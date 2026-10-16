@@ -1626,20 +1626,13 @@ static int check_package(void)
     join(pkgDir, sizeof(pkgDir), root, opts.Dir);
     out("Package:   %s\n", root);
     out("Directory: %s\n\n", pkgDir);
-    /* The bundled nvme98 driver (0.1.x in nvme98\, later at the root):
-     * named here, never installed by this tool. */
-    join(path, sizeof(path), pkgDir, "nvme98\\nvme98-LICENSE.txt");
+    /* The bundled Stor98 driver: named here, never installed by this
+     * tool. */
+    join(path, sizeof(path), pkgDir, "stor98.inf");
     if (file_exists(path, NULL)) {
-        out("The NVMe driver nvme98, a separate project, is in %s\\nvme98\\;\n"
-            "this tool does not install it (nvme98-readme.txt there says how).\n\n",
-            opts.Dir);
-    } else {
-        join(path, sizeof(path), pkgDir, "nvme98-LICENSE.txt");
-        if (file_exists(path, NULL)) {
-            out("The NVMe driver nvme98, a separate project, is in %s (nvme98.inf);\n"
-                "this tool does not install it (nvme98-readme.txt there says how).\n\n",
-                opts.Dir);
-        }
+        out("The NVMe driver Stor98, a separate project, is in %s "
+            "(stor98.inf);\nthis tool does not install it (its own readme "
+            "says how).\n\n", opts.Dir);
     }
 
     cmFiles = 0;
@@ -2951,7 +2944,7 @@ static int package_files(PKG_EACH each, void *ctx)
             if (!envNow.Nt && inst_eq(fd.cFileName, "xhcicmf.inf")) {
                 continue;
             }
-            /* The bundled nvme98 driver is not this tool's to install, and
+            /* The bundled Stor98 driver is not this tool's to install, and
              * a copy of its INF on DevicePath would install it unasked. */
             if (inst_bundled_file(fd.cFileName)) {
                 continue;
@@ -6360,7 +6353,7 @@ static int tb_read(TBNODE *t)
     }
     inst_copy(t->Shown, d->Service, sizeof(t->Shown));
     if (!envNow.Nt && t->Shown[0] == '\0' && d->Driver[0] != '\0') {
-        /* 98 and ME: an IOS miniport (nvme98.mpd) is named by PortDriver,
+        /* 98 and ME: an IOS miniport (stor98.mpd) is named by PortDriver,
          * a disk by its DevLoader; shown only, never a classification. */
         char path[INST_PATH_CHARS];
         driver_key_path(d, path, sizeof(path));
@@ -6937,8 +6930,9 @@ static void tb_print_routers(const TBNHI *h)
                       : (gen & 0xFFUL) == CM_ST_GEN_USB4 ? "USB4"
                                                         : "generation not known");
         if ((gen & 0xFFUL) == CM_ST_GEN_USB4 && ((gen >> 8) & 0xFFUL) != 0) {
-            out(" (version %lu.%lu)", (unsigned long)((gen >> 12) & 0xFUL),
-                (unsigned long)((gen >> 8) & 0xFUL));
+            /* ROUTER_CS_4's USB4 Version: major 7:5, minor 4:0. */
+            out(" (version %lu.%lu)", (unsigned long)((gen >> 13) & 0x7UL),
+                (unsigned long)((gen >> 8) & 0x1FUL));
         }
         out(", %s %lu", kind == CM_ST_KIND_ICM ? "link" : "port",
             (unsigned long)(place & 0xFFUL));

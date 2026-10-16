@@ -331,31 +331,31 @@ before anything is built. Refused with -UploadSetOnly, which stages nothing,
 and with an -Arch that has no x64. The x86 binaries are never signed. Where
 the key is held and how it was made: design record 19.
 
-.PARAMETER Nvme98Version
-The nvme98 build the download bundles (owner, 2026-10-15), with
--Nvme98Dir, -Nvme98SumsSha256 and -Nvme98InterfaceVersion: the four pins go
+.PARAMETER Stor98Version
+The Stor98 build the download bundles (owner, 2026-10-16; 0.3.0.0 or later), with
+-Stor98Dir, -Stor98SumsSha256 and -Stor98InterfaceVersion: the four pins go
 together and mean what make-package.ps1's parameters of the same names mean,
-and -Nvme98AllowInterfaceMismatch is passed through to it. Without them the
-cut bundles no nvme98, and its release notes must say so. With them each
+and -Stor98AllowInterfaceMismatch is passed through to it. Without them the
+cut bundles no Stor98, and its release notes must say so. With them each
 release-x86 and release-x64 package is built with the build's files (the
 debug directories carry none), and the upload set's release-x86\ and
-release-x64\ carry them; releases\<version>\ does not, since nvme98 is a
+release-x64\ carry them; releases\<version>\ does not, since Stor98 is a
 third-party binary and nothing third-party is tracked. The release notes
-must name the version ("nvme98 `<version>`", in place of the placeholder
+must name the version ("Stor98 `<version>`", in place of the placeholder
 the cut fills in), the generated readme lists it, and -UploadSetOnly
 re-assembles a bundled release only with the same pins.
 
-.PARAMETER Nvme98Dir
-See -Nvme98Version.
+.PARAMETER Stor98Dir
+See -Stor98Version.
 
-.PARAMETER Nvme98SumsSha256
-See -Nvme98Version.
+.PARAMETER Stor98SumsSha256
+See -Stor98Version.
 
-.PARAMETER Nvme98InterfaceVersion
-See -Nvme98Version.
+.PARAMETER Stor98InterfaceVersion
+See -Stor98Version.
 
-.PARAMETER Nvme98AllowInterfaceMismatch
-See -Nvme98Version; the override is printed, and passed to each package run.
+.PARAMETER Stor98AllowInterfaceMismatch
+See -Stor98Version; the override is printed, and passed to each package run.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
@@ -394,11 +394,11 @@ param(
     [switch]$AllowUnstampedDriver,
     [string]$TestLabel = "",
     [string]$TestSignPfx = "",
-    [string]$Nvme98Version = "",
-    [string]$Nvme98Dir = "",
-    [string]$Nvme98SumsSha256 = "",
-    [string]$Nvme98InterfaceVersion = "",
-    [switch]$Nvme98AllowInterfaceMismatch
+    [string]$Stor98Version = "",
+    [string]$Stor98Dir = "",
+    [string]$Stor98SumsSha256 = "",
+    [string]$Stor98InterfaceVersion = "",
+    [switch]$Stor98AllowInterfaceMismatch
 )
 
 $ErrorActionPreference = "Stop"
@@ -1093,18 +1093,18 @@ function Assert-ReportBatchContent {
     }
 }
 
-# The line the generated readme carries when the download bundles nvme98
-# (package-common.ps1, "nvme98, the bundled NVMe driver"), which is how
+# The line the generated readme carries when the download bundles Stor98
+# (package-common.ps1, "Stor98, the bundled NVMe driver"), which is how
 # -UploadSetOnly knows which build a published release was cut with.
-$nvme98ReadmePattern = '(?m)^  Bundled in this download: nvme98 (\d+\.\d+\.\d+\.\d+)\.\r?\n  Its SHA256SUMS\.txt has the SHA-256\r?\n  ([0-9A-F]{64})\.\r?\n  Interface version: (\S+?)( \(MISMATCH OVERRIDDEN, see below\))?\.'
+$stor98ReadmePattern = '(?m)^  Bundled in this download: Stor98 (\d+\.\d+\.\d+\.\d+)\.\r?\n  Its SHA256SUMS\.txt has the SHA-256\r?\n  ([0-9A-F]{64})\.\r?\n  Interface version: (\S+?)( \(MISMATCH OVERRIDDEN, see below\))?\.'
 
 
 # The content pins that line records - version, SHA256SUMS.txt hash and
 # interface version - for -UploadSetOnly's comparison. Whether the interface
 # check was overridden is not a pin: it is a verdict against the checkout's
 # header, which may have moved since the cut, so a re-assembly passes
-# -Nvme98AllowInterfaceMismatch where today's header needs it.
-function Get-Nvme98PinText {
+# -Stor98AllowInterfaceMismatch where today's header needs it.
+function Get-Stor98PinText {
     param($Release)
     if ($null -eq $Release) { return "" }
     return ("{0}|{1}|{2}" -f $Release.Version, $Release.SumsSha256, $Release.Interface)
@@ -1616,12 +1616,12 @@ function Get-UploadSetRepairCommand {
     if ($bound.ContainsKey("UploadDir")) { $cmd += " -UploadDir " + (& $quote $UploadDir) }
     # A bundled release is re-assembled only with the pins it was cut with.
     # Read without StrictMode's unset-variable error: the self-tests render
-    # this helper in a scope that has no $nvme98.
-    $nv = Get-Variable -Name nvme98 -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    # this helper in a scope that has no $stor98.
+    $nv = Get-Variable -Name stor98 -Scope Script -ValueOnly -ErrorAction SilentlyContinue
     if ($null -ne $nv) {
-        $cmd += " -Nvme98Version " + $nv.Version + " -Nvme98Dir " + (& $quote $nv.Dir) +
-                " -Nvme98SumsSha256 " + $nv.SumsSha256 + " -Nvme98InterfaceVersion " + $nv.Interface
-        if ($nv.Overridden) { $cmd += " -Nvme98AllowInterfaceMismatch" }
+        $cmd += " -Stor98Version " + $nv.Version + " -Stor98Dir " + (& $quote $nv.Dir) +
+                " -Stor98SumsSha256 " + $nv.SumsSha256 + " -Stor98InterfaceVersion " + $nv.Interface
+        if ($nv.Overridden) { $cmd += " -Stor98AllowInterfaceMismatch" }
     }
     return $cmd
 }
@@ -2092,9 +2092,9 @@ function New-UploadSet {
         [string]$UploadDir,
         [string]$Repo,
         [string[]]$Publishable,
-        # The verified nvme98 build (Resolve-Nvme98Input) the release-
+        # The verified Stor98 build (Resolve-Stor98Input) the release-
         # directories bundle, or $null for none.
-        $Nvme98 = $null,
+        $Stor98 = $null,
         # Build under the `.staging` names of Get-UploadSetPaths -Staged; the
         # caller moves the result onto the final names with Publish-UploadSet
         # once its publish has succeeded, or drops it with
@@ -2157,7 +2157,7 @@ function New-UploadSet {
     Copy-Item -LiteralPath $PublishedRoot -Destination $uploadRoot -Recurse -Force
 
     $publishableKeys = @($Publishable | ForEach-Object { $_.ToLowerInvariant() })
-    # Full paths (lower case) of the bundled nvme98 files copied below.
+    # Full paths (lower case) of the bundled Stor98 files copied below.
     $nvUploaded = @{}
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
 
@@ -2280,25 +2280,25 @@ their defaults.
         if ($null -ne $PkgDirs -and $PkgDirs.ContainsKey($f)) { $pkgDir = $PkgDirs[$f] }
         $uploadFlavorDir = Join-Path $uploadRoot $f
         $mediaPaths = @{}
-        # The bundled nvme98 files of a release- directory: copied here from
+        # The bundled Stor98 files of a release- directory: copied here from
         # the pinned release folder (releases\ holds none), each refused if
         # it would replace a file and held to SHA256SUMS.txt once copied.
         $nvFiles = @()
-        if ($null -ne $Nvme98 -and $f -like "release-*") {
-            $nvFiles = @(Get-Nvme98PackageFiles -Release $Nvme98 -Arch $LegArches[$f])
+        if ($null -ne $Stor98 -and $f -like "release-*") {
+            $nvFiles = @(Get-Stor98PackageFiles -Release $Stor98 -Arch $LegArches[$f])
             foreach ($nf in $nvFiles) {
                 $nvDest = Join-Path $uploadFlavorDir $nf.Dest
                 if (Test-Path -LiteralPath $nvDest) {
-                    throw "nvme98's '$($nf.Source)' would land at '$f\$($nf.Dest)' in the upload set, where the published tree already has a file."
+                    throw "Stor98's '$($nf.Source)' would land at '$f\$($nf.Dest)' in the upload set, where the published tree already has a file."
                 }
                 Ensure-Directory (Split-Path -Parent $nvDest)
-                Copy-Item -LiteralPath (Join-Path $Nvme98.Dir $nf.Source) -Destination $nvDest
+                Copy-Item -LiteralPath (Join-Path $Stor98.Dir $nf.Source) -Destination $nvDest
                 $nvUploaded[([System.IO.Path]::GetFullPath($nvDest)).ToLowerInvariant()] = $true
                 if ((Get-FileHash -LiteralPath $nvDest -Algorithm SHA256).Hash -ne $nf.Sha256) {
-                    throw "the upload set's copy of nvme98's '$($nf.Source)' does not match SHA256SUMS.txt."
+                    throw "the upload set's copy of Stor98's '$($nf.Source)' does not match SHA256SUMS.txt."
                 }
             }
-            Write-Ok ("{0}\ bundles nvme98 {1}: {2} file(s), each matching SHA256SUMS.txt" -f $f, $Nvme98.Version, $nvFiles.Count)
+            Write-Ok ("{0}\ bundles Stor98 {1}: {2} file(s), each matching SHA256SUMS.txt" -f $f, $Stor98.Version, $nvFiles.Count)
         }
 
         if ($null -ne $pkgDir) {
@@ -2543,7 +2543,7 @@ $gateOut
     # And what they say, before anything is archived: the cut checked them
     # when it staged them, but -UploadSetOnly reads a tree it did not stage.
     Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'"
-    # The bundled nvme98 files keep their own DriverVer date and their own
+    # The bundled Stor98 files keep their own DriverVer date and their own
     # file times: they are another project's release, copied unchanged.
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   Where-Object { -not $nvUploaded.ContainsKey($_.FullName.ToLowerInvariant()) } |
@@ -2621,8 +2621,8 @@ $stagedUpload = $null
 $swapDone = $false
 # What the caller actually passed, for Get-UploadSetRepairCommand.
 $boundArgs = $PSBoundParameters
-# The verified nvme98 build, once resolved below; $null for none.
-$nvme98 = $null
+# The verified Stor98 build, once resolved below; $null for none.
+$stor98 = $null
 
 try {
     if ($UploadSetOnly -and $SkipUploadSet) {
@@ -2711,24 +2711,24 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
 "@
     }
 
-    # --- the bundled nvme98 build, verified before anything is built --------
+    # --- the bundled Stor98 build, verified before anything is built --------
     #
     # make-package.ps1 verifies it again for each release leg; this run
     # verifies it once up front, so a wrong pin costs nothing, and holds the
     # result for the upload set, which copies the files from the release
     # folder itself, never from releases\ (nothing third-party is tracked).
-    $nvme98 = Resolve-Nvme98Input -Version $Nvme98Version -Dir $Nvme98Dir -SumsSha256 $Nvme98SumsSha256 `
-                                  -InterfaceVersion $Nvme98InterfaceVersion `
-                                  -HeaderPath (Join-Path $repo "src\cm\nvme98cm.h") `
-                                  -Allow:$Nvme98AllowInterfaceMismatch
-    if ($null -ne $nvme98) {
-        Write-Ok ("nvme98 {0} ({1} layout): SHA256SUMS.txt is the pinned {2}, and every file matches it" -f `
-            $nvme98.Version, $nvme98.Layout, $nvme98.SumsSha256)
-        if ($nvme98.Overridden) {
-            Write-Warn ("nvme98 INTERFACE MISMATCH OVERRIDDEN (-Nvme98AllowInterfaceMismatch): {0}" -f $nvme98.Mismatch)
+    $stor98 = Resolve-Stor98Input -Version $Stor98Version -Dir $Stor98Dir -SumsSha256 $Stor98SumsSha256 `
+                                  -InterfaceVersion $Stor98InterfaceVersion `
+                                  -HeaderPath (Join-Path $repo "src\cm\stor98cm.h") `
+                                  -Allow:$Stor98AllowInterfaceMismatch
+    if ($null -ne $stor98) {
+        Write-Ok ("Stor98 {0}: SHA256SUMS.txt is the pinned {1}, and every file matches it" -f `
+            $stor98.Version, $stor98.SumsSha256)
+        if ($stor98.Overridden) {
+            Write-Warn ("Stor98 INTERFACE MISMATCH OVERRIDDEN (-Stor98AllowInterfaceMismatch): {0}" -f $stor98.Mismatch)
         }
         if ($Flavor -notcontains "release") {
-            throw "nvme98 is bundled into the release- directories only, and this run publishes none (-Flavor $($Flavor -join ','))."
+            throw "Stor98 is bundled into the release- directories only, and this run publishes none (-Flavor $($Flavor -join ','))."
         }
     }
 
@@ -2883,27 +2883,27 @@ To cut one, run this script without it.
             Write-Ok ("{0}\: '{1}' holds the published binary and INF" -f $dirName, $pubDir)
         }
 
-        # A release cut with nvme98 says so in its readme; it is re-assembled
+        # A release cut with Stor98 says so in its readme; it is re-assembled
         # only with the same build, and one cut without it only without.
         $pubReadme = Join-Path $finalRoot "readme.txt"
-        $pubNvme98 = ""
+        $pubStor98 = ""
         if (Test-Path -LiteralPath $pubReadme) {
-            $m = [regex]::Match([System.IO.File]::ReadAllText($pubReadme), $nvme98ReadmePattern)
+            $m = [regex]::Match([System.IO.File]::ReadAllText($pubReadme), $stor98ReadmePattern)
             if ($m.Success) {
-                $pubNvme98 = "{0}|{1}|{2}" -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value
+                $pubStor98 = "{0}|{1}|{2}" -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value
             }
         }
-        $askNvme98 = Get-Nvme98PinText -Release $nvme98
-        if ($pubNvme98 -ne $askNvme98) {
-            $was = if ($pubNvme98 -ne "") { "nvme98 pinned as $pubNvme98" } else { "no nvme98" }
-            $now = if ($askNvme98 -ne "") { "nvme98 pinned as $askNvme98" } else { "no nvme98" }
+        $askStor98 = Get-Stor98PinText -Release $stor98
+        if ($pubStor98 -ne $askStor98) {
+            $was = if ($pubStor98 -ne "") { "Stor98 pinned as $pubStor98" } else { "no Stor98" }
+            $now = if ($askStor98 -ne "") { "Stor98 pinned as $askStor98" } else { "no Stor98" }
             throw "'$finalRoot' was cut with $was (version, SHA256SUMS.txt hash, interface; its readme.txt records them), and this run was given $now. Re-assemble it with the pins it was cut with."
         }
 
         $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
                              -LegArches $legArches `
                              -PkgDirs @{} -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable -Nvme98 $nvme98
+                             -Publishable $publishable -Stor98 $stor98
 
         Write-Step "Done"
         Write-Host "Upload:     $($set.Zip)"
@@ -3082,16 +3082,16 @@ the result in place of the marker, then cut again. The first:
 "@
     }
     Write-Ok "no TODO(...) or TBD in the $Version history entry or the release notes"
-    # The bundled nvme98 version is recorded in the release notes (nvme98's
+    # The bundled Stor98 version is recorded in the release notes (Stor98's
     # maintainers), in one declaration line the cut fills in: the version
-    # bundled, or that there is none (Get-Nvme98NotesFault). A disagreement
+    # bundled, or that there is none (Get-Stor98NotesFault). A disagreement
     # or the unfilled placeholder is refused; a TEST cut is warned.
     $notesText = if (Test-Path -LiteralPath $notesPath) { [System.IO.File]::ReadAllText($notesPath) } else { "" }
-    $why = Get-Nvme98NotesFault -Text $notesText -Version $(if ($null -ne $nvme98) { $nvme98.Version } else { "" })
+    $why = Get-Stor98NotesFault -Text $notesText -Version $(if ($null -ne $stor98) { $stor98.Version } else { "" })
     if ($why -ne "") {
         if ($TestLabel -ne "") { Write-Warn $why } else { throw $why }
     } else {
-        Write-Ok "the release notes' nvme98 declaration matches this cut"
+        Write-Ok "the release notes' Stor98 declaration matches this cut"
     }
 
 
@@ -3201,14 +3201,14 @@ the result in place of the marker, then cut again. The first:
             }
             $pkgArgs += @("-TestSignPfx", $TestSignPfx)
         }
-        # The bundled nvme98 build, in the release legs only; its files are
+        # The bundled Stor98 build, in the release legs only; its files are
         # accepted beside the declared set by exactly the paths it lands at.
-        $legNvme98 = @()
-        if ($null -ne $nvme98 -and $f -eq "release") {
-            $pkgArgs += @("-Nvme98Version", $nvme98.Version, "-Nvme98Dir", $nvme98.Dir,
-                          "-Nvme98SumsSha256", $nvme98.SumsSha256, "-Nvme98InterfaceVersion", $nvme98.Interface)
-            if ($Nvme98AllowInterfaceMismatch) { $pkgArgs += "-Nvme98AllowInterfaceMismatch" }
-            $legNvme98 = @(Get-Nvme98PackageFiles -Release $nvme98 -Arch $leg.PkgArch | ForEach-Object { $_.Dest })
+        $legStor98 = @()
+        if ($null -ne $stor98 -and $f -eq "release") {
+            $pkgArgs += @("-Stor98Version", $stor98.Version, "-Stor98Dir", $stor98.Dir,
+                          "-Stor98SumsSha256", $stor98.SumsSha256, "-Stor98InterfaceVersion", $stor98.Interface)
+            if ($Stor98AllowInterfaceMismatch) { $pkgArgs += "-Stor98AllowInterfaceMismatch" }
+            $legStor98 = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | ForEach-Object { $_.Dest })
         }
         # ErrorActionPreference relaxed across the call, as every other native
         # call in this script does and this one did not until the 2026-09-07
@@ -3272,14 +3272,14 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legNvme98)
+                                           -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)
         Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
-        # The bundled nvme98 files are in the package, and stay out of
+        # The bundled Stor98 files are in the package, and stay out of
         # releases\<version>\ ($legCopy names this project's files alone):
         # the upload set takes them from the pinned release folder.
-        foreach ($nvRel in $legNvme98) {
+        foreach ($nvRel in $legStor98) {
             if (-not (Test-Path -LiteralPath (Join-Path $pkgDir $nvRel) -PathType Leaf)) {
-                throw "make-package.ps1 produced no nvme98 '$nvRel' in '$pkgDir'."
+                throw "make-package.ps1 produced no Stor98 '$nvRel' in '$pkgDir'."
             }
         }
         # The certificate beside a signed leg's binaries must be this key's
@@ -4207,43 +4207,45 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
     $contents += "  covered by it. The LICENCE section at the end points here."
     $contents += ""
 
-    # The bundled nvme98 build: in the download's release- directories only
+    # The bundled Stor98 build: in the download's release- directories only
     # (not in releases\, where nothing third-party is tracked). The first
-    # line is the one -UploadSetOnly reads ($nvme98ReadmePattern).
-    if ($null -ne $nvme98) {
-        $contents += ("  Bundled in this download: nvme98 {0}." -f $nvme98.Version)
+    # line is the one -UploadSetOnly reads ($stor98ReadmePattern).
+    if ($null -ne $stor98) {
+        $contents += ("  Bundled in this download: Stor98 {0}." -f $stor98.Version)
         # Each pin on a line of its own, within the readme's 78 columns.
         $contents += "  Its SHA256SUMS.txt has the SHA-256"
-        $contents += ("  {0}." -f $nvme98.SumsSha256)
-        $contents += ("  Interface version: {0}{1}." -f $nvme98.Interface,
-                      $(if ($nvme98.Overridden) { " (MISMATCH OVERRIDDEN, see below)" } else { "" }))
-        if ($nvme98.Overridden) {
+        $contents += ("  {0}." -f $stor98.SumsSha256)
+        $contents += ("  Interface version: {0}{1}." -f $stor98.Interface,
+                      $(if ($stor98.Overridden) { " (MISMATCH OVERRIDDEN, see below)" } else { "" }))
+        if ($stor98.Overridden) {
             # The override is logged where the download's reader sees it
-            # (-Nvme98AllowInterfaceMismatch; a dry cut of a 0.1.x build).
+            # (-Stor98AllowInterfaceMismatch; a dry cut against a checkout
+            # whose header is not yet the pinned build's).
             $contents += @(Format-Wrapped -Text ("The interface check was overridden for this cut " +
-                "(-Nvme98AllowInterfaceMismatch): " + $nvme98.Mismatch.Replace($repo.TrimEnd('\') + '\', "")) -Width 78 -FirstPrefix "  " -RestPrefix "  ")
+                "(-Stor98AllowInterfaceMismatch): " + $stor98.Mismatch.Replace($repo.TrimEnd('\') + '\', "")) -Width 78 -FirstPrefix "  " -RestPrefix "  ")
         }
         $contents += ""
-        if ($nvme98.Layout -eq "old") {
-            $contents += "  RELEASE-X86\NVME98\ and RELEASE-X64\NVME98\ hold nvme98, an NVMe"
-            $contents += "  storage driver for NVMe drives such as one in a Thunderbolt or USB4"
-            $contents += "  enclosure. It is a separate project with its own licence"
-            $contents += "  (BSD-3-Clause): nvme98-LICENSE.txt and nvme98-NOTICE.txt are beside"
-            $contents += "  it, and nvme98-readme.txt is its own guide. INSTALL.BAT does not"
-            $contents += "  install it. In the hardware wizard (Have Disk), point at"
-            $contents += "  RELEASE-X86\NVME98\WIN9X on Windows 98 SE and ME,"
-            $contents += "  RELEASE-X86\NVME98\X86 on 32-bit Windows 2000 to 7, or"
-            $contents += "  RELEASE-X64\NVME98\AMD64 on 64-bit Windows (test-signed; see"
-            $contents += "  nvme98-readme.txt)."
-        } else {
-            $contents += "  RELEASE-X86 and RELEASE-X64 hold nvme98, an NVMe storage driver for"
-            $contents += "  NVMe drives such as one in a Thunderbolt or USB4 enclosure:"
-            $contents += "  nvme98.inf and the files beside it whose names start with nvme98."
-            $contents += "  It is a separate project with its own licence (BSD-3-Clause):"
-            $contents += "  nvme98-LICENSE.txt and nvme98-NOTICE.txt are beside it, and"
-            $contents += "  nvme98-readme.txt is its own guide. INSTALL.BAT does not install"
-            $contents += "  it. In the hardware wizard (Have Disk), point at RELEASE-X86 on"
-            $contents += "  32-bit Windows and RELEASE-X64 on 64-bit Windows."
+        $stor98X86 = @($legs | Where-Object { $_.Arch -eq "x86" }).Count -gt 0
+        $stor98X64 = @($legs | Where-Object { $_.Arch -eq "x64" }).Count -gt 0
+        $stor98Dirs = @()
+        if ($stor98X86) { $stor98Dirs += "RELEASE-X86" }
+        if ($stor98X64) { $stor98Dirs += "RELEASE-X64" }
+        $contents += @(Format-Wrapped -Text (($stor98Dirs -join " and ") + $(if ($stor98Dirs.Count -gt 1) { " hold" } else { " holds" }) +
+            " Stor98, an NVMe storage driver for NVMe drives such as one in a Thunderbolt or USB4 enclosure:" +
+            " stor98.inf and the files beside it whose names start with stor98. It is a separate project" +
+            " with its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
+            " and stor98-readme.txt is its own guide. INSTALL.BAT does not install it. In the hardware" +
+            " wizard (Have Disk), point at " +
+            $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `
+            -Width 78 -FirstPrefix "  " -RestPrefix "  ")
+        if ($stor98X64) {
+            $contents += ""
+            $contents += "  RELEASE-X64's stor98.sys is test-signed by Stor98's own test"
+            $contents += "  certificate, not by this project's: stor98-test.cer beside it is"
+            $contents += "  that certificate's public half, as xhci98-test.cer is this"
+            $contents += "  project's. On Vista x64 and 7 x64, test-signing mode (bcdedit /set"
+            $contents += "  testsigning on) loads both; importing either certificate is not"
+            $contents += "  needed."
         }
         $contents += ""
     }
@@ -7069,7 +7071,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
         $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
                              -LegArches $legArches `
                              -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable -Staged -Nvme98 $nvme98
+                             -Publishable $publishable -Staged -Stor98 $stor98
         $stagedUpload = $set
     }
 
@@ -7210,15 +7212,15 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Write-Host "            Each published directory holds this project's own files only: its"
     Write-Host "            drivers, their INFs, txtsetup.oem, nt\ beside them, and in an x64"
     Write-Host "            directory the test certificate; tools\ and INSTALL.BAT at the root."
-    Write-Host "            No nvme98 file and no Microsoft file. Commit this."
+    Write-Host "            No Stor98 file and no Microsoft file. Commit this."
     if ($null -ne $uploadRoot) {
         Write-Host ""
         Write-Host "Upload:     $uploadZip"
-        if ($null -ne $nvme98) {
-            Write-Host ("            The same tree, zipped, with nvme98 {0}'s own files added to each" -f $nvme98.Version)
+        if ($null -ne $stor98) {
+            Write-Host ("            The same tree, zipped, with Stor98 {0}'s own files added to each" -f $stor98.Version)
             Write-Host "            release- directory; no Microsoft file. This is the"
         } else {
-            Write-Host "            The same tree, zipped, with no nvme98 and no Microsoft file. This is the"
+            Write-Host "            The same tree, zipped, with no Stor98 and no Microsoft file. This is the"
         }
         Write-Host "            GitHub release asset; it is git-ignored and must stay that way."
         Write-Host "            See releases\README.md and docs\contributing\legal-provenance.md"

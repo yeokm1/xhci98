@@ -642,7 +642,7 @@ static void test_query(void)
 
     n = qb_build(qa, 2UL, 0x11111111UL, 5UL);
     qb_entry(qa, 0UL, CM_ST_KIND_USB4_PORT, 0x0101UL, 1UL, CM_ST_APPR_APPROVED,
-             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x1000UL, "Acme", "Dock");
+             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x2000UL, "Acme", "Dock");
     qb_entry(qa, 1UL, CM_ST_KIND_ICM, 0x0102UL, 0UL, CM_ST_APPR_APPROVED,
              CM_ST_TUN_UP, CM_ST_GEN_TBT3, "Apple", "Display");
     CHECK_EQ(n, 64 + 128 + 256 + 64 + strlen(QB_ID), "the built answer's size");
@@ -915,10 +915,13 @@ static void test_texts(void)
 
     tr_gen_text(CM_ST_GEN_TBT3, out, sizeof(out));
     CHECK(strcmp(out, "Thunderbolt 3") == 0, "gen TBT3");
-    tr_gen_text(CM_ST_GEN_USB4 | 0x1000UL, out, sizeof(out));
-    CHECK(strcmp(out, "USB4 v1.0") == 0, "gen USB4 v1.0");
+    /* 15:8 is ROUTER_CS_4's USB4 Version byte: major 7:5, minor 4:0. */
     tr_gen_text(CM_ST_GEN_USB4 | 0x2000UL, out, sizeof(out));
-    CHECK(strcmp(out, "USB4 v2.0") == 0, "gen USB4 v2.0");
+    CHECK(strcmp(out, "USB4 v1.0") == 0, "gen USB4 v1.0 (20h)");
+    tr_gen_text(CM_ST_GEN_USB4 | 0x2100UL, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 v1.1") == 0, "gen USB4 v1.1 (21h)");
+    tr_gen_text(CM_ST_GEN_USB4 | 0x4000UL, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 v2.0") == 0, "gen USB4 v2.0 (40h)");
     tr_gen_text(CM_ST_GEN_USB4, out, sizeof(out));
     CHECK(strcmp(out, "USB4") == 0, "gen USB4 without version");
     tr_gen_text(CM_ST_GEN_UNKNOWN, out, sizeof(out));
@@ -1034,7 +1037,7 @@ static void test_events(void)
     /* A snapshot as added. */
     n = qb_build(qa, 2UL, 0x11111111UL, 5UL);
     qb_entry(qa, 0UL, CM_ST_KIND_USB4_PORT, 0x0101UL, 1UL, CM_ST_APPR_APPROVED,
-             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x1000UL, "Acme", "Dock");
+             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x2000UL, "Acme", "Dock");
     qb_entry(qa, 1UL, CM_ST_KIND_ICM, 0x0102UL, 0UL, CM_ST_APPR_PENDING,
              CM_ST_TUN_NONE, CM_ST_GEN_TBT3, "", "");
     snap_of(&so, qa, n, 1UL);
@@ -1048,7 +1051,7 @@ static void test_events(void)
     CHECK_EQ(so.R[0].Place, 0x0101, "snap: place");
     CHECK_EQ(so.R[0].Tunnels, CM_ST_TUN_UP, "snap: tunnels");
     CHECK_EQ(so.R[0].Bridge, 0x0500, "snap: bridge");
-    CHECK_EQ(so.R[0].Gen, CM_ST_GEN_USB4 | 0x1000UL, "snap: gen");
+    CHECK_EQ(so.R[0].Gen, CM_ST_GEN_USB4 | 0x2000UL, "snap: gen");
     CHECK(strcmp(so.R[0].Name, "Acme Dock") == 0, "snap: name");
     CHECK_EQ(so.R[1].Ids, 0x12348086UL, "snap: ICM ids");
     CHECK_EQ(so.R[1].ShortId, 0xABCD, "snap: ICM short id");
@@ -1065,7 +1068,7 @@ static void test_events(void)
     /* Nothing without a valid old snapshot. */
     n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
     qb_entry(qa, 0UL, CM_ST_KIND_USB4_PORT, 0x0101UL, 1UL, CM_ST_APPR_APPROVED,
-             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x1000UL, "Acme", "Dock");
+             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x2000UL, "Acme", "Dock");
     snap_of(&sn, qa, n, 1UL);
     tr_snap_init(&so);
     CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: old invalid");

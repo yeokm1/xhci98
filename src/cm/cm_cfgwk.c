@@ -1093,7 +1093,7 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     if (!cmWkCurrent(w, i, gen)) {
         return FALSE;
     }
-    /* The child's ids, for the nvme98 handshake below (a function still
+    /* The child's ids, for the stor98 handshake below (a function still
      * present with an UP entry published for them). */
     id = 0;
     if (CmCfgmgDeviceId(&w->Cfgmg, devnode, text, sizeof(text)) !=
@@ -1104,7 +1104,7 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     if (!cmWkCurrent(w, i, gen)) {
         return FALSE;
     }
-    /* The nvme98 entry this very devnode names, established before the
+    /* The stor98 entry this very devnode names, established before the
      * query: an entry of this domain behind this bridge, published for the
      * devnode's ids, whose function's path - its devfn, then the bridge's
      * path - is the one the devnode's instance id spells. Not established
@@ -1113,7 +1113,7 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     entry = CM_NVLINK_NONE;
     egen = 0;
     if (id != 0) {
-        for (k = 0; k < NVME98LS_ENTRIES; k++) {
+        for (k = 0; k < STOR98LS_ENTRIES; k++) {
             if (!CmNvlinkWkCandidate(w->Nhi, w->Port[i].Bdf, id, k, &cbus,
                                      &cslot, &cgen)) {
                 continue;
@@ -1158,7 +1158,7 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
         w->C.Vetoed++;
         return TRUE;
     }
-    /* nvme98's orderly-removal handshake (MD-5; cm_nvlink.h), for a
+    /* stor98's orderly-removal handshake (MD-5; cm_nvlink.h), for a
      * function still present: REMOVE_PENDING, then its answer, waited for
      * here on the worker (no ring is serviced) and ended early when the
      * request goes stale. The removal below follows whatever the answer:
@@ -1167,7 +1167,7 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     if (entry != CM_NVLINK_NONE && cmWkCurrent(w, i, gen)) {
         /* Only for a request still current, and only for the identity
          * established before the query, unchanged since; a stale one
-         * completes the accepted query's removal without asking nvme98
+         * completes the accepted query's removal without asking stor98
          * anything. */
         entry = CmNvlinkWkRequest(w->Nhi, entry, egen, id, &seq);
     } else {

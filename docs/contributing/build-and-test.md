@@ -3077,66 +3077,76 @@ binaries are never signed.
   its activation is in grace (`-Rtc base=2026-09-20T12:00:00`); with it
   expired the not-genuine watermark replaces it and the mode is still on.
 
-#### The bundled nvme98 build (`3.0.0.0`)
+#### The bundled Stor98 build (`3.0.0.0`)
 
-The release download's `release-x86\` and `release-x64\` carry nvme98, a
-separate BSD-3-Clause project's NVMe driver, as one of its released builds
-copied unchanged from its release folder (owner, 2026-10-15). Nothing of it
-is tracked: `make-package.ps1` copies it into the package, and
+The release download's `release-x86\` and `release-x64\` carry Stor98, a
+separate BSD-3-Clause project's NVMe driver (developed as nvme98 and renamed
+before its first release, `0.3.0.0`), as one of its released builds copied
+unchanged from its release folder (owner, 2026-10-16). Nothing of it is
+tracked: `make-package.ps1` copies it into the package, and
 `make-release.ps1` into the upload set's two `release-` directories, never
 into `releases\<version>\`. Four parameters pin it, and they go together:
 
 | Parameter | What it pins |
 |---|---|
-| `-Nvme98Version` | The build, for example `0.1.1.0`. It selects the layout: `0.1.x` (from `0.1.1.0`) is bundled unchanged under `nvme98\` (`nvme98\win9x\` and `nvme98\x86\` in x86, `nvme98\amd64\` in amd64); `0.2.0.0` and later put the release's `x86\` or `x64\` at the package root, where every name starts with `nvme98`. `0.1.0.0` and anything older than `0.1.1.0` are refused |
-| `-Nvme98Dir` | Its release folder (the nvme98 repository's `releases\<version>\`), read only |
-| `-Nvme98SumsSha256` | The SHA-256 of that folder's `SHA256SUMS.txt`. Checked first; then every file against `SHA256SUMS.txt`, every file in the folder listed there, the layout's files present, nothing the layout does not know, every INF's `DriverVer` at the pinned version, and each copy in the package against `SHA256SUMS.txt` again |
-| `-Nvme98InterfaceVersion` | The build's link-state interface version (`NVME98LS_VERSION`), or `none` for a build with no link-state receiver (`0.1.x`). Compared with `src\cm\nvme98cm.h`, the header xhci98 compiles against (`none` matches only where there is none), and, where the folder carries `include\nvme98cm.h`, that file byte for byte with it. A mismatch is refused unless `-Nvme98AllowInterfaceMismatch`, which prints the mismatch it overrides |
+| `-Stor98Version` | The build, for example `0.3.0.0`. Anything older than `0.3.0.0`, Stor98's first release, is refused: earlier builds were nvme98's, under other file names |
+| `-Stor98Dir` | Its release folder (the Stor98 repository's `releases\<version>\`), read only |
+| `-Stor98SumsSha256` | The SHA-256 of that folder's `SHA256SUMS.txt`. Checked first; then every file against `SHA256SUMS.txt`, every file in the folder listed there, the release's files present, nothing the layout does not know, every INF's `DriverVer` at the pinned version, and each copy in the package against `SHA256SUMS.txt` again |
+| `-Stor98InterfaceVersion` | The build's link-state interface version (`STOR98LS_VERSION`; `4` for `0.3.0.0`). Compared with `src\cm\stor98cm.h`, the header xhci98 compiles against, and, where the folder carries `include\stor98cm.h`, that file byte for byte with it. A mismatch is refused unless `-Stor98AllowInterfaceMismatch`, which prints the mismatch it overrides |
 
-Without them the package and the cut are built as before, with no nvme98.
-Both layouts also carry the release's `LICENSE`, `NOTICE.TXT` and
-`readme.txt` as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and
-`nvme98-readme.txt` beside the driver files, and the amd64 package the
-build's own `nvme98-test.cer` with its test-signed `nvme98.sys`. The
-`debug-` directories carry none of it. A cut also needs the release notes'
-one declaration line ("NVMe drives behind Thunderbolt or USB4") to agree
-with it: "This download bundles nvme98 `<version>`." (a note in brackets
-may follow the version, such as "(dry cut only)") or "This download
-bundles no nvme98."; the unfilled placeholder or a disagreement is refused
-(a `-TestLabel` cut is only warned). The generated readme records the
-version, the SHA-256 of `SHA256SUMS.txt` and the interface version, and an
-override with the mismatch it overrode, and `-UploadSetOnly` holds a
-re-assembly to those three pins (an override is a verdict against the
-checkout's header, so a re-assembly passes it again where needed); `-Nvme98HeaderPath`,
-the self-tests' substitute header, is refused without `-SkipBinaryGates`.
-A `0.1.x` build's interface version is always `none`, and both layouts
-must carry `readme.txt` and the 64-bit `nvme98-test.cer`. For example, the 0.1.1.0 dry cut:
+Without them the package and the cut are built as before, with no Stor98.
+The release folder's `x86\` (`stor98.inf`, `stor98.mpd`, `stor98.sys`) goes
+to the root of the x86 package and its `x64\` (`stor98.inf`, `stor98.sys`,
+`stor98-test.cer`) to the root of the amd64 package, with no `stor98\`
+folder; every name there starts with `stor98`. Both also carry the release's
+`LICENSE`, `NOTICE.TXT` and `readme.txt` as `stor98-LICENSE.txt`,
+`stor98-NOTICE.txt` and `stor98-readme.txt` beside the driver files. A cut
+passes the pins to its release legs alone, so the `debug-` directories carry
+none of it; `make-package.ps1` run by hand bundles it into whichever flavour
+it is asked for, which is how a debug package for a guest gets it.
+
+The 64-bit `stor98.sys` keeps Stor98's own embedded test signature, by a
+certificate that is neither this project's (design record 19) nor nvme98's,
+and `stor98-test.cer` beside it is that certificate's public half, under
+Stor98's own name. Nothing here signs, re-signs or imports it, and no
+installer step is needed: test-signing mode on Vista x64 and 7 x64 loads a
+driver signed by any certificate, trusted or not (design record 19), so the
+one `bcdedit /set testsigning on` that loads this project's x64 drivers loads
+it too, and importing either `.cer` is not needed. The generated readme says
+so when the cut has an x64 half.
+
+A cut also needs the release notes' one declaration line ("NVMe drives
+behind Thunderbolt or USB4") to agree with it, exactly: "This download
+bundles Stor98 `<version>`." or "This download bundles no Stor98."; the
+unfilled placeholder or a disagreement is refused (a `-TestLabel` cut is
+only warned). The generated readme records the version, the SHA-256 of
+`SHA256SUMS.txt` and the interface version, and an override with the
+mismatch it overrode, and `-UploadSetOnly` holds a re-assembly to those
+three pins (an override is a verdict against the checkout's header, so a
+re-assembly passes it again where needed); `-Stor98HeaderPath`, the
+self-tests' substitute header, is refused without `-SkipBinaryGates`. For
+example, the `3.0.0.0` cut with Stor98 `0.3.0.0`:
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release ^
-    -Nvme98Version 0.1.1.0 -Nvme98Dir <nvme98>\releases\0.1.1.0 ^
-    -Nvme98SumsSha256 0d91c7a02100d0e82aaba19767c1b3f75cf5ff9a87f2439d268220fc84513e58 ^
-    -Nvme98InterfaceVersion none -Nvme98AllowInterfaceMismatch
+powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <pfx> ^
+    -Stor98Version 0.3.0.0 -Stor98Dir <stor98>\releases\0.3.0.0 ^
+    -Stor98SumsSha256 e8f0a81fd8674f0b55eef486ab9d7a980d9fdf10e00802f202e494ec098724c1 ^
+    -Stor98InterfaceVersion 4
 ```
-
-(`0.1.1.0` has no link-state receiver, so its interface version is `none`
-while `src\cm\nvme98cm.h` declares `1`: the override is required, is the
-dry cut's alone, and is logged in the generated readme.)
 
 The gates hold these files by exactly the paths the pin produces
-(`Get-Nvme98PackageFiles`, `scripts\package\package-common.ps1`) and by
+(`Get-Stor98PackageFiles`, `scripts\package\package-common.ps1`) and by
 nothing wider: `make-release.ps1`'s declared-media check accepts them
 beside this project's files, its upload-set date rule and file dating skip
-them (nvme98's INFs carry nvme98's own `DriverVer` date), and a name that
-would replace one of this project's files is a refusal. The INF and import
-gates are run on this project's INFs and binaries by name and never read
-nvme98's, and `check-source-charset.ps1` scans tracked source, which
-nvme98's files never are; the package's `PKG-MSFILE` name rule still covers
-every file, nvme98's included. `XHCIINST` copies no file whose name starts
-with `nvme98` into its local copy, which is on the hardware wizard's search
-path (design record 23 section 4.4). `scripts\package\test-package.ps1`
-holds both layouts with synthetic release folders, since `0.2.0.0` is not
-cut yet.
+them (Stor98's INFs carry Stor98's own `DriverVer` date), and a name that
+would replace one of this project's files is a refusal. The INF, import and
+signature gates are run on this project's INFs and binaries by name and
+never read Stor98's, and `check-source-charset.ps1` scans tracked source,
+which Stor98's files never are; the package's `PKG-MSFILE` name rule still
+covers every file, Stor98's included. `XHCIINST` must copy no file whose
+name starts with `stor98` into its local copy, which is on the hardware
+wizard's search path (design record 23 section 4.4). `scripts\package\test-package.ps1` holds the
+layout with synthetic release folders.
 
 #### And the install path is not the one the INF was written for
 

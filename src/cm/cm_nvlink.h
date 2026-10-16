@@ -1,43 +1,35 @@
 /*
- * cm_nvlink.h - the nvme98 link-state channel (roadmap-usb4.md tasks 39-A.7
+ * cm_nvlink.h - the stor98 link-state channel (roadmap-usb4.md tasks 39-A.7
  * for the ICM profile and 40-A.7 for the USB4 profile; design record 21
- * section 7, design record 22 section 10). The interface is nvme98's,
- * adopted by its maintainer decision MD-6 and defined in nvme98cm.h, which
- * sits beside this file byte for byte as nvme98 publishes it (its own
+ * section 7, design record 22 section 10). The interface is stor98's,
+ * adopted by its maintainer decision MD-6 and defined in stor98cm.h, which
+ * sits beside this file byte for byte as stor98 publishes it (its own
  * BSD-3-Clause notice; legal-provenance.md section 2a). This file is the
  * connection manager's side of it and adds nothing to that header.
  *
- * THE TABLE. One NVME98LS_TABLE in non-paged pool, allocated once per
+ * THE TABLE. One STOR98LS_TABLE in non-paged pool, allocated once per
  * driver load (CmNvlinkInit) and NEVER freed, not even at unload: a pointer
- * nvme98 took stays valid for the life of the system. One entry per
+ * stor98 took stays valid for the life of the system. One entry per
  * tunnelled NVMe function, keyed by its bus (the tunnel bridge's secondary
  * bus) and PCI_SLOT_NUMBER. The connection manager owns every field but
  * AckGeneration, and writes an entry only inside the odd/even Sequence
- * bracket (nvme98cm.h, "Entry protocol").
+ * bracket (stor98cm.h, "Entry protocol").
  *
  * RENDEZVOUS. Windows 2000 and later: the callback object
- * \Callback\Nvme98LinkState (ExCreateCallback, OBJ_PERMANENT) with one
- * callback that answers NVME98LS_QUERY with the table's address; nvme98
- * opens it once in HwFindAdapter. Windows 98 SE and ME: a registry record
- * written at each boot, before the first UP, through the VMM registry
- * services: HKEY_LOCAL_MACHINE key CM_NVLINK_REC_KEY (G3.md's option 2),
- * REG_BINARY value CM_NVLINK_REC_VALUE, CM_NVLINK_RECORD_BYTES long, laid
- * out as CmNvlinkRecordEncode writes it. HKEY_DYN_DATA, which would not
- * outlive the boot, refuses a static key (the VMM answered error 5 on 98
- * SE, run-39.md), so the record persists: it is a LOCATOR, not proof that
- * the table belongs to this boot. Checking that the pages are present
- * (_PageCheckLinRange) and that signature, version and cookie match are
- * preliminary rejection checks only: they establish neither the
- * allocation's lifetime nor the current boot (retained memory at a mapped
- * address could still hold an old table and its old cookie), so a reader
- * may accept the pointer only once a current-boot proof exists - a CM-hosted dynamic
- * key (_RegCreateDynKey, its provider in this image and deleted at
- * unload) or an independent boot-identity token - is open, for nvme98 and
- * the owner (MD-5 says never trust a pointer across boots).
- * nvme98cm.h defines the NT rendezvous
- * only; the 9x record and the REMOVE_PENDING request below are this
- * driver's PROPOSAL for nvme98 to adopt into nvme98cm.h, and nothing on
- * nvme98's side reads either yet (MD-5: designed, not prototyped).
+ * \Callback\Stor98LinkState (ExCreateCallback, OBJ_PERMANENT) with one
+ * callback that answers STOR98LS_QUERY with the table's address; stor98
+ * opens it once in HwFindAdapter (stor98cm.h's interface 2). Windows 98 SE
+ * and ME: stor98cm.h's interface 3 finds the table through a locator,
+ * REG_BINARY CM_NVLINK_REC_VALUE of HKEY_LOCAL_MACHINE\CM_NVLINK_REC_KEY
+ * (laid out as CmNvlinkRecordEncode writes it), accepted only beside a
+ * current-boot proof: a dynamic key under HKEY_DYN_DATA that the connection
+ * manager creates with _RegCreateDynKey and answers itself (R3 to R5).
+ * This build publishes neither on Windows 98 SE and ME (CmNvlinkOffered):
+ * no locator, no proof, so no UP, no statement, no acknowledgement wait
+ * and no REMOVE_PENDING request there. stor98 then finds no channel (R5)
+ * and runs on its own gone deadline (MD-1), with no clean-eject handshake;
+ * roadmap-usb4.md NV9X.1 publishes both. The REMOVE_PENDING code below is
+ * kept for it and is unreached on 9x until then.
  *
  * THE OBLIGATIONS, and where each is met:
  *  1. UP with a new link generation BEFORE the operating system can
@@ -69,24 +61,25 @@
  *     endpoint's completed reset cannot be observed through a down link,
  *     so no hardware statement is made (record 21 section 7.1); the entry
  *     then goes to IN_USE alone (UP cleared, no DOWN_QUIESCED), which
- *     nvme98 ignores, and its gone deadline (MD-1) applies.
+ *     stor98 ignores, and its gone deadline (MD-1) applies.
  *  3. The acknowledgement before the removal: CmNvlinkAwait, called by the
  *     seam before any removal call it makes for a tunnel down (the
  *     invalidation that reports the endpoint missing on NT,
  *     Query_Remove_SubTree and Remove_SubTree on 9x). It waits until every
  *     entry this domain marked DOWN_QUIESCED reads AckGeneration ==
- *     LinkGeneration, or CmNvlinkAckBoundMs since its mark (5 s on NT, a
- *     provisional 3 s on 9x), servicing the
+ *     LinkGeneration, or CmNvlinkAckBoundMs since its mark (5 s on NT),
+ *     servicing the
  *     connection manager between reads. On NT it does not wait while no
- *     receiver has ever asked for the table (no nvme98 is loaded, so none
- *     can acknowledge); on 9x it does not wait where the record was never
- *     written.
+ *     receiver has ever asked for the table (no stor98 is loaded, so none
+ *     can acknowledge); on 9x it never waits, the channel not being offered
+ *     there (CmNvlinkAwaitBoundMs).
  *  4. A tunnel re-established only to an endpoint reset since the last one
  *     (MD-2 obligation 1): by construction under the ICM (record 21 section
  *     7.1) and by the Detect gate under the USB4 profile (record 22 section
  *     10.1); nothing here.
  *
- * 9x ORDERLY REMOVAL (MD-5). On Windows 98 SE and ME every CONFIGMG call
+ * 9x ORDERLY REMOVAL (MD-5; unreached while the channel is not offered on
+ * 9x, see RENDEZVOUS). On Windows 98 SE and ME every CONFIGMG call
  * is the domain's worker's (cm_cfgwk.c), never the connection-manager
  * thread's, and the worker's removal step (cmWkRemoveChild) wraps the
  * handshake around a removal of a function still present: Query_Remove_
@@ -94,7 +87,7 @@
  * manager's veto: a refusal is final, nothing is forced); then, accepted,
  * CmNvlinkWkRequest sets REMOVE_PENDING with a fresh request sequence and
  * the worker waits, without servicing any ring, up to CM_NVLINK_REMOVE_MS
- * for nvme98's answer (CmNvlinkWkAnswer), ending early when its request
+ * for stor98's answer (CmNvlinkWkAnswer), ending early when its request
  * goes stale; then Remove_SubTree ALWAYS follows, clean answer or not,
  * because Windows 98 cannot cancel an accepted query (a device left
  * query-removed stays quiesced) - the outcome is logged, and only a clean
@@ -117,24 +110,24 @@
 #define CM_NVLINK_H
 
 #include "../xhci_compat.h"
-#include "nvme98cm.h"
+#include "stor98cm.h"
 
 /* ---- constants -------------------------------------------------------- */
 
 #define CM_NVLINK_NONE          0xFFFFFFFFUL
 
 /* The acknowledgement wait, measured from the DOWN_QUIESCED write and
- * ended at once by the acknowledgement. Windows 2000 and later: nvme98's
- * gone deadline (5 s in its test build, G3). Windows 98 SE and ME:
- * PROVISIONAL, awaiting nvme98's fixed 9x gone deadline - a 1 s idle poll
- * plus ME's timer lateness (up to 1.5 s, G3) with margin, and it must stay
- * well under that deadline once nvme98 fixes it. */
+ * ended at once by the acknowledgement. Windows 2000 and later: stor98's
+ * gone deadline (5 s in its test build, G3). Windows 98 SE and ME: inside
+ * interface 3's R12 S4 bounds (at least STOR98LS9X_CM_LINK_WAIT_MS, 2 s, at
+ * most STOR98LS9X_GONE_MS, 5 s); unused while the channel is not offered
+ * there. */
 #define CM_NVLINK_ACK_MS        5000UL
 #define CM_NVLINK_ACK_9X_MS     3000UL
 /* A statement whose delivery would start with less than this left of the
  * USB4 profile's 3 s is withheld (record 22 section 10.3). */
 #define CM_NVLINK_DELIVERY_MS   100UL
-/* The 9x orderly removal's wait for nvme98's answer (MD-5). */
+/* The 9x orderly removal's wait for stor98's answer (MD-5). */
 #define CM_NVLINK_REMOVE_MS     5000UL
 /* The idle poll's ceiling while an entry is UP (record 21 section 8). */
 #define CM_NVLINK_IDLE_MS       250UL
@@ -171,65 +164,64 @@
                                            21 section 5.5): presence lost,
                                            nothing proven of the endpoint  */
 
-/* The 9x REMOVE_PENDING request: a PROPOSED extension of nvme98cm.h's
- * entry, not in that header. Flags bit 3 is the request; Reserved[0] the
- * connection manager's request sequence (never 0); Reserved[1] nvme98's
- * answer, the sequence it answers in bits 31:8 and the outcome in 7:0. */
-#define CM_NVLINK_REMOVE_PENDING    0x00000008UL
+/* The 9x REMOVE_PENDING request (interface 3, R9): Flags bit 3 is the
+ * request, RemoveSequence the connection manager's request sequence (never
+ * 0), RemoveAck stor98's answer, the sequence it answers in bits 31:8 and
+ * the outcome in 7:0. */
+#define CM_NVLINK_REMOVE_PENDING    ((ULONG)STOR98LS_REMOVE_PENDING)
 #define CM_NVLINK_RM_NONE           0UL /* not answered (yet)             */
-#define CM_NVLINK_RM_CLEAN          1UL /* flushed, CC.SHN, SHST, RDY 0   */
-#define CM_NVLINK_RM_ISOLATED       2UL /* isolated, not clean            */
-#define CM_NVLINK_RM_FAILED         3UL
+#define CM_NVLINK_RM_CLEAN          ((ULONG)STOR98RM_CLEAN)
+#define CM_NVLINK_RM_ISOLATED       ((ULONG)STOR98RM_ISOLATED_NOT_CLEAN)
+#define CM_NVLINK_RM_FAILED         ((ULONG)STOR98RM_FAILED)
 
-
-/* The 9x record (proposal; see the file header). */
-#define CM_NVLINK_REC_KEY       "System\\CurrentControlSet\\Services\\nvme98"
-#define CM_NVLINK_REC_VALUE     "LinkState"
-#define CM_NVLINK_RECORD_BYTES  20UL
-#define CM_NVLINK_RECORD_VER    1UL
+/* The 9x locator (interface 3, R3b; not published by this build). */
+#define CM_NVLINK_REC_KEY       STOR98LS9X_LOCATOR_KEY
+#define CM_NVLINK_REC_VALUE     STOR98LS9X_LOCATOR_VALUE
+#define CM_NVLINK_RECORD_BYTES  ((ULONG)sizeof(STOR98LS9X_LOCATOR))
+#define CM_NVLINK_RECORD_VER    ((ULONG)STOR98LS9X_LOCATOR_VERSION)
 
 /* ---- pure ------------------------------------------------------------- */
 
 /* Signature, version, count; every entry zero. */
-VOID CmNvlinkTableInit(PNVME98LS_TABLE t);
+VOID CmNvlinkTableInit(PSTOR98LS_TABLE t);
 
 /* The entry of (bus, slot), or CM_NVLINK_NONE. */
-ULONG CmNvlinkFind(const NVME98LS_TABLE *t, ULONG bus, ULONG slot);
+ULONG CmNvlinkFind(const STOR98LS_TABLE *t, ULONG bus, ULONG slot);
 
 /*
  * Obligation 1 on (bus, slot): its entry, or a never-used one (an entry is
- * never given to another function: an nvme98 instance may hold it), gets
+ * never given to another function: a stor98 instance may hold it), gets
  * Flags = IN_USE | UP with LinkGeneration + 1 - unless it is UP already
  * and `fresh` is FALSE (a re-exposure of the same connection). `fresh` is
  * TRUE for every exposure that may follow a new connection: presence on
  * the bus does not prove the link stayed up in between. Writes `*outcome`
  * (CM_NVLINK_UP_*); returns the entry or CM_NVLINK_NONE.
  */
-ULONG CmNvlinkPublishUp(PNVME98LS_TABLE t, ULONG bus, ULONG slot,
+ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
                         BOOLEAN fresh, PULONG outcome);
 
 /*
  * Before every exposure of `bus` (after the acknowledgement wait): every
  * entry there that carries a statement (DOWN_QUIESCED, not UP) becomes
- * IN_USE alone with LinkGeneration + 1, so an nvme98 instance that binds
+ * IN_USE alone with LinkGeneration + 1, so a stor98 instance that binds
  * after the exposure - to a function the scan could not publish, or one
  * that came back between the scan and the operating system's enumeration
  * - records a generation that carries no DOWN_QUIESCED, never an old
  * statement. An entry already IN_USE alone carries nothing and is left.
  * Returns how many; CmNvlinkRetireEntry does one entry, TRUE when it did.
  */
-ULONG CmNvlinkRetire(PNVME98LS_TABLE t, ULONG bus);
-BOOLEAN CmNvlinkRetireEntry(PNVME98LS_TABLE t, ULONG index);
+ULONG CmNvlinkRetire(PSTOR98LS_TABLE t, ULONG bus);
+BOOLEAN CmNvlinkRetireEntry(PSTOR98LS_TABLE t, ULONG index);
 
 /* An UP entry leaves UP: Flags = IN_USE | DOWN_QUIESCED when `quiesced`,
  * IN_USE alone otherwise. FALSE (nothing written) for an entry not UP. */
-BOOLEAN CmNvlinkSetDown(PNVME98LS_TABLE t, ULONG index, BOOLEAN quiesced);
+BOOLEAN CmNvlinkSetDown(PSTOR98LS_TABLE t, ULONG index, BOOLEAN quiesced);
 
 /* The next UP entry on `bus` at or after `from`, or CM_NVLINK_NONE. */
-ULONG CmNvlinkNextUp(const NVME98LS_TABLE *t, ULONG bus, ULONG from);
+ULONG CmNvlinkNextUp(const STOR98LS_TABLE *t, ULONG bus, ULONG from);
 
 /* AckGeneration == LinkGeneration on a DOWN_QUIESCED entry. */
-BOOLEAN CmNvlinkAcked(const NVME98LS_TABLE *t, ULONG index);
+BOOLEAN CmNvlinkAcked(const STOR98LS_TABLE *t, ULONG index);
 
 /* The ICM profile's condition (record 21 section 7.1): the set's member
  * count, the member's source (XHCI_TBT_SRC_*), whether the member is the
@@ -255,24 +247,35 @@ ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
  * CM_NVLINK_ACK_9X_MS. */
 ULONG CmNvlinkAckBoundMs(BOOLEAN nt);
 
+/* Whether this build offers the channel on the operating system: NT
+ * (interface 2) yes; Windows 98 SE and ME no - interface 3's current-boot
+ * proof is not published, so neither is its locator (roadmap-usb4.md
+ * NV9X.1). */
+BOOLEAN CmNvlinkOffered(BOOLEAN nt);
+
+/* How long a statement's acknowledgement is waited for: 0 where no receiver
+ * can exist (no stor98 has asked for the table on NT; the channel not
+ * offered on 9x), else CmNvlinkAckBoundMs. */
+ULONG CmNvlinkAwaitBoundMs(BOOLEAN nt, BOOLEAN receiver);
+
 /* Milliseconds left of `budgetMs` begun at `startMs` (a free-running
  * millisecond clock, modulo 2^32), 0 when spent. */
 ULONG CmNvlinkLeft(ULONG startMs, ULONG nowMs, ULONG budgetMs);
 
-/* The 9x record, little-endian ULONGs: signature NVME98LS_SIGNATURE,
- * CM_NVLINK_RECORD_VER, the table's linear address, its size in bytes, and
- * `cookie` (also kept in the table's Reserved field, so the reader can
- * match the two). */
+/* The 9x locator (STOR98LS9X_LOCATOR), little-endian ULONGs: signature
+ * STOR98LS_SIGNATURE, CM_NVLINK_RECORD_VER, the table's linear address,
+ * its size in bytes, and `cookie` (also the table's Cookie). Not written by
+ * this build (CmNvlinkOffered). */
 VOID CmNvlinkRecordEncode(PUCHAR out, ULONG address, ULONG bytes,
                           ULONG cookie);
 
 /* The 9x REMOVE_PENDING request on an UP entry (FALSE otherwise), its
  * answer for `sequence` (CM_NVLINK_RM_*), and its withdrawal. */
-BOOLEAN CmNvlinkRemoveRequest(PNVME98LS_TABLE t, ULONG index,
+BOOLEAN CmNvlinkRemoveRequest(PSTOR98LS_TABLE t, ULONG index,
                               ULONG sequence);
-ULONG CmNvlinkRemoveAnswer(const NVME98LS_TABLE *t, ULONG index,
+ULONG CmNvlinkRemoveAnswer(const STOR98LS_TABLE *t, ULONG index,
                            ULONG sequence);
-VOID CmNvlinkRemoveCancel(PNVME98LS_TABLE t, ULONG index);
+VOID CmNvlinkRemoveCancel(PSTOR98LS_TABLE t, ULONG index);
 
 /* ---- the driver (cm_nvlinkos.c) --------------------------------------- */
 
@@ -285,17 +288,15 @@ struct _TBT_U4_LINKDOWN;
 /* DriverEntry: the table (CmAlloc, never freed) and, on Windows 2000 and
  * later, the callback object and its callback. Never fails the load: a
  * channel that cannot be set up is logged at the first start and left
- * off (nvme98's gone deadline applies). PASSIVE_LEVEL. */
+ * off (stor98's gone deadline applies). PASSIVE_LEVEL. */
 VOID CmNvlinkInit(VOID);
 
 /* The unload routine: the callback unregistered and the object
  * dereferenced; the table stays. PASSIVE_LEVEL. */
 VOID CmNvlinkUnload(VOID);
 
-/* Each NHI start, on its thread, before the first tunnel action: Windows 98
- * SE and ME write the record once per boot (the VMM registry services, a
- * passive thread of the system VM); every target logs the channel's
- * state. */
+/* Each NHI start, on its thread, before the first tunnel action: every
+ * target logs the channel's state (on Windows 98 SE and ME, not offered). */
 VOID CmNvlinkStart(struct _CM_NHI *nhi);
 
 /* Obligation 1 for tunnel port `bridge` (XHCI_TBT_BDF): before every
@@ -304,11 +305,11 @@ VOID CmNvlinkStart(struct _CM_NHI *nhi);
  * published or marked for `bridge`, should the bus not read). `fresh` TRUE
  * after a tunnel up, a RESYNC or an owed re-enumeration: a new generation
  * for every NVMe function found; FALSE on a tunnel down's: an entry UP is
- * left as it is. Windows 98 SE and ME: no UP while the record is not
- * written (the channel is unavailable to that exposure). Only functions on
+ * left as it is. Windows 98 SE and ME: no UP (the channel is not offered
+ * there, CmNvlinkOffered). Only functions on
  * the secondary bus itself are seen: an NVMe function behind an
  * enclosure's own PCIe switch is not, gets no entry and so no statement
- * (nvme98's gone deadline stands); nor does one that has not answered by
+ * (stor98's gone deadline stands); nor does one that has not answered by
  * the end of the scan. Returns the number of entries UP for that bus. */
 ULONG CmNvlinkExpose(struct _CM_NHI *nhi, ULONG bridge, BOOLEAN fresh);
 
@@ -322,7 +323,7 @@ ULONG CmNvlinkIcmDown(struct _CM_NHI *nhi, ULONG pollState);
 /* The host interface lost (a TUNNEL_DOWN of why TBT_ICM_WHY_UNAVAILABLE,
  * NT): no statement - each UP entry of the set's buses is treated as for a
  * verdict that withholds it (CM_NVLINK_LOST: UP cleared only where its
- * function reads absent, never DOWN_QUIESCED), so nvme98's own gone
+ * function reads absent, never DOWN_QUIESCED), so stor98's own gone
  * deadline applies. Not called on 98 SE and ME, whose loss reads no bridge
  * (cm_reenum.c CmReenumAction). */
 VOID CmNvlinkLost(struct _CM_NHI *nhi);

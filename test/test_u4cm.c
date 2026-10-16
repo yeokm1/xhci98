@@ -1200,10 +1200,21 @@ static void test_inert_and_domains(void)
           "host router version 0: inert");
     fabInit(&g_fab);
     fabHostMinimal(&g_fab);
-    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x30000000UL;
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x02000000UL;
     rc = start(&g_fab, &g_ring, &g_cm, &c);
     CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_ROUTER_VERSION,
-          "a reserved host router version: inert");
+          "host router version 02h (Thunderbolt 3): inert");
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x60000000UL;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_ROUTER_VERSION,
+          "a reserved host router version (60h): inert");
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x30000000UL;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc == TBT_OK, "host router version 30h (USB4 1.x, minor 16): active");
 
     /* Two domains at once, each its own fabric, ring and instance. */
     fabInit(&g_fab);
@@ -1265,6 +1276,25 @@ static void test_adl(void)
     CHECK_EQ(bw, (14738UL * 125UL + 511UL) / 512UL, "14738 Mb/s, the clamped 90 per cent");
 }
 
+/* Apply the EEPROM enable on router g_eeHookDev (bit-banging on, still
+ * deselected) and lose every answer to it. */
+static unsigned long g_eeDrops;
+static int g_eeHookDev;
+static int eeEnableHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                        unsigned long adp, unsigned long addr, unsigned long n,
+                        const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    if (pdf == TBT_PDF_WRITE && router == g_eeHookDev && cs == TBT_CS_ROUTER &&
+        addr == FAB_RCAP_PLUG + 4 && n == 1 && data != NULL &&
+        (data[0] & 0x12UL) == 0x12UL) {
+        g_eeDrops++;
+        return FAB_HOOK_DROP_ANSWER;
+    }
+    return FAB_HOOK_GO;
+}
+
 static void test_tbt3(void)
 {
     TBT_U4_CONFIG c;
@@ -1294,6 +1324,12 @@ static void test_tbt3(void)
     CHECK(p->Dev.Uuid[0] == 0xAABB0000UL + (unsigned long)dev, "UUID from the LC fuse");
     CHECK_EQ(p->Dev.Quirks, TBT_U4_QUIRK_NO_CLX, "the CLx quirk noted");
     CHECK(g_cm.Counters.Tbt3Routers == 1, "counted");
+    CHECK(strcmp(p->Dev.VendorName, "CalDigit, Inc.") == 0 &&
+          strcmp(p->Dev.ModelName, "TS3 Plus") == 0,
+          "the DROM's names by EEPROM bit-bang");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 4) & 0x13UL, 0x02UL,
+             "the EEPROM left deselected, bit-banging off");
+    CHECK(g_fab.R[dev].EeCtlWrites > 24UL * 3UL, "clocked by bit-bang");
 
     /* Alpine Ridge keeps its USB plug event. */
     fabInit(&g_fab);
@@ -1303,6 +1339,109 @@ static void test_tbt3(void)
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "Alpine Ridge: UP");
     CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 1) & 0x7CUL, 0, "USB disable left clear");
+
+    /* A Thunderbolt 3 router with a non-zero minor: the CalDigit TS3 Plus
+     * reads ROUTER_CS_4 0x0200000a (usb4-emu's Framework 13 capture), major
+     * 0, minor 2 - run as Thunderbolt 3, never refused as reserved. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_AR);
+    g_fab.R[dev].Rcs[4] = 0x0200000AUL;
+    /* And, as the TS3 Plus at power-on, Upstream Adapter 0 in ROUTER_CS_1
+     * (0x0602C005): the CM takes it from the read's arrival adapter. */
+    g_fab.R[dev].Rcs[1] &= ~(0x3FUL << 8);
+    g_fab.R[dev].UpWritable = 1;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "USB4 Version 02h: UP");
+    CHECK_EQ(p->Dev.UpAdp, 1UL, "upstream adapter from the arrival adapter");
+    CHECK_EQ((fabRtr(&g_fab, dev, 1) >> 8) & 0x3FUL, 1UL,
+             "the enumeration write set Upstream Adapter 1");
+    CHECK(p->Dev.Tbt3, "02h is a Thunderbolt 3 router");
+    CHECK_EQ(p->Dev.Usb4Version, 0x02UL, "the byte kept as read");
+    CHECK(p->Pcie.Up && !p->Usb3.Up, "02h: PCIe, no USB3");
+    CHECK_EQ(fabRtr(&g_fab, dev, 4) & 0xFF00UL, 0, "02h: no CMUV written");
+    CHECK_EQ(g_cm.Counters.RoutersRefused, 0, "02h: not refused");
+
+    /* A USB4 router with a non-zero minor (21h, USB4 1.1) is USB4. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].Rcs[4] = (g_fab.R[dev].Rcs[4] & 0x00FFFFFFUL) | 0x21000000UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "USB4 Version 21h: UP");
+    CHECK(!p->Dev.Tbt3, "21h is a USB4 router");
+
+    /* Major 3 (60h) stays reserved: refused. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].Rcs[4] = (g_fab.R[dev].Rcs[4] & 0x00FFFFFFUL) | 0x60000000UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UNSUPPORTED, "USB4 Version 60h: UNSUPPORTED");
+    CHECK_EQ(TbtU4Port(&g_cm, 1)->Why, TBT_U4_WHY_VERSION, "60h: for its version");
+
+    /* An EEPROM that reads not present: unnamed, still UP. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    g_fab.R[dev].Rcs[FAB_RCAP_PLUG + 4] = 0x00000022UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "no EEPROM: UP");
+    CHECK(p->Dev.ModelName[0] == 0, "no EEPROM: no name");
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "no EEPROM: never clocked");
+
+    /* The enable applied but every answer to it lost: the part is still
+     * deselected and bit-banging disabled again; the router unnamed. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.Hook = eeEnableHook;
+    g_eeHookDev = dev;
+    g_eeDrops = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(g_eeDrops >= 1, "the enable applied, its answers lost");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 4) & 0x12UL, 0x02UL,
+             "lost enable: deselected and bit-banging off again");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "lost enable: UP");
+    CHECK(p->Dev.ModelName[0] == 0, "lost enable: no name");
+
+    /* Rebuilt under a resume budget: no EEPROM bit-bang (a spent budget
+     * would refuse the part's release), the router up unnamed. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.RxQCount = 0;
+    g_fab.R[dev].EeCtlWrites = 0;
+    CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "TB3 resume: rebuilt");
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "TB3 resume: UP");
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "TB3 resume: no bit-bang under the budget");
+
+    /* A DROM whose CRC fails: unnamed, still UP. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    g_fab.R[dev].Drom[20] ^= 0xFF;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "bad DROM CRC: UP");
+    CHECK(p->Dev.ModelName[0] == 0, "bad DROM CRC: no name");
 
     /* No Plug Events capability: refused. */
     fabInit(&g_fab);
@@ -2066,6 +2205,7 @@ static void test_review2_identity_and_links(void)
     child = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
     fabPlug(&g_fab, 1, dev);
     fabPreos(&g_fab, 1, 0);
+    g_fab.R[child].Rcs[4] = 0x0200000AUL;       /* major 0, minor 2 */
     fabPlugChild(&g_fab, dev, child, 1);
     g_fab.RxQCount = 0;
     (void)start(&g_fab, &g_ring, &g_cm, &c);

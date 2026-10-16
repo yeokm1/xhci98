@@ -277,6 +277,77 @@ user:
 
 The legs after these use `vm\usb4\bin-2a893ea`.
 
+### A Thunderbolt 3 dock behind a USB4 host (task 40-A.8)
+
+The first guest runs of record 22 section 8: the emulator's TS3 Plus
+model (`usb4-device ...,dialect=tb3`, from the Framework 13 capture)
+behind `usb4-host profile=usb4-generic` on i440FX, on the emulator
+binaries `vm\usb4\bin-2a893ea` (QEMU fork `2a893ea`), the device line of
+the 98 SE leg that found the defect. Branch `tb3ver`; 98 SE ran the qemu
+flavour of `xhcicm.sys`, installed through the hardware wizard, and 7
+x86 the release package through `INSTALL /defaults /yes /nopause
+/thunderbolt`; the NVMe disk behind the dock ran `nvme98`.
+
+**What stopped it, three things in turn.**
+
+- The connection manager read the dock's ROUTER_CS_0 to 6 once and
+  refused it (`u4.router.version`): ROUTER_CS_4 reads `0x0200000A`, USB4
+  Version `02h`, major 0 and minor 2, and the version was compared as a
+  whole byte (`00h` only for Thunderbolt 3). It is now decided by the
+  major alone, as Linux decides it. The 3.0.0.0 build of the emulator
+  pinned for the cut (`bin-5ba7f60`) reads the same.
+- With that fixed, the port went FAILED for enumeration at once
+  (`u4.port.state=00010107`): the dock reads ROUTER_CS_1 `0x0602C005`
+  before enumeration, Upstream Adapter 0. A Thunderbolt 3 router's
+  upstream adapter is the connection manager's to set; it now comes from
+  the Adapter Num of the read's response (adapter 1 here), and the
+  enumeration write carries it.
+- With that fixed, the dock came up with its PCIe tunnel and the disk,
+  but unnamed: its DROM sits behind the Plug Events capability's EEPROM
+  bit-bang, which the first pass of 40-A.8 left out. It is now read.
+
+**98 SE** (the gold image's overlay, the dock hot-plugged after the
+driver update and then at power-on):
+
+- The dock up (`u4.router.up=808615D3`, `u4.router.kind=01000502`: version
+  `02h`, Thunderbolt 3, bonded), the PCIe tunnel up
+  (`u4.pcie.up=00010809`), the re-enumeration; the PCI Card wizard at once,
+  `nvme98` from the transfer drive, E: ("ORICO") with its test file.
+- XHCITR: "QEMU USB4 NVMe Enclosure (Thunderbolt 3), approved",
+  Generation "Thunderbolt 3", IDs 8086:15D3, "Tunnels: PCIe up, USB3 none,
+  DisplayPort none", the NVMe unit "[can be stopped]" beneath it, the
+  source "the driver's query device".
+- Safely Remove from XHCITR's Action menu and with Delete: "Windows has
+  stopped QEMU NVM e Ctrl (E:). ... You can now unplug the device."; the
+  unplug left the port "active, no device"; the re-plug brought the
+  router, the tunnel and E: back. Device Manager listed "NVM Express
+  Controller (nvme98)" under SCSI controllers and the disk.
+- At power-on with the dock attached: the DROM read, the router and the
+  tunnel up before the desktop, E: open at the desktop, XHCITR as above.
+
+**7 x86** (a fresh overlay; the install, then the dock hot-plugged, then
+at power-on):
+
+- INSTALL ended "restart" with "xHCI98 USB4 Host Router: xhcicm 3.0.0.0,
+  started" and the tunnel port's filter. After the restart the hot-plugged
+  dock's PCIe tunnel came up; at power-on with the dock attached too.
+  `nvme98` installed on the NVMe controller; F: ("NVME32") readable.
+- XHCITR `/report`: the host router "xhcicm", the dock "QEMU USB4 NVMe
+  Enclosure", Thunderbolt 3, "PCIe up, USB3 none, DisplayPort none", the
+  PCIe tunnel's unit "QEMU NVM e Ctrl SCSI Disk Device (F:)", every
+  devnode Problem code 0.
+- `INSTALL /devices` listed the dock "Thunderbolt 3, port 1, depth 1,
+  approved", "two lanes bonded"; `INSTALL /eject 1`: "Windows has stopped
+  NVM Express Controller (nvme98). The PCIe tunnel was closed. You can
+  now unplug the device." (exit 0); unplug and re-plug brought F: back
+  with its files.
+
+**Also found.** XHCITR and XHCIINST decoded the status record's version
+byte as two nibbles, so a USB4 1.0 router (`20h`) read "USB4 v2.0": that
+is the "USB4 v2.0" of the 2000 reading above, the emulator's enclosure
+being USB4 1.0. They now take the major and minor as the specification
+splits them. The 2000 and XP legs of the dock were not run.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link
