@@ -1604,6 +1604,26 @@ static void test_suspend_resume(void)
     CHECK_EQ(rc, TBT_E_STATE, "resume: an obligation unmet");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD, untouched");
 
+    /* Router Ready behind the verification's first read (5 ms): waited for
+     * inside the budget, read only, the tunnel verified. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    g_fab.R[dev].RrPending = 1;
+    g_fab.R[dev].RrAtUs = g_fab.NowUs + 5000UL;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "resume, Router Ready late: verified");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "resume, Router Ready late: still UP");
+    CHECK(g_fab.R[dev].Rcs[6] & 0x01000000UL, "resume, Router Ready late: read set");
+
+    /* Router Ready never back: one bounded wait, then as before. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "resume, no Router Ready: an obligation unmet");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "resume, no Router Ready: HELD");
+
     b = TbtU4ResumeBoundUs(0, 10000);
     CHECK(b >= 1050000UL + TBT_U4_RESUME_HOST_US && b < 1050000UL + TBT_U4_RESUME_HOST_US + 3000000UL,
           "no obligation: the platform, the host router's budget and the margin");
@@ -3382,6 +3402,45 @@ static void test_asm2464(void)
     CHECK_EQ(g_cm.Counters.DownstreamPortResets, 0, "asm2464 pre-OS: no reset");
     CHECK_EQ(g_fab.R[dev].AdpTouches[4], 0, "asm2464 pre-OS: adapter 4 never addressed");
     CHECK(strcmp(p->Dev.ModelName, "246x") == 0, "asm2464 pre-OS: named from its DROM");
+
+    /* The same handed over the moment the pre-OS connection manager wrote
+     * Enumerated (the model's Router Ready comes 5 ms later): waited for,
+     * read only, and preserved; a Router Ready that never comes still
+     * holds the port, after one bounded wait. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    g_fab.R[dev].RrPending = 1;
+    g_fab.R[dev].RrAtUs = g_fab.NowUs + 5000UL;
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Preserved,
+          "asm2464 pre-OS, Router Ready 5 ms late: preserved");
+    CHECK(!p->Dev.EnumeratedHere && g_cm.Counters.PortsHeld == 0,
+          "asm2464 pre-OS, Router Ready 5 ms late: adopted, nothing held");
+    CHECK_EQ(g_cm.Counters.DownstreamPortResets, 0,
+             "asm2464 pre-OS, Router Ready 5 ms late: no reset");
+    asmQuiet(&g_cm, &g_fab, dev, "asm2464 pre-OS, Router Ready 5 ms late: quiet");
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    g_fab.RxQCount = 0;
+    before = g_fab.NowUs;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_HELD && p->Why == TBT_U4_WHY_DISCOVERY,
+          "asm2464 pre-OS, no Router Ready: HELD for discovery");
+    CHECK(g_fab.NowUs - before >= TBT_U4_ROUTER_READY_US &&
+          g_fab.NowUs - before < TBT_U4_ROUTER_READY_US + 2000000UL,
+          "asm2464 pre-OS, no Router Ready: one bounded wait");
+    CHECK(fabPcieUp(&g_fab, 1), "asm2464 pre-OS, no Router Ready: left as found");
 
     c.PreOsCleanup = 2;
     fabInit(&g_fab);
