@@ -65,9 +65,10 @@ behind the emulator's tunnel port, first plugs and re-plugs alike
 (`runs/run-41.md`, "Bridges behind the tunnel port on NT"), so the NT
 build carries none of this issue's code and never reads
 `XhciCmBridgeNumbering`. What bounds a chain on NT is the bus range and
-memory window the BIOS reserved for the tunnel port: 2000 and XP do not
-grow them, and a chain that does not fit is left at Code 12 (no
-resources), as the emulator showed with a window too small for it
+memory window the BIOS reserved for the tunnel port: whether 2000 to 7
+can enlarge that reservation is not read, and a chain that does not fit
+is left at Code 12 (no resources), as the emulator showed with a window
+too small for it
 (`runs/run-41.md`'s traps; `runs/run-40.md`, U.11 on the `asm4242`
 stand-in). Whether such a unit can be stopped before an unplug is a
 separate question with its own fallback: a unit Windows does not mark
