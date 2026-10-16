@@ -91,7 +91,7 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 
 ### NVMe drives
 
-An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **Stor98**, a separate project, is that driver for Windows 98 SE to 7: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive.
+An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **[Stor98](https://github.com/yeokm1/stor98)**, a separate project, is that driver for Windows 98 SE to 7: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive.
 
 - The package carries Stor98 `0.4.0.0`, unchanged, in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). It reads `xhcicm.sys`'s link-state channel on every system, 98 SE to 7.
 - Stor98's settings, install steps and limits are in its own readme, `stor98-readme.txt` beside it. The release notes have [the detail](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).
