@@ -494,7 +494,10 @@ The Windows 95 and 98 DDKs document `SETUPX`'s device installer functions
 for class installers (`DiCreateDeviceInfo`, `DiInstallDevice` and the
 rest), so a small 16-bit helper may do what Update Driver does. Asked for
 by the owner on 2026-10-16, after an update from `2.4.0.0` on 98 SE left
-the driver as it was until the hand steps were done.
+the driver as it was until the hand steps were done. Not taken (owner,
+the same day): overwriting the installed binaries in `system32\drivers`
+in place, as NUSB does with Windows' own USB files; the device keeps the
+wizard's record of the old INF, and an INF change never reaches it.
 
 Status: not opened, unnumbered and unversioned.
 
