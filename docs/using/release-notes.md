@@ -1,8 +1,8 @@
 # xhci98 - Release Notes
 
 This file describes package version `3.0.0.0`, the fifteenth release and
-the eighth of the host controller driver, dated 2026-10-15 (`DriverVer`
-`10/15/2026,3.0.0.0`, in all eight INFs). What it adds to `2.4.0.0` is
+the eighth of the host controller driver, dated 2026-10-17 (`DriverVer`
+`10/17/2026,3.0.0.0`, in all eight INFs). What it adds to `2.4.0.0` is
 "What `3.0.0.0` adds", below; what `2.4.0.0` added to `2.3.1.0` is "What
 `2.4.0.0` adds" after it, what `2.3.1.0` changed from `2.3.0.0` is "What
 `2.3.1.0` changed" after that, and what `2.3.0.0` changed from `2.2.0.0` is

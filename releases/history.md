@@ -12,7 +12,7 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
-## 3.0.0.0 - 2026-10-15
+## 3.0.0.0 - 2026-10-17
 
 Every system `2.4.0.0` supports is supported, from the same four
 directories. The new Thunderbolt 3 and USB4 support was read in QEMU
