@@ -1509,6 +1509,121 @@ int main(void)
     test_sizes();
     test_desc_lengths();
     {
+        /* A UAS interface: bulk endpoints with companions and pipe usage. */
+        static const unsigned char uas[] = {
+            9, 2, 48, 0, 1, 1, 0, 0x80, 112,
+            9, 4, 0, 1, 2, 0x08, 0x06, 0x62, 0,
+            7, 5, 0x81, 0x02, 0x00, 0x04, 0,
+            6, 0x30, 15, 0x04, 0, 0,
+            4, 0x24, 3, 0,
+            7, 5, 0x83, 0x01, 0x00, 0x04, 1,
+            6, 0x30, 1, 0x02, 0, 0x04
+        };
+        char buf[4096];
+        char out[48];
+        TR_TEXT t;
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_dec_config(&t, uas, sizeof(uas));
+        CHECK(has(buf, "MaxStreams 4: 16 streams"), "companion: bulk MaxStreams");
+        CHECK(has(buf, "Pipe usage descriptor (UAS)") && has(buf, "3 (data-in)"),
+              "UAS pipe usage by name");
+        CHECK(has(buf, "Mult 2: up to 3 bursts per service interval, each of up to 2 packets"),
+              "companion: isochronous Mult");
+        {
+            /* configuration, interface (class cls, protocol pr), endpoint
+             * (attributes ea, length el), companion (burst, bm) */
+            unsigned char cf[37];
+            static const unsigned int streams[4] = { 0, 16, 17, 31 };
+            static const char *const want[4] = {
+                "(no streams)", "MaxStreams 16: 65536 streams",
+                "MaxStreams 17: reserved", "MaxStreams 31: reserved"
+            };
+            int k;
+            for (k = 0; k < 8; k++) {
+                static const unsigned char head[25] = {
+                    9, 2, 37, 0, 1, 1, 0, 0x80, 50,
+                    9, 4, 0, 0, 1, 0x08, 0x06, 0x62, 0,
+                    7, 5, 0x81, 0x02, 0x00, 0x04, 0
+                };
+                memcpy(cf, head, sizeof(head));
+                cf[25] = 6;
+                cf[26] = 0x30;
+                cf[27] = 1;
+                cf[28] = 0;
+                cf[29] = 0;
+                cf[30] = 0;
+                cf[31] = 4;
+                cf[32] = 0x24;
+                cf[33] = 1;
+                cf[34] = 0;
+                cf[35] = 0;
+                cf[36] = 0;
+                cf[2] = 35;
+                if (k < 4) {
+                    cf[28] = (unsigned char)streams[k];
+                    tr_text_init(&t, buf, sizeof(buf));
+                    tr_dec_config(&t, cf, 35);
+                    CHECK(has(buf, want[k]), "companion: MaxStreams boundary");
+                } else if (k == 4) {
+                    cf[21] = 0x01;      /* isochronous */
+                    cf[28] = 0x03;
+                    tr_text_init(&t, buf, sizeof(buf));
+                    tr_dec_config(&t, cf, 35);
+                    CHECK(has(buf, "Mult 3: reserved"), "companion: Mult 3 reserved");
+                } else if (k == 5) {
+                    cf[21] = 0x01;
+                    cf[28] = 0x82;
+                    tr_text_init(&t, buf, sizeof(buf));
+                    tr_dec_config(&t, cf, 35);
+                    CHECK(has(buf, "Mult is ignored"), "companion: SSP isochronous, Mult ignored");
+                } else if (k == 6) {
+                    /* The endpoint cut to 6 bytes: the companion after it
+                     * follows no valid endpoint. */
+                    cf[18] = 6;
+                    cf[24] = 6;
+                    cf[25] = 0x30;
+                    cf[26] = 1;
+                    cf[27] = 0x04;
+                    cf[28] = 0;
+                    cf[29] = 0;
+                    cf[30] = 4;
+                    cf[31] = 0x24;
+                    cf[32] = 1;
+                    cf[33] = 0;
+                    cf[2] = 34;
+                    tr_text_init(&t, buf, sizeof(buf));
+                    tr_dec_config(&t, cf, 34);
+                    CHECK(has(buf, "(not after an endpoint)") && !has(buf, "streams"),
+                          "companion: after a short endpoint");
+                } else {
+                    /* A second interface (not UAS) between the endpoint and
+                     * the companion and pipe descriptor: both lose it. */
+                    static const unsigned char two[] = {
+                        9, 2, 44, 0, 2, 1, 0, 0x80, 50,
+                        9, 4, 0, 0, 1, 0x08, 0x06, 0x62, 0,
+                        7, 5, 0x81, 0x02, 0x00, 0x04, 0,
+                        9, 4, 1, 0, 0, 0x03, 0x00, 0x00, 0,
+                        6, 0x30, 1, 0x04, 0, 0,
+                        4, 0x24, 1, 0
+                    };
+                    tr_text_init(&t, buf, sizeof(buf));
+                    tr_dec_config(&t, two, sizeof(two));
+                    CHECK(has(buf, "(not after an endpoint)") &&
+                          !has(buf, "Pipe usage descriptor"),
+                          "context: a new interface clears the endpoint and UAS");
+                }
+            }
+        }
+        tr_protocols_text(3UL, out, sizeof(out));
+        CHECK(strcmp(out, "USB 1.1, USB 2.0") == 0, "protocols: two, no stray space");
+        tr_protocols_text(4UL, out, sizeof(out));
+        CHECK(strcmp(out, "USB 3.x") == 0, "protocols: one");
+        tr_protocols_text(7UL, out, sizeof(out));
+        CHECK(strcmp(out, "USB 1.1, USB 2.0, USB 3.x") == 0, "protocols: three");
+        tr_protocols_text(0UL, out, sizeof(out));
+        CHECK(strcmp(out, "none reported") == 0, "protocols: none");
+    }
+    {
         char buf[512];
         TR_TEXT t;
         const char *two[2];

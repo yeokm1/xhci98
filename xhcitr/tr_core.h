@@ -213,6 +213,10 @@ int tr_dec_string(const unsigned char *d, size_t n, char *out, size_t cap);
  * negotiated (decision T3). 1 when the BOS holds one. */
 int tr_bos_ssp_text(const unsigned char *d, size_t n, char *out, size_t cap);
 
+/* The protocols a port supports (_EX_V2's SupportedUsbProtocols) as a
+ * list: "USB 1.1, USB 2.0, USB 3.x", or "none reported". */
+void tr_protocols_text(TR_U32 proto, char *out, size_t cap);
+
 /* The configuration descriptor's bMaxPower in mA for the speed (2 mA units
  * below SuperSpeed, 8 mA from it); 1 when read. */
 int tr_config_power(const unsigned char *d, size_t n, int speed,

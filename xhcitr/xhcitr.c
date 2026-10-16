@@ -2137,10 +2137,9 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
     tr_printf(t, "  Speed:         %s%s\n", tr_speed_name(speed),
               p->Ex ? "" : " (from the original connection request)");
     if (p->HaveV2) {
-        tr_printf(t, "  Port supports: %s%s%s; device %s\n",
-                  (p->V2Proto & 1UL) ? "USB 1.1 " : "",
-                  (p->V2Proto & 2UL) ? "USB 2.0 " : "",
-                  (p->V2Proto & 4UL) ? "USB 3.x" : "",
+        char protos[48];
+        tr_protocols_text(p->V2Proto, protos, sizeof(protos));
+        tr_printf(t, "  Port supports: %s; device %s\n", protos,
                   (p->V2Flags & TR_V2_F_SSP_CAPABLE) ? "SuperSpeedPlus capable"
                   : (p->V2Flags & TR_V2_F_SS_CAPABLE) ? "SuperSpeed capable"
                                                       : "not SuperSpeed capable");

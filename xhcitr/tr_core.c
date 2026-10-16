@@ -500,7 +500,29 @@ static const char *tr_ep_type(unsigned int attr)
     }
 }
 
-static void tr_one_desc(TR_TEXT *t, const unsigned char *d, unsigned int len)
+/* The context a descriptor is read in: the endpoint a SuperSpeed
+ * companion follows, and whether the interface is UAS (class 08, protocol
+ * 62), whose 0x24 descriptors are Pipe Usage descriptors. */
+static const char *tr_uas_pipe(unsigned int id)
+{
+    switch (id) {
+    case 1:
+        return "command";
+    case 2:
+        return "status";
+    case 3:
+        return "data-in";
+    case 4:
+        return "data-out";
+    default:
+        return "pipe not known";
+    }
+}
+
+#define TR_NO_EP 0xFFFFU    /* a companion that follows no valid endpoint */
+
+static void tr_one_desc(TR_TEXT *t, const unsigned char *d, unsigned int len,
+                        unsigned int epAttr, int uas)
 {
     unsigned int type = d[1];
 
@@ -575,7 +597,39 @@ static void tr_one_desc(TR_TEXT *t, const unsigned char *d, unsigned int len)
         }
         tr_put(t, "SuperSpeed endpoint companion descriptor\n");
         tr_printf(t, "  %-20s %u\n", "bMaxBurst", (unsigned int)d[2]);
-        tr_printf(t, "  %-20s 0x%02X\n", "bmAttributes", (unsigned int)d[3]);
+        if (epAttr == TR_NO_EP) {
+            tr_printf(t, "  %-20s 0x%02X (not after an endpoint)\n",
+                      "bmAttributes", (unsigned int)d[3]);
+        } else if ((epAttr & 3U) == 2U) {
+            unsigned int s = d[3] & 0x1FU;
+            if (s == 0) {
+                tr_printf(t, "  %-20s 0x%02X (no streams)\n", "bmAttributes",
+                          (unsigned int)d[3]);
+            } else if (s <= 16) {
+                tr_printf(t, "  %-20s 0x%02X (MaxStreams %u: %lu streams)\n",
+                          "bmAttributes", (unsigned int)d[3], s, 1UL << s);
+            } else {
+                tr_printf(t, "  %-20s 0x%02X (MaxStreams %u: reserved)\n",
+                          "bmAttributes", (unsigned int)d[3], s);
+            }
+        } else if ((epAttr & 3U) == 1U) {
+            unsigned int m = d[3] & 3U;
+            if (d[3] & 0x80U) {
+                tr_printf(t, "  %-20s 0x%02X (a SuperSpeedPlus isochronous "
+                          "companion follows; Mult is ignored)\n",
+                          "bmAttributes", (unsigned int)d[3]);
+            } else if (m == 3) {
+                tr_printf(t, "  %-20s 0x%02X (Mult 3: reserved)\n",
+                          "bmAttributes", (unsigned int)d[3]);
+            } else {
+                tr_printf(t, "  %-20s 0x%02X (Mult %u: up to %u bursts per "
+                          "service interval, each of up to %u packets)\n",
+                          "bmAttributes", (unsigned int)d[3], m, m + 1U,
+                          (unsigned int)d[2] + 1U);
+            }
+        } else {
+            tr_printf(t, "  %-20s 0x%02X\n", "bmAttributes", (unsigned int)d[3]);
+        }
         tr_printf(t, "  %-20s %u\n", "wBytesPerInterval", tr_w16(d + 4));
         return;
     case 0x31:
@@ -600,6 +654,12 @@ static void tr_one_desc(TR_TEXT *t, const unsigned char *d, unsigned int len)
         }
         return;
     case 0x24:
+        if (uas && len >= 4) {
+            tr_put(t, "Pipe usage descriptor (UAS)\n");
+            tr_printf(t, "  %-20s %u (%s)\n", "bPipeID", (unsigned int)d[2],
+                      tr_uas_pipe(d[2]));
+            return;
+        }
         tr_printf(t, "Class-specific interface descriptor (subtype 0x%02X)\n",
                   len >= 3 ? (unsigned int)d[2] : 0U);
         return;
@@ -618,6 +678,8 @@ void tr_dec_config(TR_TEXT *t, const unsigned char *d, size_t n)
 {
     size_t o = 0;
     size_t total;
+    unsigned int epAttr = TR_NO_EP;
+    int uas = 0;
 
     if (n < 9 || d[1] != 0x02 || d[0] < 9 || d[0] > n) {
         tr_put(t, "Configuration descriptor: short or malformed\n");
@@ -637,7 +699,14 @@ void tr_dec_config(TR_TEXT *t, const unsigned char *d, size_t n)
                       (unsigned int)o, len);
             break;
         }
-        tr_one_desc(t, d + o, len);
+        if (d[o + 1] == 0x04) {
+            /* A new interface: nothing of the last one carries over. */
+            uas = len >= 9 && d[o + 5] == 0x08 && d[o + 7] == 0x62;
+            epAttr = TR_NO_EP;
+        }
+        tr_one_desc(t, d + o, len, d[o + 1] == 0x30 ? epAttr : TR_NO_EP, uas);
+        /* A companion is read only right after a valid endpoint. */
+        epAttr = (d[o + 1] == 0x05 && len >= 7) ? d[o + 3] : TR_NO_EP;
         tr_hex(t, d + o, len, 2);
         o += len;
     }
@@ -1742,4 +1811,27 @@ void tr_confirm_lead(TR_TEXT *t, const char *unitName, const char *label,
         tr_printf(t, "Stop %s?\n\n", label);
     }
     tr_put(t, "These devices will stop:\n");
+}
+
+void tr_protocols_text(TR_U32 proto, char *out, size_t cap)
+{
+    TR_TEXT t;
+    int any = 0;
+
+    tr_text_init(&t, out, cap);
+    if (proto & 1UL) {
+        tr_put(&t, "USB 1.1");
+        any = 1;
+    }
+    if (proto & 2UL) {
+        tr_printf(&t, "%sUSB 2.0", any ? ", " : "");
+        any = 1;
+    }
+    if (proto & 4UL) {
+        tr_printf(&t, "%sUSB 3.x", any ? ", " : "");
+        any = 1;
+    }
+    if (!any) {
+        tr_put(&t, "none reported");
+    }
 }
