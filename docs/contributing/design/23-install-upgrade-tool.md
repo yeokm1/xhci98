@@ -938,16 +938,6 @@ stays a step (exit 4), but does not make the confirmation speak of an
 install; the run on an otherwise current machine changes nothing and says
 "No changes were made."
 
-Addendum, 2026-10-16: the same holds for a Thunderbolt NHI. Read on 98 SE:
-with the NHI's wizard ("PCI System Peripheral") cancelled, the NHI was in
-`Enum\PCI` alone, the run said no Thunderbolt or USB4 controller was found,
-and the Thunderbolt question defaulted to N. An `Enum\PCI` entry with no
-driver and no devnode that `xhcicm.inf` matches is now listed apart like a
-controller's (`inst_reg9x_listed`, host-tested), so the question sees the
-NHI and defaults to Y, and its steps name it; an entry whose first hardware
-id a present NHI with a driver carries is an old-slot suspect as above.
-Nothing else in `Enum\PCI` is listed.
-
 ### 6.4 What it prints
 
 **The form** (owner, 2026-10-16, revision 10): the tool cannot put the

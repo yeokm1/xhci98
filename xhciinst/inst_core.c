@@ -2975,21 +2975,6 @@ int inst_out_mirror(int outIsConsole, int errIsConsole, int inIsConsole)
     return !outIsConsole && errIsConsole && inIsConsole;
 }
 
-int inst_reg9x_listed(const char *hw, size_t hwBytes, const char *compat,
-                      size_t compatBytes, const INST_IDLIST *cm,
-                      int hasDriver)
-{
-    if (hasDriver) {
-        return 0;
-    }
-    if (inst_msz_has(compat, compatBytes, "PCI\\CC_0C0330") ||
-        inst_msz_has(hw, hwBytes, "PCI\\CC_0C0330")) {
-        return 1;
-    }
-    return cm != NULL &&
-           inst_ids_match(hw, hwBytes, compat, compatBytes, cm) >= 0;
-}
-
 /* ======================================================================== */
 /* The USB tree tool (record 23 section 9.5, record 25 section 8)            */
 /* ======================================================================== */

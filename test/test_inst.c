@@ -336,45 +336,6 @@ static void test_cm_infs(void)
     e = env(1, 5, 1, INST_ARCH_X86);
     CHECK(inst_inf_models(cm, &e, &ids) &&
           has_id(&ids, "PCI\\VEN_8086&DEV_15BF"), "XP: the captured NHI");
-    /* 98 SE: an Enum\PCI entry left by a cancelled New Hardware wizard is
-     * listed when it is a driverless xHCI controller or NHI, so the
-     * Thunderbolt question sees the NHI (the 98 SE leg, 2026-10-16). */
-    e = env(0, 4, 10, INST_ARCH_X86);
-    if (inst_inf_models(cm, &e, &ids)) {
-        static const char nhiHw[] =
-            "PCI\\VEN_8086&DEV_15BF&SUBSYS_22B017AA&REV_01\0"
-            "PCI\\VEN_8086&DEV_15BF&SUBSYS_22B017AA\0"
-            "PCI\\VEN_8086&DEV_15BF&REV_01\0PCI\\VEN_8086&DEV_15BF\0";
-        static const char nhiCompat[] =
-            "PCI\\VEN_8086&CC_088000\0PCI\\CC_088000\0PCI\\CC_0880\0";
-        static const char xhcHw[] = "PCI\\VEN_1B36&DEV_000D&REV_01\0";
-        static const char xhcCompat[] = "PCI\\CC_0C0330\0PCI\\CC_0C03\0";
-        static const char nicHw[] = "PCI\\VEN_8086&DEV_100E&REV_03\0";
-        static const char nicCompat[] = "PCI\\CC_020000\0PCI\\CC_0200\0";
-        CHECK_EQ(inst_reg9x_listed(nhiHw, sizeof(nhiHw), nhiCompat,
-                                   sizeof(nhiCompat), &ids, 0), 1,
-                 "98: a driverless NHI in Enum\\PCI is listed");
-        CHECK_EQ(inst_reg9x_listed(nhiHw, sizeof(nhiHw), nhiCompat,
-                                   sizeof(nhiCompat), &ids, 1), 0,
-                 "98: an NHI with a driver is not (its devnode lists it)");
-        CHECK_EQ(inst_reg9x_listed(nhiHw, sizeof(nhiHw), nhiCompat,
-                                   sizeof(nhiCompat), NULL, 0), 0,
-                 "98: no xhcicm.inf in the package: the NHI is not listed");
-        CHECK_EQ(inst_reg9x_listed(xhcHw, sizeof(xhcHw), xhcCompat,
-                                   sizeof(xhcCompat), &ids, 0), 1,
-                 "98: a driverless xHCI controller is listed, as before");
-        CHECK_EQ(inst_reg9x_listed(xhcHw, sizeof(xhcHw), xhcCompat,
-                                   sizeof(xhcCompat), NULL, 0), 1,
-                 "98: a driverless xHCI controller, no xhcicm.inf");
-        CHECK_EQ(inst_reg9x_listed(xhcHw, sizeof(xhcHw), xhcCompat,
-                                   sizeof(xhcCompat), &ids, 1), 0,
-                 "98: an xHCI controller with a driver is not");
-        CHECK_EQ(inst_reg9x_listed(nicHw, sizeof(nicHw), nicCompat,
-                                   sizeof(nicCompat), &ids, 0), 0,
-                 "98: any other driverless device is not");
-    } else {
-        CHECK(0, "98 SE: xhcicm.inf's models");
-    }
     for (i = 0; i < instValueCount; i++) {
         INST_U32 d;
         INST_U32 d64;
