@@ -426,6 +426,21 @@ static int read_line(char *buf, size_t cap)
         return 0;
     }
     n = strlen(buf);
+    if (n == 0 || buf[n - 1] != '\n') {
+        /* A line longer than the answer can be: the rest of it is read
+         * and the answer is one no question takes (asked again), so no
+         * leftover is ever taken for the next answer. */
+        int c;
+        int more = 0;
+        while ((c = getchar()) != EOF && c != '\n') {
+            more = 1;
+        }
+        if (more) {
+            logonly("> (an answer too long)\n");
+            inst_copy(buf, "(too long)", cap);
+            return 1;
+        }
+    }
     while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) {
         buf[--n] = '\0';
     }
@@ -2728,7 +2743,7 @@ failed:
 static int package_tag(INST_U32 *tag);
 static void local_copy_name(INST_U32 tag, char *name, size_t cap);
 static void local_remove(const char *dir);
-static void flat_remove(const char *dir);
+static int flat_remove(const char *dir);
 static void movefrom_get(char *out, size_t cap);
 
 /* Every missing directory of path made, from the top down. 1 when path is a
@@ -2868,16 +2883,81 @@ static int same_dir(const char *a, const char *b)
 {
     char sa[INST_PATH_CHARS];
     char sb[INST_PATH_CHARS];
+    char pa[INST_PATH_CHARS];
+    char pb[INST_PATH_CHARS];
+    char mark[32];
+    char got[32];
     DWORD na;
     DWORD nb;
+    DWORD n;
+    HANDLE h;
+    int same = 0;
 
     if (inst_eq(a, b)) {
         return 1;
     }
     na = GetShortPathNameA(a, sa, sizeof(sa));
     nb = GetShortPathNameA(b, sb, sizeof(sb));
-    return na != 0 && na < sizeof(sa) && nb != 0 && nb < sizeof(sb) &&
-           inst_eq(sa, sb);
+    if (na != 0 && na < sizeof(sa) && nb != 0 && nb < sizeof(sb) &&
+        inst_eq(sa, sb)) {
+        return 1;
+    }
+    /* Both exist: a file made in one is looked for in the other, which
+     * also sees through a junction or a substituted drive. */
+    if (na == 0 || nb == 0) {
+        return 0;
+    }
+    join(pa, sizeof(pa), a, "XHCIPROB.TMP");
+    join(pb, sizeof(pb), b, "XHCIPROB.TMP");
+    _snprintf(mark, sizeof(mark) - 1, "%08lX%08lX",
+              (unsigned long)GetTickCount(),
+              (unsigned long)GetCurrentProcessId());
+    mark[sizeof(mark) - 1] = '\0';
+    h = CreateFileA(pa, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    WriteFile(h, mark, (DWORD)strlen(mark), &n, NULL);
+    CloseHandle(h);
+    h = CreateFileA(pb, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        memset(got, 0, sizeof(got));
+        if (ReadFile(h, got, sizeof(got) - 1, &n, NULL) &&
+            strcmp(got, mark) == 0) {
+            same = 1;
+        }
+        CloseHandle(h);
+    }
+    DeleteFileA(pa);
+    return same;
+}
+
+/* path with its longest existing part in its short form, the rest as it
+ * is: two spellings of one place compare alike. */
+static void short_form(const char *path, char *out, size_t cap)
+{
+    char p[INST_PATH_CHARS];
+    char s[INST_PATH_CHARS];
+    char *slash;
+    DWORD n;
+
+    inst_copy(p, path, sizeof(p));
+    for (;;) {
+        n = GetShortPathNameA(p, s, sizeof(s));
+        if (n != 0 && n < sizeof(s)) {
+            inst_copy(out, s, cap);
+            strncat(out, path + strlen(p), cap - strlen(out) - 1);
+            return;
+        }
+        slash = strrchr(p, '\\');
+        if (slash == NULL || slash <= p + 2) {
+            inst_copy(out, path, cap);
+            return;
+        }
+        *slash = '\0';
+    }
 }
 
 static int moving(void)
@@ -2886,14 +2966,42 @@ static int moving(void)
            !same_dir(oldToolDir, toolDir);
 }
 
-/* Why a directory cannot be the install directory, or NULL. */
+/* Why a directory cannot be the install directory, or NULL: the text's
+ * checks, then the same containment checks on the short forms (a package
+ * under C:\LongName reached as C:\LONGNA~1 is still the package), not
+ * inside or around the directory the tools are in now (a move between
+ * them would clean one into the other), and the system's. */
 static const char *dir_why(const char *path, const char *win, char *checked,
                            size_t cap)
 {
+    char sp[INST_PATH_CHARS];
+    char sw[INST_PATH_CHARS];
+    char sr[INST_PATH_CHARS];
+    char so[INST_PATH_CHARS];
     int r = inst_dir_check(path, envNow.Nt, win, root, oldToolDir, checked,
                            cap);
 
-    return r != INST_DIR_OK ? inst_dir_reason(r) : dir_usable(checked);
+    if (r != INST_DIR_OK) {
+        return inst_dir_reason(r);
+    }
+    short_form(checked, sp, sizeof(sp));
+    short_form(win, sw, sizeof(sw));
+    short_form(root, sr, sizeof(sr));
+    if (win[0] != '\0' && inst_path_within(sp, sw) &&
+        !(oldToolDir[0] != '\0' && same_dir(checked, oldToolDir))) {
+        return inst_dir_reason(INST_DIR_WINDOWS);
+    }
+    if (root[0] != '\0' && inst_path_within(sp, sr)) {
+        return inst_dir_reason(INST_DIR_PACKAGE);
+    }
+    if (oldToolDir[0] != '\0' && !same_dir(checked, oldToolDir)) {
+        short_form(oldToolDir, so, sizeof(so));
+        if (inst_path_within(sp, so) || inst_path_within(so, sp)) {
+            return "not inside, or around, the directory the tools are in "
+                   "now";
+        }
+    }
+    return dir_usable(checked);
 }
 
 /* Record 23 section 9.6: the install directory - given with /to, or asked
@@ -3253,6 +3361,7 @@ static void old_dir_cleanup(void)
     char legacy[INST_PATH_CHARS];
     TRAY_PATHS o;
     int toolLeft;
+    int flatLeft = 0;
 
     if (opts.List || !moving()) {
         return;
@@ -3261,11 +3370,12 @@ static void old_dir_cleanup(void)
         legacy[0] = '\0';
     }
     if (!envNow.Nt) {
-        flat_remove(oldToolDir);
+        flatLeft = !flat_remove(oldToolDir);
         copies_remove(oldToolDir, inst_eq(oldToolDir, legacy));
     }
-    toolLeft = tray_paths_in(oldToolDir, &o) &&
-               (file_exists(o.Exe, NULL) || file_exists(o.Bak, NULL));
+    toolLeft = (tray_paths_in(oldToolDir, &o) &&
+                (file_exists(o.Exe, NULL) || file_exists(o.Bak, NULL))) ||
+               flatLeft;
     if (RemoveDirectoryA(oldToolDir)) {
         flagChanged = 1;
         out("%s removed.\n", oldToolDir);
@@ -3326,6 +3436,20 @@ static void tray_install(void)
     }
     pkg = file_version(from, pv);
     inst = file_version(t.Exe, iv);
+    /* A move carries a newer tool along rather than put an older one in
+     * its place: the copy in the old directory is the source then. */
+    if (moving()) {
+        TRAY_PATHS o;
+        INST_U32 ov[4];
+        if (tray_paths_in(oldToolDir, &o) && file_version(o.Exe, ov) > 0 &&
+            (pkg <= 0 || inst_ver_cmp(ov, pv) > 0)) {
+            inst_copy(from, o.Exe, sizeof(from));
+            memcpy(pv, ov, sizeof(pv));
+            pkg = 1;
+            logonly("the tool moved from %s (newer than the package's)\n",
+                    o.Exe);
+        }
+    }
     copy = inst_tray_copy_needed(inst, iv, pkg, pv);
     if (opts.List) {
         action = inst_tray_run_action(opts.NoTray, tray_run_state(t.Run),
@@ -3349,6 +3473,15 @@ static void tray_install(void)
         }
     } else {
         out("The xHCI98 USB Tree at %s is current.\n", t.Exe);
+    }
+    /* A move records the new directory before the Run value names it: a
+     * record that cannot be written leaves the old one in charge, and the
+     * copy just made goes again. */
+    if (moving() && file_exists(t.Exe, NULL) && !record_dir()) {
+        if (copy && delete_file(t.Exe)) {
+            logonly("%s deleted again: the move is not recorded\n", t.Exe);
+        }
+        goto done;
     }
     action = inst_tray_run_action(opts.NoTray, tray_run_state(t.Run),
                                   file_exists(t.Exe, NULL));
@@ -3605,6 +3738,7 @@ static void local_remove_all(void)
     char legacy[INST_PATH_CHARS];
     char sub[INST_PATH_CHARS];
     int i;
+    int flatLeft = 0;
 
     if (!legacy_dir(legacy, sizeof(legacy))) {
         return;
@@ -3614,8 +3748,8 @@ static void local_remove_all(void)
      * its list. A chosen directory gives up only what its lists name and
      * the <hash> directories that hold this tool's list. */
     copies_remove(legacy, 1);
-    if (!envNow.Nt) {
-        flat_remove(legacy);
+    if (!envNow.Nt && !flat_remove(legacy)) {
+        flatLeft = 1;
     }
     join(sub, sizeof(sub), legacy, "RESTAGE.LST");
     if (DeleteFileA(sub)) {
@@ -3628,7 +3762,9 @@ static void local_remove_all(void)
             continue;
         }
         if (!envNow.Nt) {
-            flat_remove(d);
+            if (!flat_remove(d)) {
+                flatLeft = 1;
+            }
             copies_remove(d, 0);
         }
         if (GetFileAttributesA(d) != 0xFFFFFFFFUL) {
@@ -3642,7 +3778,16 @@ static void local_remove_all(void)
      * uninstall finds it. */
     {
         TRAY_PATHS t;
-        if (!tray_paths(&t) || !file_exists(t.Exe, NULL)) {
+        const char *d;
+        int left = 0;
+        for (i = 0; i < 3; i++) {
+            d = i == 0 ? toolDir : i == 1 ? legacy : oldToolDir;
+            if (d[0] != '\0' && tray_paths_in(d, &t) &&
+                (file_exists(t.Exe, NULL) || file_exists(t.Bak, NULL))) {
+                left = 1;
+            }
+        }
+        if (!left && !flatLeft) {
             forget_dir();
         }
     }
@@ -3997,9 +4142,12 @@ static int flat_listed(const char *dir, const char *lst, const char *name)
     return found;
 }
 
-/* The files dir\lst names (each .inf with its .PNF) deleted, then lst.
- * Only plain names: a list never reaches outside dir. */
-static void flat_remove_list(const char *dir, const char *lst)
+/* The files dir\lst names (each .inf with its .PNF) deleted, then lst -
+ * only when every one of them is gone, so a file that would not go stays
+ * named for the next run. Only plain names: a list never reaches outside
+ * dir. 1 when nothing listed is left (or there was no list), 0 when a
+ * file stayed (said). */
+static int flat_remove_list(const char *dir, const char *lst)
 {
     char path[INST_PATH_CHARS];
     char file[INST_PATH_CHARS];
@@ -4007,11 +4155,12 @@ static void flat_remove_list(const char *dir, const char *lst)
     char *p;
     char *nl;
     size_t n;
+    int left = 0;
 
     join(path, sizeof(path), dir, lst);
     text = read_file(path, NULL);
     if (text == NULL) {
-        return;
+        return GetFileAttributesA(path) == 0xFFFFFFFFUL;
     }
     for (p = text; *p != '\0'; p = nl) {
         nl = strchr(p, '\n');
@@ -4034,6 +4183,11 @@ static void flat_remove_list(const char *dir, const char *lst)
         if (DeleteFileA(file)) {
             flagChanged = 1;
         }
+        if (GetFileAttributesA(file) != 0xFFFFFFFFUL) {
+            out("%s could not be deleted (error %lu).\n", file,
+                (unsigned long)GetLastError());
+            left = 1;
+        }
         n = strlen(file);
         if (n > 4 && inst_eq(file + n - 4, ".inf")) {
             strcpy(file + n - 4, ".PNF");
@@ -4044,10 +4198,15 @@ static void flat_remove_list(const char *dir, const char *lst)
         }
     }
     free(text);
+    if (left) {
+        flagSteps = 1;
+        return 0;
+    }
     SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
     if (DeleteFileA(path)) {
         flagChanged = 1;
     }
+    return 1;
 }
 
 /* A staging directory left by a run cut short: when the swap had begun (no
@@ -4103,11 +4262,15 @@ static void flat_drop_work(const char *dir)
 /* Everything of the package copy in dir removed (the uninstall, and the
  * old directory after a move): a staging directory, the old list's files,
  * the list's files. The tool and anything unlisted stay. */
-static void flat_remove(const char *dir)
+static int flat_remove(const char *dir)
 {
+    int a;
+    int b;
+
     flat_drop_work(dir);
-    flat_remove_list(dir, INST_FLAT_OLD);
-    flat_remove_list(dir, INST_FLAT_LIST);
+    a = flat_remove_list(dir, INST_FLAT_OLD);
+    b = flat_remove_list(dir, INST_FLAT_LIST);
+    return a && b;
 }
 
 /* The "#TAG xxxxxxxx" line of dir's list, or 0 with none. */
@@ -4284,14 +4447,18 @@ static int make_flat_copy(void)
     join(lst, sizeof(lst), toolDir, INST_FLAT_LIST);
     join(old, sizeof(old), toolDir, INST_FLAT_OLD);
     if (GetFileAttributesA(lst) != 0xFFFFFFFFUL) {
-        flat_remove_list(toolDir, INST_FLAT_OLD);
-        if (!MoveFileA(lst, old)) {
+        if (!flat_remove_list(toolDir, INST_FLAT_OLD) || !MoveFileA(lst, old)) {
             out("%s could not be renamed (error %lu).\n", lst,
                 (unsigned long)GetLastError());
             return 0;
         }
     }
-    flat_remove_list(toolDir, INST_FLAT_OLD);
+    if (!flat_remove_list(toolDir, INST_FLAT_OLD)) {
+        out("The earlier copy's files could not all be deleted, so the new "
+            "ones were not\nput in place; the directory is off DevicePath "
+            "meanwhile. Run INSTALL.BAT again.\n");
+        return 0;
+    }
     if (!flat_move_in(work)) {
         out("The copy of the package in %s is not complete; it is not on "
             "DevicePath.\nRun INSTALL.BAT again to finish it.\n", toolDir);
