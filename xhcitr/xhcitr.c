@@ -3276,6 +3276,9 @@ static int usb_relations(const WALK *w, const char *id, ULONG flags, int *set,
         return 0;
     }
     cr = api.ListSize(&len, id, flags);
+    if (cr == TR_CR_NO_SUCH_VALUE) {
+        return 1;   /* Windows 7: a devnode with no relations of the kind */
+    }
     if (cr != TR_CR_SUCCESS) {
         tr_sprintf(setFail, sizeof(setFail), "%s relations of %s: answer 0x%08lX",
                    flags == TR_GETIDLIST_EJECTRELATIONS ? "ejection" : "removal",
