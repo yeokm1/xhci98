@@ -119,10 +119,10 @@ program around them, in the shape `XHCICLN` already has.
 ```
 
 Since `3.0.0.0` the release download's `release-x86\` and `release-x64\`
-may also carry nvme98, a separate project's NVMe driver, bundled unchanged
-(`build-and-test.md`, "The bundled nvme98 build"): under `nvme98\` for its
-`0.1.x` builds, at the directory's root, every name starting with
-`nvme98`, from `0.2.0.0`. The tool does not install it (section 4.4).
+may also carry Stor98 (formerly nvme98), a separate project's NVMe
+driver, bundled unchanged (`build-and-test.md`, "The bundled Stor98
+build"): at the directory's root, every name starting with `stor98`. The
+tool does not install it (section 4.4).
 
 `INSTALL.BAT` sits at the package root, beside `readme.txt`, because it is
 the one thing a user is told to run and must be found without reading.
@@ -334,13 +334,12 @@ of 98 SE writes beside an INF it reads in place (the 98 SE uninstall leg,
 reinstall refused); a copy whose list is already gone loses only the
 `.PNF`s of this package's INFs, never another file.
 
-**The bundled nvme98 driver is not copied.** The listing takes the
-flavour directory's files and `nt\`, never another subdirectory, so the
-`0.1.x` layout's `nvme98\` is never read; and it leaves out every file
-whose name starts with `nvme98` (`inst_bundled_file`), the `0.2.0.0`
-layout's files at the root, because a copy of `nvme98.inf` on `DevicePath`
-would have the hardware wizard install nvme98 unasked. Where a flavour
-directory carries nvme98, the run names where it is and says the tool
+**The bundled Stor98 driver is not copied.** The listing takes the
+flavour directory's files and `nt\`, never another subdirectory, and it
+leaves out every file whose name starts with `stor98`
+(`inst_bundled_file`), because a copy of `stor98.inf` on `DevicePath`
+would have the hardware wizard install Stor98 unasked. Where a flavour
+directory carries Stor98, the run names where it is and says the tool
 does not install it.
 
 ## 5. The NT route: Windows 2000, XP, XP x64, Vista and 7
