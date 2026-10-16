@@ -2240,6 +2240,8 @@ static char oldToolDir[INST_PATH_CHARS];
 static int movePending;     /* oldToolDir is an unfinished move's (MoveFrom) */
 static char seenRecord[INST_PATH_CHARS];    /* the records as the question */
 static char seenMoveFrom[INST_PATH_CHARS];  /* saw them (begin_move)       */
+static int seenValid;       /* an install run that read them */
+static int records_unchanged(void);
 
 /* The local copies (record 23 section 4.4): <8 hex digits>, one immutable
  * directory per package content, each with an XHCIINST.LST naming the
@@ -3042,6 +3044,7 @@ static int choose_dir(void)
         movefrom_get(moveFrom, sizeof(moveFrom));
         recorded_dir(seenRecord, sizeof(seenRecord));
         inst_copy(seenMoveFrom, moveFrom, sizeof(seenMoveFrom));
+        seenValid = 1;
     }
     if (envNow.Nt && !toolHere) {
         return 1;
@@ -3160,6 +3163,9 @@ static int record_dir(void)
                   sizeof(cur)) == 1 && strcmp(cur, toolDir) == 0) {
         return 1;
     }
+    if (!records_unchanged()) {
+        return 0;
+    }
     if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
         out("The install directory could not be recorded in the registry.\n");
@@ -3177,6 +3183,7 @@ static int record_dir(void)
     }
     flagChanged = 1;
     logonly("wrote HKLM\\%s\\%s = %s\n", INST_DIR_KEY, INST_DIR_VALUE, toolDir);
+    recorded_dir(seenRecord, sizeof(seenRecord));
     return 1;
 }
 
@@ -3365,47 +3372,6 @@ static int movefrom_set(const char *dir)
     return ok;
 }
 
-/* A move recorded before anything moves (record 23 section 9.6): the old
- * directory as MoveFrom, then the new one as InstallDir, so whatever stops
- * the move part-way, the next run and the uninstall know both. 1, or 0
- * when the registry cannot take it (said; nothing has changed). */
-static int begin_move(void)
-{
-    char rec[INST_PATH_CHARS];
-    char mf[INST_PATH_CHARS];
-    int ok;
-
-    if (opts.List || toolDir[0] == '\0' || stScreens) {
-        return 1;
-    }
-    /* Under the maintenance lock, and only if no other run has changed
-     * the records since the question was asked - moving or not, since a
-     * run that stays would otherwise write over another's move. */
-    if (!maint_lock()) {
-        flagFailed = 1;
-        return 0;
-    }
-    recorded_dir(rec, sizeof(rec));
-    movefrom_get(mf, sizeof(mf));
-    if (strcmp(rec, seenRecord) != 0 || strcmp(mf, seenMoveFrom) != 0) {
-        out("Another run of INSTALL.BAT changed the install directory "
-            "meanwhile: this run\nleaves the xHCI98 tools as they are. Run "
-            "INSTALL.BAT again.\n");
-        flagSteps = 1;
-        maint_unlock();
-        return 0;
-    }
-    ok = !moving() || (movefrom_set(oldToolDir) && record_dir());
-    maint_unlock();
-    if (!ok) {
-        out("The move to %s could not be recorded in the registry: nothing "
-            "moves.\n", toolDir);
-        flagFailed = 1;
-        return 0;
-    }
-    return 1;
-}
-
 static void movefrom_get(char *out, size_t cap)
 {
     char v[INST_PATH_CHARS];
@@ -3417,6 +3383,71 @@ static void movefrom_get(char *out, size_t cap)
         inst_dir_check(v, 1, NULL, NULL, NULL, ok, sizeof(ok)) == INST_DIR_OK) {
         inst_copy(out, ok, cap);
     }
+}
+
+/* 1 when the directory records are still as this run last saw or wrote
+ * them (seenRecord, seenMoveFrom); 0, said, when another run has changed
+ * them meanwhile - this run then leaves the tools and the records alone.
+ * Called with the maintenance lock held, before each write that rests on
+ * them. */
+static int records_unchanged(void)
+{
+    char rec[INST_PATH_CHARS];
+    char mf[INST_PATH_CHARS];
+
+    if (!seenValid || stScreens) {
+        return 1;
+    }
+    recorded_dir(rec, sizeof(rec));
+    movefrom_get(mf, sizeof(mf));
+    if (strcmp(rec, seenRecord) == 0 && strcmp(mf, seenMoveFrom) == 0) {
+        return 1;
+    }
+    out("Another run of INSTALL.BAT changed the install directory "
+        "meanwhile: this run\nleaves the xHCI98 tools as they are. Run "
+        "INSTALL.BAT again.\n");
+    flagSteps = 1;
+    return 0;
+}
+
+/* A move recorded before anything moves (record 23 section 9.6): the old
+ * directory as MoveFrom, then the new one as InstallDir, so whatever stops
+ * the move part-way, the next run and the uninstall know both. Every run,
+ * moving or not, first checks the records are as the question saw them,
+ * and checks again before each later write (records_unchanged). 1, or 0
+ * when the registry cannot take it or another run changed it (said;
+ * nothing has changed). */
+static int begin_move(void)
+{
+    int ok;
+
+    if (opts.List || toolDir[0] == '\0' || stScreens) {
+        return 1;
+    }
+    if (!maint_lock()) {
+        flagFailed = 1;
+        return 0;
+    }
+    if (!records_unchanged()) {
+        maint_unlock();
+        return 0;
+    }
+    ok = 1;
+    if (moving()) {
+        ok = movefrom_set(oldToolDir);
+        if (ok) {
+            movefrom_get(seenMoveFrom, sizeof(seenMoveFrom));
+        }
+        ok = ok && record_dir();
+    }
+    maint_unlock();
+    if (!ok) {
+        out("The move to %s could not be recorded in the registry: nothing "
+            "moves.\n", toolDir);
+        flagFailed = 1;
+        return 0;
+    }
+    return 1;
 }
 
 /* After a move, the old directory: on 98 SE and ME its package copy and
@@ -3491,6 +3522,9 @@ static void tray_install(void)
         if (!maint_lock()) {
             flagFailed = 1;
             return;
+        }
+        if (!records_unchanged()) {
+            goto done;
         }
         if (!make_dirs(t.Dir)) {
             out("%s could not be made (error %lu).\n", t.Dir,
