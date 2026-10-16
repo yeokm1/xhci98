@@ -319,6 +319,23 @@ static ULONG brSlot(BRNUM_CTX *c, ULONG bdf)
     return XHCI_TBT_BRNUM_MAX_BRIDGES;
 }
 
+/*
+ * The command of the journalled bridge at `bdf` written with `value`, only
+ * while it still reads as the bridge journalled (a replacement is never
+ * given a decode), and read back under `compare`: 1 when it holds.
+ */
+static ULONG brCmdPut(BRNUM_CTX *c, ULONG bdf, ULONG value, ULONG compare)
+{
+    ULONG k;
+
+    k = brSlot(c, bdf);
+    if (k >= XHCI_TBT_BRNUM_MAX_BRIDGES ||
+        !brSame(c->Io, bdf, c->R->Id[k])) {
+        return 0;
+    }
+    return brPut(c, bdf, XHCI_TBT_CFG_COMMAND, value, compare);
+}
+
 /* *sum += add, refused (0) where it would pass 4 GiB. */
 static ULONG brAdd(PULONG sum, ULONG add)
 {
@@ -447,9 +464,9 @@ static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
             c->R->WinWhere = bdf;
             return XHCI_TBT_BRWIN_STALE;
         }
-        if (!brPut(c, bdf, XHCI_TBT_CFG_COMMAND,
+        if (!brCmdPut(c, bdf,
                    (cmd & 0xFFFFUL) & ~BRWIN_CMD_MEM, BRWIN_CMD_MEM)) {
-            if (!brPut(c, bdf, XHCI_TBT_CFG_COMMAND, cmd & 0xFFFFUL,
+            if (!brCmdPut(c, bdf, cmd & 0xFFFFUL,
                        BRWIN_CMD_MEM)) {
                 c->R->UndoFailed++;
             }
@@ -500,7 +517,7 @@ static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
                 c->R->WinWhere = bdf;
                 rc = XHCI_TBT_BRWIN_ACCESS;
             }
-        } else if (!brPut(c, bdf, XHCI_TBT_CFG_COMMAND, cmd & 0xFFFFUL,
+        } else if (!brCmdPut(c, bdf, cmd & 0xFFFFUL,
                           BRWIN_CMD_MEM)) {
             c->R->UndoFailed++;
             if (rc == 0) {

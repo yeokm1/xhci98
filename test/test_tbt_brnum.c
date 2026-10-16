@@ -1414,6 +1414,21 @@ static VOID test_reopen(VOID)
     CHECK_EQ(m.N[usp].Buses, 0x00080706UL, "the bus numbers as they were");
     goRefuseAt = 0;
 
+    /* Replaced while its decode is paused for sizing: the replacement
+     * is never given the old command; the decode stays off, counted. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Cmd = 0x0006UL;
+    m.N[usp].BarSize[0] = 0x1000UL;
+    goCalls = 0;
+    goRefuseAt = 2;
+    goReplace = usp;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, gocb, NULL, &r),
+             XHCI_TBT_BRNUM_STALE, "replaced: stale");
+    CHECK_EQ(m.N[usp].Cmd, 0x0004UL, "the replacement left with decode off");
+    CHECK_EQ(r.UndoFailed >= 1, 1, "the restore not made, counted");
+    goRefuseAt = 0;
+    goReplace = ROOT;
+
     /* The NVMe not answering yet behind the stopped chain: with
      * WAIT_EMPTY not ready, nothing written; and answering Retry Status
      * the same. */
