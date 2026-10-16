@@ -2904,16 +2904,18 @@ static int same_dir(const char *a, const char *b)
     }
     /* Both exist: a file made in one is looked for in the other, which
      * also sees through a junction or a substituted drive. */
-    if (na == 0 || nb == 0) {
-        return 0;
+    if (na == 0 || nb == 0 || opts.List) {
+        return 0;   /* /list writes nothing, not even a probe */
     }
-    join(pa, sizeof(pa), a, "XHCIPROB.TMP");
-    join(pb, sizeof(pb), b, "XHCIPROB.TMP");
-    _snprintf(mark, sizeof(mark) - 1, "%08lX%08lX",
-              (unsigned long)GetTickCount(),
-              (unsigned long)GetCurrentProcessId());
+    /* A name of this run's own, made new: no file of the user's is ever
+     * opened, truncated or deleted by it. */
+    _snprintf(mark, sizeof(mark) - 1, "XI%06lX.TMP",
+              (unsigned long)((GetTickCount() ^ GetCurrentProcessId()) &
+                              0xFFFFFFUL));
     mark[sizeof(mark) - 1] = '\0';
-    h = CreateFileA(pa, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+    join(pa, sizeof(pa), a, mark);
+    join(pb, sizeof(pb), b, mark);
+    h = CreateFileA(pa, GENERIC_WRITE, 0, NULL, CREATE_NEW,
                     FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         return 0;
@@ -3116,7 +3118,16 @@ static int choose_dir(void)
         }
         out("Install directory: %s\n", toolDir);
     }
-    /* A move an earlier run could not finish is finished now. */
+    /* A move an earlier run could not finish is finished now; another
+     * move waits until it is, so no directory is ever lost track of. */
+    if (moveFrom[0] != '\0' && oldToolDir[0] != '\0' &&
+        !same_dir(moveFrom, oldToolDir) && !same_dir(toolDir, oldToolDir) &&
+        !same_dir(toolDir, moveFrom)) {
+        out("REFUSED: an earlier move from %s to %s is not finished. Run "
+            "INSTALL.BAT once\nmore with %s first.\n", moveFrom, oldToolDir,
+            oldToolDir);
+        return 0;
+    }
     if (moveFrom[0] != '\0' && !same_dir(moveFrom, toolDir) &&
         (oldToolDir[0] == '\0' || same_dir(oldToolDir, toolDir))) {
         inst_copy(oldToolDir, moveFrom, sizeof(oldToolDir));
@@ -3319,23 +3330,44 @@ static void hashed_cleanup(void)
 
 /* The record of a directory a move could not empty (HKLM\Software\xhci98,
  * MoveFrom): the next install finishes the move, the uninstall cleans it. */
-static void movefrom_set(const char *dir)
+static int movefrom_set(const char *dir)
 {
     HKEY k;
+    int ok = 1;
 
     if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
-        return;
+        return 0;
     }
     if (dir != NULL) {
-        RegSetValueExA(k, INST_DIR_MOVEFROM, 0, REG_SZ, (const BYTE *)dir,
-                       (DWORD)strlen(dir) + 1);
-        logonly("wrote HKLM\\%s\\%s = %s\n", INST_DIR_KEY, INST_DIR_MOVEFROM,
-                dir);
+        ok = RegSetValueExA(k, INST_DIR_MOVEFROM, 0, REG_SZ,
+                            (const BYTE *)dir, (DWORD)strlen(dir) + 1) ==
+             ERROR_SUCCESS;
+        logonly("wrote HKLM\\%s\\%s = %s (%s)\n", INST_DIR_KEY,
+                INST_DIR_MOVEFROM, dir, ok ? "ok" : "failed");
     } else if (RegDeleteValueA(k, INST_DIR_MOVEFROM) == ERROR_SUCCESS) {
         logonly("deleted HKLM\\%s\\%s\n", INST_DIR_KEY, INST_DIR_MOVEFROM);
     }
     RegCloseKey(k);
+    return ok;
+}
+
+/* A move recorded before anything moves (record 23 section 9.6): the old
+ * directory as MoveFrom, then the new one as InstallDir, so whatever stops
+ * the move part-way, the next run and the uninstall know both. 1, or 0
+ * when the registry cannot take it (said; nothing has changed). */
+static int begin_move(void)
+{
+    if (opts.List || !moving()) {
+        return 1;
+    }
+    if (!movefrom_set(oldToolDir) || !record_dir()) {
+        out("The move to %s could not be recorded in the registry: nothing "
+            "moves.\n", toolDir);
+        flagFailed = 1;
+        return 0;
+    }
+    return 1;
 }
 
 static void movefrom_get(char *out, size_t cap)
@@ -3374,7 +3406,8 @@ static void old_dir_cleanup(void)
         copies_remove(oldToolDir, inst_eq(oldToolDir, legacy));
     }
     toolLeft = (tray_paths_in(oldToolDir, &o) &&
-                (file_exists(o.Exe, NULL) || file_exists(o.Bak, NULL))) ||
+                (file_exists(o.Exe, NULL) || file_exists(o.Bak, NULL) ||
+                 file_exists(o.Del, NULL))) ||
                flatLeft;
     if (RemoveDirectoryA(oldToolDir)) {
         flagChanged = 1;
@@ -3441,7 +3474,11 @@ static void tray_install(void)
     if (moving()) {
         TRAY_PATHS o;
         INST_U32 ov[4];
-        if (tray_paths_in(oldToolDir, &o) && file_version(o.Exe, ov) > 0 &&
+        /* An interrupted replacement there is put right first, so a
+         * newer tool left as .BAK is the one compared. */
+        if (tray_paths_in(oldToolDir, &o) &&
+            (opts.List || tray_leftovers(&o)) &&
+            file_version(o.Exe, ov) > 0 &&
             (pkg <= 0 || inst_ver_cmp(ov, pv) > 0)) {
             inst_copy(from, o.Exe, sizeof(from));
             memcpy(pv, ov, sizeof(pv));
@@ -3783,7 +3820,8 @@ static void local_remove_all(void)
         for (i = 0; i < 3; i++) {
             d = i == 0 ? toolDir : i == 1 ? legacy : oldToolDir;
             if (d[0] != '\0' && tray_paths_in(d, &t) &&
-                (file_exists(t.Exe, NULL) || file_exists(t.Bak, NULL))) {
+                (file_exists(t.Exe, NULL) || file_exists(t.Bak, NULL) ||
+                 file_exists(t.Del, NULL))) {
                 left = 1;
             }
         }
@@ -4212,7 +4250,7 @@ static int flat_remove_list(const char *dir, const char *lst)
 /* A staging directory left by a run cut short: when the swap had begun (no
  * list in dir), the files it already moved in are named by the staging
  * list and go; the staging directory goes in any case. */
-static void flat_drop_work(const char *dir)
+static int flat_drop_work(const char *dir)
 {
     char work[INST_PATH_CHARS];
     char lst[INST_PATH_CHARS];
@@ -4220,10 +4258,11 @@ static void flat_drop_work(const char *dir)
     char *p;
     char *nl;
     char file[INST_PATH_CHARS];
+    int left = 0;
 
     join(work, sizeof(work), dir, INST_FLAT_WORK);
     if (GetFileAttributesA(work) == 0xFFFFFFFFUL) {
-        return;
+        return 1;
     }
     join(lst, sizeof(lst), dir, INST_FLAT_LIST);
     if (GetFileAttributesA(lst) == 0xFFFFFFFFUL) {
@@ -4250,13 +4289,26 @@ static void flat_drop_work(const char *dir)
             if (DeleteFileA(file)) {
                 flagChanged = 1;
             }
+            if (GetFileAttributesA(file) != 0xFFFFFFFFUL) {
+                out("%s could not be deleted (error %lu).\n", file,
+                    (unsigned long)GetLastError());
+                left = 1;
+            }
         }
         free(text);
     }
-    flat_remove_list(work, INST_FLAT_LIST);
+    /* A file that stayed keeps the staging list that names it. */
+    if (left) {
+        flagSteps = 1;
+        return 0;
+    }
+    if (!flat_remove_list(work, INST_FLAT_LIST)) {
+        return 0;
+    }
     if (RemoveDirectoryA(work)) {
         flagChanged = 1;
     }
+    return 1;
 }
 
 /* Everything of the package copy in dir removed (the uninstall, and the
@@ -4266,11 +4318,12 @@ static int flat_remove(const char *dir)
 {
     int a;
     int b;
+    int w;
 
-    flat_drop_work(dir);
+    w = flat_drop_work(dir);
     a = flat_remove_list(dir, INST_FLAT_OLD);
     b = flat_remove_list(dir, INST_FLAT_LIST);
-    return a && b;
+    return a && b && w;
 }
 
 /* The "#TAG xxxxxxxx" line of dir's list, or 0 with none. */
@@ -6359,8 +6412,10 @@ static int run_install_nt(void)
         flagFailed = 1;
     }
     move_ready();
-    tray_install();
-    old_dir_cleanup();
+    if (begin_move()) {
+        tray_install();
+        old_dir_cleanup();
+    }
     if (flagRestart) {
         /* The second sentence only where it can apply (the 2000 leg read
          * it after a settings-only run). */
@@ -6748,10 +6803,14 @@ static int run_install_9x(void)
         return INST_EXIT_REFUSED;
     }
     move_ready();
-    if (!make_local_copy() || !devicepath_update(srcDir)) {
+    if (!begin_move() || !make_local_copy() || !devicepath_update(srcDir)) {
         return inst_exit_code(0, 1, 0, 1);
     }
-    record_dir();
+    if (!record_dir()) {
+        /* Unrecorded, the copy is not one the uninstall would find: the
+         * earlier layouts and the old directory are kept as they are. */
+        return inst_exit_code(0, 1, 0, 1);
+    }
     hashed_cleanup();
     write_values();
     tray_install();

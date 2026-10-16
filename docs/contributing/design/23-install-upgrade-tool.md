@@ -1677,15 +1677,23 @@ install directory, or it is `C:\XHCI98`.
   anything is copied, the tool running from the old directory is closed
   as in section 9.5; one that does not close keeps everything where it is
   this time (said, steps left, exit 4), so the tools and the copies are
-  never split between two directories. Then the tool is put in the new
-  directory (section 9.5's `.TMP` route), the Run value names it, the
-  record is written, and only then is the old copy deleted - one in use
-  is, on NT, renamed `.DEL` and deleted at the restart, and on 98 SE and
-  ME left with a step. Two names of one directory (a short and a long
-  path) are one directory, not a move (`GetShortPathNameA`). Whatever of
-  the tool a move leaves in the old directory is recorded as
-  `MoveFrom` beside `InstallDir`: the next install finishes the move and
-  the uninstall cleans it, and a finished move deletes the value. On 98 SE and ME the new copy is made and
+  never split between two directories. Before anything moves the move is
+  recorded: the old directory as `MoveFrom` beside `InstallDir`, then the
+  new one as `InstallDir` (`begin_move`; a registry that takes neither
+  stops the move with nothing changed), so whatever stops it part-way,
+  the next install finishes it and the uninstall cleans both. Then the
+  tool is put in the new directory (section 9.5's `.TMP` route) - the old
+  directory's tool where it is newer than the package's, after its own
+  leftovers are put right - the Run value names it, and only then is the
+  old copy deleted - one in use is, on NT, renamed `.DEL` and deleted at
+  the restart, and on 98 SE and ME left with a step. A move that leaves
+  nothing behind deletes `MoveFrom`; another move is refused while one is
+  outstanding. Two names of one directory are one directory, not a move:
+  the same text, the same short path (`GetShortPathNameA`), or a probe
+  file of a new name made in one and found in the other (a junction, a
+  substituted drive), never under `/list`. A directory inside, or around,
+  the one the tools are in now is refused, and the Windows and package
+  checks are made on the short forms too. On 98 SE and ME the new copy is made and
   `DevicePath` updated first, and the old directory's copies are removed
   only once `DevicePath` no longer names them; the old directory goes if
   it is then empty. No replacement is deferred and `WININIT.INI` is never
