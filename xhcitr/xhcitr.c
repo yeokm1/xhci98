@@ -490,6 +490,8 @@ static void driver_key_path(const DNODE *d, char *path, size_t cap)
 typedef struct _LVDEV {
     int Dn;
     TR_LEVEL L;
+    int OldStale;           /* xhcicm: the old name is there and is not
+                             * the new name's DWORD                      */
 } LVDEV;
 
 static LVDEV lvDev[TR_LV_DRIVERS][TR_MAX_CTRL];
@@ -523,8 +525,10 @@ static void lv_value(HKEY k, const char *name, TR_RVAL *v)
     }
 }
 
-/* Devnode dn's level as its driver reads it. */
-static void lv_read(int dn, int driver, TR_LEVEL *l)
+/* Devnode dn's level as its driver reads it; *oldStale (when not NULL)
+ * set for an xhcicm key whose old name is there and differs from the
+ * new name's DWORD. */
+static void lv_read(int dn, int driver, TR_LEVEL *l, int *oldStale)
 {
     char path[300];
     HKEY k;
@@ -545,6 +549,11 @@ static void lv_read(int dn, int driver, TR_LEVEL *l)
         RegCloseKey(k);
     }
     tr_level_pick(driver, &cur, driver == TR_LV_XHCICM ? &old : NULL, l);
+    if (oldStale != NULL) {
+        *oldStale = driver == TR_LV_XHCICM && cur.State == TR_RV_DWORD &&
+                    old.State != TR_RV_ABSENT &&
+                    !(old.State == TR_RV_DWORD && old.Value == cur.Value);
+    }
 }
 
 /* Every device's level, from the walk in gw. */
@@ -559,7 +568,7 @@ static void lv_collect(void)
             if (lv_is_device(&gw.N[i], d)) {
                 LVDEV *v = &lvDev[d][lvCount[d]++];
                 v->Dn = i;
-                lv_read(i, d, &v->L);
+                lv_read(i, d, &v->L, &v->OldStale);
             }
         }
     }
@@ -590,7 +599,7 @@ static void lv_details(TR_TEXT *t, int dn, int driver)
     if (dn < 0 || !lv_is_device(&gw.N[dn], driver)) {
         return;
     }
-    lv_read(dn, driver, &l);
+    lv_read(dn, driver, &l, NULL);
     tr_level_line(driver, &l, line, sizeof(line));
     tr_printf(t, "  Logging level: %s\n", line);
 }
@@ -606,6 +615,7 @@ static int lv_set(const int *level, char *msg, size_t cap)
     int i;
     int wrote = 0;
     int failed = 0;
+    int changed = 0;        /* a value written, verified or not */
 
     tr_text_init(&t, msg, cap);
     lv_collect();
@@ -641,6 +651,9 @@ static int lv_set(const int *level, char *msg, size_t cap)
             if (r == ERROR_SUCCESS) {
                 r = RegSetValueExA(k, name, 0, REG_DWORD, (const BYTE *)&v,
                                    sizeof(v));
+                if (r == ERROR_SUCCESS) {
+                    changed++;
+                }
                 /* A key that still holds xhcicm's old name gets the same
                  * level under it, so a driver that reads either name
                  * follows the setting. */
@@ -652,9 +665,10 @@ static int lv_set(const int *level, char *msg, size_t cap)
                 }
                 RegCloseKey(k);
             }
-            lv_read(lvDev[d][i].Dn, d, &lvDev[d][i].L);
+            lv_read(lvDev[d][i].Dn, d, &lvDev[d][i].L, &lvDev[d][i].OldStale);
             if (r == ERROR_SUCCESS && lvDev[d][i].L.State == TR_RV_DWORD &&
-                !lvDev[d][i].L.OldName && lvDev[d][i].L.Value == v) {
+                !lvDev[d][i].L.OldName && lvDev[d][i].L.Value == v &&
+                !lvDev[d][i].OldStale) {
                 ok++;
                 wrote++;
             } else if (r != ERROR_SUCCESS) {
@@ -693,7 +707,9 @@ static int lv_set(const int *level, char *msg, size_t cap)
     if (failed == 0 && wrote > 0) {
         return INST_EXIT_DONE;
     }
-    return wrote > 0 ? INST_EXIT_FAILED : INST_EXIT_REFUSED;
+    /* 2 when anything in the registry changed, so the caller offers the
+     * restart; 1 only when nothing did. */
+    return wrote > 0 || changed > 0 ? INST_EXIT_FAILED : INST_EXIT_REFUSED;
 }
 
 /* ======================================================================== */
@@ -3833,10 +3849,11 @@ static void lv_apply(HWND dlg)
         int c = lv_checked(dlg, d);
         for (k = 0; k < lvCount[d]; k++) {
             ls[k] = lvDev[d][k].L;
-            oldName |= ls[k].OldName;
+            oldName |= ls[k].OldName | lvDev[d][k].OldStale;
         }
         want[d] = -1;
-        /* A level read from xhcicm's old name is written under the new. */
+        /* A level read from xhcicm's old name is written under the new,
+         * and an old name that differs from the new is written again. */
         if (c >= 0 && lvCount[d] > 0 &&
             !(tr_level_common(ls, lvCount[d], &lv) && lv == c && !oldName)) {
             want[d] = c;
