@@ -111,9 +111,9 @@ ntoskrnl.exe!PsCreateSystemThread            all  required  w2k-export; win98-pr
 ntoskrnl.exe!PsTerminateSystemThread         all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsTerminateSystemThread, hint BB); NUSB USBPORT.SYS 5.00.2195.5652 (hint C2) (Appendix A row 113)
 ntoskrnl.exe!ObReferenceObjectByHandle      all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!ObReferenceObjectByHandle, hint AA) (+11 other 98 SE) (Appendix A row 116). Called on NT only (IoIsWdmVersionAvailable(1, 0x10): Windows 2000 is WDM 1.10, Windows 98 1.00, ME 1.05): the stop waits on the thread object there and on an event on Windows 98, where that wait faulted (runs/run-26.md). A NULL object type: PsThreadType is a data import
 ntoskrnl.exe!ObfDereferenceObject           all  required  w2k-export; win98-precedent hidclass.sys 4.10.2222 (NTOSKRNL.EXE!ObfDereferenceObject, hint AC) (+16 other 98 SE) (Appendix A row 34). The ObDereferenceObject macro; NT only, as above
-# The nvme98 link-state channel (cm_nvlinkos.c; tasks 39-A.7 and 40-A.7;
-# nvme98's nvme98cm.h, its decision MD-6): the callback object
-# \Callback\Nvme98LinkState and its one callback, created at DriverEntry
+# The stor98 link-state channel (cm_nvlinkos.c; tasks 39-A.7 and 40-A.7;
+# stor98's stor98cm.h, its decision MD-6): the callback object
+# \Callback\Stor98LinkState and its one callback, created at DriverEntry
 # and unregistered at unload. Called on NT only (IoIsWdmVersionAvailable(1,
 # 0x10)); Windows 98 SE and ME take the registry record instead, but the
 # image still has to load there, and no stock 98 SE driver imports the

@@ -1,31 +1,29 @@
 /*
- * cm_nvlinkos.c - the driver half of the nvme98 link-state channel
+ * cm_nvlinkos.c - the driver half of the stor98 link-state channel
  * (cm_nvlink.h; roadmap-usb4.md tasks 39-A.7 and 40-A.7): the table's one
- * allocation, the NT callback object, the Windows 98 SE and ME registry
- * record, and the seam's calls, over cm_nvlink.c's pure entry protocol.
+ * allocation, the NT callback object, the channel left unoffered on
+ * Windows 98 SE and ME, and the seam's calls, over cm_nvlink.c's pure entry protocol.
  *
  * ONE TABLE PER DRIVER LOAD. CmNvlinkInit allocates it (CmAlloc, so in
  * cm_pool.c's one pool site) and nothing ever frees it. A reload of this
  * driver (every NHI and filter gone, then back) allocates a new one and
- * answers queries with it; an nvme98 instance bound before the reload
+ * answers queries with it; a stor98 instance bound before the reload
  * keeps polling the old one, which stays valid and frozen at its last
  * state, so it gets no statement and falls back to its gone deadline
  * (MD-1). That is the one thing a reload loses.
  *
  * SHARED BY EVERY DOMAIN. Each NHI's thread writes the entries of its own
  * tunnel ports; cmNvLock serialises the writes and the shadow below
- * (which domain marked an entry, on which bridge, when). nvme98 reads
+ * (which domain marked an entry, on which bridge, when). stor98 reads
  * without the lock, by the entry's sequence (cm_nvlink.c).
  *
- * WINDOWS 98 SE AND ME. No callback object: the rendezvous is the record
- * cm_nvlink.h describes, under HKEY_LOCAL_MACHINE, written through the VMM's
- * registry services (_RegCreateKey 14Ah, _RegSetValueEx 152h, _RegCloseKey
- * 149h: their places in the Windows 98 DDK's VMM.H service table, counted
- * from Get_VMM_Version, service 0, and checked against VMM.INC) reached by
- * the same INT 20h dynalink cm_cfgmg.c uses for CONFIGMG, from the NHI's
- * thread, a passive thread of the system VM. x86 only.
+ * WINDOWS 98 SE AND ME. No callback object, and in this build no
+ * rendezvous at all: interface 3's locator is accepted only beside a
+ * current-boot proof this driver would have to host (cm_nvlink.h), and
+ * neither is published (CmNvlinkOffered; roadmap-usb4.md NV9X.1). The
+ * table is still allocated; no 9x exposure publishes into it.
  *
- * IRQL: as cm_nvlink.h; the callback at the caller's IRQL (nvme98 calls
+ * IRQL: as cm_nvlink.h; the callback at the caller's IRQL (stor98 calls
  * it at PASSIVE_LEVEL from HwFindAdapter), touching nothing but an
  * interlocked count and the reply.
  */
@@ -48,17 +46,17 @@ typedef struct _CM_NV_SHADOW {
     ULONG Id;           /* the function's ids when UP was published      */
 } CM_NV_SHADOW;
 
-static PNVME98LS_TABLE cmNvTable;
+static PSTOR98LS_TABLE cmNvTable;
 static KSPIN_LOCK cmNvLock;
-static CM_NV_SHADOW cmNvShadow[NVME98LS_ENTRIES];
+static CM_NV_SHADOW cmNvShadow[STOR98LS_ENTRIES];
 static BOOLEAN cmNvNt;
 static BOOLEAN cmNvOsQualified; /* 2000 x86, XP x64 (record 21 7.2)      */
 static PCALLBACK_OBJECT cmNvObject;
 static PVOID cmNvRegistration;
 static LONG cmNvQueries;
-static ULONG cmNvRecord;        /* 9x: the record was written            */
-static ULONG cmNvRecordTried;   /* 0 not yet, 1 being written, 2 done    */
-static ULONG cmNvRecordError;
+static ULONG cmNvRecord;        /* 9x: the locator was written (never, in
+                                   this build: CmNvlinkOffered)          */
+static ULONG cmNvRecordTried;   /* 9x: 0 not yet asked, 2 asked          */
 static ULONG cmNvRemoveSeq;
 
 /* Each domain's latest connection generation per host USB4 port, from the
@@ -302,16 +300,16 @@ static ULONG cmNvSecondary(ULONG bridge)
 static VOID cmNvCallback(PVOID context, PVOID argument1, PVOID argument2)
 {
     UNREFERENCED_PARAMETER(context);
-    if (argument1 == NVME98LS_QUERY && argument2 != NULL &&
+    if (argument1 == STOR98LS_QUERY && argument2 != NULL &&
         cmNvTable != NULL) {
-        *(PNVME98LS_TABLE *)argument2 = cmNvTable;
+        *(PSTOR98LS_TABLE *)argument2 = cmNvTable;
         InterlockedIncrement(&cmNvQueries);
     }
 }
 
 VOID CmNvlinkInit(VOID)
 {
-    static WCHAR name[] = NVME98LS_CALLBACK_NAME;
+    static WCHAR name[] = STOR98LS_CALLBACK_NAME;
     UNICODE_STRING text;
     OBJECT_ATTRIBUTES attributes;
     NTSTATUS status;
@@ -327,7 +325,7 @@ VOID CmNvlinkInit(VOID)
 #else
     cmNvOsQualified = (BOOLEAN)(cmNvNt && !IoIsWdmVersionAvailable(1, 0x20));
 #endif
-    cmNvTable = (PNVME98LS_TABLE)CmAlloc(sizeof(NVME98LS_TABLE));
+    cmNvTable = (PSTOR98LS_TABLE)CmAlloc(sizeof(STOR98LS_TABLE));
     if (cmNvTable == NULL) {
         return;
     }
@@ -367,117 +365,29 @@ VOID CmNvlinkUnload(VOID)
     }
 }
 
-#if defined(_X86_)
-
-#define CM_NV_VMM_ID            0x0001  /* VMM.H, VMM_DEVICE_ID          */
-#define CM_NV_SVC_CLOSE_KEY     0x0149  /* _RegCloseKey                  */
-#define CM_NV_SVC_CREATE_KEY    0x014A  /* _RegCreateKey                 */
-#define CM_NV_SVC_SET_VALUE     0x0152  /* _RegSetValueEx                */
-#define CM_NV_HKEY_LOCAL_MACHINE 0x80000002UL
-#define CM_NV_REG_BINARY        3UL
-
-typedef ULONG (__cdecl *CM_NV_FN1)(ULONG a);
-typedef ULONG (__cdecl *CM_NV_FN3)(ULONG a, ULONG b, ULONG c);
-typedef ULONG (__cdecl *CM_NV_FN6)(ULONG a, ULONG b, ULONG c, ULONG d,
-                                   ULONG e, ULONG f);
-
-static VOID cmNvThunk(PUCHAR t, ULONG service)
-{
-    t[0] = 0xCD;
-    t[1] = CMG_DYNALINK_INT;
-    t[2] = (UCHAR)(service & 0xFFUL);
-    t[3] = (UCHAR)(((service | CMG_DYNALINK_JMP) >> 8) & 0xFFUL);
-    t[4] = (UCHAR)(CM_NV_VMM_ID & 0xFF);
-    t[5] = (UCHAR)((CM_NV_VMM_ID >> 8) & 0xFF);
-    t[6] = 0xCC;
-    t[7] = 0xCC;
-}
-
-/* The record, once per load: 0 or the VMM's registry error. */
-static ULONG cmNvWriteRecord(ULONG clock)
-{
-    static char key[] = CM_NVLINK_REC_KEY;
-    static char value[] = CM_NVLINK_REC_VALUE;
-    UCHAR record[CM_NVLINK_RECORD_BYTES];
-    PUCHAR t;
-    ULONG hkey;
-    ULONG error;
-    ULONG cookie;
-
-    t = (PUCHAR)CmAlloc(3 * 8);
-    if (t == NULL) {
-        return 0xFFFFFFFFUL;
-    }
-    cmNvThunk(t, CM_NV_SVC_CREATE_KEY);
-    cmNvThunk(t + 8, CM_NV_SVC_SET_VALUE);
-    cmNvThunk(t + 16, CM_NV_SVC_CLOSE_KEY);
-    cookie = (clock * 0x9E3779B1UL) ^ (ULONG)(ULONG_PTR)cmNvTable ^
-             0x4E564C4BUL;
-    if (cookie == 0) {
-        cookie = 1;
-    }
-    *(volatile ULONG *)&cmNvTable->Reserved = cookie;
-    CmNvlinkRecordEncode(record, (ULONG)(ULONG_PTR)cmNvTable,
-                         sizeof(NVME98LS_TABLE), cookie);
-    hkey = 0;
-    error = ((CM_NV_FN3)t)(CM_NV_HKEY_LOCAL_MACHINE, (ULONG)(ULONG_PTR)key,
-                           (ULONG)(ULONG_PTR)&hkey);
-    if (error == 0) {
-        error = ((CM_NV_FN6)(t + 8))(hkey, (ULONG)(ULONG_PTR)value, 0,
-                                     CM_NV_REG_BINARY,
-                                     (ULONG)(ULONG_PTR)record,
-                                     CM_NVLINK_RECORD_BYTES);
-        (VOID)((CM_NV_FN1)(t + 16))(hkey);
-    }
-    CmFree(t);
-    return error;
-}
-
-#endif /* _X86_ */
-
-/* 9x: the record, written at the first tunnel action of the boot rather
- * than at the start: no registry service is called while the NHI's own
- * start is still pending in the configuration manager (the CONFIGMG
- * route's rule, cm_reenum.c). Before any UP, so before nvme98 can look. */
+/* 9x: the channel is not offered (CmNvlinkOffered: interface 3's proof
+ * and locator are not published by this build), so no exposure there
+ * publishes an UP, nothing is waited for and no removal request is made;
+ * logged once. NT: always ready. */
 static BOOLEAN cmNvEnsure(PCM_NHI nhi)
 {
     KIRQL irql;
-    ULONG mine;
-    ULONG start;
+    ULONG first;
 
     if (cmNvTable == NULL) {
         return FALSE;
     }
-    if (cmNvNt) {
+    if (CmNvlinkOffered(cmNvNt)) {
         return TRUE;
     }
     KeAcquireSpinLock(&cmNvLock, &irql);
-    mine = cmNvRecordTried == 0 ? 1UL : 0UL;
-    if (mine) {
-        cmNvRecordTried = 1;
-    }
-    KeReleaseSpinLock(&cmNvLock, irql);
-    if (!mine) {
-        /* Another domain's thread is writing it: wait for it, within a
-         * bound; still unwritten after that, this exposure publishes no UP
-         * (the channel is unavailable to it) and the next one asks again. */
-        start = cmNvNow(nhi);
-        while (cmNvRecordTried != 2 &&
-               CmNvlinkLeft(start, cmNvNow(nhi), 2000UL) != 0) {
-            nhi->Host.Sleep(nhi->Host.Context, CM_NVLINK_POLL_MS);
-        }
-        return (BOOLEAN)(cmNvRecordTried == 2 && cmNvRecord != 0);
-    }
-#if defined(_X86_)
-    cmNvRecordError = cmNvWriteRecord(cmNvNow(nhi));
-#else
-    cmNvRecordError = 0xFFFFFFFEUL;
-#endif
-    cmNvRecord = cmNvRecordError == 0 ? 1UL : 0UL;
+    first = cmNvRecordTried == 0 ? 1UL : 0UL;
     cmNvRecordTried = 2;
-    CmLogNote(nhi, "cm.nvlink.9x.record",
-              (cmNvRecord << 31) | (cmNvRecordError & 0xFFFFUL));
-    return (BOOLEAN)(cmNvRecord != 0);
+    KeReleaseSpinLock(&cmNvLock, irql);
+    if (first) {
+        CmLogNote(nhi, "cm.nvlink.9x.not-offered", 0);
+    }
+    return FALSE;
 }
 
 VOID CmNvlinkStart(PCM_NHI nhi)
@@ -517,7 +427,7 @@ static CM_NV_U4 *cmNvU4Of(PCM_NHI nhi, BOOLEAN create);
  * again each pass for CM_NV_LATE_MS (CmNvlinkService), the fresh
  * exposure's new generation still owed; `arm` FALSE: it answered, the
  * debt is paid. The UP so
- * published follows the operating system's enumeration: an nvme98
+ * published follows the operating system's enumeration: a stor98
  * instance bound before it finds its entry later, and the retirement
  * before the exposure kept any old statement away from it. */
 static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge, BOOLEAN arm)
@@ -659,7 +569,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
      * its bus and by the entries last published or marked for it. */
     retired = 0;
     KeAcquireSpinLock(&cmNvLock, &irql);
-    for (i = 0; i < NVME98LS_ENTRIES; i++) {
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
         if (cmNvShadow[i].Owner != NULL && cmNvShadow[i].Owner != nhi &&
             cmNvShadow[i].Waiting) {
             /* Another domain's statement, still awaited: never ours. */
@@ -667,7 +577,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
         }
         if ((cmNvShadow[i].Bridge == bridge && cmNvShadow[i].Owner != NULL) ||
             (bus != CM_NVLINK_NONE &&
-             (cmNvTable->Entry[i].Flags & NVME98LS_IN_USE) != 0 &&
+             (cmNvTable->Entry[i].Flags & STOR98LS_IN_USE) != 0 &&
              cmNvTable->Entry[i].BusNumber == bus)) {
             if (CmNvlinkRetireEntry(cmNvTable, i)) {
                 retired++;
@@ -740,8 +650,8 @@ static ULONG cmNvMark(PCM_NHI nhi, ULONG bridge, ULONG verdict)
     bus = cmNvSecondary(bridge);
     marked = 0;
     seen = 0;
-    for (i = 0; i < NVME98LS_ENTRIES; i++) {
-        if ((cmNvTable->Entry[i].Flags & NVME98LS_UP) == 0 ||
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if ((cmNvTable->Entry[i].Flags & STOR98LS_UP) == 0 ||
             (cmNvShadow[i].Bridge != bridge &&
              cmNvTable->Entry[i].BusNumber != bus) ||
             (cmNvShadow[i].Owner != NULL && cmNvShadow[i].Owner != nhi)) {
@@ -923,7 +833,7 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
     }
     pending = 0;
     KeAcquireSpinLock(&cmNvLock, &irql);
-    for (i = 0; i < NVME98LS_ENTRIES; i++) {
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
         if (cmNvShadow[i].Owner == nhi && cmNvShadow[i].Waiting) {
             pending++;
         }
@@ -938,7 +848,7 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
         pending = 0;
         now = cmNvNow(nhi);
         KeAcquireSpinLock(&cmNvLock, &irql);
-        for (i = 0; i < NVME98LS_ENTRIES; i++) {
+        for (i = 0; i < STOR98LS_ENTRIES; i++) {
             if (cmNvShadow[i].Owner != nhi || !cmNvShadow[i].Waiting) {
                 continue;
             }
@@ -947,11 +857,11 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
                 cmNvShadow[i].Waiting = 0;
                 cmNvAcked++;
             } else if ((cmNvTable->Entry[i].Flags &
-                        NVME98LS_DOWN_QUIESCED) == 0) {
+                        STOR98LS_DOWN_QUIESCED) == 0) {
                 /* Superseded by a later UP or retirement. */
                 cmNvShadow[i].Waiting = 0;
-            } else if (!cmNvReceiver()) {
-                /* No nvme98 has the table: no acknowledgement can come. */
+            } else if (CmNvlinkAwaitBoundMs(cmNvNt, cmNvReceiver()) == 0) {
+                /* No stor98 has the table: no acknowledgement can come. */
                 cmNvShadow[i].Waiting = 0;
                 cmNvNoReceiver++;
             } else if (CmNvlinkLeft(cmNvShadow[i].MarkedAt, now,
@@ -988,7 +898,7 @@ BOOLEAN CmNvlinkWkCandidate(PCM_NHI owner, ULONG bridge, ULONG id,
     KIRQL irql;
 
     if (cmNvTable == NULL || cmNvNt || cmNvRecord == 0 || owner == NULL ||
-        index >= NVME98LS_ENTRIES) {
+        index >= STOR98LS_ENTRIES) {
         return FALSE;
     }
     KeAcquireSpinLock(&cmNvLock, &irql);
@@ -996,7 +906,7 @@ BOOLEAN CmNvlinkWkCandidate(PCM_NHI owner, ULONG bridge, ULONG id,
                    cmNvShadow[index].Bridge == bridge &&
                    cmNvShadow[index].Id == id &&
                    (cmNvTable->Entry[index].Flags &
-                    (NVME98LS_UP | CM_NVLINK_REMOVE_PENDING)) == NVME98LS_UP);
+                    (STOR98LS_UP | CM_NVLINK_REMOVE_PENDING)) == STOR98LS_UP);
     if (ok) {
         *bus = cmNvTable->Entry[index].BusNumber;
         *slot = cmNvTable->Entry[index].SlotNumber;
@@ -1015,7 +925,7 @@ ULONG CmNvlinkWkRequest(PCM_NHI owner, ULONG index, ULONG gen, ULONG id,
 
     *sequence = 0;
     if (cmNvTable == NULL || cmNvNt || cmNvRecord == 0 || owner == NULL ||
-        index >= NVME98LS_ENTRIES) {
+        index >= STOR98LS_ENTRIES) {
         return CM_NVLINK_NONE;
     }
     /* The function still answers with that id (outside the lock). */
@@ -1030,7 +940,7 @@ ULONG CmNvlinkWkRequest(PCM_NHI owner, ULONG index, ULONG gen, ULONG id,
     KeAcquireSpinLock(&cmNvLock, &irql);
     if (cmNvShadow[index].Owner == owner && cmNvShadow[index].Id == id &&
         (cmNvTable->Entry[index].Flags &
-         (NVME98LS_UP | CM_NVLINK_REMOVE_PENDING)) == NVME98LS_UP &&
+         (STOR98LS_UP | CM_NVLINK_REMOVE_PENDING)) == STOR98LS_UP &&
         cmNvTable->Entry[index].LinkGeneration == gen) {
         cmNvRemoveSeq = (cmNvRemoveSeq + 1) & 0x00FFFFFFUL;
         if (cmNvRemoveSeq == 0) {
@@ -1053,13 +963,13 @@ VOID CmNvlinkWkWithdraw(ULONG index, ULONG sequence)
 {
     KIRQL irql;
 
-    if (cmNvTable == NULL || index >= NVME98LS_ENTRIES || sequence == 0) {
+    if (cmNvTable == NULL || index >= STOR98LS_ENTRIES || sequence == 0) {
         return;
     }
     /* Only this request: another worker's later one is left alone. */
     KeAcquireSpinLock(&cmNvLock, &irql);
     if ((cmNvTable->Entry[index].Flags & CM_NVLINK_REMOVE_PENDING) != 0 &&
-        cmNvTable->Entry[index].Reserved[0] == sequence) {
+        cmNvTable->Entry[index].RemoveSequence == sequence) {
         CmNvlinkRemoveCancel(cmNvTable, index);
     }
     KeReleaseSpinLock(&cmNvLock, irql);
@@ -1073,7 +983,7 @@ VOID CmNvlinkStop(PCM_NHI nhi)
         return;
     }
     KeAcquireSpinLock(&cmNvLock, &irql);
-    for (i = 0; i < NVME98LS_ENTRIES; i++) {
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
         if (cmNvShadow[i].Owner == nhi) {
             cmNvShadow[i].Owner = NULL;
             cmNvShadow[i].Waiting = 0;
@@ -1102,8 +1012,8 @@ ULONG CmNvlinkIdleMs(ULONG configured)
     if (configured <= CM_NVLINK_IDLE_MS || cmNvTable == NULL) {
         return configured;
     }
-    for (i = 0; i < NVME98LS_ENTRIES; i++) {
-        if ((cmNvTable->Entry[i].Flags & NVME98LS_UP) != 0) {
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if ((cmNvTable->Entry[i].Flags & STOR98LS_UP) != 0) {
             return CM_NVLINK_IDLE_MS;
         }
     }
@@ -1277,9 +1187,9 @@ VOID CmNvlinkService(PCM_NHI nhi)
         entries = 0;
         matched = TRUE;
         issued = TbtClockUs(&nhi->Host);
-        for (i = 0; i < NVME98LS_ENTRIES; i++) {
+        for (i = 0; i < STOR98LS_ENTRIES; i++) {
             if (cmNvShadow[i].Owner != nhi || cmNvShadow[i].Bridge != bridge ||
-                (cmNvTable->Entry[i].Flags & NVME98LS_UP) == 0) {
+                (cmNvTable->Entry[i].Flags & STOR98LS_UP) == 0) {
                 continue;
             }
             entries++;

@@ -786,7 +786,12 @@ static int inst_own_file(const char *file)
 
 int inst_bundled_file(const char *name)
 {
-    return inst_starts(name, "nvme98");
+    return inst_starts(name, "stor98");
+}
+
+int inst_bundled_service(const char *service)
+{
+    return inst_eq(service, "stor98");
 }
 
 int inst_own_service(const char *service)
@@ -818,6 +823,25 @@ int inst_inf_is_ours(const char *text)
     }
     if (!providerOk) {
         return 0;
+    }
+    /* The bundled Stor98 shares the Provider: an INF that installs its
+     * service or names one of its files is never this package's. */
+    p = text;
+    while ((p = inst_raw_line(p, line, sizeof(line))) != NULL) {
+        if (inst_inf_kv(line, key, sizeof(key), value, sizeof(value)) &&
+            inst_eq(key, "AddService") &&
+            inst_inf_field(value, 0, field, sizeof(field)) &&
+            inst_bundled_service(field)) {
+            return 0;
+        }
+        if (inst_inf_field(line, 0, field, sizeof(field)) &&
+            inst_eq(field, "HKR") &&
+            inst_inf_field(line, 2, field, sizeof(field)) &&
+            (inst_eq(field, "PortDriver") || inst_eq(field, "NTMPDriver")) &&
+            inst_inf_field(line, 4, field, sizeof(field)) &&
+            inst_bundled_file(field)) {
+            return 0;
+        }
     }
     p = text;
     while ((p = inst_raw_line(p, line, sizeof(line))) != NULL) {

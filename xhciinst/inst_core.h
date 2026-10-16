@@ -134,8 +134,10 @@ int inst_inf_addreg_default(const char *text, const char *name,
                             INST_U32 *value);
 
 /* 1 when the INF is this project's: its [Version] Provider (expanded) is
- * "Yeo Kheng Meng", and it installs one of the services xhci98, xhciuas,
- * xhcicm (AddService) or names one of their files as NTMPDriver. */
+ * "Yeo Kheng Meng", it installs one of the services xhci98, xhciuas,
+ * xhcicm (AddService) or names one of their files as NTMPDriver, and it
+ * neither installs the bundled driver's service nor names one of its files
+ * as PortDriver or NTMPDriver (Stor98's INF has the same Provider). */
 int inst_inf_is_ours(const char *text);
 
 /* ---- ids --------------------------------------------------------------------- */
@@ -501,11 +503,14 @@ const char *inst_confirm_text(int runs, int writes, int nt, int unsure);
 /* 1 when the service is one of this package's (xhci98, xhciuas, xhcicm). */
 int inst_own_service(const char *service);
 
-/* 1 when a file of the flavour directory is the bundled nvme98 driver's
- * (a separate project: every name of its files there starts with "nvme98",
+/* 1 when a file of the flavour directory is the bundled Stor98 driver's
+ * (a separate project: every name of its files there starts with "stor98",
  * package-common.ps1). The tool installs none of them and copies none into
  * its local copy, which is on the hardware wizard's search path. */
 int inst_bundled_file(const char *name);
+
+/* 1 when the service is the bundled Stor98 driver's (stor98). */
+int inst_bundled_service(const char *service);
 
 /* The removal rank: lower goes first. -1 when the devnode is not removed. */
 int inst_remove_rank(const char *instanceId, const char *service,

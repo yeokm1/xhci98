@@ -1817,7 +1817,14 @@ the SHPC slot's presence bit is the only reading.
   the tunnel-down sequence then runs in its place and sees the bus empty
   (section 7.2's budget depends on this).
 
-## 7. The contract with `nvme98`
+## 7. The contract with Stor98 (formerly `nvme98`)
+
+The NVMe driver this section was written against as `nvme98` was renamed
+Stor98 (`stor98`, its file, service and key name) before its first
+release, `0.3.0.0` (2026-10-16); its `docs/RENAME-STOR98.md` is the
+change list, and section 7.2 follows it. Its maintainer decisions (MD-1 to
+MD-6) and gates (G3, Q-9x) keep their names, and sections 7.1 and 7.3 cite
+its plan as it was read under the former name.
 
 `nvme98` (`D:\OneDrive\git-projects\nvme98`, `docs/PLAN.md` section 0.10 and
 gate G3; maintainer decision MD-2 of 2026-10-14) accepts, under assumption
@@ -1882,61 +1889,71 @@ no statement is sent until that and the hardware boundary are both
 settled. Wherever a statement is not sent, `nvme98`'s gone deadline (its
 decision MD-1) is the fallback, as its PLAN already provides.
 
-### 7.2 The channel: `nvme98`'s link-state table (decision D6, as adopted)
+### 7.2 The channel: Stor98's link-state table (decision D6, as adopted)
 
 `nvme98` chose the interface on 2026-10-15 (its decision MD-6, gate G3):
-**a link-state table the connection manager owns**, defined in
-`nvme98`'s `include/nvme98cm.h`, which this tree carries unchanged as
-`src/cm/nvme98cm.h` (BSD-3-Clause; `legal-provenance.md` section 2a). The
-first draft's `IOCTL_SCSI_MINIPORT` route was measured by G3 and rejected
+**a link-state table the connection manager owns**. Stor98 `0.3.0.0`
+defines it in its `include/stor98cm.h`, which this tree carries unchanged
+as `src/cm/stor98cm.h` (BSD-3-Clause; `legal-provenance.md` section 2a),
+in three variants: interface 1, a diagnostic `IOCTL_SCSI_MINIPORT`
+message (signature `STOR98CM`); interface 2, the table on NT; interface
+3, the same table on Windows 98 SE and ME with a registry locator, a
+current-boot proof and a removal transaction, its rules numbered R1 to
+R12. The rename gave every name and signature a new value and set every
+version field to 4 (the table's, the 9x locator's and the IOCTL
+message's), with no compatibility with the former names in either
+direction: a connection manager built against `nvme98cm.h` and a Stor98
+receiver, or the reverse, have no channel (R2), and the gone deadline
+(MD-1) applies. The first
+draft's `IOCTL_SCSI_MINIPORT` route was measured by G3 and rejected
 as the carrier: the port starts it only when the addressed unit has a free
-slot, so under a saturated queue it arrived after `nvme98`'s gone deadline,
+slot, so under a saturated queue it arrived after the driver's gone deadline,
 and once the disk is gone it fails. The discovery worker, the recipient
 cache and the per-connection discovery context this section proposed go
-with it; nothing in this driver looks for `nvme98`. `src/cm/cm_nvlink.c`
-(the pure entry protocol, host-tested) and `cm_nvlinkos.c` implement this
-side.
+with it; nothing in this driver looks for Stor98. `src/cm/cm_nvlink.c`
+(the pure entry protocol, host-tested) and `cm_nvlinkos.c` implement
+this side: interface 2 on NT; on Windows 98 SE and ME, in `3.0.0.0`,
+nothing (the next bullet but one).
 
-- **The table.** One `NVME98LS_TABLE` in non-paged pool, allocated at
+- **The table.** One `STOR98LS_TABLE` (signature `S98L`, 4C383953h,
+  version 4) in non-paged pool, allocated at
   `DriverEntry` and **never freed**, not even at unload, so a pointer
-  `nvme98` took never dangles. Eight entries, one per tunnelled NVMe
+  Stor98 took never dangles. Eight entries, one per tunnelled NVMe
   function, keyed by bus (the tunnel bridge's secondary bus) and
   `PCI_SLOT_NUMBER`; each carries a `LinkGeneration`, `Flags` (`IN_USE`,
-  `UP`, `DOWN_QUIESCED`), `AckGeneration` (the only field `nvme98` writes)
-  and a `Sequence` that is odd while this driver writes the entry. A
-  reload of this driver allocates a new table; an `nvme98` instance bound
+  `UP`, `DOWN_QUIESCED`, and on 9x `REMOVE_PENDING`), `AckGeneration` and
+  on 9x `RemoveAck` (the only fields Stor98 writes), `RemoveSequence` (9x)
+  and a `Sequence` that is odd while this driver writes the entry; the
+  header's `Cookie` is the 9x per-boot cookie (0 on NT). A
+  reload of this driver allocates a new table; a Stor98 instance bound
   before the reload keeps the old one, frozen, and gets no statement.
-- **NT rendezvous.** At `DriverEntry` the callback object
-  `\Callback\Nvme98LinkState` is created (`ExCreateCallback`,
-  `OBJ_PERMANENT`) with one callback that answers `NVME98LS_QUERY` with the
-  table's address; `nvme98` opens it in `HwFindAdapter`, once. The unload
+- **NT rendezvous** (interface 2). At `DriverEntry` the callback object
+  `\Callback\Stor98LinkState` is created (`ExCreateCallback`,
+  `OBJ_PERMANENT`) with one callback that answers `STOR98LS_QUERY` with the
+  table's address; Stor98 opens it in `HwFindAdapter`, once. The unload
   unregisters the callback and keeps the table.
-- **Windows 98 SE and ME rendezvous** (`nvme98`'s MD-5: a registry record
-  the connection manager writes at each boot, never a pointer trusted
-  across boots). `nvme98cm.h` defines the NT rendezvous only, so the record
-  is **this driver's proposal for `nvme98` to adopt**: key
-  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\nvme98` (G3.md's
-  option 2), `REG_BINARY` value `LinkState`, 20 bytes of little-endian
-  `ULONG`s - signature `N98L`, version 1, the table's linear address, its
-  size, and a cookie also written into the table's `Reserved` field. It is
-  written through the VMM's `_RegCreateKey`, `_RegSetValueEx` and
-  `_RegCloseKey` (services 14Ah, 152h and 149h, their places in the Windows
-  98 DDK's `VMM.H` table), reached by the INT 20h dynalink of section 6.1,
-  at the first tunnel action of the boot (no registry service runs while
-  the NHI's own start is pending), and no `UP` is published on 9x until it
-  is. `HKEY_DYN_DATA`, which lives in memory and would not outlive the
-  boot, was the first choice; its root refuses a static key (the VMM
-  answered error 5 on 98 SE), and a dynamic key would need a ring-0
-  provider in this image. So the record persists, and it is a locator,
-  not proof that the table belongs to this boot: checking that the pages
-  are present (`_PageCheckLinRange`) and the signature, version and cookie
-  are preliminary rejection checks only - they establish neither the
-  allocation's lifetime nor the current boot (retained memory at a mapped
-  address could still hold an old table with its old cookie) - so a
-  reader may accept the pointer only once a current-boot proof exists. A current-boot proof - a dynamic key this driver hosts
-  (`_RegCreateDynKey`, its provider in this image and the key deleted at
-  unload) or an independent boot-identity token - is open, for `nvme98`
-  and the owner. Nothing on `nvme98`'s side reads the record yet.
+- **Windows 98 SE and ME: no channel in `3.0.0.0`.** Interface 3 (R3
+  to R5; `nvme98`'s MD-5: never a pointer trusted across boots) finds the
+  table through a locator, `REG_BINARY` value `LinkState` of
+  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98` (20
+  bytes: `S98L`, version 4, the table's linear address, its size and a
+  cookie), which Stor98 accepts only beside a current-boot proof: the
+  dynamic key `HKEY_DYN_DATA\Stor98LinkState`, one per boot, created by
+  the connection manager with `_RegCreateDynKey` and answered by its own
+  resident provider (`BootCookie` and `TableLinear`), deleted only at its
+  unload. This build publishes neither (`CmNvlinkOffered`, owner,
+  2026-10-16; roadmap-usb4.md NV9X.1): a locator without the proof gives
+  Stor98 no channel anyway, and an `UP` it can never acknowledge would
+  only make each link-down and eject wait for nothing. So on 98 SE and ME
+  the table is allocated and stays empty: no `UP` is published, no
+  statement is made (none was made there before either: "The statement"
+  below), no acknowledgement is waited for, and the worker makes no
+  `REMOVE_PENDING` request. Stor98 finds no locator, which is R5's "CM
+  channel unavailable": it runs the disk with no link-state channel, on
+  its own gone deadline (MD-1) and its own pool budget, with no
+  clean-eject handshake; an eject or unplug of the drive takes the
+  removal path every other device takes. The former 9x record
+  (`Services\nvme98`, version 1) is no longer written.
 - **UP before the enumeration.** For each active member, before the call
   that exposes its secondary bus (the invalidation of section 6.2,
   `Reenumerate_DevNode` of section 6.1), the driver scans that bus and
@@ -1949,17 +1966,17 @@ side.
   fresh or not (it follows the acknowledgement wait), every entry behind
   that bridge that carries a statement is retired (`IN_USE` alone,
   generation + 1), found by the bus and by the bridge it was last published
-  or marked for, so an `nvme98` instance that binds after the exposure -
+  or marked for, so a Stor98 instance that binds after the exposure -
   to a function the scan could not see, or one that came back between the
   scan and the enumeration - never records a generation carrying an old
   statement. On Windows 98 SE and ME no `UP` is published while the
-  record is not written. There the tunnel's bus did not answer before
+  proof and locator are not published. There the tunnel's bus did not answer before
   `Reenumerate_DevNode` (98 SE, run-39): a fresh exposure that finds it
   silent leaves the bus to be scanned again on each pass for 10 s, and the
   scan that finds the function publishes the new generation the exposure
   owed - after the enumeration, which the retirement before it makes
   harmless. An entry, once
-  given to a bus and slot, is never given to another: an `nvme98` instance
+  given to a bus and slot, is never given to another: a Stor98 instance
   may still hold it. Where the SHPC slot reads a card present and nothing
   answers yet, the scan waits up to 1 s for it. Only functions on the
   secondary bus itself are seen: an NVMe function behind an enclosure's
@@ -1971,9 +1988,9 @@ side.
   before it asks for one). A device tunnelled before this driver started -
   before boot, or before an install - was enumerated by the operating
   system before any `UP` could exist; it gets its entry at the domain's
-  first exposure, and an `nvme98` instance that found none at
+  first exposure, and a Stor98 instance that found none at
   `HwFindAdapter` has no recorded generation for it (the statement then
-  depends on `nvme98` looking the entry up later; MD-1 otherwise).
+  depends on Stor98 looking the entry up later; MD-1 otherwise).
 - **The statement** is the entry's move to `DOWN_QUIESCED`, made on section
   7.1's condition alone. The seam's tunnel-down poll reads nothing on the
   emulator's SHPC bridge (no writer for its DWORD Select, run-39 39-A.5),
@@ -1995,55 +2012,55 @@ side.
   reading). This qualification list is an orchestrator decision of
   2026-10-15 for the owner to confirm. Otherwise the entries on that member
   whose function no longer answers move to `IN_USE` alone (`UP` cleared,
-  no `DOWN_QUIESCED`), which `nvme98` ignores, and its gone deadline (MD-1)
+  no `DOWN_QUIESCED`), which Stor98 ignores, and its gone deadline (MD-1)
   stands; a function still answering keeps its `UP`.
 - **The acknowledgement before the removal.** Before the removal call of a
   tunnel down or a RESYNC, the thread waits until every entry this domain
   marked reads `AckGeneration` = `LinkGeneration`, or the bound from the
-  mark: 5 s on Windows 2000 and later (`nvme98`'s gone deadline in its test
-  build; the header gives no number), and 3 s on Windows 98 SE and ME,
-  provisional until `nvme98` fixes its 9x gone deadline (a 1 s idle poll
-  plus ME's timer lateness of up to 1.5 s, with margin, and well under
-  that deadline). The acknowledgement ends the wait at once; an idle
-  `nvme98` that has not answered by then is a benign timeout (G3 run C:
+  mark: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
+  test build; the header gives no number), and 3 s on Windows 98 SE and
+  ME, inside interface 3's R12 S4 bounds (at most Stor98's 9x gone
+  deadline, `STOR98LS9X_GONE_MS`, 5 s, and not below
+  `STOR98LS9X_CM_LINK_WAIT_MS`, 2 s) - unused in `3.0.0.0`, where nothing
+  on 9x is awaited (`CmNvlinkAwaitBoundMs`). The acknowledgement ends the
+  wait at once; an idle
+  Stor98 that has not answered by then is a benign timeout (G3 run C:
   nothing was held, and its next request applied the statement), and no
   idle indication shortens or skips the wait - the acknowledgement is the
   only signal. Orchestrator decision of 2026-10-15, owner to confirm. The thread services the ICM between
   reads. On NT it does not wait while no driver
-  has ever asked for the table (no `nvme98` is loaded, so none can answer);
-  on 9x it does not wait where the record was not written.
-- **A removal on 9x** (MD-5): every CONFIGMG call is the domain's
+  has ever asked for the table (no Stor98 is loaded, so none can answer);
+  on 9x it never waits in `3.0.0.0`.
+- **A removal on 9x** (MD-5; unreached in `3.0.0.0`, which offers no
+  9x channel, and kept for NV9X.1): every CONFIGMG call is the domain's
   worker's (section 6.1, `cm_cfgwk.c`), and its removal step wraps the
   handshake around a removal of a function still present:
   `Query_Remove_SubTree` first (the file system's quiescence and the veto -
   a refusal is final, nothing is forced); accepted, a `REMOVE_PENDING`
   request on the entry with a fresh 24-bit sequence, and up to 5 s on the
-  worker for `nvme98`'s answer to that sequence, ended early when the
+  worker for Stor98's answer to that sequence, ended early when the
   worker's request goes stale; then `Remove_SubTree` always, whatever the
   answer, because Windows 98 has no service that cancels an accepted query
   and a driver left query-removed stays quiesced. The answer is logged, and
-  only a clean one is a clean removal; MD-5's "a timeout aborts the orderly
-  eject" cannot hold once the query is accepted on 9x. The
-  acknowledgement wait for a statement, which services the ICM, stays on
-  the connection-manager thread before anything is posted to the worker.
-  The request is the table's `Flags` bit 3, the sequence in `Reserved[0]`
-  and the answer in `Reserved[1]` (sequence in bits 31:8, outcome in 7:0:
-  clean, isolated not clean, failed) - a proposal `nvme98` has since
-  adopted together with the record's location, its current-boot proof and
-  its 9x deadline still to come. The children the worker removes today are
-  functions that vanished, which get no request; under the ICM nothing
-  removes a present one (section 7.4: no per-device teardown).
-  `REMOVE_PENDING` asks `nvme98` for an orderly stop (its flushes and
+  only a clean one is a clean removal. The request is the table's `Flags`
+  bit 3, the sequence in `RemoveSequence` and the answer in `RemoveAck`
+  (sequence in bits 31:8, outcome in 7:0: clean 1, isolated not clean 2,
+  failed 3), interface 3's R9, the layout this driver proposed and
+  `nvme98` adopted. Interface 3 asks more of it than this code does - a
+  14 s answer wait (R11 O4), the deadline read before the answer and the
+  answer taken only on the request's generation (R9c, R6d), the endpoint
+  isolated before a removal that is not clean (O5) and `Remove_SubTree`
+  retried for 30 s (O6) - and NV9X.1 brings those with the proof key.
+  `REMOVE_PENDING` asks Stor98 for an orderly stop (its flushes and
   shutdown), never makes a reset claim, and is made only after an accepted
   query, only while the request is current, and only to the function the
   queried devnode itself names - the entry identified before the query by
   matching its function's path against the devnode's instance id, still
   `UP` at the same generation and still answering with the same ids; where
   that identity cannot be established, no request is made and the removal
-  goes on. So it is safe on any removal path of the worker's, a lost
-  controller's included.
+  goes on.
 
-**The budget, an estimate and not an enforced deadline.** `nvme98`
+**The budget, an estimate and not an enforced deadline.** Stor98
 measures its gone deadline from its own presence loss. The parts: the
 event noticed by the idle poll, which is held to at most 250 ms while any
 entry reads `UP`, whatever `XhciCmPollIdleMs` says; a command in flight
@@ -2054,10 +2071,10 @@ bridge, which it does not read); the channel's own reading, 2 s at most
 and normally one read once stage 3 has run; the entry write, a few
 stores. With nothing queued ahead and no command in flight that is about
 2.3 s; a command or earlier actions add their own bounds. A statement that
-comes after `nvme98`'s deadline misses the deadline's purpose (MD-1 has
-already completed the held requests), but `nvme98` may still apply it as
+comes after Stor98's deadline misses the deadline's purpose (MD-1 has
+already completed the held requests), but Stor98 may still apply it as
 valid evidence, to release memory it quarantined for instance. Nothing on
-the path waits for `nvme98`, which
+the path waits for Stor98, which
 polls the table itself. The acknowledgement wait comes after the
 statement and delays only the removal.
 
@@ -2821,10 +2838,13 @@ assume them, and poll completions with timeouts.
   (branch `main`, `eba0cf1`, read 2026-10-14).
 - `nvme98/docs/PLAN.md` section 0.10, gate G3 and decisions MD-1 and MD-2
   (branch `main`, read 2026-10-14).
-- `nvme98/include/nvme98cm.h` (commit `d08ddadb`, carried unchanged as
-  `src/cm/nvme98cm.h`), `nvme98/docs/gates/G3.md` and `docs/PLAN.md`'s
-  decisions MD-5 and MD-6 (`main` at `52f2ad67`, read 2026-10-15): the
-  adopted channel of section 7.2.
+- `nvme98/include/nvme98cm.h` (commit `d08ddadb`), `nvme98/docs/gates/G3.md`
+  and `docs/PLAN.md`'s decisions MD-5 and MD-6 (`main` at `52f2ad67`, read
+  2026-10-15): the adopted channel of section 7.2 as first carried.
+- `stor98/include/stor98cm.h` (carried unchanged as `src/cm/stor98cm.h`),
+  `stor98/docs/RENAME-STOR98.md` and the `0.3.0.0` release
+  (`releases/0.3.0.0`; `main` at `3e9f51b`, read 2026-10-16): the rename,
+  interface version 4 and interface 3 of section 7.2.
 - This repository: `AGENTS.md`; design records 13 (sections 5.1, 5.2, 7.5),
   15, 18 and 19; `docs/usb-xhci-info/win98-wdm.md`; `src\hcd_entry.c`,
   `src\hcd_svc.c`, `src\hcd_ctl.c`, `src\uas\sources`, `src\xhci98.inf`.

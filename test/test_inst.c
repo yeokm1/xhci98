@@ -448,6 +448,26 @@ static void test_parser(void)
                             "[S]\r\nAddService=usbhub,2,X\r\n"), "not our service");
     CHECK(inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
                            "[S]\r\nAddService = XHCICM , 2, X\r\n"), "xhcicm");
+    /* Stor98 0.3.0.0's INF, in the shape it ships: the same Provider. */
+    CHECK(!inst_inf_is_ours("[Version]\r\nSignature=\"$CHICAGO$\"\r\n"
+                            "Provider=%Provider%\r\n"
+                            "[Manufacturer]\r\n%Mfg%=Stor98_Models\r\n"
+                            "[Stor98_Models]\r\n"
+                            "%Stor98.DeviceDesc%=Stor98_Inst,PCI\\CC_010802\r\n"
+                            "[Stor98_AddReg_9x]\r\nHKR,,PortDriver,,stor98.mpd\r\n"
+                            "[Stor98_Inst.NTx86.Services]\r\n"
+                            "AddService=stor98,%SPSVCINST_ASSOCSERVICE%,Stor98_Service\r\n"
+                            "[Strings]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "Mfg=\"Stor98 Project\"\r\n"
+                            "SPSVCINST_ASSOCSERVICE=0x00000002\r\n"),
+          "Stor98's INF is not ours");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nHKR,,PortDriver,,STOR98.MPD\r\n"),
+          "Stor98's 9x half is not ours");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nAddService=stor98,2,Y\r\n"),
+          "an INF that also installs stor98 is not ours");
 }
 
 static void test_ids(void)
@@ -605,12 +625,17 @@ static void test_helpers(void)
     pe[0x81] = 'E';
     pe[0x84] = 0x64;
     pe[0x85] = 0x86;
-    CHECK(inst_bundled_file("nvme98.inf") && inst_bundled_file("NVME98.SYS") &&
-          inst_bundled_file("nvme98-LICENSE.txt") && inst_bundled_file("nvme98.mpd"),
-          "nvme98's files are the bundled driver's");
+    CHECK(inst_bundled_file("stor98.inf") && inst_bundled_file("STOR98.SYS") &&
+          inst_bundled_file("stor98-LICENSE.txt") && inst_bundled_file("stor98.mpd") &&
+          inst_bundled_file("stor98-test.cer"),
+          "Stor98's files are the bundled driver's");
     CHECK(!inst_bundled_file("xhci98.inf") && !inst_bundled_file("xhcicm.sys") &&
-          !inst_bundled_file("nvme9.inf") && !inst_bundled_file("txtsetup.oem"),
+          !inst_bundled_file("stor9.inf") && !inst_bundled_file("txtsetup.oem") &&
+          !inst_bundled_file("xhci98-test.cer"),
           "this package's own files are not the bundled driver's");
+    CHECK(inst_bundled_service("stor98") && inst_bundled_service("STOR98") &&
+          !inst_bundled_service("xhci98") && !inst_bundled_service("stor98x"),
+          "the bundled driver's service");
     CHECK(inst_pe_machine(pe, sizeof(pe), &m) && m == INST_PE_AMD64, "amd64 PE");
     pe[0x84] = 0x4C;
     pe[0x85] = 0x01;
