@@ -476,6 +476,84 @@ whose HID install asks for the Windows CD; the guests have none, and the
 files were skipped. The cosmetic wrap of the question's drivers line seen
 on these legs was shortened afterwards (one line), with no other change.
 
+### The ORICO enclosure's pre-OS tunnel held at start (`u4-preos`)
+
+The `usb4-emu` cross-check (`scripts\usb4-crosscheck`) built against QEMU
+fork `2a893ea` failed one case of 225,320 checks: the ASM2464 model
+behind `intel-adl`, tunnelled by the model's pre-OS connection manager,
+with `XhciCmPreOsCleanup` 0 - the default - ended HELD for discovery
+(state 6, why 14) instead of preserved.
+
+**Where it was decided.** `tbtU4DiscoverPort` reads ROUTER_CS_0 to 6 of
+the router once and requires Router Ready in step 2 (record 22 section
+9.2). The PCIe walk was whole (both ends' Path Enable, `hd` 8, `hu` 9,
+the LTSSM live, the lanes bonded), ROUTER_CS_5 read `81000000` (PTO and
+CV), and ROUTER_CS_6 read `02000000`: Configuration Ready set, Router
+Ready clear. The model sets Router Ready 5 ms after Enumerated
+(`usb4-router-asm2464.c`, `ASM2464_RR_DELAY_MS`), and the harness starts
+the connection manager the moment the model's pre-OS connection manager
+has written Enumerated.
+
+**Why it passed before.** The same harness and the same driver source,
+built against an archive of QEMU fork `20655c3` (the `5ba7f60` emulator),
+pass the case: ROUTER_CS_6 reads `03000000` there and the port is
+preserved (`u4.preserved=00010809`). No ASM2464 file changed between the
+two forks. What changed is fork `558d663`: `intel-adl` now answers Get
+PCIe Downstream Entry Mapping Not Supported, so the connection manager's
+mapping stops at once, about 4 ms of the simulated clock earlier, and the
+discovery read lands inside the 5 ms. A model change exposed a
+connection-manager rule that sampled Router Ready once: the real ASM2464
+has not set it 0.4 ms after Enumerated (`usb4-emu`
+`docs/captures/ORICO-ASM2464.md`, ROUTER_CS_6), and Linux waits up to
+500 ms for it on a discovered router as well (`usb4.c`
+`usb4_switch_setup`, which `tb_switch_configure` runs for one). This
+driver's own connect path already waited (`tbtU4WaitReady`).
+
+**The fix** (branch `u4-preos`, record 22 sections 9.2 and 11):
+discovery waits for a clear Router Ready, up to 500 ms and reading only,
+and then reads ROUTER_CS_5 and 6 again; past the 500 ms the step fails as
+before. A resume verification does the same inside the resume's budget,
+and since every wait there lets hot plug events through that are not
+acted on for the port under verification, each verification of a USB4
+router first proves the router the one classified (an unplug hint only
+with no removal evidence, lane 0 unlocked, the same IDs and UUID, still
+enumerated at its route) and proves it again after the wait.
+
+| Reading | Result |
+|---|---|
+| Cross-check, fork `2a893ea`, the fixed driver | 225,122 checks, 0 failures; the case reads `u4.preserved=00010809` |
+| Cross-check, fork `2a893ea`, `7d169c09` | 225,320 checks, 1 failure (the case above) |
+| Cross-check, fork `20655c3`, `7d169c09` | the case passes; the two TS3 Plus cases fail as expected (that fork has no TB3 router under a software connection manager) |
+| `test_u4cm` | 1,015 checks, 0 failures. New cases: the ASM2464 pre-OS tunnel with Router Ready 5 ms late (preserved, nothing held, the router written exactly as with Router Ready on time) and never set (HELD for discovery after one wait, left as found); a resume with Router Ready 5 ms late (verified, nothing written to the router), never set (HELD), the budget spent inside the wait (no poll past it) and another router (another UUID) in place during the wait (never verified as the first). Without the fix the first four of these fail; without the identity proof the last one does |
+| `build-driver.cmd all` and `all -amd64` | BUILD + GATES PASSED (x86 at `da35584a`, amd64 at `60538f1b`; nothing under `src\` changed between them) |
+
+**The guests** (QEMU fork `2a893ea`, `vm\usb4\bin-2a893ea`, SHA-256
+`6a1dfcc8...bd66` checked before use; `usb4-generic`, `intel-adl`,
+`preos-cm=on`, `usb4-device,device-model=asm2464` with the 128 MiB FAT16
+NVMe image; i440FX, so the NVMe sits alone behind the tunnel bridge).
+Overlays of the 98 SE gold image and of the Windows 7 x86 image under
+`E:\xhci98-vm\u4-preos` on development host A, every window shown.
+
+- **The `3.0.0.0` package, 98 SE** (the tunnel bridge, `xhcicm.inf` and
+  `nvme98` through the hardware wizard): after the install, and again at a
+  cold boot with the enclosure attached at power-on, XHCITR read "ASMedia
+  246x ... approved", "PCIe tunnel: up (found at start)", the unit
+  "QEMU NVM e Ctrl (E:)"; E: ("ORICO") opened with `TESTDATA.BIN`.
+- **The `3.0.0.0` package, 7 x86** (`INSTALL /defaults /yes /nopause
+  /thunderbolt`, then a cold boot with the enclosure attached): "PCIe
+  tunnel: up (found at start)" (the NVMe controller had no driver; the
+  tool labels it "stopped - unplug it").
+- So the guests do not show the HELD port: the model's Router Ready comes
+  5 ms after the pre-OS enumeration at power-on, and the driver starts
+  seconds later. Only the cross-check, which starts the connection manager
+  with no time elapsed, reached the window.
+- **The fixed driver** (the `qemu` flavour of `xhcicm.sys` at `da35584a`,
+  SHA-256 `87dfa347...a732`, copied over the installed file, then a cold
+  boot with the enclosure attached): 98 SE, with `XhciLogVerbosity` 2,
+  logged `u4.drom.unused=00000010` and `u4.preserved=00010809`, no
+  `u4.router-not-ready`, and XHCITR read the tunnel "up (found at start)";
+  7 x86 (its hash read in the guest) read the same in XHCITR.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link
@@ -486,3 +564,9 @@ on these legs was shortened afterwards (one line), with no other change.
 - On Vista the tray was once "Not Responding" in tasklist at the first
   login while devices were still installing, and "Running" at the next
   sample.
+- In the `u4-preos` legs one Windows 7 x86 boot with the enclosure at
+  power-on stopped the emulator itself about 18 s in: the QEMU process at
+  0 CPU, its QMP socket silent, its trace last written during the
+  connection manager's discovery reads. It was stopped; the next boots
+  (after Windows 7's Startup Repair) ran normally with the same driver.
+  Not reproduced; no cause read.
