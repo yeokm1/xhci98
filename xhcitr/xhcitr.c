@@ -5137,22 +5137,24 @@ static int usb_confirm(HWND owner, const USBREQ *q)
 static int usb_after(const USBREQ *q, TR_TEXT *t)
 {
     WALK w;
-    int d;
+    int d = -1;
+    int walked;
+    int kind;
     int code = INST_EXIT_DONE;
 
     memset(&w, 0, sizeof(w));
-    if (!walk(&w)) {
-        tr_put(t, "\nIts state could not be read again: check that it is not "
-                  "running before you unplug it.");
-        free(w.N);
-        return code;
+    walked = walk(&w);
+    if (walked) {
+        d = walk_find_id(&w, q->Id);
     }
-    d = walk_find_id(&w, q->Id);
-    if (d >= 0 && dn_started(&w.N[d])) {
+    kind = tr_usb_after_kind(walked, d >= 0, w.Bad,
+                             d >= 0 && dn_started(&w.N[d]),
+                             d >= 0 ? w.N[d].Problem : 0,
+                             envNt && envMajor == 5 && envMinor == 0);
+    if (kind == TR_UA_STARTED) {
         tr_put(t, "\nThe device has started again, so it is not safe to unplug.");
         code = INST_EXIT_STEPS;
-    } else if ((d < 0 && w.Bad == 0) ||
-               (d >= 0 && w.N[d].Problem == TR_CM_PROB_HELD_FOR_EJECT)) {
+    } else if (kind == TR_UA_UNPLUG) {
         tr_put(t, "\nYou can now unplug the device.");
     } else {
         tr_put(t, "\nIts state could not be read again: check that it is not "

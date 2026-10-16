@@ -532,6 +532,7 @@ typedef struct _TR_USBF {
 } TR_USBF;
 
 #define TR_CM_PROB_HELD_FOR_EJECT 47UL
+#define TR_CM_PROB_DEVICE_NOT_THERE 24UL
 #define TR_USB_SET_MAX          64      /* what one confirmation lists       */
 
 #define TR_UE_DETAILS   0       /* details only: never listed              */
@@ -546,6 +547,19 @@ typedef struct _TR_USBF {
  * device may be unplugged. */
 int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
                     size_t sentenceCap);
+
+/* What a walk right after an accepted stop reads (section 6.5 step 5):
+ * TR_UA_UNPLUG for the walk whole and the device gone, held for eject
+ * (Code 47), or, on Windows 2000 only (w2k), Code 24: 2000 has no Code 47
+ * and leaves a removed devnode that is still attached at Code 24 (run 41,
+ * the bridge after its stop). TR_UA_STARTED for the device started again;
+ * TR_UA_UNKNOWN for anything else, no walk included. started is DN_STARTED
+ * with no problem code. */
+#define TR_UA_UNPLUG    0
+#define TR_UA_STARTED   1
+#define TR_UA_UNKNOWN   2
+int tr_usb_after_kind(int walked, int found, int walkBad, int started,
+                      TR_U32 problem, int w2k);
 
 /* The rule of section 6.5. *why is the reason for anything but
  * TR_UE_OFFER ("a hub", "an input device", "stopped - unplug it", ...),
