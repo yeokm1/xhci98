@@ -1242,6 +1242,46 @@ void tr_link_text(TR_U32 kind, TR_U32 lanes, const TR_EXT *x, char *out,
                                                      : "lanes not known");
 }
 
+int tr_gen_tbt3(TR_U32 gen)
+{
+    /* A Thunderbolt 3 router behind a USB4 host reads USB4 Version major 0
+     * in ROUTER_CS_4 (15:8 here: major 7:5, minor 4:0; task 40-A.8). */
+    return (gen & 0xFFUL) == CM_ST_GEN_TBT3 ||
+           ((gen & 0xFFUL) == CM_ST_GEN_USB4 && ((gen >> 8) & 0xFFUL) != 0 &&
+            ((gen >> 13) & 0x7UL) == 0);
+}
+
+void tr_link_text_gen(TR_U32 gen, TR_U32 kind, TR_U32 lanes, const TR_EXT *x,
+                      char *out, size_t cap)
+{
+    TR_U32 width = 0;
+    const char *src;
+
+    if (kind == CM_ST_KIND_ICM || x == NULL || x->Rate == 0 ||
+        !tr_gen_tbt3(gen)) {
+        tr_link_text(kind, lanes, x, out, cap);
+        return;
+    }
+    /* A lane adapter's speed is a USB4 generation only on a USB4 router;
+     * a Thunderbolt 3 router's link is worded as the ICM path words it. */
+    if (x->Width != 0) {
+        width = x->Width;
+    } else if (lanes == CM_ST_LANES_BONDED) {
+        width = 2;
+    } else if (lanes == CM_ST_LANES_SINGLE) {
+        width = 1;
+    }
+    src = (x->Flags & CM_Q_XF_RATE_READ) ? " (read from the lane adapter)" : "";
+    if (width != 0) {
+        tr_sprintf(out, cap, "Thunderbolt 3, %lu Gbit/s per lane, x%lu "
+                   "(%lu Gbit/s)%s", (unsigned long)x->Rate,
+                   (unsigned long)width, (unsigned long)(x->Rate * width), src);
+    } else {
+        tr_sprintf(out, cap, "Thunderbolt 3, %lu Gbit/s per lane, lanes not "
+                   "known%s", (unsigned long)x->Rate, src);
+    }
+}
+
 void tr_router_name(const unsigned char *entry, char *out, size_t cap)
 {
     char vendor[CM_ST_NAME_BYTES];
@@ -1585,6 +1625,14 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
             o->Eject = 1;
             tr_copy(o->EjectId, id + 3, sizeof(o->EjectId));
             alone++;
+        } else if (tr_switch(a, "result")) {
+            if (i + 1 >= argc || argv[i + 1][0] == '\0' ||
+                strlen(argv[i + 1]) >= TR_PATH_CHARS) {
+                tr_copy(err, "/result needs the name of a file.", cap);
+                return 1;
+            }
+            o->Result = 1;
+            tr_copy(o->ResultPath, argv[++i], sizeof(o->ResultPath));
         } else {
             tr_sprintf(err, cap, "Unknown switch %s. Use: XHCITR [/tray] "
                        "[/eject id=<instance id>] [/report <file>]", a);
@@ -1593,6 +1641,10 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
     }
     if (alone > 1 || (alone == 1 && o->Tray)) {
         tr_copy(err, "/eject, /report and /selftest are each used alone.", cap);
+        return 1;
+    }
+    if (o->Result && !o->Eject) {
+        tr_copy(err, "/result goes with /eject only.", cap);
         return 1;
     }
     return 0;
@@ -2219,4 +2271,156 @@ int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
     tr_copy(tag, "not started", tagCap);
     tr_copy(sentence, "Windows has not started this device.", sentenceCap);
     return 0;
+}
+
+/* ---- the elevated stop of a unit not marked removable (section 6.6) ------ */
+
+int tr_elev_needed(int nt, int notMarked, int isAdmin)
+{
+    return nt && notMarked && !isAdmin;
+}
+
+#define TR_RES_ASK      "XHCITR ASK 1"
+#define TR_RES_ANSWER   "XHCITR ANSWER 1"
+
+size_t tr_res_ask(const char (*devs)[TR_ID_CHARS], int n, char *out,
+                  size_t cap)
+{
+    TR_TEXT t;
+    int i;
+
+    if (cap == 0) {
+        return 0;
+    }
+    tr_text_init(&t, out, cap);
+    tr_put(&t, TR_RES_ASK "\n");
+    for (i = 0; i < n; i++) {
+        tr_put(&t, devs[i]);
+        tr_put(&t, "\n");
+    }
+    return t.Overflow ? 0 : t.Len;
+}
+
+/* The next line of *p into line (CR and LF dropped); 0 at the end. */
+static int tr_res_line(const char **p, char *line, size_t cap)
+{
+    size_t n = 0;
+    const char *s = *p;
+
+    if (*s == '\0') {
+        return 0;
+    }
+    while (*s != '\0' && *s != '\n') {
+        if (*s != '\r' && n + 1 < cap) {
+            line[n++] = *s;
+        }
+        s++;
+    }
+    if (*s == '\n') {
+        s++;
+    }
+    line[n] = '\0';
+    *p = s;
+    return 1;
+}
+
+int tr_res_ask_match(const char *text, const char (*devs)[TR_ID_CHARS],
+                     int n)
+{
+    char line[TR_ID_CHARS + 2];
+    const char *p = text;
+    int i;
+
+    if (!tr_res_line(&p, line, sizeof(line)) || strcmp(line, TR_RES_ASK) != 0) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (!tr_res_line(&p, line, sizeof(line)) ||
+            strlen(line) >= TR_ID_CHARS || !tr_eq(line, devs[i])) {
+            return 0;
+        }
+    }
+    return !tr_res_line(&p, line, sizeof(line));
+}
+
+size_t tr_res_answer(int code, const char *msg, char *out, size_t cap)
+{
+    TR_TEXT t;
+
+    if (cap == 0) {
+        return 0;
+    }
+    tr_text_init(&t, out, cap);
+    tr_printf(&t, TR_RES_ANSWER "\ncode %d\n%s", code, msg);
+    return t.Overflow ? 0 : t.Len;
+}
+
+int tr_res_read_answer(const char *text, int *code, char *msg, size_t cap)
+{
+    char line[64];
+    const char *p = text;
+    int c = 0;
+    const char *d;
+
+    if (!tr_res_line(&p, line, sizeof(line)) ||
+        strcmp(line, TR_RES_ANSWER) != 0 ||
+        !tr_res_line(&p, line, sizeof(line)) ||
+        strncmp(line, "code ", 5) != 0 || line[5] == '\0') {
+        return 0;
+    }
+    for (d = line + 5; *d != '\0'; d++) {
+        if (*d < '0' || *d > '9' || c > 1000) {
+            return 0;
+        }
+        c = c * 10 + (*d - '0');
+    }
+    *code = c;
+    tr_copy(msg, p, cap);
+    return 1;
+}
+
+int tr_elev_result(int launched, TR_U32 launchErr, int finished,
+                   TR_U32 exitCode, int haveAnswer, int answerCode,
+                   const char *answerMsg, char *out, size_t cap)
+{
+    if (!launched && launchErr == TR_ERROR_CANCELLED) {
+        tr_copy(out, "Nothing was stopped: administrator rights were not "
+                "given. Try again and allow\nit, or unplug the device and "
+                "plug it in again.", cap);
+        return INST_EXIT_REFUSED;
+    }
+    if (!launched) {
+        tr_sprintf(out, cap, "%s\n(The stop with administrator rights "
+                   "could not be started: error %lu.)", inst_admin_text(),
+                   (unsigned long)launchErr);
+        return INST_EXIT_REFUSED;
+    }
+    if (!finished) {
+        tr_copy(out, "The stop with administrator rights has not finished. "
+                "Look at the device in the\ntree before you unplug it.", cap);
+        return INST_EXIT_FAILED;
+    }
+    if (haveAnswer && (TR_U32)answerCode == exitCode) {
+        tr_copy(out, answerMsg, cap);
+        return answerCode;
+    }
+    switch (exitCode) {
+    case INST_EXIT_REFUSED:
+        tr_copy(out, "Nothing was stopped.", cap);
+        return INST_EXIT_REFUSED;
+    case INST_EXIT_STEPS:
+        tr_copy(out, "Windows did not stop the device; nothing was changed.", cap);
+        return INST_EXIT_STEPS;
+    default:
+        tr_sprintf(out, cap, "The stop with administrator rights ended with "
+                   "no answer (code %lu).\nLook at the device in the tree "
+                   "before you unplug it.", (unsigned long)exitCode);
+        return INST_EXIT_FAILED;
+    }
+}
+
+const char *tr_elev_question(void)
+{
+    return "Windows does not list this device for safe removal. Stopping it "
+           "needs administrator rights.";
 }

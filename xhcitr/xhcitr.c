@@ -2060,12 +2060,12 @@ static void details_unit(TR_TEXT *t, int dn)
             !(gw.N[u].Caps & TR_CM_DEVCAP_SURPRISEOK)) {
             tr_put(t, "  Windows lists it in Safely Remove Hardware too.\n");
         } else if (inst_unit_not_marked(1, gw.N[u].Caps)) {
-            /* The first plug of a device Windows has not seen (EJRB.1). */
-            tr_put(t, "  Not marked removable (first plug): Windows does not "
-                      "list it in Safely\n  Remove Hardware. Safely Remove "
-                      "here stops it when run as an administrator;\n  or "
-                      "unplug and replug it once, and Windows lists it from "
-                      "then on.\n");
+            /* Whatever the cause (the first plug, a rebuilt stack:
+             * EJRB.1). */
+            tr_put(t, "  Not marked removable: Windows may not list it in "
+                      "Safely Remove Hardware.\n  Safely Remove here stops "
+                      "it with administrator rights, asking for them\n  when "
+                      "needed.\n");
         } else {
             tr_put(t, "  Windows does not list it in Safely Remove Hardware; "
                       "stop it from here.\n");
@@ -2183,8 +2183,9 @@ static void details_router(TR_TEXT *t, int k, int r)
     haveX = h->HaveQ && tr_query_ext(&h->Q, (TR_U32)r, &x);
     tr_router_name(e, name, sizeof(name));
     tr_gen_text(inst_get32(e, CM_ST_E_GEN), gen, sizeof(gen));
-    tr_link_text(kind, inst_get32(e, CM_ST_E_LANES), haveX ? &x : NULL, link,
-                 sizeof(link));
+    tr_link_text_gen(inst_get32(e, CM_ST_E_GEN), kind,
+                     inst_get32(e, CM_ST_E_LANES), haveX ? &x : NULL, link,
+                     sizeof(link));
     tr_printf(t, "Thunderbolt / USB4 device\n");
     tr_printf(t, "  Name:          %s\n", name);
     tr_printf(t, "  Kind:          %s\n",
@@ -2946,37 +2947,79 @@ done:
 
 typedef BOOL (WINAPI *PFN_OPENTOKEN)(HANDLE, DWORD, PHANDLE);
 typedef BOOL (WINAPI *PFN_TOKENINFO)(HANDLE, int, LPVOID, DWORD, PDWORD);
+typedef BOOL (WINAPI *PFN_CHECKMEMBER)(HANDLE, PSID, PBOOL);
+typedef BOOL (WINAPI *PFN_ALLOCSID2)(PSID_IDENTIFIER_AUTHORITY, BYTE, DWORD,
+                                     DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
+                                     DWORD, PSID *);
+typedef PVOID (WINAPI *PFN_FREESID2)(PSID);
 #define TR_TOKEN_ELEVATION  20      /* TokenElevation (Vista and later) */
+
+/* Vista and 7: 1 elevated, 0 not, -1 not read. */
+static int ej_elevated_token(void)
+{
+    HMODULE adv = GetModuleHandleA("advapi32.dll");
+    PFN_OPENTOKEN openToken = (PFN_OPENTOKEN)proc(adv, "OpenProcessToken");
+    PFN_TOKENINFO tokenInfo = (PFN_TOKENINFO)proc(adv, "GetTokenInformation");
+    HANDLE token;
+    DWORD elevated = 0;
+    DWORD n = 0;
+    int r = -1;
+
+    if (openToken == NULL || tokenInfo == NULL ||
+        !openToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return -1;
+    }
+    if (tokenInfo(token, TR_TOKEN_ELEVATION, &elevated, sizeof(elevated), &n) &&
+        n == sizeof(elevated)) {
+        r = elevated != 0;
+    }
+    CloseHandle(token);
+    return r;
+}
 
 /* 0 on Vista and 7 when this process's token is not elevated, so the
  * fallback's right is known to be missing; otherwise 1, Windows' answer
  * deciding. */
 static int ej_may_remove(void)
 {
-    HMODULE adv;
-    PFN_OPENTOKEN openToken;
-    PFN_TOKENINFO tokenInfo;
-    HANDLE token;
-    DWORD elevated = 0;
-    DWORD n = 0;
-    int may = 1;
+    return !envNt || envMajor < 6 || ej_elevated_token() != 0;
+}
 
-    if (!envNt || envMajor < 6) {
+/* NT: 1 when this process runs with an administrator's rights (Vista and
+ * 7: elevated; 2000 and XP: a member of Administrators); 1 too when it
+ * cannot be read, Windows' answer then deciding. */
+static int ej_is_admin(void)
+{
+    HMODULE adv;
+    PFN_CHECKMEMBER check;
+    PFN_ALLOCSID2 allocSid;
+    PFN_FREESID2 freeSid;
+    SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
+    PSID admins = NULL;
+    BOOL member = FALSE;
+    int r = 1;
+
+    if (!envNt) {
         return 1;
+    }
+    if (envMajor >= 6) {
+        return ej_elevated_token() != 0;
     }
     adv = GetModuleHandleA("advapi32.dll");
-    openToken = (PFN_OPENTOKEN)proc(adv, "OpenProcessToken");
-    tokenInfo = (PFN_TOKENINFO)proc(adv, "GetTokenInformation");
-    if (openToken == NULL || tokenInfo == NULL ||
-        !openToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+    check = (PFN_CHECKMEMBER)proc(adv, "CheckTokenMembership");
+    allocSid = (PFN_ALLOCSID2)proc(adv, "AllocateAndInitializeSid");
+    freeSid = (PFN_FREESID2)proc(adv, "FreeSid");
+    if (check == NULL || allocSid == NULL || freeSid == NULL) {
         return 1;
     }
-    if (tokenInfo(token, TR_TOKEN_ELEVATION, &elevated, sizeof(elevated), &n) &&
-        n == sizeof(elevated)) {
-        may = elevated != 0;
+    if (allocSid(&ntAuth, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                 DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &admins)) {
+        if (check(NULL, admins, &member)) {
+            r = member != FALSE;
+        }
+        freeSid(admins);
     }
-    CloseHandle(token);
-    return may;
+    return r;
 }
 
 /* CM_Query_And_Remove_SubTreeW, its veto name in the ANSI code page, the
@@ -3018,9 +3061,9 @@ static int ej_nt_answer(DWORD dn, int capsKnown, ULONG caps, DWORD *cr,
                                   notMarked ? ej_may_remove() : 1);
 
     *notRemovable = 0;
-    if (step == INST_NT_REPLUG) {
+    if (step == INST_NT_ADMIN) {
         *withName = 0;
-        *text = inst_replug_text();
+        *text = inst_admin_text();
         return INST_EJ_RIGHTS;
     }
     if (step != INST_NT_FALLBACK) {
@@ -3037,6 +3080,168 @@ static int ej_nt_answer(DWORD dn, int capsKnown, ULONG caps, DWORD *cr,
         *cr = tr_eject_cr(*cr, *veto);
     }
     return inst_eject_nt_removal(*cr, *veto, text, withName);
+}
+
+/* ---- NT: the stop with administrator rights (record 25 section 6.6) ---- */
+
+#define TR_ELEV_WAIT_MS     300000UL
+
+static int ejElevBusy;      /* an elevated stop is being waited for */
+
+static BOOL CALLBACK elev_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_INITDIALOG:
+        SetDlgItemTextA(dlg, IDC_ELEV_TEXT, (const char *)lp);
+        if (envMajor >= 6) {
+            /* BCM_SETSHIELD: the button starts an elevation. */
+            SendDlgItemMessageA(dlg, IDOK, 0x160C, 0, 1);
+        }
+        SetForegroundWindow(dlg);
+        return TRUE;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDOK || LOWORD(wp) == IDCANCEL) {
+            EndDialog(dlg, LOWORD(wp));
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
+}
+
+/* 1 when the user asked for the stop with administrator rights. */
+static int ej_elev_ask(HWND owner, const EJREQ *q)
+{
+    char text[512];
+
+    tr_sprintf(text, sizeof(text), "%s\n\n%s", q->Desc, tr_elev_question());
+    return DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_ELEVATE), owner,
+                           (DLGPROC)elev_proc, (LPARAM)text) == IDOK;
+}
+
+/* The whole file into buf (terminated); 0 when it cannot be read. */
+static int elev_read(const char *path, char *buf, DWORD cap)
+{
+    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    DWORD n = 0;
+    int ok;
+
+    if (f == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    ok = ReadFile(f, buf, cap - 1, &n, NULL);
+    CloseHandle(f);
+    buf[ok ? n : 0] = '\0';
+    return ok;
+}
+
+/* Over an existing file only: the elevated run never creates one. */
+static int elev_write(const char *path, const char *text, size_t n, int create)
+{
+    HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, NULL,
+                           create ? CREATE_ALWAYS : OPEN_EXISTING,
+                           FILE_ATTRIBUTE_TEMPORARY, NULL);
+    DWORD w = 0;
+    int ok;
+
+    if (f == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    ok = SetEndOfFile(f) && WriteFile(f, text, (DWORD)n, &w, NULL) && w == n;
+    CloseHandle(f);
+    return ok;
+}
+
+/* Starts this program elevated with /eject id= and /result, waits for it
+ * with the window answering, and reads its answer: XHCIINST's exit code,
+ * the text in msg. */
+static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
+{
+    static char ask[TR_EJ_DEVS * (INST_ID_CHARS + 2) + 32];
+    static char answer[4096];
+    static char amsg[4096];
+    SHELLEXECUTEINFOA se;
+    char dir[MAX_PATH];
+    char path[MAX_PATH];
+    char exe[MAX_PATH];
+    char args[INST_ID_CHARS + MAX_PATH + 48];
+    size_t n;
+    int launched = 0;
+    DWORD err = 0;
+    int finished = 0;
+    DWORD exitCode = INST_EXIT_FAILED;
+    int haveAnswer = 0;
+    int answerCode = 0;
+    int code;
+
+    amsg[0] = '\0';
+    n = tr_res_ask((const char (*)[TR_ID_CHARS])q->Devs, q->DevCount, ask,
+                   sizeof(ask));
+    if (n == 0 || GetTempPathA(sizeof(dir), dir) == 0 ||
+        GetTempFileNameA(dir, "xtr", 0, path) == 0 ||
+        GetModuleFileNameA(NULL, exe, sizeof(exe)) == 0) {
+        return tr_elev_result(0, GetLastError(), 0, 0, 0, 0, "", msg, cap);
+    }
+    if (!elev_write(path, ask, n, 1)) {
+        err = GetLastError();
+        DeleteFileA(path);
+        return tr_elev_result(0, err, 0, 0, 0, 0, "", msg, cap);
+    }
+    tr_sprintf(args, sizeof(args), "/eject \"id=%s\" /result \"%s\"",
+               q->UnitId, path);
+    memset(&se, 0, sizeof(se));
+    se.cbSize = sizeof(se);
+    se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+    se.hwnd = owner;
+    se.lpVerb = "runas";
+    se.lpFile = exe;
+    se.lpParameters = args;
+    se.nShow = SW_SHOWNORMAL;
+    ejElevBusy = 1;
+    if (ShellExecuteExA(&se) && se.hProcess != NULL) {
+        DWORD start = GetTickCount();
+        launched = 1;
+        for (;;) {
+            DWORD left;
+            DWORD r;
+            MSG m;
+            DWORD spent = GetTickCount() - start;
+            if (spent >= TR_ELEV_WAIT_MS) {
+                break;
+            }
+            left = TR_ELEV_WAIT_MS - spent;
+            r = MsgWaitForMultipleObjects(1, &se.hProcess, FALSE, left,
+                                          QS_ALLINPUT);
+            if (r == WAIT_OBJECT_0) {
+                finished = 1;
+                break;
+            }
+            if (r != WAIT_OBJECT_0 + 1) {
+                break;
+            }
+            while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&m);
+                DispatchMessageA(&m);
+            }
+        }
+        if (finished && !GetExitCodeProcess(se.hProcess, &exitCode)) {
+            exitCode = INST_EXIT_FAILED;
+        }
+        CloseHandle(se.hProcess);
+    } else {
+        err = GetLastError();
+    }
+    ejElevBusy = 0;
+    if (finished && elev_read(path, answer, sizeof(answer))) {
+        haveAnswer = tr_res_read_answer(answer, &answerCode, amsg, sizeof(amsg));
+    }
+    if (finished || !launched) {
+        DeleteFileA(path);
+    }
+    code = tr_elev_result(launched, err, finished, exitCode, haveAnswer,
+                          answerCode, amsg, msg, cap);
+    return code;
 }
 
 /* The transaction (record 25 section 6.2 steps 2 to 8). Returns
@@ -3998,22 +4203,46 @@ static void ej_unit(HWND owner, int u, int fromTray)
         free(q);
         return;
     }
+    if (ejElevBusy) {
+        MessageBoxA(owner, "Another device is being stopped with administrator "
+                    "rights; try again when it has finished.", "xHCI98 USB Tree",
+                    MB_OK | MB_ICONINFORMATION);
+        free(q);
+        return;
+    }
     if (!ej_confirm(owner, q)) {
         free(q);
         return;
     }
-    old = SetCursor(LoadCursor(NULL, IDC_WAIT));
-    code = ej_run(q, msg, sizeof(msg), &rights);
-    tr_join_lines(msg);
-    SetCursor(old);
-    if (rights && envMajor >= 6) {
-        char ask[2300];
-        tr_sprintf(ask, sizeof(ask), "%s\n\nTry again as an administrator?", msg);
-        if (MessageBoxA(owner, ask, "xHCI98 USB Tree",
-                        MB_YESNO | MB_ICONWARNING) == IDYES) {
-            ej_elevated(owner, q->UnitId);
+    if (tr_elev_needed(envNt, inst_unit_not_marked(gw.N[u].HasCaps,
+                                                   gw.N[u].Caps),
+                       ej_is_admin())) {
+        /* Not marked removable, and this process is no administrator:
+         * the stop is offered with administrator rights (section 6.6). */
+        if (!ej_elev_ask(owner, q)) {
+            free(q);
+            return;
         }
-    } else if (fromTray && shellV5 && strlen(msg) < 250) {
+        code = ej_elev_run(owner, q, msg, sizeof(msg));
+    } else {
+        old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+        code = ej_run(q, msg, sizeof(msg), &rights);
+        SetCursor(old);
+        if (rights && envMajor >= 6) {
+            char ask[2300];
+            tr_join_lines(msg);
+            tr_sprintf(ask, sizeof(ask), "%s\n\nTry again as an administrator?",
+                       msg);
+            if (MessageBoxA(owner, ask, "xHCI98 USB Tree",
+                            MB_YESNO | MB_ICONWARNING) != IDYES) {
+                free(q);
+                return;
+            }
+            code = ej_elev_run(owner, q, msg, sizeof(msg));
+        }
+    }
+    tr_join_lines(msg);
+    if (fromTray && shellV5 && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
@@ -5137,27 +5366,42 @@ static int run_eject(void)
     if (u < 0 || gw.N[u].UnitOf != u) {
         tr_sprintf(msg, sizeof(msg), "No USB device, and no device behind a "
                    "Thunderbolt port, has the instance ID %s.", opts.EjectId);
-        say(msg, 1);
-        free(q);
-        return INST_EXIT_REFUSED;
+        code = INST_EXIT_REFUSED;
+        goto answer;
     }
     why = ej_why_not(u);
     if (why != NULL || !ej_prepare(u, q)) {
         tr_sprintf(msg, sizeof(msg), "%s cannot be stopped here: %s.",
                    dn_name(&gw.N[u]), why != NULL ? why : "it is not a unit");
-        say(msg, 1);
-        free(q);
-        return INST_EXIT_REFUSED;
+        code = INST_EXIT_REFUSED;
+        goto answer;
     }
     /* This run's request is confirmed as it stands now: a device that
      * appeared under the unit while the elevation was asked is listed, and
-     * the transaction holds to exactly this list. */
-    if (!ej_confirm(NULL, q)) {
-        free(q);
-        return INST_EXIT_REFUSED;
+     * the transaction holds to exactly this list. With /result, the list
+     * the window's user confirmed stands for it when it is the same. */
+    {
+        static char asked[TR_EJ_DEVS * (INST_ID_CHARS + 2) + 32];
+        if (!(opts.Result && elev_read(opts.ResultPath, asked, sizeof(asked)) &&
+              tr_res_ask_match(asked, (const char (*)[TR_ID_CHARS])q->Devs,
+                               q->DevCount)) &&
+            !ej_confirm(NULL, q)) {
+            code = INST_EXIT_REFUSED;
+            tr_copy(msg, "Cancelled; nothing was stopped.", sizeof(msg));
+            goto answer;
+        }
     }
     code = ej_run(q, msg, sizeof(msg), &rights);
     tr_join_lines(msg);
+answer:
+    if (opts.Result) {
+        static char ans[4200];
+        size_t n = tr_res_answer(code, msg, ans, sizeof(ans));
+        if (n != 0 && elev_write(opts.ResultPath, ans, n, 0)) {
+            free(q);
+            return code;
+        }
+    }
     say(msg, code != INST_EXIT_DONE);
     free(q);
     return code;

@@ -2707,10 +2707,10 @@ int inst_eject_nt_step(INST_U32 cr, INST_U32 vetoType, int notMarked,
         return INST_NT_ANSWER;
     }
     if (cr == INST_CR_REMOVE_VETOED && vetoType == INST_VETO_ILLEGAL_REQUEST) {
-        return mayRemove ? INST_NT_FALLBACK : INST_NT_REPLUG;
+        return mayRemove ? INST_NT_FALLBACK : INST_NT_ADMIN;
     }
     if (inst_rights_answer(cr, vetoType)) {
-        return INST_NT_REPLUG;
+        return INST_NT_ADMIN;
     }
     return INST_NT_ANSWER;
 }
@@ -2720,7 +2720,7 @@ int inst_eject_nt_removal(INST_U32 cr, INST_U32 vetoType, const char **text,
 {
     if (inst_rights_answer(cr, vetoType)) {
         *withName = 0;
-        *text = inst_replug_text();
+        *text = inst_admin_text();
         return INST_EJ_RIGHTS;
     }
     if (cr == INST_CR_CALL_NOT_IMPLEMENTED) {
@@ -2736,11 +2736,10 @@ int inst_removal_retry(INST_U32 cr, INST_U32 flags)
     return cr == INST_CR_INVALID_FLAG && (flags & INST_REMOVE_NO_RESTART) != 0;
 }
 
-const char *inst_replug_text(void)
+const char *inst_admin_text(void)
 {
-    return "Windows does not list this device for safe removal until it has "
-           "been plugged\nin once more. Unplug it and plug it back in, or run "
-           "this as an administrator.";
+    return "Windows does not list this device for safe removal. Run this as "
+           "an\nadministrator to stop it.";
 }
 
 const char *inst_not_removable_text(void)

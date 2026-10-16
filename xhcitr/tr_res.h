@@ -12,6 +12,8 @@
 #define IDD_ABOUT               102
 #define IDC_ABOUT_TEXT          1001
 #define IDC_ABOUT_ICON          1002
+#define IDD_ELEVATE             103
+#define IDC_ELEV_TEXT           1003
 
 #define IDM_REFRESH             40001
 #define IDM_SAVE                40002

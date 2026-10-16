@@ -1663,7 +1663,7 @@ static size_t longest_line(const char *s)
     return best;
 }
 
-/* NT: a unit not marked removable (the first plug, roadmap EJRB.1). */
+/* NT: a unit not marked removable (whatever the cause: roadmap EJRB.1). */
 static void test_tb_fallback(void)
 {
     const char *text;
@@ -1702,12 +1702,12 @@ static void test_tb_fallback(void)
              "an illegal request on a unit not marked: query and remove");
     CHECK_EQ(inst_eject_nt_step(inst_eject_cr(0, 8), 8, 1, 1), INST_NT_FALLBACK,
              "XP's success-with-veto illegal request: query and remove");
-    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 8, 1, 0), INST_NT_REPLUG,
-             "an unelevated caller on Vista and 7: the re-plug refusal");
-    CHECK_EQ(inst_eject_nt_step(INST_CR_ACCESS_DENIED, 0, 1, 1), INST_NT_REPLUG,
-             "access denied on a unit not marked: the re-plug refusal");
-    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 12, 1, 1), INST_NT_REPLUG,
-             "insufficient rights on a unit not marked: the re-plug refusal");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 8, 1, 0), INST_NT_ADMIN,
+             "an unelevated caller on Vista and 7: the administrator refusal");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_ACCESS_DENIED, 0, 1, 1), INST_NT_ADMIN,
+             "access denied on a unit not marked: the administrator refusal");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 12, 1, 1), INST_NT_ADMIN,
+             "insufficient rights on a unit not marked: the administrator refusal");
     CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 8, 0, 1), INST_NT_ANSWER,
              "a marked unit: the answer stands");
     CHECK_EQ(inst_eject_nt_step(INST_CR_ACCESS_DENIED, 0, 0, 1), INST_NT_ANSWER,
@@ -1733,13 +1733,13 @@ static void test_tb_fallback(void)
              INST_EXIT_STEPS, "a driver veto answered as success: exit 4");
     CHECK(withName, "a driver veto: names it");
     CHECK_EQ(inst_eject_nt_removal(INST_CR_ACCESS_DENIED, 0, &text, &withName),
-             INST_EJ_RIGHTS, "access denied: the re-plug refusal");
-    CHECK(text == inst_replug_text() && !withName, "the re-plug text");
+             INST_EJ_RIGHTS, "access denied: the administrator refusal");
+    CHECK(text == inst_admin_text() && !withName, "the administrator text");
     CHECK_EQ(inst_eject_code(INST_EJ_RIGHTS), INST_EXIT_REFUSED,
-             "the re-plug refusal is exit 1");
+             "the administrator refusal is exit 1");
     CHECK_EQ(inst_eject_nt_removal(INST_CR_REMOVE_VETOED, 12, &text, &withName),
-             INST_EJ_RIGHTS, "insufficient rights: the re-plug refusal");
-    CHECK(text == inst_replug_text(), "insufficient rights: the re-plug text");
+             INST_EJ_RIGHTS, "insufficient rights: the administrator refusal");
+    CHECK(text == inst_admin_text(), "insufficient rights: the administrator text");
     CHECK_EQ(inst_eject_nt_removal(INST_CR_CALL_NOT_IMPLEMENTED, 0, &text,
                                    &withName),
              INST_EJ_VETO, "not implemented: a step, exit 4");
@@ -1763,10 +1763,12 @@ static void test_tb_fallback(void)
           "never after a veto");
 
     /* The texts: the owner's words, at most 79 columns. */
-    CHECK(strstr(inst_replug_text(), "plugged\nin once more") != NULL &&
-              strstr(inst_replug_text(), "run this as an administrator.") != NULL,
-          "the re-plug text");
-    CHECK(longest_line(inst_replug_text()) <= 79, "the re-plug text fits 79");
+    CHECK(strcmp(inst_admin_text(), "Windows does not list this device for "
+                 "safe removal. Run this as an\nadministrator to stop it.") == 0,
+          "the administrator text");
+    CHECK(strstr(inst_admin_text(), "plug") == NULL,
+          "the administrator text promises nothing of a re-plug");
+    CHECK(longest_line(inst_admin_text()) <= 79, "the administrator text fits 79");
     CHECK(longest_line(inst_not_removable_text()) <= 79,
           "the not-implemented text fits 79");
 }

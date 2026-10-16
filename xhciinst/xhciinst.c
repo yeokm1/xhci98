@@ -6839,10 +6839,10 @@ static void tb_print_unit(int u, int indent)
     out("%*s    %s\n", indent, "", first_hw(&t->R));
     if (envNow.Nt && t->Number &&
         inst_unit_not_marked(t->HasCaps, (INST_U32)t->Caps)) {
-        /* The first plug of a device Windows has not seen (EJRB.1). */
-        out("%*s    not marked removable (first plug): Safely Remove Hardware "
-            "does not\n%*s    list it; /eject stops it as an administrator, "
-            "or replug it once\n", indent, "", indent, "");
+        /* Whatever the cause (the first plug, a rebuilt stack: EJRB.1). */
+        out("%*s    not marked removable: Safely Remove Hardware may not list "
+            "it;\n%*s    /eject stops it when run as an administrator\n",
+            indent, "", indent, "");
     } else if (envNow.Nt) {
         out("%*s    removable: %s; surprise removal OK: %s\n", indent, "",
             t->HasCaps ? ((t->Caps & INST_CM_DEVCAP_REMOVABLE) ? "yes" : "no")
@@ -7435,9 +7435,9 @@ static int run_eject(void)
             }
             notRemovable = 1;
             outcome = inst_eject_nt_removal(cr, veto, &text, &withName);
-        } else if (step == INST_NT_REPLUG) {
+        } else if (step == INST_NT_ADMIN) {
             outcome = INST_EJ_RIGHTS;
-            text = inst_replug_text();
+            text = inst_admin_text();
             withName = 0;
         } else {
             outcome = inst_eject_nt(cr, veto, &text, &withName);

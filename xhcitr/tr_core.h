@@ -305,6 +305,16 @@ void tr_gen_text(TR_U32 gen, char *out, size_t cap);
 void tr_link_text(TR_U32 kind, TR_U32 lanes, const TR_EXT *x, char *out,
                   size_t cap);
 
+/* 1 for a Thunderbolt 3 router: the record's generation says so, or a
+ * USB4 Version of major 0 (a Thunderbolt 3 router behind a USB4 host). */
+int tr_gen_tbt3(TR_U32 gen);
+
+/* tr_link_text, but a Thunderbolt 3 router's lane-adapter rate is worded
+ * "Thunderbolt 3, 20 Gbit/s per lane, x2 (40 Gbit/s)", never as a USB4
+ * generation. */
+void tr_link_text_gen(TR_U32 gen, TR_U32 kind, TR_U32 lanes, const TR_EXT *x,
+                      char *out, size_t cap);
+
 /* A router entry's name: "<vendor> <model>", or "(no name given)". */
 void tr_router_name(const unsigned char *entry, char *out, size_t cap);
 
@@ -414,13 +424,16 @@ typedef struct _TR_OPTS {
     int Report;
     char ReportPath[TR_PATH_CHARS];
     int SelfTest;
+    int Result;                 /* /result: the elevated stop's answer file */
+    char ResultPath[TR_PATH_CHARS];
 } TR_OPTS;
 
-/* XHCITR [/tray] [/eject id=<instance id>] [/report <file>] [/selftest].
- * Switches start with '/' or '-', without case; /eject takes id=<id> as
- * the next argument, /report its file. Returns 0 with
- * opts filled, 1 refused with why in err. /eject, /report and /selftest
- * stand alone. */
+/* XHCITR [/tray] [/eject id=<instance id> [/result <file>]]
+ * [/report <file>] [/selftest]. Switches start with '/' or '-', without
+ * case; /eject takes id=<id> as the next argument, /report and /result
+ * their file. Returns 0 with opts filled, 1 refused with why in err.
+ * /eject, /report and /selftest stand alone; /result goes with /eject
+ * only (the elevated stop of section 6.6). */
 int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap);
 
 /* ---- small text helpers ---------------------------------------------- */
@@ -568,5 +581,36 @@ void tr_wrap(const char *in, char *out, size_t cap, int width);
  * under it (the details' own lines, CR LF or LF). */
 void tr_report_node(TR_TEXT *t, int depth, const char *label,
                     const char *details);
+
+/* ---- the elevated stop of a unit not marked removable (section 6.6) ------ */
+
+/* NT: 1 when a unit's stop is to be offered with administrator rights
+ * before it is tried: the unit is not marked removable (inst_unit_not_marked)
+ * and this process is not an administrator (Vista and 7: not elevated). */
+int tr_elev_needed(int nt, int notMarked, int isAdmin);
+
+/* The answer file. The window writes the devnodes the user confirmed
+ * ("XHCITR ASK 1", then one instance ID a line); the elevated run reads
+ * it, and asks again only when its own list differs, then writes its
+ * answer over it ("XHCITR ANSWER 1", "code <n>", then the text). Lines end
+ * CR LF. The build functions return the length, 0 when it does not fit. */
+size_t tr_res_ask(const char (*devs)[TR_ID_CHARS], int n, char *out,
+                  size_t cap);
+int tr_res_ask_match(const char *text, const char (*devs)[TR_ID_CHARS],
+                     int n);
+size_t tr_res_answer(int code, const char *msg, char *out, size_t cap);
+int tr_res_read_answer(const char *text, int *code, char *msg, size_t cap);
+
+/* The window's result of an elevated run, as XHCIINST's exit code with its
+ * text in out. launched: ShellExecuteEx started it, else launchErr is its
+ * last error (ERROR_CANCELLED 1223: the user declined). finished: it ended
+ * within the wait, with exitCode. haveAnswer: its answer file was read. */
+#define TR_ERROR_CANCELLED  1223UL
+int tr_elev_result(int launched, TR_U32 launchErr, int finished,
+                   TR_U32 exitCode, int haveAnswer, int answerCode,
+                   const char *answerMsg, char *out, size_t cap);
+
+/* The question before an elevated stop. */
+const char *tr_elev_question(void);
 
 #endif /* TR_CORE_H */

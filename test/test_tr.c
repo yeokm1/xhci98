@@ -984,6 +984,48 @@ static void test_texts(void)
     tr_link_text(CM_ST_KIND_USB4_PORT, CM_ST_LANES_BONDED, NULL, out, sizeof(out));
     CHECK(strcmp(out, "two lanes; speed not known") == 0, "link: two lanes only");
 
+    /* A Thunderbolt 3 router behind a USB4 host (task 40-A.8). */
+    CHECK(tr_gen_tbt3(CM_ST_GEN_TBT3), "TBT3 by the generation");
+    CHECK(tr_gen_tbt3(CM_ST_GEN_USB4 | 0x1000UL), "USB4 Version 10h: major 0");
+    CHECK(tr_gen_tbt3(CM_ST_GEN_USB4 | 0x0200UL), "USB4 Version 02h: major 0");
+    CHECK(!tr_gen_tbt3(CM_ST_GEN_USB4 | 0x2000UL), "USB4 v1.0 is not TBT3");
+    CHECK(!tr_gen_tbt3(CM_ST_GEN_USB4 | 0x4000UL), "USB4 v2.0 is not TBT3");
+    CHECK(!tr_gen_tbt3(CM_ST_GEN_USB4), "USB4 without a version");
+    CHECK(!tr_gen_tbt3(CM_ST_GEN_UNKNOWN), "unknown");
+    memset(&x, 0, sizeof(x));
+    x.Rate = 20;
+    x.Width = 2;
+    x.Flags = CM_Q_XF_RATE_READ;
+    tr_link_text_gen(CM_ST_GEN_USB4 | 0x1000UL, CM_ST_KIND_USB4_LINK,
+                     CM_ST_LANES_BONDED, &x, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3, 20 Gbit/s per lane, x2 (40 Gbit/s) "
+                      "(read from the lane adapter)") == 0,
+          "link: a TBT3 router behind a USB4 host, never a USB4 generation");
+    tr_link_text_gen(CM_ST_GEN_TBT3, CM_ST_KIND_USB4_LINK, CM_ST_LANES_BONDED,
+                     &x, out, sizeof(out));
+    CHECK(has(out, "Thunderbolt 3, 20 Gbit/s per lane") && !has(out, "Gen"),
+          "link: TBT3 by the generation");
+    x.Width = 0;
+    x.Flags = 0;
+    tr_link_text_gen(CM_ST_GEN_TBT3, CM_ST_KIND_USB4_PORT, CM_ST_LANES_UNKNOWN,
+                     &x, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3, 20 Gbit/s per lane, lanes not known") == 0,
+          "link: TBT3 without width");
+    x.Width = 2;
+    x.Flags = CM_Q_XF_RATE_READ;
+    tr_link_text_gen(CM_ST_GEN_USB4 | 0x2000UL, CM_ST_KIND_USB4_PORT,
+                     CM_ST_LANES_BONDED, &x, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 Gen 3 x2 (40 Gbit/s) (read from the lane adapter)") == 0,
+          "link: a USB4 v1.0 router keeps its generation");
+    tr_link_text_gen(CM_ST_GEN_TBT3, CM_ST_KIND_ICM, CM_ST_LANES_BONDED, &x,
+                     out, sizeof(out));
+    CHECK(strcmp(out, "20 Gbit/s per lane, x2 (read from the lane adapter)") == 0,
+          "link: an ICM entry as before");
+    tr_link_text_gen(CM_ST_GEN_TBT3, CM_ST_KIND_USB4_LINK, CM_ST_LANES_BONDED,
+                     NULL, out, sizeof(out));
+    CHECK(strcmp(out, "two lanes; speed not known") == 0,
+          "link: TBT3 without an extension as before");
+
     memset(e, 0, sizeof(e));
     memcpy(e + CM_ST_E_VENDOR, "Acme", 4);
     memcpy(e + CM_ST_E_MODEL, "Dock", 4);
@@ -1808,6 +1850,124 @@ static void test_usb_eject(void)
     CHECK(wide[0] == '\0', "wrap: nothing");
 }
 
+/* The elevated stop of a unit not marked removable (record 25 section
+ * 6.6). */
+static void test_elevated_stop(void)
+{
+    static char devs[3][TR_ID_CHARS];
+    char buf[1024];
+    char msg[512];
+    char err[256];
+    char *av[6];
+    TR_OPTS o;
+    int code;
+    size_t n;
+
+    /* When it is offered. */
+    CHECK(tr_elev_needed(1, 1, 0), "NT, not marked, no administrator: offered");
+    CHECK(!tr_elev_needed(1, 1, 1), "an administrator stops it here");
+    CHECK(!tr_elev_needed(1, 0, 0), "a marked unit: the ordinary stop");
+    CHECK(!tr_elev_needed(0, 1, 0), "98 SE and ME: never");
+    CHECK(strcmp(tr_elev_question(), "Windows does not list this device for "
+                 "safe removal. Stopping it needs administrator rights.") == 0,
+          "the owner's words");
+
+    /* The command line of the elevated run. */
+    av[0] = "xhcitr";
+    av[1] = "/eject";
+    av[2] = "id=PCI\\VEN_1B21&DEV_2421\\X";
+    av[3] = "/result";
+    av[4] = "C:\\T\\xtr1.tmp";
+    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 0 && o.Eject &&
+              o.Result && strcmp(o.ResultPath, "C:\\T\\xtr1.tmp") == 0,
+          "/eject id= /result <file>");
+    CHECK(tr_parse_args(4, av, &o, err, sizeof(err)) == 1,
+          "/result needs its file");
+    av[1] = "/result";
+    av[2] = "C:\\T\\xtr1.tmp";
+    CHECK(tr_parse_args(3, av, &o, err, sizeof(err)) == 1,
+          "/result without /eject refused");
+    av[1] = "/tray";
+    av[2] = "/result";
+    av[3] = "x";
+    CHECK(tr_parse_args(4, av, &o, err, sizeof(err)) == 1,
+          "/tray /result refused");
+
+    /* The ask: the confirmed devnodes, matched exactly, without case. */
+    strcpy(devs[0], "PCI\\VEN_1B21&DEV_2421\\4&1");
+    strcpy(devs[1], "PCI\\VEN_1B36&DEV_000A\\5&2");
+    strcpy(devs[2], "PCI\\VEN_1B36&DEV_0010\\6&3");
+    n = tr_res_ask((const char (*)[TR_ID_CHARS])devs, 3, buf, sizeof(buf));
+    CHECK(n == strlen(buf) && strncmp(buf, "XHCITR ASK 1\r\n", 14) == 0,
+          "the ask's head");
+    CHECK(tr_res_ask_match(buf, (const char (*)[TR_ID_CHARS])devs, 3),
+          "the same list matches");
+    CHECK(!tr_res_ask_match(buf, (const char (*)[TR_ID_CHARS])devs, 2),
+          "a shorter list does not");
+    n = tr_res_ask((const char (*)[TR_ID_CHARS])devs, 2, buf, sizeof(buf));
+    CHECK(!tr_res_ask_match(buf, (const char (*)[TR_ID_CHARS])devs, 3),
+          "a devnode added since: asked again");
+    devs[1][4] = 'v';
+    n = tr_res_ask((const char (*)[TR_ID_CHARS])devs, 3, buf, sizeof(buf));
+    devs[1][4] = 'V';
+    CHECK(tr_res_ask_match(buf, (const char (*)[TR_ID_CHARS])devs, 3),
+          "instance IDs compare without case");
+    CHECK(!tr_res_ask_match("XHCITR ANSWER 1\r\n", (const char (*)[TR_ID_CHARS])devs,
+                            0), "not an ask");
+    CHECK(tr_res_ask_match("XHCITR ASK 1\r\n", (const char (*)[TR_ID_CHARS])devs, 0),
+          "an empty list matches an empty list");
+    CHECK_EQ(tr_res_ask((const char (*)[TR_ID_CHARS])devs, 3, buf, 20), 0,
+             "an ask that does not fit is not written");
+
+    /* The answer. */
+    n = tr_res_answer(4, "Windows refused: a program is using the device.",
+                      buf, sizeof(buf));
+    CHECK(n == strlen(buf), "the answer's length");
+    CHECK(tr_res_read_answer(buf, &code, msg, sizeof(msg)) && code == 4 &&
+              strcmp(msg, "Windows refused: a program is using the device.") == 0,
+          "the answer read back");
+    CHECK(!tr_res_read_answer("XHCITR ASK 1\r\n", &code, msg, sizeof(msg)),
+          "the ask is no answer");
+    CHECK(!tr_res_read_answer("XHCITR ANSWER 1\r\ncode x\r\n", &code, msg,
+                              sizeof(msg)), "a bad code");
+    CHECK(!tr_res_read_answer("XHCITR ANSWER 1\r\n", &code, msg, sizeof(msg)),
+          "no code");
+
+    /* The window's result. */
+    code = tr_elev_result(0, TR_ERROR_CANCELLED, 0, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK_EQ(code, INST_EXIT_REFUSED, "cancelled: nothing stopped, exit 1");
+    CHECK(strstr(msg, "Nothing was stopped") != NULL &&
+              strstr(msg, "Try again") != NULL && strstr(msg, "plug it in again") != NULL,
+          "cancelled: try again, or re-plug");
+    code = tr_elev_result(0, 1155UL, 0, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK_EQ(code, INST_EXIT_REFUSED, "no runas: exit 1");
+    CHECK(strstr(msg, "Run this as an") != NULL,
+          "no runas: the plain message");
+    code = tr_elev_result(1, 0, 0, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK_EQ(code, INST_EXIT_FAILED, "no end within the wait: exit 2");
+    CHECK(strstr(msg, "before you unplug it") != NULL, "no end: look first");
+    code = tr_elev_result(1, 0, 1, 0, 1, 0, "Windows has stopped X.", msg,
+                          sizeof(msg));
+    CHECK(code == INST_EXIT_DONE && strcmp(msg, "Windows has stopped X.") == 0,
+          "stopped: the run's own text");
+    code = tr_elev_result(1, 0, 1, 4, 1, 4, "Windows refused: a program is using "
+                          "the device.", msg, sizeof(msg));
+    CHECK(code == INST_EXIT_STEPS && strstr(msg, "program") != NULL,
+          "vetoed: the run's own reason, exit 4");
+    code = tr_elev_result(1, 0, 1, 4, 1, 0, "Windows has stopped X.", msg,
+                          sizeof(msg));
+    CHECK(code == INST_EXIT_STEPS && strstr(msg, "stopped X") == NULL,
+          "an answer whose code is not the exit code is not trusted");
+    code = tr_elev_result(1, 0, 1, 1, 0, 0, "", msg, sizeof(msg));
+    CHECK_EQ(code, INST_EXIT_REFUSED, "refused with no answer: exit 1");
+    code = tr_elev_result(1, 0, 1, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK_EQ(code, INST_EXIT_FAILED,
+             "exit 0 with no answer: not known, never 'stopped'");
+    code = tr_elev_result(1, 0, 1, 0xC0000005UL, 0, 0, "", msg, sizeof(msg));
+    CHECK(code == INST_EXIT_FAILED && strstr(msg, "before you unplug") != NULL,
+          "a crash: look before unplugging");
+}
+
 int main(void)
 {
     test_printf();
@@ -1822,6 +1982,7 @@ int main(void)
     test_sizes();
     test_desc_lengths();
     test_usb_eject();
+    test_elevated_stop();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {
