@@ -88,6 +88,27 @@ On Windows Vista and 7, if Windows refuses because the device needs
 administrator rights to stop, the tool offers to try again as an
 administrator.
 
+The drivers' logs
+-----------------
+
+Each xHCI controller the xhci98 driver runs has a "Driver log (xhci98)"
+item under it, and each Thunderbolt or USB4 controller a "Driver log
+(xhcicm)" item. Select one to read the driver's log and counters from the
+running driver: whether it is recording, the counters that are not zero,
+and the log, oldest line first. File > Save Report and /report include
+both logs. Nothing in them is an internal address.
+
+The logs are off unless you turn them on, and the item then says how:
+
+  xhci98   run SNAPON.BAT from the package's tools\xhcisnap folder (on
+           Windows 2000 and later as an administrator), then restart
+           Windows; SNAPOFF.BAT turns it off again.
+  xhcicm   set the DWORD value XhciLogVerbosity to 2 under the key the
+           item names (on Windows 2000 and later as an administrator),
+           then restart Windows; set it back to 0 afterwards.
+
+The tool itself changes no setting.
+
 The notification-area icon
 --------------------------
 
@@ -106,7 +127,8 @@ From a command line
 
   XHCITR                       the window and the icon
   XHCITR /tray                 the icon alone (as started at logon)
-  XHCITR /report <file>        writes the report to <file> and exits
+  XHCITR /report <file>        writes the report, the drivers' logs
+                               included, to <file> and exits
   XHCITR /eject id=<id>        stops the USB device or Thunderbolt/USB4
                                device with that Device Manager instance
                                ID and exits

@@ -3419,6 +3419,41 @@ cause, and the driver's counters, are in the report as well, which
 from `2.1.1.0` on a machine such as the E460 above showed the port trained
 and nothing more; one from `2.2.0.0` names the step that stopped.
 
+### Both logs in the xHCI98 USB Tree (from `3.0.0.0`)
+
+The xHCI98 USB Tree (`XHCITR.EXE`, see "The xHCI98 USB Tree" in the
+README) shows the logs of both drivers, read from the running drivers, with
+no debug build and no DebugView, and needs no administrator rights to do
+it. Each xHCI controller `xhci98.sys` drives has a "Driver log (xhci98)"
+node under it, and each Thunderbolt or USB4 controller a "Driver log
+(xhcicm)" node. Select the node to read the log: the details pane shows
+whether the driver is recording, its counters, and the log, oldest record
+first. Save Report (and `XHCITR /report <file>`) writes both logs and the
+counters into the report, as plain text with no internal addresses in it.
+
+Recording is off by default, and the node then says how to turn it on:
+
+- **`xhci98.sys`**: run `SNAPON.BAT` as above (on Vista and 7, as an
+  administrator), then restart Windows. At level 1 the node shows the
+  counters only. At level 4 it shows the counters but not the log, because
+  that level records internal addresses: use level 2.
+- **`xhcicm.sys`**: set the DWORD value `XhciLogVerbosity` to `2` on the
+  Thunderbolt or USB4 controller's driver key, then restart Windows. The
+  node names the key in full (the "Driver key" its details show, under
+  `HKEY_LOCAL_MACHINE`). On 2000 and later that needs an administrator; the
+  tool itself never writes the registry. Set it back to `0` once the log
+  has been sent. Its counters are shown whatever the level.
+
+`xhcicm.sys` keeps the last 16 KiB of its log, from when Windows first
+loaded it for the controller; a restart of the controller does not clear
+it. The tool reads it without removing anything, so it can be read again.
+Three of its records hold an address as their value; the tool shows those
+values as `--------`.
+
+`XHCISNAP` stays the way to send `xhci98.sys`'s full report (the `.DEV`, the
+port registers and the raw dump); the tool's report is the quick one, and
+the only one that carries `xhcicm.sys`'s log.
+
 The log cannot capture a crash: a machine that has bugchecked is not running
 for anything to read.
 

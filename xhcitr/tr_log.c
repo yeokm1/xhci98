@@ -299,8 +299,8 @@ static const char *trlFlavour(TR_U32 f)
     switch (f) {
     case 1: return "release";
     case 2: return "debug";
-    case 3: return "qemu";
-    case 4: return "host test";
+    case 3:
+    case 4: return "a development build";
     default: return "unknown";
     }
 }
