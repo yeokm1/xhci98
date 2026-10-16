@@ -42,6 +42,11 @@ shows its ports and how many are USB 2.0 and USB 3.x, for example "Root
 hub - 18 ports (14 USB 2.0, 4 USB 3.x)", and each port its kind:
 "[Port 15, USB 3]". A USB 3 connector has one port of each kind.
 
+The details of each device end with its resources: the memory and I/O
+ranges, the IRQ and (on Windows 2000 and later) the bus numbers Windows
+gave it, and its PCI location. A device with a problem code also shows what it asked for, so
+a device that wants an IRQ and was given none is easy to spot.
+
   File > Refresh (F5)      reads everything again
   File > Save Report...    writes the whole tree with every detail to a
                            text file, for a problem report

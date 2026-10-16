@@ -2194,6 +2194,12 @@ static int res_conf(TR_TEXT *t, DWORD dn, ULONG kind, const char *title)
         }
         rd = next;
         any = 1;
+        if (api.ResDesSize(&size, rd, 0) == TR_CR_SUCCESS && size == 0) {
+            /* 98 SE: a type only a private arbitrator knows (67 on a PCI
+             * bridge); CONFIGMG arbitrates memory, I/O, DMA and IRQ alone. */
+            tr_printf(t, "    Resource type %lu (no data)\n", (unsigned long)rid);
+            continue;
+        }
         if (api.ResDesSize(&size, rd, 0) != TR_CR_SUCCESS || size > sizeof(buf) ||
             api.ResDesData(rd, buf, size, 0) != TR_CR_SUCCESS) {
             tr_printf(t, "    (a resource of type %lu, %lu bytes, that could not be "
