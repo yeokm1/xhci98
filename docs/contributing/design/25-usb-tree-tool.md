@@ -968,11 +968,11 @@ builder (`cm_query.c`) is host-tested in the CM suite.
   nothing a user can write: the confirmed list travels as a digest on its
   command line, its answer in a section the window created.
 
-- **T19** (owner, 2026-10-16, revision 13) The tool sets the two
+- **T20** (owner, 2026-10-16, revision 13) The tool sets the two
   drivers' logging levels and nothing else (section 7.5). A standard user
   on NT does it through a second mode of decision T12's elevated run,
   whose arguments are checked whole before anything is read; the
-  elevated run finds the keys itself. (T13 to T18 are revisions 9 and
+  elevated run finds the keys itself. (T13 to T19 are revisions 9 and
   12's.)
 
 ## 13. Open
