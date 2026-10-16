@@ -19,7 +19,10 @@ Revised 2026-10-16 (task 40-A.8's first guest legs): a router's USB4
 Version is decided by its major alone (sections 3.5 and 6.4 step 3). The
 first reading of a Thunderbolt 3 device router behind a USB4 host, the
 CalDigit TS3 Plus model of `usb4-emu`, reported `0x02` and was refused as
-reserved under the whole-byte rule this record first gave.
+reserved under the whole-byte rule this record first gave. With that
+fixed it read Upstream Adapter 0 before enumeration, which section 8 item
+2 now covers; and the DROM by bit-bang, the task's second pass, is now
+read (section 8 item 4), so the router is named.
 
 The sources, and the tag each fact carries below:
 
@@ -1759,7 +1762,14 @@ router reporting a USB4 Version of major 0 needs beyond section 6:
    in Thunderbolt 3 compatible mode ([linux] `usb4.c` `link_is_usb4`); no
    USB3 tunnel over it.
 2. **Enumeration** without CMUV, ROUTER_CS_5 or the Configuration Valid
-   handshake: the same one write of ROUTER_CS_1 to 4 with Valid; the
+   handshake: the same one write of ROUTER_CS_1 to 4 with Valid. A
+   Thunderbolt 3 router may read Upstream Adapter 0 before it is
+   enumerated (the TS3 Plus reads ROUTER_CS_1 `0x0602C005` in `usb4-emu`'s
+   Framework 13 capture [obs]); its upstream adapter is then the Adapter
+   Num of the read's response, the adapter the request arrived at (Spec
+   Table 6-3), and the enumeration write sets it ([linux] `ctl.c`
+   `tb_cfg_get_upstream_port`, `switch.c` `tb_switch_alloc` and
+   `tb_switch_configure`). The
    router's Plug Events vendor-specific capability is required (none: the
    router is refused, [linux] `switch.c` `tb_switch_configure`) and written
    active, bits 2 to 6 of its second dword cleared, with the USB-disable
@@ -1775,10 +1785,16 @@ router reporting a USB4 Version of major 0 needs beyond section 6:
    where a USB4 router takes PORT_CS_19 PC. The host's port still takes PC.
    The bonding register sequence itself is section 6.5's.
 4. **UUID** from the link controller's fuse, four dwords ([linux] `lc.c`
-   `tb_lc_read_uuid`). The DROM is not read in the first pass: it sits
-   behind an EEPROM bit-bang ([linux] `eeprom.c` `tb_drom_bit_bang`) and is
-   optional for a tunnel; the log names the router by its configuration
-   space vendor and device. The bit-bang reader is the task's second pass.
+   `tb_lc_read_uuid`). The DROM sits behind an EEPROM bit-bang through the
+   Plug Events capability (its fourth dword the control, its twelfth the
+   DROM's offset in the part; [linux] `eeprom.c` `tb_eeprom_read_n`,
+   `tb_drom_bit_bang`). It is read once at connect, after the router's
+   capabilities and before its adapters, and parsed as section 6.4 step
+   6's DROM (CRC-32 checked, revision 1 entries from byte 22): the vendor
+   and model names, and the adapters it marks unused. It is optional for a
+   tunnel: an EEPROM that reads not present, a failed read or a bad CRC
+   leaves the router unnamed and running. A router preserved from before
+   the start (section 9) is not read.
 5. **The PCIe tunnel**: the same four entries, except that on the
    Thunderbolt 3 router the protocol adapter's ingress fields (initial
    credits, ingress flow control, shared buffering) are written as for a
@@ -1792,8 +1808,7 @@ router reporting a USB4 Version of major 0 needs beyond section 6:
    are the defaults (32 on a bonded lane, 16 single, 7 at the protocol
    adapter); and its control path's credits are taken as 2, Linux's value
    for a router whose HopID 0 entry does not report them ([linux]
-   `switch.c` `tb_init_port`). Its DROM and router operations are never
-   used.
+   `switch.c` `tb_init_port`). Its router operations are never used.
 6. **TMU**: not configured. A Thunderbolt 3 link carries no USB3 tunnel
    (item 1), and PCIe has no accuracy requirement (Guide 7.4.2). Linux
    enables it on these routers anyway ([linux] `tb.c` `tb_enable_tmu`;
@@ -1805,10 +1820,11 @@ router reporting a USB4 Version of major 0 needs beyond section 6:
 Left out: the Titan Ridge PCIe L1 setting and the Alpine and Titan Ridge
 xHCI connect ([linux] `switch.c` `tb_switch_pcie_l1_enable`,
 `tb_switch_xhci_connect`), DisplayPort and CLx. The owner's CalDigit TS3
-Plus on a USB4 host is the case this serves. The emulator has no
-Thunderbolt 3 device router preset on a USB4 host yet [model]
-(`XHCI98-HANDOFF` section 7), so the task's legs are its host suites and,
-when one exists, that preset.
+Plus on a USB4 host is the case this serves. `usb4-emu` models it from
+QEMU fork `2a893ea` on (`usb4-device` with `dialect=tb3` behind
+`usb4-host profile=usb4-generic`, from the Framework 13 capture [model]),
+which the cross-check (section 14.1) and the guest legs of `runs/run-41.md`
+read.
 
 The reverse case, a USB4 device behind a Thunderbolt 3 host, is the ICM
 client's, unchanged: "Thunderbolt 3 compatible USB4 devices, subject to the

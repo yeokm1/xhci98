@@ -17,7 +17,7 @@
  *   Linux drivers/thunderbolt (mirror pinned at
  *   c6859eed755df351a3978b33cb92365f9b3e8f06, SPDX GPL-2.0), whose notices
  *   read:
- *     tb.c, switch.c, tunnel.c, path.c, cap.c, tb_regs.h:
+ *     tb.c, switch.c, tunnel.c, path.c, cap.c, tb_regs.h, ctl.c, eeprom.c:
  *       Copyright (c) 2014 Andreas Noever <andreas.noever@gmail.com>
  *       Copyright (C) 2018, Intel Corporation (tb.c, switch.c: 2019; the
  *       rest as each file states)
@@ -32,7 +32,11 @@
  *     usb4_port_reset, tb_switch_lane_bonding_enable,
  *     tb_switch_tmu_post_time, tb_switch_tmu_enable (HiFi-Bi),
  *     tb_switch_tmu_disable, tb_lc_read_uuid, tb_lc_lane_bonding_possible,
- *     tb_lc_set_port_configured, tb_check_quirks.
+ *     tb_lc_set_port_configured, tb_check_quirks; for a Thunderbolt 3
+ *     router behind a USB4 host (task 40-A.8), tb_cfg_get_upstream_port
+ *     and tb_switch_alloc's upstream adapter, and eeprom.c's bit-bang
+ *     reader (tb_eeprom_get_drom_offset, tb_eeprom_active,
+ *     tb_eeprom_transfer, tb_eeprom_out, tb_eeprom_in, tb_eeprom_read_n).
  *
  * What changed from u4cm.c is design record 22 section 2.2's table: no
  * Host Interface Reset (ring 0 taken over, tbt_ring.c), Router Ready 500 ms,
