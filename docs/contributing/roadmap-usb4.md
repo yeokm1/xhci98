@@ -225,7 +225,7 @@ device-router preset and a conformance check.
 - [x] 40-A.5 the `usb4-emu` fabric cross-check script, recorded as a reading (done 2026-10-15, `runs/run-40.md`: the pure core against the usb4-emu fabric model at ce13e0e, minimal, intel-adl and asm4242, 45469 checks, no failures)
 - [x] 40-A.6 the driver half: the profile chosen at start, Ice Lake to Wildcat Lake force power and LTR with the ownership record, the ring takeover, the resume obligations and the filter hold, `XhciCmMode` 3, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding` and `XhciCmPreOsCleanup` written by every INF path, the `u4.*` counters, `KeTickCount` and `KeQueryTimeIncrement` in the import allowlists with record 13's evidence (done 2026-10-15: `p40-drv` 7acb5efb, merged d0004e1b; legs in run-40.md)
 - [x] 40-A.7 the `nvme98` statement under the USB4 profile (the endpoint-presence anchor and the 3 s deadline), with 39-A.7 (done 2026-10-15 with 39-A.7: the USB4 profile's hooks, UP from the hook, DOWN with PathClosed, presence samples; host-tested, the Windows 2000 guest leg on `usb4-generic` owed)
-- [ ] 40-A.8 Thunderbolt 3 device routers behind a USB4 host, record 22 section 8 (PCIe first; the DROM by bit-bang as a second pass) (pure part done 2026-10-15 in `tbt_u4cm.c`, `p40-core`; the driver side, the router-kind log, done in `p40-drv`; the DROM bit-bang and a leg are owed, the leg needing an emulator preset)
+- [ ] 40-A.8 Thunderbolt 3 device routers behind a USB4 host, record 22 section 8 (PCIe first; the DROM by bit-bang as a second pass) (pure part done 2026-10-15 in `tbt_u4cm.c`, `p40-core`; the driver side, the router-kind log, done in `p40-drv`; the DROM bit-bang, the version by its major and the upstream adapter from the read's response done 2026-10-16 on `tb3ver`, read on 98 SE and 7 x86, `runs/run-41.md`; the 2000 leg is EMU.1's)
 - [x] 40-A.9 the safe-eject entry point for 39-A.8 (done 2026-10-15: `TbtU4EjectPcie` through `CmReenumSetEject`, the PCIe tunnel alone, USB3 kept; the Windows 2000 leg passed, the eject to be re-read on the final build in 40-V.2)
 - [ ] 40-V.1 Windows 98 SE, legs U.1 to U.13 of record 22 section 14.2 (partly read 2026-10-15: U.1, U.3, U.5, U.6, U.8 fabric half and U.10 pass) (also read 2026-10-15 on the ASM2464 device model of the ORICO capture on `intel-adl`: the install, the tunnel, the NVMe read and written with no Refresh, unplug, re-plug and a cold boot pass after the DROM unused-adapter fix, record 22 section 6.11); U.2 read 2026-10-15 for the connection manager (the NVMe at Code 29 beside the `-Usb3` xHCI, the guest's interrupt routing), U.8's USB3 tunnel at 5 Gb/s, and U.14 (the host interface lost: contained, no access after the gate reopens); U.4, U.7, U.9 and U.11 to U.13 owed
 - [ ] 40-V.2 Windows 2000, the same legs plus the filter on `1B36:0001` (partly read 2026-10-15: U.2 hot plug through the filter with nvme98, and the safe eject) (the ASM2464 model as on 98 SE, plus the safe eject, pass) (read 2026-10-15: U.1 to U.13 pass on `minimal`, `intel-adl` and `asm4242`, U.11 on `asm4242` failing by platform with Code 12; the PCIe-only eject re-read passes; S3 and the Thunderbolt 3 router behind a USB4 host owed); U.14, the host interface lost under the USB4 profile, passes 2026-10-15 (contained, no access, a re-enable starts a new instance that finds the tunnel preserved)
@@ -373,12 +373,20 @@ link.
 Goal: a device behind a tunnel stays offered for safe removal after its
 driver stack is rebuilt.
 
-Status: not opened, unnumbered and unversioned. Found by the Windows 2000
-legs of 39-V.2 on 2026-10-15; `3.0.0.0` ships the release-notes line
-(re-plug it, or `INSTALL /eject`) and the owner asked for the proper fix
-later (record 21 section 7.4).
+Status: not opened, unnumbered and unversioned; to be solved after
+`3.0.0.0` (owner, 2026-10-15, confirmed 2026-10-16). Found by the Windows
+2000 legs of 39-V.2 on 2026-10-15. Read again on 2026-10-16 with a bridge
+chain behind the tunnel port on 2000: the first plug of a device Windows
+has not seen before installs its driver, the stack is rebuilt, and the
+unit reads not removable, so neither Windows' applet nor `INSTALL /eject`
+offers it; a plain unplug then brings up the Unsafe Removal dialog. From
+the second plug on it is offered and stops cleanly. `3.0.0.0` ships
+instead: `XHCITR` and `INSTALL /eject` fall back to the configuration
+manager's query-and-remove for such a unit (administrators only; a
+standard user is told to re-plug once), and the release notes state the
+behaviour (record 21 section 7.4, records 24 and 25).
 
-- [ ] EJRB.1 the child filter after a stack rebuild (owner, 2026-10-15). A disable and enable of the device, or its driver installed or updated, rebuilds its stack from the registry with no `BusRelations` query, so the child filter that sets `Removable` (record 21 section 7.4) is not attached again and the device drops out of "Unplug or Eject Hardware" and "Safely Remove Hardware" until a re-plug. A kernel-only fix is not small: the filter would have to be registered on the child devnode as a device-specific `LowerFilters` value, in the Enum key the PnP manager owns, written through SetupAPI or CfgMgr32 from user mode (the device tool of design record 24 is the natural place), and keeping a filter attached across a non-surprise `IRP_MN_REMOVE_DEVICE` is not permitted. Design first (record 21 section 7.4 and record 24), with the removal of that value when the device leaves; legs on 2000, XP and 7
+- [ ] EJRB.1 the child filter after a stack rebuild (owner, 2026-10-15). A disable and enable of the device, or its driver installed or updated, rebuilds its stack from the registry with no `BusRelations` query, so the child filter that sets `Removable` (record 21 section 7.4) is not attached again and the device drops out of "Unplug or Eject Hardware" and "Safely Remove Hardware" until a re-plug. A kernel-only fix is not small: the filter would have to be registered on the child devnode as a device-specific `LowerFilters` value, in the Enum key the PnP manager owns, written through SetupAPI or CfgMgr32 from user mode (the device tool of design record 24 is the natural place), and keeping a filter attached across a non-surprise `IRP_MN_REMOVE_DEVICE` is not permitted. The writer needs administrator rights on 2000 and XP, so a privileged user-mode piece (a service, told of each new unit by the driver) rather than the unprivileged tray tool; a value left behind that names a filter no longer installed stops the device from starting (Code 39), so its removal on the device's departure, on uninstall and after a failed upgrade is part of the design; only the unit at the top of each tunnel port, never another PCI device. Design first (record 21 section 7.4 and record 24), with the removal of that value when the device leaves; legs on 2000, XP, Vista and 7, x64 included
 
 ## Planned - `nvme98` Interface 3 on Windows 98 SE and ME
 
@@ -406,7 +414,7 @@ the `usb4-emu` maintainer's notes relayed by the owner: the TB3 dock
 preset on a USB4 host and the P14s behaviour landed on its `main`
 (`c7031a5`) after the freeze, and the root hot-plug modes are its part 2.
 
-- [ ] EMU.1 Thunderbolt 3 device routers behind a USB4 host (task 40-A.8): the emulator's TB3 dock preset on `usb4-generic` (the i440FX command line of `usb4-emu`'s `XHCI98-HANDOFF.md` section 7.1) on 98 SE and 2000, the PCIe tunnel through the legacy router and the DROM by bit-bang
+- [ ] EMU.1 Thunderbolt 3 device routers behind a USB4 host (task 40-A.8): the emulator's TB3 dock preset on `usb4-generic` (the i440FX command line of `usb4-emu`'s `XHCI98-HANDOFF.md` section 7.1) on 98 SE and 2000, the PCIe tunnel through the legacy router and the DROM by bit-bang (98 SE and 7 x86 read on 2026-10-16 with `bin-2a893ea`, `runs/run-41.md`: the router's USB4 Version by its major, its upstream adapter from the read's response and its DROM by bit-bang were needed and are in; the PCIe tunnel, the NVMe disk, the name, Safely Remove, unplug and re-plug pass; 2000 owed)
 - [ ] EMU.2 the R32 power-off read again with the emulator's root hot-plug modes once its part 2 lands: `acpi` on 2000 with ACPI, XP and 7, `restore` on 98 SE (its image is APM-only); the ICM client's ABSENT and recovery and the USB4 profile's containment against a PnP removal and a restored bridge
 - [ ] EMU.3 the P14s behaviour on the Alpine Ridge profile: Assist decided at power-on, pre-boot tunnelling every device, Assist with pre-boot and a USB4 device (single lane, flags `0x88`, configuration requests held about 2.77 s after the first `driver ready`), `driver ready` flags `0x22`, the power-off delays, and pending approvals cancelled by an unplug, a re-plug or mailbox `0x06` (a stale `approve` answered with the error flag, taken as benign)
 - [ ] EMU.4 the ORICO enclosure's ASM2464 on the Alpine Ridge profile: approved and tunnelled, and with `XhciCmApprove` 0 its fall back to USB after about 9.4 s, the disk then on the controller's own xHCI under `xhci98.sys`
@@ -480,5 +488,26 @@ Stor98's receiver, a re-signed x64 package and a release that bundles it.
 
 Status: not opened, unnumbered and unversioned.
 
-- [ ] STOR.1 the rename in `xhcicm.sys`, the scripts, the installer and the docs, from the change list; interface 3 as adopted
+- [ ] STOR.1 the rename in `xhcicm.sys`, the scripts, the installer and the docs, from the change list; interface 3 as adopted (the channel and the installer, 2026-10-16: `src/cm/stor98cm.h` in place of `nvme98cm.h`, unchanged from Stor98 `0.3.0.0`; interface version 4, `S98L` and `STOR98CM`, `\Callback\Stor98LinkState` on NT; on 98 SE and ME no channel is offered (interface 3's proof key is NV9X.1, and without it the locator is not written either, so nothing is published or awaited there and Stor98 runs on its gone deadline); records 21 section 7.2 and 22 section 10; `XHCIINST` skips `stor98*` files and never takes an INF that installs the `stor98` service or names `stor98.mpd` as its own, whatever its Provider; host suites pass)
 - [ ] STOR.2 bundle Stor98 `0.3.0.0`; NVMe legs (link up and down, the 9x clean-eject handshake, ME write-through); the release
+
+## Planned - Installing the Driver on Windows 98 SE and ME
+
+Goal: `INSTALL.BAT` on 98 SE and ME puts the driver on the controller and
+its root hub itself, as it does on 2000 and later, in place of the
+Update Driver steps the user follows by hand (design record 23 section
+6.1: no routine of these systems installs a driver on a device, and the
+16-bit `SETUPX` engine is not driven through anything undocumented).
+The Windows 95 and 98 DDKs document `SETUPX`'s device installer functions
+for class installers (`DiCreateDeviceInfo`, `DiInstallDevice` and the
+rest), so a small 16-bit helper may do what Update Driver does. Asked for
+by the owner on 2026-10-16, after an update from `2.4.0.0` on 98 SE left
+the driver as it was until the hand steps were done. Not taken (owner,
+the same day): overwriting the installed binaries in `system32\drivers`
+in place, as NUSB does with Windows' own USB files; the device keeps the
+wizard's record of the old INF, and an INF change never reaches it.
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] DI9X.1 a design record: which `SETUPX` functions, as the DDKs document them; the 16-bit toolchain; the helper's interface to `XHCIINST`; the controller, its root hub and the Thunderbolt controller; a USB keyboard and mouse behind the controller being updated; what the wizards' own bookkeeping then holds; the uninstall
+- [ ] DI9X.2 the helper and `XHCIINST`'s use of it, with the legs on 98 SE and ME (a fresh install, an update from `2.4.0.0` and `2.3.x`, the uninstall)

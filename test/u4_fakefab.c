@@ -5,6 +5,13 @@
  * 4.4.5.2, 6.4, 8.2, 8.3, 12.3, 12.4, 12.6) and usb4-emu's documented
  * host models (design record 22 section 2.1), independently of
  * src\cm\tbt_u4cm.c. C89 with the C library; test-only.
+ *
+ * One exception: the Thunderbolt 3 router's EEPROM (fabEeByte, fabEeCtl)
+ * is adapted from usb4-emu src/qemu/hw/usb4/usb4-router-tb3.c
+ * (eeprom_byte, eeprom_ctl; QEMU fork 2a893ea, read 2026-10-16), whose
+ * notice reads:
+ *   Copyright (c) 2026 usb4-emu contributors
+ *   SPDX-License-Identifier: GPL-2.0-only
  */
 
 #include <stdio.h>
@@ -502,16 +509,72 @@ static void fabEnumerated(FAB *f, int ri)
     }
 }
 
+static unsigned fabEeByte(const FAB_ROUTER *r, unsigned long addr)
+{
+    if (addr >= r->EeBase && addr - r->EeBase < r->DromLen) {
+        return r->Drom[addr - r->EeBase];
+    }
+    return 0xFF;
+}
+
+/* SK 0, CS 1 (0 selects), DI 2 (to the part), DO 3 (from it), enable 4. */
+static void fabEeCtl(FAB_ROUTER *r, unsigned long old, unsigned long v)
+{
+    int was = (old & 0x10UL) && !(old & 0x02UL);
+    int on = (v & 0x10UL) && !(v & 0x02UL);
+
+    r->EeCtlWrites++;
+    if (!on) {
+        r->EeOn = 0;
+        r->EeData = 1;
+        return;
+    }
+    if (!was || !r->EeOn) {
+        r->EeOn = 1;
+        r->EeBits = 0;
+        r->EeShift = 0;
+        r->EeData = 0;
+    }
+    if ((old & 0x01UL) || !(v & 0x01UL)) {
+        return;
+    }
+    if (r->EeBits < 24) {
+        r->EeShift = (r->EeShift << 1) | ((v & 0x04UL) ? 1UL : 0UL);
+        if (++r->EeBits == 24) {
+            r->EeCmd = r->EeShift >> 16;
+            r->EeAddr = r->EeShift & 0xFFFFUL;
+            r->EeOutByte = r->EeCmd == 3 ? fabEeByte(r, r->EeAddr) : 0xFF;
+            r->EeOutBit = 0;
+        }
+        return;
+    }
+    r->EeData = (r->EeOutByte >> (7 - r->EeOutBit)) & 1;
+    if (++r->EeOutBit == 8) {
+        r->EeAddr++;
+        r->EeOutByte = r->EeCmd == 3 ? fabEeByte(r, r->EeAddr) : 0xFF;
+        r->EeOutBit = 0;
+    }
+}
+
 static void fabRouterWrite(FAB *f, int ri, unsigned long addr, unsigned long v)
 {
     FAB_ROUTER *r = &f->R[ri];
     unsigned long old = r->Rcs[addr];
+
+    if (r->Tbt3 && addr == FAB_RCAP_PLUG + 4) {
+        r->Rcs[addr] = (old & ~0x17UL) | (v & 0x17UL);
+        fabEeCtl(r, old, r->Rcs[addr]);
+        return;
+    }
 
     if (addr == 0 || addr == 6 || addr == 7 || addr == 8) {
         return;     /* read only */
     }
     if (addr == 1) {
         r->Rcs[1] = (old & ~(7UL << 20)) | (v & (7UL << 20));
+        if (r->UpWritable) {
+            r->Rcs[1] = (r->Rcs[1] & ~(0x3FUL << 8)) | (v & (0x3FUL << 8));
+        }
         return;
     }
     if (addr == 4) {
@@ -702,6 +765,9 @@ static unsigned long fabRead(FAB *f, int ri, unsigned long cs, unsigned a,
         if (addr == 6 && r->RrPending && f->NowUs - r->RrAtUs < 0x80000000UL) {
             r->RrPending = 0;
             r->Rcs[6] |= 0x01000000UL;
+        }
+        if (r->Tbt3 && addr == FAB_RCAP_PLUG + 4) {
+            return (r->Rcs[addr] & ~0x08UL) | (r->EeData ? 0x08UL : 0UL);
         }
         return r->Rcs[addr];
     }
@@ -1418,6 +1484,13 @@ int fabDevice(FAB *f, int kind)
         d->Rcs[1] |= FAB_RCAP_PLUG;
         d->Rcs[FAB_RCAP_PLUG] = FAB_RCAP_LC | (0x05UL << 8) | (0x01UL << 16) | (0x0CUL << 24);
         d->Rcs[FAB_RCAP_PLUG + 1] = 0x7CUL;
+        /* EEPROM present, deselected, its DROM at 0x100 (as the TS3 Plus
+         * capture's idle 0x0002218A reads present and deselected). */
+        d->Rcs[FAB_RCAP_PLUG + 4] = 0x0002218AUL;
+        d->Rcs[FAB_RCAP_PLUG + 12] = 0x100UL;
+        d->EeBase = 0x100UL;
+        d->EeData = 1;
+        fabDrom(d, "CalDigit, Inc.", "TS3 Plus");
         d->Rcs[FAB_RCAP_LC] = (0x05UL << 8) | (0x06UL << 16);
         d->Rcs[FAB_RCAP_LC + 1] = 0;
         d->Rcs[FAB_RCAP_LC + 2] = 2UL | ((unsigned long)FAB_LC_START << 8) |

@@ -12,7 +12,7 @@
  * XhciCmApprove 0 or 1, task 39-A.6 reads it); the timeouts, retries and
  * error flag of section 5.5. What is not: the registry, PnP, power, the
  * thread, the common buffer, the configuration-space writes, the
- * re-enumeration and the nvme98 statement - the driver (39-A.4, 39-A.5,
+ * re-enumeration and the stor98 statement - the driver (39-A.4, 39-A.5,
  * 39-A.7) does those and reaches this file through the TBT_HOST accessor of
  * tbt_ring.h, an action queue it drains, and one upcall.
  *
@@ -387,7 +387,7 @@ typedef struct _TBT_ICM_ACTION {
  * Called the moment a device-disconnected event is decoded, wherever that
  * is - inside a command wait (`inWait` TRUE) or in the idle poll - before
  * the entry is dropped and its TUNNEL_DOWN queued: record 21 section 4.4's
- * link-down notification, which task 39-A.7 wires to nvme98. May be NULL.
+ * link-down notification, which task 39-A.7 wires to stor98. May be NULL.
  */
 typedef VOID (*TBT_ICM_LINKDOWN)(PVOID context,
                                  const TBT_ICM_DEVICE *dev,
