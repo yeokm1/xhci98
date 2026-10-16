@@ -608,6 +608,16 @@ read's state, the build flavour), then the parts. Sizing is `XCMQ`'s.
 - **The ring and the counters** are copied under the controller lock,
   the lock the door's snapshot copies them under, straight into the
   request's buffer.
+- **No address below level 4, in either driver.** With level 2 the
+  default, every log record site of both drivers was read for values
+  that are addresses (physical, bus, DMA, MMIO, kernel virtual, a
+  pointer or a handle). Four were found below level 4 and became address
+  records, which the shared ring takes at level 4 alone: `start.common.pa`
+  and `pirq.rcba` (`hcd_ctl.c`), `qemu.inj.bulk.lost` (`hcd_inj.c`, the
+  `qemu` flavour), and in `xhcicm.sys` - which had no address-gated
+  append - `cm.live.bar-changed` and the two 98 devnode-handle records,
+  through a new `CmLogNoteAddress`. `start.bar` and `start.ok` already
+  were. Section 4.5's label filter stays as a second guard.
 - **Compatibility.** The USBUSER pass-through, its clause table and its
   regions are untouched, so `usbui.dll` and `XHCISNAP` read the driver as
   before. An older `xhci98.sys` answers the request with

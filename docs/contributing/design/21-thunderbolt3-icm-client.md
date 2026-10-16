@@ -2393,7 +2393,11 @@ skipped and refused among them, and the query device serves them at every
 verbosity. Three records carry an address as their value
 (`cm.live.bar-changed`, a bus address, and on 98 SE and ME
 `cm.reenum.9x.gone.superseded` and `.id-changed`, a CONFIGMG devnode
-handle); the answer withholds their values.
+handle); the answer withholds their values. Since record 25's
+revision 12 they are written through `CmLogNoteAddress`
+(`XhciLogAppendAddress` under `LogLock`), so they reach the ring at
+`XhciLogVerbosity` 4 alone, as `xhci98.sys`'s address records do; the
+answer's label filter stays beside it.
 
 Design record 25's revision 12 (owner, 2026-10-16) adds a third request,
 `IOCTL_XHCICM_PCI` (`0x00222908`, answer `XCMP` version 1, record 25
