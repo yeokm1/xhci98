@@ -278,6 +278,7 @@ VOID CmStatusOpen(PCM_NHI nhi)
     s = &nhi->StatusPub;
     cmStClose(s);
     CmZero(s, sizeof(*s));
+    KeInitializeSpinLock(&nhi->BrDiagLock);
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(nhi->Common.Pdo,
                                            PLUGPLAY_REGKEY_DEVICE, KEY_WRITE,
                                            &key))) {
@@ -352,24 +353,26 @@ VOID CmStatusQueryName(PCM_NHI nhi, PCUNICODE_STRING name)
 }
 
 /* XhciCmBridgeDiag, when the worker has a newer attempt to show: best
- * effort, as the record. The copy is checked against the sequence again
- * after it is taken, since the worker writes it under its own lock. */
+ * effort, as the record. The copy is taken under BrDiagLock, the lock the
+ * worker writes it under, and written after the lock is released. */
 static VOID cmStBrDiag(PCM_NHI nhi)
 {
     UNICODE_STRING name;
     ULONG copy[CM_BRDIAG_WORDS];
     ULONG seq;
     ULONG i;
+    KIRQL irql;
 
-    seq = nhi->BrDiag[0];
-    if (seq == 0 || seq == nhi->BrDiagWritten ||
-        nhi->StatusPub.DevKey == NULL) {
+    if (nhi->StatusPub.DevKey == NULL) {
         return;
     }
+    KeAcquireSpinLock(&nhi->BrDiagLock, &irql);
     for (i = 0; i < CM_BRDIAG_WORDS; i++) {
         copy[i] = nhi->BrDiag[i];
     }
-    if (nhi->BrDiag[0] != seq || copy[0] != seq) {
+    KeReleaseSpinLock(&nhi->BrDiagLock, irql);
+    seq = copy[0];
+    if (seq == 0 || seq == nhi->BrDiagWritten) {
         return;
     }
     RtlInitUnicodeString(&name, L"XhciCmBridgeDiag");

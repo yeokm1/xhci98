@@ -151,7 +151,6 @@ typedef struct _CM_CFGWK {
     ULONG PciRefused;       /* PCI.VXD's guard failed: logged once        */
     ULONG NumberMember;     /* the member cmWkNumber works on ...         */
     ULONG NumberGen;        /* ... and its request's generation           */
-    ULONG DiagSeq;          /* XhciCmBridgeDiag's sequence (cmWkDiag)     */
     CM_CFGMG Cfgmg;
     CM_CFGWK_COUNTERS C;
 } CM_CFGWK, *PCM_CFGWK;
@@ -1273,6 +1272,7 @@ static VOID cmWkDiag(PCM_CFGWK w, ULONG bdf, PXHCI_TBT_BRNUM r, ULONG tries,
     ULONG d[CM_BRDIAG_WORDS];
     ULONG k;
     KIRQL irql;
+    KIRQL inner;
 
     for (k = 0; k < CM_BRDIAG_WORDS; k++) {
         d[k] = 0;
@@ -1305,16 +1305,19 @@ static VOID cmWkDiag(PCM_CFGWK w, ULONG bdf, PXHCI_TBT_BRNUM r, ULONG tries,
     }
     KeAcquireSpinLock(&w->Lock, &irql);
     if (w->Nhi != NULL) {
-        w->DiagSeq++;
-        if (w->DiagSeq == 0) {
-            w->DiagSeq = 1;
+        /* The NHI's own lock inside the worker's: the thread's reader
+         * takes it alone. The sequence is the NHI's, so a newer worker
+         * of the same NHI never repeats one already written. */
+        KeAcquireSpinLock(&w->Nhi->BrDiagLock, &inner);
+        w->Nhi->BrDiagSeq++;
+        if (w->Nhi->BrDiagSeq == 0) {
+            w->Nhi->BrDiagSeq = 1;
         }
-        d[0] = w->DiagSeq;
-        /* The sequence last, so a reader that sees it sees the rest. */
-        for (k = 1; k < CM_BRDIAG_WORDS; k++) {
+        d[0] = w->Nhi->BrDiagSeq;
+        for (k = 0; k < CM_BRDIAG_WORDS; k++) {
             w->Nhi->BrDiag[k] = d[k];
         }
-        w->Nhi->BrDiag[0] = d[0];
+        KeReleaseSpinLock(&w->Nhi->BrDiagLock, inner);
     }
     KeReleaseSpinLock(&w->Lock, irql);
 }

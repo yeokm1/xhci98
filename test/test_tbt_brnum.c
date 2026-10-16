@@ -1153,6 +1153,51 @@ static VOID test_windows_order_and_stale(VOID)
     CHECK_EQ(m.N[usp].Io, 0x0101UL, "the I/O window put back as read");
 }
 
+static VOID test_irq_stale(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, usp, dsp, nvme, at;
+    ULONG done;
+
+    /* Superseded at each point of the interrupt-line stage in turn: every
+     * line, window and bus number written is undone, and the outcome is
+     * stale; once the refusal comes after the last write, it is done. */
+    done = 0;
+    for (at = 15; at < 30 && !done; at++) {
+        mreset();
+        ioreset(TRUE);
+        port = mport(0x06, 0x2A);
+        m.N[port].Mem = 0xE000D410UL;
+        m.N[port].Intr = 0x0000010AUL;
+        masm(port, &usp, &dsp, &nvme);
+        mnvmebars(nvme);
+        m.N[usp].Intr = 0x00000100UL;
+        m.N[dsp].Intr = 0x00000100UL;
+        m.N[nvme].Intr = 0x00000100UL;
+        goCalls = 0;
+        goRefuseAt = at;
+        goReplace = ROOT;
+        (VOID)XhciTbtNumberBridges(&io, PORT,
+                                   XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ,
+                                   gocb, NULL, &r);
+        if (r.Outcome == XHCI_TBT_BRNUM_DONE) {
+            done = 1;
+            CHECK_EQ(m.N[nvme].Intr, 0x0000010AUL, "past the last write: done");
+            break;
+        }
+        CHECK_EQ(r.Outcome, XHCI_TBT_BRNUM_STALE, "superseded: stale");
+        CHECK_EQ(m.N[usp].Buses, 0, "the bus numbers undone");
+        CHECK_EQ(m.N[dsp].Buses, 0, "both");
+        CHECK_EQ(m.N[usp].Mem, 0, "the windows undone");
+        CHECK_EQ(m.N[usp].Cmd, 0, "the command undone");
+        CHECK_EQ(m.N[usp].Intr, 0x00000100UL, "the lines undone");
+        CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "every line");
+        CHECK_EQ(r.UndoFailed, 0, "nothing failed to undo");
+    }
+    CHECK_EQ(done, 1, "a late enough refusal leaves it done");
+    goRefuseAt = 0;
+}
+
 int main(void)
 {
     test_p14s_orico();
@@ -1170,6 +1215,7 @@ int main(void)
     test_windows_more();
     test_irq();
     test_windows_order_and_stale();
+    test_irq_stale();
     printf("test_tbt_brnum: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

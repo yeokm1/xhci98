@@ -839,8 +839,8 @@ static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
  * whose interrupt arrives on another of the port's pins: no line the port
  * reads is known to be routed there.
  */
-static VOID brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
-                    ULONG portPin, ULONG line)
+static ULONG brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
+                     ULONG portPin, ULONG line)
 {
     PXHCI_TBT_BRNUM r;
     ULONG dev;
@@ -855,10 +855,11 @@ static VOID brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
     ULONG pin;
     ULONG back;
     ULONG k;
+    ULONG rc;
 
     r = c->R;
     if (depth > XHCI_TBT_BRNUM_MAX_DEPTH) {
-        return;
+        return 0;
     }
     for (dev = 0; dev < 32UL; dev++) {
         first = 0;
@@ -880,9 +881,12 @@ static VOID brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
             if (layout == XHCI_TBT_HDR_BRIDGE) {
                 k = brSlot(c, bdf);
             }
+            if (!brGo(c)) {
+                return XHCI_TBT_BRIRQ_STALE;
+            }
             if ((layout == 0 || k != XHCI_TBT_BRNUM_MAX_BRIDGES) &&
                 (layout == 0 || layout == XHCI_TBT_HDR_BRIDGE) &&
-                brGo(c) && brRead(c->Io, bdf, XHCI_TBT_CFG_INTR, &v)) {
+                brRead(c->Io, bdf, XHCI_TBT_CFG_INTR, &v)) {
                 pin = (v >> 8) & 0xFFUL;
                 if (pin >= 1 && pin <= 4) {
                     r->IrqFunctions++;
@@ -890,7 +894,13 @@ static VOID brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
                         r->IrqOther++;
                     } else if ((v & 0xFFUL) != 0 && (v & 0xFFUL) != 0xFFUL) {
                         r->IrqKept++;
+                    } else if (r->IrqJournal >= XHCI_TBT_BRNUM_MAX_LINES) {
+                        r->IrqFailed++;
                     } else {
+                        /* Journalled before it is issued, for the undo. */
+                        r->IrqBdf[r->IrqJournal] = bdf;
+                        r->IrqWas[r->IrqJournal] = v;
+                        r->IrqJournal++;
                         c->Io->Writes++;
                         r->Writes++;
                         if (c->Io->Write(c->Io->Context, bdf, XHCI_TBT_CFG_INTR,
@@ -905,14 +915,43 @@ static VOID brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
                 }
             }
             if (k != XHCI_TBT_BRNUM_MAX_BRIDGES) {
-                brLines(c, (r->Now[k] >> 8) & 0xFFUL, (dev + rot) & 3UL,
-                        depth + 1, portPin, line);
+                rc = brLines(c, (r->Now[k] >> 8) & 0xFFUL, (dev + rot) & 3UL,
+                             depth + 1, portPin, line);
+                if (rc != 0) {
+                    return rc;
+                }
             }
             if (fn == 0 && !first) {
                 break;
             }
         }
     }
+    return 0;
+}
+
+/* Every line written put back as read, last first; each only on a
+ * function that still reads with the pin it had. */
+static VOID brLinesUndo(BRNUM_CTX *c)
+{
+    PXHCI_TBT_BRNUM r;
+    ULONG k;
+    ULONG v;
+
+    r = c->R;
+    for (k = r->IrqJournal; k > 0; k--) {
+        if (!brRead(c->Io, r->IrqBdf[k - 1], XHCI_TBT_CFG_INTR, &v) ||
+            (v & 0xFF00UL) != (r->IrqWas[k - 1] & 0xFF00UL)) {
+            r->UndoFailed++;
+            continue;
+        }
+        if (!brPut(c, r->IrqBdf[k - 1], XHCI_TBT_CFG_INTR,
+                   (v & 0xFFFFFF00UL) | (r->IrqWas[k - 1] & 0xFFUL), 0xFFUL)) {
+            r->UndoFailed++;
+            continue;
+        }
+        r->Undone++;
+    }
+    r->IrqJournal = 0;
 }
 
 /* The interrupt lines of the chain just set up: the port's own Interrupt
@@ -937,7 +976,11 @@ static VOID brIrq(BRNUM_CTX *c, ULONG port, ULONG secondary)
         r->IrqOutcome = XHCI_TBT_BRIRQ_PORT_NONE;
         return;
     }
-    brLines(c, secondary, 0, 0, pin, line);
+    if (brLines(c, secondary, 0, 0, pin, line) != 0) {
+        brLinesUndo(c);
+        r->IrqOutcome = XHCI_TBT_BRIRQ_STALE;
+        return;
+    }
     r->IrqOutcome = r->IrqFailed != 0 ? XHCI_TBT_BRIRQ_ACCESS
                                       : XHCI_TBT_BRIRQ_DONE;
 }
@@ -1006,6 +1049,7 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
     r->IrqKept = 0;
     r->IrqOther = 0;
     r->IrqFailed = 0;
+    r->IrqJournal = 0;
     r->WinWhere = XHCI_TBT_NO_BDF;
     r->PortMem = 0;
     r->WinNeed = 0;
@@ -1075,6 +1119,15 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
             ((flags & XHCI_TBT_BRNUM_F_WINDOWS) == 0 ||
              r->WinOutcome == XHCI_TBT_BRWIN_DONE)) {
             brIrq(&c, port, secondary);
+            if (r->IrqOutcome == XHCI_TBT_BRIRQ_STALE) {
+                /* Superseded: windows and bus numbers go too. */
+                brWinUndo(&c);
+                brUndo(&c);
+                r->Numbered = 0;
+                r->Last = 0;
+                r->Outcome = XHCI_TBT_BRNUM_STALE;
+                return r->Outcome;
+            }
         }
         return r->Outcome;
     }

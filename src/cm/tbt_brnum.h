@@ -82,6 +82,11 @@
 #define XHCI_TBT_BRIRQ_DONE         1UL /* every eligible line written       */
 #define XHCI_TBT_BRIRQ_PORT_NONE    2UL /* the port has no line of its own   */
 #define XHCI_TBT_BRIRQ_ACCESS       3UL /* a read failed or a line not held  */
+#define XHCI_TBT_BRIRQ_STALE        4UL /* the go callback refused: every
+                                           line, window and bus number
+                                           written is undone               */
+
+#define XHCI_TBT_BRNUM_MAX_LINES    32UL    /* interrupt lines journalled  */
 
 /* Flags. */
 #define XHCI_TBT_BRNUM_F_WINDOWS    0x1UL   /* also give the chain windows   */
@@ -138,7 +143,11 @@ typedef struct _XHCI_TBT_BRNUM {
     ULONG IrqSet;           /* ... given the port's line                  */
     ULONG IrqKept;          /* ... whose line was already set             */
     ULONG IrqOther;         /* ... arriving on another of the port's pins */
-    ULONG IrqFailed;        /* ... whose write did not hold               */
+    ULONG IrqFailed;        /* ... whose write did not hold (or past the
+                               journal's room)                            */
+    ULONG IrqJournal;       /* lines written, for the undo                */
+    ULONG IrqBdf[XHCI_TBT_BRNUM_MAX_LINES];  /* each function written     */
+    ULONG IrqWas[XHCI_TBT_BRNUM_MAX_LINES];  /* its 3Ch as read           */
     ULONG Was[XHCI_TBT_BRNUM_MAX_BRIDGES];   /* its 18h dword as read     */
     ULONG Now[XHCI_TBT_BRNUM_MAX_BRIDGES];   /* ... and as left           */
 } XHCI_TBT_BRNUM, *PXHCI_TBT_BRNUM;
