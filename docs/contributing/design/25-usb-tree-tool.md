@@ -67,7 +67,7 @@ item shows and sets both drivers' log levels - `xhci98.sys`'s
 `XhciLogVerbosity` and `xhcicm.sys`'s `XhciCmLogVerbosity` - and
 replaces `XHCISNAP -verbosity` and `SNAPON.BAT` (XHCISNAP still ships in
 `3.0.0.0`, unchanged, and is retired in the next release). It is the one
-setting the tool writes (section 7.5). A standard user on 2000 to 7 sets
+driver setting the tool writes (section 7.5). A standard user on 2000 to 7 sets
 it through a second mode of section 6.6's elevated run, `/setlevel`.
 Sections 1.2, 1.3, 7.3, 11 and 12 change with it.
 

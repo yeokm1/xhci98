@@ -11,8 +11,8 @@ also stops a USB stick or disk, or a device connected through a
 Thunderbolt or USB4 port, safely, so that you can unplug it, and it sits
 in the notification area (the system tray) beside the clock.
 
-The one setting it changes is the drivers' logging level (below). It
-approves no Thunderbolt device and updates no firmware. It needs no
+The one driver setting it changes is the drivers' logging level
+(below). It approves no Thunderbolt device and updates no firmware. It needs no
 administrator rights to start.
 
 Which file
@@ -130,8 +130,8 @@ driver records by default):
            the item names (on Windows 2000 and later as an
            administrator), then restart Windows.
 
-Reading a log changes nothing; Logging level (below) is the one setting
-the tool writes.
+Reading a log changes nothing; Logging level (below) is the one driver
+setting the tool writes.
 
 PCI configuration
 -----------------
