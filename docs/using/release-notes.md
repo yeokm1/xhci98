@@ -3357,8 +3357,8 @@ addresses); an update keeps the value an earlier install wrote, which was
 `0`, off, until `2.4.0.0`. Recording costs a little speed: on one machine
 (a ThinkPad P14s Gen 1 under 98 SE, a USB disk) about 1 to 2% at large
 transfers and up to about 5% at small ones. For the last few percent set
-the level to `0`, in the xHCI98 USB Tree's Logging level or with
-`SNAPOFF.BAT`, and restart.
+the level to `0` with `SNAPOFF.BAT` (or the xHCI98 USB Tree's Logging
+level, where the tool offers it), and restart.
 
 From `2.4.0.0` three batch files beside it do the typing, on every Windows
 the driver runs (under `COMMAND.COM` on 98 SE and ME, `cmd.exe` from 2000 to

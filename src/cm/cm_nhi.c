@@ -69,7 +69,7 @@
 #include "cm.h"
 #include "cm_nvlink.h"
 
-/* cm.h: an address record, at XhciLogVerbosity 4 alone (the shared ring's
+/* cm.h: an address record, at XhciCmLogVerbosity 4 alone (the shared ring's
  * own gate, XhciLogAppendAddress). Here rather than beside CmLogNote in
  * cm_log.c, whose values and emission another branch owns. IRQL:
  * <= DISPATCH_LEVEL. */
