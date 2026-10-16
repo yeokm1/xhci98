@@ -262,6 +262,8 @@ after `41.final`. Its design record is design record 25.
 - [x] 41-A.5 the tray icon: menus, single instance, events and balloons, the tooltip on 98 SE and ME (record 25 section 7) (done 2026-10-16, merged into `p41-xhcitr`; reviewed until converged; `runs/run-41.md`)
 - [x] 41-A.6 install, upgrade and uninstall in XHCIINST (the copy, the Run value, closing a running copy, `/notray`), the packager's `tools\xhcitr\`, the import allowlist, `test-package.ps1` (record 25 sections 8 and 9) (done 2026-10-16, merged into `p41-xhcitr`; reviewed until converged; `runs/run-41.md`)
 - [x ] 41-V.1 legs T.1 to T.6 of record 25 section 11 on 98 SE, ME, 2000, XP, XP x64, Vista x86 and 7 x86 (Vista x64 and 7 x64 with the test-signed package) (read 2026-10-16, `runs/run-41.md`: 2000, XP, XP x64, Vista x86 and 7 x86 pass; Vista x64 and 7 x64 the tool on the earlier signed drivers (fallback) pass; 98 SE and ME: install, login start, uninstall, the USB tree, the Thunderbolt branch, Safely Remove (window, right click, tray, `/eject`) and the ME balloons pass with the tool of `85f3fb90`, which matches the query by name there (98 gives the driver no instance ID); the 98 SE tooltip text unread; the new x64 drivers wait for the re-signed package; the upgrade of a tool in use unread) Done 2026-10-16: Vista x64 and 7 x64 pass with the owner's test-signed final drivers; unread: the approval balloon (the emulator approves at once), the 98 SE tooltip text, the upgrade of a tool in use.
+- [x] 41-A.7 Safely Remove for plain USB devices (the owner's decision of 2026-10-16, which reversed decision T6): record 25 revision 7, section 6.5 - a USB device with a disk (or, on NT, a volume) in what stops with it, on any listed controller; never a hub, an input device, a radio or the controller; the short transaction (the shared mutex, the device found again by instance ID, its set and rule read again, a change count read just before the call); the tray's two groups, `/eject id=`, `/report`; host vectors in `test_tr` (done 2026-10-16, branch `tr-usbeject`; the design and the code reviewed until they converged; `runs/run-41.md`, "Plain USB devices")
+- [x] 41-V.2 leg T.7 of record 25 section 11 (read 2026-10-16, `runs/run-41.md`, "Plain USB devices": 98 SE, ME, XP and 7 x86 pass - the label with its letter, Safely Remove from the window, Delete, a right click and the tray, the device gone (98 SE, ME) or held at Code 47 (XP, 7), unplug and re-plug with the drive back, the refusal with a file open (98 SE, XP, 7), the UAS disk (98 SE, XP, 7), a tablet, a keyboard and a hub never offered; ME's refusal and the UAS re-plug unread)
 - [ ] 41.final `README.md`, the release notes, `source-files.md`, `docs/README.md`; merged into `3.0.0.0` before `40.final`
 
 Checkpoint: design record 25 converged before 41-A's code; the host
@@ -511,3 +513,17 @@ Status: not opened, unnumbered and unversioned.
 
 - [ ] DI9X.1 a design record: which `SETUPX` functions, as the DDKs document them; the 16-bit toolchain; the helper's interface to `XHCIINST`; the controller, its root hub and the Thunderbolt controller; a USB keyboard and mouse behind the controller being updated; what the wizards' own bookkeeping then holds; the uninstall
 - [ ] DI9X.2 the helper and `XHCIINST`'s use of it, with the legs on 98 SE and ME (a fresh install, an update from `2.4.0.0` and `2.3.x`, the uninstall)
+
+## Planned - A Thunderbolt 3 Dock's Name After a Resume
+
+Goal: a Thunderbolt 3 device router behind a USB4 host keeps its name
+when the connection manager adopts it at its start or rebuilds it on a
+resume, as it has after a plug.
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 with
+task 40-A.8 (record 22 section 8): the router's DROM is read by EEPROM
+bit-bang only on a plug; under a resume budget the read is skipped, and a
+router found tunnelled at the start is adopted without it, so the tool
+shows the dock unnamed until a re-plug. The dock works either way.
+
+- [ ] TB3NAME.1 the DROM read for an adopted or resumed Thunderbolt 3 router, outside the resume budget (deferred to the connection-manager thread once the resume is done); host cases on the fake fabric; legs on 98 SE and 7 x86 with the dock attached across a suspend and at power-on
