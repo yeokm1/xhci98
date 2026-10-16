@@ -50,8 +50,8 @@ The release notes say what was read on which system.
   install the Thunderbolt and USB4 support, Yes by default when such a
   controller is found.
 - NVMe drives behind Thunderbolt or USB4: the download bundles Stor98
-  `0.3.0.0`, a separate NVMe driver for Windows 98 SE to Vista, unchanged
-  and under its own licence; its licence, notice and readme are beside it.
+  `0.3.0.0`, a separate NVMe driver for Windows 98 SE to 7, unchanged and
+  under its own licence; its licence, notice and readme are beside it.
 - Device Manager names the new devices "xHCI98 Thunderbolt 3 Controller",
   "xHCI98 USB4 Host Router" and, on the bridge ports, "xHCI98 Thunderbolt
   PCI Bridge" or "xHCI98 USB4 PCI Bridge".

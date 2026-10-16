@@ -206,12 +206,13 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   gains a read-only query device for it.
 - **Device Manager names by generation**: "Thunderbolt and USB4 in Device
   Manager", below.
-- **A link-state channel for `nvme98`**: `xhcicm.sys` tells the NVMe
-  driver `nvme98` when an NVMe drive's tunnel comes up, and under the USB4
-  connection manager when its link has gone down ("NVMe drives behind a
-  tunnel").
+- **A link-state channel for Stor98**: on Windows 2000 to 7,
+  `xhcicm.sys` tells the NVMe driver Stor98 when an NVMe drive's tunnel
+  comes up, and under the USB4 connection manager when its link has gone
+  down. On 98 SE and ME this release has no channel ("NVMe drives behind
+  a tunnel").
 - **Stor98 in the download**: the package carries a release of Stor98,
-  the NVMe driver for Windows 98 SE to Vista, as its own project released
+  the NVMe driver for Windows 98 SE to 7, as its own project released
   it (which release: "NVMe drives behind Thunderbolt or USB4", under
   "Installing").
 
@@ -388,30 +389,32 @@ Express tunnel down (the USB3 tunnel stays).
 
 An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver,
 which none of these systems has. Stor98 (formerly `nvme98`), a separate
-project, is that driver for Windows 98 SE to Vista, and the download
+project, is that driver for Windows 98 SE to 7, and the download
 carries a release of it as its project released it, with its own licence
 and notes (which release, and where it is: "NVMe drives behind
 Thunderbolt or USB4", under "Installing"); read them before installing
 it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the
 drive.
 
-The two talk over a link-state channel that `nvme98` defined:
+On Windows 2000 to 7 the two talk over a link-state channel, Stor98's
+interface 4, the kernel callback object `\Callback\Stor98LinkState`:
 
-- When a tunnel comes up, `xhcicm.sys` tells `nvme98` which NVMe function
+- When a tunnel comes up, `xhcicm.sys` tells Stor98 which NVMe function
   is behind it, before Windows finds the function.
 - Under the USB4 connection manager, after an unplug, once the path is
-  proven closed and the drive's reset is done, it tells `nvme98` the link
-  is down and waits for its acknowledgement (up to 5 seconds on Windows
-  2000 to 7, 3 seconds on 98 SE and ME) before Windows removes the drive,
-  so `nvme98` ends outstanding requests at once instead of at its own
-  timeout. In this release that statement is made only on the emulator's
-  tunnel ports; on real hardware it is withheld until `nvme98` has
-  qualified it, and `nvme98` ends a vanished drive's requests at its own
-  deadline instead.
-- On Windows 2000 to 7 the channel is a kernel callback object; on 98 SE
-  and ME, a record `xhcicm.sys` writes at each start under `nvme98`'s
-  service key. Whether a given `nvme98` release reads it is in that
-  release's notes.
+  proven closed and the drive's reset is done, it tells Stor98 the link
+  is down and waits up to 5 seconds for its acknowledgement before
+  Windows removes the drive, so Stor98 ends outstanding requests at once
+  instead of at its own timeout. In this release that statement is made
+  only on the emulator's tunnel ports; on real hardware it is withheld
+  until Stor98 has qualified it, and Stor98 ends a vanished drive's
+  requests at its own deadline instead.
+
+On Windows 98 SE and ME, `xhcicm.sys` in this release publishes no
+channel, so Stor98 runs there without it:
+
+- there is no clean-eject handshake and no acknowledged link-down;
+- Stor98 detects a removed drive by itself.
 
 ### The connection manager's registry values
 
@@ -584,7 +587,8 @@ have every leg.
   says.
 - **Windows ME: a UAS drive as the first USB storage device shows Code 2**
   (unchanged; "Known limitations").
-- **`nvme98`'s own limitations** are in its notes.
+- **Stor98's own limitations** are in its readme,
+  `stor98-readme.txt`.
 
 ### Thunderbolt and USB4 in Device Manager
 
@@ -1805,6 +1809,12 @@ Manager without a driver, Update Driver, Have Disk, and point it at:
 
 - `release-x86\` on Windows 98 SE, ME and 32-bit 2000, XP, Vista and 7
 - `release-x64\` on Windows XP x64, Vista x64 and 7 x64
+
+The x64 `stor98.sys` is test-signed by Stor98's own project.
+`stor98-test.cer` beside it in `release-x64\` is the public half of that
+project's test certificate. Test-signing mode, which the x64 drivers
+already need on Vista x64 and 7 x64, loads it too. Importing either
+`.cer` is not needed.
 
 ## Devices and hubs in Device Manager
 
@@ -3681,7 +3691,7 @@ This driver's own source is under the GNU General Public License, version 2
 record is `docs/contributing/legal-provenance.md`.
 
 `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and their INFs are this
-project's own work. A download that bundles nvme98 carries it as its own
+project's own work. A download that bundles Stor98 carries it as its own
 project released it, with its licence and notice beside it ("NVMe drives
 behind Thunderbolt or USB4"). No Microsoft file is in the download: the `usbd.sys` and `usbui.dll` the install
 needs are Windows' own and are copied by Windows from your own installation
