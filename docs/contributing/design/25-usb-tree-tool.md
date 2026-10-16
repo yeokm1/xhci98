@@ -747,6 +747,28 @@ Gen 1):
 - The same labels are in `/report` and Save Report, a file whose tree
   lines can be wider than 79 columns at depth, as before.
 
+A second addendum to revision 10, resources (the owner, 2026-10-16):
+every devnode's details - controllers, hubs, USB devices, an NHI, a
+tunnel port, a unit with its bridges and functions - end with its PCI
+location (bus:device.function, from `CM_DRP_BUSNUMBER` and `_ADDRESS` on
+NT, from the instance ID on 98 SE and ME for a function on a root bus)
+and a "Resources" list: what the configuration manager has allocated
+(`CM_Get_First_Log_Conf` with `ALLOC_LOG_CONF`, then each descriptor's
+data) - memory and I/O ranges, an IRQ (level or edge, shared or
+exclusive; "message-signalled" for the negative number Vista and 7 give
+an MSI), a DMA channel, a bus-number range. With a problem code it also
+lists what the device asked for: the boot configuration, then the
+filtered requirement list or the first basic one, so a device that wants
+an IRQ and has none shows it. The routines are looked up at run time
+from `cfgmgr32.dll` and need no rights; the descriptor layouts are
+`cfgmgr32.h`'s packed ones, the same in the Windows 98 DDK and in WDK
+7.1, except the x64 IRQ descriptor's 8-byte affinity. The decoding is
+`tr_res_text`, host-tested. Physical ranges only; no kernel address is
+shown. On 98 SE and ME the configuration manager arbitrates memory, I/O,
+DMA and IRQ only, so no bus-number range is listed there; a type that only
+a private arbitrator knows (67 on a PCI bridge, with no data) is listed by
+its number as "Resource type 67 (no data)".
+
 ## 8. Install, upgrade and uninstall
 
 - XHCIINST owns the tool's file (and its `.TMP`, `.BAK` and `.DEL`

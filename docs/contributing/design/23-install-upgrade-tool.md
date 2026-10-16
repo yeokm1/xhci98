@@ -1167,6 +1167,18 @@ under the text after a key followed by two spaces (a choice, a switch),
 else two columns in; a word longer than a line breaks after a backslash.
 The log gets the same lines.
 
+Output redirected (addendum, 2026-10-16): with standard output going to a
+file or a pipe (`INSTALL /eject > EJ.TXT`) while the answers come from the
+keyboard, the questions - which device, "Eject it now?", the install's
+confirmation - and the closing "Press Enter" used to land in the file
+alone, and the run sat at a blank console waiting for a key, which looked
+like a hang (read on 98 SE). Now, when standard output is not the console
+and standard input and standard error are, everything printed also goes to
+standard error, so the screen shows the run as before and the file gets
+the same text (`inst_out_mirror`, host-tested). A handle is the console
+when its console mode can be read. With answers from a file, or standard
+error redirected too, nothing changes.
+
 ## 8. Registry values (owner, 2026-10-15)
 
 ### 8.1 The curated set

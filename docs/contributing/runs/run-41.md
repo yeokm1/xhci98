@@ -777,6 +777,56 @@ its hub descriptor, `779b676a`), as the standard user:
 - Not read: the label of an emulated Thunderbolt chip's xHCI under
   `xhcicm.sys` ("Thunderbolt 3 controller's USB").
 
+### Resources (record 25 revision 10, second addendum)
+
+Read on the tools of `1f6c151d` (7 x86) and `b6592938` (98 SE), as the
+standard user:
+
+- 98 SE with the emulated Thunderbolt 3 enclosure (`tb3-alpine-ridge`)
+  and an NVMe unit behind it: the NHI "IRQ 11 (level, shared)", "Memory
+  FE600000-FE63FFFF"; the tunnel port's bridge "I/O C000-CFFF", "Memory
+  FE400000-FE5FFFFF" and "Memory FE000000-FE1FFFFF" (its two windows),
+  "IRQ 11 (level, shared)", "Memory FE800000-FE8000FF"; the NVMe
+  controller behind it "IRQ 10 (level, shared)", "Memory
+  FE400000-FE403FFF", inside the bridge's window. The bridge also gave a
+  descriptor of type 67 with no data, a type CONFIGMG does not arbitrate
+  (it arbitrates memory, I/O, DMA and IRQ); that build printed it as "a
+  resource of type 67, 0 bytes, that could not be read", and `fb450f51`
+  prints "Resource type 67 (no data)" (not read again on 98 SE). No
+  bus-number range on 98 SE, for the same reason, and no PCI location for
+  a function behind a bridge (the instance ID gives only a root bus's).
+- 7 x86, the xHCI controller: "PCI location: 00:03.0", "Memory
+  FEBF0000-FEBF3FFF", the IRQ "message-signalled", and its MSI data as
+  "Resource type 0x8001 (36 bytes)"; `b6592938` names that "Private data
+  36 bytes" (a host vector; not read again on 7).
+
+### XHCIINST with its output redirected
+
+On 98 SE, `XHCIINST /eject 1 > C:\EJ.TXT` (the emulated Thunderbolt 3
+enclosure, an NVMe unit behind it) had looked hung. Read again with the
+tool of the dry cut before the fix: a blank console; the file held the
+list and "Eject it now? ...", and the tool was waiting for the keyboard -
+an `n` and Enter typed blind cancelled it, a second Enter answered the
+closing "Press Enter", unseen as well. On 7 x86, from an elevated prompt,
+`XHCIINST /eject > ejo.txt` sat the same way at the unseen "Press Enter".
+The text went to standard output alone while the answers came from the
+console.
+
+With `788279cc` (the text also to standard error when standard output is
+not the console and standard input and standard error are):
+
+- 98 SE: `XHCIINST /eject 1 > C:\EJN.TXT` showed the list and the question
+  on the screen; `y` stopped the unit ("You can now unplug the device.",
+  exit code 0); the file held the same text. Without redirection, after a
+  re-plug, the text showed once, as before. XHCITR's `/eject id=... >
+  C:\TR.TXT`, for comparison: its confirmation is a message box, so it
+  never waited unseen; its answer went to the file.
+- 7 x86, an elevated prompt: `XHCIINST /eject > ejn.txt` showed its text
+  and "Press Enter" on the screen, the file the same; `/eject /nopause`
+  without redirection printed once. Run from a prompt that is not
+  elevated, the tool asks for elevation and runs in a console of its own,
+  where a redirection does not reach.
+
 ## Stor98 behind the Thunderbolt 3 controller (STOR.2)
 
 Readings of 2026-10-16 on development host A, `vm\usb4\bin-2a893ea` (its

@@ -625,6 +625,30 @@ void tr_roothub_label(char *out, size_t cap, unsigned int ports, int known,
  * "" when _EX_V2 did not report it. */
 const char *tr_port_tag(int haveV2, TR_U32 proto);
 
+/* ---- resources (record 25 revision 10, addendum) ------------------------- */
+
+/* ResType_* and the logical configuration kinds of cfgmgr32.h; the
+ * descriptor layouts are cfgmgr32.h's, packed to one byte, the same in the
+ * Windows 98 DDK's Win32 cfgmgr32.h and in WDK 7.1's. */
+#define TR_RES_MEM              1UL
+#define TR_RES_IO               2UL
+#define TR_RES_DMA              3UL
+#define TR_RES_IRQ              4UL
+#define TR_RES_BUSNUMBER        6UL
+#define TR_RES_MEMLARGE         7UL
+#define TR_LC_BASIC             0UL
+#define TR_LC_FILTERED          1UL
+#define TR_LC_ALLOC             2UL
+#define TR_LC_BOOT              3UL
+
+/* One descriptor's data (CM_Get_Res_Des_Data, n bytes) as one or more
+ * indented lines: the value given for alloc 1 (an allocated or a boot
+ * configuration), each range asked for when 0 (a requirement list). is64:
+ * the x64 IRQ descriptor, whose affinity is 8 bytes. Returns 1 when the
+ * data checked; else a line says it could not be read. */
+int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
+                int alloc, int is64);
+
 /* ---- the report ---------------------------------------------------------- */
 
 /* One node of the report: its label at depth, then its details indented

@@ -2970,6 +2970,11 @@ int inst_tb_answer(const char *line, int defaultYes)
     return -1;
 }
 
+int inst_out_mirror(int outIsConsole, int errIsConsole, int inIsConsole)
+{
+    return !outIsConsole && errIsConsole && inIsConsole;
+}
+
 /* ======================================================================== */
 /* The USB tree tool (record 23 section 9.5, record 25 section 8)            */
 /* ======================================================================== */

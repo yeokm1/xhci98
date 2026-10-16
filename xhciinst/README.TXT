@@ -190,6 +190,9 @@ changed; 2 Windows began to stop the device and could not finish - shut
 Windows down before unplugging it; 4 Windows refused because the device
 is in use, nothing changed.
 
+The text can be saved to a file as well (INSTALL /eject > EJECT.TXT): the
+questions still show on the screen, and the file gets the same text.
+
 Uninstall
 ---------
 
