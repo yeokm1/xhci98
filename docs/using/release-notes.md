@@ -345,10 +345,7 @@ the logged-on user, with no administrator rights.
   `xhci98.sys` controller or a Thunderbolt or USB4 controller) shows and
   sets both drivers' log levels side by side: `xhci98.sys`'s
   `XhciLogVerbosity` in each of its controllers' driver keys and
-  `xhcicm.sys`'s `XhciCmLogVerbosity` in its controller's (for this
-  release `xhcicm.sys` also reads an older `XhciLogVerbosity` there when
-  the new name is missing; the tool says which name it found, and writes
-  the level under both names where the older one is there). Each
+  `xhcicm.sys`'s `XhciCmLogVerbosity` in its controller's. Each
   is `0` off, `1` counters only, `2` the log (the default; no value reads
   as `2`), `3` adds port status, `4` adds memory addresses (for
   developers). A value outside `0` to `4` is shown as it is and never

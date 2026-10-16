@@ -2515,17 +2515,11 @@ const char *tr_level_text(TR_U32 level)
     return NULL;
 }
 
-void tr_level_pick(int driver, const TR_RVAL *cur, const TR_RVAL *old,
-                   TR_LEVEL *out)
+void tr_level_pick(const TR_RVAL *cur, TR_LEVEL *out)
 {
     const TR_RVAL *r = cur;
 
     memset(out, 0, sizeof(*out));
-    if (driver == TR_LV_XHCICM && cur->State == TR_RV_ABSENT && old != NULL &&
-        old->State != TR_RV_ABSENT) {
-        r = old;
-        out->OldName = 1;
-    }
     out->State = r->State;
     out->Value = r->State == TR_RV_DWORD ? r->Value : 0;
     switch (r->State) {
@@ -2541,18 +2535,14 @@ void tr_level_pick(int driver, const TR_RVAL *cur, const TR_RVAL *old,
     }
 }
 
-const char *tr_level_value_name(int driver, const TR_LEVEL *l)
+const char *tr_level_value_name(int driver)
 {
-    if (driver != TR_LV_XHCICM) {
-        return TR_LV_NAME_XHCI98;
-    }
-    return l->OldName ? TR_LV_NAME_XHCICM_OLD : TR_LV_NAME_XHCICM;
+    return driver == TR_LV_XHCICM ? TR_LV_NAME_XHCICM : TR_LV_NAME_XHCI98;
 }
 
 void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap)
 {
-    const char *name = tr_level_value_name(driver, l);
-    const char *old = l->OldName ? ", old name" : "";
+    const char *name = tr_level_value_name(driver);
 
     switch (l->State) {
     case TR_RV_ABSENT:
@@ -2561,15 +2551,15 @@ void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap)
         break;
     case TR_RV_DWORD:
         if (l->Level >= 0) {
-            tr_sprintf(out, cap, "%d - %s (%s%s)", l->Level,
-                       tr_level_text((TR_U32)l->Level), name, old);
+            tr_sprintf(out, cap, "%d - %s (%s)", l->Level,
+                       tr_level_text((TR_U32)l->Level), name);
         } else {
-            tr_sprintf(out, cap, "%lu - out of range, not 0-4 (%s%s)",
-                       (unsigned long)l->Value, name, old);
+            tr_sprintf(out, cap, "%lu - out of range, not 0-4 (%s)",
+                       (unsigned long)l->Value, name);
         }
         break;
     case TR_RV_OTHER:
-        tr_sprintf(out, cap, "%s is not a REG_DWORD%s", name, old);
+        tr_sprintf(out, cap, "%s is not a REG_DWORD", name);
         break;
     default:
         tr_copy(out, "not read", cap);

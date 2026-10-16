@@ -778,9 +778,9 @@ each driver's log, in place of `XHCISNAP -verbosity` and `SNAPON.BAT`.
    driver (software) key of every devnode the walk finds with service
    `xhci98` and a `PCI\` instance ID - every controller, not a root hub
    or a hub. xhcicm: `XhciCmLogVerbosity` in every NHI's driver key
-   (service `xhcicm`, `PCI\`); for one release, when that name is absent,
-   `XhciLogVerbosity` in the same key, and the tool says which name it
-   found. No value reads as the default, 2; a DWORD outside 0 to 4 is
+   (service `xhcicm`, `PCI\`), and no other name: `xhcicm.sys` has never
+   been released, so no older value is there to honour (the owner,
+   2026-10-16). No value reads as the default, 2; a DWORD outside 0 to 4 is
    shown as it is, "out of range"; a value of another type is shown as
    not a REG_DWORD. The decision is `tr_level_pick`, host-tested.
 3. **The dialog.** A list of each device and its reading (the same block
@@ -790,20 +790,9 @@ each driver's log, in place of `XHCISNAP -verbosity` and `SNAPON.BAT`.
    developers). A driver's buttons start at the level every one of its
    devices reads, and none is checked when they differ or a reading is
    out of range. Set writes a driver's level to every one of its devices
-   when the checked level is not what they all read, or a device read it
-   from xhcicm's old name, or a key's old name is there and differs from
-   its new name's DWORD; and nothing else.
-4. **The write.** `REG_DWORD` 0 to 4 under the value's name, read back;
-   a key that still holds xhcicm's old name gets the level under it too,
-   so a driver of either generation follows. **The old-name write.** The
-   tool writes `XhciLogVerbosity` in an NHI's key only when that value is
-   already there, never creating it; xhcicm reads `XhciCmLogVerbosity`
-   first, so the extra write changes nothing once the new name is set. It
-   is a transition measure, tied to xhcicm's one-release fallback: when
-   the fallback goes, this write (in `lv_set`), the old-name reading
-   (`tr_level_pick`) and the stale-old-name rule of point 3 go with it.
-   A driver key is written only
-   when it has the configuration manager's form (`tr_driver_key_ok`), and
+   when the checked level is not what they all read, and nothing else.
+4. **The write.** `REG_DWORD` 0 to 4 under the driver's one value name,
+   read back. A driver key is written only when it has the configuration manager's form (`tr_driver_key_ok`), and
    a value out of range is never written: the command line refuses it
    before anything is read.
 5. **Rights.** On 98 SE and ME, and for an administrator on NT (section

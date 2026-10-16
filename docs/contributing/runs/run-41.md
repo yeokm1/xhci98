@@ -939,6 +939,11 @@ The dialog's text fits at 800 x 600; the list shows about five lines, so
 the xhcicm reading is below a scroll. The list opened with its text
 selected; Set takes the focus since ca233507 (not re-read on a guest).
 
+Afterwards (the owner, 2026-10-16): `xhcicm.sys` has never been
+released, so the tool reads and writes only `XhciCmLogVerbosity` for it;
+the old-name reading and writing read in these legs were removed (record
+25 section 7.5).
+
 ### Windows 98 SE: pass
 
 Installed from `D:\PKG\INSTALL` with the Thunderbolt question answered Y

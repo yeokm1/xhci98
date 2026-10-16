@@ -120,11 +120,8 @@ the two drivers records in its log, side by side, and sets it:
 
 xhci98's level is the XhciLogVerbosity value in each of its USB
 controllers' driver keys; the Thunderbolt driver's is XhciCmLogVerbosity
-in its controller's driver key (for this release it also reads an older
-XhciLogVerbosity there when XhciCmLogVerbosity is missing, and the list
-says which name it found; Set writes the level under both names where
-the older one is there). The list at the top shows each value as it
-is: no value reads as 2, the default, and a value outside 0 to 4 is
+in its controller's driver key. The list at the top shows each value as
+it is: no value reads as 2, the default, and a value outside 0 to 4 is
 shown as out of range. Choose a level for either driver and click Set;
 a value out of range is never written. Each driver reads its level only
 when it starts, so the tool then offers to restart Windows.

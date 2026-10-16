@@ -682,8 +682,7 @@ const char *tr_elev_question(void);
 
 /* The two drivers, each with its level in its devices' driver (software)
  * keys: xhci98's XhciLogVerbosity in every controller's, xhcicm's
- * XhciCmLogVerbosity in every NHI's. For one release xhcicm also reads
- * XhciLogVerbosity in its key when the new name is absent. */
+ * XhciCmLogVerbosity in every NHI's. */
 #define TR_LV_XHCI98            0
 #define TR_LV_XHCICM            1
 #define TR_LV_DRIVERS           2
@@ -691,7 +690,6 @@ const char *tr_elev_question(void);
 #define TR_LV_MAX               4
 #define TR_LV_NAME_XHCI98       "XhciLogVerbosity"
 #define TR_LV_NAME_XHCICM       "XhciCmLogVerbosity"
-#define TR_LV_NAME_XHCICM_OLD   "XhciLogVerbosity"
 
 /* "xhci98" or "xhcicm"; NULL for anything else. */
 const char *tr_level_driver(int driver);
@@ -712,30 +710,25 @@ typedef struct _TR_RVAL {
     TR_U32 Value;
 } TR_RVAL;
 
-/* A device's level as read: which value decided it, and the level that
+/* A device's level as read: the value's state, and the level that
  * reading stands for - the DWORD when it is 0-4, TR_LV_DEFAULT when no
  * value is there, -1 otherwise (out of range, another type, not read). */
 typedef struct _TR_LEVEL {
-    int State;                  /* TR_RV_* of the value that decided       */
-    int OldName;                /* xhcicm: decided by the old name          */
+    int State;                  /* TR_RV_* of the value                    */
     TR_U32 Value;
     int Level;
 } TR_LEVEL;
 
-/* The level from the readings: xhci98 reads cur (its one name) alone;
- * xhcicm reads cur (XhciCmLogVerbosity) and, only when that is absent,
- * old (XhciLogVerbosity in its key). old may be NULL. */
-void tr_level_pick(int driver, const TR_RVAL *cur, const TR_RVAL *old,
-                   TR_LEVEL *out);
+/* The level from the driver's one value, as read. */
+void tr_level_pick(const TR_RVAL *cur, TR_LEVEL *out);
 
-/* The value name a reading came from, for the text. */
-const char *tr_level_value_name(int driver, const TR_LEVEL *l);
+/* The value a driver's level is: XhciLogVerbosity or XhciCmLogVerbosity. */
+const char *tr_level_value_name(int driver);
 
 /* One line for a device's level, at most 72 characters: "3 - adds port
  * status (XhciCmLogVerbosity)", "2 - the log (default) (no value set)",
- * "2 - the log (default) (XhciLogVerbosity, old name)", "7 -
- * out of range, not 0-4 (XhciLogVerbosity)", "XhciLogVerbosity is not a
- * REG_DWORD", "not read". */
+ * "7 - out of range, not 0-4 (XhciLogVerbosity)", "XhciLogVerbosity is
+ * not a REG_DWORD", "not read". */
 void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap);
 
 /* The levels block of the report and the dialog: per driver a heading

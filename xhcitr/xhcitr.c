@@ -490,8 +490,6 @@ static void driver_key_path(const DNODE *d, char *path, size_t cap)
 typedef struct _LVDEV {
     int Dn;
     TR_LEVEL L;
-    int OldStale;           /* xhcicm: the old name is there and is not
-                             * the new name's DWORD                      */
 } LVDEV;
 
 static LVDEV lvDev[TR_LV_DRIVERS][TR_MAX_CTRL];
@@ -525,35 +523,22 @@ static void lv_value(HKEY k, const char *name, TR_RVAL *v)
     }
 }
 
-/* Devnode dn's level as its driver reads it; *oldStale (when not NULL)
- * set for an xhcicm key whose old name is there and differs from the
- * new name's DWORD. */
-static void lv_read(int dn, int driver, TR_LEVEL *l, int *oldStale)
+/* Devnode dn's level as its driver reads it. */
+static void lv_read(int dn, int driver, TR_LEVEL *l)
 {
     char path[300];
     HKEY k;
     TR_RVAL cur;
-    TR_RVAL old;
 
     cur.State = TR_RV_UNREAD;
     cur.Value = 0;
-    old = cur;
     driver_key_path(&gw.N[dn], path, sizeof(path));
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_QUERY_VALUE, &k) ==
         ERROR_SUCCESS) {
-        lv_value(k, driver == TR_LV_XHCICM ? TR_LV_NAME_XHCICM
-                                           : TR_LV_NAME_XHCI98, &cur);
-        if (driver == TR_LV_XHCICM) {
-            lv_value(k, TR_LV_NAME_XHCICM_OLD, &old);
-        }
+        lv_value(k, tr_level_value_name(driver), &cur);
         RegCloseKey(k);
     }
-    tr_level_pick(driver, &cur, driver == TR_LV_XHCICM ? &old : NULL, l);
-    if (oldStale != NULL) {
-        *oldStale = driver == TR_LV_XHCICM && cur.State == TR_RV_DWORD &&
-                    old.State != TR_RV_ABSENT &&
-                    !(old.State == TR_RV_DWORD && old.Value == cur.Value);
-    }
+    tr_level_pick(&cur, l);
 }
 
 /* Every device's level, from the walk in gw. */
@@ -568,7 +553,7 @@ static void lv_collect(void)
             if (lv_is_device(&gw.N[i], d)) {
                 LVDEV *v = &lvDev[d][lvCount[d]++];
                 v->Dn = i;
-                lv_read(i, d, &v->L, &v->OldStale);
+                lv_read(i, d, &v->L);
             }
         }
     }
@@ -599,7 +584,7 @@ static void lv_details(TR_TEXT *t, int dn, int driver)
     if (dn < 0 || !lv_is_device(&gw.N[dn], driver)) {
         return;
     }
-    lv_read(dn, driver, &l, NULL);
+    lv_read(dn, driver, &l);
     tr_level_line(driver, &l, line, sizeof(line));
     tr_printf(t, "  Logging level: %s\n", line);
 }
@@ -620,8 +605,7 @@ static int lv_set(const int *level, char *msg, size_t cap)
     tr_text_init(&t, msg, cap);
     lv_collect();
     for (d = 0; d < TR_LV_DRIVERS; d++) {
-        const char *name = d == TR_LV_XHCICM ? TR_LV_NAME_XHCICM
-                                             : TR_LV_NAME_XHCI98;
+        const char *name = tr_level_value_name(d);
         int ok = 0;
         DWORD v;
         if (level[d] < 0) {
@@ -654,21 +638,11 @@ static int lv_set(const int *level, char *msg, size_t cap)
                 if (r == ERROR_SUCCESS) {
                     changed++;
                 }
-                /* A key that still holds xhcicm's old name gets the same
-                 * level under it, so a driver that reads either name
-                 * follows the setting. */
-                if (r == ERROR_SUCCESS && d == TR_LV_XHCICM &&
-                    RegQueryValueExA(k, TR_LV_NAME_XHCICM_OLD, NULL, NULL, NULL,
-                                     NULL) == ERROR_SUCCESS) {
-                    r = RegSetValueExA(k, TR_LV_NAME_XHCICM_OLD, 0, REG_DWORD,
-                                       (const BYTE *)&v, sizeof(v));
-                }
                 RegCloseKey(k);
             }
-            lv_read(lvDev[d][i].Dn, d, &lvDev[d][i].L, &lvDev[d][i].OldStale);
+            lv_read(lvDev[d][i].Dn, d, &lvDev[d][i].L);
             if (r == ERROR_SUCCESS && lvDev[d][i].L.State == TR_RV_DWORD &&
-                !lvDev[d][i].L.OldName && lvDev[d][i].L.Value == v &&
-                !lvDev[d][i].OldStale) {
+                lvDev[d][i].L.Value == v) {
                 ok++;
                 wrote++;
             } else if (r != ERROR_SUCCESS) {
@@ -3844,18 +3818,14 @@ static void lv_apply(HWND dlg)
     for (d = 0; d < TR_LV_DRIVERS; d++) {
         int lv;
         int k;
-        int oldName = 0;
         TR_LEVEL ls[TR_MAX_CTRL];
         int c = lv_checked(dlg, d);
         for (k = 0; k < lvCount[d]; k++) {
             ls[k] = lvDev[d][k].L;
-            oldName |= ls[k].OldName | lvDev[d][k].OldStale;
         }
         want[d] = -1;
-        /* A level read from xhcicm's old name is written under the new,
-         * and an old name that differs from the new is written again. */
         if (c >= 0 && lvCount[d] > 0 &&
-            !(tr_level_common(ls, lvCount[d], &lv) && lv == c && !oldName)) {
+            !(tr_level_common(ls, lvCount[d], &lv) && lv == c)) {
             want[d] = c;
             any = 1;
         }

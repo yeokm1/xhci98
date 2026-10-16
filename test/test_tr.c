@@ -2001,7 +2001,6 @@ static void test_levels(void)
     char *av[8];
     TR_OPTS o;
     TR_RVAL cur;
-    TR_RVAL old;
     TR_LEVEL l;
     TR_LEVEL ls[3];
     TR_TEXT t;
@@ -2025,97 +2024,63 @@ static void test_levels(void)
               tr_level_driver(2) == NULL && tr_level_driver(-1) == NULL,
           "levels: the drivers' names");
 
-    /* Reading: xhci98, its one name. */
+    /* Reading: each driver's one value. */
     cur.State = TR_RV_ABSENT;
     cur.Value = 0;
-    tr_level_pick(TR_LV_XHCI98, &cur, NULL, &l);
-    CHECK(l.State == TR_RV_ABSENT && l.Level == TR_LV_DEFAULT && !l.OldName,
-          "xhci98: an absent value reads as the default 2");
+    tr_level_pick(&cur, &l);
+    CHECK(l.State == TR_RV_ABSENT && l.Level == TR_LV_DEFAULT,
+          "an absent value reads as the default 2");
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(strcmp(line, "2 - the log (default) (no value set)") == 0,
           "xhci98: absent, the line");
+    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
+    CHECK(strcmp(line, "2 - the log (default) (no value set)") == 0,
+          "xhcicm: absent, the line");
     cur.State = TR_RV_DWORD;
     cur.Value = 3;
-    tr_level_pick(TR_LV_XHCI98, &cur, NULL, &l);
-    CHECK(l.Level == 3, "xhci98: 3 read");
+    tr_level_pick(&cur, &l);
+    CHECK(l.Level == 3, "3 read");
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(strcmp(line, "3 - adds port status (XhciLogVerbosity)") == 0,
-          "xhci98: 3, the line names the value");
+          "xhci98: 3, the line names its value");
+    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
+    CHECK(strcmp(line, "3 - adds port status (XhciCmLogVerbosity)") == 0,
+          "xhcicm: 3, the line names its value");
+    CHECK(strcmp(tr_level_value_name(TR_LV_XHCI98), "XhciLogVerbosity") == 0 &&
+              strcmp(tr_level_value_name(TR_LV_XHCICM), "XhciCmLogVerbosity") == 0,
+          "each driver's one value name");
     cur.Value = 0;
-    tr_level_pick(TR_LV_XHCI98, &cur, NULL, &l);
-    CHECK(l.Level == 0, "xhci98: 0 is a level, not absent");
+    tr_level_pick(&cur, &l);
+    CHECK(l.Level == 0, "0 is a level, not absent");
+    cur.Value = 4;
+    tr_level_pick(&cur, &l);
+    CHECK(l.Level == 4, "4 is a level");
+    cur.Value = 5;
+    tr_level_pick(&cur, &l);
+    CHECK(l.Level == -1 && l.Value == 5, "5 is out of range");
     cur.Value = 7;
-    tr_level_pick(TR_LV_XHCI98, &cur, NULL, &l);
-    CHECK(l.Level == -1 && l.Value == 7, "xhci98: 7 is out of range");
+    tr_level_pick(&cur, &l);
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
-    CHECK(strcmp(line, "7 - out of range, not 0-4 (XhciLogVerbosity)") == 0,
+    CHECK(l.Level == -1 &&
+              strcmp(line, "7 - out of range, not 0-4 (XhciLogVerbosity)") == 0,
           "xhci98: out of range shown as such");
+    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
+    CHECK(strcmp(line, "7 - out of range, not 0-4 (XhciCmLogVerbosity)") == 0,
+          "xhcicm: out of range shown as such");
     cur.Value = 0xFFFFFFFFUL;
-    tr_level_pick(TR_LV_XHCI98, &cur, NULL, &l);
+    tr_level_pick(&cur, &l);
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(l.Level == -1 && strncmp(line, "4294967295 - out of range", 25) == 0,
-          "xhci98: the largest DWORD, unsigned");
+          "the largest DWORD, unsigned");
     cur.State = TR_RV_OTHER;
-    tr_level_pick(TR_LV_XHCI98, &cur, NULL, &l);
-    tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
-    CHECK(l.Level == -1 && strcmp(line, "XhciLogVerbosity is not a REG_DWORD") == 0,
-          "xhci98: another type");
+    tr_level_pick(&cur, &l);
+    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
+    CHECK(l.Level == -1 && strcmp(line, "XhciCmLogVerbosity is not a REG_DWORD") == 0,
+          "another type");
     cur.State = TR_RV_UNREAD;
-    tr_level_pick(TR_LV_XHCI98, &cur, NULL, &l);
+    tr_level_pick(&cur, &l);
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
-    CHECK(l.Level == -1 && strcmp(line, "not read") == 0, "xhci98: not read");
-    old.State = TR_RV_DWORD;
-    old.Value = 4;
-    cur.State = TR_RV_ABSENT;
-    tr_level_pick(TR_LV_XHCI98, &cur, &old, &l);
-    CHECK(l.Level == TR_LV_DEFAULT && !l.OldName,
-          "xhci98: no fallback name, even when one is given");
-
-    /* Reading: xhcicm, the new name first, the old one for one release. */
-    cur.State = TR_RV_DWORD;
-    cur.Value = 1;
-    old.State = TR_RV_DWORD;
-    old.Value = 0;
-    tr_level_pick(TR_LV_XHCICM, &cur, &old, &l);
-    CHECK(l.Level == 1 && !l.OldName, "xhcicm: the new name wins over the old");
-    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
-    CHECK(strcmp(line, "1 - counters only (XhciCmLogVerbosity)") == 0,
-          "xhcicm: the new name in the line");
-    cur.State = TR_RV_ABSENT;
-    tr_level_pick(TR_LV_XHCICM, &cur, &old, &l);
-    CHECK(l.Level == 0 && l.OldName, "xhcicm: the old name when the new is absent");
-    CHECK(strcmp(tr_level_value_name(TR_LV_XHCICM, &l), "XhciLogVerbosity") == 0,
-          "xhcicm: the name found");
-    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
-    CHECK(strcmp(line, "0 - off (XhciLogVerbosity, old name)") == 0,
-          "xhcicm: the line says which name was found");
-    old.Value = 9;
-    tr_level_pick(TR_LV_XHCICM, &cur, &old, &l);
-    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
-    CHECK(l.Level == -1 && l.OldName &&
-              strcmp(line, "9 - out of range, not 0-4 (XhciLogVerbosity, "
-                           "old name)") == 0,
-          "xhcicm: the old name out of range");
-    old.State = TR_RV_ABSENT;
-    tr_level_pick(TR_LV_XHCICM, &cur, &old, &l);
-    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
-    CHECK(l.Level == TR_LV_DEFAULT && !l.OldName &&
-              strcmp(line, "2 - the log (default) (no value set)") == 0,
-          "xhcicm: neither name, the default");
-    tr_level_pick(TR_LV_XHCICM, &cur, NULL, &l);
-    CHECK(l.Level == TR_LV_DEFAULT, "xhcicm: no old reading given");
-    cur.State = TR_RV_OTHER;
-    old.State = TR_RV_DWORD;
-    old.Value = 3;
-    tr_level_pick(TR_LV_XHCICM, &cur, &old, &l);
-    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
-    CHECK(l.Level == -1 && !l.OldName &&
-              strcmp(line, "XhciCmLogVerbosity is not a REG_DWORD") == 0,
-          "xhcicm: a new name of another type is not passed over");
-    cur.State = TR_RV_ABSENT;
-    old.State = TR_RV_UNREAD;
-    tr_level_pick(TR_LV_XHCICM, &cur, &old, &l);
-    CHECK(l.Level == -1 && l.OldName, "xhcicm: an old name not read is not the default");
+    CHECK(l.Level == -1 && strcmp(line, "not read") == 0, "not read");
 
     /* Every line fits the dialog and 79 columns with its indent. */
     for (k = 0; k <= 12; k++) {
@@ -2123,10 +2088,9 @@ static void test_levels(void)
         for (s = TR_RV_ABSENT; s <= TR_RV_UNREAD; s++) {
             int dd;
             for (dd = 0; dd < TR_LV_DRIVERS; dd++) {
-                cur.State = TR_RV_ABSENT;
-                old.State = s;
-                old.Value = k == 12 ? 0xFFFFFFFFUL : k;
-                tr_level_pick(dd, &cur, &old, &l);
+                cur.State = s;
+                cur.Value = k == 12 ? 0xFFFFFFFFUL : k;
+                tr_level_pick(&cur, &l);
                 tr_level_line(dd, &l, line, sizeof(line));
                 if ((int)strlen(line) > maxLen) {
                     maxLen = (int)strlen(line);
@@ -2142,7 +2106,7 @@ static void test_levels(void)
     tr_level_head(&t, TR_LV_XHCICM, 1);
     cur.State = TR_RV_DWORD;
     cur.Value = 3;
-    tr_level_pick(TR_LV_XHCICM, &cur, NULL, &l);
+    tr_level_pick(&cur, &l);
     tr_level_device(&t, TR_LV_XHCICM, "Thunderbolt(TM) Controller - 15EB", &l);
     CHECK(strcmp(big,
                  "xhci98 (XhciLogVerbosity in each controller's driver key):\r\n"
