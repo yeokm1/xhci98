@@ -835,12 +835,19 @@ review fixes), hot-added `pci-bridge` chain at slot 3: bus numbers
 line on 1 of the 4 functions with a pin: the other three reach the port
 on other pins and were left alone, as the rule says.
 
+The final build, the qemu flavour of `49809c08` (the windows' sizing
+with an aligned region for the BARs at each level, the readiness wait
+behind a new bridge, a stale attempt's undo), on 98 SE after a restart
+with the unit out: the same bus numbers, windows and line as above,
+`win-need` now `00200000` (the ORICO's own NVMe beside the chain takes
+an aligned 1 MiB region), no wizard, E: within 30 s. For the P14s chain
+the writes are the same as `b9c18c41`'s: nothing sits beside the
+upstream port and the NVMe answers behind the downstream port, so its
+windows come out at `E0000000-E00FFFFF` as before.
+
 Not read: the USB4 profile with a bridge chain (the same worker and the
 same member set, so covered by the shared path, not tested under USB4);
-ME with Stor98 and known devnodes; the build after the last review fixes
-in a guest (they change only the windows' sizing with mixed alignments,
-an empty bus behind a new bridge, and a stale attempt's undo, none of
-which the P14s chain or these legs reach).
+ME with Stor98 and known devnodes.
 
 ## Noted, not changed
 
