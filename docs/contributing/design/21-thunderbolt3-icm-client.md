@@ -2390,8 +2390,10 @@ needs `XhciLogVerbosity` 2 or above on the NHI's driver key and a restart.
 The counters are no longer only written at stop: the thread formats them
 after each pass in the stop dump's names, the child filters' attached,
 skipped and refused among them, and the query device serves them at every
-verbosity. One record, `cm.live.bar-changed`, carries a bus address; the
-answer withholds its value.
+verbosity. Three records carry an address as their value
+(`cm.live.bar-changed`, a bus address, and on 98 SE and ME
+`cm.reenum.9x.gone.superseded` and `.id-changed`, a CONFIGMG devnode
+handle); the answer withholds their values.
 
 The clock behind every wait and every time in the log is the tick count,
 `KeQueryTickCount` times `KeQueryTimeIncrement` (`cm_thr.c`): monotonic,

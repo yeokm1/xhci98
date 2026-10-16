@@ -384,18 +384,34 @@ counters as text, then the log as text. Both texts are ASCII lines
   of pass `CM_QL_O_PASS`: the NHI's (`cm.*`), the ring's and the ICM's or
   the USB4 connection manager's, the re-enumeration's (`cm.reenum.*`) and
   the child filters' attached, skipped and refused (until now written only
-  at stop), and the liveness refusals, in the stop dump's names. They are
-  served at every verbosity: they hold no address and no user data.
-- **No address.** `xhcicm.sys` records no kernel address (it never calls
-  `XhciLogAppendAddress`). One record carries a bus address,
-  `cm.live.bar-changed` (the BAR as read); the builder writes its value as
+  at stop), and the liveness state and refusals, in the stop dump's names;
+  on 98 SE and ME the running CONFIGMG worker's counts (copied under its
+  lock) are added to those its predecessors left, which the stop dump
+  adds only at the stop. They are served at every verbosity: they hold no
+  address and no user data. With no thread (its creation failed) the
+  counters are formatted once when the device is created, pass 0; when
+  the thread waits with no timeout the answer says so
+  (`CM_QL_F_INERT`), and its pass and age say how old they are.
+- **The ring's lifetime.** The ring lives in the NHI's extension from
+  the device's addition to its removal and keeps its records across a
+  stop and a start (the stop dump included), so the log can begin before
+  the epoch it is served under; `CM_QL_O_APPENDS` counts from the
+  addition.
+- **No address.** `xhcicm.sys` never calls `XhciLogAppendAddress`, but
+  three records carry an address as their value: `cm.live.bar-changed`
+  (the BAR as read, a bus address) and, on 98 SE and ME,
+  `cm.reenum.9x.gone.superseded` and `cm.reenum.9x.gone.id-changed` (a
+  CONFIGMG devnode handle, a pointer). The builder writes their values as
   `--------` and sets `CM_QL_F_WITHHELD`. A record added later whose value
   is an address joins that list (`cm_query.c`), which the host suite
   holds.
 - **Text.** A byte of the ring outside 0x20 to 0x7E, CR and LF is
-  written `.`. When the wrap has overwritten part of the oldest record
-  (the ring full, bytes dropped), the text starts at the next record and
-  `CM_QL_F_LOG_CUT` is set.
+  written `.`. When the oldest bytes can be the tail of a record - the
+  wrap has overwritten bytes, or, in a checked flavour, a drain's chunk
+  (`cm_log.c`, 128 bytes, not aligned to records) took its head - the
+  text starts after the first line feed and `CM_QL_F_LOG_CUT` is set, so
+  no value is ever shown without its label (and the withholding, which
+  goes by the label, never misses one).
 - **Bounds and sizing.** Counters at most 8 KiB (`CM_QL_CTR_MAX`, cut at a
   line with `CM_QL_F_CTR_CUT`), the log at most 16 KiB (the ring), the
   answer at most 64 + 8192 + 16384 bytes (`CM_QL_MAX_BYTES`). Sizing is
@@ -415,12 +431,15 @@ already does (`\\.\HCD<n>`, or its interface path) and sends
 `IOCTL_USB_USER_REQUEST` with `USBUSER_PASS_THRU` and the snapshot GUID,
 schema 5 (design record 08, `xhcisnap\README.md`), exactly as
 `XHCISNAP`'s `take_window`: a window of the extension region at offset 0
-for the header (flavour, `XhciLogVerbosity` read and applied, the ring's
-offset, size, head and used count), a window at the ring's offset for its
-bytes, and the HCD region (version 1) for the counter block
-`XHCIHC_COUNTERS`. Every count and offset is checked against the bytes
-returned, as `XHCISNAP` checks them; a schema or region version the tool
-does not know is shown as such, not decoded.
+for the header (the ring's offset), then one window at the ring's offset
+that must hold the whole ring, and the HCD region (version 1) for the
+counter block `XHCIHC_COUNTERS`. The ring is decoded with the header of
+the window that carried it - the door fills header and payload together
+under the controller lock (`hcd_door.c`) - and its verbosity, offset,
+size, head and used count are checked there; the first window's header
+only says where to ask. Every count and offset is checked against the
+bytes returned, as `XHCISNAP` checks them; a schema or region version the
+tool does not know is shown as such, not decoded.
 
 - **Level 0**: the door answers status 6 and nothing else; the node says
   the log is off (or the controller is not an xhci98 one, which the tool
@@ -870,7 +889,7 @@ recording-off advice) in `test\test_trlog.c`.
 | T.5 | 98 SE, 7 x64 | install puts the tool and the Run value; login starts the tray; upgrade with the tray running; uninstall closes it and removes both |
 | T.6 | every target | the record 24 legs of XHCIINST still pass with the changed `xhcicm.sys` |
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
-| T.8 | 98 SE, 7 x86 (as a standard user) | revision 9: `XhciLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
+| T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
 
 ## 12. Decisions
 
