@@ -808,12 +808,16 @@ static void test_log_line(void)
 static UCHAR emitted[1024];
 static ULONG emittedBytes;
 static ULONG emitCalls;
+static ULONG emitLen[8];
 
 static VOID emit_collect(PVOID context, const UCHAR *line, ULONG n)
 {
     (VOID)context;
     memcpy(emitted + emittedBytes, line, n);
     emittedBytes += n;
+    if (emitCalls < 8) {
+        emitLen[emitCalls] = n;
+    }
     emitCalls++;
 }
 
@@ -839,12 +843,14 @@ static void test_log_emit(void)
 
     CHECK_EQ(emit_run(recs, 0, 2), 4, "four lines");
     CHECK_EQ(emitCalls, 4, "one call a line");
+    CHECK_EQ(emittedBytes, strlen(recs), "every byte, same length");
     CHECK(memcmp(emitted, "cm.start=00000001\r\ncm.live.bar-changed=--------\r\n"
                           "cm.reenum.9x.gone.superseded=--------\r\n"
                           "cm.reenum.9x.gone.id-changed=--------\r\n",
                  emittedBytes) == 0, "level 2: the three withheld");
     CHECK(strstr((const char *)emitted, "E0000004") == NULL, "no address");
     CHECK_EQ(emit_run(recs, 0, 4), 4, "level 4");
+    CHECK_EQ(emittedBytes, strlen(recs), "level 4: every byte");
     CHECK(memcmp(emitted, recs, emittedBytes) == 0, "level 4: as recorded");
     /* A wrapped ring: the first line is a tail with its label cut. */
     CHECK_EQ(emit_run("nged=E0000004\r\ncm.stop=00000000\r\n", 1, 2), 1,
@@ -857,12 +863,16 @@ static void test_log_emit(void)
              "the unterminated end is a line");
     /* A line past the print buffer goes in pieces, in order. */
     for (i = 0; i < 299; i++) {
-        big[i] = 'x';
+        big[i] = (UCHAR)('A' + i % 26);
     }
     big[299] = 0;
     CHECK_EQ(emit_run((const char *)big, 0, 2), 1, "one long line");
-    CHECK_EQ(emitCalls, 3, "in three pieces of at most 128");
+    CHECK_EQ(emitCalls, 3, "in three pieces");
+    CHECK_EQ(emitLen[0], 128, "128");
+    CHECK_EQ(emitLen[1], 128, "128");
+    CHECK_EQ(emitLen[2], 43, "43");
     CHECK_EQ(emittedBytes, 299, "every byte");
+    CHECK(memcmp(emitted, big, 299) == 0, "in order");
 }
 
 int main(void)

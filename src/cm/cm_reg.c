@@ -40,7 +40,9 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 #define CM_VALUE_TUNNEL_BRIDGE L"XhciCmTunnelBridge"
 
 typedef struct _CM_TAKE {
-    ULONG Present;          /* the value exists, whatever its type      */
+    ULONG Present;          /* the value exists, whatever its type, or a
+                               failure other than "not found" leaves that
+                               open                                      */
     ULONG Found;
     ULONG Dword;
     WCHAR Text[CM_TUNNEL_BRIDGE_CHARS + 1];
@@ -106,6 +108,7 @@ static NTSTATUS NTAPI cmTakeText(PWSTR ValueName, ULONG ValueType,
 static VOID cmQuery(HANDLE key, PCWSTR name, PCM_TAKE take, ULONG text)
 {
     RTL_QUERY_REGISTRY_TABLE table[2];
+    NTSTATUS status;
 
     CmZero(table, sizeof(table));
     CmZero(take, sizeof(CM_TAKE));
@@ -115,9 +118,15 @@ static VOID cmQuery(HANDLE key, PCWSTR name, PCM_TAKE take, ULONG text)
     table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
     table[0].Name = (PWSTR)name;
     table[0].EntryContext = take;
-    if (!NT_SUCCESS(RtlQueryRegistryValues(RTL_REGISTRY_HANDLE, (PWSTR)key,
-                                           table, NULL, NULL))) {
+    status = RtlQueryRegistryValues(RTL_REGISTRY_HANDLE, (PWSTR)key, table,
+                                    NULL, NULL);
+    if (!NT_SUCCESS(status)) {
         take->Found = 0;
+        /* Only a value confirmed missing is absent: any other failure is a
+         * value that may exist and could not be read. */
+        if (status != STATUS_OBJECT_NAME_NOT_FOUND) {
+            take->Present = 1;
+        }
     }
 }
 
