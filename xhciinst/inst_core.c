@@ -3388,8 +3388,8 @@ size_t inst_dir_question(char *out, size_t cap, const char *toolName,
         }
         inst_cat(raw, sizeof(raw), "  ");
         inst_cat(raw, sizeof(raw), key);
-        inst_cat(raw, sizeof(raw), "  this package's drivers, where the "
-                 "hardware wizards look for them\n");
+        inst_cat(raw, sizeof(raw), "  this package's drivers, for the "
+                 "hardware wizards\n");
     }
     if (now != NULL && now[0] != '\0') {
         inst_cat(raw, sizeof(raw), "  now: ");

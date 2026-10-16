@@ -2015,7 +2015,8 @@ static void test_questions(void)
           "NT: the tool, then Enter for [C:\\XHCI98]");
     inst_dir_question(out, sizeof(out), "XHCITR.EXE", "*.INF, *.SYS",
                       "C:\\WINDOWS\\XHCI98", "C:\\WINDOWS\\XHCI98", 0, 0);
-    CHECK(strstr(out, "  *.INF, *.SYS  this package's drivers") != NULL &&
+    CHECK(strstr(out, "  *.INF, *.SYS  this package's drivers, for the hardware "
+                      "wizards\n") != NULL &&
           strstr(out, "  now: C:\\WINDOWS\\XHCI98\n") != NULL &&
           strstr(out, "no spaces") != NULL &&
           strstr(out, "Enter for [C:\\WINDOWS\\XHCI98]: ") != NULL,
