@@ -121,8 +121,8 @@ and every refusal; the host suite is `test\test_tbt_brnum.c`.
 
 The USB4 software connection manager's profile reaches the same worker
 through the shared re-enumeration seam, so it shares this code path.
-USB4 leg: pending.
-TODO (owner): the USB4 profile's reading of the bridge set-up, or that it was not read.
+It was not read with a bridge chain under the USB4 profile
+(`runs/run-41.md`, "Bridges behind the tunnel port on 98 SE and ME").
 
 ## 5. The switch and the diagnostic
 
@@ -176,8 +176,11 @@ export (layout in `src/cm/cm_statb.h`):
   letter, Stor98 on IRQ 10 with no problem code, and `XhciCmBridgeDiag`
   reading every step done.
 
-Not recorded on this page: a reading on Windows ME, which runs the same
-code.
+On Windows ME, a hot-added two-bridge chain in the emulator: bus numbers
+set, both windows inside the tunnel bridge's, the NVMe behind found by
+PCI.VXD, and an interrupt line on the one function of four whose pin
+reaches the port's own, the other three left alone (`runs/run-41.md`,
+the same section). Not read on ME: Stor98 on that chain.
 
 ## 7. What is not answered
 
