@@ -373,12 +373,20 @@ link.
 Goal: a device behind a tunnel stays offered for safe removal after its
 driver stack is rebuilt.
 
-Status: not opened, unnumbered and unversioned. Found by the Windows 2000
-legs of 39-V.2 on 2026-10-15; `3.0.0.0` ships the release-notes line
-(re-plug it, or `INSTALL /eject`) and the owner asked for the proper fix
-later (record 21 section 7.4).
+Status: not opened, unnumbered and unversioned; to be solved after
+`3.0.0.0` (owner, 2026-10-15, confirmed 2026-10-16). Found by the Windows
+2000 legs of 39-V.2 on 2026-10-15. Read again on 2026-10-16 with a bridge
+chain behind the tunnel port on 2000: the first plug of a device Windows
+has not seen before installs its driver, the stack is rebuilt, and the
+unit reads not removable, so neither Windows' applet nor `INSTALL /eject`
+offers it; a plain unplug then brings up the Unsafe Removal dialog. From
+the second plug on it is offered and stops cleanly. `3.0.0.0` ships
+instead: `XHCITR` and `INSTALL /eject` fall back to the configuration
+manager's query-and-remove for such a unit (administrators only; a
+standard user is told to re-plug once), and the release notes state the
+behaviour (record 21 section 7.4, records 24 and 25).
 
-- [ ] EJRB.1 the child filter after a stack rebuild (owner, 2026-10-15). A disable and enable of the device, or its driver installed or updated, rebuilds its stack from the registry with no `BusRelations` query, so the child filter that sets `Removable` (record 21 section 7.4) is not attached again and the device drops out of "Unplug or Eject Hardware" and "Safely Remove Hardware" until a re-plug. A kernel-only fix is not small: the filter would have to be registered on the child devnode as a device-specific `LowerFilters` value, in the Enum key the PnP manager owns, written through SetupAPI or CfgMgr32 from user mode (the device tool of design record 24 is the natural place), and keeping a filter attached across a non-surprise `IRP_MN_REMOVE_DEVICE` is not permitted. Design first (record 21 section 7.4 and record 24), with the removal of that value when the device leaves; legs on 2000, XP and 7
+- [ ] EJRB.1 the child filter after a stack rebuild (owner, 2026-10-15). A disable and enable of the device, or its driver installed or updated, rebuilds its stack from the registry with no `BusRelations` query, so the child filter that sets `Removable` (record 21 section 7.4) is not attached again and the device drops out of "Unplug or Eject Hardware" and "Safely Remove Hardware" until a re-plug. A kernel-only fix is not small: the filter would have to be registered on the child devnode as a device-specific `LowerFilters` value, in the Enum key the PnP manager owns, written through SetupAPI or CfgMgr32 from user mode (the device tool of design record 24 is the natural place), and keeping a filter attached across a non-surprise `IRP_MN_REMOVE_DEVICE` is not permitted. The writer needs administrator rights on 2000 and XP, so a privileged user-mode piece (a service, told of each new unit by the driver) rather than the unprivileged tray tool; a value left behind that names a filter no longer installed stops the device from starting (Code 39), so its removal on the device's departure, on uninstall and after a failed upgrade is part of the design; only the unit at the top of each tunnel port, never another PCI device. Design first (record 21 section 7.4 and record 24), with the removal of that value when the device leaves; legs on 2000, XP, Vista and 7, x64 included
 
 ## Planned - `nvme98` Interface 3 on Windows 98 SE and ME
 
