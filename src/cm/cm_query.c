@@ -614,6 +614,55 @@ ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
     return CM_Q_ANS_WHOLE;
 }
 
+ULONG CmQueryLogLine(UCHAR *line, ULONG n, ULONG verbosity)
+{
+    if (verbosity >= 4) {
+        return 0;
+    }
+    return cmQWithhold(line, n);
+}
+
+ULONG CmQueryLogEmitLines(UCHAR *text, ULONG n, ULONG partial,
+                          ULONG verbosity, CM_QL_EMIT_FN emit,
+                          PVOID context)
+{
+    ULONG at;
+    ULONG end;
+    ULONG len;
+    ULONG lines;
+
+    at = 0;
+    lines = 0;
+    if (partial) {
+        while (at < n && text[at] != '\n') {
+            at++;
+        }
+        if (at < n) {
+            at++;
+        }
+    }
+    while (at < n) {
+        end = at;
+        while (end < n && text[end] != '\n') {
+            end++;
+        }
+        if (end < n) {
+            end++;
+        }
+        (VOID)CmQueryLogLine(text + at, end - at, verbosity);
+        while (at < end) {
+            len = end - at;
+            if (len > CM_QL_EMIT_LINE) {
+                len = CM_QL_EMIT_LINE;
+            }
+            emit(context, text + at, len);
+            at += len;
+        }
+        lines++;
+    }
+    return lines;
+}
+
 VOID CmQueryLogSetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs)
 {
     if (info >= CM_QL_HDR_BYTES) {

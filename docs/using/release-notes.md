@@ -217,14 +217,18 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
 - **Device Manager names by generation**: "Thunderbolt and USB4 in Device
   Manager", below.
 - **A link-state channel for Stor98**: on Windows 2000 to 7,
-  `xhcicm.sys` tells the NVMe driver Stor98 when an NVMe drive's tunnel
-  comes up, and under the USB4 connection manager when its link has gone
-  down. On 98 SE and ME this release has no channel ("NVMe drives behind
-  a tunnel").
+  `xhcicm.sys` publishes the channel of Stor98's interface 4. Stor98
+  `0.3.0.1` does not read it yet and detects a removed drive by itself;
+  nothing waits for it. On 98 SE and ME this release has no channel
+  ("NVMe drives behind a tunnel").
 - **Stor98 in the download**: the package carries a release of Stor98,
   the NVMe driver for Windows 98 SE to 7, as its own project released
   it (which release: "NVMe drives behind Thunderbolt or USB4", under
   "Installing").
+- **`XHCISNAP` to be deprecated.** The xHCI98 USB Tree now shows both
+  drivers' logs and sets their logging level. `XHCISNAP.EXE` and its
+  `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` still ship in this release
+  and work as before; they will be deprecated in a subsequent release.
 
 ### Which controllers
 
@@ -268,9 +272,11 @@ Lake integrated controllers - is untested: it is driven to the Linux
 driver's description of its messages, and no capture of it exists. Every
 USB4 host is untested as well: the USB4 connection manager has run only
 on the emulator's host models (Alder Lake's, from a capture of a
-Framework laptop, a minimal one, and one of ASMedia's ASM4242). Each of
-them acts by default (owner, 2026-10-15). On such a machine the driver
-may start and do nothing; the `debug` flavour's log says why.
+Framework laptop, a minimal one, and one of ASMedia's ASM4242). No USB4
+host at hand boots Windows 98 SE, ME, 2000 or XP (none offers a
+compatibility support module), so none has been read on real USB4
+hardware. Each of them acts by default (owner, 2026-10-15). On such a
+machine the driver may start and do nothing; the `debug` flavour's log says why.
 `XhciCmMode` `0` turns the driver off without uninstalling it. A report
 from any of these machines, working or not, is new information.
 
@@ -313,7 +319,9 @@ the system's drive unless another is chosen, or given with `INSTALL /to
 <path>`; an update keeps the directory an earlier install used, test
 builds' `%windir%\XHCI98\` included, unless another is chosen, when the
 tool moves it) and started at login as an icon in
-the notification area (`INSTALL /notray` leaves the icon out). It runs as
+the notification area. Each user can turn that off with "Start at login"
+in its View menu or the icon's right-click menu, with no administrator
+rights; `INSTALL /notray` turns it off for the whole machine. It runs as
 the logged-on user, with no administrator rights.
 
 - **The window** shows every USB host controller (this driver's and
@@ -335,6 +343,9 @@ the logged-on user, with no administrator rights.
   adapter; a Thunderbolt 3 device's come from the controller's firmware.
   For a USB device the descriptors give the SuperSpeed rates it supports;
   the negotiated lane rate is not reported.
+- Each controller is named with its maker and PCI ID, and the USB
+  controller inside a Thunderbolt chip says so; a root hub shows how many
+  of its ports are USB 2.0 and USB 3.x, and each port its kind.
 - **USB sticks and disks** are stopped from the window or the icon on
   every system, 98 SE and ME included, by their drive letter: "USB Flash
   Disk (F:)". The tool confirms what will stop, asks Windows to stop the
@@ -385,17 +396,29 @@ every system `INSTALL /devices` shows what is connected and
 - **A dock** is listed under the name of its own PCI switch's upstream
   port, a generic PCI-to-PCI bridge name; stopping it stops everything in
   the dock.
-- **A device missing from the list**: one connected before the driver
-  started, or disabled and enabled since, or whose driver was installed
-  or updated since, is not listed until it is unplugged and plugged in
-  again. `INSTALL /eject` still asks Windows to stop it: Windows refuses
-  to eject such a device, and the tool then asks for the same
-  query-remove and remove by the routine meant for devices that are not
-  removable, a program with a file open still refusing it. Windows 2000
-  offers no such routine (read in a virtual machine on 2026-10-15): there
-  the tool says the device cannot be stopped; after a restart with it
-  connected it is listed for removal again, or it can be unplugged with
-  the computer off. XP, Vista and 7 have not been read for this case.
+- **A device Windows does not list (Windows 2000 to 7).** The first time
+  a device Windows has never seen is plugged in behind the tunnel,
+  Windows installs its driver and rebuilds its driver stack without the
+  filter that marks it removable, so "Unplug or Eject Hardware" and
+  "Safely Remove Hardware" do not offer it (read on 2000 and XP; 7 kept
+  the mark on the first plug). The same happens after the device is
+  disabled and enabled or its driver is updated. From the next plug on
+  Windows lists it. The xHCI98 USB Tree and `INSTALL /eject` still stop it when
+  run as an administrator: they ask Windows for the same query-remove and
+  remove by the routine meant for devices that are not removable, and a
+  program with a file open still refuses it. The USB Tree asks for the
+  rights when it lacks them ("Stop as administrator...": User Account
+  Control on Vista and 7, the Run As dialog on 2000 and XP); without them
+  it says "Windows does not list this device for safe removal. Run this
+  as an administrator to stop it." Pulling such a device out without
+  stopping it is a surprise removal: Windows 2000 shows its "Unsafe
+  Removal of Device" warning, and writes Windows still held in its cache
+  can be lost, so if you have no administrator, close every program
+  using the device, unplug it and plug it in once more before you use
+  it. After this stop Windows may start the device again the next time
+  it looks for new hardware, so unplug it soon. Read in virtual machines
+  on 2000, XP and 7 x86 on 2026-10-16, with a bridge chain and no volume
+  behind it.
 
 On Windows 2000 and XP the tool needs an administrator; on Vista and 7 it
 asks for elevation. `INSTALL /eject 2` ejects device 2 of the list after
@@ -432,19 +455,14 @@ Thunderbolt or USB4", under "Installing"); read them before installing
 it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the
 drive.
 
-On Windows 2000 to 7 the two talk over a link-state channel, Stor98's
-interface 4, the kernel callback object `\Callback\Stor98LinkState`:
+On Windows 2000 to 7, `xhcicm.sys` publishes the link-state channel of
+Stor98's interface 4, the kernel callback object
+`\Callback\Stor98LinkState`, and states on it which NVMe function is
+behind a tunnel when the tunnel comes up. Stor98 `0.3.0.1` does not
+read the channel yet:
 
-- When a tunnel comes up, `xhcicm.sys` tells Stor98 which NVMe function
-  is behind it, before Windows finds the function.
-- Under the USB4 connection manager, after an unplug, once the path is
-  proven closed and the drive's reset is done, it tells Stor98 the link
-  is down and waits up to 5 seconds for its acknowledgement before
-  Windows removes the drive, so Stor98 ends outstanding requests at once
-  instead of at its own timeout. In this release that statement is made
-  only on the emulator's tunnel ports; on real hardware it is withheld
-  until Stor98 has qualified it, and Stor98 ends a vanished drive's
-  requests at its own deadline instead.
+- no statement is read or acknowledged, and nothing waits for one;
+- Stor98 detects a removed drive by itself, at its own deadline (about 5 seconds).
 
 On Windows 98 SE and ME, `xhcicm.sys` in this release publishes no
 channel, so Stor98 runs there without it:
@@ -464,7 +482,8 @@ key, a `DWORD` unless it says otherwise:
 
 `NNNN` is the subkey whose `DriverDesc` is the controller's Device
 Manager name ("Which controllers"). The install writes each value below
-but `XhciCmTunnelBridge` at its default, only where it is missing.
+but `XhciCmTunnelBridge` and `XhciCmBridgeNumbering` at its default,
+only where it is missing.
 Restart Windows, or disable and enable the controller, after a change.
 
 | Value | Default | What it does |
@@ -476,11 +495,13 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
 | `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
+| `XhciCmBridgeNumbering` | `1` | Windows 98 SE and ME: `1` sets up the PCI bridges a device brings up behind a tunnel after Windows has started (bus numbers, memory windows, interrupt lines, as the BIOS would) (a USB4 NVMe enclosure's switch, which otherwise shows Code 29 until a restart); `0` leaves them as they come up. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | A comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports, for a machine whose ports it does not find (the `debug` log says so). Not written by the install |
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
 | `XhciCmCmdTimeoutMs` | `5000` | Firmware connection manager: the wait for a command's answer, in ms (`1000` to `60000`), three tries |
 | `XhciCmApproveTimeoutMs` | `10000` | Firmware connection manager: the wait for an approval's answer, in ms, the same bounds |
-| `XhciLogVerbosity` | `0` | The driver's log, as `xhci98.sys`'s; the `release` flavour prints nothing, the `debug` flavour to DebugView |
+| `XhciCmLogVerbosity` | `2` | The driver's log, on the same `0`-`4` ladder as `xhci98.sys`'s `XhciLogVerbosity`; read by the xHCI98 USB Tree |
+| `XhciCmLogDebugView` | `0` | `1` sends the driver's log to DebugView as well, in every build (the `debug` build always does) |
 
 The install tool asks "Install Thunderbolt 3 / USB4 support?": Enter
 answers Y with a Thunderbolt or USB4 controller present and N with none
@@ -572,17 +593,36 @@ have every leg.
   device is unplugged the firmware stops answering and the controller is
   removed about 15 seconds later, not to return on a re-plug. Turn Assist
   off, or turn pre-boot support on and keep a device attached.
+- **Windows 98 SE and ME: keep "Thunderbolt BIOS Assist Mode" Off on
+  ThinkPads that have it.** Read on the ThinkPad P14s Gen 1 with Assist
+  on: Windows 98 SE shows no Thunderbolt controller at all, with or
+  without a device attached, and a plug brings up nothing.
+- **Windows 98 SE and ME: a device with a PCI Express switch of its own**
+  (a USB4 NVMe enclosure built on the ASMedia ASM2464) plugged in after
+  Windows has started is set up by the driver as the BIOS would have set
+  it up at power-on: bus numbers, memory windows and, where provably
+  routed, the interrupt line (`XhciCmBridgeNumbering`, on by default).
+  Without it Windows shows the switch with Code 29 until a restart.
+  Read under the Thunderbolt 3 firmware connection manager on the
+  ThinkPad P14s Gen 1 and in the emulator; the USB4 connection manager
+  takes the same path but has not been read with such a device.
 - **Windows 2000: an unplug without a stop shows "Unsafe Removal of
   Device"**, and the device is removed. Stop it in "Unplug or Eject
   Hardware" first.
-- **A device disabled and enabled, or whose driver was installed or
-  updated, drops out of the safe-removal list** until it is unplugged and
-  plugged in again (Windows 2000 to 7): Windows rebuilds its driver stack
-  without the filter that marks it removable. Use `INSTALL /eject`, or
-  re-plug it. A later release is to keep the mark across a rebuild.
+- **A device Windows has not seen before, or one disabled and enabled or
+  whose driver was installed or updated, is missing from the safe-removal
+  list** (Windows 2000 to 7): Windows rebuilds its driver stack without
+  the filter that marks it removable (the first plug read on 2000 and
+  XP); the next plug puts it back. The xHCI98 USB Tree and
+  `INSTALL /eject` stop it when run as
+  an administrator ("Removing a Thunderbolt or USB4 device safely"); a
+  pull without a stop is a surprise removal, with Windows 2000's warning
+  and cached writes at risk. A later release is to keep the mark across a
+  rebuild.
 - **A device tunnelled before the driver started** (by the BIOS's pre-boot
   support, or connected while the driver was installed) is offered for
-  safe removal only after a re-plug, on Windows 2000 to 7.
+  safe removal only after a re-plug, on Windows 2000 to 7; the xHCI98 USB
+  Tree and `INSTALL /eject` stop it before that, as an administrator.
 - **Windows 98 SE and ME: once the controller has started, `xhcicm.sys`
   stays loaded until Windows restarts**: disabling, updating or removing
   it takes full effect at the next start.
@@ -1822,7 +1862,7 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles Stor98 `0.3.0.1`.
+This download bundles Stor98 `0.4.0.0`.
 
 <!-- The cut replaces the line above with "This download bundles Stor98
 `<version>`." or "This download bundles no Stor98."
@@ -3464,19 +3504,26 @@ counters into the report, as plain text with no internal addresses in it.
 The tool reads `xhci98.sys` through a query request of the driver's own,
 as it reads `xhcicm.sys`, with no `SNAPON.BAT` needed; an `xhci98.sys`
 older than `3.0.0.0` is read through `XHCISNAP`'s channel as before.
-Where recording is off the node says how to turn it on:
+Both drivers record at level 2 by default. Where a driver's recording
+is off, the node says how to turn it on:
 
 - **`xhci98.sys`**: it records at level 2 after a fresh install. Where an
   earlier install left it off, run `SNAPON.BAT` as above (on Vista and 7,
   as an administrator), then restart Windows. At level 1 the node shows
   the counters only. At level 4 it shows the counters but not the log,
   because that level records internal addresses: use level 2.
-- **`xhcicm.sys`**: set the DWORD value `XhciLogVerbosity` to `2` on the
+- **`xhcicm.sys`**: set the DWORD value `XhciCmLogVerbosity` to `2` on the
   Thunderbolt or USB4 controller's driver key, then restart Windows. The
   node names the key in full (the "Driver key" its details show, under
   `HKEY_LOCAL_MACHINE`). On 2000 and later that needs an administrator; the
-  tool itself never writes the registry. Set it back to `0` once the log
-  has been sent. Its counters are shown whatever the level.
+  tool itself never writes the registry. Its counters are shown whatever
+  the level.
+
+`xhcicm.sys` also prints its log to a debugger's output (DebugView) when
+`XhciCmLogDebugView` is `1` on the same key, in every build, from its own
+thread and never from an interrupt, as `xhci98.sys` does under
+`XhciLogDebugView`. Below level 4 it prints no address. The tool's node
+needs neither.
 
 `xhcicm.sys` keeps the last 16 KiB of its log, from when Windows first
 loaded it for the controller; a restart of the controller does not clear

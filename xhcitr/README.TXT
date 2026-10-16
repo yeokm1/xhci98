@@ -35,6 +35,19 @@ connections (tunnels) to each device, and the Windows devices behind
 them. Under "USB" are the USB controllers, each with its root hub, ports,
 hubs and devices, their speed and their Device Manager entry.
 
+Each controller is named with its maker and PCI ID, for example
+"... - Intel 8086:02ED"; the USB controller inside a Thunderbolt chip
+reads "... - Thunderbolt 3 controller's USB (8086:15C1)". A root hub
+shows its ports and how many are USB 2.0 and USB 3.x, for example "Root
+hub - 18 ports (14 USB 2.0, 4 USB 3.x)", and each port its kind:
+"[Port 15, USB 3]". A USB 3 connector has one port of each kind.
+
+The details of each device end with its resources: the memory and I/O
+ranges, the IRQ and (on Windows 2000 and later) the bus numbers Windows
+gave it, and its PCI location. A device with a problem code also shows
+what it asked for, so a device that wants an IRQ and was given none is
+easy to spot.
+
   File > Refresh (F5)      reads everything again
   File > Save Report...    writes the whole tree with every detail to a
                            text file, for a problem report
@@ -88,6 +101,13 @@ On Windows Vista and 7, if Windows refuses because the device needs
 administrator rights to stop, the tool offers to try again as an
 administrator.
 
+On Windows 2000 to 7, a Thunderbolt or USB4 device that Windows does not
+mark removable (for example the first time it is plugged in) is missing
+from Windows' own Safely Remove Hardware. The tool still stops it, with
+administrator rights: when it runs without them it says so and offers
+"Stop as administrator...", which asks for them (User Account Control on
+Vista and 7, the Run As dialog on 2000 and XP) for that one stop. If you
+cancel, nothing is stopped.
 The drivers' logs
 -----------------
 
@@ -98,14 +118,15 @@ running driver: whether it is recording, the counters that are not zero,
 and the log, oldest line first. File > Save Report and /report include
 both logs. Nothing in them is an internal address.
 
-The logs are off unless you turn them on, and the item then says how:
+Where a log is off, the item says how to turn it on (the xhcicm
+driver records by default):
 
   xhci98   run SNAPON.BAT from the package's tools\xhcisnap folder (on
            Windows 2000 and later as an administrator), then restart
            Windows; SNAPOFF.BAT turns it off again.
-  xhcicm   set the DWORD value XhciLogVerbosity to 2 under the key the
-           item names (on Windows 2000 and later as an administrator),
-           then restart Windows; set it back to 0 afterwards.
+  xhcicm   set the DWORD value XhciCmLogVerbosity to 2 under the key
+           the item names (on Windows 2000 and later as an
+           administrator), then restart Windows.
 
 The tool itself changes no setting.
 
@@ -133,7 +154,17 @@ The notification-area icon
   Click            a list of the devices you can stop: USB devices,
                    then Thunderbolt and USB4 devices
   Double-click     opens the window
-  Right-click      Open, Refresh, About and Exit
+  Right-click      Open, Refresh, About, Start at login and Exit
+
+Start at login
+--------------
+
+To stop the icon starting when you log on, untick "Start at login" in
+the View menu or the icon's right-click menu; tick it again to bring it
+back. It is your own setting and needs no administrator rights. If the
+item is grey ("off for this computer"), the program was installed with
+INSTALL /notray, so it starts for nobody; run INSTALL again without
+/notray to turn it back on.
 
 The icon says when a Thunderbolt or USB4 device is connected, is waiting
 to be approved, could not be approved or was disconnected, and when the

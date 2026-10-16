@@ -339,6 +339,15 @@ typedef struct _CM_NHI {
     /* The status record for the install tool's viewer (cm_statos.c,
      * design record 24 section 3). */
     CM_STATUS_PUB StatusPub;
+    /* The 9x bus numbering's last attempt (record 21 section 6.1.1),
+     * copied in by the CONFIGMG worker and written by the thread to the
+     * hardware key's XhciCmBridgeDiag (REG_BINARY, CM_BRDIAG_WORDS
+     * dwords) when BrDiag[0], its sequence, changed. */
+    ULONG BrDiag[CM_BRDIAG_WORDS];
+    ULONG BrDiagSeq;        /* the last sequence given, across workers    */
+    ULONG BrDiagWritten;
+    KSPIN_LOCK BrDiagLock;  /* BrDiag and BrDiagSeq; taken inside the
+                               worker's own lock, never around a call     */
 
     /* The query device (cm_qryos.c, design record 25 section 4): set and
      * cleared by the PnP path alone, cleared only once the thread has
@@ -362,6 +371,11 @@ typedef struct _CM_NHI {
     ULONG QueryCtrBytes;
     ULONG QueryCtrCut;
     UCHAR QueryCtr[CM_QL_CTR_MAX];
+    /* Log.BytesDropped at the last drain for emission (cm_log.c), under
+     * LogLock; and the ring as that drain took it, the emitter's own (one
+     * emitter at a time: the thread, or the PnP path once it has ended). */
+    ULONG LogDroppedEmitted;
+    UCHAR LogEmit[XHCI_LOG_RING_BYTES];
 } CM_NHI, *PCM_NHI;
 
 /* The query device's extension (CM_KIND_QUERY): no lower object. Lock
@@ -606,7 +620,7 @@ VOID CmLogApply(PCM_NHI nhi);
 VOID CmLogNote(PCM_NHI nhi, const char *label, ULONG value);
 /* A record whose value is an address (a bus address, a devnode handle):
  * XhciLogAppendAddress under LogLock, so it reaches the ring at
- * XhciLogVerbosity 4 alone, as xhci98.sys's address records do (design
+ * XhciCmLogVerbosity 4 alone, as xhci98.sys's address records do (design
  * record 25 revision 12). Defined in cm_nhi.c. <= DISPATCH_LEVEL. */
 VOID CmLogNoteAddress(PCM_NHI nhi, const char *label, ULONG value);
 VOID CmLogEmit(PCM_NHI nhi, ULONG reason);

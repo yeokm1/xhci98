@@ -742,7 +742,8 @@ a fresh install under the don't-overwrite flag, so an update keeps a value an
 earlier install or `SNAPOFF.BAT` wrote. A refused value falls back to the
 default, so to the ring rung and never to the address rung. `start.common.pa`
 became an address record in the same change, so levels 2 and 3 carry no
-address at all. `xhcicm.sys`'s value and its INFs are branch `tr-logs`'s.
+address at all. `xhcicm.sys`'s own value is `XhciCmLogVerbosity`, also
+2 by default, with its INFs and its emission (`XhciCmLogDebugView`).
 
 The configuration that dies has an upgrade case as well as a design case. A
 machine carrying `XhciLogSnapshot = 0` with `XhciLogVerbosity` nonzero was,

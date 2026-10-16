@@ -9,7 +9,7 @@
  * Nothing here shows an internal address: xhcicm's answer carries none
  * (the driver withholds its three address records), and xhci98's ring is
  * shown only at XhciLogVerbosity 2 and 3 - at 4 it holds kernel
- * addresses and is withheld (decision T14). Only the ring and the HCD
+ * addresses and is withheld (decision T15). Only the ring and the HCD
  * region's counter block are ever taken out of a window; the raw
  * extension image is never kept or shown.
  */

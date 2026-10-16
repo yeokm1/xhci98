@@ -166,6 +166,29 @@ VOID CmQueryLogSetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs);
  * here. */
 ULONG CmQueryLogAddress(const UCHAR *label, ULONG n);
 
+/* One record of the ring as the DebugView emission prints it (cm_log.c),
+ * `n` bytes at `line`: below XhciCmLogVerbosity 4, the value of a record
+ * CmQueryLogAddress names is written "--------", the answer's rule; at 4
+ * the line is left as recorded, as xhci98.sys's ring holds its addresses
+ * at 4. Returns 1 when a value was withheld. */
+ULONG CmQueryLogLine(UCHAR *line, ULONG n, ULONG verbosity);
+
+/*
+ * The DebugView emission of a drained ring (cm_log.c): `n` bytes at
+ * `text`, oldest first, taken from the ring in one drain under its lock.
+ * `partial` nonzero when the wrap overwrote bytes since the last
+ * emission, so the first line can be a record's tail with its label gone:
+ * it is not handed on. Every other line - up to and including its LF, or
+ * the bytes left at the end - goes through CmQueryLogLine and then to
+ * `emit`, in order, at most CM_QL_EMIT_LINE bytes at a time. Returns the
+ * lines handed on.
+ */
+#define CM_QL_EMIT_LINE         128UL
+typedef VOID (*CM_QL_EMIT_FN)(PVOID context, const UCHAR *line, ULONG n);
+ULONG CmQueryLogEmitLines(UCHAR *text, ULONG n, ULONG partial,
+                          ULONG verbosity, CM_QL_EMIT_FN emit,
+                          PVOID context);
+
 /*
  * ---- The PCI answer (cm_query.h CM_QP_*, design record 25 section 4.7) ----
  *

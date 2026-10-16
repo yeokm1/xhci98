@@ -87,14 +87,13 @@ int tr_qlog_parse(const unsigned char *b, size_t n, TR_QLOG *l)
 
 void tr_log_advice_cm(TR_TEXT *t, const char *keyPath, int nt)
 {
-    tr_put(t, "  To record the log, set the DWORD value XhciLogVerbosity to 2\n"
-              "  under this key");
+    tr_put(t, "  To record the log, set the DWORD value XhciCmLogVerbosity to\n"
+              "  2 (the default) under this key");
     tr_put(t, nt ? " (as an administrator)" : "");
     tr_put(t, ", then restart Windows:\n");
     tr_printf(t, "    HKEY_LOCAL_MACHINE\\%s\n",
               keyPath != NULL && keyPath[0] ? keyPath
                                             : "(the controller's driver key)");
-    tr_put(t, "  Set it back to 0 once the log has been sent.\n");
 }
 
 /* The counters' text, "name=XXXXXXXX" a line: the nonzero ones, in
@@ -160,15 +159,22 @@ void tr_qlog_text(TR_TEXT *t, const TR_QLOG *l, const char *keyPath, int nt)
 
     tr_put(t, "xhcicm driver log\n");
     if (l->Flags & CM_QL_F_RECORDING) {
-        tr_printf(t, "  Recording:  on (XhciLogVerbosity %lu)\n",
+        tr_printf(t, "  Recording:  on (XhciCmLogVerbosity %lu)\n",
                   (unsigned long)l->Verbosity);
+        if (l->Flags & CM_QL_F_REFUSED) {
+            tr_printf(t, "  The value read, %lu, was refused (0 to 4 only); "
+                         "the driver applied %lu.\n",
+                      (unsigned long)l->VerbosityRead,
+                      (unsigned long)l->Verbosity);
+        }
     } else if (l->Flags & CM_QL_F_REFUSED) {
-        tr_printf(t, "  Recording:  off - XhciLogVerbosity is %lu, which the "
+        tr_printf(t, "  Recording:  off - XhciCmLogVerbosity is %lu, which the "
                      "driver refused\n              (0 to 4 only), so it "
-                     "applied 0\n", (unsigned long)l->VerbosityRead);
+                     "applied %lu\n", (unsigned long)l->VerbosityRead,
+                  (unsigned long)l->Verbosity);
         tr_log_advice_cm(t, keyPath, nt);
     } else {
-        tr_printf(t, "  Recording:  off (XhciLogVerbosity %lu; the log needs "
+        tr_printf(t, "  Recording:  off (XhciCmLogVerbosity %lu; the log needs "
                      "2 or more)\n", (unsigned long)l->Verbosity);
         tr_log_advice_cm(t, keyPath, nt);
     }

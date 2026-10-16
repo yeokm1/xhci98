@@ -153,7 +153,8 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_CMD_TIMEOUT_MS], 5000, "XhciCmCmdTimeoutMs defaults to 5000");
     CHECK_EQ(v.Value[CM_VAL_APPROVE_TIMEOUT_MS], 10000, "XhciCmApproveTimeoutMs defaults to 10000");
     CHECK_EQ(v.Value[CM_VAL_SAFE_EJECT], 1, "XhciCmSafeEject defaults to 1 (D10)");
-    CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 0, "XhciLogVerbosity defaults to 0");
+    CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 2, "XhciCmLogVerbosity defaults to 2");
+    CHECK_EQ(v.Value[CM_VAL_LOG_DEBUGVIEW], 0, "XhciCmLogDebugView defaults to 0");
     CHECK_EQ(v.Value[CM_VAL_USB3_TUNNEL], 1, "XhciCmUsb3Tunnel defaults to 1 (U3)");
     CHECK_EQ(v.Value[CM_VAL_LANE_BONDING], 1, "XhciCmLaneBonding defaults to 1 (U4)");
     CHECK_EQ(v.Value[CM_VAL_PREOS_CLEANUP], 0, "XhciCmPreOsCleanup defaults to 0 (U2)");
@@ -211,6 +212,17 @@ static void test_values(void)
     CmValuesTake(&v, CM_VAL_COUNT, 1, 5);
     CHECK(1, "an index out of range is ignored");
 
+    /* XhciCmLogDebugView: 0 and 1, anything else refused. */
+    CmValuesTake(&v, CM_VAL_LOG_DEBUGVIEW, 1, 1);
+    CHECK_EQ(v.Value[CM_VAL_LOG_DEBUGVIEW], 1, "DebugView 1 is taken");
+    CmValuesTake(&v, CM_VAL_LOG_DEBUGVIEW, 1, 2);
+    CHECK_EQ(v.Value[CM_VAL_LOG_DEBUGVIEW], 0, "DebugView 2 is refused");
+    CHECK(v.Refused & (1UL << CM_VAL_LOG_DEBUGVIEW), "and the refusal is recorded");
+    CmValuesTake(&v, CM_VAL_LOG_DEBUGVIEW, 0, 0);
+    CHECK_EQ(v.Value[CM_VAL_LOG_DEBUGVIEW], 0, "absent is 0");
+
+    CmValuesDefault(&v);
+
     CmValuesTakeBridge(&v, bdf, 7);
     CHECK_EQ(v.TunnelBridgeChars, 7, "bb:dd.f taken");
     CHECK(v.TunnelBridge[0] == '0' && v.TunnelBridge[7] == 0, "and terminated");
@@ -227,6 +239,32 @@ static void test_values(void)
     CmValuesTakeBridge(&v, longer, CM_TUNNEL_BRIDGE_CHARS - 1);
     CHECK_EQ(v.TunnelBridgeChars, CM_TUNNEL_BRIDGE_CHARS - 1, "the longest taken");
     CHECK_EQ(v.TunnelBridgeRefused, 0, "and the refusal cleared");
+
+    /* XhciCmBridgeNumbering (record 21 section 6.1.1): not in the rule
+     * table, since no INF writes it; default on, 0 and 1 taken, anything
+     * else refused with the default standing. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_BRIDGE_NUMBERING_DEFAULT, 1, "XhciCmBridgeNumbering defaults to 1 (owner, 2026-10-16)");
+    CHECK_EQ(v.BridgeNumbering, CM_BRIDGE_NUMBERING_DEFAULT, "the default after CmValuesDefault");
+    CHECK_EQ(v.BridgeNumberingFound | v.BridgeNumberingRefused, 0, "nothing found or refused");
+    CmValuesTakeBridgeNumbering(&v, 0, 0);
+    CHECK_EQ(v.BridgeNumbering, CM_BRIDGE_NUMBERING_DEFAULT, "absent: the default");
+    CHECK_EQ(v.BridgeNumberingFound, 0, "absent is not found");
+    CmValuesTakeBridgeNumbering(&v, 1, 0);
+    CHECK_EQ(v.BridgeNumbering, 0, "0 is taken: off");
+    CHECK_EQ(v.BridgeNumberingFound, 1, "and found");
+    CHECK_EQ(v.BridgeNumberingRefused, 0, "not refused");
+    CmValuesTakeBridgeNumbering(&v, 1, 1);
+    CHECK_EQ(v.BridgeNumbering, 1, "1 is taken: on");
+    CmValuesTakeBridgeNumbering(&v, 1, 2);
+    CHECK_EQ(v.BridgeNumbering, CM_BRIDGE_NUMBERING_DEFAULT, "2 is refused: the default stands");
+    CHECK_EQ(v.BridgeNumberingRefused, 1, "and the refusal is recorded");
+    CHECK_EQ(v.BridgeNumberingRaw, 2, "with what was read");
+    CmValuesTakeBridgeNumbering(&v, 1, 0xFFFFFFFFUL);
+    CHECK_EQ(v.BridgeNumbering, CM_BRIDGE_NUMBERING_DEFAULT, "all-ones is refused");
+    CmValuesTakeBridgeNumbering(&v, 0, 0);
+    CHECK_EQ(v.BridgeNumberingRefused | v.BridgeNumberingFound, 0, "a later absent read clears both");
+    CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched");
 }
 
 static void test_decision(void)

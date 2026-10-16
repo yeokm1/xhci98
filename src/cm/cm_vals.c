@@ -26,10 +26,11 @@ static const CM_RULE cmRules[CM_VAL_COUNT] = {
     { 5000,  1000, 60000,       CM_RULE_CLAMP  }, /* XhciCmCmdTimeoutMs     */
     { 10000, 1000, 60000,       CM_RULE_CLAMP  }, /* XhciCmApproveTimeoutMs */
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmSafeEject        */
-    { 0,     0,    0xFFFFFFFF,  CM_RULE_SWITCH }, /* XhciLogVerbosity       */
+    { 2,     0,    0xFFFFFFFF,  CM_RULE_SWITCH }, /* XhciCmLogVerbosity     */
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmUsb3Tunnel       */
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmLaneBonding      */
-    { 0,     0,    2,           CM_RULE_SWITCH }  /* XhciCmPreOsCleanup     */
+    { 0,     0,    2,           CM_RULE_SWITCH }, /* XhciCmPreOsCleanup     */
+    { 0,     0,    1,           CM_RULE_SWITCH }  /* XhciCmLogDebugView     */
 };
 
 static WCHAR cmUpper(WCHAR c)
@@ -283,6 +284,25 @@ VOID CmValuesDefault(PCM_VALUES v)
     for (i = 0; i < CM_VAL_COUNT; i++) {
         v->Value[i] = cmRules[i].Default;
     }
+    v->BridgeNumbering = CM_BRIDGE_NUMBERING_DEFAULT;
+}
+
+VOID CmValuesTakeBridgeNumbering(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->BridgeNumbering = CM_BRIDGE_NUMBERING_DEFAULT;
+    v->BridgeNumberingFound = 0;
+    v->BridgeNumberingRaw = 0;
+    v->BridgeNumberingRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->BridgeNumberingFound = 1;
+    v->BridgeNumberingRaw = raw;
+    if (raw > 1) {
+        v->BridgeNumberingRefused = 1;
+        return;
+    }
+    v->BridgeNumbering = raw;
 }
 
 VOID CmValuesTake(PCM_VALUES v, ULONG index, ULONG found, ULONG raw)
