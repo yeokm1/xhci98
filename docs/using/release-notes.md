@@ -207,10 +207,10 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
 - **Device Manager names by generation**: "Thunderbolt and USB4 in Device
   Manager", below.
 - **A link-state channel for Stor98**: on Windows 2000 to 7,
-  `xhcicm.sys` tells the NVMe driver Stor98 when an NVMe drive's tunnel
-  comes up, and under the USB4 connection manager when its link has gone
-  down. On 98 SE and ME this release has no channel ("NVMe drives behind
-  a tunnel").
+  `xhcicm.sys` publishes the channel of Stor98's interface 4. Stor98
+  `0.3.0.1` does not read it yet and detects a removed drive by itself;
+  nothing waits for it. On 98 SE and ME this release has no channel
+  ("NVMe drives behind a tunnel").
 - **Stor98 in the download**: the package carries a release of Stor98,
   the NVMe driver for Windows 98 SE to 7, as its own project released
   it (which release: "NVMe drives behind Thunderbolt or USB4", under
@@ -410,19 +410,14 @@ Thunderbolt or USB4", under "Installing"); read them before installing
 it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the
 drive.
 
-On Windows 2000 to 7 the two talk over a link-state channel, Stor98's
-interface 4, the kernel callback object `\Callback\Stor98LinkState`:
+On Windows 2000 to 7, `xhcicm.sys` publishes the link-state channel of
+Stor98's interface 4, the kernel callback object
+`\Callback\Stor98LinkState`, and states on it which NVMe function is
+behind a tunnel when the tunnel comes up. Stor98 `0.3.0.1` does not
+read the channel yet:
 
-- When a tunnel comes up, `xhcicm.sys` tells Stor98 which NVMe function
-  is behind it, before Windows finds the function.
-- Under the USB4 connection manager, after an unplug, once the path is
-  proven closed and the drive's reset is done, it tells Stor98 the link
-  is down and waits up to 5 seconds for its acknowledgement before
-  Windows removes the drive, so Stor98 ends outstanding requests at once
-  instead of at its own timeout. In this release that statement is made
-  only on the emulator's tunnel ports; on real hardware it is withheld
-  until Stor98 has qualified it, and Stor98 ends a vanished drive's
-  requests at its own deadline instead.
+- no statement is read or acknowledged, and nothing waits for one;
+- Stor98 detects a removed drive by itself, at its own deadline.
 
 On Windows 98 SE and ME, `xhcicm.sys` in this release publishes no
 channel, so Stor98 runs there without it:
