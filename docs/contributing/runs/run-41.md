@@ -476,6 +476,270 @@ whose HID install asks for the Windows CD; the guests have none, and the
 files were skipped. The cosmetic wrap of the question's drivers line seen
 on these legs was shortened afterwards (one line), with no other change.
 
+### The ORICO enclosure's pre-OS tunnel held at start (`u4-preos`)
+
+The `usb4-emu` cross-check (`scripts\usb4-crosscheck`) built against QEMU
+fork `2a893ea` failed one case of 225,320 checks: the ASM2464 model
+behind `intel-adl`, tunnelled by the model's pre-OS connection manager,
+with `XhciCmPreOsCleanup` 0 - the default - ended HELD for discovery
+(state 6, why 14) instead of preserved.
+
+**Where it was decided.** `tbtU4DiscoverPort` reads ROUTER_CS_0 to 6 of
+the router once and requires Router Ready in step 2 (record 22 section
+9.2). The PCIe walk was whole (both ends' Path Enable, `hd` 8, `hu` 9,
+the LTSSM live, the lanes bonded), ROUTER_CS_5 read `81000000` (PTO and
+CV), and ROUTER_CS_6 read `02000000`: Configuration Ready set, Router
+Ready clear. The model sets Router Ready 5 ms after Enumerated
+(`usb4-router-asm2464.c`, `ASM2464_RR_DELAY_MS`), and the harness starts
+the connection manager the moment the model's pre-OS connection manager
+has written Enumerated.
+
+**Why it passed before.** The same harness and the same driver source,
+built against an archive of QEMU fork `20655c3` (the `5ba7f60` emulator),
+pass the case: ROUTER_CS_6 reads `03000000` there and the port is
+preserved (`u4.preserved=00010809`). No ASM2464 file changed between the
+two forks. What changed is fork `558d663`: `intel-adl` now answers Get
+PCIe Downstream Entry Mapping Not Supported, so the connection manager's
+mapping stops at once, about 4 ms of the simulated clock earlier, and the
+discovery read lands inside the 5 ms. A model change exposed a
+connection-manager rule that sampled Router Ready once: the real ASM2464
+has not set it 0.4 ms after Enumerated (`usb4-emu`
+`docs/captures/ORICO-ASM2464.md`, ROUTER_CS_6), and Linux waits up to
+500 ms for it on a discovered router as well (`usb4.c`
+`usb4_switch_setup`, which `tb_switch_configure` runs for one). This
+driver's own connect path already waited (`tbtU4WaitReady`).
+
+**The fix** (branch `u4-preos`, record 22 sections 9.2 and 11):
+discovery waits for a clear Router Ready, up to 500 ms and reading only,
+and then reads ROUTER_CS_5 and 6 again; past the 500 ms the step fails as
+before. A resume verification does the same inside the resume's budget,
+and since every wait there lets hot plug events through that are not
+acted on for the port under verification, each verification of a USB4
+router first proves the router the one classified (an unplug hint only
+with no removal evidence, lane 0 unlocked, the same IDs and UUID, still
+enumerated at its route) and proves it again after the wait.
+
+| Reading | Result |
+|---|---|
+| Cross-check, fork `2a893ea`, the fixed driver | 225,122 checks, 0 failures; the case reads `u4.preserved=00010809` |
+| Cross-check, fork `2a893ea`, `7d169c09` | 225,320 checks, 1 failure (the case above) |
+| Cross-check, fork `20655c3`, `7d169c09` | the case passes; the two TS3 Plus cases fail as expected (that fork has no TB3 router under a software connection manager) |
+| `test_u4cm` | 1,015 checks, 0 failures. New cases: the ASM2464 pre-OS tunnel with Router Ready 5 ms late (preserved, nothing held, the router written exactly as with Router Ready on time) and never set (HELD for discovery after one wait, left as found); a resume with Router Ready 5 ms late (verified, nothing written to the router), never set (HELD), the budget spent inside the wait (no poll past it) and another router (another UUID) in place during the wait (never verified as the first). Without the fix the first four of these fail; without the identity proof the last one does |
+| `build-driver.cmd all` and `all -amd64` | BUILD + GATES PASSED (x86 at `da35584a`, amd64 at `60538f1b`; nothing under `src\` changed between them) |
+
+**The guests** (QEMU fork `2a893ea`, `vm\usb4\bin-2a893ea`, SHA-256
+`6a1dfcc8...bd66` checked before use; `usb4-generic`, `intel-adl`,
+`preos-cm=on`, `usb4-device,device-model=asm2464` with the 128 MiB FAT16
+NVMe image; i440FX, so the NVMe sits alone behind the tunnel bridge).
+Overlays of the 98 SE gold image and of the Windows 7 x86 image under
+`E:\xhci98-vm\u4-preos` on development host A, every window shown.
+
+- **The `3.0.0.0` package, 98 SE** (the tunnel bridge, `xhcicm.inf` and
+  `nvme98` through the hardware wizard): after the install, and again at a
+  cold boot with the enclosure attached at power-on, XHCITR read "ASMedia
+  246x ... approved", "PCIe tunnel: up (found at start)", the unit
+  "QEMU NVM e Ctrl (E:)"; E: ("ORICO") opened with `TESTDATA.BIN`.
+- **The `3.0.0.0` package, 7 x86** (`INSTALL /defaults /yes /nopause
+  /thunderbolt`, then a cold boot with the enclosure attached): "PCIe
+  tunnel: up (found at start)" (the NVMe controller had no driver; the
+  tool labels it "stopped - unplug it").
+- So the guests do not show the HELD port: the model's Router Ready comes
+  5 ms after the pre-OS enumeration at power-on, and the driver starts
+  seconds later. Only the cross-check, which starts the connection manager
+  with no time elapsed, reached the window.
+- **The fixed driver** (the `qemu` flavour of `xhcicm.sys` at `da35584a`,
+  SHA-256 `87dfa347...a732`, copied over the installed file, then a cold
+  boot with the enclosure attached): 98 SE, with `XhciLogVerbosity` 2,
+  logged `u4.drom.unused=00000010` and `u4.preserved=00010809`, no
+  `u4.router-not-ready`, and XHCITR read the tunnel "up (found at start)";
+  7 x86 (its hash read in the guest) read the same in XHCITR.
+
+## Bridges behind the tunnel port on NT
+
+The question: when a chain of PCI-to-PCI bridges appears behind a
+Thunderbolt tunnel port after boot, does Windows' own `pci.sys` on 2000,
+XP and 7 x86 number it, nest its windows and start it with no restart?
+98 SE's `PCI.VXD` does not; that is the P14s hot-plug Code 29. The earlier
+emulator NVMe legs had no bridge between the tunnel port and the NVMe.
+
+### Setup
+
+- **Emulator and package.** Emulator `vm\usb4\bin-2a893ea` (SHA-256
+  checked). Guests are overlays of `vm\win2k-xonly.img`, `vm\winxp.img`
+  and `vm\win7.img`. The 3.0.0.0 cut package (no NVMe driver) was
+  installed with `INSTALL /yes /thunderbolt /notray`.
+- **Tree.** i440FX with the `tb3-alpine-ridge` NHI and its xHCI on bus 0.
+  The tunnel port `tb0` is the emulator's SHPC `usb4-tunnel-bridge`, with
+  `bus-reserve=8,mem-reserve=32M`. SeaBIOS honours those hints only on
+  Red Hat bridge ids, so `tb0` got buses 1-9, memory
+  `fca00000-fe9fffff`, prefetchable `fc000000-fc1fffff` and IO
+  `c000-cfff`, like the P14s's 06-2A. The `8086:15C0` tunnel port of the
+  Alpine Ridge tree gets no spare bus from SeaBIOS.
+- **The chain.** A switch stand-in sits behind `tb0`'s gate: a USP
+  `usb4-asm-pci-usp` (`1b21:2421`) at `tb0` slot 3, a DSP
+  `pci-bridge-seat` (`1b36:000a`) below it, and an NVMe below that. Both
+  bridges have no BAR (`shpc=off,msi=off`), as the ASM2464's `1b21:2463`
+  ports have none. While the tunnel is down the gate hides the chain, so
+  it stays in reset state (bus numbers 0, windows closed) until the
+  enclosure is hot-plugged. Then the ICM approves it, the tunnel comes up
+  and xhcicm invalidates `tb0`. The ORICO model (`device-model=asm2464`)
+  also puts its own NVMe directly on the tunnel bus at slot 1.
+- **Not usable.** The `usb4-asm2464-usp/-dsp` types are not
+  user-creatable. 2000 and XP cannot boot on q35.
+- **Two emulator traps.**
+  - The emulator's tunnel-port id `1b36:0001` is in `xhcicmf.inf`'s
+    model list, so a plain `pci-bridge` in the chain gets the filter INF.
+    The first 2000 attempt did, and asked for a restart.
+  - Hot-adding the chain with `device_add` needs `shpc=on`, which gives
+    the DSP a BAR, and the DSP's 1 MB window plus that BAR does not fit
+    the 1 MB window 2000 gives the USP: Code 12. Neither is the hardware's
+    behaviour.
+- **Re-plugs.** The emulator gives the gated chain back with its earlier
+  configuration, so a re-plug reads re-enumeration and the first plug
+  reads fresh numbering.
+- **Recipe.** The command lines and steps are in
+  `E:\xhci98-vm\nt-bridge\RECIPE-first-plug.txt` on development host A.
+
+### pci.sys: numbered, nested, started, no restart
+
+`info pci` was read with no prompt open. The bridges show in Device
+Manager as "PCI standard PCI-to-PCI bridge, This device is working
+properly". The NVMes have no driver: Code 1 once the wizard is cancelled,
+BAR unassigned. Device Manager's Scan for hardware changes changed
+nothing.
+
+| | USP `01:03.0` | DSP `02:00.0` | Restart asked |
+|---|---|---|---|
+| 2000 | bus 2-3; memory `fe900000-fe9fffff`, prefetchable `fc100000-fc1fffff`, IO `c000-cfff` | bus 3-3; the same windows | no |
+| XP SP3 | bus 2-3; memory `fca00000-fe9fffff`, prefetchable `fc000000-fc1fffff`, IO `c000-cfff` (all of `tb0`'s) | bus 3-3; the same | no |
+
+The re-plugs on 2000 (two) and XP (three) brought both bridges back
+started, with no restart. **So `pci.sys` does what `PCI.VXD` does not.**
+Windows 7 x86 is read under "The child filter on a bridge" below.
+
+### Safely Remove does not offer the unit
+
+The ORICO's USP bridge sits directly on the tunnel bus, so on NT the
+bridge is the unit. In these legs that bridge was not removable on the
+first plug:
+
+- **2000, first plug.** `INSTALL /devices` printed "PCI standard
+  PCI-to-PCI bridge - pci, started ... removable: no". Unplug or Eject
+  Hardware listed only the driverless NVMe on the tunnel bus ("PCI Device
+  at PCI Slot 4", PCI bus 1, device 1). `INSTALL /eject 2` answered
+  "Windows will not stop this device: it does not see it as removable
+  now" (exit 4).
+- **2000, plain unplug** (the enclosure removed with no eject). 2000
+  showed its "Unsafe Removal of Device" dialog, naming both "PCI standard
+  PCI-to-PCI bridge" entries, and the subtree left Device Manager.
+- **2000, re-plug** of the same devnode. `/devices` read "removable: yes
+  ... (listed in Safely Remove Hardware)". The applet listed the bridge
+  with its subtree, and Stop gave "The 'PCI standard PCI-to-PCI bridge'
+  device can now be safely removed from the system". The unplug after it
+  raised no dialog, and the next re-plug came back started.
+- **XP, every plug.** Two first plugs (two chain instances) and three
+  re-plugs all read "removable: no". Safely Remove listed neither the bridge nor
+  the driverless NVMe. A plain unplug on XP raised no dialog.
+  `INSTALL /eject 2` printed "Windows has stopped PCI standard PCI-to-PCI
+  bridge. The device has started again" (exit 4).
+
+The qemu flavour of `xhcicm.sys` from the same tree (3.0.0.0 at
+`1e7d667e`, unmodified) showed why. It ran with `XhciLogVerbosity` 3, and
+the counters were read at the NHI's stop. Each first plug used a
+never-seen chain instance (another `tb0` slot).
+
+- **XP:** `cm.reenum.child.attached` 1 and `child.skipped` 1 on the first
+  plug, 3 and 3 after two more plugs. On every plug the NVMe got the
+  child filter and the bridge was skipped. A skip with no full snapshot is
+  `cmChildCreate`'s `STATUS_DEVICE_BUSY`: the bridge's PDO already carried
+  a device object when the answer passed the tunnel port's filter.
+- **2000 (ACPI off):** `child.attached` 2, `skipped` 0 on the first plug.
+  The bridge got its child filter and still read not removable. This
+  fits the case roadmap EJRB.1 describes: Windows installing the bridge's
+  driver for the first time rebuilds its stack without the child. The
+  re-plug of the known devnode was removable.
+
+### The child filter on a bridge (record 21 section 7.4 revision 2)
+
+**Branch.** The fix is on branch `nt-childattach`: `5cbe3ac3`, with the
+review rounds' `2d94a491` and `87935d29`.
+- `build-driver.cmd all` and `all -amd64` passed every gate at
+  `87935d29`, and the host suites pass.
+- The legs ran its qemu `xhcicm.sys`, SHA-256 `9D7F8BBF...5E9ACA`, copied
+  over the installed driver with `XhciLogVerbosity` 3.
+- Each first plug used a chain instance the guest had never seen: XP `tb0`
+  slot 6, 7 slot 3 (a fresh install), 2000 slot 8.
+
+**What the log names.** On XP and 7 the driver already on the bridge's PDO
+is ACPI's: `cm.reenum.child.under` reads `41435049` ("ACPI", after
+`\Driver\`), with `under.count` 1. `child.decision` reads 2, attached above
+it, on every plug. On 2000 with ACPI off nothing is attached, so no
+`under` line is written, as before.
+
+| | First plug of a never-seen chain | Re-plug |
+|---|---|---|
+| XP SP3 | attached above ACPI; the USP still "removable: no" | "removable: yes ... (listed in Safely Remove Hardware)"; the applet listed "PCI standard PCI-to-PCI bridge" with its subtree; Stop gave "Safe To Remove Hardware: The 'PCI standard PCI-to-PCI bridge' device can now be safely removed"; the unplug and the next re-plug brought it back started and removable |
+| 7 x86 | attached above ACPI; "removable: yes ... (listed in Safely Remove Hardware)"; the applet listed the bridge; Stop gave "The 'PCI standard PCI-to-PCI bridge' device can now be safely removed from the computer" | after that unplug: started, "removable: yes" |
+| 2000 | unchanged: "removable: no"; a plain unplug again showed "Unsafe Removal of Device" naming both bridges | "removable: yes" |
+
+The NVMe directly on the tunnel bus read "removable: yes" on every plug on
+all three systems.
+
+**XP's first plug.** The child was attached there, and the bridge still
+read not removable. This is the 2000 case of roadmap EJRB.1: XP installed
+the bridge's driver for the first time and rebuilt the stack without the
+child. Windows 7 did not lose it. So revision 2 fixes what never attached
+(XP and 7 on every plug, ACPI), and the first plug of a never-seen unit on
+2000 and XP stays EJRB.1's. For those, the route is the tool-side
+fallback the owner decided for 3.0.0.0: query-and-remove in XHCITR and
+`XHCIINST /eject`.
+
+**`pci.sys` on 7 x86** (first plug, no prompt open), with no restart
+asked:
+
+| | USP | DSP |
+|---|---|---|
+| Bus | 2-3 | 3-3 |
+| Memory | `fe400000-fe7fffff` | the same |
+| Prefetchable | `fe000000-fe3fffff`, inside `tb0`'s non-prefetchable window, which a prefetchable range may use | the same |
+| IO | `c000-cfff` | the same |
+
+Both bridges were started; the NVMes showed Code 28, no driver. The
+re-plug's `info pci` matched the first plug's.
+
+## The fallback for a unit not marked removable (record 24 revision 5, record 25 revision 11)
+
+Read on 2026-10-16 on development host A, overlays under
+`E:\xhci98-vm\tr-fallback` (QMP 47990 to 47995, each guest in its SDL
+window), with the nt-bridge recipe above: emulator `2a893ea`,
+`tb3-alpine-ridge`, the SHPC tunnel bridge with the `usb4-asm-pci-usp`
+(`1B21:2421`) and `pci-bridge-seat` chain cold-plugged behind it and an
+NVMe at its end, no NVMe driver, so no volume. The package was a dry x86
+TEST cut of branch `tr-fallback` at `e9701bdb`'s tools; its drivers came
+before the merge of `nt-childattach` (record 21 section 7.4's attachment
+above bus filters), so its re-plug readings on XP and 7 are the earlier
+drivers'. Each system: a fresh overlay, `INSTALL /yes /thunderbolt
+/notray /nopause`, a shutdown, then the chain at first boot and the
+enclosure added (`device_add usb4-device ... device-model=asm2464`).
+Evidence: `E:\xhci98-vm\tr-fallback\shots\` (`w2k-a3-*`, `w2k-b1-*`,
+`xp-x2-*`, `w7-s2-*`), `pids.txt` and each guest's `cmdline-<tag>.txt`.
+
+| System | First plug, `INSTALL /devices` | The stop | After it |
+|---|---|---|---|
+| 2000 | `[2] PCI standard PCI-to-PCI bridge`, "not marked removable: Safely Remove Hardware may not list it" | `INSTALL /eject 2`, Y, as the administrator: log `CM_Request_Device_EjectA = 0x00000017, veto 8`, then `CM_Query_And_Remove_SubTreeW(flags 0x3) = 0x00000000, veto 0`; "Windows has stopped PCI standard PCI-to-PCI bridge.", exit 0 | the bridge at problem code 24; `device_del` with no Unsafe Removal dialog; the re-plug started it, "removable: yes" |
+| 2000, second never-seen unit (the chain moved to `tb0` slot 4) | not marked removable | `XHCITR /eject id=...` run as a limited user (`runas /user:tuser`): the confirmation, then "Windows does not list this device for safe removal. Stopping it needs administrator rights." with "Stop as administrator..."; the Run As Other User dialog appeared. Cancel: "Nothing was stopped: administrator rights were not given. Try again and allow it, or unplug the device and plug it in again." A wrong password: the shell's own logon error and the dialog again. A second administrator account: "Windows has stopped PCI standard PCI-to-PCI bridge. ..." with no second confirmation | no dialog at the unplug; the re-plug started it, removable |
+| XP SP3 | not marked removable | `XHCITR` as a limited user: the same dialog, then XP's Run As. "Current user" with its protection box: the elevated run answered "Windows does not list this device for safe removal. Run this as an administrator to stop it." through the window. "The following user", an administrator: stopped, no second confirmation | after the unplug and a re-plug, still not marked (earlier drivers) |
+| XP SP3, `XHCIINST` | not marked removable | `INSTALL /eject 2`, Y: log `CM_Request_Device_EjectA = 0x00000000, veto 8` - success with the veto type, which before this change read as stopped with nothing stopped - then `CM_Query_And_Remove_SubTreeW(flags 0x3) = 0x00000000`; stopped, exit 0 | |
+| 7 SP1 x86 | not marked removable | `XHCITR` as a standard user: the dialog with the shield; User Account Control asked for an administrator's password. Cancel: the "not given" text. Accepted: stopped, no second confirmation | after the unplug and a re-plug, still not marked (earlier drivers) |
+| 7 SP1 x86, `XHCIINST` | not marked removable | `INSTALL /eject 2` from an elevated prompt: `CM_Request_Device_EjectA = 0x00000017, veto 8`, `CM_Query_And_Remove_SubTreeW(flags 0x3) = 0x00000000`; stopped, exit 0 | |
+
+All three systems accepted `CM_REMOVE_UI_NOT_OK | CM_REMOVE_NO_RESTART`;
+no `CR_INVALID_FLAG` retry was needed. Not read: a veto with a file open
+(no volume in this topology: no NVMe driver was installed), Vista, the x64
+tools, the window's and the tray's own route to the same dialog (the
+one-shot `/eject id=` takes the same functions), and whether a rescan
+restarts a unit after this stop.
+
 ### Start at login, per user (record 25 revision 10)
 
 Read on the tool of `33f66b09`, on 98 SE and on 7 x86 as the standard
@@ -523,3 +787,9 @@ its hub descriptor, `779b676a`), as the standard user:
 - On Vista the tray was once "Not Responding" in tasklist at the first
   login while devices were still installing, and "Running" at the next
   sample.
+- In the `u4-preos` legs one Windows 7 x86 boot with the enclosure at
+  power-on stopped the emulator itself about 18 s in: the QEMU process at
+  0 CPU, its QMP socket silent, its trace last written during the
+  connection manager's discovery reads. It was stopped; the next boots
+  (after Windows 7's Startup Repair) ran normally with the same driver.
+  Not reproduced; no cause read.

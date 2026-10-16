@@ -96,6 +96,48 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
                      ULONG nowCount, PULONG isNew);
 
 /*
+ * Whether a child filter goes on a PDO the snapshot found new (section 7.4
+ * step 1, revision 2). `chain[0..chainCount-1]` is the driver object of
+ * each device object already attached above the PDO, lowest first, as the
+ * caller walked it (at most CM_CHILD_CHAIN_MAX + 1 entries, so a count
+ * above CM_CHILD_CHAIN_MAX means "more than the walk allows");
+ * `busDriver` is the PDO's own driver object, `self` this driver's and
+ * `prevTruncated` the previous snapshot's SnapTruncated. Compared by
+ * pointer, never dereferenced.
+ *
+ * CM_CHILD_ATTACH: nothing is attached, the case of revision 1.
+ * CM_CHILD_ATTACH_OVER: only bus filters are attached - objects a driver
+ * below the bridge filter put on the new PDO while the BusRelations answer
+ * was completing (on an ACPI machine, ACPI's filter on a PCI-to-PCI
+ * bridge). The PnP manager builds a new device's stack only after that
+ * answer reaches it, so none of them can be the function driver; the
+ * checks below hold that reasoning to what can be seen: no object of the
+ * PDO's own driver (pci.sys, which is also a bridge's function driver),
+ * none of this driver's, none without a driver, a short chain, and a
+ * snapshot that was not truncated (beyond CM_SNAP_MAX "new" is not
+ * reliable, and the PDO may carry a built stack).
+ * CM_CHILD_SKIP: anything else; nothing is attached (STATUS_DEVICE_BUSY).
+ */
+#define CM_CHILD_SKIP           0UL
+#define CM_CHILD_ATTACH         1UL
+#define CM_CHILD_ATTACH_OVER    2UL
+#define CM_CHILD_WALK           3UL
+#define CM_CHILD_CHAIN_MAX      4UL
+ULONG CmPortsChildAttach(ULONG prevTruncated, PVOID const *chain,
+                         ULONG chainCount, PVOID busDriver, PVOID self);
+
+/*
+ * The step before it, which decides whether the caller may walk the chain
+ * at all: CM_CHILD_ATTACH when nothing is attached (`hasAttached` 0),
+ * CM_CHILD_SKIP when something is and the previous snapshot was truncated
+ * (a PDO past CM_SNAP_MAX reads as new on every answer and may carry a
+ * built stack, whose objects another driver can detach and delete at any
+ * time, so they are not dereferenced), CM_CHILD_WALK otherwise: walk the
+ * chain, then CmPortsChildAttach.
+ */
+ULONG CmPortsChildFirst(ULONG prevTruncated, ULONG hasAttached);
+
+/*
  * The resume hold's watchdog (section 6.3): the NHI's own resume bound
  * plus CM_PORTS_HOLD_EXTRA_MS. The resume is every synchronous stage of
  * the client's bring-up: the platform's readiness (CM_PORTS_HOLD_PLATFORM_MS,

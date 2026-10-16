@@ -148,7 +148,7 @@ Run it in a Command Prompt (an MS-DOS Prompt on 98 SE and ME). On Windows 2000 a
 2. It asks Windows to stop it. If a program has a file open on the device, Windows refuses and nothing changes: close the program and try again.
 3. When it says "You can now unplug the device.", unplug it.
 
-- **A device missing from Windows' list** (one connected before the driver started, or disabled and enabled since, or whose driver was updated): on XP, Vista and 7 `INSTALL /eject` still asks Windows to stop it. Windows 2000 cannot stop such a device: the tool says so; restart with the device connected and it is listed for removal again, or shut the computer down and unplug it then. Unplugging and plugging it in again also puts it back in the list.
+- **A device missing from Windows' list** (the first plug of a device Windows has not seen, one disabled and enabled since, or whose driver was updated): the xHCI98 USB Tree and `INSTALL /eject` stop it when run as an administrator, and the USB Tree asks for the rights when it needs them. Without an administrator, close every program using it, unplug it and plug it in once more: from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
 - **For scripts:** `INSTALL /eject 2` ejects device 2 of the list after one question; `INSTALL /eject id=<instance id> /yes`, with the instance id `/devices` prints, does it with no question.
 
 ### NVMe drives

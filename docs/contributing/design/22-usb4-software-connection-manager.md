@@ -1922,7 +1922,17 @@ reading only:
 2. The device router at route = lane 0 answers, with TopologyID Valid set,
    depth 1, Router Ready, ROUTER_CS_5 PTO and CV set, ROUTER_CS_6
    Configuration Ready set (for a Thunderbolt 3 router, section 8's
-   enumeration state instead).
+   enumeration state instead). Router Ready found clear is waited for
+   first, for its 500 ms of section 5.2, by reading ROUTER_CS_6 alone,
+   and ROUTER_CS_5 and 6 are read again after it: an enumeration only
+   moments old has not set it yet (the ASM2464 sets it after Enumerated,
+   section 6.11; [linux] `usb4.c` `usb4_switch_setup` waits the same 500
+   ms on a discovered router), and a port judged on that first read would
+   be HELD for a tunnel that verifies. Past the 500 ms the step fails as
+   before. The model's pre-OS connection manager hands over the moment
+   it has written Enumerated, so the `usb4-emu` cross-check reaches this
+   wait; a firmware's pre-OS connection manager finishes long before the
+   operating system loads.
 3. Lanes bonded, or lane 1 disconnected or disabled.
 4. The PCIe tunnel as Linux's discovery walks it ([linux] `tunnel.c`
    `tb_tunnel_discover_pci`, `path.c` `tb_path_discover`): the host's PCIe
@@ -2192,7 +2202,18 @@ so it stays up, as on a port FAILED for PCIe (section 7.2).
   configuration, torn down on removal evidence, or HELD on a failed
   verification - and the NT filter's held D0 IRPs released on success or
   through the failure path (section 7.6); only then are other ports'
-  connections served. System suspend with a tunnelled device attached is
+  connections served. A verification is section 9.2's, its Router Ready
+  wait included, inside the resume's budget: the 500 ms is within the
+  margin `TbtU4ResumeBoundUs` already counts for the step running when
+  the budget runs out (its 2 s longest wait), and a spent budget refuses
+  the wait's reads, so the verification fails as it did before the wait
+  existed. Hot plug events a wait consumes are not acted on for the port
+  being verified until its obligation is judged, so each verification of
+  a USB4 router (a Thunderbolt 3 router's has no Router Ready wait and is
+  unchanged), and each again after its Router Ready wait, first proves
+  the router the one classified: an unplug hint only with no removal evidence behind
+  it, lane 0 still unlocked, the same IDs and UUID, still enumerated at
+  its route; anything else does not meet the obligation. System suspend with a tunnelled device attached is
   unsupported in this release (section 7.6). Windows 98 on the APM
   machines this project runs rarely reaches S3; the NT guests do, and the
   legs read it.
@@ -2330,7 +2351,13 @@ hardware capture shows it, whether or not its code was adapted.
   freeing. Since 2026-10-15 also the ASM2464 preset of section 6.11 (its
   Thunderbolt 3 compatible DROM with the unused adapter, the TMU at `C0h`
   and the vendor capabilities after it, Router Ready 5, 450 and 700 ms
-  after Enumerated, Buffer Allocation with PCIe alone, NVM Sector Size
+  after Enumerated, and 5 ms behind a pre-OS tunnel's discovery (waited
+  for, preserved, the router written exactly as with Router Ready on
+  time) or never set there (HELD after one bounded wait); on a resume,
+  Router Ready 5 ms late (verified, nothing written to the router), never
+  set, the budget spent inside its wait, and another router (another
+  UUID) in its place during it (never verified as the first),
+  Buffer Allocation with PCIe alone, NVM Sector Size
   failing, the 594 ms reconnect after the cleaning's port reset), a USB4
   DROM marking an adapter unused, and a DROM with a bad CRC or an entry
   list past its end (nothing believed).

@@ -368,17 +368,29 @@ every system `INSTALL /devices` shows what is connected and
 - **A dock** is listed under the name of its own PCI switch's upstream
   port, a generic PCI-to-PCI bridge name; stopping it stops everything in
   the dock.
-- **A device missing from the list**: one connected before the driver
-  started, or disabled and enabled since, or whose driver was installed
-  or updated since, is not listed until it is unplugged and plugged in
-  again. `INSTALL /eject` still asks Windows to stop it: Windows refuses
-  to eject such a device, and the tool then asks for the same
-  query-remove and remove by the routine meant for devices that are not
-  removable, a program with a file open still refusing it. Windows 2000
-  offers no such routine (read in a virtual machine on 2026-10-15): there
-  the tool says the device cannot be stopped; after a restart with it
-  connected it is listed for removal again, or it can be unplugged with
-  the computer off. XP, Vista and 7 have not been read for this case.
+- **A device Windows does not list (Windows 2000 to 7).** The first time
+  a device Windows has never seen is plugged in behind the tunnel,
+  Windows installs its driver and rebuilds its driver stack without the
+  filter that marks it removable, so "Unplug or Eject Hardware" and
+  "Safely Remove Hardware" do not offer it (read on 2000 and XP; 7 kept
+  the mark on the first plug). The same happens after the device is
+  disabled and enabled or its driver is updated. From the next plug on
+  Windows lists it. The xHCI98 USB Tree and `INSTALL /eject` still stop it when
+  run as an administrator: they ask Windows for the same query-remove and
+  remove by the routine meant for devices that are not removable, and a
+  program with a file open still refuses it. The USB Tree asks for the
+  rights when it lacks them ("Stop as administrator...": User Account
+  Control on Vista and 7, the Run As dialog on 2000 and XP); without them
+  it says "Windows does not list this device for safe removal. Run this
+  as an administrator to stop it." Pulling such a device out without
+  stopping it is a surprise removal: Windows 2000 shows its "Unsafe
+  Removal of Device" warning, and writes Windows still held in its cache
+  can be lost, so if you have no administrator, close every program
+  using the device, unplug it and plug it in once more before you use
+  it. After this stop Windows may start the device again the next time
+  it looks for new hardware, so unplug it soon. Read in virtual machines
+  on 2000, XP and 7 x86 on 2026-10-16, with a bridge chain and no volume
+  behind it.
 
 On Windows 2000 and XP the tool needs an administrator; on Vista and 7 it
 asks for elevation. `INSTALL /eject 2` ejects device 2 of the list after
@@ -422,7 +434,7 @@ behind a tunnel when the tunnel comes up. Stor98 `0.3.0.1` does not
 read the channel yet:
 
 - no statement is read or acknowledged, and nothing waits for one;
-- Stor98 detects a removed drive by itself, at its own deadline.
+- Stor98 detects a removed drive by itself, at its own deadline (about 5 seconds).
 
 On Windows 98 SE and ME, `xhcicm.sys` in this release publishes no
 channel, so Stor98 runs there without it:
@@ -553,14 +565,20 @@ have every leg.
 - **Windows 2000: an unplug without a stop shows "Unsafe Removal of
   Device"**, and the device is removed. Stop it in "Unplug or Eject
   Hardware" first.
-- **A device disabled and enabled, or whose driver was installed or
-  updated, drops out of the safe-removal list** until it is unplugged and
-  plugged in again (Windows 2000 to 7): Windows rebuilds its driver stack
-  without the filter that marks it removable. Use `INSTALL /eject`, or
-  re-plug it. A later release is to keep the mark across a rebuild.
+- **A device Windows has not seen before, or one disabled and enabled or
+  whose driver was installed or updated, is missing from the safe-removal
+  list** (Windows 2000 to 7): Windows rebuilds its driver stack without
+  the filter that marks it removable (the first plug read on 2000 and
+  XP); the next plug puts it back. The xHCI98 USB Tree and
+  `INSTALL /eject` stop it when run as
+  an administrator ("Removing a Thunderbolt or USB4 device safely"); a
+  pull without a stop is a surprise removal, with Windows 2000's warning
+  and cached writes at risk. A later release is to keep the mark across a
+  rebuild.
 - **A device tunnelled before the driver started** (by the BIOS's pre-boot
   support, or connected while the driver was installed) is offered for
-  safe removal only after a re-plug, on Windows 2000 to 7.
+  safe removal only after a re-plug, on Windows 2000 to 7; the xHCI98 USB
+  Tree and `INSTALL /eject` stop it before that, as an administrator.
 - **Windows 98 SE and ME: once the controller has started, `xhcicm.sys`
   stays loaded until Windows restarts**: disabling, updating or removing
   it takes full effect at the next start.
