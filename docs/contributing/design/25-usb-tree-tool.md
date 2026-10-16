@@ -552,6 +552,14 @@ header type and bus numbers its walk needs.
   this request. One request at a time builds into a buffer in the
   device's extension (a synchronization event); the answer is copied out
   from it.
+- **One DWORD at a time, and the NHI's location on 98.** Each function's
+  256 bytes are assembled from prefixes of offset + 4 bytes, the reads the
+  topology makes: read on 98 SE, its HAL answers those and not one
+  256-byte read, which left the tunnel port reading as absent. A DWORD
+  past the HAL's answer ends the assembly with the header kept and the
+  rest all ones. And 98 SE's PCI bus answers no bus number or address for
+  the NHI's PDO, so the topology's own reading of the NHI's location
+  (`CM_REENUM.Nhi`) stands in.
 - **The walk below a port** (2000 and later): the port's secondary bus,
   then the secondary bus of each bridge found there whose numbers lie
   inside the port's secondary-to-subordinate range and above its own bus,

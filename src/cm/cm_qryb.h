@@ -202,6 +202,23 @@ typedef struct _CM_QPCI_IN {
     PVOID Context;
 } CM_QPCI_IN, *PCM_QPCI_IN;
 
+/* A reader of a prefix: the first `bytes` of bdf's configuration space
+ * into buf; returns the bytes it read, 2 where the bus driver says no
+ * function answers (HalGetBusData's form), fewer where it read less. */
+typedef ULONG (*CM_QP_PREFIX)(PVOID context, ULONG bdf, UCHAR *buf,
+                              ULONG bytes);
+
+/* CM_QP_READ's answer for `bytes` of bdf (4 or CM_QP_CFG_BYTES) built one
+ * DWORD at a time from prefixes of offset + 4 bytes - the read every
+ * other configuration access of this driver makes, which Windows 98's
+ * HAL answers where one long read may not. The first DWORD decides:
+ * CM_QP_RD_ABSENT where the prefix answers 2, CM_QP_RD_FAIL where it
+ * reads less. A later DWORD that cannot be read ends the assembly: the
+ * rest is all ones and the answer is CM_QP_RD_OK. `scratch` holds
+ * CM_QP_CFG_BYTES. */
+ULONG CmQpciReadByDword(CM_QP_PREFIX prefix, PVOID context, ULONG bdf,
+                        UCHAR *buf, ULONG bytes, UCHAR *scratch);
+
 /* The PCI answer into buf (room at least CM_QP_MAX_BYTES; 0 returned
  * otherwise): the NHI, the members, the functions below them within the
  * CM_QP_MAX_* bounds. Returns its length. */

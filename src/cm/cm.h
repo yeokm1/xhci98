@@ -395,6 +395,7 @@ typedef struct _CM_QUERY_DEV {
     CM_QP_PORT_IN Ports[CM_QP_MAX_PORTS];
     KEVENT PciGate;
     UCHAR Pci[CM_QP_MAX_BYTES];
+    UCHAR PciScratch[CM_QP_CFG_BYTES];  /* one prefix read, under PciGate */
 } CM_QUERY_DEV, *PCM_QUERY_DEV;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */

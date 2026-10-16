@@ -315,6 +315,34 @@ ULONG CmQpciBuild(UCHAR *buf, ULONG room, const CM_QPCI_IN *in)
     return bytes;
 }
 
+ULONG CmQpciReadByDword(CM_QP_PREFIX prefix, PVOID context, ULONG bdf,
+                        UCHAR *buf, ULONG bytes, UCHAR *scratch)
+{
+    ULONG off;
+    ULONG got;
+    ULONG i;
+
+    if (bytes > CM_QP_CFG_BYTES || (bytes & 3UL) != 0 || bytes == 0) {
+        return CM_QP_RD_FAIL;
+    }
+    for (off = 0; off < bytes; off += 4) {
+        got = prefix(context, bdf, scratch, off + 4);
+        if (got < off + 4) {
+            if (off == 0) {
+                return got == 2 ? CM_QP_RD_ABSENT : CM_QP_RD_FAIL;
+            }
+            for (i = off; i < bytes; i++) {
+                buf[i] = 0xFF;
+            }
+            return CM_QP_RD_OK;
+        }
+        for (i = 0; i < 4; i++) {
+            buf[off + i] = scratch[off + i];
+        }
+    }
+    return CM_QP_RD_OK;
+}
+
 ULONG CmQpciAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
                    PULONG info)
 {

@@ -767,8 +767,79 @@ static void test_reserved_speed(void)
     CHECK(widest(text) <= 79, "79 columns at the deepest indent");
 }
 
+/* The DWORD-by-DWORD reader (CmQpciReadByDword) over a modelled HAL whose
+ * longest answer is `limit` bytes, as Windows 98 SE's answered prefixes
+ * and not one 256-byte read. */
+static ULONG halLimit;
+static ULONG halCalls;
+static int halAbsent;
+
+static ULONG model_prefix(PVOID ctx, ULONG bdf, UCHAR *buf, ULONG bytes)
+{
+    ULONG i;
+
+    (void)ctx;
+    (void)bdf;
+    halCalls++;
+    if (halAbsent) {
+        return 2;
+    }
+    if (bytes > halLimit) {
+        return 0;
+    }
+    for (i = 0; i < bytes; i++) {
+        buf[i] = (UCHAR)i;
+    }
+    return bytes;
+}
+
+static void test_by_dword(void)
+{
+    UCHAR cfg[256];
+    UCHAR scratch[256];
+    ULONG i;
+    int ok;
+
+    halAbsent = 0;
+    halLimit = 256;
+    halCalls = 0;
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 256, scratch),
+             CM_QP_RD_OK, "whole");
+    CHECK_EQ(halCalls, 64, "one prefix a DWORD");
+    ok = 1;
+    for (i = 0; i < 256; i++) {
+        ok &= cfg[i] == (UCHAR)i;
+    }
+    CHECK(ok, "every byte in place");
+
+    /* A HAL that answers no more than 0x60 bytes: the header kept, the
+     * rest all ones. */
+    halLimit = 0x60;
+    memset(cfg, 0, sizeof(cfg));
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 256, scratch),
+             CM_QP_RD_OK, "partial is an answer");
+    CHECK_EQ(cfg[0x5F], 0x5F, "the last byte read");
+    CHECK_EQ(cfg[0x60], 0xFF, "past it all ones");
+    CHECK_EQ(cfg[0xFF], 0xFF, "to the end");
+
+    /* The first DWORD decides. */
+    halLimit = 2;
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 4, scratch),
+             CM_QP_RD_FAIL, "nothing read");
+    halAbsent = 1;
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 256, scratch),
+             CM_QP_RD_ABSENT, "no function");
+    halAbsent = 0;
+    halLimit = 256;
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 6, scratch),
+             CM_QP_RD_FAIL, "not whole DWORDs");
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 260, scratch),
+             CM_QP_RD_FAIL, "past 256");
+}
+
 int main(void)
 {
+    test_by_dword();
     test_branch();
     test_reserved_speed();
     test_layout();

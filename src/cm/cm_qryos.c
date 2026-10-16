@@ -396,6 +396,13 @@ static VOID cmQPorts(PCM_NHI nhi, PCM_QUERY_DEV q)
         }
     }
     q->PortCount = n;
+    /* Windows 98 SE and ME answer no bus number or address for the NHI's
+     * PDO (cmQBdf): the topology's own reading of its location stands in
+     * (read on 98 SE, record 25 revision 12). */
+    if (q->NhiBdf > 0xFFFFUL && nhi->ReenumOn &&
+        nhi->Reenum.Nhi != XHCI_TBT_NO_BDF) {
+        q->NhiBdf = nhi->Reenum.Nhi;
+    }
 }
 
 /* The answer the device holds until the thread's first publish: the
@@ -766,26 +773,28 @@ static NTSTATUS cmQLog(PCM_QUERY_DEV q, PIRP irp)
     return CmCompleteIrp(irp, STATUS_SUCCESS, info);
 }
 
-/* The PCI answer's reader (cm_qryb.h CM_QP_READ) over HalGetBusData from
- * offset 0: a function that does not answer is reported by the HAL as 2
- * bytes (the vendor id it read); a bus it does not know is a refused read.
+/* One prefix of bdf's configuration space through HalGetBusData from
+ * offset 0, the form cm_reenum.c's reader uses: a function that does not
+ * answer is reported by the HAL as 2 bytes (the vendor id it read); a bus
+ * it does not know is a refused read. IRQL: PASSIVE_LEVEL. */
+static ULONG cmQpPrefix(PVOID context, ULONG bdf, UCHAR *buf, ULONG bytes)
+{
+    UNREFERENCED_PARAMETER(context);
+    return HalGetBusData(PCIConfiguration, XHCI_TBT_BDF_BUS(bdf),
+                         XHCI_TBT_BDF_DEV(bdf) |
+                             (XHCI_TBT_BDF_FN(bdf) << 5),
+                         buf, bytes);
+}
+
+/* The PCI answer's reader (cm_qryb.h CM_QP_READ), one DWORD at a time
+ * (CmQpciReadByDword): Windows 98 SE's HAL answers the prefixes the
+ * topology reads and not one 256-byte read (read on 98 SE, record 25
+ * revision 12). `context` is the request's CM_QP_CFG_BYTES scratch.
  * IRQL: PASSIVE_LEVEL. */
 static ULONG cmQpRead(PVOID context, ULONG bdf, UCHAR *buf, ULONG bytes)
 {
-    ULONG got;
-
-    UNREFERENCED_PARAMETER(context);
-    got = HalGetBusData(PCIConfiguration, XHCI_TBT_BDF_BUS(bdf),
-                        XHCI_TBT_BDF_DEV(bdf) |
-                            (XHCI_TBT_BDF_FN(bdf) << 5),
-                        buf, bytes);
-    if (got >= bytes) {
-        return CM_QP_RD_OK;
-    }
-    if (got == 2) {
-        return CM_QP_RD_ABSENT;
-    }
-    return CM_QP_RD_FAIL;
+    return CmQpciReadByDword(cmQpPrefix, NULL, bdf, buf, bytes,
+                             (UCHAR *)context);
 }
 
 /* IRP_MJ_DEVICE_CONTROL's CM_QP_IOCTL (record 25 section 4.7): what to
@@ -837,7 +846,7 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
     if (connected) {
         in.ReadBelow = (ULONG)cmQNt();
         in.Read = cmQpRead;
-        in.Context = NULL;
+        in.Context = q->PciScratch;
         bytes = CmQpciBuild(q->Pci, CM_QP_MAX_BYTES, &in);
         KeAcquireSpinLock(&q->Lock, &irql);
         connected = q->Connected;
