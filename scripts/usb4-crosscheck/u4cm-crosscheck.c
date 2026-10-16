@@ -150,6 +150,18 @@ USB4Dialect usb4_device_dialect(USB4Device *d)
     return d->dialect;
 }
 
+/* usb4-emu QEMU fork 2a893ea: the TB3 dock's link controller UUID (the
+ * derived one, usb4-device's default) and the backpressure resume the
+ * fabric calls when a configuration hold ends (this shim never holds). */
+bool usb4_device_lc_uuid_captured(USB4Device *d)
+{
+    return false;
+}
+
+void usb4_host_tx_resume(USB4Host *h)
+{
+}
+
 const char *usb4_device_nvme_drive(USB4Device *d)
 {
     return "disk0";
@@ -472,6 +484,7 @@ static void cm_poll(int ticks)
 
 static USB4Device dev1 = { .serial = "USB4EMU01" };
 static USB4Device dev2 = { .serial = "USB4EMU02" };
+static USB4Device dock = { .serial = "USB4EMU03", .dialect = USB4_DIALECT_TB3 };
 
 static const char *model_name(USB4HostModel m)
 {
@@ -700,6 +713,31 @@ static void test_asm2464_preos(unsigned long clean)
 }
 #endif
 
+/* Task 40-A.8, record 22 section 8: the TB3 dock model (the CalDigit
+ * TS3 Plus of the Framework 13 capture, usb4-device dialect=tb3) on a
+ * USB4 host - USB4 Version 02h, Upstream Adapter 0 at power-on. */
+static void test_tb3_dock(USB4HostModel model)
+{
+    printf("== %s: Thunderbolt 3 dock on port 1, unplug, re-plug\n", model_name(model));
+    new_fabric(model, false);
+    CHECK(usb4_fabric_attach(fab, 1, &dock, NULL), "attach the dock");
+    CHECK(cm_start(true) == 0, "start");
+    CHECK(ST(1) == (unsigned long)xc_state_up(), "dock: port 1 UP (state %lu why %lu)",
+          ST(1), WHY(1));
+    CHECK(usb4_fabric_tunnel_state(fab, 1) == USB4_TUNNEL_UP, "the model's PCIe tunnel up");
+    CHECK(!xc_get(XC_USB3_UP, 1), "no USB3 tunnel over a Thunderbolt 3 link");
+    usb4_fabric_detach(fab, 1);
+    cm_poll(2);
+    CHECK(ST(1) == (unsigned long)xc_state_empty(), "unplug: EMPTY (state %lu)", ST(1));
+    CHECK(usb4_fabric_attach(fab, 1, &dock, NULL), "re-attach the dock");
+    cm_poll(4);
+    CHECK(ST(1) == (unsigned long)xc_state_up(), "re-plug: UP (state %lu why %lu)",
+          ST(1), WHY(1));
+    CHECK(usb4_fabric_tunnel_state(fab, 1) == USB4_TUNNEL_UP, "the model's tunnel up again");
+    xc_stop();
+    usb4_fabric_detach(fab, 1);
+}
+
 static void test_empty(void)
 {
     printf("== nothing attached\n");
@@ -727,6 +765,8 @@ int main(int argc, char **argv)
     test_asm2464_preos(0);
     test_asm2464_preos(2);
 #endif
+    test_tb3_dock(USB4_HOST_MODEL_MINIMAL);
+    test_tb3_dock(USB4_HOST_MODEL_INTEL_ADL);
     test_empty();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
