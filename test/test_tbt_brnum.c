@@ -922,7 +922,7 @@ static VOID test_windows_more(VOID)
              XHCI_TBT_BRNUM_DONE, "numbered");
     CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "windowed");
     CHECK_EQ(r.Align[1], 0x200000UL, "the downstream port aligned to 2 MiB");
-    CHECK_EQ(r.Need[1], 0x400000UL, "4 MiB: 2 MiB and one alignment unit");
+    CHECK_EQ(r.Need[1], 0x200000UL, "2 MiB, a multiple of its own alignment");
     CHECK_EQ((((m.N[dsp].Mem & 0xFFF0UL) << 16) & 0x1FFFFFUL), 0, "its base 2 MiB aligned");
     CHECK_EQ((m.N[dsp].Mem & 0xFFF0UL) >= (m.N[usp].Mem & 0xFFF0UL), 1, "inside the upstream port window");
     CHECK_EQ((m.N[usp].Mem & 0xFFF0UL) >= 0xD410UL, 1, "inside the port window");
@@ -1224,8 +1224,10 @@ static VOID test_round4(VOID)
     CHECK_EQ(m.N[dsp].Buses, 0x00080807UL, "the downstream port numbered all the same");
     CHECK_EQ(m.N[dsp].Mem, 0x0000FFF0UL, "with its window closed");
 
-    /* A window of 6 MiB, a bridge needing 4 MiB aligned to 2 MiB and a
-     * 2 MiB BAR beside it: refused, since alignment may leave gaps. */
+    /* A window of 6 MiB (10100000-106FFFFF), a bridge needing 2 MiB
+     * aligned to 2 MiB and a 2 MiB BAR beside it: the usable part is
+     * 10200000-105FFFFF, the BAR's region at its bottom, the bridge's
+     * window at its top. */
     mreset();
     ioreset(TRUE);
     port = mport(0x06, 0x2A);
@@ -1237,8 +1239,58 @@ static VOID test_round4(VOID)
     m.N[sib].BarSize[0] = 0x200000UL;
     CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
              XHCI_TBT_BRNUM_DONE, "numbered");
-    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_NO_ROOM, "the alignment slack does not fit");
-    CHECK_EQ(m.N[usp].Mem, 0, "nothing written");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "it fits");
+    CHECK_EQ(m.N[usp].Mem, 0x10501040UL, "the bridge at 10400000-105FFFFF, above the BAR's region");
+
+    /* A 33 MiB window 10100000-121FFFFF; a bridge needing 16 MiB aligned
+     * to 8 MiB, one needing 1 MiB, and an 8 MiB BAR beside them: the
+     * A-aligned part is 10800000-11FFFFFF, 24 MiB, short of 8 + 16 + 1. */
+    {
+        ULONG b1, b2, e1, e2, e3;
+
+        mreset();
+        ioreset(TRUE);
+        port = mport(0x06, 0x2A);
+        m.N[port].Mem = 0x121F1010UL;
+        b1 = madd(port, 0, 0, ID_ASM, 1, 0);
+        e1 = madd(b1, 0, 0, ID_NVME, 0, 0);
+        e2 = madd(b1, 1, 0, ID_NVME, 0, 0);
+        m.N[e1].BarSize[0] = 0x800000UL;
+        m.N[e2].BarSize[0] = 0x800000UL;
+        b2 = madd(port, 1, 0, ID_ASM, 1, 0);
+        e3 = madd(b2, 0, 0, ID_NVME, 0, 0);
+        m.N[e3].BarSize[0] = 0x100000UL;
+        sib = madd(port, 2, 0, ID_EMU, 0, 0);
+        m.N[sib].BarSize[0] = 0x800000UL;
+        CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+                 XHCI_TBT_BRNUM_DONE, "numbered");
+        CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_NO_ROOM, "the aligned part is too small");
+        CHECK_EQ(m.N[b1].Mem, 0, "nothing written");
+
+        /* With 8 MiB more at the top it fits: the 8 MiB-aligned window
+         * first from the top, the 1 MiB one below it, the BAR's 8 MiB
+         * region at the bottom. */
+        mreset();
+        ioreset(TRUE);
+        port = mport(0x06, 0x2A);
+        m.N[port].Mem = 0x129F1010UL;
+        b1 = madd(port, 0, 0, ID_ASM, 1, 0);
+        e1 = madd(b1, 0, 0, ID_NVME, 0, 0);
+        e2 = madd(b1, 1, 0, ID_NVME, 0, 0);
+        m.N[e1].BarSize[0] = 0x800000UL;
+        m.N[e2].BarSize[0] = 0x800000UL;
+        b2 = madd(port, 1, 0, ID_ASM, 1, 0);
+        e3 = madd(b2, 0, 0, ID_NVME, 0, 0);
+        m.N[e3].BarSize[0] = 0x100000UL;
+        sib = madd(port, 2, 0, ID_EMU, 0, 0);
+        m.N[sib].BarSize[0] = 0x800000UL;
+        CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+                 XHCI_TBT_BRNUM_DONE, "numbered");
+        CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "fits");
+        CHECK_EQ(m.N[b1].Mem, 0x12701180UL, "the 16 MiB window at 11800000-127FFFFF");
+        CHECK_EQ(m.N[b2].Mem, 0x11701170UL, "the 1 MiB window just below it");
+        CHECK_EQ(wbase(m.N[b2].Mem) >= 0x10800000UL + 0x800000UL, 1, "above the BAR's 8 MiB region");
+    }
 }
 
 int main(void)

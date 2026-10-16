@@ -441,11 +441,14 @@ static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
 
 /*
  * The memory the functions of `bus` need, in *need, with the largest
- * alignment any of it takes in *align: their BARs, and for each
+ * alignment any of it takes in *align (A): the BARs of the functions on
+ * the bus rounded up together to A, a region that starts A-aligned at the
+ * bottom of the window and holds them packed largest first, plus for each
  * journalled bridge the window its subtree needs (Need[] and Align[]: the
- * subtree rounded up to its alignment, at least 1 MiB, with one more
- * alignment unit where that is above 1 MiB, so the items fit whatever
- * order they are placed in). 0, or a refusal.
+ * subtree's own need rounded up to its alignment, at least 1 MiB). The
+ * windows go on top, largest alignment first from an A-aligned top, so
+ * they pack with no gap and never reach into the BARs' region. 0, or a
+ * refusal.
  */
 static ULONG brNeed(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG need,
                     PULONG align)
@@ -463,9 +466,13 @@ static ULONG brNeed(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG need,
     ULONG subAlign;
     ULONG size;
     ULONG rc;
+    ULONG bars;
+    ULONG wins;
 
     *need = 0;
     *align = 0;
+    bars = 0;
+    wins = 0;
     if (depth > XHCI_TBT_BRNUM_MAX_DEPTH) {
         return XHCI_TBT_BRWIN_ACCESS;
     }
@@ -490,7 +497,7 @@ static ULONG brNeed(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG need,
                 first = multi;
             }
             if (layout == 0) {
-                rc = brBars(c, bdf, 0x24UL, need, align);
+                rc = brBars(c, bdf, 0x24UL, &bars, align);
                 if (rc != 0) {
                     return rc;
                 }
@@ -501,7 +508,7 @@ static ULONG brNeed(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG need,
                     c->R->WinWhere = bdf;
                     return XHCI_TBT_BRWIN_ACCESS;
                 }
-                rc = brBars(c, bdf, 0x14UL, need, align);
+                rc = brBars(c, bdf, 0x14UL, &bars, align);
                 if (rc != 0) {
                     return rc;
                 }
@@ -518,15 +525,14 @@ static ULONG brNeed(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG need,
                         subAlign = BRWIN_GRAIN;
                     }
                     size = brRound(sub, subAlign);
-                    if (size == 0 ||
-                        (subAlign > BRWIN_GRAIN && !brAdd(&size, subAlign))) {
+                    if (size == 0) {
                         c->R->WinWhere = bdf;
                         return XHCI_TBT_BRWIN_NO_ROOM;
                     }
                 }
                 c->R->Need[k] = size;
                 c->R->Align[k] = subAlign;
-                if (!brAdd(need, size)) {
+                if (!brAdd(&wins, size)) {
                     c->R->WinWhere = bdf;
                     return XHCI_TBT_BRWIN_NO_ROOM;
                 }
@@ -538,6 +544,16 @@ static ULONG brNeed(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG need,
                 break;
             }
         }
+    }
+    if (bars != 0) {
+        bars = brRound(bars, *align);
+        if (bars == 0) {
+            return XHCI_TBT_BRWIN_NO_ROOM;
+        }
+    }
+    *need = bars;
+    if (!brAdd(need, wins)) {
+        return XHCI_TBT_BRWIN_NO_ROOM;
     }
     return 0;
 }
@@ -792,10 +808,14 @@ static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
     ULONG plimit;
     ULONG need;
     ULONG align;
+    ULONG top;
+    ULONG bottom;
     ULONG k;
     ULONG rc;
 
     r = c->R;
+    top = 0;
+    bottom = 0;
     for (k = 0; k < c->Count; k++) {
         if (!brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_COMMAND, &r->WasCmd[k]) ||
             !brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_IOWIN, &r->WasIo[k]) ||
@@ -821,16 +841,22 @@ static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
     }
     rc = brNeed(c, secondary, 0, &need, &align);
     r->WinNeed = need;
-    /* One more unit of an alignment above 1 MiB: the gap aligned windows
-     * may leave below them is not counted in the sum, and the BARs beside
-     * the chain need the rest. */
-    if (rc == 0 && ((align > BRWIN_GRAIN && !brAdd(&need, align)) ||
-                    need > plimit - pbase + 1UL)) {
-        r->WinWhere = port;
-        rc = XHCI_TBT_BRWIN_NO_ROOM;
+    if (rc == 0) {
+        /* The port's window only 1 MiB-aligned: its usable part runs from
+         * its base rounded up to A to its top rounded down to A, the BARs'
+         * region at the bottom of that, the windows packed below its top. */
+        if (align < BRWIN_GRAIN) {
+            align = BRWIN_GRAIN;
+        }
+        top = (plimit + 1UL) & ~(align - 1UL);
+        bottom = brRound(pbase, align);
+        if (bottom == 0 || top < bottom || top - bottom < need) {
+            r->WinWhere = port;
+            rc = XHCI_TBT_BRWIN_NO_ROOM;
+        }
     }
     if (rc == 0) {
-        rc = brPlace(c, secondary, plimit + 1UL, pbase, 0);
+        rc = brPlace(c, secondary, top, bottom, 0);
     }
     if (rc != 0) {
         brWinUndo(c);

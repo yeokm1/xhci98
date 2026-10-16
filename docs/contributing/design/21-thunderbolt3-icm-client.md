@@ -1538,8 +1538,8 @@ emulator's earlier NVMe legs passed because its i440FX model puts the NVMe
 directly on the tunnel bridge's secondary bus, with no bridge between.
 
 **What the driver does.** Before each `Reenumerate_DevNode` of a member
-(section 6.1, step 3), the 9x worker sets up the bridges below it as the
-BIOS does at POST (`tbt_brnum.c`), on these conditions: the request is
+(section 6.1, step 3), the 9x worker sets up the bridges below it in the
+way the BIOS does at POST, with placements of its own (`tbt_brnum.c`), on these conditions: the request is
 still current and healthy (no newer post for the member, no
 `CONTROLLER_UNAVAILABLE` since: checked again before every write), and
 the member's devnode has no child in CONFIGMG's tree, so a subtree
@@ -1556,7 +1556,10 @@ is never renumbered under it.
    Request Retry Status (vendor id `0001h`) is not ready: the whole
    attempt is undone and made again 100 ms later; so is an empty
    secondary bus while the port reads link-up (the switch behind it
-   still training); twenty attempts at most, two seconds.
+   still training), and, on every attempt but the last, an empty bus
+   behind a bridge just numbered (a link below it still training);
+   twenty attempts at most, two seconds. A bridge with an empty slot
+   costs those two seconds and is then numbered as it is.
 3. **Bus numbers.** Depth first from the secondary bus, each type 1
    function in reset state is given primary = its bus, secondary = the
    next free bus from the member's secondary + 1, and subordinate = the
@@ -1567,14 +1570,17 @@ is never renumbered under it.
    written, read back, the value read first written back; only on a
    function whose Memory Space Enable is clear, else nothing more is
    done; a BAR over 1 GiB, or a 64-bit one of 4 GiB or more, refuses the
-   windows), each bridge's window is the memory its subtree needs rounded
-   up to the subtree's largest alignment and at least 1 MiB, with one
-   more alignment unit where that is above 1 MiB (closed where nothing
-   behind it decodes memory), and the windows are placed from the top of
-   the member's own memory window downward, the largest alignment first
-   so they pack with no gap, each subtree inside its bridge's window from
-   that window's top, so the bottom of the member's window stays free for
-   any endpoint beside the chain. Each bridge's I/O and prefetchable
+   windows). At each level the BARs of the functions on that bus take a
+   region at the bottom, rounded up together to the level's largest
+   alignment A and starting A-aligned, and each bridge on it a window
+   the size of what its subtree needs, rounded up to the subtree's own
+   alignment and at least 1 MiB (closed where nothing behind it decodes
+   memory, and so is everything below a closed one). The windows are
+   placed from the A-aligned top of the member's own memory window
+   downward, the largest alignment first so they pack with no gap and
+   never reach into the BARs' region, each subtree the same way inside
+   its bridge's window; a member whose A-aligned part is smaller than
+   the total gets no window at all. Each bridge's I/O and prefetchable
    windows are closed, and its Memory Space and Bus Master Enable set. A
    member with no memory window, or one too small for the chain and the
    BARs beside it, gets the bus numbers alone.
@@ -1619,9 +1625,16 @@ bus numbers alone, PCI.VXD re-read both ASMedia bridges (their LogConfig
 was rewritten) but left the first at Code 29 with its windows closed and
 no IRQ; with the windows as well, both bridges started with
 `E0000000h`-`E00FFFFFh`, inside the port's `D4100000h`-`E00FFFFFh`, and
-the NVMe appeared, at Code 29 for want of an IRQ; the interrupt lines
-are the third step. `XhciCmBridgeDiag` (section 8) recorded each
-attempt.
+the NVMe appeared, at Code 29 for want of an IRQ; with the interrupt
+lines as well, the NVMe started on IRQ 10 with its BARs at
+`E0000000h`-`E0005FFFh` and its drive letter came up. The first
+prototype wrote no diagnostic; the second wrote `XhciCmBridgeDiag` with
+18 dwords, the third and this record's layout with 20. The driver puts
+the windows at the top of the port's window (`E0000000h`); the BIOS,
+with the enclosure present at power-on, had put them at its bottom
+(`D4100000h`-`D41FFFFFh`). Either is inside the port's window, which is
+what PCI.VXD checks; the placement is this driver's, not a copy of the
+BIOS's.
 
 Why the windows too: in the emulator, with the bus numbers alone, PCI.VXD
 found the second bridge and the NVMe behind it (it never did before), but
