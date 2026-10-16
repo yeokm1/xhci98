@@ -1123,7 +1123,9 @@ static int scan_nt(void)
 /* 98 and ME: an xHCI controller whose New Hardware wizard was cancelled has
  * no devnode until the next start, only its HKLM\Enum\PCI entry. List such
  * an entry as a controller with no driver, so the printed steps name it;
- * nothing is installed on 98 and ME either way (record 23 section 6). */
+ * nothing is installed on 98 and ME either way (record 23 section 6). The
+ * same for a Thunderbolt NHI that xhcicm.inf matches, so the Thunderbolt
+ * question sees it (inst_reg9x_listed). */
 static void registry_controllers_9x(void)
 {
     HKEY pci;
@@ -1199,7 +1201,11 @@ static void registry_controllers_9x(void)
             reg9x_value(d->Id, "DeviceDesc", d->Desc, sizeof(d->Desc));
             d->HwBytes = (DWORD)inst_ids_split(d->Hw, sizeof(d->Hw));
             d->CompatBytes = (DWORD)inst_ids_split(d->Compat, sizeof(d->Compat));
-            if (!is_controller(d) || d->Driver[0] != '\0') {
+            if (!inst_reg9x_listed(d->Hw, d->HwBytes, d->Compat,
+                                   d->CompatBytes,
+                                   infText[INST_INF_CM] != NULL
+                                       ? &infIds[INST_INF_CM] : NULL,
+                                   d->Driver[0] != '\0')) {
                 continue;
             }
             d->Present = 1;
@@ -1223,7 +1229,8 @@ static void registry_controllers_9x(void)
  * Hardware wizard was cancelled: the id cannot tell. It stays listed, with
  * what to do in either case, and stays a step; it only does not make the
  * confirmation speak of an install (orchestrator decision 2026-10-15,
- * owner to confirm). 1 when d is such an entry. */
+ * owner to confirm). The same for a Thunderbolt NHI's entry and a present
+ * NHI with a driver. 1 when d is such an entry. */
 static int old_slot_suspect(const DEVREC *d)
 {
     int j;
@@ -1234,7 +1241,8 @@ static int old_slot_suspect(const DEVREC *d)
     for (j = 0; j < devCount; j++) {
         const DEVREC *o = &devs[j];
         if (o != d && o->Present && !o->RegOnly && o->Driver[0] != '\0' &&
-            is_controller(o) && inst_eq(first_hw(o), first_hw(d))) {
+            (is_controller(o) || o->Inf == INST_INF_CM) &&
+            inst_eq(first_hw(o), first_hw(d))) {
             return 1;
         }
     }

@@ -862,6 +862,17 @@ int inst_tb_answer(const char *line, int defaultYes);
  * Each argument is 1 when that handle is the console. */
 int inst_out_mirror(int outIsConsole, int errIsConsole, int inIsConsole);
 
+/* 98 and ME (record 23 section 6.3): whether an HKLM\Enum\PCI entry that
+ * has no devnode - its New Hardware wizard was cancelled - is listed. An
+ * entry with a driver never is; one without is listed when it is an xHCI
+ * controller (class 0C0330) or a device xhcicm.inf matches (cm, its ids
+ * for this system; NULL when the package carries none), so the NHI's
+ * Thunderbolt question defaults right. hw and compat are split
+ * multi-strings. */
+int inst_reg9x_listed(const char *hw, size_t hwBytes, const char *compat,
+                      size_t compatBytes, const INST_IDLIST *cm,
+                      int hasDriver);
+
 /* ---- the USB tree tool (record 23 section 9.5, record 25 section 8) ---------- */
 
 /* The contract with XHCITR: its hidden tray window's class, the event that
