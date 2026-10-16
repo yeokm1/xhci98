@@ -10,6 +10,12 @@ rem   INSTALL /uninstall remove the drivers (asks for the word REMOVE)
 rem   INSTALL /thunderbolt  include the Thunderbolt 3 / USB4 support without
 rem                      asking (otherwise it is asked)
 rem   INSTALL /notray    install without starting the xHCI98 USB Tree at login
+rem   INSTALL /to path   install the xHCI98 tools (and on 98 SE and ME the
+rem                      package copy the hardware wizards search) in that
+rem                      directory without asking; otherwise it is asked,
+rem                      Enter giving C:\XHCI98 on the system's drive, or
+rem                      where an earlier install put them. Not /dir, which
+rem                      names the package's own driver directory
 rem   INSTALL /devices   show the connected Thunderbolt and USB4 devices
 rem   INSTALL /eject     remove one of them safely (Windows 98 SE and ME:
 rem                      the way to do it; 2000 and later: also for a

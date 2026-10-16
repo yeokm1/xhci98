@@ -1,6 +1,9 @@
 @echo off
 rem selftest.cmd - XHCIINST.EXE's and XHCIIN64.EXE's -selftest, their switch
 rem refusals and their import tables (design record 23 sections 10 and 11).
+rem -selftest also renders every screen of an interactive and a listing run
+rem with made-up devices and fails on a line wider than 79 columns
+rem (XHCIINST_SCREENS=1 shows them; owner, 2026-10-16).
 rem Nothing here touches a device, the registry or a file outside this
 rem directory. The pure half's full suite is test\test_inst.c, which
 rem test\run-host-tests.cmd runs.
@@ -105,6 +108,17 @@ if not "%ERRORLEVEL%"=="1" (
 ".\%~1" /selftest /list >nul 2>&1
 if not "%ERRORLEVEL%"=="1" (
     echo ERROR: %~1 /selftest /list was not refused with exit 1
+    exit /b 1
+)
+rem /to names the install directory of an install, nothing else.
+".\%~1" /uninstall /to C:\XHCI98 >nul 2>&1
+if not "%ERRORLEVEL%"=="1" (
+    echo ERROR: %~1 /uninstall /to was not refused with exit 1
+    exit /b 1
+)
+".\%~1" /to >nul 2>&1
+if not "%ERRORLEVEL%"=="1" (
+    echo ERROR: %~1 /to with no path was not refused with exit 1
     exit /b 1
 )
 echo %~1: switch refusals behaved

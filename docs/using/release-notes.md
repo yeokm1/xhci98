@@ -298,7 +298,11 @@ and works: `xhcicm.sys` never resets a tunnel it finds at its start
 ### The xHCI98 USB Tree
 
 `XHCITR.EXE` (`XHCITR64.EXE` on XP x64, Vista x64 and 7 x64) is installed
-by `INSTALL.BAT` in `%windir%\XHCI98\` and started at login as an icon in
+by `INSTALL.BAT` in the install directory it asks for (`C:\XHCI98` on
+the system's drive unless another is chosen, or given with `INSTALL /to
+<path>`; an update keeps the directory an earlier install used, test
+builds' `%windir%\XHCI98\` included, unless another is chosen, when the
+tool moves it) and started at login as an icon in
 the notification area (`INSTALL /notray` leaves the icon out). It runs as
 the logged-on user, with no administrator rights.
 
@@ -1250,7 +1254,10 @@ ME; run it as an administrator on Windows 2000 and XP; on Vista and 7
 right-click it and choose Run as administrator.
 
 It shows the devices it found and what it will do with each, asks about a
-few of the driver's options (below), asks once (`Y`), and then:
+few of the driver's options (below), each choice on its own line and
+"Enter for [x]" saying what Enter keeps, asks for the install directory of
+its tools (`C:\XHCI98` unless another is chosen, or `INSTALL /to <path>`),
+asks once (`Y`, or Enter), and then:
 
 - **Windows 2000, XP, XP x64, Vista and 7**: it installs or updates every
   driver of the package on the devices present, with the routine Windows
@@ -1285,12 +1292,14 @@ few of the driver's options (below), asks once (`Y`), and then:
   Windows 98 SE and ME never see it, and Vista and 7 accept it only with
   its driver file beside it.
 - **Windows 98 SE and ME**: the tool stages the files and you finish the
-  installation in Device Manager. It copies the package to that same
-  folder, adds the folder to
-  `DevicePath`, the list of places Windows' hardware wizards search, and
-  prints the Device Manager clicks that remain for each device, with the
-  folder to type if a wizard does not find the driver by itself. Run it
-  again after the restart to see the result and set the options.
+  installation in Device Manager. It copies the package's drivers into
+  the install directory itself (`C:\XHCI98` by default; on these systems
+  a path of short names with no spaces), adds that folder to
+  `DevicePath`, the list of places Windows' hardware wizards search,
+  prints the Device Manager steps that remain for each device as a short
+  numbered list with the folder to type, and offers to open Device
+  Manager. Run it again after the restart to see the result and set the
+  options.
 
 It never runs `XHCICLN`. At the end, if an update from `2.3.x` or earlier
 left old `XHCI98\` entries, it says so in one line: nothing needs them
