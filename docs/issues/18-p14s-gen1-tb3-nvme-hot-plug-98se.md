@@ -152,6 +152,16 @@ A last change after these readings covers two cases the P14s chain does
 not reach (a link behind a newly numbered bridge still training, and a
 sibling BAR beside windows aligned above 1 MiB); the release carries it.
 
+The re-open of a stopped chain (record 21 section 6.1.1, "A stopped
+chain given back") was read on the P14s on 2026-10-17 with the release
+`xhcicm.sys` of `9d9eb970` alone replaced: in three captures, h to j, D:
+present, every problem code 0, and `XhciCmBridgeDiag` showing outcome 1
+(numbered afresh) each time, never 12 (re-opened), with the same
+bridges, windows and words 18 and 19 as series f. The P14s resets the
+chain on unplug, so it is numbered afresh and the new path is not
+reached there; the emulator, which gives the chain back unreset, is
+where it runs (`runs/run-41.md`).
+
 ## 9. Rules kept
 
 - **Ask for the registry, not a debugger.** A release-build value in the
@@ -166,8 +176,9 @@ sibling BAR beside windows aligned above 1 MiB); the release carries it.
 
 - `temp\p14-resource\` (git-ignored, the owner's captures, 2026-10-16):
   for each series a to e, `xhcitr-report-<s>.txt`, `enumpci_<s>` or
-  `enumpci_<s>.reg`, `dyncm_<s>.reg` and `<s>.prn`. Not tracked, and not
-  quoted beyond the values above.
+  `enumpci_<s>.reg`, `dyncm_<s>.reg` and `<s>.prn`; and the series h to
+  j captures (2026-10-17). Not tracked, and not quoted beyond the values
+  above.
 - The owner's reports of 2026-10-16 (section 2).
 - Issue 17; design record 21 sections 1.1 and 6.1.1; `src/cm/cm_statb.h`,
   `src/cm/tbt_brnum.h`.
