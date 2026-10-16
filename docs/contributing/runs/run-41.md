@@ -939,11 +939,26 @@ The dialog's text fits at 800 x 600; the list shows about five lines, so
 the xhcicm reading is below a scroll. The list opened with its text
 selected; Set takes the focus since ca233507 (not re-read on a guest).
 
-### Windows 98 SE: owed
+### Windows 98 SE: pass
 
-The leg (install, 3 for both with "Set", the restart, a registry export,
-`/report` and the dialog at 3, back to 2) was running when this section
-was written; its result is owed here.
+Installed from `D:\PKG\INSTALL` with the Thunderbolt question answered Y,
+the restart, and the usual Add New Hardware wizards. The tree listed both
+xhci98 controllers and the Thunderbolt 3 controller ("[ICM], active");
+the dialog's button reads "Set", with no elevation, and the dialog fits a
+640 x 480 screen whole.
+
+- 3 for both, Set: the same two "set to 3 - adds port status" lines and
+  the restart question; Yes restarted Windows.
+- After the restart: `regedit /e` of `...\Services\Class` held
+  `XhciLogVerbosity`=dword:00000003 in both controllers' keys and
+  `XhciLogVerbosity` and `XhciCmLogVerbosity`=dword:00000003 in the
+  Thunderbolt 3 controller's; `XHCITR /report` read "Logging level: 3 -
+  adds port status" for each, `(XhciCmLogVerbosity)` for the host
+  interface.
+- 2 for both, Set: "xhci98: XhciLogVerbosity set to 2 - the log
+  (default), for 2 controllers.", "xhcicm: XhciCmLogVerbosity set to 2 -
+  the log (default), for 1 host interface."; the dialog then read "2 - the
+  log (default)" for every device and "Now: 2" for both.
 
 Evidence: `E:\xhci98-vm\tr-loglevel\` - `shots\lv7-*` and `lv98-*`,
 `pids.txt`, `RECIPE.txt`; the cut's log `E:\xhci98-wt\tr-loglevel\out\cut-x86.txt`.
