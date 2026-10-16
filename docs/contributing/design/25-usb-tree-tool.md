@@ -278,8 +278,8 @@ branch, marked "(behind <router name>)".
   `XhciLogVerbosity` (xhcicm: `XhciCmLogVerbosity`); when it is off, why and how to turn it on; the
   counters; the log, oldest record first, as the driver wrote it, one
   `label=XXXXXXXX` record a line.
-- **Recording off.** The tool never writes the registry (it runs as the
-  user):
+- **Recording off.** Reading a log writes nothing; the levels are set in
+  section 7.5's dialog (revision 13). The node's advice:
   - xhci98, level 0 (the driver does not answer) or 1 (counters only):
     "To record the log, run SNAPON.BAT from the package's
     tools\xhcisnap folder, then restart Windows." On 2000 and later the

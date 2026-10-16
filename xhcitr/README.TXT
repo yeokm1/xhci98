@@ -130,7 +130,8 @@ driver records by default):
            the item names (on Windows 2000 and later as an
            administrator), then restart Windows.
 
-The tool itself changes no setting.
+Reading a log changes nothing; Logging level (below) is the one setting
+the tool writes.
 
 PCI configuration
 -----------------

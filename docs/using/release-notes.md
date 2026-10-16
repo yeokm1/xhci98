@@ -3389,8 +3389,9 @@ addresses); an update keeps the value an earlier install wrote, which was
 `0`, off, until `2.4.0.0`. Recording costs a little speed: on one machine
 (a ThinkPad P14s Gen 1 under 98 SE, a USB disk) about 1 to 2% at large
 transfers and up to about 5% at small ones. For the last few percent set
-the level to `0` with `SNAPOFF.BAT` (or the xHCI98 USB Tree's Logging
-level, where the tool offers it), and restart.
+the level to `0` in the xHCI98 USB Tree's View > Logging level... (for
+either driver; `SNAPOFF.BAT` still does it for `xhci98.sys`), and
+restart.
 
 From `2.4.0.0` three batch files beside it do the typing, on every Windows
 the driver runs (under `COMMAND.COM` on 98 SE and ME, `cmd.exe` from 2000 to
@@ -3537,7 +3538,9 @@ The tool reads `xhci98.sys` through a query request of the driver's own,
 as it reads `xhcicm.sys`, with no `SNAPON.BAT` needed; an `xhci98.sys`
 older than `3.0.0.0` is read through `XHCISNAP`'s channel as before.
 Both drivers record at level 2 by default. Where a driver's recording
-is off, the node says how to turn it on:
+is off, the node says how to turn it on; View > Logging level... (or a
+right click on the node) sets either driver's level directly, asking for
+administrator rights on 2000 to 7 when the user has none:
 
 - **`xhci98.sys`**: it records at level 2 after a fresh install. Where an
   earlier install left it off, run `SNAPON.BAT` as above (on Vista and 7,
@@ -3547,9 +3550,9 @@ is off, the node says how to turn it on:
 - **`xhcicm.sys`**: set the DWORD value `XhciCmLogVerbosity` to `2` on the
   Thunderbolt or USB4 controller's driver key, then restart Windows. The
   node names the key in full (the "Driver key" its details show, under
-  `HKEY_LOCAL_MACHINE`). On 2000 and later that needs an administrator; the
-  tool itself never writes the registry. Its counters are shown whatever
-  the level.
+  `HKEY_LOCAL_MACHINE`). On 2000 and later that needs an administrator.
+  Reading the log writes nothing. Its counters are shown whatever the
+  level.
 
 `xhcicm.sys` also prints its log to a debugger's output (DebugView) when
 `XhciCmLogDebugView` is `1` on the same key, in every build, from its own
