@@ -2189,7 +2189,10 @@ reading of D10 for the owner to confirm.
      restart attaches nothing and re-takes the snapshot.
 
    The child then sits below the function driver the PnP manager loads
-   next, as it does directly on the PDO. The log names the driver found on
+   next, as it does directly on the PDO. It now copies `DeviceType`,
+   `Characteristics` and the buffering and power flags from the device it
+   attached to, as the bridge filter does. That device is the PDO or the
+   top bus filter, and the two need not match. The log names the driver found on
    the PDO: `cm.reenum.child.under` and `under2`, eight characters after
    `\Driver\`, with `under.count` and `decision`. It also counts
    `cm.reenum.child.over`. Windows 2000 with ACPI off attaches as before;

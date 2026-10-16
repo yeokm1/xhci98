@@ -584,32 +584,44 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
     ULONG chainCount;
     ULONG decision;
     PCM_NHI owner;
+    ULONG name0;
+    ULONG name1;
     KIRQL irql;
     NTSTATUS status;
 
+    /* The walk relies on the PDO being new: nothing the PnP manager
+     * builds can attach or detach before this answer reaches it, so the
+     * chain holds still without the I/O manager's database lock. */
     *over = 0;
     chainCount = 0;
+    name0 = 0;
+    name1 = 0;
     walk = pdo->AttachedDevice;
+    if (walk != NULL) {
+        name0 = cmNameChars(walk->DriverObject, 8);
+        name1 = cmNameChars(walk->DriverObject, 12);
+    }
     while (walk != NULL && chainCount <= CM_CHILD_CHAIN_MAX) {
         chain[chainCount] = (PVOID)walk->DriverObject;
         chainCount++;
         walk = walk->AttachedDevice;
     }
+    /* The owner is used under the registration list's lock only: its
+     * delisting (CmReenumStop) takes the same lock, so the NHI cannot
+     * leave while its log is written. Order: cmRegLock, then LogLock. */
     KeAcquireSpinLock(&cmRegLock, &irql);
     decision = CmPortsChildAttach(bridge->SnapTruncated,
                                   (PVOID const *)chain, chainCount,
                                   (PVOID)pdo->DriverObject,
                                   (PVOID)CmDriverObject);
     owner = bridge->Owner;
-    KeReleaseSpinLock(&cmRegLock, irql);
     if (chainCount != 0 && owner != NULL) {
-        CmLogNote(owner, "cm.reenum.child.under",
-                  cmNameChars(pdo->AttachedDevice->DriverObject, 8));
-        CmLogNote(owner, "cm.reenum.child.under2",
-                  cmNameChars(pdo->AttachedDevice->DriverObject, 12));
+        CmLogNote(owner, "cm.reenum.child.under", name0);
+        CmLogNote(owner, "cm.reenum.child.under2", name1);
         CmLogNote(owner, "cm.reenum.child.under.count", chainCount);
         CmLogNote(owner, "cm.reenum.child.decision", decision);
     }
+    KeReleaseSpinLock(&cmRegLock, irql);
     if (decision == CM_CHILD_SKIP) {
         return STATUS_DEVICE_BUSY;
     }
@@ -629,15 +641,20 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
     KeInitializeSpinLock(&child->Lock);
     KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
     CmRegFilterInit(child);
-    self->DeviceType = pdo->DeviceType;
-    self->Characteristics = pdo->Characteristics;
-    self->Flags |= pdo->Flags & DO_POWER_PAGABLE;
     lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (lower == NULL) {
         IoDeleteDevice(self);
         return STATUS_NO_SUCH_DEVICE;
     }
     child->Common.Lower = lower;
+    /* A filter mirrors the device it sits on (as CmFilterAddDevice does),
+     * which since revision 2 may be another driver's bus filter rather
+     * than the PDO. */
+    self->DeviceType = lower->DeviceType;
+    self->Characteristics = lower->Characteristics;
+    self->Flags |= lower->Flags &
+                   (DO_BUFFERED_IO | DO_DIRECT_IO | DO_POWER_PAGABLE |
+                    DO_POWER_INRUSH);
     self->Flags &= ~DO_DEVICE_INITIALIZING;
     *over = (ULONG)(decision == CM_CHILD_ATTACH_OVER);
     return STATUS_SUCCESS;
