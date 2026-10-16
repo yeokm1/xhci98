@@ -119,7 +119,7 @@ program around them, in the shape `XHCICLN` already has.
 ```
 
 Since `3.0.0.0` the release download's `release-x86\` and `release-x64\`
-may also carry Stor98 (formerly nvme98), a separate project's NVMe
+may also carry Stor98, a separate project's NVMe
 driver, bundled unchanged (`build-and-test.md`, "The bundled Stor98
 build"): at the directory's root, every name starting with `stor98`. The
 tool does not install it (section 4.4).

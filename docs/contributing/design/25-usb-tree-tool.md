@@ -1421,7 +1421,7 @@ states, the sizing) and the tool's reader and texts of it in
 - Revision 7: whether a USB disk on 98 SE (NUSB's `usbstor.sys` and
   `USBNTMAP`, or `xhciuas.sys`) and on ME (its own `USBSTOR`) is a devnode
   below the USB device in the configuration manager's tree, as an
-  `nvme98` disk is below its controller; whether a query-remove of the USB
+  Stor98 disk is below its controller; whether a query-remove of the USB
   device is refused while a file is open on its disk; and what each NT
   target leaves of a USB device after its eject (Code 47, or gone). T.7
   read them (section 14).

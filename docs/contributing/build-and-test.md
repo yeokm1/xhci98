@@ -3080,8 +3080,7 @@ binaries are never signed.
 #### The bundled Stor98 build (`3.0.0.0`)
 
 The release download's `release-x86\` and `release-x64\` carry Stor98, a
-separate BSD-3-Clause project's NVMe driver (developed as nvme98 and renamed
-before its first release, `0.3.0.0`), as one of its released builds copied
+separate BSD-3-Clause project's NVMe driver, as one of its released builds copied
 unchanged from its release folder (owner, 2026-10-16). Nothing of it is
 tracked: `make-package.ps1` copies it into the package, and
 `make-release.ps1` into the upload set's two `release-` directories, never
@@ -3089,7 +3088,7 @@ into `releases\<version>\`. Four parameters pin it, and they go together:
 
 | Parameter | What it pins |
 |---|---|
-| `-Stor98Version` | The build, for example `0.3.0.0`. Anything older than `0.3.0.0`, Stor98's first release, is refused: earlier builds were nvme98's, under other file names |
+| `-Stor98Version` | The build, for example `0.3.0.0`. Anything older than `0.3.0.0`, Stor98's first release, is refused|
 | `-Stor98Dir` | Its release folder (the Stor98 repository's `releases\<version>\`), read only |
 | `-Stor98SumsSha256` | The SHA-256 of that folder's `SHA256SUMS.txt`. Checked first; then every file against `SHA256SUMS.txt`, every file in the folder listed there, the release's files present, nothing the layout does not know, every INF's `DriverVer` at the pinned version, and each copy in the package against `SHA256SUMS.txt` again |
 | `-Stor98InterfaceVersion` | The build's link-state interface version (`STOR98LS_VERSION`; `4` for `0.3.0.0`). Compared with `src\cm\stor98cm.h`, the header xhci98 compiles against, and, where the folder carries `include\stor98cm.h`, that file byte for byte with it. A mismatch is refused unless `-Stor98AllowInterfaceMismatch`, which prints the mismatch it overrides |
@@ -3106,7 +3105,7 @@ none of it; `make-package.ps1` run by hand bundles it into whichever flavour
 it is asked for, which is how a debug package for a guest gets it.
 
 The 64-bit `stor98.sys` keeps Stor98's own embedded test signature, by a
-certificate that is neither this project's (design record 19) nor nvme98's,
+certificate that is not this project's (design record 19),
 and `stor98-test.cer` beside it is that certificate's public half, under
 Stor98's own name. Nothing here signs, re-signs or imports it, and no
 installer step is needed: test-signing mode on Vista x64 and 7 x64 loads a

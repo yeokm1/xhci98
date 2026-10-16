@@ -217,7 +217,7 @@ staging and signing nothing.
 
 .PARAMETER Stor98Version
 The Stor98 build to bundle (owner, 2026-10-16), 0.3.0.0 or later: Stor98
-(formerly nvme98) is a separate BSD-3-Clause project, and the package may
+is a separate BSD-3-Clause project, and the package may
 carry one of its released builds, copied unchanged from its release folder,
 never its source. The four -Stor98* pins go together; with none of them the
 package is built as before, with no Stor98. The release folder's x86\ goes to

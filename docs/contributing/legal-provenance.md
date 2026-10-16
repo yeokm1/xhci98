@@ -114,7 +114,7 @@ identification.
 | The two `usbd.sys` builds and Windows 98 SE's `usbhub.sys` | No | `tools/` (git-ignored) | Reference copies, staged from the user's own install media for the import gate's Windows 98 evidence and the Windows 2000 VM setup. The assembled release download carried them from 0.0.0.4 to 1.0.0.0 and carries them no longer; see section 5 |
 | Disassembly extracts taken from those binaries | No | `tools/*-extracted/` (git-ignored) | Convenience copies only; see section 4 |
 | Staged install media | No | `out/` (git-ignored) | Generated; the upload set for a release is assembled here |
-| Stor98 (formerly nvme98) release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled Stor98 build" below |
+| Stor98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled Stor98 build" below |
 | The Windows 98 Second Edition DDK (`win98se_ddk.exe`) | No | `tools/win98ddk/`, extracted into `tools/win98ddk-extracted/` (git-ignored) | Fetched on 2026-10-15 from the Internet Archive for roadmap-usb4 task 39-0.3; its identity, SHA-256, source URL and the licence it states are in `docs/references/README.md`, "Windows 98 DDK". Extracted with 7-Zip, not installed; nothing in it was executed. The CONFIGMG and VMM values of `src/cm/cm_cfgmg.h` are what is taken from it (section 4, the CONFIGMG row) |
 | Source files from `usb4-emu`'s `tools/usb4cm` (MIT) | Yes, from the change that lifts the first of them (roadmap-usb4 task 39-A.2) | `src/cm/` | Not only this project's code: which files, their notices and the rule a lifted file follows are in section 2a, "Source files lifted from `usb4cm`" |
 
@@ -421,9 +421,8 @@ project's code stays out of it.
 ### The bundled Stor98 build
 
 From `3.0.0.0` the release download may carry Stor98, an NVMe storage
-driver that is a separate project. It was developed as nvme98 and renamed
-before its first release, `0.3.0.0`; no nvme98 build is bundled
-(owner, 2026-10-16). What is recorded here:
+driver that is a separate project (owner, 2026-10-16). What is recorded
+here:
 
 - **What is shipped.** One released Stor98 build, copied byte for byte
   from that build's release folder: its `x86/` files (`stor98.inf`,
@@ -449,14 +448,13 @@ before its first release, `0.3.0.0`; no nvme98 build is bundled
 - **Where it comes from.** The `SHA256SUMS.txt` hash is checked first;
   then every file against that list before it is copied, and each copy
   again after (`scripts/package/package-common.ps1`, "Stor98, the bundled
-  NVMe driver"). A version older than `0.3.0.0` is refused: earlier
-  builds were nvme98's, under other file names, and are never bundled.
+  NVMe driver"). A version older than `0.3.0.0` is refused.
 - **Signing.** The x64 `stor98.sys` carries an embedded test signature by
   Stor98's own test certificate (`CN=stor98 project test signing (not
   trusted)`, SHA-1 thumbprint `461311C79165DC7985522D46274DCAD8832DD919`;
   SHA-1 digest, no timestamp), whose public half is `stor98-test.cer`,
   shipped unchanged. It is not this project's certificate (section 2's
-  test-signature row), not nvme98's, and not a Microsoft signature. The
+  test-signature row) and not a Microsoft signature. The
   packaging scripts do not sign, re-sign or import it.
 - **What is tracked.** None of these files: they are not in `releases/`
   and not in any commit, and the packaging scripts copy them from the
@@ -722,8 +720,8 @@ Phases 39 and 40, design records 21 and 22, `src/cm/`):
 - Behaviour taken from Linux alone stays tagged [linux], unconfirmed,
   until a hardware capture shows it; adapting the code that implements it
   does not change the tag.
-- Nothing moves from this repository or from `usb4-emu` into Stor98
-  (formerly `nvme98`), which is BSD-3-Clause.
+- Nothing moves from this repository or from `usb4-emu` into Stor98,
+  which is BSD-3-Clause.
 - A release whose binary carries adapted code says so in its notices,
   naming the source files and their copyright holders, and offers its
   corresponding source as the Linux xHCI exception above does (taken over

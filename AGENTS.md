@@ -400,7 +400,7 @@ SuperSpeed and USB 3 hub material, checked against xHCI 1.2c and USB 3.2
 ### Language and arithmetic
 
 - C89/C90 only. No `//` comments, no mid-block declarations, no `stdint.h`. Use `ULONG`/`USHORT`/`UCHAR` from `ntddk.h`.
-  The one exception is a third-party interface header carried byte for byte, `src/cm/stor98cm.h` (Stor98's, formerly `nvme98`'s `nvme98cm.h`, with `//` comments; `legal-provenance.md` section 2a): never edited here, and every compiler of the tree accepts it as it is.
+  The one exception is a third-party interface header carried byte for byte, `src/cm/stor98cm.h` (Stor98's, with `//` comments; `legal-provenance.md` section 2a): never edited here, and every compiler of the tree accepts it as it is.
 - No 64-bit DMA. Win98 is 32-bit; the upper 32 bits of all hardware addresses are always 0.
 - No 64-bit arithmetic (the `_alldiv`-style compiler helpers may not exist on Win98's kernel). Keep 64-bit hardware fields as Lo/Hi ULONG pairs, Hi always 0.
 - No floating point in kernel mode.
@@ -658,7 +658,7 @@ design records 21 and 22, `src\cm\`) has its own references:
 - Behaviour taken from Linux alone stays tagged [linux] and unconfirmed
   until a hardware capture shows it; adapting Linux code does not confirm
   it.
-- Nothing from this repository or `usb4-emu` moves into `nvme98`, which
+- Nothing from this repository or `usb4-emu` moves into Stor98, which
   is BSD-3-Clause.
 
 That permission is for the Thunderbolt and USB4 work only. Every other

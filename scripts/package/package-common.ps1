@@ -813,8 +813,8 @@ function Get-SilentRegFaults {
 
 # ---- Stor98, the bundled NVMe driver ----------------------------------------
 #
-# Stor98 is a separate project under BSD-3-Clause, developed as nvme98 and
-# renamed before its first release, 0.3.0.0. A release package may carry
+# Stor98 is a separate project under BSD-3-Clause; its first release is
+# 0.3.0.0. A release package may carry
 # one of its released builds, copied unchanged from that build's release
 # folder at packaging time: never its source, and never through git
 # (nothing of it is tracked here, and make-release.ps1 copies it into the
@@ -827,7 +827,7 @@ function Get-SilentRegFaults {
 # can clash with this project's own files.
 #
 # x64\stor98.sys carries Stor98's own embedded test signature, by a
-# certificate that is neither this project's nor nvme98's; stor98-test.cer is
+# certificate that is not this project's; stor98-test.cer is
 # its public half and is shipped beside it unchanged, as Stor98 ships it.
 # Test-signing mode on Vista x64 and 7 x64 loads a driver signed by any
 # certificate, trusted or not (design record 19), so the one boot setting
@@ -836,7 +836,7 @@ function Get-SilentRegFaults {
 #
 # LICENSE, NOTICE.TXT and readme.txt go beside the driver files as
 # stor98-LICENSE.txt, stor98-NOTICE.txt and stor98-readme.txt. Builds before
-# 0.3.0.0 are nvme98's, under other names, and are never bundled. The
+# 0.3.0.0 are refused. The
 # package checks that would otherwise judge these files as this project's
 # own are given exactly the list Get-Stor98PackageFiles returns, and nothing
 # wider.
@@ -858,7 +858,7 @@ function Assert-Stor98Version {
         throw "-Stor98Version '$Version' is not a four-part version such as 0.3.0.0: the bundled Stor98 build is pinned explicitly."
     }
     if ([version]$Version -lt $script:Stor98FirstVersion) {
-        throw "Stor98 $Version is older than 0.3.0.0, Stor98's first release; earlier builds were nvme98's, under other file names, and are never bundled."
+        throw "Stor98 $Version is older than 0.3.0.0, Stor98's first release."
     }
 }
 

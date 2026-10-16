@@ -468,7 +468,7 @@ Express tunnel down (the USB3 tunnel stays).
 ### NVMe drives behind a tunnel
 
 An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver,
-which none of these systems has. Stor98 (formerly `nvme98`), a separate
+which none of these systems has. Stor98, a separate
 project, is that driver for Windows 98 SE to 7, and the download
 carries a release of it as its project released it, with its own licence
 and notes (which release, and where it is: "NVMe drives behind
@@ -552,15 +552,15 @@ ThinkPad P14s Gen 1's Alpine Ridge controller (from a capture of that
 machine), its Titan Ridge model, its USB4 host models (Alder Lake's, a
 minimal one, and a stand-in for ASMedia's ASM4242), and its model of a
 real USB4 NVMe enclosure (the ORICO enclosure's ASMedia ASM2464, from a
-capture). The NVMe driver was `nvme98` `0.1.1.0` throughout. **No real
-Thunderbolt or USB4 machine has run this release**: the real-hardware
-bench, the owner's ThinkPad P14s Gen 1 with a Thunderbolt 3 dock among
-it, is not yet read. `docs/contributing/runs/run-39.md` and `run-40.md`
+capture). The NVMe driver was Stor98. The one real machine
+is the owner's ThinkPad P14s Gen 1 under Windows 98 SE ("Untested hosts"
+above); **no other real Thunderbolt or USB4 machine has run this
+release**. `docs/contributing/runs/run-39.md` and `run-40.md`
 have every leg.
 
 - **Windows 98 SE:** under the firmware connection manager, the install,
   a device approved and its NVMe drive found with no Refresh and read and
-  written through `nvme98`, unplug and re-plug, a device tunnelled at
+  written through Stor98, unplug and re-plug, a device tunnelled at
   boot left alone, nothing attached at boot, the controller absent with
   Thunderbolt BIOS Assist on, disable and enable, `XhciCmApprove` `0` and
   `XhciCmMode` `0`, a plug and an unplug while an Add New Hardware wizard
