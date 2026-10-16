@@ -1296,6 +1296,13 @@ static VOID cmWkDiag(PCM_CFGWK w, ULONG bdf, PXHCI_TBT_BRNUM r, ULONG tries,
     }
     d[16] = flags;
     d[17] = w->Cfgmg.PciGuard;
+    if (r != NULL) {
+        d[18] = (r->IrqOutcome & 0xFFUL) | ((r->IrqLine & 0xFFUL) << 8) |
+                ((r->IrqPin & 0xFFUL) << 16);
+        d[19] = (r->IrqFunctions & 0xFFUL) | ((r->IrqSet & 0xFFUL) << 8) |
+                ((r->IrqKept & 0xFFUL) << 16) |
+                ((r->IrqOther & 0xFFUL) << 24);
+    }
     KeAcquireSpinLock(&w->Lock, &irql);
     if (w->Nhi != NULL) {
         w->DiagSeq++;
@@ -1384,7 +1391,9 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
     for (tries = 1;; tries++) {
         io.Reads = 0;
         io.Writes = 0;
-        (VOID)XhciTbtNumberBridges(&io, bdf, XHCI_TBT_BRNUM_F_WINDOWS,
+        (VOID)XhciTbtNumberBridges(&io, bdf,
+                                   XHCI_TBT_BRNUM_F_WINDOWS |
+                                       XHCI_TBT_BRNUM_F_IRQ,
                                    cmWkNumberGo, w, &r);
         if (tries >= CM_WK_NUMBER_TRIES || !cmWkNumberGo(w)) {
             break;
@@ -1417,6 +1426,13 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
         cmWkLog(w, "cm.brnum.9x.win-outcome", r.WinOutcome);
         cmWkLog(w, "cm.brnum.9x.port-window", r.PortMem);
         cmWkLog(w, "cm.brnum.9x.win-need", r.WinNeed);
+        cmWkLog(w, "cm.brnum.9x.irq",
+                (r.IrqOutcome & 0xFFUL) | ((r.IrqLine & 0xFFUL) << 8) |
+                    ((r.IrqPin & 0xFFUL) << 16));
+        cmWkLog(w, "cm.brnum.9x.irq-counts",
+                (r.IrqFunctions & 0xFFUL) | ((r.IrqSet & 0xFFUL) << 8) |
+                    ((r.IrqKept & 0xFFUL) << 16) |
+                    ((r.IrqOther & 0xFFUL) << 24));
         if (r.WinOutcome != XHCI_TBT_BRWIN_DONE) {
             w->C.NumberRefused++;
             cmWkLog(w, "cm.brnum.9x.win-where", r.WinWhere);

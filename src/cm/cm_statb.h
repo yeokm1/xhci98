@@ -67,8 +67,10 @@ BOOLEAN CmStatusPciPath(const XHCI_TBT_CFG *cfg, ULONG bdf, PULONG path,
  * 6 the port's 20h, 7 window need, 8 where, 9 undone (failed 31:16),
  * 10-11 the first two bridges' bdf, 12-13 their 18h as left, 14-15 their
  * 20h as left, 16 flags (bit 0 held by a child devnode, bit 1 PCI.VXD's
- * guard refused, bit 2 the port read up), 17 the guard's reading. */
-#define CM_BRDIAG_WORDS 18
+ * guard refused, bit 2 the port read up), 17 the guard's reading, 18 the
+ * interrupt lines (outcome 7:0, the port's line 15:8, its pin 23:16),
+ * 19 their counts (functions 7:0, set 15:8, kept 23:16, other pin 31:24). */
+#define CM_BRDIAG_WORDS 20
 
 typedef struct _CM_STATUS_PUB {
     PVOID DevKey;           /* the hardware key, opened in the start      */

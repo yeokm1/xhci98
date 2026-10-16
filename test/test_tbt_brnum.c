@@ -54,6 +54,8 @@ typedef struct _NODE {
                                64-bit BAR's upper half has size 0            */
     ULONG BarType[6];       /* the read-only low bits                        */
     ULONG Sizing;           /* BARs read as all-ones-masked while set        */
+    ULONG Intr;             /* 3Ch: line 7:0, pin 15:8 (read-only), and on a
+                               bridge Bridge Control 31:16                   */
 } NODE;
 
 typedef struct _MODEL {
@@ -163,10 +165,14 @@ static ULONG mread(PVOID context, ULONG bdf, ULONG offset, PULONG value)
     case XHCI_TBT_CFG_HEADER:
         *value = m.N[i].Header;
         break;
-    case XHCI_TBT_CFG_BUSES:
-        *value = m.N[i].Bridge ? m.N[i].Buses : 0;
+    case 0x3CUL:
+        *value = m.N[i].Intr;
         break;
     default:
+        if (offset == XHCI_TBT_CFG_BUSES && m.N[i].Bridge) {
+            *value = m.N[i].Buses;
+            break;
+        }
         if (m.N[i].Bridge && offset == XHCI_TBT_CFG_IOWIN) {
             *value = m.N[i].Io;
         } else if (m.N[i].Bridge && offset == XHCI_TBT_CFG_MEMWIN) {
@@ -220,7 +226,12 @@ static ULONG mwrite(PVOID context, ULONG bdf, ULONG offset, ULONG width,
     if (m.IgnoreWrites) {
         return 1;
     }
-    if (offset == XHCI_TBT_CFG_COMMAND) {
+    if (offset == 0x3CUL) {
+        /* The pin and (on an endpoint) Min_Gnt/Max_Lat are read-only. */
+        m.N[i].Intr = (m.N[i].Intr & 0x0000FF00UL) | (value & 0xFFUL) |
+                      (m.N[i].Bridge ? (value & 0xFFFF0000UL)
+                                     : (m.N[i].Intr & 0xFFFF0000UL));
+    } else if (offset == XHCI_TBT_CFG_COMMAND) {
         m.N[i].Cmd = value & 0xFFFFUL;
     } else if (offset >= 0x10UL && offset <= 0x24UL &&
                (!m.N[i].Bridge || offset <= 0x14UL)) {
@@ -961,6 +972,103 @@ static VOID test_windows_more(VOID)
     CHECK_EQ(m.N[nvme].Bar[2], 0, "the BAR as read");
 }
 
+static VOID test_irq(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, usp, dsp, nvme, sib, sib0;
+
+    /* The P14s: the port's INTA on IRQ 10 (its BIOS's line, 0Ah, and the
+     * $PIR's link 61 for 04:01 INTA); the chain's pins all INTA on device
+     * 0, so each reaches the port as INTA and takes line 10, as the
+     * BIOS's boot-present configuration had it (a.prn: IRQ 10 for both
+     * bridges and the NVMe). */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    m.N[port].Intr = 0x0000010AUL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    m.N[usp].Intr = 0x00000100UL;
+    m.N[dsp].Intr = 0x000201FFUL;
+    m.N[nvme].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_DONE, "lines given");
+    CHECK_EQ(r.IrqLine, 10, "the port's line");
+    CHECK_EQ(r.IrqPin, 1, "the port's pin");
+    CHECK_EQ(m.N[usp].Intr, 0x0000010AUL, "upstream port line 10");
+    CHECK_EQ(m.N[dsp].Intr, 0x0002010AUL, "downstream port line 10, its Bridge Control kept");
+    CHECK_EQ(m.N[nvme].Intr, 0x0000010AUL, "the NVMe line 10");
+    CHECK_EQ(r.IrqFunctions, 3, "three functions with a pin");
+    CHECK_EQ(r.IrqSet, 3, "all three set");
+
+    /* A sibling endpoint on device 1 with INTA reaches the port as INTB:
+     * not the port's pin, so no line is written; one on device 0 of
+     * another function... and a line already set is kept. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    m.N[port].Intr = 0x0000010AUL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    m.N[usp].Intr = 0x00000100UL;
+    m.N[dsp].Intr = 0x00000100UL;
+    m.N[nvme].Intr = 0x0000010BUL;
+    sib = madd(port, 1, 0, ID_EMU, 0, 0);
+    m.N[sib].Intr = 0x00000100UL;
+    (void)sib0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(m.N[sib].Intr, 0x00000100UL, "the device-1 sibling arrives on INTB: left alone");
+    CHECK_EQ(r.IrqOther, 1, "counted as another pin");
+    CHECK_EQ(m.N[nvme].Intr, 0x0000010BUL, "a line already set is kept");
+    CHECK_EQ(r.IrqKept, 1, "counted as kept");
+    CHECK_EQ(r.IrqSet, 2, "the two bridges set");
+
+    /* An NVMe on INTB behind device-0 bridges arrives on INTB: left. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    m.N[port].Intr = 0x0000010AUL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    m.N[nvme].Intr = 0x00000200UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000200UL, "INTB not written");
+    CHECK_EQ(r.IrqFunctions, 1, "the bridges here have no pin");
+
+    /* The port with no line of its own: nothing written. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    m.N[port].Intr = 0x000001FFUL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    m.N[nvme].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_PORT_NONE, "the port has no line");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing written");
+
+    /* Windows refused: no lines either. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0x0000FFF0UL;
+    m.N[port].Intr = 0x0000010AUL;
+    masm(port, &usp, &dsp, &nvme);
+    m.N[nvme].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_NONE, "no lines without windows");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing written");
+}
+
 int main(void)
 {
     test_p14s_orico();
@@ -976,6 +1084,7 @@ int main(void)
     test_go_and_crs();
     test_windows();
     test_windows_more();
+    test_irq();
     printf("test_tbt_brnum: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

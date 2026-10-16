@@ -77,8 +77,20 @@
 #define XHCI_TBT_BRWIN_ACCESS       5UL /* a read or write failed            */
 #define XHCI_TBT_BRWIN_STALE        6UL /* the go callback refused           */
 
+/* XHCI_TBT_BRNUM.IrqOutcome: the interrupt lines (XHCI_TBT_BRNUM_F_IRQ). */
+#define XHCI_TBT_BRIRQ_NONE         0UL /* not asked, or nothing set up      */
+#define XHCI_TBT_BRIRQ_DONE         1UL /* every eligible line written       */
+#define XHCI_TBT_BRIRQ_PORT_NONE    2UL /* the port has no line of its own   */
+#define XHCI_TBT_BRIRQ_ACCESS       3UL /* a read failed or a line not held  */
+
 /* Flags. */
 #define XHCI_TBT_BRNUM_F_WINDOWS    0x1UL   /* also give the chain windows   */
+#define XHCI_TBT_BRNUM_F_IRQ        0x2UL   /* ... and its interrupt lines:
+                                               each function below whose
+                                               interrupt reaches the port on
+                                               the port's own pin gets the
+                                               port's own Interrupt Line,
+                                               where its line is unset    */
 
 /* Configuration registers this file writes (a type 1 header but 04h). */
 #define XHCI_TBT_CFG_COMMAND        0x04UL  /* Command 15:0, Status 31:16   */
@@ -118,6 +130,15 @@ typedef struct _XHCI_TBT_BRNUM {
     ULONG WasIo[XHCI_TBT_BRNUM_MAX_BRIDGES];   /* as read before          */
     ULONG WasMem[XHCI_TBT_BRNUM_MAX_BRIDGES];
     ULONG WasPf[XHCI_TBT_BRNUM_MAX_BRIDGES];
+    /* The interrupt lines (XHCI_TBT_BRNUM_F_IRQ). */
+    ULONG IrqOutcome;       /* XHCI_TBT_BRIRQ_*                           */
+    ULONG IrqLine;          /* the port's Interrupt Line as read          */
+    ULONG IrqPin;           /* ... and its Interrupt Pin                  */
+    ULONG IrqFunctions;     /* functions below with an Interrupt Pin      */
+    ULONG IrqSet;           /* ... given the port's line                  */
+    ULONG IrqKept;          /* ... whose line was already set             */
+    ULONG IrqOther;         /* ... arriving on another of the port's pins */
+    ULONG IrqFailed;        /* ... whose write did not hold               */
     ULONG Was[XHCI_TBT_BRNUM_MAX_BRIDGES];   /* its 18h dword as read     */
     ULONG Now[XHCI_TBT_BRNUM_MAX_BRIDGES];   /* ... and as left           */
 } XHCI_TBT_BRNUM, *PXHCI_TBT_BRNUM;
