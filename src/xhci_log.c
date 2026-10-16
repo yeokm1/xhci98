@@ -371,10 +371,12 @@ ULONG XhciLogApplySwitches(PXHCI_LOG log,
      * default and the refusal is recorded, so a reader can always tell which of
      * the two happened. Both numbers travel in every snapshot header.
      *
-     * **Since the snapshot-value merge the fallback also shuts the read channel**, because
-     * the default is `XHCI_LOG_VERBOSITY_OFF` and the channel's consent is now
-     * rung 0 of this same value. That is the right direction for a refusal to
-     * fail in, and it is the reverse of what a clamp would have done.
+     * **Since the snapshot-value merge the fallback also shut the read channel**, because
+     * the default was `XHCI_LOG_VERBOSITY_OFF` and the channel's consent is now
+     * rung 0 of this same value. Amended 2026-10-16: the default is the ring
+     * rung (the owner's decision, xhci_log.h), so a refused value records as
+     * a fresh install does - never at the address rung, which is the reverse
+     * of what a clamp would have done.
      */
     log->VerbosityRead = verbosityValue;
     if (verbosityValue > XHCI_LOG_VERBOSITY_MAX) {

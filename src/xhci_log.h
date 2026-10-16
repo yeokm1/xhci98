@@ -337,6 +337,19 @@
 
 #define XHCI_LOG_VERBOSITY_MAX      4
 /*
+ * **Amended 2026-10-16 (the owner): the default is 2, XHCI_LOG_VERBOSITY_RING
+ * - the ring records, with no addresses - for xhci98.sys and xhcicm.sys
+ * alike.** The owner decided it so that a log exists on every install
+ * before anyone asks for one: the cost described below as "paid in the
+ * tool" (an intermittent fault needing a second reproduction at a higher
+ * level) was the reason. The read channel opens with it, at the same rung.
+ * What follows is the reasoning for the earlier default of 0, kept as it
+ * was written; its caveat stands unchanged and now applies to the default
+ * itself: **what the append sites cost at real interrupt rates on Windows
+ * 98 metal is UNMEASURED**, and it is to be measured on the owner's P14s
+ * Gen 1 (an ATTO reading at levels 0 and 2). Design record 08 section 13.2
+ * carries the amendment.
+ *
  * **The default is 0 and it is a polarity decision, not a taste.** Task
  * 13-L.1's whole finding is that the safe configuration must be the default and
  * the convenience must be the thing asked for by name, and a ring filling on
@@ -359,7 +372,7 @@
  * path - and there is exactly one value to set, so the published sequence is
  * four steps and `regedit` appears nowhere in it.
  */
-#define XHCI_LOG_VERBOSITY_DEFAULT  XHCI_LOG_VERBOSITY_OFF
+#define XHCI_LOG_VERBOSITY_DEFAULT  XHCI_LOG_VERBOSITY_RING
 
 /*
  * How many records one completion code is worth before the counter carries it.

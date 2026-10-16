@@ -51,6 +51,7 @@
 #include "tr_log.h"
 #include "tr_pci.h"
 #include "tr_res.h"
+#include "../src/xhci_qry.h"
 
 #define XHCITR_VERSION XHCI_VER_STR
 
@@ -2420,6 +2421,43 @@ static int log_window(HANDLE h, unsigned char *b, TR_U32 region,
     return tr_snap_window(b, got, w);
 }
 
+/* xhci98's query request (record 13 section 8.13): the answer into a
+ * buffer the caller frees. 1 parsed whole; 0 the driver refused the
+ * request (older than revision 12: ERROR_INVALID_FUNCTION or
+ * ERROR_NOT_SUPPORTED); -1 anything else, *err set where the call failed. */
+static int hcd_query(int c, unsigned char **buf, TR_XHQ *x, DWORD *err)
+{
+    unsigned char *b;
+    DWORD got = 0;
+    HANDLE h;
+    int r = -1;
+
+    *err = 0;
+    *buf = NULL;
+    b = (unsigned char *)malloc(XHQ_ASK_BYTES);
+    h = open_device(uc[c].Path);
+    if (b == NULL || h == INVALID_HANDLE_VALUE) {
+        *err = h == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_OUTOFMEMORY;
+    } else if (DeviceIoControl(h, XHQ_IOCTL, NULL, 0, b, XHQ_ASK_BYTES, &got,
+                               NULL) && got <= XHQ_ASK_BYTES) {
+        r = tr_xhq_parse(b, got, x) == 1 ? 1 : -1;
+    } else {
+        *err = GetLastError();
+        if (*err == ERROR_INVALID_FUNCTION || *err == ERROR_NOT_SUPPORTED) {
+            r = 0;
+        }
+    }
+    if (h != INVALID_HANDLE_VALUE) {
+        CloseHandle(h);
+    }
+    if (r == 1) {
+        *buf = b;
+    } else {
+        free(b);
+    }
+    return r;
+}
+
 /* xhci98's log and counters, read as XHCISNAP reads them (section 4.6):
  * the extension's first window for where the ring is, the HCD region for
  * the counters, the ring's own window. Nothing else of the extension is
@@ -2430,6 +2468,7 @@ static void log_hcd(TR_TEXT *t, int c)
     unsigned char *img;
     TR_SNAPW w;
     TR_SNAPW x;
+    TR_XHQ q;
     TR_U32 ringAt;
     TR_U32 off = 0;
     TR_U32 total = 0;
@@ -2438,6 +2477,19 @@ static void log_hcd(TR_TEXT *t, int c)
     DWORD err;
     HANDLE h;
 
+    /* Since revision 12 the query request first; the door for a driver
+     * from before it. */
+    r = hcd_query(c, &b, &q, &err);
+    if (r == 1) {
+        tr_xhq_log_text(t, &q, envNt);
+        free(b);
+        return;
+    }
+    if (r < 0 && err != 0 && err != ERROR_INVALID_FUNCTION) {
+        tr_printf(t, "xhci98 driver log\n  The driver did not answer (error "
+                     "%lu).\n", (unsigned long)err);
+        return;
+    }
     b = (unsigned char *)malloc(TR_SNAP_BUFFER_BYTES);
     img = (unsigned char *)malloc(TR_SNAP_HCD_MAX_BYTES);
     h = open_device(uc[c].Path);
@@ -2589,37 +2641,28 @@ static void pci_node_add(int parentT, int which, int index, const char *id)
     add_tnode(parentT, K_PCI, index, which, 0, -1, "PCI configuration", key);
 }
 
-/* xhci98's controller: one window of the door's PCI region (section 4.8),
- * read when the node is shown. */
+/* xhci98's controller: its query request (record 13 section 8.13), read
+ * when the node is shown. */
 static void pci_hcd(TR_TEXT *t, int c)
 {
     unsigned char *b;
-    TR_SNAPW w;
-    DWORD err = 0;
-    HANDLE h;
+    TR_XHQ q;
+    DWORD err;
     int r;
 
-    b = (unsigned char *)malloc(TR_SNAP_BUFFER_BYTES);
-    h = open_device(uc[c].Path);
-    if (b == NULL || h == INVALID_HANDLE_VALUE) {
-        tr_printf(t, "PCI configuration\n  The controller could not be "
-                     "opened (error %lu).\n",
-                  (unsigned long)(h == INVALID_HANDLE_VALUE ? GetLastError()
-                                                            : ERROR_OUTOFMEMORY));
+    r = hcd_query(c, &b, &q, &err);
+    if (r == 1) {
+        (void)tr_xhq_pci_text(t, &q);
+        free(b);
+    } else if (r == 0) {
+        (void)tr_xhq_pci_text(t, NULL);
+    } else if (err != 0) {
+        tr_printf(t, "PCI configuration\n  The driver did not answer "
+                     "(error %lu).\n", (unsigned long)err);
     } else {
-        r = log_window(h, b, TR_SNAP_REGION_PCI, 0, &w, &err);
-        if (r == TR_SW_BAD && err != 0) {
-            tr_printf(t, "PCI configuration\n  The driver did not answer "
-                         "(error %lu).\n", (unsigned long)err);
-        } else {
-            (void)tr_hcd_pci_text(t, r, w.Status, w.Region, w.Offset,
-                                  w.RegionBytes, w.PayloadBytes, w.Payload);
-        }
+        tr_put(t, "PCI configuration\n  The driver's answer is not one this "
+                  "tool reads.\n");
     }
-    if (h != INVALID_HANDLE_VALUE) {
-        CloseHandle(h);
-    }
-    free(b);
 }
 
 /* An NHI: xhcicm's PCI answer (section 4.7), asked of the query device the

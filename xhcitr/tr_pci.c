@@ -28,6 +28,7 @@
 #include "tr_pci.h"
 #include "tr_log.h"
 #include "../src/cm/cm_query.h"
+#include "../src/xhci_qry.h"
 
 /* [LB] 6.1: the common header. */
 #define PCI_ID              0x00
@@ -911,31 +912,25 @@ void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt)
 /* xhci98.sys's PCI region                                                   */
 /* ======================================================================== */
 
-int tr_hcd_pci_text(TR_TEXT *t, int sw, TR_U32 status, TR_U32 region,
-                    TR_U32 offset, TR_U32 regionBytes, TR_U32 payloadBytes,
-                    const unsigned char *payload)
+int tr_xhq_pci_text(TR_TEXT *t, const TR_XHQ *x)
 {
     tr_put(t, "PCI configuration, read through xhci98.sys\n");
-    if (sw == TR_SW_OFF ||
-        (sw == TR_SW_OK && (status & TR_SNAP_S_BAD_REGION) != 0)) {
+    if (x == NULL) {
         tr_put(t, "  Not served by this xhci98.sys: it is older than this "
                   "tool.\n");
         return 0;
     }
-    if (sw == TR_SW_OK && (status & TR_SNAP_S_NOT_READ) != 0) {
-        tr_put(t, "  The driver could not read the controller's "
-                  "configuration space (the\n  controller may be gone).\n");
-        return 0;
+    if (x->PciState == XHQ_PCI_READ && x->Pci != NULL &&
+        x->PciBytes == XHQ_PCI_BYTES) {
+        tr_put(t, "\n");
+        tr_pci_text(t, x->Pci, 2);
+        return 1;
     }
-    if (sw != TR_SW_OK || region != TR_SNAP_REGION_PCI || offset != 0 ||
-        regionBytes != TR_SNAP_PCI_BYTES || payloadBytes != TR_SNAP_PCI_BYTES ||
-        payload == NULL ||
-        (status & (TR_SNAP_S_TRUNCATED | TR_SNAP_S_BAD_REQUEST |
-                   TR_SNAP_S_BAD_EXTENSION | TR_SNAP_S_PAST_END)) != 0) {
-        tr_put(t, "  The driver's answer is not one this tool reads.\n");
-        return 0;
+    if (x->PciState == XHQ_PCI_ABSENT) {
+        tr_put(t, "  Unread: the controller answered all ones (it may be "
+                  "gone).\n");
+    } else {
+        tr_put(t, "  Unread: the driver's configuration read was refused.\n");
     }
-    tr_put(t, "\n");
-    tr_pci_text(t, payload, 2);
-    return 1;
+    return 0;
 }

@@ -20,6 +20,7 @@
 #define TR_PCI_H
 
 #include "tr_core.h"
+#include "tr_log.h"
 
 #define TR_PCI_CFG_BYTES        256
 
@@ -105,19 +106,12 @@ void tr_qpci_entry(const TR_QPCI *q, TR_U32 i, TR_QPENT *e);
  * functions below each (or why they were not read). nt: 2000 and later. */
 void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt);
 
-/* ---- xhci98.sys: the door's PCI region (src\xhci.h) --------------------- */
+/* ---- xhci98.sys: its query request (src\xhci_qry.h) --------------------- */
 
-#define TR_SNAP_REGION_PCI      4UL
-#define TR_SNAP_PCI_BYTES       256UL
-#define TR_SNAP_S_NOT_READ      0x40UL
-
-/* The node's text from one window of the PCI region at offset 0: `sw` the
- * window's TR_SW_* (tr_log.h), then its header's status, region, offset,
- * sizes and payload. A driver older than revision 12 answers
- * TR_SNAP_S_BAD_REGION, or, with its log off, nothing at all (TR_SW_OFF):
- * both read "not served by this xhci98.sys". Returns 1 when decoded. */
-int tr_hcd_pci_text(TR_TEXT *t, int sw, TR_U32 status, TR_U32 region,
-                    TR_U32 offset, TR_U32 regionBytes, TR_U32 payloadBytes,
-                    const unsigned char *payload);
+/* The node's text from a parsed IOCTL_XHCI98_QUERY answer (tr_log.h's
+ * tr_xhq_parse), or NULL for a driver that refused the request: "not
+ * served by this xhci98.sys". A configuration read the driver could not
+ * make reads "unread". Returns 1 when decoded. */
+int tr_xhq_pci_text(TR_TEXT *t, const TR_XHQ *x);
 
 #endif /* TR_PCI_H */

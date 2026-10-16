@@ -56,6 +56,7 @@
 #include "hcd.h"
 #include "hcd_svc.h"
 #include "xhci_hw.h"
+#include "xhci_qryb.h"
 
 /* CTL_CODE(FILE_DEVICE_USB = 0x22, fn, METHOD_BUFFERED, FILE_ANY_ACCESS);
  * design record 13 sections 8.1 and 8.3. */
@@ -1120,49 +1121,12 @@ typedef char hcdSnapshotHubLocPorts[XHCI_TOL_HUB_LOC_PORTS ==
                                         : -1];
 
 /*
- * The PCI region's bytes (xhci.h, XHCI_SNAPSHOT_REGION_PCI; design record 25
- * revision 12): the controller's configuration space 00h to FFh into out,
- * one DWORD per IRP_MN_READ_CONFIG, the route every configuration access of
- * this driver takes (HcdSvcConfigSpace). Nothing is written. 1 when every
- * read was answered and the first DWORD is not all ones (the controller
- * gone); 0 otherwise. The last-access diagnostics HcdSvcConfigSpace keeps
- * for the start's own log lines are put back as they were. IRQL:
- * PASSIVE_LEVEL, door gate held, no lock.
- */
-static ULONG hcdDoorPci(PHCD_CONTROLLER hc, PUCHAR out)
-{
-    ULONG lastStatus;
-    ULONG lastInformation;
-    ULONG offset;
-    ULONG ok;
-
-    lastStatus = hc->ConfigLastStatus;
-    lastInformation = hc->ConfigLastInformation;
-    ok = 1;
-    for (offset = 0; offset < XHCI_SNAPSHOT_PCI_BYTES; offset += 4) {
-        if (HcdSvcConfigSpace(&hc->Hc, TRUE, out + offset, offset, 4) !=
-            MP_STATUS_SUCCESS) {
-            ok = 0;
-            break;
-        }
-    }
-    hc->ConfigLastStatus = lastStatus;
-    hc->ConfigLastInformation = lastInformation;
-    if (ok && hcdGet32(out, 0) == 0xFFFFFFFFUL) {
-        ok = 0;
-    }
-    return ok;
-}
-
-/*
  * XHCISNAP's window, the miniport's xhciPassThru (branch 1.2.0.0) over the
  * HCD's embedded XHCI_EXTENSION: schema 5 unchanged, so the published tool
  * reads it. Returns the USBUSER status: 6 for a GUID not ours, for the shut
  * channel (XhciLogVerbosity 0) and for a block too small for a header - the
  * three answers usbport gave for the miniport's nonzero returns - and 0 with
- * the outcome in the header otherwise. The PCI region alone is answered with
- * the channel shut (xhci.h); its bytes are read before the power gate and
- * the controller lock are taken. The caller holds the door gate, so
+ * the outcome in the header otherwise. The caller holds the door gate, so
  * no start or stop runs under the copy; the power gate is taken inside it,
  * the order the gates always nest in. IRQL: PASSIVE_LEVEL.
  */
@@ -1185,8 +1149,6 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
     ULONG valid;
     ULONG mmio;
     ULONG i;
-    ULONG pciRead;
-    UCHAR pci[XHCI_SNAPSHOT_PCI_BYTES];
     KIRQL oldIrql;
 
     if (hcdGet32(guid, 0) != XHCI_SNAPSHOT_GUID_0 ||
@@ -1200,6 +1162,9 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
              ext->TrailingSignature == XHCI_EXTENSION_TRAILING)
                 ? 1UL
                 : 0UL;
+    if (valid && ext->Log.Verbosity == XHCI_LOG_VERBOSITY_OFF) {
+        return HCD_UU_MINIPORT_ERROR;
+    }
     if (paramLength < sizeof(XHCI_SNAPSHOT_HEADER)) {
         return HCD_UU_MINIPORT_ERROR;
     }
@@ -1208,11 +1173,6 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
     requestSignature = hcdGet32(params, 0);
     requestRegion = hcdGet32(params, 4);
     requestOffset = hcdGet32(params, 8);
-    if (valid && ext->Log.Verbosity == XHCI_LOG_VERBOSITY_OFF &&
-        (requestSignature != XHCI_SNAPSHOT_REQUEST_SIGNATURE ||
-         requestRegion != XHCI_SNAPSHOT_REGION_PCI)) {
-        return HCD_UU_MINIPORT_ERROR;
-    }
 
     hcdZero(params, sizeof(XHCI_SNAPSHOT_HEADER));
     header = (XHCI_SNAPSHOT_HEADER *)params;
@@ -1237,10 +1197,6 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
     if (!valid) {
         header->Status |= XHCI_SNAPSHOT_S_BAD_EXTENSION;
         return HCD_UU_OK;
-    }
-    pciRead = 0;
-    if (requestRegion == XHCI_SNAPSHOT_REGION_PCI) {
-        pciRead = hcdDoorPci(hc, pci);
     }
 
     /* MMIO only on a started controller in D0: the door gate keeps the
@@ -1321,30 +1277,117 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
         hcdDoorSlots(hc, header, payload, capacity, requestOffset);
     } else if (requestRegion == XHCI_SNAPSHOT_REGION_HCD) {
         hcdDoorHcd(hc, header, payload, capacity, requestOffset, mmio);
-    } else if (requestRegion == XHCI_SNAPSHOT_REGION_PCI) {
-        if (!pciRead) {
-            header->Status |= XHCI_SNAPSHOT_S_NOT_READ;
-        } else {
-            regionBytes = XHCI_SNAPSHOT_PCI_BYTES;
-            header->RegionBytes = regionBytes;
-            if (requestOffset >= regionBytes) {
-                header->Status |= XHCI_SNAPSHOT_S_PAST_END;
-            } else {
-                available = regionBytes - requestOffset;
-                copied = (available > capacity) ? capacity : available;
-                hcdCopy(payload, pci + requestOffset, copied);
-                header->PayloadBytes = copied;
-                if (copied < available) {
-                    header->Status |= XHCI_SNAPSHOT_S_TRUNCATED;
-                }
-            }
-        }
     } else {
         header->Status |= XHCI_SNAPSHOT_S_BAD_REGION;
     }
     XhciControllerLockRelease(ext, oldIrql);
     HcdPowerGateLeave(hc);
     return HCD_UU_OK;
+}
+
+/* ----------------------------------------------------------------------- */
+/* The query request (xhci_qry.h; record 13 section 8.13)                   */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * The controller's configuration space 00h to FFh into out, one DWORD per
+ * IRP_MN_READ_CONFIG, the route every configuration access of this driver
+ * takes (HcdSvcConfigSpace). Nothing is written. XHQ_PCI_READ, or
+ * XHQ_PCI_FAILED where a read was refused, or XHQ_PCI_ABSENT where the
+ * first DWORD reads all ones (the controller gone). The last-access
+ * diagnostics HcdSvcConfigSpace keeps for the start's own log lines are put
+ * back as they were. IRQL: PASSIVE_LEVEL, door gate held, no lock.
+ */
+static ULONG hcdDoorPci(PHCD_CONTROLLER hc, PUCHAR out)
+{
+    ULONG lastStatus;
+    ULONG lastInformation;
+    ULONG offset;
+    ULONG state;
+
+    lastStatus = hc->ConfigLastStatus;
+    lastInformation = hc->ConfigLastInformation;
+    state = XHQ_PCI_READ;
+    for (offset = 0; offset < XHQ_PCI_BYTES; offset += 4) {
+        if (HcdSvcConfigSpace(&hc->Hc, TRUE, out + offset, offset, 4) !=
+            MP_STATUS_SUCCESS) {
+            state = XHQ_PCI_FAILED;
+            break;
+        }
+    }
+    hc->ConfigLastStatus = lastStatus;
+    hc->ConfigLastInformation = lastInformation;
+    if (state == XHQ_PCI_READ && hcdGet32(out, 0) == 0xFFFFFFFFUL) {
+        state = XHQ_PCI_ABSENT;
+    }
+    return state;
+}
+
+/*
+ * IOCTL_XHCI98_QUERY (xhci_qry.h): the log ring, the counter block and the
+ * controller's PCI configuration in one answer, framed as xhcicm.sys's log
+ * answer is. Not gated by the door's enable step: what is served follows
+ * XhciLogVerbosity (xhci_qry.c), and the configuration space is served at
+ * every level - it is not the log. The configuration space is read first,
+ * at PASSIVE_LEVEL under the door gate (no start or stop meanwhile); the
+ * ring and the counters are copied under the controller lock, the lock
+ * their producers write under, straight into the system buffer. Nothing
+ * here touches the USBUSER pass-through or its clause table. IRQL:
+ * PASSIVE_LEVEL, the caller inside HcdIoEnter.
+ */
+static NTSTATUS hcdDoorQuery(PHCD_CONTROLLER hc, PUCHAR buf, ULONG outLen,
+                             PULONG_PTR info)
+{
+    PXHCI_EXTENSION ext;
+    XHCI_QRY_IN in;
+    UCHAR pci[XHQ_PCI_BYTES];
+    ULONG written;
+    ULONG rc;
+    ULONG at;
+    KIRQL oldIrql;
+
+    *info = 0;
+    if (buf == NULL || outLen < XHQ_HDR_BYTES) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    ext = &hc->Hc;
+    hcdZero((PUCHAR)&in, sizeof(in));
+    HcdDoorGateEnter(hc);
+    in.PciState = hcdDoorPci(hc, pci);
+    in.Pci = pci;
+    in.Flavour = HCD_SNAPSHOT_FLAVOUR;
+    in.Started = hc->ControllerStarted ? 1UL : 0UL;
+    in.Counters = (const ULONG *)&hc->Counters;
+    in.CounterWords = XHCI_SNAPSHOT_HCD_COUNTER_WORDS;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    if (ext->Signature == XHCI_EXTENSION_SIGNATURE &&
+        ext->TrailingSignature == XHCI_EXTENSION_TRAILING) {
+        in.Verbosity = ext->Log.Verbosity;
+        in.VerbosityRead = ext->Log.VerbosityRead;
+        in.Refused = ext->Log.VerbosityRefused;
+        in.Emitted = ext->Log.DebugViewEnabled;
+        in.Ring = ext->Log.Ring;
+        in.RingBytes = XHCI_LOG_RING_BYTES;
+        in.Head = ext->Log.Head;
+        in.Used = ext->Log.Used;
+        in.Dropped = ext->Log.BytesDropped;
+        in.Appends = ext->Log.Appends;
+    }
+    rc = XhciQryAnswer(buf, outLen, &in, &written);
+    /* The one counter word the door computes, as the HCD region does. */
+    if (rc == XHQ_ANS_WHOLE &&
+        hcdGet32(buf, XHQ_O_CTR_BYTES) > XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS * 4) {
+        at = hcdGet32(buf, XHQ_O_CTR_OFFSET) +
+             XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS * 4;
+        hcdPut32(buf, at, hcdDoorFallbackSlots(hc));
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    HcdDoorGateLeave(hc);
+    if (rc == XHQ_ANS_TOO_SMALL) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    *info = written;
+    return STATUS_SUCCESS;
 }
 
 /* USB_CONTROLLER_INFO_0 at `body`. The revision is read from PCI
@@ -1482,6 +1525,10 @@ NTSTATUS HcdDoorControllerIoctl(PHCD_CONTROLLER hc, PIRP irp)
             break;
         }
         status = hcdDoorUserRequest(hc, buf, inLen, outLen, &info);
+        break;
+
+    case XHQ_IOCTL:
+        status = hcdDoorQuery(hc, buf, outLen, &info);
         break;
 
     case HCD_IOCTL_HCD_DRIVERKEY:

@@ -503,7 +503,7 @@ try {
     # deleted it from both would pass just as loudly while proving nothing
     # about the half that matters.
     Assert-RuleFires "logverbosity-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,0",
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,2",
                              "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"")
     }
     # **Re-anchored on the EnumPropPages line at roadmap task 23.1**, which is
@@ -514,37 +514,37 @@ try {
     # earning its keep for the second time. EnumPropPages is 9x-only, like
     # NTMPDriver, so the cases still cannot drift onto an NT path.
     Assert-RuleFires "logdbgview-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
-                             "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,0")
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                             "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,2")
     }
 
     # And the NT path, the same two.
     Assert-RuleFires "logverbosity-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0",
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2",
                              "[Xhci.AddReg.NT]`r`nHKR,,Unrelated,,x")
     }
     Assert-RuleFires "logdbgview-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,Unrelated,,x")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,Unrelated,,x")
     }
 
     Assert-RuleFires "logdbgview-type" "VAL-TYPE" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,,0")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,,0")
     }
     # Roadmap-hcd task 34.1: the unconditional DWORD would write the default
     # over a value the user set.
     Assert-RuleFires "firstenumwait-clobber" "VAL-TYPE" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0`r`nHKR,,XhciForceBulkOnly,0x00010003,0`r`nHKR,,XhciFastPollFsLs,0x00010003,0`r`nHKR,,XhciFirstEnumWaitMs,0x00010003,5000",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0`r`nHKR,,XhciForceBulkOnly,0x00010003,0`r`nHKR,,XhciFastPollFsLs,0x00010003,0`r`nHKR,,XhciFirstEnumWaitMs,0x00010001,5000")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,0x00010003,0`r`nHKR,,XhciForceBulkOnly,0x00010003,0`r`nHKR,,XhciFastPollFsLs,0x00010003,0`r`nHKR,,XhciFirstEnumWaitMs,0x00010003,5000",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,0x00010003,0`r`nHKR,,XhciForceBulkOnly,0x00010003,0`r`nHKR,,XhciFastPollFsLs,0x00010003,0`r`nHKR,,XhciFirstEnumWaitMs,0x00010001,5000")
     }
     Assert-RuleFires "logdbgview-default" "VAL-DEFAULT" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,1")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,0x00010003,1")
     }
     Assert-RuleFires "logdbgview-subkey" "VAL-SUBKEY" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,Parameters,XhciLogDebugView,0x00010003,0")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,Parameters,XhciLogDebugView,0x00010003,0")
     }
     # **VAL-DUP had no case at all until the post-Phase 13 review rounds**, which is this suite's own
     # documented failure mode one rule over: `VAL-MISSING` was structurally
@@ -555,8 +555,8 @@ try {
     # writes the value twice on one path with a *different* default on the
     # second line, which is the shape that actually costs something.
     Assert-RuleFires "logverbosity-duplicated-nt" "VAL-DUP" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogVerbosity,0x00010003,1")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2",
+                             "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogVerbosity,0x00010003,1")
     }
 
     # **The verbosity default is the one that matters most**, and since the
@@ -569,7 +569,7 @@ try {
     # replaces the separate `logsnapshot-default` one, which had the same
     # subject through the value that is gone.
     Assert-RuleFires "logverbosity-default" "VAL-DEFAULT" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0",
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2",
                              "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,1")
     }
 
@@ -834,8 +834,8 @@ try {
     # And the 9x value on an NT path, which is the same line in the wrong
     # place: no NT engine reads it, so it is a value nothing anywhere reads.
     Assert-RuleFires "proppage-9x-value-on-nt" "PROP-STRAY" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,0")
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2",
+                             "[Xhci.AddReg.NT]`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010003,2")
     }
 
     # ---- HCD-* : the root hub, the HCD's second device role (task 25.8) ----
@@ -1603,8 +1603,8 @@ try {
         @{ Flags = "4294967296"; Verdict = "review"; Why = "an out-of-range flags field is a row, not an aborted emit - the same policy the copy side has" }
     )) {
         $inf2 = New-MutatedInf -Name ("fp-addregflag-" + $case.Flags) -Mutate {
-            param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView,0x00010003,0",
-                                 ("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciLogDebugView," + $case.Flags + ",0"))
+            param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,0x00010003,0",
+                                 ("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView," + $case.Flags + ",0"))
         }.GetNewClosure()
         $fp = Get-Footprint -Path $inf2
         Assert-RowVerdict -Rows $fp -Prefix "reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogDebugView|" -Verdict $case.Verdict `
@@ -2248,7 +2248,7 @@ try {
                              "[Xhci.Dev6.NTamd64]")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-logverbosity-default" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010003,0", "HKR,,XhciLogVerbosity,0x00010003,1")
+        param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010003,2", "HKR,,XhciLogVerbosity,0x00010003,1")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-imod-missing" "VAL-MISSING" {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160`r`n", "")

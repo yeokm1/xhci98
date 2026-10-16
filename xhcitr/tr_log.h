@@ -140,4 +140,40 @@ int tr_hcd_counters_text(TR_TEXT *t, const unsigned char *img, size_t n);
 const char *tr_hc_name(TR_U32 i);
 TR_U32 tr_hc_count(void);
 
+/* ---- xhci98.sys: its query request (src\xhci_qry.h XHQ_*) ---------------
+ *
+ * Since revision 12 (the owner's logging-consistency decision of
+ * 2026-10-16) the "Driver log (xhci98)" node and the PCI configuration node
+ * read xhci98 through IOCTL_XHCI98_QUERY, as xhcicm is read; a driver that
+ * refuses it is read through the door as before (the log) or said to be
+ * older (PCI). */
+
+typedef struct _TR_XHQ {
+    TR_U32 Bytes;
+    TR_U32 Flags;               /* XHQ_F_*                                  */
+    TR_U32 Verbosity;
+    TR_U32 VerbosityRead;
+    const unsigned char *Ctr;   /* the counter block's words                */
+    TR_U32 CtrBytes;
+    const unsigned char *Log;   /* the log's text, oldest first             */
+    TR_U32 LogBytes;
+    const unsigned char *Pci;   /* 256 bytes, or NULL                       */
+    TR_U32 PciBytes;
+    TR_U32 PciState;            /* XHQ_PCI_*                                */
+    TR_U32 Appends;
+    TR_U32 Dropped;
+    TR_U32 Flavour;
+} TR_XHQ;
+
+/* An answer of n bytes. 1 whole and consistent; -1 the header alone or a
+ * size above n (x->Bytes the size, at most XHQ_MAX_BYTES); 0 anything
+ * else: magic, version, a part outside the answer or past its bound, a
+ * counter part not whole words, a PCI part not 0 or 256 bytes. */
+int tr_xhq_parse(const unsigned char *b, size_t n, TR_XHQ *x);
+
+/* The "Driver log (xhci98)" node's text from a parsed answer: the build,
+ * recording on or off with the advice, the nonzero counters by name, the
+ * log (level 4 withheld). nt: 2000 and later. */
+void tr_xhq_log_text(TR_TEXT *t, const TR_XHQ *x, int nt);
+
 #endif /* TR_LOG_H */

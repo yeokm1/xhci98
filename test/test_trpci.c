@@ -17,8 +17,6 @@
 #include <stddef.h>
 #include "../src/cm/cm_qryb.h"
 #include "../xhcitr/tr_pci.h"
-#include "../xhcitr/tr_log.h"
-#include "../src/xhci.h"
 #include "test_harness.h"
 
 static void put16(unsigned char *b, unsigned int o, unsigned long v)
@@ -693,44 +691,6 @@ static void test_node_text(void)
     CHECK(widest(text) <= 79, "79 columns, 9x");
 }
 
-/* xhci98's PCI region: decoded, not served (old driver, either way), not
- * read, and shapes this tool refuses. */
-static void test_hcd(void)
-{
-    TR_TEXT t;
-    unsigned char c[256];
-
-    dsp_bytes(c);
-    tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_pci_text(&t, TR_SW_OK, 0, 4, 0, 256, 256, c), 1,
-             "decoded");
-    CHECK(strstr(text, "Vendor:device       8086:15C0") != NULL, "ids");
-    CHECK(widest(text) <= 79, "79 columns");
-    tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_pci_text(&t, TR_SW_OK, TR_SNAP_S_BAD_REGION, 4, 0, 0, 0,
-                             c), 0, "old driver");
-    CHECK(strstr(text, "Not served by this xhci98.sys") != NULL, "said");
-    tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_pci_text(&t, TR_SW_OFF, 0, 0, 0, 0, 0, NULL), 0,
-             "old driver, log off");
-    CHECK(strstr(text, "Not served by this xhci98.sys") != NULL, "said 2");
-    tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_pci_text(&t, TR_SW_OK, TR_SNAP_S_NOT_READ, 4, 0, 0, 0,
-                             c), 0, "not read");
-    CHECK(strstr(text, "could not read") != NULL, "said 3");
-    tr_text_init(&t, text, sizeof(text));
-    CHECK_EQ(tr_hcd_pci_text(&t, TR_SW_OK, 0, 4, 0, 256, 128, c), 0,
-             "short payload");
-    CHECK_EQ(tr_hcd_pci_text(&t, TR_SW_OK, TR_SNAP_S_TRUNCATED, 4, 0, 256,
-                             256, c), 0, "truncated");
-    CHECK_EQ(tr_hcd_pci_text(&t, TR_SW_OK, 0, 3, 0, 256, 256, c), 0,
-             "another region");
-    CHECK_EQ(tr_hcd_pci_text(&t, TR_SW_BAD, 0, 4, 0, 256, 256, c), 0, "bad");
-    CHECK_EQ(TR_SNAP_REGION_PCI, XHCI_SNAPSHOT_REGION_PCI, "region held to xhci.h");
-    CHECK_EQ(TR_SNAP_PCI_BYTES, XHCI_SNAPSHOT_PCI_BYTES, "bytes held to xhci.h");
-    CHECK_EQ(TR_SNAP_S_NOT_READ, XHCI_SNAPSHOT_S_NOT_READ, "bit held to xhci.h");
-}
-
 /* A switch with two downstream ports: the walk finds both bridges before
  * either's function, and the text draws each function under its own. */
 static void test_branch(void)
@@ -809,7 +769,6 @@ static void test_reserved_speed(void)
 
 int main(void)
 {
-    test_hcd();
     test_branch();
     test_reserved_speed();
     test_layout();

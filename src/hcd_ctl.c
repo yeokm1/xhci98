@@ -252,6 +252,11 @@ static VOID hcdReadLogSwitches(PHCD_CONTROLLER hc)
     status = hcdReadDword(hc, HCD_VALUE_LOG_VERBOSITY, &verbosity);
     ext->Log.SwitchStatusVerbosity = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
                                                         : MP_STATUS_FAILURE;
+    /* An absent value is the default (xhci_log.h; 2 since the owner's
+     * decision of 2026-10-16), not 0. */
+    if (!NT_SUCCESS(status)) {
+        verbosity = XHCI_LOG_VERBOSITY_DEFAULT;
+    }
     status = hcdReadDword(hc, HCD_VALUE_LOG_DEBUGVIEW, &debugView);
     ext->Log.SwitchStatusDebugView = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
                                                         : MP_STATUS_FAILURE;
