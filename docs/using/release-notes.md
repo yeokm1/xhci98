@@ -299,7 +299,9 @@ and works: `xhcicm.sys` never resets a tunnel it finds at its start
 
 `XHCITR.EXE` (`XHCITR64.EXE` on XP x64, Vista x64 and 7 x64) is installed
 by `INSTALL.BAT` in `%windir%\XHCI98\` and started at login as an icon in
-the notification area (`INSTALL /notray` leaves the icon out). It runs as
+the notification area. Each user can turn that off with "Start at login"
+in its View menu or the icon's right-click menu, with no administrator
+rights; `INSTALL /notray` turns it off for the whole machine. It runs as
 the logged-on user, with no administrator rights.
 
 - **The window** shows every USB host controller (this driver's and

@@ -1,8 +1,10 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 7, 2026-10-16. Revision 7 adds Safely Remove for plain USB
-devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
-decision T6; sections 1.3, 3.1, 7.1, 7.3, 11, 12 and 14 change with it.
+Status: revision 8, 2026-10-16. Revision 8 adds a per-user "Start at
+login" choice (section 7.4, the owner's request of 2026-10-16). Revision 7
+added Safely Remove for plain USB devices (section 6.5), by the owner's
+decision of 2026-10-16 that reverses decision T6; sections 1.3, 3.1, 7.1,
+7.3, 11, 12 and 14 changed with it.
 Revision 6 was reviewed and revised five times the night before; the code
 is written against both. Written for the owner's instructions of
 2026-10-16: the command-line `INSTALL /devices` and `INSTALL /eject` of
@@ -615,6 +617,26 @@ build uses the WDK's header.
 writes the Save Report text and exits (for scripts and bug reports).
 Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
 `/eject id=` names a unit or a USB device (section 6.5).
+
+### 7.4 Start at login, per user (revision 8)
+
+- The machine's start is the Run value of section 8, written by XHCIINST
+  and removed by `INSTALL /notray`; that is machine-wide and needs an
+  administrator, as before.
+- Each user can turn it off without one: "Start at login", a checkable
+  item in the View menu and in the icon's right-click menu, writes the
+  DWORD `TrayAtLogin` under `HKCU\Software\xHCI98\XHCITR` - 0 off, 1 on.
+  The item shows the user's choice.
+- `XHCITR /tray`, the start the Run value makes, reads it first: a DWORD 0
+  ends the run at once, with exit 0, before any window, icon or thread.
+  An absent value, another type or any other number starts as before; a
+  plain start (no `/tray`) always opens. The decision is
+  `tr_tray_login_start`, host-tested.
+- Without the machine's Run value nothing starts at login whatever the
+  user chooses, so the item is grey and reads "Start at login (off for
+  this computer)".
+- 98 SE and ME read the same key, from the user's profile or the default
+  user's.
 
 ## 8. Install, upgrade and uninstall
 

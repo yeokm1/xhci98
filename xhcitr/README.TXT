@@ -93,7 +93,17 @@ The notification-area icon
   Click            a list of the devices you can stop: USB devices,
                    then Thunderbolt and USB4 devices
   Double-click     opens the window
-  Right-click      Open, Refresh, About and Exit
+  Right-click      Open, Refresh, About, Start at login and Exit
+
+Start at login
+--------------
+
+To stop the icon starting when you log on, untick "Start at login" in
+the View menu or the icon's right-click menu; tick it again to bring it
+back. It is your own setting and needs no administrator rights. If the
+item is grey ("off for this computer"), the program was installed with
+INSTALL /notray, so it starts for nobody; run INSTALL again without
+/notray to turn it back on.
 
 The icon says when a Thunderbolt or USB4 device is connected, is waiting
 to be approved, could not be approved or was disconnected, and when the

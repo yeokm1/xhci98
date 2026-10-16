@@ -414,6 +414,26 @@ does not attach when added to a running machine). ME's controller in the
 guest had no driver yet, and `INSTALL` left it to Device Manager, as it
 says.
 
+### Start at login, per user (record 25 revision 8)
+
+Read on the tool of `33f66b09`, on 98 SE and on 7 x86 as the standard
+user, the tool in place of the installed one:
+
+- The icon's right-click menu and the View menu showed "Start at login"
+  ticked. Unticked from the icon, the View menu showed it unticked; after
+  a restart no icon came (on 7 the hidden-icons area held none).
+- Ticked again from the View menu: after a restart the icon was back, on
+  both systems.
+- 7: with the machine's Run value deleted by an administrator, the item
+  read "Start at login (off for this computer)", grey; the value was put
+  back afterwards.
+- On the development host, `XHCITR64 /tray` with `TrayAtLogin` 0 ended in
+  about a second with exit 0 and no icon.
+
+`INSTALL /notray` already removed the machine's Run value on an existing
+install, and an install without it writes the value again; XHCIINST is
+unchanged.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link
