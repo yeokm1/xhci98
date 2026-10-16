@@ -1956,7 +1956,9 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
      all four of the provider's slots (`PROVIDER_KEEPS_VALUE_LENGTH`, so
      the handler sets each value's length): `BootCookie` (`REG_DWORD`, the
      cookie) and `TableLinear` (`REG_BINARY`, 12 bytes: the table's linear
-     address, its size 272 and the cookie;
+     address, its size 272 and the cookie). The key's handle stays open
+     for the boot: with it closed at once, 98 SE kept the key's name with
+     no values and the provider was never called (run-41.md);
   3. **the locator** (R3b), only after the proof: `REG_BINARY` value
      `LinkState` of
      `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98`, 20

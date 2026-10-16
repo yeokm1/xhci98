@@ -448,6 +448,10 @@ static STOR98LS9X_PROOF_TABLE cmNvProofTable;
 static CM_NV_PVALUE cmNvProofValues[2];
 static CM_NV_PROVIDER cmNvProvider;
 static ULONG cmNvProofMade;     /* the dynamic key was created           */
+/* Its handle, open for as long as the key is to be answered: closing it
+ * leaves the key's name with no values and no provider (98 SE, run-41),
+ * so it is closed only at an unload, before the key is deleted. */
+static ULONG cmNvProofHkey;
 
 typedef ULONG (__cdecl *CM_NV_FN1)(ULONG a);
 typedef ULONG (__cdecl *CM_NV_FN2)(ULONG a, ULONG b);
@@ -552,7 +556,7 @@ static ULONG cmNvPubCreateProof(PVOID context)
         return error;
     }
     cmNvProofMade = 1;
-    (VOID)((CM_NV_FN1)(c->Thunks + CM_NV_T_CLOSE_KEY))(hkey);
+    cmNvProofHkey = hkey;
     return 0;
 }
 
@@ -628,13 +632,18 @@ static VOID cmNvDeleteProof(VOID)
     if (cmNvProofMade == 0) {
         return;
     }
-    t = (PUCHAR)CmAlloc(8);
+    t = (PUCHAR)CmAlloc(16);
     if (t == NULL) {
         return;
     }
-    cmNvThunk(t, CM_NV_SVC_DELETE_KEY);
-    if (((CM_NV_FN2)t)(CM_NV_HKEY_DYN_DATA,
-                       (ULONG)(ULONG_PTR)cmNvProofKey) == 0) {
+    cmNvThunk(t, CM_NV_SVC_CLOSE_KEY);
+    cmNvThunk(t + 8, CM_NV_SVC_DELETE_KEY);
+    if (cmNvProofHkey != 0) {
+        (VOID)((CM_NV_FN1)t)(cmNvProofHkey);
+        cmNvProofHkey = 0;
+    }
+    if (((CM_NV_FN2)(t + 8))(CM_NV_HKEY_DYN_DATA,
+                             (ULONG)(ULONG_PTR)cmNvProofKey) == 0) {
         cmNvProofMade = 0;
     }
     CmFree(t);
