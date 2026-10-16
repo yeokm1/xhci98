@@ -2664,9 +2664,12 @@ int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
 
     switch (type) {
     case TR_RES_MEM:
-    case TR_RES_MEMLARGE:
         head = 32;
         range = 36;
+        break;
+    case TR_RES_MEMLARGE:
+        head = 32;      /* MEM_LARGE_DES */
+        range = 40;     /* MEM_LARGE_RANGE: an 8-byte length */
         break;
     case TR_RES_IO:
         head = 28;
@@ -2741,12 +2744,19 @@ int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
         const unsigned char *r = d + head + (size_t)i * range;
         switch (type) {
         case TR_RES_MEM:
-        case TR_RES_MEMLARGE:
             tr_hex64(a, sizeof(a), r + 12, 8);
             tr_hex64(b, sizeof(b), r + 20, 8);
             tr_printf(t, "    Memory        %lu bytes in %s-%s\n",
                       (unsigned long)tr_r32(r + 8), a, b);
             break;
+        case TR_RES_MEMLARGE: {
+            char len[24];
+            tr_hex64(a, sizeof(a), r + 16, 8);
+            tr_hex64(b, sizeof(b), r + 24, 8);
+            tr_hex64(len, sizeof(len), r + 8, 8);
+            tr_printf(t, "    Memory        %sh bytes in %s-%s\n", len, a, b);
+            break;
+        }
         case TR_RES_IO:
             tr_hex64(a, sizeof(a), r + 12, 4);
             tr_hex64(b, sizeof(b), r + 20, 4);

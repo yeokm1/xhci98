@@ -2130,6 +2130,24 @@ static void test_resources(void)
     tr_text_init(&t, buf, sizeof(buf));
     CHECK(tr_res_text(&t, TR_RES_MEM, d, 68, 0, 0) &&
           has(buf, "4096 bytes in 00000000-FFFFFFFF"), "res: memory asked for");
+    /* Large memory asked for (MEM_LARGE_RANGE, 40 bytes, 8-byte length):
+     * 8 GiB, then a second range. */
+    memset(d, 0, sizeof(d));
+    put32(d, 0, 2);
+    put32(d, 32 + 12, 2);
+    put32(d, 32 + 16, 0);
+    put32(d, 32 + 20, 1);
+    put32(d, 32 + 24, 0xFFFFFFFFUL);
+    put32(d, 32 + 28, 0xFUL);
+    put32(d, 72 + 8, 0x1000UL);
+    put32(d, 72 + 24, 0xFFFFFFFFUL);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, TR_RES_MEMLARGE, d, 112, 0, 0) &&
+          has(buf, "200000000h bytes in 100000000-FFFFFFFFF") &&
+          has(buf, "00001000h bytes in 00000000-FFFFFFFF"),
+          "res: large memory asked for, above 4 GiB and a second range");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(!tr_res_text(&t, TR_RES_MEMLARGE, d, 111, 0, 0), "res: large memory cut short");
     tr_text_init(&t, buf, sizeof(buf));
     CHECK(tr_res_text(&t, 0x8001UL, d, 5, 1, 0) && has(buf, "type 0x8001"),
           "res: a private type, named");
