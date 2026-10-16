@@ -569,6 +569,9 @@ have every leg.
   it up at power-on: bus numbers, memory windows and, where provably
   routed, the interrupt line (`XhciCmBridgeNumbering`, on by default).
   Without it Windows shows the switch with Code 29 until a restart.
+  Read under the Thunderbolt 3 firmware connection manager on the
+  ThinkPad P14s Gen 1 and in the emulator; the USB4 connection manager
+  takes the same path but has not been read with such a device.
 - **Windows 2000: an unplug without a stop shows "Unsafe Removal of
   Device"**, and the device is removed. Stop it in "Unplug or Eject
   Hardware" first.
