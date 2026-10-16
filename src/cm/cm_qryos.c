@@ -37,6 +37,16 @@
  * value empty, or an answer whose instance id is not the devnode's,
  * treats the NHI as having no query device.
  *
+ * THE LOG (design record 25 section 4.5, revision 9). CM_QL_IOCTL answers
+ * the NHI's log ring, copied - never drained - at the request under the
+ * ring's own LogLock, taken inside the device's Lock (never the other
+ * way: CmLogNote holds LogLock alone, CmQueryPublish the device's Lock
+ * alone), and the counters' text the thread formats after each pass
+ * (cmQCounters) and publishes with the answer. The device reaches the
+ * ring through Log and LogLock, set at creation and cleared with
+ * Connected in CmQueryClose, which runs before the NHI's extension can
+ * go; they are followed only with Lock held and Connected set.
+ *
  * IRQL: CmQueryInit in DriverEntry; CmQueryOpen, CmQueryStopping and
  * CmQueryClose in the PnP dispatch at PASSIVE_LEVEL; CmQueryPublish on the
  * connection-manager thread at PASSIVE_LEVEL, no lock held; CmQueryDispatch
@@ -54,6 +64,8 @@ static ULONG CmQueryLastLo;
 static ULONG CmQueryLastHi;
 
 #define CM_Q_NAME_CHARS 24
+
+XHCI_C_ASSERT(cm_ql_ring_bytes, XHCI_LOG_RING_BYTES == CM_QL_LOG_MAX);
 
 /* The device interface class whose link name carries the NHI's instance
  * id (cmQInstance): this driver's own, registered and never enabled.
@@ -279,6 +291,71 @@ static ULONG cmQBdf(PCM_NHI nhi)
     return XHCI_TBT_BDF(bus, address >> 16, address & 0xFFFFUL);
 }
 
+/*
+ * The counters' text (record 25 section 4.5) into out (room bytes): the
+ * stop dump's blocks (CmNhiCounterLines), the re-enumeration's - a 98 SE
+ * or ME worker's running counts added to those its predecessors left -
+ * the child filters', and the liveness state and refusals. Returns its
+ * length; *cut 1 where it did not all fit. On the connection-manager
+ * thread (or the PnP path with no thread), PASSIVE_LEVEL, no lock held.
+ */
+static ULONG cmQCounters(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG cut)
+{
+    static const char *const names[] = {
+        "cm.reenum.ups", "cm.reenum.downs", "cm.reenum.resyncs",
+        "cm.reenum.not-done", "cm.reenum.calls", "cm.reenum.call-failures",
+        "cm.reenum.abandoned", "cm.reenum.poll-timeouts",
+        "cm.reenum.9x.calls", "cm.reenum.9x.call-failures",
+        "cm.reenum.9x.removed", "cm.reenum.9x.vetoed", "cm.reenum.9x.marked",
+        "cm.reenum.9x.mark-failures", "cm.reenum.9x.unavailable",
+        "cm.reenum.9x.gone", "cm.reenum.9x.gone-dropped", "cm.reenum.ejects",
+        "cm.reenum.child.attached", "cm.reenum.child.over",
+        "cm.reenum.child.skipped",
+        "cm.reenum.child.refused", "cm.reenum.hold.watchdogs",
+        "cm.live.state", "cm.live.refused",
+        "cm.log.debugview"
+    };
+    ULONG v[sizeof(names) / sizeof(names[0])];
+    CM_CFGWK_COUNTERS wc;
+    PCM_REENUM r;
+    ULONG at;
+
+    r = &nhi->Reenum;
+    CmZero(&wc, sizeof(wc));
+    if (r->Wk != NULL) {
+        CmCfgwkCounters(r->Wk, &wc);
+    }
+    v[0] = r->Ups;
+    v[1] = r->Downs;
+    v[2] = r->Resyncs;
+    v[3] = r->NotDone;
+    v[4] = r->Calls;
+    v[5] = r->CallFailures;
+    v[6] = r->Abandoned;
+    v[7] = r->PollTimeouts;
+    v[8] = wc.Calls;
+    v[9] = wc.CallFailures;
+    v[10] = r->Removed + wc.Removed;
+    v[11] = r->Vetoed + wc.Vetoed;
+    v[12] = r->Marked + wc.Marked;
+    v[13] = r->MarkFailures + wc.MarkFailures;
+    v[14] = r->Unavailable;
+    v[15] = r->GoneDone + wc.GoneDone;
+    v[16] = r->GoneDropped + wc.GoneDropped;
+    v[17] = r->Ejects;
+    CmRegCounters(&v[18], &v[19], &v[20], &v[21], &v[22]);
+    v[23] = (CmLiveEpisode(&nhi->Live) << 8) | nhi->Live.State;
+    v[24] = (nhi->Live.Counters.RefusedWrites << 16) |
+            (nhi->Live.Counters.RefusedReads & 0xFFFFUL);
+    v[25] = nhi->Values.Value[CM_VAL_LOG_DEBUGVIEW];
+    at = 0;
+    *cut = 0;
+    CmNhiCounterLines(nhi, out, room, &at, cut);
+    (VOID)CmQueryLines(out, room, &at, names, v,
+                       sizeof(names) / sizeof(names[0]), cut);
+    return at;
+}
+
 /* The answer the device holds until the thread's first publish: the
  * record's header for the stage the start left, no router. */
 static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
@@ -355,7 +432,15 @@ VOID CmQueryOpen(PCM_NHI nhi)
         KeInitializeSpinLock(&q->Lock);
         q->Index = n;
         q->Connected = 1;
+        q->Log = &nhi->Log;
+        q->LogLock = &nhi->LogLock;
+        q->EpochLo = nhi->QueryEpochLo;
+        q->EpochHi = nhi->QueryEpochHi;
         cmQSeed(nhi, q);
+        /* No thread, no pass: the counters as the start left them, once. */
+        if (!nhi->ThreadRunning) {
+            q->CtrBytes = cmQCounters(nhi, q->Ctr, CM_QL_CTR_MAX, &q->CtrCut);
+        }
         /* The thread's previous answer, before it can see the device. */
         for (i = 0; i < q->Bytes; i++) {
             nhi->QueryLast[i] = q->Answer[i];
@@ -422,6 +507,8 @@ VOID CmQueryClose(PCM_NHI nhi)
     q = (PCM_QUERY_DEV)self->DeviceExtension;
     KeAcquireSpinLock(&q->Lock, &irql);
     q->Connected = 0;
+    q->Log = NULL;
+    q->LogLock = NULL;
     KeReleaseSpinLock(&q->Lock, irql);
     nhi->QueryDev = NULL;
     nhi->QueryUnlinked = 0;
@@ -467,6 +554,8 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     }
     (VOID)CmQueryContentGen(nhi->QueryBuf, bytes, nhi->QueryLast,
                             nhi->QueryLastBytes);
+    nhi->QueryCtrBytes = cmQCounters(nhi, nhi->QueryCtr, CM_QL_CTR_MAX,
+                                     &nhi->QueryCtrCut);
     /* The bytes, the counter and the publish time together. */
     q = (PCM_QUERY_DEV)self->DeviceExtension;
     KeAcquireSpinLock(&q->Lock, &irql);
@@ -474,6 +563,11 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
         q->Answer[i] = nhi->QueryBuf[i];
     }
     q->Bytes = bytes;
+    for (i = 0; i < nhi->QueryCtrBytes; i++) {
+        q->Ctr[i] = nhi->QueryCtr[i];
+    }
+    q->CtrBytes = nhi->QueryCtrBytes;
+    q->CtrCut = nhi->QueryCtrCut;
     /* Once stopping, every answer stays one generation past the thread's
      * own sequence (CmQueryStopping's bump), so it never goes back. */
     if (q->Stopping) {
@@ -542,6 +636,90 @@ static NTSTATUS cmQAnswer(PCM_QUERY_DEV q, PIRP irp)
     return CmCompleteIrp(irp, STATUS_SUCCESS, info);
 }
 
+/* IRP_MJ_DEVICE_CONTROL's CM_QL_IOCTL (record 25 section 4.5): the ring
+ * copied under LogLock inside the device's Lock, straight into the system
+ * buffer, at most CM_QL_MAX_BYTES; nothing of the ring is changed. */
+static NTSTATUS cmQLog(PCM_QUERY_DEV q, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    LARGE_INTEGER ticks;
+    CM_QLOG_IN in;
+    PXHCI_LOG log;
+    ULONG incr;
+    ULONG room;
+    ULONG info;
+    ULONG rc;
+    ULONG pass;
+    ULONG tick;
+    KIRQL irql;
+    KIRQL logIrql;
+    PUCHAR out;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    room = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    out = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    if (out == NULL) {
+        room = 0;
+    }
+    info = 0;
+    pass = 0;
+    tick = 0;
+    rc = 0xFFFFFFFFUL;
+    CmZero(&in, sizeof(in));
+    KeAcquireSpinLock(&q->Lock, &irql);
+    if (q->Connected && q->Log != NULL && q->LogLock != NULL) {
+        pass = q->Pass;
+        tick = q->PassTick;
+        in.Flags = q->Stopping ? CM_QL_F_STOPPING : 0;
+        if (q->Bytes >= CM_Q_HDR_BYTES &&
+            ((ULONG)q->Answer[CM_Q_O_FLAGS] & CM_Q_F_INERT) != 0) {
+            in.Flags |= CM_QL_F_INERT;
+        }
+        in.EpochLo = q->EpochLo;
+        in.EpochHi = q->EpochHi;
+        in.Ctr = q->Ctr;
+        in.CtrBytes = q->CtrBytes;
+        in.CtrCut = q->CtrCut;
+        in.Pass = pass;
+        KeAcquireSpinLock(q->LogLock, &logIrql);
+        log = q->Log;
+        if (log->Enabled) {
+            in.Flags |= CM_QL_F_RECORDING;
+        }
+        if (log->VerbosityRefused) {
+            in.Flags |= CM_QL_F_REFUSED;
+        }
+        if (log->DebugViewEnabled) {
+            in.Flags |= CM_QL_F_EMITTED;
+        }
+        in.Verbosity = log->Verbosity;
+        in.VerbosityRead = log->VerbosityRead;
+        in.Ring = log->Ring;
+        in.RingBytes = XHCI_LOG_RING_BYTES;
+        in.Head = log->Head;
+        in.Used = log->Used;
+        in.Dropped = log->BytesDropped;
+        in.Appends = log->Appends;
+        rc = CmQueryLogAnswer(out, room, &in, &info);
+        KeReleaseSpinLock(q->LogLock, logIrql);
+    }
+    KeReleaseSpinLock(&q->Lock, irql);
+    if (rc == CM_Q_ANS_WHOLE || rc == CM_Q_ANS_HEADER) {
+        incr = KeQueryTimeIncrement();
+        KeQueryTickCount(&ticks);
+        CmQueryLogSetAge(out, info, pass,
+                         CmQueryAgeMs(ticks.LowPart, tick, incr));
+    }
+    if (rc == 0xFFFFFFFFUL) {
+        return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
+                                          : STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (rc == CM_Q_ANS_TOO_SMALL) {
+        return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
+    }
+    return CmCompleteIrp(irp, STATUS_SUCCESS, info);
+}
+
 NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp)
 {
     PCM_QUERY_DEV q;
@@ -566,6 +744,9 @@ NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp)
     case IRP_MJ_DEVICE_CONTROL:
         if (stack->Parameters.DeviceIoControl.IoControlCode == CM_Q_IOCTL) {
             return cmQAnswer(q, irp);
+        }
+        if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QL_IOCTL) {
+            return cmQLog(q, irp);
         }
         break;
     case IRP_MJ_POWER:

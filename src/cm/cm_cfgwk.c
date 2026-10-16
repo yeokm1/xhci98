@@ -2168,6 +2168,17 @@ VOID CmCfgwkStop(PCM_CFGWK w, PCM_CFGWK_COUNTERS counters)
     CmFree(w);
 }
 
+/* The worker's counts so far (cm_reenum.h). IRQL: <= DISPATCH_LEVEL, w->Lock
+ * not held; the caller (the connection-manager thread) owns w's lifetime. */
+VOID CmCfgwkCounters(PCM_CFGWK w, PCM_CFGWK_COUNTERS counters)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    *counters = w->C;
+    KeReleaseSpinLock(&w->Lock, irql);
+}
+
 VOID CmCfgwkDrain(VOID)
 {
     LARGE_INTEGER step;

@@ -1,0 +1,143 @@
+/*
+ * tr_log.h - the pure half of XHCITR's "Driver log" nodes (design record
+ * 25 sections 3.5, 4.5 and 4.6, revision 9): xhcicm.sys's log answer
+ * (src\cm\cm_query.h CM_QL_*) and xhci98.sys's log and counters as its
+ * USBUSER pass-through door gives them to XHCISNAP (xhcisnap\README.md,
+ * src\xhci.h's snapshot header, schema 5), read as bytes and turned into
+ * text. No Windows call: test\test_trlog.c links it under /Za. C89.
+ *
+ * Nothing here shows an internal address: xhcicm's answer carries none
+ * (the driver withholds its three address records), and xhci98's ring is
+ * shown only at XhciLogVerbosity 2 and 3 - at 4 it holds kernel
+ * addresses and is withheld (decision T15). Only the ring and the HCD
+ * region's counter block are ever taken out of a window; the raw
+ * extension image is never kept or shown.
+ */
+
+#ifndef TR_LOG_H
+#define TR_LOG_H
+
+#include "tr_core.h"
+
+/* ---- xhcicm.sys: the log answer (CM_QL_*) ----------------------------- */
+
+typedef struct _TR_QLOG {
+    TR_U32 Bytes;               /* CM_QL_O_BYTES                            */
+    TR_U32 Flags;               /* CM_QL_F_*                                */
+    TR_U32 Verbosity;           /* XhciLogVerbosity applied                 */
+    TR_U32 VerbosityRead;
+    TR_U32 EpochLo;
+    TR_U32 EpochHi;
+    const unsigned char *Ctr;   /* the counters' text                       */
+    TR_U32 CtrBytes;
+    const unsigned char *Log;   /* the log's text, oldest first             */
+    TR_U32 LogBytes;
+    TR_U32 Appends;
+    TR_U32 Dropped;
+    TR_U32 Pass;
+    TR_U32 AgeMs;
+} TR_QLOG;
+
+/* An answer of n bytes (no more than the call returned). 1 a whole,
+ * consistent answer; -1 the header alone, or a size field asking for more
+ * than n (l->Bytes says how much, at most CM_QL_ASK_BYTES); 0 anything
+ * else: wrong magic or version, or a counter or log part outside the
+ * answer or past its bound. */
+int tr_qlog_parse(const unsigned char *b, size_t n, TR_QLOG *l);
+
+/* The node's text from a parsed answer: recording on or off (and the
+ * advice, with keyPath, the NHI's driver key under HKEY_LOCAL_MACHINE),
+ * the nonzero counters, the log. nt: 2000 and later. */
+void tr_qlog_text(TR_TEXT *t, const TR_QLOG *l, const char *keyPath, int nt);
+
+/* How to turn xhcicm's recording on (record 25 section 3.5). */
+void tr_log_advice_cm(TR_TEXT *t, const char *keyPath, int nt);
+
+/* ---- xhci98.sys: the pass-through door (as xhcisnap.c's take_window) --- */
+
+#define TR_SNAP_IOCTL           0x00220438UL    /* IOCTL_USB_USER_REQUEST */
+#define TR_SNAP_PASS_THRU       3UL             /* USBUSER_PASS_THRU      */
+#define TR_UU_REQUEST           0x00UL
+#define TR_UU_STATUS            0x04UL
+#define TR_UU_REQUEST_BYTES     0x08UL
+#define TR_UU_ACTUAL_BYTES      0x0CUL
+#define TR_UU_GUID              0x10UL
+#define TR_UU_PARAM_BYTES       0x20UL
+#define TR_UU_PARAMETERS        0x24UL
+#define TR_SNAP_PARAM_BYTES     0xF000UL
+#define TR_SNAP_BUFFER_BYTES    (TR_UU_PARAMETERS + TR_SNAP_PARAM_BYTES)
+#define TR_SNAP_REQ_SIGNATURE   0x514E5358UL    /* 'XSNQ' */
+#define TR_SNAP_SIGNATURE       0x504E5358UL    /* 'XSNP' */
+#define TR_SNAP_SCHEMA          5UL
+#define TR_SNAP_HDR_BYTES       152UL           /* 38 ULONGs, schema 5    */
+#define TR_SNAP_REGION_EXT      0UL
+#define TR_SNAP_REGION_HCD      3UL
+#define TR_SNAP_HCD_MAX_BYTES   32768UL
+#define TR_SNAP_UU_NOT_SUPPORTED 6UL            /* the channel is off      */
+
+/* XHCI_SNAPSHOT_S_* */
+#define TR_SNAP_S_TRUNCATED     0x01UL
+#define TR_SNAP_S_BAD_REQUEST   0x02UL
+#define TR_SNAP_S_BAD_EXTENSION 0x04UL
+#define TR_SNAP_S_BAD_REGION    0x08UL
+#define TR_SNAP_S_PAST_END      0x10UL
+
+/* The whole request buffer (TR_SNAP_BUFFER_BYTES) for one window of
+ * `region` at `offset`, as take_window fills it. */
+void tr_snap_request(unsigned char *buf, TR_U32 region, TR_U32 offset);
+
+typedef struct _TR_SNAPW {
+    TR_U32 UuStatus;            /* the door's own status; 0 answered        */
+    TR_U32 Status;              /* TR_SNAP_S_*                               */
+    TR_U32 Region;
+    TR_U32 Offset;
+    TR_U32 RegionBytes;
+    TR_U32 PayloadBytes;
+    TR_U32 Flavour;             /* XHCI_SNAPSHOT_FLAVOUR_*                   */
+    TR_U32 VerbosityRead;
+    TR_U32 VerbosityApplied;
+    TR_U32 RingOffset;
+    TR_U32 RingBytes;
+    TR_U32 RingHead;
+    TR_U32 RingUsed;
+    const unsigned char *Payload;
+} TR_SNAPW;
+
+#define TR_SW_OK                0   /* a window, w filled                   */
+#define TR_SW_OFF               1   /* the door answered 6: channel off     */
+#define TR_SW_REFUSED           2   /* another door status (w->UuStatus)    */
+#define TR_SW_BAD               3   /* no signature, another schema, short  */
+
+/* One window's answer, `returned` bytes of the request buffer. */
+int tr_snap_window(const unsigned char *buf, size_t returned, TR_SNAPW *w);
+
+/* xhci98's state lines: the flavour, recording on or off and why, the
+ * advice when off. From the first window's header. */
+void tr_hcd_head_text(TR_TEXT *t, const TR_SNAPW *w, int nt);
+
+/* The door answered that its channel is off (level 0). */
+void tr_hcd_off_text(TR_TEXT *t, int nt);
+
+/* How to turn xhci98's recording on (SNAPON.BAT). */
+void tr_log_advice_hcd(TR_TEXT *t, int nt);
+
+/* The ring from the window w taken at `asked` (the ring's offset, from
+ * the first window): checked and decoded with w's own header. Level 4
+ * withheld. Returns TR_RING_*. */
+#define TR_RING_SHOWN           0
+#define TR_RING_EMPTY           1
+#define TR_RING_WITHHELD        2   /* level 4: kernel addresses            */
+#define TR_RING_OFF             3   /* level below 2: not recording         */
+#define TR_RING_BAD             4   /* the window does not hold the ring    */
+int tr_hcd_ring_text(TR_TEXT *t, const TR_SNAPW *w, TR_U32 asked);
+
+/* The HCD region's counter block (version 1), its nonzero words with
+ * XHCIHC_COUNTERS' names: 1 decoded, 0 a shape this tool does not read
+ * (said in t). */
+int tr_hcd_counters_text(TR_TEXT *t, const unsigned char *img, size_t n);
+
+/* Word i's name in XHCIHC_COUNTERS (tr_hcctr.h), NULL past it. */
+const char *tr_hc_name(TR_U32 i);
+TR_U32 tr_hc_count(void);
+
+#endif /* TR_LOG_H */

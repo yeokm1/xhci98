@@ -160,11 +160,13 @@ HKR,,XhciCmPollIdleMs,0x00010003,200
 HKR,,XhciCmCmdTimeoutMs,0x00010003,5000
 HKR,,XhciCmApproveTimeoutMs,0x00010003,10000
 HKR,,XhciCmSafeEject,0x00010003,1
-HKR,,XhciLogVerbosity,0x00010003,0
+HKR,,XhciCmLogVerbosity,0x00010003,2
 ; The USB4 profile's (design record 22 section 12).
 HKR,,XhciCmUsb3Tunnel,0x00010003,1
 HKR,,XhciCmLaneBonding,0x00010003,1
 HKR,,XhciCmPreOsCleanup,0x00010003,0
+; The log's emission (record 21 section 8): 1 prints it to a debugger.
+HKR,,XhciCmLogDebugView,0x00010003,0
 
 [Cm.AddService]
 DisplayName=%CmSvcDesc%

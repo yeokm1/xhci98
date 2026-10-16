@@ -17,8 +17,9 @@ rem COMCTL32 and COMDLG32 alone (selftest.cmd holds them to it); every
 rem SetupAPI and configuration-manager routine is looked up at run time.
 rem
 rem The sources: xhcitr.c (the system half), tr_core.c (the pure half the
-rem host suite test\test_tr.c also links) and ..\xhciinst\inst_core.c,
-rem record 24's unit rules and eject texts.
+rem host suite test\test_tr.c also links), tr_log.c (the driver logs' pure
+rem half, test\test_trlog.c's) and ..\xhciinst\inst_core.c, record 24's
+rem unit rules and eject texts.
 setlocal
 cd /d "%~dp0"
 
@@ -59,11 +60,11 @@ set "INCLUDE=%MSVC6%\VC98\Include"
 set "LIB=%MSVC6%\VC98\Lib"
 rc /fo xhcitr.res xhcitr.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /FeXHCITR.EXE xhcitr.c tr_core.c ..\xhciinst\inst_core.c xhcitr.res %LIBS% /link /SUBSYSTEM:WINDOWS,4.0
+cl /nologo /W3 /WX /O2 /FeXHCITR.EXE xhcitr.c tr_core.c tr_log.c ..\xhciinst\inst_core.c xhcitr.res %LIBS% /link /SUBSYSTEM:WINDOWS,4.0
 if errorlevel 1 exit /b 1
 if not exist XHCITR.EXE exit /b 1
 endlocal
-del /q xhcitr.obj tr_core.obj inst_core.obj xhcitr.res 2>nul
+del /q xhcitr.obj tr_core.obj tr_log.obj inst_core.obj xhcitr.res 2>nul
 echo Built XHCITR.EXE
 
 if "%WANT64%"=="0" goto done
@@ -75,11 +76,11 @@ set "INCLUDE=%WDK71%\inc\api;%WDK71%\inc\crt"
 set "LIB=%WDK71%\lib\wnet\amd64;%WDK71%\lib\crt\amd64"
 rc /i "%WDK71%\inc\api" /fo xhcitr64.res xhcitr.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCITR64.EXE xhcitr.c tr_core.c ..\xhciinst\inst_core.c xhcitr64.res %LIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
+cl /nologo /W3 /WX /O2 /MT /FeXHCITR64.EXE xhcitr.c tr_core.c tr_log.c ..\xhciinst\inst_core.c xhcitr64.res %LIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
 if errorlevel 1 exit /b 1
 if not exist XHCITR64.EXE exit /b 1
 endlocal
-del /q xhcitr.obj tr_core.obj inst_core.obj xhcitr64.res 2>nul
+del /q xhcitr.obj tr_core.obj tr_log.obj inst_core.obj xhcitr64.res 2>nul
 echo Built XHCITR64.EXE
 
 :done

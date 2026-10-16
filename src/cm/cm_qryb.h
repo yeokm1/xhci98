@@ -103,4 +103,90 @@ VOID CmQuerySetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs);
  * returns it. */
 ULONG CmQueryBumpGen(UCHAR *answer, ULONG bytes);
 
+/*
+ * ---- The log answer (cm_query.h CM_QL_*, design record 25 section 4.5) ----
+ *
+ * The counters are text the thread writes after each pass (CmQueryLines,
+ * from the stop dump's name tables) and publishes with the status answer;
+ * the log is the ring, copied at the request under its own lock
+ * (cm_qryos.c) by CmQueryLogAnswer, which leaves the ring as it was.
+ */
+
+/* Lines "name=XXXXXXXX" CR LF for names[i] and values[i], i < count,
+ * appended to out at *at, out being room bytes in all; *at moves past
+ * what was written. A line that does not fit is not written, nor any
+ * after it, and *cut is set to 1; once *cut is set, nothing more is
+ * written. A name byte outside 0x21..0x7E is written '.'. Returns the
+ * lines written. */
+ULONG CmQueryLines(UCHAR *out, ULONG room, PULONG at,
+                   const char *const *names, const ULONG *values,
+                   ULONG count, PULONG cut);
+
+typedef struct _CM_QLOG_IN {
+    ULONG Flags;            /* CM_QL_F_RECORDING, _REFUSED, _STOPPING,
+                               _EMITTED and _INERT; the builder adds the
+                               rest                                      */
+    ULONG Verbosity;
+    ULONG VerbosityRead;
+    ULONG EpochLo;
+    ULONG EpochHi;
+    const UCHAR *Ctr;       /* the counters' text, CtrBytes bytes        */
+    ULONG CtrBytes;         /* above CM_QL_CTR_MAX: none, and cut        */
+    ULONG CtrCut;
+    const UCHAR *Ring;      /* the ring as XHCI_LOG holds it: RingBytes  */
+    ULONG RingBytes;        /* a power of two, at most CM_QL_LOG_MAX;    */
+    ULONG Head;             /* any other shape is an empty log           */
+    ULONG Used;
+    ULONG Dropped;
+    ULONG Appends;
+    ULONG Pass;             /* the counters' pass                         */
+} CM_QLOG_IN, *PCM_QLOG_IN;
+
+/* The log answer into out (room bytes), with CmQueryAnswer's rules:
+ * CM_Q_ANS_TOO_SMALL under CM_QL_HDR_BYTES (nothing written);
+ * CM_Q_ANS_HEADER under the whole, the header alone with CM_QL_O_BYTES the
+ * size needed; else CM_Q_ANS_WHOLE. *info the bytes written. The log is
+ * the ring's Used bytes oldest first: a byte outside 0x20..0x7E, CR and LF
+ * written '.'; when the oldest bytes may be a record's tail (Dropped != 0,
+ * or CM_QL_F_EMITTED: a drain) the text starts after the first LF
+ * (CM_QL_F_LOG_CUT); the value of a record CmQueryLogAddress names is
+ * written "--------" (CM_QL_F_WITHHELD). The age is CM_Q_UNKNOWN until
+ * CmQueryLogSetAge. */
+ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
+                       PULONG info);
+
+/* The age written into a log answer of `info` bytes: CM_Q_UNKNOWN where
+ * `pass` is 0. */
+VOID CmQueryLogSetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs);
+
+/* 1 when a record whose label is the `n` bytes at `label` carries an
+ * address as its value: cm.live.bar-changed, the BAR as read (cm_nhi.c),
+ * and cm.reenum.9x.gone.superseded and .id-changed, a CONFIGMG devnode
+ * handle (cm_cfgwk.c). A record added whose value is an address is added
+ * here. */
+ULONG CmQueryLogAddress(const UCHAR *label, ULONG n);
+
+/* One record of the ring as the DebugView emission prints it (cm_log.c),
+ * `n` bytes at `line`: below XhciCmLogVerbosity 4, the value of a record
+ * CmQueryLogAddress names is written "--------", the answer's rule; at 4
+ * the line is left as recorded, as xhci98.sys's ring holds its addresses
+ * at 4. Returns 1 when a value was withheld. */
+ULONG CmQueryLogLine(UCHAR *line, ULONG n, ULONG verbosity);
+
+/*
+ * The DebugView emission of a drained ring (cm_log.c): `n` bytes at
+ * `text`, oldest first, taken from the ring in one drain under its lock.
+ * `partial` nonzero when the wrap overwrote bytes since the last
+ * emission, so the first line can be a record's tail with its label gone:
+ * it is not handed on. Every other line - up to and including its LF, or
+ * the bytes left at the end - goes through CmQueryLogLine and then to
+ * `emit`, in order, at most CM_QL_EMIT_LINE bytes at a time. Returns the
+ * lines handed on.
+ */
+#define CM_QL_EMIT_LINE         128UL
+typedef VOID (*CM_QL_EMIT_FN)(PVOID context, const UCHAR *line, ULONG n);
+ULONG CmQueryLogEmitLines(UCHAR *text, ULONG n, ULONG partial,
+                          ULONG verbosity, CM_QL_EMIT_FN emit,
+                          PVOID context);
+
 #endif /* CM_QRYB_H */

@@ -57,9 +57,8 @@ ntoskrnl.exe!IoOpenDeviceRegistryKey       all    required  SITES=cm_reg.obj,cm_
 ntoskrnl.exe!RtlQueryRegistryValues        all    required  SITES=cm_reg.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!ZwClose                       all    required  SITES=cm_reg.obj,cm_thr.obj,cm_cfgwk.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
 
-# --- The log's emission, checked flavours only (decision D12): cm_log.obj ---
-ntoskrnl.exe!DbgPrint                      debug  required  SITES=cm_log.obj nt52-amd64-export; twin of the x86 row
-ntoskrnl.exe!DbgPrint                      qemu   required  SITES=cm_log.obj nt52-amd64-export; twin of the x86 row
+# --- The log's emission, every flavour (record 21 section 8): cm_log.obj ---
+ntoskrnl.exe!DbgPrint                      all    required  SITES=cm_log.obj nt52-amd64-export; twin of the x86 row
 
 # --- Pool: cm_pool.obj only, optional while nothing allocates pool ---
 ntoskrnl.exe!ExAllocatePoolWithTag         all    optional  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row
