@@ -49,8 +49,8 @@ The release notes say what was read on which system.
   ends by saying whether Windows must be restarted. It asks whether to
   install the Thunderbolt and USB4 support, Yes by default when such a
   controller is found.
-- NVMe drives behind Thunderbolt or USB4: the download bundles the separate
-  nvme98 driver, in its own `nvme98\` folder with its own licence.
+- NVMe drives behind Thunderbolt or USB4 need an NVMe driver of their own,
+  which this download does not include.
 - Device Manager names the new devices "xHCI98 Thunderbolt 3 Controller",
   "xHCI98 USB4 Host Router" and, on the bridge ports, "xHCI98 Thunderbolt
   PCI Bridge" or "xHCI98 USB4 PCI Bridge".
