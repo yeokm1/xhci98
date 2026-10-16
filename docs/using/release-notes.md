@@ -206,11 +206,10 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   gains a read-only query device for it.
 - **Device Manager names by generation**: "Thunderbolt and USB4 in Device
   Manager", below.
-- **A link-state channel for Stor98**: on Windows 2000 to 7,
-  `xhcicm.sys` publishes the channel of Stor98's interface 4. Stor98
-  `0.3.0.1` does not read it yet and detects a removed drive by itself;
-  nothing waits for it. On 98 SE and ME this release has no channel
-  ("NVMe drives behind a tunnel").
+- **A link-state channel for Stor98**: `xhcicm.sys` publishes the
+  channel of Stor98's interface 4 on every target, Windows 98 SE to 7,
+  and states on it which NVMe drive is behind a tunnel; Stor98 `0.4.0.0`
+  reads it on all of them ("NVMe drives behind a tunnel").
 - **Stor98 in the download**: the package carries a release of Stor98,
   the NVMe driver for Windows 98 SE to 7, as its own project released
   it (which release: "NVMe drives behind Thunderbolt or USB4", under
@@ -433,20 +432,28 @@ Thunderbolt or USB4", under "Installing"); read them before installing
 it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the
 drive.
 
-On Windows 2000 to 7, `xhcicm.sys` publishes the link-state channel of
-Stor98's interface 4, the kernel callback object
-`\Callback\Stor98LinkState`, and states on it which NVMe function is
-behind a tunnel when the tunnel comes up. Stor98 `0.3.0.1` does not
-read the channel yet:
+`xhcicm.sys` publishes the link-state channel of Stor98's interface 4
+and states on it which NVMe function is behind a tunnel when the tunnel
+comes up. On Windows 2000 to 7 the channel is the kernel callback object
+`\Callback\Stor98LinkState`; on Windows 98 SE and ME it is a registry
+locator under `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98`
+beside a key that proves it belongs to the current boot,
+`HKEY_DYN_DATA\Stor98LinkState`, which `xhcicm.sys` answers for as long
+as Windows runs. The bundled Stor98 reads it on every target:
 
-- no statement is read or acknowledged, and nothing waits for one;
-- Stor98 detects a removed drive by itself, at its own deadline (about 5 seconds).
-
-On Windows 98 SE and ME, `xhcicm.sys` in this release publishes no
-channel, so Stor98 runs there without it:
-
-- there is no clean-eject handshake and no acknowledged link-down;
-- Stor98 detects a removed drive by itself.
+- On Windows 2000 and XP x64, where `xhcicm.sys` can prove that the
+  drive's link went down and the drive was reset (today only in its
+  emulator), it says so on the channel, Stor98 acknowledges, and the
+  drive is removed at once rather than after Stor98's own deadline of
+  about 5 seconds.
+- Everywhere else nothing is stated: Stor98 detects a removed drive by
+  itself, at that deadline.
+- On Windows 98 SE and ME Stor98 finds the channel, also for a drive
+  plugged in after Windows started (it looks for its drive's entry again
+  after it starts). This release makes no link-down statement there and
+  no clean-eject handshake: an eject with the install or tray tool is
+  Windows' own (flush and stop), and for an unplugged drive Stor98
+  relies on its own deadline.
 
 ### The connection manager's registry values
 

@@ -2189,15 +2189,25 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   requests, and Stor98's own gone deadline (MD-1) covers its drives - the
   case R4 itself describes for a connection manager that stops writing.
 
-  What this gives Stor98 `0.3.0.1` on 98 SE and ME is the table and its
-  `UP` entries (it binds to the entry naming its function and records the
-  generation, R8d). It does not give it a statement or a removal request
-  in `3.0.0.0`: no link-down statement is made there ("The statement"
-  below: no reading on 98 SE and ME), and an eject made with the install
-  or tray tool goes to Windows directly (record 24 section 7.1), so the
-  worker's handshake below is not reached by it. Stor98 relies on its own
-  gone deadline (about 5 s) and on Windows' removal, as before;
-  roadmap-usb4.md NV9X.3 is the work that makes both.
+  What this gives Stor98 on 98 SE and ME is the table and its `UP`
+  entries; it reads the proof and the locator once per load, in
+  `HwFindAdapter` (R3). Where the tunnel's function answers only after
+  `Reenumerate_DevNode` - a drive plugged in after Windows started, on 98
+  SE and ME alike (run-41.md) - its `UP` is published about 200 ms after
+  Windows has started Stor98 on it, so a Stor98 that bound its entry only
+  in `HwFindAdapter` would find none, or a stale one; Stor98 `0.4.0.0`
+  looks its entry up after its start as well, taking only an `UP` above a
+  generation floor, so a hot-plugged drive gets the channel too (read in
+  the joint legs with that release). A drive present when Windows starts
+  is enumerated before this driver publishes, and its first load runs
+  without the channel; a later one, after a re-plug, finds it. It does
+  not give Stor98 a statement or a removal request in `3.0.0.0`: no
+  link-down statement is made there ("The statement" below: no reading on
+  98 SE and ME), and an eject made with the install or tray tool goes to
+  Windows directly (record 24 section 7.1), so the worker's handshake
+  below is not reached by it. Stor98 relies on its own gone deadline
+  (about 5 s) and on Windows' removal, as before; roadmap-usb4.md NV9X.3
+  is the work that makes both.
 
 - **UP before the enumeration.** For each active member, before the call
   that exposes its secondary bus (the invalidation of section 6.2,
