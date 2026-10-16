@@ -707,6 +707,39 @@ asked:
 Both bridges were started; the NVMes showed Code 28, no driver. The
 re-plug's `info pci` matched the first plug's.
 
+## The fallback for a unit not marked removable (record 24 revision 5, record 25 revision 11)
+
+Read on 2026-10-16 on development host A, overlays under
+`E:\xhci98-vm\tr-fallback` (QMP 47990 to 47995, each guest in its SDL
+window), with the nt-bridge recipe above: emulator `2a893ea`,
+`tb3-alpine-ridge`, the SHPC tunnel bridge with the `usb4-asm-pci-usp`
+(`1B21:2421`) and `pci-bridge-seat` chain cold-plugged behind it and an
+NVMe at its end, no NVMe driver, so no volume. The package was a dry x86
+TEST cut of branch `tr-fallback` at `e9701bdb`'s tools; its drivers came
+before the merge of `nt-childattach` (record 21 section 7.4's attachment
+above bus filters), so its re-plug readings on XP and 7 are the earlier
+drivers'. Each system: a fresh overlay, `INSTALL /yes /thunderbolt
+/notray /nopause`, a shutdown, then the chain at first boot and the
+enclosure added (`device_add usb4-device ... device-model=asm2464`).
+Evidence: `E:\xhci98-vm\tr-fallback\shots\` (`w2k-a3-*`, `w2k-b1-*`,
+`xp-x2-*`, `w7-s2-*`), `pids.txt` and each guest's `cmdline-<tag>.txt`.
+
+| System | First plug, `INSTALL /devices` | The stop | After it |
+|---|---|---|---|
+| 2000 | `[2] PCI standard PCI-to-PCI bridge`, "not marked removable: Safely Remove Hardware may not list it" | `INSTALL /eject 2`, Y, as the administrator: log `CM_Request_Device_EjectA = 0x00000017, veto 8`, then `CM_Query_And_Remove_SubTreeW(flags 0x3) = 0x00000000, veto 0`; "Windows has stopped PCI standard PCI-to-PCI bridge.", exit 0 | the bridge at problem code 24; `device_del` with no Unsafe Removal dialog; the re-plug started it, "removable: yes" |
+| 2000, second never-seen unit (the chain moved to `tb0` slot 4) | not marked removable | `XHCITR /eject id=...` run as a limited user (`runas /user:tuser`): the confirmation, then "Windows does not list this device for safe removal. Stopping it needs administrator rights." with "Stop as administrator..."; the Run As Other User dialog appeared. Cancel: "Nothing was stopped: administrator rights were not given. Try again and allow it, or unplug the device and plug it in again." A wrong password: the shell's own logon error and the dialog again. A second administrator account: "Windows has stopped PCI standard PCI-to-PCI bridge. ..." with no second confirmation | no dialog at the unplug; the re-plug started it, removable |
+| XP SP3 | not marked removable | `XHCITR` as a limited user: the same dialog, then XP's Run As. "Current user" with its protection box: the elevated run answered "Windows does not list this device for safe removal. Run this as an administrator to stop it." through the window. "The following user", an administrator: stopped, no second confirmation | after the unplug and a re-plug, still not marked (earlier drivers) |
+| XP SP3, `XHCIINST` | not marked removable | `INSTALL /eject 2`, Y: log `CM_Request_Device_EjectA = 0x00000000, veto 8` - success with the veto type, which before this change read as stopped with nothing stopped - then `CM_Query_And_Remove_SubTreeW(flags 0x3) = 0x00000000`; stopped, exit 0 | |
+| 7 SP1 x86 | not marked removable | `XHCITR` as a standard user: the dialog with the shield; User Account Control asked for an administrator's password. Cancel: the "not given" text. Accepted: stopped, no second confirmation | after the unplug and a re-plug, still not marked (earlier drivers) |
+| 7 SP1 x86, `XHCIINST` | not marked removable | `INSTALL /eject 2` from an elevated prompt: `CM_Request_Device_EjectA = 0x00000017, veto 8`, `CM_Query_And_Remove_SubTreeW(flags 0x3) = 0x00000000`; stopped, exit 0 | |
+
+All three systems accepted `CM_REMOVE_UI_NOT_OK | CM_REMOVE_NO_RESTART`;
+no `CR_INVALID_FLAG` retry was needed. Not read: a veto with a file open
+(no volume in this topology: no NVMe driver was installed), Vista, the x64
+tools, the window's and the tray's own route to the same dialog (the
+one-shot `/eject id=` takes the same functions), and whether a rescan
+restarts a unit after this stop.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link

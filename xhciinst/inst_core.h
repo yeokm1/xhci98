@@ -760,16 +760,57 @@ int inst_eject9x_query(INST_U32 cr, const char **text);
 int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
                   int *withName);
 
-/* NT: 1 when an eject request refused as PNP_VetoIllegalDeviceRequest is
- * for a unit whose capabilities were read and say neither Removable nor
- * SurpriseRemovalOK, so the same query-remove and remove are asked by
- * CM_Query_And_Remove_SubTreeA (record 24 section 7.2; a veto still stops
- * that call). */
-int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int capsKnown,
-                           INST_U32 caps);
+#define INST_CR_INVALID_FLAG            0x04UL
 
-/* The step when that routine is not implemented either (Windows 2000, read
- * on the leg): exit 4, nothing changed. */
+/* NT: 1 for a unit not marked removable now - its capabilities were read
+ * and say neither Removable nor SurpriseRemovalOK, whatever the cause (the
+ * first plug of a device Windows has not seen behind a tunnel, a stack
+ * rebuilt since, roadmap EJRB.1): Safely Remove Hardware does not list
+ * it. */
+int inst_unit_not_marked(int capsKnown, INST_U32 caps);
+
+/* NT: an eject routine's answer as the outcome tables read it. Windows XP
+ * answers a vetoed CM_Request_Device_EjectA with CR_SUCCESS and the veto
+ * type set, so a veto type other than PNP_VetoTypeUnknown (0) turns
+ * success into CR_REMOVE_VETOED. The caller sets the type to 0 first. */
+INST_U32 inst_eject_cr(INST_U32 cr, INST_U32 vetoType);
+
+/* NT: what follows CM_Request_Device_EjectA's answer (through
+ * inst_eject_cr) for a unit (record 24 section 7.2). notMarked: from
+ * inst_unit_not_marked; mayRemove: 0 when the caller is known to lack
+ * the right the fallback needs (an unelevated token on Vista and 7). For
+ * a unit not marked removable, Windows' refusal as an illegal request
+ * leads to CM_Query_And_Remove_SubTree - the same query-remove and
+ * remove, a veto still stopping it - and a rights refusal to
+ * inst_admin_text. */
+#define INST_NT_ANSWER      0   /* the answer is the outcome: inst_eject_nt */
+#define INST_NT_FALLBACK    1   /* ask CM_Query_And_Remove_SubTree         */
+#define INST_NT_ADMIN      2   /* refuse: inst_admin_text, exit 1        */
+int inst_eject_nt_step(INST_U32 cr, INST_U32 vetoType, int notMarked,
+                       int mayRemove);
+
+/* NT: the outcome of CM_Query_And_Remove_SubTree's answer (through
+ * inst_eject_cr) and its text, as inst_eject_nt, except that a rights
+ * refusal gives inst_admin_text (exit 1) and CR_CALL_NOT_IMPLEMENTED
+ * inst_not_removable_text (exit 4, nothing changed). */
+int inst_eject_nt_removal(INST_U32 cr, INST_U32 vetoType, const char **text,
+                          int *withName);
+
+/* The fallback's flags: CM_REMOVE_UI_NOT_OK | CM_REMOVE_NO_RESTART, which
+ * 2000, XP, Vista and 7 accept. inst_removal_retry: 1 when an answer of
+ * CR_INVALID_FLAG to `flags` is to be asked again with
+ * CM_REMOVE_UI_NOT_OK alone (that refusal changes nothing). */
+#define INST_REMOVE_UI_NOT_OK       0x00000001UL
+#define INST_REMOVE_NO_RESTART      0x00000002UL
+int inst_removal_retry(INST_U32 cr, INST_U32 flags);
+
+/* The refusal for a unit not marked removable when the caller lacks the
+ * right the fallback needs: exit 1, nothing changed. Promises nothing of
+ * a re-plug. */
+const char *inst_admin_text(void);
+
+/* The step when that routine is not implemented either: exit 4, nothing
+ * changed. */
 const char *inst_not_removable_text(void);
 
 /* 98 SE and ME: the outcome of the removal that follows an accepted

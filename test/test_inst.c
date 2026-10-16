@@ -1644,6 +1644,135 @@ static void test_tb_question(void)
              "/thunderbolt /devices refused");
 }
 
+/* The longest line of a text, for the 79-column rule. */
+static size_t longest_line(const char *s)
+{
+    size_t best = 0;
+    size_t n = 0;
+
+    for (; *s != '\0'; s++) {
+        if (*s == '\n') {
+            n = 0;
+            continue;
+        }
+        n++;
+        if (n > best) {
+            best = n;
+        }
+    }
+    return best;
+}
+
+/* NT: a unit not marked removable (whatever the cause: roadmap EJRB.1). */
+static void test_tb_fallback(void)
+{
+    const char *text;
+    int withName;
+
+    /* Not marked: capabilities read, neither Removable nor
+     * SurpriseRemovalOK. */
+    CHECK(inst_unit_not_marked(1, 0x0), "neither bit: not marked");
+    CHECK(inst_unit_not_marked(1, 0x2), "other bits do not count");
+    CHECK(!inst_unit_not_marked(1, 0x4), "Removable: marked");
+    CHECK(!inst_unit_not_marked(1, 0x80), "SurpriseRemovalOK: not this case");
+    CHECK(!inst_unit_not_marked(1, 0x84), "both: not this case");
+    CHECK(!inst_unit_not_marked(0, 0x0), "capabilities not known");
+
+    /* XP answers a vetoed eject CR_SUCCESS with the veto type set. */
+    CHECK_EQ(inst_eject_cr(0, 0), 0, "a success with no veto stays one");
+    CHECK_EQ(inst_eject_cr(0, 5), INST_CR_REMOVE_VETOED,
+             "a success with a veto type is a veto");
+    CHECK_EQ(inst_eject_cr(0, 8), INST_CR_REMOVE_VETOED,
+             "an illegal request answered as success is a veto");
+    CHECK_EQ(inst_eject_cr(INST_CR_ACCESS_DENIED, 12), INST_CR_ACCESS_DENIED,
+             "another answer is kept");
+    CHECK_EQ(inst_eject_cr(INST_CR_REMOVE_VETOED, 5), INST_CR_REMOVE_VETOED,
+             "a veto stays a veto");
+    CHECK_EQ(inst_eject_nt(inst_eject_cr(0, 5), 5, &text, &withName),
+             INST_EJ_VETO, "XP's open-handle answer: refused, exit 4");
+    CHECK(strstr(text, "program") != NULL, "XP's open-handle answer: says a program");
+    CHECK_EQ(inst_eject_code(inst_eject_nt(inst_eject_cr(0, 6), 6, &text,
+                                           &withName)),
+             INST_EXIT_STEPS, "XP's device veto: exit 4");
+    CHECK(withName, "XP's device veto: names the device");
+
+    /* The step after the eject request. */
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 8, 1, 1),
+             INST_NT_FALLBACK,
+             "an illegal request on a unit not marked: query and remove");
+    CHECK_EQ(inst_eject_nt_step(inst_eject_cr(0, 8), 8, 1, 1), INST_NT_FALLBACK,
+             "XP's success-with-veto illegal request: query and remove");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 8, 1, 0), INST_NT_ADMIN,
+             "an unelevated caller on Vista and 7: the administrator refusal");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_ACCESS_DENIED, 0, 1, 1), INST_NT_ADMIN,
+             "access denied on a unit not marked: the administrator refusal");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 12, 1, 1), INST_NT_ADMIN,
+             "insufficient rights on a unit not marked: the administrator refusal");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 8, 0, 1), INST_NT_ANSWER,
+             "a marked unit: the answer stands");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_ACCESS_DENIED, 0, 0, 1), INST_NT_ANSWER,
+             "a marked unit's access refusal: the rights text");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 5, 1, 1), INST_NT_ANSWER,
+             "never past an open handle");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 6, 1, 1), INST_NT_ANSWER,
+             "never past a device veto");
+    CHECK_EQ(inst_eject_nt_step(0, 0, 1, 1), INST_NT_ANSWER,
+             "an accepted eject is done");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_NO_SUCH_DEVNODE, 0, 1, 1),
+             INST_NT_ANSWER, "the list changed");
+
+    /* The fallback's answers. */
+    CHECK_EQ(inst_eject_nt_removal(0, 0, &text, &withName), INST_EJ_DONE,
+             "removed");
+    CHECK_EQ(inst_eject_nt_removal(INST_CR_REMOVE_VETOED, 5, &text, &withName),
+             INST_EJ_VETO, "a file open: refused");
+    CHECK(strstr(text, "program") != NULL && !withName,
+          "a file open: says a program");
+    CHECK_EQ(inst_eject_code(inst_eject_nt_removal(inst_eject_cr(0, 7), 7,
+                                                   &text, &withName)),
+             INST_EXIT_STEPS, "a driver veto answered as success: exit 4");
+    CHECK(withName, "a driver veto: names it");
+    CHECK_EQ(inst_eject_nt_removal(INST_CR_ACCESS_DENIED, 0, &text, &withName),
+             INST_EJ_RIGHTS, "access denied: the administrator refusal");
+    CHECK(text == inst_admin_text() && !withName, "the administrator text");
+    CHECK_EQ(inst_eject_code(INST_EJ_RIGHTS), INST_EXIT_REFUSED,
+             "the administrator refusal is exit 1");
+    CHECK_EQ(inst_eject_nt_removal(INST_CR_REMOVE_VETOED, 12, &text, &withName),
+             INST_EJ_RIGHTS, "insufficient rights: the administrator refusal");
+    CHECK(text == inst_admin_text(), "insufficient rights: the administrator text");
+    CHECK_EQ(inst_eject_nt_removal(INST_CR_CALL_NOT_IMPLEMENTED, 0, &text,
+                                   &withName),
+             INST_EJ_VETO, "not implemented: a step, exit 4");
+    CHECK(text == inst_not_removable_text(), "not implemented: its text");
+    CHECK_EQ(inst_eject_nt_removal(INST_CR_NO_SUCH_DEVNODE, 0, &text, &withName),
+             INST_EJ_CHANGED, "the list changed");
+    CHECK_EQ(inst_eject_nt_removal(0x1F, 0, &text, &withName), INST_EJ_FAILED,
+             "an unknown answer: the state is not known, exit 2");
+
+    /* The flags: UI_NOT_OK | NO_RESTART, then UI_NOT_OK alone after
+     * CR_INVALID_FLAG, once. */
+    CHECK(inst_removal_retry(INST_CR_INVALID_FLAG,
+                             INST_REMOVE_UI_NOT_OK | INST_REMOVE_NO_RESTART),
+          "an invalid flag: asked again without NO_RESTART");
+    CHECK(!inst_removal_retry(INST_CR_INVALID_FLAG, INST_REMOVE_UI_NOT_OK),
+          "never a second time");
+    CHECK(!inst_removal_retry(0, INST_REMOVE_UI_NOT_OK | INST_REMOVE_NO_RESTART),
+          "not after a success");
+    CHECK(!inst_removal_retry(INST_CR_REMOVE_VETOED,
+                              INST_REMOVE_UI_NOT_OK | INST_REMOVE_NO_RESTART),
+          "never after a veto");
+
+    /* The texts: the owner's words, at most 79 columns. */
+    CHECK(strcmp(inst_admin_text(), "Windows does not list this device for "
+                 "safe removal. Run this as an\nadministrator to stop it.") == 0,
+          "the administrator text");
+    CHECK(strstr(inst_admin_text(), "plug") == NULL,
+          "the administrator text promises nothing of a re-plug");
+    CHECK(longest_line(inst_admin_text()) <= 79, "the administrator text fits 79");
+    CHECK(longest_line(inst_not_removable_text()) <= 79,
+          "the not-implemented text fits 79");
+}
+
 static void test_tb_eject(void)
 {
     const char *text;
@@ -1688,17 +1817,7 @@ static void test_tb_eject(void)
     CHECK_EQ(inst_eject_nt(0x1F, 0, &text, &withName), INST_EJ_FAILED,
              "unknown state");
     CHECK(strstr(text, "shut down") != NULL, "an unknown state: shut down first");
-    CHECK(inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x0),
-          "an illegal request on a unit that is not removable: query and remove");
-    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x4),
-          "not for a removable unit");
-    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x80),
-          "not for a unit that is surprise-removal OK");
-    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 0, 0x0),
-          "not when the capabilities are not known");
-    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 5, 1, 0x0),
-          "never past an open handle");
-    CHECK(!inst_eject_nt_fallback(0, 8, 1, 0x0), "not after a success");
+    test_tb_fallback();
     CHECK(strstr(inst_unplug_text(INST_UNPLUG_RESTARTED), "not safe") != NULL,
           "a unit that started again is not safe to unplug");
     CHECK_EQ(inst_eject_code(INST_EJ_DONE), INST_EXIT_DONE, "done 0");
