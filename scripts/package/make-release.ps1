@@ -4747,9 +4747,9 @@ has already gone wrong. It prints nothing as it runs. Section 8 describes
 both, and nothing about a copied file says which one it is - so point at a
 directory, never at a loose .sys file.{ARCHNOTE}
 
-INSTALL.BAT is beta in 3.0.0.0: if it fails or you prefer, install through
-Device Manager as before (BY HAND, below).  That route still works and
-remains supported.
+INSTALL.BAT is beta in this release: if it fails or you prefer, install
+through Device Manager as before (BY HAND, below).  That route still works
+and remains supported.
 
 THE EASY WAY: INSTALL.BAT. Unzip the WHOLE package, then
 run INSTALL.BAT from its top directory: double-click it on Windows 98 SE and
