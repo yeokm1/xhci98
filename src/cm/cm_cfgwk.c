@@ -213,6 +213,19 @@ static VOID cmWkLog(PCM_CFGWK w, const char *label, ULONG value)
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
+/* The same for a value that is a devnode handle: an address record,
+ * level 4 alone (CmLogNoteAddress). <= DISPATCH_LEVEL. */
+static VOID cmWkLogAddress(PCM_CFGWK w, const char *label, ULONG value)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    if (w->Nhi != NULL) {
+        CmLogNoteAddress(w->Nhi, label, value);
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+}
+
 /* TRUE while member i's request is still the one taken (`gen`) and the
  * domain still owns the member: a newer post or a lost claim makes the
  * operation in progress stale. */
@@ -997,7 +1010,7 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
              * under that handle may be another. Not acted on. */
             cmWkIdsDrop(&p->Gone, k);
             w->C.GoneDropped++;
-            cmWkLog(w, "cm.reenum.9x.gone.superseded", node);
+            cmWkLogAddress(w, "cm.reenum.9x.gone.superseded", node);
             continue;
         }
         present = 0;
@@ -1022,7 +1035,7 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
         if (cmWkIdHash(text) != hash) {
             cmWkIdsDrop(&p->Gone, k);
             w->C.GoneDropped++;
-            cmWkLog(w, "cm.reenum.9x.gone.id-changed", node);
+            cmWkLogAddress(w, "cm.reenum.9x.gone.id-changed", node);
             continue;
         }
         vetoed = w->C.Vetoed;

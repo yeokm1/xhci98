@@ -529,3 +529,18 @@ router found tunnelled at the start is adopted without it, so the tool
 shows the dock unnamed until a re-plug. The dock works either way.
 
 - [ ] TB3NAME.1 the DROM read for an adopted or resumed Thunderbolt 3 router, outside the resume budget (deferred to the connection-manager thread once the resume is done); host cases on the fake fabric; legs on 98 SE and 7 x86 with the dock attached across a suspend and at power-on
+
+## Planned - PCI Configuration Below a Tunnel Port on Windows 98 SE and ME
+
+Goal: design record 25 section 4.7 reads the functions below a tunnel
+port on 2000 and later only; on 98 SE and ME XHCITR says "not read on
+this system", because `PCI.VXD` numbers no bus a tunnel brings up after
+boot. The bus numbering of record 21 section 6.1.1 (`tbt_brnum.c`) and its
+guarded `PCI.VXD` read route (`CmCfgmgPciRead` behind `CmCfgmgPciOpen`)
+live in the 98 CONFIGMG worker (`cm_cfgwk.c`), which owns their state and
+lifetime; the query device holds no pointer to the NHI or the worker.
+
+Status: not opened, unnumbered and unversioned (the owner's coordinator,
+2026-10-16).
+
+- [ ] PCI9X.1 the query's PCI request hands the walk below each member to the 98 worker as a request and waits for it with a bound (the worker reads through its guarded route, only buses its numbering or `PCI.VXD` assigned), or holds a referenced pointer to the worker's route with a rundown at the stop; host vectors over the worker's request; legs on 98 SE and ME with the TB3 enclosure and a bridge chain

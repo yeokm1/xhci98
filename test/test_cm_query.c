@@ -719,6 +719,16 @@ static void test_log_text(void)
           "a prefix of it");
     CHECK(!CmQueryLogAddress((const UCHAR *)"cm.live.bar-changedX", 20),
           "longer");
+    /* Every address record xhcicm.sys writes (design record 25 revision
+     * 12's sweep), each also written through CmLogNoteAddress so it reaches
+     * the ring at level 4 alone: cm_nhi.c's BAR as re-read, and
+     * cm_cfgwk.c's two devnode handles. */
+    CHECK(CmQueryLogAddress((const UCHAR *)"cm.reenum.9x.gone.superseded",
+                            28), "the superseded devnode");
+    CHECK(CmQueryLogAddress((const UCHAR *)"cm.reenum.9x.gone.id-changed",
+                            28), "the id-changed devnode");
+    CHECK(!CmQueryLogAddress((const UCHAR *)"cm.reenum.9x.gone", 17),
+          "the count beside them is no address");
 
     /* Wrapped: the ring full, bytes dropped; the oldest bytes are a tail
      * ("...ar-changed=E0000004") whose label was overwritten - cut. */

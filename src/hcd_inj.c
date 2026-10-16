@@ -1329,7 +1329,9 @@ VOID HcdInjService(PHCD_CONTROLLER hc)
             return;
         }
         (VOID)XhciInjSpend(&hc->InjLeft);
-        XhciLogNote(&hc->Hc, "qemu.inj.bulk.lost", hc->InjBulkLostFirst);
+        /* A TRB's physical address: level 4 alone. */
+        XhciLogNoteAddress(&hc->Hc, "qemu.inj.bulk.lost",
+                           hc->InjBulkLostFirst);
         hc->InjPhase = HCD_INJ_PHASE_BULK_HELD;
         hc->InjSince = now;
         return;

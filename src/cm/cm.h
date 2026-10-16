@@ -603,6 +603,11 @@ VOID CmNhiCounterLines(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG at,
 VOID CmLogInit(PCM_NHI nhi);
 VOID CmLogApply(PCM_NHI nhi);
 VOID CmLogNote(PCM_NHI nhi, const char *label, ULONG value);
+/* A record whose value is an address (a bus address, a devnode handle):
+ * XhciLogAppendAddress under LogLock, so it reaches the ring at
+ * XhciLogVerbosity 4 alone, as xhci98.sys's address records do (design
+ * record 25 revision 12). Defined in cm_nhi.c. <= DISPATCH_LEVEL. */
+VOID CmLogNoteAddress(PCM_NHI nhi, const char *label, ULONG value);
 VOID CmLogEmit(PCM_NHI nhi, ULONG reason);
 
 /* cm_pool.c */

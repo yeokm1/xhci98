@@ -1137,20 +1137,20 @@ states, the sizing) and the tool's reader and texts of it in
   driver withholds the level-4 ring itself, and through the door only
   for a driver that refuses the request.
 
-- **T15** (owner, revision 12) A "PCI configuration" view, read-only,
+- **T16** (owner, revision 12) A "PCI configuration" view, read-only,
   through this package's own drivers: the NHI, its tunnel ports and the
   functions below them through `xhcicm.sys`'s query device, each xhci98
   controller through its door; the BARs raw, never sized.
-- **T16** The PCI answer is read at the request, not snapshotted by the
+- **T17** The PCI answer is read at the request, not snapshotted by the
   thread (as decision T13 chose for the log): a pass would read every
   function's 256 bytes whether anyone asked or not. It is configuration
   space as read, decoded by the tool, so the driver carries no decoder
   that could drift from the tool's.
-- **T17** (owner) `xhci98.sys`'s query request serves the configuration
+- **T18** (owner) `xhci98.sys`'s query request serves the configuration
   space at every level and is not gated by the door's enable step; what it
   serves of the log follows the level as `xhcicm.sys`'s does. Level 4's
   ring is withheld by the driver, as the tool already withheld it.
-- **T18** (owner, 2026-10-16) Both drivers' logging level defaults to 2:
+- **T19** (owner, 2026-10-16) Both drivers' logging level defaults to 2:
   the ring records, with no addresses. The cost of the append sites on
   Windows 98 metal stays unmeasured until the owner's P14s reading (design
   record 08 section 13.2, amended).
