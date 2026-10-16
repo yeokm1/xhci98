@@ -635,6 +635,10 @@ have every leg.
   Read under the Thunderbolt 3 firmware connection manager on the
   ThinkPad P14s Gen 1 and in the emulator; the USB4 connection manager
   takes the same path but has not been read with such a device.
+- **Windows 98 SE and ME: after Safely Remove of such a device, unplug it
+  before using it again.** Windows' stop closes the switch's memory windows;
+  Scan for hardware changes without an unplug leaves the drive at Code 29
+  until it is unplugged and plugged in again, or Windows restarts.
 - **Windows 2000: an unplug without a stop shows "Unsafe Removal of
   Device"**, and the device is removed. Stop it in "Unplug or Eject
   Hardware" first.
