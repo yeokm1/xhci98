@@ -198,6 +198,38 @@ With the tool of `63086eb1` (every fix above), as the standard user:
   a sentence, in the message box and the balloon; the router "PCIe
   tunnel: closed after an eject"; unplug and re-plug as before.
 
+### A unit named by its drive, and SuperSpeed devices
+
+The owner asked that Safely Remove name the drive rather than the
+controller. The unit stopped is still the controller behind the tunnel
+port; the tree, the tray item and the answer now name its disks and their
+drive letters, and the confirmation says what stops ("This stops NVM
+Express Controller (nvme98) and everything on it:" then each disk and
+volume). With that build, as the standard user:
+
+- 98 SE (ICM): "QEMU NVM e Ctrl (E:)" in the tree, the tray and the
+  answer, the letter from the disk's `CurrentDriveLetterAssignment`; the
+  eject, unplug and re-plug as before. The model string carried trailing
+  blanks; names are now trimmed.
+- XP (ICM): "... (F:)"; 7 x86 (USB4): "... (G:)", "The PCIe tunnel was
+  closed."; the letters found with no access rights. The tool's window
+  was up in 3 to 4 s with the CD drive empty or holding a disc.
+- The disk's name as Windows gives it reads "NVM e" (with a space) on every
+  system: it comes from the NVMe driver's inquiry data, not from the tool.
+
+SuperSpeed devices on `xhci98.sys` (QEMU's xHCI with USB 3 ports):
+
+- 98 SE: a storage stick added after boot reads "SuperSpeed (5 Gbit/s)",
+  "Port supports: USB 3.x; device SuperSpeed capable", bcdUSB 3.00, the
+  bulk endpoints at 1024 bytes with their SuperSpeed companions, and the
+  BOS (USB 2.0 extension, SuperSpeed capability: full, high, 5 Gbit/s).
+- XP: the stick as on 98 SE; a UAS drive on `xhciuas.sys` 3.0.0.0 with
+  four pipes, SuperSpeed; the root ports split into four USB 3 and four
+  USB 2 ports, the USB 2 devices at High and Full Speed.
+- Once, QEMU itself stopped answering while booting XP with a UAS disk on
+  a USB 3 port (its monitor connections hung before any guest driver had
+  loaded); the same command line booted normally on the next start.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link
