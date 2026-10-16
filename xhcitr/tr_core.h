@@ -429,6 +429,28 @@ const char *tr_plural(long n);
  * empty line between paragraphs is kept; in place. */
 void tr_join_lines(char *s);
 
+/* ---- what a unit is called (owner, 2026-10-16) ---------------------------- */
+
+/* A drive-letter set: the letters A to Z, upper case, each once, in order,
+ * NUL-terminated; 27 bytes hold any set. tr_letters_add merges the letters
+ * of src (any case; anything else is skipped). */
+#define TR_LETTERS_BYTES        27
+void tr_letters_add(char *set, const char *src);
+
+/* "E:, F:", or "" for an empty set. */
+void tr_letters_text(const char *set, char *out, size_t cap);
+
+/* What the user sees for a unit: its disks' names with their letters
+ * ("Samsung SSD 970 EVO (E:)", "QEMU NVMe Ctrl (E:, F:)"), or, with no
+ * disk (diskNames empty), the unit's own name. */
+void tr_unit_label(const char *unitName, const char *diskNames,
+                   const char *letters, char *out, size_t cap);
+
+/* One disk in the confirmation: "Disk drive <name>, volume E:" (volumes
+ * for more than one, nothing after the name for none). */
+void tr_disk_line(const char *name, const char *letters, char *out,
+                  size_t cap);
+
 /* ---- the report ---------------------------------------------------------- */
 
 /* One node of the report: its label at depth, then its details indented

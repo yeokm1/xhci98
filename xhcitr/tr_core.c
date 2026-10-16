@@ -1605,3 +1605,71 @@ void tr_join_lines(char *s)
     }
     *w = '\0';
 }
+
+void tr_letters_add(char *set, const char *src)
+{
+    char have[26];
+    int i;
+    int n = 0;
+
+    memset(have, 0, sizeof(have));
+    for (i = 0; set[i] != '\0' && i < 26; i++) {
+        if (set[i] >= 'A' && set[i] <= 'Z') {
+            have[set[i] - 'A'] = 1;
+        }
+    }
+    for (; src != NULL && *src != '\0'; src++) {
+        int ch = tr_up((unsigned char)*src);
+        if (ch >= 'A' && ch <= 'Z') {
+            have[ch - 'A'] = 1;
+        }
+    }
+    for (i = 0; i < 26; i++) {
+        if (have[i]) {
+            set[n++] = (char)('A' + i);
+        }
+    }
+    set[n] = '\0';
+}
+
+void tr_letters_text(const char *set, char *out, size_t cap)
+{
+    TR_TEXT t;
+    int i;
+
+    tr_text_init(&t, out, cap);
+    for (i = 0; set[i] != '\0'; i++) {
+        tr_printf(&t, "%s%c:", i ? ", " : "", set[i]);
+    }
+}
+
+void tr_unit_label(const char *unitName, const char *diskNames,
+                   const char *letters, char *out, size_t cap)
+{
+    char text[96];
+
+    if (diskNames == NULL || diskNames[0] == '\0') {
+        tr_copy(out, unitName, cap);
+        return;
+    }
+    tr_letters_text(letters != NULL ? letters : "", text, sizeof(text));
+    if (text[0] == '\0') {
+        tr_copy(out, diskNames, cap);
+    } else {
+        tr_sprintf(out, cap, "%s (%s)", diskNames, text);
+    }
+}
+
+void tr_disk_line(const char *name, const char *letters, char *out,
+                  size_t cap)
+{
+    char text[96];
+
+    tr_letters_text(letters != NULL ? letters : "", text, sizeof(text));
+    if (text[0] == '\0') {
+        tr_sprintf(out, cap, "Disk drive %s", name);
+    } else {
+        tr_sprintf(out, cap, "Disk drive %s, volume%s %s", name,
+                   strlen(letters) > 1 ? "s" : "", text);
+    }
+}

@@ -89,7 +89,10 @@ typedef TR_NIDA TR_NID;
 #define TR_CM_DRP_HARDWAREID        0x00000002UL
 #define TR_CM_DRP_COMPATIBLEIDS     0x00000003UL
 #define TR_CM_DRP_SERVICE           0x00000005UL
+#define TR_CM_DRP_CLASS             0x00000008UL
 #define TR_CM_DRP_DRIVER            0x0000000AUL
+#define TR_CM_DRP_FRIENDLYNAME      0x0000000DUL
+#define TR_IOCTL_STORAGE_GET_DEVICE_NUMBER 0x002D1080UL
 #define TR_CM_DRP_CAPABILITIES      0x00000010UL
 #define TR_CM_DRP_BUSNUMBER         0x00000016UL
 #define TR_CM_DRP_ADDRESS           0x0000001DUL
@@ -112,6 +115,11 @@ typedef TR_NIDA TR_NID;
 #define TIMER_POLL      1
 #define TIMER_CHANGE    2
 #define TIMER_CLICK     3
+
+/* GUID_DEVINTERFACE_DISK */
+static const GUID trGuidDisk = {
+    0x53F56307L, 0xB6BF, 0x11D0, { 0x94, 0xF2, 0x00, 0xA0, 0xC9, 0x1E, 0xFB, 0x8B }
+};
 
 /* GUID_DEVINTERFACE_USB_HOST_CONTROLLER */
 static const GUID trGuidHc = {
@@ -185,6 +193,9 @@ typedef struct _DNODE {
     int Prot;
     int UnitOf;
     int Ejectable;          /* a unit, not blocked                          */
+    int IsDisk;             /* setup class DiskDrive                        */
+    char Friendly[128];     /* a disk's friendly name, where it has one     */
+    char Letters[TR_LETTERS_BYTES]; /* a disk's drive letters, where found  */
 } DNODE;
 
 typedef struct _WALK {
@@ -518,6 +529,15 @@ static int dn_read(DNODE *t)
             ok = 0;
         }
         cm_prop(t->Dn, TR_CM_DRP_DEVICEDESC, t->Desc, sizeof(t->Desc), NULL);
+        {
+            char cls[32];
+            cm_prop(t->Dn, TR_CM_DRP_CLASS, cls, sizeof(cls), NULL);
+            t->IsDisk = tr_eq(cls, "DiskDrive");
+            if (t->IsDisk) {
+                cm_prop(t->Dn, TR_CM_DRP_FRIENDLYNAME, t->Friendly,
+                        sizeof(t->Friendly), NULL);
+            }
+        }
         t->HasCaps = dword_prop(t->Dn, TR_CM_DRP_CAPABILITIES, &t->Caps) ==
                      TR_CR_SUCCESS;
         t->HasLoc = dword_prop(t->Dn, TR_CM_DRP_BUSNUMBER, &t->Bus) ==
@@ -537,6 +557,23 @@ static int dn_read(DNODE *t)
         }
         prop9x(t->Dn, t->Id, TR_CM_DRP_DEVICEDESC, "DeviceDesc", t->Desc,
                sizeof(t->Desc));
+        {
+            char cls[32];
+            char letters[32];
+            prop9x(t->Dn, t->Id, TR_CM_DRP_CLASS, "Class", cls, sizeof(cls));
+            t->IsDisk = tr_eq(cls, "DiskDrive");
+            if (t->IsDisk) {
+                /* The 9x storage stack records the letters it gave the
+                 * disk in its Enum key. */
+                prop9x(t->Dn, t->Id, TR_CM_DRP_FRIENDLYNAME, "FriendlyName",
+                       t->Friendly, sizeof(t->Friendly));
+                letters[0] = '\0';
+                if (prop9x(t->Dn, t->Id, 0xFFFFUL, "CurrentDriveLetterAssignment",
+                           letters, sizeof(letters))) {
+                    tr_letters_add(t->Letters, letters);
+                }
+            }
+        }
         t->HwBytes = (DWORD)inst_ids_split(t->Hw, sizeof(t->Hw));
         t->CompatBytes = (DWORD)inst_ids_split(t->Compat, sizeof(t->Compat));
         if (t->Driver[0] != '\0') {
@@ -963,6 +1000,131 @@ static TR_U32 port_bdf(const WALK *w, const NHI *list, int port)
         return CM_ST_UNKNOWN;
     }
     return inst_get32(list[p->PortNhi].R, CM_ST_O_PORTS + 4 * p->PortIdx);
+}
+
+/* ======================================================================== */
+/* What a unit is called: its disks and their letters (owner, 2026-10-16)    */
+/* ======================================================================== */
+
+typedef struct _TR_DEVNUM {
+    DWORD DeviceType;
+    DWORD DeviceNumber;
+    DWORD PartitionNumber;
+} TR_DEVNUM;
+
+static int dev_number(const char *path, TR_DEVNUM *n)
+{
+    HANDLE h = open_device(path);
+    DWORD got = 0;
+    int ok;
+
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    memset(n, 0, sizeof(*n));
+    ok = DeviceIoControl(h, TR_IOCTL_STORAGE_GET_DEVICE_NUMBER, NULL, 0, n,
+                         sizeof(*n), &got, NULL) && got >= 8;
+    CloseHandle(h);
+    return ok;
+}
+
+/* NT: each disk inside a unit gets the letters of the volumes on it, by
+ * the storage device number of the disk's interface and of each \\.\X:.
+ * Read only, every device opened with no access rights; whatever cannot be
+ * read just leaves a letter out. */
+static void disk_letters_nt(WALK *w)
+{
+    TR_DEVNUM vol[26];
+    int have[26];
+    DWORD drives;
+    int i;
+    int any = 0;
+
+    for (i = 0; i < w->Count; i++) {
+        if (w->N[i].IsDisk && w->N[i].UnitOf >= 0) {
+            any = 1;
+        }
+    }
+    if (!any || api.GetClassDevs == NULL || api.EnumIface == NULL ||
+        api.IfaceDetail == NULL || api.Destroy == NULL) {
+        return;
+    }
+    drives = GetLogicalDrives();
+    for (i = 2; i < 26; i++) {      /* never the floppy letters */
+        char root[4];
+        char dev[8];
+        UINT type;
+        have[i] = 0;
+        if (!(drives & (1UL << i))) {
+            continue;
+        }
+        tr_sprintf(root, sizeof(root), "%c:\\", 'A' + i);
+        type = GetDriveTypeA(root);
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) {
+            continue;
+        }
+        tr_sprintf(dev, sizeof(dev), "%c:", 'A' + i);
+        have[i] = dev_number(dev, &vol[i]);
+    }
+    have[0] = have[1] = 0;
+    for (i = 0; i < w->Count; i++) {
+        HDEVINFO set;
+        SP_DEVICE_INTERFACE_DATA ifd;
+        union {
+            SP_DEVICE_INTERFACE_DETAIL_DATA_A d;
+            char raw[TR_NAME_LEN + 16];
+        } det;
+        DWORD need = 0;
+        TR_DEVNUM dn;
+        int l;
+        if (!w->N[i].IsDisk || w->N[i].UnitOf < 0) {
+            continue;
+        }
+        set = api.GetClassDevs(&trGuidDisk, w->N[i].Id, NULL,
+                               DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+        if (set == INVALID_HANDLE_VALUE) {
+            continue;
+        }
+        memset(&ifd, 0, sizeof(ifd));
+        ifd.cbSize = sizeof(ifd);
+        memset(&det, 0, sizeof(det));
+        det.d.cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_A);
+        if (api.EnumIface(set, NULL, &trGuidDisk, 0, &ifd) &&
+            api.IfaceDetail(set, &ifd, &det.d, sizeof(det), &need, NULL) &&
+            dev_number(det.d.DevicePath, &dn)) {
+            char add[2];
+            for (l = 2; l < 26; l++) {
+                if (have[l] && vol[l].DeviceType == dn.DeviceType &&
+                    vol[l].DeviceNumber == dn.DeviceNumber) {
+                    add[0] = (char)('A' + l);
+                    add[1] = '\0';
+                    tr_letters_add(w->N[i].Letters, add);
+                }
+            }
+        }
+        api.Destroy(set);
+    }
+}
+
+/* What the user sees for unit u: its disks and their letters, else its
+ * own name (tr_unit_label). */
+static void unit_label(int u, char *out, size_t cap)
+{
+    char names[160];
+    char letters[TR_LETTERS_BYTES];
+    TR_TEXT t;
+    int i;
+
+    tr_text_init(&t, names, sizeof(names));
+    letters[0] = '\0';
+    for (i = u; i < gw.Count; i++) {
+        if (gw.N[i].UnitOf == u && gw.N[i].IsDisk) {
+            tr_printf(&t, "%s%s", t.Len ? ", " : "",
+                      gw.N[i].Friendly[0] ? gw.N[i].Friendly : dn_name(&gw.N[i]));
+            tr_letters_add(letters, gw.N[i].Letters);
+        }
+    }
+    tr_unit_label(dn_name(&gw.N[u]), names, letters, out, cap);
 }
 
 /* ======================================================================== */
@@ -1476,7 +1638,13 @@ static void add_devs_below(int parentT, int dn, int depth)
             char label[200];
             char key[280];
             int t;
-            tr_sprintf(label, sizeof(label), "%s%s", dn_name(&gw.N[i]),
+            char name[160];
+            if (gw.N[i].UnitOf == i) {
+                unit_label(i, name, sizeof(name));
+            } else {
+                tr_copy(name, dn_name(&gw.N[i]), sizeof(name));
+            }
+            tr_sprintf(label, sizeof(label), "%s%s", name,
                        gw.N[i].UnitOf != i ? ""
                        : !dn_started(&gw.N[i]) ? "  [stopped - unplug it]"
                        : ej_why_not(i) == NULL ? "  [can be stopped]" : "");
@@ -1528,8 +1696,14 @@ static void add_router(int parentT, int k, TR_U32 r, int portNode,
                                               "DisplayPort tunnel" };
         int tt;
         if (c == 0 && unit >= 0) {
+            char shown[160];
+            if (gw.N[unit].UnitOf == unit) {
+                unit_label(unit, shown, sizeof(shown));
+            } else {
+                tr_copy(shown, dn_name(&gw.N[unit]), sizeof(shown));
+            }
             tr_sprintf(label, sizeof(label), "%s: %s  - %s", names[c],
-                       tr_tun_text(v), dn_name(&gw.N[unit]));
+                       tr_tun_text(v), shown);
         } else {
             tr_sprintf(label, sizeof(label), "%s: %s", names[c], tr_tun_text(v));
         }
@@ -1677,6 +1851,9 @@ static void refresh_model(int withUsb)
     }
     nhi_find(&gw);
     derive(&gw, nhi, nhiCount);
+    if (envNt) {
+        disk_letters_nt(&gw);
+    }
     for (root = 0; root < nhiCount; root++) {
         if (nhi[root].R != NULL) {
             tbDevices += (int)inst_get32(nhi[root].R, CM_ST_O_ROUTER_COUNT);
@@ -1745,7 +1922,15 @@ static void details_unit(TR_TEXT *t, int dn)
     if (u < 0) {
         return;
     }
-    tr_printf(t, "\nUnit behind a Thunderbolt port: %s\n", dn_name(&gw.N[u]));
+    {
+        char name[160];
+        unit_label(u, name, sizeof(name));
+        tr_printf(t, "\nUnit behind a Thunderbolt port: %s\n", name);
+        if (strcmp(name, dn_name(&gw.N[u])) != 0) {
+            tr_printf(t, "  What stops: %s and everything on it.\n",
+                      dn_name(&gw.N[u]));
+        }
+    }
     if (ej_why_not(u) == NULL) {
         tr_put(t, "  It can be stopped here (Action > Safely Remove).\n");
     } else if (!dn_started(&gw.N[u])) {
@@ -2297,7 +2482,8 @@ typedef struct _EJREQ {
     char QName[24];
     int NameUnique;         /* the condition of a match by name           */
     int ByName;
-    char Desc[128];
+    char Desc[160];         /* what the user sees: disks and letters      */
+    char UnitName[128];     /* what stops: the unit's own devnode         */
     TR_U32 EpochLo;
     TR_U32 EpochHi;
     TR_U32 PortBdf;
@@ -2327,7 +2513,8 @@ static int ej_prepare(int u, EJREQ *q)
     tr_copy(q->QName, nhi[k].QName, sizeof(q->QName));
     q->NameUnique = nhi[k].NameUnique;
     q->ByName = nhi[k].ByName;
-    tr_copy(q->Desc, dn_name(d), sizeof(q->Desc));
+    unit_label(u, q->Desc, sizeof(q->Desc));
+    tr_copy(q->UnitName, dn_name(d), sizeof(q->UnitName));
     q->EpochLo = nhi[k].Q.EpochLo;
     q->EpochHi = nhi[k].Q.EpochHi;
     q->PortBdf = port_bdf(&gw, nhi, d->Parent);
@@ -2384,7 +2571,33 @@ static int ej_confirm(HWND owner, const EJREQ *q)
     int i;
 
     tr_text_init(&t, text, sizeof(text));
-    tr_printf(&t, "Stop %s?\n\nThese devices will stop:\n", q->Desc);
+    {
+        int k;
+        int disks = 0;
+        int u = walk_find_id(&gw, q->UnitId);
+        if (u >= 0) {
+            for (k = u; k < gw.Count; k++) {
+                if (gw.N[k].UnitOf == u && gw.N[k].IsDisk) {
+                    char line[256];
+                    tr_disk_line(gw.N[k].Friendly[0] ? gw.N[k].Friendly
+                                                     : dn_name(&gw.N[k]),
+                                 gw.N[k].Letters, line, sizeof(line));
+                    tr_printf(&t, "%s%s", disks ? "; " : "", line);
+                    disks++;
+                }
+            }
+        }
+        if (disks) {
+            /* Rebuilt with its lead now the disks are known. */
+            char lines[1024];
+            tr_copy(lines, text, sizeof(lines));
+            tr_text_init(&t, text, sizeof(text));
+            tr_printf(&t, "This stops %s and everything on it: %s.\n\n"
+                          "These devices will stop:\n", q->UnitName, lines);
+        } else {
+            tr_printf(&t, "Stop %s?\n\nThese devices will stop:\n", q->Desc);
+        }
+    }
     for (i = 0; i < q->DevCount; i++) {
         int n = walk_find_id(&gw, q->Devs[i]);
         tr_printf(&t, "    %s\n", n >= 0 ? dn_name(&gw.N[n]) : q->Devs[i]);
@@ -3778,11 +3991,12 @@ static void tray_unit_menu(void)
             gw.N[gw.N[i].Parent].PortNhi >= 0) {
             const char *why = ej_why_not(i);
             char text[256];
+            char name[160];
+            unit_label(i, name, sizeof(name));
             if (why == NULL) {
-                tr_sprintf(text, sizeof(text), "Safely remove %s", dn_name(&gw.N[i]));
+                tr_sprintf(text, sizeof(text), "Safely remove %s", name);
             } else {
-                tr_sprintf(text, sizeof(text), "Safely remove %s (%s)",
-                           dn_name(&gw.N[i]), why);
+                tr_sprintf(text, sizeof(text), "Safely remove %s (%s)", name, why);
             }
             tr_copy(trayUnitIds[trayUnitCount], gw.N[i].Id,
                     sizeof(trayUnitIds[0]));
@@ -4129,6 +4343,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     (void)cmdLine;
     (void)show;
     hInst = inst;
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
     memset(&osv, 0, sizeof(osv));
     osv.dwOSVersionInfoSize = sizeof(osv);
     GetVersionExA(&osv);

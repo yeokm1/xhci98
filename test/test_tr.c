@@ -1509,6 +1509,39 @@ int main(void)
     test_sizes();
     test_desc_lengths();
     {
+        char set[TR_LETTERS_BYTES];
+        char out[128];
+        set[0] = '\0';
+        tr_letters_add(set, "f");
+        tr_letters_add(set, "E;e:Z");
+        CHECK(strcmp(set, "EFZ") == 0, "letters: merged, upper case, sorted, once");
+        tr_letters_add(set, NULL);
+        CHECK(strcmp(set, "EFZ") == 0, "letters: nothing added");
+        tr_letters_text(set, out, sizeof(out));
+        CHECK(strcmp(out, "E:, F:, Z:") == 0, "letters: text");
+        tr_letters_text("", out, sizeof(out));
+        CHECK(out[0] == '\0', "letters: none");
+        tr_unit_label("NVM Express Controller", "Samsung SSD 970 EVO", "E", out,
+                      sizeof(out));
+        CHECK(strcmp(out, "Samsung SSD 970 EVO (E:)") == 0, "label: a disk and its letter");
+        tr_unit_label("NVM Express Controller", "QEMU NVMe Ctrl", "EF", out,
+                      sizeof(out));
+        CHECK(strcmp(out, "QEMU NVMe Ctrl (E:, F:)") == 0, "label: two letters");
+        tr_unit_label("NVM Express Controller", "QEMU NVMe Ctrl", "", out,
+                      sizeof(out));
+        CHECK(strcmp(out, "QEMU NVMe Ctrl") == 0, "label: a disk with no letter");
+        tr_unit_label("USB xHCI Compliant Host Controller", "", "", out, sizeof(out));
+        CHECK(strcmp(out, "USB xHCI Compliant Host Controller") == 0,
+              "label: no disk keeps the device name");
+        tr_disk_line("QEMU NVMe Ctrl", "E", out, sizeof(out));
+        CHECK(strcmp(out, "Disk drive QEMU NVMe Ctrl, volume E:") == 0, "disk line: one");
+        tr_disk_line("QEMU NVMe Ctrl", "EF", out, sizeof(out));
+        CHECK(strcmp(out, "Disk drive QEMU NVMe Ctrl, volumes E:, F:") == 0,
+              "disk line: two");
+        tr_disk_line("QEMU NVMe Ctrl", "", out, sizeof(out));
+        CHECK(strcmp(out, "Disk drive QEMU NVMe Ctrl") == 0, "disk line: none");
+    }
+    {
         char s[128];
         CHECK(strcmp(tr_plural(1), "") == 0 && strcmp(tr_plural(0), "s") == 0 &&
               strcmp(tr_plural(2), "s") == 0, "plural");
