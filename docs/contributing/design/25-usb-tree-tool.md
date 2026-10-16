@@ -790,8 +790,9 @@ each driver's log, in place of `XHCISNAP -verbosity` and `SNAPON.BAT`.
    developers). A driver's buttons start at the level every one of its
    devices reads, and none is checked when they differ or a reading is
    out of range. Set writes a driver's level to every one of its devices
-   when the checked level is not what they all read (or a device read it
-   from xhcicm's old name), and nothing else.
+   when the checked level is not what they all read, or a device read it
+   from xhcicm's old name, or a key's old name is there and differs from
+   its new name's DWORD; and nothing else.
 4. **The write.** `REG_DWORD` 0 to 4 under the value's name, read back;
    a key that still holds xhcicm's old name gets the level under it too,
    so a driver of either generation follows. A driver key is written only
