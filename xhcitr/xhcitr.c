@@ -203,6 +203,7 @@ typedef struct _DNODE {
     char Letters[TR_LETTERS_BYTES]; /* a disk's drive letters, where found  */
     char Cls[32];           /* the setup class                              */
     int ReadOk;             /* every property read whole                    */
+    int Incomplete;         /* its children were not all read (the walk)    */
     int IsVolume;           /* setup class Volume                           */
     int IsHid;              /* an input device (tr_node_is_hid)             */
     int IsHubId;            /* its ids say a hub                            */
@@ -584,7 +585,12 @@ static int dn_read(DNODE *t)
         }
         cm_prop(t->Dn, TR_CM_DRP_DEVICEDESC, t->Desc, sizeof(t->Desc), NULL);
         {
-            cm_prop(t->Dn, TR_CM_DRP_CLASS, t->Cls, sizeof(t->Cls), NULL);
+            /* The class decides what is an input device or a disk
+             * (record 25 section 6.5): a failed read is a node not read. */
+            if (!prop_ok(cm_prop(t->Dn, TR_CM_DRP_CLASS, t->Cls, sizeof(t->Cls),
+                                 NULL))) {
+                ok = 0;
+            }
             t->IsDisk = tr_eq(t->Cls, "DiskDrive");
             t->IsVolume = tr_eq(t->Cls, "Volume");
             if (t->IsDisk) {
@@ -613,7 +619,10 @@ static int dn_read(DNODE *t)
                sizeof(t->Desc));
         {
             char letters[32];
-            prop9x(t->Dn, t->Id, TR_CM_DRP_CLASS, "Class", t->Cls, sizeof(t->Cls));
+            if (!prop9x(t->Dn, t->Id, TR_CM_DRP_CLASS, "Class", t->Cls,
+                        sizeof(t->Cls))) {
+                ok = 0;
+            }
             t->IsDisk = tr_eq(t->Cls, "DiskDrive");
             if (t->IsDisk) {
                 /* The 9x storage stack records the letters it gave the
@@ -674,6 +683,9 @@ static void walk_from(WALK *w, DWORD dn, int parent, int depth)
         DNODE *t;
         if (w->Count >= TR_MAX_DEVS) {
             w->Bad++;
+            if (parent >= 0) {
+                w->N[parent].Incomplete = 1;
+            }
             return;
         }
         me = w->Count++;
@@ -695,16 +707,21 @@ static void walk_from(WALK *w, DWORD dn, int parent, int depth)
         if (cr == TR_CR_SUCCESS) {
             if (depth >= 32) {
                 w->Bad++;
+                w->N[me].Incomplete = 1;
             } else {
                 walk_from(w, child, me, depth + 1);
             }
         } else if (cr != TR_CR_NO_SUCH_DEVINST) {
             w->Bad++;
+            w->N[me].Incomplete = 1;
         }
         cr = api.Sibling(&sib, dn, 0);
         if (cr != TR_CR_SUCCESS) {
             if (cr != TR_CR_NO_SUCH_DEVINST) {
                 w->Bad++;
+                if (parent >= 0) {
+                    w->N[parent].Incomplete = 1;
+                }
             }
             return;
         }
@@ -3406,8 +3423,8 @@ static void usb_facts(const WALK *w, int d, int portIsHub, int devClass,
         if (m->IsVolume) {
             f->Volumes++;
         }
-        if (!m->ReadOk) {
-            f->ReadWhole = 0;
+        if (!m->ReadOk || m->Incomplete) {
+            f->ReadWhole = 0;   /* a member, or a child of one, not read */
         }
     }
 }
@@ -3585,8 +3602,9 @@ static int usb_prepare(int d, USBREQ *q)
     if (!usb_listed(d) || gw.N[d].UsbRule != TR_UE_OFFER) {
         return 0;
     }
-    if (!usb_set(&gw, d, set, TR_USB_SET_MAX + 1, &n, &over) || over) {
-        return 0;
+    if (!usb_set(&gw, d, set, TR_USB_SET_MAX + 1, &n, &over) || over ||
+        n > TR_USB_SET_MAX) {
+        return 0;   /* the relations grew since the rule was read */
     }
     tr_copy(q->Id, gw.N[d].Id, sizeof(q->Id));
     if (gw.N[d].Parent >= 0) {
@@ -3714,15 +3732,19 @@ static int usb_run(const USBREQ *q, char *msg, size_t cap, int *rights)
     }
     known = usb_set(&w, d, set, TR_USB_SET_MAX + 1, &n, &over);
     usb_facts(&w, d, q->PortIsHub, q->DevClass, set, n, known, over, &f);
-    for (i = 0; i < n && i < TR_USB_SET_MAX; i++) {
+    if (n > TR_USB_SET_MAX || q->Count < 1 || q->Count > TR_USB_SET_MAX) {
+        tr_printf(&t, "%s cannot be stopped now: too many devices would stop "
+                      "with it to list. Nothing was stopped.", q->Label);
+        goto out;
+    }
+    for (i = 0; i < n; i++) {
         nowIds[i] = w.N[set[i]].Id;
     }
     for (i = 0; i < q->Count; i++) {
         thenIds[i] = q->Ids[i];
     }
     if (!tr_usb_recheck(w.N[d].Parent >= 0 ? w.N[w.N[d].Parent].Id : "",
-                        q->ParentId, nowIds, n > TR_USB_SET_MAX ? TR_USB_SET_MAX : n,
-                        thenIds, q->Count, &f, &why)) {
+                        q->ParentId, nowIds, n, thenIds, q->Count, &f, &why)) {
         tr_printf(&t, "%s cannot be stopped now: %s. Nothing was stopped.",
                   q->Label, why != NULL ? why : "it changed");
         goto out;
