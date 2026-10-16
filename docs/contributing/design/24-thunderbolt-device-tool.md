@@ -11,6 +11,20 @@ this package supports. It ships in `3.0.0.0` with Phases 39 and 40
 each an orchestrator decision for the owner to confirm unless it names the
 owner; section 14 what is open.
 
+Revision 5, 2026-10-16 (the owner, for `3.0.0.0`; roadmap EJRB.1 keeps
+the proper fix): a unit Windows does not mark removable, whatever the
+cause - the first plug of a device Windows has not seen, read on 2000
+with a bridge chain behind the tunnel port, or a stack rebuilt since - is
+stopped by `CM_Query_And_Remove_SubTreeW` on 2000, XP, Vista and 7, as
+section 7.2 now says. Windows 2000's `A` form of that routine is a stub
+that answers `CR_CALL_NOT_IMPLEMENTED` (`legal-provenance.md` section
+4), which is why the earlier revision found no way to stop such a unit
+there. A rights refusal gets its own text; XP's answer of `CR_SUCCESS`
+with a veto type to `CM_Request_Device_EjectA` is read as the veto it
+is; `/devices` labels the unit "not marked removable" (section 6). The
+legs are `runs/run-41.md`'s, "The fallback for a unit not marked
+removable".
+
 It is not a Thunderbolt control panel: it approves nothing, changes no
 security level, updates no firmware, and publishes or shows no secret or
 authentication material.
@@ -570,31 +584,58 @@ removable device as ejected until it is unplugged (Code 47 on XP and
 later, "held for eject"); what it does with a device that is not
 removable is leg E4's reading, and no rescan advice is printed on NT.
 
-**A unit Windows does not see as removable** (the case of section 1.1).
-Read on Windows 2000 (leg E4, 2026-10-15): after the NVMe controller was
-disabled and enabled in Device Manager its capabilities said `Removable`
-no, and `CM_Request_Device_EjectA` answered `CR_REMOVE_VETOED` with
-`PNP_VetoIllegalDeviceRequest` (8), the device still started. For exactly
-that answer on a unit whose capabilities were read and say neither
-`Removable` nor `SurpriseRemovalOK` (Microsoft's reference limits the
-routine to such devices; it also needs `SeLoadDriverPrivilege`, an
-administrator's), the tool
-asks `CM_Query_And_Remove_SubTreeA(unit, &veto, name, MAX_PATH,
-CM_REMOVE_UI_NOT_OK)` (from `setupapi.dll`, else `cfgmgr32.dll`; read in 2000's
-export table): the same query-remove - which every driver of the subtree,
-the volume's included, may veto as for an eject - and then the remove. Its
-answers go through the table of item 2 and 3; nothing overrides a veto.
+**A unit Windows does not mark removable** (the case of section 1.1; revision
+5). Its capabilities were read and say neither `Removable` nor
+`SurpriseRemovalOK` (`inst_unit_not_marked`), whatever the cause: a
+stack rebuilt after a disable and enable or a driver update (leg E4,
+2026-10-15), the first plug of a device Windows has not seen behind the
+tunnel port, whose driver install rebuilds the stack (read on 2000 and XP
+with a bridge chain, `runs/run-41.md`; the same legs on drivers without
+record 21 section 7.4's attachment above bus filters also read it on XP
+and 7 after a re-plug, which that attachment fixes). Safely Remove
+Hardware does not list it, and
+`CM_Request_Device_EjectA` refuses it as `PNP_VetoIllegalDeviceRequest`
+(8): `CR_REMOVE_VETOED` on 2000 and 7, `CR_SUCCESS` with that veto type
+on XP. Every answer of that routine is read through `inst_eject_cr`
+first: a `CR_SUCCESS` that carries a veto type is the veto it names, on
+every unit (XP answers a refused eject so, read for a volume by record 25's
+T.7 leg and here for this refusal). `inst_eject_nt_step` decides what
+follows, for a unit not marked removable only:
+
+- the illegal-request refusal: the tool asks
+  `CM_Query_And_Remove_SubTreeW(unit, &veto, name, MAX_PATH,
+  CM_REMOVE_UI_NOT_OK | CM_REMOVE_NO_RESTART)` (from `setupapi.dll`, else
+  `cfgmgr32.dll`), and asks again with `CM_REMOVE_UI_NOT_OK` alone if
+  Windows answers `CR_INVALID_FLAG`. It is the same query-remove - which
+  every driver of the subtree, the volume's included, may veto as for an
+  eject - and then the remove. The `W` form is used everywhere because
+  Windows 2000's `CM_Query_And_Remove_SubTree_ExA`, which the `A` form
+  calls, is a stub answering `CR_CALL_NOT_IMPLEMENTED`; its `ExW` accepts
+  both flags (static, `legal-provenance.md` section 4). 2000, XP and 7
+  accepted `0x3` and stopped the unit (`runs/run-41.md`). Microsoft's
+  reference limits the routine to devices with neither capability, and it
+  needs `SeLoadDriverPrivilege`, an administrator's;
+- a rights refusal (`CR_ACCESS_DENIED` or `PNP_VetoInsufficientRights`,
+  from either routine), or, in XHCITR, a process known to lack the right:
+  "Windows does not list this device for safe removal. Run this as an
+  administrator to stop it." - exit 1, as an access refusal (section
+  8.2). The text promises nothing of a re-plug;
+- `CR_CALL_NOT_IMPLEMENTED` from the fallback (no system read answers so
+  since the `W` form): the earlier step text - a restart with the device
+  connected, or an unplug with the computer off - exit 4, nothing changed;
+- anything else: the table of items 2 and 3; nothing overrides a veto.
+
 Afterwards Windows does not hold the device as ejected: it may start it
 again the next time it looks for new hardware while the device is
 connected, and the tool says so ("Until you unplug it, Windows may start
-it again when it next looks for new hardware."). On Windows 2000 that
-routine answers `CR_CALL_NOT_IMPLEMENTED` from both `cfgmgr32.dll` and
-`setupapi.dll` (the leg, 2026-10-15), so 2000 has no documented way to
-stop such a unit: the tool says so, and that a restart with the device
-connected lists it for removal again (read on the leg: after a restart the
-unit's capabilities said `Removable` again), or to unplug it with the
-computer off - exit 4, nothing changed. XP and later are not read here;
-the same answers get the same route there.
+it again when it next looks for new hardware."). `CM_REMOVE_NO_RESTART`
+is asked so that it does not, where Windows honours it; whether a rescan
+restarts the unit after this stop is not read. An unplug after it showed
+no Unsafe Removal dialog on 2000, and a re-plug brought the unit back
+started (`runs/run-41.md`). XHCIINST runs as an administrator on every NT
+target (record 23 section 7.2; on Vista and 7 its manifest elevates), so
+its route is the one above; XHCITR's, which offers the rights when it
+lacks them, is record 25 section 6.6.
 
 ### 7.3 Choosing the unit
 
@@ -672,9 +713,12 @@ virtual machines, emulators or what was tested (the owner's rule):
 - "Until you unplug it, Device Manager's Refresh, or the Thunderbolt
   driver looking at the port again, can start it again." (98 SE and ME,
   after an eject)
-- "This device is not listed in Safely Remove Hardware because Windows
-  does not see it as removable. XHCIINST /eject asks Windows to stop it."
-  (NT, a unit without `Removable`)
+- "not marked removable: Safely Remove Hardware may not list it; /eject
+  stops it when run as an administrator" (NT, `/devices`, a unit
+  without `Removable`; revision 5)
+- "Windows does not list this device for safe removal. Run this as an
+  administrator to stop it." (NT, such a unit, a rights refusal; revision
+  5)
 
 `README.TXT`, `INSTALL.BAT`'s comment, README's Thunderbolt text and the
 release notes carry: "To remove a Thunderbolt or USB4 device safely, run
@@ -814,9 +858,9 @@ and have no live vehicle here; they are owed to the bench.
 
 - Whether `CM_Query_Remove_SubTree` and `CM_Remove_SubTree` from a Win32
   program work on 98 SE and on ME with `nvme98` below (legs E1, E2, E7).
-- The query-and-remove route for a unit without `Removable` on XP, Vista
-  and 7 (read on 2000 only), and how soon Windows starts such a unit again
-  while it stays connected.
+- How soon Windows starts a unit stopped by the query-and-remove route
+  again while it stays connected, with `CM_REMOVE_NO_RESTART` asked (the
+  route itself was read on 2000, XP and 7, revision 5).
 - The link speed is kept by neither connection manager.
 - The `nvme98` removal handshake (its MD-5): when it exists, the 9x eject
   should be asked of the connection manager, which can run it, rather than

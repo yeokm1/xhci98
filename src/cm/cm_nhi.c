@@ -32,7 +32,7 @@
  * eject entry registered (task 40-A.9) and the learning baseline taken.
  * Each idle tick runs TbtU4Poll, drains its actions to the seam and learns
  * the port-to-bridge correspondence (tbt_topo.h); the statement upcall
- * withholds the nvme98 statement (no channel yet, task 40-A.7) and ends a
+ * withholds the stor98 statement (no channel yet, task 40-A.7) and ends a
  * port's learning only on a path proven closed.
  *
  * ICM: the common buffer (cm_pool.c), the Bus Master bit, the client
@@ -600,7 +600,7 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
                                        (nhi->Live.State & 0xFFUL));
     /* 2: a batch taken and not delivered never reaches the seam. */
     nhi->U4BatchCount = 0;
-    /* 3: the nvme98 channel told presence was lost, nothing proven
+    /* 3: the stor98 channel told presence was lost, nothing proven
      * (record 21 section 7.3), through its own loss route (cm_nvlink.h CmNvlinkLost, as the ICM
      * client's unavailable TUNNEL_DOWN takes it on NT): each UP entry of
      * the set's buses as CM_NVLINK_LOST - cleared only where its function
@@ -1085,7 +1085,7 @@ static VOID cmU4LogRouter(PCM_NHI nhi, ULONG port)
 /*
  * One drain of the USB4 profile's actions (record 22 section 7.6, tbt_topo.h
  * learning rules), in two halves. CmNhiU4Take: the batch taken off the
- * core's queue; XhciTbtLearnUp for every tunnel up of it; the nvme98
+ * core's queue; XhciTbtLearnUp for every tunnel up of it; the stor98
  * channel's UP published for each live one. cmU4Deliver: each action,
  * oldest first, to the re-enumeration seam in its form (unless
  * XhciCmReenum is 0), a tunnel up then learned for its port, a tunnel down
@@ -1135,7 +1135,7 @@ VOID CmNhiU4Take(PCM_NHI nhi)
             }
             cmU4ToIcm(u, &a);
             if (CmNhiActionLive(nhi, &a)) {
-                /* The nvme98 channel's UP, before the endpoint is exposed;
+                /* The stor98 channel's UP, before the endpoint is exposed;
                  * never for a connection that has already gone. Kept until
                  * the channel is told down (CmNhiU4ContainEx). */
                 nhi->U4UpHook(nhi->U4HookContext, u);
@@ -1242,9 +1242,9 @@ VOID CmNhiSetChanged(PCM_NHI nhi)
  * it calls nothing of tbt_u4cm.c's). A path proven closed ends the port's
  * pending learning for that generation (tbt_topo.h: XhciTbtLearnDown only
  * on that evidence, never on a TUNNEL_DOWN alone) and owes a new baseline.
- * The nvme98 statement is the channel's (task 40-A.7, CM_U4_DOWN_HOOK in
+ * The stor98 statement is the channel's (task 40-A.7, CM_U4_DOWN_HOOK in
  * cm.h), handed this moment with PathClosed and the anchor; with no
- * channel registered it is withheld and nvme98's MD-1 gone deadline
+ * channel registered it is withheld and stor98's MD-1 gone deadline
  * stands.
  */
 static ULONG cmU4LinkDown(PVOID context, const TBT_U4_LINKDOWN *info)
@@ -1462,7 +1462,7 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.DeferFirstPoll = TRUE;
     TbtU4Init(&nhi->U4, &nhi->Ring, &nhi->Host, &nhi->U4Cfg);
     TbtU4SetLinkDown(&nhi->U4, cmU4LinkDown, nhi);
-    /* The nvme98 channel's two moments (task 40-A.7, cm_nvlink.h). */
+    /* The stor98 channel's two moments (task 40-A.7, cm_nvlink.h). */
     CmNhiSetU4Hooks(nhi, CmNvlinkU4Up, CmNvlinkU4Down, nhi);
     XhciTbtBindsInit(&nhi->Binds);
     nhi->ArmOwed = 0;
@@ -1776,7 +1776,7 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     powered = (BOOLEAN)(nhi->DevicePower == PowerDeviceD0);
     if (cmU4Contained(nhi)) {
         /* A surprise removal (the gate revoked) or a loss not yet acted
-         * on: the driver's containment, the nvme98 channel told, before
+         * on: the driver's containment, the stor98 channel told, before
          * the seam closes; no reconciliation from inside the PnP request. */
         CmNhiU4ContainEx(nhi, FALSE);
     }

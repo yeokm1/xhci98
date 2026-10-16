@@ -92,8 +92,8 @@
 #define CM_BAR0_MIN_BYTES 0x3A000UL
 
 /*
- * The nvme98 link-down channel's seam under the USB4 profile (record 22
- * section 10; nvme98's include/nvme98cm.h and gate G3; task 40-A.7, which
+ * The stor98 link-down channel's seam under the USB4 profile (record 22
+ * section 10; stor98's include/stor98cm.h and gate G3; task 40-A.7, which
  * implements the channel in cm_nvlink.c - nothing here does). Both run on
  * the connection-manager thread at PASSIVE_LEVEL, no lock held, and call
  * nothing of tbt_u4cm.c's:
@@ -154,7 +154,7 @@ typedef struct _CM_COUNTERS {
     ULONG U4LearnTries;
     ULONG U4LinkDowns;      /* the statement upcall                        */
     ULONG U4PathsClosed;    /* ... with the path proven closed             */
-    ULONG U4NoChannel;      /* statements withheld: no nvme98 channel      */
+    ULONG U4NoChannel;      /* statements withheld: no stor98 channel      */
     ULONG U4Ejects;         /* the eject hook called                       */
     ULONG U4EjectsUnmapped; /* ... for a bridge no port corresponds to     */
     ULONG U4EjectsFailed;   /* TbtU4Eject not TBT_OK                       */
@@ -267,7 +267,7 @@ typedef struct _CM_NHI {
     ULONG U4ClearOk;
     /* Record 22 section 7.7: the driver's half of the containment done
      * (CmNhiU4Contain ran once this start); and, per USB4 port, the
-     * connection generation the nvme98 channel was last told UP for and
+     * connection generation the stor98 channel was last told UP for and
      * not yet told down (bit n-1 of U4UpValid for port n), kept apart from
      * the core's tunnel records, which a failed teardown clears. */
     ULONG U4ContainDone;
@@ -278,7 +278,7 @@ typedef struct _CM_NHI {
     volatile ULONG PnpStopPending;
     ULONG U4UpGen[TBT_U4_MAX_PORTS];
     ULONG U4UpValid;
-    /* The nvme98 channel's two moments (CmNhiSetU4Hooks), NULL until task
+    /* The stor98 channel's two moments (CmNhiSetU4Hooks), NULL until task
      * 40-A.7's cm_nvlink.c registers them. */
     CM_U4_UP_HOOK U4UpHook;
     CM_U4_DOWN_HOOK U4DownHook;
@@ -471,7 +471,7 @@ BOOLEAN CmNhiFailed(PCM_NHI nhi);
 BOOLEAN CmNhiRunning(PCM_NHI nhi);
 VOID CmNhiUnbind(PCM_NHI nhi);
 BOOLEAN CmNhiMayClearPower(PCM_NHI nhi);
-/* The nvme98 channel's registration (CM_U4_UP_HOOK, CM_U4_DOWN_HOOK); on
+/* The stor98 channel's registration (CM_U4_UP_HOOK, CM_U4_DOWN_HOOK); on
  * the thread, or before the start. */
 VOID CmNhiSetU4Hooks(PCM_NHI nhi, CM_U4_UP_HOOK up, CM_U4_DOWN_HOOK down,
                      PVOID context);

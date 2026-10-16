@@ -3125,12 +3125,12 @@ mismatch it overrode, and `-UploadSetOnly` holds a re-assembly to those
 three pins (an override is a verdict against the checkout's header, so a
 re-assembly passes it again where needed); `-Stor98HeaderPath`, the
 self-tests' substitute header, is refused without `-SkipBinaryGates`. For
-example, the `3.0.0.0` cut with Stor98 `0.3.0.0`:
+example, the `3.0.0.0` cut with Stor98 `0.3.0.1`:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <pfx> ^
-    -Stor98Version 0.3.0.0 -Stor98Dir <stor98>\releases\0.3.0.0 ^
-    -Stor98SumsSha256 e8f0a81fd8674f0b55eef486ab9d7a980d9fdf10e00802f202e494ec098724c1 ^
+    -Stor98Version 0.3.0.1 -Stor98Dir <stor98>\releases\0.3.0.1 ^
+    -Stor98SumsSha256 aee07c9c6faffa4e7aa9e28ff0d523f04cc6745a08af8835f59a33777aecccb9 ^
     -Stor98InterfaceVersion 4
 ```
 

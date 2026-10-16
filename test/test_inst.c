@@ -448,6 +448,64 @@ static void test_parser(void)
                             "[S]\r\nAddService=usbhub,2,X\r\n"), "not our service");
     CHECK(inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
                            "[S]\r\nAddService = XHCICM , 2, X\r\n"), "xhcicm");
+    /* Stor98 0.3.0.0's INF, in the shape it ships: the same Provider. */
+    CHECK(!inst_inf_is_ours("[Version]\r\nSignature=\"$CHICAGO$\"\r\n"
+                            "Provider=%Provider%\r\n"
+                            "[Manufacturer]\r\n%Mfg%=Stor98_Models\r\n"
+                            "[Stor98_Models]\r\n"
+                            "%Stor98.DeviceDesc%=Stor98_Inst,PCI\\CC_010802\r\n"
+                            "[Stor98_AddReg_9x]\r\nHKR,,PortDriver,,stor98.mpd\r\n"
+                            "[Stor98_Inst.NTx86.Services]\r\n"
+                            "AddService=stor98,%SPSVCINST_ASSOCSERVICE%,Stor98_Service\r\n"
+                            "[Strings]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "Mfg=\"Stor98 Project\"\r\n"
+                            "SPSVCINST_ASSOCSERVICE=0x00000002\r\n"),
+          "Stor98's INF is not ours");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nHKR,,PortDriver,,STOR98.MPD\r\n"),
+          "Stor98's 9x half is not ours");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nAddService=stor98,2,Y\r\n"),
+          "an INF that also installs stor98 is not ours");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nAddService=%Svc%,2,Y\r\n"
+                            "[Strings]\r\nSvc=\"stor98\"\r\n"),
+          "stor98 named through a string is not ours");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nHKR,,PortDriver,,%Mpd%\r\n"
+                            "[Strings]\r\nMpd=stor98.mpd\r\n"),
+          "stor98.mpd named through a string is not ours");
+    CHECK(inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                           "[S]\r\nAddService=xhcicm,2,X\r\n"
+                           "[T]\r\nHKR,,PortDriver,,%Mpd%\r\n"
+                           "[Strings]\r\nMpd=xhci98.mpd\r\n"),
+          "another file named through a string is not Stor98's");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nHKR,,PortDriver,,%Driver%.mpd\r\n"
+                            "[Strings]\r\nDriver=stor98\r\n"),
+          "a token inside the file name");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nAddService=%Prefix%98,2,Y\r\n"
+                            "[Strings]\r\nPrefix=\"stor\"\r\n"),
+          "a token inside the service name");
+    CHECK(inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                           "[S]\r\nAddService=xhcicm,2,X\r\n"
+                           "[T]\r\nHKR,,PortDriver,,100%%.mpd\r\n"),
+          "%% is a percent sign, not Stor98's");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nHKR,,%DriverValue%,,stor98.mpd\r\n"
+                            "[Strings]\r\nDriverValue=PortDriver\r\n"),
+          "a value name given as a token");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[SourceDisksFiles]\r\nstor98.sys=1\r\n"),
+          "a file named as a key");
 }
 
 static void test_ids(void)
@@ -605,12 +663,17 @@ static void test_helpers(void)
     pe[0x81] = 'E';
     pe[0x84] = 0x64;
     pe[0x85] = 0x86;
-    CHECK(inst_bundled_file("nvme98.inf") && inst_bundled_file("NVME98.SYS") &&
-          inst_bundled_file("nvme98-LICENSE.txt") && inst_bundled_file("nvme98.mpd"),
-          "nvme98's files are the bundled driver's");
+    CHECK(inst_bundled_file("stor98.inf") && inst_bundled_file("STOR98.SYS") &&
+          inst_bundled_file("stor98-LICENSE.txt") && inst_bundled_file("stor98.mpd") &&
+          inst_bundled_file("stor98-test.cer"),
+          "Stor98's files are the bundled driver's");
     CHECK(!inst_bundled_file("xhci98.inf") && !inst_bundled_file("xhcicm.sys") &&
-          !inst_bundled_file("nvme9.inf") && !inst_bundled_file("txtsetup.oem"),
+          !inst_bundled_file("stor9.inf") && !inst_bundled_file("txtsetup.oem") &&
+          !inst_bundled_file("xhci98-test.cer"),
           "this package's own files are not the bundled driver's");
+    CHECK(inst_bundled_service("stor98") && inst_bundled_service("STOR98") &&
+          !inst_bundled_service("xhci98") && !inst_bundled_service("stor98x"),
+          "the bundled driver's service");
     CHECK(inst_pe_machine(pe, sizeof(pe), &m) && m == INST_PE_AMD64, "amd64 PE");
     pe[0x84] = 0x4C;
     pe[0x85] = 0x01;
@@ -1581,6 +1644,135 @@ static void test_tb_question(void)
              "/thunderbolt /devices refused");
 }
 
+/* The longest line of a text, for the 79-column rule. */
+static size_t longest_line(const char *s)
+{
+    size_t best = 0;
+    size_t n = 0;
+
+    for (; *s != '\0'; s++) {
+        if (*s == '\n') {
+            n = 0;
+            continue;
+        }
+        n++;
+        if (n > best) {
+            best = n;
+        }
+    }
+    return best;
+}
+
+/* NT: a unit not marked removable (whatever the cause: roadmap EJRB.1). */
+static void test_tb_fallback(void)
+{
+    const char *text;
+    int withName;
+
+    /* Not marked: capabilities read, neither Removable nor
+     * SurpriseRemovalOK. */
+    CHECK(inst_unit_not_marked(1, 0x0), "neither bit: not marked");
+    CHECK(inst_unit_not_marked(1, 0x2), "other bits do not count");
+    CHECK(!inst_unit_not_marked(1, 0x4), "Removable: marked");
+    CHECK(!inst_unit_not_marked(1, 0x80), "SurpriseRemovalOK: not this case");
+    CHECK(!inst_unit_not_marked(1, 0x84), "both: not this case");
+    CHECK(!inst_unit_not_marked(0, 0x0), "capabilities not known");
+
+    /* XP answers a vetoed eject CR_SUCCESS with the veto type set. */
+    CHECK_EQ(inst_eject_cr(0, 0), 0, "a success with no veto stays one");
+    CHECK_EQ(inst_eject_cr(0, 5), INST_CR_REMOVE_VETOED,
+             "a success with a veto type is a veto");
+    CHECK_EQ(inst_eject_cr(0, 8), INST_CR_REMOVE_VETOED,
+             "an illegal request answered as success is a veto");
+    CHECK_EQ(inst_eject_cr(INST_CR_ACCESS_DENIED, 12), INST_CR_ACCESS_DENIED,
+             "another answer is kept");
+    CHECK_EQ(inst_eject_cr(INST_CR_REMOVE_VETOED, 5), INST_CR_REMOVE_VETOED,
+             "a veto stays a veto");
+    CHECK_EQ(inst_eject_nt(inst_eject_cr(0, 5), 5, &text, &withName),
+             INST_EJ_VETO, "XP's open-handle answer: refused, exit 4");
+    CHECK(strstr(text, "program") != NULL, "XP's open-handle answer: says a program");
+    CHECK_EQ(inst_eject_code(inst_eject_nt(inst_eject_cr(0, 6), 6, &text,
+                                           &withName)),
+             INST_EXIT_STEPS, "XP's device veto: exit 4");
+    CHECK(withName, "XP's device veto: names the device");
+
+    /* The step after the eject request. */
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 8, 1, 1),
+             INST_NT_FALLBACK,
+             "an illegal request on a unit not marked: query and remove");
+    CHECK_EQ(inst_eject_nt_step(inst_eject_cr(0, 8), 8, 1, 1), INST_NT_FALLBACK,
+             "XP's success-with-veto illegal request: query and remove");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 8, 1, 0), INST_NT_ADMIN,
+             "an unelevated caller on Vista and 7: the administrator refusal");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_ACCESS_DENIED, 0, 1, 1), INST_NT_ADMIN,
+             "access denied on a unit not marked: the administrator refusal");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 12, 1, 1), INST_NT_ADMIN,
+             "insufficient rights on a unit not marked: the administrator refusal");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 8, 0, 1), INST_NT_ANSWER,
+             "a marked unit: the answer stands");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_ACCESS_DENIED, 0, 0, 1), INST_NT_ANSWER,
+             "a marked unit's access refusal: the rights text");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 5, 1, 1), INST_NT_ANSWER,
+             "never past an open handle");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_REMOVE_VETOED, 6, 1, 1), INST_NT_ANSWER,
+             "never past a device veto");
+    CHECK_EQ(inst_eject_nt_step(0, 0, 1, 1), INST_NT_ANSWER,
+             "an accepted eject is done");
+    CHECK_EQ(inst_eject_nt_step(INST_CR_NO_SUCH_DEVNODE, 0, 1, 1),
+             INST_NT_ANSWER, "the list changed");
+
+    /* The fallback's answers. */
+    CHECK_EQ(inst_eject_nt_removal(0, 0, &text, &withName), INST_EJ_DONE,
+             "removed");
+    CHECK_EQ(inst_eject_nt_removal(INST_CR_REMOVE_VETOED, 5, &text, &withName),
+             INST_EJ_VETO, "a file open: refused");
+    CHECK(strstr(text, "program") != NULL && !withName,
+          "a file open: says a program");
+    CHECK_EQ(inst_eject_code(inst_eject_nt_removal(inst_eject_cr(0, 7), 7,
+                                                   &text, &withName)),
+             INST_EXIT_STEPS, "a driver veto answered as success: exit 4");
+    CHECK(withName, "a driver veto: names it");
+    CHECK_EQ(inst_eject_nt_removal(INST_CR_ACCESS_DENIED, 0, &text, &withName),
+             INST_EJ_RIGHTS, "access denied: the administrator refusal");
+    CHECK(text == inst_admin_text() && !withName, "the administrator text");
+    CHECK_EQ(inst_eject_code(INST_EJ_RIGHTS), INST_EXIT_REFUSED,
+             "the administrator refusal is exit 1");
+    CHECK_EQ(inst_eject_nt_removal(INST_CR_REMOVE_VETOED, 12, &text, &withName),
+             INST_EJ_RIGHTS, "insufficient rights: the administrator refusal");
+    CHECK(text == inst_admin_text(), "insufficient rights: the administrator text");
+    CHECK_EQ(inst_eject_nt_removal(INST_CR_CALL_NOT_IMPLEMENTED, 0, &text,
+                                   &withName),
+             INST_EJ_VETO, "not implemented: a step, exit 4");
+    CHECK(text == inst_not_removable_text(), "not implemented: its text");
+    CHECK_EQ(inst_eject_nt_removal(INST_CR_NO_SUCH_DEVNODE, 0, &text, &withName),
+             INST_EJ_CHANGED, "the list changed");
+    CHECK_EQ(inst_eject_nt_removal(0x1F, 0, &text, &withName), INST_EJ_FAILED,
+             "an unknown answer: the state is not known, exit 2");
+
+    /* The flags: UI_NOT_OK | NO_RESTART, then UI_NOT_OK alone after
+     * CR_INVALID_FLAG, once. */
+    CHECK(inst_removal_retry(INST_CR_INVALID_FLAG,
+                             INST_REMOVE_UI_NOT_OK | INST_REMOVE_NO_RESTART),
+          "an invalid flag: asked again without NO_RESTART");
+    CHECK(!inst_removal_retry(INST_CR_INVALID_FLAG, INST_REMOVE_UI_NOT_OK),
+          "never a second time");
+    CHECK(!inst_removal_retry(0, INST_REMOVE_UI_NOT_OK | INST_REMOVE_NO_RESTART),
+          "not after a success");
+    CHECK(!inst_removal_retry(INST_CR_REMOVE_VETOED,
+                              INST_REMOVE_UI_NOT_OK | INST_REMOVE_NO_RESTART),
+          "never after a veto");
+
+    /* The texts: the owner's words, at most 79 columns. */
+    CHECK(strcmp(inst_admin_text(), "Windows does not list this device for "
+                 "safe removal. Run this as an\nadministrator to stop it.") == 0,
+          "the administrator text");
+    CHECK(strstr(inst_admin_text(), "plug") == NULL,
+          "the administrator text promises nothing of a re-plug");
+    CHECK(longest_line(inst_admin_text()) <= 79, "the administrator text fits 79");
+    CHECK(longest_line(inst_not_removable_text()) <= 79,
+          "the not-implemented text fits 79");
+}
+
 static void test_tb_eject(void)
 {
     const char *text;
@@ -1625,17 +1817,7 @@ static void test_tb_eject(void)
     CHECK_EQ(inst_eject_nt(0x1F, 0, &text, &withName), INST_EJ_FAILED,
              "unknown state");
     CHECK(strstr(text, "shut down") != NULL, "an unknown state: shut down first");
-    CHECK(inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x0),
-          "an illegal request on a unit that is not removable: query and remove");
-    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x4),
-          "not for a removable unit");
-    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x80),
-          "not for a unit that is surprise-removal OK");
-    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 0, 0x0),
-          "not when the capabilities are not known");
-    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 5, 1, 0x0),
-          "never past an open handle");
-    CHECK(!inst_eject_nt_fallback(0, 8, 1, 0x0), "not after a success");
+    test_tb_fallback();
     CHECK(strstr(inst_unplug_text(INST_UNPLUG_RESTARTED), "not safe") != NULL,
           "a unit that started again is not safe to unplug");
     CHECK_EQ(inst_eject_code(INST_EJ_DONE), INST_EXIT_DONE, "done 0");
@@ -1782,6 +1964,368 @@ static void test_tray(void)
     CHECK_EQ(parse(3, a5, &o), 0, "/list /notray");
 }
 
+/* The console (owner, 2026-10-16): no line wider than 79 columns, a long
+ * line broken at a space and hung under its text, a word longer than a
+ * line broken after a backslash, the spaces at a prompt's end kept, and the
+ * wrap's state across pieces fed one at a time. */
+static void test_wrap(void)
+{
+    char out[4096];
+    char text[1024];
+    INST_WRAP w;
+    size_t i;
+    size_t n;
+
+    inst_wrap_text("short line\nand another\n", out, sizeof(out));
+    CHECK(strcmp(out, "short line\nand another\n") == 0, "short lines pass");
+    /* Exactly 79 columns stays one line; 80 wraps. */
+    memset(text, 'x', 79);
+    text[79] = '\0';
+    text[40] = ' ';
+    inst_wrap_text(text, out, sizeof(out));
+    CHECK(strchr(out, '\n') == NULL && strlen(out) == 79, "79 columns: kept");
+    memset(text, 'x', 80);
+    text[80] = '\0';
+    text[40] = ' ';
+    inst_wrap_text(text, out, sizeof(out));
+    CHECK(inst_text_width(out) <= INST_COLUMNS, "80 columns: wrapped");
+    CHECK(strncmp(strchr(out, '\n'), "\n  x", 4) == 0,
+          "a plain line goes on two spaces in");
+    /* A marker's text hangs under itself. */
+    inst_wrap_text("  NOTE: aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj "
+                   "kkkk llll mmmm nnnn oooo pppp", out, sizeof(out));
+    CHECK(strstr(out, "\n        ") != NULL &&
+          strstr(out, "\n         ") == NULL, "NOTE: hangs at column 8");
+    inst_wrap_text("  3. aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj "
+                   "kkkk llll mmmm nnnn oooo pppp", out, sizeof(out));
+    CHECK(strstr(out, "\n     p") != NULL || strstr(out, "\n     o") != NULL,
+          "a numbered step hangs under its text");
+    inst_wrap_text("  /to path      install the xHCI98 tools in that directory "
+                   "without asking at all ever", out, sizeof(out));
+    CHECK(strstr(out, "\n                ") != NULL,
+          "a key and two spaces: hangs under the text after it");
+    /* A word longer than a line: broken after a backslash. */
+    inst_wrap_text("    C:\\AAAAAAAAAAAAAAAAAAAA\\BBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+                   "\\CCCCCCCCCCCCCCCCCCCCCCCCCCCC\\DDDDDDDDDDDDDDDDDDDDDD",
+                   out, sizeof(out));
+    CHECK(inst_text_width(out) <= INST_COLUMNS, "a long path kept to 79");
+    CHECK(strstr(out, "\\\n") != NULL, "broken after a backslash");
+    memset(text, 'Z', 300);
+    text[300] = '\0';
+    inst_wrap_text(text, out, sizeof(out));
+    CHECK(inst_text_width(out) <= INST_COLUMNS, "a word of 300 kept to 79");
+    for (i = 0, n = 0; out[i] != '\0'; i++) {
+        n += out[i] == 'Z';
+    }
+    CHECK_EQ(n, 300, "nothing of it lost");
+    /* A prompt's trailing space is printed at the flush, not before. */
+    inst_wrap_init(&w);
+    inst_wrap_feed(&w, "  Enter for [1]: ", out, sizeof(out));
+    CHECK(strcmp(out, "  Enter for [1]:") == 0, "the space held back");
+    inst_wrap_flush(&w, out, sizeof(out));
+    CHECK(strcmp(out, " ") == 0, "and printed at the flush");
+    inst_wrap_input(&w);
+    CHECK_EQ(w.Col, 0, "the answer's Enter starts a new line");
+    /* Pieces fed apart wrap as the whole would. */
+    inst_wrap_init(&w);
+    text[0] = '\0';
+    for (i = 0; i < 20; i++) {
+        inst_wrap_feed(&w, "word ", out, sizeof(out));
+        strcat(text, out);
+    }
+    inst_wrap_feed(&w, "\n", out, sizeof(out));
+    strcat(text, out);
+    CHECK(inst_text_width(text) <= INST_COLUMNS && w.Wraps == 1,
+          "fed in pieces: one wrap");
+    CHECK(w.MaxCol <= INST_COLUMNS, "the widest column measured");
+    CHECK_EQ(inst_text_width("ab\nabcd\r\nabc"), 4, "the width of a text");
+}
+
+/* Every line of a text within the width. */
+static int fits(const char *text)
+{
+    return inst_text_width(text) <= INST_COLUMNS;
+}
+
+/* The questions (owner, 2026-10-16): each choice on its own line with its
+ * meaning, "Enter for [x]" with x what Enter gives, "default: d (set now:
+ * x)" when they differ. */
+static void test_questions(void)
+{
+    char out[4096];
+    char longName[160];
+    INST_VNOW now[3];
+    INST_U32 enter;
+    int approve = inst_value_find("XhciCmApprove");
+    int mode = inst_value_find("XhciInterruptMode");
+    int clean = inst_value_find("XhciCmPreOsCleanup");
+    int i;
+
+    for (i = 0; i < instValueCount; i++) {
+        int b;
+        int named = 0;
+        for (b = 0; b < 4; b++) {
+            named += instValues[i].Choice[b] != NULL;
+            if ((instValues[i].Settable & (1UL << b)) == 0) {
+                CHECK(instValues[i].Choice[b] == NULL,
+                      "a choice has a meaning only where the value is allowed");
+            }
+        }
+        CHECK(named > 0, "every value names its choices");
+        CHECK(strchr(instValues[i].Meaning, '(') == NULL,
+              "the meaning carries no choice list");
+        CHECK(strchr(instValues[i].Meaning, '\n') == NULL &&
+              (instValues[i].Caution == NULL ||
+               strchr(instValues[i].Caution, '\n') == NULL),
+              "no hand-made line breaks: the console wraps");
+    }
+    memset(now, 0, sizeof(now));
+    now[0].State = 1;
+    now[0].Value = 1;
+    now[0].Desc = "xHCI98 USB4 Host Router";
+    CHECK(inst_value_question(out, sizeof(out), approve, 0x3, 1, now, 1, 0, 0,
+                              &enter) == 1 && enter == 1, "Enter keeps 1");
+    CHECK(strstr(out, "XhciCmApprove - approve Thunderbolt devices "
+                      "automatically\n") == out, "the name and meaning first");
+    CHECK(strstr(out, "  now: 1 (xHCI98 USB4 Host Router)\n") != NULL,
+          "now, with the device");
+    CHECK(strstr(out, "  allowed:\n    0  no\n    1  yes\n") != NULL,
+          "each choice on its own line");
+    CHECK(strstr(out, "  default: 1\n") != NULL, "the default");
+    CHECK(strlen(out) > 17 &&
+          strcmp(out + strlen(out) - 17, "  Enter for [1]: ") == 0,
+          "the prompt ends it");
+    /* Set now to other than the default: Enter keeps what is set. */
+    now[0].Value = 0;
+    inst_value_question(out, sizeof(out), approve, 0x3, 1, now, 1, 0, 0,
+                        &enter);
+    CHECK(enter == 0 && strstr(out, "  default: 1 (set now: 0)\n") != NULL &&
+          strstr(out, "Enter for [0]: ") != NULL, "set now: 0, Enter for [0]");
+    /* Not set, and a new install: Enter gives the default. */
+    now[0].State = 0;
+    inst_value_question(out, sizeof(out), approve, 0x3, 1, now, 1, 0, 0,
+                        &enter);
+    CHECK(enter == 1 && strstr(out, "not set, the install writes 1") != NULL &&
+          strstr(out, "Enter for [1]: ") != NULL, "not set: the default");
+    now[0].State = -1;
+    inst_value_question(out, sizeof(out), approve, 0x3, 1, now, 1, 1, 0,
+                        &enter);
+    CHECK(strstr(out, "new install, the default 1") != NULL, "a new install");
+    CHECK(strstr(out, "NOTE: a new install starts with the default") != NULL,
+          "and the approval's note");
+    /* Two devices that differ: each keeps its own. */
+    now[0].State = 1;
+    now[0].Value = 0;
+    now[1].State = 1;
+    now[1].Value = 1;
+    now[1].Desc = "xHCI98 USB4 Host Router #2";
+    CHECK(inst_value_question(out, sizeof(out), approve, 0x3, 1, now, 2, 0, 0,
+                              &enter) == 0, "two devices that differ");
+    CHECK(strstr(out, "Enter for [each keeps its own]: ") != NULL &&
+          strstr(out, "(set now: not the same on every device)") != NULL,
+          "each keeps its own");
+    /* The caution, shown where it is about an offered value. */
+    now[0].State = 0;
+    inst_value_question(out, sizeof(out), mode, 0x7, 0, now, 1, 0, 0, &enter);
+    CHECK(strstr(out, "  NOTE: with 1, a controller") != NULL,
+          "the caution names only the offered value it is about");
+    inst_value_question(out, sizeof(out), mode, 0xF, 0, now, 1, 0, 0, &enter);
+    CHECK(strstr(out, "  NOTE: with 1 or 3, a controller") != NULL,
+          "both, where 3 is offered");
+    inst_value_question(out, sizeof(out), mode, 0x5, 0, now, 1, 0, 0, &enter);
+    CHECK(strstr(out, "NOTE") == NULL, "no caution without 1 or 3");
+    inst_caution_text(mode, 1UL << 3, longName, sizeof(longName));
+    CHECK(strncmp(longName, "with 3, ", 8) == 0, "/set 3: the caution of 3");
+    inst_caution_text(inst_value_find("XhciForceBulkOnly"), 0x3, longName,
+                      sizeof(longName));
+    CHECK(strncmp(longName, "read as each", 12) == 0, "a plain caution as is");
+    CHECK(strstr(out, "    2  polling always\n") != NULL &&
+          strstr(out, "    3  ") == NULL, "3 not offered: not listed");
+    inst_value_question(out, sizeof(out), clean, 0x7, 0, now, 1, 0, 1, &enter);
+    CHECK(strstr(out, "    2  all cleaned\n") != NULL, "a three-way choice");
+    CHECK(strstr(out, "  /list: not asked; Enter would give [0].\n") != NULL,
+          "/list says what Enter would give");
+    /* Long names stay within the width, on their own line. */
+    memset(longName, 'N', sizeof(longName) - 1);
+    longName[sizeof(longName) - 1] = '\0';
+    memcpy(longName, "xHCI98 USB 3.x eXtensible Host Controller ", 42);
+    now[0].Desc = longName;
+    now[0].State = 1;
+    now[0].Value = 0;
+    for (i = 0; i < instValueCount; i++) {
+        inst_value_question(out, sizeof(out), i, instValues[i].Settable, 0,
+                            now, 1, 1, 0, &enter);
+        CHECK(fits(out), "a value's question fits 79 columns");
+    }
+    CHECK(strstr(out, "  now: 0\n    (xHCI98") != NULL,
+          "a long name on its own line");
+    /* Sixteen devices with names of 127 characters: the prompt still ends
+     * the question. */
+    {
+        static char big[16384];
+        INST_VNOW many[16];
+        char name127[128];
+        memset(name127, 'N', 127);
+        name127[127] = '\0';
+        for (i = 0; i < 16; i++) {
+            many[i].State = 1;
+            many[i].Value = 0;
+            many[i].Desc = name127;
+        }
+        inst_value_question(big, sizeof(big), approve, 0x3, 1, many, 16, 1, 0,
+                            &enter);
+        CHECK(strlen(big) > 17 &&
+              strcmp(big + strlen(big) - 17, "  Enter for [0]: ") == 0 &&
+              fits(big), "sixteen long names: the prompt is still there");
+    }
+    /* Yes or no. */
+    inst_yesno_question(out, sizeof(out), "Install Thunderbolt 3 / USB4 "
+                        "support?", "install it", "leave it out", 0);
+    CHECK(strcmp(out, "Install Thunderbolt 3 / USB4 support?\n  Y  install it"
+                      "\n  N  leave it out\n  Enter for [N]: ") == 0,
+          "a yes-or-no question");
+    inst_yesno_question(out, sizeof(out), "Open Device Manager now?",
+                        "open it", "not now", 1);
+    CHECK(strstr(out, "Enter for [Y]: ") != NULL, "Enter for [Y]");
+    /* The install directory's question. */
+    inst_dir_question(out, sizeof(out), "XHCITR.EXE", NULL, NULL,
+                      "C:\\XHCI98", 1, 0);
+    CHECK(strstr(out, "Install directory for the xHCI98 tools\n") == out &&
+          strstr(out, "  XHCITR.EXE  the xHCI98 USB Tree") != NULL &&
+          strstr(out, "8 characters") == NULL &&
+          strcmp(out + strlen(out) - 25, "  Enter for [C:\\XHCI98]: ") == 0,
+          "NT: the tool, then Enter for [C:\\XHCI98]");
+    inst_dir_question(out, sizeof(out), "XHCITR.EXE", "*.INF, *.SYS",
+                      "C:\\WINDOWS\\XHCI98", "C:\\WINDOWS\\XHCI98", 0, 0);
+    CHECK(strstr(out, "  *.INF, *.SYS  this package's drivers, for the hardware "
+                      "wizards\n") != NULL &&
+          strstr(out, "  now: C:\\WINDOWS\\XHCI98\n") != NULL &&
+          strstr(out, "no spaces") != NULL &&
+          strstr(out, "Enter for [C:\\WINDOWS\\XHCI98]: ") != NULL,
+          "98: the copy, where it is now, the 8.3 rule");
+    CHECK(fits(out), "the directory question fits");
+    inst_dir_question(out, sizeof(out), "XHCITR64.EXE", NULL, NULL,
+                      "D:\\XHCI98", 1, 1);
+    CHECK(strstr(out, "/list: not asked; Enter would give [D:\\XHCI98].\n")
+          != NULL, "the directory under /list");
+}
+
+/* The install directory as text (record 23 section 9.6). */
+static void test_dir_check(void)
+{
+    char out[260];
+    const char *win = "C:\\WINDOWS";
+    const char *pkg = "D:\\Downloads\\xhci98-3.0.0.0\\";
+
+    CHECK_EQ(inst_dir_check("C:\\XHCI98", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_OK, "C:\\XHCI98");
+    CHECK(strcmp(out, "C:\\XHCI98") == 0, "kept as given");
+    CHECK_EQ(inst_dir_check(" \"d:/Tools/xhci98/\" ", 1, win, pkg, NULL, out,
+                            sizeof(out)), INST_DIR_OK, "quotes, slashes");
+    CHECK(strcmp(out, "D:\\Tools\\xhci98") == 0, "normalised");
+    CHECK_EQ(inst_dir_check("C:\\Program Files\\xHCI98", 1, win, pkg, NULL, out,
+                            sizeof(out)), INST_DIR_OK, "NT takes spaces");
+    CHECK_EQ(inst_dir_check("C:\\Program Files\\xHCI98", 0, win, pkg, NULL, out,
+                            sizeof(out)), INST_DIR_NAME83, "98 does not");
+    CHECK_EQ(inst_dir_check("C:\\LONGFOLDERNAME", 0, win, pkg, NULL, out,
+                            sizeof(out)), INST_DIR_NAME83, "nine characters");
+    CHECK_EQ(inst_dir_check("C:\\TOOLS.ABC\\X98", 0, win, pkg, NULL, out,
+                            sizeof(out)), INST_DIR_OK, "an 8.3 extension");
+    CHECK_EQ(inst_dir_check("C:\\TOOLS.ABCD", 0, win, pkg, NULL, out,
+                            sizeof(out)), INST_DIR_NAME83, "a long extension");
+    CHECK_EQ(inst_dir_check("XHCI98", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_FORM, "relative");
+    CHECK_EQ(inst_dir_check("\\\\server\\share\\x", 1, win, pkg, NULL, out,
+                            sizeof(out)), INST_DIR_FORM, "a network path");
+    CHECK_EQ(inst_dir_check("C:XHCI98", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_FORM, "a drive-relative path");
+    CHECK_EQ(inst_dir_check("C:\\", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_ROOT, "a drive's root");
+    CHECK_EQ(inst_dir_check("C:", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_ROOT, "a bare drive");
+    CHECK_EQ(inst_dir_check("C:\\a;b", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_CHAR, "a semicolon (DevicePath's separator)");
+    CHECK_EQ(inst_dir_check("C:\\a?b", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_CHAR, "a wildcard");
+    CHECK_EQ(inst_dir_check("C:\\a:b", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_CHAR, "a second colon");
+    CHECK_EQ(inst_dir_check("C:\\a\\..\\b", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_PART, "..");
+    CHECK_EQ(inst_dir_check("C:\\a.\\b", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_PART, "a trailing dot");
+    CHECK_EQ(inst_dir_check("C:\\a\\\\b", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_FORM, "an empty part");
+    CHECK_EQ(inst_dir_check("C:\\WINDOWS\\XHCI98", 1, win, pkg, NULL, out,
+                            sizeof(out)), INST_DIR_WINDOWS, "in Windows");
+    CHECK_EQ(inst_dir_check("c:\\windows", 1, win, pkg, NULL, out, sizeof(out)),
+             INST_DIR_WINDOWS, "Windows itself, any case");
+    CHECK_EQ(inst_dir_check("C:\\WINDOWS2\\X", 1, win, pkg, NULL, out,
+                            sizeof(out)), INST_DIR_OK, "a sibling is not inside");
+    CHECK_EQ(inst_dir_check("C:\\WINDOWS\\XHCI98", 0, win, pkg,
+                            "C:\\WINDOWS\\XHCI98", out, sizeof(out)),
+             INST_DIR_OK, "where an earlier build put it: kept");
+    CHECK_EQ(inst_dir_check("D:\\Downloads\\xhci98-3.0.0.0\\tools", 1, win, pkg,
+                            NULL, out, sizeof(out)), INST_DIR_PACKAGE,
+             "inside the package");
+    CHECK_EQ(inst_dir_check("D:\\Downloads\\xhci98-3.0.0.0", 1, win, pkg, NULL,
+                            out, sizeof(out)), INST_DIR_PACKAGE, "the package");
+    {
+        char longPath[200];
+        memset(longPath, 'a', sizeof(longPath) - 1);
+        longPath[sizeof(longPath) - 1] = '\0';
+        memcpy(longPath, "C:\\", 3);
+        CHECK_EQ(inst_dir_check(longPath, 1, win, pkg, NULL, out, sizeof(out)),
+                 INST_DIR_LONG, "too long");
+    }
+    CHECK(strstr(inst_dir_reason(INST_DIR_NAME83), "no spaces") != NULL,
+          "the 8.3 reason");
+    CHECK(inst_path_within("C:\\A\\B", "c:\\a") && inst_path_within("C:\\A",
+                                                                    "C:\\A\\") &&
+          !inst_path_within("C:\\AB", "C:\\A"), "within");
+    inst_dir_default("D:", "C:\\WINDOWS", out, sizeof(out));
+    CHECK(strcmp(out, "D:\\XHCI98") == 0, "the system drive's root");
+    inst_dir_default("", "E:\\WIN98", out, sizeof(out));
+    CHECK(strcmp(out, "E:\\XHCI98") == 0, "98: the Windows directory's drive");
+    inst_dir_default(NULL, NULL, out, sizeof(out));
+    CHECK(strcmp(out, "C:\\XHCI98") == 0, "else C:");
+    /* The local copies' names, and DevicePath's entries of them. */
+    CHECK(inst_copy_name("1A2B3C4D") && inst_copy_name("1a2b3c4d.NEW") &&
+          !inst_copy_name("1A2B3C4") && !inst_copy_name("TOOLS") &&
+          !inst_copy_name("1A2B3C4G"), "a copy's name");
+    CHECK_EQ(inst_path_remove_copies("C:\\WINDOWS\\INF;C:\\XHCI98\\1A2B3C4D;"
+                                     "C:\\XHCI98\\MINE;C:\\XHCI98X\\1A2B3C4D",
+                                     "C:\\XHCI98", out, sizeof(out)), 1,
+             "a copy removed");
+    CHECK(strcmp(out, "C:\\WINDOWS\\INF;C:\\XHCI98\\MINE;C:\\XHCI98X\\1A2B3C4D")
+          == 0, "only the copy");
+    CHECK_EQ(inst_path_remove_copies("C:\\WINDOWS\\INF", "C:\\XHCI98", out,
+                                     sizeof(out)), 0, "none there");
+}
+
+/* /to (record 23 section 9.6). */
+static void test_to_switch(void)
+{
+    INST_OPTS o;
+    char err[128];
+    char *a[4];
+
+    a[0] = "x";
+    a[1] = "/to";
+    a[2] = "D:\\Tools\\xhci98";
+    CHECK_EQ(inst_parse_args(3, a, &o, err, sizeof(err)), 0, "/to path");
+    CHECK(strcmp(o.To, "D:\\Tools\\xhci98") == 0 && o.Dir[0] == '\0',
+          "/to is not /dir");
+    CHECK_EQ(inst_parse_args(2, a, &o, err, sizeof(err)), 1, "/to needs a path");
+    a[3] = "/uninstall";
+    CHECK_EQ(inst_parse_args(4, a, &o, err, sizeof(err)), 1,
+             "/to with /uninstall refused");
+    a[3] = "/list";
+    CHECK_EQ(inst_parse_args(4, a, &o, err, sizeof(err)), 0, "/to with /list");
+    a[3] = "/devices";
+    CHECK_EQ(inst_parse_args(4, a, &o, err, sizeof(err)), 1,
+             "/to with /devices refused");
+}
+
 int main(void)
 {
     test_versions();
@@ -1805,6 +2349,10 @@ int main(void)
     test_tb_eject();
     test_tb_question();
     test_tray();
+    test_wrap();
+    test_questions();
+    test_dir_check();
+    test_to_switch();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

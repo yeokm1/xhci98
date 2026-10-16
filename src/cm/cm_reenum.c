@@ -64,7 +64,7 @@
 #include "cm_nvlink.h"
 
 /* The USB4 profile's actions reach the seam with this bit in Why (cm_nhi.c,
- * cmU4ToIcm); its nvme98 statement is made at the core's upcall, not here. */
+ * cmU4ToIcm); its stor98 statement is made at the core's upcall, not here. */
 #ifndef CM_U4_WHY_BASE
 #define CM_U4_WHY_BASE 0x80UL
 #endif
@@ -95,9 +95,11 @@ static ULONG cmRegSerial;
 static ULONG cmRegAttached;
 static ULONG cmRegSkipped;
 static ULONG cmRegRefused;
+static ULONG cmRegOver;
 static ULONG cmRegWatchdogs;
 
-static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo);
+static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
+                              PULONG over);
 static VOID cmDiscoverAndList(PCM_NHI nhi);
 static VOID cmHoldDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2);
 
@@ -168,13 +170,14 @@ VOID CmRegFilterInit(PCM_FILTER filter)
     KeInitializeDpc(&filter->HoldDpc, cmHoldDpc, filter);
 }
 
-VOID CmRegCounters(PULONG attached, PULONG skipped, PULONG refused,
-                   PULONG watchdogs)
+VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
+                   PULONG refused, PULONG watchdogs)
 {
     KIRQL irql;
 
     KeAcquireSpinLock(&cmRegLock, &irql);
     *attached = cmRegAttached;
+    *over = cmRegOver;
     *skipped = cmRegSkipped;
     *refused = cmRegRefused;
     *watchdogs = cmRegWatchdogs;
@@ -456,6 +459,7 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     ULONG fresh;
     ULONG i;
     ULONG attach;
+    ULONG over;
     KIRQL irql;
     NTSTATUS status;
 
@@ -488,10 +492,13 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
         if (!isNew[i] || !attach) {
             continue;
         }
-        status = cmChildCreate(filter, (PDEVICE_OBJECT)now[i]);
+        status = cmChildCreate(filter, (PDEVICE_OBJECT)now[i], &over);
         KeAcquireSpinLock(&cmRegLock, &irql);
         if (NT_SUCCESS(status)) {
             cmRegAttached++;
+            if (over) {
+                cmRegOver++;
+            }
         } else if (status == STATUS_DEVICE_BUSY) {
             cmRegSkipped++;
         } else {
@@ -533,20 +540,97 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
+/* Four characters of a driver object's name from `from` on (8 skips the
+ * "\Driver\" prefix), one per byte, high byte first, for the log: which
+ * driver a new PDO already carried. PASSIVE_LEVEL. */
+static ULONG cmNameChars(PDRIVER_OBJECT driver, ULONG from)
+{
+    ULONG v;
+    ULONG k;
+    ULONG chars;
+
+    v = 0;
+    if (driver == NULL || driver->DriverName.Buffer == NULL) {
+        return 0;
+    }
+    chars = (ULONG)driver->DriverName.Length / sizeof(WCHAR);
+    for (k = 0; k < 4; k++) {
+        if (from + k < chars) {
+            v |= ((ULONG)driver->DriverName.Buffer[from + k] & 0xFFUL)
+                 << (8UL * (3UL - k));
+        }
+    }
+    return v;
+}
+
 /*
- * A child filter directly above a PDO pci.sys newly reported on an active
- * bridge, before the PnP manager builds that device's stack (section 7.4
- * step 1). STATUS_DEVICE_BUSY: something is already attached to the PDO
- * (not a new device's stack), so nothing is attached. PASSIVE_LEVEL.
+ * A child filter above a PDO pci.sys newly reported on an active bridge,
+ * before the PnP manager builds that device's stack (section 7.4 step 1):
+ * directly above the PDO, or (revision 2) above the bus filters a driver
+ * below the bridge filter already put on it, which is where an ACPI
+ * machine leaves a PCI-to-PCI bridge; CmPortsChildAttach decides.
+ * STATUS_SUCCESS, with *over 1 when it went above bus filters;
+ * STATUS_DEVICE_BUSY when anything else is attached, so nothing is.
+ * PASSIVE_LEVEL.
  */
-static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
+static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
+                              PULONG over)
 {
     PDEVICE_OBJECT self;
     PDEVICE_OBJECT lower;
+    PDEVICE_OBJECT walk;
     PCM_FILTER child;
+    PVOID chain[CM_CHILD_CHAIN_MAX + 1];
+    ULONG chainCount;
+    ULONG decision;
+    PCM_NHI owner;
+    ULONG name0;
+    ULONG name1;
+    KIRQL irql;
+    ULONG truncated;
     NTSTATUS status;
 
-    if (pdo->AttachedDevice != NULL) {
+    *over = 0;
+    chainCount = 0;
+    name0 = 0;
+    name1 = 0;
+    /* SnapTruncated is written by this bridge's PnP dispatch alone, which
+     * is where this runs, so the value read stays the value. */
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    truncated = bridge->SnapTruncated;
+    KeReleaseSpinLock(&cmRegLock, irql);
+    walk = pdo->AttachedDevice;
+    decision = CmPortsChildFirst(truncated, (ULONG)(walk != NULL));
+    if (decision == CM_CHILD_WALK) {
+        /* Only for a PDO that is new by a whole snapshot: nothing the PnP
+         * manager builds can attach or detach before this answer reaches
+         * it, so the chain holds still without the I/O manager's database
+         * lock. After a truncated snapshot "new" proves nothing, and
+         * CmPortsChildFirst has skipped without the walk. */
+        name0 = cmNameChars(walk->DriverObject, 8);
+        name1 = cmNameChars(walk->DriverObject, 12);
+        while (walk != NULL && chainCount <= CM_CHILD_CHAIN_MAX) {
+            chain[chainCount] = (PVOID)walk->DriverObject;
+            chainCount++;
+            walk = walk->AttachedDevice;
+        }
+        decision = CmPortsChildAttach(truncated, (PVOID const *)chain,
+                                      chainCount, (PVOID)pdo->DriverObject,
+                                      (PVOID)CmDriverObject);
+    }
+    /* The owner is used under the registration list's lock only: its
+     * delisting (CmReenumStop) takes the same lock, so the NHI cannot
+     * leave while its log is written. Order: cmRegLock, then LogLock. */
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    owner = bridge->Owner;
+    if (chainCount != 0 && owner != NULL) {
+        CmLogNote(owner, "cm.reenum.child.under", name0);
+        CmLogNote(owner, "cm.reenum.child.under2", name1);
+        CmLogNote(owner, "cm.reenum.child.under.count", chainCount);
+        CmLogNote(owner, "cm.reenum.child.decision", decision);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (decision == CM_CHILD_SKIP) {
         return STATUS_DEVICE_BUSY;
     }
     status = IoCreateDevice(CmDriverObject, sizeof(CM_FILTER), NULL,
@@ -565,16 +649,22 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
     KeInitializeSpinLock(&child->Lock);
     KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
     CmRegFilterInit(child);
-    self->DeviceType = pdo->DeviceType;
-    self->Characteristics = pdo->Characteristics;
-    self->Flags |= pdo->Flags & DO_POWER_PAGABLE;
     lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (lower == NULL) {
         IoDeleteDevice(self);
         return STATUS_NO_SUCH_DEVICE;
     }
     child->Common.Lower = lower;
+    /* A filter mirrors the device it sits on (as CmFilterAddDevice does),
+     * which since revision 2 may be another driver's bus filter rather
+     * than the PDO. */
+    self->DeviceType = lower->DeviceType;
+    self->Characteristics = lower->Characteristics;
+    self->Flags |= lower->Flags &
+                   (DO_BUFFERED_IO | DO_DIRECT_IO | DO_POWER_PAGABLE |
+                    DO_POWER_INRUSH);
     self->Flags &= ~DO_DEVICE_INITIALIZING;
+    *over = (ULONG)(decision == CM_CHILD_ATTACH_OVER);
     return STATUS_SUCCESS;
 }
 
@@ -880,7 +970,7 @@ static VOID cmWkPost(PCM_NHI nhi, ULONG reenum, ULONG vanish, BOOLEAN mark)
 {
     PCM_REENUM r;
 
-    /* Nothing posted - no removal begun - while an nvme98 statement of
+    /* Nothing posted - no removal begun - while a stor98 statement of
      * this domain awaits its acknowledgement (cm_nvlink.h; the wait
      * services the ring, so it is this thread's, never the worker's). */
     CmNvlinkAwait(nhi);
@@ -899,7 +989,7 @@ static BOOLEAN cmInvalidate(PCM_NHI nhi, ULONG i, BOOLEAN activeOnly)
     PDEVICE_OBJECT pdo;
 
     /* No wait here: CmReenumResumeFailed reaches this at DISPATCH_LEVEL.
-     * The thread's callers wait for nvme98's acknowledgement before they
+     * The thread's callers wait for stor98's acknowledgement before they
      * get here (CmNvlinkExpose, cmAskBaselines, CmReenumResumed); the
      * failure release runs only where the thread did not run the resume,
      * so no statement of the resume is pending then. */
@@ -940,7 +1030,7 @@ static VOID cmAskBaselines(PCM_NHI nhi)
         KeReleaseSpinLock(&cmRegLock, irql);
         if (serial != 0) {
             /* The baseline answer may already report an endpoint: its
-             * nvme98 UP first (cm_nvlink.h, obligation 1). */
+             * stor98 UP first (cm_nvlink.h, obligation 1). */
             (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE);
         }
         if (serial != 0 && cmInvalidate(nhi, i, FALSE)) {
@@ -1044,7 +1134,7 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh)
             }
             continue;
         }
-        /* nvme98's UP for what the call is about to expose (cm_nvlink.h,
+        /* stor98's UP for what the call is about to expose (cm_nvlink.h,
          * obligation 1). */
         (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, fresh);
         if (r->Route == CM_ROUTE_FILTER) {
@@ -1472,7 +1562,7 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
              * every port is rescanned all the same. */
             r->PollTimeouts++;
         }
-        /* nvme98's statement, then its acknowledgement, before the removal
+        /* stor98's statement, then its acknowledgement, before the removal
          * (cm_nvlink.h, obligations 2 and 3). */
         if (action->Why == TBT_ICM_WHY_UNAVAILABLE) {
             /* The host interface lost: presence lost, no quiescence
@@ -1506,7 +1596,7 @@ VOID CmReenumService(PCM_NHI nhi)
     ULONG i;
 
     r = &nhi->Reenum;
-    /* The nvme98 channel's per-pass work: on 98 SE and ME the rescan of a
+    /* The stor98 channel's per-pass work: on 98 SE and ME the rescan of a
      * bus a fresh exposure found silent; under the USB4 profile the
      * presence samples for the statement's anchor (record 22 section
      * 10.3). */
@@ -1754,7 +1844,7 @@ VOID CmReenumResumed(PCM_NHI nhi, BOOLEAN ok)
     }
     CmLogNote(nhi, "cm.reenum.resumed", ok ? 1UL : 0UL);
     /* The holds' release (and on failure their invalidations) waits for
-     * any nvme98 statement the resume's own teardown made (cm_nvlink.h). */
+     * any stor98 statement the resume's own teardown made (cm_nvlink.h). */
     CmNvlinkAwait(nhi);
     cmReleaseHeld(nhi, (BOOLEAN)!ok);
 }
@@ -1764,6 +1854,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     PCM_REENUM r;
     KIRQL irql;
     ULONG attached;
+    ULONG over;
     ULONG skipped;
     ULONG refused;
     ULONG watchdogs;
@@ -1826,8 +1917,9 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.9x.gone", r->GoneDone);
     CmLogNote(nhi, "cm.reenum.9x.gone-dropped", r->GoneDropped);
     CmLogNote(nhi, "cm.reenum.ejects", r->Ejects);
-    CmRegCounters(&attached, &skipped, &refused, &watchdogs);
+    CmRegCounters(&attached, &over, &skipped, &refused, &watchdogs);
     CmLogNote(nhi, "cm.reenum.child.attached", attached);
+    CmLogNote(nhi, "cm.reenum.child.over", over);
     CmLogNote(nhi, "cm.reenum.child.skipped", skipped);
     CmLogNote(nhi, "cm.reenum.child.refused", refused);
     CmLogNote(nhi, "cm.reenum.hold.watchdogs", watchdogs);

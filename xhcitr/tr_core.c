@@ -1175,10 +1175,12 @@ void tr_gen_text(TR_U32 gen, char *out, size_t cap)
     if ((gen & 0xFFUL) == CM_ST_GEN_TBT3) {
         tr_copy(out, "Thunderbolt 3", cap);
     } else if ((gen & 0xFFUL) == CM_ST_GEN_USB4) {
+        /* 15:8 is ROUTER_CS_4's USB4 Version byte: major 7:5, minor 4:0
+         * (Spec 8.2.1.1). */
         if (((gen >> 8) & 0xFFUL) != 0) {
             tr_sprintf(out, cap, "USB4 v%lu.%lu",
-                       (unsigned long)((gen >> 12) & 0xFUL),
-                       (unsigned long)((gen >> 8) & 0xFUL));
+                       (unsigned long)((gen >> 13) & 0x7UL),
+                       (unsigned long)((gen >> 8) & 0x1FUL));
         } else {
             tr_copy(out, "USB4", cap);
         }
@@ -1238,6 +1240,46 @@ void tr_link_text(TR_U32 kind, TR_U32 lanes, const TR_EXT *x, char *out,
     tr_sprintf(out, cap, "%s; speed not known",
                width == 2 ? "two lanes" : width == 1 ? "one lane"
                                                      : "lanes not known");
+}
+
+int tr_gen_tbt3(TR_U32 gen)
+{
+    /* A Thunderbolt 3 router behind a USB4 host reads USB4 Version major 0
+     * in ROUTER_CS_4 (15:8 here: major 7:5, minor 4:0; task 40-A.8). */
+    return (gen & 0xFFUL) == CM_ST_GEN_TBT3 ||
+           ((gen & 0xFFUL) == CM_ST_GEN_USB4 && ((gen >> 8) & 0xFFUL) != 0 &&
+            ((gen >> 13) & 0x7UL) == 0);
+}
+
+void tr_link_text_gen(TR_U32 gen, TR_U32 kind, TR_U32 lanes, const TR_EXT *x,
+                      char *out, size_t cap)
+{
+    TR_U32 width = 0;
+    const char *src;
+
+    if (kind == CM_ST_KIND_ICM || x == NULL || x->Rate == 0 ||
+        !tr_gen_tbt3(gen)) {
+        tr_link_text(kind, lanes, x, out, cap);
+        return;
+    }
+    /* A lane adapter's speed is a USB4 generation only on a USB4 router;
+     * a Thunderbolt 3 router's link is worded as the ICM path words it. */
+    if (x->Width != 0) {
+        width = x->Width;
+    } else if (lanes == CM_ST_LANES_BONDED) {
+        width = 2;
+    } else if (lanes == CM_ST_LANES_SINGLE) {
+        width = 1;
+    }
+    src = (x->Flags & CM_Q_XF_RATE_READ) ? " (read from the lane adapter)" : "";
+    if (width != 0) {
+        tr_sprintf(out, cap, "Thunderbolt 3, %lu Gbit/s per lane, x%lu "
+                   "(%lu Gbit/s)%s", (unsigned long)x->Rate,
+                   (unsigned long)width, (unsigned long)(x->Rate * width), src);
+    } else {
+        tr_sprintf(out, cap, "Thunderbolt 3, %lu Gbit/s per lane, lanes not "
+                   "known%s", (unsigned long)x->Rate, src);
+    }
 }
 
 void tr_router_name(const unsigned char *entry, char *out, size_t cap)
@@ -1583,6 +1625,20 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
             o->Eject = 1;
             tr_copy(o->EjectId, id + 3, sizeof(o->EjectId));
             alone++;
+        } else if (tr_switch(a, "result")) {
+            if (i + 1 >= argc || !tr_res_name_ok(argv[i + 1])) {
+                tr_copy(err, "/result needs the window's answer name.", cap);
+                return 1;
+            }
+            o->Result = 1;
+            tr_copy(o->ResultName, argv[++i], sizeof(o->ResultName));
+        } else if (tr_switch(a, "confirmed")) {
+            if (i + 1 >= argc || !tr_res_digest_ok(argv[i + 1])) {
+                tr_copy(err, "/confirmed needs a digest.", cap);
+                return 1;
+            }
+            o->Confirmed = 1;
+            tr_copy(o->ConfirmedDigest, argv[++i], sizeof(o->ConfirmedDigest));
         } else {
             tr_sprintf(err, cap, "Unknown switch %s. Use: XHCITR [/tray] "
                        "[/eject id=<instance id>] [/report <file>]", a);
@@ -1591,6 +1647,10 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
     }
     if (alone > 1 || (alone == 1 && o->Tray)) {
         tr_copy(err, "/eject, /report and /selftest are each used alone.", cap);
+        return 1;
+    }
+    if ((o->Result || o->Confirmed) && !o->Eject) {
+        tr_copy(err, "/result and /confirmed go with /eject only.", cap);
         return 1;
     }
     return 0;
@@ -1834,4 +1894,560 @@ void tr_protocols_text(TR_U32 proto, char *out, size_t cap)
     if (!any) {
         tr_put(&t, "none reported");
     }
+}
+
+/* ======================================================================== */
+/* Plain USB devices (record 25 section 6.5, revision 7)                     */
+/* ======================================================================== */
+
+static int tr_starts_ci(const char *s, const char *prefix)
+{
+    while (*prefix != '\0') {
+        if (*s == '\0' || tr_up((unsigned char)*s) != tr_up((unsigned char)*prefix)) {
+            return 0;
+        }
+        s++;
+        prefix++;
+    }
+    return 1;
+}
+
+int tr_msz_has_prefix(const char *msz, size_t bytes, const char *prefix)
+{
+    size_t o = 0;
+
+    if (msz == NULL) {
+        return 0;
+    }
+    while (o < bytes && msz[o] != '\0') {
+        size_t n = 0;
+        while (o + n < bytes && msz[o + n] != '\0') {
+            n++;
+        }
+        if (o + n >= bytes) {
+            return 0;   /* an id the buffer cuts short is not read */
+        }
+        if (tr_starts_ci(msz + o, prefix)) {
+            return 1;
+        }
+        o += n + 1;
+    }
+    return 0;
+}
+
+int tr_node_is_hid(const char *id, const char *hw, size_t hwBytes,
+                   const char *compat, size_t compatBytes,
+                   const char *service, const char *cls)
+{
+    if (cls != NULL && (tr_eq(cls, "HIDClass") || tr_eq(cls, "Keyboard") ||
+                        tr_eq(cls, "Mouse"))) {
+        return 1;
+    }
+    if (service != NULL && tr_eq(service, "hidusb")) {
+        return 1;
+    }
+    if (id != NULL && (tr_starts_ci(id, "HID\\") ||
+                       tr_starts_ci(id, "USB\\Class_03"))) {
+        return 1;
+    }
+    return tr_msz_has_prefix(hw, hwBytes, "USB\\Class_03") ||
+           tr_msz_has_prefix(hw, hwBytes, "HID\\") ||
+           tr_msz_has_prefix(compat, compatBytes, "USB\\Class_03") ||
+           tr_msz_has_prefix(compat, compatBytes, "HID\\");
+}
+
+int tr_node_is_hub(const char *hw, size_t hwBytes, const char *compat,
+                   size_t compatBytes)
+{
+    return tr_msz_has_prefix(hw, hwBytes, "USB\\Class_09") ||
+           tr_msz_has_prefix(compat, compatBytes, "USB\\Class_09");
+}
+
+int tr_usb_rule(const TR_USBF *f, const char **why)
+{
+    *why = NULL;
+    if (!f->HaveDevnode) {
+        *why = "its device entry was not found";
+        return TR_UE_DETAILS;
+    }
+    if (f->IsController) {
+        *why = "a USB host controller";
+        return TR_UE_DETAILS;
+    }
+    if (f->IsHub) {
+        *why = "a hub";
+        return TR_UE_DETAILS;
+    }
+    if (f->Hid) {
+        *why = "an input device";
+        return TR_UE_DETAILS;
+    }
+    if (f->Radio) {
+        *why = "a wireless radio";
+        return TR_UE_DETAILS;
+    }
+    /* Held for eject (Code 47): its disks are gone with the eject, and it
+     * is shown stopped, never offered. */
+    if (f->Problem == TR_CM_PROB_HELD_FOR_EJECT) {
+        *why = "stopped - unplug it";
+        return TR_UE_LISTED;
+    }
+    /* A disk or a volume on every target: xhci98.sys reports every device
+     * removable, internal ports included (it reads no ACPI _UPC or _PLD),
+     * so the capability cannot tell a camera from a stick. */
+    if (f->Disks == 0 && (!f->Nt || f->Volumes == 0)) {
+        *why = "no disk on it";
+        return TR_UE_DETAILS;
+    }
+    if (f->Problem == TR_CM_PROB_HELD_FOR_EJECT) {
+        *why = "stopped - unplug it";
+        return TR_UE_LISTED;
+    }
+    if (f->Problem != 0) {
+        *why = "Windows could not start it";
+        return TR_UE_LISTED;
+    }
+    if (!f->Started) {
+        *why = "it is not running";
+        return TR_UE_LISTED;
+    }
+    if (!f->SetKnown) {
+        *why = "what would stop with it could not be read";
+        return TR_UE_LISTED;
+    }
+    if (f->SetCount > TR_USB_SET_MAX) {
+        *why = "too many devices would stop with it to list";
+        return TR_UE_LISTED;
+    }
+    if (!f->ReadWhole) {
+        *why = "its devices could not be read whole";
+        return TR_UE_LISTED;
+    }
+    if (!f->CallAvailable) {
+        *why = "this Windows does not offer the call";
+        return TR_UE_LISTED;
+    }
+    return TR_UE_OFFER;
+}
+
+static int tr_id_in(const char *id, const char *const *ids, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (ids[i] != NULL && tr_eq(ids[i], id)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int tr_usb_recheck(const char *parentNow, const char *parentThen,
+                   const char *const *nowIds, int n,
+                   const char *const *thenIds, int m, const TR_USBF *f,
+                   const char **why)
+{
+    int i;
+
+    *why = NULL;
+    if (parentNow == NULL || parentThen == NULL || parentThen[0] == '\0' ||
+        !tr_eq(parentNow, parentThen)) {
+        *why = "it is no longer where it was";
+        return 0;
+    }
+    if (n != m) {
+        *why = "the devices on it changed";
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        /* Both ways: a list with a repeated entry cannot stand for
+         * another of the same length. */
+        if (nowIds[i] == NULL || !tr_id_in(nowIds[i], thenIds, m) ||
+            thenIds[i] == NULL || !tr_id_in(thenIds[i], nowIds, n)) {
+            *why = "the devices on it changed";
+            return 0;
+        }
+    }
+    return tr_usb_rule(f, why) == TR_UE_OFFER;
+}
+
+/* One %s of a text from inst_core.c, filled, into out. */
+static void tr_fill1(char *out, size_t cap, const char *text, const char *arg)
+{
+    const char *p = strstr(text, "%s");
+    char head[512];
+    size_t n;
+
+    if (p == NULL) {
+        tr_sprintf(out, cap, "%s", text);
+        return;
+    }
+    n = (size_t)(p - text);
+    if (n >= sizeof(head)) {
+        n = sizeof(head) - 1;
+    }
+    memcpy(head, text, n);
+    head[n] = '\0';
+    tr_sprintf(out, cap, "%s%s%s", head, arg, p + 2);
+}
+
+TR_U32 tr_eject_cr(TR_U32 cr, TR_U32 vetoType)
+{
+    return cr == 0 && vetoType != 0 ? INST_CR_REMOVE_VETOED : cr;
+}
+
+/* PNP_VETO_TYPE (cfg.h): the three answers whose text names the drive. */
+#define TR_VETO_WINDOWS_APP     3UL
+#define TR_VETO_WINDOWS_SERVICE 4UL
+#define TR_VETO_OUTSTANDING     5UL
+#define TR_VETO_DEVICE          6UL
+#define TR_VETO_DRIVER          7UL
+
+int tr_usb_answer_nt(TR_U32 cr, TR_U32 vetoType, const char *vetoName,
+                     int vetoInSet, const char *what, char *out, size_t cap)
+{
+    const char *text;
+    int withName;
+    int outcome;
+
+    cr = tr_eject_cr(cr, vetoType);
+    outcome = inst_eject_nt(cr, vetoType, &text, &withName);
+    if (cap == 0) {
+        return outcome;
+    }
+    out[0] = '\0';
+    if (outcome == INST_EJ_DONE) {
+        return outcome;
+    }
+    if (cr == INST_CR_REMOVE_VETOED && vetoType == TR_VETO_OUTSTANDING) {
+        tr_sprintf(out, cap, "Windows refused: a program is using %s. Close "
+                             "it and try again.", what);
+    } else if (cr == INST_CR_REMOVE_VETOED && vetoInSet &&
+               (vetoType == TR_VETO_DEVICE || vetoType == TR_VETO_DRIVER)) {
+        tr_sprintf(out, cap, "Windows refused: %s is in use (a program has a "
+                             "file or folder open on it). Close it and try "
+                             "again.", what);
+    } else if (cr == INST_CR_REMOVE_VETOED &&
+               (vetoType == TR_VETO_WINDOWS_APP ||
+                vetoType == TR_VETO_WINDOWS_SERVICE)) {
+        tr_sprintf(out, cap, "Windows refused: %s is using %s. Close it and "
+                             "try again.",
+                   vetoName != NULL && vetoName[0] != '\0' ? vetoName
+                                                           : "a program",
+                   what);
+    } else if (withName) {
+        char name[300];
+        if (vetoName != NULL && vetoName[0] != '\0') {
+            tr_copy(name, vetoName, sizeof(name));
+        } else {
+            tr_sprintf(name, sizeof(name), "veto %lu", (unsigned long)vetoType);
+        }
+        tr_fill1(out, cap, text, name);
+    } else {
+        tr_sprintf(out, cap, "%s", text);
+    }
+    if (outcome == INST_EJ_FAILED) {
+        size_t l = strlen(out);
+        tr_sprintf(out + l, cap - l, "\n(code 0x%08lX)", (unsigned long)cr);
+    }
+    return outcome;
+}
+
+int tr_usb_answer9x(TR_U32 cr, const char *what, char *out, size_t cap)
+{
+    const char *text;
+    int outcome = inst_eject9x_query(cr, &text);
+
+    if (cap == 0) {
+        return outcome;
+    }
+    out[0] = '\0';
+    if (outcome == INST_EJ_DONE) {
+        return outcome;
+    }
+    if (cr == INST_CR_REMOVE_VETOED) {
+        tr_sprintf(out, cap, "Windows refused: %s is in use. A program may "
+                             "have a file open on it, or a DOS box may be "
+                             "using it. Close it and try again.", what);
+        return outcome;
+    }
+    tr_sprintf(out, cap, "%s", text);
+    if (outcome == INST_EJ_VETO) {
+        size_t l = strlen(out);
+        tr_sprintf(out + l, cap - l, "\n(code 0x%08lX)", (unsigned long)cr);
+    }
+    return outcome;
+}
+
+/* n bytes of s into out at *o, always terminated; 0 when they did not
+ * all fit (what fits is kept). */
+static int tr_emit(char *out, size_t cap, size_t *o, const char *s, size_t n)
+{
+    if (*o + n + 1 > cap) {
+        n = cap - 1 - *o;
+        memcpy(out + *o, s, n);
+        *o += n;
+        out[*o] = '\0';
+        return 0;
+    }
+    memcpy(out + *o, s, n);
+    *o += n;
+    out[*o] = '\0';
+    return 1;
+}
+
+void tr_wrap(const char *in, char *out, size_t cap, int width)
+{
+    size_t o = 0;
+    const char *p = in;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (width < 8) {
+        width = 8;
+    }
+    for (;;) {
+        const char *end = p;
+        while (*end != '\0' && *end != '\r' && *end != '\n') {
+            end++;
+        }
+        do {
+            const char *cut = end;
+            const char *resume = end;
+            if (end - p > width) {
+                const char *s = p + width;
+                while (s > p && *s != ' ') {
+                    s--;
+                }
+                if (s == p) {
+                    cut = p + width;    /* one word longer than the line */
+                    resume = cut;
+                } else {
+                    cut = s;
+                    resume = s;
+                    while (*resume == ' ') {
+                        resume++;
+                    }
+                    while (cut > p && cut[-1] == ' ') {
+                        cut--;
+                    }
+                }
+            }
+            if (!tr_emit(out, cap, &o, p, (size_t)(cut - p))) {
+                return;
+            }
+            p = resume;
+            if (p < end && !tr_emit(out, cap, &o, "\r\n", 2)) {
+                return;
+            }
+        } while (p < end);
+        if (*end == '\0') {
+            break;
+        }
+        if (!tr_emit(out, cap, &o, "\r\n", 2)) {
+            return;
+        }
+        p = end;
+        if (*p == '\r') {
+            p++;
+        }
+        if (*p == '\n') {
+            p++;
+        }
+    }
+}
+
+int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
+                    size_t sentenceCap)
+{
+    if (problem == TR_CM_PROB_HELD_FOR_EJECT) {
+        tr_copy(tag, "stopped - unplug it", tagCap);
+        tr_copy(sentence, "Stopped: you can unplug it.", sentenceCap);
+        return 1;
+    }
+    if (problem != 0) {
+        tr_sprintf(tag, tagCap, "not started - problem code %lu",
+                   (unsigned long)problem);
+        tr_sprintf(sentence, sentenceCap, "Windows could not start this device "
+                   "(problem code %lu).", (unsigned long)problem);
+        return 0;
+    }
+    tr_copy(tag, "not started", tagCap);
+    tr_copy(sentence, "Windows has not started this device.", sentenceCap);
+    return 0;
+}
+
+/* ---- the elevated stop of a unit not marked removable (section 6.6) ------ */
+
+int tr_elev_needed(int nt, int notMarked, int isAdmin)
+{
+    return nt && notMarked && !isAdmin;
+}
+
+static TR_U32 tr_fnv(TR_U32 h, unsigned char c)
+{
+    return ((h ^ (TR_U32)c) * 16777619UL) & 0xFFFFFFFFUL;
+}
+
+void tr_res_digest(const char (*devs)[TR_ID_CHARS], int n, char *out)
+{
+    TR_U32 a = 2166136261UL;
+    TR_U32 b = 0x9E3779B9UL;
+    int i;
+    const char *p;
+    TR_TEXT t;
+
+    a = tr_fnv(a, (unsigned char)(n & 0xFF));
+    b = tr_fnv(b, (unsigned char)(n & 0xFF));
+    for (i = 0; i < n; i++) {
+        for (p = devs[i]; *p != '\0'; p++) {
+            unsigned char c = (unsigned char)tr_up((unsigned char)*p);
+            a = tr_fnv(a, c);
+            b = tr_fnv(b, (unsigned char)(c ^ 0xA5));
+        }
+        a = tr_fnv(a, '\n');
+        b = tr_fnv(b, '\n');
+    }
+    tr_text_init(&t, out, TR_DIGEST_CHARS);
+    tr_printf(&t, "%08lX%08lX", (unsigned long)a, (unsigned long)b);
+}
+
+int tr_res_digest_ok(const char *s)
+{
+    int i;
+
+    for (i = 0; i < TR_DIGEST_CHARS - 1; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
+            return 0;
+        }
+    }
+    return s[i] == '\0';
+}
+
+int tr_res_name_ok(const char *name)
+{
+    size_t k = strlen(TR_RES_PREFIX);
+    const char *p;
+
+    if (strncmp(name, TR_RES_PREFIX, k) != 0 || name[k] == '\0' ||
+        strlen(name + k) > 24) {
+        return 0;
+    }
+    for (p = name + k; *p != '\0'; p++) {
+        if (!((*p >= '0' && *p <= '9') || *p == '-')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+#define TR_RES_ANSWER   "XHCITR ANSWER 1"
+
+/* The next line of *p into line (CR and LF dropped, a long line cut); 0
+ * at the end. */
+static int tr_res_line(const char **p, char *line, size_t cap)
+{
+    size_t n = 0;
+    const char *s = *p;
+
+    if (*s == '\0') {
+        return 0;
+    }
+    while (*s != '\0' && *s != '\n') {
+        if (*s != '\r' && n + 1 < cap) {
+            line[n++] = *s;
+        }
+        s++;
+    }
+    if (*s == '\n') {
+        s++;
+    }
+    line[n] = '\0';
+    *p = s;
+    return 1;
+}
+
+size_t tr_res_answer(int code, const char *msg, char *out, size_t cap)
+{
+    TR_TEXT t;
+
+    if (cap == 0) {
+        return 0;
+    }
+    tr_text_init(&t, out, cap);
+    tr_printf(&t, TR_RES_ANSWER "\ncode %d\n%s", code, msg);
+    return t.Overflow ? 0 : t.Len;
+}
+
+int tr_res_read_answer(const char *text, int *code, char *msg, size_t cap)
+{
+    char line[64];
+    const char *p = text;
+    int c = 0;
+    const char *d;
+
+    if (!tr_res_line(&p, line, sizeof(line)) ||
+        strcmp(line, TR_RES_ANSWER) != 0 ||
+        !tr_res_line(&p, line, sizeof(line)) ||
+        strncmp(line, "code ", 5) != 0 || line[5] == '\0') {
+        return 0;
+    }
+    for (d = line + 5; *d != '\0'; d++) {
+        if (*d < '0' || *d > '9' || c > 1000) {
+            return 0;
+        }
+        c = c * 10 + (*d - '0');
+    }
+    *code = c;
+    tr_copy(msg, p, cap);
+    return 1;
+}
+
+int tr_elev_result(int launched, TR_U32 launchErr, int finished,
+                   TR_U32 exitCode, int haveAnswer, int answerCode,
+                   const char *answerMsg, char *out, size_t cap)
+{
+    if (!launched && launchErr == TR_ERROR_CANCELLED) {
+        tr_copy(out, "Nothing was stopped: administrator rights were not "
+                "given. Try again and allow\nit, or unplug the device and "
+                "plug it in again.", cap);
+        return INST_EXIT_REFUSED;
+    }
+    if (!launched) {
+        tr_sprintf(out, cap, "%s\n(The stop with administrator rights "
+                   "could not be started: error %lu.)", inst_admin_text(),
+                   (unsigned long)launchErr);
+        return INST_EXIT_REFUSED;
+    }
+    if (!finished) {
+        tr_copy(out, "The stop with administrator rights has not finished. "
+                "Look at the device in the\ntree before you unplug it.", cap);
+        return INST_EXIT_FAILED;
+    }
+    if (haveAnswer && (TR_U32)answerCode == exitCode) {
+        tr_copy(out, answerMsg, cap);
+        return answerCode;
+    }
+    switch (exitCode) {
+    case INST_EXIT_REFUSED:
+        tr_copy(out, "Nothing was stopped.", cap);
+        return INST_EXIT_REFUSED;
+    case INST_EXIT_STEPS:
+        tr_copy(out, "Windows did not stop the device; nothing was changed.", cap);
+        return INST_EXIT_STEPS;
+    default:
+        tr_sprintf(out, cap, "The stop with administrator rights ended with "
+                   "no answer (code %lu).\nLook at the device in the tree "
+                   "before you unplug it.", (unsigned long)exitCode);
+        return INST_EXIT_FAILED;
+    }
+}
+
+const char *tr_elev_question(void)
+{
+    return "Windows does not list this device for safe removal. Stopping it "
+           "needs administrator rights.";
 }

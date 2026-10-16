@@ -192,6 +192,49 @@ static void armUnplug(FAB *f, int router, unsigned long cs, unsigned long adp,
     f->Hook = unplugHook;
 }
 
+/* Requests counted per router (writes, and router-space reads of
+ * ROUTER_CS_6 alone, a Router Ready poll); with g_rpPort set, the first
+ * such poll of router g_rpRouter gives it another UUID: another router in
+ * its place, with its configuration and paths. */
+static unsigned long g_onTimeUs;
+static unsigned long g_onTimeWrites;
+static unsigned long g_cnWrites[FAB_MAX_ROUTERS];
+static unsigned long g_cnRrPolls[FAB_MAX_ROUTERS];
+static unsigned long g_cnLastPollUs;
+static int g_rpPort;
+static int g_rpRouter;
+
+static int countHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                     unsigned long adp, unsigned long addr, unsigned long n,
+                     const unsigned long *data)
+{
+    (void)adp;
+    (void)data;
+    if (router < 0 || router >= FAB_MAX_ROUTERS) {
+        return 0;
+    }
+    if (pdf == TBT_PDF_WRITE) {
+        g_cnWrites[router]++;
+    } else if (cs == TBT_CS_ROUTER && addr == 6 && n == 1) {
+        g_cnRrPolls[router]++;
+        g_cnLastPollUs = f->NowUs;
+        if (g_rpPort != 0 && router == g_rpRouter) {
+            f->R[router].Rcs[7] ^= 0x00010000UL;
+            g_rpPort = 0;
+        }
+    }
+    return 0;
+}
+
+static void armCount(FAB *f)
+{
+    memset(g_cnWrites, 0, sizeof(g_cnWrites));
+    memset(g_cnRrPolls, 0, sizeof(g_cnRrPolls));
+    g_cnLastPollUs = 0;
+    g_rpPort = 0;
+    f->Hook = countHook;
+}
+
 /* No host-side entry of the port left Valid or pending, and the host's
  * PCIe Down disabled. */
 static int hostClean(const FAB *f, int port)
@@ -1200,10 +1243,21 @@ static void test_inert_and_domains(void)
           "host router version 0: inert");
     fabInit(&g_fab);
     fabHostMinimal(&g_fab);
-    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x30000000UL;
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x02000000UL;
     rc = start(&g_fab, &g_ring, &g_cm, &c);
     CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_ROUTER_VERSION,
-          "a reserved host router version: inert");
+          "host router version 02h (Thunderbolt 3): inert");
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x60000000UL;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_ROUTER_VERSION,
+          "a reserved host router version (60h): inert");
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x30000000UL;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc == TBT_OK, "host router version 30h (USB4 1.x, minor 16): active");
 
     /* Two domains at once, each its own fabric, ring and instance. */
     fabInit(&g_fab);
@@ -1265,6 +1319,25 @@ static void test_adl(void)
     CHECK_EQ(bw, (14738UL * 125UL + 511UL) / 512UL, "14738 Mb/s, the clamped 90 per cent");
 }
 
+/* Apply the EEPROM enable on router g_eeHookDev (bit-banging on, still
+ * deselected) and lose every answer to it. */
+static unsigned long g_eeDrops;
+static int g_eeHookDev;
+static int eeEnableHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                        unsigned long adp, unsigned long addr, unsigned long n,
+                        const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    if (pdf == TBT_PDF_WRITE && router == g_eeHookDev && cs == TBT_CS_ROUTER &&
+        addr == FAB_RCAP_PLUG + 4 && n == 1 && data != NULL &&
+        (data[0] & 0x12UL) == 0x12UL) {
+        g_eeDrops++;
+        return FAB_HOOK_DROP_ANSWER;
+    }
+    return FAB_HOOK_GO;
+}
+
 static void test_tbt3(void)
 {
     TBT_U4_CONFIG c;
@@ -1294,6 +1367,12 @@ static void test_tbt3(void)
     CHECK(p->Dev.Uuid[0] == 0xAABB0000UL + (unsigned long)dev, "UUID from the LC fuse");
     CHECK_EQ(p->Dev.Quirks, TBT_U4_QUIRK_NO_CLX, "the CLx quirk noted");
     CHECK(g_cm.Counters.Tbt3Routers == 1, "counted");
+    CHECK(strcmp(p->Dev.VendorName, "CalDigit, Inc.") == 0 &&
+          strcmp(p->Dev.ModelName, "TS3 Plus") == 0,
+          "the DROM's names by EEPROM bit-bang");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 4) & 0x13UL, 0x02UL,
+             "the EEPROM left deselected, bit-banging off");
+    CHECK(g_fab.R[dev].EeCtlWrites > 24UL * 3UL, "clocked by bit-bang");
 
     /* Alpine Ridge keeps its USB plug event. */
     fabInit(&g_fab);
@@ -1303,6 +1382,109 @@ static void test_tbt3(void)
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "Alpine Ridge: UP");
     CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 1) & 0x7CUL, 0, "USB disable left clear");
+
+    /* A Thunderbolt 3 router with a non-zero minor: the CalDigit TS3 Plus
+     * reads ROUTER_CS_4 0x0200000a (usb4-emu's Framework 13 capture), major
+     * 0, minor 2 - run as Thunderbolt 3, never refused as reserved. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_AR);
+    g_fab.R[dev].Rcs[4] = 0x0200000AUL;
+    /* And, as the TS3 Plus at power-on, Upstream Adapter 0 in ROUTER_CS_1
+     * (0x0602C005): the CM takes it from the read's arrival adapter. */
+    g_fab.R[dev].Rcs[1] &= ~(0x3FUL << 8);
+    g_fab.R[dev].UpWritable = 1;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "USB4 Version 02h: UP");
+    CHECK_EQ(p->Dev.UpAdp, 1UL, "upstream adapter from the arrival adapter");
+    CHECK_EQ((fabRtr(&g_fab, dev, 1) >> 8) & 0x3FUL, 1UL,
+             "the enumeration write set Upstream Adapter 1");
+    CHECK(p->Dev.Tbt3, "02h is a Thunderbolt 3 router");
+    CHECK_EQ(p->Dev.Usb4Version, 0x02UL, "the byte kept as read");
+    CHECK(p->Pcie.Up && !p->Usb3.Up, "02h: PCIe, no USB3");
+    CHECK_EQ(fabRtr(&g_fab, dev, 4) & 0xFF00UL, 0, "02h: no CMUV written");
+    CHECK_EQ(g_cm.Counters.RoutersRefused, 0, "02h: not refused");
+
+    /* A USB4 router with a non-zero minor (21h, USB4 1.1) is USB4. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].Rcs[4] = (g_fab.R[dev].Rcs[4] & 0x00FFFFFFUL) | 0x21000000UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "USB4 Version 21h: UP");
+    CHECK(!p->Dev.Tbt3, "21h is a USB4 router");
+
+    /* Major 3 (60h) stays reserved: refused. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].Rcs[4] = (g_fab.R[dev].Rcs[4] & 0x00FFFFFFUL) | 0x60000000UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UNSUPPORTED, "USB4 Version 60h: UNSUPPORTED");
+    CHECK_EQ(TbtU4Port(&g_cm, 1)->Why, TBT_U4_WHY_VERSION, "60h: for its version");
+
+    /* An EEPROM that reads not present: unnamed, still UP. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    g_fab.R[dev].Rcs[FAB_RCAP_PLUG + 4] = 0x00000022UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "no EEPROM: UP");
+    CHECK(p->Dev.ModelName[0] == 0, "no EEPROM: no name");
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "no EEPROM: never clocked");
+
+    /* The enable applied but every answer to it lost: the part is still
+     * deselected and bit-banging disabled again; the router unnamed. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.Hook = eeEnableHook;
+    g_eeHookDev = dev;
+    g_eeDrops = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(g_eeDrops >= 1, "the enable applied, its answers lost");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 4) & 0x12UL, 0x02UL,
+             "lost enable: deselected and bit-banging off again");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "lost enable: UP");
+    CHECK(p->Dev.ModelName[0] == 0, "lost enable: no name");
+
+    /* Rebuilt under a resume budget: no EEPROM bit-bang (a spent budget
+     * would refuse the part's release), the router up unnamed. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.RxQCount = 0;
+    g_fab.R[dev].EeCtlWrites = 0;
+    CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "TB3 resume: rebuilt");
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "TB3 resume: UP");
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "TB3 resume: no bit-bang under the budget");
+
+    /* A DROM whose CRC fails: unnamed, still UP. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    g_fab.R[dev].Drom[20] ^= 0xFF;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "bad DROM CRC: UP");
+    CHECK(p->Dev.ModelName[0] == 0, "bad DROM CRC: no name");
 
     /* No Plug Events capability: refused. */
     fabInit(&g_fab);
@@ -1423,6 +1605,7 @@ static void test_loss_and_eject(void)
 
 static void test_suspend_resume(void)
 {
+    TBT_U4_CONFIG c;
     int dev;
     LONG rc;
     const TBT_U4_PORT *p;
@@ -1464,6 +1647,78 @@ static void test_suspend_resume(void)
     rc = TbtU4Resume(&g_cm);
     CHECK_EQ(rc, TBT_E_STATE, "resume: an obligation unmet");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD, untouched");
+
+    /* Router Ready behind the verification's first read (5 ms): waited for
+     * inside the budget, polled a few times, nothing written to the
+     * router, the tunnel verified. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    g_fab.R[dev].RrPending = 1;
+    g_fab.R[dev].RrAtUs = g_fab.NowUs + 5000UL;
+    armCount(&g_fab);
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(rc, TBT_OK, "resume, Router Ready late: verified");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "resume, Router Ready late: still UP");
+    CHECK(g_fab.R[dev].Rcs[6] & 0x01000000UL, "resume, Router Ready late: read set");
+    CHECK(g_cnRrPolls[dev] >= 1 && g_cnRrPolls[dev] <= 3,
+          "resume, Router Ready late: polled until set");
+    CHECK_EQ(g_cnWrites[dev], 0, "resume, Router Ready late: nothing written to the router");
+
+    /* Router Ready never back: the obligation unmet, nothing torn down. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    armCount(&g_fab);
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(rc, TBT_E_STATE, "resume, no Router Ready: an obligation unmet");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "resume, no Router Ready: HELD");
+    CHECK(fabPcieUp(&g_fab, 1), "resume, no Router Ready: nothing torn down");
+    CHECK_EQ(g_cnWrites[dev], 0, "resume, no Router Ready: nothing written to the router");
+
+    /* The budget spent inside the Router Ready wait: the polls refused,
+     * the obligation unmet, within the bound. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    g_cm.ResumeHostUs = 300000UL;
+    g_cm.ResumeEachUs = 0;
+    b = g_fab.NowUs;
+    armCount(&g_fab);
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(rc, TBT_E_STATE, "resume, budget spent in the wait: an obligation unmet");
+    CHECK(g_cm.Counters.ResumeBudgetsSpent >= 1 && g_cnRrPolls[dev] >= 1,
+          "resume, budget spent in the wait: spent while polling");
+    CHECK(g_cnLastPollUs - b < 300000UL,
+          "resume, budget spent in the wait: no poll reached the router past the budget");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "resume, budget spent in the wait: HELD");
+    CHECK(fabPcieUp(&g_fab, 1), "resume, budget spent in the wait: nothing torn down");
+
+    /* Another router in its place while Router Ready was waited for (the
+     * same route, configuration and paths, its own UUID): never verified
+     * as the router classified before the wait, and connected as itself.
+     * PCIe alone: no second obligation's classification to catch it. */
+    cfgDefault(&c);
+    c.Usb3Tunnel = FALSE;
+    dev = setupMinimal(1, &c);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    g_fab.R[dev].RrPending = 1;
+    g_fab.R[dev].RrAtUs = g_fab.NowUs + 5000UL;
+    armCount(&g_fab);
+    g_rpPort = 1;
+    g_rpRouter = dev;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK(g_rpPort == 0, "resume, replaced in the wait: the UUID changed");
+    CHECK(state(&g_cm, 1) == TBT_U4_EMPTY || (rc == TBT_E_STATE && state(&g_cm, 1) == TBT_U4_HELD),
+          "resume, replaced in the wait: not verified (discharged or HELD)");
+    poll(&g_cm, &g_fab, 4);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && TbtU4Port(&g_cm, 1)->Dev.Uuid[0] == g_fab.R[dev].Rcs[7],
+          "resume, replaced in the wait: the new router connected afresh");
 
     b = TbtU4ResumeBoundUs(0, 10000);
     CHECK(b >= 1050000UL + TBT_U4_RESUME_HOST_US && b < 1050000UL + TBT_U4_RESUME_HOST_US + 3000000UL,
@@ -2066,6 +2321,7 @@ static void test_review2_identity_and_links(void)
     child = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
     fabPlug(&g_fab, 1, dev);
     fabPreos(&g_fab, 1, 0);
+    g_fab.R[child].Rcs[4] = 0x0200000AUL;       /* major 0, minor 2 */
     fabPlugChild(&g_fab, dev, child, 1);
     g_fab.RxQCount = 0;
     (void)start(&g_fab, &g_ring, &g_cm, &c);
@@ -3242,6 +3498,69 @@ static void test_asm2464(void)
     CHECK_EQ(g_cm.Counters.DownstreamPortResets, 0, "asm2464 pre-OS: no reset");
     CHECK_EQ(g_fab.R[dev].AdpTouches[4], 0, "asm2464 pre-OS: adapter 4 never addressed");
     CHECK(strcmp(p->Dev.ModelName, "246x") == 0, "asm2464 pre-OS: named from its DROM");
+
+    /* The same handed over the moment the pre-OS connection manager wrote
+     * Enumerated (the model's Router Ready comes 5 ms later): waited for,
+     * read only - the router written exactly as with Router Ready on time
+     * (its router operations alone) - and preserved; a Router Ready that
+     * never comes still holds the port, after one bounded wait. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.RxQCount = 0;
+    armCount(&g_fab);
+    before = g_fab.NowUs;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    g_onTimeUs = g_fab.NowUs - before;
+    g_onTimeWrites = g_cnWrites[dev];
+    CHECK_EQ(g_cnRrPolls[dev], 0, "asm2464 pre-OS, Router Ready on time: never polled");
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    g_fab.R[dev].RrPending = 1;
+    g_fab.R[dev].RrAtUs = g_fab.NowUs + 5000UL;
+    g_fab.RxQCount = 0;
+    armCount(&g_fab);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(g_cnRrPolls[dev] >= 1 && g_cnRrPolls[dev] <= 3,
+          "asm2464 pre-OS, Router Ready 5 ms late: polled until set");
+    CHECK_EQ(g_cnWrites[dev], g_onTimeWrites,
+             "asm2464 pre-OS, Router Ready 5 ms late: written as on time, no more");
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Preserved,
+          "asm2464 pre-OS, Router Ready 5 ms late: preserved");
+    CHECK(!p->Dev.EnumeratedHere && g_cm.Counters.PortsHeld == 0,
+          "asm2464 pre-OS, Router Ready 5 ms late: adopted, nothing held");
+    CHECK_EQ(g_cm.Counters.DownstreamPortResets, 0,
+             "asm2464 pre-OS, Router Ready 5 ms late: no reset");
+    asmQuiet(&g_cm, &g_fab, dev, "asm2464 pre-OS, Router Ready 5 ms late: quiet");
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    g_fab.RxQCount = 0;
+    armCount(&g_fab);
+    before = g_fab.NowUs;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_HELD && p->Why == TBT_U4_WHY_DISCOVERY,
+          "asm2464 pre-OS, no Router Ready: HELD for discovery");
+    CHECK(g_fab.NowUs - before >= TBT_U4_ROUTER_READY_US &&
+          g_fab.NowUs - before < g_onTimeUs + TBT_U4_ROUTER_READY_US + 100000UL,
+          "asm2464 pre-OS, no Router Ready: one bounded wait, no second");
+    CHECK(g_cnWrites[dev] <= g_onTimeWrites,
+          "asm2464 pre-OS, no Router Ready: nothing written beyond the on-time start");
+    CHECK(fabPcieUp(&g_fab, 1), "asm2464 pre-OS, no Router Ready: left as found");
 
     c.PreOsCleanup = 2;
     fabInit(&g_fab);

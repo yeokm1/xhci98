@@ -242,6 +242,10 @@ typedef struct _TBT_RING {
     ULONG LastEventInfo;
     ULONG LastEventRouteHi;
     ULONG LastEventRouteLo;
+    /* The Adapter Num of the last Read Response taken in the router space:
+     * the adapter the request arrived at, the router's upstream adapter
+     * (Spec Table 6-3; Linux ctl.c tb_cfg_get_upstream_port). */
+    ULONG LastReadAdapter;
 
     TBT_RING_COUNTERS Counters;
 

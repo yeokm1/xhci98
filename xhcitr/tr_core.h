@@ -305,6 +305,16 @@ void tr_gen_text(TR_U32 gen, char *out, size_t cap);
 void tr_link_text(TR_U32 kind, TR_U32 lanes, const TR_EXT *x, char *out,
                   size_t cap);
 
+/* 1 for a Thunderbolt 3 router: the record's generation says so, or a
+ * USB4 Version of major 0 (a Thunderbolt 3 router behind a USB4 host). */
+int tr_gen_tbt3(TR_U32 gen);
+
+/* tr_link_text, but a Thunderbolt 3 router's lane-adapter rate is worded
+ * "Thunderbolt 3, 20 Gbit/s per lane, x2 (40 Gbit/s)", never as a USB4
+ * generation. */
+void tr_link_text_gen(TR_U32 gen, TR_U32 kind, TR_U32 lanes, const TR_EXT *x,
+                      char *out, size_t cap);
+
 /* A router entry's name: "<vendor> <model>", or "(no name given)". */
 void tr_router_name(const unsigned char *entry, char *out, size_t cap);
 
@@ -414,13 +424,20 @@ typedef struct _TR_OPTS {
     int Report;
     char ReportPath[TR_PATH_CHARS];
     int SelfTest;
+    int Result;                 /* /result: the elevated stop's answer   */
+    char ResultName[TR_PATH_CHARS];
+    int Confirmed;              /* /confirmed: the confirmed list's digest */
+    char ConfirmedDigest[TR_PATH_CHARS];
 } TR_OPTS;
 
-/* XHCITR [/tray] [/eject id=<instance id>] [/report <file>] [/selftest].
- * Switches start with '/' or '-', without case; /eject takes id=<id> as
- * the next argument, /report its file. Returns 0 with
- * opts filled, 1 refused with why in err. /eject, /report and /selftest
- * stand alone. */
+/* XHCITR [/tray] [/eject id=<instance id> [/result <section>]
+ * [/confirmed <digest>]] [/report <file>] [/selftest]. Switches start
+ * with '/' or '-', without case; /eject takes id=<id> as the next
+ * argument, /report its file, /result a section name (tr_res_name_ok) and
+ * /confirmed a digest (tr_res_digest_ok). Returns 0 with opts filled, 1
+ * refused with why in err. /eject, /report and /selftest stand alone;
+ * /result and /confirmed go with /eject only (the elevated stop of
+ * section 6.6). */
 int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap);
 
 /* ---- small text helpers ---------------------------------------------- */
@@ -472,11 +489,141 @@ void tr_confirm_lead(TR_TEXT *t, const char *unitName, const char *label,
  * spaces); in place. */
 void tr_tidy_name(char *s);
 
+/* ---- plain USB devices (record 25 section 6.5, revision 7) ---------------- */
+
+/* 1 when one of the MULTI_SZ ids (no more than bytes long) begins with
+ * prefix, without case. */
+int tr_msz_has_prefix(const char *msz, size_t bytes, const char *prefix);
+
+/* 1 when a devnode is an input device: setup class HIDClass, Keyboard or
+ * Mouse, bound to hidusb, or its instance id or a hardware or compatible
+ * id beginning USB\Class_03 or HID\. Any argument may be NULL. */
+int tr_node_is_hid(const char *id, const char *hw, size_t hwBytes,
+                   const char *compat, size_t compatBytes,
+                   const char *service, const char *cls);
+
+/* 1 when the ids say a hub (USB\Class_09). */
+int tr_node_is_hub(const char *hw, size_t hwBytes, const char *compat,
+                   size_t compatBytes);
+
+/* What is known of the device at a USB port and of its set: everything
+ * Windows stops with it (section 6.5). */
+typedef struct _TR_USBF {
+    int Nt;
+    int HaveDevnode;            /* the port's devnode was found in the walk  */
+    int IsHub;                  /* the port says so, or ids of its set do    */
+    int IsController;
+    int Hid;                    /* a devnode of its set is input             */
+    int Radio;                  /* device class E0 (a Bluetooth radio)       */
+    int Disks;                  /* setup class DiskDrive, in its set         */
+    int Volumes;                /* NT: setup class Volume, in its set        */
+    int SetKnown;               /* every relation of the set was read       */
+    int SetCount;               /* the devnodes of the set, itself included */
+    int Started;                /* DN_STARTED                                */
+    TR_U32 Problem;             /* 0, or the problem code                    */
+    int ReadWhole;              /* every devnode of its set read whole       */
+    int CallAvailable;          /* the routines of the eject were found      */
+} TR_USBF;
+
+#define TR_CM_PROB_HELD_FOR_EJECT 47UL
+#define TR_USB_SET_MAX          64      /* what one confirmation lists       */
+
+#define TR_UE_DETAILS   0       /* details only: never listed              */
+#define TR_UE_LISTED    1       /* listed with the reason, not offered     */
+#define TR_UE_OFFER     2       /* Safely Remove offered                   */
+
+/* The words for a devnode that is not running (record 25 section 14): the
+ * tag ("stopped - unplug it" for Code 47, held for eject; "not started -
+ * problem code N" for any other problem; "not started") and the sentence
+ * ("Stopped: you can unplug it.", "Windows could not start this device
+ * (problem code N).", ...). 1 only for Code 47, the one state in which the
+ * device may be unplugged. */
+int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
+                    size_t sentenceCap);
+
+/* The rule of section 6.5. *why is the reason for anything but
+ * TR_UE_OFFER ("a hub", "an input device", "stopped - unplug it", ...),
+ * NULL for it. */
+int tr_usb_rule(const TR_USBF *f, const char **why);
+
+/* The check right before the call (section 6.5 step 3): 1 when the device
+ * found again is under the devnode it was confirmed under (parent ids,
+ * without case), has exactly the devnodes below it that were confirmed
+ * (any order, without case), and is still offered by f; else 0 and *why. */
+int tr_usb_recheck(const char *parentNow, const char *parentThen,
+                   const char *const *nowIds, int n,
+                   const char *const *thenIds, int m, const TR_USBF *f,
+                   const char **why);
+
+/* The answer to the call in plain words, into out; returns the outcome
+ * (INST_EJ_*). `what` is what the user knows the device by in a refusal:
+ * its drive letters ("F:", "F:, G:"), or its name when it has none.
+ * NT: CM_Request_Device_EjectA's answer, its veto type and veto name;
+ * vetoInSet 1 when the veto name is a devnode of the device's own set (a
+ * volume refusing for an open file or folder, as XP reports it). */
+int tr_usb_answer_nt(TR_U32 cr, TR_U32 vetoType, const char *vetoName,
+                     int vetoInSet, const char *what, char *out, size_t cap);
+
+/* CM_Request_Device_EjectA's answer as the outcome tables read it: Windows
+ * XP answers a vetoed request CR_SUCCESS with the veto type set (read on
+ * the T.7 leg), so a veto type other than PNP_VetoTypeUnknown (0) turns
+ * success into CR_REMOVE_VETOED. The caller sets the type to 0 first. */
+TR_U32 tr_eject_cr(TR_U32 cr, TR_U32 vetoType);
+
+/* 98 SE and ME: CM_Query_Remove_SubTree's answer. CR_REMOVE_VETOED names
+ * no cause, so the text claims none. */
+int tr_usb_answer9x(TR_U32 cr, const char *what, char *out, size_t cap);
+
+/* Text for a console: every line longer than width broken at the last
+ * space before it (a word longer than the line is cut); LF or CR LF in,
+ * CR LF out. out always terminated. */
+void tr_wrap(const char *in, char *out, size_t cap, int width);
+
 /* ---- the report ---------------------------------------------------------- */
 
 /* One node of the report: its label at depth, then its details indented
  * under it (the details' own lines, CR LF or LF). */
 void tr_report_node(TR_TEXT *t, int depth, const char *label,
                     const char *details);
+
+/* ---- the elevated stop of a unit not marked removable (section 6.6) ------ */
+
+/* NT: 1 when a unit's stop is to be offered with administrator rights
+ * before it is tried: the unit is not marked removable (inst_unit_not_marked)
+ * and this process is not an administrator (Vista and 7: not elevated). */
+int tr_elev_needed(int nt, int notMarked, int isAdmin);
+
+/* The digest of the devnode list the window's user confirmed, passed on
+ * the elevated run's command line (/confirmed), which nothing can change
+ * after the start: two 32-bit FNV-1a hashes with different seeds over the
+ * count and the instance IDs, upper-cased, as 16 hex digits. The elevated
+ * run skips its own confirmation only when its own list has the same
+ * digest, so the digest can spare a question, never add a devnode. */
+#define TR_DIGEST_CHARS     17
+void tr_res_digest(const char (*devs)[TR_ID_CHARS], int n, char *out);
+int tr_res_digest_ok(const char *s);
+
+/* The answer travels in a named section of TR_RES_BYTES that the window
+ * creates ("Local\Xhci98TrAnswer-<digits and dashes>", tr_res_name_ok),
+ * never in a file: "XHCITR ANSWER 1", "code <n>", then the text, NUL
+ * ended. tr_res_answer returns the length, 0 when it does not fit; the
+ * reader is given a terminated copy. */
+#define TR_RES_PREFIX       "Local\\Xhci98TrAnswer-"
+#define TR_RES_BYTES        4096
+int tr_res_name_ok(const char *name);
+size_t tr_res_answer(int code, const char *msg, char *out, size_t cap);
+int tr_res_read_answer(const char *text, int *code, char *msg, size_t cap);
+
+/* The window's result of an elevated run, as XHCIINST's exit code with its
+ * text in out. launched: ShellExecuteEx started it, else launchErr is its
+ * last error (ERROR_CANCELLED 1223: the user declined). finished: it ended
+ * within the wait, with exitCode. haveAnswer: its answer was read. */
+#define TR_ERROR_CANCELLED  1223UL
+int tr_elev_result(int launched, TR_U32 launchErr, int finished,
+                   TR_U32 exitCode, int haveAnswer, int answerCode,
+                   const char *answerMsg, char *out, size_t cap);
+
+/* The question before an elevated stop. */
+const char *tr_elev_question(void);
 
 #endif /* TR_CORE_H */

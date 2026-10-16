@@ -201,16 +201,16 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   Windows): a window with every USB controller, hub and device and every
   Thunderbolt and USB4 controller and device, with their details and
   descriptors, and an icon in the notification area that starts at login
-  and removes a Thunderbolt or USB4 device safely, with no administrator
-  rights ("The xHCI98 USB Tree", below; design record 25). `xhcicm.sys`
+  and removes a USB storage device or a Thunderbolt or USB4 device safely,
+  with no administrator rights ("The xHCI98 USB Tree", below; design record 25). `xhcicm.sys`
   gains a read-only query device for it.
 - **Device Manager names by generation**: "Thunderbolt and USB4 in Device
   Manager", below.
 - **A link-state channel for Stor98**: on Windows 2000 to 7,
-  `xhcicm.sys` tells the NVMe driver Stor98 when an NVMe drive's tunnel
-  comes up, and under the USB4 connection manager when its link has gone
-  down. On 98 SE and ME this release has no channel ("NVMe drives behind
-  a tunnel").
+  `xhcicm.sys` publishes the channel of Stor98's interface 4. Stor98
+  `0.3.0.1` does not read it yet and detects a removed drive by itself;
+  nothing waits for it. On 98 SE and ME this release has no channel
+  ("NVMe drives behind a tunnel").
 - **Stor98 in the download**: the package carries a release of Stor98,
   the NVMe driver for Windows 98 SE to 7, as its own project released
   it (which release: "NVMe drives behind Thunderbolt or USB4", under
@@ -298,7 +298,11 @@ and works: `xhcicm.sys` never resets a tunnel it finds at its start
 ### The xHCI98 USB Tree
 
 `XHCITR.EXE` (`XHCITR64.EXE` on XP x64, Vista x64 and 7 x64) is installed
-by `INSTALL.BAT` in `%windir%\XHCI98\` and started at login as an icon in
+by `INSTALL.BAT` in the install directory it asks for (`C:\XHCI98` on
+the system's drive unless another is chosen, or given with `INSTALL /to
+<path>`; an update keeps the directory an earlier install used, test
+builds' `%windir%\XHCI98\` included, unless another is chosen, when the
+tool moves it) and started at login as an icon in
 the notification area (`INSTALL /notray` leaves the icon out). It runs as
 the logged-on user, with no administrator rights.
 
@@ -309,8 +313,8 @@ the logged-on user, with no administrator rights.
   them. View > Descriptors decodes the selected device's descriptors; the
   View menu's check boxes hide or show each kind of item; File > Save
   Report writes it all to a text file.
-- **The icon's menu** lists the Thunderbolt and USB4 devices that can be
-  removed safely. Removing one follows the rules of `INSTALL /eject`: the
+- **The icon's menu** lists the USB storage devices and the Thunderbolt
+  and USB4 devices that can be removed safely. Removing one follows the rules of `INSTALL /eject`: the
   tool confirms, waits for a current reading from `xhcicm.sys`, asks
   Windows to stop the device and says when to unplug it.
 - **Balloons** say when a device connects, waits for approval or
@@ -321,7 +325,17 @@ the logged-on user, with no administrator rights.
   adapter; a Thunderbolt 3 device's come from the controller's firmware.
   For a USB device the descriptors give the SuperSpeed rates it supports;
   the negotiated lane rate is not reported.
-- It shows plain USB devices but does not stop them.
+- **USB sticks and disks** are stopped from the window or the icon on
+  every system, 98 SE and ME included, by their drive letter: "USB Flash
+  Disk (F:)". The tool confirms what will stop, asks Windows to stop the
+  device, and says when to unplug it, or which drive is in use if Windows
+  refuses.
+- Only a USB device with a disk on it is offered. A keyboard, mouse,
+  hub, camera, Bluetooth adapter or other device is shown with its
+  details, not stopped from here.
+- On 98 SE and ME the stop removes the device from Device Manager; until
+  it is unplugged, Device Manager's Refresh can start it again. On XP and
+  later Windows holds it stopped (Code 47) until it is unplugged.
 
 ### Removing a Thunderbolt or USB4 device safely
 
@@ -349,17 +363,29 @@ every system `INSTALL /devices` shows what is connected and
 - **A dock** is listed under the name of its own PCI switch's upstream
   port, a generic PCI-to-PCI bridge name; stopping it stops everything in
   the dock.
-- **A device missing from the list**: one connected before the driver
-  started, or disabled and enabled since, or whose driver was installed
-  or updated since, is not listed until it is unplugged and plugged in
-  again. `INSTALL /eject` still asks Windows to stop it: Windows refuses
-  to eject such a device, and the tool then asks for the same
-  query-remove and remove by the routine meant for devices that are not
-  removable, a program with a file open still refusing it. Windows 2000
-  offers no such routine (read in a virtual machine on 2026-10-15): there
-  the tool says the device cannot be stopped; after a restart with it
-  connected it is listed for removal again, or it can be unplugged with
-  the computer off. XP, Vista and 7 have not been read for this case.
+- **A device Windows does not list (Windows 2000 to 7).** The first time
+  a device Windows has never seen is plugged in behind the tunnel,
+  Windows installs its driver and rebuilds its driver stack without the
+  filter that marks it removable, so "Unplug or Eject Hardware" and
+  "Safely Remove Hardware" do not offer it (read on 2000 and XP; 7 kept
+  the mark on the first plug). The same happens after the device is
+  disabled and enabled or its driver is updated. From the next plug on
+  Windows lists it. The xHCI98 USB Tree and `INSTALL /eject` still stop it when
+  run as an administrator: they ask Windows for the same query-remove and
+  remove by the routine meant for devices that are not removable, and a
+  program with a file open still refuses it. The USB Tree asks for the
+  rights when it lacks them ("Stop as administrator...": User Account
+  Control on Vista and 7, the Run As dialog on 2000 and XP); without them
+  it says "Windows does not list this device for safe removal. Run this
+  as an administrator to stop it." Pulling such a device out without
+  stopping it is a surprise removal: Windows 2000 shows its "Unsafe
+  Removal of Device" warning, and writes Windows still held in its cache
+  can be lost, so if you have no administrator, close every program
+  using the device, unplug it and plug it in once more before you use
+  it. After this stop Windows may start the device again the next time
+  it looks for new hardware, so unplug it soon. Read in virtual machines
+  on 2000, XP and 7 x86 on 2026-10-16, with a bridge chain and no volume
+  behind it.
 
 On Windows 2000 and XP the tool needs an administrator; on Vista and 7 it
 asks for elevation. `INSTALL /eject 2` ejects device 2 of the list after
@@ -396,19 +422,14 @@ Thunderbolt or USB4", under "Installing"); read them before installing
 it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the
 drive.
 
-On Windows 2000 to 7 the two talk over a link-state channel, Stor98's
-interface 4, the kernel callback object `\Callback\Stor98LinkState`:
+On Windows 2000 to 7, `xhcicm.sys` publishes the link-state channel of
+Stor98's interface 4, the kernel callback object
+`\Callback\Stor98LinkState`, and states on it which NVMe function is
+behind a tunnel when the tunnel comes up. Stor98 `0.3.0.1` does not
+read the channel yet:
 
-- When a tunnel comes up, `xhcicm.sys` tells Stor98 which NVMe function
-  is behind it, before Windows finds the function.
-- Under the USB4 connection manager, after an unplug, once the path is
-  proven closed and the drive's reset is done, it tells Stor98 the link
-  is down and waits up to 5 seconds for its acknowledgement before
-  Windows removes the drive, so Stor98 ends outstanding requests at once
-  instead of at its own timeout. In this release that statement is made
-  only on the emulator's tunnel ports; on real hardware it is withheld
-  until Stor98 has qualified it, and Stor98 ends a vanished drive's
-  requests at its own deadline instead.
+- no statement is read or acknowledged, and nothing waits for one;
+- Stor98 detects a removed drive by itself, at its own deadline (about 5 seconds).
 
 On Windows 98 SE and ME, `xhcicm.sys` in this release publishes no
 channel, so Stor98 runs there without it:
@@ -551,14 +572,20 @@ have every leg.
 - **Windows 2000: an unplug without a stop shows "Unsafe Removal of
   Device"**, and the device is removed. Stop it in "Unplug or Eject
   Hardware" first.
-- **A device disabled and enabled, or whose driver was installed or
-  updated, drops out of the safe-removal list** until it is unplugged and
-  plugged in again (Windows 2000 to 7): Windows rebuilds its driver stack
-  without the filter that marks it removable. Use `INSTALL /eject`, or
-  re-plug it. A later release is to keep the mark across a rebuild.
+- **A device Windows has not seen before, or one disabled and enabled or
+  whose driver was installed or updated, is missing from the safe-removal
+  list** (Windows 2000 to 7): Windows rebuilds its driver stack without
+  the filter that marks it removable (the first plug read on 2000 and
+  XP); the next plug puts it back. The xHCI98 USB Tree and
+  `INSTALL /eject` stop it when run as
+  an administrator ("Removing a Thunderbolt or USB4 device safely"); a
+  pull without a stop is a surprise removal, with Windows 2000's warning
+  and cached writes at risk. A later release is to keep the mark across a
+  rebuild.
 - **A device tunnelled before the driver started** (by the BIOS's pre-boot
   support, or connected while the driver was installed) is offered for
-  safe removal only after a re-plug, on Windows 2000 to 7.
+  safe removal only after a re-plug, on Windows 2000 to 7; the xHCI98 USB
+  Tree and `INSTALL /eject` stop it before that, as an administrator.
 - **Windows 98 SE and ME: once the controller has started, `xhcicm.sys`
   stays loaded until Windows restarts**: disabling, updating or removing
   it takes full effect at the next start.
@@ -1252,7 +1279,10 @@ ME; run it as an administrator on Windows 2000 and XP; on Vista and 7
 right-click it and choose Run as administrator.
 
 It shows the devices it found and what it will do with each, asks about a
-few of the driver's options (below), asks once (`Y`), and then:
+few of the driver's options (below), each choice on its own line and
+"Enter for [x]" saying what Enter keeps, asks for the install directory of
+its tools (`C:\XHCI98` unless another is chosen, or `INSTALL /to <path>`),
+asks once (`Y`, or Enter), and then:
 
 - **Windows 2000, XP, XP x64, Vista and 7**: it installs or updates every
   driver of the package on the devices present, with the routine Windows
@@ -1287,12 +1317,14 @@ few of the driver's options (below), asks once (`Y`), and then:
   Windows 98 SE and ME never see it, and Vista and 7 accept it only with
   its driver file beside it.
 - **Windows 98 SE and ME**: the tool stages the files and you finish the
-  installation in Device Manager. It copies the package to that same
-  folder, adds the folder to
-  `DevicePath`, the list of places Windows' hardware wizards search, and
-  prints the Device Manager clicks that remain for each device, with the
-  folder to type if a wizard does not find the driver by itself. Run it
-  again after the restart to see the result and set the options.
+  installation in Device Manager. It copies the package's drivers into
+  the install directory itself (`C:\XHCI98` by default; on these systems
+  a path of short names with no spaces), adds that folder to
+  `DevicePath`, the list of places Windows' hardware wizards search,
+  prints the Device Manager steps that remain for each device as a short
+  numbered list with the folder to type, and offers to open Device
+  Manager. Run it again after the restart to see the result and set the
+  options.
 
 It never runs `XHCICLN`. At the end, if an update from `2.3.x` or earlier
 left old `XHCI98\` entries, it says so in one line: nothing needs them
@@ -1793,7 +1825,7 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles Stor98 `0.3.0.0`.
+This download bundles Stor98 `0.3.0.1`.
 
 <!-- The cut replaces the line above with "This download bundles Stor98
 `<version>`." or "This download bundles no Stor98."

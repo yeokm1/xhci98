@@ -17,6 +17,7 @@
 #include "../xhcitr/tr_core.h"
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
+#include "../xhciinst/inst_core.h"
 #include "test_harness.h"
 
 #define QB_ID "PCI\\VEN_8086&DEV_15EB&SUBSYS_00000000&REV_06\\4&2B3C0E5&0&00E4"
@@ -641,7 +642,7 @@ static void test_query(void)
 
     n = qb_build(qa, 2UL, 0x11111111UL, 5UL);
     qb_entry(qa, 0UL, CM_ST_KIND_USB4_PORT, 0x0101UL, 1UL, CM_ST_APPR_APPROVED,
-             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x1000UL, "Acme", "Dock");
+             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x2000UL, "Acme", "Dock");
     qb_entry(qa, 1UL, CM_ST_KIND_ICM, 0x0102UL, 0UL, CM_ST_APPR_APPROVED,
              CM_ST_TUN_UP, CM_ST_GEN_TBT3, "Apple", "Display");
     CHECK_EQ(n, 64 + 128 + 256 + 64 + strlen(QB_ID), "the built answer's size");
@@ -914,10 +915,13 @@ static void test_texts(void)
 
     tr_gen_text(CM_ST_GEN_TBT3, out, sizeof(out));
     CHECK(strcmp(out, "Thunderbolt 3") == 0, "gen TBT3");
-    tr_gen_text(CM_ST_GEN_USB4 | 0x1000UL, out, sizeof(out));
-    CHECK(strcmp(out, "USB4 v1.0") == 0, "gen USB4 v1.0");
+    /* 15:8 is ROUTER_CS_4's USB4 Version byte: major 7:5, minor 4:0. */
     tr_gen_text(CM_ST_GEN_USB4 | 0x2000UL, out, sizeof(out));
-    CHECK(strcmp(out, "USB4 v2.0") == 0, "gen USB4 v2.0");
+    CHECK(strcmp(out, "USB4 v1.0") == 0, "gen USB4 v1.0 (20h)");
+    tr_gen_text(CM_ST_GEN_USB4 | 0x2100UL, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 v1.1") == 0, "gen USB4 v1.1 (21h)");
+    tr_gen_text(CM_ST_GEN_USB4 | 0x4000UL, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 v2.0") == 0, "gen USB4 v2.0 (40h)");
     tr_gen_text(CM_ST_GEN_USB4, out, sizeof(out));
     CHECK(strcmp(out, "USB4") == 0, "gen USB4 without version");
     tr_gen_text(CM_ST_GEN_UNKNOWN, out, sizeof(out));
@@ -980,6 +984,48 @@ static void test_texts(void)
     tr_link_text(CM_ST_KIND_USB4_PORT, CM_ST_LANES_BONDED, NULL, out, sizeof(out));
     CHECK(strcmp(out, "two lanes; speed not known") == 0, "link: two lanes only");
 
+    /* A Thunderbolt 3 router behind a USB4 host (task 40-A.8). */
+    CHECK(tr_gen_tbt3(CM_ST_GEN_TBT3), "TBT3 by the generation");
+    CHECK(tr_gen_tbt3(CM_ST_GEN_USB4 | 0x1000UL), "USB4 Version 10h: major 0");
+    CHECK(tr_gen_tbt3(CM_ST_GEN_USB4 | 0x0200UL), "USB4 Version 02h: major 0");
+    CHECK(!tr_gen_tbt3(CM_ST_GEN_USB4 | 0x2000UL), "USB4 v1.0 is not TBT3");
+    CHECK(!tr_gen_tbt3(CM_ST_GEN_USB4 | 0x4000UL), "USB4 v2.0 is not TBT3");
+    CHECK(!tr_gen_tbt3(CM_ST_GEN_USB4), "USB4 without a version");
+    CHECK(!tr_gen_tbt3(CM_ST_GEN_UNKNOWN), "unknown");
+    memset(&x, 0, sizeof(x));
+    x.Rate = 20;
+    x.Width = 2;
+    x.Flags = CM_Q_XF_RATE_READ;
+    tr_link_text_gen(CM_ST_GEN_USB4 | 0x1000UL, CM_ST_KIND_USB4_LINK,
+                     CM_ST_LANES_BONDED, &x, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3, 20 Gbit/s per lane, x2 (40 Gbit/s) "
+                      "(read from the lane adapter)") == 0,
+          "link: a TBT3 router behind a USB4 host, never a USB4 generation");
+    tr_link_text_gen(CM_ST_GEN_TBT3, CM_ST_KIND_USB4_LINK, CM_ST_LANES_BONDED,
+                     &x, out, sizeof(out));
+    CHECK(has(out, "Thunderbolt 3, 20 Gbit/s per lane") && !has(out, "Gen"),
+          "link: TBT3 by the generation");
+    x.Width = 0;
+    x.Flags = 0;
+    tr_link_text_gen(CM_ST_GEN_TBT3, CM_ST_KIND_USB4_PORT, CM_ST_LANES_UNKNOWN,
+                     &x, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3, 20 Gbit/s per lane, lanes not known") == 0,
+          "link: TBT3 without width");
+    x.Width = 2;
+    x.Flags = CM_Q_XF_RATE_READ;
+    tr_link_text_gen(CM_ST_GEN_USB4 | 0x2000UL, CM_ST_KIND_USB4_PORT,
+                     CM_ST_LANES_BONDED, &x, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 Gen 3 x2 (40 Gbit/s) (read from the lane adapter)") == 0,
+          "link: a USB4 v1.0 router keeps its generation");
+    tr_link_text_gen(CM_ST_GEN_TBT3, CM_ST_KIND_ICM, CM_ST_LANES_BONDED, &x,
+                     out, sizeof(out));
+    CHECK(strcmp(out, "20 Gbit/s per lane, x2 (read from the lane adapter)") == 0,
+          "link: an ICM entry as before");
+    tr_link_text_gen(CM_ST_GEN_TBT3, CM_ST_KIND_USB4_LINK, CM_ST_LANES_BONDED,
+                     NULL, out, sizeof(out));
+    CHECK(strcmp(out, "two lanes; speed not known") == 0,
+          "link: TBT3 without an extension as before");
+
     memset(e, 0, sizeof(e));
     memcpy(e + CM_ST_E_VENDOR, "Acme", 4);
     memcpy(e + CM_ST_E_MODEL, "Dock", 4);
@@ -1033,7 +1079,7 @@ static void test_events(void)
     /* A snapshot as added. */
     n = qb_build(qa, 2UL, 0x11111111UL, 5UL);
     qb_entry(qa, 0UL, CM_ST_KIND_USB4_PORT, 0x0101UL, 1UL, CM_ST_APPR_APPROVED,
-             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x1000UL, "Acme", "Dock");
+             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x2000UL, "Acme", "Dock");
     qb_entry(qa, 1UL, CM_ST_KIND_ICM, 0x0102UL, 0UL, CM_ST_APPR_PENDING,
              CM_ST_TUN_NONE, CM_ST_GEN_TBT3, "", "");
     snap_of(&so, qa, n, 1UL);
@@ -1047,7 +1093,7 @@ static void test_events(void)
     CHECK_EQ(so.R[0].Place, 0x0101, "snap: place");
     CHECK_EQ(so.R[0].Tunnels, CM_ST_TUN_UP, "snap: tunnels");
     CHECK_EQ(so.R[0].Bridge, 0x0500, "snap: bridge");
-    CHECK_EQ(so.R[0].Gen, CM_ST_GEN_USB4 | 0x1000UL, "snap: gen");
+    CHECK_EQ(so.R[0].Gen, CM_ST_GEN_USB4 | 0x2000UL, "snap: gen");
     CHECK(strcmp(so.R[0].Name, "Acme Dock") == 0, "snap: name");
     CHECK_EQ(so.R[1].Ids, 0x12348086UL, "snap: ICM ids");
     CHECK_EQ(so.R[1].ShortId, 0xABCD, "snap: ICM short id");
@@ -1064,7 +1110,7 @@ static void test_events(void)
     /* Nothing without a valid old snapshot. */
     n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
     qb_entry(qa, 0UL, CM_ST_KIND_USB4_PORT, 0x0101UL, 1UL, CM_ST_APPR_APPROVED,
-             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x1000UL, "Acme", "Dock");
+             CM_ST_TUN_UP, CM_ST_GEN_USB4 | 0x2000UL, "Acme", "Dock");
     snap_of(&sn, qa, n, 1UL);
     tr_snap_init(&so);
     CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "diff: old invalid");
@@ -1495,6 +1541,456 @@ static void test_desc_lengths(void)
     CHECK(has(buf, "short or not reported"), "hub bLength 71 of 7 bytes refused");
 }
 
+/* ---- plain USB devices (record 25 section 6.5, revision 7) ------------- */
+
+/* A device that is offered: started, no problem, its set known and read. */
+static void usbf_base(TR_USBF *f, int nt)
+{
+    memset(f, 0, sizeof(*f));
+    f->Nt = nt;
+    f->HaveDevnode = 1;
+    f->Started = 1;
+    f->SetKnown = 1;
+    f->SetCount = 3;
+    f->ReadWhole = 1;
+    f->CallAvailable = 1;
+}
+
+static void test_usb_eject(void)
+{
+    static const char ids[] = "USB\\VID_0781&PID_5581&REV_0100\0USB\\COMPOSITE\0";
+    static const char compatStor[] = "USB\\Class_08&SubClass_06&Prot_50\0USB\\Class_08\0";
+    static const char compatHid[] = "USB\\Class_03&SubClass_01&Prot_02\0usb\\class_03\0";
+    static const char compatHub[] = "USB\\Class_09&SubClass_00\0USB\\Class_09\0";
+    TR_USBF f;
+    const char *why;
+    char out[512];
+    char wide[400];
+    int r;
+
+    /* the ids */
+    CHECK(tr_msz_has_prefix(compatStor, sizeof(compatStor), "usb\\class_08"),
+          "msz prefix: without case");
+    CHECK(!tr_msz_has_prefix(compatStor, sizeof(compatStor), "USB\\Class_03"),
+          "msz prefix: storage is not input");
+    CHECK(!tr_msz_has_prefix(compatStor, 10, "USB\\Class_08"),
+          "msz prefix: an id the buffer cuts short is not read");
+    CHECK(!tr_msz_has_prefix(NULL, 0, "USB"), "msz prefix: no list");
+    CHECK(tr_msz_has_prefix(ids, sizeof(ids), "usb\\composite"),
+          "msz prefix: the second id");
+
+    CHECK(tr_node_is_hid(NULL, ids, sizeof(ids), compatHid, sizeof(compatHid),
+                         "", ""), "hid: a USB\\Class_03 compatible id");
+    CHECK(tr_node_is_hid("HID\\VID_0627&PID_0001\\7&1", NULL, 0, NULL, 0, NULL,
+                         NULL), "hid: an HID\\ instance id");
+    CHECK(tr_node_is_hid("USB\\VID_1\\2", NULL, 0, NULL, 0, "HidUsb", NULL),
+          "hid: bound to hidusb");
+    CHECK(tr_node_is_hid(NULL, NULL, 0, NULL, 0, NULL, "Keyboard") &&
+          tr_node_is_hid(NULL, NULL, 0, NULL, 0, NULL, "mouse") &&
+          tr_node_is_hid(NULL, NULL, 0, NULL, 0, NULL, "HIDClass"),
+          "hid: the three setup classes");
+    CHECK(!tr_node_is_hid("USB\\VID_0781&PID_5581\\0123", ids, sizeof(ids),
+                          compatStor, sizeof(compatStor), "USBSTOR", "USB"),
+          "hid: a storage stick is not input");
+    CHECK(tr_node_is_hub(NULL, 0, compatHub, sizeof(compatHub)),
+          "hub: USB\\Class_09");
+    CHECK(!tr_node_is_hub(ids, sizeof(ids), compatStor, sizeof(compatStor)),
+          "hub: a stick is not one");
+
+    /* eligibility: NT. Every xhci98 device says removable, an internal
+     * camera, fingerprint reader or radio too: a disk or volume decides. */
+    usbf_base(&f, 1);
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS &&
+          strcmp(why, "no disk on it") == 0,
+          "rule NT: removable alone (a camera, a fingerprint reader) is not offered");
+    f.Disks = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_OFFER && why == NULL,
+          "rule NT: a disk under it");
+    f.Disks = 0;
+    f.Volumes = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_OFFER, "rule NT: a volume in its set");
+    f.Radio = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS &&
+          strcmp(why, "a wireless radio") == 0, "rule NT: class E0 never");
+
+    /* eligibility: 98 SE and ME */
+    usbf_base(&f, 0);
+    f.Volumes = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS &&
+          strcmp(why, "no disk on it") == 0,
+          "rule 9x: no disk, no offer (volumes are an NT reading)");
+    f.Disks = 2;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_OFFER, "rule 9x: disks under it");
+    f.HaveDevnode = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS,
+          "rule 9x: a device with no driver's devnode");
+
+    /* never listed */
+    usbf_base(&f, 1);
+    f.Disks = 1;
+    f.IsHub = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS && strcmp(why, "a hub") == 0,
+          "rule: a hub, even with a disk behind it");
+    f.IsHub = 0;
+    f.Hid = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS &&
+          strcmp(why, "an input device") == 0,
+          "rule: input (a keyboard, or a composite with an input function)");
+    f.Hid = 0;
+    f.IsController = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS, "rule: a controller");
+    f.IsController = 0;
+    f.HaveDevnode = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS,
+          "rule: a port with no device entry");
+
+    /* listed, not offered */
+    usbf_base(&f, 1);
+    f.Disks = 1;
+    f.Problem = 47;
+    f.Started = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
+          strcmp(why, "stopped - unplug it") == 0, "rule: Code 47");
+    f.Disks = 0;
+    f.Volumes = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
+          strcmp(why, "stopped - unplug it") == 0,
+          "rule: Code 47 after its disk went with the eject (XP)");
+    f.Hid = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS,
+          "rule: an input device held for eject is still not listed");
+    f.Hid = 0;
+    f.Disks = 1;
+    f.Problem = 28;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
+          strcmp(why, "Windows could not start it") == 0,
+          "rule: another problem code");
+    f.Problem = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: not started");
+    f.Started = 1;
+    f.SetKnown = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: its set not known");
+    f.SetKnown = 1;
+    f.SetCount = TR_USB_SET_MAX + 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: a set too long to list");
+    f.SetCount = TR_USB_SET_MAX;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_OFFER, "rule: 64 devnodes are listed whole");
+    f.ReadWhole = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: read in part");
+    f.ReadWhole = 1;
+    f.CallAvailable = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: no routine");
+
+    /* the words for a devnode that is not running: only Code 47 says unplug */
+    {
+        char tag[64];
+        char sen[96];
+        CHECK(tr_stopped_text(47, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
+              strcmp(tag, "stopped - unplug it") == 0 &&
+              strcmp(sen, "Stopped: you can unplug it.") == 0, "stopped: Code 47");
+        CHECK(tr_stopped_text(29, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              strcmp(tag, "not started - problem code 29") == 0 &&
+              strcmp(sen, "Windows could not start this device (problem code 29).") == 0 &&
+              !has(tag, "unplug") && !has(sen, "unplug"),
+              "stopped: Code 29 is a failed start, never 'unplug it'");
+        CHECK(tr_stopped_text(28, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              has(tag, "code 28"), "stopped: Code 28, no driver");
+        CHECK(tr_stopped_text(0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              strcmp(tag, "not started") == 0 && !has(sen, "unplug"),
+              "stopped: not started, no problem code");
+    }
+
+    /* the check before the call */
+    {
+        const char *then[3];
+        const char *now[3];
+        then[0] = "USB\\VID_0781&PID_5581\\0123";
+        then[1] = "USBSTOR\\DISK&VEN_X\\0123&0";
+        then[2] = "STORAGE\\VOLUME\\1&30A9";
+        now[0] = "storage\\volume\\1&30a9";
+        now[1] = "USB\\VID_0781&PID_5581\\0123";
+        now[2] = "USBSTOR\\DISK&VEN_X\\0123&0";
+        usbf_base(&f, 1);
+        f.Disks = 1;
+        CHECK(tr_usb_recheck("USB\\ROOT_HUB30\\4&1", "usb\\root_hub30\\4&1", now,
+                             3, then, 3, &f, &why),
+              "recheck: the same parent and set, any order and case");
+        CHECK(!tr_usb_recheck("USB\\VID_05E3&PID_0610\\5&2", "USB\\ROOT_HUB30\\4&1",
+                              now, 3, then, 3, &f, &why) &&
+              strcmp(why, "it is no longer where it was") == 0,
+              "recheck: moved behind a hub");
+        CHECK(!tr_usb_recheck("A", "", now, 3, then, 3, &f, &why),
+              "recheck: no parent confirmed");
+        CHECK(!tr_usb_recheck("P", "P", now, 2, then, 3, &f, &why) &&
+              strcmp(why, "the devices on it changed") == 0,
+              "recheck: a devnode gone");
+        now[2] = "USBSTOR\\DISK&VEN_X\\0123&1";
+        CHECK(!tr_usb_recheck("P", "P", now, 3, then, 3, &f, &why),
+              "recheck: a devnode replaced");
+        now[2] = now[1];
+        CHECK(!tr_usb_recheck("P", "P", now, 3, then, 3, &f, &why),
+              "recheck: a repeated devnode does not stand for a missing one");
+        now[2] = "USBSTOR\\DISK&VEN_X\\0123&0";
+        f.Problem = 47;
+        f.Started = 0;
+        CHECK(!tr_usb_recheck("P", "P", now, 3, then, 3, &f, &why) &&
+              strcmp(why, "stopped - unplug it") == 0,
+              "recheck: stopped meanwhile");
+        f.Problem = 0;
+        f.Started = 1;
+        f.Hid = 1;
+        CHECK(!tr_usb_recheck("P", "P", now, 3, then, 3, &f, &why),
+              "recheck: an input function now");
+    }
+
+    /* the answers */
+    r = tr_usb_answer_nt(0, 0, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_DONE && out[0] == '\0', "answer NT: stopped");
+    r = tr_usb_answer_nt(0, 5, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "a program is using F:"),
+          "answer NT: success with a veto type is a veto (XP)");
+    CHECK(tr_eject_cr(0, 0) == 0 && tr_eject_cr(0, 6) == INST_CR_REMOVE_VETOED &&
+          tr_eject_cr(INST_CR_ACCESS_DENIED, 12) == INST_CR_ACCESS_DENIED,
+          "eject cr: only a success with a veto type changes");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "STORAGE\\VOLUME\\1", 0, "F:",
+                         out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: a program is using F:. Close it and "
+                      "try again.") == 0, "answer NT: an open file on F:");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "", 0, "USB Mass Storage Device",
+                         out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "is using USB Mass Storage Device."),
+          "answer NT: no letter, the name");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 3, "notepad.exe", 0, "F:, G:",
+                         out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: notepad.exe is using F:, G:. Close it "
+                      "and try again.") == 0, "answer NT: an application");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 4, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "a program is using F:"),
+          "answer NT: a service with no name");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 6, "USBSTOR\\DISK\\1", 0, "F:",
+                         out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: USBSTOR\\DISK\\1 did not allow it.") == 0,
+          "answer NT: a device's veto, named");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 6, "STORAGE\\RemovableMedia\\7&1&RM", 1,
+                         "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: F: is in use (a program has a file or "
+                      "folder open on it). Close it and try again.") == 0,
+          "answer NT: its own volume's veto names the drive (XP)");
+    r = tr_usb_answer_nt(0, 6, "STORAGE\\RemovableMedia\\7&1&RM", 1, "F:", out,
+                         sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "F: is in use"),
+          "answer NT: the same when XP answers success with the veto");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 99, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "(veto 99)"),
+          "answer NT: an unknown veto, numbered");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 12, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_RIGHTS, "answer NT: the rights veto");
+    r = tr_usb_answer_nt(INST_CR_ACCESS_DENIED, 0, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_RIGHTS && has(out, "administrator"), "answer NT: access denied");
+    r = tr_usb_answer_nt(INST_CR_NO_SUCH_DEVNODE, 0, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_CHANGED, "answer NT: gone");
+    r = tr_usb_answer_nt(0x1FUL, 0, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_FAILED && has(out, "(code 0x0000001F)"),
+          "answer NT: anything else, with its code");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "", 0, "F:", out, 8);
+    CHECK(r == INST_EJ_VETO && strlen(out) == 7, "answer NT: a small buffer");
+
+    r = tr_usb_answer9x(0, "E:", out, sizeof(out));
+    CHECK(r == INST_EJ_DONE && out[0] == '\0', "answer 9x: accepted");
+    r = tr_usb_answer9x(INST_CR_REMOVE_VETOED, "E:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: E: is in use. A program may have a "
+                      "file open on it, or a DOS box may be using it. Close "
+                      "it and try again.") == 0, "answer 9x: refused, no cause");
+    r = tr_usb_answer9x(INST_CR_NO_SUCH_DEVNODE, "E:", out, sizeof(out));
+    CHECK(r == INST_EJ_CHANGED && !has(out, "code"), "answer 9x: gone");
+    r = tr_usb_answer9x(INST_CR_CALL_NOT_IMPLEMENTED, "E:", out, sizeof(out));
+    CHECK(r == INST_EJ_UNSUPPORTED, "answer 9x: not offered");
+    r = tr_usb_answer9x(0x1FUL, "E:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "(code 0x0000001F)"),
+          "answer 9x: another refusal, with its code");
+
+    /* console text */
+    tr_wrap("Windows has stopped USB Flash Disk (F:). You can now unplug the "
+            "device. Until you unplug it, Device Manager's Refresh can start "
+            "it again.", wide, sizeof(wide), 40);
+    CHECK(strcmp(wide, "Windows has stopped USB Flash Disk (F:).\r\n"
+                       "You can now unplug the device. Until you\r\n"
+                       "unplug it, Device Manager's Refresh can\r\n"
+                       "start it again.") == 0, "wrap: at the last space");
+    {
+        const char *p = wide;
+        int longest = 0;
+        while (*p != '\0') {
+            int n = 0;
+            while (p[n] != '\0' && p[n] != '\r') {
+                n++;
+            }
+            if (n > longest) {
+                longest = n;
+            }
+            p += n;
+            while (*p == '\r' || *p == '\n') {
+                p++;
+            }
+        }
+        CHECK(longest <= 40, "wrap: no line longer than the width");
+    }
+    tr_wrap("one\n\ntwo\r\n", wide, sizeof(wide), 79);
+    CHECK(strcmp(wide, "one\r\n\r\ntwo\r\n") == 0, "wrap: breaks and paragraphs kept");
+    tr_wrap("abcdefghijklmnop qr", wide, sizeof(wide), 8);
+    CHECK(strcmp(wide, "abcdefgh\r\nijklmnop\r\nqr") == 0, "wrap: a long word cut");
+    tr_wrap("aaaa bbbb cccc", wide, 7, 79);
+    CHECK(strcmp(wide, "aaaa b") == 0, "wrap: cut short and terminated");
+    tr_wrap("", wide, sizeof(wide), 79);
+    CHECK(wide[0] == '\0', "wrap: nothing");
+}
+
+/* The elevated stop of a unit not marked removable (record 25 section
+ * 6.6). */
+static void test_elevated_stop(void)
+{
+    static char devs[3][TR_ID_CHARS];
+    char buf[1024];
+    char msg[512];
+    char err[256];
+    char d1[TR_DIGEST_CHARS];
+    char d2[TR_DIGEST_CHARS];
+    char *av[8];
+    TR_OPTS o;
+    int code;
+    size_t n;
+
+    /* When it is offered. */
+    CHECK(tr_elev_needed(1, 1, 0), "NT, not marked, no administrator: offered");
+    CHECK(!tr_elev_needed(1, 1, 1), "an administrator stops it here");
+    CHECK(!tr_elev_needed(1, 0, 0), "a marked unit: the ordinary stop");
+    CHECK(!tr_elev_needed(0, 1, 0), "98 SE and ME: never");
+    CHECK(strcmp(tr_elev_question(), "Windows does not list this device for "
+                 "safe removal. Stopping it needs administrator rights.") == 0,
+          "the owner's words");
+
+    /* The digest of the confirmed list. */
+    strcpy(devs[0], "PCI\\VEN_1B21&DEV_2421\\4&1");
+    strcpy(devs[1], "PCI\\VEN_1B36&DEV_000A\\5&2");
+    strcpy(devs[2], "PCI\\VEN_1B36&DEV_0010\\6&3");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 3, d1);
+    CHECK(strlen(d1) == 16 && tr_res_digest_ok(d1), "16 hex digits");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 3, d2);
+    CHECK(strcmp(d1, d2) == 0, "the same list, the same digest");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 2, d2);
+    CHECK(strcmp(d1, d2) != 0, "a devnode more or less: another digest");
+    devs[1][4] = 'v';
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 3, d2);
+    devs[1][4] = 'V';
+    CHECK(strcmp(d1, d2) == 0, "instance IDs compare without case");
+    strcpy(devs[2], "PCI\\VEN_1B36&DEV_0010\\6&4");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 3, d2);
+    CHECK(strcmp(d1, d2) != 0, "another devnode: another digest");
+    strcpy(devs[0], "AB");
+    strcpy(devs[1], "C");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 2, d1);
+    strcpy(devs[0], "A");
+    strcpy(devs[1], "BC");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 2, d2);
+    CHECK(strcmp(d1, d2) != 0, "the boundaries between IDs count");
+    CHECK(!tr_res_digest_ok("0123456789ABCDE") && !tr_res_digest_ok("0123456789ABCDEF0") &&
+              !tr_res_digest_ok("0123456789abcdef") && !tr_res_digest_ok(""),
+          "a digest is exactly 16 upper-case hex digits");
+
+    /* The section's name. */
+    CHECK(tr_res_name_ok("Local\\Xhci98TrAnswer-1234-56789"), "the window's name");
+    CHECK(!tr_res_name_ok("Local\\Xhci98TrAnswer-"), "no number");
+    CHECK(!tr_res_name_ok("Global\\Xhci98TrAnswer-1"), "another namespace");
+    CHECK(!tr_res_name_ok("Local\\Xhci98TrAnswer-1\\x"), "no path");
+    CHECK(!tr_res_name_ok("Local\\Xhci98TrAnswer-1234567890123456789012345"),
+          "bounded");
+    CHECK(!tr_res_name_ok("C:\\TEMP\\x.tmp"), "never a file");
+
+    /* The command line of the elevated run. */
+    av[0] = "xhcitr";
+    av[1] = "/eject";
+    av[2] = "id=PCI\\VEN_1B21&DEV_2421\\X";
+    av[3] = "/result";
+    av[4] = "Local\\Xhci98TrAnswer-12-34";
+    av[5] = "/confirmed";
+    av[6] = "0123456789ABCDEF";
+    CHECK(tr_parse_args(7, av, &o, err, sizeof(err)) == 0 && o.Eject &&
+              o.Result && o.Confirmed &&
+              strcmp(o.ResultName, "Local\\Xhci98TrAnswer-12-34") == 0 &&
+              strcmp(o.ConfirmedDigest, "0123456789ABCDEF") == 0,
+          "/eject id= /result <name> /confirmed <digest>");
+    CHECK(tr_parse_args(4, av, &o, err, sizeof(err)) == 1, "/result needs its name");
+    av[4] = "C:\\T\\xtr1.tmp";
+    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 1, "/result refuses a file");
+    av[4] = "Local\\Xhci98TrAnswer-12-34";
+    av[6] = "nothex";
+    CHECK(tr_parse_args(7, av, &o, err, sizeof(err)) == 1, "/confirmed refuses a non-digest");
+    av[1] = "/result";
+    av[2] = "Local\\Xhci98TrAnswer-1";
+    CHECK(tr_parse_args(3, av, &o, err, sizeof(err)) == 1,
+          "/result without /eject refused");
+    av[1] = "/confirmed";
+    av[2] = "0123456789ABCDEF";
+    CHECK(tr_parse_args(3, av, &o, err, sizeof(err)) == 1,
+          "/confirmed without /eject refused");
+
+    /* The answer. */
+    n = tr_res_answer(4, "Windows refused: a program is using the device.",
+                      buf, sizeof(buf));
+    CHECK(n == strlen(buf), "the answer's length");
+    CHECK(tr_res_read_answer(buf, &code, msg, sizeof(msg)) && code == 4 &&
+              strcmp(msg, "Windows refused: a program is using the device.") == 0,
+          "the answer read back");
+    CHECK_EQ(tr_res_answer(0, "x", buf, 10), 0, "an answer that does not fit");
+    CHECK(!tr_res_read_answer("", &code, msg, sizeof(msg)), "an empty section");
+    CHECK(!tr_res_read_answer("XHCITR ANSWER 1\r\ncode x\r\n", &code, msg,
+                              sizeof(msg)), "a bad code");
+    CHECK(!tr_res_read_answer("XHCITR ANSWER 1\r\ncode 99999999999\r\n", &code,
+                              msg, sizeof(msg)), "a code out of range");
+    CHECK(!tr_res_read_answer("XHCITR ANSWER 1\r\n", &code, msg, sizeof(msg)),
+          "no code");
+    CHECK(tr_res_read_answer("XHCITR ANSWER 1\ncode 2\nabcdefghij", &code, msg, 5) &&
+              strcmp(msg, "abcd") == 0, "the text is cut to its buffer");
+
+    /* The window's result. */
+    code = tr_elev_result(0, TR_ERROR_CANCELLED, 0, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK_EQ(code, INST_EXIT_REFUSED, "cancelled: nothing stopped, exit 1");
+    CHECK(strstr(msg, "Nothing was stopped") != NULL &&
+              strstr(msg, "Try again") != NULL && strstr(msg, "plug it in again") != NULL,
+          "cancelled: try again, or re-plug");
+    code = tr_elev_result(0, 1155UL, 0, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK_EQ(code, INST_EXIT_REFUSED, "no runas: exit 1");
+    CHECK(strstr(msg, "Run this as an") != NULL, "no runas: the plain message");
+    code = tr_elev_result(1, 0, 0, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK_EQ(code, INST_EXIT_FAILED, "no end within the wait: exit 2");
+    CHECK(strstr(msg, "before you unplug it") != NULL, "no end: look first");
+    code = tr_elev_result(1, 0, 1, 0, 1, 0, "Windows has stopped X.", msg,
+                          sizeof(msg));
+    CHECK(code == INST_EXIT_DONE && strcmp(msg, "Windows has stopped X.") == 0,
+          "stopped: the run's own text");
+    code = tr_elev_result(1, 0, 1, 4, 1, 4, "Windows refused: a program is using "
+                          "the device.", msg, sizeof(msg));
+    CHECK(code == INST_EXIT_STEPS && strstr(msg, "program") != NULL,
+          "vetoed: the run's own reason, exit 4");
+    code = tr_elev_result(1, 0, 1, 4, 1, 0, "Windows has stopped X.", msg,
+                          sizeof(msg));
+    CHECK(code == INST_EXIT_STEPS && strstr(msg, "stopped X") == NULL,
+          "an answer whose code is not the exit code is not trusted");
+    code = tr_elev_result(1, 0, 1, 1, 0, 0, "", msg, sizeof(msg));
+    CHECK_EQ(code, INST_EXIT_REFUSED, "refused with no answer: exit 1");
+    code = tr_elev_result(1, 0, 1, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK_EQ(code, INST_EXIT_FAILED,
+             "exit 0 with no answer: not known, never 'stopped'");
+    code = tr_elev_result(1, 0, 1, 0xC0000005UL, 0, 0, "", msg, sizeof(msg));
+    CHECK(code == INST_EXIT_FAILED && strstr(msg, "before you unplug") != NULL,
+          "a crash: look before unplugging");
+}
+
 int main(void)
 {
     test_printf();
@@ -1508,6 +2004,8 @@ int main(void)
     test_keys_args_report();
     test_sizes();
     test_desc_lengths();
+    test_usb_eject();
+    test_elevated_stop();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {

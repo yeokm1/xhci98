@@ -17,7 +17,7 @@
  *   Linux drivers/thunderbolt (mirror pinned at
  *   c6859eed755df351a3978b33cb92365f9b3e8f06, SPDX GPL-2.0), whose notices
  *   read:
- *     tb.c, switch.c, tunnel.c, path.c, cap.c, tb_regs.h:
+ *     tb.c, switch.c, tunnel.c, path.c, cap.c, tb_regs.h, ctl.c, eeprom.c:
  *       Copyright (c) 2014 Andreas Noever <andreas.noever@gmail.com>
  *       Copyright (C) 2018, Intel Corporation (tb.c, switch.c: 2019; the
  *       rest as each file states)
@@ -32,7 +32,11 @@
  *     usb4_port_reset, tb_switch_lane_bonding_enable,
  *     tb_switch_tmu_post_time, tb_switch_tmu_enable (HiFi-Bi),
  *     tb_switch_tmu_disable, tb_lc_read_uuid, tb_lc_lane_bonding_possible,
- *     tb_lc_set_port_configured, tb_check_quirks.
+ *     tb_lc_set_port_configured, tb_check_quirks; for a Thunderbolt 3
+ *     router behind a USB4 host (task 40-A.8), tb_cfg_get_upstream_port
+ *     and tb_switch_alloc's upstream adapter, and eeprom.c's bit-bang
+ *     reader (tb_eeprom_get_drom_offset, tb_eeprom_active,
+ *     tb_eeprom_transfer, tb_eeprom_out, tb_eeprom_in, tb_eeprom_read_n).
  *
  * What changed from u4cm.c is design record 22 section 2.2's table: no
  * Host Interface Reset (ring 0 taken over, tbt_ring.c), Router Ready 500 ms,
@@ -632,6 +636,135 @@ static VOID tbtU4NameCopy(char *dst, const UCHAR *src, ULONG n)
     dst[i] = 0;
 }
 
+/*
+ * A Thunderbolt 3 router's EEPROM by bit-bang through its Plug Events
+ * capability (record 22 section 8 item 4; Linux eeprom.c
+ * tb_eeprom_get_drom_offset, tb_eeprom_active, tb_eeprom_transfer,
+ * tb_eeprom_out, tb_eeprom_in and tb_eeprom_read_n): select, clock out
+ * the read command and the 16-bit address MSB first, clock in `count`
+ * bytes MSB first, deselect. `offset` is from the start of the DROM.
+ * Every bit is three control requests. Once the enable was sent - even
+ * a write whose answers were lost may have been applied - the part is
+ * deselected and bit-banging disabled again, each of the two writes tried
+ * whatever the other did (Linux eeprom.c: "Always disable access after
+ * usage").
+ */
+static LONG tbtU4EeWr(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG ctl)
+{
+    return tbtU4Wr(cm, &rt->Route, TBT_CS_ROUTER, 0,
+                   rt->CapPlugEvents + TBT_PLUG_EVENTS_EE_CTL, ctl);
+}
+
+static LONG tbtU4EeOut(PTBT_U4CM cm, PTBT_U4_ROUTER rt, PULONG ctl, ULONG val)
+{
+    ULONG i;
+    LONG rc;
+
+    for (i = 0; i < 8; i++) {
+        *ctl &= ~(TBT_EE_DI | TBT_EE_SK);
+        if ((val & 0x80UL) != 0) {
+            *ctl |= TBT_EE_DI;
+        }
+        rc = tbtU4EeWr(cm, rt, *ctl);
+        if (rc == TBT_OK) {
+            rc = tbtU4EeWr(cm, rt, *ctl | TBT_EE_SK);
+        }
+        if (rc == TBT_OK) {
+            rc = tbtU4EeWr(cm, rt, *ctl);
+        }
+        if (rc != TBT_OK) {
+            return rc;
+        }
+        val <<= 1;
+    }
+    return TBT_OK;
+}
+
+static LONG tbtU4EeIn(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG ctl, UCHAR *val)
+{
+    ULONG i;
+    ULONG v;
+    ULONG b;
+    LONG rc;
+
+    b = 0;
+    for (i = 0; i < 8; i++) {
+        rc = tbtU4EeWr(cm, rt, ctl | TBT_EE_SK);
+        if (rc == TBT_OK) {
+            rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0,
+                         rt->CapPlugEvents + TBT_PLUG_EVENTS_EE_CTL, &v);
+        }
+        if (rc == TBT_OK) {
+            rc = tbtU4EeWr(cm, rt, ctl);
+        }
+        if (rc != TBT_OK) {
+            return rc;
+        }
+        b = (b << 1) | ((v & TBT_EE_DO) != 0 ? 1UL : 0UL);
+    }
+    *val = (UCHAR)b;
+    return TBT_OK;
+}
+
+static LONG tbtU4EepromRead(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG offset,
+                            ULONG count, UCHAR *out)
+{
+    ULONG ctl;
+    ULONG base;
+    ULONG i;
+    LONG rc;
+    LONG rc2;
+
+    if (rt->CapPlugEvents == 0) {
+        return TBT_E_UNSUPPORTED;
+    }
+    rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0,
+                 rt->CapPlugEvents + TBT_PLUG_EVENTS_DROM_OFFSET, &base);
+    if (rc == TBT_OK) {
+        rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0,
+                     rt->CapPlugEvents + TBT_PLUG_EVENTS_EE_CTL, &ctl);
+    }
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    if ((ctl & TBT_EE_PRESENT) == 0 || (ctl & TBT_EE_NOT_PRESENT) != 0) {
+        return TBT_E_UNSUPPORTED;
+    }
+    if (base > 0xFFFFUL || offset + base > 0xFFFFUL) {
+        return TBT_E_STATE;
+    }
+    offset += base;
+    ctl &= ~(TBT_EE_SK | TBT_EE_DI | TBT_EE_DO);
+    ctl |= TBT_EE_ENABLE;
+    rc = tbtU4EeWr(cm, rt, ctl);
+    if (rc == TBT_OK) {
+        ctl &= ~TBT_EE_CS;
+        rc = tbtU4EeWr(cm, rt, ctl);
+    }
+    if (rc == TBT_OK) {
+        rc = tbtU4EeOut(cm, rt, &ctl, TBT_EE_READ);
+    }
+    if (rc == TBT_OK) {
+        rc = tbtU4EeOut(cm, rt, &ctl, (offset >> 8) & 0xFFUL);
+    }
+    if (rc == TBT_OK) {
+        rc = tbtU4EeOut(cm, rt, &ctl, offset & 0xFFUL);
+    }
+    ctl &= ~TBT_EE_DI;
+    for (i = 0; i < count && rc == TBT_OK; i++) {
+        rc = tbtU4EeIn(cm, rt, ctl, out + i);
+    }
+    ctl = (ctl & ~TBT_EE_SK) | TBT_EE_CS;
+    rc2 = tbtU4EeWr(cm, rt, ctl);
+    if (tbtU4EeWr(cm, rt, ctl & ~TBT_EE_ENABLE) != TBT_OK) {
+        rc2 = TBT_E_STATE;
+    }
+    if (rc2 != TBT_OK) {
+        tbtU4Log(cm, "u4.drom.eeprom-release", (ULONG)rc2);
+    }
+    return rc != TBT_OK ? rc : rc2;
+}
+
 static LONG tbtU4DromChunk(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG offset,
                            ULONG n, UCHAR *out)
 {
@@ -640,6 +773,9 @@ static LONG tbtU4DromChunk(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG offset,
     ULONG i;
     LONG rc;
 
+    if (rt->Tbt3) {
+        return tbtU4EepromRead(cm, rt, offset, 4UL * n, out);
+    }
     meta = (((offset / 4UL) << TBT_ROP_DROM_ADDR_SHIFT) & TBT_ROP_DROM_ADDR_MASK) |
            ((n << TBT_ROP_DROM_SIZE_SHIFT) & TBT_ROP_DROM_SIZE_MASK);
     rc = tbtU4RouterOp(cm, rt, TBT_ROP_DROM_READ, &meta, NULL, 0, data, n);
@@ -1551,6 +1687,29 @@ static LONG tbtU4WaitReady(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
     }
 }
 
+/*
+ * A router found enumerated by someone else, ROUTER_CS_5 and 6 in cs56[0]
+ * and [1]: a clear Router Ready may only be an enumeration moments old
+ * (the ASM2464 sets it after Enumerated, [obs] usb4-emu
+ * docs/captures/ORICO-ASM2464.md; Linux usb4.c usb4_switch_setup waits
+ * 500 ms on a discovered router too), so it is waited for and both
+ * re-read. Reads only; on a timeout or a refused read cs56 stays as
+ * found, and the caller's judgement with it.
+ */
+static VOID tbtU4FoundReady(PTBT_U4CM cm, PTBT_U4_ROUTER rt, PULONG cs56)
+{
+    ULONG v[2];
+
+    if (rt->Tbt3 || (cs56[1] & TBT_RTR6_RR) != 0) {
+        return;
+    }
+    if (tbtU4WaitReady(cm, rt) == TBT_OK &&
+        tbtU4RdN(cm, &rt->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, 2, v) == TBT_OK) {
+        cs56[0] = v[0];
+        cs56[1] = v[1];
+    }
+}
+
 /* ---------------------------------------------------------------------- */
 /* The host router (record 22 sections 3.5 test (d), 6.1 to 6.3)          */
 /* ---------------------------------------------------------------------- */
@@ -1971,7 +2130,7 @@ static BOOLEAN tbtU4TmuOff(PTBT_U4CM cm, PTBT_U4_PORT p)
             (v & TBT_TMU_ADP3_UDM) != 0) {
             return FALSE;
         }
-        if (rt->Usb4Version == TBT_USB4_VERSION_2_0) {
+        if (TBT_USB4_VERSION_MAJOR(rt->Usb4Version) == TBT_USB4_MAJOR_2) {
             if (tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
                         rt->Adp[adp].CapTmu + TBT_TMU_ADP_CS_8, &v) != TBT_OK ||
                 (v & TBT_TMU_ADP8_EUDM) != 0) {
@@ -2485,6 +2644,18 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
                 return TBT_E_STATE;
             }
             d->Depth = 1;
+            if (d->Tbt3 && (v[3] & TBT_RTR3_V) == 0 &&
+                cm->Ring->LastReadAdapter != 0) {
+                /* A Thunderbolt 3 router before enumeration may read
+                 * Upstream Adapter 0 (the TS3 Plus does); its upstream
+                 * adapter is the one the read arrived at, which the
+                 * enumeration write then sets (Linux ctl.c
+                 * tb_cfg_get_upstream_port, switch.c tb_switch_alloc and
+                 * tb_switch_configure). */
+                d->UpAdp = cm->Ring->LastReadAdapter;
+                v[1] = (v[1] & ~TBT_RTR1_UP_ADP_MASK) |
+                       ((d->UpAdp << TBT_RTR1_UP_ADP_SHIFT) & TBT_RTR1_UP_ADP_MASK);
+            }
             if ((v[3] & TBT_RTR3_V) != 0) {
                 if (!tbtU4Enumerated(d, v)) {
                     /* Valid with another depth or TopologyID: someone
@@ -2539,13 +2710,30 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
             return TBT_E_GONE;
         }
     }
-    if (d->UpAdp != 0 && d->UpAdp + 1 < TBT_U4_MAX_ADP) {
-        rc = tbtU4DiscoverAdapters(cm, d);
-    } else {
+    if (d->UpAdp == 0 || d->UpAdp + 1 >= TBT_U4_MAX_ADP) {
         rc = TBT_E_STATE;
-    }
-    if (rc == TBT_OK) {
+    } else if (d->Tbt3) {
+        /* Its DROM sits behind the Plug Events capability's EEPROM
+         * bit-bang (section 8 item 4), so the capabilities come first;
+         * the DROM still before the adapters, as on a USB4 router. Not
+         * under a resume budget: a budget running out refuses every
+         * request, the release of the part included, and the name is
+         * optional. */
         rc = tbtU4RouterCaps(cm, d, TBT_RTR1_NEXT_CAP(v[1]));
+        if (rc == TBT_OK && d->CapPlugEvents != 0 && !cm->Budgeted) {
+            tbtU4ReadDrom(cm, d);
+            if (!TBT_U4_LIVE(p, gen)) {
+                return TBT_E_GONE;
+            }
+        }
+        if (rc == TBT_OK) {
+            rc = tbtU4DiscoverAdapters(cm, d);
+        }
+    } else {
+        rc = tbtU4DiscoverAdapters(cm, d);
+        if (rc == TBT_OK) {
+            rc = tbtU4RouterCaps(cm, d, TBT_RTR1_NEXT_CAP(v[1]));
+        }
     }
     if (rc != TBT_OK) {
         p->Why = TBT_U4_WHY_ENUMERATION;
@@ -4390,6 +4578,8 @@ static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
         }
         return;
     }
+    /* Step 2 is judged after Router Ready's own wait (section 9.2). */
+    tbtU4FoundReady(cm, d, &v[5]);
     d->Present = TRUE;
     d->Preserved = TRUE;
     cm->Counters.RoutersAdopted++;
@@ -4674,7 +4864,8 @@ static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
                     l->ParentLane0 = a;
                     l->ParentLaneCap = s->Adp[a].CapLane;
                     l->Child = child;
-                    l->ChildTbt3 = (BOOLEAN)(TBT_RTR4_VERSION(v[4]) == TBT_USB4_VERSION_TBT3);
+                    l->ChildTbt3 = (BOOLEAN)(TbtHwRouterVersion(TBT_RTR4_VERSION(v[4])) ==
+                                             TBT_HW_ROUTER_TBT3);
                     l->ChildLc = 0;
                     l->ChildUuid[0] = v[7];
                     l->ChildUuid[1] = v[8];
@@ -5724,6 +5915,38 @@ static ULONG tbtU4ResumeClass(PTBT_U4CM cm, PTBT_U4_PORT p)
 }
 
 /*
+ * Inside a resume verification, on a USB4 router: the hot plug events a
+ * safe point consumes (every wait of the resume has them, this one's
+ * Router Ready wait and the PCIe loss's 2 s alike) are not acted on before
+ * the obligation is judged (ActivePort), so each verification first
+ * proves the router the one tbtU4ResumeClass classified - an unplug hint
+ * only with no removal evidence behind it (tbtU4Live), lane 0 still
+ * unlocked, the same IDs and UUID, still enumerated at its route - and
+ * returns its ROUTER_CS_5 and 6 in cs56. Reads only, but for the hint's
+ * own evidence check; anything else is not the same router, and the
+ * obligation is not met.
+ */
+static BOOLEAN tbtU4StillSame(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cs56)
+{
+    PTBT_U4_ROUTER d;
+    ULONG cs4;
+    ULONG v[9];
+
+    d = &p->Dev;
+    if (!tbtU4Live(cm, p, p->Generation) || !d->UuidValid ||
+        tbtU4Rd(cm, &cm->HostRouter.Route, TBT_CS_ADAPTER, p->Lane0, TBT_ADP_CS_4,
+                &cs4) != TBT_OK || (cs4 & TBT_ADP4_LOCK) != 0 ||
+        tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_0, 9, v) != TBT_OK ||
+        TBT_RTR0_VENDOR(v[0]) != d->Vendor || TBT_RTR0_DEVICE(v[0]) != d->Device ||
+        v[7] != d->Uuid[0] || v[8] != d->Uuid[1] || !tbtU4Enumerated(d, v)) {
+        return FALSE;
+    }
+    cs56[0] = v[5];
+    cs56[1] = v[6];
+    return TRUE;
+}
+
+/*
  * Section 9.2's whole verification of one tunnel after the sleep: the
  * router's configuration (Router Ready, CV, Configuration Ready, PTO or
  * UTO), the link (bonded, or lane 1 disconnected or disabled), the path
@@ -5743,8 +5966,16 @@ static BOOLEAN tbtU4Verify(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3)
     h = &cm->HostRouter;
     d = &p->Dev;
     if (!d->Tbt3) {
-        if (tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, 2, v) != TBT_OK ||
-            (v[1] & TBT_RTR6_RR) == 0 || (v[0] & TBT_RTR5_CV) == 0 ||
+        if (!tbtU4StillSame(cm, p, v)) {
+            return FALSE;
+        }
+        /* Router Ready waited for inside the resume's budget (a spent one
+         * refuses the reads), then the router proven the same again. */
+        if ((v[1] & TBT_RTR6_RR) == 0 &&
+            (tbtU4WaitReady(cm, d) != TBT_OK || !tbtU4StillSame(cm, p, v))) {
+            return FALSE;
+        }
+        if ((v[1] & TBT_RTR6_RR) == 0 || (v[0] & TBT_RTR5_CV) == 0 ||
             (v[1] & TBT_RTR6_CR) == 0 ||
             (v[0] & (usb3 ? TBT_RTR5_UTO : TBT_RTR5_PTO)) == 0) {
             return FALSE;

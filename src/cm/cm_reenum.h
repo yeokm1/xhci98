@@ -464,8 +464,8 @@ VOID CmRegInit(VOID);
 VOID CmRegFilterInit(struct _CM_FILTER *filter);
 
 /* The registration list's counters, for the NHI's log at stop. */
-VOID CmRegCounters(PULONG attached, PULONG skipped, PULONG refused,
-                   PULONG watchdogs);
+VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
+                   PULONG refused, PULONG watchdogs);
 
 /* The bridge filter's start has completed below it successfully: publish
  * its entry under its bus, device and function (IoGetDeviceProperty). A
@@ -506,7 +506,7 @@ VOID CmRegChildRemoved(struct _CM_FILTER *child, BOOLEAN ejected);
  * above: a capability, never the header) of the configuration space of
  * this domain's member `bdf`, by IRP_MN_WRITE_CONFIG to its bridge's PDO
  * through the filter's registration (the SHPC DWORD Select byte of the
- * nvme98 channel's reading, cm_nvlinkos.c). FALSE where the member has no
+ * stor98 channel's reading, cm_nvlinkos.c). FALSE where the member has no
  * published filter (Windows 98 SE and ME have none). PASSIVE_LEVEL. */
 BOOLEAN CmRegConfigWrite(struct _CM_NHI *nhi, ULONG bdf, ULONG offset,
                          ULONG width, ULONG value);

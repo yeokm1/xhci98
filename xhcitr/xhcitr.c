@@ -110,6 +110,7 @@ typedef TR_NIDA TR_NID;
 #define TR_NAME_LEN     320
 #define TR_DETAIL_BYTES 65536
 #define TR_EJ_DEVS      64
+#define TR_PROP_SCRATCH 8192
 
 #define WM_TRAYICON     (WM_APP + 1)
 #define TIMER_POLL      1
@@ -136,6 +137,9 @@ typedef DWORD (WINAPI *PFN_CM_PROP)(DWORD, ULONG, ULONG *, void *, ULONG *,
                                     ULONG);
 typedef DWORD (WINAPI *PFN_CM_QREMOVE)(DWORD, ULONG);
 typedef DWORD (WINAPI *PFN_CM_EJECT)(DWORD, PULONG, LPSTR, ULONG, ULONG);
+typedef DWORD (WINAPI *PFN_CM_QANDR_W)(DWORD, PULONG, LPWSTR, ULONG, ULONG);
+typedef DWORD (WINAPI *PFN_CM_LISTSIZE)(PULONG, PCSTR, ULONG);
+typedef DWORD (WINAPI *PFN_CM_LIST)(PCSTR, PCHAR, ULONG, ULONG);
 typedef HDEVINFO (WINAPI *PFN_GETCLASSDEVS)(const GUID *, PCSTR, HWND, DWORD);
 typedef BOOL (WINAPI *PFN_ENUMIFACE)(HDEVINFO, PSP_DEVINFO_DATA, const GUID *,
                                      DWORD, PSP_DEVICE_INTERFACE_DATA);
@@ -157,7 +161,9 @@ static struct {
     PFN_CM_QREMOVE QueryRemove;
     PFN_CM_QREMOVE Remove;
     PFN_CM_EJECT Eject;
-    PFN_CM_EJECT QueryAndRemove;
+    PFN_CM_QANDR_W QueryAndRemove;
+    PFN_CM_LISTSIZE ListSize;   /* NT: a devnode's removal relations       */
+    PFN_CM_LIST List;
     PFN_GETCLASSDEVS GetClassDevs;
     PFN_ENUMIFACE EnumIface;
     PFN_IFACEDETAIL IfaceDetail;
@@ -196,6 +202,16 @@ typedef struct _DNODE {
     int IsDisk;             /* setup class DiskDrive                        */
     char Friendly[128];     /* a disk's friendly name, where it has one     */
     char Letters[TR_LETTERS_BYTES]; /* a disk's drive letters, where found  */
+    char Cls[32];           /* the setup class                              */
+    int ReadOk;             /* every property read whole                    */
+    int Incomplete;         /* its children were not all read (the walk)    */
+    int IsVolume;           /* setup class Volume                           */
+    int IsHid;              /* an input device (tr_node_is_hid)             */
+    int IsHubId;            /* its ids say a hub                            */
+    int UPort;              /* the USB port it is the device of, or -1      */
+    int UsbRule;            /* TR_UE_* for that device (section 6.5)        */
+    const char *UsbWhy;
+    int UsbOf;              /* the USB device whose set holds it, or -1     */
 } DNODE;
 
 typedef struct _WALK {
@@ -228,11 +244,14 @@ typedef struct _UCTRL {
     unsigned char Node[TR_NI_BYTES];
     int HaveNode;
     int Ours;               /* xhci98 drives it                            */
+    int RootErr;            /* its root hub: 1 not opened, 2 no answer     */
     char Behind[TR_NAME_CHARS + 16];
 } UCTRL;
 
 typedef struct _UPORT {
     int Ctrl;
+    int ParentUp;               /* the hub's own port, -1 for the root hub  */
+    int HubErr;                 /* a hub: 1 not opened, 2 no node answer    */
     char Hub[TR_NAME_LEN];      /* the hub to ask about this port           */
     char Path[64];
     TR_CONN Conn;
@@ -337,12 +356,24 @@ static int trayUnitCount;
 static int quitting;
 static int firstBuild = 1;
 static int reportMode;     /* a report decodes every descriptor */
+/* Device-change broadcasts counted by the watcher thread (record 25
+ * section 6.5), and the count read just before the model was. */
+static volatile LONG chgCount;
+static LONG modelGen;
+static int watchOk;
 
 /* ======================================================================== */
 /* Small helpers                                                             */
 /* ======================================================================== */
 
 static const char *ej_why_not(int u);
+static void usb_label(int d, char *out, size_t cap);
+static const char *usb_suffix(int d);
+static int usb_listed(int d);
+static const char *usb_why(int d);
+static void details_usb_eject(TR_TEXT *t, int d);
+static void usb_derive(void);
+static void say(const char *text, int warn);
 
 static FARPROC proc(HMODULE module, const char *name)
 {
@@ -369,13 +400,21 @@ static void load_routines(void)
         api.Eject = (PFN_CM_EJECT)proc(api.SetupApi, "CM_Request_Device_EjectA");
     }
     if (envNt) {
-        /* setupapi.dll's first: Windows 2000's cfgmgr32.dll exports the
-         * routine but answers CR_CALL_NOT_IMPLEMENTED (record 24's leg). */
-        api.QueryAndRemove = (PFN_CM_EJECT)proc(api.SetupApi,
-                                                "CM_Query_And_Remove_SubTreeA");
+        /* The W form: Windows 2000's A form answers
+         * CR_CALL_NOT_IMPLEMENTED and does nothing else (record 24
+         * section 7.2). */
+        api.QueryAndRemove = (PFN_CM_QANDR_W)proc(api.SetupApi,
+                                                  "CM_Query_And_Remove_SubTreeW");
         if (api.QueryAndRemove == NULL) {
-            api.QueryAndRemove = (PFN_CM_EJECT)proc(api.CfgMgr,
-                                                    "CM_Query_And_Remove_SubTreeA");
+            api.QueryAndRemove = (PFN_CM_QANDR_W)proc(api.CfgMgr,
+                                                      "CM_Query_And_Remove_SubTreeW");
+        }
+        api.ListSize = (PFN_CM_LISTSIZE)proc(api.CfgMgr, "CM_Get_Device_ID_List_SizeA");
+        api.List = (PFN_CM_LIST)proc(api.CfgMgr, "CM_Get_Device_ID_ListA");
+        if (api.ListSize == NULL || api.List == NULL) {
+            api.ListSize = (PFN_CM_LISTSIZE)proc(api.SetupApi,
+                                                 "CM_Get_Device_ID_List_SizeA");
+            api.List = (PFN_CM_LIST)proc(api.SetupApi, "CM_Get_Device_ID_ListA");
         }
         api.GetClassDevs = (PFN_GETCLASSDEVS)proc(api.SetupApi, "SetupDiGetClassDevsA");
         api.EnumIface = (PFN_ENUMIFACE)proc(api.SetupApi, "SetupDiEnumDeviceInterfaces");
@@ -444,19 +483,32 @@ static void driver_key_path(const DNODE *d, char *path, size_t cap)
 /* The device tree (record 24 section 4.1, adapted from xhciinst.c)          */
 /* ======================================================================== */
 
+/* A property into buf (cap bytes, two NULs kept). The configuration
+ * manager writes into a scratch buffer larger than any field and the
+ * result is copied when it fits cap, as the routine answered before: the
+ * routine's honouring of the length it is given is not read on 98 SE and
+ * ME, and a heap corruption was seen there (T.7 leg). */
 static DWORD cm_prop(DWORD dn, ULONG prop, char *buf, DWORD cap, DWORD *bytes)
 {
+    static char scratch[TR_PROP_SCRATCH];
     ULONG type;
-    ULONG n = cap - 2;
+    ULONG n = TR_PROP_SCRATCH - 64;
     DWORD cr = 0xFFFFFFFFUL;
 
     memset(buf, 0, cap);
-    if (api.Property != NULL) {
-        cr = api.Property(dn, prop, &type, buf, &n, 0);
+    memset(scratch, 0, sizeof(scratch));
+    if (api.Property != NULL && cap >= 2) {
+        cr = api.Property(dn, prop, &type, scratch, &n, 0);
     }
-    if (cr != TR_CR_SUCCESS) {
-        memset(buf, 0, cap);
+    if (cr != TR_CR_SUCCESS || n > TR_PROP_SCRATCH - 64) {
         n = 0;
+    } else {
+        if (n > cap - 2) {
+            cr = 0x0000001AUL;      /* CR_BUFFER_SMALL, as before */
+            n = 0;
+        } else {
+            memcpy(buf, scratch, n);
+        }
     }
     if (bytes != NULL) {
         *bytes = n;
@@ -489,7 +541,12 @@ static int prop9x(DWORD dn, const char *id, ULONG prop, const char *name,
     char tmp[TR_MSZ];
     int r;
 
-    cm_prop(dn, prop, buf, cap, NULL);
+    /* 0xFFFF names a value the registry alone holds: no call for it. */
+    if (prop != 0xFFFFUL) {
+        cm_prop(dn, prop, buf, cap, NULL);
+    } else {
+        memset(buf, 0, cap);
+    }
     tr_sprintf(path, sizeof(path), "Enum\\%s", id);
     r = reg_text(HKEY_LOCAL_MACHINE, path, name, tmp, cap - 2 < sizeof(tmp)
                                                        ? cap - 2 : sizeof(tmp));
@@ -530,9 +587,14 @@ static int dn_read(DNODE *t)
         }
         cm_prop(t->Dn, TR_CM_DRP_DEVICEDESC, t->Desc, sizeof(t->Desc), NULL);
         {
-            char cls[32];
-            cm_prop(t->Dn, TR_CM_DRP_CLASS, cls, sizeof(cls), NULL);
-            t->IsDisk = tr_eq(cls, "DiskDrive");
+            /* The class decides what is an input device or a disk
+             * (record 25 section 6.5): a failed read is a node not read. */
+            if (!prop_ok(cm_prop(t->Dn, TR_CM_DRP_CLASS, t->Cls, sizeof(t->Cls),
+                                 NULL))) {
+                ok = 0;
+            }
+            t->IsDisk = tr_eq(t->Cls, "DiskDrive");
+            t->IsVolume = tr_eq(t->Cls, "Volume");
             if (t->IsDisk) {
                 cm_prop(t->Dn, TR_CM_DRP_FRIENDLYNAME, t->Friendly,
                         sizeof(t->Friendly), NULL);
@@ -558,10 +620,12 @@ static int dn_read(DNODE *t)
         prop9x(t->Dn, t->Id, TR_CM_DRP_DEVICEDESC, "DeviceDesc", t->Desc,
                sizeof(t->Desc));
         {
-            char cls[32];
             char letters[32];
-            prop9x(t->Dn, t->Id, TR_CM_DRP_CLASS, "Class", cls, sizeof(cls));
-            t->IsDisk = tr_eq(cls, "DiskDrive");
+            if (!prop9x(t->Dn, t->Id, TR_CM_DRP_CLASS, "Class", t->Cls,
+                        sizeof(t->Cls))) {
+                ok = 0;
+            }
+            t->IsDisk = tr_eq(t->Cls, "DiskDrive");
             if (t->IsDisk) {
                 /* The 9x storage stack records the letters it gave the
                  * disk in its Enum key. */
@@ -603,6 +667,10 @@ static int dn_read(DNODE *t)
     } else {
         ok = 0;
     }
+    t->IsHid = tr_node_is_hid(t->Id, t->Hw, t->HwBytes, t->Compat, t->CompatBytes,
+                              t->Service, t->Cls);
+    t->IsHubId = tr_node_is_hub(t->Hw, t->HwBytes, t->Compat, t->CompatBytes);
+    t->ReadOk = ok;
     return ok;
 }
 
@@ -617,6 +685,9 @@ static void walk_from(WALK *w, DWORD dn, int parent, int depth)
         DNODE *t;
         if (w->Count >= TR_MAX_DEVS) {
             w->Bad++;
+            if (parent >= 0) {
+                w->N[parent].Incomplete = 1;
+            }
             return;
         }
         me = w->Count++;
@@ -626,6 +697,8 @@ static void walk_from(WALK *w, DWORD dn, int parent, int depth)
         t->Parent = parent;
         t->UnitOf = -1;
         t->PortNhi = -1;
+        t->UPort = -1;
+        t->UsbOf = -1;
         if (!dn_read(t)) {
             /* The tree's root has no registry entry of its own on NT. */
             if (parent >= 0 || t->Id[0] == '\0') {
@@ -636,16 +709,21 @@ static void walk_from(WALK *w, DWORD dn, int parent, int depth)
         if (cr == TR_CR_SUCCESS) {
             if (depth >= 32) {
                 w->Bad++;
+                w->N[me].Incomplete = 1;
             } else {
                 walk_from(w, child, me, depth + 1);
             }
         } else if (cr != TR_CR_NO_SUCH_DEVINST) {
             w->Bad++;
+            w->N[me].Incomplete = 1;
         }
         cr = api.Sibling(&sib, dn, 0);
         if (cr != TR_CR_SUCCESS) {
             if (cr != TR_CR_NO_SUCH_DEVINST) {
                 w->Bad++;
+                if (parent >= 0) {
+                    w->N[parent].Incomplete = 1;
+                }
             }
             return;
         }
@@ -1043,7 +1121,7 @@ static void disk_letters_nt(WALK *w)
     int any = 0;
 
     for (i = 0; i < w->Count; i++) {
-        if (w->N[i].IsDisk && w->N[i].UnitOf >= 0) {
+        if (w->N[i].IsDisk && (w->N[i].UnitOf >= 0 || w->N[i].UsbOf >= 0)) {
             any = 1;
         }
     }
@@ -1079,7 +1157,7 @@ static void disk_letters_nt(WALK *w)
         DWORD need = 0;
         TR_DEVNUM dn;
         int l;
-        if (!w->N[i].IsDisk || w->N[i].UnitOf < 0) {
+        if (!w->N[i].IsDisk || (w->N[i].UnitOf < 0 && w->N[i].UsbOf < 0)) {
             continue;
         }
         set = api.GetClassDevs(&trGuidDisk, w->N[i].Id, NULL,
@@ -1321,8 +1399,12 @@ static int uport_speed(const UPORT *p)
     return tr_speed(p->Conn.Speed, p->HaveV2, p->V2Flags);
 }
 
-static void usb_hub(int parentT, int ctrl, const char *hubName,
-                    const char *path, int depth)
+/* Every port of one hub into up[] (record 25 section 5): the scan runs on
+ * every refresh, the tray's too, whatever the View check boxes show, so
+ * that the USB devices of section 6.5 are the same in the window, the tray
+ * and /eject. The tree is built from up[] afterwards (usb_add_ports). */
+static void usb_scan_hub(int ctrl, const char *hubName, const char *path,
+                         int depth, int parentUp)
 {
     HANDLE h;
     unsigned char ni[TR_NI_BYTES];
@@ -1333,8 +1415,11 @@ static void usb_hub(int parentT, int ctrl, const char *hubName,
 
     h = open_device(hubName);
     if (h == INVALID_HANDLE_VALUE) {
-        add_tnode(parentT, K_NOTE, 0, 0, 0, -1, "(the hub could not be opened)",
-                  "N:hub");
+        if (parentUp < 0) {
+            uc[ctrl].RootErr = 1;
+        } else {
+            up[parentUp].HubErr = 1;
+        }
         return;
     }
     memset(ni, 0, sizeof(ni));
@@ -1342,8 +1427,11 @@ static void usb_hub(int parentT, int ctrl, const char *hubName,
                    sizeof(ni), &got) ||
         !tr_node_parse(ni, got, &ports, &bus)) {
         CloseHandle(h);
-        add_tnode(parentT, K_NOTE, 0, 0, 0, -1, "(the hub did not report its ports)",
-                  "N:hub");
+        if (parentUp < 0) {
+            uc[ctrl].RootErr = 2;
+        } else {
+            up[parentUp].HubErr = 2;
+        }
         return;
     }
     if (depth == 0) {
@@ -1354,18 +1442,17 @@ static void usb_hub(int parentT, int ctrl, const char *hubName,
         unsigned char buf[TR_CI_BYTES + TR_MAX_PIPES * TR_CI_PIPE_BYTES];
         TR_USB_CONN_V2 v2;
         UPORT *p;
-        char label[200];
-        char key[280];
-        int t;
-        int dn;
+        int me;
 
         if (upCount >= TR_MAX_UPORTS) {
             break;
         }
-        p = &up[upCount];
+        me = upCount++;
+        p = &up[me];
         memset(p, 0, sizeof(*p));
         p->Ctrl = ctrl;
         p->Dn = -1;
+        p->ParentUp = parentUp;
         tr_copy(p->Hub, hubName, sizeof(p->Hub));
         tr_port_path(p->Path, sizeof(p->Path), path, i);
         memset(buf, 0, sizeof(buf));
@@ -1396,37 +1483,15 @@ static void usb_hub(int parentT, int ctrl, const char *hubName,
             p->V2Proto = v2.SupportedUsbProtocols;
             p->V2Flags = v2.Flags;
         }
-        tr_key(key, sizeof(key), "U", uc[ctrl].DrvKey, p->Path);
         if (!p->HaveConn || p->Conn.Status == TR_CS_NONE) {
-            if (!(viewFlags & TR_V_EMPTY)) {
-                continue;
-            }
-            upCount++;
-            tr_sprintf(label, sizeof(label), "[Port %u] (empty)", i);
-            add_tnode(parentT, K_UPORT, upCount - 1, 0, 0, -1, label, key);
             continue;
         }
-        upCount++;
         usb_name(h, TR_IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME, i,
                  p->DrvKey, sizeof(p->DrvKey));
-        dn = walk_find_driver(&gw, p->DrvKey);
-        p->Dn = dn;
+        p->Dn = walk_find_driver(&gw, p->DrvKey);
         if (p->Conn.Status == TR_CS_CONNECTED) {
             usbDevices++;
         }
-        if (p->Conn.Status != TR_CS_CONNECTED) {
-            tr_sprintf(label, sizeof(label), "[Port %u] %s", i,
-                       tr_conn_status_text(p->Conn.Status));
-        } else {
-            char vidpid[64];
-            tr_sprintf(vidpid, sizeof(vidpid), "USB device %04X:%04X",
-                       (unsigned int)p->Conn.Dev[8] | ((unsigned int)p->Conn.Dev[9] << 8),
-                       (unsigned int)p->Conn.Dev[10] | ((unsigned int)p->Conn.Dev[11] << 8));
-            tr_sprintf(label, sizeof(label), "[Port %u] %s  %s", i,
-                       dn >= 0 && gw.N[dn].Desc[0] ? gw.N[dn].Desc : vidpid,
-                       speed_short(uport_speed(p)));
-        }
-        t = add_tnode(parentT, K_UPORT, upCount - 1, 0, 0, dn, label, key);
         if (p->Conn.IsHub && p->Conn.Status == TR_CS_CONNECTED && depth < 6 &&
             usb_name(h, TR_IOCTL_USB_GET_NODE_CONNECTION_NAME, i, p->HubName,
                      sizeof(p->HubName))) {
@@ -1439,12 +1504,65 @@ static void usb_hub(int parentT, int ctrl, const char *hubName,
                                  got >= TR_NI_BYTES;
                 CloseHandle(hh);
             }
-            if (t >= 0) {
-                usb_hub(t, ctrl, p->HubName, p->Path, depth + 1);
-            }
+            usb_scan_hub(ctrl, p->HubName, p->Path, depth + 1, me);
         }
     }
     CloseHandle(h);
+}
+
+/* The tree's nodes for the ports of one hub (parentUp -1: the root hub's). */
+static void usb_add_ports(int parentT, int ctrl, int parentUp)
+{
+    int k;
+
+    for (k = 0; k < upCount; k++) {
+        UPORT *p = &up[k];
+        char label[200];
+        char key[280];
+        int dn = p->Dn;
+        int t;
+
+        if (p->Ctrl != ctrl || p->ParentUp != parentUp) {
+            continue;
+        }
+        tr_key(key, sizeof(key), "U", uc[ctrl].DrvKey, p->Path);
+        if (!p->HaveConn || p->Conn.Status == TR_CS_NONE) {
+            if (viewFlags & TR_V_EMPTY) {
+                tr_sprintf(label, sizeof(label), "[Port %lu] (empty)",
+                           (unsigned long)p->Conn.Port);
+                add_tnode(parentT, K_UPORT, k, 0, 0, -1, label, key);
+            }
+            continue;
+        }
+        if (p->Conn.Status != TR_CS_CONNECTED) {
+            tr_sprintf(label, sizeof(label), "[Port %lu] %s",
+                       (unsigned long)p->Conn.Port,
+                       tr_conn_status_text(p->Conn.Status));
+        } else {
+            char name[160];
+            tr_sprintf(name, sizeof(name), "USB device %04X:%04X",
+                       (unsigned int)p->Conn.Dev[8] | ((unsigned int)p->Conn.Dev[9] << 8),
+                       (unsigned int)p->Conn.Dev[10] | ((unsigned int)p->Conn.Dev[11] << 8));
+            if (dn >= 0) {
+                usb_label(dn, name, sizeof(name));
+            }
+            tr_sprintf(label, sizeof(label), "[Port %lu] %s  %s%s",
+                       (unsigned long)p->Conn.Port, name,
+                       speed_short(uport_speed(p)), usb_suffix(dn));
+        }
+        t = add_tnode(parentT, K_UPORT, k, 0, 0, dn, label, key);
+        if (t >= 0 && p->Conn.IsHub && p->Conn.Status == TR_CS_CONNECTED) {
+            if (p->HubErr == 1) {
+                add_tnode(t, K_NOTE, 0, 0, 0, -1, "(the hub could not be opened)",
+                          "N:hub");
+            } else if (p->HubErr == 2) {
+                add_tnode(t, K_NOTE, 0, 0, 0, -1,
+                          "(the hub did not report its ports)", "N:hub");
+            } else {
+                usb_add_ports(t, ctrl, k);
+            }
+        }
+    }
 }
 
 static int ctrl_add(const char *path, const char *hcd)
@@ -1531,6 +1649,19 @@ static void usb_controllers(void)
     }
 }
 
+/* Every controller's ports, whatever the view shows (section 6.5). */
+static void usb_scan_all(void)
+{
+    int i;
+
+    usb_controllers();
+    for (i = 0; i < ucCount; i++) {
+        if (uc[i].RootHub[0] != '\0') {
+            usb_scan_hub(i, uc[i].RootHub, "", 0, -1);
+        }
+    }
+}
+
 /* The router name of a tunnel port that is an ancestor of devnode dn. */
 static void behind_name(int dn, char *out, size_t cap)
 {
@@ -1590,8 +1721,14 @@ static void build_usb(int root)
         }
         tr_key(key, sizeof(key), "H", c->DrvKey, "root");
         rh = add_tnode(t, K_ROOTHUB, i, 0, 0, -1, "Root hub", key);
-        if (rh >= 0 && c->RootHub[0] != '\0') {
-            usb_hub(rh, i, c->RootHub, "", 0);
+        if (rh >= 0 && c->RootErr == 1) {
+            add_tnode(rh, K_NOTE, 0, 0, 0, -1, "(the hub could not be opened)",
+                      "N:hub");
+        } else if (rh >= 0 && c->RootErr == 2) {
+            add_tnode(rh, K_NOTE, 0, 0, 0, -1, "(the hub did not report its ports)",
+                      "N:hub");
+        } else if (rh >= 0) {
+            usb_add_ports(rh, i, -1);
         }
     }
 }
@@ -1646,10 +1783,19 @@ static void add_devs_below(int parentT, int dn, int depth)
             } else {
                 tr_copy(name, dn_name(&gw.N[i]), sizeof(name));
             }
-            tr_sprintf(label, sizeof(label), "%s%s", name,
-                       gw.N[i].UnitOf != i ? ""
-                       : !dn_started(&gw.N[i]) ? "  [stopped - unplug it]"
-                       : ej_why_not(i) == NULL ? "  [can be stopped]" : "");
+            if (gw.N[i].UnitOf == i && !dn_started(&gw.N[i])) {
+                char tag[64];
+                char sen[8];
+                tr_stopped_text(gw.N[i].Problem, tag, sizeof(tag), sen, sizeof(sen));
+                tr_sprintf(label, sizeof(label), "%s  [%s]", name, tag);
+            } else if (usb_listed(i)) {
+                usb_label(i, name, sizeof(name));
+                tr_sprintf(label, sizeof(label), "%s%s", name, usb_suffix(i));
+            } else {
+                tr_sprintf(label, sizeof(label), "%s%s", name,
+                           gw.N[i].UnitOf == i && ej_why_not(i) == NULL
+                               ? "  [can be stopped]" : "");
+            }
             tr_key(key, sizeof(key), "D", gw.N[i].Id, NULL);
             t = add_tnode(parentT, K_DEV, 0, 0, 0, i, label, key);
             if (t >= 0 && depth < 12) {
@@ -1841,6 +1987,7 @@ static void refresh_model(int withUsb)
     tnCount = 0;
     usbDevices = 0;
     tbDevices = 0;
+    modelGen = chgCount;
     if (!walk(&gw)) {
         gw.Count = 0;
     }
@@ -1853,6 +2000,8 @@ static void refresh_model(int withUsb)
     }
     nhi_find(&gw);
     derive(&gw, nhi, nhiCount);
+    usb_scan_all();
+    usb_derive();
     if (envNt) {
         disk_letters_nt(&gw);
     }
@@ -1869,7 +2018,6 @@ static void refresh_model(int withUsb)
         build_tb(root);
     }
     if (viewFlags & TR_V_USB) {
-        usb_controllers();
         build_usb(root);
     }
     if (gw.Bad) {
@@ -1936,7 +2084,10 @@ static void details_unit(TR_TEXT *t, int dn)
     if (ej_why_not(u) == NULL) {
         tr_put(t, "  It can be stopped here (Action > Safely Remove).\n");
     } else if (!dn_started(&gw.N[u])) {
-        tr_put(t, "  Stopped: you can unplug it.\n");
+        char tag[64];
+        char sen[96];
+        tr_stopped_text(gw.N[u].Problem, tag, sizeof(tag), sen, sizeof(sen));
+        tr_printf(t, "  %s\n", sen);
     } else {
         tr_printf(t, "  It cannot be stopped here now: %s.\n", ej_why_not(u));
     }
@@ -1944,6 +2095,13 @@ static void details_unit(TR_TEXT *t, int dn)
         if ((gw.N[u].Caps & TR_CM_DEVCAP_REMOVABLE) &&
             !(gw.N[u].Caps & TR_CM_DEVCAP_SURPRISEOK)) {
             tr_put(t, "  Windows lists it in Safely Remove Hardware too.\n");
+        } else if (inst_unit_not_marked(1, gw.N[u].Caps)) {
+            /* Whatever the cause (the first plug, a rebuilt stack:
+             * EJRB.1). */
+            tr_put(t, "  Not marked removable: Windows may not list it in "
+                      "Safely Remove Hardware.\n  Safely Remove here stops "
+                      "it with administrator rights, asking for them\n  when "
+                      "needed.\n");
         } else {
             tr_put(t, "  Windows does not list it in Safely Remove Hardware; "
                       "stop it from here.\n");
@@ -2061,8 +2219,9 @@ static void details_router(TR_TEXT *t, int k, int r)
     haveX = h->HaveQ && tr_query_ext(&h->Q, (TR_U32)r, &x);
     tr_router_name(e, name, sizeof(name));
     tr_gen_text(inst_get32(e, CM_ST_E_GEN), gen, sizeof(gen));
-    tr_link_text(kind, inst_get32(e, CM_ST_E_LANES), haveX ? &x : NULL, link,
-                 sizeof(link));
+    tr_link_text_gen(inst_get32(e, CM_ST_E_GEN), kind,
+                     inst_get32(e, CM_ST_E_LANES), haveX ? &x : NULL, link,
+                     sizeof(link));
     tr_printf(t, "Thunderbolt / USB4 device\n");
     tr_printf(t, "  Name:          %s\n", name);
     tr_printf(t, "  Kind:          %s\n",
@@ -2187,6 +2346,7 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
             details_hubnode(t, p->HubNode);
         }
     }
+    details_usb_eject(t, p->Dn);
     details_devnode(t, p->Dn);
     if ((viewFlags & TR_V_DESC) || reportMode) {
         int k;
@@ -2551,9 +2711,13 @@ static const char *ej_why_not(int u)
         return "it is not behind a Thunderbolt port";
     }
     if (!dn_started(&gw.N[u])) {
-        /* Held for the eject (Code 47) or otherwise stopped: the ICM keeps
-         * the tunnel until the unplug, so it is still listed. */
-        return "stopped - unplug it";
+        /* Held for the eject (Code 47): the ICM keeps the tunnel until the
+         * unplug, so it is still listed. Any other problem is a failed
+         * start, never "unplug it". */
+        static char tag[64];
+        char sen[8];
+        tr_stopped_text(gw.N[u].Problem, tag, sizeof(tag), sen, sizeof(sen));
+        return tag;
     }
     if (!nhi[k].HaveQ) {
         return "not confirmed: eject unavailable";
@@ -2815,6 +2979,329 @@ done:
     return kind;
 }
 
+/* ---- NT: a unit not marked removable (record 24 section 7.2) ------------- */
+
+typedef BOOL (WINAPI *PFN_OPENTOKEN)(HANDLE, DWORD, PHANDLE);
+typedef BOOL (WINAPI *PFN_TOKENINFO)(HANDLE, int, LPVOID, DWORD, PDWORD);
+typedef BOOL (WINAPI *PFN_CHECKMEMBER)(HANDLE, PSID, PBOOL);
+typedef BOOL (WINAPI *PFN_ALLOCSID2)(PSID_IDENTIFIER_AUTHORITY, BYTE, DWORD,
+                                     DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
+                                     DWORD, PSID *);
+typedef PVOID (WINAPI *PFN_FREESID2)(PSID);
+#define TR_TOKEN_ELEVATION  20      /* TokenElevation (Vista and later) */
+
+/* Vista and 7: 1 elevated, 0 not, -1 not read. */
+static int ej_elevated_token(void)
+{
+    HMODULE adv = GetModuleHandleA("advapi32.dll");
+    PFN_OPENTOKEN openToken = (PFN_OPENTOKEN)proc(adv, "OpenProcessToken");
+    PFN_TOKENINFO tokenInfo = (PFN_TOKENINFO)proc(adv, "GetTokenInformation");
+    HANDLE token;
+    DWORD elevated = 0;
+    DWORD n = 0;
+    int r = -1;
+
+    if (openToken == NULL || tokenInfo == NULL ||
+        !openToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return -1;
+    }
+    if (tokenInfo(token, TR_TOKEN_ELEVATION, &elevated, sizeof(elevated), &n) &&
+        n == sizeof(elevated)) {
+        r = elevated != 0;
+    }
+    CloseHandle(token);
+    return r;
+}
+
+/* 0 on Vista and 7 when this process's token is not elevated, so the
+ * fallback's right is known to be missing; otherwise 1, Windows' answer
+ * deciding. */
+static int ej_may_remove(void)
+{
+    return !envNt || envMajor < 6 || ej_elevated_token() != 0;
+}
+
+/* NT: 1 when this process runs with an administrator's rights (Vista and
+ * 7: elevated; 2000 and XP: a member of Administrators); 1 too when it
+ * cannot be read, Windows' answer then deciding. */
+static int ej_is_admin(void)
+{
+    HMODULE adv;
+    PFN_CHECKMEMBER check;
+    PFN_ALLOCSID2 allocSid;
+    PFN_FREESID2 freeSid;
+    SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
+    PSID admins = NULL;
+    BOOL member = FALSE;
+    int r = 1;
+
+    if (!envNt) {
+        return 1;
+    }
+    if (envMajor >= 6) {
+        return ej_elevated_token() != 0;
+    }
+    adv = GetModuleHandleA("advapi32.dll");
+    check = (PFN_CHECKMEMBER)proc(adv, "CheckTokenMembership");
+    allocSid = (PFN_ALLOCSID2)proc(adv, "AllocateAndInitializeSid");
+    freeSid = (PFN_FREESID2)proc(adv, "FreeSid");
+    if (check == NULL || allocSid == NULL || freeSid == NULL) {
+        return 1;
+    }
+    if (allocSid(&ntAuth, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                 DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &admins)) {
+        if (check(NULL, admins, &member)) {
+            r = member != FALSE;
+        }
+        freeSid(admins);
+    }
+    return r;
+}
+
+/* CM_Query_And_Remove_SubTreeW, its veto name in the ANSI code page, the
+ * flags as inst_removal_retry says. */
+static DWORD ej_query_and_remove(DWORD dn, ULONG *veto, char *name, int cap)
+{
+    WCHAR wide[MAX_PATH];
+    ULONG flags = INST_REMOVE_UI_NOT_OK | INST_REMOVE_NO_RESTART;
+    DWORD cr;
+
+    for (;;) {
+        *veto = 0;
+        wide[0] = 0;
+        cr = api.QueryAndRemove(dn, veto, wide, MAX_PATH, flags);
+        if (!inst_removal_retry(cr, flags)) {
+            break;
+        }
+        flags = INST_REMOVE_UI_NOT_OK;
+    }
+    wide[MAX_PATH - 1] = 0;
+    name[0] = '\0';
+    if (WideCharToMultiByte(CP_ACP, 0, wide, -1, name, cap, NULL, NULL) == 0) {
+        name[0] = '\0';
+    }
+    name[cap - 1] = '\0';
+    return cr;
+}
+
+/* The outcome of a unit's eject on NT after CM_Request_Device_EjectA
+ * answered *cr and *veto (through tr_eject_cr): that answer, or for a unit
+ * not marked removable the fallback's (*notRemovable set) or the re-plug
+ * refusal. *cr, *veto and vetoName end as the answer read. */
+static int ej_nt_answer(DWORD dn, int capsKnown, ULONG caps, DWORD *cr,
+                        ULONG *veto, char *vetoName, const char **text,
+                        int *withName, int *notRemovable)
+{
+    int notMarked = inst_unit_not_marked(capsKnown, caps);
+    int step = inst_eject_nt_step(*cr, *veto, notMarked,
+                                  notMarked ? ej_may_remove() : 1);
+
+    *notRemovable = 0;
+    if (step == INST_NT_ADMIN) {
+        *withName = 0;
+        *text = inst_admin_text();
+        return INST_EJ_RIGHTS;
+    }
+    if (step != INST_NT_FALLBACK) {
+        return inst_eject_nt(*cr, *veto, text, withName);
+    }
+    /* The same query-remove and remove an eject runs, by the routine that
+     * makes them for any device; a veto still stops it. */
+    *notRemovable = 1;
+    if (api.QueryAndRemove == NULL) {
+        *cr = INST_CR_CALL_NOT_IMPLEMENTED;
+        *veto = 0;
+    } else {
+        *cr = ej_query_and_remove(dn, veto, vetoName, MAX_PATH);
+        *cr = tr_eject_cr(*cr, *veto);
+    }
+    return inst_eject_nt_removal(*cr, *veto, text, withName);
+}
+
+/* ---- NT: the stop with administrator rights (record 25 section 6.6) ---- */
+
+#define TR_ELEV_WAIT_MS     300000UL
+
+static int ejElevBusy;      /* an elevated stop is being waited for      */
+static int ejElevQuit;      /* the program was asked to end meanwhile    */
+
+static BOOL CALLBACK elev_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_INITDIALOG:
+        SetDlgItemTextA(dlg, IDC_ELEV_TEXT, (const char *)lp);
+        if (envMajor >= 6) {
+            /* BCM_SETSHIELD: the button starts an elevation. */
+            SendDlgItemMessageA(dlg, IDOK, 0x160C, 0, 1);
+        }
+        SetForegroundWindow(dlg);
+        return TRUE;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDOK || LOWORD(wp) == IDCANCEL) {
+            EndDialog(dlg, LOWORD(wp));
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
+}
+
+/* 1 when the user asked for the stop with administrator rights. */
+static int ej_elev_ask(HWND owner, const EJREQ *q)
+{
+    char text[512];
+
+    tr_sprintf(text, sizeof(text), "%s\n\n%s", q->Desc, tr_elev_question());
+    return DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_ELEVATE), owner,
+                           (DLGPROC)elev_proc, (LPARAM)text) == IDOK;
+}
+
+/* Starts this program elevated with /eject id=, /result and /confirmed,
+ * waits for it with the window answering, and reads its answer from the
+ * section this run created: XHCIINST's exit code, the text in msg. No
+ * file is written or read, so the elevated run touches nothing a user
+ * could plant. A quit during the wait (Exit, or an installer) ends the
+ * wait at once; ejElevQuit is then set and the quit posted again. */
+static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
+{
+    static char answer[TR_RES_BYTES + 1];
+    static char amsg[TR_RES_BYTES + 1];
+    SHELLEXECUTEINFOA se;
+    TR_SA sa;
+    HANDLE sec;
+    void *view;
+    char name[64];
+    char digest[TR_DIGEST_CHARS];
+    char exe[MAX_PATH];
+    char args[INST_ID_CHARS + 128];
+    int launched = 0;
+    DWORD err = 0;
+    int finished = 0;
+    DWORD exitCode = INST_EXIT_FAILED;
+    int haveAnswer = 0;
+    int answerCode = 0;
+    int quitCode = 0;
+
+    amsg[0] = '\0';
+    ejElevQuit = 0;
+    if (GetModuleFileNameA(NULL, exe, sizeof(exe)) == 0) {
+        return tr_elev_result(0, GetLastError(), 0, 0, 0, 0, "", msg, cap);
+    }
+    tr_sprintf(name, sizeof(name), TR_RES_PREFIX "%lu-%lu",
+               (unsigned long)GetCurrentProcessId(),
+               (unsigned long)GetTickCount());
+    /* The user and SYSTEM and the Administrators, who may be another
+     * account under XP's Run As, may write it. */
+    make_sa(&sa, 0x0001 /* SECTION_QUERY */);
+    SetLastError(0);
+    sec = CreateFileMappingA(INVALID_HANDLE_VALUE, sa.Ok ? &sa.Sa : NULL,
+                             PAGE_READWRITE, 0, TR_RES_BYTES, name);
+    if (sec == NULL || GetLastError() == ERROR_ALREADY_EXISTS) {
+        err = sec == NULL ? GetLastError() : ERROR_ALREADY_EXISTS;
+        if (sec != NULL) {
+            CloseHandle(sec);
+        }
+        return tr_elev_result(0, err, 0, 0, 0, 0, "", msg, cap);
+    }
+    view = MapViewOfFile(sec, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, TR_RES_BYTES);
+    if (view == NULL) {
+        err = GetLastError();
+        CloseHandle(sec);
+        return tr_elev_result(0, err, 0, 0, 0, 0, "", msg, cap);
+    }
+    memset(view, 0, TR_RES_BYTES);
+    tr_res_digest((const char (*)[TR_ID_CHARS])q->Devs, q->DevCount, digest);
+    tr_sprintf(args, sizeof(args), "/eject \"id=%s\" /result %s /confirmed %s",
+               q->UnitId, name, digest);
+    memset(&se, 0, sizeof(se));
+    se.cbSize = sizeof(se);
+    se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+    se.hwnd = owner;
+    se.lpVerb = "runas";
+    se.lpFile = exe;
+    se.lpParameters = args;
+    se.nShow = SW_SHOWNORMAL;
+    ejElevBusy = 1;
+    if (ShellExecuteExA(&se) && se.hProcess != NULL) {
+        DWORD start = GetTickCount();
+        launched = 1;
+        while (!finished && !ejElevQuit) {
+            DWORD r;
+            MSG m;
+            DWORD spent = GetTickCount() - start;
+            if (spent >= TR_ELEV_WAIT_MS) {
+                break;
+            }
+            r = MsgWaitForMultipleObjects(1, &se.hProcess, FALSE,
+                                          TR_ELEV_WAIT_MS - spent, QS_ALLINPUT);
+            if (r == WAIT_OBJECT_0) {
+                finished = 1;
+                break;
+            }
+            if (r != WAIT_OBJECT_0 + 1) {
+                break;
+            }
+            while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
+                if (m.message == WM_QUIT) {
+                    ejElevQuit = 1;
+                    quitCode = (int)m.wParam;
+                    break;
+                }
+                TranslateMessage(&m);
+                DispatchMessageA(&m);
+            }
+        }
+        if (finished && !GetExitCodeProcess(se.hProcess, &exitCode)) {
+            exitCode = INST_EXIT_FAILED;
+        }
+        CloseHandle(se.hProcess);
+    } else {
+        err = GetLastError();
+    }
+    ejElevBusy = 0;
+    if (finished) {
+        memcpy(answer, view, TR_RES_BYTES);
+        answer[TR_RES_BYTES] = '\0';
+        haveAnswer = tr_res_read_answer(answer, &answerCode, amsg, sizeof(amsg));
+    }
+    UnmapViewOfFile(view);
+    CloseHandle(sec);
+    if (ejElevQuit) {
+        PostQuitMessage(quitCode);
+        msg[0] = '\0';
+        return INST_EXIT_REFUSED;
+    }
+    return tr_elev_result(launched, err, finished, exitCode, haveAnswer,
+                          answerCode, amsg, msg, cap);
+}
+
+/* The elevated run's answer, into the window's section by its name; 0
+ * when there is none to write to. */
+static int elev_child_answer(int code, const char *text)
+{
+    static char buf[TR_RES_BYTES];
+    HANDLE sec;
+    void *view;
+    size_t n = tr_res_answer(code, text, buf, sizeof(buf));
+
+    if (n == 0) {
+        return 0;
+    }
+    sec = OpenFileMappingA(FILE_MAP_WRITE, FALSE, opts.ResultName);
+    if (sec == NULL) {
+        return 0;
+    }
+    view = MapViewOfFile(sec, FILE_MAP_WRITE, 0, 0, TR_RES_BYTES);
+    if (view == NULL) {
+        CloseHandle(sec);
+        return 0;
+    }
+    memcpy(view, buf, n + 1);
+    UnmapViewOfFile(view);
+    CloseHandle(sec);
+    return 1;
+}
+
 /* The transaction (record 25 section 6.2 steps 2 to 8). Returns
  * XHCIINST's exit code; msg the answer; *rights set for a rights failure
  * Windows answered (the elevated retry is the caller's, after this has
@@ -2953,7 +3440,13 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         goto out;
     }
     if (!dn_started(&w.N[u])) {
-        tr_printf(&t, "%s is stopped already: you can unplug it.", q->Desc);
+        char tag[64];
+        char sen[96];
+        if (tr_stopped_text(w.N[u].Problem, tag, sizeof(tag), sen, sizeof(sen))) {
+            tr_printf(&t, "%s is stopped already: you can unplug it.", q->Desc);
+        } else {
+            tr_printf(&t, "%s is not running. %s Nothing was stopped.", q->Desc, sen);
+        }
         goto out;
     }
     single = ej_single(&w, u);
@@ -2977,22 +3470,11 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         int notRemovable = 0;
         vetoName[0] = '\0';
         cr = api.Eject(w.N[u].Dn, &veto, vetoName, MAX_PATH, 0);
-        if (inst_eject_nt_fallback(cr, veto, w.N[u].HasCaps, w.N[u].Caps) &&
-            api.QueryAndRemove != NULL) {
-            /* Not removable in Windows' eyes (record 24 section 7.2): the
-             * same query-remove and remove, a veto still stops it. */
-            veto = 0;
-            vetoName[0] = '\0';
-            cr = api.QueryAndRemove(w.N[u].Dn, &veto, vetoName, MAX_PATH,
-                                    TR_UI_NOT_OK);
-            notRemovable = 1;
-        }
-        outcome = inst_eject_nt(cr, veto, &text, &withName);
-        if (notRemovable && cr == INST_CR_CALL_NOT_IMPLEMENTED) {
-            text = inst_not_removable_text();
-            withName = 0;
-            outcome = INST_EJ_VETO;
-        }
+        vetoName[MAX_PATH - 1] = '\0';
+        cr = tr_eject_cr(cr, veto);
+        outcome = ej_nt_answer(w.N[u].Dn, w.N[u].HasCaps, w.N[u].Caps, &cr,
+                               &veto, vetoName, &text, &withName,
+                               &notRemovable);
         if (outcome != INST_EJ_DONE) {
             if (withName) {
                 char name[MAX_PATH + 16];
@@ -3088,16 +3570,716 @@ static void ej_elevated(HWND owner, const char *unitId)
 
 static void tray_balloon(const char *title, const char *text, int warn);
 
-/* The whole eject of one unit from the window or the tray. */
-static void ej_unit(HWND owner, int u, int fromTray)
+/* ======================================================================== */
+/* Plain USB devices (record 25 section 6.5, revision 7)                     */
+/* ======================================================================== */
+
+#define TR_GETIDLIST_EJECTRELATIONS     0x00000004UL
+#define TR_GETIDLIST_REMOVALRELATIONS   0x00000008UL
+
+/* Why the last set read was not known, for the details. */
+static char setFail[INST_ID_CHARS * 2 + 64];
+
+/* The relations of one kind of devnode `id` added to set (walk indexes):
+ * 1 read (possibly none), 0 not read or naming a devnode the walk lacks. */
+static int usb_relations(const WALK *w, const char *id, ULONG flags, int *set,
+                         int cap, int *n, int *over)
 {
-    EJREQ *q = (EJREQ *)calloc(1, sizeof(EJREQ));
+    ULONG len = 0;
+    char *buf;
+    const char *p;
+    DWORD cr;
+
+    if (api.ListSize == NULL || api.List == NULL) {
+        tr_copy(setFail, "this Windows does not offer the relations call",
+                sizeof(setFail));
+        return 0;
+    }
+    cr = api.ListSize(&len, id, flags);
+    if (cr == TR_CR_NO_SUCH_VALUE) {
+        return 1;   /* Windows 7: a devnode with no relations of the kind */
+    }
+    if (cr != TR_CR_SUCCESS) {
+        tr_sprintf(setFail, sizeof(setFail), "%s relations of %s: answer 0x%08lX",
+                   flags == TR_GETIDLIST_EJECTRELATIONS ? "ejection" : "removal",
+                   id, (unsigned long)cr);
+        return 0;
+    }
+    if (len <= 1) {
+        return 1;
+    }
+    if (len > 65536UL) {
+        tr_copy(setFail, "a relations list too long", sizeof(setFail));
+        return 0;
+    }
+    buf = (char *)calloc(1, len + 2);
+    if (buf == NULL) {
+        return 0;
+    }
+    cr = api.List(id, buf, len, flags);
+    if (cr != TR_CR_SUCCESS) {
+        tr_sprintf(setFail, sizeof(setFail), "the relations list of %s: answer "
+                   "0x%08lX", id, (unsigned long)cr);
+        free(buf);
+        return 0;
+    }
+    for (p = buf; *p != '\0' && p < buf + len; p += strlen(p) + 1) {
+        int k = walk_find_id(w, p);
+        int j;
+        int seen = 0;
+        if (k < 0) {
+            tr_sprintf(setFail, sizeof(setFail), "%s is not in the device list",
+                       p);
+            free(buf);
+            return 0;
+        }
+        for (j = 0; j < *n; j++) {
+            if (set[j] == k) {
+                seen = 1;
+            }
+        }
+        if (!seen) {
+            if (*n < cap) {
+                set[(*n)++] = k;
+            } else {
+                *over = 1;
+            }
+        }
+    }
+    free(buf);
+    return 1;
+}
+
+/* The set of devnode d (section 6.5): the device, every devnode below it,
+ * and on NT the removal and ejection relations of every member and what is
+ * below them, until nothing new is added. 1 when known; *over when more
+ * than cap. */
+static int usb_set(const WALK *w, int d, int *set, int cap, int *n, int *over)
+{
+    int i;
+    int known = 1;
+
+    *n = 0;
+    *over = 0;
+    if (d < 0 || cap < 1) {
+        return 0;
+    }
+    set[(*n)++] = d;
+    for (i = 0; i < *n; i++) {
+        int m = set[i];
+        int c;
+        for (c = 0; c < w->Count; c++) {
+            if (w->N[c].Parent == m) {
+                int j;
+                int seen = 0;
+                for (j = 0; j < *n; j++) {
+                    if (set[j] == c) {
+                        seen = 1;
+                    }
+                }
+                if (!seen) {
+                    if (*n < cap) {
+                        set[(*n)++] = c;
+                    } else {
+                        *over = 1;
+                    }
+                }
+            }
+        }
+        if (envNt && known) {
+            if (!usb_relations(w, w->N[m].Id, TR_GETIDLIST_REMOVALRELATIONS, set,
+                               cap, n, over) ||
+                !usb_relations(w, w->N[m].Id, TR_GETIDLIST_EJECTRELATIONS, set,
+                               cap, n, over)) {
+                known = 0;
+            }
+        }
+    }
+    return known;
+}
+
+/* The routines the eject needs, and the watcher that counts changes. */
+static int usb_call_available(void)
+{
+    return watchOk && (envNt ? api.Eject != NULL
+                             : (api.QueryRemove != NULL && api.Remove != NULL));
+}
+
+/* The facts of the rule for devnode d of walk w and its set. */
+static void usb_facts(const WALK *w, int d, int portIsHub, int devClass,
+                      const int *set, int n, int known, int over, TR_USBF *f)
+{
+    int i;
+
+    memset(f, 0, sizeof(*f));
+    f->Nt = envNt;
+    f->HaveDevnode = d >= 0;
+    f->IsHub = portIsHub;
+    f->Radio = devClass == 0xE0;
+    if (d < 0) {
+        return;
+    }
+    f->Started = (w->N[d].Status & INST_DN_STARTED) != 0;
+    f->Problem = w->N[d].Problem;
+    f->SetKnown = known;
+    f->SetCount = over ? TR_USB_SET_MAX + 1 : n;
+    f->ReadWhole = 1;
+    f->CallAvailable = usb_call_available();
+    for (i = 0; i < n; i++) {
+        const DNODE *m = &w->N[set[i]];
+        if (m->IsHubId) {
+            f->IsHub = 1;
+        }
+        if (m->IsUsbHc) {
+            f->IsController = 1;
+        }
+        if (m->IsHid) {
+            f->Hid = 1;
+        }
+        if (tr_msz_has_prefix(m->Hw, m->HwBytes, "USB\\Class_E0") ||
+            tr_msz_has_prefix(m->Compat, m->CompatBytes, "USB\\Class_E0")) {
+            f->Radio = 1;
+        }
+        if (m->IsDisk) {
+            f->Disks++;
+        }
+        if (m->IsVolume) {
+            f->Volumes++;
+        }
+        if (!m->ReadOk || m->Incomplete) {
+            f->ReadWhole = 0;   /* a member, or a child of one, not read */
+        }
+    }
+}
+
+/* Every device at a USB port of the model: its rule and its set. */
+static void usb_derive(void)
+{
+    static int set[TR_USB_SET_MAX + 1];
+    int k;
+
+    for (k = 0; k < gw.Count; k++) {
+        gw.N[k].UPort = -1;
+        gw.N[k].UsbOf = -1;
+        gw.N[k].UsbRule = TR_UE_DETAILS;
+        gw.N[k].UsbWhy = NULL;
+    }
+    for (k = 0; k < upCount; k++) {
+        UPORT *p = &up[k];
+        if (p->Dn >= 0 && p->HaveConn && p->Conn.Status == TR_CS_CONNECTED &&
+            gw.N[p->Dn].UPort < 0) {
+            gw.N[p->Dn].UPort = k;
+        }
+    }
+    for (k = 0; k < gw.Count; k++) {
+        TR_USBF f;
+        int n;
+        int over;
+        int known;
+        int i;
+        const UPORT *p;
+        if (gw.N[k].UPort < 0) {
+            continue;
+        }
+        p = &up[gw.N[k].UPort];
+        known = usb_set(&gw, k, set, TR_USB_SET_MAX + 1, &n, &over);
+        usb_facts(&gw, k, p->Conn.IsHub, p->Conn.Dev[4], set, n, known, over, &f);
+        gw.N[k].UsbRule = tr_usb_rule(&f, &gw.N[k].UsbWhy);
+        if (gw.N[k].UsbRule != TR_UE_DETAILS) {
+            for (i = 0; i < n; i++) {
+                if (gw.N[set[i]].UsbOf < 0) {
+                    gw.N[set[i]].UsbOf = k;
+                }
+            }
+        }
+    }
+}
+
+/* 1 when devnode d is a USB device section 6.5 lists. */
+static int usb_listed(int d)
+{
+    return d >= 0 && d < gw.Count && gw.N[d].UPort >= 0 &&
+           gw.N[d].UsbRule != TR_UE_DETAILS;
+}
+
+/* What the user sees for USB device d: its disks and their letters, else
+ * its own name. */
+static void usb_label(int d, char *out, size_t cap)
+{
+    char names[512];
+    char letters[TR_LETTERS_BYTES];
+    TR_TEXT t;
+    int i;
+
+    tr_text_init(&t, names, sizeof(names));
+    letters[0] = '\0';
+    for (i = 0; usb_listed(d) && i < gw.Count; i++) {
+        if (gw.N[i].UsbOf == d && gw.N[i].IsDisk) {
+            tr_printf(&t, "%s%s", t.Len ? ", " : "",
+                      gw.N[i].Friendly[0] ? gw.N[i].Friendly : dn_name(&gw.N[i]));
+            tr_letters_add(letters, gw.N[i].Letters);
+        }
+    }
+    tr_unit_label(dn_name(&gw.N[d]), names, letters, out, cap);
+}
+
+/* The letters of USB device d's disks as text ("F:, G:"), or its name. */
+static void usb_what(int d, char *out, size_t cap)
+{
+    char letters[TR_LETTERS_BYTES];
+    int i;
+
+    letters[0] = '\0';
+    for (i = 0; i < gw.Count; i++) {
+        if (gw.N[i].UsbOf == d && gw.N[i].IsDisk) {
+            tr_letters_add(letters, gw.N[i].Letters);
+        }
+    }
+    tr_letters_text(letters, out, cap);
+    if (out[0] == '\0') {
+        tr_copy(out, dn_name(&gw.N[d]), cap);
+    }
+}
+
+static const char *usb_suffix(int d)
+{
+    if (!usb_listed(d)) {
+        return "";
+    }
+    if (gw.N[d].UsbRule == TR_UE_OFFER) {
+        return "  [can be stopped]";
+    }
+    if (gw.N[d].Problem == TR_CM_PROB_HELD_FOR_EJECT) {
+        return "  [stopped - unplug it]";
+    }
+    return "";
+}
+
+/* Why device d cannot be stopped now, or NULL. */
+static const char *usb_why(int d)
+{
+    if (!usb_listed(d)) {
+        return "it is not a USB device that can be stopped here";
+    }
+    return gw.N[d].UsbRule == TR_UE_OFFER ? NULL : gw.N[d].UsbWhy;
+}
+
+/* The Safely Remove line of a USB device's details. */
+static void details_usb_eject(TR_TEXT *t, int d)
+{
+    int i;
+
+    if (d < 0 || gw.N[d].UPort < 0) {
+        return;
+    }
+    if (gw.N[d].UsbRule == TR_UE_OFFER) {
+        tr_put(t, "  Safely Remove: can be stopped here (Action > Safely Remove)\n");
+    } else if (gw.N[d].UsbRule == TR_UE_LISTED) {
+        static int set[TR_USB_SET_MAX + 1];
+        int n;
+        int over;
+        tr_printf(t, "  Safely Remove: not now - %s\n", gw.N[d].UsbWhy);
+        setFail[0] = '\0';
+        if (!usb_set(&gw, d, set, TR_USB_SET_MAX + 1, &n, &over) &&
+            setFail[0] != '\0') {
+            tr_printf(t, "  (%s)\n", setFail);
+        }
+    } else {
+        tr_printf(t, "  Safely Remove: not offered - %s\n",
+                  gw.N[d].UsbWhy != NULL ? gw.N[d].UsbWhy : "not a device to stop");
+    }
+    if (gw.N[d].UsbRule != TR_UE_DETAILS) {
+        tr_put(t, "  Devices that stop with it:\n");
+        for (i = 0; i < gw.Count; i++) {
+            if (gw.N[i].UsbOf == d) {
+                tr_printf(t, "    %s\n", dn_name(&gw.N[i]));
+            }
+        }
+    }
+}
+
+/* ---- the transaction (section 6.5) ---------------------------------------- */
+
+typedef struct _USBREQ {
+    char Id[INST_ID_CHARS];
+    char ParentId[INST_ID_CHARS];
+    char Label[160];        /* disks and letters, or the device's name      */
+    char Name[128];         /* the device's own devnode                     */
+    char What[TR_LETTERS_TEXT_BYTES + 32]; /* letters, or the name         */
+    int PortIsHub;
+    int DevClass;
+    LONG Gen;               /* the change count before the model was read  */
+    int Count;
+    char Ids[TR_USB_SET_MAX][INST_ID_CHARS];
+} USBREQ;
+
+/* The request as the model shows device d: 1 when it is offered. */
+static int usb_prepare(int d, USBREQ *q)
+{
+    static int set[TR_USB_SET_MAX + 1];
+    int n;
+    int over;
+    int i;
+
+    memset(q, 0, sizeof(*q));
+    if (!usb_listed(d) || gw.N[d].UsbRule != TR_UE_OFFER) {
+        return 0;
+    }
+    if (!usb_set(&gw, d, set, TR_USB_SET_MAX + 1, &n, &over) || over ||
+        n > TR_USB_SET_MAX) {
+        return 0;   /* the relations grew since the rule was read */
+    }
+    tr_copy(q->Id, gw.N[d].Id, sizeof(q->Id));
+    if (gw.N[d].Parent >= 0) {
+        tr_copy(q->ParentId, gw.N[gw.N[d].Parent].Id, sizeof(q->ParentId));
+    }
+    usb_label(d, q->Label, sizeof(q->Label));
+    tr_copy(q->Name, dn_name(&gw.N[d]), sizeof(q->Name));
+    usb_what(d, q->What, sizeof(q->What));
+    q->PortIsHub = up[gw.N[d].UPort].Conn.IsHub;
+    q->DevClass = up[gw.N[d].UPort].Conn.Dev[4];
+    q->Gen = modelGen;
+    for (i = 0; i < n; i++) {
+        tr_copy(q->Ids[q->Count++], gw.N[set[i]].Id, sizeof(q->Ids[0]));
+    }
+    return 1;
+}
+
+static int usb_confirm(HWND owner, const USBREQ *q)
+{
+    static char text[TR_USB_SET_MAX * (INST_ID_CHARS + 8) + 4096];
+    static char lineBuf[TR_USB_SET_MAX][256];
+    const char *lines[TR_USB_SET_MAX];
+    TR_TEXT t;
+    int disks = 0;
+    int i;
+
+    tr_text_init(&t, text, sizeof(text));
+    for (i = 0; i < q->Count && disks < TR_USB_SET_MAX; i++) {
+        int k = walk_find_id(&gw, q->Ids[i]);
+        if (k >= 0 && gw.N[k].IsDisk) {
+            tr_disk_line(gw.N[k].Friendly[0] ? gw.N[k].Friendly : dn_name(&gw.N[k]),
+                         gw.N[k].Letters, lineBuf[disks], sizeof(lineBuf[disks]));
+            lines[disks] = lineBuf[disks];
+            disks++;
+        }
+    }
+    tr_confirm_lead(&t, q->Name, q->Label, lines, disks);
+    for (i = 0; i < q->Count; i++) {
+        int k = walk_find_id(&gw, q->Ids[i]);
+        tr_printf(&t, "    %s\n", k >= 0 ? dn_name(&gw.N[k]) : q->Ids[i]);
+    }
+    tr_put(&t, "\nClose any program that uses them first.");
+    if (t.Overflow) {
+        MessageBoxA(owner, "The list of devices to stop is too long to show, so "
+                    "nothing is stopped from here.", "Stop a USB device",
+                    MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+        return 0;
+    }
+    return MessageBoxA(owner, text, "Stop a USB device",
+                       MB_OKCANCEL | MB_ICONQUESTION | MB_SETFOREGROUND) == IDOK;
+}
+
+/* After an accepted call: what a new walk reads (section 6.5 step 5). */
+static int usb_after(const USBREQ *q, TR_TEXT *t)
+{
+    WALK w;
+    int d;
+    int code = INST_EXIT_DONE;
+
+    memset(&w, 0, sizeof(w));
+    if (!walk(&w)) {
+        tr_put(t, "\nIts state could not be read again: check that it is not "
+                  "running before you unplug it.");
+        free(w.N);
+        return code;
+    }
+    d = walk_find_id(&w, q->Id);
+    if (d >= 0 && dn_started(&w.N[d])) {
+        tr_put(t, "\nThe device has started again, so it is not safe to unplug.");
+        code = INST_EXIT_STEPS;
+    } else if ((d < 0 && w.Bad == 0) ||
+               (d >= 0 && w.N[d].Problem == TR_CM_PROB_HELD_FOR_EJECT)) {
+        tr_put(t, "\nYou can now unplug the device.");
+    } else {
+        tr_put(t, "\nIts state could not be read again: check that it is not "
+                  "running before you unplug it.");
+    }
+    free(w.N);
+    return code;
+}
+
+/* The transaction (section 6.5 steps 2 to 5). Returns XHCIINST's exit
+ * code; msg the answer; *rights for a rights refusal. */
+static int usb_run(const USBREQ *q, char *msg, size_t cap, int *rights)
+{
+    static int set[TR_USB_SET_MAX + 1];
+    const char *nowIds[TR_USB_SET_MAX];
+    const char *thenIds[TR_USB_SET_MAX];
+    char answer[1024];
+    HANDLE m;
+    WALK w;
+    TR_USBF f;
+    const char *why;
+    int d;
+    int n;
+    int over;
+    int known;
+    int i;
+    int outcome;
+    int code = INST_EXIT_REFUSED;
+    DWORD cr;
+    TR_TEXT t;
+
+    *rights = 0;
+    tr_text_init(&t, msg, cap);
+    memset(&w, 0, sizeof(w));
+    if (!usb_call_available()) {
+        tr_put(&t, "This Windows does not offer the call that stops a device.");
+        return INST_EXIT_REFUSED;
+    }
+    m = ej_lock();
+    if (m == NULL) {
+        tr_put(&t, "Another program is removing a device; try again when it has "
+                   "finished.");
+        return INST_EXIT_REFUSED;
+    }
+    if (!walk(&w)) {
+        tr_put(&t, "The device list cannot be read now; nothing was stopped.");
+        goto out;
+    }
+    d = walk_find_id(&w, q->Id);
+    if (d < 0) {
+        tr_printf(&t, "%s is no longer connected; nothing was stopped.", q->Label);
+        goto out;
+    }
+    known = usb_set(&w, d, set, TR_USB_SET_MAX + 1, &n, &over);
+    usb_facts(&w, d, q->PortIsHub, q->DevClass, set, n, known, over, &f);
+    if (n > TR_USB_SET_MAX || q->Count < 1 || q->Count > TR_USB_SET_MAX) {
+        tr_printf(&t, "%s cannot be stopped now: too many devices would stop "
+                      "with it to list. Nothing was stopped.", q->Label);
+        goto out;
+    }
+    for (i = 0; i < n; i++) {
+        nowIds[i] = w.N[set[i]].Id;
+    }
+    for (i = 0; i < q->Count; i++) {
+        thenIds[i] = q->Ids[i];
+    }
+    if (!tr_usb_recheck(w.N[d].Parent >= 0 ? w.N[w.N[d].Parent].Id : "",
+                        q->ParentId, nowIds, n, thenIds, q->Count, &f, &why)) {
+        tr_printf(&t, "%s cannot be stopped now: %s. Nothing was stopped.",
+                  q->Label, why != NULL ? why : "it changed");
+        goto out;
+    }
+    /* Immediately before the call: no device change since the model. */
+    if (chgCount != q->Gen) {
+        tr_put(&t, "The device list changed; nothing was stopped. Look at the "
+                   "tree again.");
+        goto out;
+    }
+    if (envNt) {
+        ULONG veto = 0;
+        char vetoName[MAX_PATH];
+        vetoName[0] = '\0';
+        cr = api.Eject(w.N[d].Dn, &veto, vetoName, MAX_PATH, 0);
+        vetoName[MAX_PATH - 1] = '\0';
+        {
+            int inSet = 0;
+            for (i = 0; i < q->Count; i++) {
+                if (vetoName[0] != '\0' && tr_eq(vetoName, q->Ids[i])) {
+                    inSet = 1;
+                }
+            }
+            outcome = tr_usb_answer_nt(cr, veto, vetoName, inSet, q->What,
+                                       answer, sizeof(answer));
+        }
+        if (outcome != INST_EJ_DONE) {
+            tr_put(&t, answer);
+            *rights = outcome == INST_EJ_RIGHTS;
+            code = inst_eject_code(outcome);
+            goto out;
+        }
+        tr_printf(&t, "Windows has stopped %s.", q->Label);
+        code = usb_after(q, &t);
+    } else {
+        const char *text;
+        cr = api.QueryRemove(w.N[d].Dn, TR_UI_NOT_OK);
+        outcome = tr_usb_answer9x(cr, q->What, answer, sizeof(answer));
+        if (outcome != INST_EJ_DONE) {
+            tr_put(&t, answer);
+            code = inst_eject_code(outcome);
+            goto out;
+        }
+        /* Accepted: the removal always follows (record 24 section 7.1). */
+        cr = api.Remove(w.N[d].Dn, TR_UI_NOT_OK);
+        outcome = inst_eject9x_remove(cr, &text);
+        if (outcome != INST_EJ_DONE) {
+            tr_printf(&t, "%s\n(code 0x%08lX)", text, (unsigned long)cr);
+            code = inst_eject_code(outcome);
+            goto out;
+        }
+        tr_printf(&t, "Windows has stopped %s.", q->Label);
+        code = usb_after(q, &t);
+        tr_put(&t, "\nUntil you unplug it, Device Manager's Refresh can start it "
+                   "again.");
+    }
+out:
+    ej_unlock(m);
+    free(w.N);
+    return code;
+}
+
+/* The whole eject of USB device d from the window or the tray. */
+static void usb_eject_ui(HWND owner, int d, int fromTray)
+{
+    USBREQ *q = (USBREQ *)calloc(1, sizeof(USBREQ));
     char msg[2048];
-    const char *why = ej_why_not(u);
+    const char *why = usb_why(d);
     int rights = 0;
     int code;
     HCURSOR old;
 
+    if (q == NULL) {
+        return;
+    }
+    if (why != NULL || !usb_prepare(d, q)) {
+        tr_sprintf(msg, sizeof(msg), "%s cannot be stopped here: %s.",
+                   d >= 0 ? dn_name(&gw.N[d]) : "This device",
+                   why != NULL ? why : "what would stop with it changed");
+        MessageBoxA(owner, msg, "xHCI98 USB Tree", MB_OK | MB_ICONINFORMATION);
+        free(q);
+        return;
+    }
+    if (!usb_confirm(owner, q)) {
+        free(q);
+        return;
+    }
+    old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+    code = usb_run(q, msg, sizeof(msg), &rights);
+    tr_join_lines(msg);
+    SetCursor(old);
+    if (rights && envMajor >= 6) {
+        char ask[2300];
+        tr_sprintf(ask, sizeof(ask), "%s\n\nTry again as an administrator?", msg);
+        if (MessageBoxA(owner, ask, "xHCI98 USB Tree",
+                        MB_YESNO | MB_ICONWARNING) == IDYES) {
+            ej_elevated(owner, q->Id);
+        }
+    } else if (fromTray && shellV5 && strlen(msg) < 250) {
+        tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
+                     msg, code != INST_EXIT_DONE);
+    } else {
+        MessageBoxA(owner, msg, "xHCI98 USB Tree",
+                    MB_OK | (code == INST_EXIT_DONE ? MB_ICONINFORMATION
+                                                    : MB_ICONWARNING));
+    }
+    free(q);
+}
+
+/* /eject id= for a USB device: the whole transaction once. */
+static int usb_run_eject(int d)
+{
+    USBREQ *q = (USBREQ *)calloc(1, sizeof(USBREQ));
+    char msg[2048];
+    const char *why = usb_why(d);
+    int rights;
+    int code;
+
+    if (q == NULL) {
+        return INST_EXIT_FAILED;
+    }
+    if (why != NULL || !usb_prepare(d, q)) {
+        tr_sprintf(msg, sizeof(msg), "%s cannot be stopped here: %s.",
+                   dn_name(&gw.N[d]),
+                   why != NULL ? why : "what would stop with it changed");
+        say(msg, 1);
+        free(q);
+        return INST_EXIT_REFUSED;
+    }
+    if (!usb_confirm(NULL, q)) {
+        free(q);
+        return INST_EXIT_REFUSED;
+    }
+    code = usb_run(q, msg, sizeof(msg), &rights);
+    tr_join_lines(msg);
+    say(msg, code != INST_EXIT_DONE);
+    free(q);
+    return code;
+}
+
+/* ---- the watcher (section 6.5 step 1) -------------------------------------- */
+
+static LRESULT CALLBACK watch_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_DEVICECHANGE) {
+        InterlockedIncrement((LONG *)&chgCount);
+        return TRUE;
+    }
+    return DefWindowProcA(w, msg, wp, lp);
+}
+
+/* A thread with a hidden top-level window and a loop of its own: it counts
+ * every device-change broadcast whatever the main thread waits on. */
+static DWORD WINAPI watch_thread(LPVOID arg)
+{
+    HANDLE ready = (HANDLE)arg;
+    WNDCLASSA wc;
+    HWND h;
+    MSG m;
+
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = watch_proc;
+    wc.hInstance = hInst;
+    wc.lpszClassName = "Xhci98TrWatch";
+    RegisterClassA(&wc);
+    h = CreateWindowExA(WS_EX_TOOLWINDOW, "Xhci98TrWatch", "", WS_POPUP, 0, 0, 0,
+                        0, NULL, NULL, hInst, NULL);
+    watchOk = h != NULL;
+    SetEvent(ready);
+    if (h == NULL) {
+        return 1;
+    }
+    while (GetMessageA(&m, NULL, 0, 0) > 0) {
+        DispatchMessageA(&m);
+    }
+    return 0;
+}
+
+static void watch_start(void)
+{
+    HANDLE ready = CreateEventA(NULL, TRUE, FALSE, NULL);
+    HANDLE th;
+    DWORD tid;
+
+    if (ready == NULL) {
+        return;
+    }
+    th = CreateThread(NULL, 0, watch_thread, ready, 0, &tid);
+    if (th != NULL) {
+        WaitForSingleObject(ready, 5000);
+        CloseHandle(th);
+    }
+    CloseHandle(ready);
+}
+
+/* The whole eject of one unit, or of a USB device (section 6.5), from the
+ * window or the tray. */
+static void ej_unit(HWND owner, int u, int fromTray)
+{
+    EJREQ *q;
+    char msg[2048];
+    const char *why;
+    int rights = 0;
+    int code;
+    HCURSOR old;
+
+    if (usb_listed(u)) {
+        usb_eject_ui(owner, u, fromTray);
+        return;
+    }
+    q = (EJREQ *)calloc(1, sizeof(EJREQ));
+    why = ej_why_not(u);
     if (q == NULL) {
         return;
     }
@@ -3109,22 +4291,54 @@ static void ej_unit(HWND owner, int u, int fromTray)
         free(q);
         return;
     }
+    if (ejElevBusy) {
+        MessageBoxA(owner, "Another device is being stopped with administrator "
+                    "rights; try again when it has finished.", "xHCI98 USB Tree",
+                    MB_OK | MB_ICONINFORMATION);
+        free(q);
+        return;
+    }
     if (!ej_confirm(owner, q)) {
         free(q);
         return;
     }
-    old = SetCursor(LoadCursor(NULL, IDC_WAIT));
-    code = ej_run(q, msg, sizeof(msg), &rights);
-    tr_join_lines(msg);
-    SetCursor(old);
-    if (rights && envMajor >= 6) {
-        char ask[2300];
-        tr_sprintf(ask, sizeof(ask), "%s\n\nTry again as an administrator?", msg);
-        if (MessageBoxA(owner, ask, "xHCI98 USB Tree",
-                        MB_YESNO | MB_ICONWARNING) == IDYES) {
-            ej_elevated(owner, q->UnitId);
+    if (tr_elev_needed(envNt, inst_unit_not_marked(gw.N[u].HasCaps,
+                                                   gw.N[u].Caps),
+                       ej_is_admin())) {
+        /* Not marked removable, and this process is no administrator:
+         * the stop is offered with administrator rights (section 6.6). */
+        if (!ej_elev_ask(owner, q)) {
+            free(q);
+            return;
         }
-    } else if (fromTray && shellV5 && strlen(msg) < 250) {
+        code = ej_elev_run(owner, q, msg, sizeof(msg));
+        if (ejElevQuit) {
+            free(q);
+            return;
+        }
+    } else {
+        old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+        code = ej_run(q, msg, sizeof(msg), &rights);
+        SetCursor(old);
+        if (rights && envMajor >= 6) {
+            char ask[2300];
+            tr_join_lines(msg);
+            tr_sprintf(ask, sizeof(ask), "%s\n\nTry again as an administrator?",
+                       msg);
+            if (MessageBoxA(owner, ask, "xHCI98 USB Tree",
+                            MB_YESNO | MB_ICONWARNING) != IDYES) {
+                free(q);
+                return;
+            }
+            code = ej_elev_run(owner, q, msg, sizeof(msg));
+        }
+    }
+    if (ejElevQuit) {
+        free(q);
+        return;
+    }
+    tr_join_lines(msg);
+    if (fromTray && shellV5 && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
@@ -3222,7 +4436,7 @@ static int tree_selected(void)
     return (int)tvi.lParam;
 }
 
-/* The unit a tree node belongs to, or -1. */
+/* The unit or the USB device (section 6.5) a tree node stops, or -1. */
 static int unit_of_node(int i)
 {
     const TNODE *n;
@@ -3231,6 +4445,9 @@ static int unit_of_node(int i)
         return -1;
     }
     n = &tn[i];
+    if (n->Dn >= 0 && (n->Kind == K_DEV || n->Kind == K_UPORT) && usb_listed(n->Dn)) {
+        return n->Dn;   /* a USB device by itself, even behind a dock */
+    }
     if (n->Dn >= 0 && (n->Kind == K_DEV || n->Kind == K_UPORT || n->Kind == K_CTRL) &&
         gw.N[n->Dn].UnitOf >= 0) {
         return gw.N[n->Dn].UnitOf;
@@ -3527,7 +4744,8 @@ static BOOL CALLBACK about_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         tr_sprintf(text, sizeof(text),
                    "xHCI98 USB Tree\r\nversion %s, part of the xhci98 %s release\r\n\r\n"
                    "Shows every USB and Thunderbolt/USB4 controller and device, "
-                   "and stops a device behind a Thunderbolt or USB4 port safely.\r\n\r\n"
+                   "and stops a USB storage device or a device behind a "
+                   "Thunderbolt or USB4 port safely.\r\n\r\n"
                    "Free software under the GNU General Public License, version 2.",
                    XHCITR_VERSION, XHCI_VER_STR);
         SetDlgItemTextA(dlg, IDC_ABOUT_TEXT, text);
@@ -3573,8 +4791,9 @@ static void init_menu(HMENU m)
                                                                     : MF_UNCHECKED));
     }
     EnableMenuItem(m, IDM_EJECT, MF_BYCOMMAND |
-                                     (u >= 0 && ej_why_not(u) == NULL ? MF_ENABLED
-                                                                      : MF_GRAYED));
+                                     (u >= 0 && (usb_listed(u) ? usb_why(u) == NULL
+                                                               : ej_why_not(u) == NULL)
+                                          ? MF_ENABLED : MF_GRAYED));
     EnableMenuItem(m, IDM_PROPS, MF_BYCOMMAND |
                                      (envNt && sel >= 0 && tn[sel].Dn >= 0
                                           ? MF_ENABLED : MF_GRAYED));
@@ -3978,6 +5197,7 @@ static void tray_unit_menu(void)
     HMENU m = CreatePopupMenu();
     POINT p;
     int i;
+    int g;
     UINT cmd;
 
     if (m == NULL) {
@@ -3987,13 +5207,36 @@ static void tray_unit_menu(void)
         refresh_model(0);
     }
     trayUnitCount = 0;
-    for (i = 0; i < gw.Count && trayUnitCount < 64; i++) {
-        if (gw.N[i].UnitOf == i && gw.N[i].Parent >= 0 &&
-            gw.N[gw.N[i].Parent].PortNhi >= 0) {
-            const char *why = ej_why_not(i);
+    /* Two groups, each under a grey heading and only when it has an entry
+     * (record 25 section 6.5): USB devices, then the Thunderbolt units. */
+    for (g = 0; g < 2; g++) {
+        int heading = 0;
+        for (i = 0; i < gw.Count && trayUnitCount < 64; i++) {
+            const char *why;
             char text[256];
             char name[160];
-            unit_label(i, name, sizeof(name));
+            if (g == 0) {
+                if (!usb_listed(i)) {
+                    continue;
+                }
+                why = usb_why(i);
+                usb_label(i, name, sizeof(name));
+            } else {
+                if (gw.N[i].UnitOf != i || gw.N[i].Parent < 0 ||
+                    gw.N[gw.N[i].Parent].PortNhi < 0) {
+                    continue;
+                }
+                why = ej_why_not(i);
+                unit_label(i, name, sizeof(name));
+            }
+            if (!heading) {
+                if (trayUnitCount > 0) {
+                    AppendMenuA(m, MF_SEPARATOR, 0, NULL);
+                }
+                AppendMenuA(m, MF_STRING | MF_GRAYED, 0,
+                            g == 0 ? "USB devices" : "Thunderbolt and USB4 devices");
+                heading = 1;
+            }
             if (why == NULL) {
                 tr_sprintf(text, sizeof(text), "Safely remove %s", name);
             } else {
@@ -4007,8 +5250,7 @@ static void tray_unit_menu(void)
         }
     }
     if (trayUnitCount == 0) {
-        AppendMenuA(m, MF_STRING | MF_GRAYED, 0,
-                    "No Thunderbolt or USB4 device to stop");
+        AppendMenuA(m, MF_STRING | MF_GRAYED, 0, "No device to stop");
     }
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     AppendMenuA(m, MF_STRING, IDM_OPEN, "Open xHCI98 USB Tree");
@@ -4172,7 +5414,10 @@ static void say(const char *text, int warn)
 
     if (out != NULL && out != INVALID_HANDLE_VALUE &&
         GetFileType(out) != FILE_TYPE_UNKNOWN) {
-        WriteFile(out, text, (DWORD)strlen(text), &w, NULL);
+        /* Console text: at most 79 columns (record 25 section 6.5). */
+        static char wrapped[8192];
+        tr_wrap(text, wrapped, sizeof(wrapped), 79);
+        WriteFile(out, wrapped, (DWORD)strlen(wrapped), &w, NULL);
         WriteFile(out, "\r\n", 2, &w, NULL);
         return;
     }
@@ -4205,35 +5450,66 @@ static int run_eject(void)
     int rights;
     int code;
 
+    char digest[TR_DIGEST_CHARS];
+
     if (q == NULL) {
         return INST_EXIT_FAILED;
     }
     refresh_model(0);
     u = walk_find_id(&gw, opts.EjectId);
-    if (u < 0 || gw.N[u].UnitOf != u) {
-        tr_sprintf(msg, sizeof(msg), "No device behind a Thunderbolt port has "
-                   "the instance ID %s.", opts.EjectId);
-        say(msg, 1);
+    if (u >= 0 && gw.N[u].UPort >= 0) {
         free(q);
-        return INST_EXIT_REFUSED;
+        return usb_run_eject(u);
+    }
+    if (u < 0 || gw.N[u].UnitOf != u) {
+        tr_sprintf(msg, sizeof(msg), "No USB device, and no device behind a "
+                   "Thunderbolt port, has the instance ID %s.", opts.EjectId);
+        code = INST_EXIT_REFUSED;
+        goto answer;
     }
     why = ej_why_not(u);
     if (why != NULL || !ej_prepare(u, q)) {
         tr_sprintf(msg, sizeof(msg), "%s cannot be stopped here: %s.",
                    dn_name(&gw.N[u]), why != NULL ? why : "it is not a unit");
-        say(msg, 1);
-        free(q);
-        return INST_EXIT_REFUSED;
+        code = INST_EXIT_REFUSED;
+        goto answer;
     }
     /* This run's request is confirmed as it stands now: a device that
      * appeared under the unit while the elevation was asked is listed, and
-     * the transaction holds to exactly this list. */
-    if (!ej_confirm(NULL, q)) {
-        free(q);
-        return INST_EXIT_REFUSED;
+     * the transaction holds to exactly this list. With /confirmed, the
+     * window's confirmation stands for it when this list has that
+     * digest. */
+    tr_res_digest((const char (*)[TR_ID_CHARS])q->Devs, q->DevCount, digest);
+    if (!(opts.Confirmed && strcmp(digest, opts.ConfirmedDigest) == 0) &&
+        !ej_confirm(NULL, q)) {
+        code = INST_EXIT_REFUSED;
+        tr_copy(msg, "Cancelled; nothing was stopped.", sizeof(msg));
+        goto answer;
+    }
+    /* Not the elevated run itself: a unit not marked removable is offered
+     * with administrator rights here too (section 6.6). */
+    if (!opts.Result &&
+        tr_elev_needed(envNt, inst_unit_not_marked(gw.N[u].HasCaps,
+                                                   gw.N[u].Caps),
+                       ej_is_admin())) {
+        if (!ej_elev_ask(NULL, q)) {
+            code = INST_EXIT_REFUSED;
+            tr_copy(msg, "Cancelled; nothing was stopped.", sizeof(msg));
+            goto answer;
+        }
+        code = ej_elev_run(NULL, q, msg, sizeof(msg));
+        tr_join_lines(msg);
+        goto answer;
     }
     code = ej_run(q, msg, sizeof(msg), &rights);
     tr_join_lines(msg);
+answer:
+    if (opts.Result) {
+        if (elev_child_answer(code, msg)) {
+            free(q);
+            return code;
+        }
+    }
     say(msg, code != INST_EXIT_DONE);
     free(q);
     return code;
@@ -4360,6 +5636,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     }
     InitCommonControls();
     load_routines();
+    watch_start();
     settings_load();
     uc = (UCTRL *)calloc(TR_MAX_CTRL, sizeof(UCTRL));
     up = (UPORT *)calloc(TR_MAX_UPORTS, sizeof(UPORT));

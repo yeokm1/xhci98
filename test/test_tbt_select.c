@@ -201,14 +201,28 @@ static void test_negatives(void)
     CHECK(TbtHwSoftwareNhiVersion(0x0000000CUL), "00h taken");
     CHECK(TbtHwSoftwareNhiVersion(0x0040000CUL), "40h taken");
 
-    /* A reserved router USB4 Version, and the Thunderbolt 3 one. */
-    CHECK_EQ(TbtHwRouterVersion(0x20), TBT_HW_ROUTER_USB4, "20h USB4 1.0");
-    CHECK_EQ(TbtHwRouterVersion(0x40), TBT_HW_ROUTER_USB4, "40h USB4 2.0");
+    /* The router USB4 Version by its major alone (31:29; Linux
+     * usb4_switch_version): major 0 Thunderbolt 3 whatever the minor,
+     * 1 and 2 USB4, 3 to 7 reserved. */
     CHECK_EQ(TbtHwRouterVersion(0x00), TBT_HW_ROUTER_TBT3, "00h Thunderbolt 3");
-    CHECK_EQ(TbtHwRouterVersion(0x10), TBT_HW_ROUTER_RESERVED, "10h reserved");
-    CHECK_EQ(TbtHwRouterVersion(0x21), TBT_HW_ROUTER_RESERVED, "21h reserved");
-    CHECK_EQ(TbtHwRouterVersion(0x60), TBT_HW_ROUTER_RESERVED, "60h reserved");
+    CHECK_EQ(TbtHwRouterVersion(0x02), TBT_HW_ROUTER_TBT3, "02h Thunderbolt 3 (TS3 Plus)");
+    CHECK_EQ(TbtHwRouterVersion(0x03), TBT_HW_ROUTER_TBT3, "03h Thunderbolt 3");
+    CHECK_EQ(TbtHwRouterVersion(0x10), TBT_HW_ROUTER_TBT3, "10h Thunderbolt 3");
+    CHECK_EQ(TbtHwRouterVersion(0x1F), TBT_HW_ROUTER_TBT3, "1Fh Thunderbolt 3");
+    CHECK_EQ(TbtHwRouterVersion(0x20), TBT_HW_ROUTER_USB4, "20h USB4 1.0");
+    CHECK_EQ(TbtHwRouterVersion(0x21), TBT_HW_ROUTER_USB4, "21h USB4 1.1");
+    CHECK_EQ(TbtHwRouterVersion(0x3F), TBT_HW_ROUTER_USB4, "3Fh USB4 1.x");
+    CHECK_EQ(TbtHwRouterVersion(0x40), TBT_HW_ROUTER_USB4, "40h USB4 2.0");
+    CHECK_EQ(TbtHwRouterVersion(0x41), TBT_HW_ROUTER_USB4, "41h USB4 2.1");
+    CHECK_EQ(TbtHwRouterVersion(0x5F), TBT_HW_ROUTER_USB4, "5Fh USB4 2.x");
+    CHECK_EQ(TbtHwRouterVersion(0x60), TBT_HW_ROUTER_RESERVED, "60h major 3 reserved");
+    CHECK_EQ(TbtHwRouterVersion(0x80), TBT_HW_ROUTER_RESERVED, "80h major 4 reserved");
+    CHECK_EQ(TbtHwRouterVersion(0xE0), TBT_HW_ROUTER_RESERVED, "E0h major 7 reserved");
     CHECK_EQ(TbtHwRouterVersion(0xFF), TBT_HW_ROUTER_RESERVED, "FFh reserved");
+    CHECK_EQ(TbtHwRouterVersion(0x120), TBT_HW_ROUTER_RESERVED, "wider than a byte");
+    CHECK_EQ(TBT_USB4_VERSION_MAJOR(0x41), TBT_USB4_MAJOR_2, "41h major");
+    CHECK_EQ(TBT_USB4_VERSION_MINOR(0x41), 1UL, "41h minor");
+    CHECK_EQ(TBT_USB4_VERSION_MINOR(0x02), 2UL, "02h minor");
 
     /* A failed FW_READY is a failed platform readiness. */
     fakeReset();
