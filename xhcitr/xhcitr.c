@@ -3240,6 +3240,9 @@ static void tray_balloon(const char *title, const char *text, int warn);
 #define TR_GETIDLIST_EJECTRELATIONS     0x00000004UL
 #define TR_GETIDLIST_REMOVALRELATIONS   0x00000008UL
 
+/* Why the last set read was not known, for the details. */
+static char setFail[INST_ID_CHARS * 2 + 64];
+
 /* The relations of one kind of devnode `id` added to set (walk indexes):
  * 1 read (possibly none), 0 not read or naming a devnode the walk lacks. */
 static int usb_relations(const WALK *w, const char *id, ULONG flags, int *set,
@@ -3251,23 +3254,32 @@ static int usb_relations(const WALK *w, const char *id, ULONG flags, int *set,
     DWORD cr;
 
     if (api.ListSize == NULL || api.List == NULL) {
+        tr_copy(setFail, "this Windows does not offer the relations call",
+                sizeof(setFail));
         return 0;
     }
     cr = api.ListSize(&len, id, flags);
     if (cr != TR_CR_SUCCESS) {
+        tr_sprintf(setFail, sizeof(setFail), "%s relations of %s: answer 0x%08lX",
+                   flags == TR_GETIDLIST_EJECTRELATIONS ? "ejection" : "removal",
+                   id, (unsigned long)cr);
         return 0;
     }
     if (len <= 1) {
         return 1;
     }
     if (len > 65536UL) {
+        tr_copy(setFail, "a relations list too long", sizeof(setFail));
         return 0;
     }
     buf = (char *)calloc(1, len + 2);
     if (buf == NULL) {
         return 0;
     }
-    if (api.List(id, buf, len, flags) != TR_CR_SUCCESS) {
+    cr = api.List(id, buf, len, flags);
+    if (cr != TR_CR_SUCCESS) {
+        tr_sprintf(setFail, sizeof(setFail), "the relations list of %s: answer "
+                   "0x%08lX", id, (unsigned long)cr);
         free(buf);
         return 0;
     }
@@ -3276,6 +3288,8 @@ static int usb_relations(const WALK *w, const char *id, ULONG flags, int *set,
         int j;
         int seen = 0;
         if (k < 0) {
+            tr_sprintf(setFail, sizeof(setFail), "%s is not in the device list",
+                       p);
             free(buf);
             return 0;
         }
@@ -3521,7 +3535,15 @@ static void details_usb_eject(TR_TEXT *t, int d)
     if (gw.N[d].UsbRule == TR_UE_OFFER) {
         tr_put(t, "  Safely Remove: can be stopped here (Action > Safely Remove)\n");
     } else if (gw.N[d].UsbRule == TR_UE_LISTED) {
+        static int set[TR_USB_SET_MAX + 1];
+        int n;
+        int over;
         tr_printf(t, "  Safely Remove: not now - %s\n", gw.N[d].UsbWhy);
+        setFail[0] = '\0';
+        if (!usb_set(&gw, d, set, TR_USB_SET_MAX + 1, &n, &over) &&
+            setFail[0] != '\0') {
+            tr_printf(t, "  (%s)\n", setFail);
+        }
     } else {
         tr_printf(t, "  Safely Remove: not offered - %s\n",
                   gw.N[d].UsbWhy != NULL ? gw.N[d].UsbWhy : "not a device to stop");
