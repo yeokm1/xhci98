@@ -545,3 +545,21 @@ function with no interrupt pin (MSI only, which 9x cannot use), Windows
 98 disables the function (Code 29) before its driver loads.
 
 - [ ] NOIRQ.1 a design record: how a 9x function with an interrupt pin and no routable IRQ can be started without one (its logical configuration, CONFIGMG, what PCI.VXD requires), with only documented means; the pairing with Stor98's polling mode (Stor98 `docs/PLAN.md`); legs on 98 SE and ME with the IRQ withheld
+
+## Planned - Retiring XHCISNAP
+
+Goal: `XHCISNAP.EXE` and its `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`
+are deprecated in the release after `3.0.0.0` and later removed, the
+xHCI98 USB Tree (`XHCITR.EXE`) taking over everything a user or a bug
+report needs from them.
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 by
+the owner, when `3.0.0.0` made the two drivers' logging consistent:
+`xhci98.sys` answers its own query IOCTL, as `xhcicm.sys` does, and
+XHCITR shows both drivers' logs and sets their logging level. `3.0.0.0`
+still ships `XHCISNAP` unchanged and its release notes say it will be
+deprecated in a subsequent release.
+
+- [ ] SNAP.1 an inventory of what `XHCISNAP` does that XHCITR does not (the raw snapshot regions and the `.DEV` file, `-probe`, the counter-name check, the slot and enumeration regions), and for each a decision: moved into XHCITR, kept as a developer tool outside the package, or dropped
+- [ ] SNAP.2 the deprecation release: the bug-report steps in the README and the release notes, the release acceptance test's `XHCISNAP` steps and the tool's readme rewritten around XHCITR; `XHCISNAP` marked deprecated in its own output
+- [ ] SNAP.3 the removal: `XHCISNAP` and its batch files out of the package and the build, the door's passthru request kept for Windows' own USB property tabs
