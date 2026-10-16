@@ -139,6 +139,17 @@ typedef DWORD (WINAPI *PFN_CM_QREMOVE)(DWORD, ULONG);
 typedef DWORD (WINAPI *PFN_CM_EJECT)(DWORD, PULONG, LPSTR, ULONG, ULONG);
 typedef DWORD (WINAPI *PFN_CM_QANDR_W)(DWORD, PULONG, LPWSTR, ULONG, ULONG);
 typedef DWORD (WINAPI *PFN_CM_LISTSIZE)(PULONG, PCSTR, ULONG);
+/* LOG_CONF and RES_DES are DWORD_PTR: 8 bytes on x64. */
+#ifdef _WIN64
+typedef unsigned __int64 TR_CMH;
+#else
+typedef unsigned long TR_CMH;
+#endif
+typedef DWORD (WINAPI *PFN_CM_FIRSTLC)(TR_CMH *, DWORD, ULONG);
+typedef DWORD (WINAPI *PFN_CM_NEXTRD)(TR_CMH *, TR_CMH, ULONG, ULONG *, ULONG);
+typedef DWORD (WINAPI *PFN_CM_RDSIZE)(ULONG *, TR_CMH, ULONG);
+typedef DWORD (WINAPI *PFN_CM_RDDATA)(TR_CMH, PVOID, ULONG, ULONG);
+typedef DWORD (WINAPI *PFN_CM_FREEH)(TR_CMH);
 typedef DWORD (WINAPI *PFN_CM_LIST)(PCSTR, PCHAR, ULONG, ULONG);
 typedef HDEVINFO (WINAPI *PFN_GETCLASSDEVS)(const GUID *, PCSTR, HWND, DWORD);
 typedef BOOL (WINAPI *PFN_ENUMIFACE)(HDEVINFO, PSP_DEVINFO_DATA, const GUID *,
@@ -164,6 +175,12 @@ static struct {
     PFN_CM_QANDR_W QueryAndRemove;
     PFN_CM_LISTSIZE ListSize;   /* NT: a devnode's removal relations       */
     PFN_CM_LIST List;
+    PFN_CM_FIRSTLC FirstLogConf;    /* the resources (both families)     */
+    PFN_CM_NEXTRD NextResDes;
+    PFN_CM_RDSIZE ResDesSize;
+    PFN_CM_RDDATA ResDesData;
+    PFN_CM_FREEH FreeLogConf;
+    PFN_CM_FREEH FreeResDes;
     PFN_GETCLASSDEVS GetClassDevs;
     PFN_ENUMIFACE EnumIface;
     PFN_IFACEDETAIL IfaceDetail;
@@ -393,6 +410,12 @@ static void load_routines(void)
     api.Property = (PFN_CM_PROP)proc(api.CfgMgr, "CM_Get_DevNode_Registry_PropertyA");
     api.QueryRemove = (PFN_CM_QREMOVE)proc(api.CfgMgr, "CM_Query_Remove_SubTree");
     api.Remove = (PFN_CM_QREMOVE)proc(api.CfgMgr, "CM_Remove_SubTree");
+    api.FirstLogConf = (PFN_CM_FIRSTLC)proc(api.CfgMgr, "CM_Get_First_Log_Conf");
+    api.NextResDes = (PFN_CM_NEXTRD)proc(api.CfgMgr, "CM_Get_Next_Res_Des");
+    api.ResDesSize = (PFN_CM_RDSIZE)proc(api.CfgMgr, "CM_Get_Res_Des_Data_Size");
+    api.ResDesData = (PFN_CM_RDDATA)proc(api.CfgMgr, "CM_Get_Res_Des_Data");
+    api.FreeLogConf = (PFN_CM_FREEH)proc(api.CfgMgr, "CM_Free_Log_Conf_Handle");
+    api.FreeResDes = (PFN_CM_FREEH)proc(api.CfgMgr, "CM_Free_Res_Des_Handle");
     api.Eject = (PFN_CM_EJECT)proc(api.CfgMgr, "CM_Request_Device_EjectA");
     if (api.Eject == NULL) {
         /* Windows 2000 exports it from setupapi.dll alone (record 24
@@ -2144,6 +2167,74 @@ static void refresh_model(int withUsb)
 /* The details                                                               */
 /* ======================================================================== */
 
+/* One logical configuration of devnode dn (kind TR_LC_*), each descriptor
+ * a line; 1 when it had one. Read only, no rights needed. */
+static int res_conf(TR_TEXT *t, DWORD dn, ULONG kind, const char *title)
+{
+    TR_CMH lc = 0;
+    TR_CMH rd;
+    TR_CMH next;
+    ULONG rid = 0;
+    int any = 0;
+    int guard = 0;
+
+    if (api.FirstLogConf == NULL || api.NextResDes == NULL ||
+        api.ResDesSize == NULL || api.ResDesData == NULL ||
+        api.FirstLogConf(&lc, dn, kind) != TR_CR_SUCCESS) {
+        return 0;
+    }
+    tr_printf(t, "  %s:\n", title);
+    rd = lc;
+    while (guard++ < 64 &&
+           api.NextResDes(&next, rd, 0UL, &rid, 0) == TR_CR_SUCCESS) {
+        ULONG size = 0;
+        unsigned char buf[512];
+        if (rd != lc && api.FreeResDes != NULL) {
+            api.FreeResDes(rd);
+        }
+        rd = next;
+        any = 1;
+        if (api.ResDesSize(&size, rd, 0) != TR_CR_SUCCESS || size > sizeof(buf) ||
+            api.ResDesData(rd, buf, size, 0) != TR_CR_SUCCESS) {
+            tr_put(t, "    (a resource that could not be read)\n");
+            continue;
+        }
+#ifdef _WIN64
+        tr_res_text(t, rid, buf, size, kind == TR_LC_ALLOC || kind == TR_LC_BOOT, 1);
+#else
+        tr_res_text(t, rid, buf, size, kind == TR_LC_ALLOC || kind == TR_LC_BOOT, 0);
+#endif
+    }
+    if (rd != lc && api.FreeResDes != NULL) {
+        api.FreeResDes(rd);
+    }
+    if (api.FreeLogConf != NULL) {
+        api.FreeLogConf(lc);
+    }
+    if (!any) {
+        tr_put(t, "    none\n");
+    }
+    return 1;
+}
+
+/* The resources of devnode dn (record 25 revision 10, addendum): what is
+ * allocated, and, with a problem code, what it asked for. */
+static void details_resources(TR_TEXT *t, const DNODE *d)
+{
+    if (api.FirstLogConf == NULL || api.NextResDes == NULL) {
+        return;     /* this Windows does not offer the calls */
+    }
+    if (!res_conf(t, d->Dn, TR_LC_ALLOC, "Resources")) {
+        tr_put(t, "  Resources:     none allocated\n");
+    }
+    if (d->Problem != 0) {
+        res_conf(t, d->Dn, TR_LC_BOOT, "Asked for (boot configuration)");
+        if (!res_conf(t, d->Dn, TR_LC_FILTERED, "Asked for (filtered list)")) {
+            res_conf(t, d->Dn, TR_LC_BASIC, "Asked for (first of the lists)");
+        }
+    }
+}
+
 static void details_devnode(TR_TEXT *t, int dn)
 {
     const DNODE *d;
@@ -2175,6 +2266,19 @@ static void details_devnode(TR_TEXT *t, int dn)
                   (d->Caps & TR_CM_DEVCAP_REMOVABLE) ? "yes" : "no",
                   (d->Caps & TR_CM_DEVCAP_SURPRISEOK) ? "yes" : "no");
     }
+    if (inst_starts(d->Id, "PCI\\")) {
+        unsigned int bus;
+        unsigned int dev;
+        if (envNt && d->HasLoc) {
+            tr_printf(t, "  PCI location:  %02lX:%02lX.%lu\n", (unsigned long)d->Bus,
+                      (unsigned long)(d->Addr >> 16), (unsigned long)(d->Addr & 0xFFFFUL));
+        } else if (!envNt && tr_pci_loc9x(d->Id, &bus, &dev)) {
+            const char *fn = strstr(d->Id, "&FUNC_");
+            tr_printf(t, "  PCI location:  %02X:%02X.%lu\n", bus, dev,
+                      fn != NULL ? strtoul(fn + 6, NULL, 16) : 0UL);
+        }
+    }
+    details_resources(t, d);
 }
 
 static void details_unit(TR_TEXT *t, int dn)

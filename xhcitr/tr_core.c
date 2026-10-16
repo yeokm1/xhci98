@@ -2622,3 +2622,152 @@ int tr_pci_loc9x(const char *id, unsigned int *bus, unsigned int *dev)
     }
     return 1;
 }
+
+static TR_U32 tr_r32(const unsigned char *d)
+{
+    return (TR_U32)d[0] | ((TR_U32)d[1] << 8) | ((TR_U32)d[2] << 16) |
+           ((TR_U32)d[3] << 24);
+}
+
+/* A 64-bit field as hex, without 64-bit arithmetic: the high half only
+ * when it is not zero. */
+static void tr_hex64(char *out, size_t cap, const unsigned char *d, int width)
+{
+    TR_U32 lo = tr_r32(d);
+    TR_U32 hi = tr_r32(d + 4);
+
+    if (hi != 0) {
+        tr_sprintf(out, cap, "%lX%08lX", (unsigned long)hi, (unsigned long)lo);
+    } else if (width == 4) {
+        tr_sprintf(out, cap, "%04lX", (unsigned long)lo);
+    } else {
+        tr_sprintf(out, cap, "%08lX", (unsigned long)lo);
+    }
+}
+
+static void tr_irq_flags(char *out, size_t cap, TR_U32 flags)
+{
+    tr_sprintf(out, cap, "%s, %s", (flags & 0x02UL) ? "edge" : "level",
+               (flags & 0x01UL) ? "shared" : "exclusive");
+}
+
+int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
+                int alloc, int is64)
+{
+    size_t head;
+    size_t range;
+    TR_U32 count;
+    TR_U32 i;
+    char a[24];
+    char b[24];
+    char f[32];
+
+    switch (type) {
+    case TR_RES_MEM:
+    case TR_RES_MEMLARGE:
+        head = 32;
+        range = 36;
+        break;
+    case TR_RES_IO:
+        head = 28;
+        range = 40;
+        break;
+    case TR_RES_DMA:
+        head = 16;
+        range = 12;
+        break;
+    case TR_RES_IRQ:
+        head = is64 ? 24 : 20;
+        range = 12;
+        break;
+    case TR_RES_BUSNUMBER:
+        head = 20;
+        range = 16;
+        break;
+    default:
+        tr_printf(t, "    Resource type 0x%lX (%lu bytes)\n", (unsigned long)type,
+                  (unsigned long)n);
+        return 1;
+    }
+    if (d == NULL || n < head) {
+        tr_put(t, "    (a resource that could not be read)\n");
+        return 0;
+    }
+    count = tr_r32(d);
+    if (!alloc && (count > 64 || (size_t)count * range > n - head)) {
+        tr_put(t, "    (a resource that could not be read)\n");
+        return 0;
+    }
+    if (alloc) {
+        switch (type) {
+        case TR_RES_MEM:
+        case TR_RES_MEMLARGE:
+            tr_hex64(a, sizeof(a), d + 8, 8);
+            tr_hex64(b, sizeof(b), d + 16, 8);
+            tr_printf(t, "    Memory        %s-%s\n", a, b);
+            break;
+        case TR_RES_IO:
+            tr_hex64(a, sizeof(a), d + 8, 4);
+            tr_hex64(b, sizeof(b), d + 16, 4);
+            tr_printf(t, "    I/O           %s-%s\n", a, b);
+            break;
+        case TR_RES_DMA:
+            tr_printf(t, "    DMA           %lu\n", (unsigned long)tr_r32(d + 12));
+            break;
+        case TR_RES_IRQ:
+            tr_irq_flags(f, sizeof(f), tr_r32(d + 8));
+            if (tr_r32(d + 12) >= 0x80000000UL) {
+                /* Vista and 7 give a message-signalled interrupt a
+                 * negative number. */
+                tr_printf(t, "    IRQ           message-signalled (%ld)\n",
+                          (long)tr_r32(d + 12));
+            } else {
+                tr_printf(t, "    IRQ           %lu (%s)\n",
+                          (unsigned long)tr_r32(d + 12), f);
+            }
+            break;
+        default:
+            tr_printf(t, "    Bus numbers   %02lX-%02lX\n", (unsigned long)tr_r32(d + 12),
+                      (unsigned long)tr_r32(d + 16));
+            break;
+        }
+        return 1;
+    }
+    if (count == 0) {
+        tr_put(t, "    (an empty requirement)\n");
+        return 1;
+    }
+    for (i = 0; i < count; i++) {
+        const unsigned char *r = d + head + (size_t)i * range;
+        switch (type) {
+        case TR_RES_MEM:
+        case TR_RES_MEMLARGE:
+            tr_hex64(a, sizeof(a), r + 12, 8);
+            tr_hex64(b, sizeof(b), r + 20, 8);
+            tr_printf(t, "    Memory        %lu bytes in %s-%s\n",
+                      (unsigned long)tr_r32(r + 8), a, b);
+            break;
+        case TR_RES_IO:
+            tr_hex64(a, sizeof(a), r + 12, 4);
+            tr_hex64(b, sizeof(b), r + 20, 4);
+            tr_printf(t, "    I/O           %lu ports in %s-%s\n",
+                      (unsigned long)tr_r32(r + 8), a, b);
+            break;
+        case TR_RES_DMA:
+            tr_printf(t, "    DMA           one of %lu-%lu\n", (unsigned long)tr_r32(r),
+                      (unsigned long)tr_r32(r + 4));
+            break;
+        case TR_RES_IRQ:
+            tr_irq_flags(f, sizeof(f), tr_r32(r + 8));
+            tr_printf(t, "    IRQ           one of %lu-%lu (%s)\n",
+                      (unsigned long)tr_r32(r), (unsigned long)tr_r32(r + 4), f);
+            break;
+        default:
+            tr_printf(t, "    Bus numbers   %lu in %02lX-%02lX\n",
+                      (unsigned long)tr_r32(r + 8), (unsigned long)tr_r32(r),
+                      (unsigned long)tr_r32(r + 4));
+            break;
+        }
+    }
+    return 1;
+}

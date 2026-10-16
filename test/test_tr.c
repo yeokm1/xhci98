@@ -2052,6 +2052,118 @@ static void test_labels(void)
     CHECK(strcmp(tr_port_tag(0, 0x07UL), "") == 0, "port tag: no _EX_V2");
 }
 
+static void test_resources(void)
+{
+    unsigned char d[256];
+    char buf[1024];
+    TR_TEXT t;
+
+    /* An allocated memory range (MEM_DES, 32 bytes). */
+    memset(d, 0, sizeof(d));
+    put32(d, 0, 0);
+    put32(d, 4, 36);
+    put32(d, 8, 0xE0000000UL);
+    put32(d, 16, 0xE00FFFFFUL);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, TR_RES_MEM, d, 32, 1, 0) &&
+          strcmp(buf, "    Memory        E0000000-E00FFFFF\r\n") == 0, "res: memory");
+    /* Above 4 GB, no 64-bit arithmetic. */
+    put32(d, 12, 0x4UL);
+    put32(d, 20, 0x4UL);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, TR_RES_MEMLARGE, d, 32, 1, 0) &&
+          has(buf, "4E0000000-4E00FFFFF"), "res: memory above 4 GB");
+    /* I/O (IO_DES, 28 bytes). */
+    memset(d, 0, sizeof(d));
+    put32(d, 8, 0xE000UL);
+    put32(d, 16, 0xE01FUL);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, TR_RES_IO, d, 28, 1, 0) &&
+          strcmp(buf, "    I/O           E000-E01F\r\n") == 0, "res: I/O");
+    /* IRQ (IRQ_DES_32 20 bytes, x64 24). */
+    memset(d, 0, sizeof(d));
+    put32(d, 8, 0x01UL);
+    put32(d, 12, 10);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, TR_RES_IRQ, d, 20, 1, 0) &&
+          strcmp(buf, "    IRQ           10 (level, shared)\r\n") == 0, "res: IRQ");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(!tr_res_text(&t, TR_RES_IRQ, d, 20, 1, 1) && has(buf, "could not be read"),
+          "res: an x64 IRQ descriptor is 24 bytes");
+    put32(d, 8, 0x02UL);
+    put32(d, 12, 0xFFFFFFFEUL);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, TR_RES_IRQ, d, 24, 1, 1) &&
+          has(buf, "message-signalled (-2)"), "res: an MSI on Vista and 7");
+    /* DMA (16) and bus numbers (20). */
+    memset(d, 0, sizeof(d));
+    put32(d, 12, 3);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, TR_RES_DMA, d, 16, 1, 0) && has(buf, "DMA           3"),
+          "res: DMA");
+    memset(d, 0, sizeof(d));
+    put32(d, 12, 7);
+    put32(d, 16, 8);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, TR_RES_BUSNUMBER, d, 20, 1, 0) &&
+          strcmp(buf, "    Bus numbers   07-08\r\n") == 0, "res: bus numbers");
+    /* A requirement: one IRQ range (12 bytes after the header). */
+    memset(d, 0, sizeof(d));
+    put32(d, 0, 1);
+    put32(d, 4, 12);
+    put32(d, 20, 3);
+    put32(d, 24, 15);
+    put32(d, 28, 0x01UL);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, TR_RES_IRQ, d, 32, 0, 0) &&
+          has(buf, "IRQ           one of 3-15 (level, shared)"), "res: an IRQ asked for");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(!tr_res_text(&t, TR_RES_IRQ, d, 31, 0, 0), "res: a range cut short");
+    put32(d, 0, 100000UL);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(!tr_res_text(&t, TR_RES_IRQ, d, 32, 0, 0), "res: a count too large");
+    /* A memory requirement: 4096 bytes anywhere below 4 GB. */
+    memset(d, 0, sizeof(d));
+    put32(d, 0, 1);
+    put32(d, 32 + 8, 4096);
+    put32(d, 32 + 20, 0xFFFFFFFFUL);
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, TR_RES_MEM, d, 68, 0, 0) &&
+          has(buf, "4096 bytes in 00000000-FFFFFFFF"), "res: memory asked for");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, 0x8001UL, d, 5, 1, 0) && has(buf, "type 0x8001"),
+          "res: a private type, named");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(!tr_res_text(&t, TR_RES_MEM, d, 4, 1, 0), "res: header cut short");
+    {
+        const char *p = buf;
+        int ok = 1;
+        tr_text_init(&t, buf, sizeof(buf));
+        memset(d, 0, sizeof(d));
+        put32(d, 0, 1);
+        put32(d, 32 + 8, 0xFFFFFFFFUL);
+        put32(d, 32 + 12, 0xFFFFFFFFUL);
+        put32(d, 32 + 16, 0xFFFFFFFFUL);
+        put32(d, 32 + 20, 0xFFFFFFFFUL);
+        put32(d, 32 + 24, 0xFFFFFFFFUL);
+        tr_res_text(&t, TR_RES_MEM, d, 68, 0, 0);
+        while (*p) {
+            int k = 0;
+            while (p[k] && p[k] != '\r') {
+                k++;
+            }
+            if (k > 79) {
+                ok = 0;
+            }
+            p += k;
+            while (*p == '\r' || *p == '\n') {
+                p++;
+            }
+        }
+        CHECK(ok, "res: the widest line fits 79 columns");
+    }
+}
+
 int main(void)
 {
     test_printf();
@@ -2069,6 +2181,7 @@ int main(void)
     test_elevated_stop();
     test_login();
     test_labels();
+    test_resources();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {
