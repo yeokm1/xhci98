@@ -738,14 +738,20 @@ make the blanket form safe: a function that differs from its file's blanket
 carries its own tag, and a tag sits adjacent to the function it describes. A
 tag that has drifted onto its neighbour is worse than no tag.
 
-Never use `DbgPrint` outside `#if DBG` guards, with one exception, which is a
-switch a user sets rather than a trace site: the `XhciLogDebugView` sink in
+Never use `DbgPrint` outside `#if DBG` guards, with one exception per binary,
+which is a switch a user sets rather than a trace site: the `XhciLogDebugView` sink in
 `src/hcd_log.c` emits the bounded log ring through `DbgPrint` in every build
 flavour, from the controller thread at PASSIVE_LEVEL only - continuously, on
 every wake, and once more with the counter block at each stop (task 26-A.8) -
 so `ntoskrnl.exe!DbgPrint` is an `all` row in the import allowlist whose
 `SITES` admits `hcd_log.obj` and the qemu trace's `xhci_dbg.obj` and nothing
-else. **Do not widen it to a third call site.** Per-line printing from DPC
+else. `xhcicm.sys` has the same exception, and only it: its
+`XhciCmLogDebugView` sink in `src/cm/cm_log.c` (the owner's decision of
+2026-10-16, design record 21 section 8), under the same rules - the
+connection-manager thread and the PnP stop path only, at PASSIVE_LEVEL, no
+address value below level 4 - an `all` row of `xhcicm`'s own allowlists
+whose `SITES` admits `cm_log.obj` alone. **Do not widen either to another
+call site.** Per-line printing from DPC
 and ISR contexts at real interrupt rates is what bugchecks Windows 98 on bare
 metal (design record 08), and owning the driver object does not change that:
 producers record from any IRQL and only the thread emits. (Until 1.2.0.0 the
