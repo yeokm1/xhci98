@@ -2451,14 +2451,18 @@ read at start.
 2026-10-16, for consistency with `xhci98.sys`): every flavour of
 `xhcicm.sys` hands the log to `DbgPrint` when `XhciCmLogDebugView` is 1,
 from the connection-manager thread after each pass that recorded
-something and from the PnP path at each stop, at `PASSIVE_LEVEL` only, in
-chunks of 128 bytes printed one whole record at a time (`cm_log.c`); the
-checked flavours always do, as before. `cm_log.obj` stays the binary's one
+something and from the PnP path at each stop, at `PASSIVE_LEVEL` only:
+the whole ring drained in one step under `LogLock` into the NHI's own
+buffer, then printed one whole record a `DbgPrint`, at most 128 bytes
+each (`cm_log.c`, `CmQueryLogEmitLines`); the checked flavours always
+do, as before. `cm_log.obj` stays the binary's one
 `DbgPrint` site, now an `all` row of both `xhcicm` allowlists. Below level
 4 the emission withholds the value of each address record
-(`CmQueryLogLine`, the query answer's rule), and a line the wrap may have
-cut since the last emission is not printed, so no flavour publishes an
-address below the level that asks for one.
+(`CmQueryLogLine`, the query answer's rule), and a first line the wrap
+may have cut since the last drain is not printed, so no flavour publishes
+an address below the level that asks for one. An `XhciCmLogVerbosity`
+that exists but is not a `DWORD` is refused (the default stands) and the
+old name is not read in its place (`cm.log.verbosity-from` 3).
 The counters are no longer only written at stop: the thread formats them
 after each pass in the stop dump's names, the child filters' attached,
 skipped and refused among them, and the query device serves them at every
