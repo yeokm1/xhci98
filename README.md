@@ -2,12 +2,14 @@
 
 xHCI98 is a USB host controller driver (HCD) for xHCI (USB 3.x) controllers on Windows 98 SE, ME, 2000, XP (x86/x64), Vista (x86/x64) and 7 (x86/x64).
 
+Experimental support for USB4 and Thunderbolt 3/4 is also included.
+
 It replaces Windows' own USB port and hub drivers, so it is not limited to USB 2.0. It drives:
 
 - SuperSpeed (USB 3.x) devices and hubs
 - USB 2.0 and 1.1 (High, Full and Low Speed) devices and hubs
 - UAS (USB Attached SCSI) storage, through a second driver, `xhciuas.sys`
-- Thunderbolt 3 and USB4 docks and enclosures, through a third driver, `xhcicm.sys`
+- Thunderbolt 3 and USB4 docks and NVMe enclosures through a third driver, `xhcicm.sys`
 
 It is built to Intel's xHCI specification and tested mainly on Intel machines. Other vendors' controllers carry no guarantee, though best effort has been made for the quirks of Fresco Logic, ASMedia, AMD, TI, Etron, VIA and some Intel controllers, even ones built to the xHCI 0.96 draft standard.
 
@@ -59,9 +61,6 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 | Lunar Lake, Panther Lake, Wildcat Lake, Barlow Ridge | `A833`, `A834`, `E333`, `E334`, `E433`, `E434`, `4D33`, `5781`, `5784` | xHCI98 USB4 Host Router |
 | AMD, ASMedia and any other USB4 host | `1022:1668`, `1022:1669`, PCI class `0C0340` | xHCI98 USB4 Host Router |
 
-- **If the driver starts and does nothing** on your machine, the debug build's log says why, and `XhciCmMode` `0` turns it off. Reports from any Thunderbolt or USB4 machine, working or not, are very welcome. The release notes' [Untested hosts](docs/using/release-notes.md#which-controllers) has the detail.
-- **Not supported:** daisy chains (a device behind another device), DisplayPort over the cable, Apple machines and their controllers.
-
 ### Before you start: the BIOS
 
 - Boot in legacy (CSM) mode, as for every system here.
@@ -87,16 +86,15 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 - A **dock** is listed under a generic PCI bridge name (its own switch); stopping it stops everything in the dock.
 - A **device missing from Windows' list** (its first plug, or after a disable and enable or a driver update): the USB Tree and `INSTALL /eject` stop it when run as an administrator. Without one, close every program using it, unplug it and plug it in once more; from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
 - `INSTALL /devices` lists the connected devices (name, generation, approval, connections) and the Windows devices behind each. `INSTALL /eject` asks which one, asks Windows to stop it (refused, with nothing changed, while a program has a file open on it), and says "You can now unplug the device." For scripts: `INSTALL /eject 2`, or `INSTALL /eject id=<instance id> /yes`.
-- Run these in a Command Prompt (MS-DOS Prompt on 98 SE and ME): as an administrator on 2000 and XP; Vista and 7 ask for elevation. `tools\xhciinst\XHCIINST` (`XHCIIN64` on 64-bit Windows) takes the same switches.
+- These commands need administrator permissions on Win 2000+.
 
 ### NVMe drives
 
 An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **[Stor98](https://github.com/yeokm1/stor98)**, a separate project, is that driver for Windows 98 SE to 7: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive.
 
-- The package carries Stor98 `0.4.0.0`, unchanged, in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). It reads `xhcicm.sys`'s link-state channel on every system, 98 SE to 7.
+- The package carries Stor98 in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). It reads `xhcicm.sys`'s link-state channel on every system, 98 SE to 7.
 - Stor98's settings, install steps and limits are in its own readme, `stor98-readme.txt` beside it. The release notes have [the detail](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).
 - `INSTALL.BAT` does not install it. When the NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
-- On Vista x64 and 7 x64 the 64-bit `stor98.sys` is test-signed by Stor98's own project (`stor98-test.cer` is its certificate's public half). The test-signing mode the x64 drivers already need loads it too. You do not need to import either `.cer`.
 
 ### Things to know
 
@@ -108,16 +106,11 @@ An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **
 
 ## The xHCI98 USB Tree
 
-`XHCITR.EXE` (`XHCITR64.EXE` on 64-bit Windows) shows every USB controller, hub and device, and every Thunderbolt 3 and USB4 controller and device, with their details. It needs no administrator rights. The install puts it in its install directory (`C:\XHCI98` by default, or `INSTALL /to <path>`) and starts it at login as a notification-area icon; it is also in the package at `tools\xhcitr\`.
+`XHCITR.EXE` (`XHCITR64.EXE` on 64-bit Windows) shows every USB and Thunderbolt/USB4 controller and device. It needs no administrator rights. The install starts it at login as a notification-area icon (untick Start at login in its menus to stop that); it is also in `tools\xhcitr\`.
 
-- **Window:** a tree, and the selected item's speed, port, IDs, driver and Device Manager status. View > Descriptors decodes descriptors. File > Save Report writes everything to a text file for a bug report.
-- **Icon:** a left click lists the USB storage and Thunderbolt/USB4 devices you can remove safely; a double click opens the window. Balloons report connects, approvals and disconnects (2000, ME and later; on 98 SE the tooltip shows the last event).
-- **Safely Remove:** pick the device, confirm, and unplug when told. It follows the rules of `INSTALL /eject`, on every system. USB sticks and disks (named by drive letter) can be stopped this way on 98 SE and ME too; a keyboard, mouse, hub or camera is shown, not stopped.
-- **Driver log:** each xHCI controller and each Thunderbolt or USB4 controller has a "Driver log" item with the running driver's counters and log; Save Report includes both, so no debug build is needed. When a log is off, the item says how to turn it on ([The log, and how to send one](docs/using/release-notes.md#the-log-and-how-to-send-one)).
-- **PCI configuration:** an item per xHCI and Thunderbolt/USB4 controller showing what Windows does not (interrupt pin and line, MSI and MSI-X, PCI Express link, BARs, a bridge's buses and windows), and under a Thunderbolt controller its tunnel ports and the devices behind them. Read only ([details](docs/using/release-notes.md#the-xhci98-usb-tree)).
-- **Resources:** every item's details end with its PCI location and what Windows allocated it (memory, I/O, IRQ, bus numbers) and, for a device with a problem code, what it asked for ([design record 25](docs/contributing/design/25-usb-tree-tool.md)).
-- **Logging level:** both drivers record at level 2 by default, at a small cost in speed. To turn either driver's log off, open the xHCI98 USB Tree's View > Logging level..., set `0` and restart (`SNAPOFF.BAT` still does it for `xhci98.sys`) ([details](docs/using/release-notes.md#the-log-and-how-to-send-one)).
-- **Start at login:** untick it in the View menu or the icon's right-click menu (per user, no administrator needed). `INSTALL /notray` turns it off for every user.
+- **Safely Remove:** left-click the icon, pick the device and unplug when told. Works for USB storage on 98 SE and ME too.
+- **Details:** each item's speed, port, IDs, driver, Device Manager status, resources and PCI configuration. File > Save Report writes it all to a text file for a bug report.
+- **Driver log:** each controller has a "Driver log" item, included in Save Report. View > Logging level... sets either driver's level (default 2, `0` for off; takes effect after a restart).
 
 Details: [the release notes' USB Tree section](docs/using/release-notes.md#the-xhci98-usb-tree).
 
