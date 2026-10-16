@@ -800,11 +800,16 @@ int inst_own_service(const char *service)
            inst_eq(service, "xhcicm");
 }
 
+/* The fields of one INF line inst_inf_is_ours reads for the bundled
+ * driver's name. */
+#define INST_INF_SCAN_FIELDS 64
+
 /* A field of the INF with every %token% in it expanded from [Strings] (a
  * token anywhere in the field, "%%" a percent sign, an unknown token left
- * as written) and its quotes removed, then compared as the bundled
- * driver's service (service) or file. */
-static int inst_inf_bundled(const char *text, const char *field, int service)
+ * as written) and its quotes removed: 1 when it names the bundled driver
+ * (inst_bundled_file: its service and every file of it start with
+ * "stor98"). */
+static int inst_inf_bundled(const char *text, const char *field)
 {
     char raw[INST_LINE_CHARS];
     char expanded[INST_LINE_CHARS];
@@ -845,8 +850,7 @@ static int inst_inf_bundled(const char *text, const char *field, int service)
     }
     expanded[n] = '\0';
     inst_unquote(expanded);
-    return service ? inst_bundled_service(expanded)
-                   : inst_bundled_file(expanded);
+    return inst_bundled_file(expanded);
 }
 
 int inst_inf_is_ours(const char *text)
@@ -858,6 +862,7 @@ int inst_inf_is_ours(const char *text)
     char provider[INST_LINE_CHARS];
     const char *p = inst_inf_section(text, "Version");
     int providerOk = 0;
+    int k;
 
     while ((p = inst_inf_line(p, line, sizeof(line))) != NULL) {
         if (inst_inf_kv(line, key, sizeof(key), value, sizeof(value)) &&
@@ -873,23 +878,30 @@ int inst_inf_is_ours(const char *text)
     if (!providerOk) {
         return 0;
     }
-    /* The bundled Stor98 shares the Provider: an INF that installs its
-     * service or names one of its files is never this package's. */
+    /* The bundled Stor98 shares the Provider: an INF any field of which,
+     * its %tokens% expanded, starts with "stor98" (its service, its files,
+     * its strings) is never this package's, whatever directive or value
+     * name carries it; no INF of this package has such a field. */
     p = text;
     while ((p = inst_raw_line(p, line, sizeof(line))) != NULL) {
-        if (inst_inf_kv(line, key, sizeof(key), value, sizeof(value)) &&
-            inst_eq(key, "AddService") &&
-            inst_inf_field(value, 0, field, sizeof(field)) &&
-            inst_inf_bundled(text, field, 1)) {
-            return 0;
+        for (k = 0; k < INST_INF_SCAN_FIELDS; k++) {
+            if (!inst_inf_field(line, k, field, sizeof(field))) {
+                break;
+            }
+            if (inst_inf_bundled(text, field)) {
+                return 0;
+            }
         }
-        if (inst_inf_field(line, 0, field, sizeof(field)) &&
-            inst_eq(field, "HKR") &&
-            inst_inf_field(line, 2, field, sizeof(field)) &&
-            (inst_eq(field, "PortDriver") || inst_eq(field, "NTMPDriver")) &&
-            inst_inf_field(line, 4, field, sizeof(field)) &&
-            inst_inf_bundled(text, field, 0)) {
-            return 0;
+        if (!inst_inf_kv(line, key, sizeof(key), value, sizeof(value))) {
+            continue;
+        }
+        for (k = 0; k < INST_INF_SCAN_FIELDS; k++) {
+            if (!inst_inf_field(value, k, field, sizeof(field))) {
+                break;
+            }
+            if (inst_inf_bundled(text, field)) {
+                return 0;
+            }
         }
     }
     p = text;

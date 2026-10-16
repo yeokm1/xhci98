@@ -497,6 +497,15 @@ static void test_parser(void)
                            "[S]\r\nAddService=xhcicm,2,X\r\n"
                            "[T]\r\nHKR,,PortDriver,,100%%.mpd\r\n"),
           "%% is a percent sign, not Stor98's");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nHKR,,%DriverValue%,,stor98.mpd\r\n"
+                            "[Strings]\r\nDriverValue=PortDriver\r\n"),
+          "a value name given as a token");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[SourceDisksFiles]\r\nstor98.sys=1\r\n"),
+          "a file named as a key");
 }
 
 static void test_ids(void)

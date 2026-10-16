@@ -135,9 +135,9 @@ int inst_inf_addreg_default(const char *text, const char *name,
 
 /* 1 when the INF is this project's: its [Version] Provider (expanded) is
  * "Yeo Kheng Meng", it installs one of the services xhci98, xhciuas,
- * xhcicm (AddService) or names one of their files as NTMPDriver, and it
- * neither installs the bundled driver's service nor names one of its files
- * as PortDriver or NTMPDriver (Stor98's INF has the same Provider). */
+ * xhcicm (AddService) or names one of their files as NTMPDriver, and none
+ * of its fields, %tokens% expanded, names the bundled driver (starts with
+ * "stor98": Stor98's INF has the same Provider). */
 int inst_inf_is_ours(const char *text);
 
 /* ---- ids --------------------------------------------------------------------- */
