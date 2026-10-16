@@ -1,6 +1,6 @@
 @echo off
 rem snapoff.bat - turns the xhci98 log channel off: runs XHCISNAP -disable,
-rem which sets XhciLogVerbosity back to 0, what the INF ships, on every
+rem which sets XhciLogVerbosity to 0 (off; the INF ships 2 since 3.0.0.0) on every
 rem xhci98 controller (roadmap-hcd task 38.1). Run it once the report from
 rem SNAPGET.BAT has been sent. It is in the download's tools\xhcisnap
 rem directory, beside XHCISNAP.EXE.

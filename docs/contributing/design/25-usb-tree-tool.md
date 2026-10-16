@@ -37,12 +37,16 @@ does not, read-only, through this package's drivers: a "PCI
 configuration" node under each NHI and each xhci98 controller (section
 3.6). `xhcicm.sys`'s query device answers a third request with the
 configuration space of the NHI, of each tunnel port and, on 2000 and
-later, of every function below a tunnel port (section 4.7); `xhci98.sys`'s
-door serves its controller's configuration space as snapshot region 4
-(section 4.8), the one change to that driver this record makes, which
-reopens decision T3 for that region alone. Sections 1.2, 10, 11 and 12
-change with it. (Revisions 10 and 11 are on the `3.0.0.0` line: the
-per-user start at login and the elevated stop.)
+later, of every function below a tunnel port (section 4.7). `xhci98.sys`
+gains a query request of its own on `\\.\HCD<n>`, framed as `xhcicm.sys`'s
+log request is, that serves its log ring, its counter block and its
+controller's configuration space (section 4.8; the owner's
+logging-consistency decision of 2026-10-16, which reopens decision T3),
+and XHCITR reads xhci98's "Driver log" through it too. Both drivers'
+logging level defaults to 2 from this revision (the owner, 2026-10-16;
+design record 08 section 13.2, amended). Sections 1.2, 3.5, 4.6, 10, 11
+and 12 change with it. (Revisions 10 and 11 are on the `3.0.0.0` line:
+the per-user start at login and the elevated stop.)
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
@@ -99,8 +103,8 @@ authentication material.
   window and the report (sections 3.5, 4.5 and 4.6).
 - Since revision 12, the PCI configuration of the NHI, its tunnel ports,
   the functions below them and each xhci98 controller, read-only, in the
-  window and the report (sections 3.6, 4.7 and 4.8); `xhci98.sys` changes
-  for that one read-only region (decision T3).
+  window and the report (sections 3.6, 4.7 and 4.8); `xhci98.sys` gains a
+  read-only query request for it and for its log (decision T3).
 - An application icon (owner): `xhcitr\xhcitr.ico`, drawn for this project
   (section 9).
 
@@ -308,7 +312,8 @@ branch, marked "(behind <router name>)".
   section; nothing is taken from a Microsoft header.
 - **Older drivers.** A driver from before revision 12 is said as "Not
   served by this xhcicm.sys" or "Not served by this xhci98.sys: it is
-  older than this tool".
+  older than this tool". A configuration read the driver could not make
+  reads "Unread".
 
 ## 4. The query device in `xhcicm.sys`
 
@@ -486,6 +491,9 @@ counters as text, then the log as text. Both texts are ASCII lines
 
 ### 4.6 `xhci98.sys`'s log, read as `XHCISNAP` reads it (revision 9)
 
+Since revision 12 the tool reads xhci98's log through its query request
+(section 4.8) and comes here only for a driver that refuses it.
+
 No driver change (decision T3 holds). The tool opens the controller as it
 already does (`\\.\HCD<n>`, or its interface path) and sends
 `IOCTL_USB_USER_REQUEST` with `USBUSER_PASS_THRU` and the snapshot GUID,
@@ -569,30 +577,45 @@ header type and bus numbers its walk needs.
   a filter's lifetime; `HalGetBusData` reaches every function the walk
   names on every target, with no stack.
 
-### 4.8 `xhci98.sys`'s PCI region (revision 12)
+### 4.8 `xhci98.sys`'s query request (revision 12)
 
-The door's snapshot (record 13 section 8.8) gains region 4,
-`XHCI_SNAPSHOT_REGION_PCI` (`src\xhci.h`): the controller's configuration
-space 00h to FFh, byte for byte, read when the window is cut, one DWORD
-at a time through `HcdSvcConfigSpace`'s `IRP_MN_READ_CONFIG` to the PCI
-PDO - the route every configuration access of that driver takes - at
-`PASSIVE_LEVEL` under the door gate, before the power gate and the
-controller lock; never written, read in no interrupt, transfer or power
-path, and the last-access diagnostics that route keeps are put back. A
-refused read, or a first DWORD of all ones, answers
-`XHCI_SNAPSHOT_S_NOT_READ` with no payload; the window never fails for
-it.
+The owner's logging-consistency decision of 2026-10-16: `xhci98.sys` is
+read as `xhcicm.sys` is, through a request of its own, not the USBUSER
+pass-through. `IOCTL_XHCI98_QUERY` =
+`CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA48, METHOD_BUFFERED, FILE_ANY_ACCESS)` =
+`0x00222920`, no input, on the controller's own `\\.\HCD<n>`, answered by
+the HCD's dispatch at `PASSIVE_LEVEL`. Record 13 section 8.12 specifies
+it; the layout is `src\xhci_qry.h`'s `XHQ_*`: a 64-byte header (magic
+`XHCQ`, version 1, size, flags, the level applied and as read, the
+offsets and lengths of the counter block, the log and the configuration
+space, the ring's appends and overwritten bytes, the configuration
+read's state, the build flavour), then the parts. Sizing is `XCMQ`'s.
 
-- **Every verbosity.** Regions 0 to 3 are refused at `XhciLogVerbosity`
-  0 as before; region 4 is answered at every level, 0 included, because
-  0 is the default and the region is not the log channel: it holds no
-  driver state and no kernel address.
-- **Compatibility.** The schema stays 5 and regions 0 to 3 are unchanged.
-  An older driver answers region 4 with `XHCI_SNAPSHOT_S_BAD_REGION`, or
-  at level 0 not at all; the tool says "not served by this xhci98.sys"
-  for both. An older tool never asks.
-- The tool asks one window at offset 0 and decodes it only when it holds
-  the whole 256 bytes.
+- **What it serves follows the level**, as `xhcicm.sys`'s log answer
+  does, and it is not gated by the door's enable step: the counter block
+  (`XHCIHC_COUNTERS`, little-endian words, the one word the door computes
+  computed the same way) from level 1; the log ring as text, oldest first,
+  at levels 2 and 3 - at level 4 it can hold kernel addresses and is
+  withheld (`XHQ_F_WITHHELD`), as section 4.6 withholds it; and the
+  controller's configuration space 00h to FFh at every level, 0 included,
+  because it is not the log.
+- **The configuration space** is read on demand, one DWORD at a time
+  through `HcdSvcConfigSpace`'s `IRP_MN_READ_CONFIG` to the PCI PDO, at
+  `PASSIVE_LEVEL` under the door gate, before the controller lock; never
+  written, read in no interrupt, transfer or power path. A refused read is
+  `XHQ_PCI_FAILED`, a first DWORD of all ones `XHQ_PCI_ABSENT`; the tool
+  says "unread" for both.
+- **The ring and the counters** are copied under the controller lock,
+  the lock the door's snapshot copies them under, straight into the
+  request's buffer.
+- **Compatibility.** The USBUSER pass-through, its clause table and its
+  regions are untouched, so `usbui.dll` and `XHCISNAP` read the driver as
+  before. An older `xhci98.sys` answers the request with
+  `STATUS_INVALID_DEVICE_REQUEST`: the tool reads its log through the
+  door as section 4.6 has it, and says "not served by this xhci98.sys"
+  for its configuration space. `XHCISNAP` stays in `3.0.0.0` unchanged;
+  its retirement is the roadmap's "Planned - Retiring XHCISNAP" (SNAP.1
+  to SNAP.3).
 
 ## 5. The USB branch
 
@@ -1023,8 +1046,11 @@ refused read, an absent function, 98's "not read", the sizing answers)
 and the tool's reader and decoders (`xhcitr\tr_pci.c`: the answer's bad
 shapes, pin and line, MSI, MSI-X, the link, BARs, windows, the capability
 walk with a clear Status bit, a loop, a self loop, a bad and an unaligned
-pointer, a cut and a capability past the 256 bytes, xhci98's region
-answers, 79 columns on a worst case) in `test\test_trpci.c`.
+pointer, a cut and a capability past the 256 bytes, 79 columns on a worst
+case) in `test\test_trpci.c`; xhci98's query answer (`src\xhci_qry.c`:
+what each level serves, the ring's text and cut, the configuration read's
+states, the sizing) and the tool's reader and texts of it in
+`test\test_xhq.c`, with the default level.
 
 ## 11. Legs
 
@@ -1038,7 +1064,7 @@ answers, 79 columns on a worst case) in `test\test_trpci.c`.
 | T.6 | every target | the record 24 legs of XHCIINST still pass with the changed `xhcicm.sys` |
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
 | T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
-| T.9 | 98 SE (TB3 enclosure), 7 x86 as a standard user; xhci98's node on 98 SE, ME, 2000, XP, 7 x86 and 7 x64 | revision 12: the NHI's node shows the NHI and the tunnel port with pin and line and capabilities; below the port, the enclosure's functions on 7 and "not read on this system" on 98 SE; xhci98's controller decoded at the default verbosity 0; `/report` holds both; with the HCD regression (enumeration, a mass-storage copy, an unplug and re-plug) on each of the six |
+| T.9 | 98 SE (TB3 enclosure), 7 x86 as a standard user; xhci98's nodes on 98 SE, ME, 2000, XP, 7 x86 and 7 x64 | revision 12: the NHI's node shows the NHI and the tunnel port with pin and line and capabilities; below the port, the enclosure's functions on 7 and "not read on this system" on 98 SE; xhci98's PCI node and Driver log node read through the query request at the new default level 2; `/report` holds them; with the HCD regression (enumeration, a mass-storage copy, an unplug and re-plug) on each of the six |
 
 ## 12. Decisions
 
@@ -1054,11 +1080,14 @@ answers, 79 columns on a worst case) in `test\test_trpci.c`.
   lane rate and count; the BOS gives what a device supports, and the tool
   labels it so. A change to the HCD this close to the cut would reopen its
   whole regression for that one detail. **Revised by revision 12** (the
-  owner's PCI request, 2026-10-16): the controller's configuration space
-  is in neither the HCD region nor anything else the door serves, and no
-  user-mode route reads it, so `xhci98.sys` gains one read-only snapshot
-  region (section 4.8) and nothing else; the HCD's regression is run
-  again for it. The negotiated lane rate and count stay "not reported".
+  owner's PCI request and logging-consistency decision, 2026-10-16): the
+  controller's configuration space is in nothing the door serves and no
+  user-mode route reads it, and the owner chose to read `xhci98.sys` as
+  `xhcicm.sys` is read, so `xhci98.sys` gains one read-only query request
+  (section 4.8) serving its log, its counters and its configuration space,
+  with the USBUSER pass-through unchanged; its default logging level moves
+  to 2 in the same revision. The HCD's regression is run again for both.
+  The negotiated lane rate and count stay "not reported".
 - **T4** No new install question; `/notray` opts out of the Run value.
 - **T5** The tool links `inst_core.c` for record 24's rules and texts, and
   shares XHCIINST's mutex, with a security descriptor both can open.
@@ -1113,9 +1142,14 @@ answers, 79 columns on a worst case) in `test\test_trpci.c`.
   function's 256 bytes whether anyone asked or not. It is configuration
   space as read, decoded by the tool, so the driver carries no decoder
   that could drift from the tool's.
-- **T17** xhci98's region 4 is served at `XhciLogVerbosity` 0, the default,
-  while regions 0 to 3 stay shut there: otherwise no default install would
-  show it, and the region carries no log, no driver state and no address.
+- **T17** (owner) `xhci98.sys`'s query request serves the configuration
+  space at every level and is not gated by the door's enable step; what it
+  serves of the log follows the level as `xhcicm.sys`'s does. Level 4's
+  ring is withheld by the driver, as the tool already withheld it.
+- **T18** (owner, 2026-10-16) Both drivers' logging level defaults to 2:
+  the ring records, with no addresses. The cost of the append sites on
+  Windows 98 metal stays unmeasured until the owner's P14s reading (design
+  record 08 section 13.2, amended).
 
 ## 13. Open
 

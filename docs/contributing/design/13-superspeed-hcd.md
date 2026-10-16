@@ -3597,17 +3597,6 @@ system buffer is non-paged already). Answering request 1 for `usbui.dll` and
 request 3 for the tool from one dispatcher keeps the "8-entry table" refusal
 semantics.
 
-**Region 4, PCI configuration** (`3.0.0.0`, design record 25 revision 12,
-section 4.8): the controller's configuration space 00h to FFh, read when
-the window is cut, one DWORD at a time through `HcdSvcConfigSpace`'s
-`IRP_MN_READ_CONFIG` at PASSIVE under the door gate, before the power gate
-and the controller lock, and never written; `XHCI_SNAPSHOT_S_NOT_READ`
-(`0x40`) with no payload where a read is refused or the first DWORD reads
-all ones. It is the one region answered at `XhciLogVerbosity` 0: the
-"channel shut" clause above (status 6) still holds for regions 0 to 3. The
-schema stays 5; an older driver answers region 4 with
-`XHCI_SNAPSHOT_S_BAD_REGION`, and `XHCISNAP` never asks for it.
-
 What does change in the tool: (a) its software-key finder, which accepts a
 key on `NTMPDriver = xhci98.sys` or the miniport's `InfSection`
 (`xhcisnap.c` about lines 1466-1640), learns the HCD INFs' section names (the
@@ -3932,6 +3921,53 @@ iManufacturer, iProduct and the interface strings at every enumeration would
 add EP0 requests to every device's enumeration - the step where a device is
 least tolerant - for a diagnostic view, and XP's and 2000's hubs read none
 there either. Every string goes to the device when it is asked for.
+
+### 8.12 The query request (`3.0.0.0`, design record 25 revision 12)
+
+The owner's logging-consistency decision of 2026-10-16: the HCD is read as
+`xhcicm.sys` is read (design record 25 section 4.5), through a request of
+its own on the device it already creates, `\\.\HCD<n>`, and not through
+the USBUSER pass-through of section 8.8, which stays byte-compatible for
+`usbui.dll` and `XHCISNAP`.
+
+- **The request.** `IOCTL_XHCI98_QUERY` =
+  `CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA48, METHOD_BUFFERED, FILE_ANY_ACCESS)`
+  = `0x00222920` (a vendor-range function code beside `xhcicm.sys`'s
+  `0xA40` to `0xA42`, and none of the hub or USBUSER codes this section
+  lists), no input, answered by `HcdDoorControllerIoctl` at
+  `PASSIVE_LEVEL`. Any user may send it (`FILE_ANY_ACCESS`; the device is
+  opened with no access rights).
+- **The answer** (`src\xhci_qry.h`, `XHQ_*`; composed by the pure
+  `src\xhci_qry.c`, host suite `test_xhq`): a 64-byte header (magic
+  `XHCQ`, version 1, size, flags, `XhciLogVerbosity` applied and as read,
+  the offsets and lengths of three parts, the ring's appends and
+  overwritten bytes, the configuration read's state, the build flavour),
+  then the counter block, the log and the configuration space. Under 64
+  bytes of output buffer `STATUS_BUFFER_TOO_SMALL`; under the whole the
+  header alone with the size needed; at most 18,752 bytes.
+- **What it serves follows the level**, as `xhcicm.sys`'s log answer
+  does, and is not gated by the door's enable step (status 6 at level 0
+  stays the pass-through's alone): `XHCIHC_COUNTERS` from level 1, as
+  little-endian words, with `Usb2HubSpeedFallbackSlots` computed as the
+  HCD region computes it; the note ring as text, oldest byte first, at
+  levels 2 and 3 - a byte outside printable ASCII, CR and LF written `.`,
+  the text starting after the first line feed when the wrap has
+  overwritten bytes or `XhciLogDebugView` drains the ring; withheld at
+  level 4, which records kernel addresses; and the controller's
+  configuration space 00h to FFh at every level.
+- **The configuration space** is read on demand, one DWORD per
+  `IRP_MN_READ_CONFIG` through `HcdSvcConfigSpace` (the route of every
+  configuration access here), at PASSIVE under the door gate - no start
+  or stop meanwhile - and before the controller lock; never written, never
+  read in an interrupt, transfer or power path; the last-access
+  diagnostics that service keeps for the start's log lines are put back.
+  A refused read is `XHQ_PCI_FAILED`, a first DWORD of all ones
+  `XHQ_PCI_ABSENT`, and neither fails the request.
+- **The ring and the counters** are copied under the controller lock,
+  as the snapshot's windows are, straight into the system buffer.
+- **An older driver** answers `STATUS_INVALID_DEVICE_REQUEST` (the
+  dispatch's default); `XHCITR` then reads the log through the
+  pass-through as before and says the configuration space is not served.
 
 ## 9. The harness and the gates (task 25.5)
 

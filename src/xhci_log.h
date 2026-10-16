@@ -10,7 +10,8 @@
  * separated what is RECORDED from what is EMITTED**, which is the defect the
  * rest of this file used to have:
  *
- *   - **`XhciLogVerbosity`** (`DWORD`, **0** by default) is the 0-4 ladder and
+ *   - **`XhciLogVerbosity`** (`DWORD`, **2** by default since 2026-10-16,
+ *     0 before) is the 0-4 ladder and
  *     it is the whole switch: **0 is off outright** - the PassThru read channel
  *     (`xhciPassThru` in src/xhci_dispatch.c, the wire format in src/xhci.h)
  *     answers exactly `MP_STATUS_NOT_SUPPORTED`, which is what a binary built
@@ -270,7 +271,8 @@
  * The verbosity ladder (task 13-L.2)
  * ------------------------------------------------------------------
  *
- * `XhciLogVerbosity`, `REG_DWORD`, default **0**. **Level 0 is off outright**;
+ * `XhciLogVerbosity`, `REG_DWORD`, default **2** since the owner's decision
+ * of 2026-10-16 (0 before; see below). **Level 0 is off outright**;
  * above it each level is the one below **plus** one thing, so an engaged level
  * is always a superset and never a different report:
  *
@@ -434,8 +436,9 @@ typedef struct _XHCI_LOG {
      * **The absent-versus-explicit-zero distinction is the two `SwitchStatus`
      * fields above**, not this one: SUCCESS beside a value of 0 is a zero
      * somebody set, any other status beside 0 is nothing found. The driver
-     * treats all of them identically and must, because every default is 0; the
-     * distinction is for the reader of a dump.
+     * treats all of them identically and must, because every default was 0
+     * (the verbosity's is 2 since 2026-10-16, which an absent value reads
+     * as); the distinction is for the reader of a dump.
      *
      * *(This comment, and eight other places in the tree, credited this field
      * with that distinction until the post-Phase 13 review rounds.)*

@@ -3403,7 +3403,7 @@ says they were skipped and is otherwise the same.
 
 | Value | What it does |
 |---|---|
-| `XhciLogVerbosity` | `0` off (the driver does not answer `XHCISNAP` at all); `1` counters only; `2` adds the log of what happened (use this one); `3` adds the USB port register table; `4` everything, including internal addresses in the plain-text report. A value outside `0`-`4` is treated as `0` |
+| `XhciLogVerbosity` | `0` off (the driver does not answer `XHCISNAP` at all); `1` counters only; `2` adds the log of what happened (use this one); `3` adds the USB port register table; `4` everything, including internal addresses in the plain-text report. The default is `2` since `3.0.0.0` (`0` before; an update keeps the value already there). A value outside `0`-`4` is treated as the default |
 | `XhciLogDebugView` | `1` hands the log to a debug-output capture tool (DebugView) from the driver's own thread as it runs, and once more at each stop. Use it only when asked |
 
 Since `2.2.0.0` the report also says what happened to a device on a root

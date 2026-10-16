@@ -2795,7 +2795,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     ext->InterruptLevel = (ULONG)hc->IntIrql;
     ext->InterruptMode = (ULONG)hc->IntMode;
     XhciLogNoteAddress(ext, "start.bar", hc->BarRaw.LowPart);
-    XhciLogNote(ext, "start.common.pa", ext->StartPA);
+    /* A DMA address: recorded at level 4 alone, with the other addresses,
+     * so levels 2 and 3 carry none (design record 25 revision 12). */
+    XhciLogNoteAddress(ext, "start.common.pa", ext->StartPA);
     XhciLogNote(ext, "start.mapregs", hc->MapRegisters);
     hcdXstatGrant(hc);
     /* 36.24: after the grant, before anything is enumerated. */

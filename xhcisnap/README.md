@@ -37,9 +37,10 @@ it.
 
 ## What it needs
 
-- The channel switched on. `XhciLogVerbosity` defaults to `0` on every machine,
-  and `0` is off outright: the driver answers this tool the way a build without
-  the channel would. `XHCISNAP -verbosity 2` sets it on every xhci98 controller
+- The channel switched on. `XhciLogVerbosity` defaults to `2` since `3.0.0.0`
+  (`0` before, and an update keeps the value an earlier install wrote); `0` is
+  off outright: the driver answers this tool the way a build without the
+  channel would. `XHCISNAP -verbosity 2` sets it on every xhci98 controller
   the machine has. Then restart.
 - Nothing else. No service, no `regedit`, and no `IOCTL_USB_DIAGNOSTIC_MODE_ON`;
   the route itself is ungated.
