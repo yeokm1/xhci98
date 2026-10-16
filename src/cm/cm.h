@@ -400,6 +400,16 @@ typedef struct _CM_QUERY_DEV {
     ULONG CtrBytes;         /* the counters' text of the last publish     */
     ULONG CtrCut;
     UCHAR Ctr[CM_QL_CTR_MAX];
+    /* The PCI answer (record 25 section 4.7): the NHI's location and its
+     * domain's tunnel-port set as the thread last published them, under
+     * Lock; PciGate (a synchronization event) lets one request at a time
+     * build into Pci, outside Lock. */
+    ULONG NhiBdf;
+    ULONG PortCount;
+    CM_QP_PORT_IN Ports[CM_QP_MAX_PORTS];
+    KEVENT PciGate;
+    UCHAR Pci[CM_QP_MAX_BYTES];
+    UCHAR PciScratch[CM_QP_CFG_BYTES];  /* one prefix read, under PciGate */
 } CM_QUERY_DEV, *PCM_QUERY_DEV;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
@@ -608,6 +618,11 @@ VOID CmNhiCounterLines(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG at,
 VOID CmLogInit(PCM_NHI nhi);
 VOID CmLogApply(PCM_NHI nhi);
 VOID CmLogNote(PCM_NHI nhi, const char *label, ULONG value);
+/* A record whose value is an address (a bus address, a devnode handle):
+ * XhciLogAppendAddress under LogLock, so it reaches the ring at
+ * XhciCmLogVerbosity 4 alone, as xhci98.sys's address records do (design
+ * record 25 revision 12). Defined in cm_nhi.c. <= DISPATCH_LEVEL. */
+VOID CmLogNoteAddress(PCM_NHI nhi, const char *label, ULONG value);
 VOID CmLogEmit(PCM_NHI nhi, ULONG reason);
 
 /* cm_pool.c */

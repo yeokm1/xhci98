@@ -1371,8 +1371,9 @@ $requiredValues = @(
     @{
         Name    = "XhciLogVerbosity"
         Type    = "0x00010003"
-        Default = "0"
-        Why     = "task 13-L.2's 0-4 ladder, and since `0.0.0.6` the WHOLE switch: 0 shuts the PassThru read channel (the miniport answers exactly MP_STATUS_NOT_SUPPORTED, the same as a binary built without it - and that channel is how a dump leaves the machine at all, the only route this driver has on Windows 98), 1 engages it with the note ring still off, and 2 is the recording switch. It ships at 0 because what the append sites cost at real interrupt rates on Windows 98 metal is unmeasured, and because a diagnostic nobody asked for should not be reachable"
+        Default = "2"
+        Why     = "task 13-L.2's 0-4 ladder, and since `0.0.0.6` the WHOLE switch: 0 shuts the PassThru read channel, 1 engages it with the note ring still off, and 2 is the recording switch. Absent, the driver applies its own default, which is also 2"
+        DefaultWhy = "The owner set the shipped level to 2 (the ring records, no addresses) on 2026-10-16, so that every install has a log before anyone asks for one; it shipped at 0 until then. What the append sites cost at real interrupt rates on Windows 98 metal is still unmeasured and is to be read on the owner's P14s Gen 1 (design record 08 section 13.2, amended). Any other number is a new decision, not an INF edit"
     },
     @{
         Name    = "XhciLogDebugView"

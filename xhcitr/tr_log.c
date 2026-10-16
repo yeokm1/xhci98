@@ -7,6 +7,7 @@
 #include <string.h>
 #include "tr_log.h"
 #include "../src/cm/cm_query.h"
+#include "../src/xhci_qry.h"
 
 static TR_U32 trlGet(const unsigned char *b, TR_U32 o)
 {
@@ -394,6 +395,135 @@ TR_U32 tr_hc_count(void)
 const char *tr_hc_name(TR_U32 i)
 {
     return i < tr_hc_count() ? trlHcNames[i] : NULL;
+}
+
+/* ======================================================================== */
+/* xhci98.sys's query request (src\xhci_qry.h)                               */
+/* ======================================================================== */
+
+/* A part [off, off + len) inside an answer of `bytes`, no wider than max. */
+static int trlPart(TR_U32 off, TR_U32 len, TR_U32 bytes, TR_U32 max)
+{
+    return off >= XHQ_HDR_BYTES && off <= bytes && len <= bytes - off &&
+           len <= max;
+}
+
+int tr_xhq_parse(const unsigned char *b, size_t n, TR_XHQ *x)
+{
+    TR_U32 ctrAt;
+    TR_U32 logAt;
+    TR_U32 pciAt;
+
+    memset(x, 0, sizeof(*x));
+    if (b == NULL || n < XHQ_HDR_BYTES || trlGet(b, XHQ_O_MAGIC) != XHQ_MAGIC ||
+        trlGet(b, XHQ_O_VERSION) != XHQ_VERSION) {
+        return 0;
+    }
+    x->Bytes = trlGet(b, XHQ_O_BYTES);
+    if (x->Bytes < XHQ_HDR_BYTES || x->Bytes > XHQ_MAX_BYTES) {
+        return 0;
+    }
+    if (x->Bytes > n || (n == XHQ_HDR_BYTES && x->Bytes != n)) {
+        return -1;
+    }
+    x->Flags = trlGet(b, XHQ_O_FLAGS);
+    x->Verbosity = trlGet(b, XHQ_O_VERBOSITY);
+    x->VerbosityRead = trlGet(b, XHQ_O_VERBOSITY_READ);
+    ctrAt = trlGet(b, XHQ_O_CTR_OFFSET);
+    x->CtrBytes = trlGet(b, XHQ_O_CTR_BYTES);
+    logAt = trlGet(b, XHQ_O_LOG_OFFSET);
+    x->LogBytes = trlGet(b, XHQ_O_LOG_BYTES);
+    pciAt = trlGet(b, XHQ_O_PCI_OFFSET);
+    x->PciBytes = trlGet(b, XHQ_O_PCI_BYTES);
+    x->Appends = trlGet(b, XHQ_O_APPENDS);
+    x->Dropped = trlGet(b, XHQ_O_DROPPED);
+    x->PciState = trlGet(b, XHQ_O_PCI_STATE);
+    x->Flavour = trlGet(b, XHQ_O_FLAVOUR);
+    if (!trlPart(ctrAt, x->CtrBytes, x->Bytes, XHQ_CTR_MAX) ||
+        (x->CtrBytes & 3UL) != 0 ||
+        !trlPart(logAt, x->LogBytes, x->Bytes, XHQ_LOG_MAX) ||
+        !trlPart(pciAt, x->PciBytes, x->Bytes, XHQ_PCI_BYTES) ||
+        (x->PciBytes != 0 && x->PciBytes != XHQ_PCI_BYTES)) {
+        return 0;
+    }
+    x->Ctr = b + ctrAt;
+    x->Log = b + logAt;
+    x->Pci = x->PciBytes != 0 ? b + pciAt : NULL;
+    return 1;
+}
+
+void tr_xhq_log_text(TR_TEXT *t, const TR_XHQ *x, int nt)
+{
+    TR_U32 i;
+    TR_U32 v;
+    TR_U32 shown = 0;
+    TR_U32 words;
+    const char *name;
+
+    tr_put(t, "xhci98 driver log\n");
+    tr_printf(t, "  Build:      %s\n", trlFlavour(x->Flavour));
+    if (x->Flags & XHQ_F_REFUSED) {
+        tr_printf(t, "  XhciLogVerbosity %lu was refused (out of range); "
+                     "level %lu applies.\n",
+                  (unsigned long)x->VerbosityRead,
+                  (unsigned long)x->Verbosity);
+    }
+    if (x->Verbosity >= 2 && x->Verbosity <= 3) {
+        tr_printf(t, "  Recording:  on (XhciLogVerbosity %lu)\n",
+                  (unsigned long)x->Verbosity);
+    } else if (x->Flags & XHQ_F_WITHHELD) {
+        tr_put(t, "  Recording:  on (XhciLogVerbosity 4)\n"
+                  "  Level 4 records internal addresses, so this tool does "
+                  "not show the log.\n  Run SNAPON.BAT (level 2) and restart "
+                  "Windows for a log it can show.\n");
+    } else {
+        tr_printf(t, "  Recording:  off (XhciLogVerbosity %lu%s)\n",
+                  (unsigned long)x->Verbosity,
+                  x->Verbosity == 0 ? "" : ": counters only");
+        tr_log_advice_hcd(t, nt);
+    }
+    if (x->Flags & XHQ_F_COUNTERS) {
+        tr_put(t, "\n  Counters (nonzero):\n");
+        words = x->CtrBytes / 4;
+        for (i = 0; i < words; i++) {
+            v = trlGet(x->Ctr, i * 4);
+            if (v == 0) {
+                continue;
+            }
+            name = tr_hc_name(i);
+            if (name != NULL) {
+                tr_printf(t, "    %-36s %lu\n", name, (unsigned long)v);
+            } else {
+                tr_printf(t, "    counter %-28lu %lu\n", (unsigned long)i,
+                          (unsigned long)v);
+            }
+            shown++;
+        }
+        tr_printf(t, "    (%lu of %lu nonzero.)\n", (unsigned long)shown,
+                  (unsigned long)words);
+    }
+    if ((x->Flags & XHQ_F_RECORDING) && !(x->Flags & XHQ_F_WITHHELD)) {
+        tr_printf(t, "\n  Log (%lu records since the start",
+                  (unsigned long)x->Appends);
+        if (x->Dropped != 0) {
+            tr_printf(t, "; %lu bytes overwritten by newer ones",
+                      (unsigned long)x->Dropped);
+        }
+        tr_put(t, "):\n");
+        if (x->Flags & XHQ_F_EMITTED) {
+            tr_put(t, "  (XhciLogDebugView is on: lines already handed to "
+                      "the debugger are not here.)\n");
+        }
+        if (x->LogBytes == 0) {
+            tr_put(t, "  (empty)\n");
+        }
+        for (i = 0; i < x->LogBytes; i++) {
+            trlCh(t, x->Log[i]);
+        }
+        if (x->LogBytes != 0 && x->Log[x->LogBytes - 1] != '\n') {
+            tr_put(t, "\n");
+        }
+    }
 }
 
 int tr_hcd_counters_text(TR_TEXT *t, const unsigned char *img, size_t n)

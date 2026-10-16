@@ -130,6 +130,24 @@ driver records by default):
 
 The tool itself changes no setting.
 
+PCI configuration
+-----------------
+
+Each xHCI controller the xhci98 driver runs, and each Thunderbolt or USB4
+controller, has a "PCI configuration" item. It shows, for each PCI
+function, what Windows does not: the vendor, device, subsystem, revision
+and class; the Command and Status registers; the interrupt pin and line;
+the BARs as read; for a bridge its buses and its I/O, memory and
+prefetchable windows; and its capabilities - MSI and MSI-X (enabled or
+not, vectors or table size), the PCI Express link (speed and width now,
+and what the link is capable of) and power management.
+
+Under a Thunderbolt or USB4 controller the item lists the controller,
+its tunnel ports and the devices behind each port. On Windows 98 SE and
+ME the devices behind a port are not read and say so. Under an xHCI
+controller it shows that controller. The drivers read configuration
+space and never change it. File > Save Report and /report include it.
+
 The notification-area icon
 --------------------------
 
@@ -158,8 +176,9 @@ From a command line
 
   XHCITR                       the window and the icon
   XHCITR /tray                 the icon alone (as started at logon)
-  XHCITR /report <file>        writes the report, the drivers' logs
-                               included, to <file> and exits
+  XHCITR /report <file>        writes the report, the drivers' logs and
+                               PCI configuration included, to <file>
+                               and exits
   XHCITR /eject id=<id>        stops the USB device or Thunderbolt/USB4
                                device with that Device Manager instance
                                ID and exits

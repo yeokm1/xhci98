@@ -175,6 +175,14 @@ rem                  record 25 sections 4.5 and 4.6): xhcicm.sys's log
 rem                  answer as its builder makes it, xhci98.sys's door
 rem                  window, the ring, level 4 withheld, the recording-off
 rem                  advice, the counter names against xhci_counters.h
+rem   test_trpci   - the PCI configuration answers (src\cm\cm_qpci.c and
+rem                  xhcitr\tr_pci.c, design record 25 revision 12): the
+rem                  bounded walk below a tunnel port, the capability walk
+rem                  with bad lists, the decoders, 79 columns
+rem   test_xhq     - xhci98.sys's query answer (src\xhci_qry.c, design
+rem                  record 13 section 8.12): what each log level serves,
+rem                  the ring's text and cut, the PCI states, the sizing,
+rem                  XHCITR's reader and texts, the default level 2
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
@@ -533,6 +541,15 @@ call :run test_cm_status "test_cm_status.c ..\src\cm\cm_status.c"
 rem test_cm_query links the query device's answer builder and the status
 rem record's, whose records it frames (design record 25 section 4).
 call :run test_cm_query "test_cm_query.c ..\src\cm\cm_query.c ..\src\cm\cm_status.c"
+rem test_trpci links xhcicm.sys's PCI answer builder (src\cm\cm_qpci.c) over
+rem modelled buses and XHCITR's reader and decoders of it (xhcitr\tr_pci.c):
+rem the bounds, the capability walk with bad lists, the decoders, 79 columns
+rem (design record 25 sections 3.6 and 4.7, revision 12).
+call :run test_trpci "test_trpci.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src\cm\cm_qpci.c ..\xhciinst\inst_core.c"
+rem test_xhq links xhci98.sys's query answer composer (src\xhci_qry.c,
+rem design record 13 section 8.12) and XHCITR's reader of it and the texts
+rem it makes (xhcitr\tr_log.c, tr_pci.c); the shared default level.
+call :run test_xhq "test_xhq.c ..\src\xhci_qry.c ..\xhcitr\tr_log.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src\cm\cm_query.c ..\xhciinst\inst_core.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

@@ -188,7 +188,11 @@ On Vista x64 and 7 x64:
 - **Safely Remove:** pick the device in the icon's menu or the window, confirm, and unplug it when the tool says so. It follows the same rules as `INSTALL /eject`, on every system.
 - **USB sticks and disks** can be stopped the same way, on every system, 98 SE and ME included. The tool names one by its drive letter. Only a device with a disk on it is offered; a keyboard, mouse, hub, camera or other device is shown, not stopped.
 - **The drivers' logs:** each xHCI controller and each Thunderbolt or USB4 controller has a "Driver log" item. Select it to see the driver's counters and its log, read from the running driver. Save Report includes both logs, so you can send one without a debug build.
-- **When a log is off**, the item says how to turn it on (`xhcicm.sys` records by default). For `xhci98.sys`, run `SNAPON.BAT` and restart. For `xhcicm.sys`, set `XhciCmLogVerbosity` to `2` on the key the item names, then restart. The release notes' "The log, and how to send one" has the details.
+- **When a log is off**, the item says how to turn it on. Both drivers record by default from `3.0.0.0` (level 2 on a fresh install; an update keeps the value an earlier install wrote). For `xhci98.sys`, run `SNAPON.BAT` and restart. For `xhcicm.sys`, set `XhciCmLogVerbosity` to `2` on the key the item names, then restart. The release notes' "The log, and how to send one" has the details.
+- **PCI configuration:** each xHCI controller the xhci98 driver runs, and each Thunderbolt or USB4 controller, has a "PCI configuration" item. It shows what Windows does not: the interrupt pin and line, MSI and MSI-X, the PCI Express link speed and width, the BARs, and a bridge's buses and windows.
+  - Under a Thunderbolt or USB4 controller it lists the controller, its tunnel ports and the devices behind them.
+  - On Windows 98 SE and ME the devices behind a tunnel port read "not read on this system".
+  - The drivers only read; nothing is changed. Save Report includes it.
 
 To stop it starting at login for yourself, untick "Start at login" in its View menu or the icon's right-click menu (no administrator needed). `INSTALL /notray` stops it for every user of the machine. It is also in the package at `tools\xhcitr\`.
 

@@ -91,7 +91,7 @@ CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 HKR,,DevLoader,,*NTKERN
 HKR,,NTMPDriver,,xhci98.sys
 HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
-HKR,,XhciLogVerbosity,0x00010003,0
+HKR,,XhciLogVerbosity,0x00010003,2
 HKR,,XhciLogDebugView,0x00010003,0
 HKR,,XhciForceBulkOnly,0x00010003,0
 HKR,,XhciFastPollFsLs,0x00010003,0
@@ -193,7 +193,7 @@ AddService=xhci98,0x00000002,Xhci.AddService
 AddService=xhcihlpr,,XhciHlpr.AddService
 
 [Xhci.AddReg.NT]
-HKR,,XhciLogVerbosity,0x00010003,0
+HKR,,XhciLogVerbosity,0x00010003,2
 HKR,,XhciLogDebugView,0x00010003,0
 HKR,,XhciForceBulkOnly,0x00010003,0
 HKR,,XhciFastPollFsLs,0x00010003,0

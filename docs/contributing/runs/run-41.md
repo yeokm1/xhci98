@@ -1250,6 +1250,62 @@ Not read: the 9x waits with an acknowledgement (no statement and no
 request is made on 98 SE and ME in `3.0.0.0`; roadmap-usb4.md NV9X.3),
 the USB4 profile, and Stor98 `0.4.0.0` (the joint legs).
 
+## PCI configuration, the query request and the default level (record 25 revision 12)
+
+Branch `tr-pci`. `xhcicm.sys`'s `IOCTL_XHCICM_PCI`, `xhci98.sys`'s
+`IOCTL_XHCI98_QUERY` and XHCITR's "PCI configuration" nodes; the logging
+level's default of 2.
+
+### The cost of level 2 on real hardware (the owner, 2026-10-16)
+
+| Machine | Build | What | Level 0 | Level 2 |
+|---|---|---|---|---|
+| ThinkPad P14s Gen 1, Windows 98 SE | release x86 `xhci98.sys`, `tr-pci` `b464cad5` (gated build r5) | ATTO, Direct I/O, 256 MB, a USB Bulk-Only drive on the machine's own xHCI controller, write / read in KB/s | 64 KB 202993 / 211369; 1 MB 208493 / 208899; 8 MB 210537 / 220934 | 64 KB 196801 / 206360; 1 MB 204522 / 207286; 8 MB 208899 / 218684 |
+
+One machine, one pair of runs: about 1 to 2% at 1 MB and up, 2 to 4% from 4
+to 512 KB, up to about 5 to 6% on 16 and 32 KB writes, with a run-to-run
+noise of several percent (the 32 KB read was 10% faster at level 2). The
+owner kept the default at 2. The ATTO screenshots are on the maintainer's
+disk only.
+
+### The legs (record 25 leg T.9, 2026-10-16)
+
+Emulator `vm\usb4\bin-2a893ea` (SHA-256 checked), each guest from an
+overlay that had only booted once before, with `qemu-xhci`, a USB tablet
+and a FAT stick, the Thunderbolt guests with the `tb3-alpine-ridge` host,
+its tunnel bridge and the ASMedia NVMe enclosure. Packages: a dry x86
+TEST cut of the gated x86 build (`r6`: `a61ccb98`; `r7`: `7d6e11d5`, the
+98 SE reading fix below); x64, the unsigned release-x64 of the gated amd64
+build `r6b`, run on 7 x64 with signature enforcement disabled from F8 at
+every boot. The report was written with `XHCITR /report` and copied to
+the stick, and read off the stick image on the host.
+
+| Guest | Build | Install | Enumeration, stick copy, unplug and re-plug | xhci98: PCI configuration, Driver log | xhcicm: PCI configuration |
+|---|---|---|---|---|---|
+| 98 SE (TB) | r6, r7 | the drivers copied over an earlier 3.0.0.0 test install (the installer's 98 route then the wizards), level 0 kept | pass: the stick at G:, out and back, `SHELL32.DLL` and the report copied | decoded (1B36:000D, pin INTA line 11, no capability list); level 0, the advice | r6: NHI "location not read", the tunnel port "no function" - the defect below; r7: the NHI 8086:15BF decoded (pin INTA line 11, PM); the tunnel port decoded once its bridge driver was installed (1B36:0001, pin INTA line 10, Bus 01-09, three windows, 3 capabilities); below it "Not read on this system" |
+| ME | r6 | fresh, level 2 | pass (G:; a second, stale BIOS-mapped E: for the same stick, in MS-DOS compatibility mode) | decoded; level 2, 51 of 246 counters, 138 records | - |
+| 2000 | r6 | update over 1.1.0.0, level 0 kept; `SNAPON.BAT` then level 2 | pass (F:) | decoded; level 0 with the advice, then level 2 | - |
+| XP | r6 | fresh, level 2 | pass (F:) | decoded (MSI-X present, disabled; pin INTA line 10); level 2, 136 records | - |
+| 7 x86 (TB), as the standard user `tuser` | r6, r7 | fresh, level 2 | pass (F:; the copied `EXPLORER.EXE` hash equal) | both controllers decoded (qemu-xhci: MSI-X enabled, INTx disabled, line 0; the TB xHCI 8086:15C1); level 2 | NHI 00:04.0, tunnel port 00:05.0 (pin INTA line 10, 3 capabilities), below it 01:01.0 NVMe (010802, MSI-X, PCIe v2 Gen 1 x1, PM); 35 reads, 0 refused; the same on r7, every function read whole (r7 put in with `INSTALL /restage` over the r6 build of the same version, as the installer asks; it keeps an `XHCITR.EXE` of the same version, so the tool was copied by hand) |
+| 7 x64 | r6b (unsigned, F8) | fresh, level 2 | pass (F:; hash equal) | decoded (MSI-X enabled); level 2, 141 records | - |
+
+No report held `start.bar`, `start.ok`, `start.common.pa`, `pirq.rcba` or a
+`cm.live.bar-changed` value. No crash or hang on any guest.
+
+**The defect the 98 SE leg found, fixed in r7.** `IoGetDeviceProperty`'s
+bus number and address do not answer for the NHI's PDO on 98 SE, so the
+NHI's location was not read; and one 256-byte `HalGetBusData` read was not
+answered there, so the tunnel port read as absent. r7 takes the NHI's
+location from the topology and reads one DWORD at a time from prefixes of
+offset + 4 bytes, keeping how many were read (record 25 section 4.7).
+
+**Noted, not changed.** A standard user on 7 cannot write `/report` to the
+root of C:, and `/report` returns to `cmd` at once unless run with
+`start /wait` (the tool is a GUI program). On ME the controller's
+Device Manager status in the report reads `0x19886ACE (started)` and on
+98 SE `0x18086ACE` - the configuration manager's status word printed as
+such, passed to the tool's owner.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link

@@ -189,4 +189,72 @@ ULONG CmQueryLogEmitLines(UCHAR *text, ULONG n, ULONG partial,
                           ULONG verbosity, CM_QL_EMIT_FN emit,
                           PVOID context);
 
+/*
+ * ---- The PCI answer (cm_query.h CM_QP_*, design record 25 section 4.7) ----
+ *
+ * Built at the request by CmQpciBuild (cm_qpci.c) over a reader the caller
+ * supplies, then answered by CmQpciAnswer with the sizing rules above.
+ */
+
+/* The reader: `bytes` (4 or CM_QP_CFG_BYTES) of bdf's configuration space
+ * from offset 0 into buf. CM_QP_RD_OK when read (all ones where the
+ * function is absent is still OK), CM_QP_RD_ABSENT when the bus driver
+ * says no function answers there, CM_QP_RD_FAIL when the read was
+ * refused. Never a write. */
+#define CM_QP_RD_OK             0UL
+#define CM_QP_RD_ABSENT         1UL
+#define CM_QP_RD_FAIL           2UL
+typedef ULONG (*CM_QP_READ)(PVOID context, ULONG bdf, UCHAR *buf,
+                            ULONG bytes, PULONG valid);
+/* (*valid: with CM_QP_RD_OK, the bytes read - `bytes`, or fewer whole
+   DWORDs where the bus driver answered fewer, the rest of buf zero.) */
+
+typedef struct _CM_QP_PORT_IN {
+    ULONG Bdf;              /* XHCI_TBT_BDF                               */
+    ULONG Source;           /* XHCI_TBT_SRC_*                             */
+    ULONG Flags;            /* CM_PORT_*                                  */
+} CM_QP_PORT_IN;
+
+typedef struct _CM_QPCI_IN {
+    ULONG Flags;            /* CM_QP_F_STOPPING; the builder adds the rest */
+    ULONG EpochLo;
+    ULONG EpochHi;
+    ULONG NhiBdf;           /* CM_Q_UNKNOWN where not read                */
+    ULONG PortCount;        /* above CM_QP_MAX_PORTS: cut, and TRUNCATED  */
+    CM_QP_PORT_IN Ports[CM_QP_MAX_PORTS];
+    ULONG ReadBelow;        /* 0: one CM_QP_S_NOT_READ_OS entry a member  */
+    CM_QP_READ Read;
+    PVOID Context;
+} CM_QPCI_IN, *PCM_QPCI_IN;
+
+/* A reader of a prefix: the first `bytes` of bdf's configuration space
+ * into buf; returns the bytes it read, 2 where the bus driver says no
+ * function answers (HalGetBusData's form), fewer where it read less. */
+typedef ULONG (*CM_QP_PREFIX)(PVOID context, ULONG bdf, UCHAR *buf,
+                              ULONG bytes);
+
+/* CM_QP_READ's answer for `bytes` of bdf (4 or CM_QP_CFG_BYTES) built one
+ * DWORD at a time from prefixes of offset + 4 bytes - the read every
+ * other configuration access of this driver makes, which Windows 98's
+ * HAL answers where one long read may not. The first DWORD decides:
+ * CM_QP_RD_ABSENT where the prefix answers 2, CM_QP_RD_FAIL where it
+ * reads less. A later DWORD that cannot be read ends the assembly: the
+ * rest is zero, *valid the bytes read, and the answer CM_QP_RD_OK.
+ * `scratch` holds CM_QP_CFG_BYTES. */
+ULONG CmQpciReadByDword(CM_QP_PREFIX prefix, PVOID context, ULONG bdf,
+                        UCHAR *buf, ULONG bytes, UCHAR *scratch,
+                        PULONG valid);
+
+/* The PCI answer into buf (room at least CM_QP_MAX_BYTES; 0 returned
+ * otherwise): the NHI, the members, the functions below them within the
+ * CM_QP_MAX_* bounds. Returns its length. */
+ULONG CmQpciBuild(UCHAR *buf, ULONG room, const CM_QPCI_IN *in);
+
+/* The IOCTL's answer from a built one: CM_Q_ANS_TOO_SMALL under
+ * CM_QP_HDR_BYTES (nothing written), CM_Q_ANS_HEADER under the whole (the
+ * header alone, CM_QP_O_BYTES the size needed), else CM_Q_ANS_WHOLE;
+ * *info the bytes written. */
+ULONG CmQpciAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
+                   PULONG info);
+
 #endif /* CM_QRYB_H */

@@ -84,7 +84,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
+| `XhciLogVerbosity` | The driver's log, read by `XHCITR` and `XHCISNAP` | `0` | `4` | `2` | `2` (a fresh install; an update keeps the value there) |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
 **The Thunderbolt driver's log (`xhcicm.sys`)**, from `3.0.0.0`: these two are in the Thunderbolt or USB4 controller's driver key, not the xHCI controller's (`...\Services\Class\System\NNNN` on 98 SE and ME, `...\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 7, the subkey whose `DriverDesc` names the Thunderbolt or USB4 controller; the xHCI98 USB Tree's "Driver log (xhcicm)" item names it in full)

@@ -69,6 +69,19 @@
 #include "cm.h"
 #include "cm_nvlink.h"
 
+/* cm.h: an address record, at XhciCmLogVerbosity 4 alone (the shared ring's
+ * own gate, XhciLogAppendAddress). Here rather than beside CmLogNote in
+ * cm_log.c, whose values and emission another branch owns. IRQL:
+ * <= DISPATCH_LEVEL. */
+VOID CmLogNoteAddress(PCM_NHI nhi, const char *label, ULONG value)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&nhi->LogLock, &irql);
+    XhciLogAppendAddress(&nhi->Log, label, value);
+    KeReleaseSpinLock(&nhi->LogLock, irql);
+}
+
 NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
                         const CM_IDS *ids)
 {
@@ -694,7 +707,7 @@ static BOOLEAN cmLiveValidate(PCM_NHI nhi)
      * it. */
     if (v == 0xFFFFFFFFUL || (v & ~0xFUL) != (nhi->LiveBar0 & ~0xFUL) ||
         hi != nhi->LiveBar0Hi) {
-        CmLogNote(nhi, "cm.live.bar-changed", v);
+        CmLogNoteAddress(nhi, "cm.live.bar-changed", v);
         return FALSE;
     }
     if (cmd == 0xFFFFFFFFUL || (cmd & 0x2UL) == 0) {

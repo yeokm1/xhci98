@@ -9,7 +9,8 @@
  * extension's Kind before anything else, so the NHI's and the filters'
  * paths are what they were. CREATE succeeds for the device itself (on NT,
  * an open with a name past the device's is refused), CLOSE and CLEANUP
- * succeed, DEVICE_CONTROL answers CM_Q_IOCTL alone, everything else is
+ * succeed, DEVICE_CONTROL answers CM_Q_IOCTL, CM_QL_IOCTL and CM_QP_IOCTL
+ * (the PCI answer below), everything else is
  * STATUS_INVALID_DEVICE_REQUEST.
  *
  * THE SNAPSHOT lives in the query device's own extension, under its own
@@ -47,6 +48,20 @@
  * Connected in CmQueryClose, which runs before the NHI's extension can
  * go; they are followed only with Lock held and Connected set.
  *
+ * THE PCI ANSWER (design record 25 section 4.7, revision 12). CM_QP_IOCTL
+ * reads configuration space at the request, on the caller's thread at
+ * PASSIVE_LEVEL, through HalGetBusData from offset 0 - the reads
+ * cm_reenum.c and tbt_topo.c already make of the same functions on every
+ * target - and never writes it. What to read is what the thread published
+ * with its last answer (CmQueryPublish: the NHI's location and its
+ * domain's tunnel-port set, under Lock), copied out under Lock; the reads
+ * themselves hold no lock and follow no pointer to the NHI, so the device
+ * still holds none for this request. PciGate lets one request at a time
+ * build into the extension's Pci buffer. On Windows 98 SE and ME the
+ * functions below a member are not read: a bus a tunnel brought up after
+ * boot is not numbered by PCI.VXD (record 21 section 6.1), and a read of a
+ * bus number nobody assigned is not made.
+ *
  * IRQL: CmQueryInit in DriverEntry; CmQueryOpen, CmQueryStopping and
  * CmQueryClose in the PnP dispatch at PASSIVE_LEVEL; CmQueryPublish on the
  * connection-manager thread at PASSIVE_LEVEL, no lock held; CmQueryDispatch
@@ -64,6 +79,15 @@ static ULONG CmQueryLastLo;
 static ULONG CmQueryLastHi;
 
 #define CM_Q_NAME_CHARS 24
+
+/* HalGetBusData: as hcd_ctl.c restates it for amd64 builds whose headers
+ * leave it out. */
+#if defined(_WIN64) && defined(NO_LEGACY_DRIVERS)
+NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
+                             ULONG SlotNumber, PVOID Buffer, ULONG Length);
+#endif
+
+XHCI_C_ASSERT(cm_qp_ports, CM_QP_MAX_PORTS == XHCI_TBT_MAX_TUNNELS);
 
 XHCI_C_ASSERT(cm_ql_ring_bytes, XHCI_LOG_RING_BYTES == CM_QL_LOG_MAX);
 
@@ -356,6 +380,34 @@ static ULONG cmQCounters(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG cut)
     return at;
 }
 
+/* The domain's tunnel-port set into the device's copy (record 25 section
+ * 4.7). The caller holds q->Lock; nhi->Reenum is the thread's, or the
+ * start's before the thread runs. */
+static VOID cmQPorts(PCM_NHI nhi, PCM_QUERY_DEV q)
+{
+    ULONG i;
+    ULONG n;
+
+    n = 0;
+    if (nhi->ReenumOn) {
+        for (i = 0; i < nhi->Reenum.Members && i < XHCI_TBT_MAX_TUNNELS;
+             i++) {
+            q->Ports[n].Bdf = nhi->Reenum.Port[i].Bdf;
+            q->Ports[n].Source = nhi->Reenum.Port[i].Source;
+            q->Ports[n].Flags = nhi->Reenum.Port[i].Flags;
+            n++;
+        }
+    }
+    q->PortCount = n;
+    /* Windows 98 SE and ME answer no bus number or address for the NHI's
+     * PDO (cmQBdf): the topology's own reading of its location stands in
+     * (read on 98 SE, record 25 revision 12). */
+    if (q->NhiBdf > 0xFFFFUL && nhi->ReenumOn &&
+        nhi->Reenum.Nhi != XHCI_TBT_NO_BDF) {
+        q->NhiBdf = nhi->Reenum.Nhi;
+    }
+}
+
 /* The answer the device holds until the thread's first publish: the
  * record's header for the stage the start left, no router. */
 static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
@@ -436,6 +488,9 @@ VOID CmQueryOpen(PCM_NHI nhi)
         q->LogLock = &nhi->LogLock;
         q->EpochLo = nhi->QueryEpochLo;
         q->EpochHi = nhi->QueryEpochHi;
+        q->NhiBdf = nhi->QueryBdf;
+        KeInitializeEvent(&q->PciGate, SynchronizationEvent, TRUE);
+        cmQPorts(nhi, q);
         cmQSeed(nhi, q);
         /* No thread, no pass: the counters as the start left them, once. */
         if (!nhi->ThreadRunning) {
@@ -568,6 +623,7 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     }
     q->CtrBytes = nhi->QueryCtrBytes;
     q->CtrCut = nhi->QueryCtrCut;
+    cmQPorts(nhi, q);
     /* Once stopping, every answer stays one generation past the thread's
      * own sequence (CmQueryStopping's bump), so it never goes back. */
     if (q->Stopping) {
@@ -720,6 +776,103 @@ static NTSTATUS cmQLog(PCM_QUERY_DEV q, PIRP irp)
     return CmCompleteIrp(irp, STATUS_SUCCESS, info);
 }
 
+/* One prefix of bdf's configuration space through HalGetBusData from
+ * offset 0, the form cm_reenum.c's reader uses: a function that does not
+ * answer is reported by the HAL as 2 bytes (the vendor id it read); a bus
+ * it does not know is a refused read. IRQL: PASSIVE_LEVEL. */
+static ULONG cmQpPrefix(PVOID context, ULONG bdf, UCHAR *buf, ULONG bytes)
+{
+    UNREFERENCED_PARAMETER(context);
+    return HalGetBusData(PCIConfiguration, XHCI_TBT_BDF_BUS(bdf),
+                         XHCI_TBT_BDF_DEV(bdf) |
+                             (XHCI_TBT_BDF_FN(bdf) << 5),
+                         buf, bytes);
+}
+
+/* The PCI answer's reader (cm_qryb.h CM_QP_READ), one DWORD at a time
+ * (CmQpciReadByDword): Windows 98 SE's HAL answers the prefixes the
+ * topology reads and not one 256-byte read (read on 98 SE, record 25
+ * revision 12). `context` is the request's CM_QP_CFG_BYTES scratch.
+ * IRQL: PASSIVE_LEVEL. */
+static ULONG cmQpRead(PVOID context, ULONG bdf, UCHAR *buf, ULONG bytes,
+                      PULONG valid)
+{
+    return CmQpciReadByDword(cmQpPrefix, NULL, bdf, buf, bytes,
+                             (UCHAR *)context, valid);
+}
+
+/* IRP_MJ_DEVICE_CONTROL's CM_QP_IOCTL (record 25 section 4.7): what to
+ * read copied under Lock, the reads made with no lock held into Pci under
+ * PciGate, the answer copied out with CM_Q_IOCTL's sizing rules. */
+static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    CM_QPCI_IN in;
+    ULONG room;
+    ULONG info;
+    ULONG rc;
+    ULONG bytes;
+    ULONG i;
+    ULONG connected;
+    KIRQL irql;
+    PUCHAR out;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    room = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    out = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    if (out == NULL) {
+        room = 0;
+    }
+    if (room < CM_QP_HDR_BYTES) {
+        return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
+    }
+    CmZero(&in, sizeof(in));
+    /* The gate first: what to read is taken after any request before this
+     * one, and the device is checked again after the reads, so an answer
+     * built across a stop is never returned. */
+    (VOID)KeWaitForSingleObject(&q->PciGate, Executive, KernelMode, FALSE,
+                                NULL);
+    KeAcquireSpinLock(&q->Lock, &irql);
+    connected = q->Connected;
+    if (connected) {
+        in.Flags = q->Stopping ? CM_QP_F_STOPPING : 0;
+        in.EpochLo = q->EpochLo;
+        in.EpochHi = q->EpochHi;
+        in.NhiBdf = q->NhiBdf;
+        in.PortCount = q->PortCount;
+        for (i = 0; i < q->PortCount && i < CM_QP_MAX_PORTS; i++) {
+            in.Ports[i] = q->Ports[i];
+        }
+    }
+    KeReleaseSpinLock(&q->Lock, irql);
+    rc = CM_Q_ANS_TOO_SMALL;
+    info = 0;
+    if (connected) {
+        in.ReadBelow = (ULONG)cmQNt();
+        in.Read = cmQpRead;
+        in.Context = q->PciScratch;
+        bytes = CmQpciBuild(q->Pci, CM_QP_MAX_BYTES, &in);
+        KeAcquireSpinLock(&q->Lock, &irql);
+        connected = q->Connected;
+        if (connected && q->Stopping && bytes >= CM_QP_HDR_BYTES) {
+            q->Pci[CM_QP_O_FLAGS] |= (UCHAR)CM_QP_F_STOPPING;
+        }
+        KeReleaseSpinLock(&q->Lock, irql);
+        if (connected) {
+            rc = CmQpciAnswer(out, room, q->Pci, bytes, &info);
+        }
+    }
+    (VOID)KeSetEvent(&q->PciGate, IO_NO_INCREMENT, FALSE);
+    if (!connected) {
+        return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
+                                          : STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (rc == CM_Q_ANS_TOO_SMALL) {
+        return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
+    }
+    return CmCompleteIrp(irp, STATUS_SUCCESS, info);
+}
+
 NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp)
 {
     PCM_QUERY_DEV q;
@@ -747,6 +900,9 @@ NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp)
         }
         if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QL_IOCTL) {
             return cmQLog(q, irp);
+        }
+        if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QP_IOCTL) {
+            return cmQPci(q, irp);
         }
         break;
     case IRP_MJ_POWER:
