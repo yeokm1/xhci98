@@ -61,6 +61,15 @@ BOOLEAN CmStatusPciPath(const XHCI_TBT_CFG *cfg, ULONG bdf, PULONG path,
 
 /* The publication's state, one per NHI (CM_NHI.StatusPub, cm_statos.c);
  * touched by the connection-manager thread alone. */
+/* XhciCmBridgeDiag (record 21 section 6.1.1): the bus numbering's last
+ * attempt, dwords: 0 sequence, 1 port bdf, 2 outcome, 3 seen (functions
+ * 23:16, bridges 15:8, tries 7:0), 4 the port's 18h, 5 window outcome,
+ * 6 the port's 20h, 7 window need, 8 where, 9 undone (failed 31:16),
+ * 10-11 the first two bridges' bdf, 12-13 their 18h as left, 14-15 their
+ * 20h as left, 16 flags (bit 0 held by a child devnode, bit 1 PCI.VXD's
+ * guard refused, bit 2 the port read up), 17 the guard's reading. */
+#define CM_BRDIAG_WORDS 18
+
 typedef struct _CM_STATUS_PUB {
     PVOID DevKey;           /* the hardware key, opened in the start      */
     PVOID DrvKey;           /* the driver key, for the ask                */

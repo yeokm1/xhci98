@@ -151,6 +151,7 @@ typedef struct _CM_CFGWK {
     ULONG PciRefused;       /* PCI.VXD's guard failed: logged once        */
     ULONG NumberMember;     /* the member cmWkNumber works on ...         */
     ULONG NumberGen;        /* ... and its request's generation           */
+    ULONG DiagSeq;          /* XhciCmBridgeDiag's sequence (cmWkDiag)     */
     CM_CFGMG Cfgmg;
     CM_CFGWK_COUNTERS C;
 } CM_CFGWK, *PCM_CFGWK;
@@ -1252,17 +1253,77 @@ static ULONG cmWkNumberGo(PVOID context)
                ? 1UL : 0UL;
 }
 
-#define CM_WK_NUMBER_TRIES   5UL    /* a chain answering Retry Status     */
-#define CM_WK_NUMBER_WAIT_MS 200UL  /* ... read again this much later     */
+#define CM_WK_NUMBER_TRIES   20UL   /* a chain not answering yet ...      */
+#define CM_WK_NUMBER_WAIT_MS 100UL  /* ... read again this much later     */
+
+/* HalGetBusData as the port reading's reader (the port is a function
+ * PCI.VXD knows); no writer, so an SHPC port gives no reading. */
+static ULONG cmWkHalRead(PVOID context, ULONG bdf, ULONG offset,
+                         PULONG value)
+{
+    UNREFERENCED_PARAMETER(context);
+    return cmWkCfgRead(bdf, offset, value);
+}
+
+/* The attempt, for XhciCmBridgeDiag (cm_statb.h), copied to the NHI under
+ * the worker's lock while it is attached. */
+static VOID cmWkDiag(PCM_CFGWK w, ULONG bdf, PXHCI_TBT_BRNUM r, ULONG tries,
+                     ULONG flags)
+{
+    ULONG d[CM_BRDIAG_WORDS];
+    ULONG k;
+    KIRQL irql;
+
+    for (k = 0; k < CM_BRDIAG_WORDS; k++) {
+        d[k] = 0;
+    }
+    d[1] = bdf;
+    if (r != NULL) {
+        d[2] = r->Outcome;
+        d[3] = (r->Functions << 16) | ((r->Bridges & 0xFFUL) << 8) |
+               (tries & 0xFFUL);
+        d[4] = r->PortBuses;
+        d[5] = r->WinOutcome;
+        d[6] = r->PortMem;
+        d[7] = r->WinNeed;
+        d[8] = r->Where != XHCI_TBT_NO_BDF ? r->Where : r->WinWhere;
+        d[9] = (r->UndoFailed << 16) | (r->Undone & 0xFFFFUL);
+        for (k = 0; k < 2; k++) {
+            d[10 + k] = r->Bdf[k];
+            d[12 + k] = r->Now[k];
+            d[14 + k] = r->Win[k];
+        }
+    }
+    d[16] = flags;
+    d[17] = w->Cfgmg.PciGuard;
+    KeAcquireSpinLock(&w->Lock, &irql);
+    if (w->Nhi != NULL) {
+        w->DiagSeq++;
+        if (w->DiagSeq == 0) {
+            w->DiagSeq = 1;
+        }
+        d[0] = w->DiagSeq;
+        /* The sequence last, so a reader that sees it sees the rest. */
+        for (k = 1; k < CM_BRDIAG_WORDS; k++) {
+            w->Nhi->BrDiag[k] = d[k];
+        }
+        w->Nhi->BrDiag[0] = d[0];
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+}
 
 /*
  * Record 21 section 6.1.1 on member i (bridge devnode `bridge`), before
  * its re-enumeration: the bridges a tunnel brought up below it in reset
  * state (secondary and subordinate 0, which PCI.VXD leaves so: Code 29)
- * numbered inside its bus range, as the BIOS numbers them at POST. Only on
+ * numbered inside its bus range and given memory windows inside its window,
+ * as the BIOS sets them up at POST (left to itself, PCI.VXD placed a
+ * hot-added bridge's window outside its parent's in the emulator). Only on
  * a healthy request still current, and only while the bridge's devnode
  * has no child: a subtree PCI.VXD still holds (a removal vetoed, a
- * re-plug before the removal ran) is never renumbered under it. Nothing
+ * re-plug before the removal ran) is never renumbered under it. A port
+ * that reads up with nothing answering behind it yet, or a function
+ * answering Retry Status, is read again for up to two seconds. Nothing
  * is written when no bridge is below it or any is numbered already
  * (present at boot), and a refusal leaves every bridge as it was read
  * (tbt_brnum.h).
@@ -1270,7 +1331,9 @@ static ULONG cmWkNumberGo(PVOID context)
 static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
 {
     XHCI_TBT_CFG io;
+    XHCI_TBT_CFG hal;
     XHCI_TBT_BRNUM r;
+    XHCI_TBT_PORT port;
     LARGE_INTEGER pause;
     ULONG children[1];
     ULONG count;
@@ -1278,7 +1341,9 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
     ULONG id;
     ULONG k;
     ULONG tries;
+    ULONG flags;
     BOOLEAN complete;
+    BOOLEAN up;
 
     bdf = w->Port[i].Bdf;
     if (!cmWkCurrent(w, i, gen) || cmWkNoCfg(w, i)) {
@@ -1292,6 +1357,7 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
             !CmCfgmgPciOpen(&w->Cfgmg, bdf, id)) {
             w->PciRefused = 1;
             cmWkLog(w, "cm.brnum.9x.pci-refused", w->Cfgmg.PciGuard);
+            cmWkDiag(w, bdf, NULL, 0, 2);
             return;
         }
         cmWkLog(w, "cm.brnum.9x.pci-open", id);
@@ -1300,8 +1366,16 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
     count = cmWkChildren(w, bridge, children, 1, &complete);
     if (!complete || count != 0) {
         cmWkLog(w, "cm.brnum.9x.held", (bdf << 8) | (complete ? 1UL : 0UL));
+        cmWkDiag(w, bdf, NULL, 0, 1);
         return;
     }
+    hal.Read = cmWkHalRead;
+    hal.Write = NULL;
+    hal.Context = NULL;
+    hal.Reads = 0;
+    hal.Writes = 0;
+    up = (BOOLEAN)(XhciTbtPortRead(&hal, bdf, &port) == XHCI_TBT_PORT_UP);
+    flags = up ? 4UL : 0UL;
     io.Read = cmWkIoRead;
     io.Write = cmWkIoWrite;
     io.Context = w;
@@ -1310,9 +1384,13 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
     for (tries = 1;; tries++) {
         io.Reads = 0;
         io.Writes = 0;
-        (VOID)XhciTbtNumberBridges(&io, bdf, cmWkNumberGo, w, &r);
-        if (r.Outcome != XHCI_TBT_BRNUM_NOT_READY ||
-            tries >= CM_WK_NUMBER_TRIES || !cmWkNumberGo(w)) {
+        (VOID)XhciTbtNumberBridges(&io, bdf, XHCI_TBT_BRNUM_F_WINDOWS,
+                                   cmWkNumberGo, w, &r);
+        if (tries >= CM_WK_NUMBER_TRIES || !cmWkNumberGo(w)) {
+            break;
+        }
+        if (r.Outcome != XHCI_TBT_BRNUM_NOT_READY &&
+            !(r.Outcome == XHCI_TBT_BRNUM_NONE && r.Functions == 0 && up)) {
             break;
         }
         /* -CM_WK_NUMBER_WAIT_MS, relative, in 100 ns units, without
@@ -1321,6 +1399,7 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
         pause.HighPart = -1;
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
     }
+    cmWkDiag(w, bdf, &r, tries, flags);
     cmWkLog(w, "cm.brnum.9x.outcome", (bdf << 8) | r.Outcome);
     cmWkLog(w, "cm.brnum.9x.seen",
             (r.Functions << 16) | (r.Bridges << 8) | tries);
@@ -1333,6 +1412,15 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
         for (k = 0; k < r.Numbered; k++) {
             cmWkLog(w, "cm.brnum.9x.bridge", r.Bdf[k]);
             cmWkLog(w, "cm.brnum.9x.buses", r.Now[k]);
+            cmWkLog(w, "cm.brnum.9x.window", r.Win[k]);
+        }
+        cmWkLog(w, "cm.brnum.9x.win-outcome", r.WinOutcome);
+        cmWkLog(w, "cm.brnum.9x.port-window", r.PortMem);
+        cmWkLog(w, "cm.brnum.9x.win-need", r.WinNeed);
+        if (r.WinOutcome != XHCI_TBT_BRWIN_DONE) {
+            w->C.NumberRefused++;
+            cmWkLog(w, "cm.brnum.9x.win-where", r.WinWhere);
+            cmWkLog(w, "cm.brnum.9x.undone", (r.UndoFailed << 16) | r.Undone);
         }
     } else if (r.Outcome != XHCI_TBT_BRNUM_NUMBERED) {
         w->C.NumberRefused++;
@@ -1442,6 +1530,11 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     }
     if (w->Numbering) {
         cmWkNumber(w, i, gen, bridge);
+        if (!cmWkCurrent(w, i, gen)) {
+            /* Superseded while it numbered: the newer request redoes the
+             * re-enumeration. */
+            return TRUE;
+        }
     }
     cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
     p->PubGen++;

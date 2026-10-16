@@ -279,6 +279,505 @@ static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth)
     return 0;
 }
 
+/* ---- the memory windows (XHCI_TBT_BRNUM_F_WINDOWS) ---------------------- */
+
+#define BRWIN_GRAIN     0x00100000UL    /* a bridge window's granularity   */
+#define BRWIN_MAX_BAR   0x40000000UL    /* the largest BAR given a window  */
+#define BRWIN_CMD_MEM   0x0002UL        /* Command: Memory Space Enable    */
+#define BRWIN_CMD_BM    0x0004UL        /* Command: Bus Master Enable      */
+#define BRWIN_IO_CLOSED 0x000000F0UL    /* I/O base F0h, limit 00h; the
+                                           Secondary Status half 0 (RW1C) */
+#define BRWIN_PF_CLOSED 0x0000FFF0UL    /* prefetchable base FFF0h, limit 0 */
+#define BRWIN_MEM_MASK  0xFFF0FFF0UL    /* a window register's address bits */
+
+/* The journal slot of the bridge at `bdf`, or XHCI_TBT_BRNUM_MAX_BRIDGES. */
+static ULONG brSlot(BRNUM_CTX *c, ULONG bdf)
+{
+    ULONG k;
+
+    for (k = 0; k < c->Count; k++) {
+        if (c->R->Bdf[k] == bdf) {
+            return k;
+        }
+    }
+    return XHCI_TBT_BRNUM_MAX_BRIDGES;
+}
+
+/* *sum += add, refused (0) where it would pass 4 GiB. */
+static ULONG brAdd(PULONG sum, ULONG add)
+{
+    if (*sum + add < *sum) {
+        return 0;
+    }
+    *sum += add;
+    return 1;
+}
+
+/* `v` rounded up to a multiple of the power of two `a`; 0 where it wraps. */
+static ULONG brRound(ULONG v, ULONG a)
+{
+    if (v + (a - 1UL) < v) {
+        return 0;
+    }
+    return (v + (a - 1UL)) & ~(a - 1UL);
+}
+
+/*
+ * One memory BAR at `off` of the function at `bdf` sized: all-ones
+ * written, read back, and the value read first written back and read back
+ * - the last two on every path once the first write is made. *size is 0
+ * for an unimplemented BAR. 0, or a refusal.
+ */
+static ULONG brBarSize(BRNUM_CTX *c, ULONG bdf, ULONG off, ULONG was,
+                       PULONG size)
+{
+    ULONG mask;
+    ULONG back;
+    ULONG got;
+    ULONG rc;
+
+    *size = 0;
+    c->Io->Writes++;
+    c->R->Writes++;
+    got = c->Io->Write(c->Io->Context, bdf, off, 4, 0xFFFFFFFFUL) &&
+          brRead(c->Io, bdf, off, &mask);
+    c->Io->Writes++;
+    c->R->Writes++;
+    if (!c->Io->Write(c->Io->Context, bdf, off, 4, was) ||
+        !brRead(c->Io, bdf, off, &back) || back != was) {
+        c->R->UndoFailed++;
+        c->R->WinWhere = bdf;
+        return XHCI_TBT_BRWIN_ACCESS;
+    }
+    if (!got) {
+        c->R->WinWhere = bdf;
+        return XHCI_TBT_BRWIN_ACCESS;
+    }
+    rc = 0;
+    mask &= 0xFFFFFFF0UL;
+    if (mask != 0) {
+        *size = (~mask) + 1UL;
+        if (*size > BRWIN_MAX_BAR) {
+            c->R->WinWhere = bdf;
+            rc = XHCI_TBT_BRWIN_NO_ROOM;
+        }
+    } else if (((was >> 1) & 3UL) == 2UL) {
+        /* A 64-bit BAR whose low half sizes nothing: 4 GiB or more, or
+         * unimplemented; either way not given a window. */
+        c->R->WinWhere = bdf;
+        rc = XHCI_TBT_BRWIN_NO_ROOM;
+    }
+    return rc;
+}
+
+/*
+ * The memory BARs at offsets 10h up to `last` of the function at `bdf`,
+ * added to *need with the largest in *align. I/O BARs are not counted (no
+ * I/O window is opened). 0, or a refusal.
+ */
+static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
+                    PULONG align)
+{
+    ULONG off;
+    ULONG was;
+    ULONG size;
+    ULONG cmd;
+    ULONG rc;
+
+    if (!brRead(c->Io, bdf, XHCI_TBT_CFG_COMMAND, &cmd)) {
+        c->R->WinWhere = bdf;
+        return XHCI_TBT_BRWIN_ACCESS;
+    }
+    if ((cmd & BRWIN_CMD_MEM) != 0) {
+        /* Decoding already: someone configured it; sizing would move it. */
+        c->R->WinWhere = bdf;
+        return XHCI_TBT_BRWIN_ACTIVE;
+    }
+    for (off = 0x10UL; off <= last; off += 4) {
+        if (!brGo(c)) {
+            c->R->WinWhere = bdf;
+            return XHCI_TBT_BRWIN_STALE;
+        }
+        if (!brRead(c->Io, bdf, off, &was)) {
+            c->R->WinWhere = bdf;
+            return XHCI_TBT_BRWIN_ACCESS;
+        }
+        if ((was & 1UL) != 0) {
+            continue;
+        }
+        rc = brBarSize(c, bdf, off, was, &size);
+        if (rc != 0) {
+            return rc;
+        }
+        if (size != 0) {
+            if (!brAdd(need, size)) {
+                c->R->WinWhere = bdf;
+                return XHCI_TBT_BRWIN_NO_ROOM;
+            }
+            if (size > *align) {
+                *align = size;
+            }
+        }
+        if (((was >> 1) & 3UL) == 2UL) {
+            /* A 64-bit BAR: its upper half is the next dword, left 0. */
+            off += 4;
+        }
+    }
+    return 0;
+}
+
+/*
+ * The memory the functions of `bus` need, in *need, with the largest
+ * alignment any of it takes in *align: their BARs, and for each
+ * journalled bridge the window its subtree needs (Need[] and Align[]: the
+ * subtree rounded up to its alignment, at least 1 MiB, with one more
+ * alignment unit where that is above 1 MiB, so the items fit whatever
+ * order they are placed in). 0, or a refusal.
+ */
+static ULONG brNeed(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG need,
+                    PULONG align)
+{
+    ULONG dev;
+    ULONG fn;
+    ULONG bdf;
+    ULONG id;
+    ULONG layout;
+    ULONG multi;
+    ULONG first;
+    ULONG probe;
+    ULONG k;
+    ULONG sub;
+    ULONG subAlign;
+    ULONG size;
+    ULONG rc;
+
+    *need = 0;
+    *align = 0;
+    if (depth > XHCI_TBT_BRNUM_MAX_DEPTH) {
+        return XHCI_TBT_BRWIN_ACCESS;
+    }
+    for (dev = 0; dev < 32UL; dev++) {
+        first = 0;
+        for (fn = 0; fn < 8UL; fn++) {
+            bdf = XHCI_TBT_BDF(bus, dev, fn);
+            layout = 0;
+            multi = 0;
+            probe = brProbe(c->Io, bdf, &id, &layout, &multi);
+            if (probe == 2 || probe == 3) {
+                c->R->WinWhere = bdf;
+                return XHCI_TBT_BRWIN_ACCESS;
+            }
+            if (probe == 0) {
+                if (fn == 0) {
+                    break;
+                }
+                continue;
+            }
+            if (fn == 0) {
+                first = multi;
+            }
+            if (layout == 0) {
+                rc = brBars(c, bdf, 0x24UL, need, align);
+                if (rc != 0) {
+                    return rc;
+                }
+            } else if (layout == XHCI_TBT_HDR_BRIDGE) {
+                k = brSlot(c, bdf);
+                if (k == XHCI_TBT_BRNUM_MAX_BRIDGES) {
+                    /* Not numbered by this call: not ours to window. */
+                    c->R->WinWhere = bdf;
+                    return XHCI_TBT_BRWIN_ACCESS;
+                }
+                rc = brBars(c, bdf, 0x14UL, need, align);
+                if (rc != 0) {
+                    return rc;
+                }
+                rc = brNeed(c, (c->R->Now[k] >> 8) & 0xFFUL, depth + 1, &sub,
+                            &subAlign);
+                if (rc != 0) {
+                    return rc;
+                }
+                if (sub == 0) {
+                    size = 0;
+                    subAlign = 0;
+                } else {
+                    if (subAlign < BRWIN_GRAIN) {
+                        subAlign = BRWIN_GRAIN;
+                    }
+                    size = brRound(sub, subAlign);
+                    if (size == 0 ||
+                        (subAlign > BRWIN_GRAIN && !brAdd(&size, subAlign))) {
+                        c->R->WinWhere = bdf;
+                        return XHCI_TBT_BRWIN_NO_ROOM;
+                    }
+                }
+                c->R->Need[k] = size;
+                c->R->Align[k] = subAlign;
+                if (!brAdd(need, size)) {
+                    c->R->WinWhere = bdf;
+                    return XHCI_TBT_BRWIN_NO_ROOM;
+                }
+                if (subAlign > *align) {
+                    *align = subAlign;
+                }
+            }
+            if (fn == 0 && !first) {
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+/* One register of journalled bridge k written; read back and compared
+ * under `compare` (0: not compared, for a window a bridge may not
+ * implement). */
+static ULONG brWinWrite(BRNUM_CTX *c, ULONG k, ULONG offset, ULONG value,
+                        ULONG compare)
+{
+    ULONG back;
+
+    if (!brSame(c->Io, c->R->Bdf[k], c->R->Id[k])) {
+        return 0;
+    }
+    c->Io->Writes++;
+    c->R->Writes++;
+    if (!c->Io->Write(c->Io->Context, c->R->Bdf[k], offset, 4, value)) {
+        return 0;
+    }
+    if (compare == 0) {
+        return 1;
+    }
+    if (!brRead(c->Io, c->R->Bdf[k], offset, &back)) {
+        return 0;
+    }
+    return ((back & compare) == (value & compare)) ? 1UL : 0UL;
+}
+
+/*
+ * The journalled bridges of `bus` given their windows, from `top` (one
+ * past the highest address) downward but never below `floor`, each
+ * aligned to its Align[], and each subtree inside its bridge's window
+ * from that window's top. 0, or a refusal.
+ */
+static ULONG brPlace(BRNUM_CTX *c, ULONG bus, ULONG top, ULONG floor,
+                     ULONG depth)
+{
+    PXHCI_TBT_BRNUM r;
+    ULONG dev;
+    ULONG fn;
+    ULONG bdf;
+    ULONG id;
+    ULONG layout;
+    ULONG multi;
+    ULONG first;
+    ULONG probe;
+    ULONG k;
+    ULONG base;
+    ULONG mem;
+    ULONG rc;
+
+    r = c->R;
+    if (depth > XHCI_TBT_BRNUM_MAX_DEPTH) {
+        return XHCI_TBT_BRWIN_ACCESS;
+    }
+    for (dev = 0; dev < 32UL; dev++) {
+        first = 0;
+        for (fn = 0; fn < 8UL; fn++) {
+            bdf = XHCI_TBT_BDF(bus, dev, fn);
+            layout = 0;
+            multi = 0;
+            probe = brProbe(c->Io, bdf, &id, &layout, &multi);
+            if (probe == 2 || probe == 3) {
+                r->WinWhere = bdf;
+                return XHCI_TBT_BRWIN_ACCESS;
+            }
+            if (probe == 0) {
+                if (fn == 0) {
+                    break;
+                }
+                continue;
+            }
+            if (fn == 0) {
+                first = multi;
+            }
+            if (layout == XHCI_TBT_HDR_BRIDGE) {
+                k = brSlot(c, bdf);
+                if (k == XHCI_TBT_BRNUM_MAX_BRIDGES) {
+                    r->WinWhere = bdf;
+                    return XHCI_TBT_BRWIN_ACCESS;
+                }
+                if (!brGo(c)) {
+                    r->WinWhere = bdf;
+                    return XHCI_TBT_BRWIN_STALE;
+                }
+                if (r->Need[k] == 0) {
+                    /* Nothing behind it decodes memory: closed. */
+                    base = 0;
+                    mem = 0x0000FFF0UL;
+                } else {
+                    if (top - floor < r->Need[k]) {
+                        r->WinWhere = bdf;
+                        return XHCI_TBT_BRWIN_NO_ROOM;
+                    }
+                    base = (top - r->Need[k]) & ~(r->Align[k] - 1UL);
+                    if (base < floor) {
+                        r->WinWhere = bdf;
+                        return XHCI_TBT_BRWIN_NO_ROOM;
+                    }
+                    mem = ((((base + r->Need[k] - 1UL) >> 16) & 0xFFF0UL)
+                           << 16) |
+                          ((base >> 16) & 0xFFF0UL);
+                    top = base;
+                }
+                r->WinDone[k] = 1;
+                if (!brWinWrite(c, k, XHCI_TBT_CFG_IOWIN, BRWIN_IO_CLOSED, 0) ||
+                    !brWinWrite(c, k, XHCI_TBT_CFG_PFWIN, BRWIN_PF_CLOSED, 0) ||
+                    !brWinWrite(c, k, XHCI_TBT_CFG_MEMWIN, mem,
+                                BRWIN_MEM_MASK)) {
+                    r->WinWhere = bdf;
+                    return XHCI_TBT_BRWIN_ACCESS;
+                }
+                r->Win[k] = mem;
+                if (r->Need[k] != 0) {
+                    rc = brPlace(c, (r->Now[k] >> 8) & 0xFFUL,
+                                 base + r->Need[k], base, depth + 1);
+                    if (rc != 0) {
+                        return rc;
+                    }
+                }
+                if (!brGo(c)) {
+                    r->WinWhere = bdf;
+                    return XHCI_TBT_BRWIN_STALE;
+                }
+                if (!brWinWrite(c, k, XHCI_TBT_CFG_COMMAND,
+                                (r->WasCmd[k] & 0xFFFFUL) | BRWIN_CMD_MEM |
+                                    BRWIN_CMD_BM,
+                                BRWIN_CMD_MEM | BRWIN_CMD_BM)) {
+                    r->WinWhere = bdf;
+                    return XHCI_TBT_BRWIN_ACCESS;
+                }
+            }
+            if (fn == 0 && !first) {
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+/* One register written back, read back under `compare` (0: not read). */
+static ULONG brPut(BRNUM_CTX *c, ULONG bdf, ULONG offset, ULONG value,
+                   ULONG compare)
+{
+    ULONG back;
+
+    c->Io->Writes++;
+    c->R->Writes++;
+    if (!c->Io->Write(c->Io->Context, bdf, offset, 4, value)) {
+        return 0;
+    }
+    if (compare == 0) {
+        return 1;
+    }
+    return (brRead(c->Io, bdf, offset, &back) &&
+            (back & compare) == (value & compare)) ? 1UL : 0UL;
+}
+
+/* Every bridge's window registers and command written back as read,
+ * deepest first, each only while it still reads as the one journalled;
+ * each register attempted whatever the others did. */
+static VOID brWinUndo(BRNUM_CTX *c)
+{
+    PXHCI_TBT_BRNUM r;
+    ULONG k;
+    ULONG bdf;
+    ULONG ok;
+
+    r = c->R;
+    for (k = c->Count; k > 0; k--) {
+        if (!r->WinDone[k - 1]) {
+            continue;
+        }
+        bdf = r->Bdf[k - 1];
+        if (!brSame(c->Io, bdf, r->Id[k - 1])) {
+            r->UndoFailed++;
+            continue;
+        }
+        ok = brPut(c, bdf, XHCI_TBT_CFG_COMMAND,
+                   r->WasCmd[k - 1] & 0xFFFFUL, BRWIN_CMD_MEM | BRWIN_CMD_BM);
+        ok &= brPut(c, bdf, XHCI_TBT_CFG_MEMWIN, r->WasMem[k - 1],
+                    BRWIN_MEM_MASK);
+        ok &= brPut(c, bdf, XHCI_TBT_CFG_PFWIN, r->WasPf[k - 1], 0);
+        ok &= brPut(c, bdf, XHCI_TBT_CFG_IOWIN, r->WasIo[k - 1] & 0xFFFFUL, 0);
+        if (!ok) {
+            r->UndoFailed++;
+            continue;
+        }
+        r->WinDone[k - 1] = 0;
+        r->Win[k - 1] = 0;
+        r->Undone++;
+    }
+}
+
+/*
+ * The windows of the chain just numbered: sized from the BARs behind each
+ * bridge, placed from the top of the port's memory window downward,
+ * prefetchable and I/O windows closed, memory and bus master enabled.
+ * Sets r->WinOutcome; on a refusal every window written is put back.
+ */
+static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
+{
+    PXHCI_TBT_BRNUM r;
+    ULONG pw;
+    ULONG pbase;
+    ULONG plimit;
+    ULONG need;
+    ULONG align;
+    ULONG k;
+    ULONG rc;
+
+    r = c->R;
+    for (k = 0; k < c->Count; k++) {
+        if (!brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_COMMAND, &r->WasCmd[k]) ||
+            !brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_IOWIN, &r->WasIo[k]) ||
+            !brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_MEMWIN, &r->WasMem[k]) ||
+            !brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_PFWIN, &r->WasPf[k])) {
+            r->WinWhere = r->Bdf[k];
+            r->WinOutcome = XHCI_TBT_BRWIN_ACCESS;
+            return;
+        }
+    }
+    if (!brRead(c->Io, port, XHCI_TBT_CFG_MEMWIN, &pw)) {
+        r->WinWhere = port;
+        r->WinOutcome = XHCI_TBT_BRWIN_ACCESS;
+        return;
+    }
+    r->PortMem = pw;
+    pbase = (pw & 0xFFF0UL) << 16;
+    plimit = (((pw >> 16) & 0xFFF0UL) << 16) | 0x000FFFFFUL;
+    if (pbase > plimit || plimit == 0xFFFFFFFFUL) {
+        r->WinWhere = port;
+        r->WinOutcome = XHCI_TBT_BRWIN_PORT_CLOSED;
+        return;
+    }
+    rc = brNeed(c, secondary, 0, &need, &align);
+    r->WinNeed = need;
+    if (rc == 0 && need > plimit - pbase + 1UL) {
+        r->WinWhere = port;
+        rc = XHCI_TBT_BRWIN_NO_ROOM;
+    }
+    if (rc == 0) {
+        rc = brPlace(c, secondary, plimit + 1UL, pbase, 0);
+    }
+    if (rc != 0) {
+        brWinUndo(c);
+        r->WinOutcome = rc;
+        return;
+    }
+    r->WinOutcome = XHCI_TBT_BRWIN_DONE;
+}
+
 /* Every journalled bridge written back as read, deepest first: a parent
  * written back first would cut the configuration cycles to its children
  * off. Journalled parent before child, so the reverse order is right. A
@@ -312,7 +811,7 @@ static VOID brUndo(BRNUM_CTX *c)
     }
 }
 
-ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port,
+ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
                            XHCI_TBT_BRNUM_GO go, PVOID goContext,
                            PXHCI_TBT_BRNUM r)
 {
@@ -334,11 +833,23 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port,
     r->Writes = 0;
     r->Undone = 0;
     r->UndoFailed = 0;
+    r->WinOutcome = XHCI_TBT_BRWIN_NONE;
+    r->WinWhere = XHCI_TBT_NO_BDF;
+    r->PortMem = 0;
+    r->WinNeed = 0;
     for (k = 0; k < XHCI_TBT_BRNUM_MAX_BRIDGES; k++) {
         r->Bdf[k] = XHCI_TBT_NO_BDF;
         r->Id[k] = 0;
         r->Was[k] = 0;
         r->Now[k] = 0;
+        r->Need[k] = 0;
+        r->Align[k] = 0;
+        r->Win[k] = 0;
+        r->WinDone[k] = 0;
+        r->WasCmd[k] = 0;
+        r->WasIo[k] = 0;
+        r->WasMem[k] = 0;
+        r->WasPf[k] = 0;
     }
     if (io->Write == NULL) {
         r->Outcome = XHCI_TBT_BRNUM_NO_WRITER;
@@ -376,6 +887,9 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port,
         r->Numbered = c.Count;
         r->Last = c.Count != 0 ? c.Next - 1 : 0;
         r->Outcome = XHCI_TBT_BRNUM_DONE;
+        if ((flags & XHCI_TBT_BRNUM_F_WINDOWS) != 0 && c.Count != 0) {
+            brWindows(&c, port, secondary);
+        }
         return r->Outcome;
     }
     /* Undone whatever the refusal, a stale operation's too: each write
