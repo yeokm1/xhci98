@@ -1509,6 +1509,21 @@ int main(void)
     test_sizes();
     test_desc_lengths();
     {
+        char s[64];
+        strcpy(s, "QEMU NVM e Ctrl          ");
+        tr_tidy_name(s);
+        CHECK(strcmp(s, "QEMU NVM e Ctrl") == 0, "tidy: trailing spaces (98 SE model)");
+        strcpy(s, "  QEMU   NVMe\tCtrl \r\n");
+        tr_tidy_name(s);
+        CHECK(strcmp(s, "QEMU NVMe Ctrl") == 0, "tidy: leading, inner runs, tab, line end");
+        strcpy(s, "   ");
+        tr_tidy_name(s);
+        CHECK(s[0] == '\0', "tidy: blanks only");
+        strcpy(s, "Disk");
+        tr_tidy_name(s);
+        CHECK(strcmp(s, "Disk") == 0, "tidy: nothing to do");
+    }
+    {
         char set[TR_LETTERS_BYTES];
         char out[128];
         set[0] = '\0';

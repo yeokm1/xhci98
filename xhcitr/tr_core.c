@@ -1187,6 +1187,8 @@ void tr_router_name(const unsigned char *entry, char *out, size_t cap)
         model[i] = (c >= 0x20 && c < 0x7F) ? (char)c : '?';
     }
     model[i] = '\0';
+    tr_tidy_name(vendor);
+    tr_tidy_name(model);
     if (vendor[0] == '\0' && model[0] == '\0') {
         tr_copy(out, "(no name given)", cap);
     } else {
@@ -1698,4 +1700,27 @@ void tr_disk_line(const char *name, const char *letters, char *out,
         tr_sprintf(out, cap, "Disk drive %s, volume%s %s", name,
                    strlen(letters) > 1 ? "s" : "", text);
     }
+}
+
+void tr_tidy_name(char *s)
+{
+    char *w = s;
+    const char *r = s;
+    int space = 0;
+
+    while (*r == ' ' || *r == '\t' || *r == '\r' || *r == '\n') {
+        r++;
+    }
+    for (; *r != '\0'; r++) {
+        if (*r == ' ' || *r == '\t' || *r == '\r' || *r == '\n') {
+            space = 1;
+            continue;
+        }
+        if (space) {
+            *w++ = ' ';
+            space = 0;
+        }
+        *w++ = *r;
+    }
+    *w = '\0';
 }

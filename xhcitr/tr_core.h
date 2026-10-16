@@ -455,6 +455,11 @@ void tr_unit_label(const char *unitName, const char *diskNames,
 void tr_disk_line(const char *name, const char *letters, char *out,
                   size_t cap);
 
+/* A name as shown: leading and trailing white space removed, every run of
+ * white space inside made one space (Windows 98 pads a disk's model with
+ * spaces); in place. */
+void tr_tidy_name(char *s);
+
 /* ---- the report ---------------------------------------------------------- */
 
 /* One node of the report: its label at depth, then its details indented

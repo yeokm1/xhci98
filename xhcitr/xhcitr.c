@@ -595,6 +595,8 @@ static int dn_read(DNODE *t)
             }
         }
     }
+    tr_tidy_name(t->Desc);
+    tr_tidy_name(t->Friendly);
     if (api.Status(&status, &problem, t->Dn, 0) == TR_CR_SUCCESS) {
         t->Status = status;
         t->Problem = (status & INST_DN_HAS_PROBLEM) ? problem : 0;
