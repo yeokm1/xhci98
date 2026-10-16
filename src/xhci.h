@@ -8992,6 +8992,24 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_HEAD_WORDS    306UL /* the records end the header */
 #define XHCI_SNAPSHOT_HCD_NOT_READ      0xFFFFFFFFUL
 
+/*
+ * The PCI configuration region (xhci98.sys from 3.0.0.0, design record 25
+ * revision 12; record 13 section 8.8): the controller's own configuration
+ * space, offsets 00h to FFh, byte for byte, read when the window is cut -
+ * one DWORD at a time through HcdSvcConfigSpace's IRP_MN_READ_CONFIG to
+ * the PCI PDO, at PASSIVE_LEVEL, before the controller lock is taken; never
+ * written, and read nowhere else. A new region and not a header change, so
+ * the schema stays 5: an older driver answers it with
+ * XHCI_SNAPSHOT_S_BAD_REGION. Unlike regions 0 to 3 it is answered at every
+ * XhciLogVerbosity, 0 included: it is not the log channel, holds no driver
+ * state and no kernel address, and its words are what the bus driver hands
+ * any configuration read. A read refused, or a first DWORD of all ones (the
+ * controller gone), answers XHCI_SNAPSHOT_S_NOT_READ with RegionBytes 0 and
+ * no payload; the window itself never fails for it. Offset is in bytes.
+ */
+#define XHCI_SNAPSHOT_REGION_PCI        4UL
+#define XHCI_SNAPSHOT_PCI_BYTES         256UL
+
 /* A device record's link word: the link state (XHCI_SUSP_*) in 3:0, Ss in
  * 8, the window in 9, Armed in 10, Root in 11, the running step
  * (XHCI_SUSP_STEP_*, 0 none) in 23:16. Its last word: the last sequence's
@@ -9062,6 +9080,7 @@ ULONG XhciSnapHcdFlags(ULONG settleDeferred, ULONG linkRecovering,
 #define XHCI_SNAPSHOT_S_BAD_REGION      0x00000008UL /* unknown Region; no payload */
 #define XHCI_SNAPSHOT_S_PAST_END        0x00000010UL /* Offset >= RegionBytes; no payload */
 #define XHCI_SNAPSHOT_S_NO_MMIO         0x00000020UL /* HcInfoStatus not OK; PORTSC not read */
+#define XHCI_SNAPSHOT_S_NOT_READ        0x00000040UL /* PCI region: configuration space not read; no payload */
 
 /*
  * Header BuildFlags bits - what kind of binary produced this window.

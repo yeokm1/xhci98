@@ -1119,12 +1119,49 @@ typedef char hcdSnapshotHubLocPorts[XHCI_TOL_HUB_LOC_PORTS ==
                                         : -1];
 
 /*
+ * The PCI region's bytes (xhci.h, XHCI_SNAPSHOT_REGION_PCI; design record 25
+ * revision 12): the controller's configuration space 00h to FFh into out,
+ * one DWORD per IRP_MN_READ_CONFIG, the route every configuration access of
+ * this driver takes (HcdSvcConfigSpace). Nothing is written. 1 when every
+ * read was answered and the first DWORD is not all ones (the controller
+ * gone); 0 otherwise. The last-access diagnostics HcdSvcConfigSpace keeps
+ * for the start's own log lines are put back as they were. IRQL:
+ * PASSIVE_LEVEL, door gate held, no lock.
+ */
+static ULONG hcdDoorPci(PHCD_CONTROLLER hc, PUCHAR out)
+{
+    ULONG lastStatus;
+    ULONG lastInformation;
+    ULONG offset;
+    ULONG ok;
+
+    lastStatus = hc->ConfigLastStatus;
+    lastInformation = hc->ConfigLastInformation;
+    ok = 1;
+    for (offset = 0; offset < XHCI_SNAPSHOT_PCI_BYTES; offset += 4) {
+        if (HcdSvcConfigSpace(&hc->Hc, TRUE, out + offset, offset, 4) !=
+            MP_STATUS_SUCCESS) {
+            ok = 0;
+            break;
+        }
+    }
+    hc->ConfigLastStatus = lastStatus;
+    hc->ConfigLastInformation = lastInformation;
+    if (ok && hcdGet32(out, 0) == 0xFFFFFFFFUL) {
+        ok = 0;
+    }
+    return ok;
+}
+
+/*
  * XHCISNAP's window, the miniport's xhciPassThru (branch 1.2.0.0) over the
  * HCD's embedded XHCI_EXTENSION: schema 5 unchanged, so the published tool
  * reads it. Returns the USBUSER status: 6 for a GUID not ours, for the shut
  * channel (XhciLogVerbosity 0) and for a block too small for a header - the
  * three answers usbport gave for the miniport's nonzero returns - and 0 with
- * the outcome in the header otherwise. The caller holds the door gate, so
+ * the outcome in the header otherwise. The PCI region alone is answered with
+ * the channel shut (xhci.h); its bytes are read before the power gate and
+ * the controller lock are taken. The caller holds the door gate, so
  * no start or stop runs under the copy; the power gate is taken inside it,
  * the order the gates always nest in. IRQL: PASSIVE_LEVEL.
  */
@@ -1147,6 +1184,8 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
     ULONG valid;
     ULONG mmio;
     ULONG i;
+    ULONG pciRead;
+    UCHAR pci[XHCI_SNAPSHOT_PCI_BYTES];
     KIRQL oldIrql;
 
     if (hcdGet32(guid, 0) != XHCI_SNAPSHOT_GUID_0 ||
@@ -1160,9 +1199,6 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
              ext->TrailingSignature == XHCI_EXTENSION_TRAILING)
                 ? 1UL
                 : 0UL;
-    if (valid && ext->Log.Verbosity == XHCI_LOG_VERBOSITY_OFF) {
-        return HCD_UU_MINIPORT_ERROR;
-    }
     if (paramLength < sizeof(XHCI_SNAPSHOT_HEADER)) {
         return HCD_UU_MINIPORT_ERROR;
     }
@@ -1171,6 +1207,11 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
     requestSignature = hcdGet32(params, 0);
     requestRegion = hcdGet32(params, 4);
     requestOffset = hcdGet32(params, 8);
+    if (valid && ext->Log.Verbosity == XHCI_LOG_VERBOSITY_OFF &&
+        (requestSignature != XHCI_SNAPSHOT_REQUEST_SIGNATURE ||
+         requestRegion != XHCI_SNAPSHOT_REGION_PCI)) {
+        return HCD_UU_MINIPORT_ERROR;
+    }
 
     hcdZero(params, sizeof(XHCI_SNAPSHOT_HEADER));
     header = (XHCI_SNAPSHOT_HEADER *)params;
@@ -1195,6 +1236,10 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
     if (!valid) {
         header->Status |= XHCI_SNAPSHOT_S_BAD_EXTENSION;
         return HCD_UU_OK;
+    }
+    pciRead = 0;
+    if (requestRegion == XHCI_SNAPSHOT_REGION_PCI) {
+        pciRead = hcdDoorPci(hc, pci);
     }
 
     /* MMIO only on a started controller in D0: the door gate keeps the
@@ -1275,6 +1320,24 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
         hcdDoorSlots(hc, header, payload, capacity, requestOffset);
     } else if (requestRegion == XHCI_SNAPSHOT_REGION_HCD) {
         hcdDoorHcd(hc, header, payload, capacity, requestOffset, mmio);
+    } else if (requestRegion == XHCI_SNAPSHOT_REGION_PCI) {
+        if (!pciRead) {
+            header->Status |= XHCI_SNAPSHOT_S_NOT_READ;
+        } else {
+            regionBytes = XHCI_SNAPSHOT_PCI_BYTES;
+            header->RegionBytes = regionBytes;
+            if (requestOffset >= regionBytes) {
+                header->Status |= XHCI_SNAPSHOT_S_PAST_END;
+            } else {
+                available = regionBytes - requestOffset;
+                copied = (available > capacity) ? capacity : available;
+                hcdCopy(payload, pci + requestOffset, copied);
+                header->PayloadBytes = copied;
+                if (copied < available) {
+                    header->Status |= XHCI_SNAPSHOT_S_TRUNCATED;
+                }
+            }
+        }
     } else {
         header->Status |= XHCI_SNAPSHOT_S_BAD_REGION;
     }

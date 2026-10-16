@@ -49,6 +49,7 @@
 #include "../src/cm/cm_query.h"
 #include "tr_core.h"
 #include "tr_log.h"
+#include "tr_pci.h"
 #include "tr_res.h"
 
 #define XHCITR_VERSION XHCI_VER_STR
@@ -293,6 +294,8 @@ typedef struct _UPORT {
                                LOG_HCD or LOG_CM (record 25 section 3.5) */
 #define LOG_HCD     0
 #define LOG_CM      1
+#define K_PCI       13      /* PCI configuration: A the controller or NHI, B
+                               LOG_HCD or LOG_CM (record 25 section 3.6) */
 
 typedef struct _TNODE {
     int Parent;
@@ -378,6 +381,7 @@ static const char *usb_why(int d);
 static void details_usb_eject(TR_TEXT *t, int d);
 static void usb_derive(void);
 static void log_node_add(int parentT, int which, int index, const char *id);
+static void pci_node_add(int parentT, int which, int index, const char *id);
 static void say(const char *text, int warn);
 
 static FARPROC proc(HMODULE module, const char *name)
@@ -1725,6 +1729,7 @@ static void build_usb(int root)
         }
         if (c->Ours) {
             log_node_add(t, LOG_HCD, i, c->DrvKey[0] ? c->DrvKey : c->Path);
+            pci_node_add(t, LOG_HCD, i, c->DrvKey[0] ? c->DrvKey : c->Path);
         }
         tr_key(key, sizeof(key), "H", c->DrvKey, "root");
         rh = add_tnode(t, K_ROOTHUB, i, 0, 0, -1, "Root hub", key);
@@ -1912,6 +1917,7 @@ static void build_tb(int root)
         t = add_tnode(tb, K_NHI, k, 0, 0, h->Node, label, key);
         if (t >= 0) {
             log_node_add(t, LOG_CM, k, h->Id);
+            pci_node_add(t, LOG_CM, k, h->Id);
         }
         if (t < 0 || h->R == NULL) {
             continue;
@@ -2571,6 +2577,115 @@ static void details_log(TR_TEXT *t, int index, int which)
     }
 }
 
+/* ======================================================================== */
+/* PCI configuration (record 25 sections 3.6 and 4.7, revision 12)           */
+/* ======================================================================== */
+
+static void pci_node_add(int parentT, int which, int index, const char *id)
+{
+    char key[280];
+
+    tr_key(key, sizeof(key), which == LOG_CM ? "PC" : "PH", id, NULL);
+    add_tnode(parentT, K_PCI, index, which, 0, -1, "PCI configuration", key);
+}
+
+/* xhci98's controller: one window of the door's PCI region (section 4.8),
+ * read when the node is shown. */
+static void pci_hcd(TR_TEXT *t, int c)
+{
+    unsigned char *b;
+    TR_SNAPW w;
+    DWORD err = 0;
+    HANDLE h;
+    int r;
+
+    b = (unsigned char *)malloc(TR_SNAP_BUFFER_BYTES);
+    h = open_device(uc[c].Path);
+    if (b == NULL || h == INVALID_HANDLE_VALUE) {
+        tr_printf(t, "PCI configuration\n  The controller could not be "
+                     "opened (error %lu).\n",
+                  (unsigned long)(h == INVALID_HANDLE_VALUE ? GetLastError()
+                                                            : ERROR_OUTOFMEMORY));
+    } else {
+        r = log_window(h, b, TR_SNAP_REGION_PCI, 0, &w, &err);
+        if (r == TR_SW_BAD && err != 0) {
+            tr_printf(t, "PCI configuration\n  The driver did not answer "
+                         "(error %lu).\n", (unsigned long)err);
+        } else {
+            (void)tr_hcd_pci_text(t, r, w.Status, w.Region, w.Offset,
+                                  w.RegionBytes, w.PayloadBytes, w.Payload);
+        }
+    }
+    if (h != INVALID_HANDLE_VALUE) {
+        CloseHandle(h);
+    }
+    free(b);
+}
+
+/* An NHI: xhcicm's PCI answer (section 4.7), asked of the query device the
+ * tree's answer came from, kept only for that answer's start. */
+static void pci_cm(TR_TEXT *t, int k)
+{
+    const NHI *n = &nhi[k];
+    unsigned char *b;
+    DWORD got = 0;
+    DWORD err = 0;
+    TR_QPCI q;
+    HANDLE h;
+    int r = 0;
+
+    if (!n->HaveQ) {
+        tr_printf(t, "PCI configuration\n  It cannot be read: %s.\n",
+                  n->Why[0] ? n->Why : "the driver did not answer");
+        return;
+    }
+    b = (unsigned char *)malloc(CM_QP_ASK_BYTES);
+    h = open_device(n->QName);
+    if (b != NULL && h != INVALID_HANDLE_VALUE) {
+        if (DeviceIoControl(h, CM_QP_IOCTL, NULL, 0, b, CM_QP_ASK_BYTES, &got,
+                            NULL) && got <= CM_QP_ASK_BYTES) {
+            r = tr_qpci_parse(b, got, &q);
+        } else {
+            err = GetLastError();
+        }
+    } else {
+        err = h == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_OUTOFMEMORY;
+    }
+    if (h != INVALID_HANDLE_VALUE) {
+        CloseHandle(h);
+    }
+    if (r == 1 && (q.EpochLo != n->Q.EpochLo || q.EpochHi != n->Q.EpochHi)) {
+        tr_put(t, "PCI configuration\n  The controller has restarted since "
+                  "the tree was read: press F5.\n");
+    } else if (r == 1) {
+        tr_qpci_text(t, &q, envNt);
+    } else if (err == ERROR_INVALID_FUNCTION || err == ERROR_NOT_SUPPORTED) {
+        tr_put(t, "PCI configuration\n  Not served by this xhcicm.sys: it is "
+                  "older than this tool.\n");
+    } else if (err != 0) {
+        tr_printf(t, "PCI configuration\n  It could not be read (error "
+                     "%lu).\n", (unsigned long)err);
+    } else {
+        tr_put(t, "PCI configuration\n  The driver's answer is not one this "
+                  "tool reads.\n");
+    }
+    free(b);
+}
+
+static void details_pci(TR_TEXT *t, int index, int which)
+{
+    if (which == LOG_CM) {
+        tr_printf(t, "%s\n\n", dn_name(&gw.N[nhi[index].Node]));
+        pci_cm(t, index);
+    } else {
+        tr_printf(t, "%s (%s)\n\n",
+                  uc[index].Dn >= 0 ? dn_name(&gw.N[uc[index].Dn])
+                                    : "USB host controller",
+                  uc[index].Hcd[0] ? uc[index].Hcd : uc[index].Path);
+        pci_hcd(t, index);
+    }
+}
+
 static void details_of(TR_TEXT *t, int i, int fetch)
 {
     const TNODE *n = &tn[i];
@@ -2652,6 +2767,9 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         break;
     case K_LOG:
         details_log(t, n->A, n->B);
+        break;
+    case K_PCI:
+        details_pci(t, n->A, n->B);
         break;
     default:
         tr_printf(t, "%s\n", n->Label);

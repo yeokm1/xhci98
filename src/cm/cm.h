@@ -386,6 +386,15 @@ typedef struct _CM_QUERY_DEV {
     ULONG CtrBytes;         /* the counters' text of the last publish     */
     ULONG CtrCut;
     UCHAR Ctr[CM_QL_CTR_MAX];
+    /* The PCI answer (record 25 section 4.7): the NHI's location and its
+     * domain's tunnel-port set as the thread last published them, under
+     * Lock; PciGate (a synchronization event) lets one request at a time
+     * build into Pci, outside Lock. */
+    ULONG NhiBdf;
+    ULONG PortCount;
+    CM_QP_PORT_IN Ports[CM_QP_MAX_PORTS];
+    KEVENT PciGate;
+    UCHAR Pci[CM_QP_MAX_BYTES];
 } CM_QUERY_DEV, *PCM_QUERY_DEV;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
