@@ -512,7 +512,7 @@ the stick, and read off the stick image on the host.
 | ME | r6 | fresh, level 2 | pass (G:; a second, stale BIOS-mapped E: for the same stick, in MS-DOS compatibility mode) | decoded; level 2, 51 of 246 counters, 138 records | - |
 | 2000 | r6 | update over 1.1.0.0, level 0 kept; `SNAPON.BAT` then level 2 | pass (F:) | decoded; level 0 with the advice, then level 2 | - |
 | XP | r6 | fresh, level 2 | pass (F:) | decoded (MSI-X present, disabled; pin INTA line 10); level 2, 136 records | - |
-| 7 x86 (TB), as the standard user `tuser` | r6, r7 | fresh, level 2 | pass (F:; the copied `EXPLORER.EXE` hash equal) | both controllers decoded (qemu-xhci: MSI-X enabled, INTx disabled, line 0; the TB xHCI 8086:15C1); level 2 | NHI 00:04.0, tunnel port 00:05.0 (pin INTA line 10, 3 capabilities), below it 01:01.0 NVMe (010802, MSI-X, PCIe v2 Gen 1 x1, PM); 35 reads, 0 refused; the same on r7 (an update install), every function read whole |
+| 7 x86 (TB), as the standard user `tuser` | r6, r7 | fresh, level 2 | pass (F:; the copied `EXPLORER.EXE` hash equal) | both controllers decoded (qemu-xhci: MSI-X enabled, INTx disabled, line 0; the TB xHCI 8086:15C1); level 2 | NHI 00:04.0, tunnel port 00:05.0 (pin INTA line 10, 3 capabilities), below it 01:01.0 NVMe (010802, MSI-X, PCIe v2 Gen 1 x1, PM); 35 reads, 0 refused; the same on r7, every function read whole (r7 put in with `INSTALL /restage` over the r6 build of the same version, as the installer asks; it keeps an `XHCITR.EXE` of the same version, so the tool was copied by hand) |
 | 7 x64 | r6b (unsigned, F8) | fresh, level 2 | pass (F:; hash equal) | decoded (MSI-X enabled); level 2, 141 records | - |
 
 No report held `start.bar`, `start.ok`, `start.common.pa`, `pirq.rcba` or a
