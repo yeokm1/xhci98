@@ -403,6 +403,14 @@ ULONG CmPortsChildAttach(ULONG prevTruncated, PVOID const *chain,
     return CM_CHILD_ATTACH_OVER;
 }
 
+ULONG CmPortsChildFirst(ULONG prevTruncated, ULONG hasAttached)
+{
+    if (!hasAttached) {
+        return CM_CHILD_ATTACH;
+    }
+    return prevTruncated ? CM_CHILD_SKIP : CM_CHILD_WALK;
+}
+
 /* ---- the hold's bound ------------------------------------------------- */
 
 /* a + b, held to CM_PORTS_HOLD_MAX_MS. */

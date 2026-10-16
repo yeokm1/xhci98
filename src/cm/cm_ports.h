@@ -121,9 +121,21 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
 #define CM_CHILD_SKIP           0UL
 #define CM_CHILD_ATTACH         1UL
 #define CM_CHILD_ATTACH_OVER    2UL
+#define CM_CHILD_WALK           3UL
 #define CM_CHILD_CHAIN_MAX      4UL
 ULONG CmPortsChildAttach(ULONG prevTruncated, PVOID const *chain,
                          ULONG chainCount, PVOID busDriver, PVOID self);
+
+/*
+ * The step before it, which decides whether the caller may walk the chain
+ * at all: CM_CHILD_ATTACH when nothing is attached (`hasAttached` 0),
+ * CM_CHILD_SKIP when something is and the previous snapshot was truncated
+ * (a PDO past CM_SNAP_MAX reads as new on every answer and may carry a
+ * built stack, whose objects another driver can detach and delete at any
+ * time, so they are not dereferenced), CM_CHILD_WALK otherwise: walk the
+ * chain, then CmPortsChildAttach.
+ */
+ULONG CmPortsChildFirst(ULONG prevTruncated, ULONG hasAttached);
 
 /*
  * The resume hold's watchdog (section 6.3): the NHI's own resume bound

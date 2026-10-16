@@ -587,33 +587,41 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
     ULONG name0;
     ULONG name1;
     KIRQL irql;
+    ULONG truncated;
     NTSTATUS status;
 
-    /* The walk relies on the PDO being new: nothing the PnP manager
-     * builds can attach or detach before this answer reaches it, so the
-     * chain holds still without the I/O manager's database lock. */
     *over = 0;
     chainCount = 0;
     name0 = 0;
     name1 = 0;
+    /* SnapTruncated is written by this bridge's PnP dispatch alone, which
+     * is where this runs, so the value read stays the value. */
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    truncated = bridge->SnapTruncated;
+    KeReleaseSpinLock(&cmRegLock, irql);
     walk = pdo->AttachedDevice;
-    if (walk != NULL) {
+    decision = CmPortsChildFirst(truncated, (ULONG)(walk != NULL));
+    if (decision == CM_CHILD_WALK) {
+        /* Only for a PDO that is new by a whole snapshot: nothing the PnP
+         * manager builds can attach or detach before this answer reaches
+         * it, so the chain holds still without the I/O manager's database
+         * lock. After a truncated snapshot "new" proves nothing, and
+         * CmPortsChildFirst has skipped without the walk. */
         name0 = cmNameChars(walk->DriverObject, 8);
         name1 = cmNameChars(walk->DriverObject, 12);
-    }
-    while (walk != NULL && chainCount <= CM_CHILD_CHAIN_MAX) {
-        chain[chainCount] = (PVOID)walk->DriverObject;
-        chainCount++;
-        walk = walk->AttachedDevice;
+        while (walk != NULL && chainCount <= CM_CHILD_CHAIN_MAX) {
+            chain[chainCount] = (PVOID)walk->DriverObject;
+            chainCount++;
+            walk = walk->AttachedDevice;
+        }
+        decision = CmPortsChildAttach(truncated, (PVOID const *)chain,
+                                      chainCount, (PVOID)pdo->DriverObject,
+                                      (PVOID)CmDriverObject);
     }
     /* The owner is used under the registration list's lock only: its
      * delisting (CmReenumStop) takes the same lock, so the NHI cannot
      * leave while its log is written. Order: cmRegLock, then LogLock. */
     KeAcquireSpinLock(&cmRegLock, &irql);
-    decision = CmPortsChildAttach(bridge->SnapTruncated,
-                                  (PVOID const *)chain, chainCount,
-                                  (PVOID)pdo->DriverObject,
-                                  (PVOID)CmDriverObject);
     owner = bridge->Owner;
     if (chainCount != 0 && owner != NULL) {
         CmLogNote(owner, "cm.reenum.child.under", name0);

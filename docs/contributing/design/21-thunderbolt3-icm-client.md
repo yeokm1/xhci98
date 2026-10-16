@@ -2183,7 +2183,10 @@ reading of D10 for the owner to confirm.
    is new by the snapshot, nothing attached can be its function driver. The
    driver-object checks hold that reasoning to what can be seen.
    - **Truncated snapshot:** a PDO past `CM_SNAP_MAX` reads as new on every
-     answer and may carry a built stack.
+     answer and may carry a built stack. Another driver can detach and
+     delete that stack's objects at any time, so `CmPortsChildFirst`
+     decides before the walk. After a truncated snapshot it skips any PDO
+     with something attached, without reading the objects.
    - **A bridge stopped and restarted:** this case needs no rule of its
      own. A withdrawal clears the baseline, so the first answer after the
      restart attaches nothing and re-takes the snapshot.

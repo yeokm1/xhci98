@@ -344,6 +344,16 @@ static void test_child_attach(void)
     PVOID chain[CM_CHILD_CHAIN_MAX + 1];
     ULONG i;
 
+    CHECK_EQ(CmPortsChildFirst(0, 0), CM_CHILD_ATTACH,
+             "the first step: nothing attached attaches with no walk");
+    CHECK_EQ(CmPortsChildFirst(1, 0), CM_CHILD_ATTACH,
+             "the first step: nothing attached, truncated or not");
+    CHECK_EQ(CmPortsChildFirst(0, 1), CM_CHILD_WALK,
+             "the first step: something attached after a whole snapshot: walk it");
+    CHECK_EQ(CmPortsChildFirst(1, 1), CM_CHILD_SKIP,
+             "the first step: something attached after a truncated snapshot: skip "
+             "without touching another driver's objects");
+
     CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, 0, &pci, &cm), CM_CHILD_ATTACH,
              "nothing attached: directly above the PDO, as revision 1 did");
     CHECK_EQ(CmPortsChildAttach(1, (PVOID const *)chain, 0, &pci, &cm), CM_CHILD_ATTACH,
