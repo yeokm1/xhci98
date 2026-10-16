@@ -1606,6 +1606,16 @@ static void test_usb_eject(void)
     f.Started = 0;
     CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
           strcmp(why, "stopped - unplug it") == 0, "rule: Code 47");
+    f.Disks = 0;
+    f.Volumes = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
+          strcmp(why, "stopped - unplug it") == 0,
+          "rule: Code 47 after its disk went with the eject (XP)");
+    f.Hid = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS,
+          "rule: an input device held for eject is still not listed");
+    f.Hid = 0;
+    f.Disks = 1;
     f.Problem = 28;
     CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
           strcmp(why, "Windows could not start it") == 0,
@@ -1691,6 +1701,12 @@ static void test_usb_eject(void)
     /* the answers */
     r = tr_usb_answer_nt(0, 0, "", "F:", out, sizeof(out));
     CHECK(r == INST_EJ_DONE && out[0] == '\0', "answer NT: stopped");
+    r = tr_usb_answer_nt(0, 5, "", "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "a program is using F:"),
+          "answer NT: success with a veto type is a veto (XP)");
+    CHECK(tr_eject_cr(0, 0) == 0 && tr_eject_cr(0, 6) == INST_CR_REMOVE_VETOED &&
+          tr_eject_cr(INST_CR_ACCESS_DENIED, 12) == INST_CR_ACCESS_DENIED,
+          "eject cr: only a success with a veto type changes");
     r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "STORAGE\\VOLUME\\1", "F:",
                          out, sizeof(out));
     CHECK(r == INST_EJ_VETO &&

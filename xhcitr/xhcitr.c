@@ -3101,6 +3101,8 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         int notRemovable = 0;
         vetoName[0] = '\0';
         cr = api.Eject(w.N[u].Dn, &veto, vetoName, MAX_PATH, 0);
+        vetoName[MAX_PATH - 1] = '\0';
+        cr = tr_eject_cr(cr, veto);
         if (inst_eject_nt_fallback(cr, veto, w.N[u].HasCaps, w.N[u].Caps) &&
             api.QueryAndRemove != NULL) {
             /* Not removable in Windows' eyes (record 24 section 7.2): the

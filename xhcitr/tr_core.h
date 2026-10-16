@@ -545,6 +545,12 @@ int tr_usb_recheck(const char *parentNow, const char *parentThen,
 int tr_usb_answer_nt(TR_U32 cr, TR_U32 vetoType, const char *vetoName,
                      const char *what, char *out, size_t cap);
 
+/* CM_Request_Device_EjectA's answer as the outcome tables read it: Windows
+ * XP answers a vetoed request CR_SUCCESS with the veto type set (read on
+ * the T.7 leg), so a veto type other than PNP_VetoTypeUnknown (0) turns
+ * success into CR_REMOVE_VETOED. The caller sets the type to 0 first. */
+TR_U32 tr_eject_cr(TR_U32 cr, TR_U32 vetoType);
+
 /* 98 SE and ME: CM_Query_Remove_SubTree's answer. CR_REMOVE_VETOED names
  * no cause, so the text claims none. */
 int tr_usb_answer9x(TR_U32 cr, const char *what, char *out, size_t cap);

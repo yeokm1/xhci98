@@ -1926,6 +1926,12 @@ int tr_usb_rule(const TR_USBF *f, const char **why)
         *why = "a wireless radio";
         return TR_UE_DETAILS;
     }
+    /* Held for eject (Code 47): its disks are gone with the eject, and it
+     * is shown stopped, never offered. */
+    if (f->Problem == TR_CM_PROB_HELD_FOR_EJECT) {
+        *why = "stopped - unplug it";
+        return TR_UE_LISTED;
+    }
     /* A disk or a volume on every target: xhci98.sys reports every device
      * removable, internal ports included (it reads no ACPI _UPC or _PLD),
      * so the capability cannot tell a camera from a stick. */
@@ -2025,6 +2031,11 @@ static void tr_fill1(char *out, size_t cap, const char *text, const char *arg)
     tr_sprintf(out, cap, "%s%s%s", head, arg, p + 2);
 }
 
+TR_U32 tr_eject_cr(TR_U32 cr, TR_U32 vetoType)
+{
+    return cr == 0 && vetoType != 0 ? INST_CR_REMOVE_VETOED : cr;
+}
+
 /* PNP_VETO_TYPE (cfg.h): the three answers whose text names the drive. */
 #define TR_VETO_WINDOWS_APP     3UL
 #define TR_VETO_WINDOWS_SERVICE 4UL
@@ -2035,8 +2046,10 @@ int tr_usb_answer_nt(TR_U32 cr, TR_U32 vetoType, const char *vetoName,
 {
     const char *text;
     int withName;
-    int outcome = inst_eject_nt(cr, vetoType, &text, &withName);
+    int outcome;
 
+    cr = tr_eject_cr(cr, vetoType);
+    outcome = inst_eject_nt(cr, vetoType, &text, &withName);
     if (cap == 0) {
         return outcome;
     }
