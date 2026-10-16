@@ -127,13 +127,29 @@ the bottom.
   withdrawn. The emulator reading design record 21 section 6.1.1 rests on
   was taken before any restart.
 
-## 8. What is pending
+## 8. The recheck of the merged build
 
 The build as merged differs from the third prototype: it places the
 windows largest alignment first, undoes a superseded attempt's bus
-numbers, and checks every value it puts back.
+numbers, and checks every value it puts back. The owner read it on the
+P14s the same evening (`b9c18c41`, 3.0.0.0 merged in), with the release
+`xhcicm.sys` alone replaced:
 
-- TODO (owner): the merged build's recheck on the P14s - the hot plug after a start without the enclosure, and the re-plug after Safely Remove.
+- **Series f, a hot plug after a start without the enclosure.** D:
+  present, XHCITR showing the SK hynix drive behind the Thunderbolt port
+  with every problem code 0; Stor98 on IRQ 10 with its memory at
+  `E0000000-E0005FFF`, both bridges at `E0000000-E00FFFFF`, and
+  `XhciCmBridgeDiag` the same as the third prototype's, words 18 and 19
+  `00010A01` and `00000303`. The largest-alignment-first order places
+  this chain as the bus order did: both windows are 1 MiB aligned.
+- **Series g, the re-plug after Safely Remove** - series b's Code 29
+  case: the unit stopped from XHCITR, unplugged and plugged in again.
+  D: back, no device in error, the same resources and the same
+  diagnostic.
+
+A last change after these readings covers two cases the P14s chain does
+not reach (a link behind a newly numbered bridge still training, and a
+sibling BAR beside windows aligned above 1 MiB); the release carries it.
 
 ## 9. Rules kept
 
