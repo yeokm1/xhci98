@@ -174,12 +174,17 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_VAL_CMD_TIMEOUT_MS     4  /* XhciCmCmdTimeoutMs                  */
 #define CM_VAL_APPROVE_TIMEOUT_MS 5  /* XhciCmApproveTimeoutMs              */
 #define CM_VAL_SAFE_EJECT         6  /* XhciCmSafeEject, D10 (task 39-A.8)  */
-#define CM_VAL_LOG_VERBOSITY      7  /* XhciLogVerbosity, the shared ladder */
+#define CM_VAL_LOG_VERBOSITY      7  /* XhciCmLogVerbosity, the shared
+                                        ladder                         */
 /* The USB4 profile's (design record 22 section 12, task 40-A.6). */
 #define CM_VAL_USB3_TUNNEL        8  /* XhciCmUsb3Tunnel, decision U3       */
 #define CM_VAL_LANE_BONDING       9  /* XhciCmLaneBonding, decision U4      */
 #define CM_VAL_PREOS_CLEANUP     10  /* XhciCmPreOsCleanup, decision U2     */
-#define CM_VAL_COUNT             11
+/* The log's emission (record 21 section 8, the owner's decision of
+ * 2026-10-16): 1 hands the ring to DbgPrint in every flavour. */
+#define CM_VAL_LOG_DEBUGVIEW     11  /* XhciCmLogDebugView                  */
+#define CM_VAL_COUNT             12
+
 
 /* XhciCmMode (record 21 section 8, decision D11). */
 #define CM_MODE_OFF       0  /* bind, log, touch nothing                    */
@@ -236,6 +241,7 @@ VOID CmValuesDefault(PCM_VALUES v);
  * is taken as read: xhci_log.c's XhciLogApplySwitches refuses its own.
  */
 VOID CmValuesTake(PCM_VALUES v, ULONG index, ULONG found, ULONG raw);
+
 
 /*
  * Take XhciCmTunnelBridge: `chars` WCHARs, not counting any terminator. An

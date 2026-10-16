@@ -93,7 +93,7 @@ file|Windows 98|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 reg|Windows 98|Xhci.AddReg|HKR||DevLoader||*NTKERN|remove
 reg|Windows 98|Xhci.AddReg|HKR||NTMPDriver||xhci98.sys|remove
 reg|Windows 98|Xhci.AddReg|HKR||EnumPropPages||"sysclass.dll,USBControllerPropPage"|remove
-reg|Windows 98|Xhci.AddReg|HKR||XhciLogVerbosity|0x00010003|0|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciLogVerbosity|0x00010003|2|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciLogDebugView|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciForceBulkOnly|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciFastPollFsLs|0x00010003|0|keep
@@ -134,7 +134,7 @@ file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci9
 file|Windows 2000|Xhci.CopyOS|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 2000|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 file|Windows 2000|XhciHlpr.CopyFiles|10|System32\Drivers|xhcihlpr.sys|xhcihlpr.sys|xhcihlpr.tmp|0|remove
-reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010003|0|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010003|2|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
@@ -239,7 +239,7 @@ unmodelled|Windows 2000|Comp.Dev.NTx86|DelReg
 path|Windows Vista and 7 x86|device install|Xhci.Dev6.NTx86
 file|Windows Vista and 7 x86|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 file|Windows Vista and 7 x86|XhciHlpr.CopyFiles|10|System32\Drivers|xhcihlpr.sys|xhcihlpr.sys|xhcihlpr.tmp|0|remove
-reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010003|0|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010003|2|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep

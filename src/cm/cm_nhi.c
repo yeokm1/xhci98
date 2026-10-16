@@ -69,6 +69,19 @@
 #include "cm.h"
 #include "cm_nvlink.h"
 
+/* cm.h: an address record, at XhciCmLogVerbosity 4 alone (the shared ring's
+ * own gate, XhciLogAppendAddress). Here rather than beside CmLogNote in
+ * cm_log.c, whose values and emission another branch owns. IRQL:
+ * <= DISPATCH_LEVEL. */
+VOID CmLogNoteAddress(PCM_NHI nhi, const char *label, ULONG value)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&nhi->LogLock, &irql);
+    XhciLogAppendAddress(&nhi->Log, label, value);
+    KeReleaseSpinLock(&nhi->LogLock, irql);
+}
+
 NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
                         const CM_IDS *ids)
 {
@@ -694,7 +707,7 @@ static BOOLEAN cmLiveValidate(PCM_NHI nhi)
      * it. */
     if (v == 0xFFFFFFFFUL || (v & ~0xFUL) != (nhi->LiveBar0 & ~0xFUL) ||
         hi != nhi->LiveBar0Hi) {
-        CmLogNote(nhi, "cm.live.bar-changed", v);
+        CmLogNoteAddress(nhi, "cm.live.bar-changed", v);
         return FALSE;
     }
     if (cmd == 0xFFFFFFFFUL || (cmd & 0x2UL) == 0) {
@@ -1578,6 +1591,31 @@ static VOID cmU4LogCounters(PCM_NHI nhi)
     cmLogBlock(nhi, cmU4CounterNames, (const ULONG *)&nhi->U4.Counters,
                sizeof(TBT_U4_COUNTERS) / sizeof(ULONG));
     cmU4LogPorts(nhi);
+}
+
+/* The blocks cmLogCounters writes at stop, as the query device's log
+ * answer carries them after each pass (design record 25 section 4.5). */
+VOID CmNhiCounterLines(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG at,
+                       PULONG cut)
+{
+    (VOID)CmQueryLines(out, room, at, cmNhiCounterNames,
+                       (const ULONG *)&nhi->Counters,
+                       sizeof(CM_COUNTERS) / sizeof(ULONG), cut);
+    if (!nhi->U4On && nhi->Icm.Ring == NULL) {
+        return;
+    }
+    (VOID)CmQueryLines(out, room, at, cmRingCounterNames,
+                       (const ULONG *)&nhi->Ring.Counters,
+                       sizeof(TBT_RING_COUNTERS) / sizeof(ULONG), cut);
+    if (nhi->U4On) {
+        (VOID)CmQueryLines(out, room, at, cmU4CounterNames,
+                           (const ULONG *)&nhi->U4.Counters,
+                           sizeof(TBT_U4_COUNTERS) / sizeof(ULONG), cut);
+    } else {
+        (VOID)CmQueryLines(out, room, at, cmIcmCounterNames,
+                           (const ULONG *)&nhi->Icm.Counters,
+                           sizeof(TBT_ICM_COUNTERS) / sizeof(ULONG), cut);
+    }
 }
 
 /* The selection, on the thread. Sets StartStatus (a Code 10 refusal only

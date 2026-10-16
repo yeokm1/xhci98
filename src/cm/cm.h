@@ -366,10 +366,23 @@ typedef struct _CM_NHI {
     UCHAR QueryBuf[CM_Q_BUILD_MAX];
     ULONG QueryLastBytes;   /* the answer last published, for its content */
     UCHAR QueryLast[CM_Q_BUILD_MAX];    /* generation                    */
+    /* The counters' text for the log answer (record 25 section 4.5), the
+     * thread's own, built after each pass and published with the answer. */
+    ULONG QueryCtrBytes;
+    ULONG QueryCtrCut;
+    UCHAR QueryCtr[CM_QL_CTR_MAX];
+    /* Log.BytesDropped at the last drain for emission (cm_log.c), under
+     * LogLock; and the ring as that drain took it, the emitter's own (one
+     * emitter at a time: the thread, or the PnP path once it has ended). */
+    ULONG LogDroppedEmitted;
+    UCHAR LogEmit[XHCI_LOG_RING_BYTES];
 } CM_NHI, *PCM_NHI;
 
-/* The query device's extension (CM_KIND_QUERY): no lower object, no
- * pointer to its NHI. Lock guards every field after it. */
+/* The query device's extension (CM_KIND_QUERY): no lower object. Lock
+ * guards every field after it. Its one way to the NHI is Log and LogLock
+ * (record 25 section 4.5): set at creation, cleared with Connected in
+ * CmQueryClose, followed only with Lock held and Connected set, LogLock
+ * taken inside Lock and never the other way. */
 typedef struct _CM_QUERY_DEV {
     CM_COMMON Common;
     KSPIN_LOCK Lock;
@@ -380,6 +393,23 @@ typedef struct _CM_QUERY_DEV {
     ULONG PassTick;         /* the tick count's low word at the last     */
     ULONG Bytes;
     UCHAR Answer[CM_Q_BUILD_MAX];
+    PXHCI_LOG Log;          /* the NHI's ring, and its lock               */
+    PKSPIN_LOCK LogLock;
+    ULONG EpochLo;          /* this start's, for the log answer           */
+    ULONG EpochHi;
+    ULONG CtrBytes;         /* the counters' text of the last publish     */
+    ULONG CtrCut;
+    UCHAR Ctr[CM_QL_CTR_MAX];
+    /* The PCI answer (record 25 section 4.7): the NHI's location and its
+     * domain's tunnel-port set as the thread last published them, under
+     * Lock; PciGate (a synchronization event) lets one request at a time
+     * build into Pci, outside Lock. */
+    ULONG NhiBdf;
+    ULONG PortCount;
+    CM_QP_PORT_IN Ports[CM_QP_MAX_PORTS];
+    KEVENT PciGate;
+    UCHAR Pci[CM_QP_MAX_BYTES];
+    UCHAR PciScratch[CM_QP_CFG_BYTES];  /* one prefix read, under PciGate */
 } CM_QUERY_DEV, *PCM_QUERY_DEV;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
@@ -578,10 +608,21 @@ VOID CmQueryClose(PCM_NHI nhi);
 VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert);
 NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp);
 
+/* cm_nhi.c: the counter blocks the stop dump writes (the NHI's, the
+ * ring's, and the ICM's or the USB4 connection manager's), as text lines
+ * (CmQueryLines) appended to out at *at; on the thread, PASSIVE_LEVEL. */
+VOID CmNhiCounterLines(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG at,
+                       PULONG cut);
+
 /* cm_log.c */
 VOID CmLogInit(PCM_NHI nhi);
 VOID CmLogApply(PCM_NHI nhi);
 VOID CmLogNote(PCM_NHI nhi, const char *label, ULONG value);
+/* A record whose value is an address (a bus address, a devnode handle):
+ * XhciLogAppendAddress under LogLock, so it reaches the ring at
+ * XhciCmLogVerbosity 4 alone, as xhci98.sys's address records do (design
+ * record 25 revision 12). Defined in cm_nhi.c. <= DISPATCH_LEVEL. */
+VOID CmLogNoteAddress(PCM_NHI nhi, const char *label, ULONG value);
 VOID CmLogEmit(PCM_NHI nhi, ULONG reason);
 
 /* cm_pool.c */

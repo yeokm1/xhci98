@@ -42,9 +42,10 @@ it.
 
 ## What it needs
 
-- The channel switched on. `XhciLogVerbosity` defaults to `0` on every machine,
-  and `0` is off outright: the driver answers this tool the way a build without
-  the channel would. `XHCISNAP -verbosity 2` sets it on every xhci98 controller
+- The channel switched on. `XhciLogVerbosity` defaults to `2` since `3.0.0.0`
+  (`0` before, and an update keeps the value an earlier install wrote); `0` is
+  off outright: the driver answers this tool the way a build without the
+  channel would. `XHCISNAP -verbosity 2` sets it on every xhci98 controller
   the machine has. Then restart.
 - Nothing else. No service, no `regedit`, and no `IOCTL_USB_DIAGNOSTIC_MODE_ON`;
   the route itself is ungated.
@@ -93,7 +94,7 @@ save to. There is one value to set.
 
 `-verbosity N` prints each key's previous level beside the write. A value out
 of range is one the driver refuses rather than clamps (a start that reads it
-applies the default, which is off), so the tool reports it rather than silently
+applies the default, which is 2 since `3.0.0.0` and was off before), so the tool reports it rather than silently
 correcting it. A reported value cannot drift from the driver's policy; a
 corrected one can.
 

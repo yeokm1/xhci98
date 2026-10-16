@@ -3125,12 +3125,12 @@ mismatch it overrode, and `-UploadSetOnly` holds a re-assembly to those
 three pins (an override is a verdict against the checkout's header, so a
 re-assembly passes it again where needed); `-Stor98HeaderPath`, the
 self-tests' substitute header, is refused without `-SkipBinaryGates`. For
-example, the `3.0.0.0` cut with Stor98 `0.3.0.1`:
+example, the `3.0.0.0` cut with Stor98 `0.4.0.0`:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <pfx> ^
-    -Stor98Version 0.3.0.1 -Stor98Dir <stor98>\releases\0.3.0.1 ^
-    -Stor98SumsSha256 aee07c9c6faffa4e7aa9e28ff0d523f04cc6745a08af8835f59a33777aecccb9 ^
+    -Stor98Version 0.4.0.0 -Stor98Dir <stor98>\releases\0.4.0.0 ^
+    -Stor98SumsSha256 ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7 ^
     -Stor98InterfaceVersion 4
 ```
 
@@ -6431,7 +6431,7 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 
 | Value | Read | When absent | Range the code takes | Written | Absent reads as the written value? |
 |---|---|---|---|---|---|
-| `XhciLogVerbosity` | each start | 0 | 0-4; above 4 refused, 0 | 0 | yes |
+| `XhciLogVerbosity` | each start | 2 (0 before `3.0.0.0`) | 0-4; above 4 refused, 2 | 2 (a fresh install; an update keeps the value) | yes |
 | `XhciLogDebugView` | each start | 0 | 0 off, any other on | 0 | yes |
 | `XhciImodInterval250ns` | each start | 4000 | 10-4000; outside, 4000 | 160 | no, by design: 160 is the owner's shipped interval (2026-10-04) and 4000 only the fallback; a written 4000 reads as absent does |
 | `XhciForceBulkOnly` | each enumeration | 1 (37.2) | 0 off, any other on | 0 | no, by design: absent is text-mode Setup, where only Setup's own `usbstor` binds storage, so Bulk-Only; the install's 0 keeps UAS (issue 15) |

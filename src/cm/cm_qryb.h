@@ -103,4 +103,158 @@ VOID CmQuerySetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs);
  * returns it. */
 ULONG CmQueryBumpGen(UCHAR *answer, ULONG bytes);
 
+/*
+ * ---- The log answer (cm_query.h CM_QL_*, design record 25 section 4.5) ----
+ *
+ * The counters are text the thread writes after each pass (CmQueryLines,
+ * from the stop dump's name tables) and publishes with the status answer;
+ * the log is the ring, copied at the request under its own lock
+ * (cm_qryos.c) by CmQueryLogAnswer, which leaves the ring as it was.
+ */
+
+/* Lines "name=XXXXXXXX" CR LF for names[i] and values[i], i < count,
+ * appended to out at *at, out being room bytes in all; *at moves past
+ * what was written. A line that does not fit is not written, nor any
+ * after it, and *cut is set to 1; once *cut is set, nothing more is
+ * written. A name byte outside 0x21..0x7E is written '.'. Returns the
+ * lines written. */
+ULONG CmQueryLines(UCHAR *out, ULONG room, PULONG at,
+                   const char *const *names, const ULONG *values,
+                   ULONG count, PULONG cut);
+
+typedef struct _CM_QLOG_IN {
+    ULONG Flags;            /* CM_QL_F_RECORDING, _REFUSED, _STOPPING,
+                               _EMITTED and _INERT; the builder adds the
+                               rest                                      */
+    ULONG Verbosity;
+    ULONG VerbosityRead;
+    ULONG EpochLo;
+    ULONG EpochHi;
+    const UCHAR *Ctr;       /* the counters' text, CtrBytes bytes        */
+    ULONG CtrBytes;         /* above CM_QL_CTR_MAX: none, and cut        */
+    ULONG CtrCut;
+    const UCHAR *Ring;      /* the ring as XHCI_LOG holds it: RingBytes  */
+    ULONG RingBytes;        /* a power of two, at most CM_QL_LOG_MAX;    */
+    ULONG Head;             /* any other shape is an empty log           */
+    ULONG Used;
+    ULONG Dropped;
+    ULONG Appends;
+    ULONG Pass;             /* the counters' pass                         */
+} CM_QLOG_IN, *PCM_QLOG_IN;
+
+/* The log answer into out (room bytes), with CmQueryAnswer's rules:
+ * CM_Q_ANS_TOO_SMALL under CM_QL_HDR_BYTES (nothing written);
+ * CM_Q_ANS_HEADER under the whole, the header alone with CM_QL_O_BYTES the
+ * size needed; else CM_Q_ANS_WHOLE. *info the bytes written. The log is
+ * the ring's Used bytes oldest first: a byte outside 0x20..0x7E, CR and LF
+ * written '.'; when the oldest bytes may be a record's tail (Dropped != 0,
+ * or CM_QL_F_EMITTED: a drain) the text starts after the first LF
+ * (CM_QL_F_LOG_CUT); the value of a record CmQueryLogAddress names is
+ * written "--------" (CM_QL_F_WITHHELD). The age is CM_Q_UNKNOWN until
+ * CmQueryLogSetAge. */
+ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
+                       PULONG info);
+
+/* The age written into a log answer of `info` bytes: CM_Q_UNKNOWN where
+ * `pass` is 0. */
+VOID CmQueryLogSetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs);
+
+/* 1 when a record whose label is the `n` bytes at `label` carries an
+ * address as its value: cm.live.bar-changed, the BAR as read (cm_nhi.c),
+ * and cm.reenum.9x.gone.superseded and .id-changed, a CONFIGMG devnode
+ * handle (cm_cfgwk.c). A record added whose value is an address is added
+ * here. */
+ULONG CmQueryLogAddress(const UCHAR *label, ULONG n);
+
+/* One record of the ring as the DebugView emission prints it (cm_log.c),
+ * `n` bytes at `line`: below XhciCmLogVerbosity 4, the value of a record
+ * CmQueryLogAddress names is written "--------", the answer's rule; at 4
+ * the line is left as recorded, as xhci98.sys's ring holds its addresses
+ * at 4. Returns 1 when a value was withheld. */
+ULONG CmQueryLogLine(UCHAR *line, ULONG n, ULONG verbosity);
+
+/*
+ * The DebugView emission of a drained ring (cm_log.c): `n` bytes at
+ * `text`, oldest first, taken from the ring in one drain under its lock.
+ * `partial` nonzero when the wrap overwrote bytes since the last
+ * emission, so the first line can be a record's tail with its label gone:
+ * it is not handed on. Every other line - up to and including its LF, or
+ * the bytes left at the end - goes through CmQueryLogLine and then to
+ * `emit`, in order, at most CM_QL_EMIT_LINE bytes at a time. Returns the
+ * lines handed on.
+ */
+#define CM_QL_EMIT_LINE         128UL
+typedef VOID (*CM_QL_EMIT_FN)(PVOID context, const UCHAR *line, ULONG n);
+ULONG CmQueryLogEmitLines(UCHAR *text, ULONG n, ULONG partial,
+                          ULONG verbosity, CM_QL_EMIT_FN emit,
+                          PVOID context);
+
+/*
+ * ---- The PCI answer (cm_query.h CM_QP_*, design record 25 section 4.7) ----
+ *
+ * Built at the request by CmQpciBuild (cm_qpci.c) over a reader the caller
+ * supplies, then answered by CmQpciAnswer with the sizing rules above.
+ */
+
+/* The reader: `bytes` (4 or CM_QP_CFG_BYTES) of bdf's configuration space
+ * from offset 0 into buf. CM_QP_RD_OK when read (all ones where the
+ * function is absent is still OK), CM_QP_RD_ABSENT when the bus driver
+ * says no function answers there, CM_QP_RD_FAIL when the read was
+ * refused. Never a write. */
+#define CM_QP_RD_OK             0UL
+#define CM_QP_RD_ABSENT         1UL
+#define CM_QP_RD_FAIL           2UL
+typedef ULONG (*CM_QP_READ)(PVOID context, ULONG bdf, UCHAR *buf,
+                            ULONG bytes, PULONG valid);
+/* (*valid: with CM_QP_RD_OK, the bytes read - `bytes`, or fewer whole
+   DWORDs where the bus driver answered fewer, the rest of buf zero.) */
+
+typedef struct _CM_QP_PORT_IN {
+    ULONG Bdf;              /* XHCI_TBT_BDF                               */
+    ULONG Source;           /* XHCI_TBT_SRC_*                             */
+    ULONG Flags;            /* CM_PORT_*                                  */
+} CM_QP_PORT_IN;
+
+typedef struct _CM_QPCI_IN {
+    ULONG Flags;            /* CM_QP_F_STOPPING; the builder adds the rest */
+    ULONG EpochLo;
+    ULONG EpochHi;
+    ULONG NhiBdf;           /* CM_Q_UNKNOWN where not read                */
+    ULONG PortCount;        /* above CM_QP_MAX_PORTS: cut, and TRUNCATED  */
+    CM_QP_PORT_IN Ports[CM_QP_MAX_PORTS];
+    ULONG ReadBelow;        /* 0: one CM_QP_S_NOT_READ_OS entry a member  */
+    CM_QP_READ Read;
+    PVOID Context;
+} CM_QPCI_IN, *PCM_QPCI_IN;
+
+/* A reader of a prefix: the first `bytes` of bdf's configuration space
+ * into buf; returns the bytes it read, 2 where the bus driver says no
+ * function answers (HalGetBusData's form), fewer where it read less. */
+typedef ULONG (*CM_QP_PREFIX)(PVOID context, ULONG bdf, UCHAR *buf,
+                              ULONG bytes);
+
+/* CM_QP_READ's answer for `bytes` of bdf (4 or CM_QP_CFG_BYTES) built one
+ * DWORD at a time from prefixes of offset + 4 bytes - the read every
+ * other configuration access of this driver makes, which Windows 98's
+ * HAL answers where one long read may not. The first DWORD decides:
+ * CM_QP_RD_ABSENT where the prefix answers 2, CM_QP_RD_FAIL where it
+ * reads less. A later DWORD that cannot be read ends the assembly: the
+ * rest is zero, *valid the bytes read, and the answer CM_QP_RD_OK.
+ * `scratch` holds CM_QP_CFG_BYTES. */
+ULONG CmQpciReadByDword(CM_QP_PREFIX prefix, PVOID context, ULONG bdf,
+                        UCHAR *buf, ULONG bytes, UCHAR *scratch,
+                        PULONG valid);
+
+/* The PCI answer into buf (room at least CM_QP_MAX_BYTES; 0 returned
+ * otherwise): the NHI, the members, the functions below them within the
+ * CM_QP_MAX_* bounds. Returns its length. */
+ULONG CmQpciBuild(UCHAR *buf, ULONG room, const CM_QPCI_IN *in);
+
+/* The IOCTL's answer from a built one: CM_Q_ANS_TOO_SMALL under
+ * CM_QP_HDR_BYTES (nothing written), CM_Q_ANS_HEADER under the whole (the
+ * header alone, CM_QP_O_BYTES the size needed), else CM_Q_ANS_WHOLE;
+ * *info the bytes written. */
+ULONG CmQpciAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
+                   PULONG info);
+
 #endif /* CM_QRYB_H */

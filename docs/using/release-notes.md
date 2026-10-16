@@ -206,13 +206,22 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   and removes a USB storage device or a Thunderbolt or USB4 device safely,
   with no administrator rights ("The xHCI98 USB Tree", below; design record 25). `xhcicm.sys`
   gains a read-only query device for it.
+- **PCI details Windows does not show**, in the same tool: the interrupt
+  pin and line, MSI and MSI-X, the PCI Express link speed and width, the
+  BARs and a bridge's buses and windows, for each xHCI controller this
+  driver runs and for each Thunderbolt or USB4 controller, its tunnel
+  ports and the devices behind them. The drivers only read; `xhci98.sys`
+  gains a read-only query request for it and for its log (design record
+  13 section 8.12).
+- **The log records by default**: `XhciLogVerbosity` is `2` on a fresh
+  install, so a log exists before anyone asks for one; an update keeps the
+  value already there ("The log, and how to send one").
 - **Device Manager names by generation**: "Thunderbolt and USB4 in Device
   Manager", below.
-- **A link-state channel for Stor98**: on Windows 2000 to 7,
-  `xhcicm.sys` publishes the channel of Stor98's interface 4. Stor98
-  `0.3.0.1` does not read it yet and detects a removed drive by itself;
-  nothing waits for it. On 98 SE and ME this release has no channel
-  ("NVMe drives behind a tunnel").
+- **A link-state channel for Stor98**: `xhcicm.sys` publishes the
+  channel of Stor98's interface 4 on every target, Windows 98 SE to 7,
+  and states on it which NVMe drive is behind a tunnel; Stor98 `0.4.0.0`
+  reads it on all of them ("NVMe drives behind a tunnel").
 - **Stor98 in the download**: the package carries a release of Stor98,
   the NVMe driver for Windows 98 SE to 7, as its own project released
   it (which release: "NVMe drives behind Thunderbolt or USB4", under
@@ -257,7 +266,10 @@ settings.
 
 **Untested hosts.** Only the Alpine Ridge JHL6240 (`8086:15BF`) has been
 captured from a real machine, a ThinkPad P14s Gen 1, and the Thunderbolt 3
-half was built and read against an emulator of that capture. Every other
+half was built and read against an emulator of that capture. It has since
+been read on the owner's ThinkPad P14s Gen 1 under Windows 98 SE: hot plug,
+Safely Remove and re-plug of an NVMe enclosure
+(`docs/issues/18-p14s-gen1-tb3-nvme-hot-plug-98se.md`). Every other
 Thunderbolt controller this driver claims - Falcon Ridge, the other
 Alpine Ridge parts, Titan Ridge, Maple Ridge, and the Ice Lake to Meteor
 Lake integrated controllers - is untested: it is driven to the Linux
@@ -349,6 +361,18 @@ the logged-on user, with no administrator rights.
 - On 98 SE and ME the stop removes the device from Device Manager; until
   it is unplugged, Device Manager's Refresh can start it again. On XP and
   later Windows holds it stopped (Code 47) until it is unplugged.
+- **PCI configuration**: each xHCI controller `xhci98.sys` drives, and
+  each Thunderbolt or USB4 controller, has a "PCI configuration" item:
+  vendor, device, subsystem, revision and class, the Command and Status
+  registers, the interrupt pin and line, the BARs as read, a bridge's
+  buses and windows, and the capabilities (MSI and MSI-X with their state
+  and vectors, the PCI Express link now and what it is capable of, power
+  management). Under a Thunderbolt or USB4 controller it lists the
+  controller, its tunnel ports and, on 2000 and later, the devices behind
+  each port; on 98 SE and ME those devices read "not read on this
+  system". The drivers read configuration space and never change it. An
+  older driver's item reads "not served by this xhci98.sys" (or
+  xhcicm.sys).
 
 ### Removing a Thunderbolt or USB4 device safely
 
@@ -435,20 +459,28 @@ Thunderbolt or USB4", under "Installing"); read them before installing
 it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the
 drive.
 
-On Windows 2000 to 7, `xhcicm.sys` publishes the link-state channel of
-Stor98's interface 4, the kernel callback object
-`\Callback\Stor98LinkState`, and states on it which NVMe function is
-behind a tunnel when the tunnel comes up. Stor98 `0.3.0.1` does not
-read the channel yet:
+`xhcicm.sys` publishes the link-state channel of Stor98's interface 4
+and states on it which NVMe function is behind a tunnel when the tunnel
+comes up. On Windows 2000 to 7 the channel is the kernel callback object
+`\Callback\Stor98LinkState`; on Windows 98 SE and ME it is a registry
+locator under `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98`
+beside a key that proves it belongs to the current boot,
+`HKEY_DYN_DATA\Stor98LinkState`, which `xhcicm.sys` answers for as long
+as Windows runs. The bundled Stor98 reads it on every target:
 
-- no statement is read or acknowledged, and nothing waits for one;
-- Stor98 detects a removed drive by itself, at its own deadline (about 5 seconds).
-
-On Windows 98 SE and ME, `xhcicm.sys` in this release publishes no
-channel, so Stor98 runs there without it:
-
-- there is no clean-eject handshake and no acknowledged link-down;
-- Stor98 detects a removed drive by itself.
+- On Windows 2000 and XP x64, where `xhcicm.sys` can prove that the
+  drive's link went down and the drive was reset (today only in its
+  emulator), it says so on the channel, Stor98 acknowledges, and the
+  drive is removed at once rather than after Stor98's own deadline of
+  about 5 seconds.
+- Everywhere else nothing is stated: Stor98 detects a removed drive by
+  itself, at that deadline.
+- On Windows 98 SE and ME Stor98 finds the channel, also for a drive
+  plugged in after Windows started (it looks for its drive's entry again
+  after it starts). This release makes no link-down statement there and
+  no clean-eject handshake: an eject with the install or tray tool is
+  Windows' own (flush and stop), and for an unplugged drive Stor98
+  relies on its own deadline.
 
 ### The connection manager's registry values
 
@@ -480,7 +512,8 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
 | `XhciCmCmdTimeoutMs` | `5000` | Firmware connection manager: the wait for a command's answer, in ms (`1000` to `60000`), three tries |
 | `XhciCmApproveTimeoutMs` | `10000` | Firmware connection manager: the wait for an approval's answer, in ms, the same bounds |
-| `XhciLogVerbosity` | `0` | The driver's log, as `xhci98.sys`'s; the `release` flavour prints nothing, the `debug` flavour to DebugView |
+| `XhciCmLogVerbosity` | `2` | The driver's log, on the same `0`-`4` ladder as `xhci98.sys`'s `XhciLogVerbosity`; read by the xHCI98 USB Tree |
+| `XhciCmLogDebugView` | `0` | `1` sends the driver's log to DebugView as well, in every build (the `debug` build always does) |
 
 The install tool asks "Install Thunderbolt 3 / USB4 support?": Enter
 answers Y with a Thunderbolt or USB4 controller present and N with none
@@ -1844,7 +1877,7 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles Stor98 `0.3.0.1`.
+This download bundles Stor98 `0.4.0.0`.
 
 <!-- The cut replaces the line above with "This download bundles Stor98
 `<version>`." or "This download bundles no Stor98."
@@ -3246,7 +3279,9 @@ shutdown ("The log, and how to send one").
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 
-See "The log, and how to send one". Both default to `0`.
+See "The log, and how to send one". `XhciLogVerbosity` defaults to `2`
+since `3.0.0.0` (`0` before; an update keeps the value there);
+`XhciLogDebugView` defaults to `0`.
 
 ### The 1.2.0.0 virtual-hub values have no effect
 
@@ -3331,8 +3366,14 @@ descriptors at High Speed.
 The driver keeps a small log of what happened on the bus, inside itself, and
 `XHCISNAP.EXE` (in the download's `tools\xhcisnap\` directory; before
 `2.4.0.0`, `xhcisnap\` at the top of the download) reads it off the running
-machine. The log is off by default and stays off unless you are diagnosing
-something.
+machine. From `3.0.0.0` it records by default: a fresh install sets
+`XhciLogVerbosity` to `2` (the log of what happened, with no internal
+addresses); an update keeps the value an earlier install wrote, which was
+`0`, off, until `2.4.0.0`. Recording costs a little speed: on one machine
+(a ThinkPad P14s Gen 1 under 98 SE, a USB disk) about 1 to 2% at large
+transfers and up to about 5% at small ones. For the last few percent set
+the level to `0` with `SNAPOFF.BAT` (or the xHCI98 USB Tree's Logging
+level, where the tool offers it), and restart.
 
 From `2.4.0.0` three batch files beside it do the typing, on every Windows
 the driver runs (under `COMMAND.COM` on 98 SE and ME, `cmd.exe` from 2000 to
@@ -3447,7 +3488,7 @@ says they were skipped and is otherwise the same.
 
 | Value | What it does |
 |---|---|
-| `XhciLogVerbosity` | `0` off (the driver does not answer `XHCISNAP` at all); `1` counters only; `2` adds the log of what happened (use this one); `3` adds the USB port register table; `4` everything, including internal addresses in the plain-text report. A value outside `0`-`4` is treated as `0` |
+| `XhciLogVerbosity` | `0` off (the driver does not answer `XHCISNAP` at all); `1` counters only; `2` adds the log of what happened (use this one); `3` adds the USB port register table; `4` everything, including internal addresses in the plain-text report. The default is `2` since `3.0.0.0` (`0` before; an update keeps the value already there). A value outside `0`-`4` is treated as the default |
 | `XhciLogDebugView` | `1` hands the log to a debug-output capture tool (DebugView) from the driver's own thread as it runs, and once more at each stop. Use it only when asked |
 
 Since `2.2.0.0` the report also says what happened to a device on a root
@@ -3462,6 +3503,52 @@ cause, and the driver's counters, are in the report as well, which
 `2.1.1.0`'s was not. `xhcisnap/README.md` lists every record. A report
 from `2.1.1.0` on a machine such as the E460 above showed the port trained
 and nothing more; one from `2.2.0.0` names the step that stopped.
+
+### Both logs in the xHCI98 USB Tree (from `3.0.0.0`)
+
+The xHCI98 USB Tree (`XHCITR.EXE`, see "The xHCI98 USB Tree" in the
+README) shows the logs of both drivers, read from the running drivers, with
+no debug build and no DebugView, and needs no administrator rights to do
+it. Each xHCI controller `xhci98.sys` drives has a "Driver log (xhci98)"
+node under it, and each Thunderbolt or USB4 controller a "Driver log
+(xhcicm)" node. Select the node to read the log: the details pane shows
+whether the driver is recording, its counters, and the log, oldest record
+first. Save Report (and `XHCITR /report <file>`) writes both logs and the
+counters into the report, as plain text with no internal addresses in it.
+
+The tool reads `xhci98.sys` through a query request of the driver's own,
+as it reads `xhcicm.sys`, with no `SNAPON.BAT` needed; an `xhci98.sys`
+older than `3.0.0.0` is read through `XHCISNAP`'s channel as before.
+Both drivers record at level 2 by default. Where a driver's recording
+is off, the node says how to turn it on:
+
+- **`xhci98.sys`**: it records at level 2 after a fresh install. Where an
+  earlier install left it off, run `SNAPON.BAT` as above (on Vista and 7,
+  as an administrator), then restart Windows. At level 1 the node shows
+  the counters only. At level 4 it shows the counters but not the log,
+  because that level records internal addresses: use level 2.
+- **`xhcicm.sys`**: set the DWORD value `XhciCmLogVerbosity` to `2` on the
+  Thunderbolt or USB4 controller's driver key, then restart Windows. The
+  node names the key in full (the "Driver key" its details show, under
+  `HKEY_LOCAL_MACHINE`). On 2000 and later that needs an administrator; the
+  tool itself never writes the registry. Its counters are shown whatever
+  the level.
+
+`xhcicm.sys` also prints its log to a debugger's output (DebugView) when
+`XhciCmLogDebugView` is `1` on the same key, in every build, from its own
+thread and never from an interrupt, as `xhci98.sys` does under
+`XhciLogDebugView`. Below level 4 it prints no address. The tool's node
+needs neither.
+
+`xhcicm.sys` keeps the last 16 KiB of its log, from when Windows first
+loaded it for the controller; a restart of the controller does not clear
+it. The tool reads it without removing anything, so it can be read again.
+Three of its records hold an address as their value; the tool shows those
+values as `--------`.
+
+`XHCISNAP` stays the way to send `xhci98.sys`'s full report (the `.DEV`, the
+port registers and the raw dump); the tool's report is the quick one, and
+the only one that carries `xhcicm.sys`'s log.
 
 The log cannot capture a crash: a machine that has bugchecked is not running
 for anything to read.

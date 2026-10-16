@@ -25,10 +25,11 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
     L"XhciCmCmdTimeoutMs",
     L"XhciCmApproveTimeoutMs",
     L"XhciCmSafeEject",
-    L"XhciLogVerbosity",
+    L"XhciCmLogVerbosity",
     L"XhciCmUsb3Tunnel",
     L"XhciCmLaneBonding",
-    L"XhciCmPreOsCleanup"
+    L"XhciCmPreOsCleanup",
+    L"XhciCmLogDebugView"
 };
 
 /* Not written by any INF (record 21 section 8): absent is no override. */

@@ -84,8 +84,15 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
+| `XhciLogVerbosity` | The driver's log, read by `XHCITR` and `XHCISNAP` | `0` | `4` | `2` | `2` (a fresh install; an update keeps the value there) |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
+
+**The Thunderbolt driver's log (`xhcicm.sys`)**, from `3.0.0.0`: these two are in the Thunderbolt or USB4 controller's driver key, not the xHCI controller's (`...\Services\Class\System\NNNN` on 98 SE and ME, `...\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 7, the subkey whose `DriverDesc` names the Thunderbolt or USB4 controller; the xHCI98 USB Tree's "Driver log (xhcicm)" item names it in full)
+
+| Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
+|---|---|---|---|---|---|
+| `XhciCmLogVerbosity` | The driver's log, read by the xHCI98 USB Tree | `0` | `4` | `2` | `2` |
+| `XhciCmLogDebugView` | The log sent to DebugView as well, in every build | `0` | `1` | `0` | `0` |
 
 The install writes every value in these tables, at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 

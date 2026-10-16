@@ -5510,20 +5510,21 @@ A value that is absent means the default each one states.
   XhciLogVerbosity  -  the whole log switch
   .........................................
 
-  Default 0. Level 0 is off outright; above it each level is the one below
-  plus one thing:
+  Default 2 (an update keeps the value an earlier install wrote, which
+  was 0 before this release). Level 0 is off outright; above it each
+  level is the one below plus one thing:
 
-      0   OFF. The driver does not answer XHCISNAP at all. This is what a
-          fresh install does.
+      0   OFF. The driver does not answer XHCISNAP at all.
       1   the channel, plus the counters. The log of what happened is still
           off, so this is the cheapest reading there is.
-      2   plus the log of what happened.  USE THIS ONE.
+      2   plus the log of what happened.  USE THIS ONE. A fresh install
+          sets it.
       3   plus the USB port register table.  Still no internal addresses.
       4   plus everything, including internal addresses. Only if asked -
           it is more than you would want to paste in public.
 
   A value outside 0-4 is REFUSED rather than treated as the nearest one: the
-  driver falls back to 0, which is off.
+  driver falls back to the default, 2.
 
   XhciLogDebugView  -  the log to a capture tool
   ..............................................

@@ -93,7 +93,8 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 
 An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **Stor98**, a separate project, is that driver for Windows 98 SE to 7: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive.
 
-- The package carries an unchanged Stor98 release in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). Its `stor98-readme.txt` is its install guide and lists its limits; `readme.txt` and the release notes name the version.
+- The package carries Stor98 `0.4.0.0`, unchanged, in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). It reads `xhcicm.sys`'s link-state channel on every system, 98 SE to 7.
+- Stor98's settings, install steps and limits are in its own readme, `stor98-readme.txt` beside it. The release notes have [the detail](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).
 - `INSTALL.BAT` does not install it. When the NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
 - On Vista x64 and 7 x64 the 64-bit `stor98.sys` is test-signed by Stor98's own project (`stor98-test.cer` is its certificate's public half). The test-signing mode the x64 drivers already need loads it too. You do not need to import either `.cer`.
 
@@ -109,9 +110,13 @@ An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **
 
 `XHCITR.EXE` (`XHCITR64.EXE` on 64-bit Windows) shows every USB controller, hub and device, and every Thunderbolt 3 and USB4 controller and device, with their details. It needs no administrator rights. The install puts it in its install directory (`C:\XHCI98` by default, or `INSTALL /to <path>`) and starts it at login as a notification-area icon; it is also in the package at `tools\xhcitr\`.
 
-- **Window:** a tree, and the selected item's speed, port, IDs, driver, Device Manager status, PCI location and resources. View > Descriptors decodes descriptors. File > Save Report writes everything to a text file for a bug report.
+- **Window:** a tree, and the selected item's speed, port, IDs, driver and Device Manager status. View > Descriptors decodes descriptors. File > Save Report writes everything to a text file for a bug report.
 - **Icon:** a left click lists the USB storage and Thunderbolt/USB4 devices you can remove safely; a double click opens the window. Balloons report connects, approvals and disconnects (2000, ME and later; on 98 SE the tooltip shows the last event).
 - **Safely Remove:** pick the device, confirm, and unplug when told. It follows the rules of `INSTALL /eject`, on every system. USB sticks and disks (named by drive letter) can be stopped this way on 98 SE and ME too; a keyboard, mouse, hub or camera is shown, not stopped.
+- **Driver log:** each xHCI controller and each Thunderbolt or USB4 controller has a "Driver log" item with the running driver's counters and log; Save Report includes both, so no debug build is needed. When a log is off, the item says how to turn it on ([The log, and how to send one](docs/using/release-notes.md#the-log-and-how-to-send-one)).
+- **PCI configuration:** an item per xHCI and Thunderbolt/USB4 controller showing what Windows does not (interrupt pin and line, MSI and MSI-X, PCI Express link, BARs, a bridge's buses and windows), and under a Thunderbolt controller its tunnel ports and the devices behind them. Read only ([details](docs/using/release-notes.md#the-xhci98-usb-tree)).
+- **Resources:** every item's details end with its PCI location and what Windows allocated it (memory, I/O, IRQ, bus numbers) and, for a device with a problem code, what it asked for ([design record 25](docs/contributing/design/25-usb-tree-tool.md)).
+- **Logging level:** both drivers record at level 2 by default, at a small cost in speed. To turn `xhci98.sys`'s log off, run `SNAPOFF.BAT` (or use the tool's Logging level, where it offers it) and restart ([details](docs/using/release-notes.md#the-log-and-how-to-send-one)).
 - **Start at login:** untick it in the View menu or the icon's right-click menu (per user, no administrator needed). `INSTALL /notray` turns it off for every user.
 
 Details: [the release notes' USB Tree section](docs/using/release-notes.md#the-xhci98-usb-tree).
@@ -263,7 +268,7 @@ Each value is a `DWORD` in a driver (software) key; restart Windows after a chan
 
 | Value | What it does | Default |
 |---|---|---|
-| `XhciLogVerbosity` | The driver's log level, read by `XHCISNAP` and the USB Tree (`0` to `4`) | `0` |
+| `XhciLogVerbosity` | The driver's log level, read by the USB Tree and `XHCISNAP` (`0` to `4`; `0` off) | `2` (fresh install; an update keeps the value there) |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` |
 | `XhciInterruptMode` | How events arrive: `0` automatic, `1` interrupt line, `2` polling, `3` message-signalled interrupt only | `0` |
 | `XhciSelectiveSuspend` | `1` suspends idle devices when Windows asks | `0` |
@@ -274,8 +279,8 @@ Each value is a `DWORD` in a driver (software) key; restart Windows after a chan
 | `XhciCmApprove` | `1` approves every device, `0` none (see [approval](#installing-approving-and-removing)) | `1` |
 | `XhciCmSafeEject` | `1` offers tunnelled devices for safe removal | `1` |
 | `XhciCmBridgeNumbering` | 98 SE and ME: `1` sets up PCI bridges behind a tunnel plugged in after start (else Code 29 until restart) | `1` |
-| `XhciCmLogVerbosity` | (placeholder: arrives by merge) | |
-| `XhciCmLogDebugView` | (placeholder: arrives by merge) | |
+| `XhciCmLogVerbosity` | The Thunderbolt driver's log level, read by the USB Tree (`0` to `4`) | `2` |
+| `XhciCmLogDebugView` | The Thunderbolt driver's log sent to DebugView as well | `0` |
 
 [docs/using/tuning.md](docs/using/tuning.md) has every value, its range and its effect, including polling periods, interrupt moderation, controller-fault handling, the per-controller fixes and the Linux-derived controller quirks; the release notes have [the `XhciCm*` values](docs/using/release-notes.md#the-connection-managers-registry-values).
 
