@@ -153,7 +153,7 @@ Run it in a Command Prompt (an MS-DOS Prompt on 98 SE and ME). On Windows 2000 a
 
 ### NVMe drives
 
-An NVMe drive in an enclosure needs an NVMe driver, which these systems do not have. Stor98, a separate project, is that driver for Windows 98 SE to Vista.
+An NVMe drive in an enclosure needs an NVMe driver, which these systems do not have. Stor98, a separate project, is that driver for Windows 98 SE to 7.
 
 - `xhcicm.sys` brings the drive's tunnel up and down.
 - Stor98 runs the drive.
@@ -164,6 +164,12 @@ The package carries an unchanged Stor98 release in `release-x86\` and `release-x
 
 - `release-x86\` on Windows 98 SE, ME and 32-bit 2000, XP, Vista and 7
 - `release-x64\` on Windows XP x64, Vista x64 and 7 x64
+
+On Vista x64 and 7 x64:
+
+- The 64-bit `stor98.sys` is test-signed by Stor98's own project. `stor98-test.cer` beside it in `release-x64\` is the public half of that project's test certificate.
+- Test-signing mode, which the x64 drivers already need, loads it too; see "Windows Vista x64 and 7 x64: test-signing mode".
+- You do not need to import either `.cer`.
 
 ### Things to know
 
