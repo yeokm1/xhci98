@@ -2596,23 +2596,75 @@ int inst_eject9x_remove(INST_U32 cr, const char **text)
 #define INST_VETO_LEGACY_DRIVER     11UL
 #define INST_VETO_RIGHTS            12UL
 
-int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int capsKnown,
-                           INST_U32 caps)
+int inst_unit_not_marked(int capsKnown, INST_U32 caps)
 {
     /* CM_DEVCAP_REMOVABLE 0x4, CM_DEVCAP_SURPRISEREMOVALOK 0x80: the
-     * routine is for devices with neither (Microsoft's reference). */
-    return cr == INST_CR_REMOVE_VETOED &&
-           vetoType == INST_VETO_ILLEGAL_REQUEST && capsKnown &&
-           (caps & 0x84UL) == 0;
+     * fallback routine is for devices with neither (Microsoft's
+     * reference). */
+    return capsKnown && (caps & 0x84UL) == 0;
+}
+
+INST_U32 inst_eject_cr(INST_U32 cr, INST_U32 vetoType)
+{
+    return cr == 0 && vetoType != 0 ? INST_CR_REMOVE_VETOED : cr;
+}
+
+static int inst_rights_answer(INST_U32 cr, INST_U32 vetoType)
+{
+    return cr == INST_CR_ACCESS_DENIED ||
+           (cr == INST_CR_REMOVE_VETOED && vetoType == INST_VETO_RIGHTS);
+}
+
+int inst_eject_nt_step(INST_U32 cr, INST_U32 vetoType, int notMarked,
+                       int mayRemove)
+{
+    if (!notMarked) {
+        return INST_NT_ANSWER;
+    }
+    if (cr == INST_CR_REMOVE_VETOED && vetoType == INST_VETO_ILLEGAL_REQUEST) {
+        return mayRemove ? INST_NT_FALLBACK : INST_NT_REPLUG;
+    }
+    if (inst_rights_answer(cr, vetoType)) {
+        return INST_NT_REPLUG;
+    }
+    return INST_NT_ANSWER;
+}
+
+int inst_eject_nt_removal(INST_U32 cr, INST_U32 vetoType, const char **text,
+                          int *withName)
+{
+    if (inst_rights_answer(cr, vetoType)) {
+        *withName = 0;
+        *text = inst_replug_text();
+        return INST_EJ_RIGHTS;
+    }
+    if (cr == INST_CR_CALL_NOT_IMPLEMENTED) {
+        *withName = 0;
+        *text = inst_not_removable_text();
+        return INST_EJ_VETO;
+    }
+    return inst_eject_nt(cr, vetoType, text, withName);
+}
+
+int inst_removal_retry(INST_U32 cr, INST_U32 flags)
+{
+    return cr == INST_CR_INVALID_FLAG && (flags & INST_REMOVE_NO_RESTART) != 0;
+}
+
+const char *inst_replug_text(void)
+{
+    return "Windows does not list this device for safe removal until it has "
+           "been plugged\nin once more. Unplug it and plug it back in, or run "
+           "this as an administrator.";
 }
 
 const char *inst_not_removable_text(void)
 {
     return "Windows will not stop this device: it does not see it as "
-           "removable now, and this\nWindows has no other way to stop it. "
-           "Restart Windows with the device connected:\nit is then listed "
-           "for removal again. Or close every program using it, shut "
-           "down\nWindows and unplug it while the computer is off.";
+           "removable now, and\nthis Windows has no other way to stop it. "
+           "Restart Windows with the device\nconnected: it is then listed "
+           "for removal again. Or close every program using\nit, shut down "
+           "Windows and unplug it while the computer is off.";
 }
 
 int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,

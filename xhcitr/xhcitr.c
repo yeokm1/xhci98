@@ -136,6 +136,7 @@ typedef DWORD (WINAPI *PFN_CM_PROP)(DWORD, ULONG, ULONG *, void *, ULONG *,
                                     ULONG);
 typedef DWORD (WINAPI *PFN_CM_QREMOVE)(DWORD, ULONG);
 typedef DWORD (WINAPI *PFN_CM_EJECT)(DWORD, PULONG, LPSTR, ULONG, ULONG);
+typedef DWORD (WINAPI *PFN_CM_QANDR_W)(DWORD, PULONG, LPWSTR, ULONG, ULONG);
 typedef DWORD (WINAPI *PFN_CM_LISTSIZE)(PULONG, PCSTR, ULONG);
 typedef DWORD (WINAPI *PFN_CM_LIST)(PCSTR, PCHAR, ULONG, ULONG);
 typedef HDEVINFO (WINAPI *PFN_GETCLASSDEVS)(const GUID *, PCSTR, HWND, DWORD);
@@ -159,7 +160,7 @@ static struct {
     PFN_CM_QREMOVE QueryRemove;
     PFN_CM_QREMOVE Remove;
     PFN_CM_EJECT Eject;
-    PFN_CM_EJECT QueryAndRemove;
+    PFN_CM_QANDR_W QueryAndRemove;
     PFN_CM_LISTSIZE ListSize;   /* NT: a devnode's removal relations       */
     PFN_CM_LIST List;
     PFN_GETCLASSDEVS GetClassDevs;
@@ -397,13 +398,14 @@ static void load_routines(void)
         api.Eject = (PFN_CM_EJECT)proc(api.SetupApi, "CM_Request_Device_EjectA");
     }
     if (envNt) {
-        /* setupapi.dll's first: Windows 2000's cfgmgr32.dll exports the
-         * routine but answers CR_CALL_NOT_IMPLEMENTED (record 24's leg). */
-        api.QueryAndRemove = (PFN_CM_EJECT)proc(api.SetupApi,
-                                                "CM_Query_And_Remove_SubTreeA");
+        /* The W form: Windows 2000's A form answers
+         * CR_CALL_NOT_IMPLEMENTED and does nothing else (record 24
+         * section 7.2). */
+        api.QueryAndRemove = (PFN_CM_QANDR_W)proc(api.SetupApi,
+                                                  "CM_Query_And_Remove_SubTreeW");
         if (api.QueryAndRemove == NULL) {
-            api.QueryAndRemove = (PFN_CM_EJECT)proc(api.CfgMgr,
-                                                    "CM_Query_And_Remove_SubTreeA");
+            api.QueryAndRemove = (PFN_CM_QANDR_W)proc(api.CfgMgr,
+                                                      "CM_Query_And_Remove_SubTreeW");
         }
         api.ListSize = (PFN_CM_LISTSIZE)proc(api.CfgMgr, "CM_Get_Device_ID_List_SizeA");
         api.List = (PFN_CM_LIST)proc(api.CfgMgr, "CM_Get_Device_ID_ListA");
@@ -2057,6 +2059,13 @@ static void details_unit(TR_TEXT *t, int dn)
         if ((gw.N[u].Caps & TR_CM_DEVCAP_REMOVABLE) &&
             !(gw.N[u].Caps & TR_CM_DEVCAP_SURPRISEOK)) {
             tr_put(t, "  Windows lists it in Safely Remove Hardware too.\n");
+        } else if (inst_unit_not_marked(1, gw.N[u].Caps)) {
+            /* The first plug of a device Windows has not seen (EJRB.1). */
+            tr_put(t, "  Not marked removable (first plug): Windows does not "
+                      "list it in Safely\n  Remove Hardware. Safely Remove "
+                      "here stops it when run as an administrator;\n  or "
+                      "unplug and replug it once, and Windows lists it from "
+                      "then on.\n");
         } else {
             tr_put(t, "  Windows does not list it in Safely Remove Hardware; "
                       "stop it from here.\n");
@@ -2933,6 +2942,103 @@ done:
     return kind;
 }
 
+/* ---- NT: a unit not marked removable (record 24 section 7.2) ------------- */
+
+typedef BOOL (WINAPI *PFN_OPENTOKEN)(HANDLE, DWORD, PHANDLE);
+typedef BOOL (WINAPI *PFN_TOKENINFO)(HANDLE, int, LPVOID, DWORD, PDWORD);
+#define TR_TOKEN_ELEVATION  20      /* TokenElevation (Vista and later) */
+
+/* 0 on Vista and 7 when this process's token is not elevated, so the
+ * fallback's right is known to be missing; otherwise 1, Windows' answer
+ * deciding. */
+static int ej_may_remove(void)
+{
+    HMODULE adv;
+    PFN_OPENTOKEN openToken;
+    PFN_TOKENINFO tokenInfo;
+    HANDLE token;
+    DWORD elevated = 0;
+    DWORD n = 0;
+    int may = 1;
+
+    if (!envNt || envMajor < 6) {
+        return 1;
+    }
+    adv = GetModuleHandleA("advapi32.dll");
+    openToken = (PFN_OPENTOKEN)proc(adv, "OpenProcessToken");
+    tokenInfo = (PFN_TOKENINFO)proc(adv, "GetTokenInformation");
+    if (openToken == NULL || tokenInfo == NULL ||
+        !openToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return 1;
+    }
+    if (tokenInfo(token, TR_TOKEN_ELEVATION, &elevated, sizeof(elevated), &n) &&
+        n == sizeof(elevated)) {
+        may = elevated != 0;
+    }
+    CloseHandle(token);
+    return may;
+}
+
+/* CM_Query_And_Remove_SubTreeW, its veto name in the ANSI code page, the
+ * flags as inst_removal_retry says. */
+static DWORD ej_query_and_remove(DWORD dn, ULONG *veto, char *name, int cap)
+{
+    WCHAR wide[MAX_PATH];
+    ULONG flags = INST_REMOVE_UI_NOT_OK | INST_REMOVE_NO_RESTART;
+    DWORD cr;
+
+    for (;;) {
+        *veto = 0;
+        wide[0] = 0;
+        cr = api.QueryAndRemove(dn, veto, wide, MAX_PATH, flags);
+        if (!inst_removal_retry(cr, flags)) {
+            break;
+        }
+        flags = INST_REMOVE_UI_NOT_OK;
+    }
+    wide[MAX_PATH - 1] = 0;
+    name[0] = '\0';
+    if (WideCharToMultiByte(CP_ACP, 0, wide, -1, name, cap, NULL, NULL) == 0) {
+        name[0] = '\0';
+    }
+    name[cap - 1] = '\0';
+    return cr;
+}
+
+/* The outcome of a unit's eject on NT after CM_Request_Device_EjectA
+ * answered *cr and *veto (through tr_eject_cr): that answer, or for a unit
+ * not marked removable the fallback's (*notRemovable set) or the re-plug
+ * refusal. *cr, *veto and vetoName end as the answer read. */
+static int ej_nt_answer(DWORD dn, int capsKnown, ULONG caps, DWORD *cr,
+                        ULONG *veto, char *vetoName, const char **text,
+                        int *withName, int *notRemovable)
+{
+    int notMarked = inst_unit_not_marked(capsKnown, caps);
+    int step = inst_eject_nt_step(*cr, *veto, notMarked,
+                                  notMarked ? ej_may_remove() : 1);
+
+    *notRemovable = 0;
+    if (step == INST_NT_REPLUG) {
+        *withName = 0;
+        *text = inst_replug_text();
+        return INST_EJ_RIGHTS;
+    }
+    if (step != INST_NT_FALLBACK) {
+        return inst_eject_nt(*cr, *veto, text, withName);
+    }
+    /* The same query-remove and remove an eject runs, by the routine that
+     * makes them for any device; a veto still stops it. */
+    *notRemovable = 1;
+    if (api.QueryAndRemove == NULL) {
+        *cr = INST_CR_CALL_NOT_IMPLEMENTED;
+        *veto = 0;
+    } else {
+        *cr = ej_query_and_remove(dn, veto, vetoName, MAX_PATH);
+        *cr = tr_eject_cr(*cr, *veto);
+    }
+    return inst_eject_nt_removal(*cr, *veto, text, withName);
+}
+
 /* The transaction (record 25 section 6.2 steps 2 to 8). Returns
  * XHCIINST's exit code; msg the answer; *rights set for a rights failure
  * Windows answered (the elevated retry is the caller's, after this has
@@ -3103,22 +3209,9 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         cr = api.Eject(w.N[u].Dn, &veto, vetoName, MAX_PATH, 0);
         vetoName[MAX_PATH - 1] = '\0';
         cr = tr_eject_cr(cr, veto);
-        if (inst_eject_nt_fallback(cr, veto, w.N[u].HasCaps, w.N[u].Caps) &&
-            api.QueryAndRemove != NULL) {
-            /* Not removable in Windows' eyes (record 24 section 7.2): the
-             * same query-remove and remove, a veto still stops it. */
-            veto = 0;
-            vetoName[0] = '\0';
-            cr = api.QueryAndRemove(w.N[u].Dn, &veto, vetoName, MAX_PATH,
-                                    TR_UI_NOT_OK);
-            notRemovable = 1;
-        }
-        outcome = inst_eject_nt(cr, veto, &text, &withName);
-        if (notRemovable && cr == INST_CR_CALL_NOT_IMPLEMENTED) {
-            text = inst_not_removable_text();
-            withName = 0;
-            outcome = INST_EJ_VETO;
-        }
+        outcome = ej_nt_answer(w.N[u].Dn, w.N[u].HasCaps, w.N[u].Caps, &cr,
+                               &veto, vetoName, &text, &withName,
+                               &notRemovable);
         if (outcome != INST_EJ_DONE) {
             if (withName) {
                 char name[MAX_PATH + 16];
