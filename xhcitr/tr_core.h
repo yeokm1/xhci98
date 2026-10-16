@@ -598,6 +598,7 @@ size_t tr_res_ask(const char (*devs)[TR_ID_CHARS], int n, char *out,
                   size_t cap);
 int tr_res_ask_match(const char *text, const char (*devs)[TR_ID_CHARS],
                      int n);
+int tr_res_is_ask(const char *text);
 size_t tr_res_answer(int code, const char *msg, char *out, size_t cap);
 int tr_res_read_answer(const char *text, int *code, char *msg, size_t cap);
 

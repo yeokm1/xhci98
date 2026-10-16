@@ -1914,6 +1914,10 @@ static void test_elevated_stop(void)
           "instance IDs compare without case");
     CHECK(!tr_res_ask_match("XHCITR ANSWER 1\r\n", (const char (*)[TR_ID_CHARS])devs,
                             0), "not an ask");
+    CHECK(tr_res_is_ask("XHCITR ASK 1\r\nX\r\n") && tr_res_is_ask("XHCITR ASK 1"),
+          "an ask is recognised");
+    CHECK(!tr_res_is_ask("XHCITR ANSWER 1\r\n") && !tr_res_is_ask("") &&
+              !tr_res_is_ask("MZ\x90"), "anything else is not an ask");
     CHECK(tr_res_ask_match("XHCITR ASK 1\r\n", (const char (*)[TR_ID_CHARS])devs, 0),
           "an empty list matches an empty list");
     CHECK_EQ(tr_res_ask((const char (*)[TR_ID_CHARS])devs, 3, buf, 20), 0,

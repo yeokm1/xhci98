@@ -3136,11 +3136,10 @@ static int elev_read(const char *path, char *buf, DWORD cap)
     return ok;
 }
 
-/* Over an existing file only: the elevated run never creates one. */
-static int elev_write(const char *path, const char *text, size_t n, int create)
+/* The window's ask, into the file GetTempFileName made for it. */
+static int elev_write(const char *path, const char *text, size_t n)
 {
-    HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, NULL,
-                           create ? CREATE_ALWAYS : OPEN_EXISTING,
+    HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_TEMPORARY, NULL);
     DWORD w = 0;
     int ok;
@@ -3150,6 +3149,69 @@ static int elev_write(const char *path, const char *text, size_t n, int create)
     }
     ok = SetEndOfFile(f) && WriteFile(f, text, (DWORD)n, &w, NULL) && w == n;
     CloseHandle(f);
+    return ok;
+}
+
+#ifndef FILE_FLAG_OPEN_REPARSE_POINT
+#define FILE_FLAG_OPEN_REPARSE_POINT    0x00200000UL
+#endif
+#ifndef FILE_ATTRIBUTE_REPARSE_POINT
+#define FILE_ATTRIBUTE_REPARSE_POINT    0x00000400UL
+#endif
+
+static HANDLE elevFile = INVALID_HANDLE_VALUE;
+
+/* The elevated run's answer file, opened once and held with no sharing
+ * until the answer is written. The run is elevated and the file is in the
+ * user's temporary folder, so it is never opened through a link: a
+ * reparse point, a directory or a file with more than one name is
+ * refused, and so is a file that does not hold the window's ask - the run
+ * writes over nothing but the file the window made. ask gets its text. */
+static int elev_child_open(const char *path, char *ask, DWORD cap)
+{
+    BY_HANDLE_FILE_INFORMATION fi;
+    DWORD n = 0;
+    HANDLE f = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                           OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+
+    ask[0] = '\0';
+    if (f == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    if (!GetFileInformationByHandle(f, &fi) ||
+        (fi.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT |
+                                FILE_ATTRIBUTE_DIRECTORY)) != 0 ||
+        fi.nNumberOfLinks != 1 || fi.nFileSizeHigh != 0 ||
+        fi.nFileSizeLow >= cap || !ReadFile(f, ask, cap - 1, &n, NULL) ||
+        n != fi.nFileSizeLow) {
+        CloseHandle(f);
+        ask[0] = '\0';
+        return 0;
+    }
+    ask[n] = '\0';
+    if (!tr_res_is_ask(ask)) {
+        CloseHandle(f);
+        ask[0] = '\0';
+        return 0;
+    }
+    elevFile = f;
+    return 1;
+}
+
+/* The answer over the ask, through the handle opened above. */
+static int elev_child_answer(const char *text, size_t n)
+{
+    DWORD w = 0;
+    int ok;
+
+    if (elevFile == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    ok = SetFilePointer(elevFile, 0, NULL, FILE_BEGIN) == 0 &&
+         SetEndOfFile(elevFile) &&
+         WriteFile(elevFile, text, (DWORD)n, &w, NULL) && w == n;
+    CloseHandle(elevFile);
+    elevFile = INVALID_HANDLE_VALUE;
     return ok;
 }
 
@@ -3183,7 +3245,7 @@ static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
         GetModuleFileNameA(NULL, exe, sizeof(exe)) == 0) {
         return tr_elev_result(0, GetLastError(), 0, 0, 0, 0, "", msg, cap);
     }
-    if (!elev_write(path, ask, n, 1)) {
+    if (!elev_write(path, ask, n)) {
         err = GetLastError();
         DeleteFileA(path);
         return tr_elev_result(0, err, 0, 0, 0, 0, "", msg, cap);
@@ -5354,12 +5416,25 @@ static int run_eject(void)
     int rights;
     int code;
 
+    static char asked[TR_EJ_DEVS * (INST_ID_CHARS + 2) + 32];
+    int haveAsk = 0;
+
     if (q == NULL) {
         return INST_EXIT_FAILED;
+    }
+    if (opts.Result) {
+        /* Read once, before anything: the ask can only stand in for this
+         * run's own confirmation of the list this run reads itself, so it
+         * never adds a devnode to what is stopped. */
+        haveAsk = elev_child_open(opts.ResultPath, asked, sizeof(asked));
     }
     refresh_model(0);
     u = walk_find_id(&gw, opts.EjectId);
     if (u >= 0 && gw.N[u].UPort >= 0) {
+        if (haveAsk) {
+            CloseHandle(elevFile);
+            elevFile = INVALID_HANDLE_VALUE;
+        }
         free(q);
         return usb_run_eject(u);
     }
@@ -5380,24 +5455,21 @@ static int run_eject(void)
      * appeared under the unit while the elevation was asked is listed, and
      * the transaction holds to exactly this list. With /result, the list
      * the window's user confirmed stands for it when it is the same. */
-    {
-        static char asked[TR_EJ_DEVS * (INST_ID_CHARS + 2) + 32];
-        if (!(opts.Result && elev_read(opts.ResultPath, asked, sizeof(asked)) &&
-              tr_res_ask_match(asked, (const char (*)[TR_ID_CHARS])q->Devs,
-                               q->DevCount)) &&
-            !ej_confirm(NULL, q)) {
-            code = INST_EXIT_REFUSED;
-            tr_copy(msg, "Cancelled; nothing was stopped.", sizeof(msg));
-            goto answer;
-        }
+    if (!(haveAsk &&
+          tr_res_ask_match(asked, (const char (*)[TR_ID_CHARS])q->Devs,
+                           q->DevCount)) &&
+        !ej_confirm(NULL, q)) {
+        code = INST_EXIT_REFUSED;
+        tr_copy(msg, "Cancelled; nothing was stopped.", sizeof(msg));
+        goto answer;
     }
     code = ej_run(q, msg, sizeof(msg), &rights);
     tr_join_lines(msg);
 answer:
-    if (opts.Result) {
+    if (haveAsk) {
         static char ans[4200];
         size_t n = tr_res_answer(code, msg, ans, sizeof(ans));
-        if (n != 0 && elev_write(opts.ResultPath, ans, n, 0)) {
+        if (n != 0 && elev_child_answer(ans, n)) {
             free(q);
             return code;
         }

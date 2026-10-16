@@ -2343,6 +2343,14 @@ int tr_res_ask_match(const char *text, const char (*devs)[TR_ID_CHARS],
     return !tr_res_line(&p, line, sizeof(line));
 }
 
+int tr_res_is_ask(const char *text)
+{
+    char line[TR_ID_CHARS + 2];
+    const char *p = text;
+
+    return tr_res_line(&p, line, sizeof(line)) && strcmp(line, TR_RES_ASK) == 0;
+}
+
 size_t tr_res_answer(int code, const char *msg, char *out, size_t cap)
 {
     TR_TEXT t;
