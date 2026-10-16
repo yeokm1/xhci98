@@ -1179,12 +1179,14 @@ void tr_router_name(const unsigned char *entry, char *out, size_t cap)
 
     for (i = 0; i < CM_ST_NAME_BYTES - 1 && entry[CM_ST_E_VENDOR + i] != 0; i++) {
         unsigned char c = entry[CM_ST_E_VENDOR + i];
-        vendor[i] = (c >= 0x20 && c < 0x7F) ? (char)c : '?';
+        vendor[i] = (c == '\t' || c == '\r' || c == '\n') ? ' '
+                    : (c >= 0x20 && c < 0x7F) ? (char)c : '?';
     }
     vendor[i] = '\0';
     for (i = 0; i < CM_ST_NAME_BYTES - 1 && entry[CM_ST_E_MODEL + i] != 0; i++) {
         unsigned char c = entry[CM_ST_E_MODEL + i];
-        model[i] = (c >= 0x20 && c < 0x7F) ? (char)c : '?';
+        model[i] = (c == '\t' || c == '\r' || c == '\n') ? ' '
+                   : (c >= 0x20 && c < 0x7F) ? (char)c : '?';
     }
     model[i] = '\0';
     tr_tidy_name(vendor);
@@ -1723,4 +1725,21 @@ void tr_tidy_name(char *s)
         *w++ = *r;
     }
     *w = '\0';
+}
+
+void tr_confirm_lead(TR_TEXT *t, const char *unitName, const char *label,
+                     const char *const *diskLines, int n)
+{
+    int i;
+
+    if (n > 0) {
+        tr_printf(t, "This stops %s and everything on it:\n", unitName);
+        for (i = 0; i < n; i++) {
+            tr_printf(t, "    %s\n", diskLines[i]);
+        }
+        tr_put(t, "\n");
+    } else {
+        tr_printf(t, "Stop %s?\n\n", label);
+    }
+    tr_put(t, "These devices will stop:\n");
 }

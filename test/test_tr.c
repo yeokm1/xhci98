@@ -1509,6 +1509,42 @@ int main(void)
     test_sizes();
     test_desc_lengths();
     {
+        char buf[512];
+        TR_TEXT t;
+        const char *two[2];
+        unsigned char e[CM_ST_ENTRY_BYTES];
+        char name[TR_NAME_CHARS];
+        two[0] = "Disk drive QEMU NVMe Ctrl, volume E:";
+        two[1] = "Disk drive Samsung SSD, volumes F:, G:";
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_confirm_lead(&t, "NVM Express Controller", "QEMU NVMe Ctrl (E:)", two, 2);
+        CHECK(strcmp(buf, "This stops NVM Express Controller and everything on it:\r\n"
+                          "    Disk drive QEMU NVMe Ctrl, volume E:\r\n"
+                          "    Disk drive Samsung SSD, volumes F:, G:\r\n"
+                          "\r\n"
+                          "These devices will stop:\r\n") == 0,
+              "confirm: two disks, exact CR LF, no full stop after a letter");
+        CHECK(strstr(buf, "\r\r") == NULL, "confirm: no doubled CR");
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_confirm_lead(&t, "USB xHCI Controller", "USB xHCI Controller", NULL, 0);
+        CHECK(strcmp(buf, "Stop USB xHCI Controller?\r\n\r\nThese devices will stop:\r\n") == 0,
+              "confirm: no disk");
+        memset(e, 0, sizeof(e));
+        memcpy(e + CM_ST_E_VENDOR, "Acme\tCorp", 9);
+        memcpy(e + CM_ST_E_MODEL, " Dock\r\n  X1 ", 12);
+        tr_router_name(e, name, sizeof(name));
+        CHECK(strcmp(name, "Acme Corp Dock X1") == 0, "router name: tab, CR LF and runs made one space");
+        memset(e, 0, sizeof(e));
+        memcpy(e + CM_ST_E_VENDOR, "Ac\x01me", 5);
+        memcpy(e + CM_ST_E_MODEL, "  ", 2);
+        tr_router_name(e, name, sizeof(name));
+        CHECK(strcmp(name, "Ac?me") == 0, "router name: a control byte is '?', a blank model drops");
+        memset(e, 0, sizeof(e));
+        memcpy(e + CM_ST_E_VENDOR, " \t ", 3);
+        tr_router_name(e, name, sizeof(name));
+        CHECK(strcmp(name, "(no name given)") == 0, "router name: blanks only");
+    }
+    {
         char s[64];
         strcpy(s, "QEMU NVM e Ctrl          ");
         tr_tidy_name(s);

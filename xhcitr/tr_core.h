@@ -455,6 +455,14 @@ void tr_unit_label(const char *unitName, const char *diskNames,
 void tr_disk_line(const char *name, const char *letters, char *out,
                   size_t cap);
 
+/* The confirmation's lead, in one pass: with disks, "This stops <unit>
+ * and everything on it:", one indented "Disk drive ..." line each (no full
+ * stop after a letter), an empty line; without, "Stop <label>?" and an
+ * empty line; then "These devices will stop:". diskLines are n plain
+ * lines (tr_disk_line's). */
+void tr_confirm_lead(TR_TEXT *t, const char *unitName, const char *label,
+                     const char *const *diskLines, int n);
+
 /* A name as shown: leading and trailing white space removed, every run of
  * white space inside made one space (Windows 98 pads a disk's model with
  * spaces); in place. */

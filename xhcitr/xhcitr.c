@@ -2574,32 +2574,24 @@ static int ej_confirm(HWND owner, const EJREQ *q)
 
     tr_text_init(&t, text, sizeof(text));
     {
+        static char lineBuf[TR_EJ_DEVS][256];
+        const char *lines[TR_EJ_DEVS];
         int k;
         int disks = 0;
         int u = walk_find_id(&gw, q->UnitId);
         if (u >= 0) {
-            for (k = u; k < gw.Count; k++) {
+            for (k = u; k < gw.Count && disks < TR_EJ_DEVS; k++) {
                 if (gw.N[k].UnitOf == u && gw.N[k].IsDisk) {
-                    char line[256];
                     tr_disk_line(gw.N[k].Friendly[0] ? gw.N[k].Friendly
                                                      : dn_name(&gw.N[k]),
-                                 gw.N[k].Letters, line, sizeof(line));
-                    tr_printf(&t, "    %s\n", line);
+                                 gw.N[k].Letters, lineBuf[disks],
+                                 sizeof(lineBuf[disks]));
+                    lines[disks] = lineBuf[disks];
                     disks++;
                 }
             }
         }
-        if (disks) {
-            /* Rebuilt with its lead now the disks are known. */
-            char lines[1024];
-            tr_copy(lines, text, sizeof(lines));
-            tr_text_init(&t, text, sizeof(text));
-            /* One disk to a line: no full stop after a drive letter. */
-            tr_printf(&t, "This stops %s and everything on it:\n%s\n"
-                          "These devices will stop:\n", q->UnitName, lines);
-        } else {
-            tr_printf(&t, "Stop %s?\n\nThese devices will stop:\n", q->Desc);
-        }
+        tr_confirm_lead(&t, q->UnitName, q->Desc, lines, disks);
     }
     for (i = 0; i < q->DevCount; i++) {
         int n = walk_find_id(&gw, q->Devs[i]);
