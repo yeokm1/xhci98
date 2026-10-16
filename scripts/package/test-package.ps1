@@ -4131,6 +4131,247 @@ try {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
     }
+
+    # --- the sign-only mode and the gated build's record (SIGN.1) ----------
+    #
+    # make-package.ps1 -SignOnly skips the host suite and the import gates
+    # for binaries whose bytes are those a gated build-driver.cmd run
+    # recorded. The record's parse, the comparison and every refusal are
+    # tested here on fixtures; nothing is built and nothing is signed (every
+    # packager case below names a key that does not exist, so a run that got
+    # past the record would still be refused before SignTool).
+    Write-Step "sign-only: the gated build's record and its refusals"
+    $soDir = Join-Path $script:work "signonly"
+    New-Item -ItemType Directory -Force -Path $soDir | Out-Null
+    $soBins = @{}
+    $soSha = @{}
+    foreach ($n in @("xhci98.sys", "xhciuas.sys", "xhcicm.sys")) {
+        $p = Join-Path $soDir $n
+        [System.IO.File]::WriteAllBytes($p, [System.Text.Encoding]::ASCII.GetBytes("stand-in $n XHCI98_FLAVOUR_RELEASE"))
+        $soBins[$n] = $p
+        $soSha[$n] = Get-FileSha256 -Path $p
+    }
+    Assert-True ($soSha["xhci98.sys"] -eq (Get-StandInSha ([System.IO.File]::ReadAllBytes($soBins["xhci98.sys"])))) `
+        "Get-FileSha256 disagrees with the test's own SHA-256."
+    $soHead = "0123456789abcdef0123456789abcdef01234567"
+    $soText = ConvertTo-GatedManifest -Arch "amd64" -Flavor "release" -Commit $soHead -Dirty $false `
+        -TargetEvidence $true -Time "2026-10-16T00:00:00Z" -Sha256 $soSha
+    Assert-True (-not ($soText -match "(?<!`r)`n")) "the gated build record is not CRLF."
+    $soM = ConvertFrom-GatedManifest -Text $soText
+    Assert-True ($soM.Arch -eq "amd64" -and $soM.Flavor -eq "release" -and $soM.Commit -eq $soHead -and
+                 $soM.Dirty -eq "0" -and $soM.TargetEvidence -eq "1" -and $soM.Sha256.Count -eq 3 -and
+                 $soM.Sha256["xhcicm.sys"] -eq $soSha["xhcicm.sys"]) `
+        "the gated build record does not read back as written."
+    # Malformed records are refused, not read leniently.
+    foreach ($bad in @(
+        @{ Why = "no format line";   Text = ($soText -replace "(?m)^format=1\r?\n", "") },
+        @{ Why = "format 2";         Text = ($soText -replace "(?m)^format=1", "format=2") },
+        @{ Why = "no commit line";   Text = ($soText -replace "(?m)^commit=.*\r?\n", "") },
+        @{ Why = "dirty=2";          Text = ($soText -replace "(?m)^dirty=0", "dirty=2") },
+        @{ Why = "a short hash";     Text = ($soText -replace "(?m)^(sha256\.xhci98\.sys=)[0-9A-F]{64}", '${1}ABCD') },
+        @{ Why = "a duplicate key";  Text = ($soText + "arch=x86`r`n") },
+        @{ Why = "an unknown key";   Text = ($soText + "gates=all`r`n") },
+        @{ Why = "a line with no =";  Text = ($soText + "xhci98.sys`r`n") },
+        @{ Why = "no sha256 line";   Text = ($soText -replace "(?m)^sha256\..*\r?\n", "") }
+    )) {
+        $threw = $false
+        try { [void](ConvertFrom-GatedManifest -Text $bad.Text) } catch { $threw = $true }
+        Assert-True $threw ("ConvertFrom-GatedManifest accepted a record with {0}." -f $bad.Why)
+    }
+    # The comparison, on every reason it refuses and the one it admits.
+    function Get-SoFault {
+        param($M = $soM, [string]$Arch = "amd64", [string]$Flavor = "release", [hashtable]$Bins = $soBins,
+              [string]$Head = $soHead, [bool]$Dirty = $false, [bool]$NoTe = $false)
+        return Get-GatedManifestFault -Manifest $M -Arch $Arch -Flavor $Flavor -Binaries $Bins `
+            -Head $Head -Dirty $Dirty -NoTargetEvidence $NoTe
+    }
+    Assert-True ((Get-SoFault) -eq "") ("a matching record was refused: " + (Get-SoFault))
+    $soAltered = Join-Path $soDir "xhcicm-altered.sys"
+    [System.IO.File]::WriteAllBytes($soAltered, [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys XHCI98_FLAVOUR_RELEASE!"))
+    $soAlteredBins = $soBins.Clone(); $soAlteredBins["xhcicm.sys"] = $soAltered
+    $soExtraBins = $soBins.Clone(); $soExtraBins["xhcihlpr.sys"] = $soBins["xhci98.sys"]
+    $soDirtyM = ConvertFrom-GatedManifest -Text ($soText -replace "(?m)^dirty=0", "dirty=1")
+    $soNoTeM = ConvertFrom-GatedManifest -Text ($soText -replace "(?m)^target_evidence=1", "target_evidence=0")
+    foreach ($c in @(
+        @{ Why = "the x86 package";        Says = "records the release amd64 build"; F = (Get-SoFault -Arch "x86") },
+        @{ Why = "the debug flavour";      Says = "records the release amd64 build"; F = (Get-SoFault -Flavor "debug") },
+        @{ Why = "an altered binary";      Says = "xhcicm.sys at";                   F = (Get-SoFault -Bins $soAlteredBins) },
+        @{ Why = "an unrecorded binary";   Says = "no hash for xhcihlpr.sys";        F = (Get-SoFault -Bins $soExtraBins) },
+        @{ Why = "a dirty build";          Says = "uncommitted changes";             F = (Get-SoFault -M $soDirtyM) },
+        @{ Why = "another commit";         Says = "it was built at commit";          F = (Get-SoFault -Head "fedcba9876543210fedcba9876543210fedcba98") },
+        @{ Why = "a dirty tree";           Says = "uncommitted changes since";       F = (Get-SoFault -Dirty $true) },
+        @{ Why = "no target evidence";     Says = "-NoTargetEvidence";               F = (Get-SoFault -M $soNoTeM) }
+    )) {
+        Assert-True ($c.F -ne "" -and $c.F.Contains($c.Says)) `
+            ("the gated build record was not refused for {0} with '{1}': '{2}'" -f $c.Why, $c.Says, $c.F)
+    }
+    Assert-True ((Get-SoFault -M $soNoTeM -NoTe $true) -eq "") `
+        "a record without target evidence was refused for a run that passes -NoTargetEvidence too."
+
+    # make-package.ps1 itself: each refusal, before anything is staged. The
+    # stand-in driver says debug, the packager's default flavour.
+    $soDbgSha = @{ "xhci98.sys" = (Get-FileSha256 -Path $driver) }
+    $soState = Get-GitTreeState -Repo $repo
+    function New-SoRecord {
+        param([string]$Name, [string]$Arch = "amd64", [string]$Commit = $soState.Head, [hashtable]$Sha = $soDbgSha)
+        $p = Join-Path $soDir $Name
+        [System.IO.File]::WriteAllBytes($p, [System.Text.Encoding]::ASCII.GetBytes(
+            (ConvertTo-GatedManifest -Arch $Arch -Flavor "debug" -Commit $Commit -Dirty $false `
+                -TargetEvidence $true -Time "2026-10-16T00:00:00Z" -Sha256 $Sha)))
+        return $p
+    }
+    $soWrongHash = @{ "xhci98.sys" = ("0" * 64) }
+    # -GatedManifestPath is the self-tests' alone: it never goes with a key,
+    # and a run naming it checks the record and stops.
+    $soCases = @(
+        @{ Why = "-SignOnly without -TestSignPfx (amd64)"; Says = "without -TestSignPfx";
+           Args = @("-Arch", "amd64", "-SignOnly") },
+        @{ Why = "-SignOnly without -TestSignPfx (x86)";   Says = "without -TestSignPfx";
+           Args = @("-SignOnly") },
+        @{ Why = "-SignOnly with -SkipBinaryGates";        Says = "does not combine with -SkipBinaryGates";
+           Args = @("-Arch", "amd64", "-SignOnly", "-TestSignPfx", $tsMissing, "-SkipBinaryGates") },
+        @{ Why = "-GatedManifestPath with -TestSignPfx";   Says = "is for the packager's self-tests";
+           Args = @("-Arch", "amd64", "-SignOnly", "-TestSignPfx", $tsMissing, "-GatedManifestPath", (New-SoRecord -Name "key.txt")) },
+        @{ Why = "-GatedManifestPath without -SignOnly";   Says = "is for the packager's self-tests";
+           Args = @("-Arch", "amd64", "-GatedManifestPath", (New-SoRecord -Name "nosignonly.txt")) },
+        @{ Why = "a missing record";                       Says = "no gated build record at";
+           Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (Join-Path $soDir "none.txt")) },
+        @{ Why = "an unreadable record";                   Says = "is not a gated build record";
+           Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", $soBins["xhci98.sys"]) },
+        @{ Why = "the other architecture's record";        Says = "records the debug x86 build";
+           Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (New-SoRecord -Name "x86.txt" -Arch "x86")) },
+        @{ Why = "a hash mismatch";                        Says = "is not the binary the build gated";
+           Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (New-SoRecord -Name "hash.txt" -Sha $soWrongHash)) },
+        @{ Why = "a commit mismatch";                      Says = "it was built at commit";
+           Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (New-SoRecord -Name "commit.txt" -Commit $soHead)) }
+    )
+    $soN = 0
+    foreach ($c in $soCases) {
+        $soN++
+        $soOut = Join-Path $script:work ("pkg-signonly-" + $soN)
+        $soArgs = @("-InfPath", $(if ($c.Args -contains "amd64") { $amd64Inf } else { $prodInf }),
+                    "-DriverPath", $driver, "-OutDir", $soOut) + $c.Args
+        $r = Invoke-Packager $soArgs -WithBinaryGates
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains($c.Says)) `
+            ("make-package.ps1 did not refuse {0} with '{1}'. Output:`n{2}" -f $c.Why, $c.Says, $r.Output)
+        Assert-True ($r.Output -notmatch "=== host test suite|== host test suite") `
+            ("make-package.ps1 ran the host test suite before refusing {0}." -f $c.Why)
+        Assert-True (-not (Test-Path -LiteralPath $soOut)) ("a package refused for {0} left an output directory." -f $c.Why)
+    }
+    # A record that admits the stand-in is reported as admitting it, and the
+    # run stops there - in a clean tree. In a tree with uncommitted changes the
+    # refusal is the tree's, which is the right answer there too.
+    $soOkOut = Join-Path $script:work "pkg-signonly-ok"
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver,
+                           "-OutDir", $soOkOut, "-SignOnly",
+                           "-GatedManifestPath", (New-SoRecord -Name "ok.txt")) -WithBinaryGates
+    if ($soState.Dirty) {
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("uncommitted changes since")) `
+            ("a matching record in a dirty tree was not refused for the tree. Output:`n" + $r.Output)
+    } else {
+        Assert-True ($r.ExitCode -eq 0 -and $r.Output.Contains("nothing is staged or signed") -and
+                     $r.Output.Contains("REUSED from the gated build")) `
+            ("a matching record was not reported as admitting the stand-in. Output:`n" + $r.Output)
+    }
+    Assert-True (-not (Test-Path -LiteralPath $soOkOut)) "a -GatedManifestPath run staged a package."
+
+    # The tree's state: untracked files, and files git was told not to look at.
+    $soGit = Join-Path $soDir "git"
+    New-Item -ItemType Directory -Force -Path $soGit | Out-Null
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & git -C $soGit init -q 2>&1 | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $soGit "a.txt"), "a")
+        [System.IO.File]::WriteAllText((Join-Path $soGit "b.txt"), "b")
+        & git -C $soGit add a.txt b.txt 2>&1 | Out-Null
+        & git -C $soGit -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q -m t 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    $s = Get-GitTreeState -Repo $soGit
+    Assert-True ($s.Head -match '^[0-9a-f]{40}$' -and -not $s.Dirty) "Get-GitTreeState did not read a clean fixture repository as clean."
+    New-Item -ItemType Directory -Force -Path (Join-Path $soGit "sub") | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $soGit "sub\new.h"), "n")
+    Assert-True ((Get-GitTreeState -Repo $soGit).Dirty) "Get-GitTreeState missed an untracked file in an untracked directory."
+    Remove-Item -LiteralPath (Join-Path $soGit "sub") -Recurse -Force
+    foreach ($flag in @("--assume-unchanged", "--skip-worktree")) {
+        $ErrorActionPreference = "Continue"
+        try { & git -C $soGit update-index $flag a.txt 2>&1 | Out-Null } finally { $ErrorActionPreference = $savedEap }
+        Assert-True ((Get-GitTreeState -Repo $soGit).Dirty) "Get-GitTreeState missed a file marked $flag."
+        $ErrorActionPreference = "Continue"
+        try { & git -C $soGit update-index ($flag -replace '^--', '--no-') a.txt 2>&1 | Out-Null } finally { $ErrorActionPreference = $savedEap }
+    }
+    Assert-True (-not (Get-GitTreeState -Repo $soGit).Dirty) "Get-GitTreeState read the fixture repository as dirty after its flags were cleared."
+    Assert-True ((Get-GitTreeState -Repo (Join-Path $soDir "not-a-repo")).Head -eq "none") "Get-GitTreeState gave a commit for a directory that is no repository."
+
+    # The record's writer certifies nothing on its own: without the token of
+    # the build-driver.cmd run holding the lock it refuses, before it reads or
+    # writes anything. The token is cleared for the child, so a self-test run
+    # inside build-driver.cmd cannot reach the real record either.
+    $writer = Join-Path $PSScriptRoot "write-gated-manifest.ps1"
+    $savedRun = $env:XHCI98_GATED_RUN
+    try {
+        foreach ($tok in @($null, "not-this-run")) {
+            $env:XHCI98_GATED_RUN = $tok
+            $ErrorActionPreference = "Continue"
+            try {
+                $wOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $writer -Arch x86 -Flavor release -Finish 2>&1 | Out-String
+                $wRc = $LASTEXITCODE
+            } finally { $ErrorActionPreference = $savedEap }
+            Assert-True ($wRc -ne 0 -and ($wOut -replace '\s+', ' ').Contains("does not certify binaries on its own")) `
+                ("write-gated-manifest.ps1 ran outside a build-driver.cmd run (token '{0}'). Output:`n{1}" -f $tok, $wOut)
+        }
+    } finally {
+        $env:XHCI98_GATED_RUN = $savedRun
+    }
+
+    # Where the record is checked and written.
+    $soPkgText = [System.IO.File]::ReadAllText($packager)
+    $soCheckAt = $soPkgText.IndexOf('Get-GatedManifestFault -Manifest $gated')
+    $soSnapAt = $soPkgText.IndexOf('$bytes = [System.IO.File]::ReadAllBytes($gatedBinaries[$name])')
+    $soHostAt = $soPkgText.IndexOf('Write-Step "host test suite"')
+    Assert-True ($soSnapAt -gt 0 -and $soCheckAt -gt $soSnapAt -and $soHostAt -gt $soCheckAt -and $tsSignAt -gt $soCheckAt) `
+        "make-package.ps1 no longer reads each binary once and checks the gated build record before its gates and its signing."
+    Assert-True ($soPkgText.Contains('$DriverPath = $snapBinaries["xhci98.sys"]')) `
+        "make-package.ps1 -SignOnly no longer stages and signs the copy it hashed."
+    Assert-True (([regex]::Matches($soPkgText, 'if \(\$runBinaryGates\)')).Count -eq 4) `
+        "make-package.ps1 no longer guards exactly its four binary gates (host suite, import gates, helper) by `$runBinaryGates."
+    $soBuildText = [System.IO.File]::ReadAllText((Join-Path $repo "scripts\build-driver.cmd"))
+    $soLockAt = $soBuildText.IndexOf('mkdir "%GATEDLOCK%" 2>nul')
+    $soMainAt = $soBuildText.IndexOf('call :mainbody')
+    $soBeginAt = $soBuildText.IndexOf('call :gated -Begin')
+    $soBuildAt = $soBuildText.IndexOf('echo === build %FLAVOR% ===')
+    $soHlprAt = $soBuildText.IndexOf(':skiphlpr')
+    $soFinishAt = $soBuildText.IndexOf('call :gated -Finish %GATEOPT%')
+    Assert-True ($soLockAt -gt 0 -and $soMainAt -gt $soLockAt -and $soBeginAt -gt $soMainAt -and $soBuildAt -gt $soBeginAt -and
+                 $soHlprAt -gt $soBuildAt -and $soFinishAt -gt $soHlprAt) `
+        "build-driver.cmd no longer takes its lock for the run, begins the record before a flavour builds, and finishes it only after the flavour's last gate."
+    foreach ($cap in @(
+        @{ Gate = '-Image "%OUTSYS%" -Flavor %FLAVOR% -Arch %ARCH% %GATEOPT%'; Cap = 'call :gated -Capture -Name xhci98.sys -Image "%OUTSYS%"' },
+        @{ Gate = '-AllowPath "%UASALLOW%" %GATEOPT%';  Cap = 'call :gated -Capture -Name xhciuas.sys -Image "%UASSYS%"' },
+        @{ Gate = '-AllowPath "%CMALLOW%" %GATEOPT%';   Cap = 'call :gated -Capture -Name xhcicm.sys -Image "%CMSYS%"' },
+        @{ Gate = '-AllowPath "%HLPRALLOW%" %GATEOPT%'; Cap = 'call :gated -Capture -Name xhcihlpr.sys -Image "%HLPRSYS%"' }
+    )) {
+        $g = $soBuildText.IndexOf($cap.Gate)
+        $k = $soBuildText.IndexOf($cap.Cap)
+        $h = $soBuildText.IndexOf($cap.Cap.Replace("-Capture", "-Hash"))
+        Assert-True ($g -gt 0 -and $k -gt $g -and ($k - $g) -lt 300) `
+            ("build-driver.cmd no longer captures the hash right after the import gate: " + $cap.Cap)
+        Assert-True ($h -gt 0 -and $g -gt $h -and ($g - $h) -lt 300) `
+            ("build-driver.cmd no longer hashes the binary right before its import gate: " + $cap.Cap.Replace("-Capture", "-Hash"))
+    }
+    # The run's state is noted once, before :mainbody and so before any
+    # self-test; :mainbody has a scope of its own, so its exits' endlocal
+    # cannot take the cleanup's variables; the token is set for one call.
+    $soRunStartAt = $soBuildText.IndexOf('call :gated -RunStart')
+    Assert-True ($soRunStartAt -gt $soLockAt -and $soMainAt -gt $soRunStartAt) `
+        "build-driver.cmd no longer notes the tree's state when it takes the lock, before :mainbody."
+    Assert-True ($soBuildText.Contains(":mainbody`r`nsetlocal`r`n")) "build-driver.cmd's :mainbody no longer opens a scope of its own."
+    Assert-True ($soBuildText.Contains("set /p XHCI98_GATED_RUN=<`"%GATEDLOCK%\run.txt`"") -and
+                 ([regex]::Matches($soBuildText, 'set "XHCI98_GATED_RUN="')).Count -eq 1 -and
+                 ([regex]::Matches($soBuildText, 'XHCI98_GATED_RUN=')).Count -eq 2) `
+        "build-driver.cmd sets XHCI98_GATED_RUN somewhere other than around the one writer call."
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue

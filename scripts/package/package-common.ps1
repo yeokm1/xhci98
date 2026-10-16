@@ -1157,3 +1157,178 @@ function Resolve-Nvme98Input {
     $release | Add-Member -NotePropertyName Overridden -NotePropertyValue ($why -ne "")
     return $release
 }
+
+# ------------------------------------------------------------------
+# The gated build's manifest, and the sign-only mode that trusts it
+# (roadmap-usb4.md SIGN.1)
+# ------------------------------------------------------------------
+#
+# scripts\build-driver.cmd writes out\gated-<arch>-<flavour>.txt at the end of
+# a flavour, after every gate for it has passed (the self-tests and the host
+# suite before the builds, then each binary's import gate, flavour marker and
+# source stamp): each gated binary's SHA-256, the commit and whether the tree
+# was dirty, whether the import gates had their target evidence, and the time.
+# make-package.ps1 -SignOnly reads it and skips the host suite and the import
+# gates for a binary whose bytes are exactly the ones those gates read. The
+# hash is the guarantee; the commit is what says the INFs and scripts the
+# package is staged with are the ones that build was gated beside.
+#
+# One "key=value" per line, ASCII, CRLF, "#" lines ignored; the binaries are
+# "sha256.<name>=<64 hex>". Written by scripts\package\write-gated-manifest.ps1,
+# from the hash each binary had right after its own import gate passed, and
+# only if every binary still has it once the flavour's last gate has passed.
+#
+# What this protects against is a mismatch by accident and another process on
+# the same machine changing a binary while the build or the packager runs. It
+# is not a defence against someone who deliberately forges the record.
+#
+function Get-GatedManifestPath {
+    param([string]$Repo, [string]$Arch, [string]$Flavor)
+    return (Join-Path $Repo ("out\gated-{0}-{1}.txt" -f $Arch, $Flavor))
+}
+
+function Get-FileSha256 {
+    # .NET rather than Get-FileHash: build-driver.cmd notes that a PS7 module
+    # path inherited through cmd can hide the 5.1 cmdlet.
+    param([string]$Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $fs = [System.IO.File]::OpenRead($Path)
+    try {
+        return (($sha.ComputeHash($fs) | ForEach-Object { $_.ToString("X2") }) -join "")
+    } finally {
+        $fs.Dispose()
+        $sha.Dispose()
+    }
+}
+
+function ConvertFrom-GatedManifest {
+    # Parses the manifest's text. Throws on anything malformed: a manifest
+    # that cannot be read exactly is one no gate can be reused from.
+    param([string]$Text)
+    $m = @{ Format = ""; Arch = ""; Flavor = ""; Commit = ""; Dirty = ""; TargetEvidence = ""; Time = ""; Sha256 = @{} }
+    $seen = @{}
+    foreach ($raw in ($Text -split "`r?`n")) {
+        $line = $raw.Trim()
+        if ($line -eq "" -or $line.StartsWith("#")) { continue }
+        $eq = $line.IndexOf("=")
+        if ($eq -lt 1) { throw "malformed line '$line'" }
+        $key = $line.Substring(0, $eq).Trim().ToLowerInvariant()
+        $val = $line.Substring($eq + 1).Trim()
+        if ($seen.ContainsKey($key)) { throw "'$key' appears twice" }
+        $seen[$key] = $true
+        if ($key.StartsWith("sha256.")) {
+            $name = $key.Substring(7)
+            if ($name -notmatch '^[a-z0-9_]+\.sys$') { throw "'$key' does not name a .sys" }
+            if ($val -notmatch '^[0-9A-Fa-f]{64}$') { throw "'$key' is not a SHA-256" }
+            $m.Sha256[$name] = $val.ToUpperInvariant()
+            continue
+        }
+        switch ($key) {
+            "format"          { $m.Format = $val }
+            "arch"            { $m.Arch = $val }
+            "flavor"          { $m.Flavor = $val }
+            "commit"          { $m.Commit = $val.ToLowerInvariant() }
+            "dirty"           { $m.Dirty = $val }
+            "target_evidence" { $m.TargetEvidence = $val }
+            "time"            { $m.Time = $val }
+            default           { throw "unknown key '$key'" }
+        }
+    }
+    if ($m.Format -ne "1") { throw "format '$($m.Format)' is not 1" }
+    foreach ($k in @("Arch", "Flavor", "Commit", "Dirty", "TargetEvidence", "Time")) {
+        if ($m[$k] -eq "") { throw "no '$k' line" }
+    }
+    if ($m.Dirty -notmatch '^[01]$') { throw "dirty '$($m.Dirty)' is not 0 or 1" }
+    if ($m.TargetEvidence -notmatch '^[01]$') { throw "target_evidence '$($m.TargetEvidence)' is not 0 or 1" }
+    if ($m.Sha256.Count -eq 0) { throw "no sha256 line" }
+    return $m
+}
+
+function ConvertTo-GatedManifest {
+    # The writer's half, here so the format has one definition. $Sha256 maps
+    # a binary's file name to its hash.
+    param([string]$Arch, [string]$Flavor, [string]$Commit, [bool]$Dirty,
+          [bool]$TargetEvidence, [string]$Time, [hashtable]$Sha256)
+    $lines = @(
+        "# The gated build's record (scripts\build-driver.cmd), read by",
+        "# scripts\package\make-package.ps1 -SignOnly. Generated; do not edit.",
+        "format=1",
+        "arch=$Arch",
+        "flavor=$Flavor",
+        "commit=$Commit",
+        ("dirty=" + $(if ($Dirty) { "1" } else { "0" })),
+        ("target_evidence=" + $(if ($TargetEvidence) { "1" } else { "0" })),
+        "time=$Time"
+    )
+    foreach ($name in ($Sha256.Keys | Sort-Object)) {
+        $lines += ("sha256.{0}={1}" -f $name.ToLowerInvariant(), $Sha256[$name].ToUpperInvariant())
+    }
+    return (($lines -join "`r`n") + "`r`n")
+}
+
+function Get-GatedManifestFault {
+    # "" when the manifest admits a sign-only package of $Binaries (file name
+    # -> path of the bytes to be staged), else the reason it does not. The
+    # order decides only which reason is given: the build it describes, then
+    # each binary's bytes, then the tree the package is staged from.
+    param($Manifest, [string]$Arch, [string]$Flavor, [hashtable]$Binaries,
+          [string]$Head, [bool]$Dirty, [bool]$NoTargetEvidence)
+    if ($Manifest.Arch -ne $Arch -or $Manifest.Flavor -ne $Flavor) {
+        return ("it records the {0} {1} build, and this is the {2} {3} package" -f $Manifest.Flavor, $Manifest.Arch, $Flavor, $Arch)
+    }
+    foreach ($name in ($Binaries.Keys | Sort-Object)) {
+        $key = $name.ToLowerInvariant()
+        if (-not $Manifest.Sha256.ContainsKey($key)) {
+            return "it records no hash for $name, so that binary was not gated by the build it describes"
+        }
+        if (-not (Test-Path -LiteralPath $Binaries[$name] -PathType Leaf)) {
+            return "$name is not at '$($Binaries[$name])'"
+        }
+        $actual = Get-FileSha256 -Path $Binaries[$name]
+        if ($actual -ne $Manifest.Sha256[$key]) {
+            return ("{0} at '{1}' is not the binary the build gated: SHA-256 {2}, recorded {3}" -f $name, $Binaries[$name], $actual, $Manifest.Sha256[$key])
+        }
+    }
+    if ($Manifest.Dirty -ne "0") {
+        return "the build ran in a tree with uncommitted changes, so no commit says what it was built from"
+    }
+    if ($Manifest.Commit -ne $Head.ToLowerInvariant()) {
+        return ("it was built at commit {0}, and the tree is at {1}: the INFs and scripts this package would be staged with are not the ones the build was gated beside" -f $Manifest.Commit, $Head)
+    }
+    if ($Dirty) {
+        return "the tree has uncommitted changes since that commit"
+    }
+    if ($Manifest.TargetEvidence -ne "1" -and -not $NoTargetEvidence) {
+        return "its import gates ran with -NoTargetEvidence, on the allowlists alone, and this run did not ask for that"
+    }
+    return ""
+}
+
+function Get-GitTreeState {
+    # HEAD, and whether the tree differs from it: a tracked change, any
+    # untracked file that is not ignored, or a tracked file git has been told
+    # not to look at (assume-unchanged, a lowercase tag in `git ls-files -v`,
+    # or skip-worktree, "S"), since git status cannot see a change to that
+    # one. Head "none" when git cannot say, which the sign-only mode refuses.
+    param([string]$Repo)
+    $head = ""
+    $status = ""
+    $hidden = @()
+    $ok = $false
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $head = (& git -C $Repo rev-parse HEAD 2>$null | Out-String).Trim()
+        $headRc = $LASTEXITCODE
+        $status = (& git -C $Repo status --porcelain --untracked-files=all 2>$null | Out-String).Trim()
+        $statusRc = $LASTEXITCODE
+        $hidden = @(& git -C $Repo ls-files -v 2>$null | Where-Object { $_ -cmatch '^([a-z]|S) ' })
+        $ok = ($headRc -eq 0 -and $statusRc -eq 0 -and $LASTEXITCODE -eq 0 -and $head -match '^[0-9a-f]{40}$')
+    } catch {
+        $ok = $false
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if (-not $ok) { return @{ Head = "none"; Dirty = $true } }
+    return @{ Head = $head; Dirty = ($status -ne "" -or $hidden.Count -gt 0) }
+}
