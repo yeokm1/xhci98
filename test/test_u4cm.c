@@ -200,6 +200,7 @@ static unsigned long g_onTimeUs;
 static unsigned long g_onTimeWrites;
 static unsigned long g_cnWrites[FAB_MAX_ROUTERS];
 static unsigned long g_cnRrPolls[FAB_MAX_ROUTERS];
+static unsigned long g_cnLastPollUs;
 static int g_rpPort;
 static int g_rpRouter;
 
@@ -216,6 +217,7 @@ static int countHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
         g_cnWrites[router]++;
     } else if (cs == TBT_CS_ROUTER && addr == 6 && n == 1) {
         g_cnRrPolls[router]++;
+        g_cnLastPollUs = f->NowUs;
         if (g_rpPort != 0 && router == g_rpRouter) {
             f->R[router].Rcs[7] ^= 0x00010000UL;
             g_rpPort = 0;
@@ -228,6 +230,7 @@ static void armCount(FAB *f)
 {
     memset(g_cnWrites, 0, sizeof(g_cnWrites));
     memset(g_cnRrPolls, 0, sizeof(g_cnRrPolls));
+    g_cnLastPollUs = 0;
     g_rpPort = 0;
     f->Hook = countHook;
 }
@@ -1689,8 +1692,8 @@ static void test_suspend_resume(void)
     CHECK_EQ(rc, TBT_E_STATE, "resume, budget spent in the wait: an obligation unmet");
     CHECK(g_cm.Counters.ResumeBudgetsSpent >= 1 && g_cnRrPolls[dev] >= 1,
           "resume, budget spent in the wait: spent while polling");
-    CHECK(g_fab.NowUs - b < 300000UL + TBT_U4_ROUTER_READY_US,
-          "resume, budget spent in the wait: the wait cut short");
+    CHECK(g_cnLastPollUs - b < 300000UL,
+          "resume, budget spent in the wait: no poll reached the router past the budget");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "resume, budget spent in the wait: HELD");
     CHECK(fabPcieUp(&g_fab, 1), "resume, budget spent in the wait: nothing torn down");
 

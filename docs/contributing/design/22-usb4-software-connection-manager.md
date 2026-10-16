@@ -2208,9 +2208,10 @@ so it stays up, as on a port FAILED for PCIe (section 7.2).
   the budget runs out (its 2 s longest wait), and a spent budget refuses
   the wait's reads, so the verification fails as it did before the wait
   existed. Hot plug events a wait consumes are not acted on for the port
-  being verified until its obligation is judged, so each verification,
-  and each again after its Router Ready wait, first proves the router
-  the one classified: an unplug hint only with no removal evidence behind
+  being verified until its obligation is judged, so each verification of
+  a USB4 router (a Thunderbolt 3 router's has no Router Ready wait and is
+  unchanged), and each again after its Router Ready wait, first proves
+  the router the one classified: an unplug hint only with no removal evidence behind
   it, lane 0 still unlocked, the same IDs and UUID, still enumerated at
   its route; anything else does not meet the obligation. System suspend with a tunnelled device attached is
   unsupported in this release (section 7.6). Windows 98 on the APM
