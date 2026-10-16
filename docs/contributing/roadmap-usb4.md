@@ -595,3 +595,18 @@ boot. A machine that does, or an add-in USB4 card in an older machine
 that does, opens it.
 
 - [ ] U4HW.1 real USB4 devices, after the maintainer's ORICO capture (its emulator stand-in, the ORICO capture model, passes on 98 SE and 2000; open on real hardware, record 22 section 16: the PCIe Up adapter credits kept as read, the unused adapter 4's answers, and the enclosure's PCIe switch under 98 SE and 2000); on a USB4 host that boots the target systems
+
+## Planned - A Proper Installer With Settings
+
+Goal: an installer program, in place of the `INSTALL.BAT` console tool,
+that installs, updates and uninstalls the drivers and lets the user
+configure their settings, on every target (Windows 98 SE to 7, x86 and
+x64).
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-17 by
+the owner, at the `3.0.0.0` cut, where `INSTALL.BAT` (`XHCIINST`, design
+record 23) ships as beta and the settings are set with `INSTALL /set`,
+XHCITR's Logging level item or by hand in the registry.
+
+- [ ] INSTUI.1 a design record: a windowed installer over `XHCIINST`'s routines (one engine, the console tool kept for scripts); the steps it shows (what is found, what will be installed or updated, the restart); which drivers it installs - `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and, only when the user ticks it, the bundled Stor98 (design record 23 section 4.4: never unasked); 98 SE and ME with DI9X's helper, or the Update Driver steps it shows until then; a settings page for the values of record 23's table, the `XhciCm*` values and Stor98's settings, each with its default, its range and the systems it applies to, a value set by the user kept by an update; the uninstall; the exit codes and the log
+- [ ] INSTUI.2 the installer, built and gated as `XHCIINST` is, with the legs on 98 SE, ME, 2000, XP, XP x64, Vista and 7 in both architectures: a fresh install, an update from `3.0.0.0`, settings changed and kept across an update, the uninstall
