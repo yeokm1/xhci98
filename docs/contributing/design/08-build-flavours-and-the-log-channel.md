@@ -722,6 +722,20 @@ Windows 2000 DebugView-only setup. That loss is accepted because the channel is
 local-only, answers only the machine's owner running the tool, and the security
 posture below already says the boundary is not a user boundary.
 
+**Amendment, 2026-10-16 (the owner).** The default is now 2,
+`XHCI_LOG_VERBOSITY_RING`, for `xhci98.sys` and `xhcicm.sys` alike: the ring
+records, with no addresses, on every install, so a log exists before anyone
+asks for one. The paragraph above is left as it was written; its caveat
+stands and now applies to the default itself - the append cost at real
+interrupt rates on Windows 98 metal is unmeasured, and the owner is to
+measure it on the P14s Gen 1 (ATTO at levels 0 and 2). In `xhci98.sys` an
+absent value now reads as the default rather than 0, and the INFs write 2 on
+a fresh install under the don't-overwrite flag, so an update keeps a value an
+earlier install or `SNAPOFF.BAT` wrote. A refused value falls back to the
+default, so to the ring rung and never to the address rung. `start.common.pa`
+became an address record in the same change, so levels 2 and 3 carry no
+address at all. `xhcicm.sys`'s value and its INFs are branch `tr-logs`'s.
+
 The configuration that dies has an upgrade case as well as a design case. A
 machine carrying `XhciLogSnapshot = 0` with `XhciLogVerbosity` nonzero was,
 under the old design, saying "record but do not open the door". The new driver

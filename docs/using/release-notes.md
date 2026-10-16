@@ -204,6 +204,16 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   and removes a USB storage device or a Thunderbolt or USB4 device safely,
   with no administrator rights ("The xHCI98 USB Tree", below; design record 25). `xhcicm.sys`
   gains a read-only query device for it.
+- **PCI details Windows does not show**, in the same tool: the interrupt
+  pin and line, MSI and MSI-X, the PCI Express link speed and width, the
+  BARs and a bridge's buses and windows, for each xHCI controller this
+  driver runs and for each Thunderbolt or USB4 controller, its tunnel
+  ports and the devices behind them. The drivers only read; `xhci98.sys`
+  gains a read-only query request for it and for its log (design record
+  13 section 8.12).
+- **The log records by default**: `XhciLogVerbosity` is `2` on a fresh
+  install, so a log exists before anyone asks for one; an update keeps the
+  value already there ("The log, and how to send one").
 - **Device Manager names by generation**: "Thunderbolt and USB4 in Device
   Manager", below.
 - **A link-state channel for Stor98**: on Windows 2000 to 7,
@@ -336,6 +346,18 @@ the logged-on user, with no administrator rights.
 - On 98 SE and ME the stop removes the device from Device Manager; until
   it is unplugged, Device Manager's Refresh can start it again. On XP and
   later Windows holds it stopped (Code 47) until it is unplugged.
+- **PCI configuration**: each xHCI controller `xhci98.sys` drives, and
+  each Thunderbolt or USB4 controller, has a "PCI configuration" item:
+  vendor, device, subsystem, revision and class, the Command and Status
+  registers, the interrupt pin and line, the BARs as read, a bridge's
+  buses and windows, and the capabilities (MSI and MSI-X with their state
+  and vectors, the PCI Express link now and what it is capable of, power
+  management). Under a Thunderbolt or USB4 controller it lists the
+  controller, its tunnel ports and, on 2000 and later, the devices behind
+  each port; on 98 SE and ME those devices read "not read on this
+  system". The drivers read configuration space and never change it. An
+  older driver's item reads "not served by this xhci98.sys" (or
+  xhcicm.sys).
 
 ### Removing a Thunderbolt or USB4 device safely
 
@@ -3287,8 +3309,11 @@ descriptors at High Speed.
 The driver keeps a small log of what happened on the bus, inside itself, and
 `XHCISNAP.EXE` (in the download's `tools\xhcisnap\` directory; before
 `2.4.0.0`, `xhcisnap\` at the top of the download) reads it off the running
-machine. The log is off by default and stays off unless you are diagnosing
-something.
+machine. From `3.0.0.0` it records by default: a fresh install sets
+`XhciLogVerbosity` to `2` (the log of what happened, with no internal
+addresses); an update keeps the value an earlier install wrote, which was
+`0`, off, until `2.4.0.0`. What recording costs at real interrupt rates on
+Windows 98 hardware has not been measured yet.
 
 From `2.4.0.0` three batch files beside it do the typing, on every Windows
 the driver runs (under `COMMAND.COM` on 98 SE and ME, `cmd.exe` from 2000 to
@@ -3431,12 +3456,16 @@ whether the driver is recording, its counters, and the log, oldest record
 first. Save Report (and `XHCITR /report <file>`) writes both logs and the
 counters into the report, as plain text with no internal addresses in it.
 
-Recording is off by default, and the node then says how to turn it on:
+The tool reads `xhci98.sys` through a query request of the driver's own,
+as it reads `xhcicm.sys`, with no `SNAPON.BAT` needed; an `xhci98.sys`
+older than `3.0.0.0` is read through `XHCISNAP`'s channel as before.
+Where recording is off the node says how to turn it on:
 
-- **`xhci98.sys`**: run `SNAPON.BAT` as above (on Vista and 7, as an
-  administrator), then restart Windows. At level 1 the node shows the
-  counters only. At level 4 it shows the counters but not the log, because
-  that level records internal addresses: use level 2.
+- **`xhci98.sys`**: it records at level 2 after a fresh install. Where an
+  earlier install left it off, run `SNAPON.BAT` as above (on Vista and 7,
+  as an administrator), then restart Windows. At level 1 the node shows
+  the counters only. At level 4 it shows the counters but not the log,
+  because that level records internal addresses: use level 2.
 - **`xhcicm.sys`**: set the DWORD value `XhciLogVerbosity` to `2` on the
   Thunderbolt or USB4 controller's driver key, then restart Windows. The
   node names the key in full (the "Driver key" its details show, under
