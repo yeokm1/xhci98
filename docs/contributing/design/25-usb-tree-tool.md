@@ -563,7 +563,11 @@ header type and bus numbers its walk needs.
   capability list going on past them, with no "not present" claimed; a
   port not walked). And 98 SE's PCI bus answers no bus number or address for
   the NHI's PDO, so the topology's own reading of the NHI's location
-  (`CM_REENUM.Nhi`) stands in.
+  (`CM_REENUM.Nhi`) stands in. Read in the emulator on 98 SE (run 41):
+  while the tunnel bridge's devnode had no driver (its Add New Hardware
+  wizard cancelled), the query's reads of it answered "no function"; once
+  Windows had installed its standard PCI-to-PCI bridge driver, the bridge
+  was read whole. A real machine installs that driver at setup.
 - **The walk below a port** (2000 and later): the port's secondary bus,
   then the secondary bus of each bridge found there whose numbers lie
   inside the port's secondary-to-subordinate range and above its own bus,

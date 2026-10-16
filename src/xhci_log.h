@@ -346,11 +346,13 @@
  * tool" (an intermittent fault needing a second reproduction at a higher
  * level) was the reason. The read channel opens with it, at the same rung.
  * What follows is the reasoning for the earlier default of 0, kept as it
- * was written; its caveat stands unchanged and now applies to the default
- * itself: **what the append sites cost at real interrupt rates on Windows
- * 98 metal is UNMEASURED**, and it is to be measured on the owner's P14s
- * Gen 1 (an ATTO reading at levels 0 and 2). Design record 08 section 13.2
- * carries the amendment.
+ * was written; its caveat is now a measurement, of one machine and one
+ * pair of runs: on the owner's ThinkPad P14s Gen 1 under Windows 98 SE, a
+ * USB Bulk-Only drive on the machine's own xHCI controller, ATTO with
+ * Direct I/O, level 2 cost about 1 to 2% at 1 MB and up, 2 to 4% from 4 to
+ * 512 KB and up to about 5 to 6% on 16 and 32 KB writes, within a run-to-
+ * run noise of several percent; the owner kept 2. Design record 08
+ * section 13.2 carries the amendment and runs\run-41.md the reading.
  *
  * **The default is 0 and it is a polarity decision, not a taste.** Task
  * 13-L.1's whole finding is that the safe configuration must be the default and
