@@ -519,6 +519,54 @@ never-seen chain instance (another `tb0` slot).
   driver for the first time rebuilds its stack without the child. The
   re-plug of the known devnode was removable.
 
+### The child filter on a bridge (record 21 section 7.4 revision 2)
+
+**Branch.** The fix is on branch `nt-childattach`: `5cbe3ac3`, with the
+review rounds' `2d94a491` and `87935d29`.
+- `build-driver.cmd all` and `all -amd64` passed every gate at
+  `87935d29`, and the host suites pass.
+- The legs ran its qemu `xhcicm.sys`, SHA-256 `9D7F8BBF...5E9ACA`, copied
+  over the installed driver with `XhciLogVerbosity` 3.
+- Each first plug used a chain instance the guest had never seen: XP `tb0`
+  slot 6, 7 slot 3 (a fresh install), 2000 slot 8.
+
+**What the log names.** On XP and 7 the driver already on the bridge's PDO
+is ACPI's: `cm.reenum.child.under` reads `41435049` ("ACPI", after
+`\Driver\`), with `under.count` 1. `child.decision` reads 2, attached above
+it, on every plug. On 2000 with ACPI off nothing is attached, so no
+`under` line is written, as before.
+
+| | First plug of a never-seen chain | Re-plug |
+|---|---|---|
+| XP SP3 | attached above ACPI; the USP still "removable: no" | "removable: yes ... (listed in Safely Remove Hardware)"; the applet listed "PCI standard PCI-to-PCI bridge" with its subtree; Stop gave "Safe To Remove Hardware: The 'PCI standard PCI-to-PCI bridge' device can now be safely removed"; the unplug and the next re-plug brought it back started and removable |
+| 7 x86 | attached above ACPI; "removable: yes ... (listed in Safely Remove Hardware)"; the applet listed the bridge; Stop gave "The 'PCI standard PCI-to-PCI bridge' device can now be safely removed from the computer" | after that unplug: started, "removable: yes" |
+| 2000 | unchanged: "removable: no"; a plain unplug again showed "Unsafe Removal of Device" naming both bridges | "removable: yes" |
+
+The NVMe directly on the tunnel bus read "removable: yes" on every plug on
+all three systems.
+
+**XP's first plug.** The child was attached there, and the bridge still
+read not removable. This is the 2000 case of roadmap EJRB.1: XP installed
+the bridge's driver for the first time and rebuilt the stack without the
+child. Windows 7 did not lose it. So revision 2 fixes what never attached
+(XP and 7 on every plug, ACPI), and the first plug of a never-seen unit on
+2000 and XP stays EJRB.1's. For those, the route is the tool-side
+fallback the owner decided for 3.0.0.0: query-and-remove in XHCITR and
+`XHCIINST /eject`.
+
+**`pci.sys` on 7 x86** (first plug, no prompt open), with no restart
+asked:
+
+| | USP | DSP |
+|---|---|---|
+| Bus | 2-3 | 3-3 |
+| Memory | `fe400000-fe7fffff` | the same |
+| Prefetchable | `fe000000-fe3fffff`, inside `tb0`'s non-prefetchable window, which a prefetchable range may use | the same |
+| IO | `c000-cfff` | the same |
+
+Both bridges were started; the NVMes showed Code 28, no driver. The
+re-plug's `info pci` matched the first plug's.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link

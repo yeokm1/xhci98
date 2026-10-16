@@ -2156,10 +2156,11 @@ reading of D10 for the owner to confirm.
 
    **Revision 2 (2026-10-16): above a bus filter.** Revision 1 attached
    only to a PDO with nothing on it, and returned `STATUS_DEVICE_BUSY`
-   otherwise. On Windows XP SP3, an ACPI machine, a PCI-to-PCI bridge
-   reported on the tunnel bus already carries a device object when the
-   answer passes the bridge filter. That object is a filter that a driver
-   below the bridge filter attaches in the answer's completion. So the
+   otherwise. On Windows XP SP3 and 7 x86, both ACPI machines, a PCI-to-PCI
+   bridge reported on the tunnel bus already carries a device object when
+   the answer passes the bridge filter. That object is ACPI's bus filter
+   (`\Driver\ACPI`, named by the log below in the revision's legs),
+   attached in the answer's completion below the bridge filter. So the
    upstream port of an enclosure's switch (the ORICO ASM2464's `1b21:2463`,
    the emulator's stand-in `1b21:2421`) was never marked, and Windows'
    Safely Remove never listed it. The qemu build's counters showed it:
@@ -2200,8 +2201,11 @@ reading of D10 for the owner to confirm.
    `\Driver\`, with `under.count` and `decision`. It also counts
    `cm.reenum.child.over`. Windows 2000 with ACPI off attaches as before;
    this rule changes nothing where nothing is attached. Not changed: on
-   2000 the child is lost when Windows installs a bridge's driver for the
-   first time and rebuilds its stack (roadmap EJRB.1). `cmEjectReady`
+   2000, and in the revision's legs on XP as well, the child is lost when
+   Windows installs a bridge's driver for the first time and rebuilds its
+   stack (roadmap EJRB.1), so the first plug of a never-seen unit is not
+   listed. The re-plugs are listed. Windows 7 x86 listed the first plug
+   too. `cmEjectReady`
    still reads any attached object as a stack, so on an ACPI machine it
    depends on that bus filter leaving with the device's stack; the
    revision's legs read it.
