@@ -1,6 +1,6 @@
 /*
  * xhci_qry.h - the answer of xhci98.sys's query request, IOCTL_XHCI98_QUERY
- * (design record 13 section 8.13; design record 25 revision 12): the
+ * (design record 13 section 8.12; design record 25 revision 12): the
  * driver's log ring, its counter block and the controller's PCI
  * configuration, asked of the controller's own device (\\.\HCD<n>) in the
  * framing xhcicm.sys's IOCTL_XHCICM_LOG uses (src\cm\cm_query.h CM_QL_*).

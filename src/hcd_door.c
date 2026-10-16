@@ -1286,7 +1286,7 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
 }
 
 /* ----------------------------------------------------------------------- */
-/* The query request (xhci_qry.h; record 13 section 8.13)                   */
+/* The query request (xhci_qry.h; record 13 section 8.12)                   */
 /* ----------------------------------------------------------------------- */
 
 /*

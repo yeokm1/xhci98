@@ -180,7 +180,7 @@ rem                  xhcitr\tr_pci.c, design record 25 revision 12): the
 rem                  bounded walk below a tunnel port, the capability walk
 rem                  with bad lists, the decoders, 79 columns
 rem   test_xhq     - xhci98.sys's query answer (src\xhci_qry.c, design
-rem                  record 13 section 8.13): what each log level serves,
+rem                  record 13 section 8.12): what each log level serves,
 rem                  the ring's text and cut, the PCI states, the sizing,
 rem                  XHCITR's reader and texts, the default level 2
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
@@ -540,7 +540,7 @@ rem the bounds, the capability walk with bad lists, the decoders, 79 columns
 rem (design record 25 sections 3.6 and 4.7, revision 12).
 call :run test_trpci "test_trpci.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src\cm\cm_qpci.c ..\xhciinst\inst_core.c"
 rem test_xhq links xhci98.sys's query answer composer (src\xhci_qry.c,
-rem design record 13 section 8.13) and XHCITR's reader of it and the texts
+rem design record 13 section 8.12) and XHCITR's reader of it and the texts
 rem it makes (xhcitr\tr_log.c, tr_pci.c); the shared default level.
 call :run test_xhq "test_xhq.c ..\src\xhci_qry.c ..\xhcitr\tr_log.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src\cm\cm_query.c ..\xhciinst\inst_core.c"
 

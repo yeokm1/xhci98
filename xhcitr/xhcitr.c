@@ -2421,7 +2421,7 @@ static int log_window(HANDLE h, unsigned char *b, TR_U32 region,
     return tr_snap_window(b, got, w);
 }
 
-/* xhci98's query request (record 13 section 8.13): the answer into a
+/* xhci98's query request (record 13 section 8.12): the answer into a
  * buffer the caller frees. 1 parsed whole; 0 the driver refused the
  * request (older than revision 12: ERROR_INVALID_FUNCTION or
  * ERROR_NOT_SUPPORTED); -1 anything else, *err set where the call failed. */
@@ -2641,7 +2641,7 @@ static void pci_node_add(int parentT, int which, int index, const char *id)
     add_tnode(parentT, K_PCI, index, which, 0, -1, "PCI configuration", key);
 }
 
-/* xhci98's controller: its query request (record 13 section 8.13), read
+/* xhci98's controller: its query request (record 13 section 8.12), read
  * when the node is shown. */
 static void pci_hcd(TR_TEXT *t, int c)
 {

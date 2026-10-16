@@ -1,6 +1,6 @@
 /*
  * xhci_qry.c - the answer of xhci98.sys's query request (xhci_qryb.h,
- * xhci_qry.h; design record 13 section 8.13, design record 25 revision
+ * xhci_qry.h; design record 13 section 8.12, design record 25 revision
  * 12). Written for this project, in the framing of xhcicm.sys's log answer
  * (src\cm\cm_query.c CmQueryLogAnswer), which it does not change.
  *

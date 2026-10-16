@@ -1,6 +1,6 @@
 /*
  * test_xhq.c - xhci98.sys's query request (src\xhci_qry.c, design record
- * 13 section 8.13, design record 25 revision 12): the answer composer at
+ * 13 section 8.12, design record 25 revision 12): the answer composer at
  * each XhciLogVerbosity - counters from 1, the ring from 2, the ring
  * withheld at 4, the PCI configuration at every level - the ring's text
  * (oldest first, bytes replaced, the cut after a wrap or a drain), the PCI

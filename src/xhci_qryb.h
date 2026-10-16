@@ -1,6 +1,6 @@
 /*
  * xhci_qryb.h - the composer of IOCTL_XHCI98_QUERY's answer (xhci_qry.h;
- * design record 13 section 8.13): pure, DDK-free, host-tested by
+ * design record 13 section 8.12): pure, DDK-free, host-tested by
  * test\test_xhq.c. hcd_door.c gathers what it needs under the controller
  * lock and calls it into the request's system buffer.
  *
