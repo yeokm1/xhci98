@@ -1,5 +1,10 @@
 # xhcisnap - reading this driver's own log off a running machine
 
+**To be deprecated in a subsequent release.** From `3.0.0.0` the xHCI98
+USB Tree (`xhcitr`) reads both drivers' logs and sets their logging
+level; `XHCISNAP.EXE` and its batch files still ship in `3.0.0.0` and
+work as before.
+
 `XHCISNAP.EXE` reads `xhci98.sys`'s extension, its raw PORTSC array, (from
 2.0.0.0) its enabled slots and (from 2.2.0.0) its root ports' enumeration and
 counters from user mode, and writes a report a user can send back.
