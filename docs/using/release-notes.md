@@ -210,9 +210,10 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   driver `nvme98` when an NVMe drive's tunnel comes up, and under the USB4
   connection manager when its link has gone down ("NVMe drives behind a
   tunnel").
-- **No NVMe driver in the download**: a drive behind a tunnel needs one,
-  and this download bundles none ("NVMe drives behind Thunderbolt or
-  USB4", under "Installing").
+- **Stor98 in the download**: the package carries a release of Stor98,
+  the NVMe driver for Windows 98 SE to Vista, as its own project released
+  it (which release: "NVMe drives behind Thunderbolt or USB4", under
+  "Installing").
 
 ### Which controllers
 
@@ -386,9 +387,13 @@ Express tunnel down (the USB3 tunnel stays).
 ### NVMe drives behind a tunnel
 
 An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver,
-which none of these systems has, and this download bundles none ("NVMe
-drives behind Thunderbolt or USB4", under "Installing"). `xhcicm.sys` brings the drive's tunnel up and
-down; `nvme98` runs the drive.
+which none of these systems has. Stor98 (formerly `nvme98`), a separate
+project, is that driver for Windows 98 SE to Vista, and the download
+carries a release of it as its project released it, with its own licence
+and notes (which release, and where it is: "NVMe drives behind
+Thunderbolt or USB4", under "Installing"); read them before installing
+it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the
+drive.
 
 The two talk over a link-state channel that `nvme98` defined:
 
@@ -1772,18 +1777,34 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles no nvme98.
+This download bundles Stor98 `0.3.0.0`.
 
-<!-- The cut replaces the line above with "This download bundles nvme98
-`<version>`." or "This download bundles no nvme98."
+<!-- The cut replaces the line above with "This download bundles Stor98
+`<version>`." or "This download bundles no Stor98."
 (scripts\package\make-release.ps1 holds it to what the cut bundles). -->
 
 An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of
-its own, which none of these systems has, and this download bundles none.
-Until one is installed, the drive's NVMe controller shows in Device
-Manager without a driver. A separate NVMe driver for Windows 98 SE to
-Vista, Stor98, is being prepared as its own project; `xhcicm.sys` already
-brings the drive's tunnel up and down.
+its own, which none of these systems has. Stor98, the release named in
+the line above, is that driver. `xhcicm.sys` brings the drive's tunnel up
+and down, and Stor98 runs the drive.
+
+`release-x86\` and `release-x64\` carry it:
+
+- a separate project under its own licence, bundled as one of its
+  released builds, unchanged;
+- `stor98.inf` and the files beside it whose names start with `stor98`;
+- its `LICENSE`, `NOTICE.TXT` and `readme.txt` beside it, as
+  `stor98-LICENSE.txt`, `stor98-NOTICE.txt` and `stor98-readme.txt`.
+
+Its readme is its install guide and lists its known limits; read it
+before installing. The `debug-` directories do not carry it, and
+`INSTALL.BAT` does not install it.
+
+When the drive's NVMe controller (`PCI\CC_010802`) shows in Device
+Manager without a driver, Update Driver, Have Disk, and point it at:
+
+- `release-x86\` on Windows 98 SE, ME and 32-bit 2000, XP, Vista and 7
+- `release-x64\` on Windows XP x64, Vista x64 and 7 x64
 
 ## Devices and hubs in Device Manager
 
