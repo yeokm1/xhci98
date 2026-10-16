@@ -1394,9 +1394,15 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
     for (tries = 1;; tries++) {
         io.Reads = 0;
         io.Writes = 0;
+        /* Every attempt but the last also waits for an empty bus behind
+         * a bridge (a link below still training); the last takes what
+         * answers. */
         (VOID)XhciTbtNumberBridges(&io, bdf,
                                    XHCI_TBT_BRNUM_F_WINDOWS |
-                                       XHCI_TBT_BRNUM_F_IRQ,
+                                       XHCI_TBT_BRNUM_F_IRQ |
+                                       (tries + 1UL < CM_WK_NUMBER_TRIES
+                                            ? XHCI_TBT_BRNUM_F_WAIT_EMPTY
+                                            : 0UL),
                                    cmWkNumberGo, w, &r);
         if (tries >= CM_WK_NUMBER_TRIES || !cmWkNumberGo(w)) {
             break;

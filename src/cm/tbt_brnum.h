@@ -90,6 +90,10 @@
 
 /* Flags. */
 #define XHCI_TBT_BRNUM_F_WINDOWS    0x1UL   /* also give the chain windows   */
+#define XHCI_TBT_BRNUM_F_WAIT_EMPTY 0x4UL   /* a bridge just numbered with
+                                               nothing behind it is
+                                               NOT_READY (undone), for a
+                                               caller that will try again */
 #define XHCI_TBT_BRNUM_F_IRQ        0x2UL   /* ... and its interrupt lines:
                                                each function below whose
                                                interrupt reaches the port on

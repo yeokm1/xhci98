@@ -1198,6 +1198,49 @@ static VOID test_irq_stale(VOID)
     goRefuseAt = 0;
 }
 
+static VOID test_round4(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, usp, dsp, sib;
+
+    /* A downstream port with nothing behind it yet: with
+     * XHCI_TBT_BRNUM_F_WAIT_EMPTY not ready, and everything undone;
+     * without it, numbered as it is. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    usp = madd(port, 0, 0, ID_ASM, 1, 0);
+    dsp = madd(usp, 0, 0, ID_ASM, 1, 0);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT,
+                                  XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_WAIT_EMPTY,
+                                  NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NOT_READY, "an empty bus behind a new bridge: not ready");
+    CHECK_EQ(r.Where, XHCI_TBT_BDF(0x07, 0, 0), "at the downstream port");
+    CHECK_EQ(m.N[usp].Buses, 0, "undone");
+    CHECK_EQ(m.N[dsp].Buses, 0, "undone below too");
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "the last attempt takes what answers");
+    CHECK_EQ(m.N[dsp].Buses, 0x00080807UL, "the downstream port numbered all the same");
+    CHECK_EQ(m.N[dsp].Mem, 0x0000FFF0UL, "with its window closed");
+
+    /* A window of 6 MiB, a bridge needing 4 MiB aligned to 2 MiB and a
+     * 2 MiB BAR beside it: refused, since alignment may leave gaps. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0x10601010UL;
+    usp = madd(port, 0, 0, ID_ASM, 1, 0);
+    dsp = madd(usp, 0, 0, ID_NVME, 0, 0);
+    m.N[dsp].BarSize[0] = 0x200000UL;
+    sib = madd(port, 1, 0, ID_EMU, 0, 0);
+    m.N[sib].BarSize[0] = 0x200000UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_NO_ROOM, "the alignment slack does not fit");
+    CHECK_EQ(m.N[usp].Mem, 0, "nothing written");
+}
+
 int main(void)
 {
     test_p14s_orico();
@@ -1216,6 +1259,7 @@ int main(void)
     test_irq();
     test_windows_order_and_stale();
     test_irq_stale();
+    test_round4();
     printf("test_tbt_brnum: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

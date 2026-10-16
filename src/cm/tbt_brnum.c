@@ -22,6 +22,7 @@ typedef struct _BRNUM_CTX {
     ULONG Next;             /* the next bus to give                      */
     ULONG Limit;            /* the port's subordinate bus                */
     ULONG Count;            /* bridges journalled in R                   */
+    ULONG Flags;            /* XHCI_TBT_BRNUM_F_*                        */
 } BRNUM_CTX;
 
 static ULONG brRead(PXHCI_TBT_CFG io, ULONG bdf, ULONG offset, PULONG value)
@@ -174,7 +175,7 @@ static ULONG brSurvey(PXHCI_TBT_CFG io, ULONG bus, PXHCI_TBT_BRNUM r)
  * first, the subtree behind each. 0 when the bus is done, else the
  * refusal's outcome with r->Where set.
  */
-static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth)
+static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG found)
 {
     PXHCI_TBT_BRNUM r;
     ULONG dev;
@@ -189,8 +190,10 @@ static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth)
     ULONG secondary;
     ULONG slot;
     ULONG rc;
+    ULONG below;
 
     r = c->R;
+    *found = 0;
     for (dev = 0; dev < 32UL; dev++) {
         first = 0;
         for (fn = 0; fn < 8UL; fn++) {
@@ -209,6 +212,7 @@ static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth)
                 }
                 continue;
             }
+            (*found)++;
             if (fn == 0) {
                 first = multi;
             }
@@ -256,9 +260,18 @@ static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth)
                     r->Where = bdf;
                     return XHCI_TBT_BRNUM_ACCESS;
                 }
-                rc = brBus(c, secondary, depth + 1);
+                rc = brBus(c, secondary, depth + 1, &below);
                 if (rc != 0) {
                     return rc;
+                }
+                if (below == 0 &&
+                    (c->Flags & XHCI_TBT_BRNUM_F_WAIT_EMPTY) != 0) {
+                    /* Nothing behind a bridge just numbered: a link below
+                     * it may still be training. Undone and tried again,
+                     * so its subordinate is not narrowed past a device
+                     * that answers a moment later. */
+                    r->Where = bdf;
+                    return XHCI_TBT_BRNUM_NOT_READY;
                 }
                 if (!brGo(c)) {
                     r->Where = bdf;
@@ -652,12 +665,12 @@ static ULONG brPlaceAt(BRNUM_CTX *c, ULONG bus, PULONG ptop, ULONG floor,
                     return XHCI_TBT_BRWIN_ACCESS;
                 }
                 r->Win[k] = mem;
-                if (r->Need[k] != 0) {
-                    rc = brPlace(c, (r->Now[k] >> 8) & 0xFFUL,
-                                 base + r->Need[k], base, depth + 1);
-                    if (rc != 0) {
-                        return rc;
-                    }
+                /* Below a closed window everything is closed too (each
+                 * Need there is 0), so none is left open at reset's 0. */
+                rc = brPlace(c, (r->Now[k] >> 8) & 0xFFUL,
+                             base + r->Need[k], base, depth + 1);
+                if (rc != 0) {
+                    return rc;
                 }
                 if (!brGo(c)) {
                     r->WinWhere = bdf;
@@ -808,7 +821,11 @@ static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
     }
     rc = brNeed(c, secondary, 0, &need, &align);
     r->WinNeed = need;
-    if (rc == 0 && need > plimit - pbase + 1UL) {
+    /* One more unit of an alignment above 1 MiB: the gap aligned windows
+     * may leave below them is not counted in the sum, and the BARs beside
+     * the chain need the rest. */
+    if (rc == 0 && ((align > BRWIN_GRAIN && !brAdd(&need, align)) ||
+                    need > plimit - pbase + 1UL)) {
         r->WinWhere = port;
         rc = XHCI_TBT_BRWIN_NO_ROOM;
     }
@@ -1098,7 +1115,8 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
     c.Next = secondary + 1;
     c.Limit = subordinate;
     c.Count = 0;
-    rc = brBus(&c, secondary, 0);
+    c.Flags = flags;
+    rc = brBus(&c, secondary, 0, &k);
     if (rc == 0) {
         r->Numbered = c.Count;
         r->Last = c.Count != 0 ? c.Next - 1 : 0;
