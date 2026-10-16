@@ -424,16 +424,20 @@ typedef struct _TR_OPTS {
     int Report;
     char ReportPath[TR_PATH_CHARS];
     int SelfTest;
-    int Result;                 /* /result: the elevated stop's answer file */
-    char ResultPath[TR_PATH_CHARS];
+    int Result;                 /* /result: the elevated stop's answer   */
+    char ResultName[TR_PATH_CHARS];
+    int Confirmed;              /* /confirmed: the confirmed list's digest */
+    char ConfirmedDigest[TR_PATH_CHARS];
 } TR_OPTS;
 
-/* XHCITR [/tray] [/eject id=<instance id> [/result <file>]]
- * [/report <file>] [/selftest]. Switches start with '/' or '-', without
- * case; /eject takes id=<id> as the next argument, /report and /result
- * their file. Returns 0 with opts filled, 1 refused with why in err.
- * /eject, /report and /selftest stand alone; /result goes with /eject
- * only (the elevated stop of section 6.6). */
+/* XHCITR [/tray] [/eject id=<instance id> [/result <section>]
+ * [/confirmed <digest>]] [/report <file>] [/selftest]. Switches start
+ * with '/' or '-', without case; /eject takes id=<id> as the next
+ * argument, /report its file, /result a section name (tr_res_name_ok) and
+ * /confirmed a digest (tr_res_digest_ok). Returns 0 with opts filled, 1
+ * refused with why in err. /eject, /report and /selftest stand alone;
+ * /result and /confirmed go with /eject only (the elevated stop of
+ * section 6.6). */
 int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap);
 
 /* ---- small text helpers ---------------------------------------------- */
@@ -589,23 +593,31 @@ void tr_report_node(TR_TEXT *t, int depth, const char *label,
  * and this process is not an administrator (Vista and 7: not elevated). */
 int tr_elev_needed(int nt, int notMarked, int isAdmin);
 
-/* The answer file. The window writes the devnodes the user confirmed
- * ("XHCITR ASK 1", then one instance ID a line); the elevated run reads
- * it, and asks again only when its own list differs, then writes its
- * answer over it ("XHCITR ANSWER 1", "code <n>", then the text). Lines end
- * CR LF. The build functions return the length, 0 when it does not fit. */
-size_t tr_res_ask(const char (*devs)[TR_ID_CHARS], int n, char *out,
-                  size_t cap);
-int tr_res_ask_match(const char *text, const char (*devs)[TR_ID_CHARS],
-                     int n);
-int tr_res_is_ask(const char *text);
+/* The digest of the devnode list the window's user confirmed, passed on
+ * the elevated run's command line (/confirmed), which nothing can change
+ * after the start: two 32-bit FNV-1a hashes with different seeds over the
+ * count and the instance IDs, upper-cased, as 16 hex digits. The elevated
+ * run skips its own confirmation only when its own list has the same
+ * digest, so the digest can spare a question, never add a devnode. */
+#define TR_DIGEST_CHARS     17
+void tr_res_digest(const char (*devs)[TR_ID_CHARS], int n, char *out);
+int tr_res_digest_ok(const char *s);
+
+/* The answer travels in a named section of TR_RES_BYTES that the window
+ * creates ("Local\Xhci98TrAnswer-<digits and dashes>", tr_res_name_ok),
+ * never in a file: "XHCITR ANSWER 1", "code <n>", then the text, NUL
+ * ended. tr_res_answer returns the length, 0 when it does not fit; the
+ * reader is given a terminated copy. */
+#define TR_RES_PREFIX       "Local\\Xhci98TrAnswer-"
+#define TR_RES_BYTES        4096
+int tr_res_name_ok(const char *name);
 size_t tr_res_answer(int code, const char *msg, char *out, size_t cap);
 int tr_res_read_answer(const char *text, int *code, char *msg, size_t cap);
 
 /* The window's result of an elevated run, as XHCIINST's exit code with its
  * text in out. launched: ShellExecuteEx started it, else launchErr is its
  * last error (ERROR_CANCELLED 1223: the user declined). finished: it ended
- * within the wait, with exitCode. haveAnswer: its answer file was read. */
+ * within the wait, with exitCode. haveAnswer: its answer was read. */
 #define TR_ERROR_CANCELLED  1223UL
 int tr_elev_result(int launched, TR_U32 launchErr, int finished,
                    TR_U32 exitCode, int haveAnswer, int answerCode,

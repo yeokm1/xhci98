@@ -3086,7 +3086,8 @@ static int ej_nt_answer(DWORD dn, int capsKnown, ULONG caps, DWORD *cr,
 
 #define TR_ELEV_WAIT_MS     300000UL
 
-static int ejElevBusy;      /* an elevated stop is being waited for */
+static int ejElevBusy;      /* an elevated stop is being waited for      */
+static int ejElevQuit;      /* the program was asked to end meanwhile    */
 
 static BOOL CALLBACK elev_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -3119,139 +3120,63 @@ static int ej_elev_ask(HWND owner, const EJREQ *q)
                            (DLGPROC)elev_proc, (LPARAM)text) == IDOK;
 }
 
-/* The whole file into buf (terminated); 0 when it cannot be read. */
-static int elev_read(const char *path, char *buf, DWORD cap)
-{
-    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    DWORD n = 0;
-    int ok;
-
-    if (f == INVALID_HANDLE_VALUE) {
-        return 0;
-    }
-    ok = ReadFile(f, buf, cap - 1, &n, NULL);
-    CloseHandle(f);
-    buf[ok ? n : 0] = '\0';
-    return ok;
-}
-
-/* The window's ask, into the file GetTempFileName made for it. */
-static int elev_write(const char *path, const char *text, size_t n)
-{
-    HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
-                           FILE_ATTRIBUTE_TEMPORARY, NULL);
-    DWORD w = 0;
-    int ok;
-
-    if (f == INVALID_HANDLE_VALUE) {
-        return 0;
-    }
-    ok = SetEndOfFile(f) && WriteFile(f, text, (DWORD)n, &w, NULL) && w == n;
-    CloseHandle(f);
-    return ok;
-}
-
-#ifndef FILE_FLAG_OPEN_REPARSE_POINT
-#define FILE_FLAG_OPEN_REPARSE_POINT    0x00200000UL
-#endif
-#ifndef FILE_ATTRIBUTE_REPARSE_POINT
-#define FILE_ATTRIBUTE_REPARSE_POINT    0x00000400UL
-#endif
-
-static HANDLE elevFile = INVALID_HANDLE_VALUE;
-
-/* The elevated run's answer file, opened once and held with no sharing
- * until the answer is written. The run is elevated and the file is in the
- * user's temporary folder, so it is never opened through a link: a
- * reparse point, a directory or a file with more than one name is
- * refused, and so is a file that does not hold the window's ask - the run
- * writes over nothing but the file the window made. ask gets its text. */
-static int elev_child_open(const char *path, char *ask, DWORD cap)
-{
-    BY_HANDLE_FILE_INFORMATION fi;
-    DWORD n = 0;
-    HANDLE f = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                           OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
-
-    ask[0] = '\0';
-    if (f == INVALID_HANDLE_VALUE) {
-        return 0;
-    }
-    if (!GetFileInformationByHandle(f, &fi) ||
-        (fi.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT |
-                                FILE_ATTRIBUTE_DIRECTORY)) != 0 ||
-        fi.nNumberOfLinks != 1 || fi.nFileSizeHigh != 0 ||
-        fi.nFileSizeLow >= cap || !ReadFile(f, ask, cap - 1, &n, NULL) ||
-        n != fi.nFileSizeLow) {
-        CloseHandle(f);
-        ask[0] = '\0';
-        return 0;
-    }
-    ask[n] = '\0';
-    if (!tr_res_is_ask(ask)) {
-        CloseHandle(f);
-        ask[0] = '\0';
-        return 0;
-    }
-    elevFile = f;
-    return 1;
-}
-
-/* The answer over the ask, through the handle opened above. */
-static int elev_child_answer(const char *text, size_t n)
-{
-    DWORD w = 0;
-    int ok;
-
-    if (elevFile == INVALID_HANDLE_VALUE) {
-        return 0;
-    }
-    ok = SetFilePointer(elevFile, 0, NULL, FILE_BEGIN) == 0 &&
-         SetEndOfFile(elevFile) &&
-         WriteFile(elevFile, text, (DWORD)n, &w, NULL) && w == n;
-    CloseHandle(elevFile);
-    elevFile = INVALID_HANDLE_VALUE;
-    return ok;
-}
-
-/* Starts this program elevated with /eject id= and /result, waits for it
- * with the window answering, and reads its answer: XHCIINST's exit code,
- * the text in msg. */
+/* Starts this program elevated with /eject id=, /result and /confirmed,
+ * waits for it with the window answering, and reads its answer from the
+ * section this run created: XHCIINST's exit code, the text in msg. No
+ * file is written or read, so the elevated run touches nothing a user
+ * could plant. A quit during the wait (Exit, or an installer) ends the
+ * wait at once; ejElevQuit is then set and the quit posted again. */
 static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
 {
-    static char ask[TR_EJ_DEVS * (INST_ID_CHARS + 2) + 32];
-    static char answer[4096];
-    static char amsg[4096];
+    static char answer[TR_RES_BYTES + 1];
+    static char amsg[TR_RES_BYTES + 1];
     SHELLEXECUTEINFOA se;
-    char dir[MAX_PATH];
-    char path[MAX_PATH];
+    TR_SA sa;
+    HANDLE sec;
+    void *view;
+    char name[64];
+    char digest[TR_DIGEST_CHARS];
     char exe[MAX_PATH];
-    char args[INST_ID_CHARS + MAX_PATH + 48];
-    size_t n;
+    char args[INST_ID_CHARS + 128];
     int launched = 0;
     DWORD err = 0;
     int finished = 0;
     DWORD exitCode = INST_EXIT_FAILED;
     int haveAnswer = 0;
     int answerCode = 0;
-    int code;
+    int quitCode = 0;
 
     amsg[0] = '\0';
-    n = tr_res_ask((const char (*)[TR_ID_CHARS])q->Devs, q->DevCount, ask,
-                   sizeof(ask));
-    if (n == 0 || GetTempPathA(sizeof(dir), dir) == 0 ||
-        GetTempFileNameA(dir, "xtr", 0, path) == 0 ||
-        GetModuleFileNameA(NULL, exe, sizeof(exe)) == 0) {
+    ejElevQuit = 0;
+    if (GetModuleFileNameA(NULL, exe, sizeof(exe)) == 0) {
         return tr_elev_result(0, GetLastError(), 0, 0, 0, 0, "", msg, cap);
     }
-    if (!elev_write(path, ask, n)) {
-        err = GetLastError();
-        DeleteFileA(path);
+    tr_sprintf(name, sizeof(name), TR_RES_PREFIX "%lu-%lu",
+               (unsigned long)GetCurrentProcessId(),
+               (unsigned long)GetTickCount());
+    /* The user and SYSTEM and the Administrators, who may be another
+     * account under XP's Run As, may write it. */
+    make_sa(&sa, 0x0001 /* SECTION_QUERY */);
+    SetLastError(0);
+    sec = CreateFileMappingA(INVALID_HANDLE_VALUE, sa.Ok ? &sa.Sa : NULL,
+                             PAGE_READWRITE, 0, TR_RES_BYTES, name);
+    if (sec == NULL || GetLastError() == ERROR_ALREADY_EXISTS) {
+        err = sec == NULL ? GetLastError() : ERROR_ALREADY_EXISTS;
+        if (sec != NULL) {
+            CloseHandle(sec);
+        }
         return tr_elev_result(0, err, 0, 0, 0, 0, "", msg, cap);
     }
-    tr_sprintf(args, sizeof(args), "/eject \"id=%s\" /result \"%s\"",
-               q->UnitId, path);
+    view = MapViewOfFile(sec, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, TR_RES_BYTES);
+    if (view == NULL) {
+        err = GetLastError();
+        CloseHandle(sec);
+        return tr_elev_result(0, err, 0, 0, 0, 0, "", msg, cap);
+    }
+    memset(view, 0, TR_RES_BYTES);
+    tr_res_digest((const char (*)[TR_ID_CHARS])q->Devs, q->DevCount, digest);
+    tr_sprintf(args, sizeof(args), "/eject \"id=%s\" /result %s /confirmed %s",
+               q->UnitId, name, digest);
     memset(&se, 0, sizeof(se));
     se.cbSize = sizeof(se);
     se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
@@ -3264,17 +3189,15 @@ static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
     if (ShellExecuteExA(&se) && se.hProcess != NULL) {
         DWORD start = GetTickCount();
         launched = 1;
-        for (;;) {
-            DWORD left;
+        while (!finished && !ejElevQuit) {
             DWORD r;
             MSG m;
             DWORD spent = GetTickCount() - start;
             if (spent >= TR_ELEV_WAIT_MS) {
                 break;
             }
-            left = TR_ELEV_WAIT_MS - spent;
-            r = MsgWaitForMultipleObjects(1, &se.hProcess, FALSE, left,
-                                          QS_ALLINPUT);
+            r = MsgWaitForMultipleObjects(1, &se.hProcess, FALSE,
+                                          TR_ELEV_WAIT_MS - spent, QS_ALLINPUT);
             if (r == WAIT_OBJECT_0) {
                 finished = 1;
                 break;
@@ -3283,6 +3206,11 @@ static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
                 break;
             }
             while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
+                if (m.message == WM_QUIT) {
+                    ejElevQuit = 1;
+                    quitCode = (int)m.wParam;
+                    break;
+                }
                 TranslateMessage(&m);
                 DispatchMessageA(&m);
             }
@@ -3295,15 +3223,47 @@ static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
         err = GetLastError();
     }
     ejElevBusy = 0;
-    if (finished && elev_read(path, answer, sizeof(answer))) {
+    if (finished) {
+        memcpy(answer, view, TR_RES_BYTES);
+        answer[TR_RES_BYTES] = '\0';
         haveAnswer = tr_res_read_answer(answer, &answerCode, amsg, sizeof(amsg));
     }
-    if (finished || !launched) {
-        DeleteFileA(path);
+    UnmapViewOfFile(view);
+    CloseHandle(sec);
+    if (ejElevQuit) {
+        PostQuitMessage(quitCode);
+        msg[0] = '\0';
+        return INST_EXIT_REFUSED;
     }
-    code = tr_elev_result(launched, err, finished, exitCode, haveAnswer,
+    return tr_elev_result(launched, err, finished, exitCode, haveAnswer,
                           answerCode, amsg, msg, cap);
-    return code;
+}
+
+/* The elevated run's answer, into the window's section by its name; 0
+ * when there is none to write to. */
+static int elev_child_answer(int code, const char *text)
+{
+    static char buf[TR_RES_BYTES];
+    HANDLE sec;
+    void *view;
+    size_t n = tr_res_answer(code, text, buf, sizeof(buf));
+
+    if (n == 0) {
+        return 0;
+    }
+    sec = OpenFileMappingA(FILE_MAP_WRITE, FALSE, opts.ResultName);
+    if (sec == NULL) {
+        return 0;
+    }
+    view = MapViewOfFile(sec, FILE_MAP_WRITE, 0, 0, TR_RES_BYTES);
+    if (view == NULL) {
+        CloseHandle(sec);
+        return 0;
+    }
+    memcpy(view, buf, n + 1);
+    UnmapViewOfFile(view);
+    CloseHandle(sec);
+    return 1;
 }
 
 /* The transaction (record 25 section 6.2 steps 2 to 8). Returns
@@ -4286,6 +4246,10 @@ static void ej_unit(HWND owner, int u, int fromTray)
             return;
         }
         code = ej_elev_run(owner, q, msg, sizeof(msg));
+        if (ejElevQuit) {
+            free(q);
+            return;
+        }
     } else {
         old = SetCursor(LoadCursor(NULL, IDC_WAIT));
         code = ej_run(q, msg, sizeof(msg), &rights);
@@ -4302,6 +4266,10 @@ static void ej_unit(HWND owner, int u, int fromTray)
             }
             code = ej_elev_run(owner, q, msg, sizeof(msg));
         }
+    }
+    if (ejElevQuit) {
+        free(q);
+        return;
     }
     tr_join_lines(msg);
     if (fromTray && shellV5 && strlen(msg) < 250) {
@@ -5416,25 +5384,14 @@ static int run_eject(void)
     int rights;
     int code;
 
-    static char asked[TR_EJ_DEVS * (INST_ID_CHARS + 2) + 32];
-    int haveAsk = 0;
+    char digest[TR_DIGEST_CHARS];
 
     if (q == NULL) {
         return INST_EXIT_FAILED;
     }
-    if (opts.Result) {
-        /* Read once, before anything: the ask can only stand in for this
-         * run's own confirmation of the list this run reads itself, so it
-         * never adds a devnode to what is stopped. */
-        haveAsk = elev_child_open(opts.ResultPath, asked, sizeof(asked));
-    }
     refresh_model(0);
     u = walk_find_id(&gw, opts.EjectId);
     if (u >= 0 && gw.N[u].UPort >= 0) {
-        if (haveAsk) {
-            CloseHandle(elevFile);
-            elevFile = INVALID_HANDLE_VALUE;
-        }
         free(q);
         return usb_run_eject(u);
     }
@@ -5453,11 +5410,11 @@ static int run_eject(void)
     }
     /* This run's request is confirmed as it stands now: a device that
      * appeared under the unit while the elevation was asked is listed, and
-     * the transaction holds to exactly this list. With /result, the list
-     * the window's user confirmed stands for it when it is the same. */
-    if (!(haveAsk &&
-          tr_res_ask_match(asked, (const char (*)[TR_ID_CHARS])q->Devs,
-                           q->DevCount)) &&
+     * the transaction holds to exactly this list. With /confirmed, the
+     * window's confirmation stands for it when this list has that
+     * digest. */
+    tr_res_digest((const char (*)[TR_ID_CHARS])q->Devs, q->DevCount, digest);
+    if (!(opts.Confirmed && strcmp(digest, opts.ConfirmedDigest) == 0) &&
         !ej_confirm(NULL, q)) {
         code = INST_EXIT_REFUSED;
         tr_copy(msg, "Cancelled; nothing was stopped.", sizeof(msg));
@@ -5466,10 +5423,8 @@ static int run_eject(void)
     code = ej_run(q, msg, sizeof(msg), &rights);
     tr_join_lines(msg);
 answer:
-    if (haveAsk) {
-        static char ans[4200];
-        size_t n = tr_res_answer(code, msg, ans, sizeof(ans));
-        if (n != 0 && elev_child_answer(ans, n)) {
+    if (opts.Result) {
+        if (elev_child_answer(code, msg)) {
             free(q);
             return code;
         }

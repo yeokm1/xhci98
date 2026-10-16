@@ -1626,13 +1626,19 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
             tr_copy(o->EjectId, id + 3, sizeof(o->EjectId));
             alone++;
         } else if (tr_switch(a, "result")) {
-            if (i + 1 >= argc || argv[i + 1][0] == '\0' ||
-                strlen(argv[i + 1]) >= TR_PATH_CHARS) {
-                tr_copy(err, "/result needs the name of a file.", cap);
+            if (i + 1 >= argc || !tr_res_name_ok(argv[i + 1])) {
+                tr_copy(err, "/result needs the window's answer name.", cap);
                 return 1;
             }
             o->Result = 1;
-            tr_copy(o->ResultPath, argv[++i], sizeof(o->ResultPath));
+            tr_copy(o->ResultName, argv[++i], sizeof(o->ResultName));
+        } else if (tr_switch(a, "confirmed")) {
+            if (i + 1 >= argc || !tr_res_digest_ok(argv[i + 1])) {
+                tr_copy(err, "/confirmed needs a digest.", cap);
+                return 1;
+            }
+            o->Confirmed = 1;
+            tr_copy(o->ConfirmedDigest, argv[++i], sizeof(o->ConfirmedDigest));
         } else {
             tr_sprintf(err, cap, "Unknown switch %s. Use: XHCITR [/tray] "
                        "[/eject id=<instance id>] [/report <file>]", a);
@@ -1643,8 +1649,8 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
         tr_copy(err, "/eject, /report and /selftest are each used alone.", cap);
         return 1;
     }
-    if (o->Result && !o->Eject) {
-        tr_copy(err, "/result goes with /eject only.", cap);
+    if ((o->Result || o->Confirmed) && !o->Eject) {
+        tr_copy(err, "/result and /confirmed go with /eject only.", cap);
         return 1;
     }
     return 0;
@@ -2280,28 +2286,68 @@ int tr_elev_needed(int nt, int notMarked, int isAdmin)
     return nt && notMarked && !isAdmin;
 }
 
-#define TR_RES_ASK      "XHCITR ASK 1"
-#define TR_RES_ANSWER   "XHCITR ANSWER 1"
-
-size_t tr_res_ask(const char (*devs)[TR_ID_CHARS], int n, char *out,
-                  size_t cap)
+static TR_U32 tr_fnv(TR_U32 h, unsigned char c)
 {
-    TR_TEXT t;
-    int i;
-
-    if (cap == 0) {
-        return 0;
-    }
-    tr_text_init(&t, out, cap);
-    tr_put(&t, TR_RES_ASK "\n");
-    for (i = 0; i < n; i++) {
-        tr_put(&t, devs[i]);
-        tr_put(&t, "\n");
-    }
-    return t.Overflow ? 0 : t.Len;
+    return ((h ^ (TR_U32)c) * 16777619UL) & 0xFFFFFFFFUL;
 }
 
-/* The next line of *p into line (CR and LF dropped); 0 at the end. */
+void tr_res_digest(const char (*devs)[TR_ID_CHARS], int n, char *out)
+{
+    TR_U32 a = 2166136261UL;
+    TR_U32 b = 0x9E3779B9UL;
+    int i;
+    const char *p;
+    TR_TEXT t;
+
+    a = tr_fnv(a, (unsigned char)(n & 0xFF));
+    b = tr_fnv(b, (unsigned char)(n & 0xFF));
+    for (i = 0; i < n; i++) {
+        for (p = devs[i]; *p != '\0'; p++) {
+            unsigned char c = (unsigned char)tr_up((unsigned char)*p);
+            a = tr_fnv(a, c);
+            b = tr_fnv(b, (unsigned char)(c ^ 0xA5));
+        }
+        a = tr_fnv(a, '\n');
+        b = tr_fnv(b, '\n');
+    }
+    tr_text_init(&t, out, TR_DIGEST_CHARS);
+    tr_printf(&t, "%08lX%08lX", (unsigned long)a, (unsigned long)b);
+}
+
+int tr_res_digest_ok(const char *s)
+{
+    int i;
+
+    for (i = 0; i < TR_DIGEST_CHARS - 1; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
+            return 0;
+        }
+    }
+    return s[i] == '\0';
+}
+
+int tr_res_name_ok(const char *name)
+{
+    size_t k = strlen(TR_RES_PREFIX);
+    const char *p;
+
+    if (strncmp(name, TR_RES_PREFIX, k) != 0 || name[k] == '\0' ||
+        strlen(name + k) > 24) {
+        return 0;
+    }
+    for (p = name + k; *p != '\0'; p++) {
+        if (!((*p >= '0' && *p <= '9') || *p == '-')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+#define TR_RES_ANSWER   "XHCITR ANSWER 1"
+
+/* The next line of *p into line (CR and LF dropped, a long line cut); 0
+ * at the end. */
 static int tr_res_line(const char **p, char *line, size_t cap)
 {
     size_t n = 0;
@@ -2322,33 +2368,6 @@ static int tr_res_line(const char **p, char *line, size_t cap)
     line[n] = '\0';
     *p = s;
     return 1;
-}
-
-int tr_res_ask_match(const char *text, const char (*devs)[TR_ID_CHARS],
-                     int n)
-{
-    char line[TR_ID_CHARS + 2];
-    const char *p = text;
-    int i;
-
-    if (!tr_res_line(&p, line, sizeof(line)) || strcmp(line, TR_RES_ASK) != 0) {
-        return 0;
-    }
-    for (i = 0; i < n; i++) {
-        if (!tr_res_line(&p, line, sizeof(line)) ||
-            strlen(line) >= TR_ID_CHARS || !tr_eq(line, devs[i])) {
-            return 0;
-        }
-    }
-    return !tr_res_line(&p, line, sizeof(line));
-}
-
-int tr_res_is_ask(const char *text)
-{
-    char line[TR_ID_CHARS + 2];
-    const char *p = text;
-
-    return tr_res_line(&p, line, sizeof(line)) && strcmp(line, TR_RES_ASK) == 0;
 }
 
 size_t tr_res_answer(int code, const char *msg, char *out, size_t cap)

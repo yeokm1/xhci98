@@ -1858,7 +1858,9 @@ static void test_elevated_stop(void)
     char buf[1024];
     char msg[512];
     char err[256];
-    char *av[6];
+    char d1[TR_DIGEST_CHARS];
+    char d2[TR_DIGEST_CHARS];
+    char *av[8];
     TR_OPTS o;
     int code;
     size_t n;
@@ -1872,56 +1874,70 @@ static void test_elevated_stop(void)
                  "safe removal. Stopping it needs administrator rights.") == 0,
           "the owner's words");
 
+    /* The digest of the confirmed list. */
+    strcpy(devs[0], "PCI\\VEN_1B21&DEV_2421\\4&1");
+    strcpy(devs[1], "PCI\\VEN_1B36&DEV_000A\\5&2");
+    strcpy(devs[2], "PCI\\VEN_1B36&DEV_0010\\6&3");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 3, d1);
+    CHECK(strlen(d1) == 16 && tr_res_digest_ok(d1), "16 hex digits");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 3, d2);
+    CHECK(strcmp(d1, d2) == 0, "the same list, the same digest");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 2, d2);
+    CHECK(strcmp(d1, d2) != 0, "a devnode more or less: another digest");
+    devs[1][4] = 'v';
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 3, d2);
+    devs[1][4] = 'V';
+    CHECK(strcmp(d1, d2) == 0, "instance IDs compare without case");
+    strcpy(devs[2], "PCI\\VEN_1B36&DEV_0010\\6&4");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 3, d2);
+    CHECK(strcmp(d1, d2) != 0, "another devnode: another digest");
+    strcpy(devs[0], "AB");
+    strcpy(devs[1], "C");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 2, d1);
+    strcpy(devs[0], "A");
+    strcpy(devs[1], "BC");
+    tr_res_digest((const char (*)[TR_ID_CHARS])devs, 2, d2);
+    CHECK(strcmp(d1, d2) != 0, "the boundaries between IDs count");
+    CHECK(!tr_res_digest_ok("0123456789ABCDE") && !tr_res_digest_ok("0123456789ABCDEF0") &&
+              !tr_res_digest_ok("0123456789abcdef") && !tr_res_digest_ok(""),
+          "a digest is exactly 16 upper-case hex digits");
+
+    /* The section's name. */
+    CHECK(tr_res_name_ok("Local\\Xhci98TrAnswer-1234-56789"), "the window's name");
+    CHECK(!tr_res_name_ok("Local\\Xhci98TrAnswer-"), "no number");
+    CHECK(!tr_res_name_ok("Global\\Xhci98TrAnswer-1"), "another namespace");
+    CHECK(!tr_res_name_ok("Local\\Xhci98TrAnswer-1\\x"), "no path");
+    CHECK(!tr_res_name_ok("Local\\Xhci98TrAnswer-1234567890123456789012345"),
+          "bounded");
+    CHECK(!tr_res_name_ok("C:\\TEMP\\x.tmp"), "never a file");
+
     /* The command line of the elevated run. */
     av[0] = "xhcitr";
     av[1] = "/eject";
     av[2] = "id=PCI\\VEN_1B21&DEV_2421\\X";
     av[3] = "/result";
+    av[4] = "Local\\Xhci98TrAnswer-12-34";
+    av[5] = "/confirmed";
+    av[6] = "0123456789ABCDEF";
+    CHECK(tr_parse_args(7, av, &o, err, sizeof(err)) == 0 && o.Eject &&
+              o.Result && o.Confirmed &&
+              strcmp(o.ResultName, "Local\\Xhci98TrAnswer-12-34") == 0 &&
+              strcmp(o.ConfirmedDigest, "0123456789ABCDEF") == 0,
+          "/eject id= /result <name> /confirmed <digest>");
+    CHECK(tr_parse_args(4, av, &o, err, sizeof(err)) == 1, "/result needs its name");
     av[4] = "C:\\T\\xtr1.tmp";
-    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 0 && o.Eject &&
-              o.Result && strcmp(o.ResultPath, "C:\\T\\xtr1.tmp") == 0,
-          "/eject id= /result <file>");
-    CHECK(tr_parse_args(4, av, &o, err, sizeof(err)) == 1,
-          "/result needs its file");
+    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 1, "/result refuses a file");
+    av[4] = "Local\\Xhci98TrAnswer-12-34";
+    av[6] = "nothex";
+    CHECK(tr_parse_args(7, av, &o, err, sizeof(err)) == 1, "/confirmed refuses a non-digest");
     av[1] = "/result";
-    av[2] = "C:\\T\\xtr1.tmp";
+    av[2] = "Local\\Xhci98TrAnswer-1";
     CHECK(tr_parse_args(3, av, &o, err, sizeof(err)) == 1,
           "/result without /eject refused");
-    av[1] = "/tray";
-    av[2] = "/result";
-    av[3] = "x";
-    CHECK(tr_parse_args(4, av, &o, err, sizeof(err)) == 1,
-          "/tray /result refused");
-
-    /* The ask: the confirmed devnodes, matched exactly, without case. */
-    strcpy(devs[0], "PCI\\VEN_1B21&DEV_2421\\4&1");
-    strcpy(devs[1], "PCI\\VEN_1B36&DEV_000A\\5&2");
-    strcpy(devs[2], "PCI\\VEN_1B36&DEV_0010\\6&3");
-    n = tr_res_ask((const char (*)[TR_ID_CHARS])devs, 3, buf, sizeof(buf));
-    CHECK(n == strlen(buf) && strncmp(buf, "XHCITR ASK 1\r\n", 14) == 0,
-          "the ask's head");
-    CHECK(tr_res_ask_match(buf, (const char (*)[TR_ID_CHARS])devs, 3),
-          "the same list matches");
-    CHECK(!tr_res_ask_match(buf, (const char (*)[TR_ID_CHARS])devs, 2),
-          "a shorter list does not");
-    n = tr_res_ask((const char (*)[TR_ID_CHARS])devs, 2, buf, sizeof(buf));
-    CHECK(!tr_res_ask_match(buf, (const char (*)[TR_ID_CHARS])devs, 3),
-          "a devnode added since: asked again");
-    devs[1][4] = 'v';
-    n = tr_res_ask((const char (*)[TR_ID_CHARS])devs, 3, buf, sizeof(buf));
-    devs[1][4] = 'V';
-    CHECK(tr_res_ask_match(buf, (const char (*)[TR_ID_CHARS])devs, 3),
-          "instance IDs compare without case");
-    CHECK(!tr_res_ask_match("XHCITR ANSWER 1\r\n", (const char (*)[TR_ID_CHARS])devs,
-                            0), "not an ask");
-    CHECK(tr_res_is_ask("XHCITR ASK 1\r\nX\r\n") && tr_res_is_ask("XHCITR ASK 1"),
-          "an ask is recognised");
-    CHECK(!tr_res_is_ask("XHCITR ANSWER 1\r\n") && !tr_res_is_ask("") &&
-              !tr_res_is_ask("MZ\x90"), "anything else is not an ask");
-    CHECK(tr_res_ask_match("XHCITR ASK 1\r\n", (const char (*)[TR_ID_CHARS])devs, 0),
-          "an empty list matches an empty list");
-    CHECK_EQ(tr_res_ask((const char (*)[TR_ID_CHARS])devs, 3, buf, 20), 0,
-             "an ask that does not fit is not written");
+    av[1] = "/confirmed";
+    av[2] = "0123456789ABCDEF";
+    CHECK(tr_parse_args(3, av, &o, err, sizeof(err)) == 1,
+          "/confirmed without /eject refused");
 
     /* The answer. */
     n = tr_res_answer(4, "Windows refused: a program is using the device.",
@@ -1930,12 +1946,16 @@ static void test_elevated_stop(void)
     CHECK(tr_res_read_answer(buf, &code, msg, sizeof(msg)) && code == 4 &&
               strcmp(msg, "Windows refused: a program is using the device.") == 0,
           "the answer read back");
-    CHECK(!tr_res_read_answer("XHCITR ASK 1\r\n", &code, msg, sizeof(msg)),
-          "the ask is no answer");
+    CHECK_EQ(tr_res_answer(0, "x", buf, 10), 0, "an answer that does not fit");
+    CHECK(!tr_res_read_answer("", &code, msg, sizeof(msg)), "an empty section");
     CHECK(!tr_res_read_answer("XHCITR ANSWER 1\r\ncode x\r\n", &code, msg,
                               sizeof(msg)), "a bad code");
+    CHECK(!tr_res_read_answer("XHCITR ANSWER 1\r\ncode 99999999999\r\n", &code,
+                              msg, sizeof(msg)), "a code out of range");
     CHECK(!tr_res_read_answer("XHCITR ANSWER 1\r\n", &code, msg, sizeof(msg)),
           "no code");
+    CHECK(tr_res_read_answer("XHCITR ANSWER 1\ncode 2\nabcdefghij", &code, msg, 5) &&
+              strcmp(msg, "abcd") == 0, "the text is cut to its buffer");
 
     /* The window's result. */
     code = tr_elev_result(0, TR_ERROR_CANCELLED, 0, 0, 0, 0, "", msg, sizeof(msg));
@@ -1945,8 +1965,7 @@ static void test_elevated_stop(void)
           "cancelled: try again, or re-plug");
     code = tr_elev_result(0, 1155UL, 0, 0, 0, 0, "", msg, sizeof(msg));
     CHECK_EQ(code, INST_EXIT_REFUSED, "no runas: exit 1");
-    CHECK(strstr(msg, "Run this as an") != NULL,
-          "no runas: the plain message");
+    CHECK(strstr(msg, "Run this as an") != NULL, "no runas: the plain message");
     code = tr_elev_result(1, 0, 0, 0, 0, 0, "", msg, sizeof(msg));
     CHECK_EQ(code, INST_EXIT_FAILED, "no end within the wait: exit 2");
     CHECK(strstr(msg, "before you unplug it") != NULL, "no end: look first");
