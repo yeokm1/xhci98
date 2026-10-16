@@ -30,9 +30,9 @@
  * VMMREG.H's) reached by the same INT 20h dynalink cm_cfgmg.c uses for
  * CONFIGMG, from the NHI's thread, a passive thread of the system VM. The
  * proof key's query handler runs from this image whenever the key is read,
- * so the image is made resident first (no DriverUnload from then on, R4),
- * and the unload, reached only by a load that never published, deletes
- * the key if this load made it. x86 only.
+ * so the image is resident (no DriverUnload on 98 SE and ME, from
+ * DriverEntry, R4) before the key is made; were it ever unloaded, the
+ * unload would delete the key first. x86 only.
  *
  * IRQL: as cm_nvlink.h; the callback at the caller's IRQL (stor98 calls
  * it at PASSIVE_LEVEL from HwFindAdapter), touching nothing but an
@@ -72,6 +72,7 @@ static ULONG cmNvRecord;        /* 9x: the record was written            */
 static ULONG cmNvRecordTried;   /* 0 not yet, 1 being written, 2 done    */
 static ULONG cmNvRecordError;
 static ULONG cmNvRemoveSeq;
+static LONG cmNvQueriesLogged;  /* 9x: the proof reads last logged       */
 #if defined(_X86_)
 static VOID cmNvDeleteProof(VOID);
 #endif
@@ -492,18 +493,14 @@ typedef struct _CM_NV_PUBCTX {
 #define CM_NV_T_OPEN_KEY    24
 #define CM_NV_T_CREATE_DYN  32
 
-/* R4's residency: no DriverUnload from here on, so the image that answers
- * the proof and writes the table stays loaded for the boot whatever its
- * PnP devices do (as a CONFIGMG worker's start already makes it,
- * cm_cfgwk.c). */
+/* R4's residency, set in DriverEntry on 98 SE and ME (cm_entry.c): no
+ * DriverUnload, so the image that answers the proof and writes the table
+ * stays loaded for the boot whatever its PnP devices do. */
 static BOOLEAN cmNvPubResident(PVOID context)
 {
     UNREFERENCED_PARAMETER(context);
-    if (CmDriverObject == NULL) {
-        return FALSE;
-    }
-    CmDriverObject->DriverUnload = NULL;
-    return TRUE;
+    return (BOOLEAN)(CmDriverObject != NULL &&
+                     CmDriverObject->DriverUnload == NULL);
 }
 
 static ULONG cmNvPubOpenProof(PVOID context)
@@ -1476,6 +1473,12 @@ VOID CmNvlinkService(PCM_NHI nhi)
 
     if (cmNvTable == NULL) {
         return;
+    }
+    if (!cmNvNt && cmNvQueries != cmNvQueriesLogged) {
+        /* Each new read of the proof (stor98's HwFindAdapter reads it once
+         * per load): the evidence a receiver holds the table. */
+        cmNvQueriesLogged = cmNvQueries;
+        CmLogNote(nhi, "cm.nvlink.9x.proof-read", (ULONG)cmNvQueriesLogged);
     }
     u = cmNvU4Of(nhi, FALSE);
     if (u == NULL) {

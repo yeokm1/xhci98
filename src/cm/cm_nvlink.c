@@ -412,14 +412,14 @@ VOID CmNvlinkRemoveCancel(PSTOR98LS_TABLE t, ULONG index)
 ULONG CmNvlinkRemoveStep(const STOR98LS_TABLE *t, ULONG index,
                          ULONG sequence, ULONG gen, ULONG elapsedMs)
 {
-    ULONG answer;
-
-    answer = CmNvlinkRemoveAnswer(t, index, sequence, gen);
     if (elapsedMs >= CM_NVLINK_REMOVE_MS) {
-        return answer != CM_NVLINK_RM_NONE ? CM_NVLINK_RM_LATE
-                                           : CM_NVLINK_RM_TIMEOUT;
+        /* Read only to log it: late, never taken. */
+        return CmNvlinkRemoveAnswer(t, index, sequence, gen) !=
+                       CM_NVLINK_RM_NONE
+                   ? CM_NVLINK_RM_LATE
+                   : CM_NVLINK_RM_TIMEOUT;
     }
-    return answer;
+    return CmNvlinkRemoveAnswer(t, index, sequence, gen);
 }
 
 ULONG CmNvlinkAckStep(const STOR98LS_TABLE *t, ULONG index,
@@ -450,9 +450,15 @@ ULONG CmNvlinkPublish9x(const CM_NV_PUB9X *ops, PULONG error)
     if (!ops->Resident(ops->Context)) {
         return CM_NVLINK_PUB_RESIDENCY;
     }
-    /* R3a: open first; an existing key is another publisher's. */
-    if (ops->OpenProof(ops->Context) == 0) {
+    /* R3a: open first; an existing key is another publisher's, and only
+     * "not found" shows it absent. */
+    e = ops->OpenProof(ops->Context);
+    if (e == 0) {
         return CM_NVLINK_PUB_PUBLISHER;
+    }
+    if (e != CM_NV_ERROR_FILE_NOT_FOUND) {
+        *error = e;
+        return CM_NVLINK_PUB_OPEN;
     }
     e = ops->CreateProof(ops->Context);
     if (e != 0) {
@@ -466,4 +472,9 @@ ULONG CmNvlinkPublish9x(const CM_NV_PUB9X *ops, PULONG error)
         return CM_NVLINK_PUB_LOCATOR;
     }
     return CM_NVLINK_PUB_OK;
+}
+
+BOOLEAN CmNvlinkRetryAgain(ULONG elapsedMs)
+{
+    return (BOOLEAN)(elapsedMs < CM_NVLINK_RETRY_FOR_MS);
 }

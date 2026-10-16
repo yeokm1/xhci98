@@ -519,6 +519,13 @@ static void test_publish9x(void)
              "an existing proof key is another publisher's (R3a)");
     CHECK(strcmp(p.Order, "RO") == 0, "nothing created, no locator");
 
+    CHECK_EQ(pubRun(&p, TRUE, 1010, 0, 0, &e), CM_NVLINK_PUB_OPEN,
+             "an open that failed otherwise: absence not shown, nothing published");
+    CHECK(strcmp(p.Order, "RO") == 0, "nothing created after it");
+    CHECK_EQ(e, 1010, "its code kept");
+    CHECK_EQ(pubRun(&p, TRUE, 14, 0, 0, &e), CM_NVLINK_PUB_OPEN,
+             "out of memory at the open: the same");
+
     CHECK_EQ(pubRun(&p, FALSE, 2, 0, 0, &e), CM_NVLINK_PUB_RESIDENCY,
              "not resident: nothing published (R4)");
     CHECK(strcmp(p.Order, "R") == 0, "not even the open");
@@ -589,6 +596,10 @@ static void test_waits(void)
     CHECK(CM_NVLINK_RM_TIMEOUT != CM_NVLINK_RM_CLEAN &&
           CM_NVLINK_RM_LATE != CM_NVLINK_RM_CLEAN &&
           CM_NVLINK_RM_LATE <= 0xFF, "the wait's own ends fit the log byte");
+    CHECK(CmNvlinkRetryAgain(0), "a retry after the first failure");
+    CHECK(CmNvlinkRetryAgain(28000 + 50), "and after the one at 28 s");
+    CHECK(CmNvlinkRetryAgain(29999), "short of 30 s: once more");
+    CHECK(!CmNvlinkRetryAgain(30000), "30 s since the first: no more (R11 O6)");
     CHECK(CM_NVLINK_RETRY_MS == 2000 && CM_NVLINK_RETRY_FOR_MS == 30000,
           "Remove_SubTree retried every 2 s for 30 s (R11 O6)");
     CHECK(CM_NVLINK_POLL_MS <= 50, "read at least every 50 ms (R10)");

@@ -32,9 +32,10 @@
  * as CmNvlinkRecordEncode writes it. The locator persists across boots
  * and is only a locator; the proof exists only while this image is loaded
  * in this boot, so stor98 accepts the table only when the proof's cookie
- * and address equal the locator's and the table's (R5). Before the proof
- * the image is made resident for the boot (no DriverUnload, R4), so the
- * provider never goes; an unload before that deletes a proof it made. The
+ * and address equal the locator's and the table's (R5). The image is
+ * resident for the boot on 98 SE and ME (no DriverUnload from DriverEntry,
+ * R4), so the provider never goes; were it unloaded, the unload would
+ * delete the proof first. The
  * order (residency, proof opened first, proof, locator) is
  * CmNvlinkPublish9x's. Every read of the proof is counted, as NT counts
  * its callback's queries: until stor98 has read it, no receiver exists
@@ -222,6 +223,12 @@
                                            publisher's (R3a)              */
 #define CM_NVLINK_PUB_PROOF         3UL /* _RegCreateDynKey failed        */
 #define CM_NVLINK_PUB_LOCATOR       4UL /* the locator was not written    */
+#define CM_NVLINK_PUB_OPEN          5UL /* the open failed otherwise than
+                                           "not found": absence unproven  */
+
+/* VMMREG.H's ERROR_FILE_NOT_FOUND: the one open result that shows the
+ * proof key absent. */
+#define CM_NV_ERROR_FILE_NOT_FOUND  2UL
 
 /* The 9x locator (R3b) and current-boot proof (R3a). */
 #define CM_NVLINK_REC_KEY       STOR98LS9X_LOCATOR_KEY
@@ -242,9 +249,10 @@ typedef struct _CM_NV_VALCTX {
 
 /*
  * Interface 3's publication steps (R3, R4), the driver's (cm_nvlinkos.c),
- * each 0 on success but Resident: Resident makes the image stay loaded for
- * the boot whatever its PnP devices do (TRUE when it does); OpenProof opens
- * HKEY_DYN_DATA\STOR98LS9X_PROOF_KEY and closes it again (0: it exists);
+ * each 0 on success but Resident: Resident answers whether the image
+ * stays loaded for the boot whatever its PnP devices do; OpenProof opens
+ * HKEY_DYN_DATA\STOR98LS9X_PROOF_KEY and closes it again (0: it exists,
+ * CM_NV_ERROR_FILE_NOT_FOUND: absent, anything else: unknown);
  * CreateProof creates it with this image as its provider; WriteLocator
  * writes the locator.
  */
@@ -374,14 +382,20 @@ ULONG CmNvlinkAckStep(const STOR98LS_TABLE *t, ULONG index,
                       BOOLEAN receiver, ULONG markedAt, ULONG nowMs,
                       ULONG boundMs);
 
-/* Interface 3's publication in R3's and R4's order: the image made
- * resident, the proof key opened first (an existing one is another
- * publisher's: nothing is published), the proof created, then the locator.
- * The table and its Cookie are the caller's, filled before. Returns
- * CM_NVLINK_PUB_*, and the failed step's own code in *error (0 for OK,
- * RESIDENCY and PUBLISHER). A proof made with no locator after it leaves
- * no channel (stor98 needs both) and stays until the unload. */
+/* Interface 3's publication in R3's and R4's order: the image resident,
+ * the proof key opened first (an existing one is another publisher's, and
+ * one whose absence the open did not show may be: nothing is published
+ * either way), the proof created, then the locator. The table and its
+ * Cookie are the caller's, filled before. Returns CM_NVLINK_PUB_*, and the
+ * failed step's own code in *error (0 for OK, RESIDENCY and PUBLISHER). A
+ * proof made with no locator after it leaves no channel (stor98 needs
+ * both) and stays until the unload. */
 ULONG CmNvlinkPublish9x(const CM_NV_PUB9X *ops, PULONG error);
+
+/* Remove_SubTree failing after an accepted query (R11 O6): TRUE while
+ * `elapsedMs` since the first attempt is short of CM_NVLINK_RETRY_FOR_MS,
+ * so the attempts run every CM_NVLINK_RETRY_MS from 0 to 30 s. */
+BOOLEAN CmNvlinkRetryAgain(ULONG elapsedMs);
 VOID CmNvlinkRemoveCancel(PSTOR98LS_TABLE t, ULONG index);
 
 /* ---- the driver (cm_nvlinkos.c) --------------------------------------- */

@@ -1941,13 +1941,16 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   before any `UP` is published on 9x, the driver fills the table's
   `Cookie` (nonzero, per boot) and then, in this order
   (`CmNvlinkPublish9x`, host-tested):
-  1. **residency** (R4): it clears its `DriverUnload`, so the image that
-     answers the proof and writes the table stays loaded for the rest of
-     the boot whatever its PnP devices do - as the start of a CONFIGMG
-     worker (section 6.1) already makes it;
+  1. **residency** (R4): on 98 SE and ME `DriverEntry` leaves the driver
+     with no `DriverUnload`, so the image that answers the proof and
+     writes the table stays loaded for the rest of the boot whatever its
+     PnP devices do (until `3.0.0.0` the start of a CONFIGMG worker,
+     section 6.1, did the same later); the publication checks it;
   2. **the current-boot proof** (R3a): it opens
-     `HKEY_DYN_DATA\Stor98LinkState`, and if the key exists another
-     publisher owns it and nothing is published; otherwise it creates that
+     `HKEY_DYN_DATA\Stor98LinkState`; if the key exists another publisher
+     owns it, and if the open fails with anything but "not found"
+     (`ERROR_FILE_NOT_FOUND`) its absence is not shown, and either way
+     nothing is published; otherwise it creates that
      key with `_RegCreateDynKey`, this image as its provider, with two
      values answered from this driver's own memory by one query handler in
      all four of the provider's slots (`PROVIDER_KEEPS_VALUE_LENGTH`, so
@@ -1981,9 +1984,19 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   and its code in 15:0). The VMM refuses a static key under
   `HKEY_DYN_DATA` (Stor98's gate Q-9x), which is why the proof is a
   dynamic key. Each read of the proof is counted, as NT counts its
-  callback's queries: Stor98 reads it once per load, in `HwFindAdapter`,
-  so until it has been read no instance holds the table, and neither the
-  acknowledgement wait nor the removal request below waits for one.
+  callback's queries (`cm.nvlink.9x.proof-read` logs each new count):
+  Stor98 reads it once per load, in `HwFindAdapter`, so until it has been
+  read no instance holds the table, and neither the acknowledgement wait
+  nor the removal request below waits for one.
+
+  R4 also asks the connection manager to veto `IRP_MN_QUERY_REMOVE` of its
+  own devices. This driver does not: a disabled or removed Thunderbolt or
+  USB4 controller stops its domain, as on every other target, and the
+  update and uninstall of design record 23's tool go through that removal. The
+  image stays loaded all the same, so the proof is still answered and the
+  table stays valid; what is lost is that domain's further statements and
+  requests, and Stor98's own gone deadline (MD-1) covers its drives - the
+  case R4 itself describes for a connection manager that stops writing.
 
   What this gives Stor98 `0.3.0.1` on 98 SE and ME is the table and its
   `UP` entries (it binds to the entry naming its function and records the
