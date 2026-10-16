@@ -1,11 +1,12 @@
 # Issue 18 - The ThinkPad P14s Gen 1 under Windows 98 SE: a Thunderbolt 3 NVMe enclosure plugged in after the start, from Code 29 to a drive letter in three prototypes
 
-Status: **working on the third prototype, read by the owner on
-2026-10-16**: the enclosure plugged in after a start without it got its
-drive letter, with Stor98 on IRQ 10 and no problem code. The fix is
-issue 17's, `XhciCmBridgeNumbering` in `xhcicm.sys` for `3.0.0.0`
-(design record 21 section 6.1.1). The build as merged, which differs from
-the third prototype (section 8), has not yet been read on the P14s.
+Status: **working on the build as merged, read by the owner on
+2026-10-16**: the enclosure plugged in after a start without it, and
+plugged in again after Safely Remove, got its drive letter each time, with
+Stor98 on IRQ 10 and no problem code (section 8, series f and g). The fix
+is issue 17's, `XhciCmBridgeNumbering` in `xhcicm.sys` for `3.0.0.0`
+(design record 21 section 6.1.1). A last change after those readings
+covers two cases the P14s chain does not reach.
 
 Machine: the owner's Lenovo ThinkPad P14s Gen 1 (Intel), Windows 98 SE.
 Device: an ORICO NVMe enclosure built on the ASMedia ASM2464, holding an
