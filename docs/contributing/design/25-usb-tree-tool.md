@@ -23,6 +23,16 @@ names, `C:\XHCI98` on the system's drive by default, instead of
 by XHCIINST's lists, which never name the tool. The tool names no
 directory of its own, so nothing in it changes.
 
+Revision 11, 2026-10-16 (the owner, for `3.0.0.0`): a Thunderbolt unit
+that Windows does not mark removable is stopped by record 24 section
+7.2's query-and-remove route (its revision 5), and the tool offers the
+administrator rights that route needs when it has none (section 6.6):
+"Stop as administrator..." starts the tool elevated for that one stop,
+and only then. Sections 3.3, 6.2, 6.4, 7.3 and 12 change with it, and
+section 3.3 words a Thunderbolt 3 router's link behind a USB4 host as
+Thunderbolt 3. The tray and the window never run elevated otherwise, and
+the manifest stays `asInvoker`.
+
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
 authentication material.
@@ -175,7 +185,12 @@ branch, marked "(behind <router name>)".
   10, 20 or 40 Gbit/s per lane, x1 or x2; under the ICM "not reported by
   the firmware"), route, approval, each tunnel's state, the unit's
   devnodes, whether Windows lists it in Safely Remove (record 24 section
-  4.3) and the advice when not.
+  4.3) and the advice when not. Since revision 11 a unit whose capabilities
+  say neither Removable nor SurpriseRemovalOK reads "Not marked
+  removable", with section 6.6's route; and a Thunderbolt 3 router behind
+  a USB4 host (generation Thunderbolt 3, or USB4 Version major 0) has its
+  lane-adapter rate worded "Thunderbolt 3, 20 Gbit/s per lane, x2 (40
+  Gbit/s)", never as a USB4 generation (`tr_link_text_gen`).
 - **USB controller**: description, PCI ID, driver, `HCD<n>` name, root
   port count, problem code.
 - **Hub**: hub descriptor (ports, power switching, compound, over-current),
@@ -359,7 +374,11 @@ record.
    `CM_Query_And_Remove_SubTreeA`; on 98 SE and ME
    `CM_Query_Remove_SubTree` then, if accepted, always `CM_Remove_SubTree`,
    both `UI_NOT_OK`. Never forced, never `DIF_REMOVE`, one unit at a
-   time.
+   time. Since revision 11 the not-removable fallback is
+   `CM_Query_And_Remove_SubTreeW`, decided by `inst_eject_nt_step` as
+   record 24 section 7.2 has it, and a unit not marked removable in a
+   process without administrator rights goes to section 6.6 before this
+   step.
 7. The post-eject assessment ported from XHCIINST (the restarted-unit
    check, the USB4 tunnel watch, the unplug advice of record 24 section
    5.4 with every fact it needs), captured as text; on a veto, the vetoing
@@ -387,7 +406,62 @@ can also need the undock right. If the call answers with a rights
 failure, the tool says so and offers to run the eject elevated: it
 releases the mutex and starts itself with `runas` (Vista and 7) and
 `/eject id=<instance id>`, a one-shot mode (section 7.3) that runs the
-whole transaction itself and exits.
+whole transaction itself and exits. Since revision 11 a unit's elevated
+run is section 6.6's, waited for and answered; a USB device's is as
+before.
+
+### 6.6 A unit not marked removable (revision 11)
+
+NT only. A unit whose capabilities say neither `Removable` nor
+`SurpriseRemovalOK` (`inst_unit_not_marked`) can be stopped only by the
+query-and-remove route of record 24 section 7.2, which needs an
+administrator's rights. The owner's decision of 2026-10-16: the tool asks
+for those rights for this stop only, when it lacks them.
+
+1. **When.** `tr_elev_needed`: NT, the unit not marked removable, and
+   this process no administrator - on Vista and 7 its token not elevated
+   (`TokenElevation`), on 2000 and XP not a member of Administrators
+   (`CheckTokenMembership`), both looked up at run time. An administrator
+   stops it in place, as section 6.2 does.
+2. **The question.** After the usual confirmation, a dialog with the unit
+   and "Windows does not list this device for safe removal. Stopping it
+   needs administrator rights.", and two buttons: "Stop as
+   administrator..." (with the shield on Vista and 7) and Cancel.
+3. **The elevated run.** `ShellExecuteEx` with the verb `runas` starts the
+   same executable with `/eject id=<instance id> /result <name>
+   /confirmed <digest>`: User Account Control on Vista and 7, the Run As
+   dialog on 2000 and XP (read on both). It runs section 6.2 whole - the
+   shared mutex, every re-check, the route and its vetoes - as a one-shot
+   run, and never offers elevation itself.
+4. **What the elevated run trusts.** Nothing it reads from a place a user
+   can write. `/confirmed` is a digest of the devnode list the user
+   confirmed (`tr_res_digest`: two 32-bit FNV-1a hashes over the count
+   and the upper-cased instance IDs), on a command line nothing can change
+   after the start; the run reads its own list and asks its own
+   confirmation unless that list has the same digest, so the digest can
+   spare a question and never add a devnode. Its answer goes into a named
+   section the window created before the start (`Local\Xhci98TrAnswer-
+   <process id>-<tick>`, refused if it exists already, writable by SYSTEM
+   and the Administrators - who include another account under Run As);
+   the run opens it by a name `tr_res_name_ok` checks, writes at most
+   `TR_RES_BYTES` ("XHCITR ANSWER 1", the code, the text), and no file is
+   written or read.
+5. **The wait.** The window waits on the run's process for up to five
+   minutes, answering its messages; another stop is refused meanwhile, and
+   a quit (Exit, or an installer's) ends the wait at once and is posted
+   again. Then `tr_elev_result`: the run's own text when its code is the
+   process's exit code; a cancelled elevation (`ERROR_CANCELLED`) -
+   "Nothing was stopped: administrator rights were not given. Try again
+   and allow it, or unplug the device and plug it in again." (exit 1); a
+   failure to start - the rights text of record 24 section 7.2 with the
+   error; no end within the wait, or an end with no answer - the state
+   not known, look before unplugging (exit 2). The answer is shown as any
+   stop's, in a message box or the tray's balloon.
+6. `/eject id=` started by a user with no administrator rights takes the
+   same route for such a unit.
+
+XHCIINST needs nothing new: it runs as an administrator (record 24 section
+7.2).
 
 ### 6.5 Plain USB devices (revision 7)
 
@@ -625,7 +699,10 @@ build uses the WDK's header.
 `XHCITR [/tray] [/eject id=<instance id>] [/report <file>]`. `/report`
 writes the Save Report text and exits (for scripts and bug reports).
 Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
-`/eject id=` names a unit or a USB device (section 6.5).
+`/eject id=` names a unit or a USB device (section 6.5). Since revision
+11 `/eject` also takes `/result <name>` and `/confirmed <digest>`, which
+the tool passes to its own elevated run (section 6.6) and which nothing
+else needs.
 
 ## 8. Install, upgrade and uninstall
 
@@ -761,6 +838,13 @@ builder (`cm_query.c`) is host-tested in the CM suite.
 - **T11** The call goes to the USB device's devnode, the one Windows' own
   applet stops, never to a disk or a function below it, and on NT without
   record 24's not-removable fallback: a refusal is shown as it is.
+
+- **T12** (owner, 2026-10-16, revision 11) A unit not marked removable is
+  stopped by the query-and-remove route, and the tool asks for the
+  administrator rights it needs for that one stop, by `runas`, waiting
+  for the elevated run's answer (section 6.6). The elevated run trusts
+  nothing a user can write: the confirmed list travels as a digest on its
+  command line, its answer in a section the window created.
 
 ## 13. Open
 

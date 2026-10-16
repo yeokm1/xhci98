@@ -88,6 +88,14 @@ On Windows Vista and 7, if Windows refuses because the device needs
 administrator rights to stop, the tool offers to try again as an
 administrator.
 
+On Windows 2000 to 7, a Thunderbolt or USB4 device that Windows does not
+mark removable (for example the first time it is plugged in) is missing
+from Windows' own Safely Remove Hardware. The tool still stops it, with
+administrator rights: when it runs without them it says so and offers
+"Stop as administrator...", which asks for them (User Account Control on
+Vista and 7, the Run As dialog on 2000 and XP) for that one stop. If you
+cancel, nothing is stopped.
+
 The notification-area icon
 --------------------------
 
