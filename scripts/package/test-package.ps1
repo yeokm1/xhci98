@@ -4355,9 +4355,23 @@ try {
     )) {
         $g = $soBuildText.IndexOf($cap.Gate)
         $k = $soBuildText.IndexOf($cap.Cap)
-        Assert-True ($g -gt 0 -and $k -gt $g -and ($k - $g) -lt 200) `
+        $h = $soBuildText.IndexOf($cap.Cap.Replace("-Capture", "-Hash"))
+        Assert-True ($g -gt 0 -and $k -gt $g -and ($k - $g) -lt 300) `
             ("build-driver.cmd no longer captures the hash right after the import gate: " + $cap.Cap)
+        Assert-True ($h -gt 0 -and $g -gt $h -and ($g - $h) -lt 300) `
+            ("build-driver.cmd no longer hashes the binary right before its import gate: " + $cap.Cap.Replace("-Capture", "-Hash"))
     }
+    # The run's state is noted once, before :mainbody and so before any
+    # self-test; :mainbody has a scope of its own, so its exits' endlocal
+    # cannot take the cleanup's variables; the token is set for one call.
+    $soRunStartAt = $soBuildText.IndexOf('call :gated -RunStart')
+    Assert-True ($soRunStartAt -gt $soLockAt -and $soMainAt -gt $soRunStartAt) `
+        "build-driver.cmd no longer notes the tree's state when it takes the lock, before :mainbody."
+    Assert-True ($soBuildText.Contains(":mainbody`r`nsetlocal`r`n")) "build-driver.cmd's :mainbody no longer opens a scope of its own."
+    Assert-True ($soBuildText.Contains("set /p XHCI98_GATED_RUN=<`"%GATEDLOCK%\run.txt`"") -and
+                 ([regex]::Matches($soBuildText, 'set "XHCI98_GATED_RUN="')).Count -eq 1 -and
+                 ([regex]::Matches($soBuildText, 'XHCI98_GATED_RUN=')).Count -eq 2) `
+        "build-driver.cmd sets XHCI98_GATED_RUN somewhere other than around the one writer call."
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue

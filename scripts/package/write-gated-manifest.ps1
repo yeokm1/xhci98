@@ -3,16 +3,19 @@
 Record the gated binaries of one flavour (roadmap-usb4.md SIGN.1).
 
 .DESCRIPTION
-Called by scripts\build-driver.cmd, three ways, and refused from anywhere
+Called by scripts\build-driver.cmd, five ways, and refused from anywhere
 else. The record it ends with is out\gated-<arch>-<flavor>.txt
 (package-common.ps1, "The gated build's manifest"), which
 make-package.ps1 -SignOnly reads.
 
-  -Begin    when the flavour's build starts: deletes the last record, and
-            writes out\gated-<arch>-<flavor>.pending with the run's token,
-            the commit and whether the tree had uncommitted changes
-  -Capture  right after one binary's import gate passes: that binary's
-            SHA-256 and path, appended to the pending file
+  -RunStart when the run takes its lock, before any self-test: the commit
+            and whether the tree had uncommitted changes, in the lock's
+            start.txt (no -Flavor)
+  -Begin    when a flavour's build starts: deletes the last record, and
+            writes out\gated-<arch>-<flavor>.pending with the run's token
+  -Hash     right before one binary's import gate: its SHA-256 and path
+  -Capture  right after that gate passes: the file hashed again, which must
+            equal the -Hash value; that value is the binary's capture
   -Finish   once every gate of the flavour has passed: every expected binary
             captured, each file re-hashed and still equal to its capture, the
             tree read again; the record is written from the CAPTURED hashes
@@ -24,7 +27,7 @@ two agree with each other and with the pending file. build-driver.cmd
 deletes the pending files when the run ends, so a flavour that fails leaves
 no record and nothing half-made.
 
-The record says dirty=0 only when the tree was clean at -Begin and at
+The record says dirty=0 only when the tree was clean at -RunStart and at
 -Finish, at the same commit.
 
 What this protects against is a mismatch by accident and another process
@@ -35,14 +38,14 @@ defence against someone who deliberately forges these files.
 x86 or amd64, as build-driver.cmd builds.
 
 .PARAMETER Flavor
-release, debug or qemu.
+release, debug or qemu; every mode but -RunStart.
 
 .PARAMETER Name
--Capture: the binary's file name (xhci98.sys, xhciuas.sys, xhcicm.sys,
-xhcihlpr.sys).
+-Hash and -Capture: the binary's file name (xhci98.sys, xhciuas.sys,
+xhcicm.sys, xhcihlpr.sys).
 
 .PARAMETER Image
--Capture: the path of the binary whose import gate just passed.
+-Hash and -Capture: the path of the binary the import gate reads.
 
 .PARAMETER NoTargetEvidence
 -Finish: the build's import gates ran with -NoTargetEvidence.
@@ -53,10 +56,11 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("x86", "amd64")]
     [string]$Arch,
-    [Parameter(Mandatory = $true)]
-    [ValidateSet("debug", "release", "qemu")]
-    [string]$Flavor,
+    [ValidateSet("", "debug", "release", "qemu")]
+    [string]$Flavor = "",
+    [switch]$RunStart,
     [switch]$Begin,
+    [switch]$Hash,
     [switch]$Capture,
     [switch]$Finish,
     [string]$Name = "",
@@ -85,13 +89,15 @@ function Add-PendingLines {
 }
 
 try {
-    if (@(@($Begin, $Capture, $Finish) | Where-Object { $_ }).Count -ne 1) {
-        throw "give exactly one of -Begin, -Capture and -Finish."
+    if (@(@($RunStart, $Begin, $Hash, $Capture, $Finish) | Where-Object { $_ }).Count -ne 1) {
+        throw "give exactly one of -RunStart, -Begin, -Hash, -Capture and -Finish."
+    }
+    if (($Flavor -eq "") -ne [bool]$RunStart) {
+        throw "-Flavor goes with every mode but -RunStart."
     }
     $repo = Get-RepoRoot
-    $record = Get-GatedManifestPath -Repo $repo -Arch $Arch -Flavor $Flavor
-    $pending = [System.IO.Path]::ChangeExtension($record, ".pending")
     $lockRun = Join-Path $repo ("out\gated-{0}.lock\run.txt" -f $Arch)
+    $lockStart = Join-Path $repo ("out\gated-{0}.lock\start.txt" -f $Arch)
 
     # Only from the build-driver.cmd run that holds this architecture's lock.
     $token = "$env:XHCI98_GATED_RUN".Trim()
@@ -100,16 +106,23 @@ try {
         throw "this records a gated build and is run by scripts\build-driver.cmd while it holds '$(Split-Path -Parent $lockRun)'; it does not certify binaries on its own."
     }
 
-    if ($Begin) {
-        if (Test-Path -LiteralPath $record) { Remove-Item -LiteralPath $record -Force }
-        if (Test-Path -LiteralPath $pending) { Remove-Item -LiteralPath $pending -Force }
+    if ($RunStart) {
         $tree = Get-GitTreeState -Repo $repo
-        [System.IO.File]::WriteAllText($pending, "", [System.Text.Encoding]::ASCII)
-        Add-PendingLines -Path $pending -Lines @(
-            "run=$token",
+        [System.IO.File]::WriteAllText($lockStart, "", [System.Text.Encoding]::ASCII)
+        Add-PendingLines -Path $lockStart -Lines @(
             "head_start=$($tree.Head)",
             ("dirty_start=" + $(if ($tree.Dirty) { "1" } else { "0" }))
         )
+        exit 0
+    }
+
+    $record = Get-GatedManifestPath -Repo $repo -Arch $Arch -Flavor $Flavor
+    $pending = [System.IO.Path]::ChangeExtension($record, ".pending")
+    if ($Begin) {
+        if (Test-Path -LiteralPath $record) { Remove-Item -LiteralPath $record -Force }
+        if (Test-Path -LiteralPath $pending) { Remove-Item -LiteralPath $pending -Force }
+        [System.IO.File]::WriteAllText($pending, "", [System.Text.Encoding]::ASCII)
+        Add-PendingLines -Path $pending -Lines @("run=$token")
         exit 0
     }
 
@@ -121,16 +134,24 @@ try {
         throw "'$pending' belongs to another build-driver.cmd run."
     }
 
-    if ($Capture) {
+    if ($Hash -or $Capture) {
         $key = $Name.ToLowerInvariant()
-        if ($key -notmatch '^(xhci98|xhciuas|xhcicm|xhcihlpr)\.sys$') { throw "-Capture -Name '$Name' is not a binary this build gates." }
-        if ($p.ContainsKey("sha256.$key")) { throw "$key was captured twice in one flavour's build." }
+        if ($key -notmatch '^(xhci98|xhciuas|xhcicm|xhcihlpr)\.sys$') { throw "-Name '$Name' is not a binary this build gates." }
         if (-not (Test-Path -LiteralPath $Image -PathType Leaf)) { throw "no $key at '$Image'." }
         $full = (Resolve-Path -LiteralPath $Image).ProviderPath
-        Add-PendingLines -Path $pending -Lines @(
-            "sha256.$key=$(Get-FileSha256 -Path $full)",
-            "path.$key=$full"
-        )
+        $now = Get-FileSha256 -Path $full
+        if ($Hash) {
+            if ($p.ContainsKey("pre.$key")) { throw "$key was hashed twice in one flavour's build." }
+            Add-PendingLines -Path $pending -Lines @("pre.$key=$now", "path.$key=$full")
+            exit 0
+        }
+        if (-not $p.ContainsKey("pre.$key")) { throw "$key was not hashed before its import gate." }
+        if ($p.ContainsKey("sha256.$key")) { throw "$key was captured twice in one flavour's build." }
+        if ($p["path.$key"] -ne $full) { throw "$key was hashed at '$($p["path.$key"])' and captured at '$full'." }
+        if ($now -ne $p["pre.$key"]) {
+            throw "$key at '$full' changed while its import gate ran (SHA-256 $($p["pre.$key"]) before, $now after); the gate's verdict is not on these bytes."
+        }
+        Add-PendingLines -Path $pending -Lines @("sha256.$key=$now")
         exit 0
     }
 
@@ -148,8 +169,12 @@ try {
         }
         $sha[$n] = $p["sha256.$n"]
     }
+    # Clean only if the tree is still what it was when the run took its
+    # lock, before any self-test ran, and was clean then.
+    if (-not (Test-Path -LiteralPath $lockStart -PathType Leaf)) { throw "no '$lockStart': the run did not note the tree's state when it started." }
+    $s = Read-Pending -Path $lockStart
     $end = Get-GitTreeState -Repo $repo
-    $dirty = ($p["dirty_start"] -ne "0") -or $end.Dirty -or ($p["head_start"] -ne $end.Head)
+    $dirty = ($s["dirty_start"] -ne "0") -or $end.Dirty -or ($s["head_start"] -ne $end.Head)
     $text = ConvertTo-GatedManifest -Arch $Arch -Flavor $Flavor -Commit $end.Head -Dirty $dirty `
         -TargetEvidence (-not $NoTargetEvidence) `
         -Time ([DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")) -Sha256 $sha

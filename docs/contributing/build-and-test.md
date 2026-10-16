@@ -3018,13 +3018,14 @@ binaries are never signed.
   had uncommitted changes, whether its import gates had their target
   evidence, and the time. The run holds `out\gated-<arch>.lock` throughout
   and refuses to start while another holds it (a run stopped with Ctrl+C
-  leaves it; delete it when no build is running). When a flavour's build
-  starts its old record is deleted and the commit and the tree's state
-  noted; each binary's hash is captured right after its own import gate
-  passes; once the flavour's last gate has passed each file must still
-  have its captured hash, and the record is written from the captured
-  hashes, with `dirty=0` only if the tree was clean at the same commit at
-  both ends ("clean" also excludes untracked files and files marked
+  leaves it; delete it when no build is running), and notes the commit and
+  the tree's state when it takes it, before any self-test. When a
+  flavour's build starts its old record is deleted; each binary is hashed
+  right before its own import gate and again right after it, and the two
+  must agree; once the flavour's last gate has passed each file must still
+  have that hash, and the record is written from it, with `dirty=0` only
+  if the tree was clean when the run started and still is, at the same
+  commit ("clean" also excludes untracked files and files marked
   assume-unchanged or skip-worktree). A run that fails leaves no record for
   the flavour that failed. `make-package.ps1 -TestSignPfx <pfx> -SignOnly`
   reads the record for its `-Arch` and `-Flavor` before anything else,
