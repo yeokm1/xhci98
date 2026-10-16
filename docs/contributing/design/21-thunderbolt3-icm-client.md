@@ -1645,6 +1645,35 @@ configuration, as it does the BIOS's for a chain present at power-on.
 I/O BARs behind the chain get no window: an NVMe has none, and a device
 that needs one is outside what this does.
 
+**A stopped chain given back** (addendum, 2026-10-17). A Safely Remove
+makes Windows stop the bridges, and PCI.VXD closes their memory windows
+while their bus numbers stay. Read in the emulator (the overnight
+matrix's agent M3, Stor98 `0.4.0.0`): right after the stop, before any
+unplug, both bridges kept 1/2/3 and 2/3/3 with their windows at
+`FFF00000-000FFFFF`, and the NVMe's BAR unmapped. Where the hardware
+gives the chain back without resetting it (the emulator after an unplug
+and re-plug; real hardware whose link stayed up), the survey of step 2
+read it as numbered and wrote nothing, and the NVMe stayed at Code 29
+until a restart. On the owner's ThinkPad an unplug reset the chain, so
+the re-plug was numbered afresh and worked (`runs/run-41.md`, series g).
+So a survey that reads the chain numbered is followed by a second walk
+that journals it as found, writing nothing: each bridge must sit inside
+the port's range, its primary its own bus, its range within its
+parent's and clear of its siblings'. Only when every journalled bridge's
+memory window is closed are the window and interrupt-line stages run
+on it, exactly as after a numbering (step 4 onward), with the same
+journal, identity re-reads, go callback and undo; the bus numbers are
+never written. A chain with any window open (present at power-on, still
+started) is left alone, and so is one with a function already decoding
+or a bridge BAR holding an address while its Memory Space is on. A
+function behind it answering Retry Status, or a bus still empty while
+attempts remain, makes the attempt not ready, as for a numbering. The
+outcome is logged as 12, re-opened. What this does not reach: a Device
+Manager Refresh after a Safely Remove without an unplug, which is
+PCI.VXD's own pass and not this driver's; there the stopped chain keeps
+its closed windows until it is unplugged (which resets it on real
+hardware) or the driver re-enumerates the port.
+
 **The accessors.** Windows 98 SE's `HalGetBusData` does not answer for a
 function PCI.VXD does not know yet (read in the emulator: the hot-added
 bridge read as absent through it, so the first survey found nothing), and

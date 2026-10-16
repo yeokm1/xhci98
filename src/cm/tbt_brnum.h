@@ -66,6 +66,11 @@
                                            Request Retry Status: undone, to
                                            be tried again                   */
 #define XHCI_TBT_BRNUM_STALE        11UL /* the go callback refused: undone */
+#define XHCI_TBT_BRNUM_REOPENED     12UL /* a chain already numbered with
+                                           every bridge's window closed (a
+                                           stop by Windows): its windows
+                                           and lines set up again, its bus
+                                           numbers left as they were       */
 
 /* XHCI_TBT_BRNUM.WinOutcome: the memory windows of a chain just numbered
  * (XHCI_TBT_BRNUM_F_WINDOWS). A refusal puts every window written back. */

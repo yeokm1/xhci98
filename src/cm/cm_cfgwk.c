@@ -1463,7 +1463,8 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
         return;
     }
     cmWkLog(w, "cm.brnum.9x.port-buses", r.PortBuses);
-    if (r.Outcome == XHCI_TBT_BRNUM_DONE) {
+    if (r.Outcome == XHCI_TBT_BRNUM_DONE ||
+        r.Outcome == XHCI_TBT_BRNUM_REOPENED) {
         w->C.Numbered += r.Numbered;
         for (k = 0; k < r.Numbered; k++) {
             cmWkLog(w, "cm.brnum.9x.bridge", r.Bdf[k]);

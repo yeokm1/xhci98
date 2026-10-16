@@ -1121,6 +1121,7 @@ without it, 30 s, then the exports.
 | e | and interrupt lines (`bde7f10f`) | D: present, every problem code 0; Stor98 on IRQ 10, BARs `E0000000-E0005FFF`; diag word 18 `00010A01`, word 19 `00000303` |
 | f | the merged tree, reviewed (`b9c18c41`) | as e, every problem code 0, D: present, the same resources and diag |
 | g | the same build: Safely Remove in XHCITR, unplug, re-plug | as f: D: back, no device in error, the same resources and diag |
+| h, i, j | the re-open of a stopped chain (`9d9eb970`, release `xhcicm.sys` SHA-256 `c576eb48...598b`, `xhci98.sys` kept) | D: present (the SK hynix drive behind Stor98), the tunnel up, every problem code 0; `XhciCmBridgeDiag` sequence 1, 3 and 5, port `00000408`, outcome 1 (numbered afresh) in all three and never 12, seen `00010201`, windows outcome 1, bridges `00080706` and `00080807`, windows `E000E000`, flags 4, word 18 `00010A01`, word 19 `00000303`. The P14s resets the chain on unplug, as in g, so the re-open path is not reached there; nothing regressed |
 
 The windows are the driver's own placement, at the top of the port's
 window; with the enclosure present at power-on the BIOS had put them at
@@ -1162,6 +1163,31 @@ windows come out at `E0000000-E00FFFFF` as before.
 Not read: the USB4 profile with a bridge chain (the same worker and the
 same member set, so covered by the shared path, not tested under USB4);
 ME with Stor98 and known devnodes.
+
+### A stopped chain given back (record 21 section 6.1.1 addendum)
+
+The case: after a Safely Remove, Windows' stop leaves the bridges'
+bus numbers and closes their windows; a re-plug that gives the chain
+back without a reset was read as numbered, nothing was written, and the
+NVMe stayed at Code 29 until a restart. The qemu flavour of `9d9eb970`
+(gated, `xhcicm.sys` SHA-256 `c7723907...dfa0`) on 98 SE, the BAR-less
+chain at slot 4, Stor98 and the chain's devnodes known, the enclosure
+plugged in after the start; Safely Remove with `XHCIINST /eject 2` (the
+chain's upstream port; device 1 is the enclosure's own NVMe beside it),
+then an unplug and a re-plug of the enclosure, twice in one boot:
+
+| Leg | Result |
+|---|---|
+| First plug | outcome `00002801` (numbered afresh): bus numbers 1/2/3 and 2/3/3, both windows `FE900000-FE9FFFFF`, line 10 on the NVMe; E: present |
+| Safely Remove (1) | both bridges kept 1/2/3 and 2/3/3, windows `FFF00000-000FFFFF`, the NVMe's BAR unmapped |
+| Unplug, re-plug (1) | outcome `0000280C` (re-opened), seen `00020201`: bus numbers as found, both windows `FE900000-FE9FFFFF` again, windows outcome 1, line 10 (`irq` `00010A01`); the NVMe's BAR at `FE900000`, IRQ 10; E: back |
+| Safely Remove (2) | as (1): windows closed, BAR unmapped, bus numbers kept |
+| Unplug, re-plug (2) | as (1): outcome `0000280C`, the same windows, line and BAR; E: back |
+
+Not reached, as the record says: a Device Manager Refresh after a Safely
+Remove without an unplug (PCI.VXD's own pass); there the chain keeps its
+closed windows until it is unplugged or the driver looks at the port
+again.
 
 ### The Stor98 link-state channel on 98 SE and ME (NV9X.1)
 

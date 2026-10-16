@@ -1293,6 +1293,258 @@ static VOID test_round4(VOID)
     }
 }
 
+/* The P14s chain as a Safely Remove leaves it: bus numbers kept, every
+ * window closed, the NVMe's BARs unassigned. */
+static VOID mstopped(PULONG port, PULONG usp, PULONG dsp, PULONG nvme)
+{
+    mreset();
+    ioreset(TRUE);
+    *port = mport(0x06, 0x2A);
+    m.N[*port].Mem = 0xE000D410UL;
+    m.N[*port].Intr = 0x0000010AUL;
+    masm(*port, usp, dsp, nvme);
+    mnvmebars(*nvme);
+    m.N[*usp].Buses = 0x00080706UL;
+    m.N[*dsp].Buses = 0x00080807UL;
+    m.N[*usp].Mem = 0x0000FFF0UL;
+    m.N[*dsp].Mem = 0x0000FFF0UL;
+    m.N[*usp].Intr = 0x0000010AUL;
+    m.N[*dsp].Intr = 0x0000010AUL;
+    m.N[*nvme].Intr = 0x0000010AUL;
+}
+
+static VOID test_reopen(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, usp, dsp, nvme;
+    ULONG flags = XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ;
+
+    /* Numbered, windows closed: the windows set up again, the bus numbers
+     * untouched, the lines kept as Windows left them. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "a stopped chain is re-opened");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "its windows written");
+    CHECK_EQ(m.N[usp].Mem, 0xE000E000UL, "the upstream port E0000000-E00FFFFF again");
+    CHECK_EQ(m.N[dsp].Mem, 0xE000E000UL, "the downstream port too");
+    CHECK_EQ(m.N[usp].Cmd, 0x0006UL, "memory and bus master on");
+    CHECK_EQ(m.N[usp].Buses, 0x00080706UL, "the bus numbers as they were");
+    CHECK_EQ(m.N[dsp].Buses, 0x00080807UL, "both");
+    CHECK_EQ(r.Numbered, 2, "two bridges journalled");
+    CHECK_EQ(r.IrqKept, 3, "the lines Windows left are kept");
+    CHECK_EQ(m.N[nvme].Bar[0], 0x4UL, "the NVMe's BAR put back after sizing");
+    CHECK_EQ(m.StrayWrites, 0, "no stray write");
+
+    /* With Memory Space still on in the stopped bridges (no BAR of
+     * theirs in use): re-opened as well. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Cmd = 0x0006UL;
+    m.N[dsp].Cmd = 0x0006UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "re-opened with the bridges' Memory Space on");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "windows written");
+
+    /* Numbered, windows open (present at boot, or still started): left
+     * alone. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Mem = 0xD410D410UL;
+    m.N[dsp].Mem = 0xD410D410UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NUMBERED, "open windows: left alone");
+    CHECK_EQ(m.Writes, 0, "nothing written");
+    CHECK_EQ(m.N[usp].Mem, 0xD410D410UL, "unchanged");
+
+    /* One window open, one closed: the whole chain left alone. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Mem = 0xD410D410UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NUMBERED, "a mixed chain: left alone");
+    CHECK_EQ(m.Writes, 0, "nothing written");
+
+    /* The NVMe still decoding: the windows refused, nothing written. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[nvme].Cmd = 0x0002UL;
+    m.N[nvme].Bar[0] = 0xD4100004UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "journalled");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_ACTIVE, "a decoding function refuses the windows");
+    CHECK_EQ(m.N[usp].Cmd | m.N[dsp].Cmd, 0, "no command written (only BAR probes, put back)");
+    CHECK_EQ(m.N[nvme].Bar[0], 0xD4100004UL, "the decoding BAR untouched");
+    CHECK_EQ(m.N[usp].Mem, 0x0000FFF0UL, "still closed");
+
+    /* A stopped bridge with a BAR holding an address and Memory Space on:
+     * refused, nothing written. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Cmd = 0x0006UL;
+    m.N[usp].BarSize[0] = 0x100UL;
+    m.N[usp].Bar[0] = 0xE0100000UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "journalled");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_ACTIVE, "a bridge BAR in use refuses the windows");
+    CHECK_EQ(m.Writes, 0, "nothing written");
+
+    /* Without the windows flag a numbered chain is never re-opened. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, 0, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NUMBERED, "no windows flag: numbered, nothing more");
+    CHECK_EQ(m.Writes, 0, "nothing written");
+
+    /* A numbered bridge outside the port's range: inconsistent, left. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Buses = 0x00300706UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NUMBERED, "a subordinate past the port's: left alone");
+    CHECK_EQ(m.Writes, 0, "nothing written");
+
+    /* Superseded during the re-open: the windows put back, the bus
+     * numbers never touched. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    goCalls = 0;
+    goRefuseAt = 12;
+    goReplace = ROOT;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, gocb, NULL, &r),
+             XHCI_TBT_BRNUM_STALE, "superseded: stale");
+    CHECK_EQ(m.N[usp].Mem, 0x0000FFF0UL, "the window put back closed");
+    CHECK_EQ(m.N[usp].Buses, 0x00080706UL, "the bus numbers as they were");
+    goRefuseAt = 0;
+
+    /* Replaced while its decode is paused for sizing: the replacement
+     * is never given the old command; the decode stays off, counted. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Cmd = 0x0006UL;
+    m.N[usp].BarSize[0] = 0x1000UL;
+    goCalls = 0;
+    goRefuseAt = 2;
+    goReplace = usp;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, gocb, NULL, &r),
+             XHCI_TBT_BRNUM_STALE, "replaced: stale");
+    CHECK_EQ(m.N[usp].Cmd, 0x0004UL, "the replacement left with decode off");
+    CHECK_EQ(r.UndoFailed >= 1, 1, "the restore not made, counted");
+    goRefuseAt = 0;
+    goReplace = ROOT;
+
+    /* The NVMe not answering yet behind the stopped chain: with
+     * WAIT_EMPTY not ready, nothing written; and answering Retry Status
+     * the same. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[nvme].Id = 0xFFFFFFFFUL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags | XHCI_TBT_BRNUM_F_WAIT_EMPTY,
+                                  NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NOT_READY, "an empty bus behind a stopped bridge: not ready");
+    CHECK_EQ(m.Writes, 0, "nothing written");
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[nvme].Id = 0xFFFF0001UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NOT_READY, "Retry Status behind a stopped chain: not ready");
+    CHECK_EQ(m.Writes, 0, "nothing written");
+
+    /* Two bridges of one bus claiming overlapping buses: left alone. */
+    {
+        ULONG b1, b2;
+
+        mreset();
+        ioreset(TRUE);
+        port = mport(0x06, 0x2A);
+        m.N[port].Mem = 0xE000D410UL;
+        b1 = madd(port, 0, 0, ID_ASM, 1, 0);
+        b2 = madd(port, 1, 0, ID_ASM, 1, 0);
+        m.N[b1].Buses = 0x00080706UL;
+        m.N[b2].Buses = 0x00090806UL;
+        m.N[b1].Mem = 0x0000FFF0UL;
+        m.N[b2].Mem = 0x0000FFF0UL;
+        m.Writes = 0;
+        CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+                 XHCI_TBT_BRNUM_NUMBERED, "overlapping sibling ranges: left alone");
+        CHECK_EQ(m.Writes, 0, "nothing written");
+    }
+
+    /* A stopped downstream port with Memory Space on and an implemented but
+     * empty 2 MiB BAR: sized with its decode paused, counted, and its
+     * command put back before the windows set it again. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[dsp].Cmd = 0x0006UL;
+    m.N[dsp].BarSize[0] = 0x200000UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "re-opened");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "windowed");
+    CHECK_EQ(r.Need[0] >= 0x300000UL, 1, "the upstream window holds the bridge BAR and the NVMe's window");
+    CHECK_EQ(m.N[dsp].Cmd, 0x0006UL, "its command as it was");
+    CHECK_EQ(m.N[dsp].Bar[0], 0, "its BAR put back empty");
+
+    /* Memory Space on, BAR0 empty but BAR1 holding an address: in use;
+     * read only, nothing written. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Cmd = 0x0006UL;
+    m.N[usp].BarSize[0] = 0x1000UL;
+    m.N[usp].BarSize[1] = 0x1000UL;
+    m.N[usp].Bar[1] = 0xE0200000UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "journalled");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_ACTIVE, "BAR1 in use refuses");
+    CHECK_EQ(m.Writes, 0, "nothing written, its decode never paused");
+
+    /* The BAR's restore write failing while decode is paused: the decode
+     * stays off, the failure counted. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Cmd = 0x0006UL;
+    m.N[usp].BarSize[0] = 0x1000UL;
+    m.FailWriteBdf = XHCI_TBT_BDF(0x06, 0, 0);
+    m.FailWriteOff = 0x10UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "journalled");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_ACCESS, "the sizing failed");
+    CHECK_EQ(m.N[usp].Cmd & 0x2UL, 0, "its memory decode left off");
+    CHECK_EQ(r.UndoFailed >= 1, 1, "the failure counted");
+    m.FailWriteBdf = XHCI_TBT_NO_BDF;
+
+    /* Two bridges of one bus with disjoint ranges in reverse order: fine. */
+    {
+        ULONG b1, b2, e1, e2;
+
+        mreset();
+        ioreset(TRUE);
+        port = mport(0x06, 0x2A);
+        m.N[port].Mem = 0xE000D410UL;
+        b1 = madd(port, 0, 0, ID_ASM, 1, 0);
+        b2 = madd(port, 1, 0, ID_ASM, 1, 0);
+        e1 = madd(b1, 0, 0, ID_NVME, 0, 0);
+        e2 = madd(b2, 0, 0, ID_NVME, 0, 0);
+        m.N[e1].BarSize[0] = 0x4000UL;
+        m.N[e2].BarSize[0] = 0x4000UL;
+        m.N[b1].Buses = 0x000A0906UL;
+        m.N[b2].Buses = 0x00080706UL;
+        m.N[b1].Mem = 0x0000FFF0UL;
+        m.N[b2].Mem = 0x0000FFF0UL;
+        CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+                 XHCI_TBT_BRNUM_REOPENED, "reversed disjoint siblings: re-opened");
+        CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "windowed");
+        CHECK_EQ(m.N[b1].Buses, 0x000A0906UL, "bus numbers as found");
+    }
+
+    /* A stopped bridge, Memory Space on, a 64-bit BAR whose upper half
+     * holds an address: in use, refused, nothing written. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Cmd = 0x0006UL;
+    m.N[usp].BarSize[0] = 0x100UL;
+    m.N[usp].BarType[0] = 0x4UL;
+    m.N[usp].Bar[0] = 0x4UL;
+    m.N[usp].Bar[1] = 0x1UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "journalled");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_ACTIVE, "a 64-bit BAR above 4 GiB in use refuses");
+    CHECK_EQ(m.Writes, 0, "nothing written");
+}
+
 int main(void)
 {
     test_p14s_orico();
@@ -1312,6 +1564,7 @@ int main(void)
     test_windows_order_and_stale();
     test_irq_stale();
     test_round4();
+    test_reopen();
     printf("test_tbt_brnum: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }
