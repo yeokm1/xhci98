@@ -89,7 +89,7 @@ save to. There is one value to set.
 
 `-verbosity N` prints each key's previous level beside the write. A value out
 of range is one the driver refuses rather than clamps (a start that reads it
-applies the default, which is off), so the tool reports it rather than silently
+applies the default, which is 2 since `3.0.0.0` and was off before), so the tool reports it rather than silently
 correcting it. A reported value cannot drift from the driver's policy; a
 corrected one can.
 

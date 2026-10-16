@@ -3224,7 +3224,9 @@ shutdown ("The log, and how to send one").
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 
-See "The log, and how to send one". Both default to `0`.
+See "The log, and how to send one". `XhciLogVerbosity` defaults to `2`
+since `3.0.0.0` (`0` before; an update keeps the value there);
+`XhciLogDebugView` defaults to `0`.
 
 ### The 1.2.0.0 virtual-hub values have no effect
 

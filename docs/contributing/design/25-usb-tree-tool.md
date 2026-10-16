@@ -1132,6 +1132,10 @@ states, the sizing) and the tool's reader and texts of it in
   (decision T3). At level 4 the tool withholds the ring rather than pick
   the address records out of it by label: the level-4 guarantee is the
   driver's, and a label list in the tool would drift from it.
+  **Superseded by revision 12** (decision T3 revised): the tool reads
+  `xhci98.sys` through its query request first (section 4.8), whose
+  driver withholds the level-4 ring itself, and through the door only
+  for a driver that refuses the request.
 
 - **T15** (owner, revision 12) A "PCI configuration" view, read-only,
   through this package's own drivers: the NHI, its tunnel ports and the
