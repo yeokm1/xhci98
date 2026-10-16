@@ -2027,23 +2027,27 @@ directly. Under this one, this driver opens and closes the paths itself.
 The channel is Stor98's link-state table, adopted by `nvme98` on
 2026-10-15 (its MD-6), renamed with Stor98 `0.3.0.0` (`stor98cm.h`,
 interface version 4: the callback object `\Callback\Stor98LinkState` on
-NT; on 9x, interface 3's proof key and locator, which `3.0.0.0` does not
-publish, so there is no 9x channel) and described with both profiles in
-record 21 section 7.2; this profile reaches it through the two hooks of the driver
+NT, interface 3's proof key `HKEY_DYN_DATA\Stor98LinkState` and locator
+`Services\stor98` on 9x) and described with both profiles in record 21
+section 7.2; this profile reaches it through the two hooks of the driver
 half (`CmNhiSetU4Hooks`, registered where the selection admits this
 profile): the UP hook records each port's connection generation for the
 presence sample, the table's `UP` itself being published by the seam
 before the re-enumeration exactly as for the ICM profile, and the DOWN
 hook, at the core's statement upcall, makes or withholds the statement
 on section 10.2's condition (`CmNvlinkPortDown`). On Windows 98 SE and
-ME no `UP` is published and nothing is awaited in `3.0.0.0` (record 21
-section 7.2); once NV9X.1 offers the channel there, a removal of a present
-NVMe function that this driver starts itself
-would go through record 21 section 7.2's `REMOVE_PENDING` handshake
-(interface 3's R9 and R11)
-(on the CONFIGMG worker's removal step, `cm_cfgwk.c`); no such removal exists yet (section 10.4's 9x
-half is best effort and every 9x child removal is the seam's removal of a
-vanished function).
+ME, from `3.0.0.0`, the proof key and locator are published (record 21
+section 7.2: residency, the proof opened first, the proof, the locator),
+so Stor98 `0.3.0.1` binds to the table and sees its function's `UP`; the
+DOWN hook still withholds the statement there (section 10.2's condition
+needs a reading 98 SE and ME do not have), so no link-down is
+acknowledged on them. A removal of a present NVMe function that this
+driver starts itself would go through record 21 section 7.2's
+`REMOVE_PENDING` handshake (interface 3's R9 and R11, on the CONFIGMG
+worker's removal step, `cm_cfgwk.c`); no eject is such a removal yet
+(section 10.4's 9x half is best effort, every 9x child removal of a
+tunnel down is the seam's removal of a vanished function, and the
+tools' 9x eject goes to Windows directly; roadmap-usb4.md NV9X.3).
 
 ### 10.1 Obligation 1: a link that went down
 

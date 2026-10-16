@@ -187,5 +187,12 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     DriverObject->MajorFunction[IRP_MJ_POWER] = cmDispatchPower;
     DriverObject->DriverExtension->AddDevice = cmAddDevice;
     DriverObject->DriverUnload = cmUnload;
+    if (!IoIsWdmVersionAvailable(1, 0x10)) {
+        /* Windows 98 SE and ME: resident for the boot, whatever the PnP
+         * devices do (stor98cm.h R4: the link-state channel's proof key is
+         * answered from this image, cm_nvlinkos.c), as a CONFIGMG worker's
+         * start made it before. */
+        DriverObject->DriverUnload = NULL;
+    }
     return STATUS_SUCCESS;
 }
