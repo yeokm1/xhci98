@@ -129,6 +129,20 @@ typedef struct FAB_ROUTER {
     unsigned long DprReleasedAtUs;  /* the last such release */
     unsigned long ReconnectedAtUs;  /* and the link back after it */
     unsigned long NvmOps;           /* NVM Sector Size requests */
+    /* A Thunderbolt 3 router's EEPROM behind its Plug Events capability
+     * (DW 4 the bit-bang control, DW 12 the DROM offset): a 25-series SPI
+     * part as usb4-emu's usb4-router-tb3.c eeprom_ctl models it, holding
+     * Drom at EeBase. */
+    int EeOn;
+    unsigned EeBits;
+    unsigned long EeShift;
+    unsigned long EeCmd;
+    unsigned long EeAddr;
+    unsigned EeOutByte;
+    unsigned EeOutBit;
+    int EeData;
+    unsigned long EeBase;
+    unsigned long EeCtlWrites;
     unsigned long AdpTouches[FAB_MAX_ADP];  /* requests addressed to each adapter */
 } FAB_ROUTER;
 

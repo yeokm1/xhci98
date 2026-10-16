@@ -1305,6 +1305,12 @@ static void test_tbt3(void)
     CHECK(p->Dev.Uuid[0] == 0xAABB0000UL + (unsigned long)dev, "UUID from the LC fuse");
     CHECK_EQ(p->Dev.Quirks, TBT_U4_QUIRK_NO_CLX, "the CLx quirk noted");
     CHECK(g_cm.Counters.Tbt3Routers == 1, "counted");
+    CHECK(strcmp(p->Dev.VendorName, "CalDigit, Inc.") == 0 &&
+          strcmp(p->Dev.ModelName, "TS3 Plus") == 0,
+          "the DROM's names by EEPROM bit-bang");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 4) & 0x13UL, 0x02UL,
+             "the EEPROM left deselected, bit-banging off");
+    CHECK(g_fab.R[dev].EeCtlWrites > 24UL * 3UL, "clocked by bit-bang");
 
     /* Alpine Ridge keeps its USB plug event. */
     fabInit(&g_fab);
@@ -1359,6 +1365,29 @@ static void test_tbt3(void)
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UNSUPPORTED, "USB4 Version 60h: UNSUPPORTED");
     CHECK_EQ(TbtU4Port(&g_cm, 1)->Why, TBT_U4_WHY_VERSION, "60h: for its version");
+
+    /* An EEPROM that reads not present: unnamed, still UP. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    g_fab.R[dev].Rcs[FAB_RCAP_PLUG + 4] = 0x00000022UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "no EEPROM: UP");
+    CHECK(p->Dev.ModelName[0] == 0, "no EEPROM: no name");
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "no EEPROM: never clocked");
+
+    /* A DROM whose CRC fails: unnamed, still UP. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    g_fab.R[dev].Drom[20] ^= 0xFF;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "bad DROM CRC: UP");
+    CHECK(p->Dev.ModelName[0] == 0, "bad DROM CRC: no name");
 
     /* No Plug Events capability: refused. */
     fabInit(&g_fab);

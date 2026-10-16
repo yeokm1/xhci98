@@ -755,6 +755,21 @@
 #define TBT_PLUG_EVENTS_CS_1        1UL
 #define TBT_PLUG_EVENTS_MASK        0x0000007CUL
 #define TBT_PLUG_EVENTS_USB_DISABLE 0x00000004UL
+/* Plug Events VSEC, DW 4: the EEPROM bit-bang control (Linux tb_regs.h
+ * struct tb_eeprom_ctl, eeprom.c): SK the clock, CS the chip select (0
+ * selects), DI the bit to the EEPROM, DO the bit from it, the bit-banging
+ * enable, and NOT_PRESENT / PRESENT; DW 12 the DROM's offset in the
+ * EEPROM (struct tb_cap_plug_events drom_offset). */
+#define TBT_PLUG_EVENTS_EE_CTL      4UL
+#define TBT_PLUG_EVENTS_DROM_OFFSET 12UL
+#define TBT_EE_SK                   0x00000001UL
+#define TBT_EE_CS                   0x00000002UL
+#define TBT_EE_DI                   0x00000004UL
+#define TBT_EE_DO                   0x00000008UL
+#define TBT_EE_ENABLE               0x00000010UL
+#define TBT_EE_NOT_PRESENT          0x00000020UL
+#define TBT_EE_PRESENT              0x00000080UL
+#define TBT_EE_READ                 0x03UL      /* eeprom.c tb_eeprom_read_n */
 /* Link controller VSEC (Linux TB_LC_*): the common block. */
 #define TBT_LC_DESC                 0x02UL
 #define TBT_LC_DESC_SIZE(v)         (((ULONG)(v) >> 8) & 0xFFUL)        /* start of the per-port blocks */

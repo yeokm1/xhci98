@@ -632,6 +632,130 @@ static VOID tbtU4NameCopy(char *dst, const UCHAR *src, ULONG n)
     dst[i] = 0;
 }
 
+/*
+ * A Thunderbolt 3 router's EEPROM by bit-bang through its Plug Events
+ * capability (record 22 section 8 item 4; Linux eeprom.c
+ * tb_eeprom_get_drom_offset, tb_eeprom_active, tb_eeprom_transfer,
+ * tb_eeprom_out, tb_eeprom_in and tb_eeprom_read_n): select, clock out
+ * the read command and the 16-bit address MSB first, clock in `count`
+ * bytes MSB first, deselect. `offset` is from the start of the DROM.
+ * Every bit is three control requests; the chip is always deselected
+ * again once it was selected.
+ */
+static LONG tbtU4EeWr(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG ctl)
+{
+    return tbtU4Wr(cm, &rt->Route, TBT_CS_ROUTER, 0,
+                   rt->CapPlugEvents + TBT_PLUG_EVENTS_EE_CTL, ctl);
+}
+
+static LONG tbtU4EeOut(PTBT_U4CM cm, PTBT_U4_ROUTER rt, PULONG ctl, ULONG val)
+{
+    ULONG i;
+    LONG rc;
+
+    for (i = 0; i < 8; i++) {
+        *ctl &= ~(TBT_EE_DI | TBT_EE_SK);
+        if ((val & 0x80UL) != 0) {
+            *ctl |= TBT_EE_DI;
+        }
+        rc = tbtU4EeWr(cm, rt, *ctl);
+        if (rc == TBT_OK) {
+            rc = tbtU4EeWr(cm, rt, *ctl | TBT_EE_SK);
+        }
+        if (rc == TBT_OK) {
+            rc = tbtU4EeWr(cm, rt, *ctl);
+        }
+        if (rc != TBT_OK) {
+            return rc;
+        }
+        val <<= 1;
+    }
+    return TBT_OK;
+}
+
+static LONG tbtU4EeIn(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG ctl, UCHAR *val)
+{
+    ULONG i;
+    ULONG v;
+    ULONG b;
+    LONG rc;
+
+    b = 0;
+    for (i = 0; i < 8; i++) {
+        rc = tbtU4EeWr(cm, rt, ctl | TBT_EE_SK);
+        if (rc == TBT_OK) {
+            rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0,
+                         rt->CapPlugEvents + TBT_PLUG_EVENTS_EE_CTL, &v);
+        }
+        if (rc == TBT_OK) {
+            rc = tbtU4EeWr(cm, rt, ctl);
+        }
+        if (rc != TBT_OK) {
+            return rc;
+        }
+        b = (b << 1) | ((v & TBT_EE_DO) != 0 ? 1UL : 0UL);
+    }
+    *val = (UCHAR)b;
+    return TBT_OK;
+}
+
+static LONG tbtU4EepromRead(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG offset,
+                            ULONG count, UCHAR *out)
+{
+    ULONG ctl;
+    ULONG base;
+    ULONG i;
+    LONG rc;
+    LONG rc2;
+
+    if (rt->CapPlugEvents == 0) {
+        return TBT_E_UNSUPPORTED;
+    }
+    rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0,
+                 rt->CapPlugEvents + TBT_PLUG_EVENTS_DROM_OFFSET, &base);
+    if (rc == TBT_OK) {
+        rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0,
+                     rt->CapPlugEvents + TBT_PLUG_EVENTS_EE_CTL, &ctl);
+    }
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    if ((ctl & TBT_EE_PRESENT) == 0 || (ctl & TBT_EE_NOT_PRESENT) != 0) {
+        return TBT_E_UNSUPPORTED;
+    }
+    if (base > 0xFFFFUL || offset + base > 0xFFFFUL) {
+        return TBT_E_STATE;
+    }
+    offset += base;
+    ctl &= ~(TBT_EE_SK | TBT_EE_DI | TBT_EE_DO);
+    ctl |= TBT_EE_ENABLE;
+    rc = tbtU4EeWr(cm, rt, ctl);
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    ctl &= ~TBT_EE_CS;
+    rc = tbtU4EeWr(cm, rt, ctl);
+    if (rc == TBT_OK) {
+        rc = tbtU4EeOut(cm, rt, &ctl, TBT_EE_READ);
+    }
+    if (rc == TBT_OK) {
+        rc = tbtU4EeOut(cm, rt, &ctl, (offset >> 8) & 0xFFUL);
+    }
+    if (rc == TBT_OK) {
+        rc = tbtU4EeOut(cm, rt, &ctl, offset & 0xFFUL);
+    }
+    ctl &= ~TBT_EE_DI;
+    for (i = 0; i < count && rc == TBT_OK; i++) {
+        rc = tbtU4EeIn(cm, rt, ctl, out + i);
+    }
+    ctl = (ctl & ~TBT_EE_SK) | TBT_EE_CS;
+    rc2 = tbtU4EeWr(cm, rt, ctl);
+    if (rc2 == TBT_OK) {
+        rc2 = tbtU4EeWr(cm, rt, ctl & ~TBT_EE_ENABLE);
+    }
+    return rc != TBT_OK ? rc : rc2;
+}
+
 static LONG tbtU4DromChunk(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG offset,
                            ULONG n, UCHAR *out)
 {
@@ -640,6 +764,9 @@ static LONG tbtU4DromChunk(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG offset,
     ULONG i;
     LONG rc;
 
+    if (rt->Tbt3) {
+        return tbtU4EepromRead(cm, rt, offset, 4UL * n, out);
+    }
     meta = (((offset / 4UL) << TBT_ROP_DROM_ADDR_SHIFT) & TBT_ROP_DROM_ADDR_MASK) |
            ((n << TBT_ROP_DROM_SIZE_SHIFT) & TBT_ROP_DROM_SIZE_MASK);
     rc = tbtU4RouterOp(cm, rt, TBT_ROP_DROM_READ, &meta, NULL, 0, data, n);
@@ -2551,13 +2678,27 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
             return TBT_E_GONE;
         }
     }
-    if (d->UpAdp != 0 && d->UpAdp + 1 < TBT_U4_MAX_ADP) {
-        rc = tbtU4DiscoverAdapters(cm, d);
-    } else {
+    if (d->UpAdp == 0 || d->UpAdp + 1 >= TBT_U4_MAX_ADP) {
         rc = TBT_E_STATE;
-    }
-    if (rc == TBT_OK) {
+    } else if (d->Tbt3) {
+        /* Its DROM sits behind the Plug Events capability's EEPROM
+         * bit-bang (section 8 item 4), so the capabilities come first;
+         * the DROM still before the adapters, as on a USB4 router. */
         rc = tbtU4RouterCaps(cm, d, TBT_RTR1_NEXT_CAP(v[1]));
+        if (rc == TBT_OK && d->CapPlugEvents != 0) {
+            tbtU4ReadDrom(cm, d);
+            if (!TBT_U4_LIVE(p, gen)) {
+                return TBT_E_GONE;
+            }
+        }
+        if (rc == TBT_OK) {
+            rc = tbtU4DiscoverAdapters(cm, d);
+        }
+    } else {
+        rc = tbtU4DiscoverAdapters(cm, d);
+        if (rc == TBT_OK) {
+            rc = tbtU4RouterCaps(cm, d, TBT_RTR1_NEXT_CAP(v[1]));
+        }
     }
     if (rc != TBT_OK) {
         p->Why = TBT_U4_WHY_ENUMERATION;
