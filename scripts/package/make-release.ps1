@@ -5506,8 +5506,8 @@ A value that is absent means the default each one states.
   XhciLogVerbosity  -  the whole log switch
   .........................................
 
-  Default 2 (since 3.0.0.0; an update keeps the value an earlier install
-  wrote). Level 0 is off outright; above it each level is the one below
+  Default 2 (an update keeps the value an earlier install wrote, which
+  was 0 before this release). Level 0 is off outright; above it each level is the one below
   plus one thing:
 
       0   OFF. The driver does not answer XHCISNAP at all.

@@ -978,7 +978,8 @@ static VOID hcdPirqRun(PHCD_CONTROLLER hc, ULONG when)
     }
     XhciLogNote(ext, "pirq.slot.id", st->SlotId);
     XhciLogNote(ext, "pirq.lpc.id", st->LpcId);
-    XhciLogNote(ext, "pirq.rcba", st->Rcba);
+    /* A physical address: level 4 alone (design record 25 revision 12). */
+    XhciLogNoteAddress(ext, "pirq.rcba", st->Rcba);
     XhciLogNote(ext, "pirq.d20ip", st->D20ip);
     XhciLogNote(ext, "pirq.d20ir", st->D20ir);
     XhciLogNote(ext, "pirq.target", st->Target);
