@@ -2207,7 +2207,12 @@ so it stays up, as on a port FAILED for PCIe (section 7.2).
   margin `TbtU4ResumeBoundUs` already counts for the step running when
   the budget runs out (its 2 s longest wait), and a spent budget refuses
   the wait's reads, so the verification fails as it did before the wait
-  existed. System suspend with a tunnelled device attached is
+  existed. Hot plug events a wait consumes are not acted on for the port
+  being verified until its obligation is judged, so each verification,
+  and each again after its Router Ready wait, first proves the router
+  the one classified: an unplug hint only with no removal evidence behind
+  it, lane 0 still unlocked, the same IDs and UUID, still enumerated at
+  its route; anything else does not meet the obligation. System suspend with a tunnelled device attached is
   unsupported in this release (section 7.6). Windows 98 on the APM
   machines this project runs rarely reaches S3; the NT guests do, and the
   legs read it.
@@ -2346,7 +2351,11 @@ hardware capture shows it, whether or not its code was adapted.
   Thunderbolt 3 compatible DROM with the unused adapter, the TMU at `C0h`
   and the vendor capabilities after it, Router Ready 5, 450 and 700 ms
   after Enumerated, and 5 ms behind a pre-OS tunnel's discovery (waited
-  for, preserved) or never set there (HELD after one bounded wait),
+  for, preserved, the router written exactly as with Router Ready on
+  time) or never set there (HELD after one bounded wait); on a resume,
+  Router Ready 5 ms late (verified, nothing written to the router), never
+  set, the budget spent inside its wait, and another router (another
+  UUID) in its place during it (never verified as the first),
   Buffer Allocation with PCIe alone, NVM Sector Size
   failing, the 594 ms reconnect after the cleaning's port reset), a USB4
   DROM marking an adapter unused, and a DROM with a bad CRC or an entry

@@ -192,6 +192,46 @@ static void armUnplug(FAB *f, int router, unsigned long cs, unsigned long adp,
     f->Hook = unplugHook;
 }
 
+/* Requests counted per router (writes, and router-space reads of
+ * ROUTER_CS_6 alone, a Router Ready poll); with g_rpPort set, the first
+ * such poll of router g_rpRouter gives it another UUID: another router in
+ * its place, with its configuration and paths. */
+static unsigned long g_onTimeUs;
+static unsigned long g_onTimeWrites;
+static unsigned long g_cnWrites[FAB_MAX_ROUTERS];
+static unsigned long g_cnRrPolls[FAB_MAX_ROUTERS];
+static int g_rpPort;
+static int g_rpRouter;
+
+static int countHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                     unsigned long adp, unsigned long addr, unsigned long n,
+                     const unsigned long *data)
+{
+    (void)adp;
+    (void)data;
+    if (router < 0 || router >= FAB_MAX_ROUTERS) {
+        return 0;
+    }
+    if (pdf == TBT_PDF_WRITE) {
+        g_cnWrites[router]++;
+    } else if (cs == TBT_CS_ROUTER && addr == 6 && n == 1) {
+        g_cnRrPolls[router]++;
+        if (g_rpPort != 0 && router == g_rpRouter) {
+            f->R[router].Rcs[7] ^= 0x00010000UL;
+            g_rpPort = 0;
+        }
+    }
+    return 0;
+}
+
+static void armCount(FAB *f)
+{
+    memset(g_cnWrites, 0, sizeof(g_cnWrites));
+    memset(g_cnRrPolls, 0, sizeof(g_cnRrPolls));
+    g_rpPort = 0;
+    f->Hook = countHook;
+}
+
 /* No host-side entry of the port left Valid or pending, and the host's
  * PCIe Down disabled. */
 static int hostClean(const FAB *f, int port)
@@ -1562,6 +1602,7 @@ static void test_loss_and_eject(void)
 
 static void test_suspend_resume(void)
 {
+    TBT_U4_CONFIG c;
     int dev;
     LONG rc;
     const TBT_U4_PORT *p;
@@ -1605,24 +1646,76 @@ static void test_suspend_resume(void)
     CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD, untouched");
 
     /* Router Ready behind the verification's first read (5 ms): waited for
-     * inside the budget, read only, the tunnel verified. */
+     * inside the budget, polled a few times, nothing written to the
+     * router, the tunnel verified. */
     dev = setupMinimal(1, NULL);
     TbtU4Suspend(&g_cm);
     g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
     g_fab.R[dev].RrPending = 1;
     g_fab.R[dev].RrAtUs = g_fab.NowUs + 5000UL;
+    armCount(&g_fab);
     rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
     CHECK_EQ(rc, TBT_OK, "resume, Router Ready late: verified");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "resume, Router Ready late: still UP");
     CHECK(g_fab.R[dev].Rcs[6] & 0x01000000UL, "resume, Router Ready late: read set");
+    CHECK(g_cnRrPolls[dev] >= 1 && g_cnRrPolls[dev] <= 3,
+          "resume, Router Ready late: polled until set");
+    CHECK_EQ(g_cnWrites[dev], 0, "resume, Router Ready late: nothing written to the router");
 
-    /* Router Ready never back: one bounded wait, then as before. */
+    /* Router Ready never back: the obligation unmet, nothing torn down. */
     dev = setupMinimal(1, NULL);
     TbtU4Suspend(&g_cm);
     g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    armCount(&g_fab);
     rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
     CHECK_EQ(rc, TBT_E_STATE, "resume, no Router Ready: an obligation unmet");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "resume, no Router Ready: HELD");
+    CHECK(fabPcieUp(&g_fab, 1), "resume, no Router Ready: nothing torn down");
+    CHECK_EQ(g_cnWrites[dev], 0, "resume, no Router Ready: nothing written to the router");
+
+    /* The budget spent inside the Router Ready wait: the polls refused,
+     * the obligation unmet, within the bound. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    g_cm.ResumeHostUs = 300000UL;
+    g_cm.ResumeEachUs = 0;
+    b = g_fab.NowUs;
+    armCount(&g_fab);
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(rc, TBT_E_STATE, "resume, budget spent in the wait: an obligation unmet");
+    CHECK(g_cm.Counters.ResumeBudgetsSpent >= 1 && g_cnRrPolls[dev] >= 1,
+          "resume, budget spent in the wait: spent while polling");
+    CHECK(g_fab.NowUs - b < 300000UL + TBT_U4_ROUTER_READY_US,
+          "resume, budget spent in the wait: the wait cut short");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "resume, budget spent in the wait: HELD");
+    CHECK(fabPcieUp(&g_fab, 1), "resume, budget spent in the wait: nothing torn down");
+
+    /* Another router in its place while Router Ready was waited for (the
+     * same route, configuration and paths, its own UUID): never verified
+     * as the router classified before the wait, and connected as itself.
+     * PCIe alone: no second obligation's classification to catch it. */
+    cfgDefault(&c);
+    c.Usb3Tunnel = FALSE;
+    dev = setupMinimal(1, &c);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
+    g_fab.R[dev].RrPending = 1;
+    g_fab.R[dev].RrAtUs = g_fab.NowUs + 5000UL;
+    armCount(&g_fab);
+    g_rpPort = 1;
+    g_rpRouter = dev;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK(g_rpPort == 0, "resume, replaced in the wait: the UUID changed");
+    CHECK(state(&g_cm, 1) == TBT_U4_EMPTY || (rc == TBT_E_STATE && state(&g_cm, 1) == TBT_U4_HELD),
+          "resume, replaced in the wait: not verified (discharged or HELD)");
+    poll(&g_cm, &g_fab, 4);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && TbtU4Port(&g_cm, 1)->Dev.Uuid[0] == g_fab.R[dev].Rcs[7],
+          "resume, replaced in the wait: the new router connected afresh");
 
     b = TbtU4ResumeBoundUs(0, 10000);
     CHECK(b >= 1050000UL + TBT_U4_RESUME_HOST_US && b < 1050000UL + TBT_U4_RESUME_HOST_US + 3000000UL,
@@ -3405,8 +3498,22 @@ static void test_asm2464(void)
 
     /* The same handed over the moment the pre-OS connection manager wrote
      * Enumerated (the model's Router Ready comes 5 ms later): waited for,
-     * read only, and preserved; a Router Ready that never comes still
-     * holds the port, after one bounded wait. */
+     * read only - the router written exactly as with Router Ready on time
+     * (its router operations alone) - and preserved; a Router Ready that
+     * never comes still holds the port, after one bounded wait. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.RxQCount = 0;
+    armCount(&g_fab);
+    before = g_fab.NowUs;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    g_onTimeUs = g_fab.NowUs - before;
+    g_onTimeWrites = g_cnWrites[dev];
+    CHECK_EQ(g_cnRrPolls[dev], 0, "asm2464 pre-OS, Router Ready on time: never polled");
     fabInit(&g_fab);
     fabHostAdl(&g_fab);
     dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
@@ -3416,8 +3523,14 @@ static void test_asm2464(void)
     g_fab.R[dev].RrPending = 1;
     g_fab.R[dev].RrAtUs = g_fab.NowUs + 5000UL;
     g_fab.RxQCount = 0;
+    armCount(&g_fab);
     (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
     p = TbtU4Port(&g_cm, 1);
+    CHECK(g_cnRrPolls[dev] >= 1 && g_cnRrPolls[dev] <= 3,
+          "asm2464 pre-OS, Router Ready 5 ms late: polled until set");
+    CHECK_EQ(g_cnWrites[dev], g_onTimeWrites,
+             "asm2464 pre-OS, Router Ready 5 ms late: written as on time, no more");
     CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Preserved,
           "asm2464 pre-OS, Router Ready 5 ms late: preserved");
     CHECK(!p->Dev.EnumeratedHere && g_cm.Counters.PortsHeld == 0,
@@ -3432,14 +3545,18 @@ static void test_asm2464(void)
     fabPreos(&g_fab, 1, 0);
     g_fab.R[dev].Rcs[6] &= ~0x01000000UL;
     g_fab.RxQCount = 0;
+    armCount(&g_fab);
     before = g_fab.NowUs;
     (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
     p = TbtU4Port(&g_cm, 1);
     CHECK(state(&g_cm, 1) == TBT_U4_HELD && p->Why == TBT_U4_WHY_DISCOVERY,
           "asm2464 pre-OS, no Router Ready: HELD for discovery");
     CHECK(g_fab.NowUs - before >= TBT_U4_ROUTER_READY_US &&
-          g_fab.NowUs - before < TBT_U4_ROUTER_READY_US + 2000000UL,
-          "asm2464 pre-OS, no Router Ready: one bounded wait");
+          g_fab.NowUs - before < g_onTimeUs + TBT_U4_ROUTER_READY_US + 100000UL,
+          "asm2464 pre-OS, no Router Ready: one bounded wait, no second");
+    CHECK(g_cnWrites[dev] <= g_onTimeWrites,
+          "asm2464 pre-OS, no Router Ready: nothing written beyond the on-time start");
     CHECK(fabPcieUp(&g_fab, 1), "asm2464 pre-OS, no Router Ready: left as found");
 
     c.PreOsCleanup = 2;
