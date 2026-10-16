@@ -614,6 +614,14 @@ ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
     return CM_Q_ANS_WHOLE;
 }
 
+ULONG CmQueryLogLine(UCHAR *line, ULONG n, ULONG verbosity)
+{
+    if (verbosity >= 4) {
+        return 0;
+    }
+    return cmQWithhold(line, n);
+}
+
 VOID CmQueryLogSetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs)
 {
     if (info >= CM_QL_HDR_BYTES) {

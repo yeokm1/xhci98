@@ -242,7 +242,7 @@ branch, marked "(behind <router name>)".
   reads nothing; selecting it reads the log then (sections 4.5 and 4.6),
   and so does Save Report and `/report`, once per node.
 - **What it shows**, in this order: whether recording is on and at which
-  `XhciLogVerbosity`; when it is off, why and how to turn it on; the
+  `XhciLogVerbosity` (xhcicm: `XhciCmLogVerbosity`); when it is off, why and how to turn it on; the
   counters; the log, oldest record first, as the driver wrote it, one
   `label=XXXXXXXX` record a line.
 - **Recording off.** The tool never writes the registry (it runs as the
@@ -253,7 +253,7 @@ branch, marked "(behind <router name>)".
     text adds "as an administrator" (on Vista and 7: right-click, Run as
     administrator).
   - xhcicm, level below 2: "To record the log, set the DWORD value
-    XhciLogVerbosity to 2 under HKEY_LOCAL_MACHINE\<the NHI's driver
+    XhciCmLogVerbosity to 2 under HKEY_LOCAL_MACHINE\<the NHI's driver
     key> (as an administrator on 2000 and later), then restart
     Windows.", with the key the details pane already shows as "Driver
     key", spelled out as the full path (`...\Control\Class\...` on NT,
@@ -371,7 +371,7 @@ tool shows as "this xhcicm.sys does not serve its log".
 `0x00222904`, no input, the same device, the same access rules (opened
 with no access rights; a standard user may read), the same removed-device
 answer. The layout is `src\cm\cm_query.h`'s `CM_QL_*`: a 64-byte header
-(magic `XCML`, version 1, size, flags, `XhciLogVerbosity` applied and as
+(magic `XCML`, version 1, size, flags, `XhciCmLogVerbosity` applied and as
 read, the start epoch, the offset and length of the counters and of the
 log, the records accepted since the start, the bytes the ring's wrap
 overwrote, and the pass the counters belong to with its age), then the
@@ -380,10 +380,13 @@ counters as text, then the log as text. Both texts are ASCII lines
 
 - **The log is copied, not drained.** The ring stays as it was, so the
   tray, the window and a second program read the same log, and the
-  release flavour, which never drains, keeps the last 16 KiB. In the
-  `debug` and `qemu` flavours the thread still hands the ring to
-  DebugView after each pass (record 21 section 8), so the copy holds what
-  has not been emitted yet; the answer's `CM_QL_F_EMITTED` flag says so.
+  release flavour, which drains only under `XhciCmLogDebugView` 1, keeps
+  the last 16 KiB. Where the thread hands the ring to DebugView after
+  each pass - the `debug` and `qemu` flavours always, and any flavour
+  with `XhciCmLogDebugView` 1 since the owner's decision of 2026-10-16
+  (record 21 section 8) - the copy holds what has not been emitted yet;
+  the answer's `CM_QL_F_EMITTED` flag says so. That emission withholds
+  the same address values below level 4 (`CmQueryLogLine`).
 - **Under the ring's own lock.** The IOCTL takes the query device's lock,
   and, while the device is connected, the NHI's `LogLock` inside it, and
   copies the ring, oldest byte first, straight into the system buffer;
@@ -1009,7 +1012,7 @@ recording-off advice) in `test\test_trlog.c`.
 | T.5 | 98 SE, 7 x64 | install puts the tool and the Run value; login starts the tray; upgrade with the tray running; uninstall closes it and removes both |
 | T.6 | every target | the record 24 legs of XHCIINST still pass with the changed `xhcicm.sys` |
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
-| T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
+| T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciLogVerbosity` (now `XhciCmLogVerbosity`) 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
 
 ## 12. Decisions
 

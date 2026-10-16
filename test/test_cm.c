@@ -153,7 +153,9 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_CMD_TIMEOUT_MS], 5000, "XhciCmCmdTimeoutMs defaults to 5000");
     CHECK_EQ(v.Value[CM_VAL_APPROVE_TIMEOUT_MS], 10000, "XhciCmApproveTimeoutMs defaults to 10000");
     CHECK_EQ(v.Value[CM_VAL_SAFE_EJECT], 1, "XhciCmSafeEject defaults to 1 (D10)");
-    CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 0, "XhciLogVerbosity defaults to 0");
+    CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 2, "XhciCmLogVerbosity defaults to 2");
+    CHECK_EQ(v.Value[CM_VAL_LOG_DEBUGVIEW], 0, "XhciCmLogDebugView defaults to 0");
+    CHECK_EQ(v.LogFrom, CM_LOG_FROM_DEFAULT, "no name read yet");
     CHECK_EQ(v.Value[CM_VAL_USB3_TUNNEL], 1, "XhciCmUsb3Tunnel defaults to 1 (U3)");
     CHECK_EQ(v.Value[CM_VAL_LANE_BONDING], 1, "XhciCmLaneBonding defaults to 1 (U4)");
     CHECK_EQ(v.Value[CM_VAL_PREOS_CLEANUP], 0, "XhciCmPreOsCleanup defaults to 0 (U2)");
@@ -210,6 +212,39 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 9, "the verbosity passes to the log's own refusal");
     CmValuesTake(&v, CM_VAL_COUNT, 1, 5);
     CHECK(1, "an index out of range is ignored");
+
+    /* XhciCmLogDebugView: 0 and 1, anything else refused. */
+    CmValuesTake(&v, CM_VAL_LOG_DEBUGVIEW, 1, 1);
+    CHECK_EQ(v.Value[CM_VAL_LOG_DEBUGVIEW], 1, "DebugView 1 is taken");
+    CmValuesTake(&v, CM_VAL_LOG_DEBUGVIEW, 1, 2);
+    CHECK_EQ(v.Value[CM_VAL_LOG_DEBUGVIEW], 0, "DebugView 2 is refused");
+    CHECK(v.Refused & (1UL << CM_VAL_LOG_DEBUGVIEW), "and the refusal is recorded");
+    CmValuesTake(&v, CM_VAL_LOG_DEBUGVIEW, 0, 0);
+    CHECK_EQ(v.Value[CM_VAL_LOG_DEBUGVIEW], 0, "absent is 0");
+
+    /* The old name, for this one release: read only where the new is
+     * absent; neither gives the default. */
+    CmValuesDefault(&v);
+    CmValuesTake(&v, CM_VAL_LOG_VERBOSITY, 1, 3);
+    CmValuesTakeOldLog(&v, 1, 4);
+    CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 3, "the new name wins");
+    CHECK_EQ(v.LogFrom, CM_LOG_FROM_NEW, "read under the new name");
+    CmValuesDefault(&v);
+    CmValuesTake(&v, CM_VAL_LOG_VERBOSITY, 0, 0);
+    CmValuesTakeOldLog(&v, 1, 4);
+    CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 4, "the old name when the new is absent");
+    CHECK_EQ(v.LogFrom, CM_LOG_FROM_OLD, "read under the old name");
+    CHECK(v.Found & (1UL << CM_VAL_LOG_VERBOSITY), "and counted found");
+    CmValuesDefault(&v);
+    CmValuesTake(&v, CM_VAL_LOG_VERBOSITY, 0, 0);
+    CmValuesTakeOldLog(&v, 1, 0);
+    CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 0, "an old 0 is taken");
+    CmValuesDefault(&v);
+    CmValuesTake(&v, CM_VAL_LOG_VERBOSITY, 0, 0);
+    CmValuesTakeOldLog(&v, 0, 0);
+    CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 2, "neither: the default, 2");
+    CHECK_EQ(v.LogFrom, CM_LOG_FROM_DEFAULT, "neither name");
+    CmValuesDefault(&v);
 
     CmValuesTakeBridge(&v, bdf, 7);
     CHECK_EQ(v.TunnelBridgeChars, 7, "bb:dd.f taken");

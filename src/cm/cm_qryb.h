@@ -166,4 +166,11 @@ VOID CmQueryLogSetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs);
  * here. */
 ULONG CmQueryLogAddress(const UCHAR *label, ULONG n);
 
+/* One record of the ring as the DebugView emission prints it (cm_log.c),
+ * `n` bytes at `line`: below XhciCmLogVerbosity 4, the value of a record
+ * CmQueryLogAddress names is written "--------", the answer's rule; at 4
+ * the line is left as recorded, as xhci98.sys's ring holds its addresses
+ * at 4. Returns 1 when a value was withheld. */
+ULONG CmQueryLogLine(UCHAR *line, ULONG n, ULONG verbosity);
+
 #endif /* CM_QRYB_H */

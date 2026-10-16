@@ -311,7 +311,8 @@ static ULONG cmQCounters(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG cut)
         "cm.reenum.9x.gone", "cm.reenum.9x.gone-dropped", "cm.reenum.ejects",
         "cm.reenum.child.attached", "cm.reenum.child.skipped",
         "cm.reenum.child.refused", "cm.reenum.hold.watchdogs",
-        "cm.live.state", "cm.live.refused"
+        "cm.live.state", "cm.live.refused",
+        "cm.log.verbosity-from", "cm.log.debugview"
     };
     ULONG v[sizeof(names) / sizeof(names[0])];
     CM_CFGWK_COUNTERS wc;
@@ -345,6 +346,9 @@ static ULONG cmQCounters(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG cut)
     v[22] = (CmLiveEpisode(&nhi->Live) << 8) | nhi->Live.State;
     v[23] = (nhi->Live.Counters.RefusedWrites << 16) |
             (nhi->Live.Counters.RefusedReads & 0xFFFFUL);
+    /* CM_LOG_FROM_*: 1 XhciCmLogVerbosity, 2 the old name, 0 neither. */
+    v[24] = nhi->Values.LogFrom;
+    v[25] = nhi->Values.Value[CM_VAL_LOG_DEBUGVIEW];
     at = 0;
     *cut = 0;
     CmNhiCounterLines(nhi, out, room, &at, cut);

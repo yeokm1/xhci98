@@ -2396,7 +2396,8 @@ its default under the don't-overwrite flag, each read once at start:
 | `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000, and held to at most 250 while any entry of the `nvme98` link-state table reads `UP` (section 7.2) |
 | `XhciCmCmdTimeoutMs` | 5000 | the ordinary ICM command timeout (section 5.5), held to 1000 to 60000, retries 3; the TR and ICL `driver ready` timeouts and tries of section 1.4.4 take precedence for that command |
 | `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
-| `XhciLogVerbosity` | as `xhci98.sys` | the shared log rule |
+| `XhciCmLogVerbosity` | 2 | the shared log rule (the `0`-`4` ladder of `xhci_log.h`); named `XhciLogVerbosity` before `3.0.0.0`, which name is read, for that release alone, where `XhciCmLogVerbosity` is absent, and the counters say which (`cm.log.verbosity-from`: 1 the new name, 2 the old, 0 neither) (owner, 2026-10-16) |
+| `XhciCmLogDebugView` | 0 | 1 hands the log to `DbgPrint` in every flavour, as `xhci98.sys`'s `XhciLogDebugView` does; 0 to 1, refused otherwise (owner, 2026-10-16: the reversal of decision D12 below) |
 
 Installing the package is already the user's choice of this driver, so the
 master switch defaults to on: a driver that installs and does nothing until
@@ -2440,11 +2441,24 @@ That revision is design record 25's revision 9 (owner, 2026-10-16): the
 query device `\\.\XHCICM<n>` (record 25 section 4) answers a second
 request, `IOCTL_XHCICM_LOG` (`0x00222904`, answer `XCML` version 1,
 record 25 section 4.5), with the ring and the counters, and `XHCITR`
-shows them. Emission is unchanged and decision D12 stands: the release
-flavour still prints nothing and imports no `DbgPrint`; the request copies
-the ring under `LogLock` and leaves it as it was, so a release install's
-log is read with no checked flavour and no DebugView, and recording still
-needs `XhciLogVerbosity` 2 or above on the NHI's driver key and a restart.
+shows them. The request copies the ring under `LogLock` and leaves it as
+it was, so a release install's log is read with no checked flavour and no
+DebugView; recording needs `XhciCmLogVerbosity` 2 or above on the NHI's
+driver key (2 is the default from `3.0.0.0`, owner, 2026-10-16) and is
+read at start.
+
+**Decision D12 reversed for the release flavour** (the owner's decision of
+2026-10-16, for consistency with `xhci98.sys`): every flavour of
+`xhcicm.sys` hands the log to `DbgPrint` when `XhciCmLogDebugView` is 1,
+from the connection-manager thread after each pass that recorded
+something and from the PnP path at each stop, at `PASSIVE_LEVEL` only, in
+chunks of 128 bytes printed one whole record at a time (`cm_log.c`); the
+checked flavours always do, as before. `cm_log.obj` stays the binary's one
+`DbgPrint` site, now an `all` row of both `xhcicm` allowlists. Below level
+4 the emission withholds the value of each address record
+(`CmQueryLogLine`, the query answer's rule), and a line the wrap may have
+cut since the last emission is not printed, so no flavour publishes an
+address below the level that asks for one.
 The counters are no longer only written at stop: the thread formats them
 after each pass in the stop dump's names, the child filters' attached,
 skipped and refused among them, and the query device serves them at every
@@ -2811,7 +2825,7 @@ revised to it in draft 6.
 | D9 | Other Alpine Ridge NHI ids | **Owner, 2026-10-15, changed**, then widened the same day: every Alpine Ridge NHI id and the Titan Ridge NHI ids are claimed, ids from the public PCI id listing with the source in `legal-provenance.md`, with the matching port ids for the filter INF; Titan Ridge gets a best-effort row; every id but `15BF` is untested, the README and release notes say so plainly, and the untested ids act by default with that warning (`XhciCmMode` 1). By the owner's source rule of the same day (section 9) the profiles are read from Linux, and the coverage became every Intel firmware-connection-manager host Linux addresses - Falcon Ridge, Alpine Ridge, Titan Ridge, Maple Ridge, Ice Lake to Meteor Lake - with four-test selection, an inert start, hardware profiles apart from message profiles, per-domain tunnel-port sets and a no-reset policy (sections 1.4.2 to 1.4.6, 3.3, 6.3); the widening, the selection and the inert start are orchestrator decisions of 2026-10-15 for the owner to confirm. `XhciCmMode` 2 with a user-edited INF copy stays the route for an id the list does not carry | 1.3, 1.4, 3.3, 5.1, 5.2, 5.3, 6.3, 8, 9, 10.1 |
 | D10 | Safe eject | **Owner, 2026-10-15, changed**: in Phase 39, task `39-A.8`; on NT the filter answers `IRP_MN_QUERY_CAPABILITIES` with `Removable` (and `SurpriseRemovalOK`, so a plain unplug shows no Unsafe Removal dialog); on 98 SE and ME through CONFIGMG, best effort; NT-only with a release-notes line if the 9x half cannot be made to work; the eject stops the drivers and the user unplugs, since under the ICM there is no per-device teardown. Section 7.4 applies it with two refinements for the owner to confirm, each from a fact the decision did not have in front of it: the mark goes on the devices reported on the tunnel bridge's bus (through child filters the bridge filter attaches), not on the bridge, which never leaves the machine and would be held for eject until a restart; and `SurpriseRemovalOK` is set only where leg `39-V.2` shows Windows still lists the device with it, since Microsoft's reference says a device with both bits is not shown in "Unplug or Eject Hardware" | 1.3, 3.2, 6.2, 7.4, 8, 10.2, 12 |
 | D11 | A master switch for the whole driver | **Owner, 2026-10-15, as recommended**: `XhciCmMode`, default 1 (auto), 0 off, 2 force the ICM client at the user's own risk, 3 reserved for the software connection manager; the install is the real opt-in, so the default is on. Value 3 has since been given its meaning by the orchestrator's coverage decisions of the same day, for the owner to confirm: the software connection manager's experimental override (section 1.4.2, design record 22) | 8 |
-| D12 | The log emission | **Owner, 2026-10-15, as recommended**: nothing in `release`, `#if DBG` in `debug` and `qemu`, keeping `AGENTS.md`'s two-site `DbgPrint` rule as it is | 8 |
+| D12 | The log emission | **Owner, 2026-10-15, as recommended**: nothing in `release`, `#if DBG` in `debug` and `qemu`, keeping `AGENTS.md`'s two-site `DbgPrint` rule as it is. **Reversed for `release` by the owner on 2026-10-16**, for consistency with `xhci98.sys`: every flavour prints under `XhciCmLogDebugView` 1, address values withheld below level 4 | 8 |
 | D13 | Cut before the bench for Phase 39 | **Owner, 2026-10-15, as recommended**: the VM legs and gates before the cut, `39-E.1` and `39-E.2` after it on the asset, a failure there a re-cut; the cut being `3.0.0.0` at `40.final` (D7) | 10.4 |
 
 ## 12. What is open, and what is a risk

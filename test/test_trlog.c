@@ -113,7 +113,7 @@ static void test_cm(void)
     CHECK_EQ(l.EpochLo, 0x11111111UL, "epoch");
     tr_text_init(&t, text, sizeof(text));
     tr_qlog_text(&t, &l, key, 1);
-    CHECK(strstr(text, "Recording:  on (XhciLogVerbosity 2)") != NULL, "on");
+    CHECK(strstr(text, "Recording:  on (XhciCmLogVerbosity 2)") != NULL, "on");
     CHECK(strstr(text, "To record") == NULL, "no advice when on");
     CHECK(strstr(text, "cm.passes                            10") != NULL,
           "a counter in decimal");
@@ -131,8 +131,8 @@ static void test_cm(void)
     CHECK_EQ(tr_qlog_parse(ans, n, &l), 1, "off: whole");
     tr_text_init(&t, text, sizeof(text));
     tr_qlog_text(&t, &l, key, 1);
-    CHECK(strstr(text, "Recording:  off (XhciLogVerbosity 0") != NULL, "off");
-    CHECK(strstr(text, "XhciLogVerbosity to 2") != NULL, "the value");
+    CHECK(strstr(text, "Recording:  off (XhciCmLogVerbosity 0") != NULL, "off");
+    CHECK(strstr(text, "XhciCmLogVerbosity to\r\n  2 (the default)") != NULL, "the value");
     CHECK(strstr(text, "(as an administrator)") != NULL, "NT: admin");
     CHECK(strstr(text, "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control"
                        "\\Class\\{4D36E97D") != NULL, "the whole key");
@@ -149,7 +149,7 @@ static void test_cm(void)
     CHECK_EQ(tr_qlog_parse(ans, n, &l), 1, "refused: whole");
     tr_text_init(&t, text, sizeof(text));
     tr_qlog_text(&t, &l, key, 1);
-    CHECK(strstr(text, "XhciLogVerbosity is 9, which the driver refused") !=
+    CHECK(strstr(text, "XhciCmLogVerbosity is 9, which the driver refused") !=
           NULL, "refused said");
 
     /* Sizing and bounds. */

@@ -474,7 +474,8 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
 | `XhciCmCmdTimeoutMs` | `5000` | Firmware connection manager: the wait for a command's answer, in ms (`1000` to `60000`), three tries |
 | `XhciCmApproveTimeoutMs` | `10000` | Firmware connection manager: the wait for an approval's answer, in ms, the same bounds |
-| `XhciLogVerbosity` | `0` | The driver's log, as `xhci98.sys`'s; the `release` flavour prints nothing, the `debug` flavour to DebugView |
+| `XhciCmLogVerbosity` | `2` | The driver's log, on the same `0`-`4` ladder as `xhci98.sys`'s `XhciLogVerbosity`; read by the xHCI98 USB Tree. Where it is absent, `3.0.0.0` reads the earlier name `XhciLogVerbosity` from the same key |
+| `XhciCmLogDebugView` | `0` | `1` sends the driver's log to DebugView as well, in every build (the `debug` build always does) |
 
 The install tool asks "Install Thunderbolt 3 / USB4 support?": Enter
 answers Y with a Thunderbolt or USB4 controller present and N with none
@@ -3453,18 +3454,26 @@ whether the driver is recording, its counters, and the log, oldest record
 first. Save Report (and `XHCITR /report <file>`) writes both logs and the
 counters into the report, as plain text with no internal addresses in it.
 
-Recording is off by default, and the node then says how to turn it on:
+Both drivers record at level 2 by default. Where recording is off, the
+node says how to turn it on:
 
 - **`xhci98.sys`**: run `SNAPON.BAT` as above (on Vista and 7, as an
   administrator), then restart Windows. At level 1 the node shows the
   counters only. At level 4 it shows the counters but not the log, because
   that level records internal addresses: use level 2.
-- **`xhcicm.sys`**: set the DWORD value `XhciLogVerbosity` to `2` on the
+- **`xhcicm.sys`**: set the DWORD value `XhciCmLogVerbosity` to `2` on the
   Thunderbolt or USB4 controller's driver key, then restart Windows. The
   node names the key in full (the "Driver key" its details show, under
   `HKEY_LOCAL_MACHINE`). On 2000 and later that needs an administrator; the
-  tool itself never writes the registry. Set it back to `0` once the log
-  has been sent. Its counters are shown whatever the level.
+  tool itself never writes the registry. Its counters are shown whatever
+  the level. Builds before `3.0.0.0` named the value `XhciLogVerbosity`;
+  `3.0.0.0` still reads that name where the new one is absent.
+
+`xhcicm.sys` also prints its log to a debugger's output (DebugView) when
+`XhciCmLogDebugView` is `1` on the same key, in every build, from its own
+thread and never from an interrupt, as `xhci98.sys` does under
+`XhciLogDebugView`. Below level 4 it prints no address. The tool's node
+needs neither.
 
 `xhcicm.sys` keeps the last 16 KiB of its log, from when Windows first
 loaded it for the controller; a restart of the controller does not clear

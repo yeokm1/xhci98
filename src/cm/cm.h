@@ -362,6 +362,8 @@ typedef struct _CM_NHI {
     ULONG QueryCtrBytes;
     ULONG QueryCtrCut;
     UCHAR QueryCtr[CM_QL_CTR_MAX];
+    /* Log.BytesDropped at the last emission (cm_log.c), under LogLock. */
+    ULONG LogDroppedEmitted;
 } CM_NHI, *PCM_NHI;
 
 /* The query device's extension (CM_KIND_QUERY): no lower object. Lock

@@ -25,11 +25,16 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
     L"XhciCmCmdTimeoutMs",
     L"XhciCmApproveTimeoutMs",
     L"XhciCmSafeEject",
-    L"XhciLogVerbosity",
+    L"XhciCmLogVerbosity",
     L"XhciCmUsb3Tunnel",
     L"XhciCmLaneBonding",
-    L"XhciCmPreOsCleanup"
+    L"XhciCmPreOsCleanup",
+    L"XhciCmLogDebugView"
 };
+
+/* XhciCmLogVerbosity's name before 3.0.0.0, read where that is absent,
+ * for this one release (cm_vals.h, CmValuesTakeOldLog). */
+#define CM_VALUE_OLD_LOG L"XhciLogVerbosity"
 
 /* Not written by any INF (record 21 section 8): absent is no override. */
 #define CM_VALUE_TUNNEL_BRIDGE L"XhciCmTunnelBridge"
@@ -131,6 +136,12 @@ VOID CmReadValues(PCM_NHI nhi)
         cmQuery(key, cmValueNames[i], &take, 0);
         CmValuesTake(&nhi->Values, i, take.Found, take.Dword);
     }
+    take.Found = 0;
+    take.Dword = 0;
+    if ((nhi->Values.Found & (1UL << CM_VAL_LOG_VERBOSITY)) == 0) {
+        cmQuery(key, CM_VALUE_OLD_LOG, &take, 0);
+    }
+    CmValuesTakeOldLog(&nhi->Values, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_TUNNEL_BRIDGE, &take, 1);
     if (take.Found) {
         CmValuesTakeBridge(&nhi->Values, take.Text, take.TextChars);
