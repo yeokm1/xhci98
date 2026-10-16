@@ -414,7 +414,69 @@ does not attach when added to a running machine). ME's controller in the
 guest had no driver yet, and `INSTALL` left it to Device Manager, as it
 says.
 
-### Start at login, per user (record 25 revision 8)
+### The installer's screens and its install directory
+
+The owner's requests of 2026-10-16, after running the installer on a real
+machine under Windows 98 (record 23 revision 10, record 25 revision 8):
+every line at most 79 columns, each choice on its own line with its
+meaning, "Enter for [x]", and an install directory for the xHCI98 tools,
+`C:\XHCI98` by default, with the package copy of 98 SE and ME in it and no
+subfolder. Read on development host A, from a dry x86 cut (TEST label, no
+NVMe driver) of branch `inst-ux`, in QEMU guests with a `qemu-xhci` and a
+tablet, each a new overlay, every window shown. Before them,
+`XHCIINST /selftest` rendered every screen of an interactive and a
+listing run with made-up devices, at ordinary and at the longest names,
+ids and paths, with no line wider than 79 columns.
+
+- **98 SE, a first install, Enter for everything** (over the gold image's
+  `2.3.x` driver): every screen fitted the 80-column MS-DOS window with no
+  wrapped blank line; the Thunderbolt question, the three registry
+  questions, the install directory (`Enter for [C:\XHCI98]`) and the
+  confirmation (`Enter for [Y]`) each listed their choices one a line.
+  The package's drivers went straight into `C:\XHCI98` with
+  `XHCIINST.LST` and `XHCITR.EXE`; `DevicePath` named `C:\XHCI98`;
+  `HKLM\Software\xhci98` `InstallDir` read `C:\XHCI98`, and the Run value
+  `"C:\XHCI98\XHCITR.EXE" /tray`. Enter at "Open Device Manager now?"
+  opened System Properties at its Device Manager tab. Update Driver on the
+  controller, "Search for a better driver" with no box ticked, found
+  `C:\XHCI98\XHCI98.INF`; asked for the "xhci98 xHCI Host Controller
+  Disk", `C:\XHCI98` typed under "Copy files from" installed it (the
+  driver date then read 10-16-2026). After the restart the tray icon was
+  there. Pass.
+- **98 SE, an update over an install of the `a5a1b31f` package**, whose
+  tool was in `C:\WINDOWS\XHCI98` with its copy in
+  `C:\WINDOWS\XHCI98\46CC237E` and no record, its tray running: the
+  question offered `Enter for [C:\WINDOWS\XHCI98]` with "now:" naming it.
+  Kept: the copy went flat into `C:\WINDOWS\XHCI98`, the `<hash>`
+  directory and its `DevicePath` entry went, the tool stayed with its Run
+  value, and `InstallDir` recorded `C:\WINDOWS\XHCI98`. Pass.
+- **The same update, moving to `C:\XHCI98`** (typed at the question): the
+  running tray was closed, the copy and the tool went to `C:\XHCI98`, the
+  Run value named it, `C:\WINDOWS\XHCI98` was removed whole, `DevicePath`
+  named `C:\XHCI98` alone, and no `MoveFrom` was left. The tray started
+  from `C:\XHCI98` at the next login. Pass.
+- **98 SE, the uninstall** of that moved install (REMOVE typed): the tray
+  closed, `C:\XHCI98\XHCITR.EXE` and the copy removed, `C:\XHCI98`
+  removed, the Run value, `DevicePath`'s entry and `HKLM\Software\xhci98`
+  gone; the Device Manager steps printed, exit 4. Pass.
+- **ME, a first install, Enter for everything** (the stock image, the
+  controller with no driver): the copy went flat into `C:\XHCI98` with the
+  tool, the numbered steps named `C:\XHCI98`, and Enter at "Open Device
+  Manager now?" opened the Device Manager tab. Pass.
+- **XP, `INSTALL /to C:\Tools\xhci98`** (the guest has no second hard
+  disk): the question was not asked ("Install directory:
+  C:\Tools\xhci98 (/to)"); the drivers installed from the local copy in
+  `C:\WINDOWS\XHCI98\AE12C8F3`, the tool went to
+  `C:\Tools\xhci98\XHCITR.EXE`, `InstallDir` and the Run value named it.
+  The uninstall removed the tool, `C:\Tools\xhci98`, the copy,
+  `C:\WINDOWS\XHCI98` and the record; `C:\Tools` stayed. Pass.
+
+Noted: on 98 SE every update of the controller re-enumerates the tablet,
+whose HID install asks for the Windows CD; the guests have none, and the
+files were skipped. The cosmetic wrap of the question's drivers line seen
+on these legs was shortened afterwards (one line), with no other change.
+
+### Start at login, per user (record 25 revision 9)
 
 Read on the tool of `33f66b09`, on 98 SE and on 7 x86 as the standard
 user, the tool in place of the installed one:
