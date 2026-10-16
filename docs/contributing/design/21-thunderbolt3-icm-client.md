@@ -706,7 +706,7 @@ filter, no boot start, no `0x7B` across restarts. Windows 2000 takes the
 INF unforced; XP and 7 rank the unsigned INF `0x8005` against
 `machine.inf`'s signed `0x2004` and keep `machine.inf` unless the install
 is forced, which the installer does (`UpdateDriverForPlugAndPlayDevices`
-with `INSTALLFLAG_FORCE`, the install tool of task `40.5`, design record 23) and a user by hand does
+with `INSTALLFLAG_FORCE`, the install tool of task `40.4`, design record 23) and a user by hand does
 through Update Driver, "Don't search", Have Disk. A port that first
 appears after the install (a controller absent at boot) gets `machine.inf`
 again on XP and later, so the install route is re-run, or the filter

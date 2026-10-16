@@ -3,7 +3,7 @@
 Status: revision 10, 2026-10-16 (the console, the questions and the
 install directory; see below); revision 9, 2026-10-16 (the USB tree
 tool); revision 8, 2026-10-15, reviewed and revised six times the same day;
-the code is written against it (task 40.6) and was reviewed and revised
+the code is written against it (task 40.5) and was reviewed and revised
 against it the same day. Written for the task group the
 owner added to Phase 40 of `roadmap-usb4.md` on 2026-10-15: the `3.0.0.0`
 package gains an install and upgrade script, `INSTALL.BAT`, in front of a

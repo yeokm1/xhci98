@@ -1,7 +1,7 @@
 /*
  * xhciinst.c - XHCIINST.EXE (32-bit) and XHCIIN64.EXE (x64): install,
  * update or uninstall every driver of this package (roadmap-usb4.md tasks
- * 40.5 to 40.7; design record 23).
+ * 40.4 to 40.6; design record 23).
  *
  * WHY IT EXISTS. Installing the package was Device Manager work, one device
  * at a time, with a different trap per system on an update (Windows 2000

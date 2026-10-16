@@ -343,7 +343,7 @@
 > elevation request), `build.cmd`, `selftest.cmd` (the `-selftest` that
 > `build-driver.cmd` runs when the EXE is built) and `README.TXT` (the text
 > of the published `readme.txt`).
-> Task 40.6 (roadmap-usb4.md, design record 23) adds the install tool's
+> Task 40.5 (roadmap-usb4.md, design record 23) adds the install tool's
 > tree beside it: `xhciinst\xhciinst.c` (the system half), `inst_core.c` /
 > `inst_core.h` (the pure half: the INF reader, the models section per
 > system, the action per device and per service group, the registry value

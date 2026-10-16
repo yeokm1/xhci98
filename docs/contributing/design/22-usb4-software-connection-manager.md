@@ -2437,7 +2437,7 @@ id out of the `$CHICAGO$` INF.
 
 None is a condition of the cut (decision U10): the owner holds no USB4 host
 whose behaviour under a legacy operating system has been read, and task
-40.4 (real USB4 devices) follows the maintainer's ORICO enclosure capture.
+U4HW.1 (real USB4 devices; task 40.4 until 2026-10-16) waits on a USB4 host that boots these systems.
 The release notes say the USB4 profile has run on the emulator only, and
 that every real host id acts untested.
 
@@ -2527,7 +2527,7 @@ from their first form, as each row says.
   written in its HopID 8 entry (it resets to none; this driver keeps them
   as read, as Linux does), what its unused adapter 4 answers if read, and
   the PCIe switch in front of the NVMe under Windows 98 SE and 2000 are
-  unread; task 40.4 waits on a USB4 host that boots them.
+  unread; planned task U4HW.1 (40.4 until 2026-10-16) waits on a USB4 host that boots them.
 
 ## 17. What this record needs record 21 to say differently
 

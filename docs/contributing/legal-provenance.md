@@ -149,7 +149,7 @@ without `tools/`, in a release before 2.4.0.0; roadmap-hcd task 38.9), and
 from `2.4.0.0` `releases/<version>/tools/xhcicln/XHCICLN.EXE` and
 `XHCICL64.EXE` (roadmap-hcd task 38.8), and from `3.0.0.0`
 `releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`
-(roadmap-usb4 task 40.6). They are not the same case: the
+(roadmap-usb4 task 40.5). They are not the same case: the
 qualifier carries an embedded DOS extender and an Open Watcom runtime, the
 reader and the cleanup tool statically linked Microsoft C runtimes.
 

@@ -24,7 +24,7 @@ handoff gives (its section 2, maintainer 2026-10-14): Phase 39 the
 Thunderbolt firmware-connection-manager client with tunnel re-enumeration
 and safe eject, because it can be proven on the owner's ThinkPad P14s Gen
 1; Phase 40 the USB4 software connection manager; real USB4 devices third,
-task 40.4, once the ORICO enclosure capture exists. The release is
+planned task U4HW.1, once a USB4 host that boots these systems is at hand. The release is
 `3.0.0.0` and carries both phases (owner, 2026-10-15, decision D7):
 `39.final` closes Phase 39 with its legs and a dry build and cuts nothing;
 `40.final` cuts `3.0.0.0`. Design record 21 is Phase 39's plan, its
@@ -91,7 +91,7 @@ Phase 39 is the Thunderbolt firmware-connection-manager client, tunnel
 re-enumeration and safe eject; Phase 40 the USB4 software connection
 manager; Phase 41 the graphical tree, eject and tray tool XHCITR; all
 three ship as `3.0.0.0`. Real USB4 devices follow the ORICO capture
-and are task 40.4 until they need more. The order is the handoff's: the
+and are planned task U4HW.1. The order is the handoff's: the
 Thunderbolt 3 client is provable on real hardware the owner holds; the
 software connection manager is provable, for now, only against the
 emulator and a Framework 13 capture.
@@ -211,7 +211,7 @@ closed and the endpoint's reset has completed.
 Status: open. Opened 2026-10-15 by the owner, from the planned work
 `U4CM`; released with Phase 39 as `3.0.0.0` (D7), the cut being
 `40.final`'s. Its design record is design record 22. Nothing in it waits
-for the ORICO USB4 enclosure capture except task 40.4, which adds a real
+for the ORICO USB4 enclosure capture except planned task U4HW.1, which adds a real
 device-router preset and a conformance check.
 
 - [x] 40.1 the design record (design record 22): the connection manager's state machine from `u4cm.c` (host router, adapters, device router per port, DROM by router operation, the CV/CR handshake, lane bonding, the PCIe tunnel's four path entries, the optional USB3 tunnel), hot-plug events and unplug handling (which `usb4cm` lacks), the positive admission and the preservation of every existing tunnel and link power state (record 21 sections 1.4.2 and 1.4.5), the router quirks record 21 section 10.1 assigns to it, a Thunderbolt 3 device behind a USB4 host (legacy routers configured router by router, PCIe tunnel first), the pre-OS cleanup, and what the two profiles share (done 2026-10-15: design record 22 (draft 2), reviewed and revised to convergence; decisions U1-U16 taken by the orchestrator, for the owner to confirm)
@@ -230,8 +230,8 @@ device-router preset and a conformance check.
 - [ ] 40-V.1 Windows 98 SE, legs U.1 to U.13 of record 22 section 14.2 (partly read 2026-10-15: U.1, U.3, U.5, U.6, U.8 fabric half and U.10 pass) (also read 2026-10-15 on the ASM2464 device model of the ORICO capture on `intel-adl`: the install, the tunnel, the NVMe read and written with no Refresh, unplug, re-plug and a cold boot pass after the DROM unused-adapter fix, record 22 section 6.11); U.2 read 2026-10-15 for the connection manager (the NVMe at Code 29 beside the `-Usb3` xHCI, the guest's interrupt routing), U.8's USB3 tunnel at 5 Gb/s, and U.14 (the host interface lost: contained, no access after the gate reopens); U.4, U.7, U.9 and U.11 to U.13 owed
 - [ ] 40-V.2 Windows 2000, the same legs plus the filter on `1B36:0001` (partly read 2026-10-15: U.2 hot plug through the filter with nvme98, and the safe eject) (the ASM2464 model as on 98 SE, plus the safe eject, pass) (read 2026-10-15: U.1 to U.13 pass on `minimal`, `intel-adl` and `asm4242`, U.11 on `asm4242` failing by platform with Code 12; the PCIe-only eject re-read passes; S3 and the Thunderbolt 3 router behind a USB4 host owed); U.14, the host interface lost under the USB4 profile, passes 2026-10-15 (contained, no access, a re-enable starts a new instance that finds the tunnel preserved)
 - [x] 40-V.3 ME, XP, XP x64, Vista and 7: the install and one plug cycle each, with no checkpoint tax (read 2026-10-15 on `usb4-generic` `intel-adl`: XP, XP x64, Vista x86 and 7 x86 pass, the install and one plug cycle; Vista x64 and 7 x64 owed for want of a test-signed package; ME passes, 2026-10-15: INSTALL.BAT and one plug cycle; Vista x64 and 7 x64 pass, 2026-10-16, on the pre-cut test-signed package, run-40.md's last section); closed 2026-10-16, the reading on the signed asset is X64.1
-- [ ] 40.4 real USB4 devices, after the maintainer's ORICO capture (its emulator stand-in, the ORICO capture model, passes on 98 SE and 2000; open on real hardware, record 22 section 16: the PCIe Up adapter credits kept as read, the unused adapter 4's answers, and the enclosure's PCIe switch under 98 SE and 2000)
-- [x] 40.5 onward: the install and upgrade tool, design record 23 (`p40-inst`). Done 2026-10-15 (`p40-inst` 2bfcd27f, merged bcc74be4): `INSTALL.BAT` with `XHCIINST.EXE` and `XHCIIN64.EXE`, record 23 rev 8. The tool waits for Windows' own installs before and between its steps, the last line agrees with the exit code, the 98 SE and ME fixes, the Windows 2000 filter restart. Legs pass on 98 SE, ME, 2000, XP, XP x64, Vista x86 and x64, 7 x86 and x64 (run-40.md). Owed: Vista x64 update after the restart, 7 x64 uninstall over 3.0.0.0, and the 2000 filter install through the tool on the Thunderbolt test machine. The first two read 2026-10-16 on the pre-cut test-signed package: pass (run-40.md, last section).
+- [x] 40.4 onward: the install and upgrade tool, design record 23 (`p40-inst`). Done 2026-10-15 (`p40-inst` 2bfcd27f, merged bcc74be4): `INSTALL.BAT` with `XHCIINST.EXE` and `XHCIIN64.EXE`, record 23 rev 8. The tool waits for Windows' own installs before and between its steps, the last line agrees with the exit code, the 98 SE and ME fixes, the Windows 2000 filter restart. Legs pass on 98 SE, ME, 2000, XP, XP x64, Vista x86 and x64, 7 x86 and x64 (run-40.md). Owed: Vista x64 update after the restart, 7 x64 uninstall over 3.0.0.0, and the 2000 filter install through the tool on the Thunderbolt test machine. The first two read 2026-10-16 on the pre-cut test-signed package: pass (run-40.md, last section).
+- Renumbered 2026-10-16 (owner): task 40.4, real USB4 devices, left Phase 40 for the planned task U4HW.1 (no USB4 host that boots these systems is at hand), and the tasks after it moved down by one: 40.5 onward is 40.4 onward (40.5 to 40.7 as proposed are 40.4 to 40.6). Run records, commits and memories before this change use the old numbers
 - [ ] 40.final the `3.0.0.0` cut: the release notes for both phases (`39.final`'s drafts, the safe-eject and untested-hosts lines among them, and Phase 40's), `README.md`, `source-files.md`, `docs/README.md`'s table; the builds, the gates, the dry cut and the owner's signed cut of `3.0.0.0`, with the install legs read from the asset on every target. Task 40.4 is not a condition of the cut: it waits on the ORICO capture and is carried into a later release if the capture is not in hand (an orchestrator decision of 2026-10-15, for the owner to confirm)
 
 Checkpoint: design record 22 converged before 40-A's code; the host suites
@@ -437,7 +437,7 @@ package needs the project's test signature, applied only at a signed cut
 (design record 19). Struck from this list as the signed cut reads them.
 
 - [ ] X64.1 39-V.3 and 40-V.3 on Vista x64 and 7 x64 from the signed `3.0.0.0` asset: the install with the forced filter, one plug, unplug and re-plug cycle with the NVMe drive, and the safe-eject cycle (read 2026-10-16 on the owner's pre-cut test-signed package, pass on both, run-39.md and run-40.md; the recipe stands, the reading on the cut's signed asset is still owed)
-- [ ] X64.2 the installer legs owed by task 40.5 onward: Vista x64's update read after its restart, and 7 x64's uninstall over `3.0.0.0` (both pass 2026-10-16 on the pre-cut test-signed package, run-40.md; again on the cut's signed asset if its drivers differ)
+- [ ] X64.2 the installer legs owed by task 40.4 onward: Vista x64's update read after its restart, and 7 x64's uninstall over `3.0.0.0` (both pass 2026-10-16 on the pre-cut test-signed package, run-40.md; again on the cut's signed asset if its drivers differ)
 
 ## Planned - An Unsafe-Unplug Notice From the Child Filter
 
@@ -564,3 +564,17 @@ deprecated in a subsequent release.
 - [ ] SNAP.1 an inventory of what `XHCISNAP` does that XHCITR does not (the raw snapshot regions and the `.DEV` file, `-probe`, the counter-name check, the slot and enumeration regions), and for each a decision: moved into XHCITR, kept as a developer tool outside the package, or dropped
 - [ ] SNAP.2 the deprecation release: the bug-report steps in the README and the release notes, the release acceptance test's `XHCISNAP` steps and the tool's readme rewritten around XHCITR; `XHCISNAP` marked deprecated in its own output
 - [ ] SNAP.3 the removal: `XHCISNAP` and its batch files out of the package and the build, the door's passthru request kept for Windows' own USB property tabs
+
+## Planned - Real USB4 Hardware
+
+Goal: the USB4 software connection manager (Phase 40) read on a real
+USB4 host with real USB4 devices, not only on the emulator's host models.
+
+Status: not opened, unnumbered and unversioned; waiting on hardware.
+Moved out of Phase 40 on 2026-10-16 by the owner, where it was task 40.4:
+the USB4 hosts are recent UEFI machines, and none at hand offers the
+compatibility support module that Windows 98 SE, ME, 2000 and XP need to
+boot. A machine that does, or an add-in USB4 card in an older machine
+that does, opens it.
+
+- [ ] U4HW.1 real USB4 devices, after the maintainer's ORICO capture (its emulator stand-in, the ORICO capture model, passes on 98 SE and 2000; open on real hardware, record 22 section 16: the PCIe Up adapter credits kept as read, the unused adapter 4's answers, and the enclosure's PCIe switch under 98 SE and 2000); on a USB4 host that boots the target systems

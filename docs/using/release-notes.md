@@ -262,9 +262,11 @@ Lake integrated controllers - is untested: it is driven to the Linux
 driver's description of its messages, and no capture of it exists. Every
 USB4 host is untested as well: the USB4 connection manager has run only
 on the emulator's host models (Alder Lake's, from a capture of a
-Framework laptop, a minimal one, and one of ASMedia's ASM4242). Each of
-them acts by default (owner, 2026-10-15). On such a machine the driver
-may start and do nothing; the `debug` flavour's log says why.
+Framework laptop, a minimal one, and one of ASMedia's ASM4242). No USB4
+host at hand boots Windows 98 SE, ME, 2000 or XP (none offers a
+compatibility support module), so none has been read on real USB4
+hardware. Each of them acts by default (owner, 2026-10-15). On such a
+machine the driver may start and do nothing; the `debug` flavour's log says why.
 `XhciCmMode` `0` turns the driver off without uninstalling it. A report
 from any of these machines, working or not, is new information.
 
