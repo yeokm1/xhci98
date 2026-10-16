@@ -2584,7 +2584,7 @@ static int ej_confirm(HWND owner, const EJREQ *q)
                     tr_disk_line(gw.N[k].Friendly[0] ? gw.N[k].Friendly
                                                      : dn_name(&gw.N[k]),
                                  gw.N[k].Letters, line, sizeof(line));
-                    tr_printf(&t, "%s%s", disks ? "; " : "", line);
+                    tr_printf(&t, "    %s\n", line);
                     disks++;
                 }
             }
@@ -2594,7 +2594,8 @@ static int ej_confirm(HWND owner, const EJREQ *q)
             char lines[1024];
             tr_copy(lines, text, sizeof(lines));
             tr_text_init(&t, text, sizeof(text));
-            tr_printf(&t, "This stops %s and everything on it: %s.\n\n"
+            /* One disk to a line: no full stop after a drive letter. */
+            tr_printf(&t, "This stops %s and everything on it:\n%s\n"
                           "These devices will stop:\n", q->UnitName, lines);
         } else {
             tr_printf(&t, "Stop %s?\n\nThese devices will stop:\n", q->Desc);
