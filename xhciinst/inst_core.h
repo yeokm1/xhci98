@@ -254,6 +254,17 @@ int inst_path_remove(const char *list, const char *dir, char *out,
 int inst_path_remove_prefix(const char *list, const char *prefix, char *out,
                             size_t cap);
 
+/* 1 when name is a local copy's directory name (record 23 section 4.4):
+ * eight hex digits, or the same with ".NEW" while it is built. */
+int inst_copy_name(const char *name);
+
+/* The list with every entry that is a local copy directly under root
+ * (root\<8 hex digits>, without case) removed; another entry under root is
+ * kept, so a directory the user chose is never taken out wholesale. 1
+ * removed, 0 none, -1 out too small. */
+int inst_path_remove_copies(const char *list, const char *root, char *out,
+                            size_t cap);
+
 /* The multi-string with every entry equal to name removed, the rest kept in
  * order. Returns the new length in bytes including the final NUL pair, or 0
  * when nothing is left; *removed says whether name was there. (size_t)-1
@@ -287,6 +298,8 @@ typedef struct _INST_VALUE {
     const char *Meaning;
     const char *Caution;    /* shown with the question and with /set, or NULL */
     INST_U32 CautionMask;   /* the values the caution is about (0: every one) */
+    const char *Choice[4];  /* what value n means, or NULL (owner, 2026-10-16:
+                               each choice on its own line with its meaning) */
 } INST_VALUE;
 
 /* FNV-1a over bytes, continuing from h (start with INST_FNV_START): the
@@ -328,6 +341,144 @@ int inst_value_set(const char *arg, int *index, INST_U32 *value);
 /* The allowed values of a mask as text ("0, 1, 2"). */
 void inst_mask_text(INST_U32 mask, char *out, size_t cap);
 
+/* ---- the console (owner, 2026-10-16) ------------------------------------------------- */
+
+/* Every line the tool prints is at most INST_COLUMNS wide: a line of 80
+ * wraps an extra blank line on the 98 and NT consoles. The tool's output
+ * goes through a streaming word wrap: a line too long is broken at its
+ * last space within the width, the rest indented under the line's text (a
+ * line that starts with "- ", "1. ", "[1] " or "NOTE: " hangs under what
+ * follows the marker; a first word followed by two spaces, as a choice's
+ * key is, hangs under the text after it; any other line two spaces in). A
+ * word longer than the room left is broken after its last backslash that
+ * fits, or at the width. Spaces at the end of what was fed are held back
+ * until a word follows or the text is flushed, so a wrap never leaves
+ * them dangling. */
+#define INST_COLUMNS        79
+
+typedef struct _INST_WRAP {
+    size_t Col;             /* the column the next character goes to     */
+    size_t Lead;            /* leading spaces of this logical line       */
+    size_t Cont;            /* the indent of its continuation lines      */
+    int InLead;             /* still reading the leading spaces          */
+    int Words;              /* words placed on this logical line         */
+    int Wrapped;            /* this logical line has wrapped             */
+    int Hung;               /* its hanging indent is set by a key        */
+    size_t Spaces;          /* spaces held before the next word          */
+    size_t WordLen;
+    char Word[INST_LINE_CHARS];
+    INST_U32 Wraps;         /* lines broken so far (a test's measure)    */
+    size_t MaxCol;          /* the widest line so far                    */
+} INST_WRAP;
+
+void inst_wrap_init(INST_WRAP *w);
+
+/* Text fed through the wrap: what is to be printed now is appended to out
+ * (NUL-terminated; cap counts the NUL, and what does not fit is dropped).
+ * Returns the length of out. */
+size_t inst_wrap_feed(INST_WRAP *w, const char *text, char *out, size_t cap);
+
+/* The word and spaces held back, printed: before input is read, and at the
+ * end. */
+size_t inst_wrap_flush(INST_WRAP *w, char *out, size_t cap);
+
+/* The line was ended by the user's Enter (the console echoes it): the next
+ * character starts a new line. */
+void inst_wrap_input(INST_WRAP *w);
+
+/* The whole text wrapped at once (a fresh wrap, flushed). */
+size_t inst_wrap_text(const char *text, char *out, size_t cap);
+
+/* The widest line of a text, in columns. */
+size_t inst_text_width(const char *text);
+
+/* ---- the questions (owner, 2026-10-16) ------------------------------------------------ */
+
+/* Every question lists its choices one per line, indented, each with its
+ * meaning, and its last line says what Enter gives: "Enter for [x]: ",
+ * where x is what Enter results in. */
+
+/* One device a value question is about: State 1 the value is set (Value),
+ * 0 not set (the install writes the INF's default), -1 a new install (the
+ * default). */
+typedef struct _INST_VNOW {
+    int State;
+    INST_U32 Value;
+    const char *Desc;
+} INST_VNOW;
+
+/* A registry value's question (record 23 section 8.3), wrapped, into out.
+ * mask: the values offered; def: the INF's default; cmNewNote: a new
+ * install of the Thunderbolt driver, so XhciCmMode and XhciCmApprove take
+ * the answer only from the restart; list: /list, so the last line says
+ * what Enter would give instead of asking. Enter keeps each device's value:
+ * returns 1 with *enter the value it gives when that is one value for
+ * every device, 0 when they differ ("each keeps its own"). */
+int inst_value_question(char *out, size_t cap, int index, INST_U32 mask,
+                        INST_U32 def, const INST_VNOW *now, int n,
+                        int cmNewNote, int list, INST_U32 *enter);
+
+/* A value's caution as shown: a "%s" in it names the values it is about
+ * that are among values (CautionMask & values), "1" or "1 or 3", so the
+ * note never speaks of a value the question does not offer. */
+void inst_caution_text(int index, INST_U32 values, char *out, size_t cap);
+
+/* A yes-or-no question: the question, a line each for Y and N with their
+ * meaning, and "Enter for [Y]: " or "Enter for [N]: ". */
+size_t inst_yesno_question(char *out, size_t cap, const char *question,
+                           const char *yes, const char *no, int defaultYes);
+
+/* The install directory's question (record 23 section 9.6): a line for
+ * each thing that goes there - toolName, the USB tree tool, when the
+ * package carries it; copyName, on 98 SE and ME the package copy the
+ * hardware wizards search - where they are now (NULL on a first install),
+ * the 98 SE and ME naming rule, and "Enter for [<def>]: " (or, with list,
+ * what Enter would give). */
+size_t inst_dir_question(char *out, size_t cap, const char *toolName,
+                         const char *copyName, const char *now,
+                         const char *def, int nt, int list);
+
+/* The install directory checked as text (record 23 section 9.6). path is
+ * what was typed or given with /to; on success out holds it in the form
+ * kept: surrounding quotes and spaces removed, '/' as '\', no trailing
+ * backslash. Refused: anything but "X:\name[\name...]"; a drive's root;
+ * the characters " * ? < > | ; and a control character, and ':' after the
+ * drive; a "." or ".." part, or a part ending in a space or a dot; longer
+ * than INST_DIR_CHARS; inside (or equal to) the Windows directory, unless
+ * it is exactly `allowed` (the directory an earlier install used, kept);
+ * inside (or equal to) the package directory pkgRoot; and on 98 SE and ME
+ * (nt 0) any part that is not an 8.3 name of letters, digits and _ - $ ~
+ * ! # & @ ^ ' ( ) { } - no spaces - because the hardware wizards' "Copy
+ * files from" and DevicePath take it as typed. Returns INST_DIR_OK or the
+ * reason, which inst_dir_reason words. */
+#define INST_DIR_CHARS      100
+#define INST_DIR_OK         0
+#define INST_DIR_FORM       1
+#define INST_DIR_ROOT       2
+#define INST_DIR_CHAR       3
+#define INST_DIR_PART       4
+#define INST_DIR_LONG       5
+#define INST_DIR_WINDOWS    6
+#define INST_DIR_PACKAGE    7
+#define INST_DIR_NAME83     8
+int inst_dir_check(const char *path, int nt, const char *windir,
+                   const char *pkgRoot, const char *allowed, char *out,
+                   size_t cap);
+const char *inst_dir_reason(int code);
+
+/* 1 when path is dir or lies inside it (without case; a whole part). */
+int inst_path_within(const char *path, const char *dir);
+
+/* The default install directory: the root of the drive the system is on
+ * (sysDrive "C:", or the Windows directory's drive) and XHCI98. */
+void inst_dir_default(const char *sysDrive, const char *windir, char *out,
+                      size_t cap);
+
+/* The registry record of the install directory (record 23 section 9.6). */
+#define INST_DIR_KEY        "Software\\xhci98"
+#define INST_DIR_VALUE      "InstallDir"
+#define INST_DIR_MOVEFROM   "MoveFrom"
+
 /* ---- switches and exit codes (record 23 section 7) ----------------------------------- */
 
 #define INST_MAX_SET        16
@@ -349,6 +500,7 @@ typedef struct _INST_OPTS {
     char EjectId[INST_ID_CHARS];  /* /eject id=...: the instance id     */
     char Dir[INST_NAME_CHARS];
     char Log[260];
+    char To[260];           /* /to <path>: the install directory, unasked */
     int SetCount;
     int SetIndex[INST_MAX_SET];
     INST_U32 SetValue[INST_MAX_SET];

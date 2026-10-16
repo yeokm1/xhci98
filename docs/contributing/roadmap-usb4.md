@@ -388,7 +388,7 @@ manager's query-and-remove for such a unit (administrators only; a
 standard user is told to re-plug once), and the release notes state the
 behaviour (record 21 section 7.4, records 24 and 25).
 
-- [ ] EJRB.1 the child filter after a stack rebuild (owner, 2026-10-15). A disable and enable of the device, or its driver installed or updated, rebuilds its stack from the registry with no `BusRelations` query, so the child filter that sets `Removable` (record 21 section 7.4) is not attached again and the device drops out of "Unplug or Eject Hardware" and "Safely Remove Hardware" until a re-plug. A kernel-only fix is not small: the filter would have to be registered on the child devnode as a device-specific `LowerFilters` value, in the Enum key the PnP manager owns, written through SetupAPI or CfgMgr32 from user mode (the device tool of design record 24 is the natural place), and keeping a filter attached across a non-surprise `IRP_MN_REMOVE_DEVICE` is not permitted. The writer needs administrator rights on 2000 and XP, so a privileged user-mode piece (a service, told of each new unit by the driver) rather than the unprivileged tray tool; a value left behind that names a filter no longer installed stops the device from starting (Code 39), so its removal on the device's departure, on uninstall and after a failed upgrade is part of the design; only the unit at the top of each tunnel port, never another PCI device. Design first (record 21 section 7.4 and record 24), with the removal of that value when the device leaves; legs on 2000, XP, Vista and 7, x64 included
+- [ ] EJRB.1 the child filter after a stack rebuild (owner, 2026-10-15). A disable and enable of the device, or its driver installed or updated, rebuilds its stack from the registry with no `BusRelations` query, so the child filter that sets `Removable` (record 21 section 7.4) is not attached again and the device drops out of "Unplug or Eject Hardware" and "Safely Remove Hardware" until a re-plug. A kernel-only fix is not small: the filter would have to be registered on the child devnode as a device-specific `LowerFilters` value, in the Enum key the PnP manager owns, written through SetupAPI or CfgMgr32 from user mode (the device tool of design record 24 is the natural place), and keeping a filter attached across a non-surprise `IRP_MN_REMOVE_DEVICE` is not permitted. The writer needs administrator rights on 2000 and XP, so a privileged user-mode piece (a service, told of each new unit by the driver) rather than the unprivileged tray tool; a value left behind that names a filter no longer installed stops the device from starting (Code 39), so its removal on the device's departure, on uninstall and after a failed upgrade is part of the design; only the unit at the top of each tunnel port, never another PCI device. Design first (record 21 section 7.4 and record 24), with the removal of that value when the device leaves; legs on 2000, XP, Vista and 7, x64 included. Read on 2026-10-16 (`runs/run-41.md`, "Bridges behind the tunnel port on NT"): the case of a bridge child that was never attached at all, the ACPI bus filter already on a new PCI-to-PCI bridge's PDO on XP and 7, is fixed in 3.0.0.0 by record 21 section 7.4 revision 2. The rebuild case of this task remains, and is now also read on a first plug: the first plug of a never-seen unit is not listed on 2000 or XP, because Windows installs the bridge's driver for the first time and rebuilds its stack. Windows 7 x86 listed it. The tool-side query-and-remove fallback covers it until then
 
 ## Planned - `nvme98` Interface 3 on Windows 98 SE and ME
 
@@ -527,3 +527,19 @@ router found tunnelled at the start is adopted without it, so the tool
 shows the dock unnamed until a re-plug. The dock works either way.
 
 - [ ] TB3NAME.1 the DROM read for an adopted or resumed Thunderbolt 3 router, outside the resume budget (deferred to the connection-manager thread once the resume is done); host cases on the fake fabric; legs on 98 SE and 7 x86 with the dock attached across a suspend and at power-on
+
+## Planned - A Tunnelled Function With No Interrupt on Windows 98 SE and ME
+
+Goal: a function behind a tunnel that Windows 98 SE or ME can give no
+IRQ still starts, so that a driver that polls (Stor98's planned polling
+mode) can run it.
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 by
+the owner, after the hot-plug fix of 9x bridges (record 21 section 6,
+`XhciCmBridgeNumbering`) read on the owner's ThinkPad P14s Gen 1: there
+the IRQ the firmware routes is provable and set, but on a machine whose
+routing gives no provable IRQ for the tunnel's root port, or for a
+function with no interrupt pin (MSI only, which 9x cannot use), Windows
+98 disables the function (Code 29) before its driver loads.
+
+- [ ] NOIRQ.1 a design record: how a 9x function with an interrupt pin and no routable IRQ can be started without one (its logical configuration, CONFIGMG, what PCI.VXD requires), with only documented means; the pairing with Stor98's polling mode (Stor98 `docs/PLAN.md`); legs on 98 SE and ME with the IRQ withheld

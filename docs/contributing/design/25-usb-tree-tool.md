@@ -1,10 +1,11 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 7, 2026-10-16. Revision 7 adds Safely Remove for plain USB
+Status: revision 8, 2026-10-16. Revision 7 adds Safely Remove for plain USB
 devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
 decision T6; sections 1.3, 3.1, 7.1, 7.3, 11, 12 and 14 change with it.
 Revision 6 was reviewed and revised five times the night before; the code
-is written against both. Written for the owner's instructions of
+is written against both. Revision 8, the same day, adds the install
+directory (see below). Written for the owner's instructions of
 2026-10-16: the command-line `INSTALL /devices` and `INSTALL /eject` of
 design record 24 are not easy to use, so a separate graphical tool shows
 every USB and Thunderbolt 3 / USB4 controller and device with its details,
@@ -13,6 +14,14 @@ sits in the notification area. It ships in `3.0.0.0`, which the owner held
 for it, as roadmap Phase 41 (`roadmap-usb4.md`). Section 12 lists the
 decisions taken in writing it, each an orchestrator decision for the owner
 to confirm unless it names the owner; section 13 what is open.
+
+Revision 8, 2026-10-16 (the owner, after running the installer on a real
+machine): XHCIINST installs the tool in an install directory the user
+names, `C:\XHCI98` on the system's drive by default, instead of
+`%windir%\XHCI98\` (record 23 section 9.6); sections 2 and 8 follow. On
+98 SE and ME the package's drivers share that directory with it, named
+by XHCIINST's lists, which never name the tool. The tool names no
+directory of its own, so nothing in it changes.
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
@@ -96,7 +105,9 @@ authentication material.
 - Driver: `src\cm\cm_query.h` (the answer's layout), `cm_query.c` (pure
   builder), `cm_qryos.c` (the query device).
 - Package: `tools\xhcitr\XHCITR.EXE`, `XHCITR64.EXE`, `readme.txt`.
-- Installed copy: `%windir%\XHCI98\XHCITR.EXE` (or `XHCITR64.EXE`),
+- Installed copy: `<install directory>\XHCITR.EXE` (or `XHCITR64.EXE`;
+  the install directory is record 23 section 9.6's, `C:\XHCI98` by
+  default, `%windir%\XHCI98\` before revision 8),
   started at login from
   `HKLM\Software\Microsoft\Windows\CurrentVersion\Run`, value
   `xHCI98 USB Tree`, data `"<path>" /tray` (section 8).
@@ -620,7 +631,8 @@ Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
 
 - XHCIINST owns the tool's file (and its `.TMP`, `.BAK` and `.DEL`
   forms) and the Run value, outside the per-package `XHCIINST.LST` lists;
-  its removal of `%windir%\XHCI98\` counts them as its own. Nothing is
+  its removal of the install directory (record 23 section 9.6) counts
+  them as its own. Nothing is
   ever left pending for a restart on 98 SE or ME, and XHCIINST never
   edits `WININIT.INI`.
 - **One at a time.** XHCIINST holds a machine-wide maintenance mutex
@@ -633,7 +645,7 @@ Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
   the run stops before any version is compared ("steps left"). A `.BAK`
   beside a tool is deleted.
 - **Copy.** On an install or upgrade run, the tool for the machine's
-  architecture goes to `%windir%\XHCI98\XHCITR.EXE` (`XHCITR64.EXE` on
+  architecture goes to `<install directory>\XHCITR.EXE` (`XHCITR64.EXE` on
   x64) when the file is missing or the package's file version is newer
   than the installed file's; otherwise it is left alone. The new file is
   first copied to `.TMP` and compared with the package's; then NT

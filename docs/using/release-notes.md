@@ -207,10 +207,10 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
 - **Device Manager names by generation**: "Thunderbolt and USB4 in Device
   Manager", below.
 - **A link-state channel for Stor98**: on Windows 2000 to 7,
-  `xhcicm.sys` tells the NVMe driver Stor98 when an NVMe drive's tunnel
-  comes up, and under the USB4 connection manager when its link has gone
-  down. On 98 SE and ME this release has no channel ("NVMe drives behind
-  a tunnel").
+  `xhcicm.sys` publishes the channel of Stor98's interface 4. Stor98
+  `0.3.0.1` does not read it yet and detects a removed drive by itself;
+  nothing waits for it. On 98 SE and ME this release has no channel
+  ("NVMe drives behind a tunnel").
 - **Stor98 in the download**: the package carries a release of Stor98,
   the NVMe driver for Windows 98 SE to 7, as its own project released
   it (which release: "NVMe drives behind Thunderbolt or USB4", under
@@ -298,7 +298,11 @@ and works: `xhcicm.sys` never resets a tunnel it finds at its start
 ### The xHCI98 USB Tree
 
 `XHCITR.EXE` (`XHCITR64.EXE` on XP x64, Vista x64 and 7 x64) is installed
-by `INSTALL.BAT` in `%windir%\XHCI98\` and started at login as an icon in
+by `INSTALL.BAT` in the install directory it asks for (`C:\XHCI98` on
+the system's drive unless another is chosen, or given with `INSTALL /to
+<path>`; an update keeps the directory an earlier install used, test
+builds' `%windir%\XHCI98\` included, unless another is chosen, when the
+tool moves it) and started at login as an icon in
 the notification area (`INSTALL /notray` leaves the icon out). It runs as
 the logged-on user, with no administrator rights.
 
@@ -406,19 +410,14 @@ Thunderbolt or USB4", under "Installing"); read them before installing
 it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the
 drive.
 
-On Windows 2000 to 7 the two talk over a link-state channel, Stor98's
-interface 4, the kernel callback object `\Callback\Stor98LinkState`:
+On Windows 2000 to 7, `xhcicm.sys` publishes the link-state channel of
+Stor98's interface 4, the kernel callback object
+`\Callback\Stor98LinkState`, and states on it which NVMe function is
+behind a tunnel when the tunnel comes up. Stor98 `0.3.0.1` does not
+read the channel yet:
 
-- When a tunnel comes up, `xhcicm.sys` tells Stor98 which NVMe function
-  is behind it, before Windows finds the function.
-- Under the USB4 connection manager, after an unplug, once the path is
-  proven closed and the drive's reset is done, it tells Stor98 the link
-  is down and waits up to 5 seconds for its acknowledgement before
-  Windows removes the drive, so Stor98 ends outstanding requests at once
-  instead of at its own timeout. In this release that statement is made
-  only on the emulator's tunnel ports; on real hardware it is withheld
-  until Stor98 has qualified it, and Stor98 ends a vanished drive's
-  requests at its own deadline instead.
+- no statement is read or acknowledged, and nothing waits for one;
+- Stor98 detects a removed drive by itself, at its own deadline (about 5 seconds).
 
 On Windows 98 SE and ME, `xhcicm.sys` in this release publishes no
 channel, so Stor98 runs there without it:
@@ -1250,7 +1249,10 @@ ME; run it as an administrator on Windows 2000 and XP; on Vista and 7
 right-click it and choose Run as administrator.
 
 It shows the devices it found and what it will do with each, asks about a
-few of the driver's options (below), asks once (`Y`), and then:
+few of the driver's options (below), each choice on its own line and
+"Enter for [x]" saying what Enter keeps, asks for the install directory of
+its tools (`C:\XHCI98` unless another is chosen, or `INSTALL /to <path>`),
+asks once (`Y`, or Enter), and then:
 
 - **Windows 2000, XP, XP x64, Vista and 7**: it installs or updates every
   driver of the package on the devices present, with the routine Windows
@@ -1285,12 +1287,14 @@ few of the driver's options (below), asks once (`Y`), and then:
   Windows 98 SE and ME never see it, and Vista and 7 accept it only with
   its driver file beside it.
 - **Windows 98 SE and ME**: the tool stages the files and you finish the
-  installation in Device Manager. It copies the package to that same
-  folder, adds the folder to
-  `DevicePath`, the list of places Windows' hardware wizards search, and
-  prints the Device Manager clicks that remain for each device, with the
-  folder to type if a wizard does not find the driver by itself. Run it
-  again after the restart to see the result and set the options.
+  installation in Device Manager. It copies the package's drivers into
+  the install directory itself (`C:\XHCI98` by default; on these systems
+  a path of short names with no spaces), adds that folder to
+  `DevicePath`, the list of places Windows' hardware wizards search,
+  prints the Device Manager steps that remain for each device as a short
+  numbered list with the folder to type, and offers to open Device
+  Manager. Run it again after the restart to see the result and set the
+  options.
 
 It never runs `XHCICLN`. At the end, if an update from `2.3.x` or earlier
 left old `XHCI98\` entries, it says so in one line: nothing needs them
