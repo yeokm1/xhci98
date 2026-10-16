@@ -389,51 +389,51 @@ static ULONG brBarSize(BRNUM_CTX *c, ULONG bdf, ULONG off, ULONG was,
 /*
  * The memory BARs at offsets 10h up to `last` of the function at `bdf`,
  * added to *need with the largest in *align. I/O BARs are not counted (no
- * I/O window is opened). 0, or a refusal.
+ * I/O window is opened). A function with Memory Space on is refused
+ * (decoding: sizing would move it), but for a bridge (offsets up to 14h)
+ * whose every BAR is empty, as a stop by Windows may leave one: its
+ * decode is paused for the sizing and turned on again only once every
+ * BAR read back as it was. 0, or a refusal.
  */
 static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
                     PULONG align)
 {
     ULONG off;
     ULONG was;
+    ULONG hi;
     ULONG size;
     ULONG cmd;
     ULONG rc;
+    ULONG paused;
+    ULONG undo;
 
     if (!brRead(c->Io, bdf, XHCI_TBT_CFG_COMMAND, &cmd)) {
         c->R->WinWhere = bdf;
         return XHCI_TBT_BRWIN_ACCESS;
     }
-    if ((cmd & BRWIN_CMD_MEM) != 0 && last != 0x14UL) {
-        /* Decoding already: someone configured it; sizing would move it. */
-        c->R->WinWhere = bdf;
-        return XHCI_TBT_BRWIN_ACTIVE;
-    }
-    for (off = 0x10UL; off <= last; off += 4) {
-        if (!brGo(c)) {
+    paused = 0;
+    if ((cmd & BRWIN_CMD_MEM) != 0) {
+        if (last != 0x14UL) {
             c->R->WinWhere = bdf;
-            return XHCI_TBT_BRWIN_STALE;
+            return XHCI_TBT_BRWIN_ACTIVE;
         }
-        if (!brRead(c->Io, bdf, off, &was)) {
-            c->R->WinWhere = bdf;
-            return XHCI_TBT_BRWIN_ACCESS;
-        }
-        if ((was & 1UL) != 0) {
-            continue;
-        }
-        if ((cmd & BRWIN_CMD_MEM) != 0) {
-            /* A bridge (offsets up to 14h) with Memory Space on, as a stop
-             * by Windows may leave it: a BAR holding an address is in use
-             * and refuses the windows; an empty one is sized with the
-             * bridge's memory decode paused, the command put back after. */
-            ULONG hi;
-
+        /* Every BAR read first, nothing written: one holding an address
+         * (either half of a 64-bit one) is in use. */
+        for (off = 0x10UL; off <= last; off += 4) {
+            if (!brRead(c->Io, bdf, off, &was)) {
+                c->R->WinWhere = bdf;
+                return XHCI_TBT_BRWIN_ACCESS;
+            }
+            if ((was & 1UL) != 0) {
+                continue;
+            }
             if ((was & 0xFFFFFFF0UL) != 0) {
                 c->R->WinWhere = bdf;
                 return XHCI_TBT_BRWIN_ACTIVE;
             }
             if (((was >> 1) & 3UL) == 2UL) {
-                if (off + 4 > last || !brRead(c->Io, bdf, off + 4, &hi)) {
+                off += 4;
+                if (off > last || !brRead(c->Io, bdf, off, &hi)) {
                     c->R->WinWhere = bdf;
                     return XHCI_TBT_BRWIN_ACCESS;
                 }
@@ -442,31 +442,47 @@ static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
                     return XHCI_TBT_BRWIN_ACTIVE;
                 }
             }
-            if (!brPut(c, bdf, XHCI_TBT_CFG_COMMAND,
-                       (cmd & 0xFFFFUL) & ~BRWIN_CMD_MEM, BRWIN_CMD_MEM)) {
-                (VOID)brPut(c, bdf, XHCI_TBT_CFG_COMMAND, cmd & 0xFFFFUL, 0);
-                c->R->WinWhere = bdf;
-                return XHCI_TBT_BRWIN_ACCESS;
-            }
-            rc = brBarSize(c, bdf, off, was, &size);
+        }
+        if (!brGo(c)) {
+            c->R->WinWhere = bdf;
+            return XHCI_TBT_BRWIN_STALE;
+        }
+        if (!brPut(c, bdf, XHCI_TBT_CFG_COMMAND,
+                   (cmd & 0xFFFFUL) & ~BRWIN_CMD_MEM, BRWIN_CMD_MEM)) {
             if (!brPut(c, bdf, XHCI_TBT_CFG_COMMAND, cmd & 0xFFFFUL,
                        BRWIN_CMD_MEM)) {
                 c->R->UndoFailed++;
-                if (rc == 0) {
-                    c->R->WinWhere = bdf;
-                    rc = XHCI_TBT_BRWIN_ACCESS;
-                }
             }
-        } else {
-            rc = brBarSize(c, bdf, off, was, &size);
+            c->R->WinWhere = bdf;
+            return XHCI_TBT_BRWIN_ACCESS;
         }
+        paused = 1;
+    }
+    undo = c->R->UndoFailed;
+    rc = 0;
+    for (off = 0x10UL; off <= last && rc == 0; off += 4) {
+        if (!brGo(c)) {
+            c->R->WinWhere = bdf;
+            rc = XHCI_TBT_BRWIN_STALE;
+            break;
+        }
+        if (!brRead(c->Io, bdf, off, &was)) {
+            c->R->WinWhere = bdf;
+            rc = XHCI_TBT_BRWIN_ACCESS;
+            break;
+        }
+        if ((was & 1UL) != 0) {
+            continue;
+        }
+        rc = brBarSize(c, bdf, off, was, &size);
         if (rc != 0) {
-            return rc;
+            break;
         }
         if (size != 0) {
             if (!brAdd(need, size)) {
                 c->R->WinWhere = bdf;
-                return XHCI_TBT_BRWIN_NO_ROOM;
+                rc = XHCI_TBT_BRWIN_NO_ROOM;
+                break;
             }
             if (size > *align) {
                 *align = size;
@@ -477,7 +493,23 @@ static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
             off += 4;
         }
     }
-    return 0;
+    if (paused) {
+        if (c->R->UndoFailed != undo) {
+            /* A BAR not put back: its decode stays off. */
+            if (rc == 0) {
+                c->R->WinWhere = bdf;
+                rc = XHCI_TBT_BRWIN_ACCESS;
+            }
+        } else if (!brPut(c, bdf, XHCI_TBT_CFG_COMMAND, cmd & 0xFFFFUL,
+                          BRWIN_CMD_MEM)) {
+            c->R->UndoFailed++;
+            if (rc == 0) {
+                c->R->WinWhere = bdf;
+                rc = XHCI_TBT_BRWIN_ACCESS;
+            }
+        }
+    }
+    return rc;
 }
 
 /*

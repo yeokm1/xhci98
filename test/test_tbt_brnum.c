@@ -1464,6 +1464,33 @@ static VOID test_reopen(VOID)
     CHECK_EQ(m.N[dsp].Cmd, 0x0006UL, "its command as it was");
     CHECK_EQ(m.N[dsp].Bar[0], 0, "its BAR put back empty");
 
+    /* Memory Space on, BAR0 empty but BAR1 holding an address: in use;
+     * read only, nothing written. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Cmd = 0x0006UL;
+    m.N[usp].BarSize[0] = 0x1000UL;
+    m.N[usp].BarSize[1] = 0x1000UL;
+    m.N[usp].Bar[1] = 0xE0200000UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "journalled");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_ACTIVE, "BAR1 in use refuses");
+    CHECK_EQ(m.Writes, 0, "nothing written, its decode never paused");
+
+    /* The BAR's restore write failing while decode is paused: the decode
+     * stays off, the failure counted. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Cmd = 0x0006UL;
+    m.N[usp].BarSize[0] = 0x1000UL;
+    m.FailWriteBdf = XHCI_TBT_BDF(0x06, 0, 0);
+    m.FailWriteOff = 0x10UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "journalled");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_ACCESS, "the sizing failed");
+    CHECK_EQ(m.N[usp].Cmd & 0x2UL, 0, "its memory decode left off");
+    CHECK_EQ(r.UndoFailed >= 1, 1, "the failure counted");
+    m.FailWriteBdf = XHCI_TBT_NO_BDF;
+
     /* Two bridges of one bus with disjoint ranges in reverse order: fine. */
     {
         ULONG b1, b2, e1, e2;
