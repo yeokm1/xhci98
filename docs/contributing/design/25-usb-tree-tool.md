@@ -1,6 +1,6 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 9, 2026-10-16. Revision 9 adds a per-user "Start at
+Status: revision 10, 2026-10-16. Revision 10 adds a per-user "Start at
 login" choice (section 7.4, the owner's request of 2026-10-16).
 Revision 7 adds Safely Remove for plain USB
 devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
@@ -629,7 +629,7 @@ writes the Save Report text and exits (for scripts and bug reports).
 Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
 `/eject id=` names a unit or a USB device (section 6.5).
 
-### 7.4 Start at login, per user (revision 9)
+### 7.4 Start at login, per user (revision 10)
 
 - The machine's start is the Run value of section 8, written by XHCIINST
   and removed by `INSTALL /notray`; that is machine-wide and needs an

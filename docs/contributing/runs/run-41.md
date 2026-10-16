@@ -476,7 +476,7 @@ whose HID install asks for the Windows CD; the guests have none, and the
 files were skipped. The cosmetic wrap of the question's drivers line seen
 on these legs was shortened afterwards (one line), with no other change.
 
-### Start at login, per user (record 25 revision 9)
+### Start at login, per user (record 25 revision 10)
 
 Read on the tool of `33f66b09`, on 98 SE and on 7 x86 as the standard
 user, the tool in place of the installed one:
