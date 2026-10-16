@@ -464,3 +464,20 @@ owner on 2026-10-16, after the `3.0.0.0` cut.
 Status: not opened, unnumbered and unversioned.
 
 - [ ] SIGN.1 `build-driver.cmd` records the gated binaries' hashes; `make-package.ps1 -SignOnly` checks them, runs the staged INF gate and signs; `test-package.ps1` covers a mismatched hash
+
+## Planned - Stor98, the Renamed NVMe Driver
+
+Goal: the NVMe driver project nvme98 becomes Stor98 (`stor98`, a new
+repository) before its first public release, `0.3.0.0`, with interface 3.
+`3.0.0.0` bundles no NVMe driver (owner, 2026-10-16). Once Stor98
+`0.3.0.0` and its change list (`RENAME-STOR98.md`) arrive: the link-state
+channel's names and signatures in `xhcicm.sys` (the NT callback, the 9x
+locator and dynamic key, the interface header and its version), the
+release scripts' bundling inputs and layout, the installer's skip of the
+bundled driver, the README and release notes, then the NVMe legs with
+Stor98's receiver, a re-signed x64 package and a release that bundles it.
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] STOR.1 the rename in `xhcicm.sys`, the scripts, the installer and the docs, from the change list; interface 3 as adopted
+- [ ] STOR.2 bundle Stor98 `0.3.0.0`; NVMe legs (link up and down, the 9x clean-eject handshake, ME write-through); the release
