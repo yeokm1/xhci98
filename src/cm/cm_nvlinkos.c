@@ -1,8 +1,8 @@
 /*
  * cm_nvlinkos.c - the driver half of the stor98 link-state channel
  * (cm_nvlink.h; roadmap-usb4.md tasks 39-A.7 and 40-A.7): the table's one
- * allocation, the NT callback object, the channel left unoffered on
- * Windows 98 SE and ME, and the seam's calls, over cm_nvlink.c's pure entry protocol.
+ * allocation, the NT callback object, the Windows 98 SE and ME registry
+ * record, and the seam's calls, over cm_nvlink.c's pure entry protocol.
  *
  * ONE TABLE PER BOOT. CmNvlinkInit allocates it (CmAlloc, so in
  * cm_pool.c's one pool site) and nothing ever frees it. A reload of this
@@ -20,15 +20,25 @@
  * (which domain marked an entry, on which bridge, when). stor98 reads
  * without the lock, by the entry's sequence (cm_nvlink.c).
  *
- * WINDOWS 98 SE AND ME. No callback object, and in this build no
- * rendezvous at all: interface 3's locator is accepted only beside a
- * current-boot proof this driver would have to host (cm_nvlink.h), and
- * neither is published (CmNvlinkOffered; roadmap-usb4.md NV9X.1). The
- * table is still allocated; no 9x exposure publishes into it.
+ * WINDOWS 98 SE AND ME. No callback object: the rendezvous is interface 3's
+ * proof key under HKEY_DYN_DATA and locator under HKEY_LOCAL_MACHINE
+ * (cm_nvlink.h), made through the VMM's registry services (_RegOpenKey
+ * 148h, _RegCloseKey 149h, _RegCreateKey 14Ah, _RegDeleteKey 14Bh,
+ * _RegSetValueEx 152h, _RegCreateDynKey 176h: their places in the Windows
+ * 98 DDK's VMM.H service table, counted from Get_VMM_Version, service 0,
+ * and checked against VMM.INC; the provider and value structures are
+ * VMMREG.H's) reached by the same INT 20h dynalink cm_cfgmg.c uses for
+ * CONFIGMG, from the NHI's thread, a passive thread of the system VM. The
+ * proof key's query handler runs from this image whenever the key is read,
+ * so the image is resident (no DriverUnload on 98 SE and ME, from
+ * DriverEntry, R4) before the key is made; were it ever unloaded, the
+ * unload would delete the key first. x86 only.
  *
  * IRQL: as cm_nvlink.h; the callback at the caller's IRQL (stor98 calls
  * it at PASSIVE_LEVEL from HwFindAdapter), touching nothing but an
- * interlocked count and the reply.
+ * interlocked count and the reply. The proof key's query handler at the
+ * VMM's registry caller's level, touching only this file's proof values
+ * and the caller's buffers.
  */
 
 #include "cm.h"
@@ -58,10 +68,14 @@ static PCALLBACK_OBJECT cmNvObject;
 static PVOID cmNvRegistration;
 static ULONG cmNvReloaded;      /* NT: an earlier load made the object    */
 static LONG cmNvQueries;
-static ULONG cmNvRecord;        /* 9x: the locator was written (never, in
-                                   this build: CmNvlinkOffered)          */
-static ULONG cmNvRecordTried;   /* 9x: 0 not yet asked, 2 asked          */
+static ULONG cmNvRecord;        /* 9x: the record was written            */
+static ULONG cmNvRecordTried;   /* 0 not yet, 1 being written, 2 done    */
+static ULONG cmNvRecordError;
 static ULONG cmNvRemoveSeq;
+static LONG cmNvQueriesLogged;  /* 9x: the proof reads last logged       */
+#if defined(_X86_)
+static VOID cmNvDeleteProof(VOID);
+#endif
 
 /* Each domain's latest connection generation per host USB4 port, from the
  * UP hook: the presence sample is offered to the core under it. */
@@ -90,6 +104,7 @@ static ULONG cmNvSent;
 static ULONG cmNvWithheld;
 static ULONG cmNvAcked;
 static ULONG cmNvAckTimeouts;
+static ULONG cmNvAckLate;       /* of those, an answer first seen late    */
 static ULONG cmNvNoReceiver;
 
 /* ====================================================================== */
@@ -378,33 +393,311 @@ VOID CmNvlinkUnload(VOID)
         ObDereferenceObject(cmNvObject);
         cmNvObject = NULL;
     }
+#if defined(_X86_)
+    /* 9x: the proof goes before the image that answers it (interface 3,
+     * R4); the table stays, and receivers holding it get no further
+     * statement. */
+    cmNvDeleteProof();
+#endif
 }
 
-/* 9x: the channel is not offered (CmNvlinkOffered: interface 3's proof
- * and locator are not published by this build), so no exposure there
- * publishes an UP, nothing is waited for and no removal request is made;
- * logged once. NT: always ready. */
+#if defined(_X86_)
+
+#define CM_NV_VMM_ID            0x0001  /* VMM.H, VMM_DEVICE_ID          */
+#define CM_NV_SVC_OPEN_KEY      0x0148  /* _RegOpenKey                   */
+#define CM_NV_SVC_CLOSE_KEY     0x0149  /* _RegCloseKey                  */
+#define CM_NV_SVC_CREATE_KEY    0x014A  /* _RegCreateKey                 */
+#define CM_NV_SVC_DELETE_KEY    0x014B  /* _RegDeleteKey                 */
+#define CM_NV_SVC_SET_VALUE     0x0152  /* _RegSetValueEx                */
+#define CM_NV_SVC_CREATE_DYN    0x0176  /* _RegCreateDynKey              */
+#define CM_NV_HKEY_LOCAL_MACHINE 0x80000002UL
+#define CM_NV_HKEY_DYN_DATA     0x80000006UL /* VMMREG.H                 */
+#define CM_NV_REG_BINARY        3UL
+#define CM_NV_REG_DWORD         4UL
+#define CM_NV_PROVIDER_KEEPS_VALUE_LENGTH 1UL
+/* cmNvWriteRecord's own errors, beside the VMM's registry codes. */
+#define CM_NV_ERR_NO_THUNK      0xFFFFFFFFUL
+
+/* VMMREG.H's struct pvalue and struct provider_info (the Windows 98 DDK). */
+typedef ULONG (__cdecl *CM_NV_QUERY)(PVOID keyContext, CM_NV_VALCTX *vc,
+                                     ULONG n, PVOID data, PULONG cb,
+                                     ULONG reserved);
+
+typedef struct _CM_NV_PVALUE {
+    char *pv_valuename;
+    ULONG pv_valuelen;
+    PVOID pv_value_context;
+    ULONG pv_type;
+} CM_NV_PVALUE;
+
+typedef struct _CM_NV_PROVIDER {
+    CM_NV_QUERY pi_R0_1val;
+    CM_NV_QUERY pi_R0_allvals;
+    CM_NV_QUERY pi_R3_1val;
+    CM_NV_QUERY pi_R3_allvals;
+    ULONG pi_flags;
+} CM_NV_PROVIDER;
+
+/* The proof's values, answered from here for as long as the image is
+ * loaded; written once, before the key exists, and never changed. */
+static char cmNvProofKey[] = STOR98LS9X_PROOF_KEY;
+static char cmNvProofCookieName[] = STOR98LS9X_PROOF_VALUE;
+static char cmNvProofTableName[] = STOR98LS9X_PROOF_TABLE_VALUE;
+static ULONG cmNvProofCookie;
+static STOR98LS9X_PROOF_TABLE cmNvProofTable;
+static CM_NV_PVALUE cmNvProofValues[2];
+static CM_NV_PROVIDER cmNvProvider;
+static ULONG cmNvProofMade;     /* the dynamic key was created           */
+/* Its handle, open for as long as the key is to be answered: closing it
+ * leaves the key's name with no values and no provider (98 SE, run-41),
+ * so it is closed only at an unload, before the key is deleted. */
+static ULONG cmNvProofHkey;
+
+typedef ULONG (__cdecl *CM_NV_FN1)(ULONG a);
+typedef ULONG (__cdecl *CM_NV_FN2)(ULONG a, ULONG b);
+typedef ULONG (__cdecl *CM_NV_FN3)(ULONG a, ULONG b, ULONG c);
+typedef ULONG (__cdecl *CM_NV_FN6)(ULONG a, ULONG b, ULONG c, ULONG d,
+                                   ULONG e, ULONG f);
+
+static VOID cmNvThunk(PUCHAR t, ULONG service)
+{
+    t[0] = 0xCD;
+    t[1] = CMG_DYNALINK_INT;
+    t[2] = (UCHAR)(service & 0xFFUL);
+    t[3] = (UCHAR)(((service | CMG_DYNALINK_JMP) >> 8) & 0xFFUL);
+    t[4] = (UCHAR)(CM_NV_VMM_ID & 0xFF);
+    t[5] = (UCHAR)((CM_NV_VMM_ID >> 8) & 0xFF);
+    t[6] = 0xCC;
+    t[7] = 0xCC;
+}
+
+/* The proof key's query handler, all four slots (R3a). */
+static ULONG __cdecl cmNvProofQuery(PVOID keyContext, CM_NV_VALCTX *vc,
+                                    ULONG n, PVOID data, PULONG cb,
+                                    ULONG reserved)
+{
+    UNREFERENCED_PARAMETER(keyContext);
+    UNREFERENCED_PARAMETER(reserved);
+    /* A reader of the proof: stor98 reads it once per load, in
+     * HwFindAdapter, before it can answer anything (cmNvReceiver). */
+    InterlockedIncrement(&cmNvQueries);
+    return CmNvlinkProofQuery(vc, n, (PUCHAR)data, cb, &cmNvProofCookie,
+                              &cmNvProofTable);
+}
+
+/* CmNvlinkPublish9x's steps over the VMM's registry services. */
+typedef struct _CM_NV_PUBCTX {
+    PUCHAR Thunks;      /* five, at the CM_NV_T_* offsets               */
+    ULONG Cookie;
+} CM_NV_PUBCTX;
+
+#define CM_NV_T_CREATE_KEY  0
+#define CM_NV_T_SET_VALUE   8
+#define CM_NV_T_CLOSE_KEY   16
+#define CM_NV_T_OPEN_KEY    24
+#define CM_NV_T_CREATE_DYN  32
+
+/* R4's residency, set in DriverEntry on 98 SE and ME (cm_entry.c): no
+ * DriverUnload, so the image that answers the proof and writes the table
+ * stays loaded for the boot whatever its PnP devices do. */
+static BOOLEAN cmNvPubResident(PVOID context)
+{
+    UNREFERENCED_PARAMETER(context);
+    return (BOOLEAN)(CmDriverObject != NULL &&
+                     CmDriverObject->DriverUnload == NULL);
+}
+
+static ULONG cmNvPubOpenProof(PVOID context)
+{
+    CM_NV_PUBCTX *c;
+    ULONG hkey;
+    ULONG error;
+
+    c = (CM_NV_PUBCTX *)context;
+    hkey = 0;
+    error = ((CM_NV_FN3)(c->Thunks + CM_NV_T_OPEN_KEY))(
+        CM_NV_HKEY_DYN_DATA, (ULONG)(ULONG_PTR)cmNvProofKey,
+        (ULONG)(ULONG_PTR)&hkey);
+    if (error == 0) {
+        (VOID)((CM_NV_FN1)(c->Thunks + CM_NV_T_CLOSE_KEY))(hkey);
+    }
+    return error;
+}
+
+static ULONG cmNvPubCreateProof(PVOID context)
+{
+    CM_NV_PUBCTX *c;
+    ULONG hkey;
+    ULONG error;
+
+    c = (CM_NV_PUBCTX *)context;
+    cmNvProofCookie = c->Cookie;
+    cmNvProofTable.TableLinear = (ULONG)(ULONG_PTR)cmNvTable;
+    cmNvProofTable.TableSize = sizeof(STOR98LS_TABLE);
+    cmNvProofTable.Cookie = c->Cookie;
+    cmNvProofValues[0].pv_valuename = cmNvProofCookieName;
+    cmNvProofValues[0].pv_valuelen = sizeof(ULONG);
+    cmNvProofValues[0].pv_value_context = &cmNvProofCookie;
+    cmNvProofValues[0].pv_type = CM_NV_REG_DWORD;
+    cmNvProofValues[1].pv_valuename = cmNvProofTableName;
+    cmNvProofValues[1].pv_valuelen = CM_NVLINK_PROOF_BYTES;
+    cmNvProofValues[1].pv_value_context = &cmNvProofTable;
+    cmNvProofValues[1].pv_type = CM_NV_REG_BINARY;
+    cmNvProvider.pi_R0_1val = cmNvProofQuery;
+    cmNvProvider.pi_R0_allvals = cmNvProofQuery;
+    cmNvProvider.pi_R3_1val = cmNvProofQuery;
+    cmNvProvider.pi_R3_allvals = cmNvProofQuery;
+    cmNvProvider.pi_flags = CM_NV_PROVIDER_KEEPS_VALUE_LENGTH;
+    hkey = 0;
+    error = ((CM_NV_FN6)(c->Thunks + CM_NV_T_CREATE_DYN))(
+        (ULONG)(ULONG_PTR)cmNvProofKey, 0, (ULONG)(ULONG_PTR)&cmNvProvider,
+        (ULONG)(ULONG_PTR)cmNvProofValues, 2, (ULONG)(ULONG_PTR)&hkey);
+    if (error != 0) {
+        return error;
+    }
+    cmNvProofMade = 1;
+    cmNvProofHkey = hkey;
+    return 0;
+}
+
+static ULONG cmNvPubWriteLocator(PVOID context)
+{
+    static char key[] = CM_NVLINK_REC_KEY;
+    static char value[] = CM_NVLINK_REC_VALUE;
+    UCHAR record[CM_NVLINK_RECORD_BYTES];
+    CM_NV_PUBCTX *c;
+    ULONG hkey;
+    ULONG error;
+
+    c = (CM_NV_PUBCTX *)context;
+    CmNvlinkRecordEncode(record, (ULONG)(ULONG_PTR)cmNvTable,
+                         sizeof(STOR98LS_TABLE), c->Cookie);
+    hkey = 0;
+    error = ((CM_NV_FN3)(c->Thunks + CM_NV_T_CREATE_KEY))(
+        CM_NV_HKEY_LOCAL_MACHINE, (ULONG)(ULONG_PTR)key,
+        (ULONG)(ULONG_PTR)&hkey);
+    if (error == 0) {
+        error = ((CM_NV_FN6)(c->Thunks + CM_NV_T_SET_VALUE))(
+            hkey, (ULONG)(ULONG_PTR)value, 0, CM_NV_REG_BINARY,
+            (ULONG)(ULONG_PTR)record, CM_NVLINK_RECORD_BYTES);
+        (VOID)((CM_NV_FN1)(c->Thunks + CM_NV_T_CLOSE_KEY))(hkey);
+    }
+    return error;
+}
+
+/*
+ * Interface 3's publication, once per load (R3, R4): the table's Cookie,
+ * then CmNvlinkPublish9x - residency, the proof key opened first (refused
+ * when it exists: another publisher's), the proof created, the locator.
+ * Returns 0 when published, else CM_NVLINK_PUB_* << 16 | the failed
+ * step's code's low 16 bits, or CM_NV_ERR_NO_THUNK.
+ */
+static ULONG cmNvWriteRecord(ULONG clock)
+{
+    CM_NV_PUBCTX c;
+    CM_NV_PUB9X ops;
+    ULONG step;
+    ULONG error;
+
+    c.Thunks = (PUCHAR)CmAlloc(5 * 8);
+    if (c.Thunks == NULL) {
+        return CM_NV_ERR_NO_THUNK;
+    }
+    cmNvThunk(c.Thunks + CM_NV_T_CREATE_KEY, CM_NV_SVC_CREATE_KEY);
+    cmNvThunk(c.Thunks + CM_NV_T_SET_VALUE, CM_NV_SVC_SET_VALUE);
+    cmNvThunk(c.Thunks + CM_NV_T_CLOSE_KEY, CM_NV_SVC_CLOSE_KEY);
+    cmNvThunk(c.Thunks + CM_NV_T_OPEN_KEY, CM_NV_SVC_OPEN_KEY);
+    cmNvThunk(c.Thunks + CM_NV_T_CREATE_DYN, CM_NV_SVC_CREATE_DYN);
+    c.Cookie = (clock * 0x9E3779B1UL) ^ (ULONG)(ULONG_PTR)cmNvTable ^
+               0x5339384CUL;
+    if (c.Cookie == 0) {
+        c.Cookie = 1;
+    }
+    *(volatile ULONG *)&cmNvTable->Cookie = c.Cookie;
+    ops.Resident = cmNvPubResident;
+    ops.OpenProof = cmNvPubOpenProof;
+    ops.CreateProof = cmNvPubCreateProof;
+    ops.WriteLocator = cmNvPubWriteLocator;
+    ops.Context = &c;
+    step = CmNvlinkPublish9x(&ops, &error);
+    CmFree(c.Thunks);
+    return step == CM_NVLINK_PUB_OK ? 0 : (step << 16) | (error & 0xFFFFUL);
+}
+
+/* The proof key deleted (R4), when this load made it. PASSIVE_LEVEL. */
+static VOID cmNvDeleteProof(VOID)
+{
+    PUCHAR t;
+
+    if (cmNvProofMade == 0) {
+        return;
+    }
+    t = (PUCHAR)CmAlloc(16);
+    if (t == NULL) {
+        return;
+    }
+    cmNvThunk(t, CM_NV_SVC_CLOSE_KEY);
+    cmNvThunk(t + 8, CM_NV_SVC_DELETE_KEY);
+    if (cmNvProofHkey != 0) {
+        (VOID)((CM_NV_FN1)t)(cmNvProofHkey);
+        cmNvProofHkey = 0;
+    }
+    if (((CM_NV_FN2)(t + 8))(CM_NV_HKEY_DYN_DATA,
+                             (ULONG)(ULONG_PTR)cmNvProofKey) == 0) {
+        cmNvProofMade = 0;
+    }
+    CmFree(t);
+}
+
+#endif /* _X86_ */
+
+/* 9x: the record, written at the first tunnel action of the boot rather
+ * than at the start: no registry service is called while the NHI's own
+ * start is still pending in the configuration manager (the CONFIGMG
+ * route's rule, cm_reenum.c). Before any UP, so before stor98 can look. */
 static BOOLEAN cmNvEnsure(PCM_NHI nhi)
 {
     KIRQL irql;
-    ULONG first;
+    ULONG mine;
+    ULONG start;
 
     if (cmNvTable == NULL) {
         return FALSE;
     }
-    if (CmNvlinkOffered(cmNvNt)) {
+    if (cmNvNt) {
         /* NT: only with the callback registered (not on a reload in the
          * same boot, nor where registration failed). */
         return (BOOLEAN)(cmNvRegistration != NULL);
     }
     KeAcquireSpinLock(&cmNvLock, &irql);
-    first = cmNvRecordTried == 0 ? 1UL : 0UL;
-    cmNvRecordTried = 2;
-    KeReleaseSpinLock(&cmNvLock, irql);
-    if (first) {
-        CmLogNote(nhi, "cm.nvlink.9x.not-offered", 0);
+    mine = cmNvRecordTried == 0 ? 1UL : 0UL;
+    if (mine) {
+        cmNvRecordTried = 1;
     }
-    return FALSE;
+    KeReleaseSpinLock(&cmNvLock, irql);
+    if (!mine) {
+        /* Another domain's thread is writing it: wait for it, within a
+         * bound; still unwritten after that, this exposure publishes no UP
+         * (the channel is unavailable to it) and the next one asks again. */
+        start = cmNvNow(nhi);
+        while (cmNvRecordTried != 2 &&
+               CmNvlinkLeft(start, cmNvNow(nhi), 2000UL) != 0) {
+            nhi->Host.Sleep(nhi->Host.Context, CM_NVLINK_POLL_MS);
+        }
+        return (BOOLEAN)(cmNvRecordTried == 2 && cmNvRecord != 0);
+    }
+#if defined(_X86_)
+    cmNvRecordError = cmNvWriteRecord(cmNvNow(nhi));
+#else
+    cmNvRecordError = 0xFFFFFFFEUL;
+#endif
+    cmNvRecord = cmNvRecordError == 0 ? 1UL : 0UL;
+    cmNvRecordTried = 2;
+    /* Bit 31 published; else bits 18:16 the step that stopped it
+     * (CM_NVLINK_PUB_*) and 15:0 its code, or all ones for no thunk. */
+    CmLogNote(nhi, "cm.nvlink.9x.record",
+              (cmNvRecord << 31) | (cmNvRecordError & 0x7FFFFFFFUL));
+    return (BOOLEAN)(cmNvRecord != 0);
 }
 
 VOID CmNvlinkStart(PCM_NHI nhi)
@@ -432,7 +725,9 @@ static BOOLEAN cmNvReceiver(VOID)
     if (cmNvNt) {
         return (BOOLEAN)(cmNvQueries != 0);
     }
-    return (BOOLEAN)(cmNvRecord != 0);
+    /* 9x: published, and the proof read at least once - a stor98 that
+     * never read it holds no table and can answer nothing. */
+    return (BOOLEAN)(cmNvRecord != 0 && cmNvQueries != 0);
 }
 
 /* ====================================================================== */
@@ -844,6 +1139,9 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
     ULONG start;
     ULONG now;
     ULONG rounds;
+    ULONG step;
+    ULONG ends;
+    ULONG ended[STOR98LS_ENTRIES];
     KIRQL irql;
 
     if (cmNvTable == NULL) {
@@ -862,6 +1160,7 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
     }
     start = cmNvNow(nhi);
     rounds = 0;
+    ends = 0;
     for (;;) {
         pending = 0;
         now = cmNvNow(nhi);
@@ -871,23 +1170,31 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
                 continue;
             }
             rounds |= 0x80000000UL;
-            if (CmNvlinkAcked(cmNvTable, i)) {
-                cmNvShadow[i].Waiting = 0;
-                cmNvAcked++;
-            } else if ((cmNvTable->Entry[i].Flags &
-                        STOR98LS_DOWN_QUIESCED) == 0) {
-                /* Superseded by a later UP or retirement. */
-                cmNvShadow[i].Waiting = 0;
-            } else if (CmNvlinkAwaitBoundMs(cmNvNt, cmNvReceiver()) == 0) {
-                /* No stor98 has the table: no acknowledgement can come. */
-                cmNvShadow[i].Waiting = 0;
-                cmNvNoReceiver++;
-            } else if (CmNvlinkLeft(cmNvShadow[i].MarkedAt, now,
-                                    CmNvlinkAckBoundMs(cmNvNt)) == 0) {
-                cmNvShadow[i].Waiting = 0;
-                cmNvAckTimeouts++;
-            } else {
+            /* The deadline before the acknowledgement is read: one first
+             * seen after it is late, logged and not taken (R11, R12 S4).
+             * Superseded (a later UP or retirement) and no receiver (no
+             * stor98 has the table) end the wait at once. */
+            step = CmNvlinkAckStep(cmNvTable, i, cmNvReceiver(),
+                                   cmNvShadow[i].MarkedAt, now,
+                                   CmNvlinkAckBoundMs(cmNvNt));
+            if (step == CM_NVLINK_AW_PENDING) {
                 pending++;
+                continue;
+            }
+            cmNvShadow[i].Waiting = 0;
+            if (step == CM_NVLINK_AW_ACKED) {
+                cmNvAcked++;
+            } else if (step == CM_NVLINK_AW_NO_RECEIVER) {
+                cmNvNoReceiver++;
+            } else if (step == CM_NVLINK_AW_TIMEOUT) {
+                cmNvAckTimeouts++;
+            } else if (step == CM_NVLINK_AW_LATE) {
+                cmNvAckTimeouts++;
+                cmNvAckLate++;
+            }
+            if (ends < STOR98LS_ENTRIES) {
+                ended[ends] = (step << 8) | i;
+                ends++;
             }
         }
         KeReleaseSpinLock(&cmNvLock, irql);
@@ -899,6 +1206,10 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
     }
     if (rounds != 0) {
         CmLogNote(nhi, "cm.nvlink.await", cmNvNow(nhi) - start);
+    }
+    /* How each entry's wait ended: CM_NVLINK_AW_* << 8 | entry. */
+    for (i = 0; i < ends; i++) {
+        CmLogNote(nhi, "cm.nvlink.await.end", ended[i]);
     }
 }
 
@@ -915,7 +1226,7 @@ BOOLEAN CmNvlinkWkCandidate(PCM_NHI owner, ULONG bridge, ULONG id,
     BOOLEAN ok;
     KIRQL irql;
 
-    if (cmNvTable == NULL || cmNvNt || cmNvRecord == 0 || owner == NULL ||
+    if (cmNvTable == NULL || cmNvNt || !cmNvReceiver() || owner == NULL ||
         index >= STOR98LS_ENTRIES) {
         return FALSE;
     }
@@ -942,7 +1253,7 @@ ULONG CmNvlinkWkRequest(PCM_NHI owner, ULONG index, ULONG gen, ULONG id,
     KIRQL irql;
 
     *sequence = 0;
-    if (cmNvTable == NULL || cmNvNt || cmNvRecord == 0 || owner == NULL ||
+    if (cmNvTable == NULL || cmNvNt || !cmNvReceiver() || owner == NULL ||
         index >= STOR98LS_ENTRIES) {
         return CM_NVLINK_NONE;
     }
@@ -972,9 +1283,11 @@ ULONG CmNvlinkWkRequest(PCM_NHI owner, ULONG index, ULONG gen, ULONG id,
     KeReleaseSpinLock(&cmNvLock, irql);
     return result;
 }
-ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence)
+
+ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence, ULONG gen,
+                       ULONG elapsedMs)
 {
-    return CmNvlinkRemoveAnswer(cmNvTable, index, sequence);
+    return CmNvlinkRemoveStep(cmNvTable, index, sequence, gen, elapsedMs);
 }
 
 VOID CmNvlinkWkWithdraw(ULONG index, ULONG sequence)
@@ -992,6 +1305,7 @@ VOID CmNvlinkWkWithdraw(ULONG index, ULONG sequence)
     }
     KeReleaseSpinLock(&cmNvLock, irql);
 }
+
 VOID CmNvlinkStop(PCM_NHI nhi)
 {
     ULONG i;
@@ -1019,6 +1333,7 @@ VOID CmNvlinkStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.nvlink.withheld", cmNvWithheld);
     CmLogNote(nhi, "cm.nvlink.acked", cmNvAcked);
     CmLogNote(nhi, "cm.nvlink.ack-timeouts", cmNvAckTimeouts);
+    CmLogNote(nhi, "cm.nvlink.ack-late", cmNvAckLate);
     CmLogNote(nhi, "cm.nvlink.no-receiver", cmNvNoReceiver);
     CmLogNote(nhi, "cm.nvlink.queries", (ULONG)cmNvQueries);
 }
@@ -1167,6 +1482,12 @@ VOID CmNvlinkService(PCM_NHI nhi)
 
     if (cmNvTable == NULL) {
         return;
+    }
+    if (!cmNvNt && cmNvQueries != cmNvQueriesLogged) {
+        /* Each new read of the proof (stor98's HwFindAdapter reads it once
+         * per load): the evidence a receiver holds the table. */
+        cmNvQueriesLogged = cmNvQueries;
+        CmLogNote(nhi, "cm.nvlink.9x.proof-read", (ULONG)cmNvQueriesLogged);
     }
     u = cmNvU4Of(nhi, FALSE);
     if (u == NULL) {

@@ -252,6 +252,11 @@ static VOID hcdReadLogSwitches(PHCD_CONTROLLER hc)
     status = hcdReadDword(hc, HCD_VALUE_LOG_VERBOSITY, &verbosity);
     ext->Log.SwitchStatusVerbosity = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
                                                         : MP_STATUS_FAILURE;
+    /* An absent value is the default (xhci_log.h; 2 since the owner's
+     * decision of 2026-10-16), not 0. */
+    if (!NT_SUCCESS(status)) {
+        verbosity = XHCI_LOG_VERBOSITY_DEFAULT;
+    }
     status = hcdReadDword(hc, HCD_VALUE_LOG_DEBUGVIEW, &debugView);
     ext->Log.SwitchStatusDebugView = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
                                                         : MP_STATUS_FAILURE;
@@ -973,7 +978,8 @@ static VOID hcdPirqRun(PHCD_CONTROLLER hc, ULONG when)
     }
     XhciLogNote(ext, "pirq.slot.id", st->SlotId);
     XhciLogNote(ext, "pirq.lpc.id", st->LpcId);
-    XhciLogNote(ext, "pirq.rcba", st->Rcba);
+    /* A physical address: level 4 alone (design record 25 revision 12). */
+    XhciLogNoteAddress(ext, "pirq.rcba", st->Rcba);
     XhciLogNote(ext, "pirq.d20ip", st->D20ip);
     XhciLogNote(ext, "pirq.d20ir", st->D20ir);
     XhciLogNote(ext, "pirq.target", st->Target);
@@ -2790,7 +2796,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     ext->InterruptLevel = (ULONG)hc->IntIrql;
     ext->InterruptMode = (ULONG)hc->IntMode;
     XhciLogNoteAddress(ext, "start.bar", hc->BarRaw.LowPart);
-    XhciLogNote(ext, "start.common.pa", ext->StartPA);
+    /* A DMA address: recorded at level 4 alone, with the other addresses,
+     * so levels 2 and 3 carry none (design record 25 revision 12). */
+    XhciLogNoteAddress(ext, "start.common.pa", ext->StartPA);
     XhciLogNote(ext, "start.mapregs", hc->MapRegisters);
     hcdXstatGrant(hc);
     /* 36.24: after the grant, before anything is enumerated. */

@@ -1,7 +1,7 @@
 /*
  * xhciinst.c - XHCIINST.EXE (32-bit) and XHCIIN64.EXE (x64): install,
  * update or uninstall every driver of this package (roadmap-usb4.md tasks
- * 40.5 to 40.7; design record 23).
+ * 40.4 to 40.6; design record 23).
  *
  * WHY IT EXISTS. Installing the package was Device Manager work, one device
  * at a time, with a different trap per system on an update (Windows 2000
@@ -266,6 +266,7 @@ static int flagRestart;
 static int flagSteps;
 static int flagChanged;
 static int outQuiet;        /* a reading repeated: its text to the log only */
+static int outMirror;       /* the text to standard error too (out_mirror) */
 static int trayDeferred;    /* the USB tree tool goes at the restart        */
 
 /* The registry answers: per value, 1 when it is to be written, and what. */
@@ -290,6 +291,17 @@ static size_t stWidest;     /* the widest line the screens printed */
 static size_t stCol;
 static int stLongLines;     /* lines wider than INST_COLUMNS */
 
+/* 1 when the standard handle is the console (a console's mode can be
+ * read; a file's, a pipe's or NUL's cannot). */
+static int std_is_console(DWORD which)
+{
+    HANDLE h = GetStdHandle(which);
+    DWORD mode;
+
+    return h != NULL && h != INVALID_HANDLE_VALUE &&
+           GetConsoleMode(h, &mode) != 0;
+}
+
 static void out_emit(const char *text)
 {
     const char *p;
@@ -313,6 +325,10 @@ static void out_emit(const char *text)
     if (!outQuiet && (!stScreens || stShow)) {
         fputs(text, stdout);
         fflush(stdout);
+        if (outMirror && !stScreens) {
+            fputs(text, stderr);
+            fflush(stderr);
+        }
     }
     if (logFile != NULL) {
         fputs(text, logFile);
@@ -9607,6 +9623,10 @@ static int finish(int code)
     if (!opts.NoPause && !opts.List && !opts.Devices) {
         printf("Press Enter to close this window.");
         fflush(stdout);
+        if (outMirror) {
+            fputs("Press Enter to close this window.", stderr);
+            fflush(stderr);
+        }
         if (fgets(line, sizeof(line), stdin) == NULL) {
             printf("\n");
         }
@@ -9630,6 +9650,9 @@ int main(int argc, char **argv)
     if (opts.SelfTest) {
         return selftest();
     }
+    outMirror = inst_out_mirror(std_is_console(STD_OUTPUT_HANDLE),
+                                std_is_console(STD_ERROR_HANDLE),
+                                std_is_console(STD_INPUT_HANDLE));
     if ((!opts.List && !opts.Devices) || opts.Log[0] != '\0') {
         log_open();
     }

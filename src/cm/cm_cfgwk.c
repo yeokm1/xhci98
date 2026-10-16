@@ -19,7 +19,11 @@
  * start's baseline). Then, per request: a member's re-enumeration (its
  * vanished children query-removed and removed - a refusal respected, never
  * forced - then Reenumerate_DevNode), retried every CM_WK_RETRY_MS while
- * the bridge's devnode cannot be found or the call fails; and a marking
+ * the bridge's devnode cannot be found or the call fails - with, before
+ * that call, the bus numbers of any bridge the tunnel brought up below the
+ * member in reset state (record 21 section 6.1.1, XhciCmBridgeNumbering;
+ * tbt_brnum.c, written through PCI.VXD's _PCI_Write_Config once its guard
+ * has passed); and a marking
  * window (CM_WK_MARK_MS) in which each new child of an active member gets
  * DN_REMOVABLE (Change_DevNode_Status); and CONTROLLER_UNAVAILABLE
  * (CmCfgwkUnavailable, the host interface lost: record 21 section 5.5),
@@ -50,6 +54,8 @@
 #include "cm_cfgmg.h"
 #include "cm_ports.h"
 #include "cm_nvlink.h"
+#include "cm_qryb.h"
+#include "tbt_brnum.h"
 
 #if defined(_WIN64) && defined(NO_LEGACY_DRIVERS)
 NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
@@ -142,6 +148,10 @@ typedef struct _CM_CFGWK {
     ULONG MarkOpen;
     ULONG MarkFrom;
     ULONG OpenState;        /* CM_CFGWK_OPEN_*                            */
+    ULONG Numbering;        /* XhciCmBridgeNumbering as the start read it */
+    ULONG PciRefused;       /* PCI.VXD's guard failed: logged once        */
+    ULONG NumberMember;     /* the member cmWkNumber works on ...         */
+    ULONG NumberGen;        /* ... and its request's generation           */
     CM_CFGMG Cfgmg;
     CM_CFGWK_COUNTERS C;
 } CM_CFGWK, *PCM_CFGWK;
@@ -163,14 +173,17 @@ static ULONG cmWkNowTicks(VOID)
 
 static ULONG cmWkSince(ULONG thenTicks)
 {
-    ULONG perTick;
+    ULONG unit;
 
-    /* KeQueryTimeIncrement is in 100 ns units: at least 1 ms a tick. */
-    perTick = KeQueryTimeIncrement() / 10000UL;
-    if (perTick == 0) {
-        perTick = 1;
+    /* KeQueryTimeIncrement is in 100 ns units. Milliseconds rounded down,
+     * a tick's fraction kept (15.6 ms is not counted as 15), with no
+     * product past 32 bits for any tick period of 10 to 55 ms and any
+     * stall: cm_query.c's conversion, host-tested. */
+    unit = KeQueryTimeIncrement();
+    if (unit == 0) {
+        unit = 10000UL;
     }
-    return (cmWkNowTicks() - thenTicks) * perTick;
+    return CmQueryAgeMs(cmWkNowTicks(), thenTicks, unit);
 }
 
 /* As cm_reenum.c's reader: HalGetBusData from offset 0. */
@@ -209,6 +222,19 @@ static VOID cmWkLog(PCM_CFGWK w, const char *label, ULONG value)
     KeAcquireSpinLock(&w->Lock, &irql);
     if (w->Nhi != NULL) {
         CmLogNote(w->Nhi, label, value);
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+}
+
+/* The same for a value that is a devnode handle: an address record,
+ * level 4 alone (CmLogNoteAddress). <= DISPATCH_LEVEL. */
+static VOID cmWkLogAddress(PCM_CFGWK w, const char *label, ULONG value)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    if (w->Nhi != NULL) {
+        CmLogNoteAddress(w->Nhi, label, value);
     }
     KeReleaseSpinLock(&w->Lock, irql);
 }
@@ -997,7 +1023,7 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
              * under that handle may be another. Not acted on. */
             cmWkIdsDrop(&p->Gone, k);
             w->C.GoneDropped++;
-            cmWkLog(w, "cm.reenum.9x.gone.superseded", node);
+            cmWkLogAddress(w, "cm.reenum.9x.gone.superseded", node);
             continue;
         }
         present = 0;
@@ -1022,7 +1048,7 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
         if (cmWkIdHash(text) != hash) {
             cmWkIdsDrop(&p->Gone, k);
             w->C.GoneDropped++;
-            cmWkLog(w, "cm.reenum.9x.gone.id-changed", node);
+            cmWkLogAddress(w, "cm.reenum.9x.gone.id-changed", node);
             continue;
         }
         vetoed = w->C.Vetoed;
@@ -1164,6 +1190,9 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
      * request goes stale. The removal below follows whatever the answer:
      * Windows 98 cannot cancel the query just accepted. */
     seq = 0;
+    /* T_ack counts from before the request is published, never from a
+     * later point a descheduled worker resumes at (R11). */
+    start = cmWkNowTicks();
     if (entry != CM_NVLINK_NONE && cmWkCurrent(w, i, gen)) {
         /* Only for a request still current, and only for the identity
          * established before the query, unchanged since; a stale one
@@ -1173,13 +1202,14 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     } else {
         entry = CM_NVLINK_NONE;
     }
+    answer = CM_NVLINK_RM_NONE;
     if (entry != CM_NVLINK_NONE) {
-        start = cmWkNowTicks();
-        answer = CM_NVLINK_RM_NONE;
-        for (;;) {
-            answer = CmNvlinkWkAnswer(entry, seq);
-            if (answer != CM_NVLINK_RM_NONE || !cmWkCurrent(w, i, gen) ||
-                cmWkSince(start) >= CM_NVLINK_REMOVE_MS) {
+        /* The deadline before each read: an answer first seen after it is
+         * late, logged and not taken (interface 3, R11; CmNvlinkRemoveStep
+         * answers CM_NVLINK_RM_TIMEOUT or CM_NVLINK_RM_LATE then). */
+        while (cmWkCurrent(w, i, gen)) {
+            answer = CmNvlinkWkAnswer(entry, seq, egen, cmWkSince(start));
+            if (answer != CM_NVLINK_RM_NONE) {
                 break;
             }
             /* -CM_NVLINK_POLL_MS ms, relative, in 100 ns units, without
@@ -1188,13 +1218,30 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
             pause.HighPart = -1;
             (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
         }
-        CmNvlinkWkWithdraw(entry, seq);
         cmWkLog(w, "cm.nvlink.9x.remove-answer", (seq << 8) | answer);
     }
-    cr = CmCfgmgRemove(&w->Cfgmg, devnode);
-    cmWkLog(w, "cm.reenum.9x.remove", cr);
+    /* Remove_SubTree; after a stor98 request, retried every
+     * CM_NVLINK_RETRY_MS while it fails, until CM_NVLINK_RETRY_FOR_MS after
+     * the first attempt (R11 O6's bound, CmNvlinkRetryAgain; a veto is
+     * never forced). */
+    start = cmWkNowTicks();
+    for (;;) {
+        cr = CmCfgmgRemove(&w->Cfgmg, devnode);
+        cmWkLog(w, "cm.reenum.9x.remove", cr);
+        if (cr == CMG_CR_SUCCESS || entry == CM_NVLINK_NONE ||
+            !CmNvlinkRetryAgain(cmWkSince(start))) {
+            break;
+        }
+        pause.LowPart = (ULONG)(0UL - CM_NVLINK_RETRY_MS * 10000UL);
+        pause.HighPart = -1;
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
+    }
     if (cr == CMG_CR_SUCCESS) {
         w->C.Removed++;
+    }
+    /* R11 O5: REMOVE_PENDING cleared after the removal. */
+    if (entry != CM_NVLINK_NONE) {
+        CmNvlinkWkWithdraw(entry, seq);
     }
     if (cmWkCurrent(w, i, gen)) {
         return TRUE;
@@ -1208,6 +1255,241 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     }
     cmWkLog(w, "cm.reenum.9x.reenumerate", (w->Port[i].Bdf << 8) | cr);
     return FALSE;
+}
+
+/* tbt_brnum.c's accessors: PCI.VXD's own configuration-space services,
+ * reads and dword writes alike, once their guard has passed (a function
+ * PCI.VXD does not know yet is read the way PCI.VXD itself reads it). */
+static ULONG cmWkIoRead(PVOID context, ULONG bdf, ULONG offset,
+                        PULONG value)
+{
+    return CmCfgmgPciRead(&((PCM_CFGWK)context)->Cfgmg, bdf, offset, value)
+               ? 1UL : 0UL;
+}
+
+static ULONG cmWkIoWrite(PVOID context, ULONG bdf, ULONG offset,
+                         ULONG width, ULONG value)
+{
+    if (width != 4) {
+        return 0;
+    }
+    return CmCfgmgPciWrite(&((PCM_CFGWK)context)->Cfgmg, bdf, offset, value)
+               ? 1UL : 0UL;
+}
+
+/* The numbering's go callback: member NumberMember's request still the one
+ * taken (NumberGen) and its configuration space still to be read (no
+ * CONTROLLER_UNAVAILABLE since). */
+static ULONG cmWkNumberGo(PVOID context)
+{
+    PCM_CFGWK w;
+
+    w = (PCM_CFGWK)context;
+    return (cmWkCurrent(w, w->NumberMember, w->NumberGen) &&
+            !cmWkNoCfg(w, w->NumberMember))
+               ? 1UL : 0UL;
+}
+
+#define CM_WK_NUMBER_TRIES   20UL   /* a chain not answering yet ...      */
+#define CM_WK_NUMBER_WAIT_MS 100UL  /* ... read again this much later     */
+
+/* HalGetBusData as the port reading's reader (the port is a function
+ * PCI.VXD knows); no writer, so an SHPC port gives no reading. */
+static ULONG cmWkHalRead(PVOID context, ULONG bdf, ULONG offset,
+                         PULONG value)
+{
+    UNREFERENCED_PARAMETER(context);
+    return cmWkCfgRead(bdf, offset, value);
+}
+
+/* The attempt, for XhciCmBridgeDiag (cm_statb.h), copied to the NHI under
+ * the worker's lock while it is attached. */
+static VOID cmWkDiag(PCM_CFGWK w, ULONG bdf, PXHCI_TBT_BRNUM r, ULONG tries,
+                     ULONG flags)
+{
+    ULONG d[CM_BRDIAG_WORDS];
+    ULONG k;
+    KIRQL irql;
+    KIRQL inner;
+
+    for (k = 0; k < CM_BRDIAG_WORDS; k++) {
+        d[k] = 0;
+    }
+    d[1] = bdf;
+    if (r != NULL) {
+        d[2] = r->Outcome;
+        d[3] = (r->Functions << 16) | ((r->Bridges & 0xFFUL) << 8) |
+               (tries & 0xFFUL);
+        d[4] = r->PortBuses;
+        d[5] = r->WinOutcome;
+        d[6] = r->PortMem;
+        d[7] = r->WinNeed;
+        d[8] = r->Where != XHCI_TBT_NO_BDF ? r->Where : r->WinWhere;
+        d[9] = (r->UndoFailed << 16) | (r->Undone & 0xFFFFUL);
+        for (k = 0; k < 2; k++) {
+            d[10 + k] = r->Bdf[k];
+            d[12 + k] = r->Now[k];
+            d[14 + k] = r->Win[k];
+        }
+    }
+    d[16] = flags;
+    d[17] = w->Cfgmg.PciGuard;
+    if (r != NULL) {
+        d[18] = (r->IrqOutcome & 0xFFUL) | ((r->IrqLine & 0xFFUL) << 8) |
+                ((r->IrqPin & 0xFFUL) << 16);
+        d[19] = (r->IrqFunctions & 0xFFUL) | ((r->IrqSet & 0xFFUL) << 8) |
+                ((r->IrqKept & 0xFFUL) << 16) |
+                ((r->IrqOther & 0xFFUL) << 24);
+    }
+    KeAcquireSpinLock(&w->Lock, &irql);
+    if (w->Nhi != NULL) {
+        /* The NHI's own lock inside the worker's: the thread's reader
+         * takes it alone. The sequence is the NHI's, so a newer worker
+         * of the same NHI never repeats one already written. */
+        KeAcquireSpinLock(&w->Nhi->BrDiagLock, &inner);
+        w->Nhi->BrDiagSeq++;
+        if (w->Nhi->BrDiagSeq == 0) {
+            w->Nhi->BrDiagSeq = 1;
+        }
+        d[0] = w->Nhi->BrDiagSeq;
+        for (k = 0; k < CM_BRDIAG_WORDS; k++) {
+            w->Nhi->BrDiag[k] = d[k];
+        }
+        KeReleaseSpinLock(&w->Nhi->BrDiagLock, inner);
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+}
+
+/*
+ * Record 21 section 6.1.1 on member i (bridge devnode `bridge`), before
+ * its re-enumeration: the bridges a tunnel brought up below it in reset
+ * state (secondary and subordinate 0, which PCI.VXD leaves so: Code 29)
+ * numbered inside its bus range and given memory windows inside its window,
+ * as the BIOS sets them up at POST (left to itself, PCI.VXD placed a
+ * hot-added bridge's window outside its parent's in the emulator). Only on
+ * a healthy request still current, and only while the bridge's devnode
+ * has no child: a subtree PCI.VXD still holds (a removal vetoed, a
+ * re-plug before the removal ran) is never renumbered under it. A port
+ * that reads up with nothing answering behind it yet, or a function
+ * answering Retry Status, is read again for up to two seconds. Nothing
+ * is written when no bridge is below it or any is numbered already
+ * (present at boot), and a refusal leaves every bridge as it was read
+ * (tbt_brnum.h).
+ */
+static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
+{
+    XHCI_TBT_CFG io;
+    XHCI_TBT_CFG hal;
+    XHCI_TBT_BRNUM r;
+    XHCI_TBT_PORT port;
+    LARGE_INTEGER pause;
+    ULONG children[1];
+    ULONG count;
+    ULONG bdf;
+    ULONG id;
+    ULONG k;
+    ULONG tries;
+    ULONG flags;
+    BOOLEAN complete;
+    BOOLEAN up;
+
+    bdf = w->Port[i].Bdf;
+    if (!cmWkCurrent(w, i, gen) || cmWkNoCfg(w, i)) {
+        return;
+    }
+    if (!w->Cfgmg.PciOpen) {
+        if (w->PciRefused) {
+            return;
+        }
+        if (!cmWkCfgRead(bdf, XHCI_TBT_CFG_ID, &id) ||
+            !CmCfgmgPciOpen(&w->Cfgmg, bdf, id)) {
+            w->PciRefused = 1;
+            cmWkLog(w, "cm.brnum.9x.pci-refused", w->Cfgmg.PciGuard);
+            cmWkDiag(w, bdf, NULL, 0, 2);
+            return;
+        }
+        cmWkLog(w, "cm.brnum.9x.pci-open", id);
+    }
+    complete = FALSE;
+    count = cmWkChildren(w, bridge, children, 1, &complete);
+    if (!complete || count != 0) {
+        cmWkLog(w, "cm.brnum.9x.held", (bdf << 8) | (complete ? 1UL : 0UL));
+        cmWkDiag(w, bdf, NULL, 0, 1);
+        return;
+    }
+    hal.Read = cmWkHalRead;
+    hal.Write = NULL;
+    hal.Context = NULL;
+    hal.Reads = 0;
+    hal.Writes = 0;
+    up = (BOOLEAN)(XhciTbtPortRead(&hal, bdf, &port) == XHCI_TBT_PORT_UP);
+    flags = up ? 4UL : 0UL;
+    io.Read = cmWkIoRead;
+    io.Write = cmWkIoWrite;
+    io.Context = w;
+    w->NumberMember = i;
+    w->NumberGen = gen;
+    for (tries = 1;; tries++) {
+        io.Reads = 0;
+        io.Writes = 0;
+        /* Every attempt but the last also waits for an empty bus behind
+         * a bridge (a link below still training); the last takes what
+         * answers. */
+        (VOID)XhciTbtNumberBridges(&io, bdf,
+                                   XHCI_TBT_BRNUM_F_WINDOWS |
+                                       XHCI_TBT_BRNUM_F_IRQ |
+                                       (tries + 1UL < CM_WK_NUMBER_TRIES
+                                            ? XHCI_TBT_BRNUM_F_WAIT_EMPTY
+                                            : 0UL),
+                                   cmWkNumberGo, w, &r);
+        if (tries >= CM_WK_NUMBER_TRIES || !cmWkNumberGo(w)) {
+            break;
+        }
+        if (r.Outcome != XHCI_TBT_BRNUM_NOT_READY &&
+            !(r.Outcome == XHCI_TBT_BRNUM_NONE && r.Functions == 0 && up)) {
+            break;
+        }
+        /* -CM_WK_NUMBER_WAIT_MS, relative, in 100 ns units, without
+         * 64-bit arithmetic. */
+        pause.LowPart = (ULONG)(0UL - CM_WK_NUMBER_WAIT_MS * 10000UL);
+        pause.HighPart = -1;
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
+    }
+    cmWkDiag(w, bdf, &r, tries, flags);
+    cmWkLog(w, "cm.brnum.9x.outcome", (bdf << 8) | r.Outcome);
+    cmWkLog(w, "cm.brnum.9x.seen",
+            (r.Functions << 16) | (r.Bridges << 8) | tries);
+    if (r.Outcome == XHCI_TBT_BRNUM_NONE) {
+        return;
+    }
+    cmWkLog(w, "cm.brnum.9x.port-buses", r.PortBuses);
+    if (r.Outcome == XHCI_TBT_BRNUM_DONE) {
+        w->C.Numbered += r.Numbered;
+        for (k = 0; k < r.Numbered; k++) {
+            cmWkLog(w, "cm.brnum.9x.bridge", r.Bdf[k]);
+            cmWkLog(w, "cm.brnum.9x.buses", r.Now[k]);
+            cmWkLog(w, "cm.brnum.9x.window", r.Win[k]);
+        }
+        cmWkLog(w, "cm.brnum.9x.win-outcome", r.WinOutcome);
+        cmWkLog(w, "cm.brnum.9x.port-window", r.PortMem);
+        cmWkLog(w, "cm.brnum.9x.win-need", r.WinNeed);
+        cmWkLog(w, "cm.brnum.9x.irq",
+                (r.IrqOutcome & 0xFFUL) | ((r.IrqLine & 0xFFUL) << 8) |
+                    ((r.IrqPin & 0xFFUL) << 16));
+        cmWkLog(w, "cm.brnum.9x.irq-counts",
+                (r.IrqFunctions & 0xFFUL) | ((r.IrqSet & 0xFFUL) << 8) |
+                    ((r.IrqKept & 0xFFUL) << 16) |
+                    ((r.IrqOther & 0xFFUL) << 24));
+        if (r.WinOutcome != XHCI_TBT_BRWIN_DONE) {
+            w->C.NumberRefused++;
+            cmWkLog(w, "cm.brnum.9x.win-where", r.WinWhere);
+            cmWkLog(w, "cm.brnum.9x.undone", (r.UndoFailed << 16) | r.Undone);
+        }
+    } else if (r.Outcome != XHCI_TBT_BRNUM_NUMBERED) {
+        w->C.NumberRefused++;
+        cmWkLog(w, "cm.brnum.9x.where", r.Where);
+        cmWkLog(w, "cm.brnum.9x.undone", (r.UndoFailed << 16) | r.Undone);
+    }
 }
 
 /*
@@ -1308,6 +1590,14 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
         /* A prune posted during the operation: paid first (failed,
          * retried). */
         return FALSE;
+    }
+    if (w->Numbering) {
+        cmWkNumber(w, i, gen, bridge);
+        if (!cmWkCurrent(w, i, gen)) {
+            /* Superseded while it numbered: the newer request redoes the
+             * re-enumeration. */
+            return TRUE;
+        }
     }
     cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
     p->PubGen++;
@@ -1735,7 +2025,7 @@ static VOID cmWkThread(PVOID context)
 /* ---- the calls -------------------------------------------------------- */
 
 PCM_CFGWK CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf, ULONG members,
-                       ULONG active)
+                       ULONG active, ULONG numbering)
 {
     PCM_CFGWK w;
     HANDLE handle;
@@ -1756,6 +2046,7 @@ PCM_CFGWK CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf, ULONG members,
         w->Port[i].Bdf = bdf[i];
     }
     w->Active = active;
+    w->Numbering = numbering;
     w->OpenState = CM_CFGWK_OPEN_PENDING;
     w->OpMember = CM_WK_NO_OP;
     /* A worker the stop cannot wait for (inside a CONFIGMG call) runs this
@@ -1888,6 +2179,17 @@ VOID CmCfgwkStop(PCM_CFGWK w, PCM_CFGWK_COUNTERS counters)
     *counters = w->C;
     CmCfgmgClose(&w->Cfgmg);
     CmFree(w);
+}
+
+/* The worker's counts so far (cm_reenum.h). IRQL: <= DISPATCH_LEVEL, w->Lock
+ * not held; the caller (the connection-manager thread) owns w's lifetime. */
+VOID CmCfgwkCounters(PCM_CFGWK w, PCM_CFGWK_COUNTERS counters)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    *counters = w->C;
+    KeReleaseSpinLock(&w->Lock, irql);
 }
 
 VOID CmCfgwkDrain(VOID)

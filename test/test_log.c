@@ -871,8 +871,11 @@ static void testVerbosityLadder(void)
              "the ladder's top rung is its maximum");
     CHECK_EQ(XHCI_LOG_VERBOSITY_MAX, 4,
              "and the range is 0-4 since the snapshot-value merge");
-    CHECK_EQ(XHCI_LOG_VERBOSITY_DEFAULT, XHCI_LOG_VERBOSITY_OFF,
-             "the default is OFF, so a refusal shuts the channel");
+    /* Amended 2026-10-16 (the owner): the default is the ring rung, so an
+     * install records with no addresses before anyone asks. */
+    CHECK_EQ(XHCI_LOG_VERBOSITY_DEFAULT, XHCI_LOG_VERBOSITY_RING,
+             "the default is 2, the ring rung");
+    CHECK_EQ(XHCI_LOG_VERBOSITY_DEFAULT, 2, "and it is the number 2");
     checkAppendIdentity(0, "verbosity ladder");
 }
 
@@ -892,15 +895,15 @@ static void testVerbosityOutOfRangeIsRefused(void)
              "and the default is applied");
     CHECK_EQ(log.VerbosityRead, XHCI_LOG_VERBOSITY_MAX + 1,
              "while what was read survives");
-    CHECK_EQ(log.Enabled, 0, "so a refused level does not record");
     /*
-     * **And it does not open the channel either**, which is new since the
-     * merge and is the direction a refusal must fail in: the fallback is
-     * XHCI_LOG_VERBOSITY_OFF, so a mistyped level leaves the door shut rather
-     * than opening it at some rung nobody asked for.
+     * **Amended 2026-10-16**: the fallback is the default, which is now the
+     * ring rung, so a mistyped level records as a fresh install does - never
+     * at the address rung, which is what refusing rather than clamping
+     * protects.
      */
-    CHECK_EQ(log.Verbosity, XHCI_LOG_VERBOSITY_OFF,
-             "a refused level leaves the read channel shut");
+    CHECK_EQ(log.Enabled, 1, "so a refused level records as the default");
+    CHECK_EQ(log.Verbosity, XHCI_LOG_VERBOSITY_RING,
+             "a refused level falls to the ring rung, never to addresses");
 
     resetLog();
     log.Enabled = 0;

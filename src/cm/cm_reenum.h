@@ -234,6 +234,8 @@ typedef struct _CM_CFGMG {
     ULONG Why;              /* CM_CFGMG_WHY_*                             */
     ULONG Version;          /* Get_Version's AX                           */
     ULONG Root;             /* the root devnode                           */
+    ULONG PciOpen;          /* PCI.VXD's services passed their guard      */
+    ULONG PciGuard;         /* what _PCI_Read_Config read at the guard    */
 } CM_CFGMG, *PCM_CFGMG;
 
 /* cm_cfgmg.c. Every call but Open and Close returns the service's
@@ -249,6 +251,13 @@ ULONG CmCfgmgDeviceId(PCM_CFGMG cfg, ULONG devnode, char *buffer,
 ULONG CmCfgmgQueryRemove(PCM_CFGMG cfg, ULONG devnode);
 ULONG CmCfgmgRemove(PCM_CFGMG cfg, ULONG devnode);
 ULONG CmCfgmgReenumerate(PCM_CFGMG cfg, ULONG devnode);
+/* PCI.VXD's configuration space (record 21 section 6.1.1), dword access
+ * alone. CmCfgmgPciOpen is the guard: _PCI_Read_Config of the function at
+ * `bdf` (bus 15:8, devfunc 7:0) must read `halId`, its id as HalGetBusData
+ * read it; until it has passed, Read and Write refuse (FALSE). */
+BOOLEAN CmCfgmgPciOpen(PCM_CFGMG cfg, ULONG bdf, ULONG halId);
+BOOLEAN CmCfgmgPciRead(PCM_CFGMG cfg, ULONG bdf, ULONG offset, PULONG value);
+BOOLEAN CmCfgmgPciWrite(PCM_CFGMG cfg, ULONG bdf, ULONG offset, ULONG value);
 ULONG CmCfgmgStatus(PCM_CFGMG cfg, ULONG devnode, PULONG status,
                     PULONG problem);
 ULONG CmCfgmgAddRemovable(PCM_CFGMG cfg, ULONG devnode);
@@ -402,13 +411,15 @@ typedef struct _CM_CFGWK_COUNTERS {
     ULONG Detached;         /* the stop found it inside a call            */
     ULONG GoneDone;         /* CONTROLLER_UNAVAILABLE members reconciled  */
     ULONG GoneDropped;      /* retained children whose identity changed   */
+    ULONG Numbered;         /* bridges given bus numbers (section 6.1.1)  */
+    ULONG NumberRefused;    /* numberings refused and undone              */
 } CM_CFGWK_COUNTERS, *PCM_CFGWK_COUNTERS;
 
 /* Creates the worker for `members` bridges at bdf[] (members the domain
- * owns in `active`) and asks it to open the route. NULL on failure.
- * PASSIVE_LEVEL. */
+ * owns in `active`) and asks it to open the route; `numbering` is
+ * XhciCmBridgeNumbering (section 6.1.1). NULL on failure. PASSIVE_LEVEL. */
 struct _CM_CFGWK *CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf,
-                               ULONG members, ULONG active);
+                               ULONG members, ULONG active, ULONG numbering);
 
 /* Asks for the members in `reenum` to be re-enumerated (those also in
  * `vanish` with their vanished children removed first) and, with `mark`,
@@ -438,6 +449,13 @@ VOID CmCfgwkUnavailable(struct _CM_CFGWK *w, ULONG active);
  * stop, leaves it to free itself. `counters` gets its counts (Detached
  * set, the rest zero, in the second case). PASSIVE_LEVEL. */
 VOID CmCfgwkStop(struct _CM_CFGWK *w, PCM_CFGWK_COUNTERS counters);
+
+/* The running worker's counts so far, copied under its lock, each word as
+ * last written (for the query device's counters, design record 25 section
+ * 4.5): what CmCfgwkStop will add to the NHI's at the stop. From the
+ * connection-manager thread, which owns the worker's lifetime.
+ * <= DISPATCH_LEVEL. */
+VOID CmCfgwkCounters(struct _CM_CFGWK *w, PCM_CFGWK_COUNTERS counters);
 
 /* From the driver's unload: waits, bounded, for every worker to have
  * left. PASSIVE_LEVEL. */

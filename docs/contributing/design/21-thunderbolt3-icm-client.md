@@ -706,7 +706,7 @@ filter, no boot start, no `0x7B` across restarts. Windows 2000 takes the
 INF unforced; XP and 7 rank the unsigned INF `0x8005` against
 `machine.inf`'s signed `0x2004` and keep `machine.inf` unless the install
 is forced, which the installer does (`UpdateDriverForPlugAndPlayDevices`
-with `INSTALLFLAG_FORCE`, the install tool of task `40.5`, design record 23) and a user by hand does
+with `INSTALLFLAG_FORCE`, the install tool of task `40.4`, design record 23) and a user by hand does
 through Update Driver, "Don't search", Have Disk. A port that first
 appears after the install (a controller absent at boot) gets `machine.inf`
 again on XP and later, so the install route is re-run, or the filter
@@ -1501,6 +1501,193 @@ uses on bus 0 on every target and whose Windows 98 evidence is recorded
 there (`hcdPirqSlot`'s comment); never through port `0xCF8`/`0xCFC` directly,
 which the experiment did and its own caveats warn against.
 
+### 6.1.1 A bridge behind the tunnel port: bus numbers on 98 (addendum, 2026-10-16)
+
+**What was seen.** On the owner's ThinkPad P14s Gen 1 (98 SE, Assist off,
+pre-boot on, security level 1) the ORICO ASM2464 USB4 enclosure was
+approved and tunnelled after a hot plug, and its PCIe switch upstream port
+(`PCI\VEN_1B21&DEV_2463`, instance `000800E400`, "PCI standard
+PCI-to-PCI bridge") came up with Code 29 (`CM_PROB_HARDWARE_DISABLED`,
+status `0x180066A4`, not started, an empty `Allocation` in
+`HKEY_DYN_DATA\Config Manager\Enum`); the downstream port and the NVMe
+behind it never appeared. The same enclosure present at power-on worked:
+both ASMedia bridges started and the NVMe was found. After a Safely Remove
+from XHCITR, an unplug and a re-plug, Code 29 again; Device Manager's
+Refresh did not change it, and a Remove of the devnode and a Refresh gave
+a fresh devnode, a wizard, a restart request and Code 29 again. The tunnel
+port 04:01.0 kept the same allocation throughout (memory
+`D4100000h`-`E00FFFFFh`, prefetchable `A0000000h`-`BBFFFFFFh` and its
+bus-number resource, type `0043h`, `ResType_PCI_Bus_Number` =
+`PCI_DEVICE_ID`, VMM.H line 197); its BIOS-programmed range is
+secondary `06h`, subordinate `2Ah` (usb4-emu's DOS captures), and the
+chain needs `06h`-`08h`.
+
+**Why.** At POST the BIOS numbers the switch (upstream port 06/07/08,
+downstream port 07/08/08, the NVMe on 08) and gives it windows, and
+PCI.VXD takes what it finds. A bridge that arrives later comes out of
+reset with secondary and subordinate bus 0, so nothing behind it is
+reachable, and PCI.VXD does not number it usefully: in the emulator (98
+SE, ACPI-mode image, a fresh two-level bridge chain hot-added behind the
+tunnel bridge, read before any restart) PCI.VXD gave the first bridge
+secondary = subordinate (no room for the next level) and asked for a
+restart; a second pass widened it and numbered the second bridge, put the
+first bridge's window outside the tunnel bridge's window, and asked for a
+restart again; the NVMe got no BAR. On the APM-mode P14s the outcome is
+Code 29. A restart works because the BIOS numbers the chain at POST. The
+emulator's earlier NVMe legs passed because its i440FX model puts the NVMe
+directly on the tunnel bridge's secondary bus, with no bridge between.
+
+**What the driver does.** Before each `Reenumerate_DevNode` of a member
+(section 6.1, step 3), the 9x worker sets up the bridges below it in the
+way the BIOS does at POST, with placements of its own (`tbt_brnum.c`), on these conditions: the request is
+still current and healthy (no newer post for the member, no
+`CONTROLLER_UNAVAILABLE` since: checked again before every write), and
+the member's devnode has no child in CONFIGMG's tree, so a subtree
+PCI.VXD still holds (a removal vetoed, a re-plug before the removal ran)
+is never renumbered under it.
+
+1. The member's own bus-number register must read a secondary above its
+   bus and a subordinate at or above that; otherwise nothing is done.
+2. A survey of the member's secondary bus, writing nothing: no bridge
+   there, nothing to do (the endpoint directly behind the port, the
+   emulator's case); any bridge with a nonzero secondary or subordinate
+   (present at power-on, numbered by the BIOS, or numbered by an earlier
+   pass), nothing is done either. A function answering Configuration
+   Request Retry Status (vendor id `0001h`) is not ready: the whole
+   attempt is undone and made again 100 ms later; so is an empty
+   secondary bus while the port reads link-up (the switch behind it
+   still training), and, on every attempt but the last, an empty bus
+   behind a bridge just numbered (a link below it still training);
+   twenty attempts at most, two seconds. A bridge with an empty slot
+   costs those two seconds and is then numbered as it is.
+3. **Bus numbers.** Depth first from the secondary bus, each type 1
+   function in reset state is given primary = its bus, secondary = the
+   next free bus from the member's secondary + 1, and subordinate = the
+   member's subordinate while its subtree is walked (so configuration
+   cycles reach it), narrowed to the last bus of its subtree after. The
+   secondary latency timer byte is written back as read.
+4. **Windows.** Each memory BAR behind the chain is sized (all-ones
+   written, read back, the value read first written back; only on a
+   function whose Memory Space Enable is clear, else nothing more is
+   done; a BAR over 1 GiB, or a 64-bit one of 4 GiB or more, refuses the
+   windows). At each level the BARs of the functions on that bus take a
+   region at the bottom, rounded up together to the level's largest
+   alignment A and starting A-aligned, and each bridge on it a window
+   the size of what its subtree needs, rounded up to the subtree's own
+   alignment and at least 1 MiB (closed where nothing behind it decodes
+   memory, and so is everything below a closed one). The windows are
+   placed from the A-aligned top of the member's own memory window
+   downward, the largest alignment first so they pack with no gap and
+   never reach into the BARs' region, each subtree the same way inside
+   its bridge's window; a member whose A-aligned part is smaller than
+   the total gets no window at all. Each bridge's I/O and prefetchable
+   windows are closed, and its Memory Space and Bus Master Enable set. A
+   member with no memory window, or one too small for the chain and the
+   BARs beside it, gets the bus numbers alone.
+5. **Interrupt lines**, once the windows are in place. A function's
+   interrupt is provably routed only where it travels a wire whose IRQ is
+   already known. The tunnel port's own Interrupt Line is known (the
+   BIOS wrote it and PCI.VXD holds it), and a function below the port
+   whose Interrupt Pin, swizzled up through the bridges, reaches the port
+   on the port's own pin - (pin - 1 + its device + the device numbers of
+   the bridges between) mod 4 equal to the port's pin - shares the port's
+   wire at the port's primary side. Such a function, where its line reads
+   0 or `FFh`, gets the port's line; its pin, and a bridge's Bridge
+   Control, are written back as read. Any other function gets nothing,
+   and keeps whatever PCI.VXD makes of it (Code 29 for want of an IRQ on
+   the P14s). Considered and not used: the IRQ Windows recorded at boot
+   for the same position (`HKLM\Enum`'s LogConfig is rewritten at every
+   enumeration, as it was in the P14s captures, and `HKEY_DYN_DATA`
+   does not survive a restart, so neither is a store a later hot plug
+   can trust), and the BIOS's `$PIR` table (it would be a parser of a
+   BIOS structure for a case the port's own line already decides: on the
+   P14s the table is the standard swizzle, link 61, IRQ 10, the same
+   answer). Bridge Control and the Command register need nothing for
+   INTx: a PCI-to-PCI bridge forwards it whatever Bridge Control says,
+   and Interrupt Disable (Command bit 10) resets to 0.
+6. Every write is preceded by a read that the function is still the one
+   journalled (its identity, a type 1 header), journalled before it is
+   issued, and read back after. Bounds: six levels of bridges, sixteen
+   bridges, buses inside the member's range only. A refusal after the
+   first write (no room, too deep, too many, a numbered bridge below one
+   in reset state, a failed or unheld write, the request gone stale)
+   writes everything journalled back as it was read, deepest first, each
+   only to a bridge that still reads as the one journalled, and each
+   written back value read back; a window refusal puts back the windows
+   and keeps the bus numbers, but a stale one puts back the bus numbers
+   too, so the newer request finds the chain in reset state. The
+   re-enumeration goes ahead in every case but a stale one, which the
+   newer request makes.
+
+**What the owner's ThinkPad read** (2026-10-16, a hot plug after a start
+without the enclosure, each prototype a replaced `xhcicm.sys`): with the
+bus numbers alone, PCI.VXD re-read both ASMedia bridges (their LogConfig
+was rewritten) but left the first at Code 29 with its windows closed and
+no IRQ; with the windows as well, both bridges started with
+`E0000000h`-`E00FFFFFh`, inside the port's `D4100000h`-`E00FFFFFh`, and
+the NVMe appeared, at Code 29 for want of an IRQ; with the interrupt
+lines as well, the NVMe started on IRQ 10 with its BARs at
+`E0000000h`-`E0005FFFh` and its drive letter came up. The first
+prototype wrote no diagnostic; the second wrote `XhciCmBridgeDiag` with
+18 dwords, the third and this record's layout with 20. The driver puts
+the windows at the top of the port's window (`E0000000h`); the BIOS,
+with the enclosure present at power-on, had put them at its bottom
+(`D4100000h`-`D41FFFFFh`). Either is inside the port's window, which is
+what PCI.VXD checks; the placement is this driver's, not a copy of the
+BIOS's.
+
+Why the windows too: in the emulator, with the bus numbers alone, PCI.VXD
+found the second bridge and the NVMe behind it (it never did before), but
+gave the first bridge a window at `10100000h`-`101FFFFFh`, outside the
+tunnel bridge's `FCA00000h`-`FE9FFFFFh`, so nothing behind it decoded.
+With a window already in place, PCI.VXD takes it as the bridge's boot
+configuration, as it does the BIOS's for a chain present at power-on.
+I/O BARs behind the chain get no window: an NVMe has none, and a device
+that needs one is outside what this does.
+
+**The accessors.** Windows 98 SE's `HalGetBusData` does not answer for a
+function PCI.VXD does not know yet (read in the emulator: the hot-added
+bridge read as absent through it, so the first survey found nothing), and
+NTKERN exports `HalSetBusDataByOffset` but no `HalSetBusData`, neither an
+import the HCD carries evidence for (section 10.3's rule: `xhcicm.sys`
+imports nothing `xhci98.sys` does not). So the reads and writes of this
+section go through PCI.VXD's own services, `_PCI_Read_Config` and
+`_PCI_Write_Config` (PCI.H lines 58 and 59; `_cdecl (BYTE bus, BYTE
+devfunc, BYTE offset)` returning the dword, and `(BYTE bus, BYTE devfunc,
+BYTE offset, DWORD value)`, VXDWRAPS.H lines 313-314), reached through the
+VMM dynalink exactly as the CONFIGMG services of section 6.1, under
+PCI.VXD's VxD id `0043h`, so no import is added. The guard is a sanity
+check, not a proof: before the first use, `_PCI_Read_Config` of the
+member's identity dword must equal what `HalGetBusData` read there;
+otherwise the numbering is off for the worker's life, logged once. A
+wrong read ordinal would already have been called by then; the numbers
+are the DDK's, and the legs on 98 SE and ME are what confirm them.
+
+**The switch.** `XhciCmBridgeNumbering` (section 8), 1 by default (the
+owner, 2026-10-16); 0 turns this off, which leaves a hot-added bridge as
+it came up (on the P14s, Code 29 until a restart). Windows 98 SE and ME
+only: the NT route never reads it, since `pci.sys` owns a bridge's bus
+numbers and windows there. No INF writes it and the installer neither
+asks for it nor writes it.
+
+**The diagnostic.** The 9x worker copies its last attempt to the NHI,
+and the thread writes it as `XhciCmBridgeDiag` (`REG_BINARY`, twenty
+dwords, `cm_statb.h`) in the NHI's hardware key beside `XhciCmStatus`, so
+a release build's outcome can be read from a registry export without a
+debugger: the outcome, what was seen, the port's bus range and window,
+the first two bridges' registers as left, the interrupt lines' outcome
+and counts, and why nothing was done where nothing was.
+
+**Not done.** I/O and prefetchable windows, a CardBus bridge, a bridge
+the BIOS left half-numbered, BARs above 1 GiB, a concurrent Device
+Manager Refresh landing between the first and the last write (the window
+is milliseconds and a Refresh only makes PCI.VXD read what is there), and
+a member whose bus range or window is too small: that is the BIOS's
+choice, and the user's way round it is the enclosure present at power-on
+with pre-boot on. Thunderbolt BIOS Assist Mode on is no way round on 98:
+read on the P14s with Assist on, the NHI is absent from Device Manager
+with or without the enclosure and a plug brings up nothing.
+
 ### 6.2 Windows 2000 and later: the bridge filter
 
 `pci.sys` owns the bridge's secondary bus and notices nothing on its own
@@ -1913,9 +2100,8 @@ slot, so under a saturated queue it arrived after the driver's gone deadline,
 and once the disk is gone it fails. The discovery worker, the recipient
 cache and the per-connection discovery context this section proposed go
 with it; nothing in this driver looks for Stor98. `src/cm/cm_nvlink.c`
-(the pure entry protocol, host-tested) and `cm_nvlinkos.c` implement
-this side: interface 2 on NT; on Windows 98 SE and ME, in `3.0.0.0`,
-nothing (the next bullet but one).
+(the pure entry protocol, the locator's bytes and the proof's query
+handler, host-tested) and `cm_nvlinkos.c` implement this side.
 
 - **The table.** One `STOR98LS_TABLE` (signature `S98L`, 4C383953h,
   version 4) in non-paged pool, allocated at
@@ -1938,28 +2124,91 @@ nothing (the next bullet but one).
   `OBJ_PERMANENT`) with one callback that answers `STOR98LS_QUERY` with the
   table's address; Stor98 opens it in `HwFindAdapter`, once. The unload
   unregisters the callback and keeps the table.
-- **Windows 98 SE and ME: no channel in `3.0.0.0`.** Interface 3 (R3
-  to R5; `nvme98`'s MD-5: never a pointer trusted across boots) finds the
-  table through a locator, `REG_BINARY` value `LinkState` of
-  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98` (20
-  bytes: `S98L`, version 4, the table's linear address, its size and a
-  cookie), which Stor98 accepts only beside a current-boot proof: the
-  dynamic key `HKEY_DYN_DATA\Stor98LinkState`, one per boot, created by
-  the connection manager with `_RegCreateDynKey` and answered by its own
-  resident provider (`BootCookie` and `TableLinear`), deleted only at its
-  unload. This build publishes neither (`CmNvlinkOffered`, owner,
-  2026-10-16; roadmap-usb4.md NV9X.1): a locator without the proof gives
-  Stor98 no channel anyway, and an `UP` it can never acknowledge would
-  only make each link-down and eject wait for nothing. So on 98 SE and ME
-  the table is allocated and stays empty: no `UP` is published, no
-  statement is made (none was made there before either: "The statement"
-  below), no acknowledgement is waited for, and the worker makes no
-  `REMOVE_PENDING` request. Stor98 finds no locator, which is R5's "CM
-  channel unavailable": it runs the disk with no link-state channel, on
-  its own gone deadline (MD-1) and its own pool budget, with no
-  clean-eject handshake; an eject or unplug of the drive takes the
-  removal path every other device takes. The former 9x record
-  (`Services\nvme98`, version 1) is no longer written.
+- **Windows 98 SE and ME rendezvous** (interface 3, R3; `nvme98`'s MD-5:
+  never a pointer trusted across boots). At the first tunnel action of the
+  load (no registry service runs while the NHI's own start is pending), and
+  before any `UP` is published on 9x, the driver fills the table's
+  `Cookie` (nonzero, per boot) and then, in this order
+  (`CmNvlinkPublish9x`, host-tested):
+  1. **residency** (R4): on 98 SE and ME `DriverEntry` leaves the driver
+     with no `DriverUnload`, so the image that answers the proof and
+     writes the table stays loaded for the rest of the boot whatever its
+     PnP devices do (until `3.0.0.0` the start of a CONFIGMG worker,
+     section 6.1, did the same later); the publication checks it;
+  2. **the current-boot proof** (R3a): it opens
+     `HKEY_DYN_DATA\Stor98LinkState`; if the key exists another publisher
+     owns it, and if the open fails with anything but "not found"
+     (`ERROR_FILE_NOT_FOUND`) its absence is not shown, and either way
+     nothing is published; otherwise it creates that
+     key with `_RegCreateDynKey`, this image as its provider, with two
+     values answered from this driver's own memory by one query handler in
+     all four of the provider's slots (`PROVIDER_KEEPS_VALUE_LENGTH`, so
+     the handler sets each value's length): `BootCookie` (`REG_DWORD`, the
+     cookie) and `TableLinear` (`REG_BINARY`, 12 bytes: the table's linear
+     address, its size 272 and the cookie). The key's handle stays open
+     for the boot: with it closed at once, 98 SE kept the key's name with
+     no values and the provider was never called (run-41.md);
+  3. **the locator** (R3b), only after the proof: `REG_BINARY` value
+     `LinkState` of
+     `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98`, 20
+     bytes of little-endian `ULONG`s - `S98L`, version 4, the table's
+     linear address, its size and the cookie.
+
+  The services are the VMM's `_RegOpenKey`, `_RegCloseKey`, `_RegCreateKey`,
+  `_RegDeleteKey`, `_RegSetValueEx` and `_RegCreateDynKey` (148h, 149h,
+  14Ah, 14Bh, 152h and 176h, their places in the Windows 98 DDK's `VMM.H`
+  table, checked against `VMM.INC`; the provider and value structures are
+  `VMMREG.H`'s), reached by the INT 20h dynalink of section 6.1. The
+  locator persists across boots and is only a locator; the proof exists
+  only while this image is loaded in this boot, so Stor98 accepts the
+  table only when the proof's cookie and address equal the locator's and
+  the table's cookie matches (R5). The key is deleted only at the unload,
+  before the image that answers it goes (R4); after step 1 no unload
+  comes, so in practice the proof lasts until the restart, and a restart
+  starts with no `HKEY_DYN_DATA` key at all, so the next boot publishes a
+  new table with a new cookie and the old locator names nothing Stor98
+  accepts. Any step that fails leaves that load with no channel: the
+  table stays empty, no `UP` is published there, nothing is awaited and
+  no `REMOVE_PENDING` request is made - which is the whole of 9x's
+  behaviour before this channel existed. The outcome is logged
+  (`cm.nvlink.9x.record`: bit 31 published, else the step in bits 18:16
+  and its code in 15:0). The VMM refuses a static key under
+  `HKEY_DYN_DATA` (Stor98's gate Q-9x), which is why the proof is a
+  dynamic key. Each read of the proof is counted, as NT counts its
+  callback's queries (`cm.nvlink.9x.proof-read` logs each new count):
+  Stor98 reads it once per load, in `HwFindAdapter`, so until it has been
+  read no instance holds the table, and neither the acknowledgement wait
+  nor the removal request below waits for one.
+
+  R4 also asks the connection manager to veto `IRP_MN_QUERY_REMOVE` of its
+  own devices. This driver does not: a disabled or removed Thunderbolt or
+  USB4 controller stops its domain, as on every other target, and the
+  update and uninstall of design record 23's tool go through that removal. The
+  image stays loaded all the same, so the proof is still answered and the
+  table stays valid; what is lost is that domain's further statements and
+  requests, and Stor98's own gone deadline (MD-1) covers its drives - the
+  case R4 itself describes for a connection manager that stops writing.
+
+  What this gives Stor98 on 98 SE and ME is the table and its `UP`
+  entries; it reads the proof and the locator once per load, in
+  `HwFindAdapter` (R3). Where the tunnel's function answers only after
+  `Reenumerate_DevNode` - a drive plugged in after Windows started, on 98
+  SE and ME alike (run-41.md) - its `UP` is published about 200 ms after
+  Windows has started Stor98 on it, so a Stor98 that bound its entry only
+  in `HwFindAdapter` would find none, or a stale one; Stor98 `0.4.0.0`
+  looks its entry up after its start as well, taking only an `UP` above a
+  generation floor, so a hot-plugged drive gets the channel too (read in
+  the joint legs with that release). A drive present when Windows starts
+  is enumerated before this driver publishes, and its first load runs
+  without the channel; a later one, after a re-plug, finds it. It does
+  not give Stor98 a statement or a removal request in `3.0.0.0`: no
+  link-down statement is made there ("The statement" below: no reading on
+  98 SE and ME), and an eject made with the install or tray tool goes to
+  Windows directly (record 24 section 7.1), so the worker's handshake
+  below is not reached by it. Stor98 relies on its own gone deadline
+  (about 5 s) and on Windows' removal, as before; roadmap-usb4.md NV9X.3
+  is the work that makes both.
+
 - **UP before the enumeration.** For each active member, before the call
   that exposes its secondary bus (the invalidation of section 6.2,
   `Reenumerate_DevNode` of section 6.1), the driver scans that bus and
@@ -2025,38 +2274,69 @@ nothing (the next bullet but one).
   marked reads `AckGeneration` = `LinkGeneration`, or the bound from the
   mark: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
   test build; the header gives no number), and 3 s on Windows 98 SE and
-  ME, inside interface 3's R12 S4 bounds (at most Stor98's 9x gone
-  deadline, `STOR98LS9X_GONE_MS`, 5 s, and not below
-  `STOR98LS9X_CM_LINK_WAIT_MS`, 2 s) - unused in `3.0.0.0`, where nothing
-  on 9x is awaited (`CmNvlinkAwaitBoundMs`). The acknowledgement ends the
-  wait at once; an idle
+  ME, inside interface 3's R12 S4 bounds: at most Stor98's 9x gone
+  deadline (`STOR98LS9X_GONE_MS`, 5 s) and not below
+  `STOR98LS9X_CM_LINK_WAIT_MS` (2 s, two of its 250 ms polls and 1.5 s of
+  timer lateness). The acknowledgement ends the wait at once; an idle
   Stor98 that has not answered by then is a benign timeout (G3 run C:
   nothing was held, and its next request applied the statement), and no
   idle indication shortens or skips the wait - the acknowledgement is the
   only signal. Orchestrator decision of 2026-10-15, owner to confirm. The thread services the ICM between
   reads. On NT it does not wait while no driver
   has ever asked for the table (no Stor98 is loaded, so none can answer);
-  on 9x it never waits in `3.0.0.0`.
-- **A removal on 9x** (MD-5; unreached in `3.0.0.0`, which offers no
-  9x channel, and kept for NV9X.1): every CONFIGMG call is the domain's
+  on 9x it does not wait where the proof and locator were not published,
+  nor while no Stor98 has read the proof. Each read checks the bound
+  first and the acknowledgement after it, so one first seen after the
+  bound is late: logged (`cm.nvlink.await.end`, `cm.nvlink.ack-late`)
+  and never taken as an acknowledgement (interface 3's R11 rule, which
+  R12 S4 extends to this wait; applied on NT too). An acknowledgement is
+  taken only when a second read finds it unchanged (R6d). On 98 SE and ME
+  this wait follows a statement, so `3.0.0.0` never reaches it there.
+- **A removal on 9x** (MD-5): every CONFIGMG call is the domain's
   worker's (section 6.1, `cm_cfgwk.c`), and its removal step wraps the
   handshake around a removal of a function still present:
   `Query_Remove_SubTree` first (the file system's quiescence and the veto -
   a refusal is final, nothing is forced); accepted, a `REMOVE_PENDING`
-  request on the entry with a fresh 24-bit sequence, and up to 5 s on the
-  worker for Stor98's answer to that sequence, ended early when the
-  worker's request goes stale; then `Remove_SubTree` always, whatever the
+  request on the entry with a fresh 24-bit sequence (R9a), and up to 14 s
+  on the worker for Stor98's answer to that sequence (R11 O4's T_ack:
+  its 12 s acknowledgement bound, two of its polls and its lateness),
+  ended early when the worker's request goes stale; the deadline is read
+  before each read of the answer, so an answer first seen after it is late
+  and changes nothing (R11: the log carries `FFh` for it, `FEh` for no
+  answer at all, `CmNvlinkRemoveStep`), and an answer is taken only for
+  the request's
+  sequence on the request's generation (R9c) and when a second read finds
+  it unchanged (R6d). Then `Remove_SubTree` always, whatever the
   answer, because Windows 98 has no service that cancels an accepted query
-  and a driver left query-removed stays quiesced. The answer is logged, and
-  only a clean one is a clean removal. The request is the table's `Flags`
-  bit 3, the sequence in `RemoveSequence` and the answer in `RemoveAck`
-  (sequence in bits 31:8, outcome in 7:0: clean 1, isolated not clean 2,
-  failed 3), interface 3's R9, the layout this driver proposed and
-  `nvme98` adopted. Interface 3 asks more of it than this code does - a
-  14 s answer wait (R11 O4), the deadline read before the answer and the
-  answer taken only on the request's generation (R9c, R6d), the endpoint
-  isolated before a removal that is not clean (O5) and `Remove_SubTree`
-  retried for 30 s (O6) - and NV9X.1 brings those with the proof key.
+  and a driver left query-removed stays quiesced; after a request it is
+  retried every 2 s while it fails, until 30 s after the first attempt
+  (R11 O6's bound), and the request is cleared after it (R11 O5). The
+  answer is logged, and
+  only a clean one is a clean removal; MD-5's "a timeout aborts the orderly
+  eject" cannot hold once the query is accepted on 9x. Interface 3 asks
+  two things more that this driver does not do in `3.0.0.0`: after an
+  answer that is not clean, or none, to isolate the endpoint (path
+  teardown, reset, `DOWN_QUIESCED` and its acknowledgement) before
+  `Remove_SubTree` (R11 O5); and after O6's 30 s, to keep the devnode,
+  tear the tunnel down, keep retrying and publish no `UP` on that port
+  until the removal succeeds. Both belong with the per-port, non-blocking
+  waits of roadmap-usb4.md NV9X.2 (R6e). R4's rule for a connection
+  manager loaded again in the same boot (retire every endpoint devnode
+  under its bridges before its first `UP`) does not arise: a load that
+  published is resident and never unloads, and one that did not publish
+  wrote no `UP` anyone bound to. The
+  acknowledgement wait for a statement, which services the ICM, stays on
+  the connection-manager thread before anything is posted to the worker.
+  The request is the table's `Flags` bit 3, the sequence in
+  `RemoveSequence` and the answer in `RemoveAck` (sequence in bits 31:8,
+  outcome in 7:0: clean 1, isolated not clean 2, failed 3), interface 3's
+  R9 - the layout this driver proposed and `nvme98` adopted. The worker
+  runs the whole removal step itself, request, wait and CONFIGMG calls
+  together, so no result is handed between threads and R6f's handoff word
+  has nothing to carry here. The children the worker removes for a tunnel
+  down are
+  functions that vanished, which get no request; under the ICM nothing
+  removes a present one (section 7.4: no per-device teardown).
   `REMOVE_PENDING` asks Stor98 for an orderly stop (its flushes and
   shutdown), never makes a reset claim, and is made only after an accepted
   query, only while the request is current, and only to the function the
@@ -2064,7 +2344,13 @@ nothing (the next bullet but one).
   matching its function's path against the devnode's instance id, still
   `UP` at the same generation and still answering with the same ids; where
   that identity cannot be established, no request is made and the removal
-  goes on.
+  goes on. So it is safe on any removal path of the worker's, a lost
+  controller's included. No request is made before a Stor98 has read the
+  proof. In `3.0.0.0` the worker removes the functions that vanished,
+  which get no request, and after a lost host interface the children it
+  retained, which get one only while the function still answers; the
+  tools' 9x eject does not come through the worker at all, so no eject
+  reaches the handshake - roadmap-usb4.md NV9X.3 routes it there.
 
 **The budget, an estimate and not an enforced deadline.** Stor98
 measures its gone deadline from its own presence loss. The parts: the
@@ -2392,11 +2678,13 @@ its default under the don't-overwrite flag, each read once at start:
 | `XhciCmApprove` | 1 | section 5.4; 0 and 1 only |
 | `XhciCmReenum` | 1 | 0 disables every re-enumeration call (section 6), for a machine where CONFIGMG or the filter misbehaves; the ICM client still runs |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | under the NHI's own device key, so per domain: a comma-separated list of `bb:dd.f` bridges that replaces section 6.3's discovery as the domain's whole tunnel-port set; not written by the INFs (absence is meaningful), and named in the README for machines whose tunnel ports no source lists |
+| `XhciCmBridgeNumbering` | 1 (not written by the INFs) | section 6.1.1, Windows 98 SE and ME only: 1 gives the bridges a tunnel brings up below a tunnel port their bus numbers and memory windows before the CONFIGMG re-enumeration; 0 turns that off (a hot-added bridge is then left as it came up: Code 29 on the P14s until a restart). Absent reads as 1; any value but 0 and 1 is refused and 1 stands. Ignored on NT |
 | `XhciCmSafeEject` | 1 | section 7.4: 1 marks the devices behind an active tunnel bridge removable (the NT child filters, and the 9x flag through `Change_DevNode_Status`); 0 marks nothing. Absent reads as 1, as written by the INFs. Read by the NHI at start and handed to the bridge filters with the active mark |
 | `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000, and held to at most 250 while any entry of the `nvme98` link-state table reads `UP` (section 7.2) |
 | `XhciCmCmdTimeoutMs` | 5000 | the ordinary ICM command timeout (section 5.5), held to 1000 to 60000, retries 3; the TR and ICL `driver ready` timeouts and tries of section 1.4.4 take precedence for that command |
 | `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
-| `XhciLogVerbosity` | as `xhci98.sys` | the shared log rule |
+| `XhciCmLogVerbosity` | 2 | the shared log rule (the `0`-`4` ladder of `xhci_log.h`); its own name, as every value of this driver, and the only one read: `xhcicm.sys` was never released under another (owner, 2026-10-16) |
+| `XhciCmLogDebugView` | 0 | 1 hands the log to `DbgPrint` in every flavour, as `xhci98.sys`'s `XhciLogDebugView` does; 0 to 1, refused otherwise (owner, 2026-10-16: the reversal of decision D12 below) |
 
 Installing the package is already the user's choice of this driver, so the
 master switch defaults to on: a driver that installs and does nothing until
@@ -2414,7 +2702,8 @@ events by code; approvals sent, succeeded, failed; tunnel ups and downs;
 re-enumerations run, skipped (and why), and their `CONFIGRET` or status;
 mailbox commands and their outcomes; idle polls; malformed and unmatched
 frames (section 1.4.6); child filters attached, skipped and refused (section
-7.4).
+7.4). On 98 SE and ME the bus numbering's last attempt is also written to
+the registry as `XhciCmBridgeDiag` (section 6.1.1), in every flavour.
 
 The log is the pure ring of `xhci_log.c`, compiled in by path: producers
 record from the thread, and the ring is emitted at stop from the thread at
@@ -2435,6 +2724,61 @@ amended to name it - was not taken. `XHCISNAP` does not read this driver in the 
 door is `xhci98.sys`'s, and a `\DosDevices\` link and region of this
 driver's own is a later revision if the counters are wanted off a real
 machine.
+
+That revision is design record 25's revision 9 (owner, 2026-10-16): the
+query device `\\.\XHCICM<n>` (record 25 section 4) answers a second
+request, `IOCTL_XHCICM_LOG` (`0x00222904`, answer `XCML` version 1,
+record 25 section 4.5), with the ring and the counters, and `XHCITR`
+shows them. The request copies the ring under `LogLock` and leaves it as
+it was, so a release install's log is read with no checked flavour and no
+DebugView; recording needs `XhciCmLogVerbosity` 2 or above on the NHI's
+driver key (2 is the default from `3.0.0.0`, owner, 2026-10-16) and is
+read at start.
+
+**Decision D12 reversed for the release flavour** (the owner's decision of
+2026-10-16, for consistency with `xhci98.sys`): every flavour of
+`xhcicm.sys` hands the log to `DbgPrint` when `XhciCmLogDebugView` is 1,
+from the connection-manager thread after each pass that recorded
+something and from the PnP path at each stop, at `PASSIVE_LEVEL` only:
+the whole ring drained in one step under `LogLock` into the NHI's own
+buffer, then printed one whole record a `DbgPrint`, at most 128 bytes
+each (`cm_log.c`, `CmQueryLogEmitLines`); the checked flavours always
+do, as before. `cm_log.obj` stays the binary's one
+`DbgPrint` site, now an `all` row of both `xhcicm` allowlists. Below level
+4 the emission withholds the value of each address record
+(`CmQueryLogLine`, the query answer's rule), and a first line the wrap
+may have cut since the last drain is not printed, so no flavour publishes
+an address below the level that asks for one.
+The counters are no longer only written at stop: the thread formats them
+after each pass in the stop dump's names, the child filters' attached,
+skipped and refused among them, and the query device serves them at every
+verbosity. Three records carry an address as their value
+(`cm.live.bar-changed`, a bus address, and on 98 SE and ME
+`cm.reenum.9x.gone.superseded` and `.id-changed`, a CONFIGMG devnode
+handle); the answer withholds their values. Since record 25's
+revision 12 they are written through `CmLogNoteAddress`
+(`XhciLogAppendAddress` under `LogLock`), so they reach the ring at
+`XhciCmLogVerbosity` 4 alone, as `xhci98.sys`'s address records do; the
+answer's label filter stays beside it.
+
+Design record 25's revision 12 (owner, 2026-10-16) adds a third request,
+`IOCTL_XHCICM_PCI` (`0x00222908`, answer `XCMP` version 1, record 25
+section 4.7): the configuration space of the NHI, of each member of the
+domain's tunnel-port set (section 6.3) and, on Windows 2000 and later, of
+the functions below each member, read at the request through the same
+`HalGetBusData` reads from offset 0 that section 6.1 and `tbt_topo.c`
+make, and never written. The members are those the thread last published
+with the query answer. The walk below a member follows section 6.3's bus
+numbers - a bridge's secondary bus is entered only inside the member's
+own secondary-to-subordinate range and above its parent's, each bus once
+- and is bounded (32 functions, 16 buses a member, 8 bridges deep). On
+Windows 98 SE and ME the functions below a member are not read: section
+6.1's `PCI.VXD` does not number a bus a tunnel brings up after boot, and a
+read of a bus number nobody assigned is not made; branch `tb-code29`'s
+`PCI.VXD` read route, with its guard, is where that half goes once it is
+on this line. Nothing of sections 6 and 7 changes: no filter, child filter
+or CONFIGMG call is involved, and the request takes no lock the thread
+holds across a configuration access.
 
 The clock behind every wait and every time in the log is the tick count,
 `KeQueryTickCount` times `KeQueryTimeIncrement` (`cm_thr.c`): monotonic,
@@ -2794,7 +3138,7 @@ revised to it in draft 6.
 | D9 | Other Alpine Ridge NHI ids | **Owner, 2026-10-15, changed**, then widened the same day: every Alpine Ridge NHI id and the Titan Ridge NHI ids are claimed, ids from the public PCI id listing with the source in `legal-provenance.md`, with the matching port ids for the filter INF; Titan Ridge gets a best-effort row; every id but `15BF` is untested, the README and release notes say so plainly, and the untested ids act by default with that warning (`XhciCmMode` 1). By the owner's source rule of the same day (section 9) the profiles are read from Linux, and the coverage became every Intel firmware-connection-manager host Linux addresses - Falcon Ridge, Alpine Ridge, Titan Ridge, Maple Ridge, Ice Lake to Meteor Lake - with four-test selection, an inert start, hardware profiles apart from message profiles, per-domain tunnel-port sets and a no-reset policy (sections 1.4.2 to 1.4.6, 3.3, 6.3); the widening, the selection and the inert start are orchestrator decisions of 2026-10-15 for the owner to confirm. `XhciCmMode` 2 with a user-edited INF copy stays the route for an id the list does not carry | 1.3, 1.4, 3.3, 5.1, 5.2, 5.3, 6.3, 8, 9, 10.1 |
 | D10 | Safe eject | **Owner, 2026-10-15, changed**: in Phase 39, task `39-A.8`; on NT the filter answers `IRP_MN_QUERY_CAPABILITIES` with `Removable` (and `SurpriseRemovalOK`, so a plain unplug shows no Unsafe Removal dialog); on 98 SE and ME through CONFIGMG, best effort; NT-only with a release-notes line if the 9x half cannot be made to work; the eject stops the drivers and the user unplugs, since under the ICM there is no per-device teardown. Section 7.4 applies it with two refinements for the owner to confirm, each from a fact the decision did not have in front of it: the mark goes on the devices reported on the tunnel bridge's bus (through child filters the bridge filter attaches), not on the bridge, which never leaves the machine and would be held for eject until a restart; and `SurpriseRemovalOK` is set only where leg `39-V.2` shows Windows still lists the device with it, since Microsoft's reference says a device with both bits is not shown in "Unplug or Eject Hardware" | 1.3, 3.2, 6.2, 7.4, 8, 10.2, 12 |
 | D11 | A master switch for the whole driver | **Owner, 2026-10-15, as recommended**: `XhciCmMode`, default 1 (auto), 0 off, 2 force the ICM client at the user's own risk, 3 reserved for the software connection manager; the install is the real opt-in, so the default is on. Value 3 has since been given its meaning by the orchestrator's coverage decisions of the same day, for the owner to confirm: the software connection manager's experimental override (section 1.4.2, design record 22) | 8 |
-| D12 | The log emission | **Owner, 2026-10-15, as recommended**: nothing in `release`, `#if DBG` in `debug` and `qemu`, keeping `AGENTS.md`'s two-site `DbgPrint` rule as it is | 8 |
+| D12 | The log emission | **Owner, 2026-10-15, as recommended**: nothing in `release`, `#if DBG` in `debug` and `qemu`, keeping `AGENTS.md`'s two-site `DbgPrint` rule as it is. **Reversed for `release` by the owner on 2026-10-16**, for consistency with `xhci98.sys`: every flavour prints under `XhciCmLogDebugView` 1, address values withheld below level 4 | 8 |
 | D13 | Cut before the bench for Phase 39 | **Owner, 2026-10-15, as recommended**: the VM legs and gates before the cut, `39-E.1` and `39-E.2` after it on the asset, a failure there a re-cut; the cut being `3.0.0.0` at `40.final` (D7) | 10.4 |
 
 ## 12. What is open, and what is a risk

@@ -777,6 +777,87 @@ its hub descriptor, `779b676a`), as the standard user:
 - Not read: the label of an emulated Thunderbolt chip's xHCI under
   `xhcicm.sys` ("Thunderbolt 3 controller's USB").
 
+### Resources (record 25 revision 10, second addendum)
+
+Read on the tools of `1f6c151d` (7 x86) and `b6592938` (98 SE), as the
+standard user:
+
+- 98 SE with the emulated Thunderbolt 3 enclosure (`tb3-alpine-ridge`)
+  and an NVMe unit behind it: the NHI "IRQ 11 (level, shared)", "Memory
+  FE600000-FE63FFFF"; the tunnel port's bridge "I/O C000-CFFF", "Memory
+  FE400000-FE5FFFFF" and "Memory FE000000-FE1FFFFF" (its two windows),
+  "IRQ 11 (level, shared)", "Memory FE800000-FE8000FF"; the NVMe
+  controller behind it "IRQ 10 (level, shared)", "Memory
+  FE400000-FE403FFF", inside the bridge's window. The bridge also gave a
+  descriptor of type 67 with no data, a type CONFIGMG does not arbitrate
+  (it arbitrates memory, I/O, DMA and IRQ); that build printed it as "a
+  resource of type 67, 0 bytes, that could not be read", and `fb450f51`
+  prints "Resource type 67 (no data)" (not read again on 98 SE). No
+  bus-number range on 98 SE, for the same reason, and no PCI location for
+  a function behind a bridge (the instance ID gives only a root bus's).
+- 7 x86, the xHCI controller: "PCI location: 00:03.0", "Memory
+  FEBF0000-FEBF3FFF", the IRQ "message-signalled", and its MSI data as
+  "Resource type 0x8001 (36 bytes)"; `b6592938` names that "Private data
+  36 bytes" (a host vector; not read again on 7).
+- The Status line on 98 SE and ME (for example the NHI's "0x19886ACE
+  (started)") is CONFIGMG's whole devnode flag word, not a stray value:
+  `DN_APM_DRIVER`, `DN_APM_ENUMERATOR`, `DN_NT_DRIVER` (a WDM driver),
+  `DN_NT_ENUMERATOR`, `DN_NOT_FIRST_TIMEE`, `DN_REMOVABLE`,
+  `DN_DISABLEABLE`, `DN_FILTERED`, `DN_HAS_MARK`, `DN_HARDWARE_ENUM`,
+  `DN_NOT_FIRST_TIME`, `DN_STARTED`, `DN_ENUM_LOADED`, `DN_DRIVER_LOADED`
+  (cfg.h). The 9x-only high bits make it look unlike NT's 0x0180600A.
+
+### XHCIINST with its output redirected
+
+On 98 SE, `XHCIINST /eject 1 > C:\EJ.TXT` (the emulated Thunderbolt 3
+enclosure, an NVMe unit behind it) had looked hung. Read again with the
+tool of the dry cut before the fix: a blank console; the file held the
+list and "Eject it now? ...", and the tool was waiting for the keyboard -
+an `n` and Enter typed blind cancelled it, a second Enter answered the
+closing "Press Enter", unseen as well. On 7 x86, from an elevated prompt,
+`XHCIINST /eject > ejo.txt` sat the same way at the unseen "Press Enter".
+The text went to standard output alone while the answers came from the
+console.
+
+With `788279cc` (the text also to standard error when standard output is
+not the console and standard input and standard error are):
+
+- 98 SE: `XHCIINST /eject 1 > C:\EJN.TXT` showed the list and the question
+  on the screen; `y` stopped the unit ("You can now unplug the device.",
+  exit code 0); the file held the same text. Without redirection, after a
+  re-plug, the text showed once, as before. XHCITR's `/eject id=... >
+  C:\TR.TXT`, for comparison: its confirmation is a message box, so it
+  never waited unseen; its answer went to the file.
+- 7 x86, an elevated prompt: `XHCIINST /eject > ejn.txt` showed its text
+  and "Press Enter" on the screen, the file the same; `/eject /nopause`
+  without redirection printed once. Run from a prompt that is not
+  elevated, the tool asks for elevation and runs in a console of its own,
+  where a redirection does not reach.
+
+### XHCIINST and an NHI whose New Hardware wizard was cancelled (98 SE)
+
+A fresh 98 SE overlay (`win98-gold`) with the emulated Thunderbolt 3
+enclosure; the five bridges installed through their wizards, the NHI's
+("PCI System Peripheral") and the Thunderbolt chip's xHCI's cancelled. The
+install run's Thunderbolt question then said "No Thunderbolt or USB4
+controller was found" and offered N, as the leg that found it read; the
+same after a restart with the NHI's wizard cancelled again.
+
+- The log of that run lists every devnode the walk met: the five bridges
+  (`VEN_8086&DEV_15C0`), no NHI (`DEV_15BF`) and no Thunderbolt xHCI. The
+  NHI had no devnode.
+- Nor was it in `HKLM\Enum\PCI`: an export of that key held no `DEV_15BF`
+  (nor `CC_0880`), and an export of the NHI's own key found none. The one
+  entry the registry fallback listed was an old slot of the board's own
+  xHCI controller from the base image's history.
+- So a registry fallback that also admits an NHI (written, host-tested and
+  reviewed, `f060eae8`) changed nothing here: on 98 SE a device behind the
+  tunnel's bridges whose wizard was cancelled leaves neither a devnode nor
+  an `Enum\PCI` entry for the tool to read. It was reverted (`fbda19be`).
+  The question's own text already covers this ("Some computers show theirs
+  only while a device is plugged in ...: answer Y if this computer has a
+  Thunderbolt or USB4 port"), and `/thunderbolt` includes it unasked.
+
 ## Stor98 behind the Thunderbolt 3 controller (STOR.2)
 
 Readings of 2026-10-16 on development host A, `vm\usb4\bin-2a893ea` (its
@@ -896,6 +977,334 @@ Evidence: `E:\xhci98-vm\stor1-legs\` - `shots\` (screendumps by guest and
 step), `w98\`, `me\`, `me2\`, `w2k\` (`events.txt`, `debugcon-*.log`,
 `serial-*.log`, `trace-*.log`, `qemu-*.cmdline`), `pids.txt` (every QEMU
 started and how it ended); the cut's log `E:\xhci98-wt\stor1-legs\out\cut-x86.txt`.
+
+## The drivers' logs (record 25 revision 9)
+
+Leg T.8, 2026-10-16, on branch `tr-logs`: a dry x86 TEST cut of the
+branch at `5215f765` (no Stor98), the emulator `vm\usb4\bin-2a893ea`, the
+`tb3-alpine-ridge` host (BIOS assist off, so its own xHCI 15C1 is driven
+by `xhci98.sys` too) beside a `qemu-xhci` with a tablet, each guest an
+overlay on `E:\xhci98-vm\tr-logs\`. The enclosure was plugged and
+unplugged with QMP `device_add` and `device_del`. Its NVMe function had
+no driver in a cut without Stor98, so the unit was not started and the
+tool, rightly, offered no Safely Remove for it; the unplug stands in for
+the eject in every leg below.
+
+| System | Recording off | Recording on (both at 2) | Report |
+|---|---|---|---|
+| 98 SE | both nodes: "Recording: off", xhcicm's advice naming `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\System\0034`, xhci98's naming `SNAPON.BAT`; xhcicm's counters shown at level 0 | after a `.REG` file and `SNAPON.BAT` and a restart: xhcicm's counters and log live after the plug (`tbt.icm.connected`, `cm.action.tunnel-up`, `cm.reenum.9x.reenumerate`) and after the unplug (`tbt.icm.device-gone`, `cm.action.tunnel-down`); xhci98's counters and log on both controllers, build "release" | `/report` through `RPT.BAT` to COM1: both logs, every controller, no address record |
+| 7 x86, standard user (`trlu`, Users only) | both nodes, as on 98 SE, with "(as an administrator)" and the `...\Control\Class\{4d36e97d-...}\0028` key | after `reg add` and `XHCISNAP -on 2` as an administrator and a restart: both logs live as the standard user, the plug's balloon, `cm.reenum.child.attached` 1 among the counters | two `/report`s as the standard user, before and after the unplug, to COM1: both logs, `tbt.icm.device-gone` in the second, no address record |
+| 2000 | both nodes, the key `...\{4D36E97D-...}\0014` | after `regedit /s` and `XHCISNAP -on 2` and a restart: both logs, counters | three `/report`s (off, on, after the unplug), no address record |
+
+Read: the query device answers `IOCTL_XHCICM_LOG` on 98 SE (the open with
+no access rights, then read and write, section 14), on 2000 and on 7 to a
+standard user; xhci98's door answers the tool as it answers XHCISNAP;
+the counters move between two selections of the node (the pass and its
+age shown); the recording-off text is exactly section 3.5's; no report
+held `start.bar`, `start.ok` or `cm.live.bar-changed`. Evidence:
+`out\trl\` in the worktree (screens `shots\w98-*`, `shots\w7-*`,
+`shots\w2k-*`; reports `report-w98-1.txt`, `report-w7-std.txt`,
+`report-w2k.txt`).
+
+Not read: Safely Remove followed by the log (no unit was started, above);
+level 4's withheld ring (host vectors only); a checked flavour's drained
+ring (host vectors only).
+
+### xhcicm's DebugView switch and its value name (owner, 2026-10-16)
+
+The same leg set, after `XhciCmLogVerbosity` (default 2, the only name
+read) and `XhciCmLogDebugView` (record 21 section 8, decision D12
+reversed for the release flavour). The release `xhcicm.sys` was copied
+over the installed one and the values set by hand; DebugView 4.64 ran
+with kernel capture.
+
+- **98 SE** (the build of `1ff7e802`, whose emission code is the final
+  one): with `XhciCmLogDebugView` absent, nothing across a plug; set to 1
+  and restarted, xhcicm's records across an unplug and a plug
+  (`tbt.icm.device-gone`, `cm.action.tunnel-down`, `cm.reenum.*`,
+  `cm.brnum.9x.*`, `flush.*`); the report's counters held
+  `cm.log.debugview 1` and the node "this build hands the log to a
+  debugger".
+- **7 x86** (the build of `e05de30e`), the reports as a standard user:
+  `XhciLogVerbosity` 0 in the key and `XhciCmLogVerbosity` absent read
+  "Recording: on (XhciCmLogVerbosity 2)", so only the new name is read;
+  with `XhciCmLogDebugView` absent, nothing across a plug; with
+  `XhciCmLogVerbosity` 3 and `XhciCmLogDebugView` 1, xhcicm's records
+  across an unplug and "Recording: on (XhciCmLogVerbosity 3)". Windows 7
+  passes a plain `DbgPrint` only with the Debug Print Filter's `DEFAULT`
+  set (15 here), as for `xhci98.sys`.
+- No address record occurred in either leg; the withholding of the three
+  address values at levels below 4 is read by host vectors only
+  (`test_cm_query`).
+
+Evidence: `out\trl\shots\w98-dv-*`, `shots\w7-dv-*`,
+`report-w98-dv1.txt`, `report-w7-dv0.txt`, `report-w7-dv1.txt`.
+
+## Bridges behind the tunnel port on 98 SE and ME (record 21 section 6.1.1)
+
+The question: why an ORICO ASM2464 USB4 enclosure plugged into the
+owner's ThinkPad P14s Gen 1 after Windows 98 SE had started showed its
+switch's upstream port, `PCI\VEN_1B21&DEV_2463`, with Code 29 and nothing
+behind it, when the same enclosure present at power-on worked; and what
+the driver does about it. Readings of 2026-10-16.
+
+### The finding on the owner's ThinkPad P14s Gen 1
+
+- **Setting.** 98 SE in APM mode, Alpine Ridge LP (NHI `8086:15BF`,
+  tunnel port `04:01.0`), ICM, security level 1, firmware `0x60`; BIOS
+  Thunderbolt BIOS Assist Mode off, Support in Pre Boot Environment on;
+  `XhciCmApprove` 1; the `3.0.0.0` test build.
+- **A (present at power-on).** Both ASMedia bridges started with
+  `D4100000-D41FFFFF` and IRQ 10, Stor98 on IRQ 10 with its BARs at
+  `D4100000-D4105FFF`, D: present.
+- **B (Safely Remove in XHCITR, unplug, re-plug)**, and the first report
+  (a hot plug after a start without the enclosure): the upstream port at
+  Code 29 (`CM_PROB_HARDWARE_DISABLED`), status `0x180066A4`, an empty
+  `Allocation` in `HKEY_DYN_DATA\Config Manager\Enum`, nothing behind it.
+  The tunnel port's own allocation was the same in A and B: memory
+  `D4100000-E00FFFFF`, prefetchable `A0000000-BBFFFFFF`, and its bus-number
+  resource (type `0043h`, `ResType_PCI_Bus_Number`). Its BIOS-programmed
+  range is secondary `06`, subordinate `2A` (usb4-emu's DOS captures).
+- **Refresh and Remove.** A Device Manager Refresh changed nothing; a
+  Remove of the devnode and a Refresh gave a fresh devnode, a wizard, a
+  restart request, and Code 29 again.
+- **Assist on.** No NHI in Device Manager at all, with or without the
+  enclosure, and a plug brings up nothing; Assist is no way round on 98.
+
+### Why, read in the emulator
+
+Emulator `vm\usb4\bin-2a893ea` (SHA-256 checked), 98 SE (overlays of
+`vm\t26\win98-gold.qcow2`, which runs 98 in ACPI mode) and ME (overlay of
+`vm\t37me\winme-stock-base.qcow2`). The tunnel port is the SHPC
+`usb4-tunnel-bridge` on bus 0 with `bus-reserve=8,mem-reserve=32M`
+(buses 1-9, memory `FCA00000-FE9FFFFF`), the host `tb3-alpine-ridge`
+with the ORICO model (`device-model=asm2464`), which on i440FX puts its
+NVMe directly on the tunnel bus: the earlier NVMe legs had no bridge in
+between. A two-level bridge chain with an NVMe behind it was added behind
+the tunnel bridge's gate (hot-added `pci-bridge`s, then the BAR-less
+`usb4-asm-pci-usp` and `pci-bridge-seat` of the NT legs at slot 4), so it
+came up in reset state at the plug. The ACPI-mode guest is not the
+P14s's APM mode; the mechanism read is the same.
+
+- **No driver change, a Refresh, read before any restart.** The first
+  bridge got bus 1 -> 2/2 (no room below) and only its own BAR, and a
+  wizard asked for a restart; a second pass numbered the second bridge
+  and gave the first a window at `10100000-101FFFFF`, outside the tunnel
+  bridge's, and asked for a restart again. The NVMe got nothing.
+- **`HalGetBusData`** on 98 SE did not answer for a function PCI.VXD did
+  not know yet: the first prototype's survey through it found an empty bus.
+  The numbering reads and writes through PCI.VXD's own services.
+
+### The prototypes on the P14s
+
+Each was a replaced `xhcicm.sys`, the enclosure plugged in after a start
+without it, 30 s, then the exports.
+
+| Series | Build | Result |
+|---|---|---|
+| c | bus numbers only (`cd56e90f`) | upstream port still Code 29; both ASMedia keys' LogConfig rewritten with the memory window closed and no IRQ, so PCI.VXD had reached the downstream port; no `XhciCmBridgeDiag` in this build |
+| d | bus numbers and windows (`0c50f11b`) | both bridges started at `E0000000-E00FFFFF`; Stor98 Code 29, no IRQ; `XhciCmBridgeDiag` (18 dwords): outcome numbered, port `0408` buses `002A0604`, window `E000D410`, bridges `00080706` and `00080807`, windows `E000E000` |
+| e | and interrupt lines (`bde7f10f`) | D: present, every problem code 0; Stor98 on IRQ 10, BARs `E0000000-E0005FFF`; diag word 18 `00010A01`, word 19 `00000303` |
+| f | the merged tree, reviewed (`b9c18c41`) | as e, every problem code 0, D: present, the same resources and diag |
+| g | the same build: Safely Remove in XHCITR, unplug, re-plug | as f: D: back, no device in error, the same resources and diag |
+
+The windows are the driver's own placement, at the top of the port's
+window; with the enclosure present at power-on the BIOS had put them at
+its bottom (`D4100000-D41FFFFF`).
+
+### The final build in the emulator
+
+The qemu flavour of `b9c18c41` on 98 SE, the BAR-less chain at slot 4
+(its NVMe's INTA reaches the tunnel port as INTA), Stor98 0.3.0.1
+(`releases\0.3.0.1`, `SHA256SUMS.txt` `aee07c9c...cb9`) installed through
+the wizard:
+
+| Leg | Result |
+|---|---|
+| First plug, devnodes new | bus numbers 1/2/3 and 2/3/3, both windows `FE900000-FE9FFFFF` inside the tunnel bridge's, line 10 on the NVMe (`irq-counts` 1 of 2, the ORICO's own NVMe at device 1 arriving on INTB left alone); a wizard and a restart request for each new bridge location, declined; then Stor98: the NVMe started with BAR `FE900000` and IRQ 10, E: mounted |
+| Hot plug after a reset with the unit out (devnodes known, the chain in reset state: the P14s case) | the same writes; no wizard, no restart request; E: within 30 s |
+| Unplug and re-plug in one session | the tunnel down removed the children; the emulator gives the chain back configured, so the survey read it numbered and wrote nothing; the NVMe started again |
+| Present at power-on | the driver found the port's devnode already holding the chain (`cm.brnum.9x.held`) and wrote nothing; the BIOS's configuration stood and the chain started |
+| `XhciCmBridgeNumbering` 0 (read as `0x100`: found, 0) | no numbering activity in the log; the chain kept closed windows, the NVMe got no BAR and no IRQ, no E: |
+
+ME, the qemu flavour of `fb98ed81` (the same set-up logic before the last
+review fixes), hot-added `pci-bridge` chain at slot 3: bus numbers
+1/2/3 and 2/3/3, both windows inside the tunnel bridge's
+(`FE800000-FE9FFFFF`), PCI.VXD then found the NVMe behind both bridges
+(a "PCI Card" wizard; no NVMe driver on that guest), and an interrupt
+line on 1 of the 4 functions with a pin: the other three reach the port
+on other pins and were left alone, as the rule says.
+
+The final build, the qemu flavour of `49809c08` (the windows' sizing
+with an aligned region for the BARs at each level, the readiness wait
+behind a new bridge, a stale attempt's undo), on 98 SE after a restart
+with the unit out: the same bus numbers, windows and line as above,
+`win-need` now `00200000` (the ORICO's own NVMe beside the chain takes
+an aligned 1 MiB region), no wizard, E: within 30 s. For the P14s chain
+the writes are the same as `b9c18c41`'s: nothing sits beside the
+upstream port and the NVMe answers behind the downstream port, so its
+windows come out at `E0000000-E00FFFFF` as before.
+
+Not read: the USB4 profile with a bridge chain (the same worker and the
+same member set, so covered by the shared path, not tested under USB4);
+ME with Stor98 and known devnodes.
+
+### The Stor98 link-state channel on 98 SE and ME (NV9X.1)
+
+The current-boot proof key and the locator of interface 3 (record 21
+section 7.2), read on the `nv9x` build on 2026-10-16 evening, with Stor98
+`0.3.0.1` - the release then at hand. `3.0.0.0` bundles Stor98 `0.4.0.0`;
+these rows are the test history of the publication, and the joint legs
+with `0.4.0.0` read the channel again. Emulator `vm\usb4\bin-2a893ea`
+(SHA-256 checked before use), `tb3-alpine-ridge` with the NVMe enclosure
+`enc0`, i440FX; 98 SE from the gold image, ME from the stock image, 2000
+from the STOR.2 image; overlays under `E:\xhci98-vm\nv9x`, every window
+shown. The package was a dry x86 TEST cut bundling Stor98 `0.3.0.1`
+(`make-release.ps1 -TestLabel "dry cut"`), installed by `INSTALL
+/defaults /yes /thunderbolt` and the Device Manager steps it prints, and
+Stor98 by Have Disk on the NVMe controller's New Hardware wizard (SCSI
+controllers, `release-x86`). `xhcicm.sys` was then replaced by the `qemu`
+flavour of the same commit, with `XhciLogVerbosity` 2 on the NHI's driver
+key (the name that build read; `XhciCmLogVerbosity` since `tr-logs`); the
+notes below are its port-0xE9 lines.
+
+**The first build closed the proof key's handle, and the key had no
+values.** On 98 SE with `387990e0`: `cm.nvlink.9x.record=80000000` (proof
+and locator written), Stor98 installed and running E:, but
+`HKEY_DYN_DATA\Stor98LinkState` showed in regedit with no values, and the
+provider was never called - no read counted, from Stor98 or from regedit,
+while the VMM's own dynamic values (`PerfStats\StatData`) showed. The
+code had closed the key's handle right after `_RegCreateDynKey`; Stor98's
+own 9x stand-in keeps it open. `edb1c464` keeps it open for the boot and
+closes it only at an unload, before the key is deleted (record 21 section
+7.2). Every row below is that build.
+
+- **The publication** (98 SE and ME): `cm.nvlink.9x=00000000` at the start
+  (nothing published), then at the first tunnel action
+  `cm.nvlink.9x.record=80000000` - residency, the key opened first and
+  absent, the proof created, the locator written. regedit read the proof
+  through the provider: `BootCookie` 0xD5D654CF and `TableLinear`
+  {C14A2670h, 272, 0xD5D654CF}, and the locator `LinkState` {'S98L', 4,
+  C14A2670h, 272, 0xD5D654CF} - the same address and cookie in all three.
+  A search of the whole registry for `nvme98` found nothing, and the one
+  NVMe devnode ran `stor98.mpd` (`SCSIAdapter\0000`, XHCITR's details).
+- **Stor98 finds the proof** (no rc 0x0A). Each Stor98 load read both
+  values: `cm.nvlink.9x.proof-read=00000002` at its `HwFindAdapter` on 98
+  SE and ME, and 2 more at each later load (each regedit view also adds 2,
+  through the ring-3 handler). The release Stor98 reports no rc; whether
+  it accepted the table is Stor98's code against these values.
+- **The order on a hot plug.** The function behind the tunnel answers only
+  after `Reenumerate_DevNode`, on 98 SE and ME alike: `cm.nvlink.up.waited`
+  0x406 and 0x413 ms with nothing answering, the re-enumeration, Stor98's
+  read of the proof, and then `cm.nvlink.up=01000401` 206 ms after the
+  exposure (`up.late=0000CE00`). So the `UP` follows Windows' start of
+  Stor98 on the drive, and Stor98 `0.3.0.1`, which bound its entry only in
+  `HwFindAdapter`, found none on a first plug; on ME, where Stor98 was
+  installed after the plug, the `UP` was already there when it loaded.
+  With the drive present at power-on, Windows enumerated it before
+  `xhcicm.sys` published, and that load read no proof.
+- **XHCITR Safely Remove** on 98 SE and ME: "Windows has stopped QEMU NVMe
+  Ctrl (E:) ... You can now unplug the device." No `REMOVE_PENDING` was
+  made: the tool's eject goes to Windows directly (record 24 section 7.1),
+  not through the worker.
+- **Link-down**: at every unplug the statement was withheld,
+  `cm.nvlink.icm-down=00090404` and `cm.nvlink.withheld=09000001` (verdict
+  9, no reading on 98 SE and ME), so no acknowledgement was awaited and no
+  wait was measured there.
+- **Unplug and re-plug** on 98 SE: the withheld statement, then
+  `cm.nvlink.up=02000401` (generation 2, `up.late=0000C000`, 192 ms) and
+  the new load's read of the proof. Stor98 `0.3.0.1`'s controller started,
+  but no disk came back ("Invalid drive specification"), after an eject
+  and without one, and again after a clean restart. The cause is Stor98's
+  (found on its `latebind` branch): the withheld statement leaves the
+  entry `IN_USE` at generation 1, the new load's `P9Bind` bound that stale
+  entry, and the `UP` of generation 2 that followed read to it as R8b's
+  quiesce evidence, so it went gone and failed every request; `0.4.0.0`
+  binds only an `UP` above a generation floor. On ME the same re-plug
+  ended, at the next shutdown, in "VCACHE(01) + 00000E4D Error: 0E : 0028
+  : C004E4E9", and a shutdown after an eject with the enclosure left in
+  showed "Error: 0E : 018F : BFF775B4"; neither was taken further.
+- **A surprise unplug** with E: mounted and a file just written: 98 SE and
+  ME showed Windows' "Disk Write Error ... drive E:" until dismissed; then
+  the worker's `cm.reenum.9x.query-remove=00000000`,
+  `cm.reenum.9x.remove=00000000` (a vanished child, no request) and the
+  re-enumeration.
+- **ME write-through**: `SYSTEM.INI` copied to E: as `WT1.TXT`, about 20 s
+  later the surprise unplug; after a cold restart with the enclosure in,
+  `WT1.TXT` was there, 2,025 bytes, and `fc /b` against the source: "no
+  differences encountered".
+- **A restart**: `cm.start`, then at the first tunnel action a new
+  table and a new proof - `BootCookie` 0xD8E8D536 where the boot before
+  had 0xD5D654CF - with the locator rewritten to match. The load that
+  Windows started before the publication read the old boot's locator with
+  no proof beside it, so no table of the earlier boot was used.
+- **Windows 2000, unchanged**: `cm.nvlink.nt=80000000` (the callback
+  registered, no reload), `cm.nvlink.up=01000401` before the enumeration;
+  at a surprise unplug the statement made (`icm-down=00000402`,
+  `down=00000001`) and the wait ended at once with no receiver
+  (`cm.nvlink.await=00000000`, `cm.nvlink.await.end=00000300`: no Stor98
+  had asked for the table, as `0.3.0.1` does not on NT), then the
+  retirement - as `3.0.0.0` did.
+
+Not read: the 9x waits with an acknowledgement (no statement and no
+request is made on 98 SE and ME in `3.0.0.0`; roadmap-usb4.md NV9X.3),
+the USB4 profile, and Stor98 `0.4.0.0` (the joint legs).
+
+## PCI configuration, the query request and the default level (record 25 revision 12)
+
+Branch `tr-pci`. `xhcicm.sys`'s `IOCTL_XHCICM_PCI`, `xhci98.sys`'s
+`IOCTL_XHCI98_QUERY` and XHCITR's "PCI configuration" nodes; the logging
+level's default of 2.
+
+### The cost of level 2 on real hardware (the owner, 2026-10-16)
+
+| Machine | Build | What | Level 0 | Level 2 |
+|---|---|---|---|---|
+| ThinkPad P14s Gen 1, Windows 98 SE | release x86 `xhci98.sys`, `tr-pci` `b464cad5` (gated build r5) | ATTO, Direct I/O, 256 MB, a USB Bulk-Only drive on the machine's own xHCI controller, write / read in KB/s | 64 KB 202993 / 211369; 1 MB 208493 / 208899; 8 MB 210537 / 220934 | 64 KB 196801 / 206360; 1 MB 204522 / 207286; 8 MB 208899 / 218684 |
+
+One machine, one pair of runs: about 1 to 2% at 1 MB and up, 2 to 4% from 4
+to 512 KB, up to about 5 to 6% on 16 and 32 KB writes, with a run-to-run
+noise of several percent (the 32 KB read was 10% faster at level 2). The
+owner kept the default at 2. The ATTO screenshots are on the maintainer's
+disk only.
+
+### The legs (record 25 leg T.9, 2026-10-16)
+
+Emulator `vm\usb4\bin-2a893ea` (SHA-256 checked), each guest from an
+overlay that had only booted once before, with `qemu-xhci`, a USB tablet
+and a FAT stick, the Thunderbolt guests with the `tb3-alpine-ridge` host,
+its tunnel bridge and the ASMedia NVMe enclosure. Packages: a dry x86
+TEST cut of the gated x86 build (`r6`: `a61ccb98`; `r7`: `7d6e11d5`, the
+98 SE reading fix below); x64, the unsigned release-x64 of the gated amd64
+build `r6b`, run on 7 x64 with signature enforcement disabled from F8 at
+every boot. The report was written with `XHCITR /report` and copied to
+the stick, and read off the stick image on the host.
+
+| Guest | Build | Install | Enumeration, stick copy, unplug and re-plug | xhci98: PCI configuration, Driver log | xhcicm: PCI configuration |
+|---|---|---|---|---|---|
+| 98 SE (TB) | r6, r7 | the drivers copied over an earlier 3.0.0.0 test install (the installer's 98 route then the wizards), level 0 kept | pass: the stick at G:, out and back, `SHELL32.DLL` and the report copied | decoded (1B36:000D, pin INTA line 11, no capability list); level 0, the advice | r6: NHI "location not read", the tunnel port "no function" - the defect below; r7: the NHI 8086:15BF decoded (pin INTA line 11, PM); the tunnel port decoded once its bridge driver was installed (1B36:0001, pin INTA line 10, Bus 01-09, three windows, 3 capabilities); below it "Not read on this system" |
+| ME | r6 | fresh, level 2 | pass (G:; a second, stale BIOS-mapped E: for the same stick, in MS-DOS compatibility mode) | decoded; level 2, 51 of 246 counters, 138 records | - |
+| 2000 | r6 | update over 1.1.0.0, level 0 kept; `SNAPON.BAT` then level 2 | pass (F:) | decoded; level 0 with the advice, then level 2 | - |
+| XP | r6 | fresh, level 2 | pass (F:) | decoded (MSI-X present, disabled; pin INTA line 10); level 2, 136 records | - |
+| 7 x86 (TB), as the standard user `tuser` | r6, r7 | fresh, level 2 | pass (F:; the copied `EXPLORER.EXE` hash equal) | both controllers decoded (qemu-xhci: MSI-X enabled, INTx disabled, line 0; the TB xHCI 8086:15C1); level 2 | NHI 00:04.0, tunnel port 00:05.0 (pin INTA line 10, 3 capabilities), below it 01:01.0 NVMe (010802, MSI-X, PCIe v2 Gen 1 x1, PM); 35 reads, 0 refused; the same on r7, every function read whole (r7 put in with `INSTALL /restage` over the r6 build of the same version, as the installer asks; it keeps an `XHCITR.EXE` of the same version, so the tool was copied by hand) |
+| 7 x64 | r6b (unsigned, F8) | fresh, level 2 | pass (F:; hash equal) | decoded (MSI-X enabled); level 2, 141 records | - |
+
+No report held `start.bar`, `start.ok`, `start.common.pa`, `pirq.rcba` or a
+`cm.live.bar-changed` value. No crash or hang on any guest.
+
+**The defect the 98 SE leg found, fixed in r7.** `IoGetDeviceProperty`'s
+bus number and address do not answer for the NHI's PDO on 98 SE, so the
+NHI's location was not read; and one 256-byte `HalGetBusData` read was not
+answered there, so the tunnel port read as absent. r7 takes the NHI's
+location from the topology and reads one DWORD at a time from prefixes of
+offset + 4 bytes, keeping how many were read (record 25 section 4.7).
+
+**Noted, not changed.** A standard user on 7 cannot write `/report` to the
+root of C:, and `/report` returns to `cmd` at once unless run with
+`start /wait` (the tool is a GUI program). On ME the controller's
+Device Manager status in the report reads `0x19886ACE (started)` and on
+98 SE `0x18086ACE` - the configuration manager's status word printed as
+such, passed to the tool's owner.
 
 ## Logging level (record 25 revision 13, leg T.10)
 

@@ -174,12 +174,17 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_VAL_CMD_TIMEOUT_MS     4  /* XhciCmCmdTimeoutMs                  */
 #define CM_VAL_APPROVE_TIMEOUT_MS 5  /* XhciCmApproveTimeoutMs              */
 #define CM_VAL_SAFE_EJECT         6  /* XhciCmSafeEject, D10 (task 39-A.8)  */
-#define CM_VAL_LOG_VERBOSITY      7  /* XhciLogVerbosity, the shared ladder */
+#define CM_VAL_LOG_VERBOSITY      7  /* XhciCmLogVerbosity, the shared
+                                        ladder                         */
 /* The USB4 profile's (design record 22 section 12, task 40-A.6). */
 #define CM_VAL_USB3_TUNNEL        8  /* XhciCmUsb3Tunnel, decision U3       */
 #define CM_VAL_LANE_BONDING       9  /* XhciCmLaneBonding, decision U4      */
 #define CM_VAL_PREOS_CLEANUP     10  /* XhciCmPreOsCleanup, decision U2     */
-#define CM_VAL_COUNT             11
+/* The log's emission (record 21 section 8, the owner's decision of
+ * 2026-10-16): 1 hands the ring to DbgPrint in every flavour. */
+#define CM_VAL_LOG_DEBUGVIEW     11  /* XhciCmLogDebugView                  */
+#define CM_VAL_COUNT             12
+
 
 /* XhciCmMode (record 21 section 8, decision D11). */
 #define CM_MODE_OFF       0  /* bind, log, touch nothing                    */
@@ -199,6 +204,18 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  */
 #define CM_TUNNEL_BRIDGE_CHARS 64
 
+/*
+ * XhciCmBridgeNumbering, REG_DWORD, Windows 98 SE and ME only (record 21
+ * section 6.1.1): 1 numbers the bridges a tunnel brings up below a tunnel
+ * port before the CONFIGMG re-enumeration (tbt_brnum.c), 0 leaves them as
+ * they came up (the behaviour before it: Code 29 on a hot-added bridge
+ * until a restart). Ignored on the NT targets. No INF writes it (the
+ * owner, 2026-10-16): absent reads as the default, and the installer
+ * neither asks for it nor writes it. A value other than 0 or 1 is refused
+ * and the default stands.
+ */
+#define CM_BRIDGE_NUMBERING_DEFAULT 1UL
+
 typedef struct _CM_VALUES {
     ULONG Value[CM_VAL_COUNT];  /* what the driver runs with                */
     ULONG Raw[CM_VAL_COUNT];    /* what the registry gave, when Found       */
@@ -208,6 +225,10 @@ typedef struct _CM_VALUES {
     WCHAR TunnelBridge[CM_TUNNEL_BRIDGE_CHARS];  /* NUL-terminated          */
     ULONG TunnelBridgeChars;    /* 0: no override                           */
     ULONG TunnelBridgeRefused;  /* present and too long                     */
+    ULONG BridgeNumbering;      /* XhciCmBridgeNumbering as run with        */
+    ULONG BridgeNumberingFound; /* read as a REG_DWORD                      */
+    ULONG BridgeNumberingRaw;   /* ... what it read                         */
+    ULONG BridgeNumberingRefused; /* ... out of range: the default stood   */
 } CM_VALUES, *PCM_VALUES;
 
 /* Every value at its default, nothing found. */
@@ -221,12 +242,18 @@ VOID CmValuesDefault(PCM_VALUES v);
  */
 VOID CmValuesTake(PCM_VALUES v, ULONG index, ULONG found, ULONG raw);
 
+
 /*
  * Take XhciCmTunnelBridge: `chars` WCHARs, not counting any terminator. An
  * empty string is no override; one of CM_TUNNEL_BRIDGE_CHARS or more is
  * refused and leaves no override.
  */
 VOID CmValuesTakeBridge(PCM_VALUES v, const WCHAR *text, ULONG chars);
+
+/* Take XhciCmBridgeNumbering: found nonzero with the DWORD read, or not
+ * found; 0 and 1 are taken, any other value is refused (the default
+ * stands, the refusal recorded). */
+VOID CmValuesTakeBridgeNumbering(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* The default and bounds of value `index`, for the INF gate's cross-check
  * and the host suite. Returns 0 for an index out of range. */

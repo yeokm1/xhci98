@@ -23,6 +23,13 @@
  * route closed for the domain's life, so a wrong number is caught before
  * a service with arguments is called through it.
  *
+ * PCI.VXD's two configuration-space services (record 21 section 6.1.1,
+ * the bus numbering) are reached the same way, under PCI.VXD's VxD id; their
+ * thunks are built with CONFIGMG's and are opened separately, by
+ * CmCfgmgPciOpen's guard: a read of a known function through
+ * _PCI_Read_Config must equal what HalGetBusData read there, before
+ * _PCI_Write_Config is ever called.
+ *
  * Only x86 builds carry the thunk: no amd64 target runs CONFIGMG, and the
  * amd64 build's CmCfgmgOpen refuses.
  *
@@ -45,7 +52,9 @@
 #define CMG_T_REENUMERATE   7
 #define CMG_T_STATUS        8
 #define CMG_T_CHANGE_STATUS 9
-#define CMG_T_COUNT         10
+#define CMG_T_PCI_READ      10
+#define CMG_T_PCI_WRITE     11
+#define CMG_T_COUNT         12
 
 #define CMG_THUNK_BYTES     8
 
@@ -61,8 +70,18 @@ static const USHORT cmgServices[CMG_T_COUNT] = {
     CMG_SVC_REMOVE_SUBTREE,
     CMG_SVC_REENUMERATE_DEVNODE,
     CMG_SVC_GET_DEVNODE_STATUS,
-    CMG_SVC_CHANGE_DEVNODE_STATUS
+    CMG_SVC_CHANGE_DEVNODE_STATUS,
+    CMG_PCI_SVC_READ_CONFIG,
+    CMG_PCI_SVC_WRITE_CONFIG
 };
+
+/* Each thunk's VxD: CONFIGMG's, but for PCI.VXD's two. */
+static ULONG cmgVxdOf(ULONG which)
+{
+    return (which == CMG_T_PCI_READ || which == CMG_T_PCI_WRITE)
+               ? (ULONG)CMG_PCI_VXD_ID
+               : (ULONG)CMG_VXD_ID;
+}
 
 typedef ULONG (__cdecl *CMG_FN0)(VOID);
 typedef ULONG (__cdecl *CMG_FN2)(ULONG a, ULONG b);
@@ -87,6 +106,7 @@ BOOLEAN CmCfgmgOpen(PCM_CFGMG cfg)
     char id[CMG_MAX_DEVICE_ID_LEN + 1];
 
     cfg->Open = 0;
+    cfg->PciOpen = 0;
     cfg->Why = CM_CFGMG_WHY_NONE;
     cfg->Thunks = (PUCHAR)CmAlloc(CMG_T_COUNT * CMG_THUNK_BYTES);
     if (cfg->Thunks == NULL) {
@@ -99,8 +119,8 @@ BOOLEAN CmCfgmgOpen(PCM_CFGMG cfg)
         t[1] = CMG_DYNALINK_INT;                        /* 20h            */
         t[2] = (UCHAR)(cmgServices[i] & 0xFF);
         t[3] = (UCHAR)(((cmgServices[i] | CMG_DYNALINK_JMP) >> 8) & 0xFF);
-        t[4] = (UCHAR)(CMG_VXD_ID & 0xFF);
-        t[5] = (UCHAR)((CMG_VXD_ID >> 8) & 0xFF);
+        t[4] = (UCHAR)(cmgVxdOf(i) & 0xFF);
+        t[5] = (UCHAR)((cmgVxdOf(i) >> 8) & 0xFF);
         t[6] = 0xCC;                                    /* never reached  */
         t[7] = 0xCC;
     }
@@ -138,6 +158,7 @@ BOOLEAN CmCfgmgOpen(PCM_CFGMG cfg)
 VOID CmCfgmgClose(PCM_CFGMG cfg)
 {
     cfg->Open = 0;
+    cfg->PciOpen = 0;
     if (cfg->Thunks != NULL) {
         CmFree(cfg->Thunks);
         cfg->Thunks = NULL;
@@ -233,6 +254,52 @@ ULONG CmCfgmgAddRemovable(PCM_CFGMG cfg, ULONG devnode)
         devnode, CMG_DN_REMOVABLE, CMG_CHANGE_STATUS_ADD_FLAGS);
 }
 
+/* PCI.VXD's (bus, devfunc) for a packed routing id. */
+#define CMG_PCI_BUS(bdf)     (((bdf) >> 8) & 0xFFUL)
+#define CMG_PCI_DEVFN(bdf)   ((bdf) & 0xFFUL)
+
+BOOLEAN CmCfgmgPciOpen(PCM_CFGMG cfg, ULONG bdf, ULONG halId)
+{
+    ULONG id;
+
+    if (cfg->PciOpen) {
+        return TRUE;
+    }
+    if (!cfg->Open || halId == 0xFFFFFFFFUL || (halId & 0xFFFFUL) == 0) {
+        return FALSE;
+    }
+    id = ((CMG_FN3)cmgThunk(cfg, CMG_T_PCI_READ))(CMG_PCI_BUS(bdf),
+                                                  CMG_PCI_DEVFN(bdf), 0);
+    cfg->PciGuard = id;
+    if (id != halId) {
+        return FALSE;
+    }
+    cfg->PciOpen = 1;
+    return TRUE;
+}
+
+BOOLEAN CmCfgmgPciRead(PCM_CFGMG cfg, ULONG bdf, ULONG offset, PULONG value)
+{
+    if (!cfg->PciOpen || (offset & 3UL) != 0 || offset > 252UL) {
+        return FALSE;
+    }
+    *value = ((CMG_FN3)cmgThunk(cfg, CMG_T_PCI_READ))(CMG_PCI_BUS(bdf),
+                                                      CMG_PCI_DEVFN(bdf),
+                                                      offset);
+    return TRUE;
+}
+
+BOOLEAN CmCfgmgPciWrite(PCM_CFGMG cfg, ULONG bdf, ULONG offset, ULONG value)
+{
+    if (!cfg->PciOpen || (offset & 3UL) != 0 || offset > 252UL) {
+        return FALSE;
+    }
+    (VOID)((CMG_FN4)cmgThunk(cfg, CMG_T_PCI_WRITE))(CMG_PCI_BUS(bdf),
+                                                    CMG_PCI_DEVFN(bdf),
+                                                    offset, value);
+    return TRUE;
+}
+
 #else /* !_X86_ */
 
 /* No amd64 target runs CONFIGMG: the route is refused, and every call
@@ -240,6 +307,7 @@ ULONG CmCfgmgAddRemovable(PCM_CFGMG cfg, ULONG devnode)
 BOOLEAN CmCfgmgOpen(PCM_CFGMG cfg)
 {
     cfg->Open = 0;
+    cfg->PciOpen = 0;
     cfg->Thunks = NULL;
     cfg->Why = CM_CFGMG_WHY_ARCH;
     return FALSE;
@@ -313,6 +381,32 @@ ULONG CmCfgmgAddRemovable(PCM_CFGMG cfg, ULONG devnode)
     UNREFERENCED_PARAMETER(cfg);
     UNREFERENCED_PARAMETER(devnode);
     return CMG_CR_FAILURE;
+}
+
+BOOLEAN CmCfgmgPciOpen(PCM_CFGMG cfg, ULONG bdf, ULONG halId)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(bdf);
+    UNREFERENCED_PARAMETER(halId);
+    return FALSE;
+}
+
+BOOLEAN CmCfgmgPciRead(PCM_CFGMG cfg, ULONG bdf, ULONG offset, PULONG value)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(bdf);
+    UNREFERENCED_PARAMETER(offset);
+    *value = 0xFFFFFFFFUL;
+    return FALSE;
+}
+
+BOOLEAN CmCfgmgPciWrite(PCM_CFGMG cfg, ULONG bdf, ULONG offset, ULONG value)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(bdf);
+    UNREFERENCED_PARAMETER(offset);
+    UNREFERENCED_PARAMETER(value);
+    return FALSE;
 }
 
 #endif /* _X86_ */

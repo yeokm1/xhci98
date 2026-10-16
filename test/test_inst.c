@@ -1625,6 +1625,15 @@ static void test_tb_question(void)
     CHECK_EQ(inst_tb_answer("maybe", 1), -1, "not an answer");
     CHECK_EQ(inst_tb_answer("yx", 1), -1, "not an answer either");
 
+    /* Output redirected while the keyboard answers: the text is also on
+     * the screen (standard error), so no question waits unseen. */
+    CHECK_EQ(inst_out_mirror(0, 1, 1), 1, "mirror: > file, keyboard answers");
+    CHECK_EQ(inst_out_mirror(1, 1, 1), 0, "mirror: not redirected");
+    CHECK_EQ(inst_out_mirror(0, 0, 1), 0, "mirror: standard error redirected too");
+    CHECK_EQ(inst_out_mirror(0, 1, 0), 0, "mirror: answers from a file");
+    CHECK_EQ(inst_out_mirror(1, 1, 0), 0, "mirror: answers from a file, screen");
+    CHECK_EQ(inst_out_mirror(0, 0, 0), 0, "mirror: nothing on the console");
+
     /* The switch. */
     argv1[0] = "x";
     argv1[1] = "/thunderbolt";

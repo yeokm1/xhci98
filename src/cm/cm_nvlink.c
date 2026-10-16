@@ -2,8 +2,8 @@
  * cm_nvlink.c - the pure half of the stor98 link-state channel
  * (cm_nvlink.h; roadmap-usb4.md tasks 39-A.7 and 40-A.7): the entry
  * protocol of stor98cm.h over a STOR98LS_TABLE, the two profiles'
- * statement conditions, which systems the channel is offered on, interface
- * 3's locator encoding and its REMOVE_PENDING request. test\test_cm_nvlink.c runs it on the host.
+ * statement conditions, interface 3's locator encoding and proof query
+ * handler, and its REMOVE_PENDING request. test\test_cm_nvlink.c runs it on the host.
  *
  * WRITE ORDER. stor98 reads an entry concurrently, from its own timer and
  * HwStartIo, as a seqlock: Sequence odd while the connection manager
@@ -212,13 +212,16 @@ ULONG CmNvlinkNextUp(const STOR98LS_TABLE *t, ULONG bus, ULONG from)
 BOOLEAN CmNvlinkAcked(const STOR98LS_TABLE *t, ULONG index)
 {
     const STOR98LS_ENTRY *e;
+    ULONG ack;
 
     if (t == NULL || index >= STOR98LS_ENTRIES) {
         return FALSE;
     }
     e = &t->Entry[index];
+    ack = e->AckGeneration;
+    /* R6d: read once more, unchanged, before it is acted on. */
     return (BOOLEAN)((e->Flags & STOR98LS_DOWN_QUIESCED) != 0 &&
-                     e->AckGeneration == e->LinkGeneration);
+                     ack == e->LinkGeneration && e->AckGeneration == ack);
 }
 
 ULONG CmNvlinkIcmVerdict(ULONG members, ULONG source, BOOLEAN emulator,
@@ -278,16 +281,6 @@ ULONG CmNvlinkAckBoundMs(BOOLEAN nt)
     return nt ? CM_NVLINK_ACK_MS : CM_NVLINK_ACK_9X_MS;
 }
 
-BOOLEAN CmNvlinkOffered(BOOLEAN nt)
-{
-    return nt;
-}
-
-ULONG CmNvlinkAwaitBoundMs(BOOLEAN nt, BOOLEAN receiver)
-{
-    return receiver ? CmNvlinkAckBoundMs(nt) : 0;
-}
-
 ULONG CmNvlinkLeft(ULONG startMs, ULONG nowMs, ULONG budgetMs)
 {
     ULONG spent;
@@ -314,6 +307,46 @@ VOID CmNvlinkRecordEncode(PUCHAR out, ULONG address, ULONG bytes,
     cmNvLe(out + 16, cookie);
 }
 
+ULONG CmNvlinkProofQuery(CM_NV_VALCTX *vc, ULONG n, PUCHAR data, PULONG cb,
+                         const ULONG *cookie,
+                         const STOR98LS9X_PROOF_TABLE *proof)
+{
+    ULONG i;
+    ULONG k;
+    ULONG need;
+    const UCHAR *from;
+
+    need = 0;
+    for (i = 0; i < n; i++) {
+        if (vc[i].value_context == (PVOID)cookie) {
+            vc[i].valuelen = (int)sizeof(ULONG);
+        } else if (vc[i].value_context == (PVOID)proof) {
+            vc[i].valuelen = (int)CM_NVLINK_PROOF_BYTES;
+        } else {
+            vc[i].valuelen = 0;
+        }
+        need += (ULONG)vc[i].valuelen;
+    }
+    if (data == NULL) {
+        *cb = need;
+        return 0;
+    }
+    if (*cb < need) {
+        *cb = need;
+        return CM_NV_ERROR_MORE_DATA;
+    }
+    for (i = 0; i < n; i++) {
+        from = (const UCHAR *)vc[i].value_context;
+        for (k = 0; k < (ULONG)vc[i].valuelen; k++) {
+            data[k] = from[k];
+        }
+        vc[i].val_buff_ptr = data;
+        data += vc[i].valuelen;
+    }
+    *cb = need;
+    return 0;
+}
+
 BOOLEAN CmNvlinkRemoveRequest(PSTOR98LS_TABLE t, ULONG index,
                               ULONG sequence)
 {
@@ -335,7 +368,7 @@ BOOLEAN CmNvlinkRemoveRequest(PSTOR98LS_TABLE t, ULONG index,
 }
 
 ULONG CmNvlinkRemoveAnswer(const STOR98LS_TABLE *t, ULONG index,
-                           ULONG sequence)
+                           ULONG sequence, ULONG gen)
 {
     ULONG answer;
     ULONG outcome;
@@ -343,8 +376,12 @@ ULONG CmNvlinkRemoveAnswer(const STOR98LS_TABLE *t, ULONG index,
     if (t == NULL || index >= STOR98LS_ENTRIES) {
         return CM_NVLINK_RM_NONE;
     }
+    /* R9c: the request's own sequence, on the request's generation; R6d:
+     * read once more, unchanged, before it is acted on. */
     answer = t->Entry[index].RemoveAck;
-    if (((answer >> 8) & 0x00FFFFFFUL) != sequence) {
+    if (((answer >> 8) & (ULONG)STOR98LS9X_SEQ_MASK) != sequence ||
+        t->Entry[index].LinkGeneration != gen ||
+        t->Entry[index].RemoveAck != answer) {
         return CM_NVLINK_RM_NONE;
     }
     outcome = answer & 0xFFUL;
@@ -370,4 +407,74 @@ VOID CmNvlinkRemoveCancel(PSTOR98LS_TABLE t, ULONG index)
     cmNvBegin(e);
     e->Flags = e->Flags & ~CM_NVLINK_REMOVE_PENDING;
     cmNvEnd(e);
+}
+
+ULONG CmNvlinkRemoveStep(const STOR98LS_TABLE *t, ULONG index,
+                         ULONG sequence, ULONG gen, ULONG elapsedMs)
+{
+    if (elapsedMs >= CM_NVLINK_REMOVE_MS) {
+        /* Read only to log it: late, never taken. */
+        return CmNvlinkRemoveAnswer(t, index, sequence, gen) !=
+                       CM_NVLINK_RM_NONE
+                   ? CM_NVLINK_RM_LATE
+                   : CM_NVLINK_RM_TIMEOUT;
+    }
+    return CmNvlinkRemoveAnswer(t, index, sequence, gen);
+}
+
+ULONG CmNvlinkAckStep(const STOR98LS_TABLE *t, ULONG index,
+                      BOOLEAN receiver, ULONG markedAt, ULONG nowMs,
+                      ULONG boundMs)
+{
+    if (t == NULL || index >= STOR98LS_ENTRIES ||
+        (t->Entry[index].Flags & STOR98LS_DOWN_QUIESCED) == 0) {
+        return CM_NVLINK_AW_SUPERSEDED;
+    }
+    if (!receiver) {
+        return CM_NVLINK_AW_NO_RECEIVER;
+    }
+    if (CmNvlinkLeft(markedAt, nowMs, boundMs) == 0) {
+        return CmNvlinkAcked(t, index) ? CM_NVLINK_AW_LATE
+                                       : CM_NVLINK_AW_TIMEOUT;
+    }
+    return CmNvlinkAcked(t, index) ? CM_NVLINK_AW_ACKED
+                                   : CM_NVLINK_AW_PENDING;
+}
+
+ULONG CmNvlinkPublish9x(const CM_NV_PUB9X *ops, PULONG error)
+{
+    ULONG e;
+
+    *error = 0;
+    /* R4: resident before anything is published. */
+    if (!ops->Resident(ops->Context)) {
+        return CM_NVLINK_PUB_RESIDENCY;
+    }
+    /* R3a: open first; an existing key is another publisher's, and only
+     * "not found" shows it absent. */
+    e = ops->OpenProof(ops->Context);
+    if (e == 0) {
+        return CM_NVLINK_PUB_PUBLISHER;
+    }
+    if (e != CM_NV_ERROR_FILE_NOT_FOUND) {
+        *error = e;
+        return CM_NVLINK_PUB_OPEN;
+    }
+    e = ops->CreateProof(ops->Context);
+    if (e != 0) {
+        *error = e;
+        return CM_NVLINK_PUB_PROOF;
+    }
+    /* R3b: the locator only after the proof. */
+    e = ops->WriteLocator(ops->Context);
+    if (e != 0) {
+        *error = e;
+        return CM_NVLINK_PUB_LOCATOR;
+    }
+    return CM_NVLINK_PUB_OK;
+}
+
+BOOLEAN CmNvlinkRetryAgain(ULONG elapsedMs)
+{
+    return (BOOLEAN)(elapsedMs < CM_NVLINK_RETRY_FOR_MS);
 }

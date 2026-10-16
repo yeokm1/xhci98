@@ -43,6 +43,12 @@ shows its ports and how many are USB 2.0 and USB 3.x, for example "Root
 hub - 18 ports (14 USB 2.0, 4 USB 3.x)", and each port its kind:
 "[Port 15, USB 3]". A USB 3 connector has one port of each kind.
 
+The details of each device end with its resources: the memory and I/O
+ranges, the IRQ and (on Windows 2000 and later) the bus numbers Windows
+gave it, and its PCI location. A device with a problem code also shows
+what it asked for, so a device that wants an IRQ and was given none is
+easy to spot.
+
   File > Refresh (F5)      reads everything again
   File > Save Report...    writes the whole tree with every detail to a
                            text file, for a problem report
@@ -104,13 +110,53 @@ administrator rights: when it runs without them it says so and offers
 "Stop as administrator...", which asks for them (User Account Control on
 Vista and 7, the Run As dialog on 2000 and XP) for that one stop. If you
 cancel, nothing is stopped.
+The drivers' logs
+-----------------
+
+Each xHCI controller the xhci98 driver runs has a "Driver log (xhci98)"
+item under it, and each Thunderbolt or USB4 controller a "Driver log
+(xhcicm)" item. Select one to read the driver's log and counters from the
+running driver: whether it is recording, the counters that are not zero,
+and the log, oldest line first. File > Save Report and /report include
+both logs. Nothing in them is an internal address.
+
+Where a log is off, the item says how to turn it on (the xhcicm
+driver records by default):
+
+  xhci98   run SNAPON.BAT from the package's tools\xhcisnap folder (on
+           Windows 2000 and later as an administrator), then restart
+           Windows; SNAPOFF.BAT turns it off again.
+  xhcicm   set the DWORD value XhciCmLogVerbosity to 2 under the key
+           the item names (on Windows 2000 and later as an
+           administrator), then restart Windows.
+
+The tool itself changes no setting.
+
+PCI configuration
+-----------------
+
+Each xHCI controller the xhci98 driver runs, and each Thunderbolt or USB4
+controller, has a "PCI configuration" item. It shows, for each PCI
+function, what Windows does not: the vendor, device, subsystem, revision
+and class; the Command and Status registers; the interrupt pin and line;
+the BARs as read; for a bridge its buses and its I/O, memory and
+prefetchable windows; and its capabilities - MSI and MSI-X (enabled or
+not, vectors or table size), the PCI Express link (speed and width now,
+and what the link is capable of) and power management.
+
+Under a Thunderbolt or USB4 controller the item lists the controller,
+its tunnel ports and the devices behind each port. On Windows 98 SE and
+ME the devices behind a port are not read and say so. Under an xHCI
+controller it shows that controller. The drivers read configuration
+space and never change it. File > Save Report and /report include it.
 
 Logging level
 -------------
 
 View > Logging level... (or a right click on a USB controller driven by
-xhci98, or on a Thunderbolt or USB4 controller) shows how much each of
-the two drivers records in its log, side by side, and sets it:
+xhci98, on a Thunderbolt or USB4 controller, or on either one's Driver
+log) shows how much each of the two drivers records in its log, side by
+side, and sets it:
 
   0  off
   1  counters only
@@ -162,7 +208,9 @@ From a command line
 
   XHCITR                       the window and the icon
   XHCITR /tray                 the icon alone (as started at logon)
-  XHCITR /report <file>        writes the report to <file> and exits
+  XHCITR /report <file>        writes the report, the drivers' logs and
+                               PCI configuration included, to <file>
+                               and exits
   XHCITR /eject id=<id>        stops the USB device or Thunderbolt/USB4
                                device with that Device Manager instance
                                ID and exits

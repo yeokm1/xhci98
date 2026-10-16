@@ -10,7 +10,8 @@
  * separated what is RECORDED from what is EMITTED**, which is the defect the
  * rest of this file used to have:
  *
- *   - **`XhciLogVerbosity`** (`DWORD`, **0** by default) is the 0-4 ladder and
+ *   - **`XhciLogVerbosity`** (`DWORD`, **2** by default since 2026-10-16,
+ *     0 before) is the 0-4 ladder and
  *     it is the whole switch: **0 is off outright** - the PassThru read channel
  *     (`xhciPassThru` in src/xhci_dispatch.c, the wire format in src/xhci.h)
  *     answers exactly `MP_STATUS_NOT_SUPPORTED`, which is what a binary built
@@ -270,7 +271,8 @@
  * The verbosity ladder (task 13-L.2)
  * ------------------------------------------------------------------
  *
- * `XhciLogVerbosity`, `REG_DWORD`, default **0**. **Level 0 is off outright**;
+ * `XhciLogVerbosity`, `REG_DWORD`, default **2** since the owner's decision
+ * of 2026-10-16 (0 before; see below). **Level 0 is off outright**;
  * above it each level is the one below **plus** one thing, so an engaged level
  * is always a superset and never a different report:
  *
@@ -337,6 +339,21 @@
 
 #define XHCI_LOG_VERBOSITY_MAX      4
 /*
+ * **Amended 2026-10-16 (the owner): the default is 2, XHCI_LOG_VERBOSITY_RING
+ * - the ring records, with no addresses - for xhci98.sys and xhcicm.sys
+ * alike.** The owner decided it so that a log exists on every install
+ * before anyone asks for one: the cost described below as "paid in the
+ * tool" (an intermittent fault needing a second reproduction at a higher
+ * level) was the reason. The read channel opens with it, at the same rung.
+ * What follows is the reasoning for the earlier default of 0, kept as it
+ * was written; its caveat is now a measurement, of one machine and one
+ * pair of runs: on the owner's ThinkPad P14s Gen 1 under Windows 98 SE, a
+ * USB Bulk-Only drive on the machine's own xHCI controller, ATTO with
+ * Direct I/O, level 2 cost about 1 to 2% at 1 MB and up, 2 to 4% from 4 to
+ * 512 KB and up to about 5 to 6% on 16 and 32 KB writes, within a run-to-
+ * run noise of several percent; the owner kept 2. Design record 08
+ * section 13.2 carries the amendment and runs\run-41.md the reading.
+ *
  * **The default is 0 and it is a polarity decision, not a taste.** Task
  * 13-L.1's whole finding is that the safe configuration must be the default and
  * the convenience must be the thing asked for by name, and a ring filling on
@@ -359,7 +376,7 @@
  * path - and there is exactly one value to set, so the published sequence is
  * four steps and `regedit` appears nowhere in it.
  */
-#define XHCI_LOG_VERBOSITY_DEFAULT  XHCI_LOG_VERBOSITY_OFF
+#define XHCI_LOG_VERBOSITY_DEFAULT  XHCI_LOG_VERBOSITY_RING
 
 /*
  * How many records one completion code is worth before the counter carries it.
@@ -421,8 +438,9 @@ typedef struct _XHCI_LOG {
      * **The absent-versus-explicit-zero distinction is the two `SwitchStatus`
      * fields above**, not this one: SUCCESS beside a value of 0 is a zero
      * somebody set, any other status beside 0 is nothing found. The driver
-     * treats all of them identically and must, because every default is 0; the
-     * distinction is for the reader of a dump.
+     * treats all of them identically and must, because every default was 0
+     * (the verbosity's is 2 since 2026-10-16, which an absent value reads
+     * as); the distinction is for the reader of a dump.
      *
      * *(This comment, and eight other places in the tree, credited this field
      * with that distinction until the post-Phase 13 review rounds.)*
