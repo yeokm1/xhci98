@@ -271,7 +271,7 @@ static void speed(char *out, size_t cap, unsigned long s, unsigned long w)
     if (s >= 1 && s <= 5) {
         tr_sprintf(out, cap, "Gen %lu x%lu", s, w);
     } else {
-        tr_sprintf(out, cap, "speed code %lu x%lu", s, w);
+        tr_sprintf(out, cap, "code %lu x%lu", s, w);
     }
 }
 
@@ -772,15 +772,58 @@ static void state_text(TR_TEXT *t, int indent, TR_U32 state)
     }
 }
 
+/* One function below a port, then the functions behind it when it is a
+ * bridge, depth first by each entry's Parent, so a bridge's own functions
+ * follow it whatever order the walk found them in. `level` is bounded, and
+ * each entry is drawn once (done[]), so a malformed answer whose parents
+ * loop ends. Deeper than two bridges is drawn at the second's indent, so
+ * no line passes 79 columns. */
+static void below_text(TR_TEXT *t, const TR_QPCI *q, TR_U32 port,
+                       TR_U32 parent, int level, unsigned char *done)
+{
+    TR_QPENT b;
+    TR_U32 j;
+    char loc[48];
+    int in;
+
+    if (level > (int)CM_QP_MAX_DEPTH) {
+        return;
+    }
+    for (j = 0; j < q->Count; j++) {
+        if (done[j]) {
+            continue;
+        }
+        tr_qpci_entry(q, j, &b);
+        if (b.Role != CM_QP_R_BELOW || b.Port != port || b.Parent != parent ||
+            b.State == CM_QP_S_NOT_READ_OS) {
+            continue;
+        }
+        done[j] = 1;
+        in = 4 + 2 * (level > 2 ? 2 : level);
+        bdf_text(loc, sizeof(loc), b.Bdf);
+        ind(t, in);
+        tr_printf(t, "%s\n", loc);
+        if (b.State == CM_QP_S_READ) {
+            tr_pci_text(t, b.Cfg, in + 2);
+        } else {
+            state_text(t, in + 2, b.State);
+        }
+        if (b.Bdf <= 0xFFFFUL) {
+            below_text(t, q, port, b.Bdf, level + 1, done);
+        }
+    }
+}
+
 void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt)
 {
+    unsigned char done[CM_QP_MAX_ENTRIES];
     TR_QPENT e;
     TR_QPENT b;
     TR_U32 i;
     TR_U32 j;
     TR_U32 below;
+    TR_U32 shown;
     char loc[48];
-    int in;
 
     tr_put(t, "PCI configuration, read through xhcicm.sys\n");
     if (q->Flags & CM_QP_F_STOPPING) {
@@ -819,18 +862,29 @@ void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt)
                 tr_put(t, "    Not read on this system: Windows 98 SE and "
                           "ME number no bus a tunnel\n    brings up after "
                           "boot, so the tool does not read below the port.\n");
+            }
+        }
+        memset(done, 0, sizeof(done));
+        below_text(t, q, e.Bdf, e.Bdf, 0, done);
+        /* Any the tree did not reach (a parent not in the answer): listed
+         * flat, so nothing the driver read goes unshown. */
+        shown = 0;
+        for (j = 0; j < q->Count; j++) {
+            tr_qpci_entry(q, j, &b);
+            if (done[j] || b.Role != CM_QP_R_BELOW || b.Port != e.Bdf ||
+                b.State == CM_QP_S_NOT_READ_OS) {
                 continue;
             }
-            /* Deeper than two bridges is drawn at the second's indent, so
-             * no line passes 79 columns. */
-            in = 4 + 2 * (int)(b.Depth > 2 ? 2 : b.Depth);
+            if (shown++ == 0) {
+                tr_put(t, "    Behind a bridge not listed:\n");
+            }
+            done[j] = 1;
             bdf_text(loc, sizeof(loc), b.Bdf);
-            ind(t, in);
-            tr_printf(t, "%s\n", loc);
+            tr_printf(t, "      %s\n", loc);
             if (b.State == CM_QP_S_READ) {
-                tr_pci_text(t, b.Cfg, in + 2);
+                tr_pci_text(t, b.Cfg, 8);
             } else {
-                state_text(t, in + 2, b.State);
+                state_text(t, 8, b.State);
             }
         }
         if (below == 0) {

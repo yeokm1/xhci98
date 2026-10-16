@@ -731,9 +731,87 @@ static void test_hcd(void)
     CHECK_EQ(TR_SNAP_S_NOT_READ, XHCI_SNAPSHOT_S_NOT_READ, "bit held to xhci.h");
 }
 
+/* A switch with two downstream ports: the walk finds both bridges before
+ * either's function, and the text draws each function under its own. */
+static void test_branch(void)
+{
+    CM_QPCI_IN in;
+    ULONG n;
+    ULONG info;
+    TR_QPCI q;
+    TR_TEXT t;
+    const char *a;
+    const char *b;
+    const char *c;
+
+    reset();
+    add_fn(BDF(5, 0, 0), 0x15BF8086UL, 0x088000UL);
+    add_bridge(BDF(4, 1, 0), 0x15C08086UL, 4, 6, 10);
+    add_bridge(BDF(6, 0, 0), 0x24631B21UL, 6, 7, 10);
+    add_bridge(BDF(7, 0, 0), 0x24631B21UL, 7, 8, 8);
+    add_bridge(BDF(7, 1, 0), 0x24631B21UL, 7, 9, 10);
+    add_fn(BDF(8, 0, 0), 0x174A1C5CUL, 0x010802UL);
+    add_fn(BDF(9, 0, 0), 0x15B68086UL, 0x0C0330UL);
+    in_one_port(&in, BDF(4, 1, 0));
+    n = CmQpciBuild(built, sizeof(built), &in);
+    CHECK_EQ(n, CM_QP_HDR_BYTES + 7 * CM_QP_ENT_BYTES, "seven");
+    CHECK_EQ(ent(built, 4, CM_QP_E_BDF), BDF(7, 1, 0), "both bridges first");
+    CHECK_EQ(ent(built, 5, CM_QP_E_BDF), BDF(8, 0, 0), "then bus 8");
+    (void)CmQpciAnswer(outb, sizeof(outb), built, n, &info);
+    CHECK_EQ(tr_qpci_parse(outb, info, &q), 1, "parsed");
+    tr_text_init(&t, text, sizeof(text));
+    tr_qpci_text(&t, &q, 1);
+    a = strstr(text, "PCI 07:00.0");
+    b = strstr(text, "PCI 08:00.0");
+    c = strstr(text, "PCI 07:01.0");
+    CHECK(a != NULL && b != NULL && c != NULL, "all three");
+    CHECK(a < b && b < c, "the NVMe under its own bridge");
+    CHECK(strstr(text, "        PCI 08:00.0") != NULL, "indented two deep");
+    CHECK(strstr(text, "Behind a bridge not listed") == NULL, "no orphan");
+
+    /* An entry whose parent is not in the answer is still shown. */
+    put32(outb, CM_QP_HDR_BYTES + 5 * CM_QP_ENT_BYTES + CM_QP_E_PARENT,
+          BDF(0x30, 0, 0));
+    tr_text_init(&t, text, sizeof(text));
+    tr_qpci_text(&t, &q, 1);
+    CHECK(strstr(text, "Behind a bridge not listed") != NULL, "orphan said");
+    CHECK(strstr(text, "PCI 08:00.0") != NULL, "orphan shown");
+    /* Parents that loop end. */
+    put32(outb, CM_QP_HDR_BYTES + 5 * CM_QP_ENT_BYTES + CM_QP_E_PARENT,
+          BDF(9, 0, 0));
+    put32(outb, CM_QP_HDR_BYTES + 6 * CM_QP_ENT_BYTES + CM_QP_E_PARENT,
+          BDF(8, 0, 0));
+    tr_text_init(&t, text, sizeof(text));
+    tr_qpci_text(&t, &q, 1);
+    CHECK(!t.Overflow, "a loop of parents ends");
+}
+
+/* A reserved link speed code at the deepest indent keeps to 79 columns. */
+static void test_reserved_speed(void)
+{
+    char s[96];
+    unsigned char c[256];
+    TR_TEXT t;
+
+    memset(c, 0, sizeof(c));
+    put32(c, 0xA0 + 0x0C, 0x000003FFUL);
+    put16(c, 0xA0 + 0x12, 0x23FF);
+    tr_pci_link(c, 0xA0, s, sizeof(s));
+    CHECK(strcmp(s, "code 15 x63 (capable code 15 x63)") == 0, "reserved");
+    dsp_bytes(c);
+    put32(c, 0xC0 + 0x0C, 0x000003FFUL);
+    put16(c, 0xC0 + 0x12, 0x23FF);
+    put16(c, 0x06, 0xFFFF);
+    tr_text_init(&t, text, sizeof(text));
+    tr_pci_text(&t, c, 10);
+    CHECK(widest(text) <= 79, "79 columns at the deepest indent");
+}
+
 int main(void)
 {
     test_hcd();
+    test_branch();
+    test_reserved_speed();
     test_layout();
     test_chain();
     test_bounds();

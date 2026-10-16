@@ -810,7 +810,15 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
     if (out == NULL) {
         room = 0;
     }
+    if (room < CM_QP_HDR_BYTES) {
+        return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
+    }
     CmZero(&in, sizeof(in));
+    /* The gate first: what to read is taken after any request before this
+     * one, and the device is checked again after the reads, so an answer
+     * built across a stop is never returned. */
+    (VOID)KeWaitForSingleObject(&q->PciGate, Executive, KernelMode, FALSE,
+                                NULL);
     KeAcquireSpinLock(&q->Lock, &irql);
     connected = q->Connected;
     if (connected) {
@@ -824,21 +832,28 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
         }
     }
     KeReleaseSpinLock(&q->Lock, irql);
+    rc = CM_Q_ANS_TOO_SMALL;
+    info = 0;
+    if (connected) {
+        in.ReadBelow = (ULONG)cmQNt();
+        in.Read = cmQpRead;
+        in.Context = NULL;
+        bytes = CmQpciBuild(q->Pci, CM_QP_MAX_BYTES, &in);
+        KeAcquireSpinLock(&q->Lock, &irql);
+        connected = q->Connected;
+        if (connected && q->Stopping && bytes >= CM_QP_HDR_BYTES) {
+            q->Pci[CM_QP_O_FLAGS] |= (UCHAR)CM_QP_F_STOPPING;
+        }
+        KeReleaseSpinLock(&q->Lock, irql);
+        if (connected) {
+            rc = CmQpciAnswer(out, room, q->Pci, bytes, &info);
+        }
+    }
+    (VOID)KeSetEvent(&q->PciGate, IO_NO_INCREMENT, FALSE);
     if (!connected) {
         return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
                                           : STATUS_NO_SUCH_DEVICE, 0);
     }
-    if (room < CM_QP_HDR_BYTES) {
-        return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
-    }
-    in.ReadBelow = (ULONG)cmQNt();
-    in.Read = cmQpRead;
-    in.Context = NULL;
-    (VOID)KeWaitForSingleObject(&q->PciGate, Executive, KernelMode, FALSE,
-                                NULL);
-    bytes = CmQpciBuild(q->Pci, CM_QP_MAX_BYTES, &in);
-    rc = CmQpciAnswer(out, room, q->Pci, bytes, &info);
-    (VOID)KeSetEvent(&q->PciGate, IO_NO_INCREMENT, FALSE);
     if (rc == CM_Q_ANS_TOO_SMALL) {
         return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
     }
