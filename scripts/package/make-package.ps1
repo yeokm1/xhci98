@@ -733,6 +733,8 @@ and deletes it when that flavour's build starts. Build and gate it first:
         $tree = Get-GitTreeState -Repo $repo
         $why = Get-GatedManifestFault -Manifest $gated -Arch $Arch -Flavor $Flavor -Binaries $snapBinaries `
             -Head $tree.Head -Dirty $tree.Dirty -NoTargetEvidence ([bool]$NoTargetEvidence)
+        # A refusal names the build's file, not the private copy it was read into.
+        foreach ($name in @($snapBinaries.Keys)) { $why = $why.Replace($snapBinaries[$name], $gatedBinaries[$name]) }
         if ($why -ne "") {
             throw @"
 -SignOnly refused: '$GatedManifestPath' does not admit this package: $why.
