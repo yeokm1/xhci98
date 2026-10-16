@@ -528,3 +528,16 @@ different SuperSpeed PIDs (`0612`, `0625`, `0626`), so on a modern host they do
 sort the units, but on the target the SuperSpeed half never enumerates at all.
 The one field that would tell them apart is guaranteed absent on the machine
 where telling them apart matters. Label the hubs physically.
+
+---
+
+## Machines with Thunderbolt 3
+
+Added 2026-10-16, after Phase 13. The fleet as a whole, and each
+machine's xHCI qualification, is `build-and-test.md`, "Available Test
+Hardware"; this section holds only what a machine carries for the
+Thunderbolt 3 and USB4 work (`roadmap-usb4.md`).
+
+| Machine | Thunderbolt controller | Ids read | Firmware settings it was used with | Used for |
+|---|---|---|---|---|
+| Lenovo ThinkPad P14s Gen 1 (Intel, Comet Lake) | Intel JHL6240 Alpine Ridge LP, Thunderbolt 3; one tunnel port found | NHI `8086:15BF` (subsystem `17AA:22B0`); tunnel root port `8086:15C0` at `04:01.0`, bus range `06`-`2A` and memory window `D4100000`-`E00FFFFF` from the BIOS; Alpine Ridge's own xHCI `8086:15C1`; beside them the PCH xHCI `8086:02ED` | Thunderbolt BIOS Assist Mode Off (with it On, Windows 98 SE shows no Thunderbolt controller), Support in Pre Boot Environment On, security level 1; firmware connection manager version `0x60` | The `usb4-emu` captures behind `ICM-PROTOCOL.md` (design record 21); Windows 98 SE with `xhcicm.sys` and an ORICO ASM2464 NVMe enclosure (`1B21:2463` switch, an SK hynix HFS256GD4 `1C5C:174A` under Stor98), present at power-on and plugged in after the start: the bridge set-up of issue 17, read on 2026-10-16 (issue 18) |
