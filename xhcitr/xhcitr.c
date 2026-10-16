@@ -110,6 +110,7 @@ typedef TR_NIDA TR_NID;
 #define TR_NAME_LEN     320
 #define TR_DETAIL_BYTES 65536
 #define TR_EJ_DEVS      64
+#define TR_PROP_SCRATCH 8192
 
 #define WM_TRAYICON     (WM_APP + 1)
 #define TIMER_POLL      1
@@ -479,19 +480,32 @@ static void driver_key_path(const DNODE *d, char *path, size_t cap)
 /* The device tree (record 24 section 4.1, adapted from xhciinst.c)          */
 /* ======================================================================== */
 
+/* A property into buf (cap bytes, two NULs kept). The configuration
+ * manager writes into a scratch buffer larger than any field and the
+ * result is copied when it fits cap, as the routine answered before: the
+ * routine's honouring of the length it is given is not read on 98 SE and
+ * ME, and a heap corruption was seen there (T.7 leg). */
 static DWORD cm_prop(DWORD dn, ULONG prop, char *buf, DWORD cap, DWORD *bytes)
 {
+    static char scratch[TR_PROP_SCRATCH];
     ULONG type;
-    ULONG n = cap - 2;
+    ULONG n = TR_PROP_SCRATCH - 64;
     DWORD cr = 0xFFFFFFFFUL;
 
     memset(buf, 0, cap);
-    if (api.Property != NULL) {
-        cr = api.Property(dn, prop, &type, buf, &n, 0);
+    memset(scratch, 0, sizeof(scratch));
+    if (api.Property != NULL && cap >= 2) {
+        cr = api.Property(dn, prop, &type, scratch, &n, 0);
     }
-    if (cr != TR_CR_SUCCESS) {
-        memset(buf, 0, cap);
+    if (cr != TR_CR_SUCCESS || n > TR_PROP_SCRATCH - 64) {
         n = 0;
+    } else {
+        if (n > cap - 2) {
+            cr = 0x0000001AUL;      /* CR_BUFFER_SMALL, as before */
+            n = 0;
+        } else {
+            memcpy(buf, scratch, n);
+        }
     }
     if (bytes != NULL) {
         *bytes = n;
@@ -524,7 +538,12 @@ static int prop9x(DWORD dn, const char *id, ULONG prop, const char *name,
     char tmp[TR_MSZ];
     int r;
 
-    cm_prop(dn, prop, buf, cap, NULL);
+    /* 0xFFFF names a value the registry alone holds: no call for it. */
+    if (prop != 0xFFFFUL) {
+        cm_prop(dn, prop, buf, cap, NULL);
+    } else {
+        memset(buf, 0, cap);
+    }
     tr_sprintf(path, sizeof(path), "Enum\\%s", id);
     r = reg_text(HKEY_LOCAL_MACHINE, path, name, tmp, cap - 2 < sizeof(tmp)
                                                        ? cap - 2 : sizeof(tmp));
