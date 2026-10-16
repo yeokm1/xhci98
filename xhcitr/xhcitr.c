@@ -2196,7 +2196,8 @@ static int res_conf(TR_TEXT *t, DWORD dn, ULONG kind, const char *title)
         any = 1;
         if (api.ResDesSize(&size, rd, 0) != TR_CR_SUCCESS || size > sizeof(buf) ||
             api.ResDesData(rd, buf, size, 0) != TR_CR_SUCCESS) {
-            tr_put(t, "    (a resource that could not be read)\n");
+            tr_printf(t, "    (a resource of type %lu, %lu bytes, that could not be "
+                         "read)\n", (unsigned long)rid, (unsigned long)size);
             continue;
         }
 #ifdef _WIN64

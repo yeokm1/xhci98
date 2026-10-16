@@ -2149,8 +2149,11 @@ static void test_resources(void)
     tr_text_init(&t, buf, sizeof(buf));
     CHECK(!tr_res_text(&t, TR_RES_MEMLARGE, d, 111, 0, 0), "res: large memory cut short");
     tr_text_init(&t, buf, sizeof(buf));
-    CHECK(tr_res_text(&t, 0x8001UL, d, 5, 1, 0) && has(buf, "type 0x8001"),
-          "res: a private type, named");
+    CHECK(tr_res_text(&t, 0x8001UL, d, 36, 1, 0) && has(buf, "Private data  36 bytes"),
+          "res: device-private data (an MSI's message on 7)");
+    tr_text_init(&t, buf, sizeof(buf));
+    CHECK(tr_res_text(&t, 0x8003UL, d, 5, 1, 0) && has(buf, "type 0x8003"),
+          "res: another type, numbered");
     tr_text_init(&t, buf, sizeof(buf));
     CHECK(!tr_res_text(&t, TR_RES_MEM, d, 4, 1, 0), "res: header cut short");
     {

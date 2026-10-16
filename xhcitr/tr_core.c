@@ -2688,17 +2688,25 @@ int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
         range = 16;
         break;
     default:
-        tr_printf(t, "    Resource type 0x%lX (%lu bytes)\n", (unsigned long)type,
-                  (unsigned long)n);
+        if (type == 0x8001UL) {
+            /* ResType_DevicePrivate: a driver's own data, as Vista and 7
+             * keep an MSI's message with it. */
+            tr_printf(t, "    Private data  %lu bytes\n", (unsigned long)n);
+        } else {
+            tr_printf(t, "    Resource type 0x%lX (%lu bytes)\n", (unsigned long)type,
+                      (unsigned long)n);
+        }
         return 1;
     }
     if (d == NULL || n < head) {
-        tr_put(t, "    (a resource that could not be read)\n");
+        tr_printf(t, "    (a resource of type %lu, %lu bytes, that could not be "
+                     "read)\n", (unsigned long)type, (unsigned long)n);
         return 0;
     }
     count = tr_r32(d);
     if (!alloc && (count > 64 || (size_t)count * range > n - head)) {
-        tr_put(t, "    (a resource that could not be read)\n");
+        tr_printf(t, "    (a resource of type %lu, %lu bytes, that could not be "
+                     "read)\n", (unsigned long)type, (unsigned long)n);
         return 0;
     }
     if (alloc) {
