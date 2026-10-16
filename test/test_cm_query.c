@@ -781,9 +781,21 @@ static void test_log_line(void)
     CHECK_EQ(CmQueryLogLine(l, 39, 3), 1, "level 3: withheld");
     CHECK(memcmp(l, "cm.reenum.9x.gone.id-changed=--------\r\n", 39) == 0,
           "dashes");
+    memcpy(l, "cm.reenum.9x.gone.superseded=C1234560\r\n", 39);
+    CHECK_EQ(CmQueryLogLine(l, 39, 2), 1, "superseded: withheld");
+    CHECK(memcmp(l, "cm.reenum.9x.gone.superseded=--------\r\n", 39) == 0,
+          "dashes");
     memcpy(l, "cm.live.bar-changed=E0000004\r\n", 30);
     CHECK_EQ(CmQueryLogLine(l, 30, 4), 0, "level 4: as recorded");
     CHECK(memcmp(l, "cm.live.bar-changed=E0000004\r\n", 30) == 0, "kept");
+    memcpy(l, "cm.reenum.9x.gone.superseded=C1234560\r\n", 39);
+    CHECK_EQ(CmQueryLogLine(l, 39, 4), 0, "level 4: superseded kept");
+    CHECK(memcmp(l, "cm.reenum.9x.gone.superseded=C1234560\r\n", 39) == 0,
+          "kept");
+    memcpy(l, "cm.reenum.9x.gone.id-changed=C1234570\r\n", 39);
+    CHECK_EQ(CmQueryLogLine(l, 39, 4), 0, "level 4: id-changed kept");
+    CHECK(memcmp(l, "cm.reenum.9x.gone.id-changed=C1234570\r\n", 39) == 0,
+          "kept");
     memcpy(l, "cm.passes=00000005\r\n", 20);
     CHECK_EQ(CmQueryLogLine(l, 20, 2), 0, "another record");
     CHECK(memcmp(l, "cm.passes=00000005\r\n", 20) == 0, "untouched");
