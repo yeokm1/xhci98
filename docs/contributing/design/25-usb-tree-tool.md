@@ -441,22 +441,29 @@ against each `\\.\X:`, on 98 SE and ME the disk's
 
 1. Confirm, as section 6.2 step 1 and with the same layout: "This stops
    <device> and everything on it:", each disk with its volumes, then every
-   devnode of the set. Nothing below waits on the user. The tool counts
-   the device-change notifications it receives (`WM_DEVICECHANGE`, on a
-   hidden window that exists in every mode, `/eject` included) and notes
-   the count the request's model was read at.
+   devnode of the set. Nothing below waits on the user. A thread of the
+   tool's own, with a hidden top-level window and a message loop of its
+   own, in every mode (`/eject` included), counts the device-change
+   notifications Windows broadcasts (`WM_DEVICECHANGE`); it never waits on
+   anything else, so no wait of the eject's thread - the question, the
+   mutex, a walk - can make it miss one. The request carries the count read
+   just before the model it was built from was read.
 2. Take the shared mutex of section 6.3, so that no XHCIINST and no other
    XHCITR eject runs beside it.
-3. If a device change arrived since the model was read - while the
-   question was open, too - nothing is called: "The device list changed;
-   nothing was stopped. Look at the tree again." An instance ID alone
+3. Walk the devnodes again and find the device by its instance ID: its
+   parent must be the devnode it was under when confirmed, its set (read
+   again, relations included) exactly the devnodes confirmed, and it must
+   still be offered by the rules above. Then, immediately before the call,
+   read the count again: any notification since the request's count -
+   while the question was open, the mutex awaited or the walk read -
+   refuses, and the request's count is never moved forward. Otherwise
+   nothing is called and the reason is shown ("The device list changed;
+   nothing was stopped. Look at the tree again."). An instance ID alone
    cannot tell a device from an identical one plugged into the same port
-   (a location ID, without a serial number), and a re-plug under the
-   question would otherwise pass. Then walk the devnodes again and find
-   the device by its instance ID: its parent must be the devnode it was
-   under when confirmed, its set (read again, relations included) exactly
-   the devnodes confirmed, and it must still be offered by the rules
-   above. Otherwise nothing is called and the reason is shown.
+   (a location ID, without a serial number); the count is what catches a
+   re-plug. It narrows that case rather than closing it: a USB device has
+   no attachment-lifetime token, and a re-plug faster than Windows'
+   broadcast of it, between the last count and the call, is not seen.
 4. The call on the device's devnode, never on a disk or a function below
    it:
    - NT: `CM_Request_Device_EjectA` (setupapi on 2000, as section 6.2),
