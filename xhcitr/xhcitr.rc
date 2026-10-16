@@ -66,6 +66,8 @@ BEGIN
         MENUITEM "Devices &behind each tunnel",         IDM_V_BEHIND
         MENUITEM SEPARATOR
         MENUITEM "Auto &Refresh",                       IDM_V_AUTO
+        MENUITEM SEPARATOR
+        MENUITEM "Start at &login",                     IDM_LOGIN
     END
     POPUP "&Action"
     BEGIN

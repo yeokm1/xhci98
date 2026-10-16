@@ -215,6 +215,10 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   the NVMe driver for Windows 98 SE to 7, as its own project released
   it (which release: "NVMe drives behind Thunderbolt or USB4", under
   "Installing").
+- **`XHCISNAP` to be deprecated.** The xHCI98 USB Tree now shows both
+  drivers' logs and sets their logging level. `XHCISNAP.EXE` and its
+  `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` still ship in this release
+  and work as before; they will be deprecated in a subsequent release.
 
 ### Which controllers
 
@@ -303,7 +307,9 @@ the system's drive unless another is chosen, or given with `INSTALL /to
 <path>`; an update keeps the directory an earlier install used, test
 builds' `%windir%\XHCI98\` included, unless another is chosen, when the
 tool moves it) and started at login as an icon in
-the notification area (`INSTALL /notray` leaves the icon out). It runs as
+the notification area. Each user can turn that off with "Start at login"
+in its View menu or the icon's right-click menu, with no administrator
+rights; `INSTALL /notray` turns it off for the whole machine. It runs as
 the logged-on user, with no administrator rights.
 
 - **The window** shows every USB host controller (this driver's and
@@ -325,6 +331,9 @@ the logged-on user, with no administrator rights.
   adapter; a Thunderbolt 3 device's come from the controller's firmware.
   For a USB device the descriptors give the SuperSpeed rates it supports;
   the negotiated lane rate is not reported.
+- Each controller is named with its maker and PCI ID, and the USB
+  controller inside a Thunderbolt chip says so; a root hub shows how many
+  of its ports are USB 2.0 and USB 3.x, and each port its kind.
 - **USB sticks and disks** are stopped from the window or the icon on
   every system, 98 SE and ME included, by their drive letter: "USB Flash
   Disk (F:)". The tool confirms what will stop, asks Windows to stop the
@@ -449,7 +458,8 @@ key, a `DWORD` unless it says otherwise:
 
 `NNNN` is the subkey whose `DriverDesc` is the controller's Device
 Manager name ("Which controllers"). The install writes each value below
-but `XhciCmTunnelBridge` at its default, only where it is missing.
+but `XhciCmTunnelBridge` and `XhciCmBridgeNumbering` at its default,
+only where it is missing.
 Restart Windows, or disable and enable the controller, after a change.
 
 | Value | Default | What it does |
@@ -461,6 +471,7 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
 | `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
+| `XhciCmBridgeNumbering` | `1` | Windows 98 SE and ME: `1` sets up the PCI bridges a device brings up behind a tunnel after Windows has started (bus numbers, memory windows, interrupt lines, as the BIOS would) (a USB4 NVMe enclosure's switch, which otherwise shows Code 29 until a restart); `0` leaves them as they come up. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | A comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports, for a machine whose ports it does not find (the `debug` log says so). Not written by the install |
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
 | `XhciCmCmdTimeoutMs` | `5000` | Firmware connection manager: the wait for a command's answer, in ms (`1000` to `60000`), three tries |
@@ -557,6 +568,19 @@ have every leg.
   device is unplugged the firmware stops answering and the controller is
   removed about 15 seconds later, not to return on a re-plug. Turn Assist
   off, or turn pre-boot support on and keep a device attached.
+- **Windows 98 SE and ME: keep "Thunderbolt BIOS Assist Mode" Off on
+  ThinkPads that have it.** Read on the ThinkPad P14s Gen 1 with Assist
+  on: Windows 98 SE shows no Thunderbolt controller at all, with or
+  without a device attached, and a plug brings up nothing.
+- **Windows 98 SE and ME: a device with a PCI Express switch of its own**
+  (a USB4 NVMe enclosure built on the ASMedia ASM2464) plugged in after
+  Windows has started is set up by the driver as the BIOS would have set
+  it up at power-on: bus numbers, memory windows and, where provably
+  routed, the interrupt line (`XhciCmBridgeNumbering`, on by default).
+  Without it Windows shows the switch with Code 29 until a restart.
+  Read under the Thunderbolt 3 firmware connection manager on the
+  ThinkPad P14s Gen 1 and in the emulator; the USB4 connection manager
+  takes the same path but has not been read with such a device.
 - **Windows 2000: an unplug without a stop shows "Unsafe Removal of
   Device"**, and the device is removed. Stop it in "Unplug or Eject
   Hardware" first.

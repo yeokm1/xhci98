@@ -579,6 +579,52 @@ int tr_usb_answer9x(TR_U32 cr, const char *what, char *out, size_t cap);
  * CR LF out. out always terminated. */
 void tr_wrap(const char *in, char *out, size_t cap, int width);
 
+/* ---- start at login (record 25 section 7.4, revision 8) ------------------ */
+
+/* The per-user value under HKCU\Software\xHCI98\XHCITR. */
+#define TR_LOGIN_VALUE          "TrayAtLogin"
+
+/* Whether a start goes on. Only a /tray start (the one the Run value makes
+ * at login) reads the value, and only a DWORD 0 stops it; absent, another
+ * type or any other number starts as before. haveValue: the value was
+ * read as a DWORD. */
+int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value);
+
+/* ---- the tree's labels (record 25 revision 10 addendum) ------------------ */
+
+/* VEN_ and DEV_ of a PCI id or instance id ("PCI\VEN_8086&DEV_02ED&..."),
+ * without case; 1 when both were read. */
+int tr_pci_ids(const char *id, unsigned int *ven, unsigned int *dev);
+
+/* Windows 98 and ME: the bus and device of a function on a root bus, from
+ * the instance id's last element "BUS_hh&DEV_hh&FUNC_hh"; 1 when read. */
+int tr_pci_loc9x(const char *id, unsigned int *bus, unsigned int *dev);
+
+/* A PCI vendor's short name ("Intel"), or NULL for one not in the table. */
+const char *tr_pci_vendor(unsigned int ven);
+
+#define TR_TB_NOT               0   /* not a Thunderbolt chip's xHCI        */
+#define TR_TB_TB3               1   /* its NHI runs the firmware CM (ICM)   */
+#define TR_TB_USB4              2   /* its NHI runs the USB4 software CM    */
+#define TR_TB_UNKNOWN           3   /* an NHI's, generation not published   */
+
+/* What follows a controller's description in the tree: " - Intel
+ * 8086:02ED", " - vendor 1AB2 1AB2:0001", or for a Thunderbolt chip's
+ * own xHCI " - Thunderbolt 3 controller's USB (8086:15C1)"; "" (or the
+ * Thunderbolt words alone) when the ids were not read. */
+void tr_ctrl_suffix(char *out, size_t cap, int haveIds, unsigned int ven,
+                    unsigned int dev, int tbKind);
+
+/* "Root hub - 18 ports (14 USB 2.0, 4 USB 3.x)"; without the split when
+ * known is 0 (a port did not report its protocols); "Root hub" for 0
+ * ports. */
+void tr_roothub_label(char *out, size_t cap, unsigned int ports, int known,
+                      unsigned int usb2, unsigned int usb3);
+
+/* A port's protocol for its label (", USB 3", ", USB 2", ", USB 1.1"), or
+ * "" when _EX_V2 did not report it. */
+const char *tr_port_tag(int haveV2, TR_U32 proto);
+
 /* ---- the report ---------------------------------------------------------- */
 
 /* One node of the report: its label at depth, then its details indented

@@ -43,6 +43,8 @@
 #define CM_ST_ASK_MS        500UL   /* the ask read at most this often     */
 #define CM_ST_PATH_RETRY_MS 5000UL  /* an unknown 98 path tried again      */
 
+static VOID cmStBrDiag(PCM_NHI nhi);
+
 static BOOLEAN cmStNt(VOID)
 {
     return IoIsWdmVersionAvailable(1, 0x10);
@@ -276,6 +278,7 @@ VOID CmStatusOpen(PCM_NHI nhi)
     s = &nhi->StatusPub;
     cmStClose(s);
     CmZero(s, sizeof(*s));
+    KeInitializeSpinLock(&nhi->BrDiagLock);
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(nhi->Common.Pdo,
                                            PLUGPLAY_REGKEY_DEVICE, KEY_WRITE,
                                            &key))) {
@@ -330,6 +333,7 @@ VOID CmStatusPass(PCM_NHI nhi)
         return;
     }
     cmStPublish(nhi, bytes, FALSE);
+    cmStBrDiag(nhi);
 }
 
 /* XhciCmQueryName: the query device's name, or empty once it is gone
@@ -346,6 +350,36 @@ VOID CmStatusQueryName(PCM_NHI nhi, PCUNICODE_STRING name)
     (VOID)ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &value, 0, REG_SZ,
                         (PVOID)name->Buffer,
                         (ULONG)name->Length + sizeof(WCHAR));
+}
+
+/* XhciCmBridgeDiag, when the worker has a newer attempt to show: best
+ * effort, as the record. The copy is taken under BrDiagLock, the lock the
+ * worker writes it under, and written after the lock is released. */
+static VOID cmStBrDiag(PCM_NHI nhi)
+{
+    UNICODE_STRING name;
+    ULONG copy[CM_BRDIAG_WORDS];
+    ULONG seq;
+    ULONG i;
+    KIRQL irql;
+
+    if (nhi->StatusPub.DevKey == NULL) {
+        return;
+    }
+    KeAcquireSpinLock(&nhi->BrDiagLock, &irql);
+    for (i = 0; i < CM_BRDIAG_WORDS; i++) {
+        copy[i] = nhi->BrDiag[i];
+    }
+    KeReleaseSpinLock(&nhi->BrDiagLock, irql);
+    seq = copy[0];
+    if (seq == 0 || seq == nhi->BrDiagWritten) {
+        return;
+    }
+    RtlInitUnicodeString(&name, L"XhciCmBridgeDiag");
+    if (NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &name, 0,
+                                 REG_BINARY, (PVOID)copy, sizeof(copy)))) {
+        nhi->BrDiagWritten = seq;
+    }
 }
 
 VOID CmStatusStopped(PCM_NHI nhi)
