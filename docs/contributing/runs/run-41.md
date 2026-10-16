@@ -799,6 +799,13 @@ standard user:
   FEBF0000-FEBF3FFF", the IRQ "message-signalled", and its MSI data as
   "Resource type 0x8001 (36 bytes)"; `b6592938` names that "Private data
   36 bytes" (a host vector; not read again on 7).
+- The Status line on 98 SE and ME (for example the NHI's "0x19886ACE
+  (started)") is CONFIGMG's whole devnode flag word, not a stray value:
+  `DN_APM_DRIVER`, `DN_APM_ENUMERATOR`, `DN_NT_DRIVER` (a WDM driver),
+  `DN_NT_ENUMERATOR`, `DN_NOT_FIRST_TIMEE`, `DN_REMOVABLE`,
+  `DN_DISABLEABLE`, `DN_FILTERED`, `DN_HAS_MARK`, `DN_HARDWARE_ENUM`,
+  `DN_NOT_FIRST_TIME`, `DN_STARTED`, `DN_ENUM_LOADED`, `DN_DRIVER_LOADED`
+  (cfg.h). The 9x-only high bits make it look unlike NT's 0x0180600A.
 
 ### XHCIINST with its output redirected
 
@@ -826,6 +833,30 @@ not the console and standard input and standard error are):
   without redirection printed once. Run from a prompt that is not
   elevated, the tool asks for elevation and runs in a console of its own,
   where a redirection does not reach.
+
+### XHCIINST and an NHI whose New Hardware wizard was cancelled (98 SE)
+
+A fresh 98 SE overlay (`win98-gold`) with the emulated Thunderbolt 3
+enclosure; the five bridges installed through their wizards, the NHI's
+("PCI System Peripheral") and the Thunderbolt chip's xHCI's cancelled. The
+install run's Thunderbolt question then said "No Thunderbolt or USB4
+controller was found" and offered N, as the leg that found it read; the
+same after a restart with the NHI's wizard cancelled again.
+
+- The log of that run lists every devnode the walk met: the five bridges
+  (`VEN_8086&DEV_15C0`), no NHI (`DEV_15BF`) and no Thunderbolt xHCI. The
+  NHI had no devnode.
+- Nor was it in `HKLM\Enum\PCI`: an export of that key held no `DEV_15BF`
+  (nor `CC_0880`), and an export of the NHI's own key found none. The one
+  entry the registry fallback listed was an old slot of the board's own
+  xHCI controller from the base image's history.
+- So a registry fallback that also admits an NHI (written, host-tested and
+  reviewed, `f060eae8`) changed nothing here: on 98 SE a device behind the
+  tunnel's bridges whose wizard was cancelled leaves neither a devnode nor
+  an `Enum\PCI` entry for the tool to read. It was reverted (`fbda19be`).
+  The question's own text already covers this ("Some computers show theirs
+  only while a device is plugged in ...: answer Y if this computer has a
+  Thunderbolt or USB4 port"), and `/thunderbolt` includes it unasked.
 
 ## Stor98 behind the Thunderbolt 3 controller (STOR.2)
 
