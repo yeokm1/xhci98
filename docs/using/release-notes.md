@@ -417,7 +417,7 @@ behind a tunnel when the tunnel comes up. Stor98 `0.3.0.1` does not
 read the channel yet:
 
 - no statement is read or acknowledged, and nothing waits for one;
-- Stor98 detects a removed drive by itself, at its own deadline.
+- Stor98 detects a removed drive by itself, at its own deadline (about 5 seconds).
 
 On Windows 98 SE and ME, `xhcicm.sys` in this release publishes no
 channel, so Stor98 runs there without it:
