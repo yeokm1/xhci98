@@ -1149,6 +1149,107 @@ Not read: the USB4 profile with a bridge chain (the same worker and the
 same member set, so covered by the shared path, not tested under USB4);
 ME with Stor98 and known devnodes.
 
+### The Stor98 link-state channel on 98 SE and ME (NV9X.1)
+
+The current-boot proof key and the locator of interface 3 (record 21
+section 7.2), read on the `nv9x` build on 2026-10-16 evening, with Stor98
+`0.3.0.1` - the release then at hand. `3.0.0.0` bundles Stor98 `0.4.0.0`;
+these rows are the test history of the publication, and the joint legs
+with `0.4.0.0` read the channel again. Emulator `vm\usb4\bin-2a893ea`
+(SHA-256 checked before use), `tb3-alpine-ridge` with the NVMe enclosure
+`enc0`, i440FX; 98 SE from the gold image, ME from the stock image, 2000
+from the STOR.2 image; overlays under `E:\xhci98-vm\nv9x`, every window
+shown. The package was a dry x86 TEST cut bundling Stor98 `0.3.0.1`
+(`make-release.ps1 -TestLabel "dry cut"`), installed by `INSTALL
+/defaults /yes /thunderbolt` and the Device Manager steps it prints, and
+Stor98 by Have Disk on the NVMe controller's New Hardware wizard (SCSI
+controllers, `release-x86`). `xhcicm.sys` was then replaced by the `qemu`
+flavour of the same commit, with `XhciLogVerbosity` 2 on the NHI's driver
+key (the name that build read; `XhciCmLogVerbosity` since `tr-logs`); the
+notes below are its port-0xE9 lines.
+
+**The first build closed the proof key's handle, and the key had no
+values.** On 98 SE with `387990e0`: `cm.nvlink.9x.record=80000000` (proof
+and locator written), Stor98 installed and running E:, but
+`HKEY_DYN_DATA\Stor98LinkState` showed in regedit with no values, and the
+provider was never called - no read counted, from Stor98 or from regedit,
+while the VMM's own dynamic values (`PerfStats\StatData`) showed. The
+code had closed the key's handle right after `_RegCreateDynKey`; Stor98's
+own 9x stand-in keeps it open. `edb1c464` keeps it open for the boot and
+closes it only at an unload, before the key is deleted (record 21 section
+7.2). Every row below is that build.
+
+- **The publication** (98 SE and ME): `cm.nvlink.9x=00000000` at the start
+  (nothing published), then at the first tunnel action
+  `cm.nvlink.9x.record=80000000` - residency, the key opened first and
+  absent, the proof created, the locator written. regedit read the proof
+  through the provider: `BootCookie` 0xD5D654CF and `TableLinear`
+  {C14A2670h, 272, 0xD5D654CF}, and the locator `LinkState` {'S98L', 4,
+  C14A2670h, 272, 0xD5D654CF} - the same address and cookie in all three.
+  A search of the whole registry for `nvme98` found nothing, and the one
+  NVMe devnode ran `stor98.mpd` (`SCSIAdapter\0000`, XHCITR's details).
+- **Stor98 finds the proof** (no rc 0x0A). Each Stor98 load read both
+  values: `cm.nvlink.9x.proof-read=00000002` at its `HwFindAdapter` on 98
+  SE and ME, and 2 more at each later load (each regedit view also adds 2,
+  through the ring-3 handler). The release Stor98 reports no rc; whether
+  it accepted the table is Stor98's code against these values.
+- **The order on a hot plug.** The function behind the tunnel answers only
+  after `Reenumerate_DevNode`, on 98 SE and ME alike: `cm.nvlink.up.waited`
+  0x406 and 0x413 ms with nothing answering, the re-enumeration, Stor98's
+  read of the proof, and then `cm.nvlink.up=01000401` 206 ms after the
+  exposure (`up.late=0000CE00`). So the `UP` follows Windows' start of
+  Stor98 on the drive, and Stor98 `0.3.0.1`, which bound its entry only in
+  `HwFindAdapter`, found none on a first plug; on ME, where Stor98 was
+  installed after the plug, the `UP` was already there when it loaded.
+  With the drive present at power-on, Windows enumerated it before
+  `xhcicm.sys` published, and that load read no proof.
+- **XHCITR Safely Remove** on 98 SE and ME: "Windows has stopped QEMU NVMe
+  Ctrl (E:) ... You can now unplug the device." No `REMOVE_PENDING` was
+  made: the tool's eject goes to Windows directly (record 24 section 7.1),
+  not through the worker.
+- **Link-down**: at every unplug the statement was withheld,
+  `cm.nvlink.icm-down=00090404` and `cm.nvlink.withheld=09000001` (verdict
+  9, no reading on 98 SE and ME), so no acknowledgement was awaited and no
+  wait was measured there.
+- **Unplug and re-plug** on 98 SE: the withheld statement, then
+  `cm.nvlink.up=02000401` (generation 2, `up.late=0000C000`, 192 ms) and
+  the new load's read of the proof. Stor98 `0.3.0.1`'s controller started,
+  but no disk came back ("Invalid drive specification"), after an eject
+  and without one, and again after a clean restart. The cause is Stor98's
+  (found on its `latebind` branch): the withheld statement leaves the
+  entry `IN_USE` at generation 1, the new load's `P9Bind` bound that stale
+  entry, and the `UP` of generation 2 that followed read to it as R8b's
+  quiesce evidence, so it went gone and failed every request; `0.4.0.0`
+  binds only an `UP` above a generation floor. On ME the same re-plug
+  ended, at the next shutdown, in "VCACHE(01) + 00000E4D Error: 0E : 0028
+  : C004E4E9", and a shutdown after an eject with the enclosure left in
+  showed "Error: 0E : 018F : BFF775B4"; neither was taken further.
+- **A surprise unplug** with E: mounted and a file just written: 98 SE and
+  ME showed Windows' "Disk Write Error ... drive E:" until dismissed; then
+  the worker's `cm.reenum.9x.query-remove=00000000`,
+  `cm.reenum.9x.remove=00000000` (a vanished child, no request) and the
+  re-enumeration.
+- **ME write-through**: `SYSTEM.INI` copied to E: as `WT1.TXT`, about 20 s
+  later the surprise unplug; after a cold restart with the enclosure in,
+  `WT1.TXT` was there, 2,025 bytes, and `fc /b` against the source: "no
+  differences encountered".
+- **A restart**: `cm.start`, then at the first tunnel action a new
+  table and a new proof - `BootCookie` 0xD8E8D536 where the boot before
+  had 0xD5D654CF - with the locator rewritten to match. The load that
+  Windows started before the publication read the old boot's locator with
+  no proof beside it, so no table of the earlier boot was used.
+- **Windows 2000, unchanged**: `cm.nvlink.nt=80000000` (the callback
+  registered, no reload), `cm.nvlink.up=01000401` before the enumeration;
+  at a surprise unplug the statement made (`icm-down=00000402`,
+  `down=00000001`) and the wait ended at once with no receiver
+  (`cm.nvlink.await=00000000`, `cm.nvlink.await.end=00000300`: no Stor98
+  had asked for the table, as `0.3.0.1` does not on NT), then the
+  retirement - as `3.0.0.0` did.
+
+Not read: the 9x waits with an acknowledgement (no statement and no
+request is made on 98 SE and ME in `3.0.0.0`; roadmap-usb4.md NV9X.3),
+the USB4 profile, and Stor98 `0.4.0.0` (the joint legs).
+
 ## PCI configuration, the query request and the default level (record 25 revision 12)
 
 Branch `tr-pci`. `xhcicm.sys`'s `IOCTL_XHCICM_PCI`, `xhci98.sys`'s

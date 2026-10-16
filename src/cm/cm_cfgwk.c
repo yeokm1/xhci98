@@ -54,6 +54,7 @@
 #include "cm_cfgmg.h"
 #include "cm_ports.h"
 #include "cm_nvlink.h"
+#include "cm_qryb.h"
 #include "tbt_brnum.h"
 
 #if defined(_WIN64) && defined(NO_LEGACY_DRIVERS)
@@ -172,14 +173,17 @@ static ULONG cmWkNowTicks(VOID)
 
 static ULONG cmWkSince(ULONG thenTicks)
 {
-    ULONG perTick;
+    ULONG unit;
 
-    /* KeQueryTimeIncrement is in 100 ns units: at least 1 ms a tick. */
-    perTick = KeQueryTimeIncrement() / 10000UL;
-    if (perTick == 0) {
-        perTick = 1;
+    /* KeQueryTimeIncrement is in 100 ns units. Milliseconds rounded down,
+     * a tick's fraction kept (15.6 ms is not counted as 15), with no
+     * product past 32 bits for any tick period of 10 to 55 ms and any
+     * stall: cm_query.c's conversion, host-tested. */
+    unit = KeQueryTimeIncrement();
+    if (unit == 0) {
+        unit = 10000UL;
     }
-    return (cmWkNowTicks() - thenTicks) * perTick;
+    return CmQueryAgeMs(cmWkNowTicks(), thenTicks, unit);
 }
 
 /* As cm_reenum.c's reader: HalGetBusData from offset 0. */
@@ -1186,6 +1190,9 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
      * request goes stale. The removal below follows whatever the answer:
      * Windows 98 cannot cancel the query just accepted. */
     seq = 0;
+    /* T_ack counts from before the request is published, never from a
+     * later point a descheduled worker resumes at (R11). */
+    start = cmWkNowTicks();
     if (entry != CM_NVLINK_NONE && cmWkCurrent(w, i, gen)) {
         /* Only for a request still current, and only for the identity
          * established before the query, unchanged since; a stale one
@@ -1195,13 +1202,14 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     } else {
         entry = CM_NVLINK_NONE;
     }
+    answer = CM_NVLINK_RM_NONE;
     if (entry != CM_NVLINK_NONE) {
-        start = cmWkNowTicks();
-        answer = CM_NVLINK_RM_NONE;
-        for (;;) {
-            answer = CmNvlinkWkAnswer(entry, seq);
-            if (answer != CM_NVLINK_RM_NONE || !cmWkCurrent(w, i, gen) ||
-                cmWkSince(start) >= CM_NVLINK_REMOVE_MS) {
+        /* The deadline before each read: an answer first seen after it is
+         * late, logged and not taken (interface 3, R11; CmNvlinkRemoveStep
+         * answers CM_NVLINK_RM_TIMEOUT or CM_NVLINK_RM_LATE then). */
+        while (cmWkCurrent(w, i, gen)) {
+            answer = CmNvlinkWkAnswer(entry, seq, egen, cmWkSince(start));
+            if (answer != CM_NVLINK_RM_NONE) {
                 break;
             }
             /* -CM_NVLINK_POLL_MS ms, relative, in 100 ns units, without
@@ -1210,13 +1218,30 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
             pause.HighPart = -1;
             (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
         }
-        CmNvlinkWkWithdraw(entry, seq);
         cmWkLog(w, "cm.nvlink.9x.remove-answer", (seq << 8) | answer);
     }
-    cr = CmCfgmgRemove(&w->Cfgmg, devnode);
-    cmWkLog(w, "cm.reenum.9x.remove", cr);
+    /* Remove_SubTree; after a stor98 request, retried every
+     * CM_NVLINK_RETRY_MS while it fails, until CM_NVLINK_RETRY_FOR_MS after
+     * the first attempt (R11 O6's bound, CmNvlinkRetryAgain; a veto is
+     * never forced). */
+    start = cmWkNowTicks();
+    for (;;) {
+        cr = CmCfgmgRemove(&w->Cfgmg, devnode);
+        cmWkLog(w, "cm.reenum.9x.remove", cr);
+        if (cr == CMG_CR_SUCCESS || entry == CM_NVLINK_NONE ||
+            !CmNvlinkRetryAgain(cmWkSince(start))) {
+            break;
+        }
+        pause.LowPart = (ULONG)(0UL - CM_NVLINK_RETRY_MS * 10000UL);
+        pause.HighPart = -1;
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
+    }
     if (cr == CMG_CR_SUCCESS) {
         w->C.Removed++;
+    }
+    /* R11 O5: REMOVE_PENDING cleared after the removal. */
+    if (entry != CM_NVLINK_NONE) {
+        CmNvlinkWkWithdraw(entry, seq);
     }
     if (cmWkCurrent(w, i, gen)) {
         return TRUE;
