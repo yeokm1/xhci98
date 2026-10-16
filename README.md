@@ -165,7 +165,7 @@ An NVMe drive in an enclosure needs an NVMe driver, which these systems do not h
 
 ## The xHCI98 USB Tree
 
-`XHCITR.EXE` (`XHCITR64.EXE` on 64-bit Windows) shows every USB controller, hub and device, and every Thunderbolt 3 and USB4 controller and device, with their details. The install puts it in `%windir%\XHCI98\` and starts it at login as an icon in the notification area. It needs no administrator rights.
+`XHCITR.EXE` (`XHCITR64.EXE` on 64-bit Windows) shows every USB controller, hub and device, and every Thunderbolt 3 and USB4 controller and device, with their details. The install puts it in the install directory it asks for (`C:\XHCI98` unless you choose another; `INSTALL /to <path>` gives it without asking) and starts it at login as an icon in the notification area. It needs no administrator rights.
 
 - **The window:** a tree on the left and the selected item's details on the right: speed, port, IDs, driver, Device Manager status and, with View > Descriptors, its descriptors decoded. The View menu's check boxes show or hide each kind of item. File > Save Report writes everything to a text file for a bug report.
 - **The icon:** a left click lists the Thunderbolt and USB4 devices you can remove safely; a double click opens the window. Balloons say when a device connects, waits for approval or disconnects (Windows 2000, ME and later; on 98 SE the icon's tooltip shows the last event).
@@ -242,10 +242,10 @@ In each driver directory:
 
 ### Install with INSTALL.BAT
 
-Unzip the whole package and run `INSTALL.BAT` from its top directory: double-click it on 98 SE and ME, run it as an administrator on 2000 and XP, and with Run as administrator on Vista and 7. It shows its plan, asks about a few options (Enter keeps a value), then asks once before it changes anything.
+Unzip the whole package and run `INSTALL.BAT` from its top directory: double-click it on 98 SE and ME, run it as an administrator on 2000 and XP, and with Run as administrator on Vista and 7. It shows its plan, asks about a few options (each choice on its own line; "Enter for [x]" says what Enter keeps), asks for the install directory of its tools (`C:\XHCI98` by default, or `INSTALL /to <path>`), then asks once before it changes anything.
 
 - **Windows 2000 to 7:** it installs or updates every driver on the devices present, controller first, and stages the package for devices plugged in later. It handles Have Disk on 2000, the root hub's update and Vista and 7's same `DriverVer`. Answer Windows' unsigned-driver questions.
-- **Windows 98 SE and ME:** it copies the package under `XHCI98` in the Windows directory, adds that folder to the wizards' search path and prints the Device Manager steps left. Run it again after the restart; it then also offers the silent install (off by default; see "Tuning").
+- **Windows 98 SE and ME:** it copies the package into the install directory, adds that folder to the wizards' search path, prints the Device Manager steps left as a short numbered list per device with the folder to type, and offers to open Device Manager. Run it again after the restart; it then also offers the silent install (off by default; see "Tuning").
 
 When a run changed anything and finished, it ends with "Changes were made. Please restart Windows now." If it stopped with steps left for you (a Found New Hardware window to answer, for instance) it says so instead; do them and run it again. It never runs `XHCICLN`.
 

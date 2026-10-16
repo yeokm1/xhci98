@@ -17,10 +17,11 @@ the old driver unless Have Disk is used; Vista and 7 keeping an old build
 of the same version; the root hub's own update).
 
 On Windows 98 SE and ME the tool stages the files and you finish the
-installation in Device Manager: it copies the package to a folder under
-C:\WINDOWS\XHCI98 (your Windows directory), adds that folder to the places
-the hardware wizards search, and prints the clicks that remain, with the
-folder to type if a wizard does not find the driver by itself.
+installation in Device Manager: it copies the package to a folder in the
+install directory (C:\XHCI98 unless you choose another), adds that folder
+to the places the hardware wizards search, and prints the steps that
+remain, one action a line, with the folder to type if a wizard does not
+find the driver by itself. It then offers to open Device Manager.
 
 It uses only routines Windows documents for this. It is not devcon, and
 this package carries no Microsoft file.
@@ -60,6 +61,8 @@ architecture and this build.
                        asking (for unattended installs, with /yes)
   INSTALL /notray      installs without starting the xHCI98 USB Tree at
                        login (and stops an earlier install's start)
+  INSTALL /to path     installs the xHCI98 tools in that directory
+                       without asking (see "The install directory")
 
 Thunderbolt 3 / USB4 support: the tool asks "Install Thunderbolt 3 / USB4
 support?". With a Thunderbolt or USB4 controller present Enter (and /yes)
@@ -104,7 +107,9 @@ The options it asks about
 
 Before it changes anything it asks about a few of the driver's options,
 each only where the hardware it affects is present, showing the value now,
-the default and the values allowed; Enter keeps the value. They are
+each value allowed on its own line with what it means, and the default.
+Enter keeps the value set now, and the question says which it is: "Enter
+for [1]". On a new install that is the default. They are
 XhciIntelPortSwitch (only with an Intel 7-, 8- or 9-series controller),
 XhciInterruptMode, XhciForceBulkOnly, XhciSilentInstall (Windows 98 SE and
 ME only, off by default: on does what tools\silent\silent-on.bat does,
@@ -125,6 +130,34 @@ code 3) when it changed anything and finished, "Changes were made, but not
 everything is done" when it stopped with steps left for you (do those
 first; the next run asks for the restart), and "No changes were made."
 when it changed nothing.
+
+The install directory
+---------------------
+
+The tool asks where to install the xHCI98 tools, and lists what goes
+there: the xHCI98 USB Tree (XHCITR.EXE, or XHCITR64.EXE on 64-bit
+Windows), which starts at each login, and on Windows 98 SE and ME the
+copy of the package the hardware wizards search. Enter takes C:\XHCI98 on
+the drive Windows is on, or, on an update, the directory an earlier
+install used. /to path gives it without asking; /yes and /defaults take
+the default without asking.
+
+The directory must be a full path on a local hard disk, not the drive's
+top level, not inside the Windows directory and not inside the package.
+On Windows 98 SE and ME each folder name must be a short (8.3) name with
+no spaces, because it is what you type into the hardware wizards. The
+tool makes the directory if it is missing, and records it in the registry
+(HKLM\Software\xhci98, InstallDir) so that an update and the uninstall
+find it.
+
+An earlier test build put the tools in C:\WINDOWS\XHCI98 (your Windows
+directory). An update offers that directory as the default; choose
+another and the tool moves them: it closes the xHCI98 USB Tree, copies it
+to the new directory, points its start at login there, then deletes the
+old copy and, if it is empty, the old folder. If the xHCI98 USB Tree does
+not close, nothing moves and the tool says to close it and run INSTALL
+again. On Windows 2000 to 7 the package copies the drivers are installed
+from stay in C:\WINDOWS\XHCI98, because Windows remembers that place.
 
 Thunderbolt and USB4 devices
 ----------------------------
@@ -165,7 +198,9 @@ for a restart: this package's filter from a Thunderbolt port, every device
 entry of the package, its INFs, its services and its files. It never
 removes Windows' own usbd.sys and usbui.dll, which other USB drivers use.
 Run it again after a restart it asks for. On Windows 98 SE and ME it
-removes what it placed itself and prints the Device Manager steps.
+removes what it placed itself and prints the Device Manager steps. On
+every system it removes the xHCI98 tools from the install directory, the
+directory itself if nothing else is in it, and its record in the registry.
 
 Exit codes
 ----------

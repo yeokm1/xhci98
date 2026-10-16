@@ -1295,6 +1295,64 @@ int inst_path_remove(const char *list, const char *dir, char *out, size_t cap)
     return removed;
 }
 
+int inst_copy_name(const char *name)
+{
+    size_t i;
+    size_t n = strlen(name);
+
+    if (n == 12 && inst_eq(name + 8, ".NEW")) {
+        n = 8;
+    }
+    if (n != 8) {
+        return 0;
+    }
+    for (i = 0; i < 8; i++) {
+        int c = inst_upper((unsigned char)name[i]);
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int inst_path_remove_copies(const char *list, const char *root, char *out,
+                            size_t cap)
+{
+    char entry[INST_LINE_CHARS];
+    size_t pos = 0;
+    size_t used = 0;
+    size_t r = strlen(root);
+    int removed = 0;
+
+    while (r > 0 && root[r - 1] == '\\') {
+        r--;
+    }
+    if (cap == 0) {
+        return -1;
+    }
+    out[0] = '\0';
+    while (inst_path_entry(list, &pos, entry, sizeof(entry))) {
+        if (r > 0 && strlen(entry) > r + 1 && inst_eqn(entry, root, r) &&
+            entry[r] == '\\' && inst_copy_name(entry + r + 1)) {
+            removed = 1;
+            continue;
+        }
+        if (entry[0] == '\0') {
+            continue;
+        }
+        if (used + (used ? 1 : 0) + strlen(entry) + 1 > cap) {
+            return -1;
+        }
+        if (used) {
+            strcat(out, ";");
+            used++;
+        }
+        strcat(out, entry);
+        used += strlen(entry);
+    }
+    return removed;
+}
+
 int inst_path_remove_prefix(const char *list, const char *prefix, char *out,
                             size_t cap)
 {
@@ -1386,68 +1444,81 @@ int inst_testsigning(const char *options)
 /* ======================================================================== */
 
 const INST_VALUE instValues[] = {
+    /* The meanings and choices are the release notes' and
+     * docs\using\tuning.md's; the question prints each choice on its own
+     * line (owner, 2026-10-16), and the console wraps the cautions. */
     { "XhciIntelPortSwitch", INST_INF_XHCI, INST_APPLY_PSW, 0x3UL, 0x7UL,
-      "route the shared connectors from the EHCI controller to this driver "
-      "(0 off, 1 on)",
+      "route the shared connectors from the EHCI controller to this driver",
       "2 forces the switch writes on an Intel controller that does not "
-      "have the switch\n  registers, at every start, resume, stop and "
-      "shutdown; use it only if the\n  release notes' \"Value 2\" section "
-      "applies to your machine.", 0x4UL },
+      "have the switch registers, at every start, resume, stop and "
+      "shutdown; use it only if the release notes' \"Value 2\" section "
+      "applies to your machine.", 0x4UL,
+      { "off", "on", "on for any Intel controller, at your own risk",
+        NULL } },
     { "XhciInterruptMode", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0xFUL, 0xFUL,
-      "how the controller's events arrive (0 automatic, 1 interrupt line "
-      "only, 2 polling always, 3 message-signalled only)",
+      "how the controller's events arrive",
       "1 and 3 refuse to start a controller Windows gives no line or no "
-      "message (Code 10).", 0xAUL },
+      "message (Code 10).", 0xAUL,
+      { "automatic", "the interrupt line only", "polling always",
+        "a message-signalled interrupt only" } },
     /* Owner, 2026-10-15: never asked (Asked 0); /set Name=Value only. */
     { "XhciPollFineTimer", INST_INF_XHCI, INST_APPLY_NT_XHCI, 0x0UL, 0x3UL,
-      "a finer system clock while the controller is polled (0 off, 1 on)",
-      NULL, 0 },
+      "a finer system clock while the controller is polled",
+      NULL, 0, { "off", "on", NULL, NULL } },
     { "XhciSelectiveSuspend", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
-      0x3UL, "put idle USB devices to sleep (0 off, 1 on)",
+      0x3UL, "put idle USB devices to sleep",
       "leave it off unless a device needs it; if a device stops responding "
-      "after idling,\n  set it back to 0.", 0x2UL },
+      "after idling, set it back to 0.", 0x2UL,
+      { "off", "on", NULL, NULL } },
     /* Owner, 2026-10-15: asked on 98 SE and ME only, default off; on is
      * tools\silent\silent-on.bat's effect (the SILENT.REG list, then the
      * switch), off silent-off.bat's (the switch, the list left). */
     { "XhciSilentInstall", INST_INF_XHCI, INST_APPLY_9X_XHCI, 0x3UL, 0x3UL,
       "install hubs, boot keyboards and mice and Bulk-Only storage with no "
-      "Add New Hardware\n  wizard (0 off, 1 on)",
+      "Add New Hardware wizard",
       "turn it on only once each listed class's drivers have been installed "
-      "at least\n  once: otherwise 98 SE asks for its CD, with no wizard. "
-      "Restart Windows after\n  changing it.", 0 },
+      "at least once: otherwise 98 SE asks for its CD, with no wizard. "
+      "Restart Windows after changing it.", 0,
+      { "off", "on", NULL, NULL } },
     { "XhciForceBulkOnly", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3UL, 0x3UL,
-      "Bulk-Only instead of UAS for a disk that offers both (0 UAS where "
-      "offered, 1 Bulk-Only)",
+      "Bulk-Only instead of UAS for a disk that offers both",
       "read as each device is connected; on Windows 2000 and later a disk "
-      "already\n  installed keeps its driver until it is uninstalled in "
-      "Device Manager and\n  plugged in again. A UAS-only disk stays on "
-      "UAS.", 0 },
+      "already installed keeps its driver until it is uninstalled in "
+      "Device Manager and plugged in again. A UAS-only disk stays on "
+      "UAS.", 0,
+      { "UAS where the disk offers it", "Bulk-Only", NULL, NULL } },
     { "XhciCmMode", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0xFUL,
-      "the Thunderbolt and USB4 connection manager (0 off, 1 automatic)",
+      "the Thunderbolt and USB4 connection manager",
       "2 and 3 force one connection manager whatever the controller "
-      "reports; use them\n  only on the release notes' advice.", 0xCUL },
+      "reports; use them only on the release notes' advice.", 0xCUL,
+      { "off", "automatic",
+        "an unlisted Intel controller driven as an Alpine Ridge",
+        "the driver's own USB4 connection manager, forced" } },
     { "XhciCmApprove", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0x3UL,
-      "approve Thunderbolt devices automatically (0 no, 1 yes)", NULL, 0 },
+      "approve Thunderbolt devices automatically", NULL, 0,
+      { "no", "yes", NULL, NULL } },
     { "XhciCmSafeEject", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0x3UL,
-      "offer Safely Remove for the devices behind a dock (0 no, 1 yes)",
-      NULL, 0 },
+      "offer Safely Remove for the devices behind a dock",
+      NULL, 0, { "no", "yes", NULL, NULL } },
     /* Owner, 2026-10-15: never asked, /set Name=Value only (record 23
      * section 8.1, record 24 section 11). */
     { "XhciCmReenum", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
       "make Windows look for devices after each Thunderbolt or USB4 "
-      "change (0 no, 1 yes)",
+      "change",
       "0 is for diagnosing a machine where that misbehaves: devices then "
-      "appear only\n  after a Device Manager refresh.", 0x1UL },
+      "appear only after a Device Manager refresh.", 0x1UL,
+      { "no", "yes", NULL, NULL } },
     { "XhciCmUsb3Tunnel", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
-      "USB4: carry a device's USB over a USB3 connection (0 no, 1 yes)",
-      NULL, 0 },
+      "USB4: carry a device's USB over a USB3 connection",
+      NULL, 0, { "no", "yes", NULL, NULL } },
     { "XhciCmLaneBonding", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
-      "USB4: bond the two lanes of a link (0 no, 1 yes)", NULL, 0 },
+      "USB4: bond the two lanes of a link", NULL, 0,
+      { "no", "yes", NULL, NULL } },
     { "XhciCmPreOsCleanup", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x7UL,
-      "USB4: connections found at start (0 kept, 1 cleaned where they do "
-      "not verify, 2\n  all cleaned)",
+      "USB4: connections found at start",
       "1 and 2 may drop a device the firmware connected before Windows "
-      "started.", 0x6UL }
+      "started.", 0x6UL,
+      { "kept", "cleaned where they do not verify", "all cleaned", NULL } }
 };
 const int instValueCount = (int)(sizeof(instValues) / sizeof(instValues[0]));
 
@@ -1765,14 +1836,23 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
                     return 1;
                 }
             }
-        } else if (inst_switch(a, "dir") || inst_switch(a, "log")) {
+        } else if (inst_switch(a, "dir") || inst_switch(a, "log") ||
+                   inst_switch(a, "to")) {
             int isDir = inst_switch(a, "dir");
             if (i + 1 >= argc) {
                 inst_err(err, errCap, a, " needs a value");
                 return 1;
             }
             i++;
-            if (isDir) {
+            if (inst_switch(a, "to")) {
+                if (opts->To[0] != '\0' || argv[i][0] == '\0' ||
+                    strlen(argv[i]) >= sizeof(opts->To)) {
+                    inst_err(err, errCap, "/to given twice, empty or too long",
+                             NULL);
+                    return 1;
+                }
+                inst_copy(opts->To, argv[i], sizeof(opts->To));
+            } else if (isDir) {
                 if (opts->Dir[0] != '\0' || strlen(argv[i]) >= sizeof(opts->Dir)) {
                     inst_err(err, errCap, "/dir given twice or too long", NULL);
                     return 1;
@@ -1863,6 +1943,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     }
     if (opts->NoTray && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/notray belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->To[0] != '\0' && (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, "/to belongs to an install", NULL);
         return 1;
     }
     if (opts->Devices && opts->Eject) {
@@ -2609,10 +2693,10 @@ int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int capsKnown,
 const char *inst_not_removable_text(void)
 {
     return "Windows will not stop this device: it does not see it as "
-           "removable now, and this\nWindows has no other way to stop it. "
-           "Restart Windows with the device connected:\nit is then listed "
-           "for removal again. Or close every program using it, shut "
-           "down\nWindows and unplug it while the computer is off.";
+           "removable now, and\nthis Windows has no other way to stop it. "
+           "Restart Windows with the device\nconnected: it is then listed "
+           "for removal again. Or close every program using\nit, shut "
+           "down Windows and unplug it while the computer is off.";
 }
 
 int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
@@ -2801,4 +2885,651 @@ int inst_tray_run_action(int noTray, int runState, int inPlace)
         return INST_TRAY_RUN_SET;
     }
     return INST_TRAY_RUN_KEEP;
+}
+
+/* ======================================================================== */
+/* The console (owner, 2026-10-16)                                           */
+/* ======================================================================== */
+
+#define INST_MAX_INDENT 40
+
+void inst_wrap_init(INST_WRAP *w)
+{
+    memset(w, 0, sizeof(*w));
+    w->InLead = 1;
+    w->Cont = 2;
+}
+
+/* A new logical line: what the next character starts. */
+static void inst_wrap_line(INST_WRAP *w)
+{
+    w->Col = 0;
+    w->Lead = 0;
+    w->Cont = 2;
+    w->InLead = 1;
+    w->Words = 0;
+    w->Wrapped = 0;
+    w->Hung = 0;
+    w->Spaces = 0;
+    w->WordLen = 0;
+}
+
+static void inst_put(char *out, size_t cap, size_t *n, char c)
+{
+    if (*n + 1 < cap) {
+        out[(*n)++] = c;
+        out[*n] = '\0';
+    }
+}
+
+static void inst_wrap_max(INST_WRAP *w)
+{
+    if (w->Col > w->MaxCol) {
+        w->MaxCol = w->Col;
+    }
+}
+
+static void inst_wrap_break(INST_WRAP *w, char *out, size_t cap, size_t *n)
+{
+    size_t i;
+
+    inst_put(out, cap, n, '\n');
+    for (i = 0; i < w->Cont; i++) {
+        inst_put(out, cap, n, ' ');
+    }
+    w->Col = w->Cont;
+    w->Wraps++;
+    w->Wrapped = 1;
+}
+
+/* "-", "1.", "[1]", "NOTE:": a line's marker, which its text hangs under. */
+static int inst_marker(const char *word, size_t len)
+{
+    size_t i;
+
+    if (len == 1 && (word[0] == '-' || word[0] == '*')) {
+        return 1;
+    }
+    if (len == 5 && strncmp(word, "NOTE:", 5) == 0) {
+        return 1;
+    }
+    if (len >= 2 && word[len - 1] == '.') {
+        for (i = 0; i + 1 < len; i++) {
+            if (word[i] < '0' || word[i] > '9') {
+                return 0;
+            }
+        }
+        return 1;
+    }
+    if (len >= 3 && word[0] == '[' && word[len - 1] == ']') {
+        for (i = 1; i + 1 < len; i++) {
+            if (word[i] < '0' || word[i] > '9') {
+                return 0;
+            }
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* The held word placed: on this line, or on a continuation line when it
+ * does not fit; a word wider than the room on a line is broken after its
+ * last backslash in the second half of that room, or at the width. */
+static void inst_wrap_word(INST_WRAP *w, char *out, size_t cap, size_t *n)
+{
+    size_t i;
+    size_t start = 0;
+
+    if (w->WordLen == 0) {
+        return;
+    }
+    if (w->Words > 0 && w->Col + w->Spaces + w->WordLen > INST_COLUMNS) {
+        inst_wrap_break(w, out, cap, n);
+        w->Spaces = 0;
+    }
+    if (w->Words >= 1 && !w->Wrapped && !w->Hung && w->Spaces >= 2 &&
+        w->Col + w->Spaces <= INST_MAX_INDENT) {
+        w->Cont = w->Col + w->Spaces;
+        w->Hung = 1;
+    }
+    for (i = 0; i < w->Spaces; i++) {
+        inst_put(out, cap, n, ' ');
+    }
+    w->Col += w->Spaces;
+    w->Spaces = 0;
+    for (;;) {
+        size_t room = w->Col < INST_COLUMNS ? INST_COLUMNS - w->Col : 0;
+        size_t cut = room;
+        size_t k;
+        if (w->WordLen - start <= room) {
+            break;
+        }
+        if (room == 0) {
+            inst_wrap_break(w, out, cap, n);
+            continue;
+        }
+        for (k = room; k > room / 2; k--) {
+            if (w->Word[start + k - 1] == '\\') {
+                cut = k;
+                break;
+            }
+        }
+        for (k = 0; k < cut; k++) {
+            inst_put(out, cap, n, w->Word[start + k]);
+        }
+        w->Col += cut;
+        inst_wrap_max(w);
+        start += cut;
+        inst_wrap_break(w, out, cap, n);
+    }
+    for (i = start; i < w->WordLen; i++) {
+        inst_put(out, cap, n, w->Word[i]);
+    }
+    w->Col += w->WordLen - start;
+    inst_wrap_max(w);
+    if (w->Words == 0 && !w->Wrapped && inst_marker(w->Word, w->WordLen) &&
+        w->Lead + w->WordLen + 1 <= INST_MAX_INDENT) {
+        w->Cont = w->Lead + w->WordLen + 1;
+    }
+    w->Words++;
+    w->WordLen = 0;
+}
+
+static void inst_wrap_feed_at(INST_WRAP *w, const char *text, char *out,
+                              size_t cap, size_t *n)
+{
+    for (; *text != '\0'; text++) {
+        char c = *text;
+        if (c == '\r') {
+            continue;
+        }
+        if (c == '\n') {
+            inst_wrap_word(w, out, cap, n);
+            inst_put(out, cap, n, '\n');
+            inst_wrap_line(w);
+            continue;
+        }
+        if (c == ' ' || c == '\t') {
+            if (w->InLead) {
+                inst_put(out, cap, n, ' ');
+                w->Col++;
+                w->Lead++;
+                inst_wrap_max(w);
+            } else {
+                inst_wrap_word(w, out, cap, n);
+                w->Spaces++;
+            }
+            continue;
+        }
+        if (w->InLead) {
+            w->InLead = 0;
+            w->Cont = w->Lead + 2 <= INST_MAX_INDENT ? w->Lead + 2
+                                                      : INST_MAX_INDENT;
+        }
+        if (w->WordLen + 1 >= sizeof(w->Word)) {
+            inst_wrap_word(w, out, cap, n);
+        }
+        w->Word[w->WordLen++] = c;
+    }
+}
+
+size_t inst_wrap_feed(INST_WRAP *w, const char *text, char *out, size_t cap)
+{
+    size_t n = 0;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    inst_wrap_feed_at(w, text, out, cap, &n);
+    return n;
+}
+
+static void inst_wrap_flush_at(INST_WRAP *w, char *out, size_t cap, size_t *n)
+{
+    size_t i;
+
+    inst_wrap_word(w, out, cap, n);
+    if (w->Col + w->Spaces <= INST_COLUMNS) {
+        for (i = 0; i < w->Spaces; i++) {
+            inst_put(out, cap, n, ' ');
+        }
+        w->Col += w->Spaces;
+        inst_wrap_max(w);
+    }
+    w->Spaces = 0;
+}
+
+size_t inst_wrap_flush(INST_WRAP *w, char *out, size_t cap)
+{
+    size_t n = 0;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    inst_wrap_flush_at(w, out, cap, &n);
+    return n;
+}
+
+void inst_wrap_input(INST_WRAP *w)
+{
+    inst_wrap_line(w);
+}
+
+size_t inst_wrap_text(const char *text, char *out, size_t cap)
+{
+    INST_WRAP w;
+    size_t n = 0;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    inst_wrap_init(&w);
+    inst_wrap_feed_at(&w, text, out, cap, &n);
+    inst_wrap_flush_at(&w, out, cap, &n);
+    return n;
+}
+
+size_t inst_text_width(const char *text)
+{
+    size_t col = 0;
+    size_t max = 0;
+
+    for (; *text != '\0'; text++) {
+        if (*text == '\n') {
+            col = 0;
+        } else if (*text != '\r') {
+            col++;
+            if (col > max) {
+                max = col;
+            }
+        }
+    }
+    return max;
+}
+
+/* ======================================================================== */
+/* The questions (owner, 2026-10-16)                                         */
+/* ======================================================================== */
+
+#define INST_RAW_CHARS 4096
+
+int inst_value_question(char *out, size_t cap, int index, INST_U32 mask,
+                        INST_U32 def, const INST_VNOW *now, int n,
+                        int cmNewNote, int list, INST_U32 *enter)
+{
+    char raw[INST_RAW_CHARS];
+    char line[INST_LINE_CHARS];
+    const INST_VALUE *v;
+    INST_U32 first = def;
+    INST_U32 b;
+    INST_U32 lo = 32;
+    INST_U32 hi = 0;
+    int count = 0;
+    int named = 0;
+    int same = 1;
+    int i;
+
+    if (index < 0 || index >= instValueCount) {
+        if (cap > 0) {
+            out[0] = '\0';
+        }
+        return 0;
+    }
+    v = &instValues[index];
+    raw[0] = '\0';
+    inst_cat(raw, sizeof(raw), v->Name);
+    inst_cat(raw, sizeof(raw), " - ");
+    inst_cat(raw, sizeof(raw), v->Meaning);
+    inst_cat(raw, sizeof(raw), "\n");
+    for (i = 0; i < n; i++) {
+        INST_U32 eff = now[i].State > 0 ? now[i].Value : def;
+        if (i == 0) {
+            first = eff;
+        } else if (eff != first) {
+            same = 0;
+        }
+        line[0] = '\0';
+        inst_cat(line, sizeof(line), "  now: ");
+        if (now[i].State > 0) {
+            inst_cat_number(line, sizeof(line), now[i].Value);
+        } else {
+            inst_cat(line, sizeof(line), now[i].State == 0 ?
+                     "not set, the install writes " :
+                     "new install, the default ");
+            inst_cat_number(line, sizeof(line), def);
+        }
+        if (now[i].Desc != NULL && now[i].Desc[0] != '\0') {
+            /* A long name goes on its own line, under the value. */
+            inst_cat(line, sizeof(line),
+                     strlen(line) + strlen(now[i].Desc) + 3 <= INST_COLUMNS ?
+                     " (" : "\n    (");
+            inst_cat(line, sizeof(line), now[i].Desc);
+            inst_cat(line, sizeof(line), ")");
+        }
+        inst_cat(raw, sizeof(raw), line);
+        inst_cat(raw, sizeof(raw), "\n");
+    }
+    for (b = 0; b < 32UL; b++) {
+        if ((mask & (1UL << b)) == 0) {
+            continue;
+        }
+        count++;
+        if (b < lo) {
+            lo = b;
+        }
+        hi = b;
+        if (b < 4UL && v->Choice[b] != NULL) {
+            named = 1;
+        }
+    }
+    if (named) {
+        inst_cat(raw, sizeof(raw), "  allowed:\n");
+        for (b = 0; b < 32UL; b++) {
+            if ((mask & (1UL << b)) == 0) {
+                continue;
+            }
+            inst_cat(raw, sizeof(raw), "    ");
+            inst_cat_number(raw, sizeof(raw), b);
+            if (b < 4UL && v->Choice[b] != NULL) {
+                inst_cat(raw, sizeof(raw), "  ");
+                inst_cat(raw, sizeof(raw), v->Choice[b]);
+            }
+            inst_cat(raw, sizeof(raw), "\n");
+        }
+    } else if (count >= 3 && hi - lo + 1 == (INST_U32)count) {
+        inst_cat(raw, sizeof(raw), "  allowed: ");
+        inst_cat_number(raw, sizeof(raw), lo);
+        inst_cat(raw, sizeof(raw), " to ");
+        inst_cat_number(raw, sizeof(raw), hi);
+        inst_cat(raw, sizeof(raw), "\n");
+    } else {
+        inst_mask_text(mask, line, sizeof(line));
+        inst_cat(raw, sizeof(raw), "  allowed: ");
+        inst_cat(raw, sizeof(raw), line);
+        inst_cat(raw, sizeof(raw), "\n");
+    }
+    inst_cat(raw, sizeof(raw), "  default: ");
+    inst_cat_number(raw, sizeof(raw), def);
+    if (!same) {
+        inst_cat(raw, sizeof(raw), " (set now: not the same on every device)");
+    } else if (first != def) {
+        inst_cat(raw, sizeof(raw), " (set now: ");
+        inst_cat_number(raw, sizeof(raw), first);
+        inst_cat(raw, sizeof(raw), ")");
+    }
+    inst_cat(raw, sizeof(raw), "\n");
+    if (v->Caution != NULL &&
+        (v->CautionMask == 0 || (v->CautionMask & mask) != 0)) {
+        inst_cat(raw, sizeof(raw), "  NOTE: ");
+        inst_cat(raw, sizeof(raw), v->Caution);
+        inst_cat(raw, sizeof(raw), "\n");
+    }
+    /* Record 23 section 8.4 (decision D12): the two values whose default
+     * approves devices until the restart; not XhciCmSafeEject. */
+    if (cmNewNote && (inst_eq(v->Name, "XhciCmMode") ||
+                      inst_eq(v->Name, "XhciCmApprove"))) {
+        inst_cat(raw, sizeof(raw), "  NOTE: a new install starts with the "
+                 "default; your answer applies from the next restart. Until "
+                 "then Thunderbolt devices are approved by the default: unplug "
+                 "the dock until the restart if you answer 0.\n");
+    }
+    line[0] = '\0';
+    if (same) {
+        inst_cat_number(line, sizeof(line), first);
+    } else {
+        inst_cat(line, sizeof(line), "each keeps its own");
+    }
+    if (list) {
+        inst_cat(raw, sizeof(raw), "  /list: not asked; Enter would give [");
+        inst_cat(raw, sizeof(raw), line);
+        inst_cat(raw, sizeof(raw), "].\n");
+    } else {
+        inst_cat(raw, sizeof(raw), "  Enter for [");
+        inst_cat(raw, sizeof(raw), line);
+        inst_cat(raw, sizeof(raw), "]: ");
+    }
+    inst_wrap_text(raw, out, cap);
+    *enter = first;
+    return same;
+}
+
+size_t inst_yesno_question(char *out, size_t cap, const char *question,
+                           const char *yes, const char *no, int defaultYes)
+{
+    char raw[INST_RAW_CHARS];
+
+    raw[0] = '\0';
+    inst_cat(raw, sizeof(raw), question);
+    inst_cat(raw, sizeof(raw), "\n  Y  ");
+    inst_cat(raw, sizeof(raw), yes);
+    inst_cat(raw, sizeof(raw), "\n  N  ");
+    inst_cat(raw, sizeof(raw), no);
+    inst_cat(raw, sizeof(raw), defaultYes ? "\n  Enter for [Y]: "
+                                          : "\n  Enter for [N]: ");
+    return inst_wrap_text(raw, out, cap);
+}
+
+size_t inst_dir_question(char *out, size_t cap, const char *toolName,
+                         const char *copyName, const char *now,
+                         const char *def, int nt, int list)
+{
+    char raw[INST_RAW_CHARS];
+    char key[32];
+    size_t width = 0;
+
+    raw[0] = '\0';
+    if (toolName != NULL && strlen(toolName) > width) {
+        width = strlen(toolName);
+    }
+    if (copyName != NULL && strlen(copyName) + 1 > width) {
+        width = strlen(copyName) + 1;
+    }
+    if (width > 16) {
+        width = 16;
+    }
+    inst_cat(raw, sizeof(raw), "Install directory for the xHCI98 tools\n");
+    if (toolName != NULL) {
+        inst_copy(key, toolName, sizeof(key));
+        while (strlen(key) < width && strlen(key) + 1 < sizeof(key)) {
+            inst_cat(key, sizeof(key), " ");
+        }
+        inst_cat(raw, sizeof(raw), "  ");
+        inst_cat(raw, sizeof(raw), key);
+        inst_cat(raw, sizeof(raw), "  the xHCI98 USB Tree, which starts at "
+                 "each login\n");
+    }
+    if (copyName != NULL) {
+        inst_copy(key, copyName, sizeof(key));
+        inst_cat(key, sizeof(key), "\\");
+        while (strlen(key) < width && strlen(key) + 1 < sizeof(key)) {
+            inst_cat(key, sizeof(key), " ");
+        }
+        inst_cat(raw, sizeof(raw), "  ");
+        inst_cat(raw, sizeof(raw), key);
+        inst_cat(raw, sizeof(raw), "  a copy of this package's drivers, for "
+                 "the hardware wizards\n");
+    }
+    if (now != NULL && now[0] != '\0') {
+        inst_cat(raw, sizeof(raw), "  now: ");
+        inst_cat(raw, sizeof(raw), now);
+        inst_cat(raw, sizeof(raw), "\n");
+    }
+    if (!nt) {
+        inst_cat(raw, sizeof(raw), "  Windows 98 SE and ME: a full path with "
+                 "short names (8 characters, and a\n  3-character extension) "
+                 "and no spaces, such as C:\\XHCI98.\n");
+    }
+    if (list) {
+        inst_cat(raw, sizeof(raw), "  /list: not asked; Enter would give [");
+        inst_cat(raw, sizeof(raw), def);
+        inst_cat(raw, sizeof(raw), "].\n");
+    } else {
+        inst_cat(raw, sizeof(raw), "  Enter for [");
+        inst_cat(raw, sizeof(raw), def);
+        inst_cat(raw, sizeof(raw), "]: ");
+    }
+    return inst_wrap_text(raw, out, cap);
+}
+
+int inst_path_within(const char *path, const char *dir)
+{
+    size_t d = strlen(dir);
+
+    while (d > 0 && (dir[d - 1] == '\\' || dir[d - 1] == '/')) {
+        d--;
+    }
+    if (d == 0 || strlen(path) < d || !inst_eqn(path, dir, d)) {
+        return 0;
+    }
+    return path[d] == '\0' || path[d] == '\\';
+}
+
+/* An 8.3 name of the characters a FAT short name takes, no space. */
+static int inst_name83(const char *s, size_t len)
+{
+    size_t i;
+    size_t base = 0;
+    size_t ext = 0;
+    int dot = 0;
+
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '.') {
+            if (dot) {
+                return 0;
+            }
+            dot = 1;
+            continue;
+        }
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || strchr("_-$~!#&@^'(){}", c) != NULL)) {
+            return 0;
+        }
+        if (dot) {
+            ext++;
+        } else {
+            base++;
+        }
+    }
+    return base >= 1 && base <= 8 && ext <= 3 && (!dot || ext >= 1);
+}
+
+int inst_dir_check(const char *path, int nt, const char *windir,
+                   const char *pkgRoot, const char *allowed, char *out,
+                   size_t cap)
+{
+    char p[INST_LINE_CHARS];
+    size_t n;
+    size_t i;
+    size_t partStart;
+
+    inst_copy(p, path, sizeof(p));
+    inst_trim(p);
+    inst_unquote(p);
+    inst_trim(p);
+    for (i = 0; p[i] != '\0'; i++) {
+        if (p[i] == '/') {
+            p[i] = '\\';
+        }
+    }
+    n = strlen(p);
+    while (n > 3 && p[n - 1] == '\\') {
+        p[--n] = '\0';
+    }
+    if (n < 2 || inst_upper((unsigned char)p[0]) < 'A' ||
+        inst_upper((unsigned char)p[0]) > 'Z' || p[1] != ':') {
+        return INST_DIR_FORM;
+    }
+    if (n == 2 || (n == 3 && p[2] == '\\')) {
+        return INST_DIR_ROOT;
+    }
+    if (p[2] != '\\') {
+        return INST_DIR_FORM;
+    }
+    if (n > INST_DIR_CHARS) {
+        return INST_DIR_LONG;
+    }
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)p[i];
+        if (c < 0x20 || c >= 0x7F || strchr("\"*?<>|;", c) != NULL ||
+            (c == ':' && i != 1)) {
+            return INST_DIR_CHAR;
+        }
+    }
+    p[0] = (char)inst_upper((unsigned char)p[0]);
+    partStart = 3;
+    for (i = 3; i <= n; i++) {
+        if (i == n || p[i] == '\\') {
+            const char *s = p + partStart;
+            size_t len = i - partStart;
+            if (len == 0) {
+                return INST_DIR_FORM;
+            }
+            if ((len == 1 && s[0] == '.') ||
+                (len == 2 && s[0] == '.' && s[1] == '.') ||
+                s[0] == ' ' || s[len - 1] == ' ' || s[len - 1] == '.') {
+                return INST_DIR_PART;
+            }
+            if (!nt && !inst_name83(s, len)) {
+                return INST_DIR_NAME83;
+            }
+            partStart = i + 1;
+        }
+    }
+    if (windir != NULL && windir[0] != '\0' && inst_path_within(p, windir) &&
+        !(allowed != NULL && allowed[0] != '\0' && inst_eq(p, allowed))) {
+        return INST_DIR_WINDOWS;
+    }
+    if (pkgRoot != NULL && pkgRoot[0] != '\0' && inst_path_within(p, pkgRoot)) {
+        return INST_DIR_PACKAGE;
+    }
+    inst_copy(out, p, cap);
+    return INST_DIR_OK;
+}
+
+const char *inst_dir_reason(int code)
+{
+    switch (code) {
+    case INST_DIR_OK:
+        return "accepted";
+    case INST_DIR_ROOT:
+        return "not a drive's top level: name a folder, such as C:\\XHCI98";
+    case INST_DIR_CHAR:
+        return "a path cannot hold \" * ? < > | ; or a second colon";
+    case INST_DIR_PART:
+        return "a folder name cannot be . or .., or begin or end with a "
+               "space, or end with a dot";
+    case INST_DIR_LONG:
+        return "too long: 100 characters at most";
+    case INST_DIR_WINDOWS:
+        return "not inside the Windows directory";
+    case INST_DIR_PACKAGE:
+        return "not inside the package being installed";
+    case INST_DIR_NAME83:
+        return "Windows 98 SE and ME: each folder name 8 characters at most "
+               "(and a 3-character extension), letters and digits, no spaces";
+    default:
+        return "give a full path on a drive, such as C:\\XHCI98";
+    }
+}
+
+void inst_dir_default(const char *sysDrive, const char *windir, char *out,
+                      size_t cap)
+{
+    char drive[3];
+    const char *s = NULL;
+
+    if (sysDrive != NULL && strlen(sysDrive) >= 2 && sysDrive[1] == ':') {
+        s = sysDrive;
+    } else if (windir != NULL && strlen(windir) >= 2 && windir[1] == ':') {
+        s = windir;
+    }
+    drive[0] = s != NULL ? (char)inst_upper((unsigned char)s[0]) : 'C';
+    drive[1] = ':';
+    drive[2] = '\0';
+    if (drive[0] < 'A' || drive[0] > 'Z') {
+        drive[0] = 'C';
+    }
+    inst_copy(out, drive, cap);
+    inst_cat(out, cap, "\\XHCI98");
 }

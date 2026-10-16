@@ -296,7 +296,11 @@ and works: `xhcicm.sys` never resets a tunnel it finds at its start
 ### The xHCI98 USB Tree
 
 `XHCITR.EXE` (`XHCITR64.EXE` on XP x64, Vista x64 and 7 x64) is installed
-by `INSTALL.BAT` in `%windir%\XHCI98\` and started at login as an icon in
+by `INSTALL.BAT` in the install directory it asks for (`C:\XHCI98` on
+the system's drive unless another is chosen, or given with `INSTALL /to
+<path>`; an update keeps the directory an earlier install used, test
+builds' `%windir%\XHCI98\` included, unless another is chosen, when the
+tool moves it) and started at login as an icon in
 the notification area (`INSTALL /notray` leaves the icon out). It runs as
 the logged-on user, with no administrator rights.
 

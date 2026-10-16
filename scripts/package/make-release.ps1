@@ -238,8 +238,8 @@ hand only, the readme's BY HAND steps, and says so on the console.
 Where `XHCITR.EXE` and `XHCITR64.EXE` are built. Defaults to `xhcitr\` in the
 repository. Both are staged into `releases\<version>\tools\xhcitr\` with a
 readme.txt and a NOTICE.TXT: the xHCI98 USB Tree, which `XHCIINST` copies
-into the Windows directory and starts at login (roadmap-usb4.md task 41-A.6,
-design record 25).
+into the install directory it asks for and starts at login (roadmap-usb4.md
+task 41-A.6, design record 25; record 23 section 9.6).
 
 .PARAMETER SkipTrayTool
 Do not stage the USB tree tool. For a host that cannot build it; `XHCIINST`
@@ -3849,8 +3849,8 @@ two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
     #
     # XHCITR.EXE (MSVC 6.0) and XHCITR64.EXE (WDK 7.1 amd64), built from
     # xhcitr\ (design record 25 section 9), which XHCIINST copies from
-    # tools\xhcitr\ into the Windows directory and starts at login (record 25
-    # section 8, record 23 section 9.5). The same staleness and version rules
+    # tools\xhcitr\ into the install directory and starts at login (record 25
+    # section 8, record 23 sections 9.5 and 9.6). The same staleness and version rules
     # as XHCIINST's; its sources include the pure half it links from
     # xhciinst\ and the query layout it reads. Not drivers: the packager's test
     # signing does not reach XHCITR64.EXE.
@@ -4139,8 +4139,9 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
         $contents += "      INSTALL.BAT copies the one for your Windows into the"
-        $contents += "      Windows directory's XHCI98 folder and starts it at"
-        $contents += "      each login (section 4)."
+        $contents += "      install directory it asks for (C:\XHCI98 unless you"
+        $contents += "      choose another) and starts it at each login"
+        $contents += "      (section 4)."
         $contents += ""
     }
     if ($null -ne $pswStaged) {
@@ -4756,9 +4757,10 @@ the driver's options (section 9), asks once, and then:
     the rest for devices plugged in later. It handles the update traps
     below (Windows 2000's Have Disk, the root hub, Vista and 7's same
     DriverVer) and says when to restart;
-  - on Windows 98 SE and ME copies the package to your Windows directory's
-    XHCI98 folder, where the hardware wizards search by themselves, and
-    prints the Device Manager clicks that remain.
+  - on Windows 98 SE and ME copies the package to the install directory
+    it asks for (C:\XHCI98 unless you choose another), where the hardware
+    wizards search by themselves, prints the Device Manager steps that
+    remain, and offers to open Device Manager.
 
 INSTALL /list shows what it would do and changes nothing. INSTALL
 /uninstall removes the drivers again (it warns first: on a machine whose
@@ -4766,8 +4768,9 @@ only USB controller is xHCI, the USB keyboard and mouse stop working). Every
 run adds to XHCIINST.LOG at the root of the system drive; attach it to a bug
 report about an install. TOOLS\XHCIINST\readme.txt has the rest.
 
-INSTALL.BAT also installs the xHCI98 USB Tree (XHCITR) in the Windows
-directory's XHCI98 folder and starts it at each login. Its window shows
+INSTALL.BAT also installs the xHCI98 USB Tree (XHCITR) in the install
+directory it asks for (C:\XHCI98 unless you choose another, or INSTALL /to
+path) and starts it at each login. Its window shows
 every USB controller, hub and device, and the Thunderbolt and USB4 devices
 with what is connected behind them; its icon in the notification area of
 the taskbar removes a Thunderbolt or USB4 device safely, as Windows' own

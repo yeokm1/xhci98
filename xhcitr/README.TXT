@@ -20,9 +20,10 @@ Which file
   XHCITR.EXE     Windows 98 SE, ME, 2000, XP, 32-bit Vista and 7
   XHCITR64.EXE   Windows XP x64, Vista x64 and 7 x64
 
-INSTALL.BAT copies the right one to the XHCI98 folder in your Windows
-directory and starts it each time you log on. You can also run it from
-the package directly.
+INSTALL.BAT copies the right one to the install directory it asks for
+(C:\XHCI98 unless you choose another, or INSTALL /to path) and starts it
+each time you log on. You can also run it from the package directly, or
+from anywhere else: it does not care where it is.
 
 The window
 ----------
