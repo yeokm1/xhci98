@@ -726,9 +726,17 @@ posture below already says the boundary is not a user boundary.
 `XHCI_LOG_VERBOSITY_RING`, for `xhci98.sys` and `xhcicm.sys` alike: the ring
 records, with no addresses, on every install, so a log exists before anyone
 asks for one. The paragraph above is left as it was written; its caveat
-stands and now applies to the default itself - the append cost at real
-interrupt rates on Windows 98 metal is unmeasured, and the owner is to
-measure it on the P14s Gen 1 (ATTO at levels 0 and 2). In `xhci98.sys` an
+is now a measurement, of one machine and one pair of runs: on the owner's
+ThinkPad P14s Gen 1 under Windows 98 SE, the release x86 `xhci98.sys` of
+branch `tr-pci` at `b464cad5`, a USB Bulk-Only drive on the machine's own
+xHCI controller, ATTO with Direct I/O over 256 MB, level 2 cost about 1 to
+2% at transfer sizes of 1 MB and up, about 2 to 4% from 4 to 512 KB, and
+up to about 5 to 6% on 16 and 32 KB writes, against a run-to-run noise of
+several percent (a 32 KB read was 10% faster at level 2). For example,
+write and read in KB/s at levels 0 and 2: 64 KB 202993 and 196801, 211369
+and 206360; 1 MB 208493 and 204522, 208899 and 207286; 8 MB 210537 and
+208899, 220934 and 218684 (`runs/run-41.md`). The owner kept the default
+at 2 on that reading; level 0 is there for the last few percent. In `xhci98.sys` an
 absent value now reads as the default rather than 0, and the INFs write 2 on
 a fresh install under the don't-overwrite flag, so an update keeps a value an
 earlier install or `SNAPOFF.BAT` wrote. A refused value falls back to the

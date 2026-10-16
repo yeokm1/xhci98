@@ -3314,8 +3314,11 @@ The driver keeps a small log of what happened on the bus, inside itself, and
 machine. From `3.0.0.0` it records by default: a fresh install sets
 `XhciLogVerbosity` to `2` (the log of what happened, with no internal
 addresses); an update keeps the value an earlier install wrote, which was
-`0`, off, until `2.4.0.0`. What recording costs at real interrupt rates on
-Windows 98 hardware has not been measured yet.
+`0`, off, until `2.4.0.0`. Recording costs a little speed: on one machine
+(a ThinkPad P14s Gen 1 under 98 SE, a USB disk) about 1 to 2% at large
+transfers and up to about 5% at small ones. For the last few percent set
+the level to `0`, in the xHCI98 USB Tree's Logging level or with
+`SNAPOFF.BAT`, and restart.
 
 From `2.4.0.0` three batch files beside it do the typing, on every Windows
 the driver runs (under `COMMAND.COM` on 98 SE and ME, `cmd.exe` from 2000 to

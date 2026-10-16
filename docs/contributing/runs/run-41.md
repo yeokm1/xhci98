@@ -476,6 +476,24 @@ whose HID install asks for the Windows CD; the guests have none, and the
 files were skipped. The cosmetic wrap of the question's drivers line seen
 on these legs was shortened afterwards (one line), with no other change.
 
+## PCI configuration, the query request and the default level (record 25 revision 12)
+
+Branch `tr-pci`. `xhcicm.sys`'s `IOCTL_XHCICM_PCI`, `xhci98.sys`'s
+`IOCTL_XHCI98_QUERY` and XHCITR's "PCI configuration" nodes; the logging
+level's default of 2.
+
+### The cost of level 2 on real hardware (the owner, 2026-10-16)
+
+| Machine | Build | What | Level 0 | Level 2 |
+|---|---|---|---|---|
+| ThinkPad P14s Gen 1, Windows 98 SE | release x86 `xhci98.sys`, `tr-pci` `b464cad5` (gated build r5) | ATTO, Direct I/O, 256 MB, a USB Bulk-Only drive on the machine's own xHCI controller, write / read in KB/s | 64 KB 202993 / 211369; 1 MB 208493 / 208899; 8 MB 210537 / 220934 | 64 KB 196801 / 206360; 1 MB 204522 / 207286; 8 MB 208899 / 218684 |
+
+One machine, one pair of runs: about 1 to 2% at 1 MB and up, 2 to 4% from 4
+to 512 KB, up to about 5 to 6% on 16 and 32 KB writes, with a run-to-run
+noise of several percent (the 32 KB read was 10% faster at level 2). The
+owner kept the default at 2. The ATTO screenshots are on the maintainer's
+disk only.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link
