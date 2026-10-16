@@ -1165,7 +1165,8 @@ shown. The package was a dry x86 TEST cut bundling Stor98 `0.3.0.1`
 Stor98 by Have Disk on the NVMe controller's New Hardware wizard (SCSI
 controllers, `release-x86`). `xhcicm.sys` was then replaced by the `qemu`
 flavour of the same commit, with `XhciLogVerbosity` 2 on the NHI's driver
-key; the notes below are its port-0xE9 lines.
+key (the name that build read; `XhciCmLogVerbosity` since `tr-logs`); the
+notes below are its port-0xE9 lines.
 
 **The first build closed the proof key's handle, and the key had no
 values.** On 98 SE with `387990e0`: `cm.nvlink.9x.record=80000000` (proof
