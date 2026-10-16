@@ -1307,7 +1307,8 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
         bdf[i] = r->Port[i].Bdf;
     }
     r->WkActive = cmOwnedMask(nhi);
-    r->Wk = CmCfgwkStart(nhi, bdf, r->Members, r->WkActive);
+    r->Wk = CmCfgwkStart(nhi, bdf, r->Members, r->WkActive,
+                         nhi->Values.BridgeNumbering);
     if (r->Wk == NULL) {
         r->Why = CM_NOROUTE_CFGMG_THUNK;
         CmLogNote(nhi, "cm.reenum.no-route", r->Why);
@@ -1799,6 +1800,8 @@ VOID CmReenumStop(PCM_NHI nhi)
         if (wc.Detached) {
             CmLogNote(nhi, "cm.reenum.9x.worker-detached", 1);
         }
+        CmLogNote(nhi, "cm.brnum.9x.numbered", wc.Numbered);
+        CmLogNote(nhi, "cm.brnum.9x.refused", wc.NumberRefused);
     }
     r->WkOpenSeen = 0;
     r->WkActive = 0;

@@ -181,6 +181,9 @@ rem                  allocator's order and refusals, the walk for the UAS
 rem                  alternate setting and its Pipe Usage descriptors at High
 rem                  Speed and SuperSpeed, REPORT LUNS, the status fold, the
 rem                  CDB direction table and the storage id strings
+rem   test_tbt_brnum - the bus numbers xhcicm.sys gives the bridges a tunnel
+rem                  brought up below a tunnel port on 98 SE and ME
+rem                  (src\cm\tbt_brnum.c, record 21 section 6.1.1)
 rem   test_tbt_topo - the Thunderbolt tunnel ports' pure half (src\cm\tbt_topo.c,
 rem                  roadmap-usb4.md 39-A.5, design record 21 sections 6.3
 rem                  and 6.5): the P14s Gen 1's configuration space as
@@ -488,6 +491,10 @@ rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
 rem whose P14s half is the captured configuration space (39-A.5).
 call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
+rem test_tbt_brnum links nothing else: the Windows 98 SE and ME bus
+rem numbering of the bridges below a tunnel port is pure (record 21
+rem section 6.1.1).
+call :run test_tbt_brnum "test_tbt_brnum.c ..\src\cm\tbt_brnum.c"
 rem test_cm_live links nothing else: the host-interface liveness monitor's
 rem states, cadence, recovery and gate are pure (record 21 sections 5.5, 5.6).
 call :run test_cm_live "test_cm_live.c ..\src\cm\cm_live.c"
