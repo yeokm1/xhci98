@@ -5,6 +5,13 @@
  * 4.4.5.2, 6.4, 8.2, 8.3, 12.3, 12.4, 12.6) and usb4-emu's documented
  * host models (design record 22 section 2.1), independently of
  * src\cm\tbt_u4cm.c. C89 with the C library; test-only.
+ *
+ * One exception: the Thunderbolt 3 router's EEPROM (fabEeByte, fabEeCtl)
+ * is adapted from usb4-emu src/qemu/hw/usb4/usb4-router-tb3.c
+ * (eeprom_byte, eeprom_ctl; QEMU fork 2a893ea, read 2026-10-16), whose
+ * notice reads:
+ *   Copyright (c) 2026 usb4-emu contributors
+ *   SPDX-License-Identifier: GPL-2.0-only
  */
 
 #include <stdio.h>

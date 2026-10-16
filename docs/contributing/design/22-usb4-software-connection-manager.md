@@ -1794,10 +1794,12 @@ router reporting a USB4 Version of major 0 needs beyond section 6:
    and model names, and the adapters it marks unused. It is optional for a
    tunnel: an EEPROM that reads not present, a failed read or a bad CRC
    leaves the router unnamed and running. Once the enable is sent the part
-   is always deselected and bit-banging disabled again. A router preserved
-   from before the start (section 9), or rebuilt under a resume budget
-   (section 11, where a spent budget would refuse that release), is not
-   read.
+   is always deselected and bit-banging disabled again. A router adopted
+   from before the start without a connection sequence of this driver's
+   (section 9), or rebuilt under a resume budget (section 11, where a
+   spent budget would refuse that release), is not read; one whose
+   preserved tunnels this driver completes with a PCIe tunnel goes
+   through the connect and is.
 5. **The PCIe tunnel**: the same four entries, except that on the
    Thunderbolt 3 router the protocol adapter's ingress fields (initial
    credits, ingress flow control, shared buffering) are written as for a
