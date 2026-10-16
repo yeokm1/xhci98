@@ -1175,10 +1175,12 @@ void tr_gen_text(TR_U32 gen, char *out, size_t cap)
     if ((gen & 0xFFUL) == CM_ST_GEN_TBT3) {
         tr_copy(out, "Thunderbolt 3", cap);
     } else if ((gen & 0xFFUL) == CM_ST_GEN_USB4) {
+        /* 15:8 is ROUTER_CS_4's USB4 Version byte: major 7:5, minor 4:0
+         * (Spec 8.2.1.1). */
         if (((gen >> 8) & 0xFFUL) != 0) {
             tr_sprintf(out, cap, "USB4 v%lu.%lu",
-                       (unsigned long)((gen >> 12) & 0xFUL),
-                       (unsigned long)((gen >> 8) & 0xFUL));
+                       (unsigned long)((gen >> 13) & 0x7UL),
+                       (unsigned long)((gen >> 8) & 0x1FUL));
         } else {
             tr_copy(out, "USB4", cap);
         }
