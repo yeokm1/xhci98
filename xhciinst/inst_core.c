@@ -800,18 +800,50 @@ int inst_own_service(const char *service)
            inst_eq(service, "xhcicm");
 }
 
-/* A field of the INF with its %strings% expanded and its quotes removed,
- * then compared as the bundled driver's service (service) or file. */
+/* A field of the INF with every %token% in it expanded from [Strings] (a
+ * token anywhere in the field, "%%" a percent sign, an unknown token left
+ * as written) and its quotes removed, then compared as the bundled
+ * driver's service (service) or file. */
 static int inst_inf_bundled(const char *text, const char *field, int service)
 {
     char raw[INST_LINE_CHARS];
     char expanded[INST_LINE_CHARS];
+    char token[INST_LINE_CHARS];
+    char value[INST_LINE_CHARS];
+    const char *s;
+    const char *end;
+    size_t n;
+    size_t len;
 
     inst_copy(raw, field, sizeof(raw));
     inst_unquote(raw);
-    if (!inst_inf_expand(text, raw, expanded, sizeof(expanded))) {
-        inst_copy(expanded, raw, sizeof(expanded));
+    n = 0;
+    s = raw;
+    while (*s != '\0' && n + 1 < sizeof(expanded)) {
+        end = (*s == '%') ? strchr(s + 1, '%') : NULL;
+        if (end == NULL) {
+            expanded[n++] = *s++;
+            continue;
+        }
+        len = (size_t)(end - s) + 1;
+        if (len == 2) {
+            expanded[n++] = '%';
+            s = end + 1;
+            continue;
+        }
+        if (len >= sizeof(token)) {
+            len = sizeof(token) - 1;
+        }
+        memcpy(token, s, len);
+        token[len] = '\0';
+        if (!inst_inf_expand(text, token, value, sizeof(value))) {
+            inst_copy(value, token, sizeof(value));
+        }
+        inst_copy(expanded + n, value, sizeof(expanded) - n);
+        n = strlen(expanded);
+        s = end + 1;
     }
+    expanded[n] = '\0';
     inst_unquote(expanded);
     return service ? inst_bundled_service(expanded)
                    : inst_bundled_file(expanded);

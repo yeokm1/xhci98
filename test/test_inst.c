@@ -483,6 +483,20 @@ static void test_parser(void)
                            "[T]\r\nHKR,,PortDriver,,%Mpd%\r\n"
                            "[Strings]\r\nMpd=xhci98.mpd\r\n"),
           "another file named through a string is not Stor98's");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nHKR,,PortDriver,,%Driver%.mpd\r\n"
+                            "[Strings]\r\nDriver=stor98\r\n"),
+          "a token inside the file name");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nAddService=%Prefix%98,2,Y\r\n"
+                            "[Strings]\r\nPrefix=\"stor\"\r\n"),
+          "a token inside the service name");
+    CHECK(inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                           "[S]\r\nAddService=xhcicm,2,X\r\n"
+                           "[T]\r\nHKR,,PortDriver,,100%%.mpd\r\n"),
+          "%% is a percent sign, not Stor98's");
 }
 
 static void test_ids(void)
