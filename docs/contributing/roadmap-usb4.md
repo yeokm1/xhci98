@@ -482,3 +482,24 @@ Status: not opened, unnumbered and unversioned.
 
 - [ ] STOR.1 the rename in `xhcicm.sys`, the scripts, the installer and the docs, from the change list; interface 3 as adopted (the channel and the installer, 2026-10-16: `src/cm/stor98cm.h` in place of `nvme98cm.h`, unchanged from Stor98 `0.3.0.0`; interface version 4, `S98L` and `STOR98CM`, `\Callback\Stor98LinkState` on NT; on 98 SE and ME no channel is offered (interface 3's proof key is NV9X.1, and without it the locator is not written either, so nothing is published or awaited there and Stor98 runs on its gone deadline); records 21 section 7.2 and 22 section 10; `XHCIINST` skips `stor98*` files and never takes an INF that installs the `stor98` service or names `stor98.mpd` as its own, whatever its Provider; host suites pass)
 - [ ] STOR.2 bundle Stor98 `0.3.0.0`; NVMe legs (link up and down, the 9x clean-eject handshake, ME write-through); the release
+
+## Planned - Installing the Driver on Windows 98 SE and ME
+
+Goal: `INSTALL.BAT` on 98 SE and ME puts the driver on the controller and
+its root hub itself, as it does on 2000 and later, in place of the
+Update Driver steps the user follows by hand (design record 23 section
+6.1: no routine of these systems installs a driver on a device, and the
+16-bit `SETUPX` engine is not driven through anything undocumented).
+The Windows 95 and 98 DDKs document `SETUPX`'s device installer functions
+for class installers (`DiCreateDeviceInfo`, `DiInstallDevice` and the
+rest), so a small 16-bit helper may do what Update Driver does. Asked for
+by the owner on 2026-10-16, after an update from `2.4.0.0` on 98 SE left
+the driver as it was until the hand steps were done. Not taken (owner,
+the same day): overwriting the installed binaries in `system32\drivers`
+in place, as NUSB does with Windows' own USB files; the device keeps the
+wizard's record of the old INF, and an INF change never reaches it.
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] DI9X.1 a design record: which `SETUPX` functions, as the DDKs document them; the 16-bit toolchain; the helper's interface to `XHCIINST`; the controller, its root hub and the Thunderbolt controller; a USB keyboard and mouse behind the controller being updated; what the wizards' own bookkeeping then holds; the uninstall
+- [ ] DI9X.2 the helper and `XHCIINST`'s use of it, with the legs on 98 SE and ME (a fresh install, an update from `2.4.0.0` and `2.3.x`, the uninstall)
