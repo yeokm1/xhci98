@@ -112,29 +112,29 @@ BEGIN
     PUSHBUTTON      "Cancel", IDCANCEL, 202, 62, 50, 14
 END
 
-IDD_LEVEL DIALOG 0, 0, 400, 236
+IDD_LEVEL DIALOG 0, 0, 400, 260
 STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Logging level"
 FONT 8, "MS Sans Serif"
 BEGIN
-    EDITTEXT        IDC_LV_LIST, 8, 8, 384, 64, ES_MULTILINE | ES_READONLY |
+    EDITTEXT        IDC_LV_LIST, 8, 8, 384, 88, ES_MULTILINE | ES_READONLY |
                     ES_AUTOVSCROLL | ES_AUTOHSCROLL | WS_VSCROLL | WS_HSCROLL
-    GROUPBOX        "xhci98 - USB controllers", IDC_LV_GROUP0, 8, 78, 188, 106
-    LTEXT           "", IDC_LV_NOW0, 14, 90, 176, 18
-    AUTORADIOBUTTON "&0 - off", 1010, 14, 110, 176, 12, WS_GROUP | WS_TABSTOP
-    AUTORADIOBUTTON "&1 - counters only", 1011, 14, 124, 176, 12
-    AUTORADIOBUTTON "&2 - the log (default)", 1012, 14, 138, 176, 12
-    AUTORADIOBUTTON "&3 - adds port status", 1013, 14, 152, 176, 12
-    AUTORADIOBUTTON "&4 - adds memory addresses (for developers)", 1014, 14, 166, 176, 12
-    GROUPBOX        "xhcicm - Thunderbolt and USB4", 1008, 204, 78, 188, 106
-    LTEXT           "", 1006, 210, 90, 176, 18
-    AUTORADIOBUTTON "0 - off", 1020, 210, 110, 176, 12, WS_GROUP | WS_TABSTOP
-    AUTORADIOBUTTON "1 - counters only", 1021, 210, 124, 176, 12
-    AUTORADIOBUTTON "2 - the log (default)", 1022, 210, 138, 176, 12
-    AUTORADIOBUTTON "3 - adds port status", 1023, 210, 152, 176, 12
-    AUTORADIOBUTTON "4 - adds memory addresses (for developers)", 1024, 210, 166, 176, 12
+    GROUPBOX        "xhci98 - USB controllers", IDC_LV_GROUP0, 8, 102, 188, 106
+    LTEXT           "", IDC_LV_NOW0, 14, 114, 176, 18
+    AUTORADIOBUTTON "&0 - off", 1010, 14, 134, 176, 12, WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "&1 - counters only", 1011, 14, 148, 176, 12
+    AUTORADIOBUTTON "&2 - the log (default)", 1012, 14, 162, 176, 12
+    AUTORADIOBUTTON "&3 - adds port status", 1013, 14, 176, 176, 12
+    AUTORADIOBUTTON "&4 - adds memory addresses (for developers)", 1014, 14, 190, 176, 12
+    GROUPBOX        "xhcicm - Thunderbolt and USB4", 1008, 204, 102, 188, 106
+    LTEXT           "", 1006, 210, 114, 176, 18
+    AUTORADIOBUTTON "0 - off", 1020, 210, 134, 176, 12, WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "1 - counters only", 1021, 210, 148, 176, 12
+    AUTORADIOBUTTON "2 - the log (default)", 1022, 210, 162, 176, 12
+    AUTORADIOBUTTON "3 - adds port status", 1023, 210, 176, 176, 12
+    AUTORADIOBUTTON "4 - adds memory addresses (for developers)", 1024, 210, 190, 176, 12
     LTEXT           "Each driver reads its level when it starts: a new level takes effect after a restart. A value out of range is shown as it is and never written.",
-                    IDC_LV_NOTE, 8, 190, 384, 20
-    DEFPUSHBUTTON   "Set", IDOK, 236, 214, 100, 14, WS_GROUP
-    PUSHBUTTON      "Close", IDCANCEL, 342, 214, 50, 14
+                    IDC_LV_NOTE, 8, 214, 384, 20
+    DEFPUSHBUTTON   "Set", IDOK, 236, 238, 100, 14, WS_GROUP
+    PUSHBUTTON      "Close", IDCANCEL, 342, 238, 50, 14
 END
