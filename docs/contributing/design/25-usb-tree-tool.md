@@ -1,7 +1,7 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 11, 2026-10-16 (revision 11, the not-removable unit's
-stop, below). Revision 10 adds a per-user "Start at login" choice
+Status: revision 13, 2026-10-16 (revision 13, the drivers' logging
+level, below; revision 11, the not-removable unit's stop). Revision 10 adds a per-user "Start at login" choice
 (section 7.4, the owner's request of 2026-10-16), with an addendum on the
 tree's labels (end of section 7.4). Revision 7 adds Safely Remove for plain USB
 devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
@@ -35,6 +35,16 @@ and only then. Sections 3.3, 6.2, 6.4, 7.3 and 12 change with it, and
 section 3.3 words a Thunderbolt 3 router's link behind a USB4 host as
 Thunderbolt 3. The tray and the window never run elevated otherwise, and
 the manifest stays `asInvoker`.
+
+Revision 13, 2026-10-16 (the owner, for `3.0.0.0`): a "Logging level"
+item shows and sets both drivers' log levels - `xhci98.sys`'s
+`XhciLogVerbosity` and `xhcicm.sys`'s `XhciCmLogVerbosity` - and
+replaces `XHCISNAP -verbosity` and `SNAPON.BAT` (XHCISNAP still ships in
+`3.0.0.0`, unchanged, and is retired in the next release). It is the one
+setting the tool writes (section 7.5). A standard user on 2000 to 7 sets
+it through a second mode of section 6.6's elevated run, `/setlevel`.
+Sections 1.2, 1.3, 7.3, 11 and 12 change with it. (Revision 12, the PCI
+configuration, is written on its own branch.)
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
@@ -89,12 +99,15 @@ authentication material.
   not changed (decision T3).
 - An application icon (owner): `xhcitr\xhcitr.ico`, drawn for this project
   (section 9).
+- The two drivers' logging levels, shown and set (revision 13, section
+  7.5).
 
 ### 1.3 Not in scope
 
 - Approving, rejecting or authorising devices; security levels; firmware.
-- Changing any driver setting from the tool (the registry values stay
-  `tuning.md`'s, set by hand or by XHCIINST).
+- Changing any driver setting from the tool but the two logging levels
+  of section 7.5 (the other registry values stay `tuning.md`'s, set by
+  hand or by XHCIINST).
 - Forcing a removal Windows vetoes, ever, or stopping a Thunderbolt
   device that is not a unit (record 24 section 4.2).
 - Stopping a USB hub, a root hub, a controller, an input device (HID) or a
@@ -699,13 +712,16 @@ build uses the WDK's header.
 
 ### 7.3 Command line
 
-`XHCITR [/tray] [/eject id=<instance id>] [/report <file>]`. `/report`
+`XHCITR [/tray] [/eject id=<instance id>] [/setlevel xhci98=<n>
+xhcicm=<n>] [/report <file>]`. `/report`
 writes the Save Report text and exits (for scripts and bug reports).
 Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
 `/eject id=` names a unit or a USB device (section 6.5). Since revision
 11 `/eject` also takes `/result <name>` and `/confirmed <digest>`, which
 the tool passes to its own elevated run (section 6.6) and which nothing
-else needs.
+else needs. Since revision 13 `/setlevel` (section 7.5) writes one or
+both drivers' levels and exits; with `/result <name>` it is the dialog's
+elevated run.
 
 ### 7.4 Start at login, per user (revision 10)
 
@@ -746,6 +762,60 @@ Gen 1):
   reads none.
 - The same labels are in `/report` and Save Report, a file whose tree
   lines can be wider than 79 columns at depth, as before.
+
+### 7.5 The drivers' logging levels (revision 13)
+
+The owner's decision of 2026-10-16: the tool shows and sets the level of
+each driver's log, in place of `XHCISNAP -verbosity` and `SNAPON.BAT`.
+
+1. **Where.** "Logging level..." in the View menu, and at the end of the
+   right-click menu of an `xhci98.sys` controller and of an NHI. A
+   "Driver log" node (on its own branch) opens the same dialog: the entry
+   point is `level_dialog(owner, driver)`, and `lv_driver_of_node` names a
+   node's driver, so a Driver log node is one more case there, answering
+   its parent's driver.
+2. **What is read.** xhci98: the REG_DWORD `XhciLogVerbosity` in the
+   driver (software) key of every devnode the walk finds with service
+   `xhci98` and a `PCI\` instance ID - every controller, not a root hub
+   or a hub. xhcicm: `XhciCmLogVerbosity` in every NHI's driver key
+   (service `xhcicm`, `PCI\`); for one release, when that name is absent,
+   `XhciLogVerbosity` in the same key, and the tool says which name it
+   found. No value reads as the default, 2; a DWORD outside 0 to 4 is
+   shown as it is, "out of range"; a value of another type is shown as
+   not a REG_DWORD. The decision is `tr_level_pick`, host-tested.
+3. **The dialog.** A list of each device and its reading (the same block
+   as the report's), then the two drivers side by side, each with five
+   radio buttons, one line per level: 0 off; 1 counters only; 2 the log
+   (default); 3 adds port status; 4 adds memory addresses (for
+   developers). A driver's buttons start at the level every one of its
+   devices reads, and none is checked when they differ or a reading is
+   out of range. Set writes a driver's level to every one of its devices
+   when the checked level is not what they all read (or a device read it
+   from xhcicm's old name), and nothing else.
+4. **The write.** `REG_DWORD` 0 to 4 under the value's name, read back;
+   a key that still holds xhcicm's old name gets the level under it too,
+   so a driver of either generation follows. A driver key is written only
+   when it has the configuration manager's form (`tr_driver_key_ok`), and
+   a value out of range is never written: the command line refuses it
+   before anything is read.
+5. **Rights.** On 98 SE and ME, and for an administrator on NT (section
+   6.6's test), the window writes directly. A standard user on 2000 to 7
+   sees "Set as administrator..." (the shield on Vista and 7), and Set
+   starts section 6.6's elevated run with `/setlevel xhci98=<n>
+   xhcicm=<n> /result <name>` in place of `/eject`: the same `runas`, the
+   same section for the answer, the same wait. The elevated run takes
+   only its arguments - each `xhci98=<d>` or `xhcicm=<d>` exactly, one
+   digit 0 to 4, each driver once (`tr_level_arg`, `tr_parse_args`) -
+   walks the device tree itself, writes those values into the keys it
+   found and nothing else, answers and exits. A cancelled elevation
+   changes nothing (`tr_level_elev_result`).
+6. **The restart.** Each driver reads its level only at start, so after a
+   write the writer itself confirmed, the tool offers to restart Windows
+   (`ExitWindowsEx`, with the shutdown right enabled on NT). A run that
+   did not answer is not offered one.
+7. **The report.** `/report` and Save Report carry a "Logging levels"
+   block before the tree, and a controller's and an NHI's details carry
+   its own line.
 
 ## 8. Install, upgrade and uninstall
 
@@ -836,6 +906,7 @@ builder (`cm_query.c`) is host-tested in the CM suite.
 | T.4 | 2000, ME, XP, 7 | balloons on plug, approval, eject, disconnection; 98 SE tooltip |
 | T.5 | 98 SE, 7 x64 | install puts the tool and the Run value; login starts the tray; upgrade with the tray running; uninstall closes it and removes both |
 | T.6 | every target | the record 24 legs of XHCIINST still pass with the changed `xhcicm.sys` |
+| T.10 | 98 SE, 7 x86 | revision 13, 7 x86 as a standard user: each driver's level set to 3 (on 7 through "Set as administrator..."), the restart, the registry and the dialog read 3 for each; then set back to 2 |
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
 
 ## 12. Decisions
@@ -888,6 +959,13 @@ builder (`cm_query.c`) is host-tested in the CM suite.
   for the elevated run's answer (section 6.6). The elevated run trusts
   nothing a user can write: the confirmed list travels as a digest on its
   command line, its answer in a section the window created.
+
+- **T19** (owner, 2026-10-16, revision 13) The tool sets the two
+  drivers' logging levels and nothing else (section 7.5). A standard user
+  on NT does it through a second mode of decision T12's elevated run,
+  whose arguments are checked whole before anything is read; the
+  elevated run finds the keys itself. (T13 to T18 are revisions 9 and
+  12's.)
 
 ## 13. Open
 
