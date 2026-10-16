@@ -795,7 +795,14 @@ each driver's log, in place of `XHCISNAP -verbosity` and `SNAPON.BAT`.
    its new name's DWORD; and nothing else.
 4. **The write.** `REG_DWORD` 0 to 4 under the value's name, read back;
    a key that still holds xhcicm's old name gets the level under it too,
-   so a driver of either generation follows. A driver key is written only
+   so a driver of either generation follows. **The old-name write.** The
+   tool writes `XhciLogVerbosity` in an NHI's key only when that value is
+   already there, never creating it; xhcicm reads `XhciCmLogVerbosity`
+   first, so the extra write changes nothing once the new name is set. It
+   is a transition measure, tied to xhcicm's one-release fallback: when
+   the fallback goes, this write (in `lv_set`), the old-name reading
+   (`tr_level_pick`) and the stale-old-name rule of point 3 go with it.
+   A driver key is written only
    when it has the configuration manager's form (`tr_driver_key_ok`), and
    a value out of range is never written: the command line refuses it
    before anything is read.
