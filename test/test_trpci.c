@@ -887,6 +887,8 @@ static void test_partial(void)
     tr_pci_text_n(&t, c, 0x90, 2);
     CHECK(strstr(text, "The list goes on at C0h, past the bytes read")
               != NULL, "the walk stops at the boundary");
+    CHECK(strstr(text, "not present") == NULL,
+          "no absence claimed past the boundary");
     /* Less than the header. */
     tr_text_init(&t, text, sizeof(text));
     tr_pci_text_n(&t, c, 0x10, 2);
@@ -900,6 +902,20 @@ static void test_partial(void)
     tr_text_init(&t, text, sizeof(text));
     tr_qpci_text(&t, &q, 1);
     CHECK(strstr(text, "Only the first 24 bytes") != NULL, "port short");
+    CHECK(strstr(text, "Not walked: its bus numbers could not be read")
+              != NULL, "an unwalked port is not an empty one");
+    CHECK(strstr(text, "None found") == NULL, "not none found");
+
+    /* A multi-function device whose function 0 was read to 10h only:
+     * its siblings are still looked for. */
+    p14s();
+    fn[4].Cfg[0x0E] = 0x80;
+    fn[4].Valid = 0x10;
+    add_fn(BDF(8, 0, 1), 0x00011234UL, 0x020000UL);
+    in_one_port(&in, BDF(4, 1, 0));
+    n = CmQpciBuild(built, sizeof(built), &in);
+    CHECK_EQ(n, CM_QP_HDR_BYTES + 6 * CM_QP_ENT_BYTES, "the sibling found");
+    CHECK_EQ(ent(built, 5, CM_QP_E_BDF), BDF(8, 0, 1), "function 1");
 }
 
 int main(void)

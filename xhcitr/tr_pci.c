@@ -638,6 +638,10 @@ static void caps(TR_TEXT *t, const unsigned char *cfg, int indent)
         tr_printf(t, "The list holds more than %d entries; the walk "
                      "stopped.\n", TR_PCI_CAP_MAX);
     }
+    if (how & TR_PCI_WALK_UNREAD) {
+        /* The rest of the list was not read: absence is not known. */
+        return;
+    }
     if (!msi) {
         ind(t, indent + 2);
         tr_put(t, "MSI: not present\n");
@@ -955,7 +959,9 @@ void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt)
                 state_text(t, 8, b.State);
             }
         }
-        if (below == 0) {
+        if (below == 0 && nt && e.Valid < 0x1C) {
+            tr_put(t, "    Not walked: its bus numbers could not be read.\n");
+        } else if (below == 0) {
             tr_put(t, nt ? "    None found.\n"
                          : "    Not read on this system.\n");
         }

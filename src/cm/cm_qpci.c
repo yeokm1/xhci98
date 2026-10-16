@@ -221,16 +221,19 @@ static VOID cmQpBelow(CM_QP_WALK *w, ULONG port, const UCHAR *pcfg)
                     return;
                 }
                 w->Below++;
-                if (cmQpFill256(w, e, bdf) != CM_QP_S_READ ||
-                    !cmQpHasBuses(e)) {
+                if (cmQpFill256(w, e, bdf) != CM_QP_S_READ) {
                     continue;
                 }
                 cfg = e + CM_QP_EHDR_BYTES;
-                if (fn == 0 && (cfg[CM_QP_CFG_HEADER] & CM_QP_HDR_MF) != 0) {
+                /* The header type (0Eh) where it was read; the bus
+                 * numbers (19h, 1Ah) only for a bridge whose were. */
+                if (fn == 0 && cmQpGet(e, CM_QP_E_VALID) >= 0x10UL &&
+                    (cfg[CM_QP_CFG_HEADER] & CM_QP_HDR_MF) != 0) {
                     fnMax = 8;
                 }
-                if ((cfg[CM_QP_CFG_HEADER] & CM_QP_HDR_LAYOUT) !=
-                    CM_QP_LAYOUT_BRIDGE) {
+                if (!cmQpHasBuses(e) ||
+                    (cfg[CM_QP_CFG_HEADER] & CM_QP_HDR_LAYOUT) !=
+                        CM_QP_LAYOUT_BRIDGE) {
                     continue;
                 }
                 csec = cfg[CM_QP_CFG_SECONDARY];
