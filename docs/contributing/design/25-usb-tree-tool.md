@@ -385,38 +385,50 @@ on every target, as Windows' own Safely Remove does. Sections 6.1 to 6.4
 stay the Thunderbolt units'; this section is the USB devices'. Nothing of
 `xhci98.sys`, `xhciuas.sys` or `xhcicm.sys` changes for it.
 
-**The device.** A USB device is the devnode a port of section 5 names
-(`IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME`, found in the walk by its
-driver key), on any controller the tool lists - xhci98's or Windows' own,
-a dock's behind a tunnel included - with every devnode below it in the
-walk: a composite device's functions, a storage device's disks. The port
-scan runs on every refresh, in the tray too, whatever the View check boxes
-show, so the tray and `/eject` see the same devices as the window.
+**The device and what stops with it.** A USB device is the devnode a
+port of section 5 names (`IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME`,
+found in the walk by its driver key), on any controller the tool lists -
+xhci98's or Windows' own, a dock's behind a tunnel included. Its **set**
+is everything Windows stops with it:
+
+- on 98 SE and ME, the device and every devnode below it in the walk (a
+  composite device's functions, a storage device's disks): the removal of
+  a subtree there is the subtree;
+- on NT, the same, and then, until nothing new is added, the removal and
+  ejection relations of every member (`CM_Get_Device_ID_ListA` with
+  `CM_GETIDLIST_FILTER_REMOVALRELATIONS` and `_EJECTRELATIONS`, from
+  `cfgmgr32.dll`, else `setupapi.dll`, looked up at run time) and every
+  devnode below each: a disk's volumes are its removal relations, outside
+  its subtree. A relation that cannot be read, or that names a devnode
+  the walk does not hold, leaves the set unknown.
+
+The port scan runs on every refresh, in the tray too, whatever the View
+check boxes show, so the tray and `/eject` see the same devices as the
+window.
 
 **Listed.** A device is listed (in the tree with its state, in the tray's
-menu, for `/eject`) when it is none of:
+menu, for `/eject`) when its set holds none of:
 
-- a hub (the port says so, or the devnode's hardware or compatible IDs
-  carry `USB\Class_09`), a root hub, or a host controller;
-- an input device: the devnode or any devnode below it is of setup class
-  `HIDClass`, `Keyboard` or `Mouse`, is bound to `hidusb`, or has a
-  hardware or compatible ID beginning `USB\Class_03` or `HID\` - so a
-  keyboard, a mouse, a tablet and a composite device with an input
-  function are never listed;
-- a port whose devnode is not found in the walk;
+- a hub (the port says so, or the hardware or compatible IDs carry
+  `USB\Class_09`), a root hub, or a host controller;
+- an input device: a devnode of setup class `HIDClass`, `Keyboard` or
+  `Mouse`, bound to `hidusb`, or with an instance, hardware or compatible
+  ID beginning `USB\Class_03` or `HID\` - so a keyboard, a mouse, a
+  tablet and a composite device with an input function are never listed;
 
-and, on NT, Windows reports it removable (`CM_DEVCAP_REMOVABLE` in the
-devnode's capabilities) or a disk (setup class `DiskDrive`) is below it;
-on 98 SE and ME a disk is below it, found as section 14's drive labels
-already find them. Everything else connected gets details only, with the
-reason ("a hub", "an input device", "Windows does not report it
-removable", "no disk on it").
+its devnode was found in the walk, and, on NT, Windows reports it
+removable (`CM_DEVCAP_REMOVABLE` in the devnode's capabilities) or its
+set holds a disk (setup class `DiskDrive`) or a volume (setup class
+`Volume`); on 98 SE and ME its set holds a disk, found as section 14's
+drive labels already find them. Everything else connected gets details
+only, with the reason ("a hub", "an input device", "Windows does not
+report it removable", "no disk on it").
 
 **Offered.** A listed device is offered when it is started and has no
-problem code, and every devnode below it was read whole. One that is
-stopped is shown "[stopped - unplug it]" (Code 47, held for eject, after
-an eject on XP and later); one with another problem code is shown with
-the code, and is not offered.
+problem code, its set is known, holds no more than 64 devnodes, and each
+of them was read whole. One that is stopped is shown "[stopped - unplug
+it]" (Code 47, held for eject, after an eject on XP and later); one with
+another problem code is shown with the code, and is not offered.
 
 **What it is called.** Its disks' names and their drive letters, as units
 are (section 14, "A unit named by its drive" in run 41): "USB Flash Disk
@@ -429,16 +441,22 @@ against each `\\.\X:`, on 98 SE and ME the disk's
 
 1. Confirm, as section 6.2 step 1 and with the same layout: "This stops
    <device> and everything on it:", each disk with its volumes, then every
-   devnode that stops (at most 64, or refused). Nothing below waits on the
-   user.
+   devnode of the set. Nothing below waits on the user. The tool counts
+   the device-change notifications it receives (`WM_DEVICECHANGE`, on a
+   hidden window that exists in every mode, `/eject` included) and notes
+   the count the request's model was read at.
 2. Take the shared mutex of section 6.3, so that no XHCIINST and no other
    XHCITR eject runs beside it.
-3. Walk the devnodes again and find the device by its instance ID: its
-   parent must be the devnode it was under when confirmed, the devnodes
-   below it exactly the ones confirmed, and it must still be offered by
-   the rules above (re-read: started, no problem, every devnode below it
-   read whole, no input device, removable or a disk on NT, a disk on 98
-   SE and ME). Otherwise nothing is called and the reason is shown.
+3. If a device change arrived since the model was read - while the
+   question was open, too - nothing is called: "The device list changed;
+   nothing was stopped. Look at the tree again." An instance ID alone
+   cannot tell a device from an identical one plugged into the same port
+   (a location ID, without a serial number), and a re-plug under the
+   question would otherwise pass. Then walk the devnodes again and find
+   the device by its instance ID: its parent must be the devnode it was
+   under when confirmed, its set (read again, relations included) exactly
+   the devnodes confirmed, and it must still be offered by the rules
+   above. Otherwise nothing is called and the reason is shown.
 4. The call on the device's devnode, never on a disk or a function below
    it:
    - NT: `CM_Request_Device_EjectA` (setupapi on 2000, as section 6.2),
@@ -448,11 +466,15 @@ against each `\\.\X:`, on 98 SE and ME the disk's
      if accepted, always `CM_Remove_SubTree`, as section 6.2 step 6 does
      for a unit.
 5. Release the mutex, then show the result:
-   - stopped: "Windows has stopped <name>. You can now unplug the
-     device."; on 98 SE and ME also "Until you unplug it, Device
-     Manager's Refresh can start it again."; and if a walk right after
-     finds it started again, "The device has started again, so it is not
-     safe to unplug." in place of the unplug sentence;
+   - stopped: "Windows has stopped <name>.", then what a walk right
+     after reads: the walk whole and the device gone, or held for eject
+     (Code 47) - "You can now unplug the device."; the device started
+     again - "The device has started again, so it is not safe to
+     unplug." (exit 4, as record 24 section 8.2 has it); anything else,
+     the walk incomplete included - "Its state could not be read again:
+     check that it is not running before you unplug it." On 98 SE and ME
+     also "Until you unplug it, Device Manager's Refresh can start it
+     again.";
    - refused: in plain words, with the drive letters where Windows'
      answer allows it. NT `PNP_VetoOutstandingOpen`: "Windows refused: a
      program is using F:. Close it and try again." (the device's name in
@@ -462,9 +484,9 @@ against each `\\.\X:`, on 98 SE and ME the disk's
      `CR_REMOVE_VETOED`, which names no cause: "Windows refused: F: is in
      use. A program may have a file open on it, or a DOS box may be using
      it. Close it and try again." Nothing was changed by any refusal.
-   - exit codes as record 24 section 8.2: stopped 0, refused 4, the list
-     changed or the call not offered 1, a removal that failed after an
-     accepted query 2.
+   - exit codes as record 24 section 8.2: stopped 0, refused or started
+     again 4, the list changed or the call not offered 1, a removal that
+     failed after an accepted query 2.
 6. From the tray, a balloon with the outcome (a message box on 98 SE, and
    for an outcome longer than a balloon), as section 14 has it for units.
 

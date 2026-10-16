@@ -472,6 +472,75 @@ void tr_confirm_lead(TR_TEXT *t, const char *unitName, const char *label,
  * spaces); in place. */
 void tr_tidy_name(char *s);
 
+/* ---- plain USB devices (record 25 section 6.5, revision 7) ---------------- */
+
+/* 1 when one of the MULTI_SZ ids (no more than bytes long) begins with
+ * prefix, without case. */
+int tr_msz_has_prefix(const char *msz, size_t bytes, const char *prefix);
+
+/* 1 when a devnode is an input device: setup class HIDClass, Keyboard or
+ * Mouse, bound to hidusb, or its instance id or a hardware or compatible
+ * id beginning USB\Class_03 or HID\. Any argument may be NULL. */
+int tr_node_is_hid(const char *id, const char *hw, size_t hwBytes,
+                   const char *compat, size_t compatBytes,
+                   const char *service, const char *cls);
+
+/* 1 when the ids say a hub (USB\Class_09). */
+int tr_node_is_hub(const char *hw, size_t hwBytes, const char *compat,
+                   size_t compatBytes);
+
+/* What is known of the device at a USB port, and below it. */
+typedef struct _TR_USBF {
+    int Nt;
+    int HaveDevnode;            /* the port's devnode was found in the walk  */
+    int IsHub;                  /* the port says a hub, or the ids do        */
+    int IsController;
+    int Hid;                    /* it or a devnode below it is input         */
+    int CapsKnown;              /* NT: CM_DRP_CAPABILITIES read              */
+    TR_U32 Caps;
+    int Disks;                  /* setup class DiskDrive, below it           */
+    int Started;                /* DN_STARTED                                */
+    TR_U32 Problem;             /* 0, or the problem code                    */
+    int ReadWhole;              /* it and every devnode below it read whole  */
+    int CallAvailable;          /* the routines of the eject were found      */
+} TR_USBF;
+
+#define TR_CM_PROB_HELD_FOR_EJECT 47UL
+
+#define TR_UE_DETAILS   0       /* details only: never listed              */
+#define TR_UE_LISTED    1       /* listed with the reason, not offered     */
+#define TR_UE_OFFER     2       /* Safely Remove offered                   */
+
+/* The rule of section 6.5. *why is the reason for anything but
+ * TR_UE_OFFER ("a hub", "an input device", "stopped - unplug it", ...),
+ * NULL for it. */
+int tr_usb_rule(const TR_USBF *f, const char **why);
+
+/* The check right before the call (section 6.5 step 3): 1 when the device
+ * found again is under the devnode it was confirmed under (parent ids,
+ * without case), has exactly the devnodes below it that were confirmed
+ * (any order, without case), and is still offered by f; else 0 and *why. */
+int tr_usb_recheck(const char *parentNow, const char *parentThen,
+                   const char *const *nowIds, int n,
+                   const char *const *thenIds, int m, const TR_USBF *f,
+                   const char **why);
+
+/* The answer to the call in plain words, into out; returns the outcome
+ * (INST_EJ_*). `what` is what the user knows the device by in a refusal:
+ * its drive letters ("F:", "F:, G:"), or its name when it has none.
+ * NT: CM_Request_Device_EjectA's answer, its veto type and veto name. */
+int tr_usb_answer_nt(TR_U32 cr, TR_U32 vetoType, const char *vetoName,
+                     const char *what, char *out, size_t cap);
+
+/* 98 SE and ME: CM_Query_Remove_SubTree's answer. CR_REMOVE_VETOED names
+ * no cause, so the text claims none. */
+int tr_usb_answer9x(TR_U32 cr, const char *what, char *out, size_t cap);
+
+/* Text for a console: every line longer than width broken at the last
+ * space before it (a word longer than the line is cut); LF or CR LF in,
+ * CR LF out. out always terminated. */
+void tr_wrap(const char *in, char *out, size_t cap, int width);
+
 /* ---- the report ---------------------------------------------------------- */
 
 /* One node of the report: its label at depth, then its details indented
