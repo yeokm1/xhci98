@@ -61,7 +61,7 @@ static VOID xcLog(PVOID ctx, const char *label, ULONG value)
 }
 
 static const TBT_HOST xcHost = {
-    NULL, xcRd, xcWr, xcStall, xcSleep, xcNowMs, xcLog, xcClockUs, 0
+    NULL, xcRd, xcWr, xcStall, xcSleep, xcNowMs, xcLog, xcClockUs, 0, NULL
 };
 
 static ULONG xcLinkDown(PVOID ctx, const TBT_U4_LINKDOWN *info)

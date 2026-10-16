@@ -429,6 +429,8 @@
 /* ROUTER_CS_1 (Linux struct tb_regs_switch_header DWORD 1, same fields). */
 #define TBT_RTR1_NEXT_CAP(v)        ((ULONG)(v) & 0xFFUL)           /* 7:0 */
 #define TBT_RTR1_UP_ADP(v)          (((ULONG)(v) >> 8) & 0x3FUL)    /* 13:8 Upstream Adapter */
+#define TBT_RTR1_UP_ADP_SHIFT       8
+#define TBT_RTR1_UP_ADP_MASK        0x00003F00UL
 #define TBT_RTR1_MAX_ADP(v)         (((ULONG)(v) >> 14) & 0x3FUL)   /* 19:14 Max Adapter */
 #define TBT_RTR1_DEPTH_SHIFT        20                              /* 22:20 Depth, R/W */
 #define TBT_RTR1_DEPTH_MASK         0x00700000UL
@@ -439,17 +441,23 @@
 #define TBT_RTR3_V                  0x80000000UL
 /* ROUTER_CS_4: Notification Timeout 7:0, CMUV 15:8, USB4 Version 31:24
  * (major 31:29, minor 28:24, Spec 8.2.1.1). CMUV 10h is "USB4 1.0" (Linux
- * ROUTER_CS_4_CMUV_V1). Design record 22 section 3.5: 20h is USB4 1.0 and
- * 40h USB4 2.0, 00h is a Thunderbolt 3 router, every other value reserved
- * (Linux USB4_VERSION_MAJOR_MASK reads the major only). */
+ * ROUTER_CS_4_CMUV_V1). Design record 22 section 3.5: the major alone
+ * decides, as Linux does (USB4_VERSION_MAJOR_MASK, usb4_switch_version,
+ * tb_switch_is_usb4) - major 0 (00h to 1Fh) is a Thunderbolt 3 router,
+ * major 1 USB4 1.x, major 2 USB4 2.x, every other major reserved. A
+ * Thunderbolt 3 router may report a non-zero minor (the CalDigit TS3
+ * Plus reads 02h in usb4-emu's Framework 13 capture, usb4-tb3-sw-data.h),
+ * so no compare is made on the whole byte. */
 #define TBT_RTR4_NOTIFY_TIMEOUT_MASK 0x000000FFUL
 #define TBT_RTR4_NOTIFY_TIMEOUT_MAX 0xFFUL      /* Guide 3.2.1; Linux plug_events_delay = 0xff */
 #define TBT_RTR4_CMUV_MASK          0x0000FF00UL
 #define TBT_RTR4_CMUV_1_0           0x00001000UL
 #define TBT_RTR4_VERSION(v)         (((ULONG)(v) >> 24) & 0xFFUL)
-#define TBT_USB4_VERSION_TBT3       0x00UL
-#define TBT_USB4_VERSION_1_0        0x20UL
-#define TBT_USB4_VERSION_2_0        0x40UL
+#define TBT_USB4_VERSION_MAJOR(b)   (((ULONG)(b) >> 5) & 0x7UL)     /* 31:29 of the dword */
+#define TBT_USB4_VERSION_MINOR(b)   ((ULONG)(b) & 0x1FUL)           /* 28:24 of the dword */
+#define TBT_USB4_MAJOR_TBT3         0UL
+#define TBT_USB4_MAJOR_1            1UL
+#define TBT_USB4_MAJOR_2            2UL
 /* ROUTER_CS_5 (Linux ROUTER_CS_5_*). */
 #define TBT_RTR5_CNS                0x00800000UL    /* 23 CM TBT3 Not Supported */
 #define TBT_RTR5_PTO                0x01000000UL    /* 24 PCIe Tunneling On */
@@ -747,6 +755,21 @@
 #define TBT_PLUG_EVENTS_CS_1        1UL
 #define TBT_PLUG_EVENTS_MASK        0x0000007CUL
 #define TBT_PLUG_EVENTS_USB_DISABLE 0x00000004UL
+/* Plug Events VSEC, DW 4: the EEPROM bit-bang control (Linux tb_regs.h
+ * struct tb_eeprom_ctl, eeprom.c): SK the clock, CS the chip select (0
+ * selects), DI the bit to the EEPROM, DO the bit from it, the bit-banging
+ * enable, and NOT_PRESENT / PRESENT; DW 12 the DROM's offset in the
+ * EEPROM (struct tb_cap_plug_events drom_offset). */
+#define TBT_PLUG_EVENTS_EE_CTL      4UL
+#define TBT_PLUG_EVENTS_DROM_OFFSET 12UL
+#define TBT_EE_SK                   0x00000001UL
+#define TBT_EE_CS                   0x00000002UL
+#define TBT_EE_DI                   0x00000004UL
+#define TBT_EE_DO                   0x00000008UL
+#define TBT_EE_ENABLE               0x00000010UL
+#define TBT_EE_NOT_PRESENT          0x00000020UL
+#define TBT_EE_PRESENT              0x00000080UL
+#define TBT_EE_READ                 0x03UL      /* eeprom.c tb_eeprom_read_n */
 /* Link controller VSEC (Linux TB_LC_*): the common block. */
 #define TBT_LC_DESC                 0x02UL
 #define TBT_LC_DESC_SIZE(v)         (((ULONG)(v) >> 8) & 0xFFUL)        /* start of the per-port blocks */

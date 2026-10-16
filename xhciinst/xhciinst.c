@@ -6891,8 +6891,9 @@ static void tb_print_routers(const TBNHI *h)
                       : (gen & 0xFFUL) == CM_ST_GEN_USB4 ? "USB4"
                                                         : "generation not known");
         if ((gen & 0xFFUL) == CM_ST_GEN_USB4 && ((gen >> 8) & 0xFFUL) != 0) {
-            out(" (version %lu.%lu)", (unsigned long)((gen >> 12) & 0xFUL),
-                (unsigned long)((gen >> 8) & 0xFUL));
+            /* ROUTER_CS_4's USB4 Version: major 7:5, minor 4:0. */
+            out(" (version %lu.%lu)", (unsigned long)((gen >> 13) & 0x7UL),
+                (unsigned long)((gen >> 8) & 0x1FUL));
         }
         out(", %s %lu", kind == CM_ST_KIND_ICM ? "link" : "port",
             (unsigned long)(place & 0xFFUL));

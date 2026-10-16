@@ -296,11 +296,16 @@ BOOLEAN TbtHwSoftwareNhiVersion(ULONG caps)
 
 ULONG TbtHwRouterVersion(ULONG usb4Version)
 {
-    if (usb4Version == TBT_USB4_VERSION_1_0 ||
-        usb4Version == TBT_USB4_VERSION_2_0) {
+    ULONG major;
+
+    if ((usb4Version & ~0xFFUL) != 0) {
+        return TBT_HW_ROUTER_RESERVED;
+    }
+    major = TBT_USB4_VERSION_MAJOR(usb4Version);
+    if (major == TBT_USB4_MAJOR_1 || major == TBT_USB4_MAJOR_2) {
         return TBT_HW_ROUTER_USB4;
     }
-    if (usb4Version == TBT_USB4_VERSION_TBT3) {
+    if (major == TBT_USB4_MAJOR_TBT3) {
         return TBT_HW_ROUTER_TBT3;
     }
     return TBT_HW_ROUTER_RESERVED;
