@@ -480,6 +480,214 @@ static void driver_key_path(const DNODE *d, char *path, size_t cap)
 }
 
 /* ======================================================================== */
+/* The drivers' logging levels (record 25 section 7.5)                      */
+/* ======================================================================== */
+
+/* The devices of each driver whose level is read and set, from the last
+ * walk: xhci98's controllers and xhcicm's NHIs, by service and a PCI
+ * instance ID, each with a driver key of the configuration manager's
+ * form. */
+typedef struct _LVDEV {
+    int Dn;
+    TR_LEVEL L;
+} LVDEV;
+
+static LVDEV lvDev[TR_LV_DRIVERS][TR_MAX_CTRL];
+static int lvCount[TR_LV_DRIVERS];
+
+static int lv_is_device(const DNODE *d, int driver)
+{
+    return tr_eq(d->Service, tr_level_driver(driver)) &&
+           inst_starts(d->Id, "PCI\\") && tr_driver_key_ok(d->Driver);
+}
+
+static void lv_value(HKEY k, const char *name, TR_RVAL *v)
+{
+    DWORD type = 0;
+    DWORD value = 0;
+    DWORD n = sizeof(value);
+    LONG r = RegQueryValueExA(k, name, NULL, &type, (LPBYTE)&value, &n);
+
+    v->Value = 0;
+    if (r == ERROR_FILE_NOT_FOUND) {
+        v->State = TR_RV_ABSENT;
+    } else if (r == ERROR_MORE_DATA) {
+        v->State = TR_RV_OTHER;
+    } else if (r != ERROR_SUCCESS) {
+        v->State = TR_RV_UNREAD;
+    } else if (type == REG_DWORD && n == sizeof(value)) {
+        v->State = TR_RV_DWORD;
+        v->Value = value;
+    } else {
+        v->State = TR_RV_OTHER;
+    }
+}
+
+/* Devnode dn's level as its driver reads it. */
+static void lv_read(int dn, int driver, TR_LEVEL *l)
+{
+    char path[300];
+    HKEY k;
+    TR_RVAL cur;
+    TR_RVAL old;
+
+    cur.State = TR_RV_UNREAD;
+    cur.Value = 0;
+    old = cur;
+    driver_key_path(&gw.N[dn], path, sizeof(path));
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_QUERY_VALUE, &k) ==
+        ERROR_SUCCESS) {
+        lv_value(k, driver == TR_LV_XHCICM ? TR_LV_NAME_XHCICM
+                                           : TR_LV_NAME_XHCI98, &cur);
+        if (driver == TR_LV_XHCICM) {
+            lv_value(k, TR_LV_NAME_XHCICM_OLD, &old);
+        }
+        RegCloseKey(k);
+    }
+    tr_level_pick(driver, &cur, driver == TR_LV_XHCICM ? &old : NULL, l);
+}
+
+/* Every device's level, from the walk in gw. */
+static void lv_collect(void)
+{
+    int d;
+    int i;
+
+    for (d = 0; d < TR_LV_DRIVERS; d++) {
+        lvCount[d] = 0;
+        for (i = 0; i < gw.Count && lvCount[d] < TR_MAX_CTRL; i++) {
+            if (lv_is_device(&gw.N[i], d)) {
+                LVDEV *v = &lvDev[d][lvCount[d]++];
+                v->Dn = i;
+                lv_read(i, d, &v->L);
+            }
+        }
+    }
+}
+
+/* The levels block: the report's, and the dialog's list. */
+static void lv_block(TR_TEXT *t)
+{
+    int d;
+    int i;
+
+    lv_collect();
+    for (d = 0; d < TR_LV_DRIVERS; d++) {
+        tr_level_head(t, d, lvCount[d]);
+        for (i = 0; i < lvCount[d]; i++) {
+            tr_level_device(t, d, dn_name(&gw.N[lvDev[d][i].Dn]),
+                            &lvDev[d][i].L);
+        }
+    }
+}
+
+/* One line of a device's details: its level. */
+static void lv_details(TR_TEXT *t, int dn, int driver)
+{
+    TR_LEVEL l;
+    char line[96];
+
+    if (dn < 0 || !lv_is_device(&gw.N[dn], driver)) {
+        return;
+    }
+    lv_read(dn, driver, &l);
+    tr_level_line(driver, &l, line, sizeof(line));
+    tr_printf(t, "  Logging level: %s\n", line);
+}
+
+/* Writes the levels asked (level[driver] 0-4, or -1 for none) into every
+ * device of each driver the walk in gw found, and reads each back.
+ * XHCIINST's exit code; the outcome, one line a driver, in msg. Only the
+ * two values, only in those keys, and only 0-4. */
+static int lv_set(const int *level, char *msg, size_t cap)
+{
+    TR_TEXT t;
+    int d;
+    int i;
+    int wrote = 0;
+    int failed = 0;
+
+    tr_text_init(&t, msg, cap);
+    lv_collect();
+    for (d = 0; d < TR_LV_DRIVERS; d++) {
+        const char *name = d == TR_LV_XHCICM ? TR_LV_NAME_XHCICM
+                                             : TR_LV_NAME_XHCI98;
+        int ok = 0;
+        DWORD v;
+        if (level[d] < 0) {
+            continue;
+        }
+        if (level[d] > TR_LV_MAX) {
+            tr_printf(&t, "%s: %d is out of range; nothing written.\n",
+                      tr_level_driver(d), level[d]);
+            failed++;
+            continue;
+        }
+        v = (DWORD)level[d];
+        if (lvCount[d] == 0) {
+            tr_printf(&t, "%s: no device is driven by %s; nothing written.\n",
+                      tr_level_driver(d), tr_level_driver(d));
+            failed++;
+            continue;
+        }
+        for (i = 0; i < lvCount[d]; i++) {
+            const DNODE *n = &gw.N[lvDev[d][i].Dn];
+            char path[300];
+            HKEY k;
+            LONG r;
+            driver_key_path(n, path, sizeof(path));
+            r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0,
+                              KEY_SET_VALUE | KEY_QUERY_VALUE, &k);
+            if (r == ERROR_SUCCESS) {
+                r = RegSetValueExA(k, name, 0, REG_DWORD, (const BYTE *)&v,
+                                   sizeof(v));
+                RegCloseKey(k);
+            }
+            lv_read(lvDev[d][i].Dn, d, &lvDev[d][i].L);
+            if (r == ERROR_SUCCESS && lvDev[d][i].L.State == TR_RV_DWORD &&
+                !lvDev[d][i].L.OldName && lvDev[d][i].L.Value == v) {
+                ok++;
+                wrote++;
+            } else if (r != ERROR_SUCCESS) {
+                tr_printf(&t, "%s: %s was not written for %s (error %ld).\n",
+                          tr_level_driver(d), name, dn_name(n), (long)r);
+                failed++;
+            } else {
+                tr_printf(&t, "%s: %s for %s did not read back as written.\n",
+                          tr_level_driver(d), name, dn_name(n));
+                failed++;
+            }
+        }
+        if (ok > 0) {
+            tr_printf(&t, "%s: %s set to %d - %s, for %d %s%s.\n",
+                      tr_level_driver(d), name, level[d],
+                      tr_level_text(v), ok,
+                      d == TR_LV_XHCICM ? "host interface" : "controller",
+                      tr_plural(ok));
+        }
+    }
+    /* Plain LF lines, none at the end: the text goes to a message box, the
+     * console or the window's section. */
+    {
+        char *s = msg;
+        char *o = msg;
+        for (; *s != '\0'; s++) {
+            if (*s != '\r') {
+                *o++ = *s;
+            }
+        }
+        while (o > msg && o[-1] == '\n') {
+            o--;
+        }
+        *o = '\0';
+    }
+    if (failed == 0 && wrote > 0) {
+        return INST_EXIT_DONE;
+    }
+    return wrote > 0 ? INST_EXIT_FAILED : INST_EXIT_REFUSED;
+}
+
+/* ======================================================================== */
 /* The device tree (record 24 section 4.1, adapted from xhciinst.c)          */
 /* ======================================================================== */
 
@@ -2241,6 +2449,7 @@ static void details_nhi(TR_TEXT *t, int k)
     TR_U32 ports;
 
     tr_printf(t, "Thunderbolt / USB4 host interface\n");
+    lv_details(t, h->Node, TR_LV_XHCICM);
     if (R == NULL) {
         tr_printf(t, "  The Thunderbolt driver has not published its device "
                      "list (%s).\n", h->Why);
@@ -2555,6 +2764,9 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         if (c->Behind[0]) {
             tr_printf(t, "  Location:      %s\n", c->Behind);
         }
+        if (c->Ours) {
+            lv_details(t, c->Dn, TR_LV_XHCI98);
+        }
         details_devnode(t, c->Dn);
         break;
     }
@@ -2615,6 +2827,12 @@ static int write_report(const char *path)
               (unsigned int)st.wHour, (unsigned int)st.wMinute, usbDevices,
               tr_plural(usbDevices), tbDevices, tr_plural(tbDevices));
     ok = WriteFile(f, text, (DWORD)t.Len, &w, NULL) && w == t.Len;
+    /* The drivers' logging levels (section 7.5), before the tree. */
+    tr_text_init(&t, text, sizeof(text));
+    tr_put(&t, "Logging levels\n");
+    lv_block(&t);
+    tr_put(&t, "\n");
+    ok = ok && WriteFile(f, text, (DWORD)t.Len, &w, NULL) && w == t.Len;
     for (i = 0; i < tnCount && ok; i++) {
         tr_text_init(&d, detail, sizeof(detail));
         details_of(&d, i, 1);
@@ -3270,36 +3488,43 @@ static int ej_elev_ask(HWND owner, const EJREQ *q)
                            (DLGPROC)elev_proc, (LPARAM)text) == IDOK;
 }
 
-/* Starts this program elevated with /eject id=, /result and /confirmed,
- * waits for it with the window answering, and reads its answer from the
- * section this run created: XHCIINST's exit code, the text in msg. No
- * file is written or read, so the elevated run touches nothing a user
- * could plant. A quit during the wait (Exit, or an installer) ends the
- * wait at once; ejElevQuit is then set and the quit posted again. */
-static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
+/* What an elevated run of this program came to (elev_launch). */
+typedef struct _ELEVRUN {
+    int Launched;
+    DWORD Err;
+    int Finished;
+    DWORD ExitCode;
+    int HaveAnswer;
+    int AnswerCode;
+    char Msg[TR_RES_BYTES + 1];
+} ELEVRUN;
+
+/* Starts this program elevated with the arguments pre, /result <section>
+ * and post, waits for it with the window answering, and reads its answer
+ * from the section this run created. No file is written or read, so the
+ * elevated run touches nothing a user could plant. A quit during the wait
+ * (Exit, or an installer) ends the wait at once; ejElevQuit is then set
+ * and the quit posted again. The stop of section 6.6 and the levels of
+ * section 7.5 both start their elevated runs here. */
+static void elev_launch(HWND owner, const char *pre, const char *post,
+                        ELEVRUN *r)
 {
     static char answer[TR_RES_BYTES + 1];
-    static char amsg[TR_RES_BYTES + 1];
     SHELLEXECUTEINFOA se;
     TR_SA sa;
     HANDLE sec;
     void *view;
     char name[64];
-    char digest[TR_DIGEST_CHARS];
     char exe[MAX_PATH];
-    char args[INST_ID_CHARS + 128];
-    int launched = 0;
-    DWORD err = 0;
-    int finished = 0;
-    DWORD exitCode = INST_EXIT_FAILED;
-    int haveAnswer = 0;
-    int answerCode = 0;
+    char args[INST_ID_CHARS + 160];
     int quitCode = 0;
 
-    amsg[0] = '\0';
+    memset(r, 0, sizeof(*r));
+    r->ExitCode = INST_EXIT_FAILED;
     ejElevQuit = 0;
     if (GetModuleFileNameA(NULL, exe, sizeof(exe)) == 0) {
-        return tr_elev_result(0, GetLastError(), 0, 0, 0, 0, "", msg, cap);
+        r->Err = GetLastError();
+        return;
     }
     tr_sprintf(name, sizeof(name), TR_RES_PREFIX "%lu-%lu",
                (unsigned long)GetCurrentProcessId(),
@@ -3311,22 +3536,20 @@ static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
     sec = CreateFileMappingA(INVALID_HANDLE_VALUE, sa.Ok ? &sa.Sa : NULL,
                              PAGE_READWRITE, 0, TR_RES_BYTES, name);
     if (sec == NULL || GetLastError() == ERROR_ALREADY_EXISTS) {
-        err = sec == NULL ? GetLastError() : ERROR_ALREADY_EXISTS;
+        r->Err = sec == NULL ? GetLastError() : ERROR_ALREADY_EXISTS;
         if (sec != NULL) {
             CloseHandle(sec);
         }
-        return tr_elev_result(0, err, 0, 0, 0, 0, "", msg, cap);
+        return;
     }
     view = MapViewOfFile(sec, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, TR_RES_BYTES);
     if (view == NULL) {
-        err = GetLastError();
+        r->Err = GetLastError();
         CloseHandle(sec);
-        return tr_elev_result(0, err, 0, 0, 0, 0, "", msg, cap);
+        return;
     }
     memset(view, 0, TR_RES_BYTES);
-    tr_res_digest((const char (*)[TR_ID_CHARS])q->Devs, q->DevCount, digest);
-    tr_sprintf(args, sizeof(args), "/eject \"id=%s\" /result %s /confirmed %s",
-               q->UnitId, name, digest);
+    tr_sprintf(args, sizeof(args), "%s /result %s%s", pre, name, post);
     memset(&se, 0, sizeof(se));
     se.cbSize = sizeof(se);
     se.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
@@ -3338,21 +3561,21 @@ static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
     ejElevBusy = 1;
     if (ShellExecuteExA(&se) && se.hProcess != NULL) {
         DWORD start = GetTickCount();
-        launched = 1;
-        while (!finished && !ejElevQuit) {
-            DWORD r;
+        r->Launched = 1;
+        while (!r->Finished && !ejElevQuit) {
+            DWORD w;
             MSG m;
             DWORD spent = GetTickCount() - start;
             if (spent >= TR_ELEV_WAIT_MS) {
                 break;
             }
-            r = MsgWaitForMultipleObjects(1, &se.hProcess, FALSE,
+            w = MsgWaitForMultipleObjects(1, &se.hProcess, FALSE,
                                           TR_ELEV_WAIT_MS - spent, QS_ALLINPUT);
-            if (r == WAIT_OBJECT_0) {
-                finished = 1;
+            if (w == WAIT_OBJECT_0) {
+                r->Finished = 1;
                 break;
             }
-            if (r != WAIT_OBJECT_0 + 1) {
+            if (w != WAIT_OBJECT_0 + 1) {
                 break;
             }
             while (PeekMessageA(&m, NULL, 0, 0, PM_REMOVE)) {
@@ -3365,28 +3588,46 @@ static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
                 DispatchMessageA(&m);
             }
         }
-        if (finished && !GetExitCodeProcess(se.hProcess, &exitCode)) {
-            exitCode = INST_EXIT_FAILED;
+        if (r->Finished && !GetExitCodeProcess(se.hProcess, &r->ExitCode)) {
+            r->ExitCode = INST_EXIT_FAILED;
         }
         CloseHandle(se.hProcess);
     } else {
-        err = GetLastError();
+        r->Err = GetLastError();
     }
     ejElevBusy = 0;
-    if (finished) {
+    if (r->Finished) {
         memcpy(answer, view, TR_RES_BYTES);
         answer[TR_RES_BYTES] = '\0';
-        haveAnswer = tr_res_read_answer(answer, &answerCode, amsg, sizeof(amsg));
+        r->HaveAnswer = tr_res_read_answer(answer, &r->AnswerCode, r->Msg,
+                                           sizeof(r->Msg));
     }
     UnmapViewOfFile(view);
     CloseHandle(sec);
     if (ejElevQuit) {
         PostQuitMessage(quitCode);
+    }
+}
+
+/* The stop of section 6.6 with administrator rights: /eject id=, /result
+ * and /confirmed. XHCIINST's exit code, the text in msg. */
+static int ej_elev_run(HWND owner, const EJREQ *q, char *msg, size_t cap)
+{
+    static ELEVRUN r;
+    char digest[TR_DIGEST_CHARS];
+    char pre[INST_ID_CHARS + 32];
+    char post[TR_DIGEST_CHARS + 16];
+
+    tr_res_digest((const char (*)[TR_ID_CHARS])q->Devs, q->DevCount, digest);
+    tr_sprintf(pre, sizeof(pre), "/eject \"id=%s\"", q->UnitId);
+    tr_sprintf(post, sizeof(post), " /confirmed %s", digest);
+    elev_launch(owner, pre, post, &r);
+    if (ejElevQuit) {
         msg[0] = '\0';
         return INST_EXIT_REFUSED;
     }
-    return tr_elev_result(launched, err, finished, exitCode, haveAnswer,
-                          answerCode, amsg, msg, cap);
+    return tr_elev_result(r.Launched, r.Err, r.Finished, r.ExitCode,
+                          r.HaveAnswer, r.AnswerCode, r.Msg, msg, cap);
 }
 
 /* The elevated run's answer, into the window's section by its name; 0
@@ -3414,6 +3655,311 @@ static int elev_child_answer(int code, const char *text)
     UnmapViewOfFile(view);
     CloseHandle(sec);
     return 1;
+}
+
+/* ======================================================================== */
+/* The logging level dialog (record 25 section 7.5)                         */
+/* ======================================================================== */
+
+/* 1 when writing the levels needs this program started with
+ * administrator rights: NT, and this process no administrator. 98 SE and
+ * ME, and an administrator, write directly. */
+static int lv_need_elev(void)
+{
+    return envNt && !ej_is_admin();
+}
+
+typedef BOOL (WINAPI *PFN_LOOKUPPRIV)(LPCSTR, LPCSTR, PLUID);
+typedef BOOL (WINAPI *PFN_ADJUSTPRIV)(HANDLE, BOOL, PTOKEN_PRIVILEGES, DWORD,
+                                      PTOKEN_PRIVILEGES, PDWORD);
+
+/* Restarts Windows; on NT with the shutdown right enabled first. 0 with
+ * the error when Windows refused. */
+static int lv_restart(DWORD *err)
+{
+    *err = 0;
+    if (envNt) {
+        HMODULE adv = GetModuleHandleA("advapi32.dll");
+        PFN_OPENTOKEN openToken = (PFN_OPENTOKEN)proc(adv, "OpenProcessToken");
+        PFN_LOOKUPPRIV lookup = (PFN_LOOKUPPRIV)proc(adv, "LookupPrivilegeValueA");
+        PFN_ADJUSTPRIV adjust = (PFN_ADJUSTPRIV)proc(adv, "AdjustTokenPrivileges");
+        HANDLE token;
+        TOKEN_PRIVILEGES tp;
+        if (openToken != NULL && lookup != NULL && adjust != NULL &&
+            openToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                      &token)) {
+            memset(&tp, 0, sizeof(tp));
+            tp.PrivilegeCount = 1;
+            tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+            if (lookup(NULL, "SeShutdownPrivilege", &tp.Privileges[0].Luid)) {
+                adjust(token, FALSE, &tp, 0, NULL, NULL);
+            }
+            CloseHandle(token);
+        }
+    }
+    /* SHTDN_REASON_MAJOR_APPLICATION | MINOR_RECONFIG | FLAG_PLANNED; 98
+     * SE and ME ignore it. */
+    if (!ExitWindowsEx(EWX_REBOOT, 0x80040004UL)) {
+        *err = GetLastError();
+        return 0;
+    }
+    return 1;
+}
+
+/* The driver whose level a tree node belongs to: an xhci98 controller's,
+ * an NHI's; -1 for any other node. A Driver log node answers its
+ * parent's. */
+static int lv_driver_of_node(int i)
+{
+    if (i < 0 || i >= tnCount) {
+        return -1;
+    }
+    switch (tn[i].Kind) {
+    case K_CTRL:
+        return uc[tn[i].A].Ours ? TR_LV_XHCI98 : -1;
+    case K_NHI:
+        return TR_LV_XHCICM;
+    }
+    return -1;
+}
+
+static void refresh_window(void);
+
+static int lvFocus = -1;    /* the driver the dialog was opened for, or -1 */
+
+/* The dialog's contents from the registry as it is now. */
+static void lv_fill(HWND dlg)
+{
+    static char text[16384];
+    TR_TEXT t;
+    int d;
+    int lv;
+    int need = lv_need_elev();
+
+    /* The devices of the model the window shows, their values read now. */
+    tr_text_init(&t, text, sizeof(text));
+    lv_block(&t);
+    SetDlgItemTextA(dlg, IDC_LV_LIST, text);
+    for (d = 0; d < TR_LV_DRIVERS; d++) {
+        char now[160];
+        int common;
+        int k;
+        TR_LEVEL ls[TR_MAX_CTRL];
+        for (k = 0; k < lvCount[d]; k++) {
+            ls[k] = lvDev[d][k].L;
+        }
+        common = tr_level_common(ls, lvCount[d], &lv);
+        if (lvCount[d] == 0) {
+            tr_copy(now, d == TR_LV_XHCI98 ? "No controller is driven by xhci98."
+                                           : "No host interface is driven by xhcicm.",
+                    sizeof(now));
+        } else if (common) {
+            tr_sprintf(now, sizeof(now), "Now: %d - %s", lv,
+                       tr_level_text((TR_U32)lv));
+        } else if (lvCount[d] == 1) {
+            char line[96];
+            tr_level_line(d, &lvDev[d][0].L, line, sizeof(line));
+            tr_sprintf(now, sizeof(now), "Now: %s", line);
+        } else {
+            tr_copy(now, "Now: not the same on every device (the list above).",
+                    sizeof(now));
+        }
+        SetDlgItemTextA(dlg, IDC_LV_NOW0 + d, now);
+        for (k = 0; k <= TR_LV_MAX; k++) {
+            char label[64];
+            int id = (d == TR_LV_XHCI98 ? IDC_LV_R0 : IDC_LV_R1) + k;
+            tr_sprintf(label, sizeof(label), "%s%d - %s",
+                       d == TR_LV_XHCI98 && k == 0 ? "&" : "", k,
+                       tr_level_text((TR_U32)k));
+            SetDlgItemTextA(dlg, id, label);
+            CheckDlgButton(dlg, id, common && lv == k ? BST_CHECKED
+                                                      : BST_UNCHECKED);
+            EnableWindow(GetDlgItem(dlg, id), lvCount[d] > 0);
+        }
+    }
+    SetDlgItemTextA(dlg, IDOK, need ? "Set as administrator..." : "Set");
+    if (envMajor >= 6) {
+        /* BCM_SETSHIELD: the button starts an elevation. */
+        SendDlgItemMessageA(dlg, IDOK, 0x160C, 0, need ? 1 : 0);
+    }
+}
+
+/* The level checked for driver d, or -1. */
+static int lv_checked(HWND dlg, int d)
+{
+    int k;
+
+    for (k = 0; k <= TR_LV_MAX; k++) {
+        if (IsDlgButtonChecked(dlg, (d == TR_LV_XHCI98 ? IDC_LV_R0 : IDC_LV_R1) +
+                                        k) == BST_CHECKED) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+/* Set: the levels checked that differ from what every device reads now,
+ * written directly or by an elevated run; then the offer of a restart. */
+static void lv_apply(HWND dlg)
+{
+    static ELEVRUN r;
+    char msg[TR_RES_BYTES + 256];
+    int want[TR_LV_DRIVERS];
+    int d;
+    int any = 0;
+    int code;
+
+    if (ejElevBusy) {
+        MessageBoxA(dlg, "Another change with administrator rights is "
+                    "running; try again when it has finished.",
+                    "Logging level", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    for (d = 0; d < TR_LV_DRIVERS; d++) {
+        int lv;
+        int k;
+        int oldName = 0;
+        TR_LEVEL ls[TR_MAX_CTRL];
+        int c = lv_checked(dlg, d);
+        for (k = 0; k < lvCount[d]; k++) {
+            ls[k] = lvDev[d][k].L;
+            oldName |= ls[k].OldName;
+        }
+        want[d] = -1;
+        /* A level read from xhcicm's old name is written under the new. */
+        if (c >= 0 && lvCount[d] > 0 &&
+            !(tr_level_common(ls, lvCount[d], &lv) && lv == c && !oldName)) {
+            want[d] = c;
+            any = 1;
+        }
+    }
+    if (!any) {
+        MessageBoxA(dlg, "Every device already has the level chosen; nothing "
+                    "was changed.", "Logging level", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (lv_need_elev()) {
+        char pre[64];
+        TR_TEXT t;
+        tr_text_init(&t, pre, sizeof(pre));
+        tr_put(&t, "/setlevel");
+        for (d = 0; d < TR_LV_DRIVERS; d++) {
+            if (want[d] >= 0) {
+                tr_printf(&t, " %s=%d", tr_level_driver(d), want[d]);
+            }
+        }
+        elev_launch(dlg, pre, "", &r);
+        if (ejElevQuit) {
+            EndDialog(dlg, IDCANCEL);
+            return;
+        }
+        code = tr_level_elev_result(r.Launched, r.Err, r.Finished, r.ExitCode,
+                                    r.HaveAnswer, r.AnswerCode, r.Msg, msg,
+                                    sizeof(msg));
+    } else {
+        HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+        code = lv_set(want, msg, sizeof(msg));
+        SetCursor(old);
+    }
+    lv_fill(dlg);
+    if (code == INST_EXIT_DONE || code == INST_EXIT_FAILED) {
+        /* Something was written: the drivers take it at their next
+         * start. */
+        char ask[TR_RES_BYTES + 512];
+        if (code == INST_EXIT_DONE) {
+            tr_sprintf(ask, sizeof(ask), "%s\n\n%s", msg,
+                       tr_level_restart_question());
+        } else {
+            tr_sprintf(ask, sizeof(ask), "%s\n\nWhat was written takes effect "
+                       "after a restart. Restart Windows now?", msg);
+        }
+        if (MessageBoxA(dlg, ask, "Logging level",
+                        MB_YESNO | (code == INST_EXIT_DONE ? MB_ICONQUESTION
+                                                           : MB_ICONWARNING)) ==
+            IDYES) {
+            DWORD err;
+            if (!lv_restart(&err)) {
+                tr_sprintf(msg, sizeof(msg), "Windows did not restart (error "
+                           "%lu). Restart it from the Start menu.",
+                           (unsigned long)err);
+                MessageBoxA(dlg, msg, "Logging level", MB_OK | MB_ICONWARNING);
+            }
+        }
+        return;
+    }
+    MessageBoxA(dlg, msg, "Logging level", MB_OK | MB_ICONWARNING);
+}
+
+static BOOL CALLBACK level_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    (void)lp;
+    switch (msg) {
+    case WM_INITDIALOG:
+        SendDlgItemMessageA(dlg, IDC_LV_LIST, WM_SETFONT, (WPARAM)hFixed, 0);
+        lv_fill(dlg);
+        if (lvFocus >= 0 && lvCount[lvFocus] > 0) {
+            int c = lv_checked(dlg, lvFocus);
+            SetFocus(GetDlgItem(dlg, (lvFocus == TR_LV_XHCI98 ? IDC_LV_R0
+                                                              : IDC_LV_R1) +
+                                         (c >= 0 ? c : TR_LV_DEFAULT)));
+            return FALSE;
+        }
+        return TRUE;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDOK) {
+            lv_apply(dlg);
+            return TRUE;
+        }
+        if (LOWORD(wp) == IDCANCEL) {
+            EndDialog(dlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
+}
+
+/* The Logging level dialog, opened for driver focus (TR_LV_XHCI98 or
+ * TR_LV_XHCICM) or for none (-1): from the View menu, a controller's or
+ * an NHI's right-click, and a Driver log node's (lv_driver_of_node). */
+static void level_dialog(HWND owner, int focus)
+{
+    lvFocus = focus;
+    DialogBoxA(hInst, MAKEINTRESOURCEA(IDD_LEVEL), owner, (DLGPROC)level_proc);
+    /* The tree's details show each device's level. */
+    if (hMain != NULL) {
+        refresh_window();
+    }
+}
+
+/* /setlevel xhci98=<n> xhcicm=<n>: the levels written once, then exit; the
+ * elevated run the dialog starts, or a command line's. It reads only its
+ * own arguments, checked by tr_parse_args, and writes only the two values
+ * into the driver keys of the devices its own walk finds. */
+static int run_setlevel(void)
+{
+    char msg[TR_RES_BYTES];
+    int d;
+    int code;
+
+    for (d = 0; d < TR_LV_DRIVERS; d++) {
+        if (opts.Level[d] < -1 || opts.Level[d] > TR_LV_MAX) {
+            return INST_EXIT_REFUSED;
+        }
+    }
+    if (!walk(&gw)) {
+        gw.Count = 0;
+        tr_copy(msg, "The device tree could not be read; nothing was changed.",
+                sizeof(msg));
+        code = INST_EXIT_FAILED;
+    } else {
+        code = lv_set(opts.Level, msg, sizeof(msg));
+    }
+    if (opts.Result && elev_child_answer(code, msg)) {
+        return code;
+    }
+    say(msg, code != INST_EXIT_DONE);
+    return code;
 }
 
 /* The transaction (record 25 section 6.2 steps 2 to 8). Returns
@@ -5022,6 +5568,9 @@ static int command(HWND w, UINT id)
     case IDM_LOGIN:
         login_set(!login_on());
         return 1;
+    case IDM_LEVEL:
+        level_dialog(w, lv_driver_of_node(tree_selected()));
+        return 1;
     case IDM_SAVE:
         save_report_dialog();
         return 1;
@@ -5142,8 +5691,21 @@ static LRESULT CALLBACK main_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
                 }
                 if (bar != NULL) {
                     HMENU action = GetSubMenu(bar, 3);
+                    /* A controller's or an NHI's menu also opens its
+                     * driver's logging level (section 7.5). */
+                    int lvd = lv_driver_of_node(tree_selected());
                     init_menu(action);
+                    if (lvd >= 0) {
+                        AppendMenuA(action, MF_SEPARATOR, 0, NULL);
+                        AppendMenuA(action, MF_STRING, IDM_LEVEL,
+                                    "Logging le&vel...");
+                    }
                     TrackPopupMenu(action, TPM_RIGHTBUTTON, p.x, p.y, 0, w, NULL);
+                    if (lvd >= 0) {
+                        DeleteMenu(action, IDM_LEVEL, MF_BYCOMMAND);
+                        DeleteMenu(action, GetMenuItemCount(action) - 1,
+                                   MF_BYPOSITION);
+                    }
                 }
                 return TRUE;
             } else if (nh->code == NM_RETURN) {
@@ -5754,6 +6316,18 @@ static int run_selftest(void)
     ST(tr_parse_args(2, argv1, &o, err, sizeof(err)) == 1);
     argv1[1] = "/tray";
     ST(tr_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Tray);
+    {
+        char *argv2[4];
+        argv2[0] = "x";
+        argv2[1] = "/setlevel";
+        argv2[2] = "xhcicm=3";
+        argv2[3] = NULL;
+        ST(tr_parse_args(3, argv2, &o, err, sizeof(err)) == 0 && o.SetLevel &&
+           o.Level[TR_LV_XHCICM] == 3 && o.Level[TR_LV_XHCI98] == -1);
+        argv2[2] = "xhcicm=5";
+        ST(tr_parse_args(3, argv2, &o, err, sizeof(err)) == 1);
+    }
+    ST(strcmp(tr_level_text(4), "adds memory addresses (for developers)") == 0);
     ST(sizeof(TR_USB_CONN_EX) == 35 && sizeof(TR_USB_CONN_V2) == 16);
 #ifndef _WIN64
     ST(sizeof(TR_NIDA) == TR_NIDA_V2_BYTES);
@@ -5863,6 +6437,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     }
     if (opts.Eject) {
         return run_eject();
+    }
+    if (opts.SetLevel) {
+        return run_setlevel();
     }
 
     /* One tray per session; a second plain start asks the first to show

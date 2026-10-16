@@ -428,16 +428,22 @@ typedef struct _TR_OPTS {
     char ResultName[TR_PATH_CHARS];
     int Confirmed;              /* /confirmed: the confirmed list's digest */
     char ConfirmedDigest[TR_PATH_CHARS];
+    int SetLevel;               /* /setlevel (record 25 section 7.5)       */
+    int Level[2];               /* per TR_LV_XHCI98 / TR_LV_XHCICM: 0-4,
+                                 * or -1 for not asked                      */
 } TR_OPTS;
 
 /* XHCITR [/tray] [/eject id=<instance id> [/result <section>]
- * [/confirmed <digest>]] [/report <file>] [/selftest]. Switches start
- * with '/' or '-', without case; /eject takes id=<id> as the next
- * argument, /report its file, /result a section name (tr_res_name_ok) and
- * /confirmed a digest (tr_res_digest_ok). Returns 0 with opts filled, 1
- * refused with why in err. /eject, /report and /selftest stand alone;
- * /result and /confirmed go with /eject only (the elevated stop of
- * section 6.6). */
+ * [/confirmed <digest>]] [/setlevel xhci98=<n> xhcicm=<n> [/result
+ * <section>]] [/report <file>] [/selftest]. Switches start with '/' or
+ * '-', without case; /eject takes id=<id> as the next argument, /report
+ * its file, /result a section name (tr_res_name_ok) and /confirmed a
+ * digest (tr_res_digest_ok). /setlevel takes one or two of xhci98=<n> and
+ * xhcicm=<n> as the next arguments, each driver once, <n> a single digit
+ * 0-4 and nothing else (tr_level_arg). Returns 0 with opts filled, 1
+ * refused with why in err. /eject, /setlevel, /report and /selftest stand
+ * alone; /result goes with /eject or /setlevel, /confirmed with /eject
+ * only (the elevated runs of sections 6.6 and 7.5). */
 int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap);
 
 /* ---- small text helpers ---------------------------------------------- */
@@ -671,5 +677,97 @@ int tr_elev_result(int launched, TR_U32 launchErr, int finished,
 
 /* The question before an elevated stop. */
 const char *tr_elev_question(void);
+
+/* ---- the drivers' logging levels (record 25 section 7.5) ----------------- */
+
+/* The two drivers, each with its level in its devices' driver (software)
+ * keys: xhci98's XhciLogVerbosity in every controller's, xhcicm's
+ * XhciCmLogVerbosity in every NHI's. For one release xhcicm also reads
+ * XhciLogVerbosity in its key when the new name is absent. */
+#define TR_LV_XHCI98            0
+#define TR_LV_XHCICM            1
+#define TR_LV_DRIVERS           2
+#define TR_LV_DEFAULT           2
+#define TR_LV_MAX               4
+#define TR_LV_NAME_XHCI98       "XhciLogVerbosity"
+#define TR_LV_NAME_XHCICM       "XhciCmLogVerbosity"
+#define TR_LV_NAME_XHCICM_OLD   "XhciLogVerbosity"
+
+/* "xhci98" or "xhcicm"; NULL for anything else. */
+const char *tr_level_driver(int driver);
+
+/* The meaning of a level, one line each: "off", "counters only", "the log
+ * (default)", "adds port status", "adds memory addresses (for
+ * developers)"; NULL out of range. */
+const char *tr_level_text(TR_U32 level);
+
+/* One registry value as read. */
+#define TR_RV_ABSENT            0   /* the key has no such value           */
+#define TR_RV_DWORD             1   /* a 4-byte REG_DWORD, in Value         */
+#define TR_RV_OTHER             2   /* there, but not a 4-byte REG_DWORD    */
+#define TR_RV_UNREAD            3   /* the key or the value did not read    */
+
+typedef struct _TR_RVAL {
+    int State;
+    TR_U32 Value;
+} TR_RVAL;
+
+/* A device's level as read: which value decided it, and the level that
+ * reading stands for - the DWORD when it is 0-4, TR_LV_DEFAULT when no
+ * value is there, -1 otherwise (out of range, another type, not read). */
+typedef struct _TR_LEVEL {
+    int State;                  /* TR_RV_* of the value that decided       */
+    int OldName;                /* xhcicm: decided by the old name          */
+    TR_U32 Value;
+    int Level;
+} TR_LEVEL;
+
+/* The level from the readings: xhci98 reads cur (its one name) alone;
+ * xhcicm reads cur (XhciCmLogVerbosity) and, only when that is absent,
+ * old (XhciLogVerbosity in its key). old may be NULL. */
+void tr_level_pick(int driver, const TR_RVAL *cur, const TR_RVAL *old,
+                   TR_LEVEL *out);
+
+/* The value name a reading came from, for the text. */
+const char *tr_level_value_name(int driver, const TR_LEVEL *l);
+
+/* One line for a device's level, at most 72 characters: "3 - adds port
+ * status (XhciCmLogVerbosity)", "2 - the log (default) (no value set)",
+ * "2 - the log (default) (XhciLogVerbosity, old name)", "7 -
+ * out of range, not 0-4 (XhciLogVerbosity)", "XhciLogVerbosity is not a
+ * REG_DWORD", "not read". */
+void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap);
+
+/* The levels block of the report and the dialog: per driver a heading
+ * line, then each device's name and its line, or that there is none. A
+ * line stays within 79 columns but for a long device name. */
+void tr_level_head(TR_TEXT *t, int driver, int count);
+void tr_level_device(TR_TEXT *t, int driver, const char *name,
+                     const TR_LEVEL *l);
+
+/* 1 when every device of a driver reads the same level 0-4 (*level set);
+ * 0 when they differ, one is not 0-4, or there is none. */
+int tr_level_common(const TR_LEVEL *l, int n, int *level);
+
+/* "xhci98=<n>" or "xhcicm=<n>", case aside, <n> one digit 0-4: 1 with
+ * *driver and *level set, else 0. Anything longer, shorter or other is
+ * refused. */
+int tr_level_arg(const char *a, int *driver, int *level);
+
+/* A driver key name as the configuration manager gives it, the only form
+ * the level is written under: "<class>\<digits>", the class of letters,
+ * digits, braces, dashes and underscores, the instance 1-8 digits, one
+ * backslash and no other character. */
+int tr_driver_key_ok(const char *key);
+
+/* The window's result of an elevated /setlevel run, as tr_elev_result
+ * reads an elevated stop's: XHCIINST's exit code, the text in out. */
+int tr_level_elev_result(int launched, TR_U32 launchErr, int finished,
+                         TR_U32 exitCode, int haveAnswer, int answerCode,
+                         const char *answerMsg, char *out, size_t cap);
+
+/* The offer after a level was written: the drivers read it only at
+ * start. */
+const char *tr_level_restart_question(void);
 
 #endif /* TR_CORE_H */
