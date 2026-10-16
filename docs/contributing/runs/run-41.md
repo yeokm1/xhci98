@@ -941,8 +941,15 @@ selected; Set takes the focus since ca233507 (not re-read on a guest).
 
 ### Windows 98 SE: pass
 
-Installed from `D:\PKG\INSTALL` with the Thunderbolt question answered Y,
-the restart, and the usual Add New Hardware wizards. The tree listed both
+Installed from `D:\PKG\INSTALL` with the Thunderbolt question answered Y
+over the gold image's older `xhci98.sys`: INSTALL said no Thunderbolt or
+USB4 controller was found, ended "not everything is done" (exit 4) and
+opened Device Manager, and Update Driver from `C:\XHCI98` (the 98 SE CD
+for `usbd.sys`) then installed `xhci98.inf` and `xhcicm.inf`; after the
+restart the root hub installed silently and the tray started. The
+dialog's first reading was the install's 0 for every device, the old
+name for xhcicm, and the right-click menus of a controller and of the
+host interface end with "Logging level...". The tree listed both
 xhci98 controllers and the Thunderbolt 3 controller ("[ICM], active");
 the dialog's button reads "Set", with no elevation, and the dialog fits a
 640 x 480 screen whole.

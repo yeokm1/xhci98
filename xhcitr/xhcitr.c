@@ -3962,6 +3962,11 @@ static void level_dialog(HWND owner, int focus)
     /* The tree's details show each device's level. */
     if (hMain != NULL) {
         refresh_window();
+        /* The rebuilt tree takes the keyboard again (98 SE left it
+         * nowhere after the dialog). */
+        if (hTree != NULL) {
+            SetFocus(hTree);
+        }
     }
 }
 
