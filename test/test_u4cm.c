@@ -1276,6 +1276,25 @@ static void test_adl(void)
     CHECK_EQ(bw, (14738UL * 125UL + 511UL) / 512UL, "14738 Mb/s, the clamped 90 per cent");
 }
 
+/* Apply the EEPROM enable on router g_eeHookDev (bit-banging on, still
+ * deselected) and lose every answer to it. */
+static unsigned long g_eeDrops;
+static int g_eeHookDev;
+static int eeEnableHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                        unsigned long adp, unsigned long addr, unsigned long n,
+                        const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    if (pdf == TBT_PDF_WRITE && router == g_eeHookDev && cs == TBT_CS_ROUTER &&
+        addr == FAB_RCAP_PLUG + 4 && n == 1 && data != NULL &&
+        (data[0] & 0x12UL) == 0x12UL) {
+        g_eeDrops++;
+        return FAB_HOOK_DROP_ANSWER;
+    }
+    return FAB_HOOK_GO;
+}
+
 static void test_tbt3(void)
 {
     TBT_U4_CONFIG c;
@@ -1377,6 +1396,41 @@ static void test_tbt3(void)
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "no EEPROM: UP");
     CHECK(p->Dev.ModelName[0] == 0, "no EEPROM: no name");
     CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "no EEPROM: never clocked");
+
+    /* The enable applied but every answer to it lost: the part is still
+     * deselected and bit-banging disabled again; the router unnamed. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.Hook = eeEnableHook;
+    g_eeHookDev = dev;
+    g_eeDrops = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(g_eeDrops >= 1, "the enable applied, its answers lost");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 4) & 0x12UL, 0x02UL,
+             "lost enable: deselected and bit-banging off again");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "lost enable: UP");
+    CHECK(p->Dev.ModelName[0] == 0, "lost enable: no name");
+
+    /* Rebuilt under a resume budget: no EEPROM bit-bang (a spent budget
+     * would refuse the part's release), the router up unnamed. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.RxQCount = 0;
+    g_fab.R[dev].EeCtlWrites = 0;
+    CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "TB3 resume: rebuilt");
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "TB3 resume: UP");
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "TB3 resume: no bit-bang under the budget");
 
     /* A DROM whose CRC fails: unnamed, still UP. */
     fabInit(&g_fab);

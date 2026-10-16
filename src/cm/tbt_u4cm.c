@@ -643,8 +643,11 @@ static VOID tbtU4NameCopy(char *dst, const UCHAR *src, ULONG n)
  * tb_eeprom_out, tb_eeprom_in and tb_eeprom_read_n): select, clock out
  * the read command and the 16-bit address MSB first, clock in `count`
  * bytes MSB first, deselect. `offset` is from the start of the DROM.
- * Every bit is three control requests; the chip is always deselected
- * again once it was selected.
+ * Every bit is three control requests. Once the enable was sent - even
+ * a write whose answers were lost may have been applied - the part is
+ * deselected and bit-banging disabled again, each of the two writes tried
+ * whatever the other did (Linux eeprom.c: "Always disable access after
+ * usage").
  */
 static LONG tbtU4EeWr(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG ctl)
 {
@@ -734,11 +737,10 @@ static LONG tbtU4EepromRead(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG offset,
     ctl &= ~(TBT_EE_SK | TBT_EE_DI | TBT_EE_DO);
     ctl |= TBT_EE_ENABLE;
     rc = tbtU4EeWr(cm, rt, ctl);
-    if (rc != TBT_OK) {
-        return rc;
+    if (rc == TBT_OK) {
+        ctl &= ~TBT_EE_CS;
+        rc = tbtU4EeWr(cm, rt, ctl);
     }
-    ctl &= ~TBT_EE_CS;
-    rc = tbtU4EeWr(cm, rt, ctl);
     if (rc == TBT_OK) {
         rc = tbtU4EeOut(cm, rt, &ctl, TBT_EE_READ);
     }
@@ -754,8 +756,11 @@ static LONG tbtU4EepromRead(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG offset,
     }
     ctl = (ctl & ~TBT_EE_SK) | TBT_EE_CS;
     rc2 = tbtU4EeWr(cm, rt, ctl);
-    if (rc2 == TBT_OK) {
-        rc2 = tbtU4EeWr(cm, rt, ctl & ~TBT_EE_ENABLE);
+    if (tbtU4EeWr(cm, rt, ctl & ~TBT_EE_ENABLE) != TBT_OK) {
+        rc2 = TBT_E_STATE;
+    }
+    if (rc2 != TBT_OK) {
+        tbtU4Log(cm, "u4.drom.eeprom-release", (ULONG)rc2);
     }
     return rc != TBT_OK ? rc : rc2;
 }
@@ -2687,9 +2692,12 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
     } else if (d->Tbt3) {
         /* Its DROM sits behind the Plug Events capability's EEPROM
          * bit-bang (section 8 item 4), so the capabilities come first;
-         * the DROM still before the adapters, as on a USB4 router. */
+         * the DROM still before the adapters, as on a USB4 router. Not
+         * under a resume budget: a budget running out refuses every
+         * request, the release of the part included, and the name is
+         * optional. */
         rc = tbtU4RouterCaps(cm, d, TBT_RTR1_NEXT_CAP(v[1]));
-        if (rc == TBT_OK && d->CapPlugEvents != 0) {
+        if (rc == TBT_OK && d->CapPlugEvents != 0 && !cm->Budgeted) {
             tbtU4ReadDrom(cm, d);
             if (!TBT_U4_LIVE(p, gen)) {
                 return TBT_E_GONE;
