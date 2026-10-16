@@ -495,7 +495,7 @@ VOID CmRegChildRemoved(struct _CM_FILTER *child, BOOLEAN ejected);
  * above: a capability, never the header) of the configuration space of
  * this domain's member `bdf`, by IRP_MN_WRITE_CONFIG to its bridge's PDO
  * through the filter's registration (the SHPC DWORD Select byte of the
- * nvme98 channel's reading, cm_nvlinkos.c). FALSE where the member has no
+ * stor98 channel's reading, cm_nvlinkos.c). FALSE where the member has no
  * published filter (Windows 98 SE and ME have none). PASSIVE_LEVEL. */
 BOOLEAN CmRegConfigWrite(struct _CM_NHI *nhi, ULONG bdf, ULONG offset,
                          ULONG width, ULONG value);
