@@ -3935,7 +3935,9 @@ static BOOL CALLBACK level_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                                          (c >= 0 ? c : TR_LV_DEFAULT)));
             return FALSE;
         }
-        return TRUE;
+        /* Not the list, which an edit control selects whole on focus. */
+        SetFocus(GetDlgItem(dlg, IDOK));
+        return FALSE;
     case WM_COMMAND:
         if (LOWORD(wp) == IDOK) {
             lv_apply(dlg);
