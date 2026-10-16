@@ -230,6 +230,31 @@ SuperSpeed devices on `xhci98.sys` (QEMU's xHCI with USB 3 ports):
   a USB 3 port (its monitor connections hung before any guest driver had
   loaded); the same command line booted normally on the next start.
 
+### Vista x64 and 7 x64 with the new drivers
+
+The owner test-signed the x64 package of the final drivers (the query
+device included) on 2026-10-16 at 07:33. With it, and the tool of the dry
+cut, as the standard user:
+
+- Install: a fresh install ended "restart" and put the tool and the Run
+  value in place; over the earlier test build of the same version the
+  first run asked for `INSTALL /restage` (the store held a different build
+  under an identical INF), which then replaced every package.
+- 39-V.3 and 40-V.3 on the new drivers: the NVMe at plug with no Refresh;
+  Windows' Safely Remove to Code 47 and the unplug with no dialog;
+  `INSTALL /devices` "confirmed now"; `INSTALL /eject 1` exit 0 (on Vista
+  once refused, exit 4, while an Explorer window held the volume, as
+  Windows reports it).
+- T.1 to T.6: no UAC prompt; the tray at login; the Thunderbolt branch
+  from the query device ("Query device: XHCICM0", the last pass under
+  160 ms old, liveness answering), USB4 "Gen 3 x2 (40 Gbit/s) (read from
+  the lane adapter)", TB3 "20 Gbit/s per lane, x2 (reported by the
+  firmware)"; Safely Remove from the Action menu, Delete, a right click
+  and the tray, with no elevation; balloons on connect, disconnect and the
+  eject's outcome; uninstall with trays running in two sessions closed
+  both and removed the tool, its folder and the Run value. The approval
+  balloon was not read (the emulator's device is approved at once).
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link
