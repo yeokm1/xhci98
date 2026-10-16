@@ -1699,49 +1699,59 @@ static void test_usb_eject(void)
     }
 
     /* the answers */
-    r = tr_usb_answer_nt(0, 0, "", "F:", out, sizeof(out));
+    r = tr_usb_answer_nt(0, 0, "", 0, "F:", out, sizeof(out));
     CHECK(r == INST_EJ_DONE && out[0] == '\0', "answer NT: stopped");
-    r = tr_usb_answer_nt(0, 5, "", "F:", out, sizeof(out));
+    r = tr_usb_answer_nt(0, 5, "", 0, "F:", out, sizeof(out));
     CHECK(r == INST_EJ_VETO && has(out, "a program is using F:"),
           "answer NT: success with a veto type is a veto (XP)");
     CHECK(tr_eject_cr(0, 0) == 0 && tr_eject_cr(0, 6) == INST_CR_REMOVE_VETOED &&
           tr_eject_cr(INST_CR_ACCESS_DENIED, 12) == INST_CR_ACCESS_DENIED,
           "eject cr: only a success with a veto type changes");
-    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "STORAGE\\VOLUME\\1", "F:",
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "STORAGE\\VOLUME\\1", 0, "F:",
                          out, sizeof(out));
     CHECK(r == INST_EJ_VETO &&
           strcmp(out, "Windows refused: a program is using F:. Close it and "
                       "try again.") == 0, "answer NT: an open file on F:");
-    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "", "USB Mass Storage Device",
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "", 0, "USB Mass Storage Device",
                          out, sizeof(out));
     CHECK(r == INST_EJ_VETO && has(out, "is using USB Mass Storage Device."),
           "answer NT: no letter, the name");
-    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 3, "notepad.exe", "F:, G:",
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 3, "notepad.exe", 0, "F:, G:",
                          out, sizeof(out));
     CHECK(r == INST_EJ_VETO &&
           strcmp(out, "Windows refused: notepad.exe is using F:, G:. Close it "
                       "and try again.") == 0, "answer NT: an application");
-    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 4, "", "F:", out, sizeof(out));
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 4, "", 0, "F:", out, sizeof(out));
     CHECK(r == INST_EJ_VETO && has(out, "a program is using F:"),
           "answer NT: a service with no name");
-    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 6, "USBSTOR\\DISK\\1", "F:",
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 6, "USBSTOR\\DISK\\1", 0, "F:",
                          out, sizeof(out));
     CHECK(r == INST_EJ_VETO &&
           strcmp(out, "Windows refused: USBSTOR\\DISK\\1 did not allow it.") == 0,
           "answer NT: a device's veto, named");
-    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 99, "", "F:", out, sizeof(out));
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 6, "STORAGE\\RemovableMedia\\7&1&RM", 1,
+                         "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: F: is in use (a program has a file or "
+                      "folder open on it). Close it and try again.") == 0,
+          "answer NT: its own volume's veto names the drive (XP)");
+    r = tr_usb_answer_nt(0, 6, "STORAGE\\RemovableMedia\\7&1&RM", 1, "F:", out,
+                         sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "F: is in use"),
+          "answer NT: the same when XP answers success with the veto");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 99, "", 0, "F:", out, sizeof(out));
     CHECK(r == INST_EJ_VETO && has(out, "(veto 99)"),
           "answer NT: an unknown veto, numbered");
-    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 12, "", "F:", out, sizeof(out));
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 12, "", 0, "F:", out, sizeof(out));
     CHECK(r == INST_EJ_RIGHTS, "answer NT: the rights veto");
-    r = tr_usb_answer_nt(INST_CR_ACCESS_DENIED, 0, "", "F:", out, sizeof(out));
+    r = tr_usb_answer_nt(INST_CR_ACCESS_DENIED, 0, "", 0, "F:", out, sizeof(out));
     CHECK(r == INST_EJ_RIGHTS && has(out, "administrator"), "answer NT: access denied");
-    r = tr_usb_answer_nt(INST_CR_NO_SUCH_DEVNODE, 0, "", "F:", out, sizeof(out));
+    r = tr_usb_answer_nt(INST_CR_NO_SUCH_DEVNODE, 0, "", 0, "F:", out, sizeof(out));
     CHECK(r == INST_EJ_CHANGED, "answer NT: gone");
-    r = tr_usb_answer_nt(0x1FUL, 0, "", "F:", out, sizeof(out));
+    r = tr_usb_answer_nt(0x1FUL, 0, "", 0, "F:", out, sizeof(out));
     CHECK(r == INST_EJ_FAILED && has(out, "(code 0x0000001F)"),
           "answer NT: anything else, with its code");
-    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "", "F:", out, 8);
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "", 0, "F:", out, 8);
     CHECK(r == INST_EJ_VETO && strlen(out) == 7, "answer NT: a small buffer");
 
     r = tr_usb_answer9x(0, "E:", out, sizeof(out));

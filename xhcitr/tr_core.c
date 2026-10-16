@@ -2040,9 +2040,11 @@ TR_U32 tr_eject_cr(TR_U32 cr, TR_U32 vetoType)
 #define TR_VETO_WINDOWS_APP     3UL
 #define TR_VETO_WINDOWS_SERVICE 4UL
 #define TR_VETO_OUTSTANDING     5UL
+#define TR_VETO_DEVICE          6UL
+#define TR_VETO_DRIVER          7UL
 
 int tr_usb_answer_nt(TR_U32 cr, TR_U32 vetoType, const char *vetoName,
-                     const char *what, char *out, size_t cap)
+                     int vetoInSet, const char *what, char *out, size_t cap)
 {
     const char *text;
     int withName;
@@ -2060,6 +2062,11 @@ int tr_usb_answer_nt(TR_U32 cr, TR_U32 vetoType, const char *vetoName,
     if (cr == INST_CR_REMOVE_VETOED && vetoType == TR_VETO_OUTSTANDING) {
         tr_sprintf(out, cap, "Windows refused: a program is using %s. Close "
                              "it and try again.", what);
+    } else if (cr == INST_CR_REMOVE_VETOED && vetoInSet &&
+               (vetoType == TR_VETO_DEVICE || vetoType == TR_VETO_DRIVER)) {
+        tr_sprintf(out, cap, "Windows refused: %s is in use (a program has a "
+                             "file or folder open on it). Close it and try "
+                             "again.", what);
     } else if (cr == INST_CR_REMOVE_VETOED &&
                (vetoType == TR_VETO_WINDOWS_APP ||
                 vetoType == TR_VETO_WINDOWS_SERVICE)) {

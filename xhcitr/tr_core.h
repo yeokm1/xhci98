@@ -541,9 +541,11 @@ int tr_usb_recheck(const char *parentNow, const char *parentThen,
 /* The answer to the call in plain words, into out; returns the outcome
  * (INST_EJ_*). `what` is what the user knows the device by in a refusal:
  * its drive letters ("F:", "F:, G:"), or its name when it has none.
- * NT: CM_Request_Device_EjectA's answer, its veto type and veto name. */
+ * NT: CM_Request_Device_EjectA's answer, its veto type and veto name;
+ * vetoInSet 1 when the veto name is a devnode of the device's own set (a
+ * volume refusing for an open file or folder, as XP reports it). */
 int tr_usb_answer_nt(TR_U32 cr, TR_U32 vetoType, const char *vetoName,
-                     const char *what, char *out, size_t cap);
+                     int vetoInSet, const char *what, char *out, size_t cap);
 
 /* CM_Request_Device_EjectA's answer as the outcome tables read it: Windows
  * XP answers a vetoed request CR_SUCCESS with the veto type set (read on

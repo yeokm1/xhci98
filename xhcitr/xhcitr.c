@@ -3698,8 +3698,16 @@ static int usb_run(const USBREQ *q, char *msg, size_t cap, int *rights)
         vetoName[0] = '\0';
         cr = api.Eject(w.N[d].Dn, &veto, vetoName, MAX_PATH, 0);
         vetoName[MAX_PATH - 1] = '\0';
-        outcome = tr_usb_answer_nt(cr, veto, vetoName, q->What, answer,
-                                   sizeof(answer));
+        {
+            int inSet = 0;
+            for (i = 0; i < q->Count; i++) {
+                if (vetoName[0] != '\0' && tr_eq(vetoName, q->Ids[i])) {
+                    inSet = 1;
+                }
+            }
+            outcome = tr_usb_answer_nt(cr, veto, vetoName, inSet, q->What,
+                                       answer, sizeof(answer));
+        }
         if (outcome != INST_EJ_DONE) {
             tr_put(&t, answer);
             *rights = outcome == INST_EJ_RIGHTS;
