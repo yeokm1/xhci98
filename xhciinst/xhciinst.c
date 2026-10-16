@@ -3375,11 +3375,12 @@ static int begin_move(void)
     char mf[INST_PATH_CHARS];
     int ok;
 
-    if (opts.List || !moving()) {
+    if (opts.List || toolDir[0] == '\0' || stScreens) {
         return 1;
     }
     /* Under the maintenance lock, and only if no other run has changed
-     * the records since the question was asked. */
+     * the records since the question was asked - moving or not, since a
+     * run that stays would otherwise write over another's move. */
     if (!maint_lock()) {
         flagFailed = 1;
         return 0;
@@ -3388,12 +3389,13 @@ static int begin_move(void)
     movefrom_get(mf, sizeof(mf));
     if (strcmp(rec, seenRecord) != 0 || strcmp(mf, seenMoveFrom) != 0) {
         out("Another run of INSTALL.BAT changed the install directory "
-            "meanwhile: nothing\nmoves. Run INSTALL.BAT again.\n");
+            "meanwhile: this run\nleaves the xHCI98 tools as they are. Run "
+            "INSTALL.BAT again.\n");
         flagSteps = 1;
         maint_unlock();
         return 0;
     }
-    ok = movefrom_set(oldToolDir) && record_dir();
+    ok = !moving() || (movefrom_set(oldToolDir) && record_dir());
     maint_unlock();
     if (!ok) {
         out("The move to %s could not be recorded in the registry: nothing "
