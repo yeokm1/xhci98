@@ -2237,6 +2237,7 @@ static int legacy_dir(char *dir, size_t cap)
  * them, "" for none. */
 static char toolDir[INST_PATH_CHARS];
 static char oldToolDir[INST_PATH_CHARS];
+static int movePending;     /* oldToolDir is an unfinished move's (MoveFrom) */
 
 /* The local copies (record 23 section 4.4): <8 hex digits>, one immutable
  * directory per package content, each with an XHCIINST.LST naming the
@@ -3121,16 +3122,17 @@ static int choose_dir(void)
     /* A move an earlier run could not finish is finished now; another
      * move waits until it is, so no directory is ever lost track of. */
     if (moveFrom[0] != '\0' && oldToolDir[0] != '\0' &&
-        !same_dir(moveFrom, oldToolDir) && !same_dir(toolDir, oldToolDir) &&
-        !same_dir(toolDir, moveFrom)) {
+        !same_dir(moveFrom, oldToolDir) && !same_dir(toolDir, oldToolDir)) {
         out("REFUSED: an earlier move from %s to %s is not finished. Run "
             "INSTALL.BAT once\nmore with %s first.\n", moveFrom, oldToolDir,
             oldToolDir);
         return 0;
     }
+    movePending = 0;
     if (moveFrom[0] != '\0' && !same_dir(moveFrom, toolDir) &&
         (oldToolDir[0] == '\0' || same_dir(oldToolDir, toolDir))) {
         inst_copy(oldToolDir, moveFrom, sizeof(oldToolDir));
+        movePending = 1;
     }
     if (moving()) {
         out("  The xHCI98 tools move there from %s.\n", oldToolDir);
@@ -3230,7 +3232,14 @@ static void move_ready(void)
         out("The xHCI98 USB Tree is still running from %s, so nothing moves "
             "this time.\nClose it (or restart Windows), then run INSTALL.BAT "
             "again to move it to\n%s.\n\n", oldToolDir, toolDir);
-        inst_copy(toolDir, oldToolDir, sizeof(toolDir));
+        if (movePending) {
+            /* The records already name both: this run works in the
+             * recorded directory and leaves the unfinished move's source,
+             * and its MoveFrom, for a later run. */
+            oldToolDir[0] = '\0';
+        } else {
+            inst_copy(toolDir, oldToolDir, sizeof(toolDir));
+        }
         flagSteps = 1;
     }
 }
@@ -3476,8 +3485,14 @@ static void tray_install(void)
         INST_U32 ov[4];
         /* An interrupted replacement there is put right first, so a
          * newer tool left as .BAK is the one compared. */
+        if (!opts.List && tray_paths_in(oldToolDir, &o) &&
+            !tray_leftovers(&o)) {
+            /* The old directory's .BAK could not be put back: the tool's
+             * part stops, as for the install directory's own. */
+            flagSteps = 1;
+            goto done;
+        }
         if (tray_paths_in(oldToolDir, &o) &&
-            (opts.List || tray_leftovers(&o)) &&
             file_version(o.Exe, ov) > 0 &&
             (pkg <= 0 || inst_ver_cmp(ov, pv) > 0)) {
             inst_copy(from, o.Exe, sizeof(from));
@@ -3542,9 +3557,8 @@ static void tray_install(void)
     }
     /* In place: the directory is recorded, and after a move the old copy
      * goes - the Run value names the new one already (or none, /notray). */
-    if (file_exists(t.Exe, NULL) &&
-        tray_run_state(t.Run) == (opts.NoTray ? 0 : 1) && record_dir() &&
-        moving()) {
+    if (file_exists(t.Exe, NULL) && record_dir() && moving() &&
+        tray_run_state(t.Run) == (opts.NoTray ? 0 : 1)) {
         tray_remove_old();
     }
 done:
