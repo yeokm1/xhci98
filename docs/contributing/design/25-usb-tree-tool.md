@@ -76,8 +76,8 @@ authentication material.
 - Forcing a removal Windows vetoes, ever, or stopping a Thunderbolt
   device that is not a unit (record 24 section 4.2).
 - Stopping a USB hub, a root hub, a controller, an input device (HID) or a
-  composite device with an input function, or a USB device that section
-  6.5 does not offer (on 98 SE and ME, one with no disk on it). Until
+  composite device with an input function, a radio, or a USB device that
+  section 6.5 does not offer (one with no disk or volume on it). Until
   revision 7 plain USB devices got details only (decision T6); section 6.5
   is what replaced that.
 - Writing `LowerFilters` to repair a missing child filter (Planned
@@ -415,14 +415,27 @@ menu, for `/eject`) when its set holds none of:
   `Mouse`, bound to `hidusb`, or with an instance, hardware or compatible
   ID beginning `USB\Class_03` or `HID\` - so a keyboard, a mouse, a
   tablet and a composite device with an input function are never listed;
+- a wireless radio (device class `E0`, a Bluetooth adapter);
 
-its devnode was found in the walk, and, on NT, Windows reports it
-removable (`CM_DEVCAP_REMOVABLE` in the devnode's capabilities) or its
-set holds a disk (setup class `DiskDrive`) or a volume (setup class
-`Volume`); on 98 SE and ME its set holds a disk, found as section 14's
-drive labels already find them. Everything else connected gets details
-only, with the reason ("a hub", "an input device", "Windows does not
-report it removable", "no disk on it").
+its devnode was found in the walk (a device with no driver has none on
+98 SE and ME, and no disk anywhere), and its set holds a disk (setup
+class `DiskDrive`), or, on NT, a volume (setup class `Volume`); on 98 SE
+and ME the disks are found as section 14's drive labels already find
+them. Everything else connected gets details only, with the reason ("a
+hub", "an input device", "a wireless radio", "no disk on it").
+
+**Why not "removable" on NT.** The owner's instruction allowed a device
+Windows reports removable. `xhci98.sys` reports `Removable` on every
+device it presents (`src\hcd_pdo.c`), internal ports included: it reads
+no ACPI `_UPC` or `_PLD`. The owner's ThinkPad P14s Gen 1 under 98 SE
+has, on xhci98's root ports, a touchscreen, an integrated camera (a
+composite device), a fingerprint reader and a Bluetooth radio, all
+internal; under the capability rule the camera's parent is
+`SurpriseRemovalOK` and drops out, but a fingerprint reader with a driver
+or the radio would be offered, as Windows' own applet would list them.
+So on every target a disk or a volume decides, and a USB device with no
+storage (a camera, a network adapter, an audio device) is stopped by
+unplugging it, as before. Windows' own applet still lists what it lists.
 
 **Offered.** A listed device is offered when it is started and has no
 problem code, its set is known, holds no more than 64 devnodes, and each
@@ -691,7 +704,7 @@ builder (`cm_query.c`) is host-tested in the CM suite.
 | T.4 | 2000, ME, XP, 7 | balloons on plug, approval, eject, disconnection; 98 SE tooltip |
 | T.5 | 98 SE, 7 x64 | install puts the tool and the Run value; login starts the tray; upgrade with the tray running; uninstall closes it and removes both |
 | T.6 | every target | the record 24 legs of XHCIINST still pass with the changed `xhcicm.sys` |
-| T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard and a hub never listed |
+| T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
 
 ## 12. Decisions
 
@@ -712,9 +725,11 @@ builder (`cm_query.c`) is host-tested in the CM suite.
   shares XHCIINST's mutex, with a security descriptor both can open.
 - **T6** (owner, 2026-10-16, revision 7; it reversed the first T6, "plain
   USB devices get no eject in the tool") Plain USB devices are stopped
-  too, under section 6.5: on NT a removable device or one with a disk, on
-  98 SE and ME one with a disk; never a hub, an input device or the
-  controller; on any controller the tool lists.
+  too, under section 6.5: one with a disk (or, on NT, a volume) in what
+  stops with it; never a hub, an input device, a radio or the controller;
+  on any controller the tool lists. The owner allowed "removable" on NT
+  as well; it is not used, because `xhci98.sys` reports every device
+  removable, internal ones too (section 6.5, "Why not removable").
 - **T7** An eject waits for a connection-manager snapshot built after it
   began (two publications past its first query, section 6.2), in place of
   record 24's ask and echo, and checks eligibility on every answer up to
@@ -733,9 +748,7 @@ builder (`cm_query.c`) is host-tested in the CM suite.
   the current state.
 - **T11** The call goes to the USB device's devnode, the one Windows' own
   applet stops, never to a disk or a function below it, and on NT without
-  record 24's not-removable fallback: a device Windows does not see as
-  removable is offered only for its disks, and a refusal is shown as it
-  is.
+  record 24's not-removable fallback: a refusal is shown as it is.
 
 ## 13. Open
 

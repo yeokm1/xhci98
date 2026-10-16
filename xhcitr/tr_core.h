@@ -489,23 +489,27 @@ int tr_node_is_hid(const char *id, const char *hw, size_t hwBytes,
 int tr_node_is_hub(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes);
 
-/* What is known of the device at a USB port, and below it. */
+/* What is known of the device at a USB port and of its set: everything
+ * Windows stops with it (section 6.5). */
 typedef struct _TR_USBF {
     int Nt;
     int HaveDevnode;            /* the port's devnode was found in the walk  */
-    int IsHub;                  /* the port says a hub, or the ids do        */
+    int IsHub;                  /* the port says so, or ids of its set do    */
     int IsController;
-    int Hid;                    /* it or a devnode below it is input         */
-    int CapsKnown;              /* NT: CM_DRP_CAPABILITIES read              */
-    TR_U32 Caps;
-    int Disks;                  /* setup class DiskDrive, below it           */
+    int Hid;                    /* a devnode of its set is input             */
+    int Radio;                  /* device class E0 (a Bluetooth radio)       */
+    int Disks;                  /* setup class DiskDrive, in its set         */
+    int Volumes;                /* NT: setup class Volume, in its set        */
+    int SetKnown;               /* every relation of the set was read       */
+    int SetCount;               /* the devnodes of the set, itself included */
     int Started;                /* DN_STARTED                                */
     TR_U32 Problem;             /* 0, or the problem code                    */
-    int ReadWhole;              /* it and every devnode below it read whole  */
+    int ReadWhole;              /* every devnode of its set read whole       */
     int CallAvailable;          /* the routines of the eject were found      */
 } TR_USBF;
 
 #define TR_CM_PROB_HELD_FOR_EJECT 47UL
+#define TR_USB_SET_MAX          64      /* what one confirmation lists       */
 
 #define TR_UE_DETAILS   0       /* details only: never listed              */
 #define TR_UE_LISTED    1       /* listed with the reason, not offered     */
