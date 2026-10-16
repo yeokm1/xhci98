@@ -1924,9 +1924,13 @@ nothing (the next bullet but one).
   `UP`, `DOWN_QUIESCED`, and on 9x `REMOVE_PENDING`), `AckGeneration` and
   on 9x `RemoveAck` (the only fields Stor98 writes), `RemoveSequence` (9x)
   and a `Sequence` that is odd while this driver writes the entry; the
-  header's `Cookie` is the 9x per-boot cookie (0 on NT). A
-  reload of this driver allocates a new table; a Stor98 instance bound
-  before the reload keeps the old one, frozen, and gets no statement.
+  header's `Cookie` is the 9x per-boot cookie (0 on NT). One table per
+  boot (`stor98cm.h`, "CM lifetime (NT)"): a reload of this driver in the
+  same boot finds the callback object the first load created (Stor98 never
+  creates it) and publishes nothing - no second table, no callback, no
+  `UP` - so a Stor98 instance bound before the reload keeps the old table,
+  frozen, and gets no statement, and one that binds after it finds no
+  channel; the gone deadline (MD-1) covers both.
 - **NT rendezvous** (interface 2). At `DriverEntry` the callback object
   `\Callback\Stor98LinkState` is created (`ExCreateCallback`,
   `OBJ_PERMANENT`) with one callback that answers `STOR98LS_QUERY` with the

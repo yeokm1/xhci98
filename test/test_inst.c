@@ -468,6 +468,21 @@ static void test_parser(void)
                             "[S]\r\nAddService=xhcicm,2,X\r\n"
                             "[T]\r\nAddService=stor98,2,Y\r\n"),
           "an INF that also installs stor98 is not ours");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nAddService=%Svc%,2,Y\r\n"
+                            "[Strings]\r\nSvc=\"stor98\"\r\n"),
+          "stor98 named through a string is not ours");
+    CHECK(!inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                            "[S]\r\nAddService=xhcicm,2,X\r\n"
+                            "[T]\r\nHKR,,PortDriver,,%Mpd%\r\n"
+                            "[Strings]\r\nMpd=stor98.mpd\r\n"),
+          "stor98.mpd named through a string is not ours");
+    CHECK(inst_inf_is_ours("[Version]\r\nProvider=\"Yeo Kheng Meng\"\r\n"
+                           "[S]\r\nAddService=xhcicm,2,X\r\n"
+                           "[T]\r\nHKR,,PortDriver,,%Mpd%\r\n"
+                           "[Strings]\r\nMpd=xhci98.mpd\r\n"),
+          "another file named through a string is not Stor98's");
 }
 
 static void test_ids(void)

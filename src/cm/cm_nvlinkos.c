@@ -4,13 +4,16 @@
  * allocation, the NT callback object, the channel left unoffered on
  * Windows 98 SE and ME, and the seam's calls, over cm_nvlink.c's pure entry protocol.
  *
- * ONE TABLE PER DRIVER LOAD. CmNvlinkInit allocates it (CmAlloc, so in
+ * ONE TABLE PER BOOT. CmNvlinkInit allocates it (CmAlloc, so in
  * cm_pool.c's one pool site) and nothing ever frees it. A reload of this
- * driver (every NHI and filter gone, then back) allocates a new one and
- * answers queries with it; a stor98 instance bound before the reload
- * keeps polling the old one, which stays valid and frozen at its last
- * state, so it gets no statement and falls back to its gone deadline
- * (MD-1). That is the one thing a reload loses.
+ * driver in the same boot (every NHI and filter gone, then back) finds the
+ * callback object the first load made and publishes nothing (stor98cm.h,
+ * "CM lifetime (NT)": no second table, and the old one is not written
+ * again): a stor98 instance bound before the reload keeps polling the old
+ * table, which stays valid and frozen at its last state, so it gets no
+ * statement and falls back to its gone deadline (MD-1); one that binds
+ * after it finds no callback answering, so no channel. That is what a
+ * reload loses.
  *
  * SHARED BY EVERY DOMAIN. Each NHI's thread writes the entries of its own
  * tunnel ports; cmNvLock serialises the writes and the shadow below
@@ -53,6 +56,7 @@ static BOOLEAN cmNvNt;
 static BOOLEAN cmNvOsQualified; /* 2000 x86, XP x64 (record 21 7.2)      */
 static PCALLBACK_OBJECT cmNvObject;
 static PVOID cmNvRegistration;
+static ULONG cmNvReloaded;      /* NT: an earlier load made the object    */
 static LONG cmNvQueries;
 static ULONG cmNvRecord;        /* 9x: the locator was written (never, in
                                    this build: CmNvlinkOffered)          */
@@ -339,6 +343,17 @@ VOID CmNvlinkInit(VOID)
     InitializeObjectAttributes(&attributes, &text,
                                OBJ_CASE_INSENSITIVE | OBJ_PERMANENT, NULL,
                                NULL);
+    /* One table per boot (stor98cm.h, "CM lifetime (NT)"): stor98 never
+     * creates the object, so an object already there is an earlier load's
+     * of this driver in this boot, and a reload publishes nothing - no
+     * second table, and the first one is not written again. */
+    status = ExCreateCallback(&cmNvObject, &attributes, FALSE, TRUE);
+    if (NT_SUCCESS(status)) {
+        ObDereferenceObject(cmNvObject);
+        cmNvObject = NULL;
+        cmNvReloaded = 1;
+        return;
+    }
     status = ExCreateCallback(&cmNvObject, &attributes, TRUE, TRUE);
     if (!NT_SUCCESS(status)) {
         cmNvObject = NULL;
@@ -378,7 +393,9 @@ static BOOLEAN cmNvEnsure(PCM_NHI nhi)
         return FALSE;
     }
     if (CmNvlinkOffered(cmNvNt)) {
-        return TRUE;
+        /* NT: only with the callback registered (not on a reload in the
+         * same boot, nor where registration failed). */
+        return (BOOLEAN)(cmNvRegistration != NULL);
     }
     KeAcquireSpinLock(&cmNvLock, &irql);
     first = cmNvRecordTried == 0 ? 1UL : 0UL;
@@ -399,6 +416,7 @@ VOID CmNvlinkStart(PCM_NHI nhi)
     if (cmNvNt) {
         CmLogNote(nhi, "cm.nvlink.nt",
                   (cmNvRegistration != NULL ? 0x80000000UL : 0) |
+                      (cmNvReloaded != 0 ? 0x40000000UL : 0) |
                       ((ULONG)cmNvQueries & 0xFFFFUL));
         return;
     }

@@ -800,6 +800,23 @@ int inst_own_service(const char *service)
            inst_eq(service, "xhcicm");
 }
 
+/* A field of the INF with its %strings% expanded and its quotes removed,
+ * then compared as the bundled driver's service (service) or file. */
+static int inst_inf_bundled(const char *text, const char *field, int service)
+{
+    char raw[INST_LINE_CHARS];
+    char expanded[INST_LINE_CHARS];
+
+    inst_copy(raw, field, sizeof(raw));
+    inst_unquote(raw);
+    if (!inst_inf_expand(text, raw, expanded, sizeof(expanded))) {
+        inst_copy(expanded, raw, sizeof(expanded));
+    }
+    inst_unquote(expanded);
+    return service ? inst_bundled_service(expanded)
+                   : inst_bundled_file(expanded);
+}
+
 int inst_inf_is_ours(const char *text)
 {
     char line[INST_LINE_CHARS];
@@ -831,7 +848,7 @@ int inst_inf_is_ours(const char *text)
         if (inst_inf_kv(line, key, sizeof(key), value, sizeof(value)) &&
             inst_eq(key, "AddService") &&
             inst_inf_field(value, 0, field, sizeof(field)) &&
-            inst_bundled_service(field)) {
+            inst_inf_bundled(text, field, 1)) {
             return 0;
         }
         if (inst_inf_field(line, 0, field, sizeof(field)) &&
@@ -839,7 +856,7 @@ int inst_inf_is_ours(const char *text)
             inst_inf_field(line, 2, field, sizeof(field)) &&
             (inst_eq(field, "PortDriver") || inst_eq(field, "NTMPDriver")) &&
             inst_inf_field(line, 4, field, sizeof(field)) &&
-            inst_bundled_file(field)) {
+            inst_inf_bundled(text, field, 0)) {
             return 0;
         }
     }
