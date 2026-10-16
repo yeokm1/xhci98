@@ -5507,8 +5507,8 @@ A value that is absent means the default each one states.
   .........................................
 
   Default 2 (an update keeps the value an earlier install wrote, which
-  was 0 before this release). Level 0 is off outright; above it each level is the one below
-  plus one thing:
+  was 0 before this release). Level 0 is off outright; above it each
+  level is the one below plus one thing:
 
       0   OFF. The driver does not answer XHCISNAP at all.
       1   the channel, plus the counters. The log of what happened is still
