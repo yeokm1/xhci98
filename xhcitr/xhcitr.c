@@ -1818,6 +1818,18 @@ static void build_usb(int root)
                 }
             }
         }
+        {
+            /* The total from the hub descriptor; the split only when every
+             * advertised port was scanned (the scan has a budget). */
+            unsigned int adv = 0;
+            int busPow;
+            if (c->HaveNode && tr_node_parse(c->Node, sizeof(c->Node), &adv, &busPow)) {
+                if (adv != ports) {
+                    known = 0;
+                }
+                ports = adv;
+            }
+        }
         tr_roothub_label(rhLabel, sizeof(rhLabel), ports, known, n2, n3);
         tr_key(key, sizeof(key), "H", c->DrvKey, "root");
         rh = add_tnode(t, K_ROOTHUB, i, 0, 0, -1, rhLabel, key);
