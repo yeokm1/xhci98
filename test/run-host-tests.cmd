@@ -170,6 +170,11 @@ rem                  printf, the USB IOCTL answers, the descriptor decoders
 rem                  over whole, truncated and malformed input, xhcicm.sys's
 rem                  query answer and its refusals, the status texts, the
 rem                  tray's event diff, the switches and the report layout
+rem   test_trlog   - XHCITR's driver-log readers (xhcitr\tr_log.c, design
+rem                  record 25 sections 4.5 and 4.6): xhcicm.sys's log
+rem                  answer as its builder makes it, xhci98.sys's door
+rem                  window, the ring, level 4 withheld, the recording-off
+rem                  advice, the counter names against xhci_counters.h
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
@@ -511,6 +516,10 @@ call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
 rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
 rem record 25 section 10) and the install tool's, for the record's check.
 call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c"
+rem test_trlog links XHCITR's log readers (xhcitr\tr_log.c, design record 25
+rem sections 4.5 and 4.6) and xhcicm.sys's log builder, whose answers it
+rem reads, and holds xhcitr\tr_hcctr.h to src\xhci_counters.h.
+call :run test_trlog "test_trlog.c ..\xhcitr\tr_log.c ..\xhcitr\tr_core.c ..\src\cm\cm_query.c ..\xhciinst\inst_core.c"
 call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 rem test_cm_ports links nothing else: the re-enumeration's own pure half,

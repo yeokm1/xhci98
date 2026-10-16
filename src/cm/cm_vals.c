@@ -26,10 +26,11 @@ static const CM_RULE cmRules[CM_VAL_COUNT] = {
     { 5000,  1000, 60000,       CM_RULE_CLAMP  }, /* XhciCmCmdTimeoutMs     */
     { 10000, 1000, 60000,       CM_RULE_CLAMP  }, /* XhciCmApproveTimeoutMs */
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmSafeEject        */
-    { 0,     0,    0xFFFFFFFF,  CM_RULE_SWITCH }, /* XhciLogVerbosity       */
+    { 2,     0,    0xFFFFFFFF,  CM_RULE_SWITCH }, /* XhciCmLogVerbosity     */
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmUsb3Tunnel       */
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmLaneBonding      */
-    { 0,     0,    2,           CM_RULE_SWITCH }  /* XhciCmPreOsCleanup     */
+    { 0,     0,    2,           CM_RULE_SWITCH }, /* XhciCmPreOsCleanup     */
+    { 0,     0,    1,           CM_RULE_SWITCH }  /* XhciCmLogDebugView     */
 };
 
 static WCHAR cmUpper(WCHAR c)

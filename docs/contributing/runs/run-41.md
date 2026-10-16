@@ -978,6 +978,68 @@ step), `w98\`, `me\`, `me2\`, `w2k\` (`events.txt`, `debugcon-*.log`,
 `serial-*.log`, `trace-*.log`, `qemu-*.cmdline`), `pids.txt` (every QEMU
 started and how it ended); the cut's log `E:\xhci98-wt\stor1-legs\out\cut-x86.txt`.
 
+## The drivers' logs (record 25 revision 9)
+
+Leg T.8, 2026-10-16, on branch `tr-logs`: a dry x86 TEST cut of the
+branch at `5215f765` (no Stor98), the emulator `vm\usb4\bin-2a893ea`, the
+`tb3-alpine-ridge` host (BIOS assist off, so its own xHCI 15C1 is driven
+by `xhci98.sys` too) beside a `qemu-xhci` with a tablet, each guest an
+overlay on `E:\xhci98-vm\tr-logs\`. The enclosure was plugged and
+unplugged with QMP `device_add` and `device_del`. Its NVMe function had
+no driver in a cut without Stor98, so the unit was not started and the
+tool, rightly, offered no Safely Remove for it; the unplug stands in for
+the eject in every leg below.
+
+| System | Recording off | Recording on (both at 2) | Report |
+|---|---|---|---|
+| 98 SE | both nodes: "Recording: off", xhcicm's advice naming `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\System\0034`, xhci98's naming `SNAPON.BAT`; xhcicm's counters shown at level 0 | after a `.REG` file and `SNAPON.BAT` and a restart: xhcicm's counters and log live after the plug (`tbt.icm.connected`, `cm.action.tunnel-up`, `cm.reenum.9x.reenumerate`) and after the unplug (`tbt.icm.device-gone`, `cm.action.tunnel-down`); xhci98's counters and log on both controllers, build "release" | `/report` through `RPT.BAT` to COM1: both logs, every controller, no address record |
+| 7 x86, standard user (`trlu`, Users only) | both nodes, as on 98 SE, with "(as an administrator)" and the `...\Control\Class\{4d36e97d-...}\0028` key | after `reg add` and `XHCISNAP -on 2` as an administrator and a restart: both logs live as the standard user, the plug's balloon, `cm.reenum.child.attached` 1 among the counters | two `/report`s as the standard user, before and after the unplug, to COM1: both logs, `tbt.icm.device-gone` in the second, no address record |
+| 2000 | both nodes, the key `...\{4D36E97D-...}\0014` | after `regedit /s` and `XHCISNAP -on 2` and a restart: both logs, counters | three `/report`s (off, on, after the unplug), no address record |
+
+Read: the query device answers `IOCTL_XHCICM_LOG` on 98 SE (the open with
+no access rights, then read and write, section 14), on 2000 and on 7 to a
+standard user; xhci98's door answers the tool as it answers XHCISNAP;
+the counters move between two selections of the node (the pass and its
+age shown); the recording-off text is exactly section 3.5's; no report
+held `start.bar`, `start.ok` or `cm.live.bar-changed`. Evidence:
+`out\trl\` in the worktree (screens `shots\w98-*`, `shots\w7-*`,
+`shots\w2k-*`; reports `report-w98-1.txt`, `report-w7-std.txt`,
+`report-w2k.txt`).
+
+Not read: Safely Remove followed by the log (no unit was started, above);
+level 4's withheld ring (host vectors only); a checked flavour's drained
+ring (host vectors only).
+
+### xhcicm's DebugView switch and its value name (owner, 2026-10-16)
+
+The same leg set, after `XhciCmLogVerbosity` (default 2, the only name
+read) and `XhciCmLogDebugView` (record 21 section 8, decision D12
+reversed for the release flavour). The release `xhcicm.sys` was copied
+over the installed one and the values set by hand; DebugView 4.64 ran
+with kernel capture.
+
+- **98 SE** (the build of `1ff7e802`, whose emission code is the final
+  one): with `XhciCmLogDebugView` absent, nothing across a plug; set to 1
+  and restarted, xhcicm's records across an unplug and a plug
+  (`tbt.icm.device-gone`, `cm.action.tunnel-down`, `cm.reenum.*`,
+  `cm.brnum.9x.*`, `flush.*`); the report's counters held
+  `cm.log.debugview 1` and the node "this build hands the log to a
+  debugger".
+- **7 x86** (the build of `e05de30e`), the reports as a standard user:
+  `XhciLogVerbosity` 0 in the key and `XhciCmLogVerbosity` absent read
+  "Recording: on (XhciCmLogVerbosity 2)", so only the new name is read;
+  with `XhciCmLogDebugView` absent, nothing across a plug; with
+  `XhciCmLogVerbosity` 3 and `XhciCmLogDebugView` 1, xhcicm's records
+  across an unplug and "Recording: on (XhciCmLogVerbosity 3)". Windows 7
+  passes a plain `DbgPrint` only with the Debug Print Filter's `DEFAULT`
+  set (15 here), as for `xhci98.sys`.
+- No address record occurred in either leg; the withholding of the three
+  address values at levels below 4 is read by host vectors only
+  (`test_cm_query`).
+
+Evidence: `out\trl\shots\w98-dv-*`, `shots\w7-dv-*`,
+`report-w98-dv1.txt`, `report-w7-dv0.txt`, `report-w7-dv1.txt`.
+
 ## Bridges behind the tunnel port on 98 SE and ME (record 21 section 6.1.1)
 
 The question: why an ORICO ASM2464 USB4 enclosure plugged into the

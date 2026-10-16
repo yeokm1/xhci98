@@ -18,10 +18,12 @@
 # extension; task 39-A.4): nothing allocates, and ExFreePool is called
 # only for the bus driver's IRP_MN_QUERY_ID answer (cm_qryos.c). The registry pairs are held to cm_reg.obj, and to cm_statos.obj for the
 # install tool's status record (design record 24). DbgPrint is
-# held to cm_log.obj and to the debug and qemu flavours (decision D12: the
-# release flavour prints nothing, as xhciuas.sys prints nothing), which keeps
-# AGENTS.md's two-site rule for an unguarded DbgPrint as it is: this one is
-# under #if DBG.
+# held to cm_log.obj in every flavour: since the owner's decision of
+# 2026-10-16, which reversed decision D12 for the release flavour, the
+# release build prints the log when XhciCmLogDebugView is 1, as xhci98.sys
+# does under XhciLogDebugView (record 21 section 8). It is this binary's
+# one DbgPrint site, emitting from PASSIVE_LEVEL only (AGENTS.md, "Coding
+# Style").
 #
 # No USBPORT.SYS or USBD.SYS pair: the driver is not a USB driver.
 #
@@ -75,9 +77,8 @@ ntoskrnl.exe!IoOpenDeviceRegistryKey         all  required  SITES=cm_reg.obj,cm_
 ntoskrnl.exe!RtlQueryRegistryValues          all  required  SITES=cm_reg.obj,cm_statos.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!RtlQueryRegistryValues, hint DA) (+8 other 98 SE); ntkern-name
 ntoskrnl.exe!ZwClose                         all  required  SITES=cm_reg.obj,cm_thr.obj,cm_cfgwk.obj,cm_statos.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwClose, hint EF) (+29 other 98 SE); ntkern-name
 
-# --- The log's emission, checked flavours only (decision D12): cm_log.obj ---
-ntoskrnl.exe!DbgPrint                        debug  required  SITES=cm_log.obj the #if DBG emit at stop; w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name (design record 13 section 7.4)
-ntoskrnl.exe!DbgPrint                        qemu   required  SITES=cm_log.obj the #if DBG emit at stop; w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name (design record 13 section 7.4)
+# --- The log's emission, every flavour (record 21 section 8): cm_log.obj ---
+ntoskrnl.exe!DbgPrint                        all    required  SITES=cm_log.obj the PASSIVE emit (XhciCmLogDebugView, or a checked flavour); w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name (design record 13 section 7.4)
 # --- The qemu flavour's port-0xE9 mirror of that emission, never published ---
 HAL.dll!WRITE_PORT_UCHAR                     qemu   required  SITES=cm_log.obj w2k-export; ntkern-name; MEASURED NOT LOADING on E460 Win98 SE metal (the miniport's allowlist on branch 1.2.0.0 has the record; design record 08). The qemu flavour is never published, so this row is what keeps the import out of every binary a user can install.
 

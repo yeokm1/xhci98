@@ -450,6 +450,13 @@ VOID CmCfgwkUnavailable(struct _CM_CFGWK *w, ULONG active);
  * set, the rest zero, in the second case). PASSIVE_LEVEL. */
 VOID CmCfgwkStop(struct _CM_CFGWK *w, PCM_CFGWK_COUNTERS counters);
 
+/* The running worker's counts so far, copied under its lock, each word as
+ * last written (for the query device's counters, design record 25 section
+ * 4.5): what CmCfgwkStop will add to the NHI's at the stop. From the
+ * connection-manager thread, which owns the worker's lifetime.
+ * <= DISPATCH_LEVEL. */
+VOID CmCfgwkCounters(struct _CM_CFGWK *w, PCM_CFGWK_COUNTERS counters);
+
 /* From the driver's unload: waits, bounded, for every worker to have
  * left. PASSIVE_LEVEL. */
 VOID CmCfgwkDrain(VOID);
