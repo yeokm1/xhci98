@@ -1639,6 +1639,10 @@ void tr_letters_text(const char *set, char *out, size_t cap)
 
     tr_text_init(&t, out, cap);
     for (i = 0; set[i] != '\0'; i++) {
+        size_t need = (i ? 2U : 0U) + 2U;
+        if (t.Len + need + 1 > cap) {
+            break;      /* whole letters only, no dangling separator */
+        }
         tr_printf(&t, "%s%c:", i ? ", " : "", set[i]);
     }
 }
@@ -1646,24 +1650,46 @@ void tr_letters_text(const char *set, char *out, size_t cap)
 void tr_unit_label(const char *unitName, const char *diskNames,
                    const char *letters, char *out, size_t cap)
 {
-    char text[96];
+    char text[TR_LETTERS_TEXT_BYTES];
+    char suffix[TR_LETTERS_TEXT_BYTES + 4];
+    size_t room;
+    size_t len;
 
+    if (cap == 0) {
+        return;
+    }
     if (diskNames == NULL || diskNames[0] == '\0') {
         tr_copy(out, unitName, cap);
         return;
     }
     tr_letters_text(letters != NULL ? letters : "", text, sizeof(text));
-    if (text[0] == '\0') {
-        tr_copy(out, diskNames, cap);
+    if (text[0] != '\0') {
+        tr_sprintf(suffix, sizeof(suffix), " (%s)", text);
     } else {
-        tr_sprintf(out, cap, "%s (%s)", diskNames, text);
+        suffix[0] = '\0';
     }
+    if (strlen(suffix) + 4 > cap - 1) {
+        tr_copy(out, diskNames, cap);   /* no room for the letters at all */
+        return;
+    }
+    room = cap - 1 - strlen(suffix);
+    len = strlen(diskNames);
+    if (len <= room) {
+        memcpy(out, diskNames, len);
+    } else {
+        len = room - 3;
+        memcpy(out, diskNames, len);
+        memcpy(out + len, "...", 3);
+        len += 3;
+    }
+    out[len] = '\0';
+    tr_copy(out + len, suffix, cap - len);
 }
 
 void tr_disk_line(const char *name, const char *letters, char *out,
                   size_t cap)
 {
-    char text[96];
+    char text[TR_LETTERS_TEXT_BYTES];
 
     tr_letters_text(letters != NULL ? letters : "", text, sizeof(text));
     if (text[0] == '\0') {

@@ -1540,6 +1540,37 @@ int main(void)
               "disk line: two");
         tr_disk_line("QEMU NVMe Ctrl", "", out, sizeof(out));
         CHECK(strcmp(out, "Disk drive QEMU NVMe Ctrl") == 0, "disk line: none");
+        {
+            char all[TR_LETTERS_BYTES];
+            char text[TR_LETTERS_TEXT_BYTES];
+            char small[9];
+            char line[200];
+            char names[300];
+            char lab[64];
+            size_t k;
+            all[0] = '\0';
+            tr_letters_add(all, "ZYXWVUTSRQPONMLKJIHGFEDCBA");
+            CHECK(strcmp(all, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") == 0, "letters: the alphabet");
+            tr_letters_text(all, text, sizeof(text));
+            CHECK(strlen(text) == TR_LETTERS_TEXT_BYTES - 1 &&
+                  strncmp(text, "A:, B:", 6) == 0 &&
+                  strcmp(text + strlen(text) - 6, "Y:, Z:") == 0,
+                  "letters: the whole alphabet fits TR_LETTERS_TEXT_BYTES");
+            tr_letters_text(all, small, sizeof(small));
+            CHECK(strcmp(small, "A:, B:") == 0, "letters: whole letters only, no separator left");
+            tr_disk_line("D", all, line, sizeof(line));
+            CHECK(strcmp(line + strlen(line) - 6, "Y:, Z:") == 0, "disk line: every letter");
+            for (k = 0; k < sizeof(names) - 1; k++) {
+                names[k] = (char)('a' + (k % 26));
+            }
+            names[sizeof(names) - 1] = '\0';
+            tr_unit_label("Unit", names, "EF", lab, sizeof(lab));
+            CHECK(strlen(lab) == sizeof(lab) - 1 &&
+                  strcmp(lab + strlen(lab) - 12, "... (E:, F:)") == 0,
+                  "label: long names end in ..., the letters kept whole");
+            tr_unit_label("Unit", "Disk", all, lab, sizeof(lab));
+            CHECK(strcmp(lab, "Disk") == 0, "label: no room for the letters keeps the name");
+        }
     }
     {
         char s[128];

@@ -437,12 +437,16 @@ void tr_join_lines(char *s);
 #define TR_LETTERS_BYTES        27
 void tr_letters_add(char *set, const char *src);
 
-/* "E:, F:", or "" for an empty set. */
+/* "E:, F:", or "" for an empty set; the whole alphabet takes
+ * TR_LETTERS_TEXT_BYTES ("X:" 26 times, ", " 25 times, NUL). A smaller out
+ * holds as many whole letters as fit, never a trailing separator. */
+#define TR_LETTERS_TEXT_BYTES   103
 void tr_letters_text(const char *set, char *out, size_t cap);
 
 /* What the user sees for a unit: its disks' names with their letters
  * ("Samsung SSD 970 EVO (E:)", "QEMU NVMe Ctrl (E:, F:)"), or, with no
- * disk (diskNames empty), the unit's own name. */
+ * disk (diskNames empty), the unit's own name. The letters are kept whole:
+ * names too long for the rest of out end in "...". */
 void tr_unit_label(const char *unitName, const char *diskNames,
                    const char *letters, char *out, size_t cap);
 

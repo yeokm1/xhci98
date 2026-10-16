@@ -1110,7 +1110,7 @@ static void disk_letters_nt(WALK *w)
  * own name (tr_unit_label). */
 static void unit_label(int u, char *out, size_t cap)
 {
-    char names[160];
+    char names[512];
     char letters[TR_LETTERS_BYTES];
     TR_TEXT t;
     int i;
