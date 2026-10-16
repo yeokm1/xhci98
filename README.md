@@ -188,7 +188,7 @@ On Vista x64 and 7 x64:
 - **Safely Remove:** pick the device in the icon's menu or the window, confirm, and unplug it when the tool says so. It follows the same rules as `INSTALL /eject`, on every system.
 - **USB sticks and disks** can be stopped the same way, on every system, 98 SE and ME included. The tool names one by its drive letter. Only a device with a disk on it is offered; a keyboard, mouse, hub, camera or other device is shown, not stopped.
 
-`INSTALL /notray` installs without starting it at login. It is also in the package at `tools\xhcitr\`.
+To stop it starting at login for yourself, untick "Start at login" in its View menu or the icon's right-click menu (no administrator needed). `INSTALL /notray` stops it for every user of the machine. It is also in the package at `tools\xhcitr\`.
 
 ## Installation Steps
 
@@ -237,7 +237,7 @@ If the machine runs Windows with the driver, the bug report asks for the driver'
 | `release-x64\` | 64-bit Windows: XP x64, Vista x64, 7 x64 | the same, without `xhcihlpr.sys`, plus `xhci98-test.cer` |
 | `debug-x86\`, `debug-x64\` | troubleshooting only | the same drivers built for troubleshooting; install only if asked |
 | `tools\xhciqual\` | DOS | `XHCIQUAL.EXE`, the qualifier, and `QUALREP.BAT`, the reading a bug report asks for |
-| `tools\xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader, and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`, which turn its channel on, write the report a bug report asks for, and turn the channel off |
+| `tools\xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader, and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`, which turn its channel on, write the report a bug report asks for, and turn the channel off; to be deprecated in a subsequent release, in favour of the xHCI98 USB Tree |
 | `tools\portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
 | `tools\silent\` | Windows 98 SE and ME | `SILENT.REG`, `SILENT.VBS`, `silent-on.bat` and `silent-off.bat`, the silent install's list and its switch (see "Tuning") |
 | `tools\xhcicln\` | Windows | `XHCICLN.EXE` (32-bit) and `XHCICL64.EXE` (64-bit), an optional tool that lists the old `XHCI98\` entries an update from `2.3.x` or earlier leaves behind and, on Windows 2000 to 7, removes them; nothing needs it |

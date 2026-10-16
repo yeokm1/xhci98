@@ -215,6 +215,10 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   the NVMe driver for Windows 98 SE to 7, as its own project released
   it (which release: "NVMe drives behind Thunderbolt or USB4", under
   "Installing").
+- **`XHCISNAP` to be deprecated.** The xHCI98 USB Tree now shows both
+  drivers' logs and sets their logging level. `XHCISNAP.EXE` and its
+  `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` still ship in this release
+  and work as before; they will be deprecated in a subsequent release.
 
 ### Which controllers
 
@@ -303,7 +307,9 @@ the system's drive unless another is chosen, or given with `INSTALL /to
 <path>`; an update keeps the directory an earlier install used, test
 builds' `%windir%\XHCI98\` included, unless another is chosen, when the
 tool moves it) and started at login as an icon in
-the notification area (`INSTALL /notray` leaves the icon out). It runs as
+the notification area. Each user can turn that off with "Start at login"
+in its View menu or the icon's right-click menu, with no administrator
+rights; `INSTALL /notray` turns it off for the whole machine. It runs as
 the logged-on user, with no administrator rights.
 
 - **The window** shows every USB host controller (this driver's and
@@ -325,6 +331,9 @@ the logged-on user, with no administrator rights.
   adapter; a Thunderbolt 3 device's come from the controller's firmware.
   For a USB device the descriptors give the SuperSpeed rates it supports;
   the negotiated lane rate is not reported.
+- Each controller is named with its maker and PCI ID, and the USB
+  controller inside a Thunderbolt chip says so; a root hub shows how many
+  of its ports are USB 2.0 and USB 3.x, and each port its kind.
 - **USB sticks and disks** are stopped from the window or the icon on
   every system, 98 SE and ME included, by their drive letter: "USB Flash
   Disk (F:)". The tool confirms what will stop, asks Windows to stop the

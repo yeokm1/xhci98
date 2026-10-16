@@ -264,6 +264,8 @@ after `41.final`. Its design record is design record 25.
 - [x ] 41-V.1 legs T.1 to T.6 of record 25 section 11 on 98 SE, ME, 2000, XP, XP x64, Vista x86 and 7 x86 (Vista x64 and 7 x64 with the test-signed package) (read 2026-10-16, `runs/run-41.md`: 2000, XP, XP x64, Vista x86 and 7 x86 pass; Vista x64 and 7 x64 the tool on the earlier signed drivers (fallback) pass; 98 SE and ME: install, login start, uninstall, the USB tree, the Thunderbolt branch, Safely Remove (window, right click, tray, `/eject`) and the ME balloons pass with the tool of `85f3fb90`, which matches the query by name there (98 gives the driver no instance ID); the 98 SE tooltip text unread; the new x64 drivers wait for the re-signed package; the upgrade of a tool in use unread) Done 2026-10-16: Vista x64 and 7 x64 pass with the owner's test-signed final drivers; unread: the approval balloon (the emulator approves at once), the 98 SE tooltip text, the upgrade of a tool in use.
 - [x] 41-A.7 Safely Remove for plain USB devices (the owner's decision of 2026-10-16, which reversed decision T6): record 25 revision 7, section 6.5 - a USB device with a disk (or, on NT, a volume) in what stops with it, on any listed controller; never a hub, an input device, a radio or the controller; the short transaction (the shared mutex, the device found again by instance ID, its set and rule read again, a change count read just before the call); the tray's two groups, `/eject id=`, `/report`; host vectors in `test_tr` (done 2026-10-16, branch `tr-usbeject`; the design and the code reviewed until they converged; `runs/run-41.md`, "Plain USB devices")
 - [x] 41-V.2 leg T.7 of record 25 section 11 (read 2026-10-16, `runs/run-41.md`, "Plain USB devices": 98 SE, ME, XP and 7 x86 pass - the label with its letter, Safely Remove from the window, Delete, a right click and the tray, the device gone (98 SE, ME) or held at Code 47 (XP, 7), unplug and re-plug with the drive back, the refusal with a file open (98 SE, XP, 7), the UAS disk (98 SE, XP, 7), a tablet, a keyboard and a hub never offered; ME's refusal and the UAS re-plug unread)
+- [x] 41-A.8 Start at login, per user (the owner's request of 2026-10-16): record 25 revision 10, section 7.4 - "Start at login" in View and the icon's right-click menu writes `TrayAtLogin` under the user's settings key; a `/tray` start ends at once when it is 0; grey when the machine's Run value is absent; host vectors in `test_tr` (done 2026-10-16, branch `tr-usbeject`, reviewed; read on 98 SE and 7 x86, `runs/run-41.md`)
+- [x] 41-A.9 the tree's labels (the owner's request of 2026-10-16): each controller's vendor and PCI id, a Thunderbolt chip's own xHCI named by its NHI, the root hub's ports by protocol, each port's protocol; record 25 revision 10, addendum; host vectors in `test_tr` (done 2026-10-16, branch `tr-usbeject`, reviewed; read on 98 SE and 7 x86, `runs/run-41.md`)
 - [ ] 41.final `README.md`, the release notes, `source-files.md`, `docs/README.md`; merged into `3.0.0.0` before `40.final`
 
 Checkpoint: design record 25 converged before 41-A's code; the host
@@ -491,7 +493,7 @@ Stor98's receiver, a re-signed x64 package and a release that bundles it.
 Status: not opened, unnumbered and unversioned.
 
 - [ ] STOR.1 the rename in `xhcicm.sys`, the scripts, the installer and the docs, from the change list; interface 3 as adopted (the channel and the installer, 2026-10-16: `src/cm/stor98cm.h` in place of `nvme98cm.h`, unchanged from Stor98 `0.3.0.0`; interface version 4, `S98L` and `STOR98CM`, `\Callback\Stor98LinkState` on NT; on 98 SE and ME no channel is offered (interface 3's proof key is NV9X.1, and without it the locator is not written either, so nothing is published or awaited there and Stor98 runs on its gone deadline); records 21 section 7.2 and 22 section 10; `XHCIINST` skips `stor98*` files and never takes an INF that installs the `stor98` service or names `stor98.mpd` as its own, whatever its Provider; host suites pass)
-- [ ] STOR.2 bundle Stor98 `0.3.0.0`; NVMe legs (link up and down, the 9x clean-eject handshake, ME write-through); the release
+- [ ] STOR.2 bundle Stor98 `0.3.0.0`; NVMe legs (link up and down, the 9x clean-eject handshake, ME write-through); the release (legs read 2026-10-16 on Stor98 `0.3.0.1`; `3.0.0.0` will bundle Stor98 `0.4.0.0` (owner, 2026-10-16), and the legs are owed again on it, as is the release: a dry x86 TEST cut bundling `0.3.0.1`; on `tb3-alpine-ridge`, `bin-2a893ea`, 98 SE, ME and 2000 installed Stor98 from `release-x86\`, wrote and compared a file, stopped it with XHCITR's Safely Remove, and survived an unplug, a re-plug and a surprise unplug with the file intact; ME's write-behind showed its Disk Write Error on an unplug without an eject and the data Stor98 had taken was on the disk. No 9x channel is offered in `3.0.0.0`, so there is no 9x clean-eject handshake (NV9X.1); on 2000 `xhcicm.sys` published the channel and made its statements, and Stor98 `0.3.0.1` never queried it (its NT receiver is a stub), so nothing was acknowledged. `runs/run-41.md`, "Stor98 behind the Thunderbolt 3 controller")
 
 ## Planned - Installing the Driver on Windows 98 SE and ME
 
@@ -543,3 +545,21 @@ function with no interrupt pin (MSI only, which 9x cannot use), Windows
 98 disables the function (Code 29) before its driver loads.
 
 - [ ] NOIRQ.1 a design record: how a 9x function with an interrupt pin and no routable IRQ can be started without one (its logical configuration, CONFIGMG, what PCI.VXD requires), with only documented means; the pairing with Stor98's polling mode (Stor98 `docs/PLAN.md`); legs on 98 SE and ME with the IRQ withheld
+
+## Planned - Retiring XHCISNAP
+
+Goal: `XHCISNAP.EXE` and its `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`
+are deprecated in the release after `3.0.0.0` and later removed, the
+xHCI98 USB Tree (`XHCITR.EXE`) taking over everything a user or a bug
+report needs from them.
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 by
+the owner, when `3.0.0.0` made the two drivers' logging consistent:
+`xhci98.sys` answers its own query IOCTL, as `xhcicm.sys` does, and
+XHCITR shows both drivers' logs and sets their logging level. `3.0.0.0`
+still ships `XHCISNAP` unchanged and its release notes say it will be
+deprecated in a subsequent release.
+
+- [ ] SNAP.1 an inventory of what `XHCISNAP` does that XHCITR does not (the raw snapshot regions and the `.DEV` file, `-probe`, the counter-name check, the slot and enumeration regions), and for each a decision: moved into XHCITR, kept as a developer tool outside the package, or dropped
+- [ ] SNAP.2 the deprecation release: the bug-report steps in the README and the release notes, the release acceptance test's `XHCISNAP` steps and the tool's readme rewritten around XHCITR; `XHCISNAP` marked deprecated in its own output
+- [ ] SNAP.3 the removal: `XHCISNAP` and its batch files out of the package and the build, the door's passthru request kept for Windows' own USB property tabs

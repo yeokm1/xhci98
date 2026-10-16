@@ -740,6 +740,163 @@ tools, the window's and the tray's own route to the same dialog (the
 one-shot `/eject id=` takes the same functions), and whether a rescan
 restarts a unit after this stop.
 
+### Start at login, per user (record 25 revision 10)
+
+Read on the tool of `33f66b09`, on 98 SE and on 7 x86 as the standard
+user, the tool in place of the installed one:
+
+- The icon's right-click menu and the View menu showed "Start at login"
+  ticked. Unticked from the icon, the View menu showed it unticked; after
+  a restart no icon came (on 7 the hidden-icons area held none).
+- Ticked again from the View menu: after a restart the icon was back, on
+  both systems.
+- 7: with the machine's Run value deleted by an administrator, the item
+  read "Start at login (off for this computer)", grey; the value was put
+  back afterwards.
+- On the development host, `XHCITR64 /tray` with `TrayAtLogin` 0 ended in
+  about a second with exit 0 and no icon.
+
+`INSTALL /notray` already removed the machine's Run value on an existing
+install, and an install without it writes the value again; XHCIINST is
+unchanged.
+
+### The tree's labels (record 25 revision 10, addendum)
+
+Read on the tool of `d144edef` (the root hub's total was then taken from
+its hub descriptor, `779b676a`), as the standard user:
+
+- 98 SE and 7 x86: "xHCI98 USB 3.x eXtensible Host Controller (xhci98) -
+  Red Hat 1B36:000D", "Root hub - 8 ports (4 USB 2.0, 4 USB 3.x)", "[Port
+  3, USB 3] QEMU QEMU HARDDISK (G:) SuperSpeed" on 98 SE ("... USB Device
+  (F:)" on 7), the ports of the full-speed hub behind it "USB 1.1".
+- Development host A (Windows 11, `/report` as the user): a Thunderbolt
+  chip's own xHCI read "USB xHCI Compliant Host Controller (Windows) -
+  Thunderbolt controller's USB (8086:5782)", its NHI in the walk but not
+  driven by `xhcicm.sys`, so with no generation; the AMD controller "-
+  AMD 1022:1587"; "Root hub - 4 ports (2 USB 2.0, 2 USB 3.x)".
+- Not read: the label of an emulated Thunderbolt chip's xHCI under
+  `xhcicm.sys` ("Thunderbolt 3 controller's USB").
+
+## Stor98 behind the Thunderbolt 3 controller (STOR.2)
+
+Readings of 2026-10-16 on development host A, `vm\usb4\bin-2a893ea` (its
+`qemu-system-x86_64.exe` SHA-256 `6a1dfcc8...bd66` checked before use),
+`tb3-alpine-ridge` with the NVMe enclosure hot-plugged on port 1 after the
+desktop was up (`device_add` / `device_del` of `enc0`), every guest a new
+overlay under `E:\xhci98-vm\stor1-legs` with its SDL window shown. The
+package is a dry x86 TEST cut ("Stor98 legs") of branch `stor1-legs` at
+`da55d9e2` (`3.0.0.0` with STOR.1 merged), bundling Stor98 `0.3.0.1`
+(`SHA256SUMS.txt` SHA-256 `aee07c9c...cb9`, interface version 4); its
+`xhci98-3.0.0.0.zip` was unpacked onto each guest's transfer drive. The 98
+SE and ME legs were first read on a cut bundling Stor98 `0.3.0.0` and then
+read again on this one; where the two differ it is said below. `3.0.0.0`
+will bundle Stor98 `0.4.0.0` (owner, 2026-10-16), so these legs are owed
+again on that build. Before any
+reading every NVMe controller devnode was checked to be Stor98's: Device
+Manager listed one "Stor98 Storage Controller for NVMe SSDs" and no nvme98
+entry, `IOSUBSYS` held `STOR98.MPD` alone (98 SE, ME) and
+`system32\drivers` `stor98.sys` and no `nvme98.sys` (2000). The disk is
+"QEMU NVMe Ctrl", Stor98's new split of the model number.
+
+| Leg | 98 SE | ME | 2000 |
+|---|---|---|---|
+| S.1 install: `INSTALL`, then Stor98 by the wizard from `release-x86\` | pass | pass | pass |
+| S.2 the drive usable: a file written and compared | pass | pass | pass |
+| S.3 XHCITR Safely Remove, unplug, re-plug, compare | pass | pass (fresh overlay; see below) | pass |
+| S.4 surprise unplug with the volume mounted, re-plug, compare | pass | pass (written 15 s before) | pass |
+| S.5 the link-state channel | not offered, as designed | not offered, as designed | published; Stor98 `0.3.0.1` does not read it |
+
+**Install.** On the 98 SE base (`t26\win98-gold.qcow2`, an older xhci98
+installed) `INSTALL /defaults /yes /nopause` staged the drivers and ended
+"steps left" (exit 4) as on every 9x install: the Thunderbolt 3 controller
+("PCI System Peripheral") and the controller still on the older driver were
+updated from Device Manager as `INSTALL` printed it, with the staged folder
+for the "Copy files from" prompts; the Windows 98 CD's `usbd.sys`,
+`usbui.dll` and HID files were skipped, being on the image already. On ME
+(`t37me\winme-stock-base.qcow2`) `INSTALL ... /thunderbolt` likewise left
+the QEMU xHCI, the Thunderbolt 3 controller and its xHCI to Device Manager,
+then a restart. On 2000 (`win2k-xonly.img`) `INSTALL` ended "restart, then
+run INSTALL.BAT again" (exit 2), the second run "Please restart Windows
+now" (exit 3) with every device started. The enclosure's hot plug then
+showed "PCI Card" (98 SE, ME) or "PCI Device" (2000); the wizard pointed at
+`release-x86\` found `stor98.inf` ("Stor98 Storage Controller for NVMe
+SSDs"); 2000 asked once about the missing digital signature. The volume
+NVME32 mounted with no restart: E: on 98 SE and ME, D: on 2000. XHCITR
+showed the unit with driver `stor98.mpd` or `stor98`, version `0.3.0.1`,
+started, problem 0. On 98 SE and ME the guests that had read `0.3.0.0` were
+moved to `0.3.0.1` by Update Driver, "Display a list", Have Disk
+(`IOSUBSYS\STOR98.MPD` 42,573 bytes became 43,533).
+
+**I/O and removal.** On each system the package's `readme.txt` (162 KB)
+was copied to the NVMe volume and compared with `fc /b`: no differences.
+XHCITR's Safely Remove from a right click on the unit: "Windows has stopped
+QEMU NVMe Ctrl (E:) ... You can now unplug the device." (98 SE, ME) or
+"Windows has stopped Stor98 Storage Controller for NVMe SSDs" (2000), shown
+within the first screenshot after OK (about 4 to 5 s, the capture's own
+latency included); the unplug ("QEMU USB4 NVMe Enclosure was
+disconnected.", ME and 2000), a re-plug, and the file compared again with
+no differences. The surprise unplug with the volume mounted: 2000 showed
+its "Unsafe Removal of Device" dialog naming the Stor98 controller and
+"QEMU NVMe Ctrl SCSI Disk Device"; after the re-plug the file compared
+clean on every system.
+
+**ME write-through.** A 298 KB file copied to E:, 15 s of idle, then a
+surprise unplug with no eject: ME showed its "Disk Write Error ... drive
+E:" at once, on both Stor98 builds. After the re-plug the file was there at
+its full size and compared with no differences. This is the case Stor98's
+readme describes: data ME's own write-behind cache still held never
+reached the driver; what Stor98 had acknowledged was on the disk. With the
+drive still attached, a restart of the fresh ME guest ran ScanDisk on
+NVME32 (the unplug had left it dirty) and reached the desktop with E: and
+its files.
+
+**The channel on 9x.** `3.0.0.0` publishes no Stor98 channel on 98 SE and
+ME (design record 21 section 7.2): no `Services\stor98` key was written
+(`regedit /e` of it on ME exported nothing), no UP was published and no
+removal waited for an acknowledgement. Stor98 runs there on its own gone
+deadline, with no clean-eject handshake, and the Safely Remove above is
+Windows' own query and removal.
+
+**The channel on 2000.** The release `xhcicm.sys` was replaced by the qemu
+flavour of the same commit (copied over `system32\drivers\xhcicm.sys`,
+`XhciLogVerbosity` 2 on the controller's driver key) to read its port-0xE9
+notes, `E:\xhci98-vm\stor1-legs\w2k\debugcon-d.log`:
+
+| Moment | Notes |
+|---|---|
+| start | `cm.nvlink.nt=80000000`: the callback object `\Callback\Stor98LinkState` registered, no query yet |
+| hot plug | `cm.nvlink.up=01000401`: entry 1, bus 4, slot 1, generation 1, before the invalidation |
+| unplug after Safely Remove | `cm.nvlink.icm-down=00000402`, `cm.nvlink.down=00000001` (the statement sent on the emulator's SHPC bridge), `cm.nvlink.await=00000000`, `cm.nvlink.retired=00020801` |
+| re-plug | `cm.nvlink.up=02000401` |
+| surprise unplug | `cm.nvlink.icm-down=00000402`, `cm.nvlink.down=00000003`, `cm.nvlink.await=00000000` |
+| the controller's stop (restart) | `cm.nvlink.ups=2`, `sent=2`, `acked=0`, `ack-timeouts=0`, `no-receiver=2`, `queries=0` |
+
+`queries=0`: Stor98 `0.3.0.1` never called the callback, so the statements
+had no reader and nothing waited for an acknowledgement. Its source says
+the same: the NT receiver is a stub in `0.3.0.1` (`src/platform.c`,
+`PlatCmLinkOpen`, "STUB on NT ... the table is not opened yet"). The
+release notes were worded to match.
+
+**Two ME readings on the guest that was updated in place.** On the ME
+overlay that had run Stor98 `0.3.0.0` and was moved to `0.3.0.1` by Update
+Driver with E: mounted, the restart that followed stopped on "VCACHE(01) +
+00000E4D Error: 0E : 0028 : C004E4E9", and the boot after it hung in
+ScanDisk of NVME32 with "Statemgr" not responding; after a power cycle the
+hot plug, the Safely Remove and the unplug passed, but the first read of E:
+after the re-plug never returned and the guest's clock slowed to a crawl.
+Neither was seen on a fresh ME overlay installed with `0.3.0.1` alone
+(`E:\xhci98-vm\stor1-legs\me2`), where every leg above passed, the restart
+with the drive attached included. Not investigated further; an in-place
+update of the NVMe driver with its volume mounted is not a path the
+release notes describe. The first boot of that same overlay after a
+relaunch also hung once at a cursor before the logo; a reset brought it up
+in Safe mode, and every boot after was normal.
+
+Evidence: `E:\xhci98-vm\stor1-legs\` - `shots\` (screendumps by guest and
+step), `w98\`, `me\`, `me2\`, `w2k\` (`events.txt`, `debugcon-*.log`,
+`serial-*.log`, `trace-*.log`, `qemu-*.cmdline`), `pids.txt` (every QEMU
+started and how it ended); the cut's log `E:\xhci98-wt\stor1-legs\out\cut-x86.txt`.
+
 ## Bridges behind the tunnel port on 98 SE and ME (record 21 section 6.1.1)
 
 The question: why an ORICO ASM2464 USB4 enclosure plugged into the
