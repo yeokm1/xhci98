@@ -1451,6 +1451,43 @@ static VOID test_reopen(VOID)
         CHECK_EQ(m.Writes, 0, "nothing written");
     }
 
+    /* A stopped downstream port with Memory Space on and an implemented but
+     * empty 2 MiB BAR: sized with its decode paused, counted, and its
+     * command put back before the windows set it again. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[dsp].Cmd = 0x0006UL;
+    m.N[dsp].BarSize[0] = 0x200000UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "re-opened");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "windowed");
+    CHECK_EQ(r.Need[0] >= 0x300000UL, 1, "the upstream window holds the bridge BAR and the NVMe's window");
+    CHECK_EQ(m.N[dsp].Cmd, 0x0006UL, "its command as it was");
+    CHECK_EQ(m.N[dsp].Bar[0], 0, "its BAR put back empty");
+
+    /* Two bridges of one bus with disjoint ranges in reverse order: fine. */
+    {
+        ULONG b1, b2, e1, e2;
+
+        mreset();
+        ioreset(TRUE);
+        port = mport(0x06, 0x2A);
+        m.N[port].Mem = 0xE000D410UL;
+        b1 = madd(port, 0, 0, ID_ASM, 1, 0);
+        b2 = madd(port, 1, 0, ID_ASM, 1, 0);
+        e1 = madd(b1, 0, 0, ID_NVME, 0, 0);
+        e2 = madd(b2, 0, 0, ID_NVME, 0, 0);
+        m.N[e1].BarSize[0] = 0x4000UL;
+        m.N[e2].BarSize[0] = 0x4000UL;
+        m.N[b1].Buses = 0x000A0906UL;
+        m.N[b2].Buses = 0x00080706UL;
+        m.N[b1].Mem = 0x0000FFF0UL;
+        m.N[b2].Mem = 0x0000FFF0UL;
+        CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+                 XHCI_TBT_BRNUM_REOPENED, "reversed disjoint siblings: re-opened");
+        CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "windowed");
+        CHECK_EQ(m.N[b1].Buses, 0x000A0906UL, "bus numbers as found");
+    }
+
     /* A stopped bridge, Memory Space on, a 64-bit BAR whose upper half
      * holds an address: in use, refused, nothing written. */
     mstopped(&port, &usp, &dsp, &nvme);

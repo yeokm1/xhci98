@@ -303,6 +303,9 @@ static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG found)
 #define BRWIN_PF_CLOSED 0x0000FFF0UL    /* prefetchable base FFF0h, limit 0 */
 #define BRWIN_MEM_MASK  0xFFF0FFF0UL    /* a window register's address bits */
 
+static ULONG brPut(BRNUM_CTX *c, ULONG bdf, ULONG offset, ULONG value,
+                   ULONG compare);
+
 /* The journal slot of the bridge at `bdf`, or XHCI_TBT_BRNUM_MAX_BRIDGES. */
 static ULONG brSlot(BRNUM_CTX *c, ULONG bdf)
 {
@@ -421,25 +424,42 @@ static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
         if ((cmd & BRWIN_CMD_MEM) != 0) {
             /* A bridge (offsets up to 14h) with Memory Space on, as a stop
              * by Windows may leave it: a BAR holding an address is in use
-             * and refuses the windows; an empty one is not sized. */
+             * and refuses the windows; an empty one is sized with the
+             * bridge's memory decode paused, the command put back after. */
+            ULONG hi;
+
             if ((was & 0xFFFFFFF0UL) != 0) {
                 c->R->WinWhere = bdf;
                 return XHCI_TBT_BRWIN_ACTIVE;
             }
             if (((was >> 1) & 3UL) == 2UL) {
-                off += 4;
-                if (off > last || !brRead(c->Io, bdf, off, &was)) {
+                if (off + 4 > last || !brRead(c->Io, bdf, off + 4, &hi)) {
                     c->R->WinWhere = bdf;
                     return XHCI_TBT_BRWIN_ACCESS;
                 }
-                if (was != 0) {
+                if (hi != 0) {
                     c->R->WinWhere = bdf;
                     return XHCI_TBT_BRWIN_ACTIVE;
                 }
             }
-            continue;
+            if (!brPut(c, bdf, XHCI_TBT_CFG_COMMAND,
+                       (cmd & 0xFFFFUL) & ~BRWIN_CMD_MEM, BRWIN_CMD_MEM)) {
+                (VOID)brPut(c, bdf, XHCI_TBT_CFG_COMMAND, cmd & 0xFFFFUL, 0);
+                c->R->WinWhere = bdf;
+                return XHCI_TBT_BRWIN_ACCESS;
+            }
+            rc = brBarSize(c, bdf, off, was, &size);
+            if (!brPut(c, bdf, XHCI_TBT_CFG_COMMAND, cmd & 0xFFFFUL,
+                       BRWIN_CMD_MEM)) {
+                c->R->UndoFailed++;
+                if (rc == 0) {
+                    c->R->WinWhere = bdf;
+                    rc = XHCI_TBT_BRWIN_ACCESS;
+                }
+            }
+        } else {
+            rc = brBarSize(c, bdf, off, was, &size);
         }
-        rc = brBarSize(c, bdf, off, was, &size);
         if (rc != 0) {
             return rc;
         }
@@ -1120,15 +1140,22 @@ static ULONG brJournal(BRNUM_CTX *c, ULONG bus, ULONG low, ULONG high,
                 }
                 secondary = (buses >> 8) & 0xFFUL;
                 subordinate = (buses >> 16) & 0xFFUL;
-                /* `low` moves past each sibling's range, so two bridges of
-                 * one bus never claim overlapping buses. */
                 if ((buses & 0xFFUL) != bus || secondary <= bus ||
                     secondary < low || subordinate < secondary ||
                     subordinate > high) {
                     r->Where = bdf;
                     return XHCI_TBT_BRNUM_INCONSISTENT;
                 }
-                low = subordinate + 1UL;
+                /* No two bridges of one bus may claim overlapping buses,
+                 * whatever order they come in. */
+                for (slot = 0; slot < c->Count; slot++) {
+                    if ((r->Was[slot] & 0xFFUL) == bus &&
+                        secondary <= ((r->Was[slot] >> 16) & 0xFFUL) &&
+                        subordinate >= ((r->Was[slot] >> 8) & 0xFFUL)) {
+                        r->Where = bdf;
+                        return XHCI_TBT_BRNUM_INCONSISTENT;
+                    }
+                }
                 if (((mem & 0xFFF0UL) << 16) <=
                     ((((mem >> 16) & 0xFFF0UL) << 16) | 0x000FFFFFUL)) {
                     (*open)++;

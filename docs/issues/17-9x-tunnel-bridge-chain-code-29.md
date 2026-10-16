@@ -119,6 +119,12 @@ written. A chain whose switch is still training is read again every
 100 ms, twenty times at most. Record 21 section 6.1.1 has the bounds
 and every refusal; the host suite is `test\test_tbt_brnum.c`.
 
+A chain already numbered whose every bridge window is closed - how
+Windows' stop leaves it after a Safely Remove, given back that way by a
+re-plug that did not reset it - has its windows and lines set up again,
+its bus numbers left as found; a chain with any window open is left
+alone (record 21 section 6.1.1, "A stopped chain given back").
+
 The USB4 software connection manager's profile reaches the same worker
 through the shared re-enumeration seam, so it shares this code path.
 It was not read with a bridge chain under the USB4 profile
