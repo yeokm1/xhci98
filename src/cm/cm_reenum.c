@@ -95,9 +95,11 @@ static ULONG cmRegSerial;
 static ULONG cmRegAttached;
 static ULONG cmRegSkipped;
 static ULONG cmRegRefused;
+static ULONG cmRegOver;
 static ULONG cmRegWatchdogs;
 
-static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo);
+static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
+                              PULONG over);
 static VOID cmDiscoverAndList(PCM_NHI nhi);
 static VOID cmHoldDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2);
 
@@ -168,13 +170,14 @@ VOID CmRegFilterInit(PCM_FILTER filter)
     KeInitializeDpc(&filter->HoldDpc, cmHoldDpc, filter);
 }
 
-VOID CmRegCounters(PULONG attached, PULONG skipped, PULONG refused,
-                   PULONG watchdogs)
+VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
+                   PULONG refused, PULONG watchdogs)
 {
     KIRQL irql;
 
     KeAcquireSpinLock(&cmRegLock, &irql);
     *attached = cmRegAttached;
+    *over = cmRegOver;
     *skipped = cmRegSkipped;
     *refused = cmRegRefused;
     *watchdogs = cmRegWatchdogs;
@@ -456,6 +459,7 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     ULONG fresh;
     ULONG i;
     ULONG attach;
+    ULONG over;
     KIRQL irql;
     NTSTATUS status;
 
@@ -488,10 +492,13 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
         if (!isNew[i] || !attach) {
             continue;
         }
-        status = cmChildCreate(filter, (PDEVICE_OBJECT)now[i]);
+        status = cmChildCreate(filter, (PDEVICE_OBJECT)now[i], &over);
         KeAcquireSpinLock(&cmRegLock, &irql);
         if (NT_SUCCESS(status)) {
             cmRegAttached++;
+            if (over) {
+                cmRegOver++;
+            }
         } else if (status == STATUS_DEVICE_BUSY) {
             cmRegSkipped++;
         } else {
@@ -533,20 +540,97 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
+/* Four characters of a driver object's name from `from` on (8 skips the
+ * "\Driver\" prefix), one per byte, high byte first, for the log: which
+ * driver a new PDO already carried. PASSIVE_LEVEL. */
+static ULONG cmNameChars(PDRIVER_OBJECT driver, ULONG from)
+{
+    ULONG v;
+    ULONG k;
+    ULONG chars;
+
+    v = 0;
+    if (driver == NULL || driver->DriverName.Buffer == NULL) {
+        return 0;
+    }
+    chars = (ULONG)driver->DriverName.Length / sizeof(WCHAR);
+    for (k = 0; k < 4; k++) {
+        if (from + k < chars) {
+            v |= ((ULONG)driver->DriverName.Buffer[from + k] & 0xFFUL)
+                 << (8UL * (3UL - k));
+        }
+    }
+    return v;
+}
+
 /*
- * A child filter directly above a PDO pci.sys newly reported on an active
- * bridge, before the PnP manager builds that device's stack (section 7.4
- * step 1). STATUS_DEVICE_BUSY: something is already attached to the PDO
- * (not a new device's stack), so nothing is attached. PASSIVE_LEVEL.
+ * A child filter above a PDO pci.sys newly reported on an active bridge,
+ * before the PnP manager builds that device's stack (section 7.4 step 1):
+ * directly above the PDO, or (revision 2) above the bus filters a driver
+ * below the bridge filter already put on it, which is where an ACPI
+ * machine leaves a PCI-to-PCI bridge; CmPortsChildAttach decides.
+ * STATUS_SUCCESS, with *over 1 when it went above bus filters;
+ * STATUS_DEVICE_BUSY when anything else is attached, so nothing is.
+ * PASSIVE_LEVEL.
  */
-static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
+static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
+                              PULONG over)
 {
     PDEVICE_OBJECT self;
     PDEVICE_OBJECT lower;
+    PDEVICE_OBJECT walk;
     PCM_FILTER child;
+    PVOID chain[CM_CHILD_CHAIN_MAX + 1];
+    ULONG chainCount;
+    ULONG decision;
+    PCM_NHI owner;
+    ULONG name0;
+    ULONG name1;
+    KIRQL irql;
+    ULONG truncated;
     NTSTATUS status;
 
-    if (pdo->AttachedDevice != NULL) {
+    *over = 0;
+    chainCount = 0;
+    name0 = 0;
+    name1 = 0;
+    /* SnapTruncated is written by this bridge's PnP dispatch alone, which
+     * is where this runs, so the value read stays the value. */
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    truncated = bridge->SnapTruncated;
+    KeReleaseSpinLock(&cmRegLock, irql);
+    walk = pdo->AttachedDevice;
+    decision = CmPortsChildFirst(truncated, (ULONG)(walk != NULL));
+    if (decision == CM_CHILD_WALK) {
+        /* Only for a PDO that is new by a whole snapshot: nothing the PnP
+         * manager builds can attach or detach before this answer reaches
+         * it, so the chain holds still without the I/O manager's database
+         * lock. After a truncated snapshot "new" proves nothing, and
+         * CmPortsChildFirst has skipped without the walk. */
+        name0 = cmNameChars(walk->DriverObject, 8);
+        name1 = cmNameChars(walk->DriverObject, 12);
+        while (walk != NULL && chainCount <= CM_CHILD_CHAIN_MAX) {
+            chain[chainCount] = (PVOID)walk->DriverObject;
+            chainCount++;
+            walk = walk->AttachedDevice;
+        }
+        decision = CmPortsChildAttach(truncated, (PVOID const *)chain,
+                                      chainCount, (PVOID)pdo->DriverObject,
+                                      (PVOID)CmDriverObject);
+    }
+    /* The owner is used under the registration list's lock only: its
+     * delisting (CmReenumStop) takes the same lock, so the NHI cannot
+     * leave while its log is written. Order: cmRegLock, then LogLock. */
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    owner = bridge->Owner;
+    if (chainCount != 0 && owner != NULL) {
+        CmLogNote(owner, "cm.reenum.child.under", name0);
+        CmLogNote(owner, "cm.reenum.child.under2", name1);
+        CmLogNote(owner, "cm.reenum.child.under.count", chainCount);
+        CmLogNote(owner, "cm.reenum.child.decision", decision);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (decision == CM_CHILD_SKIP) {
         return STATUS_DEVICE_BUSY;
     }
     status = IoCreateDevice(CmDriverObject, sizeof(CM_FILTER), NULL,
@@ -565,16 +649,22 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
     KeInitializeSpinLock(&child->Lock);
     KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
     CmRegFilterInit(child);
-    self->DeviceType = pdo->DeviceType;
-    self->Characteristics = pdo->Characteristics;
-    self->Flags |= pdo->Flags & DO_POWER_PAGABLE;
     lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (lower == NULL) {
         IoDeleteDevice(self);
         return STATUS_NO_SUCH_DEVICE;
     }
     child->Common.Lower = lower;
+    /* A filter mirrors the device it sits on (as CmFilterAddDevice does),
+     * which since revision 2 may be another driver's bus filter rather
+     * than the PDO. */
+    self->DeviceType = lower->DeviceType;
+    self->Characteristics = lower->Characteristics;
+    self->Flags |= lower->Flags &
+                   (DO_BUFFERED_IO | DO_DIRECT_IO | DO_POWER_PAGABLE |
+                    DO_POWER_INRUSH);
     self->Flags &= ~DO_DEVICE_INITIALIZING;
+    *over = (ULONG)(decision == CM_CHILD_ATTACH_OVER);
     return STATUS_SUCCESS;
 }
 
@@ -1307,7 +1397,8 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
         bdf[i] = r->Port[i].Bdf;
     }
     r->WkActive = cmOwnedMask(nhi);
-    r->Wk = CmCfgwkStart(nhi, bdf, r->Members, r->WkActive);
+    r->Wk = CmCfgwkStart(nhi, bdf, r->Members, r->WkActive,
+                         nhi->Values.BridgeNumbering);
     if (r->Wk == NULL) {
         r->Why = CM_NOROUTE_CFGMG_THUNK;
         CmLogNote(nhi, "cm.reenum.no-route", r->Why);
@@ -1763,6 +1854,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     PCM_REENUM r;
     KIRQL irql;
     ULONG attached;
+    ULONG over;
     ULONG skipped;
     ULONG refused;
     ULONG watchdogs;
@@ -1799,6 +1891,8 @@ VOID CmReenumStop(PCM_NHI nhi)
         if (wc.Detached) {
             CmLogNote(nhi, "cm.reenum.9x.worker-detached", 1);
         }
+        CmLogNote(nhi, "cm.brnum.9x.numbered", wc.Numbered);
+        CmLogNote(nhi, "cm.brnum.9x.refused", wc.NumberRefused);
     }
     r->WkOpenSeen = 0;
     r->WkActive = 0;
@@ -1823,8 +1917,9 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.9x.gone", r->GoneDone);
     CmLogNote(nhi, "cm.reenum.9x.gone-dropped", r->GoneDropped);
     CmLogNote(nhi, "cm.reenum.ejects", r->Ejects);
-    CmRegCounters(&attached, &skipped, &refused, &watchdogs);
+    CmRegCounters(&attached, &over, &skipped, &refused, &watchdogs);
     CmLogNote(nhi, "cm.reenum.child.attached", attached);
+    CmLogNote(nhi, "cm.reenum.child.over", over);
     CmLogNote(nhi, "cm.reenum.child.skipped", skipped);
     CmLogNote(nhi, "cm.reenum.child.refused", refused);
     CmLogNote(nhi, "cm.reenum.hold.watchdogs", watchdogs);

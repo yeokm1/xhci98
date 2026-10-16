@@ -1,7 +1,7 @@
 /*
  * xhciinst.c - XHCIINST.EXE (32-bit) and XHCIIN64.EXE (x64): install,
  * update or uninstall every driver of this package (roadmap-usb4.md tasks
- * 40.5 to 40.7; design record 23).
+ * 40.4 to 40.6; design record 23).
  *
  * WHY IT EXISTS. Installing the package was Device Manager work, one device
  * at a time, with a different trap per system on an update (Windows 2000
@@ -266,6 +266,7 @@ static int flagRestart;
 static int flagSteps;
 static int flagChanged;
 static int outQuiet;        /* a reading repeated: its text to the log only */
+static int outMirror;       /* the text to standard error too (out_mirror) */
 static int trayDeferred;    /* the USB tree tool goes at the restart        */
 
 /* The registry answers: per value, 1 when it is to be written, and what. */
@@ -290,6 +291,17 @@ static size_t stWidest;     /* the widest line the screens printed */
 static size_t stCol;
 static int stLongLines;     /* lines wider than INST_COLUMNS */
 
+/* 1 when the standard handle is the console (a console's mode can be
+ * read; a file's, a pipe's or NUL's cannot). */
+static int std_is_console(DWORD which)
+{
+    HANDLE h = GetStdHandle(which);
+    DWORD mode;
+
+    return h != NULL && h != INVALID_HANDLE_VALUE &&
+           GetConsoleMode(h, &mode) != 0;
+}
+
 static void out_emit(const char *text)
 {
     const char *p;
@@ -313,6 +325,10 @@ static void out_emit(const char *text)
     if (!outQuiet && (!stScreens || stShow)) {
         fputs(text, stdout);
         fflush(stdout);
+        if (outMirror && !stScreens) {
+            fputs(text, stderr);
+            fflush(stderr);
+        }
     }
     if (logFile != NULL) {
         fputs(text, logFile);
@@ -7733,6 +7749,7 @@ static int selftest(void)
 
 typedef DWORD (WINAPI *PFN_CM_QREMOVE)(DWORD, ULONG);
 typedef DWORD (WINAPI *PFN_CM_EJECT)(DWORD, PULONG, LPSTR, ULONG, ULONG);
+typedef DWORD (WINAPI *PFN_CM_QANDR_W)(DWORD, PULONG, LPWSTR, ULONG, ULONG);
 
 typedef struct _TBNODE {
     DWORD Dn;
@@ -7780,7 +7797,7 @@ static const char *devLast; /* the device modes' last line            */
 static PFN_CM_QREMOVE tbQueryRemove;
 static PFN_CM_QREMOVE tbRemove;
 static PFN_CM_EJECT tbEject;
-static PFN_CM_EJECT tbQueryAndRemove;   /* the same shape (NT) */
+static PFN_CM_QANDR_W tbQueryAndRemove;  /* NT */
 
 static void tb_routines(void)
 {
@@ -7793,15 +7810,46 @@ static void tb_routines(void)
         tbEject = (PFN_CM_EJECT)proc(api.SetupApi, "setupapi", "CM_Request_Device_EjectA");
     }
     if (envNow.Nt) {
-        /* setupapi.dll's first: Windows 2000's cfgmgr32.dll exports the
-         * routine but answers CR_CALL_NOT_IMPLEMENTED (the 2000 leg). */
-        tbQueryAndRemove = (PFN_CM_EJECT)proc(api.SetupApi, "setupapi",
-                                              "CM_Query_And_Remove_SubTreeA");
+        /* The W form: Windows 2000's CM_Query_And_Remove_SubTree_ExA, which
+         * the A form calls, answers CR_CALL_NOT_IMPLEMENTED and does
+         * nothing else (record 24 section 7.2). */
+        tbQueryAndRemove = (PFN_CM_QANDR_W)proc(api.SetupApi, "setupapi",
+                                                "CM_Query_And_Remove_SubTreeW");
         if (tbQueryAndRemove == NULL) {
-            tbQueryAndRemove = (PFN_CM_EJECT)proc(
-                api.CfgMgr, "cfgmgr32", "CM_Query_And_Remove_SubTreeA");
+            tbQueryAndRemove = (PFN_CM_QANDR_W)proc(
+                api.CfgMgr, "cfgmgr32", "CM_Query_And_Remove_SubTreeW");
         }
     }
+}
+
+/* NT: the fallback for a unit not marked removable (record 24 section
+ * 7.2), its veto name in the ANSI code page. The flags as
+ * inst_removal_retry says. */
+static DWORD tb_query_and_remove(DWORD dn, ULONG *veto, char *name, int cap)
+{
+    WCHAR wide[MAX_PATH];
+    ULONG flags = INST_REMOVE_UI_NOT_OK | INST_REMOVE_NO_RESTART;
+    DWORD cr;
+
+    for (;;) {
+        *veto = 0;
+        wide[0] = 0;
+        cr = tbQueryAndRemove(dn, veto, wide, MAX_PATH, flags);
+        logonly("CM_Query_And_Remove_SubTreeW(flags 0x%lX) = 0x%08lX, veto "
+                "%lu\n", (unsigned long)flags, (unsigned long)cr,
+                (unsigned long)*veto);
+        if (!inst_removal_retry(cr, flags)) {
+            break;
+        }
+        flags = INST_REMOVE_UI_NOT_OK;
+    }
+    wide[MAX_PATH - 1] = 0;
+    name[0] = '\0';
+    if (WideCharToMultiByte(CP_ACP, 0, wide, -1, name, cap, NULL, NULL) == 0) {
+        name[0] = '\0';
+    }
+    name[cap - 1] = '\0';
+    return cr;
 }
 
 static DWORD tb_dword_prop(DWORD dn, ULONG prop, ULONG *value)
@@ -8379,21 +8427,24 @@ static void tb_print_unit(int u, int indent)
             t->R.Desc[0] ? t->R.Desc : "(no name)", state);
     }
     out("%*s    %s\n", indent, "", first_hw(&t->R));
-    if (envNow.Nt) {
-        const char *listed =
-            (t->HasCaps && (t->Caps & INST_CM_DEVCAP_REMOVABLE) &&
-             !(t->Caps & INST_CM_DEVCAP_SURPRISEOK))
-                ? "(listed in Safely Remove Hardware)"
-                : (t->Number ? "(not listed in Safely Remove Hardware; "
-                               "XHCIINST /eject asks Windows to stop it)"
-                             : NULL);
+    if (envNow.Nt && t->Number &&
+        inst_unit_not_marked(t->HasCaps, (INST_U32)t->Caps)) {
+        /* Whatever the cause (the first plug, a rebuilt stack: EJRB.1). */
+        out("%*s    not marked removable: Safely Remove Hardware may not list "
+            "it;\n%*s    /eject stops it when run as an administrator\n",
+            indent, "", indent, "");
+    } else if (envNow.Nt) {
         out("%*s    removable: %s; surprise removal OK: %s\n", indent, "",
             t->HasCaps ? ((t->Caps & INST_CM_DEVCAP_REMOVABLE) ? "yes" : "no")
                        : "not known",
             t->HasCaps ? ((t->Caps & INST_CM_DEVCAP_SURPRISEOK) ? "yes" : "no")
                        : "not known");
-        if (listed != NULL) {
-            out("%*s    %s\n", indent, "", listed);
+        if (t->HasCaps && (t->Caps & INST_CM_DEVCAP_REMOVABLE) &&
+            !(t->Caps & INST_CM_DEVCAP_SURPRISEOK)) {
+            out("%*s    listed in Safely Remove Hardware\n", indent, "");
+        } else if (t->Number) {
+            out("%*s    not listed in Safely Remove Hardware; /eject asks "
+                "Windows to stop it\n", indent, "");
         }
     } else {
         out("%*s    %s\n", indent, "",
@@ -8975,31 +9026,36 @@ static int run_eject(void)
         char vetoName[MAX_PATH];
         int withName;
         int notRemovable = 0;
+        int step;
         vetoName[0] = '\0';
         cr = tbEject(tbn[u].Dn, &veto, vetoName, MAX_PATH, 0);
+        vetoName[MAX_PATH - 1] = '\0';
         logonly("CM_Request_Device_EjectA(%s) = 0x%08lX, veto %lu %s\n", id,
                 (unsigned long)cr, (unsigned long)veto, vetoName);
-        if (inst_eject_nt_fallback(cr, veto, tbn[u].HasCaps, tbn[u].Caps) &&
-            tbQueryAndRemove != NULL) {
-            /* Not removable in Windows' eyes (record 24 section 7.2): the
-             * same query-remove and remove an eject runs, by the routine
-             * that makes them for any device; a veto still stops it. */
-            veto = 0;
-            vetoName[0] = '\0';
-            cr = tbQueryAndRemove(tbn[u].Dn, &veto, vetoName, MAX_PATH,
-                                  INST_UI_NOT_OK);
-            logonly("CM_Query_And_Remove_SubTreeA(%s) = 0x%08lX, veto %lu "
-                    "%s\n", id, (unsigned long)cr, (unsigned long)veto,
-                    vetoName);
+        cr = inst_eject_cr(cr, veto);
+        step = inst_eject_nt_step(cr, veto,
+                                  inst_unit_not_marked(tbn[u].HasCaps,
+                                                       tbn[u].Caps), 1);
+        if (step == INST_NT_FALLBACK) {
+            /* Not marked removable (record 24 section 7.2): the same
+             * query-remove and remove an eject runs, by the routine that
+             * makes them for any device; a veto still stops it. */
+            if (tbQueryAndRemove != NULL) {
+                cr = tb_query_and_remove(tbn[u].Dn, &veto, vetoName, MAX_PATH);
+                logonly("... for %s, veto name %s\n", id, vetoName);
+                cr = inst_eject_cr(cr, veto);
+            } else {
+                cr = INST_CR_CALL_NOT_IMPLEMENTED;
+                veto = 0;
+            }
             notRemovable = 1;
-        }
-        outcome = inst_eject_nt(cr, veto, &text, &withName);
-        if (notRemovable && cr == INST_CR_CALL_NOT_IMPLEMENTED) {
-            /* Windows 2000 (the leg): no routine stops a device it does
-             * not see as removable. A step for the user, nothing changed. */
-            text = inst_not_removable_text();
+            outcome = inst_eject_nt_removal(cr, veto, &text, &withName);
+        } else if (step == INST_NT_ADMIN) {
+            outcome = INST_EJ_RIGHTS;
+            text = inst_admin_text();
             withName = 0;
-            outcome = INST_EJ_VETO;
+        } else {
+            outcome = inst_eject_nt(cr, veto, &text, &withName);
         }
         if (outcome != INST_EJ_DONE) {
             if (withName) {
@@ -9567,6 +9623,10 @@ static int finish(int code)
     if (!opts.NoPause && !opts.List && !opts.Devices) {
         printf("Press Enter to close this window.");
         fflush(stdout);
+        if (outMirror) {
+            fputs("Press Enter to close this window.", stderr);
+            fflush(stderr);
+        }
         if (fgets(line, sizeof(line), stdin) == NULL) {
             printf("\n");
         }
@@ -9590,6 +9650,9 @@ int main(int argc, char **argv)
     if (opts.SelfTest) {
         return selftest();
     }
+    outMirror = inst_out_mirror(std_is_console(STD_OUTPUT_HANDLE),
+                                std_is_console(STD_ERROR_HANDLE),
+                                std_is_console(STD_INPUT_HANDLE));
     if ((!opts.List && !opts.Devices) || opts.Log[0] != '\0') {
         log_open();
     }

@@ -339,6 +339,15 @@ typedef struct _CM_NHI {
     /* The status record for the install tool's viewer (cm_statos.c,
      * design record 24 section 3). */
     CM_STATUS_PUB StatusPub;
+    /* The 9x bus numbering's last attempt (record 21 section 6.1.1),
+     * copied in by the CONFIGMG worker and written by the thread to the
+     * hardware key's XhciCmBridgeDiag (REG_BINARY, CM_BRDIAG_WORDS
+     * dwords) when BrDiag[0], its sequence, changed. */
+    ULONG BrDiag[CM_BRDIAG_WORDS];
+    ULONG BrDiagSeq;        /* the last sequence given, across workers    */
+    ULONG BrDiagWritten;
+    KSPIN_LOCK BrDiagLock;  /* BrDiag and BrDiagSeq; taken inside the
+                               worker's own lock, never around a call     */
 
     /* The query device (cm_qryos.c, design record 25 section 4): set and
      * cleared by the PnP path alone, cleared only once the thread has

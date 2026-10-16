@@ -1242,6 +1242,46 @@ void tr_link_text(TR_U32 kind, TR_U32 lanes, const TR_EXT *x, char *out,
                                                      : "lanes not known");
 }
 
+int tr_gen_tbt3(TR_U32 gen)
+{
+    /* A Thunderbolt 3 router behind a USB4 host reads USB4 Version major 0
+     * in ROUTER_CS_4 (15:8 here: major 7:5, minor 4:0; task 40-A.8). */
+    return (gen & 0xFFUL) == CM_ST_GEN_TBT3 ||
+           ((gen & 0xFFUL) == CM_ST_GEN_USB4 && ((gen >> 8) & 0xFFUL) != 0 &&
+            ((gen >> 13) & 0x7UL) == 0);
+}
+
+void tr_link_text_gen(TR_U32 gen, TR_U32 kind, TR_U32 lanes, const TR_EXT *x,
+                      char *out, size_t cap)
+{
+    TR_U32 width = 0;
+    const char *src;
+
+    if (kind == CM_ST_KIND_ICM || x == NULL || x->Rate == 0 ||
+        !tr_gen_tbt3(gen)) {
+        tr_link_text(kind, lanes, x, out, cap);
+        return;
+    }
+    /* A lane adapter's speed is a USB4 generation only on a USB4 router;
+     * a Thunderbolt 3 router's link is worded as the ICM path words it. */
+    if (x->Width != 0) {
+        width = x->Width;
+    } else if (lanes == CM_ST_LANES_BONDED) {
+        width = 2;
+    } else if (lanes == CM_ST_LANES_SINGLE) {
+        width = 1;
+    }
+    src = (x->Flags & CM_Q_XF_RATE_READ) ? " (read from the lane adapter)" : "";
+    if (width != 0) {
+        tr_sprintf(out, cap, "Thunderbolt 3, %lu Gbit/s per lane, x%lu "
+                   "(%lu Gbit/s)%s", (unsigned long)x->Rate,
+                   (unsigned long)width, (unsigned long)(x->Rate * width), src);
+    } else {
+        tr_sprintf(out, cap, "Thunderbolt 3, %lu Gbit/s per lane, lanes not "
+                   "known%s", (unsigned long)x->Rate, src);
+    }
+}
+
 void tr_router_name(const unsigned char *entry, char *out, size_t cap)
 {
     char vendor[CM_ST_NAME_BYTES];
@@ -1585,6 +1625,20 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
             o->Eject = 1;
             tr_copy(o->EjectId, id + 3, sizeof(o->EjectId));
             alone++;
+        } else if (tr_switch(a, "result")) {
+            if (i + 1 >= argc || !tr_res_name_ok(argv[i + 1])) {
+                tr_copy(err, "/result needs the window's answer name.", cap);
+                return 1;
+            }
+            o->Result = 1;
+            tr_copy(o->ResultName, argv[++i], sizeof(o->ResultName));
+        } else if (tr_switch(a, "confirmed")) {
+            if (i + 1 >= argc || !tr_res_digest_ok(argv[i + 1])) {
+                tr_copy(err, "/confirmed needs a digest.", cap);
+                return 1;
+            }
+            o->Confirmed = 1;
+            tr_copy(o->ConfirmedDigest, argv[++i], sizeof(o->ConfirmedDigest));
         } else {
             tr_sprintf(err, cap, "Unknown switch %s. Use: XHCITR [/tray] "
                        "[/eject id=<instance id>] [/report <file>]", a);
@@ -1593,6 +1647,10 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
     }
     if (alone > 1 || (alone == 1 && o->Tray)) {
         tr_copy(err, "/eject, /report and /selftest are each used alone.", cap);
+        return 1;
+    }
+    if ((o->Result || o->Confirmed) && !o->Eject) {
+        tr_copy(err, "/result and /confirmed go with /eject only.", cap);
         return 1;
     }
     return 0;
@@ -2219,4 +2277,515 @@ int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
     tr_copy(tag, "not started", tagCap);
     tr_copy(sentence, "Windows has not started this device.", sentenceCap);
     return 0;
+}
+
+/* ---- the elevated stop of a unit not marked removable (section 6.6) ------ */
+
+int tr_elev_needed(int nt, int notMarked, int isAdmin)
+{
+    return nt && notMarked && !isAdmin;
+}
+
+static TR_U32 tr_fnv(TR_U32 h, unsigned char c)
+{
+    return ((h ^ (TR_U32)c) * 16777619UL) & 0xFFFFFFFFUL;
+}
+
+void tr_res_digest(const char (*devs)[TR_ID_CHARS], int n, char *out)
+{
+    TR_U32 a = 2166136261UL;
+    TR_U32 b = 0x9E3779B9UL;
+    int i;
+    const char *p;
+    TR_TEXT t;
+
+    a = tr_fnv(a, (unsigned char)(n & 0xFF));
+    b = tr_fnv(b, (unsigned char)(n & 0xFF));
+    for (i = 0; i < n; i++) {
+        for (p = devs[i]; *p != '\0'; p++) {
+            unsigned char c = (unsigned char)tr_up((unsigned char)*p);
+            a = tr_fnv(a, c);
+            b = tr_fnv(b, (unsigned char)(c ^ 0xA5));
+        }
+        a = tr_fnv(a, '\n');
+        b = tr_fnv(b, '\n');
+    }
+    tr_text_init(&t, out, TR_DIGEST_CHARS);
+    tr_printf(&t, "%08lX%08lX", (unsigned long)a, (unsigned long)b);
+}
+
+int tr_res_digest_ok(const char *s)
+{
+    int i;
+
+    for (i = 0; i < TR_DIGEST_CHARS - 1; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
+            return 0;
+        }
+    }
+    return s[i] == '\0';
+}
+
+int tr_res_name_ok(const char *name)
+{
+    size_t k = strlen(TR_RES_PREFIX);
+    const char *p;
+
+    if (strncmp(name, TR_RES_PREFIX, k) != 0 || name[k] == '\0' ||
+        strlen(name + k) > 24) {
+        return 0;
+    }
+    for (p = name + k; *p != '\0'; p++) {
+        if (!((*p >= '0' && *p <= '9') || *p == '-')) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+#define TR_RES_ANSWER   "XHCITR ANSWER 1"
+
+/* The next line of *p into line (CR and LF dropped, a long line cut); 0
+ * at the end. */
+static int tr_res_line(const char **p, char *line, size_t cap)
+{
+    size_t n = 0;
+    const char *s = *p;
+
+    if (*s == '\0') {
+        return 0;
+    }
+    while (*s != '\0' && *s != '\n') {
+        if (*s != '\r' && n + 1 < cap) {
+            line[n++] = *s;
+        }
+        s++;
+    }
+    if (*s == '\n') {
+        s++;
+    }
+    line[n] = '\0';
+    *p = s;
+    return 1;
+}
+
+size_t tr_res_answer(int code, const char *msg, char *out, size_t cap)
+{
+    TR_TEXT t;
+
+    if (cap == 0) {
+        return 0;
+    }
+    tr_text_init(&t, out, cap);
+    tr_printf(&t, TR_RES_ANSWER "\ncode %d\n%s", code, msg);
+    return t.Overflow ? 0 : t.Len;
+}
+
+int tr_res_read_answer(const char *text, int *code, char *msg, size_t cap)
+{
+    char line[64];
+    const char *p = text;
+    int c = 0;
+    const char *d;
+
+    if (!tr_res_line(&p, line, sizeof(line)) ||
+        strcmp(line, TR_RES_ANSWER) != 0 ||
+        !tr_res_line(&p, line, sizeof(line)) ||
+        strncmp(line, "code ", 5) != 0 || line[5] == '\0') {
+        return 0;
+    }
+    for (d = line + 5; *d != '\0'; d++) {
+        if (*d < '0' || *d > '9' || c > 1000) {
+            return 0;
+        }
+        c = c * 10 + (*d - '0');
+    }
+    *code = c;
+    tr_copy(msg, p, cap);
+    return 1;
+}
+
+int tr_elev_result(int launched, TR_U32 launchErr, int finished,
+                   TR_U32 exitCode, int haveAnswer, int answerCode,
+                   const char *answerMsg, char *out, size_t cap)
+{
+    if (!launched && launchErr == TR_ERROR_CANCELLED) {
+        tr_copy(out, "Nothing was stopped: administrator rights were not "
+                "given. Try again and allow\nit, or unplug the device and "
+                "plug it in again.", cap);
+        return INST_EXIT_REFUSED;
+    }
+    if (!launched) {
+        tr_sprintf(out, cap, "%s\n(The stop with administrator rights "
+                   "could not be started: error %lu.)", inst_admin_text(),
+                   (unsigned long)launchErr);
+        return INST_EXIT_REFUSED;
+    }
+    if (!finished) {
+        tr_copy(out, "The stop with administrator rights has not finished. "
+                "Look at the device in the\ntree before you unplug it.", cap);
+        return INST_EXIT_FAILED;
+    }
+    if (haveAnswer && (TR_U32)answerCode == exitCode) {
+        tr_copy(out, answerMsg, cap);
+        return answerCode;
+    }
+    switch (exitCode) {
+    case INST_EXIT_REFUSED:
+        tr_copy(out, "Nothing was stopped.", cap);
+        return INST_EXIT_REFUSED;
+    case INST_EXIT_STEPS:
+        tr_copy(out, "Windows did not stop the device; nothing was changed.", cap);
+        return INST_EXIT_STEPS;
+    default:
+        tr_sprintf(out, cap, "The stop with administrator rights ended with "
+                   "no answer (code %lu).\nLook at the device in the tree "
+                   "before you unplug it.", (unsigned long)exitCode);
+        return INST_EXIT_FAILED;
+    }
+}
+
+const char *tr_elev_question(void)
+{
+    return "Windows does not list this device for safe removal. Stopping it "
+           "needs administrator rights.";
+}
+
+int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value)
+{
+    return !(trayMode && haveValue && value == 0);
+}
+
+static int tr_hex4(const char *s, unsigned int *v)
+{
+    int i;
+
+    *v = 0;
+    for (i = 0; i < 4; i++) {
+        int c = tr_up((unsigned char)s[i]);
+        *v <<= 4;
+        if (c >= '0' && c <= '9') {
+            *v |= (unsigned int)(c - '0');
+        } else if (c >= 'A' && c <= 'F') {
+            *v |= (unsigned int)(c - 'A' + 10);
+        } else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int tr_pci_ids(const char *id, unsigned int *ven, unsigned int *dev)
+{
+    const char *p;
+
+    *ven = 0;
+    *dev = 0;
+    if (id == NULL || !tr_starts_ci(id, "PCI\\VEN_")) {
+        return 0;
+    }
+    p = id + 8;
+    if (!tr_hex4(p, ven) || !tr_starts_ci(p + 4, "&DEV_") || !tr_hex4(p + 9, dev)) {
+        *ven = 0;
+        *dev = 0;
+        return 0;
+    }
+    return 1;
+}
+
+const char *tr_pci_vendor(unsigned int ven)
+{
+    static const struct {
+        unsigned int Ven;
+        const char *Name;
+    } names[] = {
+        { 0x8086U, "Intel" },     { 0x1022U, "AMD" },
+        { 0x1B21U, "ASMedia" },   { 0x1106U, "VIA" },
+        { 0x1912U, "Renesas" },   { 0x1033U, "NEC" },
+        { 0x104CU, "TI" },        { 0x1B73U, "Fresco Logic" },
+        { 0x1B36U, "Red Hat" },   { 0x10DEU, "NVIDIA" },
+        { 0x1D6AU, "Aquantia" },  { 0x1E49U, "Yangtze" },
+        { 0x1D17U, "Zhaoxin" }
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (names[i].Ven == ven) {
+            return names[i].Name;
+        }
+    }
+    return NULL;
+}
+
+void tr_ctrl_suffix(char *out, size_t cap, int haveIds, unsigned int ven,
+                    unsigned int dev, int tbKind)
+{
+    const char *tb = tbKind == TR_TB_TB3 ? "Thunderbolt 3"
+                     : tbKind == TR_TB_USB4 ? "USB4"
+                     : tbKind == TR_TB_UNKNOWN ? "Thunderbolt" : NULL;
+    const char *name;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (tb != NULL) {
+        if (haveIds) {
+            tr_sprintf(out, cap, " - %s controller's USB (%04X:%04X)", tb, ven, dev);
+        } else {
+            tr_sprintf(out, cap, " - %s controller's USB", tb);
+        }
+        return;
+    }
+    if (!haveIds) {
+        return;
+    }
+    name = tr_pci_vendor(ven);
+    if (name != NULL) {
+        tr_sprintf(out, cap, " - %s %04X:%04X", name, ven, dev);
+    } else {
+        tr_sprintf(out, cap, " - vendor %04X %04X:%04X", ven, ven, dev);
+    }
+}
+
+void tr_roothub_label(char *out, size_t cap, unsigned int ports, int known,
+                      unsigned int usb2, unsigned int usb3)
+{
+    if (ports == 0) {
+        tr_copy(out, "Root hub", cap);
+    } else if (!known) {
+        tr_sprintf(out, cap, "Root hub - %u port%s", ports, tr_plural((long)ports));
+    } else {
+        tr_sprintf(out, cap, "Root hub - %u port%s (%u USB 2.0, %u USB 3.x)", ports,
+                   tr_plural((long)ports), usb2, usb3);
+    }
+}
+
+const char *tr_port_tag(int haveV2, TR_U32 proto)
+{
+    if (!haveV2) {
+        return "";
+    }
+    if (proto & 0x04UL) {
+        return ", USB 3";
+    }
+    if (proto & 0x02UL) {
+        return ", USB 2";
+    }
+    if (proto & 0x01UL) {
+        return ", USB 1.1";
+    }
+    return "";
+}
+
+static int tr_hex2(const char *s, unsigned int *v)
+{
+    int i;
+
+    *v = 0;
+    for (i = 0; i < 2; i++) {
+        int c = tr_up((unsigned char)s[i]);
+        *v <<= 4;
+        if (c >= '0' && c <= '9') {
+            *v |= (unsigned int)(c - '0');
+        } else if (c >= 'A' && c <= 'F') {
+            *v |= (unsigned int)(c - 'A' + 10);
+        } else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int tr_pci_loc9x(const char *id, unsigned int *bus, unsigned int *dev)
+{
+    const char *last = NULL;
+    const char *p;
+
+    *bus = 0;
+    *dev = 0;
+    if (id == NULL) {
+        return 0;
+    }
+    for (p = id; *p != '\0'; p++) {
+        if (*p == '\\') {
+            last = p + 1;
+        }
+    }
+    if (last == NULL || !tr_starts_ci(last, "BUS_") || !tr_hex2(last + 4, bus) ||
+        !tr_starts_ci(last + 6, "&DEV_") || !tr_hex2(last + 11, dev) ||
+        !tr_starts_ci(last + 13, "&FUNC_")) {
+        *bus = 0;
+        *dev = 0;
+        return 0;
+    }
+    return 1;
+}
+
+static TR_U32 tr_r32(const unsigned char *d)
+{
+    return (TR_U32)d[0] | ((TR_U32)d[1] << 8) | ((TR_U32)d[2] << 16) |
+           ((TR_U32)d[3] << 24);
+}
+
+/* A 64-bit field as hex, without 64-bit arithmetic: the high half only
+ * when it is not zero. */
+static void tr_hex64(char *out, size_t cap, const unsigned char *d, int width)
+{
+    TR_U32 lo = tr_r32(d);
+    TR_U32 hi = tr_r32(d + 4);
+
+    if (hi != 0) {
+        tr_sprintf(out, cap, "%lX%08lX", (unsigned long)hi, (unsigned long)lo);
+    } else if (width == 4) {
+        tr_sprintf(out, cap, "%04lX", (unsigned long)lo);
+    } else {
+        tr_sprintf(out, cap, "%08lX", (unsigned long)lo);
+    }
+}
+
+static void tr_irq_flags(char *out, size_t cap, TR_U32 flags)
+{
+    tr_sprintf(out, cap, "%s, %s", (flags & 0x02UL) ? "edge" : "level",
+               (flags & 0x01UL) ? "shared" : "exclusive");
+}
+
+int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
+                int alloc, int is64)
+{
+    size_t head;
+    size_t range;
+    TR_U32 count;
+    TR_U32 i;
+    char a[24];
+    char b[24];
+    char f[32];
+
+    switch (type) {
+    case TR_RES_MEM:
+        head = 32;
+        range = 36;
+        break;
+    case TR_RES_MEMLARGE:
+        head = 32;      /* MEM_LARGE_DES */
+        range = 40;     /* MEM_LARGE_RANGE: an 8-byte length */
+        break;
+    case TR_RES_IO:
+        head = 28;
+        range = 40;
+        break;
+    case TR_RES_DMA:
+        head = 16;
+        range = 12;
+        break;
+    case TR_RES_IRQ:
+        head = is64 ? 24 : 20;
+        range = 12;
+        break;
+    case TR_RES_BUSNUMBER:
+        head = 20;
+        range = 16;
+        break;
+    default:
+        if (type == 0x8001UL) {
+            /* ResType_DevicePrivate: a driver's own data, as Vista and 7
+             * keep an MSI's message with it. */
+            tr_printf(t, "    Private data  %lu bytes\n", (unsigned long)n);
+        } else {
+            tr_printf(t, "    Resource type 0x%lX (%lu bytes)\n", (unsigned long)type,
+                      (unsigned long)n);
+        }
+        return 1;
+    }
+    if (d == NULL || n < head) {
+        tr_printf(t, "    (a resource of type %lu, %lu bytes, that could not be "
+                     "read)\n", (unsigned long)type, (unsigned long)n);
+        return 0;
+    }
+    count = tr_r32(d);
+    if (!alloc && (count > 64 || (size_t)count * range > n - head)) {
+        tr_printf(t, "    (a resource of type %lu, %lu bytes, that could not be "
+                     "read)\n", (unsigned long)type, (unsigned long)n);
+        return 0;
+    }
+    if (alloc) {
+        switch (type) {
+        case TR_RES_MEM:
+        case TR_RES_MEMLARGE:
+            tr_hex64(a, sizeof(a), d + 8, 8);
+            tr_hex64(b, sizeof(b), d + 16, 8);
+            tr_printf(t, "    Memory        %s-%s\n", a, b);
+            break;
+        case TR_RES_IO:
+            tr_hex64(a, sizeof(a), d + 8, 4);
+            tr_hex64(b, sizeof(b), d + 16, 4);
+            tr_printf(t, "    I/O           %s-%s\n", a, b);
+            break;
+        case TR_RES_DMA:
+            tr_printf(t, "    DMA           %lu\n", (unsigned long)tr_r32(d + 12));
+            break;
+        case TR_RES_IRQ:
+            tr_irq_flags(f, sizeof(f), tr_r32(d + 8));
+            if (tr_r32(d + 12) >= 0x80000000UL) {
+                /* Vista and 7 give a message-signalled interrupt a
+                 * negative number. */
+                tr_printf(t, "    IRQ           message-signalled (%ld)\n",
+                          (long)tr_r32(d + 12));
+            } else {
+                tr_printf(t, "    IRQ           %lu (%s)\n",
+                          (unsigned long)tr_r32(d + 12), f);
+            }
+            break;
+        default:
+            tr_printf(t, "    Bus numbers   %02lX-%02lX\n", (unsigned long)tr_r32(d + 12),
+                      (unsigned long)tr_r32(d + 16));
+            break;
+        }
+        return 1;
+    }
+    if (count == 0) {
+        tr_put(t, "    (an empty requirement)\n");
+        return 1;
+    }
+    for (i = 0; i < count; i++) {
+        const unsigned char *r = d + head + (size_t)i * range;
+        switch (type) {
+        case TR_RES_MEM:
+            tr_hex64(a, sizeof(a), r + 12, 8);
+            tr_hex64(b, sizeof(b), r + 20, 8);
+            tr_printf(t, "    Memory        %lu bytes in %s-%s\n",
+                      (unsigned long)tr_r32(r + 8), a, b);
+            break;
+        case TR_RES_MEMLARGE: {
+            char len[24];
+            tr_hex64(a, sizeof(a), r + 16, 8);
+            tr_hex64(b, sizeof(b), r + 24, 8);
+            tr_hex64(len, sizeof(len), r + 8, 8);
+            tr_printf(t, "    Memory        %sh bytes in %s-%s\n", len, a, b);
+            break;
+        }
+        case TR_RES_IO:
+            tr_hex64(a, sizeof(a), r + 12, 4);
+            tr_hex64(b, sizeof(b), r + 20, 4);
+            tr_printf(t, "    I/O           %lu ports in %s-%s\n",
+                      (unsigned long)tr_r32(r + 8), a, b);
+            break;
+        case TR_RES_DMA:
+            tr_printf(t, "    DMA           one of %lu-%lu\n", (unsigned long)tr_r32(r),
+                      (unsigned long)tr_r32(r + 4));
+            break;
+        case TR_RES_IRQ:
+            tr_irq_flags(f, sizeof(f), tr_r32(r + 8));
+            tr_printf(t, "    IRQ           one of %lu-%lu (%s)\n",
+                      (unsigned long)tr_r32(r), (unsigned long)tr_r32(r + 4), f);
+            break;
+        default:
+            tr_printf(t, "    Bus numbers   %lu in %02lX-%02lX\n",
+                      (unsigned long)tr_r32(r + 8), (unsigned long)tr_r32(r),
+                      (unsigned long)tr_r32(r + 4));
+            break;
+        }
+    }
+    return 1;
 }

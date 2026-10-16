@@ -2765,14 +2765,65 @@ int inst_eject9x_remove(INST_U32 cr, const char **text)
 #define INST_VETO_LEGACY_DRIVER     11UL
 #define INST_VETO_RIGHTS            12UL
 
-int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int capsKnown,
-                           INST_U32 caps)
+int inst_unit_not_marked(int capsKnown, INST_U32 caps)
 {
     /* CM_DEVCAP_REMOVABLE 0x4, CM_DEVCAP_SURPRISEREMOVALOK 0x80: the
-     * routine is for devices with neither (Microsoft's reference). */
-    return cr == INST_CR_REMOVE_VETOED &&
-           vetoType == INST_VETO_ILLEGAL_REQUEST && capsKnown &&
-           (caps & 0x84UL) == 0;
+     * fallback routine is for devices with neither (Microsoft's
+     * reference). */
+    return capsKnown && (caps & 0x84UL) == 0;
+}
+
+INST_U32 inst_eject_cr(INST_U32 cr, INST_U32 vetoType)
+{
+    return cr == 0 && vetoType != 0 ? INST_CR_REMOVE_VETOED : cr;
+}
+
+static int inst_rights_answer(INST_U32 cr, INST_U32 vetoType)
+{
+    return cr == INST_CR_ACCESS_DENIED ||
+           (cr == INST_CR_REMOVE_VETOED && vetoType == INST_VETO_RIGHTS);
+}
+
+int inst_eject_nt_step(INST_U32 cr, INST_U32 vetoType, int notMarked,
+                       int mayRemove)
+{
+    if (!notMarked) {
+        return INST_NT_ANSWER;
+    }
+    if (cr == INST_CR_REMOVE_VETOED && vetoType == INST_VETO_ILLEGAL_REQUEST) {
+        return mayRemove ? INST_NT_FALLBACK : INST_NT_ADMIN;
+    }
+    if (inst_rights_answer(cr, vetoType)) {
+        return INST_NT_ADMIN;
+    }
+    return INST_NT_ANSWER;
+}
+
+int inst_eject_nt_removal(INST_U32 cr, INST_U32 vetoType, const char **text,
+                          int *withName)
+{
+    if (inst_rights_answer(cr, vetoType)) {
+        *withName = 0;
+        *text = inst_admin_text();
+        return INST_EJ_RIGHTS;
+    }
+    if (cr == INST_CR_CALL_NOT_IMPLEMENTED) {
+        *withName = 0;
+        *text = inst_not_removable_text();
+        return INST_EJ_VETO;
+    }
+    return inst_eject_nt(cr, vetoType, text, withName);
+}
+
+int inst_removal_retry(INST_U32 cr, INST_U32 flags)
+{
+    return cr == INST_CR_INVALID_FLAG && (flags & INST_REMOVE_NO_RESTART) != 0;
+}
+
+const char *inst_admin_text(void)
+{
+    return "Windows does not list this device for safe removal. Run this as "
+           "an\nadministrator to stop it.";
 }
 
 const char *inst_not_removable_text(void)
@@ -2917,6 +2968,11 @@ int inst_tb_answer(const char *line, int defaultYes)
         return 0;
     }
     return -1;
+}
+
+int inst_out_mirror(int outIsConsole, int errIsConsole, int inIsConsole)
+{
+    return !outIsConsole && errIsConsole && inIsConsole;
 }
 
 /* ======================================================================== */

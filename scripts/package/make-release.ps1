@@ -226,7 +226,7 @@ readme.txt and a NOTICE.TXT: the opt-in tool that lists, and on Windows 2000 to
 Where `XHCIINST.EXE` and `XHCIIN64.EXE` are built. Defaults to `xhciinst\` in
 the repository. Both are staged into `releases\<version>\tools\xhciinst\` with
 a readme.txt and a NOTICE.TXT, and `xhciinst\INSTALL.BAT` at the version root:
-the install, update and uninstall tool (roadmap-usb4.md task 40.6, design
+the install, update and uninstall tool (roadmap-usb4.md task 40.5, design
 record 23).
 
 .PARAMETER SkipInstallTool

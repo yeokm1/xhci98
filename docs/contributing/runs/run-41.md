@@ -554,6 +554,539 @@ Overlays of the 98 SE gold image and of the Windows 7 x86 image under
   `u4.router-not-ready`, and XHCITR read the tunnel "up (found at start)";
   7 x86 (its hash read in the guest) read the same in XHCITR.
 
+## Bridges behind the tunnel port on NT
+
+The question: when a chain of PCI-to-PCI bridges appears behind a
+Thunderbolt tunnel port after boot, does Windows' own `pci.sys` on 2000,
+XP and 7 x86 number it, nest its windows and start it with no restart?
+98 SE's `PCI.VXD` does not; that is the P14s hot-plug Code 29. The earlier
+emulator NVMe legs had no bridge between the tunnel port and the NVMe.
+
+### Setup
+
+- **Emulator and package.** Emulator `vm\usb4\bin-2a893ea` (SHA-256
+  checked). Guests are overlays of `vm\win2k-xonly.img`, `vm\winxp.img`
+  and `vm\win7.img`. The 3.0.0.0 cut package (no NVMe driver) was
+  installed with `INSTALL /yes /thunderbolt /notray`.
+- **Tree.** i440FX with the `tb3-alpine-ridge` NHI and its xHCI on bus 0.
+  The tunnel port `tb0` is the emulator's SHPC `usb4-tunnel-bridge`, with
+  `bus-reserve=8,mem-reserve=32M`. SeaBIOS honours those hints only on
+  Red Hat bridge ids, so `tb0` got buses 1-9, memory
+  `fca00000-fe9fffff`, prefetchable `fc000000-fc1fffff` and IO
+  `c000-cfff`, like the P14s's 06-2A. The `8086:15C0` tunnel port of the
+  Alpine Ridge tree gets no spare bus from SeaBIOS.
+- **The chain.** A switch stand-in sits behind `tb0`'s gate: a USP
+  `usb4-asm-pci-usp` (`1b21:2421`) at `tb0` slot 3, a DSP
+  `pci-bridge-seat` (`1b36:000a`) below it, and an NVMe below that. Both
+  bridges have no BAR (`shpc=off,msi=off`), as the ASM2464's `1b21:2463`
+  ports have none. While the tunnel is down the gate hides the chain, so
+  it stays in reset state (bus numbers 0, windows closed) until the
+  enclosure is hot-plugged. Then the ICM approves it, the tunnel comes up
+  and xhcicm invalidates `tb0`. The ORICO model (`device-model=asm2464`)
+  also puts its own NVMe directly on the tunnel bus at slot 1.
+- **Not usable.** The `usb4-asm2464-usp/-dsp` types are not
+  user-creatable. 2000 and XP cannot boot on q35.
+- **Two emulator traps.**
+  - The emulator's tunnel-port id `1b36:0001` is in `xhcicmf.inf`'s
+    model list, so a plain `pci-bridge` in the chain gets the filter INF.
+    The first 2000 attempt did, and asked for a restart.
+  - Hot-adding the chain with `device_add` needs `shpc=on`, which gives
+    the DSP a BAR, and the DSP's 1 MB window plus that BAR does not fit
+    the 1 MB window 2000 gives the USP: Code 12. Neither is the hardware's
+    behaviour.
+- **Re-plugs.** The emulator gives the gated chain back with its earlier
+  configuration, so a re-plug reads re-enumeration and the first plug
+  reads fresh numbering.
+- **Recipe.** The command lines and steps are in
+  `E:\xhci98-vm\nt-bridge\RECIPE-first-plug.txt` on development host A.
+
+### pci.sys: numbered, nested, started, no restart
+
+`info pci` was read with no prompt open. The bridges show in Device
+Manager as "PCI standard PCI-to-PCI bridge, This device is working
+properly". The NVMes have no driver: Code 1 once the wizard is cancelled,
+BAR unassigned. Device Manager's Scan for hardware changes changed
+nothing.
+
+| | USP `01:03.0` | DSP `02:00.0` | Restart asked |
+|---|---|---|---|
+| 2000 | bus 2-3; memory `fe900000-fe9fffff`, prefetchable `fc100000-fc1fffff`, IO `c000-cfff` | bus 3-3; the same windows | no |
+| XP SP3 | bus 2-3; memory `fca00000-fe9fffff`, prefetchable `fc000000-fc1fffff`, IO `c000-cfff` (all of `tb0`'s) | bus 3-3; the same | no |
+
+The re-plugs on 2000 (two) and XP (three) brought both bridges back
+started, with no restart. **So `pci.sys` does what `PCI.VXD` does not.**
+Windows 7 x86 is read under "The child filter on a bridge" below.
+
+### Safely Remove does not offer the unit
+
+The ORICO's USP bridge sits directly on the tunnel bus, so on NT the
+bridge is the unit. In these legs that bridge was not removable on the
+first plug:
+
+- **2000, first plug.** `INSTALL /devices` printed "PCI standard
+  PCI-to-PCI bridge - pci, started ... removable: no". Unplug or Eject
+  Hardware listed only the driverless NVMe on the tunnel bus ("PCI Device
+  at PCI Slot 4", PCI bus 1, device 1). `INSTALL /eject 2` answered
+  "Windows will not stop this device: it does not see it as removable
+  now" (exit 4).
+- **2000, plain unplug** (the enclosure removed with no eject). 2000
+  showed its "Unsafe Removal of Device" dialog, naming both "PCI standard
+  PCI-to-PCI bridge" entries, and the subtree left Device Manager.
+- **2000, re-plug** of the same devnode. `/devices` read "removable: yes
+  ... (listed in Safely Remove Hardware)". The applet listed the bridge
+  with its subtree, and Stop gave "The 'PCI standard PCI-to-PCI bridge'
+  device can now be safely removed from the system". The unplug after it
+  raised no dialog, and the next re-plug came back started.
+- **XP, every plug.** Two first plugs (two chain instances) and three
+  re-plugs all read "removable: no". Safely Remove listed neither the bridge nor
+  the driverless NVMe. A plain unplug on XP raised no dialog.
+  `INSTALL /eject 2` printed "Windows has stopped PCI standard PCI-to-PCI
+  bridge. The device has started again" (exit 4).
+
+The qemu flavour of `xhcicm.sys` from the same tree (3.0.0.0 at
+`1e7d667e`, unmodified) showed why. It ran with `XhciLogVerbosity` 3, and
+the counters were read at the NHI's stop. Each first plug used a
+never-seen chain instance (another `tb0` slot).
+
+- **XP:** `cm.reenum.child.attached` 1 and `child.skipped` 1 on the first
+  plug, 3 and 3 after two more plugs. On every plug the NVMe got the
+  child filter and the bridge was skipped. A skip with no full snapshot is
+  `cmChildCreate`'s `STATUS_DEVICE_BUSY`: the bridge's PDO already carried
+  a device object when the answer passed the tunnel port's filter.
+- **2000 (ACPI off):** `child.attached` 2, `skipped` 0 on the first plug.
+  The bridge got its child filter and still read not removable. This
+  fits the case roadmap EJRB.1 describes: Windows installing the bridge's
+  driver for the first time rebuilds its stack without the child. The
+  re-plug of the known devnode was removable.
+
+### The child filter on a bridge (record 21 section 7.4 revision 2)
+
+**Branch.** The fix is on branch `nt-childattach`: `5cbe3ac3`, with the
+review rounds' `2d94a491` and `87935d29`.
+- `build-driver.cmd all` and `all -amd64` passed every gate at
+  `87935d29`, and the host suites pass.
+- The legs ran its qemu `xhcicm.sys`, SHA-256 `9D7F8BBF...5E9ACA`, copied
+  over the installed driver with `XhciLogVerbosity` 3.
+- Each first plug used a chain instance the guest had never seen: XP `tb0`
+  slot 6, 7 slot 3 (a fresh install), 2000 slot 8.
+
+**What the log names.** On XP and 7 the driver already on the bridge's PDO
+is ACPI's: `cm.reenum.child.under` reads `41435049` ("ACPI", after
+`\Driver\`), with `under.count` 1. `child.decision` reads 2, attached above
+it, on every plug. On 2000 with ACPI off nothing is attached, so no
+`under` line is written, as before.
+
+| | First plug of a never-seen chain | Re-plug |
+|---|---|---|
+| XP SP3 | attached above ACPI; the USP still "removable: no" | "removable: yes ... (listed in Safely Remove Hardware)"; the applet listed "PCI standard PCI-to-PCI bridge" with its subtree; Stop gave "Safe To Remove Hardware: The 'PCI standard PCI-to-PCI bridge' device can now be safely removed"; the unplug and the next re-plug brought it back started and removable |
+| 7 x86 | attached above ACPI; "removable: yes ... (listed in Safely Remove Hardware)"; the applet listed the bridge; Stop gave "The 'PCI standard PCI-to-PCI bridge' device can now be safely removed from the computer" | after that unplug: started, "removable: yes" |
+| 2000 | unchanged: "removable: no"; a plain unplug again showed "Unsafe Removal of Device" naming both bridges | "removable: yes" |
+
+The NVMe directly on the tunnel bus read "removable: yes" on every plug on
+all three systems.
+
+**XP's first plug.** The child was attached there, and the bridge still
+read not removable. This is the 2000 case of roadmap EJRB.1: XP installed
+the bridge's driver for the first time and rebuilt the stack without the
+child. Windows 7 did not lose it. So revision 2 fixes what never attached
+(XP and 7 on every plug, ACPI), and the first plug of a never-seen unit on
+2000 and XP stays EJRB.1's. For those, the route is the tool-side
+fallback the owner decided for 3.0.0.0: query-and-remove in XHCITR and
+`XHCIINST /eject`.
+
+**`pci.sys` on 7 x86** (first plug, no prompt open), with no restart
+asked:
+
+| | USP | DSP |
+|---|---|---|
+| Bus | 2-3 | 3-3 |
+| Memory | `fe400000-fe7fffff` | the same |
+| Prefetchable | `fe000000-fe3fffff`, inside `tb0`'s non-prefetchable window, which a prefetchable range may use | the same |
+| IO | `c000-cfff` | the same |
+
+Both bridges were started; the NVMes showed Code 28, no driver. The
+re-plug's `info pci` matched the first plug's.
+
+## The fallback for a unit not marked removable (record 24 revision 5, record 25 revision 11)
+
+Read on 2026-10-16 on development host A, overlays under
+`E:\xhci98-vm\tr-fallback` (QMP 47990 to 47995, each guest in its SDL
+window), with the nt-bridge recipe above: emulator `2a893ea`,
+`tb3-alpine-ridge`, the SHPC tunnel bridge with the `usb4-asm-pci-usp`
+(`1B21:2421`) and `pci-bridge-seat` chain cold-plugged behind it and an
+NVMe at its end, no NVMe driver, so no volume. The package was a dry x86
+TEST cut of branch `tr-fallback` at `e9701bdb`'s tools; its drivers came
+before the merge of `nt-childattach` (record 21 section 7.4's attachment
+above bus filters), so its re-plug readings on XP and 7 are the earlier
+drivers'. Each system: a fresh overlay, `INSTALL /yes /thunderbolt
+/notray /nopause`, a shutdown, then the chain at first boot and the
+enclosure added (`device_add usb4-device ... device-model=asm2464`).
+Evidence: `E:\xhci98-vm\tr-fallback\shots\` (`w2k-a3-*`, `w2k-b1-*`,
+`xp-x2-*`, `w7-s2-*`), `pids.txt` and each guest's `cmdline-<tag>.txt`.
+
+| System | First plug, `INSTALL /devices` | The stop | After it |
+|---|---|---|---|
+| 2000 | `[2] PCI standard PCI-to-PCI bridge`, "not marked removable: Safely Remove Hardware may not list it" | `INSTALL /eject 2`, Y, as the administrator: log `CM_Request_Device_EjectA = 0x00000017, veto 8`, then `CM_Query_And_Remove_SubTreeW(flags 0x3) = 0x00000000, veto 0`; "Windows has stopped PCI standard PCI-to-PCI bridge.", exit 0 | the bridge at problem code 24; `device_del` with no Unsafe Removal dialog; the re-plug started it, "removable: yes" |
+| 2000, second never-seen unit (the chain moved to `tb0` slot 4) | not marked removable | `XHCITR /eject id=...` run as a limited user (`runas /user:tuser`): the confirmation, then "Windows does not list this device for safe removal. Stopping it needs administrator rights." with "Stop as administrator..."; the Run As Other User dialog appeared. Cancel: "Nothing was stopped: administrator rights were not given. Try again and allow it, or unplug the device and plug it in again." A wrong password: the shell's own logon error and the dialog again. A second administrator account: "Windows has stopped PCI standard PCI-to-PCI bridge. ..." with no second confirmation | no dialog at the unplug; the re-plug started it, removable |
+| XP SP3 | not marked removable | `XHCITR` as a limited user: the same dialog, then XP's Run As. "Current user" with its protection box: the elevated run answered "Windows does not list this device for safe removal. Run this as an administrator to stop it." through the window. "The following user", an administrator: stopped, no second confirmation | after the unplug and a re-plug, still not marked (earlier drivers) |
+| XP SP3, `XHCIINST` | not marked removable | `INSTALL /eject 2`, Y: log `CM_Request_Device_EjectA = 0x00000000, veto 8` - success with the veto type, which before this change read as stopped with nothing stopped - then `CM_Query_And_Remove_SubTreeW(flags 0x3) = 0x00000000`; stopped, exit 0 | |
+| 7 SP1 x86 | not marked removable | `XHCITR` as a standard user: the dialog with the shield; User Account Control asked for an administrator's password. Cancel: the "not given" text. Accepted: stopped, no second confirmation | after the unplug and a re-plug, still not marked (earlier drivers) |
+| 7 SP1 x86, `XHCIINST` | not marked removable | `INSTALL /eject 2` from an elevated prompt: `CM_Request_Device_EjectA = 0x00000017, veto 8`, `CM_Query_And_Remove_SubTreeW(flags 0x3) = 0x00000000`; stopped, exit 0 | |
+
+All three systems accepted `CM_REMOVE_UI_NOT_OK | CM_REMOVE_NO_RESTART`;
+no `CR_INVALID_FLAG` retry was needed. Not read: a veto with a file open
+(no volume in this topology: no NVMe driver was installed), Vista, the x64
+tools, the window's and the tray's own route to the same dialog (the
+one-shot `/eject id=` takes the same functions), and whether a rescan
+restarts a unit after this stop.
+
+### Start at login, per user (record 25 revision 10)
+
+Read on the tool of `33f66b09`, on 98 SE and on 7 x86 as the standard
+user, the tool in place of the installed one:
+
+- The icon's right-click menu and the View menu showed "Start at login"
+  ticked. Unticked from the icon, the View menu showed it unticked; after
+  a restart no icon came (on 7 the hidden-icons area held none).
+- Ticked again from the View menu: after a restart the icon was back, on
+  both systems.
+- 7: with the machine's Run value deleted by an administrator, the item
+  read "Start at login (off for this computer)", grey; the value was put
+  back afterwards.
+- On the development host, `XHCITR64 /tray` with `TrayAtLogin` 0 ended in
+  about a second with exit 0 and no icon.
+
+`INSTALL /notray` already removed the machine's Run value on an existing
+install, and an install without it writes the value again; XHCIINST is
+unchanged.
+
+### The tree's labels (record 25 revision 10, addendum)
+
+Read on the tool of `d144edef` (the root hub's total was then taken from
+its hub descriptor, `779b676a`), as the standard user:
+
+- 98 SE and 7 x86: "xHCI98 USB 3.x eXtensible Host Controller (xhci98) -
+  Red Hat 1B36:000D", "Root hub - 8 ports (4 USB 2.0, 4 USB 3.x)", "[Port
+  3, USB 3] QEMU QEMU HARDDISK (G:) SuperSpeed" on 98 SE ("... USB Device
+  (F:)" on 7), the ports of the full-speed hub behind it "USB 1.1".
+- Development host A (Windows 11, `/report` as the user): a Thunderbolt
+  chip's own xHCI read "USB xHCI Compliant Host Controller (Windows) -
+  Thunderbolt controller's USB (8086:5782)", its NHI in the walk but not
+  driven by `xhcicm.sys`, so with no generation; the AMD controller "-
+  AMD 1022:1587"; "Root hub - 4 ports (2 USB 2.0, 2 USB 3.x)".
+- Not read: the label of an emulated Thunderbolt chip's xHCI under
+  `xhcicm.sys` ("Thunderbolt 3 controller's USB").
+
+### Resources (record 25 revision 10, second addendum)
+
+Read on the tools of `1f6c151d` (7 x86) and `b6592938` (98 SE), as the
+standard user:
+
+- 98 SE with the emulated Thunderbolt 3 enclosure (`tb3-alpine-ridge`)
+  and an NVMe unit behind it: the NHI "IRQ 11 (level, shared)", "Memory
+  FE600000-FE63FFFF"; the tunnel port's bridge "I/O C000-CFFF", "Memory
+  FE400000-FE5FFFFF" and "Memory FE000000-FE1FFFFF" (its two windows),
+  "IRQ 11 (level, shared)", "Memory FE800000-FE8000FF"; the NVMe
+  controller behind it "IRQ 10 (level, shared)", "Memory
+  FE400000-FE403FFF", inside the bridge's window. The bridge also gave a
+  descriptor of type 67 with no data, a type CONFIGMG does not arbitrate
+  (it arbitrates memory, I/O, DMA and IRQ); that build printed it as "a
+  resource of type 67, 0 bytes, that could not be read", and `fb450f51`
+  prints "Resource type 67 (no data)" (not read again on 98 SE). No
+  bus-number range on 98 SE, for the same reason, and no PCI location for
+  a function behind a bridge (the instance ID gives only a root bus's).
+- 7 x86, the xHCI controller: "PCI location: 00:03.0", "Memory
+  FEBF0000-FEBF3FFF", the IRQ "message-signalled", and its MSI data as
+  "Resource type 0x8001 (36 bytes)"; `b6592938` names that "Private data
+  36 bytes" (a host vector; not read again on 7).
+- The Status line on 98 SE and ME (for example the NHI's "0x19886ACE
+  (started)") is CONFIGMG's whole devnode flag word, not a stray value:
+  `DN_APM_DRIVER`, `DN_APM_ENUMERATOR`, `DN_NT_DRIVER` (a WDM driver),
+  `DN_NT_ENUMERATOR`, `DN_NOT_FIRST_TIMEE`, `DN_REMOVABLE`,
+  `DN_DISABLEABLE`, `DN_FILTERED`, `DN_HAS_MARK`, `DN_HARDWARE_ENUM`,
+  `DN_NOT_FIRST_TIME`, `DN_STARTED`, `DN_ENUM_LOADED`, `DN_DRIVER_LOADED`
+  (cfg.h). The 9x-only high bits make it look unlike NT's 0x0180600A.
+
+### XHCIINST with its output redirected
+
+On 98 SE, `XHCIINST /eject 1 > C:\EJ.TXT` (the emulated Thunderbolt 3
+enclosure, an NVMe unit behind it) had looked hung. Read again with the
+tool of the dry cut before the fix: a blank console; the file held the
+list and "Eject it now? ...", and the tool was waiting for the keyboard -
+an `n` and Enter typed blind cancelled it, a second Enter answered the
+closing "Press Enter", unseen as well. On 7 x86, from an elevated prompt,
+`XHCIINST /eject > ejo.txt` sat the same way at the unseen "Press Enter".
+The text went to standard output alone while the answers came from the
+console.
+
+With `788279cc` (the text also to standard error when standard output is
+not the console and standard input and standard error are):
+
+- 98 SE: `XHCIINST /eject 1 > C:\EJN.TXT` showed the list and the question
+  on the screen; `y` stopped the unit ("You can now unplug the device.",
+  exit code 0); the file held the same text. Without redirection, after a
+  re-plug, the text showed once, as before. XHCITR's `/eject id=... >
+  C:\TR.TXT`, for comparison: its confirmation is a message box, so it
+  never waited unseen; its answer went to the file.
+- 7 x86, an elevated prompt: `XHCIINST /eject > ejn.txt` showed its text
+  and "Press Enter" on the screen, the file the same; `/eject /nopause`
+  without redirection printed once. Run from a prompt that is not
+  elevated, the tool asks for elevation and runs in a console of its own,
+  where a redirection does not reach.
+
+### XHCIINST and an NHI whose New Hardware wizard was cancelled (98 SE)
+
+A fresh 98 SE overlay (`win98-gold`) with the emulated Thunderbolt 3
+enclosure; the five bridges installed through their wizards, the NHI's
+("PCI System Peripheral") and the Thunderbolt chip's xHCI's cancelled. The
+install run's Thunderbolt question then said "No Thunderbolt or USB4
+controller was found" and offered N, as the leg that found it read; the
+same after a restart with the NHI's wizard cancelled again.
+
+- The log of that run lists every devnode the walk met: the five bridges
+  (`VEN_8086&DEV_15C0`), no NHI (`DEV_15BF`) and no Thunderbolt xHCI. The
+  NHI had no devnode.
+- Nor was it in `HKLM\Enum\PCI`: an export of that key held no `DEV_15BF`
+  (nor `CC_0880`), and an export of the NHI's own key found none. The one
+  entry the registry fallback listed was an old slot of the board's own
+  xHCI controller from the base image's history.
+- So a registry fallback that also admits an NHI (written, host-tested and
+  reviewed, `f060eae8`) changed nothing here: on 98 SE a device behind the
+  tunnel's bridges whose wizard was cancelled leaves neither a devnode nor
+  an `Enum\PCI` entry for the tool to read. It was reverted (`fbda19be`).
+  The question's own text already covers this ("Some computers show theirs
+  only while a device is plugged in ...: answer Y if this computer has a
+  Thunderbolt or USB4 port"), and `/thunderbolt` includes it unasked.
+
+## Stor98 behind the Thunderbolt 3 controller (STOR.2)
+
+Readings of 2026-10-16 on development host A, `vm\usb4\bin-2a893ea` (its
+`qemu-system-x86_64.exe` SHA-256 `6a1dfcc8...bd66` checked before use),
+`tb3-alpine-ridge` with the NVMe enclosure hot-plugged on port 1 after the
+desktop was up (`device_add` / `device_del` of `enc0`), every guest a new
+overlay under `E:\xhci98-vm\stor1-legs` with its SDL window shown. The
+package is a dry x86 TEST cut ("Stor98 legs") of branch `stor1-legs` at
+`da55d9e2` (`3.0.0.0` with STOR.1 merged), bundling Stor98 `0.3.0.1`
+(`SHA256SUMS.txt` SHA-256 `aee07c9c...cb9`, interface version 4); its
+`xhci98-3.0.0.0.zip` was unpacked onto each guest's transfer drive. The 98
+SE and ME legs were first read on a cut bundling Stor98 `0.3.0.0` and then
+read again on this one; where the two differ it is said below. `3.0.0.0`
+will bundle Stor98 `0.4.0.0` (owner, 2026-10-16), so these legs are owed
+again on that build. Before any
+reading every NVMe controller devnode was checked to be Stor98's: Device
+Manager listed one "Stor98 Storage Controller for NVMe SSDs" and no nvme98
+entry, `IOSUBSYS` held `STOR98.MPD` alone (98 SE, ME) and
+`system32\drivers` `stor98.sys` and no `nvme98.sys` (2000). The disk is
+"QEMU NVMe Ctrl", Stor98's new split of the model number.
+
+| Leg | 98 SE | ME | 2000 |
+|---|---|---|---|
+| S.1 install: `INSTALL`, then Stor98 by the wizard from `release-x86\` | pass | pass | pass |
+| S.2 the drive usable: a file written and compared | pass | pass | pass |
+| S.3 XHCITR Safely Remove, unplug, re-plug, compare | pass | pass (fresh overlay; see below) | pass |
+| S.4 surprise unplug with the volume mounted, re-plug, compare | pass | pass (written 15 s before) | pass |
+| S.5 the link-state channel | not offered, as designed | not offered, as designed | published; Stor98 `0.3.0.1` does not read it |
+
+**Install.** On the 98 SE base (`t26\win98-gold.qcow2`, an older xhci98
+installed) `INSTALL /defaults /yes /nopause` staged the drivers and ended
+"steps left" (exit 4) as on every 9x install: the Thunderbolt 3 controller
+("PCI System Peripheral") and the controller still on the older driver were
+updated from Device Manager as `INSTALL` printed it, with the staged folder
+for the "Copy files from" prompts; the Windows 98 CD's `usbd.sys`,
+`usbui.dll` and HID files were skipped, being on the image already. On ME
+(`t37me\winme-stock-base.qcow2`) `INSTALL ... /thunderbolt` likewise left
+the QEMU xHCI, the Thunderbolt 3 controller and its xHCI to Device Manager,
+then a restart. On 2000 (`win2k-xonly.img`) `INSTALL` ended "restart, then
+run INSTALL.BAT again" (exit 2), the second run "Please restart Windows
+now" (exit 3) with every device started. The enclosure's hot plug then
+showed "PCI Card" (98 SE, ME) or "PCI Device" (2000); the wizard pointed at
+`release-x86\` found `stor98.inf` ("Stor98 Storage Controller for NVMe
+SSDs"); 2000 asked once about the missing digital signature. The volume
+NVME32 mounted with no restart: E: on 98 SE and ME, D: on 2000. XHCITR
+showed the unit with driver `stor98.mpd` or `stor98`, version `0.3.0.1`,
+started, problem 0. On 98 SE and ME the guests that had read `0.3.0.0` were
+moved to `0.3.0.1` by Update Driver, "Display a list", Have Disk
+(`IOSUBSYS\STOR98.MPD` 42,573 bytes became 43,533).
+
+**I/O and removal.** On each system the package's `readme.txt` (162 KB)
+was copied to the NVMe volume and compared with `fc /b`: no differences.
+XHCITR's Safely Remove from a right click on the unit: "Windows has stopped
+QEMU NVMe Ctrl (E:) ... You can now unplug the device." (98 SE, ME) or
+"Windows has stopped Stor98 Storage Controller for NVMe SSDs" (2000), shown
+within the first screenshot after OK (about 4 to 5 s, the capture's own
+latency included); the unplug ("QEMU USB4 NVMe Enclosure was
+disconnected.", ME and 2000), a re-plug, and the file compared again with
+no differences. The surprise unplug with the volume mounted: 2000 showed
+its "Unsafe Removal of Device" dialog naming the Stor98 controller and
+"QEMU NVMe Ctrl SCSI Disk Device"; after the re-plug the file compared
+clean on every system.
+
+**ME write-through.** A 298 KB file copied to E:, 15 s of idle, then a
+surprise unplug with no eject: ME showed its "Disk Write Error ... drive
+E:" at once, on both Stor98 builds. After the re-plug the file was there at
+its full size and compared with no differences. This is the case Stor98's
+readme describes: data ME's own write-behind cache still held never
+reached the driver; what Stor98 had acknowledged was on the disk. With the
+drive still attached, a restart of the fresh ME guest ran ScanDisk on
+NVME32 (the unplug had left it dirty) and reached the desktop with E: and
+its files.
+
+**The channel on 9x.** `3.0.0.0` publishes no Stor98 channel on 98 SE and
+ME (design record 21 section 7.2): no `Services\stor98` key was written
+(`regedit /e` of it on ME exported nothing), no UP was published and no
+removal waited for an acknowledgement. Stor98 runs there on its own gone
+deadline, with no clean-eject handshake, and the Safely Remove above is
+Windows' own query and removal.
+
+**The channel on 2000.** The release `xhcicm.sys` was replaced by the qemu
+flavour of the same commit (copied over `system32\drivers\xhcicm.sys`,
+`XhciLogVerbosity` 2 on the controller's driver key) to read its port-0xE9
+notes, `E:\xhci98-vm\stor1-legs\w2k\debugcon-d.log`:
+
+| Moment | Notes |
+|---|---|
+| start | `cm.nvlink.nt=80000000`: the callback object `\Callback\Stor98LinkState` registered, no query yet |
+| hot plug | `cm.nvlink.up=01000401`: entry 1, bus 4, slot 1, generation 1, before the invalidation |
+| unplug after Safely Remove | `cm.nvlink.icm-down=00000402`, `cm.nvlink.down=00000001` (the statement sent on the emulator's SHPC bridge), `cm.nvlink.await=00000000`, `cm.nvlink.retired=00020801` |
+| re-plug | `cm.nvlink.up=02000401` |
+| surprise unplug | `cm.nvlink.icm-down=00000402`, `cm.nvlink.down=00000003`, `cm.nvlink.await=00000000` |
+| the controller's stop (restart) | `cm.nvlink.ups=2`, `sent=2`, `acked=0`, `ack-timeouts=0`, `no-receiver=2`, `queries=0` |
+
+`queries=0`: Stor98 `0.3.0.1` never called the callback, so the statements
+had no reader and nothing waited for an acknowledgement. Its source says
+the same: the NT receiver is a stub in `0.3.0.1` (`src/platform.c`,
+`PlatCmLinkOpen`, "STUB on NT ... the table is not opened yet"). The
+release notes were worded to match.
+
+**Two ME readings on the guest that was updated in place.** On the ME
+overlay that had run Stor98 `0.3.0.0` and was moved to `0.3.0.1` by Update
+Driver with E: mounted, the restart that followed stopped on "VCACHE(01) +
+00000E4D Error: 0E : 0028 : C004E4E9", and the boot after it hung in
+ScanDisk of NVME32 with "Statemgr" not responding; after a power cycle the
+hot plug, the Safely Remove and the unplug passed, but the first read of E:
+after the re-plug never returned and the guest's clock slowed to a crawl.
+Neither was seen on a fresh ME overlay installed with `0.3.0.1` alone
+(`E:\xhci98-vm\stor1-legs\me2`), where every leg above passed, the restart
+with the drive attached included. Not investigated further; an in-place
+update of the NVMe driver with its volume mounted is not a path the
+release notes describe. The first boot of that same overlay after a
+relaunch also hung once at a cursor before the logo; a reset brought it up
+in Safe mode, and every boot after was normal.
+
+Evidence: `E:\xhci98-vm\stor1-legs\` - `shots\` (screendumps by guest and
+step), `w98\`, `me\`, `me2\`, `w2k\` (`events.txt`, `debugcon-*.log`,
+`serial-*.log`, `trace-*.log`, `qemu-*.cmdline`), `pids.txt` (every QEMU
+started and how it ended); the cut's log `E:\xhci98-wt\stor1-legs\out\cut-x86.txt`.
+
+## Bridges behind the tunnel port on 98 SE and ME (record 21 section 6.1.1)
+
+The question: why an ORICO ASM2464 USB4 enclosure plugged into the
+owner's ThinkPad P14s Gen 1 after Windows 98 SE had started showed its
+switch's upstream port, `PCI\VEN_1B21&DEV_2463`, with Code 29 and nothing
+behind it, when the same enclosure present at power-on worked; and what
+the driver does about it. Readings of 2026-10-16.
+
+### The finding on the owner's ThinkPad P14s Gen 1
+
+- **Setting.** 98 SE in APM mode, Alpine Ridge LP (NHI `8086:15BF`,
+  tunnel port `04:01.0`), ICM, security level 1, firmware `0x60`; BIOS
+  Thunderbolt BIOS Assist Mode off, Support in Pre Boot Environment on;
+  `XhciCmApprove` 1; the `3.0.0.0` test build.
+- **A (present at power-on).** Both ASMedia bridges started with
+  `D4100000-D41FFFFF` and IRQ 10, Stor98 on IRQ 10 with its BARs at
+  `D4100000-D4105FFF`, D: present.
+- **B (Safely Remove in XHCITR, unplug, re-plug)**, and the first report
+  (a hot plug after a start without the enclosure): the upstream port at
+  Code 29 (`CM_PROB_HARDWARE_DISABLED`), status `0x180066A4`, an empty
+  `Allocation` in `HKEY_DYN_DATA\Config Manager\Enum`, nothing behind it.
+  The tunnel port's own allocation was the same in A and B: memory
+  `D4100000-E00FFFFF`, prefetchable `A0000000-BBFFFFFF`, and its bus-number
+  resource (type `0043h`, `ResType_PCI_Bus_Number`). Its BIOS-programmed
+  range is secondary `06`, subordinate `2A` (usb4-emu's DOS captures).
+- **Refresh and Remove.** A Device Manager Refresh changed nothing; a
+  Remove of the devnode and a Refresh gave a fresh devnode, a wizard, a
+  restart request, and Code 29 again.
+- **Assist on.** No NHI in Device Manager at all, with or without the
+  enclosure, and a plug brings up nothing; Assist is no way round on 98.
+
+### Why, read in the emulator
+
+Emulator `vm\usb4\bin-2a893ea` (SHA-256 checked), 98 SE (overlays of
+`vm\t26\win98-gold.qcow2`, which runs 98 in ACPI mode) and ME (overlay of
+`vm\t37me\winme-stock-base.qcow2`). The tunnel port is the SHPC
+`usb4-tunnel-bridge` on bus 0 with `bus-reserve=8,mem-reserve=32M`
+(buses 1-9, memory `FCA00000-FE9FFFFF`), the host `tb3-alpine-ridge`
+with the ORICO model (`device-model=asm2464`), which on i440FX puts its
+NVMe directly on the tunnel bus: the earlier NVMe legs had no bridge in
+between. A two-level bridge chain with an NVMe behind it was added behind
+the tunnel bridge's gate (hot-added `pci-bridge`s, then the BAR-less
+`usb4-asm-pci-usp` and `pci-bridge-seat` of the NT legs at slot 4), so it
+came up in reset state at the plug. The ACPI-mode guest is not the
+P14s's APM mode; the mechanism read is the same.
+
+- **No driver change, a Refresh, read before any restart.** The first
+  bridge got bus 1 -> 2/2 (no room below) and only its own BAR, and a
+  wizard asked for a restart; a second pass numbered the second bridge
+  and gave the first a window at `10100000-101FFFFF`, outside the tunnel
+  bridge's, and asked for a restart again. The NVMe got nothing.
+- **`HalGetBusData`** on 98 SE did not answer for a function PCI.VXD did
+  not know yet: the first prototype's survey through it found an empty bus.
+  The numbering reads and writes through PCI.VXD's own services.
+
+### The prototypes on the P14s
+
+Each was a replaced `xhcicm.sys`, the enclosure plugged in after a start
+without it, 30 s, then the exports.
+
+| Series | Build | Result |
+|---|---|---|
+| c | bus numbers only (`cd56e90f`) | upstream port still Code 29; both ASMedia keys' LogConfig rewritten with the memory window closed and no IRQ, so PCI.VXD had reached the downstream port; no `XhciCmBridgeDiag` in this build |
+| d | bus numbers and windows (`0c50f11b`) | both bridges started at `E0000000-E00FFFFF`; Stor98 Code 29, no IRQ; `XhciCmBridgeDiag` (18 dwords): outcome numbered, port `0408` buses `002A0604`, window `E000D410`, bridges `00080706` and `00080807`, windows `E000E000` |
+| e | and interrupt lines (`bde7f10f`) | D: present, every problem code 0; Stor98 on IRQ 10, BARs `E0000000-E0005FFF`; diag word 18 `00010A01`, word 19 `00000303` |
+| f | the merged tree, reviewed (`b9c18c41`) | as e, every problem code 0, D: present, the same resources and diag |
+| g | the same build: Safely Remove in XHCITR, unplug, re-plug | as f: D: back, no device in error, the same resources and diag |
+
+The windows are the driver's own placement, at the top of the port's
+window; with the enclosure present at power-on the BIOS had put them at
+its bottom (`D4100000-D41FFFFF`).
+
+### The final build in the emulator
+
+The qemu flavour of `b9c18c41` on 98 SE, the BAR-less chain at slot 4
+(its NVMe's INTA reaches the tunnel port as INTA), Stor98 0.3.0.1
+(`releases\0.3.0.1`, `SHA256SUMS.txt` `aee07c9c...cb9`) installed through
+the wizard:
+
+| Leg | Result |
+|---|---|
+| First plug, devnodes new | bus numbers 1/2/3 and 2/3/3, both windows `FE900000-FE9FFFFF` inside the tunnel bridge's, line 10 on the NVMe (`irq-counts` 1 of 2, the ORICO's own NVMe at device 1 arriving on INTB left alone); a wizard and a restart request for each new bridge location, declined; then Stor98: the NVMe started with BAR `FE900000` and IRQ 10, E: mounted |
+| Hot plug after a reset with the unit out (devnodes known, the chain in reset state: the P14s case) | the same writes; no wizard, no restart request; E: within 30 s |
+| Unplug and re-plug in one session | the tunnel down removed the children; the emulator gives the chain back configured, so the survey read it numbered and wrote nothing; the NVMe started again |
+| Present at power-on | the driver found the port's devnode already holding the chain (`cm.brnum.9x.held`) and wrote nothing; the BIOS's configuration stood and the chain started |
+| `XhciCmBridgeNumbering` 0 (read as `0x100`: found, 0) | no numbering activity in the log; the chain kept closed windows, the NVMe got no BAR and no IRQ, no E: |
+
+ME, the qemu flavour of `fb98ed81` (the same set-up logic before the last
+review fixes), hot-added `pci-bridge` chain at slot 3: bus numbers
+1/2/3 and 2/3/3, both windows inside the tunnel bridge's
+(`FE800000-FE9FFFFF`), PCI.VXD then found the NVMe behind both bridges
+(a "PCI Card" wizard; no NVMe driver on that guest), and an interrupt
+line on 1 of the 4 functions with a pin: the other three reach the port
+on other pins and were left alone, as the rule says.
+
+The final build, the qemu flavour of `49809c08` (the windows' sizing
+with an aligned region for the BARs at each level, the readiness wait
+behind a new bridge, a stale attempt's undo), on 98 SE after a restart
+with the unit out: the same bus numbers, windows and line as above,
+`win-need` now `00200000` (the ORICO's own NVMe beside the chain takes
+an aligned 1 MiB region), no wizard, E: within 30 s. For the P14s chain
+the writes are the same as `b9c18c41`'s: nothing sits beside the
+upstream port and the NVMe answers behind the downstream port, so its
+windows come out at `E0000000-E00FFFFF` as before.
+
+Not read: the USB4 profile with a bridge chain (the same worker and the
+same member set, so covered by the shared path, not tested under USB4);
+ME with Stor98 and known devnodes.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link

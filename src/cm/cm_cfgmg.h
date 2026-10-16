@@ -127,6 +127,29 @@
 #define CMG_DN_NT_DRIVER            0x01000000UL    /* line 2074, DN_NT_DRIVER */
 #define CMG_DN_CHANGEABLE_FLAGS     0x79BB62E0UL    /* line 2086, DN_CHANGEABLE_FLAGS */
 
+/*
+ * PCI.VXD, Windows 98's PCI bus driver, whose configuration-space
+ * services the bus numbering of record 21 section 6.1.1 writes through
+ * (tbt_brnum.c). Values only, from two more headers of the same package:
+ *
+ *   PCI.H       (INC_WIN98_PCI.H, 8,081 bytes, SHA-256
+ *               0acdf32afe0cc5baca1d74d08638f4f02f744d4f7ed54edb10764c136feb34f9)
+ *   VXDWRAPS.H  (INC_WIN98_VXDWRAPS.H, 60,450 bytes, SHA-256
+ *               d43708f618ad2cd5ed4b66e1e3ebc31235710df83cc9673c54c22d4b07fbe884)
+ *
+ * PCI.H's service table opens at line 56 (Begin_Service_Table(PCI, VxD))
+ * with four entries and nothing else, numbered from 0 as VMM.H numbers
+ * every table. VXDWRAPS.H lines 313-314 give the two services' C
+ * signatures: _PCI_Read_Config(BYTE bus, BYTE devfunc, BYTE offset)
+ * returning the DWORD, and _PCI_Write_Config(BYTE bus, BYTE devfunc, BYTE
+ * offset, DWORD value), both _cdecl. The run-time guard (cm_cfgmg.c's
+ * CmCfgmgPciOpen) reads a known function through Read_Config and compares
+ * it with HalGetBusData's reading before Write_Config is ever called.
+ */
+#define CMG_PCI_VXD_ID              0x0043  /* VMM.H line 197, PCI_DEVICE_ID */
+#define CMG_PCI_SVC_READ_CONFIG     1       /* PCI.H line 58, _PCI_Read_Config */
+#define CMG_PCI_SVC_WRITE_CONFIG    2       /* PCI.H line 59, _PCI_Write_Config */
+
 /* Problem numbers, for Get_DevNode_Status and Set_DevNode_Problem. */
 #define CMG_PROB_NOT_CONFIGURED     0x01    /* line 1048, CM_PROB_NOT_CONFIGURED */
 #define CMG_PROB_FAILED_START       0x0A    /* line 1057, CM_PROB_FAILED_START */
