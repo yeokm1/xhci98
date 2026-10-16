@@ -416,6 +416,11 @@ int inst_value_question(char *out, size_t cap, int index, INST_U32 mask,
                         INST_U32 def, const INST_VNOW *now, int n,
                         int cmNewNote, int list, INST_U32 *enter);
 
+/* A value's caution as shown: a "%s" in it names the values it is about
+ * that are among values (CautionMask & values), "1" or "1 or 3", so the
+ * note never speaks of a value the question does not offer. */
+void inst_caution_text(int index, INST_U32 values, char *out, size_t cap);
+
 /* A yes-or-no question: the question, a line each for Y and N with their
  * meaning, and "Enter for [Y]: " or "Enter for [N]: ". */
 size_t inst_yesno_question(char *out, size_t cap, const char *question,
@@ -470,6 +475,7 @@ void inst_dir_default(const char *sysDrive, const char *windir, char *out,
 /* The registry record of the install directory (record 23 section 9.6). */
 #define INST_DIR_KEY        "Software\\xhci98"
 #define INST_DIR_VALUE      "InstallDir"
+#define INST_DIR_MOVEFROM   "MoveFrom"
 
 /* ---- switches and exit codes (record 23 section 7) ----------------------------------- */
 

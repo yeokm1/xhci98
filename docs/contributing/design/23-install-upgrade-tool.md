@@ -37,7 +37,10 @@ recorded in the registry for the update and the uninstall, and on 98 SE
 and ME the package copy `DevicePath` names goes there too (section 9.6;
 it replaces `%windir%\XHCI98` in sections 4.4, 6.2, 9.4 and 9.5); and on
 98 SE and ME the steps are a short numbered list per device, followed by
-an offer to open Device Manager (section 6.4).
+an offer to open Device Manager (section 6.4). The owner then decided, the
+same day, that on 98 SE and ME the package copy goes straight into the
+install directory with no subfolder (section 4.4), and that Enter at the
+confirmation goes on ("Enter for [Y]", section 5.1 step 4).
 
 The tool never ships `devcon` or any other Microsoft file, never drives
 Windows 98's 16-bit setup engine (`SETUPX`) through anything undocumented,
@@ -281,14 +284,33 @@ or 98 SE is refused too: it is not a target of this package.
 
 Every run that changes anything first copies the flavour directory's files
 to a directory of this project's own - on 2000 to 7 under
-`%windir%\XHCI98\`, on 98 SE and ME under the install directory (section
-9.6, revision 10) - and stages and installs from that copy (decision D7). Two reasons: on Windows 2000 and
+`%windir%\XHCI98\`, on 98 SE and ME the install directory itself (section
+9.6, revision 10; below) - and stages and installs from that copy
+(decision D7). Two reasons: on Windows 2000 and
 XP a device found later takes its files from where the INF was staged from,
 which must not be a CD, a floppy or a USB stick behind the controller being
 updated; and on 98 SE and ME the directory is what `DevicePath` names
 (section 6).
 
-**The copies are immutable.** Each is named for its content - eight hex
+**98 SE and ME since revision 10: the install directory itself**
+(owner, 2026-10-16: no subfolder; `DevicePath` names `C:\XHCI98` and the
+steps say "type C:\XHCI98"). What the immutable subfolders below gave is
+kept by the order of an update (`make_flat_copy`): the new files are
+staged and checked in `XHCIINST.NEW` below the directory, with a list
+whose first line is `#TAG <content tag>`; `DevicePath` stops naming the
+directory; the current list is renamed `XHCIINST.OLD` and its files
+deleted (each listed INF with its `.PNF`); the staged files are moved in;
+the new list is put in place last; and only then does `DevicePath` name
+the directory again. So no wizard searches a mixture of two packages,
+and a run cut short leaves the directory off `DevicePath`, every file of
+the package in it named by one of the three lists, for the next run to
+finish. A package file's name that is in the directory and on none of
+the lists is the user's: the copy refuses, and nothing the user put
+there is overwritten or deleted. A copy whose tag and files are this
+package's is left as it is. The uninstall deletes what the lists name,
+and the tool, and nothing else.
+
+**On 2000 to 7 the copies are immutable.** Each is named for its content - eight hex
 digits, an FNV-1a hash of every file's relative name and bytes (an 8.3
 name, which 98 SE's "Copy files from" box takes as typed, section 6.2) -
 holds an `XHCIINST.LST` naming the files the tool
@@ -335,9 +357,11 @@ does not install it.
    verdict (section 5.4); print the plan, the warnings (section 5.8 for
    the input warning) and the questions that would be asked. `/list`
    stops here, exit 0, having written nothing (section 7.1).
-4. Ask the registry questions (section 8), then ask once whether to go on
-   (`Y`; anything else, or end of input, cancels with exit 1 and changes
-   nothing; an empty answer cancels too). `/yes` skips the confirmation
+4. Ask the registry questions (section 8) and the install directory
+   (section 9.6), then ask once whether to go on (`Y`, or Enter since the
+   owner's decision of 2026-10-16, revision 10; `N`, or end of input,
+   cancels with exit 1 and changes nothing; another answer is asked
+   again). `/yes` skips the confirmation
    and asks no registry question either - a run nobody answers keeps every
    value `/set` does not name, as `/defaults` does (decided 2026-10-15
    from the 98 SE leg, where `/set ... /yes` still asked); `/defaults` and
@@ -842,22 +866,23 @@ its set.
 
 ### 6.2 The route
 
-1. The local copy (section 4.4): this package's own directory under the
-   install directory (section 9.6; `%windir%\XHCI98\` before revision
-   10), which holds the INFs - the parent holds none, and no
-   recursive search is assumed. On 98 and ME it never takes the `nt\`
+1. The local copy (section 4.4): the install directory itself (section
+   9.6; a `<hash>` directory under `%windir%\XHCI98\` before revision
+   10), which holds the INFs; no recursive search is assumed. On 98 and ME it never takes the `nt\`
    subdirectory nor a filter INF wherever it lies, so the wizards cannot
    offer the filter for a bridge (39-0.4).
 2. `DevicePath` names that directory: every entry under
    `%windir%\XHCI98\` (an earlier build's copy, which the tool itself
-   added), and every entry that is a copy directly in the install
-   directory or in the one an earlier install recorded
-   (`<dir>\<eight hex digits>`, `inst_path_remove_copies`: another entry
-   under a directory the user chose is kept), is taken out of the list and
-   this copy's directory appended, compared without case; no other entry is reordered or removed, and the value
-   keeps its type. So the wizards search this release's copy alone; the
-   earlier copies stay on disk, where an INF Windows installed from one may
-   still look for its files, until the uninstall.
+   added), the install directory and the one an earlier install recorded,
+   and every `<hash>` copy directly in either (`<dir>\<eight hex digits>`,
+   `inst_path_remove_copies`: another entry under a directory the user
+   chose is kept) is taken out of the list and the install directory
+   appended, compared without case; no other entry is reordered or
+   removed, and the value keeps its type. So the wizards search this
+   release's copy alone. The earlier layouts' `<hash>` copies are deleted
+   once `DevicePath` no longer names them (`hashed_cleanup`; in a
+   directory the user chose, only a `<hash>` directory holding this tool's
+   list).
 3. The device installer then finds the package's INFs in a directory it
    searches by itself. **Read on 98 SE** (2026-10-15, `runs/run-40.md`):
    after `DevicePath` named the copy, the Add New Hardware wizard that
@@ -870,8 +895,9 @@ its set.
    guest), not the INF's directory, and took the files once the copy's
    directory was typed into that box; then it asked for the Windows CD for
    `usbd.sys`, as a Have Disk install does. So the printed steps name that
-   question and the folder to type, and the copy's directory is named by
-   eight hex digits - an 8.3 name, typed as printed. A wizard cancelled
+   question and the folder to type, which is the install directory, whose
+   every part is an 8.3 name with no spaces (section 9.6), typed as
+   printed. A wizard cancelled
    before the tool ran does not come back when Device Manager is
    refreshed; it comes back at the next start. ME is read on its own leg.
 4. The OS's own files the INF asks for through `LayoutFile=layout.inf`
@@ -1605,8 +1631,9 @@ The owner, having run the tool on a real machine: the user names the
 install directory, or it is `C:\XHCI98`.
 
 - **What goes there**: the USB tree tool (section 9.5), and on 98 SE and
-  ME the local copies (section 4.4) that `DevicePath` names and the user
-  types into the hardware wizards. On 2000 to 7 the local copies stay in
+  ME the package's drivers themselves, in the directory with no subfolder
+  (section 4.4), which `DevicePath` names and the user types into the
+  hardware wizards. On 2000 to 7 the local copies stay in
   `%windir%\XHCI98`: Windows 2000 and XP take a device's files later from
   where its INF was staged, so a copy that moved would break the next
   device's install. The question lists what goes there, one line each.
@@ -1635,6 +1662,10 @@ install directory, or it is `C:\XHCI98`.
   drive must be a local hard disk (`GetDriveTypeA`, `DRIVE_FIXED`) and the
   path a directory or absent below one. It is made, parents first, when
   something is first put there.
+- **Checked as typed** whatever its source: `/to`, an answer, and the
+  default too, so that an unpacked package in `C:\XHCI98` refuses the
+  default under `/yes` ("name another with /to") rather than install
+  into the package.
 - **The record**: `HKLM\Software\xhci98`, value `InstallDir` (`REG_SZ`),
   written once what goes there is in place - the tool, or on 98 SE and ME
   the copy and `DevicePath`. The uninstall deletes the value, and the key
@@ -1650,15 +1681,20 @@ install directory, or it is `C:\XHCI98`.
   directory (section 9.5's `.TMP` route), the Run value names it, the
   record is written, and only then is the old copy deleted - one in use
   is, on NT, renamed `.DEL` and deleted at the restart, and on 98 SE and
-  ME left with a step. On 98 SE and ME the new copy is made and
+  ME left with a step. Two names of one directory (a short and a long
+  path) are one directory, not a move (`GetShortPathNameA`). Whatever of
+  the tool a move leaves in the old directory is recorded as
+  `MoveFrom` beside `InstallDir`: the next install finishes the move and
+  the uninstall cleans it, and a finished move deletes the value. On 98 SE and ME the new copy is made and
   `DevicePath` updated first, and the old directory's copies are removed
   only once `DevicePath` no longer names them; the old directory goes if
   it is then empty. No replacement is deferred and `WININIT.INI` is never
   edited, as in section 9.5.
-- **The uninstall** removes the tool from the install directory and from
-  an earlier build's `%windir%\XHCI98`, the local copies (in the install
-  directory only the directories named as copies are, eight hex digits,
-  so a directory the user chose keeps what else is in it), the
+- **The uninstall** removes the tool from the install directory, from
+  an earlier build's `%windir%\XHCI98` and from a `MoveFrom` directory,
+  the package copy (what its lists name) and the `<hash>` copies (in a
+  directory the user chose only those holding this tool's list), so a
+  directory the user chose keeps what else is in it; then the
   directories when empty, and the record.
 - XHCITR does not care where it lives: it names no directory, and the
   maintenance lock, the quit event and the tray window's class are

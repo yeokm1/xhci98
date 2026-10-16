@@ -1457,8 +1457,8 @@ const INST_VALUE instValues[] = {
         NULL } },
     { "XhciInterruptMode", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0xFUL, 0xFUL,
       "how the controller's events arrive",
-      "1 and 3 refuse to start a controller Windows gives no line or no "
-      "message (Code 10).", 0xAUL,
+      "with %s, a controller Windows gives no such interrupt does not "
+      "start (Code 10).", 0xAUL,
       { "automatic", "the interrupt line only", "polling always",
         "a message-signalled interrupt only" } },
     /* Owner, 2026-10-15: never asked (Asked 0); /set Name=Value only. */
@@ -3151,7 +3151,49 @@ size_t inst_text_width(const char *text)
 /* The questions (owner, 2026-10-16)                                         */
 /* ======================================================================== */
 
-#define INST_RAW_CHARS 4096
+#define INST_RAW_CHARS 8192
+
+void inst_caution_text(int index, INST_U32 values, char *out, size_t cap)
+{
+    const char *c;
+    const char *p;
+    INST_U32 these;
+    INST_U32 b;
+    int n = 0;
+    int total = 0;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (index < 0 || index >= instValueCount ||
+        instValues[index].Caution == NULL) {
+        return;
+    }
+    c = instValues[index].Caution;
+    p = strstr(c, "%s");
+    if (p == NULL) {
+        inst_copy(out, c, cap);
+        return;
+    }
+    these = instValues[index].CautionMask != 0 ?
+            (instValues[index].CautionMask & values) : values;
+    for (b = 0; b < 32UL; b++) {
+        total += (these & (1UL << b)) != 0;
+    }
+    inst_copy(out, c, (size_t)(p - c) + 1 < cap ? (size_t)(p - c) + 1 : cap);
+    for (b = 0; b < 32UL; b++) {
+        if ((these & (1UL << b)) == 0) {
+            continue;
+        }
+        if (n > 0) {
+            inst_cat(out, cap, n + 1 == total ? " or " : ", ");
+        }
+        inst_cat_number(out, cap, b);
+        n++;
+    }
+    inst_cat(out, cap, p + 2);
+}
 
 int inst_value_question(char *out, size_t cap, int index, INST_U32 mask,
                         INST_U32 def, const INST_VNOW *now, int n,
@@ -3260,8 +3302,9 @@ int inst_value_question(char *out, size_t cap, int index, INST_U32 mask,
     inst_cat(raw, sizeof(raw), "\n");
     if (v->Caution != NULL &&
         (v->CautionMask == 0 || (v->CautionMask & mask) != 0)) {
+        inst_caution_text(index, mask, line, sizeof(line));
         inst_cat(raw, sizeof(raw), "  NOTE: ");
-        inst_cat(raw, sizeof(raw), v->Caution);
+        inst_cat(raw, sizeof(raw), line);
         inst_cat(raw, sizeof(raw), "\n");
     }
     /* Record 23 section 8.4 (decision D12): the two values whose default
@@ -3321,8 +3364,8 @@ size_t inst_dir_question(char *out, size_t cap, const char *toolName,
     if (toolName != NULL && strlen(toolName) > width) {
         width = strlen(toolName);
     }
-    if (copyName != NULL && strlen(copyName) + 1 > width) {
-        width = strlen(copyName) + 1;
+    if (copyName != NULL && strlen(copyName) > width) {
+        width = strlen(copyName);
     }
     if (width > 16) {
         width = 16;
@@ -3340,14 +3383,13 @@ size_t inst_dir_question(char *out, size_t cap, const char *toolName,
     }
     if (copyName != NULL) {
         inst_copy(key, copyName, sizeof(key));
-        inst_cat(key, sizeof(key), "\\");
         while (strlen(key) < width && strlen(key) + 1 < sizeof(key)) {
             inst_cat(key, sizeof(key), " ");
         }
         inst_cat(raw, sizeof(raw), "  ");
         inst_cat(raw, sizeof(raw), key);
-        inst_cat(raw, sizeof(raw), "  a copy of this package's drivers, for "
-                 "the hardware wizards\n");
+        inst_cat(raw, sizeof(raw), "  this package's drivers, where the "
+                 "hardware wizards look for them\n");
     }
     if (now != NULL && now[0] != '\0') {
         inst_cat(raw, sizeof(raw), "  now: ");

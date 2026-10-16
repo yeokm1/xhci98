@@ -17,11 +17,11 @@ the old driver unless Have Disk is used; Vista and 7 keeping an old build
 of the same version; the root hub's own update).
 
 On Windows 98 SE and ME the tool stages the files and you finish the
-installation in Device Manager: it copies the package to a folder in the
-install directory (C:\XHCI98 unless you choose another), adds that folder
-to the places the hardware wizards search, and prints the steps that
-remain, one action a line, with the folder to type if a wizard does not
-find the driver by itself. It then offers to open Device Manager.
+installation in Device Manager: it copies the package's drivers into
+the install directory (C:\XHCI98 unless you choose another), adds that
+folder to the places the hardware wizards search, and prints the steps
+that remain, one action a line, with the folder to type if a wizard does
+not find the driver by itself. It then offers to open Device Manager.
 
 It uses only routines Windows documents for this. It is not devcon, and
 this package carries no Microsoft file.
@@ -50,8 +50,8 @@ architecture and this build.
   Windows Vista, 7:  right-click INSTALL.BAT, Run as administrator.
 
   INSTALL              shows what it will do, asks the questions below,
-                       then asks once (Y) before it changes anything;
-                       any other answer, an empty one too, cancels
+                       then asks once before it changes anything: Y or
+                       Enter goes on, N cancels
   INSTALL /list        shows what it would do; changes nothing, asks
                        nothing, writes no log
   INSTALL /yes         asks nothing: goes on, and keeps every option
@@ -137,7 +137,10 @@ The install directory
 The tool asks where to install the xHCI98 tools, and lists what goes
 there: the xHCI98 USB Tree (XHCITR.EXE, or XHCITR64.EXE on 64-bit
 Windows), which starts at each login, and on Windows 98 SE and ME the
-copy of the package the hardware wizards search. Enter takes C:\XHCI98 on
+package's drivers (the INF and SYS files), which the hardware wizards
+search. An update replaces them all at once; a file of the same name
+that the tool did not put there stops it, and the uninstall removes only
+what it put there. Enter takes C:\XHCI98 on
 the drive Windows is on, or, on an update, the directory an earlier
 install used. /to path gives it without asking; /yes and /defaults take
 the default without asking.

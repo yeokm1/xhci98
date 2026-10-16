@@ -15,8 +15,10 @@ to confirm unless it names the owner; section 13 what is open.
 Revision 7, 2026-10-16 (the owner, after running the installer on a real
 machine): XHCIINST installs the tool in an install directory the user
 names, `C:\XHCI98` on the system's drive by default, instead of
-`%windir%\XHCI98\` (record 23 section 9.6); sections 2 and 8 follow. The
-tool names no directory of its own, so nothing in it changes.
+`%windir%\XHCI98\` (record 23 section 9.6); sections 2 and 8 follow. On
+98 SE and ME the package's drivers share that directory with it, named
+by XHCIINST's lists, which never name the tool. The tool names no
+directory of its own, so nothing in it changes.
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or

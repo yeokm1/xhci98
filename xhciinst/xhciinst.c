@@ -322,8 +322,8 @@ static void out_emit(const char *text)
 
 static void out(const char *fmt, ...)
 {
-    char buf[2048];
-    char wrapped[4096];
+    char buf[8192];
+    char wrapped[16384];
     va_list ap;
 
     va_start(ap, fmt);
@@ -386,8 +386,8 @@ static void log_open(void)
     logFile = fopen(logPath, "a");
     GetLocalTime(&t);
     if (logFile == NULL) {
-        printf("The log %s could not be opened; going on without it.\n\n",
-               logPath);
+        out("The log %s could not be opened; going on without it.\n\n",
+            logPath);
         logPath[0] = '\0';
         return;
     }
@@ -1887,7 +1887,7 @@ static void ask_values(void)
     int k;
     char line[64];
     char mask[64];
-    char question[4096];
+    char question[8192];
     INST_VNOW vnow[INST_MAX_NOW];
     int nNow;
     int cmNew;
@@ -1919,7 +1919,9 @@ static void ask_values(void)
             if (instValues[v].Caution != NULL &&
                 (instValues[v].CautionMask == 0 ||
                  (instValues[v].CautionMask & (1UL << answerValue[v])) != 0)) {
-                out("  NOTE: %s\n", instValues[v].Caution);
+                inst_caution_text(v, 1UL << answerValue[v], question,
+                                  sizeof(question));
+                out("  NOTE: %s\n", question);
             }
             out("\n");
             continue;
@@ -2726,6 +2728,8 @@ failed:
 static int package_tag(INST_U32 *tag);
 static void local_copy_name(INST_U32 tag, char *name, size_t cap);
 static void local_remove(const char *dir);
+static void flat_remove(const char *dir);
+static void movefrom_get(char *out, size_t cap);
 
 /* Every missing directory of path made, from the top down. 1 when path is a
  * directory afterwards. */
@@ -2804,7 +2808,8 @@ static void recorded_dir(char *out, size_t cap)
 }
 
 /* An earlier build's install, which recorded no directory: its tool in
- * %windir%\XHCI98, or on 98 SE and ME a local copy there. */
+ * %windir%\XHCI98, or on 98 SE and ME a package copy there (a <hash>
+ * directory with its list, or the list in the directory itself). */
 static int legacy_install(void)
 {
     char dir[INST_PATH_CHARS];
@@ -2823,6 +2828,10 @@ static int legacy_install(void)
     }
     if (envNow.Nt) {
         return 0;   /* NT's copies are kept there whatever the directory */
+    }
+    join(path, sizeof(path), dir, "XHCIINST.LST");
+    if (file_exists(path, NULL)) {
+        return 1;
     }
     join(path, sizeof(path), dir, "*.*");
     h = FindFirstFileA(path, &fd);
@@ -2853,33 +2862,63 @@ static void earlier_dir(char *out, size_t cap)
     }
 }
 
+/* 1 when a and b name the same directory: the same text, or, where both
+ * exist, the same short path (C:\PROGRA~1\X and C:\Program Files\X). */
+static int same_dir(const char *a, const char *b)
+{
+    char sa[INST_PATH_CHARS];
+    char sb[INST_PATH_CHARS];
+    DWORD na;
+    DWORD nb;
+
+    if (inst_eq(a, b)) {
+        return 1;
+    }
+    na = GetShortPathNameA(a, sa, sizeof(sa));
+    nb = GetShortPathNameA(b, sb, sizeof(sb));
+    return na != 0 && na < sizeof(sa) && nb != 0 && nb < sizeof(sb) &&
+           inst_eq(sa, sb);
+}
+
 static int moving(void)
 {
     return oldToolDir[0] != '\0' && toolDir[0] != '\0' &&
-           !inst_eq(oldToolDir, toolDir);
+           !same_dir(oldToolDir, toolDir);
+}
+
+/* Why a directory cannot be the install directory, or NULL. */
+static const char *dir_why(const char *path, const char *win, char *checked,
+                           size_t cap)
+{
+    int r = inst_dir_check(path, envNow.Nt, win, root, oldToolDir, checked,
+                           cap);
+
+    return r != INST_DIR_OK ? inst_dir_reason(r) : dir_usable(checked);
 }
 
 /* Record 23 section 9.6: the install directory - given with /to, or asked
  * (Enter: where an earlier install put the tools, else C:\XHCI98 on the
  * system's drive), or under /yes and /defaults that default unasked. NT
  * asks only when the package carries the USB tree tool, the one thing it
- * puts there. 1, or 0 refused (said). */
+ * puts there. The default is checked as a typed answer is. 1, or 0
+ * refused (said). */
 static int choose_dir(void)
 {
     char win[INST_PATH_CHARS];
     char sysDrive[16];
     char def[INST_PATH_CHARS];
+    char defChecked[INST_PATH_CHARS];
     char checked[INST_PATH_CHARS];
     char line[INST_PATH_CHARS];
     char from[INST_PATH_CHARS];
-    char copyName[16];
+    char moveFrom[INST_PATH_CHARS];
     char text[2048];
     const char *why;
-    INST_U32 tag;
+    const char *defWhy;
     int toolHere;
-    int r;
 
     toolDir[0] = '\0';
+    moveFrom[0] = '\0';
     join(from, sizeof(from), root, "tools\\xhcitr");
     join(from, sizeof(from), from, inst_tray_file(INST_MY_ARCH));
     toolHere = file_exists(from, NULL);
@@ -2887,6 +2926,7 @@ static int choose_dir(void)
         toolHere = 1;   /* the self-test sets oldToolDir itself */
     } else {
         earlier_dir(oldToolDir, sizeof(oldToolDir));
+        movefrom_get(moveFrom, sizeof(moveFrom));
     }
     if (envNow.Nt && !toolHere) {
         return 1;
@@ -2907,60 +2947,72 @@ static int choose_dir(void)
     } else {
         inst_dir_default(sysDrive, win, def, sizeof(def));
     }
-    logonly("install directory: earlier \"%s\", default %s\n", oldToolDir, def);
+    defWhy = dir_why(def, win, defChecked, sizeof(defChecked));
+    logonly("install directory: earlier \"%s\", default %s (%s), move from "
+            "\"%s\"\n", oldToolDir, def, defWhy != NULL ? defWhy : "usable",
+            moveFrom);
     if (opts.To[0] != '\0') {
-        r = inst_dir_check(opts.To, envNow.Nt, win, root, oldToolDir, checked,
-                           sizeof(checked));
-        why = r != INST_DIR_OK ? inst_dir_reason(r) : dir_usable(checked);
+        why = dir_why(opts.To, win, checked, sizeof(checked));
         if (why != NULL) {
             out("REFUSED: /to %s:\n  %s.\n", opts.To, why);
             return 0;
         }
         inst_copy(toolDir, checked, sizeof(toolDir));
-        out("Install directory: %s (/to)\n\n", toolDir);
-        return 1;
-    }
-    if (opts.Yes || opts.Defaults) {
-        inst_copy(toolDir, def, sizeof(toolDir));
-        out("Install directory: %s (%s)\n\n", toolDir,
+        out("Install directory: %s (/to)\n", toolDir);
+    } else if (opts.Yes || opts.Defaults) {
+        if (defWhy != NULL) {
+            out("REFUSED: the install directory %s cannot be used:\n  %s.\n"
+                "Name another with /to <path>.\n", def, defWhy);
+            return 0;
+        }
+        inst_copy(toolDir, defChecked, sizeof(toolDir));
+        out("Install directory: %s (%s)\n", toolDir,
             oldToolDir[0] != '\0' ? "where it is now" : "the default");
-        return 1;
-    }
-    copyName[0] = '\0';
-    if (!envNow.Nt && !stScreens && package_tag(&tag)) {
-        local_copy_name(tag, copyName, sizeof(copyName));
-    }
-    inst_dir_question(text, sizeof(text),
-                      toolHere ? inst_tray_file(INST_MY_ARCH) : NULL,
-                      envNow.Nt ? NULL : (copyName[0] ? copyName : "XXXXXXXX"),
-                      oldToolDir, def, envNow.Nt, opts.List);
-    out("%s", text);
-    if (opts.List) {
-        inst_copy(toolDir, def, sizeof(toolDir));
-        out("\n");
-        return 1;
-    }
-    for (;;) {
-        if (!read_line(line, sizeof(line))) {
+    } else {
+        inst_dir_question(text, sizeof(text),
+                          toolHere ? inst_tray_file(INST_MY_ARCH) : NULL,
+                          envNow.Nt ? NULL : "*.INF, *.SYS",
+                          oldToolDir, def, envNow.Nt, opts.List);
+        out("%s", text);
+        if (opts.List) {
+            if (defWhy != NULL) {
+                out("  (that one cannot be used: %s)\n", defWhy);
+            }
             inst_copy(toolDir, def, sizeof(toolDir));
             out("\n");
-            break;
+            return 1;
         }
-        inst_copy(checked, line, sizeof(checked));
-        r = inst_dir_check(line, envNow.Nt, win, root, oldToolDir, checked,
-                           sizeof(checked));
-        if (line[strspn(line, " \t")] == '\0') {
-            inst_copy(toolDir, def, sizeof(toolDir));
-            break;
+        for (;;) {
+            if (!read_line(line, sizeof(line))) {
+                if (defWhy != NULL) {
+                    out("\nREFUSED: no answer, and %s cannot be used: %s.\n",
+                        def, defWhy);
+                    return 0;
+                }
+                inst_copy(toolDir, defChecked, sizeof(toolDir));
+                out("\n");
+                break;
+            }
+            if (line[strspn(line, " \t")] == '\0') {
+                why = defWhy;
+                inst_copy(checked, defChecked, sizeof(checked));
+            } else {
+                why = dir_why(line, win, checked, sizeof(checked));
+            }
+            if (why == NULL) {
+                inst_copy(toolDir, checked, sizeof(toolDir));
+                break;
+            }
+            out("  Not that one: %s.\n  Type another%s: ", why,
+                defWhy == NULL ? ", or Enter for the one above" : "");
         }
-        why = r != INST_DIR_OK ? inst_dir_reason(r) : dir_usable(checked);
-        if (why == NULL) {
-            inst_copy(toolDir, checked, sizeof(toolDir));
-            break;
-        }
-        out("  Not that one: %s.\n  Enter for [%s]: ", why, def);
+        out("Install directory: %s\n", toolDir);
     }
-    out("Install directory: %s\n", toolDir);
+    /* A move an earlier run could not finish is finished now. */
+    if (moveFrom[0] != '\0' && !same_dir(moveFrom, toolDir) &&
+        (oldToolDir[0] == '\0' || same_dir(oldToolDir, toolDir))) {
+        inst_copy(oldToolDir, moveFrom, sizeof(oldToolDir));
+    }
     if (moving()) {
         out("  The xHCI98 tools move there from %s.\n", oldToolDir);
     }
@@ -2969,25 +3021,25 @@ static int choose_dir(void)
 }
 
 /* The install directory recorded (HKLM\Software\xhci98, InstallDir), once
- * what goes there is in place. */
-static void record_dir(void)
+ * what goes there is in place. 1 recorded (or already), 0 failed (said). */
+static int record_dir(void)
 {
     char cur[INST_PATH_CHARS];
     HKEY k;
     LONG w;
 
     if (toolDir[0] == '\0' || opts.List) {
-        return;
+        return 1;
     }
     if (reg_text3(HKEY_LOCAL_MACHINE, INST_DIR_KEY, INST_DIR_VALUE, cur,
                   sizeof(cur)) == 1 && strcmp(cur, toolDir) == 0) {
-        return;
+        return 1;
     }
     if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
         out("The install directory could not be recorded in the registry.\n");
         flagFailed = 1;
-        return;
+        return 0;
     }
     w = RegSetValueExA(k, INST_DIR_VALUE, 0, REG_SZ, (const BYTE *)toolDir,
                        (DWORD)strlen(toolDir) + 1);
@@ -2996,10 +3048,11 @@ static void record_dir(void)
         out("The install directory could not be recorded in the registry "
             "(error %ld).\n", (long)w);
         flagFailed = 1;
-        return;
+        return 0;
     }
     flagChanged = 1;
     logonly("wrote HKLM\\%s\\%s = %s\n", INST_DIR_KEY, INST_DIR_VALUE, toolDir);
+    return 1;
 }
 
 /* The uninstall's: the record deleted, and its key when nothing else is in
@@ -3015,6 +3068,7 @@ static void forget_dir(void)
                       KEY_SET_VALUE | KEY_QUERY_VALUE, &k) != ERROR_SUCCESS) {
         return;
     }
+    RegDeleteValueA(k, INST_DIR_MOVEFROM);
     r = RegDeleteValueA(k, INST_DIR_VALUE);
     if (r == ERROR_SUCCESS) {
         flagChanged = 1;
@@ -3104,6 +3158,7 @@ static void copies_remove(const char *dir, int all)
 {
     char pattern[INST_PATH_CHARS];
     char sub[INST_PATH_CHARS];
+    char lst[INST_PATH_CHARS];
     WIN32_FIND_DATAA fd;
     HANDLE h;
 
@@ -3113,22 +3168,91 @@ static void copies_remove(const char *dir, int all)
         return;
     }
     do {
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-            strcmp(fd.cFileName, ".") != 0 && strcmp(fd.cFileName, "..") != 0 &&
-            (all || inst_copy_name(fd.cFileName))) {
-            join(sub, sizeof(sub), dir, fd.cFileName);
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0 ||
+            inst_eq(fd.cFileName, "XHCIINST.NEW")) {
+            continue;
+        }
+        join(sub, sizeof(sub), dir, fd.cFileName);
+        join(lst, sizeof(lst), sub, "XHCIINST.LST");
+        /* In a directory the user chose, a copy is one named as a copy is
+         * and holding this tool's list: the name alone proves nothing. */
+        if (all || (inst_copy_name(fd.cFileName) &&
+                    GetFileAttributesA(lst) != 0xFFFFFFFFUL)) {
             local_remove(sub);
         }
     } while (FindNextFileA(h, &fd));
     FindClose(h);
 }
 
-/* After a move, the old directory: on 98 SE and ME its copies (DevicePath
- * no longer names them), then the directory itself if it is empty. NT's
- * %windir%\XHCI98 keeps its copies, and so stays. */
+/* The earlier layouts' copies on 98 SE and ME, once DevicePath no longer
+ * names them (record 23 section 9.6): every <hash> directory of
+ * %windir%\XHCI98, and those an earlier run of this build made in the
+ * install directory. */
+static void hashed_cleanup(void)
+{
+    char legacy[INST_PATH_CHARS];
+
+    if (envNow.Nt || opts.List || !legacy_dir(legacy, sizeof(legacy))) {
+        return;
+    }
+    copies_remove(legacy, 1);
+    if (!inst_eq(toolDir, legacy)) {
+        copies_remove(toolDir, 0);
+        if (!inst_eq(oldToolDir, legacy) && oldToolDir[0] != '\0') {
+            copies_remove(oldToolDir, 0);
+        }
+        if (RemoveDirectoryA(legacy)) {
+            flagChanged = 1;
+            out("%s removed.\n", legacy);
+        }
+    }
+}
+
+/* The record of a directory a move could not empty (HKLM\Software\xhci98,
+ * MoveFrom): the next install finishes the move, the uninstall cleans it. */
+static void movefrom_set(const char *dir)
+{
+    HKEY k;
+
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        return;
+    }
+    if (dir != NULL) {
+        RegSetValueExA(k, INST_DIR_MOVEFROM, 0, REG_SZ, (const BYTE *)dir,
+                       (DWORD)strlen(dir) + 1);
+        logonly("wrote HKLM\\%s\\%s = %s\n", INST_DIR_KEY, INST_DIR_MOVEFROM,
+                dir);
+    } else if (RegDeleteValueA(k, INST_DIR_MOVEFROM) == ERROR_SUCCESS) {
+        logonly("deleted HKLM\\%s\\%s\n", INST_DIR_KEY, INST_DIR_MOVEFROM);
+    }
+    RegCloseKey(k);
+}
+
+static void movefrom_get(char *out, size_t cap)
+{
+    char v[INST_PATH_CHARS];
+    char ok[INST_PATH_CHARS];
+
+    out[0] = '\0';
+    if (reg_text3(HKEY_LOCAL_MACHINE, INST_DIR_KEY, INST_DIR_MOVEFROM, v,
+                  sizeof(v)) == 1 &&
+        inst_dir_check(v, 1, NULL, NULL, NULL, ok, sizeof(ok)) == INST_DIR_OK) {
+        inst_copy(out, ok, cap);
+    }
+}
+
+/* After a move, the old directory: on 98 SE and ME its package copy and
+ * its earlier copies (DevicePath no longer names them), then the
+ * directory itself if it is empty. NT's %windir%\XHCI98 keeps its copies,
+ * and so stays. What is left of the tool there is recorded (MoveFrom) for
+ * the next run; a move finished deletes the record. */
 static void old_dir_cleanup(void)
 {
     char legacy[INST_PATH_CHARS];
+    TRAY_PATHS o;
+    int toolLeft;
 
     if (opts.List || !moving()) {
         return;
@@ -3137,16 +3261,20 @@ static void old_dir_cleanup(void)
         legacy[0] = '\0';
     }
     if (!envNow.Nt) {
+        flat_remove(oldToolDir);
         copies_remove(oldToolDir, inst_eq(oldToolDir, legacy));
     }
+    toolLeft = tray_paths_in(oldToolDir, &o) &&
+               (file_exists(o.Exe, NULL) || file_exists(o.Bak, NULL));
     if (RemoveDirectoryA(oldToolDir)) {
         flagChanged = 1;
         out("%s removed.\n", oldToolDir);
     } else if (GetFileAttributesA(oldToolDir) != 0xFFFFFFFFUL &&
-               !(envNow.Nt && inst_eq(oldToolDir, legacy))) {
+               !toolLeft && !(envNow.Nt && inst_eq(oldToolDir, legacy))) {
         out("%s kept: it holds files this tool did not put there.\n",
             oldToolDir);
     }
+    movefrom_set(toolLeft ? oldToolDir : NULL);
 }
 
 /* Record 23 section 9.5: the tool for this machine's architecture into the
@@ -3244,11 +3372,10 @@ static void tray_install(void)
     }
     /* In place: the directory is recorded, and after a move the old copy
      * goes - the Run value names the new one already (or none, /notray). */
-    if (file_exists(t.Exe, NULL)) {
-        record_dir();
-        if (moving() && tray_run_state(t.Run) != 2) {
-            tray_remove_old();
-        }
+    if (file_exists(t.Exe, NULL) &&
+        tray_run_state(t.Run) == (opts.NoTray ? 0 : 1) && record_dir() &&
+        moving()) {
+        tray_remove_old();
     }
 done:
     maint_unlock();
@@ -3307,22 +3434,36 @@ static void tray_remove_in(const TRAY_PATHS *t)
         t->Exe, t->Del);
 }
 
-/* The tool's copies: in the install directory, and in an earlier build's
- * %windir%\XHCI98 when that is another (record 23 section 9.6). */
+/* The tool's copies: in the install directory, in an earlier build's
+ * %windir%\XHCI98, and in a directory a move could not empty (oldToolDir,
+ * from MoveFrom), each once (record 23 section 9.6). */
 static void tray_remove(void)
 {
-    TRAY_PATHS t[2];
+    TRAY_PATHS t[3];
     char legacy[INST_PATH_CHARS];
+    const char *cand[3];
     int n = 0;
     int i;
+    int j;
+    int dup;
 
-    if (tray_paths(&t[0])) {
-        n = 1;
+    if (!legacy_dir(legacy, sizeof(legacy))) {
+        legacy[0] = '\0';
     }
-    if (legacy_dir(legacy, sizeof(legacy)) &&
-        !(n == 1 && inst_eq(legacy, t[0].Dir)) &&
-        tray_paths_in(legacy, &t[n])) {
-        n++;
+    cand[0] = toolDir;
+    cand[1] = legacy;
+    cand[2] = oldToolDir;
+    for (i = 0; i < 3; i++) {
+        if (cand[i][0] == '\0') {
+            continue;
+        }
+        dup = 0;
+        for (j = 0; j < n; j++) {
+            dup |= same_dir(cand[i], t[j].Dir);
+        }
+        if (!dup && tray_paths_in(cand[i], &t[n])) {
+            n++;
+        }
     }
     if (opts.List) {
         if (tray_run_state("") != 0) {
@@ -3397,7 +3538,7 @@ static void local_remove(const char *dir)
             if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
                 p[strlen(p) - 1] = '\0';
             }
-            if (p[0] == '\0' || strcmp(p, "END") == 0 ||
+            if (p[0] == '\0' || p[0] == '#' || strcmp(p, "END") == 0 ||
                 strchr(p, ':') != NULL || strstr(p, "..") != NULL ||
                 (strchr(p, '\\') != NULL && !inst_starts(p, "nt\\")) ||
                 strchr(p + (inst_starts(p, "nt\\") ? 3 : 0), '\\') != NULL) {
@@ -3463,27 +3604,39 @@ static void local_remove_all(void)
 {
     char legacy[INST_PATH_CHARS];
     char sub[INST_PATH_CHARS];
+    int i;
 
     if (!legacy_dir(legacy, sizeof(legacy))) {
         return;
     }
     tray_remove();
     /* %windir%\XHCI98 is this tool's own: every directory in it goes by
-     * its list. A chosen directory gives up only what is named as a copy. */
+     * its list. A chosen directory gives up only what its lists name and
+     * the <hash> directories that hold this tool's list. */
     copies_remove(legacy, 1);
-    if (!envNow.Nt && toolDir[0] != '\0' && !inst_eq(toolDir, legacy)) {
-        copies_remove(toolDir, 0);
+    if (!envNow.Nt) {
+        flat_remove(legacy);
     }
     join(sub, sizeof(sub), legacy, "RESTAGE.LST");
     if (DeleteFileA(sub)) {
         flagChanged = 1;
     }
+    for (i = 0; i < 2; i++) {
+        const char *d = i == 0 ? toolDir : oldToolDir;
+        if (d[0] == '\0' || same_dir(d, legacy) ||
+            (i == 1 && toolDir[0] != '\0' && same_dir(d, toolDir))) {
+            continue;
+        }
+        if (!envNow.Nt) {
+            flat_remove(d);
+            copies_remove(d, 0);
+        }
+        if (GetFileAttributesA(d) != 0xFFFFFFFFUL) {
+            dir_remove(d);
+        }
+    }
     if (GetFileAttributesA(legacy) != 0xFFFFFFFFUL) {
         dir_remove(legacy);
-    }
-    if (toolDir[0] != '\0' && !inst_eq(toolDir, legacy) &&
-        GetFileAttributesA(toolDir) != 0xFFFFFFFFUL) {
-        dir_remove(toolDir);
     }
     /* A tool left running on 98 SE or ME keeps the record, so the next
      * uninstall finds it. */
@@ -3702,7 +3855,11 @@ static int local_committed(const char *dir)
  * under <name> only once every file and the list are written, so a failed
  * copy never passes for a finished, immutable one; an unfinished one (from
  * an interrupted run, or an earlier build of this tool) is removed and
- * built again. */
+ * built again. 98 SE and ME copy into the install directory itself
+ * (make_flat_copy). */
+static int make_flat_copy(void);
+static int devicepath_update(const char *addDir);
+
 static int make_local_copy(void)
 {
     char rootDir[INST_PATH_CHARS];
@@ -3714,6 +3871,9 @@ static int make_local_copy(void)
     int ok;
     int committed;
 
+    if (!envNow.Nt) {
+        return make_flat_copy();
+    }
     if (!local_dir(rootDir, sizeof(rootDir)) || !package_tag(&tag)) {
         out("The local copy could not be prepared.\n");
         return 0;
@@ -3787,6 +3947,370 @@ static int make_local_copy(void)
         srcDir);
     return 1;
 }
+/* ---- 98 SE and ME: the package copy in the install directory itself ---- */
+
+/* Owner, 2026-10-16 (record 23 section 9.6): on 98 SE and ME the package's
+ * drivers go straight into the install directory, which DevicePath names
+ * and the user types into the hardware wizards - no subfolder. What the
+ * hashed, immutable subfolders gave is kept by the order of an update: the
+ * new files are first staged and checked in XHCIINST.NEW below it, then
+ * DevicePath stops naming the directory, then the old list is renamed
+ * XHCIINST.OLD and its files deleted, the new files moved in and the new
+ * list put in place last, and only then does DevicePath name it again. So
+ * no wizard searches a mixture of two packages, and a run cut short leaves
+ * the directory off DevicePath with every file it holds named by one of
+ * the three lists, for the next run to finish. A file in the way that no
+ * list names refuses the copy: nothing the user put there is overwritten
+ * or deleted. */
+
+#define INST_FLAT_LIST  "XHCIINST.LST"
+#define INST_FLAT_OLD   "XHCIINST.OLD"
+#define INST_FLAT_WORK  "XHCIINST.NEW"
+
+/* 1 when name is a line of dir\lst (without case), 0 not or no list. */
+static int flat_listed(const char *dir, const char *lst, const char *name)
+{
+    char path[INST_PATH_CHARS];
+    char *text;
+    char *p;
+    char *nl;
+    int found = 0;
+
+    join(path, sizeof(path), dir, lst);
+    text = read_file(path, NULL);
+    if (text == NULL) {
+        return 0;
+    }
+    for (p = text; *p != '\0' && !found; p = nl) {
+        nl = strchr(p, '\n');
+        if (nl == NULL) {
+            nl = p + strlen(p);
+        } else {
+            *nl++ = '\0';
+        }
+        if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
+            p[strlen(p) - 1] = '\0';
+        }
+        found = inst_eq(p, name);
+    }
+    free(text);
+    return found;
+}
+
+/* The files dir\lst names (each .inf with its .PNF) deleted, then lst.
+ * Only plain names: a list never reaches outside dir. */
+static void flat_remove_list(const char *dir, const char *lst)
+{
+    char path[INST_PATH_CHARS];
+    char file[INST_PATH_CHARS];
+    char *text;
+    char *p;
+    char *nl;
+    size_t n;
+
+    join(path, sizeof(path), dir, lst);
+    text = read_file(path, NULL);
+    if (text == NULL) {
+        return;
+    }
+    for (p = text; *p != '\0'; p = nl) {
+        nl = strchr(p, '\n');
+        if (nl == NULL) {
+            nl = p + strlen(p);
+        } else {
+            *nl++ = '\0';
+        }
+        if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
+            p[strlen(p) - 1] = '\0';
+        }
+        if (p[0] == '\0' || p[0] == '#' || strcmp(p, "END") == 0 ||
+            strchr(p, ':') != NULL || strchr(p, '\\') != NULL ||
+            strchr(p, '/') != NULL || strstr(p, "..") != NULL ||
+            inst_eq(p, inst_tray_file(INST_MY_ARCH))) {
+            continue;
+        }
+        join(file, sizeof(file), dir, p);
+        SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
+        if (DeleteFileA(file)) {
+            flagChanged = 1;
+        }
+        n = strlen(file);
+        if (n > 4 && inst_eq(file + n - 4, ".inf")) {
+            strcpy(file + n - 4, ".PNF");
+            SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
+            if (DeleteFileA(file)) {
+                flagChanged = 1;
+            }
+        }
+    }
+    free(text);
+    SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+    if (DeleteFileA(path)) {
+        flagChanged = 1;
+    }
+}
+
+/* A staging directory left by a run cut short: when the swap had begun (no
+ * list in dir), the files it already moved in are named by the staging
+ * list and go; the staging directory goes in any case. */
+static void flat_drop_work(const char *dir)
+{
+    char work[INST_PATH_CHARS];
+    char lst[INST_PATH_CHARS];
+    char *text;
+    char *p;
+    char *nl;
+    char file[INST_PATH_CHARS];
+
+    join(work, sizeof(work), dir, INST_FLAT_WORK);
+    if (GetFileAttributesA(work) == 0xFFFFFFFFUL) {
+        return;
+    }
+    join(lst, sizeof(lst), dir, INST_FLAT_LIST);
+    if (GetFileAttributesA(lst) == 0xFFFFFFFFUL) {
+        join(lst, sizeof(lst), work, INST_FLAT_LIST);
+        text = read_file(lst, NULL);
+        for (p = text; p != NULL && *p != '\0'; p = nl) {
+            nl = strchr(p, '\n');
+            if (nl == NULL) {
+                nl = p + strlen(p);
+            } else {
+                *nl++ = '\0';
+            }
+            if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
+                p[strlen(p) - 1] = '\0';
+            }
+            if (p[0] == '\0' || p[0] == '#' || strcmp(p, "END") == 0 ||
+                strchr(p, ':') != NULL || strchr(p, '\\') != NULL ||
+                strstr(p, "..") != NULL ||
+                inst_eq(p, inst_tray_file(INST_MY_ARCH))) {
+                continue;
+            }
+            join(file, sizeof(file), dir, p);
+            SetFileAttributesA(file, FILE_ATTRIBUTE_NORMAL);
+            if (DeleteFileA(file)) {
+                flagChanged = 1;
+            }
+        }
+        free(text);
+    }
+    flat_remove_list(work, INST_FLAT_LIST);
+    if (RemoveDirectoryA(work)) {
+        flagChanged = 1;
+    }
+}
+
+/* Everything of the package copy in dir removed (the uninstall, and the
+ * old directory after a move): a staging directory, the old list's files,
+ * the list's files. The tool and anything unlisted stay. */
+static void flat_remove(const char *dir)
+{
+    flat_drop_work(dir);
+    flat_remove_list(dir, INST_FLAT_OLD);
+    flat_remove_list(dir, INST_FLAT_LIST);
+}
+
+/* The "#TAG xxxxxxxx" line of dir's list, or 0 with none. */
+static int flat_tag(const char *dir, INST_U32 *tag)
+{
+    char path[INST_PATH_CHARS];
+    char *text;
+    char *p;
+    int ok = 0;
+
+    join(path, sizeof(path), dir, INST_FLAT_LIST);
+    text = read_file(path, NULL);
+    if (text == NULL) {
+        return 0;
+    }
+    p = strstr(text, "#TAG ");
+    if (p == text || (p != NULL && p[-1] == '\n')) {
+        *tag = (INST_U32)strtoul(p + 5, NULL, 16);
+        ok = 1;
+    }
+    free(text);
+    return ok;
+}
+
+static int flat_check_one(const char *rel, void *ctx)
+{
+    char from[INST_PATH_CHARS];
+    char to[INST_PATH_CHARS];
+
+    (void)ctx;
+    join(from, sizeof(from), pkgDir, rel);
+    join(to, sizeof(to), toolDir, rel);
+    return same_file(from, to);
+}
+
+/* A package file's name in the install directory: free, or one of the
+ * lists' (this tool's). Anything else is the user's, and refuses. */
+static int flat_free_one(const char *rel, void *ctx)
+{
+    char path[INST_PATH_CHARS];
+    char work[INST_PATH_CHARS];
+
+    (void)ctx;
+    join(path, sizeof(path), toolDir, rel);
+    join(work, sizeof(work), toolDir, INST_FLAT_WORK);
+    if (GetFileAttributesA(path) == 0xFFFFFFFFUL ||
+        flat_listed(toolDir, INST_FLAT_LIST, rel) ||
+        flat_listed(toolDir, INST_FLAT_OLD, rel) ||
+        flat_listed(work, INST_FLAT_LIST, rel)) {
+        return 1;
+    }
+    out("%s is in the install directory, and this tool did not put it "
+        "there: refused.\nMove it away, or choose another directory.\n", path);
+    return 0;
+}
+
+/* Each file of the staging list moved into the directory. 1, or 0 said. */
+static int flat_move_in(const char *work)
+{
+    char lst[INST_PATH_CHARS];
+    char from[INST_PATH_CHARS];
+    char to[INST_PATH_CHARS];
+    char *text;
+    char *p;
+    char *nl;
+    int ok = 1;
+
+    join(lst, sizeof(lst), work, INST_FLAT_LIST);
+    text = read_file(lst, NULL);
+    if (text == NULL) {
+        return 0;
+    }
+    for (p = text; *p != '\0' && ok; p = nl) {
+        nl = strchr(p, '\n');
+        if (nl == NULL) {
+            nl = p + strlen(p);
+        } else {
+            *nl++ = '\0';
+        }
+        if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
+            p[strlen(p) - 1] = '\0';
+        }
+        if (p[0] == '\0' || p[0] == '#' || strcmp(p, "END") == 0 ||
+            strchr(p, '\\') != NULL || strchr(p, ':') != NULL) {
+            continue;
+        }
+        join(from, sizeof(from), work, p);
+        join(to, sizeof(to), toolDir, p);
+        SetFileAttributesA(to, FILE_ATTRIBUTE_NORMAL);
+        DeleteFileA(to);
+        if (!MoveFileA(from, to)) {
+            out("%s could not be put in place (error %lu).\n", to,
+                (unsigned long)GetLastError());
+            ok = 0;
+        }
+    }
+    free(text);
+    return ok;
+}
+
+static int make_flat_copy(void)
+{
+    char work[INST_PATH_CHARS];
+    char lst[INST_PATH_CHARS];
+    char old[INST_PATH_CHARS];
+    char line[32];
+    COPY_CTX c;
+    INST_U32 tag;
+    INST_U32 have;
+    int committed;
+    int ok;
+
+    if (toolDir[0] == '\0' || !package_tag(&tag)) {
+        out("The copy of the package could not be prepared.\n");
+        return 0;
+    }
+    if (!make_dirs(toolDir)) {
+        out("%s could not be made (error %lu).\n", toolDir,
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    inst_copy(srcDir, toolDir, sizeof(srcDir));
+    committed = local_committed(toolDir);
+    if (committed < 0) {
+        out("%s\\%s cannot be read: refused, nothing changed.\n", toolDir,
+            INST_FLAT_LIST);
+        return 0;
+    }
+    join(work, sizeof(work), toolDir, INST_FLAT_WORK);
+    if (committed > 0 && flat_tag(toolDir, &have) && have == tag &&
+        GetFileAttributesA(work) == 0xFFFFFFFFUL &&
+        package_files(flat_check_one, NULL)) {
+        out("The copy of this package in %s is current.\n", toolDir);
+        return 1;
+    }
+    if (!package_files(flat_free_one, NULL)) {
+        return 0;
+    }
+    /* Staged and checked below the directory first. */
+    flat_drop_work(toolDir);
+    if (GetFileAttributesA(work) != 0xFFFFFFFFUL ||
+        !CreateDirectoryA(work, NULL)) {
+        out("%s could not be made (error %lu).\n", work,
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    join(lst, sizeof(lst), work, INST_FLAT_LIST);
+    c.List = fopen(lst, "w");
+    c.Dir = work;
+    c.Count = 0;
+    if (c.List == NULL) {
+        out("%s could not be written.\n", lst);
+        return 0;
+    }
+    _snprintf(line, sizeof(line) - 1, "#TAG %08lX\n", (unsigned long)tag);
+    line[sizeof(line) - 1] = '\0';
+    ok = fputs(line, c.List) >= 0 && package_files(copy_one, &c);
+    if (ok && (fprintf(c.List, "END\n") < 0 || fflush(c.List) != 0)) {
+        ok = 0;
+    }
+    if (fclose(c.List) != 0) {
+        ok = 0;
+    }
+    if (!ok) {
+        out("The copy of the package was not completed; it is removed.\n");
+        flat_drop_work(toolDir);
+        return 0;
+    }
+    /* DevicePath stops naming the directory while its files change. */
+    if (!devicepath_update(NULL)) {
+        flat_drop_work(toolDir);
+        return 0;
+    }
+    join(lst, sizeof(lst), toolDir, INST_FLAT_LIST);
+    join(old, sizeof(old), toolDir, INST_FLAT_OLD);
+    if (GetFileAttributesA(lst) != 0xFFFFFFFFUL) {
+        flat_remove_list(toolDir, INST_FLAT_OLD);
+        if (!MoveFileA(lst, old)) {
+            out("%s could not be renamed (error %lu).\n", lst,
+                (unsigned long)GetLastError());
+            return 0;
+        }
+    }
+    flat_remove_list(toolDir, INST_FLAT_OLD);
+    if (!flat_move_in(work)) {
+        out("The copy of the package in %s is not complete; it is not on "
+            "DevicePath.\nRun INSTALL.BAT again to finish it.\n", toolDir);
+        return 0;
+    }
+    join(old, sizeof(old), work, INST_FLAT_LIST);
+    if (!MoveFileA(old, lst)) {
+        out("%s could not be put in place (error %lu).\n", lst,
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    RemoveDirectoryA(work);
+    flagChanged = 1;
+    copiedNow = 1;
+    out("Copied %d files to %s; the hardware wizards take them from "
+        "there.\n", c.Count, toolDir);
+    return 1;
+}
+
 /* The /restage work file (record 23 section 5.7), %windir%\XHCI98\
  * RESTAGE.LST, written before a stored package is removed:
  *   PKG <the local copy's directory name>
@@ -5300,7 +5824,6 @@ static void testsigning_note(void)
 static int confirm(const char *what)
 {
     char line[16];
-
     char question[1024];
     char text[2048];
     int r;
@@ -5309,21 +5832,23 @@ static int confirm(const char *what)
         out("%s - going on (/yes).\n\n", what);
         return 1;
     }
+    /* Owner, 2026-10-16: Enter goes on. End of input (no console to
+     * answer) still cancels. */
     _snprintf(question, sizeof(question) - 1, "%s?", what);
     question[sizeof(question) - 1] = '\0';
     inst_yesno_question(text, sizeof(text), question, "go on",
-                        "cancel: nothing is changed", 0);
+                        "cancel: nothing is changed", 1);
     out("%s", text);
     for (;;) {
         if (!read_line(line, sizeof(line))) {
             out("\nNo answer: cancelled, nothing changed.\n");
             return 0;
         }
-        r = inst_tb_answer(line, 0);
+        r = inst_tb_answer(line, 1);
         if (r >= 0) {
             break;
         }
-        out("  Type Y or N, or Enter for [N]: ");
+        out("  Type Y or N, or Enter for [Y]: ");
     }
     if (r == 1) {
         out("\n");
@@ -5729,11 +6254,19 @@ static int devicepath_update(const char *addDir)
     }
     for (i = 0; i < 2; i++) {
         const char *d = i == 0 ? toolDir : oldToolDir;
-        if (d[0] == '\0' || inst_eq(d, rootDir)) {
+        if (d[0] == '\0') {
             continue;
         }
         inst_copy(newList, mid, sizeof(newList));
-        if (inst_path_remove_copies(newList, d, mid, sizeof(mid)) < 0) {
+        if (!inst_eq(d, rootDir) &&
+            inst_path_remove_copies(newList, d, mid, sizeof(mid)) < 0) {
+            out("DevicePath is too long to change.\n");
+            return 0;
+        }
+        /* The install directory itself, where 98 SE and ME keep the copy
+         * since the owner's decision of 2026-10-16. */
+        inst_copy(newList, mid, sizeof(newList));
+        if (inst_path_remove(newList, d, mid, sizeof(mid)) < 0) {
             out("DevicePath is too long to change.\n");
             return 0;
         }
@@ -6052,6 +6585,7 @@ static int run_install_9x(void)
         return inst_exit_code(0, 1, 0, 1);
     }
     record_dir();
+    hashed_cleanup();
     write_values();
     tray_install();
     old_dir_cleanup();
@@ -8508,7 +9042,7 @@ static void st_screens_once(int longest)
         inst_copy(id[1], "USB\\XHCI98_ROOT_HUB\\4&2C4F2A1B&0", sizeof(id[1]));
         inst_copy(id[2], "PCI\\VEN_8086&DEV_15EB&SUBSYS_22BE17AA&REV_06\\"
                   "4&1E7B9F5C&0&00E0", sizeof(id[2]));
-        inst_copy(dir, "C:\\XHCI98\\1A2B3C4D", sizeof(dir));
+        inst_copy(dir, "C:\\XHCI98", sizeof(dir));
     }
     /* The package and the devices: the controller at 2.4 (an update), its
      * root hub, a Thunderbolt controller with no driver (a new install). */
@@ -8880,7 +9414,9 @@ int main(int argc, char **argv)
         /* The install directory an earlier install used (record 23 section
          * 9.6): the recorded one, else an earlier build's %windir%\XHCI98. */
         earlier_dir(toolDir, sizeof(toolDir));
-        logonly("install directory: \"%s\"\n", toolDir);
+        movefrom_get(oldToolDir, sizeof(oldToolDir));
+        logonly("install directory: \"%s\", move from \"%s\"\n", toolDir,
+                oldToolDir);
         return finish(envNow.Nt ? run_uninstall_nt() : run_uninstall_9x());
     }
     if (envNow.Nt && !opts.List && api.UpdateDriver == NULL) {

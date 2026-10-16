@@ -1945,7 +1945,18 @@ static void test_questions(void)
     /* The caution, shown where it is about an offered value. */
     now[0].State = 0;
     inst_value_question(out, sizeof(out), mode, 0x7, 0, now, 1, 0, 0, &enter);
-    CHECK(strstr(out, "  NOTE: 1 and 3 refuse") != NULL, "the caution");
+    CHECK(strstr(out, "  NOTE: with 1, a controller") != NULL,
+          "the caution names only the offered value it is about");
+    inst_value_question(out, sizeof(out), mode, 0xF, 0, now, 1, 0, 0, &enter);
+    CHECK(strstr(out, "  NOTE: with 1 or 3, a controller") != NULL,
+          "both, where 3 is offered");
+    inst_value_question(out, sizeof(out), mode, 0x5, 0, now, 1, 0, 0, &enter);
+    CHECK(strstr(out, "NOTE") == NULL, "no caution without 1 or 3");
+    inst_caution_text(mode, 1UL << 3, longName, sizeof(longName));
+    CHECK(strncmp(longName, "with 3, ", 8) == 0, "/set 3: the caution of 3");
+    inst_caution_text(inst_value_find("XhciForceBulkOnly"), 0x3, longName,
+                      sizeof(longName));
+    CHECK(strncmp(longName, "read as each", 12) == 0, "a plain caution as is");
     CHECK(strstr(out, "    2  polling always\n") != NULL &&
           strstr(out, "    3  ") == NULL, "3 not offered: not listed");
     inst_value_question(out, sizeof(out), clean, 0x7, 0, now, 1, 0, 1, &enter);
@@ -1966,6 +1977,25 @@ static void test_questions(void)
     }
     CHECK(strstr(out, "  now: 0\n    (xHCI98") != NULL,
           "a long name on its own line");
+    /* Sixteen devices with names of 127 characters: the prompt still ends
+     * the question. */
+    {
+        static char big[16384];
+        INST_VNOW many[16];
+        char name127[128];
+        memset(name127, 'N', 127);
+        name127[127] = '\0';
+        for (i = 0; i < 16; i++) {
+            many[i].State = 1;
+            many[i].Value = 0;
+            many[i].Desc = name127;
+        }
+        inst_value_question(big, sizeof(big), approve, 0x3, 1, many, 16, 1, 0,
+                            &enter);
+        CHECK(strlen(big) > 17 &&
+              strcmp(big + strlen(big) - 17, "  Enter for [0]: ") == 0 &&
+              fits(big), "sixteen long names: the prompt is still there");
+    }
     /* Yes or no. */
     inst_yesno_question(out, sizeof(out), "Install Thunderbolt 3 / USB4 "
                         "support?", "install it", "leave it out", 0);
@@ -1983,9 +2013,9 @@ static void test_questions(void)
           strstr(out, "8 characters") == NULL &&
           strcmp(out + strlen(out) - 25, "  Enter for [C:\\XHCI98]: ") == 0,
           "NT: the tool, then Enter for [C:\\XHCI98]");
-    inst_dir_question(out, sizeof(out), "XHCITR.EXE", "1A2B3C4D",
+    inst_dir_question(out, sizeof(out), "XHCITR.EXE", "*.INF, *.SYS",
                       "C:\\WINDOWS\\XHCI98", "C:\\WINDOWS\\XHCI98", 0, 0);
-    CHECK(strstr(out, "  1A2B3C4D\\   a copy of this package") != NULL &&
+    CHECK(strstr(out, "  *.INF, *.SYS  this package's drivers") != NULL &&
           strstr(out, "  now: C:\\WINDOWS\\XHCI98\n") != NULL &&
           strstr(out, "no spaces") != NULL &&
           strstr(out, "Enter for [C:\\WINDOWS\\XHCI98]: ") != NULL,
