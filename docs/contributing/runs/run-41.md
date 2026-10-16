@@ -979,6 +979,36 @@ Not read: Safely Remove followed by the log (no unit was started, above);
 level 4's withheld ring (host vectors only); a checked flavour's drained
 ring (host vectors only).
 
+### xhcicm's DebugView switch and its value name (owner, 2026-10-16)
+
+The same leg set, after `XhciCmLogVerbosity` (default 2, the only name
+read) and `XhciCmLogDebugView` (record 21 section 8, decision D12
+reversed for the release flavour). The release `xhcicm.sys` was copied
+over the installed one and the values set by hand; DebugView 4.64 ran
+with kernel capture.
+
+- **98 SE** (the build of `1ff7e802`, whose emission code is the final
+  one): with `XhciCmLogDebugView` absent, nothing across a plug; set to 1
+  and restarted, xhcicm's records across an unplug and a plug
+  (`tbt.icm.device-gone`, `cm.action.tunnel-down`, `cm.reenum.*`,
+  `cm.brnum.9x.*`, `flush.*`); the report's counters held
+  `cm.log.debugview 1` and the node "this build hands the log to a
+  debugger".
+- **7 x86** (the build of `e05de30e`), the reports as a standard user:
+  `XhciLogVerbosity` 0 in the key and `XhciCmLogVerbosity` absent read
+  "Recording: on (XhciCmLogVerbosity 2)", so only the new name is read;
+  with `XhciCmLogDebugView` absent, nothing across a plug; with
+  `XhciCmLogVerbosity` 3 and `XhciCmLogDebugView` 1, xhcicm's records
+  across an unplug and "Recording: on (XhciCmLogVerbosity 3)". Windows 7
+  passes a plain `DbgPrint` only with the Debug Print Filter's `DEFAULT`
+  set (15 here), as for `xhci98.sys`.
+- No address record occurred in either leg; the withholding of the three
+  address values at levels below 4 is read by host vectors only
+  (`test_cm_query`).
+
+Evidence: `out\trl\shots\w98-dv-*`, `shots\w7-dv-*`,
+`report-w98-dv1.txt`, `report-w7-dv0.txt`, `report-w7-dv1.txt`.
+
 ## Bridges behind the tunnel port on 98 SE and ME (record 21 section 6.1.1)
 
 The question: why an ORICO ASM2464 USB4 enclosure plugged into the
