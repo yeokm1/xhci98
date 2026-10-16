@@ -215,44 +215,44 @@ it is refused with -TestSignPfx and without -SignOnly, and a run that names
 it checks the record, says whether it admits the binaries, and stops there,
 staging and signing nothing.
 
-.PARAMETER Nvme98Version
-The nvme98 build to bundle (owner, 2026-10-15): nvme98 is a separate
-BSD-3-Clause project, and the package may carry one of its released builds,
-copied unchanged from its release folder, never its source. The four
--Nvme98* pins go together; with none of them the package is built as before,
-with no nvme98. The version selects the layout (package-common.ps1, "nvme98,
-the bundled NVMe driver"): 0.1.x, from 0.1.1.0, is bundled unchanged under
-nvme98\ (nvme98\win9x\ and nvme98\x86\ in the x86 package, nvme98\amd64\ in
-the amd64 one); 0.2.0.0 and later put x86\ or x64\ at the package root. Both
-carry nvme98's LICENSE, NOTICE.TXT and readme.txt as nvme98-LICENSE.txt,
-nvme98-NOTICE.txt and nvme98-readme.txt beside the driver files. 0.1.0.0 is
-refused.
+.PARAMETER Stor98Version
+The Stor98 build to bundle (owner, 2026-10-16), 0.3.0.0 or later: Stor98
+(formerly nvme98) is a separate BSD-3-Clause project, and the package may
+carry one of its released builds, copied unchanged from its release folder,
+never its source. The four -Stor98* pins go together; with none of them the
+package is built as before, with no Stor98. The release folder's x86\ goes to
+the x86 package's root and its x64\ (with stor98-test.cer, the public half of
+Stor98's own test certificate) to the amd64 package's root, with Stor98's
+LICENSE, NOTICE.TXT and readme.txt as stor98-LICENSE.txt, stor98-NOTICE.txt
+and stor98-readme.txt beside them (package-common.ps1, "Stor98, the bundled
+NVMe driver"). The x64 stor98.sys keeps Stor98's own test signature; nothing
+here signs it. Any -Flavor takes it; make-release.ps1 passes the pins to its
+release legs alone, so a cut's debug directories carry none of it.
 
-.PARAMETER Nvme98Dir
-The pinned build's release folder, for example the nvme98 repository's
-releases\0.1.1.0. Read only.
+.PARAMETER Stor98Dir
+The pinned build's release folder, for example the Stor98 repository's
+releases\0.3.0.0. Read only.
 
-.PARAMETER Nvme98SumsSha256
+.PARAMETER Stor98SumsSha256
 The SHA-256 of that folder's SHA256SUMS.txt. It is checked first, then every
 file against SHA256SUMS.txt, then every copy in the package against it again;
-any mismatch, an unlisted file or a file the layout does not know is a
-refusal, before the package is staged.
+any mismatch, an unlisted file or a file the release layout does not know is
+a refusal, before the package is staged.
 
-.PARAMETER Nvme98InterfaceVersion
+.PARAMETER Stor98InterfaceVersion
 The pinned build's connection-manager link-state interface version, its
-nvme98cm.h's NVME98LS_VERSION, or "none" for a build with no link-state
-receiver (0.1.x). Compared with src\cm\nvme98cm.h, the header xhci98 compiles
-against ("none" matches only where there is no such header), and, where the
-release folder carries include\nvme98cm.h, that file byte for byte with it.
-A mismatch is a refusal unless -Nvme98AllowInterfaceMismatch.
+stor98cm.h's STOR98LS_VERSION (4 for 0.3.0.0). Compared with
+src\cm\stor98cm.h, the header xhci98 compiles against, and, where the
+release folder carries include\stor98cm.h, that file byte for byte with it.
+A mismatch is a refusal unless -Stor98AllowInterfaceMismatch.
 
-.PARAMETER Nvme98AllowInterfaceMismatch
+.PARAMETER Stor98AllowInterfaceMismatch
 Bundle the build although its interface version does not match. The override
 is printed with the mismatch it overrides.
 
-.PARAMETER Nvme98HeaderPath
+.PARAMETER Stor98HeaderPath
 The header the interface version is compared with, overriding
-src\cm\nvme98cm.h. Exists for the packager's own self-tests, and is refused
+src\cm\stor98cm.h. Exists for the packager's own self-tests, and is refused
 without -SkipBinaryGates, so no package of real binaries is checked against
 anything else.
 
@@ -363,12 +363,12 @@ param(
     [string]$TestSignPfx = "",
     [switch]$SignOnly,
     [string]$GatedManifestPath = "",
-    [string]$Nvme98Version = "",
-    [string]$Nvme98Dir = "",
-    [string]$Nvme98SumsSha256 = "",
-    [string]$Nvme98InterfaceVersion = "",
-    [switch]$Nvme98AllowInterfaceMismatch,
-    [string]$Nvme98HeaderPath = "",
+    [string]$Stor98Version = "",
+    [string]$Stor98Dir = "",
+    [string]$Stor98SumsSha256 = "",
+    [string]$Stor98InterfaceVersion = "",
+    [switch]$Stor98AllowInterfaceMismatch,
+    [string]$Stor98HeaderPath = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
     [switch]$NoTargetEvidence,
@@ -778,26 +778,26 @@ kernel-mode code signing, and the published x86 bytes stay those of the build.
         throw "no test-signing key at '$TestSignPfx' (-TestSignPfx). Design record 19 says how the project's is made and where it is held."
     }
 
-    # The bundled nvme98 build, verified before anything is built or staged:
+    # The bundled Stor98 build, verified before anything is built or staged:
     # its pins, its SHA256SUMS.txt and every file, its layout, and its
     # interface version against the header xhci98 compiles against.
-    if ($Nvme98HeaderPath -ne "" -and -not $SkipBinaryGates) {
-        throw "-Nvme98HeaderPath replaces the header the interface check reads, so it is for the packager's self-tests only (with -SkipBinaryGates); a package of real binaries is checked against src\cm\nvme98cm.h."
+    if ($Stor98HeaderPath -ne "" -and -not $SkipBinaryGates) {
+        throw "-Stor98HeaderPath replaces the header the interface check reads, so it is for the packager's self-tests only (with -SkipBinaryGates); a package of real binaries is checked against src\cm\stor98cm.h."
     }
-    if ($Nvme98HeaderPath -eq "") { $Nvme98HeaderPath = Join-Path $repo "src\cm\nvme98cm.h" }
-    $nvme98 = Resolve-Nvme98Input -Version $Nvme98Version -Dir $Nvme98Dir -SumsSha256 $Nvme98SumsSha256 `
-                                  -InterfaceVersion $Nvme98InterfaceVersion -HeaderPath $Nvme98HeaderPath `
-                                  -Allow:$Nvme98AllowInterfaceMismatch
-    $nvme98Files = @()
-    if ($null -ne $nvme98) {
-        Write-Step ("nvme98 {0} ({1} layout) from {2}" -f $nvme98.Version, $nvme98.Layout, $nvme98.Dir)
-        Write-Ok ("SHA256SUMS.txt is the pinned {0}, and every file matches it" -f $nvme98.SumsSha256)
-        if ($nvme98.Overridden) {
-            Write-Warn ("nvme98 INTERFACE MISMATCH OVERRIDDEN (-Nvme98AllowInterfaceMismatch): {0}" -f $nvme98.Mismatch)
+    if ($Stor98HeaderPath -eq "") { $Stor98HeaderPath = Join-Path $repo "src\cm\stor98cm.h" }
+    $stor98 = Resolve-Stor98Input -Version $Stor98Version -Dir $Stor98Dir -SumsSha256 $Stor98SumsSha256 `
+                                  -InterfaceVersion $Stor98InterfaceVersion -HeaderPath $Stor98HeaderPath `
+                                  -Allow:$Stor98AllowInterfaceMismatch
+    $stor98Files = @()
+    if ($null -ne $stor98) {
+        Write-Step ("Stor98 {0} from {1}" -f $stor98.Version, $stor98.Dir)
+        Write-Ok ("SHA256SUMS.txt is the pinned {0}, and every file matches it" -f $stor98.SumsSha256)
+        if ($stor98.Overridden) {
+            Write-Warn ("Stor98 INTERFACE MISMATCH OVERRIDDEN (-Stor98AllowInterfaceMismatch): {0}" -f $stor98.Mismatch)
         } else {
-            Write-Ok ("interface version '{0}' matches {1}" -f $nvme98.Interface, $Nvme98HeaderPath)
+            Write-Ok ("interface version '{0}' matches {1}" -f $stor98.Interface, $Stor98HeaderPath)
         }
-        $nvme98Files = @(Get-Nvme98PackageFiles -Release $nvme98 -Arch $Arch)
+        $stor98Files = @(Get-Stor98PackageFiles -Release $stor98 -Arch $Arch)
     }
 
     if (-not (Test-Path -LiteralPath $InfPath)) {
@@ -1341,18 +1341,18 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
     if (-not (Test-Path -LiteralPath $rootInf)) {
         Copy-Item -LiteralPath $InfPath -Destination $rootInf -Force
     }
-    # The bundled nvme98 build, last, so a name it shares with anything this
+    # The bundled Stor98 build, last, so a name it shares with anything this
     # project staged is a refusal rather than an overwrite; and each copy is
     # held to SHA256SUMS.txt again, so what was verified is what is staged.
-    foreach ($nf in $nvme98Files) {
+    foreach ($nf in $stor98Files) {
         $dest = Join-Path $stageDir $nf.Dest
         if (Test-Path -LiteralPath $dest) {
-            throw "nvme98's '$($nf.Source)' would land at '$($nf.Dest)', where this package already has a file. Bundled files never replace this project's own."
+            throw "Stor98's '$($nf.Source)' would land at '$($nf.Dest)', where this package already has a file. Bundled files never replace this project's own."
         }
         Ensure-Directory (Split-Path -Parent $dest)
-        Copy-Item -LiteralPath (Join-Path $nvme98.Dir $nf.Source) -Destination $dest
+        Copy-Item -LiteralPath (Join-Path $stor98.Dir $nf.Source) -Destination $dest
         if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -ne $nf.Sha256) {
-            throw "the staged copy of nvme98's '$($nf.Source)' does not match SHA256SUMS.txt; the release folder changed while it was being copied."
+            throw "the staged copy of Stor98's '$($nf.Source)' does not match SHA256SUMS.txt; the release folder changed while it was being copied."
         }
     }
 
@@ -1643,15 +1643,15 @@ that does not exist, or clear that one yourself.
         Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
         Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"
     }
-    if ($null -ne $nvme98) {
+    if ($null -ne $stor98) {
         # Where the hardware wizard is pointed for an NVMe controller; nothing
-        # here installs nvme98 (it is a separate project).
-        $nvWhere = if ($nvme98.Layout -eq "new") { "this directory's nvme98.inf" }
-                   elseif ($Arch -eq "amd64") { "nvme98\amd64\" }
-                   else { "nvme98\win9x\ (98 SE, ME) or nvme98\x86\ (2000 to 7)" }
-        Write-Host ("  NVMe     nvme98 {0} (bundled, unchanged): Have Disk -> {1}" -f $nvme98.Version, $nvWhere)
-        if ($nvme98.Overridden) {
-            Write-Warn ("nvme98 bundled with its interface mismatch overridden: {0}" -f $nvme98.Mismatch)
+        # here installs Stor98 (it is a separate project).
+        Write-Host ("  NVMe     Stor98 {0} (bundled, unchanged): Have Disk -> this directory's stor98.inf" -f $stor98.Version)
+        if ($Arch -eq "amd64") {
+            Write-Host "           its stor98.sys carries Stor98's own test signature (stor98-test.cer); test-signing mode loads it"
+        }
+        if ($stor98.Overridden) {
+            Write-Warn ("Stor98 bundled with its interface mismatch overridden: {0}" -f $stor98.Mismatch)
         }
     }
 } catch {

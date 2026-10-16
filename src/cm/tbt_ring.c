@@ -969,6 +969,10 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
                 for (k = 0; k < count; k++) {
                     buf[k] = f.Dw[3 + k];
                 }
+                if (cs == TBT_CS_ROUTER) {
+                    ring->LastReadAdapter = (f.Dw[2] >> TBT_CTL_ADP_SHIFT) &
+                                            TBT_CTL_ADP_MASK;
+                }
             }
             return TBT_OK;
         }

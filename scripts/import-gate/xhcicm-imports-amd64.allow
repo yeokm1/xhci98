@@ -84,7 +84,7 @@ ntoskrnl.exe!ObfDereferenceObject         all  required  nt52-amd64-export; twin
 ntoskrnl.exe!IoGetDmaAdapter               all  required  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.2)
 HAL.dll!KeStallExecutionProcessor          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!KeQueryTimeIncrement          all  required  nt52-amd64-export; the clock's tick period (cm_thr.c); KeQueryTickCount is inline on amd64
-# The nvme98 link-state channel (cm_nvlinkos.c; tasks 39-A.7 and 40-A.7).
+# The stor98 link-state channel (cm_nvlinkos.c; tasks 39-A.7 and 40-A.7).
 ntoskrnl.exe!ExCreateCallback              all    required  SITES=cm_nvlinkos.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!ExRegisterCallback            all    required  SITES=cm_nvlinkos.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!ExUnregisterCallback          all    required  SITES=cm_nvlinkos.obj nt52-amd64-export; twin of the x86 row

@@ -232,7 +232,7 @@ static void test_u4(void)
     p->Dev.Present = TRUE;
     p->Dev.Vendor = 0x8087;
     p->Dev.Device = 0x0B26;
-    p->Dev.Usb4Version = 0x10;
+    p->Dev.Usb4Version = 0x20;
     p->Dev.Route.Lo = 0x1;
     p->Dev.UuidValid = TRUE;
     p->Dev.Uuid[3] = 0xABCD1234UL;
@@ -265,7 +265,7 @@ static void test_u4(void)
     CHECK_EQ(get32(e, CM_ST_E_APPROVAL), CM_ST_APPR_APPROVED, "UP is approved");
     CHECK_EQ(get32(e, CM_ST_E_PORT_STATE), TBT_U4_UP, "port state");
     CHECK_EQ(get32(e, CM_ST_E_IDS), 0x0B268087UL, "router ids");
-    CHECK_EQ(get32(e, CM_ST_E_GEN), CM_ST_GEN_USB4 | 0x1000UL, "USB4 1.0");
+    CHECK_EQ(get32(e, CM_ST_E_GEN), CM_ST_GEN_USB4 | 0x2000UL, "USB4 1.0");
     CHECK_EQ(get32(e, CM_ST_E_LANES), CM_ST_LANES_BONDED, "bonded");
     CHECK_EQ(get32(e, CM_ST_E_TUNNELS),
              CM_ST_TUN_UP | (CM_ST_TUN_PRESERVED << 4), "PCIe up, USB3 kept");

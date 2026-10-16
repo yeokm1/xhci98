@@ -154,20 +154,21 @@ try {
         Assert-True (Test-Path -LiteralPath (Join-Path $flatOut $f)) "'$f' is missing from the flat package."
     }
 
-    # --- the bundled nvme98 build (owner, 2026-10-15) -----------------------
+    # --- the bundled Stor98 build (owner, 2026-10-16) -----------------------
     #
-    # nvme98 is a separate project, bundled from a pinned release folder.
-    # These are synthetic release folders in both layouts - 0.1.x (win9x\,
-    # x86\, amd64\, bundled under nvme98\) and 0.2.0.0 on (x86\ and x64\ at
-    # the package root), the second not yet cut by nvme98 - with stand-in
-    # files and a SHA256SUMS.txt written here, so nothing depends on the
-    # nvme98 repository being present.
-    Write-Step "nvme98: both layouts bundle unchanged, and every pin is held"
+    # Stor98 (formerly nvme98) is a separate project, bundled from a pinned
+    # release folder. These are synthetic release folders in its layout -
+    # x86\ and x64\, copied to the package root - with stand-in files and a
+    # SHA256SUMS.txt written here, so nothing depends on the Stor98
+    # repository being present.
+    Write-Step "Stor98: the release bundles unchanged, and every pin is held"
     $nvAmd64Inf = Join-Path $repo "src\xhci98-amd64.inf"
-    $nvNoHeader = Join-Path $script:work "no-such-nvme98cm.h"
-    $nvHeader1 = Join-Path $script:work "nvme98cm-1.h"
-    Set-Content -LiteralPath $nvHeader1 -Value "#define NVME98LS_VERSION            1" -Encoding ASCII
-    function New-Nvme98Release {
+    $nvNoHeader = Join-Path $script:work "no-such-stor98cm.h"
+    $nvHeader4 = Join-Path $script:work "stor98cm-4.h"
+    Set-Content -LiteralPath $nvHeader4 -Value "#define STOR98LS_VERSION            4" -Encoding ASCII
+    $nvHeaderNone = Join-Path $script:work "stor98cm-none.h"
+    Set-Content -LiteralPath $nvHeaderNone -Value "#define NVME98LS_VERSION            1" -Encoding ASCII
+    function New-Stor98Release {
         # A synthetic release folder: name -> text, then SHA256SUMS.txt over
         # every file. Returns the folder and the SHA-256 of SHA256SUMS.txt.
         param([string]$Name, [hashtable]$Files, [string[]]$Unlisted = @())
@@ -186,173 +187,156 @@ try {
         [System.IO.File]::WriteAllText($sums, (($lines -join "`r`n") + "`r`n"), (New-Object System.Text.ASCIIEncoding))
         return @{ Dir = $dir; Sha = (Get-FileHash -LiteralPath $sums -Algorithm SHA256).Hash }
     }
-    function New-Nvme98Inf { param([string]$V) return "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=10/20/2026,$V`r`n" }
-    $nvOldFiles = @{
-        "win9x\nvme98.inf" = (New-Nvme98Inf "0.1.1.0"); "win9x\nvme98.mpd" = "stand-in mpd"
-        "x86\nvme98.inf" = (New-Nvme98Inf "0.1.1.0"); "x86\nvme98.sys" = "stand-in x86 sys"
-        "amd64\nvme98.inf" = (New-Nvme98Inf "0.1.1.0"); "amd64\nvme98.sys" = "stand-in amd64 sys"
-        "amd64\nvme98-test.cer" = "stand-in cer"
-        "LICENSE" = "stand-in licence"; "NOTICE.TXT" = "stand-in notice"; "readme.txt" = "stand-in readme"
+    function New-Stor98Inf { param([string]$V) return "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=10/16/2026,$V`r`n" }
+    function Get-Stor98Files {
+        param([string]$V)
+        return @{
+            "x86\stor98.inf" = (New-Stor98Inf $V); "x86\stor98.mpd" = "stand-in mpd"; "x86\stor98.sys" = "stand-in x86 sys"
+            "x64\stor98.inf" = (New-Stor98Inf $V); "x64\stor98.sys" = "stand-in x64 sys"; "x64\stor98-test.cer" = "stand-in cer"
+            "LICENSE" = "stand-in licence"; "NOTICE.TXT" = "stand-in notice"; "readme.txt" = "stand-in readme"
+        }
     }
-    $nvNewFiles = @{
-        "x86\nvme98.inf" = (New-Nvme98Inf "0.2.0.0"); "x86\nvme98.mpd" = "stand-in mpd"; "x86\nvme98.sys" = "stand-in x86 sys"
-        "x64\nvme98.inf" = (New-Nvme98Inf "0.2.0.0"); "x64\nvme98.sys" = "stand-in x64 sys"; "x64\nvme98-test.cer" = "stand-in cer"
-        "LICENSE" = "stand-in licence"; "NOTICE.TXT" = "stand-in notice"; "readme.txt" = "stand-in readme"
-    }
-    $nvOld = New-Nvme98Release -Name "nv-0.1.1.0" -Files $nvOldFiles
-    $nvNew = New-Nvme98Release -Name "nv-0.2.0.0" -Files $nvNewFiles
+    $nvFiles = Get-Stor98Files "0.3.0.0"
+    $nvRel = New-Stor98Release -Name "nv-0.3.0.0" -Files $nvFiles
     function Get-NvArgs {
-        param($Rel, [string]$V, [string]$Iface = "none", [string]$Header = $nvNoHeader)
-        return @("-Nvme98Version", $V, "-Nvme98Dir", $Rel.Dir, "-Nvme98SumsSha256", $Rel.Sha,
-                 "-Nvme98InterfaceVersion", $Iface, "-Nvme98HeaderPath", $Header)
+        param($Rel, [string]$V, [string]$Iface = "4", [string]$Header = $nvHeader4)
+        return @("-Stor98Version", $V, "-Stor98Dir", $Rel.Dir, "-Stor98SumsSha256", $Rel.Sha,
+                 "-Stor98InterfaceVersion", $Iface, "-Stor98HeaderPath", $Header)
     }
     function Test-NvCopies {
         # Every expected file at its package path, byte for byte the release's.
         param([string]$Pkg, $Rel, [hashtable]$Map, [string]$What)
         foreach ($src in $Map.Keys) {
             $dest = Join-Path $Pkg $Map[$src]
-            Assert-True (Test-Path -LiteralPath $dest) "$What has no '$($Map[$src])' (nvme98's $src)."
+            Assert-True (Test-Path -LiteralPath $dest) "$What has no '$($Map[$src])' (Stor98's $src)."
             if (Test-Path -LiteralPath $dest) {
                 Assert-True ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -eq
                              (Get-FileHash -LiteralPath (Join-Path $Rel.Dir $src) -Algorithm SHA256).Hash) `
-                    "$What's '$($Map[$src])' is not nvme98's $src unchanged."
+                    "$What's '$($Map[$src])' is not Stor98's $src unchanged."
             }
         }
     }
-    $nvRenamed = @{ "LICENSE" = "nvme98-LICENSE.txt"; "NOTICE.TXT" = "nvme98-NOTICE.txt"; "readme.txt" = "nvme98-readme.txt" }
+    $nvRenamed = @{ "LICENSE" = "stor98-LICENSE.txt"; "NOTICE.TXT" = "stor98-NOTICE.txt"; "readme.txt" = "stor98-readme.txt" }
 
-    # The new layout (0.2.0.0 on), x86: x86\* and the renamed three at the root.
-    $nvOut = Join-Path $script:work "pkg-nv-new-x86"
-    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $nvOut) + (Get-NvArgs $nvNew "0.2.0.0"))
-    Assert-True ($r.ExitCode -eq 0) ("an x86 package bundling the new-layout nvme98 was rejected:`n" + $r.Output)
-    $map = @{ "x86\nvme98.inf" = "nvme98.inf"; "x86\nvme98.mpd" = "nvme98.mpd"; "x86\nvme98.sys" = "nvme98.sys" }
+    # x86: x86\* and the renamed three at the root, no stor98\ folder.
+    $nvOut = Join-Path $script:work "pkg-nv-x86"
+    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $nvOut) + (Get-NvArgs $nvRel "0.3.0.0"))
+    Assert-True ($r.ExitCode -eq 0) ("an x86 package bundling Stor98 was rejected:`n" + $r.Output)
+    $map = @{ "x86\stor98.inf" = "stor98.inf"; "x86\stor98.mpd" = "stor98.mpd"; "x86\stor98.sys" = "stor98.sys" }
     foreach ($k in $nvRenamed.Keys) { $map[$k] = $nvRenamed[$k] }
-    Test-NvCopies -Pkg $nvOut -Rel $nvNew -Map $map -What "the new-layout x86 package"
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nvOut "nvme98-test.cer"))) "the x86 package carries the x64 build's nvme98-test.cer."
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nvOut "SHA256SUMS.txt"))) "a package carries nvme98's SHA256SUMS.txt, which lists files it does not hold."
-    Assert-True ([System.IO.File]::ReadAllText((Join-Path $nvOut "xhci98.inf")) -eq [System.IO.File]::ReadAllText($plainInf)) "bundling nvme98 changed xhci98.inf."
+    Test-NvCopies -Pkg $nvOut -Rel $nvRel -Map $map -What "the x86 package"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nvOut "stor98-test.cer"))) "the x86 package carries the x64 build's stor98-test.cer."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nvOut "stor98"))) "the x86 package has a stor98\ folder; the files go to its root."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nvOut "SHA256SUMS.txt"))) "a package carries Stor98's SHA256SUMS.txt, which lists files it does not hold."
+    Assert-True ([System.IO.File]::ReadAllText((Join-Path $nvOut "xhci98.inf")) -eq [System.IO.File]::ReadAllText($plainInf)) "bundling Stor98 changed xhci98.inf."
 
-    # The new layout, amd64: x64\* at the root, the test certificate with it.
-    $nvOut = Join-Path $script:work "pkg-nv-new-amd64"
-    $r = Invoke-Packager (@("-Arch", "amd64", "-InfPath", $nvAmd64Inf, "-DriverPath", $driver, "-OutDir", $nvOut) + (Get-NvArgs $nvNew "0.2.0.0"))
-    Assert-True ($r.ExitCode -eq 0) ("an amd64 package bundling the new-layout nvme98 was rejected:`n" + $r.Output)
-    $map = @{ "x64\nvme98.inf" = "nvme98.inf"; "x64\nvme98.sys" = "nvme98.sys"; "x64\nvme98-test.cer" = "nvme98-test.cer" }
+    # amd64: x64\* at the root, Stor98's own test certificate with it under
+    # its own name, beside (never in place of) this project's.
+    $nvOut = Join-Path $script:work "pkg-nv-amd64"
+    $r = Invoke-Packager (@("-Arch", "amd64", "-InfPath", $nvAmd64Inf, "-DriverPath", $driver, "-OutDir", $nvOut) + (Get-NvArgs $nvRel "0.3.0.0"))
+    Assert-True ($r.ExitCode -eq 0) ("an amd64 package bundling Stor98 was rejected:`n" + $r.Output)
+    $map = @{ "x64\stor98.inf" = "stor98.inf"; "x64\stor98.sys" = "stor98.sys"; "x64\stor98-test.cer" = "stor98-test.cer" }
     foreach ($k in $nvRenamed.Keys) { $map[$k] = $nvRenamed[$k] }
-    Test-NvCopies -Pkg $nvOut -Rel $nvNew -Map $map -What "the new-layout amd64 package"
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nvOut "nvme98.mpd"))) "the amd64 package carries the 98/ME nvme98.mpd."
+    Test-NvCopies -Pkg $nvOut -Rel $nvRel -Map $map -What "the amd64 package"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nvOut "stor98.mpd"))) "the amd64 package carries the 98/ME stor98.mpd."
+    Assert-True ($r.Output -match "Stor98's own test signature") `
+        ("the amd64 package's summary does not say that stor98.sys keeps Stor98's own test signature. Output:`n" + $r.Output)
 
-    # The old layout (0.1.x), x86: win9x\ and x86\ unchanged under nvme98\.
-    $nvOut = Join-Path $script:work "pkg-nv-old-x86"
-    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $nvOut) + (Get-NvArgs $nvOld "0.1.1.0"))
-    Assert-True ($r.ExitCode -eq 0) ("an x86 package bundling the old-layout nvme98 was rejected:`n" + $r.Output)
-    $map = @{ "win9x\nvme98.inf" = "nvme98\win9x\nvme98.inf"; "win9x\nvme98.mpd" = "nvme98\win9x\nvme98.mpd"
-              "x86\nvme98.inf" = "nvme98\x86\nvme98.inf"; "x86\nvme98.sys" = "nvme98\x86\nvme98.sys" }
-    foreach ($k in $nvRenamed.Keys) { $map[$k] = "nvme98\" + $nvRenamed[$k] }
-    Test-NvCopies -Pkg $nvOut -Rel $nvOld -Map $map -What "the old-layout x86 package"
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nvOut "nvme98\amd64"))) "the x86 package carries nvme98's amd64\."
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nvOut "nvme98.inf"))) "the old layout put an nvme98 file at the package root."
-
-    # The old layout, amd64: amd64\ (with nvme98-test.cer) under nvme98\.
-    $nvOut = Join-Path $script:work "pkg-nv-old-amd64"
-    $r = Invoke-Packager (@("-Arch", "amd64", "-InfPath", $nvAmd64Inf, "-DriverPath", $driver, "-OutDir", $nvOut) + (Get-NvArgs $nvOld "0.1.1.0"))
-    Assert-True ($r.ExitCode -eq 0) ("an amd64 package bundling the old-layout nvme98 was rejected:`n" + $r.Output)
-    $map = @{ "amd64\nvme98.inf" = "nvme98\amd64\nvme98.inf"; "amd64\nvme98.sys" = "nvme98\amd64\nvme98.sys"
-              "amd64\nvme98-test.cer" = "nvme98\amd64\nvme98-test.cer" }
-    foreach ($k in $nvRenamed.Keys) { $map[$k] = "nvme98\" + $nvRenamed[$k] }
-    Test-NvCopies -Pkg $nvOut -Rel $nvOld -Map $map -What "the old-layout amd64 package"
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $nvOut "nvme98\win9x"))) "the amd64 package carries nvme98's win9x\."
-
-    # Without the input, no nvme98 at all (the flat package above).
-    Assert-True (@(Get-ChildItem -LiteralPath $flatOut -Recurse -Force | Where-Object { $_.Name -like "nvme98*" }).Count -eq 0) `
-        "a package built without the nvme98 input carries nvme98 files."
+    # Without the input, no Stor98 at all (the flat package above).
+    Assert-True (@(Get-ChildItem -LiteralPath $flatOut -Recurse -Force | Where-Object { $_.Name -like "stor98*" }).Count -eq 0) `
+        "a package built without the Stor98 input carries Stor98 files."
 
     # The interface version: pinned against the header xhci98 compiles
     # against; a mismatch refused, and bundled only with the override, which
     # is printed.
-    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-nv-if1")) +
-                          (Get-NvArgs $nvNew "0.2.0.0" "1" $nvHeader1))
-    Assert-True ($r.ExitCode -eq 0) ("interface version 1 against a header declaring 1 was refused:`n" + $r.Output)
     foreach ($bad in @(
-        @{ Iface = "1";    Header = $nvNoHeader; Says = "compiles against no nvme98 interface" },
-        @{ Iface = "2";    Header = $nvHeader1;  Says = "declares NVME98LS_VERSION 1" },
-        @{ Iface = "none"; Header = $nvHeader1;  Says = "no link-state receiver" }
+        @{ Iface = "4";    Header = $nvNoHeader;   Says = "compiles against no Stor98 interface" },
+        @{ Iface = "3";    Header = $nvHeader4;    Says = "declares STOR98LS_VERSION 4" },
+        @{ Iface = "4";    Header = $nvHeaderNone; Says = "defines no STOR98LS_VERSION" }
     )) {
         $out = Join-Path $script:work ("pkg-nv-ifbad-" + $bad.Iface)
-        $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $out) + (Get-NvArgs $nvNew "0.2.0.0" $bad.Iface $bad.Header))
+        $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $out) + (Get-NvArgs $nvRel "0.3.0.0" $bad.Iface $bad.Header))
         Assert-True ($r.ExitCode -ne 0 -and $r.Output -match [regex]::Escape($bad.Says)) `
             ("interface '$($bad.Iface)' against the wrong header was not refused with '$($bad.Says)'. Output:`n" + $r.Output)
-        Assert-True (-not (Test-Path -LiteralPath $out)) "a package refused for its nvme98 interface left an output directory."
+        Assert-True (-not (Test-Path -LiteralPath $out)) "a package refused for its Stor98 interface left an output directory."
     }
-    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-nv-ifover"), "-Nvme98AllowInterfaceMismatch") +
-                          (Get-NvArgs $nvNew "0.2.0.0" "2" $nvHeader1))
+    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-nv-ifover"), "-Stor98AllowInterfaceMismatch") +
+                          (Get-NvArgs $nvRel "0.3.0.0" "4" $nvNoHeader))
     Assert-True ($r.ExitCode -eq 0 -and $r.Output -match "INTERFACE MISMATCH OVERRIDDEN") `
-        ("-Nvme98AllowInterfaceMismatch did not bundle the build with the override printed. Output:`n" + $r.Output)
+        ("-Stor98AllowInterfaceMismatch did not bundle the build with the override printed. Output:`n" + $r.Output)
 
     # Every other pin, refused before anything is staged.
-    $nvTampered = New-Nvme98Release -Name "nv-tampered" -Files $nvNewFiles
-    Add-Content -LiteralPath (Join-Path $nvTampered.Dir "x86\nvme98.sys") -Value "changed" -Encoding ASCII
-    $nvExtra = New-Nvme98Release -Name "nv-extra" -Files ($nvNewFiles + @{ "x86\nvme98.dll" = "unlisted" }) -Unlisted @("x86\nvme98.dll")
-    $nvClash = New-Nvme98Release -Name "nv-clash" -Files ($nvNewFiles + @{ "x86\xhci98.inf" = "would replace ours" })
-    $nvTopFile = New-Nvme98Release -Name "nv-top" -Files ($nvNewFiles + @{ "other.txt" = "unknown top-level file" })
-    $nvOldMissing = $nvOldFiles.Clone(); $nvOldMissing.Remove("amd64\nvme98-test.cer")
-    $nvMissing = New-Nvme98Release -Name "nv-missing" -Files $nvOldMissing
-    $nv010 = New-Nvme98Release -Name "nv-0.1.0.0" -Files $nvOldFiles
-    $nvNewNoCer = $nvNewFiles.Clone(); $nvNewNoCer.Remove("x64\nvme98-test.cer")
-    $nvNoCer = New-Nvme98Release -Name "nv-nocer" -Files $nvNewNoCer
+    $nvTampered = New-Stor98Release -Name "nv-tampered" -Files $nvFiles
+    Add-Content -LiteralPath (Join-Path $nvTampered.Dir "x86\stor98.sys") -Value "changed" -Encoding ASCII
+    $nvExtra = New-Stor98Release -Name "nv-extra" -Files ($nvFiles + @{ "x86\stor98.dll" = "unlisted" }) -Unlisted @("x86\stor98.dll")
+    $nvClash = New-Stor98Release -Name "nv-clash" -Files ($nvFiles + @{ "x86\xhci98.inf" = "would replace ours" })
+    $nvTopFile = New-Stor98Release -Name "nv-top" -Files ($nvFiles + @{ "other.txt" = "unknown top-level file" })
+    $nvSubDir = New-Stor98Release -Name "nv-subdir" -Files ($nvFiles + @{ "x86\sub\stor98.cat" = "a nested file" })
+    $nvNoCerFiles = $nvFiles.Clone(); $nvNoCerFiles.Remove("x64\stor98-test.cer")
+    $nvNoCer = New-Stor98Release -Name "nv-nocer" -Files $nvNoCerFiles
+    $nvOldNames = New-Stor98Release -Name "nv-oldnames" -Files @{
+        "x86\nvme98.inf" = (New-Stor98Inf "0.3.0.0"); "x86\nvme98.mpd" = "stand-in mpd"; "x86\nvme98.sys" = "stand-in x86 sys"
+        "x64\nvme98.inf" = (New-Stor98Inf "0.3.0.0"); "x64\nvme98.sys" = "stand-in x64 sys"; "x64\nvme98-test.cer" = "stand-in cer"
+        "LICENSE" = "stand-in licence"; "NOTICE.TXT" = "stand-in notice"; "readme.txt" = "stand-in readme" }
+    $nv020 = New-Stor98Release -Name "nv-0.2.0.0" -Files (Get-Stor98Files "0.2.0.0")
     foreach ($bad in @(
-        @{ Args = (Get-NvArgs $nvNew "0.2.0.0") | ForEach-Object { if ($_ -eq $nvNew.Sha) { "0" * 64 } else { $_ } }; Says = "not the pinned" },
-        @{ Args = (Get-NvArgs $nvTampered "0.2.0.0"); Says = "Release folders are write-once" },
-        @{ Args = (Get-NvArgs $nvExtra "0.2.0.0"); Says = "not in its SHA256SUMS.txt" },
-        @{ Args = (Get-NvArgs $nvClash "0.2.0.0"); Says = "could clash" },
-        @{ Args = (Get-NvArgs $nvTopFile "0.2.0.0"); Says = "does not know where to put" },
-        @{ Args = (Get-NvArgs $nvMissing "0.1.1.0"); Says = "amd64\nvme98-test.cer" },
-        @{ Args = (Get-NvArgs $nvNew "0.1.1.0"); Says = "old layout carries" },
-        @{ Args = (Get-NvArgs $nvOld "0.2.0.0"); Says = "new layout carries" },
-        @{ Args = (Get-NvArgs $nv010 "0.1.0.0"); Says = "is never bundled" },
-        @{ Args = (Get-NvArgs $nvNoCer "0.2.0.0"); Says = "x64\nvme98-test.cer" },
-        @{ Args = (Get-NvArgs $nvOld "0.1.1.0" "1" $nvHeader1); Says = "has no link-state receiver" },
-        @{ Args = (Get-NvArgs $nvNew "0.2"); Says = "not a four-part version" },
-        @{ Args = @("-Nvme98Version", "0.2.0.0", "-Nvme98Dir", $nvNew.Dir); Says = "go together" },
-        @{ Args = @("-Nvme98AllowInterfaceMismatch"); Says = "no nvme98 input" }
+        @{ Args = (Get-NvArgs $nvRel "0.3.0.0") | ForEach-Object { if ($_ -eq $nvRel.Sha) { "0" * 64 } else { $_ } }; Says = "not the pinned" },
+        @{ Args = (Get-NvArgs $nvTampered "0.3.0.0"); Says = "Release folders are write-once" },
+        @{ Args = (Get-NvArgs $nvExtra "0.3.0.0"); Says = "not in its SHA256SUMS.txt" },
+        @{ Args = (Get-NvArgs $nvClash "0.3.0.0"); Says = "could clash" },
+        @{ Args = (Get-NvArgs $nvTopFile "0.3.0.0"); Says = "does not know where to put" },
+        @{ Args = (Get-NvArgs $nvSubDir "0.3.0.0"); Says = "outside its x86\ and x64\ directories" },
+        @{ Args = (Get-NvArgs $nvNoCer "0.3.0.0"); Says = "x64\stor98-test.cer" },
+        @{ Args = (Get-NvArgs $nvOldNames "0.3.0.0"); Says = "x86\stor98.inf" },
+        @{ Args = (Get-NvArgs $nv020 "0.2.0.0"); Says = "older than 0.3.0.0" },
+        @{ Args = (Get-NvArgs $nvRel "0.3.0.1"); Says = "not the pinned 0.3.0.1" },
+        @{ Args = (Get-NvArgs $nvRel "0.3"); Says = "not a four-part version" },
+        @{ Args = (Get-NvArgs $nvRel "0.3.0.0" "none"); Says = "a number" },
+        @{ Args = @("-Stor98Version", "0.3.0.0", "-Stor98Dir", $nvRel.Dir); Says = "go together" },
+        @{ Args = @("-Stor98AllowInterfaceMismatch"); Says = "no Stor98 input" },
+        @{ Args = @("-Nvme98Version", "0.3.0.0"); Says = "Nvme98Version" }
     )) {
         $out = Join-Path $script:work "pkg-nv-bad"
         $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $out) + @($bad.Args))
         Assert-True ($r.ExitCode -ne 0 -and $r.Output -match [regex]::Escape($bad.Says)) `
-            ("an nvme98 input was not refused with '$($bad.Says)'. Output:`n" + $r.Output)
-        Assert-True (-not (Test-Path -LiteralPath $out)) "a package refused for its nvme98 input left an output directory."
+            ("a Stor98 input was not refused with '$($bad.Says)'. Output:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath $out)) "a package refused for its Stor98 input left an output directory."
     }
 
-    # Any 0.1.x.y from 0.1.1.0 takes the old layout (a 0.1.1.1 hotfix
-    # included), and the substitute header is the self-tests' alone.
-    $nvOldFiles111 = @{}
-    foreach ($k in $nvOldFiles.Keys) { $nvOldFiles111[$k] = $nvOldFiles[$k].Replace("0.1.1.0", "0.1.1.1") }
-    $nvOld111 = New-Nvme98Release -Name "nv-0.1.1.1" -Files $nvOldFiles111
-    $nvOut = Join-Path $script:work "pkg-nv-old111"
-    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $nvOut) + (Get-NvArgs $nvOld111 "0.1.1.1"))
-    Assert-True ($r.ExitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $nvOut "nvme98\x86\nvme98.sys"))) `
-        ("an old-layout 0.1.1.1 was not bundled under nvme98\:`n" + $r.Output)
+    # A later Stor98 release bundles the same way, and the substitute header
+    # is the self-tests' alone.
+    $nv031 = New-Stor98Release -Name "nv-0.3.0.1" -Files (Get-Stor98Files "0.3.0.1")
+    $nvOut = Join-Path $script:work "pkg-nv-031"
+    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $nvOut) + (Get-NvArgs $nv031 "0.3.0.1"))
+    Assert-True ($r.ExitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $nvOut "stor98.sys"))) `
+        ("Stor98 0.3.0.1 was not bundled at the package root:`n" + $r.Output)
     $r = Invoke-Packager -WithBinaryGates -Arguments (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-nv-hdr"),
-                          "-NoTargetEvidence") + (Get-NvArgs $nvNew "0.2.0.0" "1" $nvHeader1))
+                          "-NoTargetEvidence") + (Get-NvArgs $nvRel "0.3.0.0"))
     Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "self-tests only") `
-        ("-Nvme98HeaderPath was accepted without -SkipBinaryGates. Output:`n" + $r.Output)
+        ("-Stor98HeaderPath was accepted without -SkipBinaryGates. Output:`n" + $r.Output)
 
-    # The release notes' one declaration, against what a cut bundles.
+    # The release notes' one declaration, exactly, against what a cut bundles.
     $bt = [string][char]96
     foreach ($c in @(
-        @{ Text = "x`r`nThis download bundles nvme98 ${bt}0.1.1.0${bt} (dry cut only).`r`ny"; V = "0.1.1.0"; Ok = $true },
-        @{ Text = "This download bundles nvme98 ${bt}0.2.0.0${bt}.`r`n"; V = "0.2.0.0"; Ok = $true },
-        @{ Text = "This download bundles nvme98 0.2.0.0.`r`n"; V = "0.2.0.0"; Ok = $true },
-        @{ Text = "This download bundles no nvme98.`r`n"; V = ""; Ok = $true },
-        @{ Text = "This download bundles nvme98 ${bt}(version: filled in at the cut)${bt}.`r`n"; V = "0.2.0.0"; Ok = $false },
-        @{ Text = "This download bundles nvme98 ${bt}(version: filled in at the cut)${bt}.`r`n"; V = ""; Ok = $false },
-        @{ Text = "This download bundles nvme98 ${bt}0.2.0.0${bt}.`r`n"; V = ""; Ok = $false },
-        @{ Text = "This download bundles nvme98 ${bt}0.2.0.0${bt}.`r`n"; V = "0.2.0.1"; Ok = $false },
-        @{ Text = "This download bundles no nvme98.`r`n"; V = "0.2.0.0"; Ok = $false },
-        @{ Text = "nvme98 ${bt}0.2.0.0${bt} is mentioned, but there is no declaration.`r`n"; V = "0.2.0.0"; Ok = $false },
-        @{ Text = "This download bundles no nvme98.`r`nThis download bundles nvme98 0.2.0.0.`r`n"; V = "0.2.0.0"; Ok = $false }
+        @{ Text = "x`r`nThis download bundles Stor98 ${bt}0.3.0.0${bt}.`r`ny"; V = "0.3.0.0"; Ok = $true },
+        @{ Text = "This download bundles Stor98 ${bt}0.3.0.0${bt}.`n"; V = "0.3.0.0"; Ok = $true },
+        @{ Text = "This download bundles no Stor98.`r`n"; V = ""; Ok = $true },
+        @{ Text = "This download bundles Stor98 0.3.0.0.`r`n"; V = "0.3.0.0"; Ok = $false },
+        @{ Text = "This download bundles Stor98 ${bt}0.3.0.0${bt} (dry cut only).`r`n"; V = "0.3.0.0"; Ok = $false },
+        @{ Text = "This download bundles stor98 ${bt}0.3.0.0${bt}.`r`n"; V = "0.3.0.0"; Ok = $false },
+        @{ Text = "This download bundles no stor98.`r`n"; V = ""; Ok = $false },
+        @{ Text = "This download bundles no nvme98.`r`n"; V = ""; Ok = $false },
+        @{ Text = "This download bundles nvme98 ${bt}0.3.0.0${bt}.`r`n"; V = "0.3.0.0"; Ok = $false },
+        @{ Text = "This download bundles Stor98 ${bt}(version: filled in at the cut)${bt}.`r`n"; V = "0.3.0.0"; Ok = $false },
+        @{ Text = "This download bundles Stor98 ${bt}(version: filled in at the cut)${bt}.`r`n"; V = ""; Ok = $false },
+        @{ Text = "This download bundles Stor98 ${bt}0.3.0.0${bt}.`r`n"; V = ""; Ok = $false },
+        @{ Text = "This download bundles Stor98 ${bt}0.3.0.0${bt}.`r`n"; V = "0.3.0.1"; Ok = $false },
+        @{ Text = "This download bundles no Stor98.`r`n"; V = "0.3.0.0"; Ok = $false },
+        @{ Text = "Stor98 ${bt}0.3.0.0${bt} is mentioned, but there is no declaration.`r`n"; V = "0.3.0.0"; Ok = $false },
+        @{ Text = "This download bundles no Stor98.`r`nThis download bundles Stor98 ${bt}0.3.0.0${bt}.`r`n"; V = "0.3.0.0"; Ok = $false }
     )) {
-        $why = Get-Nvme98NotesFault -Text $c.Text -Version $c.V
-        Assert-True (($why -eq "") -eq $c.Ok) ("Get-Nvme98NotesFault on '" + $c.Text.Trim() + "' for '" + $c.V + "' answered '" + $why + "'.")
+        $why = Get-Stor98NotesFault -Text $c.Text -Version $c.V
+        Assert-True (($why -eq "") -eq $c.Ok) ("Get-Stor98NotesFault on '" + $c.Text.Trim() + "' for '" + $c.V + "' answered '" + $why + "'.")
     }
     $realNotes = [System.IO.File]::ReadAllText((Join-Path $repo "docs\using\release-notes.md"))
     Assert-True (([regex]::Matches($realNotes, '(?m)^This download bundles (.+?)\.[ \t]*\r?$')).Count -eq 1) `
@@ -360,24 +344,24 @@ try {
     # make-release.ps1: the release legs alone get the pins, the bundled
     # files are accepted beside the declared set by exactly their paths, the
     # upload set copies them from the release folder (releases\ never holds
-    # them), and their INFs' date and file times are left as nvme98 cut them.
+    # them), and their INFs' date and file times are left as Stor98 cut them.
     $nvRelText = [System.IO.File]::ReadAllText($releaser)
     foreach ($anchor in @(
-        @{ Find = 'if ($null -ne $nvme98 -and $f -eq "release") {'; Why = "the debug legs would bundle nvme98 too" },
-        @{ Find = '$(if ($legSigned) { $certPublishable } else { @() }) + $legNvme98)'; Why = "the build loop no longer accepts exactly the bundled paths" },
+        @{ Find = 'if ($null -ne $stor98 -and $f -eq "release") {'; Why = "the debug legs would bundle Stor98 too" },
+        @{ Find = '$(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)'; Why = "the build loop no longer accepts exactly the bundled paths" },
         @{ Find = '@($nvFiles | ForEach-Object { $_.Dest }))'; Why = "the upload assembly no longer accepts exactly the bundled paths" },
-        @{ Find = 'Copy-Item -LiteralPath (Join-Path $Nvme98.Dir $nf.Source) -Destination $nvDest'; Why = "the upload set no longer takes nvme98 from the pinned release folder" },
-        @{ Find = 'Where-Object { -not $nvUploaded.ContainsKey($_.FullName.ToLowerInvariant()) }'; Why = "nvme98's INFs would fail the one-date rule" },
-        @{ Find = 'if ($nvUploaded.ContainsKey($item.FullName.ToLowerInvariant())) { continue }'; Why = "nvme98's file times would be rewritten" },
-        @{ Find = '-Publishable $publishable -Staged -Nvme98 $nvme98'; Why = "the ordinary cut's upload set no longer bundles nvme98" },
-        @{ Find = '$askNvme98 = Get-Nvme98PinText -Release $nvme98'; Why = "-UploadSetOnly no longer holds a re-assembly to the recorded pins" },
-        @{ Find = '" -Nvme98SumsSha256 " + $nv.SumsSha256'; Why = "the repair command no longer carries the nvme98 pins" }
+        @{ Find = 'Copy-Item -LiteralPath (Join-Path $Stor98.Dir $nf.Source) -Destination $nvDest'; Why = "the upload set no longer takes Stor98 from the pinned release folder" },
+        @{ Find = 'Where-Object { -not $nvUploaded.ContainsKey($_.FullName.ToLowerInvariant()) }'; Why = "Stor98's INFs would fail the one-date rule" },
+        @{ Find = 'if ($nvUploaded.ContainsKey($item.FullName.ToLowerInvariant())) { continue }'; Why = "Stor98's file times would be rewritten" },
+        @{ Find = '-Publishable $publishable -Staged -Stor98 $stor98'; Why = "the ordinary cut's upload set no longer bundles Stor98" },
+        @{ Find = '$askStor98 = Get-Stor98PinText -Release $stor98'; Why = "-UploadSetOnly no longer holds a re-assembly to the recorded pins" },
+        @{ Find = '" -Stor98SumsSha256 " + $nv.SumsSha256'; Why = "the repair command no longer carries the Stor98 pins" }
     )) {
         Assert-True ($nvRelText.Contains($anchor.Find)) ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
     }
     $legCopyLine = @($nvRelText -split "`r?`n" | Where-Object { $_ -match '^\s*\$legCopy = ' })
-    Assert-True ($legCopyLine.Count -eq 1 -and $legCopyLine[0] -notmatch '(?i)nvme98') `
-        "make-release.ps1's copy into releases\<version>\ names nvme98 files; nothing third-party is tracked."
+    Assert-True ($legCopyLine.Count -eq 1 -and $legCopyLine[0] -notmatch '(?i)Stor98') `
+        "make-release.ps1's copy into releases\<version>\ names Stor98 files; nothing third-party is tracked."
 
     # --- the x86 helper (task 36.15, design record 18) -------------
     Write-Step "the x86 package carries the helper its INF names, of its own flavour"

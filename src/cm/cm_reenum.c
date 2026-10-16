@@ -64,7 +64,7 @@
 #include "cm_nvlink.h"
 
 /* The USB4 profile's actions reach the seam with this bit in Why (cm_nhi.c,
- * cmU4ToIcm); its nvme98 statement is made at the core's upcall, not here. */
+ * cmU4ToIcm); its stor98 statement is made at the core's upcall, not here. */
 #ifndef CM_U4_WHY_BASE
 #define CM_U4_WHY_BASE 0x80UL
 #endif
@@ -880,7 +880,7 @@ static VOID cmWkPost(PCM_NHI nhi, ULONG reenum, ULONG vanish, BOOLEAN mark)
 {
     PCM_REENUM r;
 
-    /* Nothing posted - no removal begun - while an nvme98 statement of
+    /* Nothing posted - no removal begun - while a stor98 statement of
      * this domain awaits its acknowledgement (cm_nvlink.h; the wait
      * services the ring, so it is this thread's, never the worker's). */
     CmNvlinkAwait(nhi);
@@ -899,7 +899,7 @@ static BOOLEAN cmInvalidate(PCM_NHI nhi, ULONG i, BOOLEAN activeOnly)
     PDEVICE_OBJECT pdo;
 
     /* No wait here: CmReenumResumeFailed reaches this at DISPATCH_LEVEL.
-     * The thread's callers wait for nvme98's acknowledgement before they
+     * The thread's callers wait for stor98's acknowledgement before they
      * get here (CmNvlinkExpose, cmAskBaselines, CmReenumResumed); the
      * failure release runs only where the thread did not run the resume,
      * so no statement of the resume is pending then. */
@@ -940,7 +940,7 @@ static VOID cmAskBaselines(PCM_NHI nhi)
         KeReleaseSpinLock(&cmRegLock, irql);
         if (serial != 0) {
             /* The baseline answer may already report an endpoint: its
-             * nvme98 UP first (cm_nvlink.h, obligation 1). */
+             * stor98 UP first (cm_nvlink.h, obligation 1). */
             (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE);
         }
         if (serial != 0 && cmInvalidate(nhi, i, FALSE)) {
@@ -1044,7 +1044,7 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh)
             }
             continue;
         }
-        /* nvme98's UP for what the call is about to expose (cm_nvlink.h,
+        /* stor98's UP for what the call is about to expose (cm_nvlink.h,
          * obligation 1). */
         (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, fresh);
         if (r->Route == CM_ROUTE_FILTER) {
@@ -1471,7 +1471,7 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
              * every port is rescanned all the same. */
             r->PollTimeouts++;
         }
-        /* nvme98's statement, then its acknowledgement, before the removal
+        /* stor98's statement, then its acknowledgement, before the removal
          * (cm_nvlink.h, obligations 2 and 3). */
         if (action->Why == TBT_ICM_WHY_UNAVAILABLE) {
             /* The host interface lost: presence lost, no quiescence
@@ -1505,7 +1505,7 @@ VOID CmReenumService(PCM_NHI nhi)
     ULONG i;
 
     r = &nhi->Reenum;
-    /* The nvme98 channel's per-pass work: on 98 SE and ME the rescan of a
+    /* The stor98 channel's per-pass work: on 98 SE and ME the rescan of a
      * bus a fresh exposure found silent; under the USB4 profile the
      * presence samples for the statement's anchor (record 22 section
      * 10.3). */
@@ -1753,7 +1753,7 @@ VOID CmReenumResumed(PCM_NHI nhi, BOOLEAN ok)
     }
     CmLogNote(nhi, "cm.reenum.resumed", ok ? 1UL : 0UL);
     /* The holds' release (and on failure their invalidations) waits for
-     * any nvme98 statement the resume's own teardown made (cm_nvlink.h). */
+     * any stor98 statement the resume's own teardown made (cm_nvlink.h). */
     CmNvlinkAwait(nhi);
     cmReleaseHeld(nhi, (BOOLEAN)!ok);
 }
