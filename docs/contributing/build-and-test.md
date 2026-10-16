@@ -3100,8 +3100,10 @@ to the root of the x86 package and its `x64\` (`stor98.inf`, `stor98.sys`,
 `stor98-test.cer`) to the root of the amd64 package, with no `stor98\`
 folder; every name there starts with `stor98`. Both also carry the release's
 `LICENSE`, `NOTICE.TXT` and `readme.txt` as `stor98-LICENSE.txt`,
-`stor98-NOTICE.txt` and `stor98-readme.txt` beside the driver files. The
-`debug-` directories carry none of it.
+`stor98-NOTICE.txt` and `stor98-readme.txt` beside the driver files. A cut
+passes the pins to its release legs alone, so the `debug-` directories carry
+none of it; `make-package.ps1` run by hand bundles it into whichever flavour
+it is asked for, which is how a debug package for a guest gets it.
 
 The 64-bit `stor98.sys` keeps Stor98's own embedded test signature, by a
 certificate that is neither this project's (design record 19) nor nvme98's,
@@ -3141,9 +3143,9 @@ would replace one of this project's files is a refusal. The INF, import and
 signature gates are run on this project's INFs and binaries by name and
 never read Stor98's, and `check-source-charset.ps1` scans tracked source,
 which Stor98's files never are; the package's `PKG-MSFILE` name rule still
-covers every file, Stor98's included. `XHCIINST` copies no bundled driver
-file into its local copy, which is on the hardware wizard's search path
-(design record 23 section 4.4). `scripts\package\test-package.ps1` holds the
+covers every file, Stor98's included. `XHCIINST` must copy no file whose
+name starts with `stor98` into its local copy, which is on the hardware
+wizard's search path (design record 23 section 4.4). `scripts\package\test-package.ps1` holds the
 layout with synthetic release folders.
 
 #### And the install path is not the one the INF was written for

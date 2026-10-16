@@ -226,7 +226,8 @@ Stor98's own test certificate) to the amd64 package's root, with Stor98's
 LICENSE, NOTICE.TXT and readme.txt as stor98-LICENSE.txt, stor98-NOTICE.txt
 and stor98-readme.txt beside them (package-common.ps1, "Stor98, the bundled
 NVMe driver"). The x64 stor98.sys keeps Stor98's own test signature; nothing
-here signs it.
+here signs it. Any -Flavor takes it; make-release.ps1 passes the pins to its
+release legs alone, so a cut's debug directories carry none of it.
 
 .PARAMETER Stor98Dir
 The pinned build's release folder, for example the Stor98 repository's
