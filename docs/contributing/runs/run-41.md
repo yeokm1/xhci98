@@ -414,6 +414,111 @@ does not attach when added to a running machine). ME's controller in the
 guest had no driver yet, and `INSTALL` left it to Device Manager, as it
 says.
 
+## Bridges behind the tunnel port on NT
+
+The question: when a chain of PCI-to-PCI bridges appears behind a
+Thunderbolt tunnel port after boot, does Windows' own `pci.sys` on 2000,
+XP and 7 x86 number it, nest its windows and start it with no restart?
+98 SE's `PCI.VXD` does not; that is the P14s hot-plug Code 29. The earlier
+emulator NVMe legs had no bridge between the tunnel port and the NVMe.
+
+### Setup
+
+- **Emulator and package.** Emulator `vm\usb4\bin-2a893ea` (SHA-256
+  checked). Guests are overlays of `vm\win2k-xonly.img`, `vm\winxp.img`
+  and `vm\win7.img`. The 3.0.0.0 cut package (no NVMe driver) was
+  installed with `INSTALL /yes /thunderbolt /notray`.
+- **Tree.** i440FX with the `tb3-alpine-ridge` NHI and its xHCI on bus 0.
+  The tunnel port `tb0` is the emulator's SHPC `usb4-tunnel-bridge`, with
+  `bus-reserve=8,mem-reserve=32M`. SeaBIOS honours those hints only on
+  Red Hat bridge ids, so `tb0` got buses 1-9, memory
+  `fca00000-fe9fffff`, prefetchable `fc000000-fc1fffff` and IO
+  `c000-cfff`, like the P14s's 06-2A. The `8086:15C0` tunnel port of the
+  Alpine Ridge tree gets no spare bus from SeaBIOS.
+- **The chain.** A switch stand-in sits behind `tb0`'s gate: a USP
+  `usb4-asm-pci-usp` (`1b21:2421`) at `tb0` slot 3, a DSP
+  `pci-bridge-seat` (`1b36:000a`) below it, and an NVMe below that. Both
+  bridges have no BAR (`shpc=off,msi=off`), as the ASM2464's `1b21:2463`
+  ports have none. While the tunnel is down the gate hides the chain, so
+  it stays in reset state (bus numbers 0, windows closed) until the
+  enclosure is hot-plugged. Then the ICM approves it, the tunnel comes up
+  and xhcicm invalidates `tb0`. The ORICO model (`device-model=asm2464`)
+  also puts its own NVMe directly on the tunnel bus at slot 1.
+- **Not usable.** The `usb4-asm2464-usp/-dsp` types are not
+  user-creatable. 2000 and XP cannot boot on q35.
+- **Two emulator traps.**
+  - The emulator's tunnel-port id `1b36:0001` is in `xhcicmf.inf`'s
+    model list, so a plain `pci-bridge` in the chain gets the filter INF.
+    The first 2000 attempt did, and asked for a restart.
+  - Hot-adding the chain with `device_add` needs `shpc=on`, which gives
+    the DSP a BAR, and the DSP's 1 MB window plus that BAR does not fit
+    the 1 MB window 2000 gives the USP: Code 12. Neither is the hardware's
+    behaviour.
+- **Re-plugs.** The emulator gives the gated chain back with its earlier
+  configuration, so a re-plug reads re-enumeration and the first plug
+  reads fresh numbering.
+- **Recipe.** The command lines and steps are in
+  `E:\xhci98-vm\nt-bridge\RECIPE-first-plug.txt` on development host A.
+
+### pci.sys: numbered, nested, started, no restart
+
+`info pci` was read with no prompt open. The bridges show in Device
+Manager as "PCI standard PCI-to-PCI bridge, This device is working
+properly". The NVMes have no driver: Code 1 once the wizard is cancelled,
+BAR unassigned. Device Manager's Scan for hardware changes changed
+nothing.
+
+| | USP `01:03.0` | DSP `02:00.0` | Restart asked |
+|---|---|---|---|
+| 2000 | bus 2-3; memory `fe900000-fe9fffff`, prefetchable `fc100000-fc1fffff`, IO `c000-cfff` | bus 3-3; the same windows | no |
+| XP SP3 | bus 2-3; memory `fca00000-fe9fffff`, prefetchable `fc000000-fc1fffff`, IO `c000-cfff` (all of `tb0`'s) | bus 3-3; the same | no |
+
+The re-plugs on 2000 (two) and XP (three) brought both bridges back
+started, with no restart. **So `pci.sys` does what `PCI.VXD` does not.**
+Windows 7 x86 is read under "The child filter on a bridge" below.
+
+### Safely Remove does not offer the unit
+
+The ORICO's USP bridge sits directly on the tunnel bus, so on NT the
+bridge is the unit. In these legs that bridge was not removable on the
+first plug:
+
+- **2000, first plug.** `INSTALL /devices` printed "PCI standard
+  PCI-to-PCI bridge - pci, started ... removable: no". Unplug or Eject
+  Hardware listed only the driverless NVMe on the tunnel bus ("PCI Device
+  at PCI Slot 4", PCI bus 1, device 1). `INSTALL /eject 2` answered
+  "Windows will not stop this device: it does not see it as removable
+  now" (exit 4).
+- **2000, plain unplug** (the enclosure removed with no eject). 2000
+  showed its "Unsafe Removal of Device" dialog, naming both "PCI standard
+  PCI-to-PCI bridge" entries, and the subtree left Device Manager.
+- **2000, re-plug** of the same devnode. `/devices` read "removable: yes
+  ... (listed in Safely Remove Hardware)". The applet listed the bridge
+  with its subtree, and Stop gave "The 'PCI standard PCI-to-PCI bridge'
+  device can now be safely removed from the system". The unplug after it
+  raised no dialog, and the next re-plug came back started.
+- **XP, every plug.** Two first plugs (two chain instances) and three
+  re-plugs all read "removable: no". Safely Remove listed neither the bridge nor
+  the driverless NVMe. A plain unplug on XP raised no dialog.
+  `INSTALL /eject 2` printed "Windows has stopped PCI standard PCI-to-PCI
+  bridge. The device has started again" (exit 4).
+
+The qemu flavour of `xhcicm.sys` from the same tree (3.0.0.0 at
+`1e7d667e`, unmodified) showed why. It ran with `XhciLogVerbosity` 3, and
+the counters were read at the NHI's stop. Each first plug used a
+never-seen chain instance (another `tb0` slot).
+
+- **XP:** `cm.reenum.child.attached` 1 and `child.skipped` 1 on the first
+  plug, 3 and 3 after two more plugs. On every plug the NVMe got the
+  child filter and the bridge was skipped. A skip with no full snapshot is
+  `cmChildCreate`'s `STATUS_DEVICE_BUSY`: the bridge's PDO already carried
+  a device object when the answer passed the tunnel port's filter.
+- **2000 (ACPI off):** `child.attached` 2, `skipped` 0 on the first plug.
+  The bridge got its child filter and still read not removable. This
+  fits the case roadmap EJRB.1 describes: Windows installing the bridge's
+  driver for the first time rebuilds its stack without the child. The
+  re-plug of the known devnode was removable.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link
