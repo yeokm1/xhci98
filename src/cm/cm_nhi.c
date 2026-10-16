@@ -1926,6 +1926,17 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
               nhi->Values.Value[CM_VAL_PREOS_CLEANUP]);
     CmLogNote(nhi, "cm.bridge.override", nhi->Values.TunnelBridgeChars);
     CmLogNote(nhi, "cm.bridge.refused", nhi->Values.TunnelBridgeRefused);
+    /* XhciCmBridgeNumbering as run with; bit 8 found, bit 9 refused (the
+     * value read is then the next note's). 9x only: the NT route ignores
+     * it. */
+    CmLogNote(nhi, "cm.bridge.numbering",
+              nhi->Values.BridgeNumbering |
+                  (nhi->Values.BridgeNumberingFound << 8) |
+                  (nhi->Values.BridgeNumberingRefused << 9));
+    if (nhi->Values.BridgeNumberingRefused) {
+        CmLogNote(nhi, "cm.bridge.numbering.raw",
+                  nhi->Values.BridgeNumberingRaw);
+    }
 
     cmFindBar(nhi, irp);
     CmLogNote(nhi, "cm.bar.length", nhi->BarLength);

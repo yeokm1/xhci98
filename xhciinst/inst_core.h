@@ -854,6 +854,14 @@ int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
  * answer (asked again). */
 int inst_tb_answer(const char *line, int defaultYes);
 
+/* Whether the run's text is also written to standard error (record 23
+ * section 7.6): 1 when standard output is not the console (redirected to
+ * a file or a pipe) while the answers come from the console's keyboard
+ * and standard error is the console - otherwise each question, and the
+ * closing "Press Enter", waits for a key with its text only in the file.
+ * Each argument is 1 when that handle is the console. */
+int inst_out_mirror(int outIsConsole, int errIsConsole, int inIsConsole);
+
 /* ---- the USB tree tool (record 23 section 9.5, record 25 section 8) ---------- */
 
 /* The contract with XHCITR: its hidden tray window's class, the event that

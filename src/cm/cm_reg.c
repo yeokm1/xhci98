@@ -38,6 +38,9 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 
 /* Not written by any INF (record 21 section 8): absent is no override. */
 #define CM_VALUE_TUNNEL_BRIDGE L"XhciCmTunnelBridge"
+/* Not written by any INF either (record 21 section 6.1.1): absent is the
+ * default, CM_BRIDGE_NUMBERING_DEFAULT. */
+#define CM_VALUE_BRIDGE_NUMBERING L"XhciCmBridgeNumbering"
 
 typedef struct _CM_TAKE {
     ULONG Present;          /* the value exists, whatever its type, or a
@@ -164,5 +167,7 @@ VOID CmReadValues(PCM_NHI nhi)
     if (take.Found) {
         CmValuesTakeBridge(&nhi->Values, take.Text, take.TextChars);
     }
+    cmQuery(key, CM_VALUE_BRIDGE_NUMBERING, &take, 0);
+    CmValuesTakeBridgeNumbering(&nhi->Values, take.Found, take.Dword);
     ZwClose(key);
 }

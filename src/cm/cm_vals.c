@@ -284,6 +284,25 @@ VOID CmValuesDefault(PCM_VALUES v)
     for (i = 0; i < CM_VAL_COUNT; i++) {
         v->Value[i] = cmRules[i].Default;
     }
+    v->BridgeNumbering = CM_BRIDGE_NUMBERING_DEFAULT;
+}
+
+VOID CmValuesTakeBridgeNumbering(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->BridgeNumbering = CM_BRIDGE_NUMBERING_DEFAULT;
+    v->BridgeNumberingFound = 0;
+    v->BridgeNumberingRaw = 0;
+    v->BridgeNumberingRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->BridgeNumberingFound = 1;
+    v->BridgeNumberingRaw = raw;
+    if (raw > 1) {
+        v->BridgeNumberingRefused = 1;
+        return;
+    }
+    v->BridgeNumbering = raw;
 }
 
 VOID CmValuesTake(PCM_VALUES v, ULONG index, ULONG found, ULONG raw)

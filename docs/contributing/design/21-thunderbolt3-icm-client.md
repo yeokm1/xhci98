@@ -1501,6 +1501,193 @@ uses on bus 0 on every target and whose Windows 98 evidence is recorded
 there (`hcdPirqSlot`'s comment); never through port `0xCF8`/`0xCFC` directly,
 which the experiment did and its own caveats warn against.
 
+### 6.1.1 A bridge behind the tunnel port: bus numbers on 98 (addendum, 2026-10-16)
+
+**What was seen.** On the owner's ThinkPad P14s Gen 1 (98 SE, Assist off,
+pre-boot on, security level 1) the ORICO ASM2464 USB4 enclosure was
+approved and tunnelled after a hot plug, and its PCIe switch upstream port
+(`PCI\VEN_1B21&DEV_2463`, instance `000800E400`, "PCI standard
+PCI-to-PCI bridge") came up with Code 29 (`CM_PROB_HARDWARE_DISABLED`,
+status `0x180066A4`, not started, an empty `Allocation` in
+`HKEY_DYN_DATA\Config Manager\Enum`); the downstream port and the NVMe
+behind it never appeared. The same enclosure present at power-on worked:
+both ASMedia bridges started and the NVMe was found. After a Safely Remove
+from XHCITR, an unplug and a re-plug, Code 29 again; Device Manager's
+Refresh did not change it, and a Remove of the devnode and a Refresh gave
+a fresh devnode, a wizard, a restart request and Code 29 again. The tunnel
+port 04:01.0 kept the same allocation throughout (memory
+`D4100000h`-`E00FFFFFh`, prefetchable `A0000000h`-`BBFFFFFFh` and its
+bus-number resource, type `0043h`, `ResType_PCI_Bus_Number` =
+`PCI_DEVICE_ID`, VMM.H line 197); its BIOS-programmed range is
+secondary `06h`, subordinate `2Ah` (usb4-emu's DOS captures), and the
+chain needs `06h`-`08h`.
+
+**Why.** At POST the BIOS numbers the switch (upstream port 06/07/08,
+downstream port 07/08/08, the NVMe on 08) and gives it windows, and
+PCI.VXD takes what it finds. A bridge that arrives later comes out of
+reset with secondary and subordinate bus 0, so nothing behind it is
+reachable, and PCI.VXD does not number it usefully: in the emulator (98
+SE, ACPI-mode image, a fresh two-level bridge chain hot-added behind the
+tunnel bridge, read before any restart) PCI.VXD gave the first bridge
+secondary = subordinate (no room for the next level) and asked for a
+restart; a second pass widened it and numbered the second bridge, put the
+first bridge's window outside the tunnel bridge's window, and asked for a
+restart again; the NVMe got no BAR. On the APM-mode P14s the outcome is
+Code 29. A restart works because the BIOS numbers the chain at POST. The
+emulator's earlier NVMe legs passed because its i440FX model puts the NVMe
+directly on the tunnel bridge's secondary bus, with no bridge between.
+
+**What the driver does.** Before each `Reenumerate_DevNode` of a member
+(section 6.1, step 3), the 9x worker sets up the bridges below it in the
+way the BIOS does at POST, with placements of its own (`tbt_brnum.c`), on these conditions: the request is
+still current and healthy (no newer post for the member, no
+`CONTROLLER_UNAVAILABLE` since: checked again before every write), and
+the member's devnode has no child in CONFIGMG's tree, so a subtree
+PCI.VXD still holds (a removal vetoed, a re-plug before the removal ran)
+is never renumbered under it.
+
+1. The member's own bus-number register must read a secondary above its
+   bus and a subordinate at or above that; otherwise nothing is done.
+2. A survey of the member's secondary bus, writing nothing: no bridge
+   there, nothing to do (the endpoint directly behind the port, the
+   emulator's case); any bridge with a nonzero secondary or subordinate
+   (present at power-on, numbered by the BIOS, or numbered by an earlier
+   pass), nothing is done either. A function answering Configuration
+   Request Retry Status (vendor id `0001h`) is not ready: the whole
+   attempt is undone and made again 100 ms later; so is an empty
+   secondary bus while the port reads link-up (the switch behind it
+   still training), and, on every attempt but the last, an empty bus
+   behind a bridge just numbered (a link below it still training);
+   twenty attempts at most, two seconds. A bridge with an empty slot
+   costs those two seconds and is then numbered as it is.
+3. **Bus numbers.** Depth first from the secondary bus, each type 1
+   function in reset state is given primary = its bus, secondary = the
+   next free bus from the member's secondary + 1, and subordinate = the
+   member's subordinate while its subtree is walked (so configuration
+   cycles reach it), narrowed to the last bus of its subtree after. The
+   secondary latency timer byte is written back as read.
+4. **Windows.** Each memory BAR behind the chain is sized (all-ones
+   written, read back, the value read first written back; only on a
+   function whose Memory Space Enable is clear, else nothing more is
+   done; a BAR over 1 GiB, or a 64-bit one of 4 GiB or more, refuses the
+   windows). At each level the BARs of the functions on that bus take a
+   region at the bottom, rounded up together to the level's largest
+   alignment A and starting A-aligned, and each bridge on it a window
+   the size of what its subtree needs, rounded up to the subtree's own
+   alignment and at least 1 MiB (closed where nothing behind it decodes
+   memory, and so is everything below a closed one). The windows are
+   placed from the A-aligned top of the member's own memory window
+   downward, the largest alignment first so they pack with no gap and
+   never reach into the BARs' region, each subtree the same way inside
+   its bridge's window; a member whose A-aligned part is smaller than
+   the total gets no window at all. Each bridge's I/O and prefetchable
+   windows are closed, and its Memory Space and Bus Master Enable set. A
+   member with no memory window, or one too small for the chain and the
+   BARs beside it, gets the bus numbers alone.
+5. **Interrupt lines**, once the windows are in place. A function's
+   interrupt is provably routed only where it travels a wire whose IRQ is
+   already known. The tunnel port's own Interrupt Line is known (the
+   BIOS wrote it and PCI.VXD holds it), and a function below the port
+   whose Interrupt Pin, swizzled up through the bridges, reaches the port
+   on the port's own pin - (pin - 1 + its device + the device numbers of
+   the bridges between) mod 4 equal to the port's pin - shares the port's
+   wire at the port's primary side. Such a function, where its line reads
+   0 or `FFh`, gets the port's line; its pin, and a bridge's Bridge
+   Control, are written back as read. Any other function gets nothing,
+   and keeps whatever PCI.VXD makes of it (Code 29 for want of an IRQ on
+   the P14s). Considered and not used: the IRQ Windows recorded at boot
+   for the same position (`HKLM\Enum`'s LogConfig is rewritten at every
+   enumeration, as it was in the P14s captures, and `HKEY_DYN_DATA`
+   does not survive a restart, so neither is a store a later hot plug
+   can trust), and the BIOS's `$PIR` table (it would be a parser of a
+   BIOS structure for a case the port's own line already decides: on the
+   P14s the table is the standard swizzle, link 61, IRQ 10, the same
+   answer). Bridge Control and the Command register need nothing for
+   INTx: a PCI-to-PCI bridge forwards it whatever Bridge Control says,
+   and Interrupt Disable (Command bit 10) resets to 0.
+6. Every write is preceded by a read that the function is still the one
+   journalled (its identity, a type 1 header), journalled before it is
+   issued, and read back after. Bounds: six levels of bridges, sixteen
+   bridges, buses inside the member's range only. A refusal after the
+   first write (no room, too deep, too many, a numbered bridge below one
+   in reset state, a failed or unheld write, the request gone stale)
+   writes everything journalled back as it was read, deepest first, each
+   only to a bridge that still reads as the one journalled, and each
+   written back value read back; a window refusal puts back the windows
+   and keeps the bus numbers, but a stale one puts back the bus numbers
+   too, so the newer request finds the chain in reset state. The
+   re-enumeration goes ahead in every case but a stale one, which the
+   newer request makes.
+
+**What the owner's ThinkPad read** (2026-10-16, a hot plug after a start
+without the enclosure, each prototype a replaced `xhcicm.sys`): with the
+bus numbers alone, PCI.VXD re-read both ASMedia bridges (their LogConfig
+was rewritten) but left the first at Code 29 with its windows closed and
+no IRQ; with the windows as well, both bridges started with
+`E0000000h`-`E00FFFFFh`, inside the port's `D4100000h`-`E00FFFFFh`, and
+the NVMe appeared, at Code 29 for want of an IRQ; with the interrupt
+lines as well, the NVMe started on IRQ 10 with its BARs at
+`E0000000h`-`E0005FFFh` and its drive letter came up. The first
+prototype wrote no diagnostic; the second wrote `XhciCmBridgeDiag` with
+18 dwords, the third and this record's layout with 20. The driver puts
+the windows at the top of the port's window (`E0000000h`); the BIOS,
+with the enclosure present at power-on, had put them at its bottom
+(`D4100000h`-`D41FFFFFh`). Either is inside the port's window, which is
+what PCI.VXD checks; the placement is this driver's, not a copy of the
+BIOS's.
+
+Why the windows too: in the emulator, with the bus numbers alone, PCI.VXD
+found the second bridge and the NVMe behind it (it never did before), but
+gave the first bridge a window at `10100000h`-`101FFFFFh`, outside the
+tunnel bridge's `FCA00000h`-`FE9FFFFFh`, so nothing behind it decoded.
+With a window already in place, PCI.VXD takes it as the bridge's boot
+configuration, as it does the BIOS's for a chain present at power-on.
+I/O BARs behind the chain get no window: an NVMe has none, and a device
+that needs one is outside what this does.
+
+**The accessors.** Windows 98 SE's `HalGetBusData` does not answer for a
+function PCI.VXD does not know yet (read in the emulator: the hot-added
+bridge read as absent through it, so the first survey found nothing), and
+NTKERN exports `HalSetBusDataByOffset` but no `HalSetBusData`, neither an
+import the HCD carries evidence for (section 10.3's rule: `xhcicm.sys`
+imports nothing `xhci98.sys` does not). So the reads and writes of this
+section go through PCI.VXD's own services, `_PCI_Read_Config` and
+`_PCI_Write_Config` (PCI.H lines 58 and 59; `_cdecl (BYTE bus, BYTE
+devfunc, BYTE offset)` returning the dword, and `(BYTE bus, BYTE devfunc,
+BYTE offset, DWORD value)`, VXDWRAPS.H lines 313-314), reached through the
+VMM dynalink exactly as the CONFIGMG services of section 6.1, under
+PCI.VXD's VxD id `0043h`, so no import is added. The guard is a sanity
+check, not a proof: before the first use, `_PCI_Read_Config` of the
+member's identity dword must equal what `HalGetBusData` read there;
+otherwise the numbering is off for the worker's life, logged once. A
+wrong read ordinal would already have been called by then; the numbers
+are the DDK's, and the legs on 98 SE and ME are what confirm them.
+
+**The switch.** `XhciCmBridgeNumbering` (section 8), 1 by default (the
+owner, 2026-10-16); 0 turns this off, which leaves a hot-added bridge as
+it came up (on the P14s, Code 29 until a restart). Windows 98 SE and ME
+only: the NT route never reads it, since `pci.sys` owns a bridge's bus
+numbers and windows there. No INF writes it and the installer neither
+asks for it nor writes it.
+
+**The diagnostic.** The 9x worker copies its last attempt to the NHI,
+and the thread writes it as `XhciCmBridgeDiag` (`REG_BINARY`, twenty
+dwords, `cm_statb.h`) in the NHI's hardware key beside `XhciCmStatus`, so
+a release build's outcome can be read from a registry export without a
+debugger: the outcome, what was seen, the port's bus range and window,
+the first two bridges' registers as left, the interrupt lines' outcome
+and counts, and why nothing was done where nothing was.
+
+**Not done.** I/O and prefetchable windows, a CardBus bridge, a bridge
+the BIOS left half-numbered, BARs above 1 GiB, a concurrent Device
+Manager Refresh landing between the first and the last write (the window
+is milliseconds and a Refresh only makes PCI.VXD read what is there), and
+a member whose bus range or window is too small: that is the BIOS's
+choice, and the user's way round it is the enclosure present at power-on
+with pre-boot on. Thunderbolt BIOS Assist Mode on is no way round on 98:
+read on the P14s with Assist on, the NHI is absent from Device Manager
+with or without the enclosure and a plug brings up nothing.
+
 ### 6.2 Windows 2000 and later: the bridge filter
 
 `pci.sys` owns the bridge's secondary bus and notices nothing on its own
@@ -2392,6 +2579,7 @@ its default under the don't-overwrite flag, each read once at start:
 | `XhciCmApprove` | 1 | section 5.4; 0 and 1 only |
 | `XhciCmReenum` | 1 | 0 disables every re-enumeration call (section 6), for a machine where CONFIGMG or the filter misbehaves; the ICM client still runs |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | under the NHI's own device key, so per domain: a comma-separated list of `bb:dd.f` bridges that replaces section 6.3's discovery as the domain's whole tunnel-port set; not written by the INFs (absence is meaningful), and named in the README for machines whose tunnel ports no source lists |
+| `XhciCmBridgeNumbering` | 1 (not written by the INFs) | section 6.1.1, Windows 98 SE and ME only: 1 gives the bridges a tunnel brings up below a tunnel port their bus numbers and memory windows before the CONFIGMG re-enumeration; 0 turns that off (a hot-added bridge is then left as it came up: Code 29 on the P14s until a restart). Absent reads as 1; any value but 0 and 1 is refused and 1 stands. Ignored on NT |
 | `XhciCmSafeEject` | 1 | section 7.4: 1 marks the devices behind an active tunnel bridge removable (the NT child filters, and the 9x flag through `Change_DevNode_Status`); 0 marks nothing. Absent reads as 1, as written by the INFs. Read by the NHI at start and handed to the bridge filters with the active mark |
 | `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000, and held to at most 250 while any entry of the `nvme98` link-state table reads `UP` (section 7.2) |
 | `XhciCmCmdTimeoutMs` | 5000 | the ordinary ICM command timeout (section 5.5), held to 1000 to 60000, retries 3; the TR and ICL `driver ready` timeouts and tries of section 1.4.4 take precedence for that command |
@@ -2415,7 +2603,8 @@ events by code; approvals sent, succeeded, failed; tunnel ups and downs;
 re-enumerations run, skipped (and why), and their `CONFIGRET` or status;
 mailbox commands and their outcomes; idle polls; malformed and unmatched
 frames (section 1.4.6); child filters attached, skipped and refused (section
-7.4).
+7.4). On 98 SE and ME the bus numbering's last attempt is also written to
+the registry as `XhciCmBridgeDiag` (section 6.1.1), in every flavour.
 
 The log is the pure ring of `xhci_log.c`, compiled in by path: producers
 record from the thread, and the ring is emitted at stop from the thread at
