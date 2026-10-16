@@ -54,6 +54,7 @@
  */
 
 #include "hcd.h"
+#include "hcd_svc.h"
 #include "xhci_hw.h"
 
 /* CTL_CODE(FILE_DEVICE_USB = 0x22, fn, METHOD_BUFFERED, FILE_ANY_ACCESS);
