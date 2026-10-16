@@ -1,6 +1,6 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 8, 2026-10-16. Revision 7 adds Safely Remove for plain USB
+Status: revision 9, 2026-10-16. Revision 7 adds Safely Remove for plain USB
 devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
 decision T6; sections 1.3, 3.1, 7.1, 7.3, 11, 12 and 14 change with it.
 Revision 6 was reviewed and revised five times the night before; the code
@@ -22,6 +22,15 @@ names, `C:\XHCI98` on the system's drive by default, instead of
 98 SE and ME the package's drivers share that directory with it, named
 by XHCIINST's lists, which never name the tool. The tool names no
 directory of its own, so nothing in it changes.
+
+Revision 9, 2026-10-16 (the owner): the tool shows the drivers' logs, so
+a user can send one from a release install with no debug build and no
+DebugView. `xhcicm.sys`'s query device answers a second request with its
+log ring and counters (section 4.5); `xhci98.sys`'s log and counters are
+read as `XHCISNAP` reads them, with no change to that driver (section
+4.6); each controller has a "Driver log" node, and Save Report and
+`/report` carry both logs (section 3.5). Sections 1.2, 3.1, 4.2, 7.3, 10,
+11 and 12 change with it.
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
@@ -74,6 +83,8 @@ authentication material.
   current status without administrator rights and gets the details the
   registry record lacks (link rate and width, liveness). `xhci98.sys` is
   not changed (decision T3).
+- Since revision 9, both drivers' logs and counters, read live, in the
+  window and the report (sections 3.5, 4.5 and 4.6).
 - An application icon (owner): `xhcitr\xhcitr.ico`, drawn for this project
   (section 9).
 
@@ -124,7 +135,8 @@ authentication material.
   per user under `HKCU\Software\xHCI98\XHCITR`.
 - Menus:
   - **File**: Refresh (F5), Save Report... (the whole tree with every
-    node's details as text, for a bug report), Exit.
+    node's details as text, for a bug report, the driver logs of section
+    3.5 included), Exit.
   - **Edit**: Copy, Select All (the details pane).
   - **View** (check boxes): Thunderbolt and USB4; USB controllers;
     Windows' own USB controllers (not xhci98's); Empty ports;
@@ -204,6 +216,41 @@ branch, marked "(behind <router name>)".
   descriptors are read only for the selected node with Descriptors on,
   and for Save Report.
 
+### 3.5 Driver logs (revision 9)
+
+- **Where.** A "Driver log" node is the first child of each xhci98
+  controller (label "Driver log (xhci98)") and of each NHI ("Driver log
+  (xhcicm)"). No other controller has one. A refresh adds the node and
+  reads nothing; selecting it reads the log then (sections 4.5 and 4.6),
+  and so does Save Report and `/report`, once per node.
+- **What it shows**, in this order: whether recording is on and at which
+  `XhciLogVerbosity`; when it is off, why and how to turn it on; the
+  counters; the log, oldest record first, as the driver wrote it, one
+  `label=XXXXXXXX` record a line.
+- **Recording off.** The tool never writes the registry (it runs as the
+  user):
+  - xhci98, level 0 (the driver does not answer) or 1 (counters only):
+    "To record the log, run SNAPON.BAT from the package's
+    tools\xhcisnap folder, then restart Windows." On 2000 and later the
+    text adds "as an administrator" (on Vista and 7: right-click, Run as
+    administrator).
+  - xhcicm, level below 2: "To record the log, set the DWORD value
+    XhciLogVerbosity to 2 under HKEY_LOCAL_MACHINE\<the NHI's driver
+    key> (as an administrator on 2000 and later), then restart
+    Windows.", with the key the details pane already shows as "Driver
+    key", spelled out as the full path (`...\Control\Class\...` on NT,
+    `...\Services\Class\...` on 98 SE and ME).
+  - A value the driver refused (out of range) is said as refused, with
+    the same advice.
+- **Addresses.** Neither node ever shows an internal address: xhcicm's
+  answer carries none (section 4.5); xhci98's ring is shown only at
+  levels 2 and 3 - at level 4 it can hold kernel addresses, so the tool
+  withholds it and says to use level 2 - and its raw extension image is
+  never shown or saved (section 4.6).
+- **Text.** Every byte outside printable ASCII, CR and LF is shown as
+  `.`. The details pane and the report hold the whole of both logs
+  (16 KiB of ring each) with room to spare.
+
 ## 4. The query device in `xhcicm.sys`
 
 ### 4.1 Why
@@ -228,7 +275,8 @@ unelevated user can open it on every target is read by leg T.1 (section
   roles behave exactly as before. The query device has no lower stack:
   `IRP_MJ_CREATE` succeeds only with an empty file name (anything after
   the device name is refused), `CLEANUP` and `CLOSE` succeed,
-  `DEVICE_CONTROL` answers `CM_Q_IOCTL` alone, everything else fails with
+  `DEVICE_CONTROL` answers `CM_Q_IOCTL` alone (and, since revision 9,
+  `CM_QL_IOCTL`, section 4.5), everything else fails with
   `STATUS_INVALID_DEVICE_REQUEST`, and PnP and power never reach it.
 - **Name.** `\Device\XhciCm<n>`, linked as `\DosDevices\XHCICM<n>`, `n`
   the first free of 0..15, created in the start IRP's system context (so
@@ -291,7 +339,103 @@ flags), then the instance ID.
 ### 4.4 What does not change
 
 The registry record (`XhciCmStatus`, version 1), the ask and echo, and
-XHCIINST's use of them stay exactly as record 24 has them.
+XHCIINST's use of them stay exactly as record 24 has them. Revision 9
+leaves the query's answer (`XCMQ`, version 1) as it is.
+
+### 4.5 `IOCTL_XHCICM_LOG` (revision 9)
+
+A second request on the same device, not a version 2 of `XCMQ`, so the
+eject path's reader, its checks and XHCIINST are untouched, and a driver
+from before revision 9 answers `STATUS_INVALID_DEVICE_REQUEST`, which the
+tool shows as "this xhcicm.sys does not serve its log".
+
+`CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA41, METHOD_BUFFERED, FILE_ANY_ACCESS)` =
+`0x00222904`, no input, the same device, the same access rules (opened
+with no access rights; a standard user may read), the same removed-device
+answer. The layout is `src\cm\cm_query.h`'s `CM_QL_*`: a 64-byte header
+(magic `XCML`, version 1, size, flags, `XhciLogVerbosity` applied and as
+read, the start epoch, the offset and length of the counters and of the
+log, the records accepted since the start, the bytes the ring's wrap
+overwrote, and the pass the counters belong to with its age), then the
+counters as text, then the log as text. Both texts are ASCII lines
+`label=XXXXXXXX` ending CR LF, the ring's own record format.
+
+- **The log is copied, not drained.** The ring stays as it was, so the
+  tray, the window and a second program read the same log, and the
+  release flavour, which never drains, keeps the last 16 KiB. In the
+  `debug` and `qemu` flavours the thread still hands the ring to
+  DebugView after each pass (record 21 section 8), so the copy holds what
+  has not been emitted yet; the answer's `CM_QL_F_EMITTED` flag says so.
+- **Under the ring's own lock.** The IOCTL takes the query device's lock,
+  and, while the device is connected, the NHI's `LogLock` inside it, and
+  copies the ring, oldest byte first, straight into the system buffer;
+  then releases both. No path takes them in the other order (`CmLogNote`
+  holds `LogLock` alone; the thread's publication holds the device's lock
+  alone). The copy is at most 16 KiB, so a producer on the thread or at
+  `DISPATCH_LEVEL` waits microseconds. The device keeps the address of
+  the NHI's log and its lock, set when it is created and cleared under its
+  lock in `CmQueryClose`, which runs before the NHI's extension can go;
+  this is the one exception to section 4.2's "no pointer to the NHI", and
+  it is only ever followed with the device's lock held and `Connected`
+  set.
+- **The counters** are formatted by the connection-manager thread after
+  each pass, into a buffer of its own, and published with the status
+  answer under the device's lock (section 4.3), so they are the counters
+  of pass `CM_QL_O_PASS`: the NHI's (`cm.*`), the ring's and the ICM's or
+  the USB4 connection manager's, the re-enumeration's (`cm.reenum.*`) and
+  the child filters' attached, skipped and refused (until now written only
+  at stop), and the liveness refusals, in the stop dump's names. They are
+  served at every verbosity: they hold no address and no user data.
+- **No address.** `xhcicm.sys` records no kernel address (it never calls
+  `XhciLogAppendAddress`). One record carries a bus address,
+  `cm.live.bar-changed` (the BAR as read); the builder writes its value as
+  `--------` and sets `CM_QL_F_WITHHELD`. A record added later whose value
+  is an address joins that list (`cm_query.c`), which the host suite
+  holds.
+- **Text.** A byte of the ring outside 0x20 to 0x7E, CR and LF is
+  written `.`. When the wrap has overwritten part of the oldest record
+  (the ring full, bytes dropped), the text starts at the next record and
+  `CM_QL_F_LOG_CUT` is set.
+- **Bounds and sizing.** Counters at most 8 KiB (`CM_QL_CTR_MAX`, cut at a
+  line with `CM_QL_F_CTR_CUT`), the log at most 16 KiB (the ring), the
+  answer at most 64 + 8192 + 16384 bytes (`CM_QL_MAX_BYTES`). Sizing is
+  `XCMQ`'s: under 64 bytes `STATUS_BUFFER_TOO_SMALL`; under the whole
+  answer the header alone with the size needed; the tool's first buffer
+  (32 KiB) holds the largest.
+- **Matching.** The tool asks for the log only on a query device whose
+  `XCMQ` answer names the NHI (section 4.2), and keeps the log only when
+  its epoch equals that answer's.
+- **Every target.** The same code on 98 SE, ME and NT; nothing in it is
+  NT-only, and the 98 SE and ME open rule of section 14 applies.
+
+### 4.6 `xhci98.sys`'s log, read as `XHCISNAP` reads it (revision 9)
+
+No driver change (decision T3 holds). The tool opens the controller as it
+already does (`\\.\HCD<n>`, or its interface path) and sends
+`IOCTL_USB_USER_REQUEST` with `USBUSER_PASS_THRU` and the snapshot GUID,
+schema 5 (design record 08, `xhcisnap\README.md`), exactly as
+`XHCISNAP`'s `take_window`: a window of the extension region at offset 0
+for the header (flavour, `XhciLogVerbosity` read and applied, the ring's
+offset, size, head and used count), a window at the ring's offset for its
+bytes, and the HCD region (version 1) for the counter block
+`XHCIHC_COUNTERS`. Every count and offset is checked against the bytes
+returned, as `XHCISNAP` checks them; a schema or region version the tool
+does not know is shown as such, not decoded.
+
+- **Level 0**: the door answers status 6 and nothing else; the node says
+  the log is off (or the controller is not an xhci98 one, which the tool
+  already knows it is) and how to turn it on.
+- **Level 1**: the counters; "Recording is off" and the advice.
+- **Levels 2 and 3**: the counters and the ring.
+- **Level 4**: the counters; the ring is withheld, because at level 4 it
+  holds kernel addresses (`start.bar`, `start.ok`, `xhci_log.h`), and the
+  node says to use level 2 for a log the tool can show (`XHCISNAP`'s
+  maintainer report is the level-4 reading).
+- The counters are named from `XHCIHC_COUNTERS`'s own fields
+  (`xhcitr\tr_hcctr.h`, one line a field, which the host suite holds to
+  `src\xhci_counters.h` field by field by offset); a word past the table is
+  "counter N". Nonzero counters only, as `XHCISNAP` prints them.
+- Nothing of the extension image but the ring is kept, shown or saved.
 
 ## 5. The USB branch
 
@@ -625,7 +769,8 @@ build uses the WDK's header.
 `XHCITR [/tray] [/eject id=<instance id>] [/report <file>]`. `/report`
 writes the Save Report text and exits (for scripts and bug reports).
 Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
-`/eject id=` names a unit or a USB device (section 6.5).
+`/eject id=` names a unit or a USB device (section 6.5). Since revision 9
+the report carries each "Driver log" node's text (section 3.5).
 
 ## 8. Install, upgrade and uninstall
 
@@ -706,6 +851,14 @@ malformed descriptors, a query whose size disagrees with its counts, a
 sizing answer, duplicate ICM keys and an epoch change. The driver's
 builder (`cm_query.c`) is host-tested in the CM suite.
 
+Revision 9: the log answer's builder (`cm_query.c`: the counter lines,
+the ring's text with the cut, the withheld value and the replaced bytes,
+the sizing answers) in the CM suite; the tool's readers of both logs
+(`xhcitr\tr_log.c`, pure: the `XCML` parse, the snapshot window's header,
+the ring by its head and used count, the HCD region's shape, the counter
+names held to `src\xhci_counters.h`, the level-4 withholding, the
+recording-off advice) in `test\test_trlog.c`.
+
 ## 11. Legs
 
 | Leg | Systems | What it reads |
@@ -717,6 +870,7 @@ builder (`cm_query.c`) is host-tested in the CM suite.
 | T.5 | 98 SE, 7 x64 | install puts the tool and the Run value; login starts the tray; upgrade with the tray running; uninstall closes it and removes both |
 | T.6 | every target | the record 24 legs of XHCIINST still pass with the changed `xhcicm.sys` |
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
+| T.8 | 98 SE, 7 x86 (as a standard user) | revision 9: `XhciLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
 
 ## 12. Decisions
 
@@ -761,6 +915,21 @@ builder (`cm_query.c`) is host-tested in the CM suite.
 - **T11** The call goes to the USB device's devnode, the one Windows' own
   applet stops, never to a disk or a function below it, and on NT without
   record 24's not-removable fallback: a refusal is shown as it is.
+
+- **T12** (owner, revision 9) The tool shows both drivers' logs and
+  counters, in the window and the report, from a release install, with
+  no address in them and without writing the registry.
+- **T13** `xhcicm.sys`'s log is a second request on the query device
+  (section 4.5), copied from the ring under its own lock at the request,
+  not drained and not snapshotted by the thread: a snapshot per pass would
+  copy 16 KiB each pass whether anyone reads it or not, and a drain would
+  take the log from every other reader. The counters, which the thread
+  owns, are the thread's per pass.
+- **T14** `xhci98.sys`'s log is read through the existing door, as
+  `XHCISNAP` reads it (section 4.6); `xhci98.sys` stays unchanged
+  (decision T3). At level 4 the tool withholds the ring rather than pick
+  the address records out of it by label: the level-4 guarantee is the
+  driver's, and a label list in the tool would drift from it.
 
 ## 13. Open
 

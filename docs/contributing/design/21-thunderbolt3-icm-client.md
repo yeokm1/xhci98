@@ -2378,6 +2378,21 @@ door is `xhci98.sys`'s, and a `\DosDevices\` link and region of this
 driver's own is a later revision if the counters are wanted off a real
 machine.
 
+That revision is design record 25's revision 9 (owner, 2026-10-16): the
+query device `\\.\XHCICM<n>` (record 25 section 4) answers a second
+request, `IOCTL_XHCICM_LOG` (`0x00222904`, answer `XCML` version 1,
+record 25 section 4.5), with the ring and the counters, and `XHCITR`
+shows them. Emission is unchanged and decision D12 stands: the release
+flavour still prints nothing and imports no `DbgPrint`; the request copies
+the ring under `LogLock` and leaves it as it was, so a release install's
+log is read with no checked flavour and no DebugView, and recording still
+needs `XhciLogVerbosity` 2 or above on the NHI's driver key and a restart.
+The counters are no longer only written at stop: the thread formats them
+after each pass in the stop dump's names, the child filters' attached,
+skipped and refused among them, and the query device serves them at every
+verbosity. One record, `cm.live.bar-changed`, carries a bus address; the
+answer withholds its value.
+
 The clock behind every wait and every time in the log is the tick count,
 `KeQueryTickCount` times `KeQueryTimeIncrement` (`cm_thr.c`): monotonic,
 unlike the system time, which a user or a time service may set.
