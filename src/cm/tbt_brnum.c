@@ -401,7 +401,7 @@ static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
         c->R->WinWhere = bdf;
         return XHCI_TBT_BRWIN_ACCESS;
     }
-    if ((cmd & BRWIN_CMD_MEM) != 0) {
+    if ((cmd & BRWIN_CMD_MEM) != 0 && last != 0x14UL) {
         /* Decoding already: someone configured it; sizing would move it. */
         c->R->WinWhere = bdf;
         return XHCI_TBT_BRWIN_ACTIVE;
@@ -416,6 +416,19 @@ static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
             return XHCI_TBT_BRWIN_ACCESS;
         }
         if ((was & 1UL) != 0) {
+            continue;
+        }
+        if ((cmd & BRWIN_CMD_MEM) != 0) {
+            /* A bridge (offsets up to 14h) with Memory Space on, as a stop
+             * by Windows may leave it: a BAR holding an address is in use
+             * and refuses the windows; an empty one is not sized. */
+            if ((was & 0xFFFFFFF0UL) != 0) {
+                c->R->WinWhere = bdf;
+                return XHCI_TBT_BRWIN_ACTIVE;
+            }
+            if (((was >> 1) & 3UL) == 2UL) {
+                off += 4;
+            }
             continue;
         }
         rc = brBarSize(c, bdf, off, was, &size);
@@ -1028,6 +1041,104 @@ static VOID brIrq(BRNUM_CTX *c, ULONG port, ULONG secondary)
                                       : XHCI_TBT_BRIRQ_DONE;
 }
 
+/* ---- a numbered chain with its windows closed (the re-open) ---------- */
+
+/*
+ * The bridges of a chain already numbered, journalled as they stand (bus
+ * numbers read, none written) for the window and line stages: each must
+ * sit inside the port's range, its primary its own bus, its secondary
+ * above that and its subordinate at or above its secondary and within its
+ * parent's, and its memory window closed. *open counts bridges whose
+ * window is open. 0, or a refusal (nothing written either way).
+ */
+static ULONG brJournal(BRNUM_CTX *c, ULONG bus, ULONG low, ULONG high,
+                       ULONG depth, PULONG open)
+{
+    PXHCI_TBT_BRNUM r;
+    ULONG dev;
+    ULONG fn;
+    ULONG bdf;
+    ULONG id;
+    ULONG layout;
+    ULONG multi;
+    ULONG first;
+    ULONG probe;
+    ULONG buses;
+    ULONG mem;
+    ULONG secondary;
+    ULONG subordinate;
+    ULONG slot;
+    ULONG rc;
+
+    r = c->R;
+    for (dev = 0; dev < 32UL; dev++) {
+        first = 0;
+        for (fn = 0; fn < 8UL; fn++) {
+            bdf = XHCI_TBT_BDF(bus, dev, fn);
+            layout = 0;
+            multi = 0;
+            probe = brProbe(c->Io, bdf, &id, &layout, &multi);
+            if (probe == 2 || probe == 3) {
+                r->Where = bdf;
+                return probe == 2 ? XHCI_TBT_BRNUM_ACCESS
+                                  : XHCI_TBT_BRNUM_NOT_READY;
+            }
+            if (probe == 0) {
+                if (fn == 0) {
+                    break;
+                }
+                continue;
+            }
+            if (fn == 0) {
+                first = multi;
+            }
+            if (layout == XHCI_TBT_HDR_BRIDGE) {
+                r->Bridges++;
+                if (depth >= XHCI_TBT_BRNUM_MAX_DEPTH ||
+                    c->Count >= XHCI_TBT_BRNUM_MAX_BRIDGES) {
+                    r->Where = bdf;
+                    return depth >= XHCI_TBT_BRNUM_MAX_DEPTH
+                               ? XHCI_TBT_BRNUM_TOO_DEEP
+                               : XHCI_TBT_BRNUM_TOO_MANY;
+                }
+                if (!brRead(c->Io, bdf, XHCI_TBT_CFG_BUSES, &buses) ||
+                    buses == 0xFFFFFFFFUL ||
+                    !brRead(c->Io, bdf, XHCI_TBT_CFG_MEMWIN, &mem)) {
+                    r->Where = bdf;
+                    return XHCI_TBT_BRNUM_ACCESS;
+                }
+                secondary = (buses >> 8) & 0xFFUL;
+                subordinate = (buses >> 16) & 0xFFUL;
+                if ((buses & 0xFFUL) != bus || secondary <= bus ||
+                    secondary < low || subordinate < secondary ||
+                    subordinate > high) {
+                    r->Where = bdf;
+                    return XHCI_TBT_BRNUM_INCONSISTENT;
+                }
+                if (((mem & 0xFFF0UL) << 16) <=
+                    ((((mem >> 16) & 0xFFF0UL) << 16) | 0x000FFFFFUL)) {
+                    (*open)++;
+                }
+                slot = c->Count;
+                r->Bdf[slot] = bdf;
+                r->Id[slot] = id;
+                r->Was[slot] = buses;
+                r->Now[slot] = buses;
+                c->Count++;
+                rc = brJournal(c, secondary, secondary + 1UL, subordinate,
+                               depth + 1, open);
+                if (rc != 0) {
+                    return rc;
+                }
+            }
+            if (fn == 0 && !first) {
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
 /* Every journalled bridge written back as read, deepest first: a parent
  * written back first would cut the configuration cycles to its children
  * off. Journalled parent before child, so the reverse order is right. A
@@ -1130,6 +1241,54 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         return r->Outcome;
     }
     rc = brSurvey(io, secondary, r);
+    if (rc == XHCI_TBT_BRNUM_NUMBERED &&
+        (flags & XHCI_TBT_BRNUM_F_WINDOWS) != 0) {
+        /* Numbered, but perhaps with its windows closed: Windows' stop of
+         * the bridges (a Safely Remove) closes them and keeps the bus
+         * numbers, and a chain given back that way gets no resources
+         * from PCI.VXD (Code 29). Only when every bridge's window is
+         * closed are the window and line stages run on it, as after a
+         * numbering; an open one leaves the whole chain alone. */
+        r->Where = XHCI_TBT_NO_BDF;
+        c.Io = io;
+        c.R = r;
+        c.Go = go;
+        c.GoContext = goContext;
+        c.Next = secondary + 1;
+        c.Limit = subordinate;
+        c.Count = 0;
+        c.Flags = flags;
+        k = 0;
+        r->Bridges = 0;
+        rc = brJournal(&c, secondary, secondary + 1UL, subordinate, 0, &k);
+        if (rc != 0 || k != 0 || c.Count == 0) {
+            /* Nothing written: as found. */
+            for (k = 0; k < XHCI_TBT_BRNUM_MAX_BRIDGES; k++) {
+                r->Bdf[k] = XHCI_TBT_NO_BDF;
+            }
+            r->Outcome = XHCI_TBT_BRNUM_NUMBERED;
+            return r->Outcome;
+        }
+        r->Numbered = c.Count;
+        r->Outcome = XHCI_TBT_BRNUM_REOPENED;
+        brWindows(&c, port, secondary);
+        if (r->WinOutcome == XHCI_TBT_BRWIN_STALE) {
+            r->Numbered = 0;
+            r->Outcome = XHCI_TBT_BRNUM_STALE;
+            return r->Outcome;
+        }
+        if ((flags & XHCI_TBT_BRNUM_F_IRQ) != 0 &&
+            r->WinOutcome == XHCI_TBT_BRWIN_DONE) {
+            brIrq(&c, port, secondary);
+            if (r->IrqOutcome == XHCI_TBT_BRIRQ_STALE) {
+                brWinUndo(&c);
+                r->Numbered = 0;
+                r->Outcome = XHCI_TBT_BRNUM_STALE;
+                return r->Outcome;
+            }
+        }
+        return r->Outcome;
+    }
     if (rc != XHCI_TBT_BRNUM_DONE) {
         r->Outcome = rc;
         return r->Outcome;
