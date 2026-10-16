@@ -2238,6 +2238,8 @@ static int legacy_dir(char *dir, size_t cap)
 static char toolDir[INST_PATH_CHARS];
 static char oldToolDir[INST_PATH_CHARS];
 static int movePending;     /* oldToolDir is an unfinished move's (MoveFrom) */
+static char seenRecord[INST_PATH_CHARS];    /* the records as the question */
+static char seenMoveFrom[INST_PATH_CHARS];  /* saw them (begin_move)       */
 
 /* The local copies (record 23 section 4.4): <8 hex digits>, one immutable
  * directory per package content, each with an XHCIINST.LST naming the
@@ -3038,6 +3040,8 @@ static int choose_dir(void)
     } else {
         earlier_dir(oldToolDir, sizeof(oldToolDir));
         movefrom_get(moveFrom, sizeof(moveFrom));
+        recorded_dir(seenRecord, sizeof(seenRecord));
+        inst_copy(seenMoveFrom, moveFrom, sizeof(seenMoveFrom));
     }
     if (envNow.Nt && !toolHere) {
         return 1;
@@ -3367,10 +3371,31 @@ static int movefrom_set(const char *dir)
  * when the registry cannot take it (said; nothing has changed). */
 static int begin_move(void)
 {
+    char rec[INST_PATH_CHARS];
+    char mf[INST_PATH_CHARS];
+    int ok;
+
     if (opts.List || !moving()) {
         return 1;
     }
-    if (!movefrom_set(oldToolDir) || !record_dir()) {
+    /* Under the maintenance lock, and only if no other run has changed
+     * the records since the question was asked. */
+    if (!maint_lock()) {
+        flagFailed = 1;
+        return 0;
+    }
+    recorded_dir(rec, sizeof(rec));
+    movefrom_get(mf, sizeof(mf));
+    if (strcmp(rec, seenRecord) != 0 || strcmp(mf, seenMoveFrom) != 0) {
+        out("Another run of INSTALL.BAT changed the install directory "
+            "meanwhile: nothing\nmoves. Run INSTALL.BAT again.\n");
+        flagSteps = 1;
+        maint_unlock();
+        return 0;
+    }
+    ok = movefrom_set(oldToolDir) && record_dir();
+    maint_unlock();
+    if (!ok) {
         out("The move to %s could not be recorded in the registry: nothing "
             "moves.\n", toolDir);
         flagFailed = 1;
@@ -3522,6 +3547,11 @@ static void tray_install(void)
             flagFailed = 1;
         } else if (put == INST_TRAY_PUT_IN_USE) {
             flagSteps = 1;
+        }
+        /* A move goes on only with the tool it carries in place: the
+         * source stays, and the Run value with it, until then. */
+        if (moving() && put != INST_TRAY_PUT_DONE) {
+            goto done;
         }
     } else {
         out("The xHCI98 USB Tree at %s is current.\n", t.Exe);
