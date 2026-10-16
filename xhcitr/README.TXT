@@ -112,8 +112,8 @@ running driver: whether it is recording, the counters that are not zero,
 and the log, oldest line first. File > Save Report and /report include
 both logs. Nothing in them is an internal address.
 
-Both drivers record their logs unless that was turned off; the item
-then says how to turn it on again:
+Where a log is off, the item says how to turn it on (the xhcicm
+driver records by default):
 
   xhci98   run SNAPON.BAT from the package's tools\xhcisnap folder (on
            Windows 2000 and later as an administrator), then restart

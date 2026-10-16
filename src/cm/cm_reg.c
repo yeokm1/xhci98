@@ -40,6 +40,7 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 #define CM_VALUE_TUNNEL_BRIDGE L"XhciCmTunnelBridge"
 
 typedef struct _CM_TAKE {
+    ULONG Present;          /* the value exists, whatever its type      */
     ULONG Found;
     ULONG Dword;
     WCHAR Text[CM_TUNNEL_BRIDGE_CHARS + 1];
@@ -56,10 +57,11 @@ static NTSTATUS NTAPI cmTakeDword(PWSTR ValueName, ULONG ValueType,
 
     UNREFERENCED_PARAMETER(ValueName);
     UNREFERENCED_PARAMETER(Context);
+    take = (PCM_TAKE)EntryContext;
+    take->Present = 1;
     if (ValueType != REG_DWORD || ValueLength != sizeof(ULONG)) {
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
-    take = (PCM_TAKE)EntryContext;
     from = (PUCHAR)ValueData;
     take->Dword = (ULONG)from[0] | ((ULONG)from[1] << 8) |
                   ((ULONG)from[2] << 16) | ((ULONG)from[3] << 24);
@@ -123,8 +125,10 @@ VOID CmReadValues(PCM_NHI nhi)
 {
     HANDLE key;
     CM_TAKE take;
+    ULONG newPresent;
     ULONG i;
 
+    newPresent = 0;
     CmValuesDefault(&nhi->Values);
     nhi->ValuesRead = 1;
     if (!NT_SUCCESS(IoOpenDeviceRegistryKey(nhi->Common.Pdo,
@@ -135,13 +139,18 @@ VOID CmReadValues(PCM_NHI nhi)
     for (i = 0; i < CM_VAL_COUNT; i++) {
         cmQuery(key, cmValueNames[i], &take, 0);
         CmValuesTake(&nhi->Values, i, take.Found, take.Dword);
+        if (i == CM_VAL_LOG_VERBOSITY) {
+            newPresent = take.Present;
+        }
     }
     take.Found = 0;
     take.Dword = 0;
-    if ((nhi->Values.Found & (1UL << CM_VAL_LOG_VERBOSITY)) == 0) {
+    /* The old name only where the new one does not exist at all: a new
+     * value of another type is refused, never replaced by the old one. */
+    if (!newPresent) {
         cmQuery(key, CM_VALUE_OLD_LOG, &take, 0);
     }
-    CmValuesTakeOldLog(&nhi->Values, take.Found, take.Dword);
+    CmValuesTakeOldLog(&nhi->Values, newPresent, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_TUNNEL_BRIDGE, &take, 1);
     if (take.Found) {
         CmValuesTakeBridge(&nhi->Values, take.Text, take.TextChars);

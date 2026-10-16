@@ -3454,8 +3454,8 @@ whether the driver is recording, its counters, and the log, oldest record
 first. Save Report (and `XHCITR /report <file>`) writes both logs and the
 counters into the report, as plain text with no internal addresses in it.
 
-Both drivers record at level 2 by default. Where recording is off, the
-node says how to turn it on:
+`xhcicm.sys` records at level 2 by default. Where a driver's recording is
+off, the node says how to turn it on:
 
 - **`xhci98.sys`**: run `SNAPON.BAT` as above (on Vista and 7, as an
   administrator), then restart Windows. At level 1 the node shows the

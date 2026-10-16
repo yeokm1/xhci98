@@ -173,4 +173,20 @@ ULONG CmQueryLogAddress(const UCHAR *label, ULONG n);
  * at 4. Returns 1 when a value was withheld. */
 ULONG CmQueryLogLine(UCHAR *line, ULONG n, ULONG verbosity);
 
+/*
+ * The DebugView emission of a drained ring (cm_log.c): `n` bytes at
+ * `text`, oldest first, taken from the ring in one drain under its lock.
+ * `partial` nonzero when the wrap overwrote bytes since the last
+ * emission, so the first line can be a record's tail with its label gone:
+ * it is not handed on. Every other line - up to and including its LF, or
+ * the bytes left at the end - goes through CmQueryLogLine and then to
+ * `emit`, in order, at most CM_QL_EMIT_LINE bytes at a time. Returns the
+ * lines handed on.
+ */
+#define CM_QL_EMIT_LINE         128UL
+typedef VOID (*CM_QL_EMIT_FN)(PVOID context, const UCHAR *line, ULONG n);
+ULONG CmQueryLogEmitLines(UCHAR *text, ULONG n, ULONG partial,
+                          ULONG verbosity, CM_QL_EMIT_FN emit,
+                          PVOID context);
+
 #endif /* CM_QRYB_H */

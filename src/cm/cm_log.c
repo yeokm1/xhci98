@@ -15,7 +15,8 @@
  * site and the one port-0xE9 site of the binary (SITES=cm_log.obj in the
  * allowlists).
  *
- * WHAT IS EMITTED. Whole records, one DbgPrint each: below level 4 the
+ * WHAT IS EMITTED. Whole records, one DbgPrint each, from one drain of the
+ * whole ring: below level 4 the
  * value of a record whose label names an address (cm_qryb.h,
  * CmQueryLogAddress, the rule the query device's answer follows) is
  * written "--------", so no flavour publishes an address below the level
@@ -28,12 +29,10 @@
 
 #include "cm.h"
 
-/* The drain's stack buffer and the line being assembled: small, because a
- * large local costs __chkstk, which the Windows 2000 DDK's driver
- * libraries do not provide. A record is at most XHCI_LOG_MAX_RECORD + 11
- * bytes, so a line always fits. */
-#define CM_LOG_CHUNK 128
-#define CM_LOG_LINE  128
+/* One printed line: a record is at most XHCI_LOG_MAX_RECORD + 11 bytes,
+ * within CM_QL_EMIT_LINE; a stack buffer below a page (a page or more
+ * costs __chkstk, which the Windows 2000 DDK's libraries do not provide). */
+#define CM_LOG_LINE CM_QL_EMIT_LINE
 
 #if defined(XHCI_FLAVOUR_QEMU)
 /*
@@ -84,71 +83,57 @@ VOID CmLogNote(PCM_NHI nhi, const char *label, ULONG value)
     KeReleaseSpinLock(&nhi->LogLock, irql);
 }
 
-/* One record (or the tail of the ring) to the sinks, its address value
- * withheld below level 4. PASSIVE_LEVEL. */
-static VOID cmLogLine(UCHAR *line, ULONG n, ULONG verbosity)
+/* One line to the sinks (CmQueryLogEmitLines' callback): NUL-terminated
+ * on the stack, printed with a literal format. PASSIVE_LEVEL. */
+static VOID cmLogLine(PVOID context, const UCHAR *bytes, ULONG n)
 {
-    (VOID)CmQueryLogLine(line, n, verbosity);
-    line[n] = 0;
+    UCHAR line[CM_LOG_LINE + 1];
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(context);
+    for (i = 0; i < n && i < CM_LOG_LINE; i++) {
+        line[i] = bytes[i];
+    }
+    line[i] = 0;
     DbgPrint("%s", (char *)line);
 #if defined(XHCI_FLAVOUR_QEMU)
-    cmLogMirrorE9(line, n);
+    cmLogMirrorE9(line, i);
 #endif
 }
 
+/*
+ * The whole ring is drained in one step under LogLock into the NHI's own
+ * buffer, so no producer can wrap it while lines are printed, and the
+ * drop count read in the same step says whether the first line can be a
+ * record's tail (CmQueryLogEmitLines). The count is taken only by a drain,
+ * so a wrap while emission was off is still seen at the next one.
+ */
 VOID CmLogEmit(PCM_NHI nhi, ULONG reason)
 {
-    UCHAR staging[CM_LOG_CHUNK];
-    UCHAR line[CM_LOG_LINE + 1];
     KIRQL irql;
     ULONG decision;
-    ULONG chunk;
-    ULONG emitted;
+    ULONG n;
     ULONG verbosity;
-    ULONG lineLen;
-    ULONG skip;
-    ULONG i;
+    ULONG partial;
 
     KeAcquireSpinLock(&nhi->LogLock, &irql);
     decision = XhciLogFlushBegin(&nhi->Log, reason);
-    verbosity = nhi->Log.Verbosity;
-    /* The wrap overwrote bytes since the last emission: the oldest line can
-     * be a record's tail, its label gone, so it is not printed. */
-    skip = (ULONG)(nhi->Log.BytesDropped != nhi->LogDroppedEmitted);
-    nhi->LogDroppedEmitted = nhi->Log.BytesDropped;
-    KeReleaseSpinLock(&nhi->LogLock, irql);
     if (decision != XHCI_LOG_FLUSH_GO) {
+        KeReleaseSpinLock(&nhi->LogLock, irql);
         return;
     }
-    emitted = 0;
-    lineLen = 0;
-    for (;;) {
-        KeAcquireSpinLock(&nhi->LogLock, &irql);
-        chunk = XhciLogDrain(&nhi->Log, staging, CM_LOG_CHUNK);
-        KeReleaseSpinLock(&nhi->LogLock, irql);
-        if (chunk == 0) {
-            break;
-        }
-        for (i = 0; i < chunk; i++) {
-            line[lineLen++] = staging[i];
-            if (staging[i] == '\n' || lineLen == CM_LOG_LINE) {
-                if (!skip) {
-                    cmLogLine(line, lineLen, verbosity);
-                }
-                skip = 0;
-                lineLen = 0;
-            }
-        }
-        emitted += chunk;
-    }
-    if (lineLen != 0 && !skip) {
-        cmLogLine(line, lineLen, verbosity);
-    }
+    verbosity = nhi->Log.Verbosity;
+    partial = (ULONG)(nhi->Log.BytesDropped != nhi->LogDroppedEmitted);
+    n = XhciLogDrain(&nhi->Log, nhi->LogEmit, XHCI_LOG_RING_BYTES);
+    nhi->LogDroppedEmitted = nhi->Log.BytesDropped;
+    KeReleaseSpinLock(&nhi->LogLock, irql);
+    (VOID)CmQueryLogEmitLines(nhi->LogEmit, n, partial, verbosity, cmLogLine,
+                              NULL);
     KeAcquireSpinLock(&nhi->LogLock, &irql);
-    if (emitted != 0) {
+    if (n != 0) {
         nhi->Log.DebugViewEmits++;
-        nhi->Log.DebugViewBytes += emitted;
+        nhi->Log.DebugViewBytes += n;
     }
-    XhciLogFlushEnd(&nhi->Log, emitted, 1);
+    XhciLogFlushEnd(&nhi->Log, n, 1);
     KeReleaseSpinLock(&nhi->LogLock, irql);
 }

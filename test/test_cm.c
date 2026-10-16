@@ -226,24 +226,31 @@ static void test_values(void)
      * absent; neither gives the default. */
     CmValuesDefault(&v);
     CmValuesTake(&v, CM_VAL_LOG_VERBOSITY, 1, 3);
-    CmValuesTakeOldLog(&v, 1, 4);
+    CmValuesTakeOldLog(&v, 1, 1, 4);
     CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 3, "the new name wins");
     CHECK_EQ(v.LogFrom, CM_LOG_FROM_NEW, "read under the new name");
     CmValuesDefault(&v);
     CmValuesTake(&v, CM_VAL_LOG_VERBOSITY, 0, 0);
-    CmValuesTakeOldLog(&v, 1, 4);
+    CmValuesTakeOldLog(&v, 0, 1, 4);
     CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 4, "the old name when the new is absent");
     CHECK_EQ(v.LogFrom, CM_LOG_FROM_OLD, "read under the old name");
     CHECK(v.Found & (1UL << CM_VAL_LOG_VERBOSITY), "and counted found");
     CmValuesDefault(&v);
     CmValuesTake(&v, CM_VAL_LOG_VERBOSITY, 0, 0);
-    CmValuesTakeOldLog(&v, 1, 0);
+    CmValuesTakeOldLog(&v, 0, 1, 0);
     CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 0, "an old 0 is taken");
     CmValuesDefault(&v);
     CmValuesTake(&v, CM_VAL_LOG_VERBOSITY, 0, 0);
-    CmValuesTakeOldLog(&v, 0, 0);
+    CmValuesTakeOldLog(&v, 0, 0, 0);
     CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 2, "neither: the default, 2");
     CHECK_EQ(v.LogFrom, CM_LOG_FROM_DEFAULT, "neither name");
+    /* The new name present but not a DWORD: refused, the old not read. */
+    CmValuesDefault(&v);
+    CmValuesTake(&v, CM_VAL_LOG_VERBOSITY, 0, 0);
+    CmValuesTakeOldLog(&v, 1, 1, 4);
+    CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 2, "a malformed new value: the default");
+    CHECK_EQ(v.LogFrom, CM_LOG_FROM_REFUSED, "said refused");
+    CHECK(v.Refused & (1UL << CM_VAL_LOG_VERBOSITY), "and the refusal recorded");
     CmValuesDefault(&v);
 
     CmValuesTakeBridge(&v, bdf, 7);

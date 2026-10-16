@@ -310,10 +310,16 @@ VOID CmValuesTake(PCM_VALUES v, ULONG index, ULONG found, ULONG raw)
     }
 }
 
-VOID CmValuesTakeOldLog(PCM_VALUES v, ULONG found, ULONG raw)
+VOID CmValuesTakeOldLog(PCM_VALUES v, ULONG newPresent, ULONG found,
+                        ULONG raw)
 {
     if ((v->Found & (1UL << CM_VAL_LOG_VERBOSITY)) != 0) {
         v->LogFrom = CM_LOG_FROM_NEW;
+        return;
+    }
+    if (newPresent) {
+        v->Refused |= 1UL << CM_VAL_LOG_VERBOSITY;
+        v->LogFrom = CM_LOG_FROM_REFUSED;
         return;
     }
     if (!found) {

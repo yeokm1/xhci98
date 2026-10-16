@@ -190,6 +190,9 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_LOG_FROM_DEFAULT       0  /* neither present: the default        */
 #define CM_LOG_FROM_NEW           1  /* XhciCmLogVerbosity                  */
 #define CM_LOG_FROM_OLD           2  /* XhciLogVerbosity, the fallback      */
+#define CM_LOG_FROM_REFUSED       3  /* XhciCmLogVerbosity exists but is not
+                                        a DWORD: refused, the default, the
+                                        old name not read                  */
 
 /* XhciCmMode (record 21 section 8, decision D11). */
 #define CM_MODE_OFF       0  /* bind, log, touch nothing                    */
@@ -234,11 +237,14 @@ VOID CmValuesTake(PCM_VALUES v, ULONG index, ULONG found, ULONG raw);
 
 /*
  * After CmValuesTake has taken CM_VAL_LOG_VERBOSITY under its own name,
- * XhciCmLogVerbosity: where that was absent, the name before 3.0.0.0,
- * XhciLogVerbosity in the same key (found, raw), is taken in its place,
- * for this one release (the owner, 2026-10-16). Sets LogFrom.
+ * XhciCmLogVerbosity: where that does not exist at all (newPresent 0),
+ * the name before 3.0.0.0, XhciLogVerbosity in the same key (found, raw),
+ * is taken in its place, for this one release (the owner, 2026-10-16).
+ * Where it exists but is not a DWORD it is refused (the default stands)
+ * and the old name is not taken. Sets LogFrom.
  */
-VOID CmValuesTakeOldLog(PCM_VALUES v, ULONG found, ULONG raw);
+VOID CmValuesTakeOldLog(PCM_VALUES v, ULONG newPresent, ULONG found,
+                        ULONG raw);
 
 /*
  * Take XhciCmTunnelBridge: `chars` WCHARs, not counting any terminator. An

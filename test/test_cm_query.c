@@ -804,10 +804,72 @@ static void test_log_line(void)
     CHECK(memcmp(l, "cm.live.bar-changed=---", 23) == 0, "within it");
 }
 
+/* The emission of a drained ring (CmQueryLogEmitLines). */
+static UCHAR emitted[1024];
+static ULONG emittedBytes;
+static ULONG emitCalls;
+
+static VOID emit_collect(PVOID context, const UCHAR *line, ULONG n)
+{
+    (VOID)context;
+    memcpy(emitted + emittedBytes, line, n);
+    emittedBytes += n;
+    emitCalls++;
+}
+
+static ULONG emit_run(const char *text, ULONG partial, ULONG verbosity)
+{
+    static UCHAR buf[1024];
+    ULONG n = (ULONG)strlen(text);
+
+    memcpy(buf, text, n);
+    emittedBytes = 0;
+    emitCalls = 0;
+    memset(emitted, 0, sizeof(emitted));
+    return CmQueryLogEmitLines(buf, n, partial, verbosity, emit_collect, NULL);
+}
+
+static void test_log_emit(void)
+{
+    const char *recs = "cm.start=00000001\r\ncm.live.bar-changed=E0000004\r\n"
+                       "cm.reenum.9x.gone.superseded=C1234560\r\n"
+                       "cm.reenum.9x.gone.id-changed=C1234570\r\n";
+    UCHAR big[300];
+    ULONG i;
+
+    CHECK_EQ(emit_run(recs, 0, 2), 4, "four lines");
+    CHECK_EQ(emitCalls, 4, "one call a line");
+    CHECK(memcmp(emitted, "cm.start=00000001\r\ncm.live.bar-changed=--------\r\n"
+                          "cm.reenum.9x.gone.superseded=--------\r\n"
+                          "cm.reenum.9x.gone.id-changed=--------\r\n",
+                 emittedBytes) == 0, "level 2: the three withheld");
+    CHECK(strstr((const char *)emitted, "E0000004") == NULL, "no address");
+    CHECK_EQ(emit_run(recs, 0, 4), 4, "level 4");
+    CHECK(memcmp(emitted, recs, emittedBytes) == 0, "level 4: as recorded");
+    /* A wrapped ring: the first line is a tail with its label cut. */
+    CHECK_EQ(emit_run("nged=E0000004\r\ncm.stop=00000000\r\n", 1, 2), 1,
+             "the tail dropped");
+    CHECK(memcmp(emitted, "cm.stop=00000000\r\n", 18) == 0 && emittedBytes == 18,
+          "only the whole record");
+    CHECK_EQ(emit_run("nged=E0000004", 1, 2), 0, "a lone tail: nothing");
+    CHECK_EQ(emittedBytes, 0, "no byte of it");
+    CHECK_EQ(emit_run("cm.a=00000001\r\ncm.b=00000002", 0, 2), 2,
+             "the unterminated end is a line");
+    /* A line past the print buffer goes in pieces, in order. */
+    for (i = 0; i < 299; i++) {
+        big[i] = 'x';
+    }
+    big[299] = 0;
+    CHECK_EQ(emit_run((const char *)big, 0, 2), 1, "one long line");
+    CHECK_EQ(emitCalls, 3, "in three pieces of at most 128");
+    CHECK_EQ(emittedBytes, 299, "every byte");
+}
+
 int main(void)
 {
     test_layout();
     test_log_line();
+    test_log_emit();
     test_log_layout();
     test_log_lines();
     test_log_answer();

@@ -362,8 +362,11 @@ typedef struct _CM_NHI {
     ULONG QueryCtrBytes;
     ULONG QueryCtrCut;
     UCHAR QueryCtr[CM_QL_CTR_MAX];
-    /* Log.BytesDropped at the last emission (cm_log.c), under LogLock. */
+    /* Log.BytesDropped at the last drain for emission (cm_log.c), under
+     * LogLock; and the ring as that drain took it, the emitter's own (one
+     * emitter at a time: the thread, or the PnP path once it has ended). */
     ULONG LogDroppedEmitted;
+    UCHAR LogEmit[XHCI_LOG_RING_BYTES];
 } CM_NHI, *PCM_NHI;
 
 /* The query device's extension (CM_KIND_QUERY): no lower object. Lock
