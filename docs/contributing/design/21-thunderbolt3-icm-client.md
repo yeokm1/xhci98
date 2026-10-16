@@ -20,8 +20,10 @@ the owner's decisions of 2026-10-15, the per-generation profiles and the id
 list of every Intel firmware-connection-manager host the Linux driver
 addresses, read from Linux under the owner's source rule of the same day
 (D9, sections 1.4, 3.3, 5 and 9), and safe eject (D10, task `39-A.8`,
-sections 3.2 and 7.4). The USB4 software connection manager is design
-record 22's (Phase 40).
+sections 3.2 and 7.4). Section 7.4 revision 2 (2026-10-16): the safe
+eject's child filter also goes above bus filters already on a new PDO,
+which is where an ACPI machine leaves a PCI-to-PCI bridge. The USB4
+software connection manager is design record 22's (Phase 40).
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
@@ -2151,6 +2153,52 @@ reading of D10 for the owner to confirm.
    is re-plugged, and the release notes say so. A full snapshot or a
    failed `IoCreateDevice` is logged and counted, and leaves that device
    unmarked.
+
+   **Revision 2 (2026-10-16): above a bus filter.** Revision 1 attached
+   only to a PDO with nothing on it, and returned `STATUS_DEVICE_BUSY`
+   otherwise. On Windows XP SP3, an ACPI machine, a PCI-to-PCI bridge
+   reported on the tunnel bus already carries a device object when the
+   answer passes the bridge filter. That object is a filter that a driver
+   below the bridge filter attaches in the answer's completion. So the
+   upstream port of an enclosure's switch (the ORICO ASM2464's `1b21:2463`,
+   the emulator's stand-in `1b21:2421`) was never marked, and Windows'
+   Safely Remove never listed it. The qemu build's counters showed it:
+   `child.attached` 1 and `child.skipped` 1 on every plug, the NVMe on the
+   same bus attached, the bridge skipped (`runs/run-41.md`, "Bridges behind
+   the tunnel port on NT"). The rule is now `CmPortsChildAttach`
+   (`cm_ports.c`), and it decides for a PDO the snapshot found new:
+   - **Nothing attached:** the child goes directly above the PDO, as
+     before.
+   - **Something attached:** the child goes on top of what is there,
+     provided the walk up the chain (at most `CM_CHILD_CHAIN_MAX`, 4,
+     objects) finds no object of the PDO's own driver (`pci.sys`, which is
+     also a bridge's function driver), none of this driver's, none without
+     a driver object, and the previous snapshot was not truncated.
+   - **Anything else** is skipped as before.
+
+   Why this is safe: the PnP manager builds a new device's stack (lower
+   filters, the function driver, upper filters) only once the
+   `BusRelations` answer that first reports the PDO has reached it, and this
+   runs before the bridge filter completes that answer. So for a PDO that
+   is new by the snapshot, nothing attached can be its function driver. The
+   driver-object checks hold that reasoning to what can be seen.
+   - **Truncated snapshot:** a PDO past `CM_SNAP_MAX` reads as new on every
+     answer and may carry a built stack.
+   - **A bridge stopped and restarted:** this case needs no rule of its
+     own. A withdrawal clears the baseline, so the first answer after the
+     restart attaches nothing and re-takes the snapshot.
+
+   The child then sits below the function driver the PnP manager loads
+   next, as it does directly on the PDO. The log names the driver found on
+   the PDO: `cm.reenum.child.under` and `under2`, eight characters after
+   `\Driver\`, with `under.count` and `decision`. It also counts
+   `cm.reenum.child.over`. Windows 2000 with ACPI off attaches as before;
+   this rule changes nothing where nothing is attached. Not changed: on
+   2000 the child is lost when Windows installs a bridge's driver for the
+   first time and rebuilds its stack (roadmap EJRB.1). `cmEjectReady`
+   still reads any attached object as a stack, so on an ACPI machine it
+   depends on that bus filter leaving with the device's stack; the
+   revision's legs read it.
 2. **The capabilities.** The child filter passes
    `IRP_MN_QUERY_CAPABILITIES` down with a completion wait and, when
    `pci.sys` succeeded it, sets `Removable` to 1 on the way up - the way

@@ -14,7 +14,8 @@
  *       a child filter to each new PDO (section 7.4). A device D0 request
  *       on a bridge the NHI holds for its resume is retained (section 6.3).
  *   [CM_KIND_CHILD]   role 3, safe eject's child filter, created by the
- *       bridge filter directly above a new device's PDO. Its one act is
+ *       bridge filter above a new device's PDO (directly, or above the bus
+ *       filters already there, CmPortsChildAttach). Its one act is
  *       Removable in the IRP_MN_QUERY_CAPABILITIES answer, on the way up;
  *       a removal after a query-remove (an eject, not a surprise removal)
  *       is posted to the owning domain (record 22 section 10.4's per-port

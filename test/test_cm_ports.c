@@ -333,6 +333,56 @@ static void test_snapshot(void)
              "the same answer twice has nothing new");
 }
 
+/* ---- the child filter's attach decision (section 7.4, revision 2) ------ */
+
+static void test_child_attach(void)
+{
+    int pci;
+    int acpi;
+    int cm;
+    int other;
+    PVOID chain[CM_CHILD_CHAIN_MAX + 1];
+    ULONG i;
+
+    CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, 0, &pci, &cm), CM_CHILD_ATTACH,
+             "nothing attached: directly above the PDO, as revision 1 did");
+    CHECK_EQ(CmPortsChildAttach(1, (PVOID const *)chain, 0, &pci, &cm), CM_CHILD_ATTACH,
+             "nothing attached: a truncated snapshot changes nothing");
+
+    chain[0] = &acpi;
+    CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, 1, &pci, &cm), CM_CHILD_ATTACH_OVER,
+             "a bus filter of another driver (ACPI on a PCI-to-PCI bridge): above it");
+    CHECK_EQ(CmPortsChildAttach(1, (PVOID const *)chain, 1, &pci, &cm), CM_CHILD_SKIP,
+             "after a truncated snapshot 'new' is unreliable: nothing goes above anything");
+
+    chain[0] = &pci;
+    CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, 1, &pci, &cm), CM_CHILD_SKIP,
+             "an object of the PDO's own driver (pci.sys, a bridge's FDO): a built stack");
+    chain[0] = &acpi;
+    chain[1] = &pci;
+    CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, 2, &pci, &cm), CM_CHILD_SKIP,
+             "pci.sys anywhere in the chain: skipped");
+
+    chain[1] = &cm;
+    CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, 2, &pci, &cm), CM_CHILD_SKIP,
+             "this driver's own object already there: never a second child");
+    chain[1] = NULL;
+    CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, 2, &pci, &cm), CM_CHILD_SKIP,
+             "an object without a driver: skipped");
+
+    chain[1] = &other;
+    CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, 2, &pci, &cm), CM_CHILD_ATTACH_OVER,
+             "two bus filters of other drivers: above both");
+    for (i = 0; i < CM_CHILD_CHAIN_MAX; i++) {
+        chain[i] = &acpi;
+    }
+    CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, CM_CHILD_CHAIN_MAX, &pci, &cm),
+             CM_CHILD_ATTACH_OVER, "a chain at the walk's limit: above it");
+    chain[CM_CHILD_CHAIN_MAX] = &acpi;
+    CHECK_EQ(CmPortsChildAttach(0, (PVOID const *)chain, CM_CHILD_CHAIN_MAX + 1, &pci, &cm),
+             CM_CHILD_SKIP, "a chain longer than the walk: skipped");
+}
+
 /* ---- the hold's bound -------------------------------------------------- */
 
 static ULONG bound(ULONG readyMs, ULONG readyRetries, ULONG devices, ULONG cmdMs,
@@ -450,6 +500,7 @@ int main(void)
     test_infs();
     test_ids();
     test_snapshot();
+    test_child_attach();
     test_bound();
     test_watchdog();
     test_keep_present();

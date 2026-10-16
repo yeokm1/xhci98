@@ -384,6 +384,25 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
     return fresh;
 }
 
+ULONG CmPortsChildAttach(ULONG prevTruncated, PVOID const *chain,
+                         ULONG chainCount, PVOID busDriver, PVOID self)
+{
+    ULONG i;
+
+    if (chainCount == 0) {
+        return CM_CHILD_ATTACH;
+    }
+    if (prevTruncated || chainCount > CM_CHILD_CHAIN_MAX) {
+        return CM_CHILD_SKIP;
+    }
+    for (i = 0; i < chainCount; i++) {
+        if (chain[i] == NULL || chain[i] == busDriver || chain[i] == self) {
+            return CM_CHILD_SKIP;
+        }
+    }
+    return CM_CHILD_ATTACH_OVER;
+}
+
 /* ---- the hold's bound ------------------------------------------------- */
 
 /* a + b, held to CM_PORTS_HOLD_MAX_MS. */
