@@ -115,8 +115,9 @@ ntoskrnl.exe!ObfDereferenceObject           all  required  w2k-export; win98-pre
 # stor98's stor98cm.h, its decision MD-6): the callback object
 # \Callback\Stor98LinkState and its one callback, created at DriverEntry
 # and unregistered at unload. Called on NT only (IoIsWdmVersionAvailable(1,
-# 0x10)); Windows 98 SE and ME take the registry record instead, but the
-# image still has to load there, and no stock 98 SE driver imports the
+# 0x10)); Windows 98 SE and ME get no channel in this build (no callback
+# object and no registry rendezvous), but the image still has to load
+# there, and no stock 98 SE driver imports the
 # three: their Windows 98 evidence is the name in ntkern.vxd alone, and
 # the load of this image on 98 SE is the authoritative check.
 ntoskrnl.exe!ExCreateCallback                all  required  SITES=cm_nvlinkos.obj w2k-export; ntkern-name (ntkern.vxd 4.10.2222's export-name strings; no 98 SE precedent). NT only at run time

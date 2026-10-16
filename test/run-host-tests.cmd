@@ -195,8 +195,10 @@ rem   test_cm_nvlink - the stor98 link-state channel's pure half
 rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
 rem                  table of stor98's stor98cm.h, its entry protocol read
 rem                  back by a modelled receiver, the two profiles'
-rem                  statement conditions, interface 3's locator, proof
-rem                  query handler and REMOVE_PENDING
+rem                  statement conditions, where the channel is offered
+rem                  (not on 98 SE and ME in 3.0.0.0) and the wait with no
+rem                  receiver, interface 3's locator bytes and
+rem                  REMOVE_PENDING
 rem   test_cm_ports - the re-enumeration's own pure half (src\cm\cm_ports.c,
 rem                  roadmap-usb4.md 39-A.5 and 39-A.8, design record 21
 rem                  sections 3.3, 6.1, 6.3 and 7.4): the families' NHI,
