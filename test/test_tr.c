@@ -17,6 +17,7 @@
 #include "../xhcitr/tr_core.h"
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
+#include "../xhciinst/inst_core.h"
 #include "test_harness.h"
 
 #define QB_ID "PCI\\VEN_8086&DEV_15EB&SUBSYS_00000000&REV_06\\4&2B3C0E5&0&00E4"
@@ -1498,6 +1499,315 @@ static void test_desc_lengths(void)
     CHECK(has(buf, "short or not reported"), "hub bLength 71 of 7 bytes refused");
 }
 
+/* ---- plain USB devices (record 25 section 6.5, revision 7) ------------- */
+
+/* A device that is offered: started, no problem, its set known and read. */
+static void usbf_base(TR_USBF *f, int nt)
+{
+    memset(f, 0, sizeof(*f));
+    f->Nt = nt;
+    f->HaveDevnode = 1;
+    f->Started = 1;
+    f->SetKnown = 1;
+    f->SetCount = 3;
+    f->ReadWhole = 1;
+    f->CallAvailable = 1;
+}
+
+static void test_usb_eject(void)
+{
+    static const char ids[] = "USB\\VID_0781&PID_5581&REV_0100\0USB\\COMPOSITE\0";
+    static const char compatStor[] = "USB\\Class_08&SubClass_06&Prot_50\0USB\\Class_08\0";
+    static const char compatHid[] = "USB\\Class_03&SubClass_01&Prot_02\0usb\\class_03\0";
+    static const char compatHub[] = "USB\\Class_09&SubClass_00\0USB\\Class_09\0";
+    TR_USBF f;
+    const char *why;
+    char out[512];
+    char wide[400];
+    int r;
+
+    /* the ids */
+    CHECK(tr_msz_has_prefix(compatStor, sizeof(compatStor), "usb\\class_08"),
+          "msz prefix: without case");
+    CHECK(!tr_msz_has_prefix(compatStor, sizeof(compatStor), "USB\\Class_03"),
+          "msz prefix: storage is not input");
+    CHECK(!tr_msz_has_prefix(compatStor, 10, "USB\\Class_08"),
+          "msz prefix: an id the buffer cuts short is not read");
+    CHECK(!tr_msz_has_prefix(NULL, 0, "USB"), "msz prefix: no list");
+    CHECK(tr_msz_has_prefix(ids, sizeof(ids), "usb\\composite"),
+          "msz prefix: the second id");
+
+    CHECK(tr_node_is_hid(NULL, ids, sizeof(ids), compatHid, sizeof(compatHid),
+                         "", ""), "hid: a USB\\Class_03 compatible id");
+    CHECK(tr_node_is_hid("HID\\VID_0627&PID_0001\\7&1", NULL, 0, NULL, 0, NULL,
+                         NULL), "hid: an HID\\ instance id");
+    CHECK(tr_node_is_hid("USB\\VID_1\\2", NULL, 0, NULL, 0, "HidUsb", NULL),
+          "hid: bound to hidusb");
+    CHECK(tr_node_is_hid(NULL, NULL, 0, NULL, 0, NULL, "Keyboard") &&
+          tr_node_is_hid(NULL, NULL, 0, NULL, 0, NULL, "mouse") &&
+          tr_node_is_hid(NULL, NULL, 0, NULL, 0, NULL, "HIDClass"),
+          "hid: the three setup classes");
+    CHECK(!tr_node_is_hid("USB\\VID_0781&PID_5581\\0123", ids, sizeof(ids),
+                          compatStor, sizeof(compatStor), "USBSTOR", "USB"),
+          "hid: a storage stick is not input");
+    CHECK(tr_node_is_hub(NULL, 0, compatHub, sizeof(compatHub)),
+          "hub: USB\\Class_09");
+    CHECK(!tr_node_is_hub(ids, sizeof(ids), compatStor, sizeof(compatStor)),
+          "hub: a stick is not one");
+
+    /* eligibility: NT. Every xhci98 device says removable, an internal
+     * camera, fingerprint reader or radio too: a disk or volume decides. */
+    usbf_base(&f, 1);
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS &&
+          strcmp(why, "no disk on it") == 0,
+          "rule NT: removable alone (a camera, a fingerprint reader) is not offered");
+    f.Disks = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_OFFER && why == NULL,
+          "rule NT: a disk under it");
+    f.Disks = 0;
+    f.Volumes = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_OFFER, "rule NT: a volume in its set");
+    f.Radio = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS &&
+          strcmp(why, "a wireless radio") == 0, "rule NT: class E0 never");
+
+    /* eligibility: 98 SE and ME */
+    usbf_base(&f, 0);
+    f.Volumes = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS &&
+          strcmp(why, "no disk on it") == 0,
+          "rule 9x: no disk, no offer (volumes are an NT reading)");
+    f.Disks = 2;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_OFFER, "rule 9x: disks under it");
+    f.HaveDevnode = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS,
+          "rule 9x: a device with no driver's devnode");
+
+    /* never listed */
+    usbf_base(&f, 1);
+    f.Disks = 1;
+    f.IsHub = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS && strcmp(why, "a hub") == 0,
+          "rule: a hub, even with a disk behind it");
+    f.IsHub = 0;
+    f.Hid = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS &&
+          strcmp(why, "an input device") == 0,
+          "rule: input (a keyboard, or a composite with an input function)");
+    f.Hid = 0;
+    f.IsController = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS, "rule: a controller");
+    f.IsController = 0;
+    f.HaveDevnode = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS,
+          "rule: a port with no device entry");
+
+    /* listed, not offered */
+    usbf_base(&f, 1);
+    f.Disks = 1;
+    f.Problem = 47;
+    f.Started = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
+          strcmp(why, "stopped - unplug it") == 0, "rule: Code 47");
+    f.Disks = 0;
+    f.Volumes = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
+          strcmp(why, "stopped - unplug it") == 0,
+          "rule: Code 47 after its disk went with the eject (XP)");
+    f.Hid = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS,
+          "rule: an input device held for eject is still not listed");
+    f.Hid = 0;
+    f.Disks = 1;
+    f.Problem = 28;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
+          strcmp(why, "Windows could not start it") == 0,
+          "rule: another problem code");
+    f.Problem = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: not started");
+    f.Started = 1;
+    f.SetKnown = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: its set not known");
+    f.SetKnown = 1;
+    f.SetCount = TR_USB_SET_MAX + 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: a set too long to list");
+    f.SetCount = TR_USB_SET_MAX;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_OFFER, "rule: 64 devnodes are listed whole");
+    f.ReadWhole = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: read in part");
+    f.ReadWhole = 1;
+    f.CallAvailable = 0;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: no routine");
+
+    /* the words for a devnode that is not running: only Code 47 says unplug */
+    {
+        char tag[64];
+        char sen[96];
+        CHECK(tr_stopped_text(47, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
+              strcmp(tag, "stopped - unplug it") == 0 &&
+              strcmp(sen, "Stopped: you can unplug it.") == 0, "stopped: Code 47");
+        CHECK(tr_stopped_text(29, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              strcmp(tag, "not started - problem code 29") == 0 &&
+              strcmp(sen, "Windows could not start this device (problem code 29).") == 0 &&
+              !has(tag, "unplug") && !has(sen, "unplug"),
+              "stopped: Code 29 is a failed start, never 'unplug it'");
+        CHECK(tr_stopped_text(28, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              has(tag, "code 28"), "stopped: Code 28, no driver");
+        CHECK(tr_stopped_text(0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              strcmp(tag, "not started") == 0 && !has(sen, "unplug"),
+              "stopped: not started, no problem code");
+    }
+
+    /* the check before the call */
+    {
+        const char *then[3];
+        const char *now[3];
+        then[0] = "USB\\VID_0781&PID_5581\\0123";
+        then[1] = "USBSTOR\\DISK&VEN_X\\0123&0";
+        then[2] = "STORAGE\\VOLUME\\1&30A9";
+        now[0] = "storage\\volume\\1&30a9";
+        now[1] = "USB\\VID_0781&PID_5581\\0123";
+        now[2] = "USBSTOR\\DISK&VEN_X\\0123&0";
+        usbf_base(&f, 1);
+        f.Disks = 1;
+        CHECK(tr_usb_recheck("USB\\ROOT_HUB30\\4&1", "usb\\root_hub30\\4&1", now,
+                             3, then, 3, &f, &why),
+              "recheck: the same parent and set, any order and case");
+        CHECK(!tr_usb_recheck("USB\\VID_05E3&PID_0610\\5&2", "USB\\ROOT_HUB30\\4&1",
+                              now, 3, then, 3, &f, &why) &&
+              strcmp(why, "it is no longer where it was") == 0,
+              "recheck: moved behind a hub");
+        CHECK(!tr_usb_recheck("A", "", now, 3, then, 3, &f, &why),
+              "recheck: no parent confirmed");
+        CHECK(!tr_usb_recheck("P", "P", now, 2, then, 3, &f, &why) &&
+              strcmp(why, "the devices on it changed") == 0,
+              "recheck: a devnode gone");
+        now[2] = "USBSTOR\\DISK&VEN_X\\0123&1";
+        CHECK(!tr_usb_recheck("P", "P", now, 3, then, 3, &f, &why),
+              "recheck: a devnode replaced");
+        now[2] = now[1];
+        CHECK(!tr_usb_recheck("P", "P", now, 3, then, 3, &f, &why),
+              "recheck: a repeated devnode does not stand for a missing one");
+        now[2] = "USBSTOR\\DISK&VEN_X\\0123&0";
+        f.Problem = 47;
+        f.Started = 0;
+        CHECK(!tr_usb_recheck("P", "P", now, 3, then, 3, &f, &why) &&
+              strcmp(why, "stopped - unplug it") == 0,
+              "recheck: stopped meanwhile");
+        f.Problem = 0;
+        f.Started = 1;
+        f.Hid = 1;
+        CHECK(!tr_usb_recheck("P", "P", now, 3, then, 3, &f, &why),
+              "recheck: an input function now");
+    }
+
+    /* the answers */
+    r = tr_usb_answer_nt(0, 0, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_DONE && out[0] == '\0', "answer NT: stopped");
+    r = tr_usb_answer_nt(0, 5, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "a program is using F:"),
+          "answer NT: success with a veto type is a veto (XP)");
+    CHECK(tr_eject_cr(0, 0) == 0 && tr_eject_cr(0, 6) == INST_CR_REMOVE_VETOED &&
+          tr_eject_cr(INST_CR_ACCESS_DENIED, 12) == INST_CR_ACCESS_DENIED,
+          "eject cr: only a success with a veto type changes");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "STORAGE\\VOLUME\\1", 0, "F:",
+                         out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: a program is using F:. Close it and "
+                      "try again.") == 0, "answer NT: an open file on F:");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "", 0, "USB Mass Storage Device",
+                         out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "is using USB Mass Storage Device."),
+          "answer NT: no letter, the name");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 3, "notepad.exe", 0, "F:, G:",
+                         out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: notepad.exe is using F:, G:. Close it "
+                      "and try again.") == 0, "answer NT: an application");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 4, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "a program is using F:"),
+          "answer NT: a service with no name");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 6, "USBSTOR\\DISK\\1", 0, "F:",
+                         out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: USBSTOR\\DISK\\1 did not allow it.") == 0,
+          "answer NT: a device's veto, named");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 6, "STORAGE\\RemovableMedia\\7&1&RM", 1,
+                         "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: F: is in use (a program has a file or "
+                      "folder open on it). Close it and try again.") == 0,
+          "answer NT: its own volume's veto names the drive (XP)");
+    r = tr_usb_answer_nt(0, 6, "STORAGE\\RemovableMedia\\7&1&RM", 1, "F:", out,
+                         sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "F: is in use"),
+          "answer NT: the same when XP answers success with the veto");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 99, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "(veto 99)"),
+          "answer NT: an unknown veto, numbered");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 12, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_RIGHTS, "answer NT: the rights veto");
+    r = tr_usb_answer_nt(INST_CR_ACCESS_DENIED, 0, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_RIGHTS && has(out, "administrator"), "answer NT: access denied");
+    r = tr_usb_answer_nt(INST_CR_NO_SUCH_DEVNODE, 0, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_CHANGED, "answer NT: gone");
+    r = tr_usb_answer_nt(0x1FUL, 0, "", 0, "F:", out, sizeof(out));
+    CHECK(r == INST_EJ_FAILED && has(out, "(code 0x0000001F)"),
+          "answer NT: anything else, with its code");
+    r = tr_usb_answer_nt(INST_CR_REMOVE_VETOED, 5, "", 0, "F:", out, 8);
+    CHECK(r == INST_EJ_VETO && strlen(out) == 7, "answer NT: a small buffer");
+
+    r = tr_usb_answer9x(0, "E:", out, sizeof(out));
+    CHECK(r == INST_EJ_DONE && out[0] == '\0', "answer 9x: accepted");
+    r = tr_usb_answer9x(INST_CR_REMOVE_VETOED, "E:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO &&
+          strcmp(out, "Windows refused: E: is in use. A program may have a "
+                      "file open on it, or a DOS box may be using it. Close "
+                      "it and try again.") == 0, "answer 9x: refused, no cause");
+    r = tr_usb_answer9x(INST_CR_NO_SUCH_DEVNODE, "E:", out, sizeof(out));
+    CHECK(r == INST_EJ_CHANGED && !has(out, "code"), "answer 9x: gone");
+    r = tr_usb_answer9x(INST_CR_CALL_NOT_IMPLEMENTED, "E:", out, sizeof(out));
+    CHECK(r == INST_EJ_UNSUPPORTED, "answer 9x: not offered");
+    r = tr_usb_answer9x(0x1FUL, "E:", out, sizeof(out));
+    CHECK(r == INST_EJ_VETO && has(out, "(code 0x0000001F)"),
+          "answer 9x: another refusal, with its code");
+
+    /* console text */
+    tr_wrap("Windows has stopped USB Flash Disk (F:). You can now unplug the "
+            "device. Until you unplug it, Device Manager's Refresh can start "
+            "it again.", wide, sizeof(wide), 40);
+    CHECK(strcmp(wide, "Windows has stopped USB Flash Disk (F:).\r\n"
+                       "You can now unplug the device. Until you\r\n"
+                       "unplug it, Device Manager's Refresh can\r\n"
+                       "start it again.") == 0, "wrap: at the last space");
+    {
+        const char *p = wide;
+        int longest = 0;
+        while (*p != '\0') {
+            int n = 0;
+            while (p[n] != '\0' && p[n] != '\r') {
+                n++;
+            }
+            if (n > longest) {
+                longest = n;
+            }
+            p += n;
+            while (*p == '\r' || *p == '\n') {
+                p++;
+            }
+        }
+        CHECK(longest <= 40, "wrap: no line longer than the width");
+    }
+    tr_wrap("one\n\ntwo\r\n", wide, sizeof(wide), 79);
+    CHECK(strcmp(wide, "one\r\n\r\ntwo\r\n") == 0, "wrap: breaks and paragraphs kept");
+    tr_wrap("abcdefghijklmnop qr", wide, sizeof(wide), 8);
+    CHECK(strcmp(wide, "abcdefgh\r\nijklmnop\r\nqr") == 0, "wrap: a long word cut");
+    tr_wrap("aaaa bbbb cccc", wide, 7, 79);
+    CHECK(strcmp(wide, "aaaa b") == 0, "wrap: cut short and terminated");
+    tr_wrap("", wide, sizeof(wide), 79);
+    CHECK(wide[0] == '\0', "wrap: nothing");
+}
+
 int main(void)
 {
     test_printf();
@@ -1511,6 +1821,7 @@ int main(void)
     test_keys_args_report();
     test_sizes();
     test_desc_lengths();
+    test_usb_eject();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {

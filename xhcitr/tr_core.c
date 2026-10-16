@@ -1837,3 +1837,386 @@ void tr_protocols_text(TR_U32 proto, char *out, size_t cap)
         tr_put(&t, "none reported");
     }
 }
+
+/* ======================================================================== */
+/* Plain USB devices (record 25 section 6.5, revision 7)                     */
+/* ======================================================================== */
+
+static int tr_starts_ci(const char *s, const char *prefix)
+{
+    while (*prefix != '\0') {
+        if (*s == '\0' || tr_up((unsigned char)*s) != tr_up((unsigned char)*prefix)) {
+            return 0;
+        }
+        s++;
+        prefix++;
+    }
+    return 1;
+}
+
+int tr_msz_has_prefix(const char *msz, size_t bytes, const char *prefix)
+{
+    size_t o = 0;
+
+    if (msz == NULL) {
+        return 0;
+    }
+    while (o < bytes && msz[o] != '\0') {
+        size_t n = 0;
+        while (o + n < bytes && msz[o + n] != '\0') {
+            n++;
+        }
+        if (o + n >= bytes) {
+            return 0;   /* an id the buffer cuts short is not read */
+        }
+        if (tr_starts_ci(msz + o, prefix)) {
+            return 1;
+        }
+        o += n + 1;
+    }
+    return 0;
+}
+
+int tr_node_is_hid(const char *id, const char *hw, size_t hwBytes,
+                   const char *compat, size_t compatBytes,
+                   const char *service, const char *cls)
+{
+    if (cls != NULL && (tr_eq(cls, "HIDClass") || tr_eq(cls, "Keyboard") ||
+                        tr_eq(cls, "Mouse"))) {
+        return 1;
+    }
+    if (service != NULL && tr_eq(service, "hidusb")) {
+        return 1;
+    }
+    if (id != NULL && (tr_starts_ci(id, "HID\\") ||
+                       tr_starts_ci(id, "USB\\Class_03"))) {
+        return 1;
+    }
+    return tr_msz_has_prefix(hw, hwBytes, "USB\\Class_03") ||
+           tr_msz_has_prefix(hw, hwBytes, "HID\\") ||
+           tr_msz_has_prefix(compat, compatBytes, "USB\\Class_03") ||
+           tr_msz_has_prefix(compat, compatBytes, "HID\\");
+}
+
+int tr_node_is_hub(const char *hw, size_t hwBytes, const char *compat,
+                   size_t compatBytes)
+{
+    return tr_msz_has_prefix(hw, hwBytes, "USB\\Class_09") ||
+           tr_msz_has_prefix(compat, compatBytes, "USB\\Class_09");
+}
+
+int tr_usb_rule(const TR_USBF *f, const char **why)
+{
+    *why = NULL;
+    if (!f->HaveDevnode) {
+        *why = "its device entry was not found";
+        return TR_UE_DETAILS;
+    }
+    if (f->IsController) {
+        *why = "a USB host controller";
+        return TR_UE_DETAILS;
+    }
+    if (f->IsHub) {
+        *why = "a hub";
+        return TR_UE_DETAILS;
+    }
+    if (f->Hid) {
+        *why = "an input device";
+        return TR_UE_DETAILS;
+    }
+    if (f->Radio) {
+        *why = "a wireless radio";
+        return TR_UE_DETAILS;
+    }
+    /* Held for eject (Code 47): its disks are gone with the eject, and it
+     * is shown stopped, never offered. */
+    if (f->Problem == TR_CM_PROB_HELD_FOR_EJECT) {
+        *why = "stopped - unplug it";
+        return TR_UE_LISTED;
+    }
+    /* A disk or a volume on every target: xhci98.sys reports every device
+     * removable, internal ports included (it reads no ACPI _UPC or _PLD),
+     * so the capability cannot tell a camera from a stick. */
+    if (f->Disks == 0 && (!f->Nt || f->Volumes == 0)) {
+        *why = "no disk on it";
+        return TR_UE_DETAILS;
+    }
+    if (f->Problem == TR_CM_PROB_HELD_FOR_EJECT) {
+        *why = "stopped - unplug it";
+        return TR_UE_LISTED;
+    }
+    if (f->Problem != 0) {
+        *why = "Windows could not start it";
+        return TR_UE_LISTED;
+    }
+    if (!f->Started) {
+        *why = "it is not running";
+        return TR_UE_LISTED;
+    }
+    if (!f->SetKnown) {
+        *why = "what would stop with it could not be read";
+        return TR_UE_LISTED;
+    }
+    if (f->SetCount > TR_USB_SET_MAX) {
+        *why = "too many devices would stop with it to list";
+        return TR_UE_LISTED;
+    }
+    if (!f->ReadWhole) {
+        *why = "its devices could not be read whole";
+        return TR_UE_LISTED;
+    }
+    if (!f->CallAvailable) {
+        *why = "this Windows does not offer the call";
+        return TR_UE_LISTED;
+    }
+    return TR_UE_OFFER;
+}
+
+static int tr_id_in(const char *id, const char *const *ids, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (ids[i] != NULL && tr_eq(ids[i], id)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int tr_usb_recheck(const char *parentNow, const char *parentThen,
+                   const char *const *nowIds, int n,
+                   const char *const *thenIds, int m, const TR_USBF *f,
+                   const char **why)
+{
+    int i;
+
+    *why = NULL;
+    if (parentNow == NULL || parentThen == NULL || parentThen[0] == '\0' ||
+        !tr_eq(parentNow, parentThen)) {
+        *why = "it is no longer where it was";
+        return 0;
+    }
+    if (n != m) {
+        *why = "the devices on it changed";
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        /* Both ways: a list with a repeated entry cannot stand for
+         * another of the same length. */
+        if (nowIds[i] == NULL || !tr_id_in(nowIds[i], thenIds, m) ||
+            thenIds[i] == NULL || !tr_id_in(thenIds[i], nowIds, n)) {
+            *why = "the devices on it changed";
+            return 0;
+        }
+    }
+    return tr_usb_rule(f, why) == TR_UE_OFFER;
+}
+
+/* One %s of a text from inst_core.c, filled, into out. */
+static void tr_fill1(char *out, size_t cap, const char *text, const char *arg)
+{
+    const char *p = strstr(text, "%s");
+    char head[512];
+    size_t n;
+
+    if (p == NULL) {
+        tr_sprintf(out, cap, "%s", text);
+        return;
+    }
+    n = (size_t)(p - text);
+    if (n >= sizeof(head)) {
+        n = sizeof(head) - 1;
+    }
+    memcpy(head, text, n);
+    head[n] = '\0';
+    tr_sprintf(out, cap, "%s%s%s", head, arg, p + 2);
+}
+
+TR_U32 tr_eject_cr(TR_U32 cr, TR_U32 vetoType)
+{
+    return cr == 0 && vetoType != 0 ? INST_CR_REMOVE_VETOED : cr;
+}
+
+/* PNP_VETO_TYPE (cfg.h): the three answers whose text names the drive. */
+#define TR_VETO_WINDOWS_APP     3UL
+#define TR_VETO_WINDOWS_SERVICE 4UL
+#define TR_VETO_OUTSTANDING     5UL
+#define TR_VETO_DEVICE          6UL
+#define TR_VETO_DRIVER          7UL
+
+int tr_usb_answer_nt(TR_U32 cr, TR_U32 vetoType, const char *vetoName,
+                     int vetoInSet, const char *what, char *out, size_t cap)
+{
+    const char *text;
+    int withName;
+    int outcome;
+
+    cr = tr_eject_cr(cr, vetoType);
+    outcome = inst_eject_nt(cr, vetoType, &text, &withName);
+    if (cap == 0) {
+        return outcome;
+    }
+    out[0] = '\0';
+    if (outcome == INST_EJ_DONE) {
+        return outcome;
+    }
+    if (cr == INST_CR_REMOVE_VETOED && vetoType == TR_VETO_OUTSTANDING) {
+        tr_sprintf(out, cap, "Windows refused: a program is using %s. Close "
+                             "it and try again.", what);
+    } else if (cr == INST_CR_REMOVE_VETOED && vetoInSet &&
+               (vetoType == TR_VETO_DEVICE || vetoType == TR_VETO_DRIVER)) {
+        tr_sprintf(out, cap, "Windows refused: %s is in use (a program has a "
+                             "file or folder open on it). Close it and try "
+                             "again.", what);
+    } else if (cr == INST_CR_REMOVE_VETOED &&
+               (vetoType == TR_VETO_WINDOWS_APP ||
+                vetoType == TR_VETO_WINDOWS_SERVICE)) {
+        tr_sprintf(out, cap, "Windows refused: %s is using %s. Close it and "
+                             "try again.",
+                   vetoName != NULL && vetoName[0] != '\0' ? vetoName
+                                                           : "a program",
+                   what);
+    } else if (withName) {
+        char name[300];
+        if (vetoName != NULL && vetoName[0] != '\0') {
+            tr_copy(name, vetoName, sizeof(name));
+        } else {
+            tr_sprintf(name, sizeof(name), "veto %lu", (unsigned long)vetoType);
+        }
+        tr_fill1(out, cap, text, name);
+    } else {
+        tr_sprintf(out, cap, "%s", text);
+    }
+    if (outcome == INST_EJ_FAILED) {
+        size_t l = strlen(out);
+        tr_sprintf(out + l, cap - l, "\n(code 0x%08lX)", (unsigned long)cr);
+    }
+    return outcome;
+}
+
+int tr_usb_answer9x(TR_U32 cr, const char *what, char *out, size_t cap)
+{
+    const char *text;
+    int outcome = inst_eject9x_query(cr, &text);
+
+    if (cap == 0) {
+        return outcome;
+    }
+    out[0] = '\0';
+    if (outcome == INST_EJ_DONE) {
+        return outcome;
+    }
+    if (cr == INST_CR_REMOVE_VETOED) {
+        tr_sprintf(out, cap, "Windows refused: %s is in use. A program may "
+                             "have a file open on it, or a DOS box may be "
+                             "using it. Close it and try again.", what);
+        return outcome;
+    }
+    tr_sprintf(out, cap, "%s", text);
+    if (outcome == INST_EJ_VETO) {
+        size_t l = strlen(out);
+        tr_sprintf(out + l, cap - l, "\n(code 0x%08lX)", (unsigned long)cr);
+    }
+    return outcome;
+}
+
+/* n bytes of s into out at *o, always terminated; 0 when they did not
+ * all fit (what fits is kept). */
+static int tr_emit(char *out, size_t cap, size_t *o, const char *s, size_t n)
+{
+    if (*o + n + 1 > cap) {
+        n = cap - 1 - *o;
+        memcpy(out + *o, s, n);
+        *o += n;
+        out[*o] = '\0';
+        return 0;
+    }
+    memcpy(out + *o, s, n);
+    *o += n;
+    out[*o] = '\0';
+    return 1;
+}
+
+void tr_wrap(const char *in, char *out, size_t cap, int width)
+{
+    size_t o = 0;
+    const char *p = in;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (width < 8) {
+        width = 8;
+    }
+    for (;;) {
+        const char *end = p;
+        while (*end != '\0' && *end != '\r' && *end != '\n') {
+            end++;
+        }
+        do {
+            const char *cut = end;
+            const char *resume = end;
+            if (end - p > width) {
+                const char *s = p + width;
+                while (s > p && *s != ' ') {
+                    s--;
+                }
+                if (s == p) {
+                    cut = p + width;    /* one word longer than the line */
+                    resume = cut;
+                } else {
+                    cut = s;
+                    resume = s;
+                    while (*resume == ' ') {
+                        resume++;
+                    }
+                    while (cut > p && cut[-1] == ' ') {
+                        cut--;
+                    }
+                }
+            }
+            if (!tr_emit(out, cap, &o, p, (size_t)(cut - p))) {
+                return;
+            }
+            p = resume;
+            if (p < end && !tr_emit(out, cap, &o, "\r\n", 2)) {
+                return;
+            }
+        } while (p < end);
+        if (*end == '\0') {
+            break;
+        }
+        if (!tr_emit(out, cap, &o, "\r\n", 2)) {
+            return;
+        }
+        p = end;
+        if (*p == '\r') {
+            p++;
+        }
+        if (*p == '\n') {
+            p++;
+        }
+    }
+}
+
+int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
+                    size_t sentenceCap)
+{
+    if (problem == TR_CM_PROB_HELD_FOR_EJECT) {
+        tr_copy(tag, "stopped - unplug it", tagCap);
+        tr_copy(sentence, "Stopped: you can unplug it.", sentenceCap);
+        return 1;
+    }
+    if (problem != 0) {
+        tr_sprintf(tag, tagCap, "not started - problem code %lu",
+                   (unsigned long)problem);
+        tr_sprintf(sentence, sentenceCap, "Windows could not start this device "
+                   "(problem code %lu).", (unsigned long)problem);
+        return 0;
+    }
+    tr_copy(tag, "not started", tagCap);
+    tr_copy(sentence, "Windows has not started this device.", sentenceCap);
+    return 0;
+}

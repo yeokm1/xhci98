@@ -348,6 +348,72 @@ is the "USB4 v2.0" of the 2000 reading above, the emulator's enclosure
 being USB4 1.0. They now take the major and minor as the specification
 splits them. The 2000 and XP legs of the dock were not run.
 
+## Plain USB devices (record 25 revision 7)
+
+The owner's decision of 2026-10-16 (Safely Remove for plain USB devices,
+decision T6 reversed), read on branch `tr-usbeject` on development host
+A, every window shown. xhci98's controller with four ports, each USB 2
+and USB 3; a Bulk-Only stick, a UAS disk on `xhciuas.sys`, a tablet, a
+hub with a keyboard behind it. XP and 7 as the standard user; 98 SE and
+ME as their one user. The dry cut's `XHCITR.EXE` (x86, TEST label) was
+read first; the fixes below came out of these readings, and each system
+was read again on the tool of `88b2a108` or later.
+
+| Reading | 98 SE | ME | XP | 7 x86 |
+|---|---|---|---|---|
+| label with its letter, "[can be stopped]" | pass | pass | pass | pass |
+| stick at SuperSpeed: Delete, right click, Action | pass | pass | pass | pass |
+| stick at High Speed | pass | - | - | - |
+| UAS disk | pass | - | pass | pass |
+| the tray's "USB devices" group and its stop | pass (message box) | pass (balloon) | pass (balloon) | pass (balloon) |
+| after the stop | gone from Device Manager | gone | Code 47, "[stopped - unplug it]" | Code 47 |
+| unplug, re-plug, the drive back | pass | pass | pass | pass |
+| refusal with a file open | pass | - | pass | pass |
+| tablet, keyboard, hub not offered | pass | tablet, hub | pass | tablet, hub |
+
+- 98 SE: "QEMU QEMU HARDDISK (F:) SuperSpeed [can be stopped]"; the
+  confirmation listed "USB Mass Storage Device", "USB Disk" and the disk.
+  An MS-DOS Prompt with `type con > F:\HOLD2.TXT` running gave "Windows
+  refused: F: is in use..."; a prompt merely sitting on `F:` did not, and
+  the stop went ahead. The UAS disk: "(F:) SuperSpeed", stopped from the
+  Action menu.
+- XP: the details listed "Generic volume" in what stops, from the disk's
+  removal relations. With `cmd` on the drive: "Windows refused: D: is in
+  use (a program has a file or folder open on it). Close it and try
+  again." `/eject id=` with its output redirected wrote the answer wrapped
+  at 79 columns; `/report` ended 0.
+- 7: as XP, the stick and the UAS disk, the tray item greyed "(stopped -
+  unplug it)" after the stop.
+- ME: the stop from a right click and from the tray, with the balloon.
+- The keyboard read "Safely Remove: not offered - an input device"; on
+  the development host a Bluetooth radio read "not offered - a wireless
+  radio".
+
+Defects found and fixed in these readings:
+
+- XP answered a vetoed eject `CR_SUCCESS` with the veto type set: the
+  tool first reported the stop, then "The device has started again, so it
+  is not safe to unplug." (exit 4). A success with a veto type is now a
+  veto (`655937a5`), and a veto from the device's own volume names the
+  drive (`ba1341e7`).
+- After the stop the held device read "not offered - no disk on it": the
+  disk had gone with the eject (`655937a5`).
+- 7 answered the relations call `CR_NO_SUCH_VALUE` for a stick with none,
+  so it was "not now"; that answer now means none (`fadbc9b4`).
+- ME: the tool page-faulted in the C runtime, in `/report` too, after a
+  restart left the new controller half installed; the earlier tool did
+  not. Property reads now go through a scratch buffer, and the
+  registry-only drive-letter value is no longer asked of the configuration
+  manager (`88b2a108`). Not seen again on ME, 98 SE, XP or 7.
+- From the owner's P14s report: a unit at Code 29 read "[stopped - unplug
+  it]". Only Code 47 says that now; any other code reads "not started -
+  problem code N" (`5f5d8ce7`).
+
+Not read: ME's refusal; the UAS disk's re-plug (the emulated UAS device
+does not attach when added to a running machine). ME's controller in the
+guest had no driver yet, and `INSTALL` left it to Device Manager, as it
+says.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link

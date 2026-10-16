@@ -1,7 +1,10 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 6, 2026-10-16, reviewed and revised five times the same night;
-the code is written against it. Written for the owner's instructions of
+Status: revision 7, 2026-10-16. Revision 7 adds Safely Remove for plain USB
+devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
+decision T6; sections 1.3, 3.1, 7.1, 7.3, 11, 12 and 14 change with it.
+Revision 6 was reviewed and revised five times the night before; the code
+is written against both. Written for the owner's instructions of
 2026-10-16: the command-line `INSTALL /devices` and `INSTALL /eject` of
 design record 24 are not easy to use, so a separate graphical tool shows
 every USB and Thunderbolt 3 / USB4 controller and device with its details,
@@ -70,11 +73,13 @@ authentication material.
 - Approving, rejecting or authorising devices; security levels; firmware.
 - Changing any driver setting from the tool (the registry values stay
   `tuning.md`'s, set by hand or by XHCIINST).
-- Forcing a removal Windows vetoes, or stopping a device that is not a
-  unit (record 24 section 4.2). Plain USB devices get details only: on
-  2000 to 7 Windows' own applet stops them; on 98 SE and ME the advice
-  stays what the release notes give (close the files, wait for the
-  activity to end, unplug).
+- Forcing a removal Windows vetoes, ever, or stopping a Thunderbolt
+  device that is not a unit (record 24 section 4.2).
+- Stopping a USB hub, a root hub, a controller, an input device (HID) or a
+  composite device with an input function, a radio, or a USB device that
+  section 6.5 does not offer (one with no disk or volume on it). Until
+  revision 7 plain USB devices got details only (decision T6); section 6.5
+  is what replaced that.
 - Writing `LowerFilters` to repair a missing child filter (Planned
   EJRB.1); the tool shows the condition (record 24 section 4.3) and says
   what to do.
@@ -114,7 +119,7 @@ authentication material.
     Windows' own USB controllers (not xhci98's); Empty ports;
     Descriptors; Devices behind each tunnel; Auto Refresh.
   - **Action**: Safely Remove... (enabled on a unit or a node inside
-    one), Properties (Device Manager's properties of the selected devnode
+    one, and on a USB device section 6.5 offers), Properties (Device Manager's properties of the selected devnode
     through `DeviceProperties_RunDLL` on 2000 to 7; disabled on 98 SE and
     ME).
   - **Help**: About (icon, version, the release it belongs to).
@@ -373,6 +378,164 @@ releases the mutex and starts itself with `runas` (Vista and 7) and
 `/eject id=<instance id>`, a one-shot mode (section 7.3) that runs the
 whole transaction itself and exits.
 
+### 6.5 Plain USB devices (revision 7)
+
+The owner's decision of 2026-10-16: the tool stops a plain USB device too,
+on every target, as Windows' own Safely Remove does. Sections 6.1 to 6.4
+stay the Thunderbolt units'; this section is the USB devices'. Nothing of
+`xhci98.sys`, `xhciuas.sys` or `xhcicm.sys` changes for it.
+
+**The device and what stops with it.** A USB device is the devnode a
+port of section 5 names (`IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME`,
+found in the walk by its driver key), on any controller the tool lists -
+xhci98's or Windows' own, a dock's behind a tunnel included. Its **set**
+is everything Windows stops with it:
+
+- on 98 SE and ME, the device and every devnode below it in the walk (a
+  composite device's functions, a storage device's disks): the removal of
+  a subtree there is the subtree;
+- on NT, the same, and then, until nothing new is added, the removal and
+  ejection relations of every member (`CM_Get_Device_ID_ListA` with
+  `CM_GETIDLIST_FILTER_REMOVALRELATIONS` and `_EJECTRELATIONS`, from
+  `cfgmgr32.dll`, else `setupapi.dll`, looked up at run time) and every
+  devnode below each: a disk's volumes are its removal relations, outside
+  its subtree. A relation that cannot be read, or that names a devnode
+  the walk does not hold, leaves the set unknown.
+
+The port scan runs on every refresh, in the tray too, whatever the View
+check boxes show, so the tray and `/eject` see the same devices as the
+window.
+
+**Listed.** A device is listed (in the tree with its state, in the tray's
+menu, for `/eject`) when its set holds none of:
+
+- a hub (the port says so, or the hardware or compatible IDs carry
+  `USB\Class_09`), a root hub, or a host controller;
+- an input device: a devnode of setup class `HIDClass`, `Keyboard` or
+  `Mouse`, bound to `hidusb`, or with an instance, hardware or compatible
+  ID beginning `USB\Class_03` or `HID\` - so a keyboard, a mouse, a
+  tablet and a composite device with an input function are never listed;
+- a wireless radio (device class `E0`, a Bluetooth adapter);
+
+its devnode was found in the walk (a device with no driver has none on
+98 SE and ME, and no disk anywhere), and its set holds a disk (setup
+class `DiskDrive`), or, on NT, a volume (setup class `Volume`); on 98 SE
+and ME the disks are found as section 14's drive labels already find
+them. Everything else connected gets details only, with the reason ("a
+hub", "an input device", "a wireless radio", "no disk on it").
+
+**Why not "removable" on NT.** The owner's instruction allowed a device
+Windows reports removable. `xhci98.sys` reports `Removable` on every
+device it presents (`src\hcd_pdo.c`), internal ports included: it reads
+no ACPI `_UPC` or `_PLD`. The owner's ThinkPad P14s Gen 1 under 98 SE
+has, on xhci98's root ports, a touchscreen, an integrated camera (a
+composite device), a fingerprint reader and a Bluetooth radio, all
+internal; under the capability rule the camera's parent is
+`SurpriseRemovalOK` and drops out, but a fingerprint reader with a driver
+or the radio would be offered, as Windows' own applet would list them.
+So on every target a disk or a volume decides, and a USB device with no
+storage (a camera, a network adapter, an audio device) is stopped by
+unplugging it, as before. Windows' own applet still lists what it lists.
+
+**Offered.** A listed device is offered when it is started and has no
+problem code, its set is known, holds no more than 64 devnodes, and each
+of them was read whole. One that is stopped is shown "[stopped - unplug
+it]" (Code 47, held for eject, after an eject on XP and later); one with
+another problem code is shown with the code, and is not offered.
+
+**What it is called.** Its disks' names and their drive letters, as units
+are (section 14, "A unit named by its drive" in run 41): "USB Flash Disk
+(F:)"; without a disk, the device's own name. The letters come from the
+same code: on NT the storage device number of each disk's interface
+against each `\\.\X:`, on 98 SE and ME the disk's
+`CurrentDriveLetterAssignment`.
+
+**The transaction.** No query device, no epoch and no passes:
+
+1. Confirm, as section 6.2 step 1 and with the same layout: "This stops
+   <device> and everything on it:", each disk with its volumes, then every
+   devnode of the set. Nothing below waits on the user. A thread of the
+   tool's own, with a hidden top-level window and a message loop of its
+   own, in every mode (`/eject` included), counts the device-change
+   notifications Windows broadcasts (`WM_DEVICECHANGE`); it never waits on
+   anything else, so no wait of the eject's thread - the question, the
+   mutex, a walk - can make it miss one. The request carries the count read
+   just before the model it was built from was read.
+2. Take the shared mutex of section 6.3, so that no XHCIINST and no other
+   XHCITR eject runs beside it.
+3. Walk the devnodes again and find the device by its instance ID: its
+   parent must be the devnode it was under when confirmed, its set (read
+   again, relations included) exactly the devnodes confirmed, and it must
+   still be offered by the rules above. Then, immediately before the call,
+   read the count again: any notification since the request's count -
+   while the question was open, the mutex awaited or the walk read -
+   refuses, and the request's count is never moved forward. Otherwise
+   nothing is called and the reason is shown ("The device list changed;
+   nothing was stopped. Look at the tree again."). An instance ID alone
+   cannot tell a device from an identical one plugged into the same port
+   (a location ID, without a serial number); the count is what catches a
+   re-plug. It narrows that case rather than closing it: a USB device has
+   no attachment-lifetime token, and a re-plug faster than Windows'
+   broadcast of it, between the last count and the call, is not seen.
+4. The call on the device's devnode, never on a disk or a function below
+   it:
+   - NT: `CM_Request_Device_EjectA` (setupapi on 2000, as section 6.2),
+     taking the veto type and name. No not-removable fallback: a refusal
+     is shown as it is.
+   - 98 SE and ME: `CM_Query_Remove_SubTree` with `UI_NOT_OK`, then, only
+     if accepted, always `CM_Remove_SubTree`, as section 6.2 step 6 does
+     for a unit.
+5. Release the mutex, then show the result:
+   - stopped: "Windows has stopped <name>.", then what a walk right
+     after reads: the walk whole and the device gone, or held for eject
+     (Code 47) - "You can now unplug the device."; the device started
+     again - "The device has started again, so it is not safe to
+     unplug." (exit 4, as record 24 section 8.2 has it); anything else,
+     the walk incomplete included - "Its state could not be read again:
+     check that it is not running before you unplug it." On 98 SE and ME
+     also "Until you unplug it, Device Manager's Refresh can start it
+     again.";
+   - refused: in plain words, with the drive letters where Windows'
+     answer allows it. NT `PNP_VetoOutstandingOpen`: "Windows refused: a
+     program is using F:. Close it and try again." (the device's name in
+     place of the letters when it has none); `PNP_VetoWindowsApp` and
+     `PNP_VetoWindowsService`: "<name> is using F:"; the other veto types
+     and answers as record 24 section 7.2. 98 SE and ME
+     `CR_REMOVE_VETOED`, which names no cause: "Windows refused: F: is in
+     use. A program may have a file open on it, or a DOS box may be using
+     it. Close it and try again." Nothing was changed by any refusal.
+   - exit codes as record 24 section 8.2: stopped 0, refused or started
+     again 4, the list changed or the call not offered 1, a removal that
+     failed after an accepted query 2.
+6. From the tray, a balloon with the outcome (a message box on 98 SE, and
+   for an outcome longer than a balloon), as section 14 has it for units.
+
+Never forced: no `CM_Remove_SubTree` without an accepted query, no veto
+overridden, no `CM_Query_And_Remove_SubTreeA`, no `DIF_REMOVE`, one device
+at a time.
+
+**Rights.** On NT a removable device needs no administrator (Windows'
+own applet runs as the user); a rights refusal is offered elevated on
+Vista and 7 as section 6.4 says, with `/eject id=<instance id>`.
+
+**Where it shows.**
+
+- The window: the USB branch's label of an offered device ends "[can be
+  stopped]"; its details say "Safely Remove: can be stopped here" or why
+  not. Action > Safely Remove..., Delete and the right-click menu act on a
+  USB port node whose device is offered, and on a node of the
+  Thunderbolt branch that is that device's devnode; a USB device behind a
+  dock's controller is stopped by itself, its dock only from the dock's
+  unit.
+- The tray's left-click menu has two groups, each under a grey heading
+  and only when it has an entry: "USB devices" and "Thunderbolt and USB4
+  devices", each item "Safely remove <name>" (grey with the reason when
+  listed but not offered); "No device to stop" when both are empty.
+- `/eject id=<instance id>` takes a USB device's instance ID as it takes
+  a unit's; `/report` writes each device's "Safely Remove:" line.
+- A one-shot answer written to a redirected output (`/eject`, an error
+  of `/report`) is console text, and is wrapped at 79 columns.
+
 ## 7. The tray icon
 
 ### 7.1 Behaviour
@@ -385,7 +548,8 @@ whole transaction itself and exits.
   The one-shot modes `/eject` and `/report` never hand over: they run
   and exit with a status. No window message can start an eject.
 - **Left click**: a menu "Safely remove <unit>" per unit (grayed with the
-  reason when it cannot be stopped now), a separator, "Open xHCI98 USB
+  reason when it cannot be stopped now), and since revision 7 per listed
+  USB device, in two groups (section 6.5), a separator, "Open xHCI98 USB
   Tree". **Double click**: the window. **Right click**: Open, Refresh,
   About, Exit.
 - **Tooltip**: "xHCI98 USB Tree: N Thunderbolt/USB4 devices" and, where
@@ -449,7 +613,8 @@ build uses the WDK's header.
 
 `XHCITR [/tray] [/eject id=<instance id>] [/report <file>]`. `/report`
 writes the Save Report text and exits (for scripts and bug reports).
-Exit codes follow XHCIINST's (record 23 section 10).
+Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
+`/eject id=` names a unit or a USB device (section 6.5).
 
 ## 8. Install, upgrade and uninstall
 
@@ -539,6 +704,7 @@ builder (`cm_query.c`) is host-tested in the CM suite.
 | T.4 | 2000, ME, XP, 7 | balloons on plug, approval, eject, disconnection; 98 SE tooltip |
 | T.5 | 98 SE, 7 x64 | install puts the tool and the Run value; login starts the tray; upgrade with the tray running; uninstall closes it and removes both |
 | T.6 | every target | the record 24 legs of XHCIINST still pass with the changed `xhcicm.sys` |
+| T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
 
 ## 12. Decisions
 
@@ -557,7 +723,13 @@ builder (`cm_query.c`) is host-tested in the CM suite.
 - **T4** No new install question; `/notray` opts out of the Run value.
 - **T5** The tool links `inst_core.c` for record 24's rules and texts, and
   shares XHCIINST's mutex, with a security descriptor both can open.
-- **T6** Plain USB devices get no eject in the tool (section 1.3).
+- **T6** (owner, 2026-10-16, revision 7; it reversed the first T6, "plain
+  USB devices get no eject in the tool") Plain USB devices are stopped
+  too, under section 6.5: one with a disk (or, on NT, a volume) in what
+  stops with it; never a hub, an input device, a radio or the controller;
+  on any controller the tool lists. The owner allowed "removable" on NT
+  as well; it is not used, because `xhci98.sys` reports every device
+  removable, internal ones too (section 6.5, "Why not removable").
 - **T7** An eject waits for a connection-manager snapshot built after it
   began (two publications past its first query, section 6.2), in place of
   record 24's ask and echo, and checks eligibility on every answer up to
@@ -569,9 +741,24 @@ builder (`cm_query.c`) is host-tested in the CM suite.
   one (section 7.2). The authoritative source is the child filter, which
   sees a unit's surprise removal on NT; publishing a count of those in the
   query is planned work for the owner to open.
+- **T10** A USB device's eject is section 6.5's short transaction - the
+  shared mutex, the device found again by instance ID and its eligibility
+  read again just before the call - not section 6.2's: no query device
+  stands behind a USB device, and the configuration manager's own walk is
+  the current state.
+- **T11** The call goes to the USB device's devnode, the one Windows' own
+  applet stops, never to a disk or a function below it, and on NT without
+  record 24's not-removable fallback: a refusal is shown as it is.
 
 ## 13. Open
 
+- Revision 7: whether a USB disk on 98 SE (NUSB's `usbstor.sys` and
+  `USBNTMAP`, or `xhciuas.sys`) and on ME (its own `USBSTOR`) is a devnode
+  below the USB device in the configuration manager's tree, as an
+  `nvme98` disk is below its controller; whether a query-remove of the USB
+  device is refused while a file is open on its disk; and what each NT
+  target leaves of a USB device after its eject (Code 47, or gone). T.7
+  read them (section 14).
 - Whether every target lets an unelevated user open `\\.\HCD<n>` and
   `\\.\XHCICM<n>` with no access rights (record 13 section 8.10 left this
   open for the hub names); T.1 reads it.
@@ -620,3 +807,38 @@ what they left open:
 - **Install files.** XHCIINST stages through `.TMP` and, on 98 SE and ME,
   replaces through `.BAK`; on x64 the forms are named after
   `XHCITR64.EXE`. Record 23 section 9.5 has the details.
+
+Revision 7, from leg T.7 (`runs/run-41.md`, "Plain USB devices"):
+
+- **The disks on 98 SE and ME** are below the USB device, two devnodes
+  down ("USB Mass Storage Device", "USB Disk", the disk), for NUSB's
+  `usbstor.sys`, for `xhciuas.sys` and for ME's own `USBSTOR`; the removal
+  of the subtree removes them, and Device Manager no longer lists the
+  device.
+- **The refusal on 98 SE** comes for a file held open on the drive. An
+  MS-DOS Prompt whose current directory is the drive does not refuse, so
+  the 9x text names an open file first.
+- **Windows XP answers a vetoed eject with success.**
+  `CM_Request_Device_EjectA` returned `CR_SUCCESS` with the veto type set;
+  `tr_eject_cr` turns a success with a veto type into `CR_REMOVE_VETOED`,
+  on the USB path and the Thunderbolt unit path alike. The veto came from
+  the stick's own volume (`PNP_VetoDevice`, a `STORAGE\RemovableMedia`
+  devnode); a device or driver veto from a devnode of the device's own set
+  reads "F: is in use (a program has a file or folder open on it)".
+- **Code 47 after an eject** (XP and 7): the disks go with the eject, so a
+  device held for eject is listed, "[stopped - unplug it]", before the
+  disk rule is applied. Any other problem code reads "not started -
+  problem code N", never "unplug it", for a unit too.
+- **Windows 7** answers `CR_NO_SUCH_VALUE` for a devnode with no relations
+  of the kind; that is none. A set that cannot be read says which relation
+  failed, in the details and `/report`.
+- **Property reads.** Every configuration-manager property is read into a
+  scratch buffer larger than any field and copied when it fits; the
+  registry-only drive-letter value is no longer asked of the configuration
+  manager. A page fault on ME, after the setup class moved from the stack
+  into the node, led to both.
+- **The walk's completeness** is kept per node: a node whose children could
+  not all be read makes any set holding it unread, and a failed setup-class
+  read is a node not read.
+- **The UAS disk's re-plug** was not read: the emulated UAS device does not
+  attach when added to a running machine.

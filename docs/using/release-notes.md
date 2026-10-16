@@ -201,8 +201,8 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   Windows): a window with every USB controller, hub and device and every
   Thunderbolt and USB4 controller and device, with their details and
   descriptors, and an icon in the notification area that starts at login
-  and removes a Thunderbolt or USB4 device safely, with no administrator
-  rights ("The xHCI98 USB Tree", below; design record 25). `xhcicm.sys`
+  and removes a USB storage device or a Thunderbolt or USB4 device safely,
+  with no administrator rights ("The xHCI98 USB Tree", below; design record 25). `xhcicm.sys`
   gains a read-only query device for it.
 - **Device Manager names by generation**: "Thunderbolt and USB4 in Device
   Manager", below.
@@ -309,8 +309,8 @@ the logged-on user, with no administrator rights.
   them. View > Descriptors decodes the selected device's descriptors; the
   View menu's check boxes hide or show each kind of item; File > Save
   Report writes it all to a text file.
-- **The icon's menu** lists the Thunderbolt and USB4 devices that can be
-  removed safely. Removing one follows the rules of `INSTALL /eject`: the
+- **The icon's menu** lists the USB storage devices and the Thunderbolt
+  and USB4 devices that can be removed safely. Removing one follows the rules of `INSTALL /eject`: the
   tool confirms, waits for a current reading from `xhcicm.sys`, asks
   Windows to stop the device and says when to unplug it.
 - **Balloons** say when a device connects, waits for approval or
@@ -321,7 +321,17 @@ the logged-on user, with no administrator rights.
   adapter; a Thunderbolt 3 device's come from the controller's firmware.
   For a USB device the descriptors give the SuperSpeed rates it supports;
   the negotiated lane rate is not reported.
-- It shows plain USB devices but does not stop them.
+- **USB sticks and disks** are stopped from the window or the icon on
+  every system, 98 SE and ME included, by their drive letter: "USB Flash
+  Disk (F:)". The tool confirms what will stop, asks Windows to stop the
+  device, and says when to unplug it, or which drive is in use if Windows
+  refuses.
+- Only a USB device with a disk on it is offered. A keyboard, mouse,
+  hub, camera, Bluetooth adapter or other device is shown with its
+  details, not stopped from here.
+- On 98 SE and ME the stop removes the device from Device Manager; until
+  it is unplugged, Device Manager's Refresh can start it again. On XP and
+  later Windows holds it stopped (Code 47) until it is unplugged.
 
 ### Removing a Thunderbolt or USB4 device safely
 
