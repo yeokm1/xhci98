@@ -1,6 +1,10 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 9, 2026-10-16. Revision 7 adds Safely Remove for plain USB
+Status: revision 11, 2026-10-16 (revision 11, the not-removable unit's
+stop, below). Revision 10 adds a per-user "Start at login" choice
+(section 7.4, the owner's request of 2026-10-16), with an addendum on the
+tree's labels (end of section 7.4). Revision 9 adds the drivers' logs
+(below). Revision 7 adds Safely Remove for plain USB
 devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
 decision T6; sections 1.3, 3.1, 7.1, 7.3, 11, 12 and 14 change with it.
 Revision 6 was reviewed and revised five times the night before; the code
@@ -31,6 +35,15 @@ read as `XHCISNAP` reads them, with no change to that driver (section
 4.6); each controller has a "Driver log" node, and Save Report and
 `/report` carry both logs (section 3.5). Sections 1.2, 3.1, 4.2, 7.3, 10,
 11 and 12 change with it.
+Revision 11, 2026-10-16 (the owner, for `3.0.0.0`): a Thunderbolt unit
+that Windows does not mark removable is stopped by record 24 section
+7.2's query-and-remove route (its revision 5), and the tool offers the
+administrator rights that route needs when it has none (section 6.6):
+"Stop as administrator..." starts the tool elevated for that one stop,
+and only then. Sections 3.3, 6.2, 6.4, 7.3 and 12 change with it, and
+section 3.3 words a Thunderbolt 3 router's link behind a USB4 host as
+Thunderbolt 3. The tray and the window never run elevated otherwise, and
+the manifest stays `asInvoker`.
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
@@ -187,7 +200,12 @@ branch, marked "(behind <router name>)".
   10, 20 or 40 Gbit/s per lane, x1 or x2; under the ICM "not reported by
   the firmware"), route, approval, each tunnel's state, the unit's
   devnodes, whether Windows lists it in Safely Remove (record 24 section
-  4.3) and the advice when not.
+  4.3) and the advice when not. Since revision 11 a unit whose capabilities
+  say neither Removable nor SurpriseRemovalOK reads "Not marked
+  removable", with section 6.6's route; and a Thunderbolt 3 router behind
+  a USB4 host (generation Thunderbolt 3, or USB4 Version major 0) has its
+  lane-adapter rate worded "Thunderbolt 3, 20 Gbit/s per lane, x2 (40
+  Gbit/s)", never as a USB4 generation (`tr_link_text_gen`).
 - **USB controller**: description, PCI ID, driver, `HCD<n>` name, root
   port count, problem code.
 - **Hub**: hub descriptor (ports, power switching, compound, over-current),
@@ -522,7 +540,11 @@ record.
    `CM_Query_And_Remove_SubTreeA`; on 98 SE and ME
    `CM_Query_Remove_SubTree` then, if accepted, always `CM_Remove_SubTree`,
    both `UI_NOT_OK`. Never forced, never `DIF_REMOVE`, one unit at a
-   time.
+   time. Since revision 11 the not-removable fallback is
+   `CM_Query_And_Remove_SubTreeW`, decided by `inst_eject_nt_step` as
+   record 24 section 7.2 has it, and a unit not marked removable in a
+   process without administrator rights goes to section 6.6 before this
+   step.
 7. The post-eject assessment ported from XHCIINST (the restarted-unit
    check, the USB4 tunnel watch, the unplug advice of record 24 section
    5.4 with every fact it needs), captured as text; on a veto, the vetoing
@@ -550,7 +572,62 @@ can also need the undock right. If the call answers with a rights
 failure, the tool says so and offers to run the eject elevated: it
 releases the mutex and starts itself with `runas` (Vista and 7) and
 `/eject id=<instance id>`, a one-shot mode (section 7.3) that runs the
-whole transaction itself and exits.
+whole transaction itself and exits. Since revision 11 a unit's elevated
+run is section 6.6's, waited for and answered; a USB device's is as
+before.
+
+### 6.6 A unit not marked removable (revision 11)
+
+NT only. A unit whose capabilities say neither `Removable` nor
+`SurpriseRemovalOK` (`inst_unit_not_marked`) can be stopped only by the
+query-and-remove route of record 24 section 7.2, which needs an
+administrator's rights. The owner's decision of 2026-10-16: the tool asks
+for those rights for this stop only, when it lacks them.
+
+1. **When.** `tr_elev_needed`: NT, the unit not marked removable, and
+   this process no administrator - on Vista and 7 its token not elevated
+   (`TokenElevation`), on 2000 and XP not a member of Administrators
+   (`CheckTokenMembership`), both looked up at run time. An administrator
+   stops it in place, as section 6.2 does.
+2. **The question.** After the usual confirmation, a dialog with the unit
+   and "Windows does not list this device for safe removal. Stopping it
+   needs administrator rights.", and two buttons: "Stop as
+   administrator..." (with the shield on Vista and 7) and Cancel.
+3. **The elevated run.** `ShellExecuteEx` with the verb `runas` starts the
+   same executable with `/eject id=<instance id> /result <name>
+   /confirmed <digest>`: User Account Control on Vista and 7, the Run As
+   dialog on 2000 and XP (read on both). It runs section 6.2 whole - the
+   shared mutex, every re-check, the route and its vetoes - as a one-shot
+   run, and never offers elevation itself.
+4. **What the elevated run trusts.** Nothing it reads from a place a user
+   can write. `/confirmed` is a digest of the devnode list the user
+   confirmed (`tr_res_digest`: two 32-bit FNV-1a hashes over the count
+   and the upper-cased instance IDs), on a command line nothing can change
+   after the start; the run reads its own list and asks its own
+   confirmation unless that list has the same digest, so the digest can
+   spare a question and never add a devnode. Its answer goes into a named
+   section the window created before the start (`Local\Xhci98TrAnswer-
+   <process id>-<tick>`, refused if it exists already, writable by SYSTEM
+   and the Administrators - who include another account under Run As);
+   the run opens it by a name `tr_res_name_ok` checks, writes at most
+   `TR_RES_BYTES` ("XHCITR ANSWER 1", the code, the text), and no file is
+   written or read.
+5. **The wait.** The window waits on the run's process for up to five
+   minutes, answering its messages; another stop is refused meanwhile, and
+   a quit (Exit, or an installer's) ends the wait at once and is posted
+   again. Then `tr_elev_result`: the run's own text when its code is the
+   process's exit code; a cancelled elevation (`ERROR_CANCELLED`) -
+   "Nothing was stopped: administrator rights were not given. Try again
+   and allow it, or unplug the device and plug it in again." (exit 1); a
+   failure to start - the rights text of record 24 section 7.2 with the
+   error; no end within the wait, or an end with no answer - the state
+   not known, look before unplugging (exit 2). The answer is shown as any
+   stop's, in a message box or the tray's balloon.
+6. `/eject id=` started by a user with no administrator rights takes the
+   same route for such a unit.
+
+XHCIINST needs nothing new: it runs as an administrator (record 24 section
+7.2).
 
 ### 6.5 Plain USB devices (revision 7)
 
@@ -789,7 +866,50 @@ build uses the WDK's header.
 writes the Save Report text and exits (for scripts and bug reports).
 Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
 `/eject id=` names a unit or a USB device (section 6.5). Since revision 9
-the report carries each "Driver log" node's text (section 3.5).
+the report carries each "Driver log" node's text (section 3.5). Since
+revision 11 `/eject` also takes `/result <name>` and `/confirmed <digest>`, which
+the tool passes to its own elevated run (section 6.6) and which nothing
+else needs.
+
+### 7.4 Start at login, per user (revision 10)
+
+- The machine's start is the Run value of section 8, written by XHCIINST
+  and removed by `INSTALL /notray`; that is machine-wide and needs an
+  administrator, as before.
+- Each user can turn it off without one: "Start at login", a checkable
+  item in the View menu and in the icon's right-click menu, writes the
+  DWORD `TrayAtLogin` under `HKCU\Software\xHCI98\XHCITR` - 0 off, 1 on.
+  The item shows the user's choice.
+- `XHCITR /tray`, the start the Run value makes, reads it first: a DWORD 0
+  ends the run at once, with exit 0, before any window, icon or thread.
+  An absent value, another type or any other number starts as before; a
+  plain start (no `/tray`) always opens. The decision is
+  `tr_tray_login_start`, host-tested.
+- Without the machine's Run value nothing starts at login whatever the
+  user chooses, so the item is grey and reads "Start at login (off for
+  this computer)".
+- 98 SE and ME read the same key, from the user's profile or the default
+  user's.
+
+Addendum to revision 10, the tree's labels (the owner, 2026-10-16, after
+two controllers of one name each showed a "Root hub" on the ThinkPad P14s
+Gen 1):
+
+- A controller's label ends with its vendor and PCI id from its instance
+  ID ("- Intel 8086:02ED"; "- vendor XXXX" for a vendor outside the
+  tool's short table). A Thunderbolt chip's own xHCI reads "- Thunderbolt
+  3 controller's USB (8086:15C1)" ("USB4" or "Thunderbolt" by its NHI's
+  published connection manager): an NHI in the walk on the same bus and
+  device (an integrated controller), or behind a bridge beside the
+  controller's under one switch (a discrete one); never a guess, so a
+  PCH xHCI on the root bus is not one.
+- The root hub reads "Root hub - N ports (a USB 2.0, b USB 3.x)" from
+  each port's `_EX_V2` protocols, without the split when a port did not
+  report them; each port label carries its protocol ("[Port 15, USB 3]").
+  No pairing of a connector's USB 2 and USB 3 ports is shown: the tool
+  reads none.
+- The same labels are in `/report` and Save Report, a file whose tree
+  lines can be wider than 79 columns at depth, as before.
 
 ## 8. Install, upgrade and uninstall
 
@@ -935,16 +1055,22 @@ recording-off advice) in `test\test_trlog.c`.
   applet stops, never to a disk or a function below it, and on NT without
   record 24's not-removable fallback: a refusal is shown as it is.
 
-- **T12** (owner, revision 9) The tool shows both drivers' logs and
+- **T12** (owner, 2026-10-16, revision 11) A unit not marked removable is
+  stopped by the query-and-remove route, and the tool asks for the
+  administrator rights it needs for that one stop, by `runas`, waiting
+  for the elevated run's answer (section 6.6). The elevated run trusts
+  nothing a user can write: the confirmed list travels as a digest on its
+  command line, its answer in a section the window created.
+- **T13** (owner, revision 9) The tool shows both drivers' logs and
   counters, in the window and the report, from a release install, with
   no address in them and without writing the registry.
-- **T13** `xhcicm.sys`'s log is a second request on the query device
+- **T14** `xhcicm.sys`'s log is a second request on the query device
   (section 4.5), copied from the ring under its own lock at the request,
   not drained and not snapshotted by the thread: a snapshot per pass would
   copy 16 KiB each pass whether anyone reads it or not, and a drain would
   take the log from every other reader. The counters, which the thread
   owns, are the thread's per pass.
-- **T14** `xhci98.sys`'s log is read through the existing door, as
+- **T15** `xhci98.sys`'s log is read through the existing door, as
   `XHCISNAP` reads it (section 4.6); `xhci98.sys` stays unchanged
   (decision T3). At level 4 the tool withholds the ring rather than pick
   the address records out of it by label: the level-4 guarantee is the

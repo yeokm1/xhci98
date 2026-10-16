@@ -305,6 +305,16 @@ void tr_gen_text(TR_U32 gen, char *out, size_t cap);
 void tr_link_text(TR_U32 kind, TR_U32 lanes, const TR_EXT *x, char *out,
                   size_t cap);
 
+/* 1 for a Thunderbolt 3 router: the record's generation says so, or a
+ * USB4 Version of major 0 (a Thunderbolt 3 router behind a USB4 host). */
+int tr_gen_tbt3(TR_U32 gen);
+
+/* tr_link_text, but a Thunderbolt 3 router's lane-adapter rate is worded
+ * "Thunderbolt 3, 20 Gbit/s per lane, x2 (40 Gbit/s)", never as a USB4
+ * generation. */
+void tr_link_text_gen(TR_U32 gen, TR_U32 kind, TR_U32 lanes, const TR_EXT *x,
+                      char *out, size_t cap);
+
 /* A router entry's name: "<vendor> <model>", or "(no name given)". */
 void tr_router_name(const unsigned char *entry, char *out, size_t cap);
 
@@ -414,13 +424,20 @@ typedef struct _TR_OPTS {
     int Report;
     char ReportPath[TR_PATH_CHARS];
     int SelfTest;
+    int Result;                 /* /result: the elevated stop's answer   */
+    char ResultName[TR_PATH_CHARS];
+    int Confirmed;              /* /confirmed: the confirmed list's digest */
+    char ConfirmedDigest[TR_PATH_CHARS];
 } TR_OPTS;
 
-/* XHCITR [/tray] [/eject id=<instance id>] [/report <file>] [/selftest].
- * Switches start with '/' or '-', without case; /eject takes id=<id> as
- * the next argument, /report its file. Returns 0 with
- * opts filled, 1 refused with why in err. /eject, /report and /selftest
- * stand alone. */
+/* XHCITR [/tray] [/eject id=<instance id> [/result <section>]
+ * [/confirmed <digest>]] [/report <file>] [/selftest]. Switches start
+ * with '/' or '-', without case; /eject takes id=<id> as the next
+ * argument, /report its file, /result a section name (tr_res_name_ok) and
+ * /confirmed a digest (tr_res_digest_ok). Returns 0 with opts filled, 1
+ * refused with why in err. /eject, /report and /selftest stand alone;
+ * /result and /confirmed go with /eject only (the elevated stop of
+ * section 6.6). */
 int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap);
 
 /* ---- small text helpers ---------------------------------------------- */
@@ -562,11 +579,97 @@ int tr_usb_answer9x(TR_U32 cr, const char *what, char *out, size_t cap);
  * CR LF out. out always terminated. */
 void tr_wrap(const char *in, char *out, size_t cap, int width);
 
+/* ---- start at login (record 25 section 7.4, revision 8) ------------------ */
+
+/* The per-user value under HKCU\Software\xHCI98\XHCITR. */
+#define TR_LOGIN_VALUE          "TrayAtLogin"
+
+/* Whether a start goes on. Only a /tray start (the one the Run value makes
+ * at login) reads the value, and only a DWORD 0 stops it; absent, another
+ * type or any other number starts as before. haveValue: the value was
+ * read as a DWORD. */
+int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value);
+
+/* ---- the tree's labels (record 25 revision 10 addendum) ------------------ */
+
+/* VEN_ and DEV_ of a PCI id or instance id ("PCI\VEN_8086&DEV_02ED&..."),
+ * without case; 1 when both were read. */
+int tr_pci_ids(const char *id, unsigned int *ven, unsigned int *dev);
+
+/* Windows 98 and ME: the bus and device of a function on a root bus, from
+ * the instance id's last element "BUS_hh&DEV_hh&FUNC_hh"; 1 when read. */
+int tr_pci_loc9x(const char *id, unsigned int *bus, unsigned int *dev);
+
+/* A PCI vendor's short name ("Intel"), or NULL for one not in the table. */
+const char *tr_pci_vendor(unsigned int ven);
+
+#define TR_TB_NOT               0   /* not a Thunderbolt chip's xHCI        */
+#define TR_TB_TB3               1   /* its NHI runs the firmware CM (ICM)   */
+#define TR_TB_USB4              2   /* its NHI runs the USB4 software CM    */
+#define TR_TB_UNKNOWN           3   /* an NHI's, generation not published   */
+
+/* What follows a controller's description in the tree: " - Intel
+ * 8086:02ED", " - vendor 1AB2 1AB2:0001", or for a Thunderbolt chip's
+ * own xHCI " - Thunderbolt 3 controller's USB (8086:15C1)"; "" (or the
+ * Thunderbolt words alone) when the ids were not read. */
+void tr_ctrl_suffix(char *out, size_t cap, int haveIds, unsigned int ven,
+                    unsigned int dev, int tbKind);
+
+/* "Root hub - 18 ports (14 USB 2.0, 4 USB 3.x)"; without the split when
+ * known is 0 (a port did not report its protocols); "Root hub" for 0
+ * ports. */
+void tr_roothub_label(char *out, size_t cap, unsigned int ports, int known,
+                      unsigned int usb2, unsigned int usb3);
+
+/* A port's protocol for its label (", USB 3", ", USB 2", ", USB 1.1"), or
+ * "" when _EX_V2 did not report it. */
+const char *tr_port_tag(int haveV2, TR_U32 proto);
+
 /* ---- the report ---------------------------------------------------------- */
 
 /* One node of the report: its label at depth, then its details indented
  * under it (the details' own lines, CR LF or LF). */
 void tr_report_node(TR_TEXT *t, int depth, const char *label,
                     const char *details);
+
+/* ---- the elevated stop of a unit not marked removable (section 6.6) ------ */
+
+/* NT: 1 when a unit's stop is to be offered with administrator rights
+ * before it is tried: the unit is not marked removable (inst_unit_not_marked)
+ * and this process is not an administrator (Vista and 7: not elevated). */
+int tr_elev_needed(int nt, int notMarked, int isAdmin);
+
+/* The digest of the devnode list the window's user confirmed, passed on
+ * the elevated run's command line (/confirmed), which nothing can change
+ * after the start: two 32-bit FNV-1a hashes with different seeds over the
+ * count and the instance IDs, upper-cased, as 16 hex digits. The elevated
+ * run skips its own confirmation only when its own list has the same
+ * digest, so the digest can spare a question, never add a devnode. */
+#define TR_DIGEST_CHARS     17
+void tr_res_digest(const char (*devs)[TR_ID_CHARS], int n, char *out);
+int tr_res_digest_ok(const char *s);
+
+/* The answer travels in a named section of TR_RES_BYTES that the window
+ * creates ("Local\Xhci98TrAnswer-<digits and dashes>", tr_res_name_ok),
+ * never in a file: "XHCITR ANSWER 1", "code <n>", then the text, NUL
+ * ended. tr_res_answer returns the length, 0 when it does not fit; the
+ * reader is given a terminated copy. */
+#define TR_RES_PREFIX       "Local\\Xhci98TrAnswer-"
+#define TR_RES_BYTES        4096
+int tr_res_name_ok(const char *name);
+size_t tr_res_answer(int code, const char *msg, char *out, size_t cap);
+int tr_res_read_answer(const char *text, int *code, char *msg, size_t cap);
+
+/* The window's result of an elevated run, as XHCIINST's exit code with its
+ * text in out. launched: ShellExecuteEx started it, else launchErr is its
+ * last error (ERROR_CANCELLED 1223: the user declined). finished: it ended
+ * within the wait, with exitCode. haveAnswer: its answer was read. */
+#define TR_ERROR_CANCELLED  1223UL
+int tr_elev_result(int launched, TR_U32 launchErr, int finished,
+                   TR_U32 exitCode, int haveAnswer, int answerCode,
+                   const char *answerMsg, char *out, size_t cap);
+
+/* The question before an elevated stop. */
+const char *tr_elev_question(void);
 
 #endif /* TR_CORE_H */

@@ -1687,6 +1687,29 @@ static LONG tbtU4WaitReady(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
     }
 }
 
+/*
+ * A router found enumerated by someone else, ROUTER_CS_5 and 6 in cs56[0]
+ * and [1]: a clear Router Ready may only be an enumeration moments old
+ * (the ASM2464 sets it after Enumerated, [obs] usb4-emu
+ * docs/captures/ORICO-ASM2464.md; Linux usb4.c usb4_switch_setup waits
+ * 500 ms on a discovered router too), so it is waited for and both
+ * re-read. Reads only; on a timeout or a refused read cs56 stays as
+ * found, and the caller's judgement with it.
+ */
+static VOID tbtU4FoundReady(PTBT_U4CM cm, PTBT_U4_ROUTER rt, PULONG cs56)
+{
+    ULONG v[2];
+
+    if (rt->Tbt3 || (cs56[1] & TBT_RTR6_RR) != 0) {
+        return;
+    }
+    if (tbtU4WaitReady(cm, rt) == TBT_OK &&
+        tbtU4RdN(cm, &rt->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, 2, v) == TBT_OK) {
+        cs56[0] = v[0];
+        cs56[1] = v[1];
+    }
+}
+
 /* ---------------------------------------------------------------------- */
 /* The host router (record 22 sections 3.5 test (d), 6.1 to 6.3)          */
 /* ---------------------------------------------------------------------- */
@@ -4555,6 +4578,8 @@ static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
         }
         return;
     }
+    /* Step 2 is judged after Router Ready's own wait (section 9.2). */
+    tbtU4FoundReady(cm, d, &v[5]);
     d->Present = TRUE;
     d->Preserved = TRUE;
     cm->Counters.RoutersAdopted++;
@@ -5890,6 +5915,38 @@ static ULONG tbtU4ResumeClass(PTBT_U4CM cm, PTBT_U4_PORT p)
 }
 
 /*
+ * Inside a resume verification, on a USB4 router: the hot plug events a
+ * safe point consumes (every wait of the resume has them, this one's
+ * Router Ready wait and the PCIe loss's 2 s alike) are not acted on before
+ * the obligation is judged (ActivePort), so each verification first
+ * proves the router the one tbtU4ResumeClass classified - an unplug hint
+ * only with no removal evidence behind it (tbtU4Live), lane 0 still
+ * unlocked, the same IDs and UUID, still enumerated at its route - and
+ * returns its ROUTER_CS_5 and 6 in cs56. Reads only, but for the hint's
+ * own evidence check; anything else is not the same router, and the
+ * obligation is not met.
+ */
+static BOOLEAN tbtU4StillSame(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cs56)
+{
+    PTBT_U4_ROUTER d;
+    ULONG cs4;
+    ULONG v[9];
+
+    d = &p->Dev;
+    if (!tbtU4Live(cm, p, p->Generation) || !d->UuidValid ||
+        tbtU4Rd(cm, &cm->HostRouter.Route, TBT_CS_ADAPTER, p->Lane0, TBT_ADP_CS_4,
+                &cs4) != TBT_OK || (cs4 & TBT_ADP4_LOCK) != 0 ||
+        tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_0, 9, v) != TBT_OK ||
+        TBT_RTR0_VENDOR(v[0]) != d->Vendor || TBT_RTR0_DEVICE(v[0]) != d->Device ||
+        v[7] != d->Uuid[0] || v[8] != d->Uuid[1] || !tbtU4Enumerated(d, v)) {
+        return FALSE;
+    }
+    cs56[0] = v[5];
+    cs56[1] = v[6];
+    return TRUE;
+}
+
+/*
  * Section 9.2's whole verification of one tunnel after the sleep: the
  * router's configuration (Router Ready, CV, Configuration Ready, PTO or
  * UTO), the link (bonded, or lane 1 disconnected or disabled), the path
@@ -5909,8 +5966,16 @@ static BOOLEAN tbtU4Verify(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3)
     h = &cm->HostRouter;
     d = &p->Dev;
     if (!d->Tbt3) {
-        if (tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, 2, v) != TBT_OK ||
-            (v[1] & TBT_RTR6_RR) == 0 || (v[0] & TBT_RTR5_CV) == 0 ||
+        if (!tbtU4StillSame(cm, p, v)) {
+            return FALSE;
+        }
+        /* Router Ready waited for inside the resume's budget (a spent one
+         * refuses the reads), then the router proven the same again. */
+        if ((v[1] & TBT_RTR6_RR) == 0 &&
+            (tbtU4WaitReady(cm, d) != TBT_OK || !tbtU4StillSame(cm, p, v))) {
+            return FALSE;
+        }
+        if ((v[1] & TBT_RTR6_RR) == 0 || (v[0] & TBT_RTR5_CV) == 0 ||
             (v[1] & TBT_RTR6_CR) == 0 ||
             (v[0] & (usb3 ? TBT_RTR5_UTO : TBT_RTR5_PTO)) == 0) {
             return FALSE;

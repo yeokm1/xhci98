@@ -12,6 +12,8 @@
 #define IDD_ABOUT               102
 #define IDC_ABOUT_TEXT          1001
 #define IDC_ABOUT_ICON          1002
+#define IDD_ELEVATE             103
+#define IDC_ELEV_TEXT           1003
 
 #define IDM_REFRESH             40001
 #define IDM_SAVE                40002
@@ -25,6 +27,7 @@
 #define IDM_V_DESC              40024
 #define IDM_V_BEHIND            40025
 #define IDM_V_AUTO              40026
+#define IDM_LOGIN               40027
 #define IDM_EJECT               40030
 #define IDM_PROPS               40031
 #define IDM_ABOUT               40040

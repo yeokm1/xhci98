@@ -265,6 +265,8 @@ after `41.final`. Its design record is design record 25.
 - [x] 41-A.7 Safely Remove for plain USB devices (the owner's decision of 2026-10-16, which reversed decision T6): record 25 revision 7, section 6.5 - a USB device with a disk (or, on NT, a volume) in what stops with it, on any listed controller; never a hub, an input device, a radio or the controller; the short transaction (the shared mutex, the device found again by instance ID, its set and rule read again, a change count read just before the call); the tray's two groups, `/eject id=`, `/report`; host vectors in `test_tr` (done 2026-10-16, branch `tr-usbeject`; the design and the code reviewed until they converged; `runs/run-41.md`, "Plain USB devices")
 - [x] 41-A.8 the drivers' logs in XHCITR (the owner's request of 2026-10-16): record 25 revision 9 and record 21 section 8 - `xhcicm.sys`'s query device answers `IOCTL_XHCICM_LOG` (`XCML`: its log ring copied under `LogLock`, its counters formatted after each pass, the child filters' among them, three address records withheld); `xhci98.sys`'s log and counters read through its door as `XHCISNAP` reads them, with no change to that driver (level 4 withheld); a "Driver log" node per xhci98 controller and per NHI with the recording-off advice; both logs in Save Report and `/report`; host vectors in `test_cm_query` and the new `test_trlog` (done 2026-10-16, branch `tr-logs`; the design and the code reviewed until they converged; `runs/run-41.md`, "The drivers' logs")
 - [x] 41-V.2 leg T.7 of record 25 section 11 (read 2026-10-16, `runs/run-41.md`, "Plain USB devices": 98 SE, ME, XP and 7 x86 pass - the label with its letter, Safely Remove from the window, Delete, a right click and the tray, the device gone (98 SE, ME) or held at Code 47 (XP, 7), unplug and re-plug with the drive back, the refusal with a file open (98 SE, XP, 7), the UAS disk (98 SE, XP, 7), a tablet, a keyboard and a hub never offered; ME's refusal and the UAS re-plug unread)
+- [x] 41-A.8 Start at login, per user (the owner's request of 2026-10-16): record 25 revision 10, section 7.4 - "Start at login" in View and the icon's right-click menu writes `TrayAtLogin` under the user's settings key; a `/tray` start ends at once when it is 0; grey when the machine's Run value is absent; host vectors in `test_tr` (done 2026-10-16, branch `tr-usbeject`, reviewed; read on 98 SE and 7 x86, `runs/run-41.md`)
+- [x] 41-A.9 the tree's labels (the owner's request of 2026-10-16): each controller's vendor and PCI id, a Thunderbolt chip's own xHCI named by its NHI, the root hub's ports by protocol, each port's protocol; record 25 revision 10, addendum; host vectors in `test_tr` (done 2026-10-16, branch `tr-usbeject`, reviewed; read on 98 SE and 7 x86, `runs/run-41.md`)
 - [ ] 41.final `README.md`, the release notes, `source-files.md`, `docs/README.md`; merged into `3.0.0.0` before `40.final`
 
 Checkpoint: design record 25 converged before 41-A's code; the host
@@ -389,7 +391,7 @@ manager's query-and-remove for such a unit (administrators only; a
 standard user is told to re-plug once), and the release notes state the
 behaviour (record 21 section 7.4, records 24 and 25).
 
-- [ ] EJRB.1 the child filter after a stack rebuild (owner, 2026-10-15). A disable and enable of the device, or its driver installed or updated, rebuilds its stack from the registry with no `BusRelations` query, so the child filter that sets `Removable` (record 21 section 7.4) is not attached again and the device drops out of "Unplug or Eject Hardware" and "Safely Remove Hardware" until a re-plug. A kernel-only fix is not small: the filter would have to be registered on the child devnode as a device-specific `LowerFilters` value, in the Enum key the PnP manager owns, written through SetupAPI or CfgMgr32 from user mode (the device tool of design record 24 is the natural place), and keeping a filter attached across a non-surprise `IRP_MN_REMOVE_DEVICE` is not permitted. The writer needs administrator rights on 2000 and XP, so a privileged user-mode piece (a service, told of each new unit by the driver) rather than the unprivileged tray tool; a value left behind that names a filter no longer installed stops the device from starting (Code 39), so its removal on the device's departure, on uninstall and after a failed upgrade is part of the design; only the unit at the top of each tunnel port, never another PCI device. Design first (record 21 section 7.4 and record 24), with the removal of that value when the device leaves; legs on 2000, XP, Vista and 7, x64 included
+- [ ] EJRB.1 the child filter after a stack rebuild (owner, 2026-10-15). A disable and enable of the device, or its driver installed or updated, rebuilds its stack from the registry with no `BusRelations` query, so the child filter that sets `Removable` (record 21 section 7.4) is not attached again and the device drops out of "Unplug or Eject Hardware" and "Safely Remove Hardware" until a re-plug. A kernel-only fix is not small: the filter would have to be registered on the child devnode as a device-specific `LowerFilters` value, in the Enum key the PnP manager owns, written through SetupAPI or CfgMgr32 from user mode (the device tool of design record 24 is the natural place), and keeping a filter attached across a non-surprise `IRP_MN_REMOVE_DEVICE` is not permitted. The writer needs administrator rights on 2000 and XP, so a privileged user-mode piece (a service, told of each new unit by the driver) rather than the unprivileged tray tool; a value left behind that names a filter no longer installed stops the device from starting (Code 39), so its removal on the device's departure, on uninstall and after a failed upgrade is part of the design; only the unit at the top of each tunnel port, never another PCI device. Design first (record 21 section 7.4 and record 24), with the removal of that value when the device leaves; legs on 2000, XP, Vista and 7, x64 included. Read on 2026-10-16 (`runs/run-41.md`, "Bridges behind the tunnel port on NT"): the case of a bridge child that was never attached at all, the ACPI bus filter already on a new PCI-to-PCI bridge's PDO on XP and 7, is fixed in 3.0.0.0 by record 21 section 7.4 revision 2. The rebuild case of this task remains, and is now also read on a first plug: the first plug of a never-seen unit is not listed on 2000 or XP, because Windows installs the bridge's driver for the first time and rebuilds its stack. Windows 7 x86 listed it. The tool-side query-and-remove fallback covers it until then
 
 ## Planned - `nvme98` Interface 3 on Windows 98 SE and ME
 
@@ -492,7 +494,7 @@ Stor98's receiver, a re-signed x64 package and a release that bundles it.
 Status: not opened, unnumbered and unversioned.
 
 - [ ] STOR.1 the rename in `xhcicm.sys`, the scripts, the installer and the docs, from the change list; interface 3 as adopted (the channel and the installer, 2026-10-16: `src/cm/stor98cm.h` in place of `nvme98cm.h`, unchanged from Stor98 `0.3.0.0`; interface version 4, `S98L` and `STOR98CM`, `\Callback\Stor98LinkState` on NT; on 98 SE and ME no channel is offered (interface 3's proof key is NV9X.1, and without it the locator is not written either, so nothing is published or awaited there and Stor98 runs on its gone deadline); records 21 section 7.2 and 22 section 10; `XHCIINST` skips `stor98*` files and never takes an INF that installs the `stor98` service or names `stor98.mpd` as its own, whatever its Provider; host suites pass)
-- [ ] STOR.2 bundle Stor98 `0.3.0.0`; NVMe legs (link up and down, the 9x clean-eject handshake, ME write-through); the release
+- [ ] STOR.2 bundle Stor98 `0.3.0.0`; NVMe legs (link up and down, the 9x clean-eject handshake, ME write-through); the release (legs read 2026-10-16 on Stor98 `0.3.0.1`; `3.0.0.0` will bundle Stor98 `0.4.0.0` (owner, 2026-10-16), and the legs are owed again on it, as is the release: a dry x86 TEST cut bundling `0.3.0.1`; on `tb3-alpine-ridge`, `bin-2a893ea`, 98 SE, ME and 2000 installed Stor98 from `release-x86\`, wrote and compared a file, stopped it with XHCITR's Safely Remove, and survived an unplug, a re-plug and a surprise unplug with the file intact; ME's write-behind showed its Disk Write Error on an unplug without an eject and the data Stor98 had taken was on the disk. No 9x channel is offered in `3.0.0.0`, so there is no 9x clean-eject handshake (NV9X.1); on 2000 `xhcicm.sys` published the channel and made its statements, and Stor98 `0.3.0.1` never queried it (its NT receiver is a stub), so nothing was acknowledged. `runs/run-41.md`, "Stor98 behind the Thunderbolt 3 controller")
 
 ## Planned - Installing the Driver on Windows 98 SE and ME
 
@@ -528,3 +530,37 @@ router found tunnelled at the start is adopted without it, so the tool
 shows the dock unnamed until a re-plug. The dock works either way.
 
 - [ ] TB3NAME.1 the DROM read for an adopted or resumed Thunderbolt 3 router, outside the resume budget (deferred to the connection-manager thread once the resume is done); host cases on the fake fabric; legs on 98 SE and 7 x86 with the dock attached across a suspend and at power-on
+
+## Planned - A Tunnelled Function With No Interrupt on Windows 98 SE and ME
+
+Goal: a function behind a tunnel that Windows 98 SE or ME can give no
+IRQ still starts, so that a driver that polls (Stor98's planned polling
+mode) can run it.
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 by
+the owner, after the hot-plug fix of 9x bridges (record 21 section 6,
+`XhciCmBridgeNumbering`) read on the owner's ThinkPad P14s Gen 1: there
+the IRQ the firmware routes is provable and set, but on a machine whose
+routing gives no provable IRQ for the tunnel's root port, or for a
+function with no interrupt pin (MSI only, which 9x cannot use), Windows
+98 disables the function (Code 29) before its driver loads.
+
+- [ ] NOIRQ.1 a design record: how a 9x function with an interrupt pin and no routable IRQ can be started without one (its logical configuration, CONFIGMG, what PCI.VXD requires), with only documented means; the pairing with Stor98's polling mode (Stor98 `docs/PLAN.md`); legs on 98 SE and ME with the IRQ withheld
+
+## Planned - Retiring XHCISNAP
+
+Goal: `XHCISNAP.EXE` and its `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`
+are deprecated in the release after `3.0.0.0` and later removed, the
+xHCI98 USB Tree (`XHCITR.EXE`) taking over everything a user or a bug
+report needs from them.
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 by
+the owner, when `3.0.0.0` made the two drivers' logging consistent:
+`xhci98.sys` answers its own query IOCTL, as `xhcicm.sys` does, and
+XHCITR shows both drivers' logs and sets their logging level. `3.0.0.0`
+still ships `XHCISNAP` unchanged and its release notes say it will be
+deprecated in a subsequent release.
+
+- [ ] SNAP.1 an inventory of what `XHCISNAP` does that XHCITR does not (the raw snapshot regions and the `.DEV` file, `-probe`, the counter-name check, the slot and enumeration regions), and for each a decision: moved into XHCITR, kept as a developer tool outside the package, or dropped
+- [ ] SNAP.2 the deprecation release: the bug-report steps in the README and the release notes, the release acceptance test's `XHCISNAP` steps and the tool's readme rewritten around XHCITR; `XHCISNAP` marked deprecated in its own output
+- [ ] SNAP.3 the removal: `XHCISNAP` and its batch files out of the package and the build, the door's passthru request kept for Windows' own USB property tabs

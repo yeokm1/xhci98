@@ -148,7 +148,7 @@ Run it in a Command Prompt (an MS-DOS Prompt on 98 SE and ME). On Windows 2000 a
 2. It asks Windows to stop it. If a program has a file open on the device, Windows refuses and nothing changes: close the program and try again.
 3. When it says "You can now unplug the device.", unplug it.
 
-- **A device missing from Windows' list** (one connected before the driver started, or disabled and enabled since, or whose driver was updated): on XP, Vista and 7 `INSTALL /eject` still asks Windows to stop it. Windows 2000 cannot stop such a device: the tool says so; restart with the device connected and it is listed for removal again, or shut the computer down and unplug it then. Unplugging and plugging it in again also puts it back in the list.
+- **A device missing from Windows' list** (the first plug of a device Windows has not seen, one disabled and enabled since, or whose driver was updated): the xHCI98 USB Tree and `INSTALL /eject` stop it when run as an administrator, and the USB Tree asks for the rights when it needs them. Without an administrator, close every program using it, unplug it and plug it in once more: from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
 - **For scripts:** `INSTALL /eject 2` ejects device 2 of the list after one question; `INSTALL /eject id=<instance id> /yes`, with the instance id `/devices` prints, does it with no question.
 
 ### NVMe drives
@@ -187,11 +187,10 @@ On Vista x64 and 7 x64:
 - **The icon:** a left click lists the USB storage devices and the Thunderbolt and USB4 devices you can remove safely; a double click opens the window. Balloons say when a device connects, waits for approval or disconnects (Windows 2000, ME and later; on 98 SE the icon's tooltip shows the last event).
 - **Safely Remove:** pick the device in the icon's menu or the window, confirm, and unplug it when the tool says so. It follows the same rules as `INSTALL /eject`, on every system.
 - **USB sticks and disks** can be stopped the same way, on every system, 98 SE and ME included. The tool names one by its drive letter. Only a device with a disk on it is offered; a keyboard, mouse, hub, camera or other device is shown, not stopped.
-
 - **The drivers' logs:** each xHCI controller and each Thunderbolt or USB4 controller has a "Driver log" item. Select it to see the driver's counters and its log, read from the running driver. Save Report includes both logs, so you can send one without a debug build.
 - **When a log is off** (the default), the item says how to turn it on. For `xhci98.sys`, run `SNAPON.BAT` and restart. For `xhcicm.sys`, set `XhciLogVerbosity` to `2` on the key the item names, then restart. The release notes' "The log, and how to send one" has the details.
 
-`INSTALL /notray` installs without starting it at login. It is also in the package at `tools\xhcitr\`.
+To stop it starting at login for yourself, untick "Start at login" in its View menu or the icon's right-click menu (no administrator needed). `INSTALL /notray` stops it for every user of the machine. It is also in the package at `tools\xhcitr\`.
 
 ## Installation Steps
 
@@ -240,7 +239,7 @@ If the machine runs Windows with the driver, the bug report asks for the driver'
 | `release-x64\` | 64-bit Windows: XP x64, Vista x64, 7 x64 | the same, without `xhcihlpr.sys`, plus `xhci98-test.cer` |
 | `debug-x86\`, `debug-x64\` | troubleshooting only | the same drivers built for troubleshooting; install only if asked |
 | `tools\xhciqual\` | DOS | `XHCIQUAL.EXE`, the qualifier, and `QUALREP.BAT`, the reading a bug report asks for |
-| `tools\xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader, and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`, which turn its channel on, write the report a bug report asks for, and turn the channel off |
+| `tools\xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader, and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`, which turn its channel on, write the report a bug report asks for, and turn the channel off; to be deprecated in a subsequent release, in favour of the xHCI98 USB Tree |
 | `tools\portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
 | `tools\silent\` | Windows 98 SE and ME | `SILENT.REG`, `SILENT.VBS`, `silent-on.bat` and `silent-off.bat`, the silent install's list and its switch (see "Tuning") |
 | `tools\xhcicln\` | Windows | `XHCICLN.EXE` (32-bit) and `XHCICL64.EXE` (64-bit), an optional tool that lists the old `XHCI98\` entries an update from `2.3.x` or earlier leaves behind and, on Windows 2000 to 7, removes them; nothing needs it |

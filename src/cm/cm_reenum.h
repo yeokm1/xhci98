@@ -460,8 +460,8 @@ VOID CmRegInit(VOID);
 VOID CmRegFilterInit(struct _CM_FILTER *filter);
 
 /* The registration list's counters, for the NHI's log at stop. */
-VOID CmRegCounters(PULONG attached, PULONG skipped, PULONG refused,
-                   PULONG watchdogs);
+VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
+                   PULONG refused, PULONG watchdogs);
 
 /* The bridge filter's start has completed below it successfully: publish
  * its entry under its bus, device and function (IoGetDeviceProperty). A
