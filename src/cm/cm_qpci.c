@@ -92,17 +92,23 @@ static UCHAR *cmQpEntry(CM_QP_WALK *w, ULONG bdf, ULONG role, ULONG port,
     return e;
 }
 
-/* The function's 256 bytes into the entry; its state. */
+/* The function's 256 bytes into the entry, and how many were read; its
+ * state. */
 static ULONG cmQpFill256(CM_QP_WALK *w, UCHAR *e, ULONG bdf)
 {
     UCHAR *cfg;
     ULONG rc;
     ULONG state;
+    ULONG valid;
 
     cfg = e + CM_QP_EHDR_BYTES;
     w->Reads++;
-    rc = w->In->Read(w->In->Context, bdf, cfg, CM_QP_CFG_BYTES);
-    if (rc == CM_QP_RD_OK && cmQpGet(cfg, 0) != 0xFFFFFFFFUL) {
+    valid = 0;
+    rc = w->In->Read(w->In->Context, bdf, cfg, CM_QP_CFG_BYTES, &valid);
+    if (valid > CM_QP_CFG_BYTES) {
+        valid = CM_QP_CFG_BYTES;
+    }
+    if (rc == CM_QP_RD_OK && valid >= 4 && cmQpGet(cfg, 0) != 0xFFFFFFFFUL) {
         state = CM_QP_S_READ;
     } else if (rc == CM_QP_RD_OK || rc == CM_QP_RD_ABSENT) {
         state = CM_QP_S_ABSENT;
@@ -112,9 +118,20 @@ static ULONG cmQpFill256(CM_QP_WALK *w, UCHAR *e, ULONG bdf)
     }
     if (state != CM_QP_S_READ) {
         cmQpFill(cfg, CM_QP_CFG_BYTES, 0);
+        valid = 0;
+    } else {
+        cmQpFill(cfg + valid, CM_QP_CFG_BYTES - valid, 0);
     }
     cmQpPut(e, CM_QP_E_STATE, state);
+    cmQpPut(e, CM_QP_E_VALID, valid);
     return state;
+}
+
+/* The type 1 header's bus numbers (19h, 1Ah) and the header type (0Eh)
+ * were read. */
+static ULONG cmQpHasBuses(const UCHAR *e)
+{
+    return (ULONG)(cmQpGet(e, CM_QP_E_VALID) >= 0x1CUL);
 }
 
 /* The function at bdf answers: its vendor id is neither all ones nor 0.
@@ -124,10 +141,12 @@ static ULONG cmQpPresent(CM_QP_WALK *w, ULONG bdf, PULONG failed)
     UCHAR id[4];
     ULONG rc;
     ULONG v;
+    ULONG valid;
 
     *failed = 0;
     w->Reads++;
-    rc = w->In->Read(w->In->Context, bdf, id, 4);
+    valid = 0;
+    rc = w->In->Read(w->In->Context, bdf, id, 4, &valid);
     if (rc == CM_QP_RD_ABSENT) {
         return 0;
     }
@@ -202,7 +221,8 @@ static VOID cmQpBelow(CM_QP_WALK *w, ULONG port, const UCHAR *pcfg)
                     return;
                 }
                 w->Below++;
-                if (cmQpFill256(w, e, bdf) != CM_QP_S_READ) {
+                if (cmQpFill256(w, e, bdf) != CM_QP_S_READ ||
+                    !cmQpHasBuses(e)) {
                     continue;
                 }
                 cfg = e + CM_QP_EHDR_BYTES;
@@ -294,7 +314,8 @@ ULONG CmQpciBuild(UCHAR *buf, ULONG room, const CM_QPCI_IN *in)
             continue;
         }
         cfg = e + CM_QP_EHDR_BYTES;
-        if ((cfg[CM_QP_CFG_HEADER] & CM_QP_HDR_LAYOUT) == CM_QP_LAYOUT_BRIDGE) {
+        if (cmQpHasBuses(e) &&
+            (cfg[CM_QP_CFG_HEADER] & CM_QP_HDR_LAYOUT) == CM_QP_LAYOUT_BRIDGE) {
             cmQpBelow(&w, in->Ports[p].Bdf, cfg);
         }
     }
@@ -316,12 +337,14 @@ ULONG CmQpciBuild(UCHAR *buf, ULONG room, const CM_QPCI_IN *in)
 }
 
 ULONG CmQpciReadByDword(CM_QP_PREFIX prefix, PVOID context, ULONG bdf,
-                        UCHAR *buf, ULONG bytes, UCHAR *scratch)
+                        UCHAR *buf, ULONG bytes, UCHAR *scratch,
+                        PULONG valid)
 {
     ULONG off;
     ULONG got;
     ULONG i;
 
+    *valid = 0;
     if (bytes > CM_QP_CFG_BYTES || (bytes & 3UL) != 0 || bytes == 0) {
         return CM_QP_RD_FAIL;
     }
@@ -332,14 +355,16 @@ ULONG CmQpciReadByDword(CM_QP_PREFIX prefix, PVOID context, ULONG bdf,
                 return got == 2 ? CM_QP_RD_ABSENT : CM_QP_RD_FAIL;
             }
             for (i = off; i < bytes; i++) {
-                buf[i] = 0xFF;
+                buf[i] = 0;
             }
+            *valid = off;
             return CM_QP_RD_OK;
         }
         for (i = 0; i < 4; i++) {
             buf[off + i] = scratch[off + i];
         }
     }
+    *valid = bytes;
     return CM_QP_RD_OK;
 }
 

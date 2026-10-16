@@ -8,7 +8,7 @@
  * (xhcitr\tr_pci.c) with bad shapes; the decoders (pin and line, MSI,
  * MSI-X, the PCIe link, BARs, bridge buses and windows); the capability
  * walk with a clear Status bit, a loop, a bad pointer, an unaligned
- * pointer, a cut and a capability past the 256 bytes; and that no line of
+ * pointer, a cut and a capability past the bytes; and that no line of
  * a worst-case text passes 79 columns.
  */
 
@@ -47,6 +47,7 @@ static struct {
     unsigned long Bdf;
     unsigned char Cfg[256];
     int Fail;           /* the read is refused */
+    ULONG Valid;        /* bytes the HAL answers, 0 all */
 } fn[FN_MAX];
 static int fnCount;
 static int failBus = -1;    /* any read on this bus is refused */
@@ -60,6 +61,7 @@ static unsigned char *add_fn(unsigned long bdf, unsigned long id,
     memset(c, 0, 256);
     fn[fnCount].Bdf = bdf;
     fn[fnCount].Fail = 0;
+    fn[fnCount].Valid = 0;
     put32(c, 0, id);
     put32(c, 8, cls << 8);
     fnCount++;
@@ -79,7 +81,8 @@ static unsigned char *add_bridge(unsigned long bdf, unsigned long id,
     return c;
 }
 
-static ULONG model_read(PVOID ctx, ULONG bdf, UCHAR *buf, ULONG bytes)
+static ULONG model_read(PVOID ctx, ULONG bdf, UCHAR *buf, ULONG bytes,
+                        PULONG valid)
 {
     int i;
 
@@ -94,6 +97,11 @@ static ULONG model_read(PVOID ctx, ULONG bdf, UCHAR *buf, ULONG bytes)
                 return CM_QP_RD_FAIL;
             }
             memcpy(buf, fn[i].Cfg, bytes);
+            *valid = bytes;
+            if (fn[i].Valid != 0 && fn[i].Valid < bytes) {
+                memset(buf + fn[i].Valid, 0, bytes - fn[i].Valid);
+                *valid = fn[i].Valid;
+            }
             return CM_QP_RD_OK;
         }
     }
@@ -394,7 +402,7 @@ static void test_short(void)
     CHECK(strcmp(s, "MSI: present, disabled (32 vectors)") == 0,
           "reserved counts held to 32");
     tr_pci_msi(c, 0xF8, s, sizeof(s));
-    CHECK(strstr(s, "past the 256 bytes") != NULL, "MSI past the end");
+    CHECK(strstr(s, "past the bytes") != NULL, "MSI past the end");
 
     put16(c, 0x92, 0x8007);
     tr_pci_msix(c, 0x90, s, sizeof(s));
@@ -415,7 +423,7 @@ static void test_short(void)
     tr_pci_link(c, 0xA0, s, sizeof(s));
     CHECK(strcmp(s, "down (capable Gen 3 x4)") == 0, "link down");
     tr_pci_link(c, 0xF0, s, sizeof(s));
-    CHECK(strstr(s, "past the 256 bytes") != NULL, "link past the end");
+    CHECK(strstr(s, "past the bytes") != NULL, "link past the end");
     CHECK(strcmp(tr_pci_port_type(6), "switch downstream port") == 0, "type");
     CHECK(strcmp(tr_pci_class_text(0x0C0340UL), "USB4 host interface") == 0,
           "class");
@@ -611,7 +619,7 @@ static void test_text(void)
     CHECK(strstr(text, "table BAR0+2000h, pending bits BAR0+3000h") != NULL,
           "MSI-X table");
     CHECK(strstr(text, "0Dh at E0h  Subsystem 17AA:5052") != NULL, "SSVID");
-    CHECK(strstr(text, "10h at F8h  PCI Express, past the 256 bytes read")
+    CHECK(strstr(text, "10h at F8h  PCI Express, past the bytes read")
               != NULL, "past the end");
     CHECK(strstr(text, "MSI: not present") == NULL, "MSI found");
     CHECK(widest(text) <= 79, "79 columns");
@@ -798,14 +806,16 @@ static void test_by_dword(void)
     UCHAR cfg[256];
     UCHAR scratch[256];
     ULONG i;
+    ULONG v;
     int ok;
 
     halAbsent = 0;
     halLimit = 256;
     halCalls = 0;
-    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 256, scratch),
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 256, scratch, &v),
              CM_QP_RD_OK, "whole");
     CHECK_EQ(halCalls, 64, "one prefix a DWORD");
+    CHECK_EQ(v, 256, "all read");
     ok = 1;
     for (i = 0; i < 256; i++) {
         ok &= cfg[i] == (UCHAR)i;
@@ -816,29 +826,85 @@ static void test_by_dword(void)
      * rest all ones. */
     halLimit = 0x60;
     memset(cfg, 0, sizeof(cfg));
-    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 256, scratch),
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 256, scratch, &v),
              CM_QP_RD_OK, "partial is an answer");
     CHECK_EQ(cfg[0x5F], 0x5F, "the last byte read");
-    CHECK_EQ(cfg[0x60], 0xFF, "past it all ones");
-    CHECK_EQ(cfg[0xFF], 0xFF, "to the end");
+    CHECK_EQ(cfg[0x60], 0, "past it zero");
+    CHECK_EQ(cfg[0xFF], 0, "to the end");
+    CHECK_EQ(v, 0x60, "and how much was read");
 
     /* The first DWORD decides. */
     halLimit = 2;
-    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 4, scratch),
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 4, scratch, &v),
              CM_QP_RD_FAIL, "nothing read");
     halAbsent = 1;
-    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 256, scratch),
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 256, scratch, &v),
              CM_QP_RD_ABSENT, "no function");
     halAbsent = 0;
     halLimit = 256;
-    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 6, scratch),
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 6, scratch, &v),
              CM_QP_RD_FAIL, "not whole DWORDs");
-    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 260, scratch),
+    CHECK_EQ(CmQpciReadByDword(model_prefix, NULL, 0x0500, cfg, 260, scratch, &v),
              CM_QP_RD_FAIL, "past 256");
+}
+
+/* A function the HAL answers only in part: the builder keeps how much,
+ * scans below a bridge only when its bus numbers were read, and the
+ * text decodes nothing past the bytes read. */
+static void test_partial(void)
+{
+    CM_QPCI_IN in;
+    ULONG n;
+    ULONG info;
+    TR_QPCI q;
+    TR_TEXT t;
+    unsigned char c[256];
+
+    /* The tunnel port read to 18h only: no bus numbers, no walk. */
+    p14s();
+    fn[1].Valid = 0x18;
+    in_one_port(&in, BDF(4, 1, 0));
+    n = CmQpciBuild(built, sizeof(built), &in);
+    CHECK_EQ(n, CM_QP_HDR_BYTES + 2 * CM_QP_ENT_BYTES, "no walk below");
+    CHECK_EQ(ent(built, 1, CM_QP_E_VALID), 0x18, "valid kept");
+    CHECK_EQ(ent(built, 0, CM_QP_E_VALID), 256, "the NHI whole");
+
+    /* A capability cut mid-structure: the PCIe capability at C0h of a
+     * function read to C8h is named, not decoded. */
+    dsp_bytes(c);
+    memset(c + 0xC8, 0, 256 - 0xC8);
+    tr_text_init(&t, text, sizeof(text));
+    tr_pci_text_n(&t, c, 0xC8, 2);
+    CHECK(strstr(text, "Only the first 200 bytes could be read") != NULL,
+          "said");
+    CHECK(strstr(text, "PCI Express, past the bytes read") != NULL,
+          "PCIe not decoded");
+    CHECK(strstr(text, "PCIe link:") == NULL, "no link invented");
+    CHECK(strstr(text, "The list goes on at A0h, past the bytes read")
+              == NULL, "A0h is inside");
+    /* A list whose next pointer lies past the bytes read. */
+    tr_text_init(&t, text, sizeof(text));
+    tr_pci_text_n(&t, c, 0x90, 2);
+    CHECK(strstr(text, "The list goes on at C0h, past the bytes read")
+              != NULL, "the walk stops at the boundary");
+    /* Less than the header. */
+    tr_text_init(&t, text, sizeof(text));
+    tr_pci_text_n(&t, c, 0x10, 2);
+    CHECK(strstr(text, "Only the first 16 bytes of its configuration "
+                       "space could be read.") != NULL, "short header");
+    CHECK(strstr(text, "Class               060400") != NULL, "class");
+    CHECK(strstr(text, "Interrupt") == NULL, "no pin invented");
+    /* The tool reads the field from the answer. */
+    (void)CmQpciAnswer(outb, sizeof(outb), built, n, &info);
+    CHECK_EQ(tr_qpci_parse(outb, info, &q), 1, "parsed");
+    tr_text_init(&t, text, sizeof(text));
+    tr_qpci_text(&t, &q, 1);
+    CHECK(strstr(text, "Only the first 24 bytes") != NULL, "port short");
 }
 
 int main(void)
 {
+    test_partial();
     test_by_dword();
     test_branch();
     test_reserved_speed();

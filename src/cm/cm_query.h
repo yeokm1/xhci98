@@ -248,8 +248,12 @@
                                            secondary bus, one more per bridge */
 #define CM_QP_E_INFO            24UL    /* PORT: source 7:0 (XHCI_TBT_SRC_*),
                                            flags 15:8 (CM_PORT_*) */
-/* 28..31 reserved, 0; the configuration space at CM_QP_EHDR_BYTES, all
-   zeros unless the state is CM_QP_S_READ */
+#define CM_QP_E_VALID           28UL    /* READ: the bytes of configuration
+                                           space read, CM_QP_CFG_BYTES or
+                                           fewer where the HAL answered
+                                           fewer (whole DWORDs); else 0 */
+/* The configuration space at CM_QP_EHDR_BYTES: zero past the bytes read,
+   all zeros unless the state is CM_QP_S_READ. */
 
 #define CM_QP_R_NHI             1UL
 #define CM_QP_R_PORT            2UL     /* a tunnel-port member */

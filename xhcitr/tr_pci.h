@@ -38,6 +38,7 @@ typedef struct _TR_PCICAP {
 #define TR_PCI_WALK_BAD_PTR     0x02    /* a pointer below 40h (or past FCh)*/
 #define TR_PCI_WALK_LOOP        0x04    /* a pointer visited twice         */
 #define TR_PCI_WALK_CUT         0x08    /* more than `max` entries         */
+#define TR_PCI_WALK_UNREAD      0x10    /* a pointer past the bytes read   */
 
 /* The capabilities of cfg (TR_PCI_CFG_BYTES) into out (max entries).
  * Returns the count; *how the TR_PCI_WALK_* bits, *badAt the offending
@@ -53,6 +54,12 @@ int tr_pci_caps(const unsigned char *cfg, TR_PCICAP *out, int max, int *how,
  * windows, then the capabilities (MSI, MSI-X, PCI Express with the link,
  * power management; any other by id). */
 void tr_pci_text(TR_TEXT *t, const unsigned char *cfg, int indent);
+
+/* The same for a configuration space of which only the first `valid`
+ * bytes were read (an xhcicm answer's CM_QP_E_VALID): nothing past them
+ * is decoded, and the text says so. */
+void tr_pci_text_n(TR_TEXT *t, const unsigned char *cfg,
+                   unsigned long valid, int indent);
 
 /* Short forms the text is made of, for the host suite. */
 void tr_pci_pin(unsigned int pin, unsigned int line, char *out, size_t cap);
@@ -89,6 +96,7 @@ typedef struct _TR_QPENT {
     TR_U32 Parent;
     TR_U32 Depth;
     TR_U32 Info;
+    TR_U32 Valid;               /* bytes of Cfg read (CM_QP_E_VALID)        */
     const unsigned char *Cfg;   /* TR_PCI_CFG_BYTES                         */
 } TR_QPENT;
 

@@ -182,7 +182,9 @@ ULONG CmQueryLogAddress(const UCHAR *label, ULONG n);
 #define CM_QP_RD_ABSENT         1UL
 #define CM_QP_RD_FAIL           2UL
 typedef ULONG (*CM_QP_READ)(PVOID context, ULONG bdf, UCHAR *buf,
-                            ULONG bytes);
+                            ULONG bytes, PULONG valid);
+/* (*valid: with CM_QP_RD_OK, the bytes read - `bytes`, or fewer whole
+   DWORDs where the bus driver answered fewer, the rest of buf zero.) */
 
 typedef struct _CM_QP_PORT_IN {
     ULONG Bdf;              /* XHCI_TBT_BDF                               */
@@ -214,10 +216,11 @@ typedef ULONG (*CM_QP_PREFIX)(PVOID context, ULONG bdf, UCHAR *buf,
  * HAL answers where one long read may not. The first DWORD decides:
  * CM_QP_RD_ABSENT where the prefix answers 2, CM_QP_RD_FAIL where it
  * reads less. A later DWORD that cannot be read ends the assembly: the
- * rest is all ones and the answer is CM_QP_RD_OK. `scratch` holds
- * CM_QP_CFG_BYTES. */
+ * rest is zero, *valid the bytes read, and the answer CM_QP_RD_OK.
+ * `scratch` holds CM_QP_CFG_BYTES. */
 ULONG CmQpciReadByDword(CM_QP_PREFIX prefix, PVOID context, ULONG bdf,
-                        UCHAR *buf, ULONG bytes, UCHAR *scratch);
+                        UCHAR *buf, ULONG bytes, UCHAR *scratch,
+                        PULONG valid);
 
 /* The PCI answer into buf (room at least CM_QP_MAX_BYTES; 0 returned
  * otherwise): the NHI, the members, the functions below them within the

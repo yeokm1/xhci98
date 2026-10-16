@@ -791,10 +791,11 @@ static ULONG cmQpPrefix(PVOID context, ULONG bdf, UCHAR *buf, ULONG bytes)
  * topology reads and not one 256-byte read (read on 98 SE, record 25
  * revision 12). `context` is the request's CM_QP_CFG_BYTES scratch.
  * IRQL: PASSIVE_LEVEL. */
-static ULONG cmQpRead(PVOID context, ULONG bdf, UCHAR *buf, ULONG bytes)
+static ULONG cmQpRead(PVOID context, ULONG bdf, UCHAR *buf, ULONG bytes,
+                      PULONG valid)
 {
     return CmQpciReadByDword(cmQpPrefix, NULL, bdf, buf, bytes,
-                             (UCHAR *)context);
+                             (UCHAR *)context, valid);
 }
 
 /* IRP_MJ_DEVICE_CONTROL's CM_QP_IOCTL (record 25 section 4.7): what to

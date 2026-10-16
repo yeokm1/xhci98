@@ -21,7 +21,8 @@
  *         Capability: its Capabilities register, Link Capabilities, Link
  *         Status).
  *
- * Nothing here reads past the 256 bytes it is given.
+ * Nothing here reads past the 256 bytes it is given, nor decodes past
+ * the bytes that were read (tr_pci_text_n).
  */
 
 #include <string.h>
@@ -142,6 +143,11 @@ static unsigned long g32(const unsigned char *b, unsigned int o)
            ((unsigned long)b[o + 2] << 16) | ((unsigned long)b[o + 3] << 24);
 }
 
+/* How many bytes of the configuration space being decoded were read
+ * (tr_pci_text_n): nothing past them is decoded. The tool is single-
+ * threaded where it decodes. */
+static unsigned int trLim = TR_PCI_CFG_BYTES;
+
 static void ind(TR_TEXT *t, int indent)
 {
     while (indent-- > 0) {
@@ -173,6 +179,11 @@ int tr_pci_caps(const unsigned char *cfg, TR_PCICAP *out, int max, int *how,
     while (at != 0) {
         if (at < 0x40U || at > 0xFCU) {
             *how |= TR_PCI_WALK_BAD_PTR;
+            *badAt = at;
+            break;
+        }
+        if (at + 2U > trLim) {
+            *how |= TR_PCI_WALK_UNREAD;
             *badAt = at;
             break;
         }
@@ -223,8 +234,8 @@ void tr_pci_msi(const unsigned char *cfg, unsigned int at, char *out,
     unsigned int capable;
     unsigned int enabled;
 
-    if (at + MSI_BYTES > TR_PCI_CFG_BYTES) {
-        tr_sprintf(out, cap, "MSI: present, past the 256 bytes read");
+    if (at + MSI_BYTES > trLim) {
+        tr_sprintf(out, cap, "MSI: present, past the bytes read");
         return;
     }
     c = g16(cfg, at + MSI_CTRL);
@@ -254,8 +265,8 @@ void tr_pci_msix(const unsigned char *cfg, unsigned int at, char *out,
 {
     unsigned long c;
 
-    if (at + MSIX_BYTES > TR_PCI_CFG_BYTES) {
-        tr_sprintf(out, cap, "MSI-X: present, past the 256 bytes read");
+    if (at + MSIX_BYTES > trLim) {
+        tr_sprintf(out, cap, "MSI-X: present, past the bytes read");
         return;
     }
     c = g16(cfg, at + MSIX_CTRL);
@@ -284,8 +295,8 @@ void tr_pci_link(const unsigned char *cfg, unsigned int at, char *out,
     char now[32];
     char can[32];
 
-    if (at + PCIE_BYTES > TR_PCI_CFG_BYTES) {
-        tr_sprintf(out, cap, "past the 256 bytes read");
+    if (at + PCIE_BYTES > trLim) {
+        tr_sprintf(out, cap, "past the bytes read");
         return;
     }
     lc = g32(cfg, at + PCIE_LINK_CAP);
@@ -554,7 +565,7 @@ static void caps(TR_TEXT *t, const unsigned char *cfg, int indent)
             msix = 1;
             tr_pci_msix(cfg, at, s, sizeof(s));
             tr_printf(t, "%s\n", s);
-            if (at + MSIX_BYTES <= TR_PCI_CFG_BYTES) {
+            if (at + MSIX_BYTES <= trLim) {
                 ind(t, indent + 4);
                 tr_printf(t, "table BAR%lu+%lXh, pending bits BAR%lu+%lXh\n",
                           g32(cfg, at + MSIX_TABLE) & 7UL,
@@ -565,8 +576,8 @@ static void caps(TR_TEXT *t, const unsigned char *cfg, int indent)
             break;
         case CAP_PCIE:
             pcie = 1;
-            if (at + PCIE_BYTES > TR_PCI_CFG_BYTES) {
-                tr_put(t, "PCI Express, past the 256 bytes read\n");
+            if (at + PCIE_BYTES > trLim) {
+                tr_put(t, "PCI Express, past the bytes read\n");
                 break;
             }
             v = g16(cfg, at + PCIE_CAPS);
@@ -584,8 +595,8 @@ static void caps(TR_TEXT *t, const unsigned char *cfg, int indent)
             }
             break;
         case CAP_PM:
-            if (at + PM_BYTES > TR_PCI_CFG_BYTES) {
-                tr_put(t, "Power management, past the 256 bytes read\n");
+            if (at + PM_BYTES > trLim) {
+                tr_put(t, "Power management, past the bytes read\n");
                 break;
             }
             v = g16(cfg, at + PM_PMC);
@@ -596,8 +607,8 @@ static void caps(TR_TEXT *t, const unsigned char *cfg, int indent)
                                                            : "");
             break;
         case CAP_SSVID:
-            if (at + SSVID_BYTES > TR_PCI_CFG_BYTES) {
-                tr_put(t, "Bridge subsystem ids, past the 256 bytes read\n");
+            if (at + SSVID_BYTES > trLim) {
+                tr_put(t, "Bridge subsystem ids, past the bytes read\n");
                 break;
             }
             tr_printf(t, "Subsystem %04lX:%04lX\n", g16(cfg, at + SSVID_IDS),
@@ -615,6 +626,11 @@ static void caps(TR_TEXT *t, const unsigned char *cfg, int indent)
     if (how & TR_PCI_WALK_LOOP) {
         ind(t, indent + 2);
         tr_printf(t, "The list loops back to %02Xh; the walk stopped.\n",
+                  badAt);
+    }
+    if (how & TR_PCI_WALK_UNREAD) {
+        ind(t, indent + 2);
+        tr_printf(t, "The list goes on at %02Xh, past the bytes read.\n",
                   badAt);
     }
     if (how & TR_PCI_WALK_CUT) {
@@ -638,6 +654,51 @@ static void caps(TR_TEXT *t, const unsigned char *cfg, int indent)
 
 void tr_pci_text(TR_TEXT *t, const unsigned char *cfg, int indent)
 {
+    tr_pci_text_n(t, cfg, TR_PCI_CFG_BYTES, indent);
+}
+
+static void pci_text_body(TR_TEXT *t, const unsigned char *cfg,
+                          int indent);
+
+void tr_pci_text_n(TR_TEXT *t, const unsigned char *cfg,
+                   unsigned long valid, int indent)
+{
+    unsigned long id;
+    unsigned long cls;
+
+    if (valid > TR_PCI_CFG_BYTES) {
+        valid = TR_PCI_CFG_BYTES;
+    }
+    valid &= ~3UL;
+    if (valid < 0x40) {
+        /* Not the whole common header: what was read, and no more. */
+        if (valid >= 4) {
+            id = g32(cfg, PCI_ID);
+            ind(t, indent);
+            tr_printf(t, "Vendor:device       %04lX:%04lX\n",
+                      id & 0xFFFFUL, id >> 16);
+        }
+        if (valid >= 0x0C) {
+            cls = ((unsigned long)cfg[PCI_CLASS + 2] << 16) |
+                  ((unsigned long)cfg[PCI_CLASS + 1] << 8) |
+                  cfg[PCI_CLASS];
+            ind(t, indent);
+            tr_printf(t, "Class               %06lX (%s)\n", cls,
+                      tr_pci_class_text(cls));
+        }
+        ind(t, indent);
+        tr_printf(t, "Only the first %lu bytes of its configuration "
+                     "space could be read.\n", valid);
+        return;
+    }
+    trLim = (unsigned int)valid;
+    pci_text_body(t, cfg, indent);
+    trLim = TR_PCI_CFG_BYTES;
+}
+
+static void pci_text_body(TR_TEXT *t, const unsigned char *cfg,
+                          int indent)
+{
     unsigned long id;
     unsigned long cls;
     unsigned int layout;
@@ -647,6 +708,11 @@ void tr_pci_text(TR_TEXT *t, const unsigned char *cfg, int indent)
     cls = ((unsigned long)cfg[PCI_CLASS + 2] << 16) |
           ((unsigned long)cfg[PCI_CLASS + 1] << 8) | cfg[PCI_CLASS];
     layout = cfg[PCI_HEADER] & PCI_HDR_LAYOUT;
+    if (trLim < TR_PCI_CFG_BYTES) {
+        ind(t, indent);
+        tr_printf(t, "Only the first %u bytes could be read; nothing "
+                     "past them is shown.\n", trLim);
+    }
     ind(t, indent);
     tr_printf(t, "Vendor:device       %04lX:%04lX, revision %02X\n",
               id & 0xFFFFUL, id >> 16, cfg[PCI_REVISION]);
@@ -731,6 +797,7 @@ void tr_qpci_entry(const TR_QPCI *q, TR_U32 i, TR_QPENT *e)
     e->Parent = g32(p, CM_QP_E_PARENT);
     e->Depth = g32(p, CM_QP_E_DEPTH);
     e->Info = g32(p, CM_QP_E_INFO);
+    e->Valid = g32(p, CM_QP_E_VALID);
     e->Cfg = p + CM_QP_EHDR_BYTES;
 }
 
@@ -805,7 +872,7 @@ static void below_text(TR_TEXT *t, const TR_QPCI *q, TR_U32 port,
         ind(t, in);
         tr_printf(t, "%s\n", loc);
         if (b.State == CM_QP_S_READ) {
-            tr_pci_text(t, b.Cfg, in + 2);
+            tr_pci_text_n(t, b.Cfg, b.Valid, in + 2);
         } else {
             state_text(t, in + 2, b.State);
         }
@@ -844,7 +911,7 @@ void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt)
             continue;
         }
         if (e.State == CM_QP_S_READ) {
-            tr_pci_text(t, e.Cfg, 2);
+            tr_pci_text_n(t, e.Cfg, e.Valid, 2);
         } else {
             state_text(t, 2, e.State);
         }
@@ -883,7 +950,7 @@ void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt)
             bdf_text(loc, sizeof(loc), b.Bdf);
             tr_printf(t, "      %s\n", loc);
             if (b.State == CM_QP_S_READ) {
-                tr_pci_text(t, b.Cfg, 8);
+                tr_pci_text_n(t, b.Cfg, b.Valid, 8);
             } else {
                 state_text(t, 8, b.State);
             }
