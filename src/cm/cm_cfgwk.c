@@ -50,6 +50,7 @@
 #include "cm_cfgmg.h"
 #include "cm_ports.h"
 #include "cm_nvlink.h"
+#include "cm_qryb.h"
 
 #if defined(_WIN64) && defined(NO_LEGACY_DRIVERS)
 NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
@@ -163,19 +164,17 @@ static ULONG cmWkNowTicks(VOID)
 
 static ULONG cmWkSince(ULONG thenTicks)
 {
-    ULONG ticks;
     ULONG unit;
 
     /* KeQueryTimeIncrement is in 100 ns units. Milliseconds rounded down,
-     * a tick's fraction kept (15.6 ms is not counted as 15), in 32 bits:
-     * (ticks / 10000) * unit, plus (ticks % 10000) * unit / 10000, whose
-     * product stays below 2^32 for any increment below 42 ms. */
-    ticks = cmWkNowTicks() - thenTicks;
+     * a tick's fraction kept (15.6 ms is not counted as 15), with no
+     * product past 32 bits for any tick period of 10 to 55 ms and any
+     * stall: cm_query.c's conversion, host-tested. */
     unit = KeQueryTimeIncrement();
     if (unit == 0) {
         unit = 10000UL;
     }
-    return (ticks / 10000UL) * unit + ((ticks % 10000UL) * unit) / 10000UL;
+    return CmQueryAgeMs(cmWkNowTicks(), thenTicks, unit);
 }
 
 /* As cm_reenum.c's reader: HalGetBusData from offset 0. */

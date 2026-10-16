@@ -446,6 +446,10 @@ static void test_age(void)
     CHECK_EQ(CmQueryAgeMs(0x7FFFFFFFUL, 0, 156250), CM_Q_UNKNOWN - 1UL,
              "held below unknown");
     CHECK_EQ(CmQueryAgeMs(10, 0, 0), 0, "no period");
+    CHECK_EQ(CmQueryAgeMs(7810, 0, 550000), 429550,
+             "55 ms ticks after a long stall: no 32-bit wrap");
+    CHECK_EQ(CmQueryAgeMs(256, 0, 549254), 14060,
+             "a tick's fraction kept: 256 ticks of 54.9 ms");
     CHECK_EQ(CmQueryAgeMs(3, 0, 10000), 3, "1 ms ticks");
     /* Coarse periods (10 to 55 ms): no overflow in r x incr. */
     CHECK_EQ(CmQueryAgeMs(9999, 0, 550000), 549945UL, "55 ms ticks, r large");
