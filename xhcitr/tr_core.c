@@ -519,6 +519,8 @@ static const char *tr_uas_pipe(unsigned int id)
     }
 }
 
+#define TR_NO_EP 0xFFFFU    /* a companion that follows no valid endpoint */
+
 static void tr_one_desc(TR_TEXT *t, const unsigned char *d, unsigned int len,
                         unsigned int epAttr, int uas)
 {
@@ -595,19 +597,36 @@ static void tr_one_desc(TR_TEXT *t, const unsigned char *d, unsigned int len,
         }
         tr_put(t, "SuperSpeed endpoint companion descriptor\n");
         tr_printf(t, "  %-20s %u\n", "bMaxBurst", (unsigned int)d[2]);
-        if ((epAttr & 3U) == 2U) {
+        if (epAttr == TR_NO_EP) {
+            tr_printf(t, "  %-20s 0x%02X (not after an endpoint)\n",
+                      "bmAttributes", (unsigned int)d[3]);
+        } else if ((epAttr & 3U) == 2U) {
             unsigned int s = d[3] & 0x1FU;
             if (s == 0) {
                 tr_printf(t, "  %-20s 0x%02X (no streams)\n", "bmAttributes",
                           (unsigned int)d[3]);
-            } else {
+            } else if (s <= 16) {
                 tr_printf(t, "  %-20s 0x%02X (MaxStreams %u: %lu streams)\n",
                           "bmAttributes", (unsigned int)d[3], s, 1UL << s);
+            } else {
+                tr_printf(t, "  %-20s 0x%02X (MaxStreams %u: reserved)\n",
+                          "bmAttributes", (unsigned int)d[3], s);
             }
         } else if ((epAttr & 3U) == 1U) {
-            tr_printf(t, "  %-20s 0x%02X (Mult %u: up to %u packets per "
-                      "service interval per burst)\n", "bmAttributes",
-                      (unsigned int)d[3], d[3] & 3U, (d[3] & 3U) + 1U);
+            unsigned int m = d[3] & 3U;
+            if (d[3] & 0x80U) {
+                tr_printf(t, "  %-20s 0x%02X (a SuperSpeedPlus isochronous "
+                          "companion follows; Mult is ignored)\n",
+                          "bmAttributes", (unsigned int)d[3]);
+            } else if (m == 3) {
+                tr_printf(t, "  %-20s 0x%02X (Mult 3: reserved)\n",
+                          "bmAttributes", (unsigned int)d[3]);
+            } else {
+                tr_printf(t, "  %-20s 0x%02X (Mult %u: up to %u bursts per "
+                          "service interval, each of up to %u packets)\n",
+                          "bmAttributes", (unsigned int)d[3], m, m + 1U,
+                          (unsigned int)d[2] + 1U);
+            }
         } else {
             tr_printf(t, "  %-20s 0x%02X\n", "bmAttributes", (unsigned int)d[3]);
         }
@@ -659,7 +678,7 @@ void tr_dec_config(TR_TEXT *t, const unsigned char *d, size_t n)
 {
     size_t o = 0;
     size_t total;
-    unsigned int epAttr = 0;
+    unsigned int epAttr = TR_NO_EP;
     int uas = 0;
 
     if (n < 9 || d[1] != 0x02 || d[0] < 9 || d[0] > n) {
@@ -680,12 +699,14 @@ void tr_dec_config(TR_TEXT *t, const unsigned char *d, size_t n)
                       (unsigned int)o, len);
             break;
         }
-        if (d[o + 1] == 0x04 && len >= 9) {
-            uas = d[o + 5] == 0x08 && d[o + 7] == 0x62;
-        } else if (d[o + 1] == 0x05 && len >= 7) {
-            epAttr = d[o + 3];
+        if (d[o + 1] == 0x04) {
+            /* A new interface: nothing of the last one carries over. */
+            uas = len >= 9 && d[o + 5] == 0x08 && d[o + 7] == 0x62;
+            epAttr = TR_NO_EP;
         }
-        tr_one_desc(t, d + o, len, epAttr, uas);
+        tr_one_desc(t, d + o, len, d[o + 1] == 0x30 ? epAttr : TR_NO_EP, uas);
+        /* A companion is read only right after a valid endpoint. */
+        epAttr = (d[o + 1] == 0x05 && len >= 7) ? d[o + 3] : TR_NO_EP;
         tr_hex(t, d + o, len, 2);
         o += len;
     }
