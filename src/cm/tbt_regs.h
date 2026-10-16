@@ -439,17 +439,23 @@
 #define TBT_RTR3_V                  0x80000000UL
 /* ROUTER_CS_4: Notification Timeout 7:0, CMUV 15:8, USB4 Version 31:24
  * (major 31:29, minor 28:24, Spec 8.2.1.1). CMUV 10h is "USB4 1.0" (Linux
- * ROUTER_CS_4_CMUV_V1). Design record 22 section 3.5: 20h is USB4 1.0 and
- * 40h USB4 2.0, 00h is a Thunderbolt 3 router, every other value reserved
- * (Linux USB4_VERSION_MAJOR_MASK reads the major only). */
+ * ROUTER_CS_4_CMUV_V1). Design record 22 section 3.5: the major alone
+ * decides, as Linux does (USB4_VERSION_MAJOR_MASK, usb4_switch_version,
+ * tb_switch_is_usb4) - major 0 (00h to 1Fh) is a Thunderbolt 3 router,
+ * major 1 USB4 1.x, major 2 USB4 2.x, every other major reserved. A
+ * Thunderbolt 3 router may report a non-zero minor (the CalDigit TS3
+ * Plus reads 02h in usb4-emu's Framework 13 capture, usb4-tb3-sw-data.h),
+ * so no compare is made on the whole byte. */
 #define TBT_RTR4_NOTIFY_TIMEOUT_MASK 0x000000FFUL
 #define TBT_RTR4_NOTIFY_TIMEOUT_MAX 0xFFUL      /* Guide 3.2.1; Linux plug_events_delay = 0xff */
 #define TBT_RTR4_CMUV_MASK          0x0000FF00UL
 #define TBT_RTR4_CMUV_1_0           0x00001000UL
 #define TBT_RTR4_VERSION(v)         (((ULONG)(v) >> 24) & 0xFFUL)
-#define TBT_USB4_VERSION_TBT3       0x00UL
-#define TBT_USB4_VERSION_1_0        0x20UL
-#define TBT_USB4_VERSION_2_0        0x40UL
+#define TBT_USB4_VERSION_MAJOR(b)   (((ULONG)(b) >> 5) & 0x7UL)     /* 31:29 of the dword */
+#define TBT_USB4_VERSION_MINOR(b)   ((ULONG)(b) & 0x1FUL)           /* 28:24 of the dword */
+#define TBT_USB4_MAJOR_TBT3         0UL
+#define TBT_USB4_MAJOR_1            1UL
+#define TBT_USB4_MAJOR_2            2UL
 /* ROUTER_CS_5 (Linux ROUTER_CS_5_*). */
 #define TBT_RTR5_CNS                0x00800000UL    /* 23 CM TBT3 Not Supported */
 #define TBT_RTR5_PTO                0x01000000UL    /* 24 PCIe Tunneling On */

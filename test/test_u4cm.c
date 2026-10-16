@@ -1200,10 +1200,21 @@ static void test_inert_and_domains(void)
           "host router version 0: inert");
     fabInit(&g_fab);
     fabHostMinimal(&g_fab);
-    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x30000000UL;
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x02000000UL;
     rc = start(&g_fab, &g_ring, &g_cm, &c);
     CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_ROUTER_VERSION,
-          "a reserved host router version: inert");
+          "host router version 02h (Thunderbolt 3): inert");
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x60000000UL;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_ROUTER_VERSION,
+          "a reserved host router version (60h): inert");
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x30000000UL;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc == TBT_OK, "host router version 30h (USB4 1.x, minor 16): active");
 
     /* Two domains at once, each its own fabric, ring and instance. */
     fabInit(&g_fab);
@@ -1303,6 +1314,44 @@ static void test_tbt3(void)
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "Alpine Ridge: UP");
     CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 1) & 0x7CUL, 0, "USB disable left clear");
+
+    /* A Thunderbolt 3 router with a non-zero minor: the CalDigit TS3 Plus
+     * reads ROUTER_CS_4 0x0200000a (usb4-emu's Framework 13 capture), major
+     * 0, minor 2 - run as Thunderbolt 3, never refused as reserved. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_AR);
+    g_fab.R[dev].Rcs[4] = 0x0200000AUL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "USB4 Version 02h: UP");
+    CHECK(p->Dev.Tbt3, "02h is a Thunderbolt 3 router");
+    CHECK_EQ(p->Dev.Usb4Version, 0x02UL, "the byte kept as read");
+    CHECK(p->Pcie.Up && !p->Usb3.Up, "02h: PCIe, no USB3");
+    CHECK_EQ(fabRtr(&g_fab, dev, 4) & 0xFF00UL, 0, "02h: no CMUV written");
+    CHECK_EQ(g_cm.Counters.RoutersRefused, 0, "02h: not refused");
+
+    /* A USB4 router with a non-zero minor (21h, USB4 1.1) is USB4. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].Rcs[4] = (g_fab.R[dev].Rcs[4] & 0x00FFFFFFUL) | 0x21000000UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "USB4 Version 21h: UP");
+    CHECK(!p->Dev.Tbt3, "21h is a USB4 router");
+
+    /* Major 3 (60h) stays reserved: refused. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].Rcs[4] = (g_fab.R[dev].Rcs[4] & 0x00FFFFFFUL) | 0x60000000UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UNSUPPORTED, "USB4 Version 60h: UNSUPPORTED");
+    CHECK_EQ(TbtU4Port(&g_cm, 1)->Why, TBT_U4_WHY_VERSION, "60h: for its version");
 
     /* No Plug Events capability: refused. */
     fabInit(&g_fab);
@@ -2066,6 +2115,7 @@ static void test_review2_identity_and_links(void)
     child = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
     fabPlug(&g_fab, 1, dev);
     fabPreos(&g_fab, 1, 0);
+    g_fab.R[child].Rcs[4] = 0x0200000AUL;       /* major 0, minor 2 */
     fabPlugChild(&g_fab, dev, child, 1);
     g_fab.RxQCount = 0;
     (void)start(&g_fab, &g_ring, &g_cm, &c);

@@ -15,6 +15,12 @@ orchestrator of the 2026-10-15 run so that code can proceed, and each is
 the owner's to confirm. Section 16 lists what is open and what is a risk;
 section 17 lists what this record needs record 21 to say differently.
 
+Revised 2026-10-16 (task 40-A.8's first guest legs): a router's USB4
+Version is decided by its major alone (sections 3.5 and 6.4 step 3). The
+first reading of a Thunderbolt 3 device router behind a USB4 host, the
+CalDigit TS3 Plus model of `usb4-emu`, reported `0x02` and was refused as
+reserved under the whole-byte rule this record first gave.
+
 The sources, and the tag each fact carries below:
 
 - **[spec]** the USB4 Specification 2.0 ("Spec") and the USB4 Connection
@@ -390,11 +396,16 @@ its own registers:
   These are the two versions this profile supports.
 - The host router answers the read of ROUTER_CS_0 to 4 at route 0 within
   the request bounds (section 5.2), and ROUTER_CS_4's USB4 Version (bits
-  31:24; major version in 31:29, minor in 28:24, Spec 8.2.1.1) reads
-  `0x20` (USB4 1.0) or `0x40` (USB4 2.0). Every other encoding is reserved
-  and refused, here and for a device router (section 6.4). A host router
-  reporting `0x00` (reserved for Thunderbolt 3) is a Thunderbolt 3 router,
-  which this profile does not drive as a host.
+  31:24; major version in 31:29, minor in 28:24, Spec 8.2.1.1) has major
+  1 (USB4 1.x, `0x20` to `0x3F`) or major 2 (USB4 2.x, `0x40` to `0x5F`).
+  The major alone decides, whatever the minor, here and for a device
+  router (section 6.4), as [linux] does (`tb_regs.h`
+  `USB4_VERSION_MAJOR_MASK`, `tb.h` `usb4_switch_version` and
+  `tb_switch_is_usb4`). Major 0 (`0x00` to `0x1F`) is a Thunderbolt 3
+  router, which this profile does not drive as a host; majors 3 to 7 are
+  reserved and refused. A Thunderbolt 3 router may report a non-zero
+  minor: the CalDigit TS3 Plus reads `0x0200000A` in ROUTER_CS_4 in
+  `usb4-emu`'s Framework 13 capture [obs], USB4 Version `0x02`.
 
 **The inert start** is record 21 section 1.4.2's, shared by both profiles
 (owner's coverage plan; orchestrator decision, owner to confirm), with a
@@ -798,9 +809,9 @@ the PCI mapping apart.
    of Lock on a lane 1 adapter undefined, so lane 1 is never written.
 3. **Read** ROUTER_CS_0 to 4 at route = the host's lane 0 adapter number,
    depth 1. ERR_ENUM or ERR_NUA: logged, left alone (Guide 3.2.1 step 1).
-   USB4 Version `0x00`: a Thunderbolt 3 router (section 8); `0x20` and
-   `0x40` proceed; any other encoding is reserved: UNSUPPORTED (section
-   3.5).
+   USB4 Version major 0 (`0x00` to `0x1F`, whatever the minor): a
+   Thunderbolt 3 router (section 8); majors 1 and 2 proceed; majors 3 to
+   7 are reserved: UNSUPPORTED (section 3.5).
 4. **Enumerate**: one write of ROUTER_CS_1 to 4 (depth 1, TopologyID = the
    route, Valid, Notification Timeout 255, CMUV 1.0); Router Ready within
    500 ms; retried up to 20 times 50 ms apart while the router is still
@@ -965,7 +976,7 @@ link it preserves:
    TMU_ADP_CS_3 EnableUniDirectionalMode reads 0 on both lane 0 adapters
    (so the upstream router's rate drives no uni-directional mode on this
    link),
-   and, on each router that itself reports USB4 Version 2.0 (the fields
+   and, on each router whose USB4 Version has major 2 (the fields
    are version 2 ones, read per router; on an older router they are taken
    as absent, as [linux] `tmu.c` `tb_switch_tmu_enhanced_is_supported`
    decides per router), its lane 0 adapter's TMU_ADP_CS_8 Enable Enhanced
@@ -1742,7 +1753,7 @@ sequences ([linux] `tb.c` `tb_scan_port`, `switch.c`, `lc.c`, `tunnel.c`,
 `path.c`). The owner's decision of 2026-10-15 puts it in this phase with
 nothing cut (decision U6, changed by the Linux reading from "unsupported"):
 an explicit task (40-A.8), PCIe tunnel first, at depth 1. What a device
-router reporting USB4 Version 0 needs beyond section 6:
+router reporting a USB4 Version of major 0 needs beyond section 6:
 
 1. **The link**: PORT_CS_18 TCM (bit 9) set on the host's port says it runs
    in Thunderbolt 3 compatible mode ([linux] `usb4.c` `link_is_usb4`); no

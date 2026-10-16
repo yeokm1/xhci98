@@ -285,9 +285,11 @@ VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
 BOOLEAN TbtHwSoftwareNhiVersion(ULONG caps);
 
 /* The router half of test (d) and section 6.4 step 3: a router's USB4
- * Version (ROUTER_CS_4 31:24) - TBT_HW_ROUTER_USB4 for 20h and 40h,
- * TBT_HW_ROUTER_TBT3 for 00h, TBT_HW_ROUTER_RESERVED for any other value.
- * Any IRQL. */
+ * Version (ROUTER_CS_4 31:24), decided by its major (bits 7:5 of the
+ * byte) alone, as Linux does - TBT_HW_ROUTER_TBT3 for major 0 (00h to
+ * 1Fh), TBT_HW_ROUTER_USB4 for major 1 (USB4 1.x, 20h to 3Fh) and major 2
+ * (USB4 2.x, 40h to 5Fh), TBT_HW_ROUTER_RESERVED for any other major or a
+ * value wider than a byte. Any IRQL. */
 #define TBT_HW_ROUTER_USB4          1UL
 #define TBT_HW_ROUTER_TBT3          2UL
 #define TBT_HW_ROUTER_RESERVED      3UL

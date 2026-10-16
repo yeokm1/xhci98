@@ -1971,7 +1971,7 @@ static BOOLEAN tbtU4TmuOff(PTBT_U4CM cm, PTBT_U4_PORT p)
             (v & TBT_TMU_ADP3_UDM) != 0) {
             return FALSE;
         }
-        if (rt->Usb4Version == TBT_USB4_VERSION_2_0) {
+        if (TBT_USB4_VERSION_MAJOR(rt->Usb4Version) == TBT_USB4_MAJOR_2) {
             if (tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
                         rt->Adp[adp].CapTmu + TBT_TMU_ADP_CS_8, &v) != TBT_OK ||
                 (v & TBT_TMU_ADP8_EUDM) != 0) {
@@ -4674,7 +4674,8 @@ static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
                     l->ParentLane0 = a;
                     l->ParentLaneCap = s->Adp[a].CapLane;
                     l->Child = child;
-                    l->ChildTbt3 = (BOOLEAN)(TBT_RTR4_VERSION(v[4]) == TBT_USB4_VERSION_TBT3);
+                    l->ChildTbt3 = (BOOLEAN)(TbtHwRouterVersion(TBT_RTR4_VERSION(v[4])) ==
+                                             TBT_HW_ROUTER_TBT3);
                     l->ChildLc = 0;
                     l->ChildUuid[0] = v[7];
                     l->ChildUuid[1] = v[8];
