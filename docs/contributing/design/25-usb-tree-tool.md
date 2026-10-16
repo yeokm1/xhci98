@@ -1,6 +1,6 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 9, 2026-10-16. Revision 7 adds Safely Remove for plain USB
+Status: revision 12, 2026-10-16. Revision 7 adds Safely Remove for plain USB
 devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
 decision T6; sections 1.3, 3.1, 7.1, 7.3, 11, 12 and 14 change with it.
 Revision 6 was reviewed and revised five times the night before; the code
@@ -31,6 +31,18 @@ read as `XHCISNAP` reads them, with no change to that driver (section
 4.6); each controller has a "Driver log" node, and Save Report and
 `/report` carry both logs (section 3.5). Sections 1.2, 3.1, 4.2, 7.3, 10,
 11 and 12 change with it.
+
+Revision 12, 2026-10-16 (the owner): the tool shows PCI details Windows
+does not, read-only, through this package's drivers: a "PCI
+configuration" node under each NHI and each xhci98 controller (section
+3.6). `xhcicm.sys`'s query device answers a third request with the
+configuration space of the NHI, of each tunnel port and, on 2000 and
+later, of every function below a tunnel port (section 4.7); `xhci98.sys`'s
+door serves its controller's configuration space as snapshot region 4
+(section 4.8), the one change to that driver this record makes, which
+reopens decision T3 for that region alone. Sections 1.2, 10, 11 and 12
+change with it. (Revisions 10 and 11 are on the `3.0.0.0` line: the
+per-user start at login and the elevated stop.)
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
@@ -85,6 +97,10 @@ authentication material.
   not changed (decision T3).
 - Since revision 9, both drivers' logs and counters, read live, in the
   window and the report (sections 3.5, 4.5 and 4.6).
+- Since revision 12, the PCI configuration of the NHI, its tunnel ports,
+  the functions below them and each xhci98 controller, read-only, in the
+  window and the report (sections 3.6, 4.7 and 4.8); `xhci98.sys` changes
+  for that one read-only region (decision T3).
 - An application icon (owner): `xhcitr\xhcitr.ico`, drawn for this project
   (section 9).
 
@@ -251,6 +267,49 @@ branch, marked "(behind <router name>)".
   `.`. The details pane and the report hold the whole of both logs
   (16 KiB of ring each) with room to spare.
 
+### 3.6 PCI configuration (revision 12)
+
+- **Where.** A "PCI configuration" node follows the "Driver log" node
+  under each NHI and each xhci98 controller. A refresh adds it and reads
+  nothing; selecting it reads then (sections 4.7 and 4.8), and so does
+  Save Report and `/report`, once per node. Kept apart from the Resources
+  section (Windows' own allocations): different nodes, functions and
+  files (`xhcitr\tr_pci.c`).
+- **What it shows**, per function: vendor and device, revision,
+  subsystem (a type 0 header's, or a bridge's subsystem capability),
+  class, header type; Command and Status with their bits named; the
+  interrupt pin and line ("Interrupt pin INTA, line 10"); the BARs as
+  read, raw, with their encoding (I/O, 32- or 64-bit memory,
+  prefetchable) - never sized, since sizing writes configuration space;
+  for a type 1 header the buses ("primary 06, Bus 07-08") and the I/O,
+  memory and prefetchable windows ("Window E0000000-E00FFFFF", or
+  "none"); then the capability list: MSI with its enable state and vector
+  count ("MSI: present, disabled (1 vector)"), MSI-X with its table size
+  and enable state, PCI Express with its device or port type and the link
+  ("PCIe link: Gen 3 x4 (capable Gen 3 x4)"), power management with its
+  state, and any other capability by id; "not present" for MSI, MSI-X or
+  PCI Express where the list has none.
+- **The walk.** The capability list is walked only where the Status
+  register's Capabilities List bit is set; each pointer is masked to a
+  DWORD, below 40h ends the walk as invalid, a pointer seen before ends
+  it as a loop, and it stops at 48 entries (the most the 192 bytes can
+  hold); a capability whose registers lie past the 256 bytes read is
+  named and not decoded. Each case is said in the text.
+- **The NHI's node** lists the NHI, each tunnel port (with its source
+  and whether it is active), and below each port the functions found
+  there, indented by bridge depth; on 98 SE and ME "Not read on this
+  system" stands for them (section 4.7). **An xhci98 controller's node**
+  shows the controller.
+- **Text.** Every line within 79 columns; the host suite holds it on a
+  worst case. The constants are `tr_pci.c`'s own, each cited to the PCI
+  Local Bus Specification 3.0, the PCI-to-PCI Bridge Architecture
+  Specification 1.2, the PCI Bus Power Management Interface
+  Specification 1.2 or the PCI Express Base Specification 4.0, by
+  section; nothing is taken from a Microsoft header.
+- **Older drivers.** A driver from before revision 12 is said as "Not
+  served by this xhcicm.sys" or "Not served by this xhci98.sys: it is
+  older than this tool".
+
 ## 4. The query device in `xhcicm.sys`
 
 ### 4.1 Why
@@ -276,7 +335,8 @@ unelevated user can open it on every target is read by leg T.1 (section
   `IRP_MJ_CREATE` succeeds only with an empty file name (anything after
   the device name is refused), `CLEANUP` and `CLOSE` succeed,
   `DEVICE_CONTROL` answers `CM_Q_IOCTL` alone (and, since revision 9,
-  `CM_QL_IOCTL`, section 4.5), everything else fails with
+  `CM_QL_IOCTL`, section 4.5; since revision 12, `CM_QP_IOCTL`, section
+  4.7), everything else fails with
   `STATUS_INVALID_DEVICE_REQUEST`, and PnP and power never reach it.
 - **Name.** `\Device\XhciCm<n>`, linked as `\DosDevices\XHCICM<n>`, `n`
   the first free of 0..15, created in the start IRP's system context (so
@@ -455,6 +515,84 @@ tool does not know is shown as such, not decoded.
   `src\xhci_counters.h` field by field by offset); a word past the table is
   "counter N". Nonzero counters only, as `XHCISNAP` prints them.
 - Nothing of the extension image but the ring is kept, shown or saved.
+
+### 4.7 `IOCTL_XHCICM_PCI` (revision 12)
+
+A third request on the same device, as section 4.5's was a second:
+`CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA42, METHOD_BUFFERED, FILE_ANY_ACCESS)` =
+`0x00222908`, no input, the same access rules and removed-device answer,
+and `XCMQ`'s sizing rules (under 64 bytes `STATUS_BUFFER_TOO_SMALL`; under
+the whole answer the header alone with the size needed). A driver from
+before revision 12 answers `STATUS_INVALID_DEVICE_REQUEST`. The layout is
+`src\cm\cm_query.h`'s `CM_QP_*`: a 64-byte header (magic `XCMP`, version
+1, size, flags, the start epoch, the entries' offset and shape, the NHI's
+location, the members listed, the reads made and refused), then one
+288-byte entry per function: a 32-byte head (location, role - NHI, tunnel
+port, below a port - state - read, not read on this system, refused,
+absent - the port it is below, the bridge it is behind, its depth, a
+port's source and flags) and the function's configuration space 00h to
+FFh as read. The tool decodes it; the driver interprets nothing but the
+header type and bus numbers its walk needs.
+
+- **Read at the request**, on the caller's thread at `PASSIVE_LEVEL`,
+  through `HalGetBusData` from offset 0 - the reads `cm_reenum.c` and
+  `tbt_topo.c` already make of the same functions on every target - and
+  never written. The functions to read are what the thread published with
+  its last answer (the NHI's location and its domain's tunnel-port set,
+  copied under the device's lock in `CmQueryPublish`); the reads hold no
+  lock and follow no pointer to the NHI, so section 4.2's rule holds for
+  this request. One request at a time builds into a buffer in the
+  device's extension (a synchronization event); the answer is copied out
+  from it.
+- **The walk below a port** (2000 and later): the port's secondary bus,
+  then the secondary bus of each bridge found there whose numbers lie
+  inside the port's secondary-to-subordinate range and above its own bus,
+  each bus once; 32 devices a bus, eight functions where function 0 says
+  multi-function. Bounds: 32 functions below all ports, 16 buses a port,
+  8 bridges deep, 4 ports; a bound reached sets `CM_QP_F_TRUNCATED`, so
+  the largest answer is 64 + 37 x 288 = 10,720 bytes and the tool's first
+  buffer (16 KiB) holds it. A port with no bus numbers has nothing below.
+- **Windows 98 SE and ME**: the NHI and the tunnel ports are read; the
+  functions below are not (one entry a port, "not read on this system").
+  A bus a tunnel brings up after boot is not numbered by `PCI.VXD` (record
+  21 section 6.1), and the route that reads below a port with a guard
+  is branch `tb-code29`'s `PCI.VXD` `_PCI_Read_Config`, not yet on this
+  line; once it is, this request moves to it.
+- **No kernel address.** The answer holds configuration space and the
+  driver's own counts. The BARs and bridge windows are bus addresses,
+  shown by the owner's request; they are the ranges Device Manager's
+  Resources tab shows any user.
+- **Why `HalGetBusData` and not `IRP_MN_READ_CONFIG`** from the bridge
+  and child filters: the filters exist on NT only, a child filter only
+  for a device plugged after the bridge became active (record 21 section
+  7.4), and reaching one from the query device would need a reference on
+  a filter's lifetime; `HalGetBusData` reaches every function the walk
+  names on every target, with no stack.
+
+### 4.8 `xhci98.sys`'s PCI region (revision 12)
+
+The door's snapshot (record 13 section 8.8) gains region 4,
+`XHCI_SNAPSHOT_REGION_PCI` (`src\xhci.h`): the controller's configuration
+space 00h to FFh, byte for byte, read when the window is cut, one DWORD
+at a time through `HcdSvcConfigSpace`'s `IRP_MN_READ_CONFIG` to the PCI
+PDO - the route every configuration access of that driver takes - at
+`PASSIVE_LEVEL` under the door gate, before the power gate and the
+controller lock; never written, read in no interrupt, transfer or power
+path, and the last-access diagnostics that route keeps are put back. A
+refused read, or a first DWORD of all ones, answers
+`XHCI_SNAPSHOT_S_NOT_READ` with no payload; the window never fails for
+it.
+
+- **Every verbosity.** Regions 0 to 3 are refused at `XhciLogVerbosity`
+  0 as before; region 4 is answered at every level, 0 included, because
+  0 is the default and the region is not the log channel: it holds no
+  driver state and no kernel address.
+- **Compatibility.** The schema stays 5 and regions 0 to 3 are unchanged.
+  An older driver answers region 4 with `XHCI_SNAPSHOT_S_BAD_REGION`, or
+  at level 0 not at all; the tool says "not served by this xhci98.sys"
+  for both. An older tool never asks.
+- The tool asks one window at offset 0 and decodes it only when it holds
+  the whole 256 bytes.
 
 ## 5. The USB branch
 
@@ -878,6 +1016,16 @@ the ring by its head and used count, the HCD region's shape, the counter
 names held to `src\xhci_counters.h`, the level-4 withholding, the
 recording-off advice) in `test\test_trlog.c`.
 
+Revision 12: the PCI answer's builder (`src\cm\cm_qpci.c`, over modelled
+buses: a dock's chain, a loop, a bus outside the port's range, a chain
+deeper than the bound, more functions and buses than the answer holds, a
+refused read, an absent function, 98's "not read", the sizing answers)
+and the tool's reader and decoders (`xhcitr\tr_pci.c`: the answer's bad
+shapes, pin and line, MSI, MSI-X, the link, BARs, windows, the capability
+walk with a clear Status bit, a loop, a self loop, a bad and an unaligned
+pointer, a cut and a capability past the 256 bytes, xhci98's region
+answers, 79 columns on a worst case) in `test\test_trpci.c`.
+
 ## 11. Legs
 
 | Leg | Systems | What it reads |
@@ -890,6 +1038,7 @@ recording-off advice) in `test\test_trlog.c`.
 | T.6 | every target | the record 24 legs of XHCIINST still pass with the changed `xhcicm.sys` |
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
 | T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
+| T.9 | 98 SE (TB3 enclosure), 7 x86 as a standard user; xhci98's node on 98 SE, ME, 2000, XP, 7 x86 and 7 x64 | revision 12: the NHI's node shows the NHI and the tunnel port with pin and line and capabilities; below the port, the enclosure's functions on 7 and "not read on this system" on 98 SE; xhci98's controller decoded at the default verbosity 0; `/report` holds both; with the HCD regression (enumeration, a mass-storage copy, an unplug and re-plug) on each of the six |
 
 ## 12. Decisions
 
@@ -904,7 +1053,12 @@ recording-off advice) in `test\test_trlog.c`.
   section 8) give the USB branch everything but the negotiated SuperSpeed
   lane rate and count; the BOS gives what a device supports, and the tool
   labels it so. A change to the HCD this close to the cut would reopen its
-  whole regression for that one detail.
+  whole regression for that one detail. **Revised by revision 12** (the
+  owner's PCI request, 2026-10-16): the controller's configuration space
+  is in neither the HCD region nor anything else the door serves, and no
+  user-mode route reads it, so `xhci98.sys` gains one read-only snapshot
+  region (section 4.8) and nothing else; the HCD's regression is run
+  again for it. The negotiated lane rate and count stay "not reported".
 - **T4** No new install question; `/notray` opts out of the Run value.
 - **T5** The tool links `inst_core.c` for record 24's rules and texts, and
   shares XHCIINST's mutex, with a security descriptor both can open.
@@ -949,6 +1103,19 @@ recording-off advice) in `test\test_trlog.c`.
   (decision T3). At level 4 the tool withholds the ring rather than pick
   the address records out of it by label: the level-4 guarantee is the
   driver's, and a label list in the tool would drift from it.
+
+- **T15** (owner, revision 12) A "PCI configuration" view, read-only,
+  through this package's own drivers: the NHI, its tunnel ports and the
+  functions below them through `xhcicm.sys`'s query device, each xhci98
+  controller through its door; the BARs raw, never sized.
+- **T16** The PCI answer is read at the request, not snapshotted by the
+  thread (as decision T13 chose for the log): a pass would read every
+  function's 256 bytes whether anyone asked or not. It is configuration
+  space as read, decoded by the tool, so the driver carries no decoder
+  that could drift from the tool's.
+- **T17** xhci98's region 4 is served at `XhciLogVerbosity` 0, the default,
+  while regions 0 to 3 stay shut there: otherwise no default install would
+  show it, and the region carries no log, no driver state and no address.
 
 ## 13. Open
 

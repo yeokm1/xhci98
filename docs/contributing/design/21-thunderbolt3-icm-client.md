@@ -2395,6 +2395,25 @@ verbosity. Three records carry an address as their value
 `cm.reenum.9x.gone.superseded` and `.id-changed`, a CONFIGMG devnode
 handle); the answer withholds their values.
 
+Design record 25's revision 12 (owner, 2026-10-16) adds a third request,
+`IOCTL_XHCICM_PCI` (`0x00222908`, answer `XCMP` version 1, record 25
+section 4.7): the configuration space of the NHI, of each member of the
+domain's tunnel-port set (section 6.3) and, on Windows 2000 and later, of
+the functions below each member, read at the request through the same
+`HalGetBusData` reads from offset 0 that section 6.1 and `tbt_topo.c`
+make, and never written. The members are those the thread last published
+with the query answer. The walk below a member follows section 6.3's bus
+numbers - a bridge's secondary bus is entered only inside the member's
+own secondary-to-subordinate range and above its parent's, each bus once
+- and is bounded (32 functions, 16 buses a member, 8 bridges deep). On
+Windows 98 SE and ME the functions below a member are not read: section
+6.1's `PCI.VXD` does not number a bus a tunnel brings up after boot, and a
+read of a bus number nobody assigned is not made; branch `tb-code29`'s
+`PCI.VXD` read route, with its guard, is where that half goes once it is
+on this line. Nothing of sections 6 and 7 changes: no filter, child filter
+or CONFIGMG call is involved, and the request takes no lock the thread
+holds across a configuration access.
+
 The clock behind every wait and every time in the log is the tick count,
 `KeQueryTickCount` times `KeQueryTimeIncrement` (`cm_thr.c`): monotonic,
 unlike the system time, which a user or a time service may set.

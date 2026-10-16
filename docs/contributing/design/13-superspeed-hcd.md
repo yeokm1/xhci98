@@ -3597,6 +3597,17 @@ system buffer is non-paged already). Answering request 1 for `usbui.dll` and
 request 3 for the tool from one dispatcher keeps the "8-entry table" refusal
 semantics.
 
+**Region 4, PCI configuration** (`3.0.0.0`, design record 25 revision 12,
+section 4.8): the controller's configuration space 00h to FFh, read when
+the window is cut, one DWORD at a time through `HcdSvcConfigSpace`'s
+`IRP_MN_READ_CONFIG` at PASSIVE under the door gate, before the power gate
+and the controller lock, and never written; `XHCI_SNAPSHOT_S_NOT_READ`
+(`0x40`) with no payload where a read is refused or the first DWORD reads
+all ones. It is the one region answered at `XhciLogVerbosity` 0: the
+"channel shut" clause above (status 6) still holds for regions 0 to 3. The
+schema stays 5; an older driver answers region 4 with
+`XHCI_SNAPSHOT_S_BAD_REGION`, and `XHCISNAP` never asks for it.
+
 What does change in the tool: (a) its software-key finder, which accepts a
 key on `NTMPDriver = xhci98.sys` or the miniport's `InfSection`
 (`xhcisnap.c` about lines 1466-1640), learns the HCD INFs' section names (the

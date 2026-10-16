@@ -190,6 +190,10 @@ On Vista x64 and 7 x64:
 
 - **The drivers' logs:** each xHCI controller and each Thunderbolt or USB4 controller has a "Driver log" item. Select it to see the driver's counters and its log, read from the running driver. Save Report includes both logs, so you can send one without a debug build.
 - **When a log is off** (the default), the item says how to turn it on. For `xhci98.sys`, run `SNAPON.BAT` and restart. For `xhcicm.sys`, set `XhciLogVerbosity` to `2` on the key the item names, then restart. The release notes' "The log, and how to send one" has the details.
+- **PCI configuration:** each xHCI controller the xhci98 driver runs, and each Thunderbolt or USB4 controller, has a "PCI configuration" item. It shows what Windows does not: the interrupt pin and line, MSI and MSI-X, the PCI Express link speed and width, the BARs, and a bridge's buses and windows.
+  - Under a Thunderbolt or USB4 controller it lists the controller, its tunnel ports and the devices behind them.
+  - On Windows 98 SE and ME the devices behind a tunnel port read "not read on this system".
+  - The drivers only read; nothing is changed. Save Report includes it.
 
 `INSTALL /notray` installs without starting it at login. It is also in the package at `tools\xhcitr\`.
 
