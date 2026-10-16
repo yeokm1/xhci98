@@ -476,7 +476,7 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
 | `XhciCmCmdTimeoutMs` | `5000` | Firmware connection manager: the wait for a command's answer, in ms (`1000` to `60000`), three tries |
 | `XhciCmApproveTimeoutMs` | `10000` | Firmware connection manager: the wait for an approval's answer, in ms, the same bounds |
-| `XhciCmLogVerbosity` | `2` | The driver's log, on the same `0`-`4` ladder as `xhci98.sys`'s `XhciLogVerbosity`; read by the xHCI98 USB Tree. Where it is absent, `3.0.0.0` reads the earlier name `XhciLogVerbosity` from the same key |
+| `XhciCmLogVerbosity` | `2` | The driver's log, on the same `0`-`4` ladder as `xhci98.sys`'s `XhciLogVerbosity`; read by the xHCI98 USB Tree |
 | `XhciCmLogDebugView` | `0` | `1` sends the driver's log to DebugView as well, in every build (the `debug` build always does) |
 
 The install tool asks "Install Thunderbolt 3 / USB4 support?": Enter
@@ -3481,8 +3481,7 @@ off, the node says how to turn it on:
   node names the key in full (the "Driver key" its details show, under
   `HKEY_LOCAL_MACHINE`). On 2000 and later that needs an administrator; the
   tool itself never writes the registry. Its counters are shown whatever
-  the level. Builds before `3.0.0.0` named the value `XhciLogVerbosity`;
-  `3.0.0.0` still reads that name where the new one is absent.
+  the level.
 
 `xhcicm.sys` also prints its log to a debugger's output (DebugView) when
 `XhciCmLogDebugView` is `1` on the same key, in every build, from its own

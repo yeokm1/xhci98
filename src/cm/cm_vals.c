@@ -329,26 +329,6 @@ VOID CmValuesTake(PCM_VALUES v, ULONG index, ULONG found, ULONG raw)
     }
 }
 
-VOID CmValuesTakeOldLog(PCM_VALUES v, ULONG newPresent, ULONG found,
-                        ULONG raw)
-{
-    if ((v->Found & (1UL << CM_VAL_LOG_VERBOSITY)) != 0) {
-        v->LogFrom = CM_LOG_FROM_NEW;
-        return;
-    }
-    if (newPresent) {
-        v->Refused |= 1UL << CM_VAL_LOG_VERBOSITY;
-        v->LogFrom = CM_LOG_FROM_REFUSED;
-        return;
-    }
-    if (!found) {
-        v->LogFrom = CM_LOG_FROM_DEFAULT;
-        return;
-    }
-    CmValuesTake(v, CM_VAL_LOG_VERBOSITY, 1, raw);
-    v->LogFrom = CM_LOG_FROM_OLD;
-}
-
 VOID CmValuesTakeBridge(PCM_VALUES v, const WCHAR *text, ULONG chars)
 {
     ULONG i;

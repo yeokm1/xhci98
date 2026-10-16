@@ -175,8 +175,7 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_VAL_APPROVE_TIMEOUT_MS 5  /* XhciCmApproveTimeoutMs              */
 #define CM_VAL_SAFE_EJECT         6  /* XhciCmSafeEject, D10 (task 39-A.8)  */
 #define CM_VAL_LOG_VERBOSITY      7  /* XhciCmLogVerbosity, the shared
-                                        ladder (XhciLogVerbosity before
-                                        3.0.0.0: CmValuesTakeOldLog)   */
+                                        ladder                         */
 /* The USB4 profile's (design record 22 section 12, task 40-A.6). */
 #define CM_VAL_USB3_TUNNEL        8  /* XhciCmUsb3Tunnel, decision U3       */
 #define CM_VAL_LANE_BONDING       9  /* XhciCmLaneBonding, decision U4      */
@@ -186,13 +185,6 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_VAL_LOG_DEBUGVIEW     11  /* XhciCmLogDebugView                  */
 #define CM_VAL_COUNT             12
 
-/* Which name CM_VAL_LOG_VERBOSITY was read under (CM_VALUES.LogFrom). */
-#define CM_LOG_FROM_DEFAULT       0  /* neither present: the default        */
-#define CM_LOG_FROM_NEW           1  /* XhciCmLogVerbosity                  */
-#define CM_LOG_FROM_OLD           2  /* XhciLogVerbosity, the fallback      */
-#define CM_LOG_FROM_REFUSED       3  /* XhciCmLogVerbosity exists but is not
-                                        a DWORD: refused, the default, the
-                                        old name not read                  */
 
 /* XhciCmMode (record 21 section 8, decision D11). */
 #define CM_MODE_OFF       0  /* bind, log, touch nothing                    */
@@ -233,7 +225,6 @@ typedef struct _CM_VALUES {
     WCHAR TunnelBridge[CM_TUNNEL_BRIDGE_CHARS];  /* NUL-terminated          */
     ULONG TunnelBridgeChars;    /* 0: no override                           */
     ULONG TunnelBridgeRefused;  /* present and too long                     */
-    ULONG LogFrom;              /* CM_LOG_FROM_*                            */
     ULONG BridgeNumbering;      /* XhciCmBridgeNumbering as run with        */
     ULONG BridgeNumberingFound; /* read as a REG_DWORD                      */
     ULONG BridgeNumberingRaw;   /* ... what it read                         */
@@ -251,16 +242,6 @@ VOID CmValuesDefault(PCM_VALUES v);
  */
 VOID CmValuesTake(PCM_VALUES v, ULONG index, ULONG found, ULONG raw);
 
-/*
- * After CmValuesTake has taken CM_VAL_LOG_VERBOSITY under its own name,
- * XhciCmLogVerbosity: where that does not exist at all (newPresent 0),
- * the name before 3.0.0.0, XhciLogVerbosity in the same key (found, raw),
- * is taken in its place, for this one release (the owner, 2026-10-16).
- * Where it exists but is not a DWORD it is refused (the default stands)
- * and the old name is not taken. Sets LogFrom.
- */
-VOID CmValuesTakeOldLog(PCM_VALUES v, ULONG newPresent, ULONG found,
-                        ULONG raw);
 
 /*
  * Take XhciCmTunnelBridge: `chars` WCHARs, not counting any terminator. An

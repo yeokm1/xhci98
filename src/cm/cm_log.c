@@ -2,8 +2,7 @@
  * cm_log.c - xhcicm.sys's use of the shared log ring (src\xhci_log.c,
  * compiled into this binary by path; record 21 section 8).
  *
- * Recording follows the shared ladder: XhciCmLogVerbosity (XhciLogVerbosity
- * before 3.0.0.0, read as a fallback for this one release; cm_reg.c) 2 and
+ * Recording follows the shared ladder: XhciCmLogVerbosity (cm_reg.c) 2 and
  * up fills the ring (xhci_log.h). Emission is the owner's decision of
  * 2026-10-16, which reversed decision D12 for the release flavour, for
  * consistency with xhci98.sys: every flavour hands the ring to DbgPrint

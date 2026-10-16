@@ -32,10 +32,6 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
     L"XhciCmLogDebugView"
 };
 
-/* XhciCmLogVerbosity's name before 3.0.0.0, read where that is absent,
- * for this one release (cm_vals.h, CmValuesTakeOldLog). */
-#define CM_VALUE_OLD_LOG L"XhciLogVerbosity"
-
 /* Not written by any INF (record 21 section 8): absent is no override. */
 #define CM_VALUE_TUNNEL_BRIDGE L"XhciCmTunnelBridge"
 /* Not written by any INF either (record 21 section 6.1.1): absent is the
@@ -43,9 +39,6 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 #define CM_VALUE_BRIDGE_NUMBERING L"XhciCmBridgeNumbering"
 
 typedef struct _CM_TAKE {
-    ULONG Present;          /* the value exists, whatever its type, or a
-                               failure other than "not found" leaves that
-                               open                                      */
     ULONG Found;
     ULONG Dword;
     WCHAR Text[CM_TUNNEL_BRIDGE_CHARS + 1];
@@ -62,11 +55,10 @@ static NTSTATUS NTAPI cmTakeDword(PWSTR ValueName, ULONG ValueType,
 
     UNREFERENCED_PARAMETER(ValueName);
     UNREFERENCED_PARAMETER(Context);
-    take = (PCM_TAKE)EntryContext;
-    take->Present = 1;
     if (ValueType != REG_DWORD || ValueLength != sizeof(ULONG)) {
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
+    take = (PCM_TAKE)EntryContext;
     from = (PUCHAR)ValueData;
     take->Dword = (ULONG)from[0] | ((ULONG)from[1] << 8) |
                   ((ULONG)from[2] << 16) | ((ULONG)from[3] << 24);
@@ -111,7 +103,6 @@ static NTSTATUS NTAPI cmTakeText(PWSTR ValueName, ULONG ValueType,
 static VOID cmQuery(HANDLE key, PCWSTR name, PCM_TAKE take, ULONG text)
 {
     RTL_QUERY_REGISTRY_TABLE table[2];
-    NTSTATUS status;
 
     CmZero(table, sizeof(table));
     CmZero(take, sizeof(CM_TAKE));
@@ -121,15 +112,9 @@ static VOID cmQuery(HANDLE key, PCWSTR name, PCM_TAKE take, ULONG text)
     table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
     table[0].Name = (PWSTR)name;
     table[0].EntryContext = take;
-    status = RtlQueryRegistryValues(RTL_REGISTRY_HANDLE, (PWSTR)key, table,
-                                    NULL, NULL);
-    if (!NT_SUCCESS(status)) {
+    if (!NT_SUCCESS(RtlQueryRegistryValues(RTL_REGISTRY_HANDLE, (PWSTR)key,
+                                           table, NULL, NULL))) {
         take->Found = 0;
-        /* Only a value confirmed missing is absent: any other failure is a
-         * value that may exist and could not be read. */
-        if (status != STATUS_OBJECT_NAME_NOT_FOUND) {
-            take->Present = 1;
-        }
     }
 }
 
@@ -137,10 +122,8 @@ VOID CmReadValues(PCM_NHI nhi)
 {
     HANDLE key;
     CM_TAKE take;
-    ULONG newPresent;
     ULONG i;
 
-    newPresent = 0;
     CmValuesDefault(&nhi->Values);
     nhi->ValuesRead = 1;
     if (!NT_SUCCESS(IoOpenDeviceRegistryKey(nhi->Common.Pdo,
@@ -151,18 +134,7 @@ VOID CmReadValues(PCM_NHI nhi)
     for (i = 0; i < CM_VAL_COUNT; i++) {
         cmQuery(key, cmValueNames[i], &take, 0);
         CmValuesTake(&nhi->Values, i, take.Found, take.Dword);
-        if (i == CM_VAL_LOG_VERBOSITY) {
-            newPresent = take.Present;
-        }
     }
-    take.Found = 0;
-    take.Dword = 0;
-    /* The old name only where the new one does not exist at all: a new
-     * value of another type is refused, never replaced by the old one. */
-    if (!newPresent) {
-        cmQuery(key, CM_VALUE_OLD_LOG, &take, 0);
-    }
-    CmValuesTakeOldLog(&nhi->Values, newPresent, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_TUNNEL_BRIDGE, &take, 1);
     if (take.Found) {
         CmValuesTakeBridge(&nhi->Values, take.Text, take.TextChars);

@@ -2584,7 +2584,7 @@ its default under the don't-overwrite flag, each read once at start:
 | `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000, and held to at most 250 while any entry of the `nvme98` link-state table reads `UP` (section 7.2) |
 | `XhciCmCmdTimeoutMs` | 5000 | the ordinary ICM command timeout (section 5.5), held to 1000 to 60000, retries 3; the TR and ICL `driver ready` timeouts and tries of section 1.4.4 take precedence for that command |
 | `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
-| `XhciCmLogVerbosity` | 2 | the shared log rule (the `0`-`4` ladder of `xhci_log.h`); named `XhciLogVerbosity` before `3.0.0.0`, which name is read, for that release alone, where `XhciCmLogVerbosity` is absent, and the counters say which (`cm.log.verbosity-from`: 1 the new name, 2 the old, 0 neither) (owner, 2026-10-16) |
+| `XhciCmLogVerbosity` | 2 | the shared log rule (the `0`-`4` ladder of `xhci_log.h`); its own name, as every value of this driver, and the only one read: `xhcicm.sys` was never released under another (owner, 2026-10-16) |
 | `XhciCmLogDebugView` | 0 | 1 hands the log to `DbgPrint` in every flavour, as `xhci98.sys`'s `XhciLogDebugView` does; 0 to 1, refused otherwise (owner, 2026-10-16: the reversal of decision D12 below) |
 
 Installing the package is already the user's choice of this driver, so the
@@ -2649,9 +2649,7 @@ do, as before. `cm_log.obj` stays the binary's one
 4 the emission withholds the value of each address record
 (`CmQueryLogLine`, the query answer's rule), and a first line the wrap
 may have cut since the last drain is not printed, so no flavour publishes
-an address below the level that asks for one. An `XhciCmLogVerbosity`
-that exists but is not a `DWORD` is refused (the default stands) and the
-old name is not read in its place (`cm.log.verbosity-from` 3).
+an address below the level that asks for one.
 The counters are no longer only written at stop: the thread formats them
 after each pass in the stop dump's names, the child filters' attached,
 skipped and refused among them, and the query device serves them at every
