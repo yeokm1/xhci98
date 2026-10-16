@@ -527,3 +527,19 @@ router found tunnelled at the start is adopted without it, so the tool
 shows the dock unnamed until a re-plug. The dock works either way.
 
 - [ ] TB3NAME.1 the DROM read for an adopted or resumed Thunderbolt 3 router, outside the resume budget (deferred to the connection-manager thread once the resume is done); host cases on the fake fabric; legs on 98 SE and 7 x86 with the dock attached across a suspend and at power-on
+
+## Planned - A Tunnelled Function With No Interrupt on Windows 98 SE and ME
+
+Goal: a function behind a tunnel that Windows 98 SE or ME can give no
+IRQ still starts, so that a driver that polls (Stor98's planned polling
+mode) can run it.
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 by
+the owner, after the hot-plug fix of 9x bridges (record 21 section 6,
+`XhciCmBridgeNumbering`) read on the owner's ThinkPad P14s Gen 1: there
+the IRQ the firmware routes is provable and set, but on a machine whose
+routing gives no provable IRQ for the tunnel's root port, or for a
+function with no interrupt pin (MSI only, which 9x cannot use), Windows
+98 disables the function (Code 29) before its driver loads.
+
+- [ ] NOIRQ.1 a design record: how a 9x function with an interrupt pin and no routable IRQ can be started without one (its logical configuration, CONFIGMG, what PCI.VXD requires), with only documented means; the pairing with Stor98's polling mode (Stor98 `docs/PLAN.md`); legs on 98 SE and ME with the IRQ withheld
