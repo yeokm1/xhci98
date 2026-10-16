@@ -4,8 +4,8 @@
  * printf, the USB IOCTL answers read as bytes, the descriptor decoders
  * over well-formed, truncated and malformed input, xhcicm.sys's query
  * answer and its refusals, the status record's texts, the tray's event
- * diff, the tree's keys, the command line, the report's layout and the
- * packed request sizes.
+ * diff, the tree's keys, the command line, the report's layout, the
+ * packed request sizes and the drivers' logging levels.
  *
  * cm_live.h is not included: it needs the driver's compatibility header.
  * tr_live_text is checked for every state against the texts instead.
@@ -1991,6 +1991,268 @@ static void test_elevated_stop(void)
           "a crash: look before unplugging");
 }
 
+/* ---- the drivers' logging levels (record 25 section 7.5) ----------------- */
+
+static void test_levels(void)
+{
+    char err[256];
+    char line[128];
+    char msg[512];
+    char *av[8];
+    TR_OPTS o;
+    TR_RVAL cur;
+    TR_LEVEL l;
+    TR_LEVEL ls[3];
+    TR_TEXT t;
+    int drv;
+    int lv;
+    int code;
+    TR_U32 k;
+    int maxLen = 0;
+
+    /* The level text, one line per level. */
+    CHECK(strcmp(tr_level_text(0), "off") == 0 &&
+              strcmp(tr_level_text(1), "counters only") == 0 &&
+              strcmp(tr_level_text(2), "the log (default)") == 0 &&
+              strcmp(tr_level_text(3), "adds port status") == 0 &&
+              strcmp(tr_level_text(4), "adds memory addresses (for developers)") == 0,
+          "levels: the owner's words, 0 to 4");
+    CHECK(tr_level_text(5) == NULL && tr_level_text(0xFFFFFFFFUL) == NULL,
+          "levels: no text out of range");
+    CHECK(strcmp(tr_level_driver(TR_LV_XHCI98), "xhci98") == 0 &&
+              strcmp(tr_level_driver(TR_LV_XHCICM), "xhcicm") == 0 &&
+              tr_level_driver(2) == NULL && tr_level_driver(-1) == NULL,
+          "levels: the drivers' names");
+
+    /* Reading: each driver's one value. */
+    cur.State = TR_RV_ABSENT;
+    cur.Value = 0;
+    tr_level_pick(&cur, &l);
+    CHECK(l.State == TR_RV_ABSENT && l.Level == TR_LV_DEFAULT,
+          "an absent value reads as the default 2");
+    tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
+    CHECK(strcmp(line, "2 - the log (default) (no value set)") == 0,
+          "xhci98: absent, the line");
+    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
+    CHECK(strcmp(line, "2 - the log (default) (no value set)") == 0,
+          "xhcicm: absent, the line");
+    cur.State = TR_RV_DWORD;
+    cur.Value = 3;
+    tr_level_pick(&cur, &l);
+    CHECK(l.Level == 3, "3 read");
+    tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
+    CHECK(strcmp(line, "3 - adds port status (XhciLogVerbosity)") == 0,
+          "xhci98: 3, the line names its value");
+    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
+    CHECK(strcmp(line, "3 - adds port status (XhciCmLogVerbosity)") == 0,
+          "xhcicm: 3, the line names its value");
+    CHECK(strcmp(tr_level_value_name(TR_LV_XHCI98), "XhciLogVerbosity") == 0 &&
+              strcmp(tr_level_value_name(TR_LV_XHCICM), "XhciCmLogVerbosity") == 0,
+          "each driver's one value name");
+    cur.Value = 0;
+    tr_level_pick(&cur, &l);
+    CHECK(l.Level == 0, "0 is a level, not absent");
+    cur.Value = 4;
+    tr_level_pick(&cur, &l);
+    CHECK(l.Level == 4, "4 is a level");
+    cur.Value = 5;
+    tr_level_pick(&cur, &l);
+    CHECK(l.Level == -1 && l.Value == 5, "5 is out of range");
+    cur.Value = 7;
+    tr_level_pick(&cur, &l);
+    tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
+    CHECK(l.Level == -1 &&
+              strcmp(line, "7 - out of range, not 0-4 (XhciLogVerbosity)") == 0,
+          "xhci98: out of range shown as such");
+    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
+    CHECK(strcmp(line, "7 - out of range, not 0-4 (XhciCmLogVerbosity)") == 0,
+          "xhcicm: out of range shown as such");
+    cur.Value = 0xFFFFFFFFUL;
+    tr_level_pick(&cur, &l);
+    tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
+    CHECK(l.Level == -1 && strncmp(line, "4294967295 - out of range", 25) == 0,
+          "the largest DWORD, unsigned");
+    cur.State = TR_RV_OTHER;
+    tr_level_pick(&cur, &l);
+    tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
+    CHECK(l.Level == -1 && strcmp(line, "XhciCmLogVerbosity is not a REG_DWORD") == 0,
+          "another type");
+    cur.State = TR_RV_UNREAD;
+    tr_level_pick(&cur, &l);
+    tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
+    CHECK(l.Level == -1 && strcmp(line, "not read") == 0, "not read");
+
+    /* Every line fits the dialog and 79 columns with its indent. */
+    for (k = 0; k <= 12; k++) {
+        int s;
+        for (s = TR_RV_ABSENT; s <= TR_RV_UNREAD; s++) {
+            int dd;
+            for (dd = 0; dd < TR_LV_DRIVERS; dd++) {
+                cur.State = s;
+                cur.Value = k == 12 ? 0xFFFFFFFFUL : k;
+                tr_level_pick(&cur, &l);
+                tr_level_line(dd, &l, line, sizeof(line));
+                if ((int)strlen(line) > maxLen) {
+                    maxLen = (int)strlen(line);
+                }
+            }
+        }
+    }
+    CHECK(maxLen <= 72, "levels: every line at most 72 characters");
+
+    /* The block. */
+    tr_text_init(&t, big, sizeof(big));
+    tr_level_head(&t, TR_LV_XHCI98, 0);
+    tr_level_head(&t, TR_LV_XHCICM, 1);
+    cur.State = TR_RV_DWORD;
+    cur.Value = 3;
+    tr_level_pick(&cur, &l);
+    tr_level_device(&t, TR_LV_XHCICM, "Thunderbolt(TM) Controller - 15EB", &l);
+    CHECK(strcmp(big,
+                 "xhci98 (XhciLogVerbosity in each controller's driver key):\r\n"
+                 "  No USB controller is driven by xhci98.\r\n"
+                 "xhcicm (XhciCmLogVerbosity in each host interface's driver key):\r\n"
+                 "  Thunderbolt(TM) Controller - 15EB\r\n"
+                 "    3 - adds port status (XhciCmLogVerbosity)\r\n") == 0,
+          "levels: the report's block");
+
+    /* One level for all, or not. */
+    ls[0].Level = 3;
+    ls[1].Level = 3;
+    ls[2].Level = 2;
+    lv = -9;
+    CHECK(tr_level_common(ls, 2, &lv) && lv == 3, "common: two at 3");
+    CHECK(!tr_level_common(ls, 3, &lv), "common: 3, 3 and 2 differ");
+    CHECK(!tr_level_common(ls, 0, &lv), "common: none");
+    ls[0].Level = -1;
+    CHECK(!tr_level_common(ls, 1, &lv), "common: out of range is no level");
+
+    /* The arguments, strictly. */
+    CHECK(tr_level_arg("xhci98=3", &drv, &lv) && drv == TR_LV_XHCI98 && lv == 3,
+          "arg: xhci98=3");
+    CHECK(tr_level_arg("XHCICM=0", &drv, &lv) && drv == TR_LV_XHCICM && lv == 0,
+          "arg: case aside");
+    CHECK(tr_level_arg("xhcicm=4", &drv, &lv) && lv == 4, "arg: 4");
+    CHECK(!tr_level_arg("xhci98=5", &drv, &lv), "arg: 5 refused");
+    CHECK(!tr_level_arg("xhci98=-1", &drv, &lv), "arg: negative refused");
+    CHECK(!tr_level_arg("xhci98=03", &drv, &lv), "arg: two digits refused");
+    CHECK(!tr_level_arg("xhci98=", &drv, &lv), "arg: no digit refused");
+    CHECK(!tr_level_arg("xhci98 3", &drv, &lv), "arg: no = refused");
+    CHECK(!tr_level_arg("xhciuas=3", &drv, &lv), "arg: another driver refused");
+    CHECK(!tr_level_arg("xhci99=3", &drv, &lv), "arg: a near name refused");
+    CHECK(!tr_level_arg("", &drv, &lv), "arg: empty refused");
+    CHECK(!tr_level_arg("xhci98=3 ", &drv, &lv), "arg: trailing space refused");
+    CHECK(!tr_level_arg("xhci98=a", &drv, &lv), "arg: a letter refused");
+
+    av[0] = "xhcitr";
+    av[1] = "/setlevel";
+    av[2] = "xhci98=3";
+    av[3] = "xhcicm=1";
+    CHECK(tr_parse_args(4, av, &o, err, sizeof(err)) == 0 && o.SetLevel &&
+              o.Level[TR_LV_XHCI98] == 3 && o.Level[TR_LV_XHCICM] == 1 && !o.Result,
+          "/setlevel xhci98=3 xhcicm=1");
+    CHECK(tr_parse_args(3, av, &o, err, sizeof(err)) == 0 &&
+              o.Level[TR_LV_XHCI98] == 3 && o.Level[TR_LV_XHCICM] == -1,
+          "/setlevel xhci98 alone; xhcicm not asked");
+    av[2] = "xhcicm=2";
+    CHECK(tr_parse_args(3, av, &o, err, sizeof(err)) == 0 &&
+              o.Level[TR_LV_XHCI98] == -1 && o.Level[TR_LV_XHCICM] == 2,
+          "/setlevel xhcicm alone");
+    av[1] = "/tray";
+    CHECK(tr_parse_args(2, av, &o, err, sizeof(err)) == 0 &&
+              !o.SetLevel && o.Level[0] == -1 && o.Level[1] == -1,
+          "no /setlevel: no level asked");
+    av[1] = "-SETLEVEL";
+    av[2] = "xhci98=4";
+    av[3] = "/result";
+    av[4] = "Local\\Xhci98TrAnswer-12-34";
+    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 0 && o.SetLevel &&
+              o.Result && o.Level[TR_LV_XHCI98] == 4 &&
+              strcmp(o.ResultName, "Local\\Xhci98TrAnswer-12-34") == 0,
+          "/setlevel with /result, the elevated run's form");
+    av[4] = "C:\\T\\x.tmp";
+    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 1,
+          "/setlevel: /result refuses a file");
+    av[3] = "/confirmed";
+    av[4] = "0123456789ABCDEF";
+    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 1 && has(err, "/confirmed"),
+          "/setlevel: /confirmed refused");
+    av[1] = "/setlevel";
+    CHECK(tr_parse_args(2, av, &o, err, sizeof(err)) == 1 && has(err, "/setlevel"),
+          "/setlevel with no level refused");
+    av[2] = "xhci98=3";
+    av[3] = "xhci98=2";
+    CHECK(tr_parse_args(4, av, &o, err, sizeof(err)) == 1, "a driver twice refused");
+    av[3] = "xhci98=9";
+    CHECK(tr_parse_args(4, av, &o, err, sizeof(err)) == 1, "a level 9 refused");
+    av[3] = "xhcicm=3";
+    av[4] = "extra";
+    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 1, "a stray word refused");
+    av[2] = "xhci98=7";
+    CHECK(tr_parse_args(3, av, &o, err, sizeof(err)) == 1,
+          "out of range never reaches a write");
+    av[2] = "xhci98=3";
+    av[3] = "/setlevel";
+    av[4] = "xhcicm=3";
+    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 1, "/setlevel twice refused");
+    av[3] = "/eject";
+    av[4] = "id=X";
+    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 1 && has(err, "alone"),
+          "/setlevel with /eject refused");
+    av[3] = "/tray";
+    CHECK(tr_parse_args(4, av, &o, err, sizeof(err)) == 1, "/setlevel with /tray refused");
+    av[3] = "/report";
+    av[4] = "r.txt";
+    CHECK(tr_parse_args(5, av, &o, err, sizeof(err)) == 1, "/setlevel with /report refused");
+    av[1] = "/result";
+    av[2] = "Local\\Xhci98TrAnswer-1";
+    CHECK(tr_parse_args(3, av, &o, err, sizeof(err)) == 1,
+          "/result alone still refused");
+
+    /* The driver key the level is written under. */
+    CHECK(tr_driver_key_ok("{36FC9E60-C465-11CF-8056-444553540000}\\0003"),
+          "key: an NT class GUID and instance");
+    CHECK(tr_driver_key_ok("USB\\0001") && tr_driver_key_ok("System\\0012"),
+          "key: a 98 SE class name and instance");
+    CHECK(!tr_driver_key_ok(""), "key: empty");
+    CHECK(!tr_driver_key_ok("USB"), "key: no instance");
+    CHECK(!tr_driver_key_ok("USB\\"), "key: an empty instance");
+    CHECK(!tr_driver_key_ok("\\0001"), "key: no class");
+    CHECK(!tr_driver_key_ok("USB\\0001\\x"), "key: a deeper path");
+    CHECK(!tr_driver_key_ok("USB\\..\\0001"), "key: dots");
+    CHECK(!tr_driver_key_ok("..\\0001"), "key: a parent");
+    CHECK(!tr_driver_key_ok("USB\\00a1"), "key: a letter in the instance");
+    CHECK(!tr_driver_key_ok("USB\\123456789"), "key: nine digits");
+    CHECK(!tr_driver_key_ok("U SB\\0001"), "key: a space");
+
+    /* The window's result of the elevated run. */
+    code = tr_level_elev_result(0, TR_ERROR_CANCELLED, 0, 0, 0, 0, "", msg,
+                                sizeof(msg));
+    CHECK(code == INST_EXIT_REFUSED && has(msg, "Nothing was changed") &&
+              has(msg, "administrator rights were not given"),
+          "level run: cancelled");
+    code = tr_level_elev_result(0, 1155UL, 0, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK(code == INST_EXIT_REFUSED && has(msg, "error 1155"),
+          "level run: not started");
+    code = tr_level_elev_result(1, 0, 0, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK(code == INST_EXIT_FAILED && has(msg, "has not finished"),
+          "level run: no end within the wait");
+    code = tr_level_elev_result(1, 0, 1, 0, 1, 0,
+                                "xhci98: XhciLogVerbosity set to 3", msg,
+                                sizeof(msg));
+    CHECK(code == INST_EXIT_DONE && strcmp(msg, "xhci98: XhciLogVerbosity set to 3") == 0,
+          "level run: its own answer");
+    code = tr_level_elev_result(1, 0, 1, 2, 1, 0, "set", msg, sizeof(msg));
+    CHECK(code == INST_EXIT_FAILED && strcmp(msg, "set") != 0,
+          "level run: an answer whose code is not the exit code is not trusted");
+    code = tr_level_elev_result(1, 0, 1, 0, 0, 0, "", msg, sizeof(msg));
+    CHECK(code == INST_EXIT_FAILED && has(msg, "no answer"),
+          "level run: exit 0 with no answer is not success");
+    CHECK(has(tr_level_restart_question(), "only when they start") &&
+              has(tr_level_restart_question(), "Restart Windows now?"),
+          "level run: the restart offer");
+}
+
 static void test_login(void)
 {
     CHECK(tr_tray_login_start(1, 1, 0) == 0, "login: /tray with 0 stops silently");
@@ -2201,6 +2463,7 @@ int main(void)
     test_usb_eject();
     test_elevated_stop();
     test_login();
+    test_levels();
     test_labels();
     test_resources();
     {

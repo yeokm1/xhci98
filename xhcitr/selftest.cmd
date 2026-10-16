@@ -71,8 +71,9 @@ if errorlevel 1 (
     exit /b 1
 )
 del /q "%OUT%" 2>nul
-rem An unknown switch, /report without a file, /eject without id=, and a
-rem one-shot mode with company are refused with exit 1.
+rem An unknown switch, /report without a file, /eject without id=, a
+rem one-shot mode with company and a /setlevel out of its form are
+rem refused with exit 1.
 ".\%~1" /frobnicate >nul 2>&1
 if not "%ERRORLEVEL%"=="1" (
     echo ERROR: %~1 with an unknown switch was not refused with exit 1
@@ -96,6 +97,23 @@ if not "%ERRORLEVEL%"=="1" (
 if exist x.txt (
     echo ERROR: %~1 /tray /report wrote a report
     del /q x.txt
+    exit /b 1
+)
+rem /setlevel refuses anything but one or two of xhci98=<0-4> and
+rem xhcicm=<0-4>, before any device or registry value is read.
+".\%~1" /setlevel xhci98=5 >nul 2>&1
+if not "%ERRORLEVEL%"=="1" (
+    echo ERROR: %~1 /setlevel xhci98=5 was not refused with exit 1
+    exit /b 1
+)
+".\%~1" /setlevel >nul 2>&1
+if not "%ERRORLEVEL%"=="1" (
+    echo ERROR: %~1 /setlevel with no level was not refused with exit 1
+    exit /b 1
+)
+".\%~1" /setlevel xhci98=2 xhci98=3 >nul 2>&1
+if not "%ERRORLEVEL%"=="1" (
+    echo ERROR: %~1 /setlevel with a driver twice was not refused with exit 1
     exit /b 1
 )
 echo %~1: switch refusals behaved

@@ -1590,6 +1590,8 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
     int alone = 0;
 
     memset(o, 0, sizeof(*o));
+    o->Level[TR_LV_XHCI98] = -1;
+    o->Level[TR_LV_XHCICM] = -1;
     if (cap > 0) {
         err[0] = '\0';
     }
@@ -1639,18 +1641,44 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
             }
             o->Confirmed = 1;
             tr_copy(o->ConfirmedDigest, argv[++i], sizeof(o->ConfirmedDigest));
+        } else if (tr_switch(a, "setlevel")) {
+            int drv;
+            int lv;
+            if (o->SetLevel) {
+                tr_copy(err, "/setlevel is given once.", cap);
+                return 1;
+            }
+            o->SetLevel = 1;
+            while (i + 1 < argc && argv[i + 1][0] != '/' && argv[i + 1][0] != '-') {
+                if (!tr_level_arg(argv[i + 1], &drv, &lv) || o->Level[drv] >= 0) {
+                    tr_copy(err, "/setlevel takes xhci98=<0-4> and xhcicm=<0-4>, "
+                            "each once.", cap);
+                    return 1;
+                }
+                o->Level[drv] = lv;
+                i++;
+            }
+            if (o->Level[TR_LV_XHCI98] < 0 && o->Level[TR_LV_XHCICM] < 0) {
+                tr_copy(err, "/setlevel takes xhci98=<0-4> and xhcicm=<0-4>, "
+                        "each once.", cap);
+                return 1;
+            }
+            alone++;
         } else {
             tr_sprintf(err, cap, "Unknown switch %s. Use: XHCITR [/tray] "
-                       "[/eject id=<instance id>] [/report <file>]", a);
+                       "[/eject id=<instance id>] [/setlevel xhci98=<0-4> "
+                       "xhcicm=<0-4>] [/report <file>]", a);
             return 1;
         }
     }
     if (alone > 1 || (alone == 1 && o->Tray)) {
-        tr_copy(err, "/eject, /report and /selftest are each used alone.", cap);
+        tr_copy(err, "/eject, /setlevel, /report and /selftest are each used "
+                "alone.", cap);
         return 1;
     }
-    if ((o->Result || o->Confirmed) && !o->Eject) {
-        tr_copy(err, "/result and /confirmed go with /eject only.", cap);
+    if ((o->Result && !o->Eject && !o->SetLevel) || (o->Confirmed && !o->Eject)) {
+        tr_copy(err, "/result goes with /eject or /setlevel, /confirmed with "
+                "/eject only.", cap);
         return 1;
     }
     return 0;
@@ -2455,6 +2483,216 @@ const char *tr_elev_question(void)
 int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value)
 {
     return !(trayMode && haveValue && value == 0);
+}
+
+/* ---- the drivers' logging levels (section 7.5) ---------------------------- */
+
+const char *tr_level_driver(int driver)
+{
+    switch (driver) {
+    case TR_LV_XHCI98:
+        return "xhci98";
+    case TR_LV_XHCICM:
+        return "xhcicm";
+    }
+    return NULL;
+}
+
+const char *tr_level_text(TR_U32 level)
+{
+    switch (level) {
+    case 0:
+        return "off";
+    case 1:
+        return "counters only";
+    case 2:
+        return "the log (default)";
+    case 3:
+        return "adds port status";
+    case 4:
+        return "adds memory addresses (for developers)";
+    }
+    return NULL;
+}
+
+void tr_level_pick(const TR_RVAL *cur, TR_LEVEL *out)
+{
+    const TR_RVAL *r = cur;
+
+    memset(out, 0, sizeof(*out));
+    out->State = r->State;
+    out->Value = r->State == TR_RV_DWORD ? r->Value : 0;
+    switch (r->State) {
+    case TR_RV_ABSENT:
+        out->Level = TR_LV_DEFAULT;
+        break;
+    case TR_RV_DWORD:
+        out->Level = r->Value <= TR_LV_MAX ? (int)r->Value : -1;
+        break;
+    default:
+        out->Level = -1;
+        break;
+    }
+}
+
+const char *tr_level_value_name(int driver)
+{
+    return driver == TR_LV_XHCICM ? TR_LV_NAME_XHCICM : TR_LV_NAME_XHCI98;
+}
+
+void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap)
+{
+    const char *name = tr_level_value_name(driver);
+
+    switch (l->State) {
+    case TR_RV_ABSENT:
+        tr_sprintf(out, cap, "%d - %s (no value set)", TR_LV_DEFAULT,
+                   tr_level_text(TR_LV_DEFAULT));
+        break;
+    case TR_RV_DWORD:
+        if (l->Level >= 0) {
+            tr_sprintf(out, cap, "%d - %s (%s)", l->Level,
+                       tr_level_text((TR_U32)l->Level), name);
+        } else {
+            tr_sprintf(out, cap, "%lu - out of range, not 0-4 (%s)",
+                       (unsigned long)l->Value, name);
+        }
+        break;
+    case TR_RV_OTHER:
+        tr_sprintf(out, cap, "%s is not a REG_DWORD", name);
+        break;
+    default:
+        tr_copy(out, "not read", cap);
+        break;
+    }
+}
+
+void tr_level_head(TR_TEXT *t, int driver, int count)
+{
+    if (driver == TR_LV_XHCI98) {
+        tr_printf(t, "xhci98 (" TR_LV_NAME_XHCI98 " in each controller's "
+                     "driver key):\n");
+        if (count == 0) {
+            tr_put(t, "  No USB controller is driven by xhci98.\n");
+        }
+    } else {
+        tr_printf(t, "xhcicm (" TR_LV_NAME_XHCICM " in each host "
+                     "interface's driver key):\n");
+        if (count == 0) {
+            tr_put(t, "  No Thunderbolt or USB4 host interface is driven by "
+                      "xhcicm.\n");
+        }
+    }
+}
+
+void tr_level_device(TR_TEXT *t, int driver, const char *name,
+                     const TR_LEVEL *l)
+{
+    char line[96];
+
+    tr_level_line(driver, l, line, sizeof(line));
+    tr_printf(t, "  %s\n    %s\n", name, line);
+}
+
+int tr_level_common(const TR_LEVEL *l, int n, int *level)
+{
+    int i;
+
+    if (n <= 0) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (l[i].Level < 0 || l[i].Level != l[0].Level) {
+            return 0;
+        }
+    }
+    *level = l[0].Level;
+    return 1;
+}
+
+int tr_level_arg(const char *a, int *driver, int *level)
+{
+    int d;
+
+    if (strlen(a) != 8 || a[6] != '=' || a[7] < '0' || a[7] > '0' + TR_LV_MAX) {
+        return 0;
+    }
+    for (d = 0; d < TR_LV_DRIVERS; d++) {
+        const char *n = tr_level_driver(d);
+        int k = 0;
+        while (k < 6 && tr_up((unsigned char)a[k]) == tr_up((unsigned char)n[k])) {
+            k++;
+        }
+        if (k == 6) {
+            *driver = d;
+            *level = a[7] - '0';
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int tr_driver_key_ok(const char *key)
+{
+    const char *p = key;
+    size_t cls = 0;
+    size_t digits = 0;
+
+    while (*p != '\0' && *p != '\\') {
+        char c = *p++;
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '{' || c == '}' || c == '-' ||
+              c == '_')) {
+            return 0;
+        }
+        cls++;
+    }
+    if (*p != '\\' || cls == 0 || cls > 64) {
+        return 0;
+    }
+    for (p++; *p != '\0'; p++) {
+        if (*p < '0' || *p > '9') {
+            return 0;
+        }
+        digits++;
+    }
+    return digits >= 1 && digits <= 8;
+}
+
+int tr_level_elev_result(int launched, TR_U32 launchErr, int finished,
+                         TR_U32 exitCode, int haveAnswer, int answerCode,
+                         const char *answerMsg, char *out, size_t cap)
+{
+    if (!launched && launchErr == TR_ERROR_CANCELLED) {
+        tr_copy(out, "Nothing was changed: administrator rights were not "
+                "given.", cap);
+        return INST_EXIT_REFUSED;
+    }
+    if (!launched) {
+        tr_sprintf(out, cap, "Nothing was changed: the setting with "
+                   "administrator rights could not be\nstarted (error %lu).",
+                   (unsigned long)launchErr);
+        return INST_EXIT_REFUSED;
+    }
+    if (!finished) {
+        tr_copy(out, "The setting with administrator rights has not "
+                "finished. Open Logging level\nagain to see the levels.", cap);
+        return INST_EXIT_FAILED;
+    }
+    if (haveAnswer && (TR_U32)answerCode == exitCode) {
+        tr_copy(out, answerMsg, cap);
+        return answerCode;
+    }
+    tr_sprintf(out, cap, "The setting with administrator rights ended with "
+               "no answer (code %lu).\nOpen Logging level again to see the "
+               "levels.", (unsigned long)exitCode);
+    return INST_EXIT_FAILED;
+}
+
+const char *tr_level_restart_question(void)
+{
+    return "The drivers read the logging level only when they start, so the "
+           "new level takes effect after a restart.\n\nRestart Windows now?";
 }
 
 static int tr_hex4(const char *s, unsigned int *v)

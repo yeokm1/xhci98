@@ -14,6 +14,13 @@
 #define IDC_ABOUT_ICON          1002
 #define IDD_ELEVATE             103
 #define IDC_ELEV_TEXT           1003
+#define IDD_LEVEL               104
+#define IDC_LV_LIST             1004
+#define IDC_LV_NOW0             1005    /* IDC_LV_NOW0 + driver             */
+#define IDC_LV_GROUP0           1007    /* IDC_LV_GROUP0 + driver           */
+#define IDC_LV_R0               1010    /* xhci98: 1010..1014, level 0-4    */
+#define IDC_LV_R1               1020    /* xhcicm: 1020..1024               */
+#define IDC_LV_NOTE             1030
 
 #define IDM_REFRESH             40001
 #define IDM_SAVE                40002
@@ -28,6 +35,7 @@
 #define IDM_V_BEHIND            40025
 #define IDM_V_AUTO              40026
 #define IDM_LOGIN               40027
+#define IDM_LEVEL               40028
 #define IDM_EJECT               40030
 #define IDM_PROPS               40031
 #define IDM_ABOUT               40040

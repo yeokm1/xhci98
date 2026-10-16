@@ -1306,6 +1306,84 @@ Device Manager status in the report reads `0x19886ACE (started)` and on
 98 SE `0x18086ACE` - the configuration manager's status word printed as
 such, passed to the tool's owner.
 
+## Logging level (record 25 revision 13, leg T.10)
+
+2026-10-16, development host A. The package is a dry x86 TEST cut
+("logging level legs") of branch `tr-loglevel` at fb6ce506, installed with
+"Install Thunderbolt 3 / USB4 support?" answered Y on the TB3 guests of
+`E:\xhci98-vm\tr-loglevel` (w98-tb, w7-tb: an Alpine Ridge host with its
+xHCI and the tunnel bridge). The install writes `XhciLogVerbosity` 0 in
+both drivers' keys, so the dialog's first reading is xhci98 "0 - off
+(XhciLogVerbosity)" and xhcicm "0 - off (XhciLogVerbosity, old name)".
+
+### Windows 7 x86, a standard user: pass
+
+Installed as the administrator `test`, then logged on as `tuser` (Users
+only). The tray icon started for `tuser`; View ends with "Logging
+level...", and the right-click menu of each xhci98 controller and of the
+Thunderbolt 3 host interface ends with it; each node's details carry its
+"Logging level:" line. The dialog listed two xhci98 controllers and one
+host interface at the readings above, "Now: 0 - off" for both, and the
+button "Set as administrator..." with the shield.
+
+- 3 for both, Set as administrator, the credentials of `test` at User
+  Account Control: "xhci98: XhciLogVerbosity set to 3 - adds port status,
+  for 2 controllers.", "xhcicm: XhciCmLogVerbosity set to 3 - adds port
+  status, for 1 host interface." and the restart question; Yes restarted
+  Windows from `tuser`'s session (`ExitWindowsEx` as a standard user).
+- After the restart, as `tuser`: `reg query` read `XhciLogVerbosity` 0x3
+  in both controllers' keys and `XhciCmLogVerbosity` 0x3 and
+  `XhciLogVerbosity` 0x3 in the host interface's (the old value rewritten
+  because it was there); `XHCITR /report` and the dialog read "3 - adds
+  port status (XhciLogVerbosity)" twice and "3 - adds port status
+  (XhciCmLogVerbosity)", "Now: 3" for both.
+- A cancelled User Account Control prompt: "Nothing was changed:
+  administrator rights were not given."; the dialog read the stored 3
+  again.
+- 2 for both through Set as administrator: the two "set to 2 - the log
+  (default)" lines; No to the restart; the dialog and `reg query` read 2
+  for all four values.
+
+The dialog's text fits at 800 x 600; the list shows about five lines, so
+the xhcicm reading is below a scroll. The list opened with its text
+selected; Set takes the focus since ca233507 (not re-read on a guest).
+
+Afterwards (the owner, 2026-10-16): `xhcicm.sys` has never been
+released, so the tool reads and writes only `XhciCmLogVerbosity` for it;
+the old-name reading and writing read in these legs were removed (record
+25 section 7.5).
+
+### Windows 98 SE: pass
+
+Installed from `D:\PKG\INSTALL` with the Thunderbolt question answered Y
+over the gold image's older `xhci98.sys`: INSTALL said no Thunderbolt or
+USB4 controller was found, ended "not everything is done" (exit 4) and
+opened Device Manager, and Update Driver from `C:\XHCI98` (the 98 SE CD
+for `usbd.sys`) then installed `xhci98.inf` and `xhcicm.inf`; after the
+restart the root hub installed silently and the tray started. The
+dialog's first reading was the install's 0 for every device, the old
+name for xhcicm, and the right-click menus of a controller and of the
+host interface end with "Logging level...". The tree listed both
+xhci98 controllers and the Thunderbolt 3 controller ("[ICM], active");
+the dialog's button reads "Set", with no elevation, and the dialog fits a
+640 x 480 screen whole.
+
+- 3 for both, Set: the same two "set to 3 - adds port status" lines and
+  the restart question; Yes restarted Windows.
+- After the restart: `regedit /e` of `...\Services\Class` held
+  `XhciLogVerbosity`=dword:00000003 in both controllers' keys and
+  `XhciLogVerbosity` and `XhciCmLogVerbosity`=dword:00000003 in the
+  Thunderbolt 3 controller's; `XHCITR /report` read "Logging level: 3 -
+  adds port status" for each, `(XhciCmLogVerbosity)` for the host
+  interface.
+- 2 for both, Set: "xhci98: XhciLogVerbosity set to 2 - the log
+  (default), for 2 controllers.", "xhcicm: XhciCmLogVerbosity set to 2 -
+  the log (default), for 1 host interface."; the dialog then read "2 - the
+  log (default)" for every device and "Now: 2" for both.
+
+Evidence: `E:\xhci98-vm\tr-loglevel\` - `shots\lv7-*` and `lv98-*`,
+`pids.txt`, `RECIPE.txt`; the cut's log `E:\xhci98-wt\tr-loglevel\out\cut-x86.txt`.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link
