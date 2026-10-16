@@ -1509,6 +1509,35 @@ int main(void)
     test_sizes();
     test_desc_lengths();
     {
+        /* A UAS interface: bulk endpoints with companions and pipe usage. */
+        static const unsigned char uas[] = {
+            9, 2, 48, 0, 1, 1, 0, 0x80, 112,
+            9, 4, 0, 1, 2, 0x08, 0x06, 0x62, 0,
+            7, 5, 0x81, 0x02, 0x00, 0x04, 0,
+            6, 0x30, 15, 0x04, 0, 0,
+            4, 0x24, 3, 0,
+            7, 5, 0x83, 0x01, 0x00, 0x04, 1,
+            6, 0x30, 0, 0x02, 0, 0x04
+        };
+        char buf[4096];
+        char out[48];
+        TR_TEXT t;
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_dec_config(&t, uas, sizeof(uas));
+        CHECK(has(buf, "MaxStreams 4: 16 streams"), "companion: bulk MaxStreams");
+        CHECK(has(buf, "Pipe usage descriptor (UAS)") && has(buf, "3 (data-in)"),
+              "UAS pipe usage by name");
+        CHECK(has(buf, "Mult 2: up to 3 packets"), "companion: isochronous Mult");
+        tr_protocols_text(3UL, out, sizeof(out));
+        CHECK(strcmp(out, "USB 1.1, USB 2.0") == 0, "protocols: two, no stray space");
+        tr_protocols_text(4UL, out, sizeof(out));
+        CHECK(strcmp(out, "USB 3.x") == 0, "protocols: one");
+        tr_protocols_text(7UL, out, sizeof(out));
+        CHECK(strcmp(out, "USB 1.1, USB 2.0, USB 3.x") == 0, "protocols: three");
+        tr_protocols_text(0UL, out, sizeof(out));
+        CHECK(strcmp(out, "none reported") == 0, "protocols: none");
+    }
+    {
         char buf[512];
         TR_TEXT t;
         const char *two[2];
