@@ -192,8 +192,15 @@ before anything else and refuses unless it is for this architecture and
 flavour, every binary to be staged has exactly the SHA-256 recorded for it,
 the build ran in a clean tree, the tree is now at that same commit with no
 uncommitted change, and the build's import gates had their target evidence
-(or this run passes -NoTargetEvidence too). Each binary's copy is checked
-against its hash again before it is signed.
+(or this run passes -NoTargetEvidence too). Each binary is read once, into
+memory; those bytes are what is hashed, and they are written to a private
+copy that every later step reads - the flavour markers, the signing, the
+staging - so the build's file is never read again. Each copy is checked
+against its hash again just before it is signed.
+
+That protects against a mismatch by accident and another process on the
+same machine changing a binary while this runs; it is not a defence against
+someone who deliberately forges the record.
 
 What it skips is the host test suite and the import gates (and the x86
 helper's toolchain check), which are about the bytes; what it keeps is
@@ -203,7 +210,10 @@ version checks and the signature checks. The run prints which is which.
 
 .PARAMETER GatedManifestPath
 The gated build's record -SignOnly reads, overriding
-out\gated-<arch>-<flavour>.txt. Exists for the packager's own self-tests.
+out\gated-<arch>-<flavour>.txt. Exists for the packager's own self-tests:
+it is refused with -TestSignPfx and without -SignOnly, and a run that names
+it checks the record, says whether it admits the binaries, and stops there,
+staging and signing nothing.
 
 .PARAMETER Nvme98Version
 The nvme98 build to bundle (owner, 2026-10-15): nvme98 is a separate
@@ -575,7 +585,7 @@ a signed input is a binary nobody can tie to a build. Rebuild it:
     }
     Copy-Item -LiteralPath $Source -Destination $Dest -Force
     # -SignOnly: the copy about to be signed is the gated build's, checked
-    # here rather than only at the start of the run.
+    # here, just before SignTool, rather than only at the start of the run.
     if ($ExpectSha256 -ne "" -and (Get-FileSha256 -Path $Dest) -ne $ExpectSha256) {
         throw "the copy of $Label to be signed is not the binary the build gated (its SHA-256 is not $ExpectSha256); '$Source' changed during this run."
     }
@@ -634,6 +644,7 @@ $variantDir = ""
 #
 $stageDir = ""
 $signDir = ""
+$snapDir = ""
 
 try {
     Write-Step ("Package ({0}, {1}) -> {2}" -f $Flavor, $Arch, $OutDir)
@@ -661,9 +672,12 @@ time; they land in different directories on purpose.
     # (roadmap-usb4.md SIGN.1.) Checked first, so a refusal names the binary or
     # the record rather than whatever later check a stale binary would trip.
     $gated = $null
+    if ($GatedManifestPath -ne "" -and ($TestSignPfx -ne "" -or -not $SignOnly)) {
+        throw "-GatedManifestPath is for the packager's self-tests: it goes with -SignOnly and never with -TestSignPfx, so a record from anywhere but build-driver.cmd's out\ can never lead to a signature."
+    }
     if ($SignOnly) {
         Write-Step "sign-only: the gated build's record"
-        if ($TestSignPfx -eq "") {
+        if ($TestSignPfx -eq "" -and $GatedManifestPath -eq "") {
             throw @"
 -SignOnly was given without -TestSignPfx. It exists to sign the binaries a
 gated scripts\build-driver.cmd run recorded without running that run's gates
@@ -698,8 +712,26 @@ and deletes it when that flavour's build starts. Build and gate it first:
         if ($stageUas)  { $gatedBinaries["xhciuas.sys"] = $UasDriverPath }
         if ($stageCm)   { $gatedBinaries["xhcicm.sys"] = $CmDriverPath }
         if ($stageHlpr) { $gatedBinaries["xhcihlpr.sys"] = $HlprDriverPath }
+        #
+        # Each binary is read ONCE. The bytes in memory are what is hashed and
+        # what is written to a private copy; every later step reads that copy,
+        # never the build's file again, so a file changed after this point
+        # cannot reach the package.
+        $snapDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-signonly-" + [System.IO.Path]::GetRandomFileName())
+        Ensure-Directory $snapDir
+        $snapBinaries = @{}
+        foreach ($name in @($gatedBinaries.Keys)) {
+            if (-not (Test-Path -LiteralPath $gatedBinaries[$name] -PathType Leaf)) {
+                throw "-SignOnly refused: $name is not at '$($gatedBinaries[$name])'."
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($gatedBinaries[$name])
+            $snap = Join-Path $snapDir $name
+            [System.IO.File]::WriteAllBytes($snap, $bytes)
+            $snapBinaries[$name] = $snap
+            $bytes = $null
+        }
         $tree = Get-GitTreeState -Repo $repo
-        $why = Get-GatedManifestFault -Manifest $gated -Arch $Arch -Flavor $Flavor -Binaries $gatedBinaries `
+        $why = Get-GatedManifestFault -Manifest $gated -Arch $Arch -Flavor $Flavor -Binaries $snapBinaries `
             -Head $tree.Head -Dirty $tree.Dirty -NoTargetEvidence ([bool]$NoTargetEvidence)
         if ($why -ne "") {
             throw @"
@@ -719,6 +751,17 @@ committed tree, or run this without -SignOnly to run every gate here.
         Write-Host "  RUN here: the flavour markers, the INF gates before staging (the media"
         Write-Host "  layout one included), the staged package's gate, the version checks and"
         Write-Host "  the test signature with its checks."
+        if ($GatedManifestPath -ne "" -and $TestSignPfx -eq "") {
+            # The self-tests' record: checked, and nothing more.
+            Write-Ok "-GatedManifestPath: the record admits these binaries; nothing is staged or signed."
+            Remove-Item -LiteralPath $snapDir -Recurse -Force -ErrorAction SilentlyContinue
+            exit 0
+        }
+        # From here on the private copies stand in for the build's files.
+        $DriverPath = $snapBinaries["xhci98.sys"]
+        if ($snapBinaries.ContainsKey("xhciuas.sys"))  { $UasDriverPath = $snapBinaries["xhciuas.sys"] }
+        if ($snapBinaries.ContainsKey("xhcicm.sys"))   { $CmDriverPath = $snapBinaries["xhcicm.sys"] }
+        if ($snapBinaries.ContainsKey("xhcihlpr.sys")) { $HlprDriverPath = $snapBinaries["xhcihlpr.sys"] }
     }
 
     # The x64 test signature (design record 19) is the amd64 package's alone.
@@ -1618,6 +1661,9 @@ that does not exist, or clear that one yourself.
     }
     if ($signDir -ne "" -and (Test-Path -LiteralPath $signDir)) {
         Remove-Item -LiteralPath $signDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($snapDir -ne "" -and (Test-Path -LiteralPath $snapDir)) {
+        Remove-Item -LiteralPath $snapDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     # A run that threw after staging leaves this behind and $OutDir untouched.
     if ($stageDir -ne "" -and (Test-Path -LiteralPath $stageDir)) {

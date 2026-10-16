@@ -1174,7 +1174,13 @@ function Resolve-Nvme98Input {
 # package is staged with are the ones that build was gated beside.
 #
 # One "key=value" per line, ASCII, CRLF, "#" lines ignored; the binaries are
-# "sha256.<name>=<64 hex>". Written by scripts\package\write-gated-manifest.ps1.
+# "sha256.<name>=<64 hex>". Written by scripts\package\write-gated-manifest.ps1,
+# from the hash each binary had right after its own import gate passed, and
+# only if every binary still has it once the flavour's last gate has passed.
+#
+# What this protects against is a mismatch by accident and another process on
+# the same machine changing a binary while the build or the packager runs. It
+# is not a defence against someone who deliberately forges the record.
 #
 function Get-GatedManifestPath {
     param([string]$Repo, [string]$Arch, [string]$Flavor)
@@ -1299,25 +1305,30 @@ function Get-GatedManifestFault {
 }
 
 function Get-GitTreeState {
-    # HEAD, and whether the tree differs from it (a tracked change, or an
-    # untracked file that is not ignored). Head "none" when git cannot say,
-    # which the sign-only mode refuses.
+    # HEAD, and whether the tree differs from it: a tracked change, any
+    # untracked file that is not ignored, or a tracked file git has been told
+    # not to look at (assume-unchanged, a lowercase tag in `git ls-files -v`,
+    # or skip-worktree, "S"), since git status cannot see a change to that
+    # one. Head "none" when git cannot say, which the sign-only mode refuses.
     param([string]$Repo)
     $head = ""
     $status = ""
+    $hidden = @()
     $ok = $false
     $savedEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
         $head = (& git -C $Repo rev-parse HEAD 2>$null | Out-String).Trim()
         $headRc = $LASTEXITCODE
-        $status = (& git -C $Repo status --porcelain 2>$null | Out-String).Trim()
-        $ok = ($headRc -eq 0 -and $LASTEXITCODE -eq 0 -and $head -match '^[0-9a-f]{40}$')
+        $status = (& git -C $Repo status --porcelain --untracked-files=all 2>$null | Out-String).Trim()
+        $statusRc = $LASTEXITCODE
+        $hidden = @(& git -C $Repo ls-files -v 2>$null | Where-Object { $_ -cmatch '^([a-z]|S) ' })
+        $ok = ($headRc -eq 0 -and $statusRc -eq 0 -and $LASTEXITCODE -eq 0 -and $head -match '^[0-9a-f]{40}$')
     } catch {
         $ok = $false
     } finally {
         $ErrorActionPreference = $savedEap
     }
     if (-not $ok) { return @{ Head = "none"; Dirty = $true } }
-    return @{ Head = $head; Dirty = ($status -ne "") }
+    return @{ Head = $head; Dirty = ($status -ne "" -or $hidden.Count -gt 0) }
 }

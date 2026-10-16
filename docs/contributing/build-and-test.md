@@ -3011,27 +3011,41 @@ binaries are never signed.
   -TestSignPfx ...` gives a signed `qemu` package for a guest that should
   start in test-signing mode; it is never published.
 - **Signing without running the gates twice: `-SignOnly`** (roadmap-usb4.md
-  SIGN.1, owner 2026-10-16). A gated `build-driver.cmd` run records, once
-  every gate of a flavour has passed, each gated binary's SHA-256 with the
-  commit, whether the tree had uncommitted changes, whether its import
-  gates had their target evidence, and the time, in the git-ignored
-  `out\gated-<arch>-<flavour>.txt` (`scripts\package\write-gated-manifest.ps1`;
-  the file is deleted when that flavour's build starts, so a failed build
-  leaves none). `make-package.ps1 -TestSignPfx <pfx> -SignOnly` reads the
-  record for its `-Arch` and `-Flavor` before anything else and refuses
-  unless it is for that architecture and flavour, every binary to be
-  staged has exactly its recorded SHA-256, the build ran in a clean tree,
-  the tree is still at that commit with no uncommitted change, and the
-  build's gates had target evidence (or the run passes `-NoTargetEvidence`
-  too); each copy is checked against its hash again just before it is
-  signed. It then skips the host test suite and the import gates, which
+  SIGN.1, owner 2026-10-16). A gated `build-driver.cmd` run writes the
+  git-ignored `out\gated-<arch>-<flavour>.txt` for each flavour
+  (`scripts\package\write-gated-manifest.ps1`, which refuses to run outside
+  such a run): each gated binary's SHA-256, the commit, whether the tree
+  had uncommitted changes, whether its import gates had their target
+  evidence, and the time. The run holds `out\gated-<arch>.lock` throughout
+  and refuses to start while another holds it (a run stopped with Ctrl+C
+  leaves it; delete it when no build is running). When a flavour's build
+  starts its old record is deleted and the commit and the tree's state
+  noted; each binary's hash is captured right after its own import gate
+  passes; once the flavour's last gate has passed each file must still
+  have its captured hash, and the record is written from the captured
+  hashes, with `dirty=0` only if the tree was clean at the same commit at
+  both ends ("clean" also excludes untracked files and files marked
+  assume-unchanged or skip-worktree). A run that fails leaves no record for
+  the flavour that failed. `make-package.ps1 -TestSignPfx <pfx> -SignOnly`
+  reads the record for its `-Arch` and `-Flavor` before anything else,
+  reads each binary once into memory and writes those bytes to a private
+  copy that every later step uses, and refuses unless the record is for
+  that architecture and flavour, every copy has exactly its recorded
+  SHA-256, the build ran in a clean tree, the tree is still at that commit
+  with no change, and the build's gates had target evidence (or the run
+  passes `-NoTargetEvidence` too); each copy is checked against its hash
+  again just before it is signed. It then skips the host test suite and the import gates, which
   are about the bytes, and keeps everything about the package: the
   flavour markers, the INF gates before staging (the media-layout one
   included), the staged package's gate, the version checks and the
   signature checks. It prints which checks it reused and which it ran.
   `-SignOnly` without `-TestSignPfx` is refused, as is `-SignOnly` with
-  `-SkipBinaryGates` or `-SkipPackageGate`. The signing step for the x64
-  release package is then:
+  `-SkipBinaryGates` or `-SkipPackageGate`; `-GatedManifestPath` is the
+  self-tests' alone, refused with `-TestSignPfx`, and only checks a record.
+  What this protects against is a mismatch by accident and another process
+  on the same machine changing a binary while the build or the packager
+  runs; it is not a defence against someone who deliberately forges the
+  record. The signing step for the x64 release package is then:
 
   ```
   scripts\build-driver.cmd release -amd64

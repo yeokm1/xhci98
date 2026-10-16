@@ -4221,6 +4221,8 @@ try {
         return $p
     }
     $soWrongHash = @{ "xhci98.sys" = ("0" * 64) }
+    # -GatedManifestPath is the self-tests' alone: it never goes with a key,
+    # and a run naming it checks the record and stops.
     $soCases = @(
         @{ Why = "-SignOnly without -TestSignPfx (amd64)"; Says = "without -TestSignPfx";
            Args = @("-Arch", "amd64", "-SignOnly") },
@@ -4228,16 +4230,20 @@ try {
            Args = @("-SignOnly") },
         @{ Why = "-SignOnly with -SkipBinaryGates";        Says = "does not combine with -SkipBinaryGates";
            Args = @("-Arch", "amd64", "-SignOnly", "-TestSignPfx", $tsMissing, "-SkipBinaryGates") },
+        @{ Why = "-GatedManifestPath with -TestSignPfx";   Says = "is for the packager's self-tests";
+           Args = @("-Arch", "amd64", "-SignOnly", "-TestSignPfx", $tsMissing, "-GatedManifestPath", (New-SoRecord -Name "key.txt")) },
+        @{ Why = "-GatedManifestPath without -SignOnly";   Says = "is for the packager's self-tests";
+           Args = @("-Arch", "amd64", "-GatedManifestPath", (New-SoRecord -Name "nosignonly.txt")) },
         @{ Why = "a missing record";                       Says = "no gated build record at";
-           Args = @("-Arch", "amd64", "-SignOnly", "-TestSignPfx", $tsMissing, "-GatedManifestPath", (Join-Path $soDir "none.txt")) },
+           Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (Join-Path $soDir "none.txt")) },
         @{ Why = "an unreadable record";                   Says = "is not a gated build record";
-           Args = @("-Arch", "amd64", "-SignOnly", "-TestSignPfx", $tsMissing, "-GatedManifestPath", $soBins["xhci98.sys"]) },
+           Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", $soBins["xhci98.sys"]) },
         @{ Why = "the other architecture's record";        Says = "records the debug x86 build";
-           Args = @("-Arch", "amd64", "-SignOnly", "-TestSignPfx", $tsMissing, "-GatedManifestPath", (New-SoRecord -Name "x86.txt" -Arch "x86")) },
+           Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (New-SoRecord -Name "x86.txt" -Arch "x86")) },
         @{ Why = "a hash mismatch";                        Says = "is not the binary the build gated";
-           Args = @("-Arch", "amd64", "-SignOnly", "-TestSignPfx", $tsMissing, "-GatedManifestPath", (New-SoRecord -Name "hash.txt" -Sha $soWrongHash)) },
+           Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (New-SoRecord -Name "hash.txt" -Sha $soWrongHash)) },
         @{ Why = "a commit mismatch";                      Says = "it was built at commit";
-           Args = @("-Arch", "amd64", "-SignOnly", "-TestSignPfx", $tsMissing, "-GatedManifestPath", (New-SoRecord -Name "commit.txt" -Commit $soHead)) }
+           Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (New-SoRecord -Name "commit.txt" -Commit $soHead)) }
     )
     $soN = 0
     foreach ($c in $soCases) {
@@ -4252,34 +4258,106 @@ try {
             ("make-package.ps1 ran the host test suite before refusing {0}." -f $c.Why)
         Assert-True (-not (Test-Path -LiteralPath $soOut)) ("a package refused for {0} left an output directory." -f $c.Why)
     }
-    # A record that admits the stand-in gets past itself and is refused only by
-    # the missing key - in a clean tree. In a tree with uncommitted changes the
+    # A record that admits the stand-in is reported as admitting it, and the
+    # run stops there - in a clean tree. In a tree with uncommitted changes the
     # refusal is the tree's, which is the right answer there too.
+    $soOkOut = Join-Path $script:work "pkg-signonly-ok"
     $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver,
-                           "-OutDir", (Join-Path $script:work "pkg-signonly-ok"), "-SignOnly", "-TestSignPfx", $tsMissing,
+                           "-OutDir", $soOkOut, "-SignOnly",
                            "-GatedManifestPath", (New-SoRecord -Name "ok.txt")) -WithBinaryGates
-    $soSays = if ($soState.Dirty) { "uncommitted changes since" } else { "no test-signing key at" }
-    Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains($soSays)) `
-        ("a matching record was not taken as far as '{0}'. Output:`n{1}" -f $soSays, $r.Output)
-    if (-not $soState.Dirty) {
-        Assert-True ($r.Output.Contains("REUSED from the gated build")) `
-            ("make-package.ps1 -SignOnly did not say which checks it reused. Output:`n" + $r.Output)
+    if ($soState.Dirty) {
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("uncommitted changes since")) `
+            ("a matching record in a dirty tree was not refused for the tree. Output:`n" + $r.Output)
+    } else {
+        Assert-True ($r.ExitCode -eq 0 -and $r.Output.Contains("nothing is staged or signed") -and
+                     $r.Output.Contains("REUSED from the gated build")) `
+            ("a matching record was not reported as admitting the stand-in. Output:`n" + $r.Output)
     }
+    Assert-True (-not (Test-Path -LiteralPath $soOkOut)) "a -GatedManifestPath run staged a package."
+
+    # The tree's state: untracked files, and files git was told not to look at.
+    $soGit = Join-Path $soDir "git"
+    New-Item -ItemType Directory -Force -Path $soGit | Out-Null
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & git -C $soGit init -q 2>&1 | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $soGit "a.txt"), "a")
+        [System.IO.File]::WriteAllText((Join-Path $soGit "b.txt"), "b")
+        & git -C $soGit add a.txt b.txt 2>&1 | Out-Null
+        & git -C $soGit -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q -m t 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    $s = Get-GitTreeState -Repo $soGit
+    Assert-True ($s.Head -match '^[0-9a-f]{40}$' -and -not $s.Dirty) "Get-GitTreeState did not read a clean fixture repository as clean."
+    New-Item -ItemType Directory -Force -Path (Join-Path $soGit "sub") | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $soGit "sub\new.h"), "n")
+    Assert-True ((Get-GitTreeState -Repo $soGit).Dirty) "Get-GitTreeState missed an untracked file in an untracked directory."
+    Remove-Item -LiteralPath (Join-Path $soGit "sub") -Recurse -Force
+    foreach ($flag in @("--assume-unchanged", "--skip-worktree")) {
+        $ErrorActionPreference = "Continue"
+        try { & git -C $soGit update-index $flag a.txt 2>&1 | Out-Null } finally { $ErrorActionPreference = $savedEap }
+        Assert-True ((Get-GitTreeState -Repo $soGit).Dirty) "Get-GitTreeState missed a file marked $flag."
+        $ErrorActionPreference = "Continue"
+        try { & git -C $soGit update-index ($flag -replace '^--', '--no-') a.txt 2>&1 | Out-Null } finally { $ErrorActionPreference = $savedEap }
+    }
+    Assert-True (-not (Get-GitTreeState -Repo $soGit).Dirty) "Get-GitTreeState read the fixture repository as dirty after its flags were cleared."
+    Assert-True ((Get-GitTreeState -Repo (Join-Path $soDir "not-a-repo")).Head -eq "none") "Get-GitTreeState gave a commit for a directory that is no repository."
+
+    # The record's writer certifies nothing on its own: without the token of
+    # the build-driver.cmd run holding the lock it refuses, before it reads or
+    # writes anything. The token is cleared for the child, so a self-test run
+    # inside build-driver.cmd cannot reach the real record either.
+    $writer = Join-Path $PSScriptRoot "write-gated-manifest.ps1"
+    $savedRun = $env:XHCI98_GATED_RUN
+    try {
+        foreach ($tok in @($null, "not-this-run")) {
+            $env:XHCI98_GATED_RUN = $tok
+            $ErrorActionPreference = "Continue"
+            try {
+                $wOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $writer -Arch x86 -Flavor release -Finish 2>&1 | Out-String
+                $wRc = $LASTEXITCODE
+            } finally { $ErrorActionPreference = $savedEap }
+            Assert-True ($wRc -ne 0 -and ($wOut -replace '\s+', ' ').Contains("does not certify binaries on its own")) `
+                ("write-gated-manifest.ps1 ran outside a build-driver.cmd run (token '{0}'). Output:`n{1}" -f $tok, $wOut)
+        }
+    } finally {
+        $env:XHCI98_GATED_RUN = $savedRun
+    }
+
     # Where the record is checked and written.
     $soPkgText = [System.IO.File]::ReadAllText($packager)
     $soCheckAt = $soPkgText.IndexOf('Get-GatedManifestFault -Manifest $gated')
+    $soSnapAt = $soPkgText.IndexOf('$bytes = [System.IO.File]::ReadAllBytes($gatedBinaries[$name])')
     $soHostAt = $soPkgText.IndexOf('Write-Step "host test suite"')
-    Assert-True ($soCheckAt -gt 0 -and $soHostAt -gt $soCheckAt -and $tsSignAt -gt $soCheckAt) `
-        "make-package.ps1 no longer checks the gated build record before its gates and its signing."
+    Assert-True ($soSnapAt -gt 0 -and $soCheckAt -gt $soSnapAt -and $soHostAt -gt $soCheckAt -and $tsSignAt -gt $soCheckAt) `
+        "make-package.ps1 no longer reads each binary once and checks the gated build record before its gates and its signing."
+    Assert-True ($soPkgText.Contains('$DriverPath = $snapBinaries["xhci98.sys"]')) `
+        "make-package.ps1 -SignOnly no longer stages and signs the copy it hashed."
     Assert-True (([regex]::Matches($soPkgText, 'if \(\$runBinaryGates\)')).Count -eq 4) `
         "make-package.ps1 no longer guards exactly its four binary gates (host suite, import gates, helper) by `$runBinaryGates."
     $soBuildText = [System.IO.File]::ReadAllText((Join-Path $repo "scripts\build-driver.cmd"))
-    $soDelAt = $soBuildText.IndexOf('if exist "%GATEDREC%" del "%GATEDREC%"')
+    $soLockAt = $soBuildText.IndexOf('mkdir "%GATEDLOCK%" 2>nul')
+    $soMainAt = $soBuildText.IndexOf('call :mainbody')
+    $soBeginAt = $soBuildText.IndexOf('call :gated -Begin')
     $soBuildAt = $soBuildText.IndexOf('echo === build %FLAVOR% ===')
-    $soWriteAt = $soBuildText.IndexOf('write-gated-manifest.ps1" -Arch %ARCH% -Flavor %FLAVOR% %GATEOPT%')
     $soHlprAt = $soBuildText.IndexOf(':skiphlpr')
-    Assert-True ($soDelAt -gt 0 -and $soBuildAt -gt $soDelAt -and $soWriteAt -gt $soHlprAt -and $soHlprAt -gt $soBuildAt) `
-        "build-driver.cmd no longer deletes the gated build record before a flavour builds and writes it only after the flavour's last gate."
+    $soFinishAt = $soBuildText.IndexOf('call :gated -Finish %GATEOPT%')
+    Assert-True ($soLockAt -gt 0 -and $soMainAt -gt $soLockAt -and $soBeginAt -gt $soMainAt -and $soBuildAt -gt $soBeginAt -and
+                 $soHlprAt -gt $soBuildAt -and $soFinishAt -gt $soHlprAt) `
+        "build-driver.cmd no longer takes its lock for the run, begins the record before a flavour builds, and finishes it only after the flavour's last gate."
+    foreach ($cap in @(
+        @{ Gate = '-Image "%OUTSYS%" -Flavor %FLAVOR% -Arch %ARCH% %GATEOPT%'; Cap = 'call :gated -Capture -Name xhci98.sys -Image "%OUTSYS%"' },
+        @{ Gate = '-AllowPath "%UASALLOW%" %GATEOPT%';  Cap = 'call :gated -Capture -Name xhciuas.sys -Image "%UASSYS%"' },
+        @{ Gate = '-AllowPath "%CMALLOW%" %GATEOPT%';   Cap = 'call :gated -Capture -Name xhcicm.sys -Image "%CMSYS%"' },
+        @{ Gate = '-AllowPath "%HLPRALLOW%" %GATEOPT%'; Cap = 'call :gated -Capture -Name xhcihlpr.sys -Image "%HLPRSYS%"' }
+    )) {
+        $g = $soBuildText.IndexOf($cap.Gate)
+        $k = $soBuildText.IndexOf($cap.Cap)
+        Assert-True ($g -gt 0 -and $k -gt $g -and ($k - $g) -lt 200) `
+            ("build-driver.cmd no longer captures the hash right after the import gate: " + $cap.Cap)
+    }
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue
