@@ -179,6 +179,8 @@ Each driver directory holds:
 
 ### Install with INSTALL.BAT
 
+INSTALL.BAT is beta in 3.0.0.0: if it fails or you prefer, install through Device Manager as before ([Install by hand](#install-by-hand)).
+
 Unzip the whole package and run `INSTALL.BAT` from its top directory: double-click it on 98 SE and ME; run it as an administrator on 2000 and XP; Run as administrator on Vista and 7. It shows its plan, asks about a few options ("Enter for [x]" says what Enter keeps) and the tools' install directory (`C:\XHCI98`, or `INSTALL /to <path>`), then asks once before it changes anything.
 
 - **Windows 2000 to 7:** installs or updates every driver on the devices present, controller first, and stages the package for devices plugged in later. It handles Windows 2000's Have Disk, the root hub's update and Vista and 7's same-`DriverVer` trap. Answer Windows' unsigned-driver questions.
@@ -190,6 +192,8 @@ Unzip the whole package and run `INSTALL.BAT` from its top directory: double-cli
 Details: [the release notes' INSTALL.BAT section](docs/using/release-notes.md#installing-updating-and-uninstalling-with-installbat-new-in-3000).
 
 ### Install by hand
+
+The established route: the INF install through Device Manager (Update Driver / Have Disk, pointed at the package's driver directory). It still works and remains supported.
 
 1. Put the unzipped package where the machine can read it (floppy, CD, shared folder).
 2. Install the prerequisites above. On a fresh Windows 98 SE the order is NUSB, then xhci98, then the UAS disk.

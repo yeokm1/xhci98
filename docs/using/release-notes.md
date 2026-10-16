@@ -193,6 +193,8 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   updates and uninstalls every driver of the package in one run on
   Windows 2000 to 7, and stages it with the steps left printed on 98 SE and
   ME ("Installing, updating and uninstalling with INSTALL.BAT").
+  INSTALL.BAT is beta in 3.0.0.0: if it fails or you prefer, install
+  through Device Manager as before ("Installing").
 - **A device viewer and eject in the same tool**: `INSTALL /devices` lists
   the Thunderbolt and USB4 devices connected now and the Windows devices
   behind each, and `INSTALL /eject` stops one, on every system (design
@@ -1280,6 +1282,9 @@ Hardware Wizard was once seen to leave the controller with no driver; a
 second Update Driver filled it.
 
 ### Installing, updating and uninstalling with INSTALL.BAT (new in `3.0.0.0`)
+
+INSTALL.BAT is beta in 3.0.0.0: if it fails or you prefer, install through
+Device Manager as before ("Installing", above, and the update steps below).
 
 From `3.0.0.0` the download carries `INSTALL.BAT` at its top level and the
 program it runs in `tools\xhciinst\`: `XHCIINST.EXE` for 32-bit Windows and
