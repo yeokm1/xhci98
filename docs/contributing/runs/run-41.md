@@ -1540,3 +1540,27 @@ Verdict for the coordinator
 - The resume ordering's four readings (record 21 section 6.3) stay owed to a 2000 vehicle that
   can resume. System suspend with a tunnelled device stays unsupported in the release notes, as
   they already say.
+
+## Windows 98 SE after the cut: legs U.4 to U.13 (task 40-V.1)
+
+**40-V.1 on 98 SE, the owed legs, on the signed `3.0.0.0`** (2026-10-17). Development host A,
+`vm\usb4\bin-2a893ea`, i440FX, one vCPU; overlays of an image of `vm\t26\win98-gold.qcow2` with the
+release `xhcicm.sys` installed by its class line and Stor98 `0.4.0.0` from `release-x86` (the first
+plug mounted E: with no Refresh), then the `qemu` flavour (`63029f4b...`) copied over for the log.
+U.4 passes: a 48 MiB copy cut by `device_del`, and again with the harness holding a write's completion
+(`at=complete op=write act=hold`, held 1, "discarded by reset" at the cutoff): path proven closed
+(`u4.linkdown=0100020B`), the statement withheld (`09000002`, no 9x statement), Stor98 ended the copy
+with Windows' Disk Write Error, E: gone, no hang, E: back at the re-plug with its data. U.7 passes on
+`intel-adl` and `minimal`: `u4.clean=1`, admin-down, one Downstream Port Reset, the tunnel rebuilt (gen
+2), E: present and compared clean. U.9 passes: Disable and Enable with no transition in the trace,
+`u4.preserved=00010809`, E: readable throughout. U.12 passes: the depth-2 router's plug events
+acknowledged and counted (`u4.hotplug.downstream=6`), no request to it. U.13 passes: `XhciCmMode` 0
+inert (`cm.inert=1`), and `15BF` on a `U4Desc` row of an INF copy with `XhciCmMode` 3 inert
+(`cm.inert=4`), no ring traffic in either trace. U.11: the connection manager passes on both host
+models (each port's tunnel, the map naming its own bridge on `minimal`, the pairing rule on
+`intel-adl`), but two volumes do not mount together: with the second tunnel bridge at `00:08` the
+guest gives the port-2 NVMe no interrupt (Code 29; at `00:06` it does), and when a second port's tunnel
+comes up the 9x seam re-exposes every member and re-publishes the first NVMe's link-state entry as a
+new generation (`cm.nvlink.up=02000201`), after which Stor98 `0.4.0.0` drops that disk. On
+Windows 2000 the same republication happens and the disk survives (Stor98's NT receiver), and
+`00:08` leaves the NVMe without resources there too on this emulator build. Open.
