@@ -1513,3 +1513,30 @@ Verdict for the coordinator
   under 40-V.2 and was not read here, so tick only the router clause unless S3 is closed elsewhere.
 - EMU.1: can be ticked. The 2000 leg it owed passes on the emulator's TB3 dock preset on usb4-generic (i440FX, 7.1
   command line), with the PCIe tunnel through the legacy router and the DROM by bit-bang.
+
+## Windows 2000 after the cut: the R32 re-plug and S3 (tasks 39-V.2 and 40-V.2)
+
+39-V.2 and 40-V.2 on Windows 2000, post-cut (2026-10-17).
+- Setup: the signed 3.0.0.0 package, installed by INSTALL.BAT, with the qemu-flavour
+  xhcicm.sys swapped in for the log, on bin-2a893ea.
+- R32 re-read (Alpine Ridge, ON_ON, device at boot). The silence passes as before: "controller
+  power 0" 35 s after the unplug, then SUSPECT, ABSENT and the unavailable route, with no hang.
+- With the root bridge's root-hotplug=restore (the platform writes the recorded configuration
+  back at power-on):
+  - the monitor reads CONFIG_LOST, recovers in place (cm.live.recover=100, active);
+  - the re-plug is announced (0C11), approved and tunnelled, and the volume returns with a new
+    file compared clean.
+- With the default slot, the subtree comes back reset and the monitor ends RECOVERY_FAILED, as
+  in run 39. The re-plug therefore passes wherever the platform restores the configuration; the
+  default emulator is still the platform's failure.
+- S3 cannot be read on 2000 in this emulator:
+  - The acpi=off image has no Stand by.
+  - On the ACPI image the Cirrus driver vetoes Stand by.
+  - A forced (critical) suspend enters S3, and xhcicm's suspend sequence reads as designed:
+    on Alpine Ridge rings stopped, then 0x05, 0x07 and D3 with the hold armed; on usb4-generic
+    cm.suspend with two obligations. But the guest never resumes from it, with or without the
+    USB4 devices present.
+  - With std VGA, S3 is refused.
+- The resume ordering's four readings (record 21 section 6.3) stay owed to a 2000 vehicle that
+  can resume. System suspend with a tunnelled device stays unsupported in the release notes, as
+  they already say.
