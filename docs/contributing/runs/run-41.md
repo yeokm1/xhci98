@@ -1467,3 +1467,14 @@ test-signing turned off after this install, the next start went to
 Startup Repair (every driver of the package and Stor98 is demand-start,
 and the guest's boot disk is not behind a tunnel bridge); the guest was
 stopped before Startup Repair finished.
+
+## Vista x64's update and 7 x64's uninstall on the signed `3.0.0.0` asset (task X64.2)
+
+The owner's signed cut (`xhci98-3.0.0.0.zip`, SHA-256 `b6b611d6...6eaf47`),
+read 2026-10-17 in QEMU on development host A, test-signing on, no F8, the
+certificate not imported (each read before and after):
+
+| System | Leg | Result |
+|---|---|---|
+| Vista x64 | update from 2.4.0.0 (run-40's `pkg24`, drivers identical to `releases/2.4.0.0`) | pass: `INSTALL.BAT` listed both devices "update (an older release)", staged `xhci98.inf` and `xhciuas.inf`, one publisher prompt per INF, updated the controller and root hub, exit 3; **after the restart** `xhci98` running, both devices 3.0.0.0 at problem 0, the installed `xhci98.sys` the package's (SHA-1), a stick copy and compare clean; a second run read both "current (this release)", the local copy "this package already", both INFs "staged already", "No changes were made.", exit 0. The 2.4.0.0 local copy and store packages stay until an uninstall (record 23 D7) |
+| 7 x64 | `INSTALL.BAT` with Thunderbolt answered Y on `tb3-alpine-ridge`, then `/uninstall` with the ASM2464 enclosure plugged | pass: the install exit 3 (four publisher prompts), after the restart `xhci98` and `xhcicm` running and the tunnel bridge filtered; `/uninstall` and REMOVE took `xhcicm` off the tunnel port and gave it back to `machine.inf`, removed the root hubs, the Thunderbolt and both xHCI controllers' devnodes, the four INFs, the services and their files, the tray's Run value and the local copies, exit 3. After the restart no project service (1060), file, INF, driver-store package, `%windir%\XHCI98` or `C:\XHCI98`; no `UpperFilters` under `Enum\PCI`, the bridge on `pci` at problem 0; `usbd.sys` and `usbui.dll` present; a stick on Windows' own UHCI driver copies and compares clean; the xHCI and Thunderbolt controllers back at Code 28, as on the base |

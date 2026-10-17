@@ -439,7 +439,7 @@ package needs the project's test signature, applied only at a signed cut
 (design record 19). Struck from this list as the signed cut reads them.
 
 - [x] X64.1 39-V.3 and 40-V.3 on Vista x64 and 7 x64 from the signed `3.0.0.0` asset: the install with the forced filter, one plug, unplug and re-plug cycle with the NVMe drive, and the safe-eject cycle (read 2026-10-16 on the owner's pre-cut test-signed package, pass on both, run-39.md and run-40.md; the recipe stands, the reading on the cut's signed asset is still owed) (done 2026-10-17 on the signed asset: 7 x64 with test-signing on and no F8, the install through `INSTALL.BAT`, a stick, the Thunderbolt 3 hot plug with Stor98 `0.4.0.0`, Safely Remove Hardware, re-plug, a surprise unplug and XHCITR64 as a standard user, pass; Vista x64 installed with both drivers running, its remaining legs stopped and accepted by the owner; run-41.md)
-- [ ] X64.2 the installer legs owed by task 40.4 onward: Vista x64's update read after its restart, and 7 x64's uninstall over `3.0.0.0` (both pass 2026-10-16 on the pre-cut test-signed package, run-40.md; again on the cut's signed asset if its drivers differ)
+- [x] X64.2 the installer legs owed by task 40.4 onward: Vista x64's update read after its restart, and 7 x64's uninstall over `3.0.0.0` (both pass 2026-10-16 on the pre-cut test-signed package, run-40.md; again on the cut's signed asset if its drivers differ) (done 2026-10-17 on the signed asset: Vista x64's update from 2.4.0.0 read after its restart, and 7 x64's uninstall over `3.0.0.0` with Thunderbolt, both pass; run-41.md)
 
 ## Planned - An Unsafe-Unplug Notice From the Child Filter
 
