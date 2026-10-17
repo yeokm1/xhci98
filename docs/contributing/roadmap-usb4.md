@@ -626,3 +626,21 @@ half read as designed under both connection managers; ME's S3 readings
 (run-39) stand.
 
 - [ ] S3W2K.1 the four readings on a Windows 2000 machine with a Thunderbolt or USB4 controller that resumes from S3, under each connection manager the machine has
+
+## Planned - One Port's Tunnel Leaving the Other Ports' Drives Alone on 98 SE and ME
+
+Goal: a tunnel coming up on one port publishes a fresh link-state entry
+(a new generation) only for that port's NVMe drive, so Stor98 keeps every
+other port's mounted drive.
+
+Status: not opened, unnumbered and unversioned. Found 2026-10-17 in leg
+U.11 of task 40-V.1 on the signed `3.0.0.0` (run-41.md): `cmReenumAll`
+(`cm_reenum.c`) re-exposes every active member with `fresh` set on a
+tunnel-up and on a resync, so an unchanged drive on another port is
+republished at a new generation, and Stor98 `0.4.0.0` on 98 SE drops it
+as superseded. Windows 2000 to 7 keep the drive. A drive behind its
+enclosure's own PCI Express switch is never published, so real enclosures
+are not expected to meet it; the owner published `3.0.0.0` with it open.
+Task 40-V.1 is ticked when this is fixed and U.11 read again.
+
+- [ ] GEN1.1 `fresh` only for the member whose tunnel changed (the tunnel-up action and the U4 up-hook), never on a resync; host tests for two members; U.11 on 98 SE and ME with an NVMe on each tunnel bus, and on 2000 as a regression
