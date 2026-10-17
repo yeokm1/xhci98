@@ -12,8 +12,8 @@ Thunderbolt or USB4 port, safely, so that you can unplug it, and it sits
 in the notification area (the system tray) beside the clock.
 
 The one driver setting it changes is the drivers' logging level
-(below). It approves no Thunderbolt device and updates no firmware. It needs no
-administrator rights to start.
+(below). It approves no Thunderbolt device and updates no firmware. It
+needs no administrator rights to start.
 
 Which file
 ----------
