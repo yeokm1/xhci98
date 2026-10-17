@@ -229,6 +229,9 @@ xhciqual/       Phase 0 DOS hardware-qualification tool (Open Watcom).
                 runs there, and never force-add them.
 xhcisnap/       The host-side reader for the driver's log channel
                 (`XHCISNAP.EXE`); `xhcisnap/README.md` is its guide. Tracked.
+xhciinst/       The install, update and uninstall tool (`XHCIINST.EXE`,
+                `XHCIIN64.EXE`) and the package's `INSTALL.BAT`, from
+                `3.0.0.0` (design record 23). Tracked.
 images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
@@ -279,12 +282,19 @@ but not every input; see
 ### Where to start
 
 Read `docs/contributing/roadmap.md` for the current phase and its checkpoint.
-The roadmap is three files: that one has the status, the conventions and
+The roadmap is four files: that one has the status, the conventions and
 Phases 0-16 (the initial release);
 `docs/contributing/roadmap-miniport-updates.md` has Phases 17-24, the
 miniport's public updates after it, closed with the `1.2.0.0`
-cut that froze it; and `docs/contributing/roadmap-hcd.md` has Phases 25
-onward, the host controller driver, the open phase included. The miniport is
+cut that froze it; `docs/contributing/roadmap-hcd.md` has Phases 25
+onward of the host controller driver, a USB phase opened later included; and
+`docs/contributing/roadmap-usb4.md` (opened 2026-10-14) has Phases 39
+onward, the USB4 and Thunderbolt connection-manager work: a driver beside
+`xhci98.sys` whose test bed is the `usb4-emu` repository, read there and
+never modified, with design record 21 as Phase 39's plan (the Thunderbolt
+firmware connection manager client) and design record 22 as Phase 40's
+(the USB4 software connection manager); both phases opened 2026-10-15 and
+ship together as `3.0.0.0`. The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
 are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
 ASCII and CRLF, the three flavours, the import and INF gates - bind the HCD
@@ -296,7 +306,8 @@ authority.
 The exceptions are the bench clauses the owner reads after a cut: the E.1
 clauses of Phases 28 to 31, after the `2.0.0.0` cut, and Phase 35's 35-E,
 after the `2.2.0.0` cut (`roadmap-hcd.md`, decisions table, "Cut before the
-bench" and "`2.2.0.0`: cut before the bench").
+bench" and "`2.2.0.0`: cut before the bench"), and Phase 39's 39-E, after
+the `3.0.0.0` cut (`roadmap-usb4.md`, decision D13).
 Then use the "What to read for each phase" table in `docs/README.md` for the
 documents that phase needs.
 
@@ -389,6 +400,7 @@ SuperSpeed and USB 3 hub material, checked against xHCI 1.2c and USB 3.2
 ### Language and arithmetic
 
 - C89/C90 only. No `//` comments, no mid-block declarations, no `stdint.h`. Use `ULONG`/`USHORT`/`UCHAR` from `ntddk.h`.
+  The one exception is a third-party interface header carried byte for byte, `src/cm/stor98cm.h` (Stor98's, with `//` comments; `legal-provenance.md` section 2a): never edited here, and every compiler of the tree accepts it as it is.
 - No 64-bit DMA. Win98 is 32-bit; the upper 32 bits of all hardware addresses are always 0.
 - No 64-bit arithmetic (the `_alldiv`-style compiler helpers may not exist on Win98's kernel). Keep 64-bit hardware fields as Lo/Hi ULONG pairs, Hi always 0.
 - No floating point in kernel mode.
@@ -572,10 +584,11 @@ that does not follow the default - it derives the architectures from the
 published tree, since every version published before `1.1.0.0` is x86-only.
 
 **Every published x64 directory is test-signed, and only by the packager**
-(owner, 2026-10-11; design record 19 is the authority). `xhci98.sys` and
-`xhciuas.sys` of `release-x64` and `debug-x64` carry an embedded
-Authenticode signature by the project test certificate - SHA-1 file digest,
-no timestamp, no catalog, both INFs unchanged - applied at staging by
+(owner, 2026-10-11; design record 19 is the authority). `xhci98.sys`,
+`xhciuas.sys` and `xhcicm.sys` (with its `nt\xhcicm.sys` copy, the same
+bytes) of `release-x64` and `debug-x64` carry an embedded Authenticode
+signature by the project test certificate - SHA-1 file digest, no
+timestamp, no catalog, the INFs unchanged - applied at staging by
 `make-package.ps1 -TestSignPfx` and never by hand, with the certificate's
 public half beside them as `xhci98-test.cer`; `make-release.ps1` refuses a
 cut that would publish an x64 directory without it, with no switch past
@@ -616,6 +629,45 @@ The miniport's upward interface, the undocumented
 and its bit-exact companion `docs/usb-xhci-info/usbport-miniport-abi.md`;
 they describe the `1.2.0.0` sources and bind nothing in `src/`.
 
+The Thunderbolt 3 and USB4 work (`docs/contributing/roadmap-usb4.md`,
+design records 21 and 22, `src\cm\`) has its own references:
+
+- `usb4-emu`'s `docs/ICM-PROTOCOL.md` is the contract, cited by section,
+  with the P14s Gen 1 captures behind each [obs].
+- The USB4 Specification 2.0 and Connection Manager Guide 2.0
+  (`docs/references/README.md`) are the generic host interface.
+- Since 2026-10-15 (owner, through the `usb4-emu` maintainer's note, once
+  that repository's relicensing to GPL-2.0-only landed on its `main` at
+  `3c74189`), this work may adapt code from `usb4-emu` itself,
+  `tools/usb4cm` included; from Linux's `drivers/thunderbolt`; from
+  FreeBSD's `sys/dev/thunderbolt`; and data from Intel's tbtools (MIT, the
+  commit `usb4-emu`'s `docs/REFERENCES.md` pins). Device ids, message
+  codes and layouts, register offsets, constants, sequences and controller
+  quirks are still cited by file and symbol where they are used.
+- Every adapted file keeps the copyright lines of each source file it came
+  from and its SPDX tag (`SPDX-License-Identifier: GPL-2.0-only` with
+  Linux's or `usb4-emu`'s lines; the BSD-2-Clause notice of a FreeBSD
+  file, the MIT notice of tbtools data or of a `usb4cm` file lifted before
+  the relicensing, kept verbatim), and gains a `legal-provenance.md`
+  section 2a entry naming the source file, the pinned commit actually read
+  (`external/README.md`'s for Linux and FreeBSD; the `usb4-emu` or tbtools
+  commit read) and what was adapted.
+  Adapting is translating: the code is still C89, safe on Windows 98 and
+  2000, free of 64-bit arithmetic and in this file's style, never a paste
+  of a Linux kernel API.
+- Behaviour taken from Linux alone stays tagged [linux] and unconfirmed
+  until a hardware capture shows it; adapting Linux code does not confirm
+  it.
+- Nothing from this repository or `usb4-emu` moves into Stor98, which
+  is BSD-3-Clause.
+
+That permission is for the Thunderbolt and USB4 work only. Every other
+mirror, and Linux and FreeBSD for any other subsystem, stays under the
+mirror rule of "Third-Party Material and Provenance" below, with only the
+exception for Linux's xHCI quirks that it names. The mirrors and their
+pinned commits are in `external/README.md`; `legal-provenance.md` section
+3 records the rule and section 4 the fact classes taken.
+
 ---
 
 ## Third-Party Material and Provenance
@@ -639,9 +691,9 @@ rules that bind day-to-day work, and none of them is optional.
   on all four paths by it, to dirid 11 rather than 10. **Do not put a
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"
-  anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, and from
-  `2.4.0.0` `XHCICLN` and `XHCICL64`) carry statically linked runtimes
-  (section 2a).
+  anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, from
+  `2.4.0.0` `XHCICLN` and `XHCICL64`, and from `3.0.0.0` `XHCIINST` and
+  `XHCIIN64`) carry statically linked runtimes (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh
@@ -655,7 +707,11 @@ rules that bind day-to-day work, and none of them is optional.
   Struct layouts, offsets, signatures, constants, and observed call ordering
   are what this project takes; function bodies are never copied into `src/`
   or the docs. This project being GPL-2.0 itself does not relax that rule,
-  because the rule is what makes `src/` independently written.
+  because the rule is what makes `src/` independently written. The
+  recorded exceptions are `legal-provenance.md` section 3's: Linux's xHCI
+  controller quirks (design record 20), and the Thunderbolt and USB4 work's
+  sources under "Reference Implementations" above, each adapted file with
+  its notices kept and its section 2a entry.
 - Defeat no protection mechanism, and patch no binary; read each one as the
   vendor shipped it. Routine unpacking (`7z e` plus `expand.exe` on install
   media) is not this rule's subject; the recorded adjacent cases are in
@@ -682,14 +738,20 @@ make the blanket form safe: a function that differs from its file's blanket
 carries its own tag, and a tag sits adjacent to the function it describes. A
 tag that has drifted onto its neighbour is worse than no tag.
 
-Never use `DbgPrint` outside `#if DBG` guards, with one exception, which is a
-switch a user sets rather than a trace site: the `XhciLogDebugView` sink in
+Never use `DbgPrint` outside `#if DBG` guards, with one exception per binary,
+which is a switch a user sets rather than a trace site: the `XhciLogDebugView` sink in
 `src/hcd_log.c` emits the bounded log ring through `DbgPrint` in every build
 flavour, from the controller thread at PASSIVE_LEVEL only - continuously, on
 every wake, and once more with the counter block at each stop (task 26-A.8) -
 so `ntoskrnl.exe!DbgPrint` is an `all` row in the import allowlist whose
 `SITES` admits `hcd_log.obj` and the qemu trace's `xhci_dbg.obj` and nothing
-else. **Do not widen it to a third call site.** Per-line printing from DPC
+else. `xhcicm.sys` has the same exception, and only it: its
+`XhciCmLogDebugView` sink in `src/cm/cm_log.c` (the owner's decision of
+2026-10-16, design record 21 section 8), under the same rules - the
+connection-manager thread and the PnP stop path only, at PASSIVE_LEVEL, no
+address value below level 4 - an `all` row of `xhcicm`'s own allowlists
+whose `SITES` admits `cm_log.obj` alone. **Do not widen either to another
+call site.** Per-line printing from DPC
 and ISR contexts at real interrupt rates is what bugchecks Windows 98 on bare
 metal (design record 08), and owning the driver object does not change that:
 producers record from any IRQL and only the thread emits. (Until 1.2.0.0 the

@@ -1,0 +1,949 @@
+# Phase 40 Record
+
+The detail behind `docs/contributing/roadmap-usb4.md`, "Phase 40" (the USB4
+software connection manager). The roadmap entry carries the goal, the
+status, the task list and the checkpoint; this file carries what each task
+did and what each reading said. Where the two disagree about a clause, the
+roadmap wins. The design is `design/22-usb4-software-connection-manager.md`
+(record 22).
+
+**On `out\...` and `vm\...` paths in this file.** They say where a reading
+was kept on the host that took it; they are not files a clone has.
+
+## 40-0.3 - The launcher reading, and the harness for leg U.4
+
+**Verdict: done** (2026-10-15). Every property record 22 section 14.2 passes
+as `-global` reaches its QEMU property through task 39-0.7's launcher, read
+back in `info qtree`; the launcher gained `-BaseImage` and `-RunRoot` so the
+98 SE legs can run from an overlay of the image that carries the host
+controller driver; and the `usb4-generic` profile, on both host models with
+the pre-OS connection manager, was read on Windows 98 SE and Windows 2000.
+
+**The host.** Development host A, TCG, under the admission rule of the
+Phase 39 brief (out of `out\vmlocks`, the sum of `-smp` within the logical
+processor count, 6 GB of RAM left free). Two guests of another worker were
+running throughout and were left alone. Every guest here ran with one vCPU
+(the machine lines of the launcher: `pentium3,-apic`), QMP and VNC on 47904
+and 47905 (98 SE) and 47924 and 47925 (2000). Evidence (traces, `info pci`,
+`info qtree`, screendumps) is in `vm\p40-topo\<run>\`.
+
+**The emulator.** `usb4-emu` read, never written. Its `main` is `3c74189`
+(the GPL-2.0-only relicence); committed documents were read with
+`git show main:<path>` (`docs/XHCI98-HANDOFF.md`, `docs/HARNESS.md`) and the
+property definitions from `main:src/patches/0001-usb4-emu.patch`
+(`usb4_host_properties`, `usb4_device_properties`, `hw/usb4/usb4-usb3.c`,
+`hw/usb4/usb4-harness.c`). The binary the launcher copied to `vm\usb4\bin\`
+is the working tree's build of 2026-10-15 01:42, `QEMU emulator version
+11.1.2 (v11.1.2-123-g178237c)`, SHA-256
+`92CEE077E409BE917441F240659A421219CF94FDCF451466402B3E3D32686D7E`; that
+tree (`m0-bootstrap` at `9d09cae`) is five commits ahead of `main` (a Titan
+Ridge firmware-CM variant and documents), none of which touches the
+properties or the harness read here.
+
+### Whether `-global` reaches each property
+
+`-device usb4-host,help` and `-device usb4-device,help` on that binary list
+all five: `host-model=<str>`, `preos-cm=<bool>`, `usb3-xhci=<str>`,
+`usb3-port1=<uint32>` on `usb4-host`, `usb3-dev=<str>` on `usb4-device`.
+They are ordinary qdev properties, and `-global <type>.<property>=` sets the
+default of a qdev property for every instance of that type created later,
+so nothing in the launcher stands in the way: `-Extra` accepts `-global`
+with a value that names no back end, file or path, and none of the five
+does. The reading (run `p40t-probe`, `-S`, no device router at power-on):
+
+```
+powershell -Command "& scripts\usb4\run-usb4-guest.ps1 -Guest win98
+    -BaseImage vm\t26\win98-gold.qcow2 -RunRoot p40-topo -Name p40t-probe
+    -Usb4Profile generic -Slot 2 -DeviceAtBoot 0 -Tag probe -Extra '-S',
+    '-global','usb4-host.host-model=intel-adl','-global','usb4-host.preos-cm=on',
+    '-global','usb4-host.usb3-xhci=u4x','-global','usb4-host.usb3-port1=1',
+    '-global','usb4-device.usb3-dev=ustor0',
+    '-device','qemu-xhci,id=u4x,bus=pci.0,addr=0x7'"
+usb4-qmp.ps1 -Name p40t-probe -RunRoot p40-topo hmp device_add usb4-device,id=enc0,bus=u4.0,port=1,drive=nvme0,serial=USB4EMU01
+usb4-qmp.ps1 -Name p40t-probe -RunRoot p40-topo hmp info qtree
+```
+
+| Property | `info qtree` | Reaches |
+|---|---|---|
+| `usb4-host.host-model` | `host-model = "intel-adl"` on `u4` | yes |
+| `usb4-host.preos-cm` | `preos-cm = true` | yes |
+| `usb4-host.usb3-xhci` | `usb3-xhci = "u4x"` | yes |
+| `usb4-host.usb3-port1` | `usb3-port1 = 1 (0x1)` | yes |
+| `usb4-device.usb3-dev` | `usb3-dev = "ustor0"` on `enc0`, a router hot-added after start with no `usb3-dev` on its line | yes, hot-added routers included |
+
+That the values act, and not only read back, shows in the boots below: with
+the `-global` forms alone the host realises as `usb4_fabric_new host router
+... vendor 0x8087 product 0x463e` with `total-paths 12` (`intel-adl`) and the
+trace opens with `usb4_preos_start` (`preos-cm`).
+
+Four things to know when using them:
+
+- **An explicit value wins.** A value on the `-device` line beats a
+  `-global`, so `-HostModel intel-adl` or `-PreosCm` (which the launcher
+  writes on the `-device` line) cannot be undone by a `-global`, and the
+  `-Usb3` switch's own `usb3-dev=ustor0` on `enc0` beats a
+  `-global usb4-device.usb3-dev`. The launcher's `-HostModel`, `-PreosCm` and
+  `-Usb3` remain the plain way; the `-global` forms are for what the
+  launcher does not build (a router added by hand, a second router).
+- **`host-model` and `preos-cm` belong to `usb4-generic`.** The model refuses
+  `host-model=intel-adl` on `tb3-alpine-ridge` at realize and silently
+  ignores `preos-cm` there (`cfg.preos_cm = s->preos_cm && profile ==
+  usb4-generic`). The launcher now refuses either `-global` with a profile
+  other than `generic`, as it already refused `-HostModel` and `-PreosCm`.
+- **`usb3-xhci` and `usb3-port1` only shape ACPI.** In `usb4-usb3.c` they are
+  read at ACPI table build time, for the `_DSD` that ties a SuperSpeed root
+  port of that `qemu-xhci` to the host interface, and only when the host and
+  the xHCI are both on the root bus. Attaching and detaching the USB device
+  when the USB3 tunnel goes up or down is driven by the router's `usb3-dev`
+  list alone (a device id lookup at each transition). So on these guests
+  (98 SE reads no `_DSD`; the 2000 xHCI-only image runs `acpi=off`) leg U.8
+  depends on `usb3-dev`, and the two host properties are inert for the
+  guest; the launcher's `-Usb3` builds all three.
+- **`-global` on `-Extra` order.** `-Extra` lines follow the launcher's own
+  `-device` lines on the command line; QEMU applies `-global` values before
+  any device is created, so the order does not matter.
+
+### The launcher change
+
+`scripts\usb4\run-usb4-guest.ps1` builds every overlay over
+`vm\<guest>.img` under `vm\usb4\`. The 98 SE legs need an overlay of
+`vm\t26\win98-gold.qcow2` instead (`vm\win98.img` carries the `1.x` miniport
+under NUSB's usbport; the gold image carries the host controller driver and
+its `AUTOEXEC.BAT` copies `D:\XHCI98.SYS` over the installed one), so the
+launcher gained two parameters, and `usb4-qmp.ps1` the second:
+
+- `-BaseImage <qcow2>`: another base under the main checkout's `vm\` (a
+  relative path is taken from the main checkout), only ever a backing file;
+  the guest's machine line is kept. It cannot sit in the run directory.
+- `-RunRoot <dir>`: the directory under `vm\` that holds the run directory
+  (default `usb4`, as before), so a worker's overlays sit in its own
+  `vm\<branch>\`. A writable `-XferImg` must then be under that directory.
+  `run.json` records `runRoot` and `base`; `usb4-qmp.ps1 -RunRoot` finds it.
+
+No property needed a fix: all five reached QEMU unchanged.
+
+### The `usb4-generic` profile with the pre-OS connection manager, both host models
+
+```
+run-usb4-guest.ps1 -Guest win98 -BaseImage vm\t26\win98-gold.qcow2 -RunRoot p40-topo
+    -Name p40t-98-min -Usb4Profile generic -Slot 2 -BootStrict -Trace -Tag r1
+    -Extra '-global','usb4-host.preos-cm=on'
+run-usb4-guest.ps1 -Guest win2k-xonly -RunRoot p40-topo -Name p40t-2k-min
+    -Usb4Profile generic -Slot 2 -BootStrict -Trace -Tag r1
+    -Extra '-global','usb4-host.preos-cm=on'
+```
+
+and `p40t-98-adl`, `p40t-2k-adl` the same with
+`'-global','usb4-host.host-model=intel-adl'` added. The device router `enc0`
+with its NVMe was attached at power-on; each guest booted from a fresh
+overlay, its wizards were driven over QMP keys and read from screendumps.
+
+**What the emulator did** (the `usb4_*` trace, the same on both guests per
+host model):
+
+| | `minimal` | `intel-adl` |
+|---|---|---|
+| Host router | vendor `46F4`, product `4040`, 16 paths | vendor `8087`, product `463E`, 12 paths |
+| Pre-OS CM | router `0x1` enumerated, bonded x2, Configuration Valid; PCIe path host adapter 6 to router `0x1` adapter 3, HopID 8 | the same through host adapter 8 (PCIe Down 8) |
+| Tunnel | `usb4_tunnel_transition router 0x1 PCIe tunnel up reason 0`; `usb4_tp_insert tb0: insert endpoint gen 1 drive=nvme0 serial=USB4EMU01 cold=1`, before POST | the same |
+| At the machine reset | the pre-OS CM runs again over the live tunnel (no second transition), then "host interface reset, 1 hot plug events dropped": nothing pending for the OS | the same |
+| After boot | no further `usb4_*` line: no guest touched the host (no driver), the tunnel stayed up to the quit | the same |
+
+**What the guests saw** (`info pci` after boot, both host models alike):
+
+| Function | Location | Ids | 98 SE (gold image) | 2000 SP4 (`win2k-xonly`) |
+|---|---|---|---|---|
+| USB4 host interface | 00:04.0 | `1B36:00F4`, subsystem `1AF4:1100`, class `0C0340`, BAR0 256 KB | Add New Hardware: "PCI Universal Serial Bus", no driver (cancelled) | Found New Hardware: "Universal Serial Bus (USB) Controller", no driver (cancelled) |
+| Tunnel bridge | 00:05.0 | `1B36:0001`, secondary bus 1 | "PCI standard PCI-to-PCI bridge" from `MACHINE2.INF`, installed through the wizard | installed silently |
+| NVMe behind the pre-OS tunnel | 01:01.0 | `1B36:0010`, class `010802` | "PCI Card", no driver (cancelled) | "PCI Device", no driver (cancelled) |
+
+So **the pre-OS tunnel appears to both guests from boot on both host
+models**: the NVMe is enumerated behind the tunnel bridge by the BIOS and by
+each OS with no connection manager in the guest, which is the starting
+state record 22 section 9.2 (discover and preserve) is written for. The
+NVMe at POST did not stop either boot (`-BootStrict` was carried as in
+39-0.7). After the wizards were cancelled, 98 SE's configuration manager
+left the host's and the NVMe's BARs unassigned (`info pci`: not mapped);
+2000 kept the host's BAR at `0xFEA00000` and left the NVMe's unassigned.
+The gold image also shows one "Unknown Device" (Code 28) at the root of the
+device tree, under no PCI bus; it was not identified in this reading. The
+host router's own ids (`46F4:4040`, `8087:463E`) are fabric-side only: a
+guest sees them through the connection manager's configuration reads, not
+in PCI.
+
+### The fault-injection harness and leg U.4
+
+`docs/HARNESS.md` (main `3c74189`) puts every control on the tunnel bridge
+(`tb0` here), set at run time with `qom-set` (`usb4-qmp.ps1 harness <x-prop>
+<value>`): fault rules in `x-faults`, held-command release in `x-release`,
+gate overrides `x-gate`, controller timing faults (`x-rdy-set-delay-ms`,
+`x-rdy-clear-delay-ms`, `x-shst-delay-ms`, `x-cfs`), a hung controller
+`x-hang`, lost interrupts `x-intx-drop-*`, a marker doorbell, the read-back
+`x-harness-state`, and a debug port (`-device usb4-debug-port`, I/O 0x5A0,
+which `-Extra '-device','usb4-debug-port'` passes) whose stage writes fire
+`at=stage` rules before the guest's write returns. Every firing traces
+`usb4_h_fire` and raises QMP `USB4_HARNESS`; the gate and the endpoint
+cutoff trace as `usb4_tp_gate` and `usb4_tp_cutoff`.
+
+**What it acts on.** The NVMe endpoint behind the bridge and the bridge's
+access gate, nothing else. A rule's `surprise`, `eject` or `admin-down`
+takes the tunnel slot down (stage 1 in the call, stages 2 to 4 from the
+bottom half), but it passes no device router: the router stays attached,
+its paths stay enabled and the connection manager receives no hot-plug
+event. So a harness tunnel-down is a link lost behind a live path, which
+the connection manager cannot see, not an unplug; the unplug of U.4 is
+still `device_del enc0` (`usb4-qmp.ps1 unplug`), which detaches the router,
+raises the hot-plug event and takes the tunnel down as a surprise.
+
+Which injection gives each U.4 case:
+
+| U.4 case | Injection | What it pins |
+|---|---|---|
+| Unplug during a large copy, uncontrolled point | the copy running, then `unplug` | the plain leg; where the unplug lands in the I/O stream is whatever it is |
+| Unplug with a read in flight | `x-faults "at=fetch op=read act=hold tag=u4"` (or `nth=N`), `x-harness-state` polled until it lists the hold, then `unplug` | a read fetched and not executed is outstanding when the router leaves; the hold makes the state exact, the unplug's arrival is event-following |
+| Unplug with a write's completion withheld | `x-faults "at=complete op=write act=hold tag=u4"`, then `unplug` | data transferred, no CQE and no interrupt when the router leaves |
+| A held command at the cutoff | either hold above, left held through the `unplug` | the endpoint's reset at the cutoff discards it (HARNESS.md: a reset discards held commands), so the I/O never completes and nvme98's deadline or the notification must end it |
+| Link lost at an exact NVMe command, no unplug | `x-faults "at=fetch op=read nth=N act=surprise"` | the tunnel-down without a router change: this driver must not tear down a path the fabric still reports up; nvme98 sees all-ones |
+| Presence lost with DMA still open | `x-gate=reads-fail` (or `act=reads-fail`), later `x-gate=normal` | the window before a path is closed (nvme98's R4-1), with this driver idle |
+| Late completion past nvme98's deadline | `x-faults "at=complete op=read nth=N act=hold delay=6000"`, then `unplug` | nvme98's MD-1 path when no qualified notification exists |
+| G3 qualification of the link-down notification | `-trace usb4_tp_gate -trace usb4_tp_cutoff -trace usb4_dbg_marker`, the notification marked through the debug port | the notification's marker later than `usb4_tp_cutoff` (HARNESS.md "Measurement events") |
+| An exact point in this driver's own teardown | `at=stage code=<c> act=...` on a stage code this driver writes to the debug port | not available until this driver's `qemu` flavour writes stage codes (below) |
+
+**What is not there.** Nothing in the harness acts on the fabric: no rule
+drops or delays a control packet, fails a router operation, withholds a
+hot-plug event or detaches a router at an exact point. The connection
+manager's own error paths (a router operation timing out, an unplug between
+two Path Enable writes) therefore cannot be pinned by the harness; on this
+emulator they are reached only by timing a `device_del` (event-following).
+Leg U.4 as record 22 states it (the driver does not hang, the teardown
+read-back, the notification qualified or MD-1) is fully drivable; the
+exact-point teardown variants need either the stage codes below or a
+fabric-side rule in `usb4-emu`.
+
+### Owed
+
+- **Stage codes and markers from this driver.** For the exact-point rows
+  and for G3, the `qemu` flavour of the connection manager has to write
+  stage codes and its TSC markers to the debug port (0x5A0) at its teardown
+  steps (path close, the endpoint reset seen, the notification to nvme98),
+  with a code range agreed with nvme98's debug build so the two do not
+  collide. Not in any task yet; a 40-V.1 prerequisite for U.4's exact
+  variants.
+- **A fabric-side harness rule** (a router detach, a dropped or delayed
+  control packet, a failed router operation, at `at=stage`), if the exact
+  connection-manager error paths are to be read on the emulator: an
+  `usb4-emu` request, not raised here.
+- The "Unknown Device" (Code 28) on the 98 SE gold image is not identified.
+- No leg here installed a connection manager; U.1 to U.13 are 40-V.1 and
+  40-V.2's.
+
+## 40-A.5 - The pure core against usb4-emu's fabric model
+
+**Verdict: a reading, recorded** (2026-10-15). Not a gate (record 22
+section 14.1, decision U11): the host suite `test_u4cm` over this
+project's own fake fabric is the gate; this run checks the same core
+against the emulator's own router, adapter and path model.
+
+**The vehicle.** Development host A. `scripts\usb4-crosscheck\` builds the
+pure core (`src\cm\tbt_ring.c`, `tbt_hw.c`, `tbt_icm.c`, `tbt_u4cm.c`)
+strictly as C89 (`gcc -std=c89 -pedantic -Werror`) and links it, through a
+plain-C glue (`u4cm-glue.c`, so the DDK-style types never meet the Windows
+headers QEMU's osdep pulls in), with usb4-emu's fabric model -
+`src/qemu/hw/usb4/` `usb4-ctl.c`, `usb4-fabric.c`, `usb4-router.c`,
+`usb4-router-tb3.c`, `usb4-router-adl.c`, `usb4-preos.c`, `usb4-drom.c`,
+`usb4-tunnel.c`, `usb4-fabric-usb3.c` - as usb4-emu's
+`tools/usb4cm/host/run-host-test.sh` does for `usb4cm`, with usb4-emu's
+MSYS2 UCRT64 gcc 16.2 and glib. usb4-emu read in place, never modified:
+`main` checkout at `9d09cae` (its handoff relicence commit `3c74189` is an
+ancestor), QEMU fork at `178237c`. Everything built went to
+`out\u4-crosscheck\`. The run:
+
+```sh
+<usb4-emu>/scripts/msys2-shell.sh "sh <xhci98>/scripts/usb4-crosscheck/run-crosscheck.sh"
+```
+
+**The cases** (record 22 section 14.2's U.1, U.2, U.3, U.5, U.6 and U.9,
+on the model instead of a guest): a device attached before the start on
+port 1, a hot plug on port 2 with USB3 tunnels, its unplug (surprise
+removal in the model) and re-plug, on both host models; the model's pre-OS
+connection manager (`preos_cm`) on both host models; the driver's stop and
+a second instance over the configured fabric; nothing attached.
+
+**What it said** (xhci98 at `20442cd5`; the log is
+`out\u4-crosscheck\run.log`): 32449 checks, 0 failures - the model's own
+CRC and frame checks on every packet included. The same run at the core's
+first complete version (`452151c4` with its first corrections) read 30601
+checks, 0 failures. Read again at `167f43f8` against a newer usb4-emu
+checkout (`main` `fdcca32`, QEMU fork `53f8fc7`, which adds the
+`asm4242` host model in `usb4-router-asm.c`; the script links it when
+present): 32449 checks, 0 failures.
+
+**The `asm4242` host model** (usb4-emu `main` `ce13e0e`, a descendant of
+the `a50c19e` the handoff names; its `docs/USB4-HOSTS.md` section 5: the
+ASMedia ASM4242 of AM5 X870 boards, router `174c:2428`, from public
+sources only, nothing captured, with its three quirks on). The CSM
+desktop case where this connection manager is the only one. The same
+cases on it, plus the run before: 45469 checks, 0 failures.
+
+- `asm4242`: PCIe Down 8 and USB3 Down 10 found on port 1 by discovery
+  (lanes 1-4, DP IN 5-6, Host Interface 7, PCIe Down 8-9, USB3 Down
+  10-11), both tunnels up and bonded over lanes reporting 174 Total
+  Buffers (the path credits taken from Buffer Allocation, never the lane
+  figure, and clamped to the 7-bit field in any case); hot plug, unplug
+  with the path proven closed, re-plug; the pre-OS tunnel preserved with
+  no transition. 897 control requests, 0 retries, 0 timeouts. The Host
+  Interface Pending Packets quirk is never met: this connection manager
+  never invalidates a Host Interface path. The host suite's fake fabric
+  has the same preset (`fabHostAsm4242`, written from that document).
+- Linux's quirk table (`quirks.c`, at the pinned revision) has no
+  ASMedia row; its only ASMedia code is the NVM version read (`nvm.c`),
+  which this connection manager does not use. The three quirks come from
+  mailing-list patches, not merged; their behaviours are met by the
+  design itself (bounded drains with quarantine, ring 0 only without
+  end-to-end flow control, credits clamped).
+
+- `minimal`: port 1 UP at start, PCIe at lane HopIDs 8 and 9 and USB3 at
+  10 and 11 (`u4.pcie.up 00010809`, `u4.usb3.up 00010a0b`), bonded, the
+  model's PCIe tunnel UP once and its USB3 tunnel UP; port 2 hot plugged
+  UP; its unplug torn down with the path proven closed (the link-down
+  upcall's `PathClosed`); re-plugged UP. 792 control requests, 0 retries,
+  0 timeouts, 10 hot plug events.
+- `intel-adl`: the same, with PCIe Down 8 paired with port 1, adapters 10
+  and 11 absent (`ERR_ADDR`), the `8087:463E` USB3 bandwidth quirk firing,
+  the DP IN plug events acknowledged; 825 requests, 0 retries, 0 timeouts.
+- `preos_cm=on`, both models: port 1 preserved at HopIDs 8 and 9
+  (`u4.preserved 00010809`), no tunnel transition at the driver's start
+  (no flap), no Host Interface Reset and no Host Router Reset; still up
+  across idle ticks; its unplug EMPTY.
+- Stop and restart: the second instance preserved the first's tunnel with
+  no transition.
+
+**One shim difference found.** `usb4cm`'s host test shim
+(`tools/usb4cm/host/cm-host-test.c` `shim_rx_flush`) writes the receive
+descriptor back with bit 22 set; Spec Table 12-8 makes bit 22 of the
+write-back Buffer Overflow, and usb4-emu's own host interface
+(`hw/usb4/usb4-host.c`, `DESC_BO`) sets it only on an overflow. This
+project's ring code honours Buffer Overflow, so with the copied shim every
+answer read as an overflow and the first run timed out at the host router.
+The cross-check's shim writes the write-back as `usb4-host.c` does. The
+emulator itself is right; `usb4cm`'s shim is not, and `usb4cm` never reads
+the bit. No request filed: nothing in the emulator needs to change.
+
+**Also found.** usb4-emu's fabric answers a router-space Write Request with
+the arrival adapter in the response's Adapter Num (`usb4-fabric.c`
+`send_response`), where Spec Table 6-5 asks for the request's value echoed;
+`tbt_ring.c` therefore compares the Adapter Num only outside the router
+space (route, address, size, space and sequence number still compared
+there).
+
+## 40-A.7 - The `nvme98` statement under the USB4 profile
+
+**Verdict: built and host-tested; no guest leg read yet** (2026-10-15).
+The channel of task 39-A.7 (run-39.md, "39-A.7"; record 21 section 7.2)
+is wired to the USB4 driver half: `cmU4Activate` registers
+`CmNvlinkU4Up` and `CmNvlinkU4Down` through `CmNhiSetU4Hooks`; the UP hook
+publishes the new establishment's `UP` before anything can expose the
+endpoint (its member by correspondence, or every exclusive member when
+the correspondence is not known); the DOWN hook makes the statement only
+with `TBT_U4_LINKDOWN.PathClosed`, the port's member known, that member
+the emulator's bridge (1B36h on the bridge itself or on the bus-0 bridge
+whose range holds it, SHPC, no PCI Express capability),
+an admitted operating system (2000 x86, XP x64), the slot read empty
+within what is left of the 3 s, and at least 100 ms left; the seam waits
+for the acknowledgement before the removal. `CmNvlinkService` gives the
+core one presence sample per port each pass (the anchor of record 22
+section 10.3). The conditions are `test_cm_nvlink`'s
+(`CmNvlinkU4Verdict`, every branch).
+
+**Owed:** a Windows 2000 guest on the `usb4-generic` profile with the
+software connection manager admitted and `nvme98`'s G3 prototype bound
+(the leg of run-39.md's 39-A.7 table, on the USB4 profile): the anchor's
+age at the statement, the statement after the cutoff, the
+acknowledgement before the invalidation, the 5 s bound with an idle
+receiver; and the 9x half once `nvme98` has one.
+
+## 40.5 onward - The install, upgrade and uninstall tool (INSTALL.BAT, XHCIINST, XHCIIN64)
+
+**Verdict: done** (2026-10-15): the legs below pass on the tool as it
+stands, with the 98 SE re-reads at the end. Design record 23 is the design; this section
+is what the legs read. Development host A, TCG, one vCPU per guest unless
+said, the p40-inst kit (`out\p40-inst\kit`, QEMU `-name "p40i ..."`),
+overlays under `vm\t40i\` (some early ones under `vm\p40-inst-c\`, moved
+there from another drive), evidence and per-leg notes in
+`out\p40-inst\legs\<guest>\notes.txt` with the console logs
+(`C:\XHCIINST.LOG` copied out) and screenshots beside them.
+
+**The packages.** `pkg24`: the published 2.4.0.0 drivers with the tool at
+2.4.0.0. `pkg30`, `pkg30c`, `pkg30d`: this branch restamped 3.0.0.0 in a
+throwaway worktree (the stamp is never committed), x64 unsigned (F8 at
+every start on Vista x64 and 7 x64). Each leg's notes name the tool's
+commit and the SHA-256 of the `XHCIINST.EXE` it staged; the tool changed
+during the day, and each defect below was read on the tool named with it.
+
+**The legs.** F: a first install from `pkg24` (then the population: a
+mouse, a stick, a UAS disk). R: the registry questions. U24: an update
+from 2.4.0.0 to 3.0.0.0. UN: `/uninstall`, the checks after the restart,
+then a reinstall. U23: an update over the 2.3.1.0 baselines of Phase 38
+(`vm\t38mx\mtx-<g>-u231.qcow2`, read-only backing) with their population
+(a hub with a keyboard, sticks and audio behind it). NC: a run on a
+current machine. L: the 32-bit tool run alone or on the wrong directory.
+
+| Guest | Leg | Result |
+|---|---|---|
+| 98 SE | F | pass: copy + `DevicePath`, exit 4 with the steps; after the restart the wizard named the controller and found the INF by itself; the "xhci98 xHCI Host Controller Disk" prompt took the printed directory; the CD for `usbd.sys` |
+| 98 SE | R | pass: only `XhciInterruptMode`, `XhciSilentInstall` and `XhciForceBulkOnly` asked; the answer written to the controller's key, none to the root hub's |
+| 98 SE | U24 | pass: Update Driver's search found the new copy by itself; driver date and binary the package's |
+| 98 SE | U23 | pass: the controller updated by the printed steps, the new `USB\XHCI98_*` devnodes installed, the one line naming `tools\xhcicln\`, no `XHCICLN` run |
+| 98 SE | silent install | pass: `XhciSilentInstall` 1 merged `SILENT.REG`'s list and set the switch; a mouse plugged in after the restart got no wizard (one CD prompt for `hidusb.sys`, the documented caveat) |
+| 98 SE | UN | uninstall as designed; the reinstall after it failed on the tool of that hour (the local copy held Windows' `xhci98.PNF`, so the tool kept it and then could not remove it, exit 2); fixed (the removal takes the device installer's `.PNF`), re-read below |
+| ME | F, U24 | pass: ME installed the controller with no prompt at all; U24 by Update Driver's automatic search |
+| 2000 | F, R, U24, UN | pass (F with no Windows prompt; UN left no INF, service, file or local copy of the package, `usbd.sys` and `usbui.dll` kept; the reinstall installed) |
+| 2000 | U23 | first run pass (07:38); a later run (U23b, tool 3164e913) failed: the root hub install met Windows' own Found New Hardware install of it (`0x20`), the hub ended at Code 28 and the keyboard behind it stopped; a second run installed it. Fixed by the settle of record 23 section 5.8 |
+| 2000 | U23c, U23d (tool e5b6b42d) | pass, twice: after the controller's update the tool waited ("devices moved", settled after 18 and 17 seconds) while Windows installed the root hub silently; no wizard, no busy retry; every device 3.0.0.0 started, the USB keyboard typed; "Changes were made. Please restart Windows now.", exit 3 |
+| 2000 | NC (tool e5b6b42d) | pass: `/defaults /yes` on a current machine: each INF "staged already", "No changes were made.", exit 0; a settings-only `/set` asked "Write the changed settings now", exit 3; `/defaults /yes` again exit 0 |
+| 2000 | XHCICLN | pass: the banner reads 3.0.0.0 (an earlier test package carried the 2.4.0.0 binary; the release script checks the version) |
+| 2000 SMP | F, U24 | pass (over a base carrying the 1.0.0.x miniport, updated in place) |
+| XP | F, U24, UN | pass: the root hub's Found New Hardware wizard made the first run stop with exit 4 as designed, the second finish |
+| XP x64 | F, U24, L | pass |
+| Vista x86 | F, L, U24 | pass (U24 failed once on a package whose filter INF lacked a catalog line for the store; the package was fixed and U24 re-read) |
+| Vista x64 | F, U24 | pass (U24's run after the restart not read) |
+| 7 x86 | F, U24, UN | pass |
+| 7 x64 | F, UN (over 2.4.0.0), U24, U23 | pass; the x64 note cited a section name the package's `readme.txt` does not carry and called an unsigned package test-signed: fixed |
+
+**What the legs changed in the tool** (each in record 23): the settle
+beside Windows' own installer and the retry of a call that meets it
+(section 5.8); the last line and the exit code agreeing, and no restart
+request beside "run INSTALL.BAT again" (section 7.4); an unchanged rerun
+saying "No changes were made." (sections 5.6 and 8.4); the confirmation
+naming what will happen; the results never printing "started" beside a
+problem code; the x64 note reading the drivers' signature (section 5.10);
+on 98 SE and ME the root hub's own update step, the 2.3.x warning only
+over 2.3.x on 98 SE, the `.PNF` beside a local copy, an old slot's entry
+kept as a step but out of the confirmation's wording, the UAS disk's disk
+prompt and ME's "Select Other Driver" list in the steps (sections 4.4,
+6.3, 6.4); `/yes` asking nothing (section 7.1); and on Windows 2000 a
+first filter install's Code 12 waiting for the restart the run asks for
+(section 5.9, owner).
+
+**The 98 SE re-reads on the fixed tool** (tool 62d7b22f, `pkg30d`). NC9,
+on the U23 overlay: the old slot's `DEV_04` entry listed with its
+guidance; the confirmation "Check the local copy and DevicePath now (see
+the entry listed apart above)"; "No changes were made.", exit 4 (that
+entry is a step, by design); `/set XhciForceBulkOnly=1 /yes` and back to 0
+asked nothing and wrote the controller's key ("Changes were made, but not
+everything is done ...", exit 4); `/defaults /yes` "No changes were
+made.". UN9, on the UN overlay: the install copied and staged normally;
+after the wizard and the restart a second run changed nothing;
+`/uninstall` restored `DevicePath` and removed every local copy - the one
+holding Windows' `xhci98.PNF` included - and `%windir%\XHCI98`; after the
+printed steps `USBD.SYS` and `USBUI.DLL` were present; the reinstall after
+it copied and staged with no refusal. Pass. A copy of an earlier package
+stays beside the new one until the uninstall (record 23 decision D7).
+
+### Owed
+
+- Vista x64: U24's run after the restart; 7 x64: UN over 3.0.0.0 (both
+  read on 2026-10-16 on a pre-cut signed package, the last section below).
+- The filter install on Windows 2000 through the tool (the upstream
+  port's Code 12 now answered with the restart): not re-read on the
+  Thunderbolt vehicle with this tool.
+
+## 40-A.6, 40-A.8 and 40-A.9 - The driver half, read on the emulator
+
+**Verdict: the USB4 profile runs end to end on Windows 98 SE and Windows
+2000** (2026-10-15), on `usb4-generic` with `host-model=minimal` and
+`intel-adl`, a cold device, hot plug, unplug and re-plug, the pre-OS
+connection manager's tunnel preserved, a USB3 tunnel, the policy values,
+and on 2000 the safe eject tearing the tunnel down before "Safe To Remove
+Hardware". One fault was found outside this task's code: on Windows 98 SE
+the re-enumeration seam's CONFIGMG call blocks the connection-manager
+thread while an Add New Hardware wizard is open on a tunnelled device
+(below).
+
+**The vehicle.** Development host A, TCG, the `usb4-emu` fork in
+`vm\usb4\bin` (the `a50c19e` build), through task 39-0.7's launcher with
+`-RunRoot p40-drv`, `-BootStrict` and `-trace usb4_*`; QMP and VNC on
+47984 to 47989. 98 SE from overlays of `vm\t26\win98-gold.qcow2`
+(`u98-*`), 2000 from an overlay of `vm\win2k-xonly.img` (`u2k-min`), one
+vCPU each. The `qemu` flavour of `xhcicm.sys` from this branch, staged with
+`xhcicm.inf` on the transfer drive (D: on 98 SE, E: on 2000) in a copy that
+writes `XhciLogVerbosity` 2 (and, for leg U.10, the policy values); its
+port-0xE9 lines are the "log" below. The binary was the integration of this
+branch with task 39-A.5's `cm_reenum.c` (the trial merge `p40-drv-legs`,
+then this branch after it merged `3.0.0.0` at `c2c9ca3d`), except where a
+leg names the earlier stub build. Driven over QMP keys and screendumps.
+
+**Install.** 98 SE: the tunnel bridge through 98 SE's wizard
+(`MACHINE2.INF`), then the host interface: Add New Hardware, "Specify a
+location" D:\, "xHCI98 USB4 Host Interface" from `xhcicm.inf` by its class
+line `PCI\CC_0C0340`, no restart. 2000: `devq update E:\xhcicm.inf
+"PCI\VEN_1B36&DEV_00F4&CC_0C0340"` (OK, `reboot=0`; Windows 2000's
+`UpdateDriverForPlugAndPlayDevices` finds the device only by a hardware id,
+and `PCI\CC_0C0340` is a compatible one, so the class line is reached
+through the `&CC_0C0340` hardware id), then the filter `devq update
+E:\nt\xhcicmf.inf "PCI\VEN_1B36&DEV_0001&CC_0604"` (OK, `reboot=0`), and
+for the NVMe `nvme98` 0.1.1.0 (its published x86 build, read-only) by
+`devq update ... "PCI\VEN_1B36&DEV_0010&CC_010802"` after the first tunnel.
+
+**The selection** (log, every guest): `cm.select.outcome=00000004`
+(SOFTWARE), `u4.select.route=00000001` (no firmware CM by identity),
+`cm.select.caps=00000010`; on `minimal` the host router `46F4:4040` with
+two ports (lanes 1-2 and 3-4, PCIe Down 6 and 7); on `intel-adl`
+`8087:463E`, PCIe Down 8 and 9, `u4.quirk=463E0001` (the USB3 bandwidth
+row). On both models the mapping operation answered: port 1 named
+`00:05.0` (`u4.named=01002802`, KNOWN: the tunnel bridge was already the
+set's member by its SHPC source) and port 2 a location with no bridge
+(`02000004`, NO_BRIDGE; these guests carry one tunnel bridge).
+
+| Leg | Guest, setup | What was read |
+|---|---|---|
+| U.1 cold device | 98 SE, `minimal`, device at power-on, no pre-OS CM (`u98-leg`) | trace: ring 0 disabled then programmed (no Host Interface Reset), host router enumerated, mapping (`30h`), Get Capabilities (`31h`), Buffer Allocation (`33h`) on the host and the device router, DROM Read (`24h`), bonding (lane 1's hot plug event acknowledged), TMU posting, Configuration Valid, the four PCIe entries, Path Enable both ends, `PCIe tunnel up`, and a USB3 tunnel beside it; log `u4.pcie.up=00010809`, `u4.usb3.up=00010A0B`, `u4.action=01010001`, `cm.reenum.9x.reenumerate=00002800` (CR_SUCCESS); Add New Hardware for "PCI Card" (the NVMe) with no refresh |
+| U.3 unplug, re-plug | the same guest | unplug: `u4.linkdown=01000109` (path proven closed), `u4.action=02010001`, the bridge re-enumerated, both host-side tunnels invalidated and the USB3 bandwidth released in the trace; re-plug: generation 2, `PCIe tunnel up`, "PCI Card" again |
+| U.2 hot plug | 2000, `minimal`, nothing at power-on, filter installed (`u2k-min`) | `device_add enc0`: the tunnels built, `u4.action=01010001`, the filter's invalidation, Found New Hardware for the NVMe at once, `nvme98` bound, the "Unplug or Eject Hardware" icon in the tray |
+| 40-A.9 safe eject | the same guest | the NVMe listed ("NVM Express Controller (nvme98) at PCI Slot 4"); Stop, OK: `cm.reenum.eject=00000028`, `u4.eject.bridge=00000028`, `u4.eject=00000100` (port 1, TBT_OK), the trace `PCIe tunnel down reason 1 (admin-down)` before "Safe To Remove Hardware"; `device_del enc0` then: no dialog and no further action (the port stays down until the re-plug); `device_add enc0`: generation 2, the tunnels rebuilt, the NVMe listed again. That build tore the port's USB3 tunnel down with the PCIe one; the driver was then changed to tear down the PCIe tunnel alone (a USB3 tunnel carries the host xHCI's devices, which the eject never asked to stop), host-tested and not read here again |
+| U.5 and U.6 | 98 SE, `intel-adl` with `preos-cm=on` and `USB3=1` (`u98-adl`, `u98-adl2`, `u98-adl3`) | `u4.preserved=00010809`: the pre-OS tunnel preserved (port UP, `hd` 8, `hu` 9), no reset, no transition and no reset of any kind in the trace after the driver's ring takeover, nothing re-enumerated; unplug (stub build): `u4.linkdown=01000109` and the host side torn down; re-plug: built here with bonding, the USB3 tunnel and its Host Controller Ack, the USB disk attached to the tunnel's `qemu-xhci` at 5000 Mb/s (`info usb`) - U.8's fabric half |
+| U.10 policy values | 98 SE, `minimal`, `USB3=1`, `XhciCmApprove` 0, `XhciCmUsb3Tunnel` 0, `XhciCmLaneBonding` 0 (`u98-pol`) | the router enumerated and Configuration Valid, the port UP with no PCIe tunnel and no USB3 tunnel (`usb3_want ... attached=0`), the host's lane 1 written with Lane Disable (LANE_ADP_CS_1 bit 14) |
+
+**The fault (task 39-A.5's code, not this task's).** On 98 SE with
+`cm_reenum.c`, while an Add New Hardware wizard is open on a tunnel port's
+child (the NVMe, no driver on this image), a CONFIGMG call the seam makes
+on the connection-manager thread blocks until the wizard closes: the
+thread stops, ring 0 is not serviced, the routers' hot plug events
+overflow the RX ring and an unplug is not seen. Cancelling the wizard
+unblocked it at once, and the queued unplug and re-plug then ran in order
+(`cm.reenum.9x.query-remove=00000000`, the removal, the re-enumeration,
+the tunnel up). The stub build in the same setup kept polling throughout.
+Reported to the orchestrator for task 39-A.5.
+
+**Not read here.** U.4 (unplug during I/O, the harness), U.7 (pre-OS
+cleaning), U.9 (disable and enable), U.11 (two tunnel bridges), U.12 (a
+daisy chain), U.13 (inert starts), the `asm4242` host model, suspend and
+resume, ME and the NT 5.1 and 6.x guests (40-V.3), and a Thunderbolt 3
+device router behind a USB4 host, for which the emulator has no preset
+(record 22 section 8; task 40-A.8 is host-tested only). The NVMe's volume
+was not mounted on 98 SE (no NVMe driver on the image). The 2000 legs'
+INF copy also carried a test-only `PCI\VEN_1B36&DEV_00F4` model line; which
+model line ranked there was not read. Evidence in
+`vm\p40-drv\<run>\` (traces, debug-console logs, screendumps).
+
+## 40.6 - Windows ME: a UAS disk as the first storage device after `INSTALL.BAT`
+
+**Verdict: not a regression; the tool now names the step** (2026-10-15).
+The installer's first-install leg on Windows ME read a UAS disk that
+installed silently from the staged `xhciuas.inf` and stayed at Code 2, with
+a yellow mark, through a restart. That is the limitation the release notes
+carry since `2.0.0.0` ("Known limitations", "Windows ME: a UAS drive as the
+first USB storage device shows Code 2"; the owner's ruling of 2026-10-04,
+`roadmap-hcd.md` decisions table, and `runs/run-31.md`, "Windows ME: a UAS
+drive first"), and the same leg read it with the published `2.4.0.0`
+drivers: the leg's first device reading, before any `3.0.0.0` file was
+staged, listed the UAS entry as `xhciuas 2.4.0.0; current (this release)`
+at problem code 2. `2.4.0.0` behaves the same.
+
+**The cause, read on the leg's own overlay** (a fresh overlay over
+`vm\p40-inst-c\ovl\mtx-me-f3.qcow2`, nothing written to it; the mouse and
+the UAS disk plugged in after the desktop, on the leg's ports; readings in
+`vm\me-uas\legs\serial-r2.log`). The UAS devnode
+(`Enum\USB\VID_46F4&PID_0003\27842-0000:00:03.0-3`) holds
+`upperfilters = "USBNTMAP.SYS"`; its driver key (`Class\USB\0002`) holds
+`DevLoader = *NTKERN`, `NTMPDriver = xhciuas.sys`, `InfSection = Uas.Dev`,
+`MatchingDeviceId = USB\Class_08&SubClass_06&Prot_62` and an `InfPath` that
+is the package's own `xhciuas.inf` as ME's `INF\OTHER` copy of it: the
+silent install took the expected INF, with the expected entries.
+`System32\Drivers` held `XHCIUAS.SYS` and no `USBNTMAP.SYS` or
+`USBSTOR.SYS`, and `System\IOSUBSYS` no `USBMPHLP.PDR`. ME ships the three
+in its cabinets (`BASE2.CAB` and the cabinets after it, the ME CD read with
+7-Zip, nothing executed) and its `usbstor.inf` copies `USBSTOR.SYS` and
+`USBNTMAP.SYS` only when a Bulk-Only device installs; with the named upper
+filter missing, NTKERN cannot load the devnode's drivers, which Device
+Manager shows as Code 2. A Bulk-Only stick plugged into the same guest
+installed silently, with no CD and no restart, and placed all three files;
+the UAS disk, unplugged and plugged back in, then worked.
+
+**The change** (branch `me-uas`, `1c481f33` and `97d0eff0`; reviewed and
+revised). `INSTALL.BAT` said nothing about it, and for a current UAS entry
+at Code 2 printed "Nothing: this release runs it". On 98 SE and ME, a
+present UAS entry at Code 2 while `System32\Drivers` holds no
+`USBNTMAP.SYS` now gets the release notes' recovery in the plan and in the
+steps: on ME, plug in any ordinary stick once, then unplug and replug the
+disk; on 98 SE, NUSB's mass-storage component, the disk starting at the
+next boot. Code 2 with the file present gets no such step. On ME with no
+`USBNTMAP.SYS` the steps end with the same advice before any UAS disk is
+plugged in. The decision is the pure `inst_uas_fix_9x` (`inst_core.c`,
+host suite `test_inst`). No driver or INF changed: the copy of the two
+files through `xhciuas.inf` stays parked by the owner's 2026-10-04 ruling,
+since the 98 SE CD's `layout.inf` names neither file and 98 SE prompted for
+both.
+
+**The legs** (development host A, QEMU 11.1.0, TCG, `pc`, `pentium3`, one
+processor, 256 MB, `qemu-xhci,p2=4,p3=4`; the `release-x86` package staged
+from the branch, with its `INSTALL.BAT` and tool; devices hot-plugged after
+the desktop, the UAS disk as `usb-uas` plus `scsi-hd` on a VVFAT directory,
+attached explicitly; readings and shots in `vm\me-uas\legs\` and
+`vm\me-uas\shots\`):
+
+| Leg | Result |
+| --- | --- |
+| ME, first install, a fresh overlay of the stock ME base (`vm\t37me\winme-stock-base.qcow2`) | The New Hardware wizard for "PCI Universal Serial Bus" cancelled; `INSTALL`, Y: the package copied, DevicePath set, the steps ending with the ME advice to plug a stick before the first UAS disk; after the restart ME installed the controller with no wizard and asked for a restart. The UAS disk plugged in first installed silently and showed Code 2 (yellow mark); `/list` and `INSTALL` gave the ME step for it, `INSTALL` with it in place of "Nothing". The step followed: a Bulk-Only stick installed silently and placed `USBNTMAP.SYS`, `USBSTOR.SYS` and `USBMPHLP.PDR`; the UAS disk unplugged and plugged back in on the same port worked with no restart: no yellow mark, `/list` with no problem code, its file read, a 1 MiB file written and compared with `fc /b`, no differences. **PASS** |
+| 98 SE (NUSB), first install, a fresh overlay of `vm\t26\win98-clean.qcow2` | `USBNTMAP.SYS` present from NUSB; `INSTALL`, Y: no ME line in the steps; the controller from the wizard by search, the "xhci98 xHCI Host Controller Disk" and the 98 SE CD prompts, restart; the UAS disk through the wizard by search from the staged copy, F: at once; its file read, the 1 MiB write compared clean; `/list` with no problem code and no Code 2 step. **PASS**, unchanged |
+
+Both legs ran the tool unstamped, so it and the drivers read `2.4.0.0`, the
+version the branch carried; the change touches the tool alone.
+
+## 40-V.3 - The NT tiers: XP, XP x64, Vista x86, 7 x86
+
+**Verdict: pass on XP, XP x64, Vista x86 and 7 x86; Vista x64 and 7 x64
+not run** (2026-10-15). On `usb4-generic` with `host-model=intel-adl`, each
+guest from a fresh overlay installed the package through `INSTALL.BAT` -
+`xhcicm.sys` on the USB4 host interface `1B36:00F4` by its class line
+`PCI\CC_0C0340`, the filter from `nt\` on the tunnel bridge `1B36:0001` -
+and one plug cycle (plug, unplug, re-plug) brought the NVMe up with no
+Refresh, removed it and brought it back. ME is not in this section.
+
+**Not run here: Vista x64 and 7 x64** (read on 2026-10-16, the last
+section below), for the reason `run-39.md`'s 39-V.3
+section gives (no test-signed amd64 package on this run). XP x64 ran the
+unsigned package.
+
+**The vehicle and the package** are 39-V.3's (`run-39.md`): the same
+builds, staging, NVMe image, tools and ports; `-Usb4Profile generic
+-HostModel intel-adl -DeviceAtBoot 0`. XP ran on `vm\usb4\bin` (the
+`a50c19e` build); 7 x86, Vista x86 and XP x64 on the `5ba7f60` build in
+`vm\usb4\bin-5ba7f60`.
+
+| Leg | XP SP3 | XP x64 SP2 | Vista SP2 x86 | 7 SP1 x86 |
+|---|---|---|---|---|
+| Install: host `xhcicm` started, bridge `UpperFilters` `xhcicm` | pass | pass | pass | pass |
+| Plug: tunnel up, NVMe with no Refresh, `NVME32` mounted | pass | pass | pass | pass |
+| Unplug: devnode and volume gone, no dialog | pass | pass | pass | pass |
+| Re-plug: back | pass | pass | pass | pass |
+| Result | **PASS** | **PASS** | **PASS** | **PASS** |
+
+The trace on each: the hot plug events of the router's lanes, `PCIe tunnel
+up reason 0` and `tp_insert` per plug, `tunnel down reason 3` per unplug.
+The host interface showed as "xHCI98 USB4 Host Interface" (the build
+before the new Device Manager names).
+
+**A reading, not this driver's.** On XP and 7 "Safely Remove Hardware"
+also lists the host interface itself, beside the NVMe. Its devnode reads
+`DN_REMOVABLE` (status `0x01806400`) before any driver of this project was
+installed (XP's dump before the install), so the flag is the platform's
+for that function on bus 0 of this emulator, not the child filters'
+mark (which only ever goes on devices reported on a tunnel bridge). Why
+the platform reports it so was not read. The Alpine Ridge NHI behind the
+switch reads `0x0180200a`, with no such flag.
+
+**Evidence.** `vm\v-xp7\xp-gen\`, `xp64-gen\`, `vx86-gen\`, `w7-gen\`,
+as for 39-V.3.
+
+## 40-V.1 and 40-V.2 - The ASM2464 device router (the ORICO capture)
+
+**Verdict: pass on Windows 98 SE and Windows 2000** (2026-10-15), after
+one fix. The connection manager met `usb4-emu`'s model of a real USB4
+device router, the ASMedia ASM2464PD of the ORICO AAGM2-U4 NVMe enclosure
+(`device-model=asm2464`, from the capture `docs/captures/ORICO-ASM2464.md`
+of `usb4-emu` `main` `5ba7f60`), behind the `intel-adl` host. The first
+reading, on the `usb4-emu` cross-check, found the one defect: the
+connection manager built a USB3 tunnel to adapter 4, which the router's
+Thunderbolt 3 compatible DROM marks unused, and configured the TMU for
+it. Fixed on branch `u4-asm` (record 22 section 6.11); every leg below
+ran the fixed driver: the install, the first unplug and re-plug, the safe
+eject and the first cold boot on the build of `ac583c37`, then the whole
+sequence again (cold boot, a read and a write, unplug, re-plug, and on
+2000 the safe eject) on the reviewed build of `19d8ca9f` (`qemu` flavour
+`xhcicm.sys` SHA-256 `6e5d933a...`), installed over the first: copied
+over the driver file on 98 SE, `devq force` on 2000, then a cold boot of
+each.
+
+**The vehicle.** Development host A, TCG, under the brief's admission rule
+(other workers' guests left alone). The `usb4-emu` fork binary of `main`
+`5ba7f60` (QEMU fork `20655c3`, `v11.1.2-161-g20655c3`), copied to
+`vm\usb4\bin-5ba7f60\` and passed with `-Qemu`; task 39-0.7's launcher with
+`-RunRoot u4-asm`, `-Usb4Profile generic -HostModel intel-adl`,
+`-BootStrict`, `-Trace`, and `-Extra '-global','usb4-device.device-model=asm2464'`
+(the launcher builds `enc0`; the `-global` reached it at power-on and on
+every `device_add`). QMP and VNC on 47950 and 47951 (98 SE, `u4a-98`, an
+overlay of `vm\t26\win98-gold.qcow2`) and 47954 and 47955 (2000,
+`u4a-2k`, an overlay of `vm\win2k-xonly.img`), one vCPU each. The NVMe
+behind the tunnel: an overlay of a 128 MiB image with one FAT16 partition
+holding a 1 MiB file of random data, `TESTDATA.BIN` (SHA-256 `b0e3c8dc...`),
+built with mtools; the transfer drive carried the same file and a second,
+`WRITE.BIN` (`b8b9dae4...`). The `qemu` flavour of `xhcicm.sys` with
+`XhciLogVerbosity` 2 in a copy of `xhcicm.inf`; `nvme98` 0.1.1.0 from its
+published `win9x` and `x86` folders, read-only. Evidence (traces,
+debug-console logs, screendumps) in `vm\u4-asm\u4a-98\` and
+`vm\u4-asm\u4a-2k\`.
+
+**Install.** 98 SE, from a fresh overlay with the enclosure attached: the
+tunnel bridge (`MACHINE2.INF`) and the host interface ("xHCI98 USB4 Host
+Interface", `D:\`) through Add New Hardware; the tunnel came up while the
+wizard closed and Windows 98 SE offered the NVMe ("PCI Card") at once,
+with no Refresh; `nvme98` from `D:\NVME` ("NVM Express Controller
+(nvme98)"), no restart asked, and the volume was `E:` immediately. 2000:
+`devq update` of `xhcicm.inf` on `PCI\VEN_1B36&DEV_00F4&CC_0C0340`, of
+`xhcicmf.inf` on the tunnel bridge and of `nvme98.inf` on the NVMe (the
+unsigned-driver prompt accepted); the volume was `D:` with no restart.
+
+| Leg | 98 SE | 2000 |
+|---|---|---|
+| The device router enumerated | PASS: `u4.drom.unused=00000010` (adapter 4), `u4.router.up=174C2463`; three DROM Read operations (dwords 0-3, 4-19, 20-21), Get Capabilities, Buffer Allocation; Router Ready waited out after Enumerated; no other operation | PASS, the same |
+| PCIe tunnel up | PASS: `u4.pcie.up=00010809`, `u4.port.state=00000105`, `PCIe tunnel up` in the trace; ROUTER_CS_5 written PTO then PTO and CV (`01000000`, `81000000`), never UTO | PASS, the same |
+| NVMe usable, no Refresh: a read and a write | PASS: `fc /b` of `E:\TESTDATA.BIN` against the transfer drive's copy, no differences; `WRITE.BIN` copied to `E:\WRITE1.BIN` and compared clean | PASS: the same on `D:` |
+| Unplug | PASS: `device_del enc0`; `u4.linkdown=01000109` (path proven closed), `u4.action=02010001`, the bridge's child removed through CONFIGMG (`query-remove`, `remove`, `reenumerate` all 0); `E:` gone ("Invalid drive specification") | PASS: `u4.linkdown=01000109`, `D:` gone; Windows 2000's "Unsafe Removal of Device" dialog for the NVMe, as on every earlier 2000 leg with no eject first |
+| Re-plug | PASS: `device_add enc0`, generation 2, `u4.pcie.up` again, `E:` back with both files; a second write (`WRITE2.BIN`) compared clean | PASS: generation 2, `D:` back, `WRITE1.BIN` compared clean, `WRITE2.BIN` written |
+| Safe eject | not a 98 SE leg | PASS: "Unplug or Eject Hardware" listed "NVM Express Controller (nvme98) at PCI Slot 4"; Stop: `cm.reenum.eject=00000028`, `u4.eject=00000100`, the trace's `PCIe tunnel down reason 1 (admin-down)` before "Safe To Remove Hardware"; then `device_del` and `device_add`: generation 3, `D:` back, `WRITE2.BIN` compared clean |
+| Cold boot with the device attached | PASS: shut down from the Start menu, a new QEMU process with `enc0` at power-on; the tunnel built by the driver at start with no wizard, `E:` present at the desktop with the three files, `WRITE2.BIN` and `TESTDATA.BIN` compared clean, `WRITE3.BIN` written | PASS: the same, `D:` |
+| The final build, again | PASS: cold boot, `TESTDATA.BIN` and a new `WRITE4.BIN` compared clean; unplug (`u4.linkdown=01000109`, `query-remove` and `remove` 0); re-plug (generation 2), `WRITE4.BIN` compared clean, `WRITE5.BIN` written | PASS for the connection manager: cold boot, read and write compared clean; unplug (`u4.linkdown=01000109`) and re-plug (generation 2); a write, then the safe eject (`u4.eject=00000100`, "Safe To Remove Hardware"), unplug, re-plug (generation 3): the file there and compared clean. One write was lost: `WRITE4.BIN`, copied about 6 s before a surprise unplug with no eject, was absent after the re-plug (the volume's write-back cache on Windows 2000's own removal policy; the path was proven closed and the earlier files intact) |
+
+**The quirks, read in the guests' traces and logs** (both guests, every
+run): no request of any kind to the device router's adapter 4 (0 of
+about 4,900 requests to route 1 on 98 SE's first run, 0 on every other
+trace); no NVM Sector Size operation (`25h`) issued; no USB3 path and no
+TMU configuration on the device router (the model's `usb4_usb3_path`
+never past "protocol adapter HopID 8 entry not valid"); no CL state
+enabled (every LANE_ADP_CS_1 write to the device router `4814003C`,
+Target Link Width x2 with bits 12:10 clear); no control-packet
+retry or timeout, no router operation failure, timeout or block, no
+Configuration Ready timeout and no `u4.router-not-ready` in any log. The
+After the last runs the NVMe overlays were read on the host with mtools:
+every file written in either guest except that `WRITE4.BIN` on 2000 is
+there with the SHA-256 of `WRITE.BIN`. The
+Downstream Port Reset with the 594 ms reconnect is reached only through
+`XhciCmPreOsCleanup` 1 or 2, which these legs did not set; it was read on
+the cross-check below and in the host suite.
+
+**The cross-check** (`scripts\usb4-crosscheck\run-crosscheck.sh`,
+linking the core with the QEMU fork's own `usb4-router-asm2464.c` and
+`usb4-router-img.c`, which the script now adds when the fork has them):
+before the fix, 72,565 checks with 9 failures - the USB3 tunnel to
+adapter 4 (built and brought up in the model), the TMU configured for it,
+and the DROM names missing; after it, 0 failures, on `intel-adl` with the
+ASM2464 cold, hot plugged on port 2, unplugged and re-plugged, the pre-OS
+connection manager's tunnel preserved with no transition and no reset,
+and with `XhciCmPreOsCleanup` 2 one Downstream Port Reset, the router back
+after the model's 590 ms hold, one connect and the tunnel built afresh,
+with no retry. The other models' cases were unchanged. Read again on
+`19d8ca9f` against the `usb4-emu` working tree at `d13f15c` (the same
+QEMU fork, `20655c3`): 69,243 checks, 0 failures.
+
+**Not read here.** The PCIe switch in front of the NVMe: the model builds
+it only behind a q35 tunnel port, and these i440FX guests tunnel the NVMe
+alone. The pre-OS legs (U.6, U.7) with this device in a guest, U.4
+(unplug during I/O), suspend, the `minimal` host model with this device,
+ME and the NT 5.1 and 6.x guests. Hardware: task 40.4 waits on a USB4
+host that boots these systems; the capture is Linux's on a UEFI-only
+laptop.
+
+## 40-V.2 - Windows 2000, the legs of record 22 section 14.2
+
+**Verdict: every leg read passes on Windows 2000 except U.11 on the
+`asm4242` stand-in, blocked by the platform (Code 12 on the second tunnel
+bridge), and passed on `minimal`** (2026-10-15). Not read: suspend and
+resume (another worker reads them after the client's resume budget lands),
+and a Thunderbolt 3 device router behind a USB4 host (no `usb4-emu`
+preset; task 40-A.8 stays host-tested only).
+
+**The vehicle.** As this record's 39-V.2 section in `runs/run-39.md`:
+development host A, TCG, the launcher with `-RunRoot v-2k`, `-BootStrict`,
+`-trace usb4_*` and, from the `intel-adl` legs on, `-Timestamps`; the
+`win2k-xonly` image, one vCPU; QMP and VNC 47926 to 47929. The emulator copy
+in `vm\usb4\bin` (`v11.1.2-149-gc645f13`) for `gen-a`, and
+`vm\usb4\bin-5ba7f60` (`usb4-emu` main `5ba7f60`) for the others. The
+`qemu` flavour of `xhcicm.sys` from `3.0.0.0` at `6fa331d4`; the host
+interface installed by `devq update e:\xhcicm.inf
+"PCI\VEN_1B36&DEV_00F4&CC_0C0340"` (the class line reached through that
+hardware id), **the filter on `1B36:0001`** by `nt\xhcicmf.inf` and
+`"PCI\VEN_1B36&DEV_0001&CC_0604"` (unforced, `reboot=0`, and taken
+automatically by every later `1B36:0001` from the stored INF), `nvme98`
+0.1.1.0. Evidence: `vm\v-2k\gen-*\`.
+
+| Leg | Run | Result |
+|---|---|---|
+| U.1 cold device (`minimal`) | `gen-a` | Software CM selected (`cm.select.outcome` 4, route 1); host router `46F4:4040`, two ports; the mapping operation names port 1 `00:05.0`; bonded x2, PCIe up (`00010809`) and USB3 up; the filter's invalidation; the NVMe found and `D:` mounted. PASS |
+| U.2 hot plug | `gen-a`, `gen-asm` | `device_add`: tunnels built, the bridge re-enumerated, the NVMe up with no Refresh. PASS |
+| U.3 unplug and re-plug, idle | `gen-a` | `u4.linkdown=01000109` (path proven closed), `u4.action` down, the Unsafe Removal dialog (no eject asked); re-plug: generation 2, both tunnels, `D:` back, listed for eject. PASS |
+| U.4 unplug during I/O | `gen-a` | A 52 MB copy finished into the cache before the unplug (plain case: no hang, the delayed write lost); with the harness holding a write's completion (`x-faults "at=complete op=write act=hold tag=u4"`, held 1) then `device_del`: `u4.linkdown=01000309`, the endpoint reset at the cutoff, the copy ended by `nvme98` ("Delayed Write Failed", data lost - an unplug under I/O), no hang of this driver, the devnode removed. The statement is withheld (no qualified channel in this build): `nvme98`'s own deadline ended it. PASS |
+| U.5 `intel-adl` | `gen-adl` | `8087:463E`, PCIe Down 8 and 9, `u4.quirk=463E0001` (the USB3 bandwidth row); `ERR_ADDR` on adapters 10 and 11; the DP IN adapters' plug events (5, 6) acknowledged and ignored; the mapping operation answered on this emulator build (`not-supported 0`; the record expected Not Supported on `a50c19e`), port 1 named `00:05.0`. Unplug and re-plug: both tunnels rebuilt. PASS |
+| U.6 pre-OS, preserve (`intel-adl`, `preos-cm=on`) | `gen-adl` | `u4.preserved=00010809`, no transition and no reset after the takeover, `D:` present from boot and still mounted. PASS (`minimal` with `preos-cm` is 40-0.3's reading plus `gen-a`'s U.9) |
+| U.7 pre-OS, clean (`XhciCmPreOsCleanup` 2, restart) | `gen-adl` | `u4.clean=1`: the pre-OS tunnel taken down (`admin-down`), the host router reset, the tunnels rebuilt, the volume removed and back, now listed for eject. PASS |
+| U.8 USB3 | `gen-adl` | The `qemu-xhci` `1B36:000D` under the package's `xhci98.sys`; the USB3 tunnel up with its Host Controller Ack; the USB disk attached at 5000 Mb/s (`info usb`) and enumerated by `xhci98.sys` at SuperSpeed and configured (its log). PASS. `XhciCmUsb3Tunnel` 0 is 40-A.6's 98 SE reading, not repeated |
+| U.9 disable and enable | `gen-a` | `u4.preserved=00010809` at the rebind, no transition, `D:` stays. PASS |
+| U.10 policy values (`XhciCmApprove` 0, `XhciCmLaneBonding` 0) | `gen-a` | From a cold start: the router enumerated, lane 1 of the host disabled (`LANE_ADP_CS_1` Lane Disable), Configuration Valid, the USB3 tunnel up, no PCIe tunnel. PASS. Set mid-session after a bonded link instead: `u4.bond.not-default` on the host's lane adapter (the previous bond's `TLW`/`LB` still set) and the port FAILED - record 22 section 6.5's "else FAILED", a reading. `XhciCmMode` 3 on a Thunderbolt 3 NHI: refused, inert (39-V.2's Titan Ridge leg) |
+| U.11 two ports | `gen-p2` (`minimal`, `-Port2`), `gen-asm` | `minimal`: the mapping operation names port 2 `00:08.0` (`u4.named=02004002`), the device on port 2 gets its PCIe tunnel and its own bridge re-enumerated (`u4.action.map=80000040`), the second NVMe found. PASS. `asm4242`: port 2's tunnel built and the bridge 02:01.0 re-enumerated, but 2000's `pci.sys` left that bridge at Code 12 (no resources), so the NVMe behind it never appeared: FAIL by platform, not this driver |
+| U.12 a daisy chain (`-Chain`) | `gen-ch` | The depth-2 router's plug events acknowledged (`HP_ACK matched 1`), left uninitialised, no tunnel to it. PASS |
+| U.13 inert | `gen-a`, `tr-a` | `usb4-generic` with `XhciCmMode` 0: `cm.inert` 1, no ring 0 traffic in the trace. A Thunderbolt 3 NHI forced toward the software CM (`XhciCmMode` 3 on Titan Ridge): inert. PASS (the INF-copy variant of the record was not built) |
+| `asm4242` U.1 to U.3 | `gen-asm` | The stand-in switch (`1B21:2421`, two `2423` tunnel bridges, the xHCI `2426`, the NHI `2425`) on i440FX; `xhcicm.inf` by its class line; host router `174C:2428`, PCIe Down 8 and 9; the mapping operation's answers name no bridge here (`NO_BRIDGE`), so the members come from the SHPC source and an action re-enumerates every verified port (`map 80000000`); bonded, PCIe and USB3 up, `D:` mounted; unplug and re-plug. PASS |
+| Safe eject (40-A.9 re-read, PCIe only) | `gen-a` | Listed after a re-plug ("not listed" before it: the device was present before the filter's baseline); Stop: `cm.reenum.eject=00000028`, `u4.eject=00000100`, the trace `PCIe tunnel down reason 1 (admin-down)` and **no USB3 transition** before "Safe To Remove Hardware"; `device_del`: no dialog, the USB3 tunnel down only then; `device_add`: both tunnels back. PASS |
+
+**Not read here.** Suspend and resume; the TB3-behind-USB4 preset; the
+98 SE, ME and NT 5.1/6.x tiers (40-V.1, 40-V.3); the `release` and `debug`
+flavours.
+
+## Containment of the USB4 software connection manager - the host interface taken away (record 22 section 7.7)
+
+**The change** (branch `u4-live`, on the liveness monitor and gate of
+branch `v-2k`; reviewed and revised). Under the USB4 profile a lost host
+interface - the monitor's first all-ones or changed sample, a surprise
+removal, or a bind or resume that reads back the wrong ring size - puts
+the instance in the terminal CONTAINED state of record 22 section 7.7
+(decision U17, the owner's of 2026-10-15): no register, ring or router
+access, no eject, no deferred teardown, no UP action, no restart at
+resume, until a PnP stop and start or a reboot; force power and an
+unproven DMA buffer kept; the devices reported gone through one
+reconciliation. Host suite `test_u4cm` carries the loss inside a tunnel's
+setup, an eject, a resume and the stop.
+
+**The leg** (development host A; `usb4-emu`'s QEMU of `main` `5ba7f60`,
+`vm\usb4\bin-5ba7f60`, TCG, `pc` with `acpi=off`, `pentium3,-apic`, one
+processor, 256 MB; Windows 2000 SP4, an overlay of the `u2k-min` image of
+the 40-A.6 legs; profile `usb4-generic`, host model `minimal`, the device
+router `enc0` with its NVMe attached at power-on; the `qemu` flavour of
+`xhcicm.sys` at `6e8b4ac1`). The emulator models a platform power-off
+only for the Thunderbolt 3 profile, so the NHI (`1B36:00F4`) was placed
+behind a gated `usb4-tunnel-bridge` of its own (`nhirp`, `00:06.0`,
+`x-force-tunnel=on`, its gate open from power-on) and taken away with the
+harness override `qom-set nhirp x-gate closed` (`usb4-emu`
+`docs/HARNESS.md`): BAR0 and configuration space read all ones and the
+NHI's DMA is closed, with no PnP request to the guest. A probe before the
+leg read the NHI's capability register `0x00000010` through `xp` with the
+gate open and `0xFFFFFFFF` with it closed. Readings in
+`vm\u4-live\u2k\` (`debugcon-r2.log`, `trace-r2.log`, the shots).
+
+| Step | Result |
+| --- | --- |
+| The NHI at its new place | Found New Hardware, installed from the staged copy; the start bound, port 1's PCIe tunnel found preserved, the monitor armed (`cm.live.baseline=01000010`) |
+| `x-gate closed`, the guest idle at the desktop | within one idle period `cm.live.state=00000107` (CONTAINED, episode 1), `u4.contained`, `cm.reenum.unavailable=00000001`; the QEMU trace has no `usb4_*` register or ring line after the gate's own; the guest kept running, a command prompt answering. **PASS** |
+| `x-gate normal` 20 s later | 30 s with no access in the trace: the instance stayed contained, nothing reactivated it. **PASS** |
+| Restart of Windows with the instance contained | shut down and restarted with no bugcheck and no hang; the new instance enumerated the host router afresh and armed. **PASS** |
+| A second loss on that instance, then Device Manager's Disable | contained again; the stop wrote nothing (`u4.stop.contained`, `cm.unbind.no-access`, `cm.live.refused=00000000`: nothing even attempted) and kept the common buffer (`cm.buffer-kept=00000001`, the rings never proven stopped); the Disable completed. **PASS** |
+| The gate opened, then Enable | a new instance started, found port 1's PCIe tunnel preserved (`u4.preserved=00010809`): the contained instance had left the fabric as it was. **PASS** |
+
+Not exercised by this leg: I/O on an NVMe volume through the tunnel
+(`nvme98` is not bound on this overlay, so there was no volume); the
+`nvme98` channel's notification; a surprise removal; a loss inside a
+resume; Windows 98 SE. The emulator's own bridge `nhirp` (`1B36:0001`)
+matches the tunnel-port filter's INF like the real tunnel bridge `tb0`,
+which made no difference here. The commits after `6e8b4ac1` change the
+resume, the failed bind and the reconciliation while a PnP stop waits,
+none of which this leg exercised.
+
+**Windows 98 SE** (the same build of QEMU and the same topology; an
+overlay of the `u98-min` image of the 40-A.6 legs, `pc`, 256 MB; the
+`qemu` flavour of `xhcicm.sys` at `4219d1a2`). The New Hardware wizard
+installed the moved NHI from the staged INF but kept the older
+`xhcicm.sys` already in `System32\Drivers` (same version); it was copied
+over by hand from the transfer disk and Windows restarted. This image
+writes nothing to the debug port, so the reading is the QEMU trace: the
+new driver's monitor sampled RX ring 0's size register (`0x01000010`)
+every idle period. Before the loss, at the same point, the old driver
+kept polling through a closed-and-reopened gate (about 32,000 trace lines
+in the 30 s after reopening); with the new one, `x-gate closed` for 25 s
+and then `normal`: **no access at all in the 30 s after reopening**, the
+guest running and its Start menu answering. A New Hardware wizard for the
+tunnelled NVMe endpoint ("PCI Card": `nvme98` is not installed on this
+image) came up again after the loss. **PASS**.
+
+### Owed
+
+- A leg with `nvme98` bound and a copy running on the volume, and the
+  98 SE reconciliation read from a log (this image writes no debug-port
+  log).
+
+## 40-V.1 on 98 SE and 40-V.3 on ME - The 9x legs (2026-10-15)
+
+**Verdict: U.2 passes for the connection manager on 98 SE, with the NVMe
+left at Code 29 by the guest's interrupt routing; ME passes the install
+and one plug cycle on `usb4-generic`; the other U legs are owed**
+(2026-10-15). The vehicle is `run-39.md`'s "39-V.1 on 98 SE, 39-V.3 on ME
+and 39-V.4" (the same binary, `-Qemu vm\usb4\bin-5ba7f60`, the same NVMe
+image and overlays).
+
+**98 SE** (`g98`, an overlay of `vm\t26\win98-gold.qcow2`, QMP and VNC
+47904 and 47905, `-Usb4Profile generic -HostModel minimal -Usb3
+-DeviceAtBoot 0`). The host interface was offered as "PCI Universal Serial
+Bus" and took "xHCI98 USB4 Host Router" from `xhcicm.inf` (39-V.4's
+reading); the `qemu-xhci` of `-Usb3` took `xhci98.sys`. These legs ran the
+`qemu` flavour of `3.0.0.0` at `9ea7390f` (p39-nvlink and eject9x merged),
+`xhcicm.sys` SHA-256 `ba7b3fac...985d`, copied over the installed driver,
+then a restart.
+
+| Leg | Reading | Result |
+|---|---|---|
+| U.2 hot plug | `cm.select.outcome=4`; port 1 named `00:05.0` (`u4.named=01002802`); `device_add`: `u4.pcie.up=00010809`, `u4.usb3.up=00010A0B`, `u4.action=01010001`, `cm.reenum.9x.reenumerate=00002800`, `removable=0`; `cm.nvlink.up.late-none=00000028` (`nvme98` 0.1.1.0 has no link-state receiver); "PCI Card" offered with no Refresh; after a restart the tunnel was built at start (`u4.pcie.up` again) | PASS for the connection manager |
+| The NVMe on that guest | `nvme98` installed, the device at **Code 29** ("the BIOS ... did not give it an IRQ") with `-Usb3`'s `qemu-xhci` at 00:07.0 beside the tunnel bridge, so no volume; the same device on the same bridge without `-Usb3` mounted on every earlier 98 SE leg (u4-asm, run-39's legs) | a reading of the guest's interrupt routing, not this driver's; the volume half of U.2 not read |
+| U.8, the USB3 half | the USB3 tunnel up in the trace (`usb4_usb3_apply ustor0: attached`), the disk on the tunnel's `qemu-xhci` at 5000 Mb/s (`info usb`), "USB Mass Storage Device" installed under `xhci98.sys`. Note: the emulator attached `ustor0` at power-on too, before any connection manager ran, and detached it only at the first tunnel transition, so a disk seen at boot is not evidence of a tunnel | PASS for the tunnel; `XhciCmUsb3Tunnel` 0 owed |
+
+**ME** (40-V.3's ME tier; the install is `run-39.md`'s): on
+`usb4-generic` with `host-model=intel-adl` the host took "xHCI98 USB4 Host
+Router" by automatic search from the package `INSTALL.BAT` had copied,
+the software connection manager started (`cm.select.outcome=4`), and one
+plug, unplug and re-plug brought the NVMe up with no Refresh, removed it
+and brought it back with its data (`run-39.md`'s ME table). Its suspend
+and resume readings are there too. **PASS.**
+
+**Owed.** U.4 (the harness), U.7 (`XhciCmPreOsCleanup` 2), U.9 (disable
+and enable with the tunnel preserved), U.11 and U.12 (the launcher's
+`-Port2` and `-Chain` are on branch `v-2k`), U.13 (inert starts), U.8's
+`XhciCmUsb3Tunnel` 0, the NVMe volume on a 98 SE guest with `-Usb3`
+(move the `qemu-xhci` or read without it), 98 SE suspend, and the 98 SE
+reading of the controller-unavailable route.
+
+**Evidence.** `vm\v-9x\g98\` and `vm\v-9x\me\`, `vm\v-9x\notes.txt`.
+
+## 40-V.3 on Vista x64 and 7 x64, and the installer legs owed - The test-signed package (2026-10-16)
+
+**Verdict: pass** (2026-10-16): 40-V.3 on Vista x64 and 7 x64, Vista x64's
+update from 2.4.0.0 read after its restart, and 7 x64's uninstall over
+`3.0.0.0` with the reinstall after it. **What this reading is:** as
+`run-39.md`'s section "39-V.3 on Vista x64 and 7 x64" says - the owner's
+test-signed x64 package of the night of 2026-10-15 to 16 (drivers
+identical to `dcdac455`), a platform and recipe reading, not the release's
+own x64 binaries, which change before the cut. The package, its staging
+and SHA-256 and signature proof, the test-signing overlays, the QEMU
+build and the driving are that section's.
+
+### 40-V.3 on `usb4-generic`
+
+`-Usb4Profile generic -HostModel intel-adl -DeviceAtBoot 0`, a fresh
+overlay of each test-signing base, QMP and VNC on 47900/47901 (Vista x64)
+and 47902/47903 (7 x64).
+
+| Leg | Vista SP2 x64 | 7 SP1 x64 |
+|---|---|---|
+| Install: host `xhcicm` started, bridge `UpperFilters` `xhcicm` | pass | pass |
+| Plug: tunnel up, NVMe with no Refresh, `NVME32` mounted | pass | pass |
+| Unplug: devnode and volume gone, no dialog | pass | pass |
+| Re-plug: back | pass | pass |
+| Result | **PASS** | **PASS** |
+
+`INSTALL /defaults /yes /nopause` installed `xhcicm.sys` on the host
+interface `1B36:00F4` (class `0C0340`), shown as "xHCI98 USB4 Host
+Router", and the filter on the tunnel bridge `1B36:0001`, "xHCI98 PCI
+Bridge"; exit 3, and after the restart both problem 0. `INSTALL /devices`
+read "USB4 software connection manager" and, with the device plugged,
+"USB4 (version 2.0), port 1, depth 1, approved", two lanes bonded, PCIe
+and USB3 up, the NVMe "removable: yes". The trace per plug: `PCIe tunnel
+up reason 0` and `tp_insert`; per unplug `tunnel down reason 3` and
+`tp_removed`.
+
+**A wording reading, not a fault.** `INSTALL /devices` heads the USB4
+host's tunnel bridge "Behind the Thunderbolt port xHCI98 PCI Bridge", the
+word it uses for the Thunderbolt 3 hosts' ports; left as it is (the tool's
+text is not this run's to change).
+
+### The installer legs owed by 40.5 onward
+
+`-Usb4Profile none -Xhci` for Vista x64 (QMP 47900), the 39-V.3 overlay
+for 7 x64 (QMP 47902). The 2.4.0.0 baseline is `out\p40-inst\pkg24` (the
+published 2.4.0.0 x64 drivers, test-signed with the same key, which load
+in test-signing mode).
+
+| Guest | Leg | Result |
+|---|---|---|
+| Vista x64 | U24 | pass: from 2.4.0.0 (controller and root hub started), the run copied the package, staged `xhci98.inf` and `xhciuas.inf`, updated both, "Changes were made. Please restart Windows now.", exit 3; **after the restart** a second run read every device "current (this release)", the local copy "this package already", both INFs "staged already", both 3.0.0.0 started, "No changes were made.", exit 0 |
+| 7 x64 | UN over 3.0.0.0 | pass: over the 39-V.3 install (controller, `xhcicm`, the filter on five ports, `nvme98`), `/uninstall` and the word REMOVE took `xhcicm` off the five tunnel ports and gave them back to `pci`, removed the root hub, NHI and controller devnodes and the four INFs, the services `xhci98` and `xhcicm` and their files, and the local copy; exit 3. After the restart no project service (`sc query`: 1060), no `xhci*.sys`, no `%windir%\XHCI98`, no project INF in `pnputil -e`, every port `UpperFilters` none and problem 0; `usbd.sys` and `usbui.dll` present |
+| 7 x64 | reinstall after UN | pass: `INSTALL /defaults /yes /nopause` installed everything again (exit 3); after the restart every device problem 0 and the five bridges `UpperFilters` `xhcicm` |
+
+**Evidence.** `vm\v-x64\vx64-gen\`, `w7x64-gen\`, `vx64-u24\` and
+`w7x64-tb3\` (the UN leg, tag `b`): `notes.txt`, the screendumps, the
+serial logs with the `G` dumps and the installer logs.

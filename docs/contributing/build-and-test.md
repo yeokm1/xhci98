@@ -131,7 +131,7 @@ Setup scripts:
 | `scripts\check-smp-parallelism.ps1` | Host-side Phase 2d checkpoint check against the running 2d VM: a complete one-to-one vCPU/`thread_id` mapping from `info cpus`, plus a process affinity mask allowing 2+ logical processors. Guest-side "MP kernel landed" checks do not distinguish those host conditions; this script does. Run-time, so not part of `build-driver.cmd`; `-SelfTest` needs no VM |
 | `scripts\setup-all.ps1` | Runs MSVC, DDK, and both Phase 2a/2b QEMU setups; use `-RunInstallers` for MSVC/DDK and `-InstallQemu` for QEMU. Pass `-Win2KIso` or the Win2000 half is skipped with a warning |
 | `scripts\package\extract-usbd-sources.ps1` | Stages reference copies of each target's own `usbd.sys` (and Win98 SE's `usbhub.sys`, an import-gate precedent binary) from that OS's install media into the git-ignored `tools\`, then authenticates them. Packaged by nothing since 1.0.0.1; see "The files the OS supplies" |
-| `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under |
+| `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under. `-TestSignPfx <pfx> -SignOnly` test-signs the binaries a gated `build-driver.cmd` run recorded in `out\gated-<arch>-<flavour>.txt` without running its host suite and import gates again ("Since 2.3.0.0 the x64 package is test-signed") |
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
 | `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's three-flavour `FLAVORS` grammar, on synthetic allowlists, including the row that keeps `HAL.dll!WRITE_PORT_UCHAR` out of every published binary. Run by `build-driver.cmd` |
 
@@ -302,7 +302,7 @@ The last two sites cannot include anything. An INF is a data file Windows setup 
 
 - `scripts\inf-gate\check-inf.ps1`, which every build runs, reads `src\xhci_version.h` as the authority and refuses four different disagreements: the header's two forms of the number differing from each other (nothing in any toolchain would notice, since `rc.exe` wants the integers and every other consumer wants the string), the header's version differing from `DriverVer`'s, the header's date differing from `DriverVer`'s, and a version literal appearing in `src\xhci98.rc` at all, or the include being dropped. That last rule is what keeps the header an authority rather than a suggestion.
 - `scripts\package\make-package.ps1` compares the built binary's own `FileVersion` with the `DriverVer` in the INF staged beside it. That is the copy a source-side gate cannot see and the only one an installed machine reads: bumping the source without rebuilding produces a package that installs cleanly, is accepted by Windows 2000 as an upgrade, and reports the older build for ever afterwards.
-- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` (from `2.4.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`) is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
+- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` (from `2.4.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`, from `3.0.0.0` also `XHCIINST.EXE`/`XHCIIN64.EXE`, the install tool `INSTALL.BAT` runs, built by `xhciinst\build.cmd` and checked by `xhciinst\selftest.cmd`, which holds both import tables to `KERNEL32.dll` and `ADVAPI32.dll`; `-SkipInstallTool` cuts without it) is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
 
 The header spells the number out twice because `FILEVERSION` takes four comma-separated integers and cannot be given a string, and deriving one form from the other needs preprocessor stringizing that this era's `rc.exe` does not handle reliably. So both are written and the INF gate compares them. Two adjacent lines a gate reads beat one clever line no toolchain agrees about.
 
@@ -3010,6 +3010,50 @@ binaries are never signed.
   x86` cuts the x86 half. `make-package.ps1 -Flavor qemu -Arch amd64
   -TestSignPfx ...` gives a signed `qemu` package for a guest that should
   start in test-signing mode; it is never published.
+- **Signing without running the gates twice: `-SignOnly`** (roadmap-usb4.md
+  SIGN.1, owner 2026-10-16). A gated `build-driver.cmd` run writes the
+  git-ignored `out\gated-<arch>-<flavour>.txt` for each flavour
+  (`scripts\package\write-gated-manifest.ps1`, which refuses to run outside
+  such a run): each gated binary's SHA-256, the commit, whether the tree
+  had uncommitted changes, whether its import gates had their target
+  evidence, and the time. The run holds `out\gated-<arch>.lock` throughout
+  and refuses to start while another holds it (a run stopped with Ctrl+C
+  leaves it; delete it when no build is running), and notes the commit and
+  the tree's state when it takes it, before any self-test. When a
+  flavour's build starts its old record is deleted; each binary is hashed
+  right before its own import gate and again right after it, and the two
+  must agree; once the flavour's last gate has passed each file must still
+  have that hash, and the record is written from it, with `dirty=0` only
+  if the tree was clean when the run started and still is, at the same
+  commit ("clean" also excludes untracked files and files marked
+  assume-unchanged or skip-worktree). A run that fails leaves no record for
+  the flavour that failed. `make-package.ps1 -TestSignPfx <pfx> -SignOnly`
+  reads the record for its `-Arch` and `-Flavor` before anything else,
+  reads each binary once into memory and writes those bytes to a private
+  copy that every later step uses, and refuses unless the record is for
+  that architecture and flavour, every copy has exactly its recorded
+  SHA-256, the build ran in a clean tree, the tree is still at that commit
+  with no change, and the build's gates had target evidence (or the run
+  passes `-NoTargetEvidence` too); each copy is checked against its hash
+  again just before it is signed. It then skips the host test suite and the import gates, which
+  are about the bytes, and keeps everything about the package: the
+  flavour markers, the INF gates before staging (the media-layout one
+  included), the staged package's gate, the version checks and the
+  signature checks. It prints which checks it reused and which it ran.
+  `-SignOnly` without `-TestSignPfx` is refused, as is `-SignOnly` with
+  `-SkipBinaryGates` or `-SkipPackageGate`; `-GatedManifestPath` is the
+  self-tests' alone, refused with `-TestSignPfx`, and only checks a record.
+  What this protects against is a mismatch by accident and another process
+  on the same machine changing a binary while the build or the packager
+  runs; it is not a defence against someone who deliberately forges the
+  record. The signing step for the x64 release package is then:
+
+  ```
+  scripts\build-driver.cmd release -amd64
+  powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release -Arch amd64 -OutDir out\x64-signed -TestSignPfx <pfx> -SignOnly
+  ```
+
+  `make-release.ps1` does not use it: a cut runs every gate.
 - **Verifying.** `tools\WinDDK71\bin\x86\SignTool.exe verify /pa /v
   <dir>\xhci98.sys` shows the SHA-1 file hash, the chain with the
   certificate's SHA-1 hash, "File is not timestamped", and then fails on
@@ -3032,6 +3076,76 @@ binaries are never signed.
   for an ordinary start, and Vista x64 shows its "Test Mode" text only while
   its activation is in grace (`-Rtc base=2026-09-20T12:00:00`); with it
   expired the not-genuine watermark replaces it and the mode is still on.
+
+#### The bundled Stor98 build (`3.0.0.0`)
+
+The release download's `release-x86\` and `release-x64\` carry Stor98, a
+separate BSD-3-Clause project's NVMe driver, as one of its released builds copied
+unchanged from its release folder (owner, 2026-10-16). Nothing of it is
+tracked: `make-package.ps1` copies it into the package, and
+`make-release.ps1` into the upload set's two `release-` directories, never
+into `releases\<version>\`. Four parameters pin it, and they go together:
+
+| Parameter | What it pins |
+|---|---|
+| `-Stor98Version` | The build, for example `0.3.0.0`. Anything older than `0.3.0.0`, Stor98's first release, is refused|
+| `-Stor98Dir` | Its release folder (the Stor98 repository's `releases\<version>\`), read only |
+| `-Stor98SumsSha256` | The SHA-256 of that folder's `SHA256SUMS.txt`. Checked first; then every file against `SHA256SUMS.txt`, every file in the folder listed there, the release's files present, nothing the layout does not know, every INF's `DriverVer` at the pinned version, and each copy in the package against `SHA256SUMS.txt` again |
+| `-Stor98InterfaceVersion` | The build's link-state interface version (`STOR98LS_VERSION`; `4` for `0.3.0.0`). Compared with `src\cm\stor98cm.h`, the header xhci98 compiles against, and, where the folder carries `include\stor98cm.h`, that file byte for byte with it. A mismatch is refused unless `-Stor98AllowInterfaceMismatch`, which prints the mismatch it overrides |
+
+Without them the package and the cut are built as before, with no Stor98.
+The release folder's `x86\` (`stor98.inf`, `stor98.mpd`, `stor98.sys`) goes
+to the root of the x86 package and its `x64\` (`stor98.inf`, `stor98.sys`,
+`stor98-test.cer`) to the root of the amd64 package, with no `stor98\`
+folder; every name there starts with `stor98`. Both also carry the release's
+`LICENSE`, `NOTICE.TXT` and `readme.txt` as `stor98-LICENSE.txt`,
+`stor98-NOTICE.txt` and `stor98-readme.txt` beside the driver files. A cut
+passes the pins to its release legs alone, so the `debug-` directories carry
+none of it; `make-package.ps1` run by hand bundles it into whichever flavour
+it is asked for, which is how a debug package for a guest gets it.
+
+The 64-bit `stor98.sys` keeps Stor98's own embedded test signature, by a
+certificate that is not this project's (design record 19),
+and `stor98-test.cer` beside it is that certificate's public half, under
+Stor98's own name. Nothing here signs, re-signs or imports it, and no
+installer step is needed: test-signing mode on Vista x64 and 7 x64 loads a
+driver signed by any certificate, trusted or not (design record 19), so the
+one `bcdedit /set testsigning on` that loads this project's x64 drivers loads
+it too, and importing either `.cer` is not needed. The generated readme says
+so when the cut has an x64 half.
+
+A cut also needs the release notes' one declaration line ("NVMe drives
+behind Thunderbolt or USB4") to agree with it, exactly: "This download
+bundles Stor98 `<version>`." or "This download bundles no Stor98."; the
+unfilled placeholder or a disagreement is refused (a `-TestLabel` cut is
+only warned). The generated readme records the version, the SHA-256 of
+`SHA256SUMS.txt` and the interface version, and an override with the
+mismatch it overrode, and `-UploadSetOnly` holds a re-assembly to those
+three pins (an override is a verdict against the checkout's header, so a
+re-assembly passes it again where needed); `-Stor98HeaderPath`, the
+self-tests' substitute header, is refused without `-SkipBinaryGates`. For
+example, the `3.0.0.0` cut with Stor98 `0.4.0.0`:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <pfx> ^
+    -Stor98Version 0.4.0.0 -Stor98Dir <stor98>\releases\0.4.0.0 ^
+    -Stor98SumsSha256 ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7 ^
+    -Stor98InterfaceVersion 4
+```
+
+The gates hold these files by exactly the paths the pin produces
+(`Get-Stor98PackageFiles`, `scripts\package\package-common.ps1`) and by
+nothing wider: `make-release.ps1`'s declared-media check accepts them
+beside this project's files, its upload-set date rule and file dating skip
+them (Stor98's INFs carry Stor98's own `DriverVer` date), and a name that
+would replace one of this project's files is a refusal. The INF, import and
+signature gates are run on this project's INFs and binaries by name and
+never read Stor98's, and `check-source-charset.ps1` scans tracked source,
+which Stor98's files never are; the package's `PKG-MSFILE` name rule still
+covers every file, Stor98's included. `XHCIINST` must copy no file whose
+name starts with `stor98` into its local copy, which is on the hardware
+wizard's search path (design record 23 section 4.4). `scripts\package\test-package.ps1` holds the
+layout with synthetic release folders.
 
 #### And the install path is not the one the INF was written for
 
@@ -6316,7 +6430,7 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 
 | Value | Read | When absent | Range the code takes | Written | Absent reads as the written value? |
 |---|---|---|---|---|---|
-| `XhciLogVerbosity` | each start | 0 | 0-4; above 4 refused, 0 | 0 | yes |
+| `XhciLogVerbosity` | each start | 2 (0 before `3.0.0.0`) | 0-4; above 4 refused, 2 | 2 (a fresh install; an update keeps the value) | yes |
 | `XhciLogDebugView` | each start | 0 | 0 off, any other on | 0 | yes |
 | `XhciImodInterval250ns` | each start | 4000 | 10-4000; outside, 4000 | 160 | no, by design: 160 is the owner's shipped interval (2026-10-04) and 4000 only the fallback; a written 4000 reads as absent does |
 | `XhciForceBulkOnly` | each enumeration | 1 (37.2) | 0 off, any other on | 0 | no, by design: absent is text-mode Setup, where only Setup's own `usbstor` binds storage, so Bulk-Only; the install's 0 keeps UAS (issue 15) |
@@ -7895,3 +8009,32 @@ any vehicle; what it established is the block below, published in
   - [ ] The `XUSB2PR` routing exercised against the driver, and the qualifier on a real multi-controller console. Both not possible on this fleet: no machine has an Intel 7/8-series mux and none has more than one USB controller
 - Phase 13, batch 13-H (the modern Windows host; no trip, no target OS):
   - [x] Closed. It owes no clause of the phase; it produces the equipment record the two bench batches are read against. Twelve devices and six hub units characterised, all three buy-or-publish decisions taken with no purchase, and rig positions D and T labelled at the E460. See `docs/contributing/test-equipment.md`, and the "The bench rig" section above in this file for the positions.
+
+## The Thunderbolt 3 connection manager, `xhcicm.sys` (roadmap-usb4.md Phase 39)
+
+The package's third driver (design record 21; source map in `source-files.md`, "The Thunderbolt 3 connection manager"). Since task 39-A.1 it is built, gated and packaged with the other two; what it does at run time grows with the later Phase 39 tasks, and until task 39-A.4 every start is the INERT start of record 21 section 1.4.2: the NHI's devnode starts, the driver reads its values and logs, and nothing touches the hardware.
+
+**Building.** `scripts\build-driver.cmd` builds `src\cm` after `src\uas` in every x86 and `-amd64` run, every flavour, with the same toolchains (the Windows 2000 DDK for x86, WDK 7.1 for amd64) and the same `BUILD_ALT_DIR` flavours: `src\cm\objfre\<arch>\xhcicm.sys`, `objchk`, `objchk_qemu`. After each link it runs the import gate against `scripts\import-gate\xhcicm-imports.allow` (x86) or `xhcicm-imports-amd64.allow` (amd64), the flavour marker check and `scripts\source-stamp.ps1 -Driver xhcicm`. Every allowlist row is a pair `xhci98.sys` already imports; the registry pairs are `SITES=cm_reg.obj`, `DbgPrint` is a `debug` and `qemu` row with `SITES=cm_log.obj` (decision D12: the release flavour prints nothing), the qemu flavour's port-0xE9 mirror `HAL.dll!WRITE_PORT_UCHAR` a `qemu` row of the x86 file with the same site (an intrinsic on amd64), and the pool pair is `SITES=cm_pool.obj` and `optional` until task 39-A.4 allocates. `src\cm\sources` compiles the shared `..\xhci_log.c` by path, and the import gate's amd64 source scan follows a `SOURCES` entry to its path for that reason.
+
+**Adding a source file.** One line in `src\cm\sources`' `SOURCES` (a file of `src\` by path, as `..\xhci_log.c` is); the source stamp reads the same list. A pure file (no DDK include, `xhci_compat.h` for its types) also gets a `call :run` line in `test\run-host-tests.cmd`, as `test_cm` has (`test_cm.c ..\src\cm\cm_vals.c`). A file that calls a gated import needs its object named in that row's `SITES=`.
+
+**The INF gate.** `scripts\inf-gate\check-cm-inf.ps1` gates the four INFs on every build - `-Arch x86` and `-Arch amd64` for the NHI's (`src\cm\xhcicm.inf`, `xhcicm-amd64.inf`), the same with `-Filter` for the NT-only filter's (`xhcicmf.inf`, `xhcicmf-amd64.inf`) - after `-SelfTest`, which mutates each committed INF one rule at a time and fails unless every mutation is refused. Its rules are listed in its header; the ones particular to this driver:
+
+| Rule | What it holds |
+|---|---|
+| `CM-NO9XBRIDGE` | No bridge id (a class 06/xx id, a Thunderbolt bridge id, or any id the filter INFs bind) in a `$CHICAGO$` INF of this driver: a WDM driver on a bridge devnode breaks the bridge on Windows 98 (record 21 section 6.1). And, since Windows 98 SE and ME read a `$Windows NT$` INF too (`runs/run-39.md`, 39-0.4): the filter INFs' signature held to `$Windows NT$`, no undecorated install section in them, and in a staged package the filter INF in the flavour directory's `nt\` alone, nowhere else, `nt\` holding it and its own copy of `xhcicm.sys` - the same bytes as the flavour directory's - and nothing else. |
+| `CM-ID`, `CM-IDSET`, `CM-IDLIST` | The NHI models bind `PCI\VEN_8086&DEV_xxxx`, `PCI\VEN_1022&DEV_xxxx` or the class line, every models section the same set, and the id lines exactly the rows of `src\cm\cm_vals.c`'s Intel and AMD tables (ICM and USB4 profiles), so the INF and the profile the code gives an id cannot drift. |
+| `CM-CLASSLINE` | Every NHI models section carries exactly one class line, `PCI\CC_0C0340` (design record 22 section 3.7), which its id lines outrank, and no other `PCI\CC_` id. |
+| `CM-NOROUTER` | No device router's or device-side bridge's id (Titan Ridge DD, Goshen Ridge, the Barlow Ridge hubs, AMD's USB4 router functions, ASM2464PD), no USB-only NHI and no unclaimed generation's id in any of the four (design record 22 section 3.1). |
+| `CM-PORTCC` | Every filter model binds `PCI\VEN_xxxx&DEV_xxxx&CC_0604` and nothing else: the driver takes the filter role by that class, and 98 SE's and ME's automatic search did not choose that form. |
+| `VAL-*` | Every install path writes every value the driver reads, once, at the default `cm_vals.c`'s rule table holds, as a `REG_DWORD` under `FLG_ADDREG_NOCLOBBER`, and nothing else; `XhciCmTunnelBridge` is never written (its absence is meaningful, record 21 section 8). |
+| `CM-FILTER` | The install sections include `machine.inf` and need `PCI_DRV`, `PCI_DRV.HW` and `PCI_DRV.Services` (the 39-0.4 shape) so `pci.sys` stays the port's service, copy the driver from a source disk with no path (`nt\`'s own `xhcicm.sys`: Vista's and 7's driver store refuses a source outside the INF's directory, error `0xA1`), write `HKR,,UpperFilters,0x00010008,"xhcicm"` in `.HW` and nothing else, and add the service without the function-driver flag. |
+| `CM-TWIN` | The x86 and amd64 INF of each kind bind the same ids and, for the NHI, write the same values. |
+| `CM-DESC` | Every model line's description names its controller's generation, never the connection manager running it, and every description string reads as decided (record 21 section 3.3, "Class and names"): NHI lines `Tb2Desc` (Falcon Ridge), `NhiDesc` (Alpine Ridge, Titan Ridge, Ice Lake) or `U4Desc` (every other id and the class line); filter lines `TbBridgeDesc` (the Thunderbolt 2 and 3 generation's ports), `BridgeDesc` (QEMU's `1B36` bridges) or `U4BridgeDesc`; `CmSvcDesc` the same in all four. |
+| `PATH-NO9X`, `PATH-MFGDEC` | As for the other two drivers: the amd64 INFs carry `NTamd64,NTamd64.6.0` and no undecorated section; the x86 NHI INF `NTx86.6.0` alone. |
+
+**Packaging.** `scripts\package\make-package.ps1` stages `xhcicm.inf` and `xhcicm.sys` at the root of every flavour directory and the filter INF as `nt\xhcicmf.inf` (the amd64 INFs under the x86 names; the filter INF out of the 9x engine's way, record 21 section 3.3), holds the binary to its flavour marker and import gate and both INFs to `check-cm-inf.ps1` before staging, gates the two INFs again against the staged package, and test-signs the amd64 `xhcicm.sys` with the other two binaries (design record 19). `make-release.ps1` publishes the three beside the UAS pair, verifies the published binary at release time with `Assert-CmPublished` (the refusals `xhciuas.sys` is held to: version, flavour, the built bytes, the source stamp, the x64 signature), and refuses an upload set whose flavour directory carries some of the three files without the others.
+
+**Installing it by hand.** On Windows 98 SE and ME, Device Manager -> the NHI ("PCI System peripheral" or "Base system device", class 08/80) -> Update Driver -> Specify a location -> the package directory; on Windows 2000 and later, Update Driver -> Have Disk -> the same directory, `xhcicm.inf`. The filter INF, `nt\xhcicmf.inf`, is for the NT targets alone, never pointed at from Windows 98 or ME: on each tunnel port (a Thunderbolt switch port, or the root port the platform tunnels through), Update Driver -> "Don't search" -> Have Disk -> the `nt\` directory, which Windows 2000 also takes unforced and XP and 7 need (the unsigned INF otherwise loses to `machine.inf`; task 39-0.4, record 21 section 3.3). Once installed, the NHI reads "xHCI98 Thunderbolt 2 Controller", "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" by its generation, and each port the filter attaches to "xHCI98 Thunderbolt PCI Bridge", "xHCI98 USB4 PCI Bridge" or "xHCI98 PCI Bridge".
+
+**The registry values** (record 21 section 8), in the NHI's driver key, each written by the INF at its default: `XhciCmMode` (1; 0 off, 2 the ICM client on an unlisted Intel NHI, 3 the software connection manager), `XhciCmApprove` (1), `XhciCmReenum` (1), `XhciCmPollIdleMs` (200, held to 50-5000), `XhciCmCmdTimeoutMs` (5000, held to 1000-60000), `XhciCmApproveTimeoutMs` (10000, the same bounds), `XhciCmSafeEject` (1), `XhciLogVerbosity` (0), and the USB4 profile's three of design record 22 section 12, `XhciCmUsb3Tunnel` (1), `XhciCmLaneBonding` (1) and `XhciCmPreOsCleanup` (0; 1 cleans what does not verify, 2 everything); and `XhciCmTunnelBridge` (`REG_SZ`, never written: a comma-separated `bb:dd.f` list that replaces the tunnel-port discovery). A switch out of its range is refused and its default stands; a period is held to its bounds; both are recorded in the log ring at start (`cm.values.refused`, `cm.values.clamped`).

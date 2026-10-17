@@ -106,6 +106,7 @@ identification.
 | Published snapshot reader binary | Yes | `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` | Built from this project's sources but not only this project's code: the MSVC 6.0 C runtime is statically linked in. See section 2a |
 | Intel xHCI specification PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
 | USB-IF backwards-compatibility testing PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
+| Published install tool binaries, and `INSTALL.BAT` | Yes, from the first cut that carries them (`3.0.0.0`) | `releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`; `releases/<version>/INSTALL.BAT` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each executable (MSVC 6.0's, WDK 7.1's). See section 2a. `INSTALL.BAT` is this project's own text. Neither carries or calls a Microsoft setup program: the routines they use are the system's own, looked up at run time |
 | Oney, *Programming the Microsoft Windows Driver Model* (2nd ed., 2003) | No, and it never was; it is in no commit and in no directory of this repository | Nowhere in this tree; a purchased book on the reader's own shelf | The one third-party document cited by printed page that is not kept in `docs/references/`. Edition, page count, SHA-256 of the copy the citations were read from, and the page-index offset are in `docs/references/README.md`. There is no fetch URL to record, because there is no download |
 | ReactOS / Linux / FreeBSD / Haiku source mirrors | No | `external/` (git-ignored) | Fetch procedure and pinned commits in `external/README.md` |
 | `usbport.sys`, `usbhub20.sys`, NUSB 3.3, MSVC 6.0, the Win2000 DDK | No | `tools/` (git-ignored) | Supplied by the user's own install media or download |
@@ -113,6 +114,9 @@ identification.
 | The two `usbd.sys` builds and Windows 98 SE's `usbhub.sys` | No | `tools/` (git-ignored) | Reference copies, staged from the user's own install media for the import gate's Windows 98 evidence and the Windows 2000 VM setup. The assembled release download carried them from 0.0.0.4 to 1.0.0.0 and carries them no longer; see section 5 |
 | Disassembly extracts taken from those binaries | No | `tools/*-extracted/` (git-ignored) | Convenience copies only; see section 4 |
 | Staged install media | No | `out/` (git-ignored) | Generated; the upload set for a release is assembled here |
+| Stor98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled Stor98 build" below |
+| The Windows 98 Second Edition DDK (`win98se_ddk.exe`) | No | `tools/win98ddk/`, extracted into `tools/win98ddk-extracted/` (git-ignored) | Fetched on 2026-10-15 from the Internet Archive for roadmap-usb4 task 39-0.3; its identity, SHA-256, source URL and the licence it states are in `docs/references/README.md`, "Windows 98 DDK". Extracted with 7-Zip, not installed; nothing in it was executed. The CONFIGMG and VMM values of `src/cm/cm_cfgmg.h` are what is taken from it (section 4, the CONFIGMG row) |
+| Source files from `usb4-emu`'s `tools/usb4cm` (MIT) | Yes, from the change that lifts the first of them (roadmap-usb4 task 39-A.2) | `src/cm/` | Not only this project's code: which files, their notices and the rule a lifted file follows are in section 2a, "Source files lifted from `usb4cm`" |
 
 Three of the git-ignored trees exist for this reason rather than for tidiness:
 `docs/references/`, `external/` and `tools/` hold third-party material, and
@@ -137,15 +141,31 @@ with none of the inputs can still check the claim.
 
 ### 2a. The tracked binaries that are not only ours
 
-There are two, and from `2.4.0.0` four. All are tools rather than the
+There are two, from `2.4.0.0` four, and from `3.0.0.0` six. All are tools rather than the
 driver, and all are the exception to the row above saying this project tracks
 only its own code: `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` and
 `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` (at the version root,
 without `tools/`, in a release before 2.4.0.0; roadmap-hcd task 38.9), and
 from `2.4.0.0` `releases/<version>/tools/xhcicln/XHCICLN.EXE` and
-`XHCICL64.EXE` (roadmap-hcd task 38.8). They are not the same case: the
+`XHCICL64.EXE` (roadmap-hcd task 38.8), and from `3.0.0.0`
+`releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`
+(roadmap-usb4 task 40.5). They are not the same case: the
 qualifier carries an embedded DOS extender and an Open Watcom runtime, the
 reader and the cleanup tool statically linked Microsoft C runtimes.
+
+This section also records the other way third-party code enters the
+tree: source files of this project that carry code taken from elsewhere,
+each with its notices. For the Thunderbolt and USB4 work (`src/cm/`) there
+are two kinds. The first is the files lifted from `usb4-emu`'s
+`tools/usb4cm` while that repository was MIT ("Source files lifted from
+`usb4cm`" below), which keep the MIT notice of the commit they came from.
+The second, since 2026-10-15, is any file adapted under section 3's rule
+for the Thunderbolt and USB4 mirrors from `usb4-emu` (at `3c74189` or
+later, GPL-2.0-only), from Linux `drivers/thunderbolt`, from FreeBSD
+`sys/dev/thunderbolt` or from Intel's tbtools data ("Source files adapted
+for the Thunderbolt and USB4 work" below): one entry per file, naming the
+source file, the pinned commit actually read and what was adapted, added
+in the change that adapts it.
 
 #### XHCIQUAL.EXE
 
@@ -244,6 +264,31 @@ quoted here. `scripts/package/make-release.ps1` generates one `NOTICE.TXT`
 beside the two recording both linkages, for the same reason as the two
 above.
 
+#### XHCIINST.EXE and XHCIIN64.EXE
+
+`releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE` are the
+install, update and uninstall tool of `3.0.0.0` (design record 23), built by
+`xhciinst/build.cmd` from `xhciinst/xhciinst.c`, `xhciinst/inst_core.c` and
+`src/xhci_psw.c` (the driver's own port-switchover gate), with
+`xhciinst/xhciinst.rc` embedding `xhciinst/xhciinst.manifest` - all this
+project's own text. Each is not only that, in exactly `XHCICLN`'s way:
+
+- `XHCIINST.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked
+  (`cl /nologo /W3 /WX /O2`, no `/MD`). Re-derivable: `link -dump -imports
+  XHCIINST.EXE` names `KERNEL32.dll` and `ADVAPI32.dll` and no C runtime
+  DLL, which `xhciinst/selftest.cmd` checks at every build.
+- `XHCIIN64.EXE`: the Windows Driver Kit 7.1's amd64 C runtime (`LIBCMT`),
+  statically linked (`/MT`); its import table, read the same way with WDK
+  7.1's `link`, names the same two DLLs.
+
+Every SetupAPI, `newdev.dll`, configuration-manager and `version.dll`
+routine either calls is looked up at run time from the system's own DLLs,
+which are not linked, shipped or tracked; neither executable contains or
+runs `devcon` or any other Microsoft setup program. `INSTALL.BAT`, staged
+at the version root, is this project's own text. `make-release.ps1`
+generates one `NOTICE.TXT` beside the two executables recording both
+linkages, as for `XHCICLN`.
+
 Stated plainly: `XHCISNAP.EXE` is a single executable combining this project's
 GPL-2.0-only code with Microsoft's Visual C++ 6.0 static C runtime, two
 licences meeting in one file where the qualifier's three meet in the other.
@@ -252,6 +297,172 @@ That composition is what this subsection records.
 In both cases the binary was published first and its provenance written down
 afterwards, by an audit reading the linker map rather than by the cut itself.
 Section 6's rule for a new tracked build output is written against that.
+
+#### Source files lifted from `usb4cm` (MIT)
+
+Not a binary. This subsection records the other way third-party code
+enters a tracked file. The `usb4-emu` repository's `tools/usb4cm/` is a
+polling USB4 connection manager written for that project, and its
+`README.md` ("What xhci98 can lift") offers `core/` for lifting into this
+driver. The Thunderbolt 3 client (`xhcicm.sys`, design record 21) and the
+USB4 software connection manager after it (roadmap-usb4 Phase 40) take the
+files below. They were read at `usb4-emu` `main` commit `a68bc74`; for these
+paths that commit is identical to `eba0cf1`, the commit record 21 cites.
+
+| File (`tools/usb4cm/`) | Lines | Git blob | Origin, as its header states it | Lifted by |
+|---|---|---|---|---|
+| `core/u4hi.c` | 522 | `d5f705ed29d12ee42af16c4f0d97e5aab31ea342` | written from scratch from USB4 Specification 2.0 sections 6.4, 12.3, 12.4 and 12.6 | roadmap-usb4 task 39-A.2, as `src/cm/tbt_ring.c` |
+| `core/u4regs.h` | 168 | `f4d4a15c775591c73e847f2d91d563b04d629eb8` | written from scratch from Specification 2.0 sections 12.6 and 8, "field positions cross-checked against tbtools registers.json" | 39-0.2 and 39-A.2, as `src/cm/tbt_regs.h` |
+| `core/u4types.h` | 29 | `184e46e41f451abc18cfc9ac775c0fa3e03ef4d6` | written from scratch | 39-A.2 (design record 21 section 9) |
+| `core/u4cm.c` | 754 | `826722d9c202e1b06439ddffb869c78979cd578c` | written from scratch from the Connection Manager Guide 2.0 and Specification 2.0 | Phase 40 (task 40-A.3); if taken from `3c74189` or later, entered below as an adaptation instead |
+| `core/usb4cm.h` | 224 | `6be9bab78443e7e8d6238ccf17287f7a23d9556d` | written from scratch from Specification 2.0 and the Connection Manager Guide 2.0 | Phase 40 (task 40-A.3); if taken from `3c74189` or later, entered below as an adaptation instead |
+
+Not lifted, and not to be: `dos/usb4cm.c`, a DOS front end whose build links
+the DOS/32A extender and the Open Watcom runtime; `host/cm-host-test.c`,
+which links `usb4-emu`'s QEMU fabric model; and the build scripts.
+
+The notices. Each of the five files opens with
+`Copyright (c) 2026 usb4-emu contributors` and
+`SPDX-License-Identifier: MIT`. The `usb4-emu` repository's `LICENSE` is the
+MIT License with the line `Copyright (c) 2026 Yeo Kheng Meng`. Its
+permission notice, which every lifted file carries in full, reads:
+
+```text
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+The rule for a lifted file (design record 21 section 9):
+
+- The file keeps its original copyright line and its SPDX tag.
+- It carries the permission notice above in full.
+- It names the `usb4-emu` path and commit it came from.
+- When this project changes the file, it adds its own copyright line below
+  the original and marks the file as changed, with the date. It never
+  replaces the original line.
+- `LICENSE`'s scope note names the lifted files in the same change that
+  lifts the first of them.
+- This subsection's table gains the `src/cm/` path as each file lands.
+
+One fact recorded for the lift to check. `u4regs.h`'s header says its field
+positions were "cross-checked against tbtools registers.json". That is
+Intel's tbtools, which `usb4-emu`'s `docs/REFERENCES.md` records as MIT
+(`https://github.com/intel/tbtools`, commit
+`aa0b1be590443d7074e799ebd6c72e308c5bdd02`). That document's own rule is
+that files generated from `registers.json` carry the tbtools notice.
+`u4regs.h` carries no tbtools notice and does not say it was generated. Task
+39-A.2 reads the file against that rule before it lands, and records what
+it finds here.
+
+`usb4-emu`'s `main` was relicensed to GPL-2.0-only at `3c74189`
+(2026-10-15). The files above that have landed (`u4hi.c` as
+`src/cm/tbt_ring.c` and `u4regs.h` as `src/cm/tbt_regs.h`, task 39-A.2)
+were lifted from `a68bc74`, where they carry the MIT notice, and keep it.
+The others are planned: a file taken from `3c74189` or later is an
+adaptation under section 3's rule and is entered in the subsection below
+instead.
+
+#### Source files adapted for the Thunderbolt and USB4 work
+
+Not a binary either: the files adapted under section 3's rule for the
+Thunderbolt and USB4 mirrors, from 2026-10-15. One row per adapted file,
+added in the change that adapts it; the notices it keeps are the ones that
+rule names.
+
+| File in this tree | Source file | Commit read | What was adapted | Notices kept | Task |
+|---|---|---|---|---|---|
+| `src/cm/tbt_u4cm.c` | `usb4-emu` `tools/usb4cm/core/u4cm.c` (blob `921525880d13b772fbac1598ec66c8281ebcfac5`, GPL-2.0-only) | `3c74189` | the connection manager's sequence - router enumeration, adapter discovery by capability walk, port and protocol-adapter pairing, the router operation, the DROM read, lane bonding, the device router's connect, the Configuration Valid handshake, path programming, the PCIe and USB3 tunnels - translated and changed as design record 22 section 2.2 says | `Copyright (c) 2026 usb4-emu contributors`, `SPDX-License-Identifier: GPL-2.0-only` | 40-A.3 |
+| `src/cm/tbt_u4cm.c` | Linux `drivers/thunderbolt/tb.c`, `switch.c`, `tunnel.c`, `path.c`, `usb4.c`, `tmu.c`, `lc.c`, `quirks.c`, `cap.c`, `ctl.c`, `eeprom.c` (GPL-2.0) | `c6859eed755df351a3978b33cb92365f9b3e8f06` | sequences, constants and register uses, translated to C89: `tb_switch_configure`, `usb4_switch_setup`, `tb_plug_events_active`, `tb_switch_next_cap`, `usb4_switch_credits_init`, `tb_pci_init_credits`, `tb_available_credits`, `tb_path_activate`, `tb_tunnel_discover_pci` / `_usb3`, `tb_path_discover`, `usb4_usb3_port_allocate_bandwidth` / `_release_bandwidth`, `usb4_port_reset`, `tb_switch_lane_bonding_enable`, `tb_switch_tmu_post_time`, `tb_switch_tmu_enable` (HiFi-Bi), `tb_switch_tmu_disable`, `tb_lc_read_uuid`, `tb_lc_lane_bonding_possible`, `tb_lc_set_port_configured`, `tb_check_quirks` and its table; for a Thunderbolt 3 router behind a USB4 host, the upstream adapter from the read's response (`ctl.c` `tb_cfg_get_upstream_port`, `switch.c` `tb_switch_alloc`) and the EEPROM bit-bang DROM reader (`eeprom.c` `tb_eeprom_get_drom_offset`, `tb_eeprom_active`, `tb_eeprom_transfer`, `tb_eeprom_out`, `tb_eeprom_in`, `tb_eeprom_read_n`) | each file's copyright lines (Andreas Noever 2014; Intel Corporation 2018-2020) | 40-A.3, 40-A.8 |
+| `src/cm/tbt_regs.h` (the Phase 40 block) | Linux `drivers/thunderbolt/tb_regs.h`, `tb_msgs.h` (GPL-2.0) | `c6859eed755df351a3978b33cb92365f9b3e8f06` | the cross-check of every field taken from the USB4 Specification 2.0, and the Thunderbolt 3 Plug Events and link controller fields, which the specification does not define | the file keeps `u4regs.h`'s MIT notice; the block cites Linux by file and symbol | 40-0.1 |
+| `src/cm/tbt_ring.c`, `tbt_ring.h` (the USB4 transport) | `usb4-emu` `tools/usb4cm/core/u4hi.c` (`u4_hp_ack`, `u4cm_unsolicited`, `u4_xfer`; blob `869add9a38fb536933f084a81245e095bb598361`); Linux `drivers/thunderbolt/ctl.c` (`tb_cfg_ack_plug`, `tb_cfg_ack_notification`) | `3c74189`; `c6859eed` | the hot plug acknowledgement and its queue, the write request on the read's transfer, the plain acknowledgement's form | the file's 39-A.2 MIT notice, kept | 40-A.1 |
+| `test/u4_fakefab.c` (`fabEeByte`, `fabEeCtl` only) | `usb4-emu` `src/qemu/hw/usb4/usb4-router-tb3.c` (`eeprom_byte`, `eeprom_ctl`; GPL-2.0-only) | QEMU fork `2a893ea` | the Thunderbolt 3 router's EEPROM bit-bang model (a 25-series SPI part: chip select, 24 command and address bits, data out on each later rising clock edge) | `Copyright (c) 2026 usb4-emu contributors`, `SPDX-License-Identifier: GPL-2.0-only` | 40-A.8 |
+| `scripts/usb4-crosscheck/u4cm-crosscheck.c`, `run-crosscheck.sh` | `usb4-emu` `tools/usb4cm/host/cm-host-test.c`, `run-host-test.sh`, `src/qemu/tests/usb4/fabric-test.c` (GPL-2.0-only) | `3c74189`; QEMU fork `178237c` | the fakes for the fabric's neighbours, the virtual clock and timers, the ring 0 shim, the build | `Copyright (c) 2026 usb4-emu contributors`, `SPDX-License-Identifier: GPL-2.0-only` | 40-A.5 |
+
+The host suite's fake fabric (`test/u4_fakefab.c`) is written for this
+project from the specification and from `usb4-emu`'s documents; it adapts
+no code, except the Thunderbolt 3 EEPROM model in the row above. `usb4-emu`'s fabric model (`src/qemu/hw/usb4/`) is compiled in
+place, never copied, by the cross-check of task 40-A.5.
+
+#### Third-party headers incorporated unchanged
+
+Not a binary either, and not an adaptation: a header another project
+publishes as an interface definition, carried in this tree byte for byte
+with its own licence notice, so that this driver and the other project
+build against one definition. It is never edited here; a change is made in
+its own repository and copied in again, with this row updated.
+
+| File in this tree | Source | Commit read | SHA-256 | Licence | Why | Task |
+|---|---|---|---|---|---|---|
+| `src/cm/stor98cm.h` | Stor98 `include/stor98cm.h` (the `nvme98` project's `include/nvme98cm.h` until its rename, 2026-10-16) | `6609c1c36701e50665daf0305fdc35fe06e258d6` (the header's last change; Stor98 `main` was at `3e9f51b`, its `0.3.0.0` release, when read, 2026-10-16) | `cc0ce571719bab8f40813bee3e9297501df5b824a14e0105420d8d759c545c84` | BSD-3-Clause, `Copyright (c) 2026, Yeo Kheng Meng`, the notice kept in the file; the file's own text says it is licensed on its own, independently of the code on either side, and asks that no GPL-licensed code or text be put into it | the link-state table, callback object, 9x locator and current-boot proof Stor98 adopted as its connection-manager interface (decisions MD-5 and MD-6, gate G3, interface version 4); `src/cm/cm_nvlink.c` and `cm_nvlinkos.c` implement this side on NT, and the 9x half is roadmap-usb4.md NV9X.1 | 39-A.7, 40-A.7, STOR.1 |
+
+The file uses `//` comments, which AGENTS.md's C89 rule forbids in this
+project's own source. It is the recorded exception: a third-party header
+carried unchanged. Both compilers accept it as it is - MSVC 6.0 under the
+DDK's flags for every x86 flavour, under the host suites' `/Za /W3 /WX`,
+and WDK 7.1's amd64 compiler - so no wrapper is needed. Nothing from this
+repository moves the other way: Stor98 is BSD-3-Clause, and this
+project's code stays out of it.
+
+### The bundled Stor98 build
+
+From `3.0.0.0` the release download may carry Stor98, an NVMe storage
+driver that is a separate project (owner, 2026-10-16). What is recorded
+here:
+
+- **What is shipped.** One released Stor98 build, copied byte for byte
+  from that build's release folder: its `x86/` files (`stor98.inf`,
+  `stor98.mpd`, `stor98.sys`) at the root of `release-x86/`, and its
+  `x64/` files (`stor98.inf`, `stor98.sys`, `stor98-test.cer`) at the root
+  of `release-x64/`, with no `stor98/` folder. Every name there starts
+  with `stor98`. Binaries only: none of Stor98's source is bundled. The
+  `debug-` directories carry none of it.
+- **The licence files.** Stor98's `LICENSE` (BSD-3-Clause, naming three
+  copyright holders) and `NOTICE.TXT` (where each part of Stor98 came
+  from) ship beside those files in each of the two directories as
+  `stor98-LICENSE.txt` and `stor98-NOTICE.txt`, with its `readme.txt` as
+  `stor98-readme.txt`. Their bytes are the release's.
+- **The pins.** Four parameters of `scripts/package/make-release.ps1` and
+  `make-package.ps1` name the build, and they go together:
+  `-Stor98Version` (the build), `-Stor98Dir` (its release folder, read
+  only), `-Stor98SumsSha256` (the SHA-256 of that folder's
+  `SHA256SUMS.txt`) and `-Stor98InterfaceVersion` (its link-state
+  interface version, `STOR98LS_VERSION`, `4` for `0.3.0.0`, compared with
+  the header this project compiles against). Without them no Stor98 is
+  bundled. `docs/contributing/build-and-test.md`, "The bundled Stor98
+  build", has the full checks.
+- **Where it comes from.** The `SHA256SUMS.txt` hash is checked first;
+  then every file against that list before it is copied, and each copy
+  again after (`scripts/package/package-common.ps1`, "Stor98, the bundled
+  NVMe driver"). A version older than `0.3.0.0` is refused.
+- **Signing.** The x64 `stor98.sys` carries an embedded test signature by
+  Stor98's own test certificate (`CN=stor98 project test signing (not
+  trusted)`, SHA-1 thumbprint `461311C79165DC7985522D46274DCAD8832DD919`;
+  SHA-1 digest, no timestamp), whose public half is `stor98-test.cer`,
+  shipped unchanged. It is not this project's certificate (section 2's
+  test-signature row) and not a Microsoft signature. The
+  packaging scripts do not sign, re-sign or import it.
+- **What is tracked.** None of these files: they are not in `releases/`
+  and not in any commit, and the packaging scripts copy them from the
+  release folder at each cut. The generated `readme.txt` and
+  `docs/using/release-notes.md` name the bundled version.
+- **The other direction.** No code of this project, and none of
+  `usb4-emu`'s, is copied into Stor98 (AGENTS.md, "Reference
+  Implementations").
 
 ### The third-party PDFs
 
@@ -447,6 +658,94 @@ recorded (design record 13 section 5.7); nothing of either was taken into
 stack enumerate a device?" and USB 2.0 section 9.2.6.4, which are
 documentation, not binaries, so no section 4 row records them.
 ---
+
+### The Thunderbolt and USB4 mirrors (owner, 2026-10-15)
+
+Design record 21's first draft did not open Linux's `drivers/thunderbolt`
+for the Thunderbolt 3 work. Its contract was `usb4-emu`'s `ICM-PROTOCOL.md`
+alone, a clean-room description (section 4, the `ICM-PROTOCOL` rows). On
+2026-10-15 the owner changed that, so the driver can support as many
+controllers as possible. Two trees may now be read for roadmap-usb4's work
+(Phase 39, the firmware connection manager client; Phase 40, the USB4
+software connection manager), under the same terms as the ReactOS and
+xHCI mirrors above:
+
+- Linux `drivers/thunderbolt` (40 files) and `include/linux/thunderbolt.h`,
+  at the pinned Linux commit `c6859eed755df351a3978b33cb92365f9b3e8f06`.
+  Every file carries a `GPL-2.0` or `GPL-2.0-only` SPDX identifier.
+- FreeBSD `sys/dev/thunderbolt` (21 files), at
+  `9d50245a0f1333e10cc1c4dda16878cd79a7c42b` (2026-10-14). Every file
+  carries a `BSD-2-Clause` or `BSD-2-Clause-FreeBSD` SPDX identifier and
+  the line `Copyright (c) 2022 Scott Long`.
+
+What is taken: device ids, message codes and layouts, register and field
+offsets, constants, sequences and controller quirks. Each is cited by file
+and symbol where it is used, and section 4 records the classes.
+
+The owner's first decision of 2026-10-15 named reading and citing only,
+with no function body of either tree copied. Later that day the owner
+widened it, through the `usb4-emu` maintainer's note, to take effect when
+`usb4-emu`'s relicensing from MIT to GPL-2.0-only landed on its `main`. It
+landed at `3c74189` (2026-10-15), whose handoff (`docs/XHCI98-HANDOFF.md`
+section 3) reads: "xhci98 may adapt code directly from this repo
+(`tools/usb4cm` included) and from Linux `drivers/thunderbolt`
+(GPL-2.0-only), as well as FreeBSD `sys/dev/thunderbolt` (BSD-2) and Intel
+tbtools data (MIT). Keep the notices of whatever you adapt: the copyright
+lines of the source file, its SPDX tag, and an entry in xhci98's
+provenance record naming the source file and pinned commit". The rule this
+project keeps for that, for the Thunderbolt and USB4 work only (roadmap-usb4
+Phases 39 and 40, design records 21 and 22, `src/cm/`):
+
+- Code may be adapted from those four sources. The facts above are still
+  cited by file and symbol where they are used.
+- Every adapted file keeps the copyright lines of each source file it came
+  from and that file's SPDX tag. A file adapted from Linux or from
+  `usb4-emu` at or after `3c74189` carries
+  `SPDX-License-Identifier: GPL-2.0-only` with the source's copyright
+  lines; a file adapted from FreeBSD keeps its BSD-2-Clause copyright line,
+  conditions and disclaimer verbatim; tbtools data keeps its MIT copyright
+  and permission notice verbatim; a `usb4cm` file lifted from a commit
+  before `3c74189` keeps the MIT notice of that commit (section 2a, "Source
+  files lifted from `usb4cm`"). The file is marked as changed, with the
+  date, and its header names the source file.
+- Each adapted file gets an entry in section 2a, "Source files adapted for
+  the Thunderbolt and USB4 work", naming the source file, the commit
+  actually read (Linux `c6859eed755df351a3978b33cb92365f9b3e8f06` and
+  FreeBSD `9d50245a0f1333e10cc1c4dda16878cd79a7c42b`, `external/README.md`'s
+  pins; the `usb4-emu` commit read, `3c74189` or later; the tbtools commit
+  read), what was adapted and where it landed, in the same change.
+- Adapting is translating: the code is still C89, safe on Windows 98 and
+  2000, free of 64-bit arithmetic and in `AGENTS.md`'s style, never a
+  paste of a Linux kernel API.
+- Behaviour taken from Linux alone stays tagged [linux], unconfirmed,
+  until a hardware capture shows it; adapting the code that implements it
+  does not change the tag.
+- Nothing moves from this repository or from `usb4-emu` into Stor98,
+  which is BSD-3-Clause.
+- A release whose binary carries adapted code says so in its notices,
+  naming the source files and their copyright holders, and offers its
+  corresponding source as the Linux xHCI exception above does (taken over
+  from that exception as an orchestrator decision of 2026-10-15, for the
+  owner to confirm).
+- The overlap audit above treats the recorded entries as known overlap;
+  any other verbatim overlap with these mirrors is still a finding.
+
+Every other mirror, and Linux and FreeBSD outside the Thunderbolt and
+USB4 work, stays under the do-not-copy rule, with the xHCI quirk
+exception above as the only other one.
+
+Both mirrors are in `external/` (git-ignored), and `external/README.md`
+records how to fetch them. On 2026-10-15 every mirrored file matched the
+upstream blob at its pinned commit once CR-LF was normalised to LF. Linux
+has no `include/uapi/linux/thunderbolt.h` at that commit, so the mirror
+has no such file. `usb4-emu`'s `ICM-PROTOCOL.md`, written clean-room under
+that repository's former rule and stated there to remain accurate, stays
+the contract record 21 cites first. A statement it tags [inf] - what
+Linux's client does - may be checked against `icm.c` and cited there as
+well.
+
+This records the decisions, the text they rest on and what was fetched;
+it draws no legal conclusion.
 
 ## 4. Facts read out of shipping binaries: a source-method inventory
 
@@ -972,6 +1271,26 @@ written, then the three task 22.12 (b) readings of 2026-09-18.
 | **Windows 98 SE's `RtlQueryRegistryValues` (NTKERN) with a query-table entry whose `Name` is NULL calls the routine once for every value of the key**: with `XhciSilentInstall` 1 and the six-value `Services\USB\SilentClasses` list merged, this driver's notes read `silent.entries=00000006`, `silent.ignored=00000000`, `silent.dropped=00000000`, `silent.status=00000000` after a controller disable and enable (design record 13 section 6.11, O1) | runtime (this driver's `silent.*` notes in an `XHCISNAP -o` dump, release flavour at verbosity 2, Windows 98 SE under NUSB 3.3 in QEMU, development host A, 2026-10-13; dump `out\p38-2\legs\w98\Z1.txt`, git-ignored; nothing disassembled); the same on Windows ME (`silent.entries=00000006`, dump `out\p38-2\legs\me\A3.txt`; with three more values merged, `A4.txt` reads `silent.entries=00000007`, `silent.ignored=00000002`, all nine seen) | `docs/contributing/design/13-superspeed-hcd.md` section 6.11, O1; `src/hcd_ctl.c` (`hcdReadSilent`) |
 | **Windows XP SP3's `usbccgp.sys` 5.1.2600.5585 (32,384 B, SHA-256 `4C1B3E8F3F658E356A955108FF84FB5C95244CB2A9D323AA0DFAEF92927C66C5`) selects the whole configuration down the composite devnode's own stack before it creates any function PDO**: `StartParentFdo` (`0x150F0`) passes the `START` down (`CallDriverSync`, `+0x70`), then on a first start calls `GetDeviceDescriptor` (`+0xAD`), `GetConfigDescriptor` (`+0xC4`; `TryGetConfigDescriptor` submits two URBs, `+0x57`, `+0x10F`), `GetParentFdoCapabilities`, `GetInterfaceList`, `ParentSelectConfiguration` (`+0x12B`), and only then `GetNumberFunctions` and `CreateStaticFunctionPDOs` (`+0x17F`); with a flag byte set (`+0x72`) it calls `ParentSelectConfiguration` on the stored descriptor and interface list (`+0x8C`) and returns. `SubmitUrb` (`0x107A0`) calls `IoAllocateIrp`, writes major function `0x0F` and code `0x220003`, and calls `CallNextDriverSync`. `ParentCloseConfiguration` (`0x10A90`) and the function PDO's `UrbFunctionSelectConfiguration` (`0x12E90`, `+0x201`) each submit a URB; their callers and conditions were not traced | static (`tools\WinDDK71\Debuggers\cdb.exe -z tools\symbols\usbccgp.sys\480DE37F7e80\USBCCGP.SYS` with Microsoft's public symbols from `tools\symbols`, `uf /c` on the six routines named and `u` over `StartParentFdo+0x70` to `+0x130` and `SubmitUrb`; 2026-10-14, development host A; nothing executed). ReactOS's `usbccgp` (interface documentation, `0298e10d`) shows the same order | `docs/contributing/design/13-superspeed-hcd.md` section 10.14.1 |
 | **On Windows 98 SE and Windows ME, `cfgmgr32.dll`'s `CM_Uninstall_DevNode` is a stub, and `CM_Locate_DevNodeA` honours `CM_LOCATE_DEVNODE_PHANTOM`** (task 38.8, the route (a) of design record 13's D8). 98 SE's `CFGMGR32.DLL` (45,056 B, dated 04-23-99, SHA-256 `269bbe3e...7aea`): `CM_Uninstall_DevNode` at RVA `0x302F` returns `CR_INVALID_FLAG` (4) for non-zero flags, `CR_INVALID_DEVNODE` (5) for devnode 0 and `CR_SUCCESS` otherwise, and calls nothing; `CM_Locate_DevNodeA` accepts flags 0 or 1 only and, on `CR_NO_SUCH_DEVNODE` (0x0D) from CONFIGMG with flag 1 set, opens `ENUM\<id>` under `HKLM`. ME's `CFGMGR32.DLL` (40,960 B, dated 06-08-00, SHA-256 `05a549a3521d5f060ea85ef0d40919c379b3e62130d89e4579ceae9f37a42982`): the same stub at RVA `0x2C82` (`CM_Uninstall_DevNode_Ex` answers `CR_CALL_NOT_IMPLEMENTED` for a remote machine, else the stub), and the same `CM_Locate_DevNodeA` at RVA `0x3E01`, which goes on to `RegCreateKeyEx` and CONFIGMG for a registry-only entry | static (each guest's file copied out over its serial port, the export table listed and the bytes at the two exports decoded by hand, no disassembler; 2026-10-14, development host A; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 10.13.8 |
+| **The Windows 98 / ME configuration manager's ring-0 interface values in `src/cm/cm_cfgmg.h`** (design record 21 section 6.1; safe eject, roadmap-usb4 task 39-A.8): CONFIGMG's VxD id `0x0033` (`VMM.H` line 175, `CONFIGMG_DEVICE_ID`), the dynalink interrupt `20h` (`VMM.INC` line 3355) and its jump bit `8000h` (`VMM.H` line 4919, `DL_Jmp_Mask`); twenty service numbers - `Get_Version` 0, `Locate_DevNode` 2, `Get_Parent` 3, `Get_Child` 4, `Get_Sibling` 5, `Get_Device_ID_Size` 6, `Get_Device_ID` 7, `Query_Remove_SubTree` 12, `Remove_SubTree` 13, `Register_Device_Driver` 14, `Lock` 22, `Unlock` 23, `Reenumerate_DevNode` 51, `Setup_DevNode` 52, `Get_DevNode_Status` 54, `Disable_DevNode` 64, `Enable_DevNode` 65, `Broadcast_Device_Change_Message` 88, `Change_DevNode_Status` 91, `Set_DevNode_Problem` 122 - each its entry's ordinal in `CONFIGMG.H`'s service table (lines 532-663: 124 entries numbered from 0 by `VMM.H` lines 353-358, with no conditional inside the table and two three-line comments at 624-626 and 645-647 that are not entries; the header's own `DEBUG_SERVICE_NAMES` array, from line 671, lists the same 124 in the same order, but for one spelling at ordinal 109, `_CONFIGMG_Register_For_Idle_Detection` at line 783 for the table's `_CONFIGMG_Register_DevNode_For_Idle_Detection` at line 648); and the `CR_`, `DN_`, `CM_PROB_` and call-flag values the file carries, among them `DN_REMOVABLE` `0x4000`, which `DN_CHANGEABLE_FLAGS` `0x79BB62E0` includes, and `CM_REGISTER_DEVICE_DRIVER_REMOVABLE` `0x2`. Each value is cited to its line in the file | static (a text read of the three headers of the Windows 98 Second Edition DDK, extracted with 7-Zip from `tools\win98ddk\win98se_ddk.exe` into `tools\win98ddk-extracted\`, SHA-256s in `docs/references/README.md`; nothing installed or executed; 2026-10-15; not tracked). The numbers, flag values and result codes alone were taken: no declaration, macro body or comment of the headers is reproduced, and the macro names in the file are this project's own. Every number `usb4-emu`'s re-enumeration experiment used (`tools/reenum-test/reenum.c` at `main` `a68bc74`: the VxD id and eleven services) agrees with these; that experiment's run-time results, recorded in design record 21 section 6.1, are `usb4-emu`'s evidence, not this driver's | `src/cm/cm_cfgmg.h`; design record 21 section 6.1 |
+| **PCI.VXD's configuration-space services in `src/cm/cm_cfgmg.h`** (design record 21 section 6.1.1, the 9x bus numbering): PCI.VXD's VxD id `0x0043` (`VMM.H` line 197, `PCI_DEVICE_ID`, which `PCI.H` line 67 also names `ResType_PCI_Bus_Number`), and the service numbers `_PCI_Read_Config` 1 and `_PCI_Write_Config` 2, the second and third entries of `PCI.H`'s service table (line 56 on: four entries, numbered from 0 by `VMM.H` lines 353-358); their C signatures, `(BYTE bus, BYTE devfunc, BYTE offset)` returning the dword and `(BYTE bus, BYTE devfunc, BYTE offset, DWORD value)`, both `_cdecl`, from `VXDWRAPS.H` lines 313-314 | static (a text read of `PCI.H`, 8,081 bytes, SHA-256 `0acdf32afe0cc5baca1d74d08638f4f02f744d4f7ed54edb10764c136feb34f9`, and `VXDWRAPS.H`, 60,450 bytes, SHA-256 `d43708f618ad2cd5ed4b66e1e3ebc31235710df83cc9673c54c22d4b07fbe884`, of the same extracted DDK; nothing installed or executed; 2026-10-16; not tracked). Numbers and the argument order alone; no declaration or macro body is reproduced. The run-time guard and the emulator and P14s readings of record 21 section 6.1.1 are what confirm the numbers in use | `src/cm/cm_cfgmg.h`, `src/cm/cm_cfgmg.c`; design record 21 section 6.1.1 |
+| **`usb4-emu/docs/ICM-PROTOCOL.md`, the Thunderbolt 3 client's clean-room contract (design record 21)**: `usb4-emu` `main` `a68bc74`, the same text as at `eba0cf1` (git blob `976cbbe2d4088eb86711463b3f0df3fa2d7fc414`, SHA-256 `43ee04e4326d84d6ea33a17f1b70a3e3b874221c937d3666a31e2b17768d83f8`). The file carries no licence line; its repository's `LICENSE` is MIT. It says it was written from the P14s Gen 1 captures and from a reading of Linux's client behaviour, that no client code, structure or header text is reproduced, and that its field names are its own. It tags each statement [obs] (seen in a capture, citation given) or [inf] (what the Linux client expects, not captured). This project cites it by section and keeps the tag: in `src\cm\` an [inf] fact is a hypothesis until a capture, a leg here, or Linux's `icm.c` itself (section 3, the Thunderbolt mirrors) settles it. The captures, all under `usb4-emu/tests/captures/p14s-gen1/` and named by run id: `p14s-linux-20261014-122716-assistOFF_prebootOFF` (`.tar.gz`, SHA-256 `0638f9b857e7cf6b7b11186aed4bc140d71c622aa080d0bad88895e190bd81c2`), `p14s-linux-20261014-133751-assistON_prebootON` (`5544975d2056f342d479b378406fa785e89a348c1a3629046ea53bd617940c99`), `p14s-win11-20261014-135249-assistOff_prebootOff` (`.zip`, `89171b604592f6f4f2a242f3ad4f903e016870864116df8831d6784e39e658e0`) and the Windows 98 MS-DOS-mode matrix `win98/` (`OFF_OFF`, `OFF_OFF_N`, `OFF_ON`, `OFF_ON_N`, `ON_OFF`, `ON_OFF_N`, `ON_ON`, `ON_ON_NO`) | static (a document read, 2026-10-15; nothing executed; the captures behind its [obs] were not re-read here) | design record 21 section 9 and every section citing `ICM-PROTOCOL` |
+| **`ICM-PROTOCOL` sections 1 and 2: NHI and switch identity, PCI topology, and the NHI's BAR0** - ids, class, BARs, capabilities, the switch's ports and buses (section 1); register values with the firmware running, the firmware status register, the NHI mailbox, ring 0, interrupts, host reset and starting stopped firmware (sections 2.1-2.7) | static (a document read). Its [obs] rest on run `p14s-linux-20261014-122716-assistOFF_prebootOFF`: `P:` (lspci and raw config), `M:` (BAR0 dumps per step) and `T:` (trace). The ring layout is the generic one of USB4 2.0 section 12.6 (`docs/references/README.md`) | design record 21 sections 2, 4.1-4.3, 6.3 |
+| **`ICM-PROTOCOL` sections 0 (byte order), 3 and 4.1-4.8: ICM framing on ring 0 and the Alpine Ridge message set** - the wire byte order, the ICM header word, command and event codes, driver ready, get route, approve, device connected and disconnected, boot ACL, errors | static (a document read). Its [obs] rest on run `p14s-linux-20261014-122716-assistOFF_prebootOFF`, `T:` lines. The wire byte order (section 0) is [inf] there | design record 21 sections 5.1-5.5 |
+| **`ICM-PROTOCOL` section 4.9: how Titan Ridge differs from Alpine Ridge** - driver-ready layout, device addressing by route string, no connection key, the approve and disconnect shapes | static (a document read). **Every row is [inf]**: no Titan Ridge capture exists. The best-effort Titan Ridge message-set row of decision D9 (owner, 2026-10-15) is built from it, and is untested | design record 21 sections 1.4 and 11 (D9) |
+| **`ICM-PROTOCOL` sections 5-7: the config-space traffic the client generates, the sequences, and security level `user`** - host and device router reads, the DMA port, the EEPROM protocol, the read order after a device-connected event, bind, rebind, unplug, plug and approve, runtime suspend and resume, unbind | static (a document read). Its [obs] rest on run `p14s-linux-20261014-122716-assistOFF_prebootOFF` (`T:`, `D:`, `S<n>:`); section 7's pre-boot statement rests on section 12.1's sources (the Windows 98 matrix and run `p14s-linux-20261014-133751-assistON_prebootON`). Section 6.1's bind order is inferred there | design record 21 sections 5.1, 5.3-5.6 |
+| **`ICM-PROTOCOL` sections 10 and 11: Windows 11 with Intel's driver, and the platform ACPI** - driver binding (the INF's `CC_0880` match), resources (MSI-X, 16 messages), driver state and logs, the root port `RP05` (00:1c.4) `_DSD` properties, force power and `_OSC` | static (a document read). Its [obs] rest on run `p14s-win11-20261014-135249-assistOff_prebootOff` (`W:`); the ACPI tables are its `W:acpi/reg-*`, which that document says match the Linux run's, and section 11.3's `_OSC` reading also cites the dmesg of both Linux runs | design record 21 sections 1.3, 3.3, 10.4 |
+| **`ICM-PROTOCOL` section 12: pre-boot support and BIOS Assist** - with pre-boot on, the firmware tunnels the boot-ACL dock before any OS and the BIOS enumerates it; with BIOS Assist on, pre-boot on and nothing attached at power-on (`ON_ON_NO`), the controller is down and the root port's link is down; whether Assist off does the same with nothing attached is open there (no such capture) | static (a document read). Its [obs] rest on the Windows 98 MS-DOS-mode matrix (`P98:`, each folder's `PCIDUMP.TXT`) and run `p14s-linux-20261014-133751-assistON_prebootON` | design record 21 sections 2, 6.5, 10.2, 10.4 |
+| **Linux `drivers/thunderbolt`: NHI and bridge device ids, and which connection manager each one gets** - `nhi.h`'s `PCI_DEVICE_ID_INTEL_*` constants, `pci.c`'s `nhi_ids[]`, and `icm.c`'s `icm_probe` choice of the Falcon, Alpine and Titan Ridge and Ice Lake message sets by NHI id; FreeBSD `nhi_reg.h`'s ids as a second reading | static (a source read of the pinned mirror, section 3's Thunderbolt paragraph and `external/README.md`; nothing executed). Each id is cited by file and symbol where it is used; no table is copied | design record 21 sections 1.4 and 3.3, and the INFs, as each lands |
+| **Linux `drivers/thunderbolt`: the ICM message codes and layouts per generation** - `tb_msgs.h`'s `enum icm_pkg_code` and its `icm_fr_`, `icm_ar_`, `icm_tr_` and `icm_icl_` request, response and event layouts, and `icm.c`'s per-generation `tb_cm_ops` (`icm_fr_ops`, `icm_ar_ops`, `icm_tr_ops`, `icm_icl_ops`) for the order of operations | static (a source read of the pinned mirror; nothing executed). Word and bit layouts are restated in this project's own names, cited by file and structure; no structure declaration or function body is copied | design record 21 section 5 and `src\cm\`, as each lands |
+| **Linux and FreeBSD: NHI register offsets and fields, and control-packet framing** - Linux `nhi_regs.h`, `tb_regs.h` and `ctl.c` (the frame, `tb_crc`); FreeBSD `nhi_reg.h` and `tb_reg.h` | static (a source read of the pinned mirrors; nothing executed). These are cross-readings of USB4 2.0 section 12 and `usb4cm`'s `u4regs.h` (section 2a), each offset cited by file and symbol | `src\cm\tbt_regs.h` and design record 21 section 4, as each lands |
+| **Linux `drivers/thunderbolt`: controller quirks** - `quirks.c`'s `tb_quirks[]` and the generation-specific handling in `icm.c` and `nhi.c` | static (a source read of the pinned mirror; nothing executed). A quirk is taken as a description, the ids and the register effect, cited by file and symbol, and written fresh; no quirk code is copied (section 3's Thunderbolt paragraph) | design record 21 and `src\cm\`, as each lands |
+| **The PCI ID Repository: the Thunderbolt NHI, switch-port and tunnel root-port ids and their listed names** (design record 21 section 3.3, decision D9) - `pci.ids` from <https://pci-ids.ucw.cz/v2.2/pci.ids> (the listing at <https://pci-ids.ucw.cz/>, vendor `8086`), version `2026.10.14`, dated 2026-10-14 03:15:02, fetched 2026-10-15, 1,671,991 B, SHA-256 `b0577d41ed389682f2a159cd97b4fd31b13810700e2823254e9689a3898cc837`; the file's header offers it under GPL-2.0-or-later or BSD-3-Clause and says its copyright covers only the aggregation and formatting of factual data | static (a text listing read; nothing executed). Ids only: the vendor and device ids and the names listed beside them, cross-checked against Linux `pci_ids.h` and `nhi.h`; the file is not tracked and nothing else of it is taken | design record 21 section 3.3 |
+| **The ThinkPad P14s Gen 1's PCI configuration space, as the owner captured it, used as host-test vectors** (roadmap-usb4 task 39-A.5, design record 21 section 6.3) - `usb4-emu` `main` `a68bc74` (MIT at that commit, GPL-2.0-only from `3c74189`), `tests/captures/p14s-gen1/win98/OFF_OFF/PCIDUMP.TXT` (BIOS Assist off, pre-boot off; SHA-256 `c0ddd4ee4501b2ad21ffa01eb5ad5b55e3cd9a384039a17daff43b540a44b9cd`) and `.../OFF_ON/PCIDUMP.TXT` (pre-boot on, the dock tunnelled before POST; SHA-256 `03c1448c9d5cb56ecd456cafa2c1b7118889327dbcd116885f42e96b3b6ec1be`), read under DOS with PCI mechanism #1 on the owner's own machine, 256 bytes per function | a hardware capture, neither static nor runtime in this section's sense: the owner's machine read under DOS, not by this driver and not out of a binary. Every function's 256 bytes are reproduced unedited in `test\tbt_topo_p14s.h`, which names both files and both SHA-256s in its header, for `test_tbt_topo`'s P14s vectors | `test\tbt_topo_p14s.h`, `test\test_tbt_topo.c`; design record 21 section 6.3 |
+| **Linux `drivers/thunderbolt`: how a domain's PCI side is associated** - `icm.c` `get_upstream_port` (the discrete switch known by its ids), `acpi.c` `tb_acpi_add_links` and `tb_acpi_add_link` (the `usb4-host-interface` references from root ports to the NHI), `usb4.c` `usb4_switch_map_pcie_down` and `tb.c` `tb_find_pcie_down` (the fabric mapping, which names an adapter and no PCI location) | static (a source read of the pinned mirror; nothing executed). Taken as descriptions of what each source can and cannot say, cited by file and symbol; nothing of them is adapted into `tbt_topo.c` | design record 21 section 6.3; `src\cm\tbt_topo.c` and `tbt_topo.h` |
+| **The PCI ID Repository, second reading: the USB4 hosts' tunnel-port ids** (design record 22 section 3.7, roadmap-usb4 task 40-0.2) - the same `pci.ids`, version `2026.10.14`, SHA-256 `b0577d41ed389682f2a159cd97b4fd31b13810700e2823254e9689a3898cc837`, read for vendors `8086`, `1022` and `1B21`: the Barlow Ridge host bridges `8086:5780` and `5783`, AMD's "USB4/Thunderbolt PCIe tunnel" `1022:14CD` and `14EF` and "PCIe USB4 Bridge" `150A`, ASMedia's "ASM4242 PCIe Switch Downstream Port" `1B21:2423`; and the ids the gate's `CM-NOROUTER` refuses (Goshen Ridge `8086:0B26`, AMD's "USB4 Router" `1022:151C` and `151D`, "ASM2464PD USB4 Device Controller" `1B21:2463`, and the Thunderbolt 1 and 2 parts listed beside them). The listing names no Lunar, Panther or Wildcat Lake port as a Thunderbolt or USB4 port; Panther Lake's and Meteor Lake's "USB Type-C Subsystem PCIe Root Port" ids were read and not taken | static (a text listing read; nothing executed). Ids and listed names only; neither mirror names these ports (Linux finds them through ACPI, FreeBSD's identifier table is empty at its pin); the file is not tracked | `src\cm\xhcicmf.inf`, `xhcicmf-amd64.inf`, `scripts\inf-gate\check-cm-inf.ps1`; design record 21 section 3.3 |
+| **Windows 98 SE's and ME's `cfgmgr32.dll`: its exported names** (design record 24 section 7.1) - `WINDOWS\SYSTEM\CFGMGR32.DLL` of the project's 98 SE guest image (`vm\win98.img`; 4.10.2222, 45,056 bytes, dated 1999-04-23) and ME guest image (`vm\winme.img`; 4.90.3000, 40,960 bytes, dated 2000-06-08), extracted with `7z e` and their PE export name tables read | static (the export table read; nothing executed). Both export the same 179 names, among them `CM_Query_Remove_SubTree`, `CM_Remove_SubTree`, `CM_Reenumerate_DevNode`, `CM_Get_DevNode_Status`, `CM_Locate_DevNodeA`, `CM_Get_Child`, `CM_Get_Sibling` and `CM_Get_Device_IDA`; neither exports `CM_Request_Device_EjectA`. Names only; whether the routines work is the legs' runtime reading. The files are not tracked | design record 24 section 7.1; `xhciinst\xhciinst.c` |
+| **Windows 2000's `cfgmgr32.dll` and `setupapi.dll`: where `CM_Request_Device_EjectA` is exported** (design record 24 section 7.2) - `WINNT\system32\cfgmgr32.dll` and `setupapi.dll` of the project's 2000 SP4 guest image (`vm\win2k-xonly.img`), extracted with `7z e` and their PE export name tables read | static (the export table read; nothing executed). `setupapi.dll` exports `CM_Request_Device_EjectA` and its `W` and `_Ex` forms; `cfgmgr32.dll` does not, and both export `CM_Query_And_Remove_SubTreeA`, `CM_Query_Remove_SubTree` and `CM_Remove_SubTree`. Names only; the files are not tracked | design record 24 section 7.2; `xhciinst\xhciinst.c` |
+| **Windows 2000's `CM_Query_And_Remove_SubTreeA` is a stub, and its `W` form accepts `CM_REMOVE_UI_NOT_OK` and `CM_REMOVE_NO_RESTART`** (design record 24 section 7.2, the fallback for a unit not marked removable) - `WINNT\system32\setupapi.dll` of the project's 2000 SP4 guest image (`vm\win2k-xonly.img`; 570,128 bytes, dated 2003-06-20, SHA-256 `1d0a6e9d062a51e71eaae93d776746823834f5c518096d340f2b332fc059a23d`, image base `0x77880000`), extracted with `7z e`. The export `CM_Query_And_Remove_SubTreeA` (RVA `0x53A1A`) pushes its five arguments and a zero machine handle and calls `CM_Query_And_Remove_SubTree_ExA` (RVA `0x584C7`), whose whole body is `push 34h` / `pop eax` / `ret 18h`: it answers `CR_CALL_NOT_IMPLEMENTED` (0x34) and does nothing else. `CM_Query_And_Remove_SubTreeW` (RVA `0x540F7`) calls `CM_Query_And_Remove_SubTree_ExW` (RVA `0x538C0`), a real body whose flag test (`test dword ptr [ebp+18h],0FFFFFFFCh` at VA `0x778D3906`) refuses any flag above bit 1 with `CR_INVALID_FLAG` (4), so `CM_REMOVE_UI_NOT_OK` (1) and `CM_REMOVE_NO_RESTART` (2) pass it. `cfgmgr32.dll` (17,168 bytes) forwards all four names to `setupapi.dll` | static (MSVC 6.0 `dumpbin /exports` and `/disasm` of a copy in a scratch directory; nothing executed; 2026-10-16, development host A). The file is not tracked | design record 24 section 7.2; `xhciinst\xhciinst.c`; `xhcitr\xhcitr.c` |
 
 ## 5. Microsoft binaries: what is published, and through which channel
 

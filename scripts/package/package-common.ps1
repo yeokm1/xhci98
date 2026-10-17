@@ -810,3 +810,493 @@ function Get-SilentRegFaults {
     if ($Text -cne $want) { $faults += "it is not REGEDIT4, the SilentClasses key and its six values, exactly" }
     return $faults
 }
+
+# ---- Stor98, the bundled NVMe driver ----------------------------------------
+#
+# Stor98 is a separate project under BSD-3-Clause; its first release is
+# 0.3.0.0. A release package may carry
+# one of its released builds, copied unchanged from that build's release
+# folder at packaging time: never its source, and never through git
+# (nothing of it is tracked here, and make-release.ps1 copies it into the
+# upload set only, not into releases\). The input is pinned three ways: the
+# version, the folder, and the SHA-256 of the folder's SHA256SUMS.txt, which
+# in turn pins every file. The release folder's x86\ (one $CHICAGO$ INF,
+# stor98.mpd for 98 and ME and stor98.sys for 2000 to 7) is copied to an x86
+# package's root, and its x64\ (stor98.inf, stor98.sys and stor98-test.cer)
+# to an amd64 package's root; every name there starts with "stor98", so none
+# can clash with this project's own files.
+#
+# x64\stor98.sys carries Stor98's own embedded test signature, by a
+# certificate that is not this project's; stor98-test.cer is
+# its public half and is shipped beside it unchanged, as Stor98 ships it.
+# Test-signing mode on Vista x64 and 7 x64 loads a driver signed by any
+# certificate, trusted or not (design record 19), so the one boot setting
+# that loads this project's x64 drivers loads it too: nothing is imported,
+# and nothing here signs or re-signs it.
+#
+# LICENSE, NOTICE.TXT and readme.txt go beside the driver files as
+# stor98-LICENSE.txt, stor98-NOTICE.txt and stor98-readme.txt. Builds before
+# 0.3.0.0 are refused. The
+# package checks that would otherwise judge these files as this project's
+# own are given exactly the list Get-Stor98PackageFiles returns, and nothing
+# wider.
+
+$script:Stor98FirstVersion = [version]"0.3.0.0"
+$script:Stor98RenamedTop = [ordered]@{
+    "LICENSE"    = "stor98-LICENSE.txt"
+    "NOTICE.TXT" = "stor98-NOTICE.txt"
+    "readme.txt" = "stor98-readme.txt"
+}
+# A copy of the interface header a release may carry; used for the
+# interface check only and never shipped.
+$script:Stor98ReleaseHeader = "include\stor98cm.h"
+
+function Assert-Stor98Version {
+    # Throws unless $Version is one a package may bundle.
+    param([string]$Version)
+    if ($Version -notmatch '^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$') {
+        throw "-Stor98Version '$Version' is not a four-part version such as 0.3.0.0: the bundled Stor98 build is pinned explicitly."
+    }
+    if ([version]$Version -lt $script:Stor98FirstVersion) {
+        throw "Stor98 $Version is older than 0.3.0.0, Stor98's first release."
+    }
+}
+
+function Read-Stor98Sums {
+    # SHA256SUMS.txt's text, "<sha256>  <path>" or "<sha256> *<path>" per
+    # line, with / or \ separators. Returns an ordered map of relative path
+    # (with \) to upper-case hash; refuses anything else.
+    param([string]$Text)
+    $map = [ordered]@{}
+    $seen = @{}
+    $n = 0
+    foreach ($line in ($Text -split "\r?\n")) {
+        $n++
+        if ($line.Trim() -eq "") { continue }
+        if ($line -notmatch '^([0-9A-Fa-f]{64}) [ *](.+)$') {
+            throw "SHA256SUMS.txt line $n is not '<sha256>  <path>': $line"
+        }
+        $hash = $Matches[1].ToUpperInvariant()
+        $rel = $Matches[2].Trim().Replace('/', '\')
+        $parts = @($rel.Split('\'))
+        if ($rel -eq "" -or $rel.StartsWith('\') -or $rel.Contains(':') -or
+            ($parts -contains '..') -or ($parts -contains '.') -or ($parts -contains '')) {
+            throw "SHA256SUMS.txt line $n names '$rel', which is not a plain path inside the release folder."
+        }
+        if ($rel -ieq "SHA256SUMS.txt") {
+            throw "SHA256SUMS.txt lists itself (line $n)."
+        }
+        $key = $rel.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) {
+            throw "SHA256SUMS.txt lists '$rel' twice (line $n)."
+        }
+        $seen[$key] = $true
+        $map[$rel] = $hash
+    }
+    if ($map.Count -eq 0) { throw "SHA256SUMS.txt lists no file." }
+    return $map
+}
+
+function Get-Stor98InfVersion {
+    param([string]$Path)
+    $text = [System.IO.File]::ReadAllText($Path)
+    $m = [regex]::Match($text, '(?m)^\s*DriverVer\s*=\s*[^,\r\n]+,\s*([0-9.]+)')
+    if (-not $m.Success) { return "" }
+    return $m.Groups[1].Value
+}
+
+function Assert-Stor98Release {
+    # The pinned release folder, verified: SHA256SUMS.txt's own hash first,
+    # then every file against it, every file on disk listed, the release's
+    # files present and nothing it does not know, and every INF's DriverVer
+    # at the pinned version. Returns what the package step needs; throws on
+    # any mismatch, before anything is copied.
+    param([string]$Dir, [string]$Version, [string]$SumsSha256)
+
+    Assert-Stor98Version -Version $Version
+    if ($SumsSha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw "-Stor98SumsSha256 must be the SHA-256 (64 hex digits) of the release folder's SHA256SUMS.txt."
+    }
+    if ($Dir -eq "" -or -not (Test-Path -LiteralPath $Dir -PathType Container)) {
+        throw "no Stor98 release folder at '$Dir' (-Stor98Dir)."
+    }
+    $Dir = (Resolve-Path -LiteralPath $Dir).ProviderPath.TrimEnd('\')
+    $sumsPath = Join-Path $Dir "SHA256SUMS.txt"
+    if (-not (Test-Path -LiteralPath $sumsPath -PathType Leaf)) {
+        throw "'$Dir' has no SHA256SUMS.txt, so nothing in it can be checked; it is not an Stor98 release folder."
+    }
+    # Read once: the bytes that are hashed are the bytes that are parsed, so
+    # the list cannot be swapped between the pin check and its use.
+    $sumsBytes = [System.IO.File]::ReadAllBytes($sumsPath)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $sumsHash = (($sha.ComputeHash($sumsBytes) | ForEach-Object { $_.ToString("X2") }) -join "") }
+    finally { $sha.Dispose() }
+    if ($sumsHash -ne $SumsSha256.ToUpperInvariant()) {
+        throw "'$sumsPath' hashes to $sumsHash, not the pinned $($SumsSha256.ToUpperInvariant()): this is not the Stor98 $Version release that was pinned. Nothing was copied."
+    }
+    if (@($sumsBytes | Where-Object { $_ -ge 0x80 }).Count -gt 0) {
+        throw "'$sumsPath' is not ASCII."
+    }
+    $sums = Read-Stor98Sums -Text ([System.Text.Encoding]::ASCII.GetString($sumsBytes))
+    $listed = @{}
+    foreach ($rel in $sums.Keys) {
+        $listed[$rel.ToLowerInvariant()] = $rel
+        $full = Join-Path $Dir $rel
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+            throw "SHA256SUMS.txt lists '$rel', which is not in '$Dir'."
+        }
+        $h = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash
+        if ($h -ne $sums[$rel]) {
+            throw "'$rel' in '$Dir' hashes to $h, not the $($sums[$rel]) SHA256SUMS.txt lists. Release folders are write-once; this one has changed. Nothing was copied."
+        }
+    }
+    foreach ($item in @(Get-ChildItem -LiteralPath $Dir -File -Recurse -Force)) {
+        $rel = $item.FullName.Substring($Dir.Length + 1)
+        if ($rel -ieq "SHA256SUMS.txt") { continue }
+        if (-not $listed.ContainsKey($rel.ToLowerInvariant())) {
+            throw "'$rel' is in '$Dir' but not in its SHA256SUMS.txt, so it is not part of the release."
+        }
+    }
+
+    $archDirs = @("x86", "x64")
+    $required = @("x86\stor98.inf", "x86\stor98.mpd", "x86\stor98.sys",
+                  "x64\stor98.inf", "x64\stor98.sys", "x64\stor98-test.cer", "LICENSE", "NOTICE.TXT",
+                  "readme.txt")
+    foreach ($r in $required) {
+        if (-not $listed.ContainsKey($r.ToLowerInvariant())) {
+            throw "the Stor98 $Version release has no '$r', which every Stor98 release carries."
+        }
+    }
+    $header = $null
+    foreach ($rel in $sums.Keys) {
+        $parts = @($rel.Split('\'))
+        if ($rel -ieq $script:Stor98ReleaseHeader) {
+            $header = Join-Path $Dir $rel
+            continue
+        }
+        if ($parts.Count -eq 1) {
+            if (-not ($script:Stor98RenamedTop.Keys | Where-Object { $_ -ieq $rel })) {
+                throw "the Stor98 $Version release has '$rel' at its top, which this script does not know where to put. Update scripts\package\package-common.ps1 for it rather than bundling a file blind."
+            }
+            continue
+        }
+        if ($parts.Count -ne 2 -or -not ($archDirs -contains $parts[0].ToLowerInvariant())) {
+            throw "the Stor98 $Version release has '$rel', outside its $($archDirs -join '\ and ')\ directories."
+        }
+        if (-not $parts[1].StartsWith("stor98", [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "the Stor98 $Version release has '$rel': every file goes to the package root, and a name not starting with stor98 could clash with this project's own files."
+        }
+    }
+    foreach ($rel in $sums.Keys) {
+        if ($rel -notmatch '(?i)\.inf$') { continue }
+        $infVer = Get-Stor98InfVersion -Path (Join-Path $Dir $rel)
+        if ($infVer -ne $Version) {
+            throw "'$rel' of the Stor98 release declares DriverVer '$infVer', not the pinned $Version."
+        }
+    }
+    return [pscustomobject]@{
+        Dir        = $Dir
+        Version    = $Version
+        Sums       = $sums
+        SumsSha256 = $sumsHash
+        Header     = $header
+    }
+}
+
+function Get-Stor98PackageFiles {
+    # The Stor98 files one package carries: Source (relative to the release
+    # folder), Dest (relative to the package root) and Sha256. -Arch is the
+    # packager's: x86 or amd64.
+    param($Release, [ValidateSet("x86", "amd64")][string]$Arch)
+    $dir = if ($Arch -eq "amd64") { "x64" } else { "x86" }
+    $out = @()
+    $dests = @{}
+    foreach ($rel in $Release.Sums.Keys) {
+        $parts = @($rel.Split('\'))
+        $dest = $null
+        if ($parts.Count -eq 1) {
+            $top = @($script:Stor98RenamedTop.Keys | Where-Object { $_ -ieq $rel })
+            if ($top.Count -eq 1) { $dest = $script:Stor98RenamedTop[$top[0]] }
+        } elseif ($parts.Count -eq 2 -and $parts[0] -ieq $dir) {
+            $dest = $parts[1]
+        }
+        if ($null -eq $dest) { continue }
+        $key = $dest.ToLowerInvariant()
+        if ($dests.ContainsKey($key)) {
+            throw "two files of the Stor98 $($Release.Version) release would land at '$dest' in the $Arch package."
+        }
+        $dests[$key] = $true
+        $out += [pscustomobject]@{ Source = $rel; Dest = $dest; Sha256 = $Release.Sums[$rel] }
+    }
+    return $out
+}
+
+function Get-Stor98HeaderVersion {
+    # STOR98LS_VERSION of a stor98cm.h, or "" where it has none.
+    param([string]$Path)
+    $m = [regex]::Match([System.IO.File]::ReadAllText($Path), '(?m)^\s*#\s*define\s+STOR98LS_VERSION\s+(\d+)\b')
+    if (-not $m.Success) { return "" }
+    return $m.Groups[1].Value
+}
+
+function Test-Stor98Interface {
+    # The pinned build's link-state interface version (STOR98LS_VERSION; 4
+    # for 0.3.0.0) against the header xhci98 compiles against; and, where the
+    # release carries its header, the two byte for byte. Returns "" when they
+    # agree, else why not.
+    param($Release, [string]$Pinned, [string]$HeaderPath)
+    if ($Pinned -notmatch '^\d{1,5}$') {
+        throw "-Stor98InterfaceVersion is the pinned build's STOR98LS_VERSION, a number (4 for Stor98 0.3.0.0)."
+    }
+    $have = ($HeaderPath -ne "") -and (Test-Path -LiteralPath $HeaderPath -PathType Leaf)
+    $ours = if ($have) { Get-Stor98HeaderVersion -Path $HeaderPath } else { "" }
+    if ($have -and $ours -eq "") {
+        return "'$HeaderPath' defines no STOR98LS_VERSION."
+    }
+    if ($null -ne $Release.Header) {
+        if (-not $have) {
+            return "the Stor98 $($Release.Version) release carries $($script:Stor98ReleaseHeader), and xhci98 has no '$HeaderPath' to compare it with."
+        }
+        $a = [System.IO.File]::ReadAllBytes($Release.Header)
+        $b = [System.IO.File]::ReadAllBytes($HeaderPath)
+        if ([Convert]::ToBase64String($a) -ne [Convert]::ToBase64String($b)) {
+            return "$($script:Stor98ReleaseHeader) of the Stor98 $($Release.Version) release is not byte for byte '$HeaderPath'."
+        }
+        $theirs = Get-Stor98HeaderVersion -Path $Release.Header
+        if ($Pinned -ne $theirs) {
+            return "the Stor98 $($Release.Version) release's header declares interface version '$theirs', and -Stor98InterfaceVersion pins '$Pinned'."
+        }
+    }
+    if (-not $have) {
+        return "Stor98 $($Release.Version) is pinned at interface version $Pinned, and xhci98 has no '$HeaderPath' (it compiles against no Stor98 interface)."
+    }
+    if ($ours -ne $Pinned) {
+        return "Stor98 $($Release.Version) is pinned at interface version $Pinned, and '$HeaderPath' declares STOR98LS_VERSION $ours."
+    }
+    return ""
+}
+
+function Get-Stor98NotesFault {
+    # The release notes' one bundle declaration, exactly "This download
+    # bundles Stor98 `<version>`." or "This download bundles no Stor98.",
+    # against what the cut bundles ($Version, "" for none). Returns "" when
+    # they agree, else why not; the cut fills the placeholder in.
+    param([string]$Text, [string]$Version)
+    $ms = [regex]::Matches($Text, '(?m)^This download bundles (.+?)\.[ \t]*\r?$')
+    if ($ms.Count -ne 1) {
+        return "docs\using\release-notes.md has $($ms.Count) 'This download bundles ...' declarations, not one ('NVMe drives behind Thunderbolt or USB4')."
+    }
+    $said = $ms[0].Groups[1].Value.Trim()
+    $bt = [string][char]96
+    $want = if ($Version -eq "") { "no Stor98" } else { "Stor98 " + $bt + $Version + $bt }
+    if ($said.Contains("filled in at the cut")) {
+        return "docs\using\release-notes.md still has the bundled Stor98 placeholder: write 'This download bundles $want.' in its place ('NVMe drives behind Thunderbolt or USB4')."
+    }
+    if ($said -cne $want) {
+        $what = if ($Version -eq "") { "no Stor98" } else { "Stor98 $Version" }
+        return "docs\using\release-notes.md says 'This download bundles $said.', and this cut bundles ${what}: write 'This download bundles $want.'"
+    }
+    return ""
+}
+
+function Resolve-Stor98Input {
+    # The packaging scripts' one entry point: $null when no Stor98 input was
+    # named (the package is built as before, with no Stor98), else the
+    # verified release with its interface verdict. The four pins go
+    # together; a mismatch of the interface is refused unless -Allow, and the
+    # override is reported, never silent.
+    param([string]$Version, [string]$Dir, [string]$SumsSha256, [string]$InterfaceVersion,
+          [string]$HeaderPath, [switch]$Allow)
+    $named = @(@($Version, $Dir, $SumsSha256, $InterfaceVersion) | Where-Object { $_ -ne "" })
+    if ($named.Count -eq 0) {
+        if ($Allow) { throw "-Stor98AllowInterfaceMismatch was given with no Stor98 input to apply it to." }
+        return $null
+    }
+    if ($named.Count -ne 4) {
+        throw "the bundled Stor98 build is pinned explicitly: -Stor98Version, -Stor98Dir, -Stor98SumsSha256 and -Stor98InterfaceVersion go together, and only $($named.Count) of them were given."
+    }
+    $release = Assert-Stor98Release -Dir $Dir -Version $Version -SumsSha256 $SumsSha256
+    $why = Test-Stor98Interface -Release $release -Pinned $InterfaceVersion -HeaderPath $HeaderPath
+    if ($why -ne "" -and -not $Allow) {
+        throw "the Stor98 interface does not match: $why Bundle a build whose interface matches, or pass -Stor98AllowInterfaceMismatch to bundle it anyway (the override is logged)."
+    }
+    $release | Add-Member -NotePropertyName Interface -NotePropertyValue $InterfaceVersion
+    $release | Add-Member -NotePropertyName Mismatch -NotePropertyValue $why
+    $release | Add-Member -NotePropertyName Overridden -NotePropertyValue ($why -ne "")
+    return $release
+}
+
+# ------------------------------------------------------------------
+# The gated build's manifest, and the sign-only mode that trusts it
+# (roadmap-usb4.md SIGN.1)
+# ------------------------------------------------------------------
+#
+# scripts\build-driver.cmd writes out\gated-<arch>-<flavour>.txt at the end of
+# a flavour, after every gate for it has passed (the self-tests and the host
+# suite before the builds, then each binary's import gate, flavour marker and
+# source stamp): each gated binary's SHA-256, the commit and whether the tree
+# was dirty, whether the import gates had their target evidence, and the time.
+# make-package.ps1 -SignOnly reads it and skips the host suite and the import
+# gates for a binary whose bytes are exactly the ones those gates read. The
+# hash is the guarantee; the commit is what says the INFs and scripts the
+# package is staged with are the ones that build was gated beside.
+#
+# One "key=value" per line, ASCII, CRLF, "#" lines ignored; the binaries are
+# "sha256.<name>=<64 hex>". Written by scripts\package\write-gated-manifest.ps1,
+# from the hash each binary had right after its own import gate passed, and
+# only if every binary still has it once the flavour's last gate has passed.
+#
+# What this protects against is a mismatch by accident and another process on
+# the same machine changing a binary while the build or the packager runs. It
+# is not a defence against someone who deliberately forges the record.
+#
+function Get-GatedManifestPath {
+    param([string]$Repo, [string]$Arch, [string]$Flavor)
+    return (Join-Path $Repo ("out\gated-{0}-{1}.txt" -f $Arch, $Flavor))
+}
+
+function Get-FileSha256 {
+    # .NET rather than Get-FileHash: build-driver.cmd notes that a PS7 module
+    # path inherited through cmd can hide the 5.1 cmdlet.
+    param([string]$Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $fs = [System.IO.File]::OpenRead($Path)
+    try {
+        return (($sha.ComputeHash($fs) | ForEach-Object { $_.ToString("X2") }) -join "")
+    } finally {
+        $fs.Dispose()
+        $sha.Dispose()
+    }
+}
+
+function ConvertFrom-GatedManifest {
+    # Parses the manifest's text. Throws on anything malformed: a manifest
+    # that cannot be read exactly is one no gate can be reused from.
+    param([string]$Text)
+    $m = @{ Format = ""; Arch = ""; Flavor = ""; Commit = ""; Dirty = ""; TargetEvidence = ""; Time = ""; Sha256 = @{} }
+    $seen = @{}
+    foreach ($raw in ($Text -split "`r?`n")) {
+        $line = $raw.Trim()
+        if ($line -eq "" -or $line.StartsWith("#")) { continue }
+        $eq = $line.IndexOf("=")
+        if ($eq -lt 1) { throw "malformed line '$line'" }
+        $key = $line.Substring(0, $eq).Trim().ToLowerInvariant()
+        $val = $line.Substring($eq + 1).Trim()
+        if ($seen.ContainsKey($key)) { throw "'$key' appears twice" }
+        $seen[$key] = $true
+        if ($key.StartsWith("sha256.")) {
+            $name = $key.Substring(7)
+            if ($name -notmatch '^[a-z0-9_]+\.sys$') { throw "'$key' does not name a .sys" }
+            if ($val -notmatch '^[0-9A-Fa-f]{64}$') { throw "'$key' is not a SHA-256" }
+            $m.Sha256[$name] = $val.ToUpperInvariant()
+            continue
+        }
+        switch ($key) {
+            "format"          { $m.Format = $val }
+            "arch"            { $m.Arch = $val }
+            "flavor"          { $m.Flavor = $val }
+            "commit"          { $m.Commit = $val.ToLowerInvariant() }
+            "dirty"           { $m.Dirty = $val }
+            "target_evidence" { $m.TargetEvidence = $val }
+            "time"            { $m.Time = $val }
+            default           { throw "unknown key '$key'" }
+        }
+    }
+    if ($m.Format -ne "1") { throw "format '$($m.Format)' is not 1" }
+    foreach ($k in @("Arch", "Flavor", "Commit", "Dirty", "TargetEvidence", "Time")) {
+        if ($m[$k] -eq "") { throw "no '$k' line" }
+    }
+    if ($m.Dirty -notmatch '^[01]$') { throw "dirty '$($m.Dirty)' is not 0 or 1" }
+    if ($m.TargetEvidence -notmatch '^[01]$') { throw "target_evidence '$($m.TargetEvidence)' is not 0 or 1" }
+    if ($m.Sha256.Count -eq 0) { throw "no sha256 line" }
+    return $m
+}
+
+function ConvertTo-GatedManifest {
+    # The writer's half, here so the format has one definition. $Sha256 maps
+    # a binary's file name to its hash.
+    param([string]$Arch, [string]$Flavor, [string]$Commit, [bool]$Dirty,
+          [bool]$TargetEvidence, [string]$Time, [hashtable]$Sha256)
+    $lines = @(
+        "# The gated build's record (scripts\build-driver.cmd), read by",
+        "# scripts\package\make-package.ps1 -SignOnly. Generated; do not edit.",
+        "format=1",
+        "arch=$Arch",
+        "flavor=$Flavor",
+        "commit=$Commit",
+        ("dirty=" + $(if ($Dirty) { "1" } else { "0" })),
+        ("target_evidence=" + $(if ($TargetEvidence) { "1" } else { "0" })),
+        "time=$Time"
+    )
+    foreach ($name in ($Sha256.Keys | Sort-Object)) {
+        $lines += ("sha256.{0}={1}" -f $name.ToLowerInvariant(), $Sha256[$name].ToUpperInvariant())
+    }
+    return (($lines -join "`r`n") + "`r`n")
+}
+
+function Get-GatedManifestFault {
+    # "" when the manifest admits a sign-only package of $Binaries (file name
+    # -> path of the bytes to be staged), else the reason it does not. The
+    # order decides only which reason is given: the build it describes, then
+    # each binary's bytes, then the tree the package is staged from.
+    param($Manifest, [string]$Arch, [string]$Flavor, [hashtable]$Binaries,
+          [string]$Head, [bool]$Dirty, [bool]$NoTargetEvidence)
+    if ($Manifest.Arch -ne $Arch -or $Manifest.Flavor -ne $Flavor) {
+        return ("it records the {0} {1} build, and this is the {2} {3} package" -f $Manifest.Flavor, $Manifest.Arch, $Flavor, $Arch)
+    }
+    foreach ($name in ($Binaries.Keys | Sort-Object)) {
+        $key = $name.ToLowerInvariant()
+        if (-not $Manifest.Sha256.ContainsKey($key)) {
+            return "it records no hash for $name, so that binary was not gated by the build it describes"
+        }
+        if (-not (Test-Path -LiteralPath $Binaries[$name] -PathType Leaf)) {
+            return "$name is not at '$($Binaries[$name])'"
+        }
+        $actual = Get-FileSha256 -Path $Binaries[$name]
+        if ($actual -ne $Manifest.Sha256[$key]) {
+            return ("{0} at '{1}' is not the binary the build gated: SHA-256 {2}, recorded {3}" -f $name, $Binaries[$name], $actual, $Manifest.Sha256[$key])
+        }
+    }
+    if ($Manifest.Dirty -ne "0") {
+        return "the build ran in a tree with uncommitted changes, so no commit says what it was built from"
+    }
+    if ($Manifest.Commit -ne $Head.ToLowerInvariant()) {
+        return ("it was built at commit {0}, and the tree is at {1}: the INFs and scripts this package would be staged with are not the ones the build was gated beside" -f $Manifest.Commit, $Head)
+    }
+    if ($Dirty) {
+        return "the tree has uncommitted changes since that commit"
+    }
+    if ($Manifest.TargetEvidence -ne "1" -and -not $NoTargetEvidence) {
+        return "its import gates ran with -NoTargetEvidence, on the allowlists alone, and this run did not ask for that"
+    }
+    return ""
+}
+
+function Get-GitTreeState {
+    # HEAD, and whether the tree differs from it: a tracked change, any
+    # untracked file that is not ignored, or a tracked file git has been told
+    # not to look at (assume-unchanged, a lowercase tag in `git ls-files -v`,
+    # or skip-worktree, "S"), since git status cannot see a change to that
+    # one. Head "none" when git cannot say, which the sign-only mode refuses.
+    param([string]$Repo)
+    $head = ""
+    $status = ""
+    $hidden = @()
+    $ok = $false
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $head = (& git -C $Repo rev-parse HEAD 2>$null | Out-String).Trim()
+        $headRc = $LASTEXITCODE
+        $status = (& git -C $Repo status --porcelain --untracked-files=all 2>$null | Out-String).Trim()
+        $statusRc = $LASTEXITCODE
+        $hidden = @(& git -C $Repo ls-files -v 2>$null | Where-Object { $_ -cmatch '^([a-z]|S) ' })
+        $ok = ($headRc -eq 0 -and $statusRc -eq 0 -and $LASTEXITCODE -eq 0 -and $head -match '^[0-9a-f]{40}$')
+    } catch {
+        $ok = $false
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if (-not $ok) { return @{ Head = "none"; Dirty = $true } }
+    return @{ Head = $head; Dirty = ($status -ne "" -or $hidden.Count -gt 0) }
+}

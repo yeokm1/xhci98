@@ -222,6 +222,30 @@ readme.txt and a NOTICE.TXT: the opt-in tool that lists, and on Windows 2000 to
 7 removes, the devnodes a driver before 2.4.0.0 left under `XHCI98\`
 (roadmap-hcd task 38.8, design record 13 section 10.13.8).
 
+.PARAMETER InstallToolDir
+Where `XHCIINST.EXE` and `XHCIIN64.EXE` are built. Defaults to `xhciinst\` in
+the repository. Both are staged into `releases\<version>\tools\xhciinst\` with
+a readme.txt and a NOTICE.TXT, and `xhciinst\INSTALL.BAT` at the version root:
+the install, update and uninstall tool (roadmap-usb4.md task 40.5, design
+record 23).
+
+.PARAMETER SkipInstallTool
+Do not stage the install tool or INSTALL.BAT. For a host that cannot build it
+(the 64-bit half needs `tools\WinDDK71`); the release is then installed by
+hand only, the readme's BY HAND steps, and says so on the console.
+
+.PARAMETER TrayToolDir
+Where `XHCITR.EXE` and `XHCITR64.EXE` are built. Defaults to `xhcitr\` in the
+repository. Both are staged into `releases\<version>\tools\xhcitr\` with a
+readme.txt and a NOTICE.TXT: the xHCI98 USB Tree, which `XHCIINST` copies
+into the install directory it asks for and starts at login (roadmap-usb4.md
+task 41-A.6, design record 25; record 23 section 9.6).
+
+.PARAMETER SkipTrayTool
+Do not stage the USB tree tool. For a host that cannot build it; `XHCIINST`
+then says in one line that the package has none, and the release says so on
+the console and in its readme.
+
 .PARAMETER SkipCleanTool
 Do not stage the cleanup tool. For a host that cannot build it (the 64-bit
 half needs `tools\WinDDK71`); nothing needs the tool, so the release is whole
@@ -307,6 +331,32 @@ before anything is built. Refused with -UploadSetOnly, which stages nothing,
 and with an -Arch that has no x64. The x86 binaries are never signed. Where
 the key is held and how it was made: design record 19.
 
+.PARAMETER Stor98Version
+The Stor98 build the download bundles (owner, 2026-10-16; 0.3.0.0 or later), with
+-Stor98Dir, -Stor98SumsSha256 and -Stor98InterfaceVersion: the four pins go
+together and mean what make-package.ps1's parameters of the same names mean,
+and -Stor98AllowInterfaceMismatch is passed through to it. Without them the
+cut bundles no Stor98, and its release notes must say so. With them each
+release-x86 and release-x64 package is built with the build's files (the
+debug directories carry none), and the upload set's release-x86\ and
+release-x64\ carry them; releases\<version>\ does not, since Stor98 is a
+third-party binary and nothing third-party is tracked. The release notes
+must name the version ("Stor98 `<version>`", in place of the placeholder
+the cut fills in), the generated readme lists it, and -UploadSetOnly
+re-assembles a bundled release only with the same pins.
+
+.PARAMETER Stor98Dir
+See -Stor98Version.
+
+.PARAMETER Stor98SumsSha256
+See -Stor98Version.
+
+.PARAMETER Stor98InterfaceVersion
+See -Stor98Version.
+
+.PARAMETER Stor98AllowInterfaceMismatch
+See -Stor98Version; the override is printed, and passed to each package run.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
 
@@ -331,6 +381,10 @@ param(
     [switch]$SkipSnapTool,
     [string]$CleanToolDir = "",
     [switch]$SkipCleanTool,
+    [string]$InstallToolDir = "",
+    [switch]$SkipInstallTool,
+    [string]$TrayToolDir = "",
+    [switch]$SkipTrayTool,
     [string]$UploadDir = "",
     [switch]$SkipUploadSet,
     [switch]$UploadSetOnly,
@@ -339,7 +393,12 @@ param(
     [switch]$NoTargetEvidence,
     [switch]$AllowUnstampedDriver,
     [string]$TestLabel = "",
-    [string]$TestSignPfx = ""
+    [string]$TestSignPfx = "",
+    [string]$Stor98Version = "",
+    [string]$Stor98Dir = "",
+    [string]$Stor98SumsSha256 = "",
+    [string]$Stor98InterfaceVersion = "",
+    [switch]$Stor98AllowInterfaceMismatch
 )
 
 $ErrorActionPreference = "Stop"
@@ -391,6 +450,8 @@ if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
 if ($SnapToolDir -eq "") { $SnapToolDir = Join-Path $repo "xhcisnap" }
 if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
+if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo "xhciinst" }
+if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo "xhcitr" }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
 # out of it, so it is both what their declared version is read from and an input
 # their staged binaries have to be newer than.
@@ -520,6 +581,8 @@ $ReleasesDir = Resolve-DirectoryArgument $ReleasesDir
 $QualtoolDir = Resolve-DirectoryArgument $QualtoolDir
 $SnapToolDir = Resolve-DirectoryArgument $SnapToolDir
 $CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
+$InstallToolDir = Resolve-DirectoryArgument $InstallToolDir
+$TrayToolDir = Resolve-DirectoryArgument $TrayToolDir
 $PackageRoot = Resolve-DirectoryArgument $PackageRoot
 $UploadDir   = Resolve-DirectoryArgument $UploadDir
 
@@ -609,6 +672,21 @@ function Get-LegPublishable {
 # it is present and does not require it.
 $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 
+# The Thunderbolt 3 connection manager's four files (roadmap-usb4.md task
+# 39-A.1): its NHI INF, its NT-only tunnel-port filter INF and the binary,
+# published beside the UAS pair on the same terms - its own INFs declare
+# them, its own gate (scripts\inf-gate\check-cm-inf.ps1) checks them in
+# place, and the binary is held to every refusal xhciuas.sys is
+# (Assert-CmPublished). The filter INF is in the flavour directory's nt\
+# subdirectory, out of Windows 98's and ME's way (runs/run-39.md, 39-0.4;
+# the gate's CM-NO9XBRIDGE), beside its own copy of the binary,
+# nt\xhcicm.sys, the same bytes as the root's: Vista's and 7's driver
+# store refuses an INF source outside the INF's directory (SetupCopyOEMInf
+# error 0xA1), and the assembly refuses two copies that differ. A version
+# published before 3.0.0.0 has none, so -UploadSetOnly gates them where
+# present and does not require them.
+$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")
+
 # The text-mode Setup driver description (roadmap task 33.3), published at the
 # root of every flavour directory a cut writes, where text-mode Setup of
 # Windows 2000 and XP reads it from A:\. Not an INF-declared file either: its
@@ -640,10 +718,12 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # tree with tools\ is held to it at any version (a dry cut before the version
 # is stamped has one), and a tree without it is accepted only before 2.4.0.0.
 # xhcicln\, the cleanup tool of task 38.8, is first published in 2.4.0.0 too,
-# and only ever under tools\.
+# and only ever under tools\. xhciinst\, the install tool of task 40.6, is
+# first published in 3.0.0.0, under tools\, with INSTALL.BAT at the root,
+# and so is xhcitr\, the USB tree tool of task 41-A.6 that XHCIINST installs.
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")
+$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr")
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
 # design record 13 section 6.11.8): copied once from src\ into tools\silent\
@@ -1013,6 +1093,23 @@ function Assert-ReportBatchContent {
     }
 }
 
+# The line the generated readme carries when the download bundles Stor98
+# (package-common.ps1, "Stor98, the bundled NVMe driver"), which is how
+# -UploadSetOnly knows which build a published release was cut with.
+$stor98ReadmePattern = '(?m)^  Bundled in this download: Stor98 (\d+\.\d+\.\d+\.\d+)\.\r?\n  Its SHA256SUMS\.txt has the SHA-256\r?\n  ([0-9A-F]{64})\.\r?\n  Interface version: (\S+?)( \(MISMATCH OVERRIDDEN, see below\))?\.'
+
+
+# The content pins that line records - version, SHA256SUMS.txt hash and
+# interface version - for -UploadSetOnly's comparison. Whether the interface
+# check was overridden is not a pin: it is a verdict against the checkout's
+# header, which may have moved since the cut, so a re-assembly passes
+# -Stor98AllowInterfaceMismatch where today's header needs it.
+function Get-Stor98PinText {
+    param($Release)
+    if ($null -eq $Release) { return "" }
+    return ("{0}|{1}|{2}" -f $Release.Version, $Release.SumsSha256, $Release.Interface)
+}
+
 # The project test certificate's public half (design record 19), published at
 # the root of every x64 directory a cut writes since 2.3.0.0, beside the
 # binaries it signed. Not an INF-declared file: the setup engine never reads
@@ -1269,6 +1366,27 @@ every log a user sends back. Make it read: #define $Macro XHCI_VER_STR
     }
 }
 
+function Assert-ToolFileVersion {
+    # **A staged tool's numeric file version is the release's.** XHCIINST
+    # compares the VS_FIXEDFILEINFO file version of the package's XHCITR with
+    # the installed one's and replaces only an older one (design record 25
+    # section 8), so a tool built with a stale or missing version resource
+    # would never be installed over the last release's, or would replace a
+    # newer one. The macro check above reads the source; this reads the EXE.
+    param([string]$Path, [string]$Version)
+    $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+    $got = "{0}.{1}.{2}.{3}" -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart
+    $v = [version]$Version
+    $want = "{0}.{1}.{2}.{3}" -f $v.Major, $v.Minor, [math]::Max($v.Build, 0), [math]::Max($v.Revision, 0)
+    if ($got -ne $want) {
+        throw @"
+'$Path' carries the file version $got in its version resource, but this release is $want.
+XHCIINST installs the tool over an installed one only when this number is newer,
+so the two must agree. Rebuild the tool against src\xhci_version.h.
+"@
+    }
+}
+
 function Get-PackageRelativePath {
     # $FullName expressed relative to $PackageDir, refused rather than guessed.
     #
@@ -1496,6 +1614,15 @@ function Get-UploadSetRepairCommand {
     $quote = { param([string]$s) return $q + ($s -replace $q, ($q + $q)) + $q }
     if ($bound.ContainsKey("ReleasesDir")) { $cmd += " -ReleasesDir " + (& $quote $ReleasesDir) }
     if ($bound.ContainsKey("UploadDir")) { $cmd += " -UploadDir " + (& $quote $UploadDir) }
+    # A bundled release is re-assembled only with the pins it was cut with.
+    # Read without StrictMode's unset-variable error: the self-tests render
+    # this helper in a scope that has no $stor98.
+    $nv = Get-Variable -Name stor98 -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $nv) {
+        $cmd += " -Stor98Version " + $nv.Version + " -Stor98Dir " + (& $quote $nv.Dir) +
+                " -Stor98SumsSha256 " + $nv.SumsSha256 + " -Stor98InterfaceVersion " + $nv.Interface
+        if ($nv.Overridden) { $cmd += " -Stor98AllowInterfaceMismatch" }
+    }
     return $cmd
 }
 
@@ -1645,8 +1772,9 @@ function Assert-PackageMatchesDeclaredMedia {
         [hashtable]$PublishedPaths,
         [string]$InfName,
         [string]$Flavor,
-        # Files accepted at the package root beside the declared set: the UAS
-        # pair, which its own INF declares and its own gate checks.
+        # Files accepted beside the declared set, by their path relative to
+        # the package root: the UAS pair, which its own INF declares and its
+        # own gate checks, and the connection manager's four (two in nt\).
         [string[]]$Also = @()
     )
 
@@ -1662,7 +1790,7 @@ function Assert-PackageMatchesDeclaredMedia {
             # comes from the published tree, not from the package.
             continue
         }
-        if ($key -in $alsoKeys -and $relative.ToLowerInvariant() -eq $key) {
+        if ($relative.ToLowerInvariant() -in $alsoKeys) {
             continue
         }
         if (-not $Expected.ContainsKey($key) -or
@@ -1799,6 +1927,76 @@ writes the stamp as it goes; or, for a binary that must ship unstamped, pass
     }
 }
 
+function Assert-CmPublished {
+    # xhcicm.sys, the Thunderbolt 3 connection manager (roadmap-usb4.md task
+    # 39-A.1), held to the refusals Assert-UasPublished makes of xhciuas.sys,
+    # which are the build loop's of xhci98.sys, in the same order and for
+    # the same reasons, which are argued there: the release FileVersion,
+    # VS_FF_DEBUG, the flavour marker, the staged bytes being the built ones,
+    # and the source stamp beside the build (scripts\source-stamp.ps1
+    # -Driver xhcicm), unstamped only under -AllowUnstampedDriver.
+    param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot, [switch]$Signed)
+
+    $rebuild = "scripts\build-driver.cmd $Flavor" + $(if ($Leg.Arch -eq "x64") { " -amd64" } else { "" })
+    if (-not (Test-Path -LiteralPath $Sys)) {
+        throw "the $($Leg.Id) leg has no xhcicm.sys to publish. Rebuild: $rebuild"
+    }
+    $info = (Get-Item -LiteralPath $Sys).VersionInfo
+    if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
+        throw "the connection manager binary for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+    }
+    if ($info.IsDebug -ne ($Flavor -eq "debug")) {
+        throw "the connection manager binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+    }
+    $marker = Get-ImageFlavourMarker -Path $Sys
+    if ($marker -ne $Flavor) {
+        $found = if ($marker -eq "") { "none" } else { $marker }
+        throw "the connection manager binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+    }
+    $builtSys = Join-Path $ObjRoot "xhcicm.sys"
+    if (-not (Test-Path -LiteralPath $builtSys)) {
+        throw "the $($Leg.Id) connection manager binary about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\cm. Rebuild: $rebuild"
+    }
+    if ($Signed) {
+        Assert-TestSigned -Sys $Sys -BuiltSys $builtSys -Label "$($Leg.Dir)\xhcicm.sys"
+    } elseif ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
+        throw "the connection manager binary about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
+    }
+    $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File $stampScript -Driver xhcicm -Check $ObjRoot 2>&1
+        $stampCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($stampCode -eq 1) {
+        throw @"
+the connection manager binary about to be published as $($Leg.Dir)\ was built from sources this
+tree no longer holds:
+$($stampOut -join "`n")
+Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
+"@
+    } elseif ($stampCode -eq 2) {
+        if (-not $AllowUnstampedDriver) {
+            throw @"
+no source stamp beside the $Flavor connection manager binary in $ObjRoot, so this script
+cannot tell whether src\cm still reproduces it. Rebuild it ($rebuild), which
+writes the stamp as it goes; or, for a binary that must ship unstamped, pass
+-AllowUnstampedDriver, as for xhci98.sys.
+"@
+        }
+        Write-Warn "no source stamp beside the $Flavor connection manager binary, and -AllowUnstampedDriver was passed."
+    } elseif ($stampCode -ne 0) {
+        throw "scripts\source-stamp.ps1 -Driver xhcicm -Check '$ObjRoot' failed: $($stampOut -join "`n")"
+    } else {
+        Write-Ok "$($Leg.Id) connection manager binary matches the sources in src\cm"
+    }
+}
+
 function Assert-HelperPublished {
     # xhcihlpr.sys, the x86 helper (design record 18; tasks 36.15 and 38.3),
     # held to the refusals Assert-UasPublished makes of xhciuas.sys, which are
@@ -1894,6 +2092,9 @@ function New-UploadSet {
         [string]$UploadDir,
         [string]$Repo,
         [string[]]$Publishable,
+        # The verified Stor98 build (Resolve-Stor98Input) the release-
+        # directories bundle, or $null for none.
+        $Stor98 = $null,
         # Build under the `.staging` names of Get-UploadSetPaths -Staged; the
         # caller moves the result onto the final names with Publish-UploadSet
         # once its publish has succeeded, or drops it with
@@ -1956,6 +2157,8 @@ function New-UploadSet {
     Copy-Item -LiteralPath $PublishedRoot -Destination $uploadRoot -Recurse -Force
 
     $publishableKeys = @($Publishable | ForEach-Object { $_.ToLowerInvariant() })
+    # Full paths (lower case) of the bundled Stor98 files copied below.
+    $nvUploaded = @{}
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
 
     # **Which directories have to be completed is read off the tree, not taken
@@ -2077,6 +2280,26 @@ their defaults.
         if ($null -ne $PkgDirs -and $PkgDirs.ContainsKey($f)) { $pkgDir = $PkgDirs[$f] }
         $uploadFlavorDir = Join-Path $uploadRoot $f
         $mediaPaths = @{}
+        # The bundled Stor98 files of a release- directory: copied here from
+        # the pinned release folder (releases\ holds none), each refused if
+        # it would replace a file and held to SHA256SUMS.txt once copied.
+        $nvFiles = @()
+        if ($null -ne $Stor98 -and $f -like "release-*") {
+            $nvFiles = @(Get-Stor98PackageFiles -Release $Stor98 -Arch $LegArches[$f])
+            foreach ($nf in $nvFiles) {
+                $nvDest = Join-Path $uploadFlavorDir $nf.Dest
+                if (Test-Path -LiteralPath $nvDest) {
+                    throw "Stor98's '$($nf.Source)' would land at '$f\$($nf.Dest)' in the upload set, where the published tree already has a file."
+                }
+                Ensure-Directory (Split-Path -Parent $nvDest)
+                Copy-Item -LiteralPath (Join-Path $Stor98.Dir $nf.Source) -Destination $nvDest
+                $nvUploaded[([System.IO.Path]::GetFullPath($nvDest)).ToLowerInvariant()] = $true
+                if ((Get-FileHash -LiteralPath $nvDest -Algorithm SHA256).Hash -ne $nf.Sha256) {
+                    throw "the upload set's copy of Stor98's '$($nf.Source)' does not match SHA256SUMS.txt."
+                }
+            }
+            Write-Ok ("{0}\ bundles Stor98 {1}: {2} file(s), each matching SHA256SUMS.txt" -f $f, $Stor98.Version, $nvFiles.Count)
+        }
 
         if ($null -ne $pkgDir) {
             # The ordinary cut: the backstop for the check the build loop
@@ -2084,7 +2307,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }))
+                                               -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }) + @($nvFiles | ForEach-Object { $_.Dest }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -2197,6 +2420,60 @@ $gateOut
             throw "the assembled upload set's $f\ directory has no xhciuas.inf, and this cut built it with one."
         }
 
+        # The Thunderbolt 3 connection manager's two INFs, by its own gate
+        # (roadmap-usb4.md task 39-A.1). Required of a directory this cut
+        # built; gated where present in one -UploadSetOnly reads, since a
+        # version published before 3.0.0.0 has none.
+        # The four files go together: a directory holding any of them holds
+        # all three, so a reconstruction never publishes the NHI's installer
+        # without the filter's, or an INF without its binary.
+        $cmGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1"
+        # The filter INF anywhere but nt\ is refused whatever else is there:
+        # Windows 98 SE and ME read a $Windows NT$ INF beside the one they are
+        # pointed at (runs/run-39.md, 39-0.4; the gate's CM-NO9XBRIDGE).
+        foreach ($item in @(Get-ChildItem -LiteralPath $uploadFlavorDir -Recurse -Force -File -Filter "xhcicmf.inf")) {
+            $rel = $item.FullName.Substring($uploadFlavorDir.TrimEnd('\').Length + 1)
+            if ($rel -ine "nt\xhcicmf.inf") {
+                throw "CM-NO9XBRIDGE (scripts\inf-gate\check-cm-inf.ps1's rule): the assembled upload set's $f\ directory holds $rel; the connection manager's filter INF is published in nt\ alone, out of Windows 98's and ME's way."
+            }
+        }
+        $cmHave = @($cmPublishable | Where-Object { Test-Path -LiteralPath (Join-Path $uploadFlavorDir $_) })
+        if ($cmHave.Count -ne 0 -and $cmHave.Count -ne $cmPublishable.Count) {
+            $cmMissing = @($cmPublishable | Where-Object { $cmHave -notcontains $_ })
+            throw "the assembled upload set's $f\ directory carries $($cmHave -join ', ') of the connection manager but not $($cmMissing -join ', '): the four files go together."
+        }
+        if ($cmHave.Count -ne 0 -and
+            (Get-FileHash -LiteralPath (Join-Path $uploadFlavorDir "xhcicm.sys") -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath (Join-Path $uploadFlavorDir "nt\xhcicm.sys") -Algorithm SHA256).Hash) {
+            throw "the assembled upload set's $f\ directory carries an nt\xhcicm.sys that is not the same bytes as its xhcicm.sys: the filter INF's copy must be the published binary itself (signed before it is copied)."
+        }
+        foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "nt\xhcicmf.inf"; Extra = @("-Filter") })) {
+            $cmInfPath = Join-Path $uploadFlavorDir $cmInf.Name
+            if (Test-Path -LiteralPath $cmInfPath) {
+                $savedEap = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                try {
+                    $gateOut = & powershell.exe (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $cmGate,
+                                                   "-InfPath", $cmInfPath, "-Arch", $LegArches[$f],
+                                                   "-PackageDir", $uploadFlavorDir) + $cmInf.Extra) 2>&1 | Out-String
+                } finally {
+                    $ErrorActionPreference = $savedEap
+                }
+                if ($LASTEXITCODE -ne 0) {
+                    throw @"
+the assembled upload set's $f\ directory failed scripts\inf-gate\check-cm-inf.ps1
+on $($cmInf.Name). Do not upload it: the connection manager's INFs and binary
+are not the media they claim to be.
+
+$gateOut
+"@
+                }
+                Write-Ok ("{0}\ carries the connection manager's {1}, by its own gate" -f $f, $cmInf.Name)
+            } elseif ($null -ne $pkgDir) {
+                throw "the assembled upload set's $f\ directory has no $($cmInf.Name), and this cut built it with one."
+            }
+        }
+
         # The text-mode Setup description, by its own gate against the INF
         # beside it. Required of a directory this cut built; gated where
         # present in one -UploadSetOnly reads, since a version published
@@ -2266,7 +2543,10 @@ $gateOut
     # And what they say, before anything is archived: the cut checked them
     # when it staged them, but -UploadSetOnly reads a tree it did not stage.
     Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'"
+    # The bundled Stor98 files keep their own DriverVer date and their own
+    # file times: they are another project's release, copied unchanged.
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
+                  Where-Object { -not $nvUploaded.ContainsKey($_.FullName.ToLowerInvariant()) } |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
         throw "the assembled upload set's INFs declare $($infDates.Count) DriverVer dates ($($infDates -join ', ')), not one: the release has no single date to give its files."
@@ -2274,6 +2554,7 @@ $gateOut
     $fileStamp = [datetime]::ParseExact($infDates[0], 'yyyy-MM-dd',
         [Globalization.CultureInfo]::InvariantCulture).AddHours(12)
     foreach ($item in (Get-ChildItem -LiteralPath $uploadRoot -File -Recurse)) {
+        if ($nvUploaded.ContainsKey($item.FullName.ToLowerInvariant())) { continue }
         $item.LastWriteTime = $fileStamp
     }
     Write-Ok ("every file dated {0:yyyy-MM-dd HH:mm}, the INFs' DriverVer date" -f $fileStamp)
@@ -2340,6 +2621,8 @@ $stagedUpload = $null
 $swapDone = $false
 # What the caller actually passed, for Get-UploadSetRepairCommand.
 $boundArgs = $PSBoundParameters
+# The verified Stor98 build, once resolved below; $null for none.
+$stor98 = $null
 
 try {
     if ($UploadSetOnly -and $SkipUploadSet) {
@@ -2426,6 +2709,27 @@ with its password in XHCI98_TESTSIGN_PW or typed at the prompt. Without the
 key, cut -Arch x86 only, or stage an unsigned x64 package for a guest with
 scripts\package\make-package.ps1 -Arch amd64, which is never published.
 "@
+    }
+
+    # --- the bundled Stor98 build, verified before anything is built --------
+    #
+    # make-package.ps1 verifies it again for each release leg; this run
+    # verifies it once up front, so a wrong pin costs nothing, and holds the
+    # result for the upload set, which copies the files from the release
+    # folder itself, never from releases\ (nothing third-party is tracked).
+    $stor98 = Resolve-Stor98Input -Version $Stor98Version -Dir $Stor98Dir -SumsSha256 $Stor98SumsSha256 `
+                                  -InterfaceVersion $Stor98InterfaceVersion `
+                                  -HeaderPath (Join-Path $repo "src\cm\stor98cm.h") `
+                                  -Allow:$Stor98AllowInterfaceMismatch
+    if ($null -ne $stor98) {
+        Write-Ok ("Stor98 {0}: SHA256SUMS.txt is the pinned {1}, and every file matches it" -f `
+            $stor98.Version, $stor98.SumsSha256)
+        if ($stor98.Overridden) {
+            Write-Warn ("Stor98 INTERFACE MISMATCH OVERRIDDEN (-Stor98AllowInterfaceMismatch): {0}" -f $stor98.Mismatch)
+        }
+        if ($Flavor -notcontains "release") {
+            throw "Stor98 is bundled into the release- directories only, and this run publishes none (-Flavor $($Flavor -join ','))."
+        }
     }
 
     # --- the version, from the INF ------------------------------------------
@@ -2579,10 +2883,27 @@ To cut one, run this script without it.
             Write-Ok ("{0}\: '{1}' holds the published binary and INF" -f $dirName, $pubDir)
         }
 
+        # A release cut with Stor98 says so in its readme; it is re-assembled
+        # only with the same build, and one cut without it only without.
+        $pubReadme = Join-Path $finalRoot "readme.txt"
+        $pubStor98 = ""
+        if (Test-Path -LiteralPath $pubReadme) {
+            $m = [regex]::Match([System.IO.File]::ReadAllText($pubReadme), $stor98ReadmePattern)
+            if ($m.Success) {
+                $pubStor98 = "{0}|{1}|{2}" -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value
+            }
+        }
+        $askStor98 = Get-Stor98PinText -Release $stor98
+        if ($pubStor98 -ne $askStor98) {
+            $was = if ($pubStor98 -ne "") { "Stor98 pinned as $pubStor98" } else { "no Stor98" }
+            $now = if ($askStor98 -ne "") { "Stor98 pinned as $askStor98" } else { "no Stor98" }
+            throw "'$finalRoot' was cut with $was (version, SHA256SUMS.txt hash, interface; its readme.txt records them), and this run was given $now. Re-assemble it with the pins it was cut with."
+        }
+
         $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
                              -LegArches $legArches `
                              -PkgDirs @{} -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable
+                             -Publishable $publishable -Stor98 $stor98
 
         Write-Step "Done"
         Write-Host "Upload:     $($set.Zip)"
@@ -2761,6 +3082,17 @@ the result in place of the marker, then cut again. The first:
 "@
     }
     Write-Ok "no TODO(...) or TBD in the $Version history entry or the release notes"
+    # The bundled Stor98 version is recorded in the release notes (Stor98's
+    # maintainers), in one declaration line the cut fills in: the version
+    # bundled, or that there is none (Get-Stor98NotesFault). A disagreement
+    # or the unfilled placeholder is refused; a TEST cut is warned.
+    $notesText = if (Test-Path -LiteralPath $notesPath) { [System.IO.File]::ReadAllText($notesPath) } else { "" }
+    $why = Get-Stor98NotesFault -Text $notesText -Version $(if ($null -ne $stor98) { $stor98.Version } else { "" })
+    if ($why -ne "") {
+        if ($TestLabel -ne "") { Write-Warn $why } else { throw $why }
+    } else {
+        Write-Ok "the release notes' Stor98 declaration matches this cut"
+    }
 
 
     # --- where the INF puts this project's own two files ---------------------
@@ -2869,6 +3201,15 @@ the result in place of the marker, then cut again. The first:
             }
             $pkgArgs += @("-TestSignPfx", $TestSignPfx)
         }
+        # The bundled Stor98 build, in the release legs only; its files are
+        # accepted beside the declared set by exactly the paths it lands at.
+        $legStor98 = @()
+        if ($null -ne $stor98 -and $f -eq "release") {
+            $pkgArgs += @("-Stor98Version", $stor98.Version, "-Stor98Dir", $stor98.Dir,
+                          "-Stor98SumsSha256", $stor98.SumsSha256, "-Stor98InterfaceVersion", $stor98.Interface)
+            if ($Stor98AllowInterfaceMismatch) { $pkgArgs += "-Stor98AllowInterfaceMismatch" }
+            $legStor98 = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | ForEach-Object { $_.Dest })
+        }
         # ErrorActionPreference relaxed across the call, as every other native
         # call in this script does and this one did not until the 2026-09-07
         # audit's H17. In Windows PowerShell 5.1 a native command's stderr line
@@ -2905,14 +3246,21 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable
+        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $cmPublishable + $oemPublishable
         if ($legSigned) { $legCopy += $certPublishable }
         foreach ($name in $legCopy) {
             $src = Join-Path $pkgDir $name
             if (-not (Test-Path -LiteralPath $src)) {
                 throw "make-package.ps1 produced no '$name' in '$pkgDir'."
             }
+            Ensure-Directory (Split-Path -Parent (Join-Path $destDir $name))
             Copy-Item -LiteralPath $src -Destination (Join-Path $destDir $name) -Force
+        }
+        # The filter INF's own copy of the connection manager is the
+        # published binary itself, byte for byte (signed before the copy).
+        if ((Get-FileHash -LiteralPath (Join-Path $destDir "xhcicm.sys") -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath (Join-Path $destDir "nt\xhcicm.sys") -Algorithm SHA256).Hash) {
+            throw "the $($leg.Id) leg's nt\xhcicm.sys is not the same bytes as its xhcicm.sys; make-package.ps1 copies the one binary to both places."
         }
 
         # **Held to the INF's declared media set here, not at the assembly.**
@@ -2924,8 +3272,16 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }))
+                                           -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)
         Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
+        # The bundled Stor98 files are in the package, and stay out of
+        # releases\<version>\ ($legCopy names this project's files alone):
+        # the upload set takes them from the pinned release folder.
+        foreach ($nvRel in $legStor98) {
+            if (-not (Test-Path -LiteralPath (Join-Path $pkgDir $nvRel) -PathType Leaf)) {
+                throw "make-package.ps1 produced no Stor98 '$nvRel' in '$pkgDir'."
+            }
+        }
         # The certificate beside a signed leg's binaries must be this key's
         # public half, byte for byte - the one a user would inspect or import.
         if ($legSigned) {
@@ -3109,6 +3465,13 @@ invalidate readings already taken on these exact bytes - say so:
                             -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
                             -Signed:$legSigned
 
+        # The Thunderbolt 3 connection manager beside them, held to the same
+        # refusals (roadmap-usb4.md task 39-A.1).
+        $cmSys = Join-Path $destDir "xhcicm.sys"
+        Assert-CmPublished -Sys $cmSys -Leg $leg -Flavor $f -Version $Version `
+                           -ObjRoot (Join-Path $repo ("src\cm\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
+                           -Signed:$legSigned
+
         # The x86 helper, where this leg's INF declares it (design record
         # 18), held to the same refusals; and the 2.3.x helper's name never
         # published (section 15.11).
@@ -3135,6 +3498,8 @@ invalidate readings already taken on these exact bytes - say so:
             Sha256    = (Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
             UasLength = (Get-Item -LiteralPath $uasSys).Length
             UasSha256 = (Get-FileHash -LiteralPath $uasSys -Algorithm SHA256).Hash
+            CmLength  = (Get-Item -LiteralPath $cmSys).Length
+            CmSha256  = (Get-FileHash -LiteralPath $cmSys -Algorithm SHA256).Hash
         }
     }
 
@@ -3417,6 +3782,131 @@ version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
                    "newer than every source beside them and than that header") -f $cleanVersion)
     }
 
+    # --- the install tool (task 40.6) ----------------------------------------
+    #
+    # XHCIINST.EXE (MSVC 6.0) and XHCIIN64.EXE (WDK 7.1 amd64), built from
+    # xhciinst\ as XHCICLN is from xhcicln\ (design record 23 section 3), and
+    # INSTALL.BAT, the entry point, at the version root. The same staleness and
+    # version rules as XHCICLN's. Not drivers: the packager's test signing does
+    # not reach XHCIIN64.EXE.
+    $insttoolStaged = $null
+    if (-not $SkipInstallTool) {
+        Write-Step "install tool"
+        $instExes = @("XHCIINST.EXE", "XHCIIN64.EXE")
+        foreach ($name in ($instExes + @("README.TXT", "INSTALL.BAT"))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $InstallToolDir $name) -PathType Leaf)) {
+                throw @"
+'$InstallToolDir' has no $name.
+Build the tool first:  xhciinst\build.cmd
+It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipInstallTool
+cuts without the tool on a host that cannot build it.
+"@
+            }
+        }
+        $instSources = @(@(Get-ChildItem -LiteralPath $InstallToolDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
+            @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")))
+        foreach ($name in $instExes) {
+            $instTime = (Get-Item -LiteralPath (Join-Path $InstallToolDir $name)).LastWriteTimeUtc
+            $instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })
+            if ($instNewer.Count -gt 0) {
+                throw @"
+'$(Join-Path $InstallToolDir $name)' is older than $($instNewer.Count) of its own source file(s):
+  - $(($instNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhciinst\build.cmd) before releasing: a stale copy refuses this
+release's package, or decides with rules the source no longer has.
+"@
+            }
+        }
+        Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "xhciinst.c") -Macro "XHCIINST_VERSION"
+        $instVersion = Get-DeclaredVersion -Path $versionHeader
+        if (-not (Test-DriverVersionMatches -Reported $instVersion -Declared $Version)) {
+            throw @"
+'$versionHeader' declares the version as "$instVersion", but this release is $Version.
+XHCIINST refuses a package whose INFs' DriverVer is not its own version, so the
+two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
+"@
+        }
+        $batBytes = [System.IO.File]::ReadAllBytes((Join-Path $InstallToolDir "INSTALL.BAT"))
+        for ($bi = 0; $bi -lt $batBytes.Length; $bi++) {
+            if ($batBytes[$bi] -eq 10 -and ($bi -eq 0 -or $batBytes[$bi - 1] -ne 13)) {
+                throw "xhciinst\INSTALL.BAT has an LF line ending without CR: MS-DOS 7.1 loses goto labels in such a file."
+            }
+        }
+        $instDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciinst")
+        Ensure-Directory $instDir
+        foreach ($name in $instExes) {
+            Copy-Item -LiteralPath (Join-Path $InstallToolDir $name) -Destination (Join-Path $instDir $name) -Force
+        }
+        Copy-Item -LiteralPath (Join-Path $InstallToolDir "INSTALL.BAT") -Destination (Join-Path $destRoot "INSTALL.BAT") -Force
+        $insttoolStaged = $instDir
+        Write-Ok (("XHCIINST.EXE and XHCIIN64.EXE staged at version {0}, INSTALL.BAT at the root") -f $instVersion)
+    }
+
+    # --- the USB tree tool (task 41-A.6) -------------------------------------
+    #
+    # XHCITR.EXE (MSVC 6.0) and XHCITR64.EXE (WDK 7.1 amd64), built from
+    # xhcitr\ (design record 25 section 9), which XHCIINST copies from
+    # tools\xhcitr\ into the install directory and starts at login (record 25
+    # section 8, record 23 sections 9.5 and 9.6). The same staleness and version rules
+    # as XHCIINST's; its sources include the pure half it links from
+    # xhciinst\ and the query layout it reads. Not drivers: the packager's test
+    # signing does not reach XHCITR64.EXE.
+    $traytoolStaged = $null
+    if (-not $SkipTrayTool) {
+        Write-Step "USB tree tool"
+        $trayExes = @("XHCITR.EXE", "XHCITR64.EXE")
+        foreach ($name in ($trayExes + @("README.TXT"))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $TrayToolDir $name) -PathType Leaf)) {
+                throw @"
+'$TrayToolDir' has no $name.
+Build the tool first:  xhcitr\build.cmd
+It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipTrayTool
+cuts without the tool on a host that cannot build it.
+"@
+            }
+        }
+        $traySources = @(@(Get-ChildItem -LiteralPath $TrayToolDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest", ".ico") }) +
+            @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.c")) +
+            @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")))
+        foreach ($name in $trayExes) {
+            $trayTime = (Get-Item -LiteralPath (Join-Path $TrayToolDir $name)).LastWriteTimeUtc
+            $trayNewer = @($traySources | Where-Object { $_.LastWriteTimeUtc -gt $trayTime })
+            if ($trayNewer.Count -gt 0) {
+                throw @"
+'$(Join-Path $TrayToolDir $name)' is older than $($trayNewer.Count) of its own source file(s):
+  - $(($trayNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhcitr\build.cmd) before releasing: a stale copy reads the
+drivers' answers with a layout or rules the source no longer has.
+"@
+            }
+        }
+        Assert-TakesSharedVersion -Path (Join-Path $TrayToolDir "xhcitr.c") -Macro "XHCITR_VERSION"
+        $trayVersion = Get-DeclaredVersion -Path $versionHeader
+        if (-not (Test-DriverVersionMatches -Reported $trayVersion -Declared $Version)) {
+            throw @"
+'$versionHeader' declares the version as "$trayVersion", but this release is $Version.
+XHCIINST replaces an installed XHCITR only with a newer version, so the tool must
+carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
+"@
+        }
+        foreach ($name in $trayExes) {
+            Assert-ToolFileVersion -Path (Join-Path $TrayToolDir $name) -Version $Version
+        }
+        $trayDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcitr")
+        Ensure-Directory $trayDir
+        foreach ($name in $trayExes) {
+            Copy-Item -LiteralPath (Join-Path $TrayToolDir $name) -Destination (Join-Path $trayDir $name) -Force
+        }
+        $traytoolStaged = $trayDir
+        Write-Ok (("XHCITR.EXE and XHCITR64.EXE staged at version {0}") -f $trayVersion)
+    }
+
     # --- the port switchover's scripts ---------------------------------------
     #
     # Once, into tools\portsw\ beside the other tools' directories (roadmap-hcd
@@ -3543,6 +4033,12 @@ version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
         $contents += ("      xhciuas.sys  {0:N0} bytes" -f $s.UasLength)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
+        $contents += "      xhcicm.inf   (the Thunderbolt 3 connection manager's INF)"
+        $contents += "      nt\xhcicmf.inf  (its tunnel-port filter's INF, Windows 2000 and"
+        $contents += "                   later only: never point Windows 98 or ME at nt\)"
+        $contents += ("      xhcicm.sys   {0:N0} bytes" -f $s.CmLength)
+        $contents += "      SHA-256"
+        $contents += ("      {0}" -f $s.CmSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
         if ($leg.Arch -eq "x86") {
             $contents += "      xhcihlpr.sys (the helper for 32-bit 2000, XP, Vista and 7; section 4)"
@@ -3616,6 +4112,38 @@ version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
         $contents += "      when asked; on 98 SE and ME it lists only."
         $contents += ""
     }
+    if ($null -ne $insttoolStaged) {
+        $i32 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIINST.EXE")
+        $i64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIIN64.EXE")
+        $contents += "  INSTALL.BAT     - installs, updates or uninstalls the drivers"
+        $contents += ""
+        $contents += "  TOOLS\XHCIINST\ - the program INSTALL.BAT runs"
+        $contents += ""
+        $contents += ("      XHCIINST.EXE {0:N0} bytes, for 32-bit Windows" -f $i32.Length)
+        $contents += ("      XHCIIN64.EXE {0:N0} bytes, for 64-bit Windows" -f $i64.Length)
+        $contents += "      readme.txt"
+        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
+        $contents += ""
+        $contents += "      Section 4 has how to run it; INSTALL /list shows what"
+        $contents += "      it would do and changes nothing."
+        $contents += ""
+    }
+    if ($null -ne $traytoolStaged) {
+        $t32 = Get-Item -LiteralPath (Join-Path $traytoolStaged "XHCITR.EXE")
+        $t64 = Get-Item -LiteralPath (Join-Path $traytoolStaged "XHCITR64.EXE")
+        $contents += "  TOOLS\XHCITR\   - the xHCI98 USB Tree"
+        $contents += ""
+        $contents += ("      XHCITR.EXE   {0:N0} bytes, for 32-bit Windows" -f $t32.Length)
+        $contents += ("      XHCITR64.EXE {0:N0} bytes, for 64-bit Windows" -f $t64.Length)
+        $contents += "      readme.txt"
+        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
+        $contents += ""
+        $contents += "      INSTALL.BAT copies the one for your Windows into the"
+        $contents += "      install directory it asks for (C:\XHCI98 unless you"
+        $contents += "      choose another) and starts it at each login"
+        $contents += "      (section 4)."
+        $contents += ""
+    }
     if ($null -ne $pswStaged) {
         $contents += "  TOOLS\PORTSW\  - the Intel port switchover's switch (section 9)"
         $contents += ""
@@ -3679,6 +4207,49 @@ version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
     $contents += "  what in the wider project is third-party material and is NOT"
     $contents += "  covered by it. The LICENCE section at the end points here."
     $contents += ""
+
+    # The bundled Stor98 build: in the download's release- directories only
+    # (not in releases\, where nothing third-party is tracked). The first
+    # line is the one -UploadSetOnly reads ($stor98ReadmePattern).
+    if ($null -ne $stor98) {
+        $contents += ("  Bundled in this download: Stor98 {0}." -f $stor98.Version)
+        # Each pin on a line of its own, within the readme's 78 columns.
+        $contents += "  Its SHA256SUMS.txt has the SHA-256"
+        $contents += ("  {0}." -f $stor98.SumsSha256)
+        $contents += ("  Interface version: {0}{1}." -f $stor98.Interface,
+                      $(if ($stor98.Overridden) { " (MISMATCH OVERRIDDEN, see below)" } else { "" }))
+        if ($stor98.Overridden) {
+            # The override is logged where the download's reader sees it
+            # (-Stor98AllowInterfaceMismatch; a dry cut against a checkout
+            # whose header is not yet the pinned build's).
+            $contents += @(Format-Wrapped -Text ("The interface check was overridden for this cut " +
+                "(-Stor98AllowInterfaceMismatch): " + $stor98.Mismatch.Replace($repo.TrimEnd('\') + '\', "")) -Width 78 -FirstPrefix "  " -RestPrefix "  ")
+        }
+        $contents += ""
+        $stor98X86 = @($legs | Where-Object { $_.Arch -eq "x86" }).Count -gt 0
+        $stor98X64 = @($legs | Where-Object { $_.Arch -eq "x64" }).Count -gt 0
+        $stor98Dirs = @()
+        if ($stor98X86) { $stor98Dirs += "RELEASE-X86" }
+        if ($stor98X64) { $stor98Dirs += "RELEASE-X64" }
+        $contents += @(Format-Wrapped -Text (($stor98Dirs -join " and ") + $(if ($stor98Dirs.Count -gt 1) { " hold" } else { " holds" }) +
+            " Stor98, an NVMe storage driver for NVMe drives such as one in a Thunderbolt or USB4 enclosure:" +
+            " stor98.inf and the files beside it whose names start with stor98. It is a separate project" +
+            " with its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
+            " and stor98-readme.txt is its own guide. INSTALL.BAT does not install it. In the hardware" +
+            " wizard (Have Disk), point at " +
+            $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `
+            -Width 78 -FirstPrefix "  " -RestPrefix "  ")
+        if ($stor98X64) {
+            $contents += ""
+            $contents += "  RELEASE-X64's stor98.sys is test-signed by Stor98's own test"
+            $contents += "  certificate, not by this project's: stor98-test.cer beside it is"
+            $contents += "  that certificate's public half, as xhci98-test.cer is this"
+            $contents += "  project's. On Vista x64 and 7 x64, test-signing mode (bcdedit /set"
+            $contents += "  testsigning on) loads both; importing either certificate is not"
+            $contents += "  needed."
+        }
+        $contents += ""
+    }
 
     #
     # **The install section names the directories this cut actually wrote.**
@@ -4176,6 +4747,49 @@ has already gone wrong. It prints nothing as it runs. Section 8 describes
 both, and nothing about a copied file says which one it is - so point at a
 directory, never at a loose .sys file.{ARCHNOTE}
 
+INSTALL.BAT is beta in this release: if it fails or you prefer, install
+through Device Manager as before (BY HAND, below).  That route still works
+and remains supported.
+
+THE EASY WAY: INSTALL.BAT. Unzip the WHOLE package, then
+run INSTALL.BAT from its top directory: double-click it on Windows 98 SE and
+ME; run it as an administrator on Windows 2000 and XP; right-click it, Run as
+administrator, on Vista and 7. It shows what it will do, asks about a few of
+the driver's options (section 9), asks once, and then:
+
+  - on Windows 2000, XP, XP x64, Vista and 7 installs or updates every
+    driver of the package on the devices present - the controller, its root
+    hub and hubs, UAS disks, a Thunderbolt or USB4 controller - and stages
+    the rest for devices plugged in later. It handles the update traps
+    below (Windows 2000's Have Disk, the root hub, Vista and 7's same
+    DriverVer) and says when to restart;
+  - on Windows 98 SE and ME copies the package to the install directory
+    it asks for (C:\XHCI98 unless you choose another), where the hardware
+    wizards search by themselves, prints the Device Manager steps that
+    remain, and offers to open Device Manager.
+
+INSTALL /list shows what it would do and changes nothing. INSTALL
+/uninstall removes the drivers again (it warns first: on a machine whose
+only USB controller is xHCI, the USB keyboard and mouse stop working). Every
+run adds to XHCIINST.LOG at the root of the system drive; attach it to a bug
+report about an install. TOOLS\XHCIINST\readme.txt has the rest.
+
+INSTALL.BAT also installs the xHCI98 USB Tree (XHCITR) in the install
+directory it asks for (C:\XHCI98 unless you choose another, or INSTALL /to
+path) and starts it at each login. Its window shows
+every USB controller, hub and device, and the Thunderbolt and USB4 devices
+with what is connected behind them; its icon in the notification area of
+the taskbar removes a Thunderbolt or USB4 device safely, as Windows' own
+Safely Remove Hardware icon does for other devices. It needs no
+administrator to run. INSTALL /notray installs it without starting it at
+login; INSTALL /uninstall removes it with the drivers.
+TOOLS\XHCITR\readme.txt has the rest.
+
+On Windows XP, XP x64 and 98 SE, updating from 2.3.x or earlier needs a
+keyboard and mouse that do not go through this driver, as below; the tool
+says so before it starts.
+
+BY HAND, without INSTALL.BAT:
 Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:
 
@@ -4847,6 +5461,14 @@ Untested ground:
     none has been read on a controller it lists, and QEMU's controller is
     on no list.
 
+  * WINDOWS 2000: A THUNDERBOLT PORT SHOWS CODE 12 AFTER ITS FILTER IS
+    INSTALLED BY HAND, UNTIL A RESTART. Installing the tunnel-port filter
+    from NT\ through Device Manager (Update Driver, Have Disk) leaves the
+    upstream port at Code 12, and the Thunderbolt device's own entries
+    gone, until Windows is restarted; after the restart they all start.
+    INSTALL.BAT puts the filter on the upstream and the downstream ports
+    and asks for that restart itself. Seen in a virtual machine.
+
 
 ==============================================================================
  8. WHAT IS IN THIS DIRECTORY
@@ -4888,20 +5510,21 @@ A value that is absent means the default each one states.
   XhciLogVerbosity  -  the whole log switch
   .........................................
 
-  Default 0. Level 0 is off outright; above it each level is the one below
-  plus one thing:
+  Default 2 (an update keeps the value an earlier install wrote, which
+  was 0 before this release). Level 0 is off outright; above it each
+  level is the one below plus one thing:
 
-      0   OFF. The driver does not answer XHCISNAP at all. This is what a
-          fresh install does.
+      0   OFF. The driver does not answer XHCISNAP at all.
       1   the channel, plus the counters. The log of what happened is still
           off, so this is the cheapest reading there is.
-      2   plus the log of what happened.  USE THIS ONE.
+      2   plus the log of what happened.  USE THIS ONE. A fresh install
+          sets it.
       3   plus the USB port register table.  Still no internal addresses.
       4   plus everything, including internal addresses. Only if asked -
           it is more than you would want to paste in public.
 
   A value outside 0-4 is REFUSED rather than treated as the nearest one: the
-  driver falls back to 0, which is off.
+  driver falls back to the default, 2.
 
   XhciLogDebugView  -  the log to a capture tool
   ..............................................
@@ -5531,6 +6154,8 @@ which XHCISNAP matches this driver by that number; correct the sentence.
     if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS machine checker of section 1)" }
     if ($null -eq $snaptoolStaged) { $missingTools += "TOOLS\XHCISNAP\ (the report tool of section 6)" }
     if ($null -eq $cleantoolStaged) { $missingTools += "TOOLS\XHCICLN\ (the optional cleanup tool of section 4)" }
+    if ($null -eq $insttoolStaged) { $missingTools += "INSTALL.BAT and TOOLS\XHCIINST\ (the install tool of section 4)" }
+    if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
         # Leading blank line included, so an empty substitution leaves the
@@ -6250,6 +6875,119 @@ sufficient.
         Write-Ok "NOTICE.TXT written beside XHCICLN.EXE and XHCICL64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
     }
 
+    # --- the install tool's readme and notices (task 40.6) --------------------
+    #
+    # As the cleanup tool's, above: xhciinst\README.TXT with the release's
+    # footer, and NOTICE.TXT recording the two statically linked runtimes
+    # (legal-provenance.md section 2a).
+    if ($null -ne $insttoolStaged) {
+        $instReadme = @([System.IO.File]::ReadAllText((Join-Path $InstallToolDir "README.TXT")) -split "`r?`n")
+        while ($instReadme.Count -gt 0 -and $instReadme[$instReadme.Count - 1] -eq "") {
+            $instReadme = @($instReadme | Select-Object -First ($instReadme.Count - 1))
+        }
+        $instFooter = @"
+
+------------------------------------------------------------------------------
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
+for the driver itself.
+
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCIINST.EXE and XHCIIN64.EXE are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside
+this file records.
+"@
+        $instLines = @($instReadme) + @($instFooter.Replace("{VERSION}", $Version) -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $insttoolStaged "readme.txt") -Lines $instLines
+        Write-Ok "readme.txt written beside XHCIINST.EXE and XHCIIN64.EXE"
+
+        $instNotice = @"
+==============================================================================
+                          x h c i 9 8   {VERSION}
+           THIRD-PARTY NOTICES FOR XHCIINST.EXE AND XHCIIN64.EXE
+==============================================================================
+
+XHCIINST.EXE and XHCIIN64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+
+They are not only this project's code. XHCIINST.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCIIN64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs, which is what makes each tool a single file. You can see
+it in the import tables, which name only KERNEL32.dll and ADVAPI32.dll and
+no C runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient. The tools call Windows' own setup routines at run time; they
+carry no Microsoft setup program and this package carries no Microsoft file.
+"@
+        $instNotice = $instNotice.Replace("{VERSION}", $Version)
+        Write-GeneratedText -Path (Join-Path $insttoolStaged "NOTICE.TXT") `
+                            -Lines ($instNotice -split "`r?`n")
+        Write-Ok "NOTICE.TXT written beside XHCIINST.EXE and XHCIIN64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+    }
+
+    # --- the USB tree tool's readme and notices (task 41-A.6) -----------------
+    #
+    # As the install tool's, above: xhcitr\README.TXT with the release's
+    # footer, and NOTICE.TXT recording the two statically linked runtimes
+    # (legal-provenance.md section 2a).
+    if ($null -ne $traytoolStaged) {
+        $trayReadme = @([System.IO.File]::ReadAllText((Join-Path $TrayToolDir "README.TXT")) -split "`r?`n")
+        while ($trayReadme.Count -gt 0 -and $trayReadme[$trayReadme.Count - 1] -eq "") {
+            $trayReadme = @($trayReadme | Select-Object -First ($trayReadme.Count - 1))
+        }
+        $trayFooter = @"
+
+------------------------------------------------------------------------------
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
+for the driver itself.
+
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCITR.EXE and XHCITR64.EXE are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside
+this file records.
+"@
+        $trayLines = @($trayReadme) + @($trayFooter.Replace("{VERSION}", $Version) -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $traytoolStaged "readme.txt") -Lines $trayLines
+        Write-Ok "readme.txt written beside XHCITR.EXE and XHCITR64.EXE"
+
+        $trayNotice = @"
+==============================================================================
+                          x h c i 9 8   {VERSION}
+            THIRD-PARTY NOTICES FOR XHCITR.EXE AND XHCITR64.EXE
+==============================================================================
+
+XHCITR.EXE and XHCITR64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+Their icon was drawn for this project.
+
+They are not only this project's code. XHCITR.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCITR64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs, which is what makes each tool a single file. Its import
+tables name only Windows' own system DLLs and no C runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient.
+"@
+        $trayNotice = $trayNotice.Replace("{VERSION}", $Version)
+        Write-GeneratedText -Path (Join-Path $traytoolStaged "NOTICE.TXT") `
+                            -Lines ($trayNotice -split "`r?`n")
+        Write-Ok "NOTICE.TXT written beside XHCITR.EXE and XHCITR64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+    }
+
     # --- the licence the readme sends the reader to --------------------------
     #
     # **The generated guide says "GNU GPL v2 - see LICENSE", so LICENSE has to
@@ -6341,7 +7079,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
         $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
                              -LegArches $legArches `
                              -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable -Staged
+                             -Publishable $publishable -Staged -Stor98 $stor98
         $stagedUpload = $set
     }
 
@@ -6473,15 +7211,25 @@ after checkout. Restore it with:  git checkout -- LICENSE
     if ($null -eq $cleantoolStaged) {
         Write-Warn "no tools\xhcicln\ in this release (-SkipCleanTool) - nothing needs it, but the readme's update section names it."
     }
+    if ($null -eq $traytoolStaged) {
+        Write-Warn "no tools\xhcitr\ in this release (-SkipTrayTool) - INSTALL.BAT installs no USB tree tool from it."
+    }
 
     Write-Step "Done"
     Write-Host "Tracked:    $destRoot"
-    Write-Host "            Two files per published directory - this project's own. Commit this."
+    Write-Host "            Each published directory holds this project's own files only: its"
+    Write-Host "            drivers, their INFs, txtsetup.oem, nt\ beside them, and in an x64"
+    Write-Host "            directory the test certificate; tools\ and INSTALL.BAT at the root."
+    Write-Host "            No Stor98 file and no Microsoft file. Commit this."
     if ($null -ne $uploadRoot) {
         Write-Host ""
         Write-Host "Upload:     $uploadZip"
-        Write-Host "            The same tree, zipped: this project's two files per flavour,"
-        Write-Host "            the tools and the readmes, and no Microsoft file. This is the"
+        if ($null -ne $stor98) {
+            Write-Host ("            The same tree, zipped, with Stor98 {0}'s own files added to each" -f $stor98.Version)
+            Write-Host "            release- directory; no Microsoft file. This is the"
+        } else {
+            Write-Host "            The same tree, zipped, with no Stor98 and no Microsoft file. This is the"
+        }
         Write-Host "            GitHub release asset; it is git-ignored and must stay that way."
         Write-Host "            See releases\README.md and docs\contributing\legal-provenance.md"
         Write-Host "            section 5."
@@ -6490,7 +7238,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
     } else {
         Write-Warn "-SkipUploadSet: no release asset was assembled, so there is nothing to upload."
         Write-Host "            Install from out\pkg-<flavor>\ or from the tracked directory;"
-        Write-Host "            both hold the same two files."
+        Write-Host "            the driver files in both are the same bytes."
     }
 } catch {
     Write-Err $_.Exception.Message

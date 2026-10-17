@@ -12,6 +12,51 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 3.0.0.0 - 2026-10-17
+
+Every system `2.4.0.0` supports is supported, from the same four
+directories. The new Thunderbolt 3 and USB4 support was read in QEMU
+virtual machines against an emulated Thunderbolt 3 controller, emulated
+USB4 hosts and a model of a real USB4 enclosure, and rests on host tests
+where nothing models the case; it has not yet been read on real hardware.
+The release notes say what was read on which system.
+
+### What changed
+
+- Thunderbolt 3 and USB4: a new driver, `xhcicm.sys`, with its own
+  `xhcicm.inf`. On a Thunderbolt 3 controller (Alpine Ridge, Titan Ridge,
+  Ice Lake) it works with the controller's firmware and approves devices;
+  on a USB4 host (Maple Ridge, Tiger Lake and later Intel, AMD and other
+  USB4 hosts) it is the connection manager itself. Controllers this
+  release has not been read on are handled by default, with a warning in
+  the release notes.
+- A PCIe device behind a Thunderbolt or USB4 port, such as an NVMe
+  enclosure, appears and disappears as it is plugged in and out, with no
+  Refresh in Device Manager. On Windows 2000 to 7 this uses a small filter
+  on the bridge ports, installed from the `nt\` folder.
+- Safe removal: on Windows 2000 to 7 the device is listed in "Safely
+  Remove Hardware"; on every system `INSTALL /devices` lists the connected
+  Thunderbolt and USB4 devices and `INSTALL /eject` stops one before it is
+  unplugged.
+- The xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE` on 64-bit Windows): a
+  window that shows every USB controller, hub and device and every
+  Thunderbolt and USB4 device with their details, and an icon in the
+  notification area, started at login, that removes a Thunderbolt or USB4
+  device safely without administrator rights. `INSTALL /notray` leaves
+  the icon out.
+- `INSTALL.BAT`: one command installs, updates or uninstalls the driver
+  on every system, asks only the questions that apply to the machine, and
+  ends by saying whether Windows must be restarted. It asks whether to
+  install the Thunderbolt and USB4 support, Yes by default when such a
+  controller is found.
+- NVMe drives behind Thunderbolt or USB4: the download bundles Stor98
+  `0.4.0.0`, a separate NVMe driver for Windows 98 SE to 7, unchanged and
+  under its own licence; its licence, notice and readme are beside it.
+- Device Manager names the new devices "xHCI98 Thunderbolt 3 Controller",
+  "xHCI98 USB4 Host Router" and, on the bridge ports, "xHCI98 Thunderbolt
+  PCI Bridge" or "xHCI98 USB4 PCI Bridge".
+- Updating from `2.4.0.0`: run `INSTALL.BAT`. From `2.3.x` or earlier,
+  read the release notes' update section first.
 ## 2.4.0.0 - 2026-10-14
 
 Every system `2.3.1.0` supports is supported, from the same four

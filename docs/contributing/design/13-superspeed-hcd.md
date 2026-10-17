@@ -3922,6 +3922,53 @@ add EP0 requests to every device's enumeration - the step where a device is
 least tolerant - for a diagnostic view, and XP's and 2000's hubs read none
 there either. Every string goes to the device when it is asked for.
 
+### 8.12 The query request (`3.0.0.0`, design record 25 revision 12)
+
+The owner's logging-consistency decision of 2026-10-16: the HCD is read as
+`xhcicm.sys` is read (design record 25 section 4.5), through a request of
+its own on the device it already creates, `\\.\HCD<n>`, and not through
+the USBUSER pass-through of section 8.8, which stays byte-compatible for
+`usbui.dll` and `XHCISNAP`.
+
+- **The request.** `IOCTL_XHCI98_QUERY` =
+  `CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA48, METHOD_BUFFERED, FILE_ANY_ACCESS)`
+  = `0x00222920` (a vendor-range function code beside `xhcicm.sys`'s
+  `0xA40` to `0xA42`, and none of the hub or USBUSER codes this section
+  lists), no input, answered by `HcdDoorControllerIoctl` at
+  `PASSIVE_LEVEL`. Any user may send it (`FILE_ANY_ACCESS`; the device is
+  opened with no access rights).
+- **The answer** (`src\xhci_qry.h`, `XHQ_*`; composed by the pure
+  `src\xhci_qry.c`, host suite `test_xhq`): a 64-byte header (magic
+  `XHCQ`, version 1, size, flags, `XhciLogVerbosity` applied and as read,
+  the offsets and lengths of three parts, the ring's appends and
+  overwritten bytes, the configuration read's state, the build flavour),
+  then the counter block, the log and the configuration space. Under 64
+  bytes of output buffer `STATUS_BUFFER_TOO_SMALL`; under the whole the
+  header alone with the size needed; at most 18,752 bytes.
+- **What it serves follows the level**, as `xhcicm.sys`'s log answer
+  does, and is not gated by the door's enable step (status 6 at level 0
+  stays the pass-through's alone): `XHCIHC_COUNTERS` from level 1, as
+  little-endian words, with `Usb2HubSpeedFallbackSlots` computed as the
+  HCD region computes it; the note ring as text, oldest byte first, at
+  levels 2 and 3 - a byte outside printable ASCII, CR and LF written `.`,
+  the text starting after the first line feed when the wrap has
+  overwritten bytes or `XhciLogDebugView` drains the ring; withheld at
+  level 4, which records kernel addresses; and the controller's
+  configuration space 00h to FFh at every level.
+- **The configuration space** is read on demand, one DWORD per
+  `IRP_MN_READ_CONFIG` through `HcdSvcConfigSpace` (the route of every
+  configuration access here), at PASSIVE under the door gate - no start
+  or stop meanwhile - and before the controller lock; never written, never
+  read in an interrupt, transfer or power path; the last-access
+  diagnostics that service keeps for the start's log lines are put back.
+  A refused read is `XHQ_PCI_FAILED`, a first DWORD of all ones
+  `XHQ_PCI_ABSENT`, and neither fails the request.
+- **The ring and the counters** are copied under the controller lock,
+  as the snapshot's windows are, straight into the system buffer.
+- **An older driver** answers `STATUS_INVALID_DEVICE_REQUEST` (the
+  dispatch's default); `XHCITR` then reads the log through the
+  pass-through as before and says the configuration space is not served.
+
 ## 9. The harness and the gates (task 25.5)
 
 Every script that builds, gates, packages or measures the driver was written

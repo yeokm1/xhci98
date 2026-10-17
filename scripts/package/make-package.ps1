@@ -16,6 +16,21 @@ is this project's two files and nothing else:
                    33.3; src\txtsetup-amd64.oem under this name for amd64),
                    read from A:\ when F6 is pressed in Windows 2000 and XP
                    text-mode Setup, so it sits at the root with xhci98.sys
+    xhcicm.inf     the Thunderbolt 3 connection manager's NHI INF
+                   (roadmap-usb4.md task 39-A.1; src\cm\xhcicm-amd64.inf
+                   under this name for amd64)
+    nt\xhcicmf.inf its NT-only tunnel-port filter INF (src\cm\xhcicmf.inf,
+                   or xhcicmf-amd64.inf under this name for amd64), in a
+                   subdirectory of its own because Windows 98 SE and ME read
+                   a $Windows NT$ INF beside the one they are pointed at
+                   (runs/run-39.md, 39-0.4); its source disk is nt\
+                   itself
+    nt\xhcicm.sys  the filter INF's own copy of xhcicm.sys, the same bytes
+                   as the root's (copied after test-signing): Vista's and
+                   7's driver store refuses a source outside the INF's
+                   directory (SetupCopyOEMInf error 0xA1); check-cm-inf.ps1
+                   (CM-NO9XBRIDGE) compares the two
+    xhcicm.sys     the connection manager, the same flavour
 
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
 portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
@@ -101,6 +116,24 @@ self-tests' stand-ins) stages the UAS pair only when it names -UasDriverPath
 too, so a stand-in package is not filled from whatever the last build left
 in src\uas.
 
+.PARAMETER CmInfPath
+The Thunderbolt 3 connection manager's NHI INF to stage (roadmap-usb4.md
+task 39-A.1), overriding `src\cm\xhcicm.inf` (x86) or
+`src\cm\xhcicm-amd64.inf` (amd64). Staged as `xhcicm.inf` and gated by
+scripts\inf-gate\check-cm-inf.ps1 under -Arch.
+
+.PARAMETER CmFilterInfPath
+The connection manager's NT-only tunnel-bridge filter INF, overriding
+`src\cm\xhcicmf.inf` (x86) or `src\cm\xhcicmf-amd64.inf` (amd64). Staged as
+`nt\xhcicmf.inf` and gated by check-cm-inf.ps1 -Filter under -Arch.
+
+.PARAMETER CmDriverPath
+The connection manager to stage, overriding
+`src\cm\obj<flavour>\<archdir>\xhcicm.sys`, with the same rule as
+-UasDriverPath: both packages carry it, with both its INFs, whenever they
+are built from the default paths, and a stand-in package (one naming
+-DriverPath) carries it only when it names -CmDriverPath too.
+
 .PARAMETER HlprDriverPath
 The x86 helper to stage (design record 18; tasks 36.15 and 38.3), overriding
 `src\hlpr\obj<flavour>\i386\xhcihlpr.sys`. The 32-bit INF names it in
@@ -122,7 +155,7 @@ names -DriverPath (the self-tests' stand-ins) stages it only when it names
 
 .PARAMETER TestSignPfx
 The project test certificate's .pfx (design record 19; owner, 2026-10-11):
-sign the staged xhci98.sys and xhciuas.sys of an amd64 package with an
+sign the staged xhci98.sys, xhciuas.sys and xhcicm.sys of an amd64 package with an
 embedded Authenticode signature - SHA-1 file digest, no timestamp, no
 catalog, the INFs unchanged - and stage the certificate's public half beside
 them as xhci98-test.cer. That is what lets Vista x64 and Windows 7 x64 load
@@ -144,6 +177,84 @@ binaries are never signed) and for a binary that is already signed (the
 packager signs; nothing is signed by hand). Without it the package is staged
 unsigned, as every package before 2.3.0.0 was: enough for a guest started
 with F8, and make-release.ps1 refuses to publish it.
+
+.PARAMETER SignOnly
+Sign the binaries a gated scripts\build-driver.cmd run recorded, without
+running that run's host test suite and import gates again (roadmap-usb4.md
+SIGN.1, owner 2026-10-16). Only with -TestSignPfx, and refused with
+-SkipBinaryGates, -SkipPackageGate and the two experiment packages.
+
+build-driver.cmd writes out\gated-<arch>-<flavour>.txt once every gate of a
+flavour has passed: each gated binary's SHA-256, the commit and whether the
+tree had uncommitted changes, whether its import gates had their target
+evidence, and the time. This mode reads the one for -Arch and -Flavor
+before anything else and refuses unless it is for this architecture and
+flavour, every binary to be staged has exactly the SHA-256 recorded for it,
+the build ran in a clean tree, the tree is now at that same commit with no
+uncommitted change, and the build's import gates had their target evidence
+(or this run passes -NoTargetEvidence too). Each binary is read once, into
+memory; those bytes are what is hashed, and they are written to a private
+copy that every later step reads - the flavour markers, the signing, the
+staging - so the build's file is never read again. Each copy is checked
+against its hash again just before it is signed.
+
+That protects against a mismatch by accident and another process on the
+same machine changing a binary while this runs; it is not a defence against
+someone who deliberately forges the record.
+
+What it skips is the host test suite and the import gates (and the x86
+helper's toolchain check), which are about the bytes; what it keeps is
+everything about the package: the flavour markers, every INF gate before
+staging (the media layout one included), the staged package's gate, the
+version checks and the signature checks. The run prints which is which.
+
+.PARAMETER GatedManifestPath
+The gated build's record -SignOnly reads, overriding
+out\gated-<arch>-<flavour>.txt. Exists for the packager's own self-tests:
+it is refused with -TestSignPfx and without -SignOnly, and a run that names
+it checks the record, says whether it admits the binaries, and stops there,
+staging and signing nothing.
+
+.PARAMETER Stor98Version
+The Stor98 build to bundle (owner, 2026-10-16), 0.3.0.0 or later: Stor98
+is a separate BSD-3-Clause project, and the package may
+carry one of its released builds, copied unchanged from its release folder,
+never its source. The four -Stor98* pins go together; with none of them the
+package is built as before, with no Stor98. The release folder's x86\ goes to
+the x86 package's root and its x64\ (with stor98-test.cer, the public half of
+Stor98's own test certificate) to the amd64 package's root, with Stor98's
+LICENSE, NOTICE.TXT and readme.txt as stor98-LICENSE.txt, stor98-NOTICE.txt
+and stor98-readme.txt beside them (package-common.ps1, "Stor98, the bundled
+NVMe driver"). The x64 stor98.sys keeps Stor98's own test signature; nothing
+here signs it. Any -Flavor takes it; make-release.ps1 passes the pins to its
+release legs alone, so a cut's debug directories carry none of it.
+
+.PARAMETER Stor98Dir
+The pinned build's release folder, for example the Stor98 repository's
+releases\0.3.0.0. Read only.
+
+.PARAMETER Stor98SumsSha256
+The SHA-256 of that folder's SHA256SUMS.txt. It is checked first, then every
+file against SHA256SUMS.txt, then every copy in the package against it again;
+any mismatch, an unlisted file or a file the release layout does not know is
+a refusal, before the package is staged.
+
+.PARAMETER Stor98InterfaceVersion
+The pinned build's connection-manager link-state interface version, its
+stor98cm.h's STOR98LS_VERSION (4 for 0.3.0.0). Compared with
+src\cm\stor98cm.h, the header xhci98 compiles against, and, where the
+release folder carries include\stor98cm.h, that file byte for byte with it.
+A mismatch is a refusal unless -Stor98AllowInterfaceMismatch.
+
+.PARAMETER Stor98AllowInterfaceMismatch
+Bundle the build although its interface version does not match. The override
+is printed with the mismatch it overrides.
+
+.PARAMETER Stor98HeaderPath
+The header the interface version is compared with, overriding
+src\cm\stor98cm.h. Exists for the packager's own self-tests, and is refused
+without -SkipBinaryGates, so no package of real binaries is checked against
+anything else.
 
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
@@ -244,9 +355,20 @@ param(
     [string]$DriverPath = "",
     [string]$UasInfPath = "",
     [string]$UasDriverPath = "",
+    [string]$CmInfPath = "",
+    [string]$CmFilterInfPath = "",
+    [string]$CmDriverPath = "",
     [string]$HlprDriverPath = "",
     [string]$OemPath = "",
     [string]$TestSignPfx = "",
+    [switch]$SignOnly,
+    [string]$GatedManifestPath = "",
+    [string]$Stor98Version = "",
+    [string]$Stor98Dir = "",
+    [string]$Stor98SumsSha256 = "",
+    [string]$Stor98InterfaceVersion = "",
+    [switch]$Stor98AllowInterfaceMismatch,
+    [string]$Stor98HeaderPath = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
     [switch]$NoTargetEvidence,
@@ -259,6 +381,12 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "package-common.ps1")
 
 $repo = Get-RepoRoot
+#
+# The host suite and the import gates run unless the caller is a self-test
+# staging stand-ins (-SkipBinaryGates) or -SignOnly has matched every binary
+# to the gated build's record, whose run already ran them on those bytes.
+#
+$runBinaryGates = -not ($SkipBinaryGates -or $SignOnly)
 #
 # The three things -Arch moves, in one place. build-driver.cmd puts the amd64
 # output at src\obj<flavour>\amd64 beside i386 rather than in a second obj
@@ -274,6 +402,9 @@ if ($InfPath -eq "") { $InfPath = Join-Path $repo $archInf }
 # question: see the -UasDriverPath help.
 #
 $stageUas = ($DriverPath -eq "") -or ($UasDriverPath -ne "")
+# The Thunderbolt 3 connection manager (roadmap-usb4.md task 39-A.1),
+# decided the same way.
+$stageCm = ($DriverPath -eq "") -or ($CmDriverPath -ne "")
 # The text-mode Setup description (task 33.3), decided the same way.
 $stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
 if ($OemPath -eq "") {
@@ -302,6 +433,21 @@ if ($UasDriverPath -eq "") {
         default   { "objfre" }
     }
     $UasDriverPath = Join-Path $repo "src\uas\$uasObjDir\$archDir\xhciuas.sys"
+}
+$cmAllow = if ($Arch -eq "amd64") { "xhcicm-imports-amd64.allow" } else { "xhcicm-imports.allow" }
+if ($CmInfPath -eq "") {
+    $CmInfPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\cm\xhcicm-amd64.inf" } else { "src\cm\xhcicm.inf" })
+}
+if ($CmFilterInfPath -eq "") {
+    $CmFilterInfPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\cm\xhcicmf-amd64.inf" } else { "src\cm\xhcicmf.inf" })
+}
+if ($CmDriverPath -eq "") {
+    $cmObjDir = switch ($Flavor) {
+        "debug"   { "objchk" }
+        "qemu"    { "objchk_qemu" }
+        default   { "objfre" }
+    }
+    $CmDriverPath = Join-Path $repo "src\cm\$cmObjDir\$archDir\xhcicm.sys"
 }
 if ($DriverPath -eq "") {
     # Three flavours, two of them checked: "objchk" alone stopped identifying a
@@ -426,7 +572,8 @@ function Invoke-TestSign {
     # never echoed: the command is not printed and SignTool's own output
     # does not repeat it.
     param([string]$Source, [string]$Dest, [string]$Pfx, [string]$Password,
-          [string]$Thumbprint, [string]$SignTool, [string]$Label)
+          [string]$Thumbprint, [string]$SignTool, [string]$Label,
+          [string]$ExpectSha256 = "")
 
     if ($null -ne (Get-EmbeddedSignature -Path $Source)) {
         throw @"
@@ -437,6 +584,11 @@ a signed input is a binary nobody can tie to a build. Rebuild it:
 "@
     }
     Copy-Item -LiteralPath $Source -Destination $Dest -Force
+    # -SignOnly: the copy about to be signed is the gated build's, checked
+    # here, just before SignTool, rather than only at the start of the run.
+    if ($ExpectSha256 -ne "" -and (Get-FileSha256 -Path $Dest) -ne $ExpectSha256) {
+        throw "the copy of $Label to be signed is not the binary the build gated (its SHA-256 is not $ExpectSha256); '$Source' changed during this run."
+    }
     $before = Get-UserKeyContainers
     $signArgs = @("sign", "/q", "/f", $Pfx)
     if ($Password -ne "") { $signArgs += @("/p", $Password) }
@@ -492,6 +644,7 @@ $variantDir = ""
 #
 $stageDir = ""
 $signDir = ""
+$snapDir = ""
 
 try {
     Write-Step ("Package ({0}, {1}) -> {2}" -f $Flavor, $Arch, $OutDir)
@@ -514,6 +667,105 @@ time; they land in different directories on purpose.
 "@
     }
 
+    # --- -SignOnly: the gated build's record, before anything else ----------
+    #
+    # (roadmap-usb4.md SIGN.1.) Checked first, so a refusal names the binary or
+    # the record rather than whatever later check a stale binary would trip.
+    $gated = $null
+    if ($GatedManifestPath -ne "" -and ($TestSignPfx -ne "" -or -not $SignOnly)) {
+        throw "-GatedManifestPath is for the packager's self-tests: it goes with -SignOnly and never with -TestSignPfx, so a record from anywhere but build-driver.cmd's out\ can never lead to a signature."
+    }
+    if ($SignOnly) {
+        Write-Step "sign-only: the gated build's record"
+        if ($TestSignPfx -eq "" -and $GatedManifestPath -eq "") {
+            throw @"
+-SignOnly was given without -TestSignPfx. It exists to sign the binaries a
+gated scripts\build-driver.cmd run recorded without running that run's gates
+again; an unsigned package has nothing to skip them for. Run this without
+-SignOnly, or name the key:
+  make-package.ps1 -Flavor $Flavor -Arch $Arch -TestSignPfx <pfx> -SignOnly
+"@
+        }
+        if ($SkipBinaryGates -or $SkipPackageGate) {
+            throw "-SignOnly replaces the host suite and the import gates with the gated build's record, and nothing else: it does not combine with -SkipBinaryGates or -SkipPackageGate."
+        }
+        if ($FailStartArtifact -or $UnpaddedDriverVerExperiment) {
+            throw "-SignOnly does not combine with -FailStartArtifact or -UnpaddedDriverVerExperiment."
+        }
+        if ($GatedManifestPath -eq "") {
+            $GatedManifestPath = Get-GatedManifestPath -Repo $repo -Arch $Arch -Flavor $Flavor
+        }
+        if (-not (Test-Path -LiteralPath $GatedManifestPath -PathType Leaf)) {
+            throw @"
+-SignOnly: no gated build record at '$GatedManifestPath'.
+scripts\build-driver.cmd writes it once every gate of the flavour has passed,
+and deletes it when that flavour's build starts. Build and gate it first:
+  scripts\build-driver.cmd $Flavor$(if ($Arch -eq "amd64") { " -amd64" })
+"@
+        }
+        try {
+            $gated = ConvertFrom-GatedManifest -Text ([System.IO.File]::ReadAllText($GatedManifestPath))
+        } catch {
+            throw "-SignOnly: '$GatedManifestPath' is not a gated build record this script can read: $($_.Exception.Message)."
+        }
+        $gatedBinaries = @{ "xhci98.sys" = $DriverPath }
+        if ($stageUas)  { $gatedBinaries["xhciuas.sys"] = $UasDriverPath }
+        if ($stageCm)   { $gatedBinaries["xhcicm.sys"] = $CmDriverPath }
+        if ($stageHlpr) { $gatedBinaries["xhcihlpr.sys"] = $HlprDriverPath }
+        #
+        # Each binary is read ONCE. The bytes in memory are what is hashed and
+        # what is written to a private copy; every later step reads that copy,
+        # never the build's file again, so a file changed after this point
+        # cannot reach the package.
+        $snapDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-signonly-" + [System.IO.Path]::GetRandomFileName())
+        Ensure-Directory $snapDir
+        $snapBinaries = @{}
+        foreach ($name in @($gatedBinaries.Keys)) {
+            if (-not (Test-Path -LiteralPath $gatedBinaries[$name] -PathType Leaf)) {
+                throw "-SignOnly refused: $name is not at '$($gatedBinaries[$name])'."
+            }
+            $bytes = [System.IO.File]::ReadAllBytes($gatedBinaries[$name])
+            $snap = Join-Path $snapDir $name
+            [System.IO.File]::WriteAllBytes($snap, $bytes)
+            $snapBinaries[$name] = $snap
+            $bytes = $null
+        }
+        $tree = Get-GitTreeState -Repo $repo
+        $why = Get-GatedManifestFault -Manifest $gated -Arch $Arch -Flavor $Flavor -Binaries $snapBinaries `
+            -Head $tree.Head -Dirty $tree.Dirty -NoTargetEvidence ([bool]$NoTargetEvidence)
+        # A refusal names the build's file, not the private copy it was read into.
+        foreach ($name in @($snapBinaries.Keys)) { $why = $why.Replace($snapBinaries[$name], $gatedBinaries[$name]) }
+        if ($why -ne "") {
+            throw @"
+-SignOnly refused: '$GatedManifestPath' does not admit this package: $why.
+Rebuild and gate it (scripts\build-driver.cmd $Flavor$(if ($Arch -eq "amd64") { " -amd64" })) from a clean,
+committed tree, or run this without -SignOnly to run every gate here.
+"@
+        }
+        Write-Ok ("{0} records the {1} {2} build of commit {3} at {4}, and every binary to be staged is its gated bytes:" -f `
+            $GatedManifestPath, $Flavor, $Arch, $gated.Commit, $gated.Time)
+        foreach ($name in ($gatedBinaries.Keys | Sort-Object)) {
+            Write-Host ("  {0,-13} {1}" -f $name, $gated.Sha256[$name])
+        }
+        Write-Host "  REUSED from the gated build, not run here: the host test suite; the import"
+        Write-Host ("  gates of {0}{1}." -f (($gatedBinaries.Keys | Sort-Object) -join ", "),
+            $(if ($stageHlpr) { ", and the helper's toolchain check" } else { "" }))
+        Write-Host "  RUN here: the flavour markers, the INF gates before staging (the media"
+        Write-Host "  layout one included), the staged package's gate, the version checks and"
+        Write-Host "  the test signature with its checks."
+        if ($GatedManifestPath -ne "" -and $TestSignPfx -eq "") {
+            # The self-tests' record: checked, and nothing more.
+            Write-Ok "-GatedManifestPath: the record admits these binaries; nothing is staged or signed."
+            Remove-Item -LiteralPath $snapDir -Recurse -Force -ErrorAction SilentlyContinue
+            exit 0
+        }
+        # From here on the private copies stand in for the build's files.
+        $DriverPath = $snapBinaries["xhci98.sys"]
+        if ($snapBinaries.ContainsKey("xhciuas.sys"))  { $UasDriverPath = $snapBinaries["xhciuas.sys"] }
+        if ($snapBinaries.ContainsKey("xhcicm.sys"))   { $CmDriverPath = $snapBinaries["xhcicm.sys"] }
+        if ($snapBinaries.ContainsKey("xhcihlpr.sys")) { $HlprDriverPath = $snapBinaries["xhcihlpr.sys"] }
+    }
+
     # The x64 test signature (design record 19) is the amd64 package's alone.
     if ($TestSignPfx -ne "" -and $Arch -ne "amd64") {
         throw @"
@@ -524,6 +776,28 @@ kernel-mode code signing, and the published x86 bytes stay those of the build.
     }
     if ($TestSignPfx -ne "" -and -not (Test-Path -LiteralPath $TestSignPfx -PathType Leaf)) {
         throw "no test-signing key at '$TestSignPfx' (-TestSignPfx). Design record 19 says how the project's is made and where it is held."
+    }
+
+    # The bundled Stor98 build, verified before anything is built or staged:
+    # its pins, its SHA256SUMS.txt and every file, its layout, and its
+    # interface version against the header xhci98 compiles against.
+    if ($Stor98HeaderPath -ne "" -and -not $SkipBinaryGates) {
+        throw "-Stor98HeaderPath replaces the header the interface check reads, so it is for the packager's self-tests only (with -SkipBinaryGates); a package of real binaries is checked against src\cm\stor98cm.h."
+    }
+    if ($Stor98HeaderPath -eq "") { $Stor98HeaderPath = Join-Path $repo "src\cm\stor98cm.h" }
+    $stor98 = Resolve-Stor98Input -Version $Stor98Version -Dir $Stor98Dir -SumsSha256 $Stor98SumsSha256 `
+                                  -InterfaceVersion $Stor98InterfaceVersion -HeaderPath $Stor98HeaderPath `
+                                  -Allow:$Stor98AllowInterfaceMismatch
+    $stor98Files = @()
+    if ($null -ne $stor98) {
+        Write-Step ("Stor98 {0} from {1}" -f $stor98.Version, $stor98.Dir)
+        Write-Ok ("SHA256SUMS.txt is the pinned {0}, and every file matches it" -f $stor98.SumsSha256)
+        if ($stor98.Overridden) {
+            Write-Warn ("Stor98 INTERFACE MISMATCH OVERRIDDEN (-Stor98AllowInterfaceMismatch): {0}" -f $stor98.Mismatch)
+        } else {
+            Write-Ok ("interface version '{0}' matches {1}" -f $stor98.Interface, $Stor98HeaderPath)
+        }
+        $stor98Files = @(Get-Stor98PackageFiles -Release $stor98 -Arch $Arch)
     }
 
     if (-not (Test-Path -LiteralPath $InfPath)) {
@@ -707,7 +981,7 @@ Clear XHCI_EXTRA_DEFINES and rebuild:
     # property of the package rather than of how it was built (roadmap Phase 4
     # task 1). Both are seconds; a wrong binary on a guest is a reboot cycle at
     # best and a Win2000 bugcheck-and-recover at worst.
-    if (-not $SkipBinaryGates) {
+    if ($runBinaryGates) {
         Write-Step "host test suite"
         $hostTests = Join-Path $repo "test\run-host-tests.cmd"
         # ErrorActionPreference is relaxed around every native call in this
@@ -788,7 +1062,7 @@ The package carries the UAS class driver. Build it first:
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            if (-not $SkipBinaryGates) {
+            if ($runBinaryGates) {
                 $uasGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                  (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
                                  "-Image", $UasDriverPath, "-Flavor", $Flavor, "-Arch", $Arch,
@@ -812,6 +1086,55 @@ The package carries the UAS class driver. Build it first:
         Write-Warn "no UAS class driver staged: -DriverPath was named without -UasDriverPath (a stand-in package)."
     }
 
+    # --- the Thunderbolt 3 connection manager, held to the same gates -------
+    # (roadmap-usb4.md task 39-A.1): the binary to its marker and its own
+    # allowlist, both its INFs to check-cm-inf.ps1.
+    if ($stageCm) {
+        Write-Step ("Thunderbolt 3 connection manager ({0}, {1})" -f $Flavor, $Arch)
+        if (-not (Test-Path -LiteralPath $CmDriverPath)) {
+            throw @"
+no $Flavor xhcicm.sys at '$CmDriverPath'.
+The package carries the Thunderbolt 3 connection manager. Build it first:
+  scripts\build-driver.cmd $Flavor
+"@
+        }
+        $cmFlavour = Get-ImageFlavourMarker -Path $CmDriverPath
+        if ($cmFlavour -ne $Flavor) {
+            throw "'$CmDriverPath' carries the flavour marker '$cmFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
+        }
+        $savedEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            if ($runBinaryGates) {
+                $cmGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
+                                "-Image", $CmDriverPath, "-Flavor", $Flavor, "-Arch", $Arch,
+                                "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") $cmAllow))
+                if ($NoTargetEvidence) { $cmGateArgs += "-NoTargetEvidence" }
+                & powershell.exe @cmGateArgs
+                if ($LASTEXITCODE -ne 0) {
+                    throw "'$CmDriverPath' failed the import-compatibility gate against $cmAllow."
+                }
+            }
+            & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1") `
+                -InfPath $CmInfPath -Arch $Arch
+            if ($LASTEXITCODE -ne 0) {
+                throw "'$CmInfPath' failed scripts\inf-gate\check-cm-inf.ps1 - fix it before packaging."
+            }
+            & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1") `
+                -InfPath $CmFilterInfPath -Arch $Arch -Filter
+            if ($LASTEXITCODE -ne 0) {
+                throw "'$CmFilterInfPath' failed scripts\inf-gate\check-cm-inf.ps1 -Filter - fix it before packaging."
+            }
+        } finally {
+            $ErrorActionPreference = $savedEap
+        }
+    } else {
+        Write-Warn "no connection manager staged: -DriverPath was named without -CmDriverPath (a stand-in package)."
+    }
+
     # --- the x86 helper, held to its own gates (design record 18) ---------
     if ($stageHlpr) {
         Write-Step ("x86 helper ({0})" -f $Flavor)
@@ -827,7 +1150,7 @@ The x86 package carries the x86 helper its INF names. Build it first
         if ($hlprFlavour -ne $Flavor) {
             throw "'$HlprDriverPath' carries the flavour marker '$hlprFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
         }
-        if (-not $SkipBinaryGates) {
+        if ($runBinaryGates) {
             # The toolchain the helper was decided on (design record 18
             # section 15.10), held again here for a helper named by
             # -HlprDriverPath as for one build-driver.cmd made: its build's
@@ -903,13 +1226,22 @@ The x86 package carries the x86 helper its INF names. Build it first
         Ensure-Directory $signDir
         $signedDriver = Join-Path $signDir "xhci98.sys"
         Invoke-TestSign -Source $DriverPath -Dest $signedDriver -Pfx $TestSignPfx -Password $testSignPassword `
-                        -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhci98.sys"
+                        -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhci98.sys" `
+                        -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256["xhci98.sys"] } else { "" })
         $DriverPath = $signedDriver
         if ($stageUas -and (Test-Path -LiteralPath $UasDriverPath)) {
             $signedUas = Join-Path $signDir "xhciuas.sys"
             Invoke-TestSign -Source $UasDriverPath -Dest $signedUas -Pfx $TestSignPfx -Password $testSignPassword `
-                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhciuas.sys"
+                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhciuas.sys" `
+                            -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256["xhciuas.sys"] } else { "" })
             $UasDriverPath = $signedUas
+        }
+        if ($stageCm -and (Test-Path -LiteralPath $CmDriverPath)) {
+            $signedCm = Join-Path $signDir "xhcicm.sys"
+            Invoke-TestSign -Source $CmDriverPath -Dest $signedCm -Pfx $TestSignPfx -Password $testSignPassword `
+                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhcicm.sys" `
+                            -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256["xhcicm.sys"] } else { "" })
+            $CmDriverPath = $signedCm
         }
         $testSignPassword = $null
     }
@@ -978,6 +1310,18 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
         Copy-Item -LiteralPath $UasInfPath -Destination (Join-Path $stageDir "xhciuas.inf") -Force
         Copy-Item -LiteralPath $UasDriverPath -Destination (Join-Path $stageDir "xhciuas.sys") -Force
     }
+    # The connection manager's NHI INF and binary at the root, where its
+    # SourceDisksNames entry looks; the filter INF in nt\ with its own copy
+    # of the binary, where the filter INF's entry looks.
+    if ($stageCm) {
+        Copy-Item -LiteralPath $CmInfPath -Destination (Join-Path $stageDir "xhcicm.inf") -Force
+        Ensure-Directory (Join-Path $stageDir "nt")
+        Copy-Item -LiteralPath $CmFilterInfPath -Destination (Join-Path $stageDir "nt\xhcicmf.inf") -Force
+        Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "xhcicm.sys") -Force
+        # The filter INF's own source, beside it: the same (already signed)
+        # bytes, which CM-NO9XBRIDGE compares.
+        Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "nt\xhcicm.sys") -Force
+    }
     # txtsetup.oem at the root: text-mode Setup reads it from A:\ and its
     # [Disks] entry finds xhci98.sys and xhci98.inf beside it.
     if ($stageOem) {
@@ -996,6 +1340,20 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
     $rootInf = Join-Path $stageDir "xhci98.inf"
     if (-not (Test-Path -LiteralPath $rootInf)) {
         Copy-Item -LiteralPath $InfPath -Destination $rootInf -Force
+    }
+    # The bundled Stor98 build, last, so a name it shares with anything this
+    # project staged is a refusal rather than an overwrite; and each copy is
+    # held to SHA256SUMS.txt again, so what was verified is what is staged.
+    foreach ($nf in $stor98Files) {
+        $dest = Join-Path $stageDir $nf.Dest
+        if (Test-Path -LiteralPath $dest) {
+            throw "Stor98's '$($nf.Source)' would land at '$($nf.Dest)', where this package already has a file. Bundled files never replace this project's own."
+        }
+        Ensure-Directory (Split-Path -Parent $dest)
+        Copy-Item -LiteralPath (Join-Path $stor98.Dir $nf.Source) -Destination $dest
+        if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -ne $nf.Sha256) {
+            throw "the staged copy of Stor98's '$($nf.Source)' does not match SHA256SUMS.txt; the release folder changed while it was being copied."
+        }
     }
 
     Write-Host ""
@@ -1101,6 +1459,23 @@ a build that was never made.
                 throw "the staged package failed scripts\inf-gate\check-uas-inf.ps1 - do not install it."
             }
         }
+        if ($stageCm) {
+            foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "nt\xhcicmf.inf"; Extra = @("-Filter") })) {
+                $savedEap = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                try {
+                    $cmExtra = $cmInf.Extra
+                    & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                        (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1") `
+                        -InfPath (Join-Path $stageDir $cmInf.Name) -PackageDir $stageDir -Arch $Arch @cmExtra
+                } finally {
+                    $ErrorActionPreference = $savedEap
+                }
+                if ($LASTEXITCODE -ne 0) {
+                    throw "the staged package failed scripts\inf-gate\check-cm-inf.ps1 on $($cmInf.Name) - do not install it."
+                }
+            }
+        }
         if ($stageOem) {
             $savedEap = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
@@ -1203,6 +1578,9 @@ that does not exist, or clear that one yourself.
     }
 
     Write-Step "Done"
+    if ($SignOnly) {
+        Write-Host ("Sign-only: the host test suite and the import gates were those of the gated build of commit {0} ({1}); every other check ran here." -f $gated.Commit, $gated.Time)
+    }
     if ($FailStartArtifact) {
         Write-Warn "This is the failed-start artifact. It will install and then not start."
         Write-Host "Run it from a snapshot you can revert, and read the run sheet first:"
@@ -1265,6 +1643,17 @@ that does not exist, or clear that one yourself.
         Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
         Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"
     }
+    if ($null -ne $stor98) {
+        # Where the hardware wizard is pointed for an NVMe controller; nothing
+        # here installs Stor98 (it is a separate project).
+        Write-Host ("  NVMe     Stor98 {0} (bundled, unchanged): Have Disk -> this directory's stor98.inf" -f $stor98.Version)
+        if ($Arch -eq "amd64") {
+            Write-Host "           its stor98.sys carries Stor98's own test signature (stor98-test.cer); test-signing mode loads it"
+        }
+        if ($stor98.Overridden) {
+            Write-Warn ("Stor98 bundled with its interface mismatch overridden: {0}" -f $stor98.Mismatch)
+        }
+    }
 } catch {
     Write-Err $_.Exception.Message
     exit 1
@@ -1274,6 +1663,9 @@ that does not exist, or clear that one yourself.
     }
     if ($signDir -ne "" -and (Test-Path -LiteralPath $signDir)) {
         Remove-Item -LiteralPath $signDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($snapDir -ne "" -and (Test-Path -LiteralPath $snapDir)) {
+        Remove-Item -LiteralPath $snapDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     # A run that threw after staging leaves this behind and $OutDir untouched.
     if ($stageDir -ne "" -and (Test-Path -LiteralPath $stageDir)) {

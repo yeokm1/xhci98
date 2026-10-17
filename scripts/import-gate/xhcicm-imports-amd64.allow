@@ -1,0 +1,109 @@
+# xhcicm.sys import allowlist (amd64) - the Thunderbolt 3 connection
+# manager's 64-bit build (roadmap-usb4.md task 39-A.1), held to NT 5.2 amd64
+# evidence (winxp64-baselines.expected), as xhciuas-imports-amd64.allow holds
+# xhciuas.sys. scripts\build-driver.cmd passes it with -AllowPath on every
+# -amd64 link of src\cm. Format and rules: xhci98-imports.allow's header;
+# the amd64 evidence rule: xhci98-imports-amd64.allow's.
+#
+# Every row is the amd64 twin of a row in xhcicm-imports.allow, except where
+# the architecture changes the pair: KeInitializeSpinLock is an inline on
+# amd64, and the Kf* spin-lock pair is KeAcquireSpinLockRaiseToDpc /
+# KeReleaseSpinLock there; WDK 7.1's checked headers import RtlAssert (debug
+# and qemu only); and /GS imports KeBugCheckEx, exactly as in
+# xhci98-imports-amd64.allow, whose comments say why each is accepted. The
+# SITES rules are the x86 file's.
+
+[imports]
+
+# --- Compiler- and header-added pairs, as in xhci98-imports-amd64.allow ---
+ntoskrnl.exe!KeBugCheckEx                  all    required  nt52-amd64-export; /GS __report_gsfailure only, bugcheck 0xF7 (as xhci98-imports-amd64.allow)
+ntoskrnl.exe!RtlAssert                     debug  required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
+ntoskrnl.exe!RtlAssert                     qemu   required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
+
+# --- PnP: the NHI's FDO and the tunnel bridge's filter ---
+ntoskrnl.exe!IoCreateDevice                all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoDeleteDevice                all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoAttachDeviceToDeviceStack   all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoDetachDevice                all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IofCallDriver                 all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IofCompleteRequest            all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!PoStartNextPowerIrp           all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!PoCallDriver                  all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoIsWdmVersionAvailable       all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoGetDeviceProperty           all    required  nt52-amd64-export; twin of the x86 row
+
+# --- The forwarded start and its wait ---
+ntoskrnl.exe!KeInitializeEvent             all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeSetEvent                    all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeWaitForSingleObject         all    required  nt52-amd64-export; twin of the x86 row
+
+# --- The tunnel ports and their re-enumeration (cm_reenum.c, tasks
+# 39-A.5 and 39-A.8): configuration space of the tunnel ports through
+# the HAL, the bridge filters' invalidation, and the resume hold's
+# watchdog. Each row is xhci98.sys's own, its evidence verbatim. ---
+ntoskrnl.exe!KeInitializeDpc               all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeInitializeTimer             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeSetTimer                    all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeCancelTimer                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoInvalidateDeviceRelations   all  required  nt52-amd64-export; twin of the x86 row (task 26-A.4)
+HAL.dll!HalGetBusData                     all  required  nt52-amd64-export; twin of the x86 row (task 36.3); also in WDK 7.1's wlh and win7 amd64 hal.lib
+
+# --- The log ring's lock (cm_log.c) ---
+ntoskrnl.exe!KeAcquireSpinLockRaiseToDpc   all    required  nt52-amd64-export; KeAcquireSpinLock/KeReleaseSpinLock on amd64 (the x86 HAL.dll Kf* rows)
+ntoskrnl.exe!KeReleaseSpinLock             all    required  nt52-amd64-export; KeAcquireSpinLock/KeReleaseSpinLock on amd64 (the x86 HAL.dll Kf* rows)
+
+# --- The registry values: cm_reg.obj only ---
+ntoskrnl.exe!IoOpenDeviceRegistryKey       all    required  SITES=cm_reg.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!RtlQueryRegistryValues        all    required  SITES=cm_reg.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ZwClose                       all    required  SITES=cm_reg.obj,cm_thr.obj,cm_cfgwk.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
+
+# --- The log's emission, every flavour (record 21 section 8): cm_log.obj ---
+ntoskrnl.exe!DbgPrint                      all    required  SITES=cm_log.obj nt52-amd64-export; twin of the x86 row
+
+# --- Pool: cm_pool.obj only, optional while nothing allocates pool ---
+ntoskrnl.exe!ExAllocatePoolWithTag         all    optional  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ExFreePool                    all    optional  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row
+
+# --- The NHI driver of task 39-A.4: BAR0, configuration space, the
+# thread and its clock, the power policy owner, the ring block's
+# adapter (cm_pool.obj only). Each row is xhci98.sys's own, its
+# evidence text verbatim but for the SITES object. ---
+ntoskrnl.exe!PoSetPowerState               all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IoAllocateIrp                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoFreeIrp                     all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeClearEvent                  all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeDelayExecutionThread        all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!MmMapIoSpace                  all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!MmUnmapIoSpace                all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!PoRequestPowerIrp             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!PsCreateSystemThread          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!PsTerminateSystemThread       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!ObReferenceObjectByHandle    all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!ObfDereferenceObject         all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoGetDmaAdapter               all  required  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.2)
+HAL.dll!KeStallExecutionProcessor          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeQueryTimeIncrement          all  required  nt52-amd64-export; the clock's tick period (cm_thr.c); KeQueryTickCount is inline on amd64
+# The stor98 link-state channel (cm_nvlinkos.c; tasks 39-A.7 and 40-A.7).
+ntoskrnl.exe!ExCreateCallback              all    required  SITES=cm_nvlinkos.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ExRegisterCallback            all    required  SITES=cm_nvlinkos.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ExUnregisterCallback          all    required  SITES=cm_nvlinkos.obj nt52-amd64-export; twin of the x86 row
+
+# --- the status record (cm_statos.c, design record 24 section 3.2);
+# KeQuerySystemTime is inline on amd64 ---
+ntoskrnl.exe!ZwSetValueKey                 all    required  SITES=cm_statos.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!RtlInitUnicodeString          all    required  SITES=cm_statos.obj nt52-amd64-export; twin of the x86 row
+
+# --- the query device (cm_qryos.c, design record 25 section 4.2) ---
+ntoskrnl.exe!IoCreateSymbolicLink          all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoDeleteSymbolicLink          all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoRegisterDeviceInterface     all    required  nt52-amd64-export; twin of the x86 row
+
+[deny]
+
+ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag.
+ExFreePoolWithTag           No Windows 98 evidence, and the x86 and amd64 sources are one tree: free with ExFreePool on both.
+IoForwardIrpSynchronously   Windows XP and later - blocks the load on Win2000, and the x86 and amd64 sources are one tree. Use IoCallDriver plus a completion routine that signals a KEVENT.
+IoSetCompletionRoutineEx    Windows XP and later - blocks the load on Win2000, as above.
+IoCsqInitialize             Cancel-safe queues arrived with the XP DDK and are not in the Win2K DDK's libraries.
+IoCsqInsertIrp              Cancel-safe queue family - not in the Win2K DDK.
+IoCsqRemoveNextIrp          Cancel-safe queue family - not in the Win2K DDK.

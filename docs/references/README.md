@@ -35,6 +35,12 @@ re-verify a citation without downloading the source.
 | `extensible-host-controller-interface-usb-xhci.pdf` | 1.2 (645 pages, May 2019) | `9257ca24f34bff08e6020623f707c788ca0f0df657aa713309ff489a68b1731e` | The revision the citations were first made against, before Phase 15 moved them to 1.2c. Intel no longer serves it and nothing here needs it; the row stays so the migration below can be re-derived by anyone who still has a copy |
 | `xhci-backwards-compatibility-testing-v1-7.pdf` | 1.7 | `6e6464b293f10600ae208c72c7c6796162f75430841c901265db8e18fe37fcc2` | USB-IF, [xHCI Backwards Compatibility Testing][usb-bct] |
 | `usb_32_202206/USB 3.2 Revision 1.1.pdf` (the zip's own folder and name) | USB 3.2 revision 1.1 (569 pages, June 2022), with its ECNs in `usb_32_202206/USB 3.2 ECNs/` | `26e025a56ce0352f4f91fcaaca67b622d8e9e030ca429804bf7da98f52e674fd` | USB-IF document library, ["USB 3.2 Revision 1.1 - June 2022"](https://www.usb.org/document-library/usb-32-revision-11-june-2022), delivered as `usb_32_202206.zip`. Cited as `USB 3.2 p.N`; see "USB 3.2 revision 1.1" below |
+| `usb4_202511/USB4 Specification 2.0 November 2025 - CLEAN.pdf` (the zip's own name) | USB4 Specification 2.0, November 2025 release | `d2c27a35f5436559ba7e52448b873553434218544b2b8f160667bfd036ec024b` | USB-IF document library, ["USB4 Specification v2.0"](https://www.usb.org/document-library/usb4r-specification-v20), delivered as the zip ["USB4 Specification November 2025"](https://www.usb.org/sites/default/files/USB4%20Specification%20November%202025.zip). Cited as `USB4 2.0 section N`; see "USB4 2.0, November 2025 bundle" below |
+| `usb4_202511/USB4 Connection Manager Guide 2.0 November 2025.pdf` | USB4 Connection Manager Guide 2.0, November 2025 | `09f4441915eaeb421ed5314156534d61a350f8a5b8eb8a9c63f65b7fbd251d42` | the same zip. Cited as `CM Guide 2.0 section N` |
+| `usb4_202511/USB4 DROM Specification November 2025.pdf` | USB4 DROM Specification, November 2025 | `ba87d482f919c3b4b7916a027280f8b9d27c907b4fa856c26330f290296a2055` | the same zip |
+| `usb4_202511/USB4 DVSEC Version 1.0.pdf` | USB4 DVSEC 1.0 | `ce331604d25de88cc17d9475263ab5945191ed090e8971cd97ea9f8a6b9d1729` | the same zip |
+| `usb4_202511/USB4 Inter-Domain Service Specification 2.0 November 2025.pdf` | USB4 Inter-Domain Service Specification 2.0, November 2025 | `ab337460641c1f012a78c63dcf8cf182bf90deb29a7a841726973be79dcd7396` | the same zip; out of scope for the planned work, kept because the zip carries it |
+| `usb4_202511/USB4 2.0 ECN - Configuration and Behavior When TMU is Disabled.pdf` | USB4 2.0 ECN, TMU disabled | `af6404a13bdce86badd70c76b112e79a5a7c7739220522543352ddcb55531a0e` | the same zip |
 
 [intel-xhci]: https://www.intel.com/content/www/us/en/content-details/868295/extensible-host-controller-interface-for-universal-serial-bus-xhci-requirements-specification-r1-2c.html
 [usb-bct]: https://www.usb.org/sites/default/files/xHCI_Backwards_Compatibility_Testing_v1_7.pdf
@@ -324,6 +330,37 @@ sections 10 and 11 were verified against it on 2026-10-04.
   section above checks its own: the number sits in the running head as
   `- N -`, after "Revision 1.1 June 2022".
 
+## USB4 2.0, November 2025 bundle
+
+The USB4 Specification 2.0 and the Connection Manager Guide 2.0 are the
+standard behind `roadmap-usb4.md`'s planned work and design record 21: the
+host interface's ring register layout and descriptors (specification
+section 12), the control packet format and its CRC-32C with the Appendix
+A.2 vectors (section 6), and, for the later USB4 software connection
+manager, everything the guide says a connection manager does. The six
+PDFs in `usb4_202511/` were taken on 2026-10-14 (owner's permission) from
+the `usb4-emu` repository's own git-ignored `docs/references/usb-if/`,
+which extracted them from the USB-IF zip named in the table; the hashes
+above are of the PDFs as they sit here, and a fresh clone re-fetches the
+zip from the recorded URL and extracts the same six by name
+(`usb4-emu/docs/REFERENCES.md` has the `unzip -j` recipe). The zip itself
+is not kept.
+
+- Licence: the USB4 documents carry the USB 3.0 Promoter Group's copyright
+  and "All rights reserved", state that providing them grants no licence to
+  any intellectual-property rights, and are published under the USB-IF
+  adopter terms, documents only. Facts and section numbers are cited;
+  no text is reproduced. Fetched, never tracked, like every other row.
+- Thunderbolt 3 itself has no public specification: the Intel host
+  interface, the ICM firmware protocol and the Thunderbolt 3 router dialect
+  are documented nowhere this project may fetch (`usb4-emu/docs/REFERENCES.md`,
+  "Not fetched because not public"). What design record 21 implements
+  against is `usb4-emu/docs/ICM-PROTOCOL.md`, a clean-room description
+  written from P14s Gen 1 captures, cited by section; nothing of
+  Thunderbolt 3's is in this directory and nothing can be.
+- No text dump has been made yet; when one is, follow the USB 3.2 recipe
+  above and record the printed-page offset beside it.
+
 ## Intel PCH datasheets (issue 12, the `D20IR` routing quirk)
 
 These are fetched for issue 12 and roadmap task 36.3, the
@@ -407,3 +444,49 @@ the parts accept. Design record 17 section 4.14.2 lists what a reading of
 the 0.96 text would settle. If a copy is ever obtained from Intel, record
 it here with its filename, SHA-256 and the licence limit it states, and
 keep it untracked like every document in this directory.
+
+## Windows 98 DDK (roadmap-usb4 task 39-0.3): kept in `tools/`, not here
+
+Design record 21 section 6.1 calls the Windows 98 and ME configuration
+manager (CONFIGMG) from ring 0 by VxD service number. Those numbers, and
+the flag, status and result values the calls take and return, are read
+from this DDK's `CONFIGMG.H`, `VMM.H` and `VMM.INC` into
+`src/cm/cm_cfgmg.h`, each value cited there by header and line. The DDK is
+a toolchain-shaped input, so it lives beside `tools/WIN2KDDK.EXE` in the
+git-ignored `tools/` rather than in this directory; this section is where
+its identity is recorded. Nothing of it is tracked.
+
+| Save as | Version | SHA-256 | Source |
+|---|---|---|---|
+| `tools/win98ddk/win98se_ddk.exe` | Microsoft Windows 98 Second Edition DDK, a self-extracting cabinet of 26,377,712 bytes holding 107 files, the newest dated 1999-05-25; its `PRODUCT.INI` names it "98 DDK" and its `BUILD.TXT` says it is "synched to Windows98 Build bld1998.6" | `08318354cbac0b17d2e976a70b901ceb336947e76e4af8c869efdc6327a6a5dc` | Internet Archive item [`win98se_ddk.exe`](https://archive.org/details/win98se_ddk.exe), "Windows 98 Second Edition DDK", file `https://archive.org/download/win98se_ddk.exe/win98se_ddk.exe`; the item's own SHA-1 (`fc1d96765b768c06a30ae5da61d42323d909d1e7`) and MD5 (`acbd703d59d240601c21422386fbf70e`) matched the download on 2026-10-15 |
+
+What was read. The package was extracted with 7-Zip into the git-ignored
+`tools/win98ddk-extracted/` (the outer cabinet into `layer1/`, its
+`INCS_DDK.CAB` into `incs/`); no installer was run. The install paths are
+the ones `INCS_DDK.INF`'s `[DestinationDirs]` and `[WIN98_Files1]` give:
+
+| File, as installed | Member | Bytes | SHA-256 |
+|---|---|---|---|
+| `INCS_DDK.CAB` | of `win98se_ddk.exe` | 1,688,070 | `8f6beaa457727b600bc807bd32cd62ffc65f94ba436084ed03450be7b17a624c` |
+| `inc\win98\configmg.h` | `INC_WIN98_CONFIGMG.H` of `INCS_DDK.CAB` | 106,882 | `e540ecb80a28f16f733be2280a3d99287aea1e9d3e89b473352d8ab40751d999` |
+| `inc\win98\vmm.h` | `INC_WIN98_VMM.H` of `INCS_DDK.CAB` | 188,260 | `1c8a6f7637ffa7ba97b095cc543c6bb89092bbc41fa32b5a980870e219fc6727` |
+| `inc\win98\vmm.inc` | `INC_WIN98_VMM.INC` of `INCS_DDK.CAB` | 93,146 | `713fa2d33e417ca553ce2aef64681dae26ca756ad90dc9bbd7401a044c5be072` |
+| `LICENSE.TXT` | of `win98se_ddk.exe` | 11,803 | `89f90f047aa98c71a405bf75a377ca075a6dfab3540692e0e6a65655ee2b4019` |
+
+- Licence: `LICENSE.TXT` is Microsoft's end-user licence agreement for the
+  "Windows 98 Driver Development Kit". It states that the product is
+  licensed, not sold; grants the making, installing and use of up to ten
+  copies on computers "residing on your premises", "to design, develop,
+  and test software products, including but not limited to device drivers
+  ... for use with Microsoft Windows and/or Windows NT"; allows the sample source code to be
+  modified and redistributed on the conditions it lists; and reserves every
+  right not expressly granted. What this project takes from the package is
+  the numeric values `src/cm/cm_cfgmg.h` cites, under names of its own; no
+  declaration, macro body, comment or sample code is reproduced
+  (`docs/contributing/legal-provenance.md` section 4, the CONFIGMG row).
+  Fetched, never tracked.
+- The Internet Archive item is a third-party upload, not a Microsoft
+  distribution, so the SHA-256 above is what identifies the file: another
+  copy of the same package is checked against it, not trusted by its name.
+  Other public copies exist (WinWorld; the Internet Archive's `DDK-9x-ME`
+  and MSDN disc images); none was fetched, and nothing here depends on them.

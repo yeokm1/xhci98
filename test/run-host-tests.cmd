@@ -159,6 +159,30 @@ rem                  rollback outcome, driven over a modelled controller and
 rem                  ring pool - no ring free while a context may name it,
 rem                  none leaked, the 64-context bound - and the one-setting
 rem                  descriptor walk
+rem   test_inst    - the install tool's pure half (xhciinst\inst_core.c, task
+rem                  40.6, design record 23): the INF reader over src\'s INFs,
+rem                  the models section per system, versions, ids, the action
+rem                  per device, the uninstall order, the registry value
+rem                  table and its applicability, the switches, exit codes
+rem   test_tr      - the device viewer and tray's pure half (xhcitr\tr_core.c,
+rem                  task 41-A.2, design record 25 section 10): the bounded
+rem                  printf, the USB IOCTL answers, the descriptor decoders
+rem                  over whole, truncated and malformed input, xhcicm.sys's
+rem                  query answer and its refusals, the status texts, the
+rem                  tray's event diff, the switches and the report layout
+rem   test_trlog   - XHCITR's driver-log readers (xhcitr\tr_log.c, design
+rem                  record 25 sections 4.5 and 4.6): xhcicm.sys's log
+rem                  answer as its builder makes it, xhci98.sys's door
+rem                  window, the ring, level 4 withheld, the recording-off
+rem                  advice, the counter names against xhci_counters.h
+rem   test_trpci   - the PCI configuration answers (src\cm\cm_qpci.c and
+rem                  xhcitr\tr_pci.c, design record 25 revision 12): the
+rem                  bounded walk below a tunnel port, the capability walk
+rem                  with bad lists, the decoders, 79 columns
+rem   test_xhq     - xhci98.sys's query answer (src\xhci_qry.c, design
+rem                  record 13 section 8.12): what each log level serves,
+rem                  the ring's text and cut, the PCI states, the sizing,
+rem                  XHCITR's reader and texts, the default level 2
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
@@ -170,6 +194,87 @@ rem                  allocator's order and refusals, the walk for the UAS
 rem                  alternate setting and its Pipe Usage descriptors at High
 rem                  Speed and SuperSpeed, REPORT LUNS, the status fold, the
 rem                  CDB direction table and the storage id strings
+rem   test_tbt_brnum - the bus numbers xhcicm.sys gives the bridges a tunnel
+rem                  brought up below a tunnel port on 98 SE and ME
+rem                  (src\cm\tbt_brnum.c, record 21 section 6.1.1)
+rem   test_tbt_topo - the Thunderbolt tunnel ports' pure half (src\cm\tbt_topo.c,
+rem                  roadmap-usb4.md 39-A.5, design record 21 sections 6.3
+rem                  and 6.5): the P14s Gen 1's configuration space as
+rem                  captured, the emulator's i440FX, q35 and switch layouts,
+rem                  an integrated host's root ports, the set and its
+rem                  sources (switch ids, root port ids, SHPC, the
+rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
+rem                  and SHPC
+rem                  readings, a port without the capability bits, and the
+rem                  bounded poll
+rem   test_cm_nvlink - the stor98 link-state channel's pure half
+rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
+rem                  table of stor98's stor98cm.h, its entry protocol read
+rem                  back by a modelled receiver, the two profiles'
+rem                  statement conditions, where the channel is offered
+rem                  (not on 98 SE and ME in 3.0.0.0) and the wait with no
+rem                  receiver, interface 3's locator bytes and
+rem                  REMOVE_PENDING
+rem   test_cm_ports - the re-enumeration's own pure half (src\cm\cm_ports.c,
+rem                  roadmap-usb4.md 39-A.5 and 39-A.8, design record 21
+rem                  sections 3.3, 6.1, 6.3 and 7.4): the families' NHI,
+rem                  switch port and root port ids, checked against
+rem                  xhcicm.inf and xhcicmf.inf, Windows 98's PCI device ids
+rem                  (the BUS_&DEV_&FUNC_ instance, the vendor and device),
+rem                  the bridge filter's snapshot, and the resume hold's
+rem                  watchdog bound
+rem   test_cm_status - the status record xhcicm.sys publishes for the install
+rem                  tool's viewer (src\cm\cm_status.c, design record 24
+rem                  section 3): the record from an ICM table and a USB4
+rem                  port set, nothing secret copied, the change compare,
+rem                  and the Windows 98 instance path
+rem   test_cm_query - the answer of xhcicm.sys's query device
+rem                  (src\cm\cm_query.c, design record 25 section 4): the
+rem                  header, the router extensions, the instance id, the
+rem                  sizing answers and the router-count edge
+rem   test_cm      - the pure half of xhcicm.sys, the Thunderbolt 3
+rem                  connection manager (src\cm\cm_vals.c, task 39-A.1): the
+rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
+rem                  filter), the vendor, device and class parsed from them,
+rem                  the NHI profile table, and the registry values'
+rem                  defaults, refusals and bounds
+rem
+rem   test_tbt_ring - xhcicm.sys's host interface ring 0 (src\cm\tbt_ring.c,
+rem                  task 39-A.2): the USB4 2.0 Appendix A.2 CRC-32C vectors,
+rem                  start and stop, transmit and receive across the wrap,
+rem                  both rings' exhaustion, a frame over its buffer, bad
+rem                  trailers, the control read's sequence numbers, stale
+rem                  answers, timeouts, retries and notifications
+rem   test_tbt_icm - the firmware connection manager client (src\cm\tbt_icm.c,
+rem                  task 39-A.3): every Alpine Ridge frame ICM-PROTOCOL.md
+rem                  quotes as observed, the bind, plug, approve, unplug,
+rem                  resume and reconciliation sequences, a disconnect inside
+rem                  a 10 s approve, timeouts, retries, the error flag, and
+rem                  the uncaptured Falcon Ridge, Titan Ridge and Ice Lake rows
+rem                  against Linux's structure layouts
+rem   test_tbt_hw  - the hardware profiles, the Ice Lake family's force-power
+rem                  sequence and the connection manager's selection
+rem                  (src\cm\tbt_hw.c, task 39-A.3), and its id table checked
+rem                  against cm_vals.c's for every Intel and AMD id (task
+rem                  39-A.4); every outcome and inert
+rem                  reason
+rem   test_tbt_select - the selection as design record 22 section 3 has it
+rem                  (src\cm\tbt_hw.c, task 40-A.2): every row of its table,
+rem                  every NVM_AUTH_DONE/ICM_EN combination, test (d)'s
+rem                  interface and router versions, and each negative case
+rem                  inert, never the other profile
+rem   test_u4cm    - the USB4 software connection manager (src\cm\tbt_u4cm.c,
+rem                  tasks 40-A.3 and 40-A.8, design record 22 section 14.1)
+rem                  over the fake fabric of u4_fakefab.c: both emulator host
+rem                  models, two domains, USB4 and Thunderbolt 3 device
+rem                  routers, hot plug and unplug in every wait, quick
+rem                  re-plugs, bonding and its fallback, the TMU, the Detect
+rem                  gate, the USB3 handshake, router operations each
+rem                  unsupported, failing or hanging, discovery, holding and
+rem                  cleaning, quarantine, the statement's gating and anchor,
+rem                  links below depth 1, eject, suspend and resume, and the
+rem                  ASM2464 device router's captured quirks (record 22
+rem                  section 6.11)
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
@@ -386,6 +491,65 @@ rem test_own links nothing else: who holds an endpoint's ring across an
 rem interface switch - each step's decision, the one-setting walk - is pure,
 rem and the suite drives it over a modelled controller and pool (task 38.10).
 call :run test_own "test_own.c ..\src\xhci_own.c"
+rem test_cm links nothing else: xhcicm.sys's role choice, its NHI profile
+rem table and its registry values' rules are pure (task 39-A.1).
+call :run test_cm "test_cm.c ..\src\cm\cm_vals.c"
+rem test_tbt_ring, test_tbt_icm and test_tbt_hw are xhcicm.sys's pure core
+rem (src\cm\, roadmap-usb4.md tasks 39-A.2 and 39-A.3, design record 21
+rem section 10.1), driven over the modelled host interface in tbt_fake.h:
+rem the ring alone; the ICM client over the ring it drives; the hardware
+rem profiles and the selection over both, since each profile names its
+rem ICM message row.
+call :run test_tbt_ring "test_tbt_ring.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\cm_vals.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
+rem port readings and the poll are pure, driven over a modelled machine
+rem whose P14s half is the captured configuration space (39-A.5).
+call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
+rem test_tbt_brnum links nothing else: the Windows 98 SE and ME bus
+rem numbering of the bridges below a tunnel port is pure (record 21
+rem section 6.1.1).
+call :run test_tbt_brnum "test_tbt_brnum.c ..\src\cm\tbt_brnum.c"
+rem test_cm_live links nothing else: the host-interface liveness monitor's
+rem states, cadence, recovery and gate are pure (record 21 sections 5.5, 5.6).
+call :run test_cm_live "test_cm_live.c ..\src\cm\cm_live.c"
+rem test_cm_nvlink links nothing else: the stor98 link-state channel's entry
+rem protocol, statement conditions, 9x record and REMOVE_PENDING request
+rem are pure, read back by a modelled receiver (39-A.7, 40-A.7).
+call :run test_cm_nvlink "test_cm_nvlink.c ..\src\cm\cm_nvlink.c"
+rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
+rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
+call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
+rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
+rem record 25 section 10) and the install tool's, for the record's check.
+call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c"
+rem test_trlog links XHCITR's log readers (xhcitr\tr_log.c, design record 25
+rem sections 4.5 and 4.6) and xhcicm.sys's log builder, whose answers it
+rem reads, and holds xhcitr\tr_hcctr.h to src\xhci_counters.h.
+call :run test_trlog "test_trlog.c ..\xhcitr\tr_log.c ..\xhcitr\tr_core.c ..\src\cm\cm_query.c ..\xhciinst\inst_core.c"
+call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+rem test_cm_ports links nothing else: the re-enumeration's own pure half,
+rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
+rem Windows 98's PCI device ids, the bridge filter's snapshot and the
+rem resume hold's bound (39-A.5 driver half, 39-A.8).
+call :run test_cm_ports "test_cm_ports.c ..\src\cm\cm_ports.c"
+rem test_cm_status links the status record's builder alone (design record
+rem 24 section 3), over its own fake configuration space.
+call :run test_cm_status "test_cm_status.c ..\src\cm\cm_status.c"
+rem test_cm_query links the query device's answer builder and the status
+rem record's, whose records it frames (design record 25 section 4).
+call :run test_cm_query "test_cm_query.c ..\src\cm\cm_query.c ..\src\cm\cm_status.c"
+rem test_trpci links xhcicm.sys's PCI answer builder (src\cm\cm_qpci.c) over
+rem modelled buses and XHCITR's reader and decoders of it (xhcitr\tr_pci.c):
+rem the bounds, the capability walk with bad lists, the decoders, 79 columns
+rem (design record 25 sections 3.6 and 4.7, revision 12).
+call :run test_trpci "test_trpci.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src\cm\cm_qpci.c ..\xhciinst\inst_core.c"
+rem test_xhq links xhci98.sys's query answer composer (src\xhci_qry.c,
+rem design record 13 section 8.12) and XHCITR's reader of it and the texts
+rem it makes (xhcitr\tr_log.c, tr_pci.c); the shared default level.
+call :run test_xhq "test_xhq.c ..\src\xhci_qry.c ..\xhcitr\tr_log.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src\cm\cm_query.c ..\xhciinst\inst_core.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

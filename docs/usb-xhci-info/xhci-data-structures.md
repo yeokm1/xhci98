@@ -1497,8 +1497,8 @@ Primary Stream Context Array, and stream rings are one segment each.
 | Doorbell | `DB Stream ID 31:16` names the stream whose ring has work; a stream endpoint is rung once per stream that has a TD to run, and a stopped stream endpoint restarts only for the streams rung | 5.6, 4.12 | to verify: whether the xHC re-arms every stream with a non-empty ring itself after a Stop Endpoint (this driver assumes it does not, and rings each) |
 | Transfer Event | Carries no Stream ID: the TRB Pointer (`DW0/1`) names the TRB, so the stream is the ring holding that address (`XhciStreamFind`). An event with ED = 1 carries an Event Data value instead and names no ring; a zero pointer is the Prime Pipe STALL row below | 6.4.2.1 | the event layout is the "Event TRBs" table above |
 | Set TR Dequeue Pointer | `DW0` new pointer with SCT `3:1` and DCS `0`; `DW2 31:16` Stream ID - 0 on an endpoint without streams, the stream otherwise; legal only with the endpoint Stopped (or Error); one command per stream | 6.4.3.9, 4.6.10 | to verify: that SCT is required (Linux writes 1 for a primary ring) |
-| Reset Endpoint, Stop Endpoint | The endpoint's, not a stream's: every stream stops together, and each stream's partial progress is saved in its Stream Context and kept across Reset Endpoint. So after a halt or an Error only the stream whose own event failed gets a Set TR Dequeue (past its failed TD); every other stream resumes from its saved progress when rung, since a Set TR Dequeue to its oldest unretired TD would replay a partly moved TD. An Error endpoint with no failed stream known has every stream's requests terminated (completed with an error, rings set empty), never replayed | 4.6.8, 4.6.9, 4.12 | to verify against the PDF (Codex review of 31-A.1, round 1, finding 2, cites 4.12 and 4.6.8 for the saved progress) |
-| Prime Pipe STALL | A device that stalls a Prime Pipe transaction halts the endpoint with a STALL Transfer Event whose TRB Pointer and length are 0: no TD and no stream is named. This driver takes it as the endpoint's: Reset Endpoint, CLEAR_FEATURE(ENDPOINT_HALT), every stream's requests completed as stalled, no Set TR Dequeue for a stream that did not fail. A nonzero pointer no stream ring holds is counted unclaimed and assigned to nothing | 4.12 | to verify (as cited by the Codex review, round 1, finding 3) |
+| Reset Endpoint, Stop Endpoint | The endpoint's, not a stream's: every stream stops together, and each stream's partial progress is saved in its Stream Context and kept across Reset Endpoint. So after a halt or an Error only the stream whose own event failed gets a Set TR Dequeue (past its failed TD); every other stream resumes from its saved progress when rung, since a Set TR Dequeue to its oldest unretired TD would replay a partly moved TD. An Error endpoint with no failed stream known has every stream's requests terminated (completed with an error, rings set empty), never replayed | 4.6.8, 4.6.9, 4.12 | to verify against the PDF (the review of 31-A.1 cites 4.12 and 4.6.8 for the saved progress) |
+| Prime Pipe STALL | A device that stalls a Prime Pipe transaction halts the endpoint with a STALL Transfer Event whose TRB Pointer and length are 0: no TD and no stream is named. This driver takes it as the endpoint's: Reset Endpoint, CLEAR_FEATURE(ENDPOINT_HALT), every stream's requests completed as stalled, no Set TR Dequeue for a stream that did not fail. A nonzero pointer no stream ring holds is counted unclaimed and assigned to nothing | 4.12 | to verify (as cited in the review of 31-A.1) |
 | Installing and removing streams | One Configure Endpoint that drops and adds the DCI (4.6.6 forbids an Add on an endpoint that is not Disabled without its Drop), the Endpoint Context carrying the array; removing them is the same command with MaxPStreams 0 and the endpoint's own ring | 4.6.6 | as transcribed in "Which command may set which Slot Context field" for the flags; Linux does the same (`xhci_alloc_streams`, `xhci_free_streams`) |
 | Completion codes | 10 Invalid Stream Type, 34 Invalid Stream ID (Table 6-90 above): a doorbell or context naming a stream the array does not hold | 6.4.5 | as transcribed |
 
@@ -1586,8 +1586,8 @@ page the copy prints) and against the USB 3.2 specification, revision 1.1
 dump drops its arrows. Each row now says what it was verified against;
 "verified" means the value or rule was found printed on the page cited, and
 anything the specification does not say is labelled as this driver's policy
-or as an inference. Codex's first-round reading (round 1 of the Phase 29
-review) is superseded by this transcription where they differ. Where this
+or as an inference. The first reading made in the Phase 29 review is
+superseded by this transcription where they differ. Where this
 section and the PDF disagree, the PDF wins.
 
 ### 10.1 Supported Protocol Capability, USB3 groups and PSI DWORDs (xHCI 7.2)
@@ -1871,8 +1871,7 @@ one 4 KiB page (`XhciPipeIsoFragments`, `hcd_io.c`). So any SuperSpeed or
 SuperSpeedPlus isochronous endpoint whose interval payload exceeds 4096 bytes
 is refused at SELECT_CONFIGURATION or SELECT_INTERFACE
 (`XHCI_PIPE_ESIT_REFUSED`, counted as `superspeed: endpoints refused - ESIT`),
-never admitted and never truncated (Codex review of Phase 29, round 1,
-finding 1). It also refuses one whose interval needs more than four bursts
+never admitted and never truncated (from the Phase 29 review). It also refuses one whose interval needs more than four bursts
 of its packet size and Max Burst (4096 bytes in 512-byte packets at burst 0
 is eight), because TBC is two bits without ETC (4.11.2.3, p.197; round 2,
 finding 2). Lifting the limit means multi-page isochronous packets - several
@@ -2114,8 +2113,8 @@ and more than 15 ports. The bus manages ports 1-14 of it (every hub object has
 14 port objects) - a policy, not a specification limit. A fifteenth port is
 cleared of PORT_POWER at bring-up and any change it reports is read and
 cleared, so it never keeps the status-change endpoint completing; a USB 2.0
-hub's ports above 14 are treated the same (Codex review of 034a119, finding
-3).
+hub's ports above 14 are treated the same (from the review of
+034a119).
 
 ### 11.2 The class requests (USB 3.2 10.16.2, Tables 10-7 and 10-8)
 
