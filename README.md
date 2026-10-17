@@ -32,7 +32,8 @@ The same enclosure on Windows 98 SE with the same drivers: CrystalDiskMark seque
   [![omores video](https://img.youtube.com/vi/7SOyvvC7P4E/hqdefault.jpg)](https://www.youtube.com/watch?v=7SOyvvC7P4E)
 
 - My demo video: https://www.youtube.com/watch?v=AU77f9CSbYc
-- Blog post: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driver/
+- Blog post xHCI98v1: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driver/
+- Blog post xHCI98v2 v3: https://yeokhengmeng.com/2026/10/xhci98-usb3-usb4/
 
 * Related projects: 
   * Stor98 NVME driver: https://github.com/yeokm1/stor98
