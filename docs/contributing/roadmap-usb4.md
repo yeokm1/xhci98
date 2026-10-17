@@ -627,9 +627,12 @@ half read as designed under both connection managers; ME's S3 readings
 
 - [ ] S3W2K.1 the four readings on a Windows 2000 machine with a Thunderbolt or USB4 controller that resumes from S3, under each connection manager the machine has
 
-## Planned - One Port's Tunnel Leaving the Other Ports' Drives Alone on 98 SE and ME
+## Planned - More Than One NVMe Drive on Windows 98 SE and ME
 
-Goal: a tunnel coming up on one port publishes a fresh link-state entry
+Goal: Windows 98 SE and ME keep every NVMe drive mounted when more than
+one is attached: two enclosures on two ports, a dock or enclosure with two
+drives, a daisy chain, and an internal NVMe beside a tunnelled one. First
+step: a tunnel coming up on one port publishes a fresh link-state entry
 (a new generation) only for that port's NVMe drive, so Stor98 keeps every
 other port's mounted drive.
 
@@ -644,3 +647,4 @@ are not expected to meet it; the owner published `3.0.0.0` with it open.
 Task 40-V.1 is ticked when this is fixed and U.11 read again.
 
 - [ ] GEN1.1 `fresh` only for the member whose tunnel changed (the tunnel-up action and the U4 up-hook), never on a resync; host tests for two members; U.11 on 98 SE and ME with an NVMe on each tunnel bus, and on 2000 as a regression
+- [ ] GEN1.2 legs on 98 SE and ME with more than one NVMe drive at once, each written and compared while the others are plugged and unplugged: two enclosures on two ports, two drives behind one enclosure's or dock's switch, a drive on each router of a daisy chain, and an internal NVMe under Stor98 beside a tunnelled one; what Stor98's side needs is tracked in its own plan (owner, 2026-10-17)
