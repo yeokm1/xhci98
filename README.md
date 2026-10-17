@@ -19,6 +19,10 @@ This is a solo human's project with AI assistance, so bugs are not unexpected. P
 
 My 2020 ThinkPad P14s Gen 1 (Comet Lake xHCI, no EHCI) on Windows 98 SE, with the 1.x driver: a 7-port hub, USB Ethernet, USB Audio, a USB-to-SATA bridge, two flash drives and a mouse, all on the xHCI controller.
 
+<img src="images/xhci98-tb3-nvme-98se.jpg" width="400"> <img src="images/xhci98-tb3-nvme-win7.jpg" width="400">
+
+The same P14s with an ORICO USB4 NVMe enclosure on its Thunderbolt 3 port, through `xhcicm.sys` and [Stor98](https://github.com/yeokm1/stor98). CrystalDiskMark sequential: about 204 MB/s read and 241 MB/s write on Windows 98 SE (left), where 98 SE's own storage path is the limit, and 1151 MB/s read and 1013 MB/s write on Windows 7 (right).
+
 - Video by [Omores](https://www.youtube.com/@O_mores) featuring this driver:
 
   [![omores video](https://img.youtube.com/vi/7SOyvvC7P4E/hqdefault.jpg)](https://www.youtube.com/watch?v=7SOyvvC7P4E)
