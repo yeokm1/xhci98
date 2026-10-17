@@ -1,0 +1,24 @@
+==============================================================================
+                          x h c i 9 8   3.0.0.0
+           THIRD-PARTY NOTICES FOR XHCIINST.EXE AND XHCIIN64.EXE
+==============================================================================
+
+XHCIINST.EXE and XHCIIN64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+
+They are not only this project's code. XHCIINST.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCIIN64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs, which is what makes each tool a single file. You can see
+it in the import tables, which name only KERNEL32.dll and ADVAPI32.dll and
+no C runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient. The tools call Windows' own setup routines at run time; they
+carry no Microsoft setup program and this package carries no Microsoft file.
