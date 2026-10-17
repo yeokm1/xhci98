@@ -1478,3 +1478,38 @@ certificate not imported (each read before and after):
 |---|---|---|
 | Vista x64 | update from 2.4.0.0 (run-40's `pkg24`, drivers identical to `releases/2.4.0.0`) | pass: `INSTALL.BAT` listed both devices "update (an older release)", staged `xhci98.inf` and `xhciuas.inf`, one publisher prompt per INF, updated the controller and root hub, exit 3; **after the restart** `xhci98` running, both devices 3.0.0.0 at problem 0, the installed `xhci98.sys` the package's (SHA-1), a stick copy and compare clean; a second run read both "current (this release)", the local copy "this package already", both INFs "staged already", "No changes were made.", exit 0. The 2.4.0.0 local copy and store packages stay until an uninstall (record 23 D7) |
 | 7 x64 | `INSTALL.BAT` with Thunderbolt answered Y on `tb3-alpine-ridge`, then `/uninstall` with the ASM2464 enclosure plugged | pass: the install exit 3 (four publisher prompts), after the restart `xhci98` and `xhcicm` running and the tunnel bridge filtered; `/uninstall` and REMOVE took `xhcicm` off the tunnel port and gave it back to `machine.inf`, removed the root hubs, the Thunderbolt and both xHCI controllers' devnodes, the four INFs, the services and their files, the tray's Run value and the local copies, exit 3. After the restart no project service (1060), file, INF, driver-store package, `%windir%\XHCI98` or `C:\XHCI98`; no `UpperFilters` under `Enum\PCI`, the bridge on `pci` at problem 0; `usbd.sys` and `usbui.dll` present; a stick on Windows' own UHCI driver copies and compares clean; the xHCI and Thunderbolt controllers back at Code 28, as on the base |
+
+## A Thunderbolt 3 dock behind a USB4 host on the signed `3.0.0.0` (tasks 40-A.8 and EMU.1)
+
+**Windows 2000, the signed 3.0.0.0** (2026-10-17, development host A, `vm\usb4\bin-2a893ea` with its SHA-256
+checked, the TS3 Plus model `usb4-device ...,dialect=tb3` behind `usb4-host profile=usb4-generic` on i440FX,
+the command line of `usb4-emu`'s `XHCI98-HANDOFF.md` section 7.1 with `acpi=off`; an overlay of
+`win2k-xonly.img`; the release asset with the gated `qemu` `xhcicm.sys` of the same commit copied over the
+installed one for its log; Stor98 `0.4.0.0` on the NVMe). `INSTALL /defaults /yes /nopause /thunderbolt` with
+the dock attached staged the four INFs, put the filter on the tunnel bridge and ended "Please restart Windows
+now", exit 3. The NVMe's Found New Hardware came up during the install with no Refresh, and Stor98 was installed
+from it. At power-on with the dock attached: `u4.drom.unused=00000620` (the DROM read by bit-bang, CRC good),
+`u4.router.up=808615D3`, `u4.pcie.up=00010809` and `u4.router.kind=01000502` (USB4 Version `02h`, major 0,
+Thunderbolt 3, bonded). The trace shows the enumeration write of ROUTER_CS_1 `0x0602C005` -> `0x0612C105`,
+the upstream adapter 1 taken from the read's response. XHCITR named the dock "QEMU USB4 NVMe Enclosure",
+Thunderbolt 3, 8086:15D3, "PCIe up, USB3 none, DisplayPort none". F: was readable and a written file compared
+clean. A surprise unplug brought the Unsafe Removal dialog. The re-plug (generation 2) brought F: back with no
+Refresh; a file copied about 20 s before that unplug was lost to the volume's write-back cache, as with
+`WRITE4.BIN` in run-40. Windows' Safely Remove gave "Safe To Remove Hardware" (`u4.eject=00000100`, the trace
+`PCIe tunnel down reason 1`); the unplug after it brought no dialog, and the re-plug brought F: back with its
+file. `INSTALL /eject 1` gave "The PCIe tunnel was closed. You can now unplug the device.", exit 0. A cold boot
+without the dock followed by a hot plug at the desktop mounted F: by itself. Every devnode was at Problem code 0.
+**98 SE**, the same day on the final package (the gold image; `INSTALL ... /thunderbolt`, then the NHI's wizard
+from `C:\XHCI98`, Stor98 from `release-x86`, and the controller's Update Driver): the NVMe's wizard came up at
+once with no Refresh. At power-on: the same four log lines and E: at the desktop. XHCITR's Safely Remove gave
+"Windows has stopped QEMU NVMe Ctrl (E:)", and the unplug and re-plug brought E: back with its file.
+
+Verdict for the coordinator
+---------------------------
+- 40-A.8: can be ticked. Its last owed leg, Windows 2000, passes on the signed 3.0.0.0, and 98 SE passes again on
+  the same package.
+- 40-V.2, the router part: can be ticked. A Thunderbolt 3 router behind a USB4 host on 2000 passes: PCIe tunnel,
+  NVMe through the tunnel-port filter with no Refresh, unplug and re-plug, and the safe eject. S3 is still owed
+  under 40-V.2 and was not read here, so tick only the router clause unless S3 is closed elsewhere.
+- EMU.1: can be ticked. The 2000 leg it owed passes on the emulator's TB3 dock preset on usb4-generic (i440FX, 7.1
+  command line), with the PCIe tunnel through the legacy router and the DROM by bit-bang.
