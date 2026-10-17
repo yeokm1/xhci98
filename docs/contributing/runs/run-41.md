@@ -1440,3 +1440,30 @@ Evidence: `E:\xhci98-vm\tr-loglevel\` - `shots\lv7-*` and `lv98-*`,
   connection manager's discovery reads. It was stopped; the next boots
   (after Windows 7's Startup Repair) ran normally with the same driver.
   Not reproduced; no cause read.
+
+## The signed `3.0.0.0` asset on Vista x64 and 7 x64 (task X64.1)
+
+The owner's signed cut of `3.0.0.0` (`releases/3.0.0.0` at `8ff3b3e0`;
+the upload set `xhci98-3.0.0.0.zip`, SHA-256
+`b6b611d6cbfa1975706eb31e2b59ab553ef96580d2db6286d5d156081a6eaf47`), read
+2026-10-17 in QEMU on development host A, the `tb3-alpine-ridge` model with
+the ASM2464 enclosure model, test-signing on, no F8, the certificate not
+imported (as the release notes say):
+
+| System | Leg | Result |
+|---|---|---|
+| 7 x64 | `INSTALL.BAT`, Thunderbolt answered Y | pass: one "Windows can't verify the publisher" prompt per INF, exit 3, restart; `xhci98` and `xhcicm` running, no Code 52; the files 3.0.0.0 with the project test signature; the driver tab reads "Not digitally signed" (an embedded signature, no catalog) |
+| 7 x64 | a USB stick | pass: copy and compare, unplug and re-plug |
+| 7 x64 | Thunderbolt 3 hot plug, Stor98 `0.4.0.0` by Have Disk from `release-x64\` | pass: the approval balloon, the drive with no Refresh, write and compare; Safely Remove Hardware then unplug and re-plug, compare clean; a surprise unplug during a copy loop ends the copies with no crash, and after a re-plug compare and chkdsk are clean |
+| 7 x64 | XHCITR64 as a standard user | pass: the Thunderbolt tree, and its Safely Remove stops the drive |
+| Vista x64 | `INSTALL.BAT` | pass: exit 4 with a Found New Hardware wizard open, as documented, then exit 3; both drivers running. The remaining legs were stopped by the owner, who accepted Vista x64 |
+
+Two readings, not the driver's: the only device with a problem on both
+guests is the emulator's `ACPI\QEMU0002` (Code 28, no driver); and
+Windows' Safely Remove list offers both xHCI controllers and the
+Thunderbolt controller for eject, as the emulator marks its root bus
+hot-pluggable. Not investigated, by the owner's decision: on 7 x64,
+test-signing turned off after this install, the next start went to
+Startup Repair (every driver of the package and Stor98 is demand-start,
+and the guest's boot disk is not behind a tunnel bridge); the guest was
+stopped before Startup Repair finished.
