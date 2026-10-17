@@ -25,7 +25,7 @@ CrystalDiskMark sequential on 1151 MB/s read and 1013 MB/s write on Windows 7 wi
 
 <img src="images/xhci98-tb3-nvme-98se.jpg" width="800">
 
-CrystalDiskMark sequential about 204 MB/s read and 241 MB/s write on Windows 98 SE with the same drivers showing that Win98 storage stack is the bottleneck here.
+The same enclosure on Windows 98 SE with the same drivers: CrystalDiskMark sequential about 210 MB/s read and 256 MB/s write. Windows 98's own storage stack, not the Thunderbolt link, is the bottleneck here.
 
 - Video by [Omores](https://www.youtube.com/@O_mores) featuring this driver in its earlier USB 2.0 days:
 
@@ -33,6 +33,10 @@ CrystalDiskMark sequential about 204 MB/s read and 241 MB/s write on Windows 98 
 
 - My demo video: https://www.youtube.com/watch?v=AU77f9CSbYc
 - Blog post: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driver/
+
+* Related projects: 
+  * Stor98 NVME driver: https://github.com/yeokm1/stor98
+  * usb4-emu qemu-port: https://github.com/yeokm1/usb4-emu
 
 ## Contents
 
@@ -79,7 +83,7 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 ### Installing, approving and removing
 
 - **Install:** run `INSTALL.BAT` and answer Y to "Install Thunderbolt 3 / USB4 support?" (see [Install with INSTALL.BAT](#install-with-installbat)). On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`nt\xhcicmf.inf`), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when asked: on Windows 2000 the first install of the filter needs that restart before the controller is used.
-- **Windows 98 SE and ME:** `INSTALL.BAT` prints the remaining steps: update the controller's entry (an unknown PCI device) from the driver directory. No filter is needed.
+- **Windows 98 SE and ME:** `INSTALL.BAT` prints the remaining steps: update the controller's entry (an unknown PCI device or PCI System Peripheral) from the driver directory. No filter is needed.
 - **Names:** the controller shows under the names in the table above. On Windows 2000 to 7 its PCI ports show as "xHCI98 Thunderbolt PCI Bridge" or "xHCI98 USB4 PCI Bridge": still Windows' own PCI bridges, with the filter on them.
 - **Approval:** by default (`XhciCmApprove` `1`) every device plugged into the port is approved at once. **A device with a PCI Express tunnel can read and write all of the machine's memory**, and these systems cannot fence it off. Where people you do not trust can reach the port, set `XhciCmApprove` to `0`: then only devices the BIOS connected at power-on work. Nothing is remembered: a re-plugged device is approved again by the same rule.
 
@@ -203,7 +207,7 @@ The established route: the INF install through Device Manager (Update Driver / H
 
 1. Put the unzipped package where the machine can read it (floppy, CD, shared folder).
 2. Install the prerequisites above. On a fresh Windows 98 SE the order is NUSB, then xhci98, then the UAS disk.
-3. In Device Manager, find the unrecognised xHCI controller (yellow mark, usually under "Other devices", e.g. "Universal Serial Bus Controller").
+3. In Device Manager, find the unrecognised xHCI controller (yellow mark, usually under "Other devices", e.g. "Universal Serial Bus Controller" or "PCI System Peripheral").
 4. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> `release-x86\` or `release-x64\`.
 5. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98 USB 3.x Root Hub" beneath. Windows 98 SE may ask for its CD for `usbd.sys`. Reboot if asked.
 6. Plug in a UAS disk; when the wizard asks for "xHCI98 USB Attached SCSI Storage", give it the same directory. No restart is needed.
