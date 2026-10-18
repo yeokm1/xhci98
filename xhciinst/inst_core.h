@@ -1169,4 +1169,108 @@ INST_U32 inst_text_lines(const char *text, INST_U32 cols);
 INST_U32 inst_page_cols(INST_U32 widthDlu);
 INST_U32 inst_page_rows(INST_U32 heightDlu);
 
+/* ---- Stor98, the bundled NVMe driver (record 26 sections 5.6 and 6.3) ---- */
+
+/* Stor98's settings as its readme.txt ("SETTINGS") gives them at the
+ * version the package bundles (STOR98_TABLE_VERSION): the 98 SE and ME
+ * value name, the 2000-to-7 DriverParameter key, the unit, the defaults,
+ * the range. The host suite holds every row to that readme's table
+ * (test\stor98-settings.txt, a copy make-release.ps1 compares with the
+ * bundled readme), so a Stor98 release that renames or retypes a value
+ * fails the build rather than the user. */
+#define INST_S98_TABLE_VERSION  "0.4.0.0"
+
+#define INST_S98_WORDS      0   /* a word of a list (StorWriteThrough)       */
+#define INST_S98_NUMBER     1   /* a decimal number in a range               */
+
+#define INST_S98_WRITETHROUGH   0
+#define INST_S98_POLLMODE       1
+#define INST_S98_MAXTRANSFERKB  2
+#define INST_S98_POLLBUSYUS     3
+#define INST_S98_POLLIDLEMS     4
+#define INST_S98_POLLSPINUS     5
+#define INST_S98_GONE           6
+#define INST_S98_IDLE           7
+#define INST_S98_COUNT          8
+
+#define INST_S98_WORDS_MAX      4
+
+typedef struct _INST_S98_VALUE {
+    const char *Name9x;     /* the value under Services\stor98 (98 SE, ME);
+                               NULL: not settable there                    */
+    const char *KeyNt;      /* the DriverParameter key, without '='      */
+    int Kind;               /* INST_S98_*                                */
+    int Asked;              /* on the page (1) or behind Advanced (0)     */
+    const char *Unit;       /* "KiB", "us", "ms" or ""                   */
+    const char *Def9x;      /* the built-in default on 98 SE and ME       */
+    const char *DefNt;      /* ... and on 2000 to 7                      */
+    INST_U32 Lo;            /* a number's range; Step its multiple        */
+    INST_U32 Hi;
+    INST_U32 Step;
+    int ZeroOk;             /* 0 is a value of its own (Zero says what)   */
+    const char *Zero;
+    const char *Words[INST_S98_WORDS_MAX];
+    const char *Means[INST_S98_WORDS_MAX];   /* a word's or a number's sense */
+    const char *What;       /* one line: what the setting does            */
+} INST_S98_VALUE;
+
+extern const INST_S98_VALUE instS98Values[INST_S98_COUNT];
+
+/* 1 when row i is settable on this system (the NT-only two are not on
+ * 98 SE and ME). */
+int inst_s98_applies(int i, int nt);
+
+/* The built-in default as text ("auto", "512"), and its one-line sense
+ * for the system ("cacheoff on ME, off elsewhere"); me: Windows ME. */
+const char *inst_s98_default(int i, int nt);
+void inst_s98_default_text(int i, int nt, int me, char *out, size_t cap);
+
+/* A value typed or chosen for row i, checked (the installer offers only
+ * what the readme admits, rather than leaving the driver to clamp or
+ * refuse): 1 with the canonical text in out (a word in lower case, a
+ * number in decimal), 0 refused with why. */
+int inst_s98_check(int i, int nt, const char *text, char *out, size_t cap,
+                   const char **why);
+
+/* The 2000-to-7 DriverParameter string: lower-case key=value pairs
+ * separated by semicolons. get: 1 with the value of key in out, 0 when the
+ * key is not there. set: the string with key's pair replaced in place (its
+ * position kept), appended when absent, or removed when value is NULL;
+ * every pair it does not know kept, in the order found, empty segments
+ * dropped. 1, or 0 when the result would not fit cap. */
+int inst_s98_param_get(const char *param, const char *key, char *out,
+                       size_t cap);
+int inst_s98_param_set(const char *param, const char *key, const char *value,
+                       char *out, size_t cap);
+
+/* A row's "now" as the page shows it: "not set (the built-in default is
+ * <d>)" or "set: <value>"; state 1 set, 0 not set, -1 unreadable. */
+void inst_s98_now_text(int i, int nt, int me, int state, const char *value,
+                       char *out, size_t cap);
+
+/* The install record's two rules for a device first bound to Stor98 by
+ * this installer (record 26 section 6.3, "The record"). By the
+ * installer's own call or the helper's: the reading before showed no
+ * Stor98 (before: 0 no driver, 1 another driver, 2 Stor98), the reading
+ * after shows it. During a settle (Windows bound it from the staged INF):
+ * newly bound, and on NT the driver key's InfPath names an INF this
+ * installer staged, on 98 SE and ME no Stor98 at the baseline. */
+int inst_s98_owned_by_call(int before, int afterS98);
+int inst_s98_owned_by_settle(int before, int afterS98, int nt,
+                             int infStaged, int preExisting);
+
+/* The uninstall's last Stor98 step: the service, its files and the
+ * recorded settings go only when no devnode is bound to Stor98 any more
+ * and no Stor98 was there before this installer's first run. */
+int inst_s98_service_removable(int devnodesLeft, int preExisting);
+
+/* An update's precautions (Stor98's readme, "Updating"): on 98 SE and ME
+ * nothing may be using the drive's volume and the machine is shut down,
+ * not restarted; on 2000 to 7 an update of a drive behind a tunnel under
+ * this package's connection manager is "updated, awaiting reconnection"
+ * whatever the first read-back says (record 24 section 5.2). */
+int inst_s98_cold_start(int nt);
+int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
+                             int behindTunnel);
+
 #endif /* INST_CORE_H */

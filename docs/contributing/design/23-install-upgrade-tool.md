@@ -766,9 +766,12 @@ its ports. So step 8 runs per INF, repeated while new targets appear (at
 most four passes): before each pass the system must settle, and the
 devices are read and planned again, with every safeguard of sections 5.4
 and 5.5 applied afresh; a timeout or a failed question stops the run with
-"finish or cancel the windows Windows shows, then run INSTALL.BAT again"
-(exit 4), and the next run continues from what it finds - a root hub
-whose wizard was cancelled is a device with no driver, installed then.
+"finish the windows Windows shows (Next through Finish, even when they
+find no driver; never cancel one), then run INSTALL.BAT again" (exit 4),
+and the next run continues from what it finds - a root hub whose wizard
+was finished with no driver is a device with no driver, installed then
+(on 98 SE a cancelled wizard takes the devnode away until the next start:
+record 27 section 5.1).
 
 **The settle** (read on the 2000 leg, 2026-10-15: the controller updated
 from `2.3.1.0`, a single `CMP_WaitNoPendingInstallEvents` answered "none"
@@ -812,8 +815,9 @@ set and the run ends with exit 4 and "run INSTALL.BAT again".
   the wizard waits for the user, and says so; answered, the run goes on
   and finds the devices current. **A timeout, or a failed question, stops
   the run** (exit 4) with
-  "finish or cancel the Found New Hardware windows, then run INSTALL.BAT
-  again": an installation in progress is not the tool's to compete with
+  "finish the Found New Hardware windows (Next through Finish, never
+  Cancel), then run INSTALL.BAT again": an installation in progress is not
+  the tool's to compete with
   (Microsoft's "Checking for In-Progress Installations"). The second run
   finds the new devnodes installed by the wizard, or without a driver if
   it was cancelled, and installs those.

@@ -2731,6 +2731,9 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
                                   -HeaderPath (Join-Path $repo "src\cm\stor98cm.h") `
                                   -Allow:$Stor98AllowInterfaceMismatch
     if ($null -ne $stor98) {
+        Assert-Stor98SettingsTable -Dir $stor98.Dir -Version $stor98.Version
+        Write-Ok ("Stor98 {0}: its readme's SETTINGS table is the one the installer's Stor98 rows were checked against" -f `
+            $stor98.Version)
         Write-Ok ("Stor98 {0}: SHA256SUMS.txt is the pinned {1}, and every file matches it" -f `
             $stor98.Version, $stor98.SumsSha256)
         if ($stor98.Overridden) {

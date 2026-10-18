@@ -4596,3 +4596,362 @@ INST_U32 inst_page_rows(INST_U32 heightDlu)
 {
     return heightDlu / 8;
 }
+
+/* ======================================================================== */
+/* Stor98, the bundled NVMe driver (record 26 sections 5.6 and 6.3)          */
+/* ======================================================================== */
+
+/* Copied from Stor98's readme.txt, "SETTINGS", at INST_S98_TABLE_VERSION;
+ * test_inst holds each row to test\stor98-settings.txt, that table. */
+const INST_S98_VALUE instS98Values[INST_S98_COUNT] = {
+    { "StorWriteThrough", "writethrough", INST_S98_WORDS, 1, "",
+      "auto", "auto", 0UL, 0UL, 0UL, 0, NULL,
+      { "auto", "off", "cacheoff", "fua" },
+      { "the default: cacheoff on ME, off elsewhere",
+        "leaves the drive as it is",
+        "turns the drive's write cache off (fua if it refuses)",
+        "marks every write Force Unit Access" },
+      "how writes reach the drive's media" },
+    { "StorPollMode", "pollmode", INST_S98_NUMBER, 1, "",
+      "0", "0", 0UL, 1UL, 1UL, 0, NULL,
+      { NULL, NULL, NULL, NULL },
+      { "poll only without an interrupt", "always poll", NULL, NULL },
+      "when the driver polls the controller for completed requests" },
+    { "StorMaxTransferKB", "maxtransferkb", INST_S98_NUMBER, 0, "KiB",
+      "512", "256", 64UL, 512UL, 4UL, 0, NULL,
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "the largest request Windows sends the driver" },
+    { "StorPollBusyUs", "pollbusyus", INST_S98_NUMBER, 0, "us",
+      "1000", "1000", 1000UL, 100000UL, 1UL, 1, "the default",
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "the polling interval while requests are outstanding" },
+    { "StorPollIdleMs", "pollidlems", INST_S98_NUMBER, 0, "ms",
+      "1000", "1000", 100UL, 60000UL, 1UL, 1, "no polling when idle",
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "the polling interval while the drive is idle" },
+    { "StorPollSpinUs", "pollspinus", INST_S98_NUMBER, 0, "us",
+      "0", "500", 0UL, 500UL, 1UL, 0, NULL,
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "how long to check for a completion right after a request" },
+    { NULL, "gone", INST_S98_NUMBER, 0, "ms",
+      NULL, "5000", 1UL, 600000UL, 1UL, 0, NULL,
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "how long held requests wait for proof the drive is gone" },
+    { NULL, "idle", INST_S98_NUMBER, 0, "ms",
+      NULL, "1000", 10UL, 999999999UL, 1UL, 0, NULL,
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "the write-idle time before a flush" }
+};
+
+int inst_s98_applies(int i, int nt)
+{
+    if (i < 0 || i >= INST_S98_COUNT) {
+        return 0;
+    }
+    return nt ? instS98Values[i].KeyNt != NULL
+              : instS98Values[i].Name9x != NULL;
+}
+
+const char *inst_s98_default(int i, int nt)
+{
+    if (!inst_s98_applies(i, nt)) {
+        return "";
+    }
+    return nt ? instS98Values[i].DefNt : instS98Values[i].Def9x;
+}
+
+void inst_s98_default_text(int i, int nt, int me, char *out, size_t cap)
+{
+    const INST_S98_VALUE *v;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (!inst_s98_applies(i, nt)) {
+        return;
+    }
+    v = &instS98Values[i];
+    inst_cat(out, cap, inst_s98_default(i, nt));
+    if (i == INST_S98_WRITETHROUGH) {
+        /* auto is a word for two behaviours: say which runs here. */
+        inst_cat(out, cap, me ? " (here: cacheoff)" : " (here: off)");
+    } else if (v->Unit[0] != '\0') {
+        inst_cat(out, cap, " ");
+        inst_cat(out, cap, v->Unit);
+    }
+}
+
+/* The range's top on this system: the transfer size is bounded by its own
+ * default, which differs. */
+static INST_U32 inst_s98_hi(int i, int nt)
+{
+    if (i == INST_S98_MAXTRANSFERKB) {
+        return nt ? 256UL : 512UL;
+    }
+    return instS98Values[i].Hi;
+}
+
+int inst_s98_check(int i, int nt, const char *text, char *out, size_t cap,
+                   const char **why)
+{
+    const INST_S98_VALUE *v;
+    char t[32];
+    INST_U32 n;
+    INST_U32 hi;
+    int k;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (why != NULL) {
+        *why = NULL;
+    }
+    if (!inst_s98_applies(i, nt)) {
+        if (why != NULL) {
+            *why = "not a setting of Stor98 on this system";
+        }
+        return 0;
+    }
+    v = &instS98Values[i];
+    if (text == NULL || strlen(text) >= sizeof(t) || text[0] == '\0') {
+        if (why != NULL) {
+            *why = "no value";
+        }
+        return 0;
+    }
+    inst_copy(t, text, sizeof(t));
+    inst_trim(t);
+    if (v->Kind == INST_S98_WORDS) {
+        for (k = 0; k < INST_S98_WORDS_MAX && v->Words[k] != NULL; k++) {
+            if (inst_eq(t, v->Words[k])) {
+                inst_copy(out, v->Words[k], cap);
+                return 1;
+            }
+        }
+        if (why != NULL) {
+            *why = "not one of auto, off, cacheoff, fua";
+        }
+        return 0;
+    }
+    for (k = 0; t[k] != '\0'; k++) {
+        if (t[k] < '0' || t[k] > '9') {
+            if (why != NULL) {
+                *why = "not a decimal number";
+            }
+            return 0;
+        }
+    }
+    if (!inst_number(t, &n)) {
+        if (why != NULL) {
+            *why = "not a decimal number";
+        }
+        return 0;
+    }
+    hi = inst_s98_hi(i, nt);
+    if (!(n == 0UL && v->ZeroOk) &&
+        (n < v->Lo || n > hi || (v->Step > 1UL && n % v->Step != 0UL))) {
+        if (why != NULL) {
+            *why = "outside the range Stor98's readme gives";
+        }
+        return 0;
+    }
+    out[0] = '\0';
+    inst_cat_number(out, cap, n);
+    return 1;
+}
+
+/* The next pair of a DriverParameter string from *p: its bounds, or 0 at
+ * the end. Empty segments are skipped. */
+static int inst_s98_pair(const char **p, const char **start, size_t *len)
+{
+    const char *s = *p;
+    const char *e;
+
+    while (*s == ';') {
+        s++;
+    }
+    if (*s == '\0') {
+        *p = s;
+        return 0;
+    }
+    e = strchr(s, ';');
+    if (e == NULL) {
+        e = s + strlen(s);
+    }
+    *start = s;
+    *len = (size_t)(e - s);
+    *p = e;
+    return 1;
+}
+
+/* 1 when the pair [s, s+len) is key's: "key=" at its start, whatever the
+ * case and spaces around the key. */
+static int inst_s98_pair_is(const char *s, size_t len, const char *key,
+                            const char **value)
+{
+    size_t kl = strlen(key);
+    size_t i = 0;
+
+    while (i < len && s[i] == ' ') {
+        i++;
+    }
+    if (len - i < kl || !inst_eqn(s + i, key, kl)) {
+        return 0;
+    }
+    i += kl;
+    while (i < len && s[i] == ' ') {
+        i++;
+    }
+    if (i >= len || s[i] != '=') {
+        return 0;
+    }
+    if (value != NULL) {
+        *value = s + i + 1;
+    }
+    return 1;
+}
+
+int inst_s98_param_get(const char *param, const char *key, char *out,
+                       size_t cap)
+{
+    const char *p = param != NULL ? param : "";
+    const char *s;
+    const char *v;
+    size_t len;
+    size_t n;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    while (inst_s98_pair(&p, &s, &len)) {
+        if (inst_s98_pair_is(s, len, key, &v)) {
+            n = len - (size_t)(v - s);
+            if (n + 1 > cap) {
+                return 0;
+            }
+            memcpy(out, v, n);
+            out[n] = '\0';
+            inst_trim(out);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_s98_param_set(const char *param, const char *key, const char *value,
+                       char *out, size_t cap)
+{
+    const char *p = param != NULL ? param : "";
+    const char *s;
+    size_t len;
+    size_t n = 0;
+    int done = 0;
+    char pair[64];
+    size_t pl;
+
+    if (cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    pair[0] = '\0';
+    if (value != NULL) {
+        inst_cat(pair, sizeof(pair), key);
+        inst_cat(pair, sizeof(pair), "=");
+        inst_cat(pair, sizeof(pair), value);
+        for (pl = 0; pair[pl] != '='; pl++) {
+            if (pair[pl] >= 'A' && pair[pl] <= 'Z') {
+                pair[pl] = (char)(pair[pl] - 'A' + 'a');
+            }
+        }
+    }
+    pl = strlen(pair);
+    while (inst_s98_pair(&p, &s, &len)) {
+        const char *put = s;
+        size_t putLen = len;
+        if (inst_s98_pair_is(s, len, key, NULL)) {
+            if (done || value == NULL) {
+                /* A second pair of the key, or the key removed. */
+                continue;
+            }
+            put = pair;
+            putLen = pl;
+            done = 1;
+        }
+        if (n + (n ? 1 : 0) + putLen + 1 > cap) {
+            out[0] = '\0';
+            return 0;
+        }
+        if (n) {
+            out[n++] = ';';
+        }
+        memcpy(out + n, put, putLen);
+        n += putLen;
+        out[n] = '\0';
+    }
+    if (!done && value != NULL) {
+        if (n + (n ? 1 : 0) + pl + 1 > cap) {
+            out[0] = '\0';
+            return 0;
+        }
+        if (n) {
+            out[n++] = ';';
+        }
+        memcpy(out + n, pair, pl);
+        n += pl;
+        out[n] = '\0';
+    }
+    return 1;
+}
+
+void inst_s98_now_text(int i, int nt, int me, int state, const char *value,
+                       char *out, size_t cap)
+{
+    char d[48];
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (state < 0) {
+        inst_cat(out, cap, "cannot be read");
+        return;
+    }
+    if (state == 0 || value == NULL) {
+        inst_s98_default_text(i, nt, me, d, sizeof(d));
+        inst_cat(out, cap, "not set (the built-in default is ");
+        inst_cat(out, cap, d);
+        inst_cat(out, cap, ")");
+        return;
+    }
+    inst_cat(out, cap, "set: ");
+    inst_cat(out, cap, value);
+}
+
+int inst_s98_owned_by_call(int before, int afterS98)
+{
+    return before != 2 && afterS98;
+}
+
+int inst_s98_owned_by_settle(int before, int afterS98, int nt,
+                             int infStaged, int preExisting)
+{
+    if (before == 2 || !afterS98) {
+        return 0;
+    }
+    return nt ? infStaged : !preExisting;
+}
+
+int inst_s98_service_removable(int devnodesLeft, int preExisting)
+{
+    return !devnodesLeft && !preExisting;
+}
+
+int inst_s98_cold_start(int nt)
+{
+    return !nt;
+}
+
+int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
+                             int behindTunnel)
+{
+    return nt && updatedOk && ownCm && behindTunnel;
+}

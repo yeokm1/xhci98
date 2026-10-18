@@ -2826,6 +2826,218 @@ static void test_page_texts(void)
     CHECK(inst_page_text(9999)[0] == '\0', "no such text");
 }
 
+/* The block of the readme's table that row i is: from the line naming it
+ * to the next row's first line. */
+static int s98_block(const char *table, int i, char *out, size_t cap)
+{
+    const INST_S98_VALUE *v = &instS98Values[i];
+    char head[48];
+    const char *s;
+    const char *e;
+    const char *p;
+    size_t n;
+
+    if (v->Name9x != NULL) {
+        strcpy(head, "  ");
+        strcat(head, v->Name9x);
+        strcat(head, " ");
+    } else {
+        strcpy(head, "  (NT only) ");
+        strcat(head, v->KeyNt);
+        strcat(head, "=");
+    }
+    s = strstr(table, head);
+    if (s == NULL) {
+        return 0;
+    }
+    /* The block ends at the next line that starts a row: two spaces and a
+     * letter or '(' in column 3. */
+    e = s + 1;
+    for (;;) {
+        p = strchr(e, '\n');
+        if (p == NULL) {
+            e = s + strlen(s);
+            break;
+        }
+        e = p + 1;
+        if (e[0] == ' ' && e[1] == ' ' &&
+            ((e[2] >= 'A' && e[2] <= 'Z') || e[2] == '(')) {
+            break;
+        }
+        if (e[0] == '\0') {
+            break;
+        }
+    }
+    n = (size_t)(e - s);
+    if (n + 1 > cap) {
+        return 0;
+    }
+    memcpy(out, s, n);
+    out[n] = '\0';
+    return 1;
+}
+
+static int has_text(const char *block, const char *text)
+{
+    return text == NULL || strstr(block, text) != NULL;
+}
+
+static void test_s98(void)
+{
+    char *table = load("stor98-settings.txt");
+    char block[2048];
+    char t[256];
+    char w[64];
+    const char *why;
+    int i;
+
+    /* Every row against Stor98's own table (record 26 section 5.6). */
+    CHECK(table != NULL, "test\\stor98-settings.txt, Stor98's readme table");
+    for (i = 0; table != NULL && i < INST_S98_COUNT; i++) {
+        const INST_S98_VALUE *v = &instS98Values[i];
+        char key[32];
+        char num[16];
+        CHECK(s98_block(table, i, block, sizeof(block)),
+              "each Stor98 row names a row of its readme's table");
+        strcpy(key, v->KeyNt);
+        strcat(key, "=");
+        CHECK(has_text(block, key), "the row's DriverParameter key");
+        CHECK(has_text(block, v->Unit[0] ? v->Unit : NULL), "the row's unit");
+        CHECK(has_text(block, v->Def9x) && has_text(block, v->DefNt),
+              "the row's defaults");
+        if (v->Kind == INST_S98_NUMBER && i != INST_S98_POLLMODE) {
+            sprintf(num, "%lu", (unsigned long)v->Lo);
+            CHECK(has_text(block, num), "the row's range, its bottom");
+            if (i != INST_S98_MAXTRANSFERKB && i != INST_S98_IDLE) {
+                sprintf(num, "%lu", (unsigned long)v->Hi);
+                CHECK(has_text(block, num), "the row's range, its top");
+            }
+        }
+        if (v->Kind == INST_S98_WORDS) {
+            CHECK(has_text(block, "auto, off, cacheoff, fua"),
+                  "the write-through words");
+        }
+    }
+    free(table);
+    CHECK(strcmp(INST_S98_TABLE_VERSION, "0.4.0.0") == 0,
+          "the table is the bundled Stor98's");
+
+    /* Which system each row is for. */
+    CHECK(inst_s98_applies(INST_S98_GONE, 1) &&
+          !inst_s98_applies(INST_S98_GONE, 0) &&
+          !inst_s98_applies(INST_S98_IDLE, 0) &&
+          inst_s98_applies(INST_S98_WRITETHROUGH, 0),
+          "gone and idle are 2000-to-7 only");
+    CHECK(strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 0), "512") == 0 &&
+          strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 1), "256") == 0 &&
+          strcmp(inst_s98_default(INST_S98_POLLSPINUS, 0), "0") == 0 &&
+          strcmp(inst_s98_default(INST_S98_POLLSPINUS, 1), "500") == 0,
+          "per-system defaults");
+    inst_s98_default_text(INST_S98_WRITETHROUGH, 0, 1, t, sizeof(t));
+    CHECK(strcmp(t, "auto (here: cacheoff)") == 0, "auto on ME");
+    inst_s98_default_text(INST_S98_WRITETHROUGH, 1, 0, t, sizeof(t));
+    CHECK(strcmp(t, "auto (here: off)") == 0, "auto elsewhere");
+    inst_s98_default_text(INST_S98_POLLIDLEMS, 1, 0, t, sizeof(t));
+    CHECK(strcmp(t, "1000 ms") == 0, "a default with its unit");
+
+    /* Values checked as the readme admits them. */
+    CHECK(inst_s98_check(INST_S98_WRITETHROUGH, 0, " FUA ", w, sizeof(w),
+                         &why) && strcmp(w, "fua") == 0,
+          "a write-through word, any case");
+    CHECK(!inst_s98_check(INST_S98_WRITETHROUGH, 1, "on", w, sizeof(w),
+                          &why) && why != NULL, "an unknown word refused");
+    CHECK(inst_s98_check(INST_S98_MAXTRANSFERKB, 0, "512", w, sizeof(w),
+                         &why) &&
+          !inst_s98_check(INST_S98_MAXTRANSFERKB, 1, "512", w, sizeof(w),
+                          &why) &&
+          inst_s98_check(INST_S98_MAXTRANSFERKB, 1, "128", w, sizeof(w),
+                         &why) &&
+          !inst_s98_check(INST_S98_MAXTRANSFERKB, 1, "130", w, sizeof(w),
+                          &why) &&
+          !inst_s98_check(INST_S98_MAXTRANSFERKB, 0, "60", w, sizeof(w),
+                          &why),
+          "the transfer size: 64 to the system's default, in steps of 4");
+    CHECK(inst_s98_check(INST_S98_POLLBUSYUS, 1, "0", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_POLLBUSYUS, 1, "999", w, sizeof(w),
+                          &why) &&
+          inst_s98_check(INST_S98_POLLIDLEMS, 0, "0", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_POLLIDLEMS, 0, "99", w, sizeof(w), &why),
+          "0 where the readme gives it a meaning, else the range");
+    CHECK(inst_s98_check(INST_S98_POLLMODE, 0, "1", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_POLLMODE, 0, "2", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_POLLMODE, 0, "0x1", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_POLLMODE, 0, "-1", w, sizeof(w), &why),
+          "decimal only");
+    CHECK(!inst_s98_check(INST_S98_GONE, 0, "5000", w, sizeof(w), &why),
+          "an NT-only row refused on 98 SE and ME");
+    CHECK(inst_s98_check(INST_S98_IDLE, 1, "0010", w, sizeof(w), &why) &&
+          strcmp(w, "10") == 0, "a number written canonically");
+
+    /* DriverParameter, edited one key at a time. */
+    CHECK(inst_s98_param_get("maxtransferkb=128;pollmode=1", "pollmode", w,
+                             sizeof(w)) && strcmp(w, "1") == 0,
+          "a key read");
+    CHECK(!inst_s98_param_get("maxtransferkb=128", "pollmode", w, sizeof(w)),
+          "an absent key");
+    CHECK(inst_s98_param_get("x=1; PollMode = 0 ;y", "pollmode", w,
+                             sizeof(w)) && strcmp(w, "0") == 0,
+          "a key in another case, with spaces");
+    CHECK(!inst_s98_param_get("pollmodex=1", "pollmode", w, sizeof(w)),
+          "a longer key is another key");
+    CHECK(inst_s98_param_set("maxtransferkb=128;pollmode=1;foo=bar",
+                             "pollmode", "0", t, sizeof(t)) &&
+          strcmp(t, "maxtransferkb=128;pollmode=0;foo=bar") == 0,
+          "a key replaced in place, the unknown pair kept");
+    CHECK(inst_s98_param_set("maxtransferkb=128", "gone", "9000", t,
+                             sizeof(t)) &&
+          strcmp(t, "maxtransferkb=128;gone=9000") == 0, "a key appended");
+    CHECK(inst_s98_param_set("a=1;;gone=2;b=3", "gone", NULL, t, sizeof(t)) &&
+          strcmp(t, "a=1;b=3") == 0, "a key removed, empty segments dropped");
+    CHECK(inst_s98_param_set("", "pollmode", "1", t, sizeof(t)) &&
+          strcmp(t, "pollmode=1") == 0, "the first key");
+    CHECK(inst_s98_param_set(NULL, "pollmode", NULL, t, sizeof(t)) &&
+          strcmp(t, "") == 0, "nothing to remove");
+    CHECK(inst_s98_param_set("pollmode=1;x=2;pollmode=0", "pollmode", "1", t,
+                             sizeof(t)) && strcmp(t, "pollmode=1;x=2") == 0,
+          "a doubled key made one");
+    CHECK(!inst_s98_param_set("maxtransferkb=128", "pollmode", "1", t, 10),
+          "a result that does not fit");
+
+    /* What the page shows. */
+    inst_s98_now_text(INST_S98_POLLMODE, 0, 0, 0, NULL, t, sizeof(t));
+    CHECK(strcmp(t, "not set (the built-in default is 0)") == 0,
+          "not set, with the default");
+    inst_s98_now_text(INST_S98_POLLMODE, 0, 0, 1, "1", t, sizeof(t));
+    CHECK(strcmp(t, "set: 1") == 0, "set");
+    inst_s98_now_text(INST_S98_POLLMODE, 0, 0, -1, NULL, t, sizeof(t));
+    CHECK(strcmp(t, "cannot be read") == 0, "unreadable");
+
+    /* The install record's two rules (record 26 section 6.3). */
+    CHECK(inst_s98_owned_by_call(0, 1) && inst_s98_owned_by_call(1, 1) &&
+          !inst_s98_owned_by_call(2, 1) && !inst_s98_owned_by_call(0, 0),
+          "bound by the installer's call: no Stor98 before, Stor98 after");
+    CHECK(inst_s98_owned_by_settle(0, 1, 1, 1, 1) &&
+          !inst_s98_owned_by_settle(0, 1, 1, 0, 0),
+          "NT, during a settle: the InfPath an INF this installer staged");
+    CHECK(inst_s98_owned_by_settle(0, 1, 0, 0, 0) &&
+          !inst_s98_owned_by_settle(0, 1, 0, 1, 1),
+          "98 SE and ME, during a settle: no Stor98 at the baseline");
+    CHECK(!inst_s98_owned_by_settle(2, 1, 1, 1, 0),
+          "a device Stor98 ran before is never added");
+    CHECK(inst_s98_service_removable(0, 0) &&
+          !inst_s98_service_removable(1, 0) &&
+          !inst_s98_service_removable(0, 1),
+          "the service goes only when nothing is bound and none was there");
+    CHECK(inst_s98_cold_start(0) && !inst_s98_cold_start(1),
+          "98 SE and ME: shut down, not restart");
+    CHECK(inst_s98_await_reconnect(1, 1, 1, 1) &&
+          !inst_s98_await_reconnect(0, 1, 1, 1) &&
+          !inst_s98_await_reconnect(1, 0, 1, 1) &&
+          !inst_s98_await_reconnect(1, 1, 0, 1) &&
+          !inst_s98_await_reconnect(1, 1, 1, 0),
+          "a tunnelled drive's update awaits its reconnection");
+}
+
 int main(void)
 {
     test_versions();
@@ -2857,6 +3069,7 @@ int main(void)
     test_mw_values();
     test_uninstall_entry();
     test_page_texts();
+    test_s98();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }
