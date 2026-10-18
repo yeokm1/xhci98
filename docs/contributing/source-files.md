@@ -263,7 +263,9 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `tbt_fake.h` | The modelled host interface `test_tbt_ring`, `test_tbt_icm` and `test_tbt_hw` drive, from the USB4 Specification 2.0 and `ICM-PROTOCOL.md`. |
 | `tbt_topo_p14s.h` | The ThinkPad P14s Gen 1's PCI configuration space as captured under DOS in `usb4-emu`, for `test_tbt_topo`. |
 | `u4_fakefab.c` / `u4_fakefab.h` | `test_u4cm`'s C89 fake USB4 fabric, one domain per instance, written from the specification and `usb4-emu`'s documented host models, independently of `tbt_u4cm.c` (decision U11). |
-| `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23). |
+| `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23); its Stor98 rows held to `stor98-settings.txt` (record 26 section 5.6). |
+| `stor98-settings.txt` | The bundled Stor98 readme's SETTINGS table, as the installer's Stor98 rows were checked against it; `make-release.ps1` compares a cut's bundled readme with it. |
+| `test_dijob.c` | `xhciinst\inst_core.c` with `xhciinst\di\di_core.c`: the installer's job files read by the helper's parser, the helper's result files by the installer's (design record 27 sections 4.1 and 4.2). |
 | `test_tr.c` | `xhcitr\tr_core.c`, the USB tree tool's pure half (design record 25 section 10): text, the connection answers, descriptors, the query's parsing and eject gates, the router keys and event diff, the command line, the report. |
 | `test_trpci.c` | `src\cm\cm_qpci.c` and `xhcitr\tr_pci.c`: the bounded walk below a tunnel port over modelled buses, the capability walk with bad lists, the decoders, 79 columns (design record 25 revision 12). |
 | `test_di.c` | `xhciinst\di\di_core.c`, the 98 SE and ME device install helper's pure part (design record 27 section 11): the command line and its refusals, the result file's lines, the verdicts, the error names and flags held to the DDK's `setupx.h` where `tools\` has it. |
@@ -369,12 +371,15 @@ Each tool is a tree at the repository root, built by its own `build.cmd` and pub
 
 | File | What it is |
 |---|---|
-| `xhciinst.c` | The system half of `XHCIINST.EXE` and `XHCIIN64.EXE`: install, update, uninstall, `/devices` and `/eject`. |
-| `inst_core.c` / `inst_core.h` | The pure half: the INF reader, the models section per system, the action per device and per service group, the registry value table and its applicability, record 24's unit rules, the switches and exit codes (host suite `test_inst`). |
-| `xhciinst.rc`, `xhciinst.manifest` | The version resource and the elevation request. |
-| `build.cmd` | Both executables, each also compiling `src\xhci_psw.c` for the driver's own switchover gate. |
-| `selftest.cmd`, `check-imports.ps1` | The `/selftest`, the switch refusals and the import gate (exactly `KERNEL32.dll` and `ADVAPI32.dll`). |
-| `INSTALL.BAT` | Staged at the package root; runs the tool. |
+| `inst_eng.c` / `inst_eng.h` | The engine (design record 26 section 3): the system half of the tool - install, update, uninstall, `/devices` and `/eject`, and on 98 SE and ME the helper `XHCIDI.EXE`'s jobs - behind the front-end table both front ends fill. |
+| `xhciinst.c` | The console front end, `XHCIINST.EXE` and `XHCIIN64.EXE`: the 79-column wrap, the keyboard, the pause. |
+| `xhciwiz.c` | The window, `XHCIWIZ.EXE` and `XHCIWZ64.EXE` (design record 26): the wizard's pages, the worker thread, the start of the x64 window under WOW64, the restart, the window's `/selftest`. |
+| `inst_core.c` / `inst_core.h` | The pure half: the INF reader, the models section per system, the action per device and per service group, the registry value table and its applicability, record 24's unit rules, the switches and exit codes, the helper's command line and result file, the uninstall entry and route, the window's texts (host suite `test_inst`). |
+| `xhciinst.rc`, `xhciinst.manifest` | The console tool's version resource and elevation request. |
+| `xhciwiz.rc`, `xhciwiz_res.h`, `xhciwiz.manifest`, `xhciwiz.ico` | The window's icon, version, page templates, elevation and Common Controls 6 requests. |
+| `build.cmd` | The four executables, each also compiling `src\xhci_psw.c` for the driver's own switchover gate. |
+| `selftest.cmd`, `check-imports.ps1` | The `/selftest`s, the switch refusals and the import gate (the console pair exactly `KERNEL32.dll` and `ADVAPI32.dll`; the window pair those and `USER32`, `GDI32`, `COMCTL32`, `COMDLG32` and `SHELL32`). |
+| `INSTALL.BAT` | Staged at the package root; opens the window, or with `/console` runs the console tool. |
 | `README.TXT` | The published `readme.txt`. |
 
 ### `xhcimark\` - the safe-removal mark service (task 42-A.5)
@@ -780,6 +785,12 @@ switchover gate), `selftest.cmd` (the `/selftest`, the switch refusals
 and the import-table check `build-driver.cmd` runs, through
 `check-imports.ps1`, which reads the PE import directory), `INSTALL.BAT` (staged
 at the package root) and `README.TXT` (the published `readme.txt`).
+Tasks 42-A.2 and 42-A.3 (roadmap-usb4.md, design record 26) split the
+system half into the engine, `inst_eng.c` / `inst_eng.h`, behind a
+front-end table, leave `xhciinst.c` as the console front end, and add the
+window `xhciwiz.c` (with `xhciwiz.rc`, `xhciwiz_res.h`, `xhciwiz.manifest`
+and `xhciwiz.ico`), which `build.cmd` builds as `XHCIWIZ.EXE` and
+`XHCIWZ64.EXE` and `selftest.cmd` holds to its own import list.
 Tasks 41-A.2 to 41-A.5 (roadmap-usb4.md, design record 25) add the USB
 and Thunderbolt tree tool beside it: `xhcitr\xhcitr.c` (the system half:
 the window, the USB branch through the hub IOCTLs, the Thunderbolt branch

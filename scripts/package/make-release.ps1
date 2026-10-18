@@ -223,11 +223,12 @@ readme.txt and a NOTICE.TXT: the opt-in tool that lists, and on Windows 2000 to
 (roadmap-hcd task 38.8, design record 13 section 10.13.8).
 
 .PARAMETER InstallToolDir
-Where `XHCIINST.EXE` and `XHCIIN64.EXE` are built. Defaults to `xhciinst\` in
-the repository. Both are staged into `releases\<version>\tools\xhciinst\` with
-a readme.txt and a NOTICE.TXT, and `xhciinst\INSTALL.BAT` at the version root:
-the install, update and uninstall tool (roadmap-usb4.md task 40.5, design
-record 23).
+Where `XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE` and `XHCIIN64.EXE` are
+built. Defaults to `xhciinst\` in the repository. All four are staged into
+`releases\<version>\tools\xhciinst\` with a readme.txt and a NOTICE.TXT, and
+`xhciinst\INSTALL.BAT` at the version root: the install, update and uninstall
+tool, its window and its console front end (roadmap-usb4.md tasks 40.5 and
+42-A.2, design records 23 and 26).
 
 .PARAMETER SkipInstallTool
 Do not stage the install tool or INSTALL.BAT. For a host that cannot build it
@@ -2750,6 +2751,9 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
                                   -HeaderPath (Join-Path $repo "src\cm\stor98cm.h") `
                                   -Allow:$Stor98AllowInterfaceMismatch
     if ($null -ne $stor98) {
+        Assert-Stor98SettingsTable -Dir $stor98.Dir -Version $stor98.Version
+        Write-Ok ("Stor98 {0}: its readme's SETTINGS table is the one the installer's Stor98 rows were checked against" -f `
+            $stor98.Version)
         Write-Ok ("Stor98 {0}: SHA256SUMS.txt is the pinned {1}, and every file matches it" -f `
             $stor98.Version, $stor98.SumsSha256)
         if ($stor98.Overridden) {
@@ -3777,7 +3781,9 @@ cuts without the tool on a host that cannot build it.
         }
         $cleanSources = @(@(Get-ChildItem -LiteralPath $CleanToolDir -File |
             Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
-            @(Get-Item -LiteralPath $versionHeader))
+            @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.h")))
         foreach ($name in $cleanExes) {
             $cleanTime = (Get-Item -LiteralPath (Join-Path $CleanToolDir $name)).LastWriteTimeUtc
             $cleanNewer = @($cleanSources | Where-Object { $_.LastWriteTimeUtc -gt $cleanTime })
@@ -3872,15 +3878,17 @@ version in src\xhci_version.h and rebuild the service (xhcimark\build.cmd).
 
     # --- the install tool (task 40.6) ----------------------------------------
     #
-    # XHCIINST.EXE (MSVC 6.0) and XHCIIN64.EXE (WDK 7.1 amd64), built from
-    # xhciinst\ as XHCICLN is from xhcicln\ (design record 23 section 3), and
-    # INSTALL.BAT, the entry point, at the version root. The same staleness and
-    # version rules as XHCICLN's. Not drivers: the packager's test signing does
-    # not reach XHCIIN64.EXE.
+    # XHCIINST.EXE (MSVC 6.0) and XHCIIN64.EXE (WDK 7.1 amd64), the console
+    # tool, and XHCIWIZ.EXE and XHCIWZ64.EXE, the window INSTALL.BAT opens
+    # (design record 26 sections 2 and 4), built from xhciinst\ as XHCICLN is
+    # from xhcicln\ (design record 23 section 3), and INSTALL.BAT, the entry
+    # point, at the version root. The same staleness and version rules as
+    # XHCICLN's. Not drivers: the packager's test signing does not reach the
+    # x64 executables.
     $insttoolStaged = $null
     if (-not $SkipInstallTool) {
         Write-Step "install tool"
-        $instExes = @("XHCIINST.EXE", "XHCIIN64.EXE")
+        $instExes = @("XHCIINST.EXE", "XHCIIN64.EXE", "XHCIWIZ.EXE", "XHCIWZ64.EXE")
         foreach ($name in ($instExes + @("README.TXT", "INSTALL.BAT"))) {
             if (-not (Test-Path -LiteralPath (Join-Path $InstallToolDir $name) -PathType Leaf)) {
                 throw @"
@@ -3892,7 +3900,7 @@ cuts without the tool on a host that cannot build it.
             }
         }
         $instSources = @(@(Get-ChildItem -LiteralPath $InstallToolDir -File |
-            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest", ".ico") }) +
             @(Get-Item -LiteralPath $versionHeader) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.c")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")))
@@ -3908,7 +3916,7 @@ release's package, or decides with rules the source no longer has.
 "@
             }
         }
-        Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "xhciinst.c") -Macro "XHCIINST_VERSION"
+        Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "inst_eng.c") -Macro "XHCIINST_VERSION"
         $instVersion = Get-DeclaredVersion -Path $versionHeader
         if (-not (Test-DriverVersionMatches -Reported $instVersion -Declared $Version)) {
             throw @"
@@ -3930,7 +3938,7 @@ two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
         }
         Copy-Item -LiteralPath (Join-Path $InstallToolDir "INSTALL.BAT") -Destination (Join-Path $destRoot "INSTALL.BAT") -Force
         $insttoolStaged = $instDir
-        Write-Ok (("XHCIINST.EXE and XHCIIN64.EXE staged at version {0}, INSTALL.BAT at the root") -f $instVersion)
+        Write-Ok (("XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and XHCIIN64.EXE staged at version {0}, INSTALL.BAT at the root") -f $instVersion)
     }
 
     # --- the USB tree tool (task 41-A.6) -------------------------------------
@@ -4294,19 +4302,23 @@ helper (xhciinst\di\build.cmd).
         $contents += ""
     }
     if ($null -ne $insttoolStaged) {
+        $w32 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIWIZ.EXE")
+        $w64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIWZ64.EXE")
         $i32 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIINST.EXE")
         $i64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIIN64.EXE")
         $contents += "  INSTALL.BAT     - installs, updates or uninstalls the drivers"
         $contents += ""
-        $contents += "  TOOLS\XHCIINST\ - the program INSTALL.BAT runs"
+        $contents += "  TOOLS\XHCIINST\ - the programs INSTALL.BAT runs"
         $contents += ""
-        $contents += ("      XHCIINST.EXE {0:N0} bytes, for 32-bit Windows" -f $i32.Length)
-        $contents += ("      XHCIIN64.EXE {0:N0} bytes, for 64-bit Windows" -f $i64.Length)
+        $contents += ("      XHCIWIZ.EXE  {0:N0} bytes, the installer's window" -f $w32.Length)
+        $contents += ("      XHCIWZ64.EXE {0:N0} bytes, the same for 64-bit Windows" -f $w64.Length)
+        $contents += ("      XHCIINST.EXE {0:N0} bytes, the console tool" -f $i32.Length)
+        $contents += ("      XHCIIN64.EXE {0:N0} bytes, the same for 64-bit Windows" -f $i64.Length)
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
-        $contents += "      Section 4 has how to run it; INSTALL /list shows what"
-        $contents += "      it would do and changes nothing."
+        $contents += "      Section 4 has how to run them; INSTALL /console /list"
+        $contents += "      shows what would be done and changes nothing."
         $contents += ""
     }
     if ($null -ne $ditoolStaged) {
@@ -4423,7 +4435,7 @@ helper (xhciinst\di\build.cmd).
             " Stor98, an NVMe storage driver for NVMe drives such as one in a Thunderbolt or USB4 enclosure:" +
             " stor98.inf and the files beside it whose names start with stor98. It is a separate project" +
             " with its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
-            " and stor98-readme.txt is its own guide. INSTALL.BAT does not install it. In the hardware" +
+            " and stor98-readme.txt is its own guide. INSTALL.BAT installs it only when asked (its box on the installer's Components page, or /stor98). By hand, in the hardware" +
             " wizard (Have Disk), point at " +
             $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `
             -Width 78 -FirstPrefix "  " -RestPrefix "  ")
@@ -4935,47 +4947,52 @@ has already gone wrong. It prints nothing as it runs. Section 8 describes
 both, and nothing about a copied file says which one it is - so point at a
 directory, never at a loose .sys file.{ARCHNOTE}
 
-INSTALL.BAT is beta in this release: if it fails or you prefer, install
-through Device Manager as before (BY HAND, below).  That route still works
-and remains supported.
+If the installer fails or you prefer, install through Device Manager as
+before (BY HAND, below). That route still works and remains supported.
 
 THE EASY WAY: INSTALL.BAT. Unzip the WHOLE package, then
 run INSTALL.BAT from its top directory: double-click it on Windows 98 SE and
 ME; run it as an administrator on Windows 2000 and XP; right-click it, Run as
-administrator, on Vista and 7. It shows what it will do, asks about a few of
-the driver's options (section 9), asks once, and then:
+administrator, on Vista and 7. It opens the installer's window, which shows
+what it found, lets you choose the components and a few of the driver's
+options (section 9), shows a summary, and on Install:
 
   - on Windows 2000, XP, XP x64, Vista and 7 installs or updates every
     driver of the package on the devices present - the controller, its root
     hub and hubs, UAS disks, a Thunderbolt or USB4 controller - and stages
     the rest for devices plugged in later. It handles the update traps
     below (Windows 2000's Have Disk, the root hub, Vista and 7's same
-    DriverVer) and says when to restart;
+    DriverVer);
   - on Windows 98 SE and ME copies the package to the install directory
-    it asks for (C:\XHCI98 unless you choose another), where the hardware
-    wizards search by themselves, prints the Device Manager steps that
-    remain, and offers to open Device Manager.
+    you choose (C:\XHCI98 unless you choose another), where the hardware
+    wizards search by themselves, and installs each device's driver
+    through Windows' own device installer; a device it cannot install gets
+    its Device Manager steps on a page of their own, which you can save.
 
-INSTALL /list shows what it would do and changes nothing. INSTALL
-/uninstall removes the drivers again (it warns first: on a machine whose
-only USB controller is xHCI, the USB keyboard and mouse stop working). Every
+It ends by offering to restart Windows. Add/Remove Programs (Control Panel)
+lists the package as "xHCI98 USB 3.x drivers"; Remove there takes every
+driver of the package away again (it warns first: on a machine whose only
+USB controller is xHCI, the USB keyboard and mouse stop working).
+
+For scripts there is the console tool: INSTALL /console runs it, and
+INSTALL /console /list shows what it would do and changes nothing. Every
 run adds to XHCIINST.LOG at the root of the system drive; attach it to a bug
 report about an install. TOOLS\XHCIINST\readme.txt has the rest.
 
 INSTALL.BAT also installs the xHCI98 USB Tree (XHCITR) in the install
-directory it asks for (C:\XHCI98 unless you choose another, or INSTALL /to
+directory you choose (C:\XHCI98 unless you choose another, or INSTALL /to
 path) and starts it at each login. Its window shows
 every USB controller, hub and device, and the Thunderbolt and USB4 devices
 with what is connected behind them; its icon in the notification area of
 the taskbar removes a Thunderbolt or USB4 device safely, as Windows' own
 Safely Remove Hardware icon does for other devices. It needs no
 administrator to run. INSTALL /notray installs it without starting it at
-login; INSTALL /uninstall removes it with the drivers.
+login; the uninstall removes it with the drivers.
 TOOLS\XHCITR\readme.txt has the rest.
 
 On Windows XP, XP x64 and 98 SE, updating from 2.3.x or earlier needs a
-keyboard and mouse that do not go through this driver, as below; the tool
-says so before it starts.
+keyboard and mouse that do not go through this driver, as below; the
+installer says so before it starts.
 
 BY HAND, without INSTALL.BAT:
 Put the whole unzipped package somewhere the machine can read - a floppy, a
@@ -7136,31 +7153,32 @@ Part of the xhci98 {VERSION} release. See the readme.txt two directories up
 for the driver itself.
 
 This project's own code is under the GNU GPL v2 - see the LICENSE file two
-directories up. XHCIINST.EXE and XHCIIN64.EXE are not only this project's
-code: a C runtime is statically linked into each, which NOTICE.TXT beside
-this file records.
+directories up. XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and XHCIIN64.EXE are
+not only this project's code: a C runtime is statically linked into each,
+which NOTICE.TXT beside this file records.
 "@
         $instLines = @($instReadme) + @($instFooter.Replace("{VERSION}", $Version) -split "`r?`n")
         Write-GeneratedText -Path (Join-Path $insttoolStaged "readme.txt") -Lines $instLines
-        Write-Ok "readme.txt written beside XHCIINST.EXE and XHCIIN64.EXE"
+        Write-Ok "readme.txt written beside the installer's executables"
 
         $instNotice = @"
 ==============================================================================
                           x h c i 9 8   {VERSION}
-           THIRD-PARTY NOTICES FOR XHCIINST.EXE AND XHCIIN64.EXE
+           THIRD-PARTY NOTICES FOR THE INSTALLER'S EXECUTABLES
 ==============================================================================
 
-XHCIINST.EXE and XHCIIN64.EXE are built from this project's own C source,
-which is under the GNU GPL v2 - see the LICENSE file two directories up.
+XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and XHCIIN64.EXE are built from this
+project's own C source, which is under the GNU GPL v2 - see the LICENSE file
+two directories up.
 
-They are not only this project's code. XHCIINST.EXE is compiled with
-Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
-runtime; XHCIIN64.EXE is compiled with the Windows Driver Kit 7.1's amd64
-compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
-runtime modules are bound into each executable rather than loaded from a
-DLL when it runs, which is what makes each tool a single file. You can see
-it in the import tables, which name only KERNEL32.dll and ADVAPI32.dll and
-no C runtime DLL.
+They are not only this project's code. XHCIINST.EXE and XHCIWIZ.EXE are
+compiled with Microsoft Visual C++ 6.0 and linked against that compiler's
+STATIC C runtime (LIBC and LIBCMT); XHCIIN64.EXE and XHCIWZ64.EXE are
+compiled with the Windows Driver Kit 7.1's amd64 compiler and linked
+against that kit's STATIC C runtime (LIBCMT). Those runtime modules are
+bound into each executable rather than loaded from a DLL when it runs,
+which is what makes each tool a single file. You can see it in the import
+tables, which name Windows' own DLLs and no C runtime DLL.
 
 Those runtime modules are Microsoft's. They are not covered by the GPL grant
 above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
@@ -7173,7 +7191,7 @@ carry no Microsoft setup program and this package carries no Microsoft file.
         $instNotice = $instNotice.Replace("{VERSION}", $Version)
         Write-GeneratedText -Path (Join-Path $insttoolStaged "NOTICE.TXT") `
                             -Lines ($instNotice -split "`r?`n")
-        Write-Ok "NOTICE.TXT written beside XHCIINST.EXE and XHCIIN64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+        Write-Ok "NOTICE.TXT written beside the installer's executables (static MSVC 6.0 and WDK 7.1 C runtimes)"
     }
 
     # --- the USB tree tool's readme and notices (task 41-A.6) -----------------

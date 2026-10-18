@@ -1,0 +1,26 @@
+  9x name / NT key        Unit  Default            Range
+  ----------------------  ----  -----------------  ------------------------
+  StorMaxTransferKB       KiB   512 on 98 SE / ME  64 to the default, in
+  maxtransferkb=                256 on 2000 to 7   multiples of 4; anything
+                                                   else is refused and the
+                                                   default stands
+  StorWriteThrough        -     auto               auto, off, cacheoff, fua
+  writethrough=                 (cacheoff on ME,   (string only on 9x); an
+                                off elsewhere)     unknown word is auto
+  StorPollMode            -     0                  0 = poll only without an
+  pollmode=                                        interrupt, 1 = always
+  StorPollBusyUs          us    1000               1000-100000, 0 = default;
+  pollbusyus=                                      2000 to 7 use at least
+                                                   10 ms (their clock tick)
+  StorPollIdleMs          ms    1000               100-60000, 0 = no polling
+  pollidlems=                                      when idle
+  StorPollSpinUs          us    500 on 2000 to 7,  0-500, 0 = none (check
+  pollspinus=                   0 on 98 SE / ME    for a completion right
+                                                   after a request)
+  (NT only) gone=         ms    5000               1-600000: how long held
+                                                   requests wait for proof
+                                                   after the drive is gone;
+                                                   advanced: leave at the
+                                                   default
+  (NT only) idle=         ms    1000               10 and up: write-idle
+                                                   time before a flush

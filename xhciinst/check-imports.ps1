@@ -1,15 +1,21 @@
 #Requires -Version 2.0
 <#
-check-imports.ps1 - the import gate of XHCIINST.EXE and XHCIIN64.EXE (design
-record 23 section 3): reads the PE image's import directory itself and
-lists every module it names, then requires exactly KERNEL32.dll and
-ADVAPI32.dll and no delay-load imports. Any other name - whatever its
-characters (api-ms-win-*.dll, a name with dots) - fails, and so does an
-image whose import table cannot be read. selftest.cmd runs it.
+check-imports.ps1 - the import gate of the installer's executables (design
+record 23 section 3, record 26 section 4): reads the PE image's import
+directory itself and lists every module it names, then requires exactly
+the profile's list and no delay-load imports:
+  -Profile console  XHCIINST.EXE, XHCIIN64.EXE: KERNEL32.dll, ADVAPI32.dll
+  -Profile window   XHCIWIZ.EXE, XHCIWZ64.EXE: KERNEL32, USER32, GDI32,
+                    ADVAPI32, COMCTL32, COMDLG32 and SHELL32, each present
+                    on Windows 98 SE
+Any other name - whatever its characters (api-ms-win-*.dll, a name with
+dots) - fails, and so does an image whose import table cannot be read.
+selftest.cmd runs it.
 
-Exit code 0 = the two modules alone; 1 = anything else.
+Exit code 0 = the profile's modules alone; 1 = anything else.
 #>
-param([Parameter(Mandatory = $true)][string]$Path)
+param([Parameter(Mandatory = $true)][string]$Path,
+      [ValidateSet('console', 'window')][string]$Profile = 'console')
 $ErrorActionPreference = 'Stop'
 
 function Fail([string]$why) {
@@ -75,12 +81,17 @@ for ($n = 0; ; $n++) {
     $names += (CString (RvaToOff $nameRva))
 }
 
-$want = @('KERNEL32.DLL', 'ADVAPI32.DLL')
+if ($Profile -eq 'window') {
+    $want = @('KERNEL32.DLL', 'USER32.DLL', 'GDI32.DLL', 'ADVAPI32.DLL',
+              'COMCTL32.DLL', 'COMDLG32.DLL', 'SHELL32.DLL')
+} else {
+    $want = @('KERNEL32.DLL', 'ADVAPI32.DLL')
+}
 $got = @($names | ForEach-Object { $_.ToUpperInvariant() })
 $bad = @($got | Where-Object { $want -notcontains $_ })
-if ($bad.Count -ne 0 -or $got.Count -ne 2 -or
-    ($got -notcontains 'KERNEL32.DLL') -or ($got -notcontains 'ADVAPI32.DLL')) {
-    Fail ("imports " + ($names -join ', ') + "; only KERNEL32.dll and ADVAPI32.dll are allowed")
+$missing = @($want | Where-Object { $got -notcontains $_ })
+if ($bad.Count -ne 0 -or $missing.Count -ne 0 -or $got.Count -ne $want.Count) {
+    Fail ("imports " + ($names -join ', ') + "; exactly " + ($want -join ', ') + " are allowed")
 }
-Write-Output "${Path}: imports KERNEL32 and ADVAPI32 alone"
+Write-Output ("${Path}: imports " + ($want -join ', ') + " alone")
 exit 0

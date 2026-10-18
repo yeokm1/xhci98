@@ -345,10 +345,28 @@ static void test_cm_infs(void)
         if (instValues[i].Inf != INST_INF_CM) {
             continue;
         }
-        CHECK(inst_inf_addreg_default(cm, instValues[i].Name, &d),
-              instValues[i].Name);
-        CHECK(inst_inf_addreg_default(c64, instValues[i].Name, &d64) &&
-                  d64 == d, "the amd64 INF writes the same default");
+        if (instValues[i].NoInf) {
+            /* Not written by the INF (record 26 section 5.5): the table's
+             * default, the driver's built-in one, is an allowed value, and
+             * neither INF writes it. */
+            CHECK(!inst_inf_addreg_default(cm, instValues[i].Name, &d) &&
+                  !inst_inf_addreg_default(c64, instValues[i].Name, &d64),
+                  "a NoInf row is written by no INF");
+            d = instValues[i].Def;
+        } else {
+            CHECK(inst_inf_addreg_default(cm, instValues[i].Name, &d),
+                  instValues[i].Name);
+            CHECK(inst_inf_addreg_default(c64, instValues[i].Name, &d64) &&
+                      d64 == d, "the amd64 INF writes the same default");
+        }
+        CHECK(inst_value_default(i, cm, &d64) && d64 == d,
+              "inst_value_default gives the same default");
+        if (instValues[i].Hi != 0) {
+            /* A range row: never asked, its default inside the range. */
+            CHECK(instValues[i].Asked == 0 && d >= instValues[i].Lo &&
+                  d <= instValues[i].Hi, "the cm default is in its range");
+            continue;
+        }
         /* A never-asked row (Asked 0) offers its default through /set. */
         offered = instValues[i].Asked != 0 ? instValues[i].Asked
                                            : instValues[i].Settable;
@@ -2081,7 +2099,8 @@ static void test_questions(void)
                       "a choice has a meaning only where the value is allowed");
             }
         }
-        CHECK(named > 0, "every value names its choices");
+        CHECK(named > 0 || instValues[i].Hi != 0,
+              "every value names its choices, or is a range");
         CHECK(strchr(instValues[i].Meaning, '(') == NULL,
               "the meaning carries no choice list");
         CHECK(strchr(instValues[i].Meaning, '\n') == NULL &&
@@ -2198,23 +2217,26 @@ static void test_questions(void)
                         "open it", "not now", 1);
     CHECK(strstr(out, "Enter for [Y]: ") != NULL, "Enter for [Y]");
     /* The install directory's question. */
-    inst_dir_question(out, sizeof(out), "XHCITR.EXE", NULL, NULL,
+    inst_dir_question(out, sizeof(out), "XHCITR.EXE", NULL, NULL, NULL,
                       "C:\\XHCI98", 1, 0);
     CHECK(strstr(out, "Install directory for the xHCI98 tools\n") == out &&
           strstr(out, "  XHCITR.EXE  the xHCI98 USB Tree") != NULL &&
           strstr(out, "8 characters") == NULL &&
           strcmp(out + strlen(out) - 25, "  Enter for [C:\\XHCI98]: ") == 0,
           "NT: the tool, then Enter for [C:\\XHCI98]");
-    inst_dir_question(out, sizeof(out), "XHCITR.EXE", "*.INF, *.SYS",
+    inst_dir_question(out, sizeof(out), "XHCITR.EXE", "XHCIWIZ.EXE",
+                      "*.INF, *.SYS",
                       "C:\\WINDOWS\\XHCI98", "C:\\WINDOWS\\XHCI98", 0, 0);
     CHECK(strstr(out, "  *.INF, *.SYS  this package's drivers, for the hardware "
                       "wizards\n") != NULL &&
           strstr(out, "  now: C:\\WINDOWS\\XHCI98\n") != NULL &&
+          strstr(out, "  XHCIWIZ.EXE   this installer, which Add/Remove "
+                      "Programs runs to remove it\n") != NULL &&
           strstr(out, "no spaces") != NULL &&
           strstr(out, "Enter for [C:\\WINDOWS\\XHCI98]: ") != NULL,
           "98: the copy, where it is now, the 8.3 rule");
     CHECK(fits(out), "the directory question fits");
-    inst_dir_question(out, sizeof(out), "XHCITR64.EXE", NULL, NULL,
+    inst_dir_question(out, sizeof(out), "XHCITR64.EXE", NULL, NULL, NULL,
                       "D:\\XHCI98", 1, 1);
     CHECK(strstr(out, "/list: not asked; Enter would give [D:\\XHCI98].\n")
           != NULL, "the directory under /list");
@@ -2336,6 +2358,749 @@ static void test_to_switch(void)
              "/to with /devices refused");
 }
 
+/* ---- record 26 (task 42-A.2): the helper's interface, record 27 section
+ * 4 and 5.4 ---------------------------------------------------------------- */
+
+static const char *diFile(const char *body)
+{
+    static char buf[2048];
+
+    inst_copy(buf, body, sizeof(buf));
+    return buf;
+}
+
+static void test_di_helper(void)
+{
+    char tail[512];
+    char longId[260];
+    INST_DI_RESULT r;
+    const char *id = "PCI\\VEN_8086&DEV_15EC&SUBSYS_00000000&REV_00\\"
+                     "BUS_00&DEV_0D&FUNC_00";
+    const char *inf = "C:\\XHCI98\\XHCICM.INF";
+    const char *res = "C:\\XHCI98\\XHCIDI.RES";
+
+    /* The command line (record 27 section 4.1): "<version> <job file>". */
+    CHECK(inst_di_cmdline(tail, sizeof(tail), "3.1.0.0",
+                          "C:\\XHCI98\\DIJOB.TXT") &&
+          strcmp(tail, "3.1.0.0 C:\\XHCI98\\DIJOB.TXT") == 0,
+          "the command line: the version and the job file");
+    CHECK(!inst_di_cmdline(tail, sizeof(tail), "3.1.0.0",
+                           "C:\\Program Files\\DIJOB.TXT"),
+          "a job file with a space is not passed");
+    CHECK(!inst_di_cmdline(tail, sizeof(tail), "3.1.0.0 x",
+                           "C:\\XHCI98\\DIJOB.TXT"),
+          "a version with a space is not passed");
+    CHECK(!inst_di_cmdline(tail, sizeof(tail),
+                           "12345678901234567890123456789012",
+                           "C:\\XHCI98\\DIJOB.TXT"),
+          "a version over 31 characters is not passed");
+    memset(longId, 0, sizeof(longId));
+    strcpy(longId, "C:");
+    while (strlen(longId) < 76) {
+        strcat(longId, "\\ABCDEFGH");
+    }
+    strcat(longId, "\\DIJOB.TXT");
+    CHECK(strlen(longId) > INST_DI_JOB_PATH_CHARS &&
+          !inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", longId),
+          "a job file over 80 characters is not passed");
+    CHECK(strlen("C:\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\"
+                 "ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.TXT") == 80 &&
+          inst_di_cmdline(tail, sizeof(tail),
+                          "1234567890123456789012345678901",
+                          "C:\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\"
+                          "ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.TXT") &&
+          strlen(tail) == 112 && strlen(tail) <= INST_DI_TAIL_CHARS,
+          "a 31-character version and an 80-character job file: 112");
+    CHECK(strlen("C:\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\"
+                 "ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDE\\ABC.TXT") == 81 &&
+          !inst_di_cmdline(tail, sizeof(tail), "3.1.0.0",
+                           "C:\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\"
+                           "ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDE\\ABC.TXT"),
+          "an 81-character 8.3 job file is not passed");
+
+    /* The job file's path. */
+    CHECK(inst_di_jobpath(tail, sizeof(tail), "C:\\XHCI98") &&
+          strcmp(tail, "C:\\XHCI98\\DIJOB.TXT") == 0,
+          "the job file beside the installer");
+    CHECK(inst_di_jobpath(tail, sizeof(tail), "C:\\XHCI98\\") &&
+          strcmp(tail, "C:\\XHCI98\\DIJOB.TXT") == 0,
+          "a trailing backslash is not doubled");
+    CHECK(inst_di_jobpath(tail, sizeof(tail), "D:\\") &&
+          strcmp(tail, "D:\\DIJOB.TXT") == 0, "a drive's root");
+    longId[strlen(longId) - 10] = '\0';
+    CHECK(inst_di_jobpath(tail, sizeof(tail), longId) &&
+          strcmp(tail, "C:\\XHCIDIJ.TXT") == 0,
+          "too long: the root of the install drive");
+    CHECK(inst_di_jobpath(tail, sizeof(tail), "E:\\Program Files\\xhci98") &&
+          strcmp(tail, "E:\\XHCIDIJ.TXT") == 0,
+          "not 8.3: the root of the install drive");
+    CHECK(!inst_di_jobpath(tail, sizeof(tail), NULL) &&
+          !inst_di_jobpath(tail, sizeof(tail), "C:"),
+          "no directory, no job file");
+
+    /* The job file (record 27 section 4.1, format 1). */
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_PROBE, res, 1234UL,
+                          NULL, NULL, 0, 0) &&
+          strcmp(tail, "XHCIDI-JOB 1\r\nJOB probe\r\nRESULT "
+                       "C:\\XHCI98\\XHCIDI.RES\r\nHWND 1234\r\nEND\r\n") == 0,
+          "the probe's job file");
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
+                          inf, 0, 1) &&
+          strcmp(tail, "XHCIDI-JOB 1\r\nJOB install\r\nRESULT "
+                       "C:\\XHCI98\\XHCIDI.RES\r\nHWND 0\r\nDEVICE "
+                       "PCI\\VEN_8086&DEV_15EC&SUBSYS_00000000&REV_00\\"
+                       "BUS_00&DEV_0D&FUNC_00\r\nINF C:\\XHCI98\\XHCICM.INF"
+                       "\r\nFLAGS quiet\r\nEND\r\n") == 0,
+          "an install's job file, quiet");
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
+                          inf, 1, 1) &&
+          strstr(tail, "\r\nFLAGS force quiet\r\nEND\r\n") != NULL,
+          "force before quiet");
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
+                          inf, 0, 0) &&
+          strstr(tail, "FLAGS") == NULL &&
+          strstr(tail, ".INF\r\nEND\r\n") != NULL,
+          "no flag: no FLAGS line");
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_REMOVE, res, 65535UL,
+                          id, NULL, 1, 1) &&
+          strstr(tail, "INF") == NULL && strstr(tail, "FLAGS") == NULL &&
+          strstr(tail, "\r\nHWND 65535\r\nDEVICE PCI\\") != NULL &&
+          strstr(tail, "FUNC_00\r\nEND\r\n") != NULL,
+          "a removal takes no INF and no flag");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_PROBE, res, 65536UL,
+                           NULL, NULL, 0, 0),
+          "a handle over 65535 is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL,
+                           "C:\\Program Files\\X\\XHCIDI.RES", 0UL, id, inf,
+                           0, 1), "a result path with a space is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL,
+                           "C:\\XHCI98\\LONGNAME98\\XHCIDI.RES", 0UL, id, inf,
+                           0, 1), "a part longer than 8.3 is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                           "USB\\A B", inf, 0, 1),
+          "an id with a space is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                           "USB\\A\tB", inf, 0, 1),
+          "an id with a tab is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
+                           "C:\\XHCI98\\XHCICM.TXT", 0, 1),
+          "an INF not ending .INF is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
+                           NULL, 0, 1), "an install without an INF");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_REMOVE, res, 0UL,
+                           NULL, NULL, 0, 0), "a removal without a device");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), 99, res, 0UL, NULL, NULL, 0,
+                           0), "an unknown job");
+    memset(longId, 'I', 200);
+    memcpy(longId, "PCI\\", 4);
+    longId[200] = '\0';
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                          longId, inf, 1, 1), "a 200-character id is written");
+    longId[200] = 'I';
+    longId[201] = '\0';
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                           longId, inf, 1, 1),
+          "a 201-character id is not written");
+    CHECK(!inst_di_jobfile(tail, 20, INST_DI_PROBE, res, 0UL, NULL, NULL, 0,
+                           0) && tail[0] == '\0',
+          "a buffer too small: nothing written");
+
+    /* The helper's refusal of an unusable job file, and its DEFAULT line. */
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\r\nRESULT refused command "
+                               "job-file\r\nEND 2\r\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_REFUSED,
+          "a refused job file is a refusal");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\r\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\r\nDEFAULT "
+                               "DIF_SELECTBESTCOMPATDRV lowest-rank\r\n"
+                               "RESULT installed\r\nEND 4\r\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_INSTALLED,
+          "a DEFAULT line is read past");
+
+    /* The result file (record 27 section 4.2). */
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\r\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\r\nFOUND 1\r\n"
+                               "CALL DiCallClassInstaller DIF_INSTALLDEVICE 0"
+                               "\r\nFLAGS 00000080\r\nRESULT installed-restart"
+                               "\r\nEND 6\r\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) ==
+              INST_DI_V_INSTALLED_RESTART && r.HaveFlags &&
+          r.Flags == 0x80UL && r.Ended, "installed-restart with its flags");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nRESULT installed\n"
+                               "END 3\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "pci\\x\\1",
+                        "c:\\xhci98\\xhci98.inf", &r) == INST_DI_V_INSTALLED,
+          "installed; the id and INF compared without case");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nRESULT installed\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_NONE &&
+          !r.Ended, "no END: the helper did not finish");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nRESULT installed\n"
+                               "END 4\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_NONE,
+          "an END count that differs");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.0.0.0\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nRESULT installed\n"
+                               "END 3\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_NONE,
+          "another version");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB install PCI\\Y\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nRESULT installed\n"
+                               "END 3\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_NONE,
+          "another job's device");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nRESULT splendid\n"
+                               "END 3\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_NONE,
+          "an unknown word");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nRESULT installed\n"
+                               "END 3\nRESULT failed\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_NONE,
+          "a line after END");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nCALL DiInstallDevice "
+                               "1027\nERROR ERR_DI_NOFILECOPY 1027\nRESULT "
+                               "failed ERR_DI_NOFILECOPY 1027\nEND 5\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_FAILED &&
+          strcmp(r.Error, "ERR_DI_NOFILECOPY") == 0 && r.Number == 1027UL,
+          "failed, with the error's name and number");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nRESULT refused version "
+                               "3.0.0.0\nEND 2\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_REFUSED &&
+          strstr(r.Detail, "version") != NULL, "refused, with its reason");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.0.0.0\nRESULT refused version\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_REFUSED,
+          "refused whatever the version line says");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nFOUND 0\nRESULT "
+                               "not-present\nEND 4\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) ==
+              INST_DI_V_NOT_PRESENT, "not-present");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nRESULT cancelled\n"
+                               "END 3\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_CANCELLED,
+          "cancelled");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\nRESULT no-match\n"
+                               "END 3\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_NO_MATCH,
+          "no-match");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB remove USB\\A\\1\n"
+                               "RESULT removed-restart\nEND 3\n"),
+                        "3.1.0.0", INST_DI_REMOVE, "USB\\A\\1", NULL, &r) ==
+              INST_DI_V_REMOVED_RESTART, "removed-restart");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB remove USB\\A\\1\n"
+                               "RESULT not-found\nEND 3\n"),
+                        "3.1.0.0", INST_DI_REMOVE, "USB\\A\\1", NULL, &r) ==
+              INST_DI_V_NOT_FOUND, "not-found");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB remove USB\\A\\1\n"
+                               "RESULT installed\nEND 3\n"),
+                        "3.1.0.0", INST_DI_REMOVE, "USB\\A\\1", NULL, &r) ==
+              INST_DI_V_NONE, "an install's word for a removal");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB probe\nRESULT probed\n"
+                               "END 3\n"),
+                        "3.1.0.0", INST_DI_PROBE, NULL, NULL, &r) ==
+              INST_DI_V_PROBED, "the probe's file");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB probe\nRESULT ok\nEND 3\n"),
+                        "3.1.0.0", INST_DI_PROBE, NULL, NULL, &r) ==
+              INST_DI_V_NONE, "a probe's unknown word");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB probe\nRESULT failed "
+                               "ERR_DI_BAD_PATH 1024\nEND 3\n"),
+                        "3.1.0.0", INST_DI_PROBE, NULL, NULL, &r) ==
+              INST_DI_V_NONE, "a probe that failed");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB probe\nEND 2\n"),
+                        "3.1.0.0", INST_DI_PROBE, NULL, NULL, &r) ==
+              INST_DI_V_NONE, "a probe with no RESULT line");
+    CHECK(inst_di_parse(NULL, "3.1.0.0", INST_DI_PROBE, NULL, NULL, &r) ==
+          INST_DI_V_NONE, "no file");
+    CHECK(inst_di_ended("XHCIDI 3.1.0.0\r\nEND 1\r\n") &&
+          !inst_di_ended("XHCIDI 3.1.0.0\r\nJOB probe\r\n"), "the END line");
+
+    /* The verdicts' outcomes (record 26 section 7). */
+    CHECK(inst_di_outcome(INST_DI_INSTALL, INST_DI_V_INSTALLED) ==
+          INST_DI_OUT_OK, "installed: read back");
+    CHECK(inst_di_outcome(INST_DI_INSTALL, INST_DI_V_INSTALLED_RESTART) ==
+          INST_DI_OUT_RESTART, "the restart pending");
+    CHECK(inst_di_outcome(INST_DI_INSTALL, INST_DI_V_CANCELLED) ==
+          INST_DI_OUT_STEPS && inst_di_outcome(INST_DI_INSTALL,
+                                               INST_DI_V_NO_MATCH) ==
+          INST_DI_OUT_STEPS, "a cancel and no match: the steps, exit 4");
+    CHECK(inst_di_outcome(INST_DI_INSTALL, INST_DI_V_FAILED) ==
+          INST_DI_OUT_FAILED && inst_di_outcome(INST_DI_INSTALL,
+                                                INST_DI_V_NONE) ==
+          INST_DI_OUT_FAILED, "failed, or not finished: the steps, exit 2");
+    CHECK(inst_di_outcome(INST_DI_INSTALL, INST_DI_V_NOT_PRESENT) ==
+          INST_DI_OUT_ABSENT, "not present: recorded, not running now");
+    CHECK(inst_di_outcome(INST_DI_INSTALL, INST_DI_V_REFUSED) ==
+          INST_DI_OUT_REFUSED, "refused: the route fails this run");
+    CHECK(strlen(inst_di_verdict_text(INST_DI_V_NONE)) > 0, "a text for each");
+}
+
+/* ---- record 26 section 5.4 (task 42-A.17): the machine-wide value ------- */
+
+static void test_mw_values(void)
+{
+    char out[4096];
+    INST_VNOW now[2];
+    INST_U32 enter;
+    int mode = inst_value_find("XhciInterruptMode");
+    INST_ENV e = env(1, 6, 1, INST_ARCH_X86);
+    int poll = inst_value_find("XhciCmPollIdleMs");
+    int br = inst_value_find("XhciCmBridgeNumbering");
+    INST_U32 d;
+
+    memset(now, 0, sizeof(now));
+    now[0].State = 1;
+    now[0].Value = 0;
+    now[0].Desc = "xHCI98 USB 3.x eXtensible Host Controller";
+    now[1].State = 1;
+    now[1].Value = 2;
+    now[1].Desc = "a second controller";
+    CHECK(inst_value_question_mw(out, sizeof(out), mode, 0xFUL, 0, now, 2, 1,
+                                 1, 0, 0, &enter) == 1 && enter == 1 &&
+          strstr(out, "now: 1, set machine-wide") != NULL &&
+          strstr(out, "own value: 2, not used") != NULL &&
+          strstr(out, "own value: 0, not used") != NULL &&
+          strstr(out, "Enter for [1]: ") != NULL,
+          "the machine-wide value in force, each device's own beside it");
+    CHECK(inst_value_question_mw(out, sizeof(out), mode, 0xFUL, 0, now, 2, 0,
+                                 0, 0, 0, &enter) == 0 &&
+          strstr(out, "Enter for [each keeps its own]: ") != NULL,
+          "none set machine-wide: the mixed state");
+    CHECK(inst_value_question_mw(out, sizeof(out), mode, 0xFUL, 0, now, 1, -1,
+                                 0, 0, 0, &enter) == 1 &&
+          strstr(out, "could not be read") != NULL,
+          "an unreadable machine-wide value is said");
+    CHECK(fits(out), "the machine-wide question fits");
+    /* What a choice writes. */
+    CHECK(!inst_mw_write_needed(1, 2, now, 2, 0, 2) &&
+          inst_mw_write_needed(1, 2, now, 2, 0, 0),
+          "machine-wide set: written only when it differs from it");
+    now[1].Value = 0;
+    CHECK(!inst_mw_write_needed(0, 0, now, 2, 0, 0) &&
+          inst_mw_write_needed(0, 0, now, 2, 0, 1),
+          "none set: written only when a device runs another value");
+    now[0].State = 0;
+    CHECK(!inst_mw_write_needed(0, 0, now, 1, 0, 0) &&
+          inst_mw_write_needed(0, 0, now, 1, 0, 1),
+          "not set on the device: its default counts");
+    CHECK(inst_mw_write_needed(0, 0, now, 0, 0, 0),
+          "no device yet (a controller to come): written machine-wide");
+    /* The ranges and the value no INF writes (record 26 section 5.5). */
+    CHECK(poll >= 0 && inst_value_allowed(poll, &e, 50) &&
+          inst_value_allowed(poll, &e, 5000) &&
+          !inst_value_allowed(poll, &e, 49) &&
+          !inst_value_allowed(poll, &e, 5001), "a range's bounds");
+    CHECK(inst_value_set("XhciCmCmdTimeoutMs=60000", &mode, &d) == 1 && d == 60000UL &&
+          inst_value_set("XhciCmCmdTimeoutMs=60001", &mode, &d) == -1,
+          "/set takes a range's values");
+    mode = inst_value_find("XhciInterruptMode");
+    CHECK(br >= 0 && inst_value_default(br, NULL, &d) && d == 1UL,
+          "the value no INF writes has the table's default");
+    CHECK(inst_value_set_mask(br, &e) == 0, "a 98 SE and ME value on NT");
+    e = env(0, 4, 10, INST_ARCH_X86);
+    e.CmNhi = 1;
+    CHECK(inst_value_relevant(br, &e) && !inst_value_applies(br, &e),
+          "98 SE with a host interface: an Advanced row, never asked");
+    CHECK(inst_value_allowed(mode, &e, 2) && !inst_value_allowed(mode, &e, 3),
+          "a list's values by the system");
+}
+
+/* ---- record 26 sections 9.1 and 9.2: the entry, the relaunch ------------ */
+
+static void test_uninstall_entry(void)
+{
+    char out[512];
+    INST_OPTS o;
+    char err[128];
+    char *argv[5];
+
+    inst_arp_name(out, sizeof(out), "3.1.0.0", 0);
+    CHECK(strcmp(out, "xHCI98 USB 3.x drivers 3.1.0.0") == 0, "the name");
+    inst_arp_name(out, sizeof(out), "3.1.0.0", 1);
+    CHECK(strcmp(out, "xHCI98 USB 3.x drivers 3.1.0.0 (incomplete: run "
+                      "again)") == 0, "an incomplete uninstall's name");
+    CHECK(inst_arp_command(out, sizeof(out), "C:\\Tools\\My xHCI98",
+                           "XHCIWZ64.EXE", 1) &&
+          strcmp(out, "\"C:\\Tools\\My xHCI98\\XHCIWZ64.EXE\" /uninstall") == 0,
+          "NT: the window quoted, /uninstall");
+    CHECK(inst_arp_command(out, sizeof(out), "C:\\XHCI98", "XHCIWIZ.EXE", 0) &&
+          strcmp(out, "C:\\XHCI98\\XHCIWIZ.EXE /uninstall") == 0,
+          "98 SE and ME: as it is, the folder 8.3 with no space");
+    CHECK(!inst_arp_command(out, sizeof(out), "C:\\A B", "XHCIWIZ.EXE", 0),
+          "98 SE and ME: a space is refused");
+    CHECK(strcmp(inst_self_file(INST_ARCH_X86, INST_OWN_WINDOW),
+                 "XHCIWIZ.EXE") == 0 &&
+          strcmp(inst_self_file(INST_ARCH_AMD64, INST_OWN_WINDOW),
+                 "XHCIWZ64.EXE") == 0 &&
+          strcmp(inst_self_file(INST_ARCH_AMD64, INST_OWN_CONSOLE),
+                 "XHCIIN64.EXE") == 0, "the installer's own files");
+    CHECK(inst_uninstall_route(1, 0, 0) == INST_UN_RELAUNCH,
+          "from the install directory: the relaunch");
+    CHECK(inst_uninstall_route(0, 0, 0) == INST_UN_RUN, "from the package");
+    CHECK(inst_uninstall_route(0, 1, 1) == INST_UN_RUN,
+          "the temporary copy with /from");
+    CHECK(inst_uninstall_route(0, 1, 0) == INST_UN_REFUSE &&
+          inst_uninstall_route(1, 1, 1) == INST_UN_REFUSE,
+          "a /from that is not the install directory, or given in it");
+    CHECK(inst_relaunch_cmd(out, sizeof(out), "C:\\WINDOWS\\TEMP\\XHCI98UN\\"
+                            "XHCIWIZ.EXE", "C:\\XHCI98", NULL, 0, 0) &&
+          strcmp(out, "\"C:\\WINDOWS\\TEMP\\XHCI98UN\\XHCIWIZ.EXE\" /uninstall "
+                      "/from \"C:\\XHCI98\"") == 0, "the relaunch's command");
+    CHECK(inst_relaunch_cmd(out, sizeof(out), "C:\\T\\X.EXE", "C:\\X",
+                            "D:\\L.LOG", 1, 1) &&
+          strstr(out, " /log \"D:\\L.LOG\" /nopause /yes") != NULL,
+          "the relaunch keeps /log, /nopause and /yes");
+    argv[0] = "x";
+    argv[1] = "/uninstall";
+    argv[2] = "/from";
+    argv[3] = "C:\\XHCI98";
+    CHECK(inst_parse_args(4, argv, &o, err, sizeof(err)) == 0 &&
+          strcmp(o.From, "C:\\XHCI98") == 0, "/from with /uninstall");
+    CHECK(inst_parse_args(3, argv + 1, &o, err, sizeof(err)) == 1,
+          "/from with no directory");
+    argv[1] = "/from";
+    argv[2] = "C:\\XHCI98";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) == 1,
+          "/from without /uninstall");
+    /* The window's switches (record 26 section 10). */
+    argv[1] = "/console";
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.Console &&
+          inst_window_refusal(&o, 2, argv) != NULL,
+          "/console: the console takes it, the window refuses it");
+    argv[1] = "/list";
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 &&
+          inst_window_refusal(&o, 2, argv) != NULL, "/list is the console's");
+    argv[1] = "/debug";
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.Debug &&
+          inst_window_refusal(&o, 2, argv) == NULL, "/debug is the window's");
+    argv[1] = "/thunderbolt";
+    argv[2] = "/to";
+    argv[3] = "C:\\XHCI98";
+    CHECK(inst_parse_args(4, argv, &o, err, sizeof(err)) == 0 &&
+          inst_window_refusal(&o, 4, argv) == NULL,
+          "/thunderbolt and /to preselect the window's pages");
+}
+
+/* ---- record 26 section 11: the window's texts ------------------------- */
+
+static void test_page_texts(void)
+{
+    int i;
+
+    for (i = 0; i < instPageTextCount; i++) {
+        const INST_PAGE_TEXT *t = &instPageTexts[i];
+        CHECK(t->Text != NULL && t->Text[0] != '\0' &&
+              strchr(t->Text, '\n') == NULL, "a page text, unbroken");
+        if (t->Width != 0) {
+            CHECK(inst_text_lines(t->Text, inst_page_cols(t->Width)) <=
+                  inst_page_rows(t->Height + 2), "a page text fits its "
+                  "control at the dialog font's average width");
+        }
+        CHECK(strcmp(inst_page_text(t->Id), t->Text) == 0, "by its id");
+    }
+    CHECK(inst_text_lines("aaa bbb ccc", 7) == 2 &&
+          inst_text_lines("aaa bbb", 7) == 1 &&
+          inst_text_lines("", 7) == 0 &&
+          inst_text_lines("aaaaaaaaaaaaaaa", 7) == 3, "the line count");
+    CHECK(inst_page_text(9999)[0] == '\0', "no such text");
+}
+
+/* The block of the readme's table that row i is: from the line naming it
+ * to the next row's first line. */
+static int s98_block(const char *table, int i, char *out, size_t cap)
+{
+    const INST_S98_VALUE *v = &instS98Values[i];
+    char head[48];
+    const char *s;
+    const char *e;
+    const char *p;
+    size_t n;
+
+    if (v->Name9x != NULL) {
+        strcpy(head, "  ");
+        strcat(head, v->Name9x);
+        strcat(head, " ");
+    } else {
+        strcpy(head, "  (NT only) ");
+        strcat(head, v->KeyNt);
+        strcat(head, "=");
+    }
+    s = strstr(table, head);
+    if (s == NULL) {
+        return 0;
+    }
+    /* The block ends at the next line that starts a row: two spaces and a
+     * letter or '(' in column 3. */
+    e = s + 1;
+    for (;;) {
+        p = strchr(e, '\n');
+        if (p == NULL) {
+            e = s + strlen(s);
+            break;
+        }
+        e = p + 1;
+        if (e[0] == ' ' && e[1] == ' ' &&
+            ((e[2] >= 'A' && e[2] <= 'Z') || e[2] == '(')) {
+            break;
+        }
+        if (e[0] == '\0') {
+            break;
+        }
+    }
+    n = (size_t)(e - s);
+    if (n + 1 > cap) {
+        return 0;
+    }
+    memcpy(out, s, n);
+    out[n] = '\0';
+    return 1;
+}
+
+static int has_text(const char *block, const char *text)
+{
+    return text == NULL || strstr(block, text) != NULL;
+}
+
+static void test_s98(void)
+{
+    char *table = load("stor98-settings.txt");
+    char block[2048];
+    char t[256];
+    char w[64];
+    const char *why;
+    int i;
+
+    /* Every row against Stor98's own table (record 26 section 5.6). */
+    CHECK(table != NULL, "test\\stor98-settings.txt, Stor98's readme table");
+    for (i = 0; table != NULL && i < INST_S98_COUNT; i++) {
+        const INST_S98_VALUE *v = &instS98Values[i];
+        char key[32];
+        char num[16];
+        CHECK(s98_block(table, i, block, sizeof(block)),
+              "each Stor98 row names a row of its readme's table");
+        strcpy(key, v->KeyNt);
+        strcat(key, "=");
+        CHECK(has_text(block, key), "the row's DriverParameter key");
+        CHECK(has_text(block, v->Unit[0] ? v->Unit : NULL), "the row's unit");
+        CHECK(has_text(block, v->Def9x) && has_text(block, v->DefNt),
+              "the row's defaults");
+        if (v->Kind == INST_S98_NUMBER && i != INST_S98_POLLMODE) {
+            sprintf(num, "%lu", (unsigned long)v->Lo);
+            CHECK(has_text(block, num), "the row's range, its bottom");
+            if (i != INST_S98_MAXTRANSFERKB && i != INST_S98_IDLE) {
+                sprintf(num, "%lu", (unsigned long)v->Hi);
+                CHECK(has_text(block, num), "the row's range, its top");
+            }
+        }
+        if (v->Kind == INST_S98_WORDS) {
+            CHECK(has_text(block, "auto, off, cacheoff, fua"),
+                  "the write-through words");
+        }
+    }
+    free(table);
+    CHECK(strcmp(INST_S98_TABLE_VERSION, "0.4.0.0") == 0,
+          "the table is the bundled Stor98's");
+
+    /* Which system each row is for. */
+    CHECK(inst_s98_applies(INST_S98_GONE, 1) &&
+          !inst_s98_applies(INST_S98_GONE, 0) &&
+          !inst_s98_applies(INST_S98_IDLE, 0) &&
+          inst_s98_applies(INST_S98_WRITETHROUGH, 0),
+          "gone and idle are 2000-to-7 only");
+    CHECK(strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 0), "512") == 0 &&
+          strcmp(inst_s98_default(INST_S98_MAXTRANSFERKB, 1), "256") == 0 &&
+          strcmp(inst_s98_default(INST_S98_POLLSPINUS, 0), "0") == 0 &&
+          strcmp(inst_s98_default(INST_S98_POLLSPINUS, 1), "500") == 0,
+          "per-system defaults");
+    inst_s98_default_text(INST_S98_WRITETHROUGH, 0, 1, t, sizeof(t));
+    CHECK(strcmp(t, "auto (here: cacheoff)") == 0, "auto on ME");
+    inst_s98_default_text(INST_S98_WRITETHROUGH, 1, 0, t, sizeof(t));
+    CHECK(strcmp(t, "auto (here: off)") == 0, "auto elsewhere");
+    inst_s98_default_text(INST_S98_POLLIDLEMS, 1, 0, t, sizeof(t));
+    CHECK(strcmp(t, "1000 ms") == 0, "a default with its unit");
+
+    /* SHA-256, FIPS 180-2 appendix B's vectors and the empty string. */
+    inst_sha256((const unsigned char *)"abc", 3, t);
+    CHECK(strcmp(t, "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61"
+                    "F20015AD") == 0, "SHA-256 of abc");
+    inst_sha256((const unsigned char *)"", 0, t);
+    CHECK(strcmp(t, "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B"
+                    "7852B855") == 0, "SHA-256 of nothing");
+    inst_sha256((const unsigned char *)"abcdbcdecdefdefgefghfghighijhijkijkl"
+                "jklmklmnlmnomnopnopq", 56, t);
+    CHECK(strcmp(t, "248D6A61D20638B8E5C026930C3E6039A33CE45964FF2167F6ECEDD4"
+                    "19DB06C1") == 0, "SHA-256 of 56 bytes: two padding blocks");
+
+    /* Values checked as the readme admits them. */
+    CHECK(inst_s98_check(INST_S98_WRITETHROUGH, 0, " FUA ", w, sizeof(w),
+                         &why) && strcmp(w, "fua") == 0,
+          "a write-through word, any case");
+    CHECK(!inst_s98_check(INST_S98_WRITETHROUGH, 1, "on", w, sizeof(w),
+                          &why) && why != NULL, "an unknown word refused");
+    CHECK(inst_s98_check(INST_S98_MAXTRANSFERKB, 0, "512", w, sizeof(w),
+                         &why) &&
+          !inst_s98_check(INST_S98_MAXTRANSFERKB, 1, "512", w, sizeof(w),
+                          &why) &&
+          inst_s98_check(INST_S98_MAXTRANSFERKB, 1, "128", w, sizeof(w),
+                         &why) &&
+          !inst_s98_check(INST_S98_MAXTRANSFERKB, 1, "130", w, sizeof(w),
+                          &why) &&
+          !inst_s98_check(INST_S98_MAXTRANSFERKB, 0, "60", w, sizeof(w),
+                          &why),
+          "the transfer size: 64 to the system's default, in steps of 4");
+    CHECK(inst_s98_check(INST_S98_POLLBUSYUS, 1, "0", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_POLLBUSYUS, 1, "999", w, sizeof(w),
+                          &why) &&
+          inst_s98_check(INST_S98_POLLIDLEMS, 0, "0", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_POLLIDLEMS, 0, "99", w, sizeof(w), &why),
+          "0 where the readme gives it a meaning, else the range");
+    CHECK(inst_s98_check(INST_S98_POLLMODE, 0, "1", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_POLLMODE, 0, "2", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_POLLMODE, 0, "0x1", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_POLLMODE, 0, "-1", w, sizeof(w), &why),
+          "decimal only");
+    CHECK(!inst_s98_check(INST_S98_GONE, 0, "5000", w, sizeof(w), &why),
+          "an NT-only row refused on 98 SE and ME");
+    CHECK(!inst_s98_check(INST_S98_POLLIDLEMS, 1, "   ", w, sizeof(w),
+                          &why) &&
+          !inst_s98_check(INST_S98_WRITETHROUGH, 1, " ", w, sizeof(w), &why),
+          "spaces alone are no value, not 0");
+    CHECK(inst_s98_check(INST_S98_IDLE, 1, "0010", w, sizeof(w), &why) &&
+          strcmp(w, "10") == 0, "a number written canonically");
+    CHECK(inst_s98_check(INST_S98_IDLE, 1, "4294967295", w, sizeof(w),
+                         &why) && strcmp(w, "4294967295") == 0 &&
+          !inst_s98_check(INST_S98_IDLE, 1, "4294967296", w, sizeof(w),
+                          &why) &&
+          !inst_s98_check(INST_S98_IDLE, 1, "9", w, sizeof(w), &why),
+          "idle: 10 and up, to the DWORD's top");
+    CHECK(inst_s98_check(INST_S98_GONE, 1, "600000", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_GONE, 1, "600001", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_GONE, 1, "0", w, sizeof(w), &why),
+          "gone: 1 to 600000");
+
+    /* DriverParameter, edited one key at a time. */
+    CHECK(inst_s98_param_get("maxtransferkb=128;pollmode=1", "pollmode", w,
+                             sizeof(w)) && strcmp(w, "1") == 0,
+          "a key read");
+    CHECK(!inst_s98_param_get("maxtransferkb=128", "pollmode", w, sizeof(w)),
+          "an absent key");
+    CHECK(inst_s98_param_get("x=1; PollMode = 0 ;y", "pollmode", w,
+                             sizeof(w)) && strcmp(w, "0") == 0,
+          "a key in another case, with spaces");
+    CHECK(!inst_s98_param_get("pollmodex=1", "pollmode", w, sizeof(w)),
+          "a longer key is another key");
+    CHECK(inst_s98_param_set("maxtransferkb=128;pollmode=1;foo=bar",
+                             "pollmode", "0", t, sizeof(t)) &&
+          strcmp(t, "maxtransferkb=128;pollmode=0;foo=bar") == 0,
+          "a key replaced in place, the unknown pair kept");
+    CHECK(inst_s98_param_set("maxtransferkb=128", "gone", "9000", t,
+                             sizeof(t)) &&
+          strcmp(t, "maxtransferkb=128;gone=9000") == 0, "a key appended");
+    CHECK(inst_s98_param_set("a=1;;gone=2;b=3", "gone", NULL, t, sizeof(t)) &&
+          strcmp(t, "a=1;b=3") == 0, "a key removed, empty segments dropped");
+    CHECK(inst_s98_param_set("", "pollmode", "1", t, sizeof(t)) &&
+          strcmp(t, "pollmode=1") == 0, "the first key");
+    CHECK(inst_s98_param_set(NULL, "pollmode", NULL, t, sizeof(t)) &&
+          strcmp(t, "") == 0, "nothing to remove");
+    CHECK(inst_s98_param_set("pollmode=1;x=2;pollmode=0", "pollmode", "1", t,
+                             sizeof(t)) && strcmp(t, "pollmode=1;x=2") == 0,
+          "a doubled key made one");
+    CHECK(!inst_s98_param_set("maxtransferkb=128", "pollmode", "1", t, 10),
+          "a result that does not fit");
+
+    /* What the page shows. */
+    inst_s98_now_text(INST_S98_POLLMODE, 0, 0, 0, NULL, t, sizeof(t));
+    CHECK(strcmp(t, "not set (the built-in default is 0)") == 0,
+          "not set, with the default");
+    inst_s98_now_text(INST_S98_POLLMODE, 0, 0, 1, "1", t, sizeof(t));
+    CHECK(strcmp(t, "set: 1") == 0, "set");
+    inst_s98_now_text(INST_S98_POLLMODE, 0, 0, -1, NULL, t, sizeof(t));
+    CHECK(strcmp(t, "cannot be read") == 0, "unreadable");
+
+    /* The switch, the question and the final line (record 26 sections 5.9
+     * and 6.4). */
+    {
+        char *argv1[4];
+        INST_OPTS o;
+        char err[128];
+        int asked;
+        int def;
+        argv1[0] = "x";
+        argv1[1] = "/stor98";
+        CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Stor98,
+              "/stor98");
+        argv1[2] = "/uninstall";
+        CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+              "/stor98 belongs to an install");
+        CHECK(!inst_s98_decide(1, 0, 0, 0, &asked, &def) && asked && !def,
+              "asked, Enter gives N");
+        CHECK(!inst_s98_decide(1, 1, 0, 0, &asked, &def) && !asked,
+              "/yes: N, not asked");
+        CHECK(inst_s98_decide(1, 1, 1, 0, &asked, &def) && !asked,
+              "/stor98: installed unasked");
+        CHECK(!inst_s98_decide(0, 0, 1, 0, &asked, &def) && !asked,
+              "no Stor98 in the package: nothing");
+        CHECK(!inst_s98_decide(1, 0, 0, 1, &asked, &def) && !asked,
+              "/list asks nothing");
+        CHECK(strcmp(inst_final_text_cold(INST_FINAL_RESTART, 1),
+                     "Changes were made. Please shut down and start Windows "
+                     "again.") == 0 &&
+              strstr(inst_final_text_cold(INST_FINAL_UNFINISHED, 1),
+                     "then shut down and start Windows again.") != NULL &&
+              strcmp(inst_final_text_cold(INST_FINAL_RESTART, 0),
+                     inst_final_text(INST_FINAL_RESTART)) == 0 &&
+              strcmp(inst_final_text_cold(INST_FINAL_NO_CHANGES, 1),
+                     "No changes were made.") == 0,
+              "the shutdown's final lines");
+    }
+
+    /* The install record's two rules (record 26 section 6.3). */
+    CHECK(inst_s98_owned_by_call(0, 1) && inst_s98_owned_by_call(1, 1) &&
+          !inst_s98_owned_by_call(2, 1) && !inst_s98_owned_by_call(0, 0),
+          "bound by the installer's call: no Stor98 before, Stor98 after");
+    CHECK(inst_s98_owned_by_settle(0, 1, 1, 1, 1) &&
+          !inst_s98_owned_by_settle(0, 1, 1, 0, 0),
+          "NT, during a settle: the InfPath an INF this installer staged");
+    CHECK(inst_s98_owned_by_settle(0, 1, 0, 0, 0) &&
+          !inst_s98_owned_by_settle(0, 1, 0, 1, 1),
+          "98 SE and ME, during a settle: no Stor98 at the baseline");
+    CHECK(!inst_s98_owned_by_settle(2, 1, 1, 1, 0),
+          "a device Stor98 ran before is never added");
+    CHECK(inst_s98_service_removable(0, 0) &&
+          !inst_s98_service_removable(1, 0) &&
+          !inst_s98_service_removable(0, 1),
+          "the service goes only when nothing is bound and none was there");
+    CHECK(inst_s98_cold_start(0) && !inst_s98_cold_start(1),
+          "98 SE and ME: shut down, not restart");
+    CHECK(inst_s98_await_reconnect(1, 1, 1, 1) &&
+          !inst_s98_await_reconnect(0, 1, 1, 1) &&
+          !inst_s98_await_reconnect(1, 0, 1, 1) &&
+          !inst_s98_await_reconnect(1, 1, 0, 1) &&
+          !inst_s98_await_reconnect(1, 1, 1, 0),
+          "a tunnelled drive's update awaits its reconnection");
+}
+
 int main(void)
 {
     test_versions();
@@ -2363,6 +3128,11 @@ int main(void)
     test_questions();
     test_dir_check();
     test_to_switch();
+    test_di_helper();
+    test_mw_values();
+    test_uninstall_entry();
+    test_page_texts();
+    test_s98();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

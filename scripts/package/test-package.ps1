@@ -3038,11 +3038,13 @@ try {
            Why  = "a cut no longer writes the NOTICE.TXT recording the cleanup tool's statically linked runtimes (legal-provenance.md section 2a)" },        # The install tool (roadmap-usb4.md task 40.6, design record 23).
         @{ Find = '$instDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciinst")';
            Why  = "a cut no longer stages XHCIINST.EXE and XHCIIN64.EXE into tools\xhciinst\ (task 40.6)" },
-        @{ Find = '$instExes = @("XHCIINST.EXE", "XHCIIN64.EXE")';
-           Why  = "a cut no longer stages both builds of the install tool, the 64-bit one a native build by design (task 40.6)" },
+        @{ Find = '$instExes = @("XHCIINST.EXE", "XHCIIN64.EXE", "XHCIWIZ.EXE", "XHCIWZ64.EXE")';
+           Why  = "a cut no longer stages both builds of the console tool and of the window, the 64-bit ones native builds by design (tasks 40.6 and 42-A.2, record 26 section 2)" },
+        @{ Find = '$w32 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIWIZ.EXE")';
+           Why  = "the release readme no longer lists the installer's window (task 42-A.2)" },
         @{ Find = 'Copy-Item -LiteralPath (Join-Path $InstallToolDir "INSTALL.BAT") -Destination (Join-Path $destRoot "INSTALL.BAT") -Force';
            Why  = "a cut no longer puts INSTALL.BAT at the version root (task 40.6, design record 23 section 2)" },
-        @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "xhciinst.c") -Macro "XHCIINST_VERSION"';
+        @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "inst_eng.c") -Macro "XHCIINST_VERSION"';
            Why  = "a cut no longer holds the install tool's version to the shared macro (task 40.6)" },
         @{ Find = '$instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })';
            Why  = "a cut no longer refuses an install tool older than its sources (task 40.6)" },

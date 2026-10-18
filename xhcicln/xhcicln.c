@@ -81,9 +81,53 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <stdarg.h>
+#include <stdlib.h>
 #include "../src/xhci_version.h"
+#include "../xhciinst/inst_core.h"
 
 #define XHCICLN_VERSION XHCI_VER_STR
+
+/* ---- the console (owner, 2026-10-18: the installer's rule) ---------------- */
+
+/* Every line this tool prints is at most 79 columns (INST_COLUMNS), through
+ * the installer's own streaming word wrap (xhciinst\inst_core.c, record 23
+ * section 7.6; roadmap-usb4.md task 42-A.3), and every question lists its
+ * choices one a line and ends "Enter for [x]". */
+static INST_WRAP clnWrap;
+static int clnWrapReady;
+
+static void say(const char *fmt, ...)
+{
+    char buf[4096];
+    char wrapped[8192];
+    va_list ap;
+
+    va_start(ap, fmt);
+    _vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+    va_end(ap);
+    buf[sizeof(buf) - 1] = '\0';
+    if (!clnWrapReady) {
+        inst_wrap_init(&clnWrap);
+        clnWrapReady = 1;
+    }
+    inst_wrap_feed(&clnWrap, buf, wrapped, sizeof(wrapped));
+    fputs(wrapped, stdout);
+}
+
+/* What the wrap holds back, printed: before input is read, and at the
+ * end; the user's Enter then starts a new line. */
+static void say_flush(void)
+{
+    char wrapped[INST_LINE_CHARS + 128];
+
+    if (!clnWrapReady) {
+        return;
+    }
+    inst_wrap_flush(&clnWrap, wrapped, sizeof(wrapped));
+    fputs(wrapped, stdout);
+    fflush(stdout);
+}
 
 /* ---- sizes ---------------------------------------------------------------- */
 
@@ -510,7 +554,7 @@ static FARPROC cln_proc(HMODULE module, const char *name, int *missing)
 
     p = (module != NULL) ? GetProcAddress(module, name) : NULL;
     if (p == NULL) {
-        printf("  not available: %s\n", name);
+        say("  not available: %s\n", name);
         (*missing)++;
     }
     return p;
@@ -775,7 +819,7 @@ static int cln_nt_candidates(void)
     if (cln_nt_walk("XHCI98", DIGCF_ALLCLASSES, &clnSet, ids, datas,
                     CLN_MAX_ENTRIES, &n, why, sizeof(why)) !=
         CLN_SET_COMPLETE) {
-        printf("xhcicln: %s.\n", why);
+        say("xhcicln: %s.\n", why);
         return -1;
     }
     cln_nt_present_set();
@@ -1291,14 +1335,14 @@ static int cln_9x_candidates(void)
         return 0;
     }
     if (rc != ERROR_SUCCESS) {
-        printf("xhcicln: HKLM\\Enum\\XHCI98 could not be opened (error %ld).\n",
+        say("xhcicln: HKLM\\Enum\\XHCI98 could not be opened (error %ld).\n",
                (long)rc);
         return -1;
     }
     if (RegQueryInfoKeyA(top, NULL, NULL, NULL, NULL, &maxLen, NULL, NULL,
                          NULL, NULL, NULL, NULL) != ERROR_SUCCESS ||
         maxLen + 1 > sizeof(devName)) {
-        printf("xhcicln: HKLM\\Enum\\XHCI98 could not be sized.\n");
+        say("xhcicln: HKLM\\Enum\\XHCI98 could not be sized.\n");
         RegCloseKey(top);
         return -1;
     }
@@ -1309,19 +1353,19 @@ static int cln_9x_candidates(void)
             break;
         }
         if (rc != ERROR_SUCCESS) {
-            printf("xhcicln: an entry under HKLM\\Enum\\XHCI98 could not be "
+            say("xhcicln: an entry under HKLM\\Enum\\XHCI98 could not be "
                    "read whole (error %ld); listed as unreadable.\n", (long)rc);
             continue;
         }
         if (RegOpenKeyExA(top, devName, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
-            printf("xhcicln: HKLM\\Enum\\XHCI98\\%s could not be opened; "
+            say("xhcicln: HKLM\\Enum\\XHCI98\\%s could not be opened; "
                    "listed as unreadable.\n", devName);
             continue;
         }
         if (RegQueryInfoKeyA(dev, NULL, NULL, NULL, NULL, &maxLen2, NULL, NULL,
                              NULL, NULL, NULL, NULL) != ERROR_SUCCESS ||
             maxLen2 + 1 > sizeof(inst)) {
-            printf("xhcicln: HKLM\\Enum\\XHCI98\\%s could not be read whole; "
+            say("xhcicln: HKLM\\Enum\\XHCI98\\%s could not be read whole; "
                    "listed as unreadable.\n", devName);
             RegCloseKey(dev);
             continue;
@@ -1333,12 +1377,12 @@ static int cln_9x_candidates(void)
                 break;
             }
             if (rc != ERROR_SUCCESS) {
-                printf("xhcicln: an entry under HKLM\\Enum\\XHCI98\\%s could "
+                say("xhcicln: an entry under HKLM\\Enum\\XHCI98\\%s could "
                        "not be read whole; listed as unreadable.\n", devName);
                 continue;
             }
             if (clnEntryCount >= CLN_MAX_ENTRIES) {
-                printf("xhcicln: more than %d entries; the rest are not "
+                say("xhcicln: more than %d entries; the rest are not "
                        "listed.\n", CLN_MAX_ENTRIES);
                 break;
             }
@@ -1397,15 +1441,15 @@ static int cln_list(void)
         }
     }
     if (clnEntryCount == 0) {
-        printf("No devnode is left under XHCI98\\: nothing to do.\n");
+        say("No devnode is left under XHCI98\\: nothing to do.\n");
         return 0;
     }
     for (pass = 0; pass < 2; pass++) {
         if (pass == 0) {
-            printf("Old devnodes of this project, not present (%d):\n",
+            say("Old devnodes of this project, not present (%d):\n",
                    candidates);
         } else if (candidates < clnEntryCount) {
-            printf("\nLeft alone (%d):\n", clnEntryCount - candidates);
+            say("\nLeft alone (%d):\n", clnEntryCount - candidates);
         }
         for (i = 0; i < clnEntryCount; i++) {
             e = &clnEntries[i];
@@ -1413,20 +1457,20 @@ static int cln_list(void)
                                 e->Presence == CLN_ABSENT)) {
                 continue;
             }
-            printf("  %s\n", e->Id);
-            printf("    DeviceDesc  %s\n", e->Desc[0] ? e->Desc : "(none)");
-            printf("    Driver key  %s\n",
+            say("  %s\n", e->Id);
+            say("    DeviceDesc  %s\n", e->Desc[0] ? e->Desc : "(none)");
+            say("    Driver key  %s\n",
                    e->Driver[0] ? e->Driver : "(none)");
             if (pass == 0) {
-                printf("    qualifies   %s, %s\n", cln_form_text(e->Form),
+                say("    qualifies   %s, %s\n", cln_form_text(e->Form),
                        cln_presence_text(e->Presence));
             } else if (!CLN_IS_OLD(e->Form)) {
-                printf("    left        %s\n", cln_form_text(e->Form));
+                say("    left        %s\n", cln_form_text(e->Form));
             } else if (e->Presence == CLN_PRESENT) {
-                printf("    left        present: an xhci98.sys before "
+                say("    left        present: an xhci98.sys before "
                        "2.4.0.0 is running\n");
             } else {
-                printf("    left        %s\n", e->Why);
+                say("    left        %s\n", e->Why);
             }
         }
     }
@@ -1437,25 +1481,35 @@ static int cln_list(void)
 /* The question                                                                  */
 /* ========================================================================== */
 
-/* "Y" goes on; anything else, or end of input, cancels. */
+/* The installer's form (task 42-A.3): the choices one a line, "Enter for
+ * [N]". Y goes on; N, Enter or end of input cancels; another answer is
+ * asked again. */
 static int cln_ask(int count)
 {
+    char question[128];
+    char text[1024];
     char line[32];
-    size_t n;
+    int r;
 
-    printf("\nRemove the %d old devnode(s) listed above? Type Y and press "
-           "Enter to go on, anything else to cancel: ", count);
-    fflush(stdout);
-    if (fgets(line, sizeof(line), stdin) == NULL) {
-        printf("\n");
-        return 0;
+    _snprintf(question, sizeof(question) - 1, "Remove the %d old devnode(s) "
+              "listed above?", count);
+    question[sizeof(question) - 1] = '\0';
+    inst_yesno_question(text, sizeof(text), question, "remove them",
+                        "cancel: nothing is removed", 0);
+    say("\n%s", text);
+    for (;;) {
+        say_flush();
+        inst_wrap_input(&clnWrap);
+        if (fgets(line, sizeof(line), stdin) == NULL) {
+            say("\n");
+            return 0;
+        }
+        r = inst_tb_answer(line, 0);
+        if (r >= 0) {
+            return r == 1;
+        }
+        say("  Type Y or N, or Enter for [N]: ");
     }
-    n = strlen(line);
-    while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r' ||
-                     line[n - 1] == ' ')) {
-        line[--n] = '\0';
-    }
-    return (n == 1 && (line[0] == 'Y' || line[0] == 'y'));
 }
 
 /* ========================================================================== */
@@ -1482,7 +1536,7 @@ static int cln_run_9x(void)
     int candidates;
     int anyPresent;
 
-    printf("Windows 98 SE or ME: this release lists only, and removes "
+    say("Windows 98 SE or ME: this release lists only, and removes "
            "nothing.\n\n");
     if (cln_9x_candidates() != 0) {
         return CLN_EXIT_REFUSED;
@@ -1490,18 +1544,18 @@ static int cln_run_9x(void)
     candidates = cln_list();
     anyPresent = cln_9x_named(NULL);
     if (clnWalkState != CLN_SET_COMPLETE) {
-        printf("\nWhether an XHCI98\\ devnode is present is unknown: %s.\n",
+        say("\nWhether an XHCI98\\ devnode is present is unknown: %s.\n",
                clnWalkWhy);
     } else if (anyPresent) {
-        printf("\nAn XHCI98\\ devnode is present: an xhci98.sys before 2.4.0.0 "
+        say("\nAn XHCI98\\ devnode is present: an xhci98.sys before 2.4.0.0 "
                "is running (restart after the update first).\n");
     }
     if (clnWalkNoKey > 0) {
-        printf("(%d devnode(s) in HKEY_DYN_DATA carry no HardWareKey.)\n",
+        say("(%d devnode(s) in HKEY_DYN_DATA carry no HardWareKey.)\n",
                clnWalkNoKey);
     }
     if (candidates > 0) {
-        printf("\nThe entries are inert, and nothing needs them removed. "
+        say("\nThe entries are inert, and nothing needs them removed. "
                "XHCICLN removes\nnothing on Windows 98 SE and ME in this "
                "release (README.TXT says why).\n");
     }
@@ -1532,7 +1586,7 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
 
     missing = cln_load_nt(&removalMissing);
     if (missing > 0) {
-        printf("xhcicln: a routine the listing needs is missing (above); "
+        say("xhcicln: a routine the listing needs is missing (above); "
                "nothing listed or removed.\n");
         return CLN_EXIT_REFUSED;
     }
@@ -1577,7 +1631,7 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
         /* Nothing would be removed; a refusal still answers -remove with 1
          * (the forced refusal before the update's restart, 10.13.10). */
         if (clnRefusal[0] != '\0') {
-            printf("\nRemoval refused: %s.\n", clnRefusal);
+            say("\nRemoval refused: %s.\n", clnRefusal);
             return clnRemove ? CLN_EXIT_REFUSED : CLN_EXIT_DONE;
         }
         return CLN_EXIT_DONE;
@@ -1599,26 +1653,26 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
         cln_refuse(why);
     }
     if (clnRefusal[0] != '\0') {
-        printf("\nRemoval refused, nothing removed: %s.\n", clnRefusal);
+        say("\nRemoval refused, nothing removed: %s.\n", clnRefusal);
         cln_close_doors();
         return clnRemove ? CLN_EXIT_REFUSED : CLN_EXIT_DONE;
     }
-    printf("\nEvery check passed: %d project controller(s) held through their "
+    say("\nEvery check passed: %d project controller(s) held through their "
            "doors.\n", clnCtrlCount);
     if (!clnRemove) {
-        printf("Run XHCICLN -remove to remove the %d entr%s above.\n",
+        say("Run XHCICLN -remove to remove the %d entr%s above.\n",
                candidates, candidates == 1 ? "y" : "ies");
         cln_close_doors();
         return CLN_EXIT_DONE;
     }
     if (!clnYes && !cln_ask(candidates)) {
-        printf("Cancelled; nothing removed.\n");
+        say("Cancelled; nothing removed.\n");
         cln_close_doors();
         return CLN_EXIT_REFUSED;
     }
     wait = api.WaitInstall(CLN_INSTALL_WAIT_MS);
     if (wait != WAIT_OBJECT_0) {
-        printf("Refused, nothing removed: an installation is still pending "
+        say("Refused, nothing removed: an installation is still pending "
                "after %lu seconds (0x%lX).\n",
                (unsigned long)(CLN_INSTALL_WAIT_MS / 1000UL),
                (unsigned long)wait);
@@ -1646,7 +1700,7 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
             ok = 0;
         }
         if (!ok) {
-            printf("Stopped before %s: %s.\n", e->Id, why);
+            say("Stopped before %s: %s.\n", e->Id, why);
             if (removed == 0) {
                 refused = 1;
             } else {
@@ -1664,7 +1718,7 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
             !api.CallCi(DIF_REMOVE, clnSet, &e->Data)) {
             DWORD err = GetLastError();
 
-            printf("Removing %s failed (error 0x%lX%s); stopped there.\n",
+            say("Removing %s failed (error 0x%lX%s); stopped there.\n",
                    e->Id, (unsigned long)err,
                    (err == ERROR_ACCESS_DENIED) ?
                        ": an administrator is needed" : "");
@@ -1680,7 +1734,7 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
              * so, count it as pending (the safe reading) and stop. */
             e->Done = 2;
             pending++;
-            printf("Removed %s, but whether a restart is pending could not "
+            say("Removed %s, but whether a restart is pending could not "
                    "be read (error 0x%lX); restart Windows to be sure. "
                    "Stopped.\n", e->Id, (unsigned long)GetLastError());
             stopped = 1;
@@ -1690,30 +1744,30 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
             e->Done = 2;
             pending++;
         }
-        printf("Removed %s%s.\n", e->Id,
+        say("Removed %s%s.\n", e->Id,
                (e->Done == 2) ? " (a restart is pending)" : "");
         dn = 0;
         cr = api.Locate(&dn, e->Id, CLN_CM_LOCATE_PHANTOM);
         if (cr != CLN_CR_NO_SUCH_DEVNODE) {
-            printf("But %s is still there (0x%02lX); stopped.\n", e->Id,
+            say("But %s is still there (0x%02lX); stopped.\n", e->Id,
                    (unsigned long)cr);
             stopped = 1;
             break;
         }
         if (!cln_nt_recheck(why, sizeof(why))) {
-            printf("Stopped after %s: %s.\n", e->Id, why);
+            say("Stopped after %s: %s.\n", e->Id, why);
             stopped = 1;
             break;
         }
     }
     cln_close_doors();
-    printf("\n%d removed", removed);
+    say("\n%d removed", removed);
     if (pending > 0) {
-        printf(", %d of them waiting on a restart", pending);
+        say(", %d of them waiting on a restart", pending);
     }
-    printf(".\n");
+    say(".\n");
     if (pending > 0) {
-        printf("Restart Windows to finish.\n");
+        say("Restart Windows to finish.\n");
     }
     return cln_exit_code(refused, stopped, removed, pending);
 }
@@ -1730,7 +1784,7 @@ static void cln_check(int ok, const char *what)
     clnChecks++;
     if (!ok) {
         clnFailures++;
-        printf("FAIL: %s\n", what);
+        say("FAIL: %s\n", what);
     }
 }
 
@@ -1790,7 +1844,7 @@ static int cln_selftest(void)
     char msg[256];
     int i;
 
-    printf("xhcicln %s self-test\n", XHCICLN_VERSION);
+    say("xhcicln %s self-test\n", XHCICLN_VERSION);
 
     for (i = 0; i < (int)(sizeof(ids) / sizeof(ids[0])); i++) {
         _snprintf(msg, sizeof(msg) - 1, "classify %s", ids[i].Id);
@@ -1888,7 +1942,26 @@ static int cln_selftest(void)
     cln_check(!cln_removal_enabled(6, 2) && !cln_removal_enabled(10, 0) &&
               !cln_removal_enabled(4, 0), "removal: other NT versions list only");
 
-    printf("%d checks, %d failures\n", clnChecks, clnFailures);
+    /* The console's wrap (task 42-A.3): a line made long by an instance id
+     * is held to 79 columns, and the question's last line is Enter's. */
+    {
+        char text[1024];
+        char wrapped[2048];
+        inst_wrap_text("  qualifies   an old root hub's entry, not present: "
+                       "XHCI98\\ROOT_HUB\\0PCI&VEN_1B36&DEV_000D&SUBSYS_"
+                       "11001AF4&REV_01&BUS_00&DEV_04&FUNC_00\n", wrapped,
+                       sizeof(wrapped));
+        cln_check(inst_text_width(wrapped) <= INST_COLUMNS,
+                  "the wrap: a long line held to 79 columns");
+        inst_yesno_question(text, sizeof(text), "Remove the 12 old "
+                            "devnode(s) listed above?", "remove them",
+                            "cancel: nothing is removed", 0);
+        cln_check(inst_text_width(text) <= INST_COLUMNS &&
+                  strstr(text, "Enter for [N]: ") != NULL,
+                  "the question: its choices, and Enter for [N]");
+    }
+    say("%d checks, %d failures\n", clnChecks, clnFailures);
+    say_flush();
     return clnFailures == 0 ? 0 : 1;
 }
 
@@ -1898,7 +1971,7 @@ static int cln_selftest(void)
 
 static void cln_usage(void)
 {
-    printf(
+    say(
 "Usage: XHCICLN [-remove [-yes]] | -selftest\n"
 "\n"
 "  (none)    list the devnodes an xhci98.sys before 2.4.0.0 left under\n"
@@ -1920,6 +1993,7 @@ int main(int argc, char **argv)
     BOOL wow;
     int i;
 
+    atexit(say_flush);
     for (i = 1; i < argc; i++) {
         if (cln_eq(argv[i], "-selftest") || cln_eq(argv[i], "/selftest")) {
             if (argc != 2) {
@@ -1937,25 +2011,25 @@ int main(int argc, char **argv)
         }
     }
     if (clnYes && !clnRemove) {
-        printf("xhcicln: -yes is accepted only with -remove.\n\n");
+        say("xhcicln: -yes is accepted only with -remove.\n\n");
         cln_usage();
         return CLN_EXIT_REFUSED;
     }
 
-    printf("xhcicln %s - the devnodes xhci98.sys left under XHCI98\\ before "
+    say("xhcicln %s - the devnodes xhci98.sys left under XHCI98\\ before "
            "2.4.0.0\n\n", XHCICLN_VERSION);
 
     memset(&ver, 0, sizeof(ver));
     ver.dwOSVersionInfoSize = sizeof(ver);
     if (!GetVersionExA(&ver)) {
-        printf("xhcicln: the Windows version could not be read.\n");
+        say("xhcicln: the Windows version could not be read.\n");
         return CLN_EXIT_REFUSED;
     }
     if (ver.dwPlatformId == VER_PLATFORM_WIN32_WINDOWS) {
         return cln_run_9x();
     }
     if (ver.dwPlatformId != VER_PLATFORM_WIN32_NT) {
-        printf("xhcicln: not a Windows this tool knows.\n");
+        say("xhcicln: not a Windows this tool knows.\n");
         return CLN_EXIT_REFUSED;
     }
     wow = FALSE;

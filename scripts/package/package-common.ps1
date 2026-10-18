@@ -1006,6 +1006,36 @@ function Assert-Stor98Release {
     }
 }
 
+function Assert-Stor98SettingsTable {
+    # make-release.ps1's check of a real cut's bundled Stor98 (not the
+    # packager's synthetic releases, whose readmes carry no table).
+    param([string]$Dir, [string]$Version)
+
+    # The installer's Stor98 settings (record 26 section 5.6) are copied from
+    # this readme's SETTINGS table; test\stor98-settings.txt is that table as
+    # the installer's rows were checked against it (test_inst). A release
+    # whose table differs - a value renamed, retyped or given another range -
+    # fails here rather than the user.
+    $tableCopy = Join-Path $PSScriptRoot "..\..\test\stor98-settings.txt"
+    $readmeLines = @(([System.IO.File]::ReadAllText((Join-Path $Dir "readme.txt"))) -split "\r?\n")
+    $start = -1
+    $end = -1
+    for ($i = 0; $i -lt $readmeLines.Count; $i++) {
+        if ($start -lt 0 -and $readmeLines[$i] -match '^  9x name / NT key') { $start = $i }
+        if ($start -ge 0 -and $readmeLines[$i] -match '^Polling values outside') { $end = $i; break }
+    }
+    if ($start -lt 0 -or $end -lt 0) {
+        throw "the Stor98 $Version readme has no SETTINGS table where the installer reads one (from '  9x name / NT key' to 'Polling values outside'). Update xhciinst\inst_core.c's Stor98 rows and test\stor98-settings.txt to that readme."
+    }
+    $table = @($readmeLines[$start..($end - 1)])
+    while ($table.Count -gt 0 -and $table[$table.Count - 1].Trim() -eq "") { $table = @($table[0..($table.Count - 2)]) }
+    $copy = @(([System.IO.File]::ReadAllText($tableCopy)) -split "\r?\n")
+    while ($copy.Count -gt 0 -and $copy[$copy.Count - 1].Trim() -eq "") { $copy = @($copy[0..($copy.Count - 2)]) }
+    if (($table -join "`n") -cne ($copy -join "`n")) {
+        throw "the Stor98 $Version readme's SETTINGS table differs from test\stor98-settings.txt, the table the installer's Stor98 rows were checked against. Update xhciinst\inst_core.c's instS98Values and INST_S98_TABLE_VERSION and that file to this readme, and run test\run-host-tests.cmd."
+    }
+}
+
 function Get-Stor98PackageFiles {
     # The Stor98 files one package carries: Source (relative to the release
     # folder), Dest (relative to the package root) and Sha256. -Arch is the

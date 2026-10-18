@@ -191,6 +191,8 @@ rem                  42-A.1, design record 27 section 11): the command line
 rem                  and its refusals, the result file's lines, the verdicts,
 rem                  the setup engine's error names held to the 98 SE DDK's
 rem                  setupx.h where tools\ has it
+rem   test_dijob   - the installer's job files read by the helper's parser
+rem                  and the helper's result files by the installer's
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
@@ -598,6 +600,9 @@ rem test_di links XHCIDI.EXE's pure part (xhciinst\di\di_core.c, design
 rem record 27 section 11) and reads setupx.h from tools\win98ddk-extracted\
 rem where it is there, a recorded copy of its values where it is not.
 call :run test_di "test_di.c ..\xhciinst\di\di_core.c"
+rem test_dijob links both pure halves, the installer's and the helper's:
+rem each reads what the other writes (record 27 sections 4.1 and 4.2).
+call :run test_dijob "test_dijob.c ..\xhciinst\inst_core.c ..\xhciinst\di\di_core.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

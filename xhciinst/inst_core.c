@@ -1603,7 +1603,33 @@ const INST_VALUE instValues[] = {
       "USB4: connections found at start",
       "1 and 2 may drop a device the firmware connected before Windows "
       "started.", 0x6UL,
-      { "kept", "cleaned where they do not verify", "all cleaned", NULL } }
+      { "kept", "cleaned where they do not verify", "all cleaned", NULL } },
+    /* Record 26 section 5.5 (task 42-A.2): the Thunderbolt page's
+     * "Advanced..." rows from the release notes' table, never asked by
+     * the console; the ranges are cm_vals.c's. XhciCmBridgeNumbering is
+     * not written by the INF: its default is the driver's. */
+    { "XhciCmPollIdleMs", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x0UL,
+      "how often, in ms, the driver looks at the controller with nothing "
+      "happening", NULL, 0, { NULL, NULL, NULL, NULL }, 50UL, 5000UL, 0, 0 },
+    { "XhciCmCmdTimeoutMs", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x0UL,
+      "firmware connection manager: the wait for a command's answer, in ms",
+      NULL, 0, { NULL, NULL, NULL, NULL }, 1000UL, 60000UL, 0, 0 },
+    { "XhciCmApproveTimeoutMs", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x0UL,
+      "firmware connection manager: the wait for an approval's answer, in ms",
+      NULL, 0, { NULL, NULL, NULL, NULL }, 1000UL, 60000UL, 0, 0 },
+    { "XhciCmLogVerbosity", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x1FUL,
+      "the connection manager's log",
+      "4 adds memory addresses to the log: for a developer's report.", 0x10UL,
+      { "off", "counters only", "the log", "adds port status" } },
+    { "XhciCmLogDebugView", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "the connection manager's log also to a debugger or DebugView", NULL, 0,
+      { "no", "yes", NULL, NULL } },
+    { "XhciCmBridgeNumbering", INST_INF_CM, INST_APPLY_9X_CM, 0x0UL, 0x3UL,
+      "set up the bridges a device brings up behind a tunnel",
+      "0 leaves them as they come up: a device behind a switch may then "
+      "show Code 29 until a restart.", 0x1UL,
+      { "leave them as they come up", "set them up", NULL, NULL },
+      0, 0, 1, 1UL }
 };
 const int instValueCount = (int)(sizeof(instValues) / sizeof(instValues[0]));
 
@@ -1692,9 +1718,56 @@ int inst_value_applies(int index, const INST_ENV *env)
         return env->CmNhi ? 1 : 0;
     case INST_APPLY_9X_XHCI:
         return (!env->Nt && env->AnyXhci) ? 1 : 0;
+    case INST_APPLY_9X_CM:
+        return (!env->Nt && env->CmNhi) ? 1 : 0;
     default:
         return 0;
     }
+}
+
+int inst_value_relevant(int index, const INST_ENV *env)
+{
+    switch (index >= 0 && index < instValueCount ? instValues[index].Apply
+                                                 : -1) {
+    case INST_APPLY_ANY_XHCI:
+        return env->AnyXhci ? 1 : 0;
+    case INST_APPLY_PSW:
+        return env->PswController ? 1 : 0;
+    case INST_APPLY_NT_XHCI:
+        return (env->Nt && env->AnyXhci) ? 1 : 0;
+    case INST_APPLY_CM:
+        return env->CmNhi ? 1 : 0;
+    case INST_APPLY_9X_XHCI:
+        return (!env->Nt && env->AnyXhci) ? 1 : 0;
+    case INST_APPLY_9X_CM:
+        return (!env->Nt && env->CmNhi) ? 1 : 0;
+    default:
+        return 0;
+    }
+}
+
+int inst_value_default(int index, const char *infText, INST_U32 *def)
+{
+    if (index < 0 || index >= instValueCount) {
+        return 0;
+    }
+    if (instValues[index].NoInf) {
+        *def = instValues[index].Def;
+        return 1;
+    }
+    return infText != NULL &&
+           inst_inf_addreg_default(infText, instValues[index].Name, def);
+}
+
+int inst_value_allowed(int index, const INST_ENV *env, INST_U32 v)
+{
+    if (index < 0 || index >= instValueCount) {
+        return 0;
+    }
+    if (instValues[index].Hi != 0) {
+        return v >= instValues[index].Lo && v <= instValues[index].Hi;
+    }
+    return v <= 31UL && (inst_value_set_mask(index, env) & (1UL << v)) != 0;
 }
 
 INST_U32 inst_value_asked_mask(int index, const INST_ENV *env)
@@ -1720,7 +1793,8 @@ INST_U32 inst_value_set_mask(int index, const INST_ENV *env)
         return 0;
     }
     mask = instValues[index].Settable;
-    if (instValues[index].Apply == INST_APPLY_9X_XHCI && env->Nt) {
+    if ((instValues[index].Apply == INST_APPLY_9X_XHCI ||
+         instValues[index].Apply == INST_APPLY_9X_CM) && env->Nt) {
         return 0;   /* a 98 SE and ME value: /set refuses it on NT */
     }
     if (inst_eq(instValues[index].Name, "XhciInterruptMode") &&
@@ -1778,8 +1852,10 @@ int inst_value_set(const char *arg, int *index, INST_U32 *value)
     if (sep[1] == '0' && (sep[2] == 'x' || sep[2] == 'X')) {
         return -1;
     }
-    if (!inst_number(sep + 1, &v) || v > 31UL ||
-        (instValues[i].Settable & (1UL << v)) == 0) {
+    if (!inst_number(sep + 1, &v) ||
+        (instValues[i].Hi != 0 ? (v < instValues[i].Lo || v > instValues[i].Hi)
+                               : (v > 31UL ||
+                                  (instValues[i].Settable & (1UL << v)) == 0))) {
         return -1;
     }
     *index = i;
@@ -1870,11 +1946,19 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
         } else if (inst_switch(a, "nopause")) {
             opts->NoPause = 1;
         } else if (inst_switch(a, "debug")) {
-            /* INSTALL.BAT chose the directory; nothing more to do here. */
+            /* INSTALL.BAT chose the directory for the console tool; the
+             * window, which takes no /dir, picks it itself. */
+            opts->Debug = 1;
+        } else if (inst_switch(a, "console")) {
+            /* INSTALL.BAT's word for the console tool (record 26 section
+             * 2): the console takes it and goes on; the window refuses it. */
+            opts->Console = 1;
         } else if (inst_switch(a, "selftest")) {
             opts->SelfTest = 1;
         } else if (inst_switch(a, "thunderbolt")) {
             opts->Thunderbolt = 1;
+        } else if (inst_switch(a, "stor98")) {
+            opts->Stor98 = 1;
         } else if (inst_switch(a, "notray")) {
             opts->NoTray = 1;
         } else if (inst_switch(a, "devices")) {
@@ -1921,6 +2005,15 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
                     return 1;
                 }
             }
+        } else if (inst_switch(a, "from")) {
+            if (i + 1 >= argc || opts->From[0] != '\0' ||
+                argv[i + 1][0] == '\0' ||
+                strlen(argv[i + 1]) >= sizeof(opts->From)) {
+                inst_err(err, errCap, "/from needs one directory", NULL);
+                return 1;
+            }
+            i++;
+            inst_copy(opts->From, argv[i], sizeof(opts->From));
         } else if (inst_switch(a, "dir") || inst_switch(a, "log") ||
                    inst_switch(a, "to")) {
             int isDir = inst_switch(a, "dir");
@@ -2026,12 +2119,20 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
         inst_err(err, errCap, "/thunderbolt belongs to an install", NULL);
         return 1;
     }
+    if (opts->Stor98 && (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, "/stor98 belongs to an install", NULL);
+        return 1;
+    }
     if (opts->NoTray && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/notray belongs to an install", NULL);
         return 1;
     }
     if (opts->To[0] != '\0' && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/to belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->From[0] != '\0' && !opts->Uninstall) {
+        inst_err(err, errCap, "/from belongs to an uninstall", NULL);
         return 1;
     }
     if (opts->Devices && opts->Eject) {
@@ -2093,6 +2194,22 @@ const char *inst_final_text(int line)
                "said above first,\nthen restart Windows.";
     default:
         return "No changes were made.";
+    }
+}
+
+const char *inst_final_text_cold(int line, int shutdown)
+{
+    if (!shutdown) {
+        return inst_final_text(line);
+    }
+    switch (line) {
+    case INST_FINAL_RESTART:
+        return "Changes were made. Please shut down and start Windows again.";
+    case INST_FINAL_UNFINISHED:
+        return "Changes were made, but not everything is done: do what is "
+               "said above first,\nthen shut down and start Windows again.";
+    default:
+        return inst_final_text(line);
     }
 }
 
@@ -2920,7 +3037,7 @@ const char *inst_unplug_text(int kind)
                "running: eject them\ntoo before you unplug it.";
     case INST_UNPLUG_RESTARTED:
         return "The device has started again, so it is not safe to unplug. "
-               "Close the programs\nusing it and run INSTALL /eject again.";
+               "Close the programs\nusing it and run INSTALL /console /eject again.";
     default:
         return "Before you unplug it, make sure none of its other devices "
                "(USB ports, card\nreaders, network) is in use; stop them in "
@@ -3336,9 +3453,56 @@ void inst_caution_text(int index, INST_U32 values, char *out, size_t cap)
     inst_cat(out, cap, p + 2);
 }
 
+static int inst_value_question_at(char *out, size_t cap, int index,
+                                  INST_U32 mask, INST_U32 def,
+                                  const INST_VNOW *now, int n, int mwState,
+                                  INST_U32 mwValue, int cmNewNote, int list,
+                                  INST_U32 *enter);
+
 int inst_value_question(char *out, size_t cap, int index, INST_U32 mask,
                         INST_U32 def, const INST_VNOW *now, int n,
                         int cmNewNote, int list, INST_U32 *enter)
+{
+    return inst_value_question_at(out, cap, index, mask, def, now, n, -2, 0,
+                                  cmNewNote, list, enter);
+}
+
+int inst_value_question_mw(char *out, size_t cap, int index, INST_U32 mask,
+                           INST_U32 def, const INST_VNOW *now, int n,
+                           int mwState, INST_U32 mwValue, int cmNewNote,
+                           int list, INST_U32 *enter)
+{
+    return inst_value_question_at(out, cap, index, mask, def, now, n, mwState,
+                                  mwValue, cmNewNote, list, enter);
+}
+
+int inst_mw_write_needed(int mwState, INST_U32 mwValue, const INST_VNOW *now,
+                         int n, INST_U32 def, INST_U32 answer)
+{
+    int i;
+
+    if (mwState == 1) {
+        return mwValue != answer;
+    }
+    if (n == 0) {
+        return 1;   /* no device to keep it: the machine-wide value holds it */
+    }
+    for (i = 0; i < n; i++) {
+        INST_U32 eff = now[i].State > 0 ? now[i].Value : def;
+        if (eff != answer) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* mwState: -2 no machine-wide reading at all (the console of 3.0.0.0's
+ * form), -1 unreadable, 0 not set, 1 set to mwValue. */
+static int inst_value_question_at(char *out, size_t cap, int index,
+                                  INST_U32 mask, INST_U32 def,
+                                  const INST_VNOW *now, int n, int mwState,
+                                  INST_U32 mwValue, int cmNewNote, int list,
+                                  INST_U32 *enter)
 {
     char raw[INST_RAW_CHARS];
     char line[INST_LINE_CHARS];
@@ -3364,6 +3528,36 @@ int inst_value_question(char *out, size_t cap, int index, INST_U32 mask,
     inst_cat(raw, sizeof(raw), " - ");
     inst_cat(raw, sizeof(raw), v->Meaning);
     inst_cat(raw, sizeof(raw), "\n");
+    if (mwState == 1) {
+        /* Task 42-A.17: the machine-wide value wins wherever it is set. */
+        inst_cat(raw, sizeof(raw), "  now: ");
+        inst_cat_number(raw, sizeof(raw), mwValue);
+        inst_cat(raw, sizeof(raw), ", set machine-wide (every controller "
+                 "uses it)\n");
+        for (i = 0; i < n; i++) {
+            if (now[i].State <= 0 || now[i].Value == mwValue) {
+                continue;
+            }
+            line[0] = '\0';
+            inst_cat(line, sizeof(line), "  the device's own value: ");
+            inst_cat_number(line, sizeof(line), now[i].Value);
+            inst_cat(line, sizeof(line), ", not used");
+            if (now[i].Desc != NULL && now[i].Desc[0] != '\0') {
+                inst_cat(line, sizeof(line),
+                         strlen(line) + strlen(now[i].Desc) + 3 <=
+                         INST_COLUMNS ? " (" : "\n    (");
+                inst_cat(line, sizeof(line), now[i].Desc);
+                inst_cat(line, sizeof(line), ")");
+            }
+            inst_cat(raw, sizeof(raw), line);
+            inst_cat(raw, sizeof(raw), "\n");
+        }
+        first = mwValue;
+        n = 0;
+    } else if (mwState == -1) {
+        inst_cat(raw, sizeof(raw), "  the machine-wide value could not be "
+                 "read; each device's own is shown\n");
+    }
     for (i = 0; i < n; i++) {
         INST_U32 eff = now[i].State > 0 ? now[i].Value : def;
         if (i == 0) {
@@ -3494,8 +3688,8 @@ size_t inst_yesno_question(char *out, size_t cap, const char *question,
 }
 
 size_t inst_dir_question(char *out, size_t cap, const char *toolName,
-                         const char *copyName, const char *now,
-                         const char *def, int nt, int list)
+                         const char *setupName, const char *copyName,
+                         const char *now, const char *def, int nt, int list)
 {
     char raw[INST_RAW_CHARS];
     char key[32];
@@ -3504,6 +3698,9 @@ size_t inst_dir_question(char *out, size_t cap, const char *toolName,
     raw[0] = '\0';
     if (toolName != NULL && strlen(toolName) > width) {
         width = strlen(toolName);
+    }
+    if (setupName != NULL && strlen(setupName) > width) {
+        width = strlen(setupName);
     }
     if (copyName != NULL && strlen(copyName) > width) {
         width = strlen(copyName);
@@ -3521,6 +3718,16 @@ size_t inst_dir_question(char *out, size_t cap, const char *toolName,
         inst_cat(raw, sizeof(raw), key);
         inst_cat(raw, sizeof(raw), "  the xHCI98 USB Tree, which starts at "
                  "each login\n");
+    }
+    if (setupName != NULL) {
+        inst_copy(key, setupName, sizeof(key));
+        while (strlen(key) < width && strlen(key) + 1 < sizeof(key)) {
+            inst_cat(key, sizeof(key), " ");
+        }
+        inst_cat(raw, sizeof(raw), "  ");
+        inst_cat(raw, sizeof(raw), key);
+        inst_cat(raw, sizeof(raw), "  this installer, which Add/Remove "
+                 "Programs runs to remove it\n");
     }
     if (copyName != NULL) {
         inst_copy(key, copyName, sizeof(key));
@@ -3715,4 +3922,1191 @@ void inst_dir_default(const char *sysDrive, const char *windir, char *out,
     }
     inst_copy(out, drive, cap);
     inst_cat(out, cap, "\\XHCI98");
+}
+
+/* ======================================================================== */
+/* The 98 SE and ME helper (record 27 sections 4 and 5.4; task 42-A.2)      */
+/* ======================================================================== */
+
+/* A full path whose every part is an 8.3 name with no space: X:\A\B.C. */
+int inst_di_path(const char *p)
+{
+    const char *part;
+    const char *end;
+
+    if (p == NULL || strlen(p) < 4 || p[1] != ':' || p[2] != '\\' ||
+        inst_upper((unsigned char)p[0]) < 'A' ||
+        inst_upper((unsigned char)p[0]) > 'Z') {
+        return 0;
+    }
+    for (part = p + 3; *part != '\0'; part = *end != '\0' ? end + 1 : end) {
+        end = strchr(part, '\\');
+        if (end == NULL) {
+            end = part + strlen(part);
+        }
+        if (!inst_name83(part, (size_t)(end - part))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static const char *inst_di_job_word(int job)
+{
+    return job == INST_DI_INSTALL ? "install" :
+           job == INST_DI_REMOVE ? "remove" : "probe";
+}
+
+int inst_di_jobpath(char *out, size_t cap, const char *dir)
+{
+    char t[INST_LINE_CHARS];
+    size_t n;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (dir == NULL || strlen(dir) < 3 || strlen(dir) + 16 >= sizeof(t)) {
+        return 0;
+    }
+    inst_copy(t, dir, sizeof(t));
+    n = strlen(t);
+    if (t[n - 1] != '\\') {
+        inst_cat(t, sizeof(t), "\\");
+    }
+    inst_cat(t, sizeof(t), INST_DI_JOB_NAME);
+    if (strlen(t) > INST_DI_JOB_PATH_CHARS || !inst_di_path(t)) {
+        /* Too long, or not 8.3: the root of the install directory's
+         * drive (record 27 section 4.1). */
+        t[0] = dir[0];
+        t[1] = ':';
+        t[2] = '\\';
+        t[3] = '\0';
+        inst_cat(t, sizeof(t), INST_DI_JOB_ROOT_NAME);
+        if (!inst_di_path(t)) {
+            return 0;
+        }
+    }
+    if (strlen(t) + 1 > cap) {
+        return 0;
+    }
+    inst_copy(out, t, cap);
+    return 1;
+}
+
+int inst_di_cmdline(char *out, size_t cap, const char *version,
+                    const char *jobFile)
+{
+    char t[INST_LINE_CHARS];
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (version == NULL || version[0] == '\0' || strlen(version) > 31 ||
+        strchr(version, ' ') != NULL || strchr(version, '"') != NULL ||
+        jobFile == NULL || strlen(jobFile) > INST_DI_JOB_PATH_CHARS ||
+        !inst_di_path(jobFile)) {
+        return 0;
+    }
+    t[0] = '\0';
+    inst_cat(t, sizeof(t), version);
+    inst_cat(t, sizeof(t), " ");
+    inst_cat(t, sizeof(t), jobFile);
+    if (strlen(t) > INST_DI_TAIL_CHARS || strlen(t) + 1 > cap) {
+        return 0;
+    }
+    inst_copy(out, t, cap);
+    return 1;
+}
+
+/* An operand of the job file: no space, no tab, no control character. */
+static int inst_di_operand(const char *s, size_t max)
+{
+    const unsigned char *p;
+
+    if (s == NULL || s[0] == '\0' || strlen(s) > max) {
+        return 0;
+    }
+    for (p = (const unsigned char *)s; *p != '\0'; p++) {
+        if (*p <= ' ' || *p >= 0x7F) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
+                    unsigned long hwnd, const char *devId, const char *inf,
+                    int force, int quiet)
+{
+    char t[INST_DI_JOB_BYTES + 64];
+    size_t n;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if ((job != INST_DI_PROBE && job != INST_DI_INSTALL &&
+         job != INST_DI_REMOVE) ||
+        result == NULL || strlen(result) > 255 || !inst_di_path(result) ||
+        hwnd > 65535UL) {
+        return 0;
+    }
+    if (job != INST_DI_PROBE && !inst_di_operand(devId, 200)) {
+        return 0;
+    }
+    if (job == INST_DI_INSTALL &&
+        (inf == NULL || strlen(inf) > 255 || !inst_di_path(inf) ||
+         (n = strlen(inf)) < 4 || !inst_eq(inf + n - 4, ".INF"))) {
+        return 0;
+    }
+    t[0] = '\0';
+    inst_cat(t, sizeof(t), "XHCIDI-JOB 1\r\nJOB ");
+    inst_cat(t, sizeof(t), inst_di_job_word(job));
+    inst_cat(t, sizeof(t), "\r\nRESULT ");
+    inst_cat(t, sizeof(t), result);
+    inst_cat(t, sizeof(t), "\r\nHWND ");
+    inst_cat_number(t, sizeof(t), (INST_U32)hwnd);
+    inst_cat(t, sizeof(t), "\r\n");
+    if (job != INST_DI_PROBE) {
+        inst_cat(t, sizeof(t), "DEVICE ");
+        inst_cat(t, sizeof(t), devId);
+        inst_cat(t, sizeof(t), "\r\n");
+    }
+    if (job == INST_DI_INSTALL) {
+        inst_cat(t, sizeof(t), "INF ");
+        inst_cat(t, sizeof(t), inf);
+        inst_cat(t, sizeof(t), "\r\n");
+        if (force || quiet) {
+            inst_cat(t, sizeof(t), "FLAGS");
+            if (force) {
+                inst_cat(t, sizeof(t), " force");
+            }
+            if (quiet) {
+                inst_cat(t, sizeof(t), " quiet");
+            }
+            inst_cat(t, sizeof(t), "\r\n");
+        }
+    }
+    inst_cat(t, sizeof(t), "END\r\n");
+    if (strlen(t) > INST_DI_JOB_BYTES || strlen(t) + 1 > cap) {
+        return 0;
+    }
+    inst_copy(out, t, cap);
+    return 1;
+}
+
+/* The next line of text into line (CR and LF removed); NULL at the end. */
+static const char *inst_di_line(const char *p, char *line, size_t cap)
+{
+    size_t n = 0;
+
+    if (p == NULL || *p == '\0') {
+        return NULL;
+    }
+    while (*p != '\0' && *p != '\n') {
+        if (*p != '\r' && n + 1 < cap) {
+            line[n++] = *p;
+        }
+        p++;
+    }
+    line[n] = '\0';
+    return *p == '\n' ? p + 1 : p;
+}
+
+/* The index-th space-separated word of a line. */
+static int inst_di_word(const char *line, int index, char *out, size_t cap)
+{
+    const char *p = line;
+    size_t n;
+    int i = 0;
+
+    for (;;) {
+        while (*p == ' ') {
+            p++;
+        }
+        if (*p == '\0') {
+            if (cap > 0) {
+                out[0] = '\0';
+            }
+            return 0;
+        }
+        n = strcspn(p, " ");
+        if (i == index) {
+            if (n + 1 > cap) {
+                n = cap - 1;
+            }
+            memcpy(out, p, n);
+            out[n] = '\0';
+            return 1;
+        }
+        p += n;
+        i++;
+    }
+}
+
+/* What follows the index-th word, trimmed. */
+static const char *inst_di_rest(const char *line, int index)
+{
+    const char *p = line;
+    int i;
+
+    for (i = 0; i <= index; i++) {
+        while (*p == ' ') {
+            p++;
+        }
+        p += strcspn(p, " ");
+    }
+    while (*p == ' ') {
+        p++;
+    }
+    return p;
+}
+
+int inst_di_ended(const char *text)
+{
+    char line[INST_LINE_CHARS];
+    char w[16];
+    const char *p = text;
+
+    while ((p = inst_di_line(p, line, sizeof(line))) != NULL) {
+        if (inst_di_word(line, 0, w, sizeof(w)) && strcmp(w, "END") == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_di_parse(const char *text, const char *version, int job,
+                  const char *devId, const char *inf, INST_DI_RESULT *r)
+{
+    char line[INST_LINE_CHARS];
+    char w[INST_LINE_CHARS];
+    char word[64];
+    const char *p = text;
+    int lines = 0;
+    int versionOk = 0;
+    int jobOk = 0;
+    int results = 0;
+    int after = 0;
+    INST_U32 count = 0;
+    int verdict = INST_DI_V_NONE;
+
+    memset(r, 0, sizeof(*r));
+    word[0] = '\0';
+    if (text == NULL) {
+        return INST_DI_V_NONE;
+    }
+    while ((p = inst_di_line(p, line, sizeof(line))) != NULL) {
+        if (r->Ended) {
+            if (line[0] != '\0') {
+                after = 1;
+            }
+            continue;
+        }
+        if (!inst_di_word(line, 0, w, sizeof(w))) {
+            lines++;
+            continue;
+        }
+        if (strcmp(w, "END") == 0) {
+            r->Ended = 1;
+            if (!inst_di_word(line, 1, w, sizeof(w)) || !inst_number(w, &count)) {
+                count = 0xFFFFFFFFUL;
+            }
+            continue;
+        }
+        lines++;
+        if (lines == 1 && strcmp(w, "XHCIDI") == 0) {
+            versionOk = inst_di_word(line, 1, w, sizeof(w)) &&
+                        strcmp(w, version) == 0;
+        } else if (strcmp(w, "JOB") == 0) {
+            jobOk = inst_di_word(line, 1, w, sizeof(w)) &&
+                    inst_eq(w, inst_di_job_word(job));
+            if (jobOk && job != INST_DI_PROBE) {
+                jobOk = inst_di_word(line, 2, w, sizeof(w)) &&
+                        inst_eq(w, devId);
+            }
+            if (jobOk && job == INST_DI_INSTALL) {
+                jobOk = inst_di_word(line, 3, w, sizeof(w)) &&
+                        inst_eq(w, inf);
+            }
+        } else if (strcmp(w, "RESULT") == 0) {
+            results++;
+            inst_di_word(line, 1, word, sizeof(word));
+            if (inst_eq(word, "failed")) {
+                inst_di_word(line, 2, r->Error, sizeof(r->Error));
+                if (inst_di_word(line, 3, w, sizeof(w))) {
+                    inst_number(w, &r->Number);
+                }
+                inst_copy(r->Detail, inst_di_rest(line, 1), sizeof(r->Detail));
+            } else if (inst_eq(word, "refused")) {
+                inst_copy(r->Detail, inst_di_rest(line, 1), sizeof(r->Detail));
+            }
+        } else if (strcmp(w, "FLAGS") == 0) {
+            char hex[16];
+            inst_copy(hex, "0x", sizeof(hex));
+            if (inst_di_word(line, 1, w, sizeof(w)) && strlen(w) <= 8) {
+                inst_cat(hex, sizeof(hex), w);
+                r->HaveFlags = inst_number(hex, &r->Flags);
+            }
+        }
+    }
+    r->Lines = lines;
+    if (results == 1 && inst_eq(word, "refused")) {
+        /* The helper refused before any call, whatever its version line. */
+        r->Verdict = INST_DI_V_REFUSED;
+        return r->Verdict;
+    }
+    if (!r->Ended || after || count != (INST_U32)lines || !versionOk ||
+        !jobOk || results > 1) {
+        return INST_DI_V_NONE;
+    }
+    if (job == INST_DI_PROBE) {
+        /* The probe's one verdict word (the helper writes "probed"): any
+         * other, or none, is no clean probe (record 27 section 4.2). */
+        verdict = (results == 1 && inst_eq(word, "probed")) ?
+                  INST_DI_V_PROBED : INST_DI_V_NONE;
+    } else if (results == 0) {
+        verdict = INST_DI_V_NONE;
+    } else if (job == INST_DI_INSTALL) {
+        verdict = inst_eq(word, "installed") ? INST_DI_V_INSTALLED :
+                  inst_eq(word, "installed-restart") ?
+                      INST_DI_V_INSTALLED_RESTART :
+                  inst_eq(word, "cancelled") ? INST_DI_V_CANCELLED :
+                  inst_eq(word, "no-match") ? INST_DI_V_NO_MATCH :
+                  inst_eq(word, "not-present") ? INST_DI_V_NOT_PRESENT :
+                  inst_eq(word, "failed") ? INST_DI_V_FAILED : INST_DI_V_NONE;
+    } else {
+        verdict = inst_eq(word, "removed") ? INST_DI_V_REMOVED :
+                  inst_eq(word, "removed-restart") ? INST_DI_V_REMOVED_RESTART :
+                  inst_eq(word, "cancelled") ? INST_DI_V_CANCELLED :
+                  inst_eq(word, "not-found") ? INST_DI_V_NOT_FOUND :
+                  inst_eq(word, "failed") ? INST_DI_V_FAILED : INST_DI_V_NONE;
+    }
+    r->Verdict = verdict;
+    return verdict;
+}
+
+int inst_di_outcome(int job, int verdict)
+{
+    (void)job;
+    switch (verdict) {
+    case INST_DI_V_INSTALLED:
+    case INST_DI_V_REMOVED:
+    case INST_DI_V_PROBED:
+        return INST_DI_OUT_OK;
+    case INST_DI_V_INSTALLED_RESTART:
+    case INST_DI_V_REMOVED_RESTART:
+        return INST_DI_OUT_RESTART;
+    case INST_DI_V_CANCELLED:
+    case INST_DI_V_NO_MATCH:
+        return INST_DI_OUT_STEPS;
+    case INST_DI_V_NOT_PRESENT:
+    case INST_DI_V_NOT_FOUND:
+        return INST_DI_OUT_ABSENT;
+    case INST_DI_V_REFUSED:
+        return INST_DI_OUT_REFUSED;
+    default:
+        return INST_DI_OUT_FAILED;   /* failed, or the helper did not finish */
+    }
+}
+
+const char *inst_di_verdict_text(int verdict)
+{
+    switch (verdict) {
+    case INST_DI_V_INSTALLED:           return "installed";
+    case INST_DI_V_INSTALLED_RESTART:   return "installed, restart pending";
+    case INST_DI_V_CANCELLED:           return "cancelled in a Windows dialog";
+    case INST_DI_V_NO_MATCH:            return "the INF has no driver for it";
+    case INST_DI_V_NOT_PRESENT:         return "not present";
+    case INST_DI_V_FAILED:              return "failed";
+    case INST_DI_V_REFUSED:             return "refused by the helper";
+    case INST_DI_V_REMOVED:             return "removed";
+    case INST_DI_V_REMOVED_RESTART:     return "removed, restart pending";
+    case INST_DI_V_NOT_FOUND:           return "not found";
+    case INST_DI_V_PROBED:              return "the helper runs here";
+    default:                            return "the helper did not finish";
+    }
+}
+
+/* ======================================================================== */
+/* The installer's own files and the uninstall (record 26 sections 6.2, 9)  */
+/* ======================================================================== */
+
+const char *inst_self_file(int arch, int which)
+{
+    if (arch == INST_ARCH_AMD64) {
+        return which == INST_OWN_WINDOW ? "XHCIWZ64.EXE" : "XHCIIN64.EXE";
+    }
+    return which == INST_OWN_WINDOW ? "XHCIWIZ.EXE" : "XHCIINST.EXE";
+}
+
+void inst_arp_name(char *out, size_t cap, const char *version, int incomplete)
+{
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    inst_cat(out, cap, "xHCI98 USB 3.x drivers ");
+    inst_cat(out, cap, version);
+    if (incomplete) {
+        inst_cat(out, cap, " (incomplete: run again)");
+    }
+}
+
+int inst_arp_command(char *out, size_t cap, const char *dir, const char *exe,
+                     int nt)
+{
+    char t[INST_LINE_CHARS];
+    size_t n;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (dir == NULL || exe == NULL || dir[0] == '\0' ||
+        strchr(dir, '"') != NULL || strchr(exe, '"') != NULL ||
+        strlen(dir) + strlen(exe) + 16 >= sizeof(t)) {
+        return 0;
+    }
+    if (!nt && strchr(dir, ' ') != NULL) {
+        return 0;
+    }
+    t[0] = '\0';
+    if (nt) {
+        inst_cat(t, sizeof(t), "\"");
+    }
+    inst_cat(t, sizeof(t), dir);
+    n = strlen(t);
+    if (n > 0 && t[n - 1] != '\\') {
+        inst_cat(t, sizeof(t), "\\");
+    }
+    inst_cat(t, sizeof(t), exe);
+    if (nt) {
+        inst_cat(t, sizeof(t), "\"");
+    }
+    inst_cat(t, sizeof(t), " /uninstall");
+    if (strlen(t) + 1 > cap) {
+        return 0;
+    }
+    inst_copy(out, t, cap);
+    return 1;
+}
+
+int inst_uninstall_route(int selfInInstallDir, int fromGiven,
+                         int fromIsInstallDir)
+{
+    if (fromGiven) {
+        return (fromIsInstallDir && !selfInInstallDir) ? INST_UN_RUN
+                                                       : INST_UN_REFUSE;
+    }
+    return selfInInstallDir ? INST_UN_RELAUNCH : INST_UN_RUN;
+}
+
+int inst_relaunch_cmd(char *out, size_t cap, const char *exe,
+                      const char *fromDir, const char *log, int nopause,
+                      int yes)
+{
+    char t[INST_LINE_CHARS * 2];
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (exe == NULL || fromDir == NULL || exe[0] == '\0' ||
+        fromDir[0] == '\0' || strchr(exe, '"') != NULL ||
+        strchr(fromDir, '"') != NULL ||
+        (log != NULL && strchr(log, '"') != NULL) ||
+        strlen(exe) + strlen(fromDir) +
+            (log != NULL ? strlen(log) : 0) + 64 >= sizeof(t)) {
+        return 0;
+    }
+    t[0] = '\0';
+    inst_cat(t, sizeof(t), "\"");
+    inst_cat(t, sizeof(t), exe);
+    inst_cat(t, sizeof(t), "\" /uninstall /from \"");
+    inst_cat(t, sizeof(t), fromDir);
+    inst_cat(t, sizeof(t), "\"");
+    if (log != NULL && log[0] != '\0') {
+        inst_cat(t, sizeof(t), " /log \"");
+        inst_cat(t, sizeof(t), log);
+        inst_cat(t, sizeof(t), "\"");
+    }
+    if (nopause) {
+        inst_cat(t, sizeof(t), " /nopause");
+    }
+    if (yes) {
+        inst_cat(t, sizeof(t), " /yes");
+    }
+    if (strlen(t) + 1 > cap) {
+        return 0;
+    }
+    inst_copy(out, t, cap);
+    return 1;
+}
+
+const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv)
+{
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (inst_switch(argv[i], "console")) {
+            return "/console is INSTALL.BAT's: run INSTALL /console ... for "
+                   "the console tool.";
+        }
+    }
+    if (opts->Yes || opts->List || opts->NoPause || opts->Devices ||
+        opts->Eject || opts->Dir[0] != '\0') {
+        return "that switch is the console tool's: use INSTALL /console "
+               "with it.";
+    }
+    return NULL;
+}
+
+/* ======================================================================== */
+/* The window's texts (record 26 section 5)                                  */
+/* ======================================================================== */
+
+const INST_PAGE_TEXT instPageTexts[] = {
+    { INST_PT_WELCOME,
+      "This installs or updates the xHCI98 USB 3.x drivers on this "
+      "computer, puts the xHCI98 tools in a folder you choose, and asks "
+      "you to restart Windows at the end. Nothing is changed until you "
+      "click Install on the Summary page. Help opens the readme.",
+      284, 58 },
+    { INST_PT_WAIT, "Please wait: reading this computer's devices ...",
+      284, 54 },
+    { INST_PT_FOUND,
+      "The devices this package's drivers are for, and what will be done:",
+      284, 10 },
+    { INST_PT_DRIVERS,
+      "xHCI98 USB 3.x host controller driver and UAS driver", 270, 10 },
+    { INST_PT_DRIVERS_T,
+      "xhci98.sys and xhciuas.sys: the controller, its hubs and devices, "
+      "and UAS disks. Always installed.",
+      272, 16 },
+    { INST_PT_TB, "Thunderbolt 3 / USB4 support (xhcicm.sys)", 270, 10 },
+    { INST_PT_TB_T,
+      "The connection manager. A device plugged into a Thunderbolt or USB4 "
+      "port is then approved and can reach the computer's memory: see "
+      "XhciCmApprove on the Thunderbolt settings page.",
+      272, 26 },
+    { INST_PT_TB_ABSENT,
+      "No Thunderbolt or USB4 controller was found. Some computers show "
+      "theirs only while a device is plugged in, or only with a BIOS "
+      "setting: tick it if this computer has such a port.",
+      272, 26 },
+    { INST_PT_TRAY, "xHCI98 USB Tree, started at login", 270, 10 },
+    { INST_PT_TRAY_T,
+      "The tray tool that lists the USB devices and removes them safely.",
+      272, 10 },
+    { INST_PT_DIR, "The folder for the xHCI98 tools and this installer:",
+      284, 10 },
+    { INST_PT_DIR_9X,
+      "Windows 98 SE and ME: the package's drivers go there too. Each "
+      "folder name 8 characters at most, no spaces.",
+      284, 18 },
+    { INST_PT_USB,
+      "The USB settings. A value left as it is is not written; one you "
+      "change is written machine-wide, for every controller.",
+      284, 18 },
+    { INST_PT_TBSET,
+      "The Thunderbolt and USB4 settings. A value left as it is is not "
+      "written; one you change is written machine-wide.",
+      284, 18 },
+    { INST_PT_TB_LATER,
+      "No controller is present now: these take effect when it appears.",
+      218, 20 },
+    { INST_PT_ADVANCED,
+      "For the release notes' advice and a tester's use. A value left as "
+      "it is is not written; one you change is written machine-wide.",
+      304, 18 },
+    { INST_PT_SUMMARY,
+      "Nothing has been changed yet. Click Install to do the following.",
+      284, 18 },
+    { INST_PT_PROGRESS,
+      "Windows may open windows of its own: answer them.", 284, 10 },
+    { INST_PT_STEPS,
+      "These devices could not be installed by the installer. Do their "
+      "steps after the restart; save them to a file first.",
+      284, 20 },
+    { INST_PT_NOW, "Restart Windows now", 284, 10 },
+    { INST_PT_LATER, "Restart Windows later", 284, 10 },
+    { INST_PT_S98, "Stor98, the bundled NVMe driver (a separate project)",
+      270, 10 },
+    { INST_PT_S98_T,
+      "For an NVMe drive behind a Thunderbolt or USB4 tunnel, or an "
+      "internal one; it installs only on NVMe drives with no driver.",
+      272, 18 },
+    { INST_PT_S98SET,
+      "Stor98's settings (its readme, SETTINGS). A row left as it is writes "
+      "nothing; Stor98 keeps its built-in default.",
+      284, 18 },
+    { INST_PT_S98_UNUSED,
+      "Nothing is using this drive (Stor98's readme: close every program "
+      "and window that uses it before the update).",
+      284, 18 },
+    { INST_PT_SHUT_NOW, "Shut down now, then start Windows again", 284, 10 },
+    { INST_PT_SHUT_LATER, "Shut down later", 284, 10 },
+    { INST_PT_UN_TITLE, "Remove the xHCI98 USB 3.x drivers", 284, 10 },
+    { INST_PT_UN_WARN,
+      "This removes the xhci98 drivers from Windows. On a machine whose "
+      "only USB controller is xHCI, the USB keyboard and mouse stop working "
+      "when the controller's driver is removed, and stay dead until another "
+      "driver is installed. Have a PS/2 keyboard, a laptop's built-in one, "
+      "or a USB controller another driver runs, before you go on.",
+      284, 50 },
+    { INST_PT_UN_AGREE,
+      "I have a keyboard and mouse that do not go through this driver, or "
+      "I accept that the USB ones stop working.",
+      270, 20 },
+    { INST_PT_UN_SUMMARY,
+      "Nothing has been changed yet. Click Remove to take away every "
+      "driver of this package, its tools and its records.",
+      284, 18 },
+    { INST_PT_GATE,
+      "If Windows has a hardware wizard open (Found New Hardware, Add New "
+      "Hardware), finish it first: Next through Finish, even when it finds "
+      "no driver. Do not cancel the wizard: that hides its device until "
+      "Windows restarts. OK goes on; Cancel stops here.",
+      0, 0 }
+};
+const int instPageTextCount =
+    (int)(sizeof(instPageTexts) / sizeof(instPageTexts[0]));
+
+const char *inst_page_text(int id)
+{
+    int i;
+
+    for (i = 0; i < instPageTextCount; i++) {
+        if (instPageTexts[i].Id == id) {
+            return instPageTexts[i].Text;
+        }
+    }
+    return "";
+}
+
+INST_U32 inst_text_lines(const char *text, INST_U32 cols)
+{
+    INST_U32 lines = 0;
+    INST_U32 col = 0;
+    const char *p = text;
+
+    if (cols == 0) {
+        return 0;
+    }
+    while (*p != '\0') {
+        size_t w;
+        if (*p == '\n') {
+            lines++;
+            col = 0;
+            p++;
+            continue;
+        }
+        if (*p == ' ') {
+            p++;
+            if (col > 0 && col < cols) {
+                col++;
+            }
+            continue;
+        }
+        w = strcspn(p, " \n");
+        if (col > 0 && col + w > cols) {
+            lines++;
+            col = 0;
+        }
+        while (w > cols) {
+            lines++;
+            w -= cols;
+            p += cols;
+        }
+        col += (INST_U32)w;
+        p += w;
+    }
+    return lines + (col > 0 ? 1 : 0);
+}
+
+INST_U32 inst_page_cols(INST_U32 widthDlu)
+{
+    /* A dialog unit across is a quarter of the font's average character;
+     * the margin keeps a proportional font's wider letters inside. The
+     * window's self-test measures the real rendering. */
+    return widthDlu >= 32 ? widthDlu / 4 - 3 : 1;
+}
+
+INST_U32 inst_page_rows(INST_U32 heightDlu)
+{
+    return heightDlu / 8;
+}
+
+/* ======================================================================== */
+/* Stor98, the bundled NVMe driver (record 26 sections 5.6 and 6.3)          */
+/* ======================================================================== */
+
+/* Copied from Stor98's readme.txt, "SETTINGS", at INST_S98_TABLE_VERSION;
+ * test_inst holds each row to test\stor98-settings.txt, that table. */
+const INST_S98_VALUE instS98Values[INST_S98_COUNT] = {
+    { "StorWriteThrough", "writethrough", INST_S98_WORDS, 1, "",
+      "auto", "auto", 0UL, 0UL, 0UL, 0, NULL,
+      { "auto", "off", "cacheoff", "fua" },
+      { "the default: cacheoff on ME, off elsewhere",
+        "leaves the drive as it is",
+        "turns the drive's write cache off (fua if it refuses)",
+        "marks every write Force Unit Access" },
+      "how writes reach the drive's media" },
+    { "StorPollMode", "pollmode", INST_S98_NUMBER, 1, "",
+      "0", "0", 0UL, 1UL, 1UL, 0, NULL,
+      { NULL, NULL, NULL, NULL },
+      { "poll only without an interrupt", "always poll", NULL, NULL },
+      "when the driver polls the controller for completed requests" },
+    { "StorMaxTransferKB", "maxtransferkb", INST_S98_NUMBER, 0, "KiB",
+      "512", "256", 64UL, 512UL, 4UL, 0, NULL,
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "the largest request Windows sends the driver" },
+    { "StorPollBusyUs", "pollbusyus", INST_S98_NUMBER, 0, "us",
+      "1000", "1000", 1000UL, 100000UL, 1UL, 1, "the default",
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "the polling interval while requests are outstanding" },
+    { "StorPollIdleMs", "pollidlems", INST_S98_NUMBER, 0, "ms",
+      "1000", "1000", 100UL, 60000UL, 1UL, 1, "no polling when idle",
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "the polling interval while the drive is idle" },
+    { "StorPollSpinUs", "pollspinus", INST_S98_NUMBER, 0, "us",
+      "0", "500", 0UL, 500UL, 1UL, 0, NULL,
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "how long to check for a completion right after a request" },
+    { NULL, "gone", INST_S98_NUMBER, 0, "ms",
+      NULL, "5000", 1UL, 600000UL, 1UL, 0, NULL,
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "how long held requests wait for proof the drive is gone" },
+    { NULL, "idle", INST_S98_NUMBER, 0, "ms",
+      NULL, "1000", 10UL, 4294967295UL, 1UL, 0, NULL,
+      { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
+      "the write-idle time before a flush" }
+};
+
+int inst_s98_applies(int i, int nt)
+{
+    if (i < 0 || i >= INST_S98_COUNT) {
+        return 0;
+    }
+    return nt ? instS98Values[i].KeyNt != NULL
+              : instS98Values[i].Name9x != NULL;
+}
+
+const char *inst_s98_default(int i, int nt)
+{
+    if (!inst_s98_applies(i, nt)) {
+        return "";
+    }
+    return nt ? instS98Values[i].DefNt : instS98Values[i].Def9x;
+}
+
+void inst_s98_default_text(int i, int nt, int me, char *out, size_t cap)
+{
+    const INST_S98_VALUE *v;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (!inst_s98_applies(i, nt)) {
+        return;
+    }
+    v = &instS98Values[i];
+    inst_cat(out, cap, inst_s98_default(i, nt));
+    if (i == INST_S98_WRITETHROUGH) {
+        /* auto is a word for two behaviours: say which runs here. */
+        inst_cat(out, cap, me ? " (here: cacheoff)" : " (here: off)");
+    } else if (v->Unit[0] != '\0') {
+        inst_cat(out, cap, " ");
+        inst_cat(out, cap, v->Unit);
+    }
+}
+
+/* The range's top on this system: the transfer size is bounded by its own
+ * default, which differs. */
+static INST_U32 inst_s98_hi(int i, int nt)
+{
+    if (i == INST_S98_MAXTRANSFERKB) {
+        return nt ? 256UL : 512UL;
+    }
+    return instS98Values[i].Hi;
+}
+
+int inst_s98_check(int i, int nt, const char *text, char *out, size_t cap,
+                   const char **why)
+{
+    const INST_S98_VALUE *v;
+    char t[32];
+    INST_U32 n;
+    INST_U32 hi;
+    int k;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (why != NULL) {
+        *why = NULL;
+    }
+    if (!inst_s98_applies(i, nt)) {
+        if (why != NULL) {
+            *why = "not a setting of Stor98 on this system";
+        }
+        return 0;
+    }
+    v = &instS98Values[i];
+    if (text == NULL || strlen(text) >= sizeof(t) || text[0] == '\0') {
+        if (why != NULL) {
+            *why = "no value";
+        }
+        return 0;
+    }
+    inst_copy(t, text, sizeof(t));
+    inst_trim(t);
+    if (t[0] == '\0') {
+        if (why != NULL) {
+            *why = "no value";
+        }
+        return 0;
+    }
+    if (v->Kind == INST_S98_WORDS) {
+        for (k = 0; k < INST_S98_WORDS_MAX && v->Words[k] != NULL; k++) {
+            if (inst_eq(t, v->Words[k])) {
+                inst_copy(out, v->Words[k], cap);
+                return 1;
+            }
+        }
+        if (why != NULL) {
+            *why = "not one of auto, off, cacheoff, fua";
+        }
+        return 0;
+    }
+    /* Decimal digits only, to 4294967295 ("10 and up" has no other top
+     * than the DWORD's). */
+    n = 0;
+    for (k = 0; t[k] != '\0'; k++) {
+        INST_U32 dgt = (INST_U32)(t[k] - '0');
+        if (t[k] < '0' || t[k] > '9' ||
+            n > (0xFFFFFFFFUL - dgt) / 10UL) {
+            if (why != NULL) {
+                *why = (t[k] < '0' || t[k] > '9') ? "not a decimal number"
+                                                  : "outside the range "
+                                                    "Stor98's readme gives";
+            }
+            return 0;
+        }
+        n = n * 10UL + dgt;
+    }
+    hi = inst_s98_hi(i, nt);
+    if (!(n == 0UL && v->ZeroOk) &&
+        (n < v->Lo || n > hi || (v->Step > 1UL && n % v->Step != 0UL))) {
+        if (why != NULL) {
+            *why = "outside the range Stor98's readme gives";
+        }
+        return 0;
+    }
+    out[0] = '\0';
+    inst_cat_number(out, cap, n);
+    return 1;
+}
+
+/* The next pair of a DriverParameter string from *p: its bounds, or 0 at
+ * the end. Empty segments are skipped. */
+static int inst_s98_pair(const char **p, const char **start, size_t *len)
+{
+    const char *s = *p;
+    const char *e;
+
+    while (*s == ';') {
+        s++;
+    }
+    if (*s == '\0') {
+        *p = s;
+        return 0;
+    }
+    e = strchr(s, ';');
+    if (e == NULL) {
+        e = s + strlen(s);
+    }
+    *start = s;
+    *len = (size_t)(e - s);
+    *p = e;
+    return 1;
+}
+
+/* 1 when the pair [s, s+len) is key's: "key=" at its start, whatever the
+ * case and spaces around the key. */
+static int inst_s98_pair_is(const char *s, size_t len, const char *key,
+                            const char **value)
+{
+    size_t kl = strlen(key);
+    size_t i = 0;
+
+    while (i < len && s[i] == ' ') {
+        i++;
+    }
+    if (len - i < kl || !inst_eqn(s + i, key, kl)) {
+        return 0;
+    }
+    i += kl;
+    while (i < len && s[i] == ' ') {
+        i++;
+    }
+    if (i >= len || s[i] != '=') {
+        return 0;
+    }
+    if (value != NULL) {
+        *value = s + i + 1;
+    }
+    return 1;
+}
+
+int inst_s98_param_get(const char *param, const char *key, char *out,
+                       size_t cap)
+{
+    const char *p = param != NULL ? param : "";
+    const char *s;
+    const char *v;
+    size_t len;
+    size_t n;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    while (inst_s98_pair(&p, &s, &len)) {
+        if (inst_s98_pair_is(s, len, key, &v)) {
+            n = len - (size_t)(v - s);
+            if (n + 1 > cap) {
+                return 0;
+            }
+            memcpy(out, v, n);
+            out[n] = '\0';
+            inst_trim(out);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_s98_param_set(const char *param, const char *key, const char *value,
+                       char *out, size_t cap)
+{
+    const char *p = param != NULL ? param : "";
+    const char *s;
+    size_t len;
+    size_t n = 0;
+    int done = 0;
+    char pair[64];
+    size_t pl;
+
+    if (cap == 0) {
+        return 0;
+    }
+    out[0] = '\0';
+    pair[0] = '\0';
+    if (value != NULL) {
+        inst_cat(pair, sizeof(pair), key);
+        inst_cat(pair, sizeof(pair), "=");
+        inst_cat(pair, sizeof(pair), value);
+        for (pl = 0; pair[pl] != '='; pl++) {
+            if (pair[pl] >= 'A' && pair[pl] <= 'Z') {
+                pair[pl] = (char)(pair[pl] - 'A' + 'a');
+            }
+        }
+    }
+    pl = strlen(pair);
+    while (inst_s98_pair(&p, &s, &len)) {
+        const char *put = s;
+        size_t putLen = len;
+        if (inst_s98_pair_is(s, len, key, NULL)) {
+            if (done || value == NULL) {
+                /* A second pair of the key, or the key removed. */
+                continue;
+            }
+            put = pair;
+            putLen = pl;
+            done = 1;
+        }
+        if (n + (n ? 1 : 0) + putLen + 1 > cap) {
+            out[0] = '\0';
+            return 0;
+        }
+        if (n) {
+            out[n++] = ';';
+        }
+        memcpy(out + n, put, putLen);
+        n += putLen;
+        out[n] = '\0';
+    }
+    if (!done && value != NULL) {
+        if (n + (n ? 1 : 0) + pl + 1 > cap) {
+            out[0] = '\0';
+            return 0;
+        }
+        if (n) {
+            out[n++] = ';';
+        }
+        memcpy(out + n, pair, pl);
+        n += pl;
+        out[n] = '\0';
+    }
+    return 1;
+}
+
+void inst_s98_now_text(int i, int nt, int me, int state, const char *value,
+                       char *out, size_t cap)
+{
+    char d[48];
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (state < 0) {
+        inst_cat(out, cap, "cannot be read");
+        return;
+    }
+    if (state == 0 || value == NULL) {
+        inst_s98_default_text(i, nt, me, d, sizeof(d));
+        inst_cat(out, cap, "not set (the built-in default is ");
+        inst_cat(out, cap, d);
+        inst_cat(out, cap, ")");
+        return;
+    }
+    inst_cat(out, cap, "set: ");
+    inst_cat(out, cap, value);
+}
+
+int inst_s98_owned_by_call(int before, int afterS98)
+{
+    return before != 2 && afterS98;
+}
+
+int inst_s98_owned_by_settle(int before, int afterS98, int nt,
+                             int infStaged, int preExisting)
+{
+    if (before == 2 || !afterS98) {
+        return 0;
+    }
+    return nt ? infStaged : !preExisting;
+}
+
+int inst_s98_service_removable(int devnodesLeft, int preExisting)
+{
+    return !devnodesLeft && !preExisting;
+}
+
+int inst_s98_cold_start(int nt)
+{
+    return !nt;
+}
+
+int inst_s98_decide(int haveS98, int yes, int stor98Switch, int list,
+                    int *asked, int *def)
+{
+    *def = 0;
+    *asked = haveS98 && !yes && !stor98Switch && !list;
+    return haveS98 && stor98Switch;
+}
+
+int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
+                             int behindTunnel)
+{
+    return nt && updatedOk && ownCm && behindTunnel;
+}
+
+/* ---- SHA-256 (FIPS 180-4): the 98 SE and ME INF listings' file hashes ---- */
+
+static const INST_U32 instShaK[64] = {
+    0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL, 0x3956c25bUL,
+    0x59f111f1UL, 0x923f82a4UL, 0xab1c5ed5UL, 0xd807aa98UL, 0x12835b01UL,
+    0x243185beUL, 0x550c7dc3UL, 0x72be5d74UL, 0x80deb1feUL, 0x9bdc06a7UL,
+    0xc19bf174UL, 0xe49b69c1UL, 0xefbe4786UL, 0x0fc19dc6UL, 0x240ca1ccUL,
+    0x2de92c6fUL, 0x4a7484aaUL, 0x5cb0a9dcUL, 0x76f988daUL, 0x983e5152UL,
+    0xa831c66dUL, 0xb00327c8UL, 0xbf597fc7UL, 0xc6e00bf3UL, 0xd5a79147UL,
+    0x06ca6351UL, 0x14292967UL, 0x27b70a85UL, 0x2e1b2138UL, 0x4d2c6dfcUL,
+    0x53380d13UL, 0x650a7354UL, 0x766a0abbUL, 0x81c2c92eUL, 0x92722c85UL,
+    0xa2bfe8a1UL, 0xa81a664bUL, 0xc24b8b70UL, 0xc76c51a3UL, 0xd192e819UL,
+    0xd6990624UL, 0xf40e3585UL, 0x106aa070UL, 0x19a4c116UL, 0x1e376c08UL,
+    0x2748774cUL, 0x34b0bcb5UL, 0x391c0cb3UL, 0x4ed8aa4aUL, 0x5b9cca4fUL,
+    0x682e6ff3UL, 0x748f82eeUL, 0x78a5636fUL, 0x84c87814UL, 0x8cc70208UL,
+    0x90befffaUL, 0xa4506cebUL, 0xbef9a3f7UL, 0xc67178f2UL
+};
+
+#define INST_ROR(x, n) ((((x) >> (n)) | ((x) << (32 - (n)))) & 0xFFFFFFFFUL)
+
+static void inst_sha_block(INST_U32 *h, const unsigned char *p)
+{
+    INST_U32 w[64];
+    INST_U32 a, b, c, d, e, f, g, k, t1, t2;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        w[i] = ((INST_U32)p[4 * i] << 24) | ((INST_U32)p[4 * i + 1] << 16) |
+               ((INST_U32)p[4 * i + 2] << 8) | (INST_U32)p[4 * i + 3];
+    }
+    for (i = 16; i < 64; i++) {
+        INST_U32 s0 = INST_ROR(w[i - 15], 7) ^ INST_ROR(w[i - 15], 18) ^
+                      (w[i - 15] >> 3);
+        INST_U32 s1 = INST_ROR(w[i - 2], 17) ^ INST_ROR(w[i - 2], 19) ^
+                      (w[i - 2] >> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) & 0xFFFFFFFFUL;
+    }
+    a = h[0]; b = h[1]; c = h[2]; d = h[3];
+    e = h[4]; f = h[5]; g = h[6]; k = h[7];
+    for (i = 0; i < 64; i++) {
+        t1 = (k + (INST_ROR(e, 6) ^ INST_ROR(e, 11) ^ INST_ROR(e, 25)) +
+              ((e & f) ^ (~e & g)) + instShaK[i] + w[i]) & 0xFFFFFFFFUL;
+        t2 = ((INST_ROR(a, 2) ^ INST_ROR(a, 13) ^ INST_ROR(a, 22)) +
+              ((a & b) ^ (a & c) ^ (b & c))) & 0xFFFFFFFFUL;
+        k = g; g = f; f = e;
+        e = (d + t1) & 0xFFFFFFFFUL;
+        d = c; c = b; b = a;
+        a = (t1 + t2) & 0xFFFFFFFFUL;
+    }
+    h[0] = (h[0] + a) & 0xFFFFFFFFUL; h[1] = (h[1] + b) & 0xFFFFFFFFUL;
+    h[2] = (h[2] + c) & 0xFFFFFFFFUL; h[3] = (h[3] + d) & 0xFFFFFFFFUL;
+    h[4] = (h[4] + e) & 0xFFFFFFFFUL; h[5] = (h[5] + f) & 0xFFFFFFFFUL;
+    h[6] = (h[6] + g) & 0xFFFFFFFFUL; h[7] = (h[7] + k) & 0xFFFFFFFFUL;
+}
+
+void inst_sha256(const unsigned char *data, size_t len, char *hex65)
+{
+    static const char digits[] = "0123456789ABCDEF";
+    INST_U32 h[8];
+    unsigned char tail[128];
+    size_t full = len - len % 64;
+    size_t rest = len - full;
+    size_t i;
+    size_t n;
+    INST_U32 bitsLo = (INST_U32)((len << 3) & 0xFFFFFFFFUL);
+    INST_U32 bitsHi = (INST_U32)((len >> 29) & 0xFFFFFFFFUL);
+
+    h[0] = 0x6a09e667UL; h[1] = 0xbb67ae85UL; h[2] = 0x3c6ef372UL;
+    h[3] = 0xa54ff53aUL; h[4] = 0x510e527fUL; h[5] = 0x9b05688cUL;
+    h[6] = 0x1f83d9abUL; h[7] = 0x5be0cd19UL;
+    for (i = 0; i < full; i += 64) {
+        inst_sha_block(h, data + i);
+    }
+    memset(tail, 0, sizeof(tail));
+    if (rest > 0) {
+        memcpy(tail, data + full, rest);
+    }
+    tail[rest] = 0x80;
+    n = rest + 1 + 8 <= 64 ? 64 : 128;
+    tail[n - 8] = (unsigned char)(bitsHi >> 24);
+    tail[n - 7] = (unsigned char)(bitsHi >> 16);
+    tail[n - 6] = (unsigned char)(bitsHi >> 8);
+    tail[n - 5] = (unsigned char)bitsHi;
+    tail[n - 4] = (unsigned char)(bitsLo >> 24);
+    tail[n - 3] = (unsigned char)(bitsLo >> 16);
+    tail[n - 2] = (unsigned char)(bitsLo >> 8);
+    tail[n - 1] = (unsigned char)bitsLo;
+    inst_sha_block(h, tail);
+    if (n == 128) {
+        inst_sha_block(h, tail + 64);
+    }
+    for (i = 0; i < 8; i++) {
+        int b;
+        for (b = 0; b < 8; b++) {
+            hex65[i * 8 + (size_t)b] =
+                digits[(h[i] >> (28 - 4 * b)) & 0xFUL];
+        }
+    }
+    hex65[64] = '\0';
 }
