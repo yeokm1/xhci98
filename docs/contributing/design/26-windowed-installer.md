@@ -1,6 +1,10 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 3, 2026-10-18, reviewed and revised again (Stor98's
+Status: draft 4, 2026-10-18, reviewed and revised a third time (Stor98's
+explicit bindings recorded on their own evidence, the 98 SE and ME copy
+record, the update precautions per system, the USB4 reconnection
+outcome, the shutdown line); draft 3, 2026-10-18, reviewed and revised
+again (Stor98's
 ownership by first binding, its staged copies kept across updates, its
 update precautions, its 98 SE and ME binding, the staging from the copy,
 an incomplete uninstall keeping its entry point); draft 2, 2026-10-18,
@@ -462,17 +466,23 @@ each as the console prints it), and the restart:
   after `SE_SHUTDOWN_NAME` is enabled on the process token
   (`OpenProcessToken`, `LookupPrivilegeValueA`, `AdjustTokenPrivileges`,
   looked up at run time, as record 23's security routines are). A refusal
-  of the restart is shown and the window closes. When a Stor98 device was
-  updated in this run the choice reads "Shut down now" (`EWX_SHUTDOWN`)
-  and "Shut down later", because Stor98's readme asks for a shutdown
-  and a fresh start rather than a warm restart after its update
-  (section 6.3). The console tool never
+  of the restart is shown and the window closes. On 98 SE and ME, when a
+  Stor98 device was updated in this run, the choice reads "Shut down
+  now" (`EWX_SHUTDOWN`) and "Shut down later", because Stor98's readme
+  asks for a shutdown and a fresh start rather than a warm restart after
+  its update on those two systems (section 6.3); the final line of
+  record 23 section 7.4 then reads "Changes were made. Please shut down
+  and start Windows again." in both front ends, with the exit code
+  unchanged (3), the one amendment of that section (section 12). On
+  2000 to 7 a Stor98 update keeps the ordinary restart. The console tool
+  never
   restarts the machine (record 23 section 5.9): that is the window's one
   addition to what the engine may do, and the console's final line is
   unchanged (W5).
 - Where the run changed nothing, Finish closes.
-- Where steps are left, "Restart later" is preselected and the page says
-  to do them first, as the console's unfinished line does.
+- Where steps are left, the second button ("Restart later", or "Shut
+  down later" in the case above) is preselected and the page says to do
+  them first, as the console's unfinished line does.
 
 The exit code is record 23's, so `INSTALL.BAT` passes it on unchanged
 whichever front end ran.
@@ -533,38 +543,57 @@ unasked). With the box ticked:
   devices (record 27 section 6 step 6), with Stor98's own read-back after
   it (section 8).
 - **An update of a Stor98 device** follows Stor98's readme ("Updating the
-  driver"): nothing may be using the drive's volume, and the machine is
+  driver"), whose two precautions are each for its own systems. On 98 SE
+  and ME: nothing may be using the drive's volume, and the machine is
   shut down and started again afterwards rather than restarted with the
   drive attached (the readme records a volume coming back "not ready",
-  and ME stopping with a VCACHE error, after a warm restart). So the
-  Summary page lists each Stor98 device the run will update with a check
-  box "nothing is using this drive" that Install requires; the finish
-  page offers "Shut down now" in place of "Restart now" (section 5.9);
-  and on a USB4 host under this package's own connection manager the page
-  says to unplug the drive and plug it in again after the update, as the
-  readme does. The console tool asks the same question before such an
-  update and ends with the shutdown line in place of the restart line.
+  and ME stopping with a VCACHE error, after a warm restart there). So on
+  those two systems the Summary page lists each Stor98 device the run
+  will update with a check box "nothing is using this drive" that
+  Install requires, and the finish page offers "Shut down now" in place
+  of "Restart now" (section 5.9); the console tool asks the same before
+  such an update and ends with the shutdown line. On 2000 to 7 the
+  ordinary restart flow stands, and one thing is added: on a USB4 host
+  under this package's own connection manager, a driver change on a
+  tunnelled drive stops the device, which the connection manager takes as
+  an eject and tears the tunnel down, after the call returns (record 24
+  section 5.2). A Stor98 device that is gone after its update there is
+  therefore not a failure of record 23 section 5.9's rule (section 8) but
+  "updated, awaiting reconnection": the Progress page asks to unplug the
+  drive and plug it in again and waits for it, bounded at two minutes and
+  skippable, then reads it back as any updated device; a device not
+  reconnected is a step left (exit 4), never a success and never a
+  failure, and is verified by the next run. The console tool prints the
+  same request and waits the same way.
 - **The record** (owner, 2026-10-18: the uninstall removes the bundled
   Stor98 only when this package's installer installed it). A key
   `HKLM\Software\xhci98\Stor98` with: `PreExisting` (`REG_DWORD` 1 when
   the baseline of the first bullet found any Stor98, a service, a driver
   key or a bound devnode; written once, never cleared); `Version` (the
   bundled release last installed); under `Staged` one value per INF copy
-  this installer created, its name the `oemNN.inf` `SetupCopyOEMInf`
-  returned on NT or the copy's directory on 98 SE and ME, its value the
-  Stor98 version, kept across updates so that two bundled versions in
-  succession leave two entries, and never one `SetupCopyOEMInf` answered
-  with an INF already in the store (that one was there before and is
-  left); under `Devices` one value per device instance id the installer
-  first bound to Stor98, that is a device that at the baseline, or at the
-  reading before the pass that installed it, had no driver, or no Stor98,
-  and after the pass runs Stor98, whether the helper or the installer's
-  call bound it or Windows did from the staged INF during a settle; the
-  comparison of each reading against the one before attributes such a
-  binding to the installer when the device's driver key's `InfPath` names
-  an entry under `Staged` (NT), or when `PreExisting` is clear (98 SE and
-  ME, where the `INF\OTHER` copy's origin is not recorded); a device that
-  ran Stor98 at the baseline, or that an update changed, is never added.
+  the setup engine made for this installer's installs, on NT the
+  `oemNN.inf` name `SetupCopyOEMInf` returned when it made a new copy,
+  never one it answered with an INF already in the store (that one was
+  there before and is left), and on 98 SE and ME the `INF\OTHER` copy a
+  recorded device's driver key names after its install when no entry
+  named it before (the flat copy in the install directory is the current
+  source, one directory replaced on an update under record 23 section
+  4.4's lists, not a copy the engine keeps, and is not recorded here);
+  each value the Stor98 version, kept across updates, so that two bundled
+  versions in succession leave two entries where the engine made two
+  copies, which the leg reads; under `Devices` one value per device
+  instance id the installer first bound to Stor98, by two rules with
+  their own evidence: a device the installer's own call or the helper
+  bound, whose reading before the call showed no driver, or no Stor98,
+  and whose reading after shows Stor98, is recorded on that evidence
+  alone, whatever `PreExisting` says and whichever INF the engine chose;
+  a device Windows bound by itself from the staged INF during a settle is
+  recorded when the comparison of that reading with the one before shows
+  it newly bound and its driver key's `InfPath` names an entry under
+  `Staged` (NT), or `PreExisting` is clear (98 SE and ME, where the copy's
+  origin is not recorded), and otherwise is left unrecorded and said in
+  the log; a device that ran Stor98 at the baseline, or that an update
+  changed, is never added.
   Under `Settings` one value per Stor98 setting the installer wrote
   (section 5.6). A run with the box unticked never touches an installed
   Stor98 and writes none of it. Staging and installing are told apart: a
@@ -584,7 +613,10 @@ unasked). With the box ticked:
   installer did not install was left. A device the user installed and
   this installer only updated keeps its binding, and two devices sharing
   one INF, service and binary, one installed by hand and one by this
-  installer, lose only the installer's device.
+  installer, lose only the installer's device; a staged copy that device
+  still names (an update of the hand-installed device from the bundled
+  release points its driver key at the newest copy) stays with it, by
+  the reference check, and the finish page says so.
 - The x64 `stor98.sys` keeps Stor98's own test signature; the test-signing
   note of record 23 section 5.10 names it beside this package's drivers
   when the box is ticked, and `stor98-test.cer` is never imported (the
@@ -654,8 +686,9 @@ from `3.1.0.0`: each device the helper installed is read again (the driver
 key's `NTMPDriver` naming the group's `.sys`, `DriverVersion` or the
 binary's version at the package's, the devnode present with no problem
 code), and a device gone after its install, or left with a problem code,
-is a failure as on NT, with record 23's one exception for a device that
-needs the restart (`DI_NEEDRESTART` or `DI_NEEDREBOOT` in the helper's
+is a failure as on NT, with record 23's exception for a device that
+needs the restart, and the one of section 6.3 for a tunnelled Stor98
+device awaiting reconnection on 2000 to 7 (`DI_NEEDRESTART` or `DI_NEEDREBOOT` in the helper's
 result, record 27 section 5: "installed, restart pending"). A cancelled
 wizard's entry of section 6.3 (recorded, not running now) is a step as
 before.
@@ -879,7 +912,9 @@ this list is the whole of it:
   copied unless asked".
 - Section 6.2 to 6.5: the helper in place of the printed steps for the
   devices it reaches; the steps kept for the device it cannot (section 7).
-- Section 7.1: `/stor98`, `/from`, `/console`; 7.4 unchanged.
+- Section 7.1: `/stor98`, `/from`, `/console`; 7.4: the final line's one
+  new form, the shutdown line on 98 SE and ME after a Stor98 update, with
+  the exit codes unchanged.
 - Section 8.1: the Stor98 rows and the asked-or-advanced column; 8.3: the
   mixed state of two controllers kept; 8.4: the machine-wide location
   (42-A.17) and Stor98's locations; `/defaults` unchanged.
@@ -937,9 +972,10 @@ this list is the whole of it:
 - **W13** Stor98's ownership is by first binding: a device the installer
   (or Windows, from its staged INF) first bound to Stor98 is recorded;
   one it only updated never is; its staged copies are recorded one by
-  one; an update of a Stor98 device needs the user's word that nothing
-  uses the drive and ends with a shutdown, as Stor98's readme asks
-  (section 6.3).
+  one; on 98 SE and ME an update of a Stor98 device needs the
+  user's word that nothing uses the drive and ends with a shutdown, and on
+  2000 to 7 under the USB4 connection manager it waits for the drive's
+  reconnection, as Stor98's readme asks per system (section 6.3).
 - **W14** An incomplete uninstall keeps its entry point, records and
   helper for the next run (section 9.3).
 - **W12** The uninstall and the device modes need no package: they run

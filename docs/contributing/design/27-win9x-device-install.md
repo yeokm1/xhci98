@@ -1,6 +1,9 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 3, 2026-10-18, reviewed and revised again (the bounded
+Status: draft 4, 2026-10-18, reviewed and revised a third time (the
+probe as the test of the process handle, the timeout per job kind, the
+two-versions leg's exception); draft 3, 2026-10-18, reviewed and
+revised again (the bounded
 end of a helper whose process cannot be seen to exit, the class per job,
 ME as a hypothesis the probe tests); draft 2, 2026-10-18, reviewed and
 revised the same day (every
@@ -267,7 +270,18 @@ XHCIDI.EXE <version> probe   <result file> <hwnd>
   on a difference, so no job of another release touches a device; and the
   installer runs `probe` once per run, before its first job, which proves
   that the helper starts on this system (its imports resolved by the
-  system's `SETUPX.DLL`), its version, and the result file's round trip.
+  system's `SETUPX.DLL`), its version, the result file's round trip,
+  and whether the process handle signals at the helper's exit: the probe
+  does nothing but write its file, so a handle still unsignalled 60 s
+  after its `END` line means the handle does not signal on this system,
+  and the run then uses the helper for no device job at all (every device
+  of the plan goes to the printed steps on an install, and an uninstall
+  stops before its removals with its recovery state kept), says so, and
+  the leg records it (section 12); no device job is ever started while
+  the end of the one before it cannot be seen. If the legs find the
+  handle does not signal on a target, the record is revised with a
+  termination test before the code rests on one, and the printed steps
+  remain the route there until then.
 - `<result file>`: a path in the install directory (8.3 parts, record 23
   section 9.6) the installer creates empty before the start and reads
   after the end; the helper truncates and rewrites it, so a stale file is
@@ -296,21 +310,24 @@ each tick reads the result file for its `END` line. The outcomes: the
 handle signalled and `END` present is a finished job; signalled without
 `END` is "the helper did not finish", a failure of that device; `END`
 present with the process still alive is waited for up to 60 s more; a
-process still alive after that, or a handle the system never signals,
-ends the helper's part of this run: the job is reported finished by its
-file, no further helper job is started, the remaining devices are
-listed as steps left with record 23 section 6.4's Update Driver list
-(record 26 section 7's page), and the finish says to restart and run
-the installer again, which starts a fresh helper, so an unsignalled
-handle costs one job a run and never a wrong wait; neither, for as long as the process lives, is a
+process still alive after that (the probe having shown the handle does
+signal here) ends the helper's part of this run: the job is reported
+finished by its file and no further helper job is started. On an
+install the remaining devices are listed as steps left with record 23
+section 6.4's Update Driver list (record 26 section 7's page) and the
+finish says to restart and run the installer again; on an uninstall
+the remaining removals are not made, the INF copies, the files, the
+records and the entry point stay (record 26 section 9.3's incomplete
+uninstall), and the finish says to restart and run the uninstall again,
+which resumes from what is left; neither, for as long as the process lives, is a
 job under way, which may be a Windows dialog waiting for the user, so that
 wait is unbounded and the Progress page says which device the helper is
 installing and that a dialog may be waiting behind the window. Whether the
 handle `CreateProcessA` returns for a 16-bit program on these systems is
 signalled at its exit, and what `GetExitCodeProcess` then says, are
 readings of the legs: the result file's `END` line, not the exit code, is
-the contract (section 4.2), and a handle that never signals is bounded
-by the rule above. The helper has no window, so nothing rests on one.
+the contract (section 4.2), and a handle that never signals is found by
+the probe and keeps the helper out of that run. The helper has no window, so nothing rests on one.
 
 ### 4.2 The result file
 
@@ -679,7 +696,7 @@ key, `INF\OTHER`'s listing, and Device Manager:
 | F, fresh install | the controller installed by the helper from the Found page's plan with no hand step; the Windows CD prompt for `usbd.sys` owned by the installer's window; the root hub's and hubs' wizards after the controller's restart, and the settle's wait for them; a cancelled root-hub wizard then installed by the helper; the devnode's class after the install; whether `LDID_SRCPATH` spares the "Copy files from" prompt; the driver key's values of section 8 |
 | U24, update over `2.4.0.0` | the controller and the root hub updated by the helper with no hand step (the hand step record 23's 9x leg needed); the keyboard and mouse behind the controller back after the restart of the devices, not of Windows |
 | U23, update over `2.3.1.0` (98 SE) | the new devnodes and their wizards; the helper's pass over what was cancelled |
-| UAS and Stor98 | a UAS disk installed and `force`-reinstalled (the `ERR_DI_DONT_INSTALL` question); Stor98 ticked on an NVMe device with no driver, installed from the copy, its IOS binding read back; an older Stor98 updated with the shutdown afterwards (record 26 section 6.3); two bundled versions in succession, then the uninstall removing both staged copies and leaving a hand-installed Stor98's device |
+| UAS and Stor98 | a UAS disk installed and `force`-reinstalled (the `ERR_DI_DONT_INSTALL` question); Stor98 ticked on an NVMe device with no driver, installed from the copy, its IOS binding read back; an older Stor98 updated with the shutdown afterwards (record 26 section 6.3); two bundled versions in succession, then the uninstall removing every owned staged copy no device names and leaving a hand-installed Stor98's device with the copy its driver key names (record 26 section 6.3) |
 | Thunderbolt | the host interface by `xhcicm.inf` on the emulator's Alpine Ridge guest (the 98 SE wizard's "Copy files from" of record 23 section 8.5, now the helper's) |
 | UN, uninstall | each devnode removed through the helper in order, an unplugged UAS disk's entry and a moved controller's old entry among them (the removal of an entry that is not present); the subtree removal; the `INF\OTHER` copies and the files deleted by the installer; the restart; the controller back as an unknown device with no wizard finding a driver |
 | Probe | the `probe` job on 98 SE and ME: the helper loads (its ordinals resolved), writes its version, and refuses a job with another version before any call |
@@ -747,9 +764,11 @@ engine copies an INF found through `DevicePath`.
   entry installs an INF of another class as the wizard does, is the first
   reading of the legs; the fallback for a device it does not is record 23
   section 6.4's steps, kept in the installer for that reason.
-- The 16-bit process handle: if it does not signal, the run ends its
-  helper jobs after section 4.1's 60 s rule and the next run continues;
-  if `GetExitCodeProcess` reads nothing useful, nothing rests on it.
+- The 16-bit process handle: if the probe finds it does not signal, the
+  helper is not used on that system until the record names a
+  termination test (section 4.1), and the printed steps remain the
+  route; if `GetExitCodeProcess` reads nothing useful, nothing rests on
+  it.
 - The 16-bit build's headers (Watcom's against the DDK's `windows.h`) are
   settled by the build; a conflict that cannot be resolved by include
   order is reported before any code rests on it.
