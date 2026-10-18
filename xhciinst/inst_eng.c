@@ -11754,6 +11754,10 @@ static int s98_inf_names(const char *infPath, const char *name)
     if (envNow.Nt) {
         return inst_eq(infPath, base) || inst_eq(infPath, name);
     }
+    /* A directory-qualified InfPath ("OTHER\X.INF") names one file. */
+    if (base != name && inst_eq(infPath, name)) {
+        return 1;
+    }
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return -1;
     }
