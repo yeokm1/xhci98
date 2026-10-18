@@ -2940,6 +2940,18 @@ static void test_s98(void)
     inst_s98_default_text(INST_S98_POLLIDLEMS, 1, 0, t, sizeof(t));
     CHECK(strcmp(t, "1000 ms") == 0, "a default with its unit");
 
+    /* SHA-256, FIPS 180-2 appendix B's vectors and the empty string. */
+    inst_sha256((const unsigned char *)"abc", 3, t);
+    CHECK(strcmp(t, "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61"
+                    "F20015AD") == 0, "SHA-256 of abc");
+    inst_sha256((const unsigned char *)"", 0, t);
+    CHECK(strcmp(t, "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B"
+                    "7852B855") == 0, "SHA-256 of nothing");
+    inst_sha256((const unsigned char *)"abcdbcdecdefdefgefghfghighijhijkijkl"
+                "jklmklmnlmnomnopnopq", 56, t);
+    CHECK(strcmp(t, "248D6A61D20638B8E5C026930C3E6039A33CE45964FF2167F6ECEDD4"
+                    "19DB06C1") == 0, "SHA-256 of 56 bytes: two padding blocks");
+
     /* Values checked as the readme admits them. */
     CHECK(inst_s98_check(INST_S98_WRITETHROUGH, 0, " FUA ", w, sizeof(w),
                          &why) && strcmp(w, "fua") == 0,
@@ -3011,6 +3023,43 @@ static void test_s98(void)
     CHECK(strcmp(t, "set: 1") == 0, "set");
     inst_s98_now_text(INST_S98_POLLMODE, 0, 0, -1, NULL, t, sizeof(t));
     CHECK(strcmp(t, "cannot be read") == 0, "unreadable");
+
+    /* The switch, the question and the final line (record 26 sections 5.9
+     * and 6.4). */
+    {
+        char *argv1[4];
+        INST_OPTS o;
+        char err[128];
+        int asked;
+        int def;
+        argv1[0] = "x";
+        argv1[1] = "/stor98";
+        CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Stor98,
+              "/stor98");
+        argv1[2] = "/uninstall";
+        CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+              "/stor98 belongs to an install");
+        CHECK(!inst_s98_decide(1, 0, 0, 0, &asked, &def) && asked && !def,
+              "asked, Enter gives N");
+        CHECK(!inst_s98_decide(1, 1, 0, 0, &asked, &def) && !asked,
+              "/yes: N, not asked");
+        CHECK(inst_s98_decide(1, 1, 1, 0, &asked, &def) && !asked,
+              "/stor98: installed unasked");
+        CHECK(!inst_s98_decide(0, 0, 1, 0, &asked, &def) && !asked,
+              "no Stor98 in the package: nothing");
+        CHECK(!inst_s98_decide(1, 0, 0, 1, &asked, &def) && !asked,
+              "/list asks nothing");
+        CHECK(strcmp(inst_final_text_cold(INST_FINAL_RESTART, 1),
+                     "Changes were made. Please shut down and start Windows "
+                     "again.") == 0 &&
+              strstr(inst_final_text_cold(INST_FINAL_UNFINISHED, 1),
+                     "then shut down and start Windows again.") != NULL &&
+              strcmp(inst_final_text_cold(INST_FINAL_RESTART, 0),
+                     inst_final_text(INST_FINAL_RESTART)) == 0 &&
+              strcmp(inst_final_text_cold(INST_FINAL_NO_CHANGES, 1),
+                     "No changes were made.") == 0,
+              "the shutdown's final lines");
+    }
 
     /* The install record's two rules (record 26 section 6.3). */
     CHECK(inst_s98_owned_by_call(0, 1) && inst_s98_owned_by_call(1, 1) &&

@@ -87,11 +87,12 @@
 #define P_COMP              2
 #define P_USB               3
 #define P_TBS               4
-#define P_SUMMARY           5
-#define P_PROGRESS          6
-#define P_STEPS             7
-#define P_FINISH            8
-#define P_COUNT             9
+#define P_S98               5
+#define P_SUMMARY           6
+#define P_PROGRESS          7
+#define P_STEPS             8
+#define P_FINISH            9
+#define P_COUNT             10
 
 #define WIZ_PATH            520
 #define WIZ_ROWS            12
@@ -124,6 +125,26 @@ static int tbInstalled;
 static int tbChoice;
 static int trayChoice = 1;
 static int trayHere;
+
+/* Stor98, the bundled NVMe driver (record 26 sections 5.3 and 5.6): the
+ * box, and the settings chosen (a word or a number as text, set or kept),
+ * handed to the engine at Install; on 98 SE and ME the Summary page's
+ * boxes for the drives an update touches. */
+static int s98Have;
+static int s98Choice;
+static char s98Ver[32];
+static int s98WinSet[INST_S98_COUNT];
+static char s98WinVal[INST_S98_COUNT][32];
+#define WIZ_S98_ASKED   2
+static HWND s98Label[WIZ_S98_ASKED];
+static HWND s98Combo[WIZ_S98_ASKED];
+static HWND s98Now[WIZ_S98_ASKED];
+static int s98ComboRow[WIZ_S98_ASKED];
+static int s98ComboCount;
+#define WIZ_S98_UPD     3
+static HWND s98UnusedBox[WIZ_S98_UPD];
+static char s98UnusedId[WIZ_S98_UPD][200];
+static int s98UnusedCount;
 static char dirChoice[WIZ_PATH];
 static char dirNow[WIZ_PATH];
 
@@ -320,6 +341,12 @@ static int wiz_waiting(void *ctx, const INST_WAIT *w)
             free(d);
         }
     }
+    if (w->Kind == INST_WAIT_RECONNECT && cancelAsked) {
+        /* Cancel skips the reconnection's wait (record 26 section 6.3);
+         * the run goes on. */
+        InterlockedExchange(&cancelAsked, 0);
+        return 0;
+    }
     return cancelAsked ? 0 : 1;
 }
 
@@ -351,6 +378,11 @@ static unsigned __stdcall job_main(void *arg)
             inst_eng_tb_state(&tbHave, &tbPresent, &tbDefault, &tbInstalled);
             tbChoice = tbHave && (opts->Thunderbolt || tbDefault);
             inst_eng_tb_choose(tbChoice);
+            /* Never unasked (record 23 section 4.4): ticked only by
+             * /stor98. */
+            inst_eng_s98_state(&s98Have, s98Ver, sizeof(s98Ver));
+            s98Choice = s98Have && opts->Stor98;
+            inst_eng_s98_choose(s98Choice);
             EnterCriticalSection(&textLock);
             sink = &planText;
             LeaveCriticalSection(&textLock);
@@ -380,6 +412,10 @@ static unsigned __stdcall job_main(void *arg)
         opts->SetCount = 0;
         for (i = 0; i < INST_MAX_VALUES; i++) {
             inst_eng_choose_value(i, choiceSet[i], choiceVal[i]);
+        }
+        for (i = 0; i < INST_S98_COUNT; i++) {
+            inst_eng_s98_choose_value(i, s98Choice && s98WinSet[i],
+                                      s98WinVal[i]);
         }
         r = inst_eng_ask();
         if (r < 0) {
@@ -640,6 +676,7 @@ static void replan(void)
         return;
     }
     inst_eng_tb_choose(tbChoice);
+    inst_eng_s98_choose(s98Choice);
     EnterCriticalSection(&textLock);
     tb_clear(&planText);
     sink = &planText;
@@ -663,6 +700,11 @@ static void comp_fill(HWND dlg)
     CheckDlgButton(dlg, IDC_C_TB, tbChoice ? BST_CHECKED : BST_UNCHECKED);
     ShowWindow(GetDlgItem(dlg, IDC_C_TB), tbHave ? SW_SHOW : SW_HIDE);
     ShowWindow(GetDlgItem(dlg, IDC_C_TB_T), tbHave ? SW_SHOW : SW_HIDE);
+    SetDlgItemTextA(dlg, IDC_C_S98, inst_page_text(INST_PT_S98));
+    SetDlgItemTextA(dlg, IDC_C_S98_T, inst_page_text(INST_PT_S98_T));
+    CheckDlgButton(dlg, IDC_C_S98, s98Choice ? BST_CHECKED : BST_UNCHECKED);
+    ShowWindow(GetDlgItem(dlg, IDC_C_S98), s98Have ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(dlg, IDC_C_S98_T), s98Have ? SW_SHOW : SW_HIDE);
     SetDlgItemTextA(dlg, IDC_C_TRAY, inst_page_text(INST_PT_TRAY));
     SetDlgItemTextA(dlg, IDC_C_TRAY_T, inst_page_text(INST_PT_TRAY_T));
     CheckDlgButton(dlg, IDC_C_TRAY, trayChoice ? BST_CHECKED : BST_UNCHECKED);
@@ -719,6 +761,7 @@ static int comp_leave(HWND dlg)
     char checked[WIZ_PATH];
     const char *why;
     int tb;
+    int s98;
 
     GetDlgItemTextA(dlg, IDC_C_DIR, typed, sizeof(typed));
     why = inst_eng_dir_check(typed, checked, sizeof(checked));
@@ -733,8 +776,10 @@ static int comp_leave(HWND dlg)
     inst_copy(dirChoice, checked, sizeof(dirChoice));
     trayChoice = IsDlgButtonChecked(dlg, IDC_C_TRAY) == BST_CHECKED;
     tb = tbHave && IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED;
-    if (tb != tbChoice) {
+    s98 = s98Have && IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
+    if (tb != tbChoice || s98 != s98Choice) {
         tbChoice = tb;
+        s98Choice = s98;
         replan();
     }
     return 1;
@@ -1348,6 +1393,358 @@ static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     return FALSE;
 }
 
+/* ---- Stor98's settings page (record 26 section 5.6) ------------------------ */
+
+/* Row i's choice as the page shows it: "<value> - <meaning>". */
+static void s98_item(int i, int k, char *out, size_t cap)
+{
+    const INST_S98_VALUE *v = &instS98Values[i];
+
+    if (v->Kind == INST_S98_WORDS) {
+        _snprintf(out, cap - 1, "%s - %s", v->Words[k], v->Means[k]);
+    } else {
+        _snprintf(out, cap - 1, "%d - %s", k, v->Means[k]);
+    }
+    out[cap - 1] = '\0';
+}
+
+static void s98_item_value(int i, int k, char *out, size_t cap)
+{
+    if (instS98Values[i].Kind == INST_S98_WORDS) {
+        inst_copy(out, instS98Values[i].Words[k], cap);
+    } else {
+        _snprintf(out, cap - 1, "%d", k);
+        out[cap - 1] = '\0';
+    }
+}
+
+static void s98_page_clear(void)
+{
+    int i;
+
+    for (i = 0; i < s98ComboCount; i++) {
+        DestroyWindow(s98Label[i]);
+        DestroyWindow(s98Combo[i]);
+        DestroyWindow(s98Now[i]);
+    }
+    s98ComboCount = 0;
+}
+
+/* Where the values go, said under the rows (Stor98's rule, per system). */
+static const char *s98_where(void)
+{
+    return is_9x() ? "Written as values of their own names under "
+                     "HKLM\\System\\CurrentControlSet\\Services\\stor98; read "
+                     "when the controller starts."
+                   : "Written into the one DriverParameter string under "
+                     "HKLM\\SYSTEM\\CurrentControlSet\\Services\\stor98\\"
+                     "Parameters\\Device, each key kept apart; read when the "
+                     "controller starts.";
+}
+
+static void s98_page_fill(HWND dlg)
+{
+    HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
+    INST_S98ROW r;
+    char text[256];
+    int i;
+    int k;
+    int y = 22;
+    int sel;
+
+    s98_page_clear();
+    SetDlgItemTextA(dlg, IDC_S_HEAD, inst_page_text(INST_PT_S98SET));
+    for (i = 0; i < INST_S98_COUNT && s98ComboCount < WIZ_S98_ASKED; i++) {
+        const INST_S98_VALUE *v = &instS98Values[i];
+        int n = s98ComboCount;
+        if (!inst_eng_s98_row(i, &r) || !r.Asked) {
+            continue;
+        }
+        _snprintf(text, sizeof(text) - 1, "%s - %s", r.Name, v->What);
+        text[sizeof(text) - 1] = '\0';
+        s98Label[n] = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8,
+                               y, 284, 10, IDC_ROW_BASE + IDC_ROW_STRIDE * n,
+                               font);
+        s98Combo[n] = make_ctl(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST |
+                               WS_VSCROLL | WS_TABSTOP, 8, y + 11, 200, 90,
+                               IDC_ROW_BASE + IDC_ROW_STRIDE * n + 1, font);
+        s98Now[n] = make_ctl(dlg, "STATIC", r.NowText, SS_LEFT | SS_NOPREFIX,
+                             8, y + 26, 284, 10,
+                             IDC_ROW_BASE + IDC_ROW_STRIDE * n + 2, font);
+        s98ComboRow[n] = i;
+        SendMessageA(s98Combo[n], CB_ADDSTRING, 0,
+                     (LPARAM)"(as it is: nothing written)");
+        sel = 0;
+        for (k = 0; k < INST_S98_WORDS_MAX && v->Means[k] != NULL; k++) {
+            char val[32];
+            s98_item(i, k, text, sizeof(text));
+            SendMessageA(s98Combo[n], CB_ADDSTRING, 0, (LPARAM)text);
+            s98_item_value(i, k, val, sizeof(val));
+            if (s98WinSet[i] && inst_eq(val, s98WinVal[i])) {
+                sel = k + 1;
+            }
+        }
+        SendMessageA(s98Combo[n], CB_SETCURSEL, (WPARAM)sel, 0);
+        s98ComboCount++;
+        y += 40;
+    }
+    SetDlgItemTextA(dlg, IDC_S_NOTE, s98_where());
+    ShowWindow(GetDlgItem(dlg, IDC_S_ADVANCED), SW_SHOW);
+}
+
+static void s98_page_leave(HWND dlg)
+{
+    int n;
+    int sel;
+    int i;
+
+    (void)dlg;
+    for (n = 0; n < s98ComboCount; n++) {
+        i = s98ComboRow[n];
+        sel = (int)SendMessageA(s98Combo[n], CB_GETCURSEL, 0, 0);
+        if (sel <= 0) {
+            s98WinSet[i] = 0;
+        } else {
+            s98WinSet[i] = 1;
+            s98_item_value(i, sel - 1, s98WinVal[i], sizeof(s98WinVal[i]));
+        }
+    }
+}
+
+/* The Advanced dialog for Stor98's numbers: the list, the row selected
+ * shown whole, an edit box (empty: as it is). */
+static int s98AdvRow[INST_S98_COUNT];
+static int s98AdvCount;
+static int s98AdvCur = -1;
+static int s98AdvSet[INST_S98_COUNT];
+static char s98AdvVal[INST_S98_COUNT][32];
+
+static void s98_adv_cell(HWND lv, int n)
+{
+    INST_S98ROW r;
+    char text[192];
+
+    inst_eng_s98_row(s98AdvRow[n], &r);
+    if (s98AdvSet[n]) {
+        _snprintf(text, sizeof(text) - 1, "%s (to be written)",
+                  s98AdvVal[n]);
+        text[sizeof(text) - 1] = '\0';
+    } else {
+        inst_copy(text, r.NowText, sizeof(text));
+    }
+    ListView_SetItemText(lv, n, 1, text);
+}
+
+static int s98_adv_take(HWND dlg)
+{
+    char text[32];
+    char canon[32];
+    const char *why;
+    int i;
+
+    if (s98AdvCur < 0) {
+        return 1;
+    }
+    i = s98AdvRow[s98AdvCur];
+    GetDlgItemTextA(dlg, IDC_A_EDIT, text, sizeof(text));
+    if (text[0] == '\0') {
+        s98AdvSet[s98AdvCur] = 0;
+    } else if (!inst_s98_check(i, !is_9x(), text, canon, sizeof(canon),
+                               &why)) {
+        char msg[160];
+        _snprintf(msg, sizeof(msg) - 1, "%s: %s.", text, why);
+        msg[sizeof(msg) - 1] = '\0';
+        MessageBoxA(dlg, msg, instS98Values[i].KeyNt, MB_OK |
+                    MB_ICONWARNING);
+        return 0;
+    } else {
+        s98AdvSet[s98AdvCur] = 1;
+        inst_copy(s98AdvVal[s98AdvCur], canon, sizeof(s98AdvVal[0]));
+    }
+    s98_adv_cell(GetDlgItem(dlg, IDC_LIST), s98AdvCur);
+    return 1;
+}
+
+static void s98_adv_show(HWND dlg, int n)
+{
+    const INST_S98_VALUE *v = &instS98Values[s98AdvRow[n]];
+    INST_S98ROW r;
+    char note[1024];
+    char range[160];
+    INST_U32 hi = v->Hi;
+
+    s98AdvCur = n;
+    inst_eng_s98_row(s98AdvRow[n], &r);
+    if (s98AdvRow[n] == INST_S98_MAXTRANSFERKB) {
+        hi = is_9x() ? 512UL : 256UL;
+    }
+    if (v->Step > 1UL) {
+        _snprintf(range, sizeof(range) - 1, "%lu to %lu %s, in steps of %lu",
+                  (unsigned long)v->Lo, (unsigned long)hi, v->Unit,
+                  (unsigned long)v->Step);
+    } else if (v->ZeroOk) {
+        _snprintf(range, sizeof(range) - 1, "%lu to %lu %s, or 0: %s",
+                  (unsigned long)v->Lo, (unsigned long)hi, v->Unit, v->Zero);
+    } else {
+        _snprintf(range, sizeof(range) - 1, "%lu to %lu %s",
+                  (unsigned long)v->Lo, (unsigned long)hi, v->Unit);
+    }
+    range[sizeof(range) - 1] = '\0';
+    _snprintf(note, sizeof(note) - 1,
+              "%s: %s.\r\nNow: %s.\r\nThe built-in default: %s. Takes %s. "
+              "Empty: as it is, nothing written.\r\n%s", r.Name, v->What,
+              r.NowText, r.Default, range, s98_where());
+    note[sizeof(note) - 1] = '\0';
+    SetDlgItemTextA(dlg, IDC_A_TEXT, note);
+    SetDlgItemTextA(dlg, IDC_A_LABEL, "The value:");
+    SetDlgItemTextA(dlg, IDC_A_EDIT, s98AdvSet[n] ? s98AdvVal[n] : "");
+    ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_SHOW);
+    ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_HIDE);
+}
+
+static WIZ_DLGRET CALLBACK s98_adv_proc(HWND dlg, UINT msg, WPARAM wp,
+                                        LPARAM lp)
+{
+    HWND lv;
+    LVCOLUMNA c;
+    LVITEMA it;
+    NMHDR *nm;
+    INST_S98ROW r;
+    int i;
+
+    switch (msg) {
+    case WM_INITDIALOG:
+        SetDlgItemTextA(dlg, IDC_A_HEAD, inst_page_text(INST_PT_S98SET));
+        SendMessageA(GetDlgItem(dlg, IDC_A_EDIT), EM_LIMITTEXT, 10, 0);
+        lv = GetDlgItem(dlg, IDC_LIST);
+        memset(&c, 0, sizeof(c));
+        c.mask = LVCF_TEXT | LVCF_WIDTH;
+        c.cx = dlu_x(dlg, 90);
+        c.pszText = "Value";
+        ListView_InsertColumn(lv, 0, &c);
+        c.cx = dlu_x(dlg, 200);
+        c.pszText = "Setting";
+        ListView_InsertColumn(lv, 1, &c);
+        s98AdvCount = 0;
+        for (i = 0; i < INST_S98_COUNT; i++) {
+            if (!inst_eng_s98_row(i, &r) || r.Asked) {
+                continue;
+            }
+            s98AdvRow[s98AdvCount] = i;
+            s98AdvSet[s98AdvCount] = s98WinSet[i];
+            inst_copy(s98AdvVal[s98AdvCount], s98WinVal[i],
+                      sizeof(s98AdvVal[0]));
+            memset(&it, 0, sizeof(it));
+            it.mask = LVIF_TEXT;
+            it.iItem = s98AdvCount;
+            it.pszText = (char *)r.Name;
+            ListView_InsertItem(lv, &it);
+            s98_adv_cell(lv, s98AdvCount);
+            s98AdvCount++;
+        }
+        s98AdvCur = -1;
+        if (s98AdvCount > 0) {
+            ListView_SetItemState(lv, 0, LVIS_SELECTED | LVIS_FOCUSED,
+                                  LVIS_SELECTED | LVIS_FOCUSED);
+            s98_adv_show(dlg, 0);
+        }
+        return TRUE;
+    case WM_NOTIFY:
+        nm = (NMHDR *)lp;
+        if (nm->idFrom == IDC_LIST && nm->code == LVN_ITEMCHANGED) {
+            NMLISTVIEW *nl = (NMLISTVIEW *)lp;
+            if ((nl->uNewState & LVIS_SELECTED) && nl->iItem >= 0 &&
+                nl->iItem < s98AdvCount && nl->iItem != s98AdvCur) {
+                if (s98_adv_take(dlg)) {
+                    s98_adv_show(dlg, nl->iItem);
+                }
+            }
+        }
+        break;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDOK) {
+            if (!s98_adv_take(dlg)) {
+                return TRUE;
+            }
+            for (i = 0; i < s98AdvCount; i++) {
+                s98WinSet[s98AdvRow[i]] = s98AdvSet[i];
+                inst_copy(s98WinVal[s98AdvRow[i]], s98AdvVal[i],
+                          sizeof(s98WinVal[0]));
+            }
+            EndDialog(dlg, IDOK);
+            return TRUE;
+        }
+        if (LOWORD(wp) == IDCANCEL) {
+            EndDialog(dlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+/* The Summary page's boxes (record 26 section 6.3): on 98 SE and ME, one
+ * per Stor98 drive the run updates; Install waits for every one. */
+static void s98_unused_clear(void)
+{
+    int i;
+
+    for (i = 0; i < s98UnusedCount; i++) {
+        DestroyWindow(s98UnusedBox[i]);
+    }
+    s98UnusedCount = 0;
+}
+
+static int s98_unused_all(void)
+{
+    int i;
+
+    for (i = 0; i < s98UnusedCount; i++) {
+        if (SendMessageA(s98UnusedBox[i], BM_GETCHECK, 0, 0) != BST_CHECKED) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void s98_unused_buttons(void)
+{
+    buttons(PSWIZB_BACK | (s98_unused_all() ? PSWIZB_NEXT : 0));
+}
+
+static void s98_unused_make(HWND dlg)
+{
+    HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
+    const char *id;
+    const char *desc;
+    char text[300];
+    int n;
+    int h;
+
+    s98_unused_clear();
+    if (!is_9x() || !s98Choice) {
+        return;
+    }
+    for (n = 0; n < WIZ_S98_UPD &&
+                (desc = inst_eng_s98_update(n, &id)) != NULL; n++) {
+        inst_copy(s98UnusedId[n], id, sizeof(s98UnusedId[n]));
+        _snprintf(text, sizeof(text) - 1, "Nothing is using %s", desc);
+        text[sizeof(text) - 1] = '\0';
+        s98UnusedBox[n] = make_ctl(dlg, "BUTTON", text, BS_AUTOCHECKBOX |
+                                   WS_TABSTOP, 8, 168 - 11 * (n + 1), 284, 10,
+                                   IDC_SUM_S98 + n, font);
+        s98UnusedCount++;
+    }
+    if (s98UnusedCount > 0) {
+        /* The list above them shortened to make room. */
+        h = 144 - 11 * s98UnusedCount - 2;
+        MoveWindow(GetDlgItem(dlg, IDC_DETAIL), dlu_x(dlg, 8),
+                   dlu_y(dlg, 24), dlu_x(dlg, 284), dlu_y(dlg, h), TRUE);
+    }
+}
+
 /* ---- the summary (record 26 section 5.7) ----------------------------------- */
 
 static void summary_fill(HWND dlg)
@@ -1398,6 +1795,14 @@ static void summary_fill(HWND dlg)
             tb_add(&t, tbChoice ? "- Thunderbolt 3 / USB4 support\n" :
                    "- Thunderbolt 3 / USB4 support: left out\n");
         }
+        if (s98Have) {
+            _snprintf(line, sizeof(line) - 1, s98Choice ?
+                      "- Stor98 %s, the bundled NVMe driver\n" :
+                      "- Stor98 %s, the bundled NVMe driver: left out\n",
+                      s98Ver);
+            line[sizeof(line) - 1] = '\0';
+            tb_add(&t, line);
+        }
         if (trayHere) {
             tb_add(&t, trayChoice ? "- the xHCI98 USB Tree, started at login\n"
                                   : "- the xHCI98 USB Tree, not started at "
@@ -1416,6 +1821,30 @@ static void summary_fill(HWND dlg)
         }
         if (!any) {
             tb_add(&t, "- none: every value stays as it is.\n");
+        }
+        if (s98Choice) {
+            any = 0;
+            tb_add(&t, "\nStor98's settings, where Stor98 reads them:\n");
+            for (i = 0; i < INST_S98_COUNT; i++) {
+                INST_S98ROW r;
+                if (s98WinSet[i] && inst_eng_s98_row(i, &r)) {
+                    _snprintf(line, sizeof(line) - 1, "- %s = %s\n", r.Name,
+                              s98WinVal[i]);
+                    line[sizeof(line) - 1] = '\0';
+                    tb_add(&t, line);
+                    any = 1;
+                }
+            }
+            if (!any) {
+                tb_add(&t, "- none: each stays as it is.\n");
+            }
+            if (is_9x() && inst_eng_s98_update(0, &f.Id) != NULL) {
+                tb_add(&t, "\nStor98 is updated on the drives ticked below: "
+                       "nothing may be using them\nwhile it is. Close every "
+                       "program and window that uses their drive letters.\n"
+                       "Afterwards Windows is shut down and started again, "
+                       "not restarted.\n");
+            }
         }
         _snprintf(line, sizeof(line) - 1, "\nThe tools folder: %s\n",
                   dirChoice);
@@ -1537,10 +1966,12 @@ static void restart_now(HWND owner)
             CloseHandle(tok);
         }
     }
-    if (!ExitWindowsEx(EWX_REBOOT, 0)) {
-        _snprintf(text, sizeof(text) - 1, "Windows did not restart (error "
-                  "%lu). Restart it from the Start menu.",
-                  (unsigned long)GetLastError());
+    /* 98 SE and ME after a Stor98 update: a shutdown and a fresh start,
+     * not a warm restart (record 26 section 5.9). */
+    if (!ExitWindowsEx(inst_eng_shutdown() ? EWX_SHUTDOWN : EWX_REBOOT, 0)) {
+        _snprintf(text, sizeof(text) - 1, "Windows did not %s (error %lu). "
+                  "Do it from the Start menu.", inst_eng_shutdown() ?
+                  "shut down" : "restart", (unsigned long)GetLastError());
         text[sizeof(text) - 1] = '\0';
         MessageBoxA(owner, text, "xHCI98 Setup", MB_OK | MB_ICONWARNING);
     }
@@ -1552,7 +1983,8 @@ static void finish_fill(HWND dlg)
     int failed;
     int restart;
     int steps;
-    const char *last = inst_final_text(finalLine);
+    const char *last = inst_final_text_cold(finalLine, inst_eng_shutdown());
+    int cold = inst_eng_shutdown();
 
     inst_eng_flags(&changed, &failed, &restart, &steps);
     SetDlgItemTextA(dlg, IDC_F_LAST, ran ? last :
@@ -1560,8 +1992,10 @@ static void finish_fill(HWND dlg)
     EnterCriticalSection(&textLock);
     set_edit(dlg, IDC_DETAIL, runText.Buf != NULL ? runText.Buf : "");
     LeaveCriticalSection(&textLock);
-    SetDlgItemTextA(dlg, IDC_F_NOW, inst_page_text(INST_PT_NOW));
-    SetDlgItemTextA(dlg, IDC_F_LATER, inst_page_text(INST_PT_LATER));
+    SetDlgItemTextA(dlg, IDC_F_NOW, inst_page_text(cold ? INST_PT_SHUT_NOW
+                                                        : INST_PT_NOW));
+    SetDlgItemTextA(dlg, IDC_F_LATER, inst_page_text(cold ? INST_PT_SHUT_LATER
+                                                          : INST_PT_LATER));
     if (ran && changed) {
         ShowWindow(GetDlgItem(dlg, IDC_F_NOW), SW_SHOW);
         ShowWindow(GetDlgItem(dlg, IDC_F_LATER), SW_SHOW);
@@ -1634,6 +2068,8 @@ static int page_skipped(int page)
                rows_for(P_USB, 1, idx, WIZ_ROWS) == 0;
     case P_TBS:
         return !tbChoice;
+    case P_S98:
+        return !s98Choice;
     case P_STEPS:
         return inst_eng_steps_text()[0] == '\0';
     default:
@@ -1683,6 +2119,12 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             comp_browse(dlg);
             return TRUE;
         case IDC_S_ADVANCED:
+            if (page == P_S98) {
+                s98_page_leave(dlg);
+                DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_ADVANCED), dlg,
+                                s98_adv_proc, 0);
+                return TRUE;
+            }
             if (!settings_leave(dlg, page)) {
                 return TRUE;
             }
@@ -1697,6 +2139,12 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             open_devmgr(dlg);
             return TRUE;
         default:
+            if (page == P_SUMMARY && LOWORD(wp) >= IDC_SUM_S98 &&
+                LOWORD(wp) < IDC_SUM_S98 + WIZ_S98_UPD &&
+                HIWORD(wp) == BN_CLICKED) {
+                s98_unused_buttons();
+                return TRUE;
+            }
             if (HIWORD(wp) == CBN_SETFOCUS || HIWORD(wp) == CBN_SELCHANGE ||
                 HIWORD(wp) == EN_SETFOCUS) {
                 ROWPAGE *rp = &pageRows[page == P_USB ? 0 : 1];
@@ -1737,9 +2185,20 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 settings_fill(dlg, page);
                 buttons(PSWIZB_BACK | PSWIZB_NEXT);
                 break;
+            case P_S98:
+                s98_page_fill(dlg);
+                buttons(PSWIZB_BACK | PSWIZB_NEXT);
+                break;
             case P_SUMMARY:
                 summary_fill(dlg);
-                buttons((uninstallMode ? 0 : PSWIZB_BACK) | PSWIZB_NEXT);
+                if (!uninstallMode) {
+                    s98_unused_make(dlg);
+                }
+                if (s98UnusedCount > 0) {
+                    s98_unused_buttons();
+                } else {
+                    buttons((uninstallMode ? 0 : PSWIZB_BACK) | PSWIZB_NEXT);
+                }
                 next_text(uninstallMode ? "&Remove" : "&Install");
                 break;
             case P_PROGRESS:
@@ -1764,6 +2223,18 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             SET_RESULT(dlg, 0);
             return TRUE;
         case PSN_WIZNEXT:
+            if (page == P_S98) {
+                s98_page_leave(dlg);
+            }
+            if (page == P_SUMMARY) {
+                int i;
+                for (i = 0; i < s98UnusedCount; i++) {
+                    inst_eng_s98_unused(s98UnusedId[i],
+                                        SendMessageA(s98UnusedBox[i],
+                                                     BM_GETCHECK, 0, 0) ==
+                                        BST_CHECKED);
+                }
+            }
             if ((page == P_COMP && !comp_leave(dlg)) ||
                 ((page == P_USB || page == P_TBS) &&
                  !settings_leave(dlg, page))) {
@@ -1773,6 +2244,9 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             SET_RESULT(dlg, 0);
             return TRUE;
         case PSN_WIZBACK:
+            if (page == P_S98) {
+                s98_page_leave(dlg);
+            }
             if ((page == P_USB || page == P_TBS) && !settings_leave(dlg, page)) {
                 SET_RESULT(dlg, -1);
                 return TRUE;
@@ -1869,24 +2343,24 @@ static int CALLBACK sheet_cb(HWND h, UINT msg, LPARAM lp)
 static int run_wizard(void)
 {
     static const int order[] = {
-        P_WELCOME, P_FOUND, P_COMP, P_USB, P_TBS, P_SUMMARY, P_PROGRESS,
-        P_STEPS, P_FINISH
+        P_WELCOME, P_FOUND, P_COMP, P_USB, P_TBS, P_S98, P_SUMMARY,
+        P_PROGRESS, P_STEPS, P_FINISH
     };
     static const int uorder[] = { P_WELCOME, P_SUMMARY, P_PROGRESS, P_FINISH };
     static const int tmpl[P_COUNT] = {
         IDD_WELCOME, IDD_FOUND, IDD_COMPONENTS, IDD_SETTINGS, IDD_SETTINGS,
-        IDD_SUMMARY, IDD_PROGRESS, IDD_STEPS, IDD_FINISH
+        IDD_SETTINGS, IDD_SUMMARY, IDD_PROGRESS, IDD_STEPS, IDD_FINISH
     };
     static const char *const title[P_COUNT] = {
         "Welcome", "What was found", "Components", "USB settings",
-        "Thunderbolt settings", "Summary", "Progress", "Steps left for you",
-        "Finish"
+        "Thunderbolt settings", "Stor98 settings", "Summary", "Progress",
+        "Steps left for you", "Finish"
     };
     PROPSHEETPAGEA pg[P_COUNT];
     HPROPSHEETPAGE hp[P_COUNT];
     PROPSHEETHEADERA h;
     const int *list = uninstallMode ? uorder : order;
-    int n = uninstallMode ? 4 : 9;
+    int n = uninstallMode ? 4 : 10;
     int i;
 
     for (i = 0; i < n; i++) {
@@ -2079,13 +2553,18 @@ static int selftest(void)
     static const int fIds[] = { IDC_TEXT };
     static const int fTexts[] = { INST_PT_FOUND };
     static const int cIds[] = {
-        IDC_C_DRIVERS, IDC_C_DRIVERS_T, IDC_C_TB, IDC_C_TB_T, IDC_C_TRAY,
-        IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR_T
+        IDC_C_DRIVERS, IDC_C_DRIVERS_T, IDC_C_TB, IDC_C_TB_T, IDC_C_S98,
+        IDC_C_S98_T, IDC_C_TRAY, IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR_T
     };
     static const int cTexts[] = {
         INST_PT_DRIVERS, INST_PT_DRIVERS_T, INST_PT_TB, INST_PT_TB_T,
-        INST_PT_TRAY, INST_PT_TRAY_T, INST_PT_DIR, INST_PT_DIR_9X
+        INST_PT_S98, INST_PT_S98_T, INST_PT_TRAY, INST_PT_TRAY_T, INST_PT_DIR,
+        INST_PT_DIR_9X
     };
+    static const int s3Ids[] = { IDC_S_HEAD };
+    static const int s3Texts[] = { INST_PT_S98SET };
+    static const int n2Ids[] = { IDC_F_NOW, IDC_F_LATER };
+    static const int n2Texts[] = { INST_PT_SHUT_NOW, INST_PT_SHUT_LATER };
     static const int c2Ids[] = { IDC_C_TB_T };
     static const int c2Texts[] = { INST_PT_TB_ABSENT };
     static const int sIds[] = { IDC_S_HEAD, IDC_S_NOTE };
@@ -2142,7 +2621,10 @@ static int selftest(void)
         st_page(parent, IDD_UWELCOME, uIds, uTexts, 3, "the uninstall's "
                 "welcome");
         st_page(parent, IDD_FOUND, fIds, fTexts, 1, "what was found");
-        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 8, "the components");
+        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 10, "the components");
+        st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
+        st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "
+                "shutdown");
         st_page(parent, IDD_COMPONENTS, c2Ids, c2Texts, 1, "the components, "
                 "no controller");
         st_page(parent, IDD_SETTINGS, sIds, sTexts, 2, "the USB settings");
@@ -2178,6 +2660,33 @@ static int selftest(void)
                 msg[sizeof(msg) - 1] = '\0';
                 st(fits(c), msg);
                 DestroyWindow(c);
+            }
+            /* Stor98's rows: the label, and each choice in its box. */
+            for (i = 0; d != NULL && i < INST_S98_COUNT; i++) {
+                const INST_S98_VALUE *v = &instS98Values[i];
+                char text[256];
+                char msg[128];
+                HWND c;
+                int k;
+                _snprintf(text, sizeof(text) - 1, "%s - %s",
+                          v->Name9x != NULL ? v->Name9x : v->KeyNt, v->What);
+                text[sizeof(text) - 1] = '\0';
+                c = make_ctl(d, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8, 22,
+                             284, 10, IDC_ROW_BASE, font);
+                _snprintf(msg, sizeof(msg) - 1, "Stor98's row label %d fits",
+                          i);
+                msg[sizeof(msg) - 1] = '\0';
+                st(fits(c), msg);
+                DestroyWindow(c);
+                for (k = 0; v->Asked && k < INST_S98_WORDS_MAX &&
+                            v->Means[k] != NULL; k++) {
+                    s98_item(i, k, text, sizeof(text));
+                    c = make_ctl(d, "STATIC", text, SS_LEFT | SS_NOPREFIX |
+                                 SS_LEFTNOWORDWRAP, 8, 33, 186, 10,
+                                 IDC_ROW_BASE, font);
+                    st(fits(c), "a Stor98 choice fits its box");
+                    DestroyWindow(c);
+                }
             }
             if (d != NULL) {
                 DestroyWindow(d);

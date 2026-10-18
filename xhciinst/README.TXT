@@ -58,10 +58,12 @@ The window walks you through:
   Welcome          the system found, the log's place
   What was found   each device of the package, what runs it now and what
                    will be done, and any warning
-  Components       the drivers (always), Thunderbolt 3 / USB4 support, the
-                   xHCI98 USB Tree started at login, and the tools folder
+  Components       the drivers (always), Thunderbolt 3 / USB4 support,
+                   Stor98 (where the package carries it), the xHCI98 USB
+                   Tree started at login, and the tools folder
   USB settings     the options below that apply to this machine
   Thunderbolt      the connection manager's options, when it is ticked
+  Stor98 settings  Stor98's own options, when it is ticked
   Summary          everything that will happen; nothing is changed before
                    you click Install
   Progress         each step as it runs; Cancel stops at the next step
@@ -82,12 +84,27 @@ Thunderbolt settings page; devices then get no connection unless the BIOS
 already gave them one. Unticked, a Thunderbolt driver already installed
 stays as it is, and this package's is kept out of Windows' reach.
 
+Stor98, the bundled NVMe driver (a separate project, with its own
+stor98-readme.txt): never ticked unless you tick it. Ticked, it is
+installed on every NVMe drive that has no driver - never on one another
+driver runs - and an older Stor98 is updated. Its settings page shows
+each of Stor98's options as it is now ("not set" means Stor98's built-in
+default); a row left alone writes nothing. On Windows 98 SE and ME an
+update of Stor98 asks you to confirm that nothing is using the drive, and
+the window then offers "Shut down now" rather than a restart: Stor98's
+readme asks for a fresh start after its update there. On 2000 to 7 a
+drive behind a Thunderbolt or USB4 port is unplugged and plugged in again
+after its update; the installer asks for that and waits up to two
+minutes. The uninstall removes Stor98 only where this installer put it
+there: a Stor98 installed before, by hand or by an earlier tool, stays.
+
 Switches the window takes: /uninstall (the uninstall, below), /to path
-(the tools folder, preselected), /thunderbolt and /notray (the components,
-preselected), /set Name=Value (an option, preselected), /defaults, /force
-(reinstall this release, or go back to it from a newer one), /restage
-(Vista and 7: replace a stored development build with the same DriverVer),
-/debug (the debug- directory, only if a maintainer asks), /log path.
+(the tools folder, preselected), /thunderbolt, /stor98 and /notray (the
+components, preselected), /set Name=Value (an option, preselected),
+/defaults, /force (reinstall this release, or go back to it from a newer
+one), /restage (Vista and 7: replace a stored development build with the
+same DriverVer), /debug (the debug- directory, only if a maintainer asks),
+/log path.
 
 The console tool
 ----------------
@@ -102,6 +119,9 @@ The console tool
   INSTALL /console /uninstall   removes the drivers (see below)
   INSTALL /console /thunderbolt installs the Thunderbolt 3 / USB4 support
                                 without asking
+  INSTALL /console /stor98      installs the bundled Stor98 without asking
+                                (without it the console asks, Enter for N;
+                                /yes leaves it out)
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /to path     installs the xHCI98 tools in that
@@ -178,8 +198,10 @@ under way.
 At the end it says "Changes were made. Please restart Windows now." (exit
 code 3) when it changed anything and finished, "Changes were made, but not
 everything is done" when it stopped with steps left for you (do those
-first), and "No changes were made." when it changed nothing. The window
-then offers to restart Windows; the console tool never does.
+first), and "No changes were made." when it changed nothing. After a
+Stor98 update on 98 SE or ME the first two say "shut down and start
+Windows again" instead. The window then offers to restart (or shut down)
+Windows; the console tool never does.
 
 The install directory
 ---------------------

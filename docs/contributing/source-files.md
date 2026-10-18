@@ -254,7 +254,9 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `tbt_fake.h` | The modelled host interface `test_tbt_ring`, `test_tbt_icm` and `test_tbt_hw` drive, from the USB4 Specification 2.0 and `ICM-PROTOCOL.md`. |
 | `tbt_topo_p14s.h` | The ThinkPad P14s Gen 1's PCI configuration space as captured under DOS in `usb4-emu`, for `test_tbt_topo`. |
 | `u4_fakefab.c` / `u4_fakefab.h` | `test_u4cm`'s C89 fake USB4 fabric, one domain per instance, written from the specification and `usb4-emu`'s documented host models, independently of `tbt_u4cm.c` (decision U11). |
-| `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23). |
+| `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23); its Stor98 rows held to `stor98-settings.txt` (record 26 section 5.6). |
+| `stor98-settings.txt` | The bundled Stor98 readme's SETTINGS table, as the installer's Stor98 rows were checked against it; `make-release.ps1` compares a cut's bundled readme with it. |
+| `test_dijob.c` | `xhciinst\inst_core.c` with `xhciinst\di\di_core.c`: the installer's job files read by the helper's parser, the helper's result files by the installer's (design record 27 sections 4.1 and 4.2). |
 | `test_tr.c` | `xhcitr\tr_core.c`, the USB tree tool's pure half (design record 25 section 10): text, the connection answers, descriptors, the query's parsing and eject gates, the router keys and event diff, the command line, the report. |
 | `test_trpci.c` | `src\cm\cm_qpci.c` and `xhcitr\tr_pci.c`: the bounded walk below a tunnel port over modelled buses, the capability walk with bad lists, the decoders, 79 columns (design record 25 revision 12). |
 | `test_di.c` | `xhciinst\di\di_core.c`, the 98 SE and ME device install helper's pure part (design record 27 section 11): the command line and its refusals, the result file's lines, the verdicts, the error names and flags held to the DDK's `setupx.h` where `tools\` has it. |

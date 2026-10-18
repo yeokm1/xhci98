@@ -32,6 +32,9 @@
 #define INST_Q_GATE         7   /* 98 SE and ME: no wizard open; go on?    */
 #define INST_Q_EJECT_PICK   8   /* /eject: which device                    */
 #define INST_Q_EJECT_OK     9   /* /eject: eject it now?                   */
+#define INST_Q_S98          10  /* Install Stor98, the bundled NVMe driver? */
+#define INST_Q_S98_VALUE    11  /* a Stor98 setting (Value: its row)      */
+#define INST_Q_S98_UNUSED   12  /* 98 SE and ME: nothing uses this drive?  */
 
 typedef struct _INST_ASK {
     int Kind;               /* INST_Q_*                                   */
@@ -59,6 +62,9 @@ typedef struct _INST_STEP {
 #define INST_WAIT_POINT     0
 #define INST_WAIT_SETTLE    1   /* Windows' own installs, the tree        */
 #define INST_WAIT_HELPER    2   /* the 98 SE and ME helper's job          */
+#define INST_WAIT_RECONNECT 3   /* NT: a tunnelled Stor98 drive unplugged
+                                   and plugged in again; 0 from Waiting
+                                   skips this wait, it does not stop the run */
 
 typedef struct _INST_WAIT {
     int Kind;               /* INST_WAIT_*                                */
@@ -214,5 +220,43 @@ int inst_eng_controller_changes(void);
 
 /* The confirmation's wording for the plan as it stands. */
 const char *inst_eng_confirm_text(void);
+
+/* ---- Stor98, the bundled NVMe driver (record 26 sections 5.3, 5.6, 6.3) -- */
+
+/* Whether the flavour directory carries it (and its version), and whether
+ * it is in the run; the Components page's box. */
+int inst_eng_s98_state(int *have, char *version, size_t cap);
+void inst_eng_s98_choose(int include);
+
+/* One of its settings (section 5.6): its name on this system, on the page
+ * (Asked) or behind Advanced, what is set now (State 1 set, 0 not, -1
+ * unreadable; Now the value), the page's text for it, the default. 0 when
+ * the row is not this system's. */
+typedef struct _INST_S98ROW {
+    int Value;              /* the row of instS98Values                   */
+    int Asked;
+    const char *Name;
+    int State;
+    char Now[32];
+    char NowText[160];
+    char Default[48];
+} INST_S98ROW;
+int inst_eng_s98_row(int i, INST_S98ROW *row);
+
+/* A value chosen for row i (set) or forgotten (keep): NULL when taken,
+ * else why not. */
+const char *inst_eng_s98_choose_value(int i, int set, const char *text);
+
+/* 98 SE and ME: the n-th Stor98 device the run updates (its description,
+ * and id in *id), NULL past the last; the user's word that nothing uses
+ * it (the Summary page's box), without which it is not updated. */
+const char *inst_eng_s98_update(int n, const char **id);
+void inst_eng_s98_unused(const char *id, int ok);
+
+/* 1 when the finish offers a shutdown rather than a restart (98 SE and ME
+ * after a Stor98 update); 1 when the uninstall left a Stor98 it did not
+ * install (the finish page says so). */
+int inst_eng_shutdown(void);
+int inst_eng_s98_left(void);
 
 #endif /* INST_ENG_H */

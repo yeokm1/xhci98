@@ -41,6 +41,8 @@
 #define IDC_C_DIR_T             1018
 #define IDC_C_DIR_WHY           1019
 #define IDC_C_DIR_L             1020
+#define IDC_C_S98               1021
+#define IDC_C_S98_T             1022
 #define IDC_S_HEAD              1030
 #define IDC_S_ADVANCED          1031
 #define IDC_S_NOTE              1032
@@ -62,5 +64,9 @@
  * an edit box for a range), a note, per row. */
 #define IDC_ROW_BASE            1200
 #define IDC_ROW_STRIDE          4
+
+/* The Summary page's boxes for the Stor98 drives an update touches on
+ * 98 SE and ME, made at run time. */
+#define IDC_SUM_S98             1300
 
 #endif /* XHCIWIZ_RES_H */

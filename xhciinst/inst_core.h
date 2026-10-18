@@ -281,7 +281,8 @@ int inst_testsigning(const char *options);
 #define INST_INF_UAS        1
 #define INST_INF_CM         2
 #define INST_INF_CMF        3
-#define INST_INF_COUNT      4
+#define INST_INF_S98        4   /* the bundled Stor98, when ticked */
+#define INST_INF_COUNT      5
 
 #define INST_APPLY_ANY_XHCI 0
 #define INST_APPLY_PSW      1
@@ -521,6 +522,7 @@ typedef struct _INST_OPTS {
     int Restage;
     int Uninstall;
     int Thunderbolt;        /* /thunderbolt: the Thunderbolt support, unasked */
+    int Stor98;             /* /stor98: the bundled Stor98, unasked      */
     int NoTray;             /* /notray: XHCITR not started at login     */
     int NoPause;
     int SelfTest;
@@ -565,6 +567,11 @@ int inst_exit_code(int refused, int failed, int restart, int steps);
 #define INST_FINAL_UNFINISHED   2
 int inst_final(int changed, int list, int code, int *line);
 const char *inst_final_text(int line);
+
+/* The same line where the run asks for a shutdown and a fresh start
+ * instead of a restart (98 SE and ME after a Stor98 update, record 26
+ * section 5.9); the exit codes are unchanged. */
+const char *inst_final_text_cold(int line, int shutdown);
 
 /* ---- installing beside Windows' own installer (record 23 section 5.8) ------------ */
 
@@ -1148,6 +1155,12 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 #define INST_PT_UN_AGREE        24
 #define INST_PT_UN_SUMMARY      25
 #define INST_PT_GATE            26
+#define INST_PT_S98             27
+#define INST_PT_S98_T           28
+#define INST_PT_S98SET          29
+#define INST_PT_S98_UNUSED      30
+#define INST_PT_SHUT_NOW        31
+#define INST_PT_SHUT_LATER      32
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1270,6 +1283,17 @@ int inst_s98_service_removable(int devnodesLeft, int preExisting);
  * this package's connection manager is "updated, awaiting reconnection"
  * whatever the first read-back says (record 24 section 5.2). */
 int inst_s98_cold_start(int nt);
+
+/* SHA-256 of len bytes, as 64 upper-case hex digits and a NUL. */
+void inst_sha256(const unsigned char *data, size_t len, char *hex65);
+
+/* The question "Install Stor98, the bundled NVMe driver?" (record 26
+ * section 6.4): never unasked (record 23 section 4.4), so Enter and /yes
+ * give N; /stor98 installs it without asking; /list asks nothing. Returns
+ * the decision when it is not asked; *asked whether it is, *def what Enter
+ * gives. */
+int inst_s98_decide(int haveS98, int yes, int stor98Switch, int list,
+                    int *asked, int *def);
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
                              int behindTunnel);
 
