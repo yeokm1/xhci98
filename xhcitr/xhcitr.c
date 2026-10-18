@@ -6883,7 +6883,9 @@ static int snap_child(const char *args, const char *dir, char *outPath,
     HANDLE out;
     DWORD code = (DWORD)-1;
 
+    outPath[0] = '\0';
     if (GetModuleFileNameA(NULL, exe, sizeof(exe)) == 0 || !snap_temp(outPath)) {
+        outPath[0] = '\0';
         return -1;
     }
     memset(&sa, 0, sizeof(sa));
@@ -6893,6 +6895,7 @@ static int snap_child(const char *args, const char *dir, char *outPath,
                       CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (out == INVALID_HANDLE_VALUE) {
         DeleteFileA(outPath);
+        outPath[0] = '\0';
         return -1;
     }
     tr_sprintf(cmd, sizeof(cmd), "\"%s\" %s", exe, args);
@@ -6978,7 +6981,10 @@ static int snap_txt_level(const char *path)
     return q[8] - '0';
 }
 
-/* A whole file appended to the report, in pieces. */
+static int snap_say(HANDLE f, const char *text);
+
+/* A whole file appended to the report, in pieces: 1 done, 0 not opened or
+ * a write failed, -1 a read failed part way (the report says so). */
 static int snap_append(HANDLE f, const char *path)
 {
     static char buf[8192];
@@ -6992,10 +6998,25 @@ static int snap_append(HANDLE f, const char *path)
     if (in == INVALID_HANDLE_VALUE) {
         return 0;
     }
-    while (ok && ReadFile(in, buf, sizeof(buf), &got, NULL) && got != 0) {
-        ok = WriteFile(f, buf, got, &w, NULL) && w == got;
+    for (;;) {
+        if (!ReadFile(in, buf, sizeof(buf), &got, NULL)) {
+            ok = -1;
+            break;
+        }
+        if (got == 0) {
+            break;
+        }
+        if (!WriteFile(f, buf, got, &w, NULL) || w != got) {
+            ok = 0;
+            break;
+        }
     }
     CloseHandle(in);
+    if (ok == -1) {
+        /* What was read stands; the report says it is cut short. */
+        return snap_say(f, "\r\n[cut short: the file could not be read "
+                           "to its end]\r\n") ? -1 : 0;
+    }
     return ok && WriteFile(f, "\r\n", 2, &w, NULL);
 }
 
@@ -7074,20 +7095,35 @@ static int report_snapshots(HANDLE f)
         }
         tr_sprintf(args, sizeof(args), "/snapshot XHCITR /c %d", hcd);
         rc = snap_child(args, dir, out, 120000);
-        DeleteFileA(out);
-        if (rc == -1) {
-            tr_sprintf(line, sizeof(line), "HCD%d: the snapshot did not run, "
-                       "or did not end within two minutes.\r\n\r\n", hcd);
-            ok = snap_say(f, line);
-        } else {
+        if (out[0] != '\0') {
+            DeleteFileA(out);
+        }
+        /* The child's own outcome first (its exit codes are /snapshot's,
+         * record 25 section 15): 0 both complete, 3 the dump's .TXT
+         * incomplete, 4 no dump (the .DEV says why), 5 the .DEV
+         * incomplete; anything else is said with its number. */
+        tr_sprintf(line, sizeof(line), "HCD%d: snapshot %s (exit %d)\r\n",
+                   hcd,
+                   rc == 0   ? "complete"
+                   : rc == 3 ? "taken, but its dump .TXT is NOT complete"
+                   : rc == 4 ? "taken: the device report, no dump"
+                   : rc == 5 ? "taken, but its device report is NOT complete"
+                   : rc == -1 ? "not run, or not ended within two minutes"
+                              : "not complete",
+                   rc);
+        ok = snap_say(f, line);
+        if (rc != -1) {
+            int got;
+
             if (!devDone) {
                 tr_sprintf(file, sizeof(file), "%s\\XHCITR.DEV", dir);
-                if (snap_append(f, file)) {
+                got = snap_append(f, file);
+                if (got != 0) {
                     devDone = 1;
+                    ok = ok && got == 1;
                 } else {
-                    tr_sprintf(line, sizeof(line), "No device report: the "
-                               "snapshot answered %d.\r\n\r\n", rc);
-                    ok = snap_say(f, line);
+                    ok = ok && snap_say(f, "No device report was written."
+                                           "\r\n\r\n");
                 }
             }
             tr_sprintf(file, sizeof(file), "%s\\XHCITR.TXT", dir);
@@ -7107,7 +7143,7 @@ static int report_snapshots(HANDLE f)
                                        "addresses.");
                 ok = ok && snap_say(f, line);
             } else {
-                ok = ok && snap_append(f, file);
+                ok = ok && snap_append(f, file) == 1;
             }
         }
         for (k = 0; k < 4; k++) {
@@ -7171,8 +7207,11 @@ static void save_snapshot_dialog(void)
     old = SetCursor(LoadCursor(NULL, IDC_WAIT));
     rc = snap_child(args, dir, out, 120000);
     SetCursor(old);
-    snap_read_tail(out, text, sizeof(text));
-    DeleteFileA(out);
+    text[0] = '\0';
+    if (out[0] != '\0') {
+        snap_read_tail(out, text, sizeof(text));
+        DeleteFileA(out);
+    }
     box = (char *)malloc(strlen(text) + MAX_PATH + 96);
     if (box == NULL) {
         return;
