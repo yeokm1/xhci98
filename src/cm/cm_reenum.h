@@ -212,6 +212,9 @@ typedef struct _CM_REENUM_PORT {
     ULONG Missed;           /* a tunnel change came while the member was
                                exclusive but not active, or its call could
                                not be made: re-enumerated once it is      */
+    ULONG HeldExpose;       /* the work held behind the stor98 gate (Held)
+                               includes an exposing change (record 22
+                               section 7.7, U25)                          */
     ULONG MissedExpose;     /* one of the changes Missed holds exposes (a
                                change in publication mode none alone -
                                record 22 section 7.7, U25 - is serviced as

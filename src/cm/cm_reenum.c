@@ -698,9 +698,6 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
     self->Flags &= ~DO_DEVICE_INITIALIZING;
     CmRegAttLink(child);
     *over = (ULONG)(decision == CM_CHILD_ATTACH_OVER);
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    bridge->ChildLive++;
-    KeReleaseSpinLock(&cmRegLock, irql);
     return STATUS_SUCCESS;
 }
 
@@ -860,12 +857,34 @@ static VOID cmMarkAttOf(PCM_FILTER f)
 VOID CmRegAttLink(PCM_FILTER filter)
 {
     KIRQL irql;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    ULONG i;
 
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (!filter->AttListed) {
         InsertTailList(&cmRegAtts, &filter->AttLink);
         filter->AttListed = 1;
         cmMarkAttOf(filter);
+        if (filter->Common.Kind == CM_KIND_CHILD && filter->Bridge == NULL) {
+            /* A child AddDevice made: the bridge whose last BusRelations
+             * reported its PDO, so record 22 section 7.7's retirement
+             * proof waits for its removal as for one the bridge attached. */
+            for (e = cmRegFilters.Flink;
+                 e != &cmRegFilters && filter->Bridge == NULL; e = e->Flink) {
+                f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
+                for (i = 0; f->Published && !f->Gone && i < f->SnapCount; i++) {
+                    if (f->Snap[i] == (PVOID)filter->Common.Pdo) {
+                        filter->Bridge = f;
+                    }
+                }
+            }
+        }
+        if (filter->Common.Kind == CM_KIND_CHILD && filter->Bridge != NULL &&
+            !filter->ChildCounted) {
+            filter->Bridge->ChildLive++;
+            filter->ChildCounted = 1;
+        }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
@@ -1034,12 +1053,13 @@ VOID CmRegAttRemoved(PCM_FILTER filter, BOOLEAN afterQr)
         RemoveEntryList(&filter->AttLink);
         InitializeListHead(&filter->AttLink);
         filter->AttListed = 0;
-        if (filter->Common.Kind == CM_KIND_CHILD && filter->Bridge != NULL &&
+        if (filter->ChildCounted && filter->Bridge != NULL &&
             filter->Bridge->ChildLive != 0) {
             /* Record 22 section 7.7 part 4: a child filter this bridge's
              * BusRelations attached has seen its removal complete
              * (CmReenumRetired waits for every one). */
             filter->Bridge->ChildLive--;
+            filter->ChildCounted = 0;
         }
     }
     m = cmMarkFind((PVOID)filter->Common.Pdo, &d);
@@ -1651,7 +1671,8 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
  * call's flags and FALSE is returned. No other member is looked at.
  */
 static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
-                      BOOLEAN *fresh, ULONG tunnel, BOOLEAN *mark)
+                      BOOLEAN *fresh, ULONG tunnel, BOOLEAN *mark,
+                      BOOLEAN *expose)
 {
     PCM_REENUM r;
     ULONG before;
@@ -1663,7 +1684,9 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
     before = r->Port[i].Held;
     up = CmNvlinkHeld(nhi, r->Port[i].Bdf);
     if (up) {
-        (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, *fresh, tunnel);
+        if (*expose) {
+            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, *fresh, tunnel);
+        }
         if ((before & CM_HELD_REENUM) == 0) {
             r->Holds++;
             CmLogNote(nhi, "cm.reenum.held", r->Port[i].Bdf);
@@ -1672,7 +1695,15 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
     missed = (BOOLEAN)(r->Port[i].Missed != 0);
     if (CmNvlinkHoldReenum(&r->Port[i].Held, up, &missed, removeVanished,
                            fresh)) {
+        /* Its publication mode held with it (record 22 section 7.7, U25):
+         * exposing if this call or an owed change it took in exposes. */
+        r->Port[i].HeldExpose |= (*expose || r->Port[i].MissedExpose) ? 1UL
+                                                                      : 0UL;
         return TRUE;
+    }
+    if (r->Port[i].HeldExpose) {
+        *expose = TRUE;
+        r->Port[i].HeldExpose = 0;
     }
     if (r->Port[i].Missed && !missed) {
         /* An owed skipped change paid by this call: its marking window
@@ -1747,7 +1778,7 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
         expose = (BOOLEAN)(!none || r->Port[i].MissedExpose != 0);
         /* A member whose stor98 acknowledgement is pending waits alone;
          * every other member is exposed and called now (task 42-A.12). */
-        if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel, &mark)) {
+        if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel, &mark, &expose)) {
             cmReenumOne(nhi, i, vanish, exposeFresh, tunnel, mark, expose);
         }
     }
@@ -2215,6 +2246,7 @@ VOID CmReenumService(PCM_NHI nhi)
     BOOLEAN vanish;
     BOOLEAN exposeFresh;
     BOOLEAN mark;
+    BOOLEAN heldExpose;
 
     r = &nhi->Reenum;
     /* The stor98 acknowledgement waits, stepped once per pass whatever
@@ -2345,7 +2377,13 @@ VOID CmReenumService(PCM_NHI nhi)
         }
         if (act & CM_HELD_DO_REENUM) {
             /* An owed skipped change paid by this call too: its marking
-             * window with it, as the owed call itself would open. */
+             * window with it, as the owed call itself would open; its
+             * publication mode with the held work's (record 22 section
+             * 7.7, U25). */
+            heldExpose = (BOOLEAN)(r->Port[i].HeldExpose != 0 ||
+                                   (r->Port[i].Missed && !missed &&
+                                    r->Port[i].MissedExpose != 0));
+            r->Port[i].HeldExpose = 0;
             mark = (BOOLEAN)(r->Port[i].Missed && !missed &&
                              r->SafeEject != 0);
             if (r->Port[i].Missed && !missed) {
@@ -2356,18 +2394,19 @@ VOID CmReenumService(PCM_NHI nhi)
                 /* Behind record 22 section 7.7's retirement barrier: the
                  * held call is owed until it is lifted. */
                 r->Port[i].Missed = 1;
-                r->Port[i].MissedExpose = 1;
+                r->Port[i].MissedExpose |= heldExpose ? 1UL : 0UL;
             } else {
                 r->Port[i].Missed = missed ? 1UL : 0UL;
                 if (!missed) {
                     r->Port[i].MissedExpose = 0;
                 }
                 cmReenumOne(nhi, i, vanish, exposeFresh,
-                            CM_NVLINK_TUNNEL_NONE, mark, TRUE);
+                            CM_NVLINK_TUNNEL_NONE, mark, heldExpose);
             }
         } else if (act & CM_HELD_DO_OWE) {
             r->Port[i].Missed = 1;
-            r->Port[i].MissedExpose = 1;
+            r->Port[i].MissedExpose |= r->Port[i].HeldExpose;
+            r->Port[i].HeldExpose = 0;
         }
     }
     /* A change skipped while a member was not active, now that it is;

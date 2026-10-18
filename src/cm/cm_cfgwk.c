@@ -1936,8 +1936,10 @@ static VOID cmWkMark(PCM_CFGWK w, ULONG i, BOOLEAN mark)
 /* ---- a function with no interrupt (design record 28, task 42-A.15) ----- */
 
 /* Every submission's gate (record 28, "the controller's loss and the
- * member's gates"): the worker not leaving, the claim held, and neither
- * CONTROLLER_UNAVAILABLE's removal nor its no-scan re-enumeration owed. */
+ * member's gates"): the worker not leaving, the claim held, neither
+ * CONTROLLER_UNAVAILABLE's removal nor its no-scan re-enumeration owed,
+ * and no retirement barrier standing on the member (record 22 section
+ * 7.7, CmCfgwkHold). */
 static ULONG cmWkNiGate(PCM_CFGWK w, ULONG i)
 {
     KIRQL irql;
@@ -1945,7 +1947,7 @@ static ULONG cmWkNiGate(PCM_CFGWK w, ULONG i)
 
     KeAcquireSpinLock(&w->Lock, &irql);
     open = (ULONG)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
-                   ((w->ReqGone | w->NoScan | w->NiClaimLost) &
+                   ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold) &
                     (1UL << i)) == 0);
     KeReleaseSpinLock(&w->Lock, irql);
     return open;
@@ -3301,9 +3303,17 @@ ULONG CmCfgwkEnumBusy(PCM_CFGWK w)
 {
     KIRQL irql;
     ULONG busy;
+    ULONG i;
 
     KeAcquireSpinLock(&w->Lock, &irql);
     busy = w->EnumBusy;
+    for (i = 0; i < w->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (w->Port[i].Ni.Out.Id != 0) {
+            /* A no-IRQ operation submitted before the hold (record 28)
+             * still outstanding: the removal follows its completion. */
+            busy |= 1UL << i;
+        }
+    }
     KeReleaseSpinLock(&w->Lock, irql);
     return busy;
 }

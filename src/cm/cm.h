@@ -558,11 +558,16 @@ typedef struct _CM_FILTER {
                                answer that was complete and reported no
                                PDO, 0 once a later answer reported one   */
     ULONG ChildLive;        /* child filters attached below and not yet
-                               removed (CmRegChildRemoved): that proof
-                               waits for each one's own removal           */
+                               removed (CmRegAttLink, CmRegAttRemoved):
+                               that proof waits for each one's own
+                               removal                                    */
 
     /* ---- child ---- */
-    struct _CM_FILTER *Bridge;  /* NULL for a child AddDevice made        */
+    struct _CM_FILTER *Bridge;  /* the bridge the child sits below: the one
+                               whose BusRelations attached it, or for one
+                               AddDevice made the one reporting its PDO when
+                               it linked (CmRegAttLink); NULL if none     */
+    ULONG ChildCounted;     /* counted in that bridge's ChildLive         */
     ULONG QueryRemoved;     /* a query-remove not cancelled (both kinds)   */
     ULONG SurpriseRemoved;
 
