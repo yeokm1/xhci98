@@ -551,24 +551,49 @@ numbered unit for `/eject id=`.
 The four steps above are `3.0.0.0`'s direct route. From `3.1.0.0` (record
 21 section 7.2, the 9x half; the code is 42-A.13) the tool makes neither
 call for a unit. After section 7.3's revalidation it writes
-`XhciCmEjectAsk` (a nonce, the port's and the unit's locations, the
-record's generation) to the NHI's driver key beside `XhciCmStatusAsk`,
+`XhciCmEjectAsk` (a nonce, the port's and the unit's locations, and the
+query device's start epoch and content generation the unit was chosen
+under, record 25 section 4.3 - which XHCIINST reads on 98 SE and ME for
+this, as XHCITR does) to the NHI's driver key beside `XhciCmStatusAsk`,
 under the shared mutex, and polls `XhciCmEjectResult` in the NHI's
-hardware key: the connection manager's 98 worker runs
-`Query_Remove_SubTree`, Stor98's `REMOVE_PENDING` request where the
-unit is an NVMe function with an `UP` entry, the wait for its answer,
-`Remove_SubTree` always after an accepted query and its retries, and
-reports each step. The outcomes map onto the items above: no echo of the
-nonce within 3 s is "The Thunderbolt driver did not take the request;
-nothing was changed" (exit 1); a refused query is item 2; a removal is
-item 3, with "the drive did not confirm a clean stop" added where the
-answer was not clean, late or missing; a removal still failing at the
-end of the worker's retries is item 4 (exit 2), the worker going on
-retrying; a driver whose result stops changing for 60 s is exit 2. Under
-the USB4 software connection manager a clean removal is followed by the
-port's PCIe tunnel teardown (record 22 section 10.4), and section 5.2's
-tunnel line is shown on 98 SE and ME too; under the firmware connection
-manager the tunnel stays up, as before. The direct calls stay in the
+hardware key: the connection manager runs `Query_Remove_SubTree`,
+Stor98's `REMOVE_PENDING` request where the unit is an NVMe function
+with an `UP` entry, the wait for its answer, then - after a clean
+answer, after an answer that says the drive is isolated, or after an
+isolation the connection manager could make itself - `Remove_SubTree`
+and its retries, and reports each step; where the drive did not stop
+and no isolation could be made the removal is **not** made and the unit
+is left stopped until it is unplugged (record 21 section 7.2, the 9x
+half, its decision V6). The driver first answers "accepted" (in the
+result) or a rejection (in `XhciCmEjectReply`, with the reason: a stale
+epoch or generation, not a tunnel port of this controller, nothing at
+that location, busy) before any call; the acceptance is the ownership
+boundary - before it the tool's deletion of its ask cancels the request,
+after it the driver owns the transaction and the tool only observes. The
+outcomes map onto the items above: a rejection is exit 1 with "No
+changes were made"; neither answer within 3 s, the ask then deleted and
+3 s more waited, is the uncertain outcome of section 8.2 (exit 2: "The
+Thunderbolt driver did not answer. Look at the device in the xHCI98 USB
+Tree before you unplug it."), never "No changes were made", since the
+driver may have taken the ask; a refused query (the terminal step
+"query-refused") takes item 2's table by its `CONFIGRET` (exit 4 for a
+veto and any other refusal, exit 1 for `CR_INVALID_DEVNODE`,
+`CR_NO_SUCH_DEVNODE` and `CR_CALL_NOT_IMPLEMENTED`), the one mapping both
+tools use; a removal is item 3 (exit 0): the tool then makes section
+5.4's whole assessment as before - the walk read again, the storage-only
+unit, one router, no USB3 tunnel, no other unit running - which selects
+its first, second or third text, or the restarted-unit outcome (exit 4;
+the expected reading after an answer that said the drive was isolated,
+since that branch re-enumerates it), with "the drive did not confirm a
+clean stop" added where the answer was not clean; "blocked" - the drive did
+not stop and no isolation could be made, or the removal kept failing -
+is item 4 (exit 2), the devnode left stopped until the unplug; a
+transaction not at a terminal step about 50 s after its acceptance, or
+one whose result has not been re-stamped for 20 s, is exit 2 as well. Under the USB4 software connection
+manager a clean removal is followed by the port's PCIe tunnel teardown
+(record 22 section 10.4) only when no other unit behind that port is
+running, and section 5.2's tunnel line is shown on 98 SE and ME too;
+under the firmware connection manager the tunnel stays up, as before. The direct calls stay in the
 tool for the plain USB devices of record 25 section 6.5 alone, and a
 unit's eject is still refused without a confirmed record (section 3.3).
 

@@ -38,3 +38,71 @@ Owed to the code tasks: record 23's revision (record 26 section 12), the
 section 2a provenance entry for `XHCIDI.EXE` with its first build (record
 27 section 3.4), and every reading of record 27 section 12 on the 42-V.1
 legs.
+
+## 42-0.4 to 42-0.7: the connection-manager designs (2026-10-18)
+
+Written on branch `3.1.0.0` the same day, after records 26 and 27, from the
+owner's decision of 2026-10-18 that the safe-removal mark's writer is a
+privileged NT service (the decisions table, "Phase 42, the open choices")
+and from the task texts; each as a revision of the record that owns the
+mechanism, except the one that needed a record of its own:
+
+- 42-0.4, design record 21 section 7.4, revision 3: the mark kept across a
+  stack rebuild - a device-specific `LowerFilters` value on the unit,
+  written by the service `xhcimark` (`XHCIMARK.EXE`, `XHCIMK64.EXE`) from
+  what the driver publishes through a fourth query-device request
+  (`IOCTL_XHCICM_MARKS`), validated against the devnode tree; the child
+  filter also created by `AddDevice`, never failing it; the first plug's
+  documented, veto-respecting restart; the value removed at departure and
+  at the service's reconciliation; the installer's install, update, stop
+  and removal with the marks removed before the filter hosts and `xhcicm`'s
+  service and file kept while a value may remain.
+- 42-0.5, design record 22 section 7.7, revised: the recovery of a
+  contained USB4 host interface in place - the precondition on reads
+  (the header as the healthy start read it, the two Command bits
+  restored, a changed BAR0 refused, the host interface's version and the
+  selection's tests again, the size register programmed or reset), the
+  kept buffer reused only after a verified stop of the rings in it, the
+  port records recovered as section 7.6's resume obligations through
+  section 9.2's discover-and-preserve with no reset, one RESYNC "controller
+  recovered"; decision U17 revised by the owner's promotion of the work.
+- 42-0.6, design record 28, `28-win9x-no-interrupt.md`: an NVMe function
+  behind a tunnel whose interrupt pin `PCI.VXD` cannot route started
+  through a second basic logical configuration without the IRQ descriptor
+  (the configuration manager's log-conf services from the 98 worker, then
+  `Reprocess_DevNode`), the forced form as the leg's fallback, the pin-0
+  function needing nothing, the pairing with Stor98's polling mode,
+  `XhciCmNoIrqStart` and `XhciCmNoIrqDiag`.
+- 42-0.7, design record 21 section 7.2, "The 9x half": the tools' 9x eject
+  asked of the connection manager through `XhciCmEjectAsk` and
+  `XhciCmEjectResult` and run by the worker with Stor98's handshake, the
+  USB4 per-port teardown after a clean removal and the isolation before a
+  removal after an answer that is not clean; the 9x statement through
+  `PCI.VXD`'s dword write of the SHPC bridge's DWORD Select on the worker,
+  posted by the thread with the 2 s bound, 98 SE and ME admitted one at a
+  time on their G3 readings; the per-member owed removal on the thread and
+  the per-member state machine on the worker in place of `CmNvlinkAwait`
+  and the worker's holds, with interface 3's R6f handoff word.
+
+What was read for them: the Windows 98 SE DDK's `CONFIGMG.H`, `CFGMGR32.H`
+and `PCI.H` (`tools\win98ddk-extracted\incs\`) and its help file
+(`HELP_WIN98DDK.CHM`, extracted into a scratch directory: no Configuration
+Manager page among its 1,548), the Windows 2000 DDK's `SETUPAPI.H` and
+`cfgmgr32.h`, `src\cm\stor98cm.h` (interface 3's R6 to R12), Stor98's
+`README.md` and `docs/PLAN.md` at its `audit-2026-10-18` head, and the
+connection manager's sources (`cm_cfgwk.c`, `cm_nvlinkos.c`, `cm_reenum.c`,
+`cm_filt.c`, `cm_nhi.c`, `cm_live.h`, `tbt_u4cm.h`, `tbt_brnum.c`,
+`cm_statos.c`, `cm_query.h`). Records 24 (revision 6), 25 and 26 gained
+the pointers.
+
+The two record 21 designs were reviewed and revised the same day until
+the review converged: 42-0.4 over nine rounds (the first draft's kernel
+registry lookup and location-based roles withdrawn; the service's
+binary moved to `system32`; a restart latch tried and withdrawn in favour
+of the eject posted on a positive confirmation; Windows 2000's problem
+24 refused as a confirmation), 42-0.7 over six rounds (the transactions
+moved from the worker to the thread with one call worker per member; the
+detached block and the persistent member blocker; acceptance as the
+ownership boundary of an ask; O6 under the firmware connection manager
+left as an open interface exception). 42-0.5 and 42-0.6 are recorded
+below when their loops end.

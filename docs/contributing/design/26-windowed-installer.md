@@ -522,11 +522,13 @@ uninstall removes them last (section 9.4).
 
 On Windows 2000 to 7, when the Thunderbolt 3 / USB4 component is
 installed, the safe-removal mark service of record 21 section 7.4,
-revision 3 (`XHCIMARK.EXE`, `XHCIMK64.EXE` on x64) is one more of these
-files: copied into the install directory by the same route, registered
-with the service controller from there, stopped before it is replaced or
-removed, and removed with the marks it wrote (section 9.3). Never on 98 SE
-or ME.
+revision 3 (`XHCIMARK.EXE`, `XHCIMK64.EXE` on x64) is installed as well -
+but **not** into the install directory: a program the service controller
+starts as the system must sit where only administrators can replace it,
+so its copy goes to `%SystemRoot%\system32` and is registered from
+there, stopped before it is replaced or removed, and removed with the
+marks it wrote (section 9.3); the install directory's move does not
+concern it. Never on 98 SE or ME.
 
 ### 6.3 Stor98, only when ticked
 
@@ -972,10 +974,13 @@ this list is the whole of it:
   machine-wide values removed, the last steps' order (section 9 here),
   and 9.4's "best effort, then the manual steps" rewritten around the
   helper.
-- Section 9.2 and 9.5: the safe-removal mark service (record 21 section
-  7.4, revision 3) installed, updated, stopped and removed by the
-  installer, and the marks removed before the filter hosts (tasks 42-A.3
-  and 42-A.5).
+- Sections 3, 5.1, 9.2 and 9.5: the safe-removal mark service (record 21
+  section 7.4, revision 3) built, installed into `system32`, started,
+  updated, stopped and removed by the installer; the marks removed as a
+  gated step 0 before the filter hosts, with the inventory read again
+  before `xhcicm`'s service and file go; the invariant that a mark
+  exists only while the `xhcicm` service is registered, kept at the end
+  of every run (tasks 42-A.3 and 42-A.5).
 - Section 10 and 11: the engine file, the front-end table, the new suite
   cases, the self-test of the window.
 - Section 13: D2 (the 98 SE and ME route) gains the helper; D10, D11 and
