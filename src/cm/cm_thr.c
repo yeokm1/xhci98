@@ -69,10 +69,12 @@ static NTSTATUS NTAPI cmConfigDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
  * never to the attached lower object: hcd_svc.c's route
  * (HcdSvcConfigSpace), read on Windows 98 SE and Windows 2000 for the HCD's
  * Bus Master write (26-A.2), and the one Windows 98 SE's own uhcd.sys
- * takes. A read zero-fills its buffer first. IRQL: PASSIVE_LEVEL.
+ * takes. One request; a read fills its buffer with `fill` first, and the
+ * bytes the bus driver reports (*info) are returned. IRQL: PASSIVE_LEVEL.
  */
-static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
-                        ULONG offset, ULONG length)
+static NTSTATUS cmConfigOnce(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
+                             ULONG offset, ULONG length, UCHAR fill,
+                             PULONG info)
 {
     PIO_STACK_LOCATION next;
     KEVENT done;
@@ -81,13 +83,64 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
     ULONG i;
     NTSTATUS status;
 
+    *info = 0;
     if (read) {
-        /* A recovery's validation (CfgStrict) reads through a fill of
-         * 0xFF: a byte the bus driver did not write reads as no answer,
-         * never as a zero that could pass for an identity or a BAR. */
         p = (PUCHAR)buffer;
         for (i = 0; i < length; i++) {
-            p[i] = nhi->CfgStrict ? 0xFF : 0;
+            p[i] = fill;
+        }
+    }
+    irp = IoAllocateIrp(nhi->Common.Pdo->StackSize, FALSE);
+    if (irp == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    irp->IoStatus.Information = 0;
+    next = IoGetNextIrpStackLocation(irp);
+    next->MajorFunction = IRP_MJ_PNP;
+    next->MinorFunction = read ? IRP_MN_READ_CONFIG : IRP_MN_WRITE_CONFIG;
+    next->Parameters.ReadWriteConfig.WhichSpace = PCI_WHICHSPACE_CONFIG;
+    next->Parameters.ReadWriteConfig.Buffer = buffer;
+    next->Parameters.ReadWriteConfig.Offset = offset;
+    next->Parameters.ReadWriteConfig.Length = length;
+    KeInitializeEvent(&done, NotificationEvent, FALSE);
+    CM_SET_COMPLETION_ALWAYS(irp, cmConfigDone, &done);
+    status = IoCallDriver(nhi->Common.Pdo, irp);
+    if (status == STATUS_PENDING) {
+        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
+                                    NULL);
+    }
+    status = irp->IoStatus.Status;
+    *info = (ULONG)irp->IoStatus.Information;
+    IoFreeIrp(irp);
+    return status;
+}
+
+/*
+ * A configuration access, refused where the gate does not admit it. A
+ * read zero-fills its buffer first. Under a recovery's validation
+ * (CfgStrict) a read is an answer only when it is proven whole: one that
+ * reports fewer bytes than asked is refused, and one that reports no
+ * length at all - Windows 98 SE's PCI bus driver completes the request
+ * with the data and Information 0 (the leg of task 42-A.10, 2026-10-19:
+ * every strict read refused, every other read of the same registers
+ * answered) - is made twice, through a fill of all ones and then of
+ * zeros, and is an answer only when both read the same: a byte the bus
+ * driver did not write differs between them. IRQL: PASSIVE_LEVEL.
+ */
+static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
+                        ULONG offset, ULONG length)
+{
+    UCHAR second[4];
+    PUCHAR p;
+    ULONG info;
+    ULONG i;
+    NTSTATUS status;
+
+    if (read) {
+        p = (PUCHAR)buffer;
+        for (i = 0; i < length; i++) {
+            p[i] = 0;
         }
     }
     /* After a surprise removal no configuration access either, and no
@@ -107,40 +160,34 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
         nhi->Counters.ConfigFailures++;
         return FALSE;
     }
-    irp = IoAllocateIrp(nhi->Common.Pdo->StackSize, FALSE);
-    if (irp == NULL) {
-        nhi->Counters.ConfigFailures++;
-        return FALSE;
+    if (!read || !nhi->CfgStrict) {
+        status = cmConfigOnce(nhi, read, buffer, offset, length, 0, &info);
+    } else if (length > sizeof(second)) {
+        status = STATUS_INVALID_PARAMETER;
+    } else {
+        status = cmConfigOnce(nhi, TRUE, buffer, offset, length, 0xFF, &info);
+        if (NT_SUCCESS(status) && info != 0 && info < length) {
+            status = STATUS_UNSUCCESSFUL;
+        } else if (NT_SUCCESS(status) && info == 0) {
+            status = cmConfigOnce(nhi, TRUE, second, offset, length, 0, &info);
+            if (NT_SUCCESS(status) && info != 0 && info < length) {
+                status = STATUS_UNSUCCESSFUL;
+            }
+            p = (PUCHAR)buffer;
+            for (i = 0; NT_SUCCESS(status) && i < length; i++) {
+                if (p[i] != second[i]) {
+                    status = STATUS_UNSUCCESSFUL;
+                }
+            }
+        }
     }
-    irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
-    irp->IoStatus.Information = 0;
-    next = IoGetNextIrpStackLocation(irp);
-    next->MajorFunction = IRP_MJ_PNP;
-    next->MinorFunction = read ? IRP_MN_READ_CONFIG : IRP_MN_WRITE_CONFIG;
-    next->Parameters.ReadWriteConfig.WhichSpace = PCI_WHICHSPACE_CONFIG;
-    next->Parameters.ReadWriteConfig.Buffer = buffer;
-    next->Parameters.ReadWriteConfig.Offset = offset;
-    next->Parameters.ReadWriteConfig.Length = length;
-    KeInitializeEvent(&done, NotificationEvent, FALSE);
-    CM_SET_COMPLETION_ALWAYS(irp, cmConfigDone, &done);
-    status = IoCallDriver(nhi->Common.Pdo, irp);
-    if (status == STATUS_PENDING) {
-        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                    NULL);
-    }
-    status = irp->IoStatus.Status;
-    /* Under a recovery's validation (CfgStrict), a read that reports
-     * fewer bytes than asked is not an answer. One that reports no length
-     * at all is read through the 0xFF fill: Windows 98 SE's PCI bus
-     * driver completes the request with the data and Information 0 (the
-     * leg of task 42-A.10, 2026-10-19: every strict read refused, every
-     * other read of the same registers answered). Not applied elsewhere. */
-    if (NT_SUCCESS(status) && read && nhi->CfgStrict &&
-        irp->IoStatus.Information != 0 && irp->IoStatus.Information < length) {
-        status = STATUS_UNSUCCESSFUL;
-    }
-    IoFreeIrp(irp);
     if (!NT_SUCCESS(status)) {
+        if (read) {
+            p = (PUCHAR)buffer;
+            for (i = 0; i < length; i++) {
+                p[i] = 0;
+            }
+        }
         nhi->Counters.ConfigFailures++;
         return FALSE;
     }
