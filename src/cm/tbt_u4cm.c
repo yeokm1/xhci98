@@ -2718,13 +2718,16 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
          * the DROM still before the adapters, as on a USB4 router. Not
          * under a resume budget: a budget running out refuses every
          * request, the release of the part included, and the name is
-         * optional. */
+         * optional; under one, the names are read once the resume is done
+         * (TbtU4Poll, tbtU4DromLate). */
         rc = tbtU4RouterCaps(cm, d, TBT_RTR1_NEXT_CAP(v[1]));
         if (rc == TBT_OK && d->CapPlugEvents != 0 && !cm->Budgeted) {
             tbtU4ReadDrom(cm, d);
             if (!TBT_U4_LIVE(p, gen)) {
                 return TBT_E_GONE;
             }
+        } else if (rc == TBT_OK && d->CapPlugEvents != 0) {
+            d->DromOwed = TRUE;
         }
         if (rc == TBT_OK) {
             rc = tbtU4DiscoverAdapters(cm, d);
@@ -4626,6 +4629,10 @@ static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
             d->UuidValid = (BOOLEAN)(tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0,
                                               d->CapLc + TBT_LC_FUSE, 4, d->Uuid) == TBT_OK);
         }
+        /* Adopted with no connection sequence of this driver's: its
+         * names are read on a later pass (TbtU4Poll, tbtU4DromLate), its
+         * adapters as found here. */
+        d->DromOwed = (BOOLEAN)(d->CapPlugEvents != 0);
     }
     devState = tbtU4AnyState(cm, p, d, d->UpAdp, tbtU4FirstOf(d, TBT_ADP_TYPE_PCIE_UP),
                              tbtU4FirstOf(d, TBT_ADP_TYPE_USB3_UP));
@@ -5580,6 +5587,42 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
     return TBT_OK;
 }
 
+/*
+ * A Thunderbolt 3 router's names owed (DromOwed: adopted, or rebuilt under
+ * a resume budget; record 22 section 8 item 4), read on a pass with no
+ * budget running, once, while its port is UP: the EEPROM bit-bang of
+ * tbtU4ReadDrom as at a connect, as the port's own sequence (ActivePort,
+ * so a removal seen inside it waits for tbtU4Check as a connect's does).
+ * Only the names are taken: the adapters were discovered without the
+ * DROM and stay as they are, so the unused marks it carries are left as
+ * they were. A read that fails leaves the router unnamed, as at a
+ * connect.
+ */
+static VOID tbtU4DromLate(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    ULONG unused[2];
+    ULONG gen;
+
+    if (!p->Dev.DromOwed || !p->Dev.Present || !p->Dev.Tbt3 ||
+        p->Dev.CapPlugEvents == 0 || p->State != TBT_U4_UP || cm->Budgeted ||
+        p->UnplugPending) {
+        return;
+    }
+    p->Dev.DromOwed = FALSE;
+    gen = p->Generation;
+    unused[0] = p->Dev.DromUnused[0];
+    unused[1] = p->Dev.DromUnused[1];
+    cm->ActivePort = p->Index;
+    tbtU4ReadDrom(cm, &p->Dev);
+    cm->ActivePort = 0;
+    if (p->Generation == gen && p->Dev.Present) {
+        p->Dev.DromUnused[0] = unused[0];
+        p->Dev.DromUnused[1] = unused[1];
+        tbtU4Log(cm, "u4.drom.late", (p->Index << 24) |
+                                     (p->Dev.ModelName[0] != 0 ? 1UL : 0UL));
+    }
+}
+
 VOID TbtU4Poll(PTBT_U4CM cm)
 {
     ULONG i;
@@ -5648,6 +5691,7 @@ VOID TbtU4Poll(PTBT_U4CM cm)
                 (void)tbtU4ReleaseBw(cm, p);
             }
         }
+        tbtU4DromLate(cm, p);
         tbtU4Check(cm, p);
     }
     tbtU4CheckLinks(cm);

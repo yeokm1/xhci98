@@ -1031,7 +1031,8 @@ static VOID cmAskBaselines(PCM_NHI nhi)
         if (serial != 0) {
             /* The baseline answer may already report an endpoint: its
              * stor98 UP first (cm_nvlink.h, obligation 1). */
-            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE);
+            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
+                                 CM_NVLINK_TUNNEL_NONE);
         }
         if (serial != 0 && cmInvalidate(nhi, i, FALSE)) {
             /* Recorded once asked, so a failed call is asked again. */
@@ -1115,14 +1116,24 @@ BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
 }
 
 /* ---- both routes ------------------------------------------------------ */
-/* Every active member re-enumerated by the domain's route. */
-static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh)
+/* Every active member re-enumerated by the domain's route. `action` is the
+ * one that asked for it: a tunnel up names the new tunnel to its own
+ * member's exposure alone (CmNvlinkActionTunnel, task 42-A.6), so no other
+ * member's stor98 entry is advanced; a tunnel down's and a RESYNC's name
+ * none. `fresh` is CmNvlinkExpose's. */
+static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
+                        const TBT_ICM_ACTION *action)
 {
     PCM_REENUM r;
     ULONG i;
     ULONG flags;
+    ULONG member;
 
     r = &nhi->Reenum;
+    member = XHCI_TBT_NO_MEMBER;
+    if (action->Kind == TBT_ICM_ACT_TUNNEL_UP && nhi->U4On) {
+        member = CmNhiActionMember(nhi, action);
+    }
     for (i = 0; i < r->Members; i++) {
         flags = cmFlags(nhi, i);
         if ((flags & CM_PORT_ACTIVE) == 0) {
@@ -1136,7 +1147,11 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh)
         }
         /* stor98's UP for what the call is about to expose (cm_nvlink.h,
          * obligation 1). */
-        (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, fresh);
+        (VOID)CmNvlinkExpose(
+            nhi, r->Port[i].Bdf, fresh,
+            CmNvlinkActionTunnel(
+                (BOOLEAN)(action->Kind == TBT_ICM_ACT_TUNNEL_UP),
+                action->Link, action->Serial, member, i));
         if (r->Route == CM_ROUTE_FILTER) {
             if (!cmInvalidate(nhi, i, TRUE)) {
                 /* Lost its filter or its exclusivity since it was read
@@ -1553,7 +1568,7 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         if (state == XHCI_TBT_POLL_TIMEOUT) {
             r->PollTimeouts++;
         }
-        cmReenumAll(nhi, FALSE, TRUE);
+        cmReenumAll(nhi, FALSE, TRUE, action);
     } else if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN) {
         state = cmPoll(nhi, action, XHCI_TBT_WANT_DOWN);
         CmLogNote(nhi, "cm.reenum.down.poll", (state << 8) | r->Poll.Last);
@@ -1572,10 +1587,10 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
             (VOID)CmNvlinkIcmDown(nhi, state);
         }
         CmNvlinkAwait(nhi);
-        cmReenumAll(nhi, TRUE, FALSE);
+        cmReenumAll(nhi, TRUE, FALSE, action);
     } else {
         CmNvlinkAwait(nhi);
-        cmReenumAll(nhi, TRUE, TRUE);
+        cmReenumAll(nhi, TRUE, TRUE, action);
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
         r->SafeEject != 0 && action->Kind != TBT_ICM_ACT_TUNNEL_DOWN) {
@@ -1689,7 +1704,8 @@ VOID CmReenumService(PCM_NHI nhi)
         if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE) &&
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS) {
             r->Port[i].MissedAt = cmNow(nhi);
-            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE);
+            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
+                                 CM_NVLINK_TUNNEL_NONE);
             if (r->Route == CM_ROUTE_FILTER) {
                 if (cmInvalidate(nhi, i, TRUE)) {
                     r->Port[i].Missed = 0;
