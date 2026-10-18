@@ -1,0 +1,17 @@
+Windows Me, usb4-emu TCG, nvme98 q9x build; cm9xctl bench F:\Bn.BIN 16 (16 MiB in 64 KiB WriteFile calls,
+then FlushFileBuffers, then read back). Host ms between the tool's debug-port markers 0xFA-0xFD.
+QEMU 11.1.2 hw/nvme ignores the FUA bit (no BDRV_REQ_FUA); VWC off makes its block layer write-through.
+
+WriteThrough=0 (volatile write cache on, no FUA)                       writes  1040 ms  write+commit  1498 ms  read  486 ms  ( 10.7 MB/s write+commit)
+WriteThrough=0 (volatile write cache on, no FUA)                       writes   906 ms  write+commit  1362 ms  read  411 ms  ( 11.8 MB/s write+commit)
+WriteThrough=0 (volatile write cache on, no FUA)                       writes   819 ms  write+commit  1284 ms  read  350 ms  ( 12.5 MB/s write+commit)
+WriteThrough=1 (FUA on every write; 1550/1550 writes FUA)              writes  1072 ms  write+commit  1546 ms  read  391 ms  ( 10.3 MB/s write+commit)
+WriteThrough=1 (FUA on every write; 1550/1550 writes FUA)              writes   778 ms  write+commit  1279 ms  read  423 ms  ( 12.5 MB/s write+commit)
+WriteThrough=1 (FUA on every write; 1550/1550 writes FUA)              writes   799 ms  write+commit  1269 ms  read  391 ms  ( 12.6 MB/s write+commit)
+WriteThrough=2 (VWC off by Set Features, verified by Get Features)     writes  1012 ms  write+commit  1524 ms  read  457 ms  ( 10.5 MB/s write+commit)
+WriteThrough=2 (VWC off by Set Features, verified by Get Features)     writes   811 ms  write+commit  1333 ms  read  440 ms  ( 12.0 MB/s write+commit)
+WriteThrough=2 (VWC off by Set Features, verified by Get Features)     writes   904 ms  write+commit  1427 ms  read  436 ms  ( 11.2 MB/s write+commit)
+
+mean write+commit WriteThrough=0 (volatile write cache on, no FUA)              1381 ms
+mean write+commit WriteThrough=1 (FUA on every write; 1550/1550 writes FUA)     1365 ms
+mean write+commit WriteThrough=2 (VWC off by Set Features, verified by Get Features)  1428 ms

@@ -1,0 +1,41 @@
+# 98 SE r3: I/O after a clean acknowledgement (SkipQuery, DelayRemoveMs 20000)
+ctl eject request 4 written for port 0
+[nvme98 00000327e97c71e0 00098] q9 state RUNNING -> REMOVING (REMOVE_PENDING) depth=0 nontagged=00000000 held=00000000
+[nvme98 000003285661ea47 00104] q9 pool[1]: 2 -> 3 (handshake: acknowledged disable) owner=5 last=4 bus=1 slot=1 gen=3 linear=E460B000 phys=1FE6A000
+[nvme98 000003285671cccd 00105] q9 state REMOVING -> QUIESCED (handshake done) depth=0 nontagged=00000000 held=00000000
+[nvme98 00000328568a353d 00107] q9 handshake: acknowledged request 3 (token 5 generation 3) outcome 1 detail 0000000F after 213 ms
+[nvme98 00000329a54dd259 00111] q9 request func=00 op=28 after the acknowledgement of request 3 (outcome 1): refused #1, controller stays disabled
+[nvme98 00000329a5b39ed4 00115] q9 request func=00 op=28 after the acknowledgement of request 3 (outcome 1): refused #2, controller stays disabled
+[nvme98 00000329a5dc694a 00119] q9 request func=00 op=28 after the acknowledgement of request 3 (outcome 1): refused #3, controller stays disabled
+[nvme98 00000329b287a076 00289] q9 request func=00 op=28 after the acknowledgement of request 3 (outcome 1): refused #64, controller stays disabled
+[nvme98 00000329bc17d56d 00418] q9 request func=00 op=28 after the acknowledgement of request 3 (outcome 1): refused #128, controller stays disabled
+ctl write G:\T9.BIN: failed at 0 KiB (31)
+[nvme98 0000032c91b6eade 00440] q9 tick #99 now=1021662 ms state=QUIESCED depth=0 held=00000000 writes=0 fua=0 bounced=0 busy=0 holds=1 refused=138
+ctl write F:\T9.BIN: 64 KiB seed 9 written and committed
+[nvme98 00000335492b6ebc 00211] q9 tick #4900 now=1025822 ms state=RUNNING depth=0 held=00000000 writes=13 fua=0 bounced=0 busy=0 holds=1 refused=0
+[nvme98 00000341fe88a7c7 00453] q9 tick #197 now=1031764 ms state=QUIESCED depth=0 held=00000000 writes=0 fua=0 bounced=0 busy=0 holds=1 refused=144
+[nvme98 0000034aba4fd970 00212] q9 tick #4997 now=1035869 ms state=RUNNING depth=0 held=00000000 writes=13 fua=0 bounced=0 busy=0 holds=1 refused=0
+[nvme98 000003528eb2ab82 00465] q9 state QUIESCED -> STOPPED (HwAdapterState(FALSE)) depth=0 nontagged=00000000 held=00000000
+ctl eject result C1EA after 20381 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_SubTree failing; E0 nothing to eject; 0 n
+[nvme98 000003601667db66 00213] q9 tick #5094 now=1045918 ms state=RUNNING depth=0 held=00000000 writes=13 fua=0 bounced=0 busy=0 holds=1 refused=0
+ctl set cm SkipQuery = 0
+ctl set cm DelayRemoveMs = 0
+[nvme98 0000036a118229b8 00214] q9 tick #5192 now=1055932 ms state=RUNNING depth=0 held=00000000 writes=13 fua=0 bounced=0 busy=0 holds=1 refused=0
+[nvme98 0000036c8d2d9a2b 00051] q9 state ? -> STARTING (HwInitialize) depth=0 nontagged=00000000 held=00000000
+[nvme98 0000036ca056d695 00067] q9 tick #1 now=1059571 ms state=STARTING depth=0 held=C138CE2C writes=0 fua=0 bounced=0 busy=0 holds=1 refused=0
+[nvme98 0000036cd6a30d73 00074] q9 state STARTING -> RUNNING (ready) depth=0 nontagged=00000000 held=C138CE2C
+[nvme98 000003743b151ea9 00215] q9 tick #5290 now=1066012 ms state=RUNNING depth=0 held=00000000 writes=13 fua=0 bounced=0 busy=0 holds=1 refused=0
+[nvme98 0000037bee2ab900 00096] q9 tick #98 now=1069593 ms state=RUNNING depth=0 held=00000000 writes=0 fua=0 bounced=0 busy=0 holds=1 refused=0
+ctl eject request 5 written for port 0
+[nvme98 00000381489968a1 00099] q9 state RUNNING -> REMOVING (REMOVE_PENDING) depth=0 nontagged=00000000 held=00000000
+[nvme98 000003861c4a67e4 00106] q9 pool[1]: 2 -> 3 (handshake: acknowledged disable) owner=6 last=5 bus=1 slot=1 gen=4 linear=E460B000 phys=1FE6A000
+[nvme98 000003861c57042c 00107] q9 state REMOVING -> QUIESCED (handshake done) depth=0 nontagged=00000000 held=00000000
+[nvme98 000003861c6b1ad4 00109] q9 handshake: acknowledged request 4 (token 6 generation 4) outcome 2 detail 0000000D after 2265 ms
+[nvme98 000003862715285e 00122] q9 state QUIESCED -> STOPPED (HwAdapterState(FALSE)) depth=0 nontagged=00000000 held=00000000
+[nvme98 0000038763bf4694 00051] q9 state ? -> STARTING (HwInitialize) depth=0 nontagged=00000000 held=00000000
+ctl eject result E202 after 3009 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_SubTree failing; E0 nothing to eject; 0 no
+[nvme98 000003879ad0a2f6 00068] q9 tick #1 now=1075102 ms state=STARTING depth=0 held=C138CE2C writes=0 fua=0 bounced=0 busy=0 holds=1 refused=0
+[nvme98 0000038809934ea8 00074] q9 state STARTING -> RUNNING (ready) depth=0 nontagged=00000000 held=C138CE2C
+[nvme98 000003899bbe45d3 00216] q9 tick #5388 now=1076056 ms state=RUNNING depth=0 held=00000000 writes=13 fua=0 bounced=0 busy=0 holds=1 refused=0
+[nvme98 0000039d04fc5aeb 00096] q9 tick #98 now=1085119 ms state=RUNNING depth=0 held=00000000 writes=0 fua=0 bounced=0 busy=0 holds=1 refused=0
+[nvme98 0000039ef910301d 00217] q9 tick #5485 now=1086072 ms state=RUNNING depth=0 held=00000000 writes=13 fua=0 bounced=0 busy=0 holds=1 refused=0

@@ -5,6 +5,13 @@ Read `AGENTS.md` first. It is the maintainer's guide for this repository
 do, and where to start). Everything that governs the work is there or in the
 documents it points at; this file carries only what is specific to Claude Code.
 
+## Stor98 (`src/stor98/`)
+
+`src/stor98/` is Stor98, a project of its own in this tree (AGENTS.md,
+"Stor98 (`src/stor98/`)"): its own `src/stor98/AGENTS.md` governs its
+technical rules, and this repository's commit rule applies to it, so a
+commit there carries no `Co-Authored-By` trailer either.
+
 ## Project memory (repo-local)
 
 Cross-session working memory for this repo lives in `.claude/memory/`

@@ -1,0 +1,38 @@
+cm9x DriverEntry (interface 3 revision, pin device)
+cm9x 00000002e9412c95 c8 c29ae7a0 bridge devnode; secondary bus, SHPC cap 00000001 00000040
+cm9x 00000002e9667d3d c8 c29af4e0 bridge devnode; secondary bus, SHPC cap 00000002 00000040
+cm9x 00000002e96f0bf1 c8 00000003 ports active (bit mask); cookie b200e9b4 00000000
+
+=== S5 (P2-5) Flush 1.9 s + SHST 1.9 s + RDY 4 s, then SHST never + RDY never
+ctl eject result 00E0 after 308 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_Sub
+[nvme98 000000b573196bc8 00102] q9 REMOVE_PENDING request 1 for generation 1 in state RUNNING
+[nvme98 000000ba5ad5eac7 00108] q9 handshake: SHST not complete in 2000 ms
+[nvme98 000000c53f9bac03 00114] q9 handshake: acknowledged request 1 (token 1 generation 1) outcome 3 detail 00000009 after 7326 ms
+ctl eject result E303 after 7533 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_Su
+
+=== S7 (P1-2 option A) hostile 11 (provider address differs), 12 (locator rewritten, right cookie)
+=== hostile 11
+[nvme98 0000012b560fb13d 00011] q9 rendezvous: proof table rc=0 type=3 cb=12 table=C18A2EE0 size=272 cookie=B200E9B4
+[nvme98 0000012b566cdff2 00014] q9 rendezvous: proof table C18A2EE0/272/B200E9B4 does not match the locator C18A1EE0/272/B200E9B4
+rendezvous stage arg=0xe host_ns=1792071
+=== hostile 12
+[nvme98 0000016292b2f7de 00011] q9 rendezvous: proof table rc=0 type=3 cb=12 table=C18A1EE0 size=272 cookie=B200E9B4
+[nvme98 000001629338095c 00014] q9 rendezvous: proof table C18A1EE0/272/B200E9B4 does not match the locator C18A2EE0/272/B200E9B4
+rendezvous stage arg=0xe host_ns=1792071
+=== hostile 0
+[nvme98 0000019a4a4cf12e 00011] q9 rendezvous: proof table rc=0 type=3 cb=12 table=C18A1EE0 size=272 cookie=B200E9B4
+rendezvous stage arg=0x50100 host_ns=179
+
+=== S8 (P2-4) this boot's accounting damaged: next load fails closed; a new boot initialises
+[nvme98 00000220d48cbeed 00012] q9 boot block: E42DD000 does not hold this boot's block (sig 43413950)
+[nvme98 00000220d495cf3d 00013] q9 boot block: the reference was recorded in this boot (proof B200E9B4) but its block does not check out: accounting lost or corrupt, fail
+[nvme98 00000220d4b1577b 00016] HwFindAdapter: q9 setup failed, rc=2 (before any CC.EN write)
+
+=== decoder
+statement #1 port 0 gen 1 flags 05: cutoff=0.4 cm_down=48.3 rx=305.4 ack=309.1 cm_ack=310.6 removal=320.3  -> PASS
+statement #2 port 0 gen 2 flags 05: cutoff=0.3 cm_down=30.9 rx=100.2 ack=104.5 cm_ack=122.9 removal=130.1  -> PASS
+statement #3 port 0 gen 3 flags 05: cutoff=0.3 cm_down=22.5 rx=- ack=- cm_timeout=9397.3 removal=9405.8  -> TIMEOUT (no acknowledgement within the CM's wait)
+statement #4 port 0 gen 4 flags 05: cutoff=0.3 cm_down=1.5 rx=- ack=- cm_timeout=9365.3 removal=9374.8  -> TIMEOUT (no acknowledgement within the CM's wait)
+statement #5 port 0 gen 5 flags 05: cutoff=0.3 cm_down=20.1 rx=253.5 ack=257.0 cm_ack=258.9 removal=265.4  -> PASS
+statement #6 port 0 gen 6 flags 05: cutoff=0.3 cm_down=29.1 rx=- ack=- cm_timeout=29.4 removal=-  -> NO-INSTANCE (devnode retired before the statement)
+summary: NO-INSTANCE 1, PASS 3, TIMEOUT 2

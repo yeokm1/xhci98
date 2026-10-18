@@ -1,0 +1,76 @@
+# Q-9x link-down ordering per tunnel down (host ms after T0, the usb4_tp_gate close).
+# cutoff = usb4_tp_cutoff (stage 2 complete); cm_down = cm9x DOWN published (0xCB); rx = nvme98 saw
+# DOWN_QUIESCED (0xE9); ack = AckGeneration written (0xEA); cm_ack = CM saw it or timed out (0xCC);
+# removal = first CONFIGMG Query_Remove/Remove_SubTree; stop = first HwAdapterState(FALSE) (98 SE);
+# md1 = nvme98 MD-1 gone deadline. PASS = cutoff < cm_down < rx < ack < cm_ack (< removal, < stop).
+# Produced by tests/cm9x/q9log.py; annotations below each line.
+
+=== 98 b1: link-down ordering (host ms after T0 = gate closed)
+down #1: T0  ordering n/a (no CM statement)
+          -> boot (gate closed at power-on), not a link down
+down #2: T0 cutoff=0.3 cm_down=30.9 rx=122.8 ack=125.5 cm_ack=142.6 removal=173.0 stop=123331.0  ordering PASS
+          -> surprise at the 40th read fetch (copy F:\BIG.BIN NUL): evidence 2 completed the held read; Query vetoed (DOS box) until the box exited
+=== 98 b2: link-down ordering (host ms after T0 = gate closed)
+down #1: T0 removal=113374.0 stop=116283.3  ordering n/a (no CM statement)
+          -> boot; later CM removals in this run were cancel recoveries without a link down
+down #2: T0 cutoff=0.4 cm_down=21.3 rx=173.6 ack=174.9 cm_ack=176.7 removal=182.1 stop=184.4  ordering PASS
+          -> tun surprise of a FAILED instance (RDY never cleared): acknowledged from the idle timer
+down #3: T0 cutoff=0.3 cm_down=8.5 cm_ack=15544.1 removal=15557.8 stop=21713.3 md1=15699.3  ordering FAIL/incomplete
+          -> NEGATIVE: CM NoFlag (DOWN without QUIESCED): ignored, MD-1 deadline at 15.7 s host released the held read
+down #4: T0 md1=15804.9  ordering n/a (no CM statement)
+          -> NEGATIVE: x-gate closed (no stage 2, CM Mode 0 sends nothing): MD-1 deadline, pool QUARANTINED
+down #5: T0 cutoff=0.4 cm_down=4.3 rx=110.5 ack=111.8 cm_ack=112.6 removal=121.3 stop=127.1  ordering PASS
+          -> tun surprise of the GONE instance: evidence 2 applied after the deadline (pool QUARANTINED -> CLEAN)
+down #6: T0 cutoff=0.5 cm_down=33.1 cm_ack=33.6 stop=59216.5  ordering FAIL/incomplete
+          -> teardown after a clean orderly eject: no nvme98 instance left, the CM did not wait
+=== 98 b3: link-down ordering (host ms after T0 = gate closed)
+down #1: T0  ordering n/a (no CM statement)
+          -> boot
+down #2: T0 cutoff=0.3 cm_down=12.1 cm_ack=5026.3 removal=5029.8  ordering FAIL/incomplete
+          -> surprise of the adapter refused by the pool cap (no instance; the failed devnode made the CM wait 5 s)
+down #3: T0 cutoff=0.3 cm_down=5.5 rx=70.5 ack=71.6 cm_ack=72.6 removal=83.9 stop=89.4  ordering PASS
+          -> G1 cycle: surprise of a running idle instance
+down #4: T0 cutoff=0.2 cm_down=13.4 rx=38.0 ack=38.8 cm_ack=39.5 removal=45.2 stop=48.3  ordering PASS
+          -> G1 cycle
+down #5: T0 cutoff=0.2 cm_down=11.8 rx=86.4 ack=87.3 cm_ack=88.1 removal=91.3 stop=92.9  ordering PASS
+          -> G1 cycle
+down #6: T0 cutoff=0.3 cm_down=8.0 rx=86.7 ack=87.7 cm_ack=88.3 removal=91.7 stop=93.4  ordering PASS
+          -> G1 cycle
+down #7: T0 cutoff=0.3 cm_down=2.3 rx=51.8 ack=52.7 cm_ack=53.5 removal=56.8 stop=58.3  ordering PASS
+          -> G1 cycle
+down #8: T0 cutoff=0.3 cm_down=7.6 rx=91.8 ack=93.8 cm_ack=95.6 removal=123.3 stop=38625.3  ordering PASS
+          -> G4-c end: surprise with a read held after a failed reset; evidence 2 released it
+down #9: T0 cutoff=0.2 cm_down=5.8 rx=15.4 ack=16.5 cm_ack=17.3 removal=1602.1 stop=1614.0  ordering PASS
+          -> G4 cycle (ResetMode 1 reload)
+down #10: T0 cm_down=33.7 rx=358.5 ack=360.5 cm_ack=362.0 removal=370.4 stop=375.9  ordering FAIL/incomplete
+          -> NEGATIVE: CM Mode 1 with x-gate closed: statement without any cutoff, nvme98 accepted it, host-trace check FAILS as designed
+=== me m1: link-down ordering (host ms after T0 = gate closed)
+down #1: T0 removal=152093.2  ordering n/a (no CM statement)
+          -> boot
+down #2: T0 cutoff=0.3 cm_down=46.4 cm_ack=46.6  ordering FAIL/incomplete
+          -> teardown after a clean orderly eject: no nvme98 instance left, the CM did not wait
+down #3: T0 cutoff=0.5 cm_down=3.7 rx=199.7 ack=202.5 cm_ack=208.2 removal=272.3  ordering PASS
+          -> surprise at the 6th read fetch (CTL verify): evidence 2 completed the held read; Query not vetoed
+=== me m2: link-down ordering (host ms after T0 = gate closed)
+down #1: T0 removal=197298.3  ordering n/a (no CM statement)
+          -> boot
+down #2: T0 cutoff=0.2 cm_down=12.0 cm_ack=12.2 removal=84427.3  ordering FAIL/incomplete
+          -> teardown after a clean orderly eject (write-through reload)
+down #3: T0 cutoff=0.2 cm_down=11.7 cm_ack=11.9  ordering FAIL/incomplete
+          -> teardown after a clean orderly eject (write-through reload)
+down #4: T0 cutoff=0.3 cm_down=14.2 rx=34.0 ack=35.6 cm_ack=47.8 removal=66.6  ordering PASS
+          -> G4-c end: surprise with a read held after a failed reset; evidence 2 released it
+down #5: T0 cutoff=0.3 cm_down=14.0 rx=22.8 ack=23.9 cm_ack=24.8 removal=28.6  ordering PASS
+          -> recovery after a veto that outlasted the CM (stale LINKDOWN instance acknowledged gen 4)
+down #6: T0 cutoff=0.3 cm_down=15.2 cm_ack=15.5 removal=152937.7  ordering FAIL/incomplete
+          -> teardown after an eject (G1 cycle): no instance
+down #7: T0 cutoff=0.3 cm_down=15.8 cm_ack=16.0 removal=151199.0  ordering FAIL/incomplete
+          -> teardown after an eject (G1 cycle): no instance
+down #8: T0 cutoff=0.4 cm_down=11.9 cm_ack=12.1 removal=167381.7  ordering FAIL/incomplete
+          -> teardown after an eject (G1 cycle): no instance
+down #9: T0 cutoff=10.8 cm_down=27.1 cm_ack=28.1 removal=151539.2  ordering FAIL/incomplete
+          -> teardown after an eject (G1 cycle): no instance (stage 2 took 10.8 ms)
+down #10: T0 cutoff=0.3 cm_down=11.3 rx=46.7 ack=47.8 cm_ack=48.8 removal=56.1  ordering PASS
+          -> G1 cycle: surprise of a running idle instance
+down #11: T0 cutoff=0.3 cm_down=2.9 rx=17.7 ack=18.8 cm_ack=19.7 removal=27.8 stop=66595.6  ordering PASS
+          -> G1 cycle: surprise of a running idle instance

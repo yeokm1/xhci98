@@ -304,6 +304,30 @@ try {
         Assert-True (-not (Test-Path -LiteralPath $out)) "a package refused for its Stor98 input left an output directory."
     }
 
+    # No -Stor98Dir: the folder is Stor98's own in this tree,
+    # src\stor98\releases\<version> (task 42-A.20). Its 0.4.0.0 is the
+    # release xhci98 3.0.0.0 bundled, under the same SHA256SUMS.txt pin, and
+    # bundles unchanged from there; a version with no folder there is refused
+    # by that path.
+    $nvTree = Join-Path $repo "src\stor98\releases\0.4.0.0"
+    $nvTreeSha = "ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7"
+    $nvOut = Join-Path $script:work "pkg-nv-tree"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $nvOut,
+                           "-Stor98Version", "0.4.0.0", "-Stor98SumsSha256", $nvTreeSha,
+                           "-Stor98InterfaceVersion", "4", "-Stor98HeaderPath", $nvHeader4)
+    Assert-True ($r.ExitCode -eq 0) ("an x86 package bundling Stor98 0.4.0.0 from src\stor98\releases was rejected:`n" + $r.Output)
+    Assert-True ($r.Output -match [regex]::Escape("from $nvTree")) `
+        ("the package did not take Stor98 0.4.0.0 from '$nvTree'. Output:`n" + $r.Output)
+    Test-NvCopies -Pkg $nvOut -Rel @{ Dir = $nvTree } -Map (@{ "x86\stor98.inf" = "stor98.inf"; "x86\stor98.mpd" = "stor98.mpd"; "x86\stor98.sys" = "stor98.sys" } + $nvRenamed) -What "the package of Stor98 0.4.0.0 from src\stor98\releases"
+    $out = Join-Path $script:work "pkg-nv-notree"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $out,
+                           "-Stor98Version", "9.9.9.9", "-Stor98SumsSha256", $nvTreeSha,
+                           "-Stor98InterfaceVersion", "4", "-Stor98HeaderPath", $nvHeader4)
+    $want = "no Stor98 release folder at '" + (Join-Path $repo "src\stor98\releases\9.9.9.9") + "'"
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match [regex]::Escape($want)) `
+        ("a version with no folder under src\stor98\releases was not refused with `"$want`". Output:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath $out)) "a package refused for a missing src\stor98\releases folder left an output directory."
+
     # A later Stor98 release bundles the same way, and the substitute header
     # is the self-tests' alone.
     $nv031 = New-Stor98Release -Name "nv-0.3.0.1" -Files (Get-Stor98Files "0.3.0.1")

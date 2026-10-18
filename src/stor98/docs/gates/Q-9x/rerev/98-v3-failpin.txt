@@ -1,0 +1,9 @@
+ started 98 v3 (new) QMP 48032 VNC 48033
+=== after restart with FailPin=1
+cm9x 0000005c94d861ca b6 000000ee heartbeat; loops, now ms 0000232b 0001f930
+cm9x 0000007b82dfdbe5 b6 000000ee heartbeat; loops, now ms 00002ee4 000297c6
+cm9x 0000007bca661728 b6 000000e4 system shutdown power IRP: polling parked; state 00000006 00000000
+cm9x 00000080465416ab c7 000000d1 pin device not created (or FailPin test): DriverEntry fails, nothing published 00000000 00000000
+=== after restart with FailPin=0
+cm9x DriverEntry (interface 3 revision, pin device)
+cm9x 00000002ce96de78 c8 c18a1ee0 table; proof dynamic key rc, locator rc 00000000 00000000

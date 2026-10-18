@@ -1,0 +1,45 @@
+         0.0 ms #1      91 G57_FIND 0x20003
+         4.5 ms #8      98 G57_QPOOL_CHECK 0x1
+         9.3 ms #15     04 OPTIONS 0x2
+        10.2 ms #16     80 G24_OPTIONS 0x1081388
+        10.9 ms #17     a0 Q_OPTIONS shn=0 stop=0 rdyto=CAP
+        12.0 ms #18     02 FIND_ADAPTER 0x10001
+        16.1 ms #19     95 G57_UNCACHED_CHECK 0x10f
+        17.3 ms #26     03 FIND_RESULT 0x1
+        17.6 ms #27     30 HWINIT_ENTER 0x1
+        18.1 ms #28     33 HWINIT_CAP 0xf0107ff
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460000
+                  .. pci_nvme_mmio_stopped cleared controller enable bit
+        18.6 ms #29     31 HWINIT_CC 0x460000
+        18.8 ms #30     40 STATE NONE -> DISABLING
+        19.2 ms #34     32 HWINIT_RETURN ret=1 state=DISABLING
+        21.9 ms #41     10 STARTIO EXEC:STARTSTOP st=DISABLING
+        22.9 ms #42     11 SRB_HELD EXEC:STARTSTOP st=DISABLING TimeOutValue=240s
+        24.8 ms #43     47 TIMER_FIRST 0x1
+        25.1 ms #44     45 DISABLE_ACK 0x1
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+                  .. pci_nvme_mmio_start_success setting controller enable bit succeeded
+        25.8 ms #45     31 HWINIT_CC 0x460001
+        26.0 ms #46     40 STATE DISABLING -> WAIT_RDY
+        39.9 ms #47     41 RDY_SEEN 0x1
+        40.1 ms #48     40 STATE WAIT_RDY -> ADMIN
+                  .. pci_nvme_admin_cmd cid 1 sqid 0 opc 0x5 opname 'NVME_ADM_CMD_CREATE_CQ'
+                  .. pci_nvme_create_cq create completion queue, addr=0x6ab6000, cqid=1, vector=0, qsize=63, qflags=3, ien=1
+        55.9 ms #49     42 ADMIN_DONE cid=1 status=0x0
+                  .. pci_nvme_admin_cmd cid 2 sqid 0 opc 0x1 opname 'NVME_ADM_CMD_CREATE_SQ'
+                  .. pci_nvme_create_sq create submission queue, addr=0x6aaa000, sqid=1, cqid=1, qsize=63, qflags=1
+        69.8 ms #50     42 ADMIN_DONE cid=2 status=0x0
+                  .. pci_nvme_admin_cmd cid 3 sqid 0 opc 0x6 opname 'NVME_ADM_CMD_IDENTIFY'
+                  .. pci_nvme_identify_ctrl identify controller
+        87.6 ms #51     42 ADMIN_DONE cid=3 status=0x0
+                  .. pci_nvme_admin_cmd cid 4 sqid 0 opc 0x6 opname 'NVME_ADM_CMD_IDENTIFY'
+       110.4 ms #52     42 ADMIN_DONE cid=4 status=0x0
+       110.6 ms #53     40 STATE ADMIN -> RUNNING
+       110.7 ms #54     43 BRINGUP_DONE 0x6
+       110.9 ms #55     12 DISPATCH_HELD ticks=6 STARTSTOP
+       111.0 ms #56     10 STARTIO EXEC:STARTSTOP st=RUNNING
+            (1 read/write stages)
+       112.3 ms #58     a1 Q_DIRTY 0x6f
+            (13 read/write stages)
+       678.2 ms #72     10 STARTIO EXEC:INQUIRY st=RUNNING
+            (518 read/write stages)

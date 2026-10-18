@@ -1,0 +1,96 @@
+         0.0 ms #1      91 G57_FIND 0x20003
+         3.6 ms #8      98 G57_QPOOL_CHECK 0x1
+         5.7 ms #15     04 OPTIONS 0x2
+         6.1 ms #16     80 G24_OPTIONS 0x1081388
+         6.4 ms #17     a0 Q_OPTIONS shn=0 stop=0 rdyto=CAP
+         6.8 ms #18     02 FIND_ADAPTER 0x10001
+        11.9 ms #19     95 G57_UNCACHED_CHECK 0x10f
+        12.6 ms #26     03 FIND_RESULT 0x1
+        12.7 ms #27     30 HWINIT_ENTER 0x0
+        13.0 ms #28     33 HWINIT_CAP 0xf0107ff
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460000
+                  .. pci_nvme_mmio_stopped cleared controller enable bit
+        13.7 ms #29     31 HWINIT_CC 0x460000
+        13.9 ms #30     40 STATE NONE -> DISABLING
+        14.6 ms #34     32 HWINIT_RETURN ret=1 state=DISABLING
+        16.8 ms #41     10 STARTIO EXEC:STARTSTOP st=DISABLING
+        17.1 ms #42     11 SRB_HELD EXEC:STARTSTOP st=DISABLING TimeOutValue=240s
+        22.8 ms #43     47 TIMER_FIRST 0x1
+        23.1 ms #44     45 DISABLE_ACK 0x1
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+                  .. pci_nvme_mmio_start_success setting controller enable bit succeeded
+        23.9 ms #45     31 HWINIT_CC 0x460001
+        24.0 ms #46     40 STATE DISABLING -> WAIT_RDY
+     12174.1 ms #47     44 BRINGUP_FAIL 0x1
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460000
+                  .. pci_nvme_mmio_stopped cleared controller enable bit
+     12174.3 ms #48     40 STATE WAIT_RDY -> FAIL_DISABLE reason=1
+     12189.9 ms #49     45 DISABLE_ACK 0x1
+     12190.0 ms #50     40 STATE FAIL_DISABLE -> FAILED reason=1
+     12190.1 ms #51     14 SRB_FAILED_STATE EXEC:STARTSTOP st=FAILED SrbStatus=04
+     12190.9 ms #52     10 STARTIO EXEC:REQSENSE st=FAILED
+     12191.0 ms #53     14 SRB_FAILED_STATE EXEC:REQSENSE st=FAILED SrbStatus=04
+     12393.6 ms #54     10 STARTIO EXEC:STARTSTOP st=FAILED
+     12393.7 ms #55     14 SRB_FAILED_STATE EXEC:STARTSTOP st=FAILED SrbStatus=04
+     12393.9 ms #56     10 STARTIO EXEC:REQSENSE st=FAILED
+     12394.0 ms #57     14 SRB_FAILED_STATE EXEC:REQSENSE st=FAILED SrbStatus=04
+     12594.4 ms #58     10 STARTIO EXEC:STARTSTOP st=FAILED
+     12594.6 ms #59     14 SRB_FAILED_STATE EXEC:STARTSTOP st=FAILED SrbStatus=04
+     12594.9 ms #60     10 STARTIO EXEC:REQSENSE st=FAILED
+     12595.1 ms #61     14 SRB_FAILED_STATE EXEC:REQSENSE st=FAILED SrbStatus=04
+     12797.7 ms #62     10 STARTIO EXEC:STARTSTOP st=FAILED
+     12797.9 ms #63     14 SRB_FAILED_STATE EXEC:STARTSTOP st=FAILED SrbStatus=04
+     12798.1 ms #64     10 STARTIO EXEC:REQSENSE st=FAILED
+     12798.3 ms #65     14 SRB_FAILED_STATE EXEC:REQSENSE st=FAILED SrbStatus=04
+     13001.3 ms #66     10 STARTIO EXEC:STARTSTOP st=FAILED
+     13001.5 ms #67     14 SRB_FAILED_STATE EXEC:STARTSTOP st=FAILED SrbStatus=04
+     13001.7 ms #68     10 STARTIO EXEC:REQSENSE st=FAILED
+     13001.7 ms #69     14 SRB_FAILED_STATE EXEC:REQSENSE st=FAILED SrbStatus=04
+            (1 read/write stages)
+     13002.2 ms #71     14 SRB_FAILED_STATE EXEC:WRITE10 st=FAILED SrbStatus=84
+     13002.6 ms #72     10 STARTIO EXEC:INQUIRY st=FAILED
+     13002.7 ms #73     14 SRB_FAILED_STATE EXEC:INQUIRY st=FAILED SrbStatus=84
+            (1 read/write stages)
+     13003.7 ms #75     14 SRB_FAILED_STATE EXEC:READ10 st=FAILED SrbStatus=84
+     13003.9 ms #76     10 STARTIO EXEC:INQUIRY st=FAILED
+     13004.0 ms #77     14 SRB_FAILED_STATE EXEC:INQUIRY st=FAILED SrbStatus=84
+     13004.1 ms #78     10 STARTIO EXEC:INQUIRY st=FAILED
+     13004.2 ms #79     14 SRB_FAILED_STATE EXEC:INQUIRY st=FAILED SrbStatus=84
+            (1 read/write stages)
+     13517.4 ms #81     14 SRB_FAILED_STATE EXEC:WRITE10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     13517.6 ms #83     14 SRB_FAILED_STATE EXEC:READ10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     14019.5 ms #85     14 SRB_FAILED_STATE EXEC:WRITE10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     14019.8 ms #87     14 SRB_FAILED_STATE EXEC:READ10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     14534.1 ms #89     14 SRB_FAILED_STATE EXEC:WRITE10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     14534.4 ms #91     14 SRB_FAILED_STATE EXEC:READ10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     15032.7 ms #93     14 SRB_FAILED_STATE EXEC:WRITE10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     15032.9 ms #95     14 SRB_FAILED_STATE EXEC:READ10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     15534.3 ms #97     14 SRB_FAILED_STATE EXEC:WRITE10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     15534.5 ms #99     14 SRB_FAILED_STATE EXEC:READ10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     16062.9 ms #101    14 SRB_FAILED_STATE EXEC:WRITE10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     16063.3 ms #103    14 SRB_FAILED_STATE EXEC:READ10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     16563.6 ms #105    14 SRB_FAILED_STATE EXEC:WRITE10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     16563.9 ms #107    14 SRB_FAILED_STATE EXEC:READ10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     17062.2 ms #109    14 SRB_FAILED_STATE EXEC:WRITE10 st=FAILED SrbStatus=84
+            (1 read/write stages)
+     17062.5 ms #111    14 SRB_FAILED_STATE EXEC:READ10 st=FAILED SrbStatus=84
+     17130.6 ms #112    10 STARTIO EXEC:INQUIRY st=FAILED
+     17130.8 ms #113    14 SRB_FAILED_STATE EXEC:INQUIRY st=FAILED SrbStatus=84
+     17131.1 ms #114    10 STARTIO EXEC:INQUIRY st=FAILED
+     17131.3 ms #115    14 SRB_FAILED_STATE EXEC:INQUIRY st=FAILED SrbStatus=84
+     17131.5 ms #116    10 STARTIO EXEC:INQUIRY st=FAILED
+     17131.6 ms #117    14 SRB_FAILED_STATE EXEC:INQUIRY st=FAILED SrbStatus=84

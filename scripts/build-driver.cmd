@@ -24,7 +24,9 @@ rem      two launchers sharing a monitor port cannot both run
 rem   6. the vm-matrix verdict self-tests - a matrix that reads a refusal as a
 rem      pass makes every later FAIL and NODRIVER word untrustworthy
 rem   7. the tracked batch files' line endings - MS-DOS 7.1 COMMAND.COM can
-rem      fail on an LF-only .BAT, and the field wrappers are .BAT files
+rem      fail on an LF-only .BAT, and the field wrappers are .BAT files -
+rem      then the source charset, and the two copies of Stor98's interface
+rem      header held equal (task 42-A.20, scripts\check-stor98-header.ps1)
 rem   8. the XHCISNAP report self-test, when that EXE has been built (it has a
 rem      build.cmd of its own, and a clone without Open Watcom still runs
 rem      everything else here), and the XHCICLN self-test when that one has
@@ -509,6 +511,18 @@ echo === source charset ===
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-source-charset.ps1"
 if errorlevel 1 goto charsetfail
+
+rem Stor98's interface header is in this tree twice since task 42-A.20:
+rem src\stor98\include\stor98cm.h, the master, and src\cm\stor98cm.h, the
+rem copy xhcicm.sys compiles against. Byte for byte until they are one.
+echo.
+echo === Stor98 interface header ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-stor98-header.ps1" -SelfTest
+if errorlevel 1 goto stor98hdrfail
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-stor98-header.ps1"
+if errorlevel 1 goto stor98hdrfail
 
 rem The snapshot reader's report path, when its EXE has been built (it is a
 rem separate build.cmd, and a clone without Open Watcom still has this one).
@@ -1211,6 +1225,13 @@ exit /b 1
 echo.
 echo ERROR: tracked source carries a stray control byte or a UTF-8 BOM where the
 echo 1998-era toolchain cannot read one. See the check's output above.
+endlocal
+exit /b 1
+
+:stor98hdrfail
+echo.
+echo ERROR: src\cm\stor98cm.h is not src\stor98\include\stor98cm.h, the
+echo master, byte for byte - see the check's output above.
 endlocal
 exit /b 1
 

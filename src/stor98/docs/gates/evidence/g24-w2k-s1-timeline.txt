@@ -1,0 +1,363 @@
+ -174238.2 ms [ -174240.8]  usb4_tp_gate tb0: access gate closed=1 dma_open=0
+ -174238.2 ms [ -174240.8]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+ -174238.2 ms [ -174240.8]  | usb4_tp_insert tb0: insert endpoint gen 1 drive=nvme0 serial=USB4EMU01 cold=0
+  -79754.2 ms [  -79754.2]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+  -68182.6 ms [  -68182.6]  80 OPTIONS gone=5000ms status=NO_DEVICE bcd=1 legacyreset=0
+  -68182.6 ms [  -68182.6]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x0
+  -68182.6 ms [  -68182.6]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+  -68182.6 ms [  -68182.6]  | pci_nvme_mmio_start_success setting controller enable bit succeeded
+  -68175.5 ms [  -68175.5]  63 ADAPTER_CONTROL QuerySupported
+  -68136.0 ms [  -68136.0]  10 STARTIO IOCTL st=RUNNING tagged
+  -26923.3 ms [  -26923.3]  86 SUMMARY held=1 port-owned=1 running
+   -1015.8 ms [   -1015.8]  | usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+       0.0 ms [       0.0]  usb4_tp_gate tb0: access gate closed=1 dma_open=0   <== T0
+       0.5 ms [       0.5]  | usb4_tp_cutoff tb0: stage 2 complete for gen 1 host_ns=1791994836235747000 vm_ns=174238681900
+       0.5 ms [       0.5]  | usb4_tp_removed tb0: endpoint gen 1 removed, dismissed=0
+       1.5 ms [       1.5]  81 GONE_ENTER held=1 via StartIo from RUNNING
+    7790.4 ms [    7790.4]  84 HELD_DONE slot=146 READ10 -> NO_DEVICE
+    7790.9 ms [    7790.9]  83 DEADLINE completed=1 port-retired=0 count=1
+    7791.1 ms [    7791.1]  46 QUARANTINE prp-bitmap=0x1
+    7791.3 ms [    7791.3]  8a BUS_CHANGE_DETECTED (state GONE_DONE)
+    7794.6 ms [    7794.6]  82 FASTFAIL EXEC:INQUIRY st=GONE_DONE -> NO_DEVICE
+    7794.6 ms [    7794.6]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+  137265.1 ms [  137265.1]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+  137265.1 ms [  137265.1]  | usb4_tp_insert tb0: insert endpoint gen 2 drive=nvme0 serial=USB4EMU01 cold=0
+  149644.6 ms [  149644.6]  80 OPTIONS gone=5000ms status=NO_DEVICE bcd=1 legacyreset=0
+  149644.6 ms [  149644.6]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x0
+  149644.6 ms [  149644.6]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+  149644.6 ms [  149644.6]  | pci_nvme_mmio_start_success setting controller enable bit succeeded
+  149655.9 ms [  149655.9]  63 ADAPTER_CONTROL QuerySupported
+  149684.3 ms [  149684.3]  10 STARTIO IOCTL st=RUNNING tagged
+  208584.8 ms [  208584.8]  | usb4_h_fire tb0: rule 1 fired at fetch token=106984 opc=0x2 code=0x0 acts=surprise host_ns=1791995044820063000 vm_ns=382822997700
+  208584.8 ms [  208584.8]  | usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+  208584.8 ms [  208584.8]  usb4_tp_gate tb0: access gate closed=1 dma_open=0
+  208585.1 ms [  208585.1]  | usb4_tp_cutoff tb0: stage 2 complete for gen 2 host_ns=1791995044820353000 vm_ns=382823287500
+  208585.1 ms [  208585.1]  | usb4_tp_removed tb0: endpoint gen 2 removed, dismissed=0
+  208690.1 ms [  208690.1]  81 GONE_ENTER held=8 via timer from RUNNING
+  213425.6 ms [  213425.6]  86 SUMMARY held=8 port-owned=8 t=3s
+  216538.2 ms [  216538.2]  84 HELD_DONE slot=123 READ10 -> NO_DEVICE
+  216538.5 ms [  216538.5]  84 HELD_DONE slot=135 READ10 -> NO_DEVICE
+  216538.6 ms [  216538.6]  84 HELD_DONE slot=143 WRITE10 -> NO_DEVICE
+  216538.7 ms [  216538.7]  84 HELD_DONE slot=144 WRITE10 -> NO_DEVICE
+  216538.8 ms [  216538.8]  84 HELD_DONE slot=146 WRITE10 -> NO_DEVICE
+  216538.9 ms [  216538.9]  84 HELD_DONE slot=147 READ10 -> NO_DEVICE
+  216539.1 ms [  216539.1]  84 HELD_DONE slot=148 WRITE10 -> NO_DEVICE
+  216539.2 ms [  216539.2]  84 HELD_DONE slot=149 READ10 -> NO_DEVICE
+  216539.5 ms [  216539.5]  83 DEADLINE completed=8 port-retired=0 count=1
+  216539.6 ms [  216539.6]  46 QUARANTINE prp-bitmap=0xff
+  216539.7 ms [  216539.7]  8a BUS_CHANGE_DETECTED (state GONE_DONE)
+  216541.9 ms [  216541.9]  82 FASTFAIL EXEC:INQUIRY st=GONE_DONE -> NO_DEVICE
+  216541.9 ms [  216541.9]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+  287656.5 ms [  287656.5]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+  287656.5 ms [  287656.5]  | usb4_tp_insert tb0: insert endpoint gen 3 drive=nvme0 serial=USB4EMU01 cold=0
+  300276.3 ms [  300276.3]  80 OPTIONS gone=5000ms status=SEL_TIMEOUT bcd=1 legacyreset=0
+  300276.3 ms [  300276.3]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x0
+  300276.3 ms [  300276.3]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+  300276.3 ms [  300276.3]  | pci_nvme_mmio_start_success setting controller enable bit succeeded
+  300286.7 ms [  300286.7]  63 ADAPTER_CONTROL QuerySupported
+  312756.9 ms [  312756.9]  86 SUMMARY held=1 port-owned=1 running
+  317392.4 ms [  317392.4]  50 HwResetBus #1 path=0 held=1 state=RUNNING
+  317392.4 ms [  317392.4]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460000
+  317393.3 ms [  317393.3]  84 HELD_DONE slot=2 READ10 -> BUS_RESET
+  317393.7 ms [  317393.7]  87 RESET_RESULT ret=1 csts=0x00 state=FAILED held=0
+  323626.3 ms [  323626.3]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323627.1 ms [  323627.1]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323627.5 ms [  323627.5]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323627.7 ms [  323627.7]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323628.5 ms [  323628.5]  8d FAILED_IO EXEC:READ10 st=FAILED tagged -> ERROR(04/44/00)
+  323628.8 ms [  323628.8]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323629.0 ms [  323629.0]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323629.2 ms [  323629.2]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323629.4 ms [  323629.4]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323629.8 ms [  323629.8]  8d FAILED_IO EXEC:RDCAP st=FAILED -> ERROR(04/44/00)
+  323630.0 ms [  323630.0]  8d FAILED_IO EXEC:RDCAP st=FAILED -> ERROR(04/44/00)
+  323630.2 ms [  323630.2]  8d FAILED_IO EXEC:RDCAP st=FAILED -> ERROR(04/44/00)
+  323630.4 ms [  323630.4]  8d FAILED_IO EXEC:RDCAP st=FAILED -> ERROR(04/44/00)
+  323630.6 ms [  323630.6]  8d FAILED_IO EXEC:RDCAP st=FAILED -> ERROR(04/44/00)
+  323630.9 ms [  323630.9]  8d FAILED_IO EXEC:READ10 st=FAILED tagged -> ERROR(04/44/00)
+  323631.1 ms [  323631.1]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323631.3 ms [  323631.3]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323631.5 ms [  323631.5]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323631.7 ms [  323631.7]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+  323635.5 ms [  323635.5]  10 STARTIO IOCTL st=FAILED tagged
+  323636.3 ms [  323636.3]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED tagged -> ERROR(04/44/00)
+  323636.7 ms [  323636.7]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323636.9 ms [  323636.9]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323637.1 ms [  323637.1]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323637.3 ms [  323637.3]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323638.5 ms [  323638.5]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323638.8 ms [  323638.8]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323639.0 ms [  323639.0]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323639.1 ms [  323639.1]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323639.3 ms [  323639.3]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323639.6 ms [  323639.6]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323639.8 ms [  323639.8]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  323640.0 ms [  323640.0]  8d FAILED_IO EXEC:MODESENSE6 st=FAILED -> ERROR(04/44/00)
+  325821.4 ms [  325821.4]  8d FAILED_IO EXEC:RDCAP st=FAILED -> ERROR(04/44/00)
+  325821.4 ms [  325821.4]  | usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+  370082.1 ms [  370082.1]  usb4_tp_gate tb0: access gate closed=1 dma_open=0
+  370082.3 ms [  370082.3]  | usb4_tp_cutoff tb0: stage 2 complete for gen 3 host_ns=1791995206317596000 vm_ns=544320531300
+  370082.3 ms [  370082.3]  | usb4_tp_removed tb0: endpoint gen 3 removed, dismissed=0
+  370082.3 ms [  370082.3]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+  405801.7 ms [  405801.7]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+  405801.7 ms [  405801.7]  | usb4_tp_insert tb0: insert endpoint gen 4 drive=nvme0 serial=USB4EMU01 cold=0
+  414049.1 ms [  414049.1]  80 OPTIONS gone=5000ms status=SEL_TIMEOUT bcd=1 legacyreset=0
+  414049.1 ms [  414049.1]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x0
+  414049.1 ms [  414049.1]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+  414049.1 ms [  414049.1]  | pci_nvme_mmio_start_success setting controller enable bit succeeded
+  414053.5 ms [  414053.5]  63 ADAPTER_CONTROL QuerySupported
+  414067.1 ms [  414067.1]  10 STARTIO IOCTL st=RUNNING tagged
+  456054.4 ms [  456054.4]  | usb4_h_fire tb0: rule 1 fired at fetch token=111207 opc=0x2 code=0x0 acts=surprise host_ns=1791995292289707000 vm_ns=630292642100
+  456054.4 ms [  456054.4]  | usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+  456054.5 ms [  456054.5]  usb4_tp_gate tb0: access gate closed=1 dma_open=0
+  456054.7 ms [  456054.7]  | usb4_tp_cutoff tb0: stage 2 complete for gen 4 host_ns=1791995292289972000 vm_ns=630292906900
+  456054.7 ms [  456054.7]  | usb4_tp_removed tb0: endpoint gen 4 removed, dismissed=0
+  456091.0 ms [  456091.0]  81 GONE_ENTER held=8 via timer from RUNNING
+  461098.5 ms [  461098.5]  84 HELD_DONE slot=2 WRITE10 -> SEL_TIMEOUT
+  461098.6 ms [  461098.6]  84 HELD_DONE slot=11 READ10 -> SEL_TIMEOUT
+  461098.7 ms [  461098.7]  84 HELD_DONE slot=14 WRITE10 -> SEL_TIMEOUT
+  461098.7 ms [  461098.7]  84 HELD_DONE slot=15 READ10 -> SEL_TIMEOUT
+  461098.8 ms [  461098.8]  84 HELD_DONE slot=16 WRITE10 -> SEL_TIMEOUT
+  461098.9 ms [  461098.9]  84 HELD_DONE slot=17 READ10 -> SEL_TIMEOUT
+  461099.0 ms [  461099.0]  84 HELD_DONE slot=18 WRITE10 -> SEL_TIMEOUT
+  461099.0 ms [  461099.0]  84 HELD_DONE slot=19 READ10 -> SEL_TIMEOUT
+  461099.2 ms [  461099.2]  83 DEADLINE completed=8 port-retired=0 count=1
+  461099.3 ms [  461099.3]  46 QUARANTINE prp-bitmap=0xff
+  461099.4 ms [  461099.4]  8a BUS_CHANGE_DETECTED (state GONE_DONE)
+  461101.1 ms [  461101.1]  82 FASTFAIL EXEC:INQUIRY st=GONE_DONE -> SEL_TIMEOUT
+  461101.1 ms [  461101.1]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+  546045.6 ms [  546045.6]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+  546045.6 ms [  546045.6]  | usb4_tp_insert tb0: insert endpoint gen 5 drive=nvme0 serial=USB4EMU01 cold=0
+  555122.7 ms [  555122.7]  80 OPTIONS gone=0ms status=NO_DEVICE bcd=1 legacyreset=0
+  555122.7 ms [  555122.7]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x0
+  555122.7 ms [  555122.7]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+  555122.7 ms [  555122.7]  | pci_nvme_mmio_start_success setting controller enable bit succeeded
+  555127.2 ms [  555127.2]  63 ADAPTER_CONTROL QuerySupported
+  555139.2 ms [  555139.2]  10 STARTIO IOCTL st=RUNNING tagged
+  580842.0 ms [  580842.0]  | usb4_h_fire tb0: rule 1 fired at fetch token=115425 opc=0x2 code=0x0 acts=surprise host_ns=1791995417077279000 vm_ns=755080213700
+  580842.0 ms [  580842.0]  | usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+  580842.1 ms [  580842.1]  usb4_tp_gate tb0: access gate closed=1 dma_open=0
+  580842.5 ms [  580842.5]  | usb4_tp_cutoff tb0: stage 2 complete for gen 5 host_ns=1791995417077762000 vm_ns=755080696800
+  580842.5 ms [  580842.5]  | usb4_tp_removed tb0: endpoint gen 5 removed, dismissed=0
+  580901.3 ms [  580901.3]  81 GONE_ENTER held=8 via timer from RUNNING
+  584036.3 ms [  584036.3]  86 SUMMARY held=8 port-owned=8 t=2s
+  596910.0 ms [  596910.0]  50 HwResetBus #1 path=0 held=8 state=GONE
+  596910.2 ms [  596910.2]  87 RESET_RESULT ret=0 csts=0xff state=GONE held=8
+  599643.4 ms [  599643.4]  86 SUMMARY held=8 port-owned=8 t=12s
+  615215.0 ms [  615215.0]  86 SUMMARY held=8 port-owned=8 t=22s
+  630846.1 ms [  630846.1]  86 SUMMARY held=8 port-owned=8 t=32s
+  646475.5 ms [  646475.5]  86 SUMMARY held=8 port-owned=8 t=42s
+  662122.0 ms [  662122.0]  86 SUMMARY held=8 port-owned=8 t=52s
+  677779.7 ms [  677779.7]  86 SUMMARY held=8 port-owned=8 t=62s
+  693362.3 ms [  693362.3]  86 SUMMARY held=8 port-owned=8 t=72s
+  708978.9 ms [  708978.8]  86 SUMMARY held=8 port-owned=8 t=82s
+  724582.7 ms [  724582.7]  86 SUMMARY held=8 port-owned=8 t=92s
+  740217.6 ms [  740217.6]  86 SUMMARY held=8 port-owned=8 t=102s
+  755823.3 ms [  755823.3]  86 SUMMARY held=8 port-owned=8 t=112s
+  771398.4 ms [  771398.4]  86 SUMMARY held=8 port-owned=8 t=122s
+  787067.9 ms [  787067.9]  86 SUMMARY held=8 port-owned=8 t=132s
+  802692.9 ms [  802692.9]  86 SUMMARY held=8 port-owned=8 t=142s
+  818290.8 ms [  818290.8]  86 SUMMARY held=8 port-owned=8 t=152s
+  833924.8 ms [  833924.8]  86 SUMMARY held=8 port-owned=8 t=162s
+  849522.3 ms [  849522.3]  86 SUMMARY held=8 port-owned=8 t=172s
+  865163.4 ms [  865163.4]  86 SUMMARY held=8 port-owned=8 t=182s
+  880836.3 ms [  880836.3]  86 SUMMARY held=8 port-owned=8 t=192s
+  896539.0 ms [  896539.0]  86 SUMMARY held=8 port-owned=8 t=202s
+  911998.5 ms [  911998.5]  86 SUMMARY held=8 port-owned=8 t=212s
+  915118.9 ms [  915118.9]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+  984046.7 ms [  984046.7]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+  984046.7 ms [  984046.7]  | usb4_tp_insert tb0: insert endpoint gen 6 drive=nvme0 serial=USB4EMU01 cold=0
+  996459.2 ms [  996459.2]  80 OPTIONS gone=5000ms status=NO_DEVICE bcd=1 legacyreset=0
+  996459.2 ms [  996459.2]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x0
+  996459.2 ms [  996459.2]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+  996459.2 ms [  996459.2]  | pci_nvme_mmio_start_success setting controller enable bit succeeded
+  996468.6 ms [  996468.6]  63 ADAPTER_CONTROL QuerySupported
+  996503.6 ms [  996503.6]  10 STARTIO IOCTL st=RUNNING tagged
+ 1045689.8 ms [ 1045689.8]  86 SUMMARY held=8 port-owned=8 running
+ 1048935.3 ms [ 1048935.3]  50 HwResetBus #1 path=0 held=8 state=RUNNING
+ 1048936.2 ms [ 1048936.2]  87 RESET_RESULT ret=0 csts=0x01 state=RESET_WAIT held=8
+ 1055904.0 ms [ 1055904.0]  86 SUMMARY held=8 port-owned=8 t=7s
+ 1065919.0 ms [ 1065919.0]  86 SUMMARY held=8 port-owned=8 t=17s
+ 1075963.4 ms [ 1075963.4]  86 SUMMARY held=8 port-owned=8 t=27s
+ 1085987.4 ms [ 1085987.4]  86 SUMMARY held=8 port-owned=8 t=37s
+ 1096012.1 ms [ 1096012.1]  86 SUMMARY held=8 port-owned=8 t=47s
+ 1106026.7 ms [ 1106026.7]  86 SUMMARY held=8 port-owned=8 t=57s
+ 1117983.1 ms [ 1117983.1]  86 SUMMARY held=8 port-owned=8 t=67s
+ 1128819.2 ms [ 1128819.2]  86 SUMMARY held=8 port-owned=8 t=77s
+ 1138853.7 ms [ 1138853.7]  86 SUMMARY held=8 port-owned=8 t=87s
+ 1148867.6 ms [ 1148867.6]  86 SUMMARY held=8 port-owned=8 t=97s
+ 1158903.2 ms [ 1158903.2]  86 SUMMARY held=8 port-owned=8 t=107s
+ 1168916.4 ms [ 1168916.4]  86 SUMMARY held=8 port-owned=8 t=117s
+ 1178932.5 ms [ 1178932.5]  86 SUMMARY held=8 port-owned=8 t=127s
+ 1188946.2 ms [ 1188946.2]  86 SUMMARY held=8 port-owned=8 t=137s
+ 1198969.7 ms [ 1198969.7]  86 SUMMARY held=8 port-owned=8 t=147s
+ 1208984.6 ms [ 1208984.6]  86 SUMMARY held=8 port-owned=8 t=157s
+ 1219048.9 ms [ 1219048.9]  86 SUMMARY held=8 port-owned=8 t=167s
+ 1229074.1 ms [ 1229074.1]  86 SUMMARY held=8 port-owned=8 t=177s
+ 1239087.4 ms [ 1239087.4]  86 SUMMARY held=8 port-owned=8 t=187s
+ 1246205.8 ms [ 1246205.8]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT tagged -> ERROR(04/44/00)
+ 1246206.1 ms [ 1246206.1]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246206.1 ms [ 1246206.1]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246206.2 ms [ 1246206.2]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246206.3 ms [ 1246206.3]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246206.8 ms [ 1246206.8]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT tagged -> ERROR(04/44/00)
+ 1246206.9 ms [ 1246206.9]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246207.0 ms [ 1246207.0]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246207.0 ms [ 1246207.0]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246207.1 ms [ 1246207.1]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246207.3 ms [ 1246207.3]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT tagged -> ERROR(04/44/00)
+ 1246207.4 ms [ 1246207.4]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246207.4 ms [ 1246207.4]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246207.5 ms [ 1246207.5]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246207.6 ms [ 1246207.6]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246207.8 ms [ 1246207.8]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT tagged -> ERROR(04/44/00)
+ 1246207.9 ms [ 1246207.9]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246208.0 ms [ 1246208.0]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246208.0 ms [ 1246208.0]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246208.1 ms [ 1246208.1]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246208.4 ms [ 1246208.4]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT tagged -> ERROR(04/44/00)
+ 1246208.5 ms [ 1246208.5]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246208.6 ms [ 1246208.6]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246208.7 ms [ 1246208.7]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246208.8 ms [ 1246208.8]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246209.0 ms [ 1246209.0]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT tagged -> ERROR(04/44/00)
+ 1246209.2 ms [ 1246209.2]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246209.3 ms [ 1246209.3]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246209.4 ms [ 1246209.4]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246209.5 ms [ 1246209.4]  8d FAILED_IO EXEC:READ10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1246209.8 ms [ 1246209.8]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT tagged -> ERROR(04/44/00)
+ 1246209.9 ms [ 1246209.9]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT -> ERROR(04/44/00)
+ 1249131.9 ms [ 1249131.9]  86 SUMMARY held=0 port-owned=0 t=197s
+ 1259155.9 ms [ 1259155.9]  86 SUMMARY held=0 port-owned=0 t=207s
+ 1269170.7 ms [ 1269170.7]  86 SUMMARY held=0 port-owned=0 t=217s
+ 1279184.7 ms [ 1279184.7]  86 SUMMARY held=0 port-owned=0 t=227s
+ 1290669.9 ms [ 1290669.9]  86 SUMMARY held=0 port-owned=0 t=237s
+ 1299304.0 ms [ 1299304.0]  | usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+ 1299929.6 ms [ 1299929.6]  usb4_tp_gate tb0: access gate closed=1 dma_open=0
+ 1299930.1 ms [ 1299930.1]  | usb4_tp_cutoff tb0: stage 2 complete for gen 6 host_ns=1791996136165322000 vm_ns=1474168257100
+ 1299930.1 ms [ 1299930.1]  | usb4_tp_removed tb0: endpoint gen 6 removed, dismissed=0
+ 1300004.8 ms [ 1300004.8]  81 GONE_ENTER held=0 via reset-wait from RESET_WAIT
+ 1302007.7 ms [ 1302007.7]  86 SUMMARY held=0 port-owned=0 t=2s
+ 1305012.2 ms [ 1305012.2]  83 DEADLINE completed=0 port-retired=0 count=1
+ 1305012.3 ms [ 1305012.3]  46 QUARANTINE prp-bitmap=0x0
+ 1305012.4 ms [ 1305012.4]  8a BUS_CHANGE_DETECTED (state GONE_DONE)
+ 1305012.4 ms [ 1305012.4]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+ 1343645.7 ms [ 1343645.7]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+ 1343645.7 ms [ 1343645.7]  | usb4_tp_insert tb0: insert endpoint gen 7 drive=nvme0 serial=USB4EMU01 cold=0
+ 1343645.7 ms [ 1343645.7]  | usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+ 1439856.2 ms [ 1439856.2]  usb4_tp_gate tb0: access gate closed=1 dma_open=0
+ 1439856.5 ms [ 1439856.5]  | usb4_tp_cutoff tb0: stage 2 complete for gen 7 host_ns=1791996276091725000 vm_ns=1614094659500
+ 1439856.5 ms [ 1439856.5]  | usb4_tp_removed tb0: endpoint gen 7 removed, dismissed=0
+ 1439856.5 ms [ 1439856.5]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+ 1484472.2 ms [ 1484472.2]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+ 1484472.2 ms [ 1484472.2]  | usb4_tp_insert tb0: insert endpoint gen 8 drive=nvme0 serial=USB4EMU01 cold=0
+ 1493078.7 ms [ 1493078.7]  80 OPTIONS gone=5000ms status=NO_DEVICE bcd=1 legacyreset=0
+ 1493078.7 ms [ 1493078.7]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x0
+ 1493078.7 ms [ 1493078.7]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+ 1493078.7 ms [ 1493078.7]  | pci_nvme_mmio_start_success setting controller enable bit succeeded
+ 1493085.7 ms [ 1493085.7]  63 ADAPTER_CONTROL QuerySupported
+ 1493109.8 ms [ 1493109.8]  10 STARTIO IOCTL st=RUNNING tagged
+ 1533913.8 ms [ 1533913.8]  | usb4_h_fire tb0: rule 0 fired at complete token=136025 opc=0x2 code=0x0 acts=hold host_ns=1791996370149032000 vm_ns=1708151966800
+ 1540520.2 ms [ 1540520.2]  86 SUMMARY held=1 port-owned=1 running
+ 1544636.4 ms [ 1544636.4]  50 HwResetBus #1 path=0 held=1 state=RUNNING
+ 1544636.4 ms [ 1544636.4]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460000
+ 1544638.3 ms [ 1544638.3]  87 RESET_RESULT ret=0 csts=0x01 state=RESET_WAIT held=1
+ 1550861.9 ms [ 1550861.9]  8d FAILED_IO EXEC:WRITE10 st=RESET_WAIT tagged -> ERROR(04/44/00)
+ 1555413.5 ms [ 1555413.5]  86 SUMMARY held=1 port-owned=1 t=7s
+ 1568012.4 ms [ 1568012.4]  50 HwResetBus #2 path=0 held=1 state=RESET_WAIT
+ 1568013.7 ms [ 1568013.7]  87 RESET_RESULT ret=0 csts=0x01 state=RESET_WAIT held=1
+ 1570784.0 ms [ 1570784.0]  86 SUMMARY held=1 port-owned=1 t=17s
+ 1584990.0 ms [ 1584990.0]  86 SUMMARY held=1 port-owned=1 t=27s
+ 1600559.9 ms [ 1600559.9]  86 SUMMARY held=1 port-owned=1 t=37s
+ 1616214.7 ms [ 1616214.7]  86 SUMMARY held=1 port-owned=1 t=47s
+ 1631830.6 ms [ 1631830.6]  86 SUMMARY held=1 port-owned=1 t=57s
+ 1647413.1 ms [ 1647413.1]  86 SUMMARY held=1 port-owned=1 t=67s
+ 1658851.3 ms [ 1658851.3]  86 SUMMARY held=1 port-owned=1 t=77s
+ 1668866.5 ms [ 1668866.5]  86 SUMMARY held=1 port-owned=1 t=87s
+ 1678880.2 ms [ 1678880.2]  86 SUMMARY held=1 port-owned=1 t=97s
+ 1688893.9 ms [ 1688893.9]  86 SUMMARY held=1 port-owned=1 t=107s
+ 1698909.0 ms [ 1698909.0]  86 SUMMARY held=1 port-owned=1 t=117s
+ 1708923.1 ms [ 1708923.1]  86 SUMMARY held=1 port-owned=1 t=127s
+ 1718938.4 ms [ 1718938.4]  86 SUMMARY held=1 port-owned=1 t=137s
+ 1728951.9 ms [ 1728951.9]  86 SUMMARY held=1 port-owned=1 t=147s
+ 1738967.5 ms [ 1738967.5]  86 SUMMARY held=1 port-owned=1 t=157s
+ 1748990.8 ms [ 1748990.8]  86 SUMMARY held=1 port-owned=1 t=167s
+ 1759005.4 ms [ 1759005.4]  86 SUMMARY held=1 port-owned=1 t=177s
+ 1769054.4 ms [ 1769054.4]  86 SUMMARY held=1 port-owned=1 t=187s
+ 1779063.6 ms [ 1779063.6]  86 SUMMARY held=1 port-owned=1 t=197s
+ 1789088.6 ms [ 1789088.6]  86 SUMMARY held=1 port-owned=1 t=207s
+ 1790089.7 ms [ 1790089.7]  84 HELD_DONE slot=105 READ10 -> BUS_RESET
+ 1790089.9 ms [ 1790089.9]  88 RESET_ACK ticks=2080 completed=1
+ 1793175.1 ms [ 1793175.1]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793175.4 ms [ 1793175.4]  8d FAILED_IO EXEC:READ10 st=FAILED tagged -> ERROR(04/44/00)
+ 1793175.6 ms [ 1793175.6]  8d FAILED_IO EXEC:WRITE10 st=FAILED tagged -> ERROR(04/44/00)
+ 1793175.7 ms [ 1793175.7]  8d FAILED_IO EXEC:READ10 st=FAILED tagged -> ERROR(04/44/00)
+ 1793175.8 ms [ 1793175.8]  8d FAILED_IO EXEC:WRITE10 st=FAILED tagged -> ERROR(04/44/00)
+ 1793175.9 ms [ 1793175.9]  8d FAILED_IO EXEC:READ10 st=FAILED tagged -> ERROR(04/44/00)
+ 1793176.0 ms [ 1793176.0]  8d FAILED_IO EXEC:WRITE10 st=FAILED tagged -> ERROR(04/44/00)
+ 1793176.1 ms [ 1793176.1]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793176.2 ms [ 1793176.2]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793176.3 ms [ 1793176.3]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793176.4 ms [ 1793176.4]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793176.5 ms [ 1793176.5]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793176.6 ms [ 1793176.6]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793176.7 ms [ 1793176.7]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793176.8 ms [ 1793176.8]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793176.8 ms [ 1793176.8]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793176.9 ms [ 1793176.9]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793177.0 ms [ 1793177.0]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793177.1 ms [ 1793177.1]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793177.2 ms [ 1793177.2]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793177.3 ms [ 1793177.3]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793177.4 ms [ 1793177.4]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793177.5 ms [ 1793177.5]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793177.6 ms [ 1793177.6]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793177.7 ms [ 1793177.7]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793177.8 ms [ 1793177.8]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793177.9 ms [ 1793177.9]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793178.0 ms [ 1793178.0]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793178.1 ms [ 1793178.1]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793178.1 ms [ 1793178.1]  8d FAILED_IO EXEC:READ10 st=FAILED -> ERROR(04/44/00)
+ 1793178.2 ms [ 1793178.2]  8d FAILED_IO EXEC:WRITE10 st=FAILED -> ERROR(04/44/00)
+ 1793178.2 ms [ 1793178.2]  | usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+ 1841376.0 ms [ 1841376.0]  usb4_tp_gate tb0: access gate closed=1 dma_open=0
+ 1841376.4 ms [ 1841376.4]  | usb4_tp_cutoff tb0: stage 2 complete for gen 8 host_ns=1791996677611625000 vm_ns=2015614559800
+ 1841376.4 ms [ 1841376.4]  | usb4_tp_removed tb0: endpoint gen 8 removed, dismissed=0
+ 1841376.4 ms [ 1841376.4]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+ 1885296.7 ms [ 1885296.7]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+ 1885296.7 ms [ 1885296.7]  | usb4_tp_insert tb0: insert endpoint gen 9 drive=nvme0 serial=USB4EMU01 cold=0
+ 1885296.7 ms [ 1885296.7]  | usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+ 1933322.8 ms [ 1933322.8]  usb4_tp_gate tb0: access gate closed=1 dma_open=0
+ 1933323.0 ms [ 1933323.0]  | usb4_tp_cutoff tb0: stage 2 complete for gen 9 host_ns=1791996769558277000 vm_ns=2107561211900
+ 1933323.0 ms [ 1933323.0]  | usb4_tp_removed tb0: endpoint gen 9 removed, dismissed=0
+ 1933323.0 ms [ 1933323.0]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+ 1971067.6 ms [ 1971067.6]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+ 1971067.6 ms [ 1971067.6]  | usb4_tp_insert tb0: insert endpoint gen 10 drive=nvme0 serial=USB4EMU01 cold=0
+ 1971067.6 ms [ 1971067.6]  | usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+ 2024822.6 ms [ 2024822.6]  usb4_tp_gate tb0: access gate closed=1 dma_open=0
+ 2024822.9 ms [ 2024822.9]  | usb4_tp_cutoff tb0: stage 2 complete for gen 10 host_ns=1791996861058178000 vm_ns=2199061112700
+ 2024822.9 ms [ 2024822.9]  | usb4_tp_removed tb0: endpoint gen 10 removed, dismissed=0
+ 2024822.9 ms [ 2024822.9]  | usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+ 2062576.3 ms [ 2062576.3]  usb4_tp_gate tb0: access gate closed=0 dma_open=1
+ 2062576.3 ms [ 2062576.3]  | usb4_tp_insert tb0: insert endpoint gen 11 drive=nvme0 serial=USB4EMU01 cold=0
+ 2070870.1 ms [ 2070870.1]  80 OPTIONS gone=5000ms status=NO_DEVICE bcd=1 legacyreset=0
+ 2070870.1 ms [ 2070870.1]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x0
+ 2070870.1 ms [ 2070870.1]  | pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+ 2070870.1 ms [ 2070870.1]  | pci_nvme_mmio_start_success setting controller enable bit succeeded
+ 2070876.4 ms [ 2070876.4]  63 ADAPTER_CONTROL QuerySupported
+ 2070893.3 ms [ 2070893.3]  10 STARTIO IOCTL st=RUNNING tagged
+ 2110618.0 ms [ 2110618.0]  | usb4_h_fire tb0: rule 1 fired at fetch token=184701 opc=0x2 code=0x0 acts=reads-fail host_ns=1791996946853271000 vm_ns=2284856206500
+ 2110618.0 ms [ 2110618.0]  usb4_tp_gate tb0: access gate closed=1 dma_open=1
+ 2110631.4 ms [ 2110631.4]  81 GONE_ENTER held=8 via timer from RUNNING
+ 2115638.8 ms [ 2115638.8]  84 HELD_DONE slot=57 READ10 -> NO_DEVICE
+ 2115638.9 ms [ 2115638.9]  84 HELD_DONE slot=76 WRITE10 -> NO_DEVICE
+ 2115639.0 ms [ 2115639.0]  84 HELD_DONE slot=84 READ10 -> NO_DEVICE
+ 2115639.0 ms [ 2115639.0]  84 HELD_DONE slot=85 WRITE10 -> NO_DEVICE
+ 2115639.1 ms [ 2115639.1]  84 HELD_DONE slot=86 WRITE10 -> NO_DEVICE
+ 2115639.1 ms [ 2115639.1]  84 HELD_DONE slot=87 READ10 -> NO_DEVICE
+ 2115639.2 ms [ 2115639.2]  84 HELD_DONE slot=88 WRITE10 -> NO_DEVICE
+ 2115639.3 ms [ 2115639.3]  84 HELD_DONE slot=89 READ10 -> NO_DEVICE
+ 2115639.4 ms [ 2115639.4]  83 DEADLINE completed=8 port-retired=0 count=1
+ 2115639.5 ms [ 2115639.5]  46 QUARANTINE prp-bitmap=0xff
+ 2115639.5 ms [ 2115639.5]  8a BUS_CHANGE_DETECTED (state GONE_DONE)
+ 2115641.2 ms [ 2115641.2]  82 FASTFAIL EXEC:INQUIRY st=GONE_DONE -> NO_DEVICE

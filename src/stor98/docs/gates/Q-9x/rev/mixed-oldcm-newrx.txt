@@ -1,0 +1,48 @@
+ started 98 r9 (new) QMP 48030 VNC 48031
+--- CM after restart
+cm9x 00000070f2e74245 c8 0000040b CONFIGMG version; locate root cr, root 00000000 c29a2170
+cm9x 00000070f311d41f -- bridge devnode PCI\VEN_1B36&DEV_0001&SUBSYS_00000000&REV_00\BUS_00&DEV_05&FUNC_00
+cm9x 00000070f35c8073 c8 c29aea50 bridge devnode; secondary bus, SHPC cap 00000001 00000040
+cm9x 00000070f375b3bd c9 7f000d3f SHPC slot status changed; empty 00000001 00000000
+--- receiver
+[nvme98 0000008b65447177 00010] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C18A2000 size=272 cookie=CE824B06
+[nvme98 0000008b65633981 00011] q9 rendezvous: no current-boot proof HKEY_DYN_DATA\Nvme98LinkState (rc=2): locator is stale
+[nvme98 0000008f9a323f45 00073] q9 bring-up complete in 401 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+--- eject
+cm9x 000000a84ba1c44f c8 00000000 params mode|noflag|cancel|noremove; bridge dev, ack timeout 00000005 00001388
+cm9x 000000a84bba7c15 ce 01000001 eject requested; up, gen 00000001 00000001
+cm9x 000000a8529192d0 cd 0c000000 eject: Query_Remove_SubTree; devnode c1c83210 00000000
+cm9x 000000a852acf552 ce 03000001 REMOVE_PENDING set; gen 00000001 00000000
+cm9x 000000b172095ca2 ce 04ff0001 handshake ack: ms, detail 00001390 00000000
+cm9x 000000b172136cc4 ce 05ff0001 orderly eject aborted (cancel); cancel-test 00000000 00000000
+cm9x 000000b86c3b29d0 ce 06000001 after cancel: nvme98 outcome, ms 00000000 00002715
+[nvme98 000000b86e27c3f7 00112] q9 state RUNNING -> STOPPED (HwAdapterState(FALSE)) depth=0 nontagged=00000000 held=00000000
+cm9x 000000b871dce053 cd 0d000000 cancel recovery: Remove_SubTree; devnode c1c83210 00000000
+ctl eject result E2FF after 15053 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5x
+cm9x 000000b8cb934295 cd 33000000 cancel recovery: Reenumerate_DevNode(bridge) 00000000 00000000
+[nvme98 000000b90064596f 00049] q9 state ? -> STARTING (HwInitialize) depth=0 nontagged=00000000 held=00000000
+[nvme98 000000b94a4f31a0 00072] q9 state STARTING -> RUNNING (ready) depth=0 nontagged=00000000 held=C138CE2C
+
+ started me m4 (new) QMP 48040 VNC 48041
+--- CM after restart
+cm9x 0000007b7dcd6175 c8 0000045a CONFIGMG version; locate root cr, root 00000000 c29a1dd0
+cm9x 0000007b7e131f83 -- bridge devnode PCI\VEN_1B36&DEV_0001&SUBSYS_00000000&REV_00\BUS_00&DEV_05&FUNC_00
+cm9x 0000007b7e3d9303 c8 c2a043f0 bridge devnode; secondary bus, SHPC cap 00000001 00000040
+cm9x 0000007b7e59b578 c9 7f000d3f SHPC slot status changed; empty 00000001 00000000
+--- receiver
+[nvme98 0000009506996281 00010] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C189AEF0 size=272 cookie=3D97161F
+[nvme98 0000009506bd89a4 00011] q9 rendezvous: no current-boot proof HKEY_DYN_DATA\Nvme98LinkState (rc=2): locator is stale
+[nvme98 00000095e458f258 00073] q9 bring-up complete in 409 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+--- eject
+cm9x 000000ab6270e190 c8 00000000 params mode|noflag|cancel|noremove; bridge dev, ack timeout 00000005 00001388
+cm9x 000000ab628b0426 ce 01000001 eject requested; up, gen 00000001 00000001
+cm9x 000000ab6a78e9b6 cd 0c000000 eject: Query_Remove_SubTree; devnode c1c6a640 00000000
+cm9x 000000ab6a89c9d4 ce 03000001 REMOVE_PENDING set; gen 00000001 00000000
+cm9x 000000b2061f57d7 ce 04ff0001 handshake ack: ms, detail 0000138d 00000000
+cm9x 000000b20629803b ce 05ff0001 orderly eject aborted (cancel); cancel-test 00000000 00000000
+cm9x 000000b90072da67 ce 06000001 after cancel: nvme98 outcome, ms 00000000 00002710
+cm9x 000000b902a9b265 cd 0d000000 cancel recovery: Remove_SubTree; devnode c1c6a640 00000000
+ctl eject result E2FF after 15114 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5x
+cm9x 000000b95c4735b8 cd 33000000 cancel recovery: Reenumerate_DevNode(bridge) 00000000 00000000
+[nvme98 000000b9700479b2 00052] q9 state ? -> STARTING (HwInitialize) depth=0 nontagged=00000000 held=00000000
+[nvme98 000000b982e95b7e 00077] q9 state STARTING -> RUNNING (ready) depth=0 nontagged=00000000 held=C2F3DC08

@@ -117,7 +117,8 @@ identification.
 | The two `usbd.sys` builds and Windows 98 SE's `usbhub.sys` | No | `tools/` (git-ignored) | Reference copies, staged from the user's own install media for the import gate's Windows 98 evidence and the Windows 2000 VM setup. The assembled release download carried them from 0.0.0.4 to 1.0.0.0 and carries them no longer; see section 5 |
 | Disassembly extracts taken from those binaries | No | `tools/*-extracted/` (git-ignored) | Convenience copies only; see section 4 |
 | Staged install media | No | `out/` (git-ignored) | Generated; the upload set for a release is assembled here |
-| Stor98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled Stor98 build" below |
+| Stor98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled Stor98 build" below. Since 2026-10-19 the release folders they are copied from are tracked, as part of `src/stor98/` (the next row); the copies in `out/` are not |
+| Stor98, its source, docs, tests and released builds (BSD-3-Clause) | Yes, from 2026-10-19 (roadmap-usb4 task 42-A.20) | `src/stor98/` | The Stor98 project's tracked files, imported as one snapshot (owner, 2026-10-19). Not this project's GPL-2.0 code: Stor98's own `LICENSE` and `NOTICE` govern every file there; see "Stor98 in this tree" below |
 | The Windows 98 Second Edition DDK (`win98se_ddk.exe`) | No | `tools/win98ddk/`, extracted into `tools/win98ddk-extracted/` (git-ignored) | Fetched on 2026-10-15 from the Internet Archive for roadmap-usb4 task 39-0.3; its identity, SHA-256, source URL and the licence it states are in `docs/references/README.md`, "Windows 98 DDK". Extracted with 7-Zip, not installed; nothing in it was executed. The CONFIGMG and VMM values of `src/cm/cm_cfgmg.h` are what is taken from it (section 4, the CONFIGMG row) |
 | Source files from `usb4-emu`'s `tools/usb4cm` (MIT) | Yes, from the change that lifts the first of them (roadmap-usb4 task 39-A.2) | `src/cm/` | Not only this project's code: which files, their notices and the rule a lifted file follows are in section 2a, "Source files lifted from `usb4cm`" |
 
@@ -478,11 +479,14 @@ Not a binary either, and not an adaptation: a header another project
 publishes as an interface definition, carried in this tree byte for byte
 with its own licence notice, so that this driver and the other project
 build against one definition. It is never edited here; a change is made in
-its own repository and copied in again, with this row updated.
+its own repository and copied in again, with this row updated. For
+`stor98cm.h` that repository is, since 2026-10-19, `src/stor98/` of this
+one ("Stor98 in this tree" below): the change is made in
+`src/stor98/include/stor98cm.h` and copied to `src/cm/` unchanged.
 
 | File in this tree | Source | Commit read | SHA-256 | Licence | Why | Task |
 |---|---|---|---|---|---|---|
-| `src/cm/stor98cm.h` | Stor98 `include/stor98cm.h` (the `nvme98` project's `include/nvme98cm.h` until its rename, 2026-10-16) | `6609c1c36701e50665daf0305fdc35fe06e258d6` (the header's last change; Stor98 `main` was at `3e9f51b`, its `0.3.0.0` release, when read, 2026-10-16) | `cc0ce571719bab8f40813bee3e9297501df5b824a14e0105420d8d759c545c84` | BSD-3-Clause, `Copyright (c) 2026, Yeo Kheng Meng`, the notice kept in the file; the file's own text says it is licensed on its own, independently of the code on either side, and asks that no GPL-licensed code or text be put into it | the link-state table, callback object, 9x locator and current-boot proof Stor98 adopted as its connection-manager interface (decisions MD-5 and MD-6, gate G3, interface version 4); `src/cm/cm_nvlink.c` and `cm_nvlinkos.c` implement this side, on NT and on 98 SE and ME (the 9x half read on 2026-10-16, `runs/run-41.md`, "The Stor98 link-state channel on 98 SE and ME") | 39-A.7, 40-A.7, and the Stor98 rename of 2026-10-16 (`runs/run-41.md`, "Stor98 behind the Thunderbolt 3 controller") |
+| `src/cm/stor98cm.h` | Stor98 `include/stor98cm.h` (the `nvme98` project's `include/nvme98cm.h` until its rename, 2026-10-16) | `f9755aee7a27725e2a0edfb0d8c1e1231669f777` (the header's last change, contract text only with interface version 4 and the layout unchanged, on Stor98's branch `audit-2026-10-18`, read 2026-10-18; before it `6609c1c36701e50665daf0305fdc35fe06e258d6`, read 2026-10-16) | `eeaa1f81adda3d6436f342413f17611d0a36ddacea7d8e98d113831bdd59ef1a` | BSD-3-Clause, `Copyright (c) 2026, Yeo Kheng Meng`, the notice kept in the file; the file's own text says it is licensed on its own, independently of the code on either side, and asks that no GPL-licensed code or text be put into it | the link-state table, callback object, 9x locator and current-boot proof Stor98 adopted as its connection-manager interface (decisions MD-5 and MD-6, gate G3, interface version 4); `src/cm/cm_nvlink.c` and `cm_nvlinkos.c` implement this side, on NT and on 98 SE and ME (the 9x half read on 2026-10-16, `runs/run-41.md`, "The Stor98 link-state channel on 98 SE and ME") | 39-A.7, 40-A.7, and the Stor98 rename of 2026-10-16 (`runs/run-41.md`, "Stor98 behind the Thunderbolt 3 controller") |
 
 The file uses `//` comments, which AGENTS.md's C89 rule forbids in this
 project's own source. It is the recorded exception: a third-party header
@@ -530,13 +534,74 @@ here:
   shipped unchanged. It is not this project's certificate (section 2's
   test-signature row) and not a Microsoft signature. The
   packaging scripts do not sign, re-sign or import it.
-- **What is tracked.** None of these files: they are not in `releases/`
-  and not in any commit, and the packaging scripts copy them from the
-  release folder at each cut. The generated `readme.txt` and
-  `docs/using/release-notes.md` name the bundled version.
+- **What is tracked.** None of these files in this project's
+  `releases/`: the packaging scripts copy them from the release folder at
+  each cut. Until 2026-10-19 that folder was outside this repository; since
+  then the release folders are tracked in `src/stor98/releases/` as
+  Stor98 committed them, and `-Stor98Dir` defaults to
+  `src/stor98/releases/<version>/` ("Stor98 in this tree" below). The
+  generated `readme.txt` and `docs/using/release-notes.md` name the
+  bundled version.
 - **The other direction.** No code of this project, and none of
   `usb4-emu`'s, is copied into Stor98 (AGENTS.md, "Reference
   Implementations").
+
+### Stor98 in this tree (`src/stor98/`)
+
+Since 2026-10-19 the Stor98 project is in this repository as `src/stor98/`
+(roadmap-usb4 task 42-A.20; owner): every tracked file of its own
+repository's branch `audit-2026-10-18` at commit `4253b58` (its `0.4.0.0`
+release and the reviewed fixes of its audit of 2026-10-18), copied as one
+commit with every blob identical to that commit's and none of its history.
+What is recorded here:
+
+- **Licence.** BSD-3-Clause, the whole of `src/stor98/` (its `LICENSE`, with
+  its four copyright lines: Dominik Behr for nvme2k, Dominik Behr and Ray
+  Hinchliffe for the nvme2k INF its INFs derive from, SweetLow for the
+  nvme9x/nvment port, Yeo Kheng Meng for Stor98). This project's
+  GPL-2.0-only `LICENSE` is not its licence; the root `LICENSE`'s scope
+  note says so.
+- **Provenance.** Stor98's `NOTICE` is the record and governs; this list
+  repeats what it says. Stor98's `src/` was imported from SweetLow's nvme9x/nvment source
+  (`nvme2k-src.zip` of `https://github.com/LordOfMice/Tools`, SHA-256
+  `272b50836d7f9fe4c1a483f5868d099604916ccd4c89b4daacbc1d17c80bb4f2`),
+  imported without the Microsoft headers `SCSI.H` and `SRB.H` it bundled
+  and with BSD-3-Clause headers added, and is Stor98's development of it since; SweetLow stated on 2026-10-14 that
+  his port and changes are BSD-3-Clause, the licence of the original
+  nvme2k, and his `NVMEVSD.VXD` public domain (neither its source nor its
+  binary is in the tree). That code derives from Dominik Behr's nvme2k
+  1.0.0.2, whose own licence the `NOTICE` records as not checked
+  separately. `third_party/nvme2k-1.2.0.0/` is an unmodified copy of
+  `https://github.com/techomancer/nvme2k` at commit `0c41727` (release
+  1.2.0.0), with its `LICENSE` (BSD-3-Clause). `include/stor98cm.h` is
+  Stor98's own, licensed on its own as an interface definition.
+- **Its rules.** Stor98's `AGENTS.md` keeps its own provenance rules for
+  those files (every nvme2k-derived file keeps Dominik Behr's notice, the
+  reference copy stays unmodified, no Microsoft kit file is committed).
+  This project's rules on source (C89, ASCII, the gates of
+  `build-driver.cmd`) do not bind it.
+- **Tracked binaries.** Its released builds as Stor98 committed them,
+  `src/stor98/releases/0.3.0.1/` and `0.4.0.0/`: `stor98.mpd` and
+  `stor98.sys` (x86), `stor98.sys` (x64) with the embedded test signature
+  by Stor98's own test certificate, and that certificate's public half
+  `stor98-test.cer`, each listed in the folder's `SHA256SUMS.txt`. The
+  `0.4.0.0` folder's `SHA256SUMS.txt` hashes to
+  `ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7`, the
+  pin `3.0.0.0` bundled it under.
+- **Not tracked.** Its build needs `SCSI.H` and `SRB.H` from a Windows 98
+  (or NT4) DDK, kept in the git-ignored `tools/w98ddk/inc/` with the other
+  kits: `SCSI.H` 36,501 bytes, SHA-256
+  `809d57e6756de21524930eb4d17840ab3047c7e1773da634ceb73a81ff8d39b7`;
+  `SRB.H` 21,056 bytes, SHA-256
+  `4b3c3305686f2593ceb471ae69f1d690de5d833c8f2047859d735b21affd8396` (the
+  copies that came with `nvme2k-src.zip`; `docs/references/README.md`,
+  "Windows 98 DDK"). Its build output (`src/stor98/out/`, `obj*/`) is
+  ignored by its own `.gitignore`.
+- **The interface header.** `src/cm/stor98cm.h` (section 2a, "Third-party
+  headers incorporated unchanged") is now a copy of
+  `src/stor98/include/stor98cm.h` in the same tree, the master;
+  `scripts/check-stor98-header.ps1` holds the two to the same bytes until
+  they are made one.
 
 ### The third-party PDFs
 
