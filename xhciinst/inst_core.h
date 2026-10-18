@@ -533,6 +533,9 @@ typedef struct _INST_OPTS {
     char To[260];           /* /to <path>: the install directory, unasked */
     char From[260];         /* /from <dir>: the uninstall's relaunch from the
                                install directory (record 26 section 9.2) */
+    int Debug;              /* /debug: the debug- directory (the window's
+                               own choice; INSTALL.BAT's for the console) */
+    int Console;            /* /console: INSTALL.BAT's word, the console's */
     int SetCount;
     int SetIndex[INST_MAX_SET];
     INST_U32 SetValue[INST_MAX_SET];
@@ -976,10 +979,14 @@ int inst_mw_write_needed(int mwState, INST_U32 mwValue, const INST_VNOW *now,
 #define INST_DI_INSTALL         1
 #define INST_DI_REMOVE          2
 
-/* A 16-bit program's command tail (the part after its own name) is at
- * most 126 characters: a job whose arguments do not fit is not started,
- * and its device goes to the printed steps. */
-#define INST_DI_TAIL_CHARS      126
+/* The longest command tail the installer gives the helper. A 16-bit
+ * program's command tail may be held to 126 characters on these systems
+ * (the program segment prefix's), which a 98 SE PCI device id with the
+ * INF's path already exceeds; whether it is, is a reading of the legs.
+ * A tail cut short cannot come back as the job's own JOB line, so the
+ * helper's file then reads "did not finish" and the device keeps its
+ * printed steps (record 27 section 4.2): nothing rests on the length. */
+#define INST_DI_TAIL_CHARS      255
 
 /* The helper's command tail for one job (record 27 section 4.1):
  * "<version> <job> <result file> <hwnd> [<device id> [<inf path>]
@@ -1091,5 +1098,58 @@ int inst_relaunch_cmd(char *out, size_t cap, const char *exe,
  * refusal: the console's switches ("use INSTALL /console ..."). argv as
  * given, for the switches the parser does not keep (/console). */
 const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
+
+/* ---- the window's texts (record 26 sections 5 and 11) --------------------- */
+
+/* Every fixed text a page shows, with the size of the control it sits in
+ * (dialog units, xhciwiz.rc): the host suite checks each fits its control
+ * at the dialog font's average width, and the window's self-test renders
+ * them. Width 0: shown in a message box. */
+#define INST_PT_WELCOME         1
+#define INST_PT_WAIT            2
+#define INST_PT_FOUND           3
+#define INST_PT_DRIVERS         4
+#define INST_PT_DRIVERS_T       5
+#define INST_PT_TB              6
+#define INST_PT_TB_T            7
+#define INST_PT_TB_ABSENT       8
+#define INST_PT_TRAY            9
+#define INST_PT_TRAY_T          10
+#define INST_PT_DIR             11
+#define INST_PT_DIR_9X          12
+#define INST_PT_USB             13
+#define INST_PT_TBSET           14
+#define INST_PT_TB_LATER        15
+#define INST_PT_ADVANCED        16
+#define INST_PT_SUMMARY         17
+#define INST_PT_PROGRESS        18
+#define INST_PT_STEPS           19
+#define INST_PT_NOW             20
+#define INST_PT_LATER           21
+#define INST_PT_UN_TITLE        22
+#define INST_PT_UN_WARN         23
+#define INST_PT_UN_AGREE        24
+#define INST_PT_UN_SUMMARY      25
+#define INST_PT_GATE            26
+
+typedef struct _INST_PAGE_TEXT {
+    int Id;
+    const char *Text;
+    INST_U32 Width;         /* the control, in dialog units             */
+    INST_U32 Height;
+} INST_PAGE_TEXT;
+
+extern const INST_PAGE_TEXT instPageTexts[];
+extern const int instPageTextCount;
+
+const char *inst_page_text(int id);
+
+/* The lines a text takes, word-wrapped at cols characters. */
+INST_U32 inst_text_lines(const char *text, INST_U32 cols);
+
+/* What a control of that many dialog units holds: the characters a line
+ * (a quarter of the average character a unit, less a margin), the lines. */
+INST_U32 inst_page_cols(INST_U32 widthDlu);
+INST_U32 inst_page_rows(INST_U32 heightDlu);
 
 #endif /* INST_CORE_H */

@@ -1759,7 +1759,10 @@ static int check_package(void)
     inst_copy(root, self, sizeof(root));
     root[n - t] = '\0';
     if (opts.Dir[0] == '\0') {
-        inst_copy(opts.Dir, INST_DEFAULT_DIR, sizeof(opts.Dir));
+        /* The window takes no /dir: its own architecture's release- (or,
+         * with /debug, debug-) directory (record 26 section 2). */
+        inst_copy(opts.Dir, opts.Debug ? "debug" INST_DIR_SUFFIX
+                                       : INST_DEFAULT_DIR, sizeof(opts.Dir));
     }
     if (strchr(opts.Dir, '\\') != NULL || strchr(opts.Dir, '/') != NULL ||
         strchr(opts.Dir, ':') != NULL || strstr(opts.Dir, "..") != NULL) {
@@ -5779,7 +5782,7 @@ static int install_inf(int inf, int controllers)
         reboot = FALSE;
         logonly("\nUpdateDriverForPlugAndPlayDevices(\"%s\", \"%s\", %s)\n",
                 hwid, path, flags ? "FORCE" : "0");
-        if (api.UpdateDriver(NULL, hwid, path, flags, &reboot)) {
+        if (api.UpdateDriver(front.Owner, hwid, path, flags, &reboot)) {
             out("done%s.\n", reboot ? ", restart needed" : "");
             flagChanged = 1;
             if (flags == 0) {
@@ -11302,6 +11305,11 @@ void inst_eng_init(const INST_FRONT *f, const char *selfName,
     instSelf = selfName;
     instOther = otherName;
     instWindow = window;
+}
+
+void inst_eng_owner(HWND owner)
+{
+    front.Owner = owner;
 }
 
 int inst_eng_parse(int argc, char **argv, char *err, size_t cap)

@@ -1946,7 +1946,13 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
         } else if (inst_switch(a, "nopause")) {
             opts->NoPause = 1;
         } else if (inst_switch(a, "debug")) {
-            /* INSTALL.BAT chose the directory; nothing more to do here. */
+            /* INSTALL.BAT chose the directory for the console tool; the
+             * window, which takes no /dir, picks it itself. */
+            opts->Debug = 1;
+        } else if (inst_switch(a, "console")) {
+            /* INSTALL.BAT's word for the console tool (record 26 section
+             * 2): the console takes it and goes on; the window refuses it. */
+            opts->Console = 1;
         } else if (inst_switch(a, "selftest")) {
             opts->SelfTest = 1;
         } else if (inst_switch(a, "thunderbolt")) {
@@ -4337,4 +4343,162 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv)
                "with it.";
     }
     return NULL;
+}
+
+/* ======================================================================== */
+/* The window's texts (record 26 section 5)                                  */
+/* ======================================================================== */
+
+const INST_PAGE_TEXT instPageTexts[] = {
+    { INST_PT_WELCOME,
+      "This installs or updates the xHCI98 USB 3.x drivers on this "
+      "computer, puts the xHCI98 tools in a folder you choose, and asks "
+      "you to restart Windows at the end. Nothing is changed until you "
+      "click Install on the Summary page. Help opens the readme.",
+      284, 58 },
+    { INST_PT_WAIT, "Please wait: reading this computer's devices ...",
+      284, 54 },
+    { INST_PT_FOUND,
+      "The devices this package's drivers are for, and what will be done:",
+      284, 10 },
+    { INST_PT_DRIVERS,
+      "xHCI98 USB 3.x host controller driver and UAS driver", 270, 10 },
+    { INST_PT_DRIVERS_T,
+      "xhci98.sys and xhciuas.sys: the controller, its hubs and devices, "
+      "and UAS disks. Always installed.",
+      272, 16 },
+    { INST_PT_TB, "Thunderbolt 3 / USB4 support (xhcicm.sys)", 270, 10 },
+    { INST_PT_TB_T,
+      "The connection manager. A device plugged into a Thunderbolt or USB4 "
+      "port is then approved and can reach the computer's memory: see "
+      "XhciCmApprove on the Thunderbolt settings page.",
+      272, 26 },
+    { INST_PT_TB_ABSENT,
+      "No Thunderbolt or USB4 controller was found. Some computers show "
+      "theirs only while a device is plugged in, or only with a BIOS "
+      "setting: tick it if this computer has such a port.",
+      272, 26 },
+    { INST_PT_TRAY, "xHCI98 USB Tree, started at login", 270, 10 },
+    { INST_PT_TRAY_T,
+      "The tray tool that lists the USB devices and removes them safely.",
+      272, 10 },
+    { INST_PT_DIR, "The folder for the xHCI98 tools and this installer:",
+      284, 10 },
+    { INST_PT_DIR_9X,
+      "Windows 98 SE and ME: the package's drivers go there too. Each "
+      "folder name 8 characters at most, no spaces.",
+      284, 18 },
+    { INST_PT_USB,
+      "The USB settings. A value left as it is is not written; one you "
+      "change is written machine-wide, for every controller.",
+      284, 18 },
+    { INST_PT_TBSET,
+      "The Thunderbolt and USB4 settings. A value left as it is is not "
+      "written; one you change is written machine-wide.",
+      284, 18 },
+    { INST_PT_TB_LATER,
+      "No controller is present now: these take effect when it appears.",
+      218, 20 },
+    { INST_PT_ADVANCED,
+      "For the release notes' advice and a tester's use. A value left as "
+      "it is is not written; one you change is written machine-wide.",
+      304, 18 },
+    { INST_PT_SUMMARY,
+      "Nothing has been changed yet. Click Install to do the following.",
+      284, 18 },
+    { INST_PT_PROGRESS,
+      "Windows may open windows of its own: answer them.", 284, 10 },
+    { INST_PT_STEPS,
+      "These devices could not be installed by the installer. Do their "
+      "steps after the restart; save them to a file first.",
+      284, 20 },
+    { INST_PT_NOW, "Restart Windows now", 284, 10 },
+    { INST_PT_LATER, "Restart Windows later", 284, 10 },
+    { INST_PT_UN_TITLE, "Remove the xHCI98 USB 3.x drivers", 284, 10 },
+    { INST_PT_UN_WARN,
+      "This removes the xhci98 drivers from Windows. On a machine whose "
+      "only USB controller is xHCI, the USB keyboard and mouse stop working "
+      "when the controller's driver is removed, and stay dead until another "
+      "driver is installed. Have a PS/2 keyboard, a laptop's built-in one, "
+      "or a USB controller another driver runs, before you go on.",
+      284, 50 },
+    { INST_PT_UN_AGREE,
+      "I have a keyboard and mouse that do not go through this driver, or "
+      "I accept that the USB ones stop working.",
+      270, 20 },
+    { INST_PT_UN_SUMMARY,
+      "Nothing has been changed yet. Click Remove to take away every "
+      "driver of this package, its tools and its records.",
+      284, 18 },
+    { INST_PT_GATE,
+      "If Windows has a hardware wizard open (Found New Hardware, Add New "
+      "Hardware), finish or cancel it first. OK goes on; Cancel stops here.",
+      0, 0 }
+};
+const int instPageTextCount =
+    (int)(sizeof(instPageTexts) / sizeof(instPageTexts[0]));
+
+const char *inst_page_text(int id)
+{
+    int i;
+
+    for (i = 0; i < instPageTextCount; i++) {
+        if (instPageTexts[i].Id == id) {
+            return instPageTexts[i].Text;
+        }
+    }
+    return "";
+}
+
+INST_U32 inst_text_lines(const char *text, INST_U32 cols)
+{
+    INST_U32 lines = 0;
+    INST_U32 col = 0;
+    const char *p = text;
+
+    if (cols == 0) {
+        return 0;
+    }
+    while (*p != '\0') {
+        size_t w;
+        if (*p == '\n') {
+            lines++;
+            col = 0;
+            p++;
+            continue;
+        }
+        if (*p == ' ') {
+            p++;
+            if (col > 0 && col < cols) {
+                col++;
+            }
+            continue;
+        }
+        w = strcspn(p, " \n");
+        if (col > 0 && col + w > cols) {
+            lines++;
+            col = 0;
+        }
+        while (w > cols) {
+            lines++;
+            w -= cols;
+            p += cols;
+        }
+        col += (INST_U32)w;
+        p += w;
+    }
+    return lines + (col > 0 ? 1 : 0);
+}
+
+INST_U32 inst_page_cols(INST_U32 widthDlu)
+{
+    /* A dialog unit across is a quarter of the font's average character;
+     * the margin keeps a proportional font's wider letters inside. The
+     * window's self-test measures the real rendering. */
+    return widthDlu >= 32 ? widthDlu / 4 - 3 : 1;
+}
+
+INST_U32 inst_page_rows(INST_U32 heightDlu)
+{
+    return heightDlu / 8;
 }

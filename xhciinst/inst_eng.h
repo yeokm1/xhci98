@@ -92,6 +92,10 @@ typedef struct _INST_FRONT {
 void inst_eng_init(const INST_FRONT *front, const char *selfName,
                    const char *otherName, int window);
 
+/* The window that owns Windows' own dialogs from now on (the wizard's
+ * sheet, once it exists); NULL on the console. */
+void inst_eng_owner(HWND owner);
+
 /* The switches, parsed into the engine's options. 0, or 1 refused (err). */
 int inst_eng_parse(int argc, char **argv, char *err, size_t cap);
 INST_OPTS *inst_eng_opts(void);
