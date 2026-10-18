@@ -888,6 +888,10 @@ VOID CmNhiWaitService(PCM_NHI nhi)
     if (!nhi->U4On) {
         TbtIcmService(&nhi->Icm);
     }
+    /* The servicing point of every bounded wait inside a pass: the
+     * stor98 acknowledgement waits stepped at least as often as the wait
+     * reads (task 42-A.12; record 21 section 7.2 part 0). */
+    CmNvlinkStep(nhi);
 }
 
 /* Whether the device an action names is still the one it named: the

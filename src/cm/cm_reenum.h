@@ -191,6 +191,7 @@ typedef VOID (*CM_REENUM_EJECT)(PVOID context, ULONG port);
                                        INF did not match its id): no
                                        re-enumeration, no safe eject      */
 
+
 /* One member of the set, the per-member state of record 21 section 6.3.
  * Flags is written under the registration list's lock; the rest by the
  * thread alone. */
@@ -206,6 +207,8 @@ typedef struct _CM_REENUM_PORT {
     ULONG AskedSerial;      /* NT: the filter publication a baseline was
                                last asked of                              */
     ULONG MissedAt;         /* NowMs of the last retry of Missed          */
+    ULONG Held;             /* CM_HELD_* (cm_nvlink.h): work held behind
+                               its stor98 gate (task 42-A.12)            */
     ULONG Missed;           /* a tunnel change came while the member was
                                exclusive but not active, or its call could
                                not be made: re-enumerated once it is      */
@@ -300,6 +303,8 @@ typedef struct _CM_REENUM {
     ULONG CfgmgOwed;        /* the worker starts at the first Action or
                                Service, after the NHI's start completed  */
     struct _CM_CFGWK *Wk;   /* 98: the CONFIGMG worker (cm_cfgwk.c)       */
+    struct _CM_CALLWK *Callwk; /* 98: the per-member call workers
+                               (cm_callwk.c, task 42-A.12)               */
     ULONG WkOpenSeen;       /* its opening read back                      */
     ULONG WkActive;         /* the owned-member mask it was last given    */
     ULONG RediscoverLeft;   /* an empty set's discoveries still to try    */
@@ -347,6 +352,7 @@ typedef struct _CM_REENUM {
     ULONG GoneDropped;      /* 98: retained children no longer matching
                                their recorded identity, left alone       */
     ULONG Ejects;           /* eject notifications served                 */
+    ULONG Holds;            /* members' work held behind a stor98 gate    */
     ULONG EjectsStale;      /* dropped at hand-off: the port changed      */
 
     /* The marks answer's table (task 42-A.5, cm_marks.h), under the list's

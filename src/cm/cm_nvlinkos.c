@@ -50,15 +50,8 @@ NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
                              ULONG SlotNumber, PVOID Buffer, ULONG Length);
 #endif
 
-/* The shadow of each entry, the connection manager's own. */
-typedef struct _CM_NV_SHADOW {
-    PCM_NHI Owner;      /* the domain that last published or marked it   */
-    ULONG Bridge;       /* its tunnel port, XHCI_TBT_BDF                 */
-    ULONG Waiting;      /* DOWN_QUIESCED set, acknowledgement awaited    */
-    ULONG MarkedAt;     /* the owner's clock at the mark, ms             */
-    ULONG Id;           /* the function's ids when UP was published      */
-} CM_NV_SHADOW;
-
+/* The shadow of each entry, the connection manager's own (CM_NV_SHADOW,
+ * cm_nvlink.h): its owner, bridge, pending acknowledgement and ids. */
 static PSTOR98LS_TABLE cmNvTable;
 static KSPIN_LOCK cmNvLock;
 static CM_NV_SHADOW cmNvShadow[STOR98LS_ENTRIES];
@@ -102,6 +95,9 @@ typedef struct _CM_NV_U4 {
      * exposure could not (the bus silent, the member not active). */
     ULONG TunBridge[XHCI_TBT_MAX_TUNNELS];
     ULONG Tun[XHCI_TBT_MAX_TUNNELS];
+    /* Task 42-A.12: CmNvlinkStep in progress on this domain's thread (a
+     * step reached from inside one does nothing). */
+    ULONG Stepping;
 } CM_NV_U4;
 
 #define CM_NV_LATE_MS 10000UL
@@ -153,13 +149,6 @@ static ULONG cmNvNow(PCM_NHI nhi)
     return nhi->Host.NowMs(nhi->Host.Context);
 }
 
-/* Between reads of a wait: the connection manager keeps decoding its
- * events (the seam's polls do the same), then a short sleep. */
-static VOID cmNvPause(PCM_NHI nhi)
-{
-    CmNhiWaitService(nhi);
-    nhi->Host.Sleep(nhi->Host.Context, CM_NVLINK_POLL_MS);
-}
 
 /*
  * THE READING. The seam's poll has no SHPC writer, so on the emulator's
@@ -901,14 +890,19 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
         CmLogNote(nhi, "cm.nvlink.up.not-member", bridge);
         return 0;
     }
-    /* A statement this domain made is acknowledged (or timed out) before
-     * any exposure can retire it or start a removal: a USB4 DOWN hook may
-     * have marked one ahead of an UP action in the same batch. */
-    CmNvlinkAwait(nhi);
     /* The tunnel named, recorded first, even where nothing is published
-     * now (the bus unread, the channel not ready): a later exposure of the
-     * bridge publishes for it. */
+     * now (the bus unread, the channel not ready, the gate up): a later
+     * exposure of the bridge publishes for it. */
     tunnel = cmNvTunnelOf(nhi, bridge, tunnel);
+    /* A statement this domain made behind this member is acknowledged
+     * (or timed out) before any exposure can retire it or start a
+     * removal: no UP while its gate is up (R8b's order; task 42-A.12).
+     * The seam holds the member's call behind the same gate and exposes
+     * it again once the gate falls; nothing waits here. */
+    if (CmNvlinkHeld(nhi, bridge)) {
+        CmLogNote(nhi, "cm.nvlink.up.held", bridge);
+        return 0;
+    }
     ready = cmNvEnsure(nhi);
     bus = cmNvSecondary(bridge);
     /* Every exposure retires the statements behind the bridge first, by
@@ -916,9 +910,10 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
     retired = 0;
     KeAcquireSpinLock(&cmNvLock, &irql);
     for (i = 0; i < STOR98LS_ENTRIES; i++) {
-        if (cmNvShadow[i].Owner != NULL && cmNvShadow[i].Owner != nhi &&
-            cmNvShadow[i].Waiting) {
-            /* Another domain's statement, still awaited: never ours. */
+        if (cmNvShadow[i].Owner != NULL && cmNvShadow[i].Waiting) {
+            /* A statement still awaited - another domain's, or one of
+             * this domain's behind another member on the same bus: an
+             * exposure never ends a wait (record 21 section 7.2 part 3). */
             continue;
         }
         if ((cmNvShadow[i].Bridge == bridge && cmNvShadow[i].Owner != NULL) ||
@@ -1180,85 +1175,89 @@ ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
     return verdict == CM_NVLINK_SEND ? CM_NVLINK_NO_ENTRY : verdict;
 }
 
-VOID CmNvlinkAwait(PCM_NHI nhi)
+VOID CmNvlinkStep(PCM_NHI nhi)
 {
+    CM_NV_U4 *u;
     ULONG i;
-    ULONG pending;
-    ULONG start;
+    ULONG k;
+    ULONG n;
     ULONG now;
-    ULONG rounds;
     ULONG step;
-    ULONG ends;
-    ULONG ended[STOR98LS_ENTRIES];
+    ULONG ends[STOR98LS_ENTRIES];
+    ULONG took[STOR98LS_ENTRIES];
     KIRQL irql;
 
     if (cmNvTable == NULL) {
         return;
     }
-    pending = 0;
+    /* Not a slot of its own: a step after the NHI's stop (a sleep of
+     * its teardown) must not claim one back. */
+    u = cmNvU4Of(nhi, FALSE);
+    if (u != NULL) {
+        if (u->Stepping) {
+            return;
+        }
+        u->Stepping = 1;
+    }
+    n = 0;
+    now = cmNvNow(nhi);
     KeAcquireSpinLock(&cmNvLock, &irql);
-    for (i = 0; i < STOR98LS_ENTRIES; i++) {
-        if (cmNvShadow[i].Owner == nhi && cmNvShadow[i].Waiting) {
-            pending++;
+    (VOID)CmNvlinkWaitStep(cmNvTable, cmNvShadow, nhi, cmNvReceiver(), now,
+                           CmNvlinkAckBoundMs(cmNvNt), ends, &n);
+    for (k = 0; k < n; k++) {
+        i = ends[k] & 0xFFUL;
+        step = ends[k] >> 8;
+        took[k] = now - cmNvShadow[i].MarkedAt;
+        if (step == CM_NVLINK_AW_ACKED) {
+            cmNvAcked++;
+        } else if (step == CM_NVLINK_AW_NO_RECEIVER) {
+            cmNvNoReceiver++;
+        } else if (step == CM_NVLINK_AW_TIMEOUT) {
+            cmNvAckTimeouts++;
+        } else if (step == CM_NVLINK_AW_LATE) {
+            cmNvAckTimeouts++;
+            cmNvAckLate++;
         }
     }
     KeReleaseSpinLock(&cmNvLock, irql);
-    if (pending == 0) {
-        return;
+    /* How each entry's wait ended (CM_NVLINK_AW_* << 8 | entry) and how
+     * long it ran from its mark, ms. */
+    for (k = 0; k < n; k++) {
+        CmLogNote(nhi, "cm.nvlink.await.end", ends[k]);
+        CmLogNote(nhi, "cm.nvlink.await", took[k]);
     }
-    start = cmNvNow(nhi);
-    rounds = 0;
-    ends = 0;
-    for (;;) {
-        pending = 0;
-        now = cmNvNow(nhi);
-        KeAcquireSpinLock(&cmNvLock, &irql);
-        for (i = 0; i < STOR98LS_ENTRIES; i++) {
-            if (cmNvShadow[i].Owner != nhi || !cmNvShadow[i].Waiting) {
-                continue;
-            }
-            rounds |= 0x80000000UL;
-            /* The deadline before the acknowledgement is read: one first
-             * seen after it is late, logged and not taken (R11, R12 S4).
-             * Superseded (a later UP or retirement) and no receiver (no
-             * stor98 has the table) end the wait at once. */
-            step = CmNvlinkAckStep(cmNvTable, i, cmNvReceiver(),
-                                   cmNvShadow[i].MarkedAt, now,
-                                   CmNvlinkAckBoundMs(cmNvNt));
-            if (step == CM_NVLINK_AW_PENDING) {
-                pending++;
-                continue;
-            }
-            cmNvShadow[i].Waiting = 0;
-            if (step == CM_NVLINK_AW_ACKED) {
-                cmNvAcked++;
-            } else if (step == CM_NVLINK_AW_NO_RECEIVER) {
-                cmNvNoReceiver++;
-            } else if (step == CM_NVLINK_AW_TIMEOUT) {
-                cmNvAckTimeouts++;
-            } else if (step == CM_NVLINK_AW_LATE) {
-                cmNvAckTimeouts++;
-                cmNvAckLate++;
-            }
-            if (ends < STOR98LS_ENTRIES) {
-                ended[ends] = (step << 8) | i;
-                ends++;
-            }
-        }
-        KeReleaseSpinLock(&cmNvLock, irql);
-        if (pending == 0) {
-            break;
-        }
-        rounds++;
-        cmNvPause(nhi);
+    if (u != NULL) {
+        u->Stepping = 0;
     }
-    if (rounds != 0) {
-        CmLogNote(nhi, "cm.nvlink.await", cmNvNow(nhi) - start);
+}
+
+BOOLEAN CmNvlinkHeld(PCM_NHI nhi, ULONG bridge)
+{
+    BOOLEAN held;
+    KIRQL irql;
+
+    if (cmNvTable == NULL) {
+        return FALSE;
     }
-    /* How each entry's wait ended: CM_NVLINK_AW_* << 8 | entry. */
-    for (i = 0; i < ends; i++) {
-        CmLogNote(nhi, "cm.nvlink.await.end", ended[i]);
+    CmNvlinkStep(nhi);
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    held = CmNvlinkWaitHeld(cmNvShadow, nhi, bridge);
+    KeReleaseSpinLock(&cmNvLock, irql);
+    return held;
+}
+
+BOOLEAN CmNvlinkPending(VOID)
+{
+    BOOLEAN pending;
+    KIRQL irql;
+
+    if (cmNvTable == NULL) {
+        return FALSE;
     }
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    pending = CmNvlinkWaitAny(cmNvShadow);
+    KeReleaseSpinLock(&cmNvLock, irql);
+    return pending;
 }
 
 /*
@@ -1392,16 +1391,20 @@ VOID CmNvlinkStop(PCM_NHI nhi)
 ULONG CmNvlinkIdleMs(ULONG configured)
 {
     ULONG i;
+    BOOLEAN up;
 
-    if (configured <= CM_NVLINK_IDLE_MS || cmNvTable == NULL) {
+    if (configured <= CM_NVLINK_PEND_MS || cmNvTable == NULL) {
         return configured;
     }
+    up = FALSE;
     for (i = 0; i < STOR98LS_ENTRIES; i++) {
         if ((cmNvTable->Entry[i].Flags & STOR98LS_UP) != 0) {
-            return CM_NVLINK_IDLE_MS;
+            up = TRUE;
         }
     }
-    return configured;
+    /* Read without the lock (any IRQL): a wait marked just after is
+     * stepped on the next pass all the same. */
+    return CmNvlinkIdleFor(configured, up, CmNvlinkWaitAny(cmNvShadow));
 }
 
 /* ====================================================================== */

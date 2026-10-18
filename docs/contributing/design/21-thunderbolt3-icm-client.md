@@ -2303,12 +2303,16 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   request (`REMOVE_PENDING`, below) is outstanding on an entry (interface
   3, R9a): it is left as it is until the request is withdrawn. Before
   every exposure, fresh or not (it follows the acknowledgement wait), every entry behind
-  that bridge that carries a statement is retired (`IN_USE` alone,
-  generation + 1), found by the bus and by the bridge it was last published
+  that bridge that carries a statement is retired (`IN_USE` alone, the
+  generation kept), found by the bus and by the bridge it was last published
   or marked for, so a Stor98 instance that binds after the exposure -
   to a function the scan could not see, or one that came back between the
   scan and the enumeration - never records a generation carrying an old
-  statement. On Windows 98 SE and ME no `UP` is published while the
+  statement. (Until task 42-A.12 the retirement also advanced the
+  generation, so a re-plug after a statement cost two increments; R8b
+  allows one per tunnel and none for anything else, and Stor98's 9x late
+  lookup takes a generation read not `UP` as its floor and binds only an
+  `UP` above it, which the re-plug's one increment is.) On Windows 98 SE and ME no `UP` is published while the
   proof and locator are not published. There the tunnel's bus did not answer before
   `Reenumerate_DevNode` (98 SE, run-39): a fresh exposure that finds it
   silent leaves the bus to be scanned again on each pass for 10 s, and the
@@ -2354,9 +2358,14 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   no `DOWN_QUIESCED`), which Stor98 ignores, and its gone deadline (MD-1)
   stands; a function still answering keeps its `UP`.
 - **The acknowledgement before the removal.** Before the removal call of a
-  tunnel down or a RESYNC, the thread waits until every entry this domain
-  marked reads `AckGeneration` = `LinkGeneration`, or the bound from the
-  mark: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
+  tunnel down or a RESYNC for a member, every entry this domain marked
+  behind that member reads `AckGeneration` = `LinkGeneration`, or the bound
+  from the mark has passed. Since task 42-A.12 that is a pending state per
+  entry, stepped on the thread's passes and at every servicing point of a
+  wait inside one (the sleeps of the core's and the seam's waits), and a
+  gate per member that holds that member's removal, exposure and resume
+  release alone (part 3 of "The 9x half" below); until then the thread
+  itself waited for every entry of the domain. The bound: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
   test build; the header gives no number), and 3 s on Windows 98 SE and
   ME, inside interface 3's R12 S4 bounds: at most Stor98's 9x gone
   deadline (`STOR98LS9X_GONE_MS`, 5 s) and not below
@@ -2365,8 +2374,7 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   Stor98 that has not answered by then is a benign timeout (G3 run C:
   nothing was held, and its next request applied the statement), and no
   idle indication shortens or skips the wait - the acknowledgement is the
-  only signal. Orchestrator decision of 2026-10-15, owner to confirm. The thread services the ICM between
-  reads. On NT it does not wait while no driver
+  only signal. Orchestrator decision of 2026-10-15, owner to confirm. On NT nothing waits while no driver
   has ever asked for the table (no Stor98 is loaded, so none can answer);
   on 9x it does not wait where the proof and locator were not published,
   nor while no Stor98 has read the proof. Each read checks the bound

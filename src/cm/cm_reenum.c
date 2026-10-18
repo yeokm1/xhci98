@@ -69,6 +69,7 @@
 #include "cm_cfgmg.h"
 #include "cm_ports.h"
 #include "cm_nvlink.h"
+#include "cm_call.h"
 
 /* The USB4 profile's actions reach the seam with this bit in Why (cm_nhi.c,
  * cmU4ToIcm); its stor98 statement is made at the core's upcall, not here. */
@@ -1435,10 +1436,10 @@ static VOID cmWkPost(PCM_NHI nhi, ULONG reenum, ULONG vanish, BOOLEAN mark)
 {
     PCM_REENUM r;
 
-    /* Nothing posted - no removal begun - while a stor98 statement of
-     * this domain awaits its acknowledgement (cm_nvlink.h; the wait
-     * services the ring, so it is this thread's, never the worker's). */
-    CmNvlinkAwait(nhi);
+    /* No removal is posted for a member whose stor98 gate is up: the
+     * callers hold that member's work (cmHeld, task 42-A.12) and post it
+     * once the gate falls; the wait is the thread's, stepped on its
+     * passes, never the worker's. */
     r = &nhi->Reenum;
     r->WkActive = cmOwnedMask(nhi);
     CmCfgwkPost(r->Wk, reenum, vanish, r->WkActive, mark);
@@ -1454,8 +1455,8 @@ static BOOLEAN cmInvalidate(PCM_NHI nhi, ULONG i, BOOLEAN activeOnly)
     PDEVICE_OBJECT pdo;
 
     /* No wait here: CmReenumResumeFailed reaches this at DISPATCH_LEVEL.
-     * The thread's callers wait for stor98's acknowledgement before they
-     * get here (CmNvlinkExpose, cmAskBaselines, CmReenumResumed); the
+     * The thread's callers make no call for a member whose stor98 gate is
+     * up (cmHeld, cmAskBaselines, CmReenumResumed; task 42-A.12); the
      * failure release runs only where the thread did not run the resume,
      * so no statement of the resume is pending then. */
     if (!cmRegTake(nhi, i, activeOnly, &f, &pdo)) {
@@ -1482,7 +1483,6 @@ static VOID cmAskBaselines(PCM_NHI nhi)
     ULONG i;
     ULONG serial;
 
-    CmNvlinkAwait(nhi);
     r = &nhi->Reenum;
     for (i = 0; i < r->Members; i++) {
         serial = 0;
@@ -1493,6 +1493,11 @@ static VOID cmAskBaselines(PCM_NHI nhi)
             serial = f->Serial;
         }
         KeReleaseSpinLock(&cmRegLock, irql);
+        if (serial != 0 && CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
+            /* Its stor98 gate is up (task 42-A.12): asked on a later pass,
+             * since AskedSerial is not recorded; the other members go on. */
+            continue;
+        }
         if (serial != 0) {
             /* The baseline answer may already report an endpoint: its
              * stor98 UP first (cm_nvlink.h, obligation 1). */
@@ -1581,6 +1586,80 @@ BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
 }
 
 /* ---- both routes ------------------------------------------------------ */
+
+static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask);
+
+/* Member i's exposure and its route's call: the stor98 UP first
+ * (cm_nvlink.h, obligation 1), then the invalidation or the worker's
+ * post (with a marking window when `mark`). Only for a member whose
+ * stor98 gate is down (cmHeld). */
+static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
+                        BOOLEAN fresh, ULONG tunnel, BOOLEAN mark)
+{
+    PCM_REENUM r;
+
+    r = &nhi->Reenum;
+    (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, fresh, tunnel);
+    if (r->Route == CM_ROUTE_FILTER) {
+        if (!cmInvalidate(nhi, i, TRUE)) {
+            /* Lost its filter or its exclusivity since it was read
+             * active: owed when it is active again. */
+            r->CallFailures++;
+            r->Port[i].Missed = 1;
+        }
+    } else if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+        /* Posted: the worker makes the call, and retries it itself. */
+        cmWkPost(nhi, 1UL << i, removeVanished ? 1UL << i : 0, mark);
+        r->Calls++;
+    }
+}
+
+/*
+ * Task 42-A.12 (record 21 section 7.2 part 3): member i's stor98 gate. Up
+ * - a statement made behind it still awaiting its acknowledgement - its
+ * re-enumeration is held, collapsed with any held before (a removal of
+ * vanished children or a fresh exposure asked by either is kept), and
+ * TRUE is returned; CmReenumService runs it from the first pass that
+ * finds the gate down. The exposure is still offered, so the tunnel it
+ * names is recorded for the held one (CmNvlinkExpose publishes nothing
+ * while the gate is up). Down, any work held before is folded into this
+ * call's flags and FALSE is returned. No other member is looked at.
+ */
+static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
+                      BOOLEAN *fresh, ULONG tunnel, BOOLEAN *mark)
+{
+    PCM_REENUM r;
+    ULONG before;
+    BOOLEAN up;
+    BOOLEAN missed;
+
+    r = &nhi->Reenum;
+    *mark = FALSE;
+    before = r->Port[i].Held;
+    up = CmNvlinkHeld(nhi, r->Port[i].Bdf);
+    if (up) {
+        (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, *fresh, tunnel);
+        if ((before & CM_HELD_REENUM) == 0) {
+            r->Holds++;
+            CmLogNote(nhi, "cm.reenum.held", r->Port[i].Bdf);
+        }
+    }
+    missed = (BOOLEAN)(r->Port[i].Missed != 0);
+    if (CmNvlinkHoldReenum(&r->Port[i].Held, up, &missed, removeVanished,
+                           fresh)) {
+        return TRUE;
+    }
+    if (r->Port[i].Missed && !missed) {
+        /* An owed skipped change paid by this call: its marking window
+         * with it, as the owed call itself would open. */
+        *mark = (BOOLEAN)(r->SafeEject != 0);
+        r->Port[i].Missed = 0;
+        r->Port[i].MissedAt = cmNow(nhi);
+        CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
+    }
+    return FALSE;
+}
+
 /* Every active member re-enumerated by the domain's route. `action` is the
  * one that asked for it: a tunnel up names the new tunnel to its own
  * member's exposure alone (CmNvlinkActionTunnel, task 42-A.6), so no other
@@ -1593,6 +1672,10 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
     ULONG i;
     ULONG flags;
     ULONG member;
+    ULONG tunnel;
+    BOOLEAN vanish;
+    BOOLEAN exposeFresh;
+    BOOLEAN mark;
 
     r = &nhi->Reenum;
     member = XHCI_TBT_NO_MEMBER;
@@ -1610,24 +1693,15 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
             }
             continue;
         }
-        /* stor98's UP for what the call is about to expose (cm_nvlink.h,
-         * obligation 1). */
-        (VOID)CmNvlinkExpose(
-            nhi, r->Port[i].Bdf, fresh,
-            CmNvlinkActionTunnel(
-                (BOOLEAN)(action->Kind == TBT_ICM_ACT_TUNNEL_UP),
-                action->Link, action->Serial, member, i));
-        if (r->Route == CM_ROUTE_FILTER) {
-            if (!cmInvalidate(nhi, i, TRUE)) {
-                /* Lost its filter or its exclusivity since it was read
-                 * active: owed when it is active again. */
-                r->CallFailures++;
-                r->Port[i].Missed = 1;
-            }
-        } else if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
-            /* Posted: the worker makes the call, and retries it itself. */
-            cmWkPost(nhi, 1UL << i, removeVanished ? 1UL << i : 0, FALSE);
-            r->Calls++;
+        tunnel = CmNvlinkActionTunnel(
+            (BOOLEAN)(action->Kind == TBT_ICM_ACT_TUNNEL_UP), action->Link,
+            action->Serial, member, i);
+        vanish = removeVanished;
+        exposeFresh = fresh;
+        /* A member whose stor98 acknowledgement is pending waits alone;
+         * every other member is exposed and called now (task 42-A.12). */
+        if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel, &mark)) {
+            cmReenumOne(nhi, i, vanish, exposeFresh, tunnel, mark);
         }
     }
 }
@@ -1894,6 +1968,10 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
     r->Route = CM_ROUTE_CONFIGMG;
     cmRegRecompute();
     KeReleaseSpinLock(&cmRegLock, irql);
+    /* The per-member call workers beside it (task 42-A.12; record 21
+     * section 7.2 part 0): one per member, each opening its own route.
+     * The route does not depend on them. */
+    r->Callwk = CmCallwkStart(nhi, r->Members);
 }
 
 /*
@@ -2057,10 +2135,10 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         } else if ((action->Why & CM_U4_WHY_BASE) == 0) {
             (VOID)CmNvlinkIcmDown(nhi, state);
         }
-        CmNvlinkAwait(nhi);
+        /* The acknowledgement before the removal is per member: a member
+         * with a statement pending is held, the rest go on (cmHeld). */
         cmReenumAll(nhi, TRUE, FALSE, action);
     } else {
-        CmNvlinkAwait(nhi);
         cmReenumAll(nhi, TRUE, TRUE, action);
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
@@ -2081,9 +2159,18 @@ VOID CmReenumService(PCM_NHI nhi)
     ULONG stale;
     ULONG mask;
     ULONG taken;
+    ULONG held;
+    ULONG act;
     ULONG i;
+    BOOLEAN missed;
+    BOOLEAN vanish;
+    BOOLEAN exposeFresh;
+    BOOLEAN mark;
 
     r = &nhi->Reenum;
+    /* The stor98 acknowledgement waits, stepped once per pass whatever
+     * else the pass does (task 42-A.12). */
+    CmNvlinkStep(nhi);
     /* The stor98 channel's per-pass work: on 98 SE and ME the rescan of a
      * bus a fresh exposure found silent; under the USB4 profile the
      * presence samples for the statement's anchor (record 22 section
@@ -2174,11 +2261,61 @@ VOID CmReenumService(PCM_NHI nhi)
     if (r->Route == CM_ROUTE_FILTER && r->Reenum != 0) {
         cmAskBaselines(nhi);
     }
+    /* Task 42-A.12: each member's work held behind its stor98 gate, run
+     * from the first pass that finds the gate down - another member's
+     * gate never holds it. Not while a lost host interface drains on the
+     * CONFIGMG route (CmReenumAction's rule: no request posted then). */
+    for (i = 0; i < r->Members; i++) {
+        held = r->Port[i].Held;
+        if (held == 0) {
+            continue;
+        }
+        /* Kept while the host interface is lost, whatever the route: the
+         * exposure reads the bridge and a post would undo the loss's own
+         * reconciliation (record 21 section 5.5); run once it is back. */
+        missed = (BOOLEAN)(r->Port[i].Missed != 0);
+        act = CmNvlinkHoldRun(&r->Port[i].Held,
+                              CmNvlinkHeld(nhi, r->Port[i].Bdf),
+                              (BOOLEAN)(CmLiveTransport(&nhi->Live) &&
+                                        !r->LossDrain),
+                              (BOOLEAN)(r->Reenum != 0),
+                              (BOOLEAN)((cmFlags(nhi, i) & CM_PORT_ACTIVE) !=
+                                        0),
+                              (BOOLEAN)((cmFlags(nhi, i) &
+                                         CM_PORT_EXCLUSIVE) != 0),
+                              &missed, &vanish, &exposeFresh);
+        if (r->Port[i].Held == held) {
+            continue;
+        }
+        CmLogNote(nhi, "cm.reenum.held.run",
+                  ((held & 0xFFUL) << 24) | ((act & 0xFFUL) << 16) |
+                      (r->Port[i].Bdf & 0xFFFFUL));
+        if (act & CM_HELD_DO_RELEASE) {
+            cmReleaseHeld(nhi, (BOOLEAN)((act & CM_HELD_DO_FAIL) != 0),
+                          1UL << i);
+        }
+        if (act & CM_HELD_DO_REENUM) {
+            /* An owed skipped change paid by this call too: its marking
+             * window with it, as the owed call itself would open. */
+            mark = (BOOLEAN)(r->Port[i].Missed && !missed &&
+                             r->SafeEject != 0);
+            if (r->Port[i].Missed && !missed) {
+                r->Port[i].MissedAt = cmNow(nhi);
+                CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
+            }
+            r->Port[i].Missed = missed ? 1UL : 0UL;
+            cmReenumOne(nhi, i, vanish, exposeFresh, CM_NVLINK_TUNNEL_NONE,
+                        mark);
+        } else if (act & CM_HELD_DO_OWE) {
+            r->Port[i].Missed = 1;
+        }
+    }
     /* A change skipped while a member was not active, now that it is;
      * the debt stays until a call is actually made. */
     for (i = 0; i < r->Members && r->Reenum != 0; i++) {
         if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE) &&
-            cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS) {
+            cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS &&
+            !CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
             r->Port[i].MissedAt = cmNow(nhi);
             (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
                                  CM_NVLINK_TUNNEL_NONE);
@@ -2199,6 +2336,7 @@ VOID CmReenumService(PCM_NHI nhi)
         }
     }
     cmCfgmgOpened(nhi);
+    CmCallwkService(nhi, r->Callwk);
 }
 
 VOID CmReenumSuspend(PCM_NHI nhi)
@@ -2273,12 +2411,12 @@ VOID CmReenumSuspend(PCM_NHI nhi)
 }
 
 /*
- * Every member this domain holds released; `fail` takes section 6.3's
- * failure path, an invalidation of each released member. Spin locks,
+ * Every member in `mask` this domain holds released; `fail` takes section
+ * 6.3's failure path, an invalidation of each released member. Spin locks,
  * IoCompleteRequest, PoStartNextPowerIrp and IoInvalidateDeviceRelations
  * only: callable at <= DISPATCH_LEVEL (CmReenumResumeFailed's use).
  */
-static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail)
+static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask)
 {
     PCM_REENUM r;
     KIRQL irql;
@@ -2293,6 +2431,9 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail)
         return;
     }
     for (i = 0; i < r->Members; i++) {
+        if ((mask & (1UL << i)) == 0) {
+            continue;
+        }
         irp = NULL;
         dropRef = FALSE;
         was = 0;
@@ -2324,21 +2465,37 @@ VOID CmReenumResumeFailed(PCM_NHI nhi)
 {
     nhi->Reenum.ResumeFailures++;
     CmLogNote(nhi, "cm.reenum.resume-failed", nhi->Reenum.Members);
-    cmReleaseHeld(nhi, TRUE);
+    cmReleaseHeld(nhi, TRUE, 0xFFFFFFFFUL);
 }
 
 VOID CmReenumResumed(PCM_NHI nhi, BOOLEAN ok)
 {
+    PCM_REENUM r;
+    ULONG mask;
+    ULONG i;
+
+    r = &nhi->Reenum;
     if (ok) {
-        nhi->Reenum.Resumes++;
+        r->Resumes++;
     } else {
-        nhi->Reenum.ResumeFailures++;
+        r->ResumeFailures++;
     }
     CmLogNote(nhi, "cm.reenum.resumed", ok ? 1UL : 0UL);
-    /* The holds' release (and on failure their invalidations) waits for
-     * any stor98 statement the resume's own teardown made (cm_nvlink.h). */
-    CmNvlinkAwait(nhi);
-    cmReleaseHeld(nhi, (BOOLEAN)!ok);
+    /* A member's release (and on failure its invalidation) waits for any
+     * stor98 statement the resume's own teardown made behind it, and only
+     * that member's (task 42-A.12): held, it is released by the first
+     * pass that finds its gate down (CmReenumService). */
+    mask = 0;
+    for (i = 0; i < r->Members; i++) {
+        if (r->Route == CM_ROUTE_FILTER &&
+            CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
+            r->Port[i].Held |= CM_HELD_RELEASE | (ok ? 0 : CM_HELD_FAIL);
+            CmLogNote(nhi, "cm.reenum.hold.release-held", r->Port[i].Bdf);
+        } else {
+            mask |= 1UL << i;
+        }
+    }
+    cmReleaseHeld(nhi, (BOOLEAN)!ok, mask);
 }
 
 VOID CmReenumStop(PCM_NHI nhi)
@@ -2350,6 +2507,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     ULONG skipped;
     ULONG refused;
     ULONG watchdogs;
+    ULONG i;
 
     r = &nhi->Reenum;
     CmNvlinkStop(nhi);
@@ -2359,7 +2517,7 @@ VOID CmReenumStop(PCM_NHI nhi)
         return;
     }
     r->Stops++;
-    cmReleaseHeld(nhi, TRUE);
+    cmReleaseHeld(nhi, TRUE, 0xFFFFFFFFUL);
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (r->Listed) {
         RemoveEntryList(&r->Link);
@@ -2387,9 +2545,19 @@ VOID CmReenumStop(PCM_NHI nhi)
         CmLogNote(nhi, "cm.brnum.9x.numbered", wc.Numbered);
         CmLogNote(nhi, "cm.brnum.9x.refused", wc.NumberRefused);
     }
+    if (r->Callwk != NULL) {
+        /* Never waited for: a worker inside a call frees the block itself
+         * when the call returns (cm_callwk.c). */
+        CmCallwkStop(r->Callwk);
+        r->Callwk = NULL;
+    }
     r->WkOpenSeen = 0;
     r->WkActive = 0;
     r->Route = CM_ROUTE_NONE;
+    for (i = 0; i < r->Members; i++) {
+        /* Held work belongs to this start (task 42-A.12). */
+        r->Port[i].Held = 0;
+    }
     r->Members = 0;
     r->MarkOpen = 0;
     r->CfgmgOwed = 0;
@@ -2410,6 +2578,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.9x.gone", r->GoneDone);
     CmLogNote(nhi, "cm.reenum.9x.gone-dropped", r->GoneDropped);
     CmLogNote(nhi, "cm.reenum.ejects", r->Ejects);
+    CmLogNote(nhi, "cm.reenum.holds", r->Holds);
     CmRegCounters(&attached, &over, &skipped, &refused, &watchdogs);
     CmLogNote(nhi, "cm.reenum.child.attached", attached);
     CmLogNote(nhi, "cm.reenum.child.over", over);
