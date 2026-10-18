@@ -206,9 +206,9 @@ for the INFs' `DriverVer` of 10/17/2026, so the `DRIVER` line's date is
 informational only (the driver key's `DriverDate` said `10-18-2026` on 98
 SE).
 
-Owed, written down rather than taken: the UAS and Stor98 rows (no UAS
-device attaches to this emulator's xHCI at boot in this layout, and the
-package carries no Stor98), the update rows U24 and U23 over an
+Owed, written down rather than taken: the UAS and Stor98 rows (this leg's
+layout had no UAS device on the controller, and the package carries no
+Stor98), the update rows U24 and U23 over an
 installed `2.4.0.0` or `2.3.1.0`, the uninstall's last reading (the
 controller back as an unknown device after the `INF\OTHER` copies are
 deleted, which is the installer's step), and every row through the
