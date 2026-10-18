@@ -1448,11 +1448,22 @@ static void mk_entries(const int *prot)
             }
             /* The mark is there. */
             t = mk_tried(h, e->Serial, 0);
-            if (t != NULL && t->Restarted && !t->Outcome &&
+            if (t != NULL && t->Restarted &&
                 (e->Flags & (MK_EF_BUS_ATT | MK_EF_ADD_ATT)) != 0 &&
                 (e->Flags & MK_EF_REMOVABLE) != 0) {
-                t->Outcome = 1;
-                mk_log("restarted, now listed: %s", nodes[unit].Id);
+                /* Listed after the restart: the restart worked, so a later
+                 * loss of the mark is a new event and may have its own one
+                 * restart. Windows' driver installation deletes a device's
+                 * own LowerFilters value (read on XP: a driver update of a
+                 * unit marked and listed left it unmarked, the value
+                 * written again after it); a restart Windows vetoed never
+                 * reaches here, so it is never repeated. */
+                if (!t->Outcome) {
+                    mk_log("restarted, now listed: %s", nodes[unit].Id);
+                }
+                t->Restarted = 0;
+                t->Outcome = 0;
+                t->Gated = 0;
             }
             if (mk_restart_wanted(e, 1) &&
                 (nodes[unit].Status & MK_DN_STARTED) != 0 &&

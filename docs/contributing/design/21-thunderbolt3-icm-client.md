@@ -3933,6 +3933,58 @@ is exported on every NT target the service runs on (record 23 section 5.8
 read it on 2000; the service treats a missing export as "cannot tell" and
 makes no restart).
 
+*As built (task 42-A.5, 2026-10-19, branch `p42-ejrb`).* The code follows
+the revision with these readings of it, each reviewed and revised with
+the code (`runs/run-42.md`, "42-A.5"):
+
+- **Roles.** `CmRoleDecide` (`cm_vals.c`) gives the NHI role to an id of
+  the NHI table or the USB4 host class (`CmProfileFor` not unknown) and
+  nothing wider, so an unlisted Intel NHI bound by hand for `XhciCmMode` 2
+  is a passive child now; the bridge role to a class-0604 id of
+  `xhcicmf.inf`'s models (`CmPortsFilterId`, held to the INF both ways by
+  `test_cm_ports`); every other PDO, an unreadable id list included, to the
+  `AddDevice` child (`CmChildAddDevice`), which answers success even when
+  it cannot attach. A bridge the filter INF names whose value the service
+  wrote is called twice; the second call finds the first object (a bridge
+  filter of this driver on the stack) and attaches nothing, so one object
+  serves both (M15).
+- **The location** is read at the start's way back (`CmRegAttLocate`) and
+  at a capability request's way back from the answer's own `Address` and
+  `IoGetDeviceProperty`'s bus number (`CmRegAttLocateCaps`), never while
+  the object is itself asking: `DevicePropertyAddress` is answered by an
+  `IRP_MN_QUERY_CAPABILITIES` sent down the same stack, and the first
+  build's capability handler, which asked for it, overflowed the kernel
+  stack at boot on Windows 2000 (bug check 0x7F, read in the 42-V.2 leg).
+- **Association.** An `AddDevice` child (or a bridge filter at a unit's
+  place) answers `Removable` while its bus number equals the secondary bus
+  the thread last read from an active, exclusive member's header (at the
+  discovery and after each tunnel action) and the PDO has a current entry
+  in that domain's table.
+- **The table** keeps each member's 32 current entries and 32 tombstones
+  apart (`CM_QM_MAX_ENTRIES` 256, the answer at most 16,448 bytes); an
+  eviction moves the generation on; the query device answers
+  `STATUS_DEVICE_NOT_READY` before the first pass has built one.
+- **The confirmation** is read with the status ask on NT only (the driver
+  key opened with `KEY_SET_VALUE` there for it) and written empty after the
+  check (`ZwSetValueKey` with no data, `cm_statos.c`, the file the
+  allowlists admit for it). Writers take the tools' eject mutex around
+  their check of an empty value and their write. Under the USB4 profile
+  the thread drops a member's pending departures when that member's
+  connection generation (`CmNhiMemberGen`) changes.
+- **The service's reconciliation** judges a record by its owning domain
+  (the one whose answer lists the devnode's parent, or the record's member
+  for an absent devnode) and removes nothing while that domain cannot be
+  verified; with no owner listed, only when every NHI is verifiable and
+  discovery is complete; a failed lookup or an unreadable location is never
+  an absence; an inactive member or safe eject off removes the mark even
+  from an incomplete answer. A pending departure does not hold the first
+  plug's restart back; the unit's fresh status (started, no problem) does.
+  An attempt (restart, confirmation) is forgotten only on evidence that its
+  serial is gone.
+- **Hand registration.** `XHCIMARK -register` and `-unregister` register
+  and delete the service from `system32` for a test guest before the
+  installer's hooks exist; the installer does it in a release.
+
 ## 8. Registry values, counters, the log and the snapshot
 
 Values, each `REG_DWORD` unless said, each written by every install path at
