@@ -11730,9 +11730,10 @@ static void s98_inf_log(const char *name, const char *why)
  * INF\OTHER copy has a long name ("Yeo Kheng Mengstor98.inf", the one the
  * listing holds) and the driver key's InfPath its 8.3 alias (YEOKHE~2.INF,
  * the 42-V.1 leg of 2026-10-19), so the alias is compared too. 1 named,
- * 0 not named, -1 unknown: the alias cannot be read, or it matches while
- * the other directory (INF against INF\OTHER) holds a file of that name
- * too, so the InfPath could mean either. A caller never records a copy on
+ * 0 not named, -1 unknown: the alias cannot be read, or the bare name (the
+ * copy's own or its alias) matches while the other directory (INF against
+ * INF\OTHER) holds a file of that name too, so the InfPath could mean
+ * either. A caller never records a copy on
  * -1, and the uninstall keeps it. */
 static int s98_inf_names(const char *infPath, const char *name)
 {
@@ -11750,33 +11751,37 @@ static int s98_inf_names(const char *infPath, const char *name)
     if (infPath == NULL || infPath[0] == '\0') {
         return 0;
     }
-    if (inst_eq(infPath, base) || inst_eq(infPath, name)) {
+    if (inst_eq(infPath, name)) {
         return 1;
     }
     if (envNow.Nt) {
-        return 0;
+        return inst_eq(infPath, base);
     }
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return -1;
     }
-    join(path, sizeof(path), win, "INF");
-    join(path, sizeof(path), path, name);
-    n = GetShortPathNameA(path, alias, sizeof(alias));
-    if (n == 0) {
-        e = GetLastError();
-        /* A copy that is not there has no alias for a driver key to
-         * name. */
-        return (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ?
-               0 : -1;
+    if (!inst_eq(infPath, base)) {
+        join(path, sizeof(path), win, "INF");
+        join(path, sizeof(path), path, name);
+        n = GetShortPathNameA(path, alias, sizeof(alias));
+        if (n == 0) {
+            e = GetLastError();
+            /* A copy that is not there has no alias for a driver key to
+             * name. */
+            return (e == ERROR_FILE_NOT_FOUND ||
+                    e == ERROR_PATH_NOT_FOUND) ? 0 : -1;
+        }
+        if (n >= sizeof(alias)) {
+            return -1;
+        }
+        abase = strrchr(alias, '\\');
+        abase = abase != NULL ? abase + 1 : alias;
+        if (!inst_eq(infPath, abase)) {
+            return 0;
+        }
     }
-    if (n >= sizeof(alias)) {
-        return -1;
-    }
-    abase = strrchr(alias, '\\');
-    abase = abase != NULL ? abase + 1 : alias;
-    if (!inst_eq(infPath, abase)) {
-        return 0;
-    }
+    /* 98 SE and ME: a bare name, the copy's own or its alias, is told
+     * apart only when the other directory holds no file of that name. */
     other = inst_eqn(name, "OTHER\\", 6);
     join(path, sizeof(path), win, other ? "INF" : "INF\\OTHER");
     join(path, sizeof(path), path, infPath);
