@@ -9301,6 +9301,7 @@ static int mk_delete_copy(void)
                 (unsigned long)GetLastError());
             return 0;
         }
+        flagChanged = 1;
         if (file_state(del) != 0) {
             flagRestart = 1;
         }

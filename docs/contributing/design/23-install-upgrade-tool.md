@@ -1593,9 +1593,10 @@ after it, reports what was done, and tells the user to restart and run
    that does not reach its end, a value that cannot be read, a removal
    that does not read back, or a copy that can be neither deleted nor
    scheduled for deletion fails step 0: the run stops before step 1 with
-   "steps left", keeping `xhcicm`'s service and file, the mark service's
-   registration and its records, and the next run resumes from what is
-   left. The same step runs at the end of any install or update that
+   "steps left", keeping `xhcicm`'s service and file and the mark
+   service's registration (and, when the marks themselves were not all
+   removed, its records; a copy that fails after them leaves the records
+   already deleted), and the next run resumes from what is left. The same step runs at the end of any install or update that
    leaves no `xhcicm` service (section 5.1 step 12).
 1. **The filter hosts.** For each: `xhcicm` is removed from its
    `UpperFilters` multi-string and the rest kept in order
