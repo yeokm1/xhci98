@@ -906,6 +906,14 @@ static void row_fill_combo(HWND combo, const INST_ROW *r)
             sel = item;
         }
     }
+    if (sel < 0 && !mixed) {
+        /* A value in force the list does not offer stays what it is. */
+        _snprintf(text, sizeof(text) - 1, "%lu  (set now)",
+                  (unsigned long)cur);
+        text[sizeof(text) - 1] = '\0';
+        sel = (int)SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+        SendMessageA(combo, CB_SETITEMDATA, sel, (LPARAM)cur);
+    }
     SendMessageA(combo, CB_SETCURSEL, sel < 0 ? 0 : sel, 0);
 }
 
@@ -1012,9 +1020,14 @@ static void row_make(HWND dlg, ROWCTL *rc, int row, int y, HFONT font, int id)
                          284, 17, id, font);
     if (instValues[r->Value].Hi != 0) {
         int mixed;
-        _snprintf(text, sizeof(text) - 1, "%lu",
-                  (unsigned long)row_start(r, &mixed));
-        text[sizeof(text) - 1] = '\0';
+        INST_U32 start = row_start(r, &mixed);
+        /* Empty: each controller keeps its own (the mixed state). */
+        if (mixed) {
+            text[0] = '\0';
+        } else {
+            _snprintf(text, sizeof(text) - 1, "%lu", (unsigned long)start);
+            text[sizeof(text) - 1] = '\0';
+        }
         rc->Choice = make_ctl(dlg, "EDIT", text, WS_BORDER | WS_TABSTOP |
                               ES_AUTOHSCROLL | ES_NUMBER, 8, y + 18, 60, 12,
                               id + 1, font);
@@ -1039,6 +1052,10 @@ static int row_read(const ROWCTL *rc, INST_U32 *v)
 
     if (instValues[r->Value].Hi != 0) {
         GetWindowTextA(rc->Choice, text, sizeof(text));
+        if (text[0] == '\0') {
+            *v = r->InForce;
+            return 0;
+        }
         *v = (INST_U32)strtoul(text, NULL, 10);
         if (*v < instValues[r->Value].Lo || *v > instValues[r->Value].Hi) {
             return 0;
@@ -1114,10 +1131,15 @@ static int settings_leave(HWND dlg, int page)
 
     for (i = 0; i < rp->Count; i++) {
         const INST_ROW *r = &rows[rp->R[i].Row];
+        char typed[32];
+        typed[0] = '\0';
+        if (instValues[r->Value].Hi != 0) {
+            GetWindowTextA(rp->R[i].Choice, typed, sizeof(typed));
+        }
         if (row_read(&rp->R[i], &v)) {
             choiceSet[r->Value] = 1;
             choiceVal[r->Value] = v;
-        } else if (instValues[r->Value].Hi != 0 &&
+        } else if (instValues[r->Value].Hi != 0 && typed[0] != '\0' &&
                    (v < instValues[r->Value].Lo ||
                     v > instValues[r->Value].Hi)) {
             char text[256];
@@ -1175,6 +1197,13 @@ static int adv_take(HWND dlg)
     r = &rows[advIdx[advCur]];
     if (instValues[r->Value].Hi != 0) {
         GetDlgItemTextA(dlg, IDC_A_EDIT, text, sizeof(text));
+        if (text[0] == '\0') {
+            /* The mixed state, or nothing typed: left as it is. */
+            advSet[advCur] = 0;
+            advVal[advCur] = r->InForce;
+            adv_cell(GetDlgItem(dlg, IDC_LIST), advCur);
+            return 1;
+        }
         v = (INST_U32)strtoul(text, NULL, 10);
         if (v < instValues[r->Value].Lo || v > instValues[r->Value].Hi) {
             _snprintf(text, sizeof(text) - 1, "%lu to %lu.",
@@ -1211,9 +1240,13 @@ static void adv_show(HWND dlg, int i)
     choiceSet[r->Value] = advSet[i];
     choiceVal[r->Value] = advVal[i];
     if (instValues[r->Value].Hi != 0) {
-        _snprintf(text, sizeof(text) - 1, "%lu",
-                  (unsigned long)row_start(r, &mixed));
-        text[sizeof(text) - 1] = '\0';
+        INST_U32 start = row_start(r, &mixed);
+        if (mixed) {
+            text[0] = '\0';
+        } else {
+            _snprintf(text, sizeof(text) - 1, "%lu", (unsigned long)start);
+            text[sizeof(text) - 1] = '\0';
+        }
         SetDlgItemTextA(dlg, IDC_A_EDIT, text);
         ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_SHOW);
         ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_HIDE);

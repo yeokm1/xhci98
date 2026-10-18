@@ -1035,8 +1035,8 @@ int inst_di_ended(const char *text);
  * compared), one RESULT line with a known word for the job, and END with
  * the number of lines above it. Returns the verdict (r filled), or
  * INST_DI_V_NONE. A RESULT refused is taken whatever the version line
- * says. A probe's RESULT may be any word but refused (record 27 names
- * none). */
+ * says. A probe's one RESULT word is "probed" (the helper's; record 27
+ * names none). */
 int inst_di_parse(const char *text, const char *version, int job,
                   const char *devId, const char *inf, INST_DI_RESULT *r);
 

@@ -4153,7 +4153,10 @@ int inst_di_parse(const char *text, const char *version, int job,
         return INST_DI_V_NONE;
     }
     if (job == INST_DI_PROBE) {
-        verdict = INST_DI_V_PROBED;
+        /* The probe's one verdict word (the helper writes "probed"): any
+         * other, or none, is no clean probe (record 27 section 4.2). */
+        verdict = (results == 1 && inst_eq(word, "probed")) ?
+                  INST_DI_V_PROBED : INST_DI_V_NONE;
     } else if (results == 0) {
         verdict = INST_DI_V_NONE;
     } else if (job == INST_DI_INSTALL) {

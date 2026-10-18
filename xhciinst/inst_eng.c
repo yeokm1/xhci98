@@ -303,10 +303,11 @@ static int tbTagAll;        /* package_files lists every file, whatever the
                                answer: the package's identity             */
 static void own_install(void);
 static int own_remove(void);
-static int own_remove_in(const char *dir);
+static int own_remove_in(const char *dir, int window);
+static int own_any_in(const char *dir);
 static void arp_write(int incomplete);
 static void arp_remove(void);
-static void mw_values_remove(void);
+static int mw_values_remove(void);
 static void tb_question(void);
 static int tb_decide(int *asked, int *def, int *installed);
 static void tb_apply(int include);
@@ -2207,8 +2208,9 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         }
         r->Value = v;
         r->Asked = asked;
-        r->Mask = r->Asked ? inst_value_asked_mask(v, &envNow)
-                           : inst_value_set_mask(v, &envNow);
+        /* Every value /set may give, so a setting in force is never
+         * shown as another (its caution is in the row's note). */
+        r->Mask = inst_value_set_mask(v, &envNow);
         r->MwState = mw_value(instValues[v].Name, &mwv);
         r->MwValue = (INST_U32)mwv;
         r->CmNew = cmNew;
@@ -3448,18 +3450,33 @@ static int record_dir(void)
 
 /* The uninstall's: the record deleted, and its key when nothing else is in
  * it (98 SE's RegDeleteKey would take the rest with it). */
-static void forget_dir(void)
+/* 1 when the records are gone (or were never there); 0 said, failed. */
+static int forget_dir(void)
 {
     HKEY k;
     DWORD subKeys = 0;
     DWORD values = 0;
     LONG r;
 
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0,
-                      KEY_SET_VALUE | KEY_QUERY_VALUE, &k) != ERROR_SUCCESS) {
-        return;
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0,
+                      KEY_SET_VALUE | KEY_QUERY_VALUE, &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 1;
     }
-    RegDeleteValueA(k, INST_DIR_MOVEFROM);
+    if (r != ERROR_SUCCESS) {
+        out("HKLM\\%s could not be opened (error %ld).\n", INST_DIR_KEY,
+            (long)r);
+        flagFailed = 1;
+        return 0;
+    }
+    r = RegDeleteValueA(k, INST_DIR_MOVEFROM);
+    if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
+        out("The install directory's move record could not be deleted "
+            "(error %ld).\n", (long)r);
+        flagFailed = 1;
+        RegCloseKey(k);
+        return 0;
+    }
     r = RegDeleteValueA(k, INST_DIR_VALUE);
     if (r == ERROR_SUCCESS) {
         flagChanged = 1;
@@ -3468,6 +3485,8 @@ static void forget_dir(void)
         out("The install directory's record could not be deleted (error "
             "%ld).\n", (long)r);
         flagFailed = 1;
+        RegCloseKey(k);
+        return 0;
     }
     if (RegQueryInfoKeyA(k, NULL, NULL, NULL, &subKeys, NULL, NULL, &values,
                          NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
@@ -3478,6 +3497,23 @@ static void forget_dir(void)
         RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_DIR_KEY) == ERROR_SUCCESS) {
         logonly("deleted HKLM\\%s\n", INST_DIR_KEY);
     }
+    return 1;
+}
+
+/* The record put back (the uninstall's last steps, a window that could
+ * not go after it was deleted): the entry point keeps its directory. */
+static void remember_dir(void)
+{
+    HKEY k;
+
+    if (toolDir[0] == '\0' ||
+        RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
+        return;
+    }
+    RegSetValueExA(k, INST_DIR_VALUE, 0, REG_SZ, (const BYTE *)toolDir,
+                   (DWORD)strlen(toolDir) + 1);
+    RegCloseKey(k);
 }
 
 /* Before a move (record 23 section 9.6), before anything is copied: the
@@ -3738,11 +3774,10 @@ static void old_dir_cleanup(void)
         char win[INST_PATH_CHARS];
         join(win, sizeof(win), toolDir,
              inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW));
-        ownLeft = file_exists(win, NULL) ? !own_remove_in(oldToolDir) : 1;
-        if (ownLeft) {
-            join(win, sizeof(win), oldToolDir,
-                 inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW));
-            ownLeft = file_exists(win, NULL);
+        if (file_exists(win, NULL)) {
+            ownLeft = !own_remove_in(oldToolDir, 1);
+        } else {
+            ownLeft = own_any_in(oldToolDir);
         }
     }
     toolLeft = (tray_paths_in(oldToolDir, &o) &&
@@ -4203,20 +4238,30 @@ static void finish_remove(void)
         flagSteps = 1;
         return;
     }
-    mw_values_remove();
-    if (flagFailed != failedBefore) {
+    if (!mw_values_remove()) {
         arp_write(1);
         return;
     }
     /* The installer's files of a move an earlier run could not finish
-     * too, then this directory's, the window last. */
-    if ((oldToolDir[0] != '\0' && !own_remove_in(oldToolDir)) ||
-        !own_remove()) {
+     * too, then this directory's but its window; the records; the window
+     * last, its record put back if it cannot go, so the entry always has
+     * its program and its directory. */
+    if ((oldToolDir[0] != '\0' && !own_remove_in(oldToolDir, 1)) ||
+        !own_remove_in(toolDir, 0)) {
         arp_write(1);
         flagSteps = 1;
         return;
     }
-    forget_dir();
+    if (!forget_dir()) {
+        arp_write(1);
+        return;
+    }
+    if (!own_remove_in(toolDir, 1)) {
+        remember_dir();
+        arp_write(1);
+        flagSteps = 1;
+        return;
+    }
     arp_remove();
     for (i = 0; i < 2; i++) {
         d = i == 0 ? toolDir : oldToolDir;
@@ -5976,7 +6021,10 @@ static int settle_signature(INST_U32 *sig, int *expect)
     *expect = 0;
     for (i = 0; i < devCount; i++) {
         const DEVREC *d = &devs[i];
-        if (!d->Present || d->Inf != INST_INF_XHCI || !is_controller(d)) {
+        /* This package's controllers: the INF's (an install), or those
+         * xhci98 runs (an uninstall, which reads no package). */
+        if (!d->Present || !is_controller(d) ||
+            (d->Inf != INST_INF_XHCI && !inst_eq(d->Service, "xhci98"))) {
             continue;
         }
         inst_copy(id, d->Id, sizeof(id));
@@ -7138,6 +7186,22 @@ static int steps_9x(const char *dir)
         }
         print_uas_fix(fix, "  - ");
     }
+    /* A device the helper reached that is not present now (record 26
+     * section 7): its own line, with what to do. */
+    for (i = 0; helperRan && i < stepsCount; i++) {
+        int j;
+        int seen = 0;
+        for (j = 0; j < devCount; j++) {
+            if (devs[j].Present && inst_eq(devs[j].Id, stepsId[i])) {
+                seen = 1;
+            }
+        }
+        if (!seen) {
+            any = 1;
+            out("\n%s\n  %s. Connect it again or restart Windows, then run "
+                "the installer again.\n", stepsId[i], stepsWhy[i]);
+        }
+    }
     if (!any) {
         out("  No device of this package is present.\n");
     }
@@ -7218,21 +7282,26 @@ static void open_device_manager(int needed)
 /* ======================================================================== */
 
 
-static void steps_add(const DEVREC *d, const char *why)
+static void steps_add_id(const char *id, const char *why)
 {
     int i;
 
     for (i = 0; i < stepsCount; i++) {
-        if (inst_eq(stepsId[i], d->Id)) {
+        if (inst_eq(stepsId[i], id)) {
             return;
         }
     }
     if (stepsCount >= INST_MAX_STEPDEVS) {
         return;
     }
-    inst_copy(stepsId[stepsCount], d->Id, INST_ID_CHARS);
+    inst_copy(stepsId[stepsCount], id, INST_ID_CHARS);
     inst_copy(stepsWhy[stepsCount], why, sizeof(stepsWhy[0]));
     stepsCount++;
+}
+
+static void steps_add(const DEVREC *d, const char *why)
+{
+    steps_add_id(d->Id, why);
 }
 
 /* The why of a device on the steps list, or NULL. */
@@ -7277,6 +7346,7 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
     char what[256];
     int ended = 0;
     int stuck = 0;
+    int waitFailed = 0;
     int verdict;
     const char *id = d != NULL ? d->Id : NULL;
 
@@ -7358,6 +7428,12 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
         logonly("helper: the wait ended with %lu (error %lu)\n",
                 (unsigned long)w, (unsigned long)GetLastError());
     }
+    if (w != WAIT_OBJECT_0 && !stuck) {
+        /* Only the handle's signal shows the helper ended: no further job
+         * is started, and the job is not taken as done. */
+        stuck = 1;
+        waitFailed = 1;
+    }
     CloseHandle(pi.hProcess);
     if (text != NULL) {
         logonly("helper's result file:\n%s%s", text,
@@ -7366,6 +7442,12 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
     }
     verdict = inst_di_parse(text, XHCIINST_VERSION, job, id, inf, r);
     free(text);
+    if (waitFailed) {
+        verdict = INST_DI_V_NONE;
+        r->Verdict = verdict;
+        inst_copy(r->Detail, "the wait for the helper failed",
+                  sizeof(r->Detail));
+    }
     if (stuck) {
         /* No job is started while the end of the one before cannot be
          * seen (record 27 section 4.1). */
@@ -7732,6 +7814,7 @@ static void check_results_9x(void)
             }
             out("  %s: gone after its install.\n", changedId[c]);
             flagFailed = 1;
+            steps_add_id(changedId[c], "gone after its install");
             continue;
         }
         ok = inst_eq(d->Service, instInfService[changedInf[c]]) &&
@@ -8561,11 +8644,20 @@ static int run_uninstall_nt(void)
         flagFailed = 1;
         return stop_uninstall("an INF of this package could not be removed.");
     }
+    if (!go_on()) {
+        return stop_uninstall("cancelled.");
+    }
     remove_services_and_files();
+    if (!go_on()) {
+        return stop_uninstall("cancelled.");
+    }
     copies_remove_all();
     if (flagFailed || flagSteps) {
         return stop_uninstall("a service or a file of this package could not "
                               "be removed.");
+    }
+    if (!go_on()) {
+        return stop_uninstall("cancelled.");
     }
     finish_remove();
     if (!flagChanged) {
@@ -8779,7 +8871,12 @@ static int remove_9x_devnodes(void)
         return -1;
     }
     /* Record 27 section 6's gate, before the first removal too: the tree
-     * settled and no hardware wizard open. */
+     * read and settled below this package's controllers, no hardware
+     * wizard open, and the removals' list read again after it. */
+    if (!scan()) {
+        flagFailed = 1;
+        return 0;
+    }
     out("Waiting for the devices to settle ... ");
     v = settle(INST_FIRST_WAIT_MS, 20000UL, 0UL, 0);
     if (v <= 0) {
@@ -8788,6 +8885,10 @@ static int remove_9x_devnodes(void)
     }
     out("done.\n");
     if (!gate_9x(1)) {
+        return 0;
+    }
+    if (!un9x_scan()) {
+        flagFailed = 1;
         return 0;
     }
     for (rank = 0; rank <= 5; rank++) {
@@ -8831,11 +8932,20 @@ static int remove_9x_devnodes(void)
                 flagRestart = 1;
             }
             flagChanged = 1;
-            if (enum9x_exists(u->Id) != 0) {
-                out("  %s is still recorded after its removal.\n", u->Id);
+            v = enum9x_exists(u->Id);
+            if (v != 0) {
+                /* Record 27 section 9: an entry left is an incomplete
+                 * uninstall (exit 4); an Enum that cannot be read, a
+                 * failure. */
+                out("  %s is %s after its removal.\n", u->Id,
+                    v > 0 ? "still recorded" : "unreadable");
                 step(INST_STEP_FAILED, "%s: still recorded", u->Desc[0] ?
                      u->Desc : u->Id);
-                flagFailed = 1;
+                if (v > 0) {
+                    flagSteps = 1;
+                } else {
+                    flagFailed = 1;
+                }
                 return 0;
             }
             step(INST_STEP_DONE, "%s removed", u->Desc[0] ? u->Desc : u->Id);
@@ -8928,11 +9038,14 @@ static int infs_9x(int list)
                 strcpy(pnf + n - 4, ".PNF");
             }
             SetFileAttributesA(pnf, FILE_ATTRIBUTE_NORMAL);
-            if (GetFileAttributesA(pnf) != 0xFFFFFFFFUL && !DeleteFileA(pnf)) {
-                out("%s could not be deleted (error %lu).\n", pnf,
-                    (unsigned long)GetLastError());
-                ok = 0;
-                continue;
+            if (!DeleteFileA(pnf)) {
+                e = GetLastError();
+                if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND) {
+                    out("%s could not be deleted (error %lu).\n", pnf,
+                        (unsigned long)e);
+                    ok = 0;
+                    continue;
+                }
             }
             SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
             if (!DeleteFileA(path)) {
@@ -11235,7 +11348,7 @@ static void own_install(void)
  * go keeps the window, so the Add/Remove Programs entry still has its
  * program for the next run. 1 when none is left; on NT a file in use is
  * deleted at the restart. */
-static int own_remove_in(const char *dir)
+static int own_remove_in(const char *dir, int window)
 {
     const char *names[4];
     char path[INST_PATH_CHARS];
@@ -11245,11 +11358,14 @@ static int own_remove_in(const char *dir)
     if (dir == NULL || dir[0] == '\0') {
         return 1;
     }
-    /* own_names gives the window first: it is taken last here. */
+    /* own_names gives the window first: it is taken last here, and only
+     * when asked. */
     n = own_names(names);
     names[0] = INST_DI_RESULT_NAME;
-    names[n] = inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW);
-    n++;
+    if (window) {
+        names[n] = inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW);
+        n++;
+    }
     for (i = 0; i < n; i++) {
         join(path, sizeof(path), dir, names[i]);
         if (!file_exists(path, NULL)) {
@@ -11277,7 +11393,28 @@ static int own_remove_in(const char *dir)
 
 static int own_remove(void)
 {
-    return own_remove_in(toolDir);
+    return own_remove_in(toolDir, 1);
+}
+
+/* 1 when any of the installer's files is in dir. */
+static int own_any_in(const char *dir)
+{
+    const char *names[3];
+    char path[INST_PATH_CHARS];
+    int n;
+    int i;
+
+    if (dir == NULL || dir[0] == '\0') {
+        return 0;
+    }
+    n = own_names(names);
+    for (i = 0; i < n; i++) {
+        join(path, sizeof(path), dir, names[i]);
+        if (file_exists(path, NULL)) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* One REG_SZ or REG_DWORD of the entry written when it differs. */
@@ -11412,15 +11549,24 @@ static void arp_remove(void)
 /* The machine-wide values the settings table names (record 26 section 9.3
  * step 6): each deleted by name, the key, SilentClasses, usbport's own
  * DisableSelectiveSuspend and every value the table does not name left. */
-static void mw_values_remove(void)
+/* 1 when none of them is left (or the key is absent); 0 said, failed. */
+static int mw_values_remove(void)
 {
     HKEY k;
     int v;
+    int ok = 1;
     LONG r;
 
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0,
-                      KEY_SET_VALUE | KEY_QUERY_VALUE, &k) != ERROR_SUCCESS) {
-        return;
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0,
+                      KEY_SET_VALUE | KEY_QUERY_VALUE, &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (r != ERROR_SUCCESS) {
+        out("HKLM\\%s could not be opened (error %ld): the machine-wide "
+            "values stay.\n", INST_MW_KEY, (long)r);
+        flagFailed = 1;
+        return 0;
     }
     for (v = 0; v < instValueCount; v++) {
         if (opts.List) {
@@ -11440,9 +11586,11 @@ static void mw_values_remove(void)
             out("The machine-wide %s could not be deleted (error %ld).\n",
                 instValues[v].Name, (long)r);
             flagFailed = 1;
+            ok = 0;
         }
     }
     RegCloseKey(k);
+    return ok;
 }
 
 /* ======================================================================== */

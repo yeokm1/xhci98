@@ -2516,12 +2516,20 @@ static void test_di_helper(void)
                                "RESULT installed\nEND 3\n"),
                         "3.1.0.0", INST_DI_REMOVE, "USB\\A\\1", NULL, &r) ==
               INST_DI_V_NONE, "an install's word for a removal");
-    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB probe\nRESULT ok\nEND 3\n"),
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB probe\nRESULT probed\n"
+                               "END 3\n"),
                         "3.1.0.0", INST_DI_PROBE, NULL, NULL, &r) ==
               INST_DI_V_PROBED, "the probe's file");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB probe\nRESULT ok\nEND 3\n"),
+                        "3.1.0.0", INST_DI_PROBE, NULL, NULL, &r) ==
+              INST_DI_V_NONE, "a probe's unknown word");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB probe\nRESULT failed "
+                               "ERR_DI_BAD_PATH 1024\nEND 3\n"),
+                        "3.1.0.0", INST_DI_PROBE, NULL, NULL, &r) ==
+              INST_DI_V_NONE, "a probe that failed");
     CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\nJOB probe\nEND 2\n"),
                         "3.1.0.0", INST_DI_PROBE, NULL, NULL, &r) ==
-              INST_DI_V_PROBED, "a probe with no RESULT line");
+              INST_DI_V_NONE, "a probe with no RESULT line");
     CHECK(inst_di_parse(NULL, "3.1.0.0", INST_DI_PROBE, NULL, NULL, &r) ==
           INST_DI_V_NONE, "no file");
     CHECK(inst_di_ended("XHCIDI 3.1.0.0\r\nEND 1\r\n") &&

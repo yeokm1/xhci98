@@ -52,17 +52,21 @@ from Add/Remove Programs. What changes here, section by section:
 - **The engine** (sections 3, 10 and 15): the system half moves from
   `xhciinst.c` to `xhciinst\inst_eng.c` behind the front-end table of
   record 26 section 3.2; `xhciinst.c` is the console front end. Every rule
-  of this record stays the engine's or the pure half's, and the console's
-  screens are unchanged.
+  of this record stays the engine's or the pure half's, and the split
+  itself leaves the console's screens as they were (the bullets below
+  change some of their content).
 - **Section 2**: `INSTALL.BAT` opens the window; `/console` as its first
   word runs the console tool with the rest (on 98 SE and ME the batch file
   drops the word, seven arguments after it; on NT the console tool takes
   it). The package's `tools\xhciinst\` holds the window pair beside the
-  console pair, and record 27's helper `XHCIDI.EXE` for 98 SE and ME.
+  console pair, and record 27's helper `XHCIDI.EXE` for 98 SE and ME
+  (staged by the helper's own task, 42-A.1; a package without it keeps
+  the printed steps).
 - **Section 3**: `build.cmd` builds the four executables (the window with
-  the static multithreaded runtime, `/SUBSYSTEM:WINDOWS,4.0`; its import
-  gate the seven modules of record 26 section 4); the helper has its own
-  build (record 27 section 3).
+  the static multithreaded runtime, `/SUBSYSTEM:WINDOWS,4.0` for
+  `XHCIWIZ.EXE` and `5.02` for `XHCIWZ64.EXE`; its import gate the seven
+  modules of record 26 section 4); the helper has its own build (record
+  27 section 3).
 - **Section 4.2**: the package-layout refusal holds for an install and an
   update; the uninstall needs no package (W12).
 - **Section 5.5**: the routine's `hwndParent` is the front end's window
@@ -74,8 +78,10 @@ from Add/Remove Programs. What changes here, section by section:
   interface), each pass behind the gate (the tree settled, and the user's
   word that no hardware wizard is open; `/yes` asks no word), each device
   read back afterwards (record 26 section 8). Section 6.4's printed steps
-  stay for a device the helper could not install, and for every device
-  when the package has no helper or its probe fails. "Never drives
+  stay for a device the helper could not install (with a line of its own
+  for one gone after its install), and in their old form - the controller
+  and an updated root hub, the wizards doing the rest - when the package
+  has no helper or its probe fails. "Never drives
   `SETUPX`" above now reads: never through anything but record 27's
   documented calls.
 - **Section 7.1**: `/from <dir>` (the uninstall's relaunch), `/console`
@@ -94,14 +100,18 @@ from Add/Remove Programs. What changes here, section by section:
   entry (record 26 section 9.1) once the installer's own files are in the
   install directory (record 26 section 6.2); an uninstall started from the
   install directory relaunches a temporary copy with `/from` (W6); 98 SE
-  and ME remove each package entry through the helper, children first, an
-  entry left stopping the destructive steps, then `DevicePath`, the copy,
-  the INF copies and the driver files (record 26 section 9.3 step 4;
-  section 9.4's printed steps stay only where the helper cannot run); the
-  machine-wide values the table names are deleted; the tools, the
-  installer's files, the records, the entry and the directory go last,
-  only when nothing is left for a later run, and an uninstall that stopped
-  keeps its entry, named "(incomplete: run again)" (W14).
+  and ME remove each package entry through the helper, children first,
+  behind the settle and the gate, an entry left stopping the destructive
+  steps, a fresh reading finding none before `DevicePath`, the copy, the
+  INF copies and the driver files go (record 26 section 9.3 step 4); where
+  the helper cannot run, nothing goes: the devices are removed in Device
+  Manager by hand and the uninstall run again, which, finding none, goes
+  on; the machine-wide values the table names are deleted; the tools, the
+  installer's files (the window last), the records, the entry and the
+  directory go last, only when nothing is left for a later run, and an
+  uninstall that stopped, or could not remove one of these, keeps its
+  entry, named "(incomplete: run again)", with its program and records
+  (W14).
 - **Not in this revision**: the bundled Stor98 component (record 26
   sections 5.6, 6.3 and 6.4) and the safe-removal mark service (record 21
   section 7.4 revision 3, task 42-A.5); sections 4.4 and 9.2 stay as they
