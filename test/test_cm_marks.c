@@ -116,6 +116,45 @@ static void test_sync(void)
     CHECK_EQ(countKind(0), 0, "member 1's entries buried");
 }
 
+/* An entry buried while its member was inactive and made again from the
+ * same snapshot takes back the location its bridge kept (the 7 x86 leg of
+ * 2026-10-19: no attachment was left to read it again). */
+static void test_relocate(void)
+{
+    PVOID snap[2];
+    ULONG locd[2];
+    ULONG bus[2];
+    ULONG addr[2];
+    PCM_MARK e;
+
+    CmMarksReset(&t);
+    snap[0] = P(60);
+    snap[1] = P(61);
+    CmMarksBegin(&t);
+    (VOID)CmMarksSync(&t, 0, 0x0028, snap, 2, FALSE, TRUE, 10);
+    CmMarksBegin(&t);
+    (VOID)CmMarksSync(&t, 0, 0x0028, snap, 2, FALSE, FALSE, 20);
+    CHECK_EQ(countKind(0), 0, "the inactive member's entries buried");
+    CmMarksBegin(&t);
+    (VOID)CmMarksSync(&t, 0, 0x0028, snap, 2, FALSE, TRUE, 30);
+    e = CmMarksFind(&t, P(60));
+    CHECK(e != NULL && (e->Flags & CM_QM_EF_LOCATED) == 0, "made again with no location");
+    locd[0] = 1;
+    bus[0] = 1;
+    addr[0] = 0x00010000UL;
+    locd[1] = 0;
+    bus[1] = 0;
+    addr[1] = 0;
+    CHECK(CmMarksLocate(&t, 0, snap, locd, bus, addr, 2, 40), "the kept location is taken back");
+    CHECK(e->Flags & CM_QM_EF_LOCATED, "located");
+    CHECK_EQ(e->Bus, 1, "its bus");
+    CHECK_EQ(e->Address, 0x00010000UL, "its address");
+    e = CmMarksFind(&t, P(61));
+    CHECK(e != NULL && (e->Flags & CM_QM_EF_LOCATED) == 0, "a PDO with nothing kept stays unlocated");
+    CHECK(!CmMarksLocate(&t, 0, snap, locd, bus, addr, 2, 50), "nothing more to take");
+    CHECK(!CmMarksLocate(&t, 1, snap, locd, bus, addr, 2, 50), "another member's entries are not touched");
+}
+
 static void test_tombs(void)
 {
     PVOID snap[1];
@@ -293,6 +332,7 @@ static void test_confirm(void)
 int main(void)
 {
     test_sync();
+    test_relocate();
     test_tombs();
     test_build();
     test_confirm();
