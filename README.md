@@ -29,7 +29,7 @@ The same enclosure on Windows 98 SE with the same drivers: CrystalDiskMark seque
 
 <img src="images/xhci98-xhcitr-and-devmgr.png" width="800">
 
-The xHCI98 USB Tree beside Device Manager on Windows 98 SE: a USB4 host router driven by `xhcicm.sys`, an ASMedia ASM2464 NVMe enclosure on it with a PCIe tunnel up at 40 Gbit/s, and the NVMe disk under Stor98. Emulated USB4 hardware in QEMU.
+The xHCI98 USB Tree and Device Manager on Windows 98 SE, with an ASMedia USB4 NVMe enclosure on a USB4 host. Emulated hardware in QEMU.
 
 - Video by [Omores](https://www.youtube.com/@O_mores) featuring this driver in its earlier USB 2.0 days:
 
