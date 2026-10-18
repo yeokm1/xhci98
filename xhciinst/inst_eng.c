@@ -338,8 +338,7 @@ static char s98TunId[INST_S98_MAX_DEV][INST_ID_CHARS];
 static int s98TunCount;     /* NT: updates of drives behind a tunnel port  */
 static char s98NewId[INST_S98_MAX_DEV][INST_ID_CHARS];
 static int s98NewCount;     /* devices recorded in the step just done      */
-static char s98RemovedId[INST_S98_MAX_DEV][INST_ID_CHARS];
-static int s98RemovedCount; /* the uninstall's, until verified gone        */
+
 static char *s98OemNames;   /* NT: %windir%\inf\oem*.inf before staging    */
 static int s98OemOk;
 static int s98Baseline;     /* the baseline was taken in this run          */
@@ -13034,7 +13033,6 @@ static int s98_un_devices(HDEVINFO set)
     DEVREC tmp;
     INST_DI_RESULT res;
 
-    s98RemovedCount = 0;
     r = s98_rec_there();
     if (r <= 0) {
         if (r < 0) {
@@ -13112,16 +13110,7 @@ static int s98_un_devices(HDEVINFO set)
             }
         }
         /* The record's entry stays until s98_un_verify has read every
-         * removed device gone after the other removals. */
-        inst_copy(s98RemovedId[s98RemovedCount++], id, INST_ID_CHARS);
-        if (s98RemovedCount >= INST_S98_MAX_DEV && !opts.List) {
-            /* A full batch: verified and retired, then the record read
-             * again from its start. */
-            if (!s98_un_verify()) {
-                return 0;
-            }
-            i = (DWORD)-1;
-        }
+         * recorded device gone after the other removals. */
     }
     if (r < 0) {
         out("  The record's devices cannot be read.\n");
@@ -13137,41 +13126,56 @@ static int s98_un_devices(HDEVINFO set)
  * made it again) or cannot be read: the record keeps it. */
 static int s98_un_verify(void)
 {
-    int i;
+    char id[INST_ID_CHARS];
+    DWORD i;
     int j;
+    int r;
     int back;
 
-    if (opts.List || s98RemovedCount == 0) {
+    if (opts.List) {
         return 1;
+    }
+    r = s98_rec_there();
+    if (r <= 0) {
+        return r == 0;
     }
     if (envNow.Nt && !scan()) {
         flagFailed = 1;
         return 0;
     }
-    for (i = 0; i < s98RemovedCount; i++) {
+    /* Every recorded device read gone first; only then is the record
+     * emptied, so one Windows made again keeps every entry. */
+    for (i = 0; (r = s98_rec_enum("Devices", i, id, sizeof(id))) > 0; i++) {
         back = 0;
         if (envNow.Nt) {
             for (j = 0; j < devCount; j++) {
-                if (inst_eq(devs[j].Id, s98RemovedId[i])) {
+                if (inst_eq(devs[j].Id, id)) {
                     back = 1;
                 }
             }
         } else {
-            back = enum9x_exists(s98RemovedId[i]) != 0;
+            back = enum9x_exists(id) != 0;
         }
         if (back) {
-            out("Stor98's device %s is recorded again after its removal: run "
-                "the uninstall\nagain after a restart.\n", s98RemovedId[i]);
+            out("Stor98's device %s is still or again recorded after its "
+                "removal: run the\nuninstall again after a restart.\n", id);
             flagSteps = 1;
             return 0;
         }
     }
-    for (i = 0; i < s98RemovedCount; i++) {
-        if (!s98_rec_del("Devices", s98RemovedId[i])) {
+    if (r < 0) {
+        flagFailed = 1;
+        return 0;
+    }
+    while ((r = s98_rec_enum("Devices", 0, id, sizeof(id))) > 0) {
+        if (!s98_rec_del("Devices", id)) {
             return 0;
         }
     }
-    s98RemovedCount = 0;
+    if (r < 0) {
+        flagFailed = 1;
+        return 0;
+    }
     return 1;
 }
 
