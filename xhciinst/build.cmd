@@ -61,11 +61,11 @@ rc /fo xhciinst.res xhciinst.rc
 if errorlevel 1 exit /b 1
 cl /nologo /W3 /WX /O2 /DXHCI_HOST_TEST /c /Foinst_psw.obj ..\src\xhci_psw.c
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /FeXHCIINST.EXE xhciinst.c inst_core.c inst_psw.obj xhciinst.res advapi32.lib /link /SUBSYSTEM:CONSOLE
+cl /nologo /W3 /WX /O2 /FeXHCIINST.EXE xhciinst.c inst_eng.c inst_core.c inst_psw.obj xhciinst.res advapi32.lib /link /SUBSYSTEM:CONSOLE
 if errorlevel 1 exit /b 1
 if not exist XHCIINST.EXE exit /b 1
 endlocal
-del /q xhciinst.obj inst_core.obj inst_psw.obj xhciinst.res 2>nul
+del /q xhciinst.obj inst_eng.obj inst_core.obj inst_psw.obj xhciinst.res 2>nul
 echo Built XHCIINST.EXE
 
 if "%WANT64%"=="0" goto done
@@ -79,11 +79,11 @@ rc /i "%WDK71%\inc\api" /fo xhciin64.res xhciinst.rc
 if errorlevel 1 exit /b 1
 cl /nologo /W3 /WX /O2 /MT /DXHCI_HOST_TEST /c /Foinst_psw64.obj ..\src\xhci_psw.c
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCIIN64.EXE xhciinst.c inst_core.c inst_psw64.obj xhciin64.res advapi32.lib /link /SUBSYSTEM:CONSOLE,5.02 /MACHINE:X64
+cl /nologo /W3 /WX /O2 /MT /FeXHCIIN64.EXE xhciinst.c inst_eng.c inst_core.c inst_psw64.obj xhciin64.res advapi32.lib /link /SUBSYSTEM:CONSOLE,5.02 /MACHINE:X64
 if errorlevel 1 exit /b 1
 if not exist XHCIIN64.EXE exit /b 1
 endlocal
-del /q xhciinst.obj inst_core.obj inst_psw64.obj xhciin64.res 2>nul
+del /q xhciinst.obj inst_eng.obj inst_core.obj inst_psw64.obj xhciin64.res 2>nul
 echo Built XHCIIN64.EXE
 
 :done

@@ -345,10 +345,28 @@ static void test_cm_infs(void)
         if (instValues[i].Inf != INST_INF_CM) {
             continue;
         }
-        CHECK(inst_inf_addreg_default(cm, instValues[i].Name, &d),
-              instValues[i].Name);
-        CHECK(inst_inf_addreg_default(c64, instValues[i].Name, &d64) &&
-                  d64 == d, "the amd64 INF writes the same default");
+        if (instValues[i].NoInf) {
+            /* Not written by the INF (record 26 section 5.5): the table's
+             * default, the driver's built-in one, is an allowed value, and
+             * neither INF writes it. */
+            CHECK(!inst_inf_addreg_default(cm, instValues[i].Name, &d) &&
+                  !inst_inf_addreg_default(c64, instValues[i].Name, &d64),
+                  "a NoInf row is written by no INF");
+            d = instValues[i].Def;
+        } else {
+            CHECK(inst_inf_addreg_default(cm, instValues[i].Name, &d),
+                  instValues[i].Name);
+            CHECK(inst_inf_addreg_default(c64, instValues[i].Name, &d64) &&
+                      d64 == d, "the amd64 INF writes the same default");
+        }
+        CHECK(inst_value_default(i, cm, &d64) && d64 == d,
+              "inst_value_default gives the same default");
+        if (instValues[i].Hi != 0) {
+            /* A range row: never asked, its default inside the range. */
+            CHECK(instValues[i].Asked == 0 && d >= instValues[i].Lo &&
+                  d <= instValues[i].Hi, "the cm default is in its range");
+            continue;
+        }
         /* A never-asked row (Asked 0) offers its default through /set. */
         offered = instValues[i].Asked != 0 ? instValues[i].Asked
                                            : instValues[i].Settable;
@@ -2081,7 +2099,8 @@ static void test_questions(void)
                       "a choice has a meaning only where the value is allowed");
             }
         }
-        CHECK(named > 0, "every value names its choices");
+        CHECK(named > 0 || instValues[i].Hi != 0,
+              "every value names its choices, or is a range");
         CHECK(strchr(instValues[i].Meaning, '(') == NULL,
               "the meaning carries no choice list");
         CHECK(strchr(instValues[i].Meaning, '\n') == NULL &&
@@ -2198,23 +2217,26 @@ static void test_questions(void)
                         "open it", "not now", 1);
     CHECK(strstr(out, "Enter for [Y]: ") != NULL, "Enter for [Y]");
     /* The install directory's question. */
-    inst_dir_question(out, sizeof(out), "XHCITR.EXE", NULL, NULL,
+    inst_dir_question(out, sizeof(out), "XHCITR.EXE", NULL, NULL, NULL,
                       "C:\\XHCI98", 1, 0);
     CHECK(strstr(out, "Install directory for the xHCI98 tools\n") == out &&
           strstr(out, "  XHCITR.EXE  the xHCI98 USB Tree") != NULL &&
           strstr(out, "8 characters") == NULL &&
           strcmp(out + strlen(out) - 25, "  Enter for [C:\\XHCI98]: ") == 0,
           "NT: the tool, then Enter for [C:\\XHCI98]");
-    inst_dir_question(out, sizeof(out), "XHCITR.EXE", "*.INF, *.SYS",
+    inst_dir_question(out, sizeof(out), "XHCITR.EXE", "XHCIWIZ.EXE",
+                      "*.INF, *.SYS",
                       "C:\\WINDOWS\\XHCI98", "C:\\WINDOWS\\XHCI98", 0, 0);
     CHECK(strstr(out, "  *.INF, *.SYS  this package's drivers, for the hardware "
                       "wizards\n") != NULL &&
           strstr(out, "  now: C:\\WINDOWS\\XHCI98\n") != NULL &&
+          strstr(out, "  XHCIWIZ.EXE   this installer, which Add/Remove "
+                      "Programs runs to remove it\n") != NULL &&
           strstr(out, "no spaces") != NULL &&
           strstr(out, "Enter for [C:\\WINDOWS\\XHCI98]: ") != NULL,
           "98: the copy, where it is now, the 8.3 rule");
     CHECK(fits(out), "the directory question fits");
-    inst_dir_question(out, sizeof(out), "XHCITR64.EXE", NULL, NULL,
+    inst_dir_question(out, sizeof(out), "XHCITR64.EXE", NULL, NULL, NULL,
                       "D:\\XHCI98", 1, 1);
     CHECK(strstr(out, "/list: not asked; Enter would give [D:\\XHCI98].\n")
           != NULL, "the directory under /list");
