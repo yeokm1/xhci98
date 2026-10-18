@@ -2982,6 +2982,10 @@ static void test_s98(void)
           "decimal only");
     CHECK(!inst_s98_check(INST_S98_GONE, 0, "5000", w, sizeof(w), &why),
           "an NT-only row refused on 98 SE and ME");
+    CHECK(!inst_s98_check(INST_S98_POLLIDLEMS, 1, "   ", w, sizeof(w),
+                          &why) &&
+          !inst_s98_check(INST_S98_WRITETHROUGH, 1, " ", w, sizeof(w), &why),
+          "spaces alone are no value, not 0");
     CHECK(inst_s98_check(INST_S98_IDLE, 1, "0010", w, sizeof(w), &why) &&
           strcmp(w, "10") == 0, "a number written canonically");
     CHECK(inst_s98_check(INST_S98_IDLE, 1, "4294967295", w, sizeof(w),

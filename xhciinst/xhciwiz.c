@@ -1560,6 +1560,19 @@ static int s98_adv_take(HWND dlg)
     i = s98AdvRow[s98AdvCur];
     inst_eng_s98_row(i, &r);
     GetDlgItemTextA(dlg, IDC_A_EDIT, text, sizeof(text));
+    {
+        /* Spaces alone are nothing typed. */
+        size_t a = 0;
+        size_t b = strlen(text);
+        while (text[a] == ' ' || text[a] == '\t') {
+            a++;
+        }
+        while (b > a && (text[b - 1] == ' ' || text[b - 1] == '\t')) {
+            b--;
+        }
+        memmove(text, text + a, b - a);
+        text[b - a] = '\0';
+    }
     if (text[0] == '\0' || (r.State > 0 && strcmp(text, r.Now) == 0)) {
         /* Empty, or the value set now: as it is, nothing written. */
         s98AdvSet[s98AdvCur] = 0;
@@ -1740,10 +1753,13 @@ static void s98_unused_buttons(void)
     buttons(PSWIZB_BACK | (s98_unused_all() ? PSWIZB_NEXT : 0));
 }
 
-/* The box that speaks for the n-th drive. */
+/* The box that speaks for the n-th drive: its own, or with more drives
+ * than boxes the last box for every drive from it on. */
+static int s98UnusedMany;
+
 static int s98_unused_box(int n)
 {
-    return n < WIZ_S98_UPD - 1 ? n : WIZ_S98_UPD - 1;
+    return (n < WIZ_S98_UPD - 1 || !s98UnusedMany) ? n : WIZ_S98_UPD - 1;
 }
 
 static void s98_unused_make(HWND dlg)
@@ -1765,12 +1781,16 @@ static void s98_unused_make(HWND dlg)
                     inst_eng_s98_update(total, &id) != NULL; total++) {
         inst_copy(s98UnusedId[total], id, sizeof(s98UnusedId[total]));
     }
+    /* A drive past the list gets no box: it is not updated in this run
+     * (the engine updates only a drive confirmed). */
     s98UnusedIds = total;
+    s98UnusedMany = total > WIZ_S98_UPD;
     for (n = 0; n < total && s98UnusedCount < WIZ_S98_UPD; n++) {
         desc = inst_eng_s98_update(n, &id);
-        if (s98_unused_box(n) != n) {
-            _snprintf(text, sizeof(text) - 1, "Nothing is using the other %d "
-                      "drives listed above", total - n);
+        if (s98_unused_box(n) != n || (s98UnusedMany &&
+                                       n == WIZ_S98_UPD - 1)) {
+            _snprintf(text, sizeof(text) - 1, "Nothing is using any of the "
+                      "other %d drives listed above", total - n);
         } else {
             _snprintf(text, sizeof(text) - 1, "Nothing is using %s",
                       desc != NULL ? desc : "this drive");

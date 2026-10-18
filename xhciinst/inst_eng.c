@@ -335,6 +335,13 @@ static S98BASE *s98Base;
 static int s98BaseCount;
 static char s98TunId[INST_S98_MAX_DEV][INST_ID_CHARS];
 static int s98TunCount;     /* NT: updates of drives behind a tunnel port  */
+static int s98TunFull;      /* ... more than the list holds                */
+static char s98NewId[INST_S98_MAX_DEV][INST_ID_CHARS];
+static int s98NewCount;     /* devices recorded in the step just done      */
+static char s98RemovedId[INST_S98_MAX_DEV][INST_ID_CHARS];
+static int s98RemovedCount; /* the uninstall's, until verified gone        */
+static char *s98OemNames;   /* NT: %windir%\inf\oem*.inf before staging    */
+static int s98OemOk;
 static int s98Baseline;     /* the baseline was taken in this run          */
 static int s98Pre;          /* the record's PreExisting                    */
 static int s98Cold;         /* 98 SE and ME: a Stor98 device was updated   */
@@ -376,8 +383,11 @@ static int s98_base_9x(void);
 static int s98_param_read(char *param, size_t cap);
 static void s98_tunnel_mark(void);
 static int s98_un_devices(HDEVINFO set);
+static int s98_un_verify(void);
 static int s98_un_rest(void);
-static int s98_rec_devices_any(void);
+static int s98_rec_devices_any(int present);
+static void s98_oem_before(void);
+static int s98_oem_was(const char *name);
 static int s98_reread_9x(const char *id, char *infPath, size_t cap);
 static int s98_update_9x(const DEVREC *d);
 static int s98_ok(const char *id);
@@ -5830,6 +5840,9 @@ static int stage_nt(void)
          * call reuses it, and that is no change (an unchanged rerun says
          * "No changes were made."). */
         had = identical_oem(k, before, sizeof(before));
+        if (k == INST_INF_S98) {
+            s98_oem_before();
+        }
         logonly("SetupCopyOEMInf(\"%s\", \"%s\", SPOST_PATH, 0)\n", path, media);
         if (!api.CopyOem(path, media, SPOST_PATH, 0, dest, sizeof(dest), NULL,
                          &component)) {
@@ -5849,14 +5862,19 @@ static int stage_nt(void)
             out("Staged %s as %s.\n", instInfFile[k],
                 component ? component : dest);
             flagChanged = 1;
-            if (k == INST_INF_S98 && s98Baseline) {
-                /* A new copy the setup engine made for this installer
-                 * (record 26 section 6.3); one it answered with an INF
-                 * already in the store was there before and is left. */
-                const char *nm = component ? component : dest;
-                const char *base = strrchr(nm, '\\');
-                s98_rec_text("Staged", base != NULL ? base + 1 : nm,
-                             s98VersionText);
+        }
+        if (k == INST_INF_S98 && s98Baseline) {
+            /* A new copy the setup engine made for this installer (record
+             * 26 section 6.3): a name not in %windir%\inf before the call;
+             * one it answered with an INF already there is left. */
+            const char *nm = component ? component : dest;
+            const char *base = strrchr(nm, '\\');
+            base = base != NULL ? base + 1 : nm;
+            if (s98_oem_was(base)) {
+                logonly("stor98: %s was in the store before: not recorded\n",
+                        base);
+            } else {
+                s98_rec_text("Staged", base, s98VersionText);
             }
         }
         if (restagePending[k]) {
@@ -7202,7 +7220,9 @@ static int run_install_nt(void)
             if (!go_on()) {
                 goto stopped;
             }
-            if (k == INST_INF_S98 && pass == 0) {
+            if (k == INST_INF_S98) {
+                /* Before every Stor98 pass: a drive a settle brought is
+                 * read too. */
                 s98_tunnel_mark();
             }
             install_inf(k, k == INST_INF_XHCI ? 0 : -1);
@@ -7993,13 +8013,15 @@ static int helper_install(DEVREC *d)
         return 1;
     }
     s98Update = d->Inf == INST_INF_S98 && s98_update_9x(d);
-    if (d->Inf == INST_INF_S98) {
-        s98_inf_sync();
-    }
+    /* Every helper install is bracketed by the INF listings (record 26
+     * section 6.3): a copy made in it is that device's step. */
+    s98_inf_sync();
     v = helper_job(INST_DI_INSTALL, d, inf, force, &r);
     c = note_changed(d, 1);
     d->Done = 1;
-    if (d->Inf == INST_INF_S98) {
+    if (d->Inf != INST_INF_S98) {
+        s98_inf_after(NULL, 0);
+    } else {
         char infPath[64];
         s98_reread_9x(d->Id, infPath, sizeof(infPath));
         s98_inf_after(infPath, 0);
@@ -8142,6 +8164,7 @@ static void helper_installs(void)
             if (!first) {
                 /* The settle, and the tree read again: a wizard may have
                  * installed some of them already. */
+                s98_inf_sync();
                 out("Waiting for the devices to settle ... ");
                 i = settle(INST_INSTALL_WAIT_MS, 20000UL, 20000UL, 0);
                 if (i <= 0) {
@@ -8175,6 +8198,7 @@ static void helper_installs(void)
         }
     }
     if (!first) {
+        s98_inf_sync();
         out("Waiting for the devices to settle ... ");
         i = settle(INST_INSTALL_WAIT_MS, 20000UL, 20000UL, 0);
         if (i <= 0) {
@@ -9003,7 +9027,7 @@ static int run_uninstall_nt(void)
      * NVMe device's parent port, a filter host that stays (record 26
      * section 9.3 step 3); then its staged INF and, when nothing else
      * depends on them, its service and files. */
-    if (!s98_un_devices(set) || !s98_un_rest()) {
+    if (!s98_un_devices(set) || !s98_un_verify() || !s98_un_rest()) {
         api.Destroy(set);
         if (!flagSteps && !flagRestart) {
             flagFailed = 1;
@@ -9303,8 +9327,10 @@ static int remove_9x_devnodes(void)
         flagFailed = 1;
         return 0;
     }
-    if (un9xCount == 0 && !s98_rec_devices_any()) {
-        return 1;
+    if (un9xCount == 0 && !s98_rec_devices_any(1)) {
+        /* Nothing left that needs the helper; recorded Stor98 devices
+         * already gone are cleared without it. */
+        return s98_un_devices(NULL) && s98_un_verify();
     }
     out("The devices of this package, present or not:\n");
     for (i = 0; i < un9xCount; i++) {
@@ -9411,6 +9437,11 @@ static int remove_9x_devnodes(void)
      * run's removals unconfirmed (record 27 section 4.1). */
     if (helperState < 0) {
         flagSteps = 1;
+        return 0;
+    }
+    /* Stor98's removed devices, read again after every other removal:
+     * one Windows made again stops the uninstall with its record kept. */
+    if (!s98_un_verify()) {
         return 0;
     }
     /* Windows may have made an entry again while the others went: a
@@ -11553,7 +11584,7 @@ static int s98_baseline(void)
 
 /* ---- 98 SE and ME: the setup engine's INF copies ------------------------- */
 
-static int s98_inf_dir(int slot, const char *rel, int hash)
+static int s98_inf_dir(int slot, const char *rel, int all)
 {
     char win[INST_PATH_CHARS];
     char pattern[INST_PATH_CHARS];
@@ -11562,7 +11593,8 @@ static int s98_inf_dir(int slot, const char *rel, int hash)
     HANDLE h;
     DWORD e;
     S98INF *x;
-    int p;
+    char *buf;
+    DWORD n;
 
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return 0;
@@ -11591,22 +11623,23 @@ static int s98_inf_dir(int slot, const char *rel, int hash)
         x->Size = fd.nFileSizeLow;
         x->Write = fd.ftLastWriteTime;
         x->Hash[0] = '\0';
-        /* The listing's hashes: every file at the baseline; afterwards a
-         * file new or changed since the slot before (its own line). */
-        p = slot == 0 ? 1 : 0;
-        if (hash || s98_inf_changed(p, x)) {
-            char *buf;
-            DWORD n = 0;
-            join(path, sizeof(path), win, rel);
-            join(path, sizeof(path), path, fd.cFileName);
-            buf = read_file(path, &n);
-            if (buf != NULL) {
-                inst_sha256((const unsigned char *)buf, n, x->Hash);
-                free(buf);
-            }
+        /* Every listing is whole: each file's name, size and SHA-256. The
+         * log holds the baseline's every line, and afterwards each file
+         * that is new or whose hash changed since the listing before. */
+        join(path, sizeof(path), win, rel);
+        join(path, sizeof(path), path, fd.cFileName);
+        n = 0;
+        buf = read_file(path, &n);
+        if (buf == NULL) {
+            FindClose(h);
+            logonly("stor98 INF listing: INF\\%s cannot be read\n", x->Name);
+            return 0;
+        }
+        inst_sha256((const unsigned char *)buf, n, x->Hash);
+        free(buf);
+        if (all || s98_inf_changed(slot == 0 ? 1 : 0, x)) {
             logonly("stor98 INF listing: INF\\%s %lu %s\n", x->Name,
-                    (unsigned long)x->Size, x->Hash[0] ? x->Hash :
-                    "(unreadable)");
+                    (unsigned long)x->Size, x->Hash);
         }
     } while (FindNextFileA(h, &fd));
     e = GetLastError();
@@ -11646,8 +11679,7 @@ static int s98_inf_in(int slot, const char *name)
     return 0;
 }
 
-/* 1 when x is not in the other slot as it is (new, or its size or time
- * changed). */
+/* 1 when x is not in the other slot with the same size and hash. */
 static int s98_inf_changed(int other, const S98INF *x)
 {
     int i;
@@ -11658,9 +11690,7 @@ static int s98_inf_changed(int other, const S98INF *x)
     for (i = 0; i < s98InfCount[other]; i++) {
         const S98INF *y = &s98Inf[other][i];
         if (inst_eq(y->Name, x->Name)) {
-            return y->Size != x->Size ||
-                   y->Write.dwLowDateTime != x->Write.dwLowDateTime ||
-                   y->Write.dwHighDateTime != x->Write.dwHighDateTime;
+            return y->Size != x->Size || strcmp(y->Hash, x->Hash) != 0;
         }
     }
     return 1;
@@ -11705,14 +11735,85 @@ static int s98_inf_names(const char *infPath, const char *name)
 static int s98_inf_named_by_recorded(const char *name)
 {
     int i;
+    int j;
 
     for (i = 0; i < devCount; i++) {
         const DEVREC *d = &devs[i];
-        if (d->Present && d->Inf == INST_INF_S98 && d->InfPathState > 0 &&
-            s98_inf_names(d->InfPath, name) &&
-            s98_rec_has("Devices", d->Id) == 1) {
+        if (!d->Present || d->Inf != INST_INF_S98 || d->InfPathState <= 0 ||
+            !s98_inf_names(d->InfPath, name)) {
+            continue;
+        }
+        for (j = 0; j < s98NewCount; j++) {
+            if (inst_eq(s98NewId[j], d->Id)) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* NT: the names in %windir%\inf before SetupCopyOEMInf, so a name it
+ * returns can be told new from one it found there. */
+static void s98_oem_before(void)
+{
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    size_t n = 0;
+    size_t len;
+
+    free(s98OemNames);
+    s98OemNames = NULL;
+    s98OemOk = 0;
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return;
+    }
+    join(pattern, sizeof(pattern), win, "inf\\oem*.inf");
+    s98OemNames = (char *)malloc(65536);
+    if (s98OemNames == NULL) {
+        return;
+    }
+    s98OemNames[0] = '\0';
+    h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        s98OemOk = GetLastError() == ERROR_FILE_NOT_FOUND;
+        return;
+    }
+    do {
+        len = strlen(fd.cFileName);
+        if (n + len + 2 >= 65536) {
+            FindClose(h);
+            return;
+        }
+        memcpy(s98OemNames + n, fd.cFileName, len);
+        n += len;
+        s98OemNames[n++] = '\n';
+        s98OemNames[n] = '\0';
+    } while (FindNextFileA(h, &fd));
+    s98OemOk = GetLastError() == ERROR_NO_MORE_FILES;
+    FindClose(h);
+}
+
+/* 1 when the name was there before the call, or that cannot be known (it
+ * is then never recorded as this installer's). */
+static int s98_oem_was(const char *name)
+{
+    const char *p;
+    size_t len = strlen(name);
+
+    if (!s98OemOk || s98OemNames == NULL) {
+        return 1;
+    }
+    for (p = s98OemNames; *p != '\0';) {
+        const char *e = strchr(p, '\n');
+        if (e == NULL) {
+            break;
+        }
+        if ((size_t)(e - p) == len && inst_eqn(p, name, len)) {
             return 1;
         }
+        p = e + 1;
     }
     return 0;
 }
@@ -11906,7 +12007,11 @@ static void s98_record_device(const DEVREC *d, const char *how)
     }
     out("Stor98 now runs %s: recorded as this installer's (%s).\n",
         d->Desc[0] ? d->Desc : d->Id, how);
-    s98_rec_text("Devices", d->Id, s98VersionText);
+    if (s98_rec_text("Devices", d->Id, s98VersionText) &&
+        s98NewCount < INST_S98_MAX_DEV) {
+        /* This step's: a copy made in it may be named by it. */
+        inst_copy(s98NewId[s98NewCount++], d->Id, INST_ID_CHARS);
+    }
 }
 
 /* After the installs and every settle: each present device of stor98.inf
@@ -11921,6 +12026,7 @@ static void s98_record_devices(void)
     int after;
     int staged;
 
+    s98NewCount = 0;
     if (!s98Include || !s98Baseline || opts.List) {
         return;
     }
@@ -12112,19 +12218,36 @@ static int s98_behind_tunnel(const char *id)
 static void s98_tunnel_mark(void)
 {
     int i;
+    int j;
+    int known;
 
-    s98TunCount = 0;
     if (!envNow.Nt || !s98Include) {
         return;
     }
     for (i = 0; i < devCount; i++) {
         const DEVREC *d = &devs[i];
-        if (d->Present && d->Inf == INST_INF_S98 && d->Runs && !d->Refused &&
-            inst_eq(d->Service, "stor98") && s98_behind_tunnel(d->Id) &&
-            s98TunCount < INST_S98_MAX_DEV) {
-            inst_copy(s98TunId[s98TunCount++], d->Id, INST_ID_CHARS);
-            logonly("stor98: %s is behind a tunnel port\n", d->Id);
+        if (!d->Present || d->Inf != INST_INF_S98 || !d->Runs || d->Refused ||
+            d->Done || !inst_eq(d->Service, "stor98") ||
+            !s98_behind_tunnel(d->Id)) {
+            continue;
         }
+        known = 0;
+        for (j = 0; j < s98TunCount; j++) {
+            if (inst_eq(s98TunId[j], d->Id)) {
+                known = 1;
+            }
+        }
+        if (known) {
+            continue;
+        }
+        if (s98TunCount >= INST_S98_MAX_DEV) {
+            /* Full: every further update awaits its reconnection, the
+             * safe side. */
+            s98TunFull = 1;
+            continue;
+        }
+        inst_copy(s98TunId[s98TunCount++], d->Id, INST_ID_CHARS);
+        logonly("stor98: %s is behind a tunnel port\n", d->Id);
     }
 }
 
@@ -12137,7 +12260,7 @@ static int s98_tunnelled(const char *id)
             return 1;
         }
     }
-    return 0;
+    return s98TunFull;
 }
 
 /* 1 when the device is present now (located with no phantom flag). */
@@ -12855,11 +12978,18 @@ static int s98_un_service(void)
  * when the record is absent (a Stor98 this installer did not install). */
 /* 1 when the record holds devices to remove (the 98 SE and ME removal
  * takes them in its order even when nothing of the package is left). */
-static int s98_rec_devices_any(void)
+static int s98_rec_devices_any(int present)
 {
     char id[INST_ID_CHARS];
+    DWORD i;
+    int r;
 
-    return s98_rec_enum("Devices", 0, id, sizeof(id)) != 0;
+    for (i = 0; (r = s98_rec_enum("Devices", i, id, sizeof(id))) > 0; i++) {
+        if (!present || envNow.Nt || enum9x_exists(id) != 0) {
+            return 1;
+        }
+    }
+    return r < 0;
 }
 
 /* The record's key: 1 there, 0 absent, -1 unreadable. */
@@ -12898,6 +13028,7 @@ static int s98_un_devices(HDEVINFO set)
     DEVREC tmp;
     INST_DI_RESULT res;
 
+    s98RemovedCount = 0;
     r = s98_rec_there();
     if (r <= 0) {
         if (r < 0) {
@@ -12908,7 +13039,7 @@ static int s98_un_devices(HDEVINFO set)
         return r == 0;
     }
     out("Stor98's devices, as this installer recorded them:\n");
-    for (i = 0; (r = s98_rec_enum("Devices", i, id, sizeof(id))) > 0;) {
+    for (i = 0; (r = s98_rec_enum("Devices", i, id, sizeof(id))) > 0; i++) {
         if (!opts.List && !go_on()) {
             return 0;
         }
@@ -12974,19 +13105,65 @@ static int s98_un_devices(HDEVINFO set)
                 }
             }
         }
-        if (opts.List) {
-            i++;
-            continue;
-        }
-        if (!s98_rec_del("Devices", id)) {
+        /* The record's entry stays until s98_un_verify has read every
+         * removed device gone after the other removals. */
+        if (s98RemovedCount >= INST_S98_MAX_DEV) {
+            out("  More Stor98 devices than one run removes: run the "
+                "uninstall again for the rest.\n");
+            flagSteps = 1;
             return 0;
         }
+        inst_copy(s98RemovedId[s98RemovedCount++], id, INST_ID_CHARS);
     }
     if (r < 0) {
         out("  The record's devices cannot be read.\n");
         flagFailed = 1;
         return 0;
     }
+    return 1;
+}
+
+/* After the removals that follow: each Stor98 device removed is still
+ * gone (98 SE and ME: no Enum entry; NT: not in a fresh reading), and only
+ * then is its entry dropped from the record. 0 when one is back (Windows
+ * made it again) or cannot be read: the record keeps it. */
+static int s98_un_verify(void)
+{
+    int i;
+    int j;
+    int back;
+
+    if (opts.List || s98RemovedCount == 0) {
+        return 1;
+    }
+    if (envNow.Nt && !scan()) {
+        flagFailed = 1;
+        return 0;
+    }
+    for (i = 0; i < s98RemovedCount; i++) {
+        back = 0;
+        if (envNow.Nt) {
+            for (j = 0; j < devCount; j++) {
+                if (inst_eq(devs[j].Id, s98RemovedId[i])) {
+                    back = 1;
+                }
+            }
+        } else {
+            back = enum9x_exists(s98RemovedId[i]) != 0;
+        }
+        if (back) {
+            out("Stor98's device %s is recorded again after its removal: run "
+                "the uninstall\nagain after a restart.\n", s98RemovedId[i]);
+            flagSteps = 1;
+            return 0;
+        }
+    }
+    for (i = 0; i < s98RemovedCount; i++) {
+        if (!s98_rec_del("Devices", s98RemovedId[i])) {
+            return 0;
+        }
+    }
+    s98RemovedCount = 0;
     return 1;
 }
 

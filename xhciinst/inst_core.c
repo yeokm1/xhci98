@@ -4759,6 +4759,12 @@ int inst_s98_check(int i, int nt, const char *text, char *out, size_t cap,
     }
     inst_copy(t, text, sizeof(t));
     inst_trim(t);
+    if (t[0] == '\0') {
+        if (why != NULL) {
+            *why = "no value";
+        }
+        return 0;
+    }
     if (v->Kind == INST_S98_WORDS) {
         for (k = 0; k < INST_S98_WORDS_MAX && v->Words[k] != NULL; k++) {
             if (inst_eq(t, v->Words[k])) {
