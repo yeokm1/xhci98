@@ -1,6 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 6, 2026-10-18, reviewed and revised (the INF inventory
+Status: draft 7, 2026-10-18, reviewed and revised (an INF copy made by
+an update recorded without the device); draft 6, 2026-10-18, reviewed
+and revised (the INF inventory
 around every settle as well); draft 5, 2026-10-18, reviewed and revised
 (the 98 SE and ME INF
 copies inventoried before and after, the shutdown line's unfinished
@@ -591,10 +593,14 @@ unasked). With the box ticked:
   a settle of this run: the engine's `INF` and `INF\OTHER` directories
   are listed (names, sizes and SHA-256s) at the baseline, before and
   after each helper install, and before and after each settle (record
-  27 section 6), and a file that was not there before and is named by
-  the driver key of a device recorded under `Devices` in that same step
-  (the helper's install, or a binding Windows made during the settle
-  that the rule below attributes to the installer) is recorded; a file that was there before, referenced
+  27 section 6), and a file that was not there before is recorded when
+  the driver key of the device the helper installed or updated in that
+  step names it afterwards, whether or not that device is the
+  installer's under `Devices` (an update of a hand-installed device can
+  make a copy without making the device the installer's), or, after a
+  settle, when a device newly recorded under `Devices` by the rule below
+  names it; the INF's ownership and the device's are separate records,
+  and the reference check before any deletion stands; a file that was there before, referenced
   or not (a hand install's copy whose device was removed), is never
   recorded and never deleted by this installer, and a file that appeared
   without being named is left and said in the log (the flat copy in the
