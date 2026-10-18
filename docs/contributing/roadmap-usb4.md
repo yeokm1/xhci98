@@ -17,7 +17,7 @@ the batching convention and the task-id rules, "observed on both" as
 phase's closing task named `<phase>.final`, and the rule that no phase
 advances past an unobserved checkpoint.
 
-**Status: Phases 39 and 40 opened 2026-10-15 by the owner.** The two
+**Status: Phase 42 is open, for `3.1.0.0`; Phases 39, 40 and 41 are closed on the `3.0.0.0` cut of 2026-10-17.** Phase 42 was opened on 2026-10-18 by the owner from "Planned work" (the windowed installer, the uninstall as NUSB does it, the Windows 98 SE and ME device install, `XHCISNAP` retired, the safe-removal mark across a stack rebuild, and the connection-manager follow-ups), on branch `3.1.0.0`, and widened the same day after the owner went through every planned item; the decisions table maps the planned ids to its tasks and records what was dropped or closed. The history of the first three: Phases 39 and 40 opened 2026-10-15 by the owner. The two
 pieces of planned work drawn up on 2026-10-14 with the placeholder ids
 `TB3` and `U4CM` are Phase 39 and Phase 40, in the order the `usb4-emu`
 handoff gives (its section 2, maintainer 2026-10-14): Phase 39 the
@@ -84,6 +84,9 @@ recommendation; the owner's answers are recorded here as
 | The log emission (D12) | Owner, 2026-10-15, as recommended: nothing in `release`, `#if DBG` in `debug` and `qemu` |
 | Cut before the bench (D13) | Owner, 2026-10-15, as recommended: the VM legs and gates before the cut, `39-E.1` and `39-E.2` after it on the asset, a failure there a re-cut; the cut is `40.final`'s |
 | Time | Owner, 2026-10-15: no task is cut to meet a time; the run goes late instead |
+| Phase 42 | Owner, 2026-10-18: the planned items promoted that day are Phase 42, for `3.1.0.0`, with the ids `42-0.n` (the designs), `42-A.n` (the code), `42-V.n` (the legs) and `42.final`: INSTUI.1 is 42-0.1, DI9X.1 is 42-0.2, SNAP.1 is 42-0.3, EJRB.1 is 42-0.4 (its design) and 42-A.5 (its code), DI9X.2 is 42-A.1, INSTUI.2 is 42-A.2 (its legs 42-V.1), SNAP.2 is 42-A.4, GEN1.1 is 42-A.6, QINR.1 is 42-A.7, UNPL.1 is 42-A.8 and TB3NAME.1 is 42-A.9; SNAP.3 (the removal) and GEN1.2 (the multi-drive legs) stay in "Planned work", as do the bench and hardware readings |
+| The uninstall | Owner, 2026-10-18: the drivers uninstall as NUSB's do, from Add/Remove Programs in one step, on every target, leaving the machine as it was before the install (42-A.3) |
+| Phase 42, widened | Owner, 2026-10-18, going through every planned item one by one: into Phase 42 - SNAP.3 (with SNAP.2 as 42-A.4: the removal in `3.1.0.0`, no deprecation release between), IDLE.1 as 42-V.4, U4REC.1 as 42-0.5 and 42-A.10, NVHW.1 as 42-A.11 and 42-V.8 (Stor98's MD-2 driven from here too), NV9X.2 and NV9X.3 as 42-0.7, 42-A.12, 42-A.13 and 42-V.6, EMU.2 to EMU.5 as 42-V.5, PCI9X.1 as 42-A.14, NOIRQ.1 as 42-0.6 and 42-A.15, GEN1.2 as 42-V.7; dropped - SLIP.1 (the F6 floppy serves 2000 and XP Setup; issue 16 keeps the attempt); closed, every task done - the x64 legs owed at the cut (X64.1, X64.2), the sign-only packaging mode (SIGN.1) and Stor98 the renamed driver (STOR.1, STOR.2), their records in `runs/run-41.md` and `build-and-test.md`; kept in "Planned work" - B24.5 (bench), NOX.1 (rare), PCR.1 (no safe proof reachable, record 17 section 4.13), U4HW.1 and S3W2K.1 (hardware) |
 
 ## Phase sequence
 
@@ -279,33 +282,95 @@ the dry cut's `release` flavour; then `40.final`.
 
 ---
 
+## Phase 42 - Release `3.1.0.0`: the Windowed Installer, the Uninstall, the Windows 98 SE and ME Device Install, XHCISNAP Retired, and the Connection-Manager Follow-Ups
+
+Goal: an installer program with a window, in place of the `INSTALL.BAT`
+console tool, that installs, updates and uninstalls every driver of the
+package and sets their settings, on every target (Windows 98 SE to 7,
+x86 and x64); an uninstall that works as NUSB's does, from Add/Remove
+Programs in one step, leaving the machine as it was before the install;
+the driver put on the controller and its root hub by the tool itself on
+Windows 98 SE and ME; `XHCISNAP` retired, the xHCI98 USB Tree taking over;
+the safe-removal mark kept across a driver-stack rebuild on NT; the
+connection-manager follow-ups (a lost USB4 host recovered, the Stor98
+channel's two 9x transactions and its per-port waits, the link-down
+statement on real hardware, PCI configuration below a tunnel port on 9x,
+a 9x function with no interrupt, the emulator legs, more than one NVMe
+drive on 9x) and the four small items; the idle poll period decided;
+released as `3.1.0.0`.
+
+Status: open. Opened 2026-10-18 (owner) from "Planned work": `INSTUI.1`
+and `INSTUI.2`, `DI9X.1` and `DI9X.2`, `SNAP.1` and `SNAP.2`, `EJRB.1`,
+`GEN1.1`, `QINR.1`, `UNPL.1` and `TB3NAME.1`, with one task the owner added
+the same day, the uninstall as NUSB does it (42-A.3). Widened the same
+day, when the owner went through every planned item one by one:
+`SNAP.3` (the removal, in this release rather than the next), `IDLE.1`,
+`U4REC.1`, `NVHW.1` (Stor98's hardware qualification is driven from here
+too), `NV9X.2` and `NV9X.3`, `EMU.2` to `EMU.5`, `PCI9X.1`, `NOIRQ.1` and
+`GEN1.2` joined; `SLIP.1` was dropped; the three sections whose tasks
+were all done (`X64`, `SIGN`, `STOR`) were closed; `B24.5`, `NOX.1`,
+`PCR.1`, `U4HW.1` and `S3W2K.1` stay planned, each with its blocker
+named. The decisions table maps the ids. On branch `3.1.0.0`; the version
+is `3.1.0.0` (owner, 2026-10-18). A leg that wants hardware not at hand
+when the cut comes is owed after it and said so in the release notes.
+
+Why a phase: the installer changes how every user first meets the
+package; the 9x device install drives a setup engine this project has
+never driven; the uninstall touches every devnode, service and file of
+the package; and it ends in a release.
+
+- [ ] 42-0.1 design record 26, the windowed installer (was INSTUI.1): one engine over `XHCIINST`'s routines (`inst_core.c` and the system half of `xhciinst.c`), the console tool kept for scripts, the F6 floppy and unattended installs; built as XHCITR is (MSVC 6.0, `/SUBSYSTEM:WINDOWS,4.0`, the C runtime static, every SetupAPI and configuration-manager routine looked up at run time; WDK 7.1's amd64 compiler for the x64 build), one 32-bit program that starts on every target and under WOW64 starts the x64 one itself; `INSTALL.BAT` kept as its launcher; the pages it shows (what is found, what will be installed or updated, the settings, the confirmation, the restart); which drivers it installs - `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and, only when the user ticks it, the bundled Stor98 (record 23 section 4.4: never unasked); on 98 SE and ME the helper of 42-0.2, or until it exists the Update Driver steps it shows; a settings page for the values of record 23's table, the `XhciCm*` values and Stor98's settings, each with its default, its range and the systems it applies to, a value the user set kept by an update; the uninstall of 42-A.3; the exit codes and the log; reviewed until it converges
+- [ ] 42-0.2 design record 27, the Windows 98 SE and ME device install (was DI9X.1): which `SETUPX` functions, as the Windows 95 and 98 DDKs document them for class installers (`DiCreateDeviceInfo`, `DiInstallDevice` and the rest); the 16-bit toolchain; the helper's interface to the installer; the controller, its root hub and the Thunderbolt controller; a USB keyboard and mouse behind the controller being updated; what the wizards' own bookkeeping then holds; the removal of a device, for the uninstall; nothing undocumented (the owner's rule, record 23 section 6.1); reviewed until it converges
+- [ ] 42-0.3 the `XHCISNAP` inventory (was SNAP.1): what `XHCISNAP` does that XHCITR does not (the raw snapshot regions and the `.DEV` file, `-probe`, the counter-name check, the slot and enumeration regions), and for each a decision by the owner: moved into XHCITR, kept as a developer tool outside the package, or dropped
+- [ ] 42-0.4 the design of the safe-removal mark across a stack rebuild (was EJRB.1's design): record 21 section 7.4 and record 24 - the child filter as a device-specific `LowerFilters` value on the unit at the top of each tunnel port, never on another PCI device, written from a privileged user-mode piece told of each new unit by the driver (a service, or the installer's elevated run), never from the unprivileged tray tool; the value removed when the device leaves, on uninstall and after a failed upgrade, since a value naming a filter no longer installed stops the device (Code 39); reviewed until it converges
+- [ ] 42-0.5 the design of a USB4 host's recovery after loss (was U4REC.1's design; record 22 section 7.7): when access is proven back (the size register and the host router read as programmed, or a full re-read of the PCI side the platform may have reset), what the instance may trust of its port records, how the fabric is found again (section 9.2's discover-and-preserve, never a reset), what becomes of the common buffer kept under `DmaMayRun`, and how Stor98 and the re-enumeration seam learn of it; reviewed until it converges
+- [ ] 42-0.6 design record 28, a 9x function with no interrupt (was NOIRQ.1): how a Windows 98 SE or ME function behind a tunnel with an interrupt pin and no routable IRQ, or with no pin (MSI only), is started without one - its logical configuration, CONFIGMG, what `PCI.VXD` requires - with documented means only; the pairing with Stor98's polling mode (Stor98 `docs/PLAN.md`); reviewed until it converges
+- [ ] 42-0.7 the 9x half of the Stor98 channel, designed (was NV9X.2's and NV9X.3's design): records 21 section 7.2, 22 section 10 and 24 sections 7.1 and 14 - the 9x eject asked of the connection manager (the status record's ask, the domain's CONFIGMG worker running the query, the `REMOVE_PENDING` request, the wait for `RemoveAck` and the removal on a function still present), the 9x link-down statement (a writer for the emulator SHPC bridge's DWORD Select, and 98 SE and ME admitted to the statement once gate G3's ordering check has passed on each), and the per-port, non-blocking acknowledgement and removal waits (a per-entry pending state with its deadline, polled from the connection-manager thread's pass; a per-member pending removal on the worker) in place of `CmNvlinkAwait`'s hold of the thread and the 9x `REMOVE_PENDING` hold of the worker; reviewed until it converges
+- [ ] 42-A.1 the 98 SE and ME helper and the installer's use of it (was DI9X.2): the driver put on the controller, its root hub and the Thunderbolt controller by the tool, in place of the printed Update Driver steps; the console tool uses it too
+- [ ] 42-A.2 the windowed installer (was INSTUI.2), built and gated as `XHCIINST` is (the import allowlist, `selftest.cmd`, the host suite over the pure half, `test-package.ps1`), staged by the packager, `INSTALL.BAT` starting it
+- [ ] 42-A.3 the uninstall as NUSB does it (owner, 2026-10-18): the package registered under Add/Remove Programs (the `Uninstall` key: a display name with the version, the uninstall command, the install directory) on every target by the install and the update, one entry whatever was installed; its one step removes every driver of the package - the devnodes, on 98 SE and ME through 42-A.1's helper rather than printed steps, the filter's name, the INFs, the services, the files, the xHCI98 tools and their start at login, the install directory and its registry record - and leaves the machine as it was before the install, Windows' own `usbd.sys` and `usbui.dll` untouched (record 23 section 9.3); the warning about a machine whose only USB controller is xHCI kept, and the word REMOVE or the window's equivalent; the console tool's `/uninstall` the same code; record 23 section 9 revised first
+- [ ] 42-A.4 `XHCISNAP` retired (was SNAP.2 and SNAP.3; owner, 2026-10-18: the removal in this release, no deprecation release between): whatever 42-0.3 moves into XHCITR, moved; then `XHCISNAP.EXE`, `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` out of the package (`make-release.ps1`'s staging, `test-package.ps1`, the generated `readme.txt`) and `xhcisnap\` out of the tree or kept as a developer tool as 42-0.3 decides; the door's USBUSER pass-through kept for Windows' own property tabs; the bug-report steps in `README.md`, the release notes, the release acceptance test, the issue form and `source-files.md` rewritten around XHCITR's Save Report and `/report`; the release notes say the tool was removed and what replaces each of its uses
+- [ ] 42-A.5 the safe-removal mark across a stack rebuild (was EJRB.1's code): 42-0.4's writer, the tool-side query-and-remove fallback kept for a unit the writer has not reached, and the release notes' limitation lifted where it is read
+- [ ] 42-A.6 `fresh` only for the member whose tunnel changed (was GEN1.1): the tunnel-up action and the U4 up-hook, never on a resync (`cmReenumAll`, `cm_reenum.c`); host tests for two members
+- [ ] 42-A.7 the query device's first answer after an inert start (was QINR.1): seeded from the thread's actual wait state, or exposed only after the first publication (record 25 section 14)
+- [ ] 42-A.8 the unsafe-unplug notice (was UNPL.1): the child filter's surprise-removal count and last router key in the query answer (a new `CM_Q_VERSION`), and the tray's notice; 98 SE and ME's own source decided in the design, or the notice said to be NT-only
+- [ ] 42-A.9 a Thunderbolt 3 dock's name after a resume (was TB3NAME.1): the DROM read for an adopted or resumed router outside the resume budget, deferred to the connection-manager thread once the resume is done (record 22 section 8); host cases on the fake fabric
+- [ ] 42-A.10 recovery of a contained USB4 host (was U4REC.1): 42-0.5's design coded; under the USB4 profile a SUSPECT, ABSENT or CONFIG_LOST reading, a surprise removal, or a bind or resume that reads the ring's size register wrong no longer leaves the instance in CONTAINED until a stop and start or a reboot; host vectors
+- [ ] 42-A.11 the Stor98 link-down statement on real hardware (was NVHW.1; owner, 2026-10-18: Stor98's hardware qualification, its MD-2 on the P14s with an NVMe enclosure and with one that has an internal switch, is driven from here as well): once MD-2 is qualified, the statement's hardware condition per profile - the tunnel port's Data Link Layer Link Active bit where a PCI Express capability exists, the USB4 profile's path-closed and reset anchor - written into records 21 and 22, the withholding lifted per generation that was read; the release notes' state of the pair updated
+- [ ] 42-A.12 the per-port, non-blocking Stor98 waits (was NV9X.2), as 42-0.7 designs them; host vectors
+- [ ] 42-A.13 the Stor98 channel's two 9x transactions (was NV9X.3), as 42-0.7 designs them: `XHCIINST /eject` and XHCITR's Safely Remove on a tunnelled NVMe unit asking `xhcicm.sys` instead of calling `CM_Query_Remove_SubTree` and `CM_Remove_SubTree` themselves, and the 9x link-down statement; host vectors
+- [ ] 42-A.14 PCI configuration below a tunnel port on 98 SE and ME (was PCI9X.1): the query's PCI request hands the walk below each member to the 98 CONFIGMG worker (`cm_cfgwk.c`) as a request and waits for it with a bound, the worker reading through its guarded `PCI.VXD` route (`CmCfgmgPciRead` behind `CmCfgmgPciOpen`), only buses its numbering or `PCI.VXD` assigned, or holds a referenced pointer to the worker's route with a rundown at the stop; XHCITR's "not read on this system" goes; host vectors over the worker's request
+- [ ] 42-A.15 a 9x function with no interrupt, started (was NOIRQ.1's code): what design record 28 decides, coded in `xhcicm.sys`'s 9x bus numbering (`tbt_brnum.c`) or wherever the record puts it; host vectors
+- [ ] 42-V.1 the installer's legs on 98 SE, ME, 2000, XP, XP x64, Vista and 7 in both architectures (the x64 guests on a test-signed package): a fresh install, an update from `3.0.0.0` and from `2.4.0.0`, settings changed and kept across an update, Stor98 ticked and unticked, the Add/Remove Programs uninstall and the console `/uninstall`, each leaving no devnode, service, INF, file or registry record of the package; on 98 SE and ME the helper's install and removal with a USB keyboard and mouse behind the controller, and the install directory's move
+- [ ] 42-V.2 the connection-manager legs: 42-A.5 on 2000, XP, Vista and 7, x64 included (the first plug of a never-seen unit listed, a disable and enable, a driver update, the value gone after an unplug and after the uninstall); 42-A.6's U.11 on 98 SE and ME with an NVMe on each tunnel bus, and on 2000 as a regression; 42-A.7 against an inert start; 42-A.8's notice on 2000 and 7; 42-A.9 with the dock attached across a suspend and at power-on, on 98 SE and 7 x86
+- [ ] 42-V.3 the VM matrix on the dry cut's `release` flavour, on the ten install legs' systems, as 38.final and 40.final read them: a fresh install and an update over `3.0.0.0`, a mouse, a Bulk-Only stick and UAS with file compares, composite audio, disable, enable, remove and rescan, and the Thunderbolt 3 emulator leg with Stor98
+- [ ] 42-V.4 the idle poll period, 50 against 500 ms (was IDLE.1): the table of `runs/run-38.md` "38.3" completed on 98 SE, ME and 7 x86 and x64 under mode 2 - the idle processor load over a minute, plug-to-working at a root port and behind a hub, USB 2.0 remote wake, the timer's holds and releases per minute - and `XhciPollIdleMs`'s default decided by the owner on the full table before the cut
+- [ ] 42-V.5 the emulator legs (were EMU.2 to EMU.5), on the current `usb4-emu` build and its root hot-plug modes once part 2 lands: EMU.2, the R32 power-off read again with `acpi` on 2000 with ACPI, XP and 7 and `restore` on 98 SE (the ICM client's ABSENT and recovery, and the USB4 profile's containment and 42-A.10's recovery, against a PnP removal and a restored bridge); EMU.3, the P14s behaviour on the Alpine Ridge profile (Assist decided at power-on, pre-boot tunnelling every device, Assist with pre-boot and a USB4 device at single lane with flags `0x88` and configuration requests held about 2.77 s after the first `driver ready`, `driver ready` flags `0x22`, the power-off delays, pending approvals cancelled by an unplug, a re-plug or mailbox `0x06`); EMU.4, the ORICO enclosure's ASM2464 on the Alpine Ridge profile (approved and tunnelled, and with `XhciCmApprove` 0 its fall back to USB after about 9.4 s, the disk then on the controller's own xHCI); EMU.5, the `39-V` Alpine Ridge legs read again; and 42-A.10's recovery on `usb4-generic` on 98 SE, 2000 and one later NT target
+- [ ] 42-V.6 the Stor98 channel on 98 SE and ME (42-A.12 and 42-A.13), with the bundled Stor98: the clean eject with its `RemoveAck` from `XHCIINST /eject` and from XHCITR, the link-down acknowledged with its wait measured, and the two-port legs for the per-port waits; 42-A.14 on 98 SE and ME with the TB3 enclosure and a bridge chain; 42-A.15 on 98 SE and ME with the IRQ withheld
+- [ ] 42-V.7 more than one NVMe drive on 98 SE and ME (was GEN1.2), each written and compared while the others are plugged and unplugged: two enclosures on two ports, two drives behind one enclosure's or dock's switch, a drive on each router of a daisy chain, and an internal NVMe under Stor98 beside a tunnelled one; what Stor98's side needs is tracked in its own plan (owner, 2026-10-17); on the bench, or owed after the cut where the enclosures are not at hand
+- [ ] 42-V.8 the Stor98 statement on real hardware (42-A.11) on the bench, per generation read, after Stor98's MD-2
+- [ ] 42.final `README.md`, the release notes (what `3.1.0.0` adds, "Installing" rewritten around the installer, "Untested ground" naming what is owed), `releases/history.md`, `source-files.md`, `docs/README.md`; the builds, the dry cut, the owner's signed cut of `3.1.0.0` and the install legs from the asset
+
+Checkpoint: design records 26, 27 and 28 and the sections of 42-0.4,
+42-0.5 and 42-0.7 converged before their code; 42-0.3 decided by the
+owner before 42-A.4; the host suites green with the gates on both
+architectures; 42-V.1 to 42-V.8 read on the dry cut's `release` flavour,
+or, where a leg wants hardware or an emulator build not at hand, owed
+after the cut and said so in the release notes' "Untested ground"; the
+idle poll default decided; then 42.final's install legs from the asset.
+
+Records: `runs/run-42.md` (opened with the first task); design records 23
+(revised), 24, 25, 26, 27 and 28; design record 21 sections 7.2 and 7.4;
+design record 22 sections 7.7 and 10; `runs/run-38.md` "38.3";
+`docs/using/release-notes.md`.
+
+---
+
 # Planned work
 
 Not phases yet: each takes the next free phase number when the owner opens
 it, and its placeholder ids take that number then (owner, 2026-10-06; the
 decisions table).
-
-## Planned - Slipstreaming xhci98 Into a Windows 2000 CD
-
-Goal: Windows 2000 Setup from a CD whose `TXTSETUP.SIF` carries xhci98,
-with no F6 floppy.
-
-Status: not opened, unnumbered and unversioned. Deferred by the owner on
-2026-10-14, when Phase 38's Windows 2000 F6 entry was merged; the one
-attempt is `docs/issues/16-w2k-f6-first-gui-boot-usbd.md` section 3 and
-`lessons.md`.
-
-- [ ] SLIP.1 xhci98 slipstreamed into a copy of a Windows 2000 CD (owner, 2026-10-14). One attempt during 38.final, an `[InputDevicesSupport]` entry for `xhci98` in the copy's `TXTSETUP.SIF` with its own file section listing `usbd.sys`, `hidclass.sys` and `hidparse.sys` and the driver in its `I386`, did not load the driver in text mode (no slot addressed, an empty port-0xE9 log from the `qemu` flavour; issue 16, runs 71 and 72); an `$OEM$\TEXTMODE` preinstall was not tried. Read first why text mode did not load it, then decide whether the documents describe a route
-
-## Planned - The Idle Poll Period, 50 Against 500 ms
-
-Goal: `XhciPollIdleMs`'s default decided on a full reading.
-
-Status: not opened, unnumbered and unversioned. Deferred by the owner on
-2026-10-14 from task 38.3's legs (T8); the default stays 50. The partial
-table is `runs/run-38.md`, "38.3".
-
-- [ ] IDLE.1 `XhciPollIdleMs` 50 against 500 on every target (owner, 2026-10-14): under mode 2, the idle processor load over a minute, plug-to-working at a root port and behind a hub, USB 2.0 remote wake, the timer's holds and releases per minute. The partial reading on 2026-10-14 (XP, XP x64, 2000 and 2000 SMP, Vista x86 and x64) showed plug-to-working 0.3 to 0.7 s at both values, remote wake working at both on the x86 guests (the test client is x86; not applicable on XP x64 and Vista x64), Vista x86's idle host load halved at 500 (12.7 to 5.4 %) and Vista x64's about 30 % lower, and no difference beyond noise elsewhere; 98 SE, ME and 7 x86 and x64 not taken. The default is decided on the full reading
 
 ## Planned - Bench Follow-Up After `2.4.0.0`
 
@@ -314,14 +379,13 @@ machines.
 
 Status: not opened, unnumbered and unversioned. Listed by the owner on
 2026-10-14 from what Phase 38's tasks owe after the cut (`runs/run-38.md`,
-each task's "Owed after the cut"); the release notes' "Untested ground"
-names B24.1 to B24.5 meanwhile. A sixth item, `XHCICLN`'s veto on XP x64,
-was read before the cut (task 38.8) and left the list.
+each task's "Owed after the cut"). On 2026-10-18 the owner struck
+B24.1 to B24.4 (the Linux quirks on the controllers they name, a real
+xHCI 0.96 controller, hidusbf on a composite HID device, and the High
+Speed and USB 3 hubs under the `2.4.0.0` ids) from the list; the release
+notes' "Untested ground" still says what was not read. A sixth item,
+`XHCICLN`'s veto on XP x64, was read before the cut (task 38.8).
 
-- [ ] B24.1 Linux's controller quirks (task 38.10, design record 20) on the controllers they name, each value read on a controller it lists
-- [ ] B24.2 a real xHCI 0.96 controller (task 38.11, design record 17 section 4.14): its start at `XhciAccept096` 1 and its refusal at 0, a device of each speed, and audit items A14 and A21
-- [ ] B24.3 hidusbf on a composite HID device (task 38.12, design record 13 section 10.14.8): on the composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86
-- [ ] B24.4 a High Speed and a USB 3 hub under the `2.4.0.0` ids, `USB\XHCI98_HUB` and `USB\XHCI98_HUB30` (task 38.8, design record 13 section 10.13, D13 and D14), by passthrough or on the bench
 - [ ] B24.5 the finer timer while polling, `XhciPollFineTimer` 1, on real hardware (task 38.3, design record 15 section 7.2.4's amendment); its default reconsidered on the reading
 
 ## Planned - A Refused Interface's Device Id
@@ -351,237 +415,6 @@ reopening must answer are design record 17 section 4.13.
 
 - [ ] PCR.1 (in Phase 37 until 2026-10-12) releasing the transfers kept by a pinned containment (owner, 2026-10-11), so disabling, updating or removing a controller the driver closed off without proof that DMA stopped (record 17's containment, `XHCISNAP` "CONTAINED" and "PINNED") completes instead of waiting for ever. Since `2.2.0.0` the driver keeps every transfer the controller might still write into, by design, a hang the release notes list under "Known limitations"; Phase 36's matrix read it again on Windows 2000 (4 of 4 from fresh boots, selective suspend on and off: hidusb's interrupt-IN read kept, its REMOVE waiting) and on Windows 98 SE. At the controller's stop or remove, look for proof that it can no longer write to memory, and only then complete the kept transfers as failed: (a) the device has left the bus (its PCI configuration space, the vendor id included, reads all ones), or (b) it entered D3hot through its PCI power management capability and reads back D3hot, where it may not master (PCI Bus Power Management 1.2). Only at the stop or remove of a controller already pinned by containment, the driver asks for D3 itself, through the PCI stack (a device power IRP), never by writing the power management control register (owner, 2026-10-13, on review): a containment-release step, independent of `XhciSelectiveSuspend`, adding no idle or selective-suspend policy. It reads the state back only after the 10 ms the specification requires before the next access. Conditions from the review: the capability chain validated before it is read; a failed or short configuration read is never taken for all ones, and all-ones data counts as proof (a) only through a validated read whose platform meaning is that the device left the bus or is isolated from memory, an unreachable configuration window alone proving nothing; read completeness established per target, without assuming Windows 98 reports the byte count (`hcd_svc.c` leaves its `IoStatus.Information` unproven), and a stalled configuration or power request addressed, today's wait for it being unbounded; on 98 SE and ME the configuration reads use the route already proven there, to the original PDO; a failed or ineffective transition is no proof and releases nothing; D3hot is not a reset, a function with `No_Soft_Reset` set keeping its state, so before the kept buffers are released the design establishes that DMA stays inhibited through any later return to D0 until HCRST has completed and the old ring and context pointers are invalid, and where it cannot, the buffers stay kept and an unsafe restart is refused; and the release runs before any child's teardown waits on a kept transfer. With neither proof the transfers stay kept, and no registry value overrides that (owner, 2026-10-13). Record 17 gains the section first, a full review loop on the DMA-safety path, host vectors for each proof, and legs: the all-ones injection then a disable on 98 SE, ME, 2000, XP and 7 x64, with and without a client read pending, and the unproven case still holding
 
-## Planned - USB4 Host Recovery After Loss
-
-Goal: a USB4 host interface that stopped answering taken up again by the
-driver, with no disable and enable of the controller and no restart.
-
-Status: not opened, unnumbered and unversioned. Listed by the owner on
-2026-10-15 with decision U17 (design record 22 section 7.7): `3.0.0.0`
-contains a lost USB4 host and does not recover it; the ICM client's
-recovery (record 21 section 5.5) is not this item.
-
-- [ ] U4REC.1 recovery of a contained USB4 host (owner, 2026-10-15, decision U17). Under the USB4 profile the first SUSPECT, ABSENT or CONFIG_LOST reading, a surprise removal, or a bind or resume that reads the ring's size register wrong puts the instance in CONTAINED until a PnP stop and start or a reboot (record 22 section 7.7). Design first, in record 22: when access is proven back (the size register and the host router read as programmed, or a full re-read of the PCI side the platform may have reset), what the instance may trust of its port records, how the fabric is found again (section 9.2's discover-and-preserve, never a reset), what becomes of the common buffer kept under `DmaMayRun`, and how `nvme98` and the re-enumeration seam learn of it; then host vectors and the legs on `usb4-generic` with the emulator's root hot-plug modes (`EMU.2`) on 98 SE, 2000 and one later NT target
-
-## Planned - `nvme98` Link-Down Statements on Real Hardware
-
-Goal: the link-down statement of tasks 39-A.7 and 40-A.7 made on real
-tunnel ports, not only on the emulator's.
-
-Status: not opened, unnumbered and unversioned. Listed by the owner on
-2026-10-15: `3.0.0.0` makes the statement on the emulator's tunnel
-bridges only and withholds it on hardware (record 21 sections 7.1 and
-7.2), until `nvme98`'s own hardware qualification, its MD-2, has resolved
-the completed-reset boundary this driver cannot observe through a down
-link.
-
-- [ ] NVHW.1 enabling `nvme98` link-down statements on real hardware after `nvme98`'s MD-2 (owner, 2026-10-15): once `nvme98` reports MD-2 qualified (the P14s with an NVMe enclosure and with one that has an internal switch), the statement's hardware condition per profile - the tunnel port's Data Link Layer Link Active bit where a PCI Express capability exists, the USB4 profile's path-closed and reset anchor - written into records 21 and 22, the withholding lifted per generation that was read, and the legs on the bench; the release notes' state of the pair updated
-
-## Planned - Safe Eject Across a Stack Rebuild on NT
-
-Goal: a device behind a tunnel stays offered for safe removal after its
-driver stack is rebuilt.
-
-Status: not opened, unnumbered and unversioned; to be solved after
-`3.0.0.0` (owner, 2026-10-15, confirmed 2026-10-16). Found by the Windows
-2000 legs of 39-V.2 on 2026-10-15. Read again on 2026-10-16 with a bridge
-chain behind the tunnel port on 2000: the first plug of a device Windows
-has not seen before installs its driver, the stack is rebuilt, and the
-unit reads not removable, so neither Windows' applet nor `INSTALL /eject`
-offers it; a plain unplug then brings up the Unsafe Removal dialog. From
-the second plug on it is offered and stops cleanly. `3.0.0.0` ships
-instead: `XHCITR` and `INSTALL /eject` fall back to the configuration
-manager's query-and-remove for such a unit (administrators only; a
-standard user is told to re-plug once), and the release notes state the
-behaviour (record 21 section 7.4, records 24 and 25).
-
-- [ ] EJRB.1 the child filter after a stack rebuild (owner, 2026-10-15). A disable and enable of the device, or its driver installed or updated, rebuilds its stack from the registry with no `BusRelations` query, so the child filter that sets `Removable` (record 21 section 7.4) is not attached again and the device drops out of "Unplug or Eject Hardware" and "Safely Remove Hardware" until a re-plug. A kernel-only fix is not small: the filter would have to be registered on the child devnode as a device-specific `LowerFilters` value, in the Enum key the PnP manager owns, written through SetupAPI or CfgMgr32 from user mode (the device tool of design record 24 is the natural place), and keeping a filter attached across a non-surprise `IRP_MN_REMOVE_DEVICE` is not permitted. The writer needs administrator rights on 2000 and XP, so a privileged user-mode piece (a service, told of each new unit by the driver) rather than the unprivileged tray tool; a value left behind that names a filter no longer installed stops the device from starting (Code 39), so its removal on the device's departure, on uninstall and after a failed upgrade is part of the design; only the unit at the top of each tunnel port, never another PCI device. Design first (record 21 section 7.4 and record 24), with the removal of that value when the device leaves; legs on 2000, XP, Vista and 7, x64 included. Read on 2026-10-16 (`runs/run-41.md`, "Bridges behind the tunnel port on NT"): the case of a bridge child that was never attached at all, the ACPI bus filter already on a new PCI-to-PCI bridge's PDO on XP and 7, is fixed in 3.0.0.0 by record 21 section 7.4 revision 2. The rebuild case of this task remains, and is now also read on a first plug: the first plug of a never-seen unit is not listed on 2000 or XP, because Windows installs the bridge's driver for the first time and rebuilds its stack. Windows 7 x86 listed it. The tool-side query-and-remove fallback covers it until then
-
-## Planned - `nvme98` Interface 3 on Windows 98 SE and ME
-
-Goal: the Windows 98 SE and ME half of the `nvme98` link-state channel
-read by `nvme98`, under the interface `nvme98` adopts.
-
-Status: opened 2026-10-16 (owner): NV9X.1 is in `3.0.0.0`, against
-Stor98 `0.3.0.1` (interface version 4, `stor98cm.h`, the renamed
-`nvme98`); NV9X.2 and NV9X.3 are unversioned. The proof key, the
-locator and the 9x bounds are the header's (its R3 to R12).
-
-- [x] NV9X.1 `nvme98` interface 3 adopted on 9x: the boot-proof dynamic key (`_RegCreateDynKey`, its provider in `xhcicm.sys`, the key deleted at the driver's unload, holding the record's cookie; the key path and value name `nvme98` gives), the acknowledgement deadline on 9x (`CM_NVLINK_ACK_9X_MS`, 3000 ms provisional, set against `nvme98`'s gone deadline once it is given), `nvme98cm.h` taken again unchanged from `nvme98`, record 21 section 7.2 and record 22 section 10 updated; host vectors, and the legs on 98 SE and ME with the `nvme98` release that reads it (code in `3.0.0.0`, 2026-10-16, owner's decision of that day: interface 3 as Stor98 `0.3.0.0` adopted it and `0.3.0.1` reads it - the image resident from `DriverEntry` (no `DriverUnload` on 98 SE and ME, R4; the veto of its own devices' query-remove that R4 also asks for is not made, record 21 section 7.2), then at the first tunnel action the proof key `HKEY_DYN_DATA\Stor98LinkState` opened first and, shown absent, created with `xhcicm.sys` as its provider, then the locator under `Services\stor98` (`CmNvlinkPublish9x`), the key deleted only at an unload; any failed step leaves the load with no channel, as before. The 3 s link-down wait inside R12 S4's 2 s to 5 s and the 14 s removal wait of R11 O4, each with its deadline read before the acknowledgement (a late one logged, never taken) and the acknowledgement read twice, the removal's on the request's generation (R9c); `Remove_SubTree` retried to O6's 30 s; no wait and no request before a Stor98 has read the proof. Host vectors in `test_cm_nvlink`; the legs on 98 SE and ME with Stor98 `0.3.0.1` in run-41.md, and the joint legs with the bundled `0.4.0.0`, which looks its entry up again after its start, owed. R11 O5's isolation before a removal that is not clean and O6 past 30 s go with NV9X.2; the statement and the eject that would exercise the waits on 98 SE and ME are NV9X.3) (done: shipped in `3.0.0.0` on Stor98's interface 4, the statement itself withheld on 9x; the two transactions are NV9X.3)
-- [ ] NV9X.2 per-port, non-blocking `nvme98` acknowledgement and removal waits, with NV9X.1 (asked for by `nvme98` with its interface 3, relayed by the owner on 2026-10-15). Today `CmNvlinkAwait` holds the domain's connection-manager thread for up to its bound (5 s on NT, 3 s on 9x), and the 9x `REMOVE_PENDING` wait holds that domain's CONFIGMG worker, so a second port's statement and re-enumeration wait behind the first. It matters only where statements are made - in `3.0.0.0` the emulator's tunnel bridges alone, and under the ICM client never in a set of two or more members. The change: a per-entry pending state with its deadline, polled from the connection-manager thread's pass, and a per-member pending removal on the worker; record 21 section 7.2 and record 22 section 10 first, host vectors, and the two-port legs. Estimated at six to seven hours with its reviews
-- [ ] NV9X.3 the channel's two transactions on 98 SE and ME (owner, 2026-10-16, when NV9X.1 went into `3.0.0.0` without them). First, the 9x eject asked of the connection manager: `XHCIINST /eject` and `XHCITR`'s Safely Remove on a tunnelled NVMe unit ask `xhcicm.sys` (through the status record's ask, record 24 section 3) instead of calling `CM_Query_Remove_SubTree` and `CM_Remove_SubTree` themselves, and the domain's CONFIGMG worker runs the query, the `REMOVE_PENDING` request, the wait for `RemoveAck` and the removal on a function still present (record 24 section 14's open item). Second, the 9x link-down statement: a writer for the emulator SHPC bridge's DWORD Select on 98 SE and ME, so the channel's own reading exists there, and 98 SE and ME admitted to the statement once gate G3's ordering check (the statement after the stage-2 endpoint reset in the host trace) has passed on each. Records 21 section 7.2, 22 section 10 and 24 sections 7.1 and 14 first, host vectors, and the legs with Stor98 (the clean eject with its `RemoveAck`, the link-down acknowledged with its wait measured). Until then Stor98 on 98 SE and ME relies on its own gone deadline and Windows' removal
-
-## Planned - The Emulator Legs After `3.0.0.0`
-
-Goal: the virtual-machine legs that need `usb4-emu` builds landed after
-this project's cut froze its emulator binary (`5ba7f60`).
-
-Status: not opened, unnumbered and unversioned. Listed on 2026-10-15 from
-the `usb4-emu` maintainer's notes relayed by the owner: the TB3 dock
-preset on a USB4 host and the P14s behaviour landed on its `main`
-(`c7031a5`) after the freeze, and the root hot-plug modes are its part 2.
-
-- [x] EMU.1 Thunderbolt 3 device routers behind a USB4 host (task 40-A.8): the emulator's TB3 dock preset on `usb4-generic` (the i440FX command line of `usb4-emu`'s `XHCI98-HANDOFF.md` section 7.1) on 98 SE and 2000, the PCIe tunnel through the legacy router and the DROM by bit-bang (98 SE and 7 x86 read on 2026-10-16 with `bin-2a893ea`, `runs/run-41.md`: the router's USB4 Version by its major, its upstream adapter from the read's response and its DROM by bit-bang were needed and are in; the PCIe tunnel, the NVMe disk, the name, Safely Remove, unplug and re-plug pass; 2000 owed) (done 2026-10-17: 2000 and 98 SE on the signed `3.0.0.0` with `bin-2a893ea`, pass; run-41.md)
-- [ ] EMU.2 the R32 power-off read again with the emulator's root hot-plug modes once its part 2 lands: `acpi` on 2000 with ACPI, XP and 7, `restore` on 98 SE (its image is APM-only); the ICM client's ABSENT and recovery and the USB4 profile's containment against a PnP removal and a restored bridge
-- [ ] EMU.3 the P14s behaviour on the Alpine Ridge profile: Assist decided at power-on, pre-boot tunnelling every device, Assist with pre-boot and a USB4 device (single lane, flags `0x88`, configuration requests held about 2.77 s after the first `driver ready`), `driver ready` flags `0x22`, the power-off delays, and pending approvals cancelled by an unplug, a re-plug or mailbox `0x06` (a stale `approve` answered with the error flag, taken as benign)
-- [ ] EMU.4 the ORICO enclosure's ASM2464 on the Alpine Ridge profile: approved and tunnelled, and with `XhciCmApprove` 0 its fall back to USB after about 9.4 s, the disk then on the controller's own xHCI under `xhci98.sys`
-- [ ] EMU.5 the `39-V` Alpine Ridge legs read again on the new emulator build, whose behaviour changed under them
-
-## Planned - The x64 Legs Owed at the Cut
-
-Goal: the Vista x64 and Windows 7 x64 readings Phases 39 and 40 could not
-take for want of a test-signed package.
-
-Status: not opened, unnumbered and unversioned. Listed on 2026-10-15:
-39-V.3 and 40-V.3 read XP, XP x64, Vista x86 and 7 x86, and the
-installer's legs passed on every system but two, because the amd64
-package needs the project's test signature, applied only at a signed cut
-(design record 19). Struck from this list as the signed cut reads them.
-
-- [x] X64.1 39-V.3 and 40-V.3 on Vista x64 and 7 x64 from the signed `3.0.0.0` asset: the install with the forced filter, one plug, unplug and re-plug cycle with the NVMe drive, and the safe-eject cycle (read 2026-10-16 on the owner's pre-cut test-signed package, pass on both, run-39.md and run-40.md; the recipe stands, the reading on the cut's signed asset is still owed) (done 2026-10-17 on the signed asset: 7 x64 with test-signing on and no F8, the install through `INSTALL.BAT`, a stick, the Thunderbolt 3 hot plug with Stor98 `0.4.0.0`, Safely Remove Hardware, re-plug, a surprise unplug and XHCITR64 as a standard user, pass; Vista x64 installed with both drivers running, its remaining legs stopped and accepted by the owner; run-41.md)
-- [x] X64.2 the installer legs owed by task 40.4 onward: Vista x64's update read after its restart, and 7 x64's uninstall over `3.0.0.0` (both pass 2026-10-16 on the pre-cut test-signed package, run-40.md; again on the cut's signed asset if its drivers differ) (done 2026-10-17 on the signed asset: Vista x64's update from 2.4.0.0 read after its restart, and 7 x64's uninstall over `3.0.0.0` with Thunderbolt, both pass; run-41.md)
-
-## Planned - An Unsafe-Unplug Notice From the Child Filter
-
-Goal: the owner asked for a notice when a Thunderbolt or USB4 device is
-unplugged without being stopped. The tray of design record 25 cannot
-prove it by polling (record 25 section 7.2, decision T9). On NT the child
-filter sees a unit's surprise removal; publishing a count of those, with
-the router's key, in the query of record 25 section 4 would let the tray
-say so with authority. 98 SE and ME need their own source.
-
-Status: not opened, unnumbered and unversioned.
-
-- [ ] UNPL.1 the child filter's surprise-removal count and last router key in the query answer (a new `CM_Q_VERSION`), and the tray's notice
-
-## Planned - The Query's First Answer After an Inert Start
-
-Goal: record 25 section 14: after a start with the connection manager
-off, the query's first answer can lack the inert flag until the thread's
-first pass. Harmless for an eject (the stage refuses it); the answer
-should still be right from the first byte.
-
-Status: not opened, unnumbered and unversioned.
-
-- [ ] QINR.1 seed the query device from the thread's actual wait state, or expose it only after the first publication
-
-## Planned - A Sign-Only Packaging Mode
-
-Goal: `make-package.ps1 -TestSignPfx` re-runs the host test suite and the
-import gate that `build-driver.cmd` already ran on the same binaries, so
-the owner's signing step takes minutes on a loaded host. A sign-only mode
-refuses unless each binary's SHA-256 equals the one a gated
-`build-driver.cmd` run recorded for it, skips the repeated suites, still
-runs the INF gate against the staged package, and signs. The guarantee
-that only a tested binary is signed stays; the time goes. Agreed by the
-owner on 2026-10-16, after the `3.0.0.0` cut.
-
-Status: SIGN.1 done 2026-10-16; unnumbered and unversioned. The positive
-signing run is the owner's, who holds the key.
-
-- [x] SIGN.1 `build-driver.cmd` records the gated binaries' hashes; `make-package.ps1 -SignOnly` checks them, runs the staged INF gate and signs; `test-package.ps1` covers a mismatched hash (done 2026-10-16: `out\gated-<arch>-<flavour>.txt` written by `scripts\package\write-gated-manifest.ps1` under a per-architecture lock held for the whole `build-driver.cmd` run, from each binary's hash taken right before and right after its own import gate (the two must agree) and re-checked once the flavour's last gate has passed, clean only if the tree is still as it was when the run started; `-SignOnly` reads each binary once and signs and stages that copy; it refuses without `-TestSignPfx`, without a record, for another architecture or flavour, for any staged binary not of its recorded SHA-256, and unless the build and the tree are both clean at one commit; it skips the host suite and the import gates and keeps the flavour markers, every INF gate, the staged package's gate, the version checks and the signature checks; `test-package.ps1` covers the parse and each refusal on fixtures, and after a gated x86 `build-driver.cmd release` the record admitted the built binaries and refused one with a byte appended; `build-and-test.md`, "Since 2.3.0.0 the x64 package is test-signed")
-
-## Planned - Stor98, the Renamed NVMe Driver
-
-Goal: the NVMe driver project nvme98 becomes Stor98 (`stor98`, a new
-repository) before its first public release, `0.3.0.0`, with interface 3.
-`3.0.0.0` bundles no NVMe driver (owner, 2026-10-16). Once Stor98
-`0.3.0.0` and its change list (`RENAME-STOR98.md`) arrive: the link-state
-channel's names and signatures in `xhcicm.sys` (the NT callback, the 9x
-locator and dynamic key, the interface header and its version), the
-release scripts' bundling inputs and layout, the installer's skip of the
-bundled driver, the README and release notes, then the NVMe legs with
-Stor98's receiver, a re-signed x64 package and a release that bundles it.
-
-Status: not opened, unnumbered and unversioned.
-
-- [x] STOR.1 the rename in `xhcicm.sys`, the scripts, the installer and the docs, from the change list; interface 3 as adopted (the channel and the installer, 2026-10-16: `src/cm/stor98cm.h` in place of `nvme98cm.h`, unchanged from Stor98 `0.3.0.0`; interface version 4, `S98L` and `STOR98CM`, `\Callback\Stor98LinkState`, the locator under `Services\stor98` and the proof key, NV9X.1's code; records 21 section 7.2 and 22 section 10; `XHCIINST` skips `stor98*` files and never takes an INF that installs the `stor98` service or names `stor98.mpd` as its own, whatever its Provider; host suites pass); done 2026-10-16, merged into 3.0.0.0 (a2ee0fea)
-- [x] STOR.2 bundle Stor98 `0.3.0.0`; NVMe legs (link up and down, the 9x clean-eject handshake, ME write-through); the release (legs read 2026-10-16 on Stor98 `0.3.0.1`; `3.0.0.0` will bundle Stor98 `0.4.0.0` (owner, 2026-10-16), and the legs are owed again on it, as is the release: a dry x86 TEST cut bundling `0.3.0.1`; on `tb3-alpine-ridge`, `bin-2a893ea`, 98 SE, ME and 2000 installed Stor98 from `release-x86\`, wrote and compared a file, stopped it with XHCITR's Safely Remove, and survived an unplug, a re-plug and a surprise unplug with the file intact; ME's write-behind showed its Disk Write Error on an unplug without an eject and the data Stor98 had taken was on the disk. No 9x channel is offered in `3.0.0.0`, so there is no 9x clean-eject handshake (NV9X.1); on 2000 `xhcicm.sys` published the channel and made its statements, and Stor98 `0.3.0.1` never queried it (its NT receiver is a stub), so nothing was acknowledged. `runs/run-41.md`, "Stor98 behind the Thunderbolt 3 controller") (done 2026-10-17: Stor98 `0.4.0.0` bundled in the signed `3.0.0.0` upload set, its files checked against its own SHA256SUMS; NVMe legs on 98 SE, ME, XP x64 and 7 x64, run-41.md)
-
-## Planned - Installing the Driver on Windows 98 SE and ME
-
-Goal: `INSTALL.BAT` on 98 SE and ME puts the driver on the controller and
-its root hub itself, as it does on 2000 and later, in place of the
-Update Driver steps the user follows by hand (design record 23 section
-6.1: no routine of these systems installs a driver on a device, and the
-16-bit `SETUPX` engine is not driven through anything undocumented).
-The Windows 95 and 98 DDKs document `SETUPX`'s device installer functions
-for class installers (`DiCreateDeviceInfo`, `DiInstallDevice` and the
-rest), so a small 16-bit helper may do what Update Driver does. Asked for
-by the owner on 2026-10-16, after an update from `2.4.0.0` on 98 SE left
-the driver as it was until the hand steps were done. Not taken (owner,
-the same day): overwriting the installed binaries in `system32\drivers`
-in place, as NUSB does with Windows' own USB files; the device keeps the
-wizard's record of the old INF, and an INF change never reaches it.
-
-Status: not opened, unnumbered and unversioned.
-
-- [ ] DI9X.1 a design record: which `SETUPX` functions, as the DDKs document them; the 16-bit toolchain; the helper's interface to `XHCIINST`; the controller, its root hub and the Thunderbolt controller; a USB keyboard and mouse behind the controller being updated; what the wizards' own bookkeeping then holds; the uninstall
-- [ ] DI9X.2 the helper and `XHCIINST`'s use of it, with the legs on 98 SE and ME (a fresh install, an update from `2.4.0.0` and `2.3.x`, the uninstall)
-
-## Planned - A Thunderbolt 3 Dock's Name After a Resume
-
-Goal: a Thunderbolt 3 device router behind a USB4 host keeps its name
-when the connection manager adopts it at its start or rebuilds it on a
-resume, as it has after a plug.
-
-Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 with
-task 40-A.8 (record 22 section 8): the router's DROM is read by EEPROM
-bit-bang only on a plug; under a resume budget the read is skipped, and a
-router found tunnelled at the start is adopted without it, so the tool
-shows the dock unnamed until a re-plug. The dock works either way.
-
-- [ ] TB3NAME.1 the DROM read for an adopted or resumed Thunderbolt 3 router, outside the resume budget (deferred to the connection-manager thread once the resume is done); host cases on the fake fabric; legs on 98 SE and 7 x86 with the dock attached across a suspend and at power-on
-
-## Planned - PCI Configuration Below a Tunnel Port on Windows 98 SE and ME
-
-Goal: design record 25 section 4.7 reads the functions below a tunnel
-port on 2000 and later only; on 98 SE and ME XHCITR says "not read on
-this system", because `PCI.VXD` numbers no bus a tunnel brings up after
-boot. The bus numbering of record 21 section 6.1.1 (`tbt_brnum.c`) and its
-guarded `PCI.VXD` read route (`CmCfgmgPciRead` behind `CmCfgmgPciOpen`)
-live in the 98 CONFIGMG worker (`cm_cfgwk.c`), which owns their state and
-lifetime; the query device holds no pointer to the NHI or the worker.
-
-Status: not opened, unnumbered and unversioned (the owner's coordinator,
-2026-10-16).
-
-- [ ] PCI9X.1 the query's PCI request hands the walk below each member to the 98 worker as a request and waits for it with a bound (the worker reads through its guarded route, only buses its numbering or `PCI.VXD` assigned), or holds a referenced pointer to the worker's route with a rundown at the stop; host vectors over the worker's request; legs on 98 SE and ME with the TB3 enclosure and a bridge chain
-
-## Planned - A Tunnelled Function With No Interrupt on Windows 98 SE and ME
-
-Goal: a function behind a tunnel that Windows 98 SE or ME can give no
-IRQ still starts, so that a driver that polls (Stor98's planned polling
-mode) can run it.
-
-Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 by
-the owner, after the hot-plug fix of 9x bridges (record 21 section 6,
-`XhciCmBridgeNumbering`) read on the owner's ThinkPad P14s Gen 1: there
-the IRQ the firmware routes is provable and set, but on a machine whose
-routing gives no provable IRQ for the tunnel's root port, or for a
-function with no interrupt pin (MSI only, which 9x cannot use), Windows
-98 disables the function (Code 29) before its driver loads.
-
-- [ ] NOIRQ.1 a design record: how a 9x function with an interrupt pin and no routable IRQ can be started without one (its logical configuration, CONFIGMG, what PCI.VXD requires), with only documented means; the pairing with Stor98's polling mode (Stor98 `docs/PLAN.md`); legs on 98 SE and ME with the IRQ withheld
-
-## Planned - Retiring XHCISNAP
-
-Goal: `XHCISNAP.EXE` and its `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`
-are deprecated in the release after `3.0.0.0` and later removed, the
-xHCI98 USB Tree (`XHCITR.EXE`) taking over everything a user or a bug
-report needs from them.
-
-Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 by
-the owner, when `3.0.0.0` made the two drivers' logging consistent:
-`xhci98.sys` answers its own query IOCTL, as `xhcicm.sys` does, and
-XHCITR shows both drivers' logs and sets their logging level. `3.0.0.0`
-still ships `XHCISNAP` unchanged and its release notes say it will be
-deprecated in a subsequent release.
-
-- [ ] SNAP.1 an inventory of what `XHCISNAP` does that XHCITR does not (the raw snapshot regions and the `.DEV` file, `-probe`, the counter-name check, the slot and enumeration regions), and for each a decision: moved into XHCITR, kept as a developer tool outside the package, or dropped
-- [ ] SNAP.2 the deprecation release: the bug-report steps in the README and the release notes, the release acceptance test's `XHCISNAP` steps and the tool's readme rewritten around XHCITR; `XHCISNAP` marked deprecated in its own output
-- [ ] SNAP.3 the removal: `XHCISNAP` and its batch files out of the package and the build, the door's passthru request kept for Windows' own USB property tabs
-
 ## Planned - Real USB4 Hardware
 
 Goal: the USB4 software connection manager (Phase 40) read on a real
@@ -596,21 +429,6 @@ that does, opens it.
 
 - [ ] U4HW.1 real USB4 devices, after the maintainer's ORICO capture (its emulator stand-in, the ORICO capture model, passes on 98 SE and 2000; open on real hardware, record 22 section 16: the PCIe Up adapter credits kept as read, the unused adapter 4's answers, and the enclosure's PCIe switch under 98 SE and 2000); on a USB4 host that boots the target systems
 
-## Planned - A Proper Installer With Settings
-
-Goal: an installer program, in place of the `INSTALL.BAT` console tool,
-that installs, updates and uninstalls the drivers and lets the user
-configure their settings, on every target (Windows 98 SE to 7, x86 and
-x64).
-
-Status: not opened, unnumbered and unversioned. Listed on 2026-10-17 by
-the owner, at the `3.0.0.0` cut, where `INSTALL.BAT` (`XHCIINST`, design
-record 23) ships as beta and the settings are set with `INSTALL /set`,
-XHCITR's Logging level item or by hand in the registry.
-
-- [ ] INSTUI.1 a design record: a windowed installer over `XHCIINST`'s routines (one engine, the console tool kept for scripts); the steps it shows (what is found, what will be installed or updated, the restart); which drivers it installs - `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and, only when the user ticks it, the bundled Stor98 (design record 23 section 4.4: never unasked); 98 SE and ME with DI9X's helper, or the Update Driver steps it shows until then; a settings page for the values of record 23's table, the `XhciCm*` values and Stor98's settings, each with its default, its range and the systems it applies to, a value set by the user kept by an update; the uninstall; the exit codes and the log
-- [ ] INSTUI.2 the installer, built and gated as `XHCIINST` is, with the legs on 98 SE, ME, 2000, XP, XP x64, Vista and 7 in both architectures: a fresh install, an update from `3.0.0.0`, settings changed and kept across an update, the uninstall
-
 ## Planned - Stand By on Windows 2000 With a Tunnelled Device
 
 Goal: the resume ordering of record 21 section 6.3 and the USB4
@@ -618,7 +436,8 @@ connection manager's suspend obligations read on Windows 2000 on real
 hardware: a resume that succeeds, one that fails, an unplug during sleep,
 and the watchdog's expiry.
 
-Status: not opened, unnumbered and unversioned. Listed on 2026-10-17 by
+Status: not opened, unnumbered and unversioned; kept, blocked on a
+machine (owner, 2026-10-18). Listed on 2026-10-17 by
 the owner, when tasks 39-V.2 and 40-V.2 were closed without it: Windows
 2000 in the emulator offers no Stand by (the Cirrus driver vetoes it), and
 a forced S3 never resumes, even with no `xhcicm.sys` present. The suspend
@@ -626,25 +445,3 @@ half read as designed under both connection managers; ME's S3 readings
 (run-39) stand.
 
 - [ ] S3W2K.1 the four readings on a Windows 2000 machine with a Thunderbolt or USB4 controller that resumes from S3, under each connection manager the machine has
-
-## Planned - More Than One NVMe Drive on Windows 98 SE and ME
-
-Goal: Windows 98 SE and ME keep every NVMe drive mounted when more than
-one is attached: two enclosures on two ports, a dock or enclosure with two
-drives, a daisy chain, and an internal NVMe beside a tunnelled one. First
-step: a tunnel coming up on one port publishes a fresh link-state entry
-(a new generation) only for that port's NVMe drive, so Stor98 keeps every
-other port's mounted drive.
-
-Status: not opened, unnumbered and unversioned. Found 2026-10-17 in leg
-U.11 of task 40-V.1 on the signed `3.0.0.0` (run-41.md): `cmReenumAll`
-(`cm_reenum.c`) re-exposes every active member with `fresh` set on a
-tunnel-up and on a resync, so an unchanged drive on another port is
-republished at a new generation, and Stor98 `0.4.0.0` on 98 SE drops it
-as superseded. Windows 2000 to 7 keep the drive. A drive behind its
-enclosure's own PCI Express switch is never published, so real enclosures
-are not expected to meet it; the owner published `3.0.0.0` with it open.
-Task 40-V.1 is ticked when this is fixed and U.11 read again.
-
-- [ ] GEN1.1 `fresh` only for the member whose tunnel changed (the tunnel-up action and the U4 up-hook), never on a resync; host tests for two members; U.11 on 98 SE and ME with an NVMe on each tunnel bus, and on 2000 as a regression
-- [ ] GEN1.2 legs on 98 SE and ME with more than one NVMe drive at once, each written and compared while the others are plugged and unplugged: two enclosures on two ports, two drives behind one enclosure's or dock's switch, a drive on each router of a daisy chain, and an internal NVMe under Stor98 beside a tunnelled one; what Stor98's side needs is tracked in its own plan (owner, 2026-10-17)

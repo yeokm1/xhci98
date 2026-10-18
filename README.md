@@ -37,7 +37,6 @@ The same enclosure on Windows 98 SE with the same drivers: CrystalDiskMark seque
 
 * Related projects: 
   * Stor98 NVME driver: https://github.com/yeokm1/stor98
-  * usb4-emu qemu-port: https://github.com/yeokm1/usb4-emu
 
 ## Contents
 
