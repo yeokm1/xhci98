@@ -676,6 +676,23 @@ static VOID test_gate(VOID)
     start();
     pass();
     CHECK_EQ(why(), CM_NI_W_CONFIG, "an OEM type");
+    /* An every-type read that does not meet what the typed reads found:
+     * the absence of other types unproven, refused. */
+    model();
+    f.FailKind = CM_NI_OP_RD_READ;
+    f.FailAfter = 4;            /* mem, mem end, irq, irq end ... */
+    f.FailCr = CM_NI_CR_NO_MORE_RES_DES;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "an empty every-type read refused");
+    CHECK_EQ(f.Calls[CM_NI_OP_ADD_EMPTY], 0, "nothing created");
+    /* PCI.VXD's configuration as read on 98 SE (2026-10-19): memory, no
+     * IRQ descriptor - refused, "configuration". */
+    model();
+    f.Lc[0].N = 1;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "memory only: not this record's case");
     model();
     f.FailKind = CM_NI_OP_LC_LIST;
     f.FailCr = CM_NI_CR_FAILURE;

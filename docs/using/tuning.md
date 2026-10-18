@@ -357,7 +357,7 @@ on Windows 98 SE and ME only.
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciCmNoIrqStart` | An NVMe drive behind a Thunderbolt or USB4 tunnel whose interrupt cannot be routed (Device Manager: Code 29, 12, 16 or 27) started with no interrupt, when it is bound to the bundled Stor98 0.4.0.0 or later, which then polls (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | not written |
+| `XhciCmNoIrqStart` | An NVMe drive behind a Thunderbolt or USB4 tunnel whose interrupt cannot be routed (Device Manager: Code 29, 12, 16 or 27) started with no interrupt, when it is bound to the bundled Stor98 0.4.0.0 or later, which then polls (98 SE and ME; ignored on 2000 to 7; read in the emulator not to apply yet - the release notes, "Known limitations") | `0` | `1` | `1` | not written |
 | `XhciCmBridgeNumbering` | The set-up (bus numbers, memory windows, interrupt lines) of the PCI bridges a device brings up behind a Thunderbolt tunnel after Windows has started (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | not written |
 
 A device whose PCI Express side has a bridge of its own, such as a USB4

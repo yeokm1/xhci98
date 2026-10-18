@@ -639,23 +639,17 @@ have every leg.
   ThinkPad P14s Gen 1 and in the emulator; the USB4 connection manager
   takes the same path but has not been read with such a device.
 - **Windows 98 SE and ME: an NVMe drive behind a tunnel whose interrupt
-  cannot be routed** (Device Manager: Code 29 for want of an IRQ) is
-  started with no interrupt, and the bundled Stor98 runs it in its
-  polling mode (Stor98's README, "Polling mode"); `XhciCmNoIrqStart`, on
-  by default. Only a drive bound to the Stor98 this package's installer
-  installed (0.4.0.0 or later) is started so; a hand-installed Stor98 is
-  not, and stays at its problem code. A drive plugged in after a Stor98
-  update and before the restart the installer asks for may still load the
-  older Stor98, whose behaviour without an interrupt has not been
-  measured: restart first. A drive this left unstarted after a Device
-  Manager Refresh stays so until the next plug. A drive with no interrupt
-  pin (MSI only) is expected to start by itself and has not been read.
-  The emulator legs of this are `runs/run-42.md`'s; no device at hand
-  presents the case on real hardware. While xhcicm.sys makes the calls
-  for this, a hardware wizard left open on 98 SE or ME holds its other
-  work for the tunnel ports too (plug, removal and safe-eject marking
-  wait), as any Windows 98 configuration call it makes does, and a drive
-  being started then is retried at the next plug.
+  cannot be routed** (Device Manager: Code 29, "the BIOS for the device did
+  not give it an IRQ") **still does not start.** The driver's attempt to
+  start such a drive with no interrupt for the bundled Stor98 to poll
+  (`XhciCmNoIrqStart`, on by default) was read in the emulator and does
+  not apply to the case seen there: Windows' own configuration of the
+  drive asks for no interrupt, so the driver leaves it as it is and
+  changes nothing. Re-plug the drive with the tunnel's bridge routed, or
+  restart with it attached. While xhcicm.sys makes its Windows 98
+  configuration calls, a hardware wizard left open on 98 SE or ME holds
+  its other work for the tunnel ports too (plug, removal and safe-eject
+  marking wait), as any such call it makes does.
 - **Windows 98 SE and ME: after Safely Remove of such a device, unplug it
   before using it again.** Windows' stop closes the switch's memory windows;
   Scan for hardware changes without an unplug leaves the drive at Code 29

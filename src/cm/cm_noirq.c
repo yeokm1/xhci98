@@ -979,6 +979,7 @@ static VOID niGate(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
     d->MemAdded = 0;
     d->RdAt = d->Source;
     d->RdPhase = 0;
+    d->RdAllSeen = 0;
     d->Step = NI_AD_RD;
 }
 
@@ -994,6 +995,13 @@ static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
         return;
     }
     if (res->Cr == CM_NI_CR_NO_MORE_RES_DES) {
+        /* The every-type read must have met each descriptor the typed
+         * reads found; fewer leaves the absence of any other type
+         * unproven, and the attempt is refused. */
+        if (d->RdAllSeen != d->MemCount + d->HaveIrq) {
+            niExclude(m, d, CM_NI_W_CONFIG);
+            return;
+        }
         if (!d->HaveIrq || d->MemCount == 0) {
             niExclude(m, d, CM_NI_W_CONFIG);
             return;
@@ -1023,10 +1031,17 @@ static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
          * phases; anything else (an OEM or ignored type) refuses. */
         if (res->Type != CM_NI_RES_MEM && res->Type != CM_NI_RES_IRQ) {
             niExclude(m, d, CM_NI_W_CONFIG);
+            return;
         }
+        d->RdAllSeen++;
         return;
     }
     if (res->Type == CM_NI_RES_IRQ) {
+        /* More than one IRQ descriptor is not this record's form. */
+        if (d->HaveIrq) {
+            niExclude(m, d, CM_NI_W_CONFIG);
+            return;
+        }
         d->HaveIrq = 1;
         return;
     }

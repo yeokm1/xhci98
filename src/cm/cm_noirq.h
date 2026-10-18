@@ -139,14 +139,9 @@
                                            Off, Len room. The source's
                                            descriptors are read one type at
                                            a time - memory, IRQ, I/O, DMA -
-                                           then with ResType_All for any
-                                           other type, which refuses (read
-                                           on 98 SE, 2026-10-19: a
-                                           ResType_All read of PCI.VXD's
-                                           configuration of an NVMe at Code
-                                           29 answered no descriptor, so it
-                                           is not relied on to find memory
-                                           or IRQ)                         */
+                                           then with ResType_All, which
+                                           must meet each of those and no
+                                           other type                      */
 #define CM_NI_OP_ADD_EMPTY      7UL     /* Add_Empty_Log_Conf(Dn,
                                            LCPRI_DISABLED, LcKind |
                                            PRIORITY_EQUAL_LAST)            */
@@ -293,6 +288,7 @@ typedef struct _CM_NI_DEV {
     ULONG RdAt;             /* the descriptor read past next (RD_READ)    */
     ULONG RdPhase;          /* the type being read: 0 memory, 1 IRQ, 2 I/O,
                                3 DMA, 4 every type                       */
+    ULONG RdAllSeen;        /* descriptors the every-type read met        */
     ULONG LastStep;         /* the diagnostic's step reached              */
     ULONG LastCr;
     ULONG Pin0Gen;          /* a pin-0 function counted for gen + 1       */
