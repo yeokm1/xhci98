@@ -118,3 +118,42 @@ its own admission window independent of safe eject; the descendant walk
 below the member; every hypothesis about `PCI.VXD` marked as one;
 decisions N1 to N10). With it every design of Phase 42 has converged
 before its code, as the checkpoint asks.
+
+## 42-A.1: XHCIDI.EXE, first build and the 98 SE smoke readings (2026-10-18)
+
+Branch `p42-di`. The helper of design record 27 (`xhciinst\di\`), its
+pure part and host suite `test\test_di.c`, its NE import gate, its
+staging in `make-release.ps1`, and the legs' test driver `DITEST.EXE`
+(`xhciinst\di\test\`), committed as `8a8d276b` and `0d5381c6`; reviewed
+and revised over two rounds, the second clean at every priority. The x86
+gated build (`build-driver.cmd all`) passed on `8a8d276b` before the
+review: host tests 2080 checks, 0 failures (`test_di` 376 since
+`0d5381c6`), the helper's self-test (25 imports by ordinal from KERNEL,
+USER and SETUPX, each the allowlist's, every refusal case of the gate,
+the stamp). The full gated build of both architectures after the loop
+and the 42-V.1 legs were **not run**: two smoke readings on a 98 SE
+guest, taken before the legs to test the record's two untested
+foundations, stop the task for a decision (the coordinator's brief:
+stop and report when a SETUPX routine does not behave as the record
+assumed).
+
+The guest: a fresh overlay of `vm\t26\win98-clean.qcow2` (98 SE with
+NUSB, no xhci98) on `vm\usb4\bin-2a893ea`, i440FX, one vCPU, the
+emulator's Thunderbolt 3 layout; QMP 47980; the kit (the staged
+`release-x86` package, `XHCIDI.EXE`, `DITEST.EXE`) copied to `C:\XHCI98`.
+Readings by `DITEST.EXE` over COM1 into the host's serial log.
+
+| Reading | Result |
+|---|---|
+| probe | `XHCIDI 3.0.0.0`, `JOB probe`, `RESULT probed`, `END 3`; END read and the process handle signalled 49 ms after the start, `GetExitCodeProcess` 0. The image loads on 98 SE (its ordinals resolve) and the handle of a 16-bit process **does** signal at its exit here |
+| hwnd | A 32-bit window's handle (844, 1048) passed in decimal is accepted by the helper's `IsWindow` |
+| A devnode whose Found New Hardware wizard was **cancelled** | Not in the devnode tree for the rest of that boot (`cfgmgr32` walk; its `Enum` entry stays, `Class` `Unknown`), so the helper answers `FOUND 0`, `RESULT not-present`. Taking the wizard to its end with no driver ("Windows has not installed a driver") leaves it present at problem 28, class `Unknown` |
+| **The command line** | `CreateProcessA` fails with error 31 when the helper's command tail is 127 characters or more (126 worked, 127 failed, the same job with a four-digit hwnd for a three-digit one): the MS-DOS command tail of a 16-bit program. A PCI device id alone is 66 characters, so record 27 section 4.1's line (version, job, result path, hwnd, device id, INF path, flags) does not fit for a controller in the install directory `C:\XHCI98`, let alone a USB id with a serial |
+| **`DIF_SELECTBESTCOMPATDRV`** | On the controller at problem 28 with `xhci98.inf` (tail kept under 127): `DiGetClassDevsEx` 0, `FOUND 1`, `DiGetINFClass` `USB` 0, `DiCreateDeviceInfo` 0, `DiBuildCompatDrvList` 0, then `DiCallClassInstaller(DIF_SELECTBESTCOMPATDRV)` returned **506, `ERR_DI_DO_DEFAULT`**, with `DI_NODI_DEFAULTACTION` clear: the dispatcher does not perform a default for this function (record 27 section 5.2 assumed it would) |
+| With a selection of the helper's own (an experimental build, not committed: the lowest-rank node of `lpCompatDrvList`, the network sample's `lpSelectedDriver = lpCompatDrvList` shape) | `DRIVER XHCI98.INF Xhci.Dev "xHCI98 USB 3.x eXtensible Host Controller" rank 2005`, `NODE 00000040`; `CtlGetLddPath` `D:\WIN98\` 0, `CtlSetLddPath C:\XHCI98` 0; **`DiCallClassInstaller(DIF_INSTALLDEVICE)` 0** (its default install did run): `xhci98.sys` copied from `C:\XHCI98`, the Windows CD prompt for `usbd.sys` with "Copy files from" `D:\WIN98` (the setup source, not the `LDID_SRCPATH` set), answered with the CD's path; `FLAGS 00010111` (`DI_NEEDREBOOT`), `RESULT installed-restart`, 114.6 s with the prompt; `Enum` key `Class` `USB`, `Driver` `USB\0002`, the driver key with `NTMPDriver` `xhci98.sys`, `DevLoader` `*NTKERN`, every `Xhci*` default, `InfPath` `YEOKHE~1.INF`, `InfSection` `Xhci.Dev`; the devnode at problem 2 until the restart |
+
+What follows from them is for the owner and the coordinator (the
+report of 2026-10-18): the helper's interface needs a carrier other than
+the command line for the job's operands, and section 5.2 needs a
+selection for `ERR_DI_DO_DEFAULT`. The legs owed are all of record 27
+section 12 on 98 SE and ME, after that decision.
