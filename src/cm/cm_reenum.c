@@ -359,9 +359,14 @@ VOID CmRegPublish(PCM_FILTER filter)
     ULONG bdf;
     KIRQL irql;
 
+    /* cmLocation's DevicePropertyAddress is answered by a QUERY_CAPABILITIES
+     * down this stack, which this filter must pass through unlocated. */
+    filter->InLocate++;
     if (!cmLocation(filter->Common.Pdo, &bdf)) {
+        filter->InLocate--;
         return;
     }
+    filter->InLocate--;
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (!filter->Published) {
         filter->Bdf = bdf;
@@ -855,26 +860,13 @@ VOID CmRegAttLink(PCM_FILTER filter)
 /* The PDO's bus number and address, as the PnP manager's devnode has them
  * (record 21 section 7.4, revision 3: never read at the BusRelations
  * attachment, before the devnode exists). PASSIVE_LEVEL. */
-VOID CmRegAttLocate(PCM_FILTER filter)
+/* The location published once read. PASSIVE_LEVEL. */
+static VOID cmAttLocated(PCM_FILTER filter, ULONG bus, ULONG address)
 {
-    ULONG bus;
-    ULONG address;
-    ULONG bytes;
     KIRQL irql;
 
-    if (filter->Located) {
-        return;
-    }
-    bus = 0;
-    address = 0;
-    if (!NT_SUCCESS(IoGetDeviceProperty(filter->Common.Pdo,
-                                        DevicePropertyBusNumber, sizeof(bus),
-                                        &bus, &bytes)) ||
-        bus > 0xFFUL ||
-        !NT_SUCCESS(IoGetDeviceProperty(filter->Common.Pdo,
-                                        DevicePropertyAddress,
-                                        sizeof(address), &address, &bytes)) ||
-        (address >> 16) > 0x1FUL || (address & 0xFFFFUL) > 7UL) {
+    if (bus > 0xFFUL || (address >> 16) > 0x1FUL ||
+        (address & 0xFFFFUL) > 7UL) {
         return;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
@@ -883,6 +875,53 @@ VOID CmRegAttLocate(PCM_FILTER filter)
     filter->Located = 1;
     cmMarkAttOf(filter);
     KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegAttLocate(PCM_FILTER filter)
+{
+    ULONG bus;
+    ULONG address;
+    ULONG bytes;
+    BOOLEAN ok;
+
+    if (filter->Located || filter->InLocate) {
+        return;
+    }
+    bus = 0;
+    address = 0;
+    filter->InLocate++;
+    ok = (BOOLEAN)(NT_SUCCESS(IoGetDeviceProperty(filter->Common.Pdo,
+                                                  DevicePropertyBusNumber,
+                                                  sizeof(bus), &bus,
+                                                  &bytes)) &&
+                   NT_SUCCESS(IoGetDeviceProperty(filter->Common.Pdo,
+                                                  DevicePropertyAddress,
+                                                  sizeof(address), &address,
+                                                  &bytes)));
+    filter->InLocate--;
+    if (ok) {
+        cmAttLocated(filter, bus, address);
+    }
+}
+
+VOID CmRegAttLocateCaps(PCM_FILTER filter, ULONG address)
+{
+    ULONG bus;
+    ULONG bytes;
+    BOOLEAN ok;
+
+    if (filter->Located || filter->InLocate) {
+        return;
+    }
+    bus = 0;
+    filter->InLocate++;
+    ok = (BOOLEAN)NT_SUCCESS(IoGetDeviceProperty(filter->Common.Pdo,
+                                                 DevicePropertyBusNumber,
+                                                 sizeof(bus), &bus, &bytes));
+    filter->InLocate--;
+    if (ok) {
+        cmAttLocated(filter, bus, address);
+    }
 }
 
 BOOLEAN CmRegAttMayMark(PCM_FILTER filter)

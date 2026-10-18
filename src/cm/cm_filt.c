@@ -196,7 +196,10 @@ static NTSTATUS cmFilterUsageDone(PDEVICE_OBJECT device, PIRP irp,
  * an AddDevice child or a bridge filter only while it is a unit of an
  * active member with safe eject on). SurpriseRemovalOK, EjectSupported and
  * LockSupported are left as the bus driver set them. The location is read
- * first, so that a capability request before the start finds it.
+ * on the way up, the address from the answer itself (CmRegAttLocateCaps),
+ * so that a capability request before the start - a never-seen device's
+ * first, before any driver of its own - finds it; a request this object
+ * caused by asking for its own location passes through unlocated.
  * PASSIVE_LEVEL.
  */
 static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
@@ -205,13 +208,13 @@ static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
     PDEVICE_CAPABILITIES caps;
     NTSTATUS status;
 
-    CmRegAttLocate(child);
     status = CmForwardSync(&child->Common, irp);
-    if (NT_SUCCESS(status) && CmRegAttMayMark(child)) {
-        stack = IoGetCurrentIrpStackLocation(irp);
-        caps = stack->Parameters.DeviceCapabilities.Capabilities;
-        if (caps != NULL && caps->Version >= 1 &&
-            caps->Size >= sizeof(DEVICE_CAPABILITIES)) {
+    stack = IoGetCurrentIrpStackLocation(irp);
+    caps = stack->Parameters.DeviceCapabilities.Capabilities;
+    if (NT_SUCCESS(status) && caps != NULL && caps->Version >= 1 &&
+        caps->Size >= sizeof(DEVICE_CAPABILITIES)) {
+        CmRegAttLocateCaps(child, caps->Address);
+        if (CmRegAttMayMark(child)) {
             caps->Removable = 1;
             CmRegAttAnswered(child);
         }

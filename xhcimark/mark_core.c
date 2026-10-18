@@ -175,7 +175,7 @@ const char *mk_w_text(int w)
     case MK_W_NO_UNIT:      return "no single child devnode of the port at the unit's location";
     case MK_W_PROTECTED:    return "protected device (NHI, NHI ancestor or host USB controller)";
     case MK_W_PRESENT:      return "mark already present";
-    case MK_W_UNREADABLE:   return "LowerFilters could not be read";
+    case MK_W_UNREADABLE:   return "its status or LowerFilters could not be read";
     default:                return "unknown";
     }
 }

@@ -104,7 +104,8 @@ int mk_member_active(const MK_QUERY *q, INST_U32 bdf);
 #define MK_W_PROTECTED      7   /* an NHI, an NHI's ancestor, the host's
                                    own USB controller                     */
 #define MK_W_PRESENT        8   /* xhcicm already in LowerFilters         */
-#define MK_W_UNREADABLE     9   /* LowerFilters could not be read         */
+#define MK_W_UNREADABLE     9   /* its status or LowerFilters could not be
+                                   read                                   */
 const char *mk_w_text(int w);
 
 /* The restart's wish (the first plug a rebuild overtook): the entry

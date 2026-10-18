@@ -179,6 +179,9 @@ typedef struct _MK_NODE {
     ULONG Bus;
     ULONG Address;
     int HasLoc;
+    int StatusOk;           /* CM_Get_DevNode_Status succeeded             */
+    int ServiceBad;         /* the Service value could not be read (absent
+                               is not bad)                                 */
     ULONG Status;
     ULONG Problem;
 } MK_NODE;
@@ -194,6 +197,7 @@ typedef struct _MK_NHI {
 } MK_NHI;
 
 typedef struct _MK_TRIED {
+    char NhiId[INST_ID_CHARS];  /* the domain the serial belongs to       */
     INST_U32 EpochLo;
     INST_U32 EpochHi;
     INST_U32 Serial;
@@ -222,6 +226,7 @@ static SERVICE_STATUS_HANDLE statusHandle;
 static SERVICE_STATUS status;
 static DWORD lastInventory;
 static int inventoryDone;
+static const int *curProt;      /* this poll's protected nodes (mk_poll)  */
 
 /* ======================================================================== */
 /* The log                                                                  */
@@ -384,14 +389,17 @@ static int mk_load(void)
 /* The tree                                                                 */
 /* ======================================================================== */
 
-static void mk_prop_text(DWORD dn, ULONG prop, char *out, size_t cap,
-                         size_t *bytes)
+/* A text property; returns the CONFIGRET (CR_NO_SUCH_VALUE: absent). */
+static DWORD mk_prop_text(DWORD dn, ULONG prop, char *out, size_t cap,
+                          size_t *bytes)
 {
     ULONG type = 0;
     ULONG n = (ULONG)cap - 2;
+    DWORD cr;
 
     memset(out, 0, cap);
-    if (api.GetProp(dn, prop, &type, out, &n, 0) != MK_CR_SUCCESS) {
+    cr = api.GetProp(dn, prop, &type, out, &n, 0);
+    if (cr != MK_CR_SUCCESS) {
         memset(out, 0, cap);
         n = 0;
     }
@@ -400,6 +408,7 @@ static void mk_prop_text(DWORD dn, ULONG prop, char *out, size_t cap,
     if (bytes != NULL) {
         *bytes = n;
     }
+    return cr;
 }
 
 static int mk_prop_dword(DWORD dn, ULONG prop, ULONG *v)
@@ -437,11 +446,14 @@ static void mk_walk_from(DWORD dn, int parent, int depth)
                      &t->HwBytes);
         mk_prop_text(dn, MK_CM_DRP_COMPATIBLEIDS, t->Compat,
                      sizeof(t->Compat), &t->CompatBytes);
-        mk_prop_text(dn, MK_CM_DRP_SERVICE, t->Service, sizeof(t->Service),
-                     NULL);
+        cr = mk_prop_text(dn, MK_CM_DRP_SERVICE, t->Service,
+                          sizeof(t->Service), NULL);
+        t->ServiceBad = cr != MK_CR_SUCCESS && cr != MK_CR_NO_SUCH_VALUE;
         t->HasLoc = mk_prop_dword(dn, MK_CM_DRP_BUSNUMBER, &t->Bus) &&
                     mk_prop_dword(dn, MK_CM_DRP_ADDRESS, &t->Address);
-        if (api.Status(&t->Status, &t->Problem, dn, 0) != MK_CR_SUCCESS) {
+        t->StatusOk = api.Status(&t->Status, &t->Problem, dn, 0) ==
+                      MK_CR_SUCCESS;
+        if (!t->StatusOk) {
             t->Status = 0;
             t->Problem = 0;
         }
@@ -659,19 +671,28 @@ static int mk_read_nhis(void)
     nhiCount = 0;
     for (i = 0; i < nodeCount && nhiCount < MK_MAX_NHIS; i++) {
         MK_NHI *h;
-        if (!inst_eq(nodes[i].Service, MK_NAME) ||
-            !inst_tb_is_nhi(nodes[i].Hw, nodes[i].HwBytes, nodes[i].Compat,
-                            nodes[i].CompatBytes, nodes[i].Service)) {
+        int unread;
+        /* An NHI whose Service value cannot be read may be this driver's:
+         * it is listed, never answered, so it counts as a domain that
+         * cannot be verified rather than vanishing from the evidence. */
+        unread = nodes[i].ServiceBad &&
+                 inst_tb_is_nhi(nodes[i].Hw, nodes[i].HwBytes,
+                                nodes[i].Compat, nodes[i].CompatBytes, "");
+        if (!unread &&
+            (!inst_eq(nodes[i].Service, MK_NAME) ||
+             !inst_tb_is_nhi(nodes[i].Hw, nodes[i].HwBytes, nodes[i].Compat,
+                             nodes[i].CompatBytes, nodes[i].Service))) {
             continue;
         }
         h = &nhis[nhiCount++];
         memset(h, 0, sizeof(*h));
         h->Node = i;
-        h->DevOk = (nodes[i].Status & MK_DN_STARTED) != 0 &&
+        h->DevOk = nodes[i].StatusOk &&
+                   (nodes[i].Status & MK_DN_STARTED) != 0 &&
                    (nodes[i].Status & MK_DN_HAS_PROBLEM) == 0;
-        mk_prop_text(nodes[i].Dn, MK_CM_DRP_DRIVER, h->Driver,
-                     sizeof(h->Driver), NULL);
-        h->Answered = mk_read_nhi(h);
+        (void)mk_prop_text(nodes[i].Dn, MK_CM_DRP_DRIVER, h->Driver,
+                           sizeof(h->Driver), NULL);
+        h->Answered = !unread && mk_read_nhi(h);
         h->Verifiable = h->Answered && mk_verifiable(h->DevOk, &h->Q, &h->M);
         if (h->Answered) {
             any = 1;
@@ -917,9 +938,11 @@ static int mk_filters_remove(DWORD dn)
 /* Per entry                                                                */
 /* ======================================================================== */
 
-/* Whether an attempt's serial is still reported by its domain's answer
- * this poll; an attempt is never forgotten while it is (decision M3, once
- * per serial). */
+/* Whether an attempt may still matter (decision M3, once per serial):
+ * kept unless there is positive evidence its serial is gone - its NHI's
+ * devnode no longer in the tree, its NHI answering under another epoch
+ * (a new start), or answering under that epoch without the serial
+ * reported. An NHI that cannot be read keeps its attempts. */
 static int mk_tried_live(const MK_TRIED *t)
 {
     int i;
@@ -927,9 +950,14 @@ static int mk_tried_live(const MK_TRIED *t)
 
     for (i = 0; i < nhiCount; i++) {
         const MK_NHI *h = &nhis[i];
-        if (!h->Answered || h->M.EpochLo != t->EpochLo ||
-            h->M.EpochHi != t->EpochHi) {
+        if (!inst_eq(nodes[h->Node].Id, t->NhiId)) {
             continue;
+        }
+        if (!h->Answered) {
+            return 1;
+        }
+        if (h->M.EpochLo != t->EpochLo || h->M.EpochHi != t->EpochHi) {
+            return 0;
         }
         for (j = 0; j < h->M.Count; j++) {
             if (h->M.E[j].Serial == t->Serial &&
@@ -937,20 +965,25 @@ static int mk_tried_live(const MK_TRIED *t)
                 return 1;
             }
         }
+        return 0;
     }
-    return 0;
+    /* Its NHI is not in this poll's tree: a walk that missed it proves
+     * nothing, so only a whole walk retires it. */
+    return walkBad != 0;
 }
 
 /* The attempt state of a serial, made when `make`; NULL when the table is
  * full of still-reported serials (the caller then acts on nothing this
  * poll rather than forget an earlier attempt). */
-static MK_TRIED *mk_tried(const MK_MARKS *m, INST_U32 serial, int make)
+static MK_TRIED *mk_tried(const MK_NHI *h, INST_U32 serial, int make)
 {
+    const MK_MARKS *m = &h->M;
     int i;
 
     for (i = 0; i < triedCount; i++) {
         if (tried[i].Serial == serial && tried[i].EpochLo == m->EpochLo &&
-            tried[i].EpochHi == m->EpochHi) {
+            tried[i].EpochHi == m->EpochHi &&
+            inst_eq(tried[i].NhiId, nodes[h->Node].Id)) {
             return &tried[i];
         }
     }
@@ -971,6 +1004,8 @@ static MK_TRIED *mk_tried(const MK_MARKS *m, INST_U32 serial, int make)
         triedCount--;
     }
     memset(&tried[triedCount], 0, sizeof(tried[0]));
+    inst_copy(tried[triedCount].NhiId, nodes[h->Node].Id,
+              sizeof(tried[triedCount].NhiId));
     tried[triedCount].Serial = serial;
     tried[triedCount].EpochLo = m->EpochLo;
     tried[triedCount].EpochHi = m->EpochHi;
@@ -1007,6 +1042,9 @@ static int mk_check_entry(const MK_NHI *h, const MK_ENTRY *e,
     if (unit < 0) {
         return MK_W_NO_UNIT;
     }
+    if (!nodes[unit].StatusOk) {
+        return MK_W_UNREADABLE;
+    }
     if (prot[unit] || prot[port]) {
         return MK_W_PROTECTED;
     }
@@ -1026,16 +1064,24 @@ static struct {
     DWORD At;
 } failed[MK_MAX_FAILED];
 
+/* 1 when a write or replay of `id` may be tried now: no deadline of its
+ * own pending, and room to keep one should it fail (a full table of
+ * unexpired deadlines defers new attempts rather than forget one). */
 static int mk_write_due(const char *id)
 {
     int i;
+    int room = 0;
 
     for (i = 0; i < MK_MAX_FAILED; i++) {
         if (failed[i].Id[0] != '\0' && inst_eq(failed[i].Id, id)) {
             return GetTickCount() - failed[i].At >= MK_RETRY_MS;
         }
+        if (failed[i].Id[0] == '\0' ||
+            GetTickCount() - failed[i].At >= MK_RETRY_MS) {
+            room = 1;
+        }
     }
-    return 1;
+    return room;
 }
 
 static void mk_write_failed(const char *id)
@@ -1058,6 +1104,7 @@ static void mk_write_failed(const char *id)
             oldest = i;
         }
     }
+    /* mk_write_due left room: the oldest is free or past its deadline. */
     inst_copy(failed[oldest].Id, id, sizeof(failed[oldest].Id));
     failed[oldest].At = GetTickCount();
 }
@@ -1192,7 +1239,7 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
     BOOL called;
     const char *why = NULL;
 
-    t = mk_tried(&h->M, e->Serial, 1);
+    t = mk_tried(h, e->Serial, 1);
     if (t == NULL || t->Restarted || paramRestart == 0) {
         return;
     }
@@ -1295,7 +1342,7 @@ static void mk_confirm(const MK_NHI *h, const MK_ENTRY *e, int unit)
         nodes[unit].Problem != MK_PROB_HELD_FOR_EJECT) {
         return;
     }
-    t = mk_tried(&h->M, e->Serial, 1);
+    t = mk_tried(h, e->Serial, 1);
     if (t == NULL || h->Driver[0] == '\0' ||
         (t->Confirmed && GetTickCount() - t->At < MK_CONFIRM_AGAIN_MS)) {
         return;
@@ -1368,9 +1415,9 @@ static void mk_entries(const int *prot)
                 continue;
             }
             if (w != MK_W_PRESENT) {
-                t = mk_tried(&h->M, e->Serial, 0);
+                t = mk_tried(h, e->Serial, 0);
                 if (w != MK_W_NOT_LOCATED && (t == NULL || !t->Outcome)) {
-                    t = mk_tried(&h->M, e->Serial, 1);
+                    t = mk_tried(h, e->Serial, 1);
                     if (t == NULL) {
                         continue;
                     }
@@ -1382,7 +1429,7 @@ static void mk_entries(const int *prot)
                 continue;
             }
             /* The mark is there. */
-            t = mk_tried(&h->M, e->Serial, 0);
+            t = mk_tried(h, e->Serial, 0);
             if (t != NULL && t->Restarted && !t->Outcome &&
                 (e->Flags & (MK_EF_BUS_ATT | MK_EF_ADD_ATT)) != 0 &&
                 (e->Flags & MK_EF_REMOVABLE) != 0) {
@@ -1446,7 +1493,10 @@ static void mk_judge(const char *id, const char *text)
     int safeOff = 0;
     int memberActive = 0;
     int verdict;
+    int w;
+    int unit;
     MK_NHI *owner = NULL;
+    const MK_ENTRY *le = NULL;
     HANDLE m;
 
     if (!mk_rec_parse(text, &member, &hi, &lo, &state)) {
@@ -1514,6 +1564,7 @@ static void mk_judge(const char *id, const char *text)
                 (e->Flags & MK_EF_LOCATED) && e->Bus == nodes[node].Bus &&
                 e->Address == nodes[node].Address) {
                 listed = 1;
+                le = e;
             }
         }
     }
@@ -1525,7 +1576,16 @@ static void mk_judge(const char *id, const char *text)
         return;
     }
     if (verdict == MK_R_KEEP) {
-        if (state == MK_REC_WRITING && mk_write_due(id)) {
+        if (state != MK_REC_WRITING || le == NULL || curProt == NULL) {
+            return;
+        }
+        /* A replay is a write: the write's own checks first, the unit the
+         * one the record names. */
+        w = mk_check_entry(owner, le, curProt, &unit);
+        if ((w != MK_W_OK && w != MK_W_PRESENT) || unit != node) {
+            return;
+        }
+        if (mk_write_due(id)) {
             m = mk_lock(MK_WRITE_MUTEX, 5000);
             if (m != NULL) {
                 if (mk_filters_add(dn)) {
@@ -1688,6 +1748,7 @@ static DWORD mk_poll(void)
         lastInventory = GetTickCount();
     }
     prot = mk_protect();
+    curProt = prot;
     if (walkBad != 0) {
         /* An incomplete walk proves no parent and no absence. */
         mk_log("the device tree walk was incomplete (%d); poll skipped",

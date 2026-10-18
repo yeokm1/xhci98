@@ -529,10 +529,14 @@ BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
  * on an identity-checked confirmation (CmReenumConfirm).
  *
  * CmRegAttLink     after the attach (any IRQL <= DISPATCH_LEVEL).
- * CmRegAttLocate   at the first request the PnP manager sends the device
- *                  (its start's way back, or a QUERY_CAPABILITIES first):
- *                  the PDO's bus number and address read once
- *                  (IoGetDeviceProperty) and published. PASSIVE_LEVEL.
+ * CmRegAttLocate   at the start's way back: the PDO's bus number and
+ *                  address read once (IoGetDeviceProperty) and published.
+ *                  CmRegAttLocateCaps at a QUERY_CAPABILITIES' way back,
+ *                  which may come first: the address from the answer, the
+ *                  bus number by IoGetDeviceProperty. Neither reads while
+ *                  the object is itself asking (CM_FILTER.InLocate): the
+ *                  PnP manager answers DevicePropertyAddress with a
+ *                  QUERY_CAPABILITIES down this stack. PASSIVE_LEVEL.
  * CmRegAttMayMark  whether this attachment answers Removable: a child the
  *                  bridge filter attached always (it exists only on an
  *                  active member with safe eject on); one AddDevice made,
@@ -550,6 +554,7 @@ BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
  */
 VOID CmRegAttLink(struct _CM_FILTER *filter);
 VOID CmRegAttLocate(struct _CM_FILTER *filter);
+VOID CmRegAttLocateCaps(struct _CM_FILTER *filter, ULONG address);
 BOOLEAN CmRegAttMayMark(struct _CM_FILTER *filter);
 VOID CmRegAttAnswered(struct _CM_FILTER *filter);
 VOID CmRegAttEvent(struct _CM_FILTER *filter, ULONG which);

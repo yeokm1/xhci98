@@ -496,6 +496,13 @@ typedef struct _CM_FILTER {
     ULONG LocAddress;       /* DevicePropertyAddress                        */
     ULONG Answered;         /* Removable answered set                      */
     ULONG Stray;            /* counted once as cm.reenum.child.stray       */
+    /* Set while this object asks IoGetDeviceProperty for its PDO's
+     * location: the PnP manager answers DevicePropertyAddress with an
+     * IRP_MN_QUERY_CAPABILITIES sent to the top of this very stack, which
+     * must pass through this object unlocated (read on Windows 2000: a
+     * double fault, the stack overflowed by the recursion). The PnP
+     * dispatch alone touches it. */
+    ULONG InLocate;
 } CM_FILTER, *PCM_FILTER;
 
 /* cm_entry.c */
