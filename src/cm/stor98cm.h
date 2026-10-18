@@ -132,7 +132,9 @@
 // only, RemoveAck).
 //  1. Tunnel established: Sequence odd; LinkGeneration++;
 //     Flags = IN_USE | UP; Sequence even. Done before the OS can enumerate
-//     the endpoint (before IoInvalidateDeviceRelations on the bridge).
+//     the endpoint (before IoInvalidateDeviceRelations on the bridge). Only
+//     a new tunnel increments LinkGeneration: UP published again for a
+//     tunnel that stayed up keeps its generation (R8b).
 //  2. Link down, only after the tunnel's PCIe path is closed and the
 //     endpoint reset has completed: Sequence odd;
 //     Flags = IN_USE | DOWN_QUIESCED; Sequence even.
@@ -140,12 +142,19 @@
 //     the gone deadline, and only then starts the OS removal path.
 //  4. The CM never re-establishes a tunnel to an endpoint that was not
 //     reset since the last tunnel (MD-2).
-// stor98 records LinkGeneration at HwFindAdapter. It applies DOWN_QUIESCED
-// for that generation or a newer one (held requests completed, held DMA
-// memory released, gone deadline cancelled, BusChangeDetected), then writes
-// AckGeneration = LinkGeneration. DOWN without QUIESCED, or an older
-// generation, is ignored. An entry read with an odd Sequence, or whose
-// Sequence changed during the read, is read again later.
+// stor98 records LinkGeneration at HwFindAdapter (the generation it is
+// bound to). It applies DOWN_QUIESCED for that generation or a newer one
+// (held requests completed, held DMA memory released, gone deadline
+// cancelled, BusChangeDetected), then writes AckGeneration = LinkGeneration
+// only when LinkGeneration is the bound generation. A newer generation
+// belongs to a newer instance (R8c): the bound instance applies a
+// DOWN_QUIESCED for it but never acknowledges it, so the CM's wait in step
+// 3 runs to its end. On NT, UP with a newer generation changes nothing (the
+// instance keeps polling); on 9x it is evidence only once the instance has
+// lost presence, and while its controller still answers the instance stops
+// acting on the entry (R8d). DOWN without QUIESCED, or an older generation,
+// is ignored. An entry read with an odd Sequence, or whose Sequence changed
+// during the read, is read again later.
 //
 #define STOR98LS_CALLBACK_NAME      L"\\Callback\\Stor98LinkState"
 #define STOR98LS_QUERY              ((PVOID)(ULONG_PTR)0x4C383953)  // 'S98L'
@@ -269,7 +278,7 @@ typedef struct _STOR98CM_MSG {
 //     Exactly one publisher per boot: the CM, a WDM driver. It allocates one
 //     STOR98LS_TABLE from NTKERN non-paged pool (VMM system arena, fixed
 //     pages), zeroes it, fills Signature, Version, Count and Cookie (a
-//     nonzero per-boot random value), then:
+//     nonzero per-boot value; it is not a secret), then:
 //       a. creates the current-boot proof: the dynamic key
 //          HKEY_DYN_DATA\STOR98LS9X_PROOF_KEY ("Stor98LinkState") with two
 //          values, both answered by its own resident provider (VMM
@@ -392,9 +401,12 @@ typedef struct _STOR98CM_MSG {
 //     QUARANTINED, owner tokens, claims and releases under stor98's own lock,
 //     never spinning from the timer or HwStartIo) and the boot-wide pool
 //     budget live in an stor98 boot-resident block validated with documented
-//     VMM services. The CM never sees or writes them. stor98 uses only this
-//     table's statements as evidence: DOWN_QUIESCED for a generation, or a
-//     larger LinkGeneration on the same entry (R8b).
+//     VMM services. The CM never sees or writes them. For these records
+//     stor98 takes from this table only DOWN_QUIESCED for a generation (or
+//     a later one) on the same entry as evidence; a larger LinkGeneration
+//     alone is not (for a bound instance it counts only as R8d allows). Its
+//     other evidence is its own: a later instance's acknowledged disable
+//     (CC.EN=0, RDY=0) of the same function.
 //
 // R8  Entries and identity.
 //     R8a One entry per tunnel port (one NVMe function behind one tunnel
@@ -408,12 +420,13 @@ typedef struct _STOR98CM_MSG {
 //         free entry; with none free, that port runs without the interface
 //         (stor98 finds no entry; the CM never reports a clean eject there).
 //     R8b LinkGeneration: per entry, nonzero once UP, incremented for every
-//         tunnel establishment, never reset or wrapped in a boot (the CM
-//         stops establishing tunnels on that port first). Tunnels on one port
-//         are sequential: the CM publishes DOWN_QUIESCED for generation G
-//         before UP of G + 1, so on the same entry every generation below
-//         the current one, and the current one when DOWN_QUIESCED, is
-//         quiesced. That is evidence for that entry only.
+//         tunnel establishment and for nothing else (UP published again for
+//         a tunnel that stayed up keeps it), never reset or wrapped in a
+//         boot (the CM stops establishing tunnels on that port first).
+//         Tunnels on one port are sequential: the CM publishes DOWN_QUIESCED
+//         for generation G before UP of G + 1, so on the same entry every
+//         generation below the current one, and the current one when
+//         DOWN_QUIESCED, is quiesced. That is evidence for that entry only.
 //     R8c Devnode retirement: the CM publishes UP for a new tunnel, or
 //         re-enumerates the bridge, only after CONFIGMG Remove_SubTree of the
 //         port's previous endpoint devnode has succeeded (or it never
@@ -425,8 +438,19 @@ typedef struct _STOR98CM_MSG {
 //         its (BusNumber, SlotNumber), recording LinkGeneration and the
 //         RemoveSequence present at that time (a request older than the load
 //         is never its own). An instance that later sees a different
-//         BusNumber/SlotNumber, IN_USE cleared, or UP with another
-//         LinkGeneration has lost its identity: it stops acting on the entry.
+//         BusNumber/SlotNumber, IN_USE cleared, or a LinkGeneration below its
+//         own has lost its identity: it stops acting on the entry. A
+//         LinkGeneration above its own is R8b evidence that its own
+//         generation is quiesced when the entry is DOWN_QUIESCED, and in any
+//         other state (UP, IN_USE alone) only once the instance has lost
+//         presence (it is gone, or its controller reads all-ones). While the
+//         controller still answers, such an entry is identity loss: no
+//         evidence, nothing completed, no acknowledgement; the drive keeps
+//         running, and a later presence loss ends at the MD-1 deadline.
+//         Evidence is applied once (the S3 cleanup) without AckGeneration,
+//         which is written only for the generation the instance is bound to;
+//         then it stops acting on the entry. While it holds an accepted
+//         removal request (R9), any other LinkGeneration is identity loss.
 //
 // R9  The removal transaction (REMOVE_PENDING, Flags bit 3).
 //     R9a Request: one Sequence update sets RemoveSequence = the next value
@@ -526,7 +550,8 @@ typedef struct _STOR98CM_MSG {
 //        cleanup first (held requests completed SRB_STATUS_NO_DEVICE, pool
 //        isolated and released, gone deadline cancelled, an open request
 //        acknowledged ISOLATED_NOT_CLEAN), then AckGeneration =
-//        LinkGeneration last (R6d). On 9x stor98 does not report
+//        LinkGeneration last (R6d), only for the generation the instance is
+//        bound to (R8d). On 9x stor98 does not report
 //        BusChangeDetected: the removal is the CM's CONFIGMG call (S4).
 //     S4 CM: waits for AckGeneration == LinkGeneration for at most the gone
 //        deadline; a shorter bound is allowed but not below

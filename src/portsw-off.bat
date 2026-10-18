@@ -1,8 +1,11 @@
 @echo off
 rem portsw-off.bat - turns the Intel port switchover off: sets
-rem XhciIntelPortSwitch to 0 on every xhci98 controller through portsw.vbs,
+rem XhciIntelPortSwitch to 0 machine-wide through portsw.vbs,
 rem which is beside it in the download's tools\portsw directory (roadmap-hcd
-rem tasks 36.56, 37.5 and 38.9, design record 16 section 5a).
+rem tasks 36.56, 37.5 and 38.9, design record 16 section 5a), in
+rem HKLM\System\CurrentControlSet\Services\USB, which every controller
+rem reads first; the controllers' own values are left alone (roadmap-usb4
+rem task 42-A.17).
 rem
 rem Windows 98 SE and ME: double-click it, or run it at a prompt in this
 rem directory. 2000 and XP: run it as an administrator. Vista and 7:
@@ -23,7 +26,7 @@ if not exist portsw.vbs goto nofile
 echo Now:
 cscript //nologo portsw.vbs show
 if errorlevel 1 goto end
-echo Setting it to 0:
+echo Setting it to 0 machine-wide, for every xhci98 controller:
 cscript //nologo portsw.vbs 0
 if errorlevel 3 goto elevate
 if errorlevel 1 goto refused
@@ -35,8 +38,8 @@ echo set, restart Windows. If you did not, nothing was changed. Next time,
 echo right-click portsw-off.bat and choose Run as administrator.
 goto end
 :refused
-echo The change did not complete. Read the lines above: some controllers
-echo may already have been changed.
+echo The change did not complete. Read the lines above: they say what
+echo was written and what was read back.
 if not "%OS%"=="Windows_NT" goto end
 echo Run portsw-off.bat as an administrator: on Vista and 7, right-click
 echo it and choose Run as administrator.

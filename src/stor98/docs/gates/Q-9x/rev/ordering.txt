@@ -1,0 +1,178 @@
+Recomputed with the decoder of the fourth Interface 3 re-review (transaction boundaries; every removal candidate in the transaction; bus as at the statement; per-port late-acknowledgement markers; AMBIGUOUS when an old trace cannot attribute an event; INCOMPLETE for missing events). An empty summary: no statement.
+== 98/trace-r1.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.2 cm_down=16.5 rx=- ack=- cm_timeout=16.8 removal=17.0  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+summary: NO-INSTANCE 1
+== 98/trace-r3.log
+statement #1 port 1 gen 1 flags 05: cutoff=0.3 cm_down=15.1 rx=35.2 ack=38.7 cm_ack=54.1 removal=-  -> AMBIGUOUS (the only removal found carries no port) (by gen)
+statement #2 port 0 gen 1 flags 05: cutoff=0.3 cm_down=13.6 rx=- ack=- cm_timeout=13.9 removal=14.2  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #3 port 0 gen 2 flags 05: cutoff=0.4 cm_down=7.1 rx=- ack=- cm_timeout=7.4 removal=7.9  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #4 port 0 gen 3 flags 05: cutoff=0.3 cm_down=48.3 rx=- ack=- cm_timeout=48.5 removal=48.7  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #5 port 0 gen 4 flags 05: cutoff=0.3 cm_down=3.6 rx=4.7 ack=7.5 cm_ack=9.8 removal=35.6  -> PASS (by gen)
+statement #6 port 0 gen 5 flags 05: cutoff=0.3 cm_down=1.9 rx=28.7 ack=30.4 cm_ack=31.8 removal=51.2  -> PASS (by gen)
+statement #7 port 0 gen 6 flags 05: cutoff=0.3 cm_down=14.8 rx=- ack=- cm_timeout=15.0 removal=15.2  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #8 port 0 gen 7 flags 05: cutoff=0.3 cm_down=12.8 rx=- ack=- cm_timeout=13.0 removal=13.2  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #9 port 0 gen 8 flags 05: cutoff=0.3 cm_down=13.4 rx=- ack=- cm_timeout=14.0 removal=14.2  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+summary: AMBIGUOUS 1, NO-INSTANCE 6, PASS 2
+== 98/trace-r4.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.3 cm_down=48.3 rx=- ack=- cm_timeout=48.5 removal=48.7  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #2 port 0 gen 2 flags 05: cutoff=0.3 cm_down=1.6 rx=248.8 ack=252.0 cm_ack=253.6 removal=277.8  -> PASS (by gen)
+statement #3 port 0 gen 3 flags 05: cutoff=0.3 cm_down=20.4 rx=- ack=- cm_timeout=9189.1 removal=9215.4  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #4 port 0 gen 4 flags 05: cutoff=0.3 cm_down=2.9 rx=- ack=- cm_timeout=9282.8 removal=9312.0  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #5 port 0 gen 5 flags 05: cutoff=0.5 cm_down=15.1 rx=- ack=- cm_timeout=9348.9 removal=9376.1  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #6 port 0 gen 6 flags 05: cutoff=0.4 cm_down=36.6 rx=- ack=- cm_timeout=9346.7 removal=9376.5  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #7 port 0 gen 7 flags 05: cutoff=0.2 cm_down=11.0 rx=- ack=- cm_timeout=9338.1 removal=9364.0  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #8 port 0 gen 8 flags 05: cutoff=0.4 cm_down=2.4 rx=- ack=- cm_timeout=9287.4 removal=9318.2  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #9 port 0 gen 9 flags 05: cutoff=0.3 cm_down=3.6 rx=- ack=- cm_timeout=9336.5 removal=9364.0  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #10 port 0 gen 10 flags 05: cutoff=0.5 cm_down=2.1 rx=- ack=- cm_timeout=9269.7 removal=9298.8  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #11 port 0 gen 11 flags 05: cutoff=0.6 cm_down=3.2 rx=- ack=- cm_timeout=9307.7 removal=9333.6  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+summary: NO-INSTANCE 1, PASS 1, TIMEOUT 9
+== 98/trace-r5.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.3 cm_down=1.9 rx=4.2 ack=7.6 cm_ack=31.5 removal=71.0  -> PASS (by gen)
+statement #2 port 0 gen 2 flags 05: cutoff=0.5 cm_down=17.6 rx=- ack=- cm_timeout=9270.0 removal=9296.3  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #3 port 0 gen 3 flags 05: cutoff=0.4 cm_down=18.9 rx=- ack=- cm_timeout=9210.1 removal=9233.4  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #4 port 0 gen 4 flags 05: cutoff=0.4 cm_down=10.2 rx=- ack=- cm_timeout=9166.6 removal=9184.5  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #5 port 0 gen 5 flags 05: cutoff=0.6 cm_down=28.9 rx=- ack=- cm_timeout=9200.2 removal=9226.1  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #6 port 0 gen 6 flags 05: cutoff=0.5 cm_down=9206.0 rx=- ack=- cm_timeout=12213.7 removal=12236.0  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #7 port 0 gen 7 flags 05: cutoff=0.5 cm_down=4.7 rx=49.5 ack=51.1 cm_ack=52.1 removal=72.8  -> PASS (by gen)
+statement #8 port 0 gen 8 flags 05: cutoff=0.3 cm_down=55.2 rx=- ack=- cm_timeout=55.5 removal=55.9  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #9 port 1 gen 1 flags 05: cutoff=0.2 cm_down=1.6 rx=- ack=- cm_timeout=3016.2 removal=3028.1  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #10 port 0 gen 9 flags 05: cutoff=0.3 cm_down=32.2 rx=140.5 ack=142.4 cm_ack=144.4 removal=166.6  -> PASS (by gen)
+statement #11 port 0 gen 10 flags 05: cutoff=0.3 cm_down=2.0 rx=- ack=- cm_timeout=9285.8 removal=9302.7  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+summary: NO-INSTANCE 1, PASS 3, TIMEOUT 7
+== 98/trace-r6.log
+summary: 
+== 98/trace-r9.log
+summary: 
+== me/trace-m3.log
+statement #1 port 1 gen 1 flags 05: cutoff=0.3 cm_down=2.8 rx=178.8 ack=181.4 cm_ack=195.5 removal=-  -> AMBIGUOUS (the only removal found carries no port) (by gen)
+statement #2 port 0 gen 1 flags 05: cutoff=0.4 cm_down=46.3 rx=- ack=- cm_timeout=46.5 removal=46.8  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #3 port 0 gen 2 flags 05: cutoff=0.3 cm_down=15.0 rx=- ack=- cm_timeout=15.2 removal=15.5  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #4 port 0 gen 3 flags 05: cutoff=0.4 cm_down=10.2 rx=75.3 ack=76.8 cm_ack=78.1 removal=89.3  -> PASS (by gen)
+statement #5 port 0 gen 4 flags 05: cutoff=0.3 cm_down=1.9 rx=90.0 ack=91.3 cm_ack=92.1 removal=104.5  -> PASS (by gen)
+statement #6 port 0 gen 5 flags 05: cutoff=0.3 cm_down=47.1 rx=- ack=- cm_timeout=47.4 removal=47.6  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #7 port 0 gen 6 flags 05: cutoff=0.3 cm_down=15.6 rx=- ack=- cm_timeout=15.9 removal=16.2  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #8 port 0 gen 7 flags 05: cutoff=0.4 cm_down=11.9 rx=89.1 ack=90.7 cm_ack=91.8 removal=578306.3  -> PASS (by gen)
+statement #9 port 0 gen 8 flags 05: cutoff=0.3 cm_down=23.0 rx=- ack=- cm_timeout=9284.2 removal=9302.4  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #10 port 0 gen 9 flags 05: cutoff=0.5 cm_down=16.5 rx=- ack=- cm_timeout=9348.8 removal=9362.3  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #11 port 0 gen 10 flags 05: cutoff=0.4 cm_down=11.4 rx=- ack=- cm_timeout=3014.6 removal=3024.9  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #12 port 0 gen 11 flags 05: cutoff=0.3 cm_down=9.6 rx=- ack=- cm_timeout=3008.7 removal=3019.7  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+statement #13 port 0 gen 12 flags 05: cutoff=0.2 cm_down=12.0 rx=- ack=- cm_timeout=12.2 removal=12.4  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #14 port 0 gen 13 flags 05: cutoff=0.3 cm_down=15.7 rx=- ack=- cm_timeout=16.0 removal=16.2  -> NO-INSTANCE (devnode retired before the statement) (by gen)
+statement #15 port 1 gen 2 flags 05: cutoff=0.3 cm_down=2.4 rx=52.8 ack=53.7 cm_ack=54.1 removal=81.1  -> PASS (by gen)
+statement #16 port 0 gen 14 flags 05: cutoff=0.3 cm_down=1.9 rx=- ack=- cm_timeout=3014.6 removal=3033.4  -> TIMEOUT (no acknowledgement within the CM's wait) (by gen)
+summary: AMBIGUOUS 1, NO-INSTANCE 6, PASS 4, TIMEOUT 5
+== me/trace-m4.log
+summary: 
+== 98/trace-v1.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.2 cm_down=14.2 rx=- ack=- cm_timeout=14.5 removal=14.7  -> NO-INSTANCE (devnode retired before the statement)
+statement #2 port 1 gen 1 flags 05: cutoff=0.3 cm_down=8.8 rx=63.2 ack=65.0 cm_ack=66.6 removal=120.7  -> PASS
+statement #3 port 0 gen 2 flags 05: cutoff=0.3 cm_down=13.7 rx=58.4 ack=60.4 cm_ack=61.5 removal=83.6  -> PASS
+statement #4 port 1 gen 2 flags 05: cutoff=0.4 cm_down=9.2 rx=39.0 ack=41.0 cm_ack=42.2 removal=63.3  -> PASS
+statement #5 port 0 gen 3 flags 05: cutoff=0.3 cm_down=14.5 rx=111.0 ack=112.0 cm_ack=114.4 removal=141.0  -> PASS
+statement #6 port 0 gen 4 flags 05: cutoff=0.3 cm_down=16.4 rx=74.4 ack=75.1 cm_ack=77.5 removal=121.2  -> PASS
+statement #7 port 0 gen 5 flags 05: cutoff=0.5 cm_down=18.2 rx=120.1 ack=122.1 cm_ack=123.6 removal=175.4  -> PASS
+statement #8 port 0 gen 6 flags 05: cutoff=0.2 cm_down=16.8 rx=101.9 ack=103.6 cm_ack=110.2 removal=127.2  -> PASS
+statement #9 port 0 gen 7 flags 01: cutoff=0.3 cm_down=13.3 rx=- ack=- cm_timeout=3018.9 removal=-  -> NEGATIVE (statement without QUIESCED)
+summary: NEGATIVE 1, NO-INSTANCE 1, PASS 7
+== 98/trace-v4.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.4 cm_down=48.3 rx=305.4 ack=309.1 cm_ack=310.6 removal=343.2  -> PASS
+statement #2 port 0 gen 2 flags 05: cutoff=0.3 cm_down=30.9 rx=100.2 ack=104.5 cm_ack=122.9 removal=142.1  -> PASS
+statement #3 port 0 gen 3 flags 05: cutoff=0.3 cm_down=22.5 rx=- ack=- cm_timeout=9397.3 removal=9419.9  -> TIMEOUT (no acknowledgement within the CM's wait)
+statement #4 port 0 gen 4 flags 05: cutoff=0.3 cm_down=1.5 rx=- ack=- cm_timeout=9365.3 removal=9388.1  -> TIMEOUT (no acknowledgement within the CM's wait)
+statement #5 port 0 gen 5 flags 05: cutoff=0.3 cm_down=20.1 rx=253.5 ack=257.0 cm_ack=258.9 removal=278.8  -> PASS
+statement #6 port 0 gen 6 flags 05: cutoff=0.3 cm_down=29.1 rx=- ack=- cm_timeout=29.4 removal=29.7  -> NO-INSTANCE (devnode retired before the statement)
+summary: NO-INSTANCE 1, PASS 3, TIMEOUT 2
+== 98/trace-v6.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.4 cm_down=43.6 rx=- ack=- cm_timeout=44.4 removal=44.9  -> NO-INSTANCE (devnode retired before the statement)
+statement #2 port 0 gen 2 flags 05: cutoff=0.3 cm_down=15.6 rx=95.2 ack=96.7 cm_ack=104.5 removal=133.7  -> PASS
+summary: NO-INSTANCE 1, PASS 1
+== 98/trace-v7.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.6 cm_down=37.4 rx=- ack=- cm_timeout=38.3 removal=38.8  -> NO-INSTANCE (devnode retired before the statement)
+statement #2 port 1 gen 1 flags 05: cutoff=0.3 cm_down=3.5 rx=54.6 ack=57.6 cm_ack=67.4 removal=163.7  -> PASS
+statement #3 port 0 gen 2 flags 05: cutoff=0.6 cm_down=35.6 rx=281.5 ack=285.4 cm_ack=311.7 removal=411.9  -> PASS
+statement #4 port 1 gen 2 flags 05: cutoff=0.6 cm_down=4.4 rx=243.7 ack=246.9 cm_ack=249.1 removal=352.5  -> PASS
+statement #5 port 0 gen 3 flags 05: cutoff=0.3 cm_down=36.0 rx=278.6 ack=280.1 cm_ack=309.6 removal=402.7  -> PASS
+statement #6 port 0 gen 4 flags 05: cutoff=0.4 cm_down=33.2 rx=137.4 ack=138.4 cm_ack=140.8 removal=280.1  -> PASS
+statement #7 port 0 gen 5 flags 01: cutoff=0.3 cm_down=12.8 rx=- ack=- cm_timeout=9354.5 removal=-  -> NEGATIVE (statement without QUIESCED)
+summary: NEGATIVE 1, NO-INSTANCE 1, PASS 5
+== 98/trace-v9.log
+statement #1 port 1 gen 1 flags 05: cutoff=0.3 cm_down=16.6 rx=247.5 ack=250.4 cm_ack=252.8 removal=362.4  -> PASS
+statement #2 port 0 gen 1 flags 05: cutoff=0.4 cm_down=29.9 rx=30.9 ack=32.8 cm_ack=34.0 removal=165.2  -> PASS
+summary: PASS 2
+== me/trace-v8.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.4 cm_down=28.7 rx=- ack=- cm_timeout=29.2 removal=29.7  -> NO-INSTANCE (devnode retired before the statement)
+statement #2 port 1 gen 1 flags 05: cutoff=0.4 cm_down=3.3 rx=153.9 ack=156.0 cm_ack=185.3 removal=837941.1  -> PASS
+statement #3 port 0 gen 2 flags 05: cutoff=0.5 cm_down=69.9 rx=76.5 ack=79.0 cm_ack=93.0 removal=158.7  -> PASS
+statement #4 port 1 gen 2 flags 05: cutoff=0.4 cm_down=15.2 rx=173.7 ack=176.2 cm_ack=177.1 removal=267.7  -> PASS
+statement #5 port 0 gen 3 flags 05: cutoff=0.4 cm_down=37.5 rx=122.1 ack=122.8 cm_ack=138.9 removal=278.4  -> PASS
+statement #6 port 0 gen 4 flags 05: cutoff=0.3 cm_down=15.0 rx=118.2 ack=119.5 cm_ack=121.8 removal=156.5  -> PASS
+statement #7 port 0 gen 5 flags 05: cutoff=0.4 cm_down=35.3 rx=- ack=- cm_timeout=36.0 removal=36.6  -> NO-INSTANCE (devnode retired before the statement)
+statement #8 port 0 gen 6 flags 05: cutoff=0.3 cm_down=30.6 rx=261.1 ack=263.1 cm_ack=264.7 removal=370.1  -> PASS
+statement #9 port 0 gen 7 flags 01: cutoff=0.3 cm_down=2.4 rx=- ack=- cm_timeout=3010.4 removal=-  -> NEGATIVE (statement without QUIESCED)
+summary: NEGATIVE 1, NO-INSTANCE 2, PASS 6
+== me/trace-v10.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.4 cm_down=2.9 rx=- ack=- cm_timeout=9138.6 removal=9262.0  -> TIMEOUT (no acknowledgement within the CM's wait)
+statement #2 port 0 gen 2 flags 05: cutoff=0.5 cm_down=34.0 rx=- ack=- cm_timeout=9222.7 removal=9330.1  -> TIMEOUT (no acknowledgement within the CM's wait)
+statement #3 port 0 gen 3 flags 05: cutoff=0.3 cm_down=2.2 rx=192.3 ack=195.5 cm_ack=197.3 removal=261.9  -> PASS
+statement #4 port 0 gen 4 flags 05: cutoff=0.7 cm_down=32.3 rx=- ack=- cm_timeout=32.9 removal=33.4  -> NO-INSTANCE (devnode retired before the statement)
+summary: NO-INSTANCE 1, PASS 1, TIMEOUT 2
+== 98/trace-w1.log
+statement #1 port 1 gen 1 flags 05: cutoff=0.5 cm_down=5.4 rx=333.9 ack=337.5 cm_ack=339.9 removal=106479.5  -> PASS
+statement #2 port 0 gen 1 flags 05: cutoff=0.2 cm_down=48.3 rx=249.0 ack=249.6 cm_ack=255.3 removal=16323.7  -> PASS
+statement #3 port 0 gen 2 flags 05: cutoff=0.5 cm_down=44.4 rx=279.4 ack=284.3 cm_ack=286.6 removal=356.5  -> PASS
+statement #4 port 0 gen 3 flags 05: cutoff=0.4 cm_down=3.0 rx=126.6 ack=129.3 cm_ack=131.3 removal=232.4  -> PASS
+statement #5 port 0 gen 4 flags 05: cutoff=0.8 cm_down=28.9 rx=- ack=- cm_timeout=29.4 removal=29.9  -> NO-INSTANCE (devnode retired before the statement)
+summary: NO-INSTANCE 1, PASS 4
+== 98/trace-w2.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.3 cm_down=18.1 rx=83.4 ack=85.3 cm_ack=109.2 removal=220.7  -> PASS
+statement #2 port 0 gen 2 flags 05: cutoff=0.3 cm_down=40.7 rx=- ack=- cm_timeout=41.3 removal=41.7  -> NO-INSTANCE (devnode retired before the statement)
+statement #3 port 0 gen 3 flags 05: cutoff=0.2 cm_down=46.5 rx=- ack=- cm_timeout=9381.1 removal=9443.7  -> TIMEOUT (no acknowledgement within the CM's wait)
+statement #4 port 0 gen 4 flags 05: cutoff=0.7 cm_down=45.1 rx=- ack=- cm_timeout=9418.0 removal=9494.3  -> TIMEOUT (no acknowledgement within the CM's wait)
+summary: NO-INSTANCE 1, PASS 1, TIMEOUT 2
+== 98/trace-w3.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.5 cm_down=34.8 rx=299.7 ack=303.2 cm_ack=305.1 removal=434.2  -> PASS
+summary: PASS 1
+== 98/trace-w6.log
+summary: 
+== me/trace-w1.log
+statement #1 port 1 gen 1 flags 05: cutoff=0.5 cm_down=3.2 rx=219.8 ack=222.5 cm_ack=225.0 removal=101379.8  -> PASS
+statement #2 port 0 gen 1 flags 05: cutoff=0.4 cm_down=47.1 rx=202.4 ack=203.6 cm_ack=232.2 removal=31111.2  -> PASS
+statement #3 port 0 gen 2 flags 05: cutoff=0.4 cm_down=42.1 rx=307.2 ack=310.8 cm_ack=338.1 removal=432.2  -> PASS
+statement #4 port 0 gen 3 flags 05: cutoff=0.3 cm_down=1.4 rx=217.1 ack=219.0 cm_ack=221.1 removal=346.9  -> PASS
+statement #5 port 0 gen 4 flags 05: cutoff=0.3 cm_down=31.8 rx=- ack=- cm_timeout=32.4 removal=32.8  -> NO-INSTANCE (devnode retired before the statement)
+summary: NO-INSTANCE 1, PASS 4
+== me/trace-w2.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.3 cm_down=26.2 rx=255.2 ack=258.6 cm_ack=260.9 removal=411.3  -> PASS
+statement #2 port 0 gen 2 flags 05: cutoff=0.5 cm_down=44.6 rx=- ack=- cm_timeout=44.9 removal=45.5  -> NO-INSTANCE (devnode retired before the statement)
+statement #3 port 0 gen 3 flags 05: cutoff=0.3 cm_down=39.2 rx=- ack=- cm_timeout=9345.3 removal=9423.7  -> TIMEOUT (no acknowledgement within the CM's wait)
+statement #4 port 0 gen 4 flags 05: cutoff=0.3 cm_down=45.0 rx=- ack=- cm_timeout=9375.2 removal=9470.0  -> TIMEOUT (no acknowledgement within the CM's wait)
+summary: NO-INSTANCE 1, PASS 1, TIMEOUT 2
+== me/trace-w3.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.3 cm_down=47.2 rx=310.8 ack=313.9 cm_ack=317.1 removal=374.3  -> PASS
+summary: PASS 1
+== me/trace-w4.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.4 cm_down=8.9 rx=288.4 ack=290.5 cm_ack=291.5 removal=380.1  -> PASS
+statement #2 port 0 gen 2 flags 05: cutoff=0.5 cm_down=28.5 rx=- ack=- cm_timeout=28.8 removal=29.1  -> NO-INSTANCE (devnode retired before the statement)
+summary: NO-INSTANCE 1, PASS 1
+== me/trace-w6.log
+summary: 
+== 98/trace-x1.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.4 cm_down=3.7 rx=204.9 ack=207.6 cm_ack=210.5 removal=330.0  -> PASS
+statement #2 port 0 gen 2 flags 05: cutoff=0.4 cm_down=38.8 rx=- ack=- cm_timeout=39.2 removal=39.3  -> NO-INSTANCE (devnode retired before the statement)
+summary: NO-INSTANCE 1, PASS 1
+== me/trace-x1.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.3 cm_down=31.5 rx=187.2 ack=190.8 cm_ack=192.6 removal=260.1  -> PASS
+statement #2 port 0 gen 2 flags 05: cutoff=0.3 cm_down=31.9 rx=- ack=- cm_timeout=32.4 removal=32.9  -> NO-INSTANCE (devnode retired before the statement)
+summary: NO-INSTANCE 1, PASS 1
+== 98/trace-x2.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.3 cm_down=47.7 rx=- ack=- cm_timeout=48.2 removal=48.6  -> TIMEOUT (no acknowledgement within the CM's wait)
+summary: TIMEOUT 1
+== me/trace-x2.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.3 cm_down=45.6 rx=- ack=- cm_timeout=46.0 removal=46.6  -> TIMEOUT (no acknowledgement within the CM's wait)
+summary: TIMEOUT 1
+== 98/trace-y1.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.3 cm_down=27.9 rx=- ack=- cm_timeout=28.2 removal=28.5  -> TIMEOUT (no acknowledgement within the CM's wait)
+summary: TIMEOUT 1
+== me/trace-y1.log
+statement #1 port 0 gen 1 flags 05: cutoff=0.4 cm_down=46.4 rx=- ack=- cm_timeout=47.1 removal=47.4  -> TIMEOUT (no acknowledgement within the CM's wait)
+summary: TIMEOUT 1

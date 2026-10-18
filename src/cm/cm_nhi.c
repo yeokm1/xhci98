@@ -888,6 +888,10 @@ VOID CmNhiWaitService(PCM_NHI nhi)
     if (!nhi->U4On) {
         TbtIcmService(&nhi->Icm);
     }
+    /* The servicing point of every bounded wait inside a pass: the
+     * stor98 acknowledgement waits stepped at least as often as the wait
+     * reads (task 42-A.12; record 21 section 7.2 part 0). */
+    CmNvlinkStep(nhi);
 }
 
 /* Whether the device an action names is still the one it named: the
@@ -1325,6 +1329,23 @@ VOID CmNhiSetU4Hooks(PCM_NHI nhi, CM_U4_UP_HOOK up, CM_U4_DOWN_HOOK down,
  * domain not running: the tunnel stays up and the user unplugs, as under
  * the ICM client (record 21 section 7.4).
  */
+ULONG CmNhiMemberGen(PCM_NHI nhi, ULONG member)
+{
+    const TBT_U4_PORT *p;
+    ULONG i;
+
+    if (!nhi->U4On || !cmTopoUsable(nhi)) {
+        return 0;
+    }
+    for (i = 1; i <= nhi->U4.PortCount; i++) {
+        if (XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, i) == member) {
+            p = TbtU4Port(&nhi->U4, i);
+            return p != NULL ? p->Generation : 0;
+        }
+    }
+    return 0;
+}
+
 static VOID cmU4Eject(PVOID context, ULONG bdf)
 {
     const TBT_U4_PORT *p;

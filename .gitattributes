@@ -71,3 +71,10 @@ LICENSE eol=crlf
 # The usb4-emu cross-check runs under MSYS2 bash, which does not take CRLF
 # (roadmap-usb4.md task 40-A.5).
 scripts/usb4-crosscheck/*.sh eol=lf
+
+# src/stor98 is Stor98 (roadmap-usb4 task 42-A.20), whose own .gitattributes
+# sets its line endings. The rules above that match by name alone (LICENSE,
+# sources, *.rc) would otherwise reach into it and check those files out CRLF
+# under core.autocrlf false or input, where Stor98 alone leaves them as
+# stored; this puts eol back to unspecified there, and Stor98's file applies.
+src/stor98/** !eol

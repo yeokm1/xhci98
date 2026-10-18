@@ -1,5 +1,19 @@
 # Design Record 28 - A Windows 98 SE or ME Function With No Interrupt
 
+**Note, 2026-10-19 (task 42-A.15's emulator leg, `runs/run-42.md`): the
+basic form is refuted for the case read; a redesign is owed.** On 98 SE,
+an NVMe below a tunnel port with no routing entry sat at Code 29 ("the
+BIOS for the device did not give it an IRQ"), yet `PCI.VXD`'s one basic
+configuration of it (at `LCPRI_NORMAL`) held one memory descriptor and
+no IRQ descriptor. Section 3 item 1's hypothesis - an IRQ requirement
+that cannot be met is what leaves the device unstarted - does not hold
+there: the configuration already is the one section 4 would add, so the
+code refuses the device ("configuration") and changes nothing. The open
+question the redesign starts from: does `Reprocess_DevNode` or
+`Setup_DevNode(CM_SETUP_DEVNODE_READY)` clear a Code 29 that `PCI.VXD`
+itself set on a memory-only configuration, and where (which event, on
+what reading of the function or its route) does `PCI.VXD` set it?
+
 Status: draft 11, 2026-10-18, reviewed and revised (an unstarted device
 with no problem kept ATTEMPTED, the disabled forced leftover's exception
 carried into section 5.3 and N8, the re-creation leg split by what is
@@ -70,6 +84,58 @@ exists since Stor98 `0.4.0.0` for exactly the function this record
 starts. Section 9 lists the decisions taken in writing it, each the
 orchestrator's for the owner to confirm unless it names the owner;
 section 10 what is open.
+
+**The code, and its interim (2026-10-19, task 42-A.15).** The pure half
+is `src\cm\cm_noirq.c` (`cm_noirq.h`, host suite `test\test_cm_noirq.c`):
+the window, the per-device state, the journal, the rules, the result
+table, the steps and budgets, the late results, the diagnostic and the
+counters, as a state machine that hands out one operation at a time
+(`CmNiNext`) and takes back its result by id (`CmNiTake`). Section 4
+places each operation on the member's call worker behind interface 3's
+R6f handoff word, in record 21 section 7.2's 9x execution model; those
+workers are task 42-A.12's and do not exist yet. **Until they do, the 98
+CONFIGMG worker (`cm_cfgwk.c`) makes each operation itself**, at once, at
+each of its 200 ms ticks while a member has a window or an attempt in
+progress (not the 50 ms pass cadence of section 4, "When"), with the
+deadlines on its own clock. What that costs: a CONFIGMG call that blocks
+(a wizard open) holds the domain's other 9x work for its duration, as
+every call of that worker already does, and the attempt's budget runs
+out meanwhile - FAILED "timeout", the late result accounted as section
+4 says. What changes when 42-A.12 lands: the same machine driven by the
+connection-manager thread's pass, each `CM_NI_OP` submitted through the
+member's handoff word and each `CM_NI_RES` taken back by its id; the
+machine needs no change, since it already holds one operation
+outstanding per member and accounts a result that comes back after its
+attempt ended. The gate the interim tests before each submission is the
+worker's own view of record 21 section 5.5: the stop, the claim, and
+`CONTROLLER_UNAVAILABLE`'s owed removal or no-scan re-enumeration
+(`cmWkNiGate`); the host interface's liveness state itself is the
+thread's and reaches the worker through that request. The forced form of
+section 5.2 is not built: it is the leg's verdict (section 10). The
+operations are each a short series of the services section 11 names,
+made back to back (the place read, for one, is `Get_Device_ID`, then the
+list and the priority).
+The source's descriptors are read one resource type at a time (memory,
+IRQ, I/O, DMA), then once with `ResType_All`, which must meet each of
+them and no other type.
+
+**What the emulator showed, 2026-10-19 (`runs/run-42.md`): the basic
+form does not apply as section 3 expected.** On 98 SE, the NVMe behind a
+tunnel port with no routing entry (the emulator's tunnel bridge at
+00:1Ch), bound to Stor98 0.4.0.0 with the installer record present, sat
+at Code 29 ("the BIOS for the device did not give it an IRQ"), and its
+one basic configuration (at `LCPRI_NORMAL`) held **one memory descriptor
+and no IRQ descriptor**, read twice across a re-plug. Section 3 item 1's
+hypothesis - that `PCI.VXD` puts an IRQ requirement in the configuration
+and that this requirement is what cannot be met - is refuted for this
+case: the configuration is already the one section 4 would add, and the
+problem is set without an allocation failure. The code refuses the device
+("configuration": no IRQ descriptor) and adds nothing, so the feature is
+inert there, and no function was started with no interrupt. A redesign is
+owed before 42-V.6 can pass (section 10, the first two points; the owner's
+or the designer's): whether `Reprocess_DevNode` or
+`Setup_DevNode(READY)` clears a Code 29 set this way on a memory-only
+configuration, and where `PCI.VXD` sets it.
 
 The owner's rule binds every line of it (design record 23 section 6.1,
 record 27 section 2): nothing undocumented. What "documented" means here
@@ -1384,6 +1450,7 @@ turns up.
 | File | What |
 |---|---|
 | `src\cm\cm_cfgmg.h`, `cm_cfgmg.c` | the service numbers added with their table lines - `Add_Empty_Log_Conf` 24, `Get_First_Log_Conf` 26, `Get_Next_Log_Conf` 27, `Add_Res_Des` 28, `Get_Next_Res_Des` 31, `Get_Res_Des_Data_Size` 33, `Get_Res_Des_Data` 34, `Get_Alloc_Log_Conf` 59, `Read_Registry_Value` 62, `Reprocess_DevNode` 92, `Get_Set_Log_Conf_Priority` 106, `Detect_Resource_Conflict` 112 (lines 557, 559, 560, 561, 564, 566, 567, 592, 595, 628, 642 and 651 of the table that opens at line 532, counted as `legal-provenance.md`'s CONFIGMG row counts them); the flag and priority values (`BASIC_LOG_CONF` 0, `FORCED_LOG_CONF` 4, `PRIORITY_EQUAL_LAST` 0, `LCPRI_SUBOPTIMAL` `0x5000`, `LCPRI_DISABLED` `0xFFFF`, `LCPRI_FORCECONFIG` 0, `CM_GET_LOG_CONF_PRIORITY` 0, `CM_SET_LOG_CONF_PRIORITY` 1, `CM_REGISTRY_SOFTWARE` 1, `ResType_Mem` 1, `ResType_IRQ` 4, `ResType_All` 0, `MType_Range`, `CM_REPROCESS_DEVNODE_ASYNCHRONOUS` 0, `CR_NO_MORE_LOG_CONF` `0x0E`, `CR_NO_MORE_RES_DES` `0x0F`, `CM_PROB_NORMAL_CONFLICT` `0x0C`, `CM_PROB_PARTIAL_LOG_CONF` `0x10`, `CM_PROB_NO_VALID_LOG_CONF` `0x1B`, `CM_PROB_HARDWARE_DISABLED` `0x1D`); the thunks behind the `Get_Version` guard |
+| `src\cm\cm_noirq.c`, `cm_noirq.h` (task 42-A.15) | the pure half: the state machine of operations above, every rule and table of section 4 |
 | `src\cm\cm_cfgwk.c`, `cm_nvlinkos.c` (or the file 42-A.12 gives the 9x transactions) | the no-IRQ transaction on the thread's pass (the window, the per-device state and journal, the rules across generations, the steps as operations for the member's call worker with the handle's place read before each write, late results by id), the descendant walk and the candidate rules as operations, the outcome read, the diagnostic copy; the numbering's per-function interrupt outcomes kept per member and generation; the `_RegQueryValueEx` thunk beside the locator's (VMM service `0x151`, `VMM.H` line 2225, the signature at `VXDWRAPS.H` line 439) for the installer's `Version` record |
 | `src\cm\tbt_brnum.c`, `tbt_brnum.h` | the per-function outcomes returned to the caller; the swizzle test over an ancestry; the fallback's placement plan, if built |
 | `src\cm\cm_statb.h`, `cm_statos.c` | `XhciCmNoIrqDiag` |

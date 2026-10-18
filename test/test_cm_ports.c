@@ -198,6 +198,14 @@ static void test_infs(void)
         missing += inList(seen, seenCount, CmPortsUnpairedAt(k)) ? 0 : 1;
     }
     CHECK_EQ(missing, 0, "every family port id and every unpaired id is in xhcicmf.inf");
+    missing = 0;
+    for (i = 0; i < seenCount; i++) {
+        missing += CmPortsFilterId(seen[i]) ? 0 : 1;
+    }
+    CHECK_EQ(missing, 0, "CmPortsFilterId takes every bridge id of xhcicmf.inf (task 42-A.5)");
+    CHECK(!CmPortsFilterId(CM_PORTS_ID(0x1B21, 0x2421)),
+          "and not the emulator's chained upstream port, which the INF does not name");
+    CHECK(!CmPortsFilterId(CM_PORTS_ID(0x8086, 0x15BF)), "nor an NHI");
     CHECK_EQ(seenCount, 38, "38 bridge ids: record 21's 30, record 22's 6, the emulator's 2");
 
     CHECK(readInf("..\\src\\cm\\xhcicm.inf") != 0, "xhcicm.inf read");

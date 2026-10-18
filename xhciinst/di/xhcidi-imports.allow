@@ -1,0 +1,42 @@
+# xhcidi-imports.allow - every import of XHCIDI.EXE, by module and ordinal,
+# with the name the import library that bound it gives that ordinal
+# (check-imports.ps1 holds the image to this list exactly, and each name to
+# the library: the DDK's setupx.lib for SETUPX, Open Watcom's
+# lib286\win\windows.lib for KERNEL and USER). Design record 27 sections 2
+# and 7: a 16-bit image binds by ordinal, and a system whose module lacks
+# one refuses to load it before any call, which the probe job reads.
+#
+# module  ordinal  name
+#
+# SETUPX: the device installer and logical-disk routines of record 27
+# sections 5 and 9, and the registry read of the system check.
+SETUPX  406  DIGETCLASSDEVSEX
+SETUPX  351  DiGetINFClass
+SETUPX  303  DICREATEDEVICEINFO
+SETUPX  300  DIBUILDCOMPATDRVLIST
+SETUPX  308  DICALLCLASSINSTALLER
+SETUPX  305  DIDESTROYDEVICEINFOLIST
+SETUPX  38   CTLGETLDDPATH
+SETUPX  508  CTLSETLDDPATH
+SETUPX  47   SUREGOPENKEY
+SETUPX  50   SUREGQUERYVALUEEX
+SETUPX  39   SUREGCLOSEKEY
+#
+# KERNEL and USER: the job file, the result file, the atom of the INF's path, the
+# version, the window check, and the Open Watcom runtime's start-up
+# (INITTASK, INITAPP, WAITEVENT, GETMODULEFILENAME, __AHSHIFT).
+KERNEL  3    GETVERSION
+KERNEL  74   OPENFILE
+KERNEL  81   _LCLOSE
+KERNEL  82   _LREAD
+KERNEL  86   _LWRITE
+KERNEL  90   LSTRLEN
+KERNEL  30   WAITEVENT
+KERNEL  49   GETMODULEFILENAME
+KERNEL  91   INITTASK
+KERNEL  113  __AHSHIFT
+USER    268  GLOBALADDATOM
+USER    269  GLOBALDELETEATOM
+USER    271  GLOBALGETATOMNAME
+USER    47   ISWINDOW
+USER    5    INITAPP

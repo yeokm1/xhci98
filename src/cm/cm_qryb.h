@@ -104,6 +104,28 @@ VOID CmQuerySetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs);
 ULONG CmQueryBumpGen(UCHAR *answer, ULONG bytes);
 
 /*
+ * The connection-manager thread's wait as it records it (CM_NHI.ThreadWait,
+ * cm_thr.c): between waits, in a wait with a timeout, in one with none, or
+ * in the bind a start left to run after the PnP start returned.
+ */
+#define CM_Q_WAIT_BUSY      0UL
+#define CM_Q_WAIT_TIMED     1UL
+#define CM_Q_WAIT_FOREVER   2UL
+#define CM_Q_WAIT_BINDING   3UL
+
+/*
+ * The inert flag of the answer the query device holds until the thread's
+ * first publication (task 42-A.7, design record 25 section 14): seeded
+ * from the thread's actual wait - set with no thread (`running` FALSE) or
+ * a thread already in its wait with no timeout, clear for one in a wait
+ * with a timeout or in a start's bind (whose outcome its publication
+ * then gives); for a thread between waits, `next` (whether the wait it
+ * goes to has no timeout, as its publication judges it). Its pass after
+ * the device's creation publishes the flag in any case.
+ */
+BOOLEAN CmQuerySeedInert(BOOLEAN running, ULONG wait, BOOLEAN next);
+
+/*
  * ---- The log answer (cm_query.h CM_QL_*, design record 25 section 4.5) ----
  *
  * The counters are text the thread writes after each pass (CmQueryLines,
@@ -215,6 +237,12 @@ typedef struct _CM_QP_PORT_IN {
     ULONG Flags;            /* CM_PORT_*                                  */
 } CM_QP_PORT_IN;
 
+/* Asked before the walk enters the secondary bus of `bridge` (a member,
+ * or a bridge below one), whose 18h dword read `buses`: nonzero to enter.
+ * The Windows 98 walk's rule (task 42-A.14): only numbers PCI.VXD reads
+ * the same itself, or ones the worker's numbering gave. */
+typedef ULONG (*CM_QP_ADMIT)(PVOID context, ULONG bridge, ULONG buses);
+
 typedef struct _CM_QPCI_IN {
     ULONG Flags;            /* CM_QP_F_STOPPING; the builder adds the rest */
     ULONG EpochLo;
@@ -223,8 +251,15 @@ typedef struct _CM_QPCI_IN {
     ULONG PortCount;        /* above CM_QP_MAX_PORTS: cut, and TRUNCATED  */
     CM_QP_PORT_IN Ports[CM_QP_MAX_PORTS];
     ULONG ReadBelow;        /* 0: one CM_QP_S_NOT_READ_OS entry a member  */
+    ULONG Reason;           /* ... its CM_QP_NR_* reason                  */
+    ULONG Held;             /* bit p: member p not read below either, with
+                               CM_QP_NR_HELD (its controller lost)       */
     CM_QP_READ Read;
     PVOID Context;
+    CM_QP_READ BelowRead;   /* the functions below a member; NULL: Read   */
+    PVOID BelowContext;
+    CM_QP_ADMIT Admit;      /* NULL: every bus inside the member's range  */
+    PVOID AdmitContext;
 } CM_QPCI_IN, *PCM_QPCI_IN;
 
 /* A reader of a prefix: the first `bytes` of bdf's configuration space

@@ -2056,7 +2056,7 @@ static void test_levels(void)
     /* Reading: each driver's one value. */
     cur.State = TR_RV_ABSENT;
     cur.Value = 0;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     CHECK(l.State == TR_RV_ABSENT && l.Level == TR_LV_DEFAULT,
           "an absent value reads as the default 2");
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
@@ -2067,7 +2067,7 @@ static void test_levels(void)
           "xhcicm: absent, the line");
     cur.State = TR_RV_DWORD;
     cur.Value = 3;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     CHECK(l.Level == 3, "3 read");
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(strcmp(line, "3 - adds port status (XhciLogVerbosity)") == 0,
@@ -2079,16 +2079,16 @@ static void test_levels(void)
               strcmp(tr_level_value_name(TR_LV_XHCICM), "XhciCmLogVerbosity") == 0,
           "each driver's one value name");
     cur.Value = 0;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     CHECK(l.Level == 0, "0 is a level, not absent");
     cur.Value = 4;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     CHECK(l.Level == 4, "4 is a level");
     cur.Value = 5;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     CHECK(l.Level == -1 && l.Value == 5, "5 is out of range");
     cur.Value = 7;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(l.Level == -1 &&
               strcmp(line, "7 - out of range, not 0-4 (XhciLogVerbosity)") == 0,
@@ -2097,17 +2097,17 @@ static void test_levels(void)
     CHECK(strcmp(line, "7 - out of range, not 0-4 (XhciCmLogVerbosity)") == 0,
           "xhcicm: out of range shown as such");
     cur.Value = 0xFFFFFFFFUL;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(l.Level == -1 && strncmp(line, "4294967295 - out of range", 25) == 0,
           "the largest DWORD, unsigned");
     cur.State = TR_RV_OTHER;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
     CHECK(l.Level == -1 && strcmp(line, "XhciCmLogVerbosity is not a REG_DWORD") == 0,
           "another type");
     cur.State = TR_RV_UNREAD;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(l.Level == -1 && strcmp(line, "not read") == 0, "not read");
 
@@ -2119,7 +2119,12 @@ static void test_levels(void)
             for (dd = 0; dd < TR_LV_DRIVERS; dd++) {
                 cur.State = s;
                 cur.Value = k == 12 ? 0xFFFFFFFFUL : k;
-                tr_level_pick(&cur, &l);
+                tr_level_pick(NULL, &cur, &l);
+                tr_level_line(dd, &l, line, sizeof(line));
+                if ((int)strlen(line) > maxLen) {
+                    maxLen = (int)strlen(line);
+                }
+                tr_level_pick(&cur, &cur, &l);
                 tr_level_line(dd, &l, line, sizeof(line));
                 if ((int)strlen(line) > maxLen) {
                     maxLen = (int)strlen(line);
@@ -2131,19 +2136,113 @@ static void test_levels(void)
 
     /* The block. */
     tr_text_init(&t, big, sizeof(big));
-    tr_level_head(&t, TR_LV_XHCI98, 0);
-    tr_level_head(&t, TR_LV_XHCICM, 1);
+    tr_level_head(&t, TR_LV_XHCI98, 0, NULL);
+    tr_level_head(&t, TR_LV_XHCICM, 1, NULL);
     cur.State = TR_RV_DWORD;
     cur.Value = 3;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     tr_level_device(&t, TR_LV_XHCICM, "Thunderbolt(TM) Controller - 15EB", &l);
     CHECK(strcmp(big,
                  "xhci98 (XhciLogVerbosity in each controller's driver key):\r\n"
+                 "  Machine-wide (Services\\USB, wins when set): not set\r\n"
                  "  No USB controller is driven by xhci98.\r\n"
                  "xhcicm (XhciCmLogVerbosity in each host interface's driver key):\r\n"
+                 "  Machine-wide (Services\\USB, wins when set): not set\r\n"
                  "  Thunderbolt(TM) Controller - 15EB\r\n"
                  "    3 - adds port status (XhciCmLogVerbosity)\r\n") == 0,
           "levels: the report's block");
+
+    /* Task 42-A.17: the machine-wide value wins when it is there, in any
+     * type; the device's own is shown as not in force. */
+    {
+        TR_RVAL m;
+        /* A query's answer as the drivers read it: a zero-length REG_NONE
+         * is absent, a REG_NONE with data and a REG_QWORD are another
+         * type, a REG_DWORD of four bytes the DWORD. */
+        tr_rv_from_query(TR_Q_OK, 0, 0, 0, &m);
+        CHECK(m.State == TR_RV_ABSENT, "query: zero-length REG_NONE is absent");
+        tr_rv_from_query(TR_Q_OK, 0, 4, 0, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: REG_NONE with data is another type");
+        tr_rv_from_query(TR_Q_OK, 11, 4, 0, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: a short REG_QWORD is another type");
+        tr_rv_from_query(TR_Q_OK, 4, 4, 3, &m);
+        CHECK(m.State == TR_RV_DWORD && m.Value == 3, "query: a DWORD");
+        tr_rv_from_query(TR_Q_OK, 4, 2, 3, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: a 2-byte REG_DWORD is another type");
+        tr_rv_from_query(TR_Q_NOT_FOUND, 0, 0, 0, &m);
+        CHECK(m.State == TR_RV_ABSENT, "query: not found");
+        tr_rv_from_query(TR_Q_MORE_DATA, 1, 40, 0, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: too long is another type");
+        tr_rv_from_query(TR_Q_ERROR, 4, 4, 3, &m);
+        CHECK(m.State == TR_RV_UNREAD, "query: another error is not read");
+        /* A zero-length REG_NONE machine-wide leaves the device's level in
+         * force, so a Set writes the device's key (lv_set: State absent). */
+        cur.State = TR_RV_DWORD;
+        cur.Value = 3;
+        tr_rv_from_query(TR_Q_OK, 0, 0, 0, &m);
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_DEVICE && l.Level == 3,
+              "query: a zero-length REG_NONE machine-wide does not override");
+        m.State = TR_RV_ABSENT;
+        m.Value = 0;
+        cur.State = TR_RV_ABSENT;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_NONE && l.Level == TR_LV_DEFAULT,
+              "machine-wide: absent from both is the default, from neither");
+        cur.State = TR_RV_DWORD;
+        cur.Value = 1;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_DEVICE && l.Level == 1,
+              "machine-wide: per-device only");
+        m.State = TR_RV_DWORD;
+        m.Value = 4;
+        cur.State = TR_RV_ABSENT;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_MACHINE && l.Level == 4,
+              "machine-wide only");
+        tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
+        CHECK(strcmp(line, "4 - adds memory addresses (for developers) "
+                           "(machine-wide)") == 0,
+              "machine-wide: the line says where");
+        cur.State = TR_RV_DWORD;
+        cur.Value = 1;
+        m.Value = 3;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_MACHINE && l.Level == 3 &&
+                  l.Device.State == TR_RV_DWORD && l.Device.Value == 1,
+              "machine-wide: both, the machine-wide value wins");
+        m.State = TR_RV_OTHER;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_MACHINE && l.Level == -1,
+              "machine-wide of another type still wins");
+        tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
+        CHECK(strcmp(line, "XhciLogVerbosity machine-wide is not a REG_DWORD") == 0,
+              "machine-wide: another type, the line");
+        m.State = TR_RV_UNREAD;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_MACHINE && l.Level == -1,
+              "machine-wide not read: no level claimed");
+
+        m.State = TR_RV_DWORD;
+        m.Value = 3;
+        tr_text_init(&t, big, sizeof(big));
+        tr_level_head(&t, TR_LV_XHCI98, 1, &m);
+        tr_level_pick(&m, &cur, &l);
+        tr_level_device(&t, TR_LV_XHCI98,
+                        "xHCI98 USB 3.x eXtensible Host Controller", &l);
+        CHECK(strcmp(big,
+                     "xhci98 (XhciLogVerbosity in each controller's driver key):\r\n"
+                     "  Machine-wide (Services\\USB, wins when set): 3 - adds port status\r\n"
+                     "  xHCI98 USB 3.x eXtensible Host Controller\r\n"
+                     "    3 - adds port status (machine-wide)\r\n"
+                     "    its own value, 1, is not in force\r\n") == 0,
+              "levels: the block with both set");
+        m.Value = 9;
+        tr_text_init(&t, big, sizeof(big));
+        tr_level_head(&t, TR_LV_XHCICM, 0, &m);
+        CHECK(strstr(big, "wins when set): 9 - out of range\r\n") != NULL,
+              "levels: a machine-wide value out of range");
+    }
 
     /* One level for all, or not. */
     ls[0].Level = 3;

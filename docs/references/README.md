@@ -473,11 +473,15 @@ the ones `INCS_DDK.INF`'s `[DestinationDirs]` and `[WIN98_Files1]` give:
 | `inc\win98\vmm.inc` | `INC_WIN98_VMM.INC` of `INCS_DDK.CAB` | 93,146 | `713fa2d33e417ca553ce2aef64681dae26ca756ad90dc9bbd7401a044c5be072` |
 | `inc\win98\inc16\setupx.h` | `INC_WIN98_INC16_SETUPX.H` of `INCS_DDK.CAB` | 113,904 | `aef84421a79596dcf6c7aaa90af03466e73a1a36bf83ae953138a9252421e815` |
 | `inc\win98\inc16\prsht.h` | `INC_WIN98_INC16_PRSHT.H` of `INCS_DDK.CAB` | 13,833 | `e829f4c657e9ad3ec259b8ea8786a22064b1f1a9976ec6b090cc01d7ee4418a5` |
+| `inc\win98\inc16\windows.h` | `INC_WIN98_INC16_WINDOWS.H` of `INCS_DDK.CAB` | 193,759 | `2578d377949f1b46909ee300572acb4c0f9e5010032a4bb215a93688844d9b9a` |
 | `BINS_DDK.CAB` | of `win98se_ddk.exe` | 2,503,474 | `b9ba649a546b762235c7734001cbd60c8c13a73721c5c1c281555eb1f387fd0b` |
 | `lib\win98\setupx.lib` | `LIB_WIN98_SETUPX.LIB` of `BINS_DDK.CAB` | 21,504 | `726554e15a456db37c9960aa12975e35080227403681e5bc132c94c052a98e4c` |
 | `LICENSE.TXT` | of `win98se_ddk.exe` | 11,803 | `89f90f047aa98c71a405bf75a377ca075a6dfab3540692e0e6a65655ee2b4019` |
 
-The two `setupx` members, and `prsht.h`, which `setupx.h` includes, are
+The two `setupx` members, `prsht.h`, which `setupx.h` includes, and the
+98 `windows.h` (the build's choice over Open Watcom's Windows 3.1 one,
+which declares neither the `HKEY` `setupx.h` uses nor the `NMHDR` `prsht.h`
+uses; task 42-A.1, `xhciinst\di\build.cmd`) are
 what design record 27's 16-bit helper is compiled and linked against
 (roadmap-usb4 task 42-0.2; owner, 2026-10-18): the headers for their
 documentation blocks and declarations, the import
@@ -499,6 +503,21 @@ header's text; `legal-provenance.md` section 2 has the row.
   declaration, macro body, comment or sample code is reproduced
   (`docs/contributing/legal-provenance.md` section 4, the CONFIGMG row).
   Fetched, never tracked.
+
+**Stor98's two headers (roadmap-usb4 task 42-A.20).** Stor98's 9x image
+(`src/stor98/`) is compiled with a Windows 98 (or NT4) DDK's `SCSI.H` and
+`SRB.H` ahead of the Windows 2000 DDK's, from the git-ignored
+`tools/w98ddk/inc/` (`src/stor98/docs/BUILD.md`). The copies it builds
+with are the ones that came with SweetLow's `nvme2k-src.zip`
+(`src/stor98/NOTICE`), copied from the Stor98 checkout's own `tools/` on
+2026-10-19; they are not the members of `win98se_ddk.exe` above, whose
+`BLCK_DDK` `SRC_BLOCK_INC_SCSI.H` and `SRC_BLOCK_INC_SRB.H` are other
+files (51,142 and 21,084 bytes) and are not used:
+
+| Save as | Bytes | SHA-256 |
+|---|---|---|
+| `tools/w98ddk/inc/SCSI.H` | 36,501 | `809d57e6756de21524930eb4d17840ab3047c7e1773da634ceb73a81ff8d39b7` |
+| `tools/w98ddk/inc/SRB.H` | 21,056 | `4b3c3305686f2593ceb471ae69f1d690de5d833c8f2047859d735b21affd8396` |
 - The Internet Archive item is a third-party upload, not a Microsoft
   distribution, so the SHA-256 above is what identifies the file: another
   copy of the same package is checked against it, not trusted by its name.

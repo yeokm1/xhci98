@@ -1,0 +1,798 @@
+[nvme98 0000005024703216 00000] dbg: nvme2k: DriverEntry called
+[nvme98 0000005024dc9742 00001] marker tsc=0000005024BECB6A
+[nvme98 0000005025117e80 00002] DriverEntry DriverObject=C1927BE0 Argument2=C032DDA1
+[nvme98 0000005025be1d70 00003] dbg: nvme2k: HwFindAdapter:E433C08C called with HwContext - Bus=0 Slot=0
+[nvme98 0000005026075e7c 00004] HwFindAdapter devext=E433C08C ctx=E45E0DC0 bus=0 slot=0 cfg.bus=1 cfg.slot=1 ranges=1 range0=FE800000 len=00004000 irq=10 vec=0 arg=(null)
+[nvme98 00000050268a2262 00005] dbg: nvme2k: HwFindAdapter - bus 1 slot 0: VID=003E DID=0000 Class=E45E07
+[nvme98 0000005026cbcd0c 00006] dbg: nvme2k: HwFindAdapter - not an NVMe device
+[nvme98 00000050273eb15a 00007] dbg: nvme2k: HwFindAdapter - bus 1 slot 1: VID=1B36 DID=0010 Class=010802
+[nvme98 00000050277c0c33 00008] dbg: nvme2k: HwFindAdapter - NT4: store HwContext to resume scanning
+[nvme98 0000005027b6c0cb 00009] dbg: nvme2k: HwFoundAdapter - found NVMe device VID=1B36 DID=0010 at bus 1 slot 1
+[nvme98 0000005028a83250 00010] dbg: nvme2k: HwFoundAdapter - PCI Command Register = 0006 (IntDis=0) Old
+[nvme98 0000005029182826 00011] dbg: nvme2k: HwFoundAdapter - PCI Command Register = 0406 (IntDis=1)
+[nvme98 0000005029a997c5 00012] dbg: nvme2k: HwFoundAdapter - PCI Interrupt Line=10 Pin=1
+[nvme98 0000005029bdbe5d 00013] dbg: nvme2k: HwFoundAdapter - ConfigInfo BEFORE: BusInterruptLevel=10 Vector=0 Mode=1
+[nvme98 0000005029d8d747 00014] dbg: nvme2k: HwFoundAdapter - Set interrupt from PCI config: Level=10
+[nvme98 000000502aca5fe8 00015] dbg: nvme2k: HwFoundAdapter - BAR0 base=0x00000000FE800000 size=0x00004000 Memory
+[nvme98 000000502b00b796 00016] dbg: nvme2k: HwFoundAdapter - Controller Registers at VA E4601000
+[nvme98 000000502b14bfd4 00017] dbg: nvme2k: HwFoundAdapter - Controller Registers PTE FE800A07
+[nvme98 000000502b33c9ba 00018] dbg: nvme2k: HwFoundAdapter - Uncached Memory PTE 00FCB267
+[nvme98 000000502b54b8c8 00019] dbg: nvme2k: HwFoundAdapter - allocated 65536 bytes of uncached memory at virt=E4625000 phys=0000000000FCB000
+[nvme98 000000502b6eab16 00020] dbg: nvme2k: HwFoundAdapter - Uncached Memory PTE 00FCB27F
+[nvme98 000000502b7e708c 00021] dbg: nvme2k: HwFoundAdapter - success, returning SP_RETURN_FOUND
+[nvme98 000000502b9284fa 00022] HwFindAdapter found inst=1 bus=1 slot=1 rc=1 regs=E4601000 uncached=E4625000 phys=00FCB000
+[nvme98 000000502bad4e52 00023] dbg: nvme2k: HwAdapterState called - SaveState=255
+[nvme98 000000502bc0a11b 00024] marker tsc=000000502BBF506D
+[nvme98 000000502bd3da29 00025] HwAdapterState inst=1 SaveState=255 context=C1927E88 depth=0 admin=0 CSTS=00000000
+[nvme98 000000502befb703 00026] summary(HwAdapterState) inst=1 srbs=0 rw=0 tagged=0 untagged=0 maxdepth=0 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=0 timer=0 gone=0 fastfail=0
+[nvme98 000000502c1ee695 00027] summary(HwAdapterState) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 000000502c3af321 00028] dbg: nvme2k: HwAdapterState - saving previous state
+[nvme98 000000502c4b7471 00029] dbg: nvme2k: HwAdapterState - unimplelemented
+[nvme98 000000502c5ab7d3 00030] dbg: nvme2k: HwAdapterState - exit
+[nvme98 000000502cc6e377 00031] dbg: nvme2k: HwInitialize called
+[nvme98 000000502cd877ef 00032] HwInitialize inst=1 devext=E433C08C regs=E4601000 CC=00000000 CSTS=00000000
+[nvme98 000000502ced11d7 00033] dbg: nvme2k: HwInitialize - masking all interrupts
+[nvme98 000000502d19782e 00034] dbg: nvme2k: HwInitialize - CAP=004008200F0107FF VS=00010400 MQES=2048 DBS=4
+[nvme98 000000502d2fa6f8 00035] dbg: nvme2k: HwInitialize - controller state before reset: CC=00000000 CSTS=00000000
+[nvme98 000000502d48c7a0 00036] dbg: nvme2k: HwInitialize - clearing admin queue registers
+[nvme98 000000502d6281ae 00037] dbg: nvme2k: HwInitialize - disabling controller
+[nvme98 000000502d797300 00038] dbg: nvme2k: HwInitialize - controller disabled successfully
+[nvme98 000000502d8d1acc 00039] dbg: nvme2k: HwInitialize - controller is now disabled and clean
+[nvme98 000000502da0e21e 00040] dbg: nvme2k: HwInitialize - re-masking interrupts after controller reset (QEMU clears INTMS during reset)
+[nvme98 000000502dccf6b0 00041] dbg: nvme2k: AllocateUncachedMemory - allocated 4096 bytes at offset 0 (virt=E4625000 phys=0000000000FCB000)
+[nvme98 000000502deb4a20 00042] dbg: nvme2k: AllocateUncachedMemory - allocated 4096 bytes at offset 4096 (virt=E4626000 phys=0000000000FCC000)
+[nvme98 000000502e08a124 00043] dbg: nvme2k: AllocateUncachedMemory - allocated 40960 bytes at offset 8192 (virt=E4627000 phys=0000000000FCD000)
+[nvme98 000000502e26beca 00044] dbg: nvme2k: AllocateUncachedMemory - allocated 1024 bytes at offset 49152 (virt=E4631000 phys=0000000000FD7000)
+[nvme98 000000502e437128 00045] dbg: nvme2k: AllocateUncachedMemory - allocated 1024 bytes at offset 53248 (virt=E4632000 phys=0000000000FD8000)
+[nvme98 000000502e602bf6 00046] dbg: nvme2k: HwInitialize - uncached memory usage: 54272 / 65536 bytes
+[nvme98 000000502e929140 00047] dbg: nvme2k: HwInitialize - controller is ready
+[nvme98 000000502e9f38aa 00048] dbg: nvme2k: HwInitialize - keeping interrupts masked, will use polling during init
+[nvme98 000000502eb4e7f4 00049] dbg: nvme2k: PRP list pool initialized at VA=E4627000 PA=0000000000FCD000 (10 pages)
+[nvme98 000000502eddd9a2 00050] dbg: nvme2k: HwInitialize - polling for init completion...
+[nvme98 000000502ef6b850 00051] dbg: nvme2k: I/O CQ created successfully - DW0=00000000 SQID=0
+[nvme98 000000502f18c9f4 00052] dbg: nvme2k: I/O SQ created successfully - DW0=00000000 SQID=0
+[nvme98 000000502f44a137 00053] dbg: nvme2k: Identified controller - Model: QEMU NVMe Ctrl                           SN: USB4EMU01            FW: 11.1.2   NN: 256
+[nvme98 000000502f74ca10 00054] dbg: nvme2k: Identified namespace - blocks=(2097152 + 0 * 4Gi) blocksize=512 bytes
+[nvme98 000000502f8a7c84 00055] dbg: nvme2k: Init complete - driver ready for I/O
+[nvme98 0000005030172bc2 00056] dbg: nvme2k: Enabled interrupts at PCI level, Command=0006
+[nvme98 000000503026fa20 00057] dbg: nvme2k: Unmasked interrupts at NVMe controller level (INTMC=0x00000001)
+[nvme98 00000050303ce006 00058] dbg: nvme2k: HwInitialize finished successfully - interrupts enabled
+[nvme98 000000503054da92 00059] HwInitialize inst=1 returns TRUE, InitComplete=1
+[nvme98 0000005030e5149a 00060] startio func=00 op=12 tag=01 qa=00 flags=0001006C buf=C138CE94 len=96 timeout=30 depth=0
+[nvme98 000000503107cdbe 00061] config probe in HwStartIo: ScsiPortGetBusData(bus 1 slot 1, 8) = 8, id=00101B36 cmdsts=00100006
+[nvme98 00000050320347c0 00062] dbg: nvme2k: DriverEntry exiting with status 0x00000000
+[nvme98 0000005032f3eff9 00063] startio func=00 op=00 tag=04 qa=00 flags=00010000 buf=00000000 len=0 timeout=0 depth=0
+[nvme98 000000503320a6bb 00064] startio func=00 op=25 tag=05 qa=00 flags=00010040 buf=E2EC1054 len=8 timeout=0 depth=0
+[nvme98 000000503362a679 00065] startio rw op=28 tag=06 qa=00 flags=00010240 buf=C18E8608 len=512 depth=0 cdb=000000000001
+[nvme98 0000005033f2777b 00066] complete cid=8000 nvme=0000 srb=C138D800 status=01 op=28 tag=06 depth=1
+[nvme98 00000050343b6391 00067] startio rw op=28 tag=07 qa=00 flags=00010240 buf=C18E8608 len=512 depth=0 cdb=0000003F0001
+[nvme98 00000050346cf735 00068] complete cid=8001 nvme=0000 srb=C138D800 status=01 op=28 tag=07 depth=1
+[nvme98 00000050349572cd 00069] startio rw op=28 tag=08 qa=00 flags=00010240 buf=C1905514 len=512 depth=0 cdb=0000003F0001
+[nvme98 0000005034cf6db2 00070] complete cid=8002 nvme=0000 srb=C138D800 status=01 op=28 tag=08 depth=1
+[nvme98 0000005067f59310 00071] FallbackTimer #1 depth=0 admin=0
+[nvme98 000000509f69ef71 00072] FallbackTimer #2 depth=0 admin=0
+[nvme98 00000051335e5465 00073] startio func=00 op=00 tag=09 qa=00 flags=00010000 buf=00000000 len=0 timeout=0 depth=0
+[nvme98 000000513454169d 00074] startio rw op=28 tag=0A qa=00 flags=00010240 buf=C1924690 len=512 depth=0 cdb=0000003F0001
+[nvme98 00000051353e7fa3 00075] complete cid=8003 nvme=0000 srb=C138B6F4 status=01 op=28 tag=0A depth=1
+[nvme98 00000051359b66b9 00076] startio rw op=28 tag=0B qa=00 flags=00010240 buf=C1924690 len=512 depth=0 cdb=000000400001
+[nvme98 0000005135cfa53c 00077] complete cid=8004 nvme=0000 srb=C138B6F4 status=01 op=28 tag=0B depth=1
+[nvme98 000000513769523a 00078] startio rw op=28 tag=0C qa=00 flags=00010240 buf=C750A000 len=4096 depth=0 cdb=000010570008
+[nvme98 000000513795fcbd 00079] complete cid=8005 nvme=0000 srb=C138B6F4 status=01 op=28 tag=0C depth=1
+[nvme98 000000515bd5c0e0 00080] FallbackTimer #3 depth=0 admin=0
+[nvme98 000000515c4b1cb4 00081] config probe in FallbackTimer: ScsiPortGetBusData(bus 1 slot 1, 8) = 8, id=00101B36 cmdsts=00100006
+[nvme98 0000005194e51f3e 00082] FallbackTimer #4 depth=0 admin=0
+[nvme98 00000064868aec50 00083] startio rw op=28 tag=0D qa=00 flags=00010240 buf=C7506000 len=4096 depth=0 cdb=0000003F0008
+[nvme98 0000006487345108 00084] complete cid=8006 nvme=0000 srb=C138B6F4 status=01 op=28 tag=0D depth=1
+[nvme98 00000064bbbbeafc 00085] FallbackTimer #5 depth=0 admin=0
+[nvme98 0000006fb3e3fffe 00086] startio rw op=28 tag=0E qa=00 flags=00010240 buf=C7505000 len=4096 depth=0 cdb=0000005F0008
+[nvme98 0000006fb41b0558 00087] complete cid=8007 nvme=0000 srb=C138B6F4 status=01 op=28 tag=0E depth=1
+[nvme98 0000006fb462ebde 00088] startio rw op=28 tag=0F qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000105F0078
+[nvme98 0000006fb4a42e78 00089] complete cid=8008 nvme=0000 srb=C138B6F4 status=01 op=28 tag=0F depth=1
+[nvme98 0000006fb791bc18 00090] startio rw op=28 tag=10 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000010D70078
+[nvme98 0000006fb7c0710e 00091] complete cid=8009 nvme=0000 srb=C138B6F4 status=01 op=28 tag=10 depth=1
+[nvme98 0000006fb9404b94 00092] startio rw op=28 tag=11 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000114F0078
+[nvme98 0000006fb96a0bd0 00093] complete cid=800A nvme=0000 srb=C138B6F4 status=01 op=28 tag=11 depth=1
+[nvme98 0000006fbb02fe8e 00094] startio rw op=28 tag=12 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000011C70078
+[nvme98 0000006fbb4191ad 00095] complete cid=800B nvme=0000 srb=C138B6F4 status=01 op=28 tag=12 depth=1
+[nvme98 0000006fbc8b74bb 00096] startio rw op=28 tag=13 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000123F0078
+[nvme98 0000006fbcba2306 00097] complete cid=800C nvme=0000 srb=C138B6F4 status=01 op=28 tag=13 depth=1
+[nvme98 0000006fbe6eabb8 00098] startio rw op=28 tag=14 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000012B70078
+[nvme98 0000006fbeb84e44 00099] complete cid=800D nvme=0000 srb=C138B6F4 status=01 op=28 tag=14 depth=1
+[nvme98 0000006fc12f35d4 00100] startio rw op=28 tag=15 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000132F0078
+[nvme98 0000006fc16c2cfa 00101] complete cid=800E nvme=0000 srb=C138B6F4 status=01 op=28 tag=15 depth=1
+[nvme98 0000006fc33c6e50 00102] startio rw op=28 tag=16 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000013A70078
+[nvme98 0000006fc378654a 00103] complete cid=800F nvme=0000 srb=C138B6F4 status=01 op=28 tag=16 depth=1
+[nvme98 0000006fc4c79c18 00104] startio rw op=28 tag=17 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000141F0078
+[nvme98 0000006fc4efb680 00105] complete cid=8010 nvme=0000 srb=C138B6F4 status=01 op=28 tag=17 depth=1
+[nvme98 0000006fc6c6f928 00106] startio rw op=28 tag=18 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000014970078
+[nvme98 0000006fc6fcba7c 00107] complete cid=8011 nvme=0000 srb=C138B6F4 status=01 op=28 tag=18 depth=1
+[nvme98 0000006fc9836b7e 00108] startio rw op=28 tag=19 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000150F0078
+[nvme98 0000006fc9c54b7a 00109] complete cid=8012 nvme=0000 srb=C138B6F4 status=01 op=28 tag=19 depth=1
+[nvme98 0000006fcbeba02a 00110] startio rw op=28 tag=1A qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000015870078
+[nvme98 0000006fcc22b1a0 00111] complete cid=8013 nvme=0000 srb=C138B6F4 status=01 op=28 tag=1A depth=1
+[nvme98 0000006fcdb46130 00112] startio rw op=28 tag=1B qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000015FF0078
+[nvme98 0000006fcde6d485 00113] complete cid=8014 nvme=0000 srb=C138B6F4 status=01 op=28 tag=1B depth=1
+[nvme98 0000006fcfa48c59 00114] startio rw op=28 tag=1C qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000016770078
+[nvme98 0000006fcfced54f 00115] complete cid=8015 nvme=0000 srb=C138B6F4 status=01 op=28 tag=1C depth=1
+[nvme98 0000006fd2221c49 00116] startio rw op=28 tag=1D qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000016EF0078
+[nvme98 0000006fd255b047 00117] complete cid=8016 nvme=0000 srb=C138B6F4 status=01 op=28 tag=1D depth=1
+[nvme98 0000006fd4fe273b 00118] startio rw op=28 tag=1E qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000017670078
+[nvme98 0000006fd53fa1da 00119] complete cid=8017 nvme=0000 srb=C138B6F4 status=01 op=28 tag=1E depth=1
+[nvme98 0000006fd6e8e6a4 00120] startio rw op=28 tag=1F qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000017DF0078
+[nvme98 0000006fd71dcfa4 00121] complete cid=8018 nvme=0000 srb=C138B6F4 status=01 op=28 tag=1F depth=1
+[nvme98 0000006fd8de458a 00122] startio rw op=28 tag=20 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000018570078
+[nvme98 0000006fd910525a 00123] complete cid=8019 nvme=0000 srb=C138B6F4 status=01 op=28 tag=20 depth=1
+[nvme98 0000006fdaed6b3a 00124] startio rw op=28 tag=21 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000018CF0078
+[nvme98 0000006fdb19f89e 00125] complete cid=801A nvme=0000 srb=C138B6F4 status=01 op=28 tag=21 depth=1
+[nvme98 0000006fdd9e4f2c 00126] startio rw op=28 tag=22 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000019470078
+[nvme98 0000006fddc56cd8 00127] complete cid=801B nvme=0000 srb=C138B6F4 status=01 op=28 tag=22 depth=1
+[nvme98 0000006fdf9b40d2 00128] startio rw op=28 tag=23 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000019BF0078
+[nvme98 0000006fdfd09b06 00129] complete cid=801C nvme=0000 srb=C138B6F4 status=01 op=28 tag=23 depth=1
+[nvme98 0000006fe18ef30c 00130] startio rw op=28 tag=24 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001A370078
+[nvme98 0000006fe1c008f0 00131] complete cid=801D nvme=0000 srb=C138B6F4 status=01 op=28 tag=24 depth=1
+[nvme98 0000006fe36d73f4 00132] startio rw op=28 tag=25 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001AAF0078
+[nvme98 0000006fe3b355fd 00133] complete cid=801E nvme=0000 srb=C138B6F4 status=01 op=28 tag=25 depth=1
+[nvme98 0000006fe514e034 00134] startio rw op=28 tag=26 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001B270078
+[nvme98 0000006fe540e6d4 00135] complete cid=801F nvme=0000 srb=C138B6F4 status=01 op=28 tag=26 depth=1
+[nvme98 0000006fe702102d 00136] startio rw op=28 tag=27 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001B9F0078
+[nvme98 0000006fe73f83a9 00137] complete cid=8020 nvme=0000 srb=C138B6F4 status=01 op=28 tag=27 depth=1
+[nvme98 0000006fe93d1fa3 00138] startio rw op=28 tag=28 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001C170078
+[nvme98 0000006fe968826c 00139] complete cid=8021 nvme=0000 srb=C138B6F4 status=01 op=28 tag=28 depth=1
+[nvme98 0000006feb163e10 00140] startio rw op=28 tag=29 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001C8F0078
+[nvme98 0000006feb5253aa 00141] complete cid=8022 nvme=0000 srb=C138B6F4 status=01 op=28 tag=29 depth=1
+[nvme98 0000006feda9faf4 00142] startio rw op=28 tag=2A qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001D070078
+[nvme98 0000006fede7faa7 00143] complete cid=8023 nvme=0000 srb=C138B6F4 status=01 op=28 tag=2A depth=1
+[nvme98 0000006fef939596 00144] startio rw op=28 tag=2B qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001D7F0078
+[nvme98 0000006fefc40ece 00145] complete cid=8024 nvme=0000 srb=C138B6F4 status=01 op=28 tag=2B depth=1
+[nvme98 0000006ff18da9c2 00146] startio rw op=28 tag=2C qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001DF70078
+[nvme98 0000006ff1bba958 00147] complete cid=8025 nvme=0000 srb=C138B6F4 status=01 op=28 tag=2C depth=1
+[nvme98 0000006ff3909298 00148] startio rw op=28 tag=2D qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001E6F0078
+[nvme98 0000006ff3bc8425 00149] complete cid=8026 nvme=0000 srb=C138B6F4 status=01 op=28 tag=2D depth=1
+[nvme98 0000006ff5c1b55f 00150] startio rw op=28 tag=2E qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001EE70078
+[nvme98 0000006ff5fc5a80 00151] complete cid=8027 nvme=0000 srb=C138B6F4 status=01 op=28 tag=2E depth=1
+[nvme98 0000007293aadaa7 00152] summary(periodic) inst=1 srbs=1028 rw=1024 tagged=0 untagged=1024 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=1023 timer=36 gone=0 fastfail=0
+[nvme98 0000007293d71009 00153] summary(periodic) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 000000739cc3af3c 00154] summary(periodic) inst=1 srbs=2052 rw=2048 tagged=0 untagged=2048 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=2047 timer=50 gone=0 fastfail=0
+[nvme98 000000739ceb747c 00155] summary(periodic) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 0000007495d8e79c 00156] FallbackTimer #64 depth=0 admin=0
+[nvme98 00000074a414aeef 00157] summary(periodic) inst=1 srbs=3076 rw=3072 tagged=0 untagged=3072 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=3071 timer=64 gone=0 fastfail=0
+[nvme98 00000074a4318f79 00158] summary(periodic) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 00000075b3b354e3 00159] summary(periodic) inst=1 srbs=4100 rw=4096 tagged=0 untagged=4096 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=4095 timer=79 gone=0 fastfail=0
+[nvme98 00000075b3dac90b 00160] summary(periodic) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 00000076a46f0620 00161] summary(periodic) inst=1 srbs=5124 rw=5120 tagged=0 untagged=5120 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=5119 timer=92 gone=0 fastfail=0
+[nvme98 00000076a48cb5f8 00162] summary(periodic) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 00000077910f22c5 00163] summary(periodic) inst=1 srbs=6148 rw=6144 tagged=0 untagged=6144 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=6143 timer=104 gone=0 fastfail=0
+[nvme98 00000077912c6a51 00164] summary(periodic) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 0000007887310fe3 00165] summary(periodic) inst=1 srbs=7172 rw=7168 tagged=0 untagged=7168 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=7167 timer=117 gone=0 fastfail=0
+[nvme98 00000078874116f9 00166] summary(periodic) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 0000007940bd2820 00167] FallbackTimer #128 depth=0 admin=0
+[nvme98 000000798176fb48 00168] summary(periodic) inst=1 srbs=8196 rw=8192 tagged=0 untagged=8192 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=8191 timer=131 gone=0 fastfail=0
+[nvme98 00000079819c25f8 00169] summary(periodic) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 0000007a6d78a546 00170] summary(periodic) inst=1 srbs=9220 rw=9216 tagged=0 untagged=9216 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=9215 timer=144 gone=0 fastfail=0
+[nvme98 0000007a6da17f34 00171] summary(periodic) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 0000007af49e9e86 00172] dbg: nvme2k: FallbackTimer - handled 1 of IO completions
+[nvme98 0000007af5250565 00173] marker tsc=0000007AF5236BB5
+[nvme98 0000007af531739f 00174] GONE detected in HwStartIo: CSTS all-ones, depth=0 nontagged=00000000 admin=0
+[nvme98 0000007af54cd5a9 00175] config probe in HwStartIo: ScsiPortGetBusData(bus 1 slot 1, 8) = 8, id=FFFFFFFF cmdsts=FFFFFFFF
+[nvme98 0000007af56b051f 00176] fast-fail #1 func=00 op=28 tag=A1 -> NO_DEVICE
+[nvme98 0000007af58d3491 00177] startio rw op=28 tag=A2 qa=00 flags=0001024C buf=E4814000 len=45056 depth=0 cdb=000262670058
+[nvme98 0000007af5a45487 00178] fast-fail #2 func=00 op=28 tag=A2 -> NO_DEVICE
+[nvme98 0000007af5b187fb 00179] startio rw op=28 tag=A3 qa=00 flags=0001024C buf=E4814000 len=45056 depth=0 cdb=000262670058
+[nvme98 0000007af5c9bef7 00180] fast-fail #3 func=00 op=28 tag=A3 -> NO_DEVICE
+[nvme98 0000007af5d8aecb 00181] startio rw op=28 tag=A4 qa=00 flags=0001024C buf=E4814000 len=45056 depth=0 cdb=000262670058
+[nvme98 0000007af5ef6099 00182] fast-fail #4 func=00 op=28 tag=A4 -> NO_DEVICE
+[nvme98 0000007af5fc3e09 00183] startio rw op=28 tag=A5 qa=00 flags=0001024C buf=E4814000 len=45056 depth=0 cdb=000262670058
+[nvme98 0000007af614f0e3 00184] fast-fail #5 func=00 op=28 tag=A5 -> NO_DEVICE
+[nvme98 0000007af62657c5 00185] startio rw op=28 tag=A6 qa=00 flags=0001024C buf=E4814000 len=45056 depth=0 cdb=000262670058
+[nvme98 0000007af63e6d5b 00186] fast-fail #6 func=00 op=28 tag=A6 -> NO_DEVICE
+[nvme98 0000007af66fadcb 00187] startio rw op=28 tag=A7 qa=00 flags=00010240 buf=C5E6C000 len=4096 depth=0 cdb=000262670008
+[nvme98 0000007af6822a69 00188] fast-fail #7 func=00 op=28 tag=A7 -> NO_DEVICE
+[nvme98 0000007af68e4ecf 00189] startio rw op=28 tag=A8 qa=00 flags=0001024C buf=C5E6C000 len=4096 depth=0 cdb=000262670008
+[nvme98 0000007af69fda41 00190] fast-fail #8 func=00 op=28 tag=A8 -> NO_DEVICE
+[nvme98 0000007af6ab5641 00191] startio rw op=28 tag=A9 qa=00 flags=0001024C buf=C5E6C000 len=4096 depth=0 cdb=000262670008
+[nvme98 0000007af6bccf6b 00192] fast-fail #9 func=00 op=28 tag=A9 -> NO_DEVICE
+[nvme98 0000007af6c859b7 00193] startio rw op=28 tag=AA qa=00 flags=0001024C buf=C5E6C000 len=4096 depth=0 cdb=000262670008
+[nvme98 0000007af6da1ab7 00194] fast-fail #10 func=00 op=28 tag=AA -> NO_DEVICE
+[nvme98 0000007af6e75c59 00195] startio rw op=28 tag=AB qa=00 flags=0001024C buf=C5E6C000 len=4096 depth=0 cdb=000262670008
+[nvme98 0000007af6fb50ab 00196] fast-fail #11 func=00 op=28 tag=AB -> NO_DEVICE
+[nvme98 0000007af7088d25 00197] startio rw op=28 tag=AC qa=00 flags=0001024C buf=C5E6C000 len=4096 depth=0 cdb=000262670008
+[nvme98 0000007af71fa0eb 00198] fast-fail #12 func=00 op=28 tag=AC -> NO_DEVICE
+[nvme98 0000007af732828d 00199] startio rw op=28 tag=AD qa=00 flags=00010240 buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007af753ac5c 00200] fast-fail #13 func=00 op=28 tag=AD -> NO_DEVICE
+[nvme98 0000007af760bb22 00201] startio rw op=28 tag=AE qa=00 flags=0001024C buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007af771fa68 00202] fast-fail #14 func=00 op=28 tag=AE -> NO_DEVICE
+[nvme98 0000007af77d85fe 00203] startio rw op=28 tag=AF qa=00 flags=0001024C buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007af78f077a 00204] fast-fail #15 func=00 op=28 tag=AF -> NO_DEVICE
+[nvme98 0000007af79b582c 00205] startio rw op=28 tag=B0 qa=00 flags=0001024C buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007af7af244c 00206] fast-fail #16 func=00 op=28 tag=B0 -> NO_DEVICE
+[nvme98 0000007af7bd560c 00207] startio rw op=28 tag=B1 qa=00 flags=0001024C buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007af7ce8fee 00208] fast-fail #17 func=00 op=28 tag=B1 -> NO_DEVICE
+[nvme98 0000007af7da3222 00209] startio rw op=28 tag=B2 qa=00 flags=0001024C buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007af7ebaf84 00210] fast-fail #18 func=00 op=28 tag=B2 -> NO_DEVICE
+[nvme98 0000007af80476c2 00211] startio rw op=28 tag=B3 qa=00 flags=00010240 buf=C5E6C200 len=512 depth=0 cdb=000262680001
+[nvme98 0000007af8178690 00212] fast-fail #19 func=00 op=28 tag=B3 -> NO_DEVICE
+[nvme98 0000007af823bee2 00213] startio rw op=28 tag=B4 qa=00 flags=0001024C buf=C5E6C200 len=512 depth=0 cdb=000262680001
+[nvme98 0000007af83500da 00214] fast-fail #20 func=00 op=28 tag=B4 -> NO_DEVICE
+[nvme98 0000007af840962a 00215] startio rw op=28 tag=B5 qa=00 flags=0001024C buf=C5E6C200 len=512 depth=0 cdb=000262680001
+[nvme98 0000007af85260e4 00216] fast-fail #21 func=00 op=28 tag=B5 -> NO_DEVICE
+[nvme98 0000007af85df97c 00217] startio rw op=28 tag=B6 qa=00 flags=0001024C buf=C5E6C200 len=512 depth=0 cdb=000262680001
+[nvme98 0000007af86f6928 00218] fast-fail #22 func=00 op=28 tag=B6 -> NO_DEVICE
+[nvme98 0000007af87b2056 00219] startio rw op=28 tag=B7 qa=00 flags=0001024C buf=C5E6C200 len=512 depth=0 cdb=000262680001
+[nvme98 0000007af88caf6a 00220] fast-fail #23 func=00 op=28 tag=B7 -> NO_DEVICE
+[nvme98 0000007af89895d2 00221] startio rw op=28 tag=B8 qa=00 flags=0001024C buf=C5E6C200 len=512 depth=0 cdb=000262680001
+[nvme98 0000007af8aa5e34 00222] fast-fail #24 func=00 op=28 tag=B8 -> NO_DEVICE
+[nvme98 0000007af8ba4222 00223] startio rw op=28 tag=B9 qa=00 flags=00010240 buf=C5E6C400 len=512 depth=0 cdb=000262690001
+[nvme98 0000007af8cbd550 00224] fast-fail #25 func=00 op=28 tag=B9 -> NO_DEVICE
+[nvme98 0000007af8d793c2 00225] startio rw op=28 tag=BA qa=00 flags=0001024C buf=C5E6C400 len=512 depth=0 cdb=000262690001
+[nvme98 0000007af8e92696 00226] fast-fail #26 func=00 op=28 tag=BA -> NO_DEVICE
+[nvme98 0000007af8f55e16 00227] startio rw op=28 tag=BB qa=00 flags=0001024C buf=C5E6C400 len=512 depth=0 cdb=000262690001
+[nvme98 0000007af907380c 00228] fast-fail #27 func=00 op=28 tag=BB -> NO_DEVICE
+[nvme98 0000007af912f2dc 00229] startio rw op=28 tag=BC qa=00 flags=0001024C buf=C5E6C400 len=512 depth=0 cdb=000262690001
+[nvme98 0000007af9247368 00230] fast-fail #28 func=00 op=28 tag=BC -> NO_DEVICE
+[nvme98 0000007af9302f0a 00231] startio rw op=28 tag=BD qa=00 flags=0001024C buf=C5E6C400 len=512 depth=0 cdb=000262690001
+[nvme98 0000007af941b428 00232] fast-fail #29 func=00 op=28 tag=BD -> NO_DEVICE
+[nvme98 0000007af94d81b8 00233] startio rw op=28 tag=BE qa=00 flags=0001024C buf=C5E6C400 len=512 depth=0 cdb=000262690001
+[nvme98 0000007af95f51b8 00234] fast-fail #30 func=00 op=28 tag=BE -> NO_DEVICE
+[nvme98 0000007af96ed0de 00235] startio rw op=28 tag=BF qa=00 flags=00010240 buf=C5E6C600 len=512 depth=0 cdb=0002626A0001
+[nvme98 0000007af9808680 00236] fast-fail #31 func=00 op=28 tag=BF -> NO_DEVICE
+[nvme98 0000007af98c5e60 00237] startio rw op=28 tag=C0 qa=00 flags=0001024C buf=C5E6C600 len=512 depth=0 cdb=0002626A0001
+[nvme98 0000007af99e073c 00238] fast-fail #32 func=00 op=28 tag=C0 -> NO_DEVICE
+[nvme98 0000007af9a9e4bc 00239] startio rw op=28 tag=C1 qa=00 flags=0001024C buf=C5E6C600 len=512 depth=0 cdb=0002626A0001
+[nvme98 0000007af9bbe37e 00240] fast-fail #33 func=00 op=28 tag=C1 -> NO_DEVICE
+[nvme98 0000007af9c7c608 00241] startio rw op=28 tag=C2 qa=00 flags=0001024C buf=C5E6C600 len=512 depth=0 cdb=0002626A0001
+[nvme98 0000007af9d98942 00242] fast-fail #34 func=00 op=28 tag=C2 -> NO_DEVICE
+[nvme98 0000007af9e563d4 00243] startio rw op=28 tag=C3 qa=00 flags=0001024C buf=C5E6C600 len=512 depth=0 cdb=0002626A0001
+[nvme98 0000007af9f70698 00244] fast-fail #35 func=00 op=28 tag=C3 -> NO_DEVICE
+[nvme98 0000007afa18fbe0 00245] startio rw op=28 tag=C4 qa=00 flags=0001024C buf=C5E6C600 len=512 depth=0 cdb=0002626A0001
+[nvme98 0000007afa2aca3c 00246] fast-fail #36 func=00 op=28 tag=C4 -> NO_DEVICE
+[nvme98 0000007afa3badde 00247] startio rw op=28 tag=C5 qa=00 flags=00010240 buf=C5E6C800 len=512 depth=0 cdb=0002626B0001
+[nvme98 0000007afa4d3ad6 00248] fast-fail #37 func=00 op=28 tag=C5 -> NO_DEVICE
+[nvme98 0000007afa5994ac 00249] startio rw op=28 tag=C6 qa=00 flags=0001024C buf=C5E6C800 len=512 depth=0 cdb=0002626B0001
+[nvme98 0000007afa6b0944 00250] fast-fail #38 func=00 op=28 tag=C6 -> NO_DEVICE
+[nvme98 0000007afa770938 00251] startio rw op=28 tag=C7 qa=00 flags=0001024C buf=C5E6C800 len=512 depth=0 cdb=0002626B0001
+[nvme98 0000007afa889d56 00252] fast-fail #39 func=00 op=28 tag=C7 -> NO_DEVICE
+[nvme98 0000007afa9465fa 00253] startio rw op=28 tag=C8 qa=00 flags=0001024C buf=C5E6C800 len=512 depth=0 cdb=0002626B0001
+[nvme98 0000007afaa7a35e 00254] fast-fail #40 func=00 op=28 tag=C8 -> NO_DEVICE
+[nvme98 0000007afab668a8 00255] startio rw op=28 tag=C9 qa=00 flags=0001024C buf=C5E6C800 len=512 depth=0 cdb=0002626B0001
+[nvme98 0000007afac7fb40 00256] fast-fail #41 func=00 op=28 tag=C9 -> NO_DEVICE
+[nvme98 0000007afad3c7a4 00257] startio rw op=28 tag=CA qa=00 flags=0001024C buf=C5E6C800 len=512 depth=0 cdb=0002626B0001
+[nvme98 0000007afae54c0e 00258] fast-fail #42 func=00 op=28 tag=CA -> NO_DEVICE
+[nvme98 0000007afaf5fda6 00259] startio rw op=28 tag=CB qa=00 flags=00010240 buf=C5E6CA00 len=512 depth=0 cdb=0002626C0001
+[nvme98 0000007afb078f8a 00260] fast-fail #43 func=00 op=28 tag=CB -> NO_DEVICE
+[nvme98 0000007afb16a7cc 00261] startio rw op=28 tag=CC qa=00 flags=0001024C buf=C5E6CA00 len=512 depth=0 cdb=0002626C0001
+[nvme98 0000007afb2cc250 00262] fast-fail #44 func=00 op=28 tag=CC -> NO_DEVICE
+[nvme98 0000007afb3c19bc 00263] startio rw op=28 tag=CD qa=00 flags=0001024C buf=C5E6CA00 len=512 depth=0 cdb=0002626C0001
+[nvme98 0000007afb52075e 00264] fast-fail #45 func=00 op=28 tag=CD -> NO_DEVICE
+[nvme98 0000007afb5dcb70 00265] startio rw op=28 tag=CE qa=00 flags=0001024C buf=C5E6CA00 len=512 depth=0 cdb=0002626C0001
+[nvme98 0000007afb6fd950 00266] fast-fail #46 func=00 op=28 tag=CE -> NO_DEVICE
+[nvme98 0000007afb7b8502 00267] startio rw op=28 tag=CF qa=00 flags=0001024C buf=C5E6CA00 len=512 depth=0 cdb=0002626C0001
+[nvme98 0000007afb8ce734 00268] fast-fail #47 func=00 op=28 tag=CF -> NO_DEVICE
+[nvme98 0000007afb988896 00269] startio rw op=28 tag=D0 qa=00 flags=0001024C buf=C5E6CA00 len=512 depth=0 cdb=0002626C0001
+[nvme98 0000007afba9d7ae 00270] fast-fail #48 func=00 op=28 tag=D0 -> NO_DEVICE
+[nvme98 0000007afbc1dbce 00271] startio rw op=28 tag=D1 qa=00 flags=00010240 buf=C5E6CC00 len=512 depth=0 cdb=0002626D0001
+[nvme98 0000007afbd3af8e 00272] fast-fail #49 func=00 op=28 tag=D1 -> NO_DEVICE
+[nvme98 0000007afbdf5ee2 00273] startio rw op=28 tag=D2 qa=00 flags=0001024C buf=C5E6CC00 len=512 depth=0 cdb=0002626D0001
+[nvme98 0000007afbf0b3d6 00274] fast-fail #50 func=00 op=28 tag=D2 -> NO_DEVICE
+[nvme98 0000007afbfc5736 00275] startio rw op=28 tag=D3 qa=00 flags=0001024C buf=C5E6CC00 len=512 depth=0 cdb=0002626D0001
+[nvme98 0000007afc113a98 00276] startio rw op=28 tag=D4 qa=00 flags=0001024C buf=C5E6CC00 len=512 depth=0 cdb=0002626D0001
+[nvme98 0000007afc23a002 00277] startio rw op=28 tag=D5 qa=00 flags=0001024C buf=C5E6CC00 len=512 depth=0 cdb=0002626D0001
+[nvme98 0000007afc358f4c 00278] startio rw op=28 tag=D6 qa=00 flags=0001024C buf=C5E6CC00 len=512 depth=0 cdb=0002626D0001
+[nvme98 0000007afc4b5ab6 00279] startio rw op=28 tag=D7 qa=00 flags=00010240 buf=C5E6CE00 len=512 depth=0 cdb=0002626E0001
+[nvme98 0000007afc5d75b6 00280] startio rw op=28 tag=D8 qa=00 flags=0001024C buf=C5E6CE00 len=512 depth=0 cdb=0002626E0001
+[nvme98 0000007afc6fdc10 00281] startio rw op=28 tag=D9 qa=00 flags=0001024C buf=C5E6CE00 len=512 depth=0 cdb=0002626E0001
+[nvme98 0000007afc81d514 00282] startio rw op=28 tag=DA qa=00 flags=0001024C buf=C5E6CE00 len=512 depth=0 cdb=0002626E0001
+[nvme98 0000007afc93c5e4 00283] startio rw op=28 tag=DB qa=00 flags=0001024C buf=C5E6CE00 len=512 depth=0 cdb=0002626E0001
+[nvme98 0000007afca5f5fc 00284] startio rw op=28 tag=DC qa=00 flags=0001024C buf=C5E6CE00 len=512 depth=0 cdb=0002626E0001
+[nvme98 0000007afd48821d 00285] startio rw op=28 tag=DD qa=00 flags=00010240 buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007afd5dc231 00286] startio rw op=28 tag=DE qa=00 flags=0001024C buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007afd6ff11d 00287] startio rw op=28 tag=DF qa=00 flags=0001024C buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007afd821631 00288] startio rw op=28 tag=E0 qa=00 flags=0001024C buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007afd95a97b 00289] startio rw op=28 tag=E1 qa=00 flags=0001024C buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007afdaaa4e3 00290] startio rw op=28 tag=E2 qa=00 flags=0001024C buf=C5E6C000 len=512 depth=0 cdb=000262670001
+[nvme98 0000007afde8c863 00291] startio rw op=2A tag=E3 qa=00 flags=00010280 buf=C7505000 len=512 depth=0 cdb=0000005F0001
+[nvme98 0000007afdfc55ef 00292] startio rw op=2A tag=E4 qa=00 flags=0001028C buf=C7505000 len=512 depth=0 cdb=0000005F0001
+[nvme98 0000007afe0ea7a9 00293] startio rw op=2A tag=E5 qa=00 flags=0001028C buf=C7505000 len=512 depth=0 cdb=0000005F0001
+[nvme98 0000007afe20d767 00294] startio rw op=2A tag=E6 qa=00 flags=0001028C buf=C7505000 len=512 depth=0 cdb=0000005F0001
+[nvme98 0000007afe35b2ef 00295] startio rw op=2A tag=E7 qa=00 flags=0001028C buf=C7505000 len=512 depth=0 cdb=0000005F0001
+[nvme98 0000007afe47e799 00296] startio rw op=2A tag=E8 qa=00 flags=0001028C buf=C7505000 len=512 depth=0 cdb=0000005F0001
+[nvme98 0000007afe6bc8df 00297] startio rw op=2A tag=E9 qa=00 flags=00010280 buf=C7505000 len=512 depth=0 cdb=0000085B0001
+[nvme98 0000007afe7e0bf3 00298] startio rw op=2A tag=EA qa=00 flags=0001028C buf=C7505000 len=512 depth=0 cdb=0000085B0001
+[nvme98 0000007afe902e19 00299] startio rw op=2A tag=EB qa=00 flags=0001028C buf=C7505000 len=512 depth=0 cdb=0000085B0001
+[nvme98 0000007afea24031 00300] startio rw op=2A tag=EC qa=00 flags=0001028C buf=C7505000 len=512 depth=0 cdb=0000085B0001
+[nvme98 0000007afeb4b405 00301] startio rw op=2A tag=ED qa=00 flags=0001028C buf=C7505000 len=512 depth=0 cdb=0000085B0001
+[nvme98 0000007afec6cfd7 00302] startio rw op=2A tag=EE qa=00 flags=0001028C buf=C7505000 len=512 depth=0 cdb=0000085B0001
+[nvme98 000000c0de5a91de 00303] dbg: nvme2k: HwAdapterState called - SaveState=0
+[nvme98 000000c0de6b759e 00304] marker tsc=000000C0DE6AEA48
+[nvme98 000000c0de7554c4 00305] HwAdapterState inst=1 SaveState=0 context=E45E0DC0 depth=0 admin=0 CSTS=FFFFFFFF
+[nvme98 000000c0de86ee82 00306] summary(HwAdapterState) inst=1 srbs=9452 rw=9448 tagged=0 untagged=9448 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=9370 timer=148 gone=1 fastfail=78
+[nvme98 000000c0deae5878 00307] summary(HwAdapterState) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 000000c0decb1e2c 00308] dbg: nvme2k: HwAdapterState - restoring previous state
+[nvme98 000000c0dedd97dc 00309] dbg: nvme2k: HwAdapterState - unimplelemented, stopping instead
+[nvme98 000000c0def35824 00310] dbg: nvme2k: HwAdapterState - CompletionsInFallbackTimer 1
+[nvme98 000000c0df072b4c 00311] dbg: nvme2k: NvmeShutdownController - starting shutdown sequence
+[nvme98 000000c0df1cf4d6 00312] dbg: nvme2k: NvmeShutdownController - masked all interrupts
+[nvme98 000000c0df362118 00313] dbg: nvme2k: Deleting I/O Submission Queue
+[nvme98 000000c19c1ffec5 00314] dbg: nvme2k: Deleting I/O Completion Queue
+[nvme98 000000c259ad721f 00315] dbg: nvme2k: Shutdown notification sent, waiting for completion
+[nvme98 000000c60827f3bc 00316] dbg: nvme2k: Controller disabled
+[nvme98 000000c9b70c6798 00317] dbg: nvme2k: Clearing admin queue registers
+[nvme98 000000c9b71b97e0 00318] dbg: nvme2k: Resetting queue state
+[nvme98 000000c9b7264780 00319] dbg: nvme2k: NvmeShutdownController - shutdown sequence complete
+[nvme98 000000c9b7355176 00320] HwAdapterState: controller shut down, CSTS=FFFFFFFF CC=FFFFFFFF
+[nvme98 000000c9b7431310 00321] dbg: nvme2k: HwAdapterState - exit
+[nvme98 000000f50d4ebe23 00000] dbg: nvme2k: DriverEntry called
+[nvme98 000000f50d630423 00001] marker tsc=000000F50D623679
+[nvme98 000000f50d6b7d0b 00002] DriverEntry DriverObject=C19233D0 Argument2=C032DDA1
+[nvme98 000000f50dcfff6f 00003] dbg: nvme2k: HwFindAdapter:E433C08C called with HwContext - Bus=0 Slot=0
+[nvme98 000000f50df59cf7 00004] HwFindAdapter devext=E433C08C ctx=E45E0DC0 bus=0 slot=0 cfg.bus=1 cfg.slot=1 ranges=1 range0=FE800000 len=00004000 irq=10 vec=0 arg=(null)
+[nvme98 000000f50e374c6f 00005] dbg: nvme2k: HwFindAdapter - bus 1 slot 0: VID=003E DID=0000 Class=E45E07
+[nvme98 000000f50e501a01 00006] dbg: nvme2k: HwFindAdapter - not an NVMe device
+[nvme98 000000f50eab8963 00007] dbg: nvme2k: HwFindAdapter - bus 1 slot 1: VID=1B36 DID=0010 Class=010802
+[nvme98 000000f50ec2f1e3 00008] dbg: nvme2k: HwFindAdapter - NT4: store HwContext to resume scanning
+[nvme98 000000f50edc25a5 00009] dbg: nvme2k: HwFoundAdapter - found NVMe device VID=1B36 DID=0010 at bus 1 slot 1
+[nvme98 000000f50fb00695 00010] dbg: nvme2k: HwFoundAdapter - PCI Command Register = 0006 (IntDis=0) Old
+[nvme98 000000f5101552ec 00011] dbg: nvme2k: HwFoundAdapter - PCI Command Register = 0406 (IntDis=1)
+[nvme98 000000f5105a1c83 00012] dbg: nvme2k: HwFoundAdapter - PCI Interrupt Line=10 Pin=1
+[nvme98 000000f5106e1cc9 00013] dbg: nvme2k: HwFoundAdapter - ConfigInfo BEFORE: BusInterruptLevel=10 Vector=0 Mode=1
+[nvme98 000000f51087dbff 00014] dbg: nvme2k: HwFoundAdapter - Set interrupt from PCI config: Level=10
+[nvme98 000000f511649739 00015] dbg: nvme2k: HwFoundAdapter - BAR0 base=0x00000000FE800000 size=0x00004000 Memory
+[nvme98 000000f511869195 00016] dbg: nvme2k: HwFoundAdapter - Controller Registers at VA E4601000
+[nvme98 000000f5119b3429 00017] dbg: nvme2k: HwFoundAdapter - Controller Registers PTE FE800A67
+[nvme98 000000f511be48b5 00018] dbg: nvme2k: HwFoundAdapter - Uncached Memory PTE 00FCB267
+[nvme98 000000f511e739d7 00019] dbg: nvme2k: HwFoundAdapter - allocated 65536 bytes of uncached memory at virt=E4625000 phys=0000000000FCB000
+[nvme98 000000f512058f63 00020] dbg: nvme2k: HwFoundAdapter - Uncached Memory PTE 00FCB27F
+[nvme98 000000f51218c79f 00021] dbg: nvme2k: HwFoundAdapter - success, returning SP_RETURN_FOUND
+[nvme98 000000f5123079d5 00022] HwFindAdapter found inst=1 bus=1 slot=1 rc=1 regs=E4601000 uncached=E4625000 phys=00FCB000
+[nvme98 000000f512500cb9 00023] dbg: nvme2k: HwAdapterState called - SaveState=255
+[nvme98 000000f51264c1ef 00024] marker tsc=000000F5126439A5
+[nvme98 000000f51277defb 00025] HwAdapterState inst=1 SaveState=255 context=C1923588 depth=0 admin=0 CSTS=00000000
+[nvme98 000000f51292aa6f 00026] summary(HwAdapterState) inst=1 srbs=0 rw=0 tagged=0 untagged=0 maxdepth=0 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=0 timer=0 gone=0 fastfail=0
+[nvme98 000000f512bab50f 00027] summary(HwAdapterState) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 000000f512d889f5 00028] dbg: nvme2k: HwAdapterState - saving previous state
+[nvme98 000000f512e0b7dd 00029] dbg: nvme2k: HwAdapterState - unimplelemented
+[nvme98 000000f512e8521d 00030] dbg: nvme2k: HwAdapterState - exit
+[nvme98 000000f51355e453 00031] dbg: nvme2k: HwInitialize called
+[nvme98 000000f5136dec33 00032] HwInitialize inst=1 devext=E433C08C regs=E4601000 CC=00000000 CSTS=00000000
+[nvme98 000000f5138747ce 00033] dbg: nvme2k: HwInitialize - masking all interrupts
+[nvme98 000000f51397315c 00034] dbg: nvme2k: HwInitialize - CAP=004008200F0107FF VS=00010400 MQES=2048 DBS=4
+[nvme98 000000f513a096fc 00035] dbg: nvme2k: HwInitialize - controller state before reset: CC=00000000 CSTS=00000000
+[nvme98 000000f513aee148 00036] dbg: nvme2k: HwInitialize - clearing admin queue registers
+[nvme98 000000f513c0f4aa 00037] dbg: nvme2k: HwInitialize - disabling controller
+[nvme98 000000f513d4ccdc 00038] dbg: nvme2k: HwInitialize - controller disabled successfully
+[nvme98 000000f513e54c10 00039] dbg: nvme2k: HwInitialize - controller is now disabled and clean
+[nvme98 000000f513ec90e2 00040] dbg: nvme2k: HwInitialize - re-masking interrupts after controller reset (QEMU clears INTMS during reset)
+[nvme98 000000f513fdef72 00041] dbg: nvme2k: AllocateUncachedMemory - allocated 4096 bytes at offset 0 (virt=E4625000 phys=0000000000FCB000)
+[nvme98 000000f5140d0e9e 00042] dbg: nvme2k: AllocateUncachedMemory - allocated 4096 bytes at offset 4096 (virt=E4626000 phys=0000000000FCC000)
+[nvme98 000000f51421389c 00043] dbg: nvme2k: AllocateUncachedMemory - allocated 40960 bytes at offset 8192 (virt=E4627000 phys=0000000000FCD000)
+[nvme98 000000f5143d5932 00044] dbg: nvme2k: AllocateUncachedMemory - allocated 1024 bytes at offset 49152 (virt=E4631000 phys=0000000000FD7000)
+[nvme98 000000f5145ca43e 00045] dbg: nvme2k: AllocateUncachedMemory - allocated 1024 bytes at offset 53248 (virt=E4632000 phys=0000000000FD8000)
+[nvme98 000000f5147bffb4 00046] dbg: nvme2k: HwInitialize - uncached memory usage: 54272 / 65536 bytes
+[nvme98 000000f514b1470a 00047] dbg: nvme2k: HwInitialize - controller is ready
+[nvme98 000000f514c27e76 00048] dbg: nvme2k: HwInitialize - keeping interrupts masked, will use polling during init
+[nvme98 000000f514df4c5e 00049] dbg: nvme2k: PRP list pool initialized at VA=E4627000 PA=0000000000FCD000 (10 pages)
+[nvme98 000000f5150d1756 00050] dbg: nvme2k: HwInitialize - polling for init completion...
+[nvme98 000000f5152e97f0 00051] dbg: nvme2k: I/O CQ created successfully - DW0=00000000 SQID=0
+[nvme98 000000f51556ed89 00052] dbg: nvme2k: I/O SQ created successfully - DW0=00000000 SQID=0
+[nvme98 000000f51580c51e 00053] dbg: nvme2k: Identified controller - Model: QEMU NVMe Ctrl                           SN: USB4EMU01            FW: 11.1.2   NN: 256
+[nvme98 000000f515b61a93 00054] dbg: nvme2k: Identified namespace - blocks=(2097152 + 0 * 4Gi) blocksize=512 bytes
+[nvme98 000000f515cb2b13 00055] dbg: nvme2k: Init complete - driver ready for I/O
+[nvme98 000000f5166255e7 00056] dbg: nvme2k: Enabled interrupts at PCI level, Command=0006
+[nvme98 000000f51674818b 00057] dbg: nvme2k: Unmasked interrupts at NVMe controller level (INTMC=0x00000001)
+[nvme98 000000f51686354d 00058] dbg: nvme2k: HwInitialize finished successfully - interrupts enabled
+[nvme98 000000f516981dcb 00059] HwInitialize inst=1 returns TRUE, InitComplete=1
+[nvme98 000000f5173e2559 00060] startio func=00 op=12 tag=01 qa=00 flags=0001006C buf=C138CE94 len=96 timeout=30 depth=0
+[nvme98 000000f517641471 00061] config probe in HwStartIo: ScsiPortGetBusData(bus 1 slot 1, 8) = 8, id=00101B36 cmdsts=00100006
+[nvme98 000000f518748d96 00062] dbg: nvme2k: DriverEntry exiting with status 0x00000000
+[nvme98 000000f518ddc6e4 00063] startio func=00 op=00 tag=04 qa=00 flags=00010000 buf=00000000 len=0 timeout=0 depth=0
+[nvme98 000000f51909f19c 00064] startio func=00 op=25 tag=05 qa=00 flags=00010040 buf=E2EC1054 len=8 timeout=0 depth=0
+[nvme98 000000f51944c68c 00065] startio rw op=28 tag=06 qa=00 flags=00010240 buf=C18E8608 len=512 depth=0 cdb=000000000001
+[nvme98 000000f51999b3c7 00066] complete cid=8000 nvme=0000 srb=C138D800 status=01 op=28 tag=06 depth=1
+[nvme98 000000f519c97800 00067] startio rw op=28 tag=07 qa=00 flags=00010240 buf=C18E8608 len=512 depth=0 cdb=0000003F0001
+[nvme98 000000f519fe9652 00068] complete cid=8001 nvme=0000 srb=C138D800 status=01 op=28 tag=07 depth=1
+[nvme98 000000f51a22002e 00069] startio rw op=28 tag=08 qa=00 flags=00010240 buf=C1905514 len=512 depth=0 cdb=0000003F0001
+[nvme98 000000f51a557a21 00070] complete cid=8002 nvme=0000 srb=C138D800 status=01 op=28 tag=08 depth=1
+[nvme98 000000f54ad17c5b 00071] FallbackTimer #1 depth=0 admin=0
+[nvme98 000000f582fd3d02 00072] FallbackTimer #2 depth=0 admin=0
+[nvme98 000000f6f8d21b03 00073] startio func=00 op=00 tag=09 qa=00 flags=00010000 buf=00000000 len=0 timeout=0 depth=0
+[nvme98 000000f6f98a205b 00074] startio rw op=28 tag=0A qa=00 flags=00010240 buf=C1925E40 len=512 depth=0 cdb=0000003F0001
+[nvme98 000000f6f9e62fbc 00075] complete cid=8003 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0A depth=1
+[nvme98 000000f6fa1fc22c 00076] startio rw op=28 tag=0B qa=00 flags=00010240 buf=C1925E40 len=512 depth=0 cdb=000000400001
+[nvme98 000000f6fa52e4d6 00077] complete cid=8004 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0B depth=1
+[nvme98 000000f6fc043515 00078] startio rw op=28 tag=0C qa=00 flags=00010240 buf=C75E6000 len=4096 depth=0 cdb=0000003F0008
+[nvme98 000000f6fc428289 00079] complete cid=8005 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0C depth=1
+[nvme98 000000f70a406734 00080] startio rw op=28 tag=0D qa=00 flags=00010240 buf=C75E5000 len=4096 depth=0 cdb=000010570008
+[nvme98 000000f70a8167d4 00081] complete cid=8006 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0D depth=1
+[nvme98 000000f72588d665 00082] FallbackTimer #3 depth=0 admin=0
+[nvme98 000000f725a7d14b 00083] config probe in FallbackTimer: ScsiPortGetBusData(bus 1 slot 1, 8) = 8, id=00101B36 cmdsts=00100006
+[nvme98 000000f75b04babc 00084] FallbackTimer #4 depth=0 admin=0
+[nvme98 000001181af9f04b 00085] startio rw op=28 tag=0E qa=00 flags=00010240 buf=C75E4000 len=4096 depth=0 cdb=0000105F0008
+[nvme98 000001181ba1f387 00086] complete cid=8007 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0E depth=1
+[nvme98 000001181db23a73 00087] startio rw op=28 tag=0F qa=00 flags=00010240 buf=C75E3000 len=4096 depth=0 cdb=0000005F0008
+[nvme98 000001181dec408e 00088] complete cid=8008 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0F depth=1
+[nvme98 000001181e313c7a 00089] startio rw op=28 tag=10 qa=00 flags=00010240 buf=E4811000 len=57344 depth=0 cdb=000010670070
+[nvme98 000001181e7562e2 00090] complete cid=8009 nvme=0000 srb=C138B4F0 status=01 op=28 tag=10 depth=1
+[nvme98 0000011820f0feb4 00091] startio rw op=28 tag=11 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000010D70078
+[nvme98 000001182197d819 00092] complete cid=800A nvme=0000 srb=C138B4F0 status=01 op=28 tag=11 depth=1
+[nvme98 0000011823584793 00093] startio rw op=28 tag=12 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000114F0078
+[nvme98 000001182389a4d7 00094] complete cid=800B nvme=0000 srb=C138B4F0 status=01 op=28 tag=12 depth=1
+[nvme98 00000118253b8e33 00095] startio rw op=28 tag=13 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000011C70078
+[nvme98 000001182587ac57 00096] complete cid=800C nvme=0000 srb=C138B4F0 status=01 op=28 tag=13 depth=1
+[nvme98 0000011827d40082 00097] startio rw op=28 tag=14 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000123F0078
+[nvme98 0000011828138e49 00098] complete cid=800D nvme=0000 srb=C138B4F0 status=01 op=28 tag=14 depth=1
+[nvme98 0000011829e4a2cd 00099] startio rw op=28 tag=15 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000012B70078
+[nvme98 000001182a098dd3 00100] complete cid=800E nvme=0000 srb=C138B4F0 status=01 op=28 tag=15 depth=1
+[nvme98 000001182bc847b3 00101] startio rw op=28 tag=16 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000132F0078
+[nvme98 000001182bfc99c3 00102] complete cid=800F nvme=0000 srb=C138B4F0 status=01 op=28 tag=16 depth=1
+[nvme98 000001182d6ccd08 00103] startio rw op=28 tag=17 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000013A70078
+[nvme98 000001182da6a64a 00104] complete cid=8010 nvme=0000 srb=C138B4F0 status=01 op=28 tag=17 depth=1
+[nvme98 00000118303dba9c 00105] startio rw op=28 tag=18 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000141F0078
+[nvme98 0000011830792f28 00106] complete cid=8011 nvme=0000 srb=C138B4F0 status=01 op=28 tag=18 depth=1
+[nvme98 00000118328f54ed 00107] startio rw op=28 tag=19 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000014970078
+[nvme98 0000011832c6c347 00108] complete cid=8012 nvme=0000 srb=C138B4F0 status=01 op=28 tag=19 depth=1
+[nvme98 0000011834931cd6 00109] startio rw op=28 tag=1A qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=0000150F0078
+[nvme98 0000011834b9f4aa 00110] complete cid=8013 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1A depth=1
+[nvme98 00000118367ca6ac 00111] startio rw op=28 tag=1B qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000015870078
+[nvme98 0000011836c0d081 00112] complete cid=8014 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1B depth=1
+[nvme98 000001183842dba0 00113] startio rw op=28 tag=1C qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000015FF0078
+[nvme98 00000118387e4893 00114] complete cid=8015 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1C depth=1
+[nvme98 000001183a14240b 00115] startio rw op=28 tag=1D qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000016770078
+[nvme98 000001183a40e55a 00116] complete cid=8016 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1D depth=1
+[nvme98 000001183b8aaa2c 00117] startio rw op=28 tag=1E qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000016EF0078
+[nvme98 000001183bcad188 00118] complete cid=8017 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1E depth=1
+[nvme98 000001183cc9db5f 00119] FallbackTimer #5 depth=0 admin=0
+[nvme98 000001183dc55238 00120] startio rw op=28 tag=1F qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000017670078
+[nvme98 000001183e036bc2 00121] complete cid=8018 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1F depth=1
+[nvme98 000001183faa8ee5 00122] startio rw op=28 tag=20 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000017DF0078
+[nvme98 000001183fd536b9 00123] complete cid=8019 nvme=0000 srb=C138B4F0 status=01 op=28 tag=20 depth=1
+[nvme98 0000011841867e91 00124] startio rw op=28 tag=21 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000018570078
+[nvme98 0000011841be29f9 00125] complete cid=801A nvme=0000 srb=C138B4F0 status=01 op=28 tag=21 depth=1
+[nvme98 0000011843678850 00126] startio rw op=28 tag=22 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000018CF0078
+[nvme98 0000011843926278 00127] complete cid=801B nvme=0000 srb=C138B4F0 status=01 op=28 tag=22 depth=1
+[nvme98 0000011845557fa5 00128] startio rw op=28 tag=23 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000019470078
+[nvme98 000001184577da05 00129] complete cid=801C nvme=0000 srb=C138B4F0 status=01 op=28 tag=23 depth=1
+[nvme98 00000118475c5729 00130] startio rw op=28 tag=24 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=000019BF0078
+[nvme98 0000011847938de8 00131] complete cid=801D nvme=0000 srb=C138B4F0 status=01 op=28 tag=24 depth=1
+[nvme98 0000011848fc90a8 00132] startio rw op=28 tag=25 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001A370078
+[nvme98 000001184926d90f 00133] complete cid=801E nvme=0000 srb=C138B4F0 status=01 op=28 tag=25 depth=1
+[nvme98 000001184aad60ff 00134] startio rw op=28 tag=26 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001AAF0078
+[nvme98 000001184ac90ef7 00135] complete cid=801F nvme=0000 srb=C138B4F0 status=01 op=28 tag=26 depth=1
+[nvme98 000001184c3b78fb 00136] startio rw op=28 tag=27 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001B270078
+[nvme98 000001184c6d4c1e 00137] complete cid=8020 nvme=0000 srb=C138B4F0 status=01 op=28 tag=27 depth=1
+[nvme98 000001184e0b19a2 00138] startio rw op=28 tag=28 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001B9F0078
+[nvme98 000001184e68308d 00139] complete cid=8021 nvme=0000 srb=C138B4F0 status=01 op=28 tag=28 depth=1
+[nvme98 00000118502ef16d 00140] startio rw op=28 tag=29 qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001C170078
+[nvme98 00000118507e3939 00141] complete cid=8022 nvme=0000 srb=C138B4F0 status=01 op=28 tag=29 depth=1
+[nvme98 0000011852703879 00142] startio rw op=28 tag=2A qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001C8F0078
+[nvme98 0000011852b3e75b 00143] complete cid=8023 nvme=0000 srb=C138B4F0 status=01 op=28 tag=2A depth=1
+[nvme98 0000011854083b5c 00144] startio rw op=28 tag=2B qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001D070078
+[nvme98 000001185445440f 00145] complete cid=8024 nvme=0000 srb=C138B4F0 status=01 op=28 tag=2B depth=1
+[nvme98 000001185678a023 00146] startio rw op=28 tag=2C qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001D7F0078
+[nvme98 0000011856b3127f 00147] complete cid=8025 nvme=0000 srb=C138B4F0 status=01 op=28 tag=2C depth=1
+[nvme98 00000118589793e1 00148] startio rw op=28 tag=2D qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001DF70078
+[nvme98 0000011858c7998d 00149] complete cid=8026 nvme=0000 srb=C138B4F0 status=01 op=28 tag=2D depth=1
+[nvme98 000001185a8ed91b 00150] startio rw op=28 tag=2E qa=00 flags=00010240 buf=E4810000 len=61440 depth=0 cdb=00001E6F0078
+[nvme98 000001185ace3f61 00151] complete cid=8027 nvme=0000 srb=C138B4F0 status=01 op=28 tag=2E depth=1
+[nvme98 00000118b8012f2b 00152] marker tsc=00000118B7FE77E5
+[nvme98 00000118b820367d 00153] GONE detected in FallbackTimer: CSTS all-ones, depth=1 nontagged=C138B4F0 admin=0
+[nvme98 00000118b8a288d5 00154] config probe in FallbackTimer: ScsiPortGetBusData(bus 1 slot 1, 8) = 8, id=FFFFFFFF cmdsts=FFFFFFFF
+[nvme98 0000012373b27f0f 00155] marker tsc=0000012373B0634B
+[nvme98 0000012373d14c23 00156] GONE deadline: completing depth=1 nontagged=C138B4F0 with NO_DEVICE via ScsiPortCompleteRequest
+[nvme98 0000012373fff23f 00157] summary(gone-deadline) inst=1 srbs=61 rw=57 tagged=0 untagged=57 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=56 timer=57 gone=1 fastfail=0
+[nvme98 000001237417c095 00158] summary(gone-deadline) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 00000123742c5cd5 00159] startio rw op=28 tag=40 qa=00 flags=0001024C buf=E4814000 len=45056 depth=0 cdb=000021D70058
+[nvme98 00000123743b2a35 00160] fast-fail #1 func=00 op=28 tag=40 -> NO_DEVICE
+[nvme98 000001237449da0d 00161] startio rw op=28 tag=41 qa=00 flags=0001024C buf=E4814000 len=45056 depth=0 cdb=000021D70058
+[nvme98 0000012374617929 00162] fast-fail #2 func=00 op=28 tag=41 -> NO_DEVICE
+[nvme98 00000123747022ad 00163] startio rw op=28 tag=42 qa=00 flags=0001024C buf=E4814000 len=45056 depth=0 cdb=000021D70058
+[nvme98 0000012374865555 00164] fast-fail #3 func=00 op=28 tag=42 -> NO_DEVICE
+[nvme98 0000012374972001 00165] startio rw op=28 tag=43 qa=00 flags=0001024C buf=E4814000 len=45056 depth=0 cdb=000021D70058
+[nvme98 0000012374b071a5 00166] fast-fail #4 func=00 op=28 tag=43 -> NO_DEVICE
+[nvme98 0000012374c27751 00167] startio rw op=28 tag=44 qa=00 flags=0001024C buf=E4814000 len=45056 depth=0 cdb=000021D70058
+[nvme98 0000012374d63a6b 00168] fast-fail #5 func=00 op=28 tag=44 -> NO_DEVICE
+[nvme98 000001237535651d 00169] startio rw op=28 tag=45 qa=00 flags=00010240 buf=C3C2B000 len=4096 depth=0 cdb=000021D70008
+[nvme98 000001237555b9f3 00170] fast-fail #6 func=00 op=28 tag=45 -> NO_DEVICE
+[nvme98 000001237577b7f1 00171] startio rw op=28 tag=46 qa=00 flags=0001024C buf=C3C2B000 len=4096 depth=0 cdb=000021D70008
+[nvme98 0000012375907b15 00172] fast-fail #7 func=00 op=28 tag=46 -> NO_DEVICE
+[nvme98 0000012375a18b03 00173] startio rw op=28 tag=47 qa=00 flags=0001024C buf=C3C2B000 len=4096 depth=0 cdb=000021D70008
+[nvme98 0000012375baad13 00174] fast-fail #8 func=00 op=28 tag=47 -> NO_DEVICE
+[nvme98 0000012375cb82e1 00175] startio rw op=28 tag=48 qa=00 flags=0001024C buf=C3C2B000 len=4096 depth=0 cdb=000021D70008
+[nvme98 0000012375e46117 00176] fast-fail #9 func=00 op=28 tag=48 -> NO_DEVICE
+[nvme98 0000012375f54801 00177] startio rw op=28 tag=49 qa=00 flags=0001024C buf=C3C2B000 len=4096 depth=0 cdb=000021D70008
+[nvme98 00000123760e7ffb 00178] fast-fail #10 func=00 op=28 tag=49 -> NO_DEVICE
+[nvme98 0000012376204cb3 00179] startio rw op=28 tag=4A qa=00 flags=0001024C buf=C3C2B000 len=4096 depth=0 cdb=000021D70008
+[nvme98 0000012376370061 00180] fast-fail #11 func=00 op=28 tag=4A -> NO_DEVICE
+[nvme98 000001237654dfeb 00181] startio rw op=28 tag=4B qa=00 flags=00010240 buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 0000012376d16016 00182] fast-fail #12 func=00 op=28 tag=4B -> NO_DEVICE
+[nvme98 0000012376e31aa4 00183] startio rw op=28 tag=4C qa=00 flags=0001024C buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 0000012376fc0f96 00184] fast-fail #13 func=00 op=28 tag=4C -> NO_DEVICE
+[nvme98 00000123770e4b66 00185] startio rw op=28 tag=4D qa=00 flags=0001024C buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 000001237726c8ee 00186] fast-fail #14 func=00 op=28 tag=4D -> NO_DEVICE
+[nvme98 000001237737d012 00187] startio rw op=28 tag=4E qa=00 flags=0001024C buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 00000123775012c6 00188] fast-fail #15 func=00 op=28 tag=4E -> NO_DEVICE
+[nvme98 000001237760af0a 00189] startio rw op=28 tag=4F qa=00 flags=0001024C buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 00000123777969be 00190] fast-fail #16 func=00 op=28 tag=4F -> NO_DEVICE
+[nvme98 0000012377891260 00191] startio rw op=28 tag=50 qa=00 flags=0001024C buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 00000123779c7d78 00192] fast-fail #17 func=00 op=28 tag=50 -> NO_DEVICE
+[nvme98 0000012377ca60d0 00193] startio rw op=28 tag=51 qa=00 flags=00010240 buf=C3C2B200 len=512 depth=0 cdb=000021D80001
+[nvme98 0000012377e42a92 00194] fast-fail #18 func=00 op=28 tag=51 -> NO_DEVICE
+[nvme98 0000012377f4d522 00195] startio rw op=28 tag=52 qa=00 flags=0001024C buf=C3C2B200 len=512 depth=0 cdb=000021D80001
+[nvme98 000001237808faca 00196] fast-fail #19 func=00 op=28 tag=52 -> NO_DEVICE
+[nvme98 00000123781a62f6 00197] startio rw op=28 tag=53 qa=00 flags=0001024C buf=C3C2B200 len=512 depth=0 cdb=000021D80001
+[nvme98 0000012378311014 00198] fast-fail #20 func=00 op=28 tag=53 -> NO_DEVICE
+[nvme98 0000012378405f10 00199] startio rw op=28 tag=54 qa=00 flags=0001024C buf=C3C2B200 len=512 depth=0 cdb=000021D80001
+[nvme98 00000123785642da 00200] fast-fail #21 func=00 op=28 tag=54 -> NO_DEVICE
+[nvme98 0000012378670750 00201] startio rw op=28 tag=55 qa=00 flags=0001024C buf=C3C2B200 len=512 depth=0 cdb=000021D80001
+[nvme98 00000123787dfdca 00202] fast-fail #22 func=00 op=28 tag=55 -> NO_DEVICE
+[nvme98 00000123788d6ec2 00203] startio rw op=28 tag=56 qa=00 flags=0001024C buf=C3C2B200 len=512 depth=0 cdb=000021D80001
+[nvme98 0000012378a744d2 00204] fast-fail #23 func=00 op=28 tag=56 -> NO_DEVICE
+[nvme98 0000012378c47c14 00205] startio rw op=28 tag=57 qa=00 flags=00010240 buf=C3C2B400 len=512 depth=0 cdb=000021D90001
+[nvme98 0000012378d967f2 00206] fast-fail #24 func=00 op=28 tag=57 -> NO_DEVICE
+[nvme98 0000012378e184fa 00207] startio rw op=28 tag=58 qa=00 flags=0001024C buf=C3C2B400 len=512 depth=0 cdb=000021D90001
+[nvme98 0000012378f7ec04 00208] fast-fail #25 func=00 op=28 tag=58 -> NO_DEVICE
+[nvme98 0000012379082efc 00209] startio rw op=28 tag=59 qa=00 flags=0001024C buf=C3C2B400 len=512 depth=0 cdb=000021D90001
+[nvme98 000001237921ce34 00210] fast-fail #26 func=00 op=28 tag=59 -> NO_DEVICE
+[nvme98 00000123794375b6 00211] startio rw op=28 tag=5A qa=00 flags=0001024C buf=C3C2B400 len=512 depth=0 cdb=000021D90001
+[nvme98 00000123794f3b6c 00212] fast-fail #27 func=00 op=28 tag=5A -> NO_DEVICE
+[nvme98 000001237958e1da 00213] startio rw op=28 tag=5B qa=00 flags=0001024C buf=C3C2B400 len=512 depth=0 cdb=000021D90001
+[nvme98 0000012379645e52 00214] fast-fail #28 func=00 op=28 tag=5B -> NO_DEVICE
+[nvme98 00000123796bac0c 00215] startio rw op=28 tag=5C qa=00 flags=0001024C buf=C3C2B400 len=512 depth=0 cdb=000021D90001
+[nvme98 0000012379757c8c 00216] fast-fail #29 func=00 op=28 tag=5C -> NO_DEVICE
+[nvme98 0000012379841c22 00217] startio rw op=28 tag=5D qa=00 flags=00010240 buf=C3C2B600 len=512 depth=0 cdb=000021DA0001
+[nvme98 00000123798fa254 00218] fast-fail #30 func=00 op=28 tag=5D -> NO_DEVICE
+[nvme98 0000012379978e06 00219] startio rw op=28 tag=5E qa=00 flags=0001024C buf=C3C2B600 len=512 depth=0 cdb=000021DA0001
+[nvme98 0000012379a22726 00220] fast-fail #31 func=00 op=28 tag=5E -> NO_DEVICE
+[nvme98 0000012379ab79ac 00221] startio rw op=28 tag=5F qa=00 flags=0001024C buf=C3C2B600 len=512 depth=0 cdb=000021DA0001
+[nvme98 0000012379b794d0 00222] fast-fail #32 func=00 op=28 tag=5F -> NO_DEVICE
+[nvme98 0000012379bf69e4 00223] startio rw op=28 tag=60 qa=00 flags=0001024C buf=C3C2B600 len=512 depth=0 cdb=000021DA0001
+[nvme98 0000012379c89ae6 00224] fast-fail #33 func=00 op=28 tag=60 -> NO_DEVICE
+[nvme98 0000012379d05c68 00225] startio rw op=28 tag=61 qa=00 flags=0001024C buf=C3C2B600 len=512 depth=0 cdb=000021DA0001
+[nvme98 0000012379db5942 00226] fast-fail #34 func=00 op=28 tag=61 -> NO_DEVICE
+[nvme98 0000012379e32dde 00227] startio rw op=28 tag=62 qa=00 flags=0001024C buf=C3C2B600 len=512 depth=0 cdb=000021DA0001
+[nvme98 0000012379ede8fa 00228] fast-fail #35 func=00 op=28 tag=62 -> NO_DEVICE
+[nvme98 0000012379fe5820 00229] startio rw op=28 tag=63 qa=00 flags=00010240 buf=C3C2B800 len=512 depth=0 cdb=000021DB0001
+[nvme98 000001237a16f498 00230] fast-fail #36 func=00 op=28 tag=63 -> NO_DEVICE
+[nvme98 000001237a287e0c 00231] startio rw op=28 tag=64 qa=00 flags=0001024C buf=C3C2B800 len=512 depth=0 cdb=000021DB0001
+[nvme98 000001237a414f7c 00232] fast-fail #37 func=00 op=28 tag=64 -> NO_DEVICE
+[nvme98 000001237a52a66e 00233] startio rw op=28 tag=65 qa=00 flags=0001024C buf=C3C2B800 len=512 depth=0 cdb=000021DB0001
+[nvme98 000001237a6b2f54 00234] fast-fail #38 func=00 op=28 tag=65 -> NO_DEVICE
+[nvme98 000001237a7d081e 00235] startio rw op=28 tag=66 qa=00 flags=0001024C buf=C3C2B800 len=512 depth=0 cdb=000021DB0001
+[nvme98 000001237a983dbe 00236] fast-fail #39 func=00 op=28 tag=66 -> NO_DEVICE
+[nvme98 000001237aa7a484 00237] startio rw op=28 tag=67 qa=00 flags=0001024C buf=C3C2B800 len=512 depth=0 cdb=000021DB0001
+[nvme98 000001237ac06b68 00238] fast-fail #40 func=00 op=28 tag=67 -> NO_DEVICE
+[nvme98 000001237ad30da4 00239] startio rw op=28 tag=68 qa=00 flags=0001024C buf=C3C2B800 len=512 depth=0 cdb=000021DB0001
+[nvme98 000001237aeaf63a 00240] fast-fail #41 func=00 op=28 tag=68 -> NO_DEVICE
+[nvme98 000001237b04603e 00241] startio rw op=28 tag=69 qa=00 flags=00010240 buf=C3C2BA00 len=512 depth=0 cdb=000021DC0001
+[nvme98 000001237b1ee4ae 00242] fast-fail #42 func=00 op=28 tag=69 -> NO_DEVICE
+[nvme98 000001237b304488 00243] startio rw op=28 tag=6A qa=00 flags=0001024C buf=C3C2BA00 len=512 depth=0 cdb=000021DC0001
+[nvme98 000001237b4a0d5a 00244] fast-fail #43 func=00 op=28 tag=6A -> NO_DEVICE
+[nvme98 000001237b5bf506 00245] startio rw op=28 tag=6B qa=00 flags=0001024C buf=C3C2BA00 len=512 depth=0 cdb=000021DC0001
+[nvme98 000001237b751158 00246] fast-fail #44 func=00 op=28 tag=6B -> NO_DEVICE
+[nvme98 000001237b865314 00247] startio rw op=28 tag=6C qa=00 flags=0001024C buf=C3C2BA00 len=512 depth=0 cdb=000021DC0001
+[nvme98 000001237ba02672 00248] fast-fail #45 func=00 op=28 tag=6C -> NO_DEVICE
+[nvme98 000001237bb1fae6 00249] startio rw op=28 tag=6D qa=00 flags=0001024C buf=C3C2BA00 len=512 depth=0 cdb=000021DC0001
+[nvme98 000001237bcb0748 00250] fast-fail #46 func=00 op=28 tag=6D -> NO_DEVICE
+[nvme98 000001237bdabfbc 00251] startio rw op=28 tag=6E qa=00 flags=0001024C buf=C3C2BA00 len=512 depth=0 cdb=000021DC0001
+[nvme98 000001237c2c0e9e 00252] fast-fail #47 func=00 op=28 tag=6E -> NO_DEVICE
+[nvme98 000001237c3b7a6e 00253] startio rw op=28 tag=6F qa=00 flags=00010240 buf=C3C2BC00 len=512 depth=0 cdb=000021DD0001
+[nvme98 000001237c47ef38 00254] fast-fail #48 func=00 op=28 tag=6F -> NO_DEVICE
+[nvme98 000001237c50c400 00255] startio rw op=28 tag=70 qa=00 flags=0001024C buf=C3C2BC00 len=512 depth=0 cdb=000021DD0001
+[nvme98 000001237c5c324a 00256] fast-fail #49 func=00 op=28 tag=70 -> NO_DEVICE
+[nvme98 000001237c649b60 00257] startio rw op=28 tag=71 qa=00 flags=0001024C buf=C3C2BC00 len=512 depth=0 cdb=000021DD0001
+[nvme98 000001237c70bb8e 00258] fast-fail #50 func=00 op=28 tag=71 -> NO_DEVICE
+[nvme98 000001237c78d58a 00259] startio rw op=28 tag=72 qa=00 flags=0001024C buf=C3C2BC00 len=512 depth=0 cdb=000021DD0001
+[nvme98 000001237c887382 00260] startio rw op=28 tag=73 qa=00 flags=0001024C buf=C3C2BC00 len=512 depth=0 cdb=000021DD0001
+[nvme98 000001237c96ae0c 00261] startio rw op=28 tag=74 qa=00 flags=0001024C buf=C3C2BC00 len=512 depth=0 cdb=000021DD0001
+[nvme98 000001237ca794d8 00262] startio rw op=28 tag=75 qa=00 flags=00010240 buf=C3C2BE00 len=512 depth=0 cdb=000021DE0001
+[nvme98 000001237cb288ac 00263] startio rw op=28 tag=76 qa=00 flags=0001024C buf=C3C2BE00 len=512 depth=0 cdb=000021DE0001
+[nvme98 000001237cbd8220 00264] startio rw op=28 tag=77 qa=00 flags=0001024C buf=C3C2BE00 len=512 depth=0 cdb=000021DE0001
+[nvme98 000001237cc9846c 00265] startio rw op=28 tag=78 qa=00 flags=0001024C buf=C3C2BE00 len=512 depth=0 cdb=000021DE0001
+[nvme98 000001237cd4e7ee 00266] startio rw op=28 tag=79 qa=00 flags=0001024C buf=C3C2BE00 len=512 depth=0 cdb=000021DE0001
+[nvme98 000001237ce1441c 00267] startio rw op=28 tag=7A qa=00 flags=0001024C buf=C3C2BE00 len=512 depth=0 cdb=000021DE0001
+[nvme98 000001237cf97cda 00268] startio rw op=28 tag=7B qa=00 flags=00010240 buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 000001237d069668 00269] startio rw op=28 tag=7C qa=00 flags=0001024C buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 000001237d194966 00270] startio rw op=28 tag=7D qa=00 flags=0001024C buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 000001237d30f8ea 00271] startio rw op=28 tag=7E qa=00 flags=0001024C buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 000001237d3e17be 00272] startio rw op=28 tag=7F qa=00 flags=0001024C buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 000001237d48e018 00273] startio rw op=28 tag=80 qa=00 flags=0001024C buf=C3C2B000 len=512 depth=0 cdb=000021D70001
+[nvme98 000001237d753eba 00274] startio rw op=2A tag=81 qa=00 flags=00010280 buf=C75E3000 len=512 depth=0 cdb=0000005F0001
+[nvme98 000001237d80e760 00275] startio rw op=2A tag=82 qa=00 flags=0001028C buf=C75E3000 len=512 depth=0 cdb=0000005F0001
+[nvme98 000001237d8da388 00276] startio rw op=2A tag=83 qa=00 flags=0001028C buf=C75E3000 len=512 depth=0 cdb=0000005F0001
+[nvme98 000001237d997f28 00277] startio rw op=2A tag=84 qa=00 flags=0001028C buf=C75E3000 len=512 depth=0 cdb=0000005F0001
+[nvme98 000001237da5e3a8 00278] startio rw op=2A tag=85 qa=00 flags=0001028C buf=C75E3000 len=512 depth=0 cdb=0000005F0001
+[nvme98 000001237dc2229d 00279] startio rw op=2A tag=86 qa=00 flags=0001028C buf=C75E3000 len=512 depth=0 cdb=0000005F0001
+[nvme98 000001237dee8883 00280] startio rw op=2A tag=87 qa=00 flags=00010280 buf=C75E3000 len=512 depth=0 cdb=0000085B0001
+[nvme98 000001237e0eb833 00281] startio rw op=2A tag=88 qa=00 flags=0001028C buf=C75E3000 len=512 depth=0 cdb=0000085B0001
+[nvme98 000001237e28d0b5 00282] startio rw op=2A tag=89 qa=00 flags=0001028C buf=C75E3000 len=512 depth=0 cdb=0000085B0001
+[nvme98 000001237e42b47b 00283] startio rw op=2A tag=8A qa=00 flags=0001028C buf=C75E3000 len=512 depth=0 cdb=0000085B0001
+[nvme98 000001237e5d5a8d 00284] startio rw op=2A tag=8B qa=00 flags=0001028C buf=C75E3000 len=512 depth=0 cdb=0000085B0001
+[nvme98 000001237e733371 00285] startio rw op=2A tag=8C qa=00 flags=0001028C buf=C75E3000 len=512 depth=0 cdb=0000085B0001
+[nvme98 0000015e6a6e52d5 00286] dbg: nvme2k: HwAdapterState called - SaveState=0
+[nvme98 0000015e6a8744bb 00287] marker tsc=0000015E6A86B4D3
+[nvme98 0000015e6a9483e7 00288] HwAdapterState inst=1 SaveState=0 context=E45E0DC0 depth=0 admin=0 CSTS=FFFFFFFF
+[nvme98 0000015e6aacc114 00289] summary(HwAdapterState) inst=1 srbs=138 rw=134 tagged=0 untagged=134 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=56 timer=57 gone=1 fastfail=77
+[nvme98 0000015e6ad2ce0e 00290] summary(HwAdapterState) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 0000015e6aefd760 00291] dbg: nvme2k: HwAdapterState - restoring previous state
+[nvme98 0000015e6b01f5a8 00292] dbg: nvme2k: HwAdapterState - unimplelemented, stopping instead
+[nvme98 0000015e6b17ef02 00293] dbg: nvme2k: NvmeShutdownController - starting shutdown sequence
+[nvme98 0000015e6b2da482 00294] dbg: nvme2k: NvmeShutdownController - masked all interrupts
+[nvme98 0000015e6b46d8bc 00295] dbg: nvme2k: Deleting I/O Submission Queue
+[nvme98 0000015f2952c67b 00296] dbg: nvme2k: Deleting I/O Completion Queue
+[nvme98 0000015fe73656e7 00297] dbg: nvme2k: Shutdown notification sent, waiting for completion
+[nvme98 000001639d92b74a 00298] dbg: nvme2k: Controller disabled
+[nvme98 00000167597251b2 00299] dbg: nvme2k: Clearing admin queue registers
+[nvme98 00000167598910fa 00300] dbg: nvme2k: Resetting queue state
+[nvme98 000001675997a6b0 00301] dbg: nvme2k: NvmeShutdownController - shutdown sequence complete
+[nvme98 0000016759ad0500 00302] HwAdapterState: controller shut down, CSTS=FFFFFFFF CC=FFFFFFFF
+[nvme98 0000016759c00c5e 00303] dbg: nvme2k: HwAdapterState - exit
+[nvme98 000001763e3ab16e 00000] dbg: nvme2k: DriverEntry called
+[nvme98 000001763e6e75d0 00001] marker tsc=000001763E6BFC10
+[nvme98 000001763e86e386 00002] DriverEntry DriverObject=C1929650 Argument2=C032DDA1
+[nvme98 000001763f10918a 00003] dbg: nvme2k: HwFindAdapter:E433C08C called with HwContext - Bus=0 Slot=0
+[nvme98 000001763f2fcd5c 00004] HwFindAdapter devext=E433C08C ctx=E45E0DC0 bus=0 slot=0 cfg.bus=1 cfg.slot=1 ranges=1 range0=FE800000 len=00004000 irq=10 vec=0 arg=(null)
+[nvme98 000001763f6ee67c 00005] dbg: nvme2k: HwFindAdapter - bus 1 slot 0: VID=003E DID=0000 Class=E45E07
+[nvme98 000001763f8036c0 00006] dbg: nvme2k: HwFindAdapter - not an NVMe device
+[nvme98 000001763fc7dd68 00007] dbg: nvme2k: HwFindAdapter - bus 1 slot 1: VID=1B36 DID=0010 Class=010802
+[nvme98 000001763fdaed18 00008] dbg: nvme2k: HwFindAdapter - NT4: store HwContext to resume scanning
+[nvme98 000001763ff10a6c 00009] dbg: nvme2k: HwFoundAdapter - found NVMe device VID=1B36 DID=0010 at bus 1 slot 1
+[nvme98 000001764101af2e 00010] dbg: nvme2k: HwFoundAdapter - PCI Command Register = 0006 (IntDis=0) Old
+[nvme98 000001764165eea8 00011] dbg: nvme2k: HwFoundAdapter - PCI Command Register = 0406 (IntDis=1)
+[nvme98 000001764219dca3 00012] dbg: nvme2k: HwFoundAdapter - PCI Interrupt Line=10 Pin=1
+[nvme98 00000176423071aa 00013] dbg: nvme2k: HwFoundAdapter - ConfigInfo BEFORE: BusInterruptLevel=10 Vector=0 Mode=1
+[nvme98 0000017642444d24 00014] dbg: nvme2k: HwFoundAdapter - Set interrupt from PCI config: Level=10
+[nvme98 00000176431c9341 00015] dbg: nvme2k: HwFoundAdapter - BAR0 base=0x00000000FE800000 size=0x00004000 Memory
+[nvme98 00000176435cee28 00016] dbg: nvme2k: HwFoundAdapter - Controller Registers at VA E4601000
+[nvme98 00000176437206be 00017] dbg: nvme2k: HwFoundAdapter - Controller Registers PTE FE800A67
+[nvme98 0000017643975e8c 00018] dbg: nvme2k: HwFoundAdapter - Uncached Memory PTE 00FB4267
+[nvme98 0000017643bb2286 00019] dbg: nvme2k: HwFoundAdapter - allocated 65536 bytes of uncached memory at virt=E4625000 phys=0000000000FB4000
+[nvme98 0000017643d82db8 00020] dbg: nvme2k: HwFoundAdapter - Uncached Memory PTE 00FB427F
+[nvme98 0000017643eb1a04 00021] dbg: nvme2k: HwFoundAdapter - success, returning SP_RETURN_FOUND
+[nvme98 000001764401ef54 00022] HwFindAdapter found inst=1 bus=1 slot=1 rc=1 regs=E4601000 uncached=E4625000 phys=00FB4000
+[nvme98 0000017644206934 00023] dbg: nvme2k: HwAdapterState called - SaveState=255
+[nvme98 000001764432d81c 00024] marker tsc=0000017644324DF2
+[nvme98 0000017644461670 00025] HwAdapterState inst=1 SaveState=255 context=C1929788 depth=0 admin=0 CSTS=00000000
+[nvme98 00000176445f9eec 00026] summary(HwAdapterState) inst=1 srbs=0 rw=0 tagged=0 untagged=0 maxdepth=0 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=0 timer=0 gone=0 fastfail=0
+[nvme98 0000017644864c90 00027] summary(HwAdapterState) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 0000017644a36bea 00028] dbg: nvme2k: HwAdapterState - saving previous state
+[nvme98 0000017644b45676 00029] dbg: nvme2k: HwAdapterState - unimplelemented
+[nvme98 0000017644c42984 00030] dbg: nvme2k: HwAdapterState - exit
+[nvme98 0000017645215041 00031] dbg: nvme2k: HwInitialize called
+[nvme98 0000017645335809 00032] HwInitialize inst=1 devext=E433C08C regs=E4601000 CC=00000000 CSTS=00000000
+[nvme98 0000017645492d69 00033] dbg: nvme2k: HwInitialize - masking all interrupts
+[nvme98 00000176456139db 00034] dbg: nvme2k: HwInitialize - CAP=004008200F0107FF VS=00010400 MQES=2048 DBS=4
+[nvme98 000001764576add9 00035] dbg: nvme2k: HwInitialize - controller state before reset: CC=00000000 CSTS=00000000
+[nvme98 00000176458cf9d1 00036] dbg: nvme2k: HwInitialize - clearing admin queue registers
+[nvme98 0000017645ac9502 00037] dbg: nvme2k: HwInitialize - disabling controller
+[nvme98 0000017645c32d44 00038] dbg: nvme2k: HwInitialize - controller disabled successfully
+[nvme98 0000017645d6ad74 00039] dbg: nvme2k: HwInitialize - controller is now disabled and clean
+[nvme98 0000017645e9d14c 00040] dbg: nvme2k: HwInitialize - re-masking interrupts after controller reset (QEMU clears INTMS during reset)
+[nvme98 00000176460ecfec 00041] dbg: nvme2k: AllocateUncachedMemory - allocated 4096 bytes at offset 0 (virt=E4625000 phys=0000000000FB4000)
+[nvme98 00000176462d0214 00042] dbg: nvme2k: AllocateUncachedMemory - allocated 4096 bytes at offset 4096 (virt=E4626000 phys=0000000000FB5000)
+[nvme98 000001764649e5aa 00043] dbg: nvme2k: AllocateUncachedMemory - allocated 40960 bytes at offset 8192 (virt=E4627000 phys=0000000000FB6000)
+[nvme98 00000176466c9465 00044] dbg: nvme2k: AllocateUncachedMemory - allocated 1024 bytes at offset 49152 (virt=E4631000 phys=0000000000FC0000)
+[nvme98 000001764689dd77 00045] dbg: nvme2k: AllocateUncachedMemory - allocated 1024 bytes at offset 53248 (virt=E4632000 phys=0000000000FC1000)
+[nvme98 0000017646a79583 00046] dbg: nvme2k: HwInitialize - uncached memory usage: 54272 / 65536 bytes
+[nvme98 0000017646d09f41 00047] dbg: nvme2k: HwInitialize - controller is ready
+[nvme98 0000017646de2535 00048] dbg: nvme2k: HwInitialize - keeping interrupts masked, will use polling during init
+[nvme98 0000017646f5b3e9 00049] dbg: nvme2k: PRP list pool initialized at VA=E4627000 PA=0000000000FB6000 (10 pages)
+[nvme98 0000017647a4cd65 00050] dbg: nvme2k: HwInitialize - polling for init completion...
+[nvme98 0000017647c17d4d 00051] dbg: nvme2k: I/O CQ created successfully - DW0=00000000 SQID=0
+[nvme98 0000017647e38b59 00052] dbg: nvme2k: I/O SQ created successfully - DW0=00000000 SQID=0
+[nvme98 000001764805f852 00053] dbg: nvme2k: Identified controller - Model: QEMU NVMe Ctrl                           SN: USB4EMU01            FW: 11.1.2   NN: 256
+[nvme98 0000017648394004 00054] dbg: nvme2k: Identified namespace - blocks=(2097152 + 0 * 4Gi) blocksize=512 bytes
+[nvme98 000001764850de6c 00055] dbg: nvme2k: Init complete - driver ready for I/O
+[nvme98 0000017648e0c5f4 00056] dbg: nvme2k: Enabled interrupts at PCI level, Command=0006
+[nvme98 0000017648fb8196 00057] dbg: nvme2k: Unmasked interrupts at NVMe controller level (INTMC=0x00000001)
+[nvme98 0000017649109888 00058] dbg: nvme2k: HwInitialize finished successfully - interrupts enabled
+[nvme98 000001764926b8ac 00059] HwInitialize inst=1 returns TRUE, InitComplete=1
+[nvme98 0000017649bf13e4 00060] startio func=00 op=12 tag=01 qa=00 flags=0001006C buf=C138CE94 len=96 timeout=30 depth=0
+[nvme98 0000017649e37f90 00061] config probe in HwStartIo: ScsiPortGetBusData(bus 1 slot 1, 8) = 8, id=00101B36 cmdsts=00100006
+[nvme98 000001764ad68dac 00062] dbg: nvme2k: DriverEntry exiting with status 0x00000000
+[nvme98 000001764b79fc30 00063] startio func=00 op=00 tag=04 qa=00 flags=00010000 buf=00000000 len=0 timeout=0 depth=0
+[nvme98 000001764ba340a4 00064] startio func=00 op=25 tag=05 qa=00 flags=00010040 buf=E2EC1054 len=8 timeout=0 depth=0
+[nvme98 000001764bfc7713 00065] startio rw op=28 tag=06 qa=00 flags=00010240 buf=C18E8608 len=512 depth=0 cdb=000000000001
+[nvme98 000001764c45ef2d 00066] complete cid=8000 nvme=0000 srb=C138D800 status=01 op=28 tag=06 depth=1
+[nvme98 000001764c693ccb 00067] startio rw op=28 tag=07 qa=00 flags=00010240 buf=C18E8608 len=512 depth=0 cdb=0000003F0001
+[nvme98 000001764ca09551 00068] complete cid=8001 nvme=0000 srb=C138D800 status=01 op=28 tag=07 depth=1
+[nvme98 000001764cc4b6ed 00069] startio rw op=28 tag=08 qa=00 flags=00010240 buf=C1905514 len=512 depth=0 cdb=0000003F0001
+[nvme98 000001764cebedba 00070] complete cid=8002 nvme=0000 srb=C138D800 status=01 op=28 tag=08 depth=1
+[nvme98 000001766253b442 00071] startio func=00 op=00 tag=09 qa=00 flags=00010000 buf=00000000 len=0 timeout=0 depth=0
+[nvme98 0000017662a1cf60 00072] startio rw op=28 tag=0A qa=00 flags=00010240 buf=C192C850 len=512 depth=0 cdb=0000003F0001
+[nvme98 0000017663130dd7 00073] complete cid=8003 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0A depth=1
+[nvme98 00000176633f7cff 00074] startio rw op=28 tag=0B qa=00 flags=00010240 buf=C192C850 len=512 depth=0 cdb=000000400001
+[nvme98 0000017663603a45 00075] complete cid=8004 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0B depth=1
+[nvme98 0000017665235344 00076] startio rw op=28 tag=0C qa=00 flags=00010240 buf=C75F3000 len=4096 depth=0 cdb=0000003F0008
+[nvme98 0000017665459b6f 00077] complete cid=8005 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0C depth=1
+[nvme98 0000017665f480d6 00078] startio rw op=28 tag=0D qa=00 flags=00010240 buf=C75F2000 len=4096 depth=0 cdb=000010570008
+[nvme98 00000176662446d6 00079] complete cid=8006 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0D depth=1
+[nvme98 000001767e5872db 00080] FallbackTimer #1 depth=0 admin=0
+[nvme98 00000176b3f5f7b9 00081] FallbackTimer #2 depth=0 admin=0
+[nvme98 0000018c8e7a50ce 00082] startio rw op=28 tag=0E qa=00 flags=00010240 buf=C3A4F000 len=4096 depth=0 cdb=0000005F0008
+[nvme98 0000018c8f27ca88 00083] complete cid=8007 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0E depth=1
+[nvme98 0000018c90427828 00084] startio rw op=28 tag=0F qa=00 flags=00010240 buf=C3A4D000 len=4096 depth=0 cdb=000000670008
+[nvme98 0000018c906db0d0 00085] complete cid=8008 nvme=0000 srb=C138B4F0 status=01 op=28 tag=0F depth=1
+[nvme98 0000018c913f9366 00086] startio rw op=28 tag=10 qa=00 flags=00010240 buf=C3A4C000 len=4096 depth=0 cdb=0000006F0008
+[nvme98 0000018c9169d773 00087] complete cid=8009 nvme=0000 srb=C138B4F0 status=01 op=28 tag=10 depth=1
+[nvme98 0000018c9235fa3d 00088] startio rw op=28 tag=11 qa=00 flags=00010240 buf=C3A4B000 len=4096 depth=0 cdb=000000770008
+[nvme98 0000018c9250592d 00089] complete cid=800A nvme=0000 srb=C138B4F0 status=01 op=28 tag=11 depth=1
+[nvme98 0000018c93433503 00090] startio rw op=28 tag=12 qa=00 flags=00010240 buf=C3A4A000 len=4096 depth=0 cdb=0000007F0008
+[nvme98 0000018c937cd308 00091] complete cid=800B nvme=0000 srb=C138B4F0 status=01 op=28 tag=12 depth=1
+[nvme98 0000018c94899ee2 00092] startio rw op=28 tag=13 qa=00 flags=00010240 buf=C3A49000 len=4096 depth=0 cdb=000000870008
+[nvme98 0000018c94b860a6 00093] complete cid=800C nvme=0000 srb=C138B4F0 status=01 op=28 tag=13 depth=1
+[nvme98 0000018c958fd739 00094] startio rw op=28 tag=14 qa=00 flags=00010240 buf=C3A48000 len=4096 depth=0 cdb=0000008F0008
+[nvme98 0000018c95c8b244 00095] complete cid=800D nvme=0000 srb=C138B4F0 status=01 op=28 tag=14 depth=1
+[nvme98 0000018c96a5cf58 00096] startio rw op=28 tag=15 qa=00 flags=00010240 buf=C3A47000 len=4096 depth=0 cdb=000000970008
+[nvme98 0000018c96d78fde 00097] complete cid=800E nvme=0000 srb=C138B4F0 status=01 op=28 tag=15 depth=1
+[nvme98 0000018c97ebe569 00098] startio rw op=28 tag=16 qa=00 flags=00010240 buf=C3A46000 len=4096 depth=0 cdb=0000009F0008
+[nvme98 0000018c981af7eb 00099] complete cid=800F nvme=0000 srb=C138B4F0 status=01 op=28 tag=16 depth=1
+[nvme98 0000018c99039393 00100] startio rw op=28 tag=17 qa=00 flags=00010240 buf=C3A45000 len=4096 depth=0 cdb=000000A70008
+[nvme98 0000018c992f9c8b 00101] complete cid=8010 nvme=0000 srb=C138B4F0 status=01 op=28 tag=17 depth=1
+[nvme98 0000018c9a58ea8b 00102] startio rw op=28 tag=18 qa=00 flags=00010240 buf=C3A44000 len=4096 depth=0 cdb=000000AF0008
+[nvme98 0000018c9a8fcc54 00103] complete cid=8011 nvme=0000 srb=C138B4F0 status=01 op=28 tag=18 depth=1
+[nvme98 0000018c9b5cddd4 00104] startio rw op=28 tag=19 qa=00 flags=00010240 buf=C3A43000 len=4096 depth=0 cdb=000000B70008
+[nvme98 0000018c9b940d04 00105] complete cid=8012 nvme=0000 srb=C138B4F0 status=01 op=28 tag=19 depth=1
+[nvme98 0000018c9cad1f6e 00106] startio rw op=28 tag=1A qa=00 flags=00010240 buf=C3A42000 len=4096 depth=0 cdb=000000BF0008
+[nvme98 0000018c9cdc77e6 00107] complete cid=8013 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1A depth=1
+[nvme98 0000018c9dc03305 00108] startio rw op=28 tag=1B qa=00 flags=00010240 buf=C3A41000 len=4096 depth=0 cdb=000000C70008
+[nvme98 0000018c9df0fc47 00109] complete cid=8014 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1B depth=1
+[nvme98 0000018c9efcb707 00110] startio rw op=28 tag=1C qa=00 flags=00010240 buf=C3A40000 len=4096 depth=0 cdb=000000CF0008
+[nvme98 0000018c9f3c5d03 00111] complete cid=8015 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1C depth=1
+[nvme98 0000018ca04ec437 00112] startio rw op=28 tag=1D qa=00 flags=00010240 buf=C3A3F000 len=4096 depth=0 cdb=000000D70008
+[nvme98 0000018ca0775862 00113] complete cid=8016 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1D depth=1
+[nvme98 0000018ca17e6034 00114] startio rw op=28 tag=1E qa=00 flags=00010240 buf=C3A3E000 len=4096 depth=0 cdb=000000DF0008
+[nvme98 0000018ca1b014cf 00115] complete cid=8017 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1E depth=1
+[nvme98 0000018ca281ed15 00116] startio rw op=28 tag=1F qa=00 flags=00010240 buf=C3A3D000 len=4096 depth=0 cdb=000000E70008
+[nvme98 0000018ca2b1d953 00117] complete cid=8018 nvme=0000 srb=C138B4F0 status=01 op=28 tag=1F depth=1
+[nvme98 0000018ca2f9a107 00118] FallbackTimer #3 depth=0 admin=0
+[nvme98 0000018ca31fb99b 00119] config probe in FallbackTimer: ScsiPortGetBusData(bus 1 slot 1, 8) = 8, id=00101B36 cmdsts=00100006
+[nvme98 0000018ca4485c57 00120] startio rw op=28 tag=20 qa=00 flags=00010240 buf=C3A3C000 len=4096 depth=0 cdb=000000EF0008
+[nvme98 0000018ca47ef9bf 00121] complete cid=8019 nvme=0000 srb=C138B4F0 status=01 op=28 tag=20 depth=1
+[nvme98 0000018ca57105b1 00122] startio rw op=28 tag=21 qa=00 flags=00010240 buf=C3A3B000 len=4096 depth=0 cdb=000000F70008
+[nvme98 0000018ca5ab78c6 00123] complete cid=801A nvme=0000 srb=C138B4F0 status=01 op=28 tag=21 depth=1
+[nvme98 0000018ca6ce73c6 00124] startio rw op=28 tag=22 qa=00 flags=00010240 buf=C3A3A000 len=4096 depth=0 cdb=000000FF0008
+[nvme98 0000018ca6fe49de 00125] complete cid=801B nvme=0000 srb=C138B4F0 status=01 op=28 tag=22 depth=1
+[nvme98 0000018ca7d14494 00126] startio rw op=28 tag=23 qa=00 flags=00010240 buf=C3A39000 len=4096 depth=0 cdb=000001070008
+[nvme98 0000018ca803fe20 00127] complete cid=801C nvme=0000 srb=C138B4F0 status=01 op=28 tag=23 depth=1
+[nvme98 0000018ca91073be 00128] startio rw op=28 tag=24 qa=00 flags=00010240 buf=C3A38000 len=4096 depth=0 cdb=0000010F0008
+[nvme98 0000018ca943e3cc 00129] complete cid=801D nvme=0000 srb=C138B4F0 status=01 op=28 tag=24 depth=1
+[nvme98 0000018caa253322 00130] startio rw op=28 tag=25 qa=00 flags=00010240 buf=C3A37000 len=4096 depth=0 cdb=000001170008
+[nvme98 0000018caa5f6d9e 00131] complete cid=801E nvme=0000 srb=C138B4F0 status=01 op=28 tag=25 depth=1
+[nvme98 0000018cab7e0cd0 00132] startio rw op=28 tag=26 qa=00 flags=00010240 buf=C3A36000 len=4096 depth=0 cdb=0000011F0008
+[nvme98 0000018caba22c61 00133] complete cid=801F nvme=0000 srb=C138B4F0 status=01 op=28 tag=26 depth=1
+[nvme98 0000018cac4f139f 00134] startio rw op=28 tag=27 qa=00 flags=00010240 buf=C3A35000 len=4096 depth=0 cdb=000001270008
+[nvme98 0000018cac6e5b55 00135] complete cid=8020 nvme=0000 srb=C138B4F0 status=01 op=28 tag=27 depth=1
+[nvme98 0000018cadf52d19 00136] startio rw op=28 tag=28 qa=00 flags=00010240 buf=C3A34000 len=4096 depth=0 cdb=0000012F0008
+[nvme98 0000018cae35fa7d 00137] complete cid=8021 nvme=0000 srb=C138B4F0 status=01 op=28 tag=28 depth=1
+[nvme98 0000018caf53a4f8 00138] startio rw op=28 tag=29 qa=00 flags=00010240 buf=C3A33000 len=4096 depth=0 cdb=000001370008
+[nvme98 0000018caf8a29e7 00139] complete cid=8022 nvme=0000 srb=C138B4F0 status=01 op=28 tag=29 depth=1
+[nvme98 0000018cb07fb4ed 00140] startio rw op=28 tag=2A qa=00 flags=00010240 buf=C3A32000 len=4096 depth=0 cdb=0000013F0008
+[nvme98 0000018cb0af4f41 00141] complete cid=8023 nvme=0000 srb=C138B4F0 status=01 op=28 tag=2A depth=1
+[nvme98 0000018cb1764745 00142] startio rw op=28 tag=2B qa=00 flags=00010240 buf=C3A31000 len=4096 depth=0 cdb=000001470008
+[nvme98 0000018cb1b011b4 00143] complete cid=8024 nvme=0000 srb=C138B4F0 status=01 op=28 tag=2B depth=1
+[nvme98 0000018cb2c9658e 00144] startio rw op=28 tag=2C qa=00 flags=00010240 buf=C3A30000 len=4096 depth=0 cdb=0000014F0008
+[nvme98 0000018cb2f6350a 00145] complete cid=8025 nvme=0000 srb=C138B4F0 status=01 op=28 tag=2C depth=1
+[nvme98 0000018cb3de5768 00146] startio rw op=28 tag=2D qa=00 flags=00010240 buf=C3A2F000 len=4096 depth=0 cdb=000001570008
+[nvme98 0000018cb40f65c7 00147] complete cid=8026 nvme=0000 srb=C138B4F0 status=01 op=28 tag=2D depth=1
+[nvme98 0000018cb52dfc70 00148] startio rw op=28 tag=2E qa=00 flags=00010240 buf=C3A2E000 len=4096 depth=0 cdb=0000015F0008
+[nvme98 0000018cb56316c6 00149] complete cid=8027 nvme=0000 srb=C138B4F0 status=01 op=28 tag=2E depth=1
+[nvme98 0000018cbaaf9f41 00150] FallbackTimer #4 depth=0 admin=0
+[nvme98 0000018cce407b06 00151] FallbackTimer #5 depth=0 admin=0
+[nvme98 000001a7a6b2c200 00152] dbg: nvme2k: HwAdapterState called - SaveState=0
+[nvme98 000001a7a6f00f0c 00153] marker tsc=000001A7A6ED8BB0
+[nvme98 000001a7a706541a 00154] HwAdapterState inst=1 SaveState=0 context=E45E0DC0 depth=0 admin=0 CSTS=00000001
+[nvme98 000001a7a7236d3e 00155] summary(HwAdapterState) inst=1 srbs=96 rw=92 tagged=0 untagged=92 maxdepth=1 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=92 timer=11 gone=0 fastfail=0
+[nvme98 000001a7a74c681a 00156] summary(HwAdapterState) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 000001a7a769c590 00157] dbg: nvme2k: HwAdapterState - restoring previous state
+[nvme98 000001a7a77b6aca 00158] dbg: nvme2k: HwAdapterState - unimplelemented, stopping instead
+[nvme98 000001a7a79174aa 00159] dbg: nvme2k: NvmeShutdownController - starting shutdown sequence
+[nvme98 000001a7a7a6f78a 00160] dbg: nvme2k: NvmeShutdownController - masked all interrupts
+[nvme98 000001a7a7bf6720 00161] dbg: nvme2k: Deleting I/O Submission Queue
+[nvme98 000001a7a881035d 00162] dbg: nvme2k: Deleting I/O Completion Queue
+[nvme98 000001a7a918dd5e 00163] dbg: nvme2k: Shutdown notification sent, waiting for completion
+[nvme98 000001a7a9316a22 00164] dbg: nvme2k: Shutdown complete
+[nvme98 000001a7a94200c6 00165] dbg: nvme2k: Controller disabled
+[nvme98 000001a7a95625ba 00166] dbg: nvme2k: Controller RDY bit cleared
+[nvme98 000001a7a964d2e0 00167] dbg: nvme2k: Clearing admin queue registers
+[nvme98 000001a7a97bcb58 00168] dbg: nvme2k: Resetting queue state
+[nvme98 000001a7a98b037a 00169] dbg: nvme2k: NvmeShutdownController - shutdown sequence complete
+[nvme98 000001a7a9a0b210 00170] HwAdapterState: controller shut down, CSTS=00000000 CC=00000000
+[nvme98 000001a7a9b51dae 00171] dbg: nvme2k: HwAdapterState - exit

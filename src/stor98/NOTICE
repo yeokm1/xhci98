@@ -1,0 +1,55 @@
+# Notices
+
+Stor98 as a whole is distributed under the BSD-3-Clause licence in
+`LICENSE`, which lists every copyright holder. This file records where the code came
+from.
+
+NVM Express and NVMe are trademarks of NVM Express, Inc.; Stor98 is independent and not
+endorsed by NVM Express or Microsoft.
+
+## nvme2k (BSD-3-Clause)
+
+`third_party/nvme2k-1.2.0.0/` is an unmodified copy of https://github.com/techomancer/nvme2k
+at commit 0c41727 (release 1.2.0.0), kept as the reference for backports and the amd64
+target. Its licence is in `third_party/nvme2k-1.2.0.0/LICENSE`:
+
+    Copyright (c) 2025, Dominik Behr
+    All rights reserved.
+    (BSD-3-Clause; full text in the LICENSE file)
+
+The code in `src/` derives from nvme2k 1.0.0.2. The licence of that older release has not
+been checked separately; until it is, treat the parts written by Dominik Behr as covered by
+the same BSD-3-Clause notice (the stricter reading: it adds the non-endorsement clause).
+
+`inf/stor98-x64.inf` and the NT sections of `inf/stor98-x86.inf` derive from nvme2k
+1.2.0.0's `WDM/NVMe2K.inf` (in `third_party/nvme2k-1.2.0.0/`), whose header reads
+"Copyright (c) 2025 Dominik Behr + Ray Hinchliffe"; `LICENSE` names both. The Windows
+9x sections of `inf/stor98-x86.inf` derive from SweetLow's `nvme9x.inf` (below).
+
+## nvme9x / nvment (SweetLow)
+
+`src/` is SweetLow's nvme9x/nvment source (https://github.com/LordOfMice/Tools,
+`nvme2k-src.zip`, sha256 272b50836d7f9fe4c1a483f5868d099604916ccd4c89b4daacbc1d17c80bb4f2),
+imported unmodified except that the bundled Microsoft DDK headers `SCSI.H` and `SRB.H`
+were left out and BSD-3-Clause licence headers were added. Its readme is
+`src/README-nvme9x.txt`.
+
+Licence, as stated by SweetLow on 2026-10-14 in reply to the maintainer's request:
+
+- the `nvme2k.mpd` code and binary (SweetLow's port and changes): BSD-3-Clause, the licence
+  of the original nvme2k project;
+- `NVMEVSD.VXD`: public domain. Its source is not part of `nvme2k-src.zip` and is not in
+  this repository.
+
+## Microsoft DDK headers
+
+Not included. The Windows 9x build needs `SCSI.H` and `SRB.H` from the Windows 98 or NT4
+DDK; place them in `tools/w98ddk/inc/` (git-ignored). The other kits (MSVC 6.0, Windows 2000
+DDK, WDK 7.1) live in `tools/` too; see `docs/BUILD.md`.
+
+## CM interface header
+
+`include/stor98cm.h` is original to this project (Yeo Kheng Meng, BSD-3-Clause). It defines
+the interface between xhci98's connection manager and stor98 and is licensed on its own as
+an interface definition, so that xhci98 (GPL-2.0) can include it unchanged; the file says
+so in its header.

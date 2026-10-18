@@ -1,0 +1,6 @@
+/*
+ * xhcimark.rc - the one resource of XHCIMARK.EXE and XHCIMK64.EXE: the
+ * manifest (xhcimark.manifest), as resource 1 of type 24 (RT_MANIFEST),
+ * a form MSVC 6.0's resource compiler takes by number.
+ */
+1 24 "xhcimark.manifest"

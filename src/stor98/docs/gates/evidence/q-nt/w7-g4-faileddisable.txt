@@ -1,0 +1,517 @@
+                  .. usb4_h_fire tb0: rule 0 fired at complete token=3473 opc=0x2 code=0x0 acts=hold host_ns=1792023396265379000 vm_ns=1733772809700
+                  .. usb4_h_hold tb0: hold token 3473 deadline_ms=-1 release=manual tag=h
+            (1654 read/write stages)
+     15783.4 ms #8390   86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1188 read/write stages)
+     16877.4 ms #9579   86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1238 read/write stages)
+     17968.4 ms #10818  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1243 read/write stages)
+     19059.4 ms #12062  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1241 read/write stages)
+     20151.1 ms #13304  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1291 read/write stages)
+     21242.2 ms #14596  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1250 read/write stages)
+     22336.1 ms #15847  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1269 read/write stages)
+     23429.3 ms #17117  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1252 read/write stages)
+     24521.3 ms #18370  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1284 read/write stages)
+     25611.1 ms #19655  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1327 read/write stages)
+     26703.1 ms #20983  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1269 read/write stages)
+     27795.2 ms #22253  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1226 read/write stages)
+     28888.0 ms #23480  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1219 read/write stages)
+     29979.1 ms #24700  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1213 read/write stages)
+     31072.2 ms #25914  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1162 read/write stages)
+     32164.4 ms #27077  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1224 read/write stages)
+     33255.9 ms #28302  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1248 read/write stages)
+     34347.6 ms #29551  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (2441 read/write stages)
+     36456.8 ms #31993  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (3353 read/write stages)
+     39370.9 ms #35347  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1214 read/write stages)
+     40464.2 ms #36562  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1235 read/write stages)
+     41557.2 ms #37798  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1220 read/write stages)
+     42648.6 ms #39019  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1201 read/write stages)
+     43739.4 ms #40221  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1226 read/write stages)
+     44830.0 ms #41448  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1276 read/write stages)
+     45923.6 ms #42725  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1246 read/write stages)
+     47016.9 ms #43972  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1260 read/write stages)
+     48108.8 ms #45233  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1273 read/write stages)
+     49201.3 ms #46507  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1275 read/write stages)
+     50291.0 ms #47783  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1256 read/write stages)
+     51383.1 ms #49040  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1288 read/write stages)
+     52475.6 ms #50329  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1226 read/write stages)
+     53566.9 ms #51556  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1299 read/write stages)
+     54659.6 ms #52856  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1281 read/write stages)
+     55752.9 ms #54138  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1255 read/write stages)
+     56843.5 ms #55394  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1323 read/write stages)
+     57934.9 ms #56718  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (4123 read/write stages)
+     61550.4 ms #60842  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1185 read/write stages)
+     62631.4 ms #62028  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1174 read/write stages)
+     63722.7 ms #63203  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1212 read/write stages)
+     64814.1 ms #64416  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1266 read/write stages)
+     65907.5 ms #65683  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1186 read/write stages)
+     66999.4 ms #66870  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1202 read/write stages)
+     68107.4 ms #68073  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1313 read/write stages)
+     69197.9 ms #69387  86 G24_SUMMARY held=2 port-owned=2 s=65535
+            (1289 read/write stages)
+     70290.0 ms #70677  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1334 read/write stages)
+     71382.1 ms #72012  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1358 read/write stages)
+     72475.6 ms #73371  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1230 read/write stages)
+     73566.4 ms #74602  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1244 read/write stages)
+     74657.8 ms #75847  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (1280 read/write stages)
+     75753.9 ms #77128  86 G24_SUMMARY held=1 port-owned=1 s=65535
+            (907 read/write stages)
+     76546.0 ms #78036  50 RESET_BUS arg=0x1000200
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460000
+                  .. pci_nvme_mmio_stopped cleared controller enable bit
+                  .. usb4_h_release tb0: release token 3473 (discarded by reset)
+     76548.3 ms #78037  87 G24_RESET_RESULT ret=0 csts=01 g24=RESET_WAIT held=2
+            (1 read/write stages)
+     77610.8 ms #78039  86 G24_SUMMARY held=1 port-owned=1 s=1
+     78714.2 ms #78040  86 G24_SUMMARY held=1 port-owned=1 s=2
+     79805.8 ms #78041  86 G24_SUMMARY held=1 port-owned=1 s=3
+            (1 read/write stages)
+     80570.2 ms #78043  8d G24_FAILED_IO 0x1032800
+     80898.1 ms #78044  86 G24_SUMMARY held=1 port-owned=1 s=4
+     82005.1 ms #78045  86 G24_SUMMARY held=1 port-owned=1 s=5
+     83097.3 ms #78046  86 G24_SUMMARY held=1 port-owned=1 s=6
+     84188.3 ms #78047  86 G24_SUMMARY held=1 port-owned=1 s=7
+     85281.2 ms #78048  86 G24_SUMMARY held=1 port-owned=1 s=8
+     86374.5 ms #78049  86 G24_SUMMARY held=1 port-owned=1 s=9
+     87465.4 ms #78050  86 G24_SUMMARY held=1 port-owned=1 s=10
+     88557.1 ms #78051  86 G24_SUMMARY held=1 port-owned=1 s=11
+     89649.6 ms #78052  86 G24_SUMMARY held=1 port-owned=1 s=12
+     90741.2 ms #78053  86 G24_SUMMARY held=1 port-owned=1 s=13
+     91832.6 ms #78054  86 G24_SUMMARY held=1 port-owned=1 s=14
+     92926.4 ms #78055  86 G24_SUMMARY held=1 port-owned=1 s=15
+     94018.3 ms #78056  86 G24_SUMMARY held=1 port-owned=1 s=16
+     95139.6 ms #78057  86 G24_SUMMARY held=1 port-owned=1 s=17
+     96233.0 ms #78058  86 G24_SUMMARY held=1 port-owned=1 s=18
+     97323.7 ms #78059  86 G24_SUMMARY held=1 port-owned=1 s=19
+     98442.1 ms #78060  86 G24_SUMMARY held=1 port-owned=1 s=20
+     99541.4 ms #78061  86 G24_SUMMARY held=1 port-owned=1 s=21
+    100654.8 ms #78062  86 G24_SUMMARY held=1 port-owned=1 s=22
+    101796.6 ms #78063  86 G24_SUMMARY held=1 port-owned=1 s=23
+    103021.1 ms #78064  86 G24_SUMMARY held=1 port-owned=1 s=24
+    104169.6 ms #78065  86 G24_SUMMARY held=1 port-owned=1 s=25
+    105323.4 ms #78066  86 G24_SUMMARY held=1 port-owned=1 s=26
+    106444.2 ms #78067  86 G24_SUMMARY held=1 port-owned=1 s=27
+    107582.3 ms #78068  86 G24_SUMMARY held=1 port-owned=1 s=28
+    108723.8 ms #78069  86 G24_SUMMARY held=1 port-owned=1 s=29
+    110112.6 ms #78070  86 G24_SUMMARY held=1 port-owned=1 s=30
+    111205.1 ms #78071  86 G24_SUMMARY held=1 port-owned=1 s=31
+    112342.1 ms #78072  86 G24_SUMMARY held=1 port-owned=1 s=32
+    113509.7 ms #78073  86 G24_SUMMARY held=1 port-owned=1 s=33
+    114634.4 ms #78074  86 G24_SUMMARY held=1 port-owned=1 s=34
+    115744.3 ms #78075  86 G24_SUMMARY held=1 port-owned=1 s=35
+    116866.7 ms #78076  86 G24_SUMMARY held=1 port-owned=1 s=36
+    117962.1 ms #78077  86 G24_SUMMARY held=1 port-owned=1 s=37
+    119080.6 ms #78078  86 G24_SUMMARY held=1 port-owned=1 s=38
+    120214.3 ms #78079  86 G24_SUMMARY held=1 port-owned=1 s=39
+    121341.5 ms #78080  86 G24_SUMMARY held=1 port-owned=1 s=40
+    122599.4 ms #78081  86 G24_SUMMARY held=1 port-owned=1 s=41
+    123722.9 ms #78082  86 G24_SUMMARY held=1 port-owned=1 s=42
+    124832.5 ms #78083  86 G24_SUMMARY held=1 port-owned=1 s=43
+    125950.7 ms #78084  86 G24_SUMMARY held=1 port-owned=1 s=44
+    127091.2 ms #78085  86 G24_SUMMARY held=1 port-owned=1 s=45
+    128215.5 ms #78086  86 G24_SUMMARY held=1 port-owned=1 s=46
+    129319.2 ms #78087  86 G24_SUMMARY held=1 port-owned=1 s=47
+    130415.8 ms #78088  86 G24_SUMMARY held=1 port-owned=1 s=48
+    131523.8 ms #78089  86 G24_SUMMARY held=1 port-owned=1 s=49
+    132633.6 ms #78090  86 G24_SUMMARY held=1 port-owned=1 s=50
+    133744.4 ms #78091  86 G24_SUMMARY held=1 port-owned=1 s=51
+    134882.5 ms #78092  86 G24_SUMMARY held=1 port-owned=1 s=52
+    136022.4 ms #78093  86 G24_SUMMARY held=1 port-owned=1 s=53
+    137118.3 ms #78094  86 G24_SUMMARY held=1 port-owned=1 s=54
+    138206.4 ms #78095  86 G24_SUMMARY held=1 port-owned=1 s=55
+    139334.6 ms #78096  86 G24_SUMMARY held=1 port-owned=1 s=56
+    140462.0 ms #78097  86 G24_SUMMARY held=1 port-owned=1 s=57
+    141635.2 ms #78098  86 G24_SUMMARY held=1 port-owned=1 s=58
+    142742.2 ms #78099  86 G24_SUMMARY held=1 port-owned=1 s=59
+    142772.2 ms #78100  50 RESET_BUS arg=0x2030100
+    142774.6 ms #78101  87 G24_RESET_RESULT ret=0 csts=01 g24=RESET_WAIT held=1
+    143894.1 ms #78102  86 G24_SUMMARY held=1 port-owned=1 s=60
+    145034.4 ms #78103  86 G24_SUMMARY held=1 port-owned=1 s=61
+    146191.6 ms #78104  86 G24_SUMMARY held=1 port-owned=1 s=62
+    147283.5 ms #78105  86 G24_SUMMARY held=1 port-owned=1 s=63
+    148373.8 ms #78106  86 G24_SUMMARY held=1 port-owned=1 s=64
+    149481.4 ms #78107  86 G24_SUMMARY held=1 port-owned=1 s=65
+    150618.8 ms #78108  86 G24_SUMMARY held=1 port-owned=1 s=66
+    151769.5 ms #78109  86 G24_SUMMARY held=1 port-owned=1 s=67
+    152860.7 ms #78110  86 G24_SUMMARY held=1 port-owned=1 s=68
+    154034.9 ms #78111  86 G24_SUMMARY held=1 port-owned=1 s=69
+    155124.9 ms #78112  86 G24_SUMMARY held=1 port-owned=1 s=70
+    156273.1 ms #78113  86 G24_SUMMARY held=1 port-owned=1 s=71
+    157442.2 ms #78114  86 G24_SUMMARY held=1 port-owned=1 s=72
+    158551.0 ms #78115  86 G24_SUMMARY held=1 port-owned=1 s=73
+    159875.6 ms #78116  86 G24_SUMMARY held=1 port-owned=1 s=74
+    160982.0 ms #78117  86 G24_SUMMARY held=1 port-owned=1 s=75
+    162090.0 ms #78118  86 G24_SUMMARY held=1 port-owned=1 s=76
+    163243.4 ms #78119  86 G24_SUMMARY held=1 port-owned=1 s=77
+    164401.0 ms #78120  86 G24_SUMMARY held=1 port-owned=1 s=78
+    165520.3 ms #78121  86 G24_SUMMARY held=1 port-owned=1 s=79
+    166611.7 ms #78122  86 G24_SUMMARY held=1 port-owned=1 s=80
+    167720.6 ms #78123  86 G24_SUMMARY held=1 port-owned=1 s=81
+    168856.1 ms #78124  86 G24_SUMMARY held=1 port-owned=1 s=82
+    169997.3 ms #78125  86 G24_SUMMARY held=1 port-owned=1 s=83
+    171116.5 ms #78126  86 G24_SUMMARY held=1 port-owned=1 s=84
+    172240.1 ms #78127  86 G24_SUMMARY held=1 port-owned=1 s=85
+    173378.6 ms #78128  86 G24_SUMMARY held=1 port-owned=1 s=86
+    174486.4 ms #78129  86 G24_SUMMARY held=1 port-owned=1 s=87
+    175781.5 ms #78130  86 G24_SUMMARY held=1 port-owned=1 s=88
+    176908.0 ms #78131  86 G24_SUMMARY held=1 port-owned=1 s=89
+    178026.4 ms #78132  86 G24_SUMMARY held=1 port-owned=1 s=90
+    179136.6 ms #78133  86 G24_SUMMARY held=1 port-owned=1 s=91
+    180320.6 ms #78134  86 G24_SUMMARY held=1 port-owned=1 s=92
+    181430.0 ms #78135  86 G24_SUMMARY held=1 port-owned=1 s=93
+    182706.5 ms #78136  86 G24_SUMMARY held=1 port-owned=1 s=94
+    183801.6 ms #78137  86 G24_SUMMARY held=1 port-owned=1 s=95
+    185139.2 ms #78138  86 G24_SUMMARY held=1 port-owned=1 s=96
+    186249.5 ms #78139  86 G24_SUMMARY held=1 port-owned=1 s=97
+    187344.6 ms #78140  86 G24_SUMMARY held=1 port-owned=1 s=98
+    188589.4 ms #78141  86 G24_SUMMARY held=1 port-owned=1 s=99
+    189692.9 ms #78142  86 G24_SUMMARY held=1 port-owned=1 s=100
+    190817.0 ms #78143  86 G24_SUMMARY held=1 port-owned=1 s=101
+    191990.7 ms #78144  86 G24_SUMMARY held=1 port-owned=1 s=102
+    193077.9 ms #78145  86 G24_SUMMARY held=1 port-owned=1 s=103
+    194203.0 ms #78146  86 G24_SUMMARY held=1 port-owned=1 s=104
+    195308.9 ms #78147  86 G24_SUMMARY held=1 port-owned=1 s=105
+    196444.6 ms #78148  86 G24_SUMMARY held=1 port-owned=1 s=106
+    197581.7 ms #78149  86 G24_SUMMARY held=1 port-owned=1 s=107
+    198683.2 ms #78150  86 G24_SUMMARY held=1 port-owned=1 s=108
+    199794.7 ms #78151  86 G24_SUMMARY held=1 port-owned=1 s=109
+    200934.2 ms #78152  86 G24_SUMMARY held=1 port-owned=1 s=110
+    202043.4 ms #78153  86 G24_SUMMARY held=1 port-owned=1 s=111
+    203124.3 ms #78154  86 G24_SUMMARY held=1 port-owned=1 s=112
+    204247.5 ms #78155  86 G24_SUMMARY held=1 port-owned=1 s=113
+    205380.3 ms #78156  86 G24_SUMMARY held=1 port-owned=1 s=114
+    206508.1 ms #78157  86 G24_SUMMARY held=1 port-owned=1 s=115
+    207656.5 ms #78158  86 G24_SUMMARY held=1 port-owned=1 s=116
+    208767.1 ms #78159  86 G24_SUMMARY held=1 port-owned=1 s=117
+    209993.2 ms #78160  86 G24_SUMMARY held=1 port-owned=1 s=118
+    211145.9 ms #78161  86 G24_SUMMARY held=1 port-owned=1 s=119
+    212307.8 ms #78162  86 G24_SUMMARY held=1 port-owned=1 s=120
+    213392.7 ms #78163  86 G24_SUMMARY held=1 port-owned=1 s=121
+    214498.6 ms #78164  86 G24_SUMMARY held=1 port-owned=1 s=122
+    215838.6 ms #78165  86 G24_SUMMARY held=1 port-owned=1 s=123
+    216949.5 ms #78166  86 G24_SUMMARY held=1 port-owned=1 s=124
+    218073.8 ms #78167  86 G24_SUMMARY held=1 port-owned=1 s=125
+    219179.2 ms #78168  86 G24_SUMMARY held=1 port-owned=1 s=126
+    220271.4 ms #78169  86 G24_SUMMARY held=1 port-owned=1 s=127
+    221399.8 ms #78170  86 G24_SUMMARY held=1 port-owned=1 s=128
+    222527.9 ms #78171  86 G24_SUMMARY held=1 port-owned=1 s=129
+    223645.2 ms #78172  86 G24_SUMMARY held=1 port-owned=1 s=130
+    224736.6 ms #78173  86 G24_SUMMARY held=1 port-owned=1 s=131
+    225994.0 ms #78174  86 G24_SUMMARY held=1 port-owned=1 s=132
+    227143.5 ms #78175  86 G24_SUMMARY held=1 port-owned=1 s=133
+    228249.2 ms #78176  86 G24_SUMMARY held=1 port-owned=1 s=134
+    229361.8 ms #78177  86 G24_SUMMARY held=1 port-owned=1 s=135
+    230458.7 ms #78178  86 G24_SUMMARY held=1 port-owned=1 s=136
+    231676.0 ms #78179  86 G24_SUMMARY held=1 port-owned=1 s=137
+    232783.7 ms #78180  86 G24_SUMMARY held=1 port-owned=1 s=138
+    234030.0 ms #78181  86 G24_SUMMARY held=1 port-owned=1 s=139
+    235140.1 ms #78182  86 G24_SUMMARY held=1 port-owned=1 s=140
+    236297.3 ms #78183  86 G24_SUMMARY held=1 port-owned=1 s=141
+    237417.8 ms #78184  86 G24_SUMMARY held=1 port-owned=1 s=142
+    238608.9 ms #78185  86 G24_SUMMARY held=1 port-owned=1 s=143
+    239721.5 ms #78186  86 G24_SUMMARY held=1 port-owned=1 s=144
+    240887.1 ms #78187  86 G24_SUMMARY held=1 port-owned=1 s=145
+    241985.6 ms #78188  86 G24_SUMMARY held=1 port-owned=1 s=146
+    243132.4 ms #78189  86 G24_SUMMARY held=1 port-owned=1 s=147
+    244375.6 ms #78190  86 G24_SUMMARY held=1 port-owned=1 s=148
+    245574.3 ms #78191  86 G24_SUMMARY held=1 port-owned=1 s=149
+    246869.8 ms #78192  86 G24_SUMMARY held=1 port-owned=1 s=150
+    248006.6 ms #78193  86 G24_SUMMARY held=1 port-owned=1 s=151
+    249160.7 ms #78194  86 G24_SUMMARY held=1 port-owned=1 s=152
+    250272.8 ms #78195  86 G24_SUMMARY held=1 port-owned=1 s=153
+    251365.8 ms #78196  86 G24_SUMMARY held=1 port-owned=1 s=154
+    252728.9 ms #78197  86 G24_SUMMARY held=1 port-owned=1 s=155
+    253820.2 ms #78198  86 G24_SUMMARY held=1 port-owned=1 s=156
+    254936.3 ms #78199  86 G24_SUMMARY held=1 port-owned=1 s=157
+    256072.2 ms #78200  86 G24_SUMMARY held=1 port-owned=1 s=158
+    257188.1 ms #78201  86 G24_SUMMARY held=1 port-owned=1 s=159
+    258309.0 ms #78202  86 G24_SUMMARY held=1 port-owned=1 s=160
+    259447.9 ms #78203  86 G24_SUMMARY held=1 port-owned=1 s=161
+    260534.0 ms #78204  86 G24_SUMMARY held=1 port-owned=1 s=162
+    261704.6 ms #78205  86 G24_SUMMARY held=1 port-owned=1 s=163
+    262827.9 ms #78206  86 G24_SUMMARY held=1 port-owned=1 s=164
+    263980.9 ms #78207  86 G24_SUMMARY held=1 port-owned=1 s=165
+    265104.8 ms #78208  86 G24_SUMMARY held=1 port-owned=1 s=166
+    266290.7 ms #78209  86 G24_SUMMARY held=1 port-owned=1 s=167
+    267493.8 ms #78210  86 G24_SUMMARY held=1 port-owned=1 s=168
+    268600.6 ms #78211  86 G24_SUMMARY held=1 port-owned=1 s=169
+    269755.2 ms #78212  86 G24_SUMMARY held=1 port-owned=1 s=170
+    270863.1 ms #78213  86 G24_SUMMARY held=1 port-owned=1 s=171
+    271987.7 ms #78214  86 G24_SUMMARY held=1 port-owned=1 s=172
+    273121.9 ms #78215  86 G24_SUMMARY held=1 port-owned=1 s=173
+    274318.6 ms #78216  86 G24_SUMMARY held=1 port-owned=1 s=174
+    275420.2 ms #78217  86 G24_SUMMARY held=1 port-owned=1 s=175
+    276515.0 ms #78218  86 G24_SUMMARY held=1 port-owned=1 s=176
+    277635.5 ms #78219  86 G24_SUMMARY held=1 port-owned=1 s=177
+    278722.4 ms #78220  86 G24_SUMMARY held=1 port-owned=1 s=178
+    279879.4 ms #78221  86 G24_SUMMARY held=1 port-owned=1 s=179
+    281027.1 ms #78222  86 G24_SUMMARY held=1 port-owned=1 s=180
+    282118.1 ms #78223  86 G24_SUMMARY held=1 port-owned=1 s=181
+    283199.0 ms #78224  86 G24_SUMMARY held=1 port-owned=1 s=182
+    284311.9 ms #78225  86 G24_SUMMARY held=1 port-owned=1 s=183
+    285423.4 ms #78226  86 G24_SUMMARY held=1 port-owned=1 s=184
+    286605.1 ms #78227  86 G24_SUMMARY held=1 port-owned=1 s=185
+    287710.2 ms #78228  86 G24_SUMMARY held=1 port-owned=1 s=186
+    288832.0 ms #78229  86 G24_SUMMARY held=1 port-owned=1 s=187
+    289969.9 ms #78230  86 G24_SUMMARY held=1 port-owned=1 s=188
+    291080.5 ms #78231  86 G24_SUMMARY held=1 port-owned=1 s=189
+    292235.6 ms #78232  86 G24_SUMMARY held=1 port-owned=1 s=190
+    293390.2 ms #78233  86 G24_SUMMARY held=1 port-owned=1 s=191
+    294481.6 ms #78234  86 G24_SUMMARY held=1 port-owned=1 s=192
+    295790.7 ms #78235  86 G24_SUMMARY held=1 port-owned=1 s=193
+    296890.5 ms #78236  86 G24_SUMMARY held=1 port-owned=1 s=194
+    297989.6 ms #78237  86 G24_SUMMARY held=1 port-owned=1 s=195
+    299136.0 ms #78238  86 G24_SUMMARY held=1 port-owned=1 s=196
+    300258.5 ms #78239  86 G24_SUMMARY held=1 port-owned=1 s=197
+    301363.8 ms #78240  86 G24_SUMMARY held=1 port-owned=1 s=198
+    302484.7 ms #78241  86 G24_SUMMARY held=1 port-owned=1 s=199
+    303579.4 ms #78242  86 G24_SUMMARY held=1 port-owned=1 s=200
+    304761.6 ms #78243  86 G24_SUMMARY held=1 port-owned=1 s=201
+    305852.6 ms #78244  86 G24_SUMMARY held=1 port-owned=1 s=202
+    307057.3 ms #78245  86 G24_SUMMARY held=1 port-owned=1 s=203
+    308197.8 ms #78246  86 G24_SUMMARY held=1 port-owned=1 s=204
+    309308.9 ms #78247  86 G24_SUMMARY held=1 port-owned=1 s=205
+    310413.1 ms #78248  86 G24_SUMMARY held=1 port-owned=1 s=206
+    311513.5 ms #78249  86 G24_SUMMARY held=1 port-owned=1 s=207
+    312666.4 ms #78250  86 G24_SUMMARY held=1 port-owned=1 s=208
+    313812.6 ms #78251  86 G24_SUMMARY held=1 port-owned=1 s=209
+    314972.7 ms #78252  86 G24_SUMMARY held=1 port-owned=1 s=210
+    316190.9 ms #78253  86 G24_SUMMARY held=1 port-owned=1 s=211
+    317293.7 ms #78254  86 G24_SUMMARY held=1 port-owned=1 s=212
+    318385.0 ms #78255  86 G24_SUMMARY held=1 port-owned=1 s=213
+    319530.7 ms #78256  86 G24_SUMMARY held=1 port-owned=1 s=214
+    320633.7 ms #78257  86 G24_SUMMARY held=1 port-owned=1 s=215
+    321785.9 ms #78258  86 G24_SUMMARY held=1 port-owned=1 s=216
+    322942.6 ms #78259  86 G24_SUMMARY held=1 port-owned=1 s=217
+    324081.0 ms #78260  86 G24_SUMMARY held=1 port-owned=1 s=218
+    325173.4 ms #78261  86 G24_SUMMARY held=1 port-owned=1 s=219
+    326261.0 ms #78262  86 G24_SUMMARY held=1 port-owned=1 s=220
+    327399.1 ms #78263  86 G24_SUMMARY held=1 port-owned=1 s=221
+    328505.4 ms #78264  86 G24_SUMMARY held=1 port-owned=1 s=222
+    329699.5 ms #78265  86 G24_SUMMARY held=1 port-owned=1 s=223
+    330861.5 ms #78266  86 G24_SUMMARY held=1 port-owned=1 s=224
+    332023.2 ms #78267  86 G24_SUMMARY held=1 port-owned=1 s=225
+    333129.5 ms #78268  86 G24_SUMMARY held=1 port-owned=1 s=226
+    334407.2 ms #78269  86 G24_SUMMARY held=1 port-owned=1 s=227
+    335528.4 ms #78270  86 G24_SUMMARY held=1 port-owned=1 s=228
+    336637.8 ms #78271  86 G24_SUMMARY held=1 port-owned=1 s=229
+    337723.6 ms #78272  86 G24_SUMMARY held=1 port-owned=1 s=230
+    338862.4 ms #78273  86 G24_SUMMARY held=1 port-owned=1 s=231
+    339982.1 ms #78274  86 G24_SUMMARY held=1 port-owned=1 s=232
+    341120.9 ms #78275  86 G24_SUMMARY held=1 port-owned=1 s=233
+    342244.5 ms #78276  86 G24_SUMMARY held=1 port-owned=1 s=234
+    343347.4 ms #78277  86 G24_SUMMARY held=1 port-owned=1 s=235
+    344502.3 ms #78278  86 G24_SUMMARY held=1 port-owned=1 s=236
+    345625.2 ms #78279  86 G24_SUMMARY held=1 port-owned=1 s=237
+    346708.0 ms #78280  86 G24_SUMMARY held=1 port-owned=1 s=238
+    347811.9 ms #78281  86 G24_SUMMARY held=1 port-owned=1 s=239
+    348915.0 ms #78282  86 G24_SUMMARY held=1 port-owned=1 s=240
+    350008.0 ms #78283  86 G24_SUMMARY held=1 port-owned=1 s=241
+    351113.2 ms #78284  86 G24_SUMMARY held=1 port-owned=1 s=242
+    352217.8 ms #78285  86 G24_SUMMARY held=1 port-owned=1 s=243
+    353338.5 ms #78286  86 G24_SUMMARY held=1 port-owned=1 s=244
+    354467.2 ms #78287  86 G24_SUMMARY held=1 port-owned=1 s=245
+    355561.2 ms #78288  86 G24_SUMMARY held=1 port-owned=1 s=246
+    356664.8 ms #78289  86 G24_SUMMARY held=1 port-owned=1 s=247
+    357799.7 ms #78290  86 G24_SUMMARY held=1 port-owned=1 s=248
+    358901.1 ms #78291  86 G24_SUMMARY held=1 port-owned=1 s=249
+    360020.2 ms #78292  86 G24_SUMMARY held=1 port-owned=1 s=250
+    361177.7 ms #78293  86 G24_SUMMARY held=1 port-owned=1 s=251
+    362301.8 ms #78294  86 G24_SUMMARY held=1 port-owned=1 s=252
+    363420.2 ms #78295  86 G24_SUMMARY held=1 port-owned=1 s=253
+    364685.4 ms #78296  86 G24_SUMMARY held=1 port-owned=1 s=254
+    365819.4 ms #78297  86 G24_SUMMARY held=1 port-owned=1 s=255
+    366925.2 ms #78298  86 G24_SUMMARY held=1 port-owned=1 s=256
+    368062.7 ms #78299  86 G24_SUMMARY held=1 port-owned=1 s=257
+    369200.9 ms #78300  86 G24_SUMMARY held=1 port-owned=1 s=258
+    370396.3 ms #78301  86 G24_SUMMARY held=1 port-owned=1 s=259
+    371489.5 ms #78302  86 G24_SUMMARY held=1 port-owned=1 s=260
+    372658.2 ms #78303  86 G24_SUMMARY held=1 port-owned=1 s=261
+    373746.4 ms #78304  86 G24_SUMMARY held=1 port-owned=1 s=262
+    374896.4 ms #78305  86 G24_SUMMARY held=1 port-owned=1 s=263
+    376021.2 ms #78306  86 G24_SUMMARY held=1 port-owned=1 s=264
+    377119.6 ms #78307  86 G24_SUMMARY held=1 port-owned=1 s=265
+    378202.8 ms #78308  86 G24_SUMMARY held=1 port-owned=1 s=266
+    379313.1 ms #78309  86 G24_SUMMARY held=1 port-owned=1 s=267
+    380424.2 ms #78310  86 G24_SUMMARY held=1 port-owned=1 s=268
+    381541.8 ms #78311  86 G24_SUMMARY held=1 port-owned=1 s=269
+    382665.5 ms #78312  86 G24_SUMMARY held=1 port-owned=1 s=270
+    383758.2 ms #78313  86 G24_SUMMARY held=1 port-owned=1 s=271
+    385007.4 ms #78314  86 G24_SUMMARY held=1 port-owned=1 s=272
+    386115.5 ms #78315  86 G24_SUMMARY held=1 port-owned=1 s=273
+    387269.3 ms #78316  86 G24_SUMMARY held=1 port-owned=1 s=274
+    388397.4 ms #78317  86 G24_SUMMARY held=1 port-owned=1 s=275
+    389538.1 ms #78318  86 G24_SUMMARY held=1 port-owned=1 s=276
+    390648.0 ms #78319  86 G24_SUMMARY held=1 port-owned=1 s=277
+    391728.9 ms #78320  86 G24_SUMMARY held=1 port-owned=1 s=278
+    392849.6 ms #78321  86 G24_SUMMARY held=1 port-owned=1 s=279
+    393968.8 ms #78322  86 G24_SUMMARY held=1 port-owned=1 s=280
+    395205.2 ms #78323  86 G24_SUMMARY held=1 port-owned=1 s=281
+    396310.2 ms #78324  86 G24_SUMMARY held=1 port-owned=1 s=282
+    397393.0 ms #78325  86 G24_SUMMARY held=1 port-owned=1 s=283
+    398483.6 ms #78326  86 G24_SUMMARY held=1 port-owned=1 s=284
+    399620.0 ms #78327  86 G24_SUMMARY held=1 port-owned=1 s=285
+    400712.3 ms #78328  86 G24_SUMMARY held=1 port-owned=1 s=286
+    401808.7 ms #78329  86 G24_SUMMARY held=1 port-owned=1 s=287
+    402942.3 ms #78330  86 G24_SUMMARY held=1 port-owned=1 s=288
+    404038.3 ms #78331  86 G24_SUMMARY held=1 port-owned=1 s=289
+    405151.5 ms #78332  86 G24_SUMMARY held=1 port-owned=1 s=290
+    406277.0 ms #78333  86 G24_SUMMARY held=1 port-owned=1 s=291
+    407460.3 ms #78334  86 G24_SUMMARY held=1 port-owned=1 s=292
+    408631.8 ms #78335  86 G24_SUMMARY held=1 port-owned=1 s=293
+    409720.7 ms #78336  86 G24_SUMMARY held=1 port-owned=1 s=294
+    410845.9 ms #78337  86 G24_SUMMARY held=1 port-owned=1 s=295
+    411956.5 ms #78338  86 G24_SUMMARY held=1 port-owned=1 s=296
+    413049.0 ms #78339  86 G24_SUMMARY held=1 port-owned=1 s=297
+    414137.4 ms #78340  86 G24_SUMMARY held=1 port-owned=1 s=298
+    415291.1 ms #78341  86 G24_SUMMARY held=1 port-owned=1 s=299
+    416423.2 ms #78342  86 G24_SUMMARY held=1 port-owned=1 s=300
+    417533.5 ms #78343  86 G24_SUMMARY held=1 port-owned=1 s=301
+    418659.9 ms #78344  86 G24_SUMMARY held=1 port-owned=1 s=302
+    419768.0 ms #78345  86 G24_SUMMARY held=1 port-owned=1 s=303
+    420865.1 ms #78346  86 G24_SUMMARY held=1 port-owned=1 s=304
+    421970.9 ms #78347  86 G24_SUMMARY held=1 port-owned=1 s=305
+    423126.7 ms #78348  86 G24_SUMMARY held=1 port-owned=1 s=306
+    424215.8 ms #78349  86 G24_SUMMARY held=1 port-owned=1 s=307
+    425324.7 ms #78350  86 G24_SUMMARY held=1 port-owned=1 s=308
+    426417.6 ms #78351  86 G24_SUMMARY held=1 port-owned=1 s=309
+    427526.3 ms #78352  86 G24_SUMMARY held=1 port-owned=1 s=310
+    428606.2 ms #78353  86 G24_SUMMARY held=1 port-owned=1 s=311
+    429727.6 ms #78354  86 G24_SUMMARY held=1 port-owned=1 s=312
+    430827.3 ms #78355  86 G24_SUMMARY held=1 port-owned=1 s=313
+    431921.4 ms #78356  86 G24_SUMMARY held=1 port-owned=1 s=314
+    433011.2 ms #78357  86 G24_SUMMARY held=1 port-owned=1 s=315
+    434150.7 ms #78358  86 G24_SUMMARY held=1 port-owned=1 s=316
+    435273.7 ms #78359  86 G24_SUMMARY held=1 port-owned=1 s=317
+    436413.6 ms #78360  86 G24_SUMMARY held=1 port-owned=1 s=318
+    437506.1 ms #78361  86 G24_SUMMARY held=1 port-owned=1 s=319
+    438613.1 ms #78362  86 G24_SUMMARY held=1 port-owned=1 s=320
+    439720.7 ms #78363  86 G24_SUMMARY held=1 port-owned=1 s=321
+    440885.0 ms #78364  86 G24_SUMMARY held=1 port-owned=1 s=322
+    442034.3 ms #78365  86 G24_SUMMARY held=1 port-owned=1 s=323
+    443115.0 ms #78366  86 G24_SUMMARY held=1 port-owned=1 s=324
+    444282.9 ms #78367  86 G24_SUMMARY held=1 port-owned=1 s=325
+    445389.5 ms #78368  86 G24_SUMMARY held=1 port-owned=1 s=326
+    446471.3 ms #78369  86 G24_SUMMARY held=1 port-owned=1 s=327
+    447566.9 ms #78370  86 G24_SUMMARY held=1 port-owned=1 s=328
+    448676.3 ms #78371  86 G24_SUMMARY held=1 port-owned=1 s=329
+    449796.2 ms #78372  86 G24_SUMMARY held=1 port-owned=1 s=330
+    450938.1 ms #78373  86 G24_SUMMARY held=1 port-owned=1 s=331
+    452032.2 ms #78374  86 G24_SUMMARY held=1 port-owned=1 s=332
+    453149.2 ms #78375  86 G24_SUMMARY held=1 port-owned=1 s=333
+    454264.0 ms #78376  86 G24_SUMMARY held=1 port-owned=1 s=334
+    455345.4 ms #78377  86 G24_SUMMARY held=1 port-owned=1 s=335
+    456247.2 ms #78378  84 G24_HELD_DONE 0xfd280e
+    456248.1 ms #78379  88 G24_RESET_ACK 0x10d1e
+            (1 read/write stages)
+    459989.5 ms #78381  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    459991.2 ms #78383  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    459992.9 ms #78385  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    459994.5 ms #78387  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    459996.0 ms #78389  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    459998.1 ms #78391  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460000.3 ms #78393  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460003.2 ms #78395  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460005.1 ms #78397  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460008.0 ms #78399  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460009.9 ms #78401  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460011.8 ms #78403  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460014.7 ms #78405  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460016.6 ms #78407  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460019.1 ms #78409  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460020.7 ms #78411  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460022.4 ms #78413  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460025.4 ms #78415  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460028.2 ms #78417  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460030.6 ms #78419  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460033.4 ms #78421  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460035.5 ms #78423  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460037.1 ms #78425  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460039.2 ms #78427  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460041.8 ms #78429  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460043.3 ms #78431  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460045.3 ms #78433  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460047.8 ms #78435  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460050.1 ms #78437  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460052.0 ms #78439  8d G24_FAILED_IO 0x1042800
+            (1 read/write stages)
+    460053.9 ms #78441  8d G24_FAILED_IO 0x1042800
+            (32 read/write stages)
+    460088.5 ms #78474  8d G24_FAILED_IO 0x1042800
+            (7 read/write stages)

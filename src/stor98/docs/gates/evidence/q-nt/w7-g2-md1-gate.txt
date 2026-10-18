@@ -1,0 +1,33 @@
+            (588 read/write stages)
+     38770.7 ms #4240   86 G24_SUMMARY held=3 port-owned=3 s=65535
+                  .. usb4_h_hold tb0: hold token 2328 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_hold tb0: hold token 2329 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_hold tb0: hold token 2330 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_hold tb0: hold token 2331 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_hold tb0: hold token 2332 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_hold tb0: hold token 2333 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_hold tb0: hold token 2334 deadline_ms=-1 release=manual tag=h
+                  .. usb4_tp_gate tb0: access gate closed=1 dma_open=0 host_ns=1792022639349035000 vm_ns=976856466100
+                  .. usb4_h_hold tb0: hold token 2335 deadline_ms=-1 release=manual tag=h
+            (419 read/write stages)
+     39316.5 ms #4660   81 G24_GONE_ENTER held=8 src=1 old=0
+     40507.5 ms #4661   86 G24_SUMMARY held=8 port-owned=8 s=1
+     41644.1 ms #4662   86 G24_SUMMARY held=8 port-owned=8 s=2
+     47848.9 ms #4663   86 G24_SUMMARY held=8 port-owned=8 s=3
+     50896.6 ms #4664   86 G24_SUMMARY held=8 port-owned=8 s=4
+     52013.8 ms #4665   86 G24_SUMMARY held=8 port-owned=8 s=5
+     52014.6 ms #4666   84 G24_HELD_DONE 0xf62808
+     52015.3 ms #4667   84 G24_HELD_DONE 0xf72808
+     52016.1 ms #4668   84 G24_HELD_DONE 0xf82808
+     52017.0 ms #4669   84 G24_HELD_DONE 0xf92808
+     52017.8 ms #4670   84 G24_HELD_DONE 0xfa2808
+     52019.1 ms #4671   84 G24_HELD_DONE 0xfb2808
+     52020.7 ms #4672   84 G24_HELD_DONE 0xfc2808
+     52022.0 ms #4673   84 G24_HELD_DONE 0xfd2808
+     52022.8 ms #4674   83 G24_DEADLINE done=8 retired=0 count=1
+     52023.8 ms #4675   46 QUARANTINE 0xff
+     52024.5 ms #4676   8a G24_BUS_CHANGE 0x2
+     52025.9 ms #4677   10 STARTIO EXEC:INQUIRY st=RUNNING
+     52026.9 ms #4678   82 G24_FASTFAIL 0x8021200
+     53105.6 ms #4679   10 STARTIO EXEC:INQUIRY st=RUNNING
+     60481.5 ms #4680   82 G24_FASTFAIL 0x8021200

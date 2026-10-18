@@ -1,0 +1,28 @@
+=== hostile 2
+=== hostile 7
+[nvme98 000006fdcf793e90 01571] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=E4186000 size=272 cookie=FBD79B91
+[nvme98 000006fdcf88fede 01572] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=FBD79B91
+[nvme98 000006fdcf90701a 01573] q9 page E4186000 not present (pte 00158000)
+[nvme98 000006feb5b552f6 01636] q9 bring-up complete in 413 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x5 host_ns=1792056
+=== hostile 9
+[nvme98 000007269229a78e 01677] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C18A6610 size=272 cookie=FBD79B91
+[nvme98 00000726924406f6 01678] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=FBD79B91
+[nvme98 000007269257ff08 01679] q9 bind: 2 entries name bus 1 slot 1: duplicate, table rejected (no channel)
+[nvme98 00000727749c8bcc 01741] q9 bring-up complete in 414 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x9 host_ns=1792056
+=== hostile 10
+[nvme98 0000074dc72c3597 01784] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C18A6610 size=272 cookie=FBD79B91
+[nvme98 0000074dc73d3031 01785] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=FBD79B91
+[nvme98 0000074dc7469fe5 01786] q9 bind: entry 0 generation 11 flags 00000003, removal sequence at binding 8, ack 00000801
+[nvme98 0000074dc7550139 01787] q9 rendezvous: table C18A6610 accepted, entry C18A6620 (1 ms)
+[nvme98 0000074e1389f610 01849] q9 bring-up complete in 413 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+[nvme98 00000758452886ee 01878] q9 entry: illegal entry snapshot (R5e) (reason 03): no further evidence or acknowledgement from this instance
+rendezvous stage arg=0xb0100 host_ns=179
+=== hostile 0
+[nvme98 000007717c4b1801 01899] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C18A6610 size=272 cookie=FBD79B91
+[nvme98 000007717c59de59 01900] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=FBD79B91
+[nvme98 000007717c61e53b 01901] q9 bind: entry 0 generation 12 flags 00000003, removal sequence at binding 8, ack 00000801
+[nvme98 000007717c6ec39b 01902] q9 rendezvous: table C18A6610 accepted, entry C18A6620 (1 ms)
+[nvme98 00000771c817a45d 01963] q9 bring-up complete in 409 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0xc0100 host_ns=179

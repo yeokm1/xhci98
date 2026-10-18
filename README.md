@@ -262,7 +262,7 @@ Run `INSTALL.BAT` (see [above](#install-with-installbat)). By hand: Update Drive
 
 ## Tuning
 
-Each value is a `DWORD` in a driver (software) key; restart Windows after a change (for `XhciCm*`, disabling and enabling the controller also works). The install writes most values and an update keeps any you changed. `INSTALL /set Name=Value` sets one.
+Each value is a `DWORD` in a driver (software) key, and from `3.1.0.0` also in the machine-wide key `HKLM\System\CurrentControlSet\Services\USB`, which wins for every controller when the value is there ([tuning](docs/using/tuning.md#where-the-values-are-and-every-value)); restart Windows after a change (for `XhciCm*`, disabling and enabling the controller also works). The install writes most values and an update keeps any you changed. `INSTALL /set Name=Value` sets one.
 
 | Driver | Windows | Key (`NNNN` is the subkey whose `DriverDesc` names the controller) |
 |---|---|---|
@@ -346,6 +346,8 @@ The drivers are C89 (no C++ or CRT), built on Windows 11 x64. The toolchain unpa
    scripts\build-driver.cmd both -amd64
    ```
 
+   Stor98, the bundled NVMe driver, builds separately with `src\stor98\scripts\build.cmd` (it also needs the Windows 98 DDK's `SCSI.H` and `SRB.H` in `tools\w98ddk\inc`; [src/stor98/docs/BUILD.md](src/stor98/docs/BUILD.md)), or everything at once with `scripts\build-all.cmd`.
+
 4. The tools build with their own `build.cmd` in `xhciqual\` (needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM`), `xhcicln\`, `xhciinst\` and `xhcitr\`.
 5. Install media: `scripts\package\make-package.ps1` (to `out\`); a release cut: `scripts\package\make-release.ps1`. Never hand-copy a `.sys` without its INF.
 6. Test in QEMU with `qemu-xhci` (Win98 SE, Win2000 SP4 and an SMP Win2000 guest; `usb-storage` and `usb-uas` for SuperSpeed and UAS).
@@ -358,6 +360,7 @@ The version lives in [src/xhci_version.h](src/xhci_version.h). [build-and-test.m
 src/            xhci98.sys (C), its two INFs and DDK build files
   uas/          xhciuas.sys, the UAS class driver
   cm/           xhcicm.sys, the Thunderbolt and USB4 driver
+  stor98/       Stor98, the bundled NVMe driver (its own project, BSD-3-Clause)
 test/           Host-side unit tests (test\run-host-tests.cmd)
 scripts/        Build wrapper, setup helpers, gates, vm-matrix/
 xhciqual/       DOS hardware-qualification tool (Open Watcom)
@@ -402,7 +405,7 @@ None of these PDFs is tracked here; fetch your own into the git-ignored `docs/re
 
 This project's own source is licensed under the GNU General Public License, version 2 ([LICENSE](LICENSE)), `GPL-2.0-only`.
 
-The repository tracks no third-party binary on its own, although the tool executables it tracks under `releases/` carry statically linked third-party runtimes:
+Apart from Stor98's released builds under `src/stor98/releases/` (below), the repository tracks no third-party binary on its own, although the tool executables it tracks under `releases/` carry statically linked third-party runtimes:
 
 - `xhci98.sys` and `xhciuas.sys` link no runtime or extender. The 32-bit builds link no third-party object either; the 64-bit builds, linked by WDK 7.1, carry that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls.
 - Some files of `xhcicm.sys`'s source, under `src/cm/`, are adapted from the `usb4-emu` project (some lifted from its `tools/usb4cm` under its earlier MIT licence) and from Linux's `drivers/thunderbolt`, and keep their copyright lines and licence notices. The [legal and provenance record](docs/contributing/legal-provenance.md), section 2a, lists each file.
@@ -412,7 +415,7 @@ The repository tracks no third-party binary on its own, although the tool execut
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
 
-The release download's `release-x86\` and `release-x64\` carry Stor98, a released build of a separate project under its own licence, unchanged; its `LICENSE` and `NOTICE.TXT` ship beside it as `stor98-LICENSE.txt` and `stor98-NOTICE.txt`. The repository tracks none of its files.
+The release download's `release-x86\` and `release-x64\` carry Stor98, a released build of a separate project under its own licence, unchanged; its `LICENSE` and `NOTICE.TXT` ship beside it as `stor98-LICENSE.txt` and `stor98-NOTICE.txt`. Since 2026-10-19 Stor98 itself - its source and its released builds - is in this repository as [src/stor98/](src/stor98/), under its own licence ([src/stor98/LICENSE](src/stor98/LICENSE), BSD-3-Clause) with its [NOTICE](src/stor98/NOTICE) recording where its code came from.
 
 The release download carries no Microsoft file. `usbd.sys` and `usbui.dll` are the OS's own, copied by Windows Setup from its own install source. On Windows 98, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as a filter on the UAS device; the file is named, never shipped, and NUSB's mass-storage install places it.
 

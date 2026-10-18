@@ -1,0 +1,87 @@
+[nvme98 0000007f41abf912 00000] dbg: nvme2k: DriverEntry called
+[nvme98 0000007f41dab356 00001] marker tsc=0000007F41D96DCA
+[nvme98 0000007f41fc57ae 00002] DriverEntry DriverObject=C196EC70 Argument2=C032E211
+[nvme98 0000007f427348f5 00003] dbg: nvme2k: HwFindAdapter:E42DD08C called with HwContext - Bus=0 Slot=0
+[nvme98 0000007f42a27869 00004] HwFindAdapter devext=E42DD08C ctx=E464EC10 bus=0 slot=0 cfg.bus=1 cfg.slot=1 ranges=1 range0=FE800000 len=00004000 irq=10 vec=0 arg=(null)
+[nvme98 0000007f432c68d7 00005] dbg: nvme2k: HwFindAdapter - bus 1 slot 0: VID=E590 DID=E464 Class=C2A031
+[nvme98 0000007f4355d253 00006] dbg: nvme2k: HwFindAdapter - not an NVMe device
+[nvme98 0000007f4385f7a3 00007] dbg: nvme2k: HwFindAdapter - bus 1 slot 1: VID=1B36 DID=0010 Class=010802
+[nvme98 0000007f43bced6e 00008] dbg: nvme2k: HwFindAdapter - NT4: store HwContext to resume scanning
+[nvme98 0000007f43ccbede 00009] dbg: nvme2k: HwFoundAdapter - found NVMe device VID=1B36 DID=0010 at bus 1 slot 1
+[nvme98 0000007f440d9fbc 00010] dbg: nvme2k: HwFoundAdapter - PCI Command Register = 0006 (IntDis=0) Old
+[nvme98 0000007f442c5f38 00011] dbg: nvme2k: HwFoundAdapter - PCI Command Register = 0406 (IntDis=1)
+[nvme98 0000007f44486d2c 00012] dbg: nvme2k: HwFoundAdapter - PCI Interrupt Line=10 Pin=1
+[nvme98 0000007f4452641c 00013] dbg: nvme2k: HwFoundAdapter - ConfigInfo BEFORE: BusInterruptLevel=10 Vector=0 Mode=1
+[nvme98 0000007f445f60f4 00014] dbg: nvme2k: HwFoundAdapter - Set interrupt from PCI config: Level=10
+[nvme98 0000007f4490e8c2 00015] dbg: nvme2k: HwFoundAdapter - BAR0 base=0x00000000FE800000 size=0x00004000 Memory
+[nvme98 0000007f44a85dcc 00016] dbg: nvme2k: HwFoundAdapter - Controller Registers at VA E466F000
+[nvme98 0000007f44b154ae 00017] dbg: nvme2k: HwFoundAdapter - Controller Registers PTE FE800A07
+[nvme98 0000007f44d6a51a 00018] dbg: nvme2k: HwFoundAdapter - Uncached Memory PTE 00FCB267
+[nvme98 0000007f44e7518a 00019] dbg: nvme2k: HwFoundAdapter - allocated 65536 bytes of uncached memory at virt=E4693000 phys=0000000000FCB000
+[nvme98 0000007f44f4b1e0 00020] dbg: nvme2k: HwFoundAdapter - Uncached Memory PTE 00FCB27F
+[nvme98 0000007f44fd7e56 00021] dbg: nvme2k: HwFoundAdapter - success, returning SP_RETURN_FOUND
+[nvme98 0000007f450ac0ca 00022] HwFindAdapter found inst=1 bus=1 slot=1 rc=1 regs=E466F000 uncached=E4693000 phys=00FCB000
+[nvme98 0000007f451e8894 00023] dbg: nvme2k: HwAdapterState called - SaveState=255
+[nvme98 0000007f452a1754 00024] marker tsc=0000007F4529C3E4
+[nvme98 0000007f453467cc 00025] HwAdapterState inst=1 SaveState=255 context=C196EDA8 depth=0 admin=0 CSTS=00000000
+[nvme98 0000007f4541282c 00026] summary(HwAdapterState) inst=1 srbs=0 rw=0 tagged=0 untagged=0 maxdepth=0 depth=0 nontagged=00000000 nullbuf=0 lowbuf=0 completions=0 timer=0 gone=0 fastfail=0
+[nvme98 0000007f4552eff8 00027] summary(HwAdapterState) tags 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[nvme98 0000007f456041e4 00028] dbg: nvme2k: HwAdapterState - saving previous state
+[nvme98 0000007f456815ae 00029] dbg: nvme2k: HwAdapterState - unimplelemented
+[nvme98 0000007f456fc722 00030] dbg: nvme2k: HwAdapterState - exit
+[nvme98 0000007f45c1198f 00031] dbg: nvme2k: HwInitialize called
+[nvme98 0000007f45cdca59 00032] HwInitialize inst=1 devext=E42DD08C regs=E466F000 CC=00000000 CSTS=00000000
+[nvme98 0000007f45db3de7 00033] dbg: nvme2k: HwInitialize - masking all interrupts
+[nvme98 0000007f45f2a910 00034] dbg: nvme2k: HwInitialize - CAP=004008200F0107FF VS=00010400 MQES=2048 DBS=4
+[nvme98 0000007f46003d14 00035] dbg: nvme2k: HwInitialize - controller state before reset: CC=00000000 CSTS=00000000
+[nvme98 0000007f460f146a 00036] dbg: nvme2k: HwInitialize - clearing admin queue registers
+[nvme98 0000007f461d99d6 00037] dbg: nvme2k: HwInitialize - disabling controller
+[nvme98 0000007f46298746 00038] dbg: nvme2k: HwInitialize - controller disabled successfully
+[nvme98 0000007f4634627e 00039] dbg: nvme2k: HwInitialize - controller is now disabled and clean
+[nvme98 0000007f463e2188 00040] dbg: nvme2k: HwInitialize - re-masking interrupts after controller reset (QEMU clears INTMS during reset)
+[nvme98 0000007f46537150 00041] dbg: nvme2k: AllocateUncachedMemory - allocated 4096 bytes at offset 0 (virt=E4693000 phys=0000000000FCB000)
+[nvme98 0000007f4662f544 00042] dbg: nvme2k: AllocateUncachedMemory - allocated 4096 bytes at offset 4096 (virt=E4694000 phys=0000000000FCC000)
+[nvme98 0000007f4672e3fa 00043] dbg: nvme2k: AllocateUncachedMemory - allocated 40960 bytes at offset 8192 (virt=E4695000 phys=0000000000FCD000)
+[nvme98 0000007f4682c194 00044] dbg: nvme2k: AllocateUncachedMemory - allocated 1024 bytes at offset 49152 (virt=E469F000 phys=0000000000FD7000)
+[nvme98 0000007f46916c26 00045] dbg: nvme2k: AllocateUncachedMemory - allocated 1024 bytes at offset 53248 (virt=E46A0000 phys=0000000000FD8000)
+[nvme98 0000007f46a0c860 00046] dbg: nvme2k: HwInitialize - uncached memory usage: 54272 / 65536 bytes
+[nvme98 0000007f46c0dc0e 00047] dbg: nvme2k: HwInitialize - controller is ready
+[nvme98 0000007f46c9f528 00048] dbg: nvme2k: HwInitialize - keeping interrupts masked, will use polling during init
+[nvme98 0000007f46d913fa 00049] dbg: nvme2k: PRP list pool initialized at VA=E4695000 PA=0000000000FCD000 (10 pages)
+[nvme98 0000007f46f52931 00050] dbg: nvme2k: HwInitialize - polling for init completion...
+[nvme98 0000007f47060de1 00051] dbg: nvme2k: I/O CQ created successfully - DW0=00000000 SQID=0
+[nvme98 0000007f4718e0ee 00052] dbg: nvme2k: I/O SQ created successfully - DW0=00000000 SQID=0
+[nvme98 0000007f47313232 00053] dbg: nvme2k: Identified controller - Model: QEMU NVMe Ctrl                           SN: USB4EMU01            FW: 11.1.2   NN: 256
+[nvme98 0000007f474e6253 00054] dbg: nvme2k: Identified namespace - blocks=(2097152 + 0 * 4Gi) blocksize=512 bytes
+[nvme98 0000007f475c777b 00055] dbg: nvme2k: Init complete - driver ready for I/O
+[nvme98 0000007f47bcf185 00056] dbg: nvme2k: Enabled interrupts at PCI level, Command=0006
+[nvme98 0000007f47d274fb 00057] dbg: nvme2k: Unmasked interrupts at NVMe controller level (INTMC=0x00000001)
+[nvme98 0000007f47e92507 00058] dbg: nvme2k: HwInitialize finished successfully - interrupts enabled
+[nvme98 0000007f47f5fde5 00059] HwInitialize inst=1 returns TRUE, InitComplete=1
+[nvme98 0000007f485e43eb 00060] startio func=00 op=12 tag=01 qa=00 flags=0001006C buf=C2F3CB0C len=96 timeout=30 depth=0
+[nvme98 0000007f487451c7 00061] config probe in HwStartIo: ScsiPortGetBusData(bus 1 slot 1, 8) = 8, id=00101B36 cmdsts=00100006
+[nvme98 0000007f490aecb3 00062] dbg: nvme2k: DriverEntry exiting with status 0x00000000
+[nvme98 0000007f49829f9e 00063] startio func=00 op=00 tag=04 qa=00 flags=00010000 buf=00000000 len=0 timeout=3343904768 depth=0
+[nvme98 0000007f499caa10 00064] startio func=00 op=25 tag=05 qa=00 flags=00010040 buf=E2F2D054 len=8 timeout=3343904768 depth=0
+[nvme98 0000007f49dcb1c8 00065] startio rw op=28 tag=06 qa=00 flags=00010240 buf=C1941DB8 len=512 depth=0 cdb=000000000001
+[nvme98 0000007f4a821a32 00066] complete cid=8000 nvme=0000 srb=C2F3CE58 status=01 op=28 tag=06 depth=1
+[nvme98 0000007f4acdab64 00067] startio rw op=28 tag=07 qa=00 flags=00010240 buf=C1941DB8 len=512 depth=0 cdb=0000003F0001
+[nvme98 0000007f4b0dfb6a 00068] complete cid=8001 nvme=0000 srb=C2F3CE58 status=01 op=28 tag=07 depth=1
+[nvme98 0000007f4b637e46 00069] startio rw op=28 tag=08 qa=00 flags=00010240 buf=C194B714 len=512 depth=0 cdb=0000003F0001
+[nvme98 0000007f4b86e2be 00070] complete cid=8002 nvme=0000 srb=C2F3CE58 status=01 op=28 tag=08 depth=1
+[nvme98 0000007f5bc07ef9 00071] FallbackTimer #1 depth=0 admin=0
+[nvme98 0000007f6d851f73 00072] FallbackTimer #2 depth=0 admin=0
+[nvme98 0000007fb5bfe380 00073] startio func=00 op=00 tag=09 qa=00 flags=00010000 buf=00000000 len=0 timeout=0 depth=0
+[nvme98 0000007fb65e4084 00074] startio rw op=28 tag=0A qa=00 flags=00010240 buf=C1970FB0 len=512 depth=0 cdb=0000003F0001
+[nvme98 0000007fb6b5d8e5 00075] complete cid=8003 nvme=0000 srb=C2F3BA90 status=01 op=28 tag=0A depth=1
+[nvme98 0000007fb725189f 00076] startio rw op=28 tag=0B qa=00 flags=00010240 buf=C1970FB0 len=512 depth=0 cdb=000000400001
+[nvme98 0000007fb7535291 00077] complete cid=8004 nvme=0000 srb=C2F3BA90 status=01 op=28 tag=0B depth=1
+[nvme98 0000007fb80eab13 00078] startio rw op=28 tag=0C qa=00 flags=00010240 buf=C7500000 len=4096 depth=0 cdb=0000005F0008
+[nvme98 0000007fb833e031 00079] complete cid=8005 nvme=0000 srb=C2F3BA90 status=01 op=28 tag=0C depth=1
+[nvme98 0000007fb8e0581b 00080] startio rw op=28 tag=0D qa=00 flags=00010240 buf=C7501000 len=4096 depth=0 cdb=000010570008
+[nvme98 0000007fb90521cc 00081] complete cid=8006 nvme=0000 srb=C2F3BA90 status=01 op=28 tag=0D depth=1
+[nvme98 0000007fbc89b50c 00082] startio rw op=28 tag=0E qa=00 flags=00010240 buf=C7502000 len=4096 depth=0 cdb=0000003F0008
+[nvme98 0000007fbca66c83 00083] complete cid=8007 nvme=0000 srb=C2F3BA90 status=01 op=28 tag=0E depth=1
+[nvme98 0000007fc7a74021 00084] FallbackTimer #3 depth=0 admin=0
+[nvme98 0000007fc7cefd87 00085] config probe in FallbackTimer: ScsiPortGetBusData(bus 1 slot 1, 8) = 8, id=00101B36 cmdsts=00100006
+[nvme98 0000007fd98ffdeb 00086] FallbackTimer #4 depth=0 admin=0

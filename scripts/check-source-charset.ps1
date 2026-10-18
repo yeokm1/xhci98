@@ -84,6 +84,7 @@ $skip = @(
     '^src\\obj',                                  # build.exe output: obj, objchk, objchk_qemu, objfre
     '^src\\uas\\obj',                             # the same under src\uas, xhciuas.sys (task 31-A.2)
     '^src\\hlpr\\obj',                            # the same under src\hlpr, xhcihlpr.sys (tasks 36.15, 38.3)
+    '^src\\stor98\\',                             # Stor98, tracked under its own rules, not this file's (task 42-A.20)
     '^scripts\\local\\',                          # per-operator bench tooling
     '^xhciqual\\test\\(win98hdd|hdd)\\',          # generated guest disks
     '^scripts\\vm-matrix\\matrix\.config\.psd1$'  # per-host device matrix, a copy of the tracked sample

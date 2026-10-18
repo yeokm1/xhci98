@@ -1,0 +1,32 @@
+                  .. usb4_h_fire tb0: rule 0 fired at fetch token=1656 opc=0x2 code=0x0 acts=hold host_ns=1792022461533777000 vm_ns=799041207100
+                  .. usb4_h_hold tb0: hold token 1656 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_fire tb0: rule 0 fired at fetch token=1657 opc=0x2 code=0x0 acts=hold host_ns=1792022461536203000 vm_ns=799043633100
+                  .. usb4_h_hold tb0: hold token 1657 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_fire tb0: rule 0 fired at fetch token=1658 opc=0x2 code=0x0 acts=hold host_ns=1792022461537615000 vm_ns=799045045700
+                  .. usb4_h_hold tb0: hold token 1658 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_fire tb0: rule 0 fired at fetch token=1659 opc=0x2 code=0x0 acts=hold host_ns=1792022461539032000 vm_ns=799046462100
+                  .. usb4_h_hold tb0: hold token 1659 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_fire tb0: rule 0 fired at fetch token=1660 opc=0x2 code=0x0 acts=hold host_ns=1792022461540328000 vm_ns=799047758700
+                  .. usb4_h_hold tb0: hold token 1660 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_fire tb0: rule 0 fired at fetch token=1661 opc=0x2 code=0x0 acts=hold host_ns=1792022461541513000 vm_ns=799048944100
+                  .. usb4_h_hold tb0: hold token 1661 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_fire tb0: rule 0 fired at fetch token=1662 opc=0x2 code=0x0 acts=hold host_ns=1792022461544104000 vm_ns=799051534700
+                  .. usb4_h_hold tb0: hold token 1662 deadline_ms=-1 release=manual tag=h
+                  .. usb4_h_fire tb0: rule 0 fired at fetch token=1663 opc=0x2 code=0x0 acts=hold host_ns=1792022461545495000 vm_ns=799052925800
+                  .. usb4_h_fire tb0: rule 1 fired at fetch token=1663 opc=0x2 code=0x0 acts=surprise host_ns=1792022461545632000 vm_ns=799053063000
+                  .. usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+                  .. usb4_tp_gate tb0: access gate closed=1 dma_open=0 host_ns=1792022461545684000 vm_ns=799053115100
+                  .. usb4_h_hold tb0: hold token 1663 deadline_ms=-1 release=manual tag=h
+                  .. pci_nvme_pci_reset PCI Function Level Reset
+                  .. usb4_h_release tb0: release token 1656 (discarded by reset)
+                  .. usb4_h_release tb0: release token 1657 (discarded by reset)
+                  .. usb4_h_release tb0: release token 1658 (discarded by reset)
+                  .. usb4_h_release tb0: release token 1659 (discarded by reset)
+                  .. usb4_h_release tb0: release token 1660 (discarded by reset)
+                  .. usb4_h_release tb0: release token 1661 (discarded by reset)
+                  .. usb4_h_release tb0: release token 1662 (discarded by reset)
+                  .. usb4_h_release tb0: release token 1663 (discarded by reset)
+                  .. usb4_tp_cutoff tb0: stage 2 complete for gen 1 host_ns=1792022461546441000 vm_ns=799053871900
+                  .. usb4_tp_removed tb0: endpoint gen 1 removed, dismissed=0
+            (1007 read/write stages)
+     65545.7 ms #3261   81 G24_GONE_ENTER held=8 src=1 old=0

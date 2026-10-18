@@ -309,17 +309,18 @@ ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
 #define XHCI_PIPE_FAST_4K8K     3UL
 
 /*
- * Mode 4, CODES (task 36.19; design record 13 section 13.7): the client
- * chooses. An interrupt endpoint whose descriptor bInterval is 128, 129 or
- * 130 is programmed at Interval 2, 1 or 0 (500, 250, 125 us) - at Full and
- * Low Speed on a root port only, at High Speed and SuperSpeed anywhere -
- * and every other bInterval by Table 6-12. It does not do modes 2 and 3's
- * mapping, and they do not honour the codes. Applied before the interval
- * cap, and a refusal falls back to Interval 3 (1 ms).
+ * Mode 4, CODES (task 36.19, its encoding replaced by task 42-A.18 in
+ * 3.1.0.0; design record 13 section 13.7): the client chooses. An
+ * interrupt endpoint whose descriptor bInterval is a code, 128 to 143, is
+ * programmed at Interval = bInterval - 128 (128 is 125 us, 8000 Hz; 143 is
+ * 4.096 s), at every speed, on a root port or behind a hub, and every
+ * other bInterval by Table 6-12. It does not do modes 2 and 3's mapping,
+ * and they do not honour the codes. Applied before the interval cap, and a
+ * refusal falls back to Interval 3 (1 ms).
  */
 #define XHCI_PIPE_FAST_CODES    4UL
 #define XHCI_PIPE_FAST_CODE_LOW     128UL
-#define XHCI_PIPE_FAST_CODE_HIGH    130UL
+#define XHCI_PIPE_FAST_CODE_HIGH    143UL
 #define XHCI_PIPE_FAST_CODE_FALLBACK 3UL
 
 /* The mode a registry value asks for: 1 to 4 as themselves, anything else
@@ -332,14 +333,15 @@ ULONG XhciPipeFastMode(ULONG value);
  * Full-Speed interrupt endpoint of a device on a root port (route 0) whose
  * Interval is 7 or 8 is changed: Interval becomes the table's, SpecInterval
  * and FallbackInterval keep the Interval it replaced and FastPoll is set,
- * and the return is 1. Mode 4: an interrupt endpoint whose BInterval is a
- * code (128 to 130) - Low or Full Speed on a root port, High Speed,
- * SuperSpeed or SuperSpeedPlus at any route - takes the code's Interval,
+ * and the return is 1. Modes 2 and 3 leave a Full- or Low-Speed device
+ * behind a hub alone, whose periodic traffic a transaction translator or a
+ * Full-Speed hub carries one frame at a time. Mode 4: an interrupt
+ * endpoint whose BInterval is a code (128 to 143) at Low, Full or High
+ * Speed, SuperSpeed or SuperSpeedPlus, at any route, whose Interval
+ * (BInterval - 128) differs from the one it has, takes that Interval,
  * FallbackInterval 3 and FastPoll, SpecInterval left at the Table 6-12
  * value, and the return is 1. Every other endpoint, mode and NULL returns 0
- * with `ep` untouched - a Full- or Low-Speed device behind a hub included,
- * whose periodic traffic a transaction translator or a Full-Speed hub
- * carries one frame at a time - and so does an endpoint already changed.
+ * with `ep` untouched, and so does an endpoint already changed.
  */
 ULONG XhciPipeFastPoll(ULONG mode, ULONG speed, ULONG route,
                        PXHCI_PIPE_EP ep);
