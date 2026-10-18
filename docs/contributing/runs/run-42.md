@@ -157,3 +157,60 @@ report of 2026-10-18): the helper's interface needs a carrier other than
 the command line for the job's operands, and section 5.2 needs a
 selection for `ERR_DI_DO_DEFAULT`. The legs owed are all of record 27
 section 12 on 98 SE and ME, after that decision.
+
+## 42-A.1: the redesign, its review, the gated build and the helper legs (2026-10-19)
+
+The owner's decisions on the smoke readings (2026-10-18): the job's
+operands in a job file, `XHCIDI.EXE <version> <job file>`, and the
+helper's own choice of the best-ranked node when the dispatcher answers
+`DIF_SELECTBESTCOMPATDRV` with `ERR_DI_DO_DEFAULT`. Committed as
+`9d3f17a3` with record 27 at draft 7 (section 4.1's job file format and
+the 112-character bound; sections 5.1 to 5.3 and 6 for a cancelled
+hardware wizard and `LDID_SRCPATH`), reviewed and revised over two more
+rounds (`6df7f6c8`: each job-file line held strictly per byte, a NUL
+refused, the test driver's writer bounded, the legs table), the last
+clean at every priority. Then the gated build of both architectures on
+`6df7f6c8`: `build-driver.cmd all` and `all -amd64`, BUILD + GATES PASSED
+each, host tests 2080 checks with 0 failures, `test_di` 419 checks with
+0 failures, the helper's self-test (26 imports by ordinal) in each.
+
+### The legs (42-V.1, the helper's rows, by `DITEST.EXE`)
+
+Fresh overlays of `vm\t26\win98-clean.qcow2` (98 SE with NUSB) and
+`vm\t37me\winme-stock-base.qcow2` (stock ME) on `vm\usb4\bin-2a893ea`,
+i440FX, one vCPU, the emulator's Thunderbolt 3 Alpine Ridge layout
+(`PCI\VEN_8086&DEV_15BF`, its xHCI `DEV_15C1`), the QEMU xHCI
+`PCI\VEN_1B36&DEV_000D` as the controller, a tablet and a stick on it;
+QMP 47980 and 47982; the staged `release-x86` package with the helper
+and `DITEST.EXE` of `6df7f6c8` in `C:\XHCI98`; every result over COM1.
+
+| Row | 98 SE | ME |
+|---|---|---|
+| Probe | `RESULT probed`; the handle signalled at the helper's exit (78 ms), exit code 0; with a window (hwnd 1172) too | `RESULT probed` (199 ms), exit code 0: the image loads on ME, its SETUPX ordinals resolve |
+| Version refusal | `RESULT refused version`, no `JOB` line, exit code 1 | the same |
+| Job refusal | an INF name of nine characters: `RESULT refused command inf-path`, exit code 1 | not taken (the parser is the same image) |
+| Not present | a made-up id: `FOUND 0`, `not-present`; the controller whose wizard was cancelled that boot: `not-present` (its `Enum` entry stays), its wizard back at the next start | the controller's wizard cancelled, back at the next start, the same as 98 SE |
+| Controller, `xhci98.inf` | after its wizard was finished with no driver (problem 28, class `Unknown`): `DiGetINFClass` `USB`, `DIF_SELECTBESTCOMPATDRV` 506, `DEFAULT ... lowest-rank` (rank 2005), `DIF_INSTALLDEVICE` 0, `FLAGS 00810111`, `installed-restart`; the Windows CD's "Insert disk" in front of `DITEST`'s window with no taskbar entry of its own (owned), "Copy files from" `D:\WIN98` answered with `F:\WIN98`; after the restart the controller started and Windows installed the root hub itself from its `INF\OTHER` copy with no wizard | the same calls and verdict, no prompt at all (ME's setup source `C:\WINDOWS\OPTIONS\INSTALL\` holds the files); after the restart the root hub installed silently, the tablet and the stick enumerated behind it, the stick on ME's `USBSTOR` |
+| Root hub, `force` | a same-version reinstall: `NODE 00000040 force`, `DIF_INSTALLDEVICE` 0, `installed`: no `ERR_DI_DONT_INSTALL` | the same |
+| No match | `xhciuas.inf` on the root hub: `IDS HardwareID USB\XHCI98_ROOT_HUB`, `IDS CompatibleIDs -`, `no-match` | not taken |
+| Thunderbolt, `xhcicm.inf` | `DiGetINFClass` `System`, 506 and the helper's choice (rank 2001), `installed` with no restart and no prompt; the NHI started (problem 0) | the same, `installed` |
+| Removal | NHI `removed` (`Enum` key gone); controller `removed` (`Enum` key and driver key `USB\0002` gone, the root hub gone from the tree but its `Enum` entry left); the root hub's entry, not present, found among every entry and `removed` (its `Enum` key and driver key `USB\0003` gone) | the same three removals, the same readings |
+| Bookkeeping | driver keys with `NTMPDriver` `xhci98.sys`, `DevLoader` `*NTKERN`, every `Xhci*` default; `INF\OTHER` held `YEOKHE~1.INF` (`xhcicm.inf`) and `YEOKHE~2.INF` (`xhci98.inf`) | not listed |
+
+Two readings for the record: the controller's removal takes its devnode
+subtree out of the tree but leaves the child's `Enum` entry, so the
+uninstall's one-by-one removal of section 9 (the child's entry found
+among every entry) is what removes it; and `DRIVER_NODE.DriverDate`,
+read as an MS-DOS date, says 2026-10-18 on 98 SE and 2026-10-17 on ME
+for the INFs' `DriverVer` of 10/17/2026, so the `DRIVER` line's date is
+informational only (the driver key's `DriverDate` said `10-18-2026` on 98
+SE).
+
+Owed, written down rather than taken: the UAS and Stor98 rows (no UAS
+device attaches to this emulator's xHCI at boot in this layout, and the
+package carries no Stor98), the update rows U24 and U23 over an
+installed `2.4.0.0` or `2.3.1.0`, the uninstall's last reading (the
+controller back as an unknown device after the `INF\OTHER` copies are
+deleted, which is the installer's step), and every row through the
+installer's window rather than `DITEST.EXE`: those are the joint legs
+after the merge with 42-A.2 and 42-A.3. No real hardware ran the helper.
