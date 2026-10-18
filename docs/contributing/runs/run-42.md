@@ -214,3 +214,46 @@ controller back as an unknown device after the `INF\OTHER` copies are
 deleted, which is the installer's step), and every row through the
 installer's window rather than `DITEST.EXE`: those are the joint legs
 after the merge with 42-A.2 and 42-A.3. No real hardware ran the helper.
+
+## 42-A.20: Stor98 consolidated into `src/stor98` (2026-10-19)
+
+Branch `p42-stor98`, from `3.1.0.0` at `94d30a7c`, with `3.1.0.0` merged
+in for the task's roadmap row. Owner decisions of 2026-10-19: the source
+is Stor98's branch `audit-2026-10-18` at `4253b58`; one snapshot commit
+and no history; this repository's commit rule (no trailer) applies to
+`src/stor98`; Stor98 still builds as its own files.
+
+- **The snapshot** (`b6f53b1b`): 312 files, every blob and mode equal to
+  `git ls-tree -r 4253b58` of the Stor98 repository; after a fresh
+  checkout under this host's `core.autocrlf true` the files are byte for
+  byte what `git archive 4253b58` of that repository gives. Under
+  `core.autocrlf false` ten files (its `LICENSE`, its `sources` files and
+  `.rc`, and the same in its `third_party` copy) would have been checked
+  out CRLF by this repository's name-only rules; `src/stor98/** !eol` in
+  the root `.gitattributes` (`4d196db7`) leaves them to Stor98's own file,
+  and every file's `text`/`eol` attributes now equal those of Stor98's own
+  checkout. Two root `.gitignore` patterns hid tracked Stor98 files
+  (`*.cmd`: its four build scripts; `*.log`: ten gate logs under its
+  `docs/gates/`) and are negated for `src/stor98`.
+- **Build** (`4d196db7`): Stor98's scripts find the kits under
+  `STOR98_TOOLS`, by default its own `tools\` or else the one two levels
+  up; `SCSI.H` and `SRB.H` were copied into this repository's
+  `tools\w98ddk\inc\` (SHA-256 `809d57e6...39b7` and `4b3c3305...8396`).
+  `src\stor98\scripts\build.cmd all free`, the same with
+  `STOR98_DBGPORT=1`, `tests\unit\build.cmd` (11 executables, all
+  passed), `tests\cm9x\build.cmd` and `tests\cmnt\build.cmd` all succeed
+  here. Python is not a build dependency.
+- **The header gate** (`ecffe0da`): `scripts\check-stor98-header.ps1`
+  in `build-driver.cmd`. The two copies differed on `3.1.0.0` (Stor98's
+  contract text of 2026-10-18 was on branch `stor98-audit-g` only), so
+  that branch's header commit `96fa2d6c` was taken as `ffc98acd`, the
+  same blob.
+- **Packaging** (`ecffe0da`): `-Stor98Dir` defaults to
+  `src\stor98\releases\<version>`; the `0.4.0.0` folder's
+  `SHA256SUMS.txt` hashes to `ef7a2302...96b7`, the pin `3.0.0.0`
+  bundled (`releases/3.0.0.0/readme.txt`), and `test-package.ps1`
+  bundles it from there.
+- **Review**: reviewed and revised (`4da44d52`), then clean.
+- **Gated build** at `4da44d52`: `build-driver.cmd all` and
+  `all -amd64` passed every gate, the records clean (`dirty=0`), and the
+  Stor98 builds and unit tests passed again at the same commit.
