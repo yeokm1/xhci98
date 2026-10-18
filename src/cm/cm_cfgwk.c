@@ -1137,6 +1137,7 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     ULONG egen;
     ULONG want[CM_PORTS_PATH_MAX];
     LARGE_INTEGER pause;
+    KIRQL irql;
     char text[CMG_MAX_DEVICE_ID_LEN + 1];
 
     if (!cmWkCurrent(w, i, gen)) {
@@ -1268,6 +1269,16 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     }
     if (cmWkCurrent(w, i, gen)) {
         return TRUE;
+    }
+    if (cmWkHeld(w, i)) {
+        /* Record 22 section 7.7's retirement barrier stands (the request
+         * that made this stale is its removal-only one): the rescan owed
+         * is posted, and the enumeration pass holds it until the barrier
+         * is lifted. */
+        KeAcquireSpinLock(&w->Lock, &irql);
+        w->ReqReenum |= 1UL << i;
+        KeReleaseSpinLock(&w->Lock, irql);
+        return FALSE;
     }
     /* Stale since the query: the rescan that the removal owes is made
      * here, not left to a request that may already have run. */
@@ -1622,6 +1633,11 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
              * re-enumeration. */
             return TRUE;
         }
+    }
+    if (cmWkHeld(w, i)) {
+        /* The retirement barrier rose while this operation ran (the
+         * pass checked it before): failed, retried once it is lifted. */
+        return FALSE;
     }
     cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
     p->PubGen++;

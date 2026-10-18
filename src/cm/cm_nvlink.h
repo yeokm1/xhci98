@@ -346,6 +346,11 @@ ULONG CmNvlinkBridgeTunnel(PULONG bridges, PULONG tunnels, ULONG count,
  */
 ULONG CmNvlinkRetire(PSTOR98LS_TABLE t, ULONG bus);
 BOOLEAN CmNvlinkRetireEntry(PSTOR98LS_TABLE t, ULONG index);
+/* R8a's release of an entry whose port's bus number changed, after its
+ * devnode was retired (record 22 section 7.7): IN_USE cleared (Flags 0)
+ * in one R6b Sequence update, UP with it, nothing else changed; FALSE for
+ * an entry not IN_USE or with a removal request outstanding (R9a). */
+BOOLEAN CmNvlinkReleaseEntry(PSTOR98LS_TABLE t, ULONG index);
 
 /* An UP entry leaves UP: Flags = IN_USE | DOWN_QUIESCED when `quiesced`,
  * IN_USE alone otherwise. FALSE (nothing written) for an entry not UP. */
@@ -516,12 +521,16 @@ VOID CmNvlinkLost(struct _CM_NHI *nhi);
  * unchanged: no DOWN_QUIESCED, no increment, nothing published. */
 ULONG CmNvlinkUpCount(struct _CM_NHI *nhi, ULONG bridge);
 VOID CmNvlinkRetireMember(struct _CM_NHI *nhi, ULONG bridge);
-/* R8a, after the retirement of the devnodes of a member whose secondary
- * bus changed: every entry of this domain's (or of none) on the old bus
- * `bus` that is not UP is freed (Flags 0), its shadow forgotten, so the
- * rebuild's exposure on the new bus takes a free entry and the old ones
- * do not stay allocated. */
-VOID CmNvlinkReleaseBus(struct _CM_NHI *nhi, ULONG bus);
+/* R8a, after the retirement of the devnodes of member `bridge`, whose
+ * secondary bus changed from `bus`: every entry recorded for that member
+ * on the old bus (its shadow names the bridge, or names none while no
+ * member of the set has `bus` as its secondary bus now) has IN_USE
+ * cleared through CmNvlinkReleaseEntry - UP or not, since a function
+ * answering at the old address now is another member's or nobody's - and
+ * its shadow forgotten; the rebuild's exposure on the new bus takes a
+ * free entry. Returns how many such entries are left (a removal request
+ * outstanding, an acknowledgement awaited): called again later. */
+ULONG CmNvlinkReleaseBus(struct _CM_NHI *nhi, ULONG bridge, ULONG bus);
 
 /* The host interface lost, every operating system (cm_reenum.c
  * CmReenumLossBegin): the deferred scans of buses an exposure found silent

@@ -309,12 +309,19 @@ ULONG CmThrProbe32(PCM_NHI nhi, ULONG offset)
     return v;
 }
 
-/* TBT_HOST.Cancelled: the gate closed for the current class. */
+/* TBT_HOST.Cancelled: the gate closed for the current class. Inside a
+ * USB4 recovery's attempt an all-ones read already seen (RecOnes) is the
+ * gate's cancellation too (record 22 section 7.7 part 5): the attempt's
+ * sequences end at their next request or wait, and it fails. */
 static BOOLEAN cmCancelled(PVOID context)
 {
     PCM_NHI nhi;
 
     nhi = (PCM_NHI)context;
+    if (nhi->RecOnes && (nhi->AccessClass == CM_ACCESS_PREPARE ||
+                         nhi->AccessClass == CM_ACCESS_RECOVERY)) {
+        return TRUE;
+    }
     return (BOOLEAN)!CmLiveAdmits(&nhi->Live, nhi->AccessClass);
 }
 

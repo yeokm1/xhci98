@@ -993,9 +993,11 @@ refused:
 
 /* Part 3 step 6's last rule: a learned correspondence is kept only for a
  * member whose secondary bus is unchanged (`changed`) and whose port's
- * PCIe tunnel was preserved; every other learned binding is withdrawn
- * (the port learns again at its next tunnel up). Named bindings stand:
- * the host router's mapping operation, read again in step 3, is theirs. */
+ * PCIe tunnel this recovery verified and kept (RecVerified, not a HELD
+ * one's Up); every other learned binding is withdrawn (the port learns
+ * again at its next tunnel up). Named bindings stand: the host router's
+ * mapping operation, read again in step 3, is theirs. Made after the
+ * commit, once the removal debt was taken by member. */
 static VOID cmU4Unlearn(PCM_NHI nhi, ULONG changed)
 {
     PXHCI_TBT_BINDS b;
@@ -1018,6 +1020,7 @@ static VOID cmU4Unlearn(PCM_NHI nhi, ULONG changed)
                 }
             }
             keep = (BOOLEAN)(p != NULL && p->Pcie.Up &&
+                             (p->RecVerified & 1) != 0 &&
                              member != XHCI_TBT_NO_MEMBER &&
                              (changed & (1UL << member)) == 0);
         }
@@ -1056,7 +1059,6 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
     BOOLEAN excl;
 
     r = &nhi->Reenum;
-    nhi->RecDebtMask = 0;
     if (!cmTopoUsable(nhi)) {
         return TRUE;
     }
@@ -1096,6 +1098,12 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
                       (i << 24) | (bus & 0xFFFFFFUL));
         }
     }
+    if (!CmReenumSourcesHold(nhi)) {
+        /* U24: a member no longer named by the source that put it in the
+         * set refuses the recovery for this episode. */
+        CmLogNote(nhi, "u4.recover.member.source", r->Topo.Tunnels);
+        return FALSE;
+    }
     changed |= nhi->RecLostUp;
     if (changed != 0) {
         for (i = 1; i <= nhi->U4.PortCount; i++) {
@@ -1112,8 +1120,10 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
     }
     /* The removal debt of the drains, by member, while the bindings still
      * say which member each port's endpoint sat behind; any port not
-     * known owes it on every member. */
-    nhi->RecDebtMask = 0;
+     * known owes it on every member. Accumulated across failed attempts
+     * until a commit takes it into the barrier, and the bindings are
+     * withdrawn only after that commit (cmU4AfterCommit), so a later
+     * attempt still names the member a port's debt was taken against. */
     for (i = 1; i <= nhi->U4.PortCount; i++) {
         p = TbtU4Port(&nhi->U4, i);
         if (p == NULL || !p->RemovalDebt) {
@@ -1126,7 +1136,7 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
             nhi->RecDebtMask |= cmU4AllMembers(nhi);
         }
     }
-    cmU4Unlearn(nhi, changed);
+    nhi->RecChanged |= changed;
     return TRUE;
 }
 
@@ -1150,10 +1160,14 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
     ULONG member;
     ULONG now;
     BOOLEAN barred;
+    BOOLEAN armed;
+    BOOLEAN armOk;
 
     if (!nhi->U4On) {
         return;
     }
+    armed = FALSE;
+    armOk = FALSE;
     if (nhi->RecBarred != 0 && !nhi->ReenumOn) {
         /* No seam (never started): no devnode this driver re-enumerates,
          * retires or publishes for. */
@@ -1172,10 +1186,6 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
                 nhi->RecBarred &= ~bit;
                 CmReenumHold(nhi, nhi->RecBarred);
                 CmNvlinkRetireMember(nhi, nhi->Reenum.Topo.Set[i]);
-                if (nhi->RecBusChanged & bit) {
-                    nhi->RecBusChanged &= ~bit;
-                    CmNvlinkReleaseBus(nhi, nhi->RecOldBus[i]);
-                }
                 CmLogNote(nhi, "u4.recover.retired", i);
                 continue;
             }
@@ -1194,6 +1204,21 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
             }
         }
     }
+    if (nhi->RecBusChanged != 0 && cmTopoUsable(nhi)) {
+        /* R8a: a member whose bus changed has its old entries' IN_USE
+         * cleared once no barrier holds it (its devnode retired), retried
+         * while one of them cannot be released yet. */
+        for (i = 0; i < nhi->Reenum.Topo.Tunnels && i < XHCI_TBT_MAX_TUNNELS;
+             i++) {
+            bit = 1UL << i;
+            if ((nhi->RecBusChanged & bit) != 0 &&
+                (nhi->RecBarred & bit) == 0 &&
+                CmNvlinkReleaseBus(nhi, nhi->Reenum.Topo.Set[i],
+                                   nhi->RecOldBus[i]) == 0) {
+                nhi->RecBusChanged &= ~bit;
+            }
+        }
+    }
     for (i = 1; i <= nhi->U4.PortCount && i <= TBT_U4_MAX_PORTS; i++) {
         p = TbtU4Port(&nhi->U4, i);
         if (p == NULL) {
@@ -1208,6 +1233,25 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
             barred = (BOOLEAN)(nhi->RecBarred != 0 ||
                                (p->RebuildPcie &&
                                 (nhi->Binds.Pending & ~(1UL << (i - 1))) != 0));
+            if (barred && nhi->RecBarred == 0 && !p->Barred) {
+                CmLogNote(nhi, "u4.recover.learning-held", i);
+            }
+            if (!barred && p->RebuildPcie && cmTopoUsable(nhi)) {
+                /* U29's handoff: a fresh occupancy baseline of every
+                 * member's bus, taken now - every barrier clear, no other
+                 * port pending - right before this pass's rebuild, so its
+                 * gain is attributed against what answers now. */
+                if (!armed) {
+                    armed = TRUE;
+                    armOk = (BOOLEAN)(XhciTbtLearnArm(&nhi->Reenum.Cfg,
+                                                      &nhi->Reenum.Topo,
+                                                      &nhi->Binds) == 0);
+                    if (armOk) {
+                        nhi->ArmOwed = 0;
+                    }
+                }
+                barred = (BOOLEAN)!armOk;
+            }
         }
         if (barred != p->Barred) {
             TbtU4SetBarred(&nhi->U4, i, barred);
@@ -1248,9 +1292,12 @@ static VOID cmU4AfterCommit(PCM_NHI nhi)
             nhi->ArmOwed = 1;
         }
     }
-    /* Read by step 6 before it withdrew any binding (cmU4Revalidate). */
+    /* Read by step 6 while every binding stood (cmU4Revalidate); step 6's
+     * withdrawal of the learned bindings follows it here. */
     nhi->RecBarred |= nhi->RecDebtMask;
     nhi->RecDebtMask = 0;
+    cmU4Unlearn(nhi, nhi->RecChanged);
+    nhi->RecChanged = 0;
     CmLogNote(nhi, "u4.recover.barrier", nhi->RecBarred);
     nhi->RecRetireSent = 0;
     CmReenumHold(nhi, nhi->RecBarred);
@@ -1308,6 +1355,12 @@ static VOID cmU4Recover(PCM_NHI nhi)
     if (rc == TBT_OK && cmU4StopWaiting(nhi)) {
         rc = TBT_E_STOPPED;
     }
+    if (rc == TBT_OK && nhi->RecOnes) {
+        /* Part 5: an all-ones read inside the attempt is a second outage
+         * observed, whatever step read it and whether that step's failure
+         * was tolerated: the attempt fails, Rearm set. */
+        rc = TBT_E_HW;
+    }
     if (rc != TBT_OK) {
         ones = (BOOLEAN)(!final &&
                          (nhi->RecOnes ||
@@ -1335,9 +1388,11 @@ static VOID cmU4Recover(PCM_NHI nhi)
     power = (BOOLEAN)((nhi->WorkBits & (CM_WORK_D3 | CM_WORK_SYSTEM |
                                         CM_WORK_DIRECT)) != 0 ||
                       nhi->DevicePower != PowerDeviceD0);
-    if (power && nhi->Live.State == CM_LIVE_RECOVERING) {
+    if (power && !final && nhi->Live.State == CM_LIVE_RECOVERING) {
         /* A power transition queued meanwhile: the attempt ends as part
-         * 5's suspend row says (cooldown, a new episode at the resume). */
+         * 5's suspend row says (cooldown, a new episode at the resume).
+         * Never over a stop that could not be verified, which is final
+         * for the boot whatever else is waiting. */
         CmLiveU4Interrupt(&nhi->Live);
     } else if (rc == TBT_OK && !nhi->PnpStopPending &&
         (nhi->WorkBits & (CM_WORK_STOP | CM_WORK_EXIT)) == 0) {
@@ -1451,6 +1506,13 @@ VOID CmNhiU4Probe(PCM_NHI nhi, ULONG nowMs)
     ok = cmU4Prepare(nhi, cmd, &ones);
     if (nhi->RecOnes) {
         ones = TRUE;
+    }
+    if (ok && ones) {
+        /* An all-ones read the preparation tolerated is still the second
+         * outage part 5 counts: refused, Rearm set. */
+        ok = FALSE;
+        nhi->Counters.U4RecoverRefused++;
+        CmLogNote(nhi, "u4.recover.refused", (2UL << 8) | 5UL);
     }
     if (ok && cmU4StopWaiting(nhi)) {
         ok = FALSE;
@@ -1741,14 +1803,19 @@ static VOID cmU4LogRouter(PCM_NHI nhi, ULONG port)
  */
 /* The admission-and-drain protocol of every USB4 delivery (record 22
  * section 7.7 part 3 step 7, as the ICM UP's): admitted under the work
- * lock unless revoked, the in-flight count raised, so CmNhiRevoke waits
- * for the delivery to end; FALSE when not admitted. */
+ * lock unless revoked or an ordinary stop or removal has begun
+ * (PnpStopPending, raised before the stop's work is queued, or that work
+ * queued), the in-flight count raised, so CmNhiRevoke waits for the
+ * delivery to end; FALSE when not admitted. Every delivery runs on this
+ * thread, which takes the stop's work only after it, so one admitted
+ * before a stop has ended before the teardown begins. */
 static BOOLEAN cmU4Admit(PCM_NHI nhi)
 {
     KIRQL irql;
 
     KeAcquireSpinLock(&nhi->WorkLock, &irql);
-    if (nhi->Live.Revoked) {
+    if (nhi->Live.Revoked || nhi->PnpStopPending ||
+        (nhi->WorkBits & (CM_WORK_STOP | CM_WORK_EXIT)) != 0) {
         KeReleaseSpinLock(&nhi->WorkLock, irql);
         nhi->Counters.ActionsNotLive++;
         return FALSE;
@@ -1805,7 +1872,8 @@ VOID CmNhiU4Take(PCM_NHI nhi)
     }
     if (nhi->U4UpHook != NULL) {
         if (!cmU4Admit(nhi)) {
-            /* Revoked: no UP is published any more (CmNhiRevoke). */
+            /* Revoked or stopping: no UP is published any more
+             * (CmNhiRevoke, cmU4Admit). */
             nhi->U4BatchCount = 0;
             return;
         }
@@ -2674,6 +2742,9 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     nhi->RecLostUp = 0;
     nhi->RecCmdSet = 0;
     nhi->RecBarred = 0;
+    nhi->RecDebtMask = 0;
+    nhi->RecChanged = 0;
+    nhi->RecBusChanged = 0;
     nhi->RecRetireSent = 0;
     nhi->RecUpValid = 0;
     nhi->DmaBytes = 0;

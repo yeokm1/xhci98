@@ -208,6 +208,10 @@ typedef struct _CM_REENUM_PORT {
     ULONG Missed;           /* a tunnel change came while the member was
                                exclusive but not active, or its call could
                                not be made: re-enumerated once it is      */
+    ULONG MissedExpose;     /* one of the changes Missed holds exposes (a
+                               change in publication mode none alone -
+                               record 22 section 7.7, U25 - is serviced as
+                               the re-enumeration alone)                  */
     ULONG EjectSerial;      /* the eject's bridge publication and          */
     ULONG EjectGen;         /* population generation, checked at hand-off */
     ULONG WalkLogged;       /* 98: a failed devnode walk was logged       */
@@ -304,6 +308,9 @@ typedef struct _CM_REENUM {
 
     /* tbt_topo.c's discovery and port state (too large for a stack). */
     XHCI_TBT_TOPO Topo;
+    /* The same discovery read again by a USB4 recovery's revalidation
+     * (CmReenumSourcesHold), never the set itself. */
+    XHCI_TBT_TOPO RecTopo;
     XHCI_TBT_CFG Cfg;
     XHCI_TBT_POLL Poll;
     XHCI_TBT_PORT Reading;
@@ -403,6 +410,13 @@ BOOLEAN CmReenumRetire(struct _CM_NHI *nhi, ULONG i, PULONG answers);
  * calls cmReenumAll and the service skip themselves. */
 VOID CmReenumHold(struct _CM_NHI *nhi, ULONG members);
 BOOLEAN CmReenumRetired(struct _CM_NHI *nhi, ULONG i, ULONG answers);
+/* Record 22 section 7.7 part 3 step 6 (U24): the discovery read again,
+ * with the start's inputs, into a scratch record (the set untouched) -
+ * TRUE when every member a switch, listed, SHPC or override source put in
+ * the set is found again by that same source. The router-named members
+ * are the recovery's own mapping comparison (TbtU4Recover). PASSIVE_LEVEL,
+ * the connection-manager thread. */
+BOOLEAN CmReenumSourcesHold(struct _CM_NHI *nhi);
 
 VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,
                       PVOID context);

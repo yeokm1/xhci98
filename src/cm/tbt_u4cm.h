@@ -342,11 +342,16 @@ typedef struct _TBT_U4_PORT {
      * quarantined): the next attempt owes it again. RecVerified: bit 0
      * PCIe, bit 1 USB3 - verified and kept by this attempt, the only
      * tunnels TbtU4RecoverDemote may drain. Discovered: section 9.2's
-     * discovery ran for the port (a recovery discovers one it never did). */
+     * discovery ran to its end for the port, nothing cutting it short (a
+     * recovery discovers one whose discovery never completed). */
     BOOLEAN RecDrainPcie;
     BOOLEAN RecDrainUsb3;
     UCHAR RecVerified;
     BOOLEAN Discovered;
+    /* DiscoverOwed: the link of a departed router held by another one at
+     * the recovery - section 9.2's discovery after the commit, its state
+     * as found, nothing of the departed router's cleanup applied. */
+    BOOLEAN DiscoverOwed;
 } TBT_U4_PORT, *PTBT_U4_PORT;
 
 /* A router below depth 1 a predecessor configured (section 7.1). */
@@ -610,6 +615,10 @@ typedef struct _TBT_U4CM {
     BOOLEAN RelockExplained;/* the host router was enumerated afresh by the
                                recovery: its lane 0 Lock set again is its
                                own reset, not removal evidence */
+    BOOLEAN RecRestored;    /* this attempt put the snapshot's port records
+                               back over the host router's fresh walk: until
+                               then a failure restores them whole, so the
+                               next snapshot copies no half-built table */
 
     TBT_U4_COUNTERS Counters;
 } TBT_U4CM, *PTBT_U4CM;

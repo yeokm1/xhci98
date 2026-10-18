@@ -4298,6 +4298,10 @@ static void test_recover(void)
     CHECK_EQ(g_cm.ActionCount, 0, "recover departed: no TUNNEL_DOWN");
     CHECK_EQ(g_ldCalls, ld, "recover departed: no statement");
     CHECK(g_cm.Counters.RecoverDeparted >= 1, "recover departed: counted");
+    CHECK(p->DiscoverOwed, "recover departed: the link's router discovered after the commit");
+    CHECK(!p->LaneWritten && !p->Lane1Disabled && !p->PcSetHost && !p->TmuQuarantine,
+          "recover departed: no lane or TMU cleanup owed on a held link");
+    CHECK(!g_cm.DeferredTail[0], "recover departed: no teardown tail on a held link");
     TbtU4RecoverCommit(&g_cm);
     TbtU4SetBarred(&g_cm, 1, TRUE);
     poll(&g_cm, &g_fab, 3);
@@ -4321,6 +4325,7 @@ static void test_recover(void)
     CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "recover unplugged: EMPTY");
     CHECK(p->RemovalDebt, "recover unplugged: debt");
     CHECK(hostClean(&g_fab, 1), "recover unplugged: host side drained");
+    CHECK(!p->DiscoverOwed, "recover unplugged: a disconnected link owes no discovery");
     (void)dev;
 
     /* DmaMayRun: a host interface still not answering when the recovery
@@ -4355,6 +4360,9 @@ static void test_recover(void)
     TbtU4RecoverFail(&g_cm);
     CHECK(g_cm.Contained && !g_cm.Recovering, "recover second loss: contained");
     CHECK(g_ring.DmaMayRun, "recover second loss: rings never proven stopped");
+    CHECK(TbtU4Port(&g_cm, 1) != NULL && TbtU4Port(&g_cm, 1)->Pcie.Up &&
+              g_cm.PortCount == g_cm.SnapPortCount,
+          "recover second loss: the snapshot's records back, not the walk's");
     g_fab.Hook = NULL;
     g_fab.Gone = 0;
     g_fab.Cancel = 0;

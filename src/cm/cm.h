@@ -306,9 +306,12 @@ typedef struct _CM_NHI {
     ULONG RecLostUp;
     ULONG RecCmdSet;
     ULONG RecBarred;
-    ULONG RecDebtMask;      /* the members the attempt's drains owe a
-                               removal (read before step 6 withdraws a
-                               binding), barred at the commit              */
+    ULONG RecDebtMask;      /* the members the attempts' drains owe a
+                               removal (accumulated, read while every
+                               binding stands), barred at the commit       */
+    ULONG RecChanged;       /* the members step 6 found changed (bus, or
+                               the entry lost UP): their learned bindings
+                               are withdrawn after the commit             */
     ULONG RecRetireSent;
     ULONG RecRetireAtMs[XHCI_TBT_MAX_TUNNELS];
     ULONG RecRetireAns[XHCI_TBT_MAX_TUNNELS];

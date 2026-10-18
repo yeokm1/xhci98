@@ -1162,6 +1162,7 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
              * is re-enumerated once it becomes active (CmReenumService). */
             if (flags & CM_PORT_EXCLUSIVE) {
                 r->Port[i].Missed = 1;
+                r->Port[i].MissedExpose |= none ? 0UL : 1UL;
             }
             continue;
         }
@@ -1169,8 +1170,9 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
             /* Record 22 section 7.7 part 4: a member behind the
              * retirement barrier gets its removal-only request alone
              * (CmReenumRetire); the change is owed to it once the
-             * barrier is lifted. */
+             * barrier is lifted, in its own publication mode. */
             r->Port[i].Missed = 1;
+            r->Port[i].MissedExpose |= none ? 0UL : 1UL;
             continue;
         }
         /* stor98's UP for what the call is about to expose (cm_nvlink.h,
@@ -1190,6 +1192,7 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
                  * active: owed when it is active again. */
                 r->CallFailures++;
                 r->Port[i].Missed = 1;
+                r->Port[i].MissedExpose |= none ? 0UL : 1UL;
             }
         } else if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
             /* Posted: the worker makes the call, and retries it itself. */
@@ -1369,6 +1372,7 @@ static VOID cmDiscoverAndList(PCM_NHI nhi)
         r->DebtPending = 0;
         for (i = 0; i < r->Members; i++) {
             r->Port[i].Missed = 1;
+            r->Port[i].MissedExpose = 1;
         }
         CmLogNote(nhi, "cm.reenum.debt", r->Members);
     }
@@ -1737,8 +1741,10 @@ VOID CmReenumService(PCM_NHI nhi)
             (nhi->RecBarred & (1UL << i)) == 0 &&
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS) {
             r->Port[i].MissedAt = cmNow(nhi);
-            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
-                                 CM_NVLINK_TUNNEL_NONE);
+            if (r->Port[i].MissedExpose) {
+                (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
+                                     CM_NVLINK_TUNNEL_NONE);
+            }
             if (r->Route == CM_ROUTE_FILTER) {
                 if (cmInvalidate(nhi, i, TRUE)) {
                     r->Port[i].Missed = 0;
@@ -1749,6 +1755,9 @@ VOID CmReenumService(PCM_NHI nhi)
                 cmWkPost(nhi, 1UL << i, 1UL << i,
                          (BOOLEAN)(r->SafeEject != 0));
                 r->Port[i].Missed = 0;
+            }
+            if (!r->Port[i].Missed) {
+                r->Port[i].MissedExpose = 0;
             }
             if (!r->Port[i].Missed) {
                 CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
@@ -2100,4 +2109,54 @@ VOID CmReenumHold(PCM_NHI nhi, ULONG members)
     if (nhi->Reenum.Route == CM_ROUTE_CONFIGMG && nhi->Reenum.Wk != NULL) {
         CmCfgwkHold(nhi->Reenum.Wk, members);
     }
+}
+
+BOOLEAN CmReenumSourcesHold(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    XHCI_TBT_TOPO_IN in;
+    const CM_FAMILY *family;
+    ULONG i;
+    ULONG k;
+
+    r = &nhi->Reenum;
+    /* cmDiscover's inputs, as the start gave them. */
+    CmZero(&in, sizeof(in));
+    in.Nhi = r->Nhi;
+    if (nhi->Values.TunnelBridgeChars != 0) {
+        in.Overrides = XhciTbtParseBdfList(nhi->Values.TunnelBridge,
+                                           nhi->Values.TunnelBridgeChars,
+                                           in.Override,
+                                           XHCI_TBT_MAX_TUNNELS);
+    }
+    family = CmPortsFamily(CM_PORTS_ID(nhi->Vendor, nhi->Device));
+    if (family != NULL) {
+        in.FamilyNhiIds = family->NhiIds;
+        in.FamilyNhiIdCount = family->NhiIdCount;
+        in.SwitchPortIds = family->SwitchPortIds;
+        in.SwitchPortIdCount = family->SwitchPortIdCount;
+        in.RootPortIds = family->RootPortIds;
+        in.RootPortIdCount = family->RootPortIdCount;
+    }
+    if (XhciTbtTopoFind(&r->Cfg, &in, &r->RecTopo) ==
+        XHCI_TBT_TOPO_INCOMPLETE) {
+        return FALSE;
+    }
+    for (i = 0; i < r->Topo.Tunnels && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (r->Topo.Source[i] == XHCI_TBT_SRC_ROUTER) {
+            continue;
+        }
+        for (k = 0; k < r->RecTopo.Tunnels && k < XHCI_TBT_MAX_TUNNELS; k++) {
+            if (r->RecTopo.Set[k] == r->Topo.Set[i] &&
+                r->RecTopo.Source[k] == r->Topo.Source[i]) {
+                break;
+            }
+        }
+        if (k == r->RecTopo.Tunnels || k == XHCI_TBT_MAX_TUNNELS) {
+            CmLogNote(nhi, "u4.recover.member.source-lost",
+                      (r->Topo.Set[i] << 8) | r->Topo.Source[i]);
+            return FALSE;
+        }
+    }
+    return TRUE;
 }

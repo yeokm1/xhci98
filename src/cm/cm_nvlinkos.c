@@ -1676,29 +1676,51 @@ VOID CmNvlinkRetireMember(PCM_NHI nhi, ULONG bridge)
     (VOID)cmNvMarkEx(nhi, bridge, CM_NVLINK_LOST, TRUE);
 }
 
-VOID CmNvlinkReleaseBus(PCM_NHI nhi, ULONG bus)
+ULONG CmNvlinkReleaseBus(PCM_NHI nhi, ULONG bridge, ULONG bus)
 {
     ULONG i;
     ULONG n;
+    ULONG left;
+    BOOLEAN taken;
+    BOOLEAN mine;
     KIRQL irql;
 
     if (cmNvTable == NULL || bus == 0 || bus > 0xFFUL) {
-        return;
+        return 0;
     }
-    n = 0;
-    KeAcquireSpinLock(&cmNvLock, &irql);
-    for (i = 0; i < STOR98LS_ENTRIES; i++) {
-        if (cmNvTable->Entry[i].BusNumber == bus &&
-            (cmNvTable->Entry[i].Flags & STOR98LS_IN_USE) != 0 &&
-            (cmNvTable->Entry[i].Flags & STOR98LS_UP) == 0 &&
-            (cmNvShadow[i].Owner == NULL || cmNvShadow[i].Owner == nhi) &&
-            !cmNvShadow[i].Waiting) {
-            cmNvTable->Entry[i].Flags = 0;
-            cmNvShadow[i].Owner = NULL;
-            cmNvShadow[i].Bridge = 0;
-            n++;
+    /* An entry that names no bridge is this member's only while no member
+     * has the old bus number as its own now. */
+    taken = FALSE;
+    for (i = 0; i < nhi->Reenum.Topo.Tunnels && i < XHCI_TBT_MAX_TUNNELS;
+         i++) {
+        if (nhi->Reenum.Topo.Set[i] != bridge &&
+            cmNvSecondary(nhi->Reenum.Topo.Set[i]) == bus) {
+            taken = TRUE;
         }
     }
+    n = 0;
+    left = 0;
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        mine = (BOOLEAN)(cmNvTable->Entry[i].BusNumber == bus &&
+                         (cmNvTable->Entry[i].Flags & STOR98LS_IN_USE) != 0 &&
+                         (cmNvShadow[i].Owner == NULL ||
+                          cmNvShadow[i].Owner == nhi) &&
+                         (cmNvShadow[i].Bridge == bridge ||
+                          (cmNvShadow[i].Bridge == 0 && !taken)));
+        if (!mine) {
+            continue;
+        }
+        if (cmNvShadow[i].Waiting ||
+            !CmNvlinkReleaseEntry(cmNvTable, i)) {
+            left++;
+            continue;
+        }
+        cmNvShadow[i].Owner = NULL;
+        cmNvShadow[i].Bridge = 0;
+        n++;
+    }
     KeReleaseSpinLock(&cmNvLock, irql);
-    CmLogNote(nhi, "cm.nvlink.release-bus", (bus << 16) | n);
+    CmLogNote(nhi, "cm.nvlink.release-bus", (bus << 16) | (left << 8) | n);
+    return left;
 }
