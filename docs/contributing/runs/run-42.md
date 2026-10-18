@@ -118,3 +118,69 @@ its own admission window independent of safe eject; the descendant walk
 below the member; every hypothesis about `PCI.VXD` marked as one;
 decisions N1 to N10). With it every design of Phase 42 has converged
 before its code, as the checkpoint asks.
+
+## 42-A.14 and 42-A.15: PCI below a tunnel port on 9x; a 9x function with no interrupt (2026-10-19)
+
+Worker p42-9x, branch `p42-9x` from `3.1.0.0` at `2a89ba74`; code
+`f747fce3`, reviewed and revised through the branch's last commit.
+Emulator legs in QEMU (the `usb4-emu` build `bin-2a893ea`), guest 98 SE
+from `win98-gold` on i440FX, TCG, the Thunderbolt 3 layout of the
+PCI-page legs (the tunnel bridge, the Alpine Ridge host, the ASM2464
+enclosure), with the tunnel bridge at 00:1Ch, where SeaBIOS's routing
+table has no entry, so a function added below it after POST gets no route
+from `PCI.VXD`. xHCI98 and `xhcicm.sys` installed by hand from the
+package (the 3.0.0.0 console installer refused a `qemu` build in
+`release-x86`, as it should); Stor98 0.4.0.0 on the enclosure's NVMe; the
+installer record `HKLM\Software\xhci98\Stor98` `Version` = `0.4.0.0`
+imported by hand, since this branch's installer does not write it (task
+42-A.3, branch `p42-wiz`); `XhciCmLogVerbosity` 2.
+
+- **The interim (owner's coordinator, 2026-10-19).** Design record 28
+  places each call on the member's call worker of task 42-A.12, which no
+  branch has. The pure half, `cm_noirq.c`, is a state machine of
+  operations that the existing 98 worker drives at its 200 ms tick until
+  42-A.12 lands; record 28's dated note says what that costs (a blocked
+  CONFIGMG call holds the domain's other 9x work) and what changes then.
+  **Owed to 42-A.12**: driving the same machine from the thread's pass
+  through each member's R6f handoff word, the 50 ms cadence, and the
+  liveness state read by the thread itself.
+- **42-A.14, read on 98 SE.** The xHCI98 USB Tree's PCI page of the
+  Thunderbolt controller lists the functions below the tunnel port with
+  their configuration space, read by the worker through `PCI.VXD`'s
+  guarded route: the enclosure's NVMe at 01:01.0 (1B36:0010, class
+  010802, pin INTA, line 0, its 64-bit memory BAR, its PCI Express and
+  power management capabilities; "35 configuration reads, 0 refused");
+  with a bridge chain behind the port, the switch's upstream port at
+  01:03.0, its downstream port 02:00.0 and the chain's NVMe 03:00.0, after
+  `xhcicm.sys` numbered the chain (buses 02-03, the window
+  FE900000-FE9FFFFF) - "102 configuration reads, 0 refused";
+  `cm.query.pci.9x` 00010000 (walked, nothing held). ME not read.
+- **42-A.15, read on 98 SE: the basic form does not apply.** The NVMe at
+  01:01.0 (its pin swizzling off the port's pin, UNROUTABLE by the fresh
+  classification) sat at Code 29, "This device is disabled because the
+  BIOS for the device did not give it an IRQ", its Resources tab empty.
+  The worker's walk, rules and gate ran: one basic configuration at
+  `LCPRI_NORMAL` (`cm.reenum.9x.noirq.lc` 01003000), whose descriptors
+  read one memory descriptor of 40 bytes and nothing else - no IRQ, no
+  I/O, no DMA, and the every-type read met the one memory descriptor
+  (`.rd` 01012800, 0100000F, 0400000F, 0200000F, 0300000F, 00012800,
+  0000000F). The device was refused, EXCLUDED "configuration"
+  (`XhciCmNoIrqDiag` word 4 00060203, word 6 0006000F), nothing added;
+  the same after a re-plug. Record 28 section 3's hypothesis - an IRQ
+  requirement in `PCI.VXD`'s configuration that cannot be met - is
+  refuted for this case; record 28's note says so, and a redesign is owed
+  before 42-V.6. Stor98 wrote no `StorInterrupt` (it never started). An
+  earlier build of the branch (`f747fce3`) gave no diagnostic at all (a
+  refusal wrote none, fixed in review); a later one (`d8c73375`) read the
+  descriptors with `ResType_All` and refused at the same place, which
+  `2d38fc77`'s commit message took for a failed `ResType_All` read; the
+  leg above corrects that.
+- **Not read**: the chain NVMe's start (the 98 SE "PCI standard
+  PCI-to-PCI bridge" wizard for the hot-added upstream port stopped
+  advancing, so the chain's NVMe was never enumerated); the routed case;
+  ME; the pin-0 NVMe, which the emulator cannot present (QEMU's NVMe
+  hardcodes INTA; a property for it would be a request to `usb4-emu`);
+  the file write and compare (nothing started).
+- **Owed on real hardware**: 42-A.14 on the owner's P14s Gen 1 under 98
+  SE with the ORICO enclosure, the PCI page below the port; nothing at
+  hand presents 42-A.15's case (record 28 section 8.2).
