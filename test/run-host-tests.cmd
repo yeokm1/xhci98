@@ -56,6 +56,9 @@ rem                  task 38.2, design record 13 section 6.11): the gate, the
 rem                  SilentClasses admission and cap, a failed enumeration,
 rem                  the control bits, composite, the package's six, the
 rem                  transport bar, empty lists and malformed descriptors
+rem   test_regsrc  - where a registry value is taken from (src\xhci_regsrc.c,
+rem                  task 42-A.17): absent, per-device only, machine-wide
+rem                  only, both, and another type in either key
 rem   test_psw     - the Intel port switchover (src\xhci_psw.c, task 34.3):
 rem                  the device-id gate, the board exemption, the
 rem                  XhciIntelPortSwitch rule, and the route and release over
@@ -432,6 +435,10 @@ rem test_silent links nothing else: the gate, the list's admission and the
 rem descriptor walk are pure computations over registry values and bytes
 rem (task 38.2).
 call :run test_silent "test_silent.c ..\src\xhci_silent.c"
+rem test_regsrc links nothing else: where a registry value is taken from,
+rem the machine-wide key or the driver key, is a pure decision over the two
+rem readings (task 42-A.17), shared by xhci98.sys and xhcicm.sys.
+call :run test_regsrc "test_regsrc.c ..\src\xhci_regsrc.c"
 rem test_psw links nothing else: the gate, the value rule, the two
 rem sequences and the lifetime are pure, driven over a modelled
 rem configuration space (34.3, 35.5).

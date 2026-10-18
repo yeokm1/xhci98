@@ -514,7 +514,9 @@ key, a `DWORD` unless it says otherwise:
 `NNNN` is the subkey whose `DriverDesc` is the controller's Device
 Manager name ("Which controllers"). The install writes each value below
 but `XhciCmTunnelBridge` and `XhciCmBridgeNumbering` at its default,
-only where it is missing.
+only where it is missing. From `3.1.0.0` each is also read from
+`HKLM\System\CurrentControlSet\Services\USB` first, where it wins when it
+is there ("Registry settings", "One value for every controller").
 Restart Windows, or disable and enable the controller, after a change.
 
 | Value | Default | What it does |
@@ -2528,6 +2530,19 @@ hardware or the Windows they affect is present, and sets them on request
 ("Installing, updating and uninstalling with INSTALL.BAT"); everything
 below can still be set by hand.
 
+**One value for every controller (new in `3.1.0.0`).** Every value below,
+and every `XhciCm*` value ("The connection manager's registry values"),
+is read first from `HKLM\System\CurrentControlSet\Services\USB` on every
+Windows, and a value there **wins** over the same value in a controller's
+own key, for every controller; only when it is not there does each
+controller read its own key, as before. A value of the wrong type there
+still wins, and the driver's default stands. The INFs write nothing
+there, so nothing changes until a value is set in it; a value changed in
+the installer's settings is written there, and `portsw.vbs`, `silent.vbs`
+and their batch files set their value there and show both.
+To give one controller a different value, delete the machine-wide value
+and set that controller's own. `docs/using/tuning.md` has the details.
+
 Each value is a `DWORD` in the controller's driver (software) key, and
 the install writes every value the driver reads, thirty-six, in this key:
 
@@ -2764,6 +2779,12 @@ turns those two settings into fast ones.
 | `3` | 4000 Hz | 8000 Hz |
 | `4` | 31 Hz | 62 Hz (the codes below instead) |
 
+**Changed in `3.1.0.0`: value `4`'s codes.** In `2.3.0.0` to `3.0.0.0`
+value `4` took the codes 128, 129 and 130 for 2000, 4000 and 8000 Hz. From
+`3.1.0.0` it takes 128 to 143, and the order is reversed: 128 is now
+8000 Hz and 130 is 2000 Hz. There is no setting for the old codes. A filter
+set to a code for an earlier release must be set again.
+
 With `2` or `3`:
 
 - **Root ports only.** A device behind a hub keeps its ordinary rate.
@@ -2778,20 +2799,29 @@ With `2` or `3`:
   any Low- or Full-Speed device on a root port whose own polling interval is
   16 to 63 ms is polled faster too, hidusbf or not.
 
-**`4`: the rate the client chooses** (new in `2.3.0.0`; GitHub issue 17).
-An interrupt endpoint whose polling interval in the configuration Windows
-selects is 128, 129 or 130 is polled at 2000, 4000 or 8000 Hz; every other
-interval is polled as the specification reads it, so value `4` does not do
-`2`'s and `3`'s speeding up of 16 to 63 ms, and `2` and `3` do not honour
-the codes. It applies to a Low- or Full-Speed device on a root port only,
-and to a High-Speed or SuperSpeed device at a root port or behind a hub.
-The procedure is the value first, then the client: set `XhciFastPollFsLs`
-to `4` and restart, then set hidusbf (or another filter) to write 128, 129
-or 130. Two cautions:
+**`4`: the rate the client chooses** (new in `2.3.0.0`, GitHub issue 17;
+its codes changed in `3.1.0.0`, from SweetLow's proposal). An interrupt
+endpoint whose polling interval in the configuration Windows selects is a
+code from 128 to 143 is polled every 125 us x 2 to the power (code - 128):
+
+| Code | Polled every | Rate |
+|---|---|---|
+| 128 | 125 us | 8000 Hz |
+| 129 | 250 us | 4000 Hz |
+| 130 | 500 us | 2000 Hz |
+| 131 | 1 ms | 1000 Hz |
+| 132 to 143 | 2 ms to 4.096 s, doubling each step | 500 Hz down |
+
+Every other interval is polled as the specification reads it, so value `4`
+does not do `2`'s and `3`'s speeding up of 16 to 63 ms, and `2` and `3` do
+not honour the codes. It applies at every speed, on a root port or behind a
+hub. The procedure is the value first, then the client: set
+`XhciFastPollFsLs` to `4` and restart, then set hidusbf (or another filter)
+to write the code. Two cautions:
 
 - 128 to 255 ms are legal polling intervals for a Low- or Full-Speed
-  device, so a device that itself asks for 128, 129 or 130 ms is polled at
-  2000 to 8000 Hz while the value is `4`.
+  device, so a device that itself asks for 128 to 143 ms is polled at its
+  code's rate while the value is `4`.
 - A filter that writes a code while the value is not `4` gets what the
   number means without it: a Low- or Full-Speed device is polled every
   128 ms, and a High-Speed or SuperSpeed one, for which the number is out
@@ -2800,12 +2830,16 @@ or 130. Two cautions:
 
 A controller that refuses a code is caught as for `2` and `3` and counted
 in `fastpoll.fallbacks`, and the device is then polled every 1 ms
-(1000 Hz), not at the code's ordinary reading. A controller that accepts
-it and misbehaves cannot be caught; delete the value and restart. At High
-Speed and SuperSpeed the programmed polling interval is inside the
-specification's range; at Low and Full Speed it is outside it, as `2`'s
-and `3`'s are. On an AMD controller
-the code is applied before `XhciIntervalCap`, which leaves it alone. A
+(1000 Hz), whatever the code, not at the code's ordinary reading. A
+controller that accepts it and misbehaves cannot be caught; delete the
+value and restart. At High Speed and SuperSpeed every code's polling
+interval is inside the specification's range; at Low and Full Speed codes
+131 to 138 (1 to 128 ms) are inside it on a root port, and the others are
+outside it, as `2`'s and `3`'s are. A Low- or Full-Speed device behind a
+hub at any code is **untested ground**: the specification does not
+describe it, and `2.3.0.0` to `3.0.0.0` left such a device alone. On an
+AMD controller the code is applied before `XhciIntervalCap`, which leaves a
+code of 136 or faster alone and polls a slower one every 32 ms. A
 part of a composite device keeps the code only until its class driver
 issues a later select of its interface (`SELECT_INTERFACE`), even of the
 same alternate setting, as with `2` and `3`; HID class drivers do not.
@@ -2962,8 +2996,8 @@ within USB 2.0 and costs a few polls a second for such a device.
 
 It is applied after a polling rate a setting such as hidusbf's asked for
 and does not change which mouse `XhciFastPollFsLs` speeds up; under
-`XhciFastPollFsLs` `4` a code is applied first, and the cap leaves it
-alone. It is read when the controller starts.
+`XhciFastPollFsLs` `4` a code is applied first, and the cap leaves a code
+of 32 ms or faster alone. It is read when the controller starts.
 
 ### XhciAvgTrbEsit: a comparison switch
 

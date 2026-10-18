@@ -720,7 +720,9 @@ const char *tr_elev_question(void);
 
 /* The two drivers, each with its level in its devices' driver (software)
  * keys: xhci98's XhciLogVerbosity in every controller's, xhcicm's
- * XhciCmLogVerbosity in every NHI's. */
+ * XhciCmLogVerbosity in every NHI's; and, from 3.1.0.0, the same value in
+ * the machine-wide key TR_LV_MACHINE_KEY, which both drivers read first and
+ * which wins when it is there in any type (task 42-A.17). */
 #define TR_LV_XHCI98            0
 #define TR_LV_XHCICM            1
 #define TR_LV_DRIVERS           2
@@ -728,6 +730,7 @@ const char *tr_elev_question(void);
 #define TR_LV_MAX               4
 #define TR_LV_NAME_XHCI98       "XhciLogVerbosity"
 #define TR_LV_NAME_XHCICM       "XhciCmLogVerbosity"
+#define TR_LV_MACHINE_KEY       "System\\CurrentControlSet\\Services\\USB"
 
 /* "xhci98" or "xhcicm"; NULL for anything else. */
 const char *tr_level_driver(int driver);
@@ -748,31 +751,45 @@ typedef struct _TR_RVAL {
     TR_U32 Value;
 } TR_RVAL;
 
-/* A device's level as read: the value's state, and the level that
- * reading stands for - the DWORD when it is 0-4, TR_LV_DEFAULT when no
- * value is there, -1 otherwise (out of range, another type, not read). */
+/* Where a device's level was taken from. */
+#define TR_LV_FROM_NONE         0   /* neither key has the value            */
+#define TR_LV_FROM_MACHINE      1   /* the machine-wide key                 */
+#define TR_LV_FROM_DEVICE       2   /* the device's driver key              */
+
+/* A device's level as read: the state of the value in force, and the level
+ * that reading stands for - the DWORD when it is 0-4, TR_LV_DEFAULT when no
+ * value is there, -1 otherwise (out of range, another type, not read); which
+ * key it came from; and both readings. */
 typedef struct _TR_LEVEL {
-    int State;                  /* TR_RV_* of the value                    */
+    int State;                  /* TR_RV_* of the value in force           */
     TR_U32 Value;
     int Level;
+    int From;                   /* TR_LV_FROM_*                            */
+    TR_RVAL Machine;            /* the machine-wide key's reading          */
+    TR_RVAL Device;             /* the driver key's reading                */
 } TR_LEVEL;
 
-/* The level from the driver's one value, as read. */
-void tr_level_pick(const TR_RVAL *cur, TR_LEVEL *out);
+/* The level from the two readings, as the drivers take it: the machine-wide
+ * one when it is not absent (another type, or not read, included), else the
+ * driver key's. `machine` NULL is absent. */
+void tr_level_pick(const TR_RVAL *machine, const TR_RVAL *cur, TR_LEVEL *out);
 
 /* The value a driver's level is: XhciLogVerbosity or XhciCmLogVerbosity. */
 const char *tr_level_value_name(int driver);
 
 /* One line for a device's level, at most 72 characters: "3 - adds port
- * status (XhciCmLogVerbosity)", "2 - the log (default) (no value set)",
- * "7 - out of range, not 0-4 (XhciLogVerbosity)", "XhciLogVerbosity is
- * not a REG_DWORD", "not read". */
+ * status (XhciCmLogVerbosity)", "3 - adds port status (machine-wide)",
+ * "2 - the log (default) (no value set)", "7 - out of range, not 0-4
+ * (XhciLogVerbosity)", "XhciLogVerbosity is not a REG_DWORD",
+ * "XhciLogVerbosity machine-wide is not a REG_DWORD", "not read". */
 void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap);
 
 /* The levels block of the report and the dialog: per driver a heading
- * line, then each device's name and its line, or that there is none. A
- * line stays within 79 columns but for a long device name. */
-void tr_level_head(TR_TEXT *t, int driver, int count);
+ * line, the machine-wide value's line (`machine` NULL is absent), then
+ * each device's name and its line - with, under a machine-wide value in
+ * force, the device's own value that it overrides - or that there is none.
+ * A line stays within 79 columns but for a long device name. */
+void tr_level_head(TR_TEXT *t, int driver, int count, const TR_RVAL *machine);
 void tr_level_device(TR_TEXT *t, int driver, const char *name,
                      const TR_LEVEL *l);
 

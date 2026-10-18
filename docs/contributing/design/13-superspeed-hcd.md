@@ -561,7 +561,7 @@ task. The miniport reads six values from its device key (`src\*.c`, the six
 | `XhciLogDebugView` | Carried over, same meaning; under the HCD it also selects 26-A.8's continuous PASSIVE flusher |
 | `XhciImodInterval250ns` | Carried over, same meaning and code default 4000; both INFs write 160 (40 us) on every install path since the owner's ruling of 2026-10-04 (`roadmap-hcd.md`, decisions table), 500 until then |
 | `XhciVirtualHSHub`, `XhciVirtualHSHubVid`, `XhciVirtualHSHubPid` | Not read and not written (owner, 2026-10-02); the INF gate refuses them in an HCD INF (`VAL-HCDVHUB`) |
-| `XhciFastPollFsLs` | New in `2.1.0.0` (task 33.8), the HCD's own: read at each controller start, written by no INF until task 34.1 and as 0 since, absent or 0 is off. Lets a Low- or Full-Speed interrupt endpoint on a root port be polled faster than 1 ms; section 13. Since task 36.19, 4 lets a client choose 2000 to 8000 Hz by the codes 128 to 130, section 13.7 |
+| `XhciFastPollFsLs` | New in `2.1.0.0` (task 33.8), the HCD's own: read at each controller start, written by no INF until task 34.1 and as 0 since, absent or 0 is off. Lets a Low- or Full-Speed interrupt endpoint on a root port be polled faster than 1 ms; section 13. Since task 36.19, 4 lets a client choose 2000 to 8000 Hz by the codes 128 to 130, and since task 42-A.18 (`3.1.0.0`) any Interval by the codes 128 to 143, section 13.7 |
 | `XhciIntelPortSwitch` | New in `2.1.1.0` (task 34.3), the HCD's own: read at each start of a controller the switchover's gate passes, and on no other; written as 1 by every controller install path under task 34.1's rule until `2.2.0.0`, and as 0 since task 36.42 (`2.3.0.0`), when absent or of another type became off too; a DWORD that is not 0 turns the switchover on. Design record 16 sections 5 and 5a |
 
 The root-hub sections write no value of the controller's: they carry the
@@ -600,6 +600,39 @@ value that reads as an absent one does - under the same rule and flag.
 one value whose written number is not what an absent one reads as: the
 INFs write 0 and the driver reads an absent one as 1 (above, and section
 5.6).
+
+**Amended for `3.1.0.0` (roadmap-usb4 42-A.17; owner, 2026-10-18, on
+SweetLow's proposal): the machine-wide key.** Every value above, and every
+value the HCD reads at all - each one `hcd_ctl.c`'s `hcdReadDword` fetches,
+the Linux quirk switches (`hcd_quirk.c`) and the per-enumeration
+`XhciForceBulkOnly` included - is read first from
+`HKLM\System\CurrentControlSet\Services\USB` (`RTL_REGISTRY_SERVICES`,
+`USB`: the key usbport's own `DisableSelectiveSuspend` and this package's
+`SilentClasses` already live in, on every target), and from the
+controller's driver key, as before, only when it is not there. **The
+machine-wide value wins when present**, in any type: a value of another
+type there stands as "of another type", and the caller's default stands,
+as the same value in the driver key would give; the driver key is not
+consulted. The other precedence would leave the machine-wide key dead,
+since the INFs write every per-controller value at install; a tester who
+wants one controller different deletes the machine-wide value. Nothing is
+read from the device key, and `IoOpenDeviceRegistryKey`'s driver key stays
+the per-controller location. The INFs keep writing only the per-controller
+values, so an update keeps a user's values as before, and the INF gate is
+unchanged. The decision is the pure `XhciRegPick` (`xhci_regsrc.c`, host
+suite `test_regsrc`), shared with `xhcicm.sys` (design record 21 section
+8); "present" is the query routine having been called with a value at all,
+not a status code, because which status each target's
+`RtlQueryRegistryValues` returns for a missing key, a missing value and a
+refused type is not read on every target. The count of values a start took
+machine-wide is the `reg.machine` note at the end of `hcdReadValues`. The
+six helpers (`portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`,
+`silent.vbs`, `silent-on.bat`, `silent-off.bat`) write the machine-wide
+value, create the key where it is absent, leave the per-controller values
+alone and show both, naming the one in force; XHCITR's logging-level block
+and `/report` show both and which won, and its Set writes the machine-wide
+value where one is in force; the installer's settings pages (design record
+26 section 5.4) write the machine-wide value.
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `releases\1.2.0.0` directory is never edited (`releases/README.md`) - staged by `make-package.ps1` from 26-A.1 and published by
@@ -7261,7 +7294,8 @@ endpoints only. So:
    x64 (audio plays to its end, the composite select recorded with no
    interrupt endpoint).
 4. **Mode 4**: `XhciFastPollFsLs` 4 and hidusbf on the composite at a code
-   (128 to 130): `fastpoll.open` records for the HID endpoints (13.7).
+   (128 to 130; 128 to 143 since task 42-A.18): `fastpoll.open` records for
+   the HID endpoints (13.7).
 
 Without a passthrough composite HID device the matrix reads 3 and records 1,
 2 and 4 as owed to the bench, said so in the release notes' "Untested
@@ -8712,7 +8746,8 @@ no QEMU run can rule out.
   flag.
   `XhciPipeFastMode`: 1, 2 and 3 are themselves, anything else - absent, 0,
   a value of another type, 4 and up - is off. (Since task 36.19, 4 is
-  itself too, section 13.7, and 5 and up are off.) Logged as `fastpoll.value`
+  itself too, section 13.7, and 5 and up are off; since task 42-A.18 its
+  codes are 128 to 143.) Logged as `fastpoll.value`
   and `fastpoll.mode`.
 - **The mapping** (`XhciPipeFastPoll`, `xhci_pipe.c`), hidusbf's own numbers
   so a user picks the rate in the terms its Setup already uses: 1 changes
@@ -8805,7 +8840,7 @@ A machine whose Windows mouse path cannot report more than it is given
 (Windows 98's mouse stack may coalesce) still shows the programmed rate in
 the counters; the rate tool is the second reading, not the first.
 
-### 13.7 Mode 4: the polling rate a client chooses (task 36.19, 2026-10-09)
+### 13.7 Mode 4: the polling rate a client chooses (task 36.19, 2026-10-09; the encoding revised by task 42-A.18, 2026-10-18)
 
 The request is GitHub issue 17's item 2 (SweetLow, testing `2.x`): let a
 client pick 2000, 4000 or 8000 Hz for one endpoint directly, rather than
@@ -8819,33 +8854,57 @@ value. Nothing here was read out of a binary; it adds no
 `XhciPipeFastMode` passes 1 to 4 as themselves; 5 and up, 0, absent and a
 value of another type stay off, as before.
 
-**The codes.** Under mode 4, an interrupt endpoint whose `bInterval` in the
-descriptor the HCD is handed is 128, 129 or 130 is programmed at Interval
-2, 1 or 0: 500, 250 or 125 us, 2000, 4000 or 8000 Hz. Every other
-`bInterval` is read by Table 6-12, exactly as with the value off: mode 4
-does not do modes 2 and 3's mapping of Intervals 7 and 8, and modes 2 and 3
-do not honour the codes. The two conventions never meet on one controller,
-since the value holds one mode.
+**The codes, from `3.1.0.0` (task 42-A.18; owner, 2026-10-18, on
+SweetLow's proposal).** Under mode 4, an interrupt endpoint whose
+`bInterval` in the descriptor the HCD is handed is a code, 128 to 143, is
+programmed at **Interval = code - 128**: 128 is Interval 0 (125 us,
+8000 Hz), 129 is 1 (250 us), 130 is 2 (500 us), 131 is 3 (1 ms), and so on
+to 143, Interval 15 (4.096 s). Value 4 itself changed meaning: from
+`2.3.0.0` to `3.0.0.0` (task 36.19) the codes were 128, 129 and 130 for
+Interval 2, 1 and 0 (2000, 4000 and 8000 Hz), and the new scheme reverses
+them; there is no value 5 and no compatibility with the old codes (owner:
+nobody uses value 4 yet), and the release notes say so. A code whose
+Interval is the one Table 6-12 already gives the endpoint changes nothing
+and is not marked fast: 138 at Full and Low Speed (Interval 10, 128 ms by
+footnote 113's rounding of 138 ms) and 143 at High Speed and SuperSpeed
+(Interval 15, the clamp's). Every other `bInterval` is read by Table 6-12,
+exactly as with the value off: mode 4 does not do modes 2 and 3's mapping
+of Intervals 7 and 8, and modes 2 and 3 do not honour the codes. The two
+conventions never meet on one controller, since the value holds one mode.
 
 **Why an opt-in.** 128 to 255 ms are legal Full- and Low-Speed values
 (Table 6-12's 1-255 row), so a device may itself declare a code: under mode
-4 such a device is polled every 125 to 500 us instead of every 128 ms. And
-a client that sends a code with the mode off gets what the byte legally
+4 such a device is polled at its code's Interval instead of every 128 ms.
+And a client that sends a code with the mode off gets what the byte legally
 means, 128 ms at Full Speed, so the procedure is the mode first, then the
 client (hidusbf) set to the codes. The release notes say both.
 
-**The ceiling.** 125 us, Interval 0, at any speed. 131 and above are not
-codes and read by Table 6-12; no input reaches below Interval 0.
+**The bounds.** Interval 0 (125 us) to 15 (4.096 s), at any speed: no code
+reaches outside the Endpoint Context's encoding, and 127 and 144 are not
+codes and read by Table 6-12.
 
-**Scope.**
-- Full and Low Speed on a root port only (Route String 0), as modes 2 and
-  3: behind a hub a transaction translator or a Full-Speed hub carries the
-  device's periodic traffic one frame at a time.
-- High Speed and SuperSpeed (and SuperSpeedPlus) anywhere, root port or
-  behind a hub, since their Interval range already reaches 125 us (Table
-  6-12's HS and SS rows: Interval 0 is a valid value there). A code at
-  those speeds is otherwise an out-of-range `bInterval` that the driver's
-  existing clamp to Table 6-12's range takes to 16 (Interval 15, 4.096 s); the code replaces that.
+**Scope, revisited by task 42-A.18.** Every speed, at a root port or
+behind a hub (owner, 2026-10-18: "for every speed and at a root port or
+behind a hub"):
+- High Speed and SuperSpeed (and SuperSpeedPlus) as before, root port or
+  behind a hub: every code's Interval, 0 to 15, is inside Table 6-12's HS
+  and SS interrupt range. A code at those speeds is otherwise an
+  out-of-range `bInterval` that the driver's existing clamp to Table 6-12's
+  range takes to 16 (Interval 15, 4.096 s); the code replaces that.
+- Full and Low Speed, now behind a hub as well as on a root port. Table
+  6-12 allows Interval 3 to 10 there, so codes 131 to 138 are inside the
+  specification at a root port, and 128 to 130 (Interval 0 to 2) and 139
+  to 143 (11 to 15) are outside it, as modes 2 and 3's Intervals are. Behind
+  a hub every code is beyond what the specification and this record have
+  read: a transaction translator or a Full-Speed hub carries the device's
+  periodic traffic one frame at a time, and what a controller schedules for
+  a split interrupt endpoint at an Interval below 3 (or above 10) is not
+  specified. 36.19 kept Full and Low Speed behind a hub out for that
+  reason; the owner's 3.1.0.0 text takes it in, and it is **untested
+  ground**: no hub depth, multi-TT or single-TT rule is added for it, the
+  hub admission rules of section 10 are unchanged (they look at the device,
+  not at its Interval), and a controller that refuses the context is caught
+  by the refusal path below, the only protection there is.
 - Interrupt endpoints only: never isochronous (whose interval sets its data
   rate), never bulk, never a hub's own status endpoint (`HcdCfgHubOpen`
   never asks).
@@ -8853,15 +8912,18 @@ codes and read by Table 6-12; no input reaches below Interval 0.
 **Keyed on the descriptor's byte** (`XHCI_PIPE_EP.BInterval`, as the
 caller's descriptor gave it), not on the Interval Table 6-12 derives from
 it, which for a code is 10 at Full and Low Speed (footnote 113's rounding of
-128 to 130 ms) and 15 at High Speed and SuperSpeed after the clamp, values
+128 to 143 ms) and 15 at High Speed and SuperSpeed after the clamp, values
 an ordinary device also produces.
 
 **Its place before the interval cap** (record 17 section 4.7). Modes 2 and 3
 run after the cap and only when the cap left the Interval as it was, so on
 an AMD controller (cap on) a capped endpoint is never fast-polled. Mode 4
-runs first: a code's Interval (2 or less) is then never above the cap's 8,
-so the cap leaves it, and an AMD controller does not silence the code. An
-endpoint with no code goes through the cap as it does today.
+runs first: a code's Interval at or below the cap's 8 (codes 128 to 136) is
+left as it is, so an AMD controller does not silence a fast code, and a
+slower one (137 to 143) is lowered to 8 as any endpoint's is; under
+`XhciTiIntervalCap` (record 20 section 4.9; High Speed and above, 7 and up
+to 6) codes 135 to 143 likewise become Interval 6. An endpoint with no code
+goes through the cap as it does today.
 
 **The fallback.** The endpoint keeps two values apart: `SpecInterval`, the
 Table 6-12 Interval its descriptor gives (for the record), and
@@ -8871,14 +8933,19 @@ exactly. Mode 4 sets it to 3 (1 ms), not to Table 6-12's reading of the
 code: that would leave a device that asked for 8000 Hz polled every 128 ms
 (or 4.096 s at High Speed). 3 is inside every speed's interrupt range
 (Full and Low Speed 3-10, High Speed and SuperSpeed 0-15) and at or below
-the cap. The refusal path is section 13.5's, unchanged:
+the cap. Under task 42-A.18 the fallback stays 3 for every code, as this
+section says, a slow code's included: a refused 2.048 s code is then
+polled every 1 ms, which polls a device more often than it asked but
+always within every speed's range and every cap. The refusal path is
+section 13.5's, unchanged:
 `hcdCfgConfigureAdd` reverts every pipe the mode changed when Configure
 Endpoint fails with Parameter, Bandwidth or Secondary Bandwidth Error
 (`XhciPipeFastRetry`) and issues it once more, counted in
 `fastpoll.fallbacks` with a `fastpoll.fallback` record. An endpoint opened
 fast is `fastpoll.opened` and a `fastpoll.open` record (slot, DCI,
 `SpecInterval`, the Interval programmed): under mode 4 a Full-Speed code
-reads `0A00` to `0A02`, a High-Speed or SuperSpeed one `0F00` to `0F02`.
+reads `0A00` to `0A0F` (no `0A0A`), a High-Speed or SuperSpeed one `0F00`
+to `0F0E` - the programmed byte after the cap, where one applies.
 
 **The replays.** `RESET_PORT` and the endpoint recycle rebuild the
 Endpoint Context from the stored `pipe->Ep` (`hcdCfgConfigureAdd` with
@@ -8915,22 +8982,28 @@ an interface. Revisited if a report shows it.
 **What the client is told** is unchanged: the `bInterval` it gave, in
 `USBD_PIPE_INFORMATION.Interval`.
 
-**Host vectors** (`test\test_pipe.c`, `test_fast_poll` and its
-neighbours): 4 accepted and 5 off; each code at Low, Full and High Speed
-and SuperSpeed; 127, 131 and 255 untouched; Full Speed behind a hub
-untouched and High Speed and SuperSpeed behind one applied; isochronous and
-bulk untouched; modes 2 and 3 ignoring the codes and mode 4 ignoring
-Intervals 7 and 8; no double application; the revert landing at 3 under
-mode 4 and at the replaced Interval under modes 2 and 3; mode 4 before the
-cap in `test_tol.c`'s ordering vector; `XhciPipeRebaseInterval` agreeing
-with the parser at every speed and type; and an integration vector with a
-split SuperSpeed device, a nontrivial companion, and a device byte that
-differs from the caller's code.
+**Host vectors** (`test\test_pipe.c`, `test_fast_codes` and its
+neighbours; revised by task 42-A.18): 4 accepted and 5 off; every code 128
+to 143 at Low, Full and High Speed, SuperSpeed and SuperSpeedPlus, at a
+root port and behind a one- and a two-tier hub, programmed at code - 128,
+except the one code a speed's Table 6-12 reading already gives (138 below
+High Speed, 143 above), which is left unmarked; the boundaries 127 and 144
+untouched at every speed and route; every other `bInterval` 1 to 255 at
+Full Speed untouched; isochronous, bulk and an unknown speed untouched;
+modes 2 and 3 ignoring the codes and mode 4 ignoring Intervals 7 and 8; no
+double application; the revert landing at 3 under mode 4 and at the
+replaced Interval under modes 2 and 3; mode 4 before the cap in
+`test_tol.c`'s ordering vector, a code above 8 capped and the fallback 3
+never; `XhciPipeRebaseInterval` agreeing with the parser at every speed and
+type; and an integration vector with a split SuperSpeed device, a
+nontrivial companion, and a device byte that differs from the caller's
+code.
 
-**Legs.** hidusbf set to the codes on 98 SE and 7 in QEMU, read in the
-`fastpoll.*` records (QEMU paces Interval 0 at 125 us, section 13.4, and
+**Legs.** 36.19's: hidusbf set to the codes on 98 SE and 7 in QEMU, read in
+the `fastpoll.*` records (QEMU paces Interval 0 at 125 us, section 13.4, and
 can show no refusal); mode 4 with an unpatched device reading as the
-release before it. The owner's bench reads a real controller's acceptance.
+release before it. 42-A.18's are `runs/run-42.md`'s and roadmap-usb4
+42-V.2's. The owner's bench reads a real controller's acceptance.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 

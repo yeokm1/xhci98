@@ -3936,7 +3936,15 @@ makes no restart).
 ## 8. Registry values, counters, the log and the snapshot
 
 Values, each `REG_DWORD` unless said, each written by every install path at
-its default under the don't-overwrite flag, each read once at start:
+its default under the don't-overwrite flag, each read once at start. From
+`3.1.0.0` (roadmap-usb4 42-A.17; owner, 2026-10-18) every one is read first
+from the machine-wide key `HKLM\System\CurrentControlSet\Services\USB`,
+which `xhci98.sys` reads too, and from the NHI's driver key only when it is
+not there in any type: a machine-wide value wins when present, one of
+another type standing as unreadable with the default, and the machine-wide
+key is read even when the driver key cannot be opened (`cm_reg.c`
+`cmQuery`; the decision is `..\xhci_regsrc.c`'s `XhciRegPick`, design
+record 13 section 5.5). The INFs still write only the driver key:
 
 | Value | Default | Meaning |
 |---|---|---|

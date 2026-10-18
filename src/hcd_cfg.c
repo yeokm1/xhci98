@@ -985,10 +985,11 @@ static VOID hcdCfgQuirkCapped(PHCD_CONTROLLER hc, const XHCI_PIPE_EP *ep)
  * endpoint a client's select names, never to a hub's own (HcdCfgHubOpen).
  * Modes 2 and 3: the cap comes first, and fast polling is offered only when
  * it left the Interval unchanged, so eligibility is judged on the uncapped
- * value (record 17 section 4.7). Mode 4 (task 36.19) comes before the cap,
- * which leaves a code's Interval of 2 or less as it is, so a capped
- * controller does not silence a code; the cap still runs, for the Average
- * TRB Length and for an endpoint with no code. Thread only. */
+ * value (record 17 section 4.7). Mode 4 (task 36.19; task 42-A.18's codes)
+ * comes before the cap, which leaves a code's Interval at or below the cap
+ * as it is, so a capped controller does not silence a fast code, and
+ * lowers a slower one as it lowers any endpoint's; the cap still runs, for
+ * the Average TRB Length and for an endpoint with no code. Thread only. */
 static VOID hcdCfgFastPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            PXHCI_PIPE_EP ep)
 {

@@ -1083,10 +1083,12 @@ the cap never makes an endpoint eligible that was not. Fast polling's
 fallback on a refused Configure Endpoint restores the capped Interval, not
 the uncapped one. Mode 4 (task 36.19, record 13 section 13.7) is the
 exception and comes before the cap: keyed on the caller's `bInterval` (128
-to 130), it programs Interval 2 to 0, which the cap leaves, so a capped
-controller does not silence a code; its fallback is Interval 3, which the
-cap leaves too. An endpoint mode 4 does not change goes through the cap as
-above. Host vectors cover each combination of the cap's three values with
+to 130 under task 36.19, programming Interval 2 to 0; 128 to 143 since task
+42-A.18, programming Interval code - 128), it programs an Interval the cap
+leaves when it is 8 or less, so a capped controller does not silence a fast
+code, and lowers to 8 when it is above, as any endpoint's; its fallback is
+Interval 3, which the cap leaves too. An endpoint mode 4 does not change
+goes through the cap as above. Host vectors cover each combination of the cap's three values with
 fast polling's modes, mode 4 included, and the fallback.
 
 **Task 38.10 (design record 20 sections 4.9, 4.10 and 13).** The cap's

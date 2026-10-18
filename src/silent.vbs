@@ -13,15 +13,23 @@
 '   cscript //nologo silent.vbs 0      off, the default: sets it to 0 and
 '                                      leaves the list.
 '
+' From 3.1.0.0 the switch is set machine-wide, in
+' HKLM\System\CurrentControlSet\Services\USB beside the list, which every
+' xhci98 controller reads first: a value there wins over the controller's
+' own, which the install writes and this script leaves as it is
+' (roadmap-usb4 task 42-A.17). The script shows both and says which one is
+' in force. To give one controller a different value, delete the
+' machine-wide value in regedit and set that controller's own.
+'
 ' The driver reads the switch and the list only when its controller starts,
 ' so a change takes effect at the next RESTART of Windows. Only a DWORD of
 ' exactly 1 is on; missing, 0, another number or another type is off.
 '
 ' Exit codes: 0 done; 1 refused or nothing found (no controller, or NT);
-' 2 usage; 3 partial (set on some controllers and not others); 4 the list
-' did not verify (1 only: nothing was written); 5 not verified (a write
-' that returned no error read back wrong: that controller's value may have
-' changed).
+' 2 usage; 3 partial (no longer returned since 3.1.0.0: the one
+' machine-wide value is written or not); 4 the list did not verify (1
+' only: nothing was written); 5 not verified (a write that returned no
+' error read back wrong: the machine-wide value may have changed).
 '
 ' Windows Script Host and VBScript, because 98 SE and ME have them and no
 ' reg.exe. The controller's driver key is Class\USB\NNNN; Script Host cannot
@@ -36,6 +44,7 @@ Const XHCI_DESC = "xHCI98 USB 3.x eXtensible Host Controller"
 Const VALUE_NAME = "XhciSilentInstall"
 Const CLASS_9X = "HKLM\System\CurrentControlSet\Services\Class\USB\"
 Const LIST_KEY = "HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB\SilentClasses"
+Const MACHINE_KEY = "HKLM\System\CurrentControlSet\Services\USB\"
 Const TITLE = "xhci98 silent install"
 Const PROBE_LAST = 9999
 Const SILENT_MAX = 32
@@ -455,29 +464,60 @@ End Function
 
 ' --------------------------------------------------------------------------
 
-' What the driver makes of the switch: only a DWORD of exactly 1 is on.
-Function Describe(name)
+' Whether the machine-wide switch is there, in any type: then it is the one
+' every controller uses.
+Function MachineSet()
+    Dim v, ok
+    v = ReadValue(MACHINE_KEY & VALUE_NAME, ok)
+    MachineSet = ok
+End Function
+
+' What the driver makes of one switch: only a DWORD of exactly 1 is on.
+Function DescribeAt(path)
     Dim v, ok, t
-    v = ReadValue(base & name & "\" & VALUE_NAME, ok)
+    v = ReadValue(path, ok)
     If Not ok Then
-        Describe = "not set - off"
+        DescribeAt = "not set - off"
         Exit Function
     End If
     t = VarType(v)
     If t <> vbInteger And t <> vbLong Then
-        Describe = "not a DWORD - off (the driver reads only a DWORD of 1)"
+        DescribeAt = "not a DWORD - off (the driver reads only a DWORD of 1)"
     ElseIf v = 1 Then
-        Describe = "1 - on"
+        DescribeAt = "1 - on"
     ElseIf v = 0 Then
-        Describe = "0 - off"
+        DescribeAt = "0 - off"
     Else
-        Describe = CStr(v) & " - off (only 1 turns it on)"
+        DescribeAt = CStr(v) & " - off (only 1 turns it on)"
+    End If
+End Function
+
+Function Describe(name)
+    Dim v, ok
+    If MachineSet() Then
+        v = ReadValue(base & name & "\" & VALUE_NAME, ok)
+        If ok Then
+            Describe = "its own value: " & DescribeAt(base & name & "\" & VALUE_NAME) & _
+                vbCrLf & "      NOT IN FORCE: the machine-wide value is used"
+        Else
+            Describe = "its own value: not set; the machine-wide value is used"
+        End If
+    Else
+        Describe = DescribeAt(base & name & "\" & VALUE_NAME) & _
+            vbCrLf & "      in force: no machine-wide value is set"
     End If
 End Function
 
 Function ShowText()
     Dim s, k
-    s = VALUE_NAME & " on each xhci98 controller:" & vbCrLf
+    s = VALUE_NAME & " machine-wide, which every xhci98 controller reads first:" & vbCrLf
+    s = s & "  " & MACHINE_KEY & vbCrLf & "      "
+    If MachineSet() Then
+        s = s & DescribeAt(MACHINE_KEY & VALUE_NAME) & " - IN FORCE on every controller" & vbCrLf
+    Else
+        s = s & "not set - each controller's own value below is used" & vbCrLf
+    End If
+    s = s & VALUE_NAME & " on each xhci98 controller:" & vbCrLf
     For Each k In keys
         s = s & "  " & base & k & vbCrLf & "      " & Describe(k) & vbCrLf
     Next
@@ -507,79 +547,58 @@ Sub CheckList()
     Say OthersText()
 End Sub
 
-Function WriteValue(name, v)
+' The machine-wide switch; RegWrite creates the USB key where it is absent.
+Function WriteMachine(v)
     On Error Resume Next
     Err.Clear
-    sh.RegWrite base & name & "\" & VALUE_NAME, v, "REG_DWORD"
-    WriteValue = Err.Number
+    sh.RegWrite MACHINE_KEY & VALUE_NAME, v, "REG_DWORD"
+    WriteMachine = Err.Number
     Err.Clear
 End Function
 
-' Each controller ends set (written and read back), not set (the write
-' failed: the value is as it was) or unverified (written without error and
-' then read back wrong or not at all: it may or may not have changed).
+' Writes the machine-wide switch only, and reads it back; the controllers'
+' own values are left as they are. It ends set (written and read back), not
+' set (the write failed: the value is as it was) or unverified (written
+' without error and then read back wrong or not at all).
 Sub SetAll(v)
-    Dim k, rc, back, ok, nSet, nNot, nUnv, total, t
-    nSet = 0
-    nNot = 0
-    nUnv = 0
-    total = 0
-    For Each k In keys
-        total = total + 1
-        rc = WriteValue(k, v)
-        If rc <> 0 Then
-            nNot = nNot + 1
-            Say "not set:    " & base & k & " (error " & CStr(rc) & ")"
-        Else
-            back = ReadValue(base & k & "\" & VALUE_NAME, ok)
-            If ok Then
-                t = VarType(back)
-                If (t = vbInteger Or t = vbLong) Then
-                    ok = (back = v)
-                Else
-                    ok = False
-                End If
-            End If
-            If ok Then
-                nSet = nSet + 1
-                Say "set:        " & base & k
-            Else
-                nUnv = nUnv + 1
-                Say "unverified: " & base & k & " (written, then read back wrong or not at all)"
-            End If
-        End If
-    Next
-    Say ""
-    If nUnv > 0 Then
-        Say "UNVERIFIED: the switch may have changed on " & CStr(nUnv) & " of " & _
-            CStr(total) & " controllers."
+    Dim rc, back, ok, t
+    rc = WriteMachine(v)
+    If rc <> 0 Then
+        Say "not set:    " & MACHINE_KEY & " (error " & CStr(rc) & ")"
         Say ""
-        Say ShowText()
-        Say "Run silent-off.bat to set every controller back to 0, or check"
-        Say VALUE_NAME & " under each controller's key in regedit."
-        Finish 5
-    End If
-    If nSet = total Then
-        Say ShowText()
-        Say VALUE_NAME & " is now " & CStr(v) & " on every xhci98 controller."
-        Say ""
-        Say "RESTART WINDOWS for this to take effect: the driver reads the"
-        Say "switch and the list only when its controller starts."
-        Finish 0
-    End If
-    If nSet = 0 Then
         Say "The switch was not changed."
         Say ""
         Say ShowText()
         Finish 1
     End If
-    Say "PARTIAL: the switch was set on " & CStr(nSet) & " of " & CStr(total) & _
-        " controllers."
+    back = ReadValue(MACHINE_KEY & VALUE_NAME, ok)
+    If ok Then
+        t = VarType(back)
+        If (t = vbInteger Or t = vbLong) Then
+            ok = (back = v)
+        Else
+            ok = False
+        End If
+    End If
+    If Not ok Then
+        Say "unverified: " & MACHINE_KEY & " (written, then read back wrong or not at all)"
+        Say ""
+        Say "UNVERIFIED: the machine-wide switch may have changed."
+        Say ""
+        Say ShowText()
+        Say "Run silent-off.bat to set it back to 0, or check " & VALUE_NAME
+        Say "under " & MACHINE_KEY & " in regedit."
+        Finish 5
+    End If
+    Say "set:        " & MACHINE_KEY
     Say ""
     Say ShowText()
-    Say "Run silent-off.bat to set every controller back to 0, or correct the"
-    Say "failure and run the script again."
-    Finish 3
+    Say VALUE_NAME & " is now " & CStr(v) & " machine-wide, for every xhci98"
+    Say "controller; their own values were left as they are."
+    Say ""
+    Say "RESTART WINDOWS for this to take effect: the driver reads the"
+    Say "switch and the list only when its controller starts."
+    Finish 0
 End Sub
 
 Sub Usage()

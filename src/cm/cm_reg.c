@@ -12,11 +12,21 @@
  * two values no INF writes, XhciCmTunnelBridge and XhciCmBridgeNumbering,
  * are read from the same key.
  *
+ * From 3.1.0.0 every value is read first from the machine-wide key
+ * HKLM\System\CurrentControlSet\Services\USB, the one xhci98.sys reads
+ * too, and from the driver key only when it is not there in any type: the
+ * machine-wide value wins when present (task 42-A.17, ..\xhci_regsrc.h).
+ * The machine-wide key is read even when the driver key cannot be opened.
+ *
  * IRQL: PASSIVE_LEVEL, in the system thread PnP's start runs in, as
  * IoOpenDeviceRegistryKey needs.
  */
 
 #include "cm.h"
+#include "../xhci_regsrc.h"
+
+/* Relative to RTL_REGISTRY_SERVICES (hcd_ctl.c's HCD_MACHINE_KEY). */
+#define CM_MACHINE_KEY L"USB"
 
 static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
     L"XhciCmMode",
@@ -40,7 +50,8 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 #define CM_VALUE_BRIDGE_NUMBERING L"XhciCmBridgeNumbering"
 
 typedef struct _CM_TAKE {
-    ULONG Found;
+    ULONG Seen;                 /* the routine was called with a value    */
+    ULONG Found;                /* of the type taken, in Dword or Text    */
     ULONG Dword;
     WCHAR Text[CM_TUNNEL_BRIDGE_CHARS + 1];
     ULONG TextChars;
@@ -56,10 +67,15 @@ static NTSTATUS NTAPI cmTakeDword(PWSTR ValueName, ULONG ValueType,
 
     UNREFERENCED_PARAMETER(ValueName);
     UNREFERENCED_PARAMETER(Context);
-    if (ValueType != REG_DWORD || ValueLength != sizeof(ULONG)) {
+    take = (PCM_TAKE)EntryContext;
+    if (ValueType == REG_NONE) {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+    take->Seen = 1;
+    if (ValueType != REG_DWORD || ValueLength != sizeof(ULONG) ||
+        ValueData == NULL) {
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
-    take = (PCM_TAKE)EntryContext;
     from = (PUCHAR)ValueData;
     take->Dword = (ULONG)from[0] | ((ULONG)from[1] << 8) |
                   ((ULONG)from[2] << 16) | ((ULONG)from[3] << 24);
@@ -80,10 +96,14 @@ static NTSTATUS NTAPI cmTakeText(PWSTR ValueName, ULONG ValueType,
 
     UNREFERENCED_PARAMETER(ValueName);
     UNREFERENCED_PARAMETER(Context);
-    if (ValueType != REG_SZ) {
+    take = (PCM_TAKE)EntryContext;
+    if (ValueType == REG_NONE) {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+    take->Seen = 1;
+    if (ValueType != REG_SZ || ValueData == NULL) {
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
-    take = (PCM_TAKE)EntryContext;
     from = (const WCHAR *)ValueData;
     chars = ValueLength / sizeof(WCHAR);
     while (chars != 0 && from[chars - 1] == 0) {
@@ -101,7 +121,11 @@ static NTSTATUS NTAPI cmTakeText(PWSTR ValueName, ULONG ValueType,
     return STATUS_SUCCESS;
 }
 
-static VOID cmQuery(HANDLE key, PCWSTR name, PCM_TAKE take, ULONG text)
+/* One value from one key, `relativeTo` and `path` as RtlQueryRegistryValues
+ * takes them; Seen and Found are the routine's, whatever status the query
+ * returns. */
+static VOID cmQueryAt(ULONG relativeTo, PWSTR path, PCWSTR name,
+                      PCM_TAKE take, ULONG text)
 {
     RTL_QUERY_REGISTRY_TABLE table[2];
 
@@ -113,8 +137,29 @@ static VOID cmQuery(HANDLE key, PCWSTR name, PCM_TAKE take, ULONG text)
     table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
     table[0].Name = (PWSTR)name;
     table[0].EntryContext = take;
-    if (!NT_SUCCESS(RtlQueryRegistryValues(RTL_REGISTRY_HANDLE, (PWSTR)key,
-                                           table, NULL, NULL))) {
+    (VOID)RtlQueryRegistryValues(relativeTo, path, table, NULL, NULL);
+}
+
+/* One value as it stands: the machine-wide key's reading when the value is
+ * there in any type, else the driver key's (`key` NULL when that did not
+ * open). Found only for the type taken. */
+static VOID cmQuery(HANDLE key, PCWSTR name, PCM_TAKE take, ULONG text)
+{
+    ULONG machineState;
+    ULONG deviceState;
+
+    cmQueryAt(RTL_REGISTRY_SERVICES, (PWSTR)CM_MACHINE_KEY, name, take, text);
+    machineState = XhciRegState(take->Seen, take->Found);
+    deviceState = XHCI_REG_ABSENT;
+    if (machineState == XHCI_REG_ABSENT) {
+        if (key != NULL) {
+            cmQueryAt(RTL_REGISTRY_HANDLE, (PWSTR)key, name, take, text);
+        } else {
+            CmZero(take, sizeof(CM_TAKE));
+        }
+        deviceState = XhciRegState(take->Seen, take->Found);
+    }
+    if (XhciRegPickedState(machineState, deviceState) != XHCI_REG_TAKEN) {
         take->Found = 0;
     }
 }
@@ -130,7 +175,7 @@ VOID CmReadValues(PCM_NHI nhi)
     if (!NT_SUCCESS(IoOpenDeviceRegistryKey(nhi->Common.Pdo,
                                             PLUGPLAY_REGKEY_DRIVER, KEY_READ,
                                             &key))) {
-        return;
+        key = NULL;
     }
     for (i = 0; i < CM_VAL_COUNT; i++) {
         cmQuery(key, cmValueNames[i], &take, 0);
@@ -142,5 +187,7 @@ VOID CmReadValues(PCM_NHI nhi)
     }
     cmQuery(key, CM_VALUE_BRIDGE_NUMBERING, &take, 0);
     CmValuesTakeBridgeNumbering(&nhi->Values, take.Found, take.Dword);
-    ZwClose(key);
+    if (key != NULL) {
+        ZwClose(key);
+    }
 }

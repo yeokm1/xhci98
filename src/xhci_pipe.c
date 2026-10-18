@@ -761,31 +761,38 @@ ULONG XhciPipeFastMode(ULONG value)
 }
 
 /*
- * Mode 4 (task 36.19, design record 13 section 13.7): keyed on the
- * descriptor's byte, never on the Interval Table 6-12 derives from it, which
- * for a code is 10 at Full and Low Speed and 15 at High Speed and SuperSpeed
- * - values an ordinary device gives too. 128 to 255 ms are legal Full- and
- * Low-Speed values, which is why it is a mode a user sets. The fallback is
- * Interval 3 (1 ms), inside every speed's interrupt range, not the code's
- * Table 6-12 reading of 128 ms or more.
+ * Mode 4 (task 36.19; the encoding of task 42-A.18, design record 13
+ * section 13.7): keyed on the descriptor's byte, never on the Interval
+ * Table 6-12 derives from it, which for a code is 10 at Full and Low Speed
+ * and 15 at High Speed and SuperSpeed - values an ordinary device gives
+ * too. 128 to 255 ms are legal Full- and Low-Speed values, which is why it
+ * is a mode a user sets. The route is not looked at (owner, 2026-10-18):
+ * behind a hub, and an Interval of 0 to 2 or of 11 to 15 below High Speed,
+ * are outside Table 6-12's Full- and Low-Speed range and untested ground,
+ * which the refusal path below covers where a controller says so. A code
+ * whose Interval is the one Table 6-12 already gives changes nothing. The
+ * fallback is Interval 3 (1 ms), inside every speed's interrupt range and
+ * at or below every interval cap, not the code's Table 6-12 reading.
  */
-static ULONG xhciPipeFastCodes(ULONG speed, ULONG route, PXHCI_PIPE_EP ep)
+static ULONG xhciPipeFastCodes(ULONG speed, PXHCI_PIPE_EP ep)
 {
+    ULONG interval;
+
     if (ep->TransferType != XHCI_PIPE_XFER_INTERRUPT ||
         ep->BInterval < XHCI_PIPE_FAST_CODE_LOW ||
         ep->BInterval > XHCI_PIPE_FAST_CODE_HIGH) {
         return 0;
     }
-    if (speed == XHCI_PIPE_SPEED_LOW || speed == XHCI_PIPE_SPEED_FULL) {
-        if (route != 0) {
-            return 0;
-        }
-    } else if (speed != XHCI_PIPE_SPEED_HIGH &&
-               speed != XHCI_PIPE_SPEED_SUPER &&
-               speed != XHCI_PIPE_SPEED_SUPER_PLUS) {
+    if (speed != XHCI_PIPE_SPEED_LOW && speed != XHCI_PIPE_SPEED_FULL &&
+        speed != XHCI_PIPE_SPEED_HIGH && speed != XHCI_PIPE_SPEED_SUPER &&
+        speed != XHCI_PIPE_SPEED_SUPER_PLUS) {
         return 0;
     }
-    ep->Interval = XHCI_PIPE_FAST_CODE_HIGH - ep->BInterval;
+    interval = ep->BInterval - XHCI_PIPE_FAST_CODE_LOW;
+    if (interval == ep->Interval) {
+        return 0;
+    }
+    ep->Interval = interval;
     ep->FallbackInterval = XHCI_PIPE_FAST_CODE_FALLBACK;
     ep->FastPoll = 1;
     return 1;
@@ -800,7 +807,7 @@ ULONG XhciPipeFastPoll(ULONG mode, ULONG speed, ULONG route,
         return 0;
     }
     if (mode == XHCI_PIPE_FAST_CODES) {
-        return xhciPipeFastCodes(speed, route, ep);
+        return xhciPipeFastCodes(speed, ep);
     }
     if (
         (mode != XHCI_PIPE_FAST_2K4K && mode != XHCI_PIPE_FAST_4K8K) ||

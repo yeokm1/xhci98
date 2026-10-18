@@ -10,6 +10,14 @@
 '   cscript //nologo portsw.vbs 0      off, the default: they stay where
 '                                      the firmware put them.
 '
+' From 3.1.0.0 the value is set machine-wide, in
+' HKLM\System\CurrentControlSet\Services\USB, which every xhci98 controller
+' reads first: a value there wins over the controller's own, which the
+' install writes and this script leaves as it is (roadmap-usb4 task
+' 42-A.17). The script shows both and says which one is in force. To give
+' one controller a different value, delete the machine-wide value in
+' regedit and set that controller's own.
+'
 ' The driver reads the value only when its controller starts, so a change
 ' takes effect at the next RESTART of Windows. Setting 1 or 0 needs an
 ' administrator; on Vista and 7 it asks Windows for that itself.
@@ -36,6 +44,7 @@ Const XHCI_DESC = "xHCI98 USB 3.x eXtensible Host Controller"
 Const VALUE_NAME = "XhciIntelPortSwitch"
 Const CLASS_9X = "HKLM\System\CurrentControlSet\Services\Class\USB\"
 Const CLASS_NT = "HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\"
+Const MACHINE_KEY = "HKLM\System\CurrentControlSet\Services\USB\"
 Const TITLE = "xhci98 port switchover"
 Const PROBE_LAST = 9999
 Const HKEY_LOCAL_MACHINE = &H80000002
@@ -229,41 +238,73 @@ Function SubKeysProbe()
     SubKeysProbe = s
 End Function
 
-' What the driver makes of the value: only a DWORD is read, and since
+' Whether the machine-wide value is there, in any type: then it is the one
+' every controller uses.
+Function MachineSet()
+    Dim v, ok
+    v = ReadValue(MACHINE_KEY & VALUE_NAME, ok)
+    MachineSet = ok
+End Function
+
+' What the driver makes of one value: only a DWORD is read, and since
 ' 2.3.0.0 a missing one is off.
-Function Describe(name)
+Function DescribeAt(path)
     Dim v, ok, t
-    v = ReadValue(base & name & "\" & VALUE_NAME, ok)
+    v = ReadValue(path, ok)
     If Not ok Then
-        Describe = "not set - off (a missing value is read as 0)"
+        DescribeAt = "not set - off (a missing value is read as 0)"
         Exit Function
     End If
     t = VarType(v)
     If t <> vbInteger And t <> vbLong And t <> vbDouble Then
-        Describe = "not a DWORD - off (the driver reads only a DWORD)"
+        DescribeAt = "not a DWORD - off (the driver reads only a DWORD)"
     ElseIf v = 0 Then
-        Describe = "0 - off"
+        DescribeAt = "0 - off"
     ElseIf v = 2 Then
-        Describe = "2 - on, on any Intel controller, at your own risk"
+        DescribeAt = "2 - on, on any Intel controller, at your own risk"
     Else
-        Describe = CStr(v) & " - on, on the listed Intel chipsets"
+        DescribeAt = CStr(v) & " - on, on the listed Intel chipsets"
+    End If
+End Function
+
+Function Describe(name)
+    Dim v, ok
+    If MachineSet() Then
+        v = ReadValue(base & name & "\" & VALUE_NAME, ok)
+        If ok Then
+            Describe = "its own value: " & DescribeAt(base & name & "\" & VALUE_NAME) & _
+                vbCrLf & "      NOT IN FORCE: the machine-wide value is used"
+        Else
+            Describe = "its own value: not set; the machine-wide value is used"
+        End If
+    Else
+        Describe = DescribeAt(base & name & "\" & VALUE_NAME) & _
+            vbCrLf & "      in force: no machine-wide value is set"
     End If
 End Function
 
 Function ShowText()
     Dim s, k
-    s = VALUE_NAME & " on each xhci98 controller:" & vbCrLf
+    s = VALUE_NAME & " machine-wide, which every xhci98 controller reads first:" & vbCrLf
+    s = s & "  " & MACHINE_KEY & vbCrLf & "      "
+    If MachineSet() Then
+        s = s & DescribeAt(MACHINE_KEY & VALUE_NAME) & " - IN FORCE on every controller" & vbCrLf
+    Else
+        s = s & "not set - each controller's own value below is used" & vbCrLf
+    End If
+    s = s & VALUE_NAME & " on each xhci98 controller:" & vbCrLf
     For Each k In keys
         s = s & "  " & base & k & vbCrLf & "      " & Describe(k) & vbCrLf
     Next
     ShowText = s
 End Function
 
-Function WriteValue(name, v)
+' The machine-wide value; RegWrite creates the USB key where it is absent.
+Function WriteMachine(v)
     On Error Resume Next
     Err.Clear
-    sh.RegWrite base & name & "\" & VALUE_NAME, v, "REG_DWORD"
-    WriteValue = Err.Number
+    sh.RegWrite MACHINE_KEY & VALUE_NAME, v, "REG_DWORD"
+    WriteMachine = Err.Number
     Err.Clear
 End Function
 
@@ -284,37 +325,50 @@ Function IsNT6()
     End If
 End Function
 
-' Exit code 3: the elevated copy was started, and this one does not know
-' its result.
+' Writes the machine-wide value only, and reads it back; the controllers'
+' own values are left as they are. Exit code 3: the elevated copy was
+' started, and this one does not know its result.
 Sub SetAll(v)
-    Dim k, rc, written
-    written = 0
-    For Each k In keys
-        rc = WriteValue(k, v)
-        If rc <> 0 Then
-            If written = 0 And IsNT6() And Not elevated Then
-                CreateObject("Shell.Application").ShellExecute "wscript.exe", _
-                    """" & WScript.ScriptFullName & """ " & CStr(v) & " -elevated", _
-                    "", "runas", 1
-                Say "Windows is asking for administrator rights. Nothing was"
-                Say "changed by this window; the result is shown in the window"
-                Say "that opens next."
-                Finish 3
-            End If
-            Say "Could not write " & VALUE_NAME & " to"
-            Say "  " & base & k
-            Say "(error " & CStr(rc) & "). Run this as an administrator."
-            If written > 0 Then
-                Say "The " & CStr(written) & " key(s) listed before it were set."
-            End If
-            Say ""
-            Say ShowText()
-            Finish 1
+    Dim rc, back, ok, t
+    rc = WriteMachine(v)
+    If rc <> 0 Then
+        If IsNT6() And Not elevated Then
+            CreateObject("Shell.Application").ShellExecute "wscript.exe", _
+                """" & WScript.ScriptFullName & """ " & CStr(v) & " -elevated", _
+                "", "runas", 1
+            Say "Windows is asking for administrator rights. Nothing was"
+            Say "changed by this window; the result is shown in the window"
+            Say "that opens next."
+            Finish 3
         End If
-        written = written + 1
-    Next
+        Say "Could not write " & VALUE_NAME & " to"
+        Say "  " & MACHINE_KEY
+        Say "(error " & CStr(rc) & "). Run this as an administrator."
+        Say "Nothing was changed."
+        Say ""
+        Say ShowText()
+        Finish 1
+    End If
+    back = ReadValue(MACHINE_KEY & VALUE_NAME, ok)
+    If ok Then
+        t = VarType(back)
+        If t = vbInteger Or t = vbLong Then
+            ok = (back = v)
+        Else
+            ok = False
+        End If
+    End If
+    If Not ok Then
+        Say VALUE_NAME & " was written to"
+        Say "  " & MACHINE_KEY
+        Say "and did not read back as " & CStr(v) & "."
+        Say ""
+        Say ShowText()
+        Finish 1
+    End If
     Say ShowText()
-    Say VALUE_NAME & " is now " & CStr(v) & " on every xhci98 controller."
+    Say VALUE_NAME & " is now " & CStr(v) & " machine-wide, for every xhci98"
+    Say "controller; their own values were left as they are."
     Say ""
     Say "RESTART WINDOWS for this to take effect: the driver reads the"
     Say "value only when its controller starts."
