@@ -223,6 +223,10 @@ rem                  xhcicm.inf and xhcicmf.inf, Windows 98's PCI device ids
 rem                  (the BUS_&DEV_&FUNC_ instance, the vendor and device),
 rem                  the bridge filter's snapshot, and the resume hold's
 rem                  watchdog bound
+rem   test_cm_marks - the marks answer's table (src\cm\cm_marks.c, task
+rem                  42-A.5, design record 21 section 7.4 revision 3): the
+rem                  current and tombstone sets, eviction once seen, the
+rem                  answer layout and the confirmation's checks
 rem   test_cm_status - the status record xhcicm.sys publishes for the install
 rem                  tool's viewer (src\cm\cm_status.c, design record 24
 rem                  section 3): the record from an ICM table and a USB4
@@ -544,6 +548,9 @@ rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
 rem Windows 98's PCI device ids, the bridge filter's snapshot and the
 rem resume hold's bound (39-A.5 driver half, 39-A.8).
 call :run test_cm_ports "test_cm_ports.c ..\src\cm\cm_ports.c"
+rem test_cm_marks links the marks answer's table alone (task 42-A.5,
+rem design record 21 section 7.4 revision 3).
+call :run test_cm_marks "test_cm_marks.c ..\src\cm\cm_marks.c"
 rem test_cm_status links the status record's builder alone (design record
 rem 24 section 3), over its own fake configuration space.
 call :run test_cm_status "test_cm_status.c ..\src\cm\cm_status.c"

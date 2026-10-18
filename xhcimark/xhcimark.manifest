@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  xhcimark.manifest - XHCIMARK.EXE and XHCIMK64.EXE run as the invoker: the
+  service controller starts the service as LocalSystem, and the hand
+  registration and the console poll of a test guest are run from an
+  elevated prompt. Windows 2000 and XP ignore it. Embedded by xhcimark.rc
+  as resource 1 of type 24 (RT_MANIFEST). ASCII only, CRLF line endings.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

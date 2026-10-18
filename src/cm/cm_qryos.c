@@ -9,9 +9,16 @@
  * extension's Kind before anything else, so the NHI's and the filters'
  * paths are what they were. CREATE succeeds for the device itself (on NT,
  * an open with a name past the device's is refused), CLOSE and CLEANUP
- * succeed, DEVICE_CONTROL answers CM_Q_IOCTL, CM_QL_IOCTL and CM_QP_IOCTL
- * (the PCI answer below), everything else is
- * STATUS_INVALID_DEVICE_REQUEST.
+ * succeed, DEVICE_CONTROL answers CM_Q_IOCTL, CM_QL_IOCTL, CM_QP_IOCTL
+ * (the PCI answer below) and CM_QM_IOCTL (the marks, below), everything
+ * else is STATUS_INVALID_DEVICE_REQUEST.
+ *
+ * THE MARKS (design record 21 section 7.4, revision 3; task 42-A.5).
+ * CM_QM_IOCTL answers the domain's marks table as the thread built it
+ * after its last pass (CmReenumMarksBuild into CM_NHI.MarksBuf, copied in
+ * under Lock with the rest), with CM_Q_IOCTL's sizing rules; a whole
+ * answer read records its marks generation (MarksRead), which the next
+ * publish hands back so that a tombstone a poll has seen can go.
  *
  * THE SNAPSHOT lives in the query device's own extension, under its own
  * spin lock, so the device holds no pointer to the NHI and outlives it
@@ -579,6 +586,9 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     LARGE_INTEGER ticks;
     KIRQL irql;
     ULONG bytes;
+    ULONG mbytes;
+    ULONG readGen;
+    BOOLEAN readAny;
     ULONG n;
     ULONG i;
 
@@ -624,6 +634,8 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     q->CtrBytes = nhi->QueryCtrBytes;
     q->CtrCut = nhi->QueryCtrCut;
     cmQPorts(nhi, q);
+    readAny = (BOOLEAN)(q->MarksReadAny != 0);
+    readGen = q->MarksRead;
     /* Once stopping, every answer stays one generation past the thread's
      * own sequence (CmQueryStopping's bump), so it never goes back. */
     if (q->Stopping) {
@@ -640,6 +652,15 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
         nhi->QueryLast[i] = nhi->QueryBuf[i];
     }
     nhi->QueryLastBytes = bytes;
+    /* The marks: built outside the device's lock (the registration list's
+     * lock is taken inside), copied in under it. */
+    mbytes = CmReenumMarksBuild(nhi, nhi->MarksBuf, readAny, readGen);
+    KeAcquireSpinLock(&q->Lock, &irql);
+    for (i = 0; i < mbytes; i++) {
+        q->Marks[i] = nhi->MarksBuf[i];
+    }
+    q->MarksBytes = mbytes;
+    KeReleaseSpinLock(&q->Lock, irql);
 }
 
 /* IRP_MJ_DEVICE_CONTROL's CM_Q_IOCTL. */
@@ -685,6 +706,56 @@ static NTSTATUS cmQAnswer(PCM_QUERY_DEV q, PIRP irp)
     if (rc == 0xFFFFFFFFUL) {
         return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
                                           : STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (rc == CM_Q_ANS_TOO_SMALL) {
+        return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
+    }
+    return CmCompleteIrp(irp, STATUS_SUCCESS, info);
+}
+
+/* IRP_MJ_DEVICE_CONTROL's CM_QM_IOCTL (record 21 section 7.4, revision
+ * 3): the marks as last published; a whole answer's generation recorded. */
+static NTSTATUS cmQMarks(PCM_QUERY_DEV q, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    ULONG room;
+    ULONG info;
+    ULONG rc;
+    KIRQL irql;
+    PUCHAR out;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    room = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    out = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    if (out == NULL) {
+        room = 0;
+    }
+    info = 0;
+    KeAcquireSpinLock(&q->Lock, &irql);
+    if (!q->Connected) {
+        rc = 0xFFFFFFFFUL;
+    } else if (q->MarksBytes < CM_QM_HDR_BYTES) {
+        /* No pass has built one yet: an empty answer would read as "no
+         * unit", which is not known. */
+        rc = 0xFFFFFFFEUL;
+    } else {
+        rc = CmMarksAnswer(out, room, q->Marks, q->MarksBytes, q->Pass,
+                           (BOOLEAN)(q->Stopping != 0), &info);
+        if (rc == CM_Q_ANS_WHOLE) {
+            q->MarksRead = (ULONG)q->Marks[CM_QM_O_GEN] |
+                           ((ULONG)q->Marks[CM_QM_O_GEN + 1] << 8) |
+                           ((ULONG)q->Marks[CM_QM_O_GEN + 2] << 16) |
+                           ((ULONG)q->Marks[CM_QM_O_GEN + 3] << 24);
+            q->MarksReadAny = 1;
+        }
+    }
+    KeReleaseSpinLock(&q->Lock, irql);
+    if (rc == 0xFFFFFFFFUL) {
+        return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
+                                          : STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (rc == 0xFFFFFFFEUL) {
+        return CmCompleteIrp(irp, STATUS_DEVICE_NOT_READY, 0);
     }
     if (rc == CM_Q_ANS_TOO_SMALL) {
         return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
@@ -903,6 +974,9 @@ NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp)
         }
         if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QP_IOCTL) {
             return cmQPci(q, irp);
+        }
+        if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QM_IOCTL) {
+            return cmQMarks(q, irp);
         }
         break;
     case IRP_MJ_POWER:

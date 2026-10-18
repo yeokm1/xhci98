@@ -24,6 +24,14 @@
  * CM_ST_ASK_MS and echoes it in the record, which is how the tool knows a
  * record is this session's and current (record 24 section 3.3).
  *
+ * THE CONFIRMATION (record 21 section 7.4, revision 3; task 42-A.5). On
+ * the NT targets the same read takes XhciCmEjectConfirm (cm_query.h
+ * CM_QC_*) from the driver key, which the mark service writes for a unit
+ * it read held for eject and an administrator's tool writes for its own
+ * eject: handed to the re-enumeration's check (CmReenumConfirm), then
+ * written empty, so each one is acted on once. The driver key is opened
+ * with KEY_SET_VALUE beside KEY_READ on NT for that alone.
+ *
  * A failed write is counted and tried again at the next pass; it never
  * touches the connection manager. The import allowlists hold
  * ZwSetValueKey, RtlInitUnicodeString and KeQuerySystemTime to this file
@@ -94,6 +102,56 @@ static NTSTATUS NTAPI cmStTakeAsk(PWSTR ValueName, ULONG ValueType,
     return STATUS_SUCCESS;
 }
 
+/* A REG_BINARY of CM_QC_BYTES, and nothing else, is taken. */
+static NTSTATUS NTAPI cmStTakeConfirm(PWSTR ValueName, ULONG ValueType,
+                                      PVOID ValueData, ULONG ValueLength,
+                                      PVOID Context, PVOID EntryContext)
+{
+    PUCHAR from;
+    PUCHAR to;
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(ValueName);
+    UNREFERENCED_PARAMETER(Context);
+    if (ValueType != REG_BINARY || ValueLength != CM_QC_BYTES) {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    from = (PUCHAR)ValueData;
+    to = (PUCHAR)EntryContext;
+    for (i = 0; i < CM_QC_BYTES; i++) {
+        to[i] = from[i];
+    }
+    return STATUS_SUCCESS;
+}
+
+/* NT: XhciCmEjectConfirm, checked once and written empty. */
+static VOID cmStReadConfirm(PCM_NHI nhi)
+{
+    CM_STATUS_PUB *s;
+    RTL_QUERY_REGISTRY_TABLE table[2];
+    UNICODE_STRING name;
+    UCHAR v[CM_QC_BYTES];
+    UCHAR none;
+
+    s = &nhi->StatusPub;
+    CmZero(table, sizeof(table));
+    CmZero(v, sizeof(v));
+    table[0].QueryRoutine = cmStTakeConfirm;
+    table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
+    table[0].Name = L"XhciCmEjectConfirm";
+    table[0].EntryContext = v;
+    if (!NT_SUCCESS(RtlQueryRegistryValues(RTL_REGISTRY_HANDLE,
+                                           (PWSTR)s->DrvKey, table, NULL,
+                                           NULL))) {
+        return;
+    }
+    CmReenumConfirm(nhi, v, CM_QC_BYTES);
+    none = 0;
+    RtlInitUnicodeString(&name, L"XhciCmEjectConfirm");
+    (VOID)ZwSetValueKey((HANDLE)s->DrvKey, &name, 0, REG_BINARY,
+                        (PVOID)&none, 0);
+}
+
 static VOID cmStReadAsk(PCM_NHI nhi)
 {
     CM_STATUS_PUB *s;
@@ -115,6 +173,9 @@ static VOID cmStReadAsk(PCM_NHI nhi)
                                           (PWSTR)s->DrvKey, table, NULL,
                                           NULL))) {
         s->Echo = ask;
+    }
+    if (cmStNt()) {
+        cmStReadConfirm(nhi);
     }
 }
 
@@ -285,7 +346,9 @@ VOID CmStatusOpen(PCM_NHI nhi)
         s->DevKey = (PVOID)key;
     }
     if (NT_SUCCESS(IoOpenDeviceRegistryKey(nhi->Common.Pdo,
-                                           PLUGPLAY_REGKEY_DRIVER, KEY_READ,
+                                           PLUGPLAY_REGKEY_DRIVER,
+                                           cmStNt() ? KEY_READ | KEY_SET_VALUE
+                                                    : KEY_READ,
                                            &key))) {
         s->DrvKey = (PVOID)key;
     }

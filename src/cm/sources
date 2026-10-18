@@ -18,7 +18,8 @@
 # design record 22); the tunnel ports, tbt_topo.c (test_tbt_topo), and the
 # 9x bus numbering of the bridges below them, tbt_brnum.c (test_tbt_brnum;
 # record 21 section 6.1.1); the
-# re-enumeration's own pure half, cm_ports.c (test_cm_ports), and the
+# re-enumeration's own pure half, cm_ports.c (test_cm_ports), the marks
+# answer's table, cm_marks.c (test_cm_marks; task 42-A.5), and the
 # query device's answers, cm_query.c and cm_qpci.c (test_cm_query); and the
 # shared log ring ..\xhci_log.c (test\test_log.c), compiled in by path.
 # All DDK-free.
@@ -49,6 +50,7 @@ SOURCES=cm_vals.c      \
         tbt_topo.c     \
         tbt_brnum.c    \
         cm_ports.c     \
+        cm_marks.c     \
         cm_nvlink.c    \
         ..\xhci_log.c  \
         cm_pool.c      \
