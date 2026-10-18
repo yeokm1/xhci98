@@ -472,13 +472,15 @@ the ones `INCS_DDK.INF`'s `[DestinationDirs]` and `[WIN98_Files1]` give:
 | `inc\win98\vmm.h` | `INC_WIN98_VMM.H` of `INCS_DDK.CAB` | 188,260 | `1c8a6f7637ffa7ba97b095cc543c6bb89092bbc41fa32b5a980870e219fc6727` |
 | `inc\win98\vmm.inc` | `INC_WIN98_VMM.INC` of `INCS_DDK.CAB` | 93,146 | `713fa2d33e417ca553ce2aef64681dae26ca756ad90dc9bbd7401a044c5be072` |
 | `inc\win98\inc16\setupx.h` | `INC_WIN98_INC16_SETUPX.H` of `INCS_DDK.CAB` | 113,904 | `aef84421a79596dcf6c7aaa90af03466e73a1a36bf83ae953138a9252421e815` |
+| `inc\win98\inc16\prsht.h` | `INC_WIN98_INC16_PRSHT.H` of `INCS_DDK.CAB` | 13,833 | `e829f4c657e9ad3ec259b8ea8786a22064b1f1a9976ec6b090cc01d7ee4418a5` |
 | `BINS_DDK.CAB` | of `win98se_ddk.exe` | 2,503,474 | `b9ba649a546b762235c7734001cbd60c8c13a73721c5c1c281555eb1f387fd0b` |
 | `lib\win98\setupx.lib` | `LIB_WIN98_SETUPX.LIB` of `BINS_DDK.CAB` | 21,504 | `726554e15a456db37c9960aa12975e35080227403681e5bc132c94c052a98e4c` |
 | `LICENSE.TXT` | of `win98se_ddk.exe` | 11,803 | `89f90f047aa98c71a405bf75a377ca075a6dfab3540692e0e6a65655ee2b4019` |
 
-The two `setupx` members are what design record 27's 16-bit helper is
-compiled and linked against (roadmap-usb4 task 42-0.2; owner, 2026-10-18):
-the header for its documentation blocks and declarations, the import
+The two `setupx` members, and `prsht.h`, which `setupx.h` includes, are
+what design record 27's 16-bit helper is compiled and linked against
+(roadmap-usb4 task 42-0.2; owner, 2026-10-18): the headers for their
+documentation blocks and declarations, the import
 library for the names of `SETUPX.DLL`'s exports, which is all an import
 library carries. Neither is shipped, and the helper's image holds none of
 their bytes but the import names; `legal-provenance.md` section 2 has the

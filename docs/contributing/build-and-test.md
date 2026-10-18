@@ -20,7 +20,8 @@
 - Open Watcom 2.0, installed to `C:\WATCOM`, used for the `xhciqual/`
   DOS qualifier and, from `3.1.0.0`, for the 16-bit Windows 98 SE and ME
   device-install helper `XHCIDI.EXE` (design record 27, its Win16
-  target against the Windows 98 SE DDK's `setupx.h` and `setupx.lib` in
+  target against the Windows 98 SE DDK's `setupx.h`, `prsht.h` and
+  `setupx.lib` in
   `tools/win98ddk-extracted/`), and never for the driver
 - QEMU, installed normally on the host
 
@@ -309,7 +310,7 @@ One trap is worth knowing before anyone improves on this. An earlier attempt at 
 
 The build stamps are not in the header. `XHCIQUAL` and `XHCISNAP` each print a `built <date> <time>` line from their compiler's `__DATE__`/`__TIME__`. That is a different fact from the version and must stay one: between cuts the version does not move and the tools are rebuilt many times a day, so the stamp is what tells a guest's stale copy from the one just staged. The driver has no such banner in a release build (`DriverEntry (built ...)` is inside `XHCI_DBG_TEXT` and compiles out), so a release binary is identified by its version resource and its SHA-256; a byte compare cannot stand in for either (task 13-L.4 in the roadmap records why).
 
-A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` (and, from `3.1.0.0`, for `XHCIDI.EXE`, which also needs the Windows 98 SE DDK's `setupx.h` and `setupx.lib` in `tools\win98ddk-extracted\` at the hashes `docs\references\README.md` records; design record 27 section 3.3) and the in-repo MSVC 6.0 for `XHCISNAP.EXE`. Neither is skippable on a real cut. `-SkipQualtool` and `-SkipSnapTool` exist for a host that cannot build one, and a release cut with the second publishes a read channel nobody can open. From `2.4.0.0` the cleanup tool (`xhcicln\build.cmd`, roadmap-hcd task 38.8) needs the in-repo MSVC 6.0 for `XHCICLN.EXE` and WDK 7.1, already a prerequisite of the amd64 driver, for `XHCICL64.EXE`; `-SkipCleanTool` leaves it out, and since nothing needs the tool the release is whole without it, its readme saying the directory is missing. Its executables ask for elevation (a manifest), so `xhcicln\selftest.cmd`, which `build-driver.cmd` runs when `XHCICLN.EXE` has been built, starts them with `__COMPAT_LAYER=RunAsInvoker`.
+A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` (and, from `3.1.0.0`, for `XHCIDI.EXE`, which also needs the Windows 98 SE DDK's `setupx.h`, `prsht.h` and `setupx.lib` in `tools\win98ddk-extracted\` at the hashes `docs\references\README.md` records; design record 27 section 3.3) and the in-repo MSVC 6.0 for `XHCISNAP.EXE`. Neither is skippable on a real cut. `-SkipQualtool` and `-SkipSnapTool` exist for a host that cannot build one, and a release cut with the second publishes a read channel nobody can open. From `2.4.0.0` the cleanup tool (`xhcicln\build.cmd`, roadmap-hcd task 38.8) needs the in-repo MSVC 6.0 for `XHCICLN.EXE` and WDK 7.1, already a prerequisite of the amd64 driver, for `XHCICL64.EXE`; `-SkipCleanTool` leaves it out, and since nothing needs the tool the release is whole without it, its readme saying the directory is missing. Its executables ask for elevation (a manifest), so `xhcicln\selftest.cmd`, which `build-driver.cmd` runs when `XHCICLN.EXE` has been built, starts them with `__COMPAT_LAYER=RunAsInvoker`.
 
 The scheme is one four-part version per released package, and all four fields have a meaning, settled by the project owner on 2026-09-10 after `1.1.0.0` moved the second one and nothing here said what that meant:
 

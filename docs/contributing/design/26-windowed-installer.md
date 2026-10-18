@@ -1,6 +1,11 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 1, 2026-10-18, before code. Written for `roadmap-usb4.md`
+Status: draft 2, 2026-10-18, reviewed and revised the same day (the
+uninstall without a package, Stor98's ownership record, the plan run
+again on a component change, the mixed value state, Stor98's settings
+read back, the exit precedence, the machine-wide values the uninstall
+removes, the multithreaded runtime); draft 1, 2026-10-18, before code.
+Written for `roadmap-usb4.md`
 Phase 42 task 42-0.1 (planned as `INSTUI.1` until the owner opened the
 phase on 2026-10-18), for release `3.1.0.0`. It follows the owner's
 decisions of 2026-10-18 recorded in that file's decisions table, "Phase
@@ -79,9 +84,14 @@ asks for the restart.
 
 The names are 8.3 (`XHCIWZ64` keeps the x64 marker the other pairs use)
 because the directory is read by Windows 98's shell and typed at its
-console. All four executables find the package root two levels up from
-their own location, as record 23 section 4.2 requires, and refuse to run
-from anywhere else.
+console. An install or an update finds the package root two levels up
+from the executable's own location, as record 23 section 4.2 requires,
+and refuses to run from anywhere else. The uninstall and the device modes
+do not: they read the system, never the package, and run from the install
+directory's copy or from the temporary copy of section 9.2, with the 98 SE
+and ME helper found beside the executable (W12; record 23 section 4.2 is
+revised, section 12). `/devices` and `/eject` already run without the
+package check today and keep doing so.
 
 **`INSTALL.BAT` stays the launcher** (owner, 2026-10-18). It keeps its
 choice of architecture and flavour directory and gains one rule (W2): with
@@ -172,23 +182,27 @@ ask:
 | Phase | What the engine does | Record 23 |
 |---|---|---|
 | `INST_PH_READ` | the refusals, the rights, the routines, the first reading of the devices, the store trap, test-signing mode | 4, 5.1 steps 1 and 2, 5.10 |
-| `INST_PH_PLAN` | the plan, the warnings, the questions that would be asked, each with its current value; nothing written | 5.1 step 3, 6.3 |
-| `INST_PH_ASK` | the Thunderbolt question, the registry values, the install directory, the confirmation; nothing written | 5.1 step 4, 8, 9.6 |
+| `INST_PH_PLAN` | the plan for one set of component choices (Thunderbolt support in or out, Stor98 in or out, the tray tool, `/force`, the store trap's replacement), with its warnings, refusals and the questions that would be asked, each with its current value; nothing written; run again over the data `READ` holds, and a fresh reading of the store trap, whenever the choices change | 5.1 step 3, 6.3, 8.5 |
+| `INST_PH_ASK` | the answers to the frozen plan's questions (the registry values, the install directory) and the confirmation; nothing written | 5.1 step 4, 8, 9.6 |
 | `INST_PH_RUN` | the pending-install check, the second reading and the plan comparison, the copy, the staging, the installs, the barriers, the values, the results | 5.1 steps 5 to 11, 6.2, 9 |
 | `INST_PH_END` | the final line and the exit code | 7.4 |
 
-The console calls them in order from `main`, as today. The window calls
-`READ` and `PLAN` while it shows the welcome page's "Please wait", builds
-the Found page from the plan, collects the answers of `ASK` on its own
-pages (the engine's questions are read once into the pages, and answered
-from them when `ASK` runs after the Summary's Install button), runs `RUN`
-on a worker thread while the Progress page shows the steps, and ends on the
-Finish page with `END`'s line. Back and Next move between the window's
-pages, which hold data, not between the engine's phases: nothing is written
-until Install, and the engine's own second reading before any change
-(record 23 section 5.1 step 5) catches a device that moved while the pages
-were open, with "the plan changed; go back to see it" in place of the
-console's "run INSTALL.BAT again".
+The console calls them in order from `main`, as today: `READ`, then its
+Thunderbolt question (record 23 section 8.5) and, where the package
+carries Stor98, the Stor98 question (section 6.4), then `PLAN` with those
+answers, then `ASK`, `RUN` and `END`, so its order of questions and
+writes is unchanged. The window calls `READ` and `PLAN` with the default
+component choices while the welcome page shows "Please wait", builds the
+Found page from that plan, and runs `PLAN` again whenever the Components
+page changes a choice, so the Found page, the settings pages and their
+questions follow the choices as they stand (a Back to the Found page shows
+the plan for the current choices). The plan the Summary shows is frozen
+there for `ASK` and `RUN`, which the Install button starts; the engine's
+own second reading before any change (record 23 section 5.1 step 5)
+compares against that frozen plan, with "the plan changed; go back to see
+it" in place of the console's "run INSTALL.BAT again". Back and Next
+move between the window's pages, which hold data, not between the
+engine's phases: nothing is written until Install.
 
 The worker thread exists only in the window (W3): the engine is single
 threaded and the window posts no second call into it while `RUN` runs. The
@@ -205,8 +219,12 @@ As XHCITR (design record 25 section 9), and record 23 section 3 for what
 the two share:
 
 - `XHCIWIZ.EXE`: the in-repo MSVC 6.0, `/W3 /WX /O2`, the C runtime
-  static, `/SUBSYSTEM:WINDOWS,4.0`, so it starts on 98 SE, ME, 2000, XP and
-  32-bit Vista and 7. `XHCIWZ64.EXE`: the same sources with WDK 7.1's amd64
+  static and multithreaded (`/MT`, `LIBCMT`: the engine runs on a worker
+  thread, section 3.3, made with `_beginthreadex`, and the single-threaded
+  `LIBC` the console tool keeps is not safe under two threads),
+  `/SUBSYSTEM:WINDOWS,4.0`, so it starts on 98 SE, ME, 2000, XP and
+  32-bit Vista and 7; the import table is checked as before, since the
+  runtime is static either way. `XHCIWZ64.EXE`: the same sources with WDK 7.1's amd64
   compiler, `/MT`, `/SUBSYSTEM:WINDOWS,5.02`, for XP x64, Vista x64 and
   7 x64. `xhciinst\build.cmd` builds the four executables (and record 27's
   helper when Open Watcom is found, section 7); `build.cmd x86` the 32-bit
@@ -335,7 +353,13 @@ engine's write is one routine with the location as a parameter, and record
 **An update keeps a value the user set** (owner, 2026-10-18): the combo box
 is preselected with the value in force (machine-wide first, else the
 controller's, else the default), and Next with nothing touched writes
-nothing. That is record 23's "Enter keeps" as a page.
+nothing. That is record 23's "Enter keeps" as a page. Where two
+controllers carry different values and no machine-wide value is set, the
+row shows a mixed state, "each controller keeps its own", with each
+controller's value listed under it, preselected and writing nothing;
+choosing a value replaces the mixed state and writes the machine-wide
+value, which then rules both (the console's "Enter for [each keeps its
+own]", record 23 section 8.3, as a page).
 
 **"Advanced..."** opens a dialog with the values record 23 never asks
 (`XhciPollFineTimer`, `XhciSelectiveSuspend`, and from the owner's
@@ -369,25 +393,35 @@ a diagnostic the release notes describe for a hand edit.
 ### 5.6 Stor98's settings
 
 Shown when Stor98 is ticked. Stor98's settings (its `readme.txt`,
-"Settings") are optional and its INFs write none, so the page shows them
-preselected with "the built-in default" and writes only what the user
-changes. The rows asked: `StorWriteThrough` (the behaviour switch a user
-can judge: `auto`, `off`, `cacheoff`, `fua`, each with Stor98's one-line
-meaning) and `StorPollMode` (0 or 1). "Advanced...": `StorMaxTransferKB`,
-`StorPollBusyUs`, `StorPollIdleMs`, `StorPollSpinUs`, each with Stor98's
-default, unit and range. **Where they are written is Stor98's rule, not
-this package's**: on 98 SE and ME values of those names under
-`HKLM\System\CurrentControlSet\Services\stor98`, as strings or DWORDs; on
-2000 to 7 the one `DriverParameter` string under
-`Services\stor98\Parameters\Device`, `key=value` pairs separated by
-semicolons, which the engine reads, edits one key at a time and writes back
-whole, never dropping a pair it does not know. The page names Stor98's
-readme as the authority for the meanings, which are copied from it into the
-settings table at the version the package bundles (`-Stor98Version`), and
-the host suite checks that every Stor98 row names a key that readme's
-table names, so a Stor98 release that renames a value fails the build
-rather than the user. A machine where the bundled Stor98 is not installed
-by this run (unticked) does not show the page.
+"Settings") are optional, its INFs write none, and an update keeps a
+value the user set, so the page reads what is set now and shows each row
+either as "not set (the built-in default is <value>)" or as the explicit
+value found, preselected; a row left alone writes nothing, and choosing
+the default's value where none was set writes it explicitly, which the
+row says. The rows asked: `StorWriteThrough` (`auto`, `off`, `cacheoff`,
+`fua`, each with Stor98's one-line meaning; a string on every system) and
+`StorPollMode` (0 or 1). "Advanced...": `StorMaxTransferKB`,
+`StorPollBusyUs`, `StorPollIdleMs`, `StorPollSpinUs`, and on 2000 to 7
+only the two that readme marks not settable on 98 SE and ME, `gone` and
+`idle`, each with Stor98's default, unit and range. Where they are
+written is Stor98's rule, not this package's, and the table carries it
+per value: on 98 SE and ME a value of the row's name under
+`HKLM\System\CurrentControlSet\Services\stor98`, a `REG_SZ` for
+`StorWriteThrough` and a `REG_DWORD` for the numeric ones (the readme
+admits a decimal string too; the installer reads either and writes the
+DWORD); on 2000 to 7 the one `DriverParameter` string (`REG_SZ`) under
+`Services\stor98\Parameters\Device`, lower-case `key=value` pairs
+separated by semicolons (`writethrough=`, `pollmode=`, `maxtransferkb=`,
+`pollbusyus=`, `pollidlems=`, `pollspinus=`, `gone=`, `idle=`), which the
+engine reads, edits one key at a time and writes back whole, keeping a
+pair it does not know and the order it found. The page names Stor98's
+readme as the authority, from which the table's meanings, defaults,
+ranges, types and key names are copied at the version the package bundles
+(`-Stor98Version`), and the host suite checks every row against that
+readme's table, so a Stor98 release that renames or retypes a value fails
+the build rather than the user. Every Stor98 value the installer writes is
+recorded by name under the `Stor98` key of section 6.3, for the uninstall.
+The page is not shown when Stor98 is unticked.
 
 ### 5.7 The summary
 
@@ -463,6 +497,11 @@ Record 23 section 4.4 keeps the bundled Stor98 out of the local copy so
 that no wizard installs it unasked; the owner's rule stands (never
 unasked). With the box ticked:
 
+- **Before anything**, the run records what Stor98 the machine already
+  has: whether a `stor98` service or driver key exists, and every devnode
+  bound to it, present or not (NT: `Service` = `stor98`; 98 SE and ME: the
+  driver key naming Stor98's files, as its INF binds them). Those are
+  pre-existing, and the uninstall never counts them as this installer's.
 - **NT**: `stor98.inf` is staged from the flavour directory
   (`SetupCopyOEMInf`, record 23 section 5.6; its files are at the flavour
   directory's root, so the same copy rules apply, and the local copy then
@@ -472,29 +511,47 @@ unasked). With the box ticked:
   `stor98.inf`'s models match that has **no** driver (`Service` absent, or
   problem code 28), never on one another driver runs (record 23 decision
   D3 applies to Stor98's devices as to this package's: an internal NVMe
-  drive under a vendor's driver is listed and left). A drive Stor98 already
-  runs at an older release is updated as record 23 section 5.4 updates this
-  package's own devices, with the same version rule, because the owner's
-  "bundled unchanged" release is the one whose `DriverVer` the package
-  carries.
+  drive under a vendor's driver is listed and left). A drive Stor98
+  already runs at an older release is updated as record 23 section 5.4
+  updates this package's own devices, with the same version rule, because
+  the owner's "bundled unchanged" release is the one whose `DriverVer`
+  the package carries.
 - **98 SE and ME**: the `stor98*` files go into the install directory with
   the package's drivers (the flat copy's list names them), where the
   wizards find `stor98.inf`; and record 27's helper installs it now on
-  every present NVMe device with no driver, by the same route as the
-  package's own devices.
+  every present NVMe device with no driver, and updates one Stor98 runs at
+  an older release, by the same route and rules as the package's own
+  devices (record 27 section 6 step 6), with the same read-back after it.
 - **The record** (owner, 2026-10-18: the uninstall removes the bundled
-  Stor98 only when this package's installer installed it):
-  `HKLM\Software\xhci98`, value `Stor98Installed` (`REG_SZ`, the Stor98
-  version), written once Stor98's INF is staged or copied, and deleted by
-  the uninstall after Stor98 is removed. A run with the box unticked never
-  touches an installed Stor98 and never writes the value; a later run with
-  it ticked over a Stor98 the user installed by hand writes the value only
-  for a device this run installed, and the uninstall then removes the
-  devices and files it can attribute to the package's staged INF (NT: the
-  `oemNN.inf` whose provider and files are the bundled release's; 98 SE
-  and ME: the copy's files and the `INF\OTHER` copy whose provider is
-  Stor98's and whose `DriverVer` is the bundled one), never a Stor98 of
-  another version the user put there.
+  Stor98 only when this package's installer installed it). A key
+  `HKLM\Software\xhci98\Stor98`: `PreExisting` (`REG_DWORD`, 1 when the
+  first bullet found a Stor98 before this installer ever installed one,
+  written once and never cleared by an update); `Staged` (`REG_SZ`: on NT
+  the `oemNN.inf` name `SetupCopyOEMInf` returned, on 98 SE and ME the
+  copy's directory; written only when this run staged or copied the INF);
+  `Version` (the bundled release); under `Devices` one value per device
+  instance id this installer installed or updated with Stor98, its value
+  the version, written only after the call succeeded and the device was
+  read back running Stor98; under `Settings` one value per Stor98 setting
+  the installer wrote (section 5.6). A run with the box unticked never
+  touches an installed Stor98 and writes none of it. Staging and
+  installing are told apart: a staged INF with no device installed is a
+  record of the staging alone.
+- **The uninstall** (section 9.3) removes, in this order, each step gated
+  on the one before: the devices under `Devices`, present or not, through
+  record 23 section 9.2's devnode removal on NT and record 27 section 9's
+  on 98 SE and ME; then the staged INF (`SetupUninstallOEMInf` without
+  force, which refuses an INF a devnode still references, and the engine's
+  own reference check through every devnode's `InfPath` as record 23
+  section 9.2 step 4 reads them; on 98 SE and ME the copy's files and the
+  `INF\OTHER` copy by the same reference check), so an INF a pre-existing
+  or unlisted device still names stays; then the `stor98` service, its
+  files and the recorded settings only when no devnode, present or not,
+  is bound to Stor98 any more and `PreExisting` is not set; otherwise they
+  stay, and the finish page says that a Stor98 this installer did not
+  install was left. Two devices sharing one INF, service and binary, one
+  installed by hand and one by this installer, therefore lose only the
+  installer's device, and the shared files stay.
 - The x64 `stor98.sys` keeps Stor98's own test signature; the test-signing
   note of record 23 section 5.10 names it beside this package's drivers
   when the box is ticked, and `stor98-test.cer` is never imported (the
@@ -544,8 +601,13 @@ a "Save as text file..." button (`GetSaveFileNameA`, the default name
 `XHCI98-STEPS.TXT` in the install directory) so the steps survive the
 restart, and "Open Device Manager" (record 23 section 6.4's
 `control.exe sysdm.cpl,,1`). The rest of the install completes: the
-other devices, the values, the tools, the record. The run ends with
-"steps left" (exit 4) and the finish page says to restart after the steps.
+other devices, the values, the tools, the record. The exit code follows
+record 23 section 7.4's precedence: a wizard the user cancelled, a helper
+dialog the user cancelled or a device the helper found no match for sets
+the steps flag (exit 4); a helper that failed or did not finish, or a
+device read back wrong after it (section 8), sets the failed flag (exit 2)
+with the steps page shown as well; the finish page says to restart after
+the steps in either case, and which it was.
 
 The keyboard-and-mouse warning of record 23 section 5.8 stands on the
 Found page unconditionally when a controller changes, and on 98 SE and ME
@@ -611,6 +673,13 @@ The engine refuses an uninstall started from a directory it is about to
 remove without the `/from` relaunch, so a user who starts
 `C:\XHCI98\XHCIINST.EXE /uninstall` by hand gets the relaunch too.
 
+The uninstall needs no package (W12): it reads the system alone, the
+devnodes, the INF copies by provider, the services, the files and the
+records under `Software\xhci98`, so neither the install directory's copy
+nor the temporary one checks a package layout, and the 98 SE and ME helper
+it needs is the one copied beside it. Record 23 section 4.2's refusal
+stays for an install and an update.
+
 ### 9.3 What it removes, in order
 
 Record 23 section 9 as revised for 42-A.3, one step after another, each
@@ -624,13 +693,15 @@ gated on the one before, shown on the Progress page:
 2. The pending-install check, the reading of the devices.
 3. On NT: the filter hosts, the devnodes children first, the check, the
    INFs, the services, the files (record 23 section 9.2, unchanged); the
-   bundled Stor98's devnodes, INF, service and files first, when and only
-   when `Stor98Installed` is recorded (section 6.3; children before the
-   NVMe device's parent port, which is a filter host and stays).
+   bundled Stor98's recorded devices, its staged INF and, when nothing
+   else depends on them, its service and files first, as section 6.3's
+   record says (children before the NVMe device's parent port, which is a
+   filter host and stays).
 4. On 98 SE and ME: record 27's removal for each devnode of the package,
-   children first (UAS devices, Stor98's devices when recorded, the NHI,
-   hubs and composite entries, root hubs, controllers last), through the
-   helper; then the engine's own part of record 23 section 9.4 (the
+   present or not, children first (UAS devices, Stor98's recorded
+   devices, the NHI, hubs and composite entries, root hubs, controllers
+   last), through the helper, an entry left after its removal stopping
+   the destructive steps below (record 27 section 9); then the engine's own part of record 23 section 9.4 (the
    `DevicePath` entry, the copy's files, the directories), then the INF
    copies the engine kept (`INF` and `INF\OTHER`, the rule of 9.2 step 4,
    now deleted rather than listed, each only after no devnode of the
@@ -644,7 +715,15 @@ gated on the one before, shown on the Progress page:
 5. The xHCI98 tools: the tray tool (record 23 section 9.5), the
    installer's own executables in the install directory and the helper
    (section 9.2's relaunch makes that possible), the Run value.
-6. The records: `Stor98Installed`, `InstallDir`, `MoveFrom`, the
+6. The records: the machine-wide values the installer wrote under
+   `Services\USB` (every `Xhci*` and `XhciCm*` value the settings table
+   names, which only this package's drivers, its helpers and the installer
+   write, each deleted by name; the key itself, its `SilentClasses`
+   subkey, `DisableSelectiveSuspend` and any value the table does not name
+   are left, so a later install of this package starts from the INFs'
+   defaults and nothing else on the machine is touched); the `Stor98` key
+   when Stor98 was removed, and its `Devices` and `Settings` entries that
+   were removed when it was not; `InstallDir`, `MoveFrom`, the
    `Software\xhci98` key when empty, the Uninstall entry.
 7. The install directory and `%windir%\XHCI98` when empty.
 
@@ -681,7 +760,7 @@ page:
 | `/to <path>` | preselects the tools folder; the page still shows it |
 | `/thunderbolt`, `/stor98`, `/notray` | preselect the components; the page still shows them |
 | `/set Name=Value` | preselects a setting (and makes it "changed", so it is written); the page still shows it |
-| `/defaults` | preselects every setting at its default |
+| `/defaults` | as record 23 section 7.1: every current value kept and no value question asked, which in the window means the settings pages are shown with the values in force and nothing marked changed (a page left alone writes nothing) |
 | `/force`, `/restage` | as record 23; the Found page shows what they add |
 | `/debug` | `INSTALL.BAT`'s flavour choice, and the window's own when started by hand |
 | `/log <path>` | the log's path |
@@ -737,6 +816,9 @@ this list is the whole of it:
 
 - Section 2: the package layout of section 2 here; `INSTALL.BAT`'s
   `/console` rule.
+- Section 4.2: the package-layout refusal applies to an install and an
+  update; the uninstall and the device modes run without a package
+  (section 9.2).
 - Section 3: the two new executables and record 27's helper in the build.
 - Section 4.4: the bundled Stor98 is copied and installed when the user
   ticks it, with the record of section 6.3; "not copied" becomes "not
@@ -744,12 +826,14 @@ this list is the whole of it:
 - Section 6.2 to 6.5: the helper in place of the printed steps for the
   devices it reaches; the steps kept for the device it cannot (section 7).
 - Section 7.1: `/stor98`, `/from`, `/console`; 7.4 unchanged.
-- Section 8.1: the Stor98 rows and the asked-or-advanced column; 8.4: the
-  machine-wide location (42-A.17) and Stor98's locations.
+- Section 8.1: the Stor98 rows and the asked-or-advanced column; 8.3: the
+  mixed state of two controllers kept; 8.4: the machine-wide location
+  (42-A.17) and Stor98's locations; `/defaults` unchanged.
 - Section 9: the Add/Remove Programs entry, the relaunch, the 98 SE and ME
-  removal through the helper, the Stor98 removal when recorded, the last
-  steps' order (section 9 here), and 9.4's "best effort, then the manual
-  steps" rewritten around the helper.
+  removal through the helper, the Stor98 removal when recorded, the
+  machine-wide values removed, the last steps' order (section 9 here),
+  and 9.4's "best effort, then the manual steps" rewritten around the
+  helper.
 - Section 10 and 11: the engine file, the front-end table, the new suite
   cases, the self-test of the window.
 - Section 13: D2 (the 98 SE and ME route) gains the helper; D10, D11 and
@@ -769,8 +853,8 @@ this list is the whole of it:
   decision D1's reason stands), or choosing by the presence of any switch
   (the Add/Remove entry's `/uninstall` and a user's `/to` want the window).
 - **W3** The engine is single threaded; the window runs `RUN` on one
-  worker thread and drives nothing else into the engine meanwhile
-  (section 3.3).
+  worker thread, drives nothing else into the engine meanwhile, and is
+  built on the multithreaded static runtime (sections 3.3 and 4).
 - **W4** Under WOW64 the 32-bit window starts the x64 one and returns its
   exit code; the console tool keeps its refusal (section 4).
 - **W5** The window restarts Windows on "Restart now"; the console tool
@@ -784,8 +868,11 @@ this list is the whole of it:
 - **W7** The window's equivalent of the typed word `REMOVE` is a check box
   that enables the Remove button (section 9.3).
 - **W8** Stor98 ticked installs on NVMe devices with no driver only, and
-  updates a Stor98 of an older release; a device under another driver is
-  left (section 6.3).
+  updates a Stor98 of an older release, on every target; a device under
+  another driver is left; what the installer installed is recorded per
+  device, with the pre-existing Stor98 noted, and the uninstall removes
+  only that and the shared parts only when nothing else needs them
+  (section 6.3).
 - **W9** The settings pages write the machine-wide key and show both
   locations; the console tool follows (section 5.4; the owner's 42-A.17
   decision applied to the installer).
@@ -793,6 +880,10 @@ this list is the whole of it:
   the rest advanced; written in Stor98's own two forms (section 5.6).
 - **W11** The wizard is `PSH_WIZARD` with dialog-template pages and no
   owner-drawn control (section 4).
+- **W12** The uninstall and the device modes need no package: they run
+  from the install directory's copy or the temporary one and read the
+  system alone; the package-layout refusal stays for an install and an
+  update (sections 2 and 9.2).
 
 ## 14. Open, and the risks
 
