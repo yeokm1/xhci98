@@ -777,8 +777,53 @@ then nothing, then nothing on the build fix.
   same root ports, the stick model. The task stays open.
 - The gated build at `afc2b317` (`build-driver.cmd all` and `all
   -amd64`, every gate): BUILD + GATES PASSED on both.
-- Legs owed: the moved functions on 98 SE and 7 x86 (`/snapshot`,
-  `/dump`, `/probe`, Save Snapshot, Save Report's Snapshot part), x64 with
-  the test-signed package, the package without `XHCISNAP`, and 42-A.16's
-  regression on 98 SE and one NT target with the new records. Guests are
-  ready: `a16` (98 SE, QMP 48010) and `w7` (7 x86, QMP 48011).
+- Then 3.1.0.0 (`b3b7f5e0`) merged in (`88fcc7e0`) and 42-A.5's tool
+  part added (`5d3ec2dd`, Codex round 6's three P2s fixed in `31952bdd`,
+  round 7 clean): per Thunderbolt unit on NT "Safe-removal mark: listed by
+  Windows" / "mark written; takes effect at the next start of the device"
+  / "mark written, but Windows does not list it" / "not marked", the NHI's
+  "Mark service" line, and `XhciCmEjectConfirm` after the tool's own
+  successful eject when it runs as an administrator, bound to the entry
+  serial read before the call. `cm_live.h` names no PREPARING state yet,
+  so none is shown. The gated build at `31952bdd`: BUILD + GATES PASSED on
+  x86 and amd64; `test-package.ps1` 1146 checks.
+- Legs at `31952bdd` on an x86 TEST cut (`-TestLabel "p42-tr legs"`;
+  evidence `E:\xhci98-vm\p42-tr\legs\`):
+  - The package has no `tools\xhcisnap\` (98 SE): pass.
+  - 98 SE: `XHCITR /snapshot S1` redirected wrote `.DEV`, `.TXT`, `.BIN`,
+    `.PSC`, the `.TXT` with the slots and root port enumeration; exit 0;
+    `/dump -verbosity 2` and `/snaptest -on 2` refused; `/dump /o C:\D1`;
+    `/snapshot`, `/probe` and `/snapshot /?` as message boxes;
+    `/report` carries the Snapshot part: pass. The window's Save Snapshot
+    and Save Report on 98 SE: owed.
+  - 98 SE, 42-A.16's regression (the owner's case): stick 1 stopped from
+    the window, stick 2 kept reading, the tablet kept working, stick 1
+    read again after the re-plug; the report holds `pnp.pdo=00030104` and
+    `pnp.pdo=00030204` (port 3, query-remove then remove) and no
+    `pnp.rh` or `pnp.hc`: pass.
+  - 7 x86: `/snapshot` from an elevated and a normal prompt, File > Save
+    Snapshot..., `/report` with both controllers' dumps: pass.
+  - 7 x86, 42-A.16: the stick stopped (Code 47), the other stick and the
+    tablet kept working, the report holds the same two `pnp.pdo` records
+    and nothing else: pass.
+  - 7 x86 with the emulator's Thunderbolt layout, the mark service
+    registered by hand (`XHCIMARK -register`): "Mark service: running
+    (xhcimark)" and, after `net stop`, "stopped": pass. The NVMe unit
+    (Code 28 on 7 x86, no NVMe driver) read "Safe-removal mark: not
+    marked." while the service's log said "mark written" at 07:21:48 and
+    "mark removed ... (no longer behind an active member)" one second
+    later, the unit still behind an active tunnel port: a finding for
+    42-A.5's service (`xhcimark`), not for XHCITR, which showed the state
+    as it was. The disable and enable reading and the elevated Safely
+    Remove with the confirmation: owed.
+  - Owed besides: every x64 leg (the x64 package needs the owner's signing
+    key), the 98 SE window's Save Snapshot and Save Report, and the A.16
+    reading on the P14s Gen 1.
+  - Found, not changed (for a later round): `/snapshot`'s and Save
+    Snapshot's message boxes run past the bottom of a 640x480 or 800x600
+    screen (Enter closes them); `/snapshot /?` names `XHCISNAP` as the
+    default `/o` base (the engine's default, now misleading); on 7 `start
+    /wait XHCITR ... > FILE` loses the output (cmd's start, not the tool).
+  - On 98 SE the test cut's XHCIINST left the installed `xhci98.sys` in
+    place (the same version string, 3.0.0.0, judged current); the leg
+    copied the new driver over it by hand.
