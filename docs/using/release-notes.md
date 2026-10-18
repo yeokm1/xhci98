@@ -419,15 +419,26 @@ every system `INSTALL /devices` shows what is connected and
 - **A dock** is listed under the name of its own PCI switch's upstream
   port, a generic PCI-to-PCI bridge name; stopping it stops everything in
   the dock.
-- **A device Windows does not list (Windows 2000 to 7).** The first time
-  a device Windows has never seen is plugged in behind the tunnel,
-  Windows installs its driver and rebuilds its driver stack without the
-  filter that marks it removable, so "Unplug or Eject Hardware" and
-  "Safely Remove Hardware" do not offer it (read on 2000 and XP; 7 kept
-  the mark on the first plug). The same happens after the device is
-  disabled and enabled or its driver is updated. From the next plug on
-  Windows lists it. The xHCI98 USB Tree and `INSTALL /eject` still stop it when
-  run as an administrator: they ask Windows for the same query-remove and
+- **A device Windows does not list (Windows 2000 to 7).** Until
+  `3.1.0.0`, the first time a device Windows has never seen was plugged
+  in behind the tunnel, Windows installed its driver and rebuilt its
+  driver stack without the filter that marks it removable, so "Unplug or
+  Eject Hardware" and "Safely Remove Hardware" did not offer it (read on
+  2000 and XP; 7 kept the mark on the first plug), and the same happened
+  after the device was disabled and enabled or its driver updated. From
+  `3.1.0.0` the Thunderbolt component installs a small service,
+  `xhcimark` (`tools\xhcimark\`, run by Windows, never by hand), which
+  writes the filter into the device's own driver list (its `LowerFilters`
+  value) within a poll of the device appearing (about a second; ten
+  seconds while the driver is not answering) and takes it out again within
+  a poll of the device leaving, so the first plug, a disable and
+  enable and a driver update keep the device listed. When Windows rebuilt
+  a first plug's drivers before the mark was written, the service
+  restarts that one device once, the way Device Manager applies a
+  property change; a program with a file open on it refuses that, and the
+  device is then listed from its next start. With the service stopped,
+  or for such a refused device, the xHCI98 USB Tree and `INSTALL /eject`
+  still stop it when run as an administrator: they ask Windows for the same query-remove and
   remove by the routine meant for devices that are not removable, and a
   program with a file open still refuses it. The USB Tree asks for the
   rights when it lacks them ("Stop as administrator...": User Account
@@ -465,7 +476,15 @@ Under a firmware connection manager the stop ends the device's drivers
 and leaves its tunnel up, since the firmware has no way to drop one
 tunnel alone; the tunnel goes when the device is unplugged. Under the USB4
 connection manager on Windows 2000 to 7 the stop also takes the PCI
-Express tunnel down (the USB3 tunnel stays).
+Express tunnel down (the USB3 tunnel stays) - from `3.1.0.0` only once
+the stop is confirmed: on XP, Vista and 7 by the `xhcimark` service,
+which sees Windows hold the device for removal, within a poll; on
+2000, whose applet leaves no such sign, only by an administrator's
+`INSTALL /eject` (or the USB Tree run as one). Without the confirmation
+the tunnel stays up until the unplug, and the tools say the driver has
+not confirmed the teardown. A disable, a driver update or the service's
+own restart of a device is never taken for a stop, so it no longer tears
+the tunnel down as it did in `3.0.0.0`.
 
 ### NVMe drives behind a tunnel
 
@@ -654,8 +673,10 @@ have every leg.
   `INSTALL /eject` stop it when run as
   an administrator ("Removing a Thunderbolt or USB4 device safely"); a
   pull without a stop is a surprise removal, with Windows 2000's warning
-  and cached writes at risk. A later release is to keep the mark across a
-  rebuild.
+  and cached writes at risk. From `3.1.0.0` the `xhcimark` service keeps
+  the mark across those rebuilds; this stays the case for a device whose
+  restart a program refused, until its next start, and while the service
+  is stopped.
 - **A device tunnelled before the driver started** (by the BIOS's pre-boot
   support, or connected while the driver was installed) is offered for
   safe removal only after a re-plug, on Windows 2000 to 7; the xHCI98 USB
@@ -3590,6 +3611,11 @@ node under it, and each Thunderbolt or USB4 controller a "Driver log
 whether the driver is recording, its counters, and the log, oldest record
 first. Save Report (and `XHCITR /report <file>`) writes both logs and the
 counters into the report, as plain text with no internal addresses in it.
+With a Thunderbolt or USB4 report on Windows 2000 to 7, also send the
+safe-removal mark service's log (from `3.1.0.0`),
+`%SystemRoot%\System32\LogFiles\xhci98\XHCIMARK.LOG`: one line for each
+mark it wrote or removed, each check that stopped it, and each restart it
+made.
 
 The tool reads `xhci98.sys` through a query request of the driver's own,
 as it reads `xhcicm.sys`, with no `SNAPON.BAT` needed; an `xhci98.sys`

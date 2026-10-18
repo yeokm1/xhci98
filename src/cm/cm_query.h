@@ -274,4 +274,125 @@
                                  CM_QP_MAX_ENTRIES * CM_QP_ENT_BYTES)
 #define CM_QP_ASK_BYTES         16384UL /* the reader's first buffer */
 
+/*
+ * ---- The marks answer (design record 21 section 7.4, revision 3; task
+ * 42-A.5) ----
+ *
+ * A fourth request on the same device, IOCTL_XHCICM_MARKS:
+ * CTL_CODE(FILE_DEVICE_UNKNOWN 0x22, 0xA43, METHOD_BUFFERED,
+ * FILE_ANY_ACCESS), no input, the same access rules, removed-device
+ * answer and sizing rules as CM_Q_IOCTL with CM_QM_HDR_BYTES for
+ * CM_Q_HDR_BYTES. A driver from before 42-A.5 answers it with
+ * STATUS_INVALID_DEVICE_REQUEST. What it carries are facts the domain's
+ * attachments saw, never an inference about what a user did: one entry per
+ * child PDO the domain has seen on an active member since this start, the
+ * current ones (in the member bridge's last snapshot) first, then the
+ * tombstones (left it). The mark service (xhcimark\) is its reader; the
+ * thread keeps a tombstone CM_QM_TOMB_MS and longer while no answer of a
+ * marks generation past its departure has been read, up to the set's room.
+ */
+#define CM_QM_IOCTL             0x0022290CUL
+#define CM_QM_MAGIC             0x4D4D4358UL    /* 'XCMM' */
+#define CM_QM_VERSION           1UL
+
+#define CM_QM_HDR_BYTES         64UL
+#define CM_QM_O_MAGIC           0UL
+#define CM_QM_O_VERSION         4UL
+#define CM_QM_O_BYTES           8UL     /* the whole answer; in a header
+                                           alone, the size to ask for */
+#define CM_QM_O_PASS            12UL    /* as CM_Q_O_PASS */
+#define CM_QM_O_EPOCH_LO        16UL    /* CM_Q_O_EPOCH_* of this start */
+#define CM_QM_O_EPOCH_HI        20UL
+#define CM_QM_O_GEN             24UL    /* the marks generation: bumped on
+                                           every change of an entry; 0 only
+                                           before the first */
+#define CM_QM_O_COUNT           28UL    /* entries */
+#define CM_QM_O_ENT_BYTES       32UL    /* CM_QM_ENT_BYTES */
+#define CM_QM_O_ENT_OFFSET      36UL    /* the first entry */
+#define CM_QM_O_FLAGS           40UL    /* CM_QM_F_* */
+#define CM_QM_O_DROPPED         44UL    /* tombstones evicted before any
+                                           answer showed them */
+#define CM_QM_O_NHI_BDF         48UL    /* as CM_Q_O_NHI_BDF */
+#define CM_QM_O_CURRENT         52UL    /* of the entries, current ones */
+/* 56..63 reserved, 0 */
+
+#define CM_QM_F_INCOMPLETE      0x01UL  /* a current PDO could not be listed
+                                           (a set full, a truncated
+                                           snapshot): no unit may be read
+                                           as departed from this answer */
+#define CM_QM_F_STOPPING        0x02UL  /* the NHI is stopping */
+#define CM_QM_F_SAFE_EJECT_OFF  0x04UL  /* XhciCmSafeEject 0 on this domain */
+
+/* One entry. */
+#define CM_QM_ENT_BYTES         64UL
+#define CM_QM_E_MEMBER          0UL     /* the member's bus 15:8, device
+                                           7:3, function 2:0 */
+#define CM_QM_E_BUS             4UL     /* the child's bus number and */
+#define CM_QM_E_ADDRESS         8UL     /* DevicePropertyAddress (device
+                                           31:16, function 15:0), once the
+                                           location is known, else 0 */
+#define CM_QM_E_SERIAL          12UL    /* given at the PDO's first
+                                           appearance, per start; never 0 */
+#define CM_QM_E_FLAGS           16UL    /* CM_QM_EF_* */
+#define CM_QM_E_COUNTS0         20UL    /* query-remove 15:0, cancel 31:16 */
+#define CM_QM_E_COUNTS1         24UL    /* surprise removal 15:0, removal
+                                           after a query-remove 31:16 */
+#define CM_QM_E_COUNTS2         28UL    /* removal with no query-remove
+                                           since the last start 15:0, a
+                                           start that failed 31:16; each
+                                           half saturates at FFFFh */
+#define CM_QM_E_PENDING         32UL    /* the thread's clock (ms, never 0)
+                                           at the departure after a
+                                           query-remove of the last
+                                           attachment, 0 for none */
+#define CM_QM_E_PENDING_GEN     36UL    /* the port's connection generation
+                                           at that departure (USB4 profile;
+                                           0 under the ICM client) */
+/* 40..43 reserved, 0 */
+#define CM_QM_E_CHANGED         44UL    /* the thread's clock at the
+                                           entry's last change */
+/* 48..63 reserved, 0 */
+
+#define CM_QM_EF_LOCATED        0x01UL  /* bus and address known */
+#define CM_QM_EF_REPORTED       0x02UL  /* in the bridge's last snapshot */
+#define CM_QM_EF_BUS_ATT        0x04UL  /* an attachment by BusRelations */
+#define CM_QM_EF_ADD_ATT        0x08UL  /* an attachment by AddDevice (the
+                                           LowerFilters child, or a bridge
+                                           filter on the PDO) */
+#define CM_QM_EF_REMOVABLE      0x10UL  /* Removable answered set */
+#define CM_QM_EF_SAFE_EJECT_OFF 0x20UL  /* the domain's XhciCmSafeEject 0 */
+
+/* The sets are a member's (record 21 section 7.4, revision 3: two sets a
+ * member keeps apart, so that neither can crowd the other out), and no
+ * member's can crowd another's: CM_QM_MAX_CURRENT current entries and
+ * CM_QM_MAX_TOMBS tombstones per member, CM_QM_MAX_MEMBERS members
+ * (XHCI_TBT_MAX_TUNNELS). */
+#define CM_QM_TOMB_MS           60000UL
+#define CM_QM_MAX_MEMBERS       4UL
+#define CM_QM_MAX_CURRENT       32UL    /* CM_SNAP_MAX, per member */
+#define CM_QM_MAX_TOMBS         32UL    /* per member */
+#define CM_QM_MAX_ENTRIES       (CM_QM_MAX_MEMBERS * \
+                                 (CM_QM_MAX_CURRENT + CM_QM_MAX_TOMBS))
+#define CM_QM_MAX_BYTES         (CM_QM_HDR_BYTES + \
+                                 CM_QM_MAX_ENTRIES * CM_QM_ENT_BYTES)
+
+/*
+ * The confirmation of an eject (record 21 section 7.4, revision 3,
+ * decision M16): XhciCmEjectConfirm, REG_BINARY of CM_QC_BYTES, in the
+ * NHI's driver key, written by the mark service for a unit it read held
+ * for eject (problem 47, Windows XP and later) and by an administrator's
+ * tool for its own successful eject; read by the thread with the status
+ * ask, checked, the eject posted once, and the value written empty. A
+ * writer writes it only while the value is absent or empty.
+ */
+#define CM_QC_VALUE             "XhciCmEjectConfirm"
+#define CM_QC_BYTES             28UL
+#define CM_QC_O_EPOCH_LO        0UL     /* CM_Q_O_EPOCH_* */
+#define CM_QC_O_EPOCH_HI        4UL
+#define CM_QC_O_MEMBER          8UL     /* CM_QM_E_MEMBER */
+#define CM_QC_O_BUS             12UL    /* CM_QM_E_BUS */
+#define CM_QC_O_ADDRESS         16UL    /* CM_QM_E_ADDRESS */
+#define CM_QC_O_SERIAL          20UL    /* CM_QM_E_SERIAL */
+#define CM_QC_O_GEN             24UL    /* CM_QM_E_PENDING_GEN */
+
 #endif /* CM_QUERY_H */

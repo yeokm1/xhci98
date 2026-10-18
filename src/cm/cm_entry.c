@@ -15,6 +15,7 @@
 #include "cm.h"
 #include "../xhci_version.h"
 #include "cm_nvlink.h"
+#include "cm_ports.h"
 
 #if defined(XHCI_FLAVOUR_QEMU)
 #define CM_FLAVOUR_NAME "XHCI98_FLAVOUR_QEMU"
@@ -76,14 +77,38 @@ NTSTATUS CmForwardSync(PCM_COMMON common, PIRP irp)
     return irp->IoStatus.Status;
 }
 
+/* TRUE when a bridge filter of this driver is already on the PDO's stack:
+ * a bridge the filter INF names and whose LowerFilters value the mark
+ * service wrote calls AddDevice twice, once as a lower and once as an
+ * upper filter, and the first object serves both (decision M15). The
+ * stack is being built by the PnP manager, which is this call's caller,
+ * so it holds still. PASSIVE_LEVEL. */
+static BOOLEAN cmBridgeOnStack(PDEVICE_OBJECT pdo)
+{
+    PDEVICE_OBJECT walk;
+    ULONG n;
+
+    n = 0;
+    for (walk = pdo->AttachedDevice; walk != NULL && n < 16;
+         walk = walk->AttachedDevice) {
+        if (walk->DriverObject == CmDriverObject &&
+            ((PCM_COMMON)walk->DeviceExtension)->Kind == CM_KIND_FILTER) {
+            return TRUE;
+        }
+        n++;
+    }
+    return FALSE;
+}
+
 /*
- * Which role this PDO is (record 21 section 3.2). Windows 98 SE and ME
+ * Which role this PDO is (record 21 section 3.2; since task 42-A.5,
+ * section 7.4 revision 3's CmRoleDecide). Windows 98 SE and ME
  * (IoIsWdmVersionAvailable(1, 0x10) FALSE) have the NHI role alone: no
- * INF of this driver that their engine reads names a bridge, and a WDM
- * driver on a bridge devnode there breaks the bridge (section 6.1), so
- * the ids are not read. On the NT targets the ids decide; a list that
- * cannot be read takes no role, which declines a filter's attach rather
- * than fail the bridge it would sit on.
+ * INF of this driver that their engine reads names a bridge, no mark
+ * service runs there, and a WDM driver on a bridge devnode there breaks
+ * the bridge (section 6.1), so the ids are not read. On the NT targets the
+ * ids decide, and every PDO that is neither an NHI nor a filter INF's
+ * bridge is the LowerFilters child, which never fails AddDevice.
  */
 static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 {
@@ -91,6 +116,7 @@ static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     ULONG bytes;
     CM_IDS idsSeen;
     NTSTATUS status;
+    ULONG role;
 
     CmZero(&idsSeen, sizeof(idsSeen));
     if (!IoIsWdmVersionAvailable(1, 0x10)) {
@@ -108,13 +134,19 @@ static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
         ids[bytes / sizeof(WCHAR) + 1] = 0;
         (VOID)CmClassifyIds(ids, bytes / sizeof(WCHAR) + 2, &idsSeen);
     }
-    if (idsSeen.Role == CM_ROLE_FILTER) {
+    role = CmRoleDecide(&idsSeen,
+                        (ULONG)CmPortsFilterId(CM_PORTS_ID(idsSeen.Vendor,
+                                                           idsSeen.Device)));
+    if (role == CM_ROLE_FILTER) {
+        if (cmBridgeOnStack(pdo)) {
+            return STATUS_SUCCESS;
+        }
         return CmFilterAddDevice(driver, pdo);
     }
-    if (idsSeen.Role == CM_ROLE_NHI) {
+    if (role == CM_ROLE_NHI) {
         return CmNhiAddDevice(driver, pdo, &idsSeen);
     }
-    return STATUS_SUCCESS;
+    return CmChildAddDevice(driver, pdo);
 }
 
 static VOID cmUnload(PDRIVER_OBJECT driver)

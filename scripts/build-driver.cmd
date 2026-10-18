@@ -563,6 +563,18 @@ if exist "%REPO%\xhcitr\XHCITR.EXE" (
     if errorlevel 1 goto trtestfail
 )
 
+rem The safe-removal mark service (task 42-A.5, design record 21 section
+rem 7.4 revision 3), when its EXE has been built: its -selftest, its switch
+rem refusals and its import table, which must name KERNEL32 and ADVAPI32
+rem alone (xhcimark\selftest.cmd). Nothing of it installs or starts the
+rem service.
+if exist "%REPO%\xhcimark\XHCIMARK.EXE" (
+    echo.
+    echo === xhcimark self-test ===
+    call "%REPO%\xhcimark\selftest.cmd"
+    if errorlevel 1 goto mktestfail
+)
+
 rem The 98 SE and ME device install helper (task 42-A.1, design record 27),
 rem when its EXE has been built (xhciinst\di\build.cmd, Open Watcom): its
 rem import table, by ordinal from KERNEL, USER and SETUPX and each the
@@ -1225,6 +1237,13 @@ exit /b 1
 echo.
 echo ERROR: tracked source carries a stray control byte or a UTF-8 BOM where the
 echo 1998-era toolchain cannot read one. See the check's output above.
+endlocal
+exit /b 1
+
+:mktestfail
+echo.
+echo ERROR: xhcimark's self-test failed: its pure half, its switches or its
+echo import table cannot be trusted (xhcimark\selftest.cmd).
 endlocal
 exit /b 1
 

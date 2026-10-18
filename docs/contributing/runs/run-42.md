@@ -476,3 +476,113 @@ was read on a guest with a Thunderbolt or USB4 controller; XHCITR's Set
 under a machine-wide value was not run; `silent-off.bat` and
 `portsw-off.bat` were not run. Owed to 42-V.2 as its text says, with
 these taken.
+
+## 42-A.5: the safe-removal mark across a stack rebuild (2026-10-19)
+
+The code of 42-0.4 (design record 21 section 7.4, revision 3), on branch
+`p42-ejrb` from `3.1.0.0` at `2a89ba74`: the driver half in `src\cm\`
+(the roles by id tables, the `AddDevice` child, the attachment list and the
+per-domain marks table `cm_marks.c`, `IOCTL_XHCICM_MARKS`, the departures
+held pending and the eject posted only on `XhciCmEjectConfirm`), and the
+mark service `xhcimark\` (`XHCIMARK.EXE`, `XHCIMK64.EXE`) with its pure
+half, self-test and import check, staged by `make-release.ps1` into
+`tools\xhcimark\`. The installer's hooks for the service (its install,
+start, update and removal, and the marks removed at the uninstall and
+after a failed upgrade) are task 42-A.3's code, not this branch's; record
+21 section 7.4's "The installer" paragraph is their specification.
+
+Reviewed and revised until the review converged. Among the changes the
+review brought: the reconciliation judges a record by its
+owning domain and never reads a failed lookup or an unreadable location as
+an absence; the restart's fresh reads re-check the NHI, both answers, the
+member and the unit's actual parent; the marks table keeps each member's
+sets apart; the confirmation's writers share the tools' eject mutex.
+
+### The legs (42-V.2, the 42-A.5 part)
+
+In QEMU guests on development host A, the emulator and recipe of
+"Bridges behind the tunnel port on NT" (`runs/run-41.md`): the
+`tb3-alpine-ridge` host with the SHPC tunnel bridge `tb0` and a chained
+upstream port (`1B21:2421`) and bridge behind it, an NVMe at 01:01.0 and
+another behind the chain. Each guest took the published `3.0.0.0`
+package's `INSTALL /yes /thunderbolt /notray /nopause`, then this
+branch's qemu-flavour `xhcicm.sys` copied over the installed one and the
+service registered by hand (`XHCIMARK -register` from `system32`),
+because the installer's hooks come with 42-A.3. Disables, enables and the
+driver update were made by a test helper of the guest's own
+(`SetupDiCallClassInstaller(DIF_PROPERTYCHANGE)`,
+`UpdateDriverForPlugAndPlayDevices` with `machine.inf`, forced); "listed"
+is `XHCIINST /devices` printing "removable: yes ... listed in Safely Remove
+Hardware" for the unit.
+
+- **Windows 2000 SP4** (one processor, no ACPI). The first build of the
+  driver bugchecked at the next boot (0x7F, a double fault, read with the
+  emulator's debugger: the kernel stack overflowed): a filter's capability
+  handler asked `IoGetDeviceProperty` for its own address, which the PnP
+  manager answers with an `IRP_MN_QUERY_CAPABILITIES` down the same stack.
+  Fixed in the same session (the capability answer's own address; no
+  location read while the object is itself asking). With the fix: the
+  first plug of a never-seen unit listed, the upstream port and the NVMe
+  marked within a second of the plug (`3.0.0.0` left this unit unlisted,
+  the recipe's step 4); a disable (the mark kept while disabled, problem
+  22) and an enable, listed; a forced driver update, listed; an unplug,
+  both marks removed within a poll (2000's Unsafe Removal dialog as
+  before); the service stopped, the unit unplugged, the service started:
+  both marks removed at its start. Pass.
+- **Windows XP SP3** (ACPI, two processors). The first plug of a
+  never-seen unit: the marks written within a second; Windows' driver
+  installation of the upstream port then deleted the port's own
+  `LowerFilters` value, the service wrote it again, held its restart while
+  the NVMe's Found New Hardware wizard was open ("an installation is
+  pending"), and once it was cancelled restarted the port
+  (`DIF_PROPERTYCHANGE`), which came back listed. A disable and an enable,
+  listed. A forced driver update deleted the value again; the first build
+  of the service had spent its one restart on the first plug and left the
+  unit unlisted, so a unit seen listed after its restart now re-arms it
+  (record 21 section 7.4, "As built"); read again from a fresh install: the
+  update's install deleted the value, the service wrote it, restarted the
+  port, listed. An unplug, both marks removed within a poll; the
+  stopped-service departure caught up at the service's start. Pass.
+- **Windows 7 SP1, 32-bit** (two processors, from an elevated prompt).
+  The first plug of a never-seen unit listed (7 kept the first plug in
+  `3.0.0.0` too); the driver installation deleted the upstream port's new
+  value within two seconds and the service wrote it again, so the later
+  rebuilds kept it. A disable (the mark kept while disabled) and an enable,
+  listed; a forced driver update (the value deleted by the install and
+  written again), listed; an unplug, both marks removed within a poll; a
+  departure while the service was stopped caught up at its start. Pass.
+- **Windows XP Professional x64 SP2** (the amd64 build; XP x64 enforces
+  no kernel-mode signature, so this branch's unsigned build loads). The
+  same readings as 32-bit XP: the first plug's marks written, the port's
+  value deleted by its install and written again, the gated restart held
+  while a wizard was open and then made, listed; a disable and an enable,
+  listed; a forced driver update, the value deleted and written again, the
+  re-armed restart made, listed; an unplug, both marks removed within a
+  poll; a departure while the service was stopped caught up at its start.
+  Pass.
+
+**Owed** (42-V.2's 42-A.5 part, written down here rather than read):
+
+- **Vista (both architectures) and 7 x64**: not read in this run. The x64
+  binaries of a cut are test-signed by the packager only, with the owner's
+  key and password, which this run does not have, so an unsigned
+  `xhcicm.sys` loads on those systems only from an F8 boot with signature
+  enforcement disabled; Vista x86 needs no signature and was not reached
+  for time.
+- **The value gone after the uninstall**, and every leg of the installer's
+  part (its install, update, stop and removal of the service, step 0, the
+  failed upgrade, the hand-deleted service's Code 39 repaired): they need
+  42-A.3's hooks, which are not on this branch.
+- The legs of record 21 section 7.4's list that need more than this run
+  did: the restart vetoed by an open file (no volume behind the chain: the
+  emulator's NVMe has no driver on these guests), an eject and its
+  confirmation (an applet stop on XP and later confirmed by the service, on
+  2000 by `XHCIINST /eject`'s own write, which is 42-A.3's code), the USB4
+  profile's legs (a driver update and a disable held under the USB4
+  connection manager with the tunnel kept, a delayed confirmation across a
+  connection change), more than 32 departures in a minute, the crash
+  between the write and the record, Driver Verifier on the 2000 SMP guest
+  with the `AddDevice` child, `XhciCmSafeEject` 0 with a value in place,
+  a restart of Windows with the unit present, and the dock's upstream port
+  as a unit whose id the filter INF names. Every guest here ran the
+  firmware connection manager's emulated Alpine Ridge host.

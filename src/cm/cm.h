@@ -22,7 +22,9 @@
  *                NHI asks it through (task 39-A.5).
  *   [CM_CHILD]   safe eject's child filter (task 39-A.8), NT only,
  *                created by a bridge filter above a device newly reported
- *                on an active tunnel bridge: cm_filt.c.
+ *                on an active tunnel bridge, or (task 42-A.5, record 21
+ *                section 7.4 revision 3) by AddDevice for a device whose
+ *                LowerFilters value the mark service wrote: cm_filt.c.
  *
  * FILES. cm_entry.c (DriverEntry, AddDevice, the dispatch table),
  * cm_nhi.c, cm_thr.c, cm_power.c, cm_reenum.c (the re-enumeration and
@@ -369,6 +371,7 @@ typedef struct _CM_NHI {
     UCHAR QueryBuf[CM_Q_BUILD_MAX];
     ULONG QueryLastBytes;   /* the answer last published, for its content */
     UCHAR QueryLast[CM_Q_BUILD_MAX];    /* generation                    */
+    UCHAR MarksBuf[CM_QM_MAX_BYTES];    /* the marks answer, thread-owned */
     /* The counters' text for the log answer (record 25 section 4.5), the
      * thread's own, built after each pass and published with the answer. */
     ULONG QueryCtrBytes;
@@ -413,6 +416,13 @@ typedef struct _CM_QUERY_DEV {
     KEVENT PciGate;
     UCHAR Pci[CM_QP_MAX_BYTES];
     UCHAR PciScratch[CM_QP_CFG_BYTES];  /* one prefix read, under PciGate */
+    /* The marks answer (task 42-A.5): as the thread last built it, under
+     * Lock; MarksRead the newest marks generation a whole answer carried
+     * out, which the thread's next publish takes back (MarksReadAny). */
+    ULONG MarksBytes;
+    ULONG MarksRead;
+    ULONG MarksReadAny;
+    UCHAR Marks[CM_QM_MAX_BYTES];
 } CM_QUERY_DEV, *PCM_QUERY_DEV;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
@@ -473,9 +483,29 @@ typedef struct _CM_FILTER {
     ULONG ChangeSeq;        /* tunnel changes seen, for that settling     */
 
     /* ---- child ---- */
-    struct _CM_FILTER *Bridge;
-    ULONG QueryRemoved;     /* a query-remove not cancelled                */
+    struct _CM_FILTER *Bridge;  /* NULL for a child AddDevice made        */
+    ULONG QueryRemoved;     /* a query-remove not cancelled (both kinds)   */
     ULONG SurpriseRemoved;
+
+    /* ---- the marks (task 42-A.5): every attachment of this driver on a
+     * device, a bridge filter's or a child's, on the registration list's
+     * attachment list, every field under its lock ---- */
+    LIST_ENTRY AttLink;
+    ULONG AttListed;
+    ULONG AddDev;           /* made by AddDevice: a LowerFilters child, or
+                               a bridge filter (which may also be a unit) */
+    ULONG Located;          /* LocBus and LocAddress read                  */
+    ULONG LocBus;
+    ULONG LocAddress;       /* DevicePropertyAddress                        */
+    ULONG Answered;         /* Removable answered set                      */
+    ULONG Stray;            /* counted once as cm.reenum.child.stray       */
+    /* Set while this object asks IoGetDeviceProperty for its PDO's
+     * location: the PnP manager answers DevicePropertyAddress with an
+     * IRP_MN_QUERY_CAPABILITIES sent to the top of this very stack, which
+     * must pass through this object unlocated (read on Windows 2000: a
+     * double fault, the stack overflowed by the recursion). The PnP
+     * dispatch alone touches it. */
+    ULONG InLocate;
 } CM_FILTER, *PCM_FILTER;
 
 /* cm_entry.c */
@@ -514,6 +544,10 @@ VOID CmNhiSetU4Hooks(PCM_NHI nhi, CM_U4_UP_HOOK up, CM_U4_DOWN_HOOK down,
 /* For cm_reenum.c, profile-neutral (cm_reenum.h, "THE USB4 PROFILE"). */
 VOID CmNhiNamePorts(PCM_NHI nhi);
 VOID CmNhiSetChanged(PCM_NHI nhi);
+/* The connection generation of the USB4 port member `member` corresponds
+ * to (record 22 section 7.2), 0 where none does or under the ICM client;
+ * on the thread (task 42-A.5's pending departures). */
+ULONG CmNhiMemberGen(PCM_NHI nhi, ULONG member);
 /* cm_power.c's resume: the USB4 batch taken and its UPs published before
  * the held bridges are released (cm_nhi.c, cmU4Drain). */
 VOID CmNhiU4Take(PCM_NHI nhi);
@@ -585,6 +619,10 @@ BOOLEAN CmPowerSleeping(PCM_NHI nhi);
 
 /* cm_filt.c */
 NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
+/* The child by AddDevice (record 21 section 7.4, revision 3): attached to
+ * the top of what is on the PDO, passive until associated, and never a
+ * failed AddDevice for want of a role (decision M7). */
+NTSTATUS CmChildAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
 NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp);
 NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp);
 

@@ -37,10 +37,17 @@
  * SAFE EJECT (section 7.4). NT: the bridge filter's BusRelations reading
  * (CmRegRelations) attaches a child filter (CM_KIND_CHILD) above each PDO
  * new since its snapshot, on an active bridge with XhciCmSafeEject 1; the
- * child answers IRP_MN_QUERY_CAPABILITIES with Removable (cm_filt.c). A
- * child removed after a query-remove posts an eject to the owning domain,
- * which CmReenumService hands to the per-port entry of record 22 section
- * 10.4 when one is set. 98 SE and ME, best effort: after a tunnel up the
+ * child answers IRP_MN_QUERY_CAPABILITIES with Removable (cm_filt.c).
+ * Since task 42-A.5 (revision 3) a child is also made by AddDevice for a
+ * device whose LowerFilters value the mark service wrote, so the mark
+ * survives a rebuild of the device's stack; every attachment is on the
+ * attachment list, each domain's marks table (cm_marks.h) reads it and
+ * the query device answers it (IOCTL_XHCICM_MARKS). A child removed after
+ * a query-remove posts no eject by itself: the departure is pending on its
+ * entry, and an eject is posted only on the identity-checked confirmation
+ * the service or an administrator's tool writes (CmReenumConfirm), which
+ * CmReenumService hands to the per-port entry of record 22 section 10.4
+ * when one is set. 98 SE and ME, best effort: after a tunnel up the
  * worker, for a window, walks each active member's children and adds
  * DN_REMOVABLE (Change_DevNode_Status) to each new one, never to a tunnel
  * port itself.
@@ -97,10 +104,15 @@ static ULONG cmRegSkipped;
 static ULONG cmRegRefused;
 static ULONG cmRegOver;
 static ULONG cmRegWatchdogs;
+/* Every attachment of this driver on a device (task 42-A.5, cm_reenum.h's
+ * "The marks"), and the LowerFilters children no active member owned. */
+static LIST_ENTRY cmRegAtts;
+static ULONG cmRegStray;
 
 static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
                               PULONG over);
 static VOID cmDiscoverAndList(PCM_NHI nhi);
+static VOID cmMarksSyncAll(VOID);
 static VOID cmHoldDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2);
 
 /* ====================================================================== */
@@ -160,11 +172,13 @@ VOID CmRegInit(VOID)
     KeInitializeSpinLock(&cmRegLock);
     InitializeListHead(&cmRegFilters);
     InitializeListHead(&cmRegDomains);
+    InitializeListHead(&cmRegAtts);
 }
 
 VOID CmRegFilterInit(PCM_FILTER filter)
 {
     InitializeListHead(&filter->RegLink);
+    InitializeListHead(&filter->AttLink);
     KeInitializeEvent(&filter->Rundown, NotificationEvent, FALSE);
     KeInitializeTimer(&filter->HoldTimer);
     KeInitializeDpc(&filter->HoldDpc, cmHoldDpc, filter);
@@ -275,6 +289,7 @@ static VOID cmRegRecompute(VOID)
             r->Port[i].Flags = flags;
         }
     }
+    cmMarksSyncAll();
 }
 
 /*
@@ -344,9 +359,14 @@ VOID CmRegPublish(PCM_FILTER filter)
     ULONG bdf;
     KIRQL irql;
 
+    /* cmLocation's DevicePropertyAddress is answered by a QUERY_CAPABILITIES
+     * down this stack, which this filter must pass through unlocated. */
+    filter->InLocate++;
     if (!cmLocation(filter->Common.Pdo, &bdf)) {
+        filter->InLocate--;
         return;
     }
+    filter->InLocate--;
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (!filter->Published) {
         filter->Bdf = bdf;
@@ -536,6 +556,8 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     if (filter->Published && !filter->Gone && !filter->Baseline) {
         filter->Baseline = 1;
         cmRegRecompute();
+    } else {
+        cmMarksSyncAll();
     }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
@@ -664,6 +686,7 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
                    (DO_BUFFERED_IO | DO_DIRECT_IO | DO_POWER_PAGABLE |
                     DO_POWER_INRUSH);
     self->Flags &= ~DO_DEVICE_INITIALIZING;
+    CmRegAttLink(child);
     *over = (ULONG)(decision == CM_CHILD_ATTACH_OVER);
     return STATUS_SUCCESS;
 }
@@ -692,48 +715,490 @@ static BOOLEAN cmEjectReady(PCM_FILTER bridge)
     return TRUE;
 }
 
-/*
- * A child filter's device has been removed: its REMOVE_DEVICE completed
- * below and the filter detached from the PDO. `ejected` when that removal
- * followed a query-remove, not a surprise removal. Once no function behind
- * the port has a stack (cmEjectReady), a port on which an orderly removal
- * was seen is posted to the owning domain with the bridge's population
- * generation, so record 22's per-port entry runs only after every
- * function behind the port has finished its removal, and never against a
- * population that changed since (section 10.4). PASSIVE_LEVEL.
- */
-VOID CmRegChildRemoved(PCM_FILTER child, BOOLEAN ejected)
-{
-    KIRQL irql;
-    PCM_FILTER bridge;
-    PCM_NHI d;
-    ULONG i;
+/* ---- the marks (record 21 section 7.4, revision 3; task 42-A.5) ------- */
 
-    bridge = child->Bridge;
-    if (bridge == NULL) {
-        return;
+/* The domain's clock as its thread last set it, never 0 (a departure's
+ * time 0 reads "none"). Under the lock. */
+static ULONG cmMarkNow(PCM_NHI d)
+{
+    return d->ClockMs != 0 ? d->ClockMs : 1UL;
+}
+
+/* The current entry of `pdo` in any listed domain, with its domain.
+ * Under the lock. */
+static PCM_MARK cmMarkFind(PVOID pdo, PCM_NHI *dom)
+{
+    PLIST_ENTRY e;
+    PCM_NHI d;
+    PCM_MARK m;
+
+    for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+        d = CONTAINING_RECORD(CONTAINING_RECORD(e, CM_REENUM, Link), CM_NHI,
+                              Reenum);
+        m = CmMarksFind(&d->Reenum.Marks, pdo);
+        if (m != NULL) {
+            *dom = d;
+            return m;
+        }
     }
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    /* An orderly removal counts only for a function its bridge still
-     * reports: one already reported missing belongs to an old connection.
-     * A function that arrives later forgets it (CmRegRelations). */
-    if (ejected) {
-        for (i = 0; i < bridge->SnapCount; i++) {
-            if (bridge->Snap[i] == (PVOID)child->Common.Pdo) {
-                bridge->EjectSeen = 1;
+    *dom = NULL;
+    return NULL;
+}
+
+/* An entry's attachments, location and Removable answer, from the
+ * attachment list as it stands; an attachment present clears a pending
+ * departure (the stack was rebuilt). Under the lock. */
+static VOID cmMarkAtt(PCM_NHI d, PCM_MARK m)
+{
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    ULONG flags;
+    ULONG bus;
+    ULONG address;
+
+    flags = 0;
+    bus = m->Bus;
+    address = m->Address;
+    for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if ((PVOID)f->Common.Pdo != m->Pdo) {
+            continue;
+        }
+        if (f->Common.Kind == CM_KIND_CHILD && !f->AddDev) {
+            flags |= CM_QM_EF_BUS_ATT;
+        } else {
+            flags |= CM_QM_EF_ADD_ATT;
+        }
+        if (f->Located) {
+            flags |= CM_QM_EF_LOCATED;
+            bus = f->LocBus;
+            address = f->LocAddress;
+        }
+        if (f->Answered) {
+            flags |= CM_QM_EF_REMOVABLE;
+        }
+    }
+    /* A location once known stays known: the PDO is the same device. */
+    flags |= m->Flags & CM_QM_EF_LOCATED;
+    if (flags != m->Flags || bus != m->Bus || address != m->Address ||
+        ((flags & (CM_QM_EF_BUS_ATT | CM_QM_EF_ADD_ATT)) != 0 &&
+         m->PendingAt != 0)) {
+        m->Flags = flags;
+        m->Bus = bus;
+        m->Address = address;
+        if ((flags & (CM_QM_EF_BUS_ATT | CM_QM_EF_ADD_ATT)) != 0) {
+            m->PendingAt = 0;
+            m->PendingGen = 0;
+        }
+        CmMarksTouch(&d->Reenum.Marks, m, cmMarkNow(d));
+    }
+}
+
+/* Every listed domain's table against its members' snapshots and the
+ * attachment list. Under the lock (cmRegRecompute's end, and each
+ * BusRelations answer). */
+static VOID cmMarksSyncAll(VOID)
+{
+    PLIST_ENTRY e;
+    PCM_NHI d;
+    PCM_REENUM r;
+    PCM_FILTER f;
+    ULONG i;
+    BOOLEAN active;
+
+    for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+        r = CONTAINING_RECORD(e, CM_REENUM, Link);
+        d = CONTAINING_RECORD(r, CM_NHI, Reenum);
+        if (r->Route != CM_ROUTE_FILTER) {
+            continue;
+        }
+        CmMarksBegin(&r->Marks);
+        for (i = 0; i < r->Members; i++) {
+            f = cmRegFind(r->Port[i].Bdf);
+            active = (BOOLEAN)(f != NULL && f->Owner == d && f->Active &&
+                               (r->Port[i].Flags & CM_PORT_ACTIVE) != 0);
+            (VOID)CmMarksSync(&r->Marks, i, r->Port[i].Bdf,
+                              active ? (PVOID const *)f->Snap : NULL,
+                              active ? f->SnapCount : 0,
+                              (BOOLEAN)(active && f->SnapTruncated), active,
+                              cmMarkNow(d));
+        }
+        (VOID)CmMarksDropMembers(&r->Marks, r->Members, cmMarkNow(d));
+        for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
+            if (r->Marks.E[i].Pdo != NULL && !r->Marks.E[i].Tomb) {
+                cmMarkAtt(d, &r->Marks.E[i]);
             }
         }
     }
-    d = bridge->Owner;
-    if (bridge->EjectSeen && cmEjectReady(bridge) && d != NULL &&
-        bridge->OwnerIndex < d->Reenum.Members) {
-        bridge->EjectSeen = 0;
-        d->Reenum.EjectPending |= 1UL << bridge->OwnerIndex;
-        d->Reenum.Port[bridge->OwnerIndex].Flags |= CM_PORT_EJECTED;
-        d->Reenum.Port[bridge->OwnerIndex].EjectSerial = bridge->Serial;
-        d->Reenum.Port[bridge->OwnerIndex].EjectGen = bridge->RelGen;
+}
+
+/* The entry of `f`'s PDO brought up to date. Under the lock. */
+static VOID cmMarkAttOf(PCM_FILTER f)
+{
+    PCM_NHI d;
+    PCM_MARK m;
+
+    m = cmMarkFind((PVOID)f->Common.Pdo, &d);
+    if (m != NULL) {
+        cmMarkAtt(d, m);
+    }
+}
+
+VOID CmRegAttLink(PCM_FILTER filter)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (!filter->AttListed) {
+        InsertTailList(&cmRegAtts, &filter->AttLink);
+        filter->AttListed = 1;
+        cmMarkAttOf(filter);
     }
     KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+/* The PDO's bus number and address, as the PnP manager's devnode has them
+ * (record 21 section 7.4, revision 3: never read at the BusRelations
+ * attachment, before the devnode exists). PASSIVE_LEVEL. */
+/* The location published once read. PASSIVE_LEVEL. */
+static VOID cmAttLocated(PCM_FILTER filter, ULONG bus, ULONG address)
+{
+    KIRQL irql;
+
+    if (bus > 0xFFUL || (address >> 16) > 0x1FUL ||
+        (address & 0xFFFFUL) > 7UL) {
+        return;
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    filter->LocBus = bus;
+    filter->LocAddress = address;
+    filter->Located = 1;
+    cmMarkAttOf(filter);
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegAttLocate(PCM_FILTER filter)
+{
+    ULONG bus;
+    ULONG address;
+    ULONG bytes;
+    BOOLEAN ok;
+
+    if (filter->Located || filter->InLocate) {
+        return;
+    }
+    bus = 0;
+    address = 0;
+    filter->InLocate++;
+    ok = (BOOLEAN)(NT_SUCCESS(IoGetDeviceProperty(filter->Common.Pdo,
+                                                  DevicePropertyBusNumber,
+                                                  sizeof(bus), &bus,
+                                                  &bytes)) &&
+                   NT_SUCCESS(IoGetDeviceProperty(filter->Common.Pdo,
+                                                  DevicePropertyAddress,
+                                                  sizeof(address), &address,
+                                                  &bytes)));
+    filter->InLocate--;
+    if (ok) {
+        cmAttLocated(filter, bus, address);
+    }
+}
+
+VOID CmRegAttLocateCaps(PCM_FILTER filter, ULONG address)
+{
+    ULONG bus;
+    ULONG bytes;
+    BOOLEAN ok;
+
+    if (filter->Located || filter->InLocate) {
+        return;
+    }
+    bus = 0;
+    filter->InLocate++;
+    ok = (BOOLEAN)NT_SUCCESS(IoGetDeviceProperty(filter->Common.Pdo,
+                                                 DevicePropertyBusNumber,
+                                                 sizeof(bus), &bus, &bytes));
+    filter->InLocate--;
+    if (ok) {
+        cmAttLocated(filter, bus, address);
+    }
+}
+
+BOOLEAN CmRegAttMayMark(PCM_FILTER filter)
+{
+    PLIST_ENTRY e;
+    PCM_REENUM r;
+    PCM_NHI d;
+    KIRQL irql;
+    ULONG i;
+    ULONG want;
+    BOOLEAN may;
+    BOOLEAN seen;
+
+    if (filter->Common.Kind == CM_KIND_CHILD && !filter->AddDev) {
+        return TRUE;
+    }
+    may = FALSE;
+    seen = FALSE;
+    want = CM_PORT_ACTIVE | CM_PORT_EXCLUSIVE;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (filter->Located) {
+        for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
+            r = CONTAINING_RECORD(e, CM_REENUM, Link);
+            d = CONTAINING_RECORD(r, CM_NHI, Reenum);
+            if (r->Route != CM_ROUTE_FILTER) {
+                continue;
+            }
+            for (i = 0; i < r->Members; i++) {
+                if ((r->Port[i].Flags & want) == want &&
+                    r->Port[i].SecBusValid &&
+                    r->Port[i].SecBus == filter->LocBus &&
+                    CmMarksFind(&r->Marks, (PVOID)filter->Common.Pdo) !=
+                        NULL) {
+                    seen = TRUE;
+                    if (r->SafeEject != 0) {
+                        may = TRUE;
+                    }
+                }
+            }
+            UNREFERENCED_PARAMETER(d);
+        }
+    }
+    if (!seen && filter->Common.Kind == CM_KIND_CHILD && !filter->Stray) {
+        /* A value on a device outside every set: attached and passive. */
+        filter->Stray = 1;
+        cmRegStray++;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return may;
+}
+
+VOID CmRegAttAnswered(PCM_FILTER filter)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (!filter->Answered) {
+        filter->Answered = 1;
+        cmMarkAttOf(filter);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegAttEvent(PCM_FILTER filter, ULONG which)
+{
+    KIRQL irql;
+    PCM_NHI d;
+    PCM_MARK m;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    m = cmMarkFind((PVOID)filter->Common.Pdo, &d);
+    if (m != NULL) {
+        CmMarksCount(&d->Reenum.Marks, m, which, cmMarkNow(d));
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+/*
+ * The attachment's device has been removed (cm_reenum.h). A departure
+ * after a query-remove is recorded only when the last attachment of this
+ * driver on the PDO leaves, and posts nothing: Windows sends the same
+ * query-remove and removal for a disable, a driver update and a restart
+ * as for an eject, so the eject waits for CmReenumConfirm (decision M16).
+ * PASSIVE_LEVEL.
+ */
+VOID CmRegAttRemoved(PCM_FILTER filter, BOOLEAN afterQr)
+{
+    KIRQL irql;
+    PCM_NHI d;
+    PCM_MARK m;
+    PLIST_ENTRY e;
+    PCM_FILTER other;
+    BOOLEAN left;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (filter->AttListed) {
+        RemoveEntryList(&filter->AttLink);
+        InitializeListHead(&filter->AttLink);
+        filter->AttListed = 0;
+    }
+    m = cmMarkFind((PVOID)filter->Common.Pdo, &d);
+    if (m != NULL) {
+        CmMarksCount(&d->Reenum.Marks, m,
+                     afterQr ? CM_MK_REMOVE_AFTER_QR : CM_MK_REMOVE_NO_QR,
+                     cmMarkNow(d));
+        left = TRUE;
+        for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+            other = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+            if (other->Common.Pdo == filter->Common.Pdo) {
+                left = FALSE;
+            }
+        }
+        cmMarkAtt(d, m);
+        if (afterQr && left && m->Member < d->Reenum.Members) {
+            m->PendingAt = cmMarkNow(d);
+            m->PendingGen = d->Reenum.Port[m->Member].ConnGen;
+            d->Reenum.Departures++;
+            CmMarksTouch(&d->Reenum.Marks, m, cmMarkNow(d));
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+/* Each member's secondary bus, read from its header where the host
+ * interface may be read (record 21 section 5.5), published under the
+ * lock. PASSIVE_LEVEL, the connection-manager thread. */
+static VOID cmSecBuses(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    ULONG buses[XHCI_TBT_MAX_TUNNELS];
+    ULONG ok[XHCI_TBT_MAX_TUNNELS];
+    ULONG i;
+    ULONG v;
+    KIRQL irql;
+
+    r = &nhi->Reenum;
+    if (r->Route != CM_ROUTE_FILTER || !CmNhiHwAccess(nhi)) {
+        return;
+    }
+    for (i = 0; i < r->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        ok[i] = 0;
+        buses[i] = 0;
+        if (cmCfgRead(NULL, r->Port[i].Bdf, 0x18UL, &v) &&
+            v != 0xFFFFFFFFUL) {
+            buses[i] = (v >> 8) & 0xFFUL;
+            ok[i] = (ULONG)(buses[i] != 0);
+        }
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (i = 0; i < r->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (ok[i]) {
+            r->Port[i].SecBus = buses[i];
+            r->Port[i].SecBusValid = 1;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+/* Each member's connection generation (CmNhiMemberGen): a pending
+ * departure recorded under another is dropped - an unplug and re-plug the
+ * connection manager saw before BusRelations reported the PDO missing.
+ * PASSIVE_LEVEL, the connection-manager thread. */
+static VOID cmConnGens(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    ULONG gens[XHCI_TBT_MAX_TUNNELS];
+    ULONG i;
+    ULONG k;
+    ULONG dropped;
+    KIRQL irql;
+
+    r = &nhi->Reenum;
+    for (i = 0; i < r->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        gens[i] = nhi->U4On ? CmNhiMemberGen(nhi, i) : 0;
+    }
+    dropped = 0;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (i = 0; i < r->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (r->Port[i].ConnGen == gens[i]) {
+            continue;
+        }
+        r->Port[i].ConnGen = gens[i];
+        for (k = 0; k < CM_QM_MAX_ENTRIES; k++) {
+            if (r->Marks.E[k].Pdo != NULL && !r->Marks.E[k].Tomb &&
+                r->Marks.E[k].Member == i && r->Marks.E[k].PendingAt != 0) {
+                r->Marks.E[k].PendingAt = 0;
+                r->Marks.E[k].PendingGen = 0;
+                CmMarksTouch(&r->Marks, &r->Marks.E[k], cmMarkNow(nhi));
+                dropped++;
+            }
+        }
+    }
+    r->DeparturesDropped += dropped;
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (dropped != 0) {
+        CmLogNote(nhi, "cm.reenum.departure.dropped", dropped);
+    }
+}
+
+ULONG CmReenumMarksBuild(PCM_NHI nhi, UCHAR *out, BOOLEAN readAny,
+                         ULONG readGen)
+{
+    PCM_REENUM r;
+    CM_QM_IN in;
+    KIRQL irql;
+    ULONG bytes;
+
+    r = &nhi->Reenum;
+    in.EpochLo = nhi->QueryEpochLo;
+    in.EpochHi = nhi->QueryEpochHi;
+    in.NhiBdf = nhi->QueryBdf;
+    in.SafeEjectOff = (ULONG)(r->SafeEject == 0);
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (readAny) {
+        CmMarksSeen(&r->Marks, readGen);
+    }
+    CmMarksEvict(&r->Marks, cmMarkNow(nhi));
+    bytes = CmMarksBuild(out, &r->Marks, &in);
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return bytes;
+}
+
+VOID CmReenumConfirm(PCM_NHI nhi, const UCHAR *v, ULONG bytes)
+{
+    PCM_REENUM r;
+    PCM_MARK m;
+    PCM_FILTER f;
+    ULONG gens[XHCI_TBT_MAX_TUNNELS];
+    ULONG why;
+    ULONG i;
+    ULONG member;
+    KIRQL irql;
+    BOOLEAN posted;
+
+    r = &nhi->Reenum;
+    posted = FALSE;
+    member = 0;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        gens[i] = i < r->Members ? r->Port[i].ConnGen : 0;
+    }
+    m = NULL;
+    why = CM_MK_CONF_SERIAL;
+    if (r->Listed && r->Route == CM_ROUTE_FILTER) {
+        m = CmMarksConfirm(&r->Marks, v, bytes, nhi->QueryEpochLo,
+                           nhi->QueryEpochHi, (BOOLEAN)(nhi->U4On != 0),
+                           gens, r->Members, &why);
+    }
+    if (m != NULL && m->Member < r->Members) {
+        member = m->Member;
+        f = cmRegFind(r->Port[member].Bdf);
+        if (f != NULL && f->Owner == nhi) {
+            /* The hand-off (CmReenumService) checks it once more: the same
+             * publication, population and no function with a stack. */
+            r->EjectPending |= 1UL << member;
+            r->Port[member].Flags |= CM_PORT_EJECTED;
+            r->Port[member].EjectSerial = f->Serial;
+            r->Port[member].EjectGen = f->RelGen;
+            posted = TRUE;
+        } else {
+            why = CM_MK_CONF_IDENTITY;
+        }
+        m->PendingAt = 0;
+        m->PendingGen = 0;
+        CmMarksTouch(&r->Marks, m, cmMarkNow(nhi));
+    }
+    if (posted) {
+        r->Confirms++;
+    } else {
+        r->ConfirmsRefused++;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (posted) {
+        CmLogNote(nhi, "cm.reenum.confirm", r->Port[member].Bdf);
+    } else {
+        CmLogNote(nhi, "cm.reenum.confirm.refused", why);
+    }
 }
 
 /* ---- the resume hold -------------------------------------------------- */
@@ -1282,7 +1747,12 @@ VOID CmReenumStart(PCM_NHI nhi)
     r->LossSeen = 0;
     for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
         r->KnownCount[i] = 0;
+        r->Port[i].SecBus = 0;
+        r->Port[i].SecBusValid = 0;
+        r->Port[i].ConnGen = 0;
     }
+    /* Not listed yet: no attachment reaches the table before the listing. */
+    CmMarksReset(&r->Marks);
     r->Reenum = nhi->Values.Value[CM_VAL_REENUM];
     r->SafeEject = nhi->Values.Value[CM_VAL_SAFE_EJECT];
     r->Cfg.Read = cmCfgRead;
@@ -1374,6 +1844,7 @@ static VOID cmDiscoverAndList(PCM_NHI nhi)
     if (r->Route == CM_ROUTE_FILTER && r->Reenum != 0) {
         cmAskBaselines(nhi);
     }
+    cmSecBuses(nhi);
     /* The set and its claims rebuilt: the USB4 profile's learning
      * baseline taken again over it (cm_reenum.h). */
     CmNhiSetChanged(nhi);
@@ -1597,6 +2068,8 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         /* The worker's marking window (section 7.4). */
         cmWkPost(nhi, 0, 0, TRUE);
     }
+    /* A tunnel's bridge may have been given its buses meanwhile. */
+    cmSecBuses(nhi);
 }
 
 VOID CmReenumService(PCM_NHI nhi)
@@ -1626,6 +2099,9 @@ VOID CmReenumService(PCM_NHI nhi)
     }
     if (!r->Listed) {
         return;
+    }
+    if (r->Route == CM_ROUTE_FILTER) {
+        cmConnGens(nhi);
     }
     stale = 0;
     taken = 0;
@@ -1890,6 +2366,7 @@ VOID CmReenumStop(PCM_NHI nhi)
         r->Listed = 0;
     }
     r->EjectPending = 0;
+    CmMarksReset(&r->Marks);
     cmRegRecompute();
     KeReleaseSpinLock(&cmRegLock, irql);
     if (r->Wk != NULL) {
@@ -1939,6 +2416,11 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.child.skipped", skipped);
     CmLogNote(nhi, "cm.reenum.child.refused", refused);
     CmLogNote(nhi, "cm.reenum.hold.watchdogs", watchdogs);
+    CmLogNote(nhi, "cm.reenum.child.stray", cmRegStray);
+    CmLogNote(nhi, "cm.reenum.departures", r->Departures);
+    CmLogNote(nhi, "cm.reenum.departures.dropped", r->DeparturesDropped);
+    CmLogNote(nhi, "cm.reenum.confirms", r->Confirms);
+    CmLogNote(nhi, "cm.reenum.confirms.refused", r->ConfirmsRefused);
 }
 
 /*
