@@ -3907,7 +3907,7 @@ void inst_dir_default(const char *sysDrive, const char *windir, char *out,
 /* ======================================================================== */
 
 /* A full path whose every part is an 8.3 name with no space: X:\A\B.C. */
-static int inst_di_path(const char *p)
+int inst_di_path(const char *p)
 {
     const char *part;
     const char *end;
@@ -3935,52 +3935,137 @@ static const char *inst_di_job_word(int job)
            job == INST_DI_REMOVE ? "remove" : "probe";
 }
 
-int inst_di_cmdline(char *out, size_t cap, const char *version, int job,
-                    const char *result, unsigned long hwnd, const char *devId,
-                    const char *inf, int force, int quiet)
+int inst_di_jobpath(char *out, size_t cap, const char *dir)
+{
+    char t[INST_LINE_CHARS];
+    size_t n;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (dir == NULL || strlen(dir) < 3 || strlen(dir) + 16 >= sizeof(t)) {
+        return 0;
+    }
+    inst_copy(t, dir, sizeof(t));
+    n = strlen(t);
+    if (t[n - 1] != '\\') {
+        inst_cat(t, sizeof(t), "\\");
+    }
+    inst_cat(t, sizeof(t), INST_DI_JOB_NAME);
+    if (strlen(t) > INST_DI_JOB_PATH_CHARS || !inst_di_path(t)) {
+        /* Too long, or not 8.3: the root of the install directory's
+         * drive (record 27 section 4.1). */
+        t[0] = dir[0];
+        t[1] = ':';
+        t[2] = '\\';
+        t[3] = '\0';
+        inst_cat(t, sizeof(t), INST_DI_JOB_ROOT_NAME);
+        if (!inst_di_path(t)) {
+            return 0;
+        }
+    }
+    if (strlen(t) + 1 > cap) {
+        return 0;
+    }
+    inst_copy(out, t, cap);
+    return 1;
+}
+
+int inst_di_cmdline(char *out, size_t cap, const char *version,
+                    const char *jobFile)
 {
     char t[INST_LINE_CHARS];
 
     if (cap > 0) {
         out[0] = '\0';
     }
-    if (version == NULL || version[0] == '\0' || strchr(version, ' ') != NULL ||
-        !inst_di_path(result) ||
-        (job != INST_DI_PROBE && job != INST_DI_INSTALL &&
-         job != INST_DI_REMOVE)) {
-        return 0;
-    }
-    if (job != INST_DI_PROBE &&
-        (devId == NULL || devId[0] == '\0' || strlen(devId) > 200 ||
-         strchr(devId, ' ') != NULL || strchr(devId, '"') != NULL)) {
-        return 0;
-    }
-    if (job == INST_DI_INSTALL && !inst_di_path(inf)) {
+    if (version == NULL || version[0] == '\0' || strlen(version) > 31 ||
+        strchr(version, ' ') != NULL || strchr(version, '"') != NULL ||
+        jobFile == NULL || strlen(jobFile) > INST_DI_JOB_PATH_CHARS ||
+        !inst_di_path(jobFile)) {
         return 0;
     }
     t[0] = '\0';
     inst_cat(t, sizeof(t), version);
     inst_cat(t, sizeof(t), " ");
+    inst_cat(t, sizeof(t), jobFile);
+    if (strlen(t) > INST_DI_TAIL_CHARS || strlen(t) + 1 > cap) {
+        return 0;
+    }
+    inst_copy(out, t, cap);
+    return 1;
+}
+
+/* An operand of the job file: no space, no tab, no control character. */
+static int inst_di_operand(const char *s, size_t max)
+{
+    const unsigned char *p;
+
+    if (s == NULL || s[0] == '\0' || strlen(s) > max) {
+        return 0;
+    }
+    for (p = (const unsigned char *)s; *p != '\0'; p++) {
+        if (*p <= ' ' || *p >= 0x7F) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
+                    unsigned long hwnd, const char *devId, const char *inf,
+                    int force, int quiet)
+{
+    char t[INST_DI_JOB_BYTES + 64];
+    size_t n;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if ((job != INST_DI_PROBE && job != INST_DI_INSTALL &&
+         job != INST_DI_REMOVE) ||
+        result == NULL || strlen(result) > 255 || !inst_di_path(result) ||
+        hwnd > 65535UL) {
+        return 0;
+    }
+    if (job != INST_DI_PROBE && !inst_di_operand(devId, 200)) {
+        return 0;
+    }
+    if (job == INST_DI_INSTALL &&
+        (inf == NULL || strlen(inf) > 255 || !inst_di_path(inf) ||
+         (n = strlen(inf)) < 4 || !inst_eq(inf + n - 4, ".INF"))) {
+        return 0;
+    }
+    t[0] = '\0';
+    inst_cat(t, sizeof(t), "XHCIDI-JOB 1\r\nJOB ");
     inst_cat(t, sizeof(t), inst_di_job_word(job));
-    inst_cat(t, sizeof(t), " ");
+    inst_cat(t, sizeof(t), "\r\nRESULT ");
     inst_cat(t, sizeof(t), result);
-    inst_cat(t, sizeof(t), " ");
+    inst_cat(t, sizeof(t), "\r\nHWND ");
     inst_cat_number(t, sizeof(t), (INST_U32)hwnd);
+    inst_cat(t, sizeof(t), "\r\n");
     if (job != INST_DI_PROBE) {
-        inst_cat(t, sizeof(t), " ");
+        inst_cat(t, sizeof(t), "DEVICE ");
         inst_cat(t, sizeof(t), devId);
+        inst_cat(t, sizeof(t), "\r\n");
     }
     if (job == INST_DI_INSTALL) {
-        inst_cat(t, sizeof(t), " ");
+        inst_cat(t, sizeof(t), "INF ");
         inst_cat(t, sizeof(t), inf);
-        if (force) {
-            inst_cat(t, sizeof(t), " force");
-        }
-        if (quiet) {
-            inst_cat(t, sizeof(t), " quiet");
+        inst_cat(t, sizeof(t), "\r\n");
+        if (force || quiet) {
+            inst_cat(t, sizeof(t), "FLAGS");
+            if (force) {
+                inst_cat(t, sizeof(t), " force");
+            }
+            if (quiet) {
+                inst_cat(t, sizeof(t), " quiet");
+            }
+            inst_cat(t, sizeof(t), "\r\n");
         }
     }
-    if (strlen(t) > INST_DI_TAIL_CHARS || strlen(t) + 1 > cap) {
+    inst_cat(t, sizeof(t), "END\r\n");
+    if (strlen(t) > INST_DI_JOB_BYTES || strlen(t) + 1 > cap) {
         return 0;
     }
     inst_copy(out, t, cap);
@@ -4439,7 +4524,9 @@ const INST_PAGE_TEXT instPageTexts[] = {
       284, 18 },
     { INST_PT_GATE,
       "If Windows has a hardware wizard open (Found New Hardware, Add New "
-      "Hardware), finish or cancel it first. OK goes on; Cancel stops here.",
+      "Hardware), finish it first: Next through Finish, even when it finds "
+      "no driver. Do not cancel the wizard: that hides its device until "
+      "Windows restarts. OK goes on; Cancel stops here.",
       0, 0 }
 };
 const int instPageTextCount =

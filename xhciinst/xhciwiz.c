@@ -1424,7 +1424,13 @@ static void summary_fill(HWND dlg)
             tb_add(&t, "\nWindows' own wizards may open for the devices the "
                    "controller shows after its\nrestart: answer them (Next, "
                    "Next, Finish), and type the tools folder where\nthey ask "
-                   "for a folder.\n");
+                   "for a folder or for the \"xhci98 xHCI Host Controller "
+                   "Disk\". Finish\neach one, even when it finds no driver; "
+                   "never cancel one (a cancelled\nwizard hides its device "
+                   "until Windows restarts). Asked for the Windows CD,\n"
+                   "insert it and type its WIN98 folder (WIN9X on ME) with "
+                   "your CD drive's\nletter, or the folder your PC keeps "
+                   "Windows' setup files in.\n");
         }
     }
     set_edit(dlg, IDC_DETAIL, t.Buf != NULL ? t.Buf : "");

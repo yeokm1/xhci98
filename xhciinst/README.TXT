@@ -113,7 +113,7 @@ ME, INSTALL.BAT takes eight arguments at most, seven after /console, and
 shortened command. Run TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with
 the same arguments instead for a longer one. On 98 SE and ME the console
 tool installs each device through the helper too; a Windows dialog may
-open (the Windows CD for usbd.sys): answer it.
+open (the Windows CD for usbd.sys): answer it as below.
 
 Neither ever runs XHCICLN. After an update from 2.3.x or earlier they say,
 in one line, when old XHCI98\ entries are still recorded; nothing needs
@@ -130,8 +130,18 @@ answered: have a keyboard and mouse that do not go through this driver
 
 On Windows 98 SE and ME, Windows' own hardware wizards open for the
 devices the controller shows after it starts: answer them (Next, Next,
-Finish, and type the tools folder where they ask for a folder). Before
-each device the installer asks you to finish or cancel any such wizard.
+Finish, and type the tools folder where they ask for a folder or for the
+"xhci98 xHCI Host Controller Disk"). Finish every such wizard, Next
+through Finish, even when it finds no driver; never cancel one: on 98 SE
+a cancelled wizard hides its device until Windows restarts, and the
+installer can then only list the device for after the restart. Before
+each device the installer asks you to finish any such wizard.
+
+Asked for the Windows CD (Windows' own files, such as usbd.sys), insert
+it and type its WIN98 folder (WIN9X on ME) with your CD drive's letter,
+for example E:\WIN98; the prompt offers D:\WIN98 whatever your drive is.
+A PC set up without the CD often keeps those files in
+C:\WINDOWS\OPTIONS\CABS: type that instead.
 
 On Vista x64 and 7 x64 the drivers are test-signed: they load in
 test-signing mode (bcdedit /set testsigning on, then restart) or on a

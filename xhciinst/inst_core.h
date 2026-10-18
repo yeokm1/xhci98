@@ -979,25 +979,39 @@ int inst_mw_write_needed(int mwState, INST_U32 mwValue, const INST_VNOW *now,
 #define INST_DI_INSTALL         1
 #define INST_DI_REMOVE          2
 
-/* The longest command tail the installer gives the helper. A 16-bit
- * program's command tail may be held to 126 characters on these systems
- * (the program segment prefix's), which a 98 SE PCI device id with the
- * INF's path already exceeds; whether it is, is a reading of the legs.
- * A tail cut short cannot come back as the job's own JOB line, so the
- * helper's file then reads "did not finish" and the device keeps its
- * printed steps (record 27 section 4.2): nothing rests on the length. */
-#define INST_DI_TAIL_CHARS      255
+/* A 16-bit program's command tail holds 126 characters (record 27 section
+ * 4.1, read on 98 SE: CreateProcessA failed at 127), so the job travels in
+ * a job file and the command line is "<version> <job file>": the version
+ * at most 31 characters, the job file's path at most 80, 8.3 in every
+ * part. */
+#define INST_DI_TAIL_CHARS      126
+#define INST_DI_JOB_PATH_CHARS  80
+#define INST_DI_JOB_BYTES       2048
+#define INST_DI_JOB_NAME        "DIJOB.TXT"
+#define INST_DI_JOB_ROOT_NAME   "XHCIDIJ.TXT"
 
-/* The helper's command tail for one job (record 27 section 4.1):
- * "<version> <job> <result file> <hwnd> [<device id> [<inf path>]
- * [force] [quiet]]", one space between the fields and no quoting, so
- * every field is checked: the paths every part an 8.3 name with no space,
- * the id no space and at most 200 characters. 1 with the tail in out; 0
- * when a field cannot be passed or the tail would be longer than
- * INST_DI_TAIL_CHARS. */
-int inst_di_cmdline(char *out, size_t cap, const char *version, int job,
-                    const char *result, unsigned long hwnd, const char *devId,
-                    const char *inf, int force, int quiet);
+/* 1 when p is drive-rooted and every part of it an 8.3 name. */
+int inst_di_path(const char *p);
+
+/* The job file's path: <dir>\DIJOB.TXT when that fits in 80 characters
+ * and is 8.3, else XHCIDIJ.TXT at the root of dir's drive. 1, or 0. */
+int inst_di_jobpath(char *out, size_t cap, const char *dir);
+
+/* The helper's command tail: "<version> <job file>", one space between,
+ * no quoting. 1, or 0 when either cannot be passed. */
+int inst_di_cmdline(char *out, size_t cap, const char *version,
+                    const char *jobFile);
+
+/* The job file for one job (record 27 section 4.1, format 1), CRLF:
+ * XHCIDI-JOB 1, JOB, RESULT, HWND, and for an install and a removal
+ * DEVICE, for an install INF and FLAGS (force, quiet; the line left out
+ * for neither), then END. Every operand checked: the paths 8.3 in every
+ * part and at most 255 characters, the INF ending .INF, the id at most
+ * 200 characters with no space, the handle 0 to 65535; the whole at most
+ * 2048 bytes. 1 with the text in out; 0 when the job cannot be written. */
+int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
+                    unsigned long hwnd, const char *devId, const char *inf,
+                    int force, int quiet);
 
 /* The verdicts (record 27 section 5.4 and section 9), and NONE: the
  * helper did not finish (no END line, a count that differs, another

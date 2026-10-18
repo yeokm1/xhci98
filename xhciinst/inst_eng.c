@@ -264,6 +264,7 @@ static int restage_listed(const char *id);
 static int helperState;
 static char helperPath[INST_PATH_CHARS];    /* its short path, no space   */
 static char helperResult[INST_PATH_CHARS];  /* the result file            */
+static char helperJobFile[INST_PATH_CHARS]; /* the job file (section 4.1) */
 static int helperRan;       /* a device job ran: the steps are per device  */
 
 /* The devices the helper could not do, by id, with the line said for
@@ -6050,6 +6051,14 @@ static int settle_signature(INST_U32 *sig, int *expect)
     return whole;
 }
 
+/* The folder of Windows' own setup files on its CD, as 98 SE's and ME's
+ * prompt names it for a D: drive (the prompt's default stays D:\WIN98
+ * whatever the INF says). */
+static const char *cd_folder(void)
+{
+    return envNow.Minor == 90 ? "D:\\WIN9X" : "D:\\WIN98";
+}
+
 /* Wait until Windows' own installer has nothing pending and the devices
  * below the controllers stand still (record 23 section 5.8). 2 settled
  * after something happened (pending seen, devices moved), 1 settled with
@@ -6117,9 +6126,16 @@ static int settle(INST_U32 limitMs, INST_U32 tellMs, INST_U32 expectMs,
                     "for it to finish ...\n");
             } else if (!envNow.Nt) {
                 out("\nWindows is installing the devices the controller shows; "
-                    "answer its windows:\nNext, Next, Finish, and type %s "
-                    "where it asks for a folder.\n", srcDir[0] ? srcDir :
+                    "answer its windows:\nNext, Next, Finish. Finish each one, "
+                    "even when it finds no driver; never\ncancel one (a "
+                    "cancelled one hides its device until Windows restarts).\n"
+                    "Where one asks for a folder or for the \"xhci98 xHCI Host "
+                    "Controller Disk\",\ntype %s\n", srcDir[0] ? srcDir :
                     toolDir);
+                out("Where one asks for the Windows CD, insert it and type "
+                    "%s (your CD drive's\nletter for D:), or the folder your "
+                    "PC keeps Windows' setup files in (often\n"
+                    "C:\\WINDOWS\\OPTIONS\\CABS).\n", cd_folder());
             } else {
                 out("\nWindows is installing a device itself, usually with a "
                     "Found New Hardware\nwindow - it may be behind this one. "
@@ -6161,11 +6177,12 @@ static void settle_failed(int r, const char *bound)
     }
     out(r == 0 ? "still busy after %s.\n" : "the wait failed.\n", bound);
     out("\nWindows is still installing something - usually a Found New "
-        "Hardware window\nwaiting for an answer. Finish or cancel those "
-        "windows, then run INSTALL.BAT\nagain: it goes on from here. (The "
-        "tool does not install under a wizard.) If no\nsuch window is open "
-        "(Windows 2000 keeps a cancelled one pending until the next\nstart), "
-        "restart Windows first.\n");
+        "Hardware window\nwaiting for an answer. Finish those windows (Next "
+        "through Finish, even when\nthey find no driver), then run "
+        "INSTALL.BAT again: it goes on from here. (The\ntool does not install "
+        "under a wizard.) If no such window is open (Windows\n2000 keeps a "
+        "cancelled one pending until the next start), restart Windows\n"
+        "first.\n");
     flagSteps = 1;
 }
 
@@ -6580,9 +6597,10 @@ static int nothing_pending(void)
         return 0;
     }
     out("Windows is %s - usually a Found New Hardware window\nwaiting for an "
-        "answer. Finish or cancel it, then run INSTALL.BAT again.\nIf no such "
-        "window is open (Windows 2000 keeps a cancelled one pending until\n"
-        "the next start), restart Windows first. Nothing was changed.\n",
+        "answer. Finish it (Next through Finish), then run INSTALL.BAT\n"
+        "again. If no such window is open (Windows 2000 keeps a cancelled one "
+        "pending\nuntil the next start), restart Windows first. Nothing was "
+        "changed.\n",
         r == 0 ? "still installing something after a minute" :
                  "perhaps installing something (the question failed)");
     flagSteps = 1;
@@ -7096,7 +7114,8 @@ static int steps_9x(const char *dir)
                 "under \"Other\n  devices\", do the steps below; if not, it is "
                 "an old entry (the device\n  moved) and needs nothing. After a "
                 "cancelled New Hardware wizard, restart:\n  the wizard comes "
-                "back and finds the driver by itself.\n");
+                "back and finds the driver by itself; finish it (Next\n  "
+                "through Finish, never Cancel).\n");
         }
         if (d->Refused) {
             out("  Left: its version could not be compared.\n");
@@ -7113,9 +7132,12 @@ static int steps_9x(const char *dir)
                 "  4. If it finds nothing: \"Specify a location\", type %s\n"
                 "  5. Asked for the \"xhci98 xHCI Host Controller Disk\": "
                 "type %s\n     under \"Copy files from\", OK.\n"
-                "  6. Asked for the Windows CD: it is for Windows' own files "
-                "(usbd.sys).\n"
-                "  7. Restart when asked; on ME restart anyway.\n", dir, dir);
+                "  6. Asked for the Windows CD (Windows' own files, usbd.sys): "
+                "insert it and\n     type %s (your CD drive's letter for D:), "
+                "or the folder your PC\n     keeps Windows' setup files in "
+                "(often C:\\WINDOWS\\OPTIONS\\CABS), OK.\n"
+                "  7. Restart when asked; on ME restart anyway.\n", dir, dir,
+                cd_folder());
             break;
         case INST_ACT_UPDATE:
             needs = 1;
@@ -7328,6 +7350,9 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
 {
     char tail[INST_LINE_CHARS];
     char cmd[INST_LINE_CHARS + INST_PATH_CHARS];
+    char jobText[INST_DI_JOB_BYTES + 1];
+    unsigned long owner;
+    DWORD wrote = 0;
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     HANDLE h;
@@ -7344,22 +7369,46 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
     const char *id = d != NULL ? d->Id : NULL;
 
     memset(r, 0, sizeof(*r));
-    if (!inst_di_cmdline(tail, sizeof(tail), XHCIINST_VERSION, job,
-                         helperResult,
-                         (unsigned long)(size_t)front.Owner, id, inf, force,
-                         1)) {
-        logonly("helper: the job does not fit a 16-bit command line (%s %s)\n",
-                id != NULL ? id : "probe", inf != NULL ? inf : "");
+    /* The window's handle owns the helper's dialogs; on 9x a window handle
+     * is 16 bits, and anything else is passed as 0, no owner. */
+    owner = (unsigned long)(size_t)front.Owner;
+    if (owner > 65535UL) {
+        owner = 0;
+    }
+    if (!inst_di_jobfile(jobText, sizeof(jobText), job, helperResult, owner,
+                         id, inf, force, 1) ||
+        !inst_di_cmdline(tail, sizeof(tail), XHCIINST_VERSION,
+                         helperJobFile)) {
+        logonly("helper: the job cannot be written (%s %s, result %s, job "
+                "file %s)\n", id != NULL ? id : "probe",
+                inf != NULL ? inf : "", helperResult, helperJobFile);
         r->Verdict = INST_DI_V_NONE;
-        inst_copy(r->Detail, "the command line would be too long",
+        inst_copy(r->Detail, "the job could not be written",
                   sizeof(r->Detail));
         return INST_DI_V_NONE;
     }
+    h = CreateFileA(helperJobFile, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE ||
+        !WriteFile(h, jobText, (DWORD)strlen(jobText), &wrote, NULL) ||
+        wrote != (DWORD)strlen(jobText)) {
+        out("The helper's job file %s could not be written (error %lu).\n",
+            helperJobFile, (unsigned long)GetLastError());
+        if (h != INVALID_HANDLE_VALUE) {
+            CloseHandle(h);
+            DeleteFileA(helperJobFile);
+        }
+        inst_copy(r->Detail, "no job file", sizeof(r->Detail));
+        return INST_DI_V_NONE;
+    }
+    CloseHandle(h);
+    logonly("helper's job file %s:\n%s", helperJobFile, jobText);
     h = CreateFileA(helperResult, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                     FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         out("The helper's result file %s could not be made (error %lu).\n",
             helperResult, (unsigned long)GetLastError());
+        DeleteFileA(helperJobFile);
         inst_copy(r->Detail, "no result file", sizeof(r->Detail));
         return INST_DI_V_NONE;
     }
@@ -7374,6 +7423,7 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
                         &pi)) {
         out("The helper %s could not be started (error %lu).\n", helperPath,
             (unsigned long)GetLastError());
+        DeleteFileA(helperJobFile);
         inst_copy(r->Detail, "it did not start", sizeof(r->Detail));
         return INST_DI_V_NONE;
     }
@@ -7428,6 +7478,11 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
         waitFailed = 1;
     }
     CloseHandle(pi.hProcess);
+    if (!stuck) {
+        /* The helper has ended: its job file is done with. A helper still
+         * running keeps it, and the run's end deletes it. */
+        DeleteFileA(helperJobFile);
+    }
     if (text != NULL) {
         logonly("helper's result file:\n%s%s", text,
                 (strlen(text) > 0 && text[strlen(text) - 1] == '\n') ? "" :
@@ -7493,8 +7548,21 @@ static int helper_ready(void)
             "steps for each\ndevice are printed instead.\n", path);
         return 0;
     }
-    join(helperResult, sizeof(helperResult),
-         toolDir[0] ? toolDir : srcDir, INST_DI_RESULT_NAME);
+    /* The result and job files beside the installer, by the directory's
+     * short name: the helper is 16-bit and reads 8.3 paths only. */
+    n = GetShortPathNameA(toolDir[0] ? toolDir : srcDir, path, sizeof(path));
+    if (n == 0 || n >= sizeof(path)) {
+        inst_copy(path, toolDir[0] ? toolDir : srcDir, sizeof(path));
+    }
+    join(helperResult, sizeof(helperResult), path, INST_DI_RESULT_NAME);
+    if (!inst_di_path(helperResult) ||
+        !inst_di_jobpath(helperJobFile, sizeof(helperJobFile), path)) {
+        out("The directory %s has no short form the helper can read: the "
+            "steps for each\ndevice are printed instead.\n", path);
+        helperResult[0] = '\0';
+        helperJobFile[0] = '\0';
+        return 0;
+    }
     out("Starting the helper %s to check it runs here ...\n", INST_DI_NAME);
     out_flush();
     helperState = 1;
@@ -7534,7 +7602,9 @@ static int gate_9x(int first)
     for (k = 0;; k++) {
         if (!ask(INST_Q_GATE, k == 0 ?
                  "\nIf Windows has a hardware wizard open (Found New Hardware, "
-                 "Add New Hardware),\nfinish it or cancel it first.\n"
+                 "Add New Hardware),\nfinish it first: Next through Finish, "
+                 "even when it finds no driver. Do not\ncancel it: a cancelled "
+                 "wizard hides its device until Windows restarts.\n"
                  "Go on?\n  Y  go on: no hardware wizard is open\n"
                  "  N  stop here (run the installer again later)\n"
                  "  Enter for [Y]: " : "  Type Y or N, or Enter for [Y]: ",
@@ -7614,9 +7684,10 @@ static int helper_install(DEVREC *d)
         }
         /* 98 SE: a cancelled Found New Hardware wizard takes the devnode
          * away until the next start; the helper then finds nothing. */
-        steps_add(d, "not present now (a cancelled hardware wizard takes "
-                  "it away until Windows starts again): restart Windows, "
-                  "then run the installer again");
+        steps_add(d, "not present now (a cancelled wizard hides it until the "
+                  "next start): restart, finish its Found New Hardware "
+                  "wizard (Next to Finish, never Cancel), then run the "
+                  "installer again");
         flagSteps = 1;
         step(INST_STEP_LEFT, "%s: not present", d->Desc[0] ? d->Desc : d->Id);
         return 1;
@@ -11465,6 +11536,11 @@ static int own_remove_in(const char *dir, int window)
         names[n] = inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW);
         n++;
     }
+    /* An earlier run's job file (record 27 section 4.1). */
+    join(path, sizeof(path), dir, INST_DI_JOB_NAME);
+    if (!own_delete(path)) {
+        return 0;
+    }
     for (i = 0; i < n; i++) {
         join(path, sizeof(path), dir, names[i]);
         if (!own_delete(path)) {
@@ -11960,6 +12036,7 @@ int inst_eng_run(void)
 
     if (helperResult[0] != '\0' && !stScreens) {
         DeleteFileA(helperResult);
+        DeleteFileA(helperJobFile);
     }
     return code;
 }

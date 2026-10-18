@@ -2379,44 +2379,137 @@ static void test_di_helper(void)
     const char *inf = "C:\\XHCI98\\XHCICM.INF";
     const char *res = "C:\\XHCI98\\XHCIDI.RES";
 
-    /* The command line: one space between fields, no quoting. */
-    CHECK(inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", INST_DI_PROBE, res,
-                          1234UL, NULL, NULL, 0, 0) &&
-          strcmp(tail, "3.1.0.0 probe C:\\XHCI98\\XHCIDI.RES 1234") == 0,
-          "the probe's command line");
-    CHECK(inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", INST_DI_INSTALL, res,
-                          0UL, id, inf, 0, 1) &&
-          strstr(tail, " install C:\\XHCI98\\XHCIDI.RES 0 PCI\\VEN_8086") !=
-              NULL &&
-          strcmp(tail + strlen(tail) - 26, "C:\\XHCI98\\XHCICM.INF quiet") == 0,
-          "an install's command line, quiet");
-    CHECK(inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", INST_DI_INSTALL, res,
-                          0UL, id, inf, 1, 1) &&
-          strstr(tail, ".INF force quiet") != NULL, "force before quiet");
-    CHECK(inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", INST_DI_REMOVE, res,
-                          0UL, id, NULL, 0, 1) &&
-          strstr(tail, "quiet") == NULL &&
-          strcmp(tail + strlen(tail) - 21, "BUS_00&DEV_0D&FUNC_00") == 0,
+    /* The command line (record 27 section 4.1): "<version> <job file>". */
+    CHECK(inst_di_cmdline(tail, sizeof(tail), "3.1.0.0",
+                          "C:\\XHCI98\\DIJOB.TXT") &&
+          strcmp(tail, "3.1.0.0 C:\\XHCI98\\DIJOB.TXT") == 0,
+          "the command line: the version and the job file");
+    CHECK(!inst_di_cmdline(tail, sizeof(tail), "3.1.0.0",
+                           "C:\\Program Files\\DIJOB.TXT"),
+          "a job file with a space is not passed");
+    CHECK(!inst_di_cmdline(tail, sizeof(tail), "3.1.0.0 x",
+                           "C:\\XHCI98\\DIJOB.TXT"),
+          "a version with a space is not passed");
+    CHECK(!inst_di_cmdline(tail, sizeof(tail),
+                           "12345678901234567890123456789012",
+                           "C:\\XHCI98\\DIJOB.TXT"),
+          "a version over 31 characters is not passed");
+    memset(longId, 0, sizeof(longId));
+    strcpy(longId, "C:");
+    while (strlen(longId) < 76) {
+        strcat(longId, "\\ABCDEFGH");
+    }
+    strcat(longId, "\\DIJOB.TXT");
+    CHECK(strlen(longId) > INST_DI_JOB_PATH_CHARS &&
+          !inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", longId),
+          "a job file over 80 characters is not passed");
+    CHECK(inst_di_cmdline(tail, sizeof(tail),
+                          "1234567890123456789012345678901",
+                          "C:\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\"
+                          "ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEF.TXT") &&
+          strlen(tail) <= INST_DI_TAIL_CHARS,
+          "the longest version and job file fit 126 characters");
+
+    /* The job file's path. */
+    CHECK(inst_di_jobpath(tail, sizeof(tail), "C:\\XHCI98") &&
+          strcmp(tail, "C:\\XHCI98\\DIJOB.TXT") == 0,
+          "the job file beside the installer");
+    CHECK(inst_di_jobpath(tail, sizeof(tail), "C:\\XHCI98\\") &&
+          strcmp(tail, "C:\\XHCI98\\DIJOB.TXT") == 0,
+          "a trailing backslash is not doubled");
+    CHECK(inst_di_jobpath(tail, sizeof(tail), "D:\\") &&
+          strcmp(tail, "D:\\DIJOB.TXT") == 0, "a drive's root");
+    longId[strlen(longId) - 10] = '\0';
+    CHECK(inst_di_jobpath(tail, sizeof(tail), longId) &&
+          strcmp(tail, "C:\\XHCIDIJ.TXT") == 0,
+          "too long: the root of the install drive");
+    CHECK(inst_di_jobpath(tail, sizeof(tail), "E:\\Program Files\\xhci98") &&
+          strcmp(tail, "E:\\XHCIDIJ.TXT") == 0,
+          "not 8.3: the root of the install drive");
+    CHECK(!inst_di_jobpath(tail, sizeof(tail), NULL) &&
+          !inst_di_jobpath(tail, sizeof(tail), "C:"),
+          "no directory, no job file");
+
+    /* The job file (record 27 section 4.1, format 1). */
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_PROBE, res, 1234UL,
+                          NULL, NULL, 0, 0) &&
+          strcmp(tail, "XHCIDI-JOB 1\r\nJOB probe\r\nRESULT "
+                       "C:\\XHCI98\\XHCIDI.RES\r\nHWND 1234\r\nEND\r\n") == 0,
+          "the probe's job file");
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
+                          inf, 0, 1) &&
+          strcmp(tail, "XHCIDI-JOB 1\r\nJOB install\r\nRESULT "
+                       "C:\\XHCI98\\XHCIDI.RES\r\nHWND 0\r\nDEVICE "
+                       "PCI\\VEN_8086&DEV_15EC&SUBSYS_00000000&REV_00\\"
+                       "BUS_00&DEV_0D&FUNC_00\r\nINF C:\\XHCI98\\XHCICM.INF"
+                       "\r\nFLAGS quiet\r\nEND\r\n") == 0,
+          "an install's job file, quiet");
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
+                          inf, 1, 1) &&
+          strstr(tail, "\r\nFLAGS force quiet\r\nEND\r\n") != NULL,
+          "force before quiet");
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
+                          inf, 0, 0) &&
+          strstr(tail, "FLAGS") == NULL &&
+          strstr(tail, ".INF\r\nEND\r\n") != NULL,
+          "no flag: no FLAGS line");
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_REMOVE, res, 65535UL,
+                          id, NULL, 1, 1) &&
+          strstr(tail, "INF") == NULL && strstr(tail, "FLAGS") == NULL &&
+          strstr(tail, "\r\nHWND 65535\r\nDEVICE PCI\\") != NULL &&
+          strstr(tail, "FUNC_00\r\nEND\r\n") != NULL,
           "a removal takes no INF and no flag");
-    CHECK(!inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", INST_DI_INSTALL,
-                           "C:\\Program Files\\X\\XHCIDI.RES", 0UL, id, inf, 0,
-                           1), "a path with a space is not passed");
-    CHECK(!inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", INST_DI_INSTALL,
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_PROBE, res, 65536UL,
+                           NULL, NULL, 0, 0),
+          "a handle over 65535 is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL,
+                           "C:\\Program Files\\X\\XHCIDI.RES", 0UL, id, inf,
+                           0, 1), "a result path with a space is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL,
                            "C:\\XHCI98\\LONGNAME98\\XHCIDI.RES", 0UL, id, inf,
-                           0, 1), "a part longer than 8.3 is not passed");
-    CHECK(!inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", INST_DI_INSTALL,
-                           res, 0UL, "USB\\A B", inf, 0, 1),
-          "an id with a space is not passed");
+                           0, 1), "a part longer than 8.3 is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                           "USB\\A B", inf, 0, 1),
+          "an id with a space is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                           "USB\\A\tB", inf, 0, 1),
+          "an id with a tab is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
+                           "C:\\XHCI98\\XHCICM.TXT", 0, 1),
+          "an INF not ending .INF is not written");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL, id,
+                           NULL, 0, 1), "an install without an INF");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_REMOVE, res, 0UL,
+                           NULL, NULL, 0, 0), "a removal without a device");
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), 99, res, 0UL, NULL, NULL, 0,
+                           0), "an unknown job");
     memset(longId, 'I', 200);
     memcpy(longId, "PCI\\", 4);
     longId[200] = '\0';
-    CHECK(!inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", INST_DI_INSTALL,
-                           res, 4294967295UL, longId, inf, 1, 1),
-          "a command tail over INST_DI_TAIL_CHARS is not passed");
-    CHECK(inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", INST_DI_INSTALL, res,
-                          4294967295UL, id, inf, 1, 1) &&
-          strlen(tail) <= INST_DI_TAIL_CHARS,
-          "a 98 SE PCI id, the largest handle and both flags fit");
+    CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                          longId, inf, 1, 1), "a 200-character id is written");
+    longId[200] = 'I';
+    longId[201] = '\0';
+    CHECK(!inst_di_jobfile(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                           longId, inf, 1, 1),
+          "a 201-character id is not written");
+    CHECK(!inst_di_jobfile(tail, 20, INST_DI_PROBE, res, 0UL, NULL, NULL, 0,
+                           0) && tail[0] == '\0',
+          "a buffer too small: nothing written");
+
+    /* The helper's refusal of an unusable job file, and its DEFAULT line. */
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\r\nRESULT refused command "
+                               "job-file\r\nEND 2\r\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_REFUSED,
+          "a refused job file is a refusal");
+    CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\r\nJOB install PCI\\X\\1 "
+                               "C:\\XHCI98\\XHCI98.INF\r\nDEFAULT "
+                               "DIF_SELECTBESTCOMPATDRV lowest-rank\r\n"
+                               "RESULT installed\r\nEND 4\r\n"),
+                        "3.1.0.0", INST_DI_INSTALL, "PCI\\X\\1",
+                        "C:\\XHCI98\\XHCI98.INF", &r) == INST_DI_V_INSTALLED,
+          "a DEFAULT line is read past");
 
     /* The result file (record 27 section 4.2). */
     CHECK(inst_di_parse(diFile("XHCIDI 3.1.0.0\r\nJOB install PCI\\X\\1 "
