@@ -2988,8 +2988,16 @@ try {
            Why  = "a cut no longer stages XHCISNAP into tools\xhcisnap\ (task 38.9)" },
         @{ Find = '$toolsLayoutVersion = [version]"2.4.0.0"';
            Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.9)" },
-        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr")';
-           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install, the cleanup tool, the install tool and the USB tree tool (tasks 38.9, 38.2, 38.8, 40.6 and 41-A.6)" },
+        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")';
+           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install, the cleanup tool, the install tool, the USB tree tool and the mark service (tasks 38.9, 38.2, 38.8, 40.6, 41-A.6 and 42-A.5)" },
+        @{ Find = '$markDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcimark")';
+           Why  = "a cut no longer stages XHCIMARK.EXE and XHCIMK64.EXE into tools\xhcimark\ (task 42-A.5)" },
+        @{ Find = '$markExes = @("XHCIMARK.EXE", "XHCIMK64.EXE")';
+           Why  = "a cut no longer stages both builds of the mark service, the 64-bit one the native build the 64-bit system32 needs (task 42-A.5)" },
+        @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $MarkToolDir "xhcimark.c") -Macro "XHCIMARK_VERSION"';
+           Why  = "a cut no longer holds the mark service's version to the shared macro (task 42-A.5)" },
+        @{ Find = '$markNewer = @($markSources | Where-Object { $_.LastWriteTimeUtc -gt $markTime })';
+           Why  = "a cut no longer refuses a mark service older than its sources (task 42-A.5)" },
         @{ Find = '$cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")';
            Why  = "a cut no longer stages XHCICLN.EXE and XHCICL64.EXE into tools\xhcicln\ (task 38.8)" },
         @{ Find = '$cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")';
@@ -3263,7 +3271,7 @@ try {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut $d) | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "$d\xhci98.inf"), "; stand-in")
         }
-        foreach ($name in @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr")) {
+        foreach ($name in @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")) {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut "tools\$name") | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "tools\$name\readme.txt"), "stand-in")
         }
