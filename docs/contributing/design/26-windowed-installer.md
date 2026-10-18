@@ -1,6 +1,10 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 2, 2026-10-18, reviewed and revised the same day (the
+Status: draft 3, 2026-10-18, reviewed and revised again (Stor98's
+ownership by first binding, its staged copies kept across updates, its
+update precautions, its 98 SE and ME binding, the staging from the copy,
+an incomplete uninstall keeping its entry point); draft 2, 2026-10-18,
+reviewed and revised the same day (the
 uninstall without a package, Stor98's ownership record, the plan run
 again on a component change, the mixed value state, Stor98's settings
 read back, the exit precedence, the machine-wide values the uninstall
@@ -228,7 +232,7 @@ the two share:
   compiler, `/MT`, `/SUBSYSTEM:WINDOWS,5.02`, for XP x64, Vista x64 and
   7 x64. `xhciinst\build.cmd` builds the four executables (and record 27's
   helper when Open Watcom is found, section 7); `build.cmd x86` the 32-bit
-  pair alone.
+  pair and, where Open Watcom is found, the helper.
 - Static imports: `KERNEL32`, `USER32`, `GDI32`, `ADVAPI32`, `COMCTL32`
   (the property-sheet wizard), `COMDLG32` (the Save As of the steps page)
   and `SHELL32` (the restart, section 5.9) - every one present on 98 SE.
@@ -458,7 +462,11 @@ each as the console prints it), and the restart:
   after `SE_SHUTDOWN_NAME` is enabled on the process token
   (`OpenProcessToken`, `LookupPrivilegeValueA`, `AdjustTokenPrivileges`,
   looked up at run time, as record 23's security routines are). A refusal
-  of the restart is shown and the window closes. The console tool never
+  of the restart is shown and the window closes. When a Stor98 device was
+  updated in this run the choice reads "Shut down now" (`EWX_SHUTDOWN`)
+  and "Shut down later", because Stor98's readme asks for a shutdown
+  and a fresh start rather than a warm restart after its update
+  (section 6.3). The console tool never
   restarts the machine (record 23 section 5.9): that is the window's one
   addition to what the engine may do, and the console's final line is
   unchanged (W5).
@@ -502,56 +510,81 @@ unasked). With the box ticked:
   bound to it, present or not (NT: `Service` = `stor98`; 98 SE and ME: the
   driver key naming Stor98's files, as its INF binds them). Those are
   pre-existing, and the uninstall never counts them as this installer's.
-- **NT**: `stor98.inf` is staged from the flavour directory
-  (`SetupCopyOEMInf`, record 23 section 5.6; its files are at the flavour
-  directory's root, so the same copy rules apply, and the local copy then
-  includes every `stor98*` file), so an NVMe drive that appears behind a
-  tunnel installs by itself; and it is installed now
+- **NT**: the local copy is made first, every `stor98*` file included
+  when the box is ticked (record 23 section 4.4 and 5.6's order: the copy,
+  then the staging from it, so a device found later takes its files from
+  the copy and not from a medium that may be gone), and `stor98.inf` is
+  staged from that copy (`SetupCopyOEMInf`), so an NVMe drive behind a
+  tunnel installs by itself; then it is installed now
   (`UpdateDriverForPlugAndPlayDevices`, unforced) on every present device
   `stor98.inf`'s models match that has **no** driver (`Service` absent, or
   problem code 28), never on one another driver runs (record 23 decision
   D3 applies to Stor98's devices as to this package's: an internal NVMe
   drive under a vendor's driver is listed and left). A drive Stor98
   already runs at an older release is updated as record 23 section 5.4
-  updates this package's own devices, with the same version rule, because
-  the owner's "bundled unchanged" release is the one whose `DriverVer`
-  the package carries.
+  updates this package's own devices, with the same version rule and the
+  precautions below, whether this installer or the user bound it; the
+  update never makes the device the installer's (the record, below).
 - **98 SE and ME**: the `stor98*` files go into the install directory with
   the package's drivers (the flat copy's list names them), where the
-  wizards find `stor98.inf`; and record 27's helper installs it now on
-  every present NVMe device with no driver, and updates one Stor98 runs at
-  an older release, by the same route and rules as the package's own
-  devices (record 27 section 6 step 6), with the same read-back after it.
+  wizards find `stor98.inf`; record 27's helper installs it now on every
+  present NVMe device with no driver, and updates one Stor98 runs at an
+  older release, by the same route and rules as the package's own
+  devices (record 27 section 6 step 6), with Stor98's own read-back after
+  it (section 8).
+- **An update of a Stor98 device** follows Stor98's readme ("Updating the
+  driver"): nothing may be using the drive's volume, and the machine is
+  shut down and started again afterwards rather than restarted with the
+  drive attached (the readme records a volume coming back "not ready",
+  and ME stopping with a VCACHE error, after a warm restart). So the
+  Summary page lists each Stor98 device the run will update with a check
+  box "nothing is using this drive" that Install requires; the finish
+  page offers "Shut down now" in place of "Restart now" (section 5.9);
+  and on a USB4 host under this package's own connection manager the page
+  says to unplug the drive and plug it in again after the update, as the
+  readme does. The console tool asks the same question before such an
+  update and ends with the shutdown line in place of the restart line.
 - **The record** (owner, 2026-10-18: the uninstall removes the bundled
   Stor98 only when this package's installer installed it). A key
-  `HKLM\Software\xhci98\Stor98`: `PreExisting` (`REG_DWORD`, 1 when the
-  first bullet found a Stor98 before this installer ever installed one,
-  written once and never cleared by an update); `Staged` (`REG_SZ`: on NT
-  the `oemNN.inf` name `SetupCopyOEMInf` returned, on 98 SE and ME the
-  copy's directory; written only when this run staged or copied the INF);
-  `Version` (the bundled release); under `Devices` one value per device
-  instance id this installer installed or updated with Stor98, its value
-  the version, written only after the call succeeded and the device was
-  read back running Stor98; under `Settings` one value per Stor98 setting
-  the installer wrote (section 5.6). A run with the box unticked never
-  touches an installed Stor98 and writes none of it. Staging and
-  installing are told apart: a staged INF with no device installed is a
-  record of the staging alone.
-- **The uninstall** (section 9.3) removes, in this order, each step gated
-  on the one before: the devices under `Devices`, present or not, through
-  record 23 section 9.2's devnode removal on NT and record 27 section 9's
-  on 98 SE and ME; then the staged INF (`SetupUninstallOEMInf` without
-  force, which refuses an INF a devnode still references, and the engine's
-  own reference check through every devnode's `InfPath` as record 23
-  section 9.2 step 4 reads them; on 98 SE and ME the copy's files and the
-  `INF\OTHER` copy by the same reference check), so an INF a pre-existing
-  or unlisted device still names stays; then the `stor98` service, its
-  files and the recorded settings only when no devnode, present or not,
-  is bound to Stor98 any more and `PreExisting` is not set; otherwise they
-  stay, and the finish page says that a Stor98 this installer did not
-  install was left. Two devices sharing one INF, service and binary, one
-  installed by hand and one by this installer, therefore lose only the
-  installer's device, and the shared files stay.
+  `HKLM\Software\xhci98\Stor98` with: `PreExisting` (`REG_DWORD` 1 when
+  the baseline of the first bullet found any Stor98, a service, a driver
+  key or a bound devnode; written once, never cleared); `Version` (the
+  bundled release last installed); under `Staged` one value per INF copy
+  this installer created, its name the `oemNN.inf` `SetupCopyOEMInf`
+  returned on NT or the copy's directory on 98 SE and ME, its value the
+  Stor98 version, kept across updates so that two bundled versions in
+  succession leave two entries, and never one `SetupCopyOEMInf` answered
+  with an INF already in the store (that one was there before and is
+  left); under `Devices` one value per device instance id the installer
+  first bound to Stor98, that is a device that at the baseline, or at the
+  reading before the pass that installed it, had no driver, or no Stor98,
+  and after the pass runs Stor98, whether the helper or the installer's
+  call bound it or Windows did from the staged INF during a settle; the
+  comparison of each reading against the one before attributes such a
+  binding to the installer when the device's driver key's `InfPath` names
+  an entry under `Staged` (NT), or when `PreExisting` is clear (98 SE and
+  ME, where the `INF\OTHER` copy's origin is not recorded); a device that
+  ran Stor98 at the baseline, or that an update changed, is never added.
+  Under `Settings` one value per Stor98 setting the installer wrote
+  (section 5.6). A run with the box unticked never touches an installed
+  Stor98 and writes none of it. Staging and installing are told apart: a
+  staged INF with no device bound is a record of the staging alone.
+- **The uninstall** (section 9.3) removes, each step gated on the one
+  before: the devices under `Devices`, present or not, through record 23
+  section 9.2's devnode removal on NT and record 27 section 9's on 98 SE
+  and ME; then each INF under `Staged` (`SetupUninstallOEMInf` without
+  force, which refuses an INF a devnode still references, and the
+  engine's own reference check through every devnode's `InfPath` as
+  record 23 section 9.2 step 4 reads them; on 98 SE and ME the copy's
+  files and the `INF\OTHER` copies by the same check), so an INF a
+  pre-existing or unlisted device still names stays; then the `stor98`
+  service, its files and the recorded settings only when no devnode,
+  present or not, is bound to Stor98 any more and `PreExisting` is clear;
+  otherwise they stay, and the finish page says that a Stor98 this
+  installer did not install was left. A device the user installed and
+  this installer only updated keeps its binding, and two devices sharing
+  one INF, service and binary, one installed by hand and one by this
+  installer, lose only the installer's device.
 - The x64 `stor98.sys` keeps Stor98's own test signature; the test-signing
   note of record 23 section 5.10 names it beside this package's drivers
   when the box is ticked, and `stor98-test.cer` is never imported (the
@@ -626,6 +659,17 @@ needs the restart (`DI_NEEDRESTART` or `DI_NEEDREBOOT` in the helper's
 result, record 27 section 5: "installed, restart pending"). A cancelled
 wizard's entry of section 6.3 (recorded, not running now) is a step as
 before.
+
+Stor98's devices are read by Stor98's own binding, not this package's:
+on 98 SE and ME its INF binds a device through `DevLoader` `*IOS` and
+`PortDriver` `stor98.mpd` in the driver key, the port driver living
+under `SYSTEM\IOSUBSYS`, so the check reads those two values and the
+`.mpd`'s version there (the device viewer of record 24 already reads
+`PortDriver` and `DevLoader` on 98 SE and ME to show what runs such a
+unit, `xhciinst.c`, so the read exists; the check makes it a rule); on NT the `stor98` service and
+`stor98.sys` as for this package's groups. The baseline and the readings
+of section 6.3 use the same rule, and the uninstall's file step removes
+the files Stor98's INF copies where its INF puts them, by the same rule.
 
 ## 9. The uninstall from Add/Remove Programs (task 42-A.3)
 
@@ -727,6 +771,15 @@ gated on the one before, shown on the Progress page:
    `Software\xhci98` key when empty, the Uninstall entry.
 7. The install directory and `%windir%\XHCI98` when empty.
 
+Steps 5 to 7 run only when steps 1 to 4 left nothing for a later run:
+an uninstall that stopped at a gate, or left a file in use for the next
+run (a tray tool that did not close on 98 SE or ME, a driver file still
+held), keeps the installer's executables, the helper, the records under
+`Software\xhci98` and the Add/Remove Programs entry, whose display name
+then ends "(incomplete: run again)", so the next run has its entry
+point after the package is gone; the tray tool's Run value goes at once,
+as today. Only a run that finds nothing left to do removes them.
+
 **What it leaves** (record 23 section 9.3, and the owner's decisions of
 2026-10-18): Windows' own `usbd.sys` and `usbui.dll`; other drivers'
 devnodes; a filter host's devnode; a Stor98 the installer did not install;
@@ -745,7 +798,8 @@ and console copies at the very end through the temporary copy, then the
 directory. On NT a file still in use goes by the delayed deletion; on 98 SE
 and ME a file still in use (a tray tool that did not close) is left and
 reported with the next uninstall deleting it, as record 23 section 9.5
-says today.
+says today, and in that case the entry point stays for that next
+uninstall (section 9.3).
 
 ## 10. Switches, exit codes, the log
 
@@ -880,6 +934,14 @@ this list is the whole of it:
   the rest advanced; written in Stor98's own two forms (section 5.6).
 - **W11** The wizard is `PSH_WIZARD` with dialog-template pages and no
   owner-drawn control (section 4).
+- **W13** Stor98's ownership is by first binding: a device the installer
+  (or Windows, from its staged INF) first bound to Stor98 is recorded;
+  one it only updated never is; its staged copies are recorded one by
+  one; an update of a Stor98 device needs the user's word that nothing
+  uses the drive and ends with a shutdown, as Stor98's readme asks
+  (section 6.3).
+- **W14** An incomplete uninstall keeps its entry point, records and
+  helper for the next run (section 9.3).
 - **W12** The uninstall and the device modes need no package: they run
   from the install directory's copy or the temporary one and read the
   system alone; the package-layout refusal stays for an install and an

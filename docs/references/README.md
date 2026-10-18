@@ -481,10 +481,11 @@ The two `setupx` members, and `prsht.h`, which `setupx.h` includes, are
 what design record 27's 16-bit helper is compiled and linked against
 (roadmap-usb4 task 42-0.2; owner, 2026-10-18): the headers for their
 documentation blocks and declarations, the import
-library for the names of `SETUPX.DLL`'s exports, which is all an import
-library carries. Neither is shipped, and the helper's image holds none of
-their bytes but the import names; `legal-provenance.md` section 2 has the
-row.
+library for the ordinals of `SETUPX.DLL`'s exports, which is all an
+import library carries. Neither is shipped, and the helper's image holds
+none of their bytes: its import table names the module `SETUPX` and the
+ordinals the library binds, not the library's public symbols or the
+header's text; `legal-provenance.md` section 2 has the row.
 
 - Licence: `LICENSE.TXT` is Microsoft's end-user licence agreement for the
   "Windows 98 Driver Development Kit". It states that the product is

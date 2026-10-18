@@ -1,6 +1,9 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 2, 2026-10-18, reviewed and revised the same day (every
+Status: draft 3, 2026-10-18, reviewed and revised again (the bounded
+end of a helper whose process cannot be seen to exit, the class per job,
+ME as a hypothesis the probe tests); draft 2, 2026-10-18, reviewed and
+revised the same day (every
 action through the class-installer dispatcher, the INF's class from
 `DiGetINFClass`, an explicit global removal of entries present or not,
 the version carried on the command line and a probe first, one wait
@@ -231,7 +234,8 @@ two items with this record and the third with the helper's first build:
   and a sentence that they are compiled and linked against, not shipped:
   the DDK licence the entry quotes permits the design, development and
   testing of software products with it, and the image contains none of
-  its bytes but the import names;
+  its bytes: its import table names the module `SETUPX` and the ordinals
+  the library binds, not the library's public symbols;
 - a section 2a entry for `XHCIDI.EXE` beside `XHCIQUAL.EXE`'s, recording
   the linkage and the `NOTICE.TXT` `make-release.ps1` generates beside it
   (the Watcom lines from the linker map, as the qualifier's; nothing of
@@ -291,17 +295,22 @@ process handle with a one-second timeout in the window
 each tick reads the result file for its `END` line. The outcomes: the
 handle signalled and `END` present is a finished job; signalled without
 `END` is "the helper did not finish", a failure of that device; `END`
-present with the process still alive is waited for up to 60 s more and
-then reported as finished with a note, and the next job is not started
-until the process is gone; neither, for as long as the process lives, is a
+present with the process still alive is waited for up to 60 s more; a
+process still alive after that, or a handle the system never signals,
+ends the helper's part of this run: the job is reported finished by its
+file, no further helper job is started, the remaining devices are
+listed as steps left with record 23 section 6.4's Update Driver list
+(record 26 section 7's page), and the finish says to restart and run
+the installer again, which starts a fresh helper, so an unsignalled
+handle costs one job a run and never a wrong wait; neither, for as long as the process lives, is a
 job under way, which may be a Windows dialog waiting for the user, so that
 wait is unbounded and the Progress page says which device the helper is
 installing and that a dialog may be waiting behind the window. Whether the
 handle `CreateProcessA` returns for a 16-bit program on these systems is
 signalled at its exit, and what `GetExitCodeProcess` then says, are
 readings of the legs: the result file's `END` line, not the exit code, is
-the contract (section 4.2), and a handle that never signals is covered by
-the `END` rule above. The helper has no window, so nothing rests on one.
+the contract (section 4.2), and a handle that never signals is bounded
+by the rule above. The helper has no window, so nothing rests on one.
 
 ### 4.2 The result file
 
@@ -361,7 +370,9 @@ hardware registry subkey ... usually some place in the \ENUM branch", the
 header's block), takes its `dnDevnode`, `hRegKey`, `szRegSubkey`,
 `szClassName` and `szDescription`, and builds a `DEVICE_INFO` of its own
 for it with `DiCreateDeviceInfo(&lpdi, szDescription, dnDevnode, hRegKey,
-szRegSubkey, szClassName, hwnd)`, the sample's way of taking one entry
+szRegSubkey, class, hwnd)`, the class being the INF's for an install
+(below) and the entry's own `szClassName` for a removal (section 9,
+which has no INF), the sample's way of taking one entry
 out of the list (`ipmodem.cpp`: the found device's fields passed to
 `DiCreateDeviceInfo`), then destroys the list (`DiDestroyDeviceInfoList`).
 Not found: `FOUND 0`, `RESULT not-present`, and the installer treats the
@@ -535,11 +546,12 @@ hand step for every device the installer reaches.
 The same calls, bound by ordinal: the import library names each routine's
 ordinal in module `SETUPX`, so the helper loads on a system only where
 that system's `SETUPX.DLL` exports those ordinals, and one whose does not
-refuses to load the image before any call. That ME's `SETUPX.DLL` is the
-same interface is the DDK's account (one header and one library, and the
-DDK is the 98 SE one; ME's own DDK is not at hand), not a reading: the
-`probe` job's clean run on ME is the check, and the ME leg reads every row
-of section 12 again. The differences record 23 recorded are the wizard's
+refuses to load the image before any call. That ME's `SETUPX.DLL`
+exports the same ordinals with the same behaviour is a hypothesis, not a
+reading and not anything the 98 SE DDK says (it is the only DDK at hand
+and says nothing about ME; ME's own is not here): the `probe` job's
+clean run on ME is the first check, and the ME leg reads every row of
+section 12 again before the record claims it. The differences record 23 recorded are the wizard's
 (the "Select Other Driver" list naming a driver twice, `INF\OTHER`),
 which the helper does not open. ME's digital-signature prompt for an
 unsigned driver, where ME shows one, is Windows' own dialog owned by the
@@ -667,7 +679,7 @@ key, `INF\OTHER`'s listing, and Device Manager:
 | F, fresh install | the controller installed by the helper from the Found page's plan with no hand step; the Windows CD prompt for `usbd.sys` owned by the installer's window; the root hub's and hubs' wizards after the controller's restart, and the settle's wait for them; a cancelled root-hub wizard then installed by the helper; the devnode's class after the install; whether `LDID_SRCPATH` spares the "Copy files from" prompt; the driver key's values of section 8 |
 | U24, update over `2.4.0.0` | the controller and the root hub updated by the helper with no hand step (the hand step record 23's 9x leg needed); the keyboard and mouse behind the controller back after the restart of the devices, not of Windows |
 | U23, update over `2.3.1.0` (98 SE) | the new devnodes and their wizards; the helper's pass over what was cancelled |
-| UAS and Stor98 | a UAS disk installed and `force`-reinstalled (the `ERR_DI_DONT_INSTALL` question); Stor98 ticked on an NVMe device with no driver, installed from the copy |
+| UAS and Stor98 | a UAS disk installed and `force`-reinstalled (the `ERR_DI_DONT_INSTALL` question); Stor98 ticked on an NVMe device with no driver, installed from the copy, its IOS binding read back; an older Stor98 updated with the shutdown afterwards (record 26 section 6.3); two bundled versions in succession, then the uninstall removing both staged copies and leaving a hand-installed Stor98's device |
 | Thunderbolt | the host interface by `xhcicm.inf` on the emulator's Alpine Ridge guest (the 98 SE wizard's "Copy files from" of record 23 section 8.5, now the helper's) |
 | UN, uninstall | each devnode removed through the helper in order, an unplugged UAS disk's entry and a moved controller's old entry among them (the removal of an entry that is not present); the subtree removal; the `INF\OTHER` copies and the files deleted by the installer; the restart; the controller back as an unknown device with no wizard finding a driver |
 | Probe | the `probe` job on 98 SE and ME: the helper loads (its ordinals resolved), writes its version, and refuses a job with another version before any call |
@@ -698,8 +710,8 @@ engine copies an INF found through `DevicePath`.
   section, and record 26's uninstall does not need it).
 - **H3** The devnode is taken from `DiGetClassDevsEx`'s list (present
   devices for an install, every entry for a removal) and rebuilt with
-  `DiCreateDeviceInfo` with the INF's class from `DiGetINFClass`, the DDK
-  sample's way; the helper never fills `DEVICE_INFO` from a device id by
+  `DiCreateDeviceInfo`, with the INF's class from `DiGetINFClass` for an
+  install and the entry's own class for a removal, the DDK sample's way; the helper never fills `DEVICE_INFO` from a device id by
   hand (sections 5.1 and 9).
 - **H4** `DI_ENUMSINGLEINF` with the package's INF, `DI_QUIETINSTALL`,
   every action through `DiCallClassInstaller` (`DIF_SELECTBESTCOMPATDRV`,
@@ -735,9 +747,9 @@ engine copies an INF found through `DevicePath`.
   entry installs an INF of another class as the wizard does, is the first
   reading of the legs; the fallback for a device it does not is record 23
   section 6.4's steps, kept in the installer for that reason.
-- The 16-bit process handle: if it does not signal, the installer's poll
-  of the result file is the wait; if `GetExitCodeProcess` reads nothing
-  useful, nothing rests on it.
+- The 16-bit process handle: if it does not signal, the run ends its
+  helper jobs after section 4.1's 60 s rule and the next run continues;
+  if `GetExitCodeProcess` reads nothing useful, nothing rests on it.
 - The 16-bit build's headers (Watcom's against the DDK's `windows.h`) are
   settled by the build; a conflict that cannot be resolved by include
   order is reported before any code rests on it.
