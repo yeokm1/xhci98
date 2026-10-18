@@ -230,8 +230,10 @@ here signs it. Any -Flavor takes it; make-release.ps1 passes the pins to its
 release legs alone, so a cut's debug directories carry none of it.
 
 .PARAMETER Stor98Dir
-The pinned build's release folder, for example the Stor98 repository's
-releases\0.3.0.0. Read only.
+The pinned build's release folder. Read only. Left out with -Stor98Version
+given, it is Stor98's own release folder in this tree,
+src\stor98\releases\<version> (task 42-A.20); the other three pins are still
+required.
 
 .PARAMETER Stor98SumsSha256
 The SHA-256 of that folder's SHA256SUMS.txt. It is checked first, then every

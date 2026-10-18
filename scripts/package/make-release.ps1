@@ -354,7 +354,8 @@ the cut fills in), the generated readme lists it, and -UploadSetOnly
 re-assembles a bundled release only with the same pins.
 
 .PARAMETER Stor98Dir
-See -Stor98Version.
+See -Stor98Version. Left out, it is src\stor98\releases\<version>, Stor98's
+own release folder in this tree (task 42-A.20).
 
 .PARAMETER Stor98SumsSha256
 See -Stor98Version.

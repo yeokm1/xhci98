@@ -817,9 +817,11 @@ function Get-SilentRegFaults {
 # Stor98 is a separate project under BSD-3-Clause; its first release is
 # 0.3.0.0. A release package may carry
 # one of its released builds, copied unchanged from that build's release
-# folder at packaging time: never its source, and never through git
-# (nothing of it is tracked here, and make-release.ps1 copies it into the
-# upload set only, not into releases\). The input is pinned three ways: the
+# folder at packaging time: never built from its source. Since task 42-A.20
+# its source and release folders are tracked here as src\stor98, and the
+# release folder defaults to src\stor98\releases\<version>; make-release.ps1
+# still copies the build into the upload set only, not into this project's
+# releases\. The input is pinned three ways: the
 # version, the folder, and the SHA-256 of the folder's SHA256SUMS.txt, which
 # in turn pins every file. The release folder's x86\ (one $CHICAGO$ INF,
 # stor98.mpd for 98 and ME and stor98.sys for 2000 to 7) is copied to an x86
@@ -1105,16 +1107,22 @@ function Resolve-Stor98Input {
     # named (the package is built as before, with no Stor98), else the
     # verified release with its interface verdict. The four pins go
     # together; a mismatch of the interface is refused unless -Allow, and the
-    # override is reported, never silent.
+    # override is reported, never silent. A version named without a folder
+    # takes Stor98's own release folder in this tree,
+    # src\stor98\releases\<version> (task 42-A.20); the other pins and every
+    # check are the same whichever folder it is.
     param([string]$Version, [string]$Dir, [string]$SumsSha256, [string]$InterfaceVersion,
           [string]$HeaderPath, [switch]$Allow)
+    if ($Version -ne "" -and $Dir -eq "") {
+        $Dir = Join-Path (Get-RepoRoot) ("src\stor98\releases\" + $Version)
+    }
     $named = @(@($Version, $Dir, $SumsSha256, $InterfaceVersion) | Where-Object { $_ -ne "" })
     if ($named.Count -eq 0) {
         if ($Allow) { throw "-Stor98AllowInterfaceMismatch was given with no Stor98 input to apply it to." }
         return $null
     }
     if ($named.Count -ne 4) {
-        throw "the bundled Stor98 build is pinned explicitly: -Stor98Version, -Stor98Dir, -Stor98SumsSha256 and -Stor98InterfaceVersion go together, and only $($named.Count) of them were given."
+        throw "the bundled Stor98 build is pinned explicitly: -Stor98Version, -Stor98Dir, -Stor98SumsSha256 and -Stor98InterfaceVersion go together (-Stor98Dir defaults to src\stor98\releases\<version>), and only $($named.Count) of them were given."
     }
     $release = Assert-Stor98Release -Dir $Dir -Version $Version -SumsSha256 $SumsSha256
     $why = Test-Stor98Interface -Release $release -Pinned $InterfaceVersion -HeaderPath $HeaderPath
