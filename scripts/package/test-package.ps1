@@ -3032,6 +3032,26 @@ try {
            Why  = "a cut no longer writes the USB tree tool's readme.txt (task 41-A.6)" },
         @{ Find = 'Write-GeneratedText -Path (Join-Path $traytoolStaged "NOTICE.TXT")';
            Why  = "a cut no longer writes the NOTICE.TXT recording the USB tree tool's statically linked runtimes (legal-provenance.md section 2a)" },
+        # The 98 SE and ME device install helper (roadmap-usb4.md task 42-A.1,
+        # design record 27 section 3): staged beside the install tool, held to
+        # its DDK's hashes, its sources, its map, its import allowlist and its
+        # version stamp, its notices added to the install tool's NOTICE.TXT.
+        @{ Find = 'Copy-Item -LiteralPath $diExe -Destination (Join-Path $insttoolStaged "XHCIDI.EXE") -Force';
+           Why  = "a cut no longer stages XHCIDI.EXE beside the install tool in tools\xhciinst\, where the installer starts it (task 42-A.1, design record 27 section 4.1)" },
+        @{ Find = 'if (-not $SkipDiHelper -and $null -ne $insttoolStaged) {';
+           Why  = "the helper is no longer staged by default whenever the install tool is, so -SkipDiHelper is no longer the only way to cut without it (design record 27 section 3.3)" },
+        @{ Find = '& (Join-Path $diDir "stage-ddk.ps1") -VerifyOnly';
+           Why  = "a cut no longer holds the Windows 98 SE DDK files the helper is built against to the SHA-256s docs\references\README.md records (design record 27 section 3.3)" },
+        @{ Find = '$diNewer = @($diSources | Where-Object { $_.LastWriteTimeUtc -gt $diTime })';
+           Why  = "a cut no longer refuses a helper older than its sources (task 42-A.1)" },
+        @{ Find = '& (Join-Path $diDir "check-imports.ps1") -Path $diExe';
+           Why  = "a cut no longer holds the helper's ordinal imports to its allowlist, so an image Windows 98 SE or ME refuses to load could be published (design record 27 section 7)" },
+        @{ Find = '$diStamp = "XHCIDI " + $Version + [char]0';
+           Why  = "a cut no longer holds the helper's version stamp to the release's, though the helper refuses an installer of another version (design record 27 section 3.2)" },
+        @{ Find = 'Write-GeneratedText -Path $instNoticePath -Lines ($instNoticeLines + @($diNotice -split "`r?`n"))';
+           Why  = "a cut no longer adds XHCIDI.EXE's statically linked runtime and import library to the install tool's NOTICE.TXT (legal-provenance.md section 2a)" },
+        @{ Find = 'if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }';
+           Why  = "a cut without the helper no longer says so in its readme (design record 27 section 3.3)" },
         @{ Find = 'if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }';
            Why  = "a cut without the USB tree tool no longer says so in its readme (task 41-A.6)" },
         @{ Find = 'INSTALL /notray installs it without starting it at';

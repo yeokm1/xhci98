@@ -246,6 +246,14 @@ Do not stage the USB tree tool. For a host that cannot build it; `XHCIINST`
 then says in one line that the package has none, and the release says so on
 the console and in its readme.
 
+.PARAMETER SkipDiHelper
+Do not stage `XHCIDI.EXE`, the 16-bit Windows 98 SE and ME device install
+helper (roadmap-usb4.md task 42-A.1, design record 27), beside the install
+tool. For a host that cannot build it (it needs Open Watcom and the Windows
+98 SE DDK's `setupx.h` and `setupx.lib`); a package without it installs on
+98 SE and ME through the printed Update Driver steps only, and the release
+says so on the console and in its readme. A real cut carries it.
+
 .PARAMETER SkipCleanTool
 Do not stage the cleanup tool. For a host that cannot build it (the 64-bit
 half needs `tools\WinDDK71`); nothing needs the tool, so the release is whole
@@ -385,6 +393,7 @@ param(
     [switch]$SkipInstallTool,
     [string]$TrayToolDir = "",
     [switch]$SkipTrayTool,
+    [switch]$SkipDiHelper,
     [string]$UploadDir = "",
     [switch]$SkipUploadSet,
     [switch]$UploadSetOnly,
@@ -3906,6 +3915,82 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
         Write-Ok (("XHCITR.EXE and XHCITR64.EXE staged at version {0}") -f $trayVersion)
     }
 
+    # --- the 98 SE and ME device install helper (task 42-A.1) ----------------
+    #
+    # XHCIDI.EXE, a Win16 program built with Open Watcom against the Windows 98
+    # SE DDK's setupx.h and setupx.lib (xhciinst\di\, design record 27 section
+    # 3), staged beside the install tool that starts it. Copied, not built, as
+    # the qualifier is, so staleness is the risk and the qualifier's rules are
+    # applied: newer than its sources and the version header, a .MAP no older
+    # than itself. Three of its own: the DDK files are held to the hashes
+    # docs\references\README.md records (section 3.3); its imports, by ordinal
+    # from KERNEL, USER and SETUPX, to its allowlist (its own gate); and, since
+    # a 16-bit image has no PE version resource, its version to the stamp
+    # "XHCIDI <version>" its build puts in its data (section 3.2).
+    $ditoolStaged = $null
+    if (-not $SkipDiHelper -and $null -ne $insttoolStaged) {
+        Write-Step "98 SE and ME device install helper"
+        $diDir = Join-Path $InstallToolDir "di"
+        foreach ($name in @("xhcidi.exe", "xhcidi.map")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $diDir $name) -PathType Leaf)) {
+                throw @"
+'$diDir' has no $name.
+Build the helper first:  xhciinst\di\build.cmd
+It needs Open Watcom (C:\WATCOM) and the Windows 98 SE DDK extracted into
+tools\win98ddk-extracted\ (docs\references\README.md, "Windows 98 DDK").
+-SkipDiHelper cuts without it on a host that cannot build it; that package
+installs on 98 SE and ME through the printed Update Driver steps only.
+"@
+            }
+        }
+        & (Join-Path $diDir "stage-ddk.ps1") -VerifyOnly
+        if ($LASTEXITCODE -ne 0) {
+            throw @"
+The Windows 98 SE DDK files XHCIDI.EXE is built against are missing or not at
+the SHA-256s docs\references\README.md records (see the lines above). Fetch
+and extract the DDK as that README's "Windows 98 DDK" section says, rebuild
+the helper (xhciinst\di\build.cmd), and cut again.
+"@
+        }
+        $diExe = Join-Path $diDir "xhcidi.exe"
+        $diTime = (Get-Item -LiteralPath $diExe).LastWriteTimeUtc
+        $diSources = @(@(Get-ChildItem -LiteralPath $diDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h") -or $_.Name -eq "makefile" }) +
+            @(Get-Item -LiteralPath $versionHeader))
+        $diNewer = @($diSources | Where-Object { $_.LastWriteTimeUtc -gt $diTime })
+        if ($diNewer.Count -gt 0) {
+            throw @"
+'$diExe' is older than $($diNewer.Count) of its own source file(s):
+  - $(($diNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhciinst\di\build.cmd) before releasing: a stale helper refuses
+this release's install tool, or installs with calls the source no longer makes.
+"@
+        }
+        if ((Get-Item -LiteralPath (Join-Path $diDir "xhcidi.map")).LastWriteTimeUtc -lt $diTime) {
+            throw "'$(Join-Path $diDir "xhcidi.map")' is older than '$diExe'; rebuild the helper (xhciinst\di\build.cmd) so the pair comes from one link."
+        }
+        & (Join-Path $diDir "check-imports.ps1") -Path $diExe
+        if ($LASTEXITCODE -ne 0) {
+            throw "XHCIDI.EXE's imports are not its allowlist's (xhciinst\di\check-imports.ps1, above): a Windows 98 SE or ME system would refuse to load it, or it calls what design record 27 does not."
+        }
+        $diVersion = Get-DeclaredVersion -Path $versionHeader
+        $diStamp = "XHCIDI " + $Version + [char]0
+        if (-not (Test-DriverVersionMatches -Reported $diVersion -Declared $Version) -or
+            -not ([System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($diExe)).Contains($diStamp))) {
+            throw @"
+'$diExe' does not carry the stamp "XHCIDI $Version", or '$versionHeader'
+declares "$diVersion". The helper refuses an installer of another version
+before any call, so the two must agree. Bump the version and rebuild the
+helper (xhciinst\di\build.cmd).
+"@
+        }
+        Copy-Item -LiteralPath $diExe -Destination (Join-Path $insttoolStaged "XHCIDI.EXE") -Force
+        $ditoolStaged = $insttoolStaged
+        Write-Ok ("XHCIDI.EXE staged beside the install tool at version {0}, its imports the allowlist's, its DDK as recorded" -f $Version)
+    } elseif ($null -ne $insttoolStaged) {
+        Write-Warn "-SkipDiHelper: no XHCIDI.EXE; this package installs on 98 SE and ME through the printed Update Driver steps only, and its readme says so"
+    }
+
     # --- the port switchover's scripts ---------------------------------------
     #
     # Once, into tools\portsw\ beside the other tools' directories (roadmap-hcd
@@ -4125,6 +4210,13 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
         $contents += ""
         $contents += "      Section 4 has how to run it; INSTALL /list shows what"
         $contents += "      it would do and changes nothing."
+        $contents += ""
+    }
+    if ($null -ne $ditoolStaged) {
+        $dih = Get-Item -LiteralPath (Join-Path $ditoolStaged "XHCIDI.EXE")
+        $contents += ("      XHCIDI.EXE   {0:N0} bytes, beside them: the 16-bit" -f $dih.Length)
+        $contents += "      helper that installs the drivers on Windows 98 SE"
+        $contents += "      and ME devices; the install tool starts it"
         $contents += ""
     }
     if ($null -ne $traytoolStaged) {
@@ -6155,6 +6247,7 @@ which XHCISNAP matches this driver by that number; correct the sentence.
     if ($null -eq $cleantoolStaged) { $missingTools += "TOOLS\XHCICLN\ (the optional cleanup tool of section 4)" }
     if ($null -eq $insttoolStaged) { $missingTools += "INSTALL.BAT and TOOLS\XHCIINST\ (the install tool of section 4)" }
     if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }
+    if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
         # Leading blank line included, so an empty substitution leaves the
@@ -6985,6 +7078,50 @@ sufficient.
         Write-GeneratedText -Path (Join-Path $traytoolStaged "NOTICE.TXT") `
                             -Lines ($trayNotice -split "`r?`n")
         Write-Ok "NOTICE.TXT written beside XHCITR.EXE and XHCITR64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+    }
+
+    # --- the 98 SE and ME device install helper's notices (task 42-A.1) ------
+    #
+    # XHCIDI.EXE shares tools\xhciinst\ and its NOTICE.TXT with the install
+    # tool, so its section is added to that file rather than a file of its
+    # own: the Open Watcom runtime it links statically, with the copyright
+    # lines its linker wrote at the head of xhcidi.map (as the qualifier's),
+    # and the import library it was linked against, of which it carries no
+    # byte (legal-provenance.md section 2a; design record 27 section 3.4).
+    if ($null -ne $ditoolStaged) {
+        $diMapLines = @([System.IO.File]::ReadAllLines((Join-Path (Join-Path $InstallToolDir "di") "xhcidi.map")) |
+            Where-Object { $_ -match '^(Portions )?Copyright ' })
+        if ($diMapLines.Count -eq 0) {
+            throw "xhciinst\di\xhcidi.map carries no linker copyright line for NOTICE.TXT; rebuild the helper (xhciinst\di\build.cmd)."
+        }
+        $diNotice = @"
+
+------------------------------------------------------------------------------
+ XHCIDI.EXE
+------------------------------------------------------------------------------
+
+XHCIDI.EXE, the Windows 98 SE and ME device install helper the install tool
+starts, is built from this project's own C source, under the GNU GPL v2,
+with Open Watcom 2.0's 16-bit compiler. It is not only this project's code:
+it statically links modules from the Open Watcom C runtime library for
+16-bit Windows (clibl.lib). The Open Watcom linker records its own
+copyright at the head of the map it wrote for this build:
+
+{MAPLINES}
+
+Open Watcom is distributed under the Sybase Open Watcom Public License.
+
+It is linked against setupx.lib of the Windows 98 SE DDK, an import library:
+the executable carries references, by module name and ordinal, to the
+SETUPX.DLL of the Windows it runs on, and no code or text of the DDK. What
+this file records is the linkage; the project's full provenance record is
+docs\contributing\legal-provenance.md, section 2a.
+"@
+        $diNotice = $diNotice.Replace("{MAPLINES}", (($diMapLines | ForEach-Object { "  " + $_.Trim() }) -join "`r`n"))
+        $instNoticePath = Join-Path $ditoolStaged "NOTICE.TXT"
+        $instNoticeLines = @([System.IO.File]::ReadAllLines($instNoticePath))
+        Write-GeneratedText -Path $instNoticePath -Lines ($instNoticeLines + @($diNotice -split "`r?`n"))
+        Write-Ok "NOTICE.TXT beside XHCIINST.EXE gains XHCIDI.EXE's section (static Open Watcom 16-bit runtime; setupx.lib by ordinal)"
     }
 
     # --- the licence the readme sends the reader to --------------------------

@@ -374,6 +374,52 @@ the reason. An installer that finds no helper beside
 it (an older or a development package) falls back to the printed steps
 of record 23 section 6.4 for every device, saying so once.
 
+### 4.4 The file's details as the code has them (task 42-A.1)
+
+What sections 4.1 to 4.3 leave to the code, as `xhciinst\di\` writes it
+(`di_core.c`, host-tested in `test\test_di.c`); nothing above is changed by
+it:
+
+- **The order of the checks.** The result file's path is read first (with
+  no usable path, an 8.3 drive-rooted one, nothing can be written: the
+  helper exits 3 with no file); then the version, before any other word;
+  then the rest of the line; then the system. `XHCIDI <own version>` is
+  always the first line.
+- **The `JOB` line** is `JOB install <device id> <inf path>`, `JOB remove
+  <device id>` or `JOB probe`: the job and its operands, never its flags,
+  so it compares with the command line's job without them. A refusal of
+  the version or of the command line has no `JOB` line (the job was not
+  read, or not whole); a refusal of the system, and every job that ran,
+  has one.
+- **The refusals** are `RESULT refused version`, `RESULT refused command
+  <what>` (`arguments`, `job`, `hwnd`, `device-id`, `inf-path`, `flags`; an
+  `hwnd` that is not 0 and names no window is `command hwnd`) and `RESULT
+  refused system <VersionNumber>` (the build string of
+  `HKLM\Software\Microsoft\Windows\CurrentVersion`, `-` when none was read;
+  98 SE is `4.10.2222`, ME `4.90.3000`, and `GetVersion` must also say
+  3.95).
+- **The probe's verdict** is `RESULT probed`: section 5.4's table has no
+  row for it, since the probe calls no engine routine.
+- **Two lines beside section 4.2's.** `NODE <flags>` (eight hex digits,
+  then `force` when the installer asked for it) follows `DRIVER`: the
+  chosen node's `DRIVER_NODE.Flags`, so the log shows `DNF_OLDDRIVER` and
+  `DNF_CURRENT_DRIVER` beside what was asked. The helper installs the
+  chosen node whatever its flags say; whether the engine itself declines a
+  same-version install is section 5.2's reading. And a `no-match` is
+  preceded by `IDS HardwareID <list>` and `IDS CompatibleIDs <list>`, read
+  from the devnode's `Enum` key (section 5.2's "with the ids the helper
+  read"). A space or a quote in a bare field is written as `_`.
+- **The helper's own failures**, which are no engine error, are written as
+  section 5.4's `failed <name> <n>` with the number 0: `XHCIDI_NO_SELECTION`
+  (the class installer's choice left no selected driver),
+  `XHCIDI_OTHER_INF` (the chosen node's INF is not the one given, which
+  `DI_ENUMSINGLEINF` should make impossible) and `XHCIDI_NO_ATOM` (the
+  INF's path could not be made an atom). Each has an `ERROR` line with the
+  same name before it. An engine error name the header does not enumerate
+  is `ERR_UNKNOWN`.
+- **Exit codes**, which nothing rests on: 0 a job ran to a verdict, 1
+  refused, 2 a line could not be written, 3 no result file.
+
 ## 5. The install, call by call
 
 ### 5.1 Finding the devnode
@@ -788,6 +834,9 @@ engine copies an INF found through `DevicePath`.
 | `xhciinst\di\di_core.c`, `di_core.h` | the pure part: the command line, the result writer, the error names, the verdicts |
 | `xhciinst\di\prsht16.h` | only if the DDK's `inc16\prsht.h` cannot be used as it is: a declaration-only stand-in for the types `setupx.h` names from it, this project's text |
 | `xhciinst\di\makefile`, `build.cmd` | the Watcom build, as `xhciqual\`'s |
+| `xhciinst\di\stage-ddk.ps1` | the DDK's four files (`setupx.h`, `prsht.h`, the 98 `windows.h`, `setupx.lib`) held to `docs\references\README.md`'s hashes and staged into `obj\` (task 42-A.1) |
+| `xhciinst\di\check-imports.ps1`, `xhcidi-imports.allow`, `test-gate.ps1`, `selftest.cmd` | the NE import gate of section 7 and its refusals, and the version stamp of section 3.2 (task 42-A.1) |
+| `xhciinst\di\test\ditest.c`, `build.cmd` | `DITEST.EXE`, the legs' test driver, which starts the helper as section 4.1's installer does, without the window (task 42-A.1; never packaged) |
 | `xhciinst\inst_core.c`, `inst_eng.c` | the installer's side: the command line, the result parser, the order, the fallback |
 | `test\test_di.c`, `test\test_inst.c` | the host suites |
 | `scripts\package\make-release.ps1`, `test-package.ps1` | the helper staged in `tools\xhciinst\`, its freshness, version and `NOTICE.TXT`; `-SkipDiHelper` |

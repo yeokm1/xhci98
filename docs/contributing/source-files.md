@@ -257,6 +257,7 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23). |
 | `test_tr.c` | `xhcitr\tr_core.c`, the USB tree tool's pure half (design record 25 section 10): text, the connection answers, descriptors, the query's parsing and eject gates, the router keys and event diff, the command line, the report. |
 | `test_trpci.c` | `src\cm\cm_qpci.c` and `xhcitr\tr_pci.c`: the bounded walk below a tunnel port over modelled buses, the capability walk with bad lists, the decoders, 79 columns (design record 25 revision 12). |
+| `test_di.c` | `xhciinst\di\di_core.c`, the 98 SE and ME device install helper's pure part (design record 27 section 11): the command line and its refusals, the result file's lines, the verdicts, the error names and flags held to the DDK's `setupx.h` where `tools\` has it. |
 | `test_trlog.c` | `xhcitr\tr_log.c` with `src\cm\cm_query.c` linked: `xhcicm.sys`'s log answer as the driver's builder makes it, its parse and bounds, `xhci98.sys`'s pass-through window, and `xhcitr\tr_hcctr.h`'s names held to `XHCIHC_COUNTERS` by offset (design record 25 revision 9). |
 | `test_xhq.c` | `src\xhci_qry.c` and the tool's reader of it: what each log level serves, the ring's text and cut, the configuration read's states, the sizing, the default level 2. |
 | `test_cm_live.c` | `cm_live.c`: sampling by elapsed time, SUSPECT on the first unanswered sample and ABSENT on the third, CONFIG_LOST on a changed register, the light and full recovery, its failure and the re-arm rule, the USB4 profile's containment, revocation and the access gate. |
@@ -354,6 +355,21 @@ Each tool is a tree at the repository root, built by its own `build.cmd` and pub
 | `selftest.cmd`, `check-imports.ps1` | The `/selftest`, the switch refusals and the import gate (exactly `KERNEL32.dll` and `ADVAPI32.dll`). |
 | `INSTALL.BAT` | Staged at the package root; runs the tool. |
 | `README.TXT` | The published `readme.txt`. |
+
+### `xhciinst\di\` - the 98 SE and ME device install helper (design record 27)
+
+`XHCIDI.EXE`, a Win16 program (Open Watcom 2.0, large model) the installer
+starts once per device on Windows 98 SE and ME (roadmap-usb4 task 42-A.1).
+
+| File | What it is |
+|---|---|
+| `xhcidi.c` | `WinMain`: the command line, the version and system checks, the job, the result file, the version stamp. |
+| `di_sys.c` / `di_sys.h` | The setup engine's calls of record 27 sections 5 and 9 (install and removal through `DiCallClassInstaller`), and the registry read of the system check; read, not unit-tested. |
+| `di_core.c` / `di_core.h` | The pure part, C89 with no Windows header: the command line, the result file's lines, the engine's error names, the verdicts (host suite `test_di`). |
+| `makefile`, `build.cmd` | The `wmake` build and its environment; `build.cmd` answers 2 on a host without Open Watcom. |
+| `stage-ddk.ps1` | Holds the four Windows 98 SE DDK files to `docs\references\README.md`'s hashes and copies them into the git-ignored `obj\`; `-VerifyOnly` for the cut. |
+| `selftest.cmd`, `check-imports.ps1`, `test-gate.ps1`, `xhcidi-imports.allow` | The NE import gate (`KERNEL`, `USER`, `SETUPX` by ordinal, each the allowlist's and its import library's), its refusals, and the version stamp. |
+| `test\ditest.c`, `test\build.cmd` | `DITEST.EXE`, the 42-V.1 legs' test driver (never packaged). |
 
 ### `xhcicln\` - the cleanup tool (task 38.8)
 
