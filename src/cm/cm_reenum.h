@@ -260,6 +260,30 @@ BOOLEAN CmCfgmgPciRead(PCM_CFGMG cfg, ULONG bdf, ULONG offset, PULONG value);
 BOOLEAN CmCfgmgPciWrite(PCM_CFGMG cfg, ULONG bdf, ULONG offset, ULONG value);
 ULONG CmCfgmgStatus(PCM_CFGMG cfg, ULONG devnode, PULONG status,
                     PULONG problem);
+/* Design record 28 (task 42-A.15): the logical-configuration services,
+ * each the service of cm_cfgmg.h's number with the arguments it names
+ * (an out handle zeroed first); Read_Registry_Value of a REG_SZ in the
+ * devnode's software key, *bytes the room in and the length out; and
+ * the installer's Stor98 Version through the VMM's registry services
+ * (0 when read, else the VMM's code, *type the value's type). */
+ULONG CmCfgmgAddEmptyLogConf(PCM_CFGMG cfg, ULONG devnode, ULONG priority,
+                             ULONG flags, PULONG lc);
+ULONG CmCfgmgFirstLogConf(PCM_CFGMG cfg, ULONG devnode, ULONG kind,
+                          PULONG lc);
+ULONG CmCfgmgNextLogConf(PCM_CFGMG cfg, ULONG lc, PULONG next);
+ULONG CmCfgmgLogConfPriority(PCM_CFGMG cfg, ULONG lc, PULONG priority);
+ULONG CmCfgmgSetLogConfPriority(PCM_CFGMG cfg, ULONG lc, ULONG priority);
+ULONG CmCfgmgNextResDes(PCM_CFGMG cfg, ULONG from, PULONG rd, PULONG type);
+ULONG CmCfgmgResDesSize(PCM_CFGMG cfg, ULONG rd, PULONG size);
+ULONG CmCfgmgResDesData(PCM_CFGMG cfg, ULONG rd, PVOID buffer, ULONG bytes);
+ULONG CmCfgmgAddResDes(PCM_CFGMG cfg, ULONG lc, ULONG type, PVOID data,
+                       ULONG bytes, PULONG rd);
+ULONG CmCfgmgReadSoftwareValue(PCM_CFGMG cfg, ULONG devnode,
+                               const char *name, char *buffer, PULONG bytes);
+ULONG CmCfgmgReprocess(PCM_CFGMG cfg, ULONG devnode);
+ULONG CmCfgmgSetupReady(PCM_CFGMG cfg, ULONG devnode);
+ULONG CmCfgmgStor98Version(PCM_CFGMG cfg, char *buffer, PULONG bytes,
+                           PULONG type);
 ULONG CmCfgmgAddRemovable(PCM_CFGMG cfg, ULONG devnode);
 
 typedef struct _CM_REENUM {
@@ -413,13 +437,32 @@ typedef struct _CM_CFGWK_COUNTERS {
     ULONG GoneDropped;      /* retained children whose identity changed   */
     ULONG Numbered;         /* bridges given bus numbers (section 6.1.1)  */
     ULONG NumberRefused;    /* numberings refused and undone              */
+    /* Design record 28 section 7 (task 42-A.15), summed over the members:
+     * candidates, configurations created, started, still unstarted at
+     * the deadline, disabled leftovers, left-over refusals, journal
+     * entries marked gone, timeouts, late results, pin-0 functions seen
+     * and started, and the refusals by reason (CM_NI_W_* 1 to 15). */
+    ULONG NoIrqCandidates;
+    ULONG NoIrqAttempts;
+    ULONG NoIrqStarted;
+    ULONG NoIrqUnstarted;
+    ULONG NoIrqLeftovers;
+    ULONG NoIrqLeftOver;
+    ULONG NoIrqGone;
+    ULONG NoIrqTimeouts;
+    ULONG NoIrqLate;
+    ULONG NoIrqPin0Seen;
+    ULONG NoIrqPin0Started;
+    ULONG NoIrqRefused[16];
 } CM_CFGWK_COUNTERS, *PCM_CFGWK_COUNTERS;
 
 /* Creates the worker for `members` bridges at bdf[] (members the domain
  * owns in `active`) and asks it to open the route; `numbering` is
- * XhciCmBridgeNumbering (section 6.1.1). NULL on failure. PASSIVE_LEVEL. */
+ * XhciCmBridgeNumbering (section 6.1.1), `noIrq` XhciCmNoIrqStart (design
+ * record 28 section 7). NULL on failure. PASSIVE_LEVEL. */
 struct _CM_CFGWK *CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf,
-                               ULONG members, ULONG active, ULONG numbering);
+                               ULONG members, ULONG active, ULONG numbering,
+                               ULONG noIrq);
 
 /* Asks for the members in `reenum` to be re-enumerated (those also in
  * `vanish` with their vanished children removed first) and, with `mark`,
@@ -460,6 +503,28 @@ VOID CmCfgwkCounters(struct _CM_CFGWK *w, PCM_CFGWK_COUNTERS counters);
 /* From the driver's unload: waits, bounded, for every worker to have
  * left. PASSIVE_LEVEL. */
 VOID CmCfgwkDrain(VOID);
+
+/*
+ * The query device's PCI answer on Windows 98 SE and ME (design record 25
+ * section 4.7, task 42-A.14): the walk below the members made by the
+ * worker, through PCI.VXD's guarded read, between its other operations.
+ * CmCfgwkPciAsk copies `in` (the members and the answer's header fields;
+ * its readers and admission are the worker's own) into a request of its
+ * own and posts it; NULL when none could be posted (the worker leaving,
+ * one already posted, no pool). The caller must hold w alive for the call
+ * alone (the query device's rundown, cm_qryos.c). CmCfgwkPciTake then
+ * waits up to `waitMs` for the answer and, when it came, copies it
+ * (CM_QP_MAX_BYTES at most) into `out` and returns its length; 0 with
+ * *reason (CM_QP_NR_*) when it did not. Either way the request is the
+ * caller's no more: whichever of the two sides lets go last frees it.
+ * PASSIVE_LEVEL.
+ */
+struct _CM_CFGWK_PCI;
+struct _CM_QPCI_IN;
+struct _CM_CFGWK_PCI *CmCfgwkPciAsk(struct _CM_CFGWK *w,
+                                    const struct _CM_QPCI_IN *in);
+ULONG CmCfgwkPciTake(struct _CM_CFGWK_PCI *req, ULONG waitMs, UCHAR *out,
+                     PULONG reason);
 
 /* ---- the registration list, for cm_filt.c (NT only) ------------------ */
 

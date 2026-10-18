@@ -975,6 +975,17 @@ static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
 #define XHCI_TBT_CFG_INTR   0x3CUL  /* Interrupt Line 7:0, Pin 15:8; Bridge
                                        Control 31:16 on a type 1 header   */
 
+/* A function's outcome, while there is room (the rest are read afresh by
+ * record 28's classification, as functions with no record). */
+static VOID brFnNote(PXHCI_TBT_BRNUM r, ULONG bdf, ULONG out)
+{
+    if (r->IrqFnCount < XHCI_TBT_BRNUM_MAX_LINES) {
+        r->IrqFnBdf[r->IrqFnCount] = bdf;
+        r->IrqFnOut[r->IrqFnCount] = out;
+        r->IrqFnCount++;
+    }
+}
+
 /*
  * The Interrupt Line of each function of `bus` (and, depth first, behind
  * each journalled bridge) whose interrupt reaches the port's primary side
@@ -1044,6 +1055,7 @@ static ULONG brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
                 got = brRead(c->Io, bdf, XHCI_TBT_CFG_INTR, &v);
                 if (!got) {
                     r->IrqFailed++;
+                    brFnNote(r, bdf, XHCI_TBT_BRFN_NOT_READ);
                 }
             }
             if (got) {
@@ -1052,10 +1064,13 @@ static ULONG brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
                     r->IrqFunctions++;
                     if (((pin - 1UL + dev + rot) & 3UL) != portPin - 1UL) {
                         r->IrqOther++;
+                        brFnNote(r, bdf, XHCI_TBT_BRFN_OTHER);
                     } else if ((v & 0xFFUL) != 0 && (v & 0xFFUL) != 0xFFUL) {
                         r->IrqKept++;
+                        brFnNote(r, bdf, XHCI_TBT_BRFN_ALREADY);
                     } else if (r->IrqJournal >= XHCI_TBT_BRNUM_MAX_LINES) {
                         r->IrqFailed++;
+                        brFnNote(r, bdf, XHCI_TBT_BRFN_NOT_HELD);
                     } else {
                         /* Journalled before it is issued, for the undo. */
                         r->IrqBdf[r->IrqJournal] = bdf;
@@ -1068,8 +1083,10 @@ static ULONG brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
                             brRead(c->Io, bdf, XHCI_TBT_CFG_INTR, &back) &&
                             (back & 0xFFUL) == line) {
                             r->IrqSet++;
+                            brFnNote(r, bdf, XHCI_TBT_BRFN_WRITTEN);
                         } else {
                             r->IrqFailed++;
+                            brFnNote(r, bdf, XHCI_TBT_BRFN_NOT_HELD);
                         }
                     }
                 }
@@ -1112,6 +1129,7 @@ static VOID brLinesUndo(BRNUM_CTX *c)
         r->Undone++;
     }
     r->IrqJournal = 0;
+    r->IrqFnCount = 0;
 }
 
 /* The interrupt lines of the chain just set up: the port's own Interrupt
@@ -1326,6 +1344,7 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
     r->IrqOther = 0;
     r->IrqFailed = 0;
     r->IrqJournal = 0;
+    r->IrqFnCount = 0;
     r->WinWhere = XHCI_TBT_NO_BDF;
     r->PortMem = 0;
     r->WinNeed = 0;

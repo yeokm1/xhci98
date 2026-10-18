@@ -197,6 +197,11 @@ rem                  CDB direction table and the storage id strings
 rem   test_tbt_brnum - the bus numbers xhcicm.sys gives the bridges a tunnel
 rem                  brought up below a tunnel port on 98 SE and ME
 rem                  (src\cm\tbt_brnum.c, record 21 section 6.1.1)
+rem   test_cm_noirq - a 98 SE or ME function with no interrupt, started
+rem                  (src\cm\cm_noirq.c, design record 28, task 42-A.15):
+rem                  the candidate rules, the result table, the journal
+rem                  across generations, the transaction's steps and
+rem                  budgets, late results, over a modelled devnode
 rem   test_tbt_topo - the Thunderbolt tunnel ports' pure half (src\cm\tbt_topo.c,
 rem                  roadmap-usb4.md 39-A.5, design record 21 sections 6.3
 rem                  and 6.5): the P14s Gen 1's configuration space as
@@ -513,6 +518,9 @@ rem test_tbt_brnum links nothing else: the Windows 98 SE and ME bus
 rem numbering of the bridges below a tunnel port is pure (record 21
 rem section 6.1.1).
 call :run test_tbt_brnum "test_tbt_brnum.c ..\src\cm\tbt_brnum.c"
+rem test_cm_noirq links nothing else: design record 28's state machine of
+rem operations is pure; its CONFIGMG and PCI.VXD calls are the model's.
+call :run test_cm_noirq "test_cm_noirq.c ..\src\cm\cm_noirq.c"
 rem test_cm_live links nothing else: the host-interface liveness monitor's
 rem states, cadence, recovery and gate are pure (record 21 sections 5.5, 5.6).
 call :run test_cm_live "test_cm_live.c ..\src\cm\cm_live.c"

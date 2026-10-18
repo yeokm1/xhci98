@@ -195,8 +195,14 @@
  * below a member - its secondary bus and, through each bridge found
  * there, the buses within the member's secondary-to-subordinate range,
  * bounded by CM_QP_MAX_* (a bounded walk, each bus once). On Windows 98 SE
- * and ME the functions below a member are not read (one entry per member,
- * CM_QP_S_NOT_READ_OS). Each entry is a 32-byte head and the function's
+ * and ME (task 42-A.14) the walk below the members is made by the 98
+ * CONFIGMG worker through PCI.VXD's guarded read, entering only a bus
+ * whose bridge PCI.VXD itself reads with the same numbers or whose
+ * numbers the worker's own numbering gave; where it cannot be made (no
+ * worker, the worker busy past the request's bound, PCI.VXD's guard
+ * refused, the member's controller lost) one entry per member says so
+ * (CM_QP_S_NOT_READ_OS, its reason in CM_QP_E_INFO). Each entry is a
+ * 32-byte head and the function's
  * configuration space 00h..FFh as read, byte for byte; the reader decodes
  * it. Bus addresses (the BARs and bridge windows) are what the bus holds,
  * the ranges Device Manager's Resources tab shows any user; no kernel
@@ -248,7 +254,10 @@
 #define CM_QP_E_DEPTH           20UL    /* BELOW: 0 on the member's
                                            secondary bus, one more per bridge */
 #define CM_QP_E_INFO            24UL    /* PORT: source 7:0 (XHCI_TBT_SRC_*),
-                                           flags 15:8 (CM_PORT_*) */
+                                           flags 15:8 (CM_PORT_*); BELOW in
+                                           CM_QP_S_NOT_READ_OS: the reason,
+                                           CM_QP_NR_* (0 from a driver
+                                           before 42-A.14: this system) */
 #define CM_QP_E_VALID           28UL    /* READ: the bytes of configuration
                                            space read, CM_QP_CFG_BYTES or
                                            fewer where the HAL answered
@@ -264,6 +273,20 @@
 #define CM_QP_S_NOT_READ_OS     2UL     /* not read on this system */
 #define CM_QP_S_FAILED          3UL     /* a read was refused */
 #define CM_QP_S_ABSENT          4UL     /* no function answers (all ones) */
+
+/* Why the functions below a member were not read (CM_QP_E_INFO). */
+#define CM_QP_NR_SYSTEM         0UL     /* not read on this system        */
+#define CM_QP_NR_NO_WORKER      1UL     /* 98 SE / ME: no CONFIGMG worker
+                                           running (no route, or not yet
+                                           started)                        */
+#define CM_QP_NR_BUSY           2UL     /* ... the worker did not answer
+                                           within the request's bound (a
+                                           configuration-manager call of
+                                           its own still running)          */
+#define CM_QP_NR_GUARD          3UL     /* ... PCI.VXD's read refused by its
+                                           guard                           */
+#define CM_QP_NR_HELD           4UL     /* ... the member's controller lost:
+                                           no bridge below it is read       */
 
 #define CM_QP_MAX_PORTS         4UL     /* XHCI_TBT_MAX_TUNNELS */
 #define CM_QP_MAX_BELOW         32UL    /* functions below, all members */

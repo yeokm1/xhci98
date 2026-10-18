@@ -57,10 +57,20 @@
  * domain's tunnel-port set, under Lock), copied out under Lock; the reads
  * themselves hold no lock and follow no pointer to the NHI, so the device
  * still holds none for this request. PciGate lets one request at a time
- * build into the extension's Pci buffer. On Windows 98 SE and ME the
- * functions below a member are not read: a bus a tunnel brought up after
- * boot is not numbered by PCI.VXD (record 21 section 6.1), and a read of a
- * bus number nobody assigned is not made.
+ * build into the extension's Pci buffer. On Windows 98 SE and ME (task
+ * 42-A.14) a bus a tunnel brought up after boot is not numbered by PCI.VXD
+ * (record 21 section 6.1) and the HAL does not answer for a function
+ * PCI.VXD does not know, so the walk below the members is handed to the
+ * NHI's CONFIGMG worker (cm_cfgwk.c, CmCfgwkPciAsk), which reads through
+ * PCI.VXD's guarded route and enters only buses PCI.VXD or its own
+ * numbering assigned; the request waits for it CM_QP_WK_WAIT_MS at most.
+ * The device reaches the worker through Wk, published by the thread and
+ * withdrawn before the worker stops (CmQueryWorkerGone) under a rundown
+ * count, WkUse, that covers the posting alone; the request block is the
+ * worker's and the asker's, so neither the worker's lifetime nor a late
+ * answer touches the device. Without a worker, or past the bound, the
+ * answer is built here as before, the functions below unread, with the
+ * reason in each such entry (CM_QP_NR_*).
  *
  * IRQL: CmQueryInit in DriverEntry; CmQueryOpen, CmQueryStopping and
  * CmQueryClose in the PnP dispatch at PASSIVE_LEVEL; CmQueryPublish on the
@@ -70,6 +80,11 @@
  */
 
 #include "cm.h"
+
+/* How long a 98 PCI request waits for the worker's walk: a walk of the
+ * largest answer is a few thousand PCI.VXD reads, well inside it; a worker
+ * inside a CONFIGMG call that blocks (a wizard open) answers late. */
+#define CM_QP_WK_WAIT_MS    3000UL
 
 /* Indices in use (bit n: \Device\XhciCm<n>) and the last epoch handed
  * out, under CmQueryGlobalLock. */
@@ -560,6 +575,7 @@ VOID CmQueryClose(PCM_NHI nhi)
     CmQueryStopping(nhi);
     self = (PDEVICE_OBJECT)nhi->QueryDev;
     q = (PCM_QUERY_DEV)self->DeviceExtension;
+    CmQueryWorkerGone(nhi);
     KeAcquireSpinLock(&q->Lock, &irql);
     q->Connected = 0;
     q->Log = NULL;
@@ -624,6 +640,8 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     q->CtrBytes = nhi->QueryCtrBytes;
     q->CtrCut = nhi->QueryCtrCut;
     cmQPorts(nhi, q);
+    /* The 98 worker the PCI answer asks (task 42-A.14), while it runs. */
+    q->Wk = (!cmQNt() && nhi->ReenumOn) ? nhi->Reenum.Wk : NULL;
     /* Once stopping, every answer stays one generation past the thread's
      * own sequence (CmQueryStopping's bump), so it never goes back. */
     if (q->Stopping) {
@@ -640,6 +658,35 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
         nhi->QueryLast[i] = nhi->QueryBuf[i];
     }
     nhi->QueryLastBytes = bytes;
+}
+
+VOID CmQueryWorkerGone(PCM_NHI nhi)
+{
+    PDEVICE_OBJECT self;
+    PCM_QUERY_DEV q;
+    LARGE_INTEGER step;
+    KIRQL irql;
+    ULONG use;
+
+    self = (PDEVICE_OBJECT)nhi->QueryDev;
+    if (self == NULL) {
+        return;
+    }
+    q = (PCM_QUERY_DEV)self->DeviceExtension;
+    /* 1 ms relative, in 100 ns units: -10,000. An asker holds WkUse only
+     * across CmCfgwkPciAsk, a spin lock and an allocation. */
+    step.LowPart = 0xFFFFD8F0UL;
+    step.HighPart = -1;
+    for (;;) {
+        KeAcquireSpinLock(&q->Lock, &irql);
+        q->Wk = NULL;
+        use = q->WkUse;
+        KeReleaseSpinLock(&q->Lock, irql);
+        if (use == 0) {
+            return;
+        }
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &step);
+    }
 }
 
 /* IRP_MJ_DEVICE_CONTROL's CM_Q_IOCTL. */
@@ -814,8 +861,11 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
     ULONG bytes;
     ULONG i;
     ULONG connected;
+    ULONG reason;
     KIRQL irql;
     PUCHAR out;
+    struct _CM_CFGWK *wk;
+    struct _CM_CFGWK_PCI *ask;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     room = stack->Parameters.DeviceIoControl.OutputBufferLength;
@@ -826,6 +876,7 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
     if (room < CM_QP_HDR_BYTES) {
         return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
     }
+    wk = NULL;
     CmZero(&in, sizeof(in));
     /* The gate first: what to read is taken after any request before this
      * one, and the device is checked again after the reads, so an answer
@@ -843,15 +894,37 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
         for (i = 0; i < q->PortCount && i < CM_QP_MAX_PORTS; i++) {
             in.Ports[i] = q->Ports[i];
         }
+        if (!cmQNt() && q->Wk != NULL) {
+            wk = q->Wk;
+            q->WkUse++;
+        }
     }
     KeReleaseSpinLock(&q->Lock, irql);
     rc = CM_Q_ANS_TOO_SMALL;
     info = 0;
     if (connected) {
-        in.ReadBelow = (ULONG)cmQNt();
-        in.Read = cmQpRead;
-        in.Context = q->PciScratch;
-        bytes = CmQpciBuild(q->Pci, CM_QP_MAX_BYTES, &in);
+        bytes = 0;
+        reason = cmQNt() ? CM_QP_NR_SYSTEM : CM_QP_NR_NO_WORKER;
+        if (wk != NULL) {
+            /* 98 SE and ME: the walk below the members on the worker. */
+            ask = CmCfgwkPciAsk(wk, &in);
+            KeAcquireSpinLock(&q->Lock, &irql);
+            q->WkUse--;
+            KeReleaseSpinLock(&q->Lock, irql);
+            if (ask != NULL) {
+                bytes = CmCfgwkPciTake(ask, CM_QP_WK_WAIT_MS, q->Pci,
+                                       &reason);
+            }
+        }
+        if (bytes < CM_QP_HDR_BYTES) {
+            /* NT, or no answer from the worker: built here, the
+             * functions below unread on 98 SE and ME. */
+            in.ReadBelow = (ULONG)cmQNt();
+            in.Reason = reason;
+            in.Read = cmQpRead;
+            in.Context = q->PciScratch;
+            bytes = CmQpciBuild(q->Pci, CM_QP_MAX_BYTES, &in);
+        }
         KeAcquireSpinLock(&q->Lock, &irql);
         connected = q->Connected;
         if (connected && q->Stopping && bytes >= CM_QP_HDR_BYTES) {

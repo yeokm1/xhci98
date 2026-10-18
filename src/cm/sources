@@ -17,7 +17,8 @@
 # the USB4 software connection manager, tbt_u4cm.c (test_u4cm; Phase 40,
 # design record 22); the tunnel ports, tbt_topo.c (test_tbt_topo), and the
 # 9x bus numbering of the bridges below them, tbt_brnum.c (test_tbt_brnum;
-# record 21 section 6.1.1); the
+# record 21 section 6.1.1); the 9x start of a function with no interrupt,
+# cm_noirq.c (test_cm_noirq; design record 28); the
 # re-enumeration's own pure half, cm_ports.c (test_cm_ports), and the
 # query device's answers, cm_query.c and cm_qpci.c (test_cm_query); and the
 # shared log ring ..\xhci_log.c (test\test_log.c), compiled in by path.
@@ -48,6 +49,7 @@ SOURCES=cm_vals.c      \
         tbt_u4cm.c     \
         tbt_topo.c     \
         tbt_brnum.c    \
+        cm_noirq.c     \
         cm_ports.c     \
         cm_nvlink.c    \
         ..\xhci_log.c  \

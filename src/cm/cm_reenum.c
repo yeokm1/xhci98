@@ -1398,7 +1398,8 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
     }
     r->WkActive = cmOwnedMask(nhi);
     r->Wk = CmCfgwkStart(nhi, bdf, r->Members, r->WkActive,
-                         nhi->Values.BridgeNumbering);
+                         nhi->Values.BridgeNumbering,
+                         nhi->Values.NoIrqStart);
     if (r->Wk == NULL) {
         r->Why = CM_NOROUTE_CFGMG_THUNK;
         CmLogNote(nhi, "cm.reenum.no-route", r->Why);
@@ -1879,6 +1880,8 @@ VOID CmReenumStop(PCM_NHI nhi)
     if (r->Wk != NULL) {
         CM_CFGWK_COUNTERS wc;
 
+        /* The query device lets go of the worker first (task 42-A.14). */
+        CmQueryWorkerGone(nhi);
         CmCfgwkStop(r->Wk, &wc);
         r->Wk = NULL;
         r->Removed += wc.Removed;
@@ -1893,6 +1896,19 @@ VOID CmReenumStop(PCM_NHI nhi)
         }
         CmLogNote(nhi, "cm.brnum.9x.numbered", wc.Numbered);
         CmLogNote(nhi, "cm.brnum.9x.refused", wc.NumberRefused);
+        /* Design record 28 section 7's counters, at the stop. */
+        CmLogNote(nhi, "cm.reenum.9x.noirq.candidates", wc.NoIrqCandidates);
+        CmLogNote(nhi, "cm.reenum.9x.noirq.attempts", wc.NoIrqAttempts);
+        CmLogNote(nhi, "cm.reenum.9x.noirq.started", wc.NoIrqStarted);
+        CmLogNote(nhi, "cm.reenum.9x.noirq.unstarted", wc.NoIrqUnstarted);
+        CmLogNote(nhi, "cm.reenum.9x.noirq.leftovers", wc.NoIrqLeftovers);
+        CmLogNote(nhi, "cm.reenum.9x.noirq.refused.left-over",
+                  wc.NoIrqLeftOver);
+        CmLogNote(nhi, "cm.reenum.9x.noirq.gone", wc.NoIrqGone);
+        CmLogNote(nhi, "cm.reenum.9x.noirq.timeouts", wc.NoIrqTimeouts);
+        CmLogNote(nhi, "cm.reenum.9x.noirq.late", wc.NoIrqLate);
+        CmLogNote(nhi, "cm.reenum.9x.noirq.pin0",
+                  (wc.NoIrqPin0Started << 16) | (wc.NoIrqPin0Seen & 0xFFFFUL));
     }
     r->WkOpenSeen = 0;
     r->WkActive = 0;

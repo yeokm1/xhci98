@@ -432,7 +432,8 @@ static const char cmQHex[] = "0123456789ABCDEF";
 static const char *const cmQAddressLabels[] = {
     "cm.live.bar-changed",              /* the BAR as read (cm_nhi.c)   */
     "cm.reenum.9x.gone.superseded",     /* a CONFIGMG devnode handle,   */
-    "cm.reenum.9x.gone.id-changed"      /* a pointer (cm_cfgwk.c)       */
+    "cm.reenum.9x.gone.id-changed",     /* a pointer (cm_cfgwk.c)       */
+    "cm.reenum.9x.noirq.devnode"        /* the same (record 28)         */
 };
 
 ULONG CmQueryLogAddress(const UCHAR *label, ULONG n)

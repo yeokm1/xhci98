@@ -346,6 +346,11 @@ typedef struct _CM_NHI {
     ULONG BrDiag[CM_BRDIAG_WORDS];
     ULONG BrDiagSeq;        /* the last sequence given, across workers    */
     ULONG BrDiagWritten;
+    /* The same for design record 28's XhciCmNoIrqDiag (CM_NIDIAG_WORDS),
+     * under BrDiagLock too. */
+    ULONG NiDiag[CM_NIDIAG_WORDS];
+    ULONG NiDiagSeq;
+    ULONG NiDiagWritten;
     KSPIN_LOCK BrDiagLock;  /* BrDiag and BrDiagSeq; taken inside the
                                worker's own lock, never around a call     */
 
@@ -410,6 +415,13 @@ typedef struct _CM_QUERY_DEV {
     KEVENT PciGate;
     UCHAR Pci[CM_QP_MAX_BYTES];
     UCHAR PciScratch[CM_QP_CFG_BYTES];  /* one prefix read, under PciGate */
+    /* Windows 98 SE and ME (task 42-A.14): the NHI's CONFIGMG worker, which
+     * walks below the members, as the thread last published it, and the
+     * askers inside CmCfgwkPciAsk on it, both under Lock; the thread clears
+     * Wk and waits for WkUse to fall to 0 before it stops the worker
+     * (CmQueryWorkerGone). */
+    struct _CM_CFGWK *Wk;
+    ULONG WkUse;
 } CM_QUERY_DEV, *PCM_QUERY_DEV;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
@@ -606,6 +618,9 @@ VOID CmQueryOpen(PCM_NHI nhi);
 VOID CmQueryStopping(PCM_NHI nhi);
 VOID CmQueryClose(PCM_NHI nhi);
 VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert);
+/* Before the 98 worker is stopped (cm_reenum.c): the query device lets go
+ * of it, every asker already posting done. On the thread, PASSIVE_LEVEL. */
+VOID CmQueryWorkerGone(PCM_NHI nhi);
 NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp);
 
 /* cm_nhi.c: the counter blocks the stop dump writes (the NHI's, the

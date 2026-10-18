@@ -216,6 +216,17 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  */
 #define CM_BRIDGE_NUMBERING_DEFAULT 1UL
 
+/*
+ * XhciCmNoIrqStart, REG_DWORD, Windows 98 SE and ME only (design record 28
+ * section 7, task 42-A.15): 1 starts an NVMe function below a tunnel port
+ * whose interrupt cannot be routed with no interrupt, for a bound Stor98
+ * that polls (record 28 section 4); 0 leaves such a function at its
+ * problem code. Read where XhciCmBridgeNumbering is read; no INF writes
+ * it, absent reads as the default, any other value is refused and the
+ * default stands. Ignored on the NT targets.
+ */
+#define CM_NOIRQ_START_DEFAULT 1UL
+
 typedef struct _CM_VALUES {
     ULONG Value[CM_VAL_COUNT];  /* what the driver runs with                */
     ULONG Raw[CM_VAL_COUNT];    /* what the registry gave, when Found       */
@@ -229,6 +240,10 @@ typedef struct _CM_VALUES {
     ULONG BridgeNumberingFound; /* read as a REG_DWORD                      */
     ULONG BridgeNumberingRaw;   /* ... what it read                         */
     ULONG BridgeNumberingRefused; /* ... out of range: the default stood   */
+    ULONG NoIrqStart;           /* XhciCmNoIrqStart as run with             */
+    ULONG NoIrqStartFound;
+    ULONG NoIrqStartRaw;
+    ULONG NoIrqStartRefused;
 } CM_VALUES, *PCM_VALUES;
 
 /* Every value at its default, nothing found. */
@@ -254,6 +269,9 @@ VOID CmValuesTakeBridge(PCM_VALUES v, const WCHAR *text, ULONG chars);
  * found; 0 and 1 are taken, any other value is refused (the default
  * stands, the refusal recorded). */
 VOID CmValuesTakeBridgeNumbering(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmNoIrqStart, under XhciCmBridgeNumbering's rule. */
+VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* The default and bounds of value `index`, for the INF gate's cross-check
  * and the host suite. Returns 0 for an index out of range. */

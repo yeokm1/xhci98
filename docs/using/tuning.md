@@ -104,6 +104,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciCmLogVerbosity` | The driver's log, on `xhci98.sys`'s `0` to `4` ladder, read by the xHCI98 USB Tree (the driver refuses no larger number; the Tree writes only `0` to `4`) | `0` | `4` | `2` | `2` |
 | `XhciCmLogDebugView` | The log sent to DebugView as well, in every build | `0` | `1` | `0` | `0` |
 | `XhciCmBridgeNumbering` | 98 SE and ME: the set-up of PCI bridges behind a tunnel plugged in after start (see "The Thunderbolt driver: bridges behind a tunnel on 98 SE and ME" below) | `0` | `1` | `1` | not written |
+| `XhciCmNoIrqStart` | 98 SE and ME: an NVMe drive behind a tunnel whose interrupt cannot be routed started with none, for the bundled Stor98 to poll (see below) | `0` | `1` | `1` | not written |
 | `XhciCmTunnelBridge` | A `REG_SZ`, not a `DWORD`: a comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports | - | - | absent (no override) | not written |
 
 The xHCI98 USB Tree (`XHCITR`) shows and sets `XhciLogVerbosity` in every `xhci98.sys` controller's driver key, and the Thunderbolt driver's own level, `XhciCmLogVerbosity` in its controller's driver key, beside it: View > Logging level..., with "Set as administrator..." on Windows 2000 to 7 for a user without administrator rights (the release notes, "The xHCI98 USB Tree"). It writes only `0` to `4`, and offers the restart the new level needs.
@@ -356,6 +357,7 @@ on Windows 98 SE and ME only.
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
+| `XhciCmNoIrqStart` | An NVMe drive behind a Thunderbolt or USB4 tunnel whose interrupt cannot be routed (Device Manager: Code 29, 12, 16 or 27) started with no interrupt, when it is bound to the bundled Stor98 0.4.0.0 or later, which then polls (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | not written |
 | `XhciCmBridgeNumbering` | The set-up (bus numbers, memory windows, interrupt lines) of the PCI bridges a device brings up behind a Thunderbolt tunnel after Windows has started (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | not written |
 
 A device whose PCI Express side has a bridge of its own, such as a USB4
