@@ -2984,6 +2984,16 @@ static void test_s98(void)
           "an NT-only row refused on 98 SE and ME");
     CHECK(inst_s98_check(INST_S98_IDLE, 1, "0010", w, sizeof(w), &why) &&
           strcmp(w, "10") == 0, "a number written canonically");
+    CHECK(inst_s98_check(INST_S98_IDLE, 1, "4294967295", w, sizeof(w),
+                         &why) && strcmp(w, "4294967295") == 0 &&
+          !inst_s98_check(INST_S98_IDLE, 1, "4294967296", w, sizeof(w),
+                          &why) &&
+          !inst_s98_check(INST_S98_IDLE, 1, "9", w, sizeof(w), &why),
+          "idle: 10 and up, to the DWORD's top");
+    CHECK(inst_s98_check(INST_S98_GONE, 1, "600000", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_GONE, 1, "600001", w, sizeof(w), &why) &&
+          !inst_s98_check(INST_S98_GONE, 1, "0", w, sizeof(w), &why),
+          "gone: 1 to 600000");
 
     /* DriverParameter, edited one key at a time. */
     CHECK(inst_s98_param_get("maxtransferkb=128;pollmode=1", "pollmode", w,

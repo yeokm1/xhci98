@@ -141,10 +141,14 @@ static HWND s98Combo[WIZ_S98_ASKED];
 static HWND s98Now[WIZ_S98_ASKED];
 static int s98ComboRow[WIZ_S98_ASKED];
 static int s98ComboCount;
-#define WIZ_S98_UPD     3
+/* One box per drive for the first three; a fourth for every drive after
+ * them, listed in the summary above it. */
+#define WIZ_S98_UPD     4
+#define WIZ_S98_IDS     32
 static HWND s98UnusedBox[WIZ_S98_UPD];
-static char s98UnusedId[WIZ_S98_UPD][200];
 static int s98UnusedCount;
+static char s98UnusedId[WIZ_S98_IDS][200];
+static int s98UnusedIds;
 static char dirChoice[WIZ_PATH];
 static char dirNow[WIZ_PATH];
 
@@ -1472,15 +1476,19 @@ static void s98_page_fill(HWND dlg)
                              8, y + 26, 284, 10,
                              IDC_ROW_BASE + IDC_ROW_STRIDE * n + 2, font);
         s98ComboRow[n] = i;
-        SendMessageA(s98Combo[n], CB_ADDSTRING, 0,
-                     (LPARAM)"(as it is: nothing written)");
+        /* Not set: "not set (the built-in default is ...)" preselected;
+         * set: the value found preselected. Either, left as it is, writes
+         * nothing; the default chosen where none was set is written. */
+        SendMessageA(s98Combo[n], CB_ADDSTRING, 0, (LPARAM)(r.State > 0 ?
+                     "(as it is: nothing written)" : r.NowText));
         sel = 0;
         for (k = 0; k < INST_S98_WORDS_MAX && v->Means[k] != NULL; k++) {
             char val[32];
             s98_item(i, k, text, sizeof(text));
             SendMessageA(s98Combo[n], CB_ADDSTRING, 0, (LPARAM)text);
             s98_item_value(i, k, val, sizeof(val));
-            if (s98WinSet[i] && inst_eq(val, s98WinVal[i])) {
+            if (s98WinSet[i] ? inst_eq(val, s98WinVal[i])
+                             : (r.State > 0 && inst_eq(val, r.Now))) {
                 sel = k + 1;
             }
         }
@@ -1500,13 +1508,16 @@ static void s98_page_leave(HWND dlg)
 
     (void)dlg;
     for (n = 0; n < s98ComboCount; n++) {
+        INST_S98ROW r;
         i = s98ComboRow[n];
+        inst_eng_s98_row(i, &r);
         sel = (int)SendMessageA(s98Combo[n], CB_GETCURSEL, 0, 0);
         if (sel <= 0) {
             s98WinSet[i] = 0;
         } else {
-            s98WinSet[i] = 1;
             s98_item_value(i, sel - 1, s98WinVal[i], sizeof(s98WinVal[i]));
+            /* The value set now, kept: nothing written. */
+            s98WinSet[i] = !(r.State > 0 && inst_eq(s98WinVal[i], r.Now));
         }
     }
 }
@@ -1540,14 +1551,17 @@ static int s98_adv_take(HWND dlg)
     char text[32];
     char canon[32];
     const char *why;
+    INST_S98ROW r;
     int i;
 
     if (s98AdvCur < 0) {
         return 1;
     }
     i = s98AdvRow[s98AdvCur];
+    inst_eng_s98_row(i, &r);
     GetDlgItemTextA(dlg, IDC_A_EDIT, text, sizeof(text));
-    if (text[0] == '\0') {
+    if (text[0] == '\0' || (r.State > 0 && strcmp(text, r.Now) == 0)) {
+        /* Empty, or the value set now: as it is, nothing written. */
         s98AdvSet[s98AdvCur] = 0;
     } else if (!inst_s98_check(i, !is_9x(), text, canon, sizeof(canon),
                                &why)) {
@@ -1597,7 +1611,10 @@ static void s98_adv_show(HWND dlg, int n)
     note[sizeof(note) - 1] = '\0';
     SetDlgItemTextA(dlg, IDC_A_TEXT, note);
     SetDlgItemTextA(dlg, IDC_A_LABEL, "The value:");
-    SetDlgItemTextA(dlg, IDC_A_EDIT, s98AdvSet[n] ? s98AdvVal[n] : "");
+    /* The value set now is shown, preselected (record 26 section 5.6);
+     * left as it is, it writes nothing. */
+    SetDlgItemTextA(dlg, IDC_A_EDIT, s98AdvSet[n] ? s98AdvVal[n] :
+                                     (r.State > 0 ? r.Now : ""));
     ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_SHOW);
     ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_HIDE);
 }
@@ -1651,13 +1668,22 @@ static WIZ_DLGRET CALLBACK s98_adv_proc(HWND dlg, UINT msg, WPARAM wp,
         return TRUE;
     case WM_NOTIFY:
         nm = (NMHDR *)lp;
+        if (nm->idFrom == IDC_LIST && nm->code == LVN_ITEMCHANGING) {
+            /* A value refused keeps its row selected: the change is
+             * vetoed before the selection moves. */
+            NMLISTVIEW *nl = (NMLISTVIEW *)lp;
+            if ((nl->uNewState & LVIS_SELECTED) &&
+                !(nl->uOldState & LVIS_SELECTED) && nl->iItem != s98AdvCur &&
+                !s98_adv_take(dlg)) {
+                SET_RESULT(dlg, TRUE);
+                return TRUE;
+            }
+        }
         if (nm->idFrom == IDC_LIST && nm->code == LVN_ITEMCHANGED) {
             NMLISTVIEW *nl = (NMLISTVIEW *)lp;
             if ((nl->uNewState & LVIS_SELECTED) && nl->iItem >= 0 &&
                 nl->iItem < s98AdvCount && nl->iItem != s98AdvCur) {
-                if (s98_adv_take(dlg)) {
-                    s98_adv_show(dlg, nl->iItem);
-                }
+                s98_adv_show(dlg, nl->iItem);
             }
         }
         break;
@@ -1714,6 +1740,12 @@ static void s98_unused_buttons(void)
     buttons(PSWIZB_BACK | (s98_unused_all() ? PSWIZB_NEXT : 0));
 }
 
+/* The box that speaks for the n-th drive. */
+static int s98_unused_box(int n)
+{
+    return n < WIZ_S98_UPD - 1 ? n : WIZ_S98_UPD - 1;
+}
+
 static void s98_unused_make(HWND dlg)
 {
     HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
@@ -1722,15 +1754,27 @@ static void s98_unused_make(HWND dlg)
     char text[300];
     int n;
     int h;
+    int total;
 
     s98_unused_clear();
+    s98UnusedIds = 0;
     if (!is_9x() || !s98Choice) {
         return;
     }
-    for (n = 0; n < WIZ_S98_UPD &&
-                (desc = inst_eng_s98_update(n, &id)) != NULL; n++) {
-        inst_copy(s98UnusedId[n], id, sizeof(s98UnusedId[n]));
-        _snprintf(text, sizeof(text) - 1, "Nothing is using %s", desc);
+    for (total = 0; total < WIZ_S98_IDS &&
+                    inst_eng_s98_update(total, &id) != NULL; total++) {
+        inst_copy(s98UnusedId[total], id, sizeof(s98UnusedId[total]));
+    }
+    s98UnusedIds = total;
+    for (n = 0; n < total && s98UnusedCount < WIZ_S98_UPD; n++) {
+        desc = inst_eng_s98_update(n, &id);
+        if (s98_unused_box(n) != n) {
+            _snprintf(text, sizeof(text) - 1, "Nothing is using the other %d "
+                      "drives listed above", total - n);
+        } else {
+            _snprintf(text, sizeof(text) - 1, "Nothing is using %s",
+                      desc != NULL ? desc : "this drive");
+        }
         text[sizeof(text) - 1] = '\0';
         s98UnusedBox[n] = make_ctl(dlg, "BUTTON", text, BS_AUTOCHECKBOX |
                                    WS_TABSTOP, 8, 168 - 11 * (n + 1), 284, 10,
@@ -1839,11 +1883,18 @@ static void summary_fill(HWND dlg)
                 tb_add(&t, "- none: each stays as it is.\n");
             }
             if (is_9x() && inst_eng_s98_update(0, &f.Id) != NULL) {
-                tb_add(&t, "\nStor98 is updated on the drives ticked below: "
-                       "nothing may be using them\nwhile it is. Close every "
-                       "program and window that uses their drive letters.\n"
-                       "Afterwards Windows is shut down and started again, "
-                       "not restarted.\n");
+                const char *desc;
+                tb_add(&t, "\nStor98 is updated on these drives once their "
+                       "boxes below are ticked:\nnothing may be using them "
+                       "while it is. Close every program and window that\n"
+                       "uses their drive letters. Afterwards Windows is shut "
+                       "down and started\nagain, not restarted.\n");
+                for (i = 0; (desc = inst_eng_s98_update(i, &f.Id)) != NULL;
+                     i++) {
+                    _snprintf(line, sizeof(line) - 1, "- %s\n", desc);
+                    line[sizeof(line) - 1] = '\0';
+                    tb_add(&t, line);
+                }
             }
         }
         _snprintf(line, sizeof(line) - 1, "\nThe tools folder: %s\n",
@@ -2228,9 +2279,10 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             }
             if (page == P_SUMMARY) {
                 int i;
-                for (i = 0; i < s98UnusedCount; i++) {
+                for (i = 0; i < s98UnusedIds && s98UnusedCount > 0; i++) {
                     inst_eng_s98_unused(s98UnusedId[i],
-                                        SendMessageA(s98UnusedBox[i],
+                                        SendMessageA(s98UnusedBox[
+                                                     s98_unused_box(i)],
                                                      BM_GETCHECK, 0, 0) ==
                                         BST_CHECKED);
                 }

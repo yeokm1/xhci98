@@ -4676,7 +4676,7 @@ const INST_S98_VALUE instS98Values[INST_S98_COUNT] = {
       { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
       "how long held requests wait for proof the drive is gone" },
     { NULL, "idle", INST_S98_NUMBER, 0, "ms",
-      NULL, "1000", 10UL, 999999999UL, 1UL, 0, NULL,
+      NULL, "1000", 10UL, 4294967295UL, 1UL, 0, NULL,
       { NULL, NULL, NULL, NULL }, { NULL, NULL, NULL, NULL },
       "the write-idle time before a flush" }
 };
@@ -4771,19 +4771,21 @@ int inst_s98_check(int i, int nt, const char *text, char *out, size_t cap,
         }
         return 0;
     }
+    /* Decimal digits only, to 4294967295 ("10 and up" has no other top
+     * than the DWORD's). */
+    n = 0;
     for (k = 0; t[k] != '\0'; k++) {
-        if (t[k] < '0' || t[k] > '9') {
+        INST_U32 dgt = (INST_U32)(t[k] - '0');
+        if (t[k] < '0' || t[k] > '9' ||
+            n > (0xFFFFFFFFUL - dgt) / 10UL) {
             if (why != NULL) {
-                *why = "not a decimal number";
+                *why = (t[k] < '0' || t[k] > '9') ? "not a decimal number"
+                                                  : "outside the range "
+                                                    "Stor98's readme gives";
             }
             return 0;
         }
-    }
-    if (!inst_number(t, &n)) {
-        if (why != NULL) {
-            *why = "not a decimal number";
-        }
-        return 0;
+        n = n * 10UL + dgt;
     }
     hi = inst_s98_hi(i, nt);
     if (!(n == 0UL && v->ZeroOk) &&
