@@ -4344,6 +4344,17 @@ static void test_recover(void)
     CHECK(p->RemovalDebt, "recover unplugged: debt");
     CHECK(hostClean(&g_fab, 1), "recover unplugged: host side drained");
     CHECK(!p->DiscoverOwed, "recover unplugged: a disconnected link owes no discovery");
+    CHECK(p->RecCleanup, "recover unplugged: the cleanup gated on the link");
+    /* A router plugged before the first tick: the departed router's
+     * cleanup is dropped and the newcomer discovered as found. */
+    TbtU4RecoverCommit(&g_cm);
+    (void)TbtU4TakeDebt(&g_cm, 1);
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 1);
+    CHECK(!p->RecCleanup && !p->DiscoverOwed,
+          "recover unplugged: cleanup dropped, the link's router discovered");
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "recover unplugged: the newcomer up");
     (void)dev;
 
     /* Departed, the host-side drain not completing (the host router's path

@@ -356,6 +356,10 @@ typedef struct _TBT_U4_PORT {
      * complete (HELD): retried alone, never an ordinary check or teardown
      * against what now holds the link (tbtU4Departed). */
     BOOLEAN RecDeparted;
+    /* RecCleanup: a departed router's lane, TMU or tail cleanup left owed
+     * on a link that read disconnected; the link is read again before any
+     * of it is made (tbtU4RecCleanupGate). */
+    BOOLEAN RecCleanup;
 } TBT_U4_PORT, *PTBT_U4_PORT;
 
 /* A router below depth 1 a predecessor configured (section 7.1). */
@@ -623,6 +627,10 @@ typedef struct _TBT_U4CM {
                                back over the host router's fresh walk: until
                                then a failure restores them whole, so the
                                next snapshot copies no half-built table */
+    BOOLEAN RecForeign;     /* this attempt read a recorded entry (or a
+                               quarantined one) as another path's: the
+                               fabric is not as this driver left it, and
+                               the attempt is refused for the episode      */
     ULONG HwErrors;         /* the core's requests that ended with no answer
                                (the ring not moving or stopped, or no reply
                                at all): a section 9.2 discovery that saw one
