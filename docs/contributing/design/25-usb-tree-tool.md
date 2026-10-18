@@ -290,10 +290,11 @@ branch, marked "(behind <router name>)".
 - **Recording off.** Reading a log writes nothing; the levels are set in
   section 7.5's dialog (revision 13). The node's advice:
   - xhci98, level 0 (the driver does not answer) or 1 (counters only):
-    "To record the log, run SNAPON.BAT from the package's
-    tools\xhcisnap folder, then restart Windows." On 2000 and later the
-    text adds "as an administrator" (on Vista and 7: right-click, Run as
-    administrator).
+    "To record the log, set xhci98's level to 2 in View > Logging level,
+    then restart Windows." On 2000 and later the text adds "(as an
+    administrator, or with Set as administrator...)". Until revision 14
+    (section 15) it named SNAPON.BAT in the package's tools\xhcisnap
+    folder.
   - xhcicm, level below 2: "To record the log, set the DWORD value
     XhciCmLogVerbosity to 2 under HKEY_LOCAL_MACHINE\<the NHI's driver
     key> (as an administrator on 2000 and later), then restart
@@ -1593,11 +1594,15 @@ moved) stays the reference for the route and the files.
 8. **File > Save Snapshot...** picks a folder (`SHBrowseForFolder`),
    runs `/snapshot` there for the first xhci98 controller and shows the
    text, with the folder, in a message box.
-9. **Save Report and `/report <file>`** end with a "Snapshot" part: for
-   each xhci98 controller, the `.DEV` (once: it is the machine's) and the
-   dump's `.TXT`, slots and enumeration regions included. The `.TXT` is
-   withheld at level 4, where it can hold memory addresses, as the
-   "Driver log" node withholds the ring (section 3.5). Save Report, or
+9. **Save Report and `/report <file>`** end with a "Snapshot" part,
+   always with the `.DEV`, once (it is the machine's): from the run for
+   the first xhci98 controller, or, when none is listed, from a run for
+   controller 0, which may take no dump, the `.DEV` being written before
+   any controller is opened and reporting that case. Each xhci98
+   controller's dump `.TXT` follows, whole, slots and enumeration regions
+   included; a dump whose header says level 4, where it can hold memory
+   addresses, or says no level at all is withheld, as the "Driver log"
+   node withholds the ring (section 3.5). Save Report, or
    `/report`, alone is therefore the bug report; the raw `.BIN` and
    `.PSC` come only from `/snapshot` or `/dump`, when the maintainer
    asks for them.

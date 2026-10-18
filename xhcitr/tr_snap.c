@@ -8355,11 +8355,20 @@ typedef DWORD (WINAPI *PFN_CM_ID)(DWORD, char *, ULONG, ULONG);
 typedef DWORD (WINAPI *PFN_CM_STATUS)(ULONG *, ULONG *, DWORD, ULONG);
 typedef DWORD (WINAPI *PFN_CM_PROP)(DWORD, ULONG, ULONG *, void *, ULONG *,
                                     ULONG);
-typedef DWORD (WINAPI *PFN_CM_FIRSTLC)(DWORD *, DWORD, ULONG);
-typedef DWORD (WINAPI *PFN_CM_NEXTRD)(DWORD *, DWORD, ULONG, ULONG *, ULONG);
-typedef DWORD (WINAPI *PFN_CM_RDSIZE)(ULONG *, DWORD, ULONG);
-typedef DWORD (WINAPI *PFN_CM_RDDATA)(DWORD, void *, ULONG, ULONG);
-typedef DWORD (WINAPI *PFN_CM_FREE)(DWORD);
+/* LOG_CONF and RES_DES are DWORD_PTR in cfgmgr32.h: eight bytes in
+ * XHCITR64, which links this file (XHCISNAP was x86 alone). DEVINST stays
+ * a DWORD on both. */
+#ifdef _WIN64
+typedef unsigned __int64 CMX_HANDLE;
+#else
+typedef unsigned long CMX_HANDLE;
+#endif
+typedef DWORD (WINAPI *PFN_CM_FIRSTLC)(CMX_HANDLE *, DWORD, ULONG);
+typedef DWORD (WINAPI *PFN_CM_NEXTRD)(CMX_HANDLE *, CMX_HANDLE, ULONG,
+                                      ULONG *, ULONG);
+typedef DWORD (WINAPI *PFN_CM_RDSIZE)(ULONG *, CMX_HANDLE, ULONG);
+typedef DWORD (WINAPI *PFN_CM_RDDATA)(CMX_HANDLE, void *, ULONG, ULONG);
+typedef DWORD (WINAPI *PFN_CM_FREE)(CMX_HANDLE);
 
 static struct {
     HMODULE Module;
@@ -8903,9 +8912,9 @@ static int res_map(DWORD dn, int haveDn, const char *id)
 static int dev_log_conf(DWORD dn, ULONG which, const char *heading,
                         unsigned long *why)
 {
-    DWORD lc;
-    DWORD cur;
-    DWORD rd;
+    CMX_HANDLE lc;
+    CMX_HANDLE cur;
+    CMX_HANDLE rd;
     ULONG rid;
     ULONG size;
     DWORD rc;

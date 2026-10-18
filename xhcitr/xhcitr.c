@@ -6908,8 +6908,15 @@ static int snap_child(const char *args, const char *dir, char *outPath,
     }
     CloseHandle(out);
     CloseHandle(pi.hThread);
-    if (WaitForSingleObject(pi.hProcess, waitMs) != WAIT_OBJECT_0 ||
-        !GetExitCodeProcess(pi.hProcess, &code)) {
+    if (WaitForSingleObject(pi.hProcess, waitMs) != WAIT_OBJECT_0) {
+        /* Not ended in time: ended here, and waited for, so nothing it
+         * writes can race the caller's reads and removals. */
+        TerminateProcess(pi.hProcess, 2);
+        (void)WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hProcess);
+        return -1;
+    }
+    if (!GetExitCodeProcess(pi.hProcess, &code)) {
         code = (DWORD)-1;
     }
     CloseHandle(pi.hProcess);
@@ -6937,77 +6944,171 @@ static int snap_hcd_number(const UCTRL *c)
     return *q == '\0' ? n : -1;
 }
 
-/* The report's snapshot part: for each xhci98 controller a /snapshot run
- * in a directory of its own under %TEMP%, its .DEV (the first only: it is
- * the machine's) and its dump's .TXT appended, then the files removed. At
- * level 4 the .TXT can hold kernel addresses, so it is withheld, as the
- * Driver log node withholds the ring (section 3.5). */
+/* The level a dump's .TXT says it was taken at: its "verbosity tier"
+ * header line, "read N, APPLIED M", in the file's first 16 KiB, where the
+ * header is written. -1 when no such line is there. */
+static int snap_txt_level(const char *path)
+{
+    static char head[16384];
+    static const char key[] = "verbosity tier     read ";
+    HANDLE f;
+    DWORD got = 0;
+    const char *p;
+    const char *q;
+
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    if (!ReadFile(f, head, sizeof(head) - 1, &got, NULL)) {
+        got = 0;
+    }
+    CloseHandle(f);
+    head[got] = '\0';
+    p = strstr(head, key);
+    if (p == NULL) {
+        return -1;
+    }
+    q = strstr(p, "APPLIED ");
+    if (q == NULL || q - p > 40 || q[8] < '0' || q[8] > '9' ||
+        (q[9] >= '0' && q[9] <= '9')) {
+        return -1;
+    }
+    return q[8] - '0';
+}
+
+/* A whole file appended to the report, in pieces. */
+static int snap_append(HANDLE f, const char *path)
+{
+    static char buf[8192];
+    HANDLE in;
+    DWORD got;
+    DWORD w;
+    int ok = 1;
+
+    in = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                     FILE_ATTRIBUTE_NORMAL, NULL);
+    if (in == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    while (ok && ReadFile(in, buf, sizeof(buf), &got, NULL) && got != 0) {
+        ok = WriteFile(f, buf, got, &w, NULL) && w == got;
+    }
+    CloseHandle(in);
+    return ok && WriteFile(f, "\r\n", 2, &w, NULL);
+}
+
+static int snap_say(HANDLE f, const char *text)
+{
+    DWORD w;
+    DWORD n = (DWORD)strlen(text);
+
+    return WriteFile(f, text, n, &w, NULL) && w == n;
+}
+
+/* A directory of this run's own under %TEMP%, made new. */
+static int snap_temp_dir(char *dir, size_t cap)
+{
+    char tdir[MAX_PATH];
+    DWORD n = GetTempPathA(sizeof(tdir), tdir);
+    int k;
+
+    if (n == 0 || n >= sizeof(tdir)) {
+        return 0;
+    }
+    for (k = 0; k < 16; k++) {
+        tr_sprintf(dir, cap, "%sxtr%lX-%lX-%d", tdir,
+                   (unsigned long)GetCurrentProcessId(),
+                   (unsigned long)GetTickCount(), k);
+        if (CreateDirectoryA(dir, NULL)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The report's snapshot part (section 15): one /snapshot run per xhci98
+ * controller, each in a new directory under %TEMP%, as a child process of
+ * this executable. The .DEV, the machine's device report, comes from the
+ * first run - and with no xhci98 controller listed, from a run for
+ * controller 0 that may take no dump, since the .DEV is written before
+ * any controller is opened and reports exactly that case. Each dump's
+ * .TXT follows, whole, unless its header says level 4 (it can hold kernel
+ * addresses) or says no level at all; then it is withheld, as the Driver
+ * log node withholds the ring (section 3.5). The files are removed after;
+ * the raw .BIN and .PSC never reach the report. */
 static int report_snapshots(HANDLE f)
 {
-    static char part[TR_DETAIL_BYTES];
     static const char *const ext[] = { ".DEV", ".TXT", ".BIN", ".PSC" };
-    char tdir[MAX_PATH];
+    int hcds[TR_MAX_CTRL];
     char dir[MAX_PATH];
     char out[MAX_PATH];
     char file[MAX_PATH + 16];
     char args[64];
-    char head[160];
-    DWORD w;
-    int ok = 1;
-    int any = 0;
+    char line[200];
+    int nh = 0;
+    int ok;
     int devDone = 0;
     int i;
     int k;
 
-    for (i = 0; i < ucCount && ok; i++) {
-        int hcd;
+    for (i = 0; i < ucCount && nh < TR_MAX_CTRL; i++) {
+        int h;
+        if (uc[i].Ours && (h = snap_hcd_number(&uc[i])) >= 0) {
+            hcds[nh++] = h;
+        }
+    }
+    ok = snap_say(f, "Snapshot (the device report and the dumps XHCITR "
+                     "/snapshot writes)\r\n\r\n");
+    for (i = 0; i < (nh == 0 ? 1 : nh) && ok; i++) {
+        int hcd = nh == 0 ? 0 : hcds[i];
         int rc;
-        DWORD n;
+        int level;
 
-        if (!uc[i].Ours || (hcd = snap_hcd_number(&uc[i])) < 0) {
-            continue;
-        }
-        if (!any) {
-            tr_sprintf(head, sizeof(head), "Snapshot (the field report "
-                       "XHCITR /snapshot writes)\n\n");
-            ok = WriteFile(f, head, (DWORD)strlen(head), &w, NULL);
-            any = 1;
-        }
-        n = GetTempPathA(sizeof(tdir), tdir);
-        if (n == 0 || n >= sizeof(tdir)) {
-            break;
-        }
-        tr_sprintf(dir, sizeof(dir), "%sxtr%lX-%d", tdir,
-                   (unsigned long)GetCurrentProcessId(), i);
-        if (!CreateDirectoryA(dir, NULL)) {
-            tr_sprintf(head, sizeof(head), "HCD%d: no snapshot (no "
-                       "temporary directory)\n\n", hcd);
-            ok = WriteFile(f, head, (DWORD)strlen(head), &w, NULL);
+        if (!snap_temp_dir(dir, sizeof(dir))) {
+            tr_sprintf(line, sizeof(line), "HCD%d: no snapshot: no temporary "
+                       "directory could be made.\r\n\r\n", hcd);
+            ok = snap_say(f, line);
             continue;
         }
         tr_sprintf(args, sizeof(args), "/snapshot XHCITR /c %d", hcd);
         rc = snap_child(args, dir, out, 120000);
         DeleteFileA(out);
-        for (k = devDone ? 1 : 0; k < 2 && ok; k++) {
-            tr_sprintf(file, sizeof(file), "%s\\XHCITR%s", dir, ext[k]);
-            if (snap_read_tail(file, part, sizeof(part)) == 0) {
-                tr_sprintf(head, sizeof(head), "HCD%d: no %s (the snapshot "
-                           "answered %d)\n\n", hcd, ext[k], rc);
-                ok = WriteFile(f, head, (DWORD)strlen(head), &w, NULL);
-                continue;
+        if (rc == -1) {
+            tr_sprintf(line, sizeof(line), "HCD%d: the snapshot did not run, "
+                       "or did not end within two minutes.\r\n\r\n", hcd);
+            ok = snap_say(f, line);
+        } else {
+            if (!devDone) {
+                tr_sprintf(file, sizeof(file), "%s\\XHCITR.DEV", dir);
+                if (snap_append(f, file)) {
+                    devDone = 1;
+                } else {
+                    tr_sprintf(line, sizeof(line), "No device report: the "
+                               "snapshot answered %d.\r\n\r\n", rc);
+                    ok = snap_say(f, line);
+                }
             }
-            if (k == 1 && strstr(part, "APPLIED 4") != NULL) {
-                tr_sprintf(head, sizeof(head), "HCD%d: the dump is withheld: "
-                           "at level 4 it can hold memory addresses. Use "
-                           "level 2.\n\n", hcd);
-                ok = WriteFile(f, head, (DWORD)strlen(head), &w, NULL);
-                continue;
+            tr_sprintf(file, sizeof(file), "%s\\XHCITR.TXT", dir);
+            level = snap_txt_level(file);
+            if (GetFileAttributesA(file) == 0xFFFFFFFFUL) {
+                if (nh != 0) {
+                    tr_sprintf(line, sizeof(line), "HCD%d: no dump (the "
+                               "snapshot answered %d; the device report says "
+                               "why).\r\n\r\n", hcd, rc);
+                    ok = ok && snap_say(f, line);
+                }
+            } else if (level < 0 || level >= 4) {
+                tr_sprintf(line, sizeof(line), "HCD%d: the dump is withheld: "
+                           "%s Use level 2.\r\n\r\n", hcd,
+                           level < 0 ? "its level could not be read."
+                                     : "at level 4 it can hold memory "
+                                       "addresses.");
+                ok = ok && snap_say(f, line);
+            } else {
+                ok = ok && snap_append(f, file);
             }
-            if (k == 0) {
-                devDone = 1;
-            }
-            ok = WriteFile(f, part, (DWORD)strlen(part), &w, NULL) &&
-                 WriteFile(f, "\r\n", 2, &w, NULL);
         }
         for (k = 0; k < 4; k++) {
             tr_sprintf(file, sizeof(file), "%s\\XHCITR%s", dir, ext[k]);

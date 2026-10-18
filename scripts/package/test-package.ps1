@@ -3545,7 +3545,7 @@ try {
            Why  = "the upload assembly no longer holds the tree to the report batches' layout its version was published with" },
         @{ Find = 'Assert-ReportBatchContent -Root $destRoot -Batches $reportBatches -What "the staged release ''$destRoot''" -Reference $repo';
            Why  = "a cut no longer holds the batches it staged to the shared checker and the repository's own bytes" },
-        @{ Find = 'Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set ''$uploadRoot''"';
+        @{ Find = 'Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
            Why  = "the upload assembly no longer holds the batches it archives to the shared checker" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
@@ -3741,6 +3741,54 @@ try {
                 $refused = $null
                 try { Assert-ReportBatchContent -Root $t -Batches $reportBatches -What "fixture" -Reference $rbRef } catch { $refused = $_.Exception.Message }
                 Assert-True ($null -ne $refused -and $refused -match "byte for byte") "Assert-ReportBatchContent did not call the '$($c.Name)' fixture a stale copy: $refused"
+            }
+        }
+
+        # **XHCISNAP's retired batches** (task 42-A.4): no spec and no map
+        # entry for the cut or a tree from 3.1.0.0; a tree published from
+        # 2.4.0.0 to 3.0.0.0 is still held to all three, beside XHCISNAP.EXE,
+        # as the published 2.4.0.0 and 3.0.0.0 trees are.
+        Write-Step "a tree published before 3.1.0.0 is held to XHCISNAP's batches"
+        foreach ($v in @("", "3.1.0.0", "3.2.0.0")) {
+            Assert-True (@(Get-ReportBatchSpecs -PublishedVersion $v | Where-Object { $_.Dir -eq "xhcisnap" }).Count -eq 0) "Get-ReportBatchSpecs -PublishedVersion '$v' names XHCISNAP's batches, retired in 3.1.0.0 (task 42-A.4)."
+            Assert-True (-not (Get-ReportBatchesFor -Batches $reportBatches -PublishedVersion $v).ContainsKey("xhcisnap")) "Get-ReportBatchesFor -PublishedVersion '$v' maps XHCISNAP's batches, retired in 3.1.0.0 (task 42-A.4)."
+        }
+        foreach ($v in @("2.4.0.0", "3.0.0.0")) {
+            Assert-True (@(Get-ReportBatchSpecs -PublishedVersion $v | Where-Object { $_.Dir -eq "xhcisnap" }).Count -eq 3) "Get-ReportBatchSpecs -PublishedVersion '$v' no longer holds the tree to SNAPON.BAT, SNAPGET.BAT and SNAPOFF.BAT."
+            $pubTree = Join-Path $repo "releases\$v"
+            $refused = $null
+            try {
+                Assert-ReportBatchLayout -Root $pubTree -Batches $reportBatches -What "releases\$v" -PublishedVersion $v
+                Assert-ReportBatchContent -Root $pubTree -Batches $reportBatches -What "releases\$v" -PublishedVersion $v
+            } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "the published releases\$v no longer passes its own report batches' checks: $refused"
+        }
+        $rbOld = Join-Path $rbRoot "legacy-3000"
+        Copy-Item -LiteralPath $rbCut -Destination $rbOld -Recurse
+        New-Item -ItemType Directory -Force -Path (Join-Path $rbOld "tools\xhcisnap") | Out-Null
+        foreach ($b in @("SNAPON.BAT", "SNAPGET.BAT", "SNAPOFF.BAT")) {
+            Copy-Item -LiteralPath (Join-Path $repo "releases\3.0.0.0\tools\xhcisnap\$b") -Destination (Join-Path $rbOld "tools\xhcisnap\$b")
+        }
+        $rbOldCases = @(
+            @{ Name = "good";       Do = { param($t) };                                                                                                   Says = $null },
+            @{ Name = "missing";    Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPGET.BAT") };                           Says = "SNAPGET\.BAT is missing" },
+            @{ Name = "misplaced";  Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPGET.BAT") -Destination (Join-Path $t "tools\portsw\SNAPGET.BAT") }; Says = "portsw\\SNAPGET\.BAT" },
+            @{ Name = "disable";    Do = { param($t) $p = Join-Path $t "tools\xhcisnap\SNAPGET.BAT"; [System.IO.File]::WriteAllText($p, [System.IO.File]::ReadAllText($p).Replace("XHCISNAP -report %1`r`n", "XHCISNAP -report %1`r`nXHCISNAP -disable`r`n")) }; Says = "SNAPGET\.BAT" },
+            @{ Name = "lf";         Do = { param($t) $p = Join-Path $t "tools\xhcisnap\SNAPGET.BAT"; [System.IO.File]::WriteAllText($p, [System.IO.File]::ReadAllText($p).Replace("`r`n", "`n")) }; Says = "SNAPGET\.BAT" }
+        )
+        foreach ($c in $rbOldCases) {
+            $t = Join-Path $rbRoot ("legacy-3000-" + $c.Name)
+            Copy-Item -LiteralPath $rbOld -Destination $t -Recurse
+            & $c.Do $t
+            $refused = $null
+            try {
+                Assert-ReportBatchLayout -Root $t -Batches $reportBatches -What "fixture" -PublishedVersion "3.0.0.0"
+                Assert-ReportBatchContent -Root $t -Batches $reportBatches -What "fixture" -PublishedVersion "3.0.0.0"
+            } catch { $refused = $_.Exception.Message }
+            if ($null -eq $c.Says) {
+                Assert-True ($null -eq $refused) "a 3.0.0.0 tree with its own XHCISNAP batches was refused: $refused"
+            } else {
+                Assert-True ($null -ne $refused -and $refused -match $c.Says) ("a 3.0.0.0 tree with a '{0}' SNAPGET.BAT: expected a refusal matching '{1}', got: {2}" -f $c.Name, $c.Says, $refused)
             }
         }
     }

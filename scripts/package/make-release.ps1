@@ -995,7 +995,10 @@ function Assert-ReportBatchLayout {
     # no other directory of the tree holds a copy of any of them. A tree
     # without tools\ is a version published before 2.4.0.0 (Assert-ToolsLayout
     # refuses it at the cut and from 2.4.0.0), and none of those has any.
+    # A tree published before 3.1.0.0 is also held to XHCISNAP's retired
+    # batches (package-common.ps1's Get-ReportBatchesFor).
     param([string]$Root, [hashtable]$Batches, [string]$What, [string]$PublishedVersion = "")
+    $Batches = Get-ReportBatchesFor -Batches $Batches -PublishedVersion $PublishedVersion
     $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
     $batchHome = @{}
     foreach ($tool in $Batches.Keys) {
@@ -1049,12 +1052,16 @@ function Assert-ReportBatchContent {
     # The upload assembly passes none: the tree it reads was cut from the
     # sources of its own commit. Run it after Assert-ReportBatchLayout, which
     # reports a missing batch; a tree without tools\ has none to read.
-    param([string]$Root, [hashtable]$Batches, [string]$What, [string]$Reference = "")
+    #
+    # With -PublishedVersion (the upload assembly) a tree published before
+    # 3.1.0.0 is held to XHCISNAP's retired batches too (task 42-A.4).
+    param([string]$Root, [hashtable]$Batches, [string]$What, [string]$Reference = "", [string]$PublishedVersion = "")
+    $Batches = Get-ReportBatchesFor -Batches $Batches -PublishedVersion $PublishedVersion
     $tools = Join-Path (Get-Item -LiteralPath $Root).FullName "tools"
     if (-not (Test-Path -LiteralPath $tools -PathType Container)) { return }
     $latin1 = [System.Text.Encoding]::GetEncoding(28591)
     $faults = @()
-    foreach ($spec in @(Get-ReportBatchSpecs)) {
+    foreach ($spec in @(Get-ReportBatchSpecs -PublishedVersion $PublishedVersion)) {
         $dir = Join-Path $tools $spec.Dir
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
         $pub = $Batches[$spec.Dir][$spec.Name]
@@ -2532,7 +2539,7 @@ $gateOut
     Assert-ReportBatchLayout -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
     # And what they say, before anything is archived: the cut checked them
     # when it staged them, but -UploadSetOnly reads a tree it did not stage.
-    Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'"
+    Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
     # The bundled Stor98 files keep their own DriverVer date and their own
     # file times: they are another project's release, copied unchanged.
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |

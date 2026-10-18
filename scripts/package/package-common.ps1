@@ -566,10 +566,41 @@ function Get-TestSignCertificate {
 # files to attach): the tool line is the last command before pause, reached
 # by `if exist TOOL goto X` with :X just above it, and nothing reads the exit
 # code - the tool prints the outcome. QUALREP.BAT keeps its flag logic.
+#
+# -PublishedVersion (the upload assembly, never the cut): a tree published
+# from 2.4.0.0 to 3.0.0.0 carries XHCISNAP's SNAPON.BAT, SNAPGET.BAT and
+# SNAPOFF.BAT in tools\xhcisnap\, retired in 3.1.0.0 (task 42-A.4), so it is
+# still held to their specs (Test-LegacyReportBatchVersion).
+function Test-LegacyReportBatchVersion {
+    param([string]$PublishedVersion = "")
+    return ($PublishedVersion -ne "" -and [version]$PublishedVersion -lt [version]"3.1.0.0")
+}
+
 function Get-ReportBatchSpecs {
-    return @(
+    param([string]$PublishedVersion = "")
+    $specs = @(
         @{ Name = "QUALREP.BAT"; Dir = "xhciqual"; Win = $false; Tool = "XHCIQUAL"; Args = "--probe-only --no-page --log-stamp"; Names = @("LOG"); Flag = "QUALREP.FLG" }
     )
+    if (Test-LegacyReportBatchVersion -PublishedVersion $PublishedVersion) {
+        $specs += @(
+            @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-on %1";       Names = @(); ArgPass = $true; ToolLast = $true },
+            @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report %1";   Names = @(".DEV", ".TXT"); ArgPass = $true; ToolLast = $true },
+            @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @(); ToolLast = $true }
+        )
+    }
+    return $specs
+}
+
+# The batch map a tree is held to: tool -> source name -> published name,
+# with the retired XHCISNAP batches added for a tree published before
+# 3.1.0.0 (above). Never for the cut, whose -PublishedVersion is empty.
+function Get-ReportBatchesFor {
+    param([hashtable]$Batches, [string]$PublishedVersion = "")
+    if (-not (Test-LegacyReportBatchVersion -PublishedVersion $PublishedVersion)) { return $Batches }
+    $all = @{}
+    foreach ($k in $Batches.Keys) { $all[$k] = $Batches[$k] }
+    $all["xhcisnap"] = @{ "snapon.bat" = "SNAPON.BAT"; "snapget.bat" = "SNAPGET.BAT"; "snapoff.bat" = "SNAPOFF.BAT" }
+    return $all
 }
 
 function Get-ReportBatchFaults {
@@ -690,6 +721,9 @@ function Get-ReportBatchFaults {
         foreach ($g in $gotos) {
             if ($null -ne $entry -and $g[1] -ceq $entry -and $lines[$g[0]] -cnotmatch '^if exist ') { $faults += "line $($g[0] + 1) jumps to the $($Spec.Tool) line other than through 'if exist'" }
         }
+    }
+    if ($Spec.Name -eq "snapget.bat" -and @($runs | Where-Object { $_ -match '-disable|-verbosity +0' }).Count -gt 0) {
+        $faults += "it turns the channel off; SNAPGET.BAT leaves it on and SNAPOFF.BAT turns it off"
     }
     $echoes = (@($lines | Where-Object { $_ -cmatch '^echo ' }) -join "`n")
     if ($Spec.Names.Count -gt 0 -and -not $echoes.ToUpperInvariant().Contains("ATTACH")) { $faults += "no echo line says what to attach" }
