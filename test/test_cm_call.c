@@ -48,6 +48,7 @@ static void test_transitions(void)
 {
     CM_CALL c;
     ULONG op[2];
+    ULONG big[CM_CALL_OP_BYTES / 4];
     ULONG res[4];
     ULONG got;
     ULONG id;
@@ -117,8 +118,10 @@ static void test_transitions(void)
              0, "arguments longer than the slot");
     CHECK_EQ(CmCallSubmit(&c, 7, fakeRun, NULL, NULL, 4, 0), 0,
              "a length with no arguments");
-    CHECK(CmCallSubmit(&c, 7, fakeRun, NULL, op, CM_CALL_OP_BYTES, 0) != 0,
+    memset(big, 0x5A, sizeof(big));
+    CHECK(CmCallSubmit(&c, 7, fakeRun, NULL, big, CM_CALL_OP_BYTES, 0) != 0,
           "exactly the room");
+    CHECK_EQ(c.Op[CM_CALL_OP_BYTES / 4 - 1], 0x5A5A5A5AUL, "all of it stored");
     CHECK(CmCallClaim(&c), "claimed");
     CmCallFinish(&c, CM_CALL_RES_BYTES + 100);
     CHECK_EQ(c.ResBytes, CM_CALL_RES_BYTES, "a result held to its room");
@@ -254,11 +257,101 @@ static void test_client(void)
     CHECK(passes <= 4, "one operation a pass");
 }
 
+/* What a late taker received (cm_call.h, "AFTER THE STOP"). */
+static ULONG lateCalls;
+static ULONG lateId;
+static ULONG lateWord;
+static ULONG lateKind;
+
+static VOID fakeLate(PVOID context, ULONG kind, ULONG id, const VOID *res,
+                     ULONG bytes)
+{
+    (void)context;
+    lateCalls++;
+    lateId = id;
+    lateKind = kind;
+    lateWord = bytes >= 4 ? ((const ULONG *)res)[0] : 0;
+}
+
+/* The worker after the stop, as cm_callwk.c runs it: a detached operation
+ * still taken and run, every result finishing then handed to its taker. */
+static void workerAfterStop(PCM_CALL c)
+{
+    ULONG n;
+
+    if (!CmCallRunsAfterStop(c) || !CmCallClaim(c)) {
+        return;
+    }
+    n = c->Run(NULL, c->Context, c->Op, c->Res);
+    CmCallFinish(c, n);
+    if (c->Late != NULL) {
+        c->Late(c->Context, c->Kind, c->Ran, c->Res, c->ResBytes);
+    }
+    (void)CmCallTake(c, c->Ran, NULL, 0, NULL);
+}
+
+/*
+ * Record 21 section 7.2 part 0: the stop never waits; an operation not yet
+ * taken is withdrawn unless it is detached (an authorised removal), which
+ * the worker still runs; a result that comes after the stop reaches the
+ * operation's late taker, never the thread.
+ */
+static void test_stop(void)
+{
+    CM_CALL c;
+    ULONG op[1];
+    ULONG id;
+    ULONG runs;
+
+    CmCallInit(&c);
+    op[0] = 9;
+    runs = 0;
+    id = CmCallSubmit(&c, 5, fakeRun, &runs, op, sizeof(op), 0);
+    CmCallSetLate(&c, fakeLate);
+    CHECK(CmCallStopSlot(&c), "an ordinary operation not taken: withdrawn");
+    CHECK_EQ(c.State, CM_CALL_IDLE, "idle");
+    CHECK(!CmCallRunsAfterStop(&c), "nothing for the worker after the stop");
+    workerAfterStop(&c);
+    CHECK_EQ(runs, 0, "never run");
+    CHECK_EQ(lateCalls, 0, "no late result");
+
+    /* An authorised removal, detached: run after the stop, its result to
+     * the taker. */
+    id = CmCallSubmit(&c, 6 | CM_CALL_K_DETACH, fakeRun, &runs, op,
+                      sizeof(op), 0);
+    CmCallSetLate(&c, fakeLate);
+    CHECK(!CmCallStopSlot(&c), "a detached operation is not withdrawn");
+    CHECK(CmCallRunsAfterStop(&c), "the worker still takes it");
+    workerAfterStop(&c);
+    CHECK_EQ(runs, 1, "run after the stop");
+    CHECK_EQ(lateCalls, 1, "its result to the late taker");
+    CHECK_EQ(lateId, id, "with its id");
+    CHECK_EQ(lateWord, 10, "and its result");
+    CHECK(lateKind & CM_CALL_K_DETACH, "and its kind");
+    CHECK_EQ(c.State, CM_CALL_IDLE, "the slot let go");
+
+    /* One running when the stop came: it finishes on its own. */
+    id = CmCallSubmit(&c, 5, fakeRun, &runs, op, sizeof(op), 0);
+    CmCallSetLate(&c, fakeLate);
+    CHECK(CmCallClaim(&c), "running");
+    CHECK(!CmCallStopSlot(&c), "a running operation is not withdrawn");
+    CmCallFinish(&c, c.Run(NULL, c.Context, c.Op, c.Res));
+    c.Late(c.Context, c.Kind, c.Ran, c.Res, c.ResBytes);
+    CHECK_EQ(lateCalls, 2, "its late result handed over");
+    CHECK_EQ(lateId, id, "by its id");
+    CHECK_EQ(CmCallTake(&c, id, NULL, 0, NULL), CM_CALL_T_TAKEN, "let go");
+
+    /* A new submission forgets an earlier taker. */
+    (void)CmCallSubmit(&c, 5, fakeRun, NULL, op, sizeof(op), 0);
+    CHECK(c.Late == NULL, "no taker unless set for this operation");
+}
+
 int main(void)
 {
     test_transitions();
     test_deadline();
     test_client();
+    test_stop();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

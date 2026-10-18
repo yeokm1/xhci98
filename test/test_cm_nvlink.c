@@ -573,6 +573,28 @@ static void test_r8b_replug(void)
     (void)CmNvlinkPublishUp(&table, tun, 4, 0, CM_NVLINK_TUNNEL_NONE, &o);
     CHECK_EQ(table.Entry[i].LinkGeneration, 4, "UP: generation 4");
     CHECK_EQ(table.Entry[i].Flags, STOR98LS_IN_USE | STOR98LS_UP, "UP");
+    /* The statement's wait timed out before the old instance polled: the
+     * retirement withdraws it, and that instance gets no evidence from
+     * the retirement itself (no generation change, no DOWN_QUIESCED) - its
+     * own gone deadline (MD-1) stands - and the next tunnel's UP above its
+     * generation is no acknowledgement of anything (R8d). */
+    tableInit();
+    i = CmNvlinkPublishUp(&table, tun, 4, 0, T1, &o);
+    rxFind(&old, &table, 4, 0);
+    CHECK(CmNvlinkSetDown(&table, i, TRUE), "a statement");
+    CHECK_EQ(CmNvlinkAckStep(&table, i, TRUE, 0, CmNvlinkAckBoundMs(TRUE),
+                             CmNvlinkAckBoundMs(TRUE)),
+             CM_NVLINK_AW_TIMEOUT, "its wait timed out, unanswered");
+    CHECK_EQ(CmNvlinkRetire(&table, 4), 1, "retired after the timeout");
+    rxPoll(&old, &table);
+    CHECK_EQ(old.Applied, 0, "the slow instance finds no statement now");
+    CHECK_EQ(table.Entry[i].LinkGeneration, old.Recorded,
+             "nor a larger generation from the retirement");
+    (void)CmNvlinkPublishUp(&table, tun, 4, 0, T2, &o);
+    rxPoll(&old, &table);
+    CHECK_EQ(old.Applied, 0, "the new UP is no statement for it");
+    CHECK(table.Entry[i].AckGeneration != table.Entry[i].LinkGeneration,
+          "and nothing acknowledged");
     /* Five tunnels, each down with a statement in between: five. */
     tableInit();
     for (k = 1; k <= 5; k++) {
@@ -695,6 +717,125 @@ static void test_pending(void)
     CHECK_EQ(CmNvlinkIdleFor(30, TRUE, TRUE), 30, "a shorter period kept");
     CHECK_EQ(CmNvlinkIdleFor(5000, FALSE, FALSE), 5000, "neither: as set");
     CHECK(CM_NVLINK_PEND_MS <= 50, "at least every 50 ms (R10)");
+}
+
+/*
+ * Task 42-A.12: the seam's hold, driven across passes as cm_reenum.c
+ * drives it (cmHeld from an action, CmReenumService's run each pass), two
+ * members, member 0's gate up while member 1's is down. What the seam
+ * calls is recorded per member.
+ */
+typedef struct _SEAM {
+    ULONG Held[2];
+    BOOLEAN Missed[2];
+    ULONG Calls[2];
+    ULONG Vanish[2];
+    ULONG Fresh[2];
+    ULONG Releases[2];
+    ULONG Fails[2];
+} SEAM;
+
+static void seamAction(SEAM *s, ULONG i, BOOLEAN gate, BOOLEAN vanish,
+                       BOOLEAN fresh)
+{
+    if (!CmNvlinkHoldReenum(&s->Held[i], gate, &vanish, &fresh)) {
+        s->Calls[i]++;
+        s->Vanish[i] += vanish ? 1 : 0;
+        s->Fresh[i] += fresh ? 1 : 0;
+    }
+}
+
+static ULONG seamPass(SEAM *s, ULONG i, BOOLEAN gate, BOOLEAN live,
+                      BOOLEAN active)
+{
+    ULONG act;
+    BOOLEAN vanish;
+    BOOLEAN fresh;
+
+    act = CmNvlinkHoldRun(&s->Held[i], gate, live, TRUE, active, TRUE,
+                          &s->Missed[i], &vanish, &fresh);
+    if (act & CM_HELD_DO_RELEASE) {
+        s->Releases[i]++;
+        s->Fails[i] += (act & CM_HELD_DO_FAIL) ? 1 : 0;
+    }
+    if (act & CM_HELD_DO_REENUM) {
+        s->Calls[i]++;
+        s->Vanish[i] += vanish ? 1 : 0;
+        s->Fresh[i] += fresh ? 1 : 0;
+    }
+    return act;
+}
+
+static void test_hold(void)
+{
+    SEAM s;
+    ULONG pass;
+
+    memset(&s, 0, sizeof(s));
+    /* A tunnel down on member 0 (statement pending) and a tunnel up on
+     * member 1 in the same batch: member 1 is exposed and called at once. */
+    seamAction(&s, 0, TRUE, TRUE, FALSE);
+    seamAction(&s, 1, FALSE, FALSE, TRUE);
+    CHECK_EQ(s.Calls[1], 1, "member 1's up: called now, not after member 0");
+    CHECK_EQ(s.Calls[0], 0, "member 0's down: held");
+    CHECK(s.Held[0] & CM_HELD_REENUM, "held");
+    /* A re-plug of member 0 inside its wait: collapsed into the hold. */
+    seamAction(&s, 0, TRUE, FALSE, TRUE);
+    CHECK_EQ(s.Held[0], CM_HELD_REENUM | CM_HELD_VANISH | CM_HELD_FRESH,
+             "one held call, removing vanished children and fresh");
+    /* Passes while the gate is up: nothing runs; member 1 meanwhile. */
+    for (pass = 0; pass < 5; pass++) {
+        CHECK_EQ(seamPass(&s, 0, TRUE, TRUE, TRUE), 0, "gate up: kept");
+        seamAction(&s, 1, FALSE, TRUE, FALSE);
+    }
+    CHECK_EQ(s.Calls[0], 0, "member 0 still held");
+    CHECK_EQ(s.Calls[1], 6, "member 1 called on every action");
+    /* The host interface lost as the gate falls: still kept. */
+    CHECK_EQ(seamPass(&s, 0, FALSE, FALSE, TRUE), 0, "lost: kept");
+    CHECK(s.Held[0] != 0, "nothing lost");
+    /* Back: run once, with both asks. */
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), CM_HELD_DO_REENUM, "run");
+    CHECK_EQ(s.Calls[0], 1, "once");
+    CHECK(s.Vanish[0] == 1 && s.Fresh[0] == 1, "removing and fresh");
+    CHECK_EQ(s.Held[0], 0, "nothing held");
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), 0, "and never twice");
+
+    /* Held, then an action finds the gate down before the pass: the held
+     * work is folded into that one call. */
+    seamAction(&s, 0, TRUE, TRUE, FALSE);
+    seamAction(&s, 0, FALSE, FALSE, TRUE);
+    CHECK_EQ(s.Calls[0], 2, "one call");
+    CHECK_EQ(s.Vanish[0], 2, "carrying the held removal");
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), 0, "nothing left to run");
+
+    /* An owed skipped change and a held one: one dispatch pays both. */
+    seamAction(&s, 0, TRUE, FALSE, FALSE);
+    s.Missed[0] = TRUE;
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), CM_HELD_DO_REENUM, "run");
+    CHECK(!s.Missed[0], "the owed change paid by the same call");
+    CHECK(s.Vanish[0] == 3 && s.Fresh[0] == 3,
+          "as the owed call makes it: fresh, removing vanished children");
+    CHECK_EQ(s.Calls[0], 3, "one call for both");
+
+    /* Held, and the member no longer active when its gate falls: owed. */
+    seamAction(&s, 0, TRUE, TRUE, TRUE);
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, FALSE), CM_HELD_DO_OWE, "owed");
+    CHECK(s.Missed[0], "as a skipped change");
+    CHECK_EQ(s.Calls[0], 3, "no call made");
+
+    /* NT: a resume's release held behind the gate, released once, on the
+     * failure path when asked; another member's released at once. */
+    memset(&s, 0, sizeof(s));
+    s.Held[0] = CM_HELD_RELEASE | CM_HELD_FAIL;
+    CHECK_EQ(seamPass(&s, 0, TRUE, TRUE, TRUE), 0, "gate up: held");
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE),
+             CM_HELD_DO_RELEASE | CM_HELD_DO_FAIL, "released, failure path");
+    CHECK_EQ(s.Releases[0], 1, "once");
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), 0, "not again");
+    s.Held[1] = CM_HELD_RELEASE | CM_HELD_REENUM;
+    CHECK_EQ(seamPass(&s, 1, FALSE, TRUE, TRUE),
+             CM_HELD_DO_RELEASE | CM_HELD_DO_REENUM,
+             "release before the re-enumeration, in one pass");
 }
 /*
  * Task 42-A.6 over two members (the U.11 leg of runs/run-41.md: an NVMe
@@ -1035,6 +1176,7 @@ int main(void)
     test_fresh();
     test_r8b_replug();
     test_pending();
+    test_hold();
     test_two_members();
     test_bridge_tunnel();
     test_record();

@@ -82,6 +82,26 @@
 typedef ULONG (*CM_CALL_RUN)(PVOID route, PVOID context, const VOID *op,
                              VOID *res);
 
+/*
+ * AFTER THE STOP (record 21 section 7.2 part 0, "Who owns a transaction").
+ * The NHI's stop never waits for a call. An operation submitted and not yet
+ * taken is withdrawn by the stop, unless its kind carries CM_CALL_K_DETACH:
+ * then the worker still takes and runs it after the stop (a removal its
+ * transaction was already authorised to make). An operation that finishes
+ * after the stop - a detached one, or one that was running when the stop
+ * came - hands its result to the operation's `late` callback (CmCallSetLate,
+ * on the worker, PASSIVE_LEVEL, no lock held) instead of to the thread, so
+ * a transaction's record (an accepted query's CONFIGRET, a removal's
+ * success: the member blocker) keeps what a later start must know; with no
+ * callback the result is dropped with the block. A client that uses
+ * either keeps the operation's context valid until its callback returns:
+ * image-static or never-freed state, never the NHI's extension.
+ */
+#define CM_CALL_K_DETACH    0x80000000UL
+
+typedef VOID (*CM_CALL_LATE)(PVOID context, ULONG kind, ULONG id,
+                             const VOID *res, ULONG bytes);
+
 typedef struct _CM_CALL {
     ULONG State;            /* CM_CALL_*: the handoff word               */
     ULONG Id;               /* the operation submitted: the thread's     */
@@ -90,6 +110,7 @@ typedef struct _CM_CALL {
     ULONG Kind;             /* the client's operation kind (the log)     */
     ULONG SubmittedAt;      /* the thread's clock at the submission, ms  */
     CM_CALL_RUN Run;
+    CM_CALL_LATE Late;      /* the result's taker after the stop, or NULL */
     PVOID Context;
     ULONG OpBytes;
     ULONG ResBytes;
@@ -107,6 +128,17 @@ VOID CmCallInit(PCM_CALL c);
  * SUBMITTED. Returns the id, or 0 (not idle, no executor, too long). */
 ULONG CmCallSubmit(PCM_CALL c, ULONG kind, CM_CALL_RUN run, PVOID context,
                    const VOID *op, ULONG bytes, ULONG nowMs);
+
+/* The thread, right after CmCallSubmit and under the same lock: the
+ * operation's taker after a stop (NULL: none). */
+VOID CmCallSetLate(PCM_CALL c, CM_CALL_LATE late);
+
+/* The stop, on one slot: an operation submitted and not taken is
+ * withdrawn unless its kind carries CM_CALL_K_DETACH (TRUE when one was
+ * withdrawn). CmCallRunsAfterStop: whether the worker still has an
+ * operation to take after the stop (a detached one submitted). */
+BOOLEAN CmCallStopSlot(PCM_CALL c);
+BOOLEAN CmCallRunsAfterStop(const CM_CALL *c);
 
 /* The worker: SUBMITTED -> RUNNING, TRUE once per operation; the result
  * room zeroed. */
@@ -153,8 +185,8 @@ struct _CM_CALLWK *CmCallwkStart(struct _CM_NHI *nhi, ULONG members);
  * stamped with the thread's clock `nowMs`; 0 when the member's worker is
  * not idle, is leaving, or does not exist. <= DISPATCH_LEVEL. */
 ULONG CmCallwkSubmit(struct _CM_CALLWK *b, ULONG member, ULONG kind,
-                     CM_CALL_RUN run, PVOID context, const VOID *op,
-                     ULONG bytes, ULONG nowMs);
+                     CM_CALL_RUN run, CM_CALL_LATE late, PVOID context,
+                     const VOID *op, ULONG bytes, ULONG nowMs);
 
 /* The thread: CmCallTake on member `member`'s slot; CM_CALL_T_NONE for no
  * such member. <= DISPATCH_LEVEL. */
@@ -174,9 +206,8 @@ VOID CmCallwkService(struct _CM_NHI *nhi, struct _CM_CALLWK *b);
  * nothing is waited for (a worker inside a call that is waiting on this
  * very removal would deadlock it, record 21 section 7.2 part 0), and the
  * last of the stop and the workers to let go frees the block and closes
- * the routes. An operation submitted and not yet taken is withdrawn; one
- * running finishes on its own and its result is dropped with the block.
- * PASSIVE_LEVEL. */
+ * the routes. Operations are withdrawn, run on and handed over as "AFTER
+ * THE STOP" above says. PASSIVE_LEVEL. */
 VOID CmCallwkStop(struct _CM_CALLWK *b);
 
 /* A system thread at `routine` with `context`, its handle closed at once

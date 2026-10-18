@@ -1190,7 +1190,9 @@ VOID CmNvlinkStep(PCM_NHI nhi)
     if (cmNvTable == NULL) {
         return;
     }
-    u = cmNvU4Of(nhi, TRUE);
+    /* Not a slot of its own: a step after the NHI's stop (a sleep of
+     * its teardown) must not claim one back. */
+    u = cmNvU4Of(nhi, FALSE);
     if (u != NULL) {
         if (u->Stepping) {
             return;

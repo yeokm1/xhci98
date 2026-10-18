@@ -2358,9 +2358,14 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   no `DOWN_QUIESCED`), which Stor98 ignores, and its gone deadline (MD-1)
   stands; a function still answering keeps its `UP`.
 - **The acknowledgement before the removal.** Before the removal call of a
-  tunnel down or a RESYNC, the thread waits until every entry this domain
-  marked reads `AckGeneration` = `LinkGeneration`, or the bound from the
-  mark: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
+  tunnel down or a RESYNC for a member, every entry this domain marked
+  behind that member reads `AckGeneration` = `LinkGeneration`, or the bound
+  from the mark has passed. Since task 42-A.12 that is a pending state per
+  entry, stepped on the thread's passes and at every servicing point of a
+  wait inside one (the sleeps of the core's and the seam's waits), and a
+  gate per member that holds that member's removal, exposure and resume
+  release alone (part 3 of "The 9x half" below); until then the thread
+  itself waited for every entry of the domain. The bound: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
   test build; the header gives no number), and 3 s on Windows 98 SE and
   ME, inside interface 3's R12 S4 bounds: at most Stor98's 9x gone
   deadline (`STOR98LS9X_GONE_MS`, 5 s) and not below
@@ -2369,8 +2374,7 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   Stor98 that has not answered by then is a benign timeout (G3 run C:
   nothing was held, and its next request applied the statement), and no
   idle indication shortens or skips the wait - the acknowledgement is the
-  only signal. Orchestrator decision of 2026-10-15, owner to confirm. The thread services the ICM between
-  reads. On NT it does not wait while no driver
+  only signal. Orchestrator decision of 2026-10-15, owner to confirm. On NT nothing waits while no driver
   has ever asked for the table (no Stor98 is loaded, so none can answer);
   on 9x it does not wait where the proof and locator were not published,
   nor while no Stor98 has read the proof. Each read checks the bound

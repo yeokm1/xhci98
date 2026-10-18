@@ -51,6 +51,7 @@ ULONG CmCallSubmit(PCM_CALL c, ULONG kind, CM_CALL_RUN run, PVOID context,
     }
     c->OpBytes = bytes;
     c->Run = run;
+    c->Late = NULL;
     c->Context = context;
     c->Kind = kind;
     c->SubmittedAt = nowMs;
@@ -60,6 +61,26 @@ ULONG CmCallSubmit(PCM_CALL c, ULONG kind, CM_CALL_RUN run, PVOID context,
     /* The word last: a worker that sees SUBMITTED sees the rest. */
     *(volatile ULONG *)&c->State = CM_CALL_SUBMITTED;
     return c->Id;
+}
+
+VOID CmCallSetLate(PCM_CALL c, CM_CALL_LATE late)
+{
+    c->Late = late;
+}
+
+BOOLEAN CmCallStopSlot(PCM_CALL c)
+{
+    if (c->State != CM_CALL_SUBMITTED || (c->Kind & CM_CALL_K_DETACH) != 0) {
+        return FALSE;
+    }
+    *(volatile ULONG *)&c->State = CM_CALL_IDLE;
+    return TRUE;
+}
+
+BOOLEAN CmCallRunsAfterStop(const CM_CALL *c)
+{
+    return (BOOLEAN)(c->State == CM_CALL_SUBMITTED &&
+                     (c->Kind & CM_CALL_K_DETACH) != 0);
 }
 
 BOOLEAN CmCallClaim(PCM_CALL c)

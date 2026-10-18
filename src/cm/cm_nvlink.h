@@ -488,6 +488,49 @@ BOOLEAN CmNvlinkWaitHeld(const CM_NV_SHADOW *shadow, PVOID owner,
 /* Any wait pending, of any domain (the 50 ms cadence, R10). */
 BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow);
 
+/*
+ * THE SEAM'S HOLD (task 42-A.12; record 21 section 7.2 part 3). A member
+ * whose gate is up has its work held in CM_REENUM_PORT.Held (cm_reenum.c)
+ * and run by the first pass that finds the gate down; another member's
+ * gate never holds it. The decisions are pure so that the host vectors
+ * drive them across passes.
+ */
+#define CM_HELD_REENUM      0x01UL  /* its exposure and re-enumeration     */
+#define CM_HELD_VANISH      0x02UL  /* ... removing vanished children     */
+#define CM_HELD_FRESH       0x04UL  /* ... a fresh exposure               */
+#define CM_HELD_RELEASE     0x08UL  /* NT: its held D0 requests' release  */
+#define CM_HELD_FAIL        0x10UL  /* ... on the failure path            */
+
+/* CmNvlinkHoldRun's answer, bits. */
+#define CM_HELD_DO_RELEASE  0x01UL  /* release its held D0 requests       */
+#define CM_HELD_DO_FAIL     0x02UL  /* ... on the failure path            */
+#define CM_HELD_DO_REENUM   0x04UL  /* expose and call, *vanish, *fresh    */
+#define CM_HELD_DO_OWE      0x08UL  /* not active: owed (Missed) instead  */
+
+/*
+ * An action's re-enumeration of a member (cmReenumAll): `gateUp` - held,
+ * collapsed into *held with what was held before (a removal of vanished
+ * children or a fresh exposure asked by either is kept), TRUE returned;
+ * down - any re-enumeration held before folded into *vanish and *fresh and
+ * taken out of *held, FALSE returned (the caller makes the call).
+ */
+BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN *vanish,
+                           BOOLEAN *fresh);
+
+/*
+ * A pass's decision for a member's held work: nothing while its gate is
+ * up or the host interface is lost (`live` FALSE: no bridge is read and
+ * nothing posted until the transport is back); otherwise *held emptied and
+ * the work returned - the release first, then the re-enumeration when
+ * `reenumOn` (XhciCmReenum not 0) and the member is `active`, owed instead
+ * (CM_HELD_DO_OWE) when it is only `exclusive`. A member that also owes a
+ * skipped change (*missed) is paid by the same call: *vanish and *fresh
+ * set and *missed cleared, so one dispatch pays both.
+ */
+ULONG CmNvlinkHoldRun(PULONG held, BOOLEAN gateUp, BOOLEAN live,
+                      BOOLEAN reenumOn, BOOLEAN active, BOOLEAN exclusive,
+                      BOOLEAN *missed, BOOLEAN *vanish, BOOLEAN *fresh);
+
 /* The idle poll period from XhciCmPollIdleMs as read: held to at most
  * CM_NVLINK_PEND_MS while `pending`, else to CM_NVLINK_IDLE_MS while `up`
  * (an entry reads UP). */

@@ -318,9 +318,16 @@ static VOID cmSleep(PVOID context, ULONG milliseconds)
 {
     LARGE_INTEGER due;
 
-    UNREFERENCED_PARAMETER(context);
     cmRelativeMs(&due, milliseconds);
     (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    /* Every sleeping wait of the core and the seam - the ICM client's
+     * command waits, the USB4 core's transport and teardown waits, the
+     * seam's polls - is a servicing point of the stor98 acknowledgement
+     * waits (task 42-A.12; record 21 section 7.2 part 0): one bounded,
+     * non-reentrant step after each sleep, so no wait inside a pass keeps
+     * another member's acknowledgement unread for longer than one sleep
+     * (TBT_WAIT_SLEEP_MS, CM_NVLINK_POLL_MS). */
+    CmNvlinkStep((PCM_NHI)context);
 }
 
 static ULONG cmNowMs(PVOID context)
@@ -577,7 +584,10 @@ static BOOLEAN cmPolling(PCM_NHI nhi)
 
 BOOLEAN CmThrInertNext(PCM_NHI nhi)
 {
-    return (BOOLEAN)(!cmPolling(nhi) && CmLiveWaitMs(&nhi->Live) == 0);
+    /* The wait the thread enters next (cmThread): a timed one while a
+     * stor98 acknowledgement wait is pending, so not inert then. */
+    return (BOOLEAN)(!cmPolling(nhi) && CmLiveWaitMs(&nhi->Live) == 0 &&
+                     !CmNvlinkPending());
 }
 
 /*

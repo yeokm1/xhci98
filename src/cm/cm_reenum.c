@@ -1126,9 +1126,10 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask);
 
 /* Member i's exposure and its route's call: the stor98 UP first
  * (cm_nvlink.h, obligation 1), then the invalidation or the worker's
- * post. Only for a member whose stor98 gate is down (cmHeld). */
+ * post (with a marking window when `mark`). Only for a member whose
+ * stor98 gate is down (cmHeld). */
 static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
-                        BOOLEAN fresh, ULONG tunnel)
+                        BOOLEAN fresh, ULONG tunnel, BOOLEAN mark)
 {
     PCM_REENUM r;
 
@@ -1143,7 +1144,7 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
         }
     } else if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
         /* Posted: the worker makes the call, and retries it itself. */
-        cmWkPost(nhi, 1UL << i, removeVanished ? 1UL << i : 0, FALSE);
+        cmWkPost(nhi, 1UL << i, removeVanished ? 1UL << i : 0, mark);
         r->Calls++;
     }
 }
@@ -1163,29 +1164,20 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
                       BOOLEAN *fresh, ULONG tunnel)
 {
     PCM_REENUM r;
-    ULONG held;
+    ULONG before;
+    BOOLEAN up;
 
     r = &nhi->Reenum;
-    held = r->Port[i].Held;
-    if (CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
+    before = r->Port[i].Held;
+    up = CmNvlinkHeld(nhi, r->Port[i].Bdf);
+    if (up) {
         (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, *fresh, tunnel);
-        if ((held & CM_HELD_REENUM) == 0) {
+        if ((before & CM_HELD_REENUM) == 0) {
             r->Holds++;
             CmLogNote(nhi, "cm.reenum.held", r->Port[i].Bdf);
         }
-        r->Port[i].Held = held | CM_HELD_REENUM |
-                          (*removeVanished ? CM_HELD_VANISH : 0) |
-                          (*fresh ? CM_HELD_FRESH : 0);
-        return TRUE;
     }
-    if (held & CM_HELD_REENUM) {
-        *removeVanished = (BOOLEAN)(*removeVanished ||
-                                    (held & CM_HELD_VANISH) != 0);
-        *fresh = (BOOLEAN)(*fresh || (held & CM_HELD_FRESH) != 0);
-        r->Port[i].Held = held & ~(CM_HELD_REENUM | CM_HELD_VANISH |
-                                   CM_HELD_FRESH);
-    }
-    return FALSE;
+    return CmNvlinkHoldReenum(&r->Port[i].Held, up, removeVanished, fresh);
 }
 
 /* Every active member re-enumerated by the domain's route. `action` is the
@@ -1228,7 +1220,7 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
         /* A member whose stor98 acknowledgement is pending waits alone;
          * every other member is exposed and called now (task 42-A.12). */
         if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel)) {
-            cmReenumOne(nhi, i, vanish, exposeFresh, tunnel);
+            cmReenumOne(nhi, i, vanish, exposeFresh, tunnel, FALSE);
         }
     }
 }
@@ -1679,7 +1671,12 @@ VOID CmReenumService(PCM_NHI nhi)
     ULONG mask;
     ULONG taken;
     ULONG held;
+    ULONG act;
     ULONG i;
+    BOOLEAN missed;
+    BOOLEAN vanish;
+    BOOLEAN exposeFresh;
+    BOOLEAN mark;
 
     r = &nhi->Reenum;
     /* The stor98 acknowledgement waits, stepped once per pass whatever
@@ -1778,30 +1775,48 @@ VOID CmReenumService(PCM_NHI nhi)
      * CONFIGMG route (CmReenumAction's rule: no request posted then). */
     for (i = 0; i < r->Members; i++) {
         held = r->Port[i].Held;
-        if (held == 0 || CmNvlinkHeld(nhi, r->Port[i].Bdf) ||
-            (r->LossDrain && r->Route == CM_ROUTE_CONFIGMG)) {
+        if (held == 0) {
             continue;
         }
-        r->Port[i].Held = 0;
+        /* Kept while the host interface is lost, whatever the route: the
+         * exposure reads the bridge and a post would undo the loss's own
+         * reconciliation (record 21 section 5.5); run once it is back. */
+        missed = (BOOLEAN)(r->Port[i].Missed != 0);
+        act = CmNvlinkHoldRun(&r->Port[i].Held,
+                              CmNvlinkHeld(nhi, r->Port[i].Bdf),
+                              (BOOLEAN)(CmLiveTransport(&nhi->Live) &&
+                                        !r->LossDrain),
+                              (BOOLEAN)(r->Reenum != 0),
+                              (BOOLEAN)((cmFlags(nhi, i) & CM_PORT_ACTIVE) !=
+                                        0),
+                              (BOOLEAN)((cmFlags(nhi, i) &
+                                         CM_PORT_EXCLUSIVE) != 0),
+                              &missed, &vanish, &exposeFresh);
+        if (r->Port[i].Held == held) {
+            continue;
+        }
         CmLogNote(nhi, "cm.reenum.held.run",
-                  ((held & 0xFFUL) << 16) | (r->Port[i].Bdf & 0xFFFFUL));
-        if (held & CM_HELD_RELEASE) {
-            cmReleaseHeld(nhi, (BOOLEAN)((held & CM_HELD_FAIL) != 0),
+                  ((held & 0xFFUL) << 24) | ((act & 0xFFUL) << 16) |
+                      (r->Port[i].Bdf & 0xFFFFUL));
+        if (act & CM_HELD_DO_RELEASE) {
+            cmReleaseHeld(nhi, (BOOLEAN)((act & CM_HELD_DO_FAIL) != 0),
                           1UL << i);
         }
-        if ((held & CM_HELD_REENUM) == 0 || r->Reenum == 0) {
-            continue;
-        }
-        if ((cmFlags(nhi, i) & CM_PORT_ACTIVE) == 0) {
-            /* Not active any more: owed as any other skipped change. */
-            if (cmFlags(nhi, i) & CM_PORT_EXCLUSIVE) {
-                r->Port[i].Missed = 1;
+        if (act & CM_HELD_DO_REENUM) {
+            /* An owed skipped change paid by this call too: its marking
+             * window with it, as the owed call itself would open. */
+            mark = (BOOLEAN)(r->Port[i].Missed && !missed &&
+                             r->SafeEject != 0);
+            if (r->Port[i].Missed && !missed) {
+                r->Port[i].MissedAt = cmNow(nhi);
+                CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
             }
-            continue;
+            r->Port[i].Missed = missed ? 1UL : 0UL;
+            cmReenumOne(nhi, i, vanish, exposeFresh, CM_NVLINK_TUNNEL_NONE,
+                        mark);
+        } else if (act & CM_HELD_DO_OWE) {
+            r->Port[i].Missed = 1;
         }
-        cmReenumOne(nhi, i, (BOOLEAN)((held & CM_HELD_VANISH) != 0),
-                    (BOOLEAN)((held & CM_HELD_FRESH) != 0),
-                    CM_NVLINK_TUNNEL_NONE);
     }
     /* A change skipped while a member was not active, now that it is;
      * the debt stays until a call is actually made. */

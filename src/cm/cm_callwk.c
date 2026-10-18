@@ -23,7 +23,10 @@
  * the CONFIGMG worker's rule, cm_cfgwk.c), so its code outlives the stop.
  * What a detached transaction still owes (the removal an accepted query
  * authorised, the member blocker of record 21 section 7.2 part 0) is its
- * client's state, kept where the client keeps it.
+ * client's state, kept where the client keeps it: an operation of kind
+ * CM_CALL_K_DETACH is still run after the stop, and a result that comes
+ * after it goes to the operation's late taker (cm_call.h, "AFTER THE
+ * STOP").
  *
  * WHAT RUNS HERE TODAY. Each worker's opening of its route, read back by
  * the thread once (CmCallwkService). The clients that hand operations to
@@ -103,13 +106,14 @@ static VOID NTAPI cmCwThread(PVOID context)
     PCM_CALLWK b;
     KIRQL irql;
     BOOLEAN claimed;
+    BOOLEAN after;
     ULONG n;
 
     m = (CM_CALLWK_M *)context;
     b = m->Block;
     for (;;) {
         KeAcquireSpinLock(&b->Lock, &irql);
-        if (b->Exit) {
+        if (b->Exit && !CmCallRunsAfterStop(&m->Call)) {
             KeReleaseSpinLock(&b->Lock, irql);
             break;
         }
@@ -128,7 +132,20 @@ static VOID NTAPI cmCwThread(PVOID context)
                         m->Call.Res);
         KeAcquireSpinLock(&b->Lock, &irql);
         CmCallFinish(&m->Call, n);
+        after = (BOOLEAN)(b->Exit != 0);
         KeReleaseSpinLock(&b->Lock, irql);
+        if (after) {
+            /* Finished after the stop: no thread takes it now; the
+             * operation's own taker keeps what its transaction needs
+             * (cm_call.h, "AFTER THE STOP"), then the slot is let go. */
+            if (m->Call.Late != NULL) {
+                m->Call.Late(m->Call.Context, m->Call.Kind, m->Call.Ran,
+                             m->Call.Res, m->Call.ResBytes);
+            }
+            KeAcquireSpinLock(&b->Lock, &irql);
+            (VOID)CmCallTake(&m->Call, m->Call.Ran, NULL, 0, NULL);
+            KeReleaseSpinLock(&b->Lock, irql);
+        }
     }
     cmCwRelease(b);
     (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
@@ -182,7 +199,7 @@ PCM_CALLWK CmCallwkStart(struct _CM_NHI *nhi, ULONG members)
         live++;
         /* The worker's first operation: its own route's opening. */
         m->OpenId = CmCallwkSubmit(b, i, CM_CW_OPEN_KIND, cmCwOpen, NULL,
-                                   NULL, 0,
+                                   NULL, NULL, 0,
                                    nhi->Host.NowMs(nhi->Host.Context));
     }
     CmLogNote(nhi, "cm.callwk.started", (b->Members << 8) | live);
@@ -194,8 +211,8 @@ PCM_CALLWK CmCallwkStart(struct _CM_NHI *nhi, ULONG members)
 }
 
 ULONG CmCallwkSubmit(PCM_CALLWK b, ULONG member, ULONG kind,
-                     CM_CALL_RUN run, PVOID context, const VOID *op,
-                     ULONG bytes, ULONG nowMs)
+                     CM_CALL_RUN run, CM_CALL_LATE late, PVOID context,
+                     const VOID *op, ULONG bytes, ULONG nowMs)
 {
     CM_CALLWK_M *m;
     KIRQL irql;
@@ -210,6 +227,7 @@ ULONG CmCallwkSubmit(PCM_CALLWK b, ULONG member, ULONG kind,
     if (!b->Exit) {
         id = CmCallSubmit(&m->Call, kind, run, context, op, bytes, nowMs);
         if (id != 0) {
+            CmCallSetLate(&m->Call, late);
             (VOID)KeSetEvent(&m->Wake, IO_NO_INCREMENT, FALSE);
         }
     }
@@ -285,19 +303,37 @@ VOID CmCallwkStop(PCM_CALLWK b)
 {
     KIRQL irql;
     ULONG i;
+    ULONG done;
 
     if (b == NULL) {
         return;
     }
+    done = 0;
     KeAcquireSpinLock(&b->Lock, &irql);
     b->Exit = 1;
     for (i = 0; i < b->Members; i++) {
-        (VOID)CmCallWithdraw(&b->M[i].Call, b->M[i].Call.Id);
+        (VOID)CmCallStopSlot(&b->M[i].Call);
+        if (b->M[i].Call.State == CM_CALL_DONE && b->M[i].Call.Late != NULL) {
+            /* Finished, not taken by the thread before its stop: handed
+             * to its taker here, as one finishing after the stop is. */
+            done |= 1UL << i;
+        }
         if (b->M[i].Live) {
             (VOID)KeSetEvent(&b->M[i].Wake, IO_NO_INCREMENT, FALSE);
         }
     }
     KeReleaseSpinLock(&b->Lock, irql);
+    for (i = 0; i < b->Members; i++) {
+        if (done & (1UL << i)) {
+            /* A DONE slot is the thread's alone: no worker writes it. */
+            b->M[i].Call.Late(b->M[i].Call.Context, b->M[i].Call.Kind,
+                              b->M[i].Call.Ran, b->M[i].Call.Res,
+                              b->M[i].Call.ResBytes);
+            KeAcquireSpinLock(&b->Lock, &irql);
+            (VOID)CmCallTake(&b->M[i].Call, b->M[i].Call.Ran, NULL, 0, NULL);
+            KeReleaseSpinLock(&b->Lock, irql);
+        }
+    }
     /* The domain's reference; a worker still inside a call keeps the
      * block until it returns. */
     cmCwRelease(b);

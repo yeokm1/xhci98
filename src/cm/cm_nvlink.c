@@ -382,6 +382,62 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow)
     return FALSE;
 }
 
+BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN *vanish,
+                           BOOLEAN *fresh)
+{
+    if (gateUp) {
+        *held = *held | CM_HELD_REENUM | (*vanish ? CM_HELD_VANISH : 0) |
+                (*fresh ? CM_HELD_FRESH : 0);
+        return TRUE;
+    }
+    if (*held & CM_HELD_REENUM) {
+        *vanish = (BOOLEAN)(*vanish || (*held & CM_HELD_VANISH) != 0);
+        *fresh = (BOOLEAN)(*fresh || (*held & CM_HELD_FRESH) != 0);
+        *held = *held & ~(CM_HELD_REENUM | CM_HELD_VANISH | CM_HELD_FRESH);
+    }
+    return FALSE;
+}
+
+ULONG CmNvlinkHoldRun(PULONG held, BOOLEAN gateUp, BOOLEAN live,
+                      BOOLEAN reenumOn, BOOLEAN active, BOOLEAN exclusive,
+                      BOOLEAN *missed, BOOLEAN *vanish, BOOLEAN *fresh)
+{
+    ULONG h;
+    ULONG act;
+
+    h = *held;
+    *vanish = FALSE;
+    *fresh = FALSE;
+    if (h == 0 || gateUp || !live) {
+        return 0;
+    }
+    *held = 0;
+    act = 0;
+    if (h & CM_HELD_RELEASE) {
+        act |= CM_HELD_DO_RELEASE | ((h & CM_HELD_FAIL) ? CM_HELD_DO_FAIL : 0);
+    }
+    if ((h & CM_HELD_REENUM) == 0 || !reenumOn) {
+        return act;
+    }
+    if (!active) {
+        if (exclusive) {
+            *missed = TRUE;
+            act |= CM_HELD_DO_OWE;
+        }
+        return act;
+    }
+    *vanish = (BOOLEAN)((h & CM_HELD_VANISH) != 0);
+    *fresh = (BOOLEAN)((h & CM_HELD_FRESH) != 0);
+    if (*missed) {
+        /* The skipped change's own call is a fresh exposure removing the
+         * vanished children (CmReenumService): paid here, once. */
+        *vanish = TRUE;
+        *fresh = TRUE;
+        *missed = FALSE;
+    }
+    return act | CM_HELD_DO_REENUM;
+}
+
 ULONG CmNvlinkIdleFor(ULONG configured, BOOLEAN up, BOOLEAN pending)
 {
     if (pending && configured > CM_NVLINK_PEND_MS) {

@@ -190,15 +190,6 @@ typedef VOID (*CM_REENUM_EJECT)(PVOID context, ULONG port);
                                        INF did not match its id): no
                                        re-enumeration, no safe eject      */
 
-/* CM_REENUM_PORT.Held (task 42-A.12, record 21 section 7.2 part 3): the
- * member's work held behind its stor98 gate - an acknowledgement pending
- * behind it - and run by the first pass of CmReenumService that finds the
- * gate down; another member's gate never holds it. */
-#define CM_HELD_REENUM      0x01UL  /* its exposure and re-enumeration     */
-#define CM_HELD_VANISH      0x02UL  /* ... removing vanished children     */
-#define CM_HELD_FRESH       0x04UL  /* ... a fresh exposure               */
-#define CM_HELD_RELEASE     0x08UL  /* NT: its held D0 requests' release  */
-#define CM_HELD_FAIL        0x10UL  /* ... on the failure path            */
 
 /* One member of the set, the per-member state of record 21 section 6.3.
  * Flags is written under the registration list's lock; the rest by the
@@ -215,7 +206,8 @@ typedef struct _CM_REENUM_PORT {
     ULONG AskedSerial;      /* NT: the filter publication a baseline was
                                last asked of                              */
     ULONG MissedAt;         /* NowMs of the last retry of Missed          */
-    ULONG Held;             /* CM_HELD_*: work held behind its stor98 gate */
+    ULONG Held;             /* CM_HELD_* (cm_nvlink.h): work held behind
+                               its stor98 gate (task 42-A.12)            */
     ULONG Missed;           /* a tunnel change came while the member was
                                exclusive but not active, or its call could
                                not be made: re-enumerated once it is      */
