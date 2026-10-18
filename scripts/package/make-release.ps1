@@ -3826,7 +3826,9 @@ cuts without the service on a host that cannot build it.
             Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
             @(Get-Item -LiteralPath $versionHeader) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")) +
-            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.c")))
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_status.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.h")))
         foreach ($name in $markExes) {
             $markTime = (Get-Item -LiteralPath (Join-Path $MarkToolDir $name)).LastWriteTimeUtc
             $markNewer = @($markSources | Where-Object { $_.LastWriteTimeUtc -gt $markTime })

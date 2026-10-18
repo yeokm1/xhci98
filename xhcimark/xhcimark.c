@@ -82,7 +82,8 @@
 
 #define MK_MAX_NODES        2048
 #define MK_MAX_NHIS         16
-#define MK_MAX_TRIED        128
+#define MK_MAX_TRIED        2048    /* every entry of every answer, and more */
+#define MK_MAX_RECORDS      65536
 
 /* The configuration manager's numbers (WDK 7.1 cfgmgr32.h and cfg.h, the
  * same in the Windows 2000 DDK's). */
@@ -200,7 +201,6 @@ typedef struct _MK_TRIED {
     int Restarted;          /* the restart was made (once per serial)     */
     int Outcome;            /* its outcome was logged                     */
     int Confirmed;          /* the eject confirmation was written         */
-    int WriteFailed;
     int Gated;              /* a restart gate's refusal was logged        */
 } MK_TRIED;
 
@@ -917,6 +917,33 @@ static int mk_filters_remove(DWORD dn)
 /* Per entry                                                                */
 /* ======================================================================== */
 
+/* Whether an attempt's serial is still reported by its domain's answer
+ * this poll; an attempt is never forgotten while it is (decision M3, once
+ * per serial). */
+static int mk_tried_live(const MK_TRIED *t)
+{
+    int i;
+    INST_U32 j;
+
+    for (i = 0; i < nhiCount; i++) {
+        const MK_NHI *h = &nhis[i];
+        if (!h->Answered || h->M.EpochLo != t->EpochLo ||
+            h->M.EpochHi != t->EpochHi) {
+            continue;
+        }
+        for (j = 0; j < h->M.Count; j++) {
+            if (h->M.E[j].Serial == t->Serial &&
+                (h->M.E[j].Flags & MK_EF_REPORTED) != 0) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The attempt state of a serial, made when `make`; NULL when the table is
+ * full of still-reported serials (the caller then acts on nothing this
+ * poll rather than forget an earlier attempt). */
 static MK_TRIED *mk_tried(const MK_MARKS *m, INST_U32 serial, int make)
 {
     int i;
@@ -931,8 +958,17 @@ static MK_TRIED *mk_tried(const MK_MARKS *m, INST_U32 serial, int make)
         return NULL;
     }
     if (triedCount >= MK_MAX_TRIED) {
-        memmove(&tried[0], &tried[1], sizeof(tried[0]) * (MK_MAX_TRIED - 1));
-        triedCount = MK_MAX_TRIED - 1;
+        for (i = 0; i < triedCount; i++) {
+            if (!mk_tried_live(&tried[i])) {
+                break;
+            }
+        }
+        if (i == triedCount) {
+            return NULL;
+        }
+        memmove(&tried[i], &tried[i + 1],
+                sizeof(tried[0]) * (size_t)(triedCount - i - 1));
+        triedCount--;
     }
     memset(&tried[triedCount], 0, sizeof(tried[0]));
     tried[triedCount].Serial = serial;
@@ -981,15 +1017,69 @@ static int mk_check_entry(const MK_NHI *h, const MK_ENTRY *e,
     return has ? MK_W_PRESENT : MK_W_OK;
 }
 
+/* A unit's last failed write or replay, so both keep one attempt a
+ * minute (section 7.4, "The write"); an entry is kept while its record is
+ * outstanding and given back once a write succeeds. */
+#define MK_MAX_FAILED 256
+static struct {
+    char Id[INST_ID_CHARS];
+    DWORD At;
+} failed[MK_MAX_FAILED];
+
+static int mk_write_due(const char *id)
+{
+    int i;
+
+    for (i = 0; i < MK_MAX_FAILED; i++) {
+        if (failed[i].Id[0] != '\0' && inst_eq(failed[i].Id, id)) {
+            return GetTickCount() - failed[i].At >= MK_RETRY_MS;
+        }
+    }
+    return 1;
+}
+
+static void mk_write_failed(const char *id)
+{
+    int i;
+    int oldest = 0;
+
+    for (i = 0; i < MK_MAX_FAILED; i++) {
+        if (failed[i].Id[0] != '\0' && inst_eq(failed[i].Id, id)) {
+            failed[i].At = GetTickCount();
+            return;
+        }
+    }
+    for (i = 0; i < MK_MAX_FAILED; i++) {
+        if (failed[i].Id[0] == '\0') {
+            oldest = i;
+            break;
+        }
+        if (GetTickCount() - failed[i].At > GetTickCount() - failed[oldest].At) {
+            oldest = i;
+        }
+    }
+    inst_copy(failed[oldest].Id, id, sizeof(failed[oldest].Id));
+    failed[oldest].At = GetTickCount();
+}
+
+static void mk_write_done(const char *id)
+{
+    int i;
+
+    for (i = 0; i < MK_MAX_FAILED; i++) {
+        if (failed[i].Id[0] != '\0' && inst_eq(failed[i].Id, id)) {
+            failed[i].Id[0] = '\0';
+        }
+    }
+}
+
 /* The record first, the value, then the record completed (decision M12). */
 static void mk_write(const MK_NHI *h, const MK_ENTRY *e, int unit)
 {
     HANDLE m;
-    MK_TRIED *t;
     int ok;
 
-    t = mk_tried(&h->M, e->Serial, 1);
-    if (t->WriteFailed && GetTickCount() - t->At < MK_RETRY_MS) {
+    if (!mk_write_due(nodes[unit].Id)) {
         return;
     }
     m = mk_lock(MK_WRITE_MUTEX, 5000);
@@ -1003,13 +1093,12 @@ static void mk_write(const MK_NHI *h, const MK_ENTRY *e, int unit)
     if (ok) {
         (void)mk_rec_set(nodes[unit].Id, e->Member, h->M.EpochHi,
                          h->M.EpochLo, MK_REC_WRITTEN);
-        t->WriteFailed = 0;
+        mk_write_done(nodes[unit].Id);
         mk_log("mark written: %s (member %04lX, unit %02lX:%02lX.%lX, serial %lu)",
                nodes[unit].Id, e->Member, e->Bus, e->Address >> 16,
                e->Address & 0xFFFFUL, e->Serial);
     } else {
-        t->WriteFailed = 1;
-        t->At = GetTickCount();
+        mk_write_failed(nodes[unit].Id);
         mk_log("mark write failed, retried within a minute: %s (error %lu)",
                nodes[unit].Id, GetLastError());
     }
@@ -1104,7 +1193,7 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
     const char *why = NULL;
 
     t = mk_tried(&h->M, e->Serial, 1);
-    if (t->Restarted || paramRestart == 0) {
+    if (t == NULL || t->Restarted || paramRestart == 0) {
         return;
     }
     em = mk_lock(MK_EJECT_MUTEX, 1000);
@@ -1207,7 +1296,7 @@ static void mk_confirm(const MK_NHI *h, const MK_ENTRY *e, int unit)
         return;
     }
     t = mk_tried(&h->M, e->Serial, 1);
-    if (h->Driver[0] == '\0' ||
+    if (t == NULL || h->Driver[0] == '\0' ||
         (t->Confirmed && GetTickCount() - t->At < MK_CONFIRM_AGAIN_MS)) {
         return;
     }
@@ -1282,6 +1371,9 @@ static void mk_entries(const int *prot)
                 t = mk_tried(&h->M, e->Serial, 0);
                 if (w != MK_W_NOT_LOCATED && (t == NULL || !t->Outcome)) {
                     t = mk_tried(&h->M, e->Serial, 1);
+                    if (t == NULL) {
+                        continue;
+                    }
                     t->Outcome = 1;
                     mk_log("notice not acted on: member %04lX unit %02lX "
                            "serial %lu: %s", e->Member, e->Bus, e->Serial,
@@ -1304,42 +1396,6 @@ static void mk_entries(const int *prot)
             }
         }
     }
-}
-
-/* A replayed record's last failure, so a replay keeps the write's one
- * attempt a minute (section 7.4, "The write"). */
-#define MK_MAX_REPLAY 32
-static struct {
-    char Id[INST_ID_CHARS];
-    DWORD At;
-} replay[MK_MAX_REPLAY];
-static int replayNext;
-
-static int mk_replay_due(const char *id)
-{
-    int i;
-
-    for (i = 0; i < MK_MAX_REPLAY; i++) {
-        if (replay[i].Id[0] != '\0' && inst_eq(replay[i].Id, id)) {
-            return GetTickCount() - replay[i].At >= MK_RETRY_MS;
-        }
-    }
-    return 1;
-}
-
-static void mk_replay_failed(const char *id)
-{
-    int i;
-
-    for (i = 0; i < MK_MAX_REPLAY; i++) {
-        if (replay[i].Id[0] != '\0' && inst_eq(replay[i].Id, id)) {
-            replay[i].At = GetTickCount();
-            return;
-        }
-    }
-    inst_copy(replay[replayNext].Id, id, sizeof(replay[replayNext].Id));
-    replay[replayNext].At = GetTickCount();
-    replayNext = (replayNext + 1) % MK_MAX_REPLAY;
 }
 
 /* The domain whose answer lists location `bdf` as a member, or NULL. */
@@ -1388,6 +1444,7 @@ static void mk_judge(const char *id, const char *text)
     int listed = 0;
     int incomplete = 0;
     int safeOff = 0;
+    int memberActive = 0;
     int verdict;
     MK_NHI *owner = NULL;
     HANDLE m;
@@ -1425,12 +1482,15 @@ static void mk_judge(const char *id, const char *text)
             return;
         }
         parent = nodes[node].Parent;
-        if (parent >= 0 && nodes[parent].HasLoc) {
-            pbdf = (nodes[parent].Bus << 8) |
-                   (((nodes[parent].Address >> 16) & 0x1FUL) << 3) |
-                   (nodes[parent].Address & 7UL);
-            owner = mk_owner(pbdf);
+        if (!nodes[node].HasLoc || parent < 0 || !nodes[parent].HasLoc) {
+            /* A location that cannot be read is no proof the unit is
+             * outside every domain. */
+            return;
         }
+        pbdf = (nodes[parent].Bus << 8) |
+               (((nodes[parent].Address >> 16) & 0x1FUL) << 3) |
+               (nodes[parent].Address & 7UL);
+        owner = mk_owner(pbdf);
     } else {
         owner = mk_owner(member);
     }
@@ -1444,8 +1504,10 @@ static void mk_judge(const char *id, const char *text)
     if (owner != NULL && owner->Verifiable) {
         incomplete = (owner->M.Flags & MK_F_INCOMPLETE) != 0;
         safeOff = (owner->M.Flags & MK_F_SAFE_OFF) != 0;
+        memberActive = mk_member_active(&owner->Q,
+                                        presence == MK_P_PRESENT ? pbdf : member);
         for (j = 0; j < owner->M.Count && presence == MK_P_PRESENT &&
-                    mk_member_active(&owner->Q, pbdf);
+                    memberActive;
              j++) {
             const MK_ENTRY *e = &owner->M.E[j];
             if ((e->Flags & MK_EF_REPORTED) && e->Member == pbdf &&
@@ -1457,19 +1519,21 @@ static void mk_judge(const char *id, const char *text)
     }
     verdict = mk_reconcile(presence, owner != NULL,
                            owner != NULL && owner->Verifiable, anyUnverif,
-                           anyVerif, listed, incomplete, safeOff);
+                           anyVerif, memberActive, listed, incomplete,
+                           safeOff);
     if (verdict == MK_R_LEAVE) {
         return;
     }
     if (verdict == MK_R_KEEP) {
-        if (state == MK_REC_WRITING && mk_replay_due(id)) {
+        if (state == MK_REC_WRITING && mk_write_due(id)) {
             m = mk_lock(MK_WRITE_MUTEX, 5000);
             if (m != NULL) {
                 if (mk_filters_add(dn)) {
                     (void)mk_rec_set(id, member, hi, lo, MK_REC_WRITTEN);
+                    mk_write_done(id);
                     mk_log("record replayed: %s", id);
                 } else {
-                    mk_replay_failed(id);
+                    mk_write_failed(id);
                     mk_log("record replay failed, retried within a minute: %s",
                            id);
                 }
@@ -1498,6 +1562,8 @@ static void mk_judge(const char *id, const char *text)
     mk_unlock(m);
 }
 
+/* Every record, read whole before any is judged (a judgement deletes
+ * values and so moves the enumeration's indices), and judged once a poll. */
 static void mk_reconcile_all(void)
 {
     HKEY k;
@@ -1507,6 +1573,7 @@ static void mk_reconcile_all(void)
     DWORD nn;
     DWORD tn;
     DWORD type;
+    DWORD values = 0;
     char (*ids)[INST_ID_CHARS + 8];
     char (*texts)[96];
     int count = 0;
@@ -1516,15 +1583,27 @@ static void mk_reconcile_all(void)
         ERROR_SUCCESS) {
         return;
     }
-    ids = malloc(256 * sizeof(*ids));
-    texts = malloc(256 * sizeof(*texts));
+    if (RegQueryInfoKeyA(k, NULL, NULL, NULL, NULL, NULL, NULL, &values,
+                         NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+        RegCloseKey(k);
+        return;
+    }
+    if (values > MK_MAX_RECORDS) {
+        values = MK_MAX_RECORDS;
+    }
+    if (values == 0) {
+        RegCloseKey(k);
+        return;
+    }
+    ids = malloc(values * sizeof(*ids));
+    texts = malloc(values * sizeof(*texts));
     if (ids == NULL || texts == NULL) {
         free(ids);
         free(texts);
         RegCloseKey(k);
         return;
     }
-    for (i = 0; count < 256; i++) {
+    for (i = 0; (DWORD)count < values; i++) {
         nn = sizeof(name) - 1;
         tn = sizeof(text) - 1;
         if (RegEnumValueA(k, i, name, &nn, NULL, &type, (LPBYTE)text, &tn) !=

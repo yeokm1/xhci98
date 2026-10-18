@@ -429,8 +429,9 @@ every system `INSTALL /devices` shows what is connected and
   `3.1.0.0` the Thunderbolt component installs a small service,
   `xhcimark` (`tools\xhcimark\`, run by Windows, never by hand), which
   writes the filter into the device's own driver list (its `LowerFilters`
-  value) within a second of the device appearing and takes it out again
-  within a second of the device leaving, so the first plug, a disable and
+  value) within a poll of the device appearing (about a second; ten
+  seconds while the driver is not answering) and takes it out again within
+  a poll of the device leaving, so the first plug, a disable and
   enable and a driver update keep the device listed. When Windows rebuilt
   a first plug's drivers before the mark was written, the service
   restarts that one device once, the way Device Manager applies a
@@ -477,7 +478,7 @@ tunnel alone; the tunnel goes when the device is unplugged. Under the USB4
 connection manager on Windows 2000 to 7 the stop also takes the PCI
 Express tunnel down (the USB3 tunnel stays) - from `3.1.0.0` only once
 the stop is confirmed: on XP, Vista and 7 by the `xhcimark` service,
-which sees Windows hold the device for removal, within a second; on
+which sees Windows hold the device for removal, within a poll; on
 2000, whose applet leaves no such sign, only by an administrator's
 `INSTALL /eject` (or the USB Tree run as one). Without the confirmation
 the tunnel stays up until the unplug, and the tools say the driver has
@@ -3570,6 +3571,11 @@ node under it, and each Thunderbolt or USB4 controller a "Driver log
 whether the driver is recording, its counters, and the log, oldest record
 first. Save Report (and `XHCITR /report <file>`) writes both logs and the
 counters into the report, as plain text with no internal addresses in it.
+With a Thunderbolt or USB4 report on Windows 2000 to 7, also send the
+safe-removal mark service's log (from `3.1.0.0`),
+`%SystemRoot%\System32\LogFiles\xhci98\XHCIMARK.LOG`: one line for each
+mark it wrote or removed, each check that stopped it, and each restart it
+made.
 
 The tool reads `xhci98.sys` through a query request of the driver's own,
 as it reads `xhcicm.sys`, with no `SNAPON.BAT` needed; an `xhci98.sys`

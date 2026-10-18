@@ -2998,6 +2998,10 @@ try {
            Why  = "a cut no longer holds the mark service's version to the shared macro (task 42-A.5)" },
         @{ Find = '$markNewer = @($markSources | Where-Object { $_.LastWriteTimeUtc -gt $markTime })';
            Why  = "a cut no longer refuses a mark service older than its sources (task 42-A.5)" },
+        @{ Find = '@(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_status.h")) +';
+           Why  = "a cut no longer holds the mark service to the status record's layout it parses (task 42-A.5)" },
+        @{ Find = '@(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.h")))';
+           Why  = "a cut no longer holds the mark service to the shared pure half's header it compiles (task 42-A.5)" },
         @{ Find = '$cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")';
            Why  = "a cut no longer stages XHCICLN.EXE and XHCICL64.EXE into tools\xhcicln\ (task 38.8)" },
         @{ Find = '$cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")';

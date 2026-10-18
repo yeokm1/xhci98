@@ -125,9 +125,12 @@ int mk_restart_wanted(const MK_ENTRY *e, int valuePresent);
  *   ownerVerif  that domain is verifiable
  *   anyUnverif  some NHI bound to xhcicm is not verifiable
  *   anyVerif    at least one is verifiable
+ *   memberActive  the owning member is an active member of its domain
  *   listed      the owning domain lists a reported unit at the devnode's
- *               location behind an active member
- *   incomplete  the owning domain answered incomplete
+ *               location behind that member
+ *   incomplete  the owning domain answered incomplete: an omission there
+ *               proves no departure, but an inactive member or safe eject
+ *               off still removes
  *   safeOff     its safe eject is off
  * With no owner known, nothing is decided unless every NHI is verifiable
  * and one is. */
@@ -138,8 +141,8 @@ int mk_restart_wanted(const MK_ENTRY *e, int valuePresent);
 #define MK_P_PRESENT        1
 #define MK_P_UNKNOWN        2
 int mk_reconcile(int presence, int ownerKnown, int ownerVerif,
-                 int anyUnverif, int anyVerif, int listed, int incomplete,
-                 int safeOff);
+                 int anyUnverif, int anyVerif, int memberActive, int listed,
+                 int incomplete, int safeOff);
 
 /* ---- the multi-string ----------------------------------------------------- */
 

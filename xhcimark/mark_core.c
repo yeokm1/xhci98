@@ -196,8 +196,8 @@ int mk_restart_wanted(const MK_ENTRY *e, int valuePresent)
 }
 
 int mk_reconcile(int presence, int ownerKnown, int ownerVerif,
-                 int anyUnverif, int anyVerif, int listed, int incomplete,
-                 int safeOff)
+                 int anyUnverif, int anyVerif, int memberActive, int listed,
+                 int incomplete, int safeOff)
 {
     if (presence != MK_P_ABSENT && presence != MK_P_PRESENT) {
         return MK_R_LEAVE;
@@ -208,8 +208,11 @@ int mk_reconcile(int presence, int ownerKnown, int ownerVerif,
     if (presence == MK_P_ABSENT) {
         return MK_R_REMOVE;
     }
+    if (ownerKnown && (safeOff || !memberActive)) {
+        return MK_R_REMOVE;
+    }
     if (listed) {
-        return safeOff ? MK_R_REMOVE : MK_R_KEEP;
+        return MK_R_KEEP;
     }
     if (incomplete) {
         return MK_R_LEAVE;
@@ -450,28 +453,32 @@ int mk_selftest(void (*report)(int ok, const char *what))
     e.Flags |= MK_EF_SAFE_OFF;
     mk_check(!mk_restart_wanted(&e, 1), "safe eject off: none");
 
-    mk_check(mk_reconcile(MK_P_ABSENT, 1, 1, 0, 1, 0, 0, 0) == MK_R_REMOVE,
+    mk_check(mk_reconcile(MK_P_ABSENT, 1, 1, 0, 1, 1, 0, 0, 0) == MK_R_REMOVE,
              "absent, its domain verifiable: removed");
-    mk_check(mk_reconcile(MK_P_ABSENT, 1, 0, 1, 0, 0, 0, 0) == MK_R_LEAVE,
+    mk_check(mk_reconcile(MK_P_ABSENT, 1, 0, 1, 0, 1, 0, 0, 0) == MK_R_LEAVE,
              "absent, its domain not verifiable (the NHI stopped): left alone");
-    mk_check(mk_reconcile(MK_P_ABSENT, 0, 0, 0, 1, 0, 0, 0) == MK_R_REMOVE,
+    mk_check(mk_reconcile(MK_P_ABSENT, 0, 0, 0, 1, 0, 0, 0, 0) == MK_R_REMOVE,
              "absent, no owner listed, every NHI verifiable: removed");
-    mk_check(mk_reconcile(MK_P_ABSENT, 0, 0, 1, 1, 0, 0, 0) == MK_R_LEAVE,
+    mk_check(mk_reconcile(MK_P_ABSENT, 0, 0, 1, 1, 0, 0, 0, 0) == MK_R_LEAVE,
              "absent, no owner listed, an NHI not verifiable: left alone");
-    mk_check(mk_reconcile(MK_P_ABSENT, 0, 0, 0, 0, 0, 0, 0) == MK_R_LEAVE,
+    mk_check(mk_reconcile(MK_P_ABSENT, 0, 0, 0, 0, 0, 0, 0, 0) == MK_R_LEAVE,
              "absent with no NHI at all (the driver not running): left alone");
-    mk_check(mk_reconcile(MK_P_UNKNOWN, 1, 1, 0, 1, 0, 0, 0) == MK_R_LEAVE,
+    mk_check(mk_reconcile(MK_P_UNKNOWN, 1, 1, 0, 1, 1, 0, 0, 0) == MK_R_LEAVE,
              "a lookup that failed is never an absence");
-    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 0, 1, 1, 0, 0) == MK_R_KEEP, "listed: kept");
-    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 0, 1, 1, 0, 1) == MK_R_REMOVE,
+    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 0, 1, 1, 1, 0, 0) == MK_R_KEEP, "listed: kept");
+    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 0, 1, 1, 1, 0, 1) == MK_R_REMOVE,
              "listed, safe eject off: removed");
-    mk_check(mk_reconcile(MK_P_PRESENT, 1, 0, 1, 1, 0, 0, 0) == MK_R_LEAVE,
+    mk_check(mk_reconcile(MK_P_PRESENT, 1, 0, 1, 1, 1, 0, 0, 0) == MK_R_LEAVE,
              "its domain not verifiable: left alone");
-    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 0, 1, 0, 1, 0) == MK_R_LEAVE,
+    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 0, 1, 1, 0, 1, 0) == MK_R_LEAVE,
              "an incomplete answer: left alone");
-    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 1, 1, 0, 0, 0) == MK_R_REMOVE,
+    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 0, 1, 0, 0, 1, 0) == MK_R_REMOVE,
+             "incomplete, but the member is no longer active: removed");
+    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 0, 1, 1, 0, 1, 1) == MK_R_REMOVE,
+             "incomplete, but safe eject is off: removed");
+    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 1, 1, 1, 0, 0, 0) == MK_R_REMOVE,
              "its domain verifiable and complete, not listed: removed (another domain's state aside)");
-    mk_check(mk_reconcile(MK_P_PRESENT, 0, 0, 0, 1, 0, 0, 0) == MK_R_REMOVE,
+    mk_check(mk_reconcile(MK_P_PRESENT, 0, 0, 0, 1, 0, 0, 0, 0) == MK_R_REMOVE,
              "behind no member, every NHI verifiable: removed");
 
     n = mk_msz_append(NULL, 0, out, sizeof(out));
