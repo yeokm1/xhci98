@@ -11726,14 +11726,38 @@ static void s98_inf_log(const char *name, const char *why)
 }
 
 /* 1 when a copy's name is the one an InfPath names (InfPath holds the file
- * name; the copy may be in INF\OTHER). */
+ * name; the copy may be in INF\OTHER). On 98 SE and ME the setup engine's
+ * INF\OTHER copy has a long name ("Yeo Kheng Mengstor98.inf", the one the
+ * listing holds) and the driver key's InfPath its 8.3 alias (YEOKHE~2.INF,
+ * the 42-V.1 leg of 2026-10-19), so the alias is compared too. */
 static int s98_inf_names(const char *infPath, const char *name)
 {
     const char *base = strrchr(name, '\\');
+    char win[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char alias[INST_PATH_CHARS];
+    const char *abase;
+    DWORD n;
 
     base = base != NULL ? base + 1 : name;
-    return infPath != NULL && infPath[0] != '\0' &&
-           (inst_eq(infPath, base) || inst_eq(infPath, name));
+    if (infPath == NULL || infPath[0] == '\0') {
+        return 0;
+    }
+    if (inst_eq(infPath, base) || inst_eq(infPath, name)) {
+        return 1;
+    }
+    if (envNow.Nt || GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(path, sizeof(path), win, "INF");
+    join(path, sizeof(path), path, name);
+    n = GetShortPathNameA(path, alias, sizeof(alias));
+    if (n == 0 || n >= sizeof(alias)) {
+        return 0;
+    }
+    abase = strrchr(alias, '\\');
+    abase = abase != NULL ? abase + 1 : alias;
+    return inst_eq(infPath, abase);
 }
 
 /* 1 when, after a settle, a device of stor98.inf recorded as this
