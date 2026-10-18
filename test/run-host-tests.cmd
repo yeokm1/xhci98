@@ -183,6 +183,11 @@ rem   test_xhq     - xhci98.sys's query answer (src\xhci_qry.c, design
 rem                  record 13 section 8.12): what each log level serves,
 rem                  the ring's text and cut, the PCI states, the sizing,
 rem                  XHCITR's reader and texts, the default level 2
+rem   test_di      - XHCIDI.EXE's pure part (xhciinst\di\di_core.c, task
+rem                  42-A.1, design record 27 section 11): the command line
+rem                  and its refusals, the result file's lines, the verdicts,
+rem                  the setup engine's error names held to the 98 SE DDK's
+rem                  setupx.h where tools\ has it
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
@@ -559,6 +564,10 @@ rem test_xhq links xhci98.sys's query answer composer (src\xhci_qry.c,
 rem design record 13 section 8.12) and XHCITR's reader of it and the texts
 rem it makes (xhcitr\tr_log.c, tr_pci.c); the shared default level.
 call :run test_xhq "test_xhq.c ..\src\xhci_qry.c ..\xhcitr\tr_log.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src\cm\cm_query.c ..\xhciinst\inst_core.c"
+rem test_di links XHCIDI.EXE's pure part (xhciinst\di\di_core.c, design
+rem record 27 section 11) and reads setupx.h from tools\win98ddk-extracted\
+rem where it is there, a recorded copy of its values where it is not.
+call :run test_di "test_di.c ..\xhciinst\di\di_core.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

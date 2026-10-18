@@ -58,6 +58,58 @@ by a different compiler from everything else in this repository.
   publishes without it and the resulting directory is incomplete and says so.
 - `xhciqual\README.md` has the tool's own build, test and usage documentation.
 
+The same install builds `XHCIDI.EXE`, the Windows 98 SE and ME device
+install helper (roadmap-usb4 task 42-A.1, design record 27), a Win16 program
+in the large model, from `xhciinst\di\`:
+
+- `xhciinst\di\build.cmd` finds `wcc.exe` under `%WATCOM%` (default
+  `C:\WATCOM`) in `BINNT64`, `BINNT` and `BINW`, in that order, and answers
+  exit 2 ("not built") on a host without it. `xhciinst\build.cmd` calls it
+  as its last step and goes on after a 2, saying so.
+- It needs the Windows 98 SE DDK extracted into
+  `tools\win98ddk-extracted\` (`docs\references\README.md`, "Windows 98
+  DDK"; `DDK98` names another root). `xhciinst\di\stage-ddk.ps1` holds four
+  of its members to the SHA-256s that README's table records, reading each
+  hash from the table row, and copies them into the git-ignored
+  `xhciinst\di\obj\` under the names the sources include: `setupx.h`,
+  `prsht.h` (which `setupx.h` includes), `windows.h` and `setupx.lib`. The
+  DDK's 98 `windows.h` is compiled against, not Open Watcom's `h\win`
+  one: Watcom's is the Windows 3.1 header, with neither the `HKEY`
+  `setupx.h` uses nor the `NMHDR` `prsht.h` uses, so `INCLUDE` is
+  `obj\inc` then `%WATCOM%\H` (the C runtime's headers) and `h\win` is not
+  on it.
+- `wmake` runs `xhciinst\di\makefile`: `wcc -bt=windows -ml -zW -zu -s -wx
+  -we -zq -oas`, then `wlink system windows` with `option stack=16k`, the
+  DDK's `setupx.lib` and Watcom's `windows.lib` (the `system windows`
+  definition in Watcom's `wlink.lnk` adds `option nocaseexact`, which is
+  what resolves the two mixed-case names in the import library,
+  `DiGetINFClass` and `DiSelectBestCompatDrv`). Out come `xhcidi.exe` and
+  `xhcidi.map`.
+- `xhciinst\di\selftest.cmd`, which `build-driver.cmd` runs when the image
+  exists, holds it to `xhciinst\di\check-imports.ps1`: an NE image whose
+  modules are `KERNEL`, `USER` and `SETUPX` exactly, every import by
+  ordinal and each one a row of `xhcidi-imports.allow`, every row
+  imported, each row's name the one the import library binds to that
+  ordinal (the IMPDEF records of `setupx.lib` and of Watcom's
+  `lib286\win\windows.lib`). `test-gate.ps1` runs the gate's refusals, and
+  the image must carry the stamp `XHCIDI <version>` at `XHCI_VER_STR`. A
+  Win16 image does not run on 64-bit Windows, so nothing on the build host
+  runs it: the pure part's suite is `test\test_di.c`, and the engine calls
+  are proved on the 42-V.1 legs.
+- `make-release.ps1` stages it as `tools\xhciinst\XHCIDI.EXE` whenever it
+  stages the install tool, refusing a helper older than its sources or
+  `src\xhci_version.h`, a map older than it, DDK files not at the recorded
+  hashes (`stage-ddk.ps1 -VerifyOnly`), imports the gate refuses or a stamp
+  that is not the release's, and adds its section to that directory's
+  `NOTICE.TXT` with the linker's copyright lines from `xhcidi.map`.
+  `-SkipDiHelper` cuts without it, and the readme then says the download
+  is incomplete: such a package installs on 98 SE and ME through the
+  printed Update Driver steps only.
+- `xhciinst\di\test\build.cmd` builds `DITEST.EXE` (MSVC 6.0), the legs'
+  test driver: it starts the helper as record 27 section 4.1 says the
+  installer does and prints the result file, when its `END` line was read
+  and when the process handle signalled. It is never packaged.
+
 Two consequences worth knowing before they bite:
 
 - A repository path containing a space is a problem for the DDK half only.

@@ -118,3 +118,99 @@ its own admission window independent of safe eject; the descendant walk
 below the member; every hypothesis about `PCI.VXD` marked as one;
 decisions N1 to N10). With it every design of Phase 42 has converged
 before its code, as the checkpoint asks.
+
+## 42-A.1: XHCIDI.EXE, first build and the 98 SE smoke readings (2026-10-18)
+
+Branch `p42-di`. The helper of design record 27 (`xhciinst\di\`), its
+pure part and host suite `test\test_di.c`, its NE import gate, its
+staging in `make-release.ps1`, and the legs' test driver `DITEST.EXE`
+(`xhciinst\di\test\`), committed as `8a8d276b` and `0d5381c6`; reviewed
+and revised over two rounds, the second clean at every priority. The x86
+gated build (`build-driver.cmd all`) passed on `8a8d276b` before the
+review: host tests 2080 checks, 0 failures (`test_di` 376 since
+`0d5381c6`), the helper's self-test (25 imports by ordinal from KERNEL,
+USER and SETUPX, each the allowlist's, every refusal case of the gate,
+the stamp). The full gated build of both architectures after the loop
+and the 42-V.1 legs were **not run**: two smoke readings on a 98 SE
+guest, taken before the legs to test the record's two untested
+foundations, stop the task for a decision (the coordinator's brief:
+stop and report when a SETUPX routine does not behave as the record
+assumed).
+
+The guest: a fresh overlay of `vm\t26\win98-clean.qcow2` (98 SE with
+NUSB, no xhci98) on `vm\usb4\bin-2a893ea`, i440FX, one vCPU, the
+emulator's Thunderbolt 3 layout; QMP 47980; the kit (the staged
+`release-x86` package, `XHCIDI.EXE`, `DITEST.EXE`) copied to `C:\XHCI98`.
+Readings by `DITEST.EXE` over COM1 into the host's serial log.
+
+| Reading | Result |
+|---|---|
+| probe | `XHCIDI 3.0.0.0`, `JOB probe`, `RESULT probed`, `END 3`; END read and the process handle signalled 49 ms after the start, `GetExitCodeProcess` 0. The image loads on 98 SE (its ordinals resolve) and the handle of a 16-bit process **does** signal at its exit here |
+| hwnd | A 32-bit window's handle (844, 1048) passed in decimal is accepted by the helper's `IsWindow` |
+| A devnode whose Found New Hardware wizard was **cancelled** | Not in the devnode tree for the rest of that boot (`cfgmgr32` walk; its `Enum` entry stays, `Class` `Unknown`), so the helper answers `FOUND 0`, `RESULT not-present`. Taking the wizard to its end with no driver ("Windows has not installed a driver") leaves it present at problem 28, class `Unknown` |
+| **The command line** | `CreateProcessA` fails with error 31 when the helper's command tail is 127 characters or more (126 worked, 127 failed, the same job with a four-digit hwnd for a three-digit one): the MS-DOS command tail of a 16-bit program. A PCI device id alone is 66 characters, so record 27 section 4.1's line (version, job, result path, hwnd, device id, INF path, flags) does not fit for a controller in the install directory `C:\XHCI98`, let alone a USB id with a serial |
+| **`DIF_SELECTBESTCOMPATDRV`** | On the controller at problem 28 with `xhci98.inf` (tail kept under 127): `DiGetClassDevsEx` 0, `FOUND 1`, `DiGetINFClass` `USB` 0, `DiCreateDeviceInfo` 0, `DiBuildCompatDrvList` 0, then `DiCallClassInstaller(DIF_SELECTBESTCOMPATDRV)` returned **506, `ERR_DI_DO_DEFAULT`**, with `DI_NODI_DEFAULTACTION` clear: the dispatcher does not perform a default for this function (record 27 section 5.2 assumed it would) |
+| With a selection of the helper's own (an experimental build, not committed: the lowest-rank node of `lpCompatDrvList`, the network sample's `lpSelectedDriver = lpCompatDrvList` shape) | `DRIVER XHCI98.INF Xhci.Dev "xHCI98 USB 3.x eXtensible Host Controller" rank 2005`, `NODE 00000040`; `CtlGetLddPath` `D:\WIN98\` 0, `CtlSetLddPath C:\XHCI98` 0; **`DiCallClassInstaller(DIF_INSTALLDEVICE)` 0** (its default install did run): `xhci98.sys` copied from `C:\XHCI98`, the Windows CD prompt for `usbd.sys` with "Copy files from" `D:\WIN98` (the setup source, not the `LDID_SRCPATH` set), answered with the CD's path; `FLAGS 00010111` (`DI_NEEDREBOOT`), `RESULT installed-restart`, 114.6 s with the prompt; `Enum` key `Class` `USB`, `Driver` `USB\0002`, the driver key with `NTMPDriver` `xhci98.sys`, `DevLoader` `*NTKERN`, every `Xhci*` default, `InfPath` `YEOKHE~1.INF`, `InfSection` `Xhci.Dev`; the devnode at problem 2 until the restart |
+
+What follows from them is for the owner and the coordinator (the
+report of 2026-10-18): the helper's interface needs a carrier other than
+the command line for the job's operands, and section 5.2 needs a
+selection for `ERR_DI_DO_DEFAULT`. The legs owed are all of record 27
+section 12 on 98 SE and ME, after that decision.
+
+## 42-A.1: the redesign, its review, the gated build and the helper legs (2026-10-19)
+
+The owner's decisions on the smoke readings (2026-10-18): the job's
+operands in a job file, `XHCIDI.EXE <version> <job file>`, and the
+helper's own choice of the best-ranked node when the dispatcher answers
+`DIF_SELECTBESTCOMPATDRV` with `ERR_DI_DO_DEFAULT`. Committed as
+`9d3f17a3` with record 27 at draft 7 (section 4.1's job file format and
+the 112-character bound; sections 5.1 to 5.3 and 6 for a cancelled
+hardware wizard and `LDID_SRCPATH`), reviewed and revised over two more
+rounds (`6df7f6c8`: each job-file line held strictly per byte, a NUL
+refused, the test driver's writer bounded, the legs table), the last
+clean at every priority. Then the gated build of both architectures on
+`6df7f6c8`: `build-driver.cmd all` and `all -amd64`, BUILD + GATES PASSED
+each, host tests 2080 checks with 0 failures, `test_di` 419 checks with
+0 failures, the helper's self-test (26 imports by ordinal) in each.
+
+### The legs (42-V.1, the helper's rows, by `DITEST.EXE`)
+
+Fresh overlays of `vm\t26\win98-clean.qcow2` (98 SE with NUSB) and
+`vm\t37me\winme-stock-base.qcow2` (stock ME) on `vm\usb4\bin-2a893ea`,
+i440FX, one vCPU, the emulator's Thunderbolt 3 Alpine Ridge layout
+(`PCI\VEN_8086&DEV_15BF`, its xHCI `DEV_15C1`), the QEMU xHCI
+`PCI\VEN_1B36&DEV_000D` as the controller, a tablet and a stick on it;
+QMP 47980 and 47982; the staged `release-x86` package with the helper
+and `DITEST.EXE` of `6df7f6c8` in `C:\XHCI98`; every result over COM1.
+
+| Row | 98 SE | ME |
+|---|---|---|
+| Probe | `RESULT probed`; the handle signalled at the helper's exit (78 ms), exit code 0; with a window (hwnd 1172) too | `RESULT probed` (199 ms), exit code 0: the image loads on ME, its SETUPX ordinals resolve |
+| Version refusal | `RESULT refused version`, no `JOB` line, exit code 1 | the same |
+| Job refusal | an INF name of nine characters: `RESULT refused command inf-path`, exit code 1 | not taken (the parser is the same image) |
+| Not present | a made-up id: `FOUND 0`, `not-present`; the controller whose wizard was cancelled that boot: `not-present` (its `Enum` entry stays), its wizard back at the next start | the controller's wizard cancelled, back at the next start, the same as 98 SE |
+| Controller, `xhci98.inf` | after its wizard was finished with no driver (problem 28, class `Unknown`): `DiGetINFClass` `USB`, `DIF_SELECTBESTCOMPATDRV` 506, `DEFAULT ... lowest-rank` (rank 2005), `DIF_INSTALLDEVICE` 0, `FLAGS 00810111`, `installed-restart`; the Windows CD's "Insert disk" in front of `DITEST`'s window with no taskbar entry of its own (owned), "Copy files from" `D:\WIN98` answered with `F:\WIN98`; after the restart the controller started and Windows installed the root hub itself from its `INF\OTHER` copy with no wizard | the same calls and verdict, no prompt at all (ME's setup source `C:\WINDOWS\OPTIONS\INSTALL\` holds the files); after the restart the root hub installed silently, the tablet and the stick enumerated behind it, the stick on ME's `USBSTOR` |
+| Root hub, `force` | a same-version reinstall: `NODE 00000040 force`, `DIF_INSTALLDEVICE` 0, `installed`: no `ERR_DI_DONT_INSTALL` | the same |
+| No match | `xhciuas.inf` on the root hub: `IDS HardwareID USB\XHCI98_ROOT_HUB`, `IDS CompatibleIDs -`, `no-match` | not taken |
+| Thunderbolt, `xhcicm.inf` | `DiGetINFClass` `System`, 506 and the helper's choice (rank 2001), `installed` with no restart and no prompt; the NHI started (problem 0) | the same, `installed` |
+| Removal | NHI `removed` (`Enum` key gone); controller `removed` (`Enum` key and driver key `USB\0002` gone, the root hub gone from the tree but its `Enum` entry left); the root hub's entry, not present, found among every entry and `removed` (its `Enum` key and driver key `USB\0003` gone) | the same three removals, the same readings |
+| Bookkeeping | driver keys with `NTMPDriver` `xhci98.sys`, `DevLoader` `*NTKERN`, every `Xhci*` default; `INF\OTHER` held `YEOKHE~1.INF` (`xhcicm.inf`) and `YEOKHE~2.INF` (`xhci98.inf`) | not listed |
+
+Two readings for the record: the controller's removal takes its devnode
+subtree out of the tree but leaves the child's `Enum` entry, so the
+uninstall's one-by-one removal of section 9 (the child's entry found
+among every entry) is what removes it; and `DRIVER_NODE.DriverDate`,
+read as an MS-DOS date, says 2026-10-18 on 98 SE and 2026-10-17 on ME
+for the INFs' `DriverVer` of 10/17/2026, so the `DRIVER` line's date is
+informational only (the driver key's `DriverDate` said `10-18-2026` on 98
+SE).
+
+Owed, written down rather than taken: the UAS and Stor98 rows (this leg's
+layout had no UAS device on the controller, and the package carries no
+Stor98), the update rows U24 and U23 over an
+installed `2.4.0.0` or `2.3.1.0`, the uninstall's last reading (the
+controller back as an unknown device after the `INF\OTHER` copies are
+deleted, which is the installer's step), and every row through the
+installer's window rather than `DITEST.EXE`: those are the joint legs
+after the merge with 42-A.2 and 42-A.3. No real hardware ran the helper.

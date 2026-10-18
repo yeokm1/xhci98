@@ -109,5 +109,17 @@ del /q xhciwiz.obj inst_eng.obj inst_core.obj inst_psw64.obj xhciwz64.res 2>nul
 echo Built XHCIWZ64.EXE
 
 :done
+rem ---- XHCIDI.EXE: Open Watcom, 16-bit (design record 27 section 3.2) -------
+rem The 98 SE and ME device install helper, last, in both forms of this
+rem script: di\build.cmd answers 2 when this host has no Open Watcom, which
+rem is said and is no failure here (make-release.ps1 is what refuses a cut
+rem without it).
+call "%~dp0di\build.cmd"
+if errorlevel 2 (
+    echo XHCIDI.EXE not built on this host; the package would install on 98 SE and ME through the printed steps only.
+    goto donedi
+)
+if errorlevel 1 exit /b 1
+:donedi
 echo.
 exit /b 0
