@@ -214,3 +214,112 @@ controller back as an unknown device after the `INF\OTHER` copies are
 deleted, which is the installer's step), and every row through the
 installer's window rather than `DITEST.EXE`: those are the joint legs
 after the merge with 42-A.2 and 42-A.3. No real hardware ran the helper.
+
+## 42-A.2 and 42-A.3: the legs (2026-10-19)
+
+Branch `p42-wiz`, the installer's window (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`)
+and the uninstall from Add/Remove Programs, taken over at `b869a42f`
+(Codex rounds 1 to 16, the last clean).
+
+### Builds and the cut
+
+| Build | Result |
+|---|---|
+| `build-driver.cmd all`, `b869a42f` | BUILD + GATES PASSED (debug release qemu); host tests 2080 checks, 0 failures |
+| `build-driver.cmd all -amd64`, `b869a42f` | BUILD + GATES PASSED (debug release qemu); host tests 2080 checks, 0 failures |
+| `build-driver.cmd all`, `a0bfc2b1` (the leg fix below) | BUILD + GATES PASSED (debug release qemu); host tests 2080 checks, 0 failures |
+| `build-driver.cmd all -amd64`, `a0bfc2b1` | BUILD + GATES PASSED (debug release qemu); host tests 2080 checks, 0 failures |
+
+The TEST cut: `make-release.ps1 -Flavor release -Arch x86 -TestLabel
+"bench pending, window installer" -ReleasesDir out\legrel -UploadDir
+out\legup -SkipQualtool` with Stor98 `0.4.0.0` pinned (`-Stor98Dir`
+`stor98\releases\0.4.0.0`, `SHA256SUMS.txt` `ef7a2302...96b7`, interface
+4), so `out\legup\xhci98-3.0.0.0.zip` carries Stor98 in `release-x86\`;
+the readme opens "TEST 3.0.0.0, bench pending, window installer". The
+x64 half is `make-package.ps1 -Flavor release -Arch amd64` with the same
+pins, unsigned (no `-TestSignPfx`; a cut with x64 refuses to run without
+it), added as `release-x64\` to the unpacked zip for the legs. The cut
+first stopped twice: `xhcicln\XHCICLN.EXE` and `xhcitr\XHCITR.EXE` were
+older than `xhciinst\inst_core.c`, which both compile, and the gated
+build does not rebuild either; `xhcicln\build.cmd` and
+`xhcitr\build.cmd` by hand, then the cut passed. The branch's version is
+still `3.0.0.0`, the published release's.
+
+### The guests
+
+Overlays under `E:\xhci98-vm\p42-wiz` on `vm\usb4\bin-2a893ea`, QMP
+47970 to 47975: 98 SE on `vm\t26\win98-clean.qcow2` (NUSB, no xhci98)
+for the fresh legs and on `vm\t26\win98-gold.qcow2` (an earlier xhci98
+installed) for the update; ME on `vm\t37me\winme-stock-base.qcow2`; XP
+on `vm\winxp.img`; 7 on `vm\win7.img`; 7 x64 on
+`vm\v-x64-base\w7x64-ts\disk.qcow2`; 2000 on `vm\win2k-xonly.img` and
+`vm\t26\win2k-clean.qcow2`. Each has `qemu-xhci` with a tablet and a USB
+stick on it; 98 SE, 7 and the first 2000 overlay also a QEMU NVMe
+(`nvme`, no driver in the base). The package reached 98 SE and ME on the
+transfer drive (FAT, read at the start), the NT guests on an ISO swapped
+into the CD drive over QMP. Readings: `regedit /e` of `HKLM` (98 SE, ME)
+or of `CurrentControlSet`, the Uninstall key and `Software\xhci98` (NT),
+listings of `INF`, `INF\OTHER`, the driver directories, the install
+directory and `TEMP`, and `C:\XHCIINST.LOG`, each sent over COM1 to the
+host's serial log, before the install (B0), after it, and after the
+uninstall, compared key by key and value by value.
+
+### The legs
+
+| Target | Fresh install through the window | Update over 3.0.0.0 | Uninstall from Add/Remove Programs |
+|---|---|---|---|
+| 98 SE (clean, Stor98 ticked) | pass: both wizards finished with no driver first (problem 28); the Found page listed the controller and its old moved entry; the helper installed the controller (`installed-restart`), the Windows CD's "Copy files from" answered; Stor98 installed on the NVMe (`stor98`, started) and recorded; after the cold start the root hub came by itself, Windows asked for the HID and mass-storage drivers (the Windows CD, now `G:` behind the NVMe and the stick's letters), the tablet worked, the tray tool ran at login | see the gold row | **fail on `b869a42f`, pass on `a0bfc2b1`**: the first uninstall left `INF\OTHER\YEOKHE~2.INF` (Stor98's copy) and the next start's wizard offered it for the NVMe; fixed (below) and taken again on a fresh overlay: every devnode removed through the helper, both `INF\OTHER` copies, `xhci98.sys`, `stor98.mpd`, the install directory, `Software\xhci98` and the Uninstall entry gone; at the cold start the controller and the NVMe came back as unknown devices and neither wizard found a driver |
+| 98 SE (gold: an earlier xhci98, then 3.0.0.0's console install, which ended at exit 4 with the Device Manager steps) | - | **owed**: the Found page read "update (an older release)", the helper's `DIF_INSTALLDEVICE` returned `installed` with no restart flag, but `SYSTEM32\DRIVERS\XHCI98.SYS` stayed the old 114,704-byte file while the driver key took the new INF's date; the engine's last reading compared the binary's version and said "did not end as installed" with the Device Manager steps, correctly; why SETUPX kept the old file (in use, or its version resource) is not read | not taken |
+| ME | pass: no CD prompt; after the cold start the root hub, the tablet and the stick (ME's `USBSTOR`) came with no wizard; tray tool at login | not taken | pass: `INF\OTHER`, the driver files, the install directory, `Software\xhci98` and the entry gone; at the cold start the controller's wizard found no driver |
+| 7 x86 (Stor98 ticked) | pass: two "Windows can't verify the publisher" prompts (unsigned x86), then the window's "Restart Windows now" restarted it; the tablet and the stick worked behind xhci98, the NVMe ran on `stor98` (`Software\xhci98\Stor98\Devices` and `Staged` `oem4.inf` recorded) | **owed by the version**: over 3.0.0.0 installed by its console tool the Found page read "current (this release)" for both devices (the same version), and named only `xhciuas.inf` as a different build in the driver store; with `/restage` the window replaced `oem3.inf` and staged this `xhci98.inf` as a second store copy beside 3.0.0.0's `oem2.inf`, and `xhci98.sys` stayed 3.0.0.0's after the restart | pass: services `xhci98`, `xhcihlpr`, `stor98`, the `oem` INFs, the driver files, `C:\XHCI98`, `Software\xhci98` and the entry gone, the NVMe and controller back with no driver; left: `Control\Class\{3C8E5F21-...}` (the helper's class key), `Enum\Root\LEGACY_XHCIHLPR`, `CriticalDeviceDatabase\PCI#CC_010802` (`Service` `stor98`, written by Stor98's INF) and `Services\EventLog\System\stor98`; taken again after the `/restage` update: `oem2.inf` (3.0.0.0's), `oem3.inf` and `oem4.inf` all removed, the same four keys left and nothing else |
+| XP | pass: three "has not passed Windows Logo testing" prompts and the root hub's Found New Hardware wizard (answered "No, not this time", install automatically); restart by the window | not taken (the same version as 3.0.0.0, as on 7) | pass, the same as 7 but for Stor98 (not ticked); left: the helper's class key and `Enum\Root\LEGACY_XHCIHLPR` |
+| 7 x64 (unsigned) | pass with a start that has signature enforcement off (`bcdedit /set {current} advancedoptions on` in the overlay, then "Disable Driver Signature Enforcement"): the window ran as `XHCIWZ64.EXE`, said the x64 drivers carry no signature, waited its ten minutes for devices that cannot start on an ordinary boot, and ended "not everything is done"; after the start with enforcement off the tablet worked behind xhci98 | not taken | pass: the `oem` INFs, `xhci98.sys`, the install directory and the entry gone, nothing of the package left |
+| 2000 | **owed**: on `win2k-xonly.img` (an old 1.x miniport installed) QEMU stopped at boot three times, its process using no CPU and QMP silent; on `win2k-clean.qcow2` the window ran to its Summary and QEMU stopped the same way as the install started the controller; the emulator, not the guest, so not read further | not taken | not taken |
+
+Two misses in driving the guests, for the record: on the first 98 SE
+uninstall an Enter meant for a message box landed on the Finish page
+with "Restart Windows now" selected, and that 98 SE guest warm-restarted
+(it did not hang this time); every other 98 SE and ME restart was a shut
+down and a cold start. The window's Finish page offers "Restart Windows
+now" first on 98 SE and ME after a full install or uninstall (record 26
+W5).
+
+### The bug the legs found, and its fix
+
+On 98 SE and ME the setup engine's `INF\OTHER` copy has a long name
+("Yeo Kheng Mengstor98.inf") and the driver key's `InfPath` its 8.3 alias
+(`YEOKHE~2.INF`). `s98_inf_names` compared the two as strings, so the
+install logged "appeared in this step, named by no device of this step:
+left", recorded nothing under `Staged`, and the uninstall never deleted
+the copy. `60a8f225` compares the alias too (`GetShortPathNameA`, already
+imported); Codex rounds 17 to 21 (thread `01a14f91-...`) made the answer
+three-valued (unknown when the alias cannot be read, and for a bare name
+that `INF` and `INF\OTHER` could both hold; a qualified `InfPath`
+matched against the copy's qualified name or alias), committed as
+`db7b5470`, `53ba12da`, `d818fcd5`, `06eb6160` and `a0bfc2b1`; round 22
+was clean. The fresh install on `a0bfc2b1` logged "made in this step and
+named by the device: recorded" for the copy, and its uninstall "Stor98's
+INF copy ... was deleted".
+
+### What the legs leave for the owner
+
+- The update rows need a version above 3.0.0.0: with the branch at the
+  published version the window treats 3.0.0.0's devices as current, and
+  `/restage` leaves two store copies of `xhci98.inf` and the old binary.
+- 98 SE's update over an earlier xhci98 through the helper (the gold
+  row): the old `XHCI98.SYS` stayed in place.
+- The NT uninstall leaves the helper's class key and its legacy devnode,
+  and Stor98's critical-device entry and event-log source; the 98 SE
+  uninstall leaves `Services\stor98` (a value Stor98 writes at run time,
+  `StorInterrupt 0.4.0`) and `Software\Stor98\Pool`, both Stor98's own.
+  Which of these the uninstall owns is a record 26 section 9.3 decision.
+- The 98 SE and ME uninstall shows its "If Windows has a hardware wizard
+  open" message once per helper step (twice on 98 SE with Stor98).
+- On 98 SE and ME the window shows no USB settings page on a fresh
+  install (Components goes to Stor98's settings, or to the Summary).
+
+Owed: 2000 (the emulator), the update over 3.0.0.0 on every target with
+a version that differs, the helper rows U24, U23, UAS, Thunderbolt, an
+older Stor98's update and two bundled Stor98 versions, the uninstall
+after an update, and XP's and ME's updates. No real hardware ran the
+window.
