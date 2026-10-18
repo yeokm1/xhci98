@@ -24,6 +24,16 @@ is; `/devices` labels the unit "not marked removable" (section 6). The
 legs are `runs/run-41.md`'s, "The fallback for a unit not marked
 removable".
 
+Revision 6, 2026-10-18 (roadmap-usb4.md tasks 42-0.4 and 42-0.7, their
+designs): on Windows 98 SE and ME the tool's eject of a unit is asked of
+the connection manager, which runs the removal with Stor98's handshake
+(section 7.1's revision; record 21 section 7.2, the 9x half; the code is
+42-A.13), and section 14's handshake item is closed by it; on Windows
+2000 to 7 the mark across a stack rebuild is record 21 section 7.4's
+revision 3 (a privileged service writing a device-specific `LowerFilters`
+value), section 7.2's query-and-remove route staying as the fallback for
+a unit the service has not reached.
+
 It is not a Thunderbolt control panel: it approves nothing, changes no
 security level, updates no firmware, and publishes or shows no secret or
 authentication material.
@@ -394,6 +404,14 @@ re-enumeration worker (`cm_cfgwk.c` on branch `p39-reenum`, read
   that promises that teardown on 9x is reported to the connection-manager
   work as inconsistent with this.
 
+Since revision 6 (2026-10-18) the tool's removal on 98 SE and ME no
+longer happens outside the connection manager: it is asked of it (section
+7.1's revision), the worker runs it as its own removal step with Stor98's
+handshake, and under the USB4 software connection manager the per-port
+teardown of record 22 section 10.4 follows a clean removal, so the
+inconsistency the last bullet reports is resolved for the tool's ejects;
+the bullets above describe `3.0.0.0`.
+
 ### 5.2 `xhcicm.sys` on the NT targets
 
 `CM_Request_Device_EjectA` is the call the applet makes, so a unit with
@@ -431,8 +449,8 @@ removal. On 98 SE the remove gives `nvme98` its native stop; on ME
 write-through (its MD-5 and D3). The removal handshake `nvme98`'s MD-5
 plans (a `REMOVE_PENDING` request and a clean acknowledgement before the
 connection manager calls `Remove_SubTree`) is the connection manager's,
-and a removal the tool makes does not run it; when that handshake exists,
-the 9x eject should be asked of the connection manager (section 14). The
+and a removal the tool makes does not run it; since revision 6 the 9x eject is
+asked of the connection manager, which runs it (section 7.1's revision). The
 query goes to the unit - the NVMe controller's PCI devnode - so the IOS
 devnodes of its disk and volume are inside the subtree; the tool never
 climbs to a bridge. On NT `nvme98` receives the query-remove and remove of
@@ -528,6 +546,31 @@ numbered unit for `/eject id=`.
 4. A removal that fails after an accepted query: "Windows began to stop
    the device but could not finish (code 0x...). It is not safe to unplug
    it now. Shut down Windows, then unplug it." Exit 2.
+
+**Revision 6 (2026-10-18): the eject asked of the connection manager.**
+The four steps above are `3.0.0.0`'s direct route. From `3.1.0.0` (record
+21 section 7.2, the 9x half; the code is 42-A.13) the tool makes neither
+call for a unit. After section 7.3's revalidation it writes
+`XhciCmEjectAsk` (a nonce, the port's and the unit's locations, the
+record's generation) to the NHI's driver key beside `XhciCmStatusAsk`,
+under the shared mutex, and polls `XhciCmEjectResult` in the NHI's
+hardware key: the connection manager's 98 worker runs
+`Query_Remove_SubTree`, Stor98's `REMOVE_PENDING` request where the
+unit is an NVMe function with an `UP` entry, the wait for its answer,
+`Remove_SubTree` always after an accepted query and its retries, and
+reports each step. The outcomes map onto the items above: no echo of the
+nonce within 3 s is "The Thunderbolt driver did not take the request;
+nothing was changed" (exit 1); a refused query is item 2; a removal is
+item 3, with "the drive did not confirm a clean stop" added where the
+answer was not clean, late or missing; a removal still failing at the
+end of the worker's retries is item 4 (exit 2), the worker going on
+retrying; a driver whose result stops changing for 60 s is exit 2. Under
+the USB4 software connection manager a clean removal is followed by the
+port's PCIe tunnel teardown (record 22 section 10.4), and section 5.2's
+tunnel line is shown on 98 SE and ME too; under the firmware connection
+manager the tunnel stays up, as before. The direct calls stay in the
+tool for the plain USB devices of record 25 section 6.5 alone, and a
+unit's eject is still refused without a confirmed record (section 3.3).
 
 `cfgmgr32.dll` on 98 SE (4.10.2222, 45,056 bytes) and ME (4.90.3000, 40,960
 bytes) exports the same 179 names (read 2026-10-15 from each guest image's
@@ -867,9 +910,9 @@ and have no live vehicle here; they are owed to the bench.
   again while it stays connected, with `CM_REMOVE_NO_RESTART` asked (the
   route itself was read on 2000, XP and 7, revision 5).
 - The link speed is kept by neither connection manager.
-- The `nvme98` removal handshake (its MD-5): when it exists, the 9x eject
-  should be asked of the connection manager, which can run it, rather than
-  made by the tool.
+- The Stor98 removal handshake (its MD-5): closed by revision 6 (the 9x
+  eject asked of the connection manager, section 7.1's revision; record 21
+  section 7.2, the 9x half); the legs are 42-V.6.
 - A dock with several units, and its USB devices under USB4: section 5.4's
   messages are written from the design, with no vehicle to read them here.
 - Titan Ridge and the integrated hosts: the record's fields are filled from

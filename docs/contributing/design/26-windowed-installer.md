@@ -401,7 +401,10 @@ the restart; disconnect the dock until then when the answer is 0).
 `XhciCmPreOsCleanup`, and from the release notes' table `XhciCmBridgeNumbering`
 (98 SE and ME only), `XhciCmPollIdleMs`, `XhciCmCmdTimeoutMs`,
 `XhciCmApproveTimeoutMs`, `XhciCmLogVerbosity` and `XhciCmLogDebugView`,
-each with its default, range and warning. `XhciCmTunnelBridge` (a string
+each with its default, range and warning; design record 28's
+`XhciCmNoIrqStart` (98 SE and ME only) and the mark service's `Restart`
+(2000 to 7 only; record 21 section 7.4, revision 3) join these rows with
+their systems. `XhciCmTunnelBridge` (a string
 for a machine whose ports the driver does not find) is not offered: it is
 a diagnostic the release notes describe for a hand edit.
 
@@ -516,6 +519,14 @@ installer's files outside every `XHCIINST.LST`, as the tray tool's are,
 replaced by the same `.TMP` route and never left pending for a restart
 (record 23 section 9.5's rules, applied to three more files), and the
 uninstall removes them last (section 9.4).
+
+On Windows 2000 to 7, when the Thunderbolt 3 / USB4 component is
+installed, the safe-removal mark service of record 21 section 7.4,
+revision 3 (`XHCIMARK.EXE`, `XHCIMK64.EXE` on x64) is one more of these
+files: copied into the install directory by the same route, registered
+with the service controller from there, stopped before it is replaced or
+removed, and removed with the marks it wrote (section 9.3). Never on 98 SE
+or ME.
 
 ### 6.3 Stor98, only when ticked
 
@@ -797,8 +808,14 @@ gated on the one before, shown on the Progress page:
    that the USB ones stop working" that enables the Remove button (W7).
    The console keeps `REMOVE`.
 2. The pending-install check, the reading of the devices.
-3. On NT: the filter hosts, the devnodes children first, the check, the
-   INFs, the services, the files (record 23 section 9.2, unchanged); the
+3. On NT: first the safe-removal mark service stopped and every mark it
+   wrote removed from the units' `LowerFilters`, present or not (record 21
+   section 7.4, revision 3: a removal that fails keeps `xhcicm`'s service
+   and file and ends with steps left, since a value naming a filter no
+   longer installed stops the device); then the filter hosts, the devnodes
+   children first, the check, the
+   INFs, the services, the files (record 23 section 9.2, unchanged but for
+   that first step); the
    bundled Stor98's recorded devices, its staged INF and, when nothing
    else depends on them, its service and files first, as section 6.3's
    record says (children before the NVMe device's parent port, which is a
@@ -955,6 +972,10 @@ this list is the whole of it:
   machine-wide values removed, the last steps' order (section 9 here),
   and 9.4's "best effort, then the manual steps" rewritten around the
   helper.
+- Section 9.2 and 9.5: the safe-removal mark service (record 21 section
+  7.4, revision 3) installed, updated, stopped and removed by the
+  installer, and the marks removed before the filter hosts (tasks 42-A.3
+  and 42-A.5).
 - Section 10 and 11: the engine file, the front-end table, the new suite
   cases, the self-test of the window.
 - Section 13: D2 (the 98 SE and ME route) gains the helper; D10, D11 and

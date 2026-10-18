@@ -744,7 +744,12 @@ record.
    (setupapi on 2000), with the not-removable fallback
    `CM_Query_And_Remove_SubTreeA`; on 98 SE and ME
    `CM_Query_Remove_SubTree` then, if accepted, always `CM_Remove_SubTree`,
-   both `UI_NOT_OK`. Never forced, never `DIF_REMOVE`, one unit at a
+   both `UI_NOT_OK` - since 2026-10-18 (record 24 section 7.1's revision;
+   record 21 section 7.2, the 9x half; the code is 42-A.13) a unit's
+   eject on 98 SE and ME is asked of the connection manager through
+   record 24's ask and result values instead, the two calls staying for
+   the plain USB devices of section 6.5. Never forced, never
+   `DIF_REMOVE`, one unit at a
    time. Since revision 11 the not-removable fallback is
    `CM_Query_And_Remove_SubTreeW`, decided by `inst_eject_nt_step` as
    record 24 section 7.2 has it, and a unit not marked removable in a
@@ -996,6 +1001,13 @@ for those rights for this stop only, when it lacks them.
    stop's, in a message box or the tray's balloon.
 6. `/eject id=` started by a user with no administrator rights takes the
    same route for such a unit.
+
+Since 2026-10-18 the mark itself survives a rebuild on Windows 2000 to 7
+where the mark service of record 21 section 7.4, revision 3, runs (task
+42-0.4; the code is 42-A.5): this section's route stays for a unit the
+service has not reached (its restart vetoed, the service stopped, a value
+not yet in effect), and the window shows the mark's state beside the
+unit as that revision says.
 
 XHCIINST needs nothing new: it runs as an administrator (record 24 section
 7.2).
