@@ -634,10 +634,11 @@ six helpers (`portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`,
 value, create the key where it is absent, leave the per-controller values
 alone and show both, naming the one in force; XHCITR's logging-level block
 and `/report` show both and which won, and its Set writes the machine-wide
-value where one is in force; the windowed installer's settings pages
-(design record 26 section 5.4) are to write the machine-wide value, and
-until they do `INSTALL /set` and the console questions write the
-controller's own key, which a machine-wide value then overrides.
+value where one is in force; the installer - its window's settings pages
+(design record 26 section 5.4), its console questions and `INSTALL /set` -
+makes the key where it is absent, reads the value in force by the same
+rule, writes the machine-wide value and never the controller's own, and
+its uninstall deletes by name the values its table names there.
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `releases\1.2.0.0` directory is never edited (`releases/README.md`) - staged by `make-package.ps1` from 26-A.1 and published by

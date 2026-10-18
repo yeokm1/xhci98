@@ -2667,6 +2667,108 @@ INST_U32 inst_get32(const unsigned char *b, size_t offset)
            ((INST_U32)b[offset + 2] << 16) | ((INST_U32)b[offset + 3] << 24);
 }
 
+static void inst_put32(unsigned char *b, size_t offset, INST_U32 v)
+{
+    b[offset] = (unsigned char)v;
+    b[offset + 1] = (unsigned char)(v >> 8);
+    b[offset + 2] = (unsigned char)(v >> 16);
+    b[offset + 3] = (unsigned char)(v >> 24);
+}
+
+int inst_mw_reading(int found, INST_U32 type, INST_U32 bytes, INST_U32 dword,
+                    INST_U32 def, INST_U32 *value)
+{
+    if (!found || (type == INST_REG_NONE && bytes == 0)) {
+        return 0;
+    }
+    *value = (type == INST_REG_DWORD && bytes == 4) ? dword : def;
+    return 1;
+}
+
+int inst_mk_system(const INST_ENV *env)
+{
+    return env->Nt && (env->Major == 5UL ||
+                       (env->Major == 6UL && env->Minor <= 1UL));
+}
+
+int inst_mk_end_action(int cmService, int tbInRun, int markSystem)
+{
+    if (cmService == 0) {
+        return INST_MK_REMOVE;
+    }
+    if (cmService == 1 && tbInRun && markSystem) {
+        return INST_MK_INSTALL;
+    }
+    return INST_MK_LEAVE;
+}
+
+/* The marks answer's and the confirmation's layouts (src\cm\cm_query.h),
+ * repeated as numbers as the status record's are; test_inst checks them
+ * against it. */
+#define INST_QM_MAGIC       0x4D4D4358UL
+#define INST_QM_HDR         64UL
+#define INST_QM_ENT         64UL
+#define INST_QM_MAX_BYTES   (64UL + 256UL * 64UL)
+#define INST_QM_EF_LOCATED  0x01UL
+
+int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
+                  INST_U32 bus, INST_U32 address, unsigned char *out,
+                  INST_U32 *need)
+{
+    INST_U32 bytes;
+    INST_U32 count;
+    INST_U32 entBytes;
+    INST_U32 off;
+    INST_U32 i;
+    const unsigned char *hit = NULL;
+
+    *need = 0;
+    if (b == NULL || n < INST_QM_HDR || inst_get32(b, 0) != INST_QM_MAGIC ||
+        inst_get32(b, 4) != 1UL) {
+        return 0;
+    }
+    bytes = inst_get32(b, 8);
+    if (bytes < INST_QM_HDR || bytes > INST_QM_MAX_BYTES) {
+        return 0;
+    }
+    if ((size_t)bytes > n) {
+        *need = bytes;
+        return -2;
+    }
+    count = inst_get32(b, 28);
+    entBytes = inst_get32(b, 32);
+    off = inst_get32(b, 36);
+    if (count > 256UL || entBytes < INST_QM_ENT || off < INST_QM_HDR ||
+        off > bytes || count * entBytes > bytes - off) {
+        return 0;
+    }
+    for (i = 0; i < count; i++) {
+        const unsigned char *e = b + off + i * entBytes;
+        if (inst_get32(e, 0) != member || inst_get32(e, 4) != bus ||
+            inst_get32(e, 8) != address ||
+            (inst_get32(e, 16) & INST_QM_EF_LOCATED) == 0 ||
+            inst_get32(e, 32) == 0) {
+            continue;
+        }
+        if (hit != NULL) {
+            return -1;
+        }
+        hit = e;
+    }
+    if (hit == NULL) {
+        return 0;
+    }
+    memset(out, 0, INST_QC_BYTES);
+    inst_put32(out, 0, inst_get32(b, 16));      /* the epoch, low word  */
+    inst_put32(out, 4, inst_get32(b, 20));      /* and high             */
+    inst_put32(out, 8, inst_get32(hit, 0));     /* the member           */
+    inst_put32(out, 12, inst_get32(hit, 4));    /* the bus              */
+    inst_put32(out, 16, inst_get32(hit, 8));    /* the address          */
+    inst_put32(out, 20, inst_get32(hit, 12));   /* the serial           */
+    inst_put32(out, 24, inst_get32(hit, 36));   /* the pending's gen    */
+    return 1;
+}
+
 /* The record's layout (src\cm\cm_status.h), repeated here as numbers so
  * the pure half needs no driver header; test_inst checks them against it. */
 #define INST_ST_MAGIC       0x534D4358UL
