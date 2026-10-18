@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# cmnt.sys: NT link-state table stand-in (test only). Build with build.cmd.
+TARGETNAME=cmnt
+TARGETPATH=obj
+TARGETTYPE=DRIVER
+MSC_WARNING_LEVEL=/W3 /WX
+SOURCES=cmnt.c

@@ -1,0 +1,31 @@
+=== hostile 7
+[nvme98 000000c5942ed2c3 00010] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C18A1EB0 size=272 cookie=31C44B69
+[nvme98 000000c59441ac13 00011] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=31C64B69
+[nvme98 000000c63fb354cc 00074] q9 bring-up complete in 316 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0xb host_ns=1792053
+=== hostile 8
+[nvme98 000000f0e9f79554 00010] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C18A1EB0 size=272 cookie=31C64B69
+[nvme98 000000f0ea06d730 00011] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=31C64B69
+[nvme98 000000f0ea17b802 00012] q9 rendezvous: table header mismatch (sig 4C38394E ver 1 count 7 cookie 31C64B69)
+[nvme98 000000f1bff09b43 00074] q9 bring-up complete in 400 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x6 host_ns=1792053
+=== hostile 9
+[nvme98 00000118a1de5401 00010] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C18A1EB0 size=272 cookie=31C64B69
+[nvme98 00000118a1ef38ed 00011] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=31C64B69
+[nvme98 00000118a207ef69 00012] q9 bind: 2 entries name bus 1 slot 1: duplicate, table rejected (no channel)
+[nvme98 00000119457e8b1f 00074] q9 bring-up complete in 308 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x9 host_ns=1792053
+=== hostile 10
+[nvme98 00000140a98a3709 00010] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C18A1EB0 size=272 cookie=31C64B69
+[nvme98 00000140a99ccfc7 00011] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=31C64B69
+[nvme98 00000140a9b77e49 00012] q9 bind: entry 0 generation 6 flags 00000003, removal sequence at binding 0, ack 00000000
+[nvme98 00000140a9c46fe1 00013] q9 rendezvous: table C18A1EB0 accepted, entry C18A1EC0 (2 ms)
+[nvme98 000001418ccaf20b 00075] q9 bring-up complete in 421 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x60100 host_ns=179
+=== hostile 0
+[nvme98 0000016ab83fb379 00010] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C18A1EB0 size=272 cookie=31C64B69
+[nvme98 0000016ab856a057 00011] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=31C64B69
+[nvme98 0000016ab88319c7 00012] q9 bind: entry 0 generation 7 flags 00000003, removal sequence at binding 0, ack 00000000
+[nvme98 0000016ab890783d 00013] q9 rendezvous: table C18A1EB0 accepted, entry C18A1EC0 (7 ms)
+[nvme98 0000016b045e3944 00074] q9 bring-up complete in 409 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x70100 host_ns=179

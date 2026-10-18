@@ -184,6 +184,9 @@ typedef struct _TBT_U4_ROUTER {
     char ModelName[TBT_U4_NAME_LEN];
     ULONG DromRevision;     /* DROM byte 13: 1 Thunderbolt 3 layout, 3 USB4; 0 unread */
     ULONG DromUnused[2];    /* bit n: the DROM's adapter entry n marks it unused */
+    BOOLEAN DromOwed;       /* Thunderbolt 3: adopted, or rebuilt under a resume
+                               budget, its EEPROM not yet read: its names read
+                               by TbtU4Poll once no budget runs (section 8) */
     TBT_U4_ADP Adp[TBT_U4_MAX_ADP];
 } TBT_U4_ROUTER, *PTBT_U4_ROUTER;
 

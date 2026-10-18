@@ -126,25 +126,65 @@ ULONG CmNvlinkRetire(PSTOR98LS_TABLE t, ULONG bus)
     return n;
 }
 
-ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
-                        BOOLEAN fresh, PULONG outcome)
+ULONG CmNvlinkActionTunnel(BOOLEAN up, ULONG port, ULONG generation,
+                           ULONG member, ULONG i)
+{
+    if (!up || member == XHCI_TBT_NO_MEMBER || member != i) {
+        return CM_NVLINK_TUNNEL_NONE;
+    }
+    return CM_NVLINK_TUNNEL(port, generation);
+}
+
+ULONG CmNvlinkBridgeTunnel(PULONG bridges, PULONG tunnels, ULONG count,
+                           ULONG bridge, ULONG named)
+{
+    ULONG k;
+    ULONG f;
+
+    f = count;
+    for (k = 0; k < count; k++) {
+        if (tunnels[k] != CM_NVLINK_TUNNEL_NONE && bridges[k] == bridge) {
+            break;
+        }
+        if (tunnels[k] == CM_NVLINK_TUNNEL_NONE && f == count) {
+            f = k;
+        }
+    }
+    if (named == CM_NVLINK_TUNNEL_NONE) {
+        return k != count ? tunnels[k] : CM_NVLINK_TUNNEL_NONE;
+    }
+    if (k == count) {
+        k = f;
+    }
+    if (k != count) {
+        bridges[k] = bridge;
+        tunnels[k] = named;
+    }
+    return named;
+}
+
+ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
+                        ULONG slot, ULONG tunnel, PULONG outcome)
 {
     ULONG i;
     ULONG pick;
     PSTOR98LS_ENTRY e;
 
     *outcome = CM_NVLINK_UP_BAD;
-    if (t == NULL || bus > 0xFFUL || slot > 0xFFUL) {
+    if (t == NULL || tunnels == NULL || bus > 0xFFUL || slot > 0xFFUL) {
         return CM_NVLINK_NONE;
     }
     i = CmNvlinkFind(t, bus, slot);
     if (i != CM_NVLINK_NONE) {
         e = &t->Entry[i];
-        /* R9a: LinkGeneration is not changed, nor the request cleared,
-         * while a removal request is outstanding; a fresh exposure then
-         * waits for CmNvlinkWkWithdraw like any other. */
+        /* R8b: only a new tunnel increments the generation - one this
+         * exposure names and the entry's UP was not published for. R9a:
+         * nor is it changed, or the request cleared, while a removal
+         * request is outstanding; an exposure then waits for
+         * CmNvlinkWkWithdraw like any other. */
         if ((e->Flags & STOR98LS_UP) != 0 &&
-            (!fresh || (e->Flags & CM_NVLINK_REMOVE_PENDING) != 0)) {
+            (tunnel == CM_NVLINK_TUNNEL_NONE || tunnels[i] == tunnel ||
+             (e->Flags & CM_NVLINK_REMOVE_PENDING) != 0)) {
             *outcome = CM_NVLINK_UP_ALREADY;
             return i;
         }
@@ -152,6 +192,7 @@ ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
         e->LinkGeneration = e->LinkGeneration + 1;
         e->Flags = STOR98LS_IN_USE | STOR98LS_UP;
         cmNvEnd(e);
+        tunnels[i] = tunnel;
         *outcome = CM_NVLINK_UP_AGAIN;
         return i;
     }
@@ -174,6 +215,7 @@ ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
     e->LinkGeneration = e->LinkGeneration + 1;
     e->Flags = STOR98LS_IN_USE | STOR98LS_UP;
     cmNvEnd(e);
+    tunnels[pick] = tunnel;
     *outcome = CM_NVLINK_UP_NEW;
     return pick;
 }

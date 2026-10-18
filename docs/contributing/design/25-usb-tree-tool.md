@@ -1466,9 +1466,16 @@ what they left open:
   element only; `IRP_MN_QUERY_ID` is the fallback.
 - **An empty file name on create** is required on NT only; what NTKERN
   leaves in the file name for a `\\.\` open is unread.
-- **An inert start's first answer** can lack `CM_Q_F_INERT` for the moment
-  between the device's creation and the thread's first pass. An eject
-  refuses it anyway (the record's stage is inert); planned work.
+- **An inert start's first answer** carries `CM_Q_F_INERT` (task
+  42-A.7). The answer the device holds until the thread's first pass is
+  seeded from the thread's actual wait, which the thread records before
+  each wait and clears after it (`CM_NHI.ThreadWait`,
+  `CmQuerySeedInert`): no thread, or a thread already in its wait with no
+  timeout, is inert; one in a timed wait is not; a thread between waits is
+  judged by the wait it goes to, as its own publication judges it
+  (`CmThrInertNext`). Until 42-A.7 the seed was set only with no thread,
+  so the moment between the device's creation and that pass read as not
+  inert; an eject refused it all the same (the record's stage is inert).
 - **The confirmation** is a message box listing the unit and every
   devnode that will stop (at most 64; a larger unit is refused), not a
   dialog of its own.

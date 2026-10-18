@@ -209,7 +209,7 @@ The three flavours (`debug`, `release`, `qemu`) and what distinguishes their out
 | `cm_cfgmg.c` | CONFIGMG's services through the VMM dynalink (Windows 98 SE and ME, x86 only): the non-paged thunks, the `Get_Version` and root-id guards, and the calls of record 21 sections 6.1 and 7.4; and PCI.VXD's `_PCI_Read_Config` and `_PCI_Write_Config` through the same mechanism, behind their read guard (section 6.1.1) (`cm_cfgmg.h` has the numbers). |
 | `cm_nvlink.c` / `cm_nvlink.h` | The Stor98 link-state channel (tasks 39-A.7 and 40-A.7; record 21 section 7.2, record 22 section 10), its pure half (`test_cm_nvlink`): the entry protocol over `stor98cm.h`'s table (UP with a new generation, `DOWN_QUIESCED`, the acknowledgement), both profiles' statement conditions, interface 3's locator bytes, proof query handler and publication order (residency, the proof opened first, the proof, the locator), its `REMOVE_PENDING` request, and both waits' steps (the deadline read before the acknowledgement). The header is the API the seam and the USB4 driver half call. |
 | `cm_nvlinkos.c` | The channel's driver half: the never-freed table, the `\Callback\Stor98LinkState` callback object (NT), interface 3's `HKEY_DYN_DATA` current-boot proof (a dynamic key this image answers, made resident first, deleted at an unload) and `HKEY_LOCAL_MACHINE` locator through the VMM's registry services (98 SE and ME, x86), the scan that publishes UP before a re-enumeration, the channel's own SHPC reading, the statement, the acknowledgement wait, the 9x orderly removal, the idle poll's ceiling. |
-| `stor98cm.h` | Stor98's interface header, carried byte for byte (BSD-3-Clause, its own notice; `legal-provenance.md` section 2a): never edited here. |
+| `stor98cm.h` | Stor98's interface header, carried byte for byte (BSD-3-Clause, its own notice; `legal-provenance.md` section 2a): never edited here. A copy of `src\stor98\include\stor98cm.h`, the master, since task 42-A.20 (section "Stor98 - `src\stor98\`" below). |
 | `cm_cfgwk.c` | The Windows 98 SE and ME CONFIGMG worker: one system thread per domain that makes every CONFIGMG call of the re-enumeration and of safe eject's 9x half (the route's opening and guards, the bridge devnode walk, the vanished children's query-remove and remove, `Reenumerate_DevNode`, `DN_REMOVABLE`), so the connection-manager thread never blocks when CONFIGMG does (an Add New Hardware wizard open); requests posted and collapsed per member; a stop that finds it inside a call leaves it to free itself. |
 | `cm_statos.c` | The status record's publication (design record 24 section 3.2): the value `XhciCmStatus` (`REG_BINARY`) of the NHI's hardware key, written by the connection-manager thread only when the record `cm_status.c` built has changed, and the install tool's ask `XhciCmStatusAsk` read from the driver key and echoed; both keys opened in the start (`CmStatusOpen`), since on 98 SE and ME `IoOpenDeviceRegistryKey` is a CONFIGMG service that waits while a wizard is open. A failed write is counted and retried at the next pass. |
 | `cm_qryos.c` | The query device (design record 25 section 4.2): one control device object per started NHI, `\Device\XhciCm<n>` linked as `\DosDevices\XHCICM<n>` (n the first free of 0..15) and named in `XhciCmQueryName` beside `XhciCmStatus`; created after a start that succeeded, with a new epoch, and deleted once the thread has ended at a stop or removal (the name value written empty: `ZwDeleteValueKey` has no Windows 98 evidence). Its extension holds the snapshot the thread publishes after each pass under the device's own spin lock and no pointer to the NHI; `IOCTL_XHCICM_QUERY` answers from it with the pass counter, its age and the stopping flag, and never touches the hardware; the same device answers the log request (`CM_QL_IOCTL`) and the PCI request (`CM_QP_IOCTL`, `cm_qpci.c`). `cm_entry.c` routes every request to it by the extension's kind. |
@@ -259,6 +259,7 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23). |
 | `test_tr.c` | `xhcitr\tr_core.c`, the USB tree tool's pure half (design record 25 section 10): text, the connection answers, descriptors, the query's parsing and eject gates, the router keys and event diff, the command line, the report. |
 | `test_trpci.c` | `src\cm\cm_qpci.c` and `xhcitr\tr_pci.c`: the bounded walk below a tunnel port over modelled buses, the capability walk with bad lists, the decoders, 79 columns (design record 25 revision 12). |
+| `test_di.c` | `xhciinst\di\di_core.c`, the 98 SE and ME device install helper's pure part (design record 27 section 11): the command line and its refusals, the result file's lines, the verdicts, the error names and flags held to the DDK's `setupx.h` where `tools\` has it. |
 | `test_trlog.c` | `xhcitr\tr_log.c` with `src\cm\cm_query.c` linked: `xhcicm.sys`'s log answer as the driver's builder makes it, its parse and bounds, `xhci98.sys`'s pass-through window, and `xhcitr\tr_hcctr.h`'s names held to `XHCIHC_COUNTERS` by offset (design record 25 revision 9). |
 | `test_xhq.c` | `src\xhci_qry.c` and the tool's reader of it: what each log level serves, the ring's text and cut, the configuration read's states, the sizing, the default level 2. |
 | `test_cm_live.c` | `cm_live.c`: sampling by elapsed time, SUSPECT on the first unanswered sample and ABSENT on the third, CONFIG_LOST on a changed register, the light and full recovery, its failure and the re-arm rule, the USB4 profile's containment, revocation and the access gate. |
@@ -325,6 +326,17 @@ The host suites of `xhci98.sys` and `xhciuas.sys`, and the shared and guest-side
 | `xfertest\xfertest.c` | `XFERTEST.EXE`, the transfer-size test client (roadmap-hcd tasks 36.21, 36.22 and 36.26): moves data in requests of a given size from or to a file or raw disk and times them. In no package. |
 | `xfertest\build.cmd` | Its MSVC 6.0 build. |
 
+## Stor98 - `src\stor98\`
+
+Stor98, the SCSI miniport for NVMe SSDs that the release packages bundle, in this tree since 2026-10-19 (roadmap-usb4 task 42-A.20): a project of its own, BSD-3-Clause, whose `README.md`, `AGENTS.md`, `NOTICE` and `docs\` (its `BUILD.md`, `PLAN.md` and `TESTING.md` first) describe its files; this page does not map them. It builds its own images (`stor98.mpd`, `stor98.sys` x86 and amd64) with `src\stor98\scripts\build.cmd` into the git-ignored `src\stor98\out\`, its host unit tests with `src\stor98\tests\unit\build.cmd`, and keeps its released builds in `src\stor98\releases\<version>\`, from which a package bundles one (`make-package.ps1 -Stor98*`). Nothing under `src\stor98\` is in `src\sources` or any of this project's build lists.
+
+**The interface header is here twice until the two are made one, and `src\stor98\include\stor98cm.h` is the master**: its own text and Stor98's `NOTICE` name it as the definition of the interface, and Stor98 is its receiving side. A change is made there and copied to `src\cm\stor98cm.h` unchanged, with the new SHA-256 in `legal-provenance.md` section 2a; `scripts\check-stor98-header.ps1`, which `scripts\build-driver.cmd` runs on every build, fails when the two are not the same bytes.
+
+| File | Role |
+|---|---|
+| `scripts\check-stor98-header.ps1` | The gate above: `src\cm\stor98cm.h` against the master byte for byte, its refusals self-tested first (`-SelfTest`). |
+| `scripts\build-all.cmd` | One command for everything: `build-driver.cmd` for x86 and amd64 with every gate, then Stor98's `build.cmd all free` and its unit tests (`-NoStor98` skips them). |
+
 ## The user-mode tools
 
 Each tool is a tree at the repository root, built by its own `build.cmd` and published under `releases\<version>\tools\`; `scripts\build-driver.cmd` runs a tool's self-test when its executable has been built.
@@ -366,6 +378,21 @@ Each tool is a tree at the repository root, built by its own `build.cmd` and pub
 | `xhcimark.rc`, `xhcimark.manifest` | The manifest (`asInvoker`). |
 | `build.cmd`, `selftest.cmd`, `check-imports.ps1` | The build, and the `-selftest`, switch refusals and import check (`KERNEL32` and `ADVAPI32` alone) `build-driver.cmd` runs when the executable has been built. |
 | `README.TXT` | The published `readme.txt`. |
+
+### `xhciinst\di\` - the 98 SE and ME device install helper (design record 27)
+
+`XHCIDI.EXE`, a Win16 program (Open Watcom 2.0, large model) the installer
+starts once per device on Windows 98 SE and ME (roadmap-usb4 task 42-A.1).
+
+| File | What it is |
+|---|---|
+| `xhcidi.c` | `WinMain`: the command line, the version and system checks, the job, the result file, the version stamp. |
+| `di_sys.c` / `di_sys.h` | The setup engine's calls of record 27 sections 5 and 9 (install and removal through `DiCallClassInstaller`), and the registry read of the system check; read, not unit-tested. |
+| `di_core.c` / `di_core.h` | The pure part, C89 with no Windows header: the command line, the result file's lines, the engine's error names, the verdicts (host suite `test_di`). |
+| `makefile`, `build.cmd` | The `wmake` build and its environment; `build.cmd` answers 2 on a host without Open Watcom. |
+| `stage-ddk.ps1` | Holds the four Windows 98 SE DDK files to `docs\references\README.md`'s hashes and copies them into the git-ignored `obj\`; `-VerifyOnly` for the cut. |
+| `selftest.cmd`, `check-imports.ps1`, `test-gate.ps1`, `xhcidi-imports.allow` | The NE import gate (`KERNEL`, `USER`, `SETUPX` by ordinal, each the allowlist's and its import library's), its refusals, and the version stamp. |
+| `test\ditest.c`, `test\build.cmd` | `DITEST.EXE`, the 42-V.1 legs' test driver (never packaged). |
 
 ### `xhcicln\` - the cleanup tool (task 38.8)
 

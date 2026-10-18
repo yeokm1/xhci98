@@ -2281,15 +2281,28 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   that exposes its secondary bus (the invalidation of section 6.2,
   `Reenumerate_DevNode` of section 6.1), the driver scans that bus and
   publishes `UP` for each function of class 01h subclass 08h that
-  answers, with `LinkGeneration` + 1 - except that an entry already `UP`
-  keeps its generation on a tunnel down's re-enumeration. After a tunnel
-  up, a RESYNC or an owed re-enumeration the exposure is fresh: presence
-  on the bus does not prove the link stayed up in between, so even an
-  entry that reads `UP` gets a new generation - unless a 9x removal
-  request (`REMOVE_PENDING`, below) is outstanding on it: the generation
-  does not change while one is set (interface 3, R9a), so the entry is
-  left as it is until the request is withdrawn. Before every exposure,
-  fresh or not (it follows the acknowledgement wait), every entry behind
+  answers, with `LinkGeneration` + 1 for a new tunnel only (task 42-A.6;
+  `stor98cm.h` as Stor98 revised it on 2026-10-18, entry protocol step 1
+  and R8b: UP published again for a tunnel that stayed up keeps its
+  generation). An entry not `UP` always gets the new generation. An entry
+  already `UP` keeps it - on a tunnel down's re-enumeration, a RESYNC, a
+  baseline's or an owed re-enumeration's exposure, and on every member but
+  the one a tunnel up names - unless the exposure names a tunnel other
+  than the one the entry's `UP` was last published for: under the USB4
+  profile (record 22 section 10) the UP hook and the seam name the port's
+  tunnel (the USB4 port and its connection generation) to the member the
+  port corresponds to, and nothing else names one. Under the firmware
+  connection manager no action names its member, so no tunnel is named
+  and no entry already `UP` is advanced: a member whose function is newly
+  found gets its generation, and the others stay as they are. (Until
+  42-A.6 every exposure after a tunnel up or a RESYNC advanced every
+  member's entry: U.11's two NVMe drives under the USB4 profile,
+  `runs/run-41.md`, where a second port's tunnel up re-published the
+  first drive's entry at a new generation and a bound Stor98 on 98 SE
+  dropped that disk.) Nor does the generation change while a 9x removal
+  request (`REMOVE_PENDING`, below) is outstanding on an entry (interface
+  3, R9a): it is left as it is until the request is withdrawn. Before
+  every exposure, fresh or not (it follows the acknowledgement wait), every entry behind
   that bridge that carries a statement is retired (`IN_USE` alone,
   generation + 1), found by the bus and by the bridge it was last published
   or marked for, so a Stor98 instance that binds after the exposure -

@@ -416,6 +416,13 @@ records the rule. src/cm/stor98cm.h is a third case: the Stor98 project's
 interface header, carried byte for byte under its own BSD-3-Clause notice and
 never edited here (section 2a).
 
+src/stor98/ is the Stor98 project itself, in this repository since 2026-10-19:
+its source, documentation, tests and released builds. Those files carry
+Stor98's own licence, BSD-3-Clause, in src/stor98/LICENSE, not the licence
+above, and src/stor98/NOTICE records where their code came from (SweetLow's
+nvme9x/nvment and Dominik Behr's nvme2k among it).
+docs/contributing/legal-provenance.md, "Stor98 in this tree", has the record.
+
 This project's tools are compiled binaries that statically contain
 third-party code; the drivers are not among them. There are five tools and,
 for 3.0.0.0, eight executables: XHCIQUAL.EXE, the DOS qualification tool;

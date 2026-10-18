@@ -1,6 +1,14 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 6, 2026-10-18, reviewed and revised (the settle-binding
+Status: draft 7, 2026-10-19, revised from the 98 SE smoke readings of
+task 42-A.1 (`runs/run-42.md`) with the owner's two decisions of
+2026-10-18: the job's operands in a job file, since a 16-bit program's
+command tail holds 126 characters (section 4.1); the helper's own choice
+of the best-ranked node when the dispatcher answers `DIF_SELECTBESTCOMPATDRV`
+with `ERR_DI_DO_DEFAULT` (section 5.2); with them what a cancelled
+hardware wizard does to its devnode (sections 5.1 and 6) and what
+`LDID_SRCPATH` does not do to the Windows CD's prompt (section 5.3);
+draft 6, 2026-10-18, reviewed and revised (the settle-binding
 leg); draft 5, 2026-10-18, reviewed and revised (the ownership leg's
 existing-copy case); draft 4, 2026-10-18, reviewed and revised (the
 probe as the test of the process handle, the timeout per job kind, the
@@ -259,17 +267,85 @@ its line, as the rule for every third-party document here says.
 The installer (record 26's engine, on 98 SE and ME only) starts the
 helper with `CreateProcessA` from `tools\xhciinst\XHCIDI.EXE` of the
 package, or from the install directory's copy for the uninstall (record
-26 section 6.2), with one job on the command line:
+26 section 6.2), with one job, written into a **job file** first (owner,
+2026-10-18):
 
 ```
-XHCIDI.EXE <version> install <result file> <hwnd> <device id> <inf path> [<flags>]
-XHCIDI.EXE <version> remove  <result file> <hwnd> <device id>
-XHCIDI.EXE <version> probe   <result file> <hwnd>
+XHCIDI.EXE <version> <job file>
 ```
 
-- `<version>`: the installer's `XHCI_VER_STR`. The helper compares it
-  with its own before anything else and writes `RESULT refused version`
-  on a difference, so no job of another release touches a device; and the
+**Why a job file.** A 16-bit program's command line is its MS-DOS command
+tail, at most 126 characters: on the 98 SE smoke run of 2026-10-18 (task
+42-A.1, `runs/run-42.md`) `CreateProcessA` failed with error 31 for a
+helper tail of 127 characters and started it at 126. A PCI device id alone
+is 66 characters and a USB one with a serial number can reach
+`MAX_DEVICE_ID_LEN` (200), so the job's operands cannot travel on the
+command line; only the version and the job file's path do.
+
+**The command line.** Two words separated by one space: `<version>`, the
+installer's `XHCI_VER_STR` (at most 31 characters), and `<job file>`, a
+drive-rooted path whose every part is 8.3 (record 23 section 9.6's rule,
+the characters `inst_name83` takes) of **at most 80 characters**. The
+tail is therefore at most 31 + 1 + 80 = 112 characters, 14 under the
+bound, whatever the install directory. The installer names the job file
+in its install directory (`C:\XHCI98\DIJOB.TXT`, say) when that path fits
+in 80 characters, and otherwise in the root of the install directory's
+drive (`C:\XHCIDIJ.TXT`); a path longer than 80 characters is refused by
+the helper with no result file (exit 3).
+
+**The job file.** Written whole by the installer before the start, read
+whole by the helper at its start, and never changed or deleted by the
+helper (the installer deletes it after the job, or overwrites it with the
+next one). ASCII, at most 2048 bytes, one record a line, each line ending
+in CRLF (a bare LF is accepted), each record a key and its operands
+separated by one or more spaces or tabs, no operand containing a space.
+The records, exactly in this order and each exactly once, keys in upper
+case:
+
+```
+XHCIDI-JOB 1
+JOB <install | remove | probe>
+RESULT <result file>
+HWND <hwnd>
+DEVICE <device id>          install and remove only
+INF <inf path>              install only
+FLAGS <flag> [<flag>]       install only, and optional
+END
+```
+
+(The words after the columns are this record's explanation, not part of
+the file.) Nothing but blank lines may follow `END`, and no blank line
+may come before it. `XHCIDI-JOB 1` is the format's version: a later
+format changes the number. A probe of an installer whose run directory is
+`C:\XHCI98` is therefore
+
+```
+XHCIDI-JOB 1
+JOB probe
+RESULT C:\XHCI98\DIRES.TXT
+HWND 1048
+END
+```
+
+and an install
+
+```
+XHCIDI-JOB 1
+JOB install
+RESULT C:\XHCI98\DIRES.TXT
+HWND 1048
+DEVICE PCI\VEN_1B36&DEV_000D&SUBSYS_11001AF4&REV_01\BUS_00&DEV_03&FUNC_00
+INF C:\XHCI98\XHCI98.INF
+FLAGS quiet
+END
+```
+
+The operands:
+
+- `<version>` (the command line): the installer's `XHCI_VER_STR`. The
+  helper compares it with its own before it reads anything of the job but
+  the `RESULT` line, and writes `RESULT refused version` on a difference,
+  so no job of another release touches a device; and the
   installer runs `probe` once per run, before its first job, which proves
   that the helper starts on this system (its imports resolved by the
   system's `SETUPX.DLL`), its version, the result file's round trip,
@@ -283,27 +359,35 @@ XHCIDI.EXE <version> probe   <result file> <hwnd>
   the end of the one before it cannot be seen. If the legs find the
   handle does not signal on a target, the record is revised with a
   termination test before the code rests on one, and the printed steps
-  remain the route there until then.
-- `<result file>`: a path in the install directory (8.3 parts, record 23
-  section 9.6) the installer creates empty before the start and reads
-  after the end; the helper truncates and rewrites it, so a stale file is
-  never read as a result.
-- `<hwnd>`: the installer's window handle in decimal, or 0 from the
-  console tool. On Windows 98 and ME the 16-bit and 32-bit window handle
-  spaces are one, so the engine's dialogs (the copy engine's "Insert
-  disk", the class installer's questions, the signature prompts ME shows)
-  are owned by the installer's window and appear in front of it. A 16-bit
-  program may use a handle a 32-bit program created on these systems; the
-  leg reads that the dialogs appear owned (section 12).
-- `<device id>`: the devnode's device id as `cfgmgr32.dll` gave it to the
-  installer (`PCI\VEN_8086&DEV_...\BUS_00&DEV_14&FUNC_00`,
-  `USB\XHCI98_ROOT_HUB\...`), at most `MAX_DEVICE_ID_LEN` characters.
-- `<inf path>`: the INF in the install directory (`C:\XHCI98\XHCI98.INF`),
-  every part 8.3 and no space (record 23 section 9.6's rule makes the
-  command line safe for the 16-bit engine, whose `atDriverPath` is one
-  atom of at most 255 characters).
-- `<flags>`: `force` (reinstall a current driver: record 23's `/force`
-  and the Have Disk cases of its section 6.4), `quiet` (section 5.2).
+  remain the route there until then. (The 98 SE smoke run read it
+  signalling at the helper's exit, `GetExitCodeProcess` 0.)
+- `RESULT <result file>`: a path of at most 255 characters, 8.3 in every
+  part (record 23 section 9.6), in the install directory, which the
+  installer creates empty before the start and reads after the end; the
+  helper truncates and rewrites it, so a stale file is never read as a
+  result. The helper looks for this line first, wherever it is in the
+  file, because with no usable result path it can report nothing.
+- `HWND <hwnd>`: the installer's window handle in decimal (at most 65535,
+  no leading zero), or 0 from the console tool. On Windows 98 and ME the
+  16-bit and 32-bit window handle spaces are one, so the engine's dialogs
+  (the copy engine's "Insert disk", the class installer's questions, the
+  signature prompts ME shows) are owned by the installer's window and
+  appear in front of it. A 16-bit program may use a handle a 32-bit
+  program created on these systems (the smoke run's 844 and 1048 passed
+  the helper's `IsWindow`); the leg reads that the dialogs appear owned
+  (section 12).
+- `DEVICE <device id>`: the devnode's device id as `cfgmgr32.dll` gave it
+  to the installer (`PCI\VEN_8086&DEV_...\BUS_00&DEV_14&FUNC_00`,
+  `USB\XHCI98_ROOT_HUB\...`), at most `MAX_DEVICE_ID_LEN` (200)
+  characters.
+- `INF <inf path>`: the INF in the install directory
+  (`C:\XHCI98\XHCI98.INF`), at most 255 characters, every part 8.3 and no
+  space (the engine's `atDriverPath` is one atom of at most 255
+  characters).
+- `FLAGS`: one or both of `force` (reinstall a current driver: record
+  23's `/force` and the Have Disk cases of its section 6.4) and `quiet`
+  (section 5.2), lower case, each at most once; the line is left out for
+  neither.
 
 The installer waits in one loop: `MsgWaitForMultipleObjects` on the
 process handle with a one-second timeout in the window
@@ -357,7 +441,9 @@ one verdict word; an `ERROR` line with the engine's error name
 failed; `END` with the count. The installer's pure half parses it
 (`inst_di_result`, host-tested on every verdict and on a truncated file):
 no `END`, a count that differs, a version that is not the installer's, a
-`JOB` that is not the one started, or an unknown verdict is "the helper
+`JOB` that is not the one started (the job file's `JOB`, `DEVICE` and
+`INF` records, in that order, as section 4.4 says), or an unknown verdict
+is "the helper
 did not finish", reported as a failure of that device with the steps page
 (record 26 section 7). The installer copies every line into its log.
 
@@ -369,10 +455,64 @@ touches a devnode other than the one named, never starts a second job,
 never retries, and never runs on a system that is not 98 SE or ME (it
 reads the Windows version first and writes `RESULT refused` with the
 reason), or whose version is not the installer's (section 4.1). A
-helper started with a malformed command line writes `RESULT refused` and
-the reason. An installer that finds no helper beside
+helper started with a malformed command line or job file writes `RESULT
+refused` and the reason, where the job file's `RESULT` line can be read. An installer that finds no helper beside
 it (an older or a development package) falls back to the printed steps
 of record 23 section 6.4 for every device, saying so once.
+
+### 4.4 The file's details as the code has them (task 42-A.1)
+
+What sections 4.1 to 4.3 leave to the code, as `xhciinst\di\` writes it
+(`di_core.c`, host-tested in `test\test_di.c`); nothing above is changed by
+it:
+
+- **The order of the checks.** The command line first: two words, the
+  job file's path 8.3 and at most 80 characters; then the job file, read
+  whole (at most 2048 bytes); then its `RESULT` line, wherever it is. With
+  any of those unusable nothing can be written: the helper exits 3 with no
+  file. Then the version, before the rest of the job file is read; then
+  the job file whole, strictly, in section 4.1's order; then the window
+  handle; then the system. `XHCIDI <own version>` is always the first
+  line of the result file.
+- **The `JOB` line** is `JOB install <device id> <inf path>`, `JOB remove
+  <device id>` or `JOB probe`: the job and its operands, never its flags,
+  so it compares with the job file's `JOB`, `DEVICE` and `INF` records
+  without them. A refusal of the version or of the job has no `JOB` line
+  (the job was not read, or not whole); a refusal of the system, and every
+  job that ran, has one.
+- **The refusals** are `RESULT refused version`, `RESULT refused command
+  <what>` (`job-file` for a record missing, out of order, of the wrong
+  shape or after `END`, or a format version other than 1; `job`, `hwnd`,
+  `device-id`, `inf-path` and `flags` for that record's operand; an `hwnd`
+  that is not 0 and names no window is `command hwnd`) and `RESULT
+  refused system <VersionNumber>` (the build string of
+  `HKLM\Software\Microsoft\Windows\CurrentVersion`, `-` when none was read;
+  98 SE is `4.10.2222`, ME `4.90.3000`, and `GetVersion` must also say
+  3.95).
+- **The probe's verdict** is `RESULT probed`: section 5.4's table has no
+  row for it, since the probe calls no engine routine.
+- **Three lines beside section 4.2's.** `DEFAULT DIF_SELECTBESTCOMPATDRV
+  lowest-rank` follows the `CALL` line of that dispatcher call when it
+  answered `ERR_DI_DO_DEFAULT` and the helper chose the node itself
+  (section 5.2). `NODE <flags>` (eight hex digits,
+  then `force` when the installer asked for it) follows `DRIVER`: the
+  chosen node's `DRIVER_NODE.Flags`, so the log shows `DNF_OLDDRIVER` and
+  `DNF_CURRENT_DRIVER` beside what was asked. The helper installs the
+  chosen node whatever its flags say; whether the engine itself declines a
+  same-version install is section 5.2's reading. And a `no-match` is
+  preceded by `IDS HardwareID <list>` and `IDS CompatibleIDs <list>`, read
+  from the devnode's `Enum` key (section 5.2's "with the ids the helper
+  read"). A space or a quote in a bare field is written as `_`.
+- **The helper's own failures**, which are no engine error, are written as
+  section 5.4's `failed <name> <n>` with the number 0: `XHCIDI_NO_SELECTION`
+  (the class installer's choice left no selected driver),
+  `XHCIDI_OTHER_INF` (the chosen node's INF is not the one given, which
+  `DI_ENUMSINGLEINF` should make impossible) and `XHCIDI_NO_ATOM` (the
+  INF's path could not be made an atom). Each has an `ERROR` line with the
+  same name before it. An engine error name the header does not enumerate
+  is `ERR_UNKNOWN`.
+- **Exit codes**, which nothing rests on: 0 a job ran to a verdict, 1
+  refused, 2 a line could not be written, 3 no result file.
 
 ## 5. The install, call by call
 
@@ -397,6 +537,20 @@ out of the list (`ipmodem.cpp`: the found device's fields passed to
 Not found: `FOUND 0`, `RESULT not-present`, and the installer treats the
 device as record 23 section 6.3's "recorded, not running now".
 
+**A cancelled hardware wizard** (read on the 98 SE smoke run of
+2026-10-18): when the user cancels the Found New Hardware wizard of a
+device, 98 SE takes the devnode out of the tree for the rest of that boot
+(its `Enum` entry stays, class `Unknown`; the wizard opens again at the
+next start), so the present list does not hold it and the helper answers
+`not-present`. Taking the wizard to its end instead, Next until "Windows
+has not installed a driver for this device" and Finish when it finds
+none, leaves the devnode present at problem 28 with class `Unknown`, and
+the helper installs it (below). The installer therefore asks for the
+wizards to be finished, not cancelled (section 6), and a device of the
+plan the helper answers `not-present` for is listed as section 5.4 says:
+a step that says to restart, finish that device's wizard when it opens,
+and run the installer again.
+
 **The class.** A devnode with no driver yet has the class its enumerator
 gave it, often none or `Unknown`; the INF says which class its driver
 installs. The helper asks the engine for the INF's class with
@@ -405,12 +559,12 @@ in the header as "API to return the Class name of an INF File", and
 passes that class to `DiCreateDeviceInfo` for the devnode's entry, as the
 DDK's network sample passes an explicit class name when it creates the
 `DEVICE_INFO` for a device it is about to install (`ipndi.cpp`), the
-other fields taken from the list's entry. Whether the engine then installs
-a `USB` or `System` class INF on a devnode listed under `Unknown` through
-this route is the first reading of the 98 SE leg (section 12): the header
-documents the fields, not the wizard's own sequence, and the record
-claims no more until it is read; the fallback is record 23 section 6.4's
-steps.
+other fields taken from the list's entry. The 98 SE smoke run of
+2026-10-18 read this route installing `xhci98.inf` (`DiGetINFClass`
+answered `USB`) on the controller listed under `Unknown` at problem 28:
+the devnode's `Enum` key then said `Class` `USB` and `Driver` `USB\0002`.
+The 42-V.1 legs read it again for every device and on ME; the fallback is
+record 23 section 6.4's steps.
 
 ### 5.2 Choosing the driver
 
@@ -436,13 +590,30 @@ steps.
   match (record 23 section 5.3's rule, pure) said the INF matches, so a
   disagreement is reported as such, never forced.
 - `DiCallClassInstaller(DIF_SELECTBESTCOMPATDRV, lpdi)`: the class
-  installer of the device's class is given the choice first, and the
-  engine's default, `DiSelectBestCompatDrv`, makes it when the class
+  installer of the device's class is given the choice first. The record
+  assumed that the engine's default would make the choice when the class
   installer answers `ERR_DI_DO_DEFAULT` or there is none (the header's
-  `DI_NODI_DEFAULTACTION` block: with that flag clear, which the helper
-  leaves it, the dispatcher performs the default action); `lpSelectedDriver`
-  is read after the call ("Given list of drivers returns the newest" is
-  `DiPickBestDriver`'s comment, the default's helper). The helper checks the chosen node's `atInfFileName` names the given INF
+  `DI_NODI_DEFAULTACTION` block: "Set if DiCallClassInstaller should not
+  perform any default action if the class installer return
+  ERR_DI_DO_DEFAULT, or there is not class installer"). It does not, for
+  this function: on the 98 SE smoke run of 2026-10-18 the dispatcher
+  returned 506, `ERR_DI_DO_DEFAULT`, for the controller with `xhci98.inf`
+  (class `USB`), `DI_NODI_DEFAULTACTION` clear, and selected nothing. The
+  block promises no default for any one function, and
+  `DiSelectBestCompatDrv` is declared with another shape (it returns a
+  `LPDRIVER_NODE` and takes a current node), so this reads as the
+  dispatcher having no default for `DIF_SELECTBESTCOMPATDRV`, not as a
+  default that failed. **On `ERR_DI_DO_DEFAULT` the helper selects the
+  node itself** (owner, 2026-10-18): the node of the best rank in
+  `lpCompatDrvList` ("Ranks go from 0 to n, where 0 is the most
+  compatible", the `DRIVER_NODE` block), the first of equal ranks, into
+  `lpSelectedDriver`, as the DDK's network sample selects from the
+  compatible list itself (`lpSelectedDriver = lpCompatDrvList`), and
+  writes `DEFAULT DIF_SELECTBESTCOMPATDRV lowest-rank` after the call's
+  `CALL` line. With `DI_ENUMSINGLEINF` every node is this package's INF.
+  The same run read the install that followed succeed (section 5.3). Any
+  answer other than 0 or 506 is the call's failure (`ERR_DI_USER_CANCEL`
+  is `cancelled`). `lpSelectedDriver` is then read. The helper checks the chosen node's `atInfFileName` names the given INF
   (with one INF in the search it must) and writes the `DRIVER` line from
   the node. With `force`, a node flagged `DNF_OLDDRIVER` or
   `DNF_CURRENT_DRIVER` is still installed (the engine's "do not upgrade
@@ -463,11 +634,20 @@ steps.
   prompt starts from. Before the install the helper sets it to the INF's
   directory with `CtlSetLddPath(LDID_SRCPATH, dir)` after saving the old
   path with `CtlGetLddPath`, and puts it back after (both routines are the
-  header's `Ctl*` logical-disk set, declared with their arguments; their
-  effect on the prompt is the leg's reading, section 12). If the prompt
-  still comes, it is Windows' own, owned by the installer's window, and
-  the page says what to type (record 26 section 7); the files then come
-  from the directory typed, as today.
+  header's `Ctl*` logical-disk set, declared with their arguments). Read on
+  the 98 SE smoke run of 2026-10-18: the saved path was `D:\WIN98\` (the
+  Windows setup source), the package's own `xhci98.sys` was copied from
+  `C:\XHCI98` with no prompt for the package's disk, and the Windows CD
+  prompt for `usbd.sys` still came, its "Copy files from" set to
+  `D:\WIN98`: **`LDID_SRCPATH` does not change the default path of the
+  Windows CD's prompt**, which names the Windows CD's own disk. Whether
+  the package's files would have prompted without it is read on the legs
+  (section 12), and the helper keeps setting and restoring it until then.
+  The CD prompt is Windows' own, owned by the installer's window; the
+  installer's page before the first job says that Windows may ask for its
+  CD and what to type when the path it offers is not the CD's (the CD-ROM
+  drive's `\WIN98`, or wherever the CD's `WIN98` directory was copied);
+  the files then come from the directory typed, as today.
 - `DiCallClassInstaller(DIF_INSTALLDEVICE, lpdi)`, the dispatcher the
   DDK's samples call: the class installer runs first and the engine's
   `DiInstallDevice` is the default action it falls to (`ERR_DI_DO_DEFAULT`,
@@ -498,9 +678,9 @@ steps.
 | `installed-restart` | 0, with `DI_NEEDRESTART` or `DI_NEEDREBOOT` | "installed, restart pending"; the restart flag |
 | `cancelled` | `ERR_DI_USER_CANCEL` | the device's steps page (record 26 section 7), exit 4 |
 | `no-match` | an empty compatible list | the steps page, and the ids in the log |
-| `not-present` | the devnode is not in the present list | record 23 section 6.3's "recorded, not running now" |
+| `not-present` | the devnode is not in the present list (a device whose hardware wizard was cancelled this boot among them, section 5.1) | record 23 section 6.3's "recorded, not running now", and for a device of the plan a finish-page step: restart, finish its wizard, run the installer again (section 6) |
 | `failed <ERR_DI_name> <n>` | any other `RETERR`, with the call that returned it | the steps page; a failed controller stops the devices below it, as record 23 section 5.1 does on NT |
-| `refused <reason>` | the helper did not start the job (the system, the command line, the version), before any call | a failure of the run's 98 SE and ME route, said once |
+| `refused <reason>` | the helper did not start the job (the system, the job file, the version), before any call | a failure of the run's 98 SE and ME route, said once |
 
 ## 6. The devices, in order
 
@@ -508,9 +688,14 @@ The installer's plan (record 23 sections 5.4 and 6.3) decides what is
 installed; the helper only does what it is told, one devnode at a time,
 in this order, and before every pass, the first included, the gate of
 step 2: the tree read and settled, and the user's Next on a page that
-says to finish or cancel any hardware wizard already open, so a
-controller whose own wizard is open when the installer starts is never
-installed under it.
+says to finish any hardware wizard already open (Next until its end, and
+Finish where Windows "has not installed a driver"), so a controller whose
+own wizard is open when the installer starts is never installed under it.
+The page says not to cancel a wizard, because a cancelled one removes its
+device until the next start (section 5.1); a device the helper then
+answers `not-present` for is a step of the finish page (restart, finish
+its wizard when it opens, run the installer again), and the rest of the
+plan goes on.
 
 1. **The controller** (`PCI\CC_0C0330` among its ids, `xhci98.inf`). Its
    install starts `xhci98.sys`, which enumerates the root hub as a new
@@ -531,7 +716,8 @@ installed under it.
    retried (record 23's three-tries rule is NT's `0x20`; here the second
    try is the next run).
 3. **The root hub, the hubs and the composite entries** that still have no
-   driver (a cancelled wizard) or an older one (an update: the 9x leg of
+   driver (a wizard finished with none, which leaves the devnode present;
+   a cancelled one is `not-present`, section 5.1) or an older one (an update: the 9x leg of
    2026-10-15, where the root hub otherwise stayed at the old release),
    each by `xhci98.inf`, repeated while new targets appear, at most four
    passes as on NT, each pass after a settle.
@@ -610,7 +796,7 @@ Nothing here is written by the helper or the installer directly.
 
 ## 9. Removal, for the uninstall
 
-`XHCIDI.EXE <version> remove <result file> <hwnd> <device id>`: the
+A `remove` job (section 4.1: `JOB remove`, `RESULT`, `HWND`, `DEVICE`): the
 devnode's entry is taken from `DiGetClassDevsEx` without `DIGCF_PRESENT`
 (`DIGCF_ALLCLASSES` alone), so a device of the package that is not
 connected now, a UAS disk unplugged or the root hub of a controller that
@@ -665,8 +851,9 @@ CD), which is no different from today's wizard and is said in the readme.
 
 In `xhciinst\inst_core.c` (host-tested in `test\test_inst.c`):
 
-- the helper's command line (the job, the arguments, the 8.3 and length
-  checks on the paths and the id);
+- the helper's job file and command line (section 4.1: the records in
+  their order, the 80-character bound on the job file's path, the 8.3 and
+  length checks on the paths and the id);
 - the result file's parser and the verdict table of section 5.4, with
   cases for every verdict, a truncated file, a wrong version, a wrong job,
   an unknown word, an `END` count that differs;
@@ -677,7 +864,8 @@ In `xhciinst\inst_core.c` (host-tested in `test\test_inst.c`):
 
 In `xhciinst\di\di_core.c`, the helper's own pure part, C89 with no
 Windows header and no far pointer, compiled by Watcom into the helper and
-by the host suite (`test\test_di.c`) under MSVC: the command-line parser,
+by the host suite (`test\test_di.c`) under MSVC: the parser of the
+command line and the job file,
 the result file's writer (line by line into a caller's buffer), the
 `RETERR` to error-name table from the header's enumeration (checked by the
 suite against the header's values, read at build time from
@@ -695,9 +883,9 @@ key, `INF\OTHER`'s listing, and Device Manager:
 
 | Leg | Reads |
 |---|---|
-| F, fresh install | the controller installed by the helper from the Found page's plan with no hand step; the Windows CD prompt for `usbd.sys` owned by the installer's window; the root hub's and hubs' wizards after the controller's restart, and the settle's wait for them; a cancelled root-hub wizard then installed by the helper; the devnode's class after the install; whether `LDID_SRCPATH` spares the "Copy files from" prompt; the driver key's values of section 8 |
+| F, fresh install | the controller installed by the helper from the Found page's plan with no hand step; the Windows CD prompt for `usbd.sys` owned by the installer's window; the root hub's and hubs' wizards after the controller's restart, and the settle's wait for them; a root-hub wizard finished with no driver then installed by the helper, and a cancelled one answered `not-present` and listed as the restart-and-run-again step (section 5.1); the devnode's class after the install; whether `LDID_SRCPATH` spares the package disk's prompt (the Windows CD's keeps its own default path, section 5.3); the driver key's values of section 8 |
 | U24, update over `2.4.0.0` | the controller and the root hub updated by the helper with no hand step (the hand step record 23's 9x leg needed); the keyboard and mouse behind the controller back after the restart of the devices, not of Windows |
-| U23, update over `2.3.1.0` (98 SE) | the new devnodes and their wizards; the helper's pass over what was cancelled |
+| U23, update over `2.3.1.0` (98 SE) | the new devnodes and their wizards; the helper's pass over what a wizard finished with no driver; a cancelled one's `not-present` and its step |
 | UAS and Stor98 | a UAS disk installed and `force`-reinstalled (the `ERR_DI_DONT_INSTALL` question); Stor98 ticked on an NVMe device with no driver, installed from the copy, its IOS binding read back; an older Stor98 updated with the shutdown afterwards (record 26 section 6.3); two bundled versions in succession, then the uninstall removing every owned staged copy no device names and leaving a hand-installed Stor98's device with the copy its driver key names, and an `INF\OTHER` copy of a hand install whose device was removed before the run, which stays; an NVMe device Windows binds to Stor98 by itself during the settle after the host interface's install, with no Stor98 helper call, recorded with the copy the engine made for it, and the uninstall removing that copy once unreferenced (record 26 section 6.3) |
 | Thunderbolt | the host interface by `xhcicm.inf` on the emulator's Alpine Ridge guest (the 98 SE wizard's "Copy files from" of record 23 section 8.5, now the helper's) |
 | UN, uninstall | each devnode removed through the helper in order, an unplugged UAS disk's entry and a moved controller's old entry among them (the removal of an entry that is not present); the subtree removal; the `INF\OTHER` copies and the files deleted by the installer; the restart; the controller back as an unknown device with no wizard finding a driver |
@@ -705,13 +893,22 @@ key, `INF\OTHER`'s listing, and Device Manager:
 | ME | every row above on ME, and ME's own prompts |
 | Dialogs and handles | that the engine's dialogs are owned by the installer's window; that the process handle of the 16-bit helper signals at its exit and what its exit code reads; the fallback poll of the result file |
 
-What the legs settle that nothing here has read: the install of an INF of
-another class on an `Unknown` entry through `DiCreateDeviceInfo` with the
-INF's class; the listing and removal of an entry that is not present; `DI_ENUMSINGLEINF`
-with an INF outside `%windir%\INF`; `CtlSetLddPath` and the copy prompt;
-`ERR_DI_DONT_INSTALL` on a same-version install; the subtree removal of
-`DiRemoveDevice`; the 16-bit process handle's behaviour; and where the
-engine copies an INF found through `DevicePath`.
+What the 98 SE smoke run of 2026-10-18 read before the legs (task 42-A.1,
+`runs/run-42.md`): the probe and the 16-bit process handle signalling at
+the helper's exit; the 126-character command tail (section 4.1); a
+cancelled wizard's devnode leaving the tree (section 5.1); the install of
+`xhci98.inf` on the controller's `Unknown` entry through
+`DiCreateDeviceInfo` with the INF's class, with `DI_ENUMSINGLEINF` and the
+INF outside `%windir%\INF`; `ERR_DI_DO_DEFAULT` from
+`DIF_SELECTBESTCOMPATDRV` (section 5.2); `LDID_SRCPATH` and the Windows
+CD's prompt (section 5.3); the engine's copy `YEOKHE~1.INF` under
+`INF\OTHER`. Each is read again on the legs with the helper as it now
+is, on 98 SE and ME. What the legs settle that nothing here has read: the
+other devices' installs and ME's; the listing and removal of an entry
+that is not present; `ERR_DI_DONT_INSTALL` on a same-version install;
+the subtree removal of `DiRemoveDevice`; whether `LDID_SRCPATH` is what
+spares the package disk's prompt; and where the engine copies an INF
+found through `DevicePath`.
 
 ## 13. Decisions taken in writing this (the orchestrator's, owner to confirm)
 
@@ -735,11 +932,16 @@ engine copies an INF found through `DevicePath`.
 - **H4** `DI_ENUMSINGLEINF` with the package's INF, `DI_QUIETINSTALL`,
   every action through `DiCallClassInstaller` (`DIF_SELECTBESTCOMPATDRV`,
   `DIF_INSTALLDEVICE`, `DIF_REMOVE`) with the engine's default behind the
-  class installer; never `DI_NOFILECOPY`, `DI_FORCECOPY` or
-  `DI_DONOTCALLCONFIGMG` (sections 5.2, 5.3 and 9).
+  class installer, and where the dispatcher has no default
+  (`ERR_DI_DO_DEFAULT` for `DIF_SELECTBESTCOMPATDRV`, read on 98 SE) the
+  helper's own choice of the best-ranked node (owner, 2026-10-18); never
+  `DI_NOFILECOPY`, `DI_FORCECOPY` or `DI_DONOTCALLCONFIGMG` (sections 5.2,
+  5.3 and 9).
 - **H5** `LDID_SRCPATH` set to the INF's directory for the install and
-  restored after; the prompt, if it still comes, is Windows' own (section
-  5.3).
+  restored after; the package's files came from that directory with no
+  prompt on the 98 SE smoke run, and the Windows CD's prompt, which still
+  comes with its own default path, is Windows' own, the installer's page
+  saying what to type (section 5.3).
 - **H6** The installer never installs under a wizard it cannot see: a
   settle and the user's Next gate every pass after the controller (section
   6; record 23 decision D13 on these systems).
@@ -753,6 +955,18 @@ engine copies an INF found through `DevicePath`.
 - **H9** The result file is the contract; the exit code and the handle's
   signal are readings; the version travels on the command line and a
   probe runs before the first job (sections 4.1 and 4.2).
+- **H10** (owner, 2026-10-18) The job's operands travel in a job file of
+  section 4.1's format, its path at most 80 characters on the command
+  line beside the version, because a 16-bit program's command tail holds
+  126 characters (98 SE smoke run of 2026-10-18). Not taken: the operands
+  shortened to fit (a USB device id alone can reach 200 characters), the
+  environment (a 16-bit task's is a copy made at its start, with no
+  documented way to pass one per job from a 32-bit `CreateProcessA` that
+  this record could rest on).
+- **H11** (owner, 2026-10-18) A cancelled hardware wizard's device is
+  `not-present` until the next start, so the installer asks for wizards
+  to be finished, not cancelled, and lists a device left so as a
+  restart-and-run-again step (sections 5.1 and 6).
 
 ## 14. Open, and the risks
 
@@ -785,10 +999,13 @@ engine copies an INF found through `DevicePath`.
 |---|---|
 | `xhciinst\di\xhcidi.c` | the helper's `WinMain`: the version check, the job, the result file |
 | `xhciinst\di\di_sys.c` | the engine calls of sections 5 and 9 |
-| `xhciinst\di\di_core.c`, `di_core.h` | the pure part: the command line, the result writer, the error names, the verdicts |
+| `xhciinst\di\di_core.c`, `di_core.h` | the pure part: the command line and the job file, the result writer, the error names, the verdicts |
 | `xhciinst\di\prsht16.h` | only if the DDK's `inc16\prsht.h` cannot be used as it is: a declaration-only stand-in for the types `setupx.h` names from it, this project's text |
 | `xhciinst\di\makefile`, `build.cmd` | the Watcom build, as `xhciqual\`'s |
-| `xhciinst\inst_core.c`, `inst_eng.c` | the installer's side: the command line, the result parser, the order, the fallback |
+| `xhciinst\di\stage-ddk.ps1` | the DDK's four files (`setupx.h`, `prsht.h`, the 98 `windows.h`, `setupx.lib`) held to `docs\references\README.md`'s hashes and staged into `obj\` (task 42-A.1) |
+| `xhciinst\di\check-imports.ps1`, `xhcidi-imports.allow`, `test-gate.ps1`, `selftest.cmd` | the NE import gate of section 7 and its refusals, and the version stamp of section 3.2 (task 42-A.1) |
+| `xhciinst\di\test\ditest.c`, `build.cmd` | `DITEST.EXE`, the legs' test driver, which starts the helper as section 4.1's installer does, without the window (task 42-A.1; never packaged) |
+| `xhciinst\inst_core.c`, `inst_eng.c` | the installer's side: the job file and the command line, the result parser, the order, the fallback |
 | `test\test_di.c`, `test\test_inst.c` | the host suites |
 | `scripts\package\make-release.ps1`, `test-package.ps1` | the helper staged in `tools\xhciinst\`, its freshness, version and `NOTICE.TXT`; `-SkipDiHelper` |
 | `docs\contributing\legal-provenance.md`, `docs\references\README.md`, `build-and-test.md` | the rows of section 3.4 and the prerequisite of 3.3 |

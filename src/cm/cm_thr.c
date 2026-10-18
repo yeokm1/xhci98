@@ -574,6 +574,11 @@ static BOOLEAN cmPolling(PCM_NHI nhi)
                      CmLiveTransport(&nhi->Live));
 }
 
+BOOLEAN CmThrInertNext(PCM_NHI nhi)
+{
+    return (BOOLEAN)(!cmPolling(nhi) && CmLiveWaitMs(&nhi->Live) == 0);
+}
+
 /*
  * The liveness monitor's sample (cm_live.h, record 21 section 5.5): only
  * for an active instance in D0 with the system working, by elapsed time,
@@ -613,19 +618,26 @@ static VOID NTAPI cmThread(PVOID context)
 
     nhi = (PCM_NHI)context;
     for (;;) {
+        /* The wait recorded before it is entered and cleared after it
+         * returns (an aligned volatile ULONG: one store), for the query
+         * device's seed (task 42-A.7). */
         if (cmPolling(nhi)) {
             cmRelativeMs(&due, CmNvlinkIdleMs(nhi->Values.Value[CM_VAL_POLL_IDLE_MS]));
+            nhi->ThreadWait = CM_Q_WAIT_TIMED;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
         } else if (CmLiveWaitMs(&nhi->Live) != 0) {
             /* No transport, but a monitored state: the slow probes. */
             cmRelativeMs(&due, CmLiveWaitMs(&nhi->Live));
+            nhi->ThreadWait = CM_Q_WAIT_TIMED;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
         } else {
+            nhi->ThreadWait = CM_Q_WAIT_FOREVER;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, NULL);
         }
+        nhi->ThreadWait = CM_Q_WAIT_BUSY;
         nhi->Counters.Passes++;
         (VOID)cmNowMs(nhi);
 
@@ -653,11 +665,18 @@ static VOID NTAPI cmThread(PVOID context)
          * to activate anything out of D0 (CmNhiStartWork). */
         if (bits & CM_WORK_START) {
             CmNhiStartWork(nhi);
+            /* A bind still to come after the PnP start returns: recorded
+             * before the start is released, so the query device's seed
+             * does not judge the wait from the state before it. */
+            if (nhi->BindOwed) {
+                nhi->ThreadWait = CM_Q_WAIT_BINDING;
+            }
             (VOID)KeSetEvent(&nhi->PnpDone, IO_NO_INCREMENT, FALSE);
             if (nhi->BindOwed) {
                 nhi->BindOwed = 0;
                 CmNhiBind(nhi);
             }
+            nhi->ThreadWait = CM_Q_WAIT_BUSY;
         }
         if (bits & CM_WORK_D3) {
             CmPowerD3Work(nhi, d3Irp);
@@ -683,8 +702,7 @@ static VOID NTAPI cmThread(PVOID context)
         CmStatusPass(nhi);
         /* The query device's snapshot, inert when the wait at the top of
          * the loop will have no timeout. */
-        CmQueryPublish(nhi, (BOOLEAN)(!cmPolling(nhi) &&
-                                      CmLiveWaitMs(&nhi->Live) == 0));
+        CmQueryPublish(nhi, CmThrInertNext(nhi));
         /* The checked flavours' emission (decision D12), from here at
          * PASSIVE_LEVEL after each pass that recorded something; the
          * release flavour's CmLogEmit does nothing. */
@@ -711,6 +729,7 @@ NTSTATUS CmThrStart(PCM_NHI nhi)
     nhi->ThreadRunning = 0;
     nhi->ThreadObject = NULL;
     nhi->WorkBits = 0;
+    nhi->ThreadWait = CM_Q_WAIT_BUSY;
     KeClearEvent(&nhi->ThreadExited);
     status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
                                   NULL, cmThread, nhi);

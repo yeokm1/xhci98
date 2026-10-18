@@ -2246,11 +2246,15 @@ unchanged - no `DOWN_QUIESCED` (no quiescence is claimed), no increment
   a rebuild held so until a re-plug is handled by that re-plug as a
   fresh plug. Each rebuild is then an ordinary tunnel up with unknown
   correspondence whose publication follows task 42-A.6's rule for that
-  case - the fresh exposure for the one member whose secondary bus gains
-  the function, the publication held as debt until the gain attributes
-  it, and record 21 section 7.2's late route for a function that answers
-  only after the 9x enumeration - which that task owns and this record
-  does not redefine. The two-member leg's expected outcome: the two
+  case as section 10 states it - no tunnel named while the member is not
+  known, so the function newly found on the member's bus (its entry not
+  `UP` after the drain) gets the one new generation and no entry still
+  `UP` is advanced, nothing published again once the gain attributes the
+  port, and record 21 section 7.2's late route for a function that
+  answers only after the 9x enumeration - which that task owns and this
+  record does not redefine; a recovery that wants its rebuild's
+  publication held until attribution, before the operating system's
+  enumeration, is 42-A.10's to design and build. The two-member leg's expected outcome: the two
   rebuilds one after the other, each attributed by its gain, each
   publishing one new `UP` on its own member, no other member's generation
   changed; the ambiguous-group leg's: both tunnels drained and rebuilt,
@@ -2261,9 +2265,11 @@ argument becomes (decision U25): *fresh* for a member whose port's tunnel
 came up, *retire* for one whose device departed, *none* for every other
 member of a change, so that an unaffected member's entry is never
 advanced; the containment's own RESYNC (reason UNAVAILABLE, step 4 above)
-takes mode *none* for every member - today it exposes with `fresh` set on
-NT, which advances the generation of an entry still `UP` behind a tunnel
-nobody saw go down; `CmNvlinkLost` is the whole of what containment says
+takes mode *none* for every member - until task 42-A.6 it exposed with
+`fresh` set on NT, which advanced the generation of an entry still `UP`
+behind a tunnel nobody saw go down (since 42-A.6 a RESYNC names no tunnel
+and advances no entry `UP` for the tunnel last named on its bridge,
+section 10); `CmNvlinkLost` is the whole of what containment says
 to the channel, and that RESYNC requests the operating system's
 reconciliation alone. The recovery's own RESYNC after the commit (reason
 "controller recovered", `TBT_ICM_WHY_RECOVERED`) carries mode *none* for
@@ -2499,9 +2505,18 @@ router reporting a USB4 Version of major 0 needs beyond section 6:
    is always deselected and bit-banging disabled again. A router adopted
    from before the start without a connection sequence of this driver's
    (section 9), or rebuilt under a resume budget (section 11, where a
-   spent budget would refuse that release), is not read; one whose
+   spent budget would refuse that release), is not read there; one whose
    preserved tunnels this driver completes with a PCIe tunnel goes
-   through the connect and is.
+   through the connect and is. The first two are owed their names
+   (`DromOwed`, task 42-A.9): the core reads the EEPROM on its first poll
+   with no budget running and the port `UP` (the start's own first poll
+   for an adopted router, the thread's first pass after the resume for a
+   rebuilt one), once, as the port's own sequence so that a removal seen
+   inside it waits for the port check, and takes only the names - the
+   adapters were discovered without the DROM and stay as found, so its
+   unused marks are not applied late. A failed read leaves the router
+   unnamed, as at a connect; the tunnel and the connection generation are
+   untouched, and nothing is re-enumerated (`u4.drom.late`).
 5. **The PCIe tunnel**: the same four entries, except that on the
    Thunderbolt 3 router the protocol adapter's ingress fields (initial
    credits, ingress flow control, shared buffering) are written as for a
@@ -2741,8 +2756,9 @@ NT, interface 3's proof key `HKEY_DYN_DATA\Stor98LinkState` and locator
 section 7.2; this profile reaches it through the two hooks of the driver
 half (`CmNhiSetU4Hooks`, registered where the selection admits this
 profile): the UP hook records each port's connection generation for the
-presence sample, the table's `UP` itself being published by the seam
-before the re-enumeration exactly as for the ICM profile, and the DOWN
+presence sample and publishes the port's `UP` itself, before anything can
+expose the endpoint (the seam's exposure for the same tunnel up follows,
+as for the ICM profile, and finds it published), and the DOWN
 hook, at the core's statement upcall, makes or withholds the statement
 on section 10.2's condition (`CmNvlinkPortDown`). On Windows 98 SE and
 ME, from `3.0.0.0`, the proof key and locator are published (record 21
@@ -2760,6 +2776,40 @@ Since 2026-10-18 record 21 section 7.2's 9x half (task 42-0.7; the code is
 42-A.13) routes the tools' 9x eject through that worker step, hands a clean
 removal back to the thread for section 10.4's per-port teardown, and makes
 the 9x statement once each system's G3 ordering is read.
+
+**Only a new tunnel moves a generation** (task 42-A.6; `stor98cm.h` as
+Stor98 revised it on 2026-10-18, entry protocol step 1 and R8b). The UP
+hook publishes its port's `UP` itself, on the port's bridge when the
+correspondence (section 7.6) names it, and names the tunnel - the USB4
+port and its connection generation (`CM_NVLINK_TUNNEL`). The seam's
+exposure that follows for the same tunnel up names that tunnel to the
+member the action's port corresponds to (`CmNhiActionMember`) and none to
+every other member; a tunnel down's and a RESYNC's name none. An entry
+already `UP` keeps its generation unless the exposure names a tunnel other
+than the one its `UP` was last published for (`CmNvlinkPublishUp`,
+`cmNvTunnel`): so the seam's second exposure of a tunnel the hook already
+published, a second port's tunnel up, and a RESYNC leave every other
+port's entry as it is, and a bound Stor98 instance keeps its identity
+(R8d). An entry not `UP` gets its new generation from any exposure. The
+latest tunnel named for each member's bridge is kept (`cmNvTunnelOf`), and
+every exposure of that bridge publishes for it, whatever it names itself:
+applied again it changes nothing, and a later exposure - a baseline, an
+owed re-enumeration, the 9x late scan, a RESYNC - pays what an earlier one
+could not (the bus silent, the member not yet active). Where the port's
+member is not known, nothing names a tunnel: a function newly found gets
+its generation, and no entry already `UP` is advanced on a guess (U29's
+rule). What lets a new tunnel there still get its new generation is the
+DOWN hook: where the port's member is not known it states nothing, but
+an entry whose function is read absent (its identifier read, all ones;
+a failed read proves nothing) leaves `UP` (`IN_USE` alone), on every
+member no other port with a live PCIe tunnel corresponds to, so the
+tunnel that follows finds it not `UP`. An entry
+not taken out so (no teardown seen, the function answering throughout)
+keeps its generation until its member's next named tunnel; it is not
+advanced once correspondence is learned, since by then the operating
+system has enumerated the function and a bound instance would read the
+change as identity loss. The tunnels recorded are forgotten at the
+domain's stop, since a later start numbers its connections afresh.
 
 ### 10.1 Obligation 1: a link that went down
 

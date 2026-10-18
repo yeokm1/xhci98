@@ -1,0 +1,24 @@
+=== hostile 1
+[nvme98 0000012f6aaf24fe 00010] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=C18A1ED2 size=272 cookie=06114893
+[nvme98 0000012f6abea96a 00011] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=06114893
+[nvme98 000001304d612bef 00071] q9 bring-up complete in 415 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x4 host_ns=1792051
+=== hostile 2
+[nvme98 0000014abc2feb86 00010] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=E2E0B000 size=272 cookie=06114893
+[nvme98 0000014abc5394aa 00011] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=06114893
+[nvme98 0000014abc712970 00012] q9 page E2E0B000 not present (pte 00066000)
+[nvme98 0000014ba5a4f38e 00075] q9 bring-up complete in 420 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x5 host_ns=1792051
+=== hostile 3
+[nvme98 00000166c75e6232 00010] q9 rendezvous: locator rc=0 type=3 cb=20 sig=4C38394E ver=1 table=00400000 size=272 cookie=06114893
+[nvme98 00000166c76fa448 00011] q9 rendezvous: proof rc=0 type=4 cb=4 cookie=06114893
+[nvme98 00000167b18b033e 00073] q9 bring-up complete in 416 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x4 host_ns=1792051
+=== hostile 4
+[nvme98 00000181d2ac7542 00010] q9 rendezvous: locator rc=0 type=3 cb=16 sig=4C38394E ver=1 table=C18A1ED0 size=272 cookie=00000000
+[nvme98 000001827f5ca014 00072] q9 bring-up complete in 310 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x2 host_ns=1792051
+=== hostile 5
+[nvme98 0000019c6cedca29 00010] q9 rendezvous: locator rc=0 type=4 cb=20 sig=4C38394E ver=1 table=C18A1ED0 size=272 cookie=06114893
+[nvme98 0000019d51353450 00072] q9 bring-up complete in 414 ms: blocks=2097152 bs=512 model=QEMU NVMe Ctrl                          
+rendezvous stage arg=0x2 host_ns=1792052

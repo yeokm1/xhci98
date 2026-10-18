@@ -892,6 +892,32 @@ static void test_log_emit(void)
     CHECK(memcmp(emitted, big, 299) == 0, "in order");
 }
 
+/* Task 42-A.7 (record 25 section 14): the seeded answer's inert flag from
+ * the thread's actual wait. The inert start: the thread already in its
+ * wait with no timeout when the device is created - set, where the
+ * earlier seed (!ThreadRunning) left it clear until the first pass. */
+static void test_seed_inert(void)
+{
+    CHECK(CmQuerySeedInert(TRUE, CM_Q_WAIT_FOREVER, FALSE),
+          "an inert start: the thread waits with no timeout - inert");
+    CHECK(CmQuerySeedInert(TRUE, CM_Q_WAIT_FOREVER, TRUE),
+          "a wait with no timeout is inert whatever the predicate reads");
+    CHECK(!CmQuerySeedInert(TRUE, CM_Q_WAIT_TIMED, TRUE),
+          "a timed wait (a client polled, or the slow probes): not inert");
+    CHECK(CmQuerySeedInert(TRUE, CM_Q_WAIT_BUSY, TRUE),
+          "between waits, going to one with no timeout: inert");
+    CHECK(!CmQuerySeedInert(TRUE, CM_Q_WAIT_BUSY, FALSE),
+          "between waits, going to a timed one: not inert");
+    CHECK(CmQuerySeedInert(FALSE, CM_Q_WAIT_BUSY, FALSE),
+          "no thread: inert");
+    CHECK(CmQuerySeedInert(FALSE, CM_Q_WAIT_TIMED, FALSE),
+          "no thread, whatever was recorded: inert");
+    CHECK(!CmQuerySeedInert(TRUE, CM_Q_WAIT_BINDING, TRUE),
+          "a start's bind still running (PnpDone set before it): not inert, "
+          "whatever the state before the bind reads");
+    CHECK(CM_Q_WAIT_BUSY == 0, "a zeroed extension reads between waits");
+}
+
 int main(void)
 {
     test_layout();
@@ -909,6 +935,7 @@ int main(void)
     test_id_from_link();
     test_age();
     test_order_and_bump();
+    test_seed_inert();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

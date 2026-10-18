@@ -1,0 +1,41 @@
+# Run a (NVME98_G9=1): surprise removal with the base request path
+usb4_tp_removed tb0: endpoint gen 1 removed, dismissed=0
+usb4_tp_gate tb0: access gate closed=0 dma_open=1 host_ns=1791993310633418000 vm_ns=601084425900
+usb4_tp_set_state tb0: tunnel down (surprise), endpoint state 1
+usb4_tp_gate tb0: access gate closed=1 dma_open=0 host_ns=1791993446606295000 vm_ns=737057303400
+usb4_tp_cutoff tb0: stage 2 complete for gen 2 host_ns=1791993446606780000 vm_ns=737057788300
+usb4_tp_surprise tb0: surprise removal of gen 2
+usb4_tp_removed tb0: endpoint gen 2 removed, dismissed=0
+usb4_dbg_stage stage #5432 code=0x20 arg=0x0 host_ns=1791993465353114000 vm_ns=755804122200
+
+# Run a: last writes before the CONFIGMG remove, then HwAdapterState(FALSE) (0x30 arg 0) and CC.SHN
+pci_nvme_write cid 35041 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+pci_nvme_write cid 35042 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x5f
+pci_nvme_write cid 35043 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x85b
+usb4_dbg_stage stage #4572 code=0x30 arg=0x0 host_ns=1791993038694010000 vm_ns=329145018300
+pci_nvme_del_sq deleting submission queue sqid=1
+pci_nvme_del_cq deleted completion queue, cqid=1
+pci_nvme_mmio_shutdown_set shutdown bit set
+
+# Run b (NVME98_G9=2): harness fault at fetch, gate, GONE (0x50), deadline (0x51)
+usb4_tp_gate tb0: access gate closed=1 dma_open=0 host_ns=1791994258947512000 vm_ns=402229312000
+usb4_dbg_stage stage #19056 code=0x50 arg=0x1 host_ns=1791994259391027000 vm_ns=402672827000
+usb4_dbg_stage stage #19057 code=0x51 arg=0x1 host_ns=1791994274787088000 vm_ns=418068887900
+usb4_tp_gate tb0: access gate closed=0 dma_open=1 host_ns=1791994384276894000 vm_ns=527558694400
+
+# Run b: FallbackTimer ticks (0x40) for a 100 ms RequestTimerCall
+usb4_dbg_stage stage #19240 code=0x40 arg=0x1 host_ns=1791994393904927000 vm_ns=537186727400
+usb4_dbg_stage stage #19241 code=0x40 arg=0x2 host_ns=1791994394205360000 vm_ns=537487160100
+usb4_dbg_stage stage #19278 code=0x40 arg=0x3 host_ns=1791994425667769000 vm_ns=568949569100
+usb4_dbg_stage stage #19313 code=0x40 arg=0x4 host_ns=1791994425800635000 vm_ns=569082435400
+usb4_dbg_stage stage #19314 code=0x40 arg=0x5 host_ns=1791994425910257000 vm_ns=569192057300
+
+# Run b: system shutdown, last writes then HwAdapterState(FALSE)
+pci_nvme_write cid 32857 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x5f
+pci_nvme_write cid 32858 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x85b
+pci_nvme_write cid 32859 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+usb4_dbg_stage stage #19415 code=0x30 arg=0x0 host_ns=1791994464419661000 vm_ns=607701460900
+
+# Clock: TSC markers vs vm_ns (TSC ~2.994 GHz)
+usb4_dbg_marker marker #3 value=0x7af5236bb5 host_ns=1791994033092912000 vm_ns=176374711800
+usb4_dbg_marker marker #4 value=0xc0de6aea48 host_ns=1791994133376065000 vm_ns=276657865200

@@ -1,0 +1,111 @@
+         0.0 ms #5690   21 SRB_COMPLETE EXEC:READ10 SrbStatus=01 nvme=00
+         1.1 ms #5691   10 STARTIO EXEC:MODESENSE6 st=RUNNING
+         1.7 ms #5692   10 STARTIO EXEC:RDCAP st=RUNNING
+         2.4 ms #5693   10 STARTIO EXEC:READ10 st=RUNNING tagged
+         2.7 ms #5694   21 SRB_COMPLETE EXEC:READ10 SrbStatus=01 nvme=00
+      4575.0 ms #5695   10 STARTIO EXEC:SYNC10 st=RUNNING
+      4575.2 ms #5696   62 SYNC_CACHE SYNC10 shutdowns=0
+                  .. pci_nvme_flush_ns nsid 0x1
+      4577.3 ms #5697   a2 Q_CLEAN 0xb4
+      4577.4 ms #5698   21 SRB_COMPLETE EXEC:SYNC10 SrbStatus=01 nvme=00
+      4578.5 ms #5699   10 STARTIO FLUSH st=RUNNING
+      4578.7 ms #5700   61 SRB_FLUSH shutdowns=0 st=RUNNING
+                  .. pci_nvme_flush_ns nsid 0x1
+      4579.0 ms #5701   21 SRB_COMPLETE FLUSH SrbStatus=01 nvme=00
+      4595.0 ms #5702   10 STARTIO EXEC:SYNC10 st=RUNNING
+      4595.3 ms #5703   62 SYNC_CACHE SYNC10 shutdowns=0
+                  .. pci_nvme_flush_ns nsid 0x1
+      4595.6 ms #5704   21 SRB_COMPLETE EXEC:SYNC10 SrbStatus=01 nvme=00
+      4595.8 ms #5705   10 STARTIO FLUSH st=RUNNING
+      4595.8 ms #5706   61 SRB_FLUSH shutdowns=0 st=RUNNING
+                  .. pci_nvme_flush_ns nsid 0x1
+      4596.1 ms #5707   21 SRB_COMPLETE FLUSH SrbStatus=01 nvme=00
+      4639.0 ms #5708   10 STARTIO EXEC:READ10 st=RUNNING tagged
+      4639.6 ms #5709   21 SRB_COMPLETE EXEC:READ10 SrbStatus=01 nvme=00
+      4640.1 ms #5710   10 STARTIO EXEC:WRITE10 st=RUNNING tagged
+      4640.2 ms #5711   a1 Q_DIRTY 0xb5
+      4640.6 ms #5712   21 SRB_COMPLETE EXEC:WRITE10 SrbStatus=01 nvme=00
+      4641.1 ms #5713   10 STARTIO EXEC:READ10 st=RUNNING tagged
+      4641.5 ms #5714   21 SRB_COMPLETE EXEC:READ10 SrbStatus=01 nvme=00
+      4641.9 ms #5715   10 STARTIO EXEC:WRITE10 st=RUNNING tagged
+      4642.2 ms #5716   10 STARTIO EXEC:WRITE10 st=RUNNING tagged
+      4642.7 ms #5717   21 SRB_COMPLETE EXEC:WRITE10 SrbStatus=01 nvme=00
+      4642.8 ms #5718   21 SRB_COMPLETE EXEC:WRITE10 SrbStatus=01 nvme=00
+      4643.4 ms #5719   10 STARTIO EXEC:SYNC10 st=RUNNING
+      4643.5 ms #5720   62 SYNC_CACHE SYNC10 shutdowns=0
+                  .. pci_nvme_flush_ns nsid 0x1
+      4644.9 ms #5721   a2 Q_CLEAN 0xb7
+      4645.0 ms #5722   21 SRB_COMPLETE EXEC:SYNC10 SrbStatus=01 nvme=00
+      4645.1 ms #5723   10 STARTIO SHUTDOWN st=RUNNING
+      4645.2 ms #5724   60 SRB_SHUTDOWN shutdowns=1 st=RUNNING
+                  .. pci_nvme_flush_ns nsid 0x1
+      4645.4 ms #5725   a3 Q_SHN_FLUSH_DONE nvme=00 depth=1 shutdowns=1 dirty=0
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x464001
+                  .. pci_nvme_mmio_shutdown_set shutdown bit set
+      4645.7 ms #5726   a4 Q_SHN_WRITE 0x464001
+      4645.8 ms #5727   40 STATE RUNNING -> SHN_WAIT
+      4652.2 ms #5728   a5 Q_SHN_DONE ticks=1 csts=09
+      4652.4 ms #5729   40 STATE SHN_WAIT -> SHUTDOWN
+      4652.6 ms #5730   21 SRB_COMPLETE SHUTDOWN SrbStatus=01 nvme=00
+      4662.5 ms #5731   10 STARTIO EXEC:READ10 st=SHUTDOWN tagged
+      4662.7 ms #5732   68 IO_AFTER_SHUTDOWN EXEC:READ10 st=SHUTDOWN tagged
+      4662.9 ms #5733   a7 Q_REENABLE EXEC:READ10 st=SHUTDOWN tagged
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460000
+                  .. pci_nvme_mmio_shutdown_cleared shutdown bit cleared
+                  .. pci_nvme_mmio_stopped cleared controller enable bit
+      4663.1 ms #5734   31 HWINIT_CC 0x460000
+      4663.2 ms #5735   40 STATE SHUTDOWN -> DISABLING
+      4682.9 ms #5736   45 DISABLE_ACK 0x1
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+                  .. pci_nvme_mmio_start_success setting controller enable bit succeeded
+      4683.4 ms #5737   31 HWINIT_CC 0x460001
+      4683.6 ms #5738   40 STATE DISABLING -> WAIT_RDY
+      4698.7 ms #5739   41 RDY_SEEN 0x1
+      4698.8 ms #5740   40 STATE WAIT_RDY -> ADMIN
+                  .. pci_nvme_admin_cmd cid 1 sqid 0 opc 0x5 opname 'NVME_ADM_CMD_CREATE_CQ'
+                  .. pci_nvme_create_cq create completion queue, addr=0x1825000, cqid=1, vector=0, qsize=63, qflags=3, ien=1
+      4714.1 ms #5741   42 ADMIN_DONE cid=1 status=0x0
+                  .. pci_nvme_admin_cmd cid 2 sqid 0 opc 0x1 opname 'NVME_ADM_CMD_CREATE_SQ'
+                  .. pci_nvme_create_sq create submission queue, addr=0x1819000, sqid=1, cqid=1, qsize=63, qflags=1
+      4729.0 ms #5742   42 ADMIN_DONE cid=2 status=0x0
+                  .. pci_nvme_admin_cmd cid 3 sqid 0 opc 0x6 opname 'NVME_ADM_CMD_IDENTIFY'
+                  .. pci_nvme_identify_ctrl identify controller
+      4744.3 ms #5743   42 ADMIN_DONE cid=3 status=0x0
+                  .. pci_nvme_admin_cmd cid 4 sqid 0 opc 0x6 opname 'NVME_ADM_CMD_IDENTIFY'
+      4759.8 ms #5744   42 ADMIN_DONE cid=4 status=0x0
+      4759.9 ms #5745   40 STATE ADMIN -> RUNNING
+      4760.0 ms #5746   43 BRINGUP_DONE 0x6
+      4760.1 ms #5747   12 DISPATCH_HELD ticks=6 READ10
+      4760.1 ms #5748   10 STARTIO EXEC:READ10 st=RUNNING tagged
+      4760.2 ms #5749   68 IO_AFTER_SHUTDOWN EXEC:READ10 st=RUNNING tagged
+      4760.5 ms #5750   21 SRB_COMPLETE EXEC:READ10 SrbStatus=01 nvme=00
+      4761.0 ms #5751   10 STARTIO EXEC:WRITE10 st=RUNNING tagged
+      4761.1 ms #5752   68 IO_AFTER_SHUTDOWN EXEC:WRITE10 st=RUNNING tagged
+      4761.2 ms #5753   a1 Q_DIRTY 0xb8
+      4761.4 ms #5754   21 SRB_COMPLETE EXEC:WRITE10 SrbStatus=01 nvme=00
+      4761.8 ms #5755   10 STARTIO EXEC:READ10 st=RUNNING tagged
+      4761.9 ms #5756   68 IO_AFTER_SHUTDOWN EXEC:READ10 st=RUNNING tagged
+      4762.1 ms #5757   21 SRB_COMPLETE EXEC:READ10 SrbStatus=01 nvme=00
+      4762.6 ms #5758   10 STARTIO EXEC:WRITE10 st=RUNNING tagged
+      4762.7 ms #5759   68 IO_AFTER_SHUTDOWN EXEC:WRITE10 st=RUNNING tagged
+      4762.8 ms #5760   10 STARTIO EXEC:WRITE10 st=RUNNING tagged
+      4763.0 ms #5761   68 IO_AFTER_SHUTDOWN EXEC:WRITE10 st=RUNNING tagged
+      4763.1 ms #5762   21 SRB_COMPLETE EXEC:WRITE10 SrbStatus=01 nvme=00
+      4763.3 ms #5763   21 SRB_COMPLETE EXEC:WRITE10 SrbStatus=01 nvme=00
+      4763.6 ms #5764   10 STARTIO EXEC:SYNC10 st=RUNNING
+      4763.7 ms #5765   68 IO_AFTER_SHUTDOWN EXEC:SYNC10 st=RUNNING
+      4763.8 ms #5766   62 SYNC_CACHE SYNC10 shutdowns=1
+                  .. pci_nvme_flush_ns nsid 0x1
+      4764.9 ms #5767   a2 Q_CLEAN 0xba
+      4765.0 ms #5768   21 SRB_COMPLETE EXEC:SYNC10 SrbStatus=01 nvme=00
+      4765.2 ms #5769   10 STARTIO SHUTDOWN st=RUNNING
+      4765.3 ms #5770   60 SRB_SHUTDOWN shutdowns=2 st=RUNNING
+                  .. pci_nvme_flush_ns nsid 0x1
+      4765.5 ms #5771   a3 Q_SHN_FLUSH_DONE nvme=00 depth=1 shutdowns=2 dirty=0
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x464001
+                  .. pci_nvme_mmio_shutdown_set shutdown bit set
+      4765.7 ms #5772   a4 Q_SHN_WRITE 0x464001
+      4765.9 ms #5773   40 STATE RUNNING -> SHN_WAIT
+      4775.3 ms #5774   a5 Q_SHN_DONE ticks=1 csts=09
+      4775.4 ms #5775   40 STATE SHN_WAIT -> SHUTDOWN
+      4775.5 ms #5776   21 SRB_COMPLETE SHUTDOWN SrbStatus=01 nvme=00

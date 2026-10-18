@@ -1,0 +1,56 @@
+# Windows Me stop investigation: QEMU trace excerpts (usb4-emu vms/me-stop, local)
+# Filter: NVMe writes/flush, CC writes (mmio 0x14), debug-port stages 0x30 (HwAdapterState, arg=SaveState)
+# and 0x31 (SRB_FUNCTION_SHUTDOWN), and the ACPI power-off request.
+
+## m4 (Windows Me, level 4: CachesData=TRUE): system shutdown
+pci_nvme_write cid 32776 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+usb4_dbg_stage stage #67 code=0x31 arg=0x0 host_ns=1792001160756181000 vm_ns=246318545200
+pci_nvme_flush_ns nsid 0x1
+qemu_system_shutdown_request reason=6
+
+## m5 (Windows Me, level 5: CachesData=TRUE + DDB_ios_flags 0x04 set at first read): CONFIGMG remove right after a copy
+pci_nvme_write cid 32815 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+pci_nvme_write cid 32816 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x15f
+pci_nvme_write cid 32817 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x95b
+pci_nvme_write cid 32818 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x1057
+pci_nvme_write cid 32819 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 53 count 27136 lba 0x410b7
+pci_nvme_write cid 32820 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x5f
+pci_nvme_write cid 32821 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x85b
+usb4_dbg_stage stage #158 code=0x30 arg=0x0 host_ns=1792001451319137000 vm_ns=240259572600
+pci_nvme_mmio_write addr 0x14 data 0x464001 size 4
+pci_nvme_mmio_write addr 0x14 data 0x464000 size 4
+usb4_dbg_stage stage #162 code=0x3 arg=0x1 host_ns=1792001451447025000 vm_ns=240387460100
+usb4_dbg_stage stage #163 code=0x30 arg=0xff host_ns=1792001451447471000 vm_ns=240387906300
+pci_nvme_mmio_write addr 0x14 data 0x0 size 4
+pci_nvme_mmio_write addr 0x14 data 0x460001 size 4
+
+## m5: system shutdown
+pci_nvme_write cid 32784 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+usb4_dbg_stage stage #211 code=0x31 arg=0x0 host_ns=1792001514859215000 vm_ns=303799650000
+pci_nvme_flush_ns nsid 0x1
+qemu_system_shutdown_request reason=6
+
+## s2 (Windows 98 SE, gold SCSIPORT.PDR 23,650 bytes, QuickInstall IOS, level 4): CONFIGMG remove
+usb4_dbg_stage stage #28 code=0x30 arg=0x0 host_ns=1792002798817483000 vm_ns=355595151100
+pci_nvme_mmio_write addr 0x14 data 0x464001 size 4
+pci_nvme_mmio_write addr 0x14 data 0x464000 size 4
+usb4_dbg_stage stage #32 code=0x3 arg=0x1 host_ns=1792002800492658000 vm_ns=357270325400
+usb4_dbg_stage stage #33 code=0x30 arg=0xff host_ns=1792002800493800000 vm_ns=357271467700
+pci_nvme_mmio_write addr 0x14 data 0x0 size 4
+pci_nvme_mmio_write addr 0x14 data 0x460001 size 4
+pci_nvme_write cid 32808 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x5f
+
+## s2: system shutdown (CachesData=TRUE, yet no stage 0x31)
+pci_nvme_write cid 32814 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+pci_nvme_write cid 32815 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x5f
+pci_nvme_write cid 32816 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x85b
+pci_nvme_write cid 32817 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+usb4_dbg_stage stage #146 code=0x30 arg=0x0 host_ns=1792002886117648000 vm_ns=442895315400
+pci_nvme_mmio_write addr 0x14 data 0x464001 size 4
+pci_nvme_mmio_write addr 0x14 data 0x464000 size 4
+qemu_system_shutdown_request reason=6
+
+## s3 (Windows 98 SE with Me's SCSIPORT.PDR): tunnel up + CONFIGMG scan, then the guest hangs before DriverEntry
+usb4_tp_set_state tb0: tunnel up (up), endpoint state 0
+usb4_tp_insert tb0: insert endpoint gen 1 drive=nvme0 serial=USB4EMU01 cold=0
+(no usb4_dbg_stage line follows: DriverEntry never ran; debugcon-s3.log is empty)

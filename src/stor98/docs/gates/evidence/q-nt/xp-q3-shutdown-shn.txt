@@ -1,0 +1,29 @@
+            (183 read/write stages)
+     52933.8 ms #1179   10 STARTIO EXEC:SYNC10 st=RUNNING tagged
+     52934.1 ms #1180   62 SYNC_CACHE SYNC10 shutdowns=0
+                  .. pci_nvme_flush_ns nsid 0x1
+     52940.2 ms #1181   a2 Q_CLEAN 0x66
+     52940.4 ms #1182   21 SRB_COMPLETE EXEC:SYNC10 SrbStatus=01 nvme=00
+     52940.8 ms #1183   10 STARTIO FLUSH st=RUNNING tagged
+     52941.1 ms #1184   61 SRB_FLUSH shutdowns=0 st=RUNNING
+                  .. pci_nvme_flush_ns nsid 0x1
+     52941.3 ms #1185   21 SRB_COMPLETE FLUSH SrbStatus=01 nvme=00
+            (1 read/write stages)
+     53507.0 ms #1187   a1 Q_DIRTY 0x67
+            (5 read/write stages)
+     53509.4 ms #1193   10 STARTIO EXEC:SYNC10 st=RUNNING tagged
+     53509.7 ms #1194   62 SYNC_CACHE SYNC10 shutdowns=0
+                  .. pci_nvme_flush_ns nsid 0x1
+     53510.8 ms #1195   a2 Q_CLEAN 0x69
+     53510.9 ms #1196   21 SRB_COMPLETE EXEC:SYNC10 SrbStatus=01 nvme=00
+     53511.2 ms #1197   10 STARTIO SHUTDOWN st=RUNNING tagged
+     53511.3 ms #1198   60 SRB_SHUTDOWN shutdowns=1 st=RUNNING
+                  .. pci_nvme_flush_ns nsid 0x1
+     53511.7 ms #1199   a3 Q_SHN_FLUSH_DONE nvme=00 depth=1 shutdowns=1 dirty=0
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x464001
+                  .. pci_nvme_mmio_shutdown_set shutdown bit set
+     53512.0 ms #1200   a4 Q_SHN_WRITE 0x464001
+     53512.2 ms #1201   40 STATE RUNNING -> SHN_WAIT
+     53531.8 ms #1202   a5 Q_SHN_DONE ticks=1 csts=09
+     53532.0 ms #1203   40 STATE SHN_WAIT -> SHUTDOWN
+     53532.2 ms #1204   21 SRB_COMPLETE SHUTDOWN SrbStatus=01 nvme=00

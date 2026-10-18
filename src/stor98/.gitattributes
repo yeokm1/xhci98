@@ -1,0 +1,11 @@
+# Batch files and INFs are read by cmd.exe and the Windows 9x/NT setup
+# engines, which want CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.inf text eol=crlf
+*.ps1 text eol=crlf
+# Python scripts start with a #! line, which a CR would break on Linux and
+# macOS.
+*.py text eol=lf
+*.sh text eol=lf
+releases/** -text
