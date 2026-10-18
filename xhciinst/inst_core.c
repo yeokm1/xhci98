@@ -2681,8 +2681,12 @@ int inst_mw_reading(int found, INST_U32 type, INST_U32 bytes, INST_U32 dword,
     if (!found || (type == INST_REG_NONE && bytes == 0)) {
         return 0;
     }
-    *value = (type == INST_REG_DWORD && bytes == 4) ? dword : def;
-    return 1;
+    if (type == INST_REG_DWORD && bytes == 4) {
+        *value = dword;
+        return 1;
+    }
+    *value = def;
+    return 2;
 }
 
 int inst_mk_system(const INST_ENV *env)

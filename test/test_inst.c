@@ -3121,12 +3121,12 @@ static void test_marks(void)
     CHECK(inst_mw_reading(1, INST_REG_DWORD, 4, 2, 0, &v) == 1 && v == 2,
           "machine-wide: a DWORD is its number");
     v = 9;
-    CHECK(inst_mw_reading(1, 1UL /* REG_SZ */, 4, 2, 3, &v) == 1 && v == 3,
-          "machine-wide: another type is present and the default stands");
-    CHECK(inst_mw_reading(1, INST_REG_NONE, 2, 2, 1, &v) == 1 && v == 1,
+    CHECK(inst_mw_reading(1, 1UL /* REG_SZ */, 4, 2, 3, &v) == 2,
+          "machine-wide: another type is present and not a number");
+    CHECK(inst_mw_reading(1, INST_REG_NONE, 2, 2, 1, &v) == 2,
           "machine-wide: a REG_NONE with data is present");
-    CHECK(inst_mw_reading(1, INST_REG_DWORD, 2, 2, 0, &v) == 1 && v == 0,
-          "machine-wide: a short DWORD is present, the default stands");
+    CHECK(inst_mw_reading(1, INST_REG_DWORD, 2, 2, 0, &v) == 2,
+          "machine-wide: a short DWORD is present and not a number");
 
     /* Where the service goes, and what a run's end does. */
     {

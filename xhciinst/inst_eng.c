@@ -2221,17 +2221,18 @@ static const char *value_inf(int v);
  * 2026-10-18): HKLM\System\CurrentControlSet\Services\USB, which both
  * drivers read before a controller's own key, by their rule
  * (inst_mw_reading): present in any type wins, a zero-length REG_NONE is
- * absent, and a value that is not a DWORD leaves the default in force.
- * 1 set (*value the number in force), 0 not set (the key or the value
- * absent), -1 unreadable. */
+ * absent. 1 set (*value the number in force), 0 not set (the key or the
+ * value absent), -1 unreadable or not a DWORD: it wins with the driver's
+ * own fallback, which the installer does not know, so it is shown as
+ * unreadable and a value chosen for it is always written over it. */
 static int mw_value(int v, DWORD *value)
 {
     HKEY k;
     DWORD t = REG_NONE;
     BYTE data[64];
     DWORD n = sizeof(data);
-    INST_U32 def = 0;
     INST_U32 in;
+    int got;
     LONG r;
 
     *value = 0;
@@ -2256,17 +2257,16 @@ static int mw_value(int v, DWORD *value)
     } else if (r != ERROR_SUCCESS) {
         return -1;
     }
-    if (value_inf(v) != NULL) {
-        inst_value_default(v, value_inf(v), &def);
-    }
-    if (!inst_mw_reading(1, (INST_U32)t, (INST_U32)n, inst_get32(data, 0), def,
-                         &in)) {
+    got = inst_mw_reading(1, (INST_U32)t, (INST_U32)n, inst_get32(data, 0), 0,
+                          &in);
+    if (got == 0) {
         return 0;
     }
-    if (!(t == REG_DWORD && n == sizeof(DWORD))) {
-        logonly("machine-wide %s is not a DWORD (type %lu, %lu bytes): the "
-                "default %lu is in force\n", instValues[v].Name,
-                (unsigned long)t, (unsigned long)n, (unsigned long)def);
+    if (got == 2) {
+        logonly("machine-wide %s is not a DWORD (type %lu, %lu bytes): it "
+                "wins with the driver's own fallback\n", instValues[v].Name,
+                (unsigned long)t, (unsigned long)n);
+        return -1;
     }
     *value = (DWORD)in;
     return 1;
@@ -2402,7 +2402,7 @@ static void ask_values(void)
         }
         /* Owner, 2026-10-16: each choice on its own line with its meaning,
          * and "Enter for [x]", x what Enter keeps (inst_value_question). */
-        mw = mw_value(v,&mwv);
+        mw = mw_value(v, &mwv);
         same = inst_value_question_mw(question, sizeof(question), v, m, def,
                                       vnow, nNow, mw, (INST_U32)mwv, cmNew,
                                       opts.List, &enterValue);
@@ -2492,7 +2492,7 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         /* Every value /set may give, so a setting in force is never
          * shown as another (its caution is in the row's note). */
         r->Mask = inst_value_set_mask(v, &envNow);
-        r->MwState = mw_value(v,&mwv);
+        r->MwState = mw_value(v, &mwv);
         r->MwValue = (INST_U32)mwv;
         r->CmNew = cmNew;
         r->NowCount = nNow < INST_ROW_NOW_MAX ? nNow : INST_ROW_NOW_MAX;
@@ -2636,7 +2636,10 @@ static int value_needs_write(int v)
     }
     inst_value_default(v, value_inf(v), &def);
     value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
-    mw = mw_value(v,&mwv);
+    mw = mw_value(v, &mwv);
+    if (mw < 0) {
+        return 1;   /* a value there that is not a number wins: replaced */
+    }
     return inst_mw_write_needed(mw > 0 ? 1 : 0, (INST_U32)mwv, vnow, nNow,
                                 def, answerValue[v]);
 }
@@ -2688,7 +2691,7 @@ static void write_values(void)
                 instValues[v].Name, (unsigned long)answerValue[v]);
             continue;
         }
-        had = mw_value(v,&old) > 0;
+        had = mw_value(v, &old) > 0;
         val = (DWORD)answerValue[v];
         if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0, NULL, 0,
                             KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
@@ -9060,22 +9063,34 @@ static const char *mk_exe(void)
 }
 
 /* A service's state: 1 registered, 0 not (or marked for deletion, which
- * leaves it gone at the restart), -1 unreadable. */
+ * leaves it gone at the restart), -1 unreadable. OpenService still opens
+ * a service marked for deletion, so a change that changes nothing asks:
+ * ChangeServiceConfig refuses such a service with its own error. */
 static int svc_state(const char *name)
 {
+    PFN_CHANGESVC changeSvc = (PFN_CHANGESVC)adv_proc("ChangeServiceConfigA");
     SC_HANDLE scm;
     SC_HANDLE s;
     DWORD e;
     int r;
 
+    if (changeSvc == NULL) {
+        return -1;
+    }
     scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
     if (scm == NULL) {
         return -1;
     }
-    s = OpenServiceA(scm, name, SERVICE_QUERY_STATUS);
+    s = OpenServiceA(scm, name, SERVICE_QUERY_STATUS | SERVICE_CHANGE_CONFIG);
     e = GetLastError();
     if (s != NULL) {
-        r = 1;
+        if (changeSvc(s, SERVICE_NO_CHANGE, SERVICE_NO_CHANGE,
+                      SERVICE_NO_CHANGE, NULL, NULL, NULL, NULL, NULL, NULL,
+                      NULL)) {
+            r = 1;
+        } else {
+            r = GetLastError() == ERROR_SERVICE_MARKED_FOR_DELETE ? 0 : -1;
+        }
         CloseServiceHandle(s);
     } else {
         r = (e == ERROR_SERVICE_DOES_NOT_EXIST ||
@@ -9246,34 +9261,48 @@ static int mk_inventory(int fix, int *left)
     return ok;
 }
 
-/* The mark service's system32 copy deleted, or left for the restart. */
-static void mk_delete_copy(void)
+/* The mark service's system32 copy deleted. One in use is renamed to
+ * <name>.DEL and that name deleted at the restart, as the tray tool's
+ * copy is (record 23 section 9.5), so a later install of the same name
+ * before the restart is not deleted with it. 1 gone or renamed; 0 it
+ * stays (the service's registration then stays too). */
+static int mk_delete_copy(void)
 {
     char sys[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
+    char del[INST_PATH_CHARS];
     PFN_MOVEEX moveEx = move_ex();
 
     if (GetSystemDirectoryA(sys, sizeof(sys)) == 0) {
-        return;
+        out("The system directory could not be read.\n");
+        return 0;
     }
     join(path, sizeof(path), sys, mk_exe());
+    inst_copy(del, path, sizeof(del));
+    del[strlen(del) - 4] = '\0';
+    inst_copy(del + strlen(del), ".DEL", sizeof(del) - strlen(del));
     if (!file_exists(path, NULL)) {
-        return;
+        return 1;
     }
     SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
     if (DeleteFileA(path)) {
         out("Deleted %s.\n", path);
         flagChanged = 1;
-    } else if (moveEx != NULL &&
-               moveEx(path, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
-        out("%s is in use; it is deleted at the restart.\n", path);
-        flagChanged = 1;
-        flagRestart = 1;
-    } else {
-        out("%s could not be deleted (error %lu).\n", path,
-            (unsigned long)GetLastError());
-        flagFailed = 1;
+        return 1;
     }
+    if (moveEx != NULL && moveEx(path, del, MOVEFILE_REPLACE_EXISTING)) {
+        flagChanged = 1;
+        if (moveEx(del, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
+            out("%s is in use; it is deleted at the restart.\n", path);
+            flagRestart = 1;
+        } else {
+            out("%s is in use; delete %s after the restart.\n", path, del);
+        }
+        return 1;
+    }
+    out("%s could not be deleted (error %lu).\n", path,
+        (unsigned long)GetLastError());
+    return 0;
 }
 
 /* Step 0 of the uninstall (decision M14), and the end of any run that
@@ -9334,6 +9363,11 @@ static int mk_remove(void)
             ok = 0;
         }
     }
+    /* The copy before the registration: a copy that stays keeps the
+     * service registered for the next run. */
+    if (ok && !mk_delete_copy()) {
+        ok = 0;
+    }
     if (ok && had) {
         s = OpenServiceA(scm, INST_MK_SERVICE, DELETE);
         if (s == NULL || !DeleteService(s)) {
@@ -9352,13 +9386,33 @@ static int mk_remove(void)
             CloseServiceHandle(s);
         }
     }
-    if (ok) {
-        mk_delete_copy();
-    }
     ReleaseMutex(mx);
     CloseHandle(mx);
     CloseServiceHandle(scm);
     return ok;
+}
+
+/* StartService returns before the service has prepared itself: 1 once it
+ * reads SERVICE_RUNNING within 30 s, 0 stopped or still starting. The
+ * handle needs SERVICE_QUERY_STATUS. */
+static int mk_running(SC_HANDLE s)
+{
+    SERVICE_STATUS st;
+    DWORD t0 = GetTickCount();
+
+    for (;;) {
+        if (!QueryServiceStatus(s, &st)) {
+            return 0;
+        }
+        if (st.dwCurrentState == SERVICE_RUNNING) {
+            return 1;
+        }
+        if (st.dwCurrentState == SERVICE_STOPPED ||
+            GetTickCount() - t0 >= INST_MK_STOP_MS) {
+            return 0;
+        }
+        Sleep(250);
+    }
 }
 
 /* The service installed or updated and started (decision M8): the
@@ -9399,7 +9453,16 @@ static void mk_install(void)
     }
     join(dst, sizeof(dst), sys, mk_exe());
     inst_copy(tmp, dst, sizeof(tmp));
-    inst_copy(tmp + strlen(tmp) - 4, ".TMP", sizeof(tmp) - strlen(tmp) + 4);
+    tmp[strlen(tmp) - 4] = '\0';
+    inst_copy(tmp + strlen(tmp), ".DEL", sizeof(tmp) - strlen(tmp));
+    /* An earlier uninstall's copy, renamed while in use, if it is free
+     * now; one still waiting for the restart is a name of its own. */
+    if (file_exists(tmp, NULL)) {
+        SetFileAttributesA(tmp, FILE_ATTRIBUTE_NORMAL);
+        DeleteFileA(tmp);
+    }
+    tmp[strlen(tmp) - 4] = '\0';
+    inst_copy(tmp + strlen(tmp), ".TMP", sizeof(tmp) - strlen(tmp));
     scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_ALL_ACCESS);
     if (scm == NULL) {
         out("The service manager could not be opened (error %lu): the "
@@ -9439,7 +9502,8 @@ static void mk_install(void)
     if (!put) {
         if (had) {
             /* The earlier copy stays; so does its service, started again. */
-            s = OpenServiceA(scm, INST_MK_SERVICE, SERVICE_START);
+            s = OpenServiceA(scm, INST_MK_SERVICE,
+                             SERVICE_START | SERVICE_QUERY_STATUS);
         }
         goto start;
     }
@@ -9482,6 +9546,11 @@ start:
         GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) {
         out("The service %s did not start (error %lu).\n", INST_MK_SERVICE,
             (unsigned long)GetLastError());
+        flagFailed = 1;
+    } else if (!mk_running(s)) {
+        out("The service %s did not reach the running state within 30 "
+            "seconds\n(its log: system32\\LogFiles\\xhci98\\XHCIMARK.LOG).\n",
+            INST_MK_SERVICE);
         flagFailed = 1;
     } else if (put) {
         out("The Thunderbolt safe-removal mark service %s is %s and running:\n"
@@ -15297,9 +15366,12 @@ int inst_eng_run(void)
     /* Whatever the run's verdict, the invariant of record 21 section 7.4
      * holds at its end (decision M13). */
     mk_end_of_run();
-    if (code != INST_EXIT_REFUSED &&
+    /* The marks' flags join the run's verdict, which a failure returned
+     * without flagFailed (a refused baseline) keeps. */
+    if (code != INST_EXIT_REFUSED && code != INST_EXIT_FAILED &&
         (f != flagFailed || r != flagRestart || s != flagSteps)) {
-        code = inst_exit_code(0, flagFailed, flagRestart, flagSteps);
+        code = inst_exit_code(0, flagFailed, flagRestart,
+                              flagSteps || code == INST_EXIT_STEPS);
     }
     helper_files_gone();
     return code;

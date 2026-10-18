@@ -1302,8 +1302,10 @@ int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
 /* xhci_regsrc.c's rule (XhciRegCallSeen, XhciRegPick): `found` is whether
  * the query found the name at all; a zero-length REG_NONE is absent; a
  * REG_DWORD of four bytes is its number; any other type or size is present
- * and the default stands, as the drivers then use it. 1 present (*value
- * the number in force), 0 absent. */
+ * and wins with the driver's own fallback, which is not always the INF's
+ * default (XhciForceBulkOnly's is 1). 1 present with *value its number;
+ * 2 present and not a number (*value def, a guess the caller must not
+ * decide by); 0 absent. */
 #define INST_REG_NONE       0UL
 #define INST_REG_DWORD      4UL
 int inst_mw_reading(int found, INST_U32 type, INST_U32 bytes, INST_U32 dword,

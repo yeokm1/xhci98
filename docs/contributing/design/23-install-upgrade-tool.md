@@ -136,9 +136,11 @@ installer"; record 26 section 12): the safe-removal mark service
   service stops the device at its next start, Code 39).
 - **Section 8.4**: the machine-wide key is made where it is absent at
   every install and update, a value is read there by the drivers' rule
-  (present in any type wins, a zero-length `REG_NONE` is absent, a value
-  that is not a `DWORD` leaves the default in force), and every write
-  goes there, never to a controller's own key.
+  (present in any type wins, a zero-length `REG_NONE` is absent; a value
+  that is not a `DWORD` wins with the driver's own fallback, which is not
+  always the INF's default, so it is shown as unreadable and a value
+  chosen for it is always written over it), and every write goes there,
+  never to a controller's own key.
 - **`/eject`** (record 24 section 7.2; record 21 section 7.4, decision
   M16): on NT, after its own successful `CM_Request_Device_EjectA` (not
   the query-and-remove fallback), the tool reads the NHI's marks answer
