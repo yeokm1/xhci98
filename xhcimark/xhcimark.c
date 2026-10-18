@@ -182,6 +182,8 @@ typedef struct _MK_NODE {
     int StatusOk;           /* CM_Get_DevNode_Status succeeded             */
     int ServiceBad;         /* the Service value could not be read (absent
                                is not bad)                                 */
+    int IdsBad;             /* a hardware or compatible id list could not
+                               be read (absent is not bad)                 */
     ULONG Status;
     ULONG Problem;
 } MK_NODE;
@@ -213,6 +215,7 @@ static int nodeCount;
 static int walkBad;
 static MK_NHI nhis[MK_MAX_NHIS];
 static int nhiCount;
+static int discoveryIncomplete;     /* a devnode could be an NHI unseen   */
 static MK_TRIED tried[MK_MAX_TRIED];
 static int triedCount;
 
@@ -442,10 +445,14 @@ static void mk_walk_from(DWORD dn, int parent, int depth)
             t->Id[0] = '\0';
             walkBad++;
         }
-        mk_prop_text(dn, MK_CM_DRP_HARDWAREID, t->Hw, sizeof(t->Hw),
-                     &t->HwBytes);
-        mk_prop_text(dn, MK_CM_DRP_COMPATIBLEIDS, t->Compat,
-                     sizeof(t->Compat), &t->CompatBytes);
+        cr = mk_prop_text(dn, MK_CM_DRP_HARDWAREID, t->Hw, sizeof(t->Hw),
+                          &t->HwBytes);
+        t->IdsBad = cr != MK_CR_SUCCESS && cr != MK_CR_NO_SUCH_VALUE;
+        cr = mk_prop_text(dn, MK_CM_DRP_COMPATIBLEIDS, t->Compat,
+                          sizeof(t->Compat), &t->CompatBytes);
+        if (cr != MK_CR_SUCCESS && cr != MK_CR_NO_SUCH_VALUE) {
+            t->IdsBad = 1;
+        }
         cr = mk_prop_text(dn, MK_CM_DRP_SERVICE, t->Service,
                           sizeof(t->Service), NULL);
         t->ServiceBad = cr != MK_CR_SUCCESS && cr != MK_CR_NO_SUCH_VALUE;
@@ -669,9 +676,19 @@ static int mk_read_nhis(void)
     int any = 0;
 
     nhiCount = 0;
-    for (i = 0; i < nodeCount && nhiCount < MK_MAX_NHIS; i++) {
+    discoveryIncomplete = 0;
+    for (i = 0; i < nodeCount; i++) {
         MK_NHI *h;
         int unread;
+        if (nodes[i].IdsBad) {
+            /* Its ids cannot exclude an NHI of this driver: no decision
+             * that needs every domain known is made this poll. */
+            discoveryIncomplete = 1;
+        }
+        if (nhiCount >= MK_MAX_NHIS) {
+            discoveryIncomplete = 1;
+            break;
+        }
         /* An NHI whose Service value cannot be read may be this driver's:
          * it is listed, never answered, so it counts as a domain that
          * cannot be verified rather than vanishing from the evidence. */
@@ -967,9 +984,10 @@ static int mk_tried_live(const MK_TRIED *t)
         }
         return 0;
     }
-    /* Its NHI is not in this poll's tree: a walk that missed it proves
-     * nothing, so only a whole walk retires it. */
-    return walkBad != 0;
+    /* Its NHI is not among this poll's NHIs: retired only when a whole walk
+     * no longer has its devnode at all (one present but not read as an NHI
+     * now, its Service value missing for a moment, keeps it). */
+    return walkBad != 0 || mk_find_id(t->NhiId) >= 0;
 }
 
 /* The attempt state of a serial, made when `make`; NULL when the table is
@@ -1550,6 +1568,9 @@ static void mk_judge(const char *id, const char *text)
         } else {
             anyUnverif = 1;
         }
+    }
+    if (discoveryIncomplete) {
+        anyUnverif = 1;
     }
     if (owner != NULL && owner->Verifiable) {
         incomplete = (owner->M.Flags & MK_F_INCOMPLETE) != 0;
