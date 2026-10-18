@@ -82,9 +82,12 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
     NTSTATUS status;
 
     if (read) {
+        /* A recovery's validation (CfgStrict) reads through a fill of
+         * 0xFF: a byte the bus driver did not write reads as no answer,
+         * never as a zero that could pass for an identity or a BAR. */
         p = (PUCHAR)buffer;
         for (i = 0; i < length; i++) {
-            p[i] = 0;
+            p[i] = nhi->CfgStrict ? 0xFF : 0;
         }
     }
     /* After a surprise removal no configuration access either, and no
@@ -126,12 +129,14 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
                                     NULL);
     }
     status = irp->IoStatus.Status;
-    /* Under a recovery's validation (CfgStrict), a read that answered
-     * fewer bytes than asked is not an answer: its zero fill would pass
-     * for the identity. Not applied elsewhere: whether every target's bus
-     * driver reports the length is not read. */
+    /* Under a recovery's validation (CfgStrict), a read that reports
+     * fewer bytes than asked is not an answer. One that reports no length
+     * at all is read through the 0xFF fill: Windows 98 SE's PCI bus
+     * driver completes the request with the data and Information 0 (the
+     * leg of task 42-A.10, 2026-10-19: every strict read refused, every
+     * other read of the same registers answered). Not applied elsewhere. */
     if (NT_SUCCESS(status) && read && nhi->CfgStrict &&
-        irp->IoStatus.Information < length) {
+        irp->IoStatus.Information != 0 && irp->IoStatus.Information < length) {
         status = STATUS_UNSUCCESSFUL;
     }
     IoFreeIrp(irp);

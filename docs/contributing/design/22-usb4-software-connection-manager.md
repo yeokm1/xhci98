@@ -1821,7 +1821,12 @@ the snapshot together, never from the snapshot alone.
 a second (`CM_LIVE_SLOW_MS`, the `PROBE` class of record 21 section 5.6's
 gate, which admits reads alone): first the NHI's own configuration header
 through `IRP_MN_READ_CONFIG` to the PDO with the strict length check
-(`CfgStrict`: an answer shorter than asked is no answer) - the identity
+(`CfgStrict`: an answer that reports fewer bytes than asked is no answer;
+the buffer is filled with all ones first, so an answer that reports no
+length at all - Windows 98 SE's PCI bus driver completes the read with the
+data and `Information` 0, read in the emulator leg of 2026-10-19 - leaves
+every byte it did not write reading as no answer, never as a zero that
+passes for an identity or a base address) - the identity
 dword, BAR0 (both dwords of a 64-bit BAR) and the Command register - and
 only then RX ring 0's size register through the BAR. The header is read
 whatever the BAR sample says, because a function whose memory decoding the
