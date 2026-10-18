@@ -1765,197 +1765,689 @@ which revises decision U17's "no recovery in this release" and leaves its
 containment as it is: CONTAINED stays the state a loss puts the instance
 in, with everything the section above refuses; what changes is that it is
 no longer terminal. The code is task 42-A.10, the legs 42-V.5 (the
-emulator's root hot-plug modes, `acpi` and `restore`). Each choice below
-that is not the owner's is the orchestrator's, for the owner to confirm
-(the list at the end).
+emulator's root hot-plug modes, `acpi` and `restore`, on `usb4-generic`).
+Each choice below that is not the owner's is the orchestrator's, for the
+owner to confirm (the list at the end). Reviewed and revised.
 
-*1. When access is proven back.* Under CONTAINED the monitor keeps
-sampling (the `PROBE` class, one read a second, `CM_LIVE_SLOW_MS`, as the
-ICM client's RECOVERY_FAILED does; the sample is the only access). A
-sample that reads something other than all ones starts the precondition,
-record 21 section 5.6's extended for this profile, on reads alone, every
-part of it refusing the recovery and nothing else when it fails (the
-instance stays CONTAINED, the next sample may try again, each attempt
-counted):
+The shape: a recovery **restores a consistent instance and nothing more**.
+It proves access back, repairs the two configuration bits the platform may
+have cleared, stops and restarts its own rings in the kept buffer, finds
+the fabric again by reading, drains what cannot be preserved, revalidates
+the PCI side, and commits to ACTIVE. Every tunnel that has to be rebuilt,
+every endpoint that has to be removed and every entry of Stor98's table
+that has to change is then handled **after the commit by the ordinary
+machinery** - the port state machine, the tunnel-up and tunnel-down
+actions, the seam, `CmNvlinkExpose` - under one new rule, the retirement
+barrier of part 4, so that a generation change has exactly one owner (the
+tunnel-up exposure), a publication never precedes the guarded commit, and
+nothing speculative is left behind by a stop or a second loss in the
+middle (decision U22).
 
-1. **The NHI's own configuration header**, through `IRP_MN_READ_CONFIG`
-   to the PDO (the route record 21 section 5.6 uses): the identity dword
-   as the healthy start read it; BAR0 (both dwords of a 64-bit BAR) as
-   read then, attribute bits masked; the Command register with memory
-   decoding on. Where BAR0 is intact and the Command register alone reads
-   with memory decoding or Bus Master off - a platform that reset the
-   function's command bits and nothing else - the two bits are restored
-   through the one configuration word this driver writes (`cm_thr.c`'s
-   Command write, the route `CmNhiSetBusMaster` already takes), read
-   back, and the precondition goes on; a BAR0 that reads 0, all ones or
-   another address is refused: a base address is the bus driver's to
-   assign, and only a PnP stop and start maps it (record 21 section 5.6:
-   recovery "never repairs a bridge's bus numbers or windows", and not a
-   function's BAR either). This is the "full re-read of the PCI side the
-   platform may have reset": the whole header read and compared, nothing
-   of it written but those two bits.
-2. **The host interface**: the capabilities register readable (not all
-   ones) with the same Host Interface Version as test (d) read (section
-   3.5), and the selection's tests (a) to (c) run again on reads with the
-   same outcome (section 3: the same candidate, the platform ready, the
-   domain still this driver's - `ICM_EN` still clear where it decides).
-3. **The size register** of RX ring 0: either the value this instance
-   programmed (the controller merely stopped answering and kept its
-   configuration: a SUSPECT or ABSENT episode the platform ended without
-   a reset) or its reset default (CONFIG_LOST, or a power cycle: the
-   rings are gone). Any other value is refused: a register that reads a
-   value nobody here wrote is a controller somebody else programmed.
+*0. The snapshot and the journal.* Entering CONTAINED (step 1 above)
+takes, before anything is retired, one immutable **recovery snapshot** of
+the instance: a complete copy of every host port record (`TBT_U4_PORT`,
+every field: the state and reason, the generation, the device router
+`TBT_U4_ROUTER` with its route - which is the TopologyID expected of it -
+its ids, UUID and validity, USB4 version, `Tbt3`, DROM state and
+capabilities state, both tunnels `TBT_U4_TUNNEL`, the lane fields
+`LaneSaved`, `LaneWritten`, `Bonded`, `SingleLane`, `Lane1Disabled`,
+`PcSetHost` and `PcSetDev`, the TMU fields, `Usb3Failed`, `Usb3GapValid`
+and `LastUsb3TeardownUs`, `BwQuarantine`, `BwReleaseOwed`, `HostResidual`,
+`HostCloseOwed`, `RemovalOwed`, `RelockSeen`, `ClassifyPending`,
+`LostKnown`, `AsFoundOwed`, `PcieFailed`, `Ejected`, `DpPreserved`, the
+anchor and the link reading), of the host router record, of every
+discovered link below depth 1 (`TBT_U4_LINK`), of the quarantined HopIDs
+per adapter, of the writes a sequence running at the loss had recorded
+(section 7.4's per-write record), of the deferred teardown tails abandoned
+at containment, of the tunnel-port set (each member's location, header
+identity, secondary and subordinate bus numbers, source, exclusivity and
+named or learned correspondence) and of the channel's shadow (each entry
+this domain owns with its bus, slot, generation and its flags before and
+after step 3's loss marking). Nothing is enumerated by hand: the
+structures are copied whole, and the rules below say which fields a
+recovery re-initialises (the transitional and pending flags of a sequence,
+`CheckPending`, `UnplugPending`, `Transitional`, the anchor, the link
+reading) and which it keeps. The resume obligations of section 7.6
+(`TBT_U4_OBLIGATION`) are derived inside the snapshot for every tunnel that
+was up and are not its replacement (decision U19). Each later loss
+(cooldown, then a new episode) takes a new snapshot of the state as it then
+is, and every recovery attempt keeps a **journal** of what it changed - the
+Command bits, force power, the rings' stop, each drained entry and cleared
+enable - so that an attempt interrupted by a stop, a suspend or a second
+loss is read by the next attempt's classification from the journal and
+the snapshot together, never from the snapshot alone.
 
-*2. The recovery*, on the thread, in the RECOVERING state and the
-`RECOVERY` access class (record 21 section 5.5's gate admits that class
-alone), bounded as the resume is (the sum of its steps' implemented costs,
-`TbtU4ResumeBoundUs`'s shape, read at its start), refused where a PnP stop
-or removal is waiting for the thread (the rule of entering CONTAINED's
-step 4), and ended through the failure path by a system suspend that
-arrives inside it:
+*1. Access proven back: the probe.* Under CONTAINED the thread probes once
+a second (`CM_LIVE_SLOW_MS`, the `PROBE` class of record 21 section 5.6's
+gate, which admits reads alone): first the NHI's own configuration header
+through `IRP_MN_READ_CONFIG` to the PDO with the strict length check
+(`CfgStrict`: an answer shorter than asked is no answer) - the identity
+dword, BAR0 (both dwords of a 64-bit BAR) and the Command register - and
+only then RX ring 0's size register through the BAR. The header is read
+whatever the BAR sample says, because a function whose memory decoding the
+platform cleared answers configuration cycles and nothing through its BAR,
+and that is the case the Command repair below exists for. Access is proven
+back when the header reads the identity dword as the healthy start read it
+(`LiveIds`) and BAR0 as read then, attribute bits masked, the high dword
+too (`LiveBar0`, `LiveBar0Hi`). A header that reads all ones, or an
+identity that differs, keeps the instance contained with the probe going
+on; a BAR0 that reads 0, all ones or another address refuses the recovery
+for this episode (logged `u4.recover.bar-changed`): a base address is the
+bus driver's to assign and only a PnP stop and start maps it (record 21
+section 5.6's rule for the ICM profile, kept). The probe does not touch
+the fabric and makes no write.
+
+*2. Preparation.* With the header proven, the thread enters PREPARING, a
+new state of the monitor whose access class, `PREPARE`, the gate admits
+for configuration-space reads and for configuration-space **writes to the
+Command register and to the vendor capability section 4.2 names**, and
+for nothing else (no BAR write, no ordinary transport; `cmConfig` refuses
+every other write as it refuses them under `PROBE`). In order:
+
+1. **The Command register**, where it reads with Memory Space Enable (bit
+   1) or Bus Master Enable (bit 2) clear while BAR0 is intact: one 16-bit
+   read-modify-write setting the two bits (the word `cm_thr.c` already
+   writes for Bus Master, `CmNhiSetBusMaster`'s route widened to bit 1 for
+   this stage alone), read back; a read-back without both bits refuses
+   the recovery for this episode. The journal notes the bits this stage
+   set.
+2. **The platform step** of section 4.2, on the integrated family, exactly
+   as the start and the resume make it and before any ring is touched,
+   since section 3.2's readiness depends on it: VS_CAP_22 read, FORCE_POWER
+   set where clear (journalled, as the power-change record requires: a bit
+   this stage set is this instance's; one found set is never cleared),
+   FW_READY polled (up to 1.05 s), LTR copied into VS_CAP_15. FW_READY
+   never set refuses the recovery for this episode (the instance is not
+   made inert: it is contained, and stays so).
+3. **The selection's tests again**, on reads: (a) the candidate, the
+   identity dword already compared; (b) readiness, from step 2's FW_READY
+   where it applies; (c) ownership, section 3.3's reads of the domain's
+   ownership indication (`ICM_EN` where it decides) through the now
+   decoding BAR under the `PROBE` class; (d)'s first half, the Host
+   Interface Version from the capabilities register, unchanged. The
+   selection's pure half (`TbtHwSelect`) is re-run on those readings with
+   the same inputs the start gave it and must give the same outcome,
+   `TBT_SEL_SOFTWARE`; anything else refuses the recovery for this episode
+   (logged with the test that changed). Platform preparation is what
+   makes (b) answerable, which is why this step follows step 2 and not the
+   probe (U18 restricts the probe to reads; the preparation's writes are
+   the two named here).
+4. **The size register**, read once more through the BAR: the value this
+   instance programmed (`0x01000010`) means the controller kept its ring
+   configuration (a SUSPECT or ABSENT episode the platform ended without
+   a reset); any other readable value - the reset default or another -
+   means the rings are not this instance's any more. Neither is refused:
+   the first is logged as kept, the second as lost, and both go through
+   step 3.1's verified stop, which is what proves the controller writes
+   nothing into the buffer whatever the register read. `cm_live.h`'s
+   CONFIG_LOST is any readable mismatch against the baseline, and all of
+   it is admitted here; a readable value that is neither is not taken as
+   proof of another owner, since the verified stop, not an inference, is
+   the safety argument (decision U18).
+
+*3. The recovery*, in RECOVERING under the `RECOVERY` class (the gate's
+rule of record 21 section 5.6), on the thread, with the episode recorded at
+its start, bounded as the resume is (the sum of its steps' implemented
+costs in `TbtU4ResumeBoundUs`'s shape, read at its start), refused where a
+PnP stop or removal is waiting for the thread (the rule of entering
+CONTAINED's step 4) and ended through the failure path by anything part 5
+lists. The core's own gate is opened for it and for nothing else: a
+`TbtU4Recover` entry clears `Contained` for the recovery's work alone
+(every request of the core refused by `tbtU4Off` is admitted only on the
+recovery's path, through a flag the entry sets and the commit or the
+failure path clears), the failure path sets `Contained` again and the
+driver's `U4ContainDone` latch is cleared only by the commit, so that a
+later loss contains the instance once more and takes a new snapshot
+(decision U26). Nothing is built and nothing is published in this part.
 
 1. **The rings, in the kept buffer.** The common buffer kept under
-   `DmaMayRun` is the one the controller may still be writing; nothing is
-   placed in it before a **verified stop** proves it is not: each ring's
-   control register written to its default, its base, size and index
-   registers written 0, read back readable and disabled, and the 1 ms
-   settle (section 4.4 step 2's takeover, now of this instance's own
-   rings) - the same read-back that clears `DmaMayRun` at a stop (record
-   21 section 5.5). A read-back that fails ends the recovery: the buffer
-   stays kept, the instance stays CONTAINED, and no second buffer is
-   allocated for this episode, because a controller that cannot be proven
-   stopped cannot be given new rings either (decision U20). With the
-   stop verified, section 4.4 steps 1 to 3 run again in the same buffer:
-   interrupts masked, ring 0 programmed, the size register read back as
-   programmed, the monitor armed on it.
-2. **The platform step** where section 4.2 applies: force power read back
-   (a bit the platform cleared is set again as the start set it, under the
-   power-change record's rules; a bit the BIOS had set is never cleared),
-   FW_READY polled, LTR written; then test (d) (section 3.5) again, with
-   its inert outcome ending the recovery as a failure.
-3. **The host router**: section 6.1's enumerate-or-verify. A host router
-   that still reads as this instance programmed it (TopologyID, CMUV, its
-   adapters) is verified; one the platform reset (Configuration Valid
-   clear, the adapters at their defaults) is enumerated afresh as at
-   start.
-4. **The fabric found again**, by section 9.2's discover-and-preserve over
-   every port, reading only, never a reset, with the port records kept
-   under CONTAINED read as **obligations**, the way section 7.6 reads the
-   records kept across a suspend (decision U19): every tunnel that was up
-   at containment - PCIe and USB3, with its port, generation, router UUID
-   and HopIDs, which the containment kept - is an obligation, and the
-   outcomes are section 7.6's:
-   - *verified* by section 9.2's reads with the same router (UUID,
-     TopologyID, the four path entries at the recorded HopIDs): the
-     tunnel is preserved, the port's record kept (UP, the same
-     generation), nothing re-enumerated; the Stor98 entry, left `UP` at
-     containment where its function still answered, is unchanged;
-   - *the host side gone, the device router still configured* (the host
-     router was reset or re-enumerated; the device's PCIe Up adapter
-     still carries Path Enable and the recorded entries, the port one
-     this driver built): the recorded device-side entries are torn down
-     from the device end as section 9.3 step 1's orderly form does with
-     both ends reachable (Path Enable 0 on the device's PCIe Up, its lane
-     0 `hd` and PCIe Up HopID 8 entries invalidated and drained, the USB3
-     tunnel's likewise), then the port connects anew through sections 6.4
-     to 6.9 with the Detect gate of section 6.8 - obligation 1 met by the
-     gate - and the PCI side follows (section 7.6): a new tunnel, a new
-     generation, a re-enumeration. No Downstream Port Reset and no router
-     reset is issued (decision U21: an orderly teardown of entries this
-     instance recorded is unplug handling, not a cleaning);
-   - *removal evidence* (CLd, Lock set again, another router's UUID, no
-     router): the host side torn down as section 7.3 does, as far as it
-     can be read, with the quarantine where a step fails; the OS side's
-     removal was requested at containment and is requested again by step
-     5;
-   - *anything else* (a half-built state, HopIDs that match no record, a
-     device router that does not answer while entries are enabled): HELD,
-     as section 9.2 says, untouched, served by its unplug alone.
-   A port that was EMPTY, FAILED or UNSUPPORTED at containment is
-   discovered as any port at start. The deferred teardown tails
-   abandoned at containment are not resumed: their ports are obligations
-   like the others, and the quarantine rule covers what their steps left.
-5. **ACTIVE again**, for the episode that began the recovery and only if
-   nothing revoked it meanwhile (`CmLiveRecovered`, as the ICM client's
-   recovery ends), with the actions the recovery produced published
-   through the ordinary seam: one RESYNC with a new reason, "controller
-   recovered" (`TBT_ICM_WHY_RECOVERED`), so that every member of the
-   tunnel-port set is re-enumerated - on NT the bridge filters'
-   invalidation, which reports a preserved endpoint present (the
-   containment's reconciliation found it present too, since the tunnel
-   stayed up, so nothing changed for it) and a rebuilt one as new; on
-   Windows 98 SE and ME the worker's `Reenumerate_DevNode` of each
-   member, queued behind that member's `CONTROLLER_UNAVAILABLE` removal
-   where one is still owed (record 21 section 5.5: no re-enumeration of
-   a member runs before its loss removal resolved; R8c: no `UP` for a new
-   tunnel before the previous endpoint's devnode is retired). A recovery
-   that fails at any step leaves the instance CONTAINED with the reason
-   logged and counted (`u4.recover.failed` by step); a failure at step 1's
-   read-back is final for the boot (the buffer unproven); any other
-   failure may be retried by a later episode (a new all-ones sample and a
-   new readable one), at most once a minute.
+   `DmaMayRun` (record 21 section 5.6) is the one the controller may still
+   be writing; nothing is placed in it before a **verified stop**: each of
+   TX ring 0 and RX ring 0 has its Ring Control register written to its
+   default, its Base Address Low and High, Ring Size and index registers
+   written 0, read back readable and disabled, then the 1 ms settle
+   (section 4.4 step 2's takeover, of this instance's own rings this
+   time), the read-back after the settle as the stop's is - the same
+   read-back that clears `DmaMayRun` at a stop. A read-back that fails
+   ends the recovery and is **final for this boot** (CONTAINED, final):
+   the buffer stays kept with its adapter object, no second buffer is
+   allocated for any episode, since a controller that cannot be proven
+   stopped cannot be given new rings either (decision U20). With the stop
+   verified, section 4.4 steps 1 to 3 run again in the same buffer, with
+   the same adapter: interrupts masked, ring 0 programmed, the size
+   register read back as programmed; the monitor is not armed here
+   (`CmLiveArm` enters ACTIVE, which would open ordinary access before the
+   recovery has ended), and the commit of step 7 takes its own fresh
+   sample.
+2. **Test (d)'s second half**: ROUTER_CS_0 to 4 at route 0 answered within
+   the request bounds, the USB4 Version's major 1 or 2 (section 3.5). An
+   inert outcome ends the recovery for this episode.
+3. **The host router**, by section 6.1's rule as `tbtU4HostRouter` codes
+   it: ROUTER_CS_3's **TopologyID Valid** (bit 31) clear means the host
+   router lost its enumeration and is enumerated afresh (ROUTER_CS_1 to 4
+   written as at start); set, with the enumeration fields consistent with
+   a host router (`tbtU4Enumerated`: Valid, depth 0 and the root route),
+   means it is adopted as it is, its DW1 to DW3 preserved; set and
+   inconsistent refuses the recovery for this episode (logged
+   `u4.host.topology`), as the start refuses such a host router.
+   Configuration Valid (ROUTER_CS_5) is the separate handshake of section
+   6.6 and decides nothing here. Then the adapters are discovered, the
+   capabilities read, the PCIe Down mapping asked (section 6.3) and Buffer
+   Allocation made, as at start; the host router's path entries are read,
+   not written: a host router found enumerated keeps whatever entries it
+   holds for step 4 to classify, and one enumerated afresh may hold them
+   too, since writing the TopologyID clears no path entry - so the host
+   entries at every recorded HopID are read in both cases.
+4. **The fabric found again**, reading only, never a reset (no Downstream
+   Port Reset, no Host Router Reset, nothing of section 9.3), port by
+   port against the snapshot and the journal, **per tunnel**: each PCIe
+   and each USB3 tunnel that was up is an obligation of its own, and a
+   port's outcome is the pair of them (a USB3 tunnel alone on a port
+   `Ejected` or FAILED for PCIe, whose PCIe side stays as the snapshot
+   says: no PCIe is built for an eject or a PCIe failure until a re-plug;
+   a USB3 tunnel preserved beside a PCIe one rebuilt; both preserved).
+   For a Thunderbolt 3 device router (`Tbt3`, section 8) every test and
+   step below takes section 8's form: its enumeration state in place of
+   TopologyID Valid and Configuration Ready, no router operation (no Get
+   Capabilities, no Buffer Allocation), the Detect gate at the USB4 end
+   alone and obligation 1 resting on section 10.1's link-down argument
+   for it.
 
-*3. What Stor98 and the seam learn.* The channel's entries were handled
-at containment (step 3 above: `CM_NVLINK_LOST`, `UP` cleared where the
-function read absent, nothing claimed). The recovery adds no statement:
-the path-closed proof needs the host router's read-back at the time of
-the loss, which was not available. A preserved tunnel keeps its entry `UP`
-at its generation (no claim is made about the link, and none is needed:
-Stor98 binds again to the same entry when its devnode comes back, R8a and
-R8d); a rebuilt tunnel publishes `UP` with a new generation before its
-exposure, as every fresh tunnel does (`CmNvlinkExpose`, obligation 1); a
-port whose device left has its entry at `IN_USE` alone from containment
-and gets nothing. The seam learns of the recovery by the RESYNC alone; the
-re-enumeration seam's `CmReenumUnavailable` bracket (record 21 section
-5.5) is closed by the recovery's RESYNC on NT, and on 98 SE and ME by the
-worker's resolution of the removal it owes. The query device's answer
-carries the liveness state throughout (CONTAINED, RECOVERING, ACTIVE), so
-XHCITR shows the branch "not current" until the recovery ends.
+   - **A port with no tunnel at the loss** (EMPTY, UNSUPPORTED,
+     CONNECTING, or FAILED with no live tunnel and no eject): discovered
+     as at start by section 9.2, the quarantine of the snapshot kept.
+   - **A tunnel verified** by section 9.2's reads - the device router
+     answers at the recorded route with TopologyID Valid set, the same
+     UUID (a UUID not read at the loss is compared to nothing and the
+     tunnel is HELD), the same lanes (bonded, or single as recorded),
+     Configuration Ready set (a USB4 router), and the tunnel's path
+     entries Valid at the recorded HopIDs with Path Enable set at both
+     ends - is **preserved** in the fabric: the port's record kept as the
+     snapshot has it. Whether it stays preserved for the channel and the
+     operating system is part 4's.
+   - **A partial loss** - the device router answers at the recorded route
+     with the same UUID and its Up adapter for that tunnel still carries
+     Path Enable and the recorded entries, while the host side of that
+     tunnel is gone (the host router re-enumerated in step 3, or the host
+     entries at the recorded HopIDs reading Valid 0 or the host adapter's
+     Path Enable clear) - is **to be rebuilt**: its drain is step 5's,
+     its rebuild part 4's, under these prerequisites, else HELD: (i) the
+     router's identity and ownership as above, its enumeration adopted as
+     it is (section 6.4 step 4 skipped; Get Capabilities re-read on a
+     USB4 router); (ii) the lanes kept as found - a link bonded by this
+     driver and still bonded is adopted bonded, a single link single; no
+     bonding is attempted and no Lane Disable written, since the Guide
+     forbids starting lane bonding with a path enabled in the port and a
+     path is enabled on the device side; (iii) the TMU read and left as
+     found, a USB3 rebuild admitted only where it still reads configured
+     as section 6.6 requires (`TmuOk`), else that USB3 obligation ends
+     `Usb3Failed` with its quarantine while the PCIe one goes on.
+   - **Removal evidence** (CLd on lane 0, Lock set again, another UUID or
+     TopologyID, ERR_CONN at the route, no router): the port's tunnels are
+     **departed**: their host side alone is drained in step 5 (a router
+     that answers at the route with another identity is a replacement,
+     whose adapters and entries are not the departed router's recorded
+     resources and are never written here; it is discovered on its own
+     after the commit, as section 9.2 discovers a router found at start,
+     with its state as found), and the port is EMPTY, its device gone.
+   - **A tunnel preserved in the fabric whose member's secondary bus
+     changed** (step 6 finds it): the endpoint's devnode is not the one
+     the operating system had, and its entry is R8a's case; such a tunnel
+     is classified **to be rebuilt**, drained in step 5 and rebuilt after
+     the commit behind the barrier, so that the new entry is allocated by
+     a true establishment and the old one retired after its devnode (part
+     4); nothing is invented for it.
+   - **Anything else** (a half-built path, HopIDs matching no record, a
+     device router that does not answer while host entries are enabled, a
+     lane state this driver did not leave, a prerequisite above failing):
+     HELD, as section 9.2 says, untouched, served by its unplug alone.
+   - **A sequence interrupted at the loss** (the snapshot's recorded
+     writes) or an earlier attempt's (the journal): its entries and
+     enable bits are undone from the record where the adapter still
+     answers and the entry still reads as written, and quarantined where
+     not, before the port is classified; the deferred teardown tails are
+     owed as section 7.3's quarantine rule owes them (retried at the idle
+     tick once ACTIVE), never resumed as sequences.
+   - The discovered links below depth 1 are re-read as section 9.2 reads
+     them, and the residual-host-state rule of 9.2 applies to every host
+     adapter the walk covers.
+5. **The drains**, for every tunnel to be rebuilt or departed and for
+   nothing preserved, each protocol by its own contract, and the device
+   side only where the router is positively the recorded one (the same
+   UUID and TopologyID at the recorded route, its adapters as recorded):
+   a departed tunnel, or one whose router is a replacement, is drained on
+   the host side alone.
+   - **A PCIe tunnel**: the complete recorded teardown - the orderly form
+     of section 9.3 step 1 without its reset steps, which is section 7.3
+     step 1's discipline applied to both ends: Path Enable cleared on the
+     host's PCIe Down adapter and on the device's PCIe Up adapter, each of
+     the tunnel's recorded entries (host Down HopID 8, host lane 0 `hu`,
+     device lane 0 `hd`, device Up HopID 8) invalidated with Pending
+     Packets polled to 0 and tTeardown, every other entry on those
+     adapters left as found, and the read-back of section 7.3 step 1
+     sub-step 3 (Path Enable 0, Valid 0, Pending Packets 0, the host
+     adapter's LTSSM in Detect) - a host entry that reads Valid 0 already
+     is still drained (Pending Packets read) before it counts as closed,
+     since a cleared Valid alone proves nothing about what the adapter
+     holds.
+   - **A USB3 tunnel**: section 7.3 step 4's contract, not the PCIe one -
+     Path Enable cleared with the adapter's Valid kept set on the host's
+     USB3 Down adapter (and the device's USB3 Up where the router is the
+     recorded one), its recorded entries invalidated and drained the same
+     way, the bandwidth released to the consumed value where HCA answers
+     (never below section 7.3's floor, `BwReleaseOwed` where it does
+     not), and the time of the teardown recorded for section 6.9's reuse
+     gap (`LastUsb3TeardownUs`); no LTSSM reading, which is PCIe's.
+   What does not drain is quarantined as section 7.3 says, and a tunnel
+   whose drain did not complete is HELD, not rebuilt. The lane adapters
+   and the TMU are left as found. No path is built here (decision U21:
+   this drain of entries this instance itself recorded is unplug handling
+   under the no-reset rule; no register of any router is reset and no
+   lane is retrained by this driver). **The removal debt** is recorded
+   here too: for every drained PCIe tunnel whose endpoint devnode the
+   operating system still has (the containment's reconciliation found
+   the function present, or ran on 98 SE and ME where the worker's
+   removal is still owed or was abandoned), the member owes a
+   **removal-only** request after the commit (part 4), since no
+   TUNNEL_DOWN action arises from a classification - the port's
+   `RemovalOwed` is set and the member's barrier raised.
+6. **The PCI side revalidated** (decision U24): every member of the
+   snapshot's tunnel-port set re-read through `HalGetBusData` - the same
+   identity dword and header type, the same secondary and subordinate bus
+   numbers, the same source still naming it (the router-named source
+   re-read through step 3's mapping operation; the switch, listed and
+   SHPC sources as record 21 section 6.3 reads them) - and the
+   exclusive-ownership check of record 21 section 6.3 run again on the
+   registration list. A member whose secondary bus changed sends every
+   tunnel preserved behind it back to step 4's rebuild classification
+   (R8a: its old entries' `IN_USE` is cleared only after their devnodes
+   are retired, part 4, and the rebuild's exposure takes a free entry);
+   a member that cannot
+   be read, that is no longer a bridge, or whose exclusivity is lost,
+   refuses the recovery for this episode (the set is found afresh by the
+   next instance, not patched here). Learned correspondences are kept only
+   for a member whose secondary bus is unchanged and whose port's tunnel
+   was preserved; every other learned binding is withdrawn, the named ones
+   re-established by the mapping operation.
+7. **The commit.** One fresh sample of the size register, read now; then
+   the **locked part**, under the work lock and nothing else there (the
+   lock raises IRQL, as `cmLiveRecover` releases it right after
+   `CmLiveRecovered`): `CmLiveRecovered`'s rule from CONTAINED's side -
+   the episode the recovery recorded is still the current one, nothing
+   revoked it, the sample is the programmed value - and, in this order,
+   the flag updates alone: the monitor ACTIVE with that sample as its
+   baseline; the core's `Contained` cleared, its `Suspended` latch cleared
+   (a suspend taken while contained sets it with no resume to clear it,
+   and `TbtU4Poll` and `CmNhiRunning` refuse a suspended instance; the
+   commit runs in D0 only, the power path's rule), its stage RUNNING; the
+   driver's `U4ContainDone` cleared and its stage `CM_STAGE_ACTIVE`; where
+   the loss had interrupted an activation or a resume (part 5's
+   eligibility), the loss indication and `U4.Failed` cleared - only now,
+   after the reconstruction succeeded. Then, **with the lock released**
+   and at PASSIVE_LEVEL, the work that reaches outside: the bind's
+   remaining steps where the loss interrupted a bind, as the bind would
+   have run them (the seam's start, `CmReenumStart`, the hooks, the first
+   publication to the query device; the host-router discovery a loss
+   before it had completed being steps 2 and 3 of this part), and part
+   4's requests - each under the **admission-and-drain protocol** the
+   driver already uses for an ICM `UP`'s delivery (`CmNhiDrainActions`:
+   admitted under the work lock with the episode and the revocation
+   checked there and an in-flight count raised, `Delivering`; run at
+   PASSIVE_LEVEL outside the lock; the count lowered after), so that a
+   stop or surprise removal that lands between the check and the
+   operation finds the admission closed and waits for the admitted work
+   to drain (`CmNhiRevoke` on `DeliverIdle`) instead of racing it; the
+   USB4 delivery path and `CmReenumStart` are brought under the same
+   protocol for this work, since neither has it today. A request not
+   admitted is dropped, as `CmLiveRecovered`'s rule drops a late result.
+   The port records are as parts 3 and
+   4 leave them. A commit refused (the episode moved on, a revocation, a
+   sample not the programmed value) is a failed recovery, and none of
+   these updates is made.
 
-*4. What CONTAINED keeps*, unchanged but for the exit: the buffer under
-`DmaMayRun` until the verified stop of step 1; force power; the Bus Master
-bit as found; the port records, now as obligations; USB4 router state
-never read or written until the recovery's step 4 reads it under the
-`RECOVERY` class. The table of refusals stands for every path but the
-recovery's own, and the stop, surprise removal, removal and shutdown rows
-are unchanged (a recovery in progress is ended by them through the failure
-path, the buffer as `DmaMayRun` then says).
+*4. After the commit: the barrier, the rebuilds and the publications.* From
+the commit on, the instance is an ordinary ACTIVE one with some tunnels
+in drained states, and the ordinary machinery does the rest, under the
+**retirement barrier** (decisions U22 and U23), a per-member flag the
+recovery sets for every member behind which an endpoint of a departed or
+to-be-rebuilt PCIe tunnel sat whose devnode the operating system still
+has, and that is cleared only by the retirement of that endpoint's
+devnode: on Windows 98 SE and ME the worker's per-devnode result for its
+removal (`cmWkGone`'s outcome for that instance id, or the vanished-child
+removal's: removed, or already absent from the tree), carried back
+through a per-devnode result slot the worker gains for this, which is
+interface 3's R8c (`Remove_SubTree` succeeded before the bridge is
+re-enumerated or a new `UP` published); on Windows 2000 and later, where
+interface 2 states no retirement rule and every ordinary re-plug already
+publishes its new `UP` and invalidates once `pci.sys` stops reporting the
+old PDO, the child filter's own observation that the endpoint's
+`IRP_MN_REMOVE_DEVICE` completed below it (`CmRegChildRemoved`, which the
+child posts after the removal finished and it detached, tagged with the
+episode) where a child of this driver was on the PDO, and otherwise a
+**fresh and complete** `BusRelations` answer after the removal-only
+request (`CmRegRelations`: not truncated, taken after the request,
+bounded at 5 s and retried once) that no longer reports the PDO - the
+condition every ordinary NT re-plug of this driver rests on, and no
+stronger one is claimed for it. A physical unplug clears no barrier: the
+devnode's retirement does, which the unplug brings about through the
+worker's vanished-child removal or `pci.sys`'s report. While a member's
+barrier stands, **no tunnel is built on its port, no `UP` is published
+for it and no re-enumeration of it is requested but the removal-only
+one** - the block record 21 section 7.2's 9x half imposes on a member
+whose removal keeps failing (R8c gates the bridge's re-enumeration as
+well as the new `UP`); a removal vetoed or abandoned (`CM_WK_GONE_TRIES`)
+keeps the barrier and is retried without forcing, the ports behind it
+drained and down, logged `u4.recover.retirement-owed`, until the devnode
+is retired.
 
-*Legs* (42-V.5, EMU.2, on the current `usb4-emu` build's root hot-plug
-modes once part 2 lands): the R32 power-off read again with `acpi` on
-2000 with ACPI, XP and 7 (a PnP removal: the containment ends with the
-instance, no recovery, as before) and with `restore` on 98 SE, 2000 and
-one later NT target (the bridge restored with its configuration: the
-precondition passes, the rings stopped and restarted in the kept buffer,
-a tunnel up at the loss preserved and its drive still mounted, a tunnel
-whose host side the model reset rebuilt through the Detect gate and its
-drive back after the re-enumeration, a device unplugged during the loss
-removed); a `restore` that brings BAR0 back unassigned (the instance stays
-CONTAINED and says why); a suspend during the recovery; the recovery
-refused with a stop waiting; and the counters and the query device's
+**The removal-only request** is what retires an endpoint whose devnode
+the operating system still has after its tunnel was drained: dispatched
+right after the commit for every member with removal debt (step 5), it
+is allowed through the barrier and is the one request a barred member
+gets - on NT the invalidation of that member with publication mode
+*retire* (`pci.sys` reads the drained function absent and reports the
+PDO missing, the child filter observes the removal), on 98 SE and ME the
+worker's vanished-child removal for the member (its scan reads the
+function absent, `Query_Remove_SubTree` and `Remove_SubTree` follow, a
+veto respected and retried) - and it is retried until the devnode is
+gone, as the worker already retries. **Mode *retire*** is a distinct,
+non-exposing operation of the channel (a new pure function beside
+`CmNvlinkRetireEntry`, which refuses an entry still `UP` because it
+retires acknowledged statements): for each entry behind the member whose
+function reads absent on the bus and whose devnode's retirement was
+observed, `UP` is cleared to `IN_USE` alone with the generation
+unchanged - no `DOWN_QUIESCED` (no quiescence is claimed), no increment
+(no establishment happened), nothing scanned or published. Then:
+
+- **A preserved tunnel** (its member's bus unchanged) whose entry still
+  reads `UP` and whose endpoint devnode is retained (the containment's
+  reconciliation found the function present, since the tunnel stayed
+  up): nothing is published and no generation changes; a Stor98 instance
+  still bound keeps its identity (R8d). On Windows 98 SE and ME, where
+  containment changed no entry, a preserved tunnel keeps its entry `UP`
+  at its generation whatever the worker did with the devnode. Its member
+  takes publication mode *none*.
+- **A preserved tunnel whose entry lost `UP` at containment** (its
+  function read absent for the moment PCI access was gone) is **not
+  preserved for the channel**: re-publishing `UP` at the same generation is
+  nothing the interface defines, and a new generation would say
+  "re-established" of a link nobody saw go down (R8b). Such a tunnel is
+  reclassified by step 4 as to be rebuilt and drained by step 5 at both
+  ends, so that its rebuild's new generation is true; its member takes
+  the removal debt and the barrier (decision U22).
+- **A rebuilt PCIe tunnel**: once its member's barrier is clear, the
+  tunnel is rebuilt by a **per-tunnel rebuild transition** of the core
+  (decision U28, new for 42-A.10: the ordinary connect of section 6.4
+  cannot serve, since it restores the lanes, requires them idle and
+  decides both tunnels, which would touch a preserved sibling): from the
+  port's UP, HELD or FAILED state (FAILED is where an eject of the PCIe
+  tunnel leaves a port whose USB3 tunnel stays up, `TbtU4EjectPcie`, and
+  where a PCIe failure leaves it; such a port is a source for its USB3
+  obligation alone, and stays FAILED for PCIe with `Ejected` and
+  `PcieFailed` as they were when the USB3 rebuild ends), on the adopted
+  router with the lanes and the
+  TMU as found, the sibling tunnel untouched, `Ejected` and `PcieFailed`
+  respected (a port so flagged gets no PCIe rebuild), the Detect gate of
+  section 6.8 step 1 at both ends (the USB4 end alone for a Thunderbolt 3
+  router), then section 6.8's paths with Buffer Allocation as section 6.4
+  step 9 for an adopted router; a failure is section 6.8's (the PCIe side
+  FAILED, `PcieFailed`, the quarantine, the sibling kept). Its TUNNEL_UP
+  action reaches the seam as any tunnel up's: `CmNvlinkExpose` with a
+  fresh exposure publishes the one new `UP`, generation + 1, before the
+  invalidation or `Reenumerate_DevNode`. That exposure is the only owner
+  of the generation change (U22). Its member takes mode *fresh*.
+- **A rebuilt USB3 tunnel**: the same transition for USB3 alone - section
+  6.9 on the adopted router, lanes and TMU as found (admitted only where
+  `TmuOk` held in step 4), the reuse gap of section 6.9 step 1 from the
+  recorded teardown time, the bandwidth handshake, the sibling untouched
+  - with **no TUNNEL_UP action, no PCI-side change and no table
+  generation**: a USB3 tunnel carries devices of the host's own xHCI
+  tree, enumerated there, and the channel is PCIe's. A failure is section
+  6.9's (`Usb3Failed`, the quarantine). A USB3 tunnel on a port whose
+  PCIe side is `Ejected` or `PcieFailed` is rebuilt this way with the
+  PCIe side left as it was.
+- **A departed tunnel**: no action of the fabric remains (step 5 drained
+  it; the port is EMPTY and connects afresh when a router appears); its
+  removal debt goes through the removal-only request and mode *retire*
+  above; no statement is ever made for it (the path-closed proof needs
+  the host router's read-back at the time of the loss, which did not
+  exist, section 10.2; Stor98's gone deadline, MD-1, stands). On NT an
+  entry whose function read absent at containment already reads
+  `IN_USE` alone from `CmNvlinkLost`; one whose function still answered
+  then, and every 9x entry (untouched at containment), is retired by
+  mode *retire* once the devnode is gone, and left `UP` while a veto
+  retains the devnode.
+- **Unknown correspondence** (section 7.6: a port whose member is not
+  known, a binding withdrawn by step 6). Classification first: the
+  channel's cases above name a member's entry, and an unattributed port
+  cannot be matched to one; so, where any PCIe tunnel of the
+  unattributed group would be preserved while some member of the set has
+  an entry that lost `UP` at containment, or a member's secondary bus
+  changed, **the whole unattributed group is classified to be rebuilt**:
+  every PCIe obligation of it drained in step 5 and retired through the
+  removal-only request, none preserved, since a tunnel kept with a
+  broken or misattributed entry would leave its drive without a channel
+  (decision U29: hold nothing on a guess). Then the publications: the
+  recovery's own RESYNC takes mode *none* for the whole set; removal-only
+  requests go to every member with debt in mode *retire* (which exposes
+  nothing); and the rebuilds are **serialised**, one port at a time, under
+  a learning handoff this record states because section 7.6's learning
+  (`XhciTbtLearn`: exactly one pending port, one member gaining a
+  function) was written for ordinary plugs: before each rebuild, every
+  member's barrier is clear; the drained obligations' pending-learning
+  marks are consumed (step 5's read-back is the proof of closure section
+  7.6 asks for a pending port, and the reconciliation after the commit
+  does not re-mark a proven-drained obligation pending); a fresh
+  occupancy baseline of every member's secondary bus is taken (the
+  functions answering now); and no other unattributed port is pending -
+  a preserved unattributed port, or one whose closure is unproven, holds
+  every rebuild of the group (drained and down, logged
+  `u4.recover.learning-held`) until it is attributed or proven down, and
+  a rebuild held so until a re-plug is handled by that re-plug as a
+  fresh plug. Each rebuild is then an ordinary tunnel up with unknown
+  correspondence whose publication follows task 42-A.6's rule for that
+  case - the fresh exposure for the one member whose secondary bus gains
+  the function, the publication held as debt until the gain attributes
+  it, and record 21 section 7.2's late route for a function that answers
+  only after the 9x enumeration - which that task owns and this record
+  does not redefine. The two-member leg's expected outcome: the two
+  rebuilds one after the other, each attributed by its gain, each
+  publishing one new `UP` on its own member, no other member's generation
+  changed; the ambiguous-group leg's: both tunnels drained and rebuilt,
+  neither preserved.
+
+The per-member **publication mode** is what `cmReenumAll`'s `fresh`
+argument becomes (decision U25): *fresh* for a member whose port's tunnel
+came up, *retire* for one whose device departed, *none* for every other
+member of a change, so that an unaffected member's entry is never
+advanced; the containment's own RESYNC (reason UNAVAILABLE, step 4 above)
+takes mode *none* for every member - today it exposes with `fresh` set on
+NT, which advances the generation of an entry still `UP` behind a tunnel
+nobody saw go down; `CmNvlinkLost` is the whole of what containment says
+to the channel, and that RESYNC requests the operating system's
+reconciliation alone. The recovery's own RESYNC after the commit (reason
+"controller recovered", `TBT_ICM_WHY_RECOVERED`) carries mode *none* for
+every member: it re-enumerates the preserved members' buses (which report
+nothing new) and skips a member whose barrier stands. On Windows 98 SE and
+ME it is posted to the worker per member behind that member's
+`CONTROLLER_UNAVAILABLE` removal where one is still owed (`ReqGone`,
+`NoScan`: the worker's own ordering), and the barrier holds the member
+whose removal the worker abandoned.
+
+*5. The states and what ends a recovery.* The monitor's states gain
+CONTAINED's exit and one state; the pure half (`cm_live.c`) carries the
+table and the host suite reads every row:
+
+| From | On | To |
+|---|---|---|
+| CONTAINED (probing) | a probe reading the header proven and BAR0 intact | PREPARING |
+| CONTAINED (probing) | a probe reading all ones, or an identity mismatch | CONTAINED (probing), the probe going on |
+| CONTAINED (probing) | BAR0 changed | CONTAINED (cooldown) |
+| PREPARING | every step of part 2 passed | RECOVERING |
+| PREPARING | a step refused (Command read-back, FW_READY, a selection test, a BAR read all ones) | CONTAINED (cooldown); `Rearm` set where the refusal was an all-ones read |
+| RECOVERING | step 3.1's verified stop failed | CONTAINED (final) |
+| RECOVERING | any other step refused; the bound spent; the commit refused | CONTAINED (cooldown); `Rearm` set where a read came back all ones (the second outage was observed) |
+| RECOVERING | step 7's commit for the recorded episode, nothing revoked | ACTIVE |
+| PREPARING or RECOVERING | a system suspend (D3) | CONTAINED (cooldown), the attempt journalled; at the resume to D0 one probe at once, which takes the probing row where the header is proven (no second outage is required of a power-cancelled attempt) |
+| CONTAINED (cooldown) | an all-ones probe then a readable one, or `Rearm` already set and a readable probe (a new episode) | CONTAINED (probing), the episode bumped, a new snapshot of what was changed meanwhile |
+| CONTAINED (final) | anything but a revocation | CONTAINED (final) |
+| any of these | `IRP_MN_SURPRISE_REMOVAL`, stop, remove (`CmLiveRevoke`) | REVOKED, terminal |
+
+Cooldown exists so that a platform that keeps answering with a broken
+configuration is not re-tried every second: a new episode is the one
+trigger, as RECOVERY_FAILED's `Rearm` is for the ICM profile, and an outage
+the attempt itself observed counts as that episode's all-ones probe, so a
+controller that comes back before the next probe is not stranded. A PnP
+stop or removal queued while a recovery runs ends it through the failure
+path and takes REVOKED; a result for an episode other than the current
+one, or after REVOKED, is dropped (`CmLiveRecovered`'s late-completion
+rule). An all-ones reading inside RECOVERING is a refused request (the
+gate's cancellation) and ends the recovery as a failure with `Rearm` set.
+A resume from a suspend taken in CONTAINED is unchanged (the failure path
+of section 7.6, the hold released then invalidated) and the probe follows
+it at once. Eligibility (decision U27): the stage ACTIVE, and the stage a
+bind or a resume left when **the host interface was lost during it** -
+`cmU4Bind` finds the size register all ones or other than programmed, or
+the gate revoked, and contains the instance; `CmNhiReinit`'s resume
+(`cm_power.c`) fails and its size-register check finds the same, and
+contains it; those are 42-A.10's "a bind or resume that reads the ring's
+size register wrong", and each is told apart from a protocol failure
+(`U4.Failed` with the host interface answering), which stays
+`CM_STAGE_FAILED`, never sampled and never recovered. For the
+interrupted bind or resume the stage is recorded as loss-interrupted (a
+new stage value beside `CM_STAGE_FAILED`, which `CmThrLiveness` samples
+as it samples ACTIVE), the thread samples, and the commit clears
+`U4.Failed` and the indication and runs the bind's remaining steps where
+it was a bind (step 7); a resume interrupted by the loss had its hold
+released through section 7.6's failure path already, and the recovery
+owes it nothing more.
+REVOKED stays terminal, and nothing of this part runs under it.
+
+*6. What CONTAINED keeps*, unchanged but for the exit: the buffer under
+`DmaMayRun` until the verified stop of step 3.1; force power; the Bus
+Master bit as found; the port records, now inside the snapshot; USB4
+router state never read or written until the recovery's steps 3 and 4
+read it under the `RECOVERY` class. The table of refusals stands for every
+path but the recovery's own, and the stop, surprise removal, removal and
+shutdown rows are unchanged (a recovery in progress is ended by them
+through the failure path, the buffer as `DmaMayRun` then says).
+
+*7. The seam, the brackets and the query device.* The loss bracket of
+`CmReenumLossBegin` and `CmReenumUnavailable` (`LossDrain`) is the short
+window in which actions handed over are voided, closed by
+`CmReenumUnavailable` itself on both routes; what the barrier waits for on
+Windows 98 SE and ME is the worker's longer obligation (`ReqGone` and
+`NoScan`) resolved per devnode, not that bracket. On NT the containment's
+invalidations are asynchronous and prove nothing by themselves; the
+barrier's observations are the proof. The query device's answer carries
+the liveness state throughout (CONTAINED, PREPARING, RECOVERING, ACTIVE),
+so XHCITR shows the branch "not current" until the commit, and the
+counters count each refusal by step (`u4.recover.refused` by step,
+`u4.recover.final`, `u4.recover.ok`, `u4.recover.retirement-owed`,
+`u4.recover.rearm`).
+
+*Legs* (42-V.5, EMU.2, on `usb4-generic` under the current `usb4-emu`
+build's root hot-plug modes once part 2 lands): the R32 power-off read
+again with `acpi` on 2000 with ACPI, XP and 7 (a PnP removal: the
+containment ends with the instance, no recovery) and with `restore` on 98
+SE, 2000 and one later NT target: the bridge restored with its
+configuration intact (the probe passes, the rings stopped and restarted
+in the kept buffer, a tunnel up at the loss preserved with its generation
+unchanged and nothing published - on NT its drive kept; on 98 SE and ME
+the devnode as the containment worker's removal left it, removed and
+found again by the re-enumeration where that removal ran, the tunnel and
+the entry unchanged either way); the bridge restored with the host router reset (the
+drain, the barrier, the rebuild through the Detect gate, the drive back
+after the re-enumeration with a new generation); a device unplugged
+during the loss (departed, its entry retired, no statement); a `restore`
+that leaves memory decoding off (the Command repair) and one that brings
+BAR0 back unassigned (CONTAINED, cooldown, the reason logged); a loss that
+cleared an entry's `UP` while the tunnel stayed up (drained and rebuilt,
+not preserved); a USB3-only obligation on an ejected port, a PCIe tunnel rebuilt
+beside a preserved USB3 tunnel on the **same port** and the reverse, and
+one port preserved beside another rebuilt; a router replaced during the
+loss (host-side drain alone, the replacement discovered afresh); a
+removal vetoed, the device then unplugged and re-plugged (the barrier
+cleared by the devnode's retirement, never by the unplug); a loss before
+the host-router discovery had completed; a loss during a resume, and the
+recovery after it with polling and tunnel service verified, not the
+monitor's state alone; a stop racing the commit's post-lock work (the
+qemu flavour pausing after the admission check, before the publication); the ambiguous unattributed group (two tunnels
+verified, one member's entry lost); a Thunderbolt 3 device router (the TS3
+Plus model) preserved and rebuilt; a suspend during the recovery and the
+probe at the resume; the recovery refused with a stop waiting; a second
+loss during the recovery and the recovery after it without a further
+outage; a vetoed 9x removal holding the barrier until the veto lifts,
+with the hardware ready to rebuild meanwhile; two members with no usable
+mapping; a loss during the bind; the counters and the query device's
 states read in XHCITR throughout. On real USB4 hardware the loss itself is
 unread (section 16), so the recovery is emulator-only in `3.1.0.0` and the
 release notes say so.
 
 *Decisions* (the orchestrator's, owner to confirm; U17 as revised by the
-owner's Phase 42 opening): U18 the precondition writes nothing but the
-Command register's decoding and Bus Master bits, and a BAR0 not as before
-refuses the recovery; U19 the port records kept under CONTAINED are
-recovered as section 7.6's resume obligations are; U20 the kept buffer is
-reused only after a verified stop of the rings in it, and a stop that
-cannot be verified ends recovery for the boot; U21 the device-side
-teardown of entries this instance recorded, before a rebuild through the
-Detect gate, is unplug handling under the no-reset rule, never a
-Downstream Port Reset or a router reset; U22 one RESYNC, reason
-"controller recovered", tells the seam.
+owner's Phase 42 opening): U18 the probe reads the configuration header
+before the BAR and writes nothing; the preparation's writes are the
+Command register's decoding and Bus Master bits and section 4.2's
+platform registers, under a `PREPARE` class that admits nothing else; a
+BAR0 not as before refuses the recovery; every readable size-register
+value is admitted and the verified stop is the safety argument, never an
+ownership inference. U19 an immutable recovery snapshot at each
+containment, a complete copy of the port, router, link, set and channel
+records with the writes in flight, the resume obligations derived inside
+it, and a journal of each attempt's changes. U20 the kept buffer and its
+adapter are reused only after a verified stop of the rings in it, and a
+stop that cannot be verified ends recovery for the boot. U21 the fabric
+is classified per tunnel by reading, with section 8's forms for a
+Thunderbolt 3 router; a tunnel to be rebuilt or departed is drained by
+the complete recorded teardown at both ends without any reset, with the
+closure read back; HELD for anything short of the prerequisites. U22 the
+recovery builds and publishes nothing before its guarded commit; every
+rebuild happens afterwards through the per-tunnel rebuild transition, a
+PCIe rebuild's tunnel-up exposure the one owner of the generation
+change and a USB3 rebuild publishing nothing; a preserved tunnel whose
+entry lost `UP`, or whose member's secondary bus changed, is drained and
+rebuilt rather than re-published; mode *retire* clears `UP` with no
+generation change and no quiescence claim; the containment's own RESYNC
+exposes nothing. U23 the per-member retirement barrier, cleared only by
+the endpoint devnode's retirement - the worker's per-devnode result on
+98 SE and ME (R8c), the child filter's removal observation or a fresh
+complete relations answer on NT (the ordinary re-plug's condition,
+interface 2 stating no retirement rule) - holding builds, publications
+and every re-enumeration but the removal-only request of that member; a
+veto blocks, never forces; an unplug clears nothing by itself. U24 the
+tunnel-port set revalidated before the commit; a changed member refuses
+the recovery for the episode; a changed secondary bus is R8a's case. U25
+`cmReenumAll`'s `fresh` becomes a per-member publication mode (fresh,
+retire, none), the recovery's RESYNC "controller recovered" taking none
+for every member and unknown correspondence taking none for the set with
+42-A.6's rule for the gain. U26 a `TbtU4Recover` entry opens the core's
+gate for the recovery's work alone, the failure path closes it again, the
+commit clears the containment latch so a later loss contains afresh. U27
+the eligible stages: ACTIVE, and a bind or a resume the loss interrupted
+(told apart from a protocol failure), whose stage and latch updates - the
+core's `Suspended` latch included - the commit makes in the order step 7
+gives, the bind's remaining steps and part 4's requests after the lock
+under the admission-and-drain protocol; CONTAINED's
+substates probing, cooldown and final and the PREPARING state, with the
+table above. U28 a per-tunnel rebuild transition of the core for
+42-A.10, PCIe or USB3 alone on an adopted router with the lanes and TMU
+as found and the sibling tunnel untouched, in place of the whole-port
+connect; and the device side of a drain written only on the positively
+identified recorded router, a replacement router discovered afresh. U29
+unknown correspondence holds nothing on a guess: an unattributed group
+with any member's entry lost or bus changed is drained and rebuilt whole,
+its rebuilds serialised under the learning handoff of part 4.
 
 *Open.* Whether a real USB4 host that loses power without a PnP removal
-comes back with its configuration intact (the ICM profile's SUSPECT and
-ABSENT case) or reset (CONFIG_LOST); which the emulator's `restore` mode
-models; how long a device router keeps its configuration while the host
-side is down (a router that gave up its enumeration meanwhile reads as
-removal evidence and is reconnected as new, which the design handles,
-but its drive is then re-enumerated rather than preserved).
+comes back with its configuration intact or reset, and which the
+emulator's `restore` mode models; how long a device router keeps its
+configuration while the host side is down (a router that gave up its
+enumeration reads as removal evidence and is reconnected as new, its drive
+re-enumerated rather than preserved); whether `pci.sys` re-reports an
+endpoint whose tunnel stayed up at the containment's invalidation on every
+NT target (the retention case of part 4), and how long its removal of a
+missing PDO's stack takes where no child of this driver observes it (the
+barrier's weaker proof), both read by 42-V.5.
 
 ## 8. Thunderbolt 3 device routers behind a USB4 host
 
@@ -2394,7 +2886,10 @@ and leave the unplug to the user). Under this one it does: section 9.3 step
 profile exposes it as a per-port entry point on the thread, and task
 39-A.8's NT mechanism calls it after the children of that verified tunnel
 port have been removed, so the tunnel is down before the user is told the
-device may be unplugged; on Windows 98 SE and ME the call follows the worker's
+device may be unplugged - a clause record 21 section 7.4, revision 3,
+supersedes for Windows 2000 and later, where the teardown follows an
+identity-checked eject confirmation asynchronously and the tools report
+what they observe (record 24 section 5.2); on Windows 98 SE and ME the call follows the worker's
 removal of the unit, which the tools ask of the connection manager since
 2026-10-18 (record 21 section 7.2, the 9x half; the code is 42-A.13): the
 worker hands a clean removal back to the thread, which runs the same
@@ -2697,7 +3192,7 @@ from their first form, as each row says.
 | U14 | The selection | section 3's four tests, the inert start in its two forms, the three positive admissions of section 3.4, and the hardware-profile table apart from the CM table (owner's coverage plan, 2026-10-15) | 3, 4 |
 | U15 | A resume that fails to restore every tunnel | an exception to the coverage plan's "tunnels restored before dependent PCI devices resume": the NT hold is released through record 21's failure path (release, then invalidation), since holding a bridge's D0 for ever would hang the system's resume; system suspend with a tunnelled device attached is unsupported in this release on every target and the release notes say so; on 9x there is no hold at all | 7.6, 11 |
 | U16 | The TMU | configured (HiFi-Bi) only on links that will carry a USB3 tunnel, as the Guide's accuracy rule requires, never on a preserved link; PCIe-only links and Thunderbolt 3 links left with the TMU off; CLx never enabled | 6.6, 8 |
-| U17 | A host interface lost under this profile | the owner's decision of 2026-10-15, not an orchestrator one: containment only, automatic recovery a later item of the roadmap's planned work; a terminal CONTAINED state on the monitor's first sign of loss, a surprise removal or a resume that finds the host interface gone, refusing transport, ejects, deferred teardown, UP actions, suspend and resume until a PnP stop and start or a reboot; force power and an unproven DMA buffer kept; no recovery in `3.0.0.0`. **Revised 2026-10-18** by the owner's opening of Phase 42, which promoted the planned recovery (`U4REC.1`) into `3.1.0.0` as tasks 42-0.5 and 42-A.10: CONTAINED is no longer terminal, the recovery of section 7.7's revision following on its precondition (decisions U18 to U22 there, the orchestrator's) | 7.7 |
+| U17 | A host interface lost under this profile | the owner's decision of 2026-10-15, not an orchestrator one: containment only, automatic recovery a later item of the roadmap's planned work; a terminal CONTAINED state on the monitor's first sign of loss, a surprise removal or a resume that finds the host interface gone, refusing transport, ejects, deferred teardown, UP actions, suspend and resume until a PnP stop and start or a reboot; force power and an unproven DMA buffer kept; no recovery in `3.0.0.0`. **Revised 2026-10-18** by the owner's opening of Phase 42, which promoted the planned recovery (`U4REC.1`) into `3.1.0.0` as tasks 42-0.5 and 42-A.10: CONTAINED is no longer terminal, the recovery of section 7.7's revision following on its precondition (decisions U18 to U29 there, the orchestrator's) | 7.7 |
 
 ## 16. What is open, and what is a risk
 

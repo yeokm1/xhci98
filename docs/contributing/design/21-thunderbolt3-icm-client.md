@@ -2558,6 +2558,12 @@ the removal retries. The design therefore separates two things that
   never by time or by a worker's exit (R8c, S5). The image stays
   resident, so the code and the lists outlive the stop (section 6.1's
   rule).
+- **The per-devnode result slot and the member's gates are shared.**
+  Record 22 section 7.7's recovery (task 42-0.5) reads the same
+  per-devnode result slot for its retirement barrier (its decision U23:
+  on 9x the worker's removal result is R8c's retirement) and waits on
+  the same exposure gate before any rebuild's publication; the worker
+  gains nothing further for it.
 - **The persistent per-devnode transaction is not a call.** It outlives
   every call it submits, keeps its `REMOVE_PENDING` request (R9a: one
   request per devnode, left in place through retries) until the devnode

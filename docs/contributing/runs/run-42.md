@@ -104,5 +104,10 @@ of the eject posted on a positive confirmation; Windows 2000's problem
 moved from the worker to the thread with one call worker per member; the
 detached block and the persistent member blocker; acceptance as the
 ownership boundary of an ask; O6 under the firmware connection manager
-left as an open interface exception). 42-0.5 and 42-0.6 are recorded
-below when their loops end.
+left as an open interface exception). 42-0.5 converged over six rounds
+(the first draft's recovery transaction restructured: the recovery
+restores and commits, every rebuild and publication afterwards going
+through the ordinary machinery behind a per-member retirement barrier;
+an immutable snapshot per containment; nothing built or published
+before a guarded commit; decisions U18 to U29). 42-0.6 is recorded
+below when its loop ends.
