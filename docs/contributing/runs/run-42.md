@@ -953,3 +953,16 @@ read and the stop's read-back.
   a vetoed removal, the bind or resume the loss interrupts, a Thunderbolt
   3 router, Windows 2000 - 42-V.5's list, which the emulator's root
   hot-plug `restore` and `acpi` modes serve.
+**After the merge of `3.1.0.0` (`2d2703b9`)**, at `3f646cc8` and its
+review fixes to `03ce451c` (the AddDevice child filters counted for the
+retirement proof, publication mode none kept through 42-A.12's held work,
+the no-IRQ machine admitted against the retirement hold), reviewed until
+clean: `build-driver.cmd all` and `all -amd64` pass every gate at
+`03ce451c` (x86 `qemu` `xhcicm.sys` `2D6F769852663DDE...`). The 98 SE leg
+read again on that build (`l4`, a cold boot): F: compared clean, two
+losses each contained and recovered with the tunnel preserved
+(`u4.recover.class=00000103`, `u4.recover.ok`, no barrier). As before the
+merge, the volume came back after the first recovery and not after the
+second (no Stor98 binding after that re-enumeration, the prompt on C:
+this time, so not a volume held open); owed to the 9x Stor98 rebinding,
+not read further.
