@@ -61,7 +61,7 @@ static int di_copy(char *out, unsigned size, const char *s, unsigned n)
     return 1;
 }
 
-/* ---- the command line (record 27 section 4.1) ------------------------- */
+/* ---- the command line and the job file (record 27 section 4.1) -------- */
 
 #define DI_MAX_TOKENS 9
 
@@ -267,105 +267,214 @@ static void di_cmd_clear(DI_CMD *cmd)
 }
 
 /*
- * XHCIDI.EXE <version> install <result> <hwnd> <device id> <inf> [<flags>]
- * XHCIDI.EXE <version> remove  <result> <hwnd> <device id>
- * XHCIDI.EXE <version> probe   <result> <hwnd>
+ * XHCIDI.EXE <version> <job file>
  *
- * The result file is the third word, so it is read first: with no usable
- * path the helper can report nothing. The version is compared next and
- * before any other word is read.
+ * The command line carries two words (record 27 section 4.1): the
+ * installer's version and the path of the job file, at most DI_JOBPATH_MAX
+ * characters and 8.3 in every part. A 16-bit program's command tail holds
+ * at most 126 characters (the 98 SE smoke run of 2026-10-18 failed
+ * CreateProcessA at 127), and this line is at most 31 + 1 + 80 = 112.
  */
-int di_parse(const char *cmdline, const char *own_version, DI_CMD *cmd)
+int di_cmdline(const char *cmdline, char *version, unsigned vsize,
+               char *jobpath, unsigned jsize)
 {
+    DI_TOK t[3];
+    int n = di_tokens(cmdline, t, 3);
+    if (vsize != 0) {
+        version[0] = '\0';
+    }
+    if (jsize != 0) {
+        jobpath[0] = '\0';
+    }
+    if (n != 2 || t[0].n > DI_VERSION_MAX || t[1].n > DI_JOBPATH_MAX) {
+        return 0;
+    }
+    if (!di_copy(version, vsize, t[0].p, t[0].n) ||
+        !di_copy(jobpath, jsize, t[1].p, t[1].n) ||
+        !di_path_ok(jobpath, 0)) {
+        if (jsize != 0) {
+            jobpath[0] = '\0';
+        }
+        return 0;
+    }
+    return 1;
+}
+
+/*
+ * The next line of the job file: its words into t (at most max, *n set to
+ * max + 1 when there are more), and the start of the line after it. A line
+ * ends at LF; a CR before it is part of the line's end.
+ */
+static const char *di_line(const char *p, DI_TOK *t, int max, int *n)
+{
+    const char *e = p;
+    while (*e != '\0' && *e != '\n') {
+        e++;
+    }
+    *n = di_tokens(p, t, max);
+    return *e == '\n' ? e + 1 : e;
+}
+
+static int di_line_is(const DI_TOK *t, int n, const char *key, int words)
+{
+    return n == words && di_tok_is(&t[0], key);
+}
+
+/*
+ * The job file (record 27 section 4.1), one record a line, in this order:
+ *
+ *   XHCIDI-JOB 1
+ *   JOB install | remove | probe
+ *   RESULT <result file>
+ *   HWND <decimal>
+ *   DEVICE <device id>            install and remove
+ *   INF <inf path>                install
+ *   FLAGS <flag> [<flag>]         install, optional: force, quiet
+ *   END
+ *
+ * The RESULT line is found first, wherever it is, since with no usable
+ * result path nothing can be reported; then the command line's version is
+ * compared; then the whole file is read strictly.
+ */
+int di_parse(const char *cmdline, const char *jobtext, const char *own_version,
+             DI_CMD *cmd)
+{
+    char jobpath[DI_JOBPATH_MAX + 1];
     DI_TOK t[DI_MAX_TOKENS];
+    const char *p;
     int n;
     int i;
 
     di_cmd_clear(cmd);
-    n = di_tokens(cmdline, t, DI_MAX_TOKENS);
-    if (n < 3) {
-        cmd->why = "arguments";
+    if (!di_cmdline(cmdline, cmd->version, sizeof cmd->version,
+                    jobpath, sizeof jobpath)) {
+        cmd->why = "command-line";
         return DI_PARSE_NOFILE;
     }
-    if (!di_copy(cmd->result, sizeof cmd->result, t[2].p, t[2].n) ||
-        !di_path_ok(cmd->result, 0)) {
-        cmd->result[0] = '\0';
+    if (jobtext == 0) {
+        cmd->why = "job-file";
+        return DI_PARSE_NOFILE;
+    }
+    for (p = jobtext; *p != '\0' && cmd->result[0] == '\0';) {
+        p = di_line(p, t, DI_MAX_TOKENS, &n);
+        if (di_line_is(t, n, "RESULT", 2) &&
+            (!di_copy(cmd->result, sizeof cmd->result, t[1].p, t[1].n) ||
+             !di_path_ok(cmd->result, 0))) {
+            cmd->result[0] = '\0';
+            break;
+        }
+    }
+    if (cmd->result[0] == '\0') {
         cmd->why = "result-file";
         return DI_PARSE_NOFILE;
     }
-    if (!di_copy(cmd->version, sizeof cmd->version, t[0].p, t[0].n) ||
-        !di_streq(cmd->version, own_version)) {
+    if (!di_streq(cmd->version, own_version)) {
         cmd->why = "version";
         return DI_PARSE_VERSION;
     }
-    if (n > DI_MAX_TOKENS) {
-        cmd->why = "arguments";
+
+    cmd->why = "job-file";
+    p = di_line(jobtext, t, DI_MAX_TOKENS, &n);
+    if (!di_line_is(t, n, "XHCIDI-JOB", 2) || !di_tok_is(&t[1], "1")) {
+        return DI_PARSE_COMMAND;
+    }
+    p = di_line(p, t, DI_MAX_TOKENS, &n);
+    if (!di_line_is(t, n, "JOB", 2)) {
         return DI_PARSE_COMMAND;
     }
     if (di_tok_is(&t[1], "install")) {
-        if (n < 6 || n > 8) {
-            cmd->why = "arguments";
-            return DI_PARSE_COMMAND;
-        }
         cmd->job = DI_JOB_INSTALL;
     } else if (di_tok_is(&t[1], "remove")) {
-        if (n != 5) {
-            cmd->why = "arguments";
-            return DI_PARSE_COMMAND;
-        }
         cmd->job = DI_JOB_REMOVE;
     } else if (di_tok_is(&t[1], "probe")) {
-        if (n != 4) {
-            cmd->why = "arguments";
-            return DI_PARSE_COMMAND;
-        }
         cmd->job = DI_JOB_PROBE;
     } else {
         cmd->why = "job";
         return DI_PARSE_COMMAND;
     }
-    if (!di_parse_hwnd(&t[3], &cmd->hwnd)) {
+    p = di_line(p, t, DI_MAX_TOKENS, &n);
+    if (!di_line_is(t, n, "RESULT", 2)) {
+        cmd->job = DI_JOB_NONE;
+        return DI_PARSE_COMMAND;
+    }
+    p = di_line(p, t, DI_MAX_TOKENS, &n);
+    if (!di_line_is(t, n, "HWND", 2)) {
+        cmd->job = DI_JOB_NONE;
+        return DI_PARSE_COMMAND;
+    }
+    if (!di_parse_hwnd(&t[1], &cmd->hwnd)) {
         cmd->job = DI_JOB_NONE;
         cmd->why = "hwnd";
         return DI_PARSE_COMMAND;
     }
-    if (cmd->job == DI_JOB_PROBE) {
-        return DI_PARSE_OK;
-    }
-    if (!di_copy(cmd->devid, sizeof cmd->devid, t[4].p, t[4].n) ||
-        !di_devid_ok(cmd->devid)) {
-        cmd->devid[0] = '\0';
-        cmd->job = DI_JOB_NONE;
-        cmd->why = "device-id";
-        return DI_PARSE_COMMAND;
-    }
-    if (cmd->job == DI_JOB_REMOVE) {
-        return DI_PARSE_OK;
-    }
-    if (!di_copy(cmd->inf, sizeof cmd->inf, t[5].p, t[5].n) ||
-        !di_path_ok(cmd->inf, 1)) {
-        cmd->inf[0] = '\0';
-        cmd->job = DI_JOB_NONE;
-        cmd->why = "inf-path";
-        return DI_PARSE_COMMAND;
-    }
-    for (i = 6; i < n; i++) {
-        unsigned bit;
-        if (di_tok_is(&t[i], "force")) {
-            bit = DI_FLAG_FORCE;
-        } else if (di_tok_is(&t[i], "quiet")) {
-            bit = DI_FLAG_QUIET;
-        } else {
-            bit = 0;
+    if (cmd->job != DI_JOB_PROBE) {
+        p = di_line(p, t, DI_MAX_TOKENS, &n);
+        if (!di_line_is(t, n, "DEVICE", 2)) {
+            cmd->job = DI_JOB_NONE;
+            return DI_PARSE_COMMAND;
         }
-        if (bit == 0 || (cmd->flags & bit) != 0) {
-            cmd->flags = 0;
+        if (!di_copy(cmd->devid, sizeof cmd->devid, t[1].p, t[1].n) ||
+            !di_devid_ok(cmd->devid)) {
+            cmd->devid[0] = '\0';
+            cmd->job = DI_JOB_NONE;
+            cmd->why = "device-id";
+            return DI_PARSE_COMMAND;
+        }
+    }
+    if (cmd->job == DI_JOB_INSTALL) {
+        p = di_line(p, t, DI_MAX_TOKENS, &n);
+        if (!di_line_is(t, n, "INF", 2)) {
+            cmd->job = DI_JOB_NONE;
+            return DI_PARSE_COMMAND;
+        }
+        if (!di_copy(cmd->inf, sizeof cmd->inf, t[1].p, t[1].n) ||
+            !di_path_ok(cmd->inf, 1)) {
+            cmd->inf[0] = '\0';
+            cmd->job = DI_JOB_NONE;
+            cmd->why = "inf-path";
+            return DI_PARSE_COMMAND;
+        }
+    }
+    p = di_line(p, t, DI_MAX_TOKENS, &n);
+    if (cmd->job == DI_JOB_INSTALL && n >= 1 && di_tok_is(&t[0], "FLAGS")) {
+        if (n < 2 || n > 3) {
             cmd->job = DI_JOB_NONE;
             cmd->why = "flags";
             return DI_PARSE_COMMAND;
         }
-        cmd->flags |= bit;
+        for (i = 1; i < n; i++) {
+            unsigned bit;
+            if (di_tok_is(&t[i], "force")) {
+                bit = DI_FLAG_FORCE;
+            } else if (di_tok_is(&t[i], "quiet")) {
+                bit = DI_FLAG_QUIET;
+            } else {
+                bit = 0;
+            }
+            if (bit == 0 || (cmd->flags & bit) != 0) {
+                cmd->flags = 0;
+                cmd->job = DI_JOB_NONE;
+                cmd->why = "flags";
+                return DI_PARSE_COMMAND;
+            }
+            cmd->flags |= bit;
+        }
+        p = di_line(p, t, DI_MAX_TOKENS, &n);
     }
+    if (!di_line_is(t, n, "END", 1)) {
+        cmd->flags = 0;
+        cmd->job = DI_JOB_NONE;
+        return DI_PARSE_COMMAND;
+    }
+    while (*p != '\0') {
+        p = di_line(p, t, DI_MAX_TOKENS, &n);
+        if (n != 0) {
+            cmd->flags = 0;
+            cmd->job = DI_JOB_NONE;
+            return DI_PARSE_COMMAND;
+        }
+    }
+    cmd->why = "";
     return DI_PARSE_OK;
 }
 
@@ -826,6 +935,19 @@ const char *di_out_node(DI_OUT *out, unsigned long node_flags, int force)
     if (force) {
         di_field(out, "force", 0);
     }
+    return di_finish(out);
+}
+
+/*
+ * DEFAULT <function> lowest-rank: the dispatcher answered ERR_DI_DO_DEFAULT
+ * for a function it performs no default of its own for, and the helper
+ * made the choice itself (record 27 section 5.2).
+ */
+const char *di_out_default(DI_OUT *out, const char *function)
+{
+    di_begin(out, "DEFAULT");
+    di_field(out, function, 0);
+    di_field(out, "lowest-rank", 0);
     return di_finish(out);
 }
 

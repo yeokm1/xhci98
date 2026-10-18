@@ -23,17 +23,91 @@
 #include "test_harness.h"
 
 #define V "3.1.0.0"
+#define JOBPATH "C:\\XHCI98\\DIJOB.TXT"
 
-static int parse(const char *line, DI_CMD *cmd)
+static char jobtext[4096];
+
+/*
+ * A job file from words: <job> <result> <hwnd> [<device id> [<inf> [<flag>...]]],
+ * each operand on the line record 27 section 4.1 gives it, in order.
+ */
+static const char *jobfile(const char *words)
 {
-    return di_parse(line, V, cmd);
+    char copy[2048];
+    char *w[16];
+    int n = 0;
+    int i;
+    char *p;
+    strcpy(copy, words);
+    for (p = strtok(copy, " \t"); p != NULL && n < 16; p = strtok(NULL, " \t")) {
+        w[n++] = p;
+    }
+    strcpy(jobtext, "XHCIDI-JOB 1\r\n");
+    if (n > 0) { strcat(jobtext, "JOB "); strcat(jobtext, w[0]); strcat(jobtext, "\r\n"); }
+    if (n > 1) { strcat(jobtext, "RESULT "); strcat(jobtext, w[1]); strcat(jobtext, "\r\n"); }
+    if (n > 2) { strcat(jobtext, "HWND "); strcat(jobtext, w[2]); strcat(jobtext, "\r\n"); }
+    if (n > 3) { strcat(jobtext, "DEVICE "); strcat(jobtext, w[3]); strcat(jobtext, "\r\n"); }
+    if (n > 4) { strcat(jobtext, "INF "); strcat(jobtext, w[4]); strcat(jobtext, "\r\n"); }
+    if (n > 5) {
+        strcat(jobtext, "FLAGS");
+        for (i = 5; i < n; i++) { strcat(jobtext, " "); strcat(jobtext, w[i]); }
+        strcat(jobtext, "\r\n");
+    }
+    strcat(jobtext, "END\r\n");
+    return jobtext;
+}
+
+static int parse_text(const char *text, DI_CMD *cmd)
+{
+    return di_parse(V " " JOBPATH, text, V, cmd);
+}
+
+static int parse(const char *words, DI_CMD *cmd)
+{
+    return parse_text(jobfile(words), cmd);
+}
+
+static void test_cmdline(void)
+{
+    char ver[DI_VERSION_MAX + 1];
+    char path[DI_JOBPATH_MAX + 1];
+    char line[200];
+    char longpath[DI_JOBPATH_MAX + 2];
+    DI_CMD c;
+
+    CHECK(di_cmdline(V " " JOBPATH, ver, sizeof ver, path, sizeof path), "the command line");
+    CHECK(strcmp(ver, V) == 0 && strcmp(path, JOBPATH) == 0, "its two words");
+    CHECK(di_cmdline("  " V "\t" JOBPATH " \r\n", ver, sizeof ver, path, sizeof path), "blanks, a tab, a CRLF");
+    CHECK(!di_cmdline(V, ver, sizeof ver, path, sizeof path), "one word");
+    CHECK(!di_cmdline(V " " JOBPATH " extra", ver, sizeof ver, path, sizeof path), "three words");
+    CHECK(!di_cmdline(V " DIJOB.TXT", ver, sizeof ver, path, sizeof path) && path[0] == '\0', "a relative job path");
+    CHECK(!di_cmdline(V " C:\\LONGNAME12\\J.TXT", ver, sizeof ver, path, sizeof path), "a job path not 8.3");
+    CHECK(!di_cmdline("3.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0 " JOBPATH, ver, sizeof ver, path, sizeof path),
+          "a version longer than 31");
+
+    /* The bound: a job path of 80 characters is taken, 81 is not. */
+    strcpy(longpath, "C:\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\J.TXT");
+    CHECK_EQ(strlen(longpath), DI_JOBPATH_MAX, "an 80-character job path");
+    sprintf(line, V " %s", longpath);
+    CHECK(di_cmdline(line, ver, sizeof ver, path, sizeof path), "an 80-character job path is taken");
+    CHECK(strlen(line) <= 126, "and the command tail stays under the 126 a 16-bit program is given");
+    sprintf(line, "3.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0 %s", longpath);
+    CHECK(strlen(line) <= 126 && di_cmdline(line, ver, sizeof ver, path, sizeof path),
+          "the longest version and the longest job path: at most 112 characters");
+    sprintf(line, V " %s", "C:\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\ABCDEFGH\\JJ.TXT");
+    CHECK(!di_cmdline(line, ver, sizeof ver, path, sizeof path), "an 81-character job path is refused");
+
+    CHECK_EQ(di_parse(V, jobfile("probe C:\\X\\R.TXT 0"), V, &c), DI_PARSE_NOFILE, "no job path: no file");
+    CHECK(strcmp(c.why, "command-line") == 0, "why: command-line");
+    CHECK_EQ(di_parse(V " " JOBPATH, NULL, V, &c), DI_PARSE_NOFILE, "an unreadable job file: no file");
+    CHECK(strcmp(c.why, "job-file") == 0, "why: job-file");
 }
 
 static void test_parse_ok(void)
 {
     DI_CMD c;
 
-    CHECK_EQ(parse(V " install C:\\XHCI98\\DI1.TXT 1234 "
+    CHECK_EQ(parse("install C:\\XHCI98\\DI1.TXT 1234 "
                    "PCI\\VEN_8086&DEV_31A8&SUBSYS_00000000&REV_03\\BUS_00&DEV_04&FUNC_00 "
                    "C:\\XHCI98\\XHCI98.INF", &c), DI_PARSE_OK, "install parses");
     CHECK_EQ(c.job, DI_JOB_INSTALL, "install: job");
@@ -44,23 +118,30 @@ static void test_parse_ok(void)
           "install: device id");
     CHECK_EQ(c.flags, 0, "install: no flags");
 
-    CHECK_EQ(parse("  " V "\tinstall C:\\X\\R.TXT 0 USB\\XHCI98_ROOT_HUB\\5&1 C:\\X\\XHCIUAS.INF force quiet \r\n", &c),
-             DI_PARSE_OK, "install with both flags, tabs, leading blanks and a CRLF");
+    CHECK_EQ(parse("install C:\\X\\R.TXT 0 USB\\XHCI98_ROOT_HUB\\5&1 C:\\X\\XHCIUAS.INF force quiet", &c),
+             DI_PARSE_OK, "install with both flags");
     CHECK_EQ(c.flags, DI_FLAG_FORCE | DI_FLAG_QUIET, "both flags");
     CHECK_EQ(c.hwnd, 0, "hwnd 0, the console tool's");
 
-    CHECK_EQ(parse(V " install C:\\X\\R.TXT 65535 USB\\A\\B C:\\X.INF quiet", &c), DI_PARSE_OK,
+    CHECK_EQ(parse("install C:\\X\\R.TXT 65535 USB\\A\\B C:\\X.INF quiet", &c), DI_PARSE_OK,
              "an INF at a drive's root, hwnd 65535");
     CHECK_EQ(c.flags, DI_FLAG_QUIET, "quiet alone");
 
-    CHECK_EQ(parse(V " remove C:\\XHCI98\\DI2.TXT 77 USB\\XHCI98_HUB\\6&2&1", &c), DI_PARSE_OK,
+    CHECK_EQ(parse("remove C:\\XHCI98\\DI2.TXT 77 USB\\XHCI98_HUB\\6&2&1", &c), DI_PARSE_OK,
              "remove parses");
     CHECK_EQ(c.job, DI_JOB_REMOVE, "remove: job");
     CHECK(strcmp(c.devid, "USB\\XHCI98_HUB\\6&2&1") == 0, "remove: device id");
     CHECK(c.inf[0] == '\0', "remove: no inf");
 
-    CHECK_EQ(parse(V " probe C:\\XHCI98\\DIPROBE.TXT 0", &c), DI_PARSE_OK, "probe parses");
+    CHECK_EQ(parse("probe C:\\XHCI98\\DIPROBE.TXT 0", &c), DI_PARSE_OK, "probe parses");
     CHECK_EQ(c.job, DI_JOB_PROBE, "probe: job");
+
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\nJOB probe\nRESULT C:\\X\\R.TXT\nHWND 0\nEND", &c), DI_PARSE_OK,
+             "LF endings and no newline after END");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\r\n\r\n  \r\n", &c),
+             DI_PARSE_OK, "blank lines after END");
+    CHECK_EQ(parse_text("XHCIDI-JOB  1\r\nJOB\tprobe\r\n RESULT C:\\X\\R.TXT\r\nHWND 0  \r\nEND\r\n", &c),
+             DI_PARSE_OK, "blanks and tabs between and around the words");
 }
 
 static void test_parse_refused(void)
@@ -68,41 +149,68 @@ static void test_parse_refused(void)
     DI_CMD c;
     const char *dev = " PCI\\VEN_1033&DEV_0194\\3&1 ";
 
-    CHECK_EQ(parse("", &c), DI_PARSE_NOFILE, "empty line: no file");
-    CHECK_EQ(parse(V " probe", &c), DI_PARSE_NOFILE, "two words: no file");
-    CHECK_EQ(parse(V " probe RESULT.TXT 0", &c), DI_PARSE_NOFILE, "a relative result path: no file");
+    CHECK_EQ(parse_text("", &c), DI_PARSE_NOFILE, "an empty job file: no file");
+    CHECK(strcmp(c.why, "result-file") == 0, "why: result-file");
+    CHECK_EQ(parse("probe", &c), DI_PARSE_NOFILE, "no RESULT line: no file");
+    CHECK_EQ(parse("probe RESULT.TXT 0", &c), DI_PARSE_NOFILE, "a relative result path: no file");
     CHECK(c.result[0] == '\0', "no result path kept");
-    CHECK_EQ(parse(V " probe C:\\LONGNAME12\\R.TXT 0", &c), DI_PARSE_NOFILE, "a result path not 8.3: no file");
+    CHECK_EQ(parse("probe C:\\LONGNAME12\\R.TXT 0", &c), DI_PARSE_NOFILE, "a result path not 8.3: no file");
+    CHECK_EQ(parse_text("RESULT C:\\X\\R.TXT C:\\Y\\R.TXT\r\n", &c), DI_PARSE_NOFILE, "a RESULT line of two paths");
+    CHECK_EQ(parse_text("JOB probe\r\nRESULT C:\\X\\R.TXT\r\n", &c), DI_PARSE_COMMAND,
+             "a RESULT line found in a file whose header is missing: reported, then refused");
+    CHECK(strcmp(c.why, "job-file") == 0, "why: job-file");
+    CHECK(strcmp(c.result, "C:\\X\\R.TXT") == 0, "the result path is kept");
 
-    CHECK_EQ(parse("3.0.0.0 probe C:\\X\\R.TXT 0", &c), DI_PARSE_VERSION, "another version");
+    CHECK_EQ(di_parse("3.0.0.0 " JOBPATH, jobfile("probe C:\\X\\R.TXT 0"), V, &c), DI_PARSE_VERSION, "another version");
     CHECK(strcmp(c.result, "C:\\X\\R.TXT") == 0, "the result file is known to a version refusal");
     CHECK_EQ(c.job, DI_JOB_NONE, "no job read after a version refusal");
-    CHECK_EQ(parse("3.1.0.0x probe C:\\X\\R.TXT 0", &c), DI_PARSE_VERSION, "a longer version");
-    CHECK_EQ(parse("3.1.0 probe C:\\X\\R.TXT 0", &c), DI_PARSE_VERSION, "a shorter version");
-    CHECK_EQ(parse("3.1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0 probe C:\\X\\R.TXT 0", &c), DI_PARSE_VERSION,
-             "a version longer than the field");
-    CHECK_EQ(parse("3.0.0.0 bogus C:\\X\\R.TXT", &c), DI_PARSE_VERSION,
+    CHECK_EQ(di_parse("3.1.0.0x " JOBPATH, jobfile("probe C:\\X\\R.TXT 0"), V, &c), DI_PARSE_VERSION, "a longer version");
+    CHECK_EQ(di_parse("3.1.0 " JOBPATH, jobfile("probe C:\\X\\R.TXT 0"), V, &c), DI_PARSE_VERSION, "a shorter version");
+    CHECK_EQ(di_parse("3.0.0.0 " JOBPATH, jobfile("bogus C:\\X\\R.TXT"), V, &c), DI_PARSE_VERSION,
              "the version is compared before the job is read");
 
-    CHECK_EQ(parse(V " Install C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF", &c), DI_PARSE_COMMAND, "a job word in another case");
-    CHECK(strcmp(c.why, "job") == 0, "why: job");
-    CHECK_EQ(parse(V " probe C:\\X\\R.TXT", &c), DI_PARSE_COMMAND, "probe with no hwnd");
-    CHECK(strcmp(c.why, "arguments") == 0, "why: arguments");
-    CHECK_EQ(parse(V " probe C:\\X\\R.TXT 0 extra", &c), DI_PARSE_COMMAND, "probe with an extra word");
-    CHECK_EQ(parse(V " remove C:\\X\\R.TXT 0", &c), DI_PARSE_COMMAND, "remove with no device");
-    CHECK_EQ(parse(V " remove C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF", &c), DI_PARSE_COMMAND, "remove with an INF");
-    CHECK_EQ(parse(V " install C:\\X\\R.TXT 0 USB\\A\\B", &c), DI_PARSE_COMMAND, "install with no INF");
-    CHECK_EQ(parse(V " install C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF force quiet force", &c), DI_PARSE_COMMAND,
-             "install with three flags");
-    CHECK_EQ(parse(V " install C:\\X\\R.TXT 0 A\\B C:\\X\\A.INF a b c d e f", &c), DI_PARSE_COMMAND,
-             "more words than any job takes");
+    CHECK_EQ(parse_text("XHCIDI-JOB 2\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "another job file version");
+    CHECK(strcmp(c.why, "job-file") == 0, "why: job-file");
+    CHECK_EQ(parse_text("JOB probe\r\nXHCIDI-JOB 1\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "lines out of order");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\n\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "a blank line before END");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\n", &c),
+             DI_PARSE_COMMAND, "no END");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "a line after END");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND now\r\n", &c),
+             DI_PARSE_COMMAND, "END with a word");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\njob probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "a key in lower case");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nFLAGS quiet\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "FLAGS on a probe");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB remove\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nDEVICE USB\\A\\B\r\n"
+                        "FLAGS force\r\nEND\r\n", &c), DI_PARSE_COMMAND, "FLAGS on a removal");
 
-    CHECK_EQ(parse(V " probe C:\\X\\R.TXT -1", &c), DI_PARSE_COMMAND, "a negative hwnd");
+    CHECK_EQ(parse("Install C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF", &c), DI_PARSE_COMMAND, "a job word in another case");
+    CHECK(strcmp(c.why, "job") == 0, "why: job");
+    CHECK_EQ(parse("probe C:\\X\\R.TXT", &c), DI_PARSE_COMMAND, "probe with no hwnd");
+    CHECK(strcmp(c.why, "job-file") == 0, "why: job-file");
+    CHECK_EQ(parse("probe C:\\X\\R.TXT 0 extra", &c), DI_PARSE_COMMAND, "probe with a device");
+    CHECK_EQ(parse("remove C:\\X\\R.TXT 0", &c), DI_PARSE_COMMAND, "remove with no device");
+    CHECK_EQ(parse("remove C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF", &c), DI_PARSE_COMMAND, "remove with an INF");
+    CHECK_EQ(parse("install C:\\X\\R.TXT 0 USB\\A\\B", &c), DI_PARSE_COMMAND, "install with no INF");
+    CHECK_EQ(parse("install C:\\X\\R.TXT 0 USB\\A\\B C:\\X\\A.INF force quiet force", &c), DI_PARSE_COMMAND,
+             "install with three flags");
+    CHECK(strcmp(c.why, "flags") == 0, "why: flags");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB install\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nDEVICE USB\\A\\B\r\n"
+                        "INF C:\\X\\A.INF\r\nFLAGS\r\nEND\r\n", &c), DI_PARSE_COMMAND, "a FLAGS line with none");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0 1\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "an HWND line of two words");
+
+    CHECK_EQ(parse("probe C:\\X\\R.TXT -1", &c), DI_PARSE_COMMAND, "a negative hwnd");
     CHECK(strcmp(c.why, "hwnd") == 0, "why: hwnd");
-    CHECK_EQ(parse(V " probe C:\\X\\R.TXT 65536", &c), DI_PARSE_COMMAND, "an hwnd above 16 bits");
-    CHECK_EQ(parse(V " probe C:\\X\\R.TXT 0012", &c), DI_PARSE_COMMAND, "an hwnd with leading zeros");
-    CHECK_EQ(parse(V " probe C:\\X\\R.TXT 0x12", &c), DI_PARSE_COMMAND, "an hwnd in hex");
-    CHECK_EQ(parse(V " probe C:\\X\\R.TXT 123456", &c), DI_PARSE_COMMAND, "an hwnd of six digits");
+    CHECK_EQ(parse("probe C:\\X\\R.TXT 65536", &c), DI_PARSE_COMMAND, "an hwnd above 16 bits");
+    CHECK_EQ(parse("probe C:\\X\\R.TXT 0012", &c), DI_PARSE_COMMAND, "an hwnd with leading zeros");
+    CHECK_EQ(parse("probe C:\\X\\R.TXT 0x12", &c), DI_PARSE_COMMAND, "an hwnd in hex");
+    CHECK_EQ(parse("probe C:\\X\\R.TXT 123456", &c), DI_PARSE_COMMAND, "an hwnd of six digits");
 
     {
         char line[600];
@@ -110,37 +218,37 @@ static void test_parse_refused(void)
         memset(longid, 'A', sizeof longid - 1);
         longid[sizeof longid - 1] = '\0';
         longid[3] = '\\';
-        sprintf(line, V " remove C:\\X\\R.TXT 0 %s", longid);
+        sprintf(line, "remove C:\\X\\R.TXT 0 %s", longid);
         CHECK_EQ(parse(line, &c), DI_PARSE_COMMAND, "a device id of 201 characters");
         CHECK(strcmp(c.why, "device-id") == 0, "why: device-id");
         longid[DI_DEVID_MAX] = '\0';
-        sprintf(line, V " remove C:\\X\\R.TXT 0 %s", longid);
+        sprintf(line, "remove C:\\X\\R.TXT 0 %s", longid);
         CHECK_EQ(parse(line, &c), DI_PARSE_OK, "a device id of 200 characters");
     }
-    CHECK_EQ(parse(V " remove C:\\X\\R.TXT 0 NOBACKSLASH", &c), DI_PARSE_COMMAND, "a device id of one part");
-    CHECK_EQ(parse(V " remove C:\\X\\R.TXT 0 \\USB\\A", &c), DI_PARSE_COMMAND, "a device id with no enumerator");
-    CHECK_EQ(parse(V " remove C:\\X\\R.TXT 0 USB\\\\A", &c), DI_PARSE_COMMAND, "a device id with an empty part");
-    CHECK_EQ(parse(V " remove C:\\X\\R.TXT 0 USB\\A\\", &c), DI_PARSE_COMMAND, "a device id ending in a backslash");
-    CHECK_EQ(parse(V " remove C:\\X\\R.TXT 0 US&B\\A", &c), DI_PARSE_COMMAND, "an enumerator with a symbol");
-    CHECK_EQ(parse(V " remove C:\\X\\R.TXT 0 USB\\A\"B", &c), DI_PARSE_COMMAND, "a device id with a quote");
+    CHECK_EQ(parse("remove C:\\X\\R.TXT 0 NOBACKSLASH", &c), DI_PARSE_COMMAND, "a device id of one part");
+    CHECK_EQ(parse("remove C:\\X\\R.TXT 0 \\USB\\A", &c), DI_PARSE_COMMAND, "a device id with no enumerator");
+    CHECK_EQ(parse("remove C:\\X\\R.TXT 0 USB\\\\A", &c), DI_PARSE_COMMAND, "a device id with an empty part");
+    CHECK_EQ(parse("remove C:\\X\\R.TXT 0 USB\\A\\", &c), DI_PARSE_COMMAND, "a device id ending in a backslash");
+    CHECK_EQ(parse("remove C:\\X\\R.TXT 0 US&B\\A", &c), DI_PARSE_COMMAND, "an enumerator with a symbol");
+    CHECK_EQ(parse("remove C:\\X\\R.TXT 0 USB\\A\"B", &c), DI_PARSE_COMMAND, "a device id with a quote");
 
     {
         char line[300];
-        sprintf(line, V " install C:\\X\\R.TXT 0%sC:\\X\\A.TXT", dev);
+        sprintf(line, "install C:\\X\\R.TXT 0%sC:\\X\\A.TXT", dev);
         CHECK_EQ(parse(line, &c), DI_PARSE_COMMAND, "an INF path not ending .INF");
         CHECK(strcmp(c.why, "inf-path") == 0, "why: inf-path");
-        sprintf(line, V " install C:\\X\\R.TXT 0%sC:\\PROGRAM~1\\XHCI98LONG.INF", dev);
+        sprintf(line, "install C:\\X\\R.TXT 0%sC:\\PROGRAM~1\\XHCI98LONG.INF", dev);
         CHECK_EQ(parse(line, &c), DI_PARSE_COMMAND, "an INF name of nine characters");
-        sprintf(line, V " install C:\\X\\R.TXT 0%sX98.INF", dev);
+        sprintf(line, "install C:\\X\\R.TXT 0%sX98.INF", dev);
         CHECK_EQ(parse(line, &c), DI_PARSE_COMMAND, "an INF path with no drive");
-        sprintf(line, V " install C:\\X\\R.TXT 0%sC:\\A.B.INF", dev);
+        sprintf(line, "install C:\\X\\R.TXT 0%sC:\\A.B.INF", dev);
         CHECK_EQ(parse(line, &c), DI_PARSE_COMMAND, "an INF name with two dots");
-        sprintf(line, V " install C:\\X\\R.TXT 0%sC:\\X\\A.INF bogus", dev);
+        sprintf(line, "install C:\\X\\R.TXT 0%sC:\\X\\A.INF bogus", dev);
         CHECK_EQ(parse(line, &c), DI_PARSE_COMMAND, "an unknown flag");
         CHECK(strcmp(c.why, "flags") == 0, "why: flags");
-        sprintf(line, V " install C:\\X\\R.TXT 0%sC:\\X\\A.INF force force", dev);
+        sprintf(line, "install C:\\X\\R.TXT 0%sC:\\X\\A.INF force force", dev);
         CHECK_EQ(parse(line, &c), DI_PARSE_COMMAND, "a flag twice");
-        sprintf(line, V " install C:\\X\\R.TXT 0%sC:\\X\\A.INF FORCE", dev);
+        sprintf(line, "install C:\\X\\R.TXT 0%sC:\\X\\A.INF FORCE", dev);
         CHECK_EQ(parse(line, &c), DI_PARSE_COMMAND, "a flag in capitals");
     }
 }
@@ -486,7 +594,7 @@ static void test_writer(void)
 
     file[0] = '\0';
     di_out_init(&o);
-    CHECK_EQ(parse(V " install C:\\XHCI98\\DI1.TXT 0 PCI\\VEN_8086&DEV_15EC\\BUS_00&DEV_0D&FUNC_00 "
+    CHECK_EQ(parse("install C:\\XHCI98\\DI1.TXT 0 PCI\\VEN_8086&DEV_15EC\\BUS_00&DEV_0D&FUNC_00 "
                    "C:\\XHCI98\\XHCICM.INF quiet", &c), DI_PARSE_OK, "the record's example parses");
     put(di_out_header(&o, V));
     put(di_out_job(&o, &c));
@@ -522,7 +630,7 @@ static void test_writer(void)
     /* Each refusal's reason and detail are separate fields (section 4.4). */
     file[0] = '\0';
     di_out_init(&o);
-    CHECK_EQ(parse(V " probe C:\\X\\R.TXT 99999", &c), DI_PARSE_COMMAND, "a refused hwnd");
+    CHECK_EQ(parse("probe C:\\X\\R.TXT 99999", &c), DI_PARSE_COMMAND, "a refused hwnd");
     put(di_out_header(&o, V));
     put(di_out_refused(&o, "command", c.why));
     put(di_out_end(&o));
@@ -537,7 +645,7 @@ static void test_writer(void)
 
     file[0] = '\0';
     di_out_init(&o);
-    CHECK_EQ(parse(V " remove C:\\X\\R.TXT 9 USB\\XHCI98_HUB\\1", &c), DI_PARSE_OK, "remove parses");
+    CHECK_EQ(parse("remove C:\\X\\R.TXT 9 USB\\XHCI98_HUB\\1", &c), DI_PARSE_OK, "remove parses");
     put(di_out_header(&o, V));
     put(di_out_job(&o, &c));
     put(di_out_found(&o, 1));
@@ -558,12 +666,16 @@ static void test_writer(void)
 
     file[0] = '\0';
     di_out_init(&o);
-    CHECK_EQ(parse(V " probe C:\\X\\R.TXT 0", &c), DI_PARSE_OK, "probe parses");
+    CHECK_EQ(parse("probe C:\\X\\R.TXT 0", &c), DI_PARSE_OK, "probe parses");
     put(di_out_header(&o, V));
     put(di_out_job(&o, &c));
     put(di_out_result_text(&o, DI_V_PROBED, NULL));
     put(di_out_end(&o));
     CHECK(strcmp(file, "XHCIDI 3.1.0.0\r\nJOB probe\r\nRESULT probed\r\nEND 3\r\n") == 0, "a probe");
+
+    di_out_init(&o);
+    CHECK(strcmp(di_out_default(&o, "DIF_SELECTBESTCOMPATDRV"), "DEFAULT DIF_SELECTBESTCOMPATDRV lowest-rank\r\n") == 0,
+          "the helper's own selection after ERR_DI_DO_DEFAULT (record 27 section 5.2)");
 
     di_out_init(&o);
     CHECK(strcmp(di_out_result_text(&o, DI_V_FAILED, DI_SELF_OTHERINF), "RESULT failed XHCIDI_OTHER_INF 0\r\n") == 0,
@@ -595,6 +707,7 @@ static void test_writer(void)
 
 int main(void)
 {
+    test_cmdline();
     test_parse_ok();
     test_parse_refused();
     test_paths();

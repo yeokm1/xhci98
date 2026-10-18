@@ -3,7 +3,8 @@
  * (roadmap-usb4.md task 42-A.1; design record 27 section 12). A 32-bit
  * console program for Windows 98 SE and ME guests that starts the helper
  * exactly as record 27 section 4.1 says the installer does, without the
- * window: CreateProcessA with one job, an empty result file created first,
+ * window: the job file written, CreateProcessA with "<version> <job file>"
+ * (record 27 section 4.1), an empty result file created first,
  * one wait loop with a one-second tick that reads the file for its END
  * line, and the four outcomes of that loop. It prints what the legs record:
  * the result file, when its END line was read, when the process handle
@@ -14,7 +15,9 @@
  *   DITEST install <device id> <inf> [force] [quiet]
  *   DITEST remove <device id>
  *   DITEST raw <words...>                     the helper's command line after
- *                                             its name, verbatim (a refusal)
+ *                                             its name, verbatim, the job file
+ *                                             as it is (a refusal; a job file
+ *                                             written by hand)
  *   DITEST list [<prefix>]                    devnodes: id, status, problem
  *   DITEST reg <device id>                    the Enum key and driver key
  *
@@ -24,7 +27,8 @@
  * Options before the command: /w gives the helper the hwnd of a window of
  * DITEST's own, pumped by MsgWaitForMultipleObjects as the installer's is
  * (without it the hwnd is 0, the console tool's); /r <file> the result file
- * (default C:\DIRES.TXT); /x <path> the helper (default XHCIDI.EXE beside
+ * (default C:\DIRES.TXT); /j <file> the job file (default C:\DIJOB.TXT);
+ * /x <path> the helper (default XHCIDI.EXE beside
  * DITEST.EXE). Not part of any package: built by build.cmd beside it with
  * MSVC 6.0 and copied to a guest by hand.
  */
@@ -45,6 +49,47 @@ typedef DWORD (WINAPI *PFN_STATUS)(ULONG *, ULONG *, DWORD, ULONG);
 static HWND g_hwnd;
 static char g_result[MAX_PATH] = "C:\\DIRES.TXT";
 static char g_helper[MAX_PATH];
+static char g_job[MAX_PATH] = "C:\\DIJOB.TXT";
+
+/*
+ * The job file of record 27 section 4.1, CRLF lines in its order; devid
+ * and inf NULL where the job has none, flags NULL or the FLAGS words.
+ */
+static int dtWriteJob(const char *job, const char *devid, const char *inf,
+                      const char *flags)
+{
+    char text[2048];
+    HANDLE f;
+    DWORD put = 0;
+    _snprintf(text, sizeof text - 1, "XHCIDI-JOB 1\r\nJOB %s\r\nRESULT %s\r\nHWND %lu\r\n",
+              job, g_result, (unsigned long)(UINT_PTR)g_hwnd);
+    text[sizeof text - 1] = 0;
+    if (devid != NULL) {
+        strcat(text, "DEVICE ");
+        strcat(text, devid);
+        strcat(text, "\r\n");
+    }
+    if (inf != NULL) {
+        strcat(text, "INF ");
+        strcat(text, inf);
+        strcat(text, "\r\n");
+    }
+    if (flags != NULL && flags[0] != 0) {
+        strcat(text, "FLAGS");
+        strcat(text, flags);
+        strcat(text, "\r\n");
+    }
+    strcat(text, "END\r\n");
+    f = CreateFileA(g_job, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        printf("DITEST: cannot write %s (%lu)\n", g_job, GetLastError());
+        return 0;
+    }
+    WriteFile(f, text, (DWORD)strlen(text), &put, NULL);
+    CloseHandle(f);
+    printf("---- %s ----\n%s", g_job, text);
+    return put == strlen(text);
+}
 
 static LRESULT CALLBACK dtWndProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
@@ -348,7 +393,7 @@ static int dtReg(const char *devid)
 static void dtUsage(void)
 {
     printf("DITEST %s - the XHCIDI.EXE test driver (design record 27 section 12)\n"
-           "  DITEST [/w] [/r <result>] [/x <helper>] probe\n"
+           "  DITEST [/w] [/r <result>] [/j <job file>] [/x <helper>] probe\n"
            "  DITEST [...] install <device id> <inf> [force] [quiet]\n"
            "  DITEST [...] remove <device id>\n"
            "  DITEST [...] raw <the helper's words>\n"
@@ -375,6 +420,9 @@ int main(int argc, char **argv)
             i++;
         } else if (_stricmp(argv[i], "/r") == 0 && i + 1 < argc) {
             strncpy(g_result, argv[i + 1], sizeof g_result - 1);
+            i += 2;
+        } else if (_stricmp(argv[i], "/j") == 0 && i + 1 < argc) {
+            strncpy(g_job, argv[i + 1], sizeof g_job - 1);
             i += 2;
         } else if (_stricmp(argv[i], "/x") == 0 && i + 1 < argc) {
             strncpy(g_helper, argv[i + 1], sizeof g_helper - 1);
@@ -415,32 +463,32 @@ int main(int argc, char **argv)
         }
         return dtRun(args);
     }
+    _snprintf(args, sizeof args - 1, "%s %s", XHCI_VER_STR, g_job);
     if (_stricmp(argv[i], "probe") == 0 && i + 1 == argc) {
-        _snprintf(args, sizeof args - 1, "%s probe %s %lu", XHCI_VER_STR, g_result,
-                  (unsigned long)(UINT_PTR)g_hwnd);
-        return dtRun(args);
+        return dtWriteJob("probe", NULL, NULL, NULL) ? dtRun(args) : 2;
     }
     if (_stricmp(argv[i], "remove") == 0 && i + 2 == argc) {
         const char *id = dtResolve(argv[i + 1]);
         if (id == NULL) {
             return 1;
         }
-        _snprintf(args, sizeof args - 1, "%s remove %s %lu %s", XHCI_VER_STR, g_result,
-                  (unsigned long)(UINT_PTR)g_hwnd, id);
-        return dtRun(args);
+        return dtWriteJob("remove", id, NULL, NULL) ? dtRun(args) : 2;
     }
     if (_stricmp(argv[i], "install") == 0 && i + 3 <= argc && i + 5 >= argc) {
+        char flags[64];
         const char *id = dtResolve(argv[i + 1]);
         if (id == NULL) {
             return 1;
         }
-        _snprintf(args, sizeof args - 1, "%s install %s %lu %s %s", XHCI_VER_STR, g_result,
-                  (unsigned long)(UINT_PTR)g_hwnd, id, argv[i + 2]);
+        flags[0] = 0;
         for (k = i + 3; k < argc; k++) {
-            strcat(args, " ");
-            strcat(args, argv[k]);
+            if (strlen(flags) + strlen(argv[k]) + 2 >= sizeof flags) {
+                return 1;
+            }
+            strcat(flags, " ");
+            strcat(flags, argv[k]);
         }
-        return dtRun(args);
+        return dtWriteJob("install", id, argv[i + 2], flags) ? dtRun(args) : 2;
     }
     dtUsage();
     return 1;

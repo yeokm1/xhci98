@@ -22,12 +22,13 @@ SETUPX  47   SUREGOPENKEY
 SETUPX  50   SUREGQUERYVALUEEX
 SETUPX  39   SUREGCLOSEKEY
 #
-# KERNEL and USER: the result file, the atom of the INF's path, the
+# KERNEL and USER: the job file, the result file, the atom of the INF's path, the
 # version, the window check, and the Open Watcom runtime's start-up
 # (INITTASK, INITAPP, WAITEVENT, GETMODULEFILENAME, __AHSHIFT).
 KERNEL  3    GETVERSION
 KERNEL  74   OPENFILE
 KERNEL  81   _LCLOSE
+KERNEL  82   _LREAD
 KERNEL  86   _LWRITE
 KERNEL  90   LSTRLEN
 KERNEL  30   WAITEVENT

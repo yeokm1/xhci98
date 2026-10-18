@@ -29,6 +29,14 @@
 #define DI_VERSION_MAX      31
 #define DI_LINE_MAX         1024
 
+/*
+ * The job file (record 27 section 4.1): its path on the command line at
+ * most 80 characters, so the command tail stays at 112 at most, under the
+ * 126 a 16-bit program is given; the file itself at most 2048 bytes.
+ */
+#define DI_JOBPATH_MAX      80
+#define DI_JOBFILE_MAX      2048
+
 #define DI_JOB_NONE         0
 #define DI_JOB_INSTALL      1
 #define DI_JOB_REMOVE       2
@@ -38,10 +46,11 @@
 #define DI_FLAG_QUIET       0x0002
 
 /*
- * What di_parse found, in the order it looks: the result file first (with
- * no usable path nothing can be reported, and the helper exits without a
- * file), then the version (section 4.1: compared before anything else is
- * read), then the rest of the job.
+ * What di_parse found, in the order it looks: the command line and the job
+ * file's RESULT line first (with no usable result path nothing can be
+ * reported, and the helper exits without a file), then the version
+ * (section 4.1: compared before the rest of the job is read), then the
+ * job file whole.
  */
 #define DI_PARSE_OK         0
 #define DI_PARSE_NOFILE     1
@@ -59,7 +68,10 @@ typedef struct _DI_CMD {
     const char *why;
 } DI_CMD;
 
-int di_parse(const char *cmdline, const char *own_version, DI_CMD *cmd);
+int di_cmdline(const char *cmdline, char *version, unsigned vsize,
+               char *jobpath, unsigned jsize);
+int di_parse(const char *cmdline, const char *jobtext, const char *own_version,
+             DI_CMD *cmd);
 
 int di_path_ok(const char *path, int want_inf);
 int di_devid_ok(const char *devid);
@@ -154,6 +166,7 @@ const char *di_out_driver(DI_OUT *out, const char *inf_name,
 const char *di_out_call(DI_OUT *out, const char *routine, const char *arg,
                         unsigned err);
 const char *di_out_flags(DI_OUT *out, unsigned long flags);
+const char *di_out_default(DI_OUT *out, const char *function);
 const char *di_out_node(DI_OUT *out, unsigned long node_flags, int force);
 const char *di_out_ids(DI_OUT *out, const char *value_name,
                        const char *value);

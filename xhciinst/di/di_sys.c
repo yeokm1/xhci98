@@ -233,6 +233,27 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
 
     err = DiCallClassInstaller(DIF_SELECTBESTCOMPATDRV, lpdi);
     di_call(run, "DiCallClassInstaller", "DIF_SELECTBESTCOMPATDRV", err);
+    /*
+     * On 98 SE the dispatcher answers ERR_DI_DO_DEFAULT for this function
+     * with DI_NODI_DEFAULTACTION clear, and selects nothing (the smoke run
+     * of 2026-10-18, record 27 section 5.2): it performs no default of its
+     * own for DIF_SELECTBESTCOMPATDRV. The helper then takes the node of
+     * the best rank (the lowest number; "Ranks go from 0 to n, where 0 is
+     * the most compatible", the DRIVER_NODE block), the first of equals, as
+     * the DDK's network sample selects from lpCompatDrvList itself.
+     */
+    if (err == ERR_DI_DO_DEFAULT) {
+        LPDRIVER_NODE best = NULL;
+        LPDRIVER_NODE node;
+        for (node = lpdi->lpCompatDrvList; node != NULL; node = node->lpNextDN) {
+            if (best == NULL || node->Rank < best->Rank) {
+                best = node;
+            }
+        }
+        lpdi->lpSelectedDriver = best;
+        di_emit(run, di_out_default(&run->out, "DIF_SELECTBESTCOMPATDRV"));
+        err = OK;
+    }
     if (err != OK) {
         di_fail(run, err);
         goto cleanup;

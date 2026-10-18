@@ -1,14 +1,15 @@
 /*
  * xhcidi.c - XHCIDI.EXE, the Windows 98 SE and ME device install helper
  * (roadmap-usb4.md task 42-A.1; design record 27). The installer, a 32-bit
- * program, starts it once per device with one job on the command line:
+ * program, starts it once per device with one job, written into a job file:
  *
- *   XHCIDI.EXE <version> install <result file> <hwnd> <device id> <inf> [<flags>]
- *   XHCIDI.EXE <version> remove  <result file> <hwnd> <device id>
- *   XHCIDI.EXE <version> probe   <result file> <hwnd>
+ *   XHCIDI.EXE <version> <job file>
  *
- * and reads what the setup engine answered from the result file (record 27
- * section 4.2), whose END line, not the exit code, is the contract.
+ * (record 27 section 4.1; the job's operands are in the file because a
+ * 16-bit program's command tail holds 126 characters, less than a device
+ * id and two paths), and reads what the setup engine answered from the
+ * result file the job names (section 4.2), whose END line, not the exit
+ * code, is the contract.
  *
  * WHY 16-BIT. The device installer of these systems is SETUPX.DLL, a 16-bit
  * DLL whose routines take far pointers; no 32-bit import of it exists
@@ -52,6 +53,36 @@ static DI_CMD g_cmd;
 static DI_RUN g_run;
 static char g_version_number[64];
 
+static char g_jobtext[DI_JOBFILE_MAX + 1];
+
+/*
+ * The job file, read whole and shared (the installer wrote it and may
+ * still hold it); NULL when it cannot be opened or is longer than
+ * DI_JOBFILE_MAX.
+ */
+static const char *xhcidiReadJob(LPSTR cmdline)
+{
+    static char version[DI_VERSION_MAX + 1];
+    static char path[DI_JOBPATH_MAX + 1];
+    OFSTRUCT of;
+    HFILE f;
+    UINT got;
+    if (!di_cmdline(cmdline, version, sizeof version, path, sizeof path)) {
+        return NULL;
+    }
+    f = OpenFile(path, &of, OF_READ | OF_SHARE_DENY_NONE);
+    if (f == HFILE_ERROR) {
+        return NULL;
+    }
+    got = _lread(f, g_jobtext, DI_JOBFILE_MAX + 1);
+    _lclose(f);
+    if (got == HFILE_ERROR || got > DI_JOBFILE_MAX) {
+        return NULL;
+    }
+    g_jobtext[got] = '\0';
+    return g_jobtext;
+}
+
 static int xhcidiFinish(int code)
 {
     di_emit(&g_run, di_out_end(&g_run.out));
@@ -79,7 +110,8 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpszCmdLine,
     (void)hPrev;
     (void)nCmdShow;
 
-    parsed = di_parse(lpszCmdLine, XHCI_VER_STR, &g_cmd);
+    parsed = di_parse(lpszCmdLine, xhcidiReadJob(lpszCmdLine), XHCI_VER_STR,
+                      &g_cmd);
     if (parsed == DI_PARSE_NOFILE) {
         return XHCIDI_EXIT_NOFILE;
     }
