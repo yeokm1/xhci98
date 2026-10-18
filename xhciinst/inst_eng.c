@@ -4250,8 +4250,10 @@ static void finish_remove(void)
         return;
     }
     if (!forget_dir()) {
-        out("Nothing of this package is left but its record HKLM\\%s; delete "
-            "it with regedit.\n", INST_DIR_KEY);
+        out("Nothing of this package is left but its values %s and %s under "
+            "HKLM\\%s;\ndelete those two with regedit (and the key only if "
+            "nothing else is in it).\n", INST_DIR_VALUE, INST_DIR_MOVEFROM,
+            INST_DIR_KEY);
         return;
     }
     for (i = 0; i < 2; i++) {
