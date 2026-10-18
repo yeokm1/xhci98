@@ -73,7 +73,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `hcd_urb.c` | The device PDOs' internal device controls: each URB function routed, the private `IOCTL_XHCI98_*` requests of `xhci98_streams.h` and `xhci98_xfer.h`, the composite parent's select, the idle notification. |
 | `hcd_io.c` | The URB transfer path: a request onto a pipe, through the map pump, onto the ring and back; cancellation, the wide path, the time-stamp readings. |
 | `hcd_cfg.c` | The URBs that need commands, served on the controller thread: SELECT_CONFIGURATION, SELECT_INTERFACE, ABORT_PIPE, RESET_PIPE and the port reset; streams' build and fallback, the retry service, the interval cap, the held rings of an interface switch. |
-| `hcd_door.c` | The user-mode door (design record 13 section 8): the controller's Advanced tab and `USBUSER` requests, `XHCISNAP`'s pass-through and the HCD region, `IOCTL_XHCI98_QUERY`, and the root hub's and each hub's hub IOCTLs. |
+| `hcd_door.c` | The user-mode door (design record 13 section 8): the controller's Advanced tab and `USBUSER` requests, the snapshot pass-through (`XHCITR`'s `/snapshot`, `xhcitr\tr_snap.c`) and the HCD region, `IOCTL_XHCI98_QUERY`, and the root hub's and each hub's hub IOCTLs. |
 | `hcd_log.c` | The log ring's one sink: the DebugView emit, from the controller thread, under the lock-then-emit order of design record 08. |
 | `hcd_susp.c` | Selective suspend's executor on the thread: the admission gate, the suspend and resume sequences at a root port and a hub port, U3 and Function Suspend at SuperSpeed, the wake evidence. |
 | `hcd_poll.c` | Polled delivery's kernel half: the poll timer and its DPC, `PollLock`, the watcher's look, the retirement under `KeSynchronizeExecution`, PCI Interrupt Disable on containment, the doorbell hook. |
@@ -92,7 +92,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `xhci.h` | xHCI types, register and TRB bit definitions, the common-buffer layout, the extension `hcd.h` embeds, the snapshot's layout, and the declarations of most of the pure core. Bit positions are transcribed from [xhci-data-structures.md](../usb-xhci-info/xhci-data-structures.md), never from memory. | yes |
 | `xhci_hw.h` | The driver-only side of the split: MMIO accessors, PCI configuration access and bounded waits (`xhci_pci.c`), and the core's call-outs that `hcd_dev.c` implements. | no |
 | `xhci_compat.h` | Two jobs: the Windows 98 and 2000 DDK shims, chiefly undoing the DDK's `ExAllocatePool` rewrite so a stray untagged call reaches the name the import gate refuses; and, under `XHCI_HOST_TEST`, the DDK-free types the host suites compile the pure core with. Included by every driver of the tree. | yes, under `XHCI_HOST_TEST` |
-| `xhci_counters.h` | The counter block `XHCIHC_COUNTERS` (roadmap-hcd.md 26-A.10), measured by `scripts\vm-matrix\gen-offsets.ps1` under `XHCI_HOST_TEST`, which is why it is a header of its own; `xhcisnap\check-counter-names.ps1` and `xhcitr\tr_hcctr.h` follow it name by name. | yes |
+| `xhci_counters.h` | The counter block `XHCIHC_COUNTERS` (roadmap-hcd.md 26-A.10), measured by `scripts\vm-matrix\gen-offsets.ps1` under `XHCI_HOST_TEST`, which is why it is a header of its own; `scripts\check-counter-names.ps1` and `xhcitr\tr_hcctr.h` follow it name by name. | yes |
 | `xhci_log.h` | The log ring's contract: the verbosity ladder, the sinks, and the rule that recording is not emission. | yes |
 | `xhci_dbg.h` | The trace channel's macros; empty outside the qemu flavour. | no |
 | `xhci_version.h` | The package version and release date, the single editable source of the version. Included by `xhci98.rc`, `uas\xhciuas.rc`, `cm\xhcicm.rc`, `hlpr\xhcihlpr.rc`, `hcd_entry.c`, `hcd_msi86.c`, `uas\uas_entry.c`, `cm\cm_entry.c`, `hlpr\hlpr_entry.c`, `xhciqual\qual.h`, `xhcisnap\xhcisnap.c`, `xhcicln\xhcicln.c`, `xhciinst\xhciinst.c`, `xhcitr\xhcitr.c` and `xhcitr\xhcitr.rc`; every INF's `DriverVer` literal is checked against it by the INF gates (`build-and-test.md`, "Versioning the driver"). | yes |
@@ -101,7 +101,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `xhci_desc.h` | The descriptor walk's interface, and the argument for why it must exist. | yes |
 | `xhci_topo.h` | The topology graph's types and interface, with the measured wire constants. | yes |
 | `xhci_probe.h` | Types only: those of the miniport's transfer-contract probe (task 6-V.1), kept because the extension `xhci.h` declares still embeds them; the probe and its functions left with the miniport. | yes |
-| `xhci_vhub.h` | Types and values only: the miniport's virtual-hub records (task 24.3, design record 12) that `XHCI_EXTENSION` embeds, kept for the same reason; the HCD has no virtual hub, `xhci_vhub.c` left with the miniport, and `xhcisnap` still decodes the records. | yes |
+| `xhci_vhub.h` | Types and values only: the miniport's virtual-hub records (task 24.3, design record 12) that `XHCI_EXTENSION` embeds, kept for the same reason; the HCD has no virtual hub, `xhci_vhub.c` left with the miniport, and `xhcitr\tr_snap.c` still decodes the records. | yes |
 | `xhci_enum.h` | The enumeration machine's states, events, actions and port record (`xhci_enum.c`). | yes |
 | `xhci_link.h` | The USB3 link machine and the hold rules (`xhci_link.c`). | yes |
 | `xhci_pipe.h` | URB dispatch's pure half (`xhci_pipe.c`). | yes |
@@ -146,7 +146,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `silent-on.bat`, `silent-off.bat` | Its two batch files (task 38.2, section 6.11.8), `portsw-on.bat`'s shape: `silent-on.bat` shows, stops on any errorlevel, merges `silent.reg` with `regedit /s` and runs `silent.vbs 1`, reading its errorlevel 5, 4, 3, 1 in that order; `silent-off.bat` runs `silent.vbs 0` and says the list was left in place and how to delete it. On NT both change nothing. Published in `tools\silent\`. |
 | `txtsetup.oem`, `txtsetup-amd64.oem` | The text-mode Setup driver descriptions (roadmap task 33.3, design record 13 section 5.6): what Windows 2000 and 32-bit XP (the first) and XP x64 (the second, staged under the first's name) read from drive A: when F6 is pressed, loading `xhci98.sys` as a `scsi` component and binding it to `PCI\CC_0C0330`, `USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`, `USB\XHCI98_HUB30` and `USB\XHCI98_COMPOSITE` (under `XHCI98\` before task 38.8). The x86 file also carries `xhcihlpr.sys` on a `dll` line, copied to `%windir%\OemDir` for GUI-mode Setup's install and not loaded in text mode (design record 18 section 15.9). Gated by `scripts\inf-gate\check-txtsetup-oem.ps1`, which holds both to the INF beside them (`OEM-COPY`: every file the INF's NT 5.x install copies from the disk is on the option) and to each other. |
 
-The field reports' batch files live beside the tools they run, outside `src\`: `xhcisnap\snapon.bat`, `snapget.bat` and `snapoff.bat`, and `xhciqual\QUALREP.BAT` (the tools' section below).
+The field report's batch file lives beside the tool it runs, outside `src\`: `xhciqual\QUALREP.BAT` (the tools' section below). The driver's field report is `XHCITR`'s Save Report, `/report` and `/snapshot`, with no batch file.
 
 ## Generated, not tracked
 
@@ -355,15 +355,19 @@ Each tool is a tree at the repository root, built by its own `build.cmd` and pub
 
 | File | What it is |
 |---|---|
-| `xhcitr.c` | The system half of `XHCITR.EXE` and `XHCITR64.EXE`: the window, the USB branch through the hub IOCTLs, the Thunderbolt branch through `xhcicm.sys`'s query device, the driver logs and PCI configuration nodes, the eject transaction under the mutex `XHCIINST` shares, the notification-area icon. |
+| `xhcitr.c` | The system half of `XHCITR.EXE` and `XHCITR64.EXE`: the window, the USB branch through the hub IOCTLs, the Thunderbolt branch through `xhcicm.sys`'s query device, the driver logs and PCI configuration nodes, the eject transaction under the mutex `XHCIINST` shares, the notification-area icon; the snapshot modes (`/snapshot`, `/dump`, `/probe`, `/snaptest`) mapped onto `tr_snap.c`'s command line, File > Save Snapshot... and the report's "Snapshot" part, each run as a child process of the tool itself (record 25 section 15). |
 | `tr_core.c` / `tr_core.h` | The pure half: text, the USB answers' bytes, descriptor decoding, the query's parsing and eject gates, the status record's texts, the tray's router keys and event diff, the command line, the report (host suite `test_tr`, which also links `xhciinst\inst_core.c` for record 24's rules). |
 | `tr_log.c` / `tr_log.h` | The pure half of the "Driver log" nodes: `xhcicm.sys`'s log answer and `xhci98.sys`'s log and counters read as bytes and turned into text (record 25 sections 3.5, 4.5 and 4.6; host suites `test_trlog` and `test_xhq`). |
 | `tr_pci.c` / `tr_pci.h` | The pure half of the "PCI configuration" nodes: `xhcicm.sys`'s PCI answer and `xhci98.sys`'s PCI region read as bytes and a function's configuration space decoded, every offset cited to the PCI specifications (record 25 sections 3.6 and 4.7; host suites `test_trpci` and `test_xhq`). |
+| `tr_snap.c` | `XHCISNAP`'s engine, moved from `xhcisnap\xhcisnap.c` (roadmap-usb4 task 42-A.4, record 25 section 15), its `main` renamed `tr_snap_main`: reads the extension, the PORTSC array, the enabled slots and the HCD region through the door's pass-through and writes the `.DEV` device report and the `.TXT`, `.BIN` and `.PSC` dump. `docs\contributing\snapshot-reader.md` is its reference. |
 | `tr_hcctr.h` | The names of `XHCIHC_COUNTERS`, one line per word in field order; `test_trlog` holds each line to the field of the same name by offset. |
 | `tr_res.h` | The resource and command numbers shared by `xhcitr.rc` and `xhcitr.c`. |
 | `xhcitr.rc`, `xhcitr.manifest`, `xhcitr.ico` | The icon, the version (from `src\xhci_version.h`), the menus and the About dialog; the manifest runs it as the invoker with Common Controls 6. |
 | `build.cmd` | `XHCITR.EXE` with MSVC 6.0 and `XHCITR64.EXE` with WDK 7.1 amd64. |
 | `selftest.cmd` | The import tables, the `/selftest` and the switch refusals, which `build-driver.cmd` runs. |
+| `snaptest.cmd` | The snapshot path driven with no controller (`XHCITR /snaptest`, the canned decodes and the report's write faults), then the user's spellings `/snapshot`, `/dump` and `/probe`; moved from `xhcisnap\selftest.cmd`, run by `build-driver.cmd`. |
+| `scripts\check-counter-names.ps1` | Checks the counter names `XHCITR /snaptest -selftest-counters` prints against `src\xhci_counters.h` word by word; part of the gated build (moved from `xhcisnap\`). |
+| `docs\contributing\snapshot-reader.md` | The snapshot route's and its files' reference (XHCISNAP's guide, moved from `xhcisnap\README.md`). |
 | `check-imports.ps1` | The import gate `selftest.cmd` runs: reads the PE import directory and requires exactly KERNEL32, USER32, GDI32, ADVAPI32, SHELL32, COMCTL32 and COMDLG32 and no delay-load imports. |
 | `README.TXT` | The text of the published `readme.txt`. |
 
@@ -415,16 +419,6 @@ starts once per device on Windows 98 SE and ME (roadmap-usb4 task 42-A.1).
 | `xhcicln.rc`, `xhcicln.manifest` | The version resource and the elevation request. |
 | `build.cmd`, `selftest.cmd` | The build, and the `-selftest` `build-driver.cmd` runs when the executable has been built. |
 | `README.TXT` | The published `readme.txt`. |
-
-### `xhcisnap\` - the snapshot reader
-
-| File | What it is |
-|---|---|
-| `xhcisnap.c` | `XHCISNAP.EXE`: reads the extension, the PORTSC array, the enabled slots and the HCD region through the door's pass-through, and switches the log channel. To be retired in favour of `XHCITR` (roadmap-usb4 task 42-A.4). |
-| `README.md` | Its user and maintainer guide. |
-| `build.cmd`, `selftest.cmd` | The MSVC 6.0 build, and the report path driven with no controller. |
-| `check-counter-names.ps1` | Checks the built tool's counter names against `src\xhci_counters.h` word by word. |
-| `snapon.bat`, `snapget.bat`, `snapoff.bat` | The field reports' Windows batch files (roadmap-hcd task 38.1): `XHCISNAP -on %1`, `XHCISNAP -report %1` and `XHCISNAP -disable`, one file each for `COMMAND.COM` and `cmd.exe`, published as `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` and held by the packager's self-tests (`Get-ReportBatchFaults`, `Assert-ReportBatchLayout`), the source charset gate and the batch-file line-ending gate. |
 
 ### `xhciqual\` - the DOS qualifier
 

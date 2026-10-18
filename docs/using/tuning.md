@@ -92,7 +92,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciLogVerbosity` | The driver's log, read by `XHCITR` and `XHCISNAP` | `0` | `4` | `2` | `2` (a fresh install; an update keeps the value there) |
+| `XhciLogVerbosity` | The driver's log, read by `XHCITR` (its Driver log item and its snapshot) | `0` | `4` | `2` | `2` (a fresh install; an update keeps the value there) |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
 **The Thunderbolt and USB4 driver (`xhcicm.sys`)**, from `3.0.0.0`: these values are in the Thunderbolt or USB4 controller's driver key, not the xHCI controller's (`HKLM\System\CurrentControlSet\Services\Class\System\NNNN` on 98 SE and ME, `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 7, the subkey whose `DriverDesc` names the Thunderbolt or USB4 controller; the xHCI98 USB Tree's "Driver log (xhcicm)" item names it in full), and from `3.1.0.0` also in the machine-wide `Services\USB` key above, which wins when the value is there. They are read at each start of that controller: restart Windows, or disable and enable the controller, after a change. A switch outside its range is refused and its default stands; a period or timeout outside its range is held to the nearer bound. The release notes' "The connection manager's registry values" says what each does in full.
@@ -360,7 +360,7 @@ Linux's xHCI driver works around faults of particular controllers, each named by
 - `1` (the default, except `XhciShutdownReset`, which is `0`): on the controllers in the table.
 - `2`: on every controller, except `XhciIntelShutdownToEhci`, `XhciAsmediaFlowControl` and `XhciAmdSuspendBitClear`, which are vendor-specific (a `2` there is read as `1`).
 
-Absent, not a `DWORD`, or any other number is the default. The revision of the controller is logged but never matched. Each value is read when the controller starts, so restart after changing one. `XHCISNAP`'s report has a "Linux quirks" block: each value as read, whether this controller is listed, whether the quirk applies, and what it last did.
+Absent, not a `DWORD`, or any other number is the default. The revision of the controller is logged but never matched. Each value is read when the controller starts, so restart after changing one. The driver's snapshot (in `XHCITR`'s Save Report, or `XHCITR /snapshot`) has a "Linux quirks" block: each value as read, whether this controller is listed, whether the quirk applies, and what it last did.
 
 What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is logged, but the log lives in memory and is gone at the next start. It can be seen only in a capture of that shutdown: `XhciLogVerbosity` at `2` or above (below it nothing is recorded) and `XhciLogDebugView` set to `1`, with a debug-output viewer or a kernel debugger attached (see the release notes, "The log, and how to send one").
 

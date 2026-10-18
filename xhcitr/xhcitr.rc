@@ -48,6 +48,7 @@ BEGIN
     BEGIN
         MENUITEM "&Refresh\tF5",            IDM_REFRESH
         MENUITEM "&Save Report...\tCtrl+S", IDM_SAVE
+        MENUITEM "Save S&napshot...",       IDM_SNAPSHOT
         MENUITEM SEPARATOR
         MENUITEM "E&xit",                   IDM_EXIT
     END

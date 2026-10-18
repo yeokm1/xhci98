@@ -155,11 +155,39 @@ included.
   suspend is new in `2.3.0.0` and off by default; see
   "XhciSelectiveSuspend: putting idle devices to sleep".
 - It does not write to your disk. The driver creates no file. Its log is read
-  out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
+  out of the running driver by the xHCI98 USB Tree when you ask for a report; see
   "The log, and how to send one".
 - It is not the miniport. `1.2.0.0` is frozen and stays available; nothing
   of it is in this package. An install of this package replaces it, because both are
   called `xhci98.sys` (see "Upgrading from 1.2.0.0").
+
+## What `3.1.0.0` changes
+
+This section collects the changes made for the next release, `3.1.0.0`,
+as they are made; the head of this file is rewritten when it is cut.
+
+- **`XHCISNAP` removed.** `XHCISNAP.EXE`, `SNAPON.BAT`, `SNAPGET.BAT`
+  and `SNAPOFF.BAT` are no longer in the package (`tools\xhcisnap\` is
+  gone), and the xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE`) does
+  what they did ("The log, and how to send one"):
+  - The field report, `SNAPGET.BAT` (`XHCISNAP -report`): File > Save
+    Report... or `XHCITR /report <file>`, whose report now ends with a
+    "Snapshot" part for each xHCI controller `xhci98.sys` drives - the
+    device report the `.DEV` held and the decoded dump the `.TXT` held,
+    the dump left out at level 4, where it can hold internal addresses.
+    That one file is the bug report. The `.DEV`, `.TXT`, `.BIN` and
+    `.PSC` files themselves: File > Save Snapshot... or
+    `XHCITR /snapshot [NAME]`, with the same names and exit codes.
+  - `SNAPON.BAT`, `SNAPOFF.BAT` and `XHCISNAP -verbosity`, `-on`,
+    `-disable`: View > Logging level... or `XHCITR /setlevel xhci98=<0-4>`
+    (both in `3.0.0.0` already), then a restart.
+  - `XHCISNAP -dump` and `-o NAME`: `XHCITR /dump [/o NAME]`.
+  - `XHCISNAP -probe`: `XHCITR /probe`.
+
+  `xhci98.sys` is unchanged by it: Windows' own property tabs and the
+  tool read it through the same door. Where a section below names
+  `XHCISNAP`'s report, read the snapshot in the tool's report: the same
+  text, from the same code.
 
 ## What `3.0.0.0` adds
 
@@ -2444,11 +2472,10 @@ behaviours did; those of the behaviours switched off stay at `0`, while
 what applies at every value still counts (a held port after repeated
 incompatible-device reports, a closing-off without proof). **If a USB device stops on your
 machine**, send the controller's id (`XHCIQUAL`'s probe, or Device Manager)
-and two `XHCISNAP` reports at `XhciLogVerbosity` `2`, one while it works and
-one after it stops (from `2.4.0.0`: `SNAPON.BAT` and a restart, then
-`SNAPGET.BAT` once while it works and once after it stops, which leaves the
-channel on between the two and never overwrites the first; "The log, and how
-to send one" below); and if it still stops, the same with `XhciAvgTrbEsit` at
+and two reports at `XhciLogVerbosity` `2`, one while it works and one after
+it stops (the xHCI98 USB Tree's File > Save Report..., once each, under two
+names; "The log, and how to send one" below); and if it still stops, the
+same with `XhciAvgTrbEsit` at
 `1`.
 
 What it rests on. QEMU raises none of these faults, so each was made on
@@ -2591,7 +2618,8 @@ the install writes every value the driver reads, thirty-six, in this key:
 Controller". The number varies from machine to machine, and a machine whose
 controller was ever enumerated at another PCI slot can have more than one
 such key: the device's own `Driver` value, under `Enum\PCI`, names the one in
-use. `XHCISNAP -verbosity` finds it for you. On Vista and 7 Device
+use. The xHCI98 USB Tree shows it as the controller's "Driver key", and its
+View > Logging level... finds it for you. On Vista and 7 Device
 Manager also shows it: the controller's Properties, Details tab, the
 "Driver key" property, whose value ends in that `NNNN`. A change takes
 effect when the driver next starts: restart Windows (or, for the values
@@ -3472,115 +3500,101 @@ descriptors at High Speed.
 ## The log, and how to send one
 
 The driver keeps a small log of what happened on the bus, inside itself, and
-`XHCISNAP.EXE` (in the download's `tools\xhcisnap\` directory; before
-`2.4.0.0`, `xhcisnap\` at the top of the download) reads it off the running
-machine. From `3.0.0.0` it records by default: a fresh install sets
+the xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE` on 64-bit Windows, in the
+download's `tools\xhcitr\` directory and installed with the drivers) reads
+it off the running machine. Up to `3.0.0.0` that reader was `XHCISNAP.EXE`
+with its `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`; from `3.1.0.0` they
+are gone and the tool does what they did ("What `3.1.0.0` changes"). From
+`3.0.0.0` the driver records by default: a fresh install sets
 `XhciLogVerbosity` to `2` (the log of what happened, with no internal
 addresses); an update keeps the value an earlier install wrote, which was
 `0`, off, until `2.4.0.0`. Recording costs a little speed: on one machine
 (a ThinkPad P14s Gen 1 under 98 SE, a USB disk) about 1 to 2% at large
 transfers and up to about 5% at small ones. For the last few percent set
 the level to `0` in the xHCI98 USB Tree's View > Logging level... (for
-either driver; `SNAPOFF.BAT` still does it for `xhci98.sys`), and
-restart.
+either driver), and restart.
 
-From `2.4.0.0` three batch files beside it do the typing, on every Windows
-the driver runs (under `COMMAND.COM` on 98 SE and ME, `cmd.exe` from 2000 to
-7). Double-click them, or run them at a prompt in that directory; on Vista
-and 7, right-click each one and choose Run as administrator.
+To send a report:
 
 ```
-  1.  SNAPON.BAT     XHCISNAP -verbosity 2: the log channel on
-  2.  restart Windows
-  3.  make the problem happen again
-  4.  SNAPGET.BAT    XHCISNAP -report: the report and the dump
-  5.  SNAPOFF.BAT    XHCISNAP -disable: the channel off, once you have sent them
+  1.  View > Logging level...: check xhci98 reads 2 (set 2 and restart if not)
+  2.  make the problem happen again
+  3.  File > Save Report...: the tree, both drivers' logs and the snapshot
+  4.  attach the .TXT it wrote to the bug report
 ```
 
-`SNAPGET.BAT` writes its files in the directory it runs in, never under
-`C:\`, under a name `XHCISNAP` makes from the local date and time,
-`mDDhhmmS` (the month as one character, `1` to `9` then `A`, `B`, `C`; the
-day, hour and minute; then the first letter `A` to `Z` not yet taken), so a
-second run never overwrites the first; it prints the names. Attach two of
-them to the bug report:
+`XHCITR /report <file>` writes the same report from a prompt, and
+`XHCITR /setlevel xhci98=2` sets the level (on 2000 to 7 as an
+administrator; on Vista and 7, an administrator's prompt). Each driver
+reads its level only when it starts, so a change needs a restart of
+Windows; the tool offers one.
+
+The report ends with a "Snapshot" part for each xHCI controller
+`xhci98.sys` drives: the device report (what the `.DEV` file below holds,
+once) and the decoded dump (the `.TXT` below). At level 4 the dump can
+hold internal addresses, so the report leaves it out and says so: use
+level 2.
+
+When a maintainer asks for the snapshot's files themselves, File > Save
+Snapshot... writes them in a folder you pick, for the first controller,
+and `XHCITR /snapshot` writes them in the current directory, under a name
+made from the local date and time, `mDDhhmmS` (the month as one
+character, `1` to `9` then `A`, `B`, `C`; the day, hour and minute; then
+the first letter `A` to `Z` not yet taken), so a second run never
+overwrites the first; it prints the names:
 
 - `mDDhhmmS.DEV`: the controller as Windows sees it - its Device Manager
   status and problem code, the resources it was given, and the versions and
   SHA-256 hashes of `xhci98.sys`, `xhciuas.sys`, `xhcihlpr.sys`, `usbd.sys` and
   `usbui.dll` as installed, and of `xhcimsi.sys`, the `2.3.x` helper, where
-  it is still on disk (`2.3.x`'s `XHCISNAP` lists `xhcimsi.sys` in place of
-  `xhcihlpr.sys`). `XHCISNAP` reads these itself, through the
+  it is still on disk. The tool reads these itself, through the
   configuration manager, so every target reports the same.
-- `mDDhhmmS.TXT`: the report, plain text with no internal addresses in it.
+- `mDDhhmmS.TXT`: the dump, plain text with no internal addresses in it
+  below level 4.
+- `mDDhhmmS.BIN`, the driver's raw internal state, which only a maintainer
+  holding the exact build can decode, and `mDDhhmmS.PSC`, the raw port
+  registers.
 
-`mDDhhmmS.BIN`, the driver's raw internal state, which only a maintainer
-holding the exact build can decode, and `mDDhhmmS.PSC`, the raw port
-registers, are written beside them; attach those if you are asked for them.
-`SNAPGET.BAT` leaves the channel on, so it can be run again after the next
-attempt.
+`XHCITR /snapshot MYPC` saves the files as `MYPC.DEV`, `MYPC.TXT`,
+`MYPC.BIN` and `MYPC.PSC` instead of the clock's name (`/o MYPC` is the
+same): 1 to 8 letters, digits, `_` or `-`, not starting with `-`, with no
+path, drive or extension, and not a DOS device name (`CON`, `PRN`, `AUX`,
+`NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`), in the same directory. The tool holds
+the name to that rule itself, and refuses a name any file of whose set is
+already there rather than overwrite it. `/c N` picks the controller
+(`\.\HCDN`, default 0). `XHCITR /dump [/o NAME]` writes the dump alone,
+`NAME.TXT` with `NAME.BIN` and `NAME.PSC` beside it, replacing an earlier
+set of that name; `XHCITR /probe` checks the route to the driver and
+dumps nothing; `XHCITR /snapshot /?` is the long help. With the output
+redirected to a file the text goes there; otherwise a message box shows
+it, with the directory the files went to.
 
-Two of the batch files take one optional argument, typed after the name at a
-prompt in their directory (on Vista and 7, an administrator's prompt):
-
-- `SNAPON.BAT 3` sets level 3 instead of 2. The level is 1 to 4, and 2 - the
-  log, the one to use unless you are asked for another - when none is given.
-  `SNAPON.BAT 0` is refused, since 0 is off: `SNAPOFF.BAT` turns the channel
-  off. Anything else is refused too, and neither refusal changes anything.
-  It runs `XHCISNAP -on 3` (`-on` with no level is 2).
-- `SNAPGET.BAT MYPC` saves the files as `MYPC.DEV`, `MYPC.TXT`, `MYPC.BIN`
-  and `MYPC.PSC` instead of the clock's name (it runs
-  `XHCISNAP -report MYPC`; `XHCISNAP -report -o MYPC` is the same): 1 to 8
-  letters, digits, `_` or `-`, not starting with `-`, with no path, drive or
-  extension, and not a DOS device name (`CON`, `PRN`, `AUX`, `NUL`,
-  `COM0`-`COM9`, `LPT0`-`LPT9`), in the same directory. `XHCISNAP` holds the
-  name to that rule itself, and refuses a name any file of whose set is
-  already there rather than overwrite it.
-
-Both batch files pass the word on to `XHCISNAP` exactly as it was typed and
-test nothing themselves, so a quoted word (`SNAPON "1"`) or one with a
-character the prompt treats specially reaches `XHCISNAP`, which takes it or
-refuses it with the reason.
-
-Each batch file runs `XHCISNAP` as its last step, and `XHCISNAP` prints what
-happened and what to do next; its last line, the last on the screen before
-"Press any key", names the files to attach (`Attach: A131554A.DEV
+`/snapshot`'s last line names the files to attach (`Attach: A131554A.DEV
 A131554A.TXT (the .BIN and .PSC only if asked)`), or says there is nothing
-to attach. When the report does not go through, `XHCISNAP -report` says so
-by its exit code (`xhcisnap\README.md` has the same table):
+to attach. When the snapshot does not go through, it says so by its exit
+code (`docs/contributing/snapshot-reader.md` has the same table):
 
 | Exit | What it means | What to do |
 |---|---|---|
 | 0 | the `.DEV` and the `.TXT` were written in full | attach them |
-| 2 | the name given was refused; the line above says why | give a name by the rule above, or no name (if `XHCISNAP` printed its usage instead, the `XHCISNAP.EXE` is older than the batch: use the one from the same download) |
+| 2 | the name given was refused; the line above says why | give a name by the rule above, or no name |
 | 3 | the `.TXT` is not complete | attach it, and say so |
-| 4 | no dump was taken; the `.DEV` says why | often the channel is off: `SNAPON.BAT`, restart, reproduce, `SNAPGET.BAT`; attach the `.DEV` |
-| 5 | the `.DEV` could not be written in full | the disk is full or cannot be written: copy the directory somewhere writable and run it there |
+| 4 | no dump was taken; the `.DEV` says why | often the log is off: Logging level 2, restart, reproduce, run it again; attach the `.DEV` |
+| 5 | the `.DEV` could not be written in full | the disk is full or cannot be written: run it in a directory that can be written |
 | 6 | no free name: all 26 for this minute are taken, or the name given is taken; nothing written or overwritten | wait a minute and run it again, or give another name, or none |
 | 7 | the clock is not a valid date and time; nothing written | set the clock and run it again |
-| 8 | another run made a file of this set while this one ran; that file was left as it was, and no dump was kept under the name | run `SNAPGET.BAT` again: it takes the next letter (with a name, give another, or none) |
+| 8 | another run made a file of this set while this one ran; that file was left as it was, and no dump was kept under the name | run it again: it takes the next letter (with a name, give another, or none) |
 
 A controller Device Manager shows as disabled (Code 22) on Windows 98 SE or
-ME still gives a dump; the `.DEV` and the screen then say "dump taken from
+ME still gives a dump; the `.DEV` and the text then say "dump taken from
 a controller Device Manager reports as disabled (Code 22)", so that the
 dump is read as what the driver held while Windows had it disabled.
 
-Without the batch files, and in every release before `2.4.0.0`, the same
-steps are typed:
-
-```
-  1.  XHCISNAP -verbosity 2
-  2.  restart the machine
-  3.  make the problem happen again
-  4.  XHCISNAP -report       (2.4.0.0 on; before it, XHCISNAP -o MYDUMP)
-```
-
-`XHCISNAP -o NAME` still writes the dump alone, `NAME.TXT` with `NAME.BIN`
-and `NAME.PSC` beside it, under a name you choose. Step 1 finds the right
-registry key for you, on every xHCI controller the machine has. Step 2 is
-not optional: the driver reads these settings when it starts. **Use the
-`XHCISNAP.EXE` from this download**, not a copy kept from an earlier
-release: one from before `2.2.0.0` neither decodes the enumeration records
-nor reads the per-port section below.
+`XHCISNAP`'s level switches did not move to the tool: `-verbosity`, `-on`,
+`SNAPON.BAT`, `-disable` and `SNAPOFF.BAT` are View > Logging level... and
+`XHCITR /setlevel`, and a dashed switch after `/snapshot`, `/dump` or
+`/probe` is refused. On an install up to `3.0.0.0`, use that release's own
+`XHCISNAP.EXE` and its notes.
 
 From `2.3.0.0` the top of the `.TXT` also says which system it came from:
 the Windows version, build and service pack, 32-bit or 64-bit, the
@@ -3592,12 +3606,13 @@ to withhold a firmware string that contains one (a name of three characters
 or more). The file is meant to be pasted into a public issue as it is, but
 if your machine's firmware strings were customised, read the top of the
 file first. If reading those details causes a problem on your machine, add
-`-nosysinfo` to step 4 (`XHCISNAP -nosysinfo -report`): the report then
-says they were skipped and is otherwise the same.
+`/nosysinfo` to `XHCITR /snapshot` or `/dump` (`XHCITR /snapshot
+/nosysinfo`): the dump then says they were skipped and is otherwise the
+same.
 
 | Value | What it does |
 |---|---|
-| `XhciLogVerbosity` | `0` off (the driver does not answer `XHCISNAP` at all); `1` counters only; `2` adds the log of what happened (use this one); `3` adds the USB port register table; `4` everything, including internal addresses in the plain-text report. The default is `2` since `3.0.0.0` (`0` before; an update keeps the value already there). A value outside `0`-`4` is treated as the default |
+| `XhciLogVerbosity` | `0` off (the driver does not answer the snapshot at all); `1` counters only; `2` adds the log of what happened (use this one); `3` adds the USB port register table; `4` everything, including internal addresses in the plain-text report. The default is `2` since `3.0.0.0` (`0` before; an update keeps the value already there). A value outside `0`-`4` is treated as the default |
 | `XhciLogDebugView` | `1` hands the log to a debug-output capture tool (DebugView) from the driver's own thread as it runs, and once more at each stop. Use it only when asked |
 
 Since `2.2.0.0` the report also says what happened to a device on a root
@@ -3609,7 +3624,7 @@ Enable Slot's result, and a failure's cause - decoded in the report under
 enumerations so a port that keeps failing cannot fill the log. And from
 `XhciLogVerbosity` `1`, each root port's enumeration state and failure
 cause, and the driver's counters, are in the report as well, which
-`2.1.1.0`'s was not. `xhcisnap/README.md` lists every record. A report
+`2.1.1.0`'s was not. `docs/contributing/snapshot-reader.md` lists every record. A report
 from `2.1.1.0` on a machine such as the E460 above showed the port trained
 and nothing more; one from `2.2.0.0` names the step that stopped.
 
@@ -3631,16 +3646,16 @@ mark it wrote or removed, each check that stopped it, and each restart it
 made.
 
 The tool reads `xhci98.sys` through a query request of the driver's own,
-as it reads `xhcicm.sys`, with no `SNAPON.BAT` needed; an `xhci98.sys`
-older than `3.0.0.0` is read through `XHCISNAP`'s channel as before.
+as it reads `xhcicm.sys`; an `xhci98.sys` older than `3.0.0.0` is read
+through the driver's door, as `XHCISNAP` read it.
 Both drivers record at level 2 by default. Where a driver's recording
 is off, the node says how to turn it on; View > Logging level... (or a
 right click on the node) sets either driver's level directly, asking for
 administrator rights on 2000 to 7 when the user has none:
 
 - **`xhci98.sys`**: it records at level 2 after a fresh install. Where an
-  earlier install left it off, run `SNAPON.BAT` as above (on Vista and 7,
-  as an administrator), then restart Windows. At level 1 the node shows
+  earlier install left it off, set level 2 in View > Logging level...
+  (or `XHCITR /setlevel xhci98=2`), then restart Windows. At level 1 the node shows
   the counters only. At level 4 it shows the counters but not the log,
   because that level records internal addresses: use level 2.
 - **`xhcicm.sys`**: set the DWORD value `XhciCmLogVerbosity` to `2` on the
@@ -3662,16 +3677,18 @@ it. The tool reads it without removing anything, so it can be read again.
 Three of its records hold an address as their value; the tool shows those
 values as `--------`.
 
-`XHCISNAP` stays the way to send `xhci98.sys`'s full report (the `.DEV`, the
-port registers and the raw dump); the tool's report is the quick one, and
-the only one that carries `xhcicm.sys`'s log.
+From `3.1.0.0` the same report also carries `xhci98.sys`'s snapshot (the
+device report and the decoded dump), so it is the whole bug report; the
+raw `.BIN` and `.PSC` files come from File > Save Snapshot... or
+`XHCITR /snapshot` when a maintainer asks for them.
 
 The log cannot capture a crash: a machine that has bugchecked is not running
 for anything to read.
 
-> **Run `SNAPOFF.BAT` (`XHCISNAP -disable`) once you have sent the capture.** While the channel
-> is on, anyone using the machine can read the driver's diagnostic state
-> through it, including internal addresses in the raw dump.
+> **Set the level back to 2 (or 0) once you have sent a capture taken at
+> level 3 or 4.** While the level is above 0, anyone using the machine can
+> read the driver's diagnostic state through the tool, and at level 4 that
+> includes internal addresses in the raw dump.
 
 > **Do not run DebugView on Windows 98 on real hardware.** Under the `1.x`
 > miniport, plugging in a device while it captured crashed a ThinkPad E460

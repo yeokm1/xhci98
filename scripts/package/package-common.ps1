@@ -539,24 +539,25 @@ function Get-TestSignCertificate {
     }
 }
 
-# The field reports' batch files (roadmap-hcd task 38.1): SNAPON.BAT,
-# SNAPGET.BAT and SNAPOFF.BAT beside XHCISNAP.EXE, run by COMMAND.COM on
-# Windows 98 SE and ME and by cmd.exe from 2000 to 7, so they carry
-# portsw-on.bat's pinned split; QUALREP.BAT beside XHCIQUAL.EXE, run by
-# MS-DOS's COMMAND.COM alone, so it carries none. One definition of what each
+# The field reports' batch files (roadmap-hcd task 38.1): QUALREP.BAT beside
+# XHCIQUAL.EXE, run by MS-DOS's COMMAND.COM alone, so it carries no split. A
+# Win spec (run by COMMAND.COM on Windows 98 SE and ME and by cmd.exe from
+# 2000 to 7) carries portsw-on.bat's pinned split: none is published since
+# task 42-A.4 retired SNAPON, SNAPGET and SNAPOFF.BAT for XHCITR's /setlevel
+# and /snapshot, and the rule stays for the next. One definition of what each
 # must say, read by test-package.ps1 against the repository's sources and by
 # make-release.ps1 against the batches a cut stages and an upload set
 # assembles (Assert-ReportBatchContent), so a stale or malformed batch in a
-# -SnapToolDir, a -QualtoolDir or a published tree is refused as the
+# -QualtoolDir or a published tree is refused as the
 # repository's own would be. Name is the source name in the tool's own
 # directory (Dir); make-release.ps1's $reportBatches maps it to the
 # published 8.3 name.
 #
 # ArgPass, where a spec has it, is the batch's optional argument (owner,
-# 2026-10-13: SNAPON.BAT LEVEL, SNAPGET.BAT NAME), passed on as it came:
-# Args ends in %1, and that one run line is the only line that may carry
-# %1. The default and the check are the tool's (XHCISNAP -on, -report
-# NAME), so no `if` reads %1 (task 38.1: a quoted or
+# 2026-10-13, for the retired SNAPON.BAT LEVEL, SNAPGET.BAT NAME), passed on
+# as it came: Args ends in %1, and that one run line is the only line that may
+# carry %1. The default and the check are the tool's, so no `if` reads %1
+# (task 38.1: a quoted or
 # metacharacter %1 broke cmd.exe's `if "%1"==` before the tool could refuse
 # it, and a goto change could route around a level test). No other percent
 # variable (%2, %0, %*, %~1, %DATE%, ...) is admitted anywhere.
@@ -565,13 +566,41 @@ function Get-TestSignCertificate {
 # files to attach): the tool line is the last command before pause, reached
 # by `if exist TOOL goto X` with :X just above it, and nothing reads the exit
 # code - the tool prints the outcome. QUALREP.BAT keeps its flag logic.
+#
+# -PublishedVersion (the upload assembly, never the cut): a tree published
+# from 2.4.0.0 to 3.0.0.0 carries XHCISNAP's SNAPON.BAT, SNAPGET.BAT and
+# SNAPOFF.BAT in tools\xhcisnap\, retired in 3.1.0.0 (task 42-A.4), so it is
+# still held to their specs (Test-LegacyReportBatchVersion).
+function Test-LegacyReportBatchVersion {
+    param([string]$PublishedVersion = "")
+    return ($PublishedVersion -ne "" -and [version]$PublishedVersion -lt [version]"3.1.0.0")
+}
+
 function Get-ReportBatchSpecs {
-    return @(
-        @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-on %1";       Names = @(); ArgPass = $true; ToolLast = $true },
-        @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report %1";   Names = @(".DEV", ".TXT"); ArgPass = $true; ToolLast = $true },
-        @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @(); ToolLast = $true },
+    param([string]$PublishedVersion = "")
+    $specs = @(
         @{ Name = "QUALREP.BAT"; Dir = "xhciqual"; Win = $false; Tool = "XHCIQUAL"; Args = "--probe-only --no-page --log-stamp"; Names = @("LOG"); Flag = "QUALREP.FLG" }
     )
+    if (Test-LegacyReportBatchVersion -PublishedVersion $PublishedVersion) {
+        $specs += @(
+            @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-on %1";       Names = @(); ArgPass = $true; ToolLast = $true },
+            @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report %1";   Names = @(".DEV", ".TXT"); ArgPass = $true; ToolLast = $true },
+            @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @(); ToolLast = $true }
+        )
+    }
+    return $specs
+}
+
+# The batch map a tree is held to: tool -> source name -> published name,
+# with the retired XHCISNAP batches added for a tree published before
+# 3.1.0.0 (above). Never for the cut, whose -PublishedVersion is empty.
+function Get-ReportBatchesFor {
+    param([hashtable]$Batches, [string]$PublishedVersion = "")
+    if (-not (Test-LegacyReportBatchVersion -PublishedVersion $PublishedVersion)) { return $Batches }
+    $all = @{}
+    foreach ($k in $Batches.Keys) { $all[$k] = $Batches[$k] }
+    $all["xhcisnap"] = @{ "snapon.bat" = "SNAPON.BAT"; "snapget.bat" = "SNAPGET.BAT"; "snapoff.bat" = "SNAPOFF.BAT" }
+    return $all
 }
 
 function Get-ReportBatchFaults {

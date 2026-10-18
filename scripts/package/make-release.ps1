@@ -37,14 +37,14 @@ file on it setup never touches - but a release directory is not install media,
 so a sibling subdirectory is exactly where it belongs. It is also built by a
 different toolchain (Open Watcom), so it is copied from `xhciqual\` rather than
 built here; the freshness check below is what stops a stale one shipping.
-`xhcisnap\`, the log reader, sits beside it on the same terms, and since
-roadmap-hcd task 37.5 so does **`portsw\`**: the Intel port switchover's
+Since roadmap-hcd task 37.5 **`portsw\`** sits beside it on the same terms:
+the Intel port switchover's
 `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, copied once from `src\`
 rather than into every flavour directory, since they are the same for every
 architecture and flavour and the setup engine never reads them. It carries
 no `readme.txt` of its own: the top-level readme's section 9 explains them.
-Since roadmap-hcd task 38.9 the three sit under **`tools\`** in the version
-directory (`tools\xhciqual\`, `tools\xhcisnap\`, `tools\portsw\`), so the
+Since roadmap-hcd task 38.9 the tools sit under **`tools\`** in the version
+directory (`tools\xhciqual\`, `tools\portsw\` and the rest), so the
 version root holds only the flavour directories, the readme and the licence;
 a version published before 2.4.0.0 keeps its tools at its root (portsw\ only
 in 2.3.1.0; 2.3.0.0 has the scripts per flavour, older none), and the upload
@@ -56,15 +56,16 @@ reset it and enable bus mastering - and are development instrumentation. What a
 user needs is the one read-only command that answers "will this driver work on
 this machine", and that is `XHCIQUAL` with no arguments.
 
-**The report batches go out beside their tools** (roadmap-hcd task 38.1):
+**The report batch goes out beside its tool** (roadmap-hcd task 38.1):
 `QUALREP.BAT` beside `XHCIQUAL.EXE` (a read-only probe whose log is named from
-the DOS clock), and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside
-`XHCISNAP.EXE` (the log channel on, the report and the dump with the channel
-left on, the channel off). They are what a field report asks its reporter to
-run. They are copied from `xhciqual\` and `xhcisnap\`, published under 8.3
-upper-case names, and held to their tools' directories alone
-(`Assert-ReportBatchLayout`); a version published before 2.4.0.0 has none. What
-they say is held to one checker, `Get-ReportBatchFaults` in `package-common.ps1`:
+the DOS clock), what a field report asks its reporter to run under DOS. It is
+copied from `xhciqual\`, published under an 8.3
+upper-case name, and held to its tool's directory alone
+(`Assert-ReportBatchLayout`); a version published before 2.4.0.0 has none.
+XHCISNAP's `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` (2.4.0.0 to 3.0.0.0)
+were retired with XHCISNAP (task 42-A.4) for XHCITR's `/setlevel` and
+`/snapshot`. What it says is held to one checker, `Get-ReportBatchFaults` in
+`package-common.ps1`:
 by `test-package.ps1` on the repository's sources, and here on the batches
 actually staged (which must also be the repository's bytes) and on those in the
 tree an upload set is assembled from, `-UploadSetOnly`'s included
@@ -201,19 +202,6 @@ that stamp, so the only binary this applies to is one built before the stamp
 existed - where rebuilding to acquire one would move the PE link timestamp and
 invalidate every reading already taken on these exact bytes. Without this the
 cut refuses; a stamp that MISMATCHES is refused either way.
-
-.PARAMETER SnapToolDir
-Where `XHCISNAP.EXE` is built. Defaults to `xhcisnap\` in the repository. It is
-staged into `releases\<version>\tools\xhcisnap\`, beside the DOS qualifier's own
-directory, and it is what a user runs to switch the driver's read channel on and
-to take a dump off the machine - **the only route this driver has for getting
-evidence off Windows 98**. It has never been in a release before task 13-L.2.
-
-.PARAMETER SkipSnapTool
-Do not stage `XHCISNAP.EXE`. There is no reason to on an ordinary host - it
-builds with the in-repo MSVC 6.0 and installs nothing - so this exists for the
-packager's own self-tests, and a release cut with it publishes a read channel
-nobody can open.
 
 .PARAMETER CleanToolDir
 Where `XHCICLN.EXE` and `XHCICL64.EXE` are built. Defaults to `xhcicln\` in the
@@ -401,8 +389,6 @@ param(
     [string]$ReleasesDir = "",
     [string]$QualtoolDir = "",
     [switch]$SkipQualtool,
-    [string]$SnapToolDir = "",
-    [switch]$SkipSnapTool,
     [string]$CleanToolDir = "",
     [switch]$SkipCleanTool,
     [string]$MarkToolDir = "",
@@ -475,7 +461,6 @@ was asked for, and nothing else.
 $infPath = Join-Path $repo "src\xhci98.inf"
 if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
-if ($SnapToolDir -eq "") { $SnapToolDir = Join-Path $repo "xhcisnap" }
 if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
 if ($MarkToolDir -eq "") { $MarkToolDir = Join-Path $repo "xhcimark" }
 if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo "xhciinst" }
@@ -607,7 +592,6 @@ function Resolve-DirectoryArgument {
 
 $ReleasesDir = Resolve-DirectoryArgument $ReleasesDir
 $QualtoolDir = Resolve-DirectoryArgument $QualtoolDir
-$SnapToolDir = Resolve-DirectoryArgument $SnapToolDir
 $CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
 $MarkToolDir = Resolve-DirectoryArgument $MarkToolDir
 $InstallToolDir = Resolve-DirectoryArgument $InstallToolDir
@@ -624,7 +608,6 @@ $qualtoolFiles = @{ "xhciqual.exe" = "XHCIQUAL.EXE"; "xhciqual.map" = "XHCIQUAL.
 # Copied with the tool, so a cut that skips a tool publishes none of its
 # batches; held there and nowhere else by Assert-ReportBatchLayout.
 $reportBatches = @{
-    "xhcisnap" = @{ "snapon.bat" = "SNAPON.BAT"; "snapget.bat" = "SNAPGET.BAT"; "snapoff.bat" = "SNAPOFF.BAT" };
     "xhciqual" = @{ "QUALREP.BAT" = "QUALREP.BAT" }
 }
 
@@ -729,7 +712,7 @@ $oemPublishable = @("txtsetup.oem")
 # Not INF-declared files: text files the user runs, the same for every
 # architecture and flavour, which the setup engine never reads. Since task
 # 37.5 a cut publishes them once, from src\, into portsw\ beside xhciqual\
-# and xhcisnap\ (all three under tools\ since task 38.9), and into no
+# (both under tools\ since task 38.9), and into no
 # flavour directory; the
 # packages no longer carry them. A version published before 2.3.0.0 has
 # none and 2.3.0.0 has them at the root of each flavour directory, and a
@@ -739,7 +722,7 @@ $oemPublishable = @("txtsetup.oem")
 $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 
 # The release's tools in tools\ (roadmap-hcd task 38.9): a cut publishes
-# xhciqual\, xhcisnap\ and portsw\ under <version>\tools\, so the version
+# xhciqual\, portsw\ and the rest under <version>\tools\, so the version
 # root holds only the flavour directories, the readme and the licence. The
 # first version so published is 2.4.0.0; every one before it has them at the
 # version root, and a published release is never rewritten. So the upload
@@ -750,10 +733,14 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # and only ever under tools\. xhciinst\, the install tool of task 40.6, is
 # first published in 3.0.0.0, under tools\, with INSTALL.BAT at the root,
 # and so is xhcitr\, the USB tree tool of task 41-A.6 that XHCIINST installs.
+# xhcisnap\ was published from 2.4.0.0 to 3.0.0.0 and retired in 3.1.0.0
+# (task 42-A.4, into XHCITR): $retiredToolNames admits it in a tree the
+# upload assembly reads at a version that published it, and never in a cut.
 # xhcimark\, the mark service of task 42-A.5, is first published in 3.1.0.0.
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")
+$toolNames = @("xhciqual", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")
+$retiredToolNames = @{ "xhcisnap" = [version]"3.1.0.0" }
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
 # design record 13 section 6.11.8): copied once from src\ into tools\silent\
@@ -787,17 +774,21 @@ function Assert-ToolsLayout {
     $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
     $tools = Join-Path $rootFull $toolsDirName
     $faults = @()
+    $names = @($toolNames)
+    foreach ($r in $retiredToolNames.Keys) {
+        if ($PublishedVersion -ne "" -and [version]$PublishedVersion -lt $retiredToolNames[$r]) { $names += $r }
+    }
     if (Test-Path -LiteralPath $tools) {
         if (-not (Test-Path -LiteralPath $tools -PathType Container)) {
             $faults += "$toolsDirName is a file, not a directory"
         } else {
             foreach ($item in @(Get-ChildItem -LiteralPath $tools -Force)) {
-                if (-not $item.PSIsContainer -or $item.Name.ToLowerInvariant() -notin $toolNames) {
+                if (-not $item.PSIsContainer -or $item.Name.ToLowerInvariant() -notin $names) {
                     $faults += "$toolsDirName\$($item.Name) is not one of the tools' directories"
                 }
             }
         }
-        foreach ($name in $toolNames) {
+        foreach ($name in $names) {
             if (Test-Path -LiteralPath (Join-Path $rootFull $name)) { $faults += "$name\ is at the version root, not in $toolsDirName\" }
         }
         $layout = "in $toolsDirName\"
@@ -1034,7 +1025,10 @@ function Assert-ReportBatchLayout {
     # no other directory of the tree holds a copy of any of them. A tree
     # without tools\ is a version published before 2.4.0.0 (Assert-ToolsLayout
     # refuses it at the cut and from 2.4.0.0), and none of those has any.
+    # A tree published before 3.1.0.0 is also held to XHCISNAP's retired
+    # batches (package-common.ps1's Get-ReportBatchesFor).
     param([string]$Root, [hashtable]$Batches, [string]$What, [string]$PublishedVersion = "")
+    $Batches = Get-ReportBatchesFor -Batches $Batches -PublishedVersion $PublishedVersion
     $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
     $batchHome = @{}
     foreach ($tool in $Batches.Keys) {
@@ -1078,7 +1072,7 @@ function Assert-ReportBatchContent {
     # a tools\<tool>\ directory that is there is read as bytes and held to
     # package-common.ps1's Get-ReportBatchFaults, the one definition
     # test-package.ps1 holds the repository's sources to. So a stale or
-    # malformed batch that came in with -SnapToolDir or -QualtoolDir, or that
+    # malformed batch that came in with -QualtoolDir, or that
     # sits in the published tree -UploadSetOnly re-assembles, is refused
     # rather than published or archived (task 38.1).
     #
@@ -1088,12 +1082,16 @@ function Assert-ReportBatchContent {
     # The upload assembly passes none: the tree it reads was cut from the
     # sources of its own commit. Run it after Assert-ReportBatchLayout, which
     # reports a missing batch; a tree without tools\ has none to read.
-    param([string]$Root, [hashtable]$Batches, [string]$What, [string]$Reference = "")
+    #
+    # With -PublishedVersion (the upload assembly) a tree published before
+    # 3.1.0.0 is held to XHCISNAP's retired batches too (task 42-A.4).
+    param([string]$Root, [hashtable]$Batches, [string]$What, [string]$Reference = "", [string]$PublishedVersion = "")
+    $Batches = Get-ReportBatchesFor -Batches $Batches -PublishedVersion $PublishedVersion
     $tools = Join-Path (Get-Item -LiteralPath $Root).FullName "tools"
     if (-not (Test-Path -LiteralPath $tools -PathType Container)) { return }
     $latin1 = [System.Text.Encoding]::GetEncoding(28591)
     $faults = @()
-    foreach ($spec in @(Get-ReportBatchSpecs)) {
+    foreach ($spec in @(Get-ReportBatchSpecs -PublishedVersion $PublishedVersion)) {
         $dir = Join-Path $tools $spec.Dir
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
         $pub = $Batches[$spec.Dir][$spec.Name]
@@ -1333,7 +1331,7 @@ function Find-DraftMarkers {
 # cannot see a version string.
 #
 # **What DID change is what a bump touches**, and it opens a gap this function's
-# callers close: `qual.h` and `xhcisnap.c` no longer move when the version does,
+# callers close: `qual.h` and the tools' sources no longer move when the version does,
 # so the "EXE newer than every .c/.h beside it" checks would no longer see a
 # bump at all. Both of them take `src\xhci_version.h` as an extra input for
 # exactly that reason.
@@ -2571,7 +2569,7 @@ $gateOut
     Assert-ReportBatchLayout -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
     # And what they say, before anything is archived: the cut checked them
     # when it staged them, but -UploadSetOnly reads a tree it did not stage.
-    Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'"
+    Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
     # The bundled Stor98 files keep their own DriverVer date and their own
     # file times: they are another project's release, copied unchanged.
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
@@ -3381,7 +3379,7 @@ meant: scripts\build-driver.cmd $f
         #
         # **And that the tree can still reproduce it** (the audit of
         # 2026-09-07). This script already refuses a staged XHCIQUAL or
-        # XHCISNAP older
+        # XHCITR older
         # than its own sources; the driver had no equivalent, and the only tie
         # between src\ and the published .sys was the file version against the
         # INF's - which cannot see a code edit that did not bump the version.
@@ -3647,116 +3645,13 @@ driver".
                    "with a .MAP no older than itself, and QUALREP.BAT beside it") -f $toolVersion)
     }
 
-    # --- the snapshot reader ------------------------------------------------
-    #
-    # **XHCISNAP has never been in a release** (task 13-L.2). It was a bench
-    # companion to a probe build that could not ship either, and now it is how a
-    # user gets evidence off a Windows 98 machine at all: the driver's snapshot
-    # channel is in every shipping flavour and this is the only thing that
-    # speaks to it. A release without it publishes a channel nobody can open.
-    #
-    # It is built with MSVC 6.0 in place, so unlike the DOS qualifier it needs
-    # no extra toolchain on the cutting host - but it gets the **same staleness
-    # throw**, and it matters more here than there: the tool duplicates the
-    # driver's wire format rather than including `src\xhci.h`, and refuses any
-    # driver whose reply signature, schema version or header size is not the one
-    # it was built against. **That refusal is a good failure and a wasted
-    # download**, and a stale XHCISNAP.EXE in a cut is exactly how a user gets
-    # one - they would install a working driver, run the tool, and be told to
-    # rebuild something they cannot rebuild.
-    $snaptoolStaged = $null
-    if (-not $SkipSnapTool) {
-        Write-Step "snapshot reader"
-
-        $snapExe = Join-Path $SnapToolDir "XHCISNAP.EXE"
-        if (-not (Test-Path -LiteralPath $snapExe)) {
-            throw @"
-'$SnapToolDir' has no XHCISNAP.EXE.
-Build it first:  xhcisnap\build.cmd
-It uses the in-repo MSVC 6.0 and installs nothing, so there is no toolchain to
-acquire. A release without it publishes a read channel nobody can open.
-"@
-        }
-
-        # `src\xhci_version.h` is one of its sources too - see the same set in
-        # the qualifier's check above for why a version bump would otherwise be
-        # invisible to every check in this script.
-        $snapTime = (Get-Item -LiteralPath $snapExe).LastWriteTimeUtc
-        $snapNewer = @(@(Get-ChildItem -LiteralPath $SnapToolDir -File |
-            Where-Object { $_.Extension -in @(".c", ".h") }) +
-            @(Get-Item -LiteralPath $versionHeader) |
-            Where-Object { $_.LastWriteTimeUtc -gt $snapTime })
-        if ($snapNewer.Count -gt 0) {
-            throw @"
-'$snapExe' is older than $($snapNewer.Count) of its own source file(s):
-  - $(($snapNewer | ForEach-Object { $_.Name }) -join "`n  - ")
-Rebuild it (xhcisnap\build.cmd) before releasing. This tool refuses any driver
-whose snapshot schema is not the one it was built against, so a stale one is a
-download that answers a working driver with "rebuild the tool".
-"@
-        }
-
-        # **And the wire format has to be the driver's own.** The timestamp
-        # above catches a tool older than its sources; this catches the case
-        # that actually bites - a tool rebuilt from sources that never learned
-        # about a schema the DRIVER moved. The number is in two files by
-        # construction (the tool may not include a kernel header), so the only
-        # honest check is to compare them.
-        $snapSchemaTool = Get-SnapSchema -Path (Join-Path $SnapToolDir "xhcisnap.c") -Macro "SNAP_SCHEMA"
-        $snapSchemaDrv = Get-SnapSchema -Path (Join-Path $repo "src\xhci.h") -Macro "XHCI_SNAPSHOT_SCHEMA"
-        if ($snapSchemaTool -ne $snapSchemaDrv) {
-            throw @"
-xhcisnap\xhcisnap.c declares SNAP_SCHEMA $snapSchemaTool and src\xhci.h declares
-XHCI_SNAPSHOT_SCHEMA $snapSchemaDrv. The tool duplicates the wire format rather
-than including a kernel header, and refuses at run time any driver whose schema
-is not its own - so publishing these two together would ship a tool that cannot
-read the driver beside it.
-"@
-        }
-
-        # **The reader's version, and this is the only gate that reaches it.**
-        # It was a seventh copy of the number until task 14.1.10 made it an
-        # expansion of the shared macro, so what is checked here is now two
-        # things rather than one: that the source still takes the macro, and
-        # that the macro's value is this release's. Both for the reason the
-        # qualifier's check above exists: the timestamp checks catch a stale
-        # binary and not a stale number inside a fresh one, and this tool now
-        # prints its version on its default screen AND into the header of every
-        # report a user pastes into an issue. A report headed "xhcisnap 0.0.0.5"
-        # taken out of a 0.0.0.6 release names a build that was never published.
-        $snapSource = Join-Path $SnapToolDir "xhcisnap.c"
-        Assert-TakesSharedVersion -Path $snapSource -Macro "XHCISNAP_VERSION"
-        $snapVersion = Get-DeclaredVersion -Path $versionHeader
-        if (-not (Test-DriverVersionMatches -Reported $snapVersion -Declared $Version)) {
-            throw @"
-'$versionHeader' declares the version as "$snapVersion", but this release is $Version.
-XHCISNAP is published inside releases\$Version\tools\xhcisnap\, prints that string on
-its default screen, and writes it into the header of every report a user sends
-back, so the two must agree. Bump the version in src\xhci_version.h and rebuild
-the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
-"Versioning the driver".
-"@
-        }
-
-        $snapDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcisnap")
-        Ensure-Directory $snapDir
-        Copy-Item -LiteralPath $snapExe -Destination (Join-Path $snapDir "XHCISNAP.EXE") -Force
-        # Its three report batches (roadmap-hcd task 38.1), beside it.
-        Publish-ReportBatches -SourceDir $SnapToolDir -DestDir $snapDir -Map $reportBatches["xhcisnap"]
-        $snaptoolStaged = $snapDir
-        Write-Ok (("XHCISNAP.EXE staged at version {0} from src\xhci_version.h, " +
-                   "wire schema {1}, matching src\xhci.h, newer than every .c/.h " +
-                   "beside it and than that header, with SNAPON.BAT, SNAPGET.BAT " +
-                   "and SNAPOFF.BAT beside it") -f $snapVersion, $snapSchemaTool)
-    }
-
     # --- the cleanup tool (task 38.8) ----------------------------------------
     #
     # XHCICLN.EXE (MSVC 6.0, the 32-bit targets) and XHCICL64.EXE (WDK 7.1
     # amd64, the 64-bit ones), one source: the opt-in tool that lists, and on
     # Windows 2000 to 7 removes, the devnodes a driver before 2.4.0.0 left
     # under XHCI98\ (design record 13 section 10.13.8). The same staleness
-    # rule as XHCISNAP's - each EXE newer than every source beside it and than
+    # rule as XHCIQUAL's - each EXE newer than every source beside it and than
     # src\xhci_version.h - and the same version rule: the source expands the
     # shared macro and the macro is this release's. Not a driver, so the
     # packager's test signing of the x64 drivers (design record 19) does not
@@ -3969,6 +3864,8 @@ cuts without the tool on a host that cannot build it.
             @(Get-Item -LiteralPath $versionHeader) +
             @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.c")) +
             @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhcimark\mark_core.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhcimark\mark_core.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")))
         foreach ($name in $trayExes) {
             $trayTime = (Get-Item -LiteralPath (Join-Path $TrayToolDir $name)).LastWriteTimeUtc
@@ -3982,7 +3879,26 @@ drivers' answers with a layout or rules the source no longer has.
 "@
             }
         }
+        # **And the snapshot's wire format has to be the driver's own** (the
+        # snapshot reader, XHCISNAP's until task 42-A.4, is tr_snap.c). The
+        # timestamps above catch a tool older than its sources; this catches a
+        # tool rebuilt from sources that never learned about a schema the
+        # DRIVER moved. The number is in two files by construction (the tool
+        # may not include a kernel header), so the only honest check is to
+        # compare them.
+        $snapSchemaTool = Get-SnapSchema -Path (Join-Path $TrayToolDir "tr_snap.c") -Macro "SNAP_SCHEMA"
+        $snapSchemaDrv = Get-SnapSchema -Path (Join-Path $repo "src\xhci.h") -Macro "XHCI_SNAPSHOT_SCHEMA"
+        if ($snapSchemaTool -ne $snapSchemaDrv) {
+            throw @"
+xhcitr\tr_snap.c declares SNAP_SCHEMA $snapSchemaTool and src\xhci.h declares
+XHCI_SNAPSHOT_SCHEMA $snapSchemaDrv. The tool duplicates the wire format rather
+than including a kernel header, and refuses at run time any driver whose schema
+is not its own - so publishing these two together would ship a tool that cannot
+read the driver beside it.
+"@
+        }
         Assert-TakesSharedVersion -Path (Join-Path $TrayToolDir "xhcitr.c") -Macro "XHCITR_VERSION"
+        Assert-TakesSharedVersion -Path (Join-Path $TrayToolDir "tr_snap.c") -Macro "XHCISNAP_VERSION"
         $trayVersion = Get-DeclaredVersion -Path $versionHeader
         if (-not (Test-DriverVersionMatches -Reported $trayVersion -Declared $Version)) {
             throw @"
@@ -4000,7 +3916,7 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
             Copy-Item -LiteralPath (Join-Path $TrayToolDir $name) -Destination (Join-Path $trayDir $name) -Force
         }
         $traytoolStaged = $trayDir
-        Write-Ok (("XHCITR.EXE and XHCITR64.EXE staged at version {0}") -f $trayVersion)
+        Write-Ok (("XHCITR.EXE and XHCITR64.EXE staged at version {0}, snapshot schema {1}, matching src\xhci.h") -f $trayVersion, $snapSchemaTool)
     }
 
     # --- the 98 SE and ME device install helper (task 42-A.1) ----------------
@@ -4194,7 +4110,7 @@ helper (xhciinst\di\build.cmd).
             $contents += "  it prints nothing as it runs. It is here only so that it can be"
             $contents += "  installed at this exact version if something goes wrong. Do not"
             $contents += "  install it otherwise - and note that BOTH builds answer"
-            $contents += "  XHCISNAP, so you do not need this one to send a report."
+            $contents += "  XHCITR's report, so you do not need this one to send one."
         }
         $contents += ""
         $contents += "      xhci98.inf"
@@ -4237,35 +4153,6 @@ helper (xhciinst\di\build.cmd).
         $contents += "                   to a new .LOG named from the date and time"
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices this EXE carries"
-        $contents += ""
-    }
-    if ($null -ne $snaptoolStaged) {
-        $sexe = Get-Item -LiteralPath (Join-Path $snaptoolStaged "XHCISNAP.EXE")
-        $contents += "  TOOLS\XHCISNAP\  - what to run if something goes wrong"
-        $contents += ""
-        $contents += ("      XHCISNAP.EXE {0:N0} bytes" -f $sexe.Length)
-        $contents += "      SNAPON.BAT   turns the driver's log channel on"
-        $contents += "      SNAPGET.BAT  writes the report and the dump a bug report asks for"
-        $contents += "      SNAPOFF.BAT  turns the channel off again"
-        $contents += "      readme.txt"
-        $contents += "      NOTICE.TXT   third-party notices this EXE carries"
-        $contents += ""
-        $contents += "      It reads the driver's own log off the running"
-        $contents += "      machine and writes a report you can attach to a"
-        $contents += "      bug report. On Windows 98 it is the only way to"
-        $contents += "      get anything out at all. Four steps, and none of"
-        $contents += "      them is regedit (section 6):"
-        $contents += ""
-        $contents += "        SNAPON.BAT"
-        $contents += "        restart Windows"
-        $contents += "        make the problem happen again"
-        $contents += "        SNAPGET.BAT"
-        $contents += ""
-        $contents += "      Then attach the .DEV and .TXT files it names,"
-        $contents += "      and run SNAPOFF.BAT once you have sent them."
-        $contents += "      At a prompt, SNAPON 3 sets level 3 rather than"
-        $contents += "      2 (1 to 4), and SNAPGET MYPC saves the files as"
-        $contents += "      MYPC.DEV and so on; section 6 has the rules."
         $contents += ""
     }
     if ($null -ne $marktoolStaged) {
@@ -4341,7 +4228,8 @@ helper (xhciinst\di\build.cmd).
         $contents += "      INSTALL.BAT copies the one for your Windows into the"
         $contents += "      install directory it asks for (C:\XHCI98 unless you"
         $contents += "      choose another) and starts it at each login"
-        $contents += "      (section 4)."
+        $contents += "      (section 4). Its File > Save Report writes what a"
+        $contents += "      bug report asks for (section 6)."
         $contents += ""
     }
     if ($null -ne $pswStaged) {
@@ -5283,7 +5171,7 @@ Things specific to this driver, worth knowing in advance:
 
   * DEVICE MANAGER SHOWS A SUPERSPEED DEVICE AS HIGH SPEED AT MOST. The
     interface it reads on these systems predates SuperSpeed, so that display
-    says nothing about the real link. XHCISNAP's report (section 6) shows the
+    says nothing about the real link. XHCITR's report (section 6) shows the
     speed the driver actually uses.
 
   * HUBS HAVE ENTRIES OF THEIR OWN IN DEVICE MANAGER. A hub appears as
@@ -5348,106 +5236,63 @@ Things specific to this driver, worth knowing in advance:
   ...................
 
   Open an issue on the project's GitHub page (section 7) and describe what
-  happened. The bug report form asks for two things these batch files
+  happened. The bug report form asks for two things the tools below
   gather; installing and using the driver never needs them.
 
-  IF THE MACHINE KEEPS RUNNING: SNAPON, SNAPGET, SNAPOFF
+  IF THE MACHINE KEEPS RUNNING: THE xHCI98 USB TREE'S REPORT
 
-  TOOLS\XHCISNAP holds XHCISNAP.EXE and three batch files that run it. It
-  reads the driver's own log straight out of the running machine and writes
-  a report you can attach to that issue. On Windows 98 and Windows ME it is
-  the ONLY way to get anything out. Four steps, and none of them is REGEDIT.
-  Copy the directory somewhere writable first (not a CD), and on Vista and
-  7 right-click each batch file and choose Run as administrator:
+  The xHCI98 USB Tree (XHCITR, section 4) reads the driver's own log and
+  snapshot straight out of the running machine and writes a report you
+  can attach to that issue. On Windows 98 and Windows ME it is the ONLY
+  way to get anything out, and none of it is REGEDIT. INSTALL.BAT puts it
+  in the install directory and the notification area; it is also in
+  TOOLS\XHCITR (XHCITR.EXE, or XHCITR64.EXE on 64-bit Windows):
 
-      1. SNAPON.BAT                 turns the log channel on
-      2. restart Windows
-      3. make the problem happen again
-      4. SNAPGET.BAT                writes the report and the dump
+      1. View > Logging level...   xhci98 at 2, the default; if it is
+                                   not, set 2 and restart Windows
+      2. make the problem happen again
+      3. File > Save Report...     writes one .TXT file: attach it
 
-  SNAPGET.BAT writes its files in the directory it runs in, not in C:\,
-  under a name made from the date and time - for example 3141022A.DEV
-  and 3141022A.TXT for 14 March at 10:22 (the month is one character, 1 to
-  9 then A, B, C) - and a second run never overwrites the first. It prints
-  the names. Attach the .DEV file (the controller's Device Manager status
-  and problem code, its resources, and the versions and SHA-256 hashes of
-  the installed driver files) and the .TXT file (the report). Keep the .BIN
-  and .PSC beside them and attach those only if you are asked for them. It
-  leaves the channel on, so you can run it again after the next attempt.
-  Step 1 finds the right registry key for you, on every controller this
-  driver runs - see section 9 for what it sets.
+  The report holds the device tree, both drivers' logs and the driver's
+  snapshot: the controller's Device Manager status and problem code, its
+  resources, the versions and SHA-256 hashes of the installed driver
+  files, and the decoded dump. It is plain text with no internal
+  addresses. If you can, save one report while it works and one after the
+  problem happens, under two names.
 
-  Two of the batch files take one optional word, typed after the name at a
-  prompt in their directory (on Vista and 7, an administrator's prompt):
+  From a prompt the same steps are (step 1 needs administrator rights on
+  Windows 2000 to 7: on Vista and 7, a Command Prompt started with "Run as
+  administrator"):
 
-      SNAPON 3      level 3 instead of 2 (1 to 4; with none, 2, the log -
-                    use it unless you are asked for another). SNAPON 0 is
-                    refused: 0 is off, and SNAPOFF.BAT turns it off.
-      SNAPGET MYPC  saves the files as MYPC.DEV, MYPC.TXT, .BIN and .PSC
-                    instead of the date-and-time name: 1 to 8 letters,
-                    digits, _ or -, not starting with -, no path, drive or
-                    extension, and not a DOS device name (CON, PRN, AUX,
-                    NUL, COM0 to COM9, LPT0 to LPT9), in the same
-                    directory. A name already taken there is refused;
-                    nothing is overwritten.
+      1. XHCITR /setlevel xhci98=2, and restart Windows if it was not 2
+      2. make the problem happen again
+      3. XHCITR /report FILE.TXT
 
-  The batch files pass the word on to XHCISNAP as it came (SNAPON runs
-  XHCISNAP -on LEVEL, SNAPGET XHCISNAP -report NAME), and XHCISNAP checks
-  it: a word it does not take changes nothing and writes nothing.
+  THE RESTART IN STEP 1 IS NOT OPTIONAL WHEN THE LEVEL CHANGES. The driver
+  reads it when it starts; until the restart it is still at whatever it
+  read last time, and at 0 it gives no answer at all rather than an empty
+  one.
 
-  Each batch file runs XHCISNAP last, and XHCISNAP says what happened and
-  what to do next. Its last line, just above "Press any key", names the
-  files to attach (for example "Attach: 3141022A.DEV 3141022A.TXT"), or
-  says there is nothing to attach. What it says when SNAPGET.BAT stops
-  follows XHCISNAP -report's exit code:
+  WHEN THE MAINTAINER ASKS FOR THE SNAPSHOT'S OWN FILES, File > Save
+  Snapshot... (or XHCITR /snapshot at a prompt) writes them: NAME.DEV
+  (the device report), NAME.TXT (the dump), and NAME.BIN and NAME.PSC
+  (the raw state and the port registers). NAME is made from the date and
+  time - for example 3141022A for 14 March at 10:22 (the month is one
+  character, 1 to 9 then A, B, C) - or is the 1 to 8 letters, digits, _
+  or - you give (XHCITR /snapshot MYPC); an earlier set is never
+  overwritten. XHCITR /snapshot /? says what each exit code means.
 
-      0  the .DEV and the .TXT were written in full: attach them.
-      2  the name given was refused, and the line above says why: give
-         a name by the rules above, or no name. (If XHCISNAP printed its
-         usage instead, it is older than the batch: use this package's.)
-      3  the .TXT is not complete: attach it, and say so.
-      4  no dump was taken, and the .DEV says why - often the channel is
-         off: SNAPON.BAT, restart, make it happen, SNAPGET.BAT. Attach the
-         .DEV.
-      5  the .DEV could not be written in full: the disk is full or cannot
-         be written. Copy the directory somewhere writable, run it there.
-      6  no free name: all 26 for this minute are taken (wait a minute and
-         run it again), or the name given is taken (give another, or
-         none). Nothing was written or overwritten.
-      7  the clock is not a valid date and time: set it, run it again.
-         Nothing was written.
-      8  another run made a file of this set while it ran. That file was
-         left as it was and no dump was kept under the name: run
-         SNAPGET.BAT again - it takes the next letter, or give another
-         name.
-
-  Without the batch files the same steps are:
-
-      1. XHCISNAP -verbosity 2
-      2. restart Windows
-      3. make the problem happen again
-      4. XHCISNAP -report           (or XHCISNAP -o NAME for the dump alone)
-
-  STEP 2 IS NOT OPTIONAL. The driver reads that setting when it starts.
-  Without the restart the driver is still at whatever it read last time -
-  which on a fresh install is OFF, and then XHCISNAP gets no answer at all
-  rather than an empty one.
-
-  If nothing comes back at all, run XHCISNAP -probe. It checks the route to
+  If nothing comes back at all, run XHCITR /probe. It checks the route to
   the driver separately from whether this driver answers on it.
 
-  USE THE XHCISNAP.EXE FROM THIS PACKAGE, not a copy kept from an earlier
+  USE THE XHCITR FROM THIS PACKAGE, not a copy kept from an earlier
   release. This driver's report is snapshot schema 5.
 
-  XHCISNAP.EXE changes nothing about how the driver behaves on the bus, and
-  writes no file it was not asked to. It does READ the controller's port
-  registers, which is a hardware access - it just does not write one.
-
-  What step 1 DOES change is ONE of this driver's own settings, and it says
-  so as it writes it - that is the point of it, and it is why step 2 is a
-  restart. SNAPOFF.BAT (XHCISNAP -disable) puts it back, and you should run
-  that once you have sent the capture: while it is on, anyone using this
-  machine can read the driver's diagnostic state. See section 9.
+  The report and the snapshot change nothing about how the driver behaves
+  on the bus, and XHCITR writes no file it was not asked to. They do READ
+  the controller's port registers, which is a hardware access - they just
+  do not write one. The logging level is the one driver setting XHCITR
+  writes; see section 9.
 
   IF THE MACHINE WILL NOT START WINDOWS, OR CRASHES: QUALREP UNDER DOS
 
@@ -5465,11 +5310,11 @@ Things specific to this driver, worth knowing in advance:
   anything to read.
 
   THE DRIVER WRITES NO LOG FILE ITSELF, and there is no registry value that
-  makes it. XHCISNAP writes the file, named from the clock or by you.
+  makes it. XHCITR writes the report and the snapshot's files.
 
   DEBUGVIEW (Sysinternals), with "Capture Kernel" switched on, receives this
-  driver's log as it runs if XhciLogDebugView is set. LIKE XHCISNAP, USE IT
-  ONLY WHEN THE MAINTAINER ASKS FOR IT.
+  driver's log as it runs if XhciLogDebugView is set. USE IT ONLY WHEN THE
+  MAINTAINER ASKS FOR IT.
 
       !! Do not run DebugView on Windows 98 on real hardware while
          capturing. Under the earlier releases, plugging in a device while
@@ -5517,7 +5362,7 @@ being unsigned, and no change to this driver can remove them:
   * A SUPERSPEED DEVICE DECLARING MORE THAN 510 mA READS 510 mA on the
     Power tab (a bus-powered hub is charged (ports + 1) x 100 mA, at most
     500 mA, instead): the value the page reads cannot count past 510 mA. With
-    XhciLogVerbosity at 2, XHCISNAP's report gives the exact figure as
+    XhciLogVerbosity at 2, XHCITR's report gives the exact figure as
     dev.ss.maxpower.ma, in hexadecimal mA.
 
   * INTEL 7-, 8- AND 9-SERIES CHIPSETS: A DEVICE ON A BLUE CONNECTOR MOVES
@@ -5581,7 +5426,7 @@ May be addressed in a later release:
     STOPPED HANGS: RESTART THE MACHINE. Only after the controller stopped
     answering altogether, or a recovery could not stop it, and the driver
     could not prove it had stopped writing to memory, so kept everything it
-    might still write into (XHCISNAP reads "CONTAINED" and "PINNED"): a
+    might still write into (XHCITR's report says "CONTAINED" and "PINNED"): a
     later disable of the controller in Device Manager, or an update or
     removal of its driver, waits for ever on the kept transfers, and only
     restarting the machine ends it. Seen in virtual machines on Windows 98
@@ -5709,8 +5554,8 @@ XhciImodInterval250ns at 500, the update keeps it; set it to 160 by hand.
 A value that is absent means the default each one states.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
-  XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
-  finds the key itself.
+  XHCITR's View > Logging level (or XHCITR /setlevel xhci98=2) sets the value
+  that matters, on every controller, and finds the key itself.
 
   XhciLogVerbosity  -  the whole log switch
   .........................................
@@ -5719,7 +5564,7 @@ A value that is absent means the default each one states.
   was 0 before this release). Level 0 is off outright; above it each
   level is the one below plus one thing:
 
-      0   OFF. The driver does not answer XHCISNAP at all.
+      0   OFF. The driver does not answer XHCITR's snapshot at all.
       1   the channel, plus the counters. The log of what happened is still
           off, so this is the cheapest reading there is.
       2   plus the log of what happened.  USE THIS ONE. A fresh install
@@ -5736,7 +5581,7 @@ A value that is absent means the default each one states.
 
   Default 0. Set it to 1 to have the log handed to DebugView as the driver
   runs, and once more when the controller stops. It does not affect what
-  XHCISNAP reads. Leave it at 0 unless the maintainer asks for a DebugView
+  XHCITR reads. Leave it at 0 unless the maintainer asks for a DebugView
   capture, and see section 6 about DebugView on Windows 98.
 
   XhciImodInterval250ns  -  how long the controller holds back an interrupt
@@ -5765,7 +5610,7 @@ A value that is absent means the default each one states.
   FEEL FREE TO TUNE IT. Raise it towards 4000 (or delete it) if you get
   audio stutter or instability under load. Enter it as a decimal DWORD.
   The driver reads it when it starts, so a change takes effect after a
-  restart; XHCISNAP's report then shows under "registry values" the value
+  restart; XHCITR's report then shows under "registry values" the value
   it read, the interval in force, and what the controller took.
 
   XhciForceBulkOnly  -  keep storage on Bulk-Only instead of UAS
@@ -5797,7 +5642,7 @@ A value that is absent means the default each one states.
 
   THIS IS OUTSIDE THE xHCI SPECIFICATION, which sets 1 ms as the shortest
   interval for these devices. With 2 or 3, a controller that refuses it is
-  caught: the device runs at its normal rate, and XHCISNAP's report counts
+  caught: the device runs at its normal rate, and XHCITR's report counts
   it as fastpoll.fallbacks. A controller that accepts it and then misbehaves
   cannot be caught; if anything misbehaves, delete the value and restart.
   While 2 or 3 is set, ANY Low- or Full-Speed device on a root port that
@@ -5926,7 +5771,7 @@ A value that is absent means the default each one states.
   message (MSI) rather than a line, as it can be on Vista and 7, and
   NOTHING while the driver is polling the controller. On 2000, XP, Vista
   and 7 it also writes nothing when Windows gave the controller an
-  interrupt below 16. XHCISNAP's report
+  interrupt below 16. XHCITR's report
   has an "interrupt routing" section saying what it found and did. The
   same register written by hand fixed the E7250 under XP x64; the
   driver's own write has not yet been read on any machine.
@@ -5956,7 +5801,7 @@ A value that is absent means the default each one states.
   Set it to 0 to turn all of that off together and have the earlier
   handling back, but for the rules below that apply at every value.
   ONLY 0 TURNS IT OFF; absent or any other number is on. It does not
-  touch the next two values. At 0 XHCISNAP's report still counts the
+  touch the next two values. At 0 XHCITR's report still counts the
   faults it sees and what the rules below did, while the counters of the
   behaviours switched off stay at 0. Read when the controller starts, so
   restart after changing it.
@@ -5966,7 +5811,7 @@ A value that is absent means the default each one states.
   specification asks, at most three times on one port before the port is
   held; and a recovery that cannot stop the controller, and cannot prove
   it has stopped writing to memory, closes the controller off until the
-  machine restarts. XHCISNAP then reports "CONTAINED: halt and reset did
+  machine restarts. XHCITR's report then says "CONTAINED: halt and reset did
   not complete and Bus Master Enable would not clear; DMA not proven
   stopped, common buffer pinned". And on a controller latched failed (its
   recoveries refused or failed three times in a row): once it shows it
@@ -6114,7 +5959,7 @@ A value that is absent means the default each one states.
   Speed is not affected, and a device on a root port of its own is never
   given one. It is on by default because without it every such device on
   such a controller is refused. Set 0 and restart to refuse them again.
-  XHCISNAP shows whether it is on and counts the devices given an ID
+  XHCITR's report shows whether it is on and counts the devices given an ID
   (Usb2HubSpeedFallbacks) and those still refused (TopoBehindHubNoSpeed).
   It was built without the hardware and has never run on a VL805.
 
@@ -6133,7 +5978,7 @@ A value that is absent means the default each one states.
   devices. Below 0.96 is refused at every value, and on a 1.0 or later
   controller the value changes nothing. Set 0 and restart to refuse a
   controller below 1.0 again. XHCIQUAL names the controller's version,
-  and XHCISNAP's "controller version" lines say what the driver decided.
+  and XHCITR's "controller version" lines say what the driver decided.
 
   Linux's controller quirks  -  fourteen values
   .............................................
@@ -6154,7 +5999,7 @@ A value that is absent means the default each one states.
 
   Matched by vendor and device ID alone; the revision is logged, never
   matched. Read when the controller starts, so restart after changing one.
-  XHCISNAP's report has a "Linux quirks" block: each value as read,
+  XHCITR's report has a "Linux quirks" block: each value as read,
   whether this controller is listed, whether it applies, what it last did.
   The Linux flag is in brackets.
 
@@ -6208,7 +6053,7 @@ A value that is absent means the default each one states.
 
   WHAT HAPPENS AT SHUTDOWN IS SEEN ONLY IN A CAPTURE OF THAT SHUTDOWN.
   XhciIntelShutdownToEhci and XhciShutdownReset log what they did, but the
-  log lives in memory and is gone at the next start, so XHCISNAP never
+  log lives in memory and is gone at the next start, so XHCITR never
   shows it. Set XhciLogVerbosity to 2 or above (below it nothing is
   recorded) and XhciLogDebugView to 1, and attach a debug-output viewer or
   a kernel debugger to the shutdown to see it.
@@ -6247,15 +6092,17 @@ A value that is absent means the default each one states.
   open the subkey for the slot it occupies, and read its Driver value. It
   names the key to edit - for example USB\0004.
 
-  SET THE TWO LOG VALUES ONLY WHILE DIAGNOSING SOMETHING, AND RUN
-  XHCISNAP -DISABLE WHEN YOU HAVE SENT THE CAPTURE. While the channel is
-  enabled, anyone using this machine can read the driver's own diagnostic
-  state through it - counters, the log, the port table, and at level 4
-  internal addresses. It is this driver's own state and nothing else: no
-  documents, no passwords, no other program's memory. At level 0 the driver
-  does not answer at all, so the value you set IS the lock. On Windows 2000
-  and later you need administrator rights to set it (on Vista and 7, a
-  Command Prompt started with "Run as administrator").
+  RAISE THE LEVEL ABOVE 2, OR SET XhciLogDebugView, ONLY WHILE DIAGNOSING
+  SOMETHING, AND PUT THEM BACK WHEN YOU HAVE SENT THE CAPTURE. While the
+  channel is enabled (at any level above 0), anyone using this machine can
+  read the driver's own diagnostic state through it - counters, the log,
+  the port table, and at level 4 internal addresses. It is this driver's
+  own state and nothing else: no documents, no passwords, no other
+  program's memory. At level 0 the driver does not answer at all, so the
+  value you set IS the lock. On Windows 2000 and later you need
+  administrator rights to set it (XHCITR's Logging level asks for them; on
+  Vista and 7, XHCITR /setlevel needs a Command Prompt started with "Run as
+  administrator").
 
 
 ==============================================================================
@@ -6323,7 +6170,7 @@ are in it.
 
     # **The schema number section 6 names is the driver's, or the cut fails.**
     # It is the one number in the template that is neither a version nor
-    # substituted, and a user reads it to tell a stale XHCISNAP from this one.
+    # substituted, and a user reads it to tell a stale XHCITR from this one.
     $templateSchemas = @([regex]::Matches($template, 'snapshot schema (\d+)') |
                          ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique)
     $driverSchema = Get-SnapSchema -Path (Join-Path $repo "src\xhci.h") -Macro "XHCI_SNAPSHOT_SCHEMA"
@@ -6332,7 +6179,7 @@ are in it.
         throw @"
 the readme template names snapshot schema $($staleSchemas -join ', '), and
 src\xhci.h declares XHCI_SNAPSHOT_SCHEMA $driverSchema. Section 6 tells the user
-which XHCISNAP matches this driver by that number; correct the sentence.
+which XHCITR matches this driver by that number; correct the sentence.
 "@
     }
 
@@ -6348,16 +6195,15 @@ which XHCISNAP matches this driver by that number; correct the sentence.
 
     #
     # **An incomplete cut has to say so IN THE FILE**, which is the audit of
-    # 2026-09-07. `-SkipQualtool` and `-SkipSnapTool` warn on the console and
+    # 2026-09-07. `-SkipQualtool` and the other -Skip switches warn on the console and
     # leave the section-8 listing out, but every other mention of those
     # directories stayed: section 1 tells the reader the checker is in
-    # TOOLS\XHCIQUAL\, section 6 tells them to run XHCISNAP, and neither directory is
+    # TOOLS\XHCIQUAL\, section 6 tells them to run XHCITR, and neither directory is
     # there. build-and-test.md says the result "is incomplete and says so", and
     # the console is not where a user reads it.
     #
     $missingTools = @()
     if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS machine checker of section 1)" }
-    if ($null -eq $snaptoolStaged) { $missingTools += "TOOLS\XHCISNAP\ (the report tool of section 6)" }
     if ($null -eq $cleantoolStaged) { $missingTools += "TOOLS\XHCICLN\ (the optional cleanup tool of section 4)" }
     if ($null -eq $marktoolStaged) { $missingTools += "TOOLS\XHCIMARK\ (the Thunderbolt safe-removal mark service of section 4)" }
     if ($null -eq $insttoolStaged) { $missingTools += "INSTALL.BAT and TOOLS\XHCIINST\ (the install tool of section 4)" }
@@ -6828,208 +6674,11 @@ provenance record is docs\contributing\legal-provenance.md, section 2a.
         Write-Ok "NOTICE.TXT written beside XHCIQUAL.EXE (DOS/32A + Open Watcom runtime)"
     }
 
-    # --- the snapshot reader's own readme ------------------------------------
-    #
-    # Written for the person who has a problem, not for a maintainer. What it
-    # must get across is the one thing that is not obvious: **the channel is off
-    # by default**, so a dump taken without step 1 comes back correct and empty,
-    # and that is not a fault.
-    if ($null -ne $snaptoolStaged) {
-        $snapReadme = @'
-==============================================================================
- XHCISNAP - getting a report out of the xhci98 driver
-==============================================================================
-
-If USB is not working properly with this driver, this is what to run. It reads
-the driver's own log straight out of the running machine and writes a report
-you can attach to a bug report.
-
-It talks to the driver directly, through the controller's own device, on
-every Windows version this driver supports. Nothing else needs installing,
-and no log file is written unless you ask for one.
-
-It changes nothing about how the driver behaves on the bus, and writes no file
-it was not asked to. It does READ the controller's port registers, which is a
-hardware access - it just does not write one, and it deliberately leaves the
-"something changed here" flags it finds standing, so it takes no evidence away
-from the driver either.
-
-What step 1 DOES change is ONE of this driver's own settings - that is the
-point of it, and it is why step 2 is a restart. It prints it as it writes it,
-and SNAPOFF.BAT (XHCISNAP -disable) puts it back. Run that once you have sent
-the capture: while it is on, anyone using this machine can read the driver's
-diagnostic state.
-
-
- THE FOUR STEPS
-------------------------------------------------------------------------------
-
-Three batch files beside XHCISNAP.EXE do the typing. Double-click them, or
-run them at a prompt in this directory; on Windows Vista and 7, right-click
-each one and choose Run as administrator. Copy this directory somewhere
-writable first if it is not (a CD is not).
-
-  1.  SNAPON.BAT     XHCISNAP -on (-verbosity 2): the log channel on
-  2.  restart Windows
-  3.  make the problem happen again
-  4.  SNAPGET.BAT    XHCISNAP -report: the report and the dump
-
-SNAPGET.BAT writes its files in the directory it runs in, not in C:\, under a
-name made from the date and time, and prints the names. Attach the .DEV and
-.TXT files to the bug report. Attach the .BIN and .PSC as well only if you
-are asked for them. It leaves the channel on, so you can run it again after
-the next attempt. At a prompt, SNAPON 3 sets level 3 rather than 2 (1 to 4;
-SNAPON 0 is refused, SNAPOFF.BAT is off), and SNAPGET MYPC saves the files
-as MYPC.DEV, .TXT, .BIN and .PSC (1 to 8 letters, digits, _ or -, not
-starting with -, not a DOS device name such as CON, NUL, COM1 or LPT1, in
-this directory; a name already taken is refused, never overwritten). The
-readme.txt at the top of the download, section 6, says what each of
-SNAPGET.BAT's endings means. When you are done:
-
-  5.  SNAPOFF.BAT    XHCISNAP -disable: the channel off
-
-You never have to open REGEDIT. Step 1 does the whole of that for you, on
-every xHCI controller the machine has. Without the batch files, type the
-commands they run; XHCISNAP -o NAME writes the dump alone under a name you
-choose.
-
-
- WHY STEP 1 IS NOT OPTIONAL
-------------------------------------------------------------------------------
-
-The driver answers nothing until it is asked to, and it reads that setting
-once when it starts. So without step 1 and the restart this tool gets no
-answer at all - which is right, not broken.
-
-Level 2 is the one to use. The others exist and a maintainer may ask for one:
-
-  0   OFF. The driver does not answer this tool at all. This is the default.
-  1   answers, with counters only. The cheapest reading there is.
-  2   plus the driver's own log of what happened. USE THIS ONE.
-  3   plus the USB port register table.
-  4   plus everything, including internal addresses. Only if asked - it is
-      more than you would want to paste in public.
-
-
- WHAT THE FILES ARE
-------------------------------------------------------------------------------
-
-Each name is mDDhhmmS: the month as one character (1 to 9, then A, B, C for
-October to December), the day, the hour, the minute, and the first letter A
-to Z not yet taken, so 3141022A is 14 March at 10:22 and a second run in the
-same minute is 3141022B. Nothing is ever overwritten.
-
-  3141022A.DEV The controller as Windows sees it: its Device Manager status
-               and problem code, the resources it was given, and the versions
-               and SHA-256 hashes of xhci98.sys, xhciuas.sys, xhcihlpr.sys
-               (and xhcimsi.sys, the earlier helper, where it is still on the
-               disk), usbd.sys and usbui.dll as installed. Attach it.
-  3141022A.TXT The report. Plain text. Below level 4 it holds no internal
-               addresses - the driver refuses to record one at those levels,
-               so that is a property of the file and not a promise about it.
-               Attach it.
-  3141022A.BIN The driver's raw internal state. A maintainer can decode it
-               against the exact build you are running; nobody else can. Send
-               it as an attachment if asked.
-  3141022A.PSC The raw port register values, for the same audience.
-
-The report's header names the system it was taken on - the Windows
-version, BIOS, processor and memory - and never a serial number or a
-name. If reading those details causes a problem on your machine, type
-XHCISNAP -nosysinfo -report instead of step 4; the header then says they
-were skipped.
-
-
- IF NOTHING COMES BACK
-------------------------------------------------------------------------------
-
-  XHCISNAP -probe
-
-That checks whether the route to the driver works at all, separately from
-whether this driver answers on it. If it says the request reached a driver and
-that driver declined, the usual cause is simply that step 1 has not been
-done - or that the machine has more than one USB controller and this is not
-the right one, in which case try -c 1 and -c 2.
-
-If it cannot open the device at all, no xHCI controller is started on this
-machine, and there is nothing for this tool to read.
-
-
-------------------------------------------------------------------------------
-Part of the xhci98 {VERSION} release. See the readme.txt two directories up
-for the driver itself.
-
-This project's own code is under the GNU GPL v2 - see the LICENSE file two
-directories up. XHCISNAP.EXE is not only this project's code: the Microsoft
-Visual C++ 6.0 C runtime is statically linked into it, which is why it is one
-file that runs on a machine with nothing installed on it. That linkage is
-recorded in NOTICE.TXT beside this file.
-'@
-        $snapReadme = $snapReadme.Replace("{VERSION}", $Version)
-        Write-GeneratedText -Path (Join-Path $snaptoolStaged "readme.txt") `
-                            -Lines ($snapReadme -split "`r?`n")
-        Write-Ok "readme.txt written beside XHCISNAP.EXE"
-
-        # --- the notices the snapshot reader carries with it ------------------
-        #
-        # **XHCISNAP.EXE is a published binary that statically contains code
-        # this project did not write**, and it reached its first release
-        # (0.0.0.6) with no record of that at all - which is the qualifier's
-        # own ordering failure, one tool over and nine days later.
-        #
-        # It is a much smaller case than the qualifier's: an ordinary Win32
-        # console PE with no DOS extender and no Open Watcom code, whose only
-        # third-party content is MSVC 6.0's C runtime, bound in because
-        # xhcisnap\build.cmd does not pass /MD. `link -dump -imports` on the
-        # published EXE names KERNEL32.dll and ADVAPI32.dll and no C runtime
-        # DLL, which is how that is re-derivable by someone who has neither the
-        # compiler nor this comment.
-        #
-        # **Nothing of that licence is quoted here, because nothing of it has
-        # been read.** The qualifier's NOTICE.TXT reproduces the DOS/32A text
-        # because that licence's own clause 2 asks for it; no equivalent clause
-        # has been established here, and inventing a reproduction would be a
-        # verdict rather than a fact. What this file records is the linkage.
-        # See AGENTS.md, "Third-Party Material and Provenance", and
-        # docs\contributing\legal-provenance.md section 2a.
-        $snapNotice = @'
-==============================================================================
-                          x h c i 9 8   {VERSION}
-                    THIRD-PARTY NOTICES FOR XHCISNAP.EXE
-==============================================================================
-
-XHCISNAP.EXE is built from this project's own C source, which is under the GNU
-GPL v2 - see the LICENSE file two directories up.
-
-It is not only this project's code. It is compiled with Microsoft Visual C++
-6.0 and linked against that compiler's STATIC C runtime - the build passes no
-/MD - so those runtime modules are bound into this executable rather than
-loaded from a DLL when it runs. That is deliberate: it is what makes the
-tool a single file that works on a Windows 98 SE machine with nothing
-installed on it, which is the machine it exists for. You can see it for
-yourself in the import table, which names only KERNEL32.dll and ADVAPI32.dll
-and no C runtime DLL.
-
-Those runtime modules are Microsoft's. They are not covered by the GPL grant
-above, and they keep whatever terms accompany Visual C++ 6.0. What this file
-records is the linkage; the project's full provenance record is
-docs\contributing\legal-provenance.md, section 2a. Nothing in this file is a
-statement that the arrangement is or is not sufficient.
-
-No DOS extender and no Open Watcom code is in this executable; the NOTICE.TXT
-beside XHCIQUAL.EXE covers a different program and does not apply here.
-'@
-        $snapNotice = $snapNotice.Replace("{VERSION}", $Version)
-        Write-GeneratedText -Path (Join-Path $snaptoolStaged "NOTICE.TXT") `
-                            -Lines ($snapNotice -split "`r?`n")
-        Write-Ok "NOTICE.TXT written beside XHCISNAP.EXE (static MSVC 6.0 C runtime)"
-    }
-
     # --- the cleanup tool's readme and notices (task 38.8) --------------------
     #
     # The readme is xhcicln\README.TXT, tracked beside the source, with the
     # release's footer; NOTICE.TXT records the two statically linked runtimes
-    # as XHCISNAP's records its one, for the same reason and on the same terms
+    # as XHCISNAP's recorded its one, for the same reason and on the same terms
     # (legal-provenance.md section 2a).
     if ($null -ne $cleantoolStaged) {
         $cleanReadme = @([System.IO.File]::ReadAllText((Join-Path $CleanToolDir "README.TXT")) -split "`r?`n")
@@ -7509,9 +7158,6 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     if ($null -eq $qualtoolStaged) {
         Write-Warn "no tools\xhciqual\ in this release (-SkipQualtool) - it is incomplete."
-    }
-    if ($null -eq $snaptoolStaged) {
-        Write-Warn "no tools\xhcisnap\ in this release (-SkipSnapTool) - it publishes a read channel nobody can open."
     }
     if ($null -eq $cleantoolStaged) {
         Write-Warn "no tools\xhcicln\ in this release (-SkipCleanTool) - nothing needs it, but the readme's update section names it."

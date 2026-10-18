@@ -853,3 +853,86 @@ a version that differs, the helper rows U24, U23, UAS, Thunderbolt, an
 older Stor98's update and two bundled Stor98 versions, the uninstall
 after an update, and XP's and ME's updates. No real hardware ran the
 window.
+
+## 42-A.4 and 42-A.16: XHCISNAP retired into XHCITR; the Safely Remove stop investigated (2026-10-19)
+
+Branch `p42-tr` from `2a89ba74`: `99c5fc3a` (the code), `955525c1`,
+`3ed6761d` and `ccd9e028` (Codex rounds 1 to 3), `afc2b317` (the gated
+build's fix: `hcd_pnp.c` and `hcd_rh.c` include `xhci_hw.h`). Codex
+reviewed it over five rounds: 2 P1, 3 P2 and 1 P3, then 4 P2, then 1 P2,
+then nothing, then nothing on the build fix.
+
+- 42-A.4, as record 25 section 15 has it. Round 1's P1s were real: the
+  configuration manager's `LOG_CONF` and `RES_DES` handles are pointer
+  sized, which `XHCISNAP` (x86 alone) never met and `XHCITR64` does; and
+  the report's level-4 withholding must read the dump's own header line,
+  not a tail of the file. Read on the x64 build host after the fix:
+  `XHCITR64 /snapshot` decodes allocated memory ranges and MSI interrupts.
+  `test-package.ps1`: 1114 checks pass; host suites pass; `snaptest.cmd`
+  33 cases pass.
+- 42-A.16, read in QEMU on 98 SE with the released `3.0.0.0` (folder
+  `E:\xhci98-vm\p42-tr\a16`): XHCITR's Safely Remove of a Bulk-Only stick
+  stopped that stick alone, at SuperSpeed and at High Speed, on a root
+  port and behind a hub; a second stick kept reading, the tablet kept
+  moving, and the stick came back when plugged again. The confirmation
+  listed the stick's own three devnodes. `XHCIINST /eject` of `3.0.0.0`
+  offers only Thunderbolt units, so it could not be compared. Not
+  reproduced; no cause found. The level-2 log held no record of the stop,
+  so `xhci98.sys` now writes `pnp.pdo`, `pnp.rh` and `pnp.hc` for every
+  stop, query-remove, remove, cancel and surprise removal its device PDOs,
+  root hub PDO and controller receive: the owner's Save Report on the
+  ThinkPad P14s Gen 1 under 98 SE says which devices the PnP manager
+  stopped. Still to read there: a UAS stick, the internal devices on the
+  same root ports, the stick model. The task stays open.
+- The gated build at `afc2b317` (`build-driver.cmd all` and `all
+  -amd64`, every gate): BUILD + GATES PASSED on both.
+- Then 3.1.0.0 (`b3b7f5e0`) merged in (`88fcc7e0`) and 42-A.5's tool
+  part added (`5d3ec2dd`, Codex round 6's three P2s fixed in `31952bdd`,
+  round 7 clean): per Thunderbolt unit on NT "Safe-removal mark: listed by
+  Windows" / "mark written; takes effect at the next start of the device"
+  / "mark written, but Windows does not list it" / "not marked", the NHI's
+  "Mark service" line, and `XhciCmEjectConfirm` after the tool's own
+  successful eject when it runs as an administrator, bound to the entry
+  serial read before the call. `cm_live.h` names no PREPARING state yet,
+  so none is shown. The gated build at `31952bdd`: BUILD + GATES PASSED on
+  x86 and amd64; `test-package.ps1` 1146 checks.
+- Legs at `31952bdd` on an x86 TEST cut (`-TestLabel "p42-tr legs"`;
+  evidence `E:\xhci98-vm\p42-tr\legs\`):
+  - The package has no `tools\xhcisnap\` (98 SE): pass.
+  - 98 SE: `XHCITR /snapshot S1` redirected wrote `.DEV`, `.TXT`, `.BIN`,
+    `.PSC`, the `.TXT` with the slots and root port enumeration; exit 0;
+    `/dump -verbosity 2` and `/snaptest -on 2` refused; `/dump /o C:\D1`;
+    `/snapshot`, `/probe` and `/snapshot /?` as message boxes;
+    `/report` carries the Snapshot part: pass. The window's Save Snapshot
+    and Save Report on 98 SE: owed.
+  - 98 SE, 42-A.16's regression (the owner's case): stick 1 stopped from
+    the window, stick 2 kept reading, the tablet kept working, stick 1
+    read again after the re-plug; the report holds `pnp.pdo=00030104` and
+    `pnp.pdo=00030204` (port 3, query-remove then remove) and no
+    `pnp.rh` or `pnp.hc`: pass.
+  - 7 x86: `/snapshot` from an elevated and a normal prompt, File > Save
+    Snapshot..., `/report` with both controllers' dumps: pass.
+  - 7 x86, 42-A.16: the stick stopped (Code 47), the other stick and the
+    tablet kept working, the report holds the same two `pnp.pdo` records
+    and nothing else: pass.
+  - 7 x86 with the emulator's Thunderbolt layout, the mark service
+    registered by hand (`XHCIMARK -register`): "Mark service: running
+    (xhcimark)" and, after `net stop`, "stopped": pass. The NVMe unit
+    (Code 28 on 7 x86, no NVMe driver) read "Safe-removal mark: not
+    marked." while the service's log said "mark written" at 07:21:48 and
+    "mark removed ... (no longer behind an active member)" one second
+    later, the unit still behind an active tunnel port: a finding for
+    42-A.5's service (`xhcimark`), not for XHCITR, which showed the state
+    as it was. The disable and enable reading and the elevated Safely
+    Remove with the confirmation: owed.
+  - Owed besides: every x64 leg (the x64 package needs the owner's signing
+    key), the 98 SE window's Save Snapshot and Save Report, and the A.16
+    reading on the P14s Gen 1.
+  - Found, not changed (for a later round): `/snapshot`'s and Save
+    Snapshot's message boxes run past the bottom of a 640x480 or 800x600
+    screen (Enter closes them); `/snapshot /?` names `XHCISNAP` as the
+    default `/o` base (the engine's default, now misleading); on 7 `start
+    /wait XHCITR ... > FILE` loses the output (cmd's start, not the tool).
+  - On 98 SE the test cut's XHCIINST left the installed `xhci98.sys` in
+    place (the same version string, 3.0.0.0, judged current); the leg
+    copied the new driver over it by hand.

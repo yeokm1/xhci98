@@ -3133,3 +3133,128 @@ int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
     }
     return 1;
 }
+
+/* ======================================================================== */
+/* 42-A.5: the safe-removal mark, shown                                     */
+/* ======================================================================== */
+
+int tr_msz_has(const char *msz, size_t bytes, const char *name)
+{
+    size_t i = 0;
+
+    while (i < bytes && msz[i] != '\0') {
+        size_t n = 0;
+        while (i + n < bytes && msz[i + n] != '\0') {
+            n++;
+        }
+        if (n == strlen(name)) {
+            size_t k;
+            for (k = 0; k < n; k++) {
+                char a = msz[i + k];
+                char b = name[k];
+                if (a >= 'a' && a <= 'z') {
+                    a = (char)(a - 'a' + 'A');
+                }
+                if (b >= 'a' && b <= 'z') {
+                    b = (char)(b - 'a' + 'A');
+                }
+                if (a != b) {
+                    break;
+                }
+            }
+            if (k == n) {
+                return 1;
+            }
+        }
+        i += n + 1;
+    }
+    return 0;
+}
+
+INST_U32 tr_mark_member(INST_U32 bus, INST_U32 address)
+{
+    return ((bus & 0xFFUL) << 8) | (((address >> 16) & 0x1FUL) << 3) |
+           (address & 0x7UL);
+}
+
+int tr_mark_find(const MK_MARKS *m, INST_U32 member, INST_U32 bus,
+                 INST_U32 address, int pending)
+{
+    INST_U32 i;
+    int found = -1;
+
+    if (m == NULL) {
+        return -1;
+    }
+    for (i = 0; i < m->Count && i < MK_MAX_ENTRIES; i++) {
+        const MK_ENTRY *e = &m->E[i];
+        if (e->Member != member || e->Bus != bus || e->Address != address ||
+            (e->Flags & (MK_EF_REPORTED | MK_EF_LOCATED)) !=
+                (MK_EF_REPORTED | MK_EF_LOCATED) ||
+            (pending && e->Pending == 0)) {
+            continue;
+        }
+        if (found >= 0) {
+            return -1;
+        }
+        found = (int)i;
+    }
+    return found;
+}
+
+int tr_mark_state(int answered, const MK_MARKS *m, int entry,
+                  int filterPresent)
+{
+    const MK_ENTRY *e;
+
+    if (answered == 0) {
+        return TR_MK_OLD;
+    }
+    if (answered < 0 || m == NULL) {
+        return TR_MK_FAILED;
+    }
+    e = (entry >= 0 && (INST_U32)entry < m->Count) ? &m->E[entry] : NULL;
+    if (e != NULL && (e->Flags & MK_EF_REMOVABLE)) {
+        return TR_MK_LISTED;
+    }
+    if (filterPresent) {
+        return (e != NULL && (e->Flags & (MK_EF_BUS_ATT | MK_EF_ADD_ATT)))
+                   ? TR_MK_NOTLISTED
+                   : TR_MK_WRITTEN;
+    }
+    return TR_MK_NOT;
+}
+
+const char *tr_mark_text(int state)
+{
+    switch (state) {
+    case TR_MK_OLD:
+        return "not read: this xhcicm.sys does not answer for it";
+    case TR_MK_FAILED:
+        return "not read: the Thunderbolt driver did not answer";
+    case TR_MK_LISTED:
+        return "listed by Windows";
+    case TR_MK_WRITTEN:
+        return "mark written; takes effect at the next start of the device";
+    case TR_MK_NOTLISTED:
+        return "mark written, but Windows does not list it";
+    default:
+        return "not marked";
+    }
+}
+
+const char *tr_mksvc_text(int state)
+{
+    switch (state) {
+    case TR_SV_ABSENT:
+        return "not installed";
+    case TR_SV_STOPPED:
+        return "stopped";
+    case TR_SV_RUNNING:
+        return "running";
+    case TR_SV_OTHER:
+        return "starting or stopping";
+    default:
+        return "not read";
+    }
+}

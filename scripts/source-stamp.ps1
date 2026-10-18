@@ -4,7 +4,7 @@ Record, or check, which driver sources a built xhci98.sys came from.
 
 .DESCRIPTION
 **WHY THIS IS NOT A TIMESTAMP COMPARISON.** `make-release.ps1` already refuses
-a staged XHCIQUAL or XHCISNAP older than its own sources, and until the
+a staged XHCIQUAL (as it did XHCISNAP) older than its own sources, and until the
 audit of 2026-09-07 there was no equivalent for the driver: the only tie
 between `src\` and the binary in `src\objfre` was the file version against the
 INF's, which cannot see a code edit that does not bump the version. So a
