@@ -40,7 +40,8 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * text-mode Setup (HcdCtlForceBulkOnly); the INFs' 0 keeps UAS.
  * XhciFastPollFsLs (33.8) is read at start: absent is 0, every interval by
  * Table 6-12. Since 34.1 the INFs write both, and the two below; the first
- * at 0, not at its absent value, since 37.2. */
+ * at 0, not at its absent value, since 37.2. Since 3.1.0.0 (task 42-A.17)
+ * each is read from the machine-wide key first (hcdReadDword). */
 #define HCD_VALUE_LOG_VERBOSITY L"XhciLogVerbosity"
 #define HCD_VALUE_LOG_DEBUGVIEW L"XhciLogDebugView"
 #define HCD_VALUE_IMOD          L"XhciImodInterval250ns"
@@ -154,75 +155,132 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 /* Registry                                                               */
 /* --------------------------------------------------------------------- */
 
+/* The machine-wide key every value is read from first (task 42-A.17,
+ * xhci_regsrc.h), relative to RTL_REGISTRY_SERVICES: on every target
+ * HKLM\System\CurrentControlSet\Services\USB, where the SilentClasses list
+ * already lives (HCD_SILENT_LIST, read the same way on 98 SE and ME). */
+#define HCD_MACHINE_KEY         L"USB"
+
+/* What hcdTakeDword saw of one value in one key. */
+typedef struct _HCD_REG_TAKE {
+    ULONG Seen;                 /* called with a value of any type        */
+    ULONG Taken;                /* a REG_DWORD of four bytes, in Value     */
+    ULONG Value;
+} HCD_REG_TAKE, *PHCD_REG_TAKE;
+
 /*
- * The query routine for hcdReadDword: a value is taken only when it is a
+ * The query routine for hcdQueryDword: a value is taken only when it is a
  * REG_DWORD of four bytes. RTL_QUERY_REGISTRY_DIRECT would instead write a
  * value of another type in that type's own form - a REG_SZ as a
  * UNICODE_STRING - over the four-byte destination (task 26-A.2), and the
  * flag that makes DIRECT check the type is
- * newer than both primary targets. IRQL: PASSIVE_LEVEL.
+ * newer than both primary targets. Seen is set for a value of any type, a
+ * stored REG_NONE with data included (XhciRegCallSeen), so the caller
+ * tells "there, of another type" from "not there" without relying on the
+ * status each target's RtlQueryRegistryValues returns for the two (task
+ * 42-A.17). IRQL: PASSIVE_LEVEL.
  */
 static NTSTATUS NTAPI hcdTakeDword(PWSTR ValueName, ULONG ValueType,
                                    PVOID ValueData, ULONG ValueLength,
                                    PVOID Context, PVOID EntryContext)
 {
-    PULONG out;
+    PHCD_REG_TAKE take;
     PUCHAR from;
 
     UNREFERENCED_PARAMETER(ValueName);
     UNREFERENCED_PARAMETER(Context);
 
+    take = (PHCD_REG_TAKE)EntryContext;
+    if (!XhciRegCallSeen(ValueType, ValueLength)) {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+    take->Seen = 1;
     if (ValueType != REG_DWORD || ValueLength != sizeof(ULONG) ||
         ValueData == NULL) {
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
-    out = (PULONG)EntryContext;
     from = (PUCHAR)ValueData;
-    *out = (ULONG)from[0] | ((ULONG)from[1] << 8) | ((ULONG)from[2] << 16) |
-           ((ULONG)from[3] << 24);
+    take->Value = (ULONG)from[0] | ((ULONG)from[1] << 8) |
+                  ((ULONG)from[2] << 16) | ((ULONG)from[3] << 24);
+    take->Taken = 1;
     return STATUS_SUCCESS;
 }
 
-/*
- * One REG_DWORD from the controller's driver (software) key, the key the
- * miniport's values lived in. Returns the NTSTATUS - a value of the wrong
- * type is a failure, and the caller's default stands; *value is untouched on
- * failure. IRQL: PASSIVE_LEVEL.
- */
-static NTSTATUS hcdReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
+/* One value from one key: `relativeTo` and `path` as RtlQueryRegistryValues
+ * takes them. The reading is XhciRegState's, from what hcdTakeDword saw;
+ * the query's own status is not consulted. IRQL: PASSIVE_LEVEL. */
+static ULONG hcdQueryDword(ULONG relativeTo, PWSTR path, PCWSTR name,
+                           PULONG value)
 {
     RTL_QUERY_REGISTRY_TABLE table[2];
-    HANDLE key;
-    ULONG found;
-    NTSTATUS status;
+    HCD_REG_TAKE take;
     PUCHAR p;
     ULONG i;
-
-    status = IoOpenDeviceRegistryKey(hc->Pdo, PLUGPLAY_REGKEY_DRIVER, KEY_READ,
-                                     &key);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
 
     p = (PUCHAR)table;
     for (i = 0; i < sizeof(table); i++) {
         p[i] = 0;
     }
-    found = 0;
+    take.Seen = 0;
+    take.Taken = 0;
+    take.Value = 0;
     table[0].QueryRoutine = hcdTakeDword;
     /* NOEXPAND: a value mistakenly stored as REG_EXPAND_SZ is not expanded
      * before hcdTakeDword refuses its type (task 26-A.2). */
     table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
     table[0].Name = (PWSTR)name;
-    table[0].EntryContext = &found;
+    table[0].EntryContext = &take;
 
-    status = RtlQueryRegistryValues(RTL_REGISTRY_HANDLE, (PWSTR)key, table,
-                                    NULL, NULL);
-    ZwClose(key);
-    if (NT_SUCCESS(status)) {
-        *value = found;
+    (VOID)RtlQueryRegistryValues(relativeTo, path, table, NULL, NULL);
+    if (take.Taken) {
+        *value = take.Value;
     }
-    return status;
+    return XhciRegState(take.Seen, take.Taken);
+}
+
+/*
+ * One REG_DWORD of the controller's: from the machine-wide key when it is
+ * there in any type, else from the controller's driver (software) key, the
+ * key the miniport's values lived in (task 42-A.17, xhci_regsrc.h).
+ * Returns STATUS_SUCCESS with *value set for a REG_DWORD,
+ * STATUS_OBJECT_TYPE_MISMATCH for a value of another type in the key that
+ * stands, STATUS_OBJECT_NAME_NOT_FOUND for none - the caller's default
+ * stands for both failures; *value is untouched on failure. A value taken
+ * machine-wide is counted in RegMachineWon. IRQL: PASSIVE_LEVEL.
+ */
+static NTSTATUS hcdReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
+{
+    HANDLE key;
+    ULONG machine;
+    ULONG device;
+    ULONG mValue;
+    ULONG dValue;
+    ULONG state;
+
+    mValue = 0;
+    dValue = 0;
+    device = XHCI_REG_ABSENT;
+    machine = hcdQueryDword(RTL_REGISTRY_SERVICES, (PWSTR)HCD_MACHINE_KEY,
+                            name, &mValue);
+    if (machine == XHCI_REG_ABSENT &&
+        NT_SUCCESS(IoOpenDeviceRegistryKey(hc->Pdo, PLUGPLAY_REGKEY_DRIVER,
+                                           KEY_READ, &key))) {
+        device = hcdQueryDword(RTL_REGISTRY_HANDLE, (PWSTR)key, name,
+                               &dValue);
+        ZwClose(key);
+    }
+    state = XhciRegPickedState(machine, device);
+    if (state == XHCI_REG_ABSENT) {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+    if (XhciRegPick(machine, device) == XHCI_REG_FROM_MACHINE) {
+        hc->RegMachineWon++;
+    }
+    if (state != XHCI_REG_TAKEN) {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    *value = (machine == XHCI_REG_TAKEN) ? mValue : dValue;
+    return STATUS_SUCCESS;
 }
 
 /* The same read for hcd_msi86.c's mode cache, from AddDevice and the
@@ -2717,6 +2775,10 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     /* Task 38.10: every quirk at its default and unread, before the
      * delivery reads XhciMsiAvoid (hcd_quirk.c). */
     HcdQuirkStartBegin(hc);
+    /* Task 42-A.17: the start's values taken from the machine-wide key,
+     * counted from the delivery's first read to the note after the
+     * quirks and the route below. */
+    hc->RegMachineWon = 0;
     /* The power fallback's marker describes the controller this start
      * rebuilds, so it is reset with it (task 26-A.2). */
     hc->SuspendedInD0 = 0;
@@ -2915,6 +2977,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     HcdQuirkStart(hc);
     /* Task 36.3: the route repaired before the first interrupt is enabled. */
     hcdPirqStart(hc);
+    XhciLogNote(ext, "reg.machine", hc->RegMachineWon);
     /* Before the thread runs, so no backstop pass reads it mid-write. */
     hc->TolStartGen++;
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);

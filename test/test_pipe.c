@@ -2153,96 +2153,125 @@ static void test_fast_poll(void)
     CHECK_EQ(XhciPipeFastRetry(0), 0, "no code does not");
 }
 
-/* Mode 4 (task 36.19; design record 13 section 13.7): the codes 128, 129
- * and 130 are Interval 2, 1 and 0 for an interrupt endpoint, Full and Low
- * Speed on a root port, High Speed and SuperSpeed anywhere; the fallback is
- * 3. */
+/* Mode 4 (task 36.19; the encoding of task 42-A.18, design record 13
+ * section 13.7): a code 128 to 143 of an interrupt endpoint is Interval
+ * code - 128 at Low, Full and High Speed, SuperSpeed and SuperSpeedPlus, on
+ * a root port and behind a hub, unless Table 6-12 already gives that
+ * Interval; the fallback is 3. 127 and 144 are not codes. */
+static ULONG code_ep(ULONG speed, ULONG b, PXHCI_PIPE_EP ep)
+{
+    UCHAR c[64];
+
+    if (speed == XHCI_PIPE_SPEED_SUPER || speed == XHCI_PIPE_SPEED_SUPER_PLUS) {
+        ss_config(c, 3, 8, b, 0, 0, 0, 1, 0);
+        return XhciPipeEndpointParamsAt(c, 64, 18, speed, 0, ep);
+    }
+    return ep_params(0x81, 3, 8, b, speed, ep);
+}
+
 static void test_fast_codes(void)
 {
-    static const ULONG speeds[4] = {
+    static const ULONG speeds[5] = {
         XHCI_PIPE_SPEED_LOW, XHCI_PIPE_SPEED_FULL, XHCI_PIPE_SPEED_HIGH,
-        XHCI_PIPE_SPEED_SUPER
+        XHCI_PIPE_SPEED_SUPER, XHCI_PIPE_SPEED_SUPER_PLUS
     };
-    UCHAR c[64];
+    static const ULONG routes[3] = { 0, 0x1, 0x21 };
     XHCI_PIPE_EP ep;
     ULONG applied;
     ULONG s;
+    ULONG r;
     ULONG b;
     ULONG spec;
+    ULONG fsls;
+    ULONG opened;
 
-    for (s = 0; s < 4; s++) {
-        for (b = 128; b <= 130; b++) {
-            if (speeds[s] == XHCI_PIPE_SPEED_SUPER) {
-                ss_config(c, 3, 8, b, 0, 0, 0, 1, 0);
-                CHECK_EQ(XhciPipeEndpointParamsAt(c, 64, 18, speeds[s], 0,
-                                                  &ep), XHCI_PIPE_OK,
-                         "SS interrupt with a code parses");
-            } else {
-                CHECK_EQ(ep_params(0x81, 3, 8, b, speeds[s], &ep),
-                         XHCI_PIPE_OK, "a code parses");
+    opened = 0;
+    for (s = 0; s < 5; s++) {
+        fsls = (speeds[s] == XHCI_PIPE_SPEED_LOW ||
+                speeds[s] == XHCI_PIPE_SPEED_FULL);
+        for (r = 0; r < 3; r++) {
+            for (b = 128; b <= 143; b++) {
+                CHECK_EQ(code_ep(speeds[s], b, &ep), XHCI_PIPE_OK,
+                         "a code parses");
+                spec = ep.Interval;
+                CHECK_EQ(spec, fsls ? 10UL : 15UL,
+                         "Table 6-12's reading of a code");
+                applied = XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, speeds[s],
+                                           routes[r], &ep);
+                CHECK_EQ(ep.Interval, b - 128, "Interval = code - 128");
+                CHECK_EQ(ep.BInterval, b, "the client is told its own byte");
+                CHECK_EQ(ep.SpecInterval, spec,
+                         "SpecInterval stays Table 6-12's");
+                if (b - 128 == spec) {
+                    CHECK_EQ(applied, 0, "Table 6-12's own Interval: no change");
+                    CHECK_EQ(ep.FastPoll, 0, "and not fast");
+                    CHECK_EQ(ep.FallbackInterval, spec, "fallback untouched");
+                    CHECK_EQ(XhciPipeFastRevert(&ep), 0, "nothing to revert");
+                    continue;
+                }
+                opened++;
+                CHECK_EQ(applied, 1, "a code applies, any route");
+                CHECK_EQ(ep.FastPoll, 1, "fast");
+                CHECK_EQ(ep.FallbackInterval, 3, "the fallback is 3");
+                CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, speeds[s],
+                                          routes[r], &ep), 0,
+                         "no double application");
+                CHECK_EQ(ep.Interval, b - 128, "unchanged by the second");
+                CHECK_EQ(XhciPipeFastRevert(&ep), 1, "reverted");
+                CHECK_EQ(ep.Interval, 3, "the revert lands at 3");
+                CHECK_EQ(ep.FastPoll, 0, "and is not fast");
+                CHECK_EQ(XhciPipeFastRevert(&ep), 0, "once");
             }
+            /* The boundaries: 127 and 144 are read by Table 6-12. */
+            CHECK_EQ(code_ep(speeds[s], 127, &ep), XHCI_PIPE_OK, "127");
             spec = ep.Interval;
-            CHECK_EQ(spec, (speeds[s] == XHCI_PIPE_SPEED_LOW ||
-                            speeds[s] == XHCI_PIPE_SPEED_FULL) ? 10UL : 15UL,
-                     "Table 6-12's reading of a code");
-            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, speeds[s], 0,
-                                      &ep), 1, "a code applies at a root port");
-            CHECK_EQ(ep.Interval, 130 - b, "128/129/130 -> 2/1/0");
-            CHECK_EQ(ep.SpecInterval, spec, "SpecInterval stays Table 6-12's");
-            CHECK_EQ(ep.FallbackInterval, 3, "the fallback is 3");
-            CHECK_EQ(ep.BInterval, b, "the client is told its own byte");
-            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, speeds[s], 0,
-                                      &ep), 0, "no double application");
-            CHECK_EQ(ep.Interval, 130 - b, "unchanged by the second");
-            CHECK_EQ(XhciPipeFastRevert(&ep), 1, "reverted");
-            CHECK_EQ(ep.Interval, 3, "the revert lands at 3");
-            CHECK_EQ(ep.FastPoll, 0, "and is not fast");
-            CHECK_EQ(XhciPipeFastRevert(&ep), 0, "once");
-
-            /* Behind a hub: FS and LS untouched, HS and SS applied. */
-            if (speeds[s] == XHCI_PIPE_SPEED_SUPER) {
-                XhciPipeEndpointParamsAt(c, 64, 18, speeds[s], 0, &ep);
-            } else {
-                ep_params(0x81, 3, 8, b, speeds[s], &ep);
-            }
-            applied = XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, speeds[s], 0x21,
-                                       &ep);
-            if (speeds[s] == XHCI_PIPE_SPEED_LOW ||
-                speeds[s] == XHCI_PIPE_SPEED_FULL) {
-                CHECK_EQ(applied, 0, "FS/LS behind a hub untouched");
-                CHECK_EQ(ep.Interval, 10, "keeps Table 6-12's");
-            } else {
-                CHECK_EQ(applied, 1, "HS/SS behind a hub applied");
-                CHECK_EQ(ep.Interval, 130 - b, "the code's Interval");
-            }
-
-            /* Modes 2 and 3 do not honour the codes. */
-            ep_params(0x81, 3, 8, b, XHCI_PIPE_SPEED_FULL, &ep);
-            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_4K8K,
-                                      XHCI_PIPE_SPEED_FULL, 0, &ep), 0,
-                     "mode 3 ignores a code");
-            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_2K4K,
-                                      XHCI_PIPE_SPEED_FULL, 0, &ep), 0,
-                     "mode 2 ignores a code");
-            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_OFF,
-                                      XHCI_PIPE_SPEED_FULL, 0, &ep), 0,
-                     "off ignores a code");
-            CHECK_EQ(ep.Interval, 10, "128 ms as the byte legally means");
+            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, speeds[s],
+                                      routes[r], &ep), 0, "127 not a code");
+            CHECK_EQ(ep.Interval, spec, "127 keeps Table 6-12's");
+            CHECK_EQ(spec, fsls ? 9UL : 15UL, "127's Table 6-12 reading");
+            CHECK_EQ(code_ep(speeds[s], 144, &ep), XHCI_PIPE_OK, "144");
+            spec = ep.Interval;
+            CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, speeds[s],
+                                      routes[r], &ep), 0, "144 not a code");
+            CHECK_EQ(ep.Interval, spec, "144 keeps Table 6-12's");
+            CHECK_EQ(spec, fsls ? 10UL : 15UL, "144's Table 6-12 reading");
         }
     }
-    ss_config(c, 3, 8, 130, 0, 0, 0, 1, 0);
-    XhciPipeEndpointParamsAt(c, 64, 18, XHCI_PIPE_SPEED_SUPER_PLUS, 0, &ep);
-    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES,
-                              XHCI_PIPE_SPEED_SUPER_PLUS, 0x1, &ep), 1,
-             "SuperSpeedPlus behind a hub");
-    CHECK_EQ(ep.Interval, 0, "8000 Hz");
+    /* Five speeds, three routes, sixteen codes, less the one code a speed's
+     * Table 6-12 reading already gives (138 below High Speed, 143 above). */
+    CHECK_EQ(opened, 5UL * 3UL * 15UL, "every other code applied");
 
-    /* Not codes. */
-    for (b = 0; b <= 255; b++) {
-        if (b >= 128 && b <= 130) {
-            continue;
-        }
-        if (b == 0) {
+    /* The new scheme reverses 36.19's: 128 is 8000 Hz, 130 is 2000 Hz. */
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL, 0, 3,
+                           128, &applied), 0, "128 -> Interval 0, 8000 Hz");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL, 0, 3,
+                           130, &applied), 2, "130 -> Interval 2, 2000 Hz");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_LOW, 0x1, 3,
+                           131, &applied), 3, "131 behind a hub -> 1 ms");
+    CHECK_EQ(applied, 1, "applied behind a hub");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_HIGH, 0, 3,
+                           143, &applied), 15, "143 -> 4.096 s");
+    CHECK_EQ(applied, 0, "143 at High Speed is Table 6-12's own clamp");
+    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL, 0, 3,
+                           143, &applied), 15,
+             "143 at Full Speed -> 15, outside 3-10");
+    CHECK_EQ(applied, 1, "applied");
+
+    /* Modes 2 and 3, and off, do not honour the codes. */
+    for (b = 128; b <= 143; b++) {
+        ep_params(0x81, 3, 8, b, XHCI_PIPE_SPEED_FULL, &ep);
+        CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_4K8K, XHCI_PIPE_SPEED_FULL,
+                                  0, &ep), 0, "mode 3 ignores a code");
+        CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_2K4K, XHCI_PIPE_SPEED_FULL,
+                                  0, &ep), 0, "mode 2 ignores a code");
+        CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_OFF, XHCI_PIPE_SPEED_FULL,
+                                  0, &ep), 0, "off ignores a code");
+        CHECK_EQ(ep.Interval, 10, "128 to 143 ms as the byte legally means");
+    }
+
+    /* Not codes, at Full Speed on a root port. */
+    for (b = 1; b <= 255; b++) {
+        if (b >= 128 && b <= 143) {
             continue;
         }
         ep_params(0x81, 3, 8, b, XHCI_PIPE_SPEED_FULL, &ep);
@@ -2251,20 +2280,13 @@ static void test_fast_codes(void)
                                   0, &ep), 0, "not a code");
         CHECK_EQ(ep.Interval, spec, "Table 6-12 unchanged");
     }
-    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL, 0, 3,
-                           127, &applied), 9, "127 untouched: 9");
-    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL, 0, 3,
-                           131, &applied), 10, "131 untouched");
-    CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_FULL, 0, 3,
-                           255, &applied), 10, "255 untouched");
-    CHECK_EQ(applied, 0, "not applied");
     CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_LOW, 0, 3,
                            16, &applied), 7, "mode 4 does not map 16-63");
     CHECK_EQ(fast_interval(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_LOW, 0, 3,
                            32, &applied), 8, "nor 32");
     CHECK_EQ(applied, 0, "not applied");
 
-    /* Isochronous and bulk untouched. */
+    /* Isochronous and bulk untouched, and an unknown speed. */
     ep_params(0x81, 1, 8, 128, XHCI_PIPE_SPEED_HIGH, &ep);
     CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_HIGH, 0,
                               &ep), 0, "HS isochronous untouched");
@@ -2275,6 +2297,10 @@ static void test_fast_codes(void)
     CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_HIGH, 0,
                               &ep), 0, "HS bulk untouched");
     CHECK_EQ(ep.Interval, 0, "bulk keeps 0");
+    ep_params(0x81, 3, 8, 128, XHCI_PIPE_SPEED_FULL, &ep);
+    CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, 9, 0, &ep), 0,
+             "an unknown speed untouched");
+    CHECK_EQ(ep.Interval, 10, "and keeps Table 6-12's");
 
     /* Modes 2 and 3 keep reverting to the Interval they replaced. */
     ep_params(0x81, 3, 8, 16, XHCI_PIPE_SPEED_LOW, &ep);
@@ -2395,7 +2421,7 @@ static void test_rebase(void)
     CHECK_EQ(ep.Interval, 15, "Table 6-12's reading of it");
     CHECK_EQ(XhciPipeFastPoll(XHCI_PIPE_FAST_CODES, XHCI_PIPE_SPEED_SUPER,
                               0x1, &ep), 1, "mode 4 applies");
-    CHECK_EQ(ep.Interval, 1, "4000 Hz");
+    CHECK_EQ(ep.Interval, 1, "129 -> Interval 1, 250 us");
     CHECK_EQ(ep.MaxEsitPayload, 2048, "the payload still the companion's");
     XhciPipeFastRevert(&ep);
     CHECK_EQ(ep.Interval, 3, "the fallback 3");

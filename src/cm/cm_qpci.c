@@ -4,8 +4,11 @@
  * project.
  *
  * WHAT IS READ. The NHI, each member of the domain's tunnel-port set, and,
- * where the caller allows it (Windows 2000 and later), the functions below
- * each member: the member's secondary bus, then the secondary bus of each
+ * where the caller allows it (Windows 2000 and later; on Windows 98 SE and
+ * ME the CONFIGMG worker, task 42-A.14), the functions below each member,
+ * through the caller's below-reader where it gives one, entering a bus
+ * only where the caller's admission allows it: the member's secondary
+ * bus, then the secondary bus of each
  * bridge found there whose bus numbers lie inside the member's own range,
  * each bus once, at most CM_QP_MAX_BUSES buses a member, CM_QP_MAX_DEPTH
  * bridges deep and CM_QP_MAX_BELOW functions in all. A bound reached sets
@@ -66,6 +69,8 @@ typedef struct _CM_QP_WALK {
     ULONG Flags;
     ULONG Reads;
     ULONG Fails;
+    CM_QP_READ Read;        /* the reader in use: In's, or its BelowRead  */
+    PVOID Context;
 } CM_QP_WALK;
 
 /* A new entry's head, its configuration space zero; NULL when the answer
@@ -104,7 +109,7 @@ static ULONG cmQpFill256(CM_QP_WALK *w, UCHAR *e, ULONG bdf)
     cfg = e + CM_QP_EHDR_BYTES;
     w->Reads++;
     valid = 0;
-    rc = w->In->Read(w->In->Context, bdf, cfg, CM_QP_CFG_BYTES, &valid);
+    rc = w->Read(w->Context, bdf, cfg, CM_QP_CFG_BYTES, &valid);
     if (valid > CM_QP_CFG_BYTES) {
         valid = CM_QP_CFG_BYTES;
     }
@@ -146,7 +151,7 @@ static ULONG cmQpPresent(CM_QP_WALK *w, ULONG bdf, PULONG failed)
     *failed = 0;
     w->Reads++;
     valid = 0;
-    rc = w->In->Read(w->In->Context, bdf, id, 4, &valid);
+    rc = w->Read(w->Context, bdf, id, 4, &valid);
     if (rc == CM_QP_RD_ABSENT) {
         return 0;
     }
@@ -187,6 +192,10 @@ static VOID cmQpBelow(CM_QP_WALK *w, ULONG port, const UCHAR *pcfg)
     /* A member with no bus numbers (0, or not above its own bus) has
      * nothing below it the walk could reach. */
     if (sec == 0 || sec <= ((port >> 8) & 0xFFUL) || sub < sec) {
+        return;
+    }
+    if (w->In->Admit != NULL &&
+        !w->In->Admit(w->In->AdmitContext, port, cmQpGet(pcfg, 0x18UL))) {
         return;
     }
     for (i = 0; i < 8; i++) {
@@ -250,6 +259,13 @@ static VOID cmQpBelow(CM_QP_WALK *w, ULONG port, const UCHAR *pcfg)
                     w->Flags |= CM_QP_F_TRUNCATED;
                     continue;
                 }
+                /* A bus nobody this walk trusts assigned is not entered
+                 * (the caller's rule; its function stays listed). */
+                if (w->In->Admit != NULL &&
+                    !w->In->Admit(w->In->AdmitContext, bdf,
+                                  cmQpGet(cfg, 0x18UL))) {
+                    continue;
+                }
                 visited[csec >> 5] |= 1UL << (csec & 31UL);
                 qBus[qTail] = csec;
                 qParent[qTail] = bdf;
@@ -282,6 +298,8 @@ ULONG CmQpciBuild(UCHAR *buf, ULONG room, const CM_QPCI_IN *in)
     w.Flags = in->Flags & CM_QP_F_STOPPING;
     w.Reads = 0;
     w.Fails = 0;
+    w.Read = in->Read;
+    w.Context = in->Context;
     ports = in->PortCount;
     if (ports > CM_QP_MAX_PORTS) {
         ports = CM_QP_MAX_PORTS;
@@ -308,9 +326,10 @@ ULONG CmQpciBuild(UCHAR *buf, ULONG room, const CM_QPCI_IN *in)
             cmQpFill256(&w, e, in->Ports[p].Bdf) != CM_QP_S_READ) {
             continue;
         }
-        if (!in->ReadBelow) {
+        if (!in->ReadBelow || (in->Held & (1UL << p)) != 0) {
             e = cmQpEntry(&w, CM_Q_UNKNOWN, CM_QP_R_BELOW, in->Ports[p].Bdf,
-                          CM_Q_UNKNOWN, 0, 0);
+                          CM_Q_UNKNOWN, 0,
+                          in->ReadBelow ? CM_QP_NR_HELD : in->Reason);
             if (e != NULL) {
                 cmQpPut(e, CM_QP_E_STATE, CM_QP_S_NOT_READ_OS);
             }
@@ -319,7 +338,15 @@ ULONG CmQpciBuild(UCHAR *buf, ULONG room, const CM_QPCI_IN *in)
         cfg = e + CM_QP_EHDR_BYTES;
         if (cmQpHasBuses(e) &&
             (cfg[CM_QP_CFG_HEADER] & CM_QP_HDR_LAYOUT) == CM_QP_LAYOUT_BRIDGE) {
+            /* The port itself was read with In's reader; below it, the
+             * caller's below-reader. */
+            if (in->BelowRead != NULL) {
+                w.Read = in->BelowRead;
+                w.Context = in->BelowContext;
+            }
             cmQpBelow(&w, in->Ports[p].Bdf, cfg);
+            w.Read = in->Read;
+            w.Context = in->Context;
         }
     }
 

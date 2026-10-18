@@ -25,6 +25,10 @@
 #define CM_ROLE_NONE    0   /* no id list to decide by: take no role */
 #define CM_ROLE_NHI     1
 #define CM_ROLE_FILTER  2
+/* Since task 42-A.5 (record 21 section 7.4, revision 3) AddDevice decides
+ * by CmRoleDecide, not by the class alone: the LowerFilters child is a
+ * third role, and CmClassifyIds' Role is only what the class says. */
+#define CM_ROLE_CHILD   3
 
 /*
  * What a PDO's hardware ids say. Vendor and Device are the 16-bit PCI ids
@@ -44,6 +48,22 @@ typedef struct _CM_IDS {
  * DevicePropertyHardwareID) into *out, and return its Role.
  */
 ULONG CmClassifyIds(const WCHAR *ids, ULONG chars, PCM_IDS out);
+
+/*
+ * AddDevice's role (record 21 section 7.4, revision 3, decision M15), from
+ * the classified ids and whether their vendor and device are one of
+ * xhcicmf.inf's bridge models (`filterListed`, cm_ports.c's
+ * CmPortsFilterId): CM_ROLE_NHI for an id of the NHI table or the USB4 host
+ * class xhcicm.inf also binds (CmProfileFor not UNKNOWN: xhcicm.inf's
+ * matching contract and nothing wider, so a device carrying a stale mark is
+ * never driven as an NHI; an unlisted Intel NHI bound by hand for
+ * XhciCmMode 2 is a passive child since 42-A.5); CM_ROLE_FILTER
+ * for a bridge (class 0604) whose id the filter INF names; CM_ROLE_CHILD
+ * for every other PDO, an unreadable id list included - which is a device
+ * this driver was named a lower filter of, and whose AddDevice must never
+ * fail for want of a role (decision M7).
+ */
+ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed);
 
 /*
  * The NHI profiles (record 21 section 1.4, and the coverage plan of the
@@ -216,6 +236,17 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  */
 #define CM_BRIDGE_NUMBERING_DEFAULT 1UL
 
+/*
+ * XhciCmNoIrqStart, REG_DWORD, Windows 98 SE and ME only (design record 28
+ * section 7, task 42-A.15): 1 starts an NVMe function below a tunnel port
+ * whose interrupt cannot be routed with no interrupt, for a bound Stor98
+ * that polls (record 28 section 4); 0 leaves such a function at its
+ * problem code. Read where XhciCmBridgeNumbering is read; no INF writes
+ * it, absent reads as the default, any other value is refused and the
+ * default stands. Ignored on the NT targets.
+ */
+#define CM_NOIRQ_START_DEFAULT 1UL
+
 typedef struct _CM_VALUES {
     ULONG Value[CM_VAL_COUNT];  /* what the driver runs with                */
     ULONG Raw[CM_VAL_COUNT];    /* what the registry gave, when Found       */
@@ -229,6 +260,10 @@ typedef struct _CM_VALUES {
     ULONG BridgeNumberingFound; /* read as a REG_DWORD                      */
     ULONG BridgeNumberingRaw;   /* ... what it read                         */
     ULONG BridgeNumberingRefused; /* ... out of range: the default stood   */
+    ULONG NoIrqStart;           /* XhciCmNoIrqStart as run with             */
+    ULONG NoIrqStartFound;
+    ULONG NoIrqStartRaw;
+    ULONG NoIrqStartRefused;
 } CM_VALUES, *PCM_VALUES;
 
 /* Every value at its default, nothing found. */
@@ -254,6 +289,9 @@ VOID CmValuesTakeBridge(PCM_VALUES v, const WCHAR *text, ULONG chars);
  * found; 0 and 1 are taken, any other value is refused (the default
  * stands, the refusal recorded). */
 VOID CmValuesTakeBridgeNumbering(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmNoIrqStart, under XhciCmBridgeNumbering's rule. */
+VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* The default and bounds of value `index`, for the INF gate's cross-check
  * and the host suite. Returns 0 for an index out of range. */

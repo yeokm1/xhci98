@@ -96,6 +96,16 @@
 
 #define XHCI_TBT_BRNUM_MAX_LINES    32UL    /* interrupt lines journalled  */
 
+/* XHCI_TBT_BRNUM.IrqFnOut: each function the line stage met with an
+ * Interrupt Pin (design record 28 section 4 rule 5, task 42-A.15). */
+#define XHCI_TBT_BRFN_WRITTEN       1UL /* the port's line written, held  */
+#define XHCI_TBT_BRFN_ALREADY       2UL /* a line already set, left       */
+#define XHCI_TBT_BRFN_OTHER         3UL /* its pin arrives on another of
+                                           the port's pins: unroutable   */
+#define XHCI_TBT_BRFN_NOT_HELD      4UL /* a write not held, or past the
+                                           journal's room                 */
+#define XHCI_TBT_BRFN_NOT_READ      5UL /* its 3Ch read failed            */
+
 /* Flags. */
 #define XHCI_TBT_BRNUM_F_WINDOWS    0x1UL   /* also give the chain windows   */
 #define XHCI_TBT_BRNUM_F_WAIT_EMPTY 0x4UL   /* a bridge just numbered with
@@ -161,6 +171,11 @@ typedef struct _XHCI_TBT_BRNUM {
     ULONG IrqFailed;        /* ... whose write did not hold (or past the
                                journal's room)                            */
     ULONG IrqJournal;       /* lines written, for the undo                */
+    ULONG IrqFnCount;       /* functions with a pin met, each one's
+                               outcome (XHCI_TBT_BRFN_*); 0 after an
+                               undo of the lines                         */
+    ULONG IrqFnBdf[XHCI_TBT_BRNUM_MAX_LINES];
+    ULONG IrqFnOut[XHCI_TBT_BRNUM_MAX_LINES];
     ULONG IrqBdf[XHCI_TBT_BRNUM_MAX_LINES];  /* each function written     */
     ULONG IrqWas[XHCI_TBT_BRNUM_MAX_LINES];  /* its 3Ch as read           */
     ULONG Was[XHCI_TBT_BRNUM_MAX_BRIDGES];   /* its 18h dword as read     */

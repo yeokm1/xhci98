@@ -612,12 +612,27 @@ header type and bus numbers its walk needs.
   8 bridges deep, 4 ports; a bound reached sets `CM_QP_F_TRUNCATED`, so
   the largest answer is 64 + 37 x 288 = 10,720 bytes and the tool's first
   buffer (16 KiB) holds it. A port with no bus numbers has nothing below.
-- **Windows 98 SE and ME**: the NHI and the tunnel ports are read; the
-  functions below are not (one entry a port, "not read on this system").
-  A bus a tunnel brings up after boot is not numbered by `PCI.VXD` (record
-  21 section 6.1), and the route that reads below a port with a guard
-  is branch `tb-code29`'s `PCI.VXD` `_PCI_Read_Config`, not yet on this
-  line; once it is, this request moves to it.
+- **Windows 98 SE and ME** (roadmap-usb4 task 42-A.14, 2026-10-19): the
+  NHI and the tunnel ports are read as above; the walk below them is
+  handed to the 98 CONFIGMG worker (`cm_cfgwk.c`, `CmCfgwkPciAsk`) and
+  waited for 3 s at most. The worker reads below each member through
+  `PCI.VXD`'s guarded `_PCI_Read_Config` (`CmCfgmgPciRead` behind
+  `CmCfgmgPciOpen`, record 21 section 6.1.1), between its other
+  operations and never alongside a numbering, and enters a bridge's bus
+  only where `PCI.VXD` reads that bridge with the same bus numbers itself
+  (the HAL, which on 98 SE answers only functions `PCI.VXD` knows) or
+  where its own numbering gave them; a member whose controller was lost
+  (`CONTROLLER_UNAVAILABLE`'s removal or no-scan re-enumeration owed) is
+  not read below. The query device reaches the worker through a pointer
+  the thread publishes and withdraws before it stops the worker, under a
+  rundown count that covers the posting alone; the request is a block of
+  its own that the asker and the worker share, freed by whichever lets go
+  last, so a worker inside a blocked CONFIGMG call answers late or never
+  and touches nothing of the device. Where the walk is not made, each
+  member keeps one `CM_QP_S_NOT_READ_OS` entry with its reason in
+  `CM_QP_E_INFO` (`CM_QP_NR_*`: no worker, the worker busy, `PCI.VXD`'s
+  guard refused, the controller lost; 0 from a driver before it), and
+  the tool says which.
 - **No kernel address.** The answer holds configuration space and the
   driver's own counts. The BARs and bridge windows are bus addresses,
   shown by the owner's request; they are the ranges Device Manager's

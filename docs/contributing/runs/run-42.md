@@ -345,6 +345,514 @@ as a fresh plug, reading its DROM at the connect; the adopted case is the
 fake fabric's (`test_u4cm.c`, `test_tbt3_adopted`). Windows 2000 was not
 run for these tasks.
 
+## 42-A.20: Stor98 consolidated into `src/stor98` (2026-10-19)
+
+Branch `p42-stor98`, from `3.1.0.0` at `94d30a7c`, with `3.1.0.0` merged
+in for the task's roadmap row. Owner decisions of 2026-10-19: the source
+is Stor98's branch `audit-2026-10-18` at `4253b58`; one snapshot commit
+and no history; this repository's commit rule (no trailer) applies to
+`src/stor98`; Stor98 still builds as its own files.
+
+- **The snapshot** (`b6f53b1b`): 312 files, every blob and mode equal to
+  `git ls-tree -r 4253b58` of the Stor98 repository; after a fresh
+  checkout under this host's `core.autocrlf true` the files are byte for
+  byte what `git archive 4253b58` of that repository gives. Under
+  `core.autocrlf false` ten files (its `LICENSE`, its `sources` files and
+  `.rc`, and the same in its `third_party` copy) would have been checked
+  out CRLF by this repository's name-only rules; `src/stor98/** !eol` in
+  the root `.gitattributes` (`4d196db7`) leaves them to Stor98's own file,
+  and every file's `text`/`eol` attributes now equal those of Stor98's own
+  checkout. Two root `.gitignore` patterns hid tracked Stor98 files
+  (`*.cmd`: its four build scripts; `*.log`: ten gate logs under its
+  `docs/gates/`) and are negated for `src/stor98`.
+- **Build** (`4d196db7`): Stor98's scripts find the kits under
+  `STOR98_TOOLS`, by default its own `tools\` or else the one two levels
+  up; `SCSI.H` and `SRB.H` were copied into this repository's
+  `tools\w98ddk\inc\` (SHA-256 `809d57e6...39b7` and `4b3c3305...8396`).
+  `src\stor98\scripts\build.cmd all free`, the same with
+  `STOR98_DBGPORT=1`, `tests\unit\build.cmd` (11 executables, all
+  passed), `tests\cm9x\build.cmd` and `tests\cmnt\build.cmd` all succeed
+  here. Python is not a build dependency.
+- **The header gate** (`ecffe0da`): `scripts\check-stor98-header.ps1`
+  in `build-driver.cmd`. The two copies differed on `3.1.0.0` (Stor98's
+  contract text of 2026-10-18 was on branch `stor98-audit-g` only), so
+  that branch's header commit `96fa2d6c` was taken as `ffc98acd`, the
+  same blob.
+- **Packaging** (`ecffe0da`): `-Stor98Dir` defaults to
+  `src\stor98\releases\<version>`; the `0.4.0.0` folder's
+  `SHA256SUMS.txt` hashes to `ef7a2302...96b7`, the pin `3.0.0.0`
+  bundled (`releases/3.0.0.0/readme.txt`), and `test-package.ps1`
+  bundles it from there.
+- **Review**: reviewed and revised (`4da44d52`), then clean.
+- **Gated build** at `4da44d52`: `build-driver.cmd all` and
+  `all -amd64` passed every gate, the records clean (`dirty=0`), and the
+  Stor98 builds and unit tests passed again at the same commit.
+
+## 42-A.17 and 42-A.18: the machine-wide registry key, and value 4's codes (2026-10-18 and 19)
+
+Written on branch `p42-reg` from `3.1.0.0` at `2a89ba74` (`7f25ca3c`, the
+implementation; `2a3e7e9c`, `33e98bc3` and `2b9a2ae2`, its revisions),
+reviewed and revised until the review converged. The owner's decisions
+are the decisions table's two
+rows of 2026-10-18.
+
+- 42-A.17: every `Xhci*` value of `xhci98.sys` (`hcd_ctl.c`
+  `hcdReadDword`, which every read goes through) and every `XhciCm*`
+  value of `xhcicm.sys` (`cm_reg.c` `cmQuery`) is read first from
+  `HKLM\System\CurrentControlSet\Services\USB` and, when it is not there
+  in any type, from the driver key; the decision is the new pure
+  `xhci_regsrc.c` (host suite `test_regsrc`), compiled into both drivers.
+  "There" is the query routine having been called with a value (a
+  zero-length `REG_NONE` excepted), not a status code. A `reg.machine`
+  log note counts the start's values taken machine-wide. The INFs are
+  unchanged. The six helpers write the machine-wide value, create the key,
+  leave the per-controller values alone and show both; XHCITR's levels
+  block and `/report` show both and which won, and its Set writes the
+  machine-wide value where one is in force. `INSTALL /set` and
+  `INSTALL.BAT`'s questions still write the controllers' own keys; the
+  installer's machine-wide write is the installer task's (design record 26
+  section 5.4).
+- 42-A.18: `XhciFastPollFsLs` 4 programs Interval = `bInterval` - 128 for
+  an interrupt endpoint's code 128 to 143, at every speed, on a root port
+  or behind a hub, replacing task 36.19's codes with no compatibility; a
+  code whose Interval is Table 6-12's own is left unmarked; the fallback
+  stays Interval 3; the interval caps still run after it (design record 13
+  section 13.7).
+
+Built after the review converged: `scripts\build-driver.cmd all` and
+`all -amd64` at `2b9a2ae2`, every gate passing, the host suites (with
+`test_regsrc`, `test_fast_codes`, `test_cap_codes` and the XHCITR level
+vectors) passing.
+
+### The legs (development host A, QEMU, the `debug` flavour at `2b9a2ae2`)
+
+Each guest had two `qemu-xhci` controllers, a `usb-tablet` on controller
+1's root port 2 (High Speed), a `usb-mouse` behind a `usb-hub` on its port
+1 (Full Speed behind a hub) and a `usb-mouse` on controller 2's root port
+1. The values were set with a leg aid that writes one DWORD machine-wide
+or on one controller's driver key and lists both (not shipped), and with
+the package's own helpers; each reading is the `XHCITR /report` of the
+next start, searched for `fastpoll.*`, `reg.machine`, `silent.gate` and
+the levels block, and screenshotted. The `qemu` flavour could not be
+used: `XHCIINST` refuses a `qemu` build in the `debug-x86` directory, as
+it should. Installed with `INSTALL /debug /yes` from a package made of
+`3.0.0.0`'s `INSTALL.BAT` and `XHCIINST`, this branch's helpers and
+XHCITR, and the staged `debug` x86 drivers.
+
+| Target | Reading | Result |
+|---|---|---|
+| 98 SE | Absent: no machine-wide value | PASS: `fastpoll.value 0`, `reg.machine 0`; the levels block "Machine-wide ... not set". One controller recorded nothing: its own `XhciLogVerbosity` was the `0` an older INF had written |
+| 98 SE | Machine-wide `XhciFastPollFsLs 3` and `XhciLogVerbosity 3`; controller 2's own `XhciFastPollFsLs 2`, controller 1's own `0` | PASS: both controllers `fastpoll.value 3`, `reg.machine 2`; both now log, the machine-wide level overriding the `0`; XHCITR "3 - adds port status (machine-wide)" for each and "its own value, 0 / 2, is not in force" |
+| 98 SE | `silent-on.bat`, `portsw-on.bat` | PASS: each wrote the machine-wide value, read it back and showed both controllers' own `0` as "NOT IN FORCE"; `portsw.vbs show` before it read the missing value as "no machine-wide value is set" (WSH's not-found error matched on 98 SE). At the next start both controllers `silent.gate.value 1`, `silent.gate 1` |
+| 98 SE | Machine-wide `XhciFastPollFsLs` deleted | PASS: controller 1 `fastpoll.value 0`, controller 2 `2`, each its own; `reg.machine 2` (the log value and the silent switch) |
+| 2000 SP4 | Absent | PASS: `fastpoll.value 0`, `reg.machine 0`, "not set"; `Services\USB` did not exist (`regedit /e` of it wrote no file) |
+| 2000 SP4 | `portsw-on.bat` | PASS: the key created, holding `XhciIntelPortSwitch` dword 1 (`regedit /e`); both controllers' own `0` shown "NOT IN FORCE" |
+| 2000 SP4 | Machine-wide `3` over controller 2's own `2` | PASS: both `fastpoll.value 3`, `reg.machine 2`, XHCITR's "not in force" lines for `0` and `2` |
+| 2000 SP4 | Machine-wide deleted | PASS: `0` and `2`, `reg.machine 1` |
+| 7 SP1 x86 | Absent; `portsw-on.bat`; machine-wide `3` over controller 2's own `2`; deleted | PASS: `0`/`0` and `reg.machine 0`; the helper wrote and showed as on 2000 (`reg query` of the key: `XhciIntelPortSwitch 0x1`); `3`/`3` and `reg.machine 1`; `0`/`2` and `reg.machine 0`. Whether the key existed before the helper ran on 7 was not read |
+
+42-A.18 on 98 SE, hidusbf (the 98/ME `hidusbf.sys` of 2026-10-03)
+on every QEMU HID device as design record 13 section 13.6 step 1 puts it
+by hand, `XhciFastPollFsLs` 4 machine-wide; the programmed Interval is the
+`fastpoll.open` record's last byte (slot, DCI, Table 6-12's Interval, the
+one programmed):
+
+| Code | Tablet, High Speed, root port | Mouse, Full Speed, behind the hub | Mouse, controller 2 root port | Result |
+|---|---|---|---|---|
+| 135 | `02030F07` | `03030A07` | `01030F07` | PASS: Interval 7 (16 ms) everywhere; Full Speed behind a hub applied, as task 42-A.18 asks |
+| 128 | `02030F00` | `03030A00` | `01030F00` | PASS: Interval 0 (125 us); no `fastpoll.fallback`; the tablet's pointer followed |
+| 143 | no record | `03030A0F` | no record | PASS: at High Speed 143 is Table 6-12's own clamp, left unmarked; Full Speed Interval 15 |
+| 144 | no record | no record | no record | PASS: not a code |
+
+What these legs do not show: QEMU accepts any Interval (design record 13
+section 13.4), so no refusal and no fallback was exercised, and nothing
+says how a real controller or a transaction translator schedules
+Interval 0 to 2 or 11 to 15 below High Speed; the 7 guest's hidusbf
+reading of 36.19 was not repeated; the A.17 legs read `XhciFastPollFsLs`,
+`XhciLogVerbosity` and `XhciSilentInstall` as the driver takes them, and
+the port switch only as the helpers write and show it (QEMU's controller
+is not Intel, so the driver never reads that value); no `XhciCm*` value
+was read on a guest with a Thunderbolt or USB4 controller; XHCITR's Set
+under a machine-wide value was not run; `silent-off.bat` and
+`portsw-off.bat` were not run. Owed to 42-V.2 as its text says, with
+these taken.
+
+## 42-A.5: the safe-removal mark across a stack rebuild (2026-10-19)
+
+The code of 42-0.4 (design record 21 section 7.4, revision 3), on branch
+`p42-ejrb` from `3.1.0.0` at `2a89ba74`: the driver half in `src\cm\`
+(the roles by id tables, the `AddDevice` child, the attachment list and the
+per-domain marks table `cm_marks.c`, `IOCTL_XHCICM_MARKS`, the departures
+held pending and the eject posted only on `XhciCmEjectConfirm`), and the
+mark service `xhcimark\` (`XHCIMARK.EXE`, `XHCIMK64.EXE`) with its pure
+half, self-test and import check, staged by `make-release.ps1` into
+`tools\xhcimark\`. The installer's hooks for the service (its install,
+start, update and removal, and the marks removed at the uninstall and
+after a failed upgrade) are task 42-A.3's code, not this branch's; record
+21 section 7.4's "The installer" paragraph is their specification.
+
+Reviewed and revised until the review converged. Among the changes the
+review brought: the reconciliation judges a record by its
+owning domain and never reads a failed lookup or an unreadable location as
+an absence; the restart's fresh reads re-check the NHI, both answers, the
+member and the unit's actual parent; the marks table keeps each member's
+sets apart; the confirmation's writers share the tools' eject mutex.
+
+### The legs (42-V.2, the 42-A.5 part)
+
+In QEMU guests on development host A, the emulator and recipe of
+"Bridges behind the tunnel port on NT" (`runs/run-41.md`): the
+`tb3-alpine-ridge` host with the SHPC tunnel bridge `tb0` and a chained
+upstream port (`1B21:2421`) and bridge behind it, an NVMe at 01:01.0 and
+another behind the chain. Each guest took the published `3.0.0.0`
+package's `INSTALL /yes /thunderbolt /notray /nopause`, then this
+branch's qemu-flavour `xhcicm.sys` copied over the installed one and the
+service registered by hand (`XHCIMARK -register` from `system32`),
+because the installer's hooks come with 42-A.3. Disables, enables and the
+driver update were made by a test helper of the guest's own
+(`SetupDiCallClassInstaller(DIF_PROPERTYCHANGE)`,
+`UpdateDriverForPlugAndPlayDevices` with `machine.inf`, forced); "listed"
+is `XHCIINST /devices` printing "removable: yes ... listed in Safely Remove
+Hardware" for the unit.
+
+- **Windows 2000 SP4** (one processor, no ACPI). The first build of the
+  driver bugchecked at the next boot (0x7F, a double fault, read with the
+  emulator's debugger: the kernel stack overflowed): a filter's capability
+  handler asked `IoGetDeviceProperty` for its own address, which the PnP
+  manager answers with an `IRP_MN_QUERY_CAPABILITIES` down the same stack.
+  Fixed in the same session (the capability answer's own address; no
+  location read while the object is itself asking). With the fix: the
+  first plug of a never-seen unit listed, the upstream port and the NVMe
+  marked within a second of the plug (`3.0.0.0` left this unit unlisted,
+  the recipe's step 4); a disable (the mark kept while disabled, problem
+  22) and an enable, listed; a forced driver update, listed; an unplug,
+  both marks removed within a poll (2000's Unsafe Removal dialog as
+  before); the service stopped, the unit unplugged, the service started:
+  both marks removed at its start. Pass.
+- **Windows XP SP3** (ACPI, two processors). The first plug of a
+  never-seen unit: the marks written within a second; Windows' driver
+  installation of the upstream port then deleted the port's own
+  `LowerFilters` value, the service wrote it again, held its restart while
+  the NVMe's Found New Hardware wizard was open ("an installation is
+  pending"), and once it was cancelled restarted the port
+  (`DIF_PROPERTYCHANGE`), which came back listed. A disable and an enable,
+  listed. A forced driver update deleted the value again; the first build
+  of the service had spent its one restart on the first plug and left the
+  unit unlisted, so a unit seen listed after its restart now re-arms it
+  (record 21 section 7.4, "As built"); read again from a fresh install: the
+  update's install deleted the value, the service wrote it, restarted the
+  port, listed. An unplug, both marks removed within a poll; the
+  stopped-service departure caught up at the service's start. Pass.
+- **Windows 7 SP1, 32-bit** (two processors, from an elevated prompt).
+  The first plug of a never-seen unit listed (7 kept the first plug in
+  `3.0.0.0` too); the driver installation deleted the upstream port's new
+  value within two seconds and the service wrote it again, so the later
+  rebuilds kept it. A disable (the mark kept while disabled) and an enable,
+  listed; a forced driver update (the value deleted by the install and
+  written again), listed; an unplug, both marks removed within a poll; a
+  departure while the service was stopped caught up at its start. Pass.
+- **Windows XP Professional x64 SP2** (the amd64 build; XP x64 enforces
+  no kernel-mode signature, so this branch's unsigned build loads). The
+  same readings as 32-bit XP: the first plug's marks written, the port's
+  value deleted by its install and written again, the gated restart held
+  while a wizard was open and then made, listed; a disable and an enable,
+  listed; a forced driver update, the value deleted and written again, the
+  re-armed restart made, listed; an unplug, both marks removed within a
+  poll; a departure while the service was stopped caught up at its start.
+  Pass.
+
+**Owed** (42-V.2's 42-A.5 part, written down here rather than read):
+
+- **Vista (both architectures) and 7 x64**: not read in this run. The x64
+  binaries of a cut are test-signed by the packager only, with the owner's
+  key and password, which this run does not have, so an unsigned
+  `xhcicm.sys` loads on those systems only from an F8 boot with signature
+  enforcement disabled; Vista x86 needs no signature and was not reached
+  for time.
+- **The value gone after the uninstall**, and every leg of the installer's
+  part (its install, update, stop and removal of the service, step 0, the
+  failed upgrade, the hand-deleted service's Code 39 repaired): they need
+  42-A.3's hooks, which are not on this branch.
+- The legs of record 21 section 7.4's list that need more than this run
+  did: the restart vetoed by an open file (no volume behind the chain: the
+  emulator's NVMe has no driver on these guests), an eject and its
+  confirmation (an applet stop on XP and later confirmed by the service, on
+  2000 by `XHCIINST /eject`'s own write, which is 42-A.3's code), the USB4
+  profile's legs (a driver update and a disable held under the USB4
+  connection manager with the tunnel kept, a delayed confirmation across a
+  connection change), more than 32 departures in a minute, the crash
+  between the write and the record, Driver Verifier on the 2000 SMP guest
+  with the `AddDevice` child, `XhciCmSafeEject` 0 with a value in place,
+  a restart of Windows with the unit present, and the dock's upstream port
+  as a unit whose id the filter INF names. Every guest here ran the
+  firmware connection manager's emulated Alpine Ridge host.
+
+## 42-A.12: the per-member, non-blocking Stor98 waits and the 9x call workers (2026-10-19)
+
+Code on branch `p42-nvw` (from `3.1.0.0` at `db921f49`): `44eaf47c`, then
+`4a31f545` and `bddf936d`; reviewed and revised until the review
+converged at `bddf936d` (its third round returned nothing). Built at
+`bddf936d` with every gate, `scripts\build-driver.cmd all` and
+`all -amd64`: both pass; the host suites pass (`test_cm_nvlink` 391
+checks, `test_cm_call` 175).
+
+What changed:
+
+- The acknowledgement before a removal is no longer a hold of the
+  connection-manager thread (`CmNvlinkAwait` is gone). Each entry marked
+  `DOWN_QUIESCED` keeps a pending wait with its mark's time, stepped by
+  `CmNvlinkStep` on every pass and after every piece of every sleep of the
+  core and the seam (the host sleep is taken in pieces of at most 50 ms
+  while a wait is pending), the deadline read before the answer. A
+  member's gate (`CmNvlinkHeld`) is raised by its own waits alone: the
+  seam holds that member's exposure and re-enumeration, its baseline ask,
+  its owed re-enumeration and its NT resume release (`CM_REENUM_PORT.Held`,
+  the pure `CmNvlinkHoldReenum` and `CmNvlinkHoldRun`) and runs them from
+  the first pass that finds the gate down; a held re-enumeration waits
+  for the transport after a host-interface loss, a held release does not.
+  The thread passes at most 50 ms apart while a wait is pending (R10).
+- The 9x per-member call workers of record 21 section 7.2 part 0: the
+  R6f handoff word (`cm_call.c`, pure) and one system thread per member
+  with its own CONFIGMG route (`cm_callwk.c`), started beside the CONFIGMG
+  worker, stopped without waiting; an operation of kind
+  `CM_CALL_K_DETACH` still runs after the stop, and every outcome the
+  thread did not take (a result, or a withdrawal) goes to the operation's
+  late taker on the worker. In this branch the only operation run on them
+  is each worker's own route opening; record 28's machine (task 42-A.15)
+  and the removal and statement transactions attach to `CmCallwkSubmit`
+  and `CmCallwkTake`. Moving `cm_cfgwk.c`'s operations onto them is owed
+  (that file was being edited on another branch).
+- `stor98cm.h` R8b (as Stor98 revised it on 2026-10-18): the retirement
+  before an exposure withdraws a statement without advancing the
+  generation, so a re-plug after a statement costs one increment, the new
+  `UP`'s, not two. Keeping the retirement's increment for the next `UP` to
+  reuse was rejected: Stor98's 9x late lookup takes a generation read not
+  `UP` as its floor and binds only an `UP` above it.
+
+The legs, on the reviewed code: the `usb4-emu` QEMU of `bin-2a893ea`
+(SHA-256 checked), i440FX, `usb4-host profile=usb4-generic` at `00:04`
+with tunnel bridges `tb0` at `00:05` (port 1) and `tb1` at `00:06` (port
+2), NVMe enclosures `enc0` and `enc1` over the FAT image of
+`vm\u4-asm\base`, the display on VNC; the gated `qemu` `xhcicm.sys` of
+`bddf936d` (SHA-256 `a83f7f9a7b25ec65...`) copied over the installed one.
+
+**Windows 2000** (the one NT target the statement is qualified on): the
+signed `3.0.0.0` asset installed in the guest (`XHCIINST /dir release-x86
+/defaults /yes /thunderbolt`), Stor98 `0.4.0.0` from its release through
+the Found New Hardware wizard for each drive, then the new `xhcicm.sys`.
+Both enclosures hot-plugged: one `UP` each (`cm.nvlink.up=01000101`,
+`01000201`), F: and G: mounted, `TESTDATA.BIN` on both compared clean
+(`fc /b` against a copy taken first), a file written to F: and compared.
+`enc0` unplugged: the statement made (`cm.nvlink.down=00000001`), the
+member's re-enumeration held behind its gate (`cm.nvlink.up.held=00000028`,
+`cm.reenum.held=00000028`), the acknowledgement 110 ms after the mark
+(`cm.nvlink.await.end=00000100`, `cm.nvlink.await=0000006E`), then the
+held work run (`cm.reenum.held.run=03040028`) and the entry retired. Later
+`enc0` and `enc1` unplugged one second apart: each member held behind its
+own statement and released by its own acknowledgement (`...0028` at 110
+ms, `...0030` at 50 ms), and `enc1` plugged again published its `UP`
+with nothing held. Port 2's next statement read generation 2
+(`cm.nvlink.down=00010002`) after one re-plug that followed a statement,
+where the double increment gave 3. F: and G: compared clean after every
+re-plug. Pass, with one gap: both acknowledgements came within one Stor98
+poll, so no leg had a long wait on one port while the other worked; an
+attempt to make one (the port-1 controller disabled in Device Manager)
+ended in the safe-eject teardown of that port instead, as disabling a
+tunnelled function does under the USB4 profile. A held member left
+unacknowledged for its 5 s while the other plugs and unplugs is the host
+vectors' (`test_cm_nvlink.c`, `test_hold`, `test_pending`); on a guest it
+needs a Stor98 whose acknowledgement is stretched (42-V.6's harness).
+
+**Windows 98 SE** (the `t26` gold image with the `3.0.0.0` asset and
+Stor98 `0.4.0.0`, its `XhciCmMode` put back to 1): the call workers at
+the start (`cm.callwk.started=00000202`, both made) and each opening its
+own route (`cm.callwk.open=0080040B`, `0180040B`: opened, version 040B).
+Both enclosures hot-plugged, F: and G: mounted, compared clean and
+written; `enc0` unplugged (the statement withheld, as 98 SE makes none:
+`09000001`) and plugged again (one `UP`, port 1's entry alone), both
+volumes compared clean. Then the USB4 host router disabled in Device
+Manager (`cm.stop`, the workers stopped without a wait, no hang) and
+enabled again: a second start with two new workers, both routes opened,
+and F: and G: still compared clean. Pass.
+
+Owed: Windows ME and 7 were not run for this task; the long-wait
+two-port leg above; the call workers carrying a real operation (record
+28's, the removal and statement transactions) and their stop with an
+operation in flight, which come with those clients.
+## 42-A.14 and 42-A.15: PCI below a tunnel port on 9x; a 9x function with no interrupt (2026-10-19)
+
+Worker p42-9x, branch `p42-9x` from `3.1.0.0` at `2a89ba74`; code
+`f747fce3`, reviewed and revised through the branch's last commit.
+Emulator legs in QEMU (the `usb4-emu` build `bin-2a893ea`), guest 98 SE
+from `win98-gold` on i440FX, TCG, the Thunderbolt 3 layout of the
+PCI-page legs (the tunnel bridge, the Alpine Ridge host, the ASM2464
+enclosure), with the tunnel bridge at 00:1Ch, where SeaBIOS's routing
+table has no entry, so a function added below it after POST gets no route
+from `PCI.VXD`. xHCI98 and `xhcicm.sys` installed by hand from the
+package (the 3.0.0.0 console installer refused a `qemu` build in
+`release-x86`, as it should); Stor98 0.4.0.0 on the enclosure's NVMe; the
+installer record `HKLM\Software\xhci98\Stor98` `Version` = `0.4.0.0`
+imported by hand, since this branch's installer does not write it (task
+42-A.3, branch `p42-wiz`); `XhciCmLogVerbosity` 2.
+
+- **The interim (owner's coordinator, 2026-10-19).** Design record 28
+  places each call on the member's call worker of task 42-A.12, which no
+  branch has. The pure half, `cm_noirq.c`, is a state machine of
+  operations that the existing 98 worker drives at its 200 ms tick until
+  42-A.12 lands; record 28's dated note says what that costs (a blocked
+  CONFIGMG call holds the domain's other 9x work) and what changes then.
+  **Owed to 42-A.12**: driving the same machine from the thread's pass
+  through each member's R6f handoff word, the 50 ms cadence, and the
+  liveness state read by the thread itself.
+- **42-A.14, read on 98 SE.** The xHCI98 USB Tree's PCI page of the
+  Thunderbolt controller lists the functions below the tunnel port with
+  their configuration space, read by the worker through `PCI.VXD`'s
+  guarded route: the enclosure's NVMe at 01:01.0 (1B36:0010, class
+  010802, pin INTA, line 0, its 64-bit memory BAR, its PCI Express and
+  power management capabilities; "35 configuration reads, 0 refused");
+  with a bridge chain behind the port, the switch's upstream port at
+  01:03.0, its downstream port 02:00.0 and the chain's NVMe 03:00.0, after
+  `xhcicm.sys` numbered the chain (buses 02-03, the window
+  FE900000-FE9FFFFF) - "102 configuration reads, 0 refused";
+  `cm.query.pci.9x` 00010000 (walked, nothing held). ME not read.
+- **42-A.15, read on 98 SE: the basic form does not apply.** The NVMe at
+  01:01.0 (its pin swizzling off the port's pin, UNROUTABLE by the fresh
+  classification) sat at Code 29, "This device is disabled because the
+  BIOS for the device did not give it an IRQ", its Resources tab empty.
+  The worker's walk, rules and gate ran: one basic configuration at
+  `LCPRI_NORMAL` (`cm.reenum.9x.noirq.lc` 01003000), whose descriptors
+  read one memory descriptor of 40 bytes and nothing else - no IRQ, no
+  I/O, no DMA, and the every-type read met the one memory descriptor
+  (`.rd` 01012800, 0100000F, 0400000F, 0200000F, 0300000F, 00012800,
+  0000000F). The device was refused, EXCLUDED "configuration"
+  (`XhciCmNoIrqDiag` word 4 00060203, word 6 0006000F), nothing added;
+  the same after a re-plug. Record 28 section 3's hypothesis - an IRQ
+  requirement in `PCI.VXD`'s configuration that cannot be met - is
+  refuted for this case; record 28's note says so, and a redesign is owed
+  before 42-V.6. Stor98 wrote no `StorInterrupt` (it never started). An
+  earlier build of the branch (`f747fce3`) gave no diagnostic at all (a
+  refusal wrote none, fixed in review); a later one (`d8c73375`) read the
+  descriptors with `ResType_All` and refused at the same place, which
+  `2d38fc77`'s commit message took for a failed `ResType_All` read; the
+  leg above corrects that.
+- **Not read**: the chain NVMe's start (the 98 SE "PCI standard
+  PCI-to-PCI bridge" wizard for the hot-added upstream port stopped
+  advancing, so the chain's NVMe was never enumerated); the routed case;
+  ME; the pin-0 NVMe, which the emulator cannot present (QEMU's NVMe
+  hardcodes INTA; a property for it would be a request to `usb4-emu`);
+  the file write and compare (nothing started).
+- **Owed on real hardware**: 42-A.14 on the owner's P14s Gen 1 under 98
+  SE with the ORICO enclosure, the PCI page below the port; nothing at
+  hand presents 42-A.15's case (record 28 section 8.2).
+
+## 42-A.2 and 42-A.3: the legs (2026-10-19)
+
+Branch `p42-wiz`, the installer's window (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`)
+and the uninstall from Add/Remove Programs, taken over at `b869a42f`
+(Codex rounds 1 to 16, the last clean).
+
+### Builds and the cut
+
+| Build | Result |
+|---|---|
+| `build-driver.cmd all`, `b869a42f` | BUILD + GATES PASSED (debug release qemu); host tests 2080 checks, 0 failures |
+| `build-driver.cmd all -amd64`, `b869a42f` | BUILD + GATES PASSED (debug release qemu); host tests 2080 checks, 0 failures |
+| `build-driver.cmd all`, `a0bfc2b1` (the leg fix below) | BUILD + GATES PASSED (debug release qemu); host tests 2080 checks, 0 failures |
+| `build-driver.cmd all -amd64`, `a0bfc2b1` | BUILD + GATES PASSED (debug release qemu); host tests 2080 checks, 0 failures |
+
+The TEST cut: `make-release.ps1 -Flavor release -Arch x86 -TestLabel
+"bench pending, window installer" -ReleasesDir out\legrel -UploadDir
+out\legup -SkipQualtool` with Stor98 `0.4.0.0` pinned (`-Stor98Dir`
+`stor98\releases\0.4.0.0`, `SHA256SUMS.txt` `ef7a2302...96b7`, interface
+4), so `out\legup\xhci98-3.0.0.0.zip` carries Stor98 in `release-x86\`;
+the readme opens "TEST 3.0.0.0, bench pending, window installer". The
+x64 half is `make-package.ps1 -Flavor release -Arch amd64` with the same
+pins, unsigned (no `-TestSignPfx`; a cut with x64 refuses to run without
+it), added as `release-x64\` to the unpacked zip for the legs. The cut
+first stopped twice: `xhcicln\XHCICLN.EXE` and `xhcitr\XHCITR.EXE` were
+older than `xhciinst\inst_core.c`, which both compile, and the gated
+build does not rebuild either; `xhcicln\build.cmd` and
+`xhcitr\build.cmd` by hand, then the cut passed. The branch's version is
+still `3.0.0.0`, the published release's.
+
+### The guests
+
+Overlays under `E:\xhci98-vm\p42-wiz` on `vm\usb4\bin-2a893ea`, QMP
+47970 to 47975: 98 SE on `vm\t26\win98-clean.qcow2` (NUSB, no xhci98)
+for the fresh legs and on `vm\t26\win98-gold.qcow2` (an earlier xhci98
+installed) for the update; ME on `vm\t37me\winme-stock-base.qcow2`; XP
+on `vm\winxp.img`; 7 on `vm\win7.img`; 7 x64 on
+`vm\v-x64-base\w7x64-ts\disk.qcow2`; 2000 on `vm\win2k-xonly.img` and
+`vm\t26\win2k-clean.qcow2`. Each has `qemu-xhci` with a tablet and a USB
+stick on it; 98 SE, 7 and the first 2000 overlay also a QEMU NVMe
+(`nvme`, no driver in the base). The package reached 98 SE and ME on the
+transfer drive (FAT, read at the start), the NT guests on an ISO swapped
+into the CD drive over QMP. Readings: `regedit /e` of `HKLM` (98 SE, ME)
+or of `CurrentControlSet`, the Uninstall key and `Software\xhci98` (NT),
+listings of `INF`, `INF\OTHER`, the driver directories, the install
+directory and `TEMP`, and `C:\XHCIINST.LOG`, each sent over COM1 to the
+host's serial log, before the install (B0), after it, and after the
+uninstall, compared key by key and value by value.
+
+### The legs
+
+| Target | Fresh install through the window | Update over 3.0.0.0 | Uninstall from Add/Remove Programs |
+|---|---|---|---|
+| 98 SE (clean, Stor98 ticked) | pass: both wizards finished with no driver first (problem 28); the Found page listed the controller and its old moved entry; the helper installed the controller (`installed-restart`), the Windows CD's "Copy files from" answered; Stor98 installed on the NVMe (`stor98`, started) and recorded; after the cold start the root hub came by itself, Windows asked for the HID and mass-storage drivers (the Windows CD, now `G:` behind the NVMe and the stick's letters), the tablet worked, the tray tool ran at login | see the gold row | **fail on `b869a42f`, pass on `a0bfc2b1`**: the first uninstall left `INF\OTHER\YEOKHE~2.INF` (Stor98's copy) and the next start's wizard offered it for the NVMe; fixed (below) and taken again on a fresh overlay: every devnode removed through the helper, both `INF\OTHER` copies, `xhci98.sys`, `stor98.mpd`, the install directory, `Software\xhci98` and the Uninstall entry gone; at the cold start the controller and the NVMe came back as unknown devices and neither wizard found a driver |
+| 98 SE (gold: an earlier xhci98, then 3.0.0.0's console install, which ended at exit 4 with the Device Manager steps) | - | **owed**: the Found page read "update (an older release)", the helper's `DIF_INSTALLDEVICE` returned `installed` with no restart flag, but `SYSTEM32\DRIVERS\XHCI98.SYS` stayed the old 114,704-byte file while the driver key took the new INF's date; the engine's last reading compared the binary's version and said "did not end as installed" with the Device Manager steps, correctly; why SETUPX kept the old file (in use, or its version resource) is not read | not taken |
+| ME | pass: no CD prompt; after the cold start the root hub, the tablet and the stick (ME's `USBSTOR`) came with no wizard; tray tool at login | not taken | pass: `INF\OTHER`, the driver files, the install directory, `Software\xhci98` and the entry gone; at the cold start the controller's wizard found no driver |
+| 7 x86 (Stor98 ticked) | pass: two "Windows can't verify the publisher" prompts (unsigned x86), then the window's "Restart Windows now" restarted it; the tablet and the stick worked behind xhci98, the NVMe ran on `stor98` (`Software\xhci98\Stor98\Devices` and `Staged` `oem4.inf` recorded) | **owed by the version**: over 3.0.0.0 installed by its console tool the Found page read "current (this release)" for both devices (the same version), and named only `xhciuas.inf` as a different build in the driver store; with `/restage` the window replaced `oem3.inf` and staged this `xhci98.inf` as a second store copy beside 3.0.0.0's `oem2.inf`, and `xhci98.sys` stayed 3.0.0.0's after the restart | pass: services `xhci98`, `xhcihlpr`, `stor98`, the `oem` INFs, the driver files, `C:\XHCI98`, `Software\xhci98` and the entry gone, the NVMe and controller back with no driver; left: `Control\Class\{3C8E5F21-...}` (the helper's class key), `Enum\Root\LEGACY_XHCIHLPR`, `CriticalDeviceDatabase\PCI#CC_010802` (`Service` `stor98`, written by Stor98's INF) and `Services\EventLog\System\stor98`; taken again after the `/restage` update: `oem2.inf` (3.0.0.0's), `oem3.inf` and `oem4.inf` all removed, the same four keys left and nothing else |
+| XP | pass: three "has not passed Windows Logo testing" prompts and the root hub's Found New Hardware wizard (answered "No, not this time", install automatically); restart by the window | not taken (the same version as 3.0.0.0, as on 7) | pass, the same as 7 but for Stor98 (not ticked); left: the helper's class key and `Enum\Root\LEGACY_XHCIHLPR` |
+| 7 x64 (unsigned) | pass with a start that has signature enforcement off (`bcdedit /set {current} advancedoptions on` in the overlay, then "Disable Driver Signature Enforcement"): the window ran as `XHCIWZ64.EXE`, said the x64 drivers carry no signature, waited its ten minutes for devices that cannot start on an ordinary boot, and ended "not everything is done"; after the start with enforcement off the tablet worked behind xhci98 | not taken | pass: the `oem` INFs, `xhci98.sys`, the install directory and the entry gone, nothing of the package left |
+| 2000 | **owed**: on `win2k-xonly.img` (an old 1.x miniport installed) QEMU stopped at boot three times, its process using no CPU and QMP silent; on `win2k-clean.qcow2` the window ran to its Summary and QEMU stopped the same way as the install started the controller; the emulator, not the guest, so not read further | not taken | not taken |
+
+Two misses in driving the guests, for the record: on the first 98 SE
+uninstall an Enter meant for a message box landed on the Finish page
+with "Restart Windows now" selected, and that 98 SE guest warm-restarted
+(it did not hang this time); every other 98 SE and ME restart was a shut
+down and a cold start. The window's Finish page offers "Restart Windows
+now" first on 98 SE and ME after a full install or uninstall (record 26
+W5).
+
+### The bug the legs found, and its fix
+
+On 98 SE and ME the setup engine's `INF\OTHER` copy has a long name
+("Yeo Kheng Mengstor98.inf") and the driver key's `InfPath` its 8.3 alias
+(`YEOKHE~2.INF`). `s98_inf_names` compared the two as strings, so the
+install logged "appeared in this step, named by no device of this step:
+left", recorded nothing under `Staged`, and the uninstall never deleted
+the copy. `60a8f225` compares the alias too (`GetShortPathNameA`, already
+imported); Codex rounds 17 to 21 (thread `01a14f91-...`) made the answer
+three-valued (unknown when the alias cannot be read, and for a bare name
+that `INF` and `INF\OTHER` could both hold; a qualified `InfPath`
+matched against the copy's qualified name or alias), committed as
+`db7b5470`, `53ba12da`, `d818fcd5`, `06eb6160` and `a0bfc2b1`; round 22
+was clean. The fresh install on `a0bfc2b1` logged "made in this step and
+named by the device: recorded" for the copy, and its uninstall "Stor98's
+INF copy ... was deleted".
+
+### What the legs leave for the owner
+
+- The update rows need a version above 3.0.0.0: with the branch at the
+  published version the window treats 3.0.0.0's devices as current, and
+  `/restage` leaves two store copies of `xhci98.inf` and the old binary.
+- 98 SE's update over an earlier xhci98 through the helper (the gold
+  row): the old `XHCI98.SYS` stayed in place.
+- The NT uninstall leaves the helper's class key and its legacy devnode,
+  and Stor98's critical-device entry and event-log source; the 98 SE
+  uninstall leaves `Services\stor98` (a value Stor98 writes at run time,
+  `StorInterrupt 0.4.0`) and `Software\Stor98\Pool`, both Stor98's own.
+  Which of these the uninstall owns is a record 26 section 9.3 decision.
+- The 98 SE and ME uninstall shows its "If Windows has a hardware wizard
+  open" message once per helper step (twice on 98 SE with Stor98).
+- On 98 SE and ME the window shows no USB settings page on a fresh
+  install (Components goes to Stor98's settings, or to the Summary).
+
+Owed: 2000 (the emulator), the update over 3.0.0.0 on every target with
+a version that differs, the helper rows U24, U23, UAS, Thunderbolt, an
+older Stor98's update and two bundled Stor98 versions, the uninstall
+after an update, and XP's and ME's updates. No real hardware ran the
+window.
 ## 42-A.10: recovery of a contained USB4 host (2026-10-19)
 
 Code on branch `p42-u4rec` (from `3.1.0.0` at `db921f49`): `cd9cf616`,

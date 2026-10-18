@@ -221,6 +221,9 @@ src/            Driver source code (C): the HCD, xhci98.sys (roadmap Phases
                 of xhcihlpr.sys, the x86 helper (design record 18 section
                 15), whose code is src/xhci_hlpr.c. The miniport left the
                 tree on 2026-10-02; its last sources are on branch 1.2.0.0
+src/stor98/     Stor98, the NVMe SCSI miniport the packages bundle, a
+                BSD-3-Clause project with its own AGENTS.md, build and
+                releases; see "Stor98 (src/stor98/)" below
 test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
 scripts/        The build wrapper, host setup helpers, and the import/INF/
                 packaging gates. `scripts/local/` is git-ignored per-host
@@ -237,7 +240,9 @@ xhcisnap/       The host-side reader for the driver's log channel
                 (`XHCISNAP.EXE`); `xhcisnap/README.md` is its guide. Tracked.
 xhciinst/       The install, update and uninstall tool (`XHCIINST.EXE`,
                 `XHCIIN64.EXE`) and the package's `INSTALL.BAT`, from
-                `3.0.0.0` (design record 23). Tracked.
+                `3.0.0.0` (design record 23), and its window
+                (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`) over the same engine, from
+                `3.1.0.0` (design record 26). Tracked.
 xhcicln/        The optional cleanup tool (`XHCICLN.EXE`, `XHCICL64.EXE`)
                 for the devnodes a driver before `2.4.0.0` left under
                 `XHCI98\`, from `2.4.0.0` (roadmap-hcd task 38.8, design
@@ -693,6 +698,31 @@ pinned commits are in `external/README.md`; `legal-provenance.md` section
 
 ---
 
+## Stor98 (`src/stor98/`)
+
+`src/stor98/` is Stor98, the SCSI miniport for NVMe SSDs that the release
+packages bundle, in this repository since 2026-10-19 as one snapshot of
+its own repository's tracked files (branch `audit-2026-10-18` at `4253b58`,
+no history; roadmap-usb4 task 42-A.20, owner). It stays its own driver and
+its own files - `stor98.mpd` for 98 SE and ME, `stor98.sys` for x86 and
+x64, its two INFs - built by `src\stor98\scripts\build.cmd` (or with
+everything else by `scripts\build-all.cmd`) into the ignored
+`src\stor98\out\`, never folded into this project's binaries; a package
+bundles only a released build, by default from
+`src\stor98\releases\<version>\`, under `make-package.ps1`'s four pins.
+**Its own `AGENTS.md` governs its technical rules** (provenance, surprise
+removal and DMA, its write-once releases and signing, no "NVMe" in a name),
+and its `LICENSE` and `NOTICE` its files; this file's source rules (C89,
+the arithmetic rules, ASCII, the gates) do not bind it, and
+`check-source-charset.ps1` skips it. This repository's commit rule does
+apply to it: no attribution trailer in a commit message. Its interface
+header is here twice until the two are made one: the master is
+`src\stor98\include\stor98cm.h`, and `src\cm\stor98cm.h` must be the same
+bytes, which `scripts\check-stor98-header.ps1` holds on every gated build
+(`docs/contributing/source-files.md`).
+
+---
+
 ## Third-Party Material and Provenance
 
 This project is GPL-2.0-only licensed and depends on material that is not.
@@ -715,9 +745,9 @@ rules that bind day-to-day work, and none of them is optional.
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"
   anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, from
-  `2.4.0.0` `XHCICLN` and `XHCICL64`, and from `3.0.0.0` `XHCIINST`,
-  `XHCIIN64`, `XHCITR` and `XHCITR64`) carry statically linked runtimes
-  (section 2a).
+  `2.4.0.0` `XHCICLN` and `XHCICL64`, from `3.0.0.0` `XHCIINST`,
+  `XHCIIN64`, `XHCITR` and `XHCITR64`, and from `3.1.0.0` `XHCIWIZ` and
+  `XHCIWZ64`) carry statically linked runtimes (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh

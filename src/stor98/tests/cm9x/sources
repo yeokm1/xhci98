@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# cm9x.sys: 9x CM stand-in (test only). Build with build.cmd.
+TARGETNAME=cm9x
+TARGETPATH=obj
+TARGETTYPE=DRIVER
+DRIVERTYPE=WDM
+MSC_WARNING_LEVEL=/W3 /WX
+SOURCES=cm9x.c

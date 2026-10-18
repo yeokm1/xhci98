@@ -828,6 +828,36 @@ static const char *source_text(TR_U32 s)
     }
 }
 
+/* Why the functions below a port were not read (CM_QP_E_INFO, task
+ * 42-A.14); a driver before it gave 0 on 98 SE and ME too. */
+static void not_read_text(TR_TEXT *t, TR_U32 reason)
+{
+    switch (reason) {
+    case CM_QP_NR_NO_WORKER:
+        tr_put(t, "    Not read: xhcicm.sys has no configuration-manager "
+                  "worker running\n    for this controller (no tunnel "
+                  "route, or not started yet).\n");
+        break;
+    case CM_QP_NR_BUSY:
+        tr_put(t, "    Not read this time: xhcicm.sys's worker is inside "
+                  "a configuration-\n    manager call (a hardware wizard "
+                  "may be open). Refresh later.\n");
+        break;
+    case CM_QP_NR_GUARD:
+        tr_put(t, "    Not read: PCI.VXD's configuration read did not "
+                  "pass xhcicm.sys's check.\n");
+        break;
+    case CM_QP_NR_HELD:
+        tr_put(t, "    Not read: the controller was lost, and nothing "
+                  "below the port is read\n    until it is back.\n");
+        break;
+    default:
+        tr_put(t, "    Not read on this system: this driver does not "
+                  "read below the port\n    on Windows 98 SE and ME.\n");
+        break;
+    }
+}
+
 /* An entry's state when its bytes are not shown. */
 static void state_text(TR_TEXT *t, int indent, TR_U32 state)
 {
@@ -931,9 +961,7 @@ void tr_qpci_text(TR_TEXT *t, const TR_QPCI *q, int nt)
             }
             below++;
             if (b.State == CM_QP_S_NOT_READ_OS) {
-                tr_put(t, "    Not read on this system: Windows 98 SE and "
-                          "ME number no bus a tunnel\n    brings up after "
-                          "boot, so the tool does not read below the port.\n");
+                not_read_text(t, b.Info);
             }
         }
         memset(done, 0, sizeof(done));

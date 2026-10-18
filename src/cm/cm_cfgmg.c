@@ -54,7 +54,22 @@
 #define CMG_T_CHANGE_STATUS 9
 #define CMG_T_PCI_READ      10
 #define CMG_T_PCI_WRITE     11
-#define CMG_T_COUNT         12
+/* Design record 28 (task 42-A.15). */
+#define CMG_T_ADD_EMPTY_LC  12
+#define CMG_T_FIRST_LC      13
+#define CMG_T_NEXT_LC       14
+#define CMG_T_ADD_RD        15
+#define CMG_T_NEXT_RD       16
+#define CMG_T_RD_SIZE       17
+#define CMG_T_RD_DATA       18
+#define CMG_T_READ_REG      19
+#define CMG_T_REPROCESS     20
+#define CMG_T_LC_PRIORITY   21
+#define CMG_T_SETUP         22
+#define CMG_T_REG_OPEN      23
+#define CMG_T_REG_CLOSE     24
+#define CMG_T_REG_QUERY     25
+#define CMG_T_COUNT         26
 
 #define CMG_THUNK_BYTES     8
 
@@ -72,21 +87,48 @@ static const USHORT cmgServices[CMG_T_COUNT] = {
     CMG_SVC_GET_DEVNODE_STATUS,
     CMG_SVC_CHANGE_DEVNODE_STATUS,
     CMG_PCI_SVC_READ_CONFIG,
-    CMG_PCI_SVC_WRITE_CONFIG
+    CMG_PCI_SVC_WRITE_CONFIG,
+    CMG_SVC_ADD_EMPTY_LOG_CONF,
+    CMG_SVC_GET_FIRST_LOG_CONF,
+    CMG_SVC_GET_NEXT_LOG_CONF,
+    CMG_SVC_ADD_RES_DES,
+    CMG_SVC_GET_NEXT_RES_DES,
+    CMG_SVC_GET_RES_DES_DATA_SIZE,
+    CMG_SVC_GET_RES_DES_DATA,
+    CMG_SVC_READ_REGISTRY_VALUE,
+    CMG_SVC_REPROCESS_DEVNODE,
+    CMG_SVC_GET_SET_LOG_CONF_PRIORITY,
+    CMG_SVC_SETUP_DEVNODE,
+    CMG_VMM_REG_OPEN_KEY,
+    CMG_VMM_REG_CLOSE_KEY,
+    CMG_VMM_REG_QUERY_VALUE_EX
 };
 
-/* Each thunk's VxD: CONFIGMG's, but for PCI.VXD's two. */
+/* Each thunk's VxD: CONFIGMG's, but for PCI.VXD's two and the VMM's
+ * three registry services. */
 static ULONG cmgVxdOf(ULONG which)
 {
-    return (which == CMG_T_PCI_READ || which == CMG_T_PCI_WRITE)
-               ? (ULONG)CMG_PCI_VXD_ID
-               : (ULONG)CMG_VXD_ID;
+    if (which == CMG_T_PCI_READ || which == CMG_T_PCI_WRITE) {
+        return (ULONG)CMG_PCI_VXD_ID;
+    }
+    if (which == CMG_T_REG_OPEN || which == CMG_T_REG_CLOSE ||
+        which == CMG_T_REG_QUERY) {
+        return (ULONG)CMG_VMM_VXD_ID;
+    }
+    return (ULONG)CMG_VXD_ID;
 }
 
 typedef ULONG (__cdecl *CMG_FN0)(VOID);
+typedef ULONG (__cdecl *CMG_FN1)(ULONG a);
 typedef ULONG (__cdecl *CMG_FN2)(ULONG a, ULONG b);
 typedef ULONG (__cdecl *CMG_FN3)(ULONG a, ULONG b, ULONG c);
 typedef ULONG (__cdecl *CMG_FN4)(ULONG a, ULONG b, ULONG c, ULONG d);
+typedef ULONG (__cdecl *CMG_FN5)(ULONG a, ULONG b, ULONG c, ULONG d,
+                                 ULONG e);
+typedef ULONG (__cdecl *CMG_FN6)(ULONG a, ULONG b, ULONG c, ULONG d,
+                                 ULONG e, ULONG f);
+typedef ULONG (__cdecl *CMG_FN7)(ULONG a, ULONG b, ULONG c, ULONG d,
+                                 ULONG e, ULONG f, ULONG g);
 
 static PVOID cmgThunk(PCM_CFGMG cfg, ULONG which)
 {
@@ -300,6 +342,164 @@ BOOLEAN CmCfgmgPciWrite(PCM_CFGMG cfg, ULONG bdf, ULONG offset, ULONG value)
     return TRUE;
 }
 
+/* ---- design record 28: logical configurations (task 42-A.15) ---------- */
+
+ULONG CmCfgmgAddEmptyLogConf(PCM_CFGMG cfg, ULONG devnode, ULONG priority,
+                             ULONG flags, PULONG lc)
+{
+    *lc = 0;
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN4)cmgThunk(cfg, CMG_T_ADD_EMPTY_LC))(
+        (ULONG)(ULONG_PTR)lc, devnode, priority, flags);
+}
+
+ULONG CmCfgmgFirstLogConf(PCM_CFGMG cfg, ULONG devnode, ULONG kind,
+                          PULONG lc)
+{
+    *lc = 0;
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN3)cmgThunk(cfg, CMG_T_FIRST_LC))((ULONG)(ULONG_PTR)lc,
+                                                    devnode, kind);
+}
+
+ULONG CmCfgmgNextLogConf(PCM_CFGMG cfg, ULONG lc, PULONG next)
+{
+    *next = 0;
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN3)cmgThunk(cfg, CMG_T_NEXT_LC))((ULONG)(ULONG_PTR)next,
+                                                   lc, 0);
+}
+
+ULONG CmCfgmgLogConfPriority(PCM_CFGMG cfg, ULONG lc, PULONG priority)
+{
+    *priority = 0;
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN3)cmgThunk(cfg, CMG_T_LC_PRIORITY))(
+        (ULONG)(ULONG_PTR)priority, lc, CMG_GET_LOG_CONF_PRIORITY);
+}
+
+ULONG CmCfgmgSetLogConfPriority(PCM_CFGMG cfg, ULONG lc, ULONG priority)
+{
+    ULONG p;
+
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    p = priority;
+    return ((CMG_FN3)cmgThunk(cfg, CMG_T_LC_PRIORITY))(
+        (ULONG)(ULONG_PTR)&p, lc, CMG_SET_LOG_CONF_PRIORITY);
+}
+
+ULONG CmCfgmgNextResDes(PCM_CFGMG cfg, ULONG from, ULONG forType, PULONG rd,
+                        PULONG type)
+{
+    *rd = 0;
+    *type = forType;
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN5)cmgThunk(cfg, CMG_T_NEXT_RD))(
+        (ULONG)(ULONG_PTR)rd, from, forType, (ULONG)(ULONG_PTR)type, 0);
+}
+
+ULONG CmCfgmgResDesSize(PCM_CFGMG cfg, ULONG rd, PULONG size)
+{
+    *size = 0;
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN3)cmgThunk(cfg, CMG_T_RD_SIZE))((ULONG)(ULONG_PTR)size,
+                                                   rd, 0);
+}
+
+ULONG CmCfgmgResDesData(PCM_CFGMG cfg, ULONG rd, PVOID buffer, ULONG bytes)
+{
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN4)cmgThunk(cfg, CMG_T_RD_DATA))(
+        rd, (ULONG)(ULONG_PTR)buffer, bytes, 0);
+}
+
+ULONG CmCfgmgAddResDes(PCM_CFGMG cfg, ULONG lc, ULONG type, PVOID data,
+                       ULONG bytes, PULONG rd)
+{
+    *rd = 0;
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN6)cmgThunk(cfg, CMG_T_ADD_RD))(
+        (ULONG)(ULONG_PTR)rd, lc, type, (ULONG)(ULONG_PTR)data, bytes, 0);
+}
+
+ULONG CmCfgmgReadSoftwareValue(PCM_CFGMG cfg, ULONG devnode,
+                               const char *name, char *buffer, PULONG bytes)
+{
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN7)cmgThunk(cfg, CMG_T_READ_REG))(
+        devnode, 0, (ULONG)(ULONG_PTR)name, CMG_REG_SZ,
+        (ULONG)(ULONG_PTR)buffer, (ULONG)(ULONG_PTR)bytes,
+        CMG_REGISTRY_SOFTWARE);
+}
+
+ULONG CmCfgmgReprocess(PCM_CFGMG cfg, ULONG devnode)
+{
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN2)cmgThunk(cfg, CMG_T_REPROCESS))(
+        devnode, CMG_REPROCESS_ASYNCHRONOUS);
+}
+
+ULONG CmCfgmgSetupReady(PCM_CFGMG cfg, ULONG devnode)
+{
+    if (!cfg->Open) {
+        return CMG_CR_FAILURE;
+    }
+    return ((CMG_FN2)cmgThunk(cfg, CMG_T_SETUP))(devnode,
+                                                 CMG_SETUP_DEVNODE_READY);
+}
+
+/* The installer's Stor98 record: HKLM\Software\xhci98\Stor98's Version
+ * (record 26 section 6.3). The VMM's error codes are Win32's (0 success,
+ * 2 not found). */
+static char cmgStorKey[] = "Software\\xhci98\\Stor98";
+static char cmgStorValue[] = "Version";
+
+ULONG CmCfgmgStor98Version(PCM_CFGMG cfg, char *buffer, PULONG bytes,
+                           PULONG type)
+{
+    ULONG hkey;
+    ULONG error;
+
+    *type = 0;
+    if (!cfg->Open) {
+        return 0xFFFFFFFFUL;
+    }
+    hkey = 0;
+    error = ((CMG_FN3)cmgThunk(cfg, CMG_T_REG_OPEN))(
+        CMG_HKEY_LOCAL_MACHINE, (ULONG)(ULONG_PTR)cmgStorKey,
+        (ULONG)(ULONG_PTR)&hkey);
+    if (error != 0) {
+        return error;
+    }
+    error = ((CMG_FN6)cmgThunk(cfg, CMG_T_REG_QUERY))(
+        hkey, (ULONG)(ULONG_PTR)cmgStorValue, 0, (ULONG)(ULONG_PTR)type,
+        (ULONG)(ULONG_PTR)buffer, (ULONG)(ULONG_PTR)bytes);
+    (VOID)((CMG_FN1)cmgThunk(cfg, CMG_T_REG_CLOSE))(hkey);
+    return error;
+}
+
 #else /* !_X86_ */
 
 /* No amd64 target runs CONFIGMG: the route is refused, and every call
@@ -407,6 +607,126 @@ BOOLEAN CmCfgmgPciWrite(PCM_CFGMG cfg, ULONG bdf, ULONG offset, ULONG value)
     UNREFERENCED_PARAMETER(offset);
     UNREFERENCED_PARAMETER(value);
     return FALSE;
+}
+
+ULONG CmCfgmgAddEmptyLogConf(PCM_CFGMG cfg, ULONG devnode, ULONG priority,
+                             ULONG flags, PULONG lc)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(devnode);
+    UNREFERENCED_PARAMETER(priority);
+    UNREFERENCED_PARAMETER(flags);
+    *lc = 0;
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgFirstLogConf(PCM_CFGMG cfg, ULONG devnode, ULONG kind,
+                          PULONG lc)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(devnode);
+    UNREFERENCED_PARAMETER(kind);
+    *lc = 0;
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgNextLogConf(PCM_CFGMG cfg, ULONG lc, PULONG next)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(lc);
+    *next = 0;
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgLogConfPriority(PCM_CFGMG cfg, ULONG lc, PULONG priority)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(lc);
+    *priority = 0;
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgSetLogConfPriority(PCM_CFGMG cfg, ULONG lc, ULONG priority)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(lc);
+    UNREFERENCED_PARAMETER(priority);
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgNextResDes(PCM_CFGMG cfg, ULONG from, ULONG forType, PULONG rd,
+                        PULONG type)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(from);
+    UNREFERENCED_PARAMETER(forType);
+    *rd = 0;
+    *type = 0;
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgResDesSize(PCM_CFGMG cfg, ULONG rd, PULONG size)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(rd);
+    *size = 0;
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgResDesData(PCM_CFGMG cfg, ULONG rd, PVOID buffer, ULONG bytes)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(rd);
+    UNREFERENCED_PARAMETER(buffer);
+    UNREFERENCED_PARAMETER(bytes);
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgAddResDes(PCM_CFGMG cfg, ULONG lc, ULONG type, PVOID data,
+                       ULONG bytes, PULONG rd)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(lc);
+    UNREFERENCED_PARAMETER(type);
+    UNREFERENCED_PARAMETER(data);
+    UNREFERENCED_PARAMETER(bytes);
+    *rd = 0;
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgReadSoftwareValue(PCM_CFGMG cfg, ULONG devnode,
+                               const char *name, char *buffer, PULONG bytes)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(devnode);
+    UNREFERENCED_PARAMETER(name);
+    UNREFERENCED_PARAMETER(buffer);
+    UNREFERENCED_PARAMETER(bytes);
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgReprocess(PCM_CFGMG cfg, ULONG devnode)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(devnode);
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgSetupReady(PCM_CFGMG cfg, ULONG devnode)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(devnode);
+    return CMG_CR_FAILURE;
+}
+
+ULONG CmCfgmgStor98Version(PCM_CFGMG cfg, char *buffer, PULONG bytes,
+                           PULONG type)
+{
+    UNREFERENCED_PARAMETER(cfg);
+    UNREFERENCED_PARAMETER(buffer);
+    UNREFERENCED_PARAMETER(bytes);
+    *type = 0;
+    return 0xFFFFFFFFUL;
 }
 
 #endif /* _X86_ */

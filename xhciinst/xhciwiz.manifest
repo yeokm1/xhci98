@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  xhciwiz.manifest - XHCIWIZ.EXE and XHCIWZ64.EXE ask for elevation on
+  Windows Vista and 7 (design record 26 section 4): installing or removing
+  a driver needs an administrator; and Common Controls 6, so XP and later
+  draw themed pages. Windows 98, ME and 2000 ignore it. Embedded by
+  xhciwiz.rc as resource 1 of type 24 (RT_MANIFEST). ASCII only, CRLF
+  line endings.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity version="3.1.0.0" processorArchitecture="*" name="xhci98.xhciwiz" type="win32"/>
+  <description>xHCI98 Setup</description>
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

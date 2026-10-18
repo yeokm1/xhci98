@@ -1,0 +1,74 @@
+         0.0 ms #1      91 G57_FIND 0x20003
+         0.5 ms #2      92 G57_ADDR_KIND 0x1
+         0.8 ms #3      93 G57_ADDR_LO 0x81826004
+         1.0 ms #4      94 G57_ADDR_HI 0x0
+         1.3 ms #5      92 G57_ADDR_KIND 0xa
+         1.5 ms #6      93 G57_ADDR_LO 0x1826004
+         1.7 ms #7      94 G57_ADDR_HI 0x0
+         2.3 ms #8      98 G57_QPOOL_CHECK 0x1
+         2.7 ms #9      92 G57_ADDR_KIND 0x4
+         3.0 ms #10     93 G57_ADDR_LO 0x81648000
+         3.4 ms #11     94 G57_ADDR_HI 0x0
+         3.8 ms #12     92 G57_ADDR_KIND 0x5
+         4.4 ms #13     93 G57_ADDR_LO 0x1648000
+         4.9 ms #14     94 G57_ADDR_HI 0x0
+         5.5 ms #15     04 OPTIONS 0x2
+         6.0 ms #16     80 G24_OPTIONS 0x1081388
+         6.4 ms #17     a0 Q_OPTIONS shn=0 stop=0 rdyto=CAP
+         6.9 ms #18     02 FIND_ADAPTER 0x10001
+                  .. pci_cfg_write nvme 01:01.0 @0x4 <- 0x507
+                  .. pci_cfg_write nvme 01:01.0 @0x10 <- 0xffffffff
+                  .. pci_cfg_write nvme 01:01.0 @0x10 <- 0xfe800004
+                  .. pci_cfg_write nvme 01:01.0 @0x4 <- 0x107
+         8.6 ms #19     95 G57_UNCACHED_CHECK 0x10f
+         8.8 ms #20     92 G57_ADDR_KIND 0x2
+         9.0 ms #21     93 G57_ADDR_LO 0x81638000
+         9.2 ms #22     94 G57_ADDR_HI 0x0
+        12.9 ms #23     92 G57_ADDR_KIND 0x3
+        13.0 ms #24     93 G57_ADDR_LO 0x1638000
+        13.1 ms #25     94 G57_ADDR_HI 0x0
+        13.3 ms #26     03 FIND_RESULT 0x1
+        13.4 ms #27     30 HWINIT_ENTER 0x1
+        13.6 ms #28     33 HWINIT_CAP 0xf0107ff
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460000
+                  .. pci_nvme_mmio_stopped cleared controller enable bit
+        14.1 ms #29     31 HWINIT_CC 0x460000
+        14.2 ms #30     40 STATE NONE -> DISABLING
+        14.3 ms #31     92 G57_ADDR_KIND 0x9
+        14.3 ms #32     93 G57_ADDR_LO 0x1645000
+        14.4 ms #33     94 G57_ADDR_HI 0x0
+        14.5 ms #34     32 HWINIT_RETURN ret=1 state=DISABLING
+        15.0 ms #35     92 G57_ADDR_KIND 0x7
+        15.1 ms #36     93 G57_ADDR_LO 0x81637000
+        15.1 ms #37     94 G57_ADDR_HI 0x0
+        15.2 ms #38     92 G57_ADDR_KIND 0x8
+        15.2 ms #39     93 G57_ADDR_LO 0x1637000
+        15.3 ms #40     94 G57_ADDR_HI 0x0
+        15.4 ms #41     10 STARTIO EXEC:STARTSTOP st=DISABLING
+        15.6 ms #42     11 SRB_HELD EXEC:STARTSTOP st=DISABLING TimeOutValue=240s
+        34.8 ms #43     47 TIMER_FIRST 0x1
+        34.9 ms #44     45 DISABLE_ACK 0x1
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460001
+                  .. pci_nvme_mmio_start_success setting controller enable bit succeeded
+        35.3 ms #45     31 HWINIT_CC 0x460001
+        35.3 ms #46     40 STATE DISABLING -> WAIT_RDY
+        50.7 ms #47     41 RDY_SEEN 0x1
+        51.0 ms #48     40 STATE WAIT_RDY -> ADMIN
+                  .. pci_nvme_admin_cmd cid 1 sqid 0 opc 0x5 opname 'NVME_ADM_CMD_CREATE_CQ'
+                  .. pci_nvme_create_cq create completion queue, addr=0x1645000, cqid=1, vector=0, qsize=63, qflags=3, ien=1
+        66.1 ms #49     42 ADMIN_DONE cid=1 status=0x0
+                  .. pci_nvme_admin_cmd cid 2 sqid 0 opc 0x1 opname 'NVME_ADM_CMD_CREATE_SQ'
+                  .. pci_nvme_create_sq create submission queue, addr=0x1639000, sqid=1, cqid=1, qsize=63, qflags=1
+        81.8 ms #50     42 ADMIN_DONE cid=2 status=0x0
+                  .. pci_nvme_admin_cmd cid 3 sqid 0 opc 0x6 opname 'NVME_ADM_CMD_IDENTIFY'
+                  .. pci_nvme_identify_ctrl identify controller
+        97.8 ms #51     42 ADMIN_DONE cid=3 status=0x0
+                  .. pci_nvme_admin_cmd cid 4 sqid 0 opc 0x6 opname 'NVME_ADM_CMD_IDENTIFY'
+       113.6 ms #52     42 ADMIN_DONE cid=4 status=0x0
+       114.0 ms #53     40 STATE ADMIN -> RUNNING
+       114.1 ms #54     43 BRINGUP_DONE 0x6
+       114.4 ms #55     12 DISPATCH_HELD ticks=6 STARTSTOP
+       114.6 ms #56     10 STARTIO EXEC:STARTSTOP st=RUNNING
+            (1 read/write stages)
+       116.0 ms #58     a1 Q_DIRTY 0x5b
+            (183 read/write stages)

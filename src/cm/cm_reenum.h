@@ -152,6 +152,7 @@
 
 #include "tbt_icm.h"
 #include "tbt_topo.h"
+#include "cm_marks.h"
 
 /* cm.h's CM_NHI and CM_FILTER; the calls take them by their structure tags
  * so that this header stands before cm.h's definitions. */
@@ -190,6 +191,7 @@ typedef VOID (*CM_REENUM_EJECT)(PVOID context, ULONG port);
                                        INF did not match its id): no
                                        re-enumeration, no safe eject      */
 
+
 /* One member of the set, the per-member state of record 21 section 6.3.
  * Flags is written under the registration list's lock; the rest by the
  * thread alone. */
@@ -205,6 +207,8 @@ typedef struct _CM_REENUM_PORT {
     ULONG AskedSerial;      /* NT: the filter publication a baseline was
                                last asked of                              */
     ULONG MissedAt;         /* NowMs of the last retry of Missed          */
+    ULONG Held;             /* CM_HELD_* (cm_nvlink.h): work held behind
+                               its stor98 gate (task 42-A.12)            */
     ULONG Missed;           /* a tunnel change came while the member was
                                exclusive but not active, or its call could
                                not be made: re-enumerated once it is      */
@@ -218,6 +222,13 @@ typedef struct _CM_REENUM_PORT {
     ULONG PathRead;         /* 98: Path read (cmPciPath)                  */
     ULONG PathCount;        /* 98: its elements, 0 for none               */
     ULONG Path[16];         /* 98: the instance path, cm_ports.h's form   */
+    /* NT, task 42-A.5, under the list's lock: the member's secondary bus
+     * as the thread last read it (a LowerFilters child is associated with
+     * the member by it), and the connection generation its pending
+     * departures are held to (CmNhiMemberGen). */
+    ULONG SecBus;
+    ULONG SecBusValid;
+    ULONG ConnGen;
 } CM_REENUM_PORT, *PCM_REENUM_PORT;
 
 /* Children of one tunnel port remembered on 98 as already seen, so that
@@ -264,6 +275,31 @@ BOOLEAN CmCfgmgPciRead(PCM_CFGMG cfg, ULONG bdf, ULONG offset, PULONG value);
 BOOLEAN CmCfgmgPciWrite(PCM_CFGMG cfg, ULONG bdf, ULONG offset, ULONG value);
 ULONG CmCfgmgStatus(PCM_CFGMG cfg, ULONG devnode, PULONG status,
                     PULONG problem);
+/* Design record 28 (task 42-A.15): the logical-configuration services,
+ * each the service of cm_cfgmg.h's number with the arguments it names
+ * (an out handle zeroed first); Read_Registry_Value of a REG_SZ in the
+ * devnode's software key, *bytes the room in and the length out; and
+ * the installer's Stor98 Version through the VMM's registry services
+ * (0 when read, else the VMM's code, *type the value's type). */
+ULONG CmCfgmgAddEmptyLogConf(PCM_CFGMG cfg, ULONG devnode, ULONG priority,
+                             ULONG flags, PULONG lc);
+ULONG CmCfgmgFirstLogConf(PCM_CFGMG cfg, ULONG devnode, ULONG kind,
+                          PULONG lc);
+ULONG CmCfgmgNextLogConf(PCM_CFGMG cfg, ULONG lc, PULONG next);
+ULONG CmCfgmgLogConfPriority(PCM_CFGMG cfg, ULONG lc, PULONG priority);
+ULONG CmCfgmgSetLogConfPriority(PCM_CFGMG cfg, ULONG lc, ULONG priority);
+ULONG CmCfgmgNextResDes(PCM_CFGMG cfg, ULONG from, ULONG forType, PULONG rd,
+                        PULONG type);
+ULONG CmCfgmgResDesSize(PCM_CFGMG cfg, ULONG rd, PULONG size);
+ULONG CmCfgmgResDesData(PCM_CFGMG cfg, ULONG rd, PVOID buffer, ULONG bytes);
+ULONG CmCfgmgAddResDes(PCM_CFGMG cfg, ULONG lc, ULONG type, PVOID data,
+                       ULONG bytes, PULONG rd);
+ULONG CmCfgmgReadSoftwareValue(PCM_CFGMG cfg, ULONG devnode,
+                               const char *name, char *buffer, PULONG bytes);
+ULONG CmCfgmgReprocess(PCM_CFGMG cfg, ULONG devnode);
+ULONG CmCfgmgSetupReady(PCM_CFGMG cfg, ULONG devnode);
+ULONG CmCfgmgStor98Version(PCM_CFGMG cfg, char *buffer, PULONG bytes,
+                           PULONG type);
 ULONG CmCfgmgAddRemovable(PCM_CFGMG cfg, ULONG devnode);
 
 typedef struct _CM_REENUM {
@@ -296,6 +332,8 @@ typedef struct _CM_REENUM {
     ULONG CfgmgOwed;        /* the worker starts at the first Action or
                                Service, after the NHI's start completed  */
     struct _CM_CFGWK *Wk;   /* 98: the CONFIGMG worker (cm_cfgwk.c)       */
+    struct _CM_CALLWK *Callwk; /* 98: the per-member call workers
+                               (cm_callwk.c, task 42-A.12)               */
     ULONG WkOpenSeen;       /* its opening read back                      */
     ULONG WkActive;         /* the owned-member mask it was last given    */
     ULONG RediscoverLeft;   /* an empty set's discoveries still to try    */
@@ -346,7 +384,16 @@ typedef struct _CM_REENUM {
     ULONG GoneDropped;      /* 98: retained children no longer matching
                                their recorded identity, left alone       */
     ULONG Ejects;           /* eject notifications served                 */
+    ULONG Holds;            /* members' work held behind a stor98 gate    */
     ULONG EjectsStale;      /* dropped at hand-off: the port changed      */
+
+    /* The marks answer's table (task 42-A.5, cm_marks.h), under the list's
+     * lock, and the confirmations of record 21 section 7.4 revision 3. */
+    CM_MARKS Marks;
+    ULONG Confirms;         /* confirmations that posted an eject         */
+    ULONG ConfirmsRefused;  /* ... read and refused (CM_MK_CONF_*)        */
+    ULONG Departures;       /* departures after a query-remove recorded   */
+    ULONG DeparturesDropped;    /* ... dropped on a connection change     */
 } CM_REENUM, *PCM_REENUM;
 
 VOID CmReenumStart(struct _CM_NHI *nhi);
@@ -451,13 +498,32 @@ typedef struct _CM_CFGWK_COUNTERS {
     ULONG GoneDropped;      /* retained children whose identity changed   */
     ULONG Numbered;         /* bridges given bus numbers (section 6.1.1)  */
     ULONG NumberRefused;    /* numberings refused and undone              */
+    /* Design record 28 section 7 (task 42-A.15), summed over the members:
+     * candidates, configurations created, started, still unstarted at
+     * the deadline, disabled leftovers, left-over refusals, journal
+     * entries marked gone, timeouts, late results, pin-0 functions seen
+     * and started, and the refusals by reason (CM_NI_W_* 1 to 15). */
+    ULONG NoIrqCandidates;
+    ULONG NoIrqAttempts;
+    ULONG NoIrqStarted;
+    ULONG NoIrqUnstarted;
+    ULONG NoIrqLeftovers;
+    ULONG NoIrqLeftOver;
+    ULONG NoIrqGone;
+    ULONG NoIrqTimeouts;
+    ULONG NoIrqLate;
+    ULONG NoIrqPin0Seen;
+    ULONG NoIrqPin0Started;
+    ULONG NoIrqRefused[16];
 } CM_CFGWK_COUNTERS, *PCM_CFGWK_COUNTERS;
 
 /* Creates the worker for `members` bridges at bdf[] (members the domain
  * owns in `active`) and asks it to open the route; `numbering` is
- * XhciCmBridgeNumbering (section 6.1.1). NULL on failure. PASSIVE_LEVEL. */
+ * XhciCmBridgeNumbering (section 6.1.1), `noIrq` XhciCmNoIrqStart (design
+ * record 28 section 7). NULL on failure. PASSIVE_LEVEL. */
 struct _CM_CFGWK *CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf,
-                               ULONG members, ULONG active, ULONG numbering);
+                               ULONG members, ULONG active, ULONG numbering,
+                               ULONG noIrq);
 
 /* Asks for the members in `reenum` to be re-enumerated (those also in
  * `vanish` with their vanished children removed first) and, with `mark`,
@@ -514,6 +580,31 @@ VOID CmCfgwkCounters(struct _CM_CFGWK *w, PCM_CFGWK_COUNTERS counters);
  * left. PASSIVE_LEVEL. */
 VOID CmCfgwkDrain(VOID);
 
+/*
+ * The query device's PCI answer on Windows 98 SE and ME (design record 25
+ * section 4.7, task 42-A.14): the walk below the members made by the
+ * worker, through PCI.VXD's guarded read, between its other operations.
+ * CmCfgwkPciAsk copies `in` (the members and the answer's header fields;
+ * its readers and admission are the worker's own) into a request of its
+ * own and posts it; NULL when none could be posted, *reason then
+ * CM_QP_NR_BUSY for one already posted and not yet taken, else
+ * CM_QP_NR_NO_WORKER (the worker leaving, no pool). The caller must hold
+ * w alive for the call
+ * alone (the query device's rundown, cm_qryos.c). CmCfgwkPciTake then
+ * waits up to `waitMs` for the answer and, when it came, copies it
+ * (CM_QP_MAX_BYTES at most) into `out` and returns its length; 0 with
+ * *reason (CM_QP_NR_*) when it did not. Either way the request is the
+ * caller's no more: whichever of the two sides lets go last frees it.
+ * PASSIVE_LEVEL.
+ */
+struct _CM_CFGWK_PCI;
+struct _CM_QPCI_IN;
+struct _CM_CFGWK_PCI *CmCfgwkPciAsk(struct _CM_CFGWK *w,
+                                    const struct _CM_QPCI_IN *in,
+                                    PULONG reason);
+ULONG CmCfgwkPciTake(struct _CM_CFGWK_PCI *req, ULONG waitMs, UCHAR *out,
+                     PULONG reason);
+
 /* ---- the registration list, for cm_filt.c (NT only) ------------------ */
 
 /* Once, from DriverEntry, before any AddDevice. Any IRQL. */
@@ -555,12 +646,58 @@ ULONG CmRegRelationsBegin(struct _CM_FILTER *filter);
  * <= DISPATCH_LEVEL. */
 BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
 
-/* A child filter's device has been removed, its REMOVE_DEVICE passed
- * down and finished below; `ejected` when a query-remove preceded it and
- * no surprise removal did. Once no live child stack and no unwatched
- * device is left on the port, an orderly removal seen there is posted to
- * the owning domain as an eject. PASSIVE_LEVEL. */
-VOID CmRegChildRemoved(struct _CM_FILTER *child, BOOLEAN ejected);
+/*
+ * The marks (record 21 section 7.4, revision 3; task 42-A.5). Every
+ * attachment of this driver on a device - a bridge filter, a child the
+ * bridge filter attached at BusRelations, a child AddDevice made for a
+ * LowerFilters value - is on the list's attachment list from its attach
+ * to its removal, and each domain's marks table (CM_REENUM.Marks) reads
+ * it. A child's departure after a query-remove posts no eject by itself:
+ * it is recorded as pending on the PDO's entry, and the eject follows only
+ * on an identity-checked confirmation (CmReenumConfirm).
+ *
+ * CmRegAttLink     after the attach (any IRQL <= DISPATCH_LEVEL).
+ * CmRegAttLocate   at the start's way back: the PDO's bus number and
+ *                  address read once (IoGetDeviceProperty) and published.
+ *                  CmRegAttLocateCaps at a QUERY_CAPABILITIES' way back,
+ *                  which may come first: the address from the answer, the
+ *                  bus number by IoGetDeviceProperty. Neither reads while
+ *                  the object is itself asking (CM_FILTER.InLocate): the
+ *                  PnP manager answers DevicePropertyAddress with a
+ *                  QUERY_CAPABILITIES down this stack. PASSIVE_LEVEL.
+ * CmRegAttMayMark  whether this attachment answers Removable: a child the
+ *                  bridge filter attached always (it exists only on an
+ *                  active member with safe eject on); one AddDevice made,
+ *                  or a bridge filter, only while its bus is the secondary
+ *                  bus of an active, exclusive member of a listed domain
+ *                  whose XhciCmSafeEject is 1. PASSIVE_LEVEL.
+ * CmRegAttAnswered Removable was answered set.
+ * CmRegAttEvent    a CM_MK_* count (query-remove, cancel, surprise
+ *                  removal, a start that failed) on the PDO's entry.
+ * CmRegAttRemoved  the device was removed, the REMOVE_DEVICE finished
+ *                  below; `afterQr` when a query-remove preceded it and no
+ *                  surprise removal did: unlisted, counted, and once no
+ *                  attachment of this driver is left on the PDO, the
+ *                  departure recorded as pending. PASSIVE_LEVEL.
+ */
+VOID CmRegAttLink(struct _CM_FILTER *filter);
+VOID CmRegAttLocate(struct _CM_FILTER *filter);
+VOID CmRegAttLocateCaps(struct _CM_FILTER *filter, ULONG address);
+BOOLEAN CmRegAttMayMark(struct _CM_FILTER *filter);
+VOID CmRegAttAnswered(struct _CM_FILTER *filter);
+VOID CmRegAttEvent(struct _CM_FILTER *filter, ULONG which);
+VOID CmRegAttRemoved(struct _CM_FILTER *filter, BOOLEAN afterQr);
+
+/* The thread's half of the marks: the answer built into out (at least
+ * CM_QM_MAX_BYTES) after the tombstones a poll has seen are evicted
+ * (`readAny` with `readGen` the newest generation a poll read); returns
+ * its length. PASSIVE_LEVEL, the connection-manager thread. */
+ULONG CmReenumMarksBuild(struct _CM_NHI *nhi, UCHAR *out, BOOLEAN readAny,
+                         ULONG readGen);
+/* XhciCmEjectConfirm as read (`bytes` of v): checked against the table
+ * and, when it names a pending departure, the eject posted once for its
+ * member. PASSIVE_LEVEL, the connection-manager thread. */
+VOID CmReenumConfirm(struct _CM_NHI *nhi, const UCHAR *v, ULONG bytes);
 
 /* NT: `width` bytes (1, 2 or 4) of `value` written at `offset` (0x40 or
  * above: a capability, never the header) of the configuration space of

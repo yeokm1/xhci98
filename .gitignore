@@ -69,6 +69,8 @@ objfre/
 !xhciinst/selftest.cmd
 !xhcitr/build.cmd
 !xhcitr/selftest.cmd
+!xhcimark/build.cmd
+!xhcimark/selftest.cmd
 !test/xfertest/build.cmd
 !test/pmclient/build.cmd
 !xhciinst/di/build.cmd
@@ -245,3 +247,10 @@ src/build*.wrn
 src/uas/build*.wrn
 src/cm/build*.wrn
 src/hlpr/build*.wrn
+
+# src/stor98 is Stor98 (roadmap-usb4 task 42-A.20), with its own .gitignore for
+# its build output (out/, obj*/, build*.log and the rest). Two of the generic
+# patterns above would hide files it tracks: its build scripts (*.cmd) and the
+# debug-console logs its dated gate records cite (docs/gates/**/*.log).
+!src/stor98/**/*.cmd
+!src/stor98/docs/**/*.log

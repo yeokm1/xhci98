@@ -107,7 +107,7 @@ identification.
 | Published snapshot reader binary | Yes | `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` | Built from this project's sources but not only this project's code: the MSVC 6.0 C runtime is statically linked in. See section 2a |
 | Intel xHCI specification PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
 | USB-IF backwards-compatibility testing PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
-| Published install tool binaries, and `INSTALL.BAT` | Yes, from the first cut that carries them (`3.0.0.0`) | `releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`; `releases/<version>/INSTALL.BAT` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each executable (MSVC 6.0's, WDK 7.1's). See section 2a. `INSTALL.BAT` is this project's own text. Neither carries or calls a Microsoft setup program: the routines they use are the system's own, looked up at run time |
+| Published install tool binaries, and `INSTALL.BAT` | Yes, from the first cut that carries them (`3.0.0.0`; the window from `3.1.0.0`, not cut yet) | `releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`, and from `3.1.0.0` `XHCIWIZ.EXE` and `XHCIWZ64.EXE`; `releases/<version>/INSTALL.BAT` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each executable (MSVC 6.0's, WDK 7.1's). See section 2a. `INSTALL.BAT` is this project's own text. Neither carries or calls a Microsoft setup program: the routines they use are the system's own, looked up at run time |
 | Published USB tree tool binaries | Yes, from the first cut that carries them (`3.0.0.0`) | `releases/<version>/tools/xhcitr/XHCITR.EXE` and `XHCITR64.EXE` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each (MSVC 6.0's, WDK 7.1's). See section 2a |
 | Published 98 SE and ME device-install helper binary | Yes, from the first cut that carries it (`3.1.0.0`; not cut yet) | `releases/<version>/tools/xhciinst/XHCIDI.EXE` | Built from this project's sources but not only this project's code (design record 27 section 3): a 16-bit Windows program whose Open Watcom 2.0 C runtime is statically linked in (the Sybase Open Watcom Public License, as the qualifier's), linked against the Windows 98 SE DDK's `setupx.lib`, an import library whose OMF records name the module `SETUPX` and its exports and carry no code, so the image holds module-and-ordinal imports of the running system's `SETUPX.DLL` and no Microsoft code; compiled against that DDK's `inc16\setupx.h`, the `prsht.h` it includes and its 98 `windows.h` (the four members identified in `docs/references/README.md`, "Windows 98 DDK"); see section 2a, "XHCIDI.EXE" (task 42-A.1) |
 | Oney, *Programming the Microsoft Windows Driver Model* (2nd ed., 2003) | No, and it never was; it is in no commit and in no directory of this repository | Nowhere in this tree; a purchased book on the reader's own shelf | The one third-party document cited by printed page that is not kept in `docs/references/`. Edition, page count, SHA-256 of the copy the citations were read from, and the page-index offset are in `docs/references/README.md`. There is no fetch URL to record, because there is no download |
@@ -117,7 +117,8 @@ identification.
 | The two `usbd.sys` builds and Windows 98 SE's `usbhub.sys` | No | `tools/` (git-ignored) | Reference copies, staged from the user's own install media for the import gate's Windows 98 evidence and the Windows 2000 VM setup. The assembled release download carried them from 0.0.0.4 to 1.0.0.0 and carries them no longer; see section 5 |
 | Disassembly extracts taken from those binaries | No | `tools/*-extracted/` (git-ignored) | Convenience copies only; see section 4 |
 | Staged install media | No | `out/` (git-ignored) | Generated; the upload set for a release is assembled here |
-| Stor98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled Stor98 build" below |
+| Stor98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled Stor98 build" below. Since 2026-10-19 the release folders they are copied from are tracked, as part of `src/stor98/` (the next row); the copies in `out/` are not |
+| Stor98, its source, docs, tests and released builds (BSD-3-Clause) | Yes, from 2026-10-19 (roadmap-usb4 task 42-A.20) | `src/stor98/` | The Stor98 project's tracked files, imported as one snapshot (owner, 2026-10-19). Not this project's GPL-2.0 code: Stor98's own `LICENSE` and `NOTICE` govern every file there; see "Stor98 in this tree" below |
 | The Windows 98 Second Edition DDK (`win98se_ddk.exe`) | No | `tools/win98ddk/`, extracted into `tools/win98ddk-extracted/` (git-ignored) | Fetched on 2026-10-15 from the Internet Archive for roadmap-usb4 task 39-0.3; its identity, SHA-256, source URL and the licence it states are in `docs/references/README.md`, "Windows 98 DDK". Extracted with 7-Zip, not installed; nothing in it was executed. The CONFIGMG and VMM values of `src/cm/cm_cfgmg.h` are what is taken from it (section 4, the CONFIGMG row) |
 | Source files from `usb4-emu`'s `tools/usb4cm` (MIT) | Yes, from the change that lifts the first of them (roadmap-usb4 task 39-A.2) | `src/cm/` | Not only this project's code: which files, their notices and the rule a lifted file follows are in section 2a, "Source files lifted from `usb4cm`" |
 
@@ -296,6 +297,34 @@ runs `devcon` or any other Microsoft setup program. `INSTALL.BAT`, staged
 at the version root, is this project's own text. `make-release.ps1`
 generates one `NOTICE.TXT` beside the two executables recording both
 linkages, as for `XHCICLN`.
+
+From `3.1.0.0` (roadmap-usb4.md task 42-A.2, design record 23 revision 11)
+the same tool is built from `xhciinst/inst_eng.c` (the engine) and
+`xhciinst/xhciinst.c` (its console front end), the same linkages.
+
+#### XHCIWIZ.EXE and XHCIWZ64.EXE
+
+`releases/<version>/tools/xhciinst/XHCIWIZ.EXE` and `XHCIWZ64.EXE` are the
+installer's window, from `3.1.0.0` (design record 26), built by
+`xhciinst/build.cmd` from `xhciinst/xhciwiz.c`, `xhciinst/inst_eng.c`,
+`xhciinst/inst_core.c` and `src/xhci_psw.c`, with `xhciinst/xhciwiz.rc`
+embedding `xhciinst/xhciwiz.manifest` and `xhciinst/xhciwiz.ico` (an icon
+drawn for this project in the 16 VGA colours) - all this project's own
+text. Each is not only that, in `XHCITR`'s way:
+
+- `XHCIWIZ.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked
+  multithreaded (`cl /nologo /W3 /WX /O2 /MT`, `LIBCMT`). Re-derivable:
+  `link -dump -imports XHCIWIZ.EXE` names `KERNEL32.dll`, `USER32.dll`,
+  `GDI32.dll`, `ADVAPI32.dll`, `COMCTL32.dll`, `COMDLG32.dll` and
+  `SHELL32.dll` and no C runtime DLL, which `xhciinst/selftest.cmd` checks
+  at every build.
+- `XHCIWZ64.EXE`: the Windows Driver Kit 7.1's amd64 C runtime (`LIBCMT`),
+  statically linked (`/MT`); its import table names the same seven DLLs.
+
+As for the console pair, every SetupAPI, `newdev.dll`,
+configuration-manager and `version.dll` routine is looked up at run time;
+neither executable contains or runs a Microsoft setup program. The one
+`NOTICE.TXT` beside the four executables records all four linkages.
 
 #### XHCITR.EXE and XHCITR64.EXE
 
@@ -478,11 +507,14 @@ Not a binary either, and not an adaptation: a header another project
 publishes as an interface definition, carried in this tree byte for byte
 with its own licence notice, so that this driver and the other project
 build against one definition. It is never edited here; a change is made in
-its own repository and copied in again, with this row updated.
+its own repository and copied in again, with this row updated. For
+`stor98cm.h` that repository is, since 2026-10-19, `src/stor98/` of this
+one ("Stor98 in this tree" below): the change is made in
+`src/stor98/include/stor98cm.h` and copied to `src/cm/` unchanged.
 
 | File in this tree | Source | Commit read | SHA-256 | Licence | Why | Task |
 |---|---|---|---|---|---|---|
-| `src/cm/stor98cm.h` | Stor98 `include/stor98cm.h` (the `nvme98` project's `include/nvme98cm.h` until its rename, 2026-10-16) | `6609c1c36701e50665daf0305fdc35fe06e258d6` (the header's last change; Stor98 `main` was at `3e9f51b`, its `0.3.0.0` release, when read, 2026-10-16) | `cc0ce571719bab8f40813bee3e9297501df5b824a14e0105420d8d759c545c84` | BSD-3-Clause, `Copyright (c) 2026, Yeo Kheng Meng`, the notice kept in the file; the file's own text says it is licensed on its own, independently of the code on either side, and asks that no GPL-licensed code or text be put into it | the link-state table, callback object, 9x locator and current-boot proof Stor98 adopted as its connection-manager interface (decisions MD-5 and MD-6, gate G3, interface version 4); `src/cm/cm_nvlink.c` and `cm_nvlinkos.c` implement this side, on NT and on 98 SE and ME (the 9x half read on 2026-10-16, `runs/run-41.md`, "The Stor98 link-state channel on 98 SE and ME") | 39-A.7, 40-A.7, and the Stor98 rename of 2026-10-16 (`runs/run-41.md`, "Stor98 behind the Thunderbolt 3 controller") |
+| `src/cm/stor98cm.h` | Stor98 `include/stor98cm.h` (the `nvme98` project's `include/nvme98cm.h` until its rename, 2026-10-16) | `f9755aee7a27725e2a0edfb0d8c1e1231669f777` (the header's last change, contract text only with interface version 4 and the layout unchanged, on Stor98's branch `audit-2026-10-18`, read 2026-10-18; before it `6609c1c36701e50665daf0305fdc35fe06e258d6`, read 2026-10-16) | `eeaa1f81adda3d6436f342413f17611d0a36ddacea7d8e98d113831bdd59ef1a` | BSD-3-Clause, `Copyright (c) 2026, Yeo Kheng Meng`, the notice kept in the file; the file's own text says it is licensed on its own, independently of the code on either side, and asks that no GPL-licensed code or text be put into it | the link-state table, callback object, 9x locator and current-boot proof Stor98 adopted as its connection-manager interface (decisions MD-5 and MD-6, gate G3, interface version 4); `src/cm/cm_nvlink.c` and `cm_nvlinkos.c` implement this side, on NT and on 98 SE and ME (the 9x half read on 2026-10-16, `runs/run-41.md`, "The Stor98 link-state channel on 98 SE and ME") | 39-A.7, 40-A.7, and the Stor98 rename of 2026-10-16 (`runs/run-41.md`, "Stor98 behind the Thunderbolt 3 controller") |
 
 The file uses `//` comments, which AGENTS.md's C89 rule forbids in this
 project's own source. It is the recorded exception: a third-party header
@@ -530,13 +562,74 @@ here:
   shipped unchanged. It is not this project's certificate (section 2's
   test-signature row) and not a Microsoft signature. The
   packaging scripts do not sign, re-sign or import it.
-- **What is tracked.** None of these files: they are not in `releases/`
-  and not in any commit, and the packaging scripts copy them from the
-  release folder at each cut. The generated `readme.txt` and
-  `docs/using/release-notes.md` name the bundled version.
+- **What is tracked.** None of these files in this project's
+  `releases/`: the packaging scripts copy them from the release folder at
+  each cut. Until 2026-10-19 that folder was outside this repository; since
+  then the release folders are tracked in `src/stor98/releases/` as
+  Stor98 committed them, and `-Stor98Dir` defaults to
+  `src/stor98/releases/<version>/` ("Stor98 in this tree" below). The
+  generated `readme.txt` and `docs/using/release-notes.md` name the
+  bundled version.
 - **The other direction.** No code of this project, and none of
   `usb4-emu`'s, is copied into Stor98 (AGENTS.md, "Reference
   Implementations").
+
+### Stor98 in this tree (`src/stor98/`)
+
+Since 2026-10-19 the Stor98 project is in this repository as `src/stor98/`
+(roadmap-usb4 task 42-A.20; owner): every tracked file of its own
+repository's branch `audit-2026-10-18` at commit `4253b58` (its `0.4.0.0`
+release and the reviewed fixes of its audit of 2026-10-18), copied as one
+commit with every blob identical to that commit's and none of its history.
+What is recorded here:
+
+- **Licence.** BSD-3-Clause, the whole of `src/stor98/` (its `LICENSE`, with
+  its four copyright lines: Dominik Behr for nvme2k, Dominik Behr and Ray
+  Hinchliffe for the nvme2k INF its INFs derive from, SweetLow for the
+  nvme9x/nvment port, Yeo Kheng Meng for Stor98). This project's
+  GPL-2.0-only `LICENSE` is not its licence; the root `LICENSE`'s scope
+  note says so.
+- **Provenance.** Stor98's `NOTICE` is the record and governs; this list
+  repeats what it says. Stor98's `src/` was imported from SweetLow's nvme9x/nvment source
+  (`nvme2k-src.zip` of `https://github.com/LordOfMice/Tools`, SHA-256
+  `272b50836d7f9fe4c1a483f5868d099604916ccd4c89b4daacbc1d17c80bb4f2`),
+  imported without the Microsoft headers `SCSI.H` and `SRB.H` it bundled
+  and with BSD-3-Clause headers added, and is Stor98's development of it since; SweetLow stated on 2026-10-14 that
+  his port and changes are BSD-3-Clause, the licence of the original
+  nvme2k, and his `NVMEVSD.VXD` public domain (neither its source nor its
+  binary is in the tree). That code derives from Dominik Behr's nvme2k
+  1.0.0.2, whose own licence the `NOTICE` records as not checked
+  separately. `third_party/nvme2k-1.2.0.0/` is an unmodified copy of
+  `https://github.com/techomancer/nvme2k` at commit `0c41727` (release
+  1.2.0.0), with its `LICENSE` (BSD-3-Clause). `include/stor98cm.h` is
+  Stor98's own, licensed on its own as an interface definition.
+- **Its rules.** Stor98's `AGENTS.md` keeps its own provenance rules for
+  those files (every nvme2k-derived file keeps Dominik Behr's notice, the
+  reference copy stays unmodified, no Microsoft kit file is committed).
+  This project's rules on source (C89, ASCII, the gates of
+  `build-driver.cmd`) do not bind it.
+- **Tracked binaries.** Its released builds as Stor98 committed them,
+  `src/stor98/releases/0.3.0.1/` and `0.4.0.0/`: `stor98.mpd` and
+  `stor98.sys` (x86), `stor98.sys` (x64) with the embedded test signature
+  by Stor98's own test certificate, and that certificate's public half
+  `stor98-test.cer`, each listed in the folder's `SHA256SUMS.txt`. The
+  `0.4.0.0` folder's `SHA256SUMS.txt` hashes to
+  `ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7`, the
+  pin `3.0.0.0` bundled it under.
+- **Not tracked.** Its build needs `SCSI.H` and `SRB.H` from a Windows 98
+  (or NT4) DDK, kept in the git-ignored `tools/w98ddk/inc/` with the other
+  kits: `SCSI.H` 36,501 bytes, SHA-256
+  `809d57e6756de21524930eb4d17840ab3047c7e1773da634ceb73a81ff8d39b7`;
+  `SRB.H` 21,056 bytes, SHA-256
+  `4b3c3305686f2593ceb471ae69f1d690de5d833c8f2047859d735b21affd8396` (the
+  copies that came with `nvme2k-src.zip`; `docs/references/README.md`,
+  "Windows 98 DDK"). Its build output (`src/stor98/out/`, `obj*/`) is
+  ignored by its own `.gitignore`.
+- **The interface header.** `src/cm/stor98cm.h` (section 2a, "Third-party
+  headers incorporated unchanged") is now a copy of
+  `src/stor98/include/stor98cm.h` in the same tree, the master;
+  `scripts/check-stor98-header.ps1` holds the two to the same bytes until
+  they are made one.
 
 ### The third-party PDFs
 
@@ -1346,6 +1439,7 @@ written, then the three task 22.12 (b) readings of 2026-09-18.
 | **Windows XP SP3's `usbccgp.sys` 5.1.2600.5585 (32,384 B, SHA-256 `4C1B3E8F3F658E356A955108FF84FB5C95244CB2A9D323AA0DFAEF92927C66C5`) selects the whole configuration down the composite devnode's own stack before it creates any function PDO**: `StartParentFdo` (`0x150F0`) passes the `START` down (`CallDriverSync`, `+0x70`), then on a first start calls `GetDeviceDescriptor` (`+0xAD`), `GetConfigDescriptor` (`+0xC4`; `TryGetConfigDescriptor` submits two URBs, `+0x57`, `+0x10F`), `GetParentFdoCapabilities`, `GetInterfaceList`, `ParentSelectConfiguration` (`+0x12B`), and only then `GetNumberFunctions` and `CreateStaticFunctionPDOs` (`+0x17F`); with a flag byte set (`+0x72`) it calls `ParentSelectConfiguration` on the stored descriptor and interface list (`+0x8C`) and returns. `SubmitUrb` (`0x107A0`) calls `IoAllocateIrp`, writes major function `0x0F` and code `0x220003`, and calls `CallNextDriverSync`. `ParentCloseConfiguration` (`0x10A90`) and the function PDO's `UrbFunctionSelectConfiguration` (`0x12E90`, `+0x201`) each submit a URB; their callers and conditions were not traced | static (`tools\WinDDK71\Debuggers\cdb.exe -z tools\symbols\usbccgp.sys\480DE37F7e80\USBCCGP.SYS` with Microsoft's public symbols from `tools\symbols`, `uf /c` on the six routines named and `u` over `StartParentFdo+0x70` to `+0x130` and `SubmitUrb`; 2026-10-14, development host A; nothing executed). ReactOS's `usbccgp` (interface documentation, `0298e10d`) shows the same order | `docs/contributing/design/13-superspeed-hcd.md` section 10.14.1 |
 | **On Windows 98 SE and Windows ME, `cfgmgr32.dll`'s `CM_Uninstall_DevNode` is a stub, and `CM_Locate_DevNodeA` honours `CM_LOCATE_DEVNODE_PHANTOM`** (task 38.8, the route (a) of design record 13's D8). 98 SE's `CFGMGR32.DLL` (45,056 B, dated 04-23-99, SHA-256 `269bbe3e...7aea`): `CM_Uninstall_DevNode` at RVA `0x302F` returns `CR_INVALID_FLAG` (4) for non-zero flags, `CR_INVALID_DEVNODE` (5) for devnode 0 and `CR_SUCCESS` otherwise, and calls nothing; `CM_Locate_DevNodeA` accepts flags 0 or 1 only and, on `CR_NO_SUCH_DEVNODE` (0x0D) from CONFIGMG with flag 1 set, opens `ENUM\<id>` under `HKLM`. ME's `CFGMGR32.DLL` (40,960 B, dated 06-08-00, SHA-256 `05a549a3521d5f060ea85ef0d40919c379b3e62130d89e4579ceae9f37a42982`): the same stub at RVA `0x2C82` (`CM_Uninstall_DevNode_Ex` answers `CR_CALL_NOT_IMPLEMENTED` for a remote machine, else the stub), and the same `CM_Locate_DevNodeA` at RVA `0x3E01`, which goes on to `RegCreateKeyEx` and CONFIGMG for a registry-only entry | static (each guest's file copied out over its serial port, the export table listed and the bytes at the two exports decoded by hand, no disassembler; 2026-10-14, development host A; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 10.13.8 |
 | **The Windows 98 / ME configuration manager's ring-0 interface values in `src/cm/cm_cfgmg.h`** (design record 21 section 6.1; safe eject, roadmap-usb4 task 39-A.8): CONFIGMG's VxD id `0x0033` (`VMM.H` line 175, `CONFIGMG_DEVICE_ID`), the dynalink interrupt `20h` (`VMM.INC` line 3355) and its jump bit `8000h` (`VMM.H` line 4919, `DL_Jmp_Mask`); twenty service numbers - `Get_Version` 0, `Locate_DevNode` 2, `Get_Parent` 3, `Get_Child` 4, `Get_Sibling` 5, `Get_Device_ID_Size` 6, `Get_Device_ID` 7, `Query_Remove_SubTree` 12, `Remove_SubTree` 13, `Register_Device_Driver` 14, `Lock` 22, `Unlock` 23, `Reenumerate_DevNode` 51, `Setup_DevNode` 52, `Get_DevNode_Status` 54, `Disable_DevNode` 64, `Enable_DevNode` 65, `Broadcast_Device_Change_Message` 88, `Change_DevNode_Status` 91, `Set_DevNode_Problem` 122 - each its entry's ordinal in `CONFIGMG.H`'s service table (lines 532-663: 124 entries numbered from 0 by `VMM.H` lines 353-358, with no conditional inside the table and two three-line comments at 624-626 and 645-647 that are not entries; the header's own `DEBUG_SERVICE_NAMES` array, from line 671, lists the same 124 in the same order, but for one spelling at ordinal 109, `_CONFIGMG_Register_For_Idle_Detection` at line 783 for the table's `_CONFIGMG_Register_DevNode_For_Idle_Detection` at line 648); and the `CR_`, `DN_`, `CM_PROB_` and call-flag values the file carries, among them `DN_REMOVABLE` `0x4000`, which `DN_CHANGEABLE_FLAGS` `0x79BB62E0` includes, and `CM_REGISTER_DEVICE_DRIVER_REMOVABLE` `0x2`. Each value is cited to its line in the file | static (a text read of the three headers of the Windows 98 Second Edition DDK, extracted with 7-Zip from `tools\win98ddk\win98se_ddk.exe` into `tools\win98ddk-extracted\`, SHA-256s in `docs/references/README.md`; nothing installed or executed; 2026-10-15; not tracked). The numbers, flag values and result codes alone were taken: no declaration, macro body or comment of the headers is reproduced, and the macro names in the file are this project's own. Every number `usb4-emu`'s re-enumeration experiment used (`tools/reenum-test/reenum.c` at `main` `a68bc74`: the VxD id and eleven services) agrees with these; that experiment's run-time results, recorded in design record 21 section 6.1, are `usb4-emu`'s evidence, not this driver's | `src/cm/cm_cfgmg.h`; design record 21 section 6.1 |
+| **The configuration manager's logical-configuration services in `src/cm/cm_cfgmg.h`** (design record 28, roadmap-usb4 task 42-A.15), counted as the row above counts them: `Add_Empty_Log_Conf` 24 (line 557), `Get_First_Log_Conf` 26 (559), `Get_Next_Log_Conf` 27 (560), `Add_Res_Des` 28 (561), `Get_Next_Res_Des` 31 (564), `Get_Res_Des_Data_Size` 33 (566), `Get_Res_Des_Data` 34 (567), `Read_Registry_Value` 62 (595), `Reprocess_DevNode` 92 (628, the "4.0 OPK2" group) and `Get_Set_Log_Conf_Priority` 106 (642, the same group), with their C signatures from `MAKE_CM_HEADER` (lines 2827 to 2912); the values `BASIC_LOG_CONF` 0 (line 2212), `FORCED_LOG_CONF` 4 (2216), `PRIORITY_EQUAL_LAST` 0 (2235), `LCPRI_SUBOPTIMAL` `0x5000` (445), `LCPRI_DISABLED` `0xFFFF` (453), `CM_GET_LOG_CONF_PRIORITY` 0 and `CM_SET_LOG_CONF_PRIORITY` 1 (1342, 1343), `CM_REGISTRY_SOFTWARE` 1 (1227), `CM_REPROCESS_DEVNODE_ASYNCHRONOUS` 0 (1287), `ResType_All` 0, `ResType_Mem` 1 and `ResType_IRQ` 4 (lines 92 to 97), `CR_NO_MORE_LOG_CONF` `0x0E`, `CR_NO_MORE_RES_DES` `0x0F` and `CR_NO_SUCH_VALUE` `0x25` (951, 952, 974), and the problems `0x08`, `0x0C`, `0x10`, `0x12`, `0x1B`, `0x1C`, `0x1D` (lines 1055 to 1076); `REG_SZ` 1 (`VMM.H` line 2231). The VMM's registry services the Stor98 locator and this record use, which no row carried: VMM id 1, `_RegOpenKey` `0x148` (`VMM.H` line 2216, the table numbered on from there one a line), `_RegCloseKey` `0x149` (2217), `_RegCreateKey` `0x14A`, `_RegDeleteKey` `0x14B`, `_RegQueryValueEx` `0x151` (2225), `_RegSetValueEx` `0x152` and `_RegCreateDynKey` `0x176`, their cdecl signatures from `VXDWRAPS.H` (lines 430 and 439 for the two this task added); Stor98's INF lines `PCI\CC_010802`, `HKR,,DevLoader,,*IOS` and `HKR,,PortDriver,,stor98.mpd` (`inf/stor98-x86.inf`, read at Stor98 `4253b58`) as the ownership evidence of record 28 section 4 rule 4 | static (a text read of the same extracted DDK headers and of Stor98's INF; nothing installed or executed; 2026-10-18 and 2026-10-19; not tracked). Numbers and argument orders alone; no declaration, macro body or comment reproduced | `src/cm/cm_cfgmg.h`, `src/cm/cm_cfgmg.c`, `src/cm/cm_nvlinkos.c`; design record 28 |
 | **The Windows 98 SE setup engine's device-installer values and ordinals in `xhciinst/di/`** (roadmap-usb4 task 42-A.1, design record 27 sections 2, 5 and 9). From the DDK's `inc16\setupx.h`: the `RETERR` values of its five error enumerations, each counting up from its base (`_ERR_IP` from `IP_ERROR` 100 + 1, sixteen; the text processor's from `TP_ERROR` 200 + 1, six; `_ERR_VCP` from `VCP_ERROR` 300 + 1, twenty-five; `_ERR_GENERIC` from `GEN_ERROR` 400 + 1, eighteen; `_ERR_DEVICE_INSTALL` from `DI_ERROR` 500, twenty-eight, in which `ERR_DI_BAD_UNREMOVEDEVICE_PARAMS` is 520, after `ERR_DI_BAD_PATH`, not where its documentation block lists it), with their names, which the helper writes into its result file; `DI_NEEDRESTART` `0x80`, `DI_NEEDREBOOT` `0x100`, `DI_ENUMSINGLEINF` `0x10000`, `DI_CLASSINSTALLPARAMS` `0x100000`, `DI_QUIETINSTALL` `0x800000`, `DNF_OLDDRIVER` `0x2`, `DNF_CURRENT_DRIVER` `0x100`. From the DDK's `setupx.lib`: the ordinals of `SETUPX.DLL` the helper imports, among them `DIGETCLASSDEVSEX` 406, `DiGetINFClass` 351, `DICREATEDEVICEINFO` 303, `DIBUILDCOMPATDRVLIST` 300, `DICALLCLASSINSTALLER` 308, `DIDESTROYDEVICEINFOLIST` 305, `CTLGETLDDPATH` 38 and `CTLSETLDDPATH` 508 (`xhciinst/di/xhcidi-imports.allow` has every row) | static (a text read of the header and a read of the library's IMPDEF records by `xhciinst/di/check-imports.ps1`, which holds every allowlist row to them at each build, and by Open Watcom's `wlib -l`; the DDK as in the CONFIGMG row above, its member hashes in `docs/references/README.md`; nothing executed; 2026-10-18; not tracked). Names and numbers alone are taken: the structure declarations the helper uses are the header's, compiled against and not reproduced, and `test/test_di.c` re-reads the five enumerations and the flags from the header wherever `tools\win98ddk-extracted\` holds it | `xhciinst/di/di_core.c`, `di_core.h`, `xhcidi-imports.allow`; design record 27 |
 | **PCI.VXD's configuration-space services in `src/cm/cm_cfgmg.h`** (design record 21 section 6.1.1, the 9x bus numbering): PCI.VXD's VxD id `0x0043` (`VMM.H` line 197, `PCI_DEVICE_ID`, which `PCI.H` line 67 also names `ResType_PCI_Bus_Number`), and the service numbers `_PCI_Read_Config` 1 and `_PCI_Write_Config` 2, the second and third entries of `PCI.H`'s service table (line 56 on: four entries, numbered from 0 by `VMM.H` lines 353-358); their C signatures, `(BYTE bus, BYTE devfunc, BYTE offset)` returning the dword and `(BYTE bus, BYTE devfunc, BYTE offset, DWORD value)`, both `_cdecl`, from `VXDWRAPS.H` lines 313-314 | static (a text read of `PCI.H`, 8,081 bytes, SHA-256 `0acdf32afe0cc5baca1d74d08638f4f02f744d4f7ed54edb10764c136feb34f9`, and `VXDWRAPS.H`, 60,450 bytes, SHA-256 `d43708f618ad2cd5ed4b66e1e3ebc31235710df83cc9673c54c22d4b07fbe884`, of the same extracted DDK; nothing installed or executed; 2026-10-16; not tracked). Numbers and the argument order alone; no declaration or macro body is reproduced. The run-time guard and the emulator and P14s readings of record 21 section 6.1.1 are what confirm the numbers in use | `src/cm/cm_cfgmg.h`, `src/cm/cm_cfgmg.c`; design record 21 section 6.1.1 |
 | **`usb4-emu/docs/ICM-PROTOCOL.md`, the Thunderbolt 3 client's clean-room contract (design record 21)**: `usb4-emu` `main` `a68bc74`, the same text as at `eba0cf1` (git blob `976cbbe2d4088eb86711463b3f0df3fa2d7fc414`, SHA-256 `43ee04e4326d84d6ea33a17f1b70a3e3b874221c937d3666a31e2b17768d83f8`). The file carries no licence line; its repository's `LICENSE` is MIT. It says it was written from the P14s Gen 1 captures and from a reading of Linux's client behaviour, that no client code, structure or header text is reproduced, and that its field names are its own. It tags each statement [obs] (seen in a capture, citation given) or [inf] (what the Linux client expects, not captured). This project cites it by section and keeps the tag: in `src\cm\` an [inf] fact is a hypothesis until a capture, a leg here, or Linux's `icm.c` itself (section 3, the Thunderbolt mirrors) settles it. The captures, all under `usb4-emu/tests/captures/p14s-gen1/` and named by run id: `p14s-linux-20261014-122716-assistOFF_prebootOFF` (`.tar.gz`, SHA-256 `0638f9b857e7cf6b7b11186aed4bc140d71c622aa080d0bad88895e190bd81c2`), `p14s-linux-20261014-133751-assistON_prebootON` (`5544975d2056f342d479b378406fa785e89a348c1a3629046ea53bd617940c99`), `p14s-win11-20261014-135249-assistOff_prebootOff` (`.zip`, `89171b604592f6f4f2a242f3ad4f903e016870864116df8831d6784e39e658e0`) and the Windows 98 MS-DOS-mode matrix `win98/` (`OFF_OFF`, `OFF_OFF_N`, `OFF_ON`, `OFF_ON_N`, `ON_OFF`, `ON_OFF_N`, `ON_ON`, `ON_ON_NO`) | static (a document read, 2026-10-15; nothing executed; the captures behind its [obs] were not re-read here) | design record 21 section 9 and every section citing `ICM-PROTOCOL` |

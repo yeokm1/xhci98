@@ -542,27 +542,40 @@ static void lv_value(HKEY k, const char *name, TR_RVAL *v)
     DWORD n = sizeof(value);
     LONG r = RegQueryValueExA(k, name, NULL, &type, (LPBYTE)&value, &n);
 
-    v->Value = 0;
+    tr_rv_from_query(r == ERROR_SUCCESS ? TR_Q_OK
+                     : r == ERROR_FILE_NOT_FOUND ? TR_Q_NOT_FOUND
+                     : r == ERROR_MORE_DATA ? TR_Q_MORE_DATA
+                                            : TR_Q_ERROR,
+                     (TR_U32)type, (TR_U32)n, (TR_U32)value, v);
+}
+
+/* A driver's level value in the machine-wide key (task 42-A.17): absent
+ * when the key is not there. */
+static void lv_machine(int driver, TR_RVAL *m)
+{
+    HKEY k;
+    LONG r;
+
+    m->State = TR_RV_UNREAD;
+    m->Value = 0;
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, TR_LV_MACHINE_KEY, 0,
+                      KEY_QUERY_VALUE, &k);
     if (r == ERROR_FILE_NOT_FOUND) {
-        v->State = TR_RV_ABSENT;
-    } else if (r == ERROR_MORE_DATA) {
-        v->State = TR_RV_OTHER;
-    } else if (r != ERROR_SUCCESS) {
-        v->State = TR_RV_UNREAD;
-    } else if (type == REG_DWORD && n == sizeof(value)) {
-        v->State = TR_RV_DWORD;
-        v->Value = value;
-    } else {
-        v->State = TR_RV_OTHER;
+        m->State = TR_RV_ABSENT;
+    } else if (r == ERROR_SUCCESS) {
+        lv_value(k, tr_level_value_name(driver), m);
+        RegCloseKey(k);
     }
 }
 
-/* Devnode dn's level as its driver reads it. */
+/* Devnode dn's level as its driver reads it: the machine-wide value when
+ * it is there, else its driver key's. */
 static void lv_read(int dn, int driver, TR_LEVEL *l)
 {
     char path[300];
     HKEY k;
     TR_RVAL cur;
+    TR_RVAL m;
 
     cur.State = TR_RV_UNREAD;
     cur.Value = 0;
@@ -572,7 +585,8 @@ static void lv_read(int dn, int driver, TR_LEVEL *l)
         lv_value(k, tr_level_value_name(driver), &cur);
         RegCloseKey(k);
     }
-    tr_level_pick(&cur, l);
+    lv_machine(driver, &m);
+    tr_level_pick(&m, &cur, l);
 }
 
 /* Every device's level, from the walk in gw. */
@@ -601,7 +615,9 @@ static void lv_block(TR_TEXT *t)
 
     lv_collect();
     for (d = 0; d < TR_LV_DRIVERS; d++) {
-        tr_level_head(t, d, lvCount[d]);
+        TR_RVAL m;
+        lv_machine(d, &m);
+        tr_level_head(t, d, lvCount[d], &m);
         for (i = 0; i < lvCount[d]; i++) {
             tr_level_device(t, d, dn_name(&gw.N[lvDev[d][i].Dn]),
                             &lvDev[d][i].L);
@@ -626,7 +642,10 @@ static void lv_details(TR_TEXT *t, int dn, int driver)
 /* Writes the levels asked (level[driver] 0-4, or -1 for none) into every
  * device of each driver the walk in gw found, and reads each back.
  * XHCIINST's exit code; the outcome, one line a driver, in msg. Only the
- * two values, only in those keys, and only 0-4. */
+ * two values, only in those keys, and only 0-4. Where the driver's value
+ * is set machine-wide (task 42-A.17), that one value is the one in force
+ * for every device, so it is the one written, and the devices' own are
+ * left as they are. */
 static int lv_set(const int *level, char *msg, size_t cap)
 {
     TR_TEXT t;
@@ -657,6 +676,49 @@ static int lv_set(const int *level, char *msg, size_t cap)
                       tr_level_driver(d), tr_level_driver(d));
             failed++;
             continue;
+        }
+        {
+            TR_RVAL m;
+            lv_machine(d, &m);
+            if (m.State != TR_RV_ABSENT) {
+                HKEY k;
+                LONG r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, TR_LV_MACHINE_KEY,
+                                       0, KEY_SET_VALUE | KEY_QUERY_VALUE, &k);
+                if (r == ERROR_SUCCESS) {
+                    r = RegSetValueExA(k, name, 0, REG_DWORD,
+                                       (const BYTE *)&v, sizeof(v));
+                    if (r == ERROR_SUCCESS) {
+                        changed++;
+                    }
+                    RegCloseKey(k);
+                }
+                for (i = 0; i < lvCount[d]; i++) {
+                    lv_read(lvDev[d][i].Dn, d, &lvDev[d][i].L);
+                    if (lvDev[d][i].L.State == TR_RV_DWORD &&
+                        lvDev[d][i].L.Value == v) {
+                        ok++;
+                    }
+                }
+                if (r != ERROR_SUCCESS) {
+                    tr_printf(&t, "%s: %s was not written machine-wide "
+                              "(error %ld).\n", tr_level_driver(d), name,
+                              (long)r);
+                    failed++;
+                } else if (ok != lvCount[d]) {
+                    tr_printf(&t, "%s: %s machine-wide did not read back as "
+                              "written.\n", tr_level_driver(d), name);
+                    failed++;
+                } else {
+                    wrote += ok;
+                    tr_printf(&t, "%s: %s set to %d - %s, machine-wide "
+                              "(Services\\USB), for every %s.\n",
+                              tr_level_driver(d), name, level[d],
+                              tr_level_text(v),
+                              d == TR_LV_XHCICM ? "host interface"
+                                                : "controller");
+                }
+                continue;
+            }
         }
         for (i = 0; i < lvCount[d]; i++) {
             const DNODE *n = &gw.N[lvDev[d][i].Dn];

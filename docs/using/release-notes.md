@@ -419,15 +419,26 @@ every system `INSTALL /devices` shows what is connected and
 - **A dock** is listed under the name of its own PCI switch's upstream
   port, a generic PCI-to-PCI bridge name; stopping it stops everything in
   the dock.
-- **A device Windows does not list (Windows 2000 to 7).** The first time
-  a device Windows has never seen is plugged in behind the tunnel,
-  Windows installs its driver and rebuilds its driver stack without the
-  filter that marks it removable, so "Unplug or Eject Hardware" and
-  "Safely Remove Hardware" do not offer it (read on 2000 and XP; 7 kept
-  the mark on the first plug). The same happens after the device is
-  disabled and enabled or its driver is updated. From the next plug on
-  Windows lists it. The xHCI98 USB Tree and `INSTALL /eject` still stop it when
-  run as an administrator: they ask Windows for the same query-remove and
+- **A device Windows does not list (Windows 2000 to 7).** Until
+  `3.1.0.0`, the first time a device Windows has never seen was plugged
+  in behind the tunnel, Windows installed its driver and rebuilt its
+  driver stack without the filter that marks it removable, so "Unplug or
+  Eject Hardware" and "Safely Remove Hardware" did not offer it (read on
+  2000 and XP; 7 kept the mark on the first plug), and the same happened
+  after the device was disabled and enabled or its driver updated. From
+  `3.1.0.0` the Thunderbolt component installs a small service,
+  `xhcimark` (`tools\xhcimark\`, run by Windows, never by hand), which
+  writes the filter into the device's own driver list (its `LowerFilters`
+  value) within a poll of the device appearing (about a second; ten
+  seconds while the driver is not answering) and takes it out again within
+  a poll of the device leaving, so the first plug, a disable and
+  enable and a driver update keep the device listed. When Windows rebuilt
+  a first plug's drivers before the mark was written, the service
+  restarts that one device once, the way Device Manager applies a
+  property change; a program with a file open on it refuses that, and the
+  device is then listed from its next start. With the service stopped,
+  or for such a refused device, the xHCI98 USB Tree and `INSTALL /eject`
+  still stop it when run as an administrator: they ask Windows for the same query-remove and
   remove by the routine meant for devices that are not removable, and a
   program with a file open still refuses it. The USB Tree asks for the
   rights when it lacks them ("Stop as administrator...": User Account
@@ -465,7 +476,15 @@ Under a firmware connection manager the stop ends the device's drivers
 and leaves its tunnel up, since the firmware has no way to drop one
 tunnel alone; the tunnel goes when the device is unplugged. Under the USB4
 connection manager on Windows 2000 to 7 the stop also takes the PCI
-Express tunnel down (the USB3 tunnel stays).
+Express tunnel down (the USB3 tunnel stays) - from `3.1.0.0` only once
+the stop is confirmed: on XP, Vista and 7 by the `xhcimark` service,
+which sees Windows hold the device for removal, within a poll; on
+2000, whose applet leaves no such sign, only by an administrator's
+`INSTALL /eject` (or the USB Tree run as one). Without the confirmation
+the tunnel stays up until the unplug, and the tools say the driver has
+not confirmed the teardown. A disable, a driver update or the service's
+own restart of a device is never taken for a stop, so it no longer tears
+the tunnel down as it did in `3.0.0.0`.
 
 ### NVMe drives behind a tunnel
 
@@ -514,7 +533,9 @@ key, a `DWORD` unless it says otherwise:
 `NNNN` is the subkey whose `DriverDesc` is the controller's Device
 Manager name ("Which controllers"). The install writes each value below
 but `XhciCmTunnelBridge` and `XhciCmBridgeNumbering` at its default,
-only where it is missing.
+only where it is missing. From `3.1.0.0` each is also read from
+`HKLM\System\CurrentControlSet\Services\USB` first, where it wins when it
+is there ("Registry settings", "One value for every controller").
 Restart Windows, or disable and enable the controller, after a change.
 
 | Value | Default | What it does |
@@ -526,6 +547,7 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
 | `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
+| `XhciCmNoIrqStart` | `1` | Windows 98 SE and ME: `1` starts an NVMe drive behind a tunnel whose interrupt cannot be routed with no interrupt, for the bundled Stor98 (0.4.0.0 or later, installed by this package's installer) to poll; `0` leaves it at its problem code. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
 | `XhciCmBridgeNumbering` | `1` | Windows 98 SE and ME: `1` sets up the PCI bridges a device brings up behind a tunnel after Windows has started (bus numbers, memory windows, interrupt lines, as the BIOS would) (a USB4 NVMe enclosure's switch, which otherwise shows Code 29 until a restart); `0` leaves them as they come up. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | A comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports, for a machine whose ports it does not find (the `debug` log says so). Not written by the install |
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
@@ -637,6 +659,18 @@ have every leg.
   Read under the Thunderbolt 3 firmware connection manager on the
   ThinkPad P14s Gen 1 and in the emulator; the USB4 connection manager
   takes the same path but has not been read with such a device.
+- **Windows 98 SE and ME: an NVMe drive behind a tunnel whose interrupt
+  cannot be routed** (Device Manager: Code 29, "the BIOS for the device did
+  not give it an IRQ") **still does not start.** The driver's attempt to
+  start such a drive with no interrupt for the bundled Stor98 to poll
+  (`XhciCmNoIrqStart`, on by default) was read in the emulator and does
+  not apply to the case seen there: Windows' own configuration of the
+  drive asks for no interrupt, so the driver leaves it as it is and
+  changes nothing. Re-plug the drive with the tunnel's bridge routed, or
+  restart with it attached. While xhcicm.sys makes its Windows 98
+  configuration calls, a hardware wizard left open on 98 SE or ME holds
+  its other work for the tunnel ports too (plug, removal and safe-eject
+  marking wait), as any such call it makes does.
 - **Windows 98 SE and ME: after Safely Remove of such a device, unplug it
   before using it again.** Windows' stop closes the switch's memory windows;
   Scan for hardware changes without an unplug leaves the drive at Code 29
@@ -652,8 +686,10 @@ have every leg.
   `INSTALL /eject` stop it when run as
   an administrator ("Removing a Thunderbolt or USB4 device safely"); a
   pull without a stop is a surprise removal, with Windows 2000's warning
-  and cached writes at risk. A later release is to keep the mark across a
-  rebuild.
+  and cached writes at risk. From `3.1.0.0` the `xhcimark` service keeps
+  the mark across those rebuilds; this stays the case for a device whose
+  restart a program refused, until its next start, and while the service
+  is stopped.
 - **A device tunnelled before the driver started** (by the BIOS's pre-boot
   support, or connected while the driver was installed) is offered for
   safe removal only after a re-plug, on Windows 2000 to 7; the xHCI98 USB
@@ -2528,6 +2564,21 @@ hardware or the Windows they affect is present, and sets them on request
 ("Installing, updating and uninstalling with INSTALL.BAT"); everything
 below can still be set by hand.
 
+**One value for every controller (new in `3.1.0.0`).** Every value below,
+and every `XhciCm*` value ("The connection manager's registry values"),
+is read first from `HKLM\System\CurrentControlSet\Services\USB` on every
+Windows, and a value there **wins** over the same value in a controller's
+own key, for every controller; only when it is not there does each
+controller read its own key, as before. A value of the wrong type there
+still wins, and the driver's default stands. The INFs write nothing
+there, so nothing changes until a value is set in it; `portsw.vbs`,
+`silent.vbs` and their batch files set their value there and show both.
+`INSTALL /set` and `INSTALL.BAT`'s questions still write each
+controller's own key, which a machine-wide value overrides: delete the
+machine-wide value first, or set it there.
+To give one controller a different value, delete the machine-wide value
+and set that controller's own. `docs/using/tuning.md` has the details.
+
 Each value is a `DWORD` in the controller's driver (software) key, and
 the install writes every value the driver reads, thirty-six, in this key:
 
@@ -2764,6 +2815,12 @@ turns those two settings into fast ones.
 | `3` | 4000 Hz | 8000 Hz |
 | `4` | 31 Hz | 62 Hz (the codes below instead) |
 
+**Changed in `3.1.0.0`: value `4`'s codes.** In `2.3.0.0` to `3.0.0.0`
+value `4` took the codes 128, 129 and 130 for 2000, 4000 and 8000 Hz. From
+`3.1.0.0` it takes 128 to 143, and the order is reversed: 128 is now
+8000 Hz and 130 is 2000 Hz. There is no setting for the old codes. A filter
+set to a code for an earlier release must be set again.
+
 With `2` or `3`:
 
 - **Root ports only.** A device behind a hub keeps its ordinary rate.
@@ -2778,20 +2835,29 @@ With `2` or `3`:
   any Low- or Full-Speed device on a root port whose own polling interval is
   16 to 63 ms is polled faster too, hidusbf or not.
 
-**`4`: the rate the client chooses** (new in `2.3.0.0`; GitHub issue 17).
-An interrupt endpoint whose polling interval in the configuration Windows
-selects is 128, 129 or 130 is polled at 2000, 4000 or 8000 Hz; every other
-interval is polled as the specification reads it, so value `4` does not do
-`2`'s and `3`'s speeding up of 16 to 63 ms, and `2` and `3` do not honour
-the codes. It applies to a Low- or Full-Speed device on a root port only,
-and to a High-Speed or SuperSpeed device at a root port or behind a hub.
-The procedure is the value first, then the client: set `XhciFastPollFsLs`
-to `4` and restart, then set hidusbf (or another filter) to write 128, 129
-or 130. Two cautions:
+**`4`: the rate the client chooses** (new in `2.3.0.0`, GitHub issue 17;
+its codes changed in `3.1.0.0`, from SweetLow's proposal). An interrupt
+endpoint whose polling interval in the configuration Windows selects is a
+code from 128 to 143 is polled every 125 us x 2 to the power (code - 128):
+
+| Code | Polled every | Rate |
+|---|---|---|
+| 128 | 125 us | 8000 Hz |
+| 129 | 250 us | 4000 Hz |
+| 130 | 500 us | 2000 Hz |
+| 131 | 1 ms | 1000 Hz |
+| 132 to 143 | 2 ms to 4.096 s, doubling each step | 500 Hz down |
+
+Every other interval is polled as the specification reads it, so value `4`
+does not do `2`'s and `3`'s speeding up of 16 to 63 ms, and `2` and `3` do
+not honour the codes. It applies at every speed, on a root port or behind a
+hub. The procedure is the value first, then the client: set
+`XhciFastPollFsLs` to `4` and restart, then set hidusbf (or another filter)
+to write the code. Two cautions:
 
 - 128 to 255 ms are legal polling intervals for a Low- or Full-Speed
-  device, so a device that itself asks for 128, 129 or 130 ms is polled at
-  2000 to 8000 Hz while the value is `4`.
+  device, so a device that itself asks for 128 to 143 ms is polled at its
+  code's rate while the value is `4`.
 - A filter that writes a code while the value is not `4` gets what the
   number means without it: a Low- or Full-Speed device is polled every
   128 ms, and a High-Speed or SuperSpeed one, for which the number is out
@@ -2800,12 +2866,16 @@ or 130. Two cautions:
 
 A controller that refuses a code is caught as for `2` and `3` and counted
 in `fastpoll.fallbacks`, and the device is then polled every 1 ms
-(1000 Hz), not at the code's ordinary reading. A controller that accepts
-it and misbehaves cannot be caught; delete the value and restart. At High
-Speed and SuperSpeed the programmed polling interval is inside the
-specification's range; at Low and Full Speed it is outside it, as `2`'s
-and `3`'s are. On an AMD controller
-the code is applied before `XhciIntervalCap`, which leaves it alone. A
+(1000 Hz), whatever the code, not at the code's ordinary reading. A
+controller that accepts it and misbehaves cannot be caught; delete the
+value and restart. At High Speed and SuperSpeed every code's polling
+interval is inside the specification's range; at Low and Full Speed codes
+131 to 138 (1 to 128 ms) are inside it, and the others are outside it, as
+`2`'s and `3`'s are. A Low- or Full-Speed device behind a hub at any code
+is **untested ground**: `2.3.0.0` to `3.0.0.0` left such a device alone,
+and below 1 ms or above 128 ms the specification does not describe it. On an
+AMD controller the code is applied before `XhciIntervalCap`, which leaves a
+code of 136 or faster alone and polls a slower one every 32 ms. A
 part of a composite device keeps the code only until its class driver
 issues a later select of its interface (`SELECT_INTERFACE`), even of the
 same alternate setting, as with `2` and `3`; HID class drivers do not.
@@ -2818,7 +2888,11 @@ QEMU (since `2.3.0.0`, on 32-bit Windows 7 and Windows 98 SE) value `4`
 programmed the intervals the codes ask for, `2` and `3` ignored the
 codes, a mouse behind a hub kept its rate and the mouse moved
 throughout; that shows what the driver asks of the controller, not how
-a real controller and device behave at those rates. The bench reading on
+a real controller and device behave at those rates. The `3.1.0.0` codes
+were read the same way on Windows 98 SE: 128, 135 and 143 programmed
+polling intervals of 125 us, 16 ms and 4.096 s (a Full-Speed mouse behind
+QEMU's hub among them), 143 left a High-Speed device at its own 4.096 s,
+and 144 changed nothing. The bench reading on
 the ThinkPad E460 and P14s Gen 1 was not taken for this release.
 
 ### XhciFirstEnumWaitMs and XhciFirstEnumPortMs: the first report's wait
@@ -2962,8 +3036,8 @@ within USB 2.0 and costs a few polls a second for such a device.
 
 It is applied after a polling rate a setting such as hidusbf's asked for
 and does not change which mouse `XhciFastPollFsLs` speeds up; under
-`XhciFastPollFsLs` `4` a code is applied first, and the cap leaves it
-alone. It is read when the controller starts.
+`XhciFastPollFsLs` `4` a code is applied first, and the cap leaves a code
+of 32 ms or faster alone. It is read when the controller starts.
 
 ### XhciAvgTrbEsit: a comparison switch
 
@@ -3550,6 +3624,11 @@ node under it, and each Thunderbolt or USB4 controller a "Driver log
 whether the driver is recording, its counters, and the log, oldest record
 first. Save Report (and `XHCITR /report <file>`) writes both logs and the
 counters into the report, as plain text with no internal addresses in it.
+With a Thunderbolt or USB4 report on Windows 2000 to 7, also send the
+safe-removal mark service's log (from `3.1.0.0`),
+`%SystemRoot%\System32\LogFiles\xhci98\XHCIMARK.LOG`: one line for each
+mark it wrote or removed, each check that stopped it, and each restart it
+made.
 
 The tool reads `xhci98.sys` through a query request of the driver's own,
 as it reads `xhcicm.sys`, with no `SNAPON.BAT` needed; an `xhci98.sys`
@@ -3862,7 +3941,7 @@ information.
 | Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; on a VL805 reported working on `2.3.0.0` by the owner, not yet read in detail, and not run on any other controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
 | Controllers below xHCI 1.0 (0.96: NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) | Accepted by default (`XhciAccept096`), driven as xHCI 1.0 controllers but for the fields Linux writes differently on them (TD Size in 0.96's units, the control transfer's Transfer Type, the isochronous burst counts, and no isochronous Frame ID) and with the capability register at 1Ch ignored, so a resume from standby re-enumerates their devices; built against host tests and Linux's handling of the same parts; read on no 0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD 0.96 parts are not applied, so isochronous transfers (audio, video) on those parts are the least certain. Set `XhciAccept096` to `0` to refuse such a controller as `2.3.1.0` did |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
-| Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs") |
+| Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs"), and its `3.1.0.0` codes on Windows 98 SE alone, a Full-Speed device behind a hub included |
 | The Intel port switchover beyond two machines | Read on one `1E31` machine under Windows 98 SE and on one `9CB1` machine, the Dell Latitude E7250, under Windows 7 x64 ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1` and `8D31` and every other system rest on Linux's handling of the same chipsets and on host tests of the sequence |
 | `XhciIntelPortSwitch` `2` on an unlisted Intel controller | Built and host-tested; read on no unlisted Intel controller. At your own risk: on one without the switch registers it writes registers of unknown meaning ("Value 2") |
 | A finer system timer while polling (`XhciPollFineTimer`, off by default), and the helper `xhcihlpr.sys` | New in `2.4.0.0`, built against host tests and static checks: the helper's imports were read in the kernels and HALs of 32-bit Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1, statically. The finer timer was read only in QEMU virtual machines without hardware acceleration, polling, on 7 x64, 7 x86 and Vista x86, where while it was held it slowed the guest's clock to a tenth to seven tenths of real time and USB keyboard input was lost; so it ships off; on 32-bit XP and 2000 the guest's clock kept nine tenths of real time or more while it was held. Real hardware is unread. Read in QEMU before the release besides: the helper's install on 2000 and XP with no restart and its replacement of `xhcimsi.sys` on 32-bit Vista and 7; a held request given back at the controller's stop (7 x86) and at a hibernation (7 x86 and x64), and taken again at the next copy after the resume (Vista x86 and 7); a clean shutdown during a polled copy with the finer timer on, on 2000 and 7 x86; two controllers polled at once, holds equal to releases on each (2000, 7 x86). A recovery with the request held, and the finer timer's effect on a copy's rate or on audio, were not read ("XhciPollFineTimer: a finer system timer while polling") |

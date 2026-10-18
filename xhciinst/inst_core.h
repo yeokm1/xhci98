@@ -281,13 +281,15 @@ int inst_testsigning(const char *options);
 #define INST_INF_UAS        1
 #define INST_INF_CM         2
 #define INST_INF_CMF        3
-#define INST_INF_COUNT      4
+#define INST_INF_S98        4   /* the bundled Stor98, when ticked */
+#define INST_INF_COUNT      5
 
 #define INST_APPLY_ANY_XHCI 0
 #define INST_APPLY_PSW      1
 #define INST_APPLY_NT_XHCI  2
 #define INST_APPLY_CM       3
 #define INST_APPLY_9X_XHCI  4   /* 98 SE and ME with an xHCI controller */
+#define INST_APPLY_9X_CM    5   /* 98 SE and ME with a device xhcicm.inf matches */
 
 typedef struct _INST_VALUE {
     const char *Name;
@@ -300,7 +302,23 @@ typedef struct _INST_VALUE {
     INST_U32 CautionMask;   /* the values the caution is about (0: every one) */
     const char *Choice[4];  /* what value n means, or NULL (owner, 2026-10-16:
                                each choice on its own line with its meaning) */
+    /* Record 26 section 11 (task 42-A.2): a value whose allowed set is a
+     * range rather than a list (Hi nonzero: Lo to Hi, the masks unused),
+     * and a value the INFs do not write (NoInf: Def is its default, the
+     * driver's built-in one). */
+    INST_U32 Lo;
+    INST_U32 Hi;
+    int NoInf;
+    INST_U32 Def;
 } INST_VALUE;
+
+/* The most values the table holds (the answers' arrays). */
+#define INST_MAX_VALUES     32
+
+/* Where the installer writes a value (record 26 section 5.4, task 42-A.17;
+ * owner, 2026-10-18): the machine-wide key both drivers read first, under
+ * HKLM. A per-controller value is left as it is. */
+#define INST_MW_KEY         "System\\CurrentControlSet\\Services\\USB"
 
 /* FNV-1a over bytes, continuing from h (start with INST_FNV_START): the
  * local copy's content tag (record 23 section 4.4). */
@@ -330,6 +348,18 @@ INST_U32 inst_value_asked_mask(int index, const INST_ENV *env);
 /* The values /set accepts on this system (XhciInterruptMode 3 on Vista and
  * 7 only, as asked). */
 INST_U32 inst_value_set_mask(int index, const INST_ENV *env);
+
+/* 1 when v is a value /set (and the window's Advanced dialog) may give
+ * value `index` on this system: in its range, or in its /set mask. */
+int inst_value_allowed(int index, const INST_ENV *env, INST_U32 v);
+
+/* 1 when value `index` concerns this system and hardware, asked or not
+ * (the window's Advanced rows): its Apply rule's hardware and system. */
+int inst_value_relevant(int index, const INST_ENV *env);
+
+/* The value's default: the INF's AddReg line, or, for a value no INF
+ * writes (NoInf), the table's. 1 when there is one. */
+int inst_value_default(int index, const char *infText, INST_U32 *def);
 
 /* An answer: 0 keep (empty line), 1 *value set, -1 not an allowed value. */
 int inst_value_answer(const char *line, INST_U32 mask, INST_U32 *value);
@@ -430,13 +460,14 @@ size_t inst_yesno_question(char *out, size_t cap, const char *question,
 
 /* The install directory's question (record 23 section 9.6): a line for
  * each thing that goes there - toolName, the USB tree tool, when the
- * package carries it; copyName, on 98 SE and ME the package copy the
+ * package carries it; setupName, the installer itself (record 26 section
+ * 6.2), NULL for none; copyName, on 98 SE and ME the package copy the
  * hardware wizards search - where they are now (NULL on a first install),
  * the 98 SE and ME naming rule, and "Enter for [<def>]: " (or, with list,
  * what Enter would give). */
 size_t inst_dir_question(char *out, size_t cap, const char *toolName,
-                         const char *copyName, const char *now,
-                         const char *def, int nt, int list);
+                         const char *setupName, const char *copyName,
+                         const char *now, const char *def, int nt, int list);
 
 /* The install directory checked as text (record 23 section 9.6). path is
  * what was typed or given with /to; on success out holds it in the form
@@ -491,6 +522,7 @@ typedef struct _INST_OPTS {
     int Restage;
     int Uninstall;
     int Thunderbolt;        /* /thunderbolt: the Thunderbolt support, unasked */
+    int Stor98;             /* /stor98: the bundled Stor98, unasked      */
     int NoTray;             /* /notray: XHCITR not started at login     */
     int NoPause;
     int SelfTest;
@@ -501,6 +533,11 @@ typedef struct _INST_OPTS {
     char Dir[INST_NAME_CHARS];
     char Log[260];
     char To[260];           /* /to <path>: the install directory, unasked */
+    char From[260];         /* /from <dir>: the uninstall's relaunch from the
+                               install directory (record 26 section 9.2) */
+    int Debug;              /* /debug: the debug- directory (the window's
+                               own choice; INSTALL.BAT's for the console) */
+    int Console;            /* /console: INSTALL.BAT's word, the console's */
     int SetCount;
     int SetIndex[INST_MAX_SET];
     INST_U32 SetValue[INST_MAX_SET];
@@ -530,6 +567,11 @@ int inst_exit_code(int refused, int failed, int restart, int steps);
 #define INST_FINAL_UNFINISHED   2
 int inst_final(int changed, int list, int code, int *line);
 const char *inst_final_text(int line);
+
+/* The same line where the run asks for a shutdown and a fresh start
+ * instead of a restart (98 SE and ME after a Stor98 update, record 26
+ * section 5.9); the exit codes are unchanged. */
+const char *inst_final_text_cold(int line, int shutdown);
 
 /* ---- installing beside Windows' own installer (record 23 section 5.8) ------------ */
 
@@ -914,5 +956,345 @@ int inst_tray_leftover(int bakExists, int exeExists);
 #define INST_TRAY_RUN_SET       1
 #define INST_TRAY_RUN_DELETE    2
 int inst_tray_run_action(int noTray, int runState, int inPlace);
+
+/* ---- the machine-wide value (record 26 section 5.4; task 42-A.17) ------------ */
+
+/* The value question with the machine-wide value beside each device's own:
+ * mwState 1 set (mwValue), 0 not set, -1 unreadable (said, and treated as
+ * not set). Set, it is the value in force on every device: "now: N, set
+ * machine-wide", each device whose own value differs listed under it as
+ * not used, and Enter gives N. Not set: inst_value_question's form, a
+ * mixed state "each keeps its own". Returns as inst_value_question. */
+int inst_value_question_mw(char *out, size_t cap, int index, INST_U32 mask,
+                           INST_U32 def, const INST_VNOW *now, int n,
+                           int mwState, INST_U32 mwValue, int cmNewNote,
+                           int list, INST_U32 *enter);
+
+/* 1 when an answer writes the machine-wide value: it differs from the
+ * value in force - the machine-wide one where set, else each device's
+ * own (its value, or the default where it is not set). 0: nothing to
+ * write, every device runs with the answer already. */
+int inst_mw_write_needed(int mwState, INST_U32 mwValue, const INST_VNOW *now,
+                         int n, INST_U32 def, INST_U32 answer);
+
+/* ---- the 98 SE and ME helper, XHCIDI.EXE (record 27 sections 4 and 5.4) ---- */
+
+#define INST_DI_NAME            "XHCIDI.EXE"
+#define INST_DI_RESULT_NAME     "XHCIDI.RES"
+
+#define INST_DI_PROBE           0
+#define INST_DI_INSTALL         1
+#define INST_DI_REMOVE          2
+
+/* A 16-bit program's command tail holds 126 characters (record 27 section
+ * 4.1, read on 98 SE: CreateProcessA failed at 127), so the job travels in
+ * a job file and the command line is "<version> <job file>": the version
+ * at most 31 characters, the job file's path at most 80, 8.3 in every
+ * part. */
+#define INST_DI_TAIL_CHARS      126
+#define INST_DI_JOB_PATH_CHARS  80
+#define INST_DI_JOB_BYTES       2048
+#define INST_DI_JOB_NAME        "DIJOB.TXT"
+#define INST_DI_JOB_ROOT_NAME   "XHCIDIJ.TXT"
+
+/* 1 when p is drive-rooted and every part of it an 8.3 name. */
+int inst_di_path(const char *p);
+
+/* The job file's path: <dir>\DIJOB.TXT when that fits in 80 characters
+ * and is 8.3, else XHCIDIJ.TXT at the root of dir's drive. 1, or 0. */
+int inst_di_jobpath(char *out, size_t cap, const char *dir);
+
+/* The helper's command tail: "<version> <job file>", one space between,
+ * no quoting. 1, or 0 when either cannot be passed. */
+int inst_di_cmdline(char *out, size_t cap, const char *version,
+                    const char *jobFile);
+
+/* The job file for one job (record 27 section 4.1, format 1), CRLF:
+ * XHCIDI-JOB 1, JOB, RESULT, HWND, and for an install and a removal
+ * DEVICE, for an install INF and FLAGS (force, quiet; the line left out
+ * for neither), then END. Every operand checked: the paths 8.3 in every
+ * part and at most 255 characters, the INF ending .INF, the id at most
+ * 200 characters with no space, the handle 0 to 65535; the whole at most
+ * 2048 bytes. 1 with the text in out; 0 when the job cannot be written. */
+int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
+                    unsigned long hwnd, const char *devId, const char *inf,
+                    int force, int quiet);
+
+/* The verdicts (record 27 section 5.4 and section 9), and NONE: the
+ * helper did not finish (no END line, a count that differs, another
+ * version or job, an unknown word). */
+#define INST_DI_V_NONE              0
+#define INST_DI_V_INSTALLED         1
+#define INST_DI_V_INSTALLED_RESTART 2
+#define INST_DI_V_CANCELLED         3
+#define INST_DI_V_NO_MATCH          4
+#define INST_DI_V_NOT_PRESENT       5
+#define INST_DI_V_FAILED            6
+#define INST_DI_V_REFUSED           7
+#define INST_DI_V_REMOVED           8
+#define INST_DI_V_REMOVED_RESTART   9
+#define INST_DI_V_NOT_FOUND         10
+#define INST_DI_V_PROBED            11
+
+typedef struct _INST_DI_RESULT {
+    int Verdict;            /* INST_DI_V_*                                 */
+    int Ended;              /* the END line is there                       */
+    int Lines;              /* the lines before END                        */
+    int HaveFlags;
+    INST_U32 Flags;         /* the FLAGS line: DEVICE_INFO.Flags after it  */
+    INST_U32 Number;        /* failed: the RETERR                          */
+    char Error[48];         /* failed: the ERR_DI_* name                   */
+    char Detail[128];       /* refused: the reason; failed: what follows   */
+} INST_DI_RESULT;
+
+/* 1 when the text holds an END line (the end the wait looks for). */
+int inst_di_ended(const char *text);
+
+/* The result file read for the job that was started: its first line
+ * "XHCIDI <version>" equal to the installer's, its JOB line naming the
+ * job and its device id (and, for an install, the INF; later fields not
+ * compared), one RESULT line with a known word for the job, and END with
+ * the number of lines above it. Returns the verdict (r filled), or
+ * INST_DI_V_NONE. A RESULT refused is taken whatever the version line
+ * says. A probe's one RESULT word is "probed" (the helper's; record 27
+ * names none). */
+int inst_di_parse(const char *text, const char *version, int job,
+                  const char *devId, const char *inf, INST_DI_RESULT *r);
+
+/* What the installer does with a verdict (record 26 section 7, record 27
+ * section 5.4): */
+#define INST_DI_OUT_OK          0   /* done: read the device back           */
+#define INST_DI_OUT_RESTART     1   /* done, a restart pending              */
+#define INST_DI_OUT_STEPS       2   /* the steps page, exit 4               */
+#define INST_DI_OUT_FAILED      3   /* the steps page, exit 2               */
+#define INST_DI_OUT_ABSENT      4   /* not present: "recorded, not running" */
+#define INST_DI_OUT_REFUSED     5   /* the helper's route fails this run    */
+int inst_di_outcome(int job, int verdict);
+
+/* The verdict as one phrase ("installed", "the helper did not finish"). */
+const char *inst_di_verdict_text(int verdict);
+
+/* ---- the installer's own files and the uninstall (record 26 sections 6.2, 9) --- */
+
+/* The window and the console tool of an architecture: XHCIWIZ.EXE and
+ * XHCIINST.EXE (x86, 98 SE and ME included), XHCIWZ64.EXE and
+ * XHCIIN64.EXE (x64). which 0 the window, 1 the console tool. */
+#define INST_OWN_WINDOW         0
+#define INST_OWN_CONSOLE        1
+const char *inst_self_file(int arch, int which);
+
+/* The Add/Remove Programs entry (record 26 section 9.1). */
+#define INST_ARP_KEY \
+    "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\xhci98"
+#define INST_PUBLISHER          "Yeo Kheng Meng"
+
+/* "xHCI98 USB 3.x drivers <version>", ending " (incomplete: run again)"
+ * for an uninstall that stopped part-way. */
+void inst_arp_name(char *out, size_t cap, const char *version, int incomplete);
+
+/* The UninstallString: the window in dir, /uninstall. NT quotes the path;
+ * 98 SE and ME, whose install directory is 8.3 with no space, take it as
+ * it is. 1, or 0 when it does not fit or holds a quote. */
+int inst_arp_command(char *out, size_t cap, const char *dir, const char *exe,
+                     int nt);
+
+/* The uninstall's route (record 26 section 9.2): run here, relaunch a
+ * temporary copy (started from the install directory, no /from), or
+ * refuse (a /from that does not name the install directory, or given to
+ * a run that is itself in it). */
+#define INST_UN_RUN             0
+#define INST_UN_RELAUNCH        1
+#define INST_UN_REFUSE          2
+int inst_uninstall_route(int selfInInstallDir, int fromGiven,
+                         int fromIsInstallDir);
+
+/* The temporary copy's command line: "<exe>" /uninstall /from "<dir>",
+ * and /log "<log>", /nopause and /yes when this run had them (the console
+ * tool's unattended uninstall stays unattended). 1, or 0 when it does not
+ * fit. */
+int inst_relaunch_cmd(char *out, size_t cap, const char *exe,
+                      const char *fromDir, const char *log, int nopause,
+                      int yes);
+
+/* ---- the window's switches (record 26 section 10) ------------------------- */
+
+/* NULL when the window takes the switches parsed into opts, else the
+ * refusal: the console's switches ("use INSTALL /console ..."). argv as
+ * given, for the switches the parser does not keep (/console). */
+const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
+
+/* ---- the window's texts (record 26 sections 5 and 11) --------------------- */
+
+/* Every fixed text a page shows, with the size of the control it sits in
+ * (dialog units, xhciwiz.rc): the host suite checks each fits its control
+ * at the dialog font's average width, and the window's self-test renders
+ * them. Width 0: shown in a message box. */
+#define INST_PT_WELCOME         1
+#define INST_PT_WAIT            2
+#define INST_PT_FOUND           3
+#define INST_PT_DRIVERS         4
+#define INST_PT_DRIVERS_T       5
+#define INST_PT_TB              6
+#define INST_PT_TB_T            7
+#define INST_PT_TB_ABSENT       8
+#define INST_PT_TRAY            9
+#define INST_PT_TRAY_T          10
+#define INST_PT_DIR             11
+#define INST_PT_DIR_9X          12
+#define INST_PT_USB             13
+#define INST_PT_TBSET           14
+#define INST_PT_TB_LATER        15
+#define INST_PT_ADVANCED        16
+#define INST_PT_SUMMARY         17
+#define INST_PT_PROGRESS        18
+#define INST_PT_STEPS           19
+#define INST_PT_NOW             20
+#define INST_PT_LATER           21
+#define INST_PT_UN_TITLE        22
+#define INST_PT_UN_WARN         23
+#define INST_PT_UN_AGREE        24
+#define INST_PT_UN_SUMMARY      25
+#define INST_PT_GATE            26
+#define INST_PT_S98             27
+#define INST_PT_S98_T           28
+#define INST_PT_S98SET          29
+#define INST_PT_S98_UNUSED      30
+#define INST_PT_SHUT_NOW        31
+#define INST_PT_SHUT_LATER      32
+
+typedef struct _INST_PAGE_TEXT {
+    int Id;
+    const char *Text;
+    INST_U32 Width;         /* the control, in dialog units             */
+    INST_U32 Height;
+} INST_PAGE_TEXT;
+
+extern const INST_PAGE_TEXT instPageTexts[];
+extern const int instPageTextCount;
+
+const char *inst_page_text(int id);
+
+/* The lines a text takes, word-wrapped at cols characters. */
+INST_U32 inst_text_lines(const char *text, INST_U32 cols);
+
+/* What a control of that many dialog units holds: the characters a line
+ * (a quarter of the average character a unit, less a margin), the lines. */
+INST_U32 inst_page_cols(INST_U32 widthDlu);
+INST_U32 inst_page_rows(INST_U32 heightDlu);
+
+/* ---- Stor98, the bundled NVMe driver (record 26 sections 5.6 and 6.3) ---- */
+
+/* Stor98's settings as its readme.txt ("SETTINGS") gives them at the
+ * version the package bundles (STOR98_TABLE_VERSION): the 98 SE and ME
+ * value name, the 2000-to-7 DriverParameter key, the unit, the defaults,
+ * the range. The host suite holds every row to that readme's table
+ * (test\stor98-settings.txt, a copy make-release.ps1 compares with the
+ * bundled readme), so a Stor98 release that renames or retypes a value
+ * fails the build rather than the user. */
+#define INST_S98_TABLE_VERSION  "0.4.0.0"
+
+#define INST_S98_WORDS      0   /* a word of a list (StorWriteThrough)       */
+#define INST_S98_NUMBER     1   /* a decimal number in a range               */
+
+#define INST_S98_WRITETHROUGH   0
+#define INST_S98_POLLMODE       1
+#define INST_S98_MAXTRANSFERKB  2
+#define INST_S98_POLLBUSYUS     3
+#define INST_S98_POLLIDLEMS     4
+#define INST_S98_POLLSPINUS     5
+#define INST_S98_GONE           6
+#define INST_S98_IDLE           7
+#define INST_S98_COUNT          8
+
+#define INST_S98_WORDS_MAX      4
+
+typedef struct _INST_S98_VALUE {
+    const char *Name9x;     /* the value under Services\stor98 (98 SE, ME);
+                               NULL: not settable there                    */
+    const char *KeyNt;      /* the DriverParameter key, without '='      */
+    int Kind;               /* INST_S98_*                                */
+    int Asked;              /* on the page (1) or behind Advanced (0)     */
+    const char *Unit;       /* "KiB", "us", "ms" or ""                   */
+    const char *Def9x;      /* the built-in default on 98 SE and ME       */
+    const char *DefNt;      /* ... and on 2000 to 7                      */
+    INST_U32 Lo;            /* a number's range; Step its multiple        */
+    INST_U32 Hi;
+    INST_U32 Step;
+    int ZeroOk;             /* 0 is a value of its own (Zero says what)   */
+    const char *Zero;
+    const char *Words[INST_S98_WORDS_MAX];
+    const char *Means[INST_S98_WORDS_MAX];   /* a word's or a number's sense */
+    const char *What;       /* one line: what the setting does            */
+} INST_S98_VALUE;
+
+extern const INST_S98_VALUE instS98Values[INST_S98_COUNT];
+
+/* 1 when row i is settable on this system (the NT-only two are not on
+ * 98 SE and ME). */
+int inst_s98_applies(int i, int nt);
+
+/* The built-in default as text ("auto", "512"), and its one-line sense
+ * for the system ("cacheoff on ME, off elsewhere"); me: Windows ME. */
+const char *inst_s98_default(int i, int nt);
+void inst_s98_default_text(int i, int nt, int me, char *out, size_t cap);
+
+/* A value typed or chosen for row i, checked (the installer offers only
+ * what the readme admits, rather than leaving the driver to clamp or
+ * refuse): 1 with the canonical text in out (a word in lower case, a
+ * number in decimal), 0 refused with why. */
+int inst_s98_check(int i, int nt, const char *text, char *out, size_t cap,
+                   const char **why);
+
+/* The 2000-to-7 DriverParameter string: lower-case key=value pairs
+ * separated by semicolons. get: 1 with the value of key in out, 0 when the
+ * key is not there. set: the string with key's pair replaced in place (its
+ * position kept), appended when absent, or removed when value is NULL;
+ * every pair it does not know kept, in the order found, empty segments
+ * dropped. 1, or 0 when the result would not fit cap. */
+int inst_s98_param_get(const char *param, const char *key, char *out,
+                       size_t cap);
+int inst_s98_param_set(const char *param, const char *key, const char *value,
+                       char *out, size_t cap);
+
+/* A row's "now" as the page shows it: "not set (the built-in default is
+ * <d>)" or "set: <value>"; state 1 set, 0 not set, -1 unreadable. */
+void inst_s98_now_text(int i, int nt, int me, int state, const char *value,
+                       char *out, size_t cap);
+
+/* The install record's two rules for a device first bound to Stor98 by
+ * this installer (record 26 section 6.3, "The record"). By the
+ * installer's own call or the helper's: the reading before showed no
+ * Stor98 (before: 0 no driver, 1 another driver, 2 Stor98), the reading
+ * after shows it. During a settle (Windows bound it from the staged INF):
+ * newly bound, and on NT the driver key's InfPath names an INF this
+ * installer staged, on 98 SE and ME no Stor98 at the baseline. */
+int inst_s98_owned_by_call(int before, int afterS98);
+int inst_s98_owned_by_settle(int before, int afterS98, int nt,
+                             int infStaged, int preExisting);
+
+/* The uninstall's last Stor98 step: the service, its files and the
+ * recorded settings go only when no devnode is bound to Stor98 any more
+ * and no Stor98 was there before this installer's first run. */
+int inst_s98_service_removable(int devnodesLeft, int preExisting);
+
+/* An update's precautions (Stor98's readme, "Updating"): on 98 SE and ME
+ * nothing may be using the drive's volume and the machine is shut down,
+ * not restarted; on 2000 to 7 an update of a drive behind a tunnel under
+ * this package's connection manager is "updated, awaiting reconnection"
+ * whatever the first read-back says (record 24 section 5.2). */
+int inst_s98_cold_start(int nt);
+
+/* SHA-256 of len bytes, as 64 upper-case hex digits and a NUL. */
+void inst_sha256(const unsigned char *data, size_t len, char *hex65);
+
+/* The question "Install Stor98, the bundled NVMe driver?" (record 26
+ * section 6.4): never unasked (record 23 section 4.4), so Enter and /yes
+ * give N; /stor98 installs it without asking; /list asks nothing. Returns
+ * the decision when it is not asked; *asked whether it is, *def what Enter
+ * gives. */
+int inst_s98_decide(int haveS98, int yes, int stor98Switch, int list,
+                    int *asked, int *def);
+int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
+                             int behindTunnel);
 
 #endif /* INST_CORE_H */

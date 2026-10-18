@@ -223,11 +223,12 @@ readme.txt and a NOTICE.TXT: the opt-in tool that lists, and on Windows 2000 to
 (roadmap-hcd task 38.8, design record 13 section 10.13.8).
 
 .PARAMETER InstallToolDir
-Where `XHCIINST.EXE` and `XHCIIN64.EXE` are built. Defaults to `xhciinst\` in
-the repository. Both are staged into `releases\<version>\tools\xhciinst\` with
-a readme.txt and a NOTICE.TXT, and `xhciinst\INSTALL.BAT` at the version root:
-the install, update and uninstall tool (roadmap-usb4.md task 40.5, design
-record 23).
+Where `XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE` and `XHCIIN64.EXE` are
+built. Defaults to `xhciinst\` in the repository. All four are staged into
+`releases\<version>\tools\xhciinst\` with a readme.txt and a NOTICE.TXT, and
+`xhciinst\INSTALL.BAT` at the version root: the install, update and uninstall
+tool, its window and its console front end (roadmap-usb4.md tasks 40.5 and
+42-A.2, design records 23 and 26).
 
 .PARAMETER SkipInstallTool
 Do not stage the install tool or INSTALL.BAT. For a host that cannot build it
@@ -245,6 +246,20 @@ task 41-A.6, design record 25; record 23 section 9.6).
 Do not stage the USB tree tool. For a host that cannot build it; `XHCIINST`
 then says in one line that the package has none, and the release says so on
 the console and in its readme.
+
+.PARAMETER MarkToolDir
+Where `XHCIMARK.EXE` and `XHCIMK64.EXE` are built. Defaults to `xhcimark\` in
+the repository. Both are staged into `releases\<version>\tools\xhcimark\` with
+a readme.txt and a NOTICE.TXT: the safe-removal mark service, which the
+installer copies into the system directory and registers on Windows 2000 to
+7 with the Thunderbolt 3 / USB4 component (roadmap-usb4.md task 42-A.5,
+design record 21 section 7.4, revision 3).
+
+.PARAMETER SkipMarkTool
+Do not stage the mark service. For a host that cannot build it; without it
+the Thunderbolt component's devices lose their safe-removal mark at a
+rebuild of their drivers, as before 3.1.0.0, and the release says so on the
+console.
 
 .PARAMETER SkipDiHelper
 Do not stage `XHCIDI.EXE`, the 16-bit Windows 98 SE and ME device install
@@ -354,7 +369,8 @@ the cut fills in), the generated readme lists it, and -UploadSetOnly
 re-assembles a bundled release only with the same pins.
 
 .PARAMETER Stor98Dir
-See -Stor98Version.
+See -Stor98Version. Left out, it is src\stor98\releases\<version>, Stor98's
+own release folder in this tree (task 42-A.20).
 
 .PARAMETER Stor98SumsSha256
 See -Stor98Version.
@@ -389,6 +405,8 @@ param(
     [switch]$SkipSnapTool,
     [string]$CleanToolDir = "",
     [switch]$SkipCleanTool,
+    [string]$MarkToolDir = "",
+    [switch]$SkipMarkTool,
     [string]$InstallToolDir = "",
     [switch]$SkipInstallTool,
     [string]$TrayToolDir = "",
@@ -459,6 +477,7 @@ if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
 if ($SnapToolDir -eq "") { $SnapToolDir = Join-Path $repo "xhcisnap" }
 if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
+if ($MarkToolDir -eq "") { $MarkToolDir = Join-Path $repo "xhcimark" }
 if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo "xhciinst" }
 if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo "xhcitr" }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
@@ -590,6 +609,7 @@ $ReleasesDir = Resolve-DirectoryArgument $ReleasesDir
 $QualtoolDir = Resolve-DirectoryArgument $QualtoolDir
 $SnapToolDir = Resolve-DirectoryArgument $SnapToolDir
 $CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
+$MarkToolDir = Resolve-DirectoryArgument $MarkToolDir
 $InstallToolDir = Resolve-DirectoryArgument $InstallToolDir
 $TrayToolDir = Resolve-DirectoryArgument $TrayToolDir
 $PackageRoot = Resolve-DirectoryArgument $PackageRoot
@@ -730,9 +750,10 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # and only ever under tools\. xhciinst\, the install tool of task 40.6, is
 # first published in 3.0.0.0, under tools\, with INSTALL.BAT at the root,
 # and so is xhcitr\, the USB tree tool of task 41-A.6 that XHCIINST installs.
+# xhcimark\, the mark service of task 42-A.5, is first published in 3.1.0.0.
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr")
+$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
 # design record 13 section 6.11.8): copied once from src\ into tools\silent\
@@ -2730,6 +2751,9 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
                                   -HeaderPath (Join-Path $repo "src\cm\stor98cm.h") `
                                   -Allow:$Stor98AllowInterfaceMismatch
     if ($null -ne $stor98) {
+        Assert-Stor98SettingsTable -Dir $stor98.Dir -Version $stor98.Version
+        Write-Ok ("Stor98 {0}: its readme's SETTINGS table is the one the installer's Stor98 rows were checked against" -f `
+            $stor98.Version)
         Write-Ok ("Stor98 {0}: SHA256SUMS.txt is the pinned {1}, and every file matches it" -f `
             $stor98.Version, $stor98.SumsSha256)
         if ($stor98.Overridden) {
@@ -3757,7 +3781,9 @@ cuts without the tool on a host that cannot build it.
         }
         $cleanSources = @(@(Get-ChildItem -LiteralPath $CleanToolDir -File |
             Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
-            @(Get-Item -LiteralPath $versionHeader))
+            @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.h")))
         foreach ($name in $cleanExes) {
             $cleanTime = (Get-Item -LiteralPath (Join-Path $CleanToolDir $name)).LastWriteTimeUtc
             $cleanNewer = @($cleanSources | Where-Object { $_.LastWriteTimeUtc -gt $cleanTime })
@@ -3790,17 +3816,79 @@ version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
                    "newer than every source beside them and than that header") -f $cleanVersion)
     }
 
+    # --- the mark service (task 42-A.5) -------------------------------------
+    #
+    # XHCIMARK.EXE (MSVC 6.0) and XHCIMK64.EXE (WDK 7.1 amd64), one source:
+    # the safe-removal mark service of design record 21 section 7.4, revision
+    # 3, which the installer copies into %SystemRoot%\system32 and registers
+    # (Windows 2000 to 7, with the Thunderbolt 3 / USB4 component). The same
+    # staleness and version rules as XHCICLN's. Not a driver: the packager's
+    # test signing does not reach XHCIMK64.EXE.
+    $marktoolStaged = $null
+    if (-not $SkipMarkTool) {
+        Write-Step "mark service"
+        $markExes = @("XHCIMARK.EXE", "XHCIMK64.EXE")
+        foreach ($name in ($markExes + @("README.TXT"))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $MarkToolDir $name) -PathType Leaf)) {
+                throw @"
+'$MarkToolDir' has no $name.
+Build both first:  xhcimark\build.cmd
+It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipMarkTool
+cuts without the service on a host that cannot build it.
+"@
+            }
+        }
+        $markSources = @(@(Get-ChildItem -LiteralPath $MarkToolDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
+            @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_status.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.h")))
+        foreach ($name in $markExes) {
+            $markTime = (Get-Item -LiteralPath (Join-Path $MarkToolDir $name)).LastWriteTimeUtc
+            $markNewer = @($markSources | Where-Object { $_.LastWriteTimeUtc -gt $markTime })
+            if ($markNewer.Count -gt 0) {
+                throw @"
+'$(Join-Path $MarkToolDir $name)' is older than $($markNewer.Count) of its own source file(s):
+  - $(($markNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhcimark\build.cmd) before releasing: a stale copy reads the
+driver's answers with a layout the source no longer has.
+"@
+            }
+        }
+        Assert-TakesSharedVersion -Path (Join-Path $MarkToolDir "xhcimark.c") -Macro "XHCIMARK_VERSION"
+        $markVersion = Get-DeclaredVersion -Path $versionHeader
+        if (-not (Test-DriverVersionMatches -Reported $markVersion -Declared $Version)) {
+            throw @"
+'$versionHeader' declares the version as "$markVersion", but this release is $Version.
+XHCIMARK logs that string at every start, so the two must agree. Bump the
+version in src\xhci_version.h and rebuild the service (xhcimark\build.cmd).
+"@
+        }
+        $markDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcimark")
+        Ensure-Directory $markDir
+        foreach ($name in $markExes) {
+            Copy-Item -LiteralPath (Join-Path $MarkToolDir $name) -Destination (Join-Path $markDir $name) -Force
+        }
+        $marktoolStaged = $markDir
+        Write-Ok (("XHCIMARK.EXE and XHCIMK64.EXE staged at version {0} from src\xhci_version.h, " +
+                   "newer than every source beside them and than that header") -f $markVersion)
+    }
+
     # --- the install tool (task 40.6) ----------------------------------------
     #
-    # XHCIINST.EXE (MSVC 6.0) and XHCIIN64.EXE (WDK 7.1 amd64), built from
-    # xhciinst\ as XHCICLN is from xhcicln\ (design record 23 section 3), and
-    # INSTALL.BAT, the entry point, at the version root. The same staleness and
-    # version rules as XHCICLN's. Not drivers: the packager's test signing does
-    # not reach XHCIIN64.EXE.
+    # XHCIINST.EXE (MSVC 6.0) and XHCIIN64.EXE (WDK 7.1 amd64), the console
+    # tool, and XHCIWIZ.EXE and XHCIWZ64.EXE, the window INSTALL.BAT opens
+    # (design record 26 sections 2 and 4), built from xhciinst\ as XHCICLN is
+    # from xhcicln\ (design record 23 section 3), and INSTALL.BAT, the entry
+    # point, at the version root. The same staleness and version rules as
+    # XHCICLN's. Not drivers: the packager's test signing does not reach the
+    # x64 executables.
     $insttoolStaged = $null
     if (-not $SkipInstallTool) {
         Write-Step "install tool"
-        $instExes = @("XHCIINST.EXE", "XHCIIN64.EXE")
+        $instExes = @("XHCIINST.EXE", "XHCIIN64.EXE", "XHCIWIZ.EXE", "XHCIWZ64.EXE")
         foreach ($name in ($instExes + @("README.TXT", "INSTALL.BAT"))) {
             if (-not (Test-Path -LiteralPath (Join-Path $InstallToolDir $name) -PathType Leaf)) {
                 throw @"
@@ -3812,7 +3900,7 @@ cuts without the tool on a host that cannot build it.
             }
         }
         $instSources = @(@(Get-ChildItem -LiteralPath $InstallToolDir -File |
-            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest", ".ico") }) +
             @(Get-Item -LiteralPath $versionHeader) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.c")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")))
@@ -3828,7 +3916,7 @@ release's package, or decides with rules the source no longer has.
 "@
             }
         }
-        Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "xhciinst.c") -Macro "XHCIINST_VERSION"
+        Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "inst_eng.c") -Macro "XHCIINST_VERSION"
         $instVersion = Get-DeclaredVersion -Path $versionHeader
         if (-not (Test-DriverVersionMatches -Reported $instVersion -Declared $Version)) {
             throw @"
@@ -3850,7 +3938,7 @@ two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
         }
         Copy-Item -LiteralPath (Join-Path $InstallToolDir "INSTALL.BAT") -Destination (Join-Path $destRoot "INSTALL.BAT") -Force
         $insttoolStaged = $instDir
-        Write-Ok (("XHCIINST.EXE and XHCIIN64.EXE staged at version {0}, INSTALL.BAT at the root") -f $instVersion)
+        Write-Ok (("XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and XHCIIN64.EXE staged at version {0}, INSTALL.BAT at the root") -f $instVersion)
     }
 
     # --- the USB tree tool (task 41-A.6) -------------------------------------
@@ -4180,6 +4268,23 @@ helper (xhciinst\di\build.cmd).
         $contents += "      MYPC.DEV and so on; section 6 has the rules."
         $contents += ""
     }
+    if ($null -ne $marktoolStaged) {
+        $m32 = Get-Item -LiteralPath (Join-Path $marktoolStaged "XHCIMARK.EXE")
+        $m64 = Get-Item -LiteralPath (Join-Path $marktoolStaged "XHCIMK64.EXE")
+        $contents += "  TOOLS\XHCIMARK\ - the Thunderbolt safe-removal mark service"
+        $contents += ""
+        $contents += ("      XHCIMARK.EXE {0:N0} bytes, for 32-bit Windows 2000 to 7" -f $m32.Length)
+        $contents += ("      XHCIMK64.EXE {0:N0} bytes, for 64-bit Windows" -f $m64.Length)
+        $contents += "      readme.txt"
+        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
+        $contents += ""
+        $contents += "      Installed by INSTALL.BAT with the Thunderbolt 3 /"
+        $contents += "      USB4 component on Windows 2000 to 7; never run by"
+        $contents += "      hand. It keeps a Thunderbolt device listed in"
+        $contents += "      Safely Remove Hardware across a driver install,"
+        $contents += "      update or a disable and enable."
+        $contents += ""
+    }
     if ($null -ne $cleantoolStaged) {
         $c32 = Get-Item -LiteralPath (Join-Path $cleantoolStaged "XHCICLN.EXE")
         $c64 = Get-Item -LiteralPath (Join-Path $cleantoolStaged "XHCICL64.EXE")
@@ -4197,19 +4302,23 @@ helper (xhciinst\di\build.cmd).
         $contents += ""
     }
     if ($null -ne $insttoolStaged) {
+        $w32 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIWIZ.EXE")
+        $w64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIWZ64.EXE")
         $i32 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIINST.EXE")
         $i64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIIN64.EXE")
         $contents += "  INSTALL.BAT     - installs, updates or uninstalls the drivers"
         $contents += ""
-        $contents += "  TOOLS\XHCIINST\ - the program INSTALL.BAT runs"
+        $contents += "  TOOLS\XHCIINST\ - the programs INSTALL.BAT runs"
         $contents += ""
-        $contents += ("      XHCIINST.EXE {0:N0} bytes, for 32-bit Windows" -f $i32.Length)
-        $contents += ("      XHCIIN64.EXE {0:N0} bytes, for 64-bit Windows" -f $i64.Length)
+        $contents += ("      XHCIWIZ.EXE  {0:N0} bytes, the installer's window" -f $w32.Length)
+        $contents += ("      XHCIWZ64.EXE {0:N0} bytes, the same for 64-bit Windows" -f $w64.Length)
+        $contents += ("      XHCIINST.EXE {0:N0} bytes, the console tool" -f $i32.Length)
+        $contents += ("      XHCIIN64.EXE {0:N0} bytes, the same for 64-bit Windows" -f $i64.Length)
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
-        $contents += "      Section 4 has how to run it; INSTALL /list shows what"
-        $contents += "      it would do and changes nothing."
+        $contents += "      Section 4 has how to run them; INSTALL /console /list"
+        $contents += "      shows what would be done and changes nothing."
         $contents += ""
     }
     if ($null -ne $ditoolStaged) {
@@ -4326,7 +4435,7 @@ helper (xhciinst\di\build.cmd).
             " Stor98, an NVMe storage driver for NVMe drives such as one in a Thunderbolt or USB4 enclosure:" +
             " stor98.inf and the files beside it whose names start with stor98. It is a separate project" +
             " with its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
-            " and stor98-readme.txt is its own guide. INSTALL.BAT does not install it. In the hardware" +
+            " and stor98-readme.txt is its own guide. INSTALL.BAT installs it only when asked (its box on the installer's Components page, or /stor98). By hand, in the hardware" +
             " wizard (Have Disk), point at " +
             $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `
             -Width 78 -FirstPrefix "  " -RestPrefix "  ")
@@ -4838,47 +4947,52 @@ has already gone wrong. It prints nothing as it runs. Section 8 describes
 both, and nothing about a copied file says which one it is - so point at a
 directory, never at a loose .sys file.{ARCHNOTE}
 
-INSTALL.BAT is beta in this release: if it fails or you prefer, install
-through Device Manager as before (BY HAND, below).  That route still works
-and remains supported.
+If the installer fails or you prefer, install through Device Manager as
+before (BY HAND, below). That route still works and remains supported.
 
 THE EASY WAY: INSTALL.BAT. Unzip the WHOLE package, then
 run INSTALL.BAT from its top directory: double-click it on Windows 98 SE and
 ME; run it as an administrator on Windows 2000 and XP; right-click it, Run as
-administrator, on Vista and 7. It shows what it will do, asks about a few of
-the driver's options (section 9), asks once, and then:
+administrator, on Vista and 7. It opens the installer's window, which shows
+what it found, lets you choose the components and a few of the driver's
+options (section 9), shows a summary, and on Install:
 
   - on Windows 2000, XP, XP x64, Vista and 7 installs or updates every
     driver of the package on the devices present - the controller, its root
     hub and hubs, UAS disks, a Thunderbolt or USB4 controller - and stages
     the rest for devices plugged in later. It handles the update traps
     below (Windows 2000's Have Disk, the root hub, Vista and 7's same
-    DriverVer) and says when to restart;
+    DriverVer);
   - on Windows 98 SE and ME copies the package to the install directory
-    it asks for (C:\XHCI98 unless you choose another), where the hardware
-    wizards search by themselves, prints the Device Manager steps that
-    remain, and offers to open Device Manager.
+    you choose (C:\XHCI98 unless you choose another), where the hardware
+    wizards search by themselves, and installs each device's driver
+    through Windows' own device installer; a device it cannot install gets
+    its Device Manager steps on a page of their own, which you can save.
 
-INSTALL /list shows what it would do and changes nothing. INSTALL
-/uninstall removes the drivers again (it warns first: on a machine whose
-only USB controller is xHCI, the USB keyboard and mouse stop working). Every
+It ends by offering to restart Windows. Add/Remove Programs (Control Panel)
+lists the package as "xHCI98 USB 3.x drivers"; Remove there takes every
+driver of the package away again (it warns first: on a machine whose only
+USB controller is xHCI, the USB keyboard and mouse stop working).
+
+For scripts there is the console tool: INSTALL /console runs it, and
+INSTALL /console /list shows what it would do and changes nothing. Every
 run adds to XHCIINST.LOG at the root of the system drive; attach it to a bug
 report about an install. TOOLS\XHCIINST\readme.txt has the rest.
 
 INSTALL.BAT also installs the xHCI98 USB Tree (XHCITR) in the install
-directory it asks for (C:\XHCI98 unless you choose another, or INSTALL /to
+directory you choose (C:\XHCI98 unless you choose another, or INSTALL /to
 path) and starts it at each login. Its window shows
 every USB controller, hub and device, and the Thunderbolt and USB4 devices
 with what is connected behind them; its icon in the notification area of
 the taskbar removes a Thunderbolt or USB4 device safely, as Windows' own
 Safely Remove Hardware icon does for other devices. It needs no
 administrator to run. INSTALL /notray installs it without starting it at
-login; INSTALL /uninstall removes it with the drivers.
+login; the uninstall removes it with the drivers.
 TOOLS\XHCITR\readme.txt has the rest.
 
 On Windows XP, XP x64 and 98 SE, updating from 2.3.x or earlier needs a
-keyboard and mouse that do not go through this driver, as below; the tool
-says so before it starts.
+keyboard and mouse that do not go through this driver, as below; the
+installer says so before it starts.
 
 BY HAND, without INSTALL.BAT:
 Put the whole unzipped package somewhere the machine can read - a floppy, a
@@ -6245,6 +6359,7 @@ which XHCISNAP matches this driver by that number; correct the sentence.
     if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS machine checker of section 1)" }
     if ($null -eq $snaptoolStaged) { $missingTools += "TOOLS\XHCISNAP\ (the report tool of section 6)" }
     if ($null -eq $cleantoolStaged) { $missingTools += "TOOLS\XHCICLN\ (the optional cleanup tool of section 4)" }
+    if ($null -eq $marktoolStaged) { $missingTools += "TOOLS\XHCIMARK\ (the Thunderbolt safe-removal mark service of section 4)" }
     if ($null -eq $insttoolStaged) { $missingTools += "INSTALL.BAT and TOOLS\XHCIINST\ (the install tool of section 4)" }
     if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }
     if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }
@@ -6967,6 +7082,60 @@ sufficient.
         Write-Ok "NOTICE.TXT written beside XHCICLN.EXE and XHCICL64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
     }
 
+    # --- the mark service's readme and notices (task 42-A.5) ----------------
+    #
+    # As the cleanup tool's: xhcimark\README.TXT with the release's footer,
+    # and NOTICE.TXT recording the two statically linked runtimes.
+    if ($null -ne $marktoolStaged) {
+        $markReadme = @([System.IO.File]::ReadAllText((Join-Path $MarkToolDir "README.TXT")) -split "`r?`n")
+        while ($markReadme.Count -gt 0 -and $markReadme[$markReadme.Count - 1] -eq "") {
+            $markReadme = @($markReadme | Select-Object -First ($markReadme.Count - 1))
+        }
+        $markFooter = @'
+
+------------------------------------------------------------------------------
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
+for the driver itself.
+
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCIMARK.EXE and XHCIMK64.EXE are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside
+this file records.
+'@
+        $markLines = @($markReadme) + @($markFooter.Replace("{VERSION}", $Version) -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $marktoolStaged "readme.txt") -Lines $markLines
+        Write-Ok "readme.txt written beside XHCIMARK.EXE and XHCIMK64.EXE"
+        $markNotice = @'
+==============================================================================
+                          x h c i 9 8   {VERSION}
+           THIRD-PARTY NOTICES FOR XHCIMARK.EXE AND XHCIMK64.EXE
+==============================================================================
+
+XHCIMARK.EXE and XHCIMK64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+
+They are not only this project's code. XHCIMARK.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCIMK64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs, which is what makes each a single file. You can see it in
+the import tables, which name only KERNEL32.dll and ADVAPI32.dll and no C
+runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient.
+'@
+        $markNotice = $markNotice.Replace("{VERSION}", $Version)
+        Write-GeneratedText -Path (Join-Path $marktoolStaged "NOTICE.TXT") `
+                            -Lines ($markNotice -split "`r?`n")
+        Write-Ok "NOTICE.TXT written beside XHCIMARK.EXE and XHCIMK64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+    }
+
     # --- the install tool's readme and notices (task 40.6) --------------------
     #
     # As the cleanup tool's, above: xhciinst\README.TXT with the release's
@@ -6984,31 +7153,32 @@ Part of the xhci98 {VERSION} release. See the readme.txt two directories up
 for the driver itself.
 
 This project's own code is under the GNU GPL v2 - see the LICENSE file two
-directories up. XHCIINST.EXE and XHCIIN64.EXE are not only this project's
-code: a C runtime is statically linked into each, which NOTICE.TXT beside
-this file records.
+directories up. XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and XHCIIN64.EXE are
+not only this project's code: a C runtime is statically linked into each,
+which NOTICE.TXT beside this file records.
 "@
         $instLines = @($instReadme) + @($instFooter.Replace("{VERSION}", $Version) -split "`r?`n")
         Write-GeneratedText -Path (Join-Path $insttoolStaged "readme.txt") -Lines $instLines
-        Write-Ok "readme.txt written beside XHCIINST.EXE and XHCIIN64.EXE"
+        Write-Ok "readme.txt written beside the installer's executables"
 
         $instNotice = @"
 ==============================================================================
                           x h c i 9 8   {VERSION}
-           THIRD-PARTY NOTICES FOR XHCIINST.EXE AND XHCIIN64.EXE
+           THIRD-PARTY NOTICES FOR THE INSTALLER'S EXECUTABLES
 ==============================================================================
 
-XHCIINST.EXE and XHCIIN64.EXE are built from this project's own C source,
-which is under the GNU GPL v2 - see the LICENSE file two directories up.
+XHCIWIZ.EXE, XHCIWZ64.EXE, XHCIINST.EXE and XHCIIN64.EXE are built from this
+project's own C source, which is under the GNU GPL v2 - see the LICENSE file
+two directories up.
 
-They are not only this project's code. XHCIINST.EXE is compiled with
-Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
-runtime; XHCIIN64.EXE is compiled with the Windows Driver Kit 7.1's amd64
-compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
-runtime modules are bound into each executable rather than loaded from a
-DLL when it runs, which is what makes each tool a single file. You can see
-it in the import tables, which name only KERNEL32.dll and ADVAPI32.dll and
-no C runtime DLL.
+They are not only this project's code. XHCIINST.EXE and XHCIWIZ.EXE are
+compiled with Microsoft Visual C++ 6.0 and linked against that compiler's
+STATIC C runtime (LIBC and LIBCMT); XHCIIN64.EXE and XHCIWZ64.EXE are
+compiled with the Windows Driver Kit 7.1's amd64 compiler and linked
+against that kit's STATIC C runtime (LIBCMT). Those runtime modules are
+bound into each executable rather than loaded from a DLL when it runs,
+which is what makes each tool a single file. You can see it in the import
+tables, which name Windows' own DLLs and no C runtime DLL.
 
 Those runtime modules are Microsoft's. They are not covered by the GPL grant
 above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
@@ -7021,7 +7191,7 @@ carry no Microsoft setup program and this package carries no Microsoft file.
         $instNotice = $instNotice.Replace("{VERSION}", $Version)
         Write-GeneratedText -Path (Join-Path $insttoolStaged "NOTICE.TXT") `
                             -Lines ($instNotice -split "`r?`n")
-        Write-Ok "NOTICE.TXT written beside XHCIINST.EXE and XHCIIN64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+        Write-Ok "NOTICE.TXT written beside the installer's executables (static MSVC 6.0 and WDK 7.1 C runtimes)"
     }
 
     # --- the USB tree tool's readme and notices (task 41-A.6) -----------------
@@ -7345,6 +7515,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     if ($null -eq $cleantoolStaged) {
         Write-Warn "no tools\xhcicln\ in this release (-SkipCleanTool) - nothing needs it, but the readme's update section names it."
+    }
+    if ($null -eq $marktoolStaged) {
+        Write-Warn "no tools\xhcimark\ in this release (-SkipMarkTool) - a Thunderbolt device's safe-removal mark is lost at a rebuild of its drivers, as before 3.1.0.0."
     }
     if ($null -eq $traytoolStaged) {
         Write-Warn "no tools\xhcitr\ in this release (-SkipTrayTool) - INSTALL.BAT installs no USB tree tool from it."

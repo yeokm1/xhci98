@@ -817,9 +817,11 @@ function Get-SilentRegFaults {
 # Stor98 is a separate project under BSD-3-Clause; its first release is
 # 0.3.0.0. A release package may carry
 # one of its released builds, copied unchanged from that build's release
-# folder at packaging time: never its source, and never through git
-# (nothing of it is tracked here, and make-release.ps1 copies it into the
-# upload set only, not into releases\). The input is pinned three ways: the
+# folder at packaging time: never built from its source. Since task 42-A.20
+# its source and release folders are tracked here as src\stor98, and the
+# release folder defaults to src\stor98\releases\<version>; make-release.ps1
+# still copies the build into the upload set only, not into this project's
+# releases\. The input is pinned three ways: the
 # version, the folder, and the SHA-256 of the folder's SHA256SUMS.txt, which
 # in turn pins every file. The release folder's x86\ (one $CHICAGO$ INF,
 # stor98.mpd for 98 and ME and stor98.sys for 2000 to 7) is copied to an x86
@@ -1004,6 +1006,36 @@ function Assert-Stor98Release {
     }
 }
 
+function Assert-Stor98SettingsTable {
+    # make-release.ps1's check of a real cut's bundled Stor98 (not the
+    # packager's synthetic releases, whose readmes carry no table).
+    param([string]$Dir, [string]$Version)
+
+    # The installer's Stor98 settings (record 26 section 5.6) are copied from
+    # this readme's SETTINGS table; test\stor98-settings.txt is that table as
+    # the installer's rows were checked against it (test_inst). A release
+    # whose table differs - a value renamed, retyped or given another range -
+    # fails here rather than the user.
+    $tableCopy = Join-Path $PSScriptRoot "..\..\test\stor98-settings.txt"
+    $readmeLines = @(([System.IO.File]::ReadAllText((Join-Path $Dir "readme.txt"))) -split "\r?\n")
+    $start = -1
+    $end = -1
+    for ($i = 0; $i -lt $readmeLines.Count; $i++) {
+        if ($start -lt 0 -and $readmeLines[$i] -match '^  9x name / NT key') { $start = $i }
+        if ($start -ge 0 -and $readmeLines[$i] -match '^Polling values outside') { $end = $i; break }
+    }
+    if ($start -lt 0 -or $end -lt 0) {
+        throw "the Stor98 $Version readme has no SETTINGS table where the installer reads one (from '  9x name / NT key' to 'Polling values outside'). Update xhciinst\inst_core.c's Stor98 rows and test\stor98-settings.txt to that readme."
+    }
+    $table = @($readmeLines[$start..($end - 1)])
+    while ($table.Count -gt 0 -and $table[$table.Count - 1].Trim() -eq "") { $table = @($table[0..($table.Count - 2)]) }
+    $copy = @(([System.IO.File]::ReadAllText($tableCopy)) -split "\r?\n")
+    while ($copy.Count -gt 0 -and $copy[$copy.Count - 1].Trim() -eq "") { $copy = @($copy[0..($copy.Count - 2)]) }
+    if (($table -join "`n") -cne ($copy -join "`n")) {
+        throw "the Stor98 $Version readme's SETTINGS table differs from test\stor98-settings.txt, the table the installer's Stor98 rows were checked against. Update xhciinst\inst_core.c's instS98Values and INST_S98_TABLE_VERSION and that file to this readme, and run test\run-host-tests.cmd."
+    }
+}
+
 function Get-Stor98PackageFiles {
     # The Stor98 files one package carries: Source (relative to the release
     # folder), Dest (relative to the package root) and Sha256. -Arch is the
@@ -1105,16 +1137,22 @@ function Resolve-Stor98Input {
     # named (the package is built as before, with no Stor98), else the
     # verified release with its interface verdict. The four pins go
     # together; a mismatch of the interface is refused unless -Allow, and the
-    # override is reported, never silent.
+    # override is reported, never silent. A version named without a folder
+    # takes Stor98's own release folder in this tree,
+    # src\stor98\releases\<version> (task 42-A.20); the other pins and every
+    # check are the same whichever folder it is.
     param([string]$Version, [string]$Dir, [string]$SumsSha256, [string]$InterfaceVersion,
           [string]$HeaderPath, [switch]$Allow)
+    if ($Version -ne "" -and $Dir -eq "") {
+        $Dir = Join-Path (Get-RepoRoot) ("src\stor98\releases\" + $Version)
+    }
     $named = @(@($Version, $Dir, $SumsSha256, $InterfaceVersion) | Where-Object { $_ -ne "" })
     if ($named.Count -eq 0) {
         if ($Allow) { throw "-Stor98AllowInterfaceMismatch was given with no Stor98 input to apply it to." }
         return $null
     }
     if ($named.Count -ne 4) {
-        throw "the bundled Stor98 build is pinned explicitly: -Stor98Version, -Stor98Dir, -Stor98SumsSha256 and -Stor98InterfaceVersion go together, and only $($named.Count) of them were given."
+        throw "the bundled Stor98 build is pinned explicitly: -Stor98Version, -Stor98Dir, -Stor98SumsSha256 and -Stor98InterfaceVersion go together (-Stor98Dir defaults to src\stor98\releases\<version>), and only $($named.Count) of them were given."
     }
     $release = Assert-Stor98Release -Dir $Dir -Version $Version -SumsSha256 $SumsSha256
     $why = Test-Stor98Interface -Release $release -Pinned $InterfaceVersion -HeaderPath $HeaderPath
