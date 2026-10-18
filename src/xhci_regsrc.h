@@ -36,6 +36,15 @@
 #define XHCI_REG_FROM_MACHINE   1UL     /* Services\USB                    */
 #define XHCI_REG_FROM_DEVICE    2UL     /* the driver (software) key       */
 
+/* Whether a call of the query routine with `valueType` and `valueLength`
+ * is a value that is there: every call but one of REG_NONE (0) with no
+ * data. A stored REG_NONE with data is a value of another type and wins
+ * as one; a zero-length REG_NONE is read as absent, because that is also
+ * the shape a routine may be handed for a value not there, and a missing
+ * value taken for a present one would silence every controller's own. */
+#define XHCI_REG_TYPE_NONE      0UL
+ULONG XhciRegCallSeen(ULONG valueType, ULONG valueLength);
+
 /* A reading from what the query routine saw: `taken` when it accepted the
  * value, else `seen` when it was called with a value at all, else absent. */
 ULONG XhciRegState(ULONG seen, ULONG taken);

@@ -13,6 +13,15 @@
 
 static void test_state(void)
 {
+    /* What a call of the query routine is: REG_NONE 0, REG_SZ 1, REG_DWORD
+     * 4, REG_BINARY 3 (winnt.h). */
+    CHECK_EQ(XhciRegCallSeen(0, 0), 0, "REG_NONE with no data: absent");
+    CHECK_EQ(XhciRegCallSeen(0, 4), 1,
+             "a stored REG_NONE with data: present, of another type");
+    CHECK_EQ(XhciRegCallSeen(4, 4), 1, "a REG_DWORD: present");
+    CHECK_EQ(XhciRegCallSeen(4, 0), 1, "an empty REG_DWORD: present");
+    CHECK_EQ(XhciRegCallSeen(1, 2), 1, "a REG_SZ: present");
+    CHECK_EQ(XhciRegCallSeen(3, 0), 1, "an empty REG_BINARY: present");
     CHECK_EQ(XhciRegState(0, 0), XHCI_REG_ABSENT, "not seen: absent");
     CHECK_EQ(XhciRegState(1, 0), XHCI_REG_OTHER,
              "seen and refused: another type");

@@ -68,7 +68,7 @@ static NTSTATUS NTAPI cmTakeDword(PWSTR ValueName, ULONG ValueType,
     UNREFERENCED_PARAMETER(ValueName);
     UNREFERENCED_PARAMETER(Context);
     take = (PCM_TAKE)EntryContext;
-    if (ValueType == REG_NONE) {
+    if (!XhciRegCallSeen(ValueType, ValueLength)) {
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
     take->Seen = 1;
@@ -97,7 +97,7 @@ static NTSTATUS NTAPI cmTakeText(PWSTR ValueName, ULONG ValueType,
     UNREFERENCED_PARAMETER(ValueName);
     UNREFERENCED_PARAMETER(Context);
     take = (PCM_TAKE)EntryContext;
-    if (ValueType == REG_NONE) {
+    if (!XhciRegCallSeen(ValueType, ValueLength)) {
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
     take->Seen = 1;

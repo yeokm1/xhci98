@@ -174,10 +174,11 @@ typedef struct _HCD_REG_TAKE {
  * value of another type in that type's own form - a REG_SZ as a
  * UNICODE_STRING - over the four-byte destination (task 26-A.2), and the
  * flag that makes DIRECT check the type is
- * newer than both primary targets. Seen is set for a value of any type, so
- * the caller tells "there, of another type" from "not there" without
- * relying on the status each target's RtlQueryRegistryValues returns for
- * the two (task 42-A.17). IRQL: PASSIVE_LEVEL.
+ * newer than both primary targets. Seen is set for a value of any type, a
+ * stored REG_NONE with data included (XhciRegCallSeen), so the caller
+ * tells "there, of another type" from "not there" without relying on the
+ * status each target's RtlQueryRegistryValues returns for the two (task
+ * 42-A.17). IRQL: PASSIVE_LEVEL.
  */
 static NTSTATUS NTAPI hcdTakeDword(PWSTR ValueName, ULONG ValueType,
                                    PVOID ValueData, ULONG ValueLength,
@@ -190,7 +191,7 @@ static NTSTATUS NTAPI hcdTakeDword(PWSTR ValueName, ULONG ValueType,
     UNREFERENCED_PARAMETER(Context);
 
     take = (PHCD_REG_TAKE)EntryContext;
-    if (ValueType == REG_NONE) {
+    if (!XhciRegCallSeen(ValueType, ValueLength)) {
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
     take->Seen = 1;
@@ -368,10 +369,6 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
 
     ext = &hc->Hc;
 
-    /* Counted over this start's reads from here (task 42-A.17); noted at
-     * the end, so a dump shows whether any value came from the
-     * machine-wide key. */
-    hc->RegMachineWon = 0;
     hcdReadLogSwitches(hc);
 
     imod = 0;
@@ -517,7 +514,6 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     hc->QemuPsiE460 = (NT_SUCCESS(status) && value == 1) ? 1UL : 0UL;
     XhciLogNote(ext, "qemu.psi.e460", hc->QemuPsiE460);
 #endif
-    XhciLogNote(ext, "reg.machine", hc->RegMachineWon);
 }
 
 /* xhci_silent.h keeps REG_BINARY's number for the pure core; this is where
@@ -2779,6 +2775,10 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     /* Task 38.10: every quirk at its default and unread, before the
      * delivery reads XhciMsiAvoid (hcd_quirk.c). */
     HcdQuirkStartBegin(hc);
+    /* Task 42-A.17: the start's values taken from the machine-wide key,
+     * counted from the delivery's first read to the note after the
+     * quirks and the route below. */
+    hc->RegMachineWon = 0;
     /* The power fallback's marker describes the controller this start
      * rebuilds, so it is reset with it (task 26-A.2). */
     hc->SuspendedInD0 = 0;
@@ -2977,6 +2977,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     HcdQuirkStart(hc);
     /* Task 36.3: the route repaired before the first interrupt is enabled. */
     hcdPirqStart(hc);
+    XhciLogNote(ext, "reg.machine", hc->RegMachineWon);
     /* Before the thread runs, so no backstop pass reads it mid-write. */
     hc->TolStartGen++;
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);

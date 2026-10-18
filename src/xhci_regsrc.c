@@ -15,6 +15,11 @@ static ULONG xhciRegKnown(ULONG state)
     return XHCI_REG_ABSENT;
 }
 
+ULONG XhciRegCallSeen(ULONG valueType, ULONG valueLength)
+{
+    return (valueType == XHCI_REG_TYPE_NONE && valueLength == 0) ? 0UL : 1UL;
+}
+
 ULONG XhciRegState(ULONG seen, ULONG taken)
 {
     if (taken != 0) {

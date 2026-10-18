@@ -1714,8 +1714,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG FastPollOpened;
     ULONG FastPollFallbacks;
     /* Task 42-A.17 (hcd_ctl.c hcdReadDword): how many of the start's
-     * values were taken from the machine-wide key, zeroed at hcdReadValues
-     * and noted as reg.machine at its end. */
+     * values were taken from the machine-wide key, zeroed before the
+     * delivery's first read and noted as reg.machine after the quirks
+     * and the interrupt route. */
     ULONG RegMachineWon;
     /* The driver's controllers, for the machine-wide serial check
      * (hcd_pdo.c, hcdSerialLock). */

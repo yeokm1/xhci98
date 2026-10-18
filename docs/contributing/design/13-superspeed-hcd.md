@@ -624,15 +624,20 @@ suite `test_regsrc`), shared with `xhcicm.sys` (design record 21 section
 8); "present" is the query routine having been called with a value at all,
 not a status code, because which status each target's
 `RtlQueryRegistryValues` returns for a missing key, a missing value and a
-refused type is not read on every target. The count of values a start took
-machine-wide is the `reg.machine` note at the end of `hcdReadValues`. The
+refused type is not read on every target; a stored `REG_NONE` with data is
+present, a zero-length one absent (`XhciRegCallSeen`), the shape a routine
+may be handed for a value that is not there. The count of values a start
+took machine-wide, from the delivery's first read to the quirks and the
+interrupt route, is the `reg.machine` note after `hcdPirqStart`. The
 six helpers (`portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`,
 `silent.vbs`, `silent-on.bat`, `silent-off.bat`) write the machine-wide
 value, create the key where it is absent, leave the per-controller values
 alone and show both, naming the one in force; XHCITR's logging-level block
 and `/report` show both and which won, and its Set writes the machine-wide
-value where one is in force; the installer's settings pages (design record
-26 section 5.4) write the machine-wide value.
+value where one is in force; the windowed installer's settings pages
+(design record 26 section 5.4) are to write the machine-wide value, and
+until they do `INSTALL /set` and the console questions write the
+controller's own key, which a machine-wide value then overrides.
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `releases\1.2.0.0` directory is never edited (`releases/README.md`) - staged by `make-package.ps1` from 26-A.1 and published by
@@ -8892,16 +8897,17 @@ behind a hub"):
   out-of-range `bInterval` that the driver's existing clamp to Table 6-12's
   range takes to 16 (Interval 15, 4.096 s); the code replaces that.
 - Full and Low Speed, now behind a hub as well as on a root port. Table
-  6-12 allows Interval 3 to 10 there, so codes 131 to 138 are inside the
-  specification at a root port, and 128 to 130 (Interval 0 to 2) and 139
-  to 143 (11 to 15) are outside it, as modes 2 and 3's Intervals are. Behind
-  a hub every code is beyond what the specification and this record have
-  read: a transaction translator or a Full-Speed hub carries the device's
-  periodic traffic one frame at a time, and what a controller schedules for
-  a split interrupt endpoint at an Interval below 3 (or above 10) is not
-  specified. 36.19 kept Full and Low Speed behind a hub out for that
-  reason; the owner's 3.1.0.0 text takes it in, and it is **untested
-  ground**: no hub depth, multi-TT or single-TT rule is added for it, the
+  6-12 allows Interval 3 to 10 there, at any route, so codes 131 to 138
+  are inside the specification on a root port and behind a hub alike, and
+  128 to 130 (Interval 0 to 2) and 139 to 143 (11 to 15) are outside it,
+  as modes 2 and 3's Intervals are. Behind a hub an out-of-range code is
+  beyond what the specification and this record have read: a transaction
+  translator or a Full-Speed hub carries the device's periodic traffic one
+  frame at a time, and what a controller schedules for a split interrupt
+  endpoint at an Interval below 3 (or above 10) is not specified. 36.19
+  kept Full and Low Speed behind a hub out for that reason; the owner's
+  3.1.0.0 text takes it in, and every code behind a hub is **untested
+  ground** (no controller has run one): no hub depth, multi-TT or single-TT rule is added for it, the
   hub admission rules of section 10 are unchanged (they look at the device,
   not at its Interval), and a controller that refuses the context is caught
   by the refusal path below, the only protection there is.

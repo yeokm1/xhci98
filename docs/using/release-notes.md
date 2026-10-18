@@ -2537,9 +2537,11 @@ Windows, and a value there **wins** over the same value in a controller's
 own key, for every controller; only when it is not there does each
 controller read its own key, as before. A value of the wrong type there
 still wins, and the driver's default stands. The INFs write nothing
-there, so nothing changes until a value is set in it; a value changed in
-the installer's settings is written there, and `portsw.vbs`, `silent.vbs`
-and their batch files set their value there and show both.
+there, so nothing changes until a value is set in it; `portsw.vbs`,
+`silent.vbs` and their batch files set their value there and show both.
+`INSTALL /set` and `INSTALL.BAT`'s questions still write each
+controller's own key, which a machine-wide value overrides: delete the
+machine-wide value first, or set it there.
 To give one controller a different value, delete the machine-wide value
 and set that controller's own. `docs/using/tuning.md` has the details.
 
@@ -2834,10 +2836,10 @@ in `fastpoll.fallbacks`, and the device is then polled every 1 ms
 controller that accepts it and misbehaves cannot be caught; delete the
 value and restart. At High Speed and SuperSpeed every code's polling
 interval is inside the specification's range; at Low and Full Speed codes
-131 to 138 (1 to 128 ms) are inside it on a root port, and the others are
-outside it, as `2`'s and `3`'s are. A Low- or Full-Speed device behind a
-hub at any code is **untested ground**: the specification does not
-describe it, and `2.3.0.0` to `3.0.0.0` left such a device alone. On an
+131 to 138 (1 to 128 ms) are inside it, and the others are outside it, as
+`2`'s and `3`'s are. A Low- or Full-Speed device behind a hub at any code
+is **untested ground**: `2.3.0.0` to `3.0.0.0` left such a device alone,
+and below 1 ms or above 128 ms the specification does not describe it. On an
 AMD controller the code is applied before `XhciIntervalCap`, which leaves a
 code of 136 or faster alone and polls a slower one every 32 ms. A
 part of a composite device keeps the code only until its class driver
