@@ -526,6 +526,9 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     }
     if (seq == filter->ChangeSeq) {
         filter->Unsettled = 0;
+        /* An answer to a query begun after the last change: what the
+         * recovery's retirement proof counts (CmReenumRetired). */
+        filter->RelAnswers++;
     }
     for (i = 0; i < count; i++) {
         filter->Snap[i] = now[i];
@@ -1145,6 +1148,12 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
             }
             continue;
         }
+        if (action->Why == TBT_ICM_WHY_RECOVERED &&
+            (nhi->RecBarred & (1UL << i)) != 0) {
+            /* Record 22 section 7.7 part 4: a member behind the
+             * retirement barrier gets its removal-only request alone. */
+            continue;
+        }
         /* stor98's UP for what the call is about to expose (cm_nvlink.h,
          * obligation 1). */
         (VOID)CmNvlinkExpose(
@@ -1590,7 +1599,10 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         cmReenumAll(nhi, TRUE, FALSE, action);
     } else {
         CmNvlinkAwait(nhi);
-        cmReenumAll(nhi, TRUE, TRUE, action);
+        /* The recovery's RESYNC is publication mode none (record 22
+         * section 7.7, decision U25): no fresh generation. */
+        cmReenumAll(nhi, TRUE,
+                    (BOOLEAN)(action->Why != TBT_ICM_WHY_RECOVERED), action);
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
         r->SafeEject != 0 && action->Kind != TBT_ICM_ACT_TUNNEL_DOWN) {
@@ -1983,4 +1995,75 @@ VOID CmReenumUnavailable(PCM_NHI nhi, ULONG episode)
     CmCfgwkUnavailable(r->Wk, r->WkActive);
     r->Unavailable++;
     CmLogNote(nhi, "cm.reenum.9x.unavailable.members", r->WkActive);
+}
+/* ---- record 22 section 7.7: the retirement barrier ------------------- */
+
+BOOLEAN CmReenumRetire(PCM_NHI nhi, ULONG i, PULONG answers)
+{
+    PCM_REENUM r;
+    PCM_FILTER f;
+    PDEVICE_OBJECT pdo;
+    KIRQL irql;
+
+    r = &nhi->Reenum;
+    *answers = 0;
+    if (i >= r->Members) {
+        return FALSE;
+    }
+    if (r->Route == CM_ROUTE_FILTER) {
+        CmNvlinkAwait(nhi);
+        if (!cmRegTake(nhi, i, FALSE, &f, &pdo)) {
+            return FALSE;
+        }
+        /* A change: an answer to a query already in flight does not
+         * count for it (CmRegRelations' seq rule). */
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        f->ChangeSeq++;
+        f->Unsettled = 1;
+        *answers = f->RelAnswers;
+        KeReleaseSpinLock(&cmRegLock, irql);
+        IoInvalidateDeviceRelations(pdo, BusRelations);
+        cmRegRelease(f);
+        r->Port[i].Reenums++;
+        r->Calls++;
+        CmLogNote(nhi, "cm.reenum.retire", (i << 16) | (*answers & 0xFFFFUL));
+        return TRUE;
+    }
+    if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+        CmNvlinkAwait(nhi);
+        r->WkActive = cmOwnedMask(nhi);
+        CmCfgwkGone(r->Wk, 1UL << i, r->WkActive);
+        CmLogNote(nhi, "cm.reenum.9x.retire", i);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+BOOLEAN CmReenumRetired(PCM_NHI nhi, ULONG i, ULONG answers)
+{
+    PCM_REENUM r;
+    PCM_FILTER f;
+    PDEVICE_OBJECT pdo;
+    BOOLEAN done;
+    KIRQL irql;
+
+    r = &nhi->Reenum;
+    if (i >= r->Members) {
+        return FALSE;
+    }
+    if (r->Route == CM_ROUTE_FILTER) {
+        if (!cmRegTake(nhi, i, FALSE, &f, &pdo)) {
+            return FALSE;
+        }
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        done = (BOOLEAN)(f->RelAnswers != answers && f->SnapCount == 0 &&
+                         !f->SnapTruncated);
+        KeReleaseSpinLock(&cmRegLock, irql);
+        cmRegRelease(f);
+        return done;
+    }
+    if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+        return (BOOLEAN)((CmCfgwkRetired(r->Wk) & (1UL << i)) != 0);
+    }
+    return FALSE;
 }

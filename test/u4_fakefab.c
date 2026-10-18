@@ -1767,6 +1767,24 @@ void fabPowerCycle(FAB *f)
     f->RxQCount = 0;
 }
 
+void fabResetHost(FAB *f)
+{
+    unsigned a;
+
+    fabResetRouter(f, 0);
+    for (a = 1; a <= f->R[0].MaxAdp; a++) {
+        if (f->R[0].Adp[a].Present && (f->R[0].Adp[a].Cs[2] & 0xFFFFFFUL) == 1) {
+            f->R[0].Adp[a].Cs[4] |= 0x80000000UL;
+        }
+    }
+    f->TxCtrl = 0;
+    f->RxCtrl = 0;
+    f->TxSize = 0;
+    f->RxSizeReg = 0;
+    f->RxSize = 0;
+    f->RxQCount = 0;
+}
+
 void fabSwapQuiet(FAB *f, int port, int dev)
 {
     int a = fabPortLane0(f, port);

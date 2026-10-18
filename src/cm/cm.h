@@ -162,6 +162,13 @@ typedef struct _CM_COUNTERS {
     ULONG U4ForcePowerKept; /* a router connected at stop: force power kept */
     ULONG U4Contained;      /* the USB4 profile contained (record 22 7.7)  */
     ULONG U4ContainRefused; /* a lifecycle step refused while contained    */
+    ULONG U4RecoverProbes;  /* record 22 7.7: probes while contained       */
+    ULONG U4RecoverRefused; /* an attempt refused by a step (logged)       */
+    ULONG U4RecoverOk;      /* committed                                   */
+    ULONG U4RecoverFinal;   /* the verified stop failed: final             */
+    ULONG U4RetireRequests; /* removal-only requests made                  */
+    ULONG U4RetirementOwed; /* a pass that found a barrier still standing  */
+    ULONG U4RecoverRearm;   /* an attempt that ended on an all-ones read   */
 } CM_COUNTERS;
 
 typedef struct _CM_NHI {
@@ -278,6 +285,29 @@ typedef struct _CM_NHI {
     volatile ULONG PnpStopPending;
     ULONG U4UpGen[TBT_U4_MAX_PORTS];
     ULONG U4UpValid;
+    /* Record 22 section 7.7's recovery (task 42-A.10), the driver's half.
+     * The tunnel-port set as last read healthy (each member's location,
+     * identity DW and bus-number DW 0x18), for part 3 step 6; the members
+     * whose stor98 entry lost UP at the containment (CmNvlinkLost), for
+     * R8b; the Command bits the preparation set; the retirement barrier
+     * (part 4: bit i, member i), with each barred member's removal-only
+     * request - when it was last made and the bridge filter's answer
+     * count then (NT) - and the members the recovery's RESYNC skips. */
+    ULONG RecSetCount;
+    ULONG RecSetBdf[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecSetId[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecSetBus[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecLostUp;
+    ULONG RecCmdSet;
+    ULONG RecBarred;
+    ULONG RecRetireSent;
+    ULONG RecRetireAtMs[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecRetireAns[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecUpValid;       /* U4UpValid as the containment found it      */
+    /* Decision U27: the bind (1) or the resume (2) the loss interrupted;
+     * the stage is then CM_STAGE_FAILED, sampled and recovered as ACTIVE
+     * is, never a protocol failure's (0). */
+    ULONG U4LossFrom;
     /* The stor98 channel's two moments (CmNhiSetU4Hooks), NULL until task
      * 40-A.7's cm_nvlink.c registers them. */
     CM_U4_UP_HOOK U4UpHook;
@@ -471,6 +501,10 @@ typedef struct _CM_FILTER {
                                eject was posted                           */
     ULONG Unsettled;        /* a tunnel change since its last BusRelations */
     ULONG ChangeSeq;        /* tunnel changes seen, for that settling     */
+    ULONG RelAnswers;       /* successful BusRelations answers seen: the
+                               recovery's retirement proof (record 22
+                               section 7.7 part 4) wants one after its
+                               removal-only request                       */
 
     /* ---- child ---- */
     struct _CM_FILTER *Bridge;
@@ -536,6 +570,19 @@ VOID CmNhiU4Contain(PCM_NHI nhi);
 /* The same with the reconciliation chosen: FALSE on the stop's path, which
  * never calls into PnP from inside a PnP request (record 22 section 7.7). */
 VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile);
+/* Record 22 section 7.7's recovery (task 42-A.10): one probe of a
+ * contained USB4 instance at `nowMs` and, as the monitor's table admits,
+ * the preparation, the recovery and its commit (cm_nhi.c). The thread,
+ * PASSIVE_LEVEL. */
+VOID CmNhiU4Probe(PCM_NHI nhi, ULONG nowMs);
+/* The retirement barrier of part 4, once per pass of an ACTIVE USB4
+ * instance before its tick: each barred member's devnode retirement read,
+ * its removal-only request made or retried, and every port's Barred set
+ * from it (TbtU4SetBarred). The thread, PASSIVE_LEVEL. */
+VOID CmNhiU4Barrier(PCM_NHI nhi);
+/* Whether the instance is one the probe serves: a contained USB4 instance
+ * ACTIVE, or FAILED by a loss inside its bind or resume (U27). */
+BOOLEAN CmNhiU4Probing(PCM_NHI nhi);
 /* The value RX ring 0's size register holds under the USB4 profile: what
  * the bind and every resume must read back before the monitor is armed. */
 #define CM_U4_RX_SIZE_VALUE \

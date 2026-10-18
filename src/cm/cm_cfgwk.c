@@ -142,6 +142,10 @@ typedef struct _CM_CFGWK {
     ULONG NoScan;           /* members whose next re-enumeration reads no
                                configuration space (no vanished-child
                                scan): CONTROLLER_UNAVAILABLE's           */
+    ULONG GoneClean;        /* members whose last CONTROLLER_UNAVAILABLE
+                               removal resolved with every recorded
+                               devnode removed or absent (CmCfgwkRetired,
+                               record 22 section 7.7's barrier)          */
     ULONG Retry;            /* member calls owed after a failure          */
     ULONG RetryVanish;
     ULONG RetryAt;          /* ms clock of the last failure               */
@@ -1763,6 +1767,7 @@ static VOID cmWkThread(PVOID context)
     ULONG goneRc;
     ULONG seq[XHCI_TBT_MAX_TUNNELS];
     ULONG i;
+    BOOLEAN clean;
     BOOLEAN open;
     BOOLEAN go;
     BOOLEAN timed;
@@ -1895,8 +1900,11 @@ static VOID cmWkThread(PVOID context)
                     KeReleaseSpinLock(&w->Lock, irql);
                     continue;
                 }
+                clean = FALSE;
                 if (goneRc == CM_WK_GONE_DONE) {
                     w->C.GoneDone++;
+                    /* Nothing refused went back to the retained set. */
+                    clean = (BOOLEAN)(w->Port[i].Ret.Count == 0);
                 } else {
                     cmWkLog(w, "cm.reenum.9x.gone.abandoned",
                             (w->Port[i].Bdf << 8) | w->Port[i].Gone.Count);
@@ -1911,6 +1919,9 @@ static VOID cmWkThread(PVOID context)
                     /* Only the request this attempt took; a newer one is
                      * taken at the next pass. */
                     w->ReqGone &= ~(1UL << i);
+                    if (clean) {
+                        w->GoneClean |= 1UL << i;
+                    }
                 }
                 KeReleaseSpinLock(&w->Lock, irql);
             }
@@ -2106,31 +2117,49 @@ VOID CmCfgwkPost(PCM_CFGWK w, ULONG reenum, ULONG vanish, ULONG active,
 
 VOID CmCfgwkUnavailable(PCM_CFGWK w, ULONG active)
 {
+    CmCfgwkGone(w, active, active);
+}
+
+VOID CmCfgwkGone(PCM_CFGWK w, ULONG members, ULONG active)
+{
     KIRQL irql;
     ULONG i;
 
     KeAcquireSpinLock(&w->Lock, &irql);
     w->Active = active;
-    w->ReqGone |= active;
+    members &= active;
+    w->ReqGone |= members;
+    w->GoneClean &= ~members;
     for (i = 0; i < w->Members; i++) {
-        if (active & (1UL << i)) {
+        if (members & (1UL << i)) {
             w->GoneSeq[i]++;
         }
     }
     /* The re-enumeration after the removal reads no configuration space:
      * no vanished-child scan, here or in a coalesced earlier request. */
-    w->ReqReenum |= active;
-    w->ReqVanish &= ~active;
-    w->NoScan |= active;
-    w->Retry &= ~active;
-    w->RetryVanish &= ~active;
+    w->ReqReenum |= members;
+    w->ReqVanish &= ~members;
+    w->NoScan |= members;
+    w->Retry &= ~members;
+    w->RetryVanish &= ~members;
     for (i = 0; i < w->Members; i++) {
-        if (active & (1UL << i)) {
+        if (members & (1UL << i)) {
             w->Gen[i]++;
         }
     }
     KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&w->Lock, irql);
+}
+
+ULONG CmCfgwkRetired(PCM_CFGWK w)
+{
+    KIRQL irql;
+    ULONG done;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    done = w->GoneClean & ~w->ReqGone;
+    KeReleaseSpinLock(&w->Lock, irql);
+    return done;
 }
 
 VOID CmCfgwkPrune(PCM_CFGWK w)

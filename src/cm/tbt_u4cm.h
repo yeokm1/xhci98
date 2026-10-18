@@ -248,6 +248,9 @@ typedef struct _TBT_U4_TUNNEL {
 #define TBT_U4_WHY_RESUME           18UL    /* HELD: a resume obligation not met */
 #define TBT_U4_WHY_LANE_STATE       19UL
 #define TBT_U4_WHY_CONTAINED        20UL    /* a sequence the containment stopped */
+#define TBT_U4_WHY_RECOVER          21UL    /* HELD by a recovery (section 7.7):
+                                               unclassified, or drained and
+                                               waiting for its rebuild */
 
 typedef struct _TBT_U4_PORT {
     ULONG Index;            /* 1-based */
@@ -322,6 +325,19 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN LinkSeen;
     ULONG LinkLane1;
     ULONG LinkGeneration;
+
+    /* Record 22 section 7.7's recovery (task 42-A.10). Rebuild*: a tunnel
+     * drained by the recovery at both ends, rebuilt after the commit by
+     * the per-tunnel rebuild transition once Barred is clear. RemovalDebt:
+     * a PCIe tunnel drained by the recovery (departed, or to be rebuilt)
+     * whose endpoint devnode the operating system may still have; the
+     * driver takes it (TbtU4TakeDebt) and raises the member's barrier.
+     * Barred: the driver's retirement barrier on this port - no tunnel is
+     * built and no connect is made while it is set. */
+    BOOLEAN RebuildPcie;
+    BOOLEAN RebuildUsb3;
+    BOOLEAN RemovalDebt;
+    BOOLEAN Barred;
 } TBT_U4_PORT, *PTBT_U4_PORT;
 
 /* A router below depth 1 a predecessor configured (section 7.1). */
@@ -499,6 +515,13 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG Ejects;
     ULONG ContainedRefused; /* requests and entry points refused, contained */
     ULONG ContainedRetired; /* actions and deferred tails retired at containment */
+    ULONG RecoverAttempts;  /* TbtU4Recover entered (section 7.7) */
+    ULONG RecoverOk;        /* committed */
+    ULONG RecoverFinal;     /* the verified stop failed: final for the boot */
+    ULONG RecoverPreserved; /* tunnels verified and kept */
+    ULONG RecoverRebuilt;   /* tunnels drained, then rebuilt after the commit */
+    ULONG RecoverDeparted;  /* tunnels whose router left: host side drained */
+    ULONG RecoverHeld;      /* tunnels HELD for anything short of the rules */
 } TBT_U4_COUNTERS;
 
 /* The start stages (section 3.5's two inert forms). */
@@ -559,6 +582,24 @@ typedef struct _TBT_U4CM {
     BOOLEAN ResyncPending;
 
     TBT_U4_ROUTER Scratch;  /* a router below depth 1, read in turn */
+
+    /* Section 7.7's recovery snapshot (decision U19), taken by
+     * TbtU4Contain and again by TbtU4Snapshot at each new episode: the
+     * port, host router and link records copied whole, the stage. The
+     * port records themselves are the journal of an attempt that failed:
+     * what it drained reads down there, and a later snapshot copies it. */
+    BOOLEAN SnapValid;
+    ULONG SnapStage;
+    ULONG SnapPortCount;
+    TBT_U4_PORT SnapPorts[TBT_U4_MAX_PORTS];
+    TBT_U4_ROUTER SnapHost;
+    TBT_U4_LINK SnapLinks[TBT_U4_MAX_LINKS];
+    BOOLEAN Recovering;     /* TbtU4Recover's work: the core's gate open
+                               for it alone (decision U26) */
+    BOOLEAN RecoverRings;   /* this attempt restarted the rings */
+    BOOLEAN RelockExplained;/* the host router was enumerated afresh by the
+                               recovery: its lane 0 Lock set again is its
+                               own reset, not removal evidence */
 
     TBT_U4_COUNTERS Counters;
 } TBT_U4CM, *PTBT_U4CM;
@@ -642,6 +683,54 @@ VOID TbtU4Stop(PTBT_U4CM cm);
  * next request or wait.
  */
 VOID TbtU4Contain(PTBT_U4CM cm);
+
+/*
+ * Record 22 section 7.7's recovery (task 42-A.10, decisions U19 to U28).
+ *
+ * TbtU4Snapshot: the recovery snapshot taken again from the records as
+ * they now are (a new episode after a failed attempt); TbtU4Contain takes
+ * the first. No access.
+ *
+ * TbtU4Recover: part 3 steps 1 to 5 on a contained instance, under the
+ * driver's RECOVERY access class: the rings stopped and verified stopped
+ * in the kept buffer (a stop not verified sets *final: no recovery for the
+ * boot, the buffer kept), restarted there and the size register read back
+ * as programmed; the host router enumerated afresh or adopted (section
+ * 6.1, test (d)'s router half); every tunnel up at the loss classified by
+ * reading alone - verified and preserved, to be rebuilt (the router the
+ * recorded one, its side of the tunnel intact, the host side gone),
+ * departed (removal evidence, or a router that gave up its enumeration),
+ * or HELD - and the rebuilt and departed ones drained by their recorded
+ * teardown, the device side only on the positively identified router.
+ * Builds nothing and queues no action. TBT_OK, or a negative result: the
+ * caller then calls TbtU4RecoverFail.
+ *
+ * TbtU4RecoverDemote: before the commit, a tunnel TbtU4Recover preserved
+ * sent back to the rebuild classification by the driver (its member's
+ * secondary bus changed, or its channel entry lost UP at containment:
+ * R8a, R8b): its PCIe tunnel drained at both ends, RebuildPcie and
+ * RemovalDebt set. TRUE when drained; FALSE leaves the port HELD.
+ *
+ * TbtU4RecoverCommit: part 3 step 7's flag updates alone, no access, any
+ * IRQL (the driver holds its work lock): Contained, Recovering and
+ * Suspended cleared, the stage RUNNING, every port to be checked. The
+ * rebuilds then run from TbtU4Poll (the per-tunnel rebuild transition,
+ * decision U28) on ports not Barred.
+ *
+ * TbtU4RecoverFail: the failure path: the rings this attempt restarted
+ * stopped (verified where the gate still admits it), Recovering cleared,
+ * the instance contained as before. PASSIVE_LEVEL.
+ *
+ * TbtU4TakeDebt: RemovalDebt read and cleared for `port`.
+ * TbtU4SetBarred: the driver's barrier for `port`.
+ */
+VOID TbtU4Snapshot(PTBT_U4CM cm);
+LONG TbtU4Recover(PTBT_U4CM cm, BOOLEAN *final);
+BOOLEAN TbtU4RecoverDemote(PTBT_U4CM cm, ULONG port);
+VOID TbtU4RecoverCommit(PTBT_U4CM cm);
+VOID TbtU4RecoverFail(PTBT_U4CM cm);
+BOOLEAN TbtU4TakeDebt(PTBT_U4CM cm, ULONG port);
+VOID TbtU4SetBarred(PTBT_U4CM cm, ULONG port, BOOLEAN barred);
 
 /* Whether a device router is connected on any port (record 22 section
  * 4.2's condition for clearing force power at stop). */

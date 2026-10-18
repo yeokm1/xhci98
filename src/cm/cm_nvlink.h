@@ -507,6 +507,16 @@ ULONG CmNvlinkIcmDown(struct _CM_NHI *nhi, ULONG pollState);
  * (cm_reenum.c CmReenumAction). */
 VOID CmNvlinkLost(struct _CM_NHI *nhi);
 
+/* Record 22 section 7.7's recovery (task 42-A.10). CmNvlinkUpCount: how
+ * many entries behind `bridge` read UP (by the shadow, or by its
+ * secondary bus read now; NT only, as CmNvlinkLost). CmNvlinkRetireMember:
+ * publication mode retire for `bridge`, once its endpoint's devnode was
+ * seen retired - each UP entry there whose function reads absent (its
+ * identifier read, all ones) leaves UP for IN_USE alone, its generation
+ * unchanged: no DOWN_QUIESCED, no increment, nothing published. */
+ULONG CmNvlinkUpCount(struct _CM_NHI *nhi, ULONG bridge);
+VOID CmNvlinkRetireMember(struct _CM_NHI *nhi, ULONG bridge);
+
 /* The host interface lost, every operating system (cm_reenum.c
  * CmReenumLossBegin): the deferred scans of buses an exposure found silent
  * are dropped, with no access; a later exposure arms its own. */

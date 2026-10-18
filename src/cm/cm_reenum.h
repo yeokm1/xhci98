@@ -380,6 +380,25 @@ VOID CmReenumUnavailable(struct _CM_NHI *nhi, ULONG episode);
 VOID CmReenumLossBegin(struct _CM_NHI *nhi);
 VOID CmReenumLossEnd(struct _CM_NHI *nhi);
 
+/*
+ * Record 22 section 7.7 part 4, the retirement barrier's two halves for
+ * member i. CmReenumRetire: the removal-only request - on NT the member's
+ * invalidation with no exposure (publication mode retire: nothing
+ * published, the drained function read absent by pci.sys), its bridge
+ * filter's answer count then written to `answers`; on 98 SE and ME the
+ * worker's removal of the children retained at the member's last healthy
+ * walk (CmCfgwkGone), never by reading the bridge. FALSE when no request
+ * could be made. CmReenumRetired: whether the endpoint's devnode is
+ * retired since that request - on NT a BusRelations answer below the
+ * bridge after it (`answers` moved), complete (not truncated) and
+ * reporting no PDO; on 98 SE and ME the worker's removal for the member
+ * resolved with every recorded devnode removed or absent (a refusal, an
+ * undecided entry or an abandoned attempt keep it owed). PASSIVE_LEVEL,
+ * the connection-manager thread.
+ */
+BOOLEAN CmReenumRetire(struct _CM_NHI *nhi, ULONG i, PULONG answers);
+BOOLEAN CmReenumRetired(struct _CM_NHI *nhi, ULONG i, ULONG answers);
+
 VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,
                       PVOID context);
 /* Writes up to `capacity` active members' locations into `ports` and
@@ -443,6 +462,13 @@ VOID CmCfgwkPrune(struct _CM_CFGWK *w);
  * an operation in progress on the member goes stale). `active` replaces
  * the owned members. Returns at once. <= DISPATCH_LEVEL. */
 VOID CmCfgwkUnavailable(struct _CM_CFGWK *w, ULONG active);
+/* The same removal for the members in `members` alone (record 22 section
+ * 7.7's removal-only request), `active` replacing the owned members; and
+ * the members whose last such removal resolved clean (every recorded
+ * devnode removed or found absent, nothing refused or undecided) with no
+ * newer one owed. <= DISPATCH_LEVEL. */
+VOID CmCfgwkGone(struct _CM_CFGWK *w, ULONG members, ULONG active);
+ULONG CmCfgwkRetired(struct _CM_CFGWK *w);
 
 /* Ends the worker: waits for it when it is between calls (and frees it);
  * when it is inside a CONFIGMG call, which may be waiting for this very

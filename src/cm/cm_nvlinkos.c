@@ -1642,3 +1642,36 @@ VOID CmNvlinkService(PCM_NHI nhi)
         }
     }
 }
+
+/* ---- record 22 section 7.7: the recovery's two reads of the channel --- */
+
+ULONG CmNvlinkUpCount(PCM_NHI nhi, ULONG bridge)
+{
+    ULONG i;
+    ULONG bus;
+    ULONG n;
+
+    if (cmNvTable == NULL || !cmNvExclusive(nhi, bridge)) {
+        return 0;
+    }
+    bus = cmNvSecondary(bridge);
+    n = 0;
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if ((cmNvTable->Entry[i].Flags & STOR98LS_UP) != 0 &&
+            (cmNvShadow[i].Bridge == bridge ||
+             cmNvTable->Entry[i].BusNumber == bus) &&
+            (cmNvShadow[i].Owner == NULL || cmNvShadow[i].Owner == nhi)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+VOID CmNvlinkRetireMember(PCM_NHI nhi, ULONG bridge)
+{
+    if (cmNvTable == NULL) {
+        return;
+    }
+    CmLogNote(nhi, "cm.nvlink.retire", bridge);
+    (VOID)cmNvMarkEx(nhi, bridge, CM_NVLINK_LOST, TRUE);
+}

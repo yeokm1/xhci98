@@ -95,9 +95,16 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
      * configuration write the liveness gate does not admit for the current
      * class (cm_live.h; the BAR accessors' rule): refused like any failed
      * request. Reads stay open for the validation until revoked. */
+    /* The USB4 recovery's preparation (record 22 section 7.7 part 2)
+     * writes the Command register and section 4.2's platform registers,
+     * and nothing else. */
     if (nhi->Live.Revoked ||
         (!read && (nhi->AccessClass == CM_ACCESS_PROBE ||
-                   !CmLiveAdmits(&nhi->Live, nhi->AccessClass)))) {
+                   !CmLiveAdmits(&nhi->Live, nhi->AccessClass) ||
+                   (nhi->AccessClass == CM_ACCESS_PREPARE &&
+                    offset != CM_PCI_COMMAND &&
+                    offset != TBT_ICL_VS_CAP_22 &&
+                    offset != TBT_ICL_VS_CAP_15)))) {
         nhi->Counters.ConfigFailures++;
         return FALSE;
     }
@@ -268,6 +275,7 @@ static VOID cmBarWrite(PVOID context, ULONG offset, ULONG value)
         return;
     }
     if (nhi->AccessClass == CM_ACCESS_PROBE ||
+        nhi->AccessClass == CM_ACCESS_PREPARE ||
         !CmLiveAdmits(&nhi->Live, nhi->AccessClass)) {
         nhi->Live.Counters.RefusedWrites++;
         return;
@@ -591,12 +599,19 @@ VOID CmThrLiveness(PCM_NHI nhi)
     ULONG v;
     ULONG act;
 
-    if (nhi->Stage != CM_STAGE_ACTIVE || nhi->DevicePower != PowerDeviceD0 ||
+    if ((nhi->Stage != CM_STAGE_ACTIVE && !CmNhiU4Probing(nhi)) ||
+        nhi->DevicePower != PowerDeviceD0 ||
         nhi->Suspended || CmPowerSleeping(nhi)) {
         return;
     }
     now = cmNowMs(nhi);
     if (!CmLiveDue(&nhi->Live, now)) {
+        return;
+    }
+    if (nhi->U4On && nhi->Live.State == CM_LIVE_CONTAINED) {
+        /* Record 22 section 7.7 part 1: the USB4 profile's probe for
+         * access back, and what follows it. */
+        CmNhiU4Probe(nhi, now);
         return;
     }
     v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
