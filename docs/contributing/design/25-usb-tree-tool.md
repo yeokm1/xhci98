@@ -1,9 +1,10 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 13, 2026-10-16 (revision 13, the drivers' logging
-level, below; revision 12, PCI configuration and xhci98's query
-request, below). Revision 11 adds the not-removable
-unit's stop (below). Revision 10 adds a per-user "Start at login" choice
+Status: revision 14, 2026-10-19 (revision 14, XHCISNAP's reading
+moved here, below; revision 13, the drivers' logging level, below;
+revision 12, PCI configuration and xhci98's query request, below).
+Revision 11 adds the not-removable unit's stop (below).
+Revision 10 adds a per-user "Start at login" choice
 (section 7.4, the owner's request of 2026-10-16), with an addendum on the
 tree's labels (end of section 7.4). Revision 9 adds the drivers' logs
 (below). Revision 7 adds Safely Remove for plain USB
@@ -70,6 +71,14 @@ replaces `XHCISNAP -verbosity` and `SNAPON.BAT` (XHCISNAP still ships in
 driver setting the tool writes (section 7.5). A standard user on 2000 to 7 sets
 it through a second mode of section 6.6's elevated run, `/setlevel`.
 Sections 1.2, 1.3, 7.3, 11 and 12 change with it.
+
+Revision 14, 2026-10-19 (roadmap-usb4 42-A.4, the owner's 42-0.3
+decision of 2026-10-18): XHCISNAP is retired in `3.1.0.0` and its
+reading moves into the tool: `XHCITR /snapshot`, `/dump` and `/probe`,
+File > Save Snapshot..., and a "Snapshot" part at the end of Save Report
+and `/report` (section 15). XHCISNAP.EXE and its SNAPON.BAT, SNAPGET.BAT
+and SNAPOFF.BAT leave the package. Sections 4.6, 4.8 and 12 change with
+it.
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
@@ -533,10 +542,11 @@ Since revision 12 the tool reads xhci98's log through its query request
 No driver change (decision T3 holds). The tool opens the controller as it
 already does (`\\.\HCD<n>`, or its interface path) and sends
 `IOCTL_USB_USER_REQUEST` with `USBUSER_PASS_THRU` and the snapshot GUID,
-schema 5 (design record 08, `xhcisnap\README.md`), exactly as
-`XHCISNAP`'s `take_window`: a window of the extension region at offset 0
-for the header (the ring's offset), then one window at the ring's offset
-that must hold the whole ring, and the HCD region (version 1) for the
+schema 5 (design record 08, `docs\contributing\snapshot-reader.md`),
+exactly as `XHCISNAP`'s `take_window` (now `xhcitr\tr_snap.c`'s): a
+window of the extension region at offset 0 for the header (the ring's
+offset), then one window at the ring's offset that must hold the whole ring,
+and the HCD region (version 1) for the
 counter block `XHCIHC_COUNTERS`. The ring is decoded with the header of
 the window that carried it - the door fills header and payload together
 under the controller lock (`hcd_door.c`) - and its verbosity, offset,
@@ -552,8 +562,9 @@ tool does not know is shown as such, not decoded.
 - **Levels 2 and 3**: the counters and the ring.
 - **Level 4**: the counters; the ring is withheld, because at level 4 it
   holds kernel addresses (`start.bar`, `start.ok`, `xhci_log.h`), and the
-  node says to use level 2 for a log the tool can show (`XHCISNAP`'s
-  maintainer report is the level-4 reading).
+  node says to use level 2 for a log the tool can show (`XHCITR
+  /snapshot`, `XHCISNAP`'s maintainer report up to `3.0.0.0`, is the
+  level-4 reading; section 15).
 - The counters are named from `XHCIHC_COUNTERS`'s own fields
   (`xhcitr\tr_hcctr.h`, one line a field, which the host suite holds to
   `src\xhci_counters.h` field by field by offset); a word past the table is
@@ -675,9 +686,11 @@ read's state, the build flavour), then the parts. Sizing is `XCMQ`'s.
   before. An older `xhci98.sys` answers the request with
   `STATUS_INVALID_DEVICE_REQUEST`: the tool reads its log through the
   door as section 4.6 has it, and says "not served by this xhci98.sys"
-  for its configuration space. `XHCISNAP` stays in `3.0.0.0` unchanged;
-  its retirement is roadmap-usb4 tasks 42-0.3 and 42-A.4 (were SNAP.1
-  to SNAP.3), in `3.1.0.0`.
+  for its configuration space. `XHCISNAP` stayed in `3.0.0.0` unchanged;
+  it was retired in `3.1.0.0` (roadmap-usb4 tasks 42-0.3 and 42-A.4,
+  were SNAP.1 to SNAP.3), its reading moved into this tool (section 15),
+  and the pass-through stays: Windows' own property tabs use it, and the
+  tool's snapshot reads through it.
 
 ## 5. The USB branch
 
@@ -1430,6 +1443,13 @@ states, the sizing) and the tool's reader and texts of it in
   elevated run finds the keys itself. (T13 to T19 are revisions 9 and
   12's.)
 
+- **T21** (owner, 2026-10-18, roadmap-usb4 42-0.3; revision 14)
+  XHCISNAP is retired in `3.1.0.0` and its reading moves into XHCITR
+  (section 15): its engine is linked into the tool, its `-report`,
+  `-dump` and `-probe` become `/snapshot`, `/dump` and `/probe`, and Save
+  Report carries the snapshot, so one file is the bug report. Its level
+  switches do not move: section 7.5 already replaces them.
+
 ## 13. Open
 
 - Revision 7: whether a USB disk on 98 SE (NUSB's `usbstor.sys` and
@@ -1522,3 +1542,72 @@ Revision 7, from leg T.7 (`runs/run-41.md`, "Plain USB devices"):
   read is a node not read.
 - **The UAS disk's re-plug** was not read: the emulated UAS device does not
   attach when added to a running machine.
+
+## 15. XHCISNAP's reading, moved here (revision 14)
+
+The owner's 42-0.3 decision of 2026-10-18 (decision T21): `3.1.0.0`
+ships no `XHCISNAP.EXE`, `SNAPON.BAT`, `SNAPGET.BAT` or `SNAPOFF.BAT`,
+and `XHCITR.EXE` and `XHCITR64.EXE` take over exactly XHCISNAP's
+reading. `docs\contributing\snapshot-reader.md` (XHCISNAP's guide,
+moved) stays the reference for the route and the files.
+
+1. **The source.** `xhcisnap\xhcisnap.c` is `xhcitr\tr_snap.c`, its
+   `main` renamed `tr_snap_main` and its command line still spelled with
+   dashes inside; `xhcitr\xhcitr.c` maps the user's words onto it.
+   `xhcisnap\selftest.cmd` is `xhcitr\snaptest.cmd`, and
+   `xhcisnap\check-counter-names.ps1` is
+   `scripts\check-counter-names.ps1`. The `xhcisnap\` directory, its
+   `build.cmd` and its three batch files are gone.
+2. **`XHCITR /snapshot [NAME] [/c N] [/nosysinfo]`** is XHCISNAP's
+   `-report`, the field report. It writes `BASE.DEV` first - every PCI
+   xHCI controller's and this package's devnodes with their Device
+   Manager status, problem code and allocated resources, the installed
+   driver files' size, version and SHA-256, and the "captured on" system
+   block - then the dump: `BASE.TXT` (the decoded header, note ring,
+   slots region, root port enumeration and HCD region, PORTSC at level
+   3), `BASE.BIN` (the raw extension image) and `BASE.PSC` (the raw
+   PORTSC array). The files go in the current directory under the 8.3
+   NAME given, else a name from the clock (`mDDhhmmS`); a set is never
+   overwritten. The exit codes are XHCISNAP's, 0 and 2 to 8.
+3. **`XHCITR /dump [/c N] [/o BASE] [/nosysinfo]`** is `-dump`:
+   `BASE.TXT`, `.BIN` and `.PSC`, replacing an earlier set of that BASE.
+4. **`XHCITR /probe`** is `-probe`: the route's four controls, nothing
+   dumped.
+5. **`XHCITR /snapshot /?`** is the long help. With its output
+   redirected each of these modes writes its text there; otherwise a
+   message box shows the text with the current directory.
+6. **What is refused.** A word beginning with `-` after `/snapshot`,
+   `/dump` or `/probe` is refused before anything is read, so no switch
+   of the old tool is reached by its old spelling. XHCISNAP's level
+   switches (`-verbosity`, `-on`, `-disable`, `-force`) did not move:
+   section 7.5's Logging level and `/setlevel xhci98=<0-4>
+   xhcicm=<0-4>` replace them and SNAPON.BAT and SNAPOFF.BAT, and the
+   engine's answer to one names Logging level and `/setlevel`.
+7. **`/snaptest`** is `snaptest.cmd`'s entry, not for users: it hands the
+   rest of the command line to the engine unmapped, so the self-test
+   reaches the canned decodes (`-selftest-*`) as XHCISNAP's did. The
+   gated build runs `xhcitr\snaptest.cmd` after `xhcitr\build.cmd`, and
+   `scripts\check-counter-names.ps1` checks the counter names that
+   `XHCITR /snaptest -selftest-counters` prints against
+   `src\xhci_counters.h`, as it checked XHCISNAP's.
+8. **File > Save Snapshot...** picks a folder (`SHBrowseForFolder`),
+   runs `/snapshot` there for the first xhci98 controller and shows the
+   text, with the folder, in a message box.
+9. **Save Report and `/report <file>`** end with a "Snapshot" part: for
+   each xhci98 controller, the `.DEV` (once: it is the machine's) and the
+   dump's `.TXT`, slots and enumeration regions included. The `.TXT` is
+   withheld at level 4, where it can hold memory addresses, as the
+   "Driver log" node withholds the ring (section 3.5). Save Report, or
+   `/report`, alone is therefore the bug report; the raw `.BIN` and
+   `.PSC` come only from `/snapshot` or `/dump`, when the maintainer
+   asks for them.
+10. **A child process.** The window and `/report` do not call the engine
+    in their own process: they run the tool itself with `/snapshot` in a
+    folder - for Save Snapshot the one picked, for `/report` a directory
+    of its own under `%TEMP%`, removed afterwards with its files - and
+    read the files and the text back, waiting up to two minutes. The
+    moved engine keeps XHCISNAP's process-wide state, so it runs once per
+    process, as it did in XHCISNAP.
+11. **The door.** `xhci98.sys`'s USBUSER pass-through is kept unchanged
+    (section 4.8): Windows' own property tabs use it, and the snapshot
+    reads through it.

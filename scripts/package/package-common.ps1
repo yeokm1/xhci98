@@ -539,24 +539,25 @@ function Get-TestSignCertificate {
     }
 }
 
-# The field reports' batch files (roadmap-hcd task 38.1): SNAPON.BAT,
-# SNAPGET.BAT and SNAPOFF.BAT beside XHCISNAP.EXE, run by COMMAND.COM on
-# Windows 98 SE and ME and by cmd.exe from 2000 to 7, so they carry
-# portsw-on.bat's pinned split; QUALREP.BAT beside XHCIQUAL.EXE, run by
-# MS-DOS's COMMAND.COM alone, so it carries none. One definition of what each
+# The field reports' batch files (roadmap-hcd task 38.1): QUALREP.BAT beside
+# XHCIQUAL.EXE, run by MS-DOS's COMMAND.COM alone, so it carries no split. A
+# Win spec (run by COMMAND.COM on Windows 98 SE and ME and by cmd.exe from
+# 2000 to 7) carries portsw-on.bat's pinned split: none is published since
+# task 42-A.4 retired SNAPON, SNAPGET and SNAPOFF.BAT for XHCITR's /setlevel
+# and /snapshot, and the rule stays for the next. One definition of what each
 # must say, read by test-package.ps1 against the repository's sources and by
 # make-release.ps1 against the batches a cut stages and an upload set
 # assembles (Assert-ReportBatchContent), so a stale or malformed batch in a
-# -SnapToolDir, a -QualtoolDir or a published tree is refused as the
+# -QualtoolDir or a published tree is refused as the
 # repository's own would be. Name is the source name in the tool's own
 # directory (Dir); make-release.ps1's $reportBatches maps it to the
 # published 8.3 name.
 #
 # ArgPass, where a spec has it, is the batch's optional argument (owner,
-# 2026-10-13: SNAPON.BAT LEVEL, SNAPGET.BAT NAME), passed on as it came:
-# Args ends in %1, and that one run line is the only line that may carry
-# %1. The default and the check are the tool's (XHCISNAP -on, -report
-# NAME), so no `if` reads %1 (task 38.1: a quoted or
+# 2026-10-13, for the retired SNAPON.BAT LEVEL, SNAPGET.BAT NAME), passed on
+# as it came: Args ends in %1, and that one run line is the only line that may
+# carry %1. The default and the check are the tool's, so no `if` reads %1
+# (task 38.1: a quoted or
 # metacharacter %1 broke cmd.exe's `if "%1"==` before the tool could refuse
 # it, and a goto change could route around a level test). No other percent
 # variable (%2, %0, %*, %~1, %DATE%, ...) is admitted anywhere.
@@ -567,9 +568,6 @@ function Get-TestSignCertificate {
 # code - the tool prints the outcome. QUALREP.BAT keeps its flag logic.
 function Get-ReportBatchSpecs {
     return @(
-        @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-on %1";       Names = @(); ArgPass = $true; ToolLast = $true },
-        @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report %1";   Names = @(".DEV", ".TXT"); ArgPass = $true; ToolLast = $true },
-        @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @(); ToolLast = $true },
         @{ Name = "QUALREP.BAT"; Dir = "xhciqual"; Win = $false; Tool = "XHCIQUAL"; Args = "--probe-only --no-page --log-stamp"; Names = @("LOG"); Flag = "QUALREP.FLG" }
     )
 }
@@ -692,9 +690,6 @@ function Get-ReportBatchFaults {
         foreach ($g in $gotos) {
             if ($null -ne $entry -and $g[1] -ceq $entry -and $lines[$g[0]] -cnotmatch '^if exist ') { $faults += "line $($g[0] + 1) jumps to the $($Spec.Tool) line other than through 'if exist'" }
         }
-    }
-    if ($Spec.Name -eq "snapget.bat" -and @($runs | Where-Object { $_ -match '-disable|-verbosity +0' }).Count -gt 0) {
-        $faults += "it turns the channel off; SNAPGET.BAT leaves it on and SNAPOFF.BAT turns it off"
     }
     $echoes = (@($lines | Where-Object { $_ -cmatch '^echo ' }) -join "`n")
     if ($Spec.Names.Count -gt 0 -and -not $echoes.ToUpperInvariant().Contains("ATTACH")) { $faults += "no echo line says what to attach" }

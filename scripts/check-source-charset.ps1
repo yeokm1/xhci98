@@ -42,7 +42,7 @@
 # 2026-10-18. No tracked file under the scanned trees carries a UTF-8 BOM
 # today. Five did on 2026-09-12 (scripts\inf-gate\check-inf.ps1 and
 # test-inf-checks.ps1, scripts\package\test-package.ps1,
-# xhcisnap\README.md and scripts\vm-matrix\offsets.labels.txt); by
+# docs\contributing\snapshot-reader.md and scripts\vm-matrix\offsets.labels.txt); by
 # 2026-10-18 the four scripts\vm-matrix\*.labels.txt maps were the last,
 # because gen-offsets.ps1 wrote them as utf8. It now writes them as ascii,
 # like the offset tables beside them.
@@ -61,7 +61,7 @@ $repo = Split-Path -Parent $scriptDir
 # The trees that hold source. src\ is the one that ships; the other four were
 # measured clean on 2026-09-12 under all three rules, so including them costs
 # nothing today and puts the guard where a future edit would land.
-$trees = @("src", "test", "scripts", "xhcisnap", "xhciqual")
+$trees = @("src", "test", "scripts", "xhcitr", "xhciqual")
 
 # File kinds the 1998-era toolchain reads. All three rules apply to these.
 # `.oem` is txtsetup.oem, which text-mode Setup reads (task 33.3); `.vbs` is

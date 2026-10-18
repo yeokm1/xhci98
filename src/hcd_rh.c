@@ -319,6 +319,22 @@ NTSTATUS HcdRootHubPdoPnp(PHCD_ROOTHUB_PDO pdo, PIRP irp)
 
     stack = IoGetCurrentIrpStackLocation(irp);
     XHCI_DBG_VALUE("hcd: root hub PDO PnP minor", stack->MinorFunction);
+    /* Roadmap-usb4 42-A.16: the root hub's stop, query-remove, remove,
+     * cancel and surprise removal in the shipping log, the minor as the
+     * value, under the lock that clears Controller. */
+    if (stack->MinorFunction <= IRP_MN_CANCEL_STOP_DEVICE ||
+        stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) {
+        KIRQL noteIrql;
+
+        if (stack->MinorFunction != IRP_MN_START_DEVICE) {
+            KeAcquireSpinLock(&pdo->ControllerLock, &noteIrql);
+            if (pdo->Controller != NULL && !pdo->Deleted) {
+                XhciLogNote(&pdo->Controller->Hc, "pnp.rh",
+                            stack->MinorFunction);
+            }
+            KeReleaseSpinLock(&pdo->ControllerLock, noteIrql);
+        }
+    }
 
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:

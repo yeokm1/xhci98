@@ -684,8 +684,9 @@ static int take_window(HANDLE device, unsigned long region,
                       "default on every machine - or this is not an xhci98 "
                       "controller. A switched-off channel answers exactly as a "
                       "binary built without one, so this tool cannot tell you "
-                      "which. If it is yours: XHCISNAP -verbosity 2, then "
-                      "RESTART, reproduce, and dump again.");
+                      "which. If it is yours: set xhci98's Logging level to 2 "
+                      "in the xHCI98 USB Tree, RESTART, reproduce, and dump "
+                      "again.");
         }
         return 0;
     }
@@ -707,7 +708,7 @@ static int take_window(HANDLE device, unsigned long region,
                header->SchemaVersion, header->HeaderBytes,
                SNAP_SCHEMA, (unsigned)sizeof(SNAP_HEADER));
         window_why("schema mismatch: the driver's is %lu, this tool's %lu; "
-                   "use the XHCISNAP from the driver's own release",
+                   "use the XHCITR from the driver's own release",
                    header->SchemaVersion, SNAP_SCHEMA);
         return 0;
     }
@@ -1600,10 +1601,17 @@ static const char *sys_os_name(unsigned long platform, unsigned long major,
             return (product == SYS_PRODUCT_WORKSTATION)
                        ? "Windows 7" : "Windows Server 2008 R2";
         }
+        /* XHCITR's manifest names Windows 8 to 10 as supported (record
+         * 25 section 9), so those tell it their own version; XHCISNAP had
+         * none and read 6.2 for all of them. */
         if (major == 6 && minor == 2) {
-            /* Windows 8 and every later Windows tell a program with no
-             * compatibility manifest 6.2, which this one has not. */
-            return "Windows 8 or later (all report 6.2 to this tool)";
+            return "Windows 8";
+        }
+        if (major == 6 && minor == 3) {
+            return "Windows 8.1";
+        }
+        if (major == 10 && minor == 0) {
+            return "Windows 10 or 11";
         }
     }
     return "unknown";
@@ -2122,10 +2130,10 @@ static void write_companion_system(void)
 
     if (sysinfoOff) {
         comp("\n  captured on - not read: the system details were skipped by "
-             "-nosysinfo.\n");
+             "/nosysinfo.\n");
         return;
     }
-    comp("\n  captured on - this machine, read by xhcisnap at the time of the "
+    comp("\n  captured on - this machine, read by XHCITR at the time of the "
          "dump (not\n  in the .BIN):\n");
 
     k32 = GetModuleHandleA("kernel32.dll");
@@ -2376,7 +2384,7 @@ static void write_companion_header(const SNAP_HEADER *h)
      * the reader and the driver came from the same tree - the schema check
      * proves they agree, and this says WHICH agreement it was. The build stamp
      * carries what the version cannot between cuts: which build. */
-    comp("  tool               xhcisnap %s, built %s\n",
+    comp("  tool               XHCITR %s, built %s\n",
          XHCISNAP_VERSION, XHCISNAP_BUILT);
     /* When the dump was taken, with the year (task 38.1). */
     if (runTimeSet) {
@@ -2465,9 +2473,10 @@ static void write_companion_header(const SNAP_HEADER *h)
     if (h->VerbosityApplied < XHCISNAP_LEVEL_LOG) {
         comp("    This level records nothing into the note ring, ON PURPOSE - "
              "the counters\n"
-             "    are the whole report here. To capture the ring, run  "
-             "XHCISNAP -verbosity 2,\n"
-             "    restart, reproduce, and dump again.\n");
+             "    are the whole report here. To capture the ring, set "
+             "xhci98's Logging\n"
+             "    level to 2 in the xHCI98 USB Tree, restart, reproduce, "
+             "and dump again.\n");
     }
 
     /* Two lines: the fill is what a reader wants and the offsets are what a
@@ -6566,10 +6575,10 @@ static int probe_route(HANDLE device)
         say("    ", "Two things look exactly like this and the driver cannot "
                     "tell you which:");
         say_hang("      ", "         ", "1. an xhci98 whose channel is switched off - the default "
-                      "on every machine. Fix: xhcisnap -verbosity 2, then "
+                      "on every machine. Fix: XHCITR /setlevel xhci98=2, then "
                       "RESTART, reproduce, and dump.");
         say_hang("      ", "         ", "2. some other controller's driver on this HCD index, or an xhci98 "
-                      "from before the channel shipped. Try -c 1, -c 2, or "
+                      "from before the channel shipped. Try /c 1, /c 2, or "
                       "check the installed xhci98.sys.");
     } else {
         printf("    *** the request did not reach the controller's driver\n");
@@ -7155,613 +7164,6 @@ static int find_driver_keys(void)
     find_driver_keys_under(XHCI_CLASS_NT);
     find_driver_keys_under(XHCI_CLASS_9X);
     return driverKeyCount;
-}
-
-/*
- * Say so, and mean it: a run that could not record every key it found has not
- * done what the user asked, whatever it managed. Returns nonzero when the
- * caller should fail.
- */
-static int report_dropped_matches(void)
-{
-    if (droppedMatches == 0) {
-        return 0;
-    }
-    printf("\n*** %d key(s) that could be this driver's were found and NOT\n"
-           "    recorded - either more than %d of them, or one whose name is\n"
-           "    too long to hold. This tool was not written for a machine like\n"
-           "    that, and it will not pretend it covered it.\n",
-           droppedMatches, MAX_DRIVER_KEYS);
-    if (driverKeyCount > 0) {
-        printf("    Set the values by hand on any controller missing from the\n"
-               "    list above.\n");
-    } else {
-        /* Nothing was listed, so there is no "above" to point at - and this is
-         * the branch where the caller would otherwise have said the INF never
-         * ran, which would have been false. */
-        printf("    Nothing could be listed at all, so set the values by hand\n"
-               "    on every xHCI controller this machine has.\n");
-    }
-    return 1;
-}
-
-/* How many of the keys found were matched by NAME alone. */
-static int weak_match_count(void)
-{
-    int i;
-    int n;
-
-    n = 0;
-    for (i = 0; i < driverKeyCount; i++) {
-        if (driverKeyStrength[i] == MATCH_NAME) {
-            n++;
-        }
-    }
-    return n;
-}
-
-/*
- * The leaf of a driver key path, for the one-line-per-key report. The parent is
- * printed once in the header, so repeating a 47-character class path on every
- * line would spend the width the readings need.
- */
-static const char *key_leaf(const char *path)
-{
-    const char *slash;
-
-    slash = strrchr(path, '\\');
-    return (slash != NULL && slash[1] != '\0') ? slash + 1 : path;
-}
-
-/*
- * The parent all the keys found share, or NULL when they do not - a machine can
- * legitimately have keys under both the NT class path and the 9x one, and in
- * that case each line has to carry its own full path rather than be filed under
- * a heading that is true of only some of them.
- */
-static char keyParent[MAX_PATH];
-
-static const char *common_key_parent(void)
-{
-    int i;
-    const char *slash;
-    size_t n;
-
-    if (driverKeyCount <= 0) {
-        return NULL;
-    }
-    slash = strrchr(driverKeys[0], '\\');
-    if (slash == NULL) {
-        return NULL;
-    }
-    n = (size_t)(slash - driverKeys[0]);
-    if (n == 0 || n >= sizeof(keyParent)) {
-        return NULL;
-    }
-    for (i = 1; i < driverKeyCount; i++) {
-        if (strlen(driverKeys[i]) <= n ||
-            driverKeys[i][n] != '\\' ||
-            strncmp(driverKeys[i], driverKeys[0], n) != 0) {
-            return NULL;
-        }
-    }
-    memcpy(keyParent, driverKeys[0], n);
-    keyParent[n] = '\0';
-    return keyParent;
-}
-
-/*
- * **The heading, and then ONE LINE PER KEY from the write loop itself.**
- *
- * This used to print a two-line paragraph per key here and a three-line
- * paragraph per key again while writing, plus blank lines between all of them:
- * on the stage L3 2a guest, which has THREE driver keys, that was thirty-one
- * lines into a twenty-five-line box, and the two lines with the most diagnostic
- * value in the whole tool - which key, and what identified it - were the ones
- * that scrolled away. *(Project owner, seeing it: "a wall of text ... perhaps a
- * shorter single screen text will suffice.")*
- *
- * **The rule is that the ordinary case is one line and only an anomaly earns a
- * paragraph.** A key identified decisively, holding a readable in-range value,
- * and taking the write is one line; a name-only match, an out-of-range or
- * unreadable value, a key that will not open, or a refused write each buy back
- * as much prose as they need, because those are the cases where a stranger has
- * to read something. **No reading was dropped to make it fit** - which key, what
- * identified it, what it held, what it holds now, and that it takes effect at
- * the next start are all still on the screen.
- */
-static void print_key_header(void)
-{
-    const char *parent;
-
-    parent = common_key_parent();
-    if (parent != NULL) {
-        printf("\n%d xhci98 driver key(s) under\n", driverKeyCount);
-        print_hklm_path("  ", parent, ":");
-    } else {
-        say("", "\n%d xhci98 driver key(s), under more than one class path:",
-            driverKeyCount);
-    }
-}
-
-/* The per-key line's trailing column: what identified this key. */
-static const char *key_why_short(int i)
-{
-    return (driverKeyStrength[i] == MATCH_NAME) ? "name only" : driverKeyWhy[i];
-}
-
-/* The leaf, or the whole path when the keys share no parent to head them with. */
-static const char *key_label(int i)
-{
-    return (common_key_parent() != NULL) ? key_leaf(driverKeys[i])
-                                         : driverKeys[i];
-}
-
-/* The rung's name, for the one line that spells the ladder out at a DOS prompt.
- * The wording matches the usage text's ladder; two spellings of one rung is how
- * a reader ends up believing there are two rungs. */
-static const char *level_name(unsigned long level)
-{
-    switch (level) {
-    case 0:  return "OFF";
-    case 1:  return "counters only";
-    case 2:  return "counters + note ring";
-    case 3:  return "+ the PORTSC table";
-    case 4:  return "+ everything, addresses included";
-    default: return "OUT OF RANGE";
-    }
-}
-
-/*
- * **A name-only match is not written to unless it is asked for by name, and the
- * decision is PER KEY.**
- *
- * Printing a warning and then writing anyway was the first attempt, and it is
- * not a repair: making a wrong match visible is not the same as not making it.
- * Refusing the whole run was the second, and it is wrong in the other
- * direction - a machine with two controllers can legitimately have one key the
- * setup engine wrote and one an operator has edited, and refusing both because
- * of the second leaves the first unset for no reason.
- *
- * Refusing outright was not available at all until `InfSection` became a
- * decisive signal: it is written by both setup engines, survives a `.sys` swap
- * because it records the last INSTALL, and is what the value-setting path's key
- * bug needed (`d27a718`, when that path was still spelled `-enable`).
- * `NTMPDriver` covers the 9x path. **So every key this driver is properly
- * installed against has a decisive signal**, and a name-only one means that key
- * has been hand-edited - which is worth stopping for, on that key.
- *
- * `-force` is the escape hatch, and it is the project's own polarity rule
- * applied to a registry write: the safe configuration is the default and the
- * convenience is the thing you ask for by name.
- *
- * Returns nonzero when key `i` may be written.
- */
-static int may_write(int i, int force)
-{
-    if (driverKeyStrength[i] != MATCH_NAME) {
-        return 1;
-    }
-    return force ? 1 : 0;
-}
-
-/* Said once, after the listing and before the writes, and only when one of the
- * keys found is going to be treated differently from the others. */
-static void explain_weak(int force)
-{
-    int weak;
-
-    weak = weak_match_count();
-    if (weak == 0) {
-        return;
-    }
-
-    say("", "\n*** %d of the %d key(s) above was identified by a value NAME "
-            "alone. A key this driver installed carries NTMPDriver (Windows 98) "
-            "or InfSection (both systems); those carry neither, so what "
-            "identified them was a name - and a name is not proof of whose key "
-            "it is. Most likely such a key has been edited by hand.",
-        weak, driverKeyCount);
-
-    if (force) {
-        say("    ", "-force given: writing to them anyway.");
-    } else {
-        printf("\n    They are being SKIPPED. If one of them is the controller\n"
-               "    you mean, run the same command again with -force:\n\n"
-               "      XHCISNAP -force ...\n");
-    }
-}
-
-static int set_dword(const char *keyPath, const char *value, DWORD data)
-{
-    HKEY key;
-    LONG rc;
-
-    rc = RegOpenKeyExA(HKEY_LOCAL_MACHINE, keyPath, 0, KEY_SET_VALUE, &key);
-    if (rc != ERROR_SUCCESS) {
-        printf("  cannot open for writing (error %ld):\n", rc);
-        print_hklm_path("    ", keyPath, "");
-        return 0;
-    }
-    rc = RegSetValueExA(key, value, 0, REG_DWORD, (const BYTE *)&data,
-                        sizeof(data));
-    RegCloseKey(key);
-    if (rc != ERROR_SUCCESS) {
-        printf("  cannot write %s, error %ld\n", value, rc);
-        return 0;
-    }
-    return 1;
-}
-
-/*
- * What a level read found. **Four failures that used to be one**, because a
- * report that flattens them into "0" makes a false statement on exactly the
- * machine this report exists for - a key somebody has edited by hand.
- */
-#define LEVEL_READ_OK           0   /* r->Value holds the level               */
-#define LEVEL_READ_ABSENT       1   /* ERROR_FILE_NOT_FOUND: really not there */
-#define LEVEL_READ_NOKEY        2   /* the key itself would not open          */
-#define LEVEL_READ_UNREADABLE   3   /* there, and not a four-byte REG_DWORD   */
-#define LEVEL_READ_ERROR        4   /* the query failed some OTHER way        */
-
-/*
- * The evidence behind whichever of those came back, so the report can name what
- * it found instead of describing it. A struct rather than a fourth and fifth
- * out-parameter: each fix in this area has needed one more piece of evidence,
- * and this is the shape that stops the signature growing again.
- */
-typedef struct {
-    DWORD Value;    /* the level - untouched unless LEVEL_READ_OK          */
-    DWORD Type;     /* the type actually found; 0 if nothing was found     */
-    DWORD Bytes;    /* how many bytes it holds; 0 if nothing was found     */
-    LONG  Error;    /* the failing code; ERROR_SUCCESS when there is none  */
-} LEVEL_READ;
-
-/*
- * Read the level out of `keyPath`. `r->Value` is left alone unless
- * LEVEL_READ_OK is returned, so a caller that seeded it with a default keeps
- * the default.
- *
- * **The type and the length are checked here and NEITHER is checked by the
- * driver, so an unreadable value must never be reported as an off one.**
- * usbport's `UsbPortGetMiniportRegistryKeyValue` calls `ZwQueryValueKey` with
- * `KeyValueFullInformation` and copies the requested byte count out of the data
- * **unconditionally - without looking at the type, and without clamping to
- * `DataLength`** (docs/usb-xhci-info/usbport-miniport-abi.md, the task 11-V.7
- * box). So a `REG_BINARY` holding `02 00 00 00` reads as level 2 and OPENS the
- * channel, and a two-byte `REG_DWORD` has four bytes taken out of it either
- * way, while this tool refuses to decode either. Saying such a key was "not
- * set" would be the one wrong answer that matters here: it reports a shut door
- * on a machine whose door is open.
- *
- * **Only `ERROR_FILE_NOT_FOUND` is absence.** Every other query failure - a key
- * marked for deletion between the open and the query is the reachable one - is
- * `LEVEL_READ_ERROR` and carries its code out in `r->Error`, because "the read
- * failed" and "there is nothing there" are the same distinction this function
- * exists to make, one level down. Answering the first with the second would
- * recreate the defect in the place the fix was applied.
- *
- * (This is `get_dword` widened. The type check it carried is unchanged and is
- * the same trap `read_string` was given one for; what changed is that its ways
- * of failing now reach the caller instead of being answered with a 0.)
- */
-static int read_level(const char *keyPath, const char *value, LEVEL_READ *r)
-{
-    HKEY key;
-    DWORD type;
-    DWORD data;
-    DWORD bytes;
-    LONG rc;
-
-    r->Type = 0;
-    r->Bytes = 0;
-    r->Error = ERROR_SUCCESS;
-
-    rc = RegOpenKeyExA(HKEY_LOCAL_MACHINE, keyPath, 0, KEY_QUERY_VALUE, &key);
-    if (rc != ERROR_SUCCESS) {
-        r->Error = rc;
-        return LEVEL_READ_NOKEY;
-    }
-    type = 0;
-    data = 0;
-    bytes = sizeof(data);
-    rc = RegQueryValueExA(key, value, NULL, &type, (BYTE *)&data, &bytes);
-    RegCloseKey(key);
-    /*
-     * `ERROR_MORE_DATA` is a value too long for four bytes. That is PRESENT and
-     * undecodable, not absent - the same reading `value_exists` takes of it,
-     * and the one that matters, since usbport would copy four bytes out of it
-     * regardless.
-     */
-    if (rc != ERROR_SUCCESS && rc != ERROR_MORE_DATA) {
-        r->Error = rc;
-        return (rc == ERROR_FILE_NOT_FOUND) ? LEVEL_READ_ABSENT
-                                            : LEVEL_READ_ERROR;
-    }
-    r->Type = type;
-    r->Bytes = bytes;
-    if (rc != ERROR_SUCCESS || type != REG_DWORD || bytes != sizeof(data)) {
-        /*
-         * **A `REG_DWORD` of the wrong LENGTH lands here too**, which is why
-         * the caller's message says "not a four-byte REG_DWORD" rather than
-         * "not a REG_DWORD" - the latter contradicts the `type 4` printed
-         * beside it. Both halves are reported, so the reader can see which
-         * of the two it is.
-         */
-        return LEVEL_READ_UNREADABLE;
-    }
-    r->Value = data;
-    return LEVEL_READ_OK;
-}
-
-/*
- * **One command, one value, one knob** - all three structural since the
- * snapshot-value merge rather than requirements on this function. There is only
- * `XhciLogVerbosity` to set, and `-verbosity N` is the only thing that sets it.
- * The published sequence is four steps and `regedit` appears nowhere in it: set
- * the level, restart, reproduce, `XHCISNAP -o C:\NAME`.
- *
- * **`-enable` was retired, because it wrote a level the user had
- * not named.** It existed to spare a user setting two values in one command;
- * the merge deleted the second value, and what was left was a flag that raised
- * a 0 to 2, rewrote an out-of-range value to 2, and never lowered. The rewrite
- * was the weaker half: it overwrote a value this tool did not set, on the
- * strength of this tool's own hard-coded copy of the driver's range. The tool
- * already duplicates the driver's WIRE FORMAT for want of a shared header, and
- * that made the driver's POLICY a second thing that can drift - **a reported
- * out-of-range value cannot drift; a silently corrected one can.**
- *
- * **So the range knowledge survives as a MESSAGE and not as a decision.** The
- * loop below reads each key's current level and prints it beside the write,
- * naming an out-of-range one as the wasted boot it would otherwise cause. The
- * overwrite that follows is one the user asked for by name.
- *
- * **What survives of the per-key decision is `may_write` plus that per-key
- * report - not a never-lowers rule under a new name.** `-verbosity N` sets
- * every writable key to exactly N, up or down: a two-controller machine sitting
- * at 4 and 0 becomes 2 and 2, which is correct because the user named 2. The
- * prior-value print is what makes the drop visible rather than silent.
- *
- * `-verbosity 0` reaches this function too, and it is `-disable` spelled
- * differently - see the aftercare paragraph at the end.
- */
-static int set_verbosity(unsigned long verbosity, int force)
-{
-    int i;
-    int ok;
-    int written;
-    int dropped;
-    int anyOn;
-
-    if (find_driver_keys() == 0) {
-        if (report_dropped_matches()) {
-            /* Not "no key" - keys were found and could not be held. Saying the
-             * INF never ran would be a false statement about the machine. */
-            return 1;
-        }
-        /*
-         * **`HKLM\` is in the heading and not on the path lines**, because the
-         * NT class path plus that prefix is 84 characters and a GUID is one
-         * unbreakable token: the wrapper will not split a path - a path split
-         * across two lines cannot be typed back in - so those five characters
-         * are the difference between a line that fits and one the console
-         * breaks in the middle of the GUID.
-         */
-        printf("\nNo xhci98 driver key found under either of these, in HKLM:\n");
-        printf("  %s\n", XHCI_CLASS_NT);
-        printf("  %s\n", XHCI_CLASS_9X);
-        say("", "That means this driver's INF has never run on this machine - a "
-                "binary copied in by hand has no software key to read values "
-                "from, and the driver starts with everything off, which is "
-                "correct behaviour rather than a fault. Install from the media.");
-        return 1;
-    }
-
-    print_key_header();
-    /*
-     * **Reported here rather than at the end, so it runs on every path.** It
-     * used to be called only on the success return, which meant a run that also
-     * failed to write - or found nothing eligible - exited without ever
-     * mentioning the keys it could not hold. Its verdict is kept for the exit
-     * status; printing it beside the listing is also what makes "missing from
-     * the list above" true.
-     */
-    dropped = report_dropped_matches();
-
-    ok = 1;
-    written = 0;
-    anyOn = 0;
-    for (i = 0; i < driverKeyCount; i++) {
-        LEVEL_READ prior;
-        char was[64];
-        const char *detail;
-        int showErr;
-        int thisOk;
-
-        if (!may_write(i, force)) {
-            say_hang("  ", "             ",
-                     "%-8s SKIPPED - identified by a value NAME alone, so it "
-                     "is not written without -force.", key_label(i));
-            continue;
-        }
-
-        /*
-         * **The prior value is read and reported, on every key and before every
-         * write**, and the failures are told apart rather than answered with a
-         * 0. Each reading says something different:
-         *
-         *   - a drop (4 to 2) is what the user asked for, and should still be
-         *     visible rather than silent;
-         *   - an OUT OF RANGE value is a level the driver will refuse rather
-         *     than clamp, falling back to its default, which is OFF - so the
-         *     next start off this key would answer nothing;
-         *   - an UNREADABLE value is the dangerous one, and it is the reason
-         *     these are several answers and not one. See read_level: usbport
-         *     does not check the type, so a value this tool refuses to decode
-         *     can still read as a level and OPEN the channel. Reporting it as
-         *     "not set" would say the door was shut on a machine whose door is
-         *     open.
-         *
-         * **Every one of these is phrased about the NEXT start, never about
-         * what a running driver did.** The value is read once per start, so a
-         * key edited since the last boot has been read by nothing, and a
-         * running controller may be sitting at a level this value no longer
-         * says. The registry cannot tell those apart and this report must not
-         * pretend otherwise - the applied level travels in a dump's header,
-         * which is the only place it is actually known.
-         *
-         * Saying so is all this tool does about any of them: the value that
-         * goes in afterwards is the one the command named.
-         */
-        prior.Value = 0;
-        prior.Error = 0;
-        detail = NULL;
-        showErr = 0;
-        switch (read_level(driverKeys[i], "XhciLogVerbosity", &prior)) {
-        case LEVEL_READ_OK:
-            if ((unsigned long)prior.Value > XHCISNAP_LEVEL_MAX) {
-                sprintf(was, "was %lu OUT OF RANGE",
-                        (unsigned long)prior.Value);
-                detail = "The driver refuses an out-of-range level rather than "
-                         "clamping it, so a start reading that value applies "
-                         "the default, which is OFF. Whether any start has read "
-                         "it yet is not knowable from the registry - it is read "
-                         "once per start.";
-            } else {
-                sprintf(was, "was %lu", (unsigned long)prior.Value);
-            }
-            break;
-        case LEVEL_READ_ABSENT:
-            strcpy(was, "was unset");
-            break;
-        case LEVEL_READ_NOKEY:
-            strcpy(was, "*** UNREADABLE");
-            showErr = 1;
-            detail = "This key would not open to be read, though it opened a "
-                     "moment ago when it was identified. What it held is NOT "
-                     "known.";
-            break;
-        case LEVEL_READ_ERROR:
-            strcpy(was, "*** UNREADABLE");
-            showErr = 1;
-            detail = "XhciLogVerbosity could not be read. Whether it is set, "
-                     "and to what, is NOT known - which is not the same as its "
-                     "being absent.";
-            break;
-        default:
-            /* The type and the length are the reading here, so they go on the
-             * key's own line rather than into the prose under it - a review
-             * round put them there and compressing the report must not spend
-             * them. */
-            sprintf(was, "*** type %lu, %lu bytes",
-                    (unsigned long)prior.Type, (unsigned long)prior.Bytes);
-            detail = "That is not a four-byte REG_DWORD. What it held is NOT "
-                     "known and this tool will not guess: "
-                     "the driver's reader checks neither the type nor the "
-                     "length and takes four bytes either way, so a value like "
-                     "this can read as a level and OPEN the channel. The write "
-                     "replaces it with a proper REG_DWORD, which ends the "
-                     "ambiguity.";
-            break;
-        }
-
-        /*
-         * **One line, and the write's outcome is on it.** The line is built
-         * after the write rather than before it so it can say what happened
-         * instead of what was attempted.
-         */
-        thisOk = set_dword(driverKeys[i], "XhciLogVerbosity",
-                           (DWORD)verbosity) ? 1 : 0;
-
-        if (!thisOk) {
-            ok = 0;
-            say_hang("  ", "             ", "%-8s %-19s -> WRITE FAILED   %s",
-                     key_label(i), was, key_why_short(i));
-        } else {
-            say_hang("  ", "             ", "%-8s %-19s -> %lu   %s",
-                     key_label(i), was, verbosity, key_why_short(i));
-            if (verbosity != XHCISNAP_LEVEL_OFF) {
-                anyOn = 1;
-            }
-        }
-        if (detail != NULL) {
-            say("      ", "%s", detail);
-        }
-        if (showErr) {
-            say("      ", "(error %ld)", prior.Error);
-        }
-        written++;
-    }
-
-    /* After the lines rather than before them: it refers to keys the reader has
-     * now seen, and on a healthy machine it prints nothing at all. */
-    explain_weak(force);
-
-    if (!ok) {
-        /*
-         * **Switching OFF gets the stronger sentence**, because the two
-         * failures are not equally bad: a level that did not go up is a
-         * diagnostic you do not get, and a level that did not go down is a
-         * channel left open to anyone using the machine. Since the merge, this
-         * value is also the access control.
-         */
-        if (verbosity == XHCISNAP_LEVEL_OFF) {
-            say("", "\n*** NOT switched off. The value could not be written on "
-                    "some key, so the driver will go on reading it as it is - "
-                    "and while it is nonzero the read channel stays open to "
-                    "anyone using this machine. Administrator rights are needed "
-                    "on Windows 2000 and later (on Vista and 7, Run as "
-                    "administrator); Windows 98 needs none.");
-        } else {
-            say("", "\nSome values could not be written. Administrator rights "
-                    "are needed on Windows 2000 and later (on Vista and 7, "
-                    "Run as administrator); Windows 98 needs none.");
-        }
-        return 1;
-    }
-    if (written == 0) {
-        printf("\nNothing was written - every key found needs -force. See "
-               "above.\n");
-        return 1;
-    }
-
-    /*
-     * Two lines rather than one: the rung and the ladder together are 91
-     * characters, which wrapped to a twelve-character orphan - `+everything)`
-     * alone on a line. Wrapping correctly is not the same as reading well, and
-     * where a line is a hair too long the fix is the line, not the wrapper.
-     */
-    say("", "\nlevel %lu = %s", verbosity, level_name(verbosity));
-    say("  ", "ladder: 0 off, 1 counters, 2 +note ring, 3 +PORTSC, "
-              "4 +everything");
-    say("", "\n%d key(s) set. RESTART THE MACHINE, or disable and re-enable the "
-            "controller in Device Manager: the driver reads this once per start "
-            "and nothing re-reads it while it is running.", written);
-    /*
-     * **`-verbosity 0` reaches this function too**, and it is `-disable` spelled
-     * differently - so everything after the restart is conditional on the run
-     * having left something ON. Telling somebody who has just switched the
-     * channel off to go and reproduce a problem and then switch it off would
-     * read as this tool not knowing what it had just done.
-     */
-    if (anyOn) {
-        printf("Then reproduce and run:  XHCISNAP -report  (or SNAPGET.BAT)\n");
-        printf("Afterwards:              XHCISNAP -disable\n");
-        say("  ", "While the channel is on, anyone using this machine can read "
-                  "this driver's diagnostic state through it. The controller's "
-                  "device opens to anyone, so this value IS the lock.");
-    } else {
-        /* **Not "and what -disable does"**, which is what this said until the
-         * two spellings became one path: a user who typed `-disable` was being
-         * told that -disable does what -disable does. It explains the level,
-         * not the flag. */
-        say("", "The channel is now OFF on every key set above - the driver "
-                "answers this tool exactly as a build without the channel "
-                "would, which is what the INF ships.");
-    }
-    /* A run that covered part of the machine did not do what it was asked, so
-     * it does not exit as though it had. */
-    return dropped ? 1 : 0;
 }
 
 /*
@@ -9960,7 +9362,7 @@ static void write_dev_files(void)
     int rc;
 
     comp("\n  installed files - size, file version and SHA-256, computed by "
-         "xhcisnap:\n");
+         "XHCITR:\n");
     /* Loaded and resolved with the redirection on; see wow64_resolve. */
     wow64_resolve();
     ver_load();
@@ -10134,16 +9536,16 @@ static int take_report(unsigned long controller, const char *given)
         sprintf(base, "%s", given);
         again = "Run it again with another name, or with none.";
         if (report_name_taken(base, name, sizeof(name))) {
-            say("", "xhcisnap -report: %s already exists in this directory, "
+            say("", "XHCITR /snapshot: %s already exists in this directory, "
                 "so the name %s is taken. Nothing was written, and nothing "
                 "was overwritten. Give another name, or none for one made "
-                "from the clock (SNAPGET.BAT with another name, or none).",
+                "from the clock.",
                 name, base);
             report_attach_line(base, 0, 0);
             return REPORT_NAMES_FULL;
         }
         sprintf(devPath, "%s.DEV", base);
-        printf("xhcisnap -report: %04u-%02u-%02u %02u:%02u, files named %s "
+        printf("XHCITR /snapshot: %04u-%02u-%02u %02u:%02u, files named %s "
                "(the name given), in the\ncurrent directory\n",
                (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
                (unsigned)runTime.wDay, (unsigned)runTime.wHour,
@@ -10154,7 +9556,7 @@ static int take_report(unsigned long controller, const char *given)
     rc = stamp_base(runTime.wMonth, runTime.wDay, runTime.wHour,
                     runTime.wMinute, stamp_exists_here, NULL, base);
     if (rc == STAMP_BADCLOCK) {
-        printf("xhcisnap -report: the clock reads %04u-%02u-%02u %02u:%02u, "
+        printf("XHCITR /snapshot: the clock reads %04u-%02u-%02u %02u:%02u, "
                "which is not a date and time\nthis tool can name a file "
                "after. Set the clock and run it again. Nothing was written.\n",
                (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
@@ -10164,7 +9566,7 @@ static int take_report(unsigned long controller, const char *given)
         return REPORT_BAD_CLOCK;
     }
     if (rc == STAMP_TAKEN) {
-        printf("xhcisnap -report: all 26 names for this minute are taken in "
+        printf("XHCITR /snapshot: all 26 names for this minute are taken in "
                "this directory\n(A to Z after the time). Wait a minute and "
                "run it again. Nothing was written,\nand nothing was "
                "overwritten.\n");
@@ -10174,7 +9576,7 @@ static int take_report(unsigned long controller, const char *given)
     /* The current directory is not printed: it is often the user's profile,
      * named after the user (task 38.1). */
     sprintf(devPath, "%s.DEV", base);
-    printf("xhcisnap -report: %04u-%02u-%02u %02u:%02u, files named %s, in "
+    printf("XHCITR /snapshot: %04u-%02u-%02u %02u:%02u, files named %s, in "
            "the\ncurrent directory\n", (unsigned)runTime.wYear,
            (unsigned)runTime.wMonth, (unsigned)runTime.wDay,
            (unsigned)runTime.wHour, (unsigned)runTime.wMinute, base);
@@ -10200,8 +9602,8 @@ named:
                "the disk may be full\n      or read-only. Copy this "
                "directory somewhere you can write to and run it\n      "
                "there.%s\n", devPath, errno,
-               on_nt() ? " On Vista and 7, right-click SNAPGET.BAT and choose "
-                         "Run as\n      administrator." : "");
+               on_nt() ? " On Vista and 7, run it from a command prompt "
+                         "started with\n      Run as administrator." : "");
         report_attach_line(base, 0, 0);
         return REPORT_DEV_BAD;
     }
@@ -10220,11 +9622,11 @@ named:
         }
     }
 
-    comp("xhci98 device report - xhcisnap -report\n");
-    comp("  tool               xhcisnap %s, built %s\n", XHCISNAP_VERSION,
+    comp("xhci98 device report - XHCITR /snapshot\n");
+    comp("  tool               XHCITR %s, built %s\n", XHCISNAP_VERSION,
          XHCISNAP_BUILT);
     write_dev_time();
-    comp("  controller asked   -c %lu, \\\\.\\HCD%lu\n", controller, controller);
+    comp("  controller asked   /c %lu, \\\\.\\HCD%lu\n", controller, controller);
     comp("  files              %s.DEV (this), %s.TXT, %s.BIN, %s.PSC\n", base,
          base, base, base);
     write_companion_system();
@@ -10232,7 +9634,7 @@ named:
         comp("\n  %s: this machine's names were not read, so no free text "
              "below could be\n  screened for them and none is printed; ids "
              "are printed in their own\n  characters only.\n",
-             sysNamesOff ? "-nosysinfo" : "not screened");
+             sysNamesOff ? "/nosysinfo" : "not screened");
     }
     printf("\ndevices:\n");
     write_dev_devices();
@@ -10319,8 +9721,8 @@ named:
             dev_line("", "This report above still stands. A controller "
                      "whose driver is not loaded (as before the restart "
                      "after an install), one with no \\\\.\\HCD%lu, or a log "
-                     "channel that is off (XHCISNAP -verbosity 2 or "
-                     "SNAPON.BAT, then restart), gives no dump.", controller);
+                     "channel that is off (xhci98's Logging level 2 in the "
+                     "xHCI98 USB Tree, then restart), gives no dump.", controller);
         }
         comp("end of device report\n");
         appendOk = finish_companion();
@@ -10365,28 +9767,27 @@ named:
         printf("%s was made by another run or program after this one chose "
                "the name.\nIt was left alone and is not this run's, and no "
                "dump was kept under this name.\n%s\n", reportClashName,
-               (given != NULL) ? "Run SNAPGET.BAT (XHCISNAP -report) again "
-                                 "with another name, or none."
-                               : "Run SNAPGET.BAT (XHCISNAP -report) again: "
-                                 "it takes the next letter.");
+               (given != NULL) ? "Run XHCITR /snapshot again with another "
+                                 "name, or none."
+                               : "Run XHCITR /snapshot again: it takes the "
+                                 "next letter.");
     } else if (rc == REPORT_DEV_BAD) {
         printf("%s.DEV could not be written in full: the disk may be full "
                "or read-only. Copy\nthis directory somewhere you can write "
                "to and run it there.%s\n", base,
-               on_nt() ? " On Vista and 7,\nright-click SNAPGET.BAT and "
-                         "choose Run as administrator." : "");
+               on_nt() ? " On Vista and 7,\nrun it from a command prompt "
+                         "started with Run as administrator." : "");
     } else if (rc == REPORT_TXT_BAD) {
         printf("The dump's .TXT is not complete: read the lines above, and "
                "say so when you\nattach it.\n");
     } else if (rc == REPORT_NO_DUMP) {
         printf("No dump was taken; %s.DEV says why. If the log channel is "
-               "off,\nrun SNAPON.BAT, restart Windows, reproduce the "
-               "problem, then run SNAPGET.BAT\nagain.\n", base);
+               "off,\nset xhci98's Logging level to 2 in the xHCI98 USB Tree, "
+               "restart Windows,\nreproduce the problem, then take the "
+               "snapshot again.\n", base);
     } else {
         printf("The device report and the dump were written.\n");
     }
-    printf("The log channel stays on until you run SNAPOFF.BAT (XHCISNAP "
-           "-disable).\n");
     /* Only files that are there: a failed dump leaves no .TXT to attach
      * (the p38-1 legs, 2026-10-13). */
     sprintf(name, "%s.TXT", base);
@@ -10567,153 +9968,71 @@ static unsigned char ext_image[EXT_IMAGE_MAX];
  */
 static void usage(void)
 {
-    printf("xhcisnap %s   built %s\n", XHCISNAP_VERSION, XHCISNAP_BUILT);
+    printf("XHCITR %s   built %s\n", XHCISNAP_VERSION, XHCISNAP_BUILT);
     printf(
-"read xhci98.sys's own log off a running machine, from user mode.\n"
-"  xhcisnap -report [NAME] [-c N]  .DEV + dump; NAME 8.3, else from clock\n"
-"  xhcisnap -dump [-c N] [-o BASE]   dump: BASE.TXT (send this), .BIN, .PSC\n"
-"  xhcisnap -verbosity N      set the level 0-4 on every xhci98 key, RESTART\n"
-"  xhcisnap -disable          exactly -verbosity 0.  There is no -enable.\n"
-"  xhcisnap -probe            check the ROUTE only, dump nothing\n"
-"  xhcisnap -help             the long version - add | MORE, it is a screenful\n"
+"read xhci98.sys's own state off a running machine, for the maintainer.\n"
+"  XHCITR /snapshot [NAME] [/c N]  .DEV + dump; NAME 8.3, else from clock\n"
+"  XHCITR /dump [/c N] [/o BASE]   dump: BASE.TXT, .BIN, .PSC\n"
+"  XHCITR /probe                   check the ROUTE only, dump nothing\n"
+"  XHCITR /snapshot /?             the long version\n"
 "\n"
-"  -c N     controller index, opens \\\\.\\HCDN (default 0)\n"
-"  -o BASE  output basename (default XHCISNAP)\n"
-"  -force   write to a key matched by value NAME alone\n"
-"  -nosysinfo  with a dump: skip reading the OS, BIOS, CPU and RAM\n"
+"  /c N        controller index, opens \\\\.\\HCDN (default 0)\n"
+"  /o BASE     output basename (default XHCISNAP)\n"
+"  /nosysinfo  with a dump: skip reading the OS, BIOS, CPU and RAM\n"
 "\n"
-"Exit 0 = the .TXT is complete.  3 = it is NOT: send the .BIN and say so.\n"
-"THE FOUR STEPS, and none of them is regedit:\n"
-"  1. xhcisnap -verbosity 2     0 off, 1 counters, 2 +note ring THE LOG,\n"
-"  2. restart the machine       3 +PORTSC table, 4 +everything\n"
-"  3. reproduce the problem\n"
-"  4. xhcisnap -report          then send the .DEV and .TXT it names\n"
-"Step 1 is not optional - the channel ships OFF.  Run xhcisnap -disable once\n"
-"you have sent the capture; -help says what leaving it on costs.\n");
+"The log needs xhci98's logging level at 2 or more (2 is the default): the\n"
+"xHCI98 USB Tree's View > Logging level, or XHCITR /setlevel xhci98=2, then\n"
+"restart.  For a bug report, File > Save Report is usually enough.\n");
 }
 
 /*
- * Everything the short usage had to give up. Reached only by `-help`, so it may
- * run past a screen - and it says so at the top of the short one rather than
- * leaving a user to discover it.
+ * Everything the short usage had to give up. Reached only by `/?`, so it
+ * may run past a screen.
  */
 static void usage_long(void)
 {
-    printf("xhcisnap %s   built %s\n", XHCISNAP_VERSION, XHCISNAP_BUILT);
+    printf("XHCITR %s   built %s\n", XHCISNAP_VERSION, XHCISNAP_BUILT);
     printf(
-"read xhci98.sys's own log, PORTSC and slots off a running machine, from user\n"
-"mode, through the USBUSER PassThru request (the driver's own door from\n"
-"2.0.0.0; usbport's escape under a 1.x miniport).\n"
+"read xhci98.sys's log, PORTSC, slots and root port enumeration off a running\n"
+"machine, through the door's USBUSER PassThru request.\n"
 "\n"
-"EVERY ARGUMENT.  With none at all you get the short usage, not a dump - a\n"
-"program's name typed to find out what it is should not write three files.\n"
+"  /snapshot     the field report.  Writes BASE.DEV first - the xHCI\n"
+"                controllers' and this driver's devnodes with their Device\n"
+"                Manager status, problem code and allocated resources, and\n"
+"                the size, version and SHA-256 of xhci98.sys, xhciuas.sys,\n"
+"                xhcihlpr.sys (and xhcimsi.sys), usbd.sys and usbui.dll -\n"
+"                then takes the dump into BASE.TXT, .BIN and .PSC.  BASE.DEV\n"
+"                is written even when the controller cannot be opened, and\n"
+"                says why there is no dump.  BASE is made from the local\n"
+"                clock, in the CURRENT directory: mDDhhmmS - the month as\n"
+"                1-9, A, B or C, the day, the hour (24h), the minute, and S\n"
+"                the first letter A-Z no file of the set already has.\n"
+"                /snapshot NAME, or /snapshot /o NAME, gives the base\n"
+"                instead: 1 to 8 letters, digits, '_' or '-' (not first), no\n"
+"                path, drive or extension, not a DOS device name (exit 2\n"
+"                otherwise), refused (exit 6) if any file of its set - .DEV\n"
+"                .TXT .BIN .PSC or a .TMP of one - exists already.  Takes\n"
+"                /c and /nosysinfo.  Exit 0 both complete, 3 the .TXT is not\n"
+"                complete, 4 no dump (the .DEV says why), 5 the .DEV is not\n"
+"                complete, 6 no free name, 7 the clock is not a valid date,\n"
+"                8 a file of the set appeared after the name was chosen.\n"
+"                /snapshot never replaces or deletes a file it did not make.\n"
+"  /dump         a dump alone: BASE.BIN (the raw extension image), BASE.PSC\n"
+"                (the raw PORTSC array) and BASE.TXT, replacing an earlier\n"
+"                set of that BASE; prints the resolved path.\n"
+"  /c N          controller index; opens \\\\.\\HCDN.  Default 0.  A machine\n"
+"                whose own USB stack owns HCD0 leaves xhci98 at 1 or 2.\n"
+"  /o BASENAME   output basename.  Default XHCISNAP, in the current\n"
+"                directory (beside /snapshot an 8.3 name only).\n"
+"  /probe        four controls on the route, for when nothing came back.\n"
+"  /nosysinfo    with a dump: do not read the system details the header\n"
+"                names (Windows version, BIOS, CPU, memory).\n"
 "\n"
-"  -report       the field report (task 38.1).  Writes BASE.DEV first - the\n"
-"                xHCI controllers' and this driver's devnodes with their\n"
-"                Device Manager status, problem code and allocated resources,\n"
-"                and the size, version and SHA-256 of xhci98.sys, xhciuas.sys,\n"
-"                xhcihlpr.sys (and xhcimsi.sys, the 2.3.x helper), usbd.sys\n"
-"                and usbui.dll - then takes the dump into\n"
-"                BASE.TXT, .BIN and .PSC.  BASE.DEV is written even when the\n"
-"                controller cannot be opened, and says why there is no dump.\n"
-"                BASE is made from the local clock, in the CURRENT directory:\n"
-"                mDDhhmmS - the month as 1-9, A, B or C, the day, the hour\n"
-"                (24h), the minute, and S the first letter A-Z no file of the\n"
-"                set already has, so a second run never overwrites the first.\n"
-"                -report NAME, or -report -o NAME, gives the base instead\n"
-"                (NAME is the argument after -report unless that is -o, -c\n"
-"                or -nosysinfo): 1 to 8 letters, digits, '_' or '-' (not\n"
-"                first), no path, drive or extension, not a DOS device name\n"
-"                - CON PRN AUX NUL COM0-9 LPT0-9 - (exit 2 otherwise; one\n"
-"                name only, not both spellings), still in the current\n"
-"                directory, and refused (exit 6) if any file of its set -\n"
-"                .DEV .TXT .BIN .PSC or a .TMP of one - exists already.\n"
-"                Takes -c and -nosysinfo.  Prints every file it\n"
-"                wrote, and last the ones to attach: the .DEV and the .TXT\n"
-"                (the .BIN and .PSC only if asked).  Exit 0 both complete,\n"
-"                3 the .TXT is not complete, 4 no dump (the .DEV says why),\n"
-"                5 the .DEV is not complete, 6 no free name (all 26 taken\n"
-"                this minute, or NAME taken), 7 the clock is not a valid\n"
-"                date; at 6 and 7 nothing is written.  8 a file of the set\n"
-"                appeared after the name was chosen (another run made it):\n"
-"                it is left alone and no dump is kept under that name; run\n"
-"                it again (under another NAME, if one was given).  -report\n"
-"                never replaces or deletes a file it did not create.\n"
-"                SNAPON.BAT [LEVEL], SNAPGET.BAT [NAME] and SNAPOFF.BAT\n"
-"                beside this tool run -on LEVEL, -report NAME and -disable,\n"
-"                passing the word given to them on as it came.\n"
-"  -on [LEVEL]   SNAPON.BAT's form, and it stands alone: -verbosity LEVEL\n"
-"                with LEVEL exactly 1, 2, 3 or 4, and 2 (the log) when none\n"
-"                is given.  0 is refused - SNAPOFF.BAT or -disable turns the\n"
-"                channel off - and so is anything else (exit 2, nothing\n"
-"                changed).  The write and its exit codes are -verbosity's.\n"
-"  -dump         take a dump with the defaults.  Implied by -c and -o, so it\n"
-"                is only needed when neither is given.  Writes BASE.BIN,\n"
-"                BASE.PSC and BASE.TXT, and prints the RESOLVED absolute path\n"
-"                they went to.  Read it: a dump taken onto a QEMU transfer\n"
-"                volume is gone at power-off, and the path is what tells you\n"
-"                that before you go looking for the file.\n"
-"  -c N          controller index; opens \\\\.\\HCDN.  Default 0.  xhci98.sys\n"
-"                takes the first HCDN no other controller holds (usbport\n"
-"                took a fixed one for the 1.x miniport), so a machine whose\n"
-"                own USB stack already owns HCD0 leaves this driver at 1 or\n"
-"                2 - try those before concluding anything.\n"
-"  -o BASENAME   output basename.  Default XHCISNAP, in the CURRENT\n"
-"                directory, where the dump prints its resolved path.  For a\n"
-"                field report use -report, which names its own files\n"
-"                (beside -report, -o takes an 8.3 name only; see above).\n"
-"  -help, -?, /? this text.  Add | MORE - it is longer than a screen, which\n"
-"                the short usage is deliberately not.\n"
-"  -verbosity N  set XhciLogVerbosity to exactly N, 0-4, up or down, in the\n"
-"                driver's software key on every xhci98 controller this machine\n"
-"                has.  regedit is not needed.  The ladder is:\n"
-"                  0  OFF - the driver does not answer this tool at all\n"
-"                  1  counters only     (the channel, at its cheapest)\n"
-"                  2  + the note ring   THE LOG.  USE THIS ONE.\n"
-"                  3  + the PORTSC table in BASENAME.TXT\n"
-"                  4  + everything, internal addresses included\n"
-"                Each key's PREVIOUS level is printed beside the write, so a\n"
-"                level you did not expect - or one out of range, which the\n"
-"                driver refuses outright and reads as OFF - is visible.\n"
-"                The report is about the NEXT start: the driver reads this\n"
-"                value once per start, so a key edited since the last boot\n"
-"                has been read by nothing.  The level actually in force\n"
-"                travels in a dump's header, which is where to read it.\n"
-"  -disable      exactly -verbosity 0: put XhciLogVerbosity back to 0, which\n"
-"                is what the INF ships.  THERE IS NO -enable: 'off' means one\n"
-"                thing and 'on' means four, so you name the level you want.\n"
-"  -force        write to a driver key that was identified by a value NAME\n"
-"                alone.  Only needed on a machine whose key has been edited\n"
-"                by hand; the tool says so when it wants this.\n"
-"  -probe        four controls on the route, for when nothing came back.\n"
-"  -nosysinfo    with a dump: do not read the system details the report's\n"
-"                header names (Windows version, BIOS, CPU, memory).  They are\n"
-"                read by default; use this only if reading them causes a\n"
-"                problem on your machine.  The header then says they were\n"
-"                skipped.\n"
-"\n"
-"WHAT A DUMP WRITES (and -report adds BASE.DEV, the device report):\n"
-"  BASENAME.BIN  the raw extension image.  Send this to the maintainer - it\n"
-"                decodes only against an offsets.txt from the driver's own\n"
-"                tree, which is why it is an attachment and not the report.\n"
-"  BASENAME.PSC  the raw PORTSC array.\n"
-"  BASENAME.TXT  the plain-text report.  THIS is the one to paste into an\n"
-"                issue: it is built entirely from what the driver puts on the\n"
-"                wire, so it needs no offset table.  Below verbosity 4 it\n"
-"                carries no internal addresses, because the driver refuses to\n"
-"                record one at those levels.\n"
-"\n"
-"WHY step 1 is not optional: the channel is in EVERY build of this driver and\n"
-"is switched OFF by default.  A driver that has it switched off answers\n"
-"exactly as one built without it - that is deliberate, and it is why -probe\n"
-"cannot tell you which of the two you have.\n"
-"\n"
-"AND A FIFTH STEP THAT IS NOT ONE OF THE FOUR:  xhcisnap -disable , once you\n"
-"have sent the capture.  While the channel is on, anyone using this machine\n"
-"can read this driver's own diagnostic state through it.  This driver cannot\n"
-"put a lock on that door - Windows' USB property pages need it open to\n"
-"anyone, as usbport's was under a 1.x miniport - so the value you set IS the\n"
-"lock.\n");
+"The levels: 0 off - the driver does not answer; 1 counters only; 2 + the\n"
+"note ring, THE LOG (the default); 3 + the PORTSC table in the .TXT; 4 +\n"
+"internal addresses.  Set them in the xHCI98 USB Tree (View > Logging level)\n"
+"or with XHCITR /setlevel xhci98=<0-4>, then restart.  The .BIN is the raw\n"
+"extension image at any level from 1; the .TXT carries addresses at 4 only.\n");
 }
 
 /*
@@ -10892,8 +10211,8 @@ static int selftest_report(const char *base)
                "screen only.\n", textPath);
         return 3;
     }
-    comp("xhcisnap %s report self-test\n", XHCISNAP_VERSION);
-    comp_wrapped("  ", "This file was written by xhcisnap -selftest-report "
+    comp("XHCITR %s snapshot self-test\n", XHCISNAP_VERSION);
+    comp_wrapped("  ", "This file was written by XHCITR -selftest-report "
                        "through the same writers the dump report uses, so that "
                        "the incomplete-report branch can be driven on a host "
                        "with no controller: XHCISNAP_FAULT=write fails the "
@@ -10914,104 +10233,21 @@ static int selftest_report(const char *base)
     return 3;
 }
 
-/*
- * `-on [LEVEL]`, SNAPON.BAT's one command line (task 38.1).
- * The batch passes its %1 on as it came, with no `if` on it: a quoted or
- * metacharacter argument broke cmd.exe's `if "%1"==` test before this tool
- * could refuse it, and `SNAPON "1"` failed the batch's compare though the C
- * runtime hands this tool a plain 1. So the default and the check live here.
- * `count` and `args` are what follows -on. No LEVEL is 2, the log; LEVEL is
- * exactly one of the characters 1 to 4 (no sign, no leading zero, nothing
- * after it); 0 is refused, since SNAPOFF.BAT is what turns the channel off;
- * anything else, and a second argument, is refused. Returns 0 with *level
- * set, or 2 having said why. Pure but for the message, so -selftest-on
- * drives it with no registry.
- */
-static int parse_on_level(int count, char **args, unsigned long *level)
-{
-    const char *a;
-
-    if (count == 0) {
-        *level = XHCISNAP_LEVEL_LOG;
-        return 0;
-    }
-    if (count > 1) {
-        printf("-on takes one level at most, 1, 2, 3 or 4, or none for 2, the "
-               "log. Nothing was\nchanged.\n");
-        return 2;
-    }
-    a = args[0];
-    if (a[0] == '0' && a[1] == '\0') {
-        printf("-on does not take 0: level 0 is off, and SNAPOFF.BAT "
-               "(XHCISNAP -disable)\nis what turns the channel off. Nothing was "
-               "changed.\n");
-        return 2;
-    }
-    if (a[0] < '1' || a[0] > '4' || a[1] != '\0') {
-        printf("-on takes a level of 1, 2, 3 or 4, or none for 2, the log. "
-               "'%s' is not one,\nand this tool will not guess. Nothing was "
-               "changed.\n", a);
-        return 2;
-    }
-    *level = (unsigned long)(a[0] - '0');
-    return 0;
-}
-
-/*
- * What SNAPON.BAT's and SNAPOFF.BAT's exit-code ladders said, said by the
- * tool, so the batch can run it last and the last line on the screen is the
- * attach line (owner, 2026-10-13). `on` is -on, else -disable. Returns rc.
- */
-static int switch_wrapup(int rc, int on)
-{
-    printf("\n");
-    if (rc == 0 && on) {
-        printf("The channel is on. Next:\n"
-               "  1. Restart Windows, or disable and enable the xHCI "
-               "controller in\n     Device Manager.\n"
-               "  2. Reproduce the problem.\n"
-               "  3. Run SNAPGET.BAT (XHCISNAP -report), in this directory.\n"
-               "Nothing to attach yet: restart Windows, reproduce, then run "
-               "SNAPGET.BAT.\n");
-    } else if (rc == 0) {
-        printf("The channel is off from the next start: restart Windows, or "
-               "disable and enable\nthe xHCI controller in Device Manager, "
-               "for it to take effect.\nNothing to attach.\n");
-    } else {
-        printf("The channel was %s. Read the lines above: some\ncontrollers "
-               "may already have been changed.\n",
-               on ? "not switched on" : "NOT switched off");
-        if (on_nt()) {
-            printf("Run %s as an administrator: on Vista and 7, right-click "
-                   "it and choose\nRun as administrator.\n",
-                   on ? "SNAPON.BAT" : "SNAPOFF.BAT");
-        }
-        printf("Nothing to attach.\n");
-    }
-    return rc;
-}
-
-int main(int argc, char **argv)
+int tr_snap_main(int argc, char **argv)
 {
     unsigned long controller;
-    unsigned long verbosity;
     const char *base;
     int probeOnly;
     int doDump;
-    int doSetLevel;
-    int doDisable;
     int doReport;
     int baseGiven;
-    int force;
     int i;
     const char *selftestReport;
     const char *reportName;
     int doSelftestSysinfo;
-    int noReg;
 
     controller = 0;
     reportName = NULL;
-    noReg = 0;
     doReport = 0;
     baseGiven = 0;
     selftestReport = NULL;
@@ -11019,9 +10255,6 @@ int main(int argc, char **argv)
     base = "XHCISNAP";
     probeOnly = 0;
     doDump = 0;
-    doSetLevel = 0;
-    doDisable = 0;
-    force = 0;
     /* Never used unless `doSetLevel` says a level was named; seeded to the
      * shut door rather than to a sentinel, since there is no longer a
      * "set it to something" form for a sentinel to mean. */
@@ -11045,8 +10278,21 @@ int main(int argc, char **argv)
         usage();
         return 2;
     }
+    /* XHCISNAP's level switches did not move (42-A.4): the window's
+     * Logging level and /setlevel set both drivers' levels (record 25
+     * section 7.5). */
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-on") == 0 || strcmp(argv[i], "-selftest-on") == 0 ||
+            strcmp(argv[i], "-verbosity") == 0 ||
+            strcmp(argv[i], "-disable") == 0 || strcmp(argv[i], "-force") == 0) {
+            printf("%s is not taken here. Set xhci98's logging level in the "
+                   "xHCI98 USB Tree\n(View > Logging level), or run XHCITR "
+                   "/setlevel xhci98=<0-4>, then restart.\nNothing was "
+                   "changed.\n", argv[i]);
+            return 2;
+        }
+    }
 
-    verbosity = XHCISNAP_LEVEL_OFF;
     {
         const char *fault;
 
@@ -11058,36 +10304,8 @@ int main(int argc, char **argv)
                 faultClose = 1;
             } else if (strcmp(fault, "clash") == 0) {
                 faultClash = 1;
-            } else if (strcmp(fault, "noreg") == 0) {
-                /* -on stops once its level is parsed, so selftest.cmd can
-                 * drive SNAPON.BAT through cmd.exe without the registry. */
-                noReg = 1;
             }
         }
-    }
-    /*
-     * `-on [LEVEL]` and `-selftest-on [LEVEL]` stand alone: SNAPON.BAT's line
-     * is `XHCISNAP -on %1`, and whatever its %1 was is LEVEL, checked by
-     * parse_on_level (task 38.1). The write is
-     * -verbosity's, with the same key matching, refusals and exit codes;
-     * -force is not taken, as SNAPON.BAT never passed it.
-     */
-    if (strcmp(argv[1], "-on") == 0 || strcmp(argv[1], "-selftest-on") == 0) {
-        unsigned long onLevel;
-
-        if (parse_on_level(argc - 2, argv + 2, &onLevel) != 0) {
-            printf("SNAPON.BAT takes the same: SNAPON for 2, the log, or "
-                   "SNAPON 3 for level 3.\nNothing to attach: nothing was "
-                   "changed.\n");
-            return 2;
-        }
-        if (argv[1][1] == 's' || noReg) {
-            printf("-on: level %lu accepted; the registry was not touched "
-                   "(%s).\n", onLevel,
-                   noReg ? "XHCISNAP_FAULT=noreg" : "-selftest-on");
-            return switch_wrapup(0, 1);
-        }
-        return switch_wrapup(set_verbosity(onLevel, 0), 1);
     }
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
@@ -11101,7 +10319,7 @@ int main(int argc, char **argv)
              * implied spelling. */
             doDump = 1;
             if (!parse_ulong(argv[++i], &controller)) {
-                printf("-c takes a controller number and nothing else. '%s' "
+                printf("/c takes a controller number and nothing else. '%s' "
                        "is not one, and this\ntool will not guess: on a "
                        "machine with more than one controller a misread\n"
                        "number dumps the wrong one while looking honoured.\n",
@@ -11222,71 +10440,12 @@ int main(int argc, char **argv)
             selftestReport = argv[++i];
         } else if (strcmp(argv[i], "-nosysinfo") == 0) {
             sysinfoOff = 1;
-        } else if (strcmp(argv[i], "-disable") == 0) {
-            doDisable = 1;
-        } else if (strcmp(argv[i], "-force") == 0) {
-            /* Only ever consulted for a key matched by value NAME alone -
-             * see may_write(). It is not a general "do it anyway". */
-            force = 1;
-        } else if (strcmp(argv[i], "-verbosity") == 0 && i + 1 < argc) {
-            /*
-             * **This is the only knob** (since the merge, and `-enable` retired the
-             * same day). It used to set a second value, `XhciLogSnapshot`,
-             * since a ladder set on a channel nobody opened would have recorded
-             * faithfully into a ring nothing could read. That value is now rung
-             * 0 of this one, so setting the level IS opening the channel - and
-             * `-verbosity 0` is `-disable` spelled differently rather than an
-             * enable that shuts the door behind itself.
-             *
-             * `doSetLevel` means "a level was named", and it is what selects
-             * `set_verbosity`'s key-finding and write path.
-             *
-             * A negative argument arrives as a large unsigned value and is
-             * refused by the same bound, which is why the compare is against
-             * the ladder's top rather than a signed range.
-             */
-            /*
-             * **Parsed strictly, and `atoi` is not strict enough for what this
-             * value now is.** `atoi` stops at the first character it cannot use
-             * and reports nothing about it, so `-verbosity full` became 0 and
-             * silently switched the channel OFF while the user believed they
-             * had switched it on, and `-verbosity 4oops` became 4 and opened
-             * the address-bearing tier. That was tolerable while this was a
-             * depth knob; it is not now that the same value is the channel's
-             * access control. A whole-argument parse with at least one digit
-             * and nothing after it is the only reading that cannot mean
-             * something the user did not type. (Commit `29c311f`.)
-             * `parse_ulong` is that reading, and since Phase 13 `-c` takes
-             * the same one - see the parser's own comment for what `atoi`
-             * did there.
-             */
-            if (!parse_ulong(argv[++i], &verbosity)) {
-                printf("-verbosity takes a number and nothing else, 0-%lu. "
-                       "'%s' is not one, and this tool\nwill not guess: the "
-                       "value it sets is what opens the channel as well as "
-                       "what sets\nthe level, so a misread argument would "
-                       "switch a diagnostic on or off silently.\n",
-                       XHCISNAP_LEVEL_MAX, argv[i]);
-                return 2;
-            }
-            if (verbosity > XHCISNAP_LEVEL_MAX) {
-                printf("the ladder is 0-%lu. The driver REFUSES anything else "
-                       "rather than clamping it,\nso a 7 here would not become "
-                       "a %lu - it would apply the default, which is OFF.\n",
-                       XHCISNAP_LEVEL_MAX, XHCISNAP_LEVEL_MAX);
-                return 2;
-            }
-            doSetLevel = 1;
         } else {
             usage();
             return 2;
         }
     }
 
-    if (doSetLevel && doDisable) {
-        printf("-verbosity and -disable are opposites. Pick one.\n");
-        return 2;
-    }
     /* -report names its files from the clock, in the current directory, so
      * that a second run never overwrites the first. A name given with -o
      * (owner, 2026-10-13: SNAPGET.BAT NAME) is held to the 8.3 rule here and
@@ -11294,7 +10453,7 @@ int main(int argc, char **argv)
      * is the same name, and one of the two spellings is all a run takes. */
     if (reportName != NULL) {
         if (baseGiven) {
-            printf("-report NAME and -o NAME both name the files. Give one "
+            printf("/snapshot NAME and /o NAME both name the files. Give one "
                    "name.\nNothing was written.\n");
             report_attach_line(reportName, 0, 0);
             return 2;
@@ -11307,25 +10466,18 @@ int main(int argc, char **argv)
 
         why = report_name_refusal(base);
         if (why != NULL) {
-            printf("-report takes a name of 1 to 8 letters, digits, '_' or "
+            printf("/snapshot takes a name of 1 to 8 letters, digits, '_' or "
                    "'-' (not first), with\nno path, drive or extension, and "
                    "not a DOS device name; its files are written\nin the "
                    "current directory. That name is refused:\n");
             say("  ", "%s.", why);
-            printf("Nothing was written. SNAPGET.BAT takes such a name, or "
-                   "none:\nSNAPGET or SNAPGET MYPC.\n");
+            printf("Nothing was written. XHCITR /snapshot takes such a "
+                   "name, or none:\nXHCITR /snapshot or XHCITR /snapshot "
+                   "MYPC.\n");
             report_attach_line(base, 0, 0);
             return 2;
         }
     }
-    /*
-     * **`-force` is a modifier on the registry write and nothing else**, which
-     * is what `README.md` documents it as. On its own it used to fall through
-     * to a default-named dump - so a user who typed it expecting to override
-     * something got three files in the current directory instead, which is the
-     * same surprise the bare-invocation refusal above exists to prevent (the
-     * audit of 2026-09-16).
-     */
     /* -selftest-sysinfo and -selftest-report are acted on once every
      * argument is read, so that -nosysinfo beside them counts wherever it
      * stands. */
@@ -11339,28 +10491,9 @@ int main(int argc, char **argv)
      * on the registry write: on its own, or beside -probe, -verbosity or
      * -disable, it asks for nothing. */
     if (sysinfoOff && !doDump) {
-        printf("-nosysinfo only has meaning beside a dump (-dump, -o or -c), "
+        printf("/nosysinfo only has meaning beside a dump (/dump, /o or /c), "
                "where it skips\nreading the system details. On its own it "
                "asks for nothing.\n");
-        return 2;
-    }
-    if (force && !doSetLevel && !doDisable) {
-        printf("-force only has meaning beside -verbosity or -disable, where "
-               "it allows a write to\na key matched by value name alone. On "
-               "its own it asks for nothing.\n");
-        return 2;
-    }
-    /*
-     * The registry half returns before the device is opened, so `-probe` or
-     * `-dump` beside `-verbosity`/`-disable` used to perform the write and
-     * silently drop the probe or dump (roadmap Phase 20, D5). Refused instead:
-     * a user who asked for two things and got one with no word about the
-     * other has been told something false by omission.
-     */
-    if ((probeOnly || doDump) && (doSetLevel || doDisable)) {
-        printf("-probe and -dump read the driver; -verbosity and -disable "
-               "write the registry and\nreturn before the driver is opened. "
-               "Run them as two commands.\n");
         return 2;
     }
     /*
@@ -11369,32 +10502,9 @@ int main(int argc, char **argv)
      * silently take no dump (the audit of 2026-09-17).
      */
     if (probeOnly && doDump) {
-        printf("-probe checks the route and returns; -dump, -c and -o ask "
+        printf("/probe checks the route and returns; /dump, /c and /o ask "
                "for a dump it never\ntakes. Run them as two commands.\n");
         return 2;
-    }
-
-    /*
-     * The registry half runs without opening the device at all, and that is
-     * what makes the bootstrap non-circular: a machine whose channel is off
-     * cannot be read, but it can always be switched on and restarted.
-     */
-    /*
-     * **`-disable` IS `-verbosity 0`** - one write path, two spellings, since
-     * the merge. They were two functions with half the behaviour each until
-     * then; see the merge note in `set_verbosity`. The alias is kept rather
-     * than retired alongside `-enable` because the two are not mirrors: `-enable`
-     * had to guess which of four "on" levels the user meant, and **"off" has
-     * exactly one meaning**, so the objection that retired it does not reach
-     * this. It is also the aftercare step the security posture depends on
-     * somebody actually running, and a name is more likely to be run than a
-     * number.
-     */
-    if (doDisable) {
-        return switch_wrapup(set_verbosity(XHCISNAP_LEVEL_OFF, force), 0);
-    }
-    if (doSetLevel) {
-        return set_verbosity(verbosity, force);
     }
 
     if (doReport) {
@@ -11453,7 +10563,7 @@ static int take_dump(unsigned long controller, const char *base,
     sprintf(extTmpPath, "%s.TMP", extPath);
     sprintf(portscTmpPath, "%s.TMP", portscPath);
 
-    printf("xhcisnap: opening %s\n", devicePath);
+    printf("XHCITR: opening %s\n", devicePath);
     /*
      * FILE_ANY_ACCESS, and usbport completes IRP_MJ_CREATE with no work, so no
      * particular access mask is needed - but ask for read/write anyway, since
@@ -11619,7 +10729,7 @@ static int take_dump(unsigned long controller, const char *base,
     } else if (companion == NULL) {
         printf("\n  *** cannot create %s - the report will be on screen only, "
                "and on real\n      silicon it will scroll off. Name somewhere "
-               "writable with -o.\n", textPath);
+               "writable with /o.\n", textPath);
         if (GetFileAttributesA(textPath) != 0xFFFFFFFFUL) {
             printf("      an OLDER %s is still there and could not be removed "
                    "- it is not\n      this dump's report; do not send it as "
@@ -11652,7 +10762,7 @@ static int take_dump(unsigned long controller, const char *base,
     } else {
         comp("\nnote ring: not printed - the driver was at verbosity %lu, "
              "which records\n  nothing into it. That is a real report, not a "
-             "failure; -verbosity 2 fills it.\n", extLast.VerbosityApplied);
+             "failure; Logging level 2 fills it.\n", extLast.VerbosityApplied);
     }
 
     if (portscBytes != 0) {
@@ -11779,7 +10889,7 @@ static int take_dump(unsigned long controller, const char *base,
      * where a file's reader can scroll.
      */
     printf("\n--- summary ------------------------------------------------\n");
-    printf("  tool       xhcisnap %s, built %s\n",
+    printf("  tool       XHCITR %s, built %s\n",
            XHCISNAP_VERSION, XHCISNAP_BUILT);
     say_hang("  drv file   ", "             ", "%s", driver_file_version());
     printf("  driver     %s, extension %lu bytes, schema %lu\n",
@@ -11880,7 +10990,7 @@ static int take_dump(unsigned long controller, const char *base,
              */
             printf("  report     *** NOT CREATED: %s - the report went to the "
                    "screen only.\n", full);
-            printf("             Name a writable location with -o and run "
+            printf("             Name a writable location with /o and run "
                    "the dump again; the .BIN and .PSC\n             beside it "
                    "are still the raw evidence.\n");
         }

@@ -1,9 +1,20 @@
-# xhcisnap - reading this driver's own log off a running machine
+# The snapshot reader - reading this driver's own state off a running machine
 
-**To be deprecated in a subsequent release.** From `3.0.0.0` the xHCI98
-USB Tree (`xhcitr`) reads both drivers' logs and sets their logging
-level; `XHCISNAP.EXE` and its batch files still ship in `3.0.0.0` and
-work as before.
+This is the reference for the snapshot route (the door's USBUSER
+`PassThru` request, its schema and regions) and for the files it
+produces. Since `3.1.0.0` the route is read by the xHCI98 USB Tree:
+`XHCITR /snapshot`, `/dump` and `/probe` are what were `XHCISNAP
+-report`, `-dump` and `-probe`, and File > Save Snapshot... and the
+"Snapshot" part of Save Report and `/report` run `/snapshot` (design
+record 25 section 15). Its engine is `xhcitr\tr_snap.c`, moved from
+`xhcisnap\xhcisnap.c`; its self-test is `xhcitr\snaptest.cmd`
+(`XHCITR /snaptest`), and the counter-name check is
+`scripts\check-counter-names.ps1`. `XHCISNAP.EXE` and its `SNAPON.BAT`,
+`SNAPGET.BAT` and `SNAPOFF.BAT` were retired in `3.1.0.0` (roadmap-usb4
+task 42-A.4); the logging level is set by XHCITR's View > Logging
+level... or `XHCITR /setlevel` (record 25 section 7.5). The sections
+below keep XHCISNAP's names where they record its history; read
+`XHCISNAP -report` as `XHCITR /snapshot` for a current build.
 
 `XHCISNAP.EXE` reads `xhci98.sys`'s extension, its raw PORTSC array, (from
 2.0.0.0) its enabled slots and (from 2.2.0.0) its root ports' enumeration and

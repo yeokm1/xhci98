@@ -99,11 +99,12 @@ DOS tool runs, but available in-situ for the lifetime of the driver.
    2000 metal DebugView remains the trace channel.
 6. The snapshot read, the one rung that works on Windows 98 bare metal.
    The driver's counters and its note ring sit inside `XHCI_EXTENSION`, and
-   `XHCISNAP.EXE` reads them out of the running machine from ring 3, through
-   usbport's PassThru escape, so nothing is pushed, nothing is printed, and
-   no PASSIVE moment has to be found. It ships in every flavour from
-   `0.0.0.6`, is off until `XhciLogVerbosity` is set and the machine
-   restarted, and works the same on both targets.
+   `XHCITR /snapshot` (`XHCISNAP.EXE` up to `3.0.0.0`) reads them out of the
+   running machine from ring 3, through the door's PassThru request
+   (usbport's PassThru escape under the miniport), so nothing is pushed,
+   nothing is printed, and no PASSIVE moment has to be found. It ships in
+   every flavour from `0.0.0.6`, is off until `XhciLogVerbosity` is set and
+   the machine restarted, and works the same on both targets.
 
    Keep the distinction clear: what task 12.2 closed is the trace, a running record of what
    happened as it happens plus a capture of a crash, and neither exists on
@@ -337,7 +338,7 @@ A release build gives two readings before any of the rows above.
 `XHCI_EXTENSION.InitStep` and `.InitStatus` record the failing step and its
 refusal code, because a release build has no trace channel and most refusal
 codes are shared between steps (`XHCI_HC_WINDOW_TOO_SMALL` alone does not say
-which window). Read them out of the extension (`XHCISNAP`, or the monitor-side
+which window). Read them out of the extension (`XHCITR /snapshot`, or the monitor-side
 counter reader) before reasoning from the symptom. On a shared interrupt
 line, also read `InterruptCount` (ISR entries) against `InterruptsClaimed` (the
 entries that were ours). "Our interrupt never routes here" and "it routes but
@@ -372,7 +373,7 @@ Ring/cycle bugs have distinctive signatures. Recognize them by shape:
 
    **On the HCD, read the root port's own account first** (since `2.2.0.0`,
    roadmap-hcd task 35.3). With `XhciLogVerbosity` at 2 or above each root
-   port's enumeration leaves `enum.port.` notes, which `XHCISNAP` decodes
+   port's enumeration leaves `enum.port.` notes, which the snapshot decodes
    after the note ring ("root port enumeration notes, decoded"):
    `enum.port.look` says why the port was inspected and what PORTSC read,
    `enum.port.reset` the reset's result, `enum.port.speed` the raw speed ID,
@@ -393,7 +394,7 @@ Ring/cycle bugs have distinctive signatures. Recognize them by shape:
    `enum.port.speed` with class 0 and `enum.port.fail` with cause 7, the
    speed; on the E460 under `2.2.0.0` the port reads class 4 by the
    fallback and Enable Slot succeeds (issue 11 section 6). Ports behind
-   a hub are not noted. `xhcisnap/README.md` has every layout.
+   a hub are not noted. `docs/contributing/snapshot-reader.md` has every layout.
 2. Address Device completes with Parameter/Context State Error (codes in
    `docs/usb-xhci-info/xhci-data-structures.md` "Completion Codes"). The input context
    content is wrong. Checklist, in order of how often each is the culprit:
@@ -472,7 +473,8 @@ Ring/cycle bugs have distinctive signatures. Recognize them by shape:
   interrupt's backstop, which keeps delivering (at most one drain per 100 ms
   while an event stands) and has no terminal, so the symptom
   under `2.2.0.0` is either a recovery that worked (and is only counted) or
-  a stated terminal state. Read, in this order, from an `XHCISNAP` report
+  a stated terminal state. Read, in this order, from a snapshot (`XHCITR`'s
+  Save Report or `/snapshot`; an `XHCISNAP` report up to `3.0.0.0`)
   taken after the symptom (and one taken before it, to subtract):
   1. The values in effect, `XhciTolerance`, `XhciIntervalCap` and
      `XhciAvgTrbEsit`. At `XhciTolerance` 0 none of the behaviours acts

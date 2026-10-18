@@ -25,10 +25,11 @@ rem   6. the vm-matrix verdict self-tests - a matrix that reads a refusal as a
 rem      pass makes every later FAIL and NODRIVER word untrustworthy
 rem   7. the tracked batch files' line endings - MS-DOS 7.1 COMMAND.COM can
 rem      fail on an LF-only .BAT, and the field wrappers are .BAT files
-rem   8. the XHCISNAP report self-test, when that EXE has been built (it has a
+rem   8. the XHCICLN self-test, when that EXE has been built (it has a
 rem      build.cmd of its own, and a clone without Open Watcom still runs
-rem      everything else here), and the XHCICLN self-test when that one has
-rem      (task 38.8; xhcicln\build.cmd), and the XHCIINST self-test and import
+rem      everything else here; task 38.8; xhcicln\build.cmd), XHCITR's own
+rem      and its snapshot self-tests when that one has (xhcitr\snaptest.cmd,
+rem      XHCISNAP's, moved by roadmap-usb4 task 42-A.4), and the XHCIINST self-test and import
 rem      check when that one has (task 40.5; xhciinst\build.cmd)
 rem   9. test\run-host-tests.cmd - the pure-core suite. It runs before the DDK
 rem      builds, not after: it compiles the same core files in seconds, so a
@@ -508,17 +509,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-source-charset.ps1"
 if errorlevel 1 goto charsetfail
 
-rem The snapshot reader's report path, when its EXE has been built (it is a
-rem separate build.cmd, and a clone without Open Watcom still has this one).
-if exist "%REPO%\xhcisnap\XHCISNAP.EXE" (
-    echo.
-    echo === xhcisnap report self-test ===
-    call "%REPO%\xhcisnap\selftest.cmd"
-    if errorlevel 1 goto snaptestfail
-)
-
 rem The cleanup tool's pure half (task 38.8), when its EXE has been built (it
-rem has a build.cmd of its own, as XHCISNAP has).
+rem has a build.cmd of its own).
 if exist "%REPO%\xhcicln\XHCICLN.EXE" (
     echo.
     echo === xhcicln self-test ===
@@ -545,6 +537,13 @@ if exist "%REPO%\xhcitr\XHCITR.EXE" (
     echo === xhcitr self-test ===
     call "%REPO%\xhcitr\selftest.cmd"
     if errorlevel 1 goto trtestfail
+    rem The snapshot reader, XHCISNAP's until 42-A.4: its report path with
+    rem no controller, its decodes over canned data and the counter-name
+    rem check (scripts\check-counter-names.ps1) on the built image.
+    echo.
+    echo === xhcitr snapshot self-test ===
+    call "%REPO%\xhcitr\snaptest.cmd"
+    if errorlevel 1 goto snaptestfail
 )
 
 echo.
@@ -602,7 +601,7 @@ if errorlevel 1 goto flavourmissing
 rem Record which sources this binary came from, beside it. make-release.ps1
 rem checks it and refuses to publish a .sys the tree can no longer reproduce -
 rem the driver's equivalent of the "EXE newer than its own sources" refusals it
-rem already makes for XHCIQUAL and XHCISNAP (the audit of 2026-09-07). It is
+rem already makes for XHCIQUAL (and made for XHCISNAP; the audit of 2026-09-07). It is
 rem content rather than timestamps, because an mtime moves on a checkout or a
 rem comment-only commit; scripts\source-stamp.ps1 says why at length.
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
@@ -1223,7 +1222,7 @@ exit /b 1
 
 :snaptestfail
 echo.
-echo ERROR: xhcisnap's report self-test failed, so a dump's "send this" line
+echo ERROR: xhcitr's snapshot self-test failed, so a dump's "send this" line
 echo cannot be trusted to mean the report was written in full.
 endlocal
 exit /b 1

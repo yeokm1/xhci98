@@ -36,6 +36,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <commdlg.h>
 #include <setupapi.h>
 #include <dbt.h>
@@ -52,6 +53,9 @@
 #include "tr_pci.h"
 #include "tr_res.h"
 #include "../src/xhci_qry.h"
+
+static int report_snapshots(HANDLE f);
+static void save_snapshot_dialog(void);
 
 #define XHCITR_VERSION XHCI_VER_STR
 
@@ -3322,6 +3326,8 @@ static int write_report(const char *path)
         tr_put(&t, "\n");
         ok = WriteFile(f, text, (DWORD)t.Len, &w, NULL) && w == t.Len;
     }
+    /* What XHCISNAP's field report carried (section 15). */
+    ok = ok && report_snapshots(f);
     CloseHandle(f);
     reportMode = 0;
     return ok;
@@ -6069,6 +6075,9 @@ static int command(HWND w, UINT id)
     case IDM_SAVE:
         save_report_dialog();
         return 1;
+    case IDM_SNAPSHOT:
+        save_snapshot_dialog();
+        return 1;
     case IDM_EXIT:
         quit_all();
         return 1;
@@ -6700,6 +6709,385 @@ static int run_report(void)
     return INST_EXIT_DONE;
 }
 
+/* ======================================================================== */
+/* XHCISNAP's reading, moved here (42-A.4; record 25 section 15)             */
+/* ======================================================================== */
+
+/* tr_snap.c: XHCISNAP's engine, its command line spelled with dashes. */
+int tr_snap_main(int argc, char **argv);
+
+/* The snapshot modes: /snapshot, /dump, /probe, and /snaptest for
+ * snaptest.cmd. Each takes the whole command line. */
+static int snap_is_mode(const char *a)
+{
+    return a != NULL && (lstrcmpiA(a, "/snapshot") == 0 ||
+                         lstrcmpiA(a, "/dump") == 0 ||
+                         lstrcmpiA(a, "/probe") == 0 ||
+                         strcmp(a, "/snaptest") == 0);
+}
+
+static int stdout_redirected(void)
+{
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    return out != NULL && out != INVALID_HANDLE_VALUE &&
+           GetFileType(out) != FILE_TYPE_UNKNOWN;
+}
+
+/* A file's text, at most cap - 1 bytes of its end, NUL-terminated; with
+ * more, the head is cut at a line and "..." says so. Returns its length. */
+static size_t snap_read_tail(const char *path, char *buf, size_t cap)
+{
+    HANDLE f;
+    DWORD size;
+    DWORD got = 0;
+    DWORD from = 0;
+
+    buf[0] = '\0';
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    size = GetFileSize(f, NULL);
+    if (size == 0xFFFFFFFFUL) {
+        size = 0;
+    }
+    if (size > cap - 8) {
+        from = size - (DWORD)(cap - 8);
+        SetFilePointer(f, (LONG)from, NULL, FILE_BEGIN);
+        tr_copy(buf, "...\r\n", cap);
+    }
+    if (ReadFile(f, buf + strlen(buf), (DWORD)(cap - 1 - strlen(buf)), &got,
+                 NULL)) {
+        buf[(from != 0 ? 5 : 0) + got] = '\0';
+    }
+    CloseHandle(f);
+    return strlen(buf);
+}
+
+/* A temporary file's path in %TEMP%, made empty. */
+static int snap_temp(char *path)
+{
+    char dir[MAX_PATH];
+    DWORD n = GetTempPathA(sizeof(dir), dir);
+
+    if (n == 0 || n >= sizeof(dir)) {
+        return 0;
+    }
+    return GetTempFileNameA(dir, "xtr", 0, path) != 0;
+}
+
+/* The words the user typed, as tr_snap.c's command line: /snapshot is
+ * -report, /dump -dump, /probe -probe, and after it /c, /o and /nosysinfo
+ * their dashed forms; a word of the user's own that begins with '-' is
+ * refused, so no switch of the old tool is reached by its spelling.
+ * Returns the count, or 0 having said why. */
+static int snap_args(int argc, char **argv, char **av, int cap)
+{
+    int n = 0;
+    int i;
+
+    if (argc + 2 > cap) {
+        printf("Too many words on the command line.\n");
+        return 0;
+    }
+    av[n++] = "XHCITR";
+    if (strcmp(argv[1], "/snaptest") == 0) {
+        for (i = 2; i < argc; i++) {
+            av[n++] = argv[i];
+        }
+        av[n] = NULL;
+        return n;
+    }
+    if (argc == 3 && strcmp(argv[2], "/?") == 0) {
+        av[n++] = "-help";
+        av[n] = NULL;
+        return n;
+    }
+    av[n++] = lstrcmpiA(argv[1], "/snapshot") == 0 ? "-report"
+            : lstrcmpiA(argv[1], "/dump") == 0     ? "-dump"
+                                                   : "-probe";
+    for (i = 2; i < argc; i++) {
+        const char *a = argv[i];
+        if (a[0] == '-') {
+            printf("%s is not taken: %s takes /c N, /o NAME and /nosysinfo "
+                   "(/snapshot also a NAME).\nNothing was written.\n", a,
+                   argv[1]);
+            return 0;
+        }
+        av[n++] = lstrcmpiA(a, "/c") == 0          ? "-c"
+                : lstrcmpiA(a, "/o") == 0          ? "-o"
+                : lstrcmpiA(a, "/nosysinfo") == 0  ? "-nosysinfo"
+                                                   : argv[i];
+    }
+    av[n] = NULL;
+    return n;
+}
+
+/* A snapshot mode: its text to the redirected output, else, captured, to
+ * a message box with the directory the files went to (shown on this
+ * machine only; the files never name it). */
+static int run_snap(int argc, char **argv)
+{
+    static char *av[72];
+    static char text[6144];
+    char tmp[MAX_PATH];
+    char cwd[MAX_PATH];
+    char *box;
+    int capture = !stdout_redirected();
+    int n;
+    int rc;
+
+    if (capture) {
+        if (!snap_temp(tmp) || freopen(tmp, "w", stdout) == NULL) {
+            say("The snapshot's text has nowhere to go: no temporary file "
+                "could be made. Run it from a command prompt with its output "
+                "redirected to a file.", 1);
+            return 2;
+        }
+    }
+    n = snap_args(argc, argv, av, sizeof(av) / sizeof(av[0]));
+    rc = (n == 0) ? 2 : tr_snap_main(n, av);
+    fflush(stdout);
+    if (!capture) {
+        return rc;
+    }
+    fclose(stdout);
+    snap_read_tail(tmp, text, sizeof(text));
+    DeleteFileA(tmp);
+    if (GetCurrentDirectoryA(sizeof(cwd), cwd) == 0) {
+        cwd[0] = '\0';
+    }
+    box = (char *)malloc(strlen(text) + sizeof(cwd) + 64);
+    if (box != NULL) {
+        sprintf(box, "%s\r\n(The current directory is %s.)", text, cwd);
+        MessageBoxA(NULL, box, "xHCI98 USB Tree - snapshot",
+                    MB_OK | (rc != 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
+        free(box);
+    }
+    return rc;
+}
+
+/* This executable run with `args` in `dir`, its output to a temporary
+ * file whose path comes back in outPath; waits up to waitMs. Returns the
+ * exit code, or -1 when it did not start or end. */
+static int snap_child(const char *args, const char *dir, char *outPath,
+                      DWORD waitMs)
+{
+    char exe[MAX_PATH];
+    char cmd[MAX_PATH * 2 + 64];
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    HANDLE out;
+    DWORD code = (DWORD)-1;
+
+    if (GetModuleFileNameA(NULL, exe, sizeof(exe)) == 0 || !snap_temp(outPath)) {
+        return -1;
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    out = CreateFileA(outPath, GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (out == INVALID_HANDLE_VALUE) {
+        DeleteFileA(outPath);
+        return -1;
+    }
+    tr_sprintf(cmd, sizeof(cmd), "\"%s\" %s", exe, args);
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = out;
+    si.hStdError = out;
+    if (!CreateProcessA(exe, cmd, NULL, NULL, TRUE, 0, NULL, dir, &si, &pi)) {
+        CloseHandle(out);
+        return -1;
+    }
+    CloseHandle(out);
+    CloseHandle(pi.hThread);
+    if (WaitForSingleObject(pi.hProcess, waitMs) != WAIT_OBJECT_0 ||
+        !GetExitCodeProcess(pi.hProcess, &code)) {
+        code = (DWORD)-1;
+    }
+    CloseHandle(pi.hProcess);
+    return (int)code;
+}
+
+/* The HCD number of a controller, from its \\.\HCD<n> name, or -1. */
+static int snap_hcd_number(const UCTRL *c)
+{
+    const char *p = c->Hcd;
+    const char *q;
+    int n = 0;
+
+    q = strstr(p, "HCD");
+    if (q == NULL) {
+        return -1;
+    }
+    q += 3;
+    if (*q < '0' || *q > '9') {
+        return -1;
+    }
+    while (*q >= '0' && *q <= '9' && n < 1000) {
+        n = n * 10 + (*q++ - '0');
+    }
+    return *q == '\0' ? n : -1;
+}
+
+/* The report's snapshot part: for each xhci98 controller a /snapshot run
+ * in a directory of its own under %TEMP%, its .DEV (the first only: it is
+ * the machine's) and its dump's .TXT appended, then the files removed. At
+ * level 4 the .TXT can hold kernel addresses, so it is withheld, as the
+ * Driver log node withholds the ring (section 3.5). */
+static int report_snapshots(HANDLE f)
+{
+    static char part[TR_DETAIL_BYTES];
+    static const char *const ext[] = { ".DEV", ".TXT", ".BIN", ".PSC" };
+    char tdir[MAX_PATH];
+    char dir[MAX_PATH];
+    char out[MAX_PATH];
+    char file[MAX_PATH + 16];
+    char args[64];
+    char head[160];
+    DWORD w;
+    int ok = 1;
+    int any = 0;
+    int devDone = 0;
+    int i;
+    int k;
+
+    for (i = 0; i < ucCount && ok; i++) {
+        int hcd;
+        int rc;
+        DWORD n;
+
+        if (!uc[i].Ours || (hcd = snap_hcd_number(&uc[i])) < 0) {
+            continue;
+        }
+        if (!any) {
+            tr_sprintf(head, sizeof(head), "Snapshot (the field report "
+                       "XHCITR /snapshot writes)\n\n");
+            ok = WriteFile(f, head, (DWORD)strlen(head), &w, NULL);
+            any = 1;
+        }
+        n = GetTempPathA(sizeof(tdir), tdir);
+        if (n == 0 || n >= sizeof(tdir)) {
+            break;
+        }
+        tr_sprintf(dir, sizeof(dir), "%sxtr%lX-%d", tdir,
+                   (unsigned long)GetCurrentProcessId(), i);
+        if (!CreateDirectoryA(dir, NULL)) {
+            tr_sprintf(head, sizeof(head), "HCD%d: no snapshot (no "
+                       "temporary directory)\n\n", hcd);
+            ok = WriteFile(f, head, (DWORD)strlen(head), &w, NULL);
+            continue;
+        }
+        tr_sprintf(args, sizeof(args), "/snapshot XHCITR /c %d", hcd);
+        rc = snap_child(args, dir, out, 120000);
+        DeleteFileA(out);
+        for (k = devDone ? 1 : 0; k < 2 && ok; k++) {
+            tr_sprintf(file, sizeof(file), "%s\\XHCITR%s", dir, ext[k]);
+            if (snap_read_tail(file, part, sizeof(part)) == 0) {
+                tr_sprintf(head, sizeof(head), "HCD%d: no %s (the snapshot "
+                           "answered %d)\n\n", hcd, ext[k], rc);
+                ok = WriteFile(f, head, (DWORD)strlen(head), &w, NULL);
+                continue;
+            }
+            if (k == 1 && strstr(part, "APPLIED 4") != NULL) {
+                tr_sprintf(head, sizeof(head), "HCD%d: the dump is withheld: "
+                           "at level 4 it can hold memory addresses. Use "
+                           "level 2.\n\n", hcd);
+                ok = WriteFile(f, head, (DWORD)strlen(head), &w, NULL);
+                continue;
+            }
+            if (k == 0) {
+                devDone = 1;
+            }
+            ok = WriteFile(f, part, (DWORD)strlen(part), &w, NULL) &&
+                 WriteFile(f, "\r\n", 2, &w, NULL);
+        }
+        for (k = 0; k < 4; k++) {
+            tr_sprintf(file, sizeof(file), "%s\\XHCITR%s", dir, ext[k]);
+            DeleteFileA(file);
+            tr_sprintf(file, sizeof(file), "%s\\XHCITR%s.TMP", dir, ext[k]);
+            DeleteFileA(file);
+        }
+        RemoveDirectoryA(dir);
+    }
+    return ok;
+}
+
+/* File > Save Snapshot...: /snapshot in a folder the user picks, for the
+ * selected xhci98 controller (else the first), its text in a message box. */
+static void save_snapshot_dialog(void)
+{
+    static char text[6144];
+    BROWSEINFOA bi;
+    LPITEMIDLIST pidl;
+    IMalloc *m;
+    char dir[MAX_PATH];
+    char out[MAX_PATH];
+    char args[64];
+    char *box;
+    HCURSOR old;
+    int hcd = -1;
+    int rc;
+    int i;
+
+    for (i = 0; i < ucCount && hcd < 0; i++) {
+        if (uc[i].Ours) {
+            hcd = snap_hcd_number(&uc[i]);
+        }
+    }
+    if (hcd < 0) {
+        MessageBoxA(hMain, "No controller here is driven by xhci98.sys, so "
+                    "there is nothing to take a snapshot of.",
+                    "xHCI98 USB Tree", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    memset(&bi, 0, sizeof(bi));
+    bi.hwndOwner = hMain;
+    bi.pszDisplayName = dir;
+    bi.lpszTitle = "Save the snapshot (a .DEV, .TXT, .BIN and .PSC) in:";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS;
+    pidl = SHBrowseForFolderA(&bi);
+    if (pidl == NULL) {
+        return;
+    }
+    dir[0] = '\0';
+    i = SHGetPathFromIDListA(pidl, dir);
+    if (SHGetMalloc(&m) == NOERROR) {
+        m->lpVtbl->Free(m, pidl);
+        m->lpVtbl->Release(m);
+    }
+    if (!i || dir[0] == '\0') {
+        return;
+    }
+    tr_sprintf(args, sizeof(args), "/snapshot /c %d", hcd);
+    old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+    rc = snap_child(args, dir, out, 120000);
+    SetCursor(old);
+    snap_read_tail(out, text, sizeof(text));
+    DeleteFileA(out);
+    box = (char *)malloc(strlen(text) + MAX_PATH + 96);
+    if (box == NULL) {
+        return;
+    }
+    if (rc == -1) {
+        tr_sprintf(box, strlen(text) + MAX_PATH + 96,
+                   "The snapshot did not run, or did not end within two "
+                   "minutes.\r\n%s", text);
+    } else {
+        sprintf(box, "%s\r\n(The files are in %s.)", text, dir);
+    }
+    MessageBoxA(hMain, box, "xHCI98 USB Tree - snapshot",
+                MB_OK | (rc != 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
+    free(box);
+}
+
 /* /eject id=<instance id>: the whole transaction once, then exit (record
  * 25 section 6.4). The user confirmed in the run that started this one. */
 static int run_eject(void)
@@ -6900,6 +7288,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     envNt = osv.dwPlatformId == VER_PLATFORM_WIN32_NT;
     envMajor = osv.dwMajorVersion;
     envMinor = osv.dwMinorVersion;
+    /* XHCISNAP's reading (42-A.4): the whole command line is the mode's. */
+    if (__argc >= 2 && snap_is_mode(__argv[1])) {
+        return run_snap(__argc, __argv);
+    }
     if (tr_parse_args(__argc, __argv, &opts, err, sizeof(err)) != 0) {
         say(err, 1);
         return INST_EXIT_REFUSED;

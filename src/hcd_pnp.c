@@ -135,6 +135,14 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
 
     stack = IoGetCurrentIrpStackLocation(irp);
     XHCI_DBG_VALUE("hcd: controller PnP minor", stack->MinorFunction);
+    /* Roadmap-usb4 42-A.16: the controller's stop, query-remove, remove,
+     * cancel and surprise removal in the shipping log, the minor as the
+     * value, before the IRP is handled. */
+    if ((stack->MinorFunction != IRP_MN_START_DEVICE &&
+         stack->MinorFunction <= IRP_MN_CANCEL_STOP_DEVICE) ||
+        stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) {
+        XhciLogNote(&hc->Hc, "pnp.hc", stack->MinorFunction);
+    }
 
     if (stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
         return hcdRemove(hc, irp);

@@ -285,12 +285,11 @@ int tr_snap_window(const unsigned char *buf, size_t returned, TR_SNAPW *w)
 
 void tr_log_advice_hcd(TR_TEXT *t, int nt)
 {
-    tr_put(t, "  To record the log, run SNAPON.BAT from the package's "
-              "tools\\xhcisnap\n  folder");
-    tr_put(t, nt ? " as an administrator (on Vista and 7: right-click it,\n"
-                   "  Run as administrator)" : "");
-    tr_put(t, ", then restart Windows. SNAPOFF.BAT turns it off\n"
-              "  again once the log has been sent.\n");
+    tr_put(t, "  To record the log, set xhci98's level to 2 in View > "
+              "Logging level");
+    tr_put(t, nt ? "\n  (as an administrator, or with Set as administrator..."
+                   ")" : "");
+    tr_put(t, ", then restart\n  Windows.\n");
 }
 
 void tr_hcd_off_text(TR_TEXT *t, int nt)
@@ -322,8 +321,8 @@ void tr_hcd_head_text(TR_TEXT *t, const TR_SNAPW *w, int nt)
     } else if (w->VerbosityApplied == 4) {
         tr_put(t, "  Recording:  on (XhciLogVerbosity 4)\n"
                   "  Level 4 records internal addresses, so this tool does "
-                  "not show the log.\n  Run SNAPON.BAT (level 2) and restart "
-                  "Windows for a log it can show.\n");
+                  "not show the log.\n  Set level 2 in View > Logging level and "
+                  "restart Windows for a log it can\n  show.\n");
     } else {
         tr_printf(t, "  Recording:  off (XhciLogVerbosity %lu: counters "
                      "only)\n", (unsigned long)w->VerbosityApplied);
@@ -474,8 +473,8 @@ void tr_xhq_log_text(TR_TEXT *t, const TR_XHQ *x, int nt)
     } else if (x->Flags & XHQ_F_WITHHELD) {
         tr_put(t, "  Recording:  on (XhciLogVerbosity 4)\n"
                   "  Level 4 records internal addresses, so this tool does "
-                  "not show the log.\n  Run SNAPON.BAT (level 2) and restart "
-                  "Windows for a log it can show.\n");
+                  "not show the log.\n  Set level 2 in View > Logging level and "
+                  "restart Windows for a log it can\n  show.\n");
     } else {
         tr_printf(t, "  Recording:  off (XhciLogVerbosity %lu%s)\n",
                   (unsigned long)x->Verbosity,

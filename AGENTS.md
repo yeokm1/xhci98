@@ -233,8 +233,6 @@ xhciqual/       Phase 0 DOS hardware-qualification tool (Open Watcom).
                 privacy (owner, 2026-10-07), so a citation of it names where
                 the evidence is held, not a file in the clone. Archive new
                 runs there, and never force-add them.
-xhcisnap/       The host-side reader for the driver's log channel
-                (`XHCISNAP.EXE`); `xhcisnap/README.md` is its guide. Tracked.
 xhciinst/       The install, update and uninstall tool (`XHCIINST.EXE`,
                 `XHCIIN64.EXE`) and the package's `INSTALL.BAT`, from
                 `3.0.0.0` (design record 23). Tracked.
@@ -245,8 +243,12 @@ xhcicln/        The optional cleanup tool (`XHCICLN.EXE`, `XHCICL64.EXE`)
                 guide. Tracked.
 xhcitr/         The xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE`), the
                 graphical tree, eject and tray tool, from `3.0.0.0`
-                (roadmap-usb4 Phase 41, design record 25);
-                `xhcitr/README.TXT` is its guide. Tracked.
+                (roadmap-usb4 Phase 41, design record 25), and from
+                `3.1.0.0` the reader of the driver's snapshot (`XHCITR
+                /snapshot`, `/dump`, `/probe`; `tr_snap.c`, XHCISNAP's
+                engine, moved; `docs/contributing/snapshot-reader.md` is
+                the route's reference); `xhcitr/README.TXT` is its guide.
+                Tracked.
 images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
@@ -376,8 +378,8 @@ target's class drivers expect of a USB PDO is read per target and is design
 record 13 section 6; the object model, the enumeration state machine and the
 lock model are its section 5; hubs and composite devices are section 10. The
 controller's Advanced tab and the root hub's Power tab are answered by the
-driver itself (the `USBUSER` door, section 8), which is also how `XHCISNAP`
-reaches it. `xhciuas.sys` is a class driver of this project's own above a
+driver itself (the `USBUSER` door, section 8), which is also how `XHCITR`'s
+snapshot reaches it. `xhciuas.sys` is a class driver of this project's own above a
 device PDO, for UAS, with streams the bus provides (`roadmap-hcd.md` Phase
 31).
 
@@ -714,8 +716,8 @@ rules that bind day-to-day work, and none of them is optional.
   on all four paths by it, to dirid 11 rather than 10. **Do not put a
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"
-  anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, from
-  `2.4.0.0` `XHCICLN` and `XHCICL64`, and from `3.0.0.0` `XHCIINST`,
+  anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP` up to
+  `3.0.0.0`, from `2.4.0.0` `XHCICLN` and `XHCICL64`, and from `3.0.0.0` `XHCIINST`,
   `XHCIIN64`, `XHCITR` and `XHCITR64`) carry statically linked runtimes
   (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
@@ -810,7 +812,7 @@ UTF-8.
 - Do not use C++ syntax, STL, or runtime library functions.
 - Do not take a SuperSpeed or SuperSpeedPlus field, encoding or state transition from memory. Take it from `docs/usb-xhci-info/xhci-data-structures.md` sections 10 and 11, checked against xHCI 1.2c and USB 3.2 (roadmap-hcd tasks 29-0 and 30-0), and say in the release notes what no vehicle has read.
 - Do not attempt to make a USB 3.x logical port operate at USB 2.0 speeds; it is electrically impossible.
-- Do not write against a guessed function-driver contract. What a target's class drivers send a USB PDO, and what the property pages and `XHCISNAP` send the door, is read per target and recorded in design record 13 sections 6 and 8; a contract taken from the DDK headers alone, or one target's assumed for another's, is what Phase 25 exists to prevent.
+- Do not write against a guessed function-driver contract. What a target's class drivers send a USB PDO, and what the property pages and `XHCITR`'s snapshot (`XHCISNAP` up to `3.0.0.0`) send the door, is read per target and recorded in design record 13 sections 6 and 8; a contract taken from the DDK headers alone, or one target's assumed for another's, is what Phase 25 exists to prevent.
 - Do not bring `usbport.sys`, `usbhub.sys` or a composite parent back underneath or beside the HCD, and do not bind the root hub to `USB\ROOT_HUB`: the bus owns the root hub, hubs and composite splitting (`roadmap-hcd.md`, decisions table).
 - Do not place a SET_ADDRESS setup packet on a transfer ring. xHCI forbids software-issued SET_ADDRESS (spec section 4.5.4.1: the xHC blocks it and completes the TRB with TRB Error). The bus addresses a device with the Address Device command in its own enumeration state machine (design record 13 section 5.3), and a SET_ADDRESS a client sends is never put on a ring.
 - Do not use undocumented Win98 kernel internals without documenting why there is no other option.
