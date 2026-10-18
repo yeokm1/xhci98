@@ -5,7 +5,10 @@ rem link-state table stand-in, with the kits in ..\..\tools. Output: out\cmnt\.
 rem A failed build never leaves an earlier image in place (Codex round 3).
 setlocal
 for %%I in ("%~dp0..\..") do set "REPO=%%~fI"
-set "DDKROOT=%REPO%\tools\ntddk"
+rem The kits root, as scripts\build.cmd finds it (STOR98_TOOLS)
+if not defined STOR98_TOOLS if exist "%REPO%\tools\" set "STOR98_TOOLS=%REPO%\tools"
+if not defined STOR98_TOOLS for %%I in ("%REPO%\..\..\tools") do set "STOR98_TOOLS=%%~fI"
+set "DDKROOT=%STOR98_TOOLS%\ntddk"
 if exist "%~dp0objfre\i386\cmnt.sys" del /f /q "%~dp0objfre\i386\cmnt.sys"
 if exist "%REPO%\out\cmnt\cmnt.sys" del /f /q "%REPO%\out\cmnt\cmnt.sys"
 if exist "%~dp0buildfre.err" del /f /q "%~dp0buildfre.err"

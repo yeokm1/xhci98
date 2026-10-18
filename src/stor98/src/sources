@@ -17,7 +17,12 @@ TARGETPATH=obj
 TARGETTYPE=MINIPORT
 
 !IF "$(STOR98_TARGET)" == "9x"
-INCLUDES=..\tools\w98ddk\inc
+# scripts\build.cmd passes the headers' folder as STOR98_W98INC (it finds
+# the kits in xhci98's tools\ when Stor98 is xhci98's src\stor98).
+!IF "$(STOR98_W98INC)" == ""
+STOR98_W98INC=..\tools\w98ddk\inc
+!ENDIF
+INCLUDES=$(STOR98_W98INC)
 C_DEFINES=$(C_DEFINES) -DNVME2K_W9X
 # MD-4: driver DMA memory from the _PageAllocate pool on the stor98 boot block
 # (src\pool9x.c), never the port's uncached extension (docs\INTEGRATION-0.2.md).

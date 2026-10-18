@@ -15,7 +15,9 @@ rem   x86    stor98.sys  Windows 2000 DDK + MSVC 6.0   setenv <ddk> <fl> w2k x86
 rem   amd64  stor98.sys  WDK 7.1 7600.16385.1          setenv <wdk> <fl> x64 WNET no_oacr
 rem
 rem Toolchains are found in tools\ next to this script's parent directory
-rem (see docs\BUILD.md); nothing is installed machine-wide. Results are copied
+rem (see docs\BUILD.md), or, where there is none (Stor98 in xhci98's tree as
+rem src\stor98), in the tools\ two levels above it; STOR98_TOOLS in the
+rem environment names another root. Nothing is installed machine-wide. Results are copied
 rem to out\<flavor>\{win9x,x86,amd64}\ together with the .pdb. Each build runs
 rem in its own child cmd because setenv.bat is not idempotent.
 rem
@@ -30,10 +32,13 @@ rem Exit code 0 when every requested build produced its image without errors.
 
 setlocal
 for %%I in ("%~dp0..") do set "REPO=%%~fI"
-set "MSVC=%REPO%\tools\MSVC600"
-set "W2KDDK=%REPO%\tools\ntddk"
-set "WDK71=%REPO%\tools\WinDDK71"
-set "W98INC=%REPO%\tools\w98ddk\inc"
+if not defined STOR98_TOOLS if exist "%REPO%\tools\" set "STOR98_TOOLS=%REPO%\tools"
+if not defined STOR98_TOOLS for %%I in ("%REPO%\..\..\tools") do set "STOR98_TOOLS=%%~fI"
+set "MSVC=%STOR98_TOOLS%\MSVC600"
+set "W2KDDK=%STOR98_TOOLS%\ntddk"
+set "WDK71=%STOR98_TOOLS%\WinDDK71"
+set "W98INC=%STOR98_TOOLS%\w98ddk\inc"
+set "STOR98_W98INC=%W98INC%"
 
 set "TARGETS=%~1"
 set "FLAVORS=%~2"
@@ -59,6 +64,10 @@ rem setenv.bat takes BASEDIR verbatim and cannot be quoted.
 for /f "tokens=2 delims= " %%S in ("%REPO%") do (
     echo ERROR: the repository path contains a space: "%REPO%"
     echo The DDK's setenv.bat cannot take a quoted path. Clone it elsewhere.
+    exit /b 1
+)
+for /f "tokens=2 delims= " %%S in ("%STOR98_TOOLS%") do (
+    echo ERROR: the toolchain path contains a space: "%STOR98_TOOLS%"
     exit /b 1
 )
 

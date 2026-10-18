@@ -33,6 +33,12 @@ tools\
 
 The repository path must not contain a space: the DDKs' `setenv.bat` takes its root unquoted.
 
+In the xhci98 repository, where Stor98 is `src\stor98\` (since 2026-10-19), there is no
+`tools\` here: `scripts\build.cmd`, `tests\unit\build.cmd`, `tests\cm9x\build.cmd`,
+`tests\cmnt\build.cmd` and the signing scripts then use xhci98's own `tools\`, two levels
+up, which holds the same kits (its `tools\w98ddk\inc` the two headers below). `STOR98_TOOLS`
+in the environment names any other root; the layout under it is the one above.
+
 ### Where each kit comes from
 
 | Folder | Source | Notes |
@@ -40,7 +46,7 @@ The repository path must not contain a space: the DDKs' `setenv.bat` takes its r
 | `tools\MSVC600` | MSVC 6.0 (Visual C++ 6.0, `cl` 12.00.8804), e.g. `MSVC600.zip` from [itsmattkc/MSVC600](https://github.com/itsmattkc/MSVC600) (sha256 `a4c46a05039cc8f512043728c8132a830a04ffd68d6f038df100413ae6c21061`) or a Visual Studio 6.0 CD | Unzip so that `tools\MSVC600\VC98\BIN\CL.EXE` exists. No setup program is run; `cl.exe` works in place once `Common\MSDev98\Bin` is on `PATH`, which `ddkvars.bat` does. |
 | `tools\ntddk` | Windows 2000 DDK, `WIN2KDDK.EXE` (sha256 `e81728f182a278fc749abe32a366ae6726f15ca5f2c9e43912672707a4df2213`), e.g. from [KunYi/WDK_DDKArchive](https://github.com/KunYi/WDK_DDKArchive/releases/tag/Win2K_DDK) | A cabinet self-extractor; extract the cabinets into `tools\ntddk` (`bin\setenv.bat`, `inc\`, `libfre\`, `libchk\`). `setenv.bat` calls `bin\ddkvars.bat` when it exists instead of looking for a registry-installed MSVC; create it as shown below. |
 | `tools\WinDDK71` | WDK 7.1, `GRMWDK_EN_7600_1.ISO` (649,877,504 bytes, sha256 `5edc723b50ea28a070cad361dd0927df402b7a861a036bbcf11d27ebba77657d`), Microsoft download KB 11800 | Unpack the ISO's payload MSIs with `msiexec /a <msi> TARGETDIR=...` (administrative install: lays out files, registers nothing). Only needed for amd64. |
-| `tools\w98ddk\inc` | `SCSI.H` and `SRB.H` from the Windows 98 DDK (`98DDK.EXE`), the Windows 98 SE DDK, or the Windows NT4 DDK | Only these two files. The copies used so far came with SweetLow's `nvme2k-src.zip` (sha256 `809d57e6...b7` and `4b3c3305...96`). Only needed for the 9x target. |
+| `tools\w98ddk\inc` | `SCSI.H` and `SRB.H` from the Windows 98 DDK (`98DDK.EXE`), the Windows 98 SE DDK, or the Windows NT4 DDK | Only these two files. The copies used so far came with SweetLow's `nvme2k-src.zip` (sha256 `809d57e6...b7` and `4b3c3305...96`; in full, `SCSI.H` 36,501 bytes `809d57e6756de21524930eb4d17840ab3047c7e1773da634ceb73a81ff8d39b7`, `SRB.H` 21,056 bytes `4b3c3305686f2593ceb471ae69f1d690de5d833c8f2047859d735b21affd8396`). Only needed for the 9x target. |
 
 `tools\ntddk\bin\ddkvars.bat` (local, not part of the DDK):
 

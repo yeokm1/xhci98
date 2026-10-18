@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> Since 2026-10-19 Stor98 lives in the xhci98 repository as `src/stor98/`; xhci98's commit rule applies to it (no attribution trailer in commit messages), overriding "Commits" below, and the rest of this file still governs Stor98's technical rules.
+
 Guidance for AI agents and contributors working in this repository.
 
 ## What this is

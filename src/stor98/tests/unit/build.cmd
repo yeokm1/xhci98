@@ -10,11 +10,14 @@ rem every test passed.
 
 setlocal
 for %%I in ("%~dp0..\..") do set "REPO=%%~fI"
-set "MSVC=%REPO%\tools\MSVC600"
+rem The kits root, as scripts\build.cmd finds it (STOR98_TOOLS)
+if not defined STOR98_TOOLS if exist "%REPO%\tools\" set "STOR98_TOOLS=%REPO%\tools"
+if not defined STOR98_TOOLS for %%I in ("%REPO%\..\..\tools") do set "STOR98_TOOLS=%%~fI"
+set "MSVC=%STOR98_TOOLS%\MSVC600"
 set "PATH=%MSVC%\VC98\Bin;%MSVC%\Common\MSDev98\Bin;%PATH%"
 set "LIB=%MSVC%\VC98\Lib"
-set "DDKINC=%REPO%\tools\ntddk\inc"
-set "W98INC=%REPO%\tools\w98ddk\inc"
+set "DDKINC=%STOR98_TOOLS%\ntddk\inc"
+set "W98INC=%STOR98_TOOLS%\w98ddk\inc"
 set "OUT=%REPO%\out\unit"
 if not exist "%OUT%" mkdir "%OUT%"
 set "FAILED="

@@ -63,7 +63,10 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
 
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$SignTool = Join-Path $Repo "tools\WinDDK71\bin\x86\SignTool.exe"
+# The kits root, as scripts\build.cmd finds it: STOR98_TOOLS, else tools\ here,
+# else the tools\ of the xhci98 tree that holds Stor98 as src\stor98.
+$Tools = if ($env:STOR98_TOOLS) { $env:STOR98_TOOLS } elseif (Test-Path -LiteralPath (Join-Path $Repo "tools") -PathType Container) { Join-Path $Repo "tools" } else { [System.IO.Path]::GetFullPath((Join-Path $Repo "..\..\tools")) }
+$SignTool = Join-Path $Tools "WinDDK71\bin\x86\SignTool.exe"
 . (Join-Path $PSScriptRoot "testsign-common.ps1")
 function Fail([string]$Message) { throw "sign-x64: $Message" }
 
