@@ -3,9 +3,11 @@
  * object, so the import allowlists can hold them to it (SITES=cm_pool.obj;
  * the HCD's rule of design record 13 section 7.5, as uas_mem.c applies it
  * to xhciuas.sys). Nonpaged pool only, at lifetime-scoped sites, never per
- * frame; nothing allocates pool yet (the NHI's state is its device
- * extension), so the linker drops CmAlloc and CmFree and the allowlists
- * carry the pool pair as optional rows.
+ * frame. The NHI's own state is its device extension; what is allocated
+ * is the stor98 link-state table (cm_nvlinkos.c), on Windows 98 SE and ME
+ * the CONFIGMG thunks and worker (cm_cfgmg.c, cm_cfgwk.c), and the query
+ * device's names (freed in cm_qryos.c), so the allowlists carry the pool
+ * pair as required rows.
  *
  * The ring block (record 21 section 4.2): one common buffer of
  * CM_NHI.DmaBytes - TBT_RING_DMA_BYTES for the ICM client's ten-entry

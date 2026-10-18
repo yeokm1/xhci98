@@ -185,7 +185,7 @@ $targetIds = @($targetIds | Sort-Object -Unique)
 # this configuration lists: a local config written before a target was added
 # (xp64-fresh and win7-fresh, 2026-09-18) must still validate a run of the
 # targets it does have. The tracked sample is the list of supported targets, so
-# a key in neither is still refused as a typo (Codex review of fcbf9a1).
+# a key in neither is still refused as a typo (commit fcbf9a1).
 $noDriverKeys = @($targetIds)
 $samplePath = Join-Path $PSScriptRoot "config.sample.psd1"
 if (Test-Path -LiteralPath $samplePath) {
@@ -366,7 +366,8 @@ function Add-RowBackends {
     }
     foreach ($cmd in $wanted) {
         if ($script:backendsAdded.ContainsKey($cmd)) { continue }
-        # **Cached only if it actually took** (repo audit D4).  The cache exists
+        # **Cached only if it actually took** (an earlier repository audit).
+        # The cache exists
         # to stop a second `netdev_add` for the same id, and it used to record
         # the attempt rather than the outcome - so a backend QEMU REFUSED was
         # remembered as present, every later row that needed it skipped the
@@ -658,8 +659,8 @@ function Invoke-AttachLeg {
         # stopped.  Demonstrated by killing QEMU inside this window.
         #
         # WITH THE PUMP, THE GUEST HAS TO COMPLETE A TRANSFER TOO.  A
-        # bugchecked guest still takes timer interrupts (the 2026-09-17
-        # audit's D2), so on a group that has the keep-alive the probe is
+        # bugchecked guest still takes timer interrupts (the audit of
+        # 2026-09-17), so on a group that has the keep-alive the probe is
         # also handed its `transfers completed` and the pump to drive it.
         $probeArgs = @{}
         if ($Pump) {
@@ -809,8 +810,8 @@ foreach ($tgt in $targetsToRun) {
         # backends and not `-blockdev` nodes, which is what these three are
         # below, so a storage row writes persistent state - a partition table,
         # a format - that every later group and every later run inherited, and
-        # a row was then measuring a disk a previous row had written (the
-        # 2026-09-17 audit's D3).  [IO.File]::Create truncates, so this is a
+        # a row was then measuring a disk a previous row had written (the audit
+        # of 2026-09-17).  [IO.File]::Create truncates, so this is a
         # fresh sparse 64 MB file each time.
         $scratchDrive = Join-Path $OutDir ("matrix-{0}-scratch.img" -f $tag)
         $fs = [IO.File]::Create($scratchDrive); $fs.SetLength(64MB); $fs.Close()
@@ -843,7 +844,7 @@ foreach ($tgt in $targetsToRun) {
             # it is unplugged, so the post-release run's replug leg (the same
             # `device_add ... drive=matrixdrv` after a `device_del`) answered
             # `Property 'usb-storage.drive' can't find value 'matrixdrv'` on
-            # every storage row (repo audit S-1).  A node name declared with
+            # every storage row (an earlier repository audit).  A node name declared with
             # -blockdev is accepted by `drive=` and survives the unplug;
             # verified guestless on QEMU 11.0.0 for usb-storage, usb-bot and
             # usb-uas with their scsi-hd children, twice each.
@@ -874,7 +875,8 @@ foreach ($tgt in $targetsToRun) {
             # guestless QEMU took 16 s+ by default and about 1 s with `none`.
             # The row plays nothing (its expectations are inert), so `none`
             # measures the same thing; prepare-image.ps1 has used it since
-            # repo audit D4.  The usb-audio row's AddArgs names this id.
+            # an earlier repository audit.  The usb-audio row's AddArgs names
+            # this id.
             "-audiodev", "none,id=matrixaud",
             # ONE -trace argument with both keys.  QEMU keeps the LAST -trace, so
             # `-trace events=X -trace file=Y` silently discards the event list
@@ -889,8 +891,8 @@ foreach ($tgt in $targetsToRun) {
         # launch then carried a bare `-accel` with the next argument as its
         # value - a dangling switch that eats `-smp` or `-drive` and fails with
         # a message about the wrong option. Every tracked config has the key,
-        # which is why it survived; a hand-written one need not (the 2026-09-07
-        # audit's H25).
+        # which is why it survived; a hand-written one need not (the audit of
+        # 2026-09-07).
         if ($tgt.ContainsKey('Accel') -and $null -ne $tgt.Accel -and "$($tgt.Accel)" -ne "") {
             $args += @("-accel", "$($tgt.Accel)")
         }
@@ -935,13 +937,15 @@ foreach ($tgt in $targetsToRun) {
         $groupError = ""
         $rowInFlight = ""
         # EVERY ROW IS "BEHIND" UNTIL THE LOOP BELOW REACHES IT. The first cut
-        # of the H20 fix started this empty and filled it only inside the row
+        # of the fix after the audit of 2026-09-07 started this empty and
+        # filled it only inside the row
         # loop, which left the failures that happen BEFORE the first row -
         # the monitor never answering, the driver never starting, the offset
         # table stale, the guest dead out of the boot - counting exactly one
         # row and nothing not reached. Those are the commonest group-level
-        # failures there are, and they are the ones the audit's own example
-        # was: a failed HID boot must read as the group's whole row count, not
+        # failures there are, and they are what that audit gave as its
+        # example: a failed HID boot must read as the group's whole row count,
+        # not
         # as one.
         $rowsBehind = @($grp.Rows)
         try {
@@ -987,7 +991,7 @@ foreach ($tgt in $targetsToRun) {
             if ($null -eq $ident -or $null -eq $ident.Va) {
                 # The leaf name, not the absolute path: this reading reaches
                 # the diffable report body, where an absolute path is a
-                # per-host difference (the 2026-09-17 audit's D10).
+                # per-host difference (the audit of 2026-09-17).
                 $want = if ($isHcd) { "`counters start= / size= / VA low=` record" } else { "`cb ... a=<VA>` line" }
                 throw ("no {2} in {0} after {1} s. Either the guest did not boot, or the driver did not load, or it is not the QEMU build - since task 13-L.1 the port-0xE9 trace exists only in that flavour, so a `debug` guest produces this exact silence. Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu, then prepare-image.ps1 -Xfer." -f (Split-Path -Leaf $dbgLog), $tgt.BootSeconds, $want)
             }
@@ -1093,7 +1097,7 @@ foreach ($tgt in $targetsToRun) {
                 # the fact that the group holds exactly one.
                 $rowInFlight = $row.Name
                 # And WHICH ROWS ARE STILL BEHIND IT, for the tally in the
-                # catch below (the 2026-09-07 audit's H20). The rows a group
+                # catch below (the audit of 2026-09-07). The rows a group
                 # never reached because it ended early have to be counted, or
                 # the target's own report understates what it did not measure -
                 # a failed HID boot on 2b read as twelve rows and none not
@@ -1236,13 +1240,13 @@ foreach ($tgt in $targetsToRun) {
                     # composite row's pinned reading (design record 09 section
                     # 4.1) whether the wedge ended the group or only this row's
                     # leg, so the declaration is read here as well as in the
-                    # group-failure path below (repo audit S-3).
+                    # group-failure path below (an earlier repository audit).
                     $rowWedgeDeclared = $false
                     if ($row.ContainsKey('MayWedgeGuest')) {
                         $rowWedgeDeclared = Test-TargetInList -List $row.MayWedgeGuest -Target $tgt
                     }
                     # ...and waived only when what happened IS a wedge (the
-                    # 2026-09-17 audit's D1).  A declared row whose ERROR is
+                    # audit of 2026-09-17).  A declared row whose ERROR is
                     # something else is printed as such, so the diff shows
                     # the declaration not applying, as an ExpectNoDriver entry
                     # that did not apply is printed above.
@@ -1296,7 +1300,7 @@ foreach ($tgt in $targetsToRun) {
                 $wedgeDeclared = Test-TargetInList -List $rowObj.MayWedgeGuest -Target $tgt
             }
             # AND WHETHER WHAT HAPPENED IS A WEDGE, which the declaration alone
-            # cannot say (the 2026-09-17 audit's D1): the monitor gone with the
+            # cannot say (the audit of 2026-09-17): the monitor gone with the
             # row in flight is that shape, and so is a guest the liveness
             # probe finds stopped; a guest still executing behind a thrown
             # counter read or monitor timeout is not, and the declaration then
@@ -1341,7 +1345,8 @@ foreach ($tgt in $targetsToRun) {
             }
 
             # **The rows this group never measured**, which used to vanish
-            # (audit H20). `lib\fresh.ps1` says `Rows` includes rows "never
+            # (the audit of 2026-09-07). `lib\fresh.ps1` says `Rows` includes
+            # rows "never
             # reached because the group ended early" and that both add to
             # `NotReached`; only the row in flight was ever added, so the count
             # of what a run did not measure was short by the whole tail of
@@ -1419,7 +1424,7 @@ foreach ($tgt in $targetsToRun) {
         # switch but about the report: `New-PostReleaseHeader -Accel` is a
         # mandatory string, so a target with no `Accel` key reached it with
         # $null and THREW - after the whole run, before the report was written,
-        # losing everything the run measured (the 2026-09-16 audit's D2).
+        # losing everything the run measured (the audit of 2026-09-16).
         $accel = if ($tgt.ContainsKey('Accel') -and $null -ne $tgt.Accel -and "$($tgt.Accel)" -ne "") {
             "$($tgt.Accel)"
         } else {
@@ -1516,7 +1521,7 @@ if ($bad -gt 0) { exit 1 }
 # line and `$report.Count` is nonzero.  The F11 fix that closed this - and the
 # reasoning behind `Get-TargetVerdict`, which is where it lives - was applied
 # only on the -PostRelease path, while design record 06 and the README state
-# the rule generally (the 2026-09-16 audit's D1).
+# the rule generally (the audit of 2026-09-16).
 #
 # Not reachable with the tracked `matrix.psd1`, where no target excludes every
 # row.  It is a property of the runner rather than of the configuration, and a

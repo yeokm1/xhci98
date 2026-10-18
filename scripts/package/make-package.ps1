@@ -311,7 +311,7 @@ refusal lived at build time in three places (on branch 1.2.0.0): src\sources ref
 XHCI_EXTRA_DEFINES that was not exactly -DXHCI_FAIL_START_CONTROLLER (which bound
 a bare `build` from a DDK prompt), scripts\build-driver.cmd refused it earlier
 with a fuller message, and src\xhci_dispatch.c carried an #error for the one
-other define this tree documents. Review finding 2, round 2 finding 4.
+other define this tree documents.
 
 Mutually exclusive with -UnpaddedDriverVerExperiment.
 
@@ -491,7 +491,7 @@ $OutDir = [System.IO.Path]::GetFullPath($OutDir)
 # directory below is named by appending a suffix to this string, so with
 # `-OutDir out\pkg-debug\` it would be `out\pkg-debug\.staging-xxx` - a *child*
 # of the destination rather than a sibling, and the swap would then delete its
-# own source. Review round 2 finding 1. A path root keeps its separator: "E:\"
+# own source. A path root keeps its separator: "E:\"
 # trimmed is "E:", which names the current directory on that drive.
 #
 if ($OutDir.Length -gt [System.IO.Path]::GetPathRoot($OutDir).Length) {
@@ -499,7 +499,8 @@ if ($OutDir.Length -gt [System.IO.Path]::GetPathRoot($OutDir).Length) {
 }
 #
 # **And the volume-or-repository-root refusal is made HERE**, not at the swap
-# (repo audit D6). The crafted message below is the one a caller who typed
+# (an earlier repository audit). The crafted message below is the one a caller
+# who typed
 # `-OutDir E:\` needs, and it was unreachable: staging runs first and calls
 # `Ensure-Directory (Split-Path -Parent $OutDir)`, which for a volume root is
 # `Ensure-Directory ""` - a parameter-binding error, with no explanation of what
@@ -610,7 +611,7 @@ a signed input is a binary nobody can tie to a build. Rebuild it:
             $left.Count, $Label)
         foreach ($n in $left) {
             # Apostrophes doubled, so the printed line pastes as written
-            # whatever the profile path holds (review round 8).
+            # whatever the profile path holds.
             Write-Warn ("  Remove-Item -LiteralPath '{0}' -Force" -f (Join-Path $after.Dir $n).Replace("'", "''"))
         }
     }
@@ -633,7 +634,7 @@ $gateExtra = @()
 $variantDir = ""
 #
 # Everything is staged here and moved into $OutDir only once every gate has
-# passed. Review finding 1: the packager used to copy straight into
+# passed. The packager used to copy straight into
 # $OutDir, so a run that failed *after* staging left a directory holding a
 # mixture of the new files and whatever was there before - and the only thing
 # that distinguishes a good package from a half-written one, once the run has
@@ -650,7 +651,7 @@ try {
     Write-Step ("Package ({0}, {1}) -> {2}" -f $Flavor, $Arch, $OutDir)
 
     #
-    # Review finding 4: the two special modes are not composable.
+    # The two special modes are not composable.
     # Each exists to vary exactly one thing against the ordinary package - the
     # driver's behaviour (12.3) or the INF's date padding (12.4) - and a package
     # varying both answers neither question while looking like it answers one.
@@ -1158,7 +1159,7 @@ The x86 package carries the x86 helper its INF names. Build it first
             # src\hlpr\obj<alt>\i386\xhcihlpr.sys), must name the WXP target
             # and lib\wxp\i386 and be the log of this very link, and the
             # image's header must be native 5.00, aligned 0x80, checksummed
-            # (review of 38.3, round 1).
+            # (task 38.3).
             $hlprObjDir = Split-Path -Parent (Split-Path -Parent $HlprDriverPath)
             $hlprLog = Join-Path (Split-Path -Parent $hlprObjDir) ("build" + ((Split-Path -Leaf $hlprObjDir) -replace '^obj', '') + ".log")
             if (-not (Test-Path -LiteralPath $hlprLog)) {
@@ -1205,7 +1206,7 @@ The x86 package carries the x86 helper its INF names. Build it first
     # After the import gates and before staging. The import gates read the
     # build where it was linked, because their SITES rule needs the objects
     # (or, for LTCG objects, the sources) beside the image, which a copy in
-    # a temporary folder does not have (review round 1). What the gates read
+    # a temporary folder does not have. What the gates read
     # is nevertheless what ships: each signed copy is held to the build byte
     # for byte apart from the checksum, the certificate-table entry and the
     # appended table (Invoke-TestSign), none of which the import table, the
@@ -1513,8 +1514,8 @@ a build that was never made.
     # paying for a host suite and a link. What is left here is the
     # foreign-directory question, which needs the staged package to exist.
     # There was a second copy of the root refusal in this block, unreachable
-    # behind the early one and therefore untestable (the 2026-09-16 audit's
-    # D6); the file-not-directory check below is NOT a duplicate and stays.
+    # behind the early one and therefore untestable (the audit of 2026-09-16);
+    # the file-not-directory check below is NOT a duplicate and stays.
     #
     $retired = ""
     if (Test-Path -LiteralPath $OutDir) {
@@ -1523,7 +1524,7 @@ a build that was never made.
         }
         #
         # **What counts as "a package this script made" is every entry, not one
-        # of them.** Round 2 finding 2: testing only for xhci98.inf at the root
+        # of them.** Testing only for xhci98.inf at the root
         # calls a transfer directory holding a package *and* a README.TXT ours,
         # and then deletes the README. So the destination is compared against
         # what this run just staged: anything it does not also contain is
@@ -1548,7 +1549,7 @@ that does not exist, or clear that one yourself.
 "@
         }
         #
-        # Retire by rename, not by delete. Round 2 finding 2: a recursive
+        # Retire by rename, not by delete. A recursive
         # delete mutates the old package one child at a time, so a single open
         # handle - Explorer, a scanner, a guest's vvfat mount - can leave it
         # half-removed with the replacement not yet in place. A rename either

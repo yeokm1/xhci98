@@ -236,5 +236,5 @@ a new `DriverVer`).
   p.199-200.
 - `external/linux/xhci-ring.c`, `xhci_queue_isoc_tx` and
   `xhci_queue_isoc_tx_prepare`.
-- `docs/contributing/runs/run-26.md`, round 16 of the batch (c) review, where
-  the refusal was chosen.
+- `docs/contributing/runs/run-26.md`, the batch (c) record of the fix in
+  `7df3809`, where the refusal was chosen.

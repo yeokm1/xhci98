@@ -190,10 +190,20 @@ static void test_platform(void)
     CHECK_EQ(g_fake.CfgWrites, 0, "nothing written");
 }
 
+/* Every selection, and so every inert reason, is held to writing
+ * nothing: no BAR0 register and no configuration dword. */
 static void doSelect(const TBT_HW_PROFILE *hw, BOOLEAN ready, BOOLEAN apple,
                    BOOLEAN force, TBT_HW_SELECTION *s)
 {
+    unsigned long writes = g_fake.Writes;
+    unsigned long cfgWrites = g_fake.CfgWrites;
+
     TbtHwSelect(hw, &g_fakeHost, ready, apple, force, s);
+    if (s->Outcome == TBT_SEL_INERT) {
+        CHECK_EQ(g_fake.Writes, writes, "an inert selection writes no register");
+        CHECK_EQ(g_fake.CfgWrites, cfgWrites,
+                 "an inert selection writes no configuration dword");
+    }
 }
 
 static void test_select(void)
@@ -227,6 +237,11 @@ static void test_select(void)
     g_fake.Outmail = 0x800002F5UL;
     doSelect(ar, TRUE, FALSE, FALSE, &s);
     CHECK_EQ(s.Reason, TBT_INERT_MODE, "endpoint mode: inert");
+    fakeReset();
+    g_fake.Outmail = 0x800007F5UL;
+    doSelect(ar, TRUE, FALSE, FALSE, &s);
+    CHECK_EQ(s.Outcome, TBT_SEL_INERT, "mode 7: inert");
+    CHECK_EQ(s.Reason, TBT_INERT_MODE, "mode 7: the mode reason");
 
     fakeReset();
     g_fake.FwStatus = 0x800001A0UL;

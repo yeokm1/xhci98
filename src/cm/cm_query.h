@@ -21,8 +21,9 @@
 /* The device: \Device\XhciCm<n>, linked as \DosDevices\XHCICM<n> (created
    in the start IRP's system context, so global on XP and later), n the
    first free of 0..15; its name "XHCICM<n>" as REG_SZ CM_Q_NAME_VALUE in
-   the NHI's hardware key, written after the link and deleted before it.
-   A reader trusts the mapping only when the answer's instance id equals
+   the NHI's hardware key, written after the link and written empty before
+   it goes (ZwDeleteValueKey has no Windows 98 evidence; cm_qryos.c). An
+   empty value is no query device. A reader trusts the mapping only when the answer's instance id equals
    the devnode it read the value from (CM_Q_O_ID_*). */
 #define CM_Q_MAX_DEVICES        16UL
 #define CM_Q_NAME_VALUE         "XhciCmQueryName"

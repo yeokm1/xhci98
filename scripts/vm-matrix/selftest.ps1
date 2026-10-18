@@ -199,7 +199,8 @@ foreach ($lbl in @($script:DriverRefusalLabelsPermanent) + @($script:DriverRefus
     try { Resolve-CounterLabel -Table $table -Label $lbl | Out-Null } catch { $threw = $true }
     Assert ("refusal label '{0}' resolves" -f $lbl) $false $threw
 }
-# F3, the audit's exact vector: EP0 is the one accepted open, the function
+# F3, the exact vector of the 2026-09-05 audit: EP0 is the one accepted open,
+# the function
 # driver's open was refused by the ring pool, `endpoints opened` stays 0, the
 # identity holds.  The only failed expectation is the row's bind clause.
 $f3 = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoint opens seen' = 2; 'endpoint opens accepted' = 1; 'endpoint refusals - ring pool' = 1 }
@@ -455,7 +456,7 @@ Write-Host "--- MayWedgeGuest must be read, and a typo in it must not pass ---"
 # Driven through `Test-TargetInList`, which is what run-matrix.ps1 calls - a
 # `Test-RowMayWedge` beside it answered the same question by exact Id only and
 # was called by this self-test and by nothing else, so the harness was checking
-# the answer it does not use (the 2026-09-16 audit's D4).
+# the answer it does not use (the audit of 2026-09-16).
 $wedgeRow = @{ Name = 'usb-audio/fs'; MayWedgeGuest = @('2a') }
 Assert "a declared target is recognised"   $true  (Test-TargetInList -List $wedgeRow.MayWedgeGuest -Target @{ Id = '2a' })
 Assert "an undeclared target is not"       $false (Test-TargetInList -List $wedgeRow.MayWedgeGuest -Target @{ Id = '2b' })
@@ -548,7 +549,7 @@ Assert "an expected NODRIVER does not"                 $false (Test-RowCountsAga
 Assert "a refusal is not waived by ExpectNoDriver"     $true  (Test-RowCountsAgainst -Outcome (Get-Outcome $mouseTexts (New-Delta $f3)) -NoDriverExpected $true)
 Assert "an undeclared wedge (ERROR) counts"            $true  (Test-RowCountsAgainst -Outcome "ERROR")
 Assert "a declared wedge (the pinned reading) does not" $false (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $true -WedgeShape $true)
-# The 2026-09-17 audit's D1: the declaration is keyed on the row, and it used
+# The audit of 2026-09-17: the declaration is keyed on the row, and it used
 # to waive ANY error on that row - a refused device_add, a device never on the
 # bus, an unconfirmed device_del, identity drift, a monitor timeout.  It
 # licenses one shape, and both halves are required.
@@ -561,7 +562,7 @@ Assert "an unknown is not either"                      $false (Test-WedgeShape -
 
 Write-Host "--- the liveness verdict: a ticking PIT is not a running kernel ---"
 #
-# The 2026-09-17 audit's D2.  A bugchecked guest reads `running` with an
+# The audit of 2026-09-17.  A bugchecked guest reads `running` with an
 # `info irq` delta, because the PIT raises IRQ0 whether or not a halted kernel
 # services it; with the keep-alive pump's `transfers completed` handed in as
 # the sign of life, that guest has to complete a transfer too.  Without a
@@ -583,8 +584,7 @@ Write-Host "--- ...and the sign of life is read off the snapshot the way Read-Co
 # is `Get-KeepAliveTransfers -Snapshot (Read-Counters ...) -Table $table`, so
 # it is driven here against a snapshot shaped exactly like that return, with
 # the real table: a callback indexing the wrong object or the wrong key would
-# read $null, cast to 0, and every pumped row would read as a dead guest
-# (Codex review round 1 on the 2026-09-17 audit's D2).
+# read $null, cast to 0, and every pumped row would read as a dead guest.
 $lifeSnap = [pscustomobject]@{ Values = @{ 'TransfersCompleted' = [int64]7; 'TransfersSubmitted' = [int64]9 }; Unread = 0; Read = 2 }
 Assert "the field is read from .Values by its raw name" 7 (Get-KeepAliveTransfers -Snapshot $lifeSnap -Table $table)
 $lifeCb = { Get-KeepAliveTransfers -Table $table -Snapshot $lifeSnap }.GetNewClosure()
@@ -611,7 +611,7 @@ Write-Host "--- the snapshot reader must fail on qemu-img's exit code, not read 
 #
 # A source image held by a running QEMU, a missing DLL and a corrupt qcow2 all
 # leave qemu-img with an empty listing and a nonzero exit, and the run read the
-# empty listing as "carries no base- stamp" (repo audit S-5).  A stand-in
+# empty listing as "carries no base- stamp" (an earlier repository audit).  A stand-in
 # qemu-img here plays both parts: one prints a listing and exits 0, the other
 # prints the lock refusal on stderr and exits 1.
 $fakeDir = Join-Path $env:TEMP ("xhci98-selftest-qemuimg-{0}" -f $PID)
@@ -728,8 +728,9 @@ Assert "every row not reached is FAIL (F11)"   "FAIL" (Get-TargetVerdict -Tally 
 Assert "one row reached, nothing against, is PASS" "PASS" (Get-TargetVerdict -Tally @{ Rows = 3; NotReached = 2; Against = 0 })
 Assert "one row reached and against is FAIL"   "FAIL" (Get-TargetVerdict -Tally @{ Rows = 3; NotReached = 2; Against = 1 })
 
-Write-Host "--- a group-level failure counts the rows it never measured (H20) ---"
-# The audit's own example: a seventeen-row group whose fifth row was in flight
+Write-Host "--- a group-level failure counts the rows it never measured ---"
+# The example the audit of 2026-09-07 gave: a seventeen-row group whose fifth
+# row was in flight
 # owes twelve unreached rows, not zero.
 $midGroup = Get-GroupFailureTally -GroupRows 17 -Reached 5 -RowInFlight $true
 Assert "a row in flight owns the ERROR line"   1  ($midGroup.Rows - $midGroup.NotReached)
@@ -858,7 +859,7 @@ $esc = [string][char]27
 Assert "...also under readline escapes"               $true  (Test-MonitorReplyComplete -Raw ($esc + "[K(qemu) " + $esc + "[D"))
 Assert "a reply without the prompt is not"            $false (Test-MonitorReplyComplete -Raw "Device 0.0, Port 2, ID: dut1`r`n")
 Assert "an absent reply is not"                       $false (Test-MonitorReplyComplete -Raw $null)
-# H19, the half no timeout can see: the banner's own prompt still in the
+# The half no timeout can see: the banner's own prompt still in the
 # buffer when the command goes out. Without -RequireEcho that reads complete
 # and the caller gets an empty answer, which for `info usb` is a departure
 # that never happened.
@@ -870,7 +871,7 @@ Assert "the echo with no prompt after it is not"      $false (Test-MonitorReplyC
 Assert "a plain path is sent as it is"                'C:\out\x.ppm' (ConvertTo-HmpArgument -Text 'C:\out\x.ppm')
 Assert "a path with a space is quoted with forward slashes" '"C:/out dir/x.ppm"' (ConvertTo-HmpArgument -Text 'C:\out dir\x.ppm')
 # chardev-add: HMP quotes WHOLE arguments, so a spaced path must quote the
-# whole option string, not the value after path= (Phase 20 review, round 2,
+# whole option string, not the value after path= (Phase 20,
 # probed against QEMU 11); a comma cannot be carried and is refused.
 Assert "a chardev-add with a plain path is unquoted"  'chardev-add file,id=matrixchr1,path=C:\out\m.log' (New-ChardevAddCommand -Id 'matrixchr1' -Path 'C:\out\m.log')
 Assert "a chardev-add with a spaced path quotes the whole option string" 'chardev-add "file,id=matrixchr1,path=C:/out dir/m.log"' (New-ChardevAddCommand -Id 'matrixchr1' -Path 'C:\out dir\m.log')
@@ -947,7 +948,7 @@ Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
     'xhci98: StartController extension VA low=CE31A008')
 Assert "two amd64 loads are a span"             $true (Find-ExtensionIdentity -DebugconLog $idLog -Arch amd64).Spans
 # A boot poll that lands between the callback line and the low half: on amd64
-# the truncated a= must never become the identity (Codex review of fcbf9a1).
+# the truncated a= must never become the identity (commit fcbf9a1).
 Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
     'xhci98: cb StartController irql=00 a=CE2F5DC8 b=0012F000 c=00000000'
     'xhci98: StartController extension VA high=FFFFFADF')

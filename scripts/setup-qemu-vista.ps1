@@ -45,7 +45,7 @@ Vista editions, so that identity does not rest on the edition alone.
 
 .PARAMETER VistaIso
 The Windows Vista SP2 32-bit DVD image. Empty by default, like every other ISO
-parameter in these scripts (the 2026-09-07 audit's J3): a default naming one
+parameter in these scripts (the audit of 2026-09-07): a default naming one
 host's media is a tracked file that names nothing on any other host. The
 generated launchers carry the "edit this file or pass -VistaIso" guard.
 

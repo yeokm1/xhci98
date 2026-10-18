@@ -1,5 +1,14 @@
 # Windows 98/2000 WDM Constraints
 
+> **Written while `xhci98.sys` was a `usbport.sys` miniport** (to `1.2.0.0`,
+> whose sources are on branch `1.2.0.0`). The WDM constraints bind the
+> successor HCD of `2.0.0.0` onward unchanged - it is a WDM driver on the
+> same targets, with the same import ceiling. Where this page names usbport
+> as the stack above the driver, the integration decision for Option A, a
+> miniport callback or a file that left the tree with the miniport
+> (`xhci_dispatch.c`, `xhci_rh.c`, `xhci_slot.c`, `xhci_probe.c`), it
+> describes the miniport; the HCD's architecture is design record 13.
+
 "Oney p.N" citations in the project refer to Walter Oney, *Programming the
 Microsoft Windows Driver Model*, 2nd ed. (2003), using the page number printed
 in the book. In the reviewed PDF, the corresponding PDF page index is printed
@@ -620,13 +629,13 @@ build breaks or silent bugs:
 | Declarations after statements | Declare every variable at the top of its block |
 | `//` comments | `/* */` only (project rule; keeps any C89 tool happy) |
 | `stdint.h` (`uint32_t` ...) | `ULONG`/`USHORT`/`UCHAR` from `ntddk.h` |
-| Variadic macros (`#define P(...)`) | Fixed-arity macros. This driver's trace API is `XHCI_DBG_TEXT`/`XHCI_DBG_VALUE`/`XHCI_DBG_WORDS`/`XHCI_DBG_CB` (`src/xhci_dbg.h`), compiled under `#ifdef XHCI_DBG_TRACE` (never spelled `#if DBG`), and `DbgPrint` is only ever called as `DbgPrint("%s", line)`. `XHCI_DBG_TRACE` is not an escape from `DBG`: `src/xhci_dbg.h` defines it as `DBG && defined(XHCI_DBG_LIVE)`, so it is a narrowing of `DBG` to the `qemu` flavour alone. Writing `#if DBG` instead is what left two `src/xhci_probe.c` sites calling functions the `debug` build no longer compiles. There are exactly two `DbgPrint` call sites in the tree: `src/xhci_dbg.c`, under `XHCI_DBG_TRACE`, and `src/xhci_dispatch.c`'s PASSIVE-level log-ring flush, which is in every flavour and is the one sanctioned exception `AGENTS.md` names |
+| Variadic macros (`#define P(...)`) | Fixed-arity macros. This driver's trace API is `XHCI_DBG_TEXT`/`XHCI_DBG_VALUE`/`XHCI_DBG_WORDS`/`XHCI_DBG_CB` (`src/xhci_dbg.h`), compiled under `#ifdef XHCI_DBG_TRACE` (never spelled `#if DBG`), and `DbgPrint` is only ever called as `DbgPrint("%s", line)`. `XHCI_DBG_TRACE` is not an escape from `DBG`: `src/xhci_dbg.h` defines it as `DBG && defined(XHCI_DBG_LIVE)`, so it is a narrowing of `DBG` to the `qemu` flavour alone. Writing `#if DBG` instead is what left two sites of the miniport's `xhci_probe.c` (branch `1.2.0.0`) calling functions the `debug` build no longer compiled. There are exactly three `DbgPrint` call sites in the tree, each `DbgPrint("%s", line)`: `src/xhci_dbg.c`, under `XHCI_DBG_TRACE`; `src/hcd_log.c`'s PASSIVE-level log-ring emit, which is in every flavour and is the one sanctioned exception `AGENTS.md` names (on `1.2.0.0` it was `xhci_dispatch.c`'s flush); and its counterpart in the connection manager, `src/cm/cm_log.c` |
 | Designated initializers (`.field =`) | Positional initializers, or explicit assignments (preferred for the registration packet - order mistakes stay visible) |
 | `inline` | `__inline` (MSVC extension, works in C) |
 | `bool` | `BOOLEAN` with `TRUE`/`FALSE` |
 | `for (int i = ...)` | Declare `i` at block top |
 | Compound literals | Named temporaries |
-| `snprintf`/CRT anything | No CRT in kernel mode, and no `Rtl*` memory/string calls either: `RtlZeroMemory`/`RtlCopyMemory` expand to `memset`/`memcpy`, CRT symbols no allowed module provides, so the import gate fails the build. Write the loop by hand (`src/xhci_dispatch.c` and `src/xhci_desc.c` show the pattern); `DbgPrint("%s", line)` is the only formatting call, and only at its one sanctioned sink |
+| `snprintf`/CRT anything | No CRT in kernel mode, and no `Rtl*` memory/string calls either: `RtlZeroMemory`/`RtlCopyMemory` expand to `memset`/`memcpy`, CRT symbols no allowed module provides, so the import gate fails the build. Write the loop by hand (`src/hcd_door.c`'s `hcdZero` and `hcdCopy`, and `src/xhci_desc.c`, show the pattern); `DbgPrint("%s", line)` is the only formatting call, and only at its one sanctioned sink |
 
 Additional hazards:
 

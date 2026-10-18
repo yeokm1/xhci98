@@ -35,7 +35,7 @@ Polling or Compliance with CCS clear and without setting CAS, and Linux
 warm-resets the port (on resume only). This driver waits on a Polling link
 indefinitely, so the lead fitted every symptom, and Phase 35 was first
 planned around it: a reading, link notes, a second reading, a design, and a
-gated fix (`XhciMissingCas`).
+gated fix, planned under the name XhciMissingCas and never written.
 
 The first reading (task 35.0) set it aside. The link was never stuck.
 

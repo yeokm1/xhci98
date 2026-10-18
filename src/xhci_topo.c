@@ -6,13 +6,16 @@
  * machine, and three rules hold throughout:
  *
  *   **It decides nothing itself.** Everything here answers a question; what to
- *   do about the answer is the caller's. Task 7b-A.2 asks `XhciTopoHubMark`
- *   what a hub's own Slot Context should say and issues the command;
- *   task 7b-A.3 asks for a downstream device's position, through
- *   `XhciTopoClaimChild` and `XhciTopoAttachChild` in `src/xhci_slot.c`.
- *   Nothing below returns a status a transfer or a register write depends on.
- *   *(7b-A.3 was written here as a task that "will ask" until the post-Phase 13 review rounds; it
- *   has been landed and consuming this graph since Phase 7b.)*
+ *   do about the answer is the caller's. Under the HCD the hub layer
+ *   (hcd_hub.c, hcd_sshub.c) asks `XhciTopoHubMark` what a hub's own Slot
+ *   Context should say, attaches each hub at the position its own
+ *   enumeration knows (`XhciTopoAttachRoot`, `XhciTopoAttachChild` through
+ *   `XhciTopoChildOf`), and feeds the snoop. The claim calls
+ *   (`XhciTopoClaimChild`, `DropPending`, `SuppressClaim`), `XhciTopoMigrate`
+ *   and `XhciTopoForgetAlternate` were the miniport slot layer's
+ *   (xhci_slot.c, deleted 2026-10-02) and are host-suite-only now
+ *   (test_topo.c). Nothing below returns a status a transfer or a register
+ *   write depends on.
  *
  *   **It never holds a pointer usbport owns.** The reply fold takes bytes the
  *   caller has already read; the caller is the only thing that ever touches a
@@ -502,8 +505,8 @@ ULONG XhciTopoAttachChild(PXHCI_TOPOLOGY topo,
  * the depth of the deepest possible chain in a table of that size.
  *
  * *(The repeated-walk paragraph described `xhciTopoPruneFrom` and sat above
- * this function, which is the one it is actually about - the 2026-09-16 audit's
- * B10.)*
+ * this function, which is the one it is actually about; revised
+ * 2026-09-16.)*
  *
  * IRQL: any.
  */
@@ -600,8 +603,8 @@ VOID XhciTopoDetach(PXHCI_TOPOLOGY topo, ULONG address)
 
 /*
  * See xhci_topo.h for the two obligations. This replaced
- * `XhciTopoRootPortChanged`, which no driver path ever called (Phase 7 review,
- * finding A4): its by-generation discriminator did not survive contact with
+ * `XhciTopoRootPortChanged`, which no driver path ever called (Phase 7): its
+ * by-generation discriminator did not survive contact with
  * the shadow's semantics - a port's generation advances on every claimed
  * operation, not per device tenancy, so a live hub's node stops matching the
  * current generation on the first re-enumeration reset. The keyed detach plus
@@ -623,7 +626,7 @@ VOID XhciTopoMigrate(PXHCI_TOPOLOGY topo, ULONG oldAddress, ULONG newAddress)
      * refuses an address another *record* holds, so a node here can only
      * describe a device that left without its detach running. Pruned with its
      * subtree before it can hand the new device - or any child claimed through
-     * it - the departed hub's position (finding A5).
+     * it - the departed hub's position.
      */
     if (xhciTopoNodeFor(topo, newAddress) != NULL) {
         topo->MigrationsStale++;
@@ -652,7 +655,7 @@ VOID XhciTopoMigrate(PXHCI_TOPOLOGY topo, ULONG oldAddress, ULONG newAddress)
 }
 
 /* ------------------------------------------------------------------ */
-/* Claims                                                              */
+/* Claims - host-suite-only (no driver caller)                         */
 /* ------------------------------------------------------------------ */
 
 /* IRQL: any. */
@@ -683,7 +686,7 @@ ULONG XhciTopoClaimChild(PXHCI_TOPOLOGY topo, PXHCI_TOPO_CHILD out)
         /*
          * Armed, spent, and unanswerable: the node was pruned between the
          * reset and this open, or its position was never learned. Its own
-         * counter (Phase 7 review, B9) because `ClaimsUnarmed`'s declared
+         * counter (Phase 7) because `ClaimsUnarmed`'s declared
          * meaning is "an address-0 open with no pending parent" - the
          * ordinary root-port answer - and folding a consumed claim into it
          * made a channel failure indistinguishable from business as usual.
@@ -767,12 +770,14 @@ static VOID xhciTopoObservePortRequest(PXHCI_TOPOLOGY topo,
     ULONG port;
 
     node = xhciTopoPromote(topo, address);
-    port = (ULONG)setup->wIndex;
+    /* The port is wIndex 7:0: SET_FEATURE(PORT_LINK_STATE) and its siblings
+     * carry a selector in 15:8. */
+    port = (ULONG)setup->wIndex & 0xFFUL;
     selector = (ULONG)setup->wValue;
 
     /*
-     * **Only the three requests whose `wIndex` is a port number** (audit finding
-     * A7). The recipient bits alone do not say that: a hub-class request to
+     * **Only the three requests whose `wIndex` is a port number.** The
+     * recipient bits alone do not say that: a hub-class request to
      * recipient Other also covers `CLEAR_TT_BUFFER` (bRequest 8), whose `wIndex`
      * encodes an endpoint number, device address, endpoint type and direction,
      * and `RESET_TT` / `GET_TT_STATE` / `STOP_TT` beside it. usbhub sends
@@ -857,8 +862,9 @@ static VOID xhciTopoObservePortRequest(PXHCI_TOPOLOGY topo,
     if (snoop != NULL) {
         snoop->Armed = 1;
         /* The armed pair's port, so the caller can ask whether the position it
-         * names is mid-enumeration (finding A6) without re-parsing the setup
-         * packet. Reply stays NONE, so nothing ever folds against this. */
+         * names is mid-enumeration (task 7b-A.1.1) without re-parsing the
+         * setup packet. Reply stays NONE, so nothing ever folds against this.
+         * */
         snoop->Port = port;
     }
 }
@@ -937,9 +943,9 @@ VOID XhciTopoObserveSetup(PXHCI_TOPOLOGY topo,
          * packet*, which `src/xhci_desc.c` reads for the alternate setting's
          * endpoint declarations: "a request the device refused did not change
          * what the device is running". Both readings of one SET_INTERFACE now
-         * wait for the same success. *(Until a later review this case applied MTT
-         * at placement; the descriptor half had been moved to the completion by
-         * its own first review round and this half was not.)*
+         * wait for the same success. *(Until a later revision this case
+         * applied MTT at placement; the descriptor half had been moved to the
+         * completion earlier and this half was not.)*
          */
         return;
 
@@ -1113,7 +1119,7 @@ static ULONG xhciTopoFoldPortStatus(PXHCI_TOPOLOGY topo,
     if (connected) {
         /*
          * **Connected-to-connected with the connect-change bit set is a
-         * departure too** (Phase 7 review, B10). A disconnect and reconnect
+         * departure too** (Phase 7). A disconnect and reconnect
          * between usbhub polls never shows this graph an empty port; the
          * change bit is the only evidence a device left, and without acting
          * on it the old child record would be re-entered for a different

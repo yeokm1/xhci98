@@ -9,7 +9,8 @@
  * against the local spec PDF - never from memory.
  *
  * Two properties hold throughout, and both are the reason this is a file of its
- * own rather than a handful of writes inside src/xhci_slot.c:
+ * own rather than a handful of writes inside the code that issues the
+ * commands (hcd_enum.c, hcd_cfg.c):
  *
  *   - **A value that does not fit its field is refused, not masked.** Every
  *     argument here is this driver's own bookkeeping about a device. A masked
@@ -120,11 +121,10 @@ ULONG XhciBuildInputControlContext(volatile ULONG *context,
      * not depend on the wrong capability, but a reader checking the citation
      * would have found it did not say this.)*
      *
-     * *(This said "issues no Configure Endpoint yet" until the post-Phase 13 review rounds, which has
-     * been false since task 7a-A.1: `src/xhci_slot.c` builds and submits
+     * The driver does issue Configure Endpoint - hcd_cfg.c builds and submits
      * `XhciTrbConfigureEndpoint` for every endpoint open and for the hub
-     * marking. What is still true is the part that matters here - the command
-     * is issued and these three fields are not filled in, whatever CFC says.)*
+     * marking - and what matters here is that these three fields are not
+     * filled in, whatever CFC says.
      */
     return XHCI_CTX_OK;
 }
@@ -329,7 +329,8 @@ ULONG XhciBuildEndpointContext(volatile ULONG *context,
     /*
      * EP State is output-only and "shall be cleared to '0'" in an Input Context
      * (Table 6-8), so the field is left at the zero the clearing loop writes -
-     * MaxPStreams and LSA with it, since this driver uses no streams.
+     * MaxPStreams and LSA with it: a stream endpoint has them set afterwards
+     * by XhciStreamEndpointContext (31-A.1).
      */
     dw0 = params->Mult << XHCI_EP_MULT_SHIFT;
     dw0 |= params->Interval << XHCI_EP_INTERVAL_SHIFT;

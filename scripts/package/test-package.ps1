@@ -77,8 +77,9 @@ function Invoke-Packager {
     }
     $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $packager) + $Arguments
     # ErrorActionPreference relaxed across the call, as
-    # `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin (repo audit
-    # D5): a native command's stderr line becomes an ErrorRecord in Windows
+    # `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin (an
+    # earlier repository audit):
+    # a native command's stderr line becomes an ErrorRecord in Windows
     # PowerShell 5.1, and under "Stop" the first one aborts this self-test with
     # an empty message - on a harness whose whole job is to drive the packager
     # into its refusal paths and read what it said.
@@ -481,8 +482,8 @@ try {
 
     # The files themselves. Every line is held to a short list of the commands
     # both interpreters run, rather than searched for constructs one of them
-    # lacks: a list of forbidden words misses the one nobody listed (review
-    # round 1 found four such escapes). The only lines outside that list are
+    # lacks: a list of forbidden words misses the one nobody listed (four such
+    # escapes were found that way). The only lines outside that list are
     # the split's: the OS test, and the cd /d that only cmd.exe reaches.
     function Get-PswBatchFaults {
         param([string]$Text, [string]$Value)
@@ -561,7 +562,7 @@ try {
             continue
         }
         # Bytes, then Latin-1: ReadAllText would consume a BOM, or decode a
-        # UTF-16 file into clean text (review round 2).
+        # UTF-16 file into clean text.
         $batText = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($batSrc))
         $faults = @(Get-PswBatchFaults -Text $batText -Value $bat.Value)
         Assert-True ($faults.Count -eq 0) ("src\$($bat.Name):`n  " + ($faults -join "`n  "))
@@ -686,8 +687,8 @@ try {
     # portsw-on.bat's are. Each batch runs its tool once, by name, with the
     # one command line the task fixes - SNAPON.BAT's and SNAPGET.BAT's end in
     # %1, passed on as it came for the tool to default and check (owner,
-    # 2026-10-13: an optional level, an optional name; Codex review of 38.1,
-    # round 3: no `if` on it); no batch names a drive path or reads a
+    # 2026-10-13: an optional level, an optional name; task 38.1: no `if` on
+    # it); no batch names a drive path or reads a
     # percent variable other than that one %1 (COMMAND.COM on 98 SE and ME
     # has no %DATE% or %TIME%, and
     # cmd.exe's follow the locale, which is why the tools build the names);
@@ -800,7 +801,7 @@ try {
         if ($spec.ContainsKey("ArgPass")) {
             # %1 passes on the one run line alone, as it came, and nothing
             # tests it; %2, %0, %*, %~1, %DATE% and %1 anywhere else are
-            # refused (Codex review of 38.1, round 3).
+            # refused (task 38.1).
             $mutants += @{ Why = "an if on %1";          Text = $fx.Replace($at, "`r`nif `"%1`"==`"`" goto end`r`n" + $runLine + "`r`n") }
             $mutants += @{ Why = "an if not on %1";      Text = $fx.Replace($at, $at + "if not `"%1`"==`"`" goto end`r`n") }
             $mutants += @{ Why = "an if on %1 unquoted"; Text = $fx.Replace($at, "`r`nif %1.==. goto end`r`n" + $runLine + "`r`n") }
@@ -843,8 +844,8 @@ try {
         } else {
             $harmless = $fx.Replace($at, $at + "echo setlocal is not used here, and the date comes from XHCISNAP.`r`n")
         }
-        # After every control is built, the ToolLast ones included (Codex
-        # review of 38.1, round 4: they were appended after this loop).
+        # After every control is built, the ToolLast ones included (task 38.1:
+        # they were appended after this loop).
         foreach ($m in $mutants) {
             Assert-True ($m.Text -cne $fx) "the $($spec.Name) control '$($m.Why)' did not change the fixture, so it controls nothing."
             Assert-True (@(Get-ReportBatchFaults -Text $m.Text -Spec $spec).Count -gt 0) "the report-batch checker accepted $($spec.Name) with $($m.Why)."
@@ -1031,7 +1032,7 @@ try {
     # asserts exit 0, would fail the BUILD from the first cut carrying it. The
     # experiment is about the padding, so the date it runs on has to be one
     # with padding, and that is this file's business rather than the release
-    # calendar's. The 2026-09-07 audit's H12.
+    # calendar's (the audit of 2026-09-07).
     #
     Write-Step "the unpadded-date experiment changes the date and nothing else"
     $paddedInf = New-Inf -Name "padded-date" -Mutate {
@@ -1071,7 +1072,7 @@ try {
 
     # --- the two special modes are not composable ---------------------------
     #
-    # Review finding 4. Each mode varies one thing against the
+    # Each mode varies one thing against the
     # ordinary package; a package varying both answers neither question, and the
     # combination used to be accepted silently - both banners printed and the
     # output landed in the artifact's directory, so the run that produced it
@@ -1091,7 +1092,7 @@ try {
 
     # --- a failure after staging leaves the previous package alone ----------
     #
-    # Review finding 1. The packager used to copy straight into
+    # The packager used to copy straight into
     # OutDir, so a run failing at the final gate left a directory holding a
     # mixture of the new files and the old - which passes HANDOFF's marker and
     # DriverVer preflight, and is what a VM would then be recovered from.
@@ -1176,7 +1177,7 @@ try {
 
     # --- a failure AFTER staging leaves the old package byte-for-byte -------
     #
-    # Round 2 finding 5: the refusal above happens before anything is staged, so
+    # The refusal above happens before anything is staged, so
     # it cannot tell a transactional packager from one that writes straight into
     # the destination. The ownership check can, because it runs *after* the
     # whole package is staged and gated - it compares the destination against
@@ -1225,7 +1226,7 @@ try {
 
     # --- a trailing separator on -OutDir is not a nested staging directory ---
     #
-    # Round 2 finding 1. The staging directory is named by appending to the
+    # The staging directory is named by appending to the
     # destination's path, so an unnormalised trailing "\" made it a *child* of
     # the destination - and the swap then destroyed its own source. Both runs
     # here matter: the first creates the package, the second replaces it, and it
@@ -1265,7 +1266,8 @@ try {
         "a stand-in driver was packaged with the binary gates enabled."
     Assert-True ($r.Output -match "host test suite|import-compatibility gate") `
         ("expected the refusal to name the gate that ran. Output:`n" + $r.Output)
-    # **"Gated" and "inconclusive" are different readings** (audit H18). Smart
+    # **"Gated" and "inconclusive" are different readings** (the audit of
+    # 2026-09-07). Smart
     # App Control blocking a freshly linked unsigned exe makes the host suite
     # produce no result line, and the packager refuses on that too - with a
     # message that says to run it again. That refusal would satisfy the two
@@ -1278,7 +1280,7 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $gatedOut)) `
         "the output directory was created for a driver that failed a binary gate."
 
-    # --- the output path refusals (audit H18) -------------------------------
+    # --- the output path refusals (the audit of 2026-09-07) ----------------
     #
     # This script replaces its output directory wholesale, so where it is
     # pointed is a data-loss question rather than a tidiness one. The packager
@@ -1311,7 +1313,7 @@ try {
     Assert-True ((Get-Content -LiteralPath $fileOut -Raw).Trim() -eq "occupied") `
         "the packager overwrote the file it was pointed at."
 
-    # --- a foreign file in a SUBDIRECTORY (audit H18) -----------------------
+    # --- a foreign file in a SUBDIRECTORY (the audit of 2026-09-07) --------
     #
     # The foreign-file check is recursive, and both existing cases put their
     # bystander at the root - so the recursion was untested and a check written
@@ -1330,7 +1332,7 @@ try {
     Assert-True (Test-Path -LiteralPath $deepBystander) `
         "the foreign file below the output root was deleted."
 
-    # --- the missing-version-resource refusal (audit H18) -------------------
+    # --- the missing-version-resource refusal (the audit of 2026-09-07) ----
     #
     # NOT TESTED, and recorded here rather than left as a silent gap. That
     # refusal fires only with the binary gates ON, and with them on the host
@@ -1344,7 +1346,7 @@ try {
     # deliberately not gated on the switch, so a stand-in that does carry a
     # version is still checked against the INF.
 
-    # --- the two degenerate unpadded-date inputs (audit H18) ----------------
+    # --- the two degenerate unpadded-date inputs (the audit of 2026-09-07) -
     #
     # make-package.ps1 refuses both, and neither refusal had a test: a source
     # whose date is already unpadded (the derived package would be
@@ -1635,7 +1637,7 @@ try {
         # The layout checks see names and places only, so a QUALREP.BAT in
         # the right place that the shared checker refuses (here: LF endings,
         # which COMMAND.COM misreads) must stop the assembly before anything
-        # is archived (Codex review of 38.1, round 1).
+        # is archived (task 38.1).
         Write-Step "the upload set refuses a malformed report batch in the published tree"
         $qrPub = Join-Path $pubRoot "tools\xhciqual\QUALREP.BAT"
         $qrGood = [System.IO.File]::ReadAllBytes($qrPub)
@@ -1975,7 +1977,7 @@ try {
         )) {
             $r = Invoke-Releaser ($relArgs + @($bad.Switch))
             Assert-True ($r.ExitCode -ne 0) "-UploadSetOnly was accepted together with $($bad.Switch)."
-            # The diagnostic, not just the exit code - see finding 6 above.
+            # The diagnostic, not just the exit code, as above.
             Assert-True ($r.Output -match [regex]::Escape($bad.Says)) `
                 ("expected $($bad.Switch) to be refused on its own terms. Output:`n" + $r.Output)
         }
@@ -2001,7 +2003,7 @@ try {
 
         # --- a flavour the run was not asked to complete ---------------------
         #
-        # Review finding 1. The published tree is copied whole, so
+        # The published tree is copied whole, so
         # narrowing -Flavor completes some of its flavour directories and
         # leaves the rest holding this project's two files and neither of
         # Microsoft's - which is the incomplete-media defect again, reached by
@@ -2016,7 +2018,7 @@ try {
 
         # --- a relative -PackageRoot --------------------------------------
         #
-        # Review finding 3. The relative path of each staged file
+        # The relative path of each staged file
         # used to be derived by cutting the package directory's length off an
         # absolute FullName, so a relative root cut mid-path - and every check
         # downstream re-derived it the same wrong way and agreed. The run
@@ -2060,14 +2062,14 @@ try {
 
         # --- the upload set may not be assembled inside the release ---------
         #
-        # Review finding 5. Assembling clears its own destination
+        # Assembling clears its own destination
         # first, so an -UploadDir at or below the version directory would
         # delete inside a written-once release and then copy that release into
         # its own descendant.
         #
         # --- a file the INF does not name may not be published --------------
         #
-        # Review round 2, finding 1. The copy used to take everything
+        # The copy used to take everything
         # in the package that was not one of this project's own two files, and
         # check-inf.ps1 -PackageDir does not object to a file nobody declared -
         # it checks the declared ones are present. So anything left in
@@ -2108,7 +2110,7 @@ try {
 
         # --- what is NOT covered here, and why -------------------------------
         #
-        # Review round 6 found that the containment guard compares
+        # The containment guard compares
         # strings, so a drive alias gives the published release a second
         # spelling sharing no prefix with the first.
         # Resolve-DirectoryArgument in make-release.ps1 expands a PSDrive's
@@ -2126,7 +2128,7 @@ try {
         # --- a publishable file the INF declares in a subdirectory ----------
         # --- a publishable file the INF declares in a subdirectory ----------
         #
-        # Review round 3. An INF saying `xhci98.inf=1,setup` is
+        # An INF saying `xhci98.inf=1,setup` is
         # valid and make-package.ps1 stages it there, but this script publishes
         # its own two files at the root of a flavour directory - three places
         # assume it. The assumption is now refused with its reason rather than
@@ -2153,8 +2155,7 @@ try {
 
         # --- the upload set may not be assembled inside the release ---------
         #
-        # Review finding 5, tightened by round 2 finding 3: the
-        # first version of this case asserted only a nonzero exit, which
+        # The first version of this case asserted only a nonzero exit, which
         # copying a directory into its own descendant produces on its own - so
         # the guard could have been deleted and the case stayed green. Both
         # containment directions are driven, and both assert the diagnostic.
@@ -2178,7 +2179,7 @@ try {
             @{ Why = "at the releases root"; UploadDir = $relRoot },
             # The repository's OWN releases\ while -ReleasesDir points at the
             # stand-in tree: the override moves the cut, not the protection
-            # (Phase 20 review, finding 5). The destination is a probe name
+            # (Phase 20). The destination is a probe name
             # under the canonical root that does not exist; the guard must
             # refuse before anything is written, and the case removes the
             # probe if a broken guard ever creates it.
@@ -2297,15 +2298,15 @@ try {
         @{ Name = "the containment assertion"; Find = 'Assert-UploadSetOutsideRelease -UploadRoot $early.Root' },
         @{ Name = "the make-package call";     Find = '& powershell.exe @pkgArgs' },
         @{ Name = "the declared-media check";  Find = 'Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected' },
-        # The upload assembly comes BEFORE the swap since the 2026-09-17
-        # audit's D5: it carries the per-directory INF gate and the zip, and
+        # The upload assembly comes BEFORE the swap since the audit of
+        # 2026-09-17: it carries the per-directory INF gate and the zip, and
         # either failing after the swap left a written-once release with no
         # asset - the exact shape this list exists to prevent, one step later
         # than it was looking.
         @{ Name = "the upload assembly";       Find = '$set = New-UploadSet -PublishedRoot $destRoot' },
         @{ Name = "the publish swap";          Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' },
         # ...and the set built before the swap reaches its final names only
-        # after it (Codex review round 2): built straight onto them, a swap
+        # after it: built straight onto them, a swap
         # that failed and rolled the release back left the OLD release beside
         # the NEW release's zip.
         @{ Name = "the upload publish";        Find = '$final = Publish-UploadSet -Set $stagedUpload' }
@@ -2328,7 +2329,7 @@ try {
 
     # --- the aside's removal after a completed swap may not fail the cut -----
     #
-    # The 2026-09-17 audit's D4, structural for the same reason as the list
+    # From the audit of 2026-09-17, structural for the same reason as the list
     # above. After both renames the replaced release is disk space, and on a
     # OneDrive-hosted tree its removal fails routinely on a sync handle; under
     # Stop that reported a published cut as failed and left the aside for the
@@ -2342,7 +2343,7 @@ try {
 
     # --- a failed swap leaves the previous asset in place ---------------------
     #
-    # Codex review round 2 on the D5 reorder. The upload set is assembled
+    # The upload set is assembled
     # before the swap, so it must be assembled under names that are not the
     # previous asset's: the ordinary cut passes -Staged, Get-UploadSetPaths
     # -Staged yields the `.staging` pair, New-UploadSet takes its paths from
@@ -2369,7 +2370,7 @@ try {
 
     # --- once the swap has succeeded, the cut is published, whatever out\ does
     #
-    # Codex review round 3. Publish-UploadSet runs after the release swap, so
+    # Publish-UploadSet runs after the release swap, so
     # a failure in it must not reach the outer catch as a failed cut (the
     # release cannot be unpublished, and the "previous asset untouched" line
     # would be false): it is caught locally, the staged pair is kept, the
@@ -2405,7 +2406,7 @@ try {
 
     # --- a stale .previous is the last good asset when the final zip is gone
     #
-    # Codex review round 4. An interruption between the aside rename and the
+    # An interruption between the aside rename and the
     # staged move leaves `.previous` present and the final zip absent; a retry
     # that deleted the stale aside first, then failed its own staged move,
     # would lose the only previous archive. So the stale aside is judged by
@@ -2439,7 +2440,7 @@ try {
 
     # --- ...and the rendered line parses, apostrophes and all -----------------
     #
-    # Codex review round 5: the paths were single-quoted with no escaping, so
+    # The paths were single-quoted with no escaping, so
     # a directory such as D:\O'Brien\ rendered a line no shell could parse.
     # This case EXECUTES the helper rather than grepping it: its body is
     # loaded from make-release.ps1's text, driven with bound arguments naming
@@ -2628,7 +2629,8 @@ try {
     Assert-True ($releaserText -match "No Microsoft file is in this download") `
         "make-release.ps1 lost the one defensible form of the no-Microsoft-file statement."
 
-    # And the third claim, which the 2026-09-07 audit's D9 fix put IN while
+    # And the third claim, which a fix after the audit of 2026-09-07 put IN
+    # while
     # removing the other two: an introduction that named Windows 98 SE and
     # Windows 2000 SP4 together as "validated on, including on real hardware".
     # AGENTS.md, "Project Purpose", is explicit that Windows 2000 has never
@@ -2659,7 +2661,8 @@ try {
     $stampFile = Join-Path $stampWork "xhci98.srcstamp"
 
     # ErrorActionPreference is relaxed across the call, for the reason
-    # make-release.ps1 records at its make-package.ps1 invocation (audit H17):
+    # make-release.ps1 records at its make-package.ps1 invocation (the audit of
+    # 2026-09-07):
     # in Windows PowerShell 5.1 a native command's stderr line becomes an
     # ErrorRecord, so under "Stop" the refusal this helper exists to MEASURE
     # aborts the suite instead of being returned as an exit code. It bites
@@ -2683,17 +2686,18 @@ try {
     # @(...) for the same strict-mode reason the script itself needed it: a
     # single matching line comes back as a String, and a String has no .Count.
     Assert-True (@(Get-Content -LiteralPath $stampFile | Where-Object { $_ -cmatch '^BINARY [0-9A-F]{64} xhci98\.sys$' }).Count -eq 1) `
-        "the stamp carries no BINARY line, so it cannot say which .sys it was written for (audit H13, round 3)."
+        "the stamp carries no BINARY line, so it cannot say which .sys it was written for (the audit of 2026-09-07)."
     Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 0) `
         "a stamp checked against the tree and binary it was just written from must pass."
 
-    # The hole the first two H13 fixes both walked around: same sources, a
+    # The hole the first two fixes after the audit of 2026-09-07 both walked
+    # around: same sources, a
     # different binary restored beside them. make-release.ps1's own
     # staged-against-built comparison cannot see this - the restored file is on
     # both sides of it - so only the stamp can.
     [System.IO.File]::WriteAllBytes($stampSys, [byte[]](1, 2, 3, 9))
     Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 1) `
-        "a binary swapped under an unchanged stamp must be refused (audit H13)."
+        "a binary swapped under an unchanged stamp must be refused (the audit of 2026-09-07)."
     [System.IO.File]::WriteAllBytes($stampSys, [byte[]](1, 2, 3, 4))
 
     # The UAS class driver's stamp (task 31-A.2): its own file name, its own
@@ -3183,7 +3187,7 @@ try {
         }
 
         # The layouts already published, each accepted for its own version
-        # only (Codex review round 1): none before 2.3.0.0, all three at the
+        # only: none before 2.3.0.0, all three at the
         # root of every flavour directory in 2.3.0.0, and no other layout
         # after it; and a damaged one of either refused.
         $legacyNone = Join-Path $pswRoot "legacy-none"
@@ -3333,7 +3337,7 @@ try {
         }
 
         # **A tree with tools\ is held to the cut's port switchover layout**,
-        # whatever its version (Codex review of task 38.9): the upload
+        # whatever its version (task 38.9): the upload
         # assembly's own $pswVersion line, taken from make-release.ps1's text
         # and evaluated here, then Assert-PortSwitchLayout called as the
         # assembly calls it. Without it, a tree with tools\ but no
@@ -3441,7 +3445,7 @@ try {
             try { Assert-SilentInstallLayout -Root $siCut -Map $silentPublishable -What "fixture cut" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
             Assert-True ($null -eq $refused) "Assert-SilentInstallLayout -PublishedVersion '$v' refused the four in tools\silent\ alone: $refused"
         }
-        # **What they say, EXECUTED** (Codex review of 38.2, round 1): the
+        # **What they say, EXECUTED** (task 38.2): the
         # layout check passes four files by name alone, so a zero-byte
         # SILENT.REG passed it. Each malformed one is refused in both modes,
         # naming its file; a stale SILENT.VBS (no checker of its own) by the
@@ -3675,8 +3679,8 @@ try {
             Assert-True (($null -eq $refused) -eq $c.Want) ("Assert-ReportBatchLayout -PublishedVersion '{0}' on '{1}': accepted={2}, expected {3}. {4}" -f $c.Version, (Split-Path -Leaf $c.Tree), ($null -eq $refused), $c.Want, $refused)
         }
 
-        # **What the staged batches say, EXECUTED** (Codex review of 38.1,
-        # round 1): the layout checks above pass a batch by name and place
+        # **What the staged batches say, EXECUTED** (task 38.1): the layout
+        # checks above pass a batch by name and place
         # alone, so Assert-ReportBatchContent holds each one in the tree to
         # the shared checker - for the cut, whose -SnapToolDir and
         # -QualtoolDir may hold anything, and for the upload assembly,
@@ -3876,7 +3880,7 @@ try {
                 ("$($tcMarks[$i - 1].Name) must come before $($tcMarks[$i].Name) in make-release.ps1.")
         }
         # Not inside the -SkipUploadSet branch: the staged-release check
-        # runs on every cut (round 1, finding 6). Its line is not indented
+        # runs on every cut. Its line is not indented
         # under an `if (-not $SkipUploadSet)`.
         $line = ($releaserText.Substring(0, $tcAt2[1]) -split "`n")[-1]
         Assert-True ($line.TrimEnd("`r") -eq '    ') "the staged release's test-client check is not at the publish step's own level."
@@ -4011,7 +4015,7 @@ try {
         @{ Name = "digest not last"; Bytes = [byte[]](@(0x30, ($spcBody.Length + 2)) + $spcBody + @(0x05, 0x00)) },
         @{ Name = "truncated";       Bytes = [byte[]]($spcGood[0..($spcGood.Length - 2)]) }
     )
-    # Review round 2: what the parser does not interpret is still validated.
+    # What the parser does not interpret is still validated.
     # Each variant below is the good encoding with one element changed.
     function New-SpcVariant {
         param([byte[]]$Data, [byte[]]$Alg)
@@ -4065,7 +4069,7 @@ try {
 
     # The pinned thumbprint is the one design record 19 records, and the
     # packager signs only after the import gates have read the build, whose
-    # SITES rule needs the objects beside the image (review round 1).
+    # SITES rule needs the objects beside the image.
     $rec19 = [System.IO.File]::ReadAllText((Join-Path $repo "docs\contributing\design\19-x64-test-signing.md"))
     Assert-True ($rec19.Contains($script:TestSignThumbprint)) `
         "package-common.ps1's pinned thumbprint $($script:TestSignThumbprint) is not the one design record 19 records."

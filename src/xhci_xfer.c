@@ -1,14 +1,12 @@
 /*
- * xhci_xfer.c - the control-transfer engine: TD construction, the pending-
- * transfer queue, and what a Transfer Event means to one usbport transfer.
+ * xhci_xfer.c - the transfer engine: TD construction for control, Normal and
+ * isochronous transfers, the pending-transfer queue, and what a Transfer
+ * Event means to one queued transfer (xhci_xfer.h lists what is here).
  *
- * KEPT FROM THE MINIPORT, whole and unchanged, from branch 1.2.0.0 (roadmap-
- * hcd.md task 26-A.4). It is pure, so it built as it stood; the HCD uses its
- * completion-code table and its control-TD builder (the enumeration's EP0
- * reads, hcd_enum.c), and 26-A.5 decides what of the queue the URB path
- * keeps. "usbport" below is the miniport's caller; src/hcd_svc.h, "READING
- * THE KEPT FILES", is the key. Its host suite, test_xfer, left the tree with
- * the miniport and returns with 26-A.9.
+ * KEPT FROM THE MINIPORT (roadmap-hcd.md task 26-A.4) and grown since: the
+ * HCD's URB path (hcd_io.c), enumeration (hcd_enum.c) and device layer
+ * (hcd_dev.c) all run on it. "usbport" below is the miniport's caller;
+ * src/hcd_svc.h, "READING THE KEPT FILES", is the key.
  *
  * Pure computation plus stores into caller-supplied common-buffer memory: no
  * MMIO, no DDK calls, no usbport services, no IRQL dependencies, so it builds
@@ -92,7 +90,7 @@ ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
      * issues no vendor command and has no vendor knowledge, so "unknown" is the
      * only reading available for either.
      *
-     * **Audit round 8 found the error range stopping half way through that
+     * **The error range once stopped half way through that
      * reading.** It mapped to Undefined Error's *status* and not to its
      * *treatment*: "If software does not recognize the code, it shall interpret
      * this range of vendor defined values as a Undefined Error condition"
@@ -162,16 +160,17 @@ ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
     /*
      * TRB Error is this driver's own fault - the controller read a TRB it
      * could not act on - and Invalid Stream ID is a condition with no USB-level
-     * equivalent (this driver opens no streams at all, so it means the
-     * controller and the driver disagree about the endpoint). Both are "the host
+     * equivalent (it means the controller and the driver disagree about the
+     * endpoint's streams, which since 31-A.1 the driver does open for UAS,
+     * xhci_stream.c). Both are "the host
      * controller layer failed", which is what INTERNAL_HC_ERROR says, and
      * neither is fatal: TRB Error puts the endpoint in Error and
      * `xhciEpRecoveryNeeded` repositions it.
      *
      * **Incompatible Device and Undefined Error used to share this arm, and
-     * audit round 8 found that both of them carry an instruction it was
-     * dropping.** They are still reported to usbport as INTERNAL_HC_ERROR -
-     * neither has a USB-level equivalent - but the recovery each one names is
+     * both of them carry an instruction it was dropping.** They are still
+     * reported to usbport as INTERNAL_HC_ERROR - neither has a USB-level
+     * equivalent - but the recovery each one names is
      * not this arm's.
      */
     case XHCI_CC_TRB_ERROR:
@@ -190,12 +189,12 @@ ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
      * slot enabled and the device addressed, which is the state the controller
      * has just said it cannot successfully access. `SlotFatal` carries it to
      * `xhciDevSlotFatalEvent`, which owes the Disable Slot through the ordinary
-     * device teardown rather than inventing a second route to it. **Audit round
-     * 9 found this sentence naming `xhciEpRecoveryNeeded`** - the function called
+     * device teardown rather than inventing a second route to it. **This
+     * sentence once named `xhciEpRecoveryNeeded`** - the function called
      * beside it, which does the endpoint's half and never reads this flag.
      *
-     * **"Any command or transfer" is the whole clause, and round 9 found the
-     * command half missing.** A Command Completion Event carrying this code went
+     * **"Any command or transfer" is the whole clause, and the command half
+     * was once missing.** A Command Completion Event carrying this code went
      * to the slot state machine, which reduces every code to success/non-success,
      * so a Configure Endpoint answered with 22 became one failed endpoint record
      * and left the slot in service. `XhciSlotCommandSlotFatal` is the command
@@ -250,7 +249,7 @@ ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
      *
      * `ResidualIsBytes` is 0 for both, and for 28 that is a statement about the
      * *residual arithmetic* rather than about the field being unusable - a
-     * correction the third review round of batch 7a-B forced. The EDTLA is a
+     * correction made in batch 7a-B (reviewed and revised). The EDTLA is a
      * running total of the bytes the TD has moved, maintained per endpoint by
      * the xHC whether or not software ever places an Event Data TRB (4.11.5.2
      * p.209-210), so it is a byte count; what it is not is something
@@ -269,7 +268,7 @@ ULONG XhciXferCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
 
     /*
      * Everything else is refused, and **one of the codes that falls through here
-     * is not the family it was labelled as until audit round 9**.
+     * is not the family it was once labelled as**.
      * `XHCI_CC_EP_NOT_ENABLED` (12) is a *Transfer Event*: Table 6-90 p.467
      * asserts it "if a
      * doorbell is rung for an endpoint that is in the Disabled state", and 4.7
@@ -882,8 +881,8 @@ ULONG XhciXferBuildNormal(const XHCI_NORMAL_REQUEST *request,
      * non-control TD has no third stage to carry it: this is the only TRB whose
      * completion means the transfer is over.
      *
-     * **The two halves of ISP are not the same claim**, and the tenth review
-     * caught this comment making the stronger one twice. 4.10.1.1.2 requires ISP
+     * **The two halves of ISP are not the same claim**, and this comment once
+     * made the stronger one twice. 4.10.1.1.2 requires ISP
      * on every TRB of a TD *except the last* - that is the half that is not
      * optional, because a short packet terminates the TD wherever it lands, so
      * without ISP on the TRB it lands on there would be no event and the IOC
@@ -1053,9 +1052,10 @@ VOID XhciXferQueueInit(PXHCI_TRANSFER_QUEUE queue)
     queue->ReservedBitsSet = 0;
     queue->EventDataEvents = 0;
     queue->BadCodes = 0;
-    /* Never set here until the Phase 20 review pass: the extension the queue
-     * lives in arrives zeroed, so production never noticed, and the host
-     * fixture's stack happened to read 0 until a new vector moved it. */
+    /* Never set here until Phase 20 (reviewed and revised): the extension
+     * the queue lives in arrives zeroed, so production never noticed, and
+     * the host fixture's stack happened to read 0 until a new vector moved
+     * it. */
     queue->StoppedRefused = 0;
     queue->ResidualRejects = 0;
     queue->LengthOverruns = 0;
@@ -1090,8 +1090,8 @@ VOID XhciXferQueueInit(PXHCI_TRANSFER_QUEUE queue)
 
 /*
  * Remember the tail TRB this driver did not wait for, so the trailing event
- * p.175 promises can be recognised if it ever arrives. The repo audit
- * finding 1: at the time the early retire happened identically on both kinds of
+ * p.175 promises can be recognised if it ever arrives. When it was written
+ * the early retire happened identically on both kinds of
  * controller, so this record was the only answer to the conformance question.
  * Task 9-0.2 changed that - a conforming controller's tail is consumed in the
  * same drain and ends the transfer positionally, so it never reaches the early
@@ -1114,8 +1114,8 @@ static VOID xhciXferRecordMidTdTail(PXHCI_TRANSFER_QUEUE queue, ULONG tailIndex)
      * version wrote to the *next physical slot* whether or not it was live, so
      * it could displace a waiting record while other slots stood empty - the
      * count stayed arithmetically consistent and the eviction meant the wrong
-     * thing, which is worse than an obviously wrong number (repo audit round 2,
-     * finding 2). Here a record is displaced only when all
+     * thing, which is worse than an obviously wrong number. Here a record is
+     * displaced only when all
      * XHCI_XFER_MID_TD_TAIL of them are genuinely outstanding.
      */
     if (queue->MidTdTailCount >= XHCI_XFER_MID_TD_TAIL) {
@@ -1133,7 +1133,7 @@ static VOID xhciXferRecordMidTdTail(PXHCI_TRANSFER_QUEUE queue, ULONG tailIndex)
  * Forget any recorded tail that lies inside a TD about to be published there.
  *
  * This is what makes the "a false match cannot occur" claim true rather than
- * merely likely (repo audit round 2, finding 1). The claim rested on an unowned
+ * merely likely. The claim rested on an unowned
  * index never being re-let - but that only holds until the ring laps: the TRB
  * *is* re-let eventually, and if that later transfer ends and its own event
  * arrives unowned, a stale record would claim it and report a tail event the
@@ -1152,7 +1152,7 @@ static VOID xhciXferForgetMidTdTails(PXHCI_TRANSFER_QUEUE queue,
     if (queue == NULL || ring == NULL || trbCount == 0) {
         return;
     }
-    /* Task 38.10 (review round 1): the remembered isochronous event is
+    /* Task 38.10: the remembered isochronous event is
      * forgotten the same way, so a Success for a TD placed here later is
      * never taken for the earlier error's duplicate (XhciXferIsoEvent). */
     if (queue->IsoLastEventPA != 0 &&
@@ -1177,7 +1177,7 @@ static VOID xhciXferForgetMidTdTails(PXHCI_TRANSFER_QUEUE queue,
              * *this driver's* inability to read the answer with the answer
              * being no. The tail may already have been sent and be sitting
              * unprocessed in the event ring right now; the repost loop makes
-             * that the ordinary case (repo audit round 3, finding 1). So the
+             * that the ordinary case. So the
              * observation is censored, not resolved.
              */
             queue->MidTdTailsCensored++;
@@ -1628,8 +1628,8 @@ static ULONG xhciXferResidualBytes(PXHCI_TRANSFER_QUEUE queue,
  * fact that they were set counted. Shared by the three event paths so they
  * cannot disagree, and the mirror of what the command path has done since
  * Phase 4: a controller that sets 3:0 is a finding, not a reason to let the
- * transfer sit until usbport's timeout (the 2026-09-05 audit's first smaller
- * item). The high DWORD is the caller's to reject, and both callers do.
+ * transfer sit until usbport's timeout (reviewed and revised 2026-09-05).
+ * The high DWORD is the caller's to reject, and both callers do.
  */
 static ULONG xhciXferEventPointer(PXHCI_TRANSFER_QUEUE queue, ULONG eventTrbPA)
 {
@@ -1712,7 +1712,7 @@ ULONG XhciXferQueueStopped(PXHCI_TRANSFER_QUEUE queue,
      * carry their own per-packet status, which is what usbport reads. So the
      * right action here is to leave it alone.
      *
-     * **What that costs, stated rather than glossed** (Codex review, same day):
+     * **What that costs, stated rather than glossed** (reviewed and revised):
      * this event is the only measurement the *interrupted* TD will ever get, and
      * returning here discards it - so a stream stopped part-way through one
      * packet reports the bytes of the packets before it and nothing of that one.
@@ -1729,7 +1729,7 @@ ULONG XhciXferQueueStopped(PXHCI_TRANSFER_QUEUE queue,
      *     pure ring/queue layer reaching into the isochronous packet block the
      *     slot layer owns. That is a second writer of the per-packet totals,
      *     racing the one that already exists.
-     *   - `handoff.md`'s finding A1 names both forms and prefers this one, "the
+     *   - `handoff.md` names both forms and prefers this one, "the
      *     first form is smaller and keeps the 'one reader for the forced event'
      *     design intact".
      *
@@ -1743,7 +1743,8 @@ ULONG XhciXferQueueStopped(PXHCI_TRANSFER_QUEUE queue,
 
     /*
      * **A control transfer stopped on its Status Stage TRB moved its whole data
-     * stage, and neither arm below can say so** (the 2026-09-16 audit's B7).
+     * stage, and neither arm below can say so** (reviewed and revised
+     * 2026-09-16).
      *
      * The Status Stage is the last TRB of the TD and the xHC executes it only
      * once every Data Stage TRB has completed, so by the time an event can name
@@ -1823,6 +1824,7 @@ ULONG XhciXferQueueStopped(PXHCI_TRANSFER_QUEUE queue,
         if (prev != XHCI_XFER_NO_INDEX &&
             XhciRingSumTrbLengths(ring, owner->DataFirstIndex, prev, &bytes) !=
                 XHCI_RING_OK) {
+            queue->SumFailures++;
             return 0;
         }
     } else if (completionCode == XHCI_CC_STOPPED_SHORT_PACKET) {
@@ -1860,8 +1862,8 @@ ULONG XhciXferQueueStopped(PXHCI_TRANSFER_QUEUE queue,
      * is progress, not an ending: the transfer is still on the ring and a
      * doorbell may resume it, in which case its real completion has to be free
      * to report the final count. Fixing the length here made a survivor's
-     * eventual success report the pre-stop partial instead - the third review
-     * round found it. What the value is for is the transfer that is *not*
+     * eventual success report the pre-stop partial instead. What the value is
+     * for is the transfer that is *not*
      * resumed, where no later event ever comes and this is the only measurement
      * `AbortTransfer` has to report.
      */
@@ -2115,8 +2117,8 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
     }
 
     /* Masked once, here, so the classifier below and the short-TRB record see
-     * the same pointer the lookup resolved (the Phase 20 review's round 2
-     * found the first version masking the lookup alone). */
+     * the same pointer the lookup resolved (the first version, Phase 20,
+     * masked the lookup alone). */
     eventTrbPA = xhciXferEventPointer(queue, eventTrbPA);
     if (XhciRingIndexFromPA(ring, eventTrbPA, &reportedIndex) != XHCI_RING_OK) {
         /* Zero (an error the xHC could not attribute to a TRB, 4.11.3.1) or an
@@ -2234,7 +2236,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
          */
         /*
          * **The *first* measurement fixes it, and later ones may not move it.**
-         * The tenth review found this: `XHCI_XFER_FLAG_LENGTH_FIXED` was set
+         * `XHCI_XFER_FLAG_LENGTH_FIXED` was once set
          * here and consulted only at the terminal event, so a second measuring
          * event overwrote the first.
          *
@@ -2319,7 +2321,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
      *     conforming controller.
      *
      *     **"Not the group's last TRB" is the whole of that definition**, and
-     *     the tenth review found the code had been relying on a coincidence
+     *     the code had once been relying on a coincidence
      *     instead. A control transfer's last TRB is the Status Stage TRB, which
      *     has no length, so `haveBytes` was false there and the test never had
      *     to be written. A Normal TD's last TRB is a data TRB carrying IOC, so
@@ -2443,7 +2445,7 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
      * It is justified now. `test_event_half_data_range_refuses_early_retire`
      * constructs the two half-mismatched records directly - neither is a shape
      * the builder emits, which is the point - and each conjunct is the only
-     * thing that refuses one of them (the repo audit, finding 3). Keep
+     * thing that refuses one of them. Keep
      * both: Phase 9's isochronous TDs are the shape expected to satisfy one and
      * not the other, and the guard is now tested before it is needed rather
      * than after.
@@ -2469,8 +2471,8 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
      * *address*, not a generation. Once those TRBs are re-let, that tail is
      * indistinguishable from the new TD's own event and the owner search matches
      * it to a live transfer, measuring or completing it wrongly: a truncated
-     * bulk IN reported as success. That is the repo audit finding 21, and
-     * `MidTdTailsCensored` only ever *reported* it.
+     * bulk IN reported as success. `MidTdTailsCensored` only ever *reported*
+     * that.
      *
      * So the transfer stays on the queue, still owning its TRBs, and the
      * decision moves to the end of a drain pass that found the event ring
@@ -2550,8 +2552,8 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
          * conforming. But it must not be left to fall through to the unlink
          * either: that counted it as `MidTdDeferralsLost`, making a controller
          * that sends two events indistinguishable from a teardown - on the one
-         * measurement task 9-0.2 exists to produce. Found by the batch-9-0
-         * review round 1.
+         * measurement task 9-0.2 exists to produce (batch 9-0, reviewed and
+         * revised).
          */
         owner->Flags &= ~XHCI_XFER_FLAG_SHORT_DEFERRED;
         queue->MidTdDeferralsTailedSpurious++;
@@ -2611,8 +2613,8 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
     /*
      * **The group ended, nothing was reclaimed, and nothing halted the
      * endpoint.** That is the general statement of the divergence the two
-     * checks above catch only one shape of, and the batch-9-0 review round 6
-     * found the gap: the interception before `terminal` tests
+     * checks above catch only one shape of, and batch 9-0 closed the gap:
+     * the interception before `terminal` tests
      * `reportedIndex != owner->LastIndex`, so an event naming the record's
      * *last* TRB while the **ring** says that index is not the TD's tail - a
      * `CH` bit merging this TD into the next one - sails past it, is terminal
@@ -2754,7 +2756,7 @@ ULONG XhciXferQueueRestart(PXHCI_TRANSFER_QUEUE queue)
  * names a TRB address, not a generation, so the moment a short TD's TRBs are
  * re-let, the tail 4.10.1.1.2 p.175 promises becomes indistinguishable from
  * the new TD's own event and the owner search matches it to a live transfer -
- * a truncated bulk IN reported as success (the repo audit, finding 21).
+ * a truncated bulk IN reported as success.
  * Holding the transfer until the ring reads empty means every tail the
  * controller had already written has been consumed and matched normally, so a
  * TD still short at this point is one whose tail was not sent. On a conforming
@@ -2869,8 +2871,8 @@ ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
          *
          * The first fix for this branch completed the transfer anyway and asked
          * the slot layer to reprogram the position, on the reasoning that the
-         * event path answers the same divergence the same way. The batch-9-0
-         * review round 2 refuted the analogy: on the event path the endpoint is
+         * event path answers the same divergence the same way. Batch 9-0
+         * refuted the analogy: on the event path the endpoint is
          * *halted* or in *Error* by the time the orphan case is reached, and it
          * is that state which makes both the completion and a Set TR Dequeue
          * legal. Here the endpoint is **Running** - this branch's whole premise
@@ -3014,7 +3016,7 @@ ULONG XhciXferIsoCodeInfo(ULONG completionCode, PXHCI_XFER_CODE info)
 
     /*
      * **Everything else is asked of the ring layer's list first**, and that is
-     * the batch 9-A review's fifth MAJOR: this function used to fall straight
+     * a batch 9-A correction: this function used to fall straight
      * through to the shared decoder, which serves the *endpoint* ring kind and
      * therefore accepts Stall Error and Invalid Stream ID. Neither is legal on an
      * isochronous ring - an isoch pipe has no handshake to report a stall with
@@ -3073,7 +3075,7 @@ ULONG XhciXferFrameIdUsable(const XHCI_ISO_FRAME_POLICY *policy,
      * right for half of every second and wrong for the other half.
      *
      * Taking it in 11 bits was the *second* half of the same mistake, and the
-     * batch 9-A review's fourth MAJOR. Masking first makes a stale stamp
+     * another batch 9-A correction. Masking first makes a stale stamp
      * indistinguishable from a future one - 2,000 frames in the past is 48 frames
      * ahead once both are reduced mod 2,048 - so a usbport stamp left over from a
      * lap ago was accepted and given an explicit Frame ID naming a frame that had
@@ -3463,7 +3465,7 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
     }
     /* 36.57: the first TD alone names a frame; the rest are SIA. An ESIT
      * longer than a frame would need that frame on an ESIT boundary
-     * (4.11.2.5.1), which is not computed here: SIA (review, round 2). */
+     * (4.11.2.5.1), which is not computed here: SIA. */
     if (request->Frames.FirstOnly) {
         if (request->PacketsPerFrame == 0) {
             return 0;
@@ -3966,7 +3968,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
      */
     /* The pointer as the engine reads it, its reserved low bits dropped
      * (xhciXferEventPointer, which counts them once, below), so the reuse
-     * check in xhciXferForgetMidTdTails finds it (review round 2). */
+     * check in xhciXferForgetMidTdTails finds it. */
     lastPA = queue->IsoLastEventPA;
     lastCode = queue->IsoLastEventCode;
     queue->IsoLastEventPA = eventTrbPA & ~0x0FUL;
@@ -3980,8 +3982,12 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
         return XHCI_XFER_OK;
     }
 
+    /* Code, Refused and Unattributed as XhciXferEvent fills them, so the
+     * header's contract holds for both producers. */
+    result->Code = completionCode;
     if (XhciXferIsoCodeInfo(completionCode, &code) != XHCI_XFER_OK) {
         queue->BadCodes++;
+        result->Refused = 1;
         return XHCI_XFER_OK;
     }
     if (code.Fatal) {
@@ -4035,6 +4041,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     eventTrbPA = xhciXferEventPointer(queue, eventTrbPA);
     if (XhciRingIndexFromPA(ring, eventTrbPA, &reportedIndex) != XHCI_RING_OK) {
         queue->ForeignEvents++;
+        result->Unattributed = 1;
         return XHCI_XFER_OK;
     }
 
@@ -4050,6 +4057,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     }
     if (owner == NULL) {
         queue->UnmatchedEvents++;
+        result->Unattributed = 1;
         return XHCI_XFER_OK;
     }
     if ((owner->Flags & XHCI_XFER_FLAG_ISOCH) == 0 ||
@@ -4106,7 +4114,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
      * reported as a plausible number, and a ring that cannot sum the range is
      * the same refusal: neither may fall through to a number.
      *
-     * **The bound, stated rather than closed** (batch 9-A review round 2). If the
+     * **The bound, stated rather than closed** (batch 9-A). If the
      * first of the two events p.175 promises is *dropped* - an Event Ring Full
      * condition does that - and only the tail arrives, this sum runs to the tail
      * and the residual it carries is the original one, so a short packet that
@@ -4167,12 +4175,12 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
          * transfer owns, so it is not an `UnmatchedEvents` reading - and that
          * counter folds into the total the mid-TD no-double-completion
          * argument rests on, which a conforming controller would otherwise
-         * raise once per page-crossing short isoch IN packet (the 2026-09-17
-         * audit's B9). **Any packet's last TRB is a tail**, not only the
-         * request's: the builder puts IOC on every TD's last TRB, so a short
-         * packet on a split packet in the middle of a request produces one
-         * too (Codex round 1). A re-measurement naming a TRB that is not its
-         * packet's last is a genuine duplicate event and stays where it was -
+         * raise once per page-crossing short isoch IN packet (reviewed and
+         * revised 2026-09-17). **Any packet's last TRB is a tail**, not only
+         * the request's: the builder puts IOC on every TD's last TRB, so a
+         * short packet on a split packet in the middle of a request produces
+         * one too. A re-measurement naming a TRB that is not its packet's
+         * last is a genuine duplicate event and stays where it was -
          * and so is a second event for a single-TRB packet: a TD of one TRB
          * has no intermediate event for a tail to follow, so the only thing a
          * repeat on it can be is a duplicate.
@@ -4289,7 +4297,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
          * group that ended with its TRBs unreclaimed is the state that counter
          * names. `PlacementFailures` is the opposite diagnosis - a ring that
          * refused an explicit dequeue position, which nothing here asked for
-         * (the 2026-09-17 audit's B9).
+         * (reviewed and revised 2026-09-17).
          */
         queue->OrphanedGroups++;
         result->RefusedRetire = 1;

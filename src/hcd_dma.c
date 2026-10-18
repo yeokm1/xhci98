@@ -70,8 +70,8 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
     hc->CommonPa = pa;
     hc->CommonBytes = XHCI_HC_RESOURCES_SIZE;
     /* The pin names the block a bus master may still hold. A block kept by
-     * an earlier stop stays kept; this new one starts unpinned (Codex review
-     * of 26-A.2, round 1, finding 8). */
+     * an earlier stop stays kept; this new one starts unpinned (task
+     * 26-A.2). */
     hc->CommonBufferPinned = 0;
 
     /* The enumeration's scratch, where descriptors land (hcd_enum.c). Its
@@ -238,8 +238,7 @@ static VOID hcdMapStart(PHCD_CONTROLLER hc)
  * The channel's release, queued only by the execution routine: a DPC queued
  * on this processor from DISPATCH_LEVEL runs after the routine has
  * returned, so MapBusy is cleared only then, and no restart queued by
- * anything else can clear it early (Codex review of batch (c), round 3,
- * finding 4).
+ * anything else can clear it early (batch (c)).
  */
 static VOID NTAPI hcdMapDoneDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
                                 PVOID Arg2)
@@ -491,8 +490,7 @@ release:
      * AllocateAdapterChannel contract): MapBusy is cleared by the pump's
      * DPC, queued on this processor and so unable to run before this
      * DISPATCH_LEVEL code has left, and counted before anything is cleared
-     * so the stop's drain cannot see an idle pump meanwhile (Codex review
-     * of batch (c), round 2, finding 4).
+     * so the stop's drain cannot see an idle pump meanwhile (batch (c)).
      */
     (VOID)InterlockedIncrement(&hc->MapDpcsInFlight);
     if (!KeInsertQueueDpc(&hc->MapDoneDpc, NULL, NULL)) {
@@ -627,8 +625,7 @@ static ULONG hcdWideCheck(PHCD_CONTROLLER hc)
     }
     /* The event is set inside the second routine; that routine and its
      * caller have returned only once the pump's release DPC has run, so
-     * nothing it was given goes back before then (review round 1,
-     * finding 4). */
+     * nothing it was given goes back before then. */
     HcdDmaMapDrain(hc);
     if (hc->WideProbe[0].Status != 0 ||
         hc->WideProbe[1].Status != 0) {
@@ -737,8 +734,8 @@ VOID HcdDmaWideOpen(PHCD_CONTROLLER hc)
  * mastering (CommonBufferPinned) keeps its devices' records instead
  * (HcdIoDeviceDrain), and one of them may still own an entry and be
  * finalized by a late cancel: then the pool is detached from admission and
- * kept for the life of the system, as the records it serves are (review
- * round 3), and counted as a kept buffer is. IRQL: PASSIVE_LEVEL.
+ * kept for the life of the system, as the records it serves are, and counted
+ * as a kept buffer is. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdDmaWideClose(PHCD_CONTROLLER hc)
 {

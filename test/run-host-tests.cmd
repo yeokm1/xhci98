@@ -377,7 +377,9 @@ call :run test_ring "test_ring.c ..\src\xhci_ring.c"
 call :run test_caps "test_caps.c ..\src\xhci_caps.c"
 rem test_port links xhci_caps.c too, since Phase 5: the root-hub map is derived
 rem from the port classification, so XhciRootHubBuild asks XhciPortIsManaged
-rem which ports it may present rather than re-deciding it from the class codes.
+rem and XhciPortIsUsb3 which ports it may present rather than re-deciding it
+rem from the class codes. Since 29-A.1 every protocol port is managed and only
+rem a USB 2.0 one gets a hub port, so the refusal pinned is "no USB 2.0 port".
 call :run test_port "test_port.c ..\src\xhci_port.c ..\src\xhci_caps.c"
 rem test_ctx links xhci_mem.c: the context *encoders* are its subject, but where
 rem one context ends and the next begins is the carve's answer, and pairing them
@@ -528,7 +530,14 @@ rem test_trlog links XHCITR's log readers (xhcitr\tr_log.c, design record 25
 rem sections 4.5 and 4.6) and xhcicm.sys's log builder, whose answers it
 rem reads, and holds xhcitr\tr_hcctr.h to src\xhci_counters.h.
 call :run test_trlog "test_trlog.c ..\xhcitr\tr_log.c ..\xhcitr\tr_core.c ..\src\cm\cm_query.c ..\xhciinst\inst_core.c"
+rem test_tbt_select links the hardware profiles' selection (src\cm\tbt_hw.c,
+rem task 40-A.2, design record 22 section 3) and the ICM client and ring
+rem tbt_hw.c links against, without cm_vals.c.
 call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+rem test_u4cm links the USB4 software connection manager (src\cm\tbt_u4cm.c,
+rem tasks 40-A.3 and 40-A.8, design record 22 section 14.1) over the fake
+rem fabric of u4_fakefab.c, with the router-version helper of tbt_hw.c and
+rem the ring it drives (and tbt_icm.c, which tbt_hw.c links against).
 call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 rem test_cm_ports links nothing else: the re-enumeration's own pure half,
 rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),

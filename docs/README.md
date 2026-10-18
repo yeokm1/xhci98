@@ -8,7 +8,8 @@ source comments, scripts, and other docs use these same locations.
 - [Release notes](using/release-notes.md) - what the driver does, what it does
   not, and its known limitations.
 - [Tuning](using/tuning.md) - every registry setting of the controller
-  driver: where it is, its range and default, and what it does.
+  driver and of the Thunderbolt and USB4 driver: where it is, its range and
+  default, and what it does.
 - [Release acceptance test](using/release-acceptance-test.md) - the fixed
   procedure a stranger runs against a published release on a machine this
   project has never seen: nine steps, the longer ones a checklist table of
@@ -28,8 +29,8 @@ source comments, scripts, and other docs use these same locations.
   [its second file](contributing/roadmap-miniport-updates.md), and Phases 25
   onward, the successor host controller driver's, in
   [its third](contributing/roadmap-hcd.md); the USB4 and Thunderbolt 3
-  connection-manager work, Phases 39 and 40 (`3.0.0.0`), is in
-  [its fourth](contributing/roadmap-usb4.md).
+  connection-manager work, Phases 39 to 41 (`3.0.0.0`) and the open Phase
+  42 (`3.1.0.0`), is in [its fourth](contributing/roadmap-usb4.md).
 - [Source files](contributing/source-files.md) - what every file in `src/` is
   for, and which belong to the host-tested pure core.
 - [Architecture](contributing/architecture.md) - component boundaries and data
@@ -203,7 +204,7 @@ third-party documents remain untracked in `docs/references/`.
 
 ## Documents that live outside `docs/`
 
-Four trees keep their documentation beside the thing it describes. This index
+Seven trees keep their documentation beside the thing it describes. This index
 points at them rather than copying them, so that everything tracked is
 reachable from here or from `AGENTS.md`'s repository layout.
 
@@ -218,9 +219,12 @@ reachable from here or from `AGENTS.md`'s repository layout.
   `2.4.0.0` left under `XHCI98\` (roadmap-hcd task 38.8, design record 13
   section 10.13.8); published as the tool's `readme.txt`.
 - [`xhciinst/README.TXT`](../xhciinst/README.TXT) - the install, update and
-  uninstall tool `INSTALL.BAT` runs, from `3.0.0.0` (roadmap-usb4 task 40.5,
+  uninstall tool `INSTALL.BAT` runs, from `3.0.0.0` (roadmap-usb4 task 40.4,
   design record 23), with its Thunderbolt and USB4 device modes `/devices`
   and `/eject` (design record 24); published as the tool's `readme.txt`.
+- [`xhcitr/README.TXT`](../xhcitr/README.TXT) - the xHCI98 USB Tree, the
+  graphical tree, eject and tray tool, from `3.0.0.0` (roadmap-usb4 Phase
+  41, design record 25); published as the tool's `readme.txt`.
 - [`scripts/vm-matrix/README.md`](../scripts/vm-matrix/README.md) - the
   automated VM device matrix, its files, and its traps; its `guest/README.md`
   covers the load scripts that must run inside the guest.

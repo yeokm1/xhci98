@@ -257,8 +257,10 @@ static void test_decide(void)
                              "held device, port no longer enabled") == 0,
                       r->what, __FILE__, __LINE__);
     }
+    /* A NULL decision is answered, not dereferenced. There is nothing to
+     * read back (the function is VOID), so this is not a CHECK: a
+     * dereference faults the suite, and the runner fails a crashed suite. */
     XhciSsHubPortDecide(E, UP, 0, NULL);
-    CHECK(1, "a NULL decision is answered, not dereferenced");
 }
 
 static void test_selectors(void)

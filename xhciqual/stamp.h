@@ -49,7 +49,7 @@ int stamp_name(unsigned month, unsigned day, unsigned hour, unsigned minute,
                char *out);
 
 /*
- * The name, created: what --log-stamp uses (Codex round 1 on task 38.1). A
+ * The name, created: what --log-stamp uses (task 38.1). A
  * name that is free when asked about can be taken before it is created, and
  * a create that truncated would then overwrite it; so the caller's create
  * must be exclusive (INT 21h AH=5Bh, "create new file"), and a create that

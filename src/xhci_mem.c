@@ -648,7 +648,9 @@ ULONG XhciCommonBufferAllocationBytes(ULONG resourcesSize)
     if (resourcesSize == 0) {
         return 0;
     }
-    /* usbport: ROUND_TO_PAGES(BufferLength + sizeof(header)). */
+    /* usbport's: ROUND_TO_PAGES(BufferLength + sizeof(header)). Kept for the
+     * host suite's record of the miniport's sizing; the HCD's allocation is
+     * XHCI_HC_RESOURCES_SIZE, unrounded by any header (hcd_dma.c). */
     if (resourcesSize > (0xFFFFFFFFUL - XHCI_USBPORT_CB_HEADER_BYTES -
                          (XHCI_PAGE_SIZE - 1))) {
         return 0;

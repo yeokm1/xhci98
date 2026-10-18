@@ -16,7 +16,7 @@ placeholders, which map as follows:
 | `POLL-E` | 36.14 |
 | (new) MSI on Vista and 7 | 36.15, 36.16 |
 
-It was drawn up as Phase 35, and the review history in section 13 keeps the
+It was drawn up as Phase 35, and the revision history in section 13 keeps the
 old phase numbers. Section 4.2 and decision 6 are the 2026-10-08 amendment
 for issue 12. Section 4.3 and decision 7 add MSI on Vista and 7 (36.15).
 That reverses section 1's "not in this design" for MSI on NT6.
@@ -26,9 +26,9 @@ message or interrupter stays out.
 Revision 4, 2026-10-05: written at the owner's request so the driver can
 run a controller that delivers no legacy interrupt - an MSI- or MSI-X-only
 xHCI controller, which neither primary target can serve today - by polling
-the event ring, adaptively, instead of waiting for an interrupt. Reviews
-covered revisions 1 to 3 the same day (10, 8 and 5 findings, all taken;
-section 13 maps each) and converged at round 4, on revision 4.
+the event ring, adaptively, instead of waiting for an interrupt. Revisions
+1 to 3 were reviewed and revised the same day (section 13 maps each
+change); revision 4 is the result.
 
 **Revision 5, 2026-10-09 (task 36.5).** The issue 12 amendment made
 concrete before code: the watcher of section 4.2 (its predicate, period,
@@ -36,7 +36,7 @@ count and window, and the move), WATCHING as a role in section 5, the
 mode rules reconciled with 36.15's decisions (sections 1, 3, 4 and 11),
 section 4.1 checked against the spec, the inputs and hooks of sections 6
 and 7.1 named, and section 4.3 designed in full for 36.15, so the MSI code
-has a reviewed design. Reviewed in 36.5's loop (section 13.5).
+has a reviewed design. Reviewed and revised in task 36.5 (section 13.5).
 
 **Revision 6, 2026-10-10 (task 36.15, as built).** Section 4.3 reconciled
 with design record 18 - the NT 6 x86 MSI helper and the owner's decisions
@@ -75,7 +75,7 @@ design record 18, extended to Windows 2000 and XP and renamed
 `xhcimsi.sys` they describe `2.3.0.0` and `2.3.1.0`. Section 7's
 "next question" is answered there. The owner answered section 7.2.13's
 and record 18 section 15.13's decisions the same day, and revised T3, T5
-and H2 after review round 1 (section 12, decision 9): `XhciPollIdleMs`
+and H2 at `e2c01854` (section 12, decision 9): `XhciPollIdleMs`
 keeps its default of 50, measured against 500 by the legs (section
 7.2.6a). **The code, 2026-10-14**: section 7.2.14, as built; its legs
 are owed.
@@ -103,7 +103,7 @@ moves. On a controller whose line interrupt works, the default must read
 as the release before it does: the same delivery, the same ISR, the same
 drains.
 
-## 2. State today (read 2026-10-05, and by review on revision 1)
+## 2. State today (read 2026-10-05, and checked again on revision 1)
 
 The start:
 
@@ -148,8 +148,9 @@ The drain and its accounting:
   so a reader without the controller lock can see an out-of-range index.
 - **Since `2.2.0.0` (task 35-T.1, after this section was read) the ISR is
   not the only producer of `IsrDpc`.** Design record 17 section 4.1's
-  lost-interrupt backstop (`hcd_ctl.c`, `hcdBackstop`), a step of the
-  controller thread's own under the power gate, peeks the event TRB at the
+  lost-interrupt backstop (`hcd_ctl.c`, `HcdCtlBackstopTick`), a step of
+  the controller thread's own under the power gate until task 36.55 moved
+  it to the tolerance clock's DPC, peeks the event TRB at the
   software dequeue with `XhciEventRingPending` under the controller lock and
   queues `IsrDpc` through `hcdIsr`'s admission - `DpcsInFlight` counted
   before the insertion and rolled back on a refusal, nothing once
@@ -435,8 +436,9 @@ interrupt not delivered". Mode 1 (the line, forced) never moves, so it
 reads as today. Mode 2 polls from the start. A message delivery is not
 watched.
 
-**Who looks** (review of `7567dec`; decided by the owner,
-2026-10-09). `hcdBackstop` runs on `hcdThread`, and `hcdCommand` blocks
+**Who looks** (at `7567dec`; decided by the owner, 2026-10-09). The
+backstop then ran on `hcdThread` (it is `HcdCtlBackstopTick`, in the
+tolerance clock's DPC, since 36.55), and `hcdCommand` blocks
 that thread in a command wait for the very completion a dead line never
 delivers (issue 12 section 2), so the backstop cannot be the observer. The
 poller's own timer and DPC look instead: at a mode 0 start under a line
@@ -520,8 +522,8 @@ the same controller-lock hold as the look that proved the line dead:
    delivery and reason (section 8).
 2. `XHCI_EXT_FLAG_INTERRUPTS` is cleared, so no drain, resume or recovery
    re-arms.
-3. **The line is retired, with the ISR excluded** (review of
-   revision 5, rounds 1 to 3). `LineMoved` is set to 1 in the extension
+3. **The line is retired, with the ISR excluded** (revision 5).
+   `LineMoved` is set to 1 in the extension
    first: the delivery was a line, and its retirement is now owed. Masking
    forbids new interrupts, but the INTx a pin controller has already
    asserted "remains asserted until the device driver clears the Interrupt
@@ -542,8 +544,7 @@ the same controller-lock hold as the look that proved the line dead:
    `XhciMaskInterrupts` keeps, since 5.4.1 forbids Operational and Runtime
    writes then - nor derives a write from an operand that read all ones;
    either case answers "not proven", and the PASSIVE containment below
-   goes on to its configuration-space step without touching MMIO (round
-   7).
+   goes on to its configuration-space step without touching MMIO.
    1. **Both enables down, proven.** `USBCMD.INTE` written 0 and
       `IMAN.IE` written 0 (`IP` written 0, so it is kept), then both read
       back, up to three times, until `INTE` and `IE` both read 0 - both,
@@ -566,7 +567,7 @@ the same controller-lock hold as the look that proved the line dead:
       and from here no interrupt is ever wanted again, so `EINT` is left
       as it stands and no ISR of this controller reads it.
 
-   **A retirement owed is retired at every chance** (rounds 3 to 6).
+   **A retirement owed is retired at every chance**.
    The verdict says only that no claim came in a 300 ms window, not that
    the ISR can never acknowledge later (on the E7250 an EHCI interrupt can
    still bring it there), so while the retirement is owed the ISR keeps
@@ -582,7 +583,7 @@ the same controller-lock hold as the look that proved the line dead:
       lock (`HcdPollRevoke`) - and only then reads whether a retirement is
       owed: the watcher moves only inside an admitted pass, holding the
       controller lock from its look through the move, so after the
-      revocation no new obligation can appear behind the check (round 7).
+      revocation no new obligation can appear behind the check.
       It runs the DIRQL retirement once more and, if that does not
       prove, sets bit 10 of the PCI Command register (Interrupt Disable;
       PCI 3.0 6.2.2: "when set, the function is prevented from asserting
@@ -698,13 +699,13 @@ connection refused, or Windows falling back to the line - fails the
 start, with no fallback to the line or to polling; on Windows 98 SE, ME,
 2000, XP and XP x64 mode 3 fails the start, since they grant no message.
 
-**How each architecture reaches `IoConnectInterruptEx`** (36.5's review;
-owner, 2026-10-09). Four review rounds found no way for the one x86
-binary to reach it by itself that is safe without an import Windows 98
-lacks: a walk of the running kernel's memory cannot prove the pages it
-reads are mapped (rounds 1 to 3), and a parse of the kernel's file, tied
-to the running image by the driver's own imports, proves where those
-imports are but not where `IoConnectInterruptEx` is (round 4). So:
+**How each architecture reaches `IoConnectInterruptEx`** (task 36.5;
+owner, 2026-10-09). There is no way for the one x86 binary to reach it
+by itself that is safe without an import Windows 98 lacks: a walk of the
+running kernel's memory cannot prove the pages it reads are mapped, and
+a parse of the kernel's file, tied to the running image by the driver's
+own imports, proves where those imports are but not where
+`IoConnectInterruptEx` is (section 13.5). So:
 
 - **amd64** calls `MmGetSystemRoutineAddress` (below).
 - **x86** gets them from **`xhcimsi.sys`, a small NT 6-only x86 helper
@@ -853,7 +854,7 @@ pure function over the configuration bytes, host-tested (`test_msi`).
 **The ISR.** `hcdMsgIsr(Interrupt, Context, MessageId)` does what the line
 ISR does - `XhciIsr`: EINT then IP acknowledged and `IE` written 0, on a
 claim - and returns `XhciIsr`'s answer, queueing the drain only on a claim
-(review of revision 5, round 1). Windows permits shared message
+(revision 5). Windows permits shared message
 interrupts and may call a message ISR for an interrupt this controller did
 not raise, so its contract is the line ISR's: FALSE for an interrupt not
 handled. `XhciIsr` claims on `USBSTS.EINT`, which the xHC sets on each
@@ -934,7 +935,7 @@ under `PollLock`:
 | CLOSING | the DPC | as FIRING, but close has been asked; the DPC ends it |
 | CLOSED | nobody | closed; nothing touches the poller until a start reopens it |
 
-**The role** (2026-10-09; review of `6cac234`) is not a state. The
+**The role** (2026-10-09; revised from `6cac234`) is not a state. The
 states say who owns the timer; the role, `PollRole` under `PollLock`, says
 what the DPC does while it owns it:
 
@@ -976,7 +977,7 @@ promoted and never peeked for.
 - **The DPC's pass.** In CLOSING it does nothing more and ends. Otherwise,
   under the controller lock, it reads the admission of section 5.3; not
   admitted, it decides to park (section 5.3) and ends. **The DPC keeps
-  ownership until its epilogue** (rounds 3 to 5): the decision, made
+  ownership until its epilogue**: the decision, made
   under the controller lock and then `PollLock`, only marks the pass
   `ParkPending`; the state stays FIRING (or CLOSING, if a close came
   meanwhile). After **both** locks are released the DPC takes `PollLock`
@@ -996,7 +997,7 @@ promoted and never peeked for.
   decision under the controller lock again.
 - **The DPC gives it up** as it ends, under `PollLock`: CLOSING becomes
   CLOSED; otherwise it arms and the state becomes ARMED. **The arm is the
-  role's** (review of revision 5, round 1): a watcher arms
+  role's** (revision 5): a watcher arms
   `XHCI_POLL_WATCH_MS` exactly, with no deadline, no `PollOwed` and no
   conversion, since nothing promotes a watcher and the registry periods do
   not govern it; a server arms at the earlier of its own decision and
@@ -1040,15 +1041,15 @@ core's own flags. `INITIALIZED` is published before the controller is run
 run bit is written, so neither proves the controller runs.
 
 - **Set** by the HCD alone, once everything the poller's admission reads
-  is published, in one controller-lock hold that also kicks (review
-  of revision 5, round 1: `hcd_power.c` calls `XhciResumeController`
+  is published, in one controller-lock hold that also kicks (revision
+  5: `hcd_power.c` calls `XhciResumeController`
   before it publishes `Common.DevicePower = PowerDeviceD0`, so a kick from
   inside the core's resume could arm a DPC that runs first, fails the D0
   test and parks for good; and the start's own D0 is published by
   `hcdStart` in `hcd_pnp.c` only after `hcdStartBody` returns). **Every
   grant is made with the power gate held**, so no suspend or resume on
   another processor can publish its own state between the grant's checks
-  and its kick (round 2). The sites, each through `HcdPollGrant(hc)`:
+  and its kick. The sites, each through `HcdPollGrant(hc)`:
   - **the start:** in `hcdStart`, after `HcdStartController` succeeded
     and `PnpState` and `DevicePower = PowerDeviceD0` are published, before
     the root hub's PDO is created, with the power gate taken around it;
@@ -1191,8 +1192,8 @@ then handed to the pure `XhciPollDecidePeriod`):
   the event path and the submissions write under the same lock; it is
   bounded by `MaxSlots` x 31 pipes and stops at the first ACTIVE input.
 - **A port in reset or enumeration:** `PollPortsBusy`, a count the
-  controller thread publishes under the controller lock (review of
-  revision 5, round 1: the port machines and the hub records are the
+  controller thread publishes under the controller lock (revision 5:
+  the port machines and the hub records are the
   thread's, written without the lock, so the DPC cannot scan them). The
   thread recounts it at the end of each enumeration service pass (the
   root and hub port objects whose machine is between
@@ -1330,7 +1331,7 @@ event not yet drained.
   dequeue index can be seen unwrapped (`xhci_ring.c:1373`), and the ring's
   lifetime across a reset is not otherwise guaranteed. Task 35-T.1's
   lost-interrupt backstop (record 17 section 4.1, `hcd_ctl.c`
-  `hcdBackstop`) already takes this peek, under the same lock, on each
+  `HcdCtlBackstopTick`) already takes this peek, under the same lock, on each
   controller-thread pass (since 36.55, on each tick of the tolerance
   clock's DPC instead); these checks reuse the helper with their own
   staleness rule, which is none: a hit queues the drain at once, since
@@ -1362,8 +1363,8 @@ Designed 2026-10-13 for roadmap-hcd task 38.3, before any code; the
 helper half (how the 32-bit image reaches the routine, the helper's
 extension to Windows 2000 and XP and its rename to `xhcihlpr.sys`) is
 design record 18 section 15. The owner's answers of 2026-10-13 are
-written in (section 7.2.13), as revised by the owner after review round
-1 (section 13.6).
+written in (section 7.2.13), as revised by the owner at `e2c01854`
+(section 13.6).
 
 #### 7.2.1 What is asked, and what is not
 
@@ -1515,8 +1516,8 @@ thread" reads "from a thread of the controller's").
   on the call.
 - **Why not a work item.** `ExQueueWorkItem` (the only work-item routine
   the 32-bit image has; `IoQueueWorkItem` is not on Windows 98) does not
-  keep `xhci98.sys` loaded while the item runs (record 18 section 14.8,
-  round 7's finding), and a system worker blocked in the call is a worker
+  keep `xhci98.sys` loaded while the item runs (record 18 section 14.8),
+  and a system worker blocked in the call is a worker
   the D0 completion's own deferral (`hcdPowerDefer`, `DelayedWorkQueue`)
   may need, an indirect dependency.
 - **Why not the helper.** On 32-bit systems the helper could run the
@@ -1575,7 +1576,7 @@ controller's extension, which outlives every stop.
   start never run on NT 5. Its result is copied into `hc->Tmr`;
   absent, the thread stays and never holds.
 - **Stopped and joined by the stop, after every power IRP of the
-  controller's children is settled** (round 1, finding 1): the stop sets
+  controller's children is settled**: the stop sets
   `TmrStop` and `TmrBar` under the controller lock and signals the event
   first of all, before `hcdThreadStop`, so the thread gives a held
   request back at once and takes none; it joins the thread (its object,
@@ -1621,8 +1622,8 @@ lock; every write that can change "wanted" sets the timer thread's event
   each bar (below) set `TmrActive` to 0 and advance `TmrGen`, and set the
   event, always.
 - **A grant** (`HcdPollGrant`, every site: the start, D0, the direct
-  resume, the recovery) clears `TmrBar` and sets the event, always (round
-  1, finding 3). Because a boundary reset `TmrActive`, the first ACTIVE
+  resume, the recovery) clears `TmrBar` and sets the event, always.
+  Because a boundary reset `TmrActive`, the first ACTIVE
   decision after the grant is a change and signals too.
 - `hcdPollMove` sets the event (a move makes the role SERVE and the
   delivery poll).
@@ -1692,8 +1693,8 @@ nothing waits for it.
 
 #### 7.2.6a The idle period: kept at 50 ms, and what the legs measure
 
-The owner keeps `XhciPollIdleMs`'s default at 50 ms (2026-10-13, after
-review round 1, which found the case for 500 ms incomplete) and asks for
+The owner keeps `XhciPollIdleMs`'s default at 50 ms (2026-10-13, at
+`e2c01854`, the case for 500 ms having been found incomplete) and asks for
 the readings on which a change would be decided. Since the idle period
 is also the ACTIVE window after the last event (section 6.1), it governs
 how long the finer timer outlives a burst; the measurement is therefore
@@ -1740,7 +1741,7 @@ CPU over a fixed minute; the time from a plug to a working device at a
 root port and behind an external hub; and the finer timer's holds and
 releases per minute (`TmrHolds`, `TmrReleases`) under a moving mouse and
 under intermittent storage bursts. **The wakes are not all readable on
-the test environment** (round 2, finding D): QEMU generates no Device
+the test environment**: QEMU generates no Device
 Notification Event (record 14 section 8.12, read from QEMU 11.1.0's
 `hcd-xhci.c`), so a Function Wake's latency cannot be read on a guest,
 and a zero Function Wake counter is not a reading; a USB 2.0 remote wake
@@ -1821,8 +1822,7 @@ start zeroing them; `XHCISNAP` names them, as task 36.9 did):
 - `TmrReleaseCause` of the last release: 1 the poller left ACTIVE, 2
   parked or revoked, 3 barred (a power transition), 4 the stop;
 - `TmrHeldMs`, the time held in this start, in whole ms, saturating;
-- **phase observations** (round 1, finding 6; round 2, finding B; round
-  3, finding 2): **the observation epoch**, `TmrObsEpoch`, is advanced
+- **phase observations**: **the observation epoch**, `TmrObsEpoch`, is advanced
   by the timer thread under the controller lock immediately before each
   call (to an odd value: a call in flight) and immediately after it
   returns (to the next even value), so every hold and every release moves
@@ -1831,7 +1831,7 @@ start zeroing them; `XHCISNAP` names them, as task 36.9 did):
   controller-lock hold where it observes (`XhciPollObserve`, ~813). Each
   run is a **sample**: its entry timestamp, its entry and observation
   epochs, the period armed for it and the start. **The baseline**
-  (round 4, finding 1) is the last coherent sample, kept apart from the
+  is the last coherent sample, kept apart from the
   counting:
   - a sample is **coherent** when its entry and observation epochs are
     one even value; an incoherent one (an odd epoch, or a call landing
@@ -1903,8 +1903,8 @@ In `test_poll`: `XhciPollTmrWant` over each input alone;
 advanced, with the invariants checked over random sequences of inputs
 and boundaries (never `TRUE` while HELD, never `FALSE` while RELEASED,
 no HELD state surviving a generation change, every `TRUE` followed by a
-`FALSE` before the thread's exit); the two schedules of round 1's
-finding 3 with the executor delayed - a revoke, release and grant with
+`FALSE` before the thread's exit); the two schedules of section 7.2.6's
+grant signal with the executor delayed - a revoke, release and grant with
 the next decision still ACTIVE (one release, then one hold after the
 grant's signal), and a revoke and grant before the thread samples (a
 forced release, then a hold); a recovery; a PERIODIC decision after
@@ -1917,7 +1917,7 @@ the 3 ms lateness threshold at its edge, `ObsSumMs` saturating, a
 HELD-RELEASED-HELD and a RELEASED-HELD-RELEASED sequence between two
 runs, a call landing between a run's entry and its observation, an odd
 epoch, a change of armed period and a change of start - each rejected,
-and observation resuming after each (round 5, finding 2): after an
+and observation resuming after each: after an
 incoherent sample (an odd epoch, or a call between entry and
 observation) the baseline is invalid, the next coherent sample seeds and
 the one after it counts; after a coherent sample that changed epoch,
@@ -1985,14 +1985,14 @@ a leg's off case or baseline is the value 0 written explicitly.
   removal (QEMU `device_del`, as record 18's L3): the stop's dump with
   `TmrHeld` 0 and cause 4, no bugcheck, and the next start's counters
   from zero. Then the stop with a child's power IRP really outstanding
-  (round 2, finding C): a child put in D2 does not keep its D-IRP pended
+  a child put in D2 does not keep its D-IRP pended
   (admission publishes the Dx and the executor completes it), so the
   `qemu` flavour gains `XhciQemuSuspHoldDx` 1. **Under it the executor
   does not claim a child's pended Dx**: its pass skips the slot before
   `hcdSuspTake` (which appends the IRP to the pass's taken list; its
   caller then clears `PwrIrp`, `src/hcd_susp.c` ~2227), so the IRP stays
   in `PwrIrp`. That preserves it against **normal executor completion
-  only** (round 4, finding 3): the other settlement paths stay as they
+  only**: the other settlement paths stay as they
   are - the PDO's close (`HcdSuspPdoClose`, ~3035, from the PDO's
   teardown), the controller's suspend (`HcdSuspSettleStale`, ~3424, from
   `hcd_power.c` ~116) and the stop's unlink (`HcdSuspUnlinkFinish`'s
@@ -2010,11 +2010,11 @@ a leg's off case or baseline is the value 0 written explicitly.
   unlink's hand-off, the stale settle): after `IoCompleteRequest`
   returns and before `PowerPending` is dropped, from the serial, D-state
   and claiming path (unlink, PDO close or stale settle) saved before the
-  completion, never read back from the completed IRP (round 5, finding
-  1); the settlement paths themselves unchanged; `poll.timer.call` written by the
+  completion, never read back from the completed IRP; the settlement
+  paths themselves unchanged; `poll.timer.call` written by the
   timer thread **before the injected delay** and `poll.timer.return`
   after the call returns, each with the start's serial and the call's
-  sequence number in that start (round 4, finding 2); and
+  sequence number in that start; and
   `poll.timer.join` after the join returns.
 
   The leg: `XhciSelectiveSuspend` 1, record 14's test client asking D2,
@@ -2085,7 +2085,7 @@ a leg's off case or baseline is the value 0 written explicitly.
 
 #### 7.2.13 The owner's decisions (2026-10-13)
 
-Answered before review, then revised by the owner after review round 1
+Answered before review, then revised by the owner at `e2c01854`
 (section 13.6):
 
 - **T1: (b)**, a timer thread per controller (section 7.2.5).
@@ -2095,7 +2095,7 @@ Answered before review, then revised by the owner after review round 1
   7.2.6). **`XhciPollIdleMs` keeps its default of 50**; the legs measure
   50 against 500 on every target and the default is decided on that
   reading (section 7.2.6a). (The first answer moved it to 500; withdrawn
-  after review round 1.)
+  at `e2c01854`.)
 - **T4:** `XhciPollFineTimer`, 1 by default (section 7.2.4). **Amended
   by the owner 2026-10-14: 0 by default (opt-in)**, after the matrix's
   reading on QEMU guests (section 7.2.4's amendment).
@@ -2155,7 +2155,7 @@ T8 is deferred.
   RELEASED - the baseline the legs compare against on the same guest.
   The period "armed for the run" is `PollPeriodLast` read at the DPC's
   entry under `PollLock`. The entry epoch is read before the entry time,
-  not after it (review round 1 of the code): a call landing between the
+  not after it (as the code was revised): a call landing between the
   two reads then moves the epoch past the value read, so the run is
   incoherent and counts nothing, where the other order dated a pre-call
   time under the post-call epoch.
@@ -2319,8 +2319,8 @@ A controller is no longer disqualified for `Interrupt Pin = 0`:
 or set `XhciInterruptMode` to 2)", and the other disqualifiers - BAR0 above
 4 GB, unassigned, I/O space - keep their verdicts.
 
-C4 is not converted wholesale. Its fail covers several causes (review,
-revision 1): the DPMI interrupt hook not installed (`bringup.c:580`), no
+C4 is not converted wholesale. Its fail covers several causes (revision
+1): the DPMI interrupt hook not installed (`bringup.c:580`), no
 `IP` and no matching event (`:605-623`), and an ISR that fired with no
 completion behind it (`:668`). Only the cause "the event reached the ring
 and no interrupt arrived" reads "needs polling"; the tool's own failures
@@ -2370,7 +2370,7 @@ can arrive, and the polled completion is the same evidence. FAIL stays for
 a DPMI step that failed, an ISR entry the controller's status did not own,
 an ISR with no completion behind it, and a No-Op that never completed even
 polled, which the verdict words as the command's failure rather than the
-line's. One POLL differs in its advice (review rounds 1 and 2): when `IP`
+line's. One POLL differs in its advice: when `IP`
 was never seen, at any look through both of C4's waits, the driver's
 automatic mode cannot see the dead line - section 4.2's watcher moves on
 `IP` asserted with nothing claimed - so the caveat names
@@ -2379,7 +2379,7 @@ capability list, said as untested; and since an enabled MSI or MSI-X
 clears `IP` itself after its message (4.17.5), one found enabled (Message
 Control, read only) is named as a reason `IP` may not have been seen. A
 source that comes live late, `EINT` and `IP` both up after the first wait,
-goes on to the delivery test as a prompt one does (review round 3). Every
+goes on to the delivery test as a prompt one does. Every
 path that installed the hook removes it before C4 returns, so C6 and C8 run
 with no live ISR. `--irq-selftest` gives the same outcome
 as "IRQ SELF-TEST: NO WORKING INTERRUPT", exit 3. The QEMU matrix reaches
@@ -2474,7 +2474,7 @@ and that flavour is never published.
   with its expected evidence stated for the drains that compete:
   - **N = 0, a line dead from the first No Op**, a device present at
     boot. For N = 0 the latch is set before the interrupt is connected
-    (review of revision 5, round 2: the No Op is submitted and the
+    (revision 5: the No Op is submitted and the
     enables raised before the grant, so a latch set at the grant would let
     its completion be claimed and drained normally); the watcher's timing
     still begins at the grant, and the leg reads `qemu.inj.deadline.isr`
@@ -2549,8 +2549,8 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
    ME, 2000 and XP, 32- and 64-bit, mode 3 fails the start. 0 and 2 are
    unchanged, and 4 and above still run as 0 (revision 7; task 36.53).
 
-9. (2026-10-13, task 38.3; revision 8; revised by the owner after review
-   round 1) A finer system timer while polling, on Windows 2000 and later
+9. (2026-10-13, task 38.3; revision 8; revised by the owner at
+   `e2c01854`) A finer system timer while polling, on Windows 2000 and later
    (section 7.2): T1, the call on a timer thread of each controller's; T2,
    the active period x 10000 asked for; T3, held while the poller is
    ACTIVE and given back when it is not, the idle period the only linger,
@@ -2560,11 +2560,11 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
    7.2.4); T5, an update keeps an existing value. The helper's H1 to H5
    are design record 18 section 15.13's.
 
-## 13. The reviews
+## 13. The revisions
 
 ### 13.1 Revision 1
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | The core's own interrupt gates and the manufactured resource mask | Sections 2 and 4 |
 | 2 | Timer delivery cannot reuse the ISR's admission; one DPC for timer and queue | Sections 5.1 and 5.2 |
@@ -2579,7 +2579,7 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 
 ### 13.2 Revision 2
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | `KeCancelTimer` TRUE does not prove retirement when a promotion re-arms under a running DPC | Section 5.2: one owner at a time, `PollOwed`, close through CLOSING |
 | 2 | Park and kick can lose the restart | Section 5.3: both inside one controller-lock hold; the kick sites named |
@@ -2592,7 +2592,7 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 
 ### 13.3 Revision 3
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | CLOSED was terminal; a stop and start never reopened the poller | Section 5.2: initial state CLOSED, opened at each poll-delivery start |
 | 2 | A clock step breaks the deadline bound | Section 6.2: every deadline checked where it becomes an arm, every arm between the active and idle periods |
@@ -2602,17 +2602,18 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
 
 ### 13.4 Revision 4
 
-Converged (review round 4, 2026-10-05): one wording finding, the roadmap's
-Phase 35 status still naming revision 3, taken. No finding in the reopen,
-the deadline conversion, the phase split or the cross-references.
+2026-10-05: one wording correction, the roadmap's Phase 35 status still
+naming revision 3. Nothing else changed in the reopen, the deadline
+conversion, the phase split or the cross-references.
 
 ### 13.5 Revision 5 (task 36.5)
 
-Reviewed 2026-10-09 in 36.5's loop, eight rounds, converged at round 8.
+Reviewed and revised 2026-10-09 in task 36.5, in eight commits; what each
+answered is below.
 
-Round 1 (`a744811`): 4 P1, 5 P2, all taken.
+At `a744811`: 4 P1, 5 P2, all answered.
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P1: the export walk touched pages it had not proven resident | Section 4.3: amd64 calls `MmGetSystemRoutineAddress`; x86 walks only the header page and nonpaged `.text` below a routine in it (static reading of both kernels, PAE kernels before code), every header and export range checked against a non-discardable section, a refusing reader in the vectors |
 | 2 | P1: a kick inside the core's resume runs before the HCD publishes D0, and the DPC parks for good | Section 5.3: `PollService` set by the HCD alone (`HcdPollGrant`) after D0 is published, at start, D0 return and recovery |
@@ -2624,9 +2625,9 @@ Round 1 (`a744811`): 4 P1, 5 P2, all taken.
 | 8 | P2: the dead-line injection vanished with an empty ring, and the BUSY leg's drain competes | Section 11: a latch independent of the ring; each leg's competing drains and expected evidence |
 | 9 | P2: the port machines are the thread's, not the lock's | Section 6.1: `PollPortsBusy` published by the thread; a port reset promotes |
 
-Round 2 (`1bc3546`): 3 P1, 3 P2, 1 P3, all taken.
+At `1bc3546`: 3 P1, 3 P2, 1 P3, all answered.
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P1: the start's grant came before `hcdStart` publishes D0 | Section 5.3: the start's grant in `hcdStart`, after the D0 publication |
 | 2 | P1: the retirement raced the DIRQL ISR, which declines on `EINT` 0 | Section 4.2, step 3: `KeSynchronizeExecution` around `XhciRetireLine`; `IP` before `EINT`, so an unproven step leaves the ISR able to claim; the poller closed before the disconnect (section 5.2) |
@@ -2636,68 +2637,65 @@ Round 2 (`1bc3546`): 3 P1, 3 P2, 1 P3, all taken.
 | 6 | P2: a retry repeated the acknowledgement without the both-enables proof, and `IP` can rise again | Section 4.2, step 3.1 to 3.3: both enables proven each attempt; a re-set `IP` with `IE` 0 told from the standing one |
 | 7 | P3: roadmap 36.15 still argued one walk and one message | Roadmap 36.15: amd64's call, x86's walk, a multi-message grant served as one |
 
-Round 3 (`b814ee3`): 2 P1, 1 P2, 1 P3, all taken.
+At `b814ee3`: 2 P1, 1 P2, 1 P3, all answered.
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P1: a failed `IP` step left `InterruptDeliverySuppressed` set, so a later suspend or recovery opened the ISR's old decline gate | Section 4.2: step 1 no longer sets it; `LineMoved` keeps the ISR claiming while a retirement is owed; the HCD retries before a suspend, a recovery and the disconnect; a completed HCRST retires it |
 | 2 | P1: a build number does not prove the running kernel's layout | Section 4.3: x86 reads no kernel memory - it parses the kernel's file and proves the identity by every import resolving to one base; roadmap 36.15 |
 | 3 | P2: a park against a close asked after the DPC took ownership | Sections 5.2 and 5.3: the park turns CLOSING into CLOSED; a revocation cancels no timer, stated; vectors |
 | 4 | P3: the retirement's `EINT` write broke Table 5-21's order | Section 4.2, step 3.3: `EINT` is not acknowledged |
 
-Round 4 (`f4d8a28`): 2 P1, 2 P2, all taken.
+At `f4d8a28`: 2 P1, 2 P2, all answered.
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P1: agreeing anchors do not prove the target's RVA | Section 4.3: amd64 through `MmGetSystemRoutineAddress`; x86 through an NT 6-only helper driver designed separately (owner, 2026-10-09, after the review), the line without it; roadmap 36.15 |
 | 2 | P1: an unproven retirement and the ISR's lifecycle gates | Section 4.2: why the ISR path never acknowledges this assertion; the unproven outcome recorded and ended by the next HCRST |
 | 3 | P2: CLOSED published before the DPC's last controller access | Section 5.2: CLOSING kept through the park; CLOSED in a `PollLock`-only epilogue |
-| 4 | P2: the file parser's callable-address and short-read checks | Moot with finding 1: the file parser is withdrawn |
+| 4 | P2: the file parser's callable-address and short-read checks | Moot with problem 1: the file parser is withdrawn |
 
-Round 5 (`5508b61`): 2 P1, 1 P2, all taken.
+At `5508b61`: 2 P1, 1 P2, all answered.
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P1: PARKED published before the DPC's last access; a grant could arm under a parking DPC | Sections 5.2 and 5.3: `ParkPending` and `KickOwed`; ownership given up only in the `PollLock`-only epilogue |
 | 2 | P1: a finite verdict is not permanent unreachability; containment needed | Section 4.2: the ISR keeps its path; escalation to PCI INTx Disable, then the recovery's HCRST, then a recorded uncontained terminal |
 | 3 | P2: the acceptance legs still asked MSI of x86 | Roadmap decisions table, 36.15 and 36.16; section 4.3's legs |
 
-Round 6 (`ded0bbf`): 1 P1, 2 P2, all taken.
+At `ded0bbf`: 1 P1, 2 P2, all answered.
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P1: clearing Interrupt Disable before the reset could re-expose a pending `IP` | Section 4.2: cleared only after `XhciInitController` succeeded, just before `XhciEnableInterrupts`, read back; left set on a failed start; a stuck bit handled per mode |
 | 2 | P2: stop and suspend could bypass the PCI step | Section 4.2: `HcdPollContain`, under the power gate in D0, called by the thread, both suspend paths, `hcdRecover` and the stop after the thread ends |
 | 3 | P2: "latched failed" did not enter the recovery machinery | Section 4.2: the recovery asked through `XhciRequestControllerReset`, its existing bounded retries and terminal kept; `LineRetired` set at HCRST completion |
 
-Round 7 (`8cee483`): 1 P1, 1 P2, both taken.
+At `8cee483`: 1 P1, 1 P2, both answered.
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P1: containment could write MMIO during a reset or on a bad layout | Section 4.2, step 3: `HcInfoStatus` admission, HCRST/CNR and operand guards; the PCI step taken without MMIO |
 | 2 | P2: the watcher could create an obligation after a lifecycle check | Section 4.2, containment step 2: `HcdPollRevoke` before the check |
 
-Round 8 (`59e0959`): **converged** - "the design is now sound enough to
-implement", no P1 or P2. Two P3s taken: `HcdPollRevoke` named among the
+At `59e0959`: no P1 or P2 left, and the design judged sound enough to
+implement. Two P3s answered: `HcdPollRevoke` named among the
 revocation's writers (section 5.3), and what `LineRetired` proves stated
-for all three of its proofs (section 4.2). Review thread
-`01a12062-0080-7c92-a609-9e2b765333c4`.
+for all three of its proofs (section 4.2).
 
 ### 13.6 Revision 8 (task 38.3)
 
 Drafted 2026-10-13 and put to the owner for section 7.2.13's decisions
-before any review round (the owner's rule for Phase 38's design tasks:
+before any review (the owner's rule for Phase 38's design tasks:
 decisions first, review after); the answers written in the same day,
 with the idle default's change (sections 3 and 7.2.6a) and the open T5.
 
-Round 1 (`e2c01854`, review thread
-`01a135b1-e223-7ab1-95c0-686c23dc9d01`): 2 P1, 8 P2, 3 P3. With them the
-review gave an opinion on each owner answer; the owner then revised T3
-(the 500 ms default withdrawn, measured instead), T5 (option (a)) and
-record 18's H2 (no forced restart). All findings taken in revision 8's
-round-1 commit:
+At `e2c01854`: 2 P1, 8 P2, 3 P3, with an opinion on each owner answer;
+the owner then revised T3 (the 500 ms default withdrawn, measured
+instead), T5 (option (a)) and record 18's H2 (no forced restart). All
+answered in that commit:
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P1: the stop's join came before the children's pended D-IRPs were settled, so a child power IRP could wait on the call | Section 7.2.5: the stop bars and signals first, joins after `HcdEnumDrop`, `HcdSuspCbStop` and `HcdSuspDoneDrain`; section 7.2.7 point 3; leg T3 with a pended child and a delayed call |
 | 2 | P1: the 500 ms rationale ignored the other peeks and Function Wake's Device Notification Event | Section 7.2.6a rewritten as a measurement; section 7.2.2 names the paths |
@@ -2713,11 +2711,10 @@ round-1 commit:
 | 12 | P3: an inference stated as a reading | Section 7.2.2 |
 | 13 | P3: the kit substitutes a target rather than refusing | Record 18 section 15.10 |
 
-Round 2 (`50c0dfc3`, same thread): 1 P1, 3 P2, 2 P3. Round-1 findings 1,
-3 to 5 and 7 to 13 confirmed closed; 2 and 6 reopened narrower. All
-taken:
+At `50c0dfc3`: 1 P1, 3 P2, 2 P3. Problems 1, 3 to 5 and 7 to 13 of
+`e2c01854` held; 2 and 6 were narrowed. All answered:
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | A | P1: the tolerance backstop is a stale-event detector (tolerance 1, four ticks), not a peek | Sections 7.2.2 and 7.2.6a |
 | B | P2: an idle 50 ms request cannot show the clock; boundary-crossing intervals counted | Section 7.2.9: short-request phase observations, crossings discarded, a PERIODIC released-phase stimulus; legs T2 and T5 by windows, T5 with no stated expectation |
@@ -2726,10 +2723,10 @@ taken:
 | E | P3: WATCH creates a parked thread | Record 18 section 15.4 |
 | F | P3: the header gate cannot show the target | Record 18 section 15.10: the claim limited; the build log's target line and library path checked |
 
-Round 3 (`7dde5165`, same thread): 1 P1, 3 P2, 1 P3. A, D and E
-confirmed closed; B, C and F reopened. All taken:
+At `7dde5165`: 1 P1, 3 P2, 1 P3. A, D and E held; B, C and F were
+narrowed. All answered:
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P1: `XhciIntervalCap` caps at 32 ms and cannot make a 2-5 ms probe | Section 7.2.9: an endpoint with a native short interval, named from the model's descriptors, the reading owed where none exists, acceptance needing a recorded PERIODIC period and a non-zero count |
 | 2 | P2: equal phases at both ends miss an ABA and a transition during the drain | Section 7.2.9: the observation epoch, moved before and after every call, read at the DPC's entry and at its observation; vectors in section 7.2.10 |
@@ -2737,26 +2734,25 @@ confirmed closed; B, C and F reopened. All taken:
 | 4 | P2: T3's injection cleared the slot; the stop's dump comes after the drain; unlink only hands off | Leg T3: the claim skipped before `hcdSuspTake`, the entry note, the completion worker's own note, the ordering rule |
 | 5 | P3: stale "phase bins" in the test and integrator lists | Sections 7.2.10 and 7.2.11 |
 
-Round 4 (`5ba0b6f2`, same thread): no P1, 3 P2. Round-3 findings 1, 3
-and 5 confirmed closed; 2 and 4 reopened narrower. All taken:
+At `5ba0b6f2`: no P1, 3 P2. Problems 1, 3 and 5 of `7dde5165` held; 2
+and 4 were narrowed. All answered:
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P2: a rejected sample left the baseline stale, so counting could stop for good | Section 7.2.9: coherent samples seed or count and always become the baseline, incoherent ones invalidate it; vectors showing observation resumes |
 | 2 | P2: T3's order did not prove the delay overlapped the outstanding IRP | Leg T3: call and return notes with sequence numbers, the call note before the delay, the required order with the completion inside the call |
 | 3 | P2: the skip does not make the unlink the only settlement path | Leg T3: the claim narrowed to normal executor completion, the claiming path recorded, the stop-entry condition a reading that may be owed |
 
-Round 5 (`9557fe74`, same thread): no P1, 1 P2, 1 P3. Round-4 findings 1
-and 2 confirmed closed; 3 reopened narrowly. Both taken:
+At `9557fe74`: no P1, 1 P2, 1 P3. Problems 1 and 2 of `5ba0b6f2` held; 3
+was narrowed. Both answered:
 
-| # | Finding | Where answered |
+| # | Problem | Where answered |
 |---|---|---|
 | 1 | P2: a worker-only completion note misses the PDO close's inline completion | Leg T3: the note at `hcdSuspCompletePower`, for inline and worker callers, from metadata saved before the completion |
 | 2 | P3: the recovery vectors added a seed after a coherent mismatch | Section 7.2.10: the incoherent and coherent cases split |
 
-Round 6 (`ffaaf528`, same thread), the confirmation round over round 5's
-diff: both findings confirmed closed, no P1, P2 or P3. **Converged**.
-Review thread `01a135b1-e223-7ab1-95c0-686c23dc9d01`, rounds 1 to 6.
+At `ffaaf528`: both problems of `9557fe74` held, and no P1, P2 or P3 was
+left.
 
 ## 14. What changes in the documents
 

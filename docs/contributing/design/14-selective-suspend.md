@@ -1434,7 +1434,9 @@ completes the device's WAIT_WAKEs `STATUS_NO_SUCH_DEVICE` at the unlink
   endpoint's doorbell to restart it" is 3.2's restart.
 
 **`xhci_link.c`.** `XhciLinkClassify` reads PLS=Resume on a USB3 port as
-`XHCI_LINK_UNKNOWN` (Resume was a USB2 encoding when it was written), and
+`XHCI_LINK_UNKNOWN` (written as though Resume were a USB2 encoding alone;
+a USB3 port also reads it after a device-initiated U3 exit, 4.15.2.1,
+p.255-256), and
 `XHCI_LINK_WANT_RESUME` accepts only SUSPENDED. The classification stays
 as it is: every caller that runs with the switch at 0 - the enumeration's
 reset (`hcdUsb3ResetWrite`, WANT_RESET), the inspection

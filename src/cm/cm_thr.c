@@ -490,8 +490,8 @@ VOID CmThrRunPnp(PCM_NHI nhi, ULONG work)
 /* Power IRPs this driver holds (pended, or a device IRP requested for a
  * system IRP): a removal closes admission (Removing), then waits until
  * none is left (cm_nhi.c, CmPowerDrain). FALSE once Removing is set: the
- * caller then passes the IRP down touching nothing of the extension's
- * after it. The release is each holder's last access to the extension.
+ * caller then completes the IRP with STATUS_DELETE_PENDING, touching
+ * nothing of the extension's after it. The release is each holder's last access to the extension.
  * IRQL: <= DISPATCH_LEVEL. */
 BOOLEAN CmPowerHold(PCM_NHI nhi)
 {

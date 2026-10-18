@@ -36,7 +36,7 @@ Write-Step "Checking host"
 Test-SetupHost
 
 # Get-QemuTool lives in common.ps1 - there were five copies of it and they
-# had drifted (the 2026-09-07 audit's H28).
+# had drifted (the audit of 2026-09-07).
 
 Write-Step "Checking QEMU"
 $qemuSystem = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-system-x86_64.exe"
@@ -52,7 +52,7 @@ if (($null -eq $qemuSystem -or $null -eq $qemuImg) -and $Install) {
     $wingetRc = $LASTEXITCODE
     #
     # **The installer's exit code is read, and the re-lookup does not rely on
-    # PATH** (the 2026-09-07 audit's H29). Two things were wrong here. A winget
+    # PATH** (the audit of 2026-09-07). Two things were wrong here. A winget
     # failure was ignored entirely, so a refused or cancelled install carried
     # straight on to write launchers. And the re-lookup below goes through
     # `Find-Tool`, which searches THIS process's PATH - a value inherited when
@@ -105,7 +105,7 @@ if ($null -eq $qemuSystem) {
 # (scripts\local is git-ignored and OneDrive-synced), and
 # `setup-qemu.ps1 -Install` in particular writes launchers in a process whose
 # PATH predates the install it just performed. One resolver for all five
-# generators, in common.ps1 (the 2026-09-07 audit's H28 and H29).
+# generators, in common.ps1 (the audit of 2026-09-07).
 $qemuResolve = Get-QemuLauncherResolver -FoundPath $qemuSystemCommand
 
 if ($null -eq $qemuImg) {
@@ -138,7 +138,7 @@ if ($CreateDisk) {
             & $qemuImg create -f qcow2 $diskImage $DiskSize | Out-Host
             # Read as the winget exit code above is read: a failed create used
             # to carry straight on to write launchers for an image that does
-            # not exist (the 2026-09-17 audit's D8).
+            # not exist (the audit of 2026-09-17).
             if ($LASTEXITCODE -ne 0) {
                 throw "qemu-img create failed (exit code $LASTEXITCODE) for $diskImage, so no disk image was created."
             }

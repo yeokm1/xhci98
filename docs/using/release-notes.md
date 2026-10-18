@@ -21,7 +21,8 @@ Windows XP x64 and 7 x64, and a ThinkPad E460 under Windows 98 SE. "What
 fix was read on the same E7250 under Windows XP x64 Setup. "What
 `2.4.0.0` adds" says, item by item, what was read of `2.4.0.0`'s changes.
 `3.0.0.0`'s Thunderbolt and USB4 support was read in virtual machines, on
-an emulator of those controllers, and on no real machine yet: "Where
+an emulator of those controllers; of real machines, only its Thunderbolt 3
+half on the owner's ThinkPad P14s Gen 1 under Windows 98 SE: "Where
 `3.0.0.0` was read" lists the readings.
 
 The notes for `1.2.0.0`, the last release of the USB 2.0-only miniport, stay
@@ -120,10 +121,11 @@ included.
   machines: Windows 2000 Setup bugchecked on both physical machines this
   project tried, so the driver has never run on Windows 2000 on real silicon.
   Windows ME, 32-bit Windows XP, Windows Vista and 32-bit Windows 7 are
-  supported in virtual machines only for `2.4.0.0`. Real hardware: Windows
+  supported in virtual machines only for `3.0.0.0`. Real hardware: Windows
   98 SE, at a bench session before the `2.0.0.0` release, on a ThinkPad
-  E460 and a ThinkPad P14s Gen 1, and Windows XP x64 and 7 x64 on the
-  owner's Dell Latitude E7250. `2.1.0.0`'s own
+  E460 and a ThinkPad P14s Gen 1, and later on the owner's Lenovo B490 for
+  the Intel port switchover; and Windows XP x64 and 7 x64 on the owner's
+  Dell Latitude E7250. `2.1.0.0`'s own
   changes were read in virtual machines only; of `2.1.1.0`'s, the Power tab
   and the Intel port switchover were read on the owner's real hardware under
   Windows 98 SE, and the registry values in virtual machines; of
@@ -1039,7 +1041,8 @@ detail, and what each rests on.
   refused every mouse, keyboard or other Low- or Full-Speed device behind
   that hub. Such a device now gets the standard speed ID. The fix was built
   without the hardware: it rests on the specification, the reporter's logs
-  and what Linux, FreeBSD and Haiku do, and it has never run on a VL805. It
+  and what Linux, FreeBSD and Haiku do. On a VL805 it is reported working
+  on `2.3.0.0` by the owner, not yet read in detail. It
   is on by default, on any controller, because without it every Low- and
   Full-Speed device on such a controller fails; set
   `XhciUsb2HubSpeedFallback` to `0` to turn it off ("XhciUsb2HubSpeedFallback:
@@ -1254,11 +1257,15 @@ date, all 26 names of that minute are taken, or the log cannot be created.
 
 ## Installing
 
-Each flavour directory of the package holds six files (nine in `2.3.0.0`,
-below). Five are in every
-one: `xhci98.inf` and `xhci98.sys`, the host controller driver,
-`xhciuas.inf` and `xhciuas.sys`, the UAS driver, and `txtsetup.oem`, which
-only Windows 2000 and XP Setup read (below). The sixth is
+Each flavour directory of the `3.0.0.0` package holds eight files and an
+`nt\` subdirectory of two (`2.4.0.0`'s held six files; `2.3.0.0`'s nine,
+below). Seven files are in every one: `xhci98.inf` and `xhci98.sys`, the
+host controller driver, `xhciuas.inf` and `xhciuas.sys`, the UAS driver,
+`xhcicm.inf` and `xhcicm.sys`, the Thunderbolt and USB4 driver, and
+`txtsetup.oem`, which only Windows 2000 and XP Setup read (below). `nt\`
+holds `xhcicmf.inf`, the INF of `xhcicm.sys`'s tunnel-port filter on
+Windows 2000 and later, with a copy of `xhcicm.sys` beside it; never point
+Windows 98 or ME at `nt\`. The eighth file is
 `xhcihlpr.sys` in the x86 directories, the helper the INF installs on
 32-bit Windows 2000, XP, Vista and 7 (in `2.3.0.0` and `2.3.1.0`,
 `xhcimsi.sys`, the MSI helper, installed on 32-bit Vista and 7 only), and
@@ -1271,7 +1278,9 @@ download's `tools\portsw\` directory, one copy for every flavour directory;
 in `2.3.1.0`, in `portsw\` at the top of the download; in `2.3.0.0`, at the
 root of each flavour directory. `release-x86\` is the one to install on 32-bit
 Windows and `release-x64\` on 64-bit Windows; the `debug-` directories are the
-same drivers built for troubleshooting. No Microsoft file is in the package.
+same drivers built for troubleshooting. In the download, `release-x86\`
+and `release-x64\` also carry the bundled Stor98 files ("NVMe drives behind
+Thunderbolt or USB4", below). No Microsoft file is in the package.
 
 1. Install the prerequisite, where there is one: on Windows 98 SE, NUSB 3.3
    or 3.6 if you want USB storage (above). On a fresh Windows 98 SE install
@@ -2511,8 +2520,11 @@ by default, with nothing for the backstop to drain, and the line under
 
 ## Registry settings
 
-From `3.0.0.0`, `INSTALL.BAT` asks about eight of these values where the
-hardware they affect is present, and sets them on request
+From `3.0.0.0`, `INSTALL.BAT` asks about four of these values -
+`XhciIntelPortSwitch`, `XhciInterruptMode`, `XhciForceBulkOnly` and
+`XhciSilentInstall`, seven in all with the three `XhciCm*` values it asks
+about ("The connection manager's registry values") - where the
+hardware or the Windows they affect is present, and sets them on request
 ("Installing, updating and uninstalling with INSTALL.BAT"); everything
 below can still be set by hand.
 
@@ -3137,7 +3149,8 @@ controller's own ports are not affected.
 | `0` | Off: such a device is refused, as in `2.2.0.0` |
 
 Read at each start of the controller: restart Windows after changing it.
-Built without the hardware and never run on a VL805; in QEMU virtual
+Built without the hardware; on a VL805 reported working on `2.3.0.0` by
+the owner, not yet read in detail; in QEMU virtual
 machines, whose controller lists no speed table, devices behind a hub read
 as before. `XHCISNAP`'s report says whether it is on, how many devices it
 gave an ID and which slots hold one, and on the VL805 the card's firmware
@@ -3846,7 +3859,7 @@ information.
 | SuperSpeedPlus hubs | Built from the specification against host tests; no vehicle |
 | SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
-| Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; never run on a VL805 or on any controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
+| Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; on a VL805 reported working on `2.3.0.0` by the owner, not yet read in detail, and not run on any other controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
 | Controllers below xHCI 1.0 (0.96: NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) | Accepted by default (`XhciAccept096`), driven as xHCI 1.0 controllers but for the fields Linux writes differently on them (TD Size in 0.96's units, the control transfer's Transfer Type, the isochronous burst counts, and no isochronous Frame ID) and with the capability register at 1Ch ignored, so a resume from standby re-enumerates their devices; built against host tests and Linux's handling of the same parts; read on no 0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD 0.96 parts are not applied, so isochronous transfers (audio, video) on those parts are the least certain. Set `XhciAccept096` to `0` to refuse such a controller as `2.3.1.0` did |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
 | Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs") |

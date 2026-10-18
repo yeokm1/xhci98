@@ -1,5 +1,17 @@
 # The PassThru snapshot instrument, as built
 
+> **This is the `1.2.0.0` miniport's record, on branch `1.2.0.0`.** The
+> instrument was built for the miniport, where `usbport.sys` owned the door
+> and called the miniport's `PassThru` callback (`xhciPassThru` in
+> `xhci_dispatch.c`, tested by `test_init.c`; both left the tree on
+> 2026-10-02). From `2.0.0.0` the HCD answers the same request itself:
+> `hcd_door.c` reproduces usbport's `USBUSER_PASS_THRU` dispatcher clause for
+> clause (`hcdDoorUserRequest`, `hcdDoorSnapshot`) over the extension the HCD
+> embeds, schema 5 unchanged, and adds the HCD region (design record 13
+> section 8.8), so the wire contract, the ladder and `XHCISNAP`'s behaviour
+> below still hold. What names usbport's door, its callbacks, `XHCI_FIX_*`
+> diagnostic builds or a deleted file describes the miniport.
+
 This is the as-built record of the driver's read channel: the route a
 user-mode tool takes to read `XHCI_EXTENSION` and the PORTSC array out of a
 running machine through usbport's `PassThru` escape, the wire contract, the
@@ -28,9 +40,9 @@ Where the code lives:
 
 | Half | Where |
 |---|---|
-| kernel side | `xhciPassThru` and its two helpers in `src/xhci_dispatch.c`; the wire format in the block after `XHCI_EXTENSION` in `src/xhci.h` |
+| kernel side | `hcdDoorUserRequest` and `hcdDoorSnapshot` in `src/hcd_door.c` (on `1.2.0.0`, `xhciPassThru` and its two helpers in `xhci_dispatch.c`); the wire format in the block after `XHCI_EXTENSION` in `src/xhci.h`, and the HCD region's layout in `src/xhci_snap.c` |
 | host side | `xhcisnap/`: `xhcisnap.c`, `build.cmd`, `README.md` |
-| regression | `test_passthru_snapshot` and `test_passthru_snapshot_disabled` in `test/test_init.c`, run on every build |
+| regression | `test/test_snap.c` for the HCD region's layout and `xhcisnap\selftest.cmd` for the tool, run on every build (on `1.2.0.0`, `test_passthru_snapshot` and `test_passthru_snapshot_disabled` in `test/test_init.c`) |
 | the sanctioned PORTSC exception | the bullet in `docs/contributing/implementation-invariants.md` that follows "there is one way to acknowledge a port's change bits" ("The one sanctioned exception to that rule is an observation mode") |
 
 How it is switched on and what a user is told to run: section 8. The four
@@ -40,7 +52,7 @@ things a reader should know before decoding a dump:
   ladder alone: once engaged it serves both regions whole at every level. The
   ladder gates what is recorded into the image and what the tool's plain-text
   companion publishes, never what the engaged channel serves. Why a serving
-  ceiling cannot be built on this wire format is design record 08 §13.2's;
+  ceiling cannot be built on this wire format is design record 08 section 13.2's;
   the warning is repeated here on purpose.
 - It defaults to `0`, and at `0` the callback does not engage the IOCTL at
   all: it takes section 5 rule 1's existing return, `MP_STATUS_NOT_SUPPORTED`,
@@ -56,7 +68,7 @@ things a reader should know before decoding a dump:
   what they get is this driver's own diagnostic state and nothing else.
   Writing the value needs Administrators on Windows 2000 and nothing at all
   on Windows 98. That is a measurement, taken on the one target that has a
-  user boundary. The derivation and the posture are design record 08 §13.2's
+  user boundary. The derivation and the posture are design record 08 section 13.2's
   amendment; the door itself is `docs/usb-xhci-info/usbport-miniport-abi.md`,
   "Reachability from user mode".
 - The wire format is at schema 5 in the tree since roadmap task 24.3.3
@@ -80,7 +92,7 @@ would meet that refusal.
 
 On Windows 98 this driver already records everything a mechanism question
 needs, the counter block and the note ring, both inside `XHCI_EXTENSION`, and
-none of it could get out. There is no ring-0 file sink (08 §13.0.1), the
+none of it could get out. There is no ring-0 file sink (08 section 13.0.1), the
 DebugView sink has no viewer there, and a flush needs a PASSIVE moment a
 wedged session never provides. What was missing was a way to read, not a way
 to record.
@@ -94,7 +106,7 @@ and so move `MiniPortExtensionSize`, which invalidates the tracked offset
 table, which is what a counter reader must not do. The ones known to do it
 are `XHCI_FIX_NO_RING_REUSE`, `XHCI_FIX_ACK_OWED` and the polling/gate
 candidates in `src/xhci.h`; others, such as `XHCI_FIX_QUIESCE_GATE`
-(`src/xhci_slot.c`), are behaviour-only and change no field. This block adds no field, so a shipping
+(`xhci_slot.c`, on `1.2.0.0`), are behaviour-only and change no field. This block adds no field, so a shipping
 binary decodes against the ordinary `offsets.txt`. Do not reason about a
 combination of defines from that list: measure `sizeof(XHCI_EXTENSION)` for
 whatever set you build, which is the check section 11 ends on.
@@ -146,7 +158,7 @@ each id's read status, verdict, encoding and value.
 
 That last block is what
 the plain-text companion is built out of. It is not the gather table design
-record 08 §13.2 rejected: every one of those is a scalar or an offset the
+record 08 section 13.2 rejected: every one of those is a scalar or an offset the
 compiler derives from the same struct the payload is a copy of, so it cannot
 drift from the layout the way a hand-written table would.
 
@@ -199,7 +211,7 @@ order they bite:
    This rule is
    live in every published binary, so it has a host regression rather than
    trust: `test_passthru_snapshot` and `test_passthru_snapshot_disabled` in
-   `test/test_init.c`. The switched-off channel (verbosity 0) takes this same
+   `test_init.c` (on `1.2.0.0`). The switched-off channel (verbosity 0) takes this same
    return.
 2. Read the request out before writing a byte of the reply, because request
    and header overlay each other in the caller's block.
@@ -247,7 +259,7 @@ order they bite:
 Section 5 is a specification, not the source: it names the ordering rules and
 the reasons for them. The exact validation order, the unlock path on every
 branch, the window and PORTSC capacity arithmetic, and the regression matrix
-in `test/test_init.c` (null arguments, short and header-only buffers,
+in `test_init.c` on `1.2.0.0` (null arguments, short and header-only buffers,
 past-end, a corrupted extension, a misaligned PORTSC offset, and
 PORTSC-and-shadow preservation) live in the source.
 
@@ -256,7 +268,7 @@ PORTSC-and-shadow preservation) live in the source.
 A dump is several IOCTLs and the driver runs between them, so a dump can
 tear. Every window carries `TearDetector`, read inside the driver's lock. It
 is `CheckCallbacks + DpcCount + Log.Appends + Log.Suppressed`
-(`src/xhci_dispatch.c`), so it moves for the DPC and for every producer call
+(`xhci_dispatch.c` on `1.2.0.0`), so it moves for the DPC and for every producer call
 as well as for usbport's health check. The tool prints the pair and the step
 (`tear detector 4431 -> 4438 (+7)`), because reporting a change and then
 printing only the value it started at made one idle tick and a thousand DPCs
@@ -325,7 +337,7 @@ always a superset and never a different report. A value outside `0`-`4` is
 refused rather than clamped, and a start that reads one applies the default,
 which is off. Why there are five rungs and not four, why consent and depth
 are one value, and what kind of line the 3 / 4 boundary is, are design record
-08 §13.2's; the driver's own `XHCI_LOG_VERBOSITY_*` in `src/xhci_log.h` owns
+08 section 13.2's; the driver's own `XHCI_LOG_VERBOSITY_*` in `src/xhci_log.h` owns
 the numbers.
 
 The published sequence is four steps and `regedit` appears in none of them:
@@ -475,9 +487,9 @@ E460):
   the same four control answers, the same `read 2, APPLIED 2` and a 981-byte
   ring with `log.debugview=00000000`. So the structural reading of the SP4
   binary is an observation on both targets;
-  `docs/contributing/legal-provenance.md` §4's row for this route records
+  `docs/contributing/legal-provenance.md` section 4's row for this route records
   runtime on both. The same session took the non-administrator measurement
-  design record 08 §13.2's posture rests on.
+  design record 08 section 13.2's posture rests on.
 - Real silicon, the E460, with both shipping flavours (task 13-L.3, seven
   cold boots, `run-13e.md` stage L3). `release` first and then `debug`, each
   reading back its own flavour, extension 90,272 and schema 3 off the machine

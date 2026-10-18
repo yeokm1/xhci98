@@ -537,7 +537,7 @@ function Resolve-DirectoryArgument {
     # strings.** An alias makes one directory reachable under two spellings
     # that share no prefix, so `-UploadDir X:\releases\1.2.3.4` would not be
     # recognised as inside `D:\work\releases\1.2.3.4` and the guard would let a
-    # cut write into a written-once release (review round 6). A
+    # cut write into a written-once release. A
     # PSDrive's DisplayRoot names the target of a network mapping and is empty
     # for an ordinary volume, so this closes that form.
     #
@@ -932,8 +932,8 @@ function Assert-SilentInstallLayout {
 
 function Assert-SilentInstallContent {
     # What the silent install's files in a version tree SAY (task 38.2), where
-    # Assert-SilentInstallLayout checks only where they are (Codex review of
-    # 38.2, round 1: a truncated SILENT.REG under the right name passed it).
+    # Assert-SilentInstallLayout checks only where they are (task 38.2: a
+    # truncated SILENT.REG under the right name passed it).
     # In tools\silent\, each batch is read as bytes and held to
     # package-common.ps1's Get-SilentBatchFaults and SILENT.REG to
     # Get-SilentRegFaults, the definitions test-package.ps1 holds the
@@ -1050,7 +1050,7 @@ function Assert-ReportBatchContent {
     # test-package.ps1 holds the repository's sources to. So a stale or
     # malformed batch that came in with -SnapToolDir or -QualtoolDir, or that
     # sits in the published tree -UploadSetOnly re-assembles, is refused
-    # rather than published or archived (Codex review of 38.1, round 1).
+    # rather than published or archived (task 38.1).
     #
     # With -Reference (the cut: the repository root) each one must also be
     # the repository's own tracked source byte for byte, so a tool directory
@@ -1477,8 +1477,8 @@ function Assert-PublishableAtMediaRoot {
     # script looks for is there. The release therefore publishes, and a check
     # living only in the upload assembly fires afterwards - leaving a
     # written-once version directory published with no asset and no scripted
-    # way back to one. Review round 4 established that against the
-    # actual control flow, correcting round 3's reading and mine.
+    # way back to one. That was established against the actual control
+    # flow, correcting an earlier reading.
     #
     # Supporting a subdirectory would be a change to the published layout as
     # well as to the INF. Nothing has needed it: the INF has always named both
@@ -1517,11 +1517,11 @@ function Get-UploadSetPaths {
     # download says about itself until it is unpacked.
     #
     # **-Staged names the same two under a `.staging` suffix.** The ordinary
-    # cut assembles the set BEFORE the publish swap (the 2026-09-17 audit's
-    # D5), and assembling it straight onto the final names there deleted the
+    # cut assembles the set BEFORE the publish swap (the audit of 2026-09-17),
+    # and assembling it straight onto the final names there deleted the
     # previous asset and overwrote the versioned zip while the swap could still
     # fail and roll the tracked release back - leaving the old release paired
-    # with the new release's zip (Codex review round 2). So the pre-swap set is
+    # with the new release's zip. So the pre-swap set is
     # built under these names and renamed onto the final ones only once both
     # renames of the swap have succeeded; a rollback removes the staged pair
     # and never touches a pre-existing asset. -UploadSetOnly, which publishes
@@ -1538,7 +1538,7 @@ function Get-UploadSetPaths {
 # after the publish swap has completed, so this is the first moment the previous
 # asset is touched - and by then the cut IS published, so nothing here may
 # unpublish it; what this function can do is keep the window in which out\
-# holds no usable zip as small as a rename (Codex review round 3).
+# holds no usable zip as small as a rename.
 #
 # Directory first, then the zip, and the previous zip is RENAMED ASIDE rather
 # than deleted: `.previous` beside it, the staged zip moved onto the final
@@ -1556,7 +1556,7 @@ function Publish-UploadSet {
     Move-Item -LiteralPath $Set.Root -Destination $Set.Final.Root
 
     # A `.previous` left by an interrupted earlier run is handled BEFORE this
-    # run's own rename, and by what is beside it (Codex review round 4): with
+    # run's own rename, and by what is beside it: with
     # the final zip absent it is the last good asset and goes back onto the
     # final name; with the final zip present it is the older of the two and
     # goes. It is never deleted while the final zip is absent.
@@ -1591,7 +1591,7 @@ function Publish-UploadSet {
 }
 
 # The one repair command every post-swap warning prints, rendered from the
-# arguments actually in effect (Codex review round 4): -UploadSetOnly honours
+# arguments actually in effect: -UploadSetOnly honours
 # -Version, -Flavor, -ReleasesDir and -UploadDir, and -Arch only when the
 # caller passed it (otherwise it derives the architectures from the published
 # tree - see the -UploadSetOnly branch). A bare `-UploadSetOnly -Version`
@@ -1606,7 +1606,7 @@ function Get-UploadSetRepairCommand {
     if ($bound.ContainsKey("Flavor")) { $cmd += " -Flavor " + ($Flavor -join ",") }
     if ($bound.ContainsKey("Arch")) { $cmd += " -Arch " + ($Arch -join ",") }
     # Single-quoted, with an embedded apostrophe doubled - the one escape a
-    # single-quoted PowerShell string has (Codex review round 5: a path such
+    # single-quoted PowerShell string has (a path such
     # as D:\O'Brien\ rendered as an unparseable line). The apostrophe is built
     # from its code point so this file carries no doubled-apostrophe literal
     # for the charset rules to trip on.
@@ -1663,7 +1663,7 @@ function Assert-UploadSetOutsideRelease {
     # only in the assembly, it fired after the publish swap - so a cut with a
     # bad -UploadDir ran both non-reproducible builds, published
     # `releases\<version>\`, and then refused, leaving the "published, with no
-    # asset" state. Review round 5. Recoverable with -UploadSetOnly
+    # asset" state. Recoverable with -UploadSetOnly
     # and a sane -UploadDir, unlike the media-root case, but there is no reason
     # to reject an argument late that can be rejected free.
     #
@@ -2168,8 +2168,8 @@ function New-UploadSet {
     # carried Microsoft files (0.0.0.4 to 1.0.0.0), assembling with `-Flavor
     # release` from a release published with both shipped a `debug\` directory
     # holding this project's two files and none of the three, exit 0, no
-    # warning: the nesting defect again, through a different door (review
-    # finding 1). The media has carried no such file since 1.0.0.1; what the
+    # warning: the nesting defect again, through a different door. The media
+    # has carried no such file since 1.0.0.1; what the
     # rule protects now is that every flavour directory in the asset was gated
     # by this run.
     #
@@ -2209,7 +2209,7 @@ their defaults.
     # this project's own two files, which is a rule about what to *exclude* and
     # therefore silently includes anything nobody thought about: a stray
     # `notes.txt`, a `setup.exe`, a second binary left in `out\pkg-release\` by
-    # hand (review round 2, finding 1). So the rule is inverted: the media set
+    # hand. So the rule is inverted: the media set
     # is declared by the INF, and a package holding anything else is refused
     # rather than quietly trimmed. Since 1.0.0.1 that set is this project's two
     # files and nothing else - the Microsoft files the 1.0.0.0 media carried
@@ -2246,7 +2246,7 @@ their defaults.
     # **The two publishable files are matched by their declared path, not by
     # name.** Excluding them by name alone made a package staging
     # `setup\xhci98.inf` - which an INF saying `xhci98.inf=1,setup` legitimately
-    # produces - look like a file nobody declared (review round 3).
+    # produces - look like a file nobody declared.
     # The path is the thing everything else here is checked against, so it is
     # what these are checked against too.
     foreach ($f in $Flavors) {
@@ -2348,8 +2348,7 @@ asset has to be assembled by the cut that publishes it.
         # directory against the package it had just copied, using the same
         # relative-path derivation the copy used - so a systematic error agreed
         # with itself and passed, and a package holding `usbfiles\usbd98.sys`
-        # while the INF names it at the root was accepted (review
-        # findings 2 and 3).
+        # while the INF names it at the root was accepted.
         #
         # check-inf.ps1 -PackageDir is the authority instead. It is a second,
         # independent parse of the INF that is about to be shipped in this very
@@ -2578,8 +2577,8 @@ $gateOut
     # the central directory, so it is a step that can fail on its own - a full
     # volume after the last entry is the ordinary way - and an archive with no
     # central directory is not readable by anything. Setting the flag at the
-    # end of the entry loop would have called that a success (review
-    # round 2, finding 2). Nesting the two try blocks is what makes the order
+    # end of the entry loop would have called that a success. Nesting the two
+    # try blocks is what makes the order
     # right: the inner `finally` disposes, the outer one then sees whether
     # everything including the dispose returned.
     $zipped = $false
@@ -2692,7 +2691,7 @@ under the git-ignored out\, holding a history.md that carries the build's entry.
         # Asked once here and held in this script's memory; each x64
         # make-package.ps1 child gets it through XHCI98_TESTSIGN_PW, set in
         # this process's environment only around that one call and restored
-        # after it (review round 1: a script run from an open session must
+        # after it (a script run from an open session must
         # not leave the password in it). Never printed, never written.
         $testSignPassword = Get-TestSignPassword
         $testSignCert = Get-TestSignCertificate -PfxPath $TestSignPfx -Password $testSignPassword
@@ -2959,7 +2958,7 @@ pass -Force if this version was never published.
     # **With `releases\<version>\` beside it, the aside is the other case**: the
     # swap completed and only the removal afterwards did not. On an
     # OneDrive-hosted tree a sync handle inside the just-renamed aside makes
-    # that removal fail routinely, and until the 2026-09-17 audit's D4 this
+    # that removal fail routinely, and until the audit of 2026-09-17 this
     # check then refused the next run with "a previous run was interrupted",
     # which was false. The published tree is the authoritative copy by
     # construction - the aside is what it replaced - so this is a warning and a
@@ -3107,8 +3106,8 @@ the result in place of the marker, then cut again. The first:
     # `xhci98.inf=1,setup` sails through the staging copy below: make-package.ps1
     # stages `setup\xhci98.inf` and then also writes a root launcher copy when
     # the layout leaves the root empty, so the root file that copy looks for is
-    # there. Review round 4, which established this against the
-    # control flow after round 3 and I had both read it the other way.
+    # there, which was established against the control flow after an
+    # earlier reading had it the other way.
     #
     # Gating it here rather than at the point of use follows the changelog check
     # above: there is no value in building two flavours around a release that
@@ -3152,8 +3151,7 @@ the result in place of the marker, then cut again. The first:
     # **And where the upload set would land, which is knowable now.** Checked
     # only inside the assembly, this refused after the publish swap - so a cut
     # with an -UploadDir pointing into releases\ ran both non-reproducible
-    # builds and published the version directory before saying no. Review
-    # round 5.
+    # builds and published the version directory before saying no.
     if (-not $SkipUploadSet) {
         $early = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version
         Assert-UploadSetOutsideRelease -UploadRoot $early.Root -UploadZip $early.Zip `
@@ -3176,7 +3174,7 @@ the result in place of the marker, then cut again. The first:
         # published package can be two different things: a stale
         # out\pkg-release at the same version with the right VS_FF_DEBUG flag
         # passes every check this script makes, while the build that actually
-        # ran is discarded. Review finding 4.
+        # ran is discarded.
         $pkgDirForBuild = Join-Path $PackageRoot ("pkg-" + $f + "-" + $leg.PkgArch)
         $pkgArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                      $makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,
@@ -3211,8 +3209,8 @@ the result in place of the marker, then cut again. The first:
             $legStor98 = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | ForEach-Object { $_.Dest })
         }
         # ErrorActionPreference relaxed across the call, as every other native
-        # call in this script does and this one did not until the 2026-09-07
-        # audit's H17. In Windows PowerShell 5.1 a native command's stderr line
+        # call in this script does and this one did not until the audit of
+        # 2026-09-07. In Windows PowerShell 5.1 a native command's stderr line
         # becomes an ErrorRecord, so under "Stop" a single warning from the
         # packager aborts the cut here with an empty message instead of
         # reaching the exit-code test below. It only bites when the child's
@@ -3267,8 +3265,8 @@ runs are what stand between a broken binary and a guest that cannot boot.
         # A package is fully known the moment make-package.ps1 returns, which
         # is before the publish swap; the same check inside the upload assembly
         # runs after it, and a refusal there leaves a written-once version
-        # directory published with no asset. Review round 5, which
-        # is the second instance of that shape in this loop.
+        # directory published with no asset, the second instance of that shape
+        # in this loop.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
@@ -3348,8 +3346,9 @@ meant: scripts\build-driver.cmd $f
         }
 
         #
-        # **And that the tree can still reproduce it** (the 2026-09-07 audit's
-        # H13). This script already refuses a staged XHCIQUAL or XHCISNAP older
+        # **And that the tree can still reproduce it** (the audit of
+        # 2026-09-07). This script already refuses a staged XHCIQUAL or
+        # XHCISNAP older
         # than its own sources; the driver had no equivalent, and the only tie
         # between src\ and the published .sys was the file version against the
         # INF's - which cannot see a code edit that did not bump the version.
@@ -3412,10 +3411,10 @@ build you mean: scripts\build-driver.cmd $f
         }
 
         if (Test-Path -LiteralPath $stampScript) {
-            # Relaxed across the call for the H17 reason above: with stderr
+            # Relaxed across the call for the reason given above: with stderr
             # redirected, a `throw` on the stamp's hashing path would become a
             # terminating NativeCommandError here before the exit code is read
-            # (the 2026-09-17 audit's D9).
+            # (the audit of 2026-09-17).
             $savedEap = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
@@ -4273,7 +4272,7 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
         # and debug\" and "the debug flag on the Version tab", which a
         # four-directory cut makes false twice over: there are four
         # directories, and the debug flag does not separate x86 from x64 (the
-        # 2026-09-16 audit's D5).
+        # audit of 2026-09-16).
         $readmeDirList    = ("{0}\ and in {1}\" -f $readmeReleaseDir, $readmeDebugDir)
         $readmeTellApart  = @"
 The one thing that tells them apart is the "debug" flag shown on the Version
@@ -6090,7 +6089,7 @@ repository rather than here.
     # a particular release - "new in 1.0.2.0", "since 1.1.0.0", what an
     # upgrade from an older version leaves behind - stay true at every later
     # version, which is exactly why nobody notices them going stale, and until
-    # the 2026-09-07 audit's H15 nothing made anyone look.
+    # the audit of 2026-09-07 nothing made anyone look.
     #
     # **The owner's rule since 2026-09-17: the readme states the current state
     # only.** What changed between versions, and why, belongs in section 10,
@@ -6142,8 +6141,8 @@ which XHCISNAP matches this driver by that number; correct the sentence.
     $historyText = @(ConvertFrom-MarkdownBlocks -Lines $history -Width 78)
 
     #
-    # **An incomplete cut has to say so IN THE FILE**, which is the 2026-09-07
-    # audit's H14. `-SkipQualtool` and `-SkipSnapTool` warn on the console and
+    # **An incomplete cut has to say so IN THE FILE**, which is the audit of
+    # 2026-09-07. `-SkipQualtool` and `-SkipSnapTool` warn on the console and
     # leave the section-8 listing out, but every other mention of those
     # directories stayed: section 1 tells the reader the checker is in
     # TOOLS\XHCIQUAL\, section 6 tells them to run XHCISNAP, and neither directory is
@@ -7045,7 +7044,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # LayoutFile. See docs\contributing\legal-provenance.md section 5.
     #
     # **Assembled from the staging tree, BEFORE the publish swap below.** It
-    # ran after the swap until the 2026-09-17 audit's D5, so a per-directory
+    # ran after the swap until the audit of 2026-09-17, so a per-directory
     # INF-gate refusal or a zip failure inside it fired with the old release
     # already moved aside and the new one already under the real name - the
     # written-once release with no asset that the ordering test in
@@ -7059,8 +7058,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # previous asset - `upload-<version>\` and `xhci98-<version>.zip` from an
     # earlier -Force cut of this version - is not touched here; it is replaced
     # by Publish-UploadSet below only once both renames of the swap have
-    # succeeded, and a swap that fails removes the staged pair and leaves it
-    # (Codex review round 2 on D5).
+    # succeeded, and a swap that fails removes the staged pair and leaves it.
     $uploadRoot = $null
     $uploadZip = $null
     $uploadPublishError = ""
@@ -7102,8 +7100,8 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # one directory, so the aside and the staging tree are both on the same
     # volume as the destination by construction.
     # The whole staged release, the tools' directories included, whatever
-    # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6), and
-    # before -Force moves an existing release aside (round 2, finding 4),
+    # -SkipUploadSet says (task 36.34), and
+    # before -Force moves an existing release aside,
     # so a refusal leaves releases\ as it was. The port switchover's scripts
     # in tools\portsw\ and nowhere else (tasks 37.5 and 38.9), and the tools
     # in tools\ alone (task 38.9), at the same point and for the same reason.
@@ -7147,8 +7145,8 @@ after checkout. Restore it with:  git checkout -- LICENSE
         # must not fail a cut whose publish is already correct, and on this
         # OneDrive-hosted tree a sync handle inside the just-renamed aside made
         # it fail under Stop: the cut reported as failed with the release
-        # published, and the next run refused on the aside (the 2026-09-17
-        # audit's D4). The early check at the top of this run removes a
+        # published, and the next run refused on the aside (the audit of
+        # 2026-09-17). The early check at the top of this run removes a
         # leftover aside beside a published tree for the same reason.
         Remove-Item -LiteralPath $asideRoot -Recurse -Force -ErrorAction SilentlyContinue
         if (Test-Path -LiteralPath $asideRoot) {
@@ -7164,7 +7162,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # asset is derived from it, so a rename that fails in out\ is a warning
     # and a recovery hint, not an exit 1 and not a rollback: the outer catch
     # would report a published cut as failed and could not undo the publish
-    # anyway (Codex review round 3). The staged pair is left where it is so
+    # anyway. The staged pair is left where it is so
     # nothing is lost, the state of out\ is said, and -UploadSetOnly - which
     # rebuilds the asset from the published tree - is the way back.
     if ($null -ne $stagedUpload) {

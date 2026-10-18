@@ -39,7 +39,7 @@
  *     is this driver's policy, not the xHC's rule: PR is legal in every
  *     Enabled substate, and the xHC converts a hot reset to a warm one by
  *     itself only when the hot-reset handshake fails (4.19.5.1 footnote 66;
- *     Codex review of Phase 29, round 1, finding 5), which the caller sees
+ *     Phase 29), which the caller sees
  *     as WRC at the reset's end and counts from that;
  *   - Error and Compliance are recovered with a warm reset when they are
  *     seen, at most XHCI_LINK_MAX_WARM_RESETS times for one connection, and
@@ -127,7 +127,11 @@ ULONG XhciLinkClassify(ULONG portsc)
         }
         return connected ? XHCI_LINK_NOT_ENABLED : XHCI_LINK_UNKNOWN;
     default:
-        /* Test Mode, Resume (a USB2 encoding) and the reserved values. */
+        /* Test Mode, Resume and the reserved values. Resume is not only a
+         * USB2 state: a USB3 port enters it on a device-initiated U3 exit
+         * and holds it for software (xHCI 1.2c 4.15.2.1, p.255-256). It stays
+         * UNKNOWN here so every want but WANT_RESUME keeps its answer;
+         * WANT_RESUME reads it from the PORTSC itself (below). */
         return XHCI_LINK_UNKNOWN;
     }
 }

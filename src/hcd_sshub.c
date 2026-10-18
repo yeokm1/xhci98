@@ -477,8 +477,8 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
  * for the disconnect of whatever it held, so hcd_enum.c tears the old
  * device and its subtree down - frozen, its transfers ended, its slot
  * disabled - before HcdSsHubPortRecover puts the warm reset on the wire
- * (Codex review of 034a119, finding 1). A link in U3 under a held device
- * is named in d->Resume and a finished U3 exit in d->Suspended, which
+ * (reviewed and revised after 034a119). A link in U3 under a held device is
+ * named in d->Resume and a finished U3 exit in d->Suspended, which
  * hcd_hub.c's HcdHubPortLook carries out as for a USB 2.0 hub port: the
  * devices quiesced, the link brought to U0 or the recovery waited, and the
  * outcome decided by the same rules (the Phase 27 and Phase 30 merge).
@@ -535,8 +535,7 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
          * budget. The re-arm waits restart only when a device was seen
          * since the last re-arm and has gone - not on the empty read that
          * follows the driver's own RxDetect while the receiver is being
-         * detected (Codex review of the Phase 28-31 integration, round 2,
-         * finding C). */
+         * detected (the Phase 28-31 integration). */
         q->Link.WarmResets = 0;
         q->Link.GaveUp = 0;
         if (q->HubSsSeen) {
@@ -724,7 +723,7 @@ VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub)
  * where it differs from the one the bus asked for and names a SuperSpeed
  * rate (XhciSsHubAdoptSpeed) - so a SuperSpeedPlus rate the bus could only
  * guess at is replaced by the controller's, and every later Slot Context
- * carries it (Codex review of 034a119, finding 2). Thread only, powered;
+ * carries it (reviewed and revised after 034a119). Thread only, powered;
  * before hcdCountAddressed reads the rate.
  */
 VOID HcdSsHubAdoptSpeed(PHCD_CONTROLLER hc, PHCD_PORT p,

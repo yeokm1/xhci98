@@ -77,8 +77,8 @@ static void test_icm(void)
     d->Names.Present = TBT_ICM_NAMES_VENDOR | TBT_ICM_NAMES_MODEL |
                        TBT_ICM_NAMES_INTEL;
     strcpy(d->Names.Vendor, "Lenovo");
-    strcpy(d->Names.Model,
-           "ThinkPad Thunderbolt 3 Dock with a very long model name");
+    /* 46 characters: inside Model[48], past the record's 31. */
+    strcpy(d->Names.Model, "ThinkPad Thunderbolt 3 Dock, a long model name");
     d->Names.Model[5] = (char)0xE9;
     d->Names.TbVendorId = 0x0109;
     d->Names.TbModelId = 0x2031;
@@ -149,6 +149,11 @@ static void test_icm(void)
              "approval unanswered");
     CHECK_EQ(get32(entry(rec, 3), CM_ST_E_APPROVAL), CM_ST_APPR_BOOT,
              "approved before boot");
+    icm.Devices[6].ApproveUnknown = FALSE;
+    (void)CmStatusBuild(rec2, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(entry(rec2, 2), CM_ST_E_APPROVAL), CM_ST_APPR_PENDING,
+             "not approved and nothing sent: pending");
+    icm.Devices[6].ApproveUnknown = TRUE;
     CHECK_EQ(get32(entry(rec, 1), CM_ST_E_ROUTE_LO), CM_ST_UNKNOWN,
              "no route when the event carried none");
 

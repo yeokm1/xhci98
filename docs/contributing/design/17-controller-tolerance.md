@@ -2,24 +2,23 @@
 
 Design record for roadmap-hcd tasks 35-T.0 to 35-T.9 (Phase 35, release
 `2.2.0.0`). Revision 7, 2026-10-06, written before code. Revisions 4, 5
-and 6 are `9163f77`, `74d14e8` and `cc82d37`; revisions 5 to 7 answer
-review rounds 5 to 7 (section 10). Revision 0
+and 6 are `9163f77`, `74d14e8` and `cc82d37`; each of revisions 1 to 7
+answers the review of the one before it (section 10). Revision 0
 (`60f8f64`) drafted the findings and the shape; revision 1 (`4a63a35`)
-answered review round 1; revision 2 (`67a3f75`) rested the recoveries on
-the machinery as it is and answered round 2; revision 3 (`e8d2c0e`)
+answered its review; revision 2 (`67a3f75`) rested the recoveries on
+the machinery as it is; revision 3 (`e8d2c0e`)
 replaced the in-place endpoint recovery, by the owner's decision, with a
 device cycle - the replug the user does by hand, done by the bus (section
 4.3) - and made the soft retry pause nothing (section 4.2). Revision 4
-answers review round 4: a clock of the driver's own (section 4.0), the
+adds a clock of the driver's own (section 4.0), the
 power gate taken explicitly (4.1, 4.6), the soft retry intercepted before
 the engine's terminal mutations and generation-checked (4.2), the cycle
 before a PDO exists (4.3), and containment that drains only after its proof
-(4.6). Section 10 maps every finding of the seven rounds to where it is
-answered. **Converged**: review round 8, on revision 7 (`edc7a2a`), found
-every earlier finding resolved and nothing material remaining. Section
-4.11, the off-switch `XhciTolerance`, was added after it by the owner's
-decision of the same day, and converged in its turn at review round 11
-(`d9b39c4`).
+(4.6). Section 10 maps every point raised against revisions 0 to 6 to
+where it is answered. Revision 7 (`edc7a2a`) was reviewed and revised on
+2026-10-06 with nothing material remaining. Section 4.11, the off-switch
+`XhciTolerance`, was added after it by the owner's decision of the same
+day, and reviewed and revised in its turn (`d9b39c4`).
 
 Revision 8, 2026-10-07, for roadmap-hcd task 35.6, after the code: section
 4.5 takes the three departures task 35-T.5 built and its done-note left to
@@ -36,8 +35,8 @@ written back into the text above them, which stays the design as converged.
 One known limitation is recorded in section 4.6.
 
 Revision 10, 2026-10-07, for roadmap-hcd task 35.6, once 35-T.9's second
-part was built and the final review of the whole branch had converged, at
-its round 4 (branch `2.2.0.0` at `2000fcc`): "As built" notes in sections
+part was built and the whole branch had been reviewed and revised
+(branch `2.2.0.0` at `2000fcc`): "As built" notes in sections
 4.3 (the slot-fatal teardown; the configuration's fallback cycles; one
 re-enumeration charge per pending cycle), 4.6 (an invalidation no halt or
 reset proved; the Bus Master Enable a proof cleared put back; the
@@ -77,9 +76,9 @@ section 4.14 accepts controllers whose HCIVERSION is 0.96 behind
 `XhciAccept096`, on by default, with the TD Size field in 0.96's units on
 them (owner, 2026-10-13), and audits every other behaviour of xHCI 1.0 the
 driver relies on against what 0.96 may lack. The owner's answers of the
-same day to its seven questions are folded in (section 4.14.11), and review
-round 1's findings answered (an eighth question, D8, the isochronous Frame
-ID below 1.0, answered (b) by the owner the same day). Nothing else changes.
+same day to its seven questions are folded in (section 4.14.11), and the
+section was reviewed and revised (an eighth question, D8, the isochronous
+Frame ID below 1.0, answered (b) by the owner the same day). Nothing else changes.
 
 ## 1. What is asked, and what is not
 
@@ -502,8 +501,8 @@ charged to any further budget: the class driver sees what it sees today.
 
 Cost on a compliant controller: nothing, since no Transaction Error arrives.
 
-**As built (35-T.2, `4ab1663`, review round 1 `6c0ecc1`, `35f77b6` and
-`8fd1f49`, converged at round 2; revision 9).** The scope is set once per
+**As built (35-T.2, `4ab1663`, revised in `6c0ecc1`, `35f77b6` and
+`8fd1f49`; revision 9).** The scope is set once per
 pipe when it is opened (`hcdCfgPipeNew`, the pure `XhciTolRetryScope`),
 "behind a TT" read as the device's `TtSlot` being nonzero; the interception
 is `XhciTolRetryDivert` in `XhciXferEvent`, the event kept on the TD under
@@ -555,7 +554,7 @@ on the same device takes the cycle (section 4.3, "As built").
 
 A code nothing claims (T3) and a halt with no TD (T4) are answered by
 cycling the device (owner, 2026-10-06), not by recovering the endpoint in
-place. Review round 3 showed every in-place form needs to attribute the
+place. Every in-place form needs to attribute the
 fault to a TD, and that cannot be done soundly here: the Endpoint Context's
 TR Dequeue Pointer is defined only in some states (xHCI 1.2c Table 6-10),
 the queue's head and the ring's dequeue are kept apart by design, a
@@ -640,9 +639,8 @@ describe the cycle), and the comment at `xhci_xfer.c` line 270 corrected
 (35-T.3/4, `0e1cb42`: the refused-code comments at both of its sites no
 longer lean on usbport's URB timeout; the caller cycles the device).
 
-**As built (35-T.3/4, `0e1cb42` and `c0f429c`, review rounds `18f383f`,
-`bdc93c0` and `adbc4e3`, converged at round 4, with `d69814f` meeting
-35-T.2; revision 9).** The producer is `hcd_dev.c`'s `hcdTolCycleEvent`
+**As built (35-T.3/4, `0e1cb42` and `c0f429c`, revised in `18f383f`,
+`bdc93c0` and `adbc4e3`, with `d69814f` meeting 35-T.2; revision 9).** The producer is `hcd_dev.c`'s `hcdTolCycleEvent`
 over the pure `XhciTolCycleReason`; the mark, `CycleMark` on the device
 record, is set only through `HcdTolCycleMark` (DISPATCH_LEVEL, the
 controller lock held, a no-op at `XhciTolerance` 0); the connect generation
@@ -795,7 +793,7 @@ over-current budget is spent: it is released only by a controller start (a
 restart, or a disable and enable), and the dump and the release notes say
 so.
 
-**As built (35-T.5, `778b730` and review rounds `4a9010d`, `82d87fe`,
+**As built (35-T.5, `778b730`, revised in `4a9010d`, `82d87fe` and
 `64461df`; revision 8).** Three departures from the text above, taken in
 the code and recorded here:
 
@@ -824,7 +822,7 @@ never re-arms a budget; stable progress counts only validated Success and
 Short Packet retirements; and an unpowered hold is kept off through a
 reinitialization's power pass.
 
-Revision 9 adds one rule found in review after 35-T.5 converged (`cd8f744`):
+Revision 9 adds one rule taken after 35-T.5 was built (`cd8f744`):
 **a hub port's repower is the recovery's own disconnect.** A USB 2.0 hub
 (`HcdHubPortLook`) and a SuperSpeed hub (`HcdSsHubPortLook`) mark the
 location (`HcdTolLocRecovery`) before setting PORT_POWER on a port an
@@ -900,8 +898,7 @@ step contains the controller, in this order:
 Revalidation happens only at a start, through the start's own checks; a
 pinned buffer stays pinned as the existing rule says.
 
-**As built (revision 9).** Three rules changed by review after 35-T.6
-converged:
+**As built (revision 9).** Three rules changed after 35-T.6 was built:
 
 - **An owed recovery waits while USBSTS reads all-ones** (`a76637d`). A
   command that timed out on a window that stopped decoding requests the
@@ -1106,7 +1103,7 @@ over: eligibility is still judged on the uncapped Interval.
 
 **The Average TRB Length switch** (owner, 2026-10-06). Revision 0 proposed
 taking the Average TRB Length of a periodic endpoint as its Max ESIT
-Payload, as Linux programs it; review round 1 showed the field enters the
+Payload, as Linux programs it; but the field enters the
 controller's bandwidth admission (4.14.1.1), so changing it changes what a
 healthy controller is told, and that Max ESIT Payload may be zero or
 exceed the field. So it is not unconditional and not gated by id: it is a
@@ -1134,8 +1131,8 @@ snapshot already carries, rather than in `XHCIHC_COUNTERS`.
 the note ring carries the first records of each code. `xhciqual/quirks.c`
 grows report-only AMD rows.
 
-**As built (35-T.8, `dd6bd3c` and `df4045c`, review round 1 `39066c0`,
-converged at round 4; revision 9).** The queues' counts are published as
+**As built (35-T.8, `dd6bd3c` and `df4045c`, revised in `39066c0`;
+revision 9).** The queues' counts are published as
 controller-wide sums (`QueueErrors`, `QueueBadCodes`, `QueueUnmatched`,
 `QueueForeign`, `QueueHalts`, and the soft retry's six counters), added as
 each event moves them; no per-queue figure reaches the dump, and the slot
@@ -1783,8 +1780,8 @@ What a future implementer can keep, whatever proof is found:
 
 #### 4.13.4 What a reopening must answer
 
-Beyond a proof that establishes isolation (above), the review's other
-findings on the draft:
+Beyond a proof that establishes isolation (above), the other points
+raised on the draft:
 
 - **An image unload under a late completion.** Dropping the last FDO
   reference inside the completion routine leaves driver code running
@@ -2291,7 +2288,7 @@ On the draft's questions, each recommendation taken:
   0 (4.14.6).
 - **D5, the refused start's flush**: every refusal of
   `XhciInitController` flushes the note ring, not the version's alone
-  (4.14.7). Review round 1 narrowed where it can act: every refusal of the
+  (4.14.7). Where it can act is narrowed: every refusal of the
   initial start, at any step; a resume's or a recovery's reinitialization
   may run below PASSIVE_LEVEL, where no flush is emitted, and keeps
   today's reporting.
@@ -2300,7 +2297,7 @@ On the draft's questions, each recommendation taken:
   `XhciQemuHciVersion`, `qemu` flavour only, written by no INF (4.14.10).
 - **The value's name**: `XhciAccept096`.
 
-From review round 1, answered by the owner the same day:
+Raised in the review of the draft, answered by the owner the same day:
 
 - **D8, the isochronous Frame ID below 1.0: taken (b).** (a) As 1.0: with CFC 0 a new
   flow's first TD may carry a Frame ID, as today; or (b) SIA on every TD
@@ -2445,8 +2442,8 @@ requested while a cycle, a RESET_PORT or the location's PED reconnect is
 already running; a stream endpoint; teardown and a power transition during
 each; and every budget exhausted.
 
-**As built, first part (35-T.9, `8d27a13`, review rounds `cade36c` and
-`b0dd28c`, converged at round 3; revision 9).** The faults whose driver
+**As built, first part (35-T.9, `8d27a13`, revised in `cade36c` and
+`b0dd28c`; revision 9).** The faults whose driver
 behaviour was in the tree when it was built: the pure `xhci_inj.c` with
 host suite `test_inj`, the driver half `hcd_inj.c`, compiled into the
 `qemu` flavour alone. The trigger is `XhciQemuInject`, a REG_DWORD in the
@@ -2475,7 +2472,7 @@ the second part, still to be built. Two departures from the table above:
   `qemu.inj.refused` while `ControllerFailed` is set; CLEAR and the
   over-current release are always taken.
 
-**As built, second part (35-T.9, `5044966`, review round 1 `6808ff9`;
+**As built, second part (35-T.9, `5044966`, revised in `6808ff9`;
 revision 10).** Codes `08` to `12` hex, reserved by the first part, are
 built: the rows of 35-T.2 to 35-T.4 - `08` Transaction Error, `09` the
 soft retry's Reset Endpoint failing, `0A` a refused code, `0B` and `0C` a
@@ -2581,7 +2578,8 @@ bounded number of times, and name `XHCISNAP`'s new terminal reason;
 `xhcisnap/README.md` decodes terminal reason 5;
 `implementation-invariants.md`'s "Fatal Errors" says how the HCD answers
 code 22 and an invalidation no halt or reset proved; `runs/run-35.md`
-records 35-T.9's second part and the final review's findings.
+records 35-T.9's second part and what the final review of the branch
+changed.
 
 At revision 12 (roadmap-hcd task 36.54, section 4.12): the release notes'
 "Controller faults" bullet takes UAS streams into the soft retry, and
@@ -2616,11 +2614,10 @@ section 5.2's "HCIVERSION enters nowhere".
   the 0/1/2 override.
 - The lost-interrupt backstop is this work's; polled delivery reuses its
   peek.
-- The Average TRB Length change is not made by default (after review round
-  1, finding 1); it is the switch `XhciAvgTrbEsit`, written by the INFs at
+- The Average TRB Length change is not made by default; it is the switch `XhciAvgTrbEsit`, written by the INFs at
   0, off.
 - A code nothing claims and a halt with no TD cycle the device, rather than
-  recover the endpoint in place (after review round 3).
+  recover the endpoint in place.
 - The budgets and intervals are constants, not registry values; one
   switch, `XhciTolerance`, INF-written at 1, turns the unconditional
   behaviours off together (section 4.11). The value names `XhciIntervalCap`
@@ -2631,11 +2628,11 @@ section 5.2's "HCIVERSION enters nowhere".
 The values of section 4.9's constants, which stand as proposed and are
 retuned in a build against the bench's and any tester's readings.
 
-## 10. The review findings, and where each is answered
+## 10. The points raised against revisions 0 to 7, and where each is answered
 
-Round 1:
+Against revision 0 (`60f8f64`), answered in revision 1:
 
-| Finding | Severity | Answered in |
+| Point | Severity | Answered in |
 |---|---|---|
 | 1 Average TRB Length neither legal everywhere nor free | high | 4.7: a switch, off by default |
 | 2 A refused code does not prove its TD safe to complete | high | 4.3: no TD is completed on the event; the Disable Slot takes the TRBs back |
@@ -2649,9 +2646,9 @@ Round 1:
 | 10 Absent quirk flags do not explain Linux | medium | section 1, a hypothesis |
 | 11 Injection and acceptance need fault-specific outcomes | medium | section 5 |
 
-Round 2:
+Against revision 1 (`4a63a35`), answered in revision 2:
 
-| Finding | Severity | Answered in |
+| Point | Severity | Answered in |
 |---|---|---|
 | 1 The injected Reset Endpoint met the wrong state | high | section 5: emulated, the real endpoint already Stopped |
 | 2 All-ones containment released I/O with no DMA proof | high | 4.6: admission closed first, Bus Master Enable read back, or pinned |
@@ -2667,9 +2664,9 @@ Round 2:
 | 12 The interval cap and fast polling do not compose by themselves | medium | 4.7 |
 | 13 Roadmap alignment | low | 35-V and 35.6 |
 
-Round 3:
+Against revision 2 (`67a3f75`), answered in revision 3:
 
-| Finding | Severity | Answered in |
+| Point | Severity | Answered in |
 |---|---|---|
 | 1 Retry abandonment releases held work before the winning operation; no pipe lock | high | 4.2: no pause, so nothing is released; the decision under the controller lock; abandonment is today's retirement |
 | 2 The context's dequeue is undefined in Error or Disabled | high | 4.3: the dequeue is never read |
@@ -2684,9 +2681,9 @@ Round 3:
 | 11 The class-driver reading's place is inconsistent | medium | 4.10 and 35-T.0: before 35-V, not a precondition of the design |
 | 12 The roadmap named the reviewer | low | the roadmap, reworded throughout |
 
-Round 4:
+Against revision 3 (`e8d2c0e`), answered in revision 4:
 
-| Finding | Severity | Answered in |
+| Point | Severity | Answered in |
 |---|---|---|
 | 1 Containment drained before its proof | high | 4.6: admission closed by a new `Unreadable` flag, `HcdIoDeviceDrain` only after the proof or after the pin |
 | 2 The power gate was not taken; the health poll lacks D0 and `DpcClosed` | high | 4.0, 4.1 and 4.6: steps of their own after `hcdRecover`, taking the gate and admitting themselves |
@@ -2698,9 +2695,9 @@ Round 4:
 | 8 Writing PED does not set PEC | medium | section 5: PEC and its event emulated beside the real disable |
 | 9 35-T.5 lost its USB 2.0 and PEC conditions; a stale roadmap line | medium | the roadmap |
 
-Round 5:
+Against revision 4 (`9163f77`), answered in revision 5:
 
-| Finding | Severity | Answered in |
+| Point | Severity | Answered in |
 |---|---|---|
 | 1 A filtered wall clock does not measure elapsed time | medium | 4.0: ticks of a relative kernel timer, late but never early |
 | 2 Containment acted on the ungated poll's samples, across lifetimes | high | 4.6: USBSTS read by the gated step itself; the stamp cleared by any lifetime or power change |
@@ -2710,30 +2707,30 @@ Round 5:
 | 6 The second-error injection lost coherence | medium | section 5: another real Stop and the emulated Halted state reinstated first |
 | 7 Retry exhaustion had two routes | low | 4.2: never intercepted; the thread never sees a spent TD |
 
-Round 6:
+Against revision 5 (`74d14e8`), answered in revision 6:
 
-| Finding | Severity | Answered in |
+| Point | Severity | Answered in |
 |---|---|---|
 | 1 A relative timer can expire up to one clock period early, cumulatively | medium | 4.0: each tick credited at 45 ms against the slowest PC clock, intervals counted as `ceil(T / 45) + 1` ticks |
 | 2 The pre-PDO teardown left the location's machine where a CONNECT is ignored | high | 4.3: one handler sets it `EMPTY` with its slot and device cleared, once per attempt, before the CONNECT |
 | 3 Parked requests' release triggers misstated; `HcdIoPark` can decline | low | 4.6: today's triggers named; the declined cases completed `STATUS_CANCELLED` or `STATUS_DELETE_PENDING` |
 
-Round 7:
+Against revision 6 (`cc82d37`), answered in revision 7:
 
-| Finding | Severity | Answered in |
+| Point | Severity | Answered in |
 |---|---|---|
 | 1 The pre-PDO reconnect read CCS, which an external hub's port does not have | medium | 4.3: connected read as `hcdPortConnected` reads it, for either kind of location |
 | 2 "About 2.2 times" stated as an upper bound | low | 4.0: no fixed upper bound; 2.2 the long-interval factor under timely DPCs |
 
-Round 8 found nothing material. Round 9, on section 4.11 and the reviewer-name
-scrub of the other records:
+Revision 7 (`edc7a2a`) left nothing material. Against section 4.11 as first
+added the same day:
 
-| Finding | Severity | Answered in |
+| Point | Severity | Answered in |
 |---|---|---|
 | 1 The off-switch had no lifecycle contract | medium | 4.11: latched per start, gated at every producer, deferred work settled by the old teardown, all tolerance state initialized explicitly, a pin kept; the 1-0-1 restart legs |
 
-Round 10:
+Against section 4.11 as revised, answered before `d9b39c4`:
 
-| Finding | Severity | Answered in |
+| Point | Severity | Answered in |
 |---|---|---|
 | 1 A pinned stop keeps its transfers, and a start clears the flag for its new buffer | medium | 4.11: retired work told from retained work, kept state unreachable by the new lifetime, the old pinned allocation told from the new buffer |

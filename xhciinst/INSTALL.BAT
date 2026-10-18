@@ -42,7 +42,7 @@ set XDIR=
 goto end
 
 :toomany
-echo Too many arguments for INSTALL.BAT on this Windows (nine at most, and
+echo Too many arguments for INSTALL.BAT on this Windows (eight at most, and
 echo /set Name=Value counts as three). Run TOOLS\XHCIINST\XHCIINST.EXE /dir
 echo release-x86 with the same arguments instead, or use fewer /set.
 goto end

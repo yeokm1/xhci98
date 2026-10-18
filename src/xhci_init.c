@@ -9,8 +9,8 @@
  * Roadmap Phase 4 tasks 2, 3 and 5. usbport calls StartController once it has
  * mapped BAR0, connected the interrupt and placed the fixed common buffer; this
  * file turns that into a controller whose DCBAA, scratchpad, command ring and
- * event ring are programmed, which is running, and whose managed USB 2.0 ports
- * are powered - with every interrupt source still masked, because usbport calls
+ * event ring are programmed, which is running, and whose managed ports are
+ * powered - with every interrupt source still masked, because usbport calls
  * EnableInterrupts (task 6) the moment StartController returns success.
  *
  * The sequence is docs/usb-xhci-info/xhci-programming.md "Initialization Sequence" steps
@@ -680,8 +680,8 @@ static ULONG xhciBiosHandoff(PXHCI_EXTENSION ext)
      * RW1C status bits in 31:29 (docs/usb-xhci-info/xhci-data-structures.md section 6).
      *
      * **The write names the bits it carries rather than the bits it clears.**
-     * `dw1 & ~SMI_ENABLES` kept the RsvdP fields, which was the 2026-09-05
-     * audit's F13 - but it also carried back bits 28:21, which are RsvdZ and
+     * `dw1 & ~SMI_ENABLES` kept the RsvdP fields (reviewed and revised
+     * 2026-09-05) - but it also carried back bits 28:21, which are RsvdZ and
      * must be written as zero, and the read-only status at 16 and 20, which a
      * write has no business asserting. Every bit of this register is spoken
      * for: 0/4/15:13 are the enables, 3:1 and 12:5 and 19:17 are RsvdP,
@@ -1020,7 +1020,7 @@ static ULONG xhciReset(PXHCI_EXTENSION ext)
      * complete" (5.4.1, p.360), the sequence's step 3 polls both bits after a
      * reset for that reason (docs/usb-xhci-info/xhci-programming.md,
      * "Initialization Sequence"), and the read-modify-write below would carry
-     * a read 1 straight back as a second reset (Codex round 2).
+     * a read 1 straight back as a second reset.
      */
     if (!XhciWaitForBits(ext,
                          ext->HcInfo.OperationalOffset + XHCI_OP_USBCMD,
@@ -1394,9 +1394,8 @@ static ULONG xhciRunController(PXHCI_EXTENSION ext, ULONG *usbstsOut)
          * must still leave its ports alone - nothing here wrote R/S and nothing
          * here powered a port.
          *
-         * Found by the second-reader review. The branch predates
-         * this phase; what the phase changed is the branch above it, which is
-         * how it came to be read.
+         * The branch predates this phase; what the phase changed is the
+         * branch above it, which is how it came to be read.
          */
         (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_HW_RUNNING);
         XHCI_DBG_VALUE("run: controller is not halted, USBSTS", usbsts);
@@ -1689,7 +1688,7 @@ VOID XhciMaskInterrupts(PXHCI_EXTENSION ext)
          * in-place recovery) never mean one. Nothing is lost by skipping: the
          * reset itself returns USBCMD.INTE and every interrupter register to
          * their defaults of 0, so the read back below proves the suppression
-         * from the hardware's own doing (2026-09-17 audit, B7, Codex round 1).
+         * from the hardware's own doing (reviewed and revised 2026-09-17).
          */
         resetting = 0;
         if ((usbcmd != 0xFFFFFFFFUL && (usbcmd & XHCI_USBCMD_HCRST) != 0) ||
@@ -1722,13 +1721,15 @@ VOID XhciMaskInterrupts(PXHCI_EXTENSION ext)
             degraded = 1;
             XHCI_DBG_TEXT("interrupt mask: a register window is not decoding");
         }
-        /* HCRST is stripped as well as INTE: a mask never resets, and the bit
-         * is write-1-to-reset, so carrying a read 1 back would. Unreachable
-         * behind the test above and kept for the race it closes. */
+        /* HCRST and LHCRST are stripped as well as INTE: a mask never
+         * resets, and both bits are write-1-to-reset, so carrying a read 1
+         * back would. Unreachable behind the test above and kept for the race
+         * it closes. */
         if (!resetting && usbcmd != 0xFFFFFFFFUL) {
             xhciWriteUsbCmdFrom(ext, usbcmd,
                                 (usbcmd & XHCI_USBCMD_DEFINED_MASK) &
-                                    ~(XHCI_USBCMD_INTE | XHCI_USBCMD_HCRST));
+                                    ~(XHCI_USBCMD_INTE | XHCI_USBCMD_HCRST |
+                                      XHCI_USBCMD_LHCRST));
         }
         if (!resetting && iman != 0xFFFFFFFFUL) {
             XhciWriteIr0(ext, XHCI_IR_IMAN,
@@ -1813,8 +1814,8 @@ static ULONG xhciInterruptsClaimed(PXHCI_EXTENSION ext)
  * therefore permanent silence, not a missed cycle.
  *
  * The DPC used to do this inline as a bare read-modify-write, and it had exactly
- * the defect rounds 6-10 of task 7 spent five rounds removing from the mask and
- * unmask paths, in its worst form: an all-ones read has **IE set**, so
+ * the defect task 7's later revisions removed from the mask and unmask paths,
+ * in its worst form: an all-ones read has **IE set**, so
  * `(iman & IE) == 0` was false and the caller concluded the interrupter was
  * already armed and wrote nothing. One transient undecoding read, and delivery
  * was gone for the life of the driver with no counter, no trace and no
@@ -1902,6 +1903,7 @@ ULONG XhciUnmaskInterrupts(PXHCI_EXTENSION ext)
 {
     ULONG iman;
     ULONG usbcmd;
+    ULONG usbsts;
     ULONG imanBack;
     ULONG usbcmdBack;
     ULONG attempt;
@@ -1936,11 +1938,20 @@ ULONG XhciUnmaskInterrupts(PXHCI_EXTENSION ext)
         if (iman == 0xFFFFFFFFUL || usbcmd == 0xFFFFFFFFUL) {
             continue;
         }
+        /* XhciMaskInterrupts' rule: a reset in progress owns the enables,
+         * so nothing is written while one runs; and HCRST and LHCRST are
+         * never carried back, since a read 1 written back re-issues it. */
+        usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+        if ((usbcmd & XHCI_USBCMD_HCRST) != 0 ||
+            (usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_CNR) != 0)) {
+            continue;
+        }
 
         XhciWriteIr0(ext, XHCI_IR_IMAN,
                      (iman & ~XHCI_IMAN_IP) | XHCI_IMAN_IE);
         xhciWriteUsbCmdFrom(ext, usbcmd,
-                            (usbcmd & XHCI_USBCMD_DEFINED_MASK) |
+                            ((usbcmd & XHCI_USBCMD_DEFINED_MASK) &
+                             ~(XHCI_USBCMD_HCRST | XHCI_USBCMD_LHCRST)) |
                                 XHCI_USBCMD_INTE);
 
         /*
@@ -2101,19 +2112,16 @@ static ULONG xhciDrivePortPower(PXHCI_EXTENSION ext, ULONG port, ULONG want)
 }
 
 /*
- * Power the managed USB 2.0 ports, and take power off the USB 3.x ones.
+ * Power every managed port, and take power off the ones a hold keeps off.
  *
- * **The second half is not a no-op, and that is the whole reason this is one
- * function rather than a loop over the managed ports.** AGENTS.md's port
- * strategy says USB 3.x logical ports are left unpowered and unmanaged, and
- * docs/usb-xhci-info/xhci-programming.md builds on that:
- * an unpowered SuperSpeed half is what makes a USB 3.x capable device fail SS
- * link training and fall back to its D+/D- path, onto the USB 2.0 companion
- * this driver does serve. But PP defaults to *asserted* on every port after
- * HCRST (4.19.4, p.295), so "left unpowered" is something this driver has to
- * do, not something it gets by not acting. Leaving them powered would leave
- * SuperSpeed devices trained onto ports nothing services - a device that
- * appears dead rather than one that falls back.
+ * Since task 29-A.1 every port a protocol capability names is managed and
+ * powered, USB 3.x ones included (xhciWantPortPower). The deassertion pass is
+ * what is left of the miniport's rule that USB 3.x ports were held unpowered:
+ * today it writes only the ports controller tolerance holds unpowered
+ * (35-T.5, xhciWantPortPowerExt) - after an in-place recovery or a resume,
+ * which do not release a hold. PP defaults to *asserted* on every port after
+ * HCRST (4.19.4, p.295), so a port held off is something this driver has to
+ * write, not something it gets by not acting.
  *
  * Assertions run before deassertions, **and are confirmed to have taken effect
  * before any deassertion is written**. The order is load-bearing on a connector
@@ -2122,9 +2130,10 @@ static ULONG xhciDrivePortPower(PXHCI_EXTENSION ext, ULONG port, ULONG want)
  * that map to the same Physical USB Connector" (4.19.7 implementation note,
  * p.303), so deasserting first drops VBus on that connector. Ordering the
  * *writes* is not enough on its own, because "the PP flag may be delayed in
- * reflecting this change" (footnote 91 to Table 5-27, p.375): if the USB 2.0
- * half has not actually come up yet when the USB 3.x half goes down, the OR is
- * momentarily zero and VBus drops anyway. Confirming between the passes is what
+ * reflecting this change" (footnote 91 to Table 5-27, p.375): if the half
+ * being powered has not actually come up yet when the half held off goes
+ * down, the OR is momentarily zero and VBus drops anyway. Confirming between
+ * the passes is what
  * closes that.
  *
  * **HCCPARAMS1.PPC is read and recorded but not consulted here**, which is a
@@ -2185,10 +2194,10 @@ static ULONG xhciCountPortsWanting(PXHCI_EXTENSION ext,
  *
  * The first version of this step waited only when a port was asserted, and then
  * read every port back once. On the ordinary controller - the one that comes out
- * of HCRST with PP asserted everywhere, so the only writes are the USB 3.x
- * deassertions - that meant reading a just-written register with no allowance
- * at all, and any controller taking footnote 91's latitude would have had every
- * one of its USB 3.x ports counted as a failure.
+ * of HCRST with PP asserted everywhere, so the only writes were the
+ * miniport's USB 3.x deassertions - that meant reading a just-written register
+ * with no allowance at all, and any controller taking footnote 91's latitude
+ * would have had every one of those ports counted as a failure.
  *
  * The loop costs nothing when there is nothing to wait for: a pass where every
  * port already reports the wanted state exits before its first delay.
@@ -2249,13 +2258,13 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
     ULONG port;
     ULONG asserted;
     ULONG managed;
-    ULONG superSpeed;
+    ULONG heldOff;
 
     map = &ext->PortMap;
     managed = xhciCountPortsWanting(ext, XHCI_PP_WANT_ON,
                                     XHCI_PP_PHASE_START);
-    superSpeed = xhciCountPortsWanting(ext, XHCI_PP_WANT_OFF,
-                                       XHCI_PP_PHASE_START);
+    heldOff = xhciCountPortsWanting(ext, XHCI_PP_WANT_OFF,
+                                    XHCI_PP_PHASE_START);
 
     asserted = 0;
     for (port = 1; port <= map->PortCount; port++) {
@@ -2282,8 +2291,8 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
      * records the earlier claim that this number built the hub; that document
      * was design record 10 when this comment was written, was removed on
      * 2026-10-12 and is in git history at 00a3b9e, and the second
-     * section it cited, 14.4, does not exist in it - the 2026-09-16 audit's
-     * B10).
+     * section it cited, 14.4, does not exist in it; reviewed and revised
+     * 2026-09-16).
      */
     ext->PortsPowered =
         xhciSettlePortPower(ext, XHCI_PP_WANT_ON, XHCI_PP_PHASE_START,
@@ -2299,7 +2308,7 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
         xhciSettlePortPower(ext, XHCI_PP_WANT_OFF, XHCI_PP_PHASE_START, 0);
 
     ext->PortPowerFailures = (managed - ext->PortsPowered) +
-                             (superSpeed - ext->PortsUnpowered);
+                             (heldOff - ext->PortsUnpowered);
 
     XHCI_DBG_VALUE("port power: ports transitioned to powered", asserted);
     XHCI_DBG_VALUE("port power: managed ports powered", ext->PortsPowered);
@@ -2670,8 +2679,8 @@ ULONG XhciFrameNumber(PXHCI_EXTENSION ext)
                  *
                  * "Forward only" is a statement about this addition and not
                  * about the published number, which is 32 bits wide and
-                 * therefore wraps - a review round read an earlier draft of this
-                 * comment as claiming otherwise. At the wrap a stamp taken just
+                 * therefore wraps - an earlier draft of this comment read as
+                 * claiming otherwise. At the wrap a stamp taken just
                  * below `0xFFFFFFFF` is not passed again for a full lap, and
                  * that is a property of a 32-bit frame number rather than of the
                  * resync: the synced branch above adds a masked delta to the
@@ -2773,13 +2782,13 @@ ULONG XhciFrameIdNow(PXHCI_EXTENSION ext, ULONG *frameId)
      * precisely because `FrameCongruent`, checked above, is the statement that
      * those two agree in their low 11 bits. Returning the bare index instead is
      * what let a stamp a whole lap in the past pass the Valid Frame Window (batch
-     * 9-A review round 2); the window arithmetic cannot recover a lap the caller
+     * 9-A); the window arithmetic cannot recover a lap the caller
      * was never given.
      */
     live = (mfindex & XHCI_MFINDEX_MASK) >> XHCI_MFINDEX_FRAME_SHIFT;
     /*
-     * **The reconstruction is only as good as the axis is fresh**, and the third
-     * review round is why this sentence is here rather than an assumption.
+     * **The reconstruction is only as good as the axis is fresh**, which is
+     * why this sentence is here rather than an assumption.
      *
      * The masked difference recovers the low eleven bits and nothing more, so it
      * cannot tell "fifty frames since the last sample" from "fifty frames plus a
@@ -3013,7 +3022,7 @@ static ULONG xhciSaveRestoreWait(PXHCI_EXTENSION ext, ULONG busyBit)
  * (`XHCI_EPQ_REPOSITION`, `XHCI_EPQ_FORCE_DEQUEUE`).
  *
  * **`XHCI_EPQ_FAILED | XHCI_EPQ_UNAVAILABLE` is the one pair that is excluded,
- * and audit round 9 found round 8's gate deadlocking on it.** The two bits are
+ * and an earlier version of this gate deadlocked on it.** The two bits are
  * set together at exactly one site - `xhciEpArmQuiesce` when `xhciDevAdmitted`
  * refuses, i.e. when the *controller* could take no command - and its own
  * comment says "a successful restore is entitled to take it back".
@@ -3038,7 +3047,7 @@ static ULONG xhciSaveRestoreWait(PXHCI_EXTENSION ext, ULONG busyBit)
  *   only pass on an endpoint whose queue is empty and whose ring has no
  *   outstanding placement.
  *
- * The wider question round 9 also raised - that an ordinary `FAILED` is sticky
+ * The wider question that raised - that an ordinary `FAILED` is sticky
  * until a reset-pipe clears it, so one failed chain may cost this controller
  * every later `CSS` - is left as it is, and as of **task 12.1 that
  * is a decision rather than a deferral**. The task's two branches were to build
@@ -3052,7 +3061,7 @@ static ULONG xhciSaveRestoreWait(PXHCI_EXTENSION ext, ULONG busyBit)
  * task, not editing this gate.
  *
  * **What is not established is that the excluded pair happens in production at
- * all**, and round 10 asked directly. It is set only by an endpoint callback
+ * all**. It is set only by an endpoint callback
  * arriving after `XhciQuiesceController` has closed admission, and the whole of
  * that window is inside one `XhciSuspendController` call at PASSIVE - so on
  * Windows 98, which has no preemption, there may be no sequence that both
@@ -3195,21 +3204,22 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
      * wrong. Win98 idle-suspends the controller about a second after every
      * start, which is precisely when a keyboard has a read outstanding.
      *
-     * **A queue count is not the whole question, and audit round 8 closed the
-     * part round 7 documented and left open.** An empty software queue does not
-     * mean the xHC owns no TRBs on that ring: `XhciAbortTransfer` takes a
-     * transfer out of the queue while the controller may still be executing it -
-     * `AbortsBeforeStopped` counts exactly that window - and `XhciSlotCommandLost`
-     * clears `ActiveOp` for a Stop Endpoint that never answered, leaving the
-     * chain `XHCI_EPQ_FAILED` with nothing draining it. Both leave a Busy
-     * endpoint behind an empty queue, and step 1 asks about Busy endpoints, not
-     * about queued transfers: "Stop all USB activity by issuing Stop Endpoint
-     * Commands for Busy endpoints in the Running state" (4.23.2, p.313).
+     * **A queue count is not the whole question**, and the part an earlier
+     * version documented and left open is closed. An empty software queue does
+     * not mean the xHC owns no TRBs on that ring: `XhciAbortTransfer` takes a
+     * transfer out of the queue while the controller may still be executing it
+     * - `AbortsBeforeStopped` counts exactly that window - and
+     * `XhciSlotCommandLost` clears `ActiveOp` for a Stop Endpoint that never
+     * answered, leaving the chain `XHCI_EPQ_FAILED` with nothing draining it.
+     * Both leave a Busy endpoint behind an empty queue, and step 1 asks about
+     * Busy endpoints, not about queued transfers: "Stop all USB activity by
+     * issuing Stop Endpoint Commands for Busy endpoints in the Running state"
+     * (4.23.2, p.313).
      *
      * So the quiescence state is consulted beside the count, through
      * `xhciSaveQuiesceUnproven` - which is where the bits are, together with the
-     * one pair that is deliberately not among them and the reason audit round 9
-     * had to carve it out.
+     * one pair that is deliberately not among them and the reason it had to
+     * be carved out.
      *
      * **The cost is real and it is the right way round.** Declining the save
      * means the resume reinitialises and every device re-enumerates, which is
@@ -3291,8 +3301,8 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
      * TRB left owned at suspend time cannot be re-executed after a restore,
      * whatever the saved image said about it.
      *
-     * **The second is `XhciEventDiscardStale`, and audit round 5 found this
-     * comment claiming the residue was harmless without it.** What it said was
+     * **The second is `XhciEventDiscardStale`, and this comment once claimed
+     * the residue was harmless without it.** What it said was
      * that a stale Command Completion Event naming the abandoned TRB "is already
      * classified as unmatched". That is true only while `CommandTrbPA` is zero.
      * `xhciCommandCompleted` matches on address alone, and the rebuild puts the
@@ -3559,9 +3569,9 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
      * isochronous builder's IOC-per-TD policy relies on to absorb up to 8,000
      * events a second; the 0 this site used to write removed that moderation
      * after every successful restore while a comment beside it claimed 0 was
-     * "the value this driver programs everywhere" (the 2026-09-05 audit's
-     * F10). The spec's restore list wants the register written before CRS
-     * (4.23.2 p.314), so it is written - with its pre-suspend value.
+     * "the value this driver programs everywhere" (reviewed and revised
+     * 2026-09-05). The spec's restore list wants the register written before
+     * CRS (4.23.2 p.314), so it is written - with its pre-suspend value.
      */
     XhciWriteIr0(ext, XHCI_IR_IMOD, ext->SavedImod);
 
@@ -3653,19 +3663,20 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
      * before the caller's `XhciSlotResumeSweep`, which is the first thing that
      * can issue a command.
      *
-     * **Some of what it can find are not droppable**, and three rounds have now
-     * widened that set, each finding its material inside the previous round's
-     * fix. A Host Controller Event on the ring is a controller-level fault the
-     * save gate never excluded, reported nowhere in `USBSTS` - not in `HCE`, not
-     * in `HSE` (round 6). A Transfer Event carrying `Event Lost` is the same loss
-     * reported per endpoint, on an endpoint the xHC has halted for it (4.10.1,
-     * p.173), and round 6's prose had Event Lost arriving only as the former,
-     * which is what hid it (round 7). **Round 8 then found that counting them was
-     * the wrong shape**: Table 6-90 marks Undefined Error fatal in as many words
-     * and hands the vendor error range the same reading, and Incompatible Device
-     * Error owes a Disable Slot that a successful restore would preserve the slot
-     * past. The drain now asks `XhciXferCodeInfo` instead of carrying a list, so
-     * this comment does not carry one either.
+     * **Some of what it can find are not droppable**, and three revisions have
+     * now widened that set, each finding its material inside the previous
+     * one's fix. A Host Controller Event on the ring is a controller-level
+     * fault the save gate never excluded, reported nowhere in `USBSTS` - not
+     * in `HCE`, not in `HSE`. A Transfer Event carrying `Event Lost` is the
+     * same loss reported per endpoint, on an endpoint the xHC has halted for
+     * it (4.10.1, p.173), and the first revision's prose had Event Lost
+     * arriving only as the former, which is what hid it. **The third then
+     * found that counting them was the wrong shape**: Table 6-90 marks
+     * Undefined Error fatal in as many words and hands the vendor error range
+     * the same reading, and Incompatible Device Error owes a Disable Slot that
+     * a successful restore would preserve the slot past. The drain now asks
+     * `XhciXferCodeInfo` instead of carrying a list, so this comment does not
+     * carry one either.
      *
      * Restoring on top of any of them would restart the controller that raised it
      * and consume the only notice of it there will be. The restore fails instead,
@@ -3676,8 +3687,8 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
      * `RestoreEventsFatal` counts them; `RestoreFatalKind` and `RestoreFatalCode`
      * say which kind ended it and which completion code it carried, both readable
      * from a release build. `LastHostControllerCode` is the DPC's field and is
-     * written here only by the Host Controller Event arm - audit round 8 found
-     * three places implying a machine could read the kind out of it, which is why
+     * written here only by the Host Controller Event arm - three places once
+     * implied a machine could read the kind out of it, which is why
      * the kind now has a field of its own.
      */
     fatalEvent = XHCI_RESTORE_FATAL_NONE;
@@ -3733,8 +3744,8 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
  * the one it left. Phase 6 creates all three, so task 6-B.6 built the protocol
  * with exactly the trigger Phase 4 task 8 recorded: `xhciSaveState` below and
  * `xhciRestoreState` beside it. The Phase 4 text survived the change and sat
- * here, several hundred lines from either function, until the 2026-09-16
- * audit's B10.
+ * here, several hundred lines from either function, until it was reviewed
+ * and revised on 2026-09-16.
  *
  * What is still true of the reinitialization is what makes it the fallback: it
  * re-derives every capability register from the hardware and reprograms DCBAAP,
@@ -3781,7 +3792,7 @@ VOID XhciSuspendController(PXHCI_EXTENSION ext)
 
     /*
      * Deliver anything still parked on the completion list before the world
-     * stops (Phase 7 review, B4). The "next DPC or poll" the held-completion
+     * stops (Phase 7). The "next DPC or poll" the held-completion
      * comments lean on does not exist while suspended: usbport gates both the
      * worker and the 500 ms timer on its HC_SUSPEND flag, and the quiesce
      * below clears INITIALIZED so the event DPC declines too - a completion
@@ -3874,6 +3885,7 @@ VOID XhciSuspendController(PXHCI_EXTENSION ext)
 MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
 {
     MPSTATUS status;
+    ULONG rhStatus;
 
     if (ext == NULL) {
         return MP_STATUS_FAILURE;
@@ -3940,14 +3952,15 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
              * "The state of a Root Hub port is not covered by a Save or Restore
              * operation" (p.315), which is why step 9 of the procedure -
              * re-initialising every PORTSC - is mandatory rather than optional.
-             * XhciRootHubInit is that step: it re-seeds every shadow from a live
-             * read, latching whatever changed while the controller was down.
+             * XhciRootHubInit is that step: it marks every port for the device
+             * thread's next PORTSC read (hcd_dev.c), so whatever changed while
+             * the controller was down is seen.
              *
              * `afterRestore` is 1 because this is the one path on which the port
-             * registers themselves survived - see finding A5 and the pass the
-             * flag suppresses.
+             * registers themselves survived - see the pass the flag
+             * suppresses.
              *
-             * **And its status is not discarded** (finding A6). The start path
+             * **And its status is not discarded**. The start path
              * fails the whole start on a nonzero, and the asymmetry was latent
              * rather than harmless: a rebuild that refused would leave every
              * status query answering "no such managed port" on a controller that
@@ -3957,10 +3970,11 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
              * up on the restore and take the reinitialisation, which rebuilds
              * from HCRST.
              */
-            if (XhciRootHubInit(ext, 1) != XHCI_RH_OK) {
+            rhStatus = XhciRootHubInit(ext, 1);
+            if (rhStatus != XHCI_RH_OK) {
                 XHCI_DBG_VALUE("ResumeController: restored but the root hub "
                                "would not rebuild, status",
-                               ext->RootHub.Status);
+                               rhStatus);
                 (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_INITIALIZED,
                                                 0);
                 restored = 0;
@@ -3975,8 +3989,8 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
             }
             /* A REMOVE or PAUSE delivered inside the suspend window left its
              * quiesce chain FAILED-by-unavailability, and this is the one
-             * path on which the record survives to be taken back (Phase 7
-             * review, B3). */
+             * path on which the record survives to be taken back (Phase
+             * 7). */
             XhciSlotResumeSweep(ext);
             XhciRootHubDeferredWork(ext, XHCI_ARM_UNLOCKED);
             XhciSlotDeferredWorkForced(ext, XHCI_ARM_UNLOCKED);
@@ -4181,7 +4195,7 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      * made here ahead of the quiesce, as the same refusal at the same step
      * with the same evidence. Nothing is done and nothing is undone: the
      * controller is left exactly as found, the latch stands, and the retry
-     * is the next poll's (2026-09-17 audit, B7, Codex round 1).
+     * is the next poll's (reviewed and revised 2026-09-17).
      */
     /*
      * **And HCRST, which is the other half of "the reset is over" and not
@@ -4192,7 +4206,7 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      * Sequence") - because a controller may drop CNR while HCRST still reads 1
      * or the other way round. A USBCMD reading HCRST = 1 is a reset in
      * progress whatever CNR says, and the RMW the quiesce would perform on it
-     * carries the write-1-to-reset bit straight back (Codex round 2). The
+     * carries the write-1-to-reset bit straight back. The
      * refusal is the same one, recorded with the USBSTS reading as every
      * XHCI_INIT_STEP_RESET refusal is; the trace carries USBCMD.
      */
@@ -4324,7 +4338,8 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      * latch is still set, so a restoring resume's enable IS refused and the
      * enables wait for the recovery that the handback keeps owed
      * (`xhciRecoveryCallback`). That story is true there and false here, and
-     * this comment told it in the wrong place until the pre-cut audit.
+     * this comment told it in the wrong place until it was reviewed and
+     * revised before the cut.
      */
     if ((ext->Flags & (XHCI_EXT_FLAG_INTERRUPTS | XHCI_EXT_FLAG_SUSPENDED)) ==
         XHCI_EXT_FLAG_INTERRUPTS) {
@@ -4341,8 +4356,8 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      *
      * From the recovery timer's callback, so an XHCI_ARM_DEFER context
      * (roadmap 24.4): the self-test's watchdog is owed, and on NT 6.x so is
-     * the announcement (round 5: the callback may hold usbport's timer-list
-     * lock) - both made by the next health poll or event DPC. On NT 5.x the
+     * the announcement (the callback may hold usbport's timer-list lock) -
+     * both made by the next health poll or event DPC. On NT 5.x the
      * announcement is made here, as before.
      */
     XhciRootHubDeferredWork(ext, XHCI_ARM_DEFER);
@@ -4420,8 +4435,8 @@ ULONG XhciShutdownReset(PXHCI_EXTENSION ext)
  * IRQL: PASSIVE_LEVEL (it waits), or DISPATCH_LEVEL with
  * `ext->InitBelowPassive` set (task 13-R.1), where the waits underneath take
  * their stall-only path. The declaration in src/xhci_hw.h has the full
- * contract; a bare "PASSIVE_LEVEL" stood here until the 2026-09-16 audit's
- * B11 and contradicted it. */
+ * contract; a bare "PASSIVE_LEVEL" stood here until 2026-09-16 and
+ * contradicted it. */
 ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
 {
     return xhciQuiesceBounded(ext, XHCI_HALT_TIMEOUT_MS);
@@ -4601,8 +4616,8 @@ static ULONG xhciQuiesceBounded(PXHCI_EXTENSION ext, ULONG haltMs)
  *   every pointer register in one write. It also undoes the step above it: an
  *   xHC "shall automatically enable VBus on all Root Hub ports after a Chip
  *   Hardware Reset or HCRST" (4.19.4, p.295), so a reset here re-powers every
- *   port - including the USB 3.x ports the port strategy requires unpowered, on
- *   a machine that no longer has a driver to serve whatever trains onto them.
+ *   port - including any the teardown left unpowered, on a machine that no
+ *   longer has a driver to serve whatever trains onto them.
  *   The halt is already a sufficient proof, so the reset buys a cleaner register
  *   image at the cost of the only user-visible thing this teardown achieves.
  *
@@ -4614,8 +4629,8 @@ static ULONG xhciQuiesceBounded(PXHCI_EXTENSION ext, ULONG haltMs)
  * IRQL: PASSIVE_LEVEL (it waits), or DISPATCH_LEVEL with
  * `ext->InitBelowPassive` set (task 13-R.1), where the waits underneath take
  * their stall-only path. The declaration in src/xhci_hw.h has the full
- * contract; a bare "PASSIVE_LEVEL" stood here until the 2026-09-16 audit's
- * B11 and contradicted it. */
+ * contract; a bare "PASSIVE_LEVEL" stood here until 2026-09-16 and
+ * contradicted it. */
 ULONG XhciStopController(PXHCI_EXTENSION ext)
 {
     if (ext == NULL) {
@@ -4639,7 +4654,7 @@ ULONG XhciStopController(PXHCI_EXTENSION ext)
      * One gate per concern, applied where the concern is.
      */
     /*
-     * **Root-hub admission is closed for the port pass** (audit finding A4).
+     * **Root-hub admission is closed for the port pass** (Phase 7).
      * `xhciUnpowerPorts` writes PORTSC raw and unlocked, and `xhciRhAdmitted`
      * asks only for `INITIALIZED`, which the quiesce below does not clear until
      * afterwards - so without this a concurrent `RH_GetPortStatus` on SMP could
@@ -5280,7 +5295,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      * RMWs use this lock too, so none can lose this admission transition.
      */
     /* `RH_CLOSED` goes down in the same write: a teardown's port pass set it
-     * (finding A4) and this is the transition that says the root hub may reach
+     * and this is the transition that says the root hub may reach
      * hardware again. Paired here rather than left to usbport's zeroing of the
      * extension, so the pairing is a property of this driver's own sequence. */
     (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RH_CLOSED,
@@ -5295,16 +5310,15 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
          * reclaims the common buffer after that.
          *
          * **Not because the quiesce is a no-op when R/S was never written** -
-         * this comment said that until the second-reader review, and it
-         * is wrong. `INITIALIZED` is still set here (it is cleared two lines
-         * below, after this call), so the quiesce is admitted and runs
-         * `XhciControllerBeginQuiesce` - retiring the command generation,
-         * masking both interrupt enables and closing DPC admission - before it
-         * looks at `RUNNING` at all. Only the *halt* half is conditional. That
-         * is what makes calling it on every failure of this step correct: the
-         * interrupt and command teardown is owed whether or not the controller
-         * ever ran, and a start that refused at R/S has already programmed the
-         * command ring and the interrupter.
+         * this comment once said that, and it is wrong. `INITIALIZED` is still
+         * set here (it is cleared two lines below, after this call), so the
+         * quiesce is admitted and runs `XhciControllerBeginQuiesce` - retiring
+         * the command generation, masking both interrupt enables and closing
+         * DPC admission - before it looks at `RUNNING` at all. Only the *halt*
+         * half is conditional. That is what makes calling it on every failure
+         * of this step correct: the interrupt and command teardown is owed
+         * whether or not the controller ever ran, and a start that refused at
+         * R/S has already programmed the command ring and the interrupter.
          *
          * And the result is no longer discarded. A failed start reclaims that
          * buffer exactly as a stop does, so the same rule applies: a controller
@@ -5421,8 +5435,8 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      * so what a target observes is this driver's own refusal path and not a
      * special case written for a test.
      *
-     * **It is not that exit verbatim, and the difference is observable**
-     * (a review's finding 3). The No Op step stops the controller only
+     * **It is not that exit verbatim, and the difference is observable**.
+     * The No Op step stops the controller only
      * when the *submit* failed, i.e. with nothing outstanding. Here the submit
      * succeeded, so a No Op is on the command ring with its watchdog armed, and
      * `XhciStopController`'s quiesce abandons it: `CommandsAbandoned` reads 1,

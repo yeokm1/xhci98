@@ -6,8 +6,8 @@
 # `out\post-release`, `vm\win2k.img` - because that is what the committed
 # sample config and every runbook are written in. Five of them carried a
 # byte-identical private copy of the resolver, along with a private
-# `..\..`-relative derivation of the repository root (the 2026-09-07 audit's
-# J6). A resolver that five files agree on today is one that four files agree
+# `..\..`-relative derivation of the repository root (the audit of 2026-09-07).
+# A resolver that five files agree on today is one that four files agree
 # on after the next edit.
 #
 # `Resolve-RepoPath` does not read a `$repo` from its caller's scope, which is

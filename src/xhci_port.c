@@ -17,14 +17,15 @@
  * quiet rather than an error anyone sees, so no caller composes a PORTSC value
  * by hand - they all come from here.
  *
- * Phase 5 adds the other half of the same argument, one layer up. The
- * root-hub *callbacks* live in src/xhci_rh.c because they touch registers and
- * take a lock; what lives here is everything they decide **without** hardware:
- * which PORTSC a hub port is (task 2's explicit map), what a freshly read
- * PORTSC does to the shadow, and which hub-class bits that shadow reports
- * (task 2's "never expose raw xHCI bit positions as USB hub-class status
- * bits"). Splitting it that way is what lets the reporting rules be checked by
- * golden vectors rather than by plugging a device into a VM.
+ * Phase 5 added the other half of the same argument, one layer up, for the
+ * miniport's root-hub callbacks (xhci_rh.c, deleted 2026-10-02): which PORTSC
+ * a hub port is (task 2's explicit map), what a freshly read PORTSC does to
+ * the shadow, which hub-class bits that shadow reports, and the armed-operation
+ * generations. **That half is host-suite-only under the HCD**: the device
+ * thread reads PORTSC itself (hcd_enum.c), no driver file calls the map, the
+ * shadow or the arm functions, and test/test_port.c is what keeps them
+ * compiling and true to their vectors. The PORTSC builders above it are the
+ * part the HCD calls.
  *
  * C89 only. IRQL: every function is callable at any IRQL.
  */
@@ -194,7 +195,7 @@ ULONG XhciPortscRxDetect(ULONG portsc)
 }
 
 /* ------------------------------------------------------------------ */
-/* The logical-port map (roadmap Phase 5 task 2)                       */
+/* The logical-port map (roadmap Phase 5 task 2) - host-suite-only     */
 /* ------------------------------------------------------------------ */
 
 ULONG XhciRootHubBuild(const XHCI_PORT_MAP *map, PXHCI_ROOT_HUB rh)
@@ -505,9 +506,11 @@ VOID XhciPortShadowReport(const XHCI_PORT_SHADOW *shadow,
     }
 
     /*
-     * Every connected managed root port is reported to usbport as High Speed,
-     * whatever `shadow->Speed` decoded - Phase 5 task 7, and the one place this
-     * driver deliberately tells usbport something untrue.
+     * Every connected managed root port was reported to usbport as High Speed,
+     * whatever `shadow->Speed` decoded - Phase 5 task 7, and the one place the
+     * miniport deliberately told usbport something untrue. Nothing under the
+     * HCD reports a port through this function; the rule is kept with its
+     * vectors (test_port.c) as the record of why the miniport did it.
      *
      * usbport applies the EHCI model, in which a root port can only ever have a
      * High Speed device enabled because Full and Low Speed devices are released
@@ -574,8 +577,8 @@ VOID XhciPortShadowLatchChange(XHCI_PORT_SHADOW *shadow, ULONG changeBits)
  * because they are the part with no hardware in it - and because reset and
  * resume must share exactly one copy of them. Building the generation dance
  * twice is how the second copy gets a subtly different version of it; what the
- * two operations do *not* share is the completion rule, which lives at the call
- * sites in src/xhci_rh.c and is different for each.
+ * two operations do *not* share is the completion rule, which lived at the
+ * miniport's call sites (xhci_rh.c) and was different for each.
  */
 
 /*

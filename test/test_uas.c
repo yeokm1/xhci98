@@ -337,7 +337,7 @@ static void test_config(void)
 
     /* Task 36.46: an endpoint past bNumEndpoints, with a companion and a
      * Pipe Usage after it, is no pipe of the setting (the bus opens four)
-     * and lends it neither SuperSpeed nor a usage (Codex round 1). */
+     * and lends it neither SuperSpeed nor a usage. */
     {
         static const UCHAR tail[] = {
             0x07, 0x05, 0x05, 0x02, 0x00, 0x02, 0x00,

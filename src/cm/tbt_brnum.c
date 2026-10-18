@@ -765,6 +765,9 @@ static ULONG brPlaceAt(BRNUM_CTX *c, ULONG bus, PULONG ptop, ULONG floor,
                 r->WinDone[k] = 1;
                 if (!brWinWrite(c, k, XHCI_TBT_CFG_IOWIN, BRWIN_IO_CLOSED, 0) ||
                     !brWinWrite(c, k, XHCI_TBT_CFG_PFWIN, BRWIN_PF_CLOSED, 0) ||
+                    (XHCI_TBT_PF_64BIT(r->WasPf[k]) &&
+                     (!brWinWrite(c, k, XHCI_TBT_CFG_PFUPBASE, 0, 0) ||
+                      !brWinWrite(c, k, XHCI_TBT_CFG_PFUPLIMIT, 0, 0))) ||
                     !brWinWrite(c, k, XHCI_TBT_CFG_MEMWIN, mem,
                                 BRWIN_MEM_MASK)) {
                     r->WinWhere = bdf;
@@ -870,6 +873,12 @@ static VOID brWinUndo(BRNUM_CTX *c)
                    r->WasCmd[k - 1] & 0xFFFFUL, BRWIN_CMD_MEM | BRWIN_CMD_BM);
         ok &= brPut(c, bdf, XHCI_TBT_CFG_MEMWIN, r->WasMem[k - 1],
                     BRWIN_MEM_MASK);
+        if (XHCI_TBT_PF_64BIT(r->WasPf[k - 1])) {
+            ok &= brPut(c, bdf, XHCI_TBT_CFG_PFUPBASE, r->WasPfUp[k - 1],
+                        0xFFFFFFFFUL);
+            ok &= brPut(c, bdf, XHCI_TBT_CFG_PFUPLIMIT,
+                        r->WasPfLimit[k - 1], 0xFFFFFFFFUL);
+        }
         ok &= brPut(c, bdf, XHCI_TBT_CFG_PFWIN, r->WasPf[k - 1],
                     BRWIN_MEM_MASK);
         ok &= brPut(c, bdf, XHCI_TBT_CFG_IOWIN, r->WasIo[k - 1] & 0xFFFFUL,
@@ -910,7 +919,12 @@ static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
         if (!brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_COMMAND, &r->WasCmd[k]) ||
             !brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_IOWIN, &r->WasIo[k]) ||
             !brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_MEMWIN, &r->WasMem[k]) ||
-            !brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_PFWIN, &r->WasPf[k])) {
+            !brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_PFWIN, &r->WasPf[k]) ||
+            (XHCI_TBT_PF_64BIT(r->WasPf[k]) &&
+             (!brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_PFUPBASE,
+                      &r->WasPfUp[k]) ||
+              !brRead(c->Io, r->Bdf[k], XHCI_TBT_CFG_PFUPLIMIT,
+                      &r->WasPfLimit[k])))) {
             r->WinWhere = r->Bdf[k];
             r->WinOutcome = XHCI_TBT_BRWIN_ACCESS;
             return;
@@ -984,6 +998,7 @@ static ULONG brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
     ULONG multi;
     ULONG first;
     ULONG probe;
+    ULONG got;
     ULONG v;
     ULONG pin;
     ULONG back;
@@ -1002,6 +1017,12 @@ static ULONG brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
             multi = 0;
             probe = brProbe(c->Io, bdf, &id, &layout, &multi);
             if (probe != 1) {
+                if (probe != 0) {
+                    /* A function not read (a failed read, or Retry
+                     * Status): its line, and any behind it, not set up,
+                     * so the stage cannot answer DONE. */
+                    r->IrqFailed++;
+                }
                 if (fn == 0 || probe != 0) {
                     break;
                 }
@@ -1017,9 +1038,15 @@ static ULONG brLines(BRNUM_CTX *c, ULONG bus, ULONG rot, ULONG depth,
             if (!brGo(c)) {
                 return XHCI_TBT_BRIRQ_STALE;
             }
+            got = 0;
             if ((layout == 0 || k != XHCI_TBT_BRNUM_MAX_BRIDGES) &&
-                (layout == 0 || layout == XHCI_TBT_HDR_BRIDGE) &&
-                brRead(c->Io, bdf, XHCI_TBT_CFG_INTR, &v)) {
+                (layout == 0 || layout == XHCI_TBT_HDR_BRIDGE)) {
+                got = brRead(c->Io, bdf, XHCI_TBT_CFG_INTR, &v);
+                if (!got) {
+                    r->IrqFailed++;
+                }
+            }
+            if (got) {
                 pin = (v >> 8) & 0xFFUL;
                 if (pin >= 1 && pin <= 4) {
                     r->IrqFunctions++;
@@ -1315,6 +1342,8 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         r->WasIo[k] = 0;
         r->WasMem[k] = 0;
         r->WasPf[k] = 0;
+        r->WasPfUp[k] = 0;
+        r->WasPfLimit[k] = 0;
     }
     if (io->Write == NULL) {
         r->Outcome = XHCI_TBT_BRNUM_NO_WRITER;

@@ -39,16 +39,17 @@
 #      token of the first line.
 #
 # WHY RULE 3 IS NARROWER THAN THE OTHER TWO, measured 2026-09-12 and re-read
-# 2026-09-17. Three tracked files under the scanned trees carry a UTF-8 BOM
-# today (five did on 2026-09-12; scripts\inf-gate\check-inf.ps1 and
-# xhcisnap\README.md have since lost theirs):
+# 2026-10-18. No tracked file under the scanned trees carries a UTF-8 BOM
+# today. Five did on 2026-09-12 (scripts\inf-gate\check-inf.ps1 and
+# test-inf-checks.ps1, scripts\package\test-package.ps1,
+# xhcisnap\README.md and scripts\vm-matrix\offsets.labels.txt); by
+# 2026-10-18 the four scripts\vm-matrix\*.labels.txt maps were the last,
+# because gen-offsets.ps1 wrote them as utf8. It now writes them as ascii,
+# like the offset tables beside them.
 #
-#     scripts\inf-gate\test-inf-checks.ps1    scripts\vm-matrix\offsets.labels.txt
-#     scripts\package\test-package.ps1
-#
-# None is read by the 1998-era toolchain, and on a .ps1 a BOM is not a defect
-# at all: Windows PowerShell 5.1 reads a BOM-less script as the system ANSI
-# codepage, so the BOM is what makes a non-ASCII script read correctly. A rule
+# None of those was read by the 1998-era toolchain, and on a .ps1 a BOM is
+# not a defect at all: Windows PowerShell 5.1 reads a BOM-less script as the
+# system ANSI codepage, so the BOM is what makes a non-ASCII script read correctly. A rule
 # covering every kind would have failed the build on files that work, so it
 # covers the kinds where the byte does damage. Rules 1 and 2 have no such
 # carve-out and cover every kind.
@@ -72,8 +73,8 @@ $toolchainName = @("makefile", "sources")
 
 # Everything else that is source in this tree. Rules 1 and 2 only - see above.
 # `.allow` is the import allowlist, which is tracked source this project edits
-# by hand and which no other gate reads for encoding (the 2026-09-16 audit's
-# D7).
+# by hand and which no other gate reads for encoding (the audit of
+# 2026-09-16).
 $otherExt = @(".ps1", ".psd1", ".md", ".txt", ".list", ".expected", ".allow")
 
 # Repo-relative paths that are not tracked source, each git-ignored for the

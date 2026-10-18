@@ -630,16 +630,16 @@ Map to Windows `USB_DEVICE_SPEED`:
 - LS -> `UsbLowSpeed`
 - HS -> `UsbHighSpeed`
 
-This mapping feeds the driver's internal port shadow and its Slot Contexts. It
-is not what the root-hub reporting layer tells `usbport.sys`. Every connected
-managed root port is reported to usbport as High Speed, and
-`XHCI_HUB_PORT_LOW_SPEED` is never set at all; see
-`docs/contributing/implementation-invariants.md`, "Root Hub Reporting". That
-works around `USBPORT_GetTt`, which `CONTAINING_RECORD`s an empty `TtList` into
-`0xFFFFFFEC` on the Full-Speed root-port path and bugchecks both primary
-targets deterministically. A reporting layer written or reviewed from the
-mapping above alone reintroduces that bugcheck; the invariants document is
-normative for what is reported, this section for what is decoded.
+This mapping feeds the driver's Slot Contexts, and from `2.0.0.0` what the
+HCD reports: it enumerates each device at the speed its port decoded and
+reports to no usbport (`hcd_enum.c`; the hub IOCTLs' answers are design
+record 13 section 8.4). The `1.2.0.0` miniport did not: it reported every
+connected managed root port to usbport as High Speed and never set
+`XHCI_HUB_PORT_LOW_SPEED`, to work around `USBPORT_GetTt`, which
+`CONTAINING_RECORD`s an empty `TtList` into `0xFFFFFFEC` on the Full-Speed
+root-port path and bugchecks both primary targets deterministically
+(`docs/contributing/implementation-invariants.md`, "Root Hub Reporting",
+and issue 6, both kept as that driver's record).
 
 ## Completion Status Mapping
 
@@ -664,7 +664,7 @@ The vocabulary is the Windows 2000 DDK's `usbdi.h`. `USBD_STATUS_DATA_BUFFER_ERR
 | 22 | Incompatible Device | `USBD_STATUS_INTERNAL_HC_ERROR` | 0x80000800 | |
 | 32 | Event Lost | `USBD_STATUS_INTERNAL_HC_ERROR` | 0x80000800 | and escalates: a dropped event is not a late one |
 | 33 | Undefined Error | `USBD_STATUS_INTERNAL_HC_ERROR` | 0x80000800 | |
-| 34 | Invalid Stream ID | `USBD_STATUS_INTERNAL_HC_ERROR` | 0x80000800 | this driver opens no streams |
+| 34 | Invalid Stream ID | `USBD_STATUS_INTERNAL_HC_ERROR` | 0x80000800 | the bus addresses only the streams it opened (task 31-A.1), so the controller and the driver disagree about the endpoint |
 | 192-223 | Vendor Defined Error | `USBD_STATUS_INTERNAL_HC_ERROR` | 0x80000800 | Table 6-90: unknown means Undefined Error |
 | 26/27/28 | Stopped / Length Invalid / Short Packet | `USBD_STATUS_CANCELED` | 0x00010000 | software stopped the ring with Stop Endpoint |
 

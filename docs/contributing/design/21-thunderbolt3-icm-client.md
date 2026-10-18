@@ -917,7 +917,7 @@ and no bitfields:
 
 | Register | Offset | Use |
 |---|---|---|
-| host capabilities | `0x39640` | ring count in bits 9:0, interface version in 23:16 (0 on Alpine Ridge; the versions each row accepts are section 1.4.2's test 4, anything else the inert start) |
+| host capabilities | `0x39640` | Total Paths (the ring count) in bits 10:0, interface version in 23:16 (0 on Alpine Ridge; the versions each row accepts are section 1.4.2's test 4, anything else the inert start) |
 | firmware status | `0x39944` | bit 0 ICM enabled, bit 31 NVM authentication done |
 | outbound mailbox | `0x3990c` | operating mode in bits 11:8 |
 | inbound mailbox data and command | `0x39900`, `0x39904` | command in bits 7:0, error bit 30, request bit 31 |
@@ -951,6 +951,19 @@ numbers, CRC-32C over control packets, and the error notifications. Its
 callback contract (`mmio_rd`, `mmio_wr`, `dma_alloc`, `udelay`, `log`) is
 what makes it host-testable and is kept as the seam between the pure core
 and the driver.
+
+Each ring's index register (offset `8h` of its block: the producer index
+in one 16-bit half, the consumer index in the other, Spec Tables 12-19 and
+12-24) is written as a whole dword: a TX producer write carries 0 in the
+consumer half, and an RX consumer write 0 in the producer half. That is
+correct only if the host interface ignores writes to the half it owns,
+which is an assumption, **unverified on hardware**: it has run on the
+emulator alone (39-V.2). Linux's `nhi.c` writes the 16-bit half alone
+[linux]. On
+a part that latched the written half, the RX producer would read 0 after
+every frame. The writes are left as they are until a reading on the P14s
+settles it; the alternative is a 16-bit write (`WRITE_REGISTER_USHORT`,
+an import the gate would have to admit).
 
 ### 4.3 Polling, and no interrupt at all (decision D3)
 
@@ -1116,9 +1129,11 @@ the observed frames quoted there: `driver ready` (`T:1`, `T:2`), `get route`
 (`T:833`, `T:834`), `approve` (`T:34153`, `T:34154`), `device connected`
 (`T:9`, 61 words, the name block decoded entry by entry), `device
 disconnected` (`T:21087`). Frame type 11 out, 12 and 10 in; the CRC-32C
-trailer is appended to every command and stripped unchecked from every
-response and event, as the Linux client does [inf] and the emulator sends it
-anyway. One command outstanding at a time; a response matches by frame type
+trailer is appended to every command and checked on every response and
+event (`tbt_ring.c`): a mismatch is counted (`cm.ring.crc-errors`), logged
+and flagged on the frame, which is still decoded - an ICM frame is never
+dropped for its trailer, while a control packet with a bad one is (Spec
+6.4.4 has the request retried). One command outstanding at a time; a response matches by frame type
 and code; an event arriving while a command is outstanding is decoded at
 once and acted on as section 4.4 says, never dropped. Error is bit 0 of the
 response flags; an unknown event code is logged and ignored. The encoders
@@ -1292,9 +1307,9 @@ tunnel-up sequence (section 6.5) with its route missing, since the tunnel
 exists whatever the route request did. Entries are removed only by a
 disconnect (with the entries below it), by the reconciliation, or by a
 replacing announcement at the same place (section 5.3).
-A frame longer than its buffer, a response with an unexpected code, or a
-CRC mismatch on a command the firmware reports as an error are counted, not
-acted on. Counters: section 8.
+A frame longer than its buffer, or a response with an unexpected code, is
+counted, not acted on; a CRC mismatch is counted and the frame still
+decoded, as above. Counters: section 8.
 
 **A host interface that stops answering** (reviewed and revised on
 2026-10-15, after the R32 leg of `39-V.2`). With BIOS Assist on, after the
@@ -1454,7 +1469,7 @@ services used:
 | `Get_Device_ID` | 7 | match `PCI\...\BUS_bb&DEV_dd&FUNC_ff` for the tunnel bridge, and `PCI\VEN_vvvv&DEV_dddd` for a vanished child |
 | `Query_Remove_SubTree`, `Remove_SubTree` | 12, 13 | a child whose function has left the bus, before the re-enumeration |
 | `Reenumerate_DevNode` | 51 | the bridge, after a tunnel up or down |
-| `Get_DevNode_Status` | 54 | the log only |
+| `Get_DevNode_Status` | 54 | the log, and safe eject's `DN_REMOVABLE` check before `Change_DevNode_Status` (section 7.4) |
 | `Register_Device_Driver` | 14 | not called: its `CM_REGISTER_DEVICE_DRIVER_REMOVABLE` applies only to a devnode the caller drives (section 7.4) |
 | `Change_DevNode_Status` | 91 | safe eject's 9x half: `DN_REMOVABLE` added to a tunnelled device's devnode, never to a tunnel port's (section 7.4) |
 
@@ -1493,7 +1508,9 @@ What the driver does on a tunnel change on 98 (section 6.5 says when):
 The Windows 98 instance id of a hot-added PCI function is not always the
 `BUS_&DEV_&FUNC_` form (the experiment saw `082800`), so vanished children
 are matched by vendor and device id against what still answers on the bus,
-never by instance id.
+never by instance id. A bus that cannot be read completely - a failed
+read, or a function answering Configuration Request Retry Status (vendor
+id `0001h`, not ready yet) - takes nothing for vanished on that pass.
 
 Reads of the secondary bus for "what still answers" go through
 `HalGetBusData(PCIConfiguration, bus, slot, ...)`, which `hcd_ctl.c` already
@@ -1581,7 +1598,10 @@ is never renumbered under it.
    never reach into the BARs' region, each subtree the same way inside
    its bridge's window; a member whose A-aligned part is smaller than
    the total gets no window at all. Each bridge's I/O and prefetchable
-   windows are closed, and its Memory Space and Bus Master Enable set. A
+   windows are closed (a 64-bit prefetchable window's upper base and
+   limit, `28h` and `2Ch`, written 0 with it and journalled for the undo,
+   since `24h` alone does not close it), and its Memory Space and Bus
+   Master Enable set. A
    member with no memory window, or one too small for the chain and the
    BARs beside it, gets the bus numbers alone.
 5. **Interrupt lines**, once the windows are in place. A function's
@@ -1595,7 +1615,9 @@ is never renumbered under it.
    0 or `FFh`, gets the port's line; its pin, and a bridge's Bridge
    Control, are written back as read. Any other function gets nothing,
    and keeps whatever PCI.VXD makes of it (Code 29 for want of an IRQ on
-   the P14s). Considered and not used: the IRQ Windows recorded at boot
+   the P14s). A function this stage cannot read (a failed read, or one
+   answering Retry Status) is counted as not set up, so the stage does
+   not report every line written. Considered and not used: the IRQ Windows recorded at boot
    for the same position (`HKLM\Enum`'s LogConfig is rewritten at every
    enumeration, as it was in the P14s captures, and `HKEY_DYN_DATA`
    does not survive a restart, so neither is a store a later hot plug
@@ -1738,7 +1760,7 @@ directory, the device-specific route of decision D2 (section 3.3): unforced
 on Windows 2000, forced on XP and 7 by the installer, which the unsigned
 INF's rank requires (`39-0.4`).
 
-The filter does no device work: PnP IRPs other than the five it watches
+The filter does no device work: PnP IRPs other than the six it watches
 go down with `IoSkipCurrentIrpStackLocation`; power IRPs go down the way
 NT 5.x requires of a filter, `PoStartNextPowerIrp` then
 `IoSkipCurrentIrpStackLocation` and `PoCallDriver` (the experiment's
@@ -1746,7 +1768,10 @@ NT 5.x requires of a filter, `PoStartNextPowerIrp` then
 member the NHI has marked **held** (section 6.3), which is passed down
 with a completion routine and retained as section 6.3's resume ordering
 says,
-`PoStartNextPowerIrp` and the completion following its release; `IRP_MN_START_DEVICE` is passed down with a
+`PoStartNextPowerIrp` and the completion following its release;
+`IRP_MN_DEVICE_USAGE_NOTIFICATION` sets `DO_POWER_PAGABLE` on the way down
+unless a device above the filter lacks it, and clears it on the way up
+where the device below lacks it (the paging-path rule for a filter); `IRP_MN_START_DEVICE` is passed down with a
 completion wait and the entry published only on success;
 `IRP_MN_STOP_DEVICE` and `IRP_MN_SURPRISE_REMOVAL` withdraw the entry;
 `IRP_MN_REMOVE_DEVICE` withdraws it, waits for the rundown of section 3.2,
@@ -2235,8 +2260,8 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   98 SE and ME), and an eject made with the install or tray tool goes to
   Windows directly (record 24 section 7.1), so the worker's handshake
   below is not reached by it. Stor98 relies on its own gone deadline
-  (about 5 s) and on Windows' removal, as before; roadmap-usb4.md NV9X.3
-  is the work that makes both.
+  (about 5 s) and on Windows' removal, as before; roadmap-usb4.md 42-0.7
+  and 42-A.13 (formerly NV9X.3) are the work that makes both.
 
 - **UP before the enumeration.** For each active member, before the call
   that exposes its secondary bus (the invalidation of section 6.2,
@@ -2246,7 +2271,10 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   keeps its generation on a tunnel down's re-enumeration. After a tunnel
   up, a RESYNC or an owed re-enumeration the exposure is fresh: presence
   on the bus does not prove the link stayed up in between, so even an
-  entry that reads `UP` gets a new generation. Before every exposure,
+  entry that reads `UP` gets a new generation - unless a 9x removal
+  request (`REMOVE_PENDING`, below) is outstanding on it: the generation
+  does not change while one is set (interface 3, R9a), so the entry is
+  left as it is until the request is withdrawn. Before every exposure,
   fresh or not (it follows the acknowledgement wait), every entry behind
   that bridge that carries a statement is retired (`IN_USE` alone,
   generation + 1), found by the bus and by the bridge it was last published
@@ -2349,7 +2377,7 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   `Remove_SubTree` (R11 O5); and after O6's 30 s, to keep the devnode,
   tear the tunnel down, keep retrying and publish no `UP` on that port
   until the removal succeeds. Both belong with the per-port, non-blocking
-  waits of roadmap-usb4.md NV9X.2 (R6e). R4's rule for a connection
+  waits of roadmap-usb4.md 42-0.7 and 42-A.12 (formerly NV9X.2; R6e). R4's rule for a connection
   manager loaded again in the same boot (retire every endpoint devnode
   under its bridges before its first `UP`) does not arise: a load that
   published is resident and never unloads, and one that did not publish
@@ -2379,7 +2407,8 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   which get no request, and after a lost host interface the children it
   retained, which get one only while the function still answers; the
   tools' 9x eject does not come through the worker at all, so no eject
-  reaches the handshake - roadmap-usb4.md NV9X.3 routes it there.
+  reaches the handshake - roadmap-usb4.md 42-A.13 (formerly NV9X.3)
+  routes it there.
 
 **The budget, an estimate and not an enforced deadline.** Stor98
 measures its gone deadline from its own presence loss. The parts: the
@@ -2518,7 +2547,8 @@ reading of D10 for the owner to confirm.
    this rule changes nothing where nothing is attached. Not changed: on
    2000, and in the revision's legs on XP as well, the child is lost when
    Windows installs a bridge's driver for the first time and rebuilds its
-   stack (roadmap EJRB.1), so the first plug of a never-seen unit is not
+   stack (roadmap-usb4.md 42-0.4 and 42-A.5, formerly EJRB.1), so the
+   first plug of a never-seen unit is not
    listed. The re-plugs are listed. Windows 7 x86 listed the first plug
    too. `cmEjectReady`
    still reads any attached object as a stack, so on an ACPI machine it

@@ -49,6 +49,9 @@ typedef struct _NODE {
     ULONG Io;               /* 1Ch, bridges                                  */
     ULONG Mem;              /* 20h, bridges                                  */
     ULONG Pf;               /* 24h, bridges                                  */
+    ULONG PfType;           /* 24h 3:0 and 19:16, read-only: 1 for 64-bit    */
+    ULONG PfUp;             /* 28h, a 64-bit prefetchable window's           */
+    ULONG PfLimit;          /* 2Ch                                           */
     ULONG Bar[6];           /* 10h-24h (an endpoint's six, a bridge's two)   */
     ULONG BarSize[6];       /* the size each decodes, 0 unimplemented; a
                                64-bit BAR's upper half has size 0            */
@@ -66,7 +69,8 @@ typedef struct _MODEL {
     ULONG FailWriteBdf;     /* writes to this function ...                   */
     ULONG FailWriteOff;     /* ... at this offset fail                       */
     ULONG IgnoreWrites;     /* writes accepted but not held                  */
-    ULONG FailReadBdf;      /* reads of this function fail                   */
+    ULONG FailReadBdf;      /* reads of this function fail ...               */
+    ULONG FailReadOff;      /* ... at this offset only, where nonzero        */
     ULONG StrayWrites;      /* writes not at 18h or not dword                */
 } MODEL;
 
@@ -147,7 +151,8 @@ static ULONG mread(PVOID context, ULONG bdf, ULONG offset, PULONG value)
     ULONG i;
 
     (void)context;
-    if (bdf == m.FailReadBdf) {
+    if (bdf == m.FailReadBdf &&
+        (m.FailReadOff == 0 || offset == m.FailReadOff)) {
         return 0;
     }
     i = mfind(bdf);
@@ -178,7 +183,11 @@ static ULONG mread(PVOID context, ULONG bdf, ULONG offset, PULONG value)
         } else if (m.N[i].Bridge && offset == XHCI_TBT_CFG_MEMWIN) {
             *value = m.N[i].Mem;
         } else if (m.N[i].Bridge && offset == XHCI_TBT_CFG_PFWIN) {
-            *value = m.N[i].Pf;
+            *value = m.N[i].Pf | m.N[i].PfType | (m.N[i].PfType << 16);
+        } else if (m.N[i].Bridge && offset == XHCI_TBT_CFG_PFUPBASE) {
+            *value = m.N[i].PfType != 0 ? m.N[i].PfUp : 0;
+        } else if (m.N[i].Bridge && offset == XHCI_TBT_CFG_PFUPLIMIT) {
+            *value = m.N[i].PfType != 0 ? m.N[i].PfLimit : 0;
         } else if (offset >= 0x10UL && offset <= 0x24UL &&
                    (!m.N[i].Bridge || offset <= 0x14UL)) {
             *value = m.N[i].Bar[(offset - 0x10UL) / 4];
@@ -244,6 +253,12 @@ static ULONG mwrite(PVOID context, ULONG bdf, ULONG offset, ULONG width,
         m.N[i].Mem = value & 0xFFF0FFF0UL;
     } else if (m.N[i].Bridge && offset == XHCI_TBT_CFG_PFWIN) {
         m.N[i].Pf = value & 0xFFF0FFF0UL;
+    } else if (m.N[i].Bridge && m.N[i].PfType != 0 &&
+               offset == XHCI_TBT_CFG_PFUPBASE) {
+        m.N[i].PfUp = value;
+    } else if (m.N[i].Bridge && m.N[i].PfType != 0 &&
+               offset == XHCI_TBT_CFG_PFUPLIMIT) {
+        m.N[i].PfLimit = value;
     } else {
         m.StrayWrites++;
     }
@@ -975,7 +990,7 @@ static VOID test_windows_more(VOID)
 static VOID test_irq(VOID)
 {
     XHCI_TBT_BRNUM r;
-    ULONG port, usp, dsp, nvme, sib, sib0;
+    ULONG port, usp, dsp, nvme, sib;
 
     /* The P14s: the port's INTA on IRQ 10 (its BIOS's line, 0Ah, and the
      * $PIR's link 61 for 04:01 INTA); the chain's pins all INTA on device
@@ -1018,7 +1033,6 @@ static VOID test_irq(VOID)
     m.N[nvme].Intr = 0x0000010BUL;
     sib = madd(port, 1, 0, ID_EMU, 0, 0);
     m.N[sib].Intr = 0x00000100UL;
-    (void)sib0;
     CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ,
                                   NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "numbered");
     CHECK_EQ(m.N[sib].Intr, 0x00000100UL, "the device-1 sibling arrives on INTB: left alone");
@@ -1067,6 +1081,69 @@ static VOID test_irq(VOID)
                                   NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "numbered");
     CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_NONE, "no lines without windows");
     CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing written");
+
+    /* A function whose 3Ch cannot be read: its line not set up, so the
+     * stage does not answer DONE. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    m.N[port].Intr = 0x0000010AUL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    m.N[usp].Intr = 0x00000100UL;
+    m.N[dsp].Intr = 0x00000100UL;
+    m.N[nvme].Intr = 0x00000100UL;
+    m.FailReadBdf = XHCI_TBT_BDF(0x08, 0, 0);
+    m.FailReadOff = 0x3CUL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_ACCESS, "a line not read: not DONE");
+    CHECK_EQ(r.IrqFailed, 1, "counted");
+    CHECK_EQ(r.IrqSet, 2, "the two bridges set");
+}
+
+/* A 64-bit prefetchable window is closed through 28h and 2Ch as well as
+ * 24h, and a refusal puts all three back. */
+static VOID test_pf64(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, usp, dsp, nvme;
+
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    m.N[usp].PfType = 1;
+    m.N[usp].PfUp = 0;
+    m.N[usp].PfLimit = 1;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "the windows written");
+    CHECK_EQ(m.N[usp].Pf, 0x0000FFF0UL, "24h closed");
+    CHECK_EQ(m.N[usp].PfUp, 0, "28h 0");
+    CHECK_EQ(m.N[usp].PfLimit, 0, "2Ch 0: the 64-bit window closed");
+    CHECK_EQ(m.StrayWrites, 0, "no stray write (28h, 2Ch only where 64-bit)");
+
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    m.N[usp].PfType = 1;
+    m.N[usp].PfUp = 0x12UL;
+    m.N[usp].PfLimit = 0x34UL;
+    m.FailWriteBdf = XHCI_TBT_BDF(0x07, 0, 0);
+    m.FailWriteOff = XHCI_TBT_CFG_MEMWIN;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_ACCESS, "the downstream window refused");
+    CHECK_EQ(m.N[usp].PfUp, 0x12UL, "28h put back");
+    CHECK_EQ(m.N[usp].PfLimit, 0x34UL, "2Ch put back");
+    CHECK_EQ(m.N[usp].Pf, 0, "24h put back");
 }
 
 /* A window's base and limit from its 20h dword. */
@@ -1198,7 +1275,7 @@ static VOID test_irq_stale(VOID)
     goRefuseAt = 0;
 }
 
-static VOID test_round4(VOID)
+static VOID test_empty_bus_and_alignment(VOID)
 {
     XHCI_TBT_BRNUM r;
     ULONG port, usp, dsp, sib;
@@ -1561,10 +1638,11 @@ int main(void)
     test_windows();
     test_windows_more();
     test_irq();
+    test_pf64();
     test_windows_order_and_stale();
     test_irq_stale();
-    test_round4();
+    test_empty_bus_and_alignment();
     test_reopen();
     printf("test_tbt_brnum: %d checks, %d failures\n", checks, failures);
-    return failures != 0;
+    return failures;
 }

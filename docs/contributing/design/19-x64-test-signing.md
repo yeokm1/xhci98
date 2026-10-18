@@ -284,8 +284,8 @@ recovery key. Secure Boot does not arise: Vista and 7 do not support it.
 signing mode loads the driver without it, and it does not quiet the install
 prompt either: Plug and Play judges the driver package by its catalog, and
 this package deliberately has none (section 3), so trusting the binaries'
-signer does not sign the package (review round 1, which corrected an
-earlier draft of this record). Imported into a trusted store it would only
+signer does not sign the package (this corrects an earlier draft of
+this record). Imported into a trusted store it would only
 make the machine trust a certificate this project made - which is the
 user's decision, and the docs advise against it. The `.cer` is shipped so
 that anyone can compare a signed binary's signer with the thumbprint of

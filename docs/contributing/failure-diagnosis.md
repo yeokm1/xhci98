@@ -1,5 +1,16 @@
 # Failure Diagnosis Guide (symptom -> ordered causes -> discriminating test)
 
+> **Written for the `1.2.0.0` miniport, on branch `1.2.0.0`.** Most of this
+> guide's symptoms are the miniport's: usbport not calling it, its root-hub
+> callbacks, its health poll, and functions in files that left the tree with
+> it on 2026-10-02 (`xhci_dispatch.c`, `xhci_rh.c`, `xhci_slot.c`). From
+> `2.0.0.0` `xhci98.sys` is the successor HCD, which replaces `usbport.sys`
+> (design record 13); its failure records are the issue pages under
+> `docs/issues/`, the run sheets and design records 13 to 25. The method
+> below - localise silence with instrumentation and differentials, and read
+> the trust order - still holds; a test that names a usbport callback or a
+> deleted file applies to `1.2.0.0` and earlier.
+
 The other docs say what to build and which invariants to keep. This one
 captures the diagnostic reasoning for when a phase checkpoint fails: for each
 symptom, the causes in descending order of likelihood, and the cheapest test
@@ -127,7 +138,7 @@ prints its own line (a counter whose expected value is zero and whose only
 trace site is past an early return proves nothing when it is right), so
 absence means the pass never ran. The two lines are `root hub: no port needed
 driving out of U3, total` and `root hub: ports driven out of U3 after the D0
-transition`, both in `xhciRhDriveSuspendedPortsToU0` (`src/xhci_rh.c`). The
+transition`, both in `xhciRhDriveSuspendedPortsToU0` (`xhci_rh.c`, on `1.2.0.0`). The
 anchor is `XhciRootHubInit`, which calls the pass and then prints four lines
 unconditionally. Line numbers are not given: they drift, and every one of
 these labels is unique in the tree, so `grep` finds them.
@@ -208,7 +219,7 @@ and the set behind it instead.
 
 ---
 
-## Phase 3 - usbport never calls the miniport
+## Phase 3 - usbport never calls the miniport (1.2.0.0)
 
 Symptom: driver installed, but no lifecycle callback ever logs.
 
@@ -271,7 +282,7 @@ order, and do not start by writing a symbol checker:
    failure is in the qemu-only import set.
 2. There is no finer import bisect inside the trace channel. `XHCI_DBG_NO_IRQL`
    does not drop `HAL.DLL!KeGetCurrentIrql`: the flush guard (`xhciLogAtPassive`,
-   `src/xhci_dispatch.c`) calls that symbol in every flavour and the
+   `xhci_dispatch.c` on `1.2.0.0`) calls that symbol in every flavour and the
    allowlist carries it as `all required`. All the define still does is put
    `0xFF` in a trace line's IRQL field, which no published binary prints. A
    target that rejects that HAL symbol therefore cannot be bisected around, and

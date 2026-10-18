@@ -24,8 +24,9 @@
  * case for the hardware: its D3 and D0 work does nothing. Where
  * PoRequestPowerIrp fails, the transition is made on the thread without a
  * device IRP (CmPowerDirectWork, hcd_power.c's direct transition). Once a
- * removal has closed admission (CmPowerDrain), a SET_POWER passes down
- * untouched.
+ * removal has closed admission (CmPowerDrain), a power IRP is completed
+ * with STATUS_DELETE_PENDING, touching nothing of the extension's (as
+ * hcd_power.c does after removal).
  *
  * Windows 98 rules (win98-wdm.md, "Power Management"), each kept as
  * hcd_power.c keeps them: PoStartNextPowerIrp before a power IRP is

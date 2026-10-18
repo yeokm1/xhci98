@@ -64,6 +64,11 @@ architecture and this build.
   INSTALL /to path     installs the xHCI98 tools in that directory
                        without asking (see "The install directory")
 
+On Windows 98 SE and ME, INSTALL.BAT takes eight arguments at most, and
+/set Name=Value counts as three; it refuses more rather than run a
+shortened command. Run TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86
+with the same arguments instead for a longer one.
+
 Thunderbolt 3 / USB4 support: the tool asks "Install Thunderbolt 3 / USB4
 support?". With a Thunderbolt or USB4 controller present Enter (and /yes)
 answers Y; with none found it is still asked, and Enter (and /yes)

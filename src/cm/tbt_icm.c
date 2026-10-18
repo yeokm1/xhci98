@@ -1099,6 +1099,7 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
     ULONG k;
     ULONG n;
     BOOLEAN match;
+    BOOLEAN sent;
     LONG rc;
     TBT_FRAME f;
     TBT_DEADLINE d;
@@ -1106,6 +1107,7 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
     if (icm->InWait) {
         return TBT_E_PARAM;
     }
+    sent = FALSE;
     icm->InWait = TRUE;
     icm->WaitSlot = slot;
     icm->WaitSerial = serial;
@@ -1134,6 +1136,7 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
         if (rc != TBT_OK) {
             break;
         }
+        sent = TRUE;
         icm->Counters.CommandsSent++;
         rc = TBT_E_TIMEOUT;
         TbtDeadlineStart(&d, icm->Host, tbtIcmClip(icm, timeoutMs));
@@ -1239,10 +1242,13 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
     if (rc == TBT_E_TIMEOUT && icm->WaitGone) {
         rc = TBT_E_GONE;
     }
-    if (rc != TBT_OK && rc != TBT_E_ERROR_FLAG && rc != TBT_E_PARAM) {
+    if (sent && rc != TBT_OK && rc != TBT_E_ERROR_FLAG &&
+        rc != TBT_E_PARAM) {
         /* Sent and not answered (or abandoned): its answer may still
          * arrive, and no word of a driver-ready answer tells it from the
-         * next one's. Only a ring restart ends that (TbtIcmRecover). */
+         * next one's. Only a ring restart ends that (TbtIcmRecover). A
+         * command the ring refused (full, stopped) was never sent and has
+         * no answer to come. */
         icm->Ambiguous = TRUE;
     }
     icm->InWait = FALSE;

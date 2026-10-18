@@ -211,10 +211,16 @@ driver fills the gap for both.
 
 ```
 src/            Driver source code (C): the HCD, xhci98.sys (roadmap Phases
-                25 onward, design record 13), its two INFs, and under
-                src/uas/ the UAS class driver xhciuas.sys and its two INFs.
-                The miniport left the tree on 2026-10-02; its last sources
-                are on branch 1.2.0.0
+                25 onward, design record 13), its two INFs and the two
+                txtsetup.oem files; under src/uas/ the UAS class driver
+                xhciuas.sys and its two INFs; under src/cm/ xhcicm.sys,
+                the Thunderbolt 3 and USB4 connection manager
+                (roadmap-usb4.md, design records 21 and 22), with its four
+                INFs (xhcicm and its tunnel-port filter xhcicmf, each 32-
+                and 64-bit); and under src/hlpr/ the WDK 7.1 build files
+                of xhcihlpr.sys, the x86 helper (design record 18 section
+                15), whose code is src/xhci_hlpr.c. The miniport left the
+                tree on 2026-10-02; its last sources are on branch 1.2.0.0
 test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
 scripts/        The build wrapper, host setup helpers, and the import/INF/
                 packaging gates. `scripts/local/` is git-ignored per-host
@@ -232,6 +238,15 @@ xhcisnap/       The host-side reader for the driver's log channel
 xhciinst/       The install, update and uninstall tool (`XHCIINST.EXE`,
                 `XHCIIN64.EXE`) and the package's `INSTALL.BAT`, from
                 `3.0.0.0` (design record 23). Tracked.
+xhcicln/        The optional cleanup tool (`XHCICLN.EXE`, `XHCICL64.EXE`)
+                for the devnodes a driver before `2.4.0.0` left under
+                `XHCI98\`, from `2.4.0.0` (roadmap-hcd task 38.8, design
+                record 13 section 10.13.8); `xhcicln/README.TXT` is its
+                guide. Tracked.
+xhcitr/         The xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE`), the
+                graphical tree, eject and tray tool, from `3.0.0.0`
+                (roadmap-usb4 Phase 41, design record 25);
+                `xhcitr/README.TXT` is its guide. Tracked.
 images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
@@ -255,6 +270,9 @@ vm/             Guest disk images and transfer disks. The per-run evidence the
                 was taken, not a file a clone can open. Git-ignored.
 out/            Staged install media from `scripts\package\make-package.ps1`.
                 Generated; git-ignored.
+temp/           Scratch: bench dumps land here by hand and are copied to a
+                tracked evidence directory if a document cites them
+                (`.gitignore` has the rule). Git-ignored.
 releases/       The releases that have been cut, one directory per version.
                 `releases/README.md` has the numbering rule and the standing
                 rule that a cut directory is never edited afterwards;
@@ -270,8 +288,8 @@ LICENSE         The license text and its scope note.
 ```
 
 Everything above is tracked except `tools/`, `external/`, the PDFs in
-`docs/references/`, `vm/`, `out/` and `scripts/local/`: third-party material,
-generated output, or host-specific tooling. Nothing under `tools/` goes into
+`docs/references/`, `vm/`, `out/`, `temp/` and `scripts/local/`: third-party material,
+generated output, scratch, or host-specific tooling. Nothing under `tools/` goes into
 the release download since 1.0.0.1; "Third-Party Material and Provenance"
 below has the record. Every version under `releases/` has been uploaded to a
 GitHub release, and the repository is public (which build the third-party
@@ -294,7 +312,12 @@ onward, the USB4 and Thunderbolt connection-manager work: a driver beside
 never modified, with design record 21 as Phase 39's plan (the Thunderbolt
 firmware connection manager client) and design record 22 as Phase 40's
 (the USB4 software connection manager); both phases opened 2026-10-15 and
-ship together as `3.0.0.0`. The miniport is
+shipped together as `3.0.0.0`, cut on 2026-10-17 with Phase 41 (XHCITR,
+design record 25). **The open phase is that file's Phase 42**, opened by
+the owner on 2026-10-18 for release `3.1.0.0` (the windowed installer,
+the uninstall, the Windows 98 SE and ME device install, `XHCISNAP`
+retired, and the connection-manager follow-ups), on branch `3.1.0.0`;
+the file's status line and decisions table are the current state. The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
 are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
 ASCII and CRLF, the three flavours, the import and INF gates - bind the HCD
@@ -692,8 +715,9 @@ rules that bind day-to-day work, and none of them is optional.
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"
   anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, from
-  `2.4.0.0` `XHCICLN` and `XHCICL64`, and from `3.0.0.0` `XHCIINST` and
-  `XHCIIN64`) carry statically linked runtimes (section 2a).
+  `2.4.0.0` `XHCICLN` and `XHCICL64`, and from `3.0.0.0` `XHCIINST`,
+  `XHCIIN64`, `XHCITR` and `XHCITR64`) carry statically linked runtimes
+  (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh
@@ -794,4 +818,5 @@ UTF-8.
 - Do not sign a binary by hand, sign an x86 binary, or let the test-signing key (`.pfx`) or its password reach a tracked file, a package, a log or a note. The packager signs the x64 binaries at staging (design record 19).
 - Do not describe a fact as runtime-observed when it was read out of a disassembly. Tag the method you actually used.
 - Do not write a legal conclusion into any file in this repository. `docs/contributing/legal-provenance.md` records facts, not verdicts.
+- Do not name the review tool, a review round or a finding number in a tracked file (owner, 2026-10-14; made explicit 2026-10-18): no tracked document and no source or script comment says which tool reviewed a change, "review round N" or "finding N". Cite the commit, the date, the task id or the run section instead, and say "reviewed and revised" at most. The dated run sheets (`docs/contributing/runs/run-*.md` and `run-13e.md`) are left as they were written, and so is the credit line in `README.md`'s "AI usage", which names the agents on purpose.
 - Do not write a development machine's name (its `hostname`) into any tracked file, commit message or report. Name the host by its alias - "development host A", "B", "C" - as every run record here does; the key from name to alias is kept out of the repository (owner, 2026-09-28). Logs that print `$env:COMPUTERNAME` are git-ignored; do not transcribe that field.

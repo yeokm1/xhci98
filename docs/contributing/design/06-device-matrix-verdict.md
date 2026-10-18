@@ -52,8 +52,8 @@ The runner prints a sixth word, `EXCLUDED`, for a row the matrix declares is
 not run on a target (`ExcludedOnTarget`, with its reason). It is not an
 outcome of the evaluator: no reading was taken, and the row counts as not
 reached. A target on which every row was excluded or never reached has
-measured nothing and its verdict is `FAIL`, not an empty pass (the 2026-09-05
-audit's F11 found the tally reading such a target as `PASS`).
+measured nothing and its verdict is `FAIL`, not an empty pass (the audit of
+2026-09-05 found the tally reading such a target as `PASS`).
 
 `NODRIVER` and `INERT` are the two the checkpoint names explicitly, because
 they are the two a naive harness reports as `PASS`. A `usb-braille` on Windows

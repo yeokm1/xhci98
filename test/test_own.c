@@ -749,5 +749,5 @@ int main(void)
     test_drop_paths();
     test_single_setting();
     printf("test_own: %d checks, %d failures\n", checks, failures);
-    return failures != 0;
+    return failures;
 }

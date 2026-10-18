@@ -55,7 +55,7 @@ if (-not (Test-Path -LiteralPath $Image)) {
 }
 
 # The name list and the scan are `common.ps1`'s, so this gate and the packager
-# cannot disagree about what a marker is (audit J6). HOSTTEST is in that list
+# cannot disagree about what a marker is (the audit of 2026-09-07). HOSTTEST is in that list
 # on purpose; the reason is given there.
 . (Join-Path $PSScriptRoot "common.ps1")
 

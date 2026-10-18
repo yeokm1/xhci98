@@ -52,7 +52,8 @@
 #define UAS_POOL_TAG            ' saU'
 
 #define UAS_MAX_LUNS            8
-#define UAS_STATUS_BUFFER       288     /* a SENSE IU with 252 sense bytes */
+#define UAS_STATUS_BUFFER       288     /* holds a SENSE IU with all 252
+                                         * sense bytes (16 + 252 = 268) */
 #define UAS_MAX_TRANSFER        0x10000 /* the command size until the bus
                                          * answers, and whenever it cannot
                                          * (task 36.22; CommandBytes) */

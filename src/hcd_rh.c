@@ -159,10 +159,10 @@ NTSTATUS HcdRootHubCreatePdo(PHCD_CONTROLLER hc)
  * when PnP has removed it, orphaned when it still awaits its REMOVE (a
  * surprise removal with the root hub's handles open): it forgets the
  * controller, whose storage goes now, and deletes itself at that REMOVE
- * (Codex review of batch (b), round 1, finding 2). PnP sends a parent's
- * remove only after its children's, one at a time, so this does not race
- * the root hub's own PnP handlers; a device-control request through a handle
- * still open is not serialized with it, and is waited out (RootHubUsers).
+ * (batch (b)). PnP sends a parent's remove only after its children's, one at
+ * a time, so this does not race the root hub's own PnP handlers; a
+ * device-control request through a handle still open is not serialized with
+ * it, and is waited out (RootHubUsers).
  */
 VOID HcdRootHubDeletePdo(PHCD_CONTROLLER hc)
 {
@@ -176,15 +176,14 @@ VOID HcdRootHubDeletePdo(PHCD_CONTROLLER hc)
     ext = (PHCD_ROOTHUB_PDO)hc->RootHubPdo->DeviceExtension;
     hcdRhOrphan(ext);
     /* A request that took the controller before the orphaning is still
-     * inside it; the storage outlives it (Codex review of 26-A.8, round 22,
-     * finding 1). */
+     * inside it; the storage outlives it (task 26-A.8). */
     while (hc->RootHubUsers != 0) {
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
     if (ext->RemoveReceived || !ext->Reported) {
         /* PnP has removed it, or never learned of it and so never will
-         * (Codex review of batch (b), round 2, finding 4). */
+         * (batch (b)). */
         ext->Deleted = 1;
         IoDeleteDevice(ext->Common.Self);
     }
@@ -344,8 +343,8 @@ NTSTATUS HcdRootHubPdoPnp(PHCD_ROOTHUB_PDO pdo, PIRP irp)
         pdo->Started = 0;
         pdo->Common.PnpState = HCD_PNP_REMOVED;
         if (pdo->Deleted) {
-            /* A REMOVE again while a reference keeps the object (round 2,
-             * finding 1): deleted once already. */
+            /* A REMOVE again while a reference keeps the object: deleted
+             * once already. */
             return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
         }
         pdo->RemoveReceived = 1;
@@ -515,7 +514,7 @@ static NTSTATUS NTAPI hcdRhSignal(PDEVICE_OBJECT DeviceObject, PIRP Irp,
  * remove waits for (RootHubUsers) is held across one, and no lock is; the
  * controller thread it waits for needs nothing this IRP holds. Bounded by
  * the controller's deadline, a relative timer on this stack frame (task
- * 33.3; Codex review of 33.3, round 1, finding 4). IRQL: PASSIVE_LEVEL.
+ * 33.3). IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdRhSettle(PHCD_ROOTHUB_FDO fdo, ULONG target)
 {
@@ -618,7 +617,7 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
          * The bus is detached before its children are settled: the thread
          * drops every device and stops creating PDOs (HcdEnumDetach), and
          * only then is each PDO deleted or orphaned (HcdDevicePdoReleaseAll;
-         * Codex review of batch (b), round 1, findings 1 and 2). Both run
+         * batch (b)). Both run
          * before the IRP goes down, since the PDO below may delete itself,
          * and its extension with the controller pointer, on the way.
          */

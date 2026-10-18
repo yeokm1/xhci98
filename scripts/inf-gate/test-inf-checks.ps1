@@ -79,8 +79,8 @@ function Invoke-Gate {
     if ($PackageDir -ne "") { $psArgs += @("-PackageDir", $PackageDir) }
     if ($Extra.Count -gt 0) { $psArgs += $Extra }
     # ErrorActionPreference relaxed across the call, as
-    # `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin (repo audit
-    # D5): in Windows PowerShell 5.1 each stderr line from a native command
+    # `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin: in
+    # Windows PowerShell 5.1 each stderr line from a native command
     # becomes an ErrorRecord, and under "Stop" the first one aborts this
     # self-test with an empty message. That matters most here, because the gate
     # under test is *expected* to fail on most of these cases and its diagnosis
@@ -132,7 +132,7 @@ function New-MutatedInf {
     $path = Join-Path $script:work ("$Name.inf")
     if ($BareCr) {
         # ONE bare CR, not a whole-file CRLF -> CR conversion. The rule under
-        # test (FILE-EOL's CR arithmetic, repo audit D5) exists because a lone CR
+        # test (FILE-EOL's CR arithmetic) exists because a lone CR
         # is a line break this gate's own CRLF splitting cannot see, so the case
         # worth witnessing is the one where FILE-EOL is the ONLY thing that can
         # object: a classic-Mac file would trip a dozen structural rules and
@@ -144,7 +144,7 @@ function New-MutatedInf {
     } elseif ($Utf8Bom) {
         # Three bytes of BOM in front of otherwise perfect ASCII - the one
         # encoding mistake an editor makes silently on save, and the branch of
-        # FILE-ENCODING that had no test until the 2026-09-07 audit's H9.
+        # FILE-ENCODING that had no test until the audit of 2026-09-07.
         # Neither setup engine reads a BOM as anything but garbage at the head
         # of [Version].
         [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($true)))
@@ -423,6 +423,33 @@ try {
             Assert-True ($r.Output -match [regex]::Escape("[BOTH-VERSION]")) ($c.Name + " : expected BOTH-VERSION. Output was:`n" + $r.Output)
         }
 
+        # The XHCITR manifest's literal version (check-inf.ps1 -ManifestPath):
+        # the production one must pass, and a copy one version ahead, one with
+        # the attribute gone and one with no identity must each fail.
+        Stage-VersionPair $hdrText $rcText
+        $mfProd = Join-Path $repo "xhcitr\xhcitr.manifest"
+        $mfText = [System.IO.File]::ReadAllText($mfProd)
+        $mfStaged = Join-Path $script:work "xhcitr.manifest"
+        $path = New-MutatedInf -Name "mfgood" -Mutate { param($t) $t } -InfUnchanged
+        [System.IO.File]::WriteAllText($mfStaged, $mfText, $ascii)
+        $r = Invoke-Gate -Path $path -Extra @("-ManifestPath", $mfStaged)
+        Assert-True ($r.ExitCode -eq 0) ("mfgood : the production manifest disagrees with the header:`n" + $r.Output)
+        $mfCases = @(
+            @{ Name = "mfver";    Pattern = '(<assemblyIdentity version=")[\d.]+(" processorArchitecture="\*" name="xhci98\.xhcitr")'; Replace = '${1}9.9.9.9${2}' },
+            @{ Name = "mfnover";  Pattern = '(<assemblyIdentity )version="[\d.]+" (processorArchitecture="\*" name="xhci98\.xhcitr")'; Replace = '${1}${2}' },
+            @{ Name = "mfnoname"; Pattern = 'name="xhci98\.xhcitr"'; Replace = 'name="xhci98.other"' }
+        )
+        foreach ($c in $mfCases) {
+            $mutated = $mfText -replace $c.Pattern, $c.Replace
+            Assert-True ($mutated -ne $mfText) ($c.Name + " : the mutation matched nothing, so it tests nothing.")
+            [System.IO.File]::WriteAllText($mfStaged, $mutated, $ascii)
+            $path = New-MutatedInf -Name $c.Name -Mutate { param($t) $t } -InfUnchanged
+            $r = Invoke-Gate -Path $path -Extra @("-ManifestPath", $mfStaged)
+            Assert-True ($r.ExitCode -ne 0) ($c.Name + " : a manifest whose version the header does not back was accepted.")
+            Assert-True ($r.Output -match [regex]::Escape("[BOTH-VERSION]")) ($c.Name + " : expected BOTH-VERSION. Output was:`n" + $r.Output)
+        }
+        Remove-Item -LiteralPath $mfStaged -Force
+
         Remove-Item -LiteralPath $stagedHdr -Force
         Remove-Item -LiteralPath $stagedRc -Force
     }.Invoke() | Out-Null
@@ -479,7 +506,7 @@ try {
     # **BOTH of the values are exercised and not just one**, because the rule
     # set runs per value: a case list covering one of them would pass while the
     # other had no coverage at all, which is the same shape as a value written
-    # on one install path only. *(This said "all THREE" until the post-Phase 13 review rounds,
+    # on one install path only. *(This said "all THREE" until after Phase 13,
     # contradicting the step title three lines below it - there have been two
     # since `XhciLogSnapshot` merged into the ladder.)*
     #
@@ -546,7 +573,7 @@ try {
         param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,,XhciLogDebugView,0x00010003,0",
                              "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010003,2`r`nHKR,Parameters,XhciLogDebugView,0x00010003,0")
     }
-    # **VAL-DUP had no case at all until the post-Phase 13 review rounds**, which is this suite's own
+    # **VAL-DUP had no case at all until after Phase 13**, which is this suite's own
     # documented failure mode one rule over: `VAL-MISSING` was structurally
     # incapable of firing and only a case found it. The rule is worth having -
     # `Get-AddRegValues` returns every hit and the checker reads `$hits[0]`, so
@@ -953,8 +980,7 @@ try {
         param($t) $t.Replace("[Hub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`n", "[Hub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
     }
     # A copy in a section the engine runs beside the install by name, or an
-    # Include/Needs the gate cannot follow (Codex review of 33.4, round 1,
-    # finding 3).
+    # Include/Needs the gate cannot follow (task 33.4).
     Assert-RuleFires "hcd-hub-coinstallers-copy" "HCD-HUBCOPY" {
         param($t) $t.Replace("[Hub.Dev.NTx86.Services]", "[Hub.Dev.NTx86.CoInstallers]`r`nCopyFiles=Xhci.CopyFiles`r`n`r`n[Hub.Dev.NTx86.Services]")
     }
@@ -1083,7 +1109,7 @@ try {
         param($t) $t.Replace("%HubDesc%=Hub.Dev6,USB\XHCI98_HUB`r`n", "%HubDesc%=Hub.Dev6,USB\XHCI98_HUB`r`n%HubDesc%=Hub.Dev6,XHCI98\HUB`r`n")
     }
     # A [Strings] substitution is expanded before the scan, and a model
-    # line's ids are literal (round 1 of the 38.8 code review, finding 1).
+    # line's ids are literal (task 38.8).
     Assert-RuleFires "hcd-usbres-strings-token" "HCD-USBRES" {
         param($t) $t.Replace("Xhci.Dev,PCI\CC_0C0330`r`n", "Xhci.Dev,PCI\CC_0C0330,%Bus%\XHCI98_NOXPORT&VID_0781&PID_5581`r`n").Replace("[Strings]`r`n", "[Strings]`r`nBus=`"USB`"`r`n")
     }
@@ -1184,7 +1210,7 @@ try {
     #
     # **A genuinely NT-only INF** - the mistake this task exists to prevent. It
     # has to fail on the Windows 98 half rather than quietly install on one
-    # target. The case that stood here until the 2026-09-07 audit's H9 was
+    # target. The case that stood here until the audit of 2026-09-07 was
     # named for this and did not build it: it deleted the `AddReg=` line and
     # left `[Xhci.Dev]` in place, so what it exercised was the case above and
     # the Windows 98 *path* branch - a model whose undecorated section is
@@ -1300,7 +1326,7 @@ try {
 
     # ---- usbui.dll, new in 1.0.2.0 -----------------------------------------
     #
-    # **The 2026-09-07 audit's H7.** This file is the change the release turns
+    # **Found by the audit of 2026-09-07.** This file is the change the release turns
     # on, and it had ZERO self-test coverage: the missing-file, on-media,
     # never-named and flag rules were all untested for it, and so was the
     # wrong-destination rule - which matters more than the rest, because
@@ -1360,7 +1386,7 @@ try {
         param($t) $t.Replace("[Xhci.CopyUI]`r`nusbui.dll,,,16", "[Xhci.CopyUI]`r`nusbui.dll,usbui2k.dll,,16")
     }
 
-    # ---- rules whose negative branch had no test (audit H9) ----------------
+    # ---- rules whose negative branch had no test (audit of 2026-09-07) --
     #
     # Each of these is a branch the gate carries and nothing had ever watched
     # fire. A rule that has never failed is a rule that might not be able to.
@@ -1381,14 +1407,14 @@ try {
                              "[Xhci.CopyFiles]`r`nxhci98driver.sys,,xhci98.tmp")
     }
 
-    # The temporary-name field on the driver's own copy row (audit H10). Its
+    # The temporary-name field on the driver's own copy row (audit of 2026-09-07). Its
     # absence is a documented Windows 98 trap - the replace over the loaded
     # binary fails - and until that audit only the footprint diff noticed.
     Assert-RuleFires "w98-no-tempname" "W98-TEMPNAME" {
         param($t) $t.Replace("xhci98.sys,,xhci98.tmp", "xhci98.sys")
     }
 
-    # Both right-click sections gone (audit H8). This is the shape that used to
+    # Both right-click sections gone (audit of 2026-09-07). This is the shape that used to
     # pass green: with neither section present the OS-* and SUSP-* route lists
     # simply get shorter, so half the install routes stop being checked instead
     # of failing.
@@ -1399,7 +1425,7 @@ try {
     }
 
     # COPYFLG_NO_VERSION_DIALOG (32), which the table in build-and-test.md
-    # rejects and which the flag rule did not object to until audit H11. 16|32
+    # rejects and which the flag rule did not object to until the 2026-09-07 audit. 16|32
     # keeps NO_OVERWRITE set, so only the added bit is under test.
     Assert-RuleFires "os-no-version-dialog" "OS-FLAGS" {
         param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys,,,48")
@@ -1461,8 +1487,8 @@ try {
     # was a silently disabled fix; the same reasoning inverted says the value's
     # data is not what makes it unwanted - its being here at all is.
     # Quoted names and a quoted subkey: setup reads them as the same value,
-    # so each of the three OS names is refused quoted too (Codex review of
-    # task 36.51, round 1).
+    # so each of the three OS names is refused quoted too (task
+    # 36.51).
     Assert-RuleFires "susp-global-quoted" "SUSP-GLOBAL" {
         param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
                              "[Xhci.AddReg.NT]`r`nHKLM,`"System\CurrentControlSet\Services\USB`",`"DisableSelectiveSuspend`",0x00010001,1`r`nHKR,,XhciLogVerbosity")
@@ -2094,7 +2120,7 @@ try {
 
     #
     # **And the two DECORATED spellings a 32-bit engine reaches BEFORE the
-    # undecorated one** (the 2026-09-16 audit's D7). The fallback chain is
+    # undecorated one** (the audit of 2026-09-16). The fallback chain is
     # .NTx86, then .NT, then the bare name, so `[Xhci.Dev.NTx86]` in the 64-bit
     # file is not a fallback at all - it is the section that engine was looking
     # for. Both were accepted while only the bare name was refused, which made
@@ -2132,7 +2158,7 @@ try {
 
     # And the right-click section going missing altogether, which halves the
     # routes every OS-* and SUSP-* rule below is checked against rather than
-    # failing anything - the 2026-09-07 audit's H8, in its 64-bit form.
+    # failing anything - found by the audit of 2026-09-07, in its 64-bit form.
     Assert-RuleFires "amd64-no-default" "OS-DEFAULT" {
         param($t) $t.Replace("[DefaultInstall.NTamd64]", "[DefaultInstall.NTamd65]")
     } -Source $prodInfAmd64 -Arch amd64

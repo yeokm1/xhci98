@@ -60,9 +60,9 @@ ntoskrnl.exe!ZwClose                       all    required  SITES=cm_reg.obj,cm_
 # --- The log's emission, every flavour (record 21 section 8): cm_log.obj ---
 ntoskrnl.exe!DbgPrint                      all    required  SITES=cm_log.obj nt52-amd64-export; twin of the x86 row
 
-# --- Pool: cm_pool.obj only, optional while nothing allocates pool ---
-ntoskrnl.exe!ExAllocatePoolWithTag         all    optional  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row
-ntoskrnl.exe!ExFreePool                    all    optional  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row
+# --- Pool: cm_pool.obj only (CmAlloc, CmFree), required as on x86 ---
+ntoskrnl.exe!ExAllocatePoolWithTag         all    required  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ExFreePool                    all    required  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row
 
 # --- The NHI driver of task 39-A.4: BAR0, configuration space, the
 # thread and its clock, the power policy owner, the ring block's

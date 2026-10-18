@@ -86,7 +86,7 @@ function Read-MediaLayout {
 # artifact instead of trusting the build wrapper. An image carrying two markers
 # is one the preprocessor let through with more than one flavour define, and it
 # is not a debug build with a stray string in it. `scripts\check-flavour-marker.ps1`
-# has always demanded exactly one; this did not until a Codex review pointed
+# has always demanded exactly one; this did not until a review pointed
 # out that the two gates disagreed. (That review named commit `efa86a3`, which
 # is not in this repository's history: it predates the history rewrite and
 # cannot be resolved. The finding stands; the citation does not.)
@@ -100,7 +100,8 @@ function Get-ImageFlavourMarker {
     param([string]$Path)
 
     # The scan is common.ps1's, so this and scripts\check-flavour-marker.ps1
-    # cannot disagree about what a marker is (audit J6). What differs is the
+    # cannot disagree about what a marker is (the audit of 2026-09-07). What
+    # differs is the
     # answer's shape: that gate wants "exactly one, and this one", and this
     # returns which one it is.
     $found = @(Get-XhciFlavourMarkers -Path $Path |
@@ -165,7 +166,7 @@ function Read-DerTlv {
     # One DER tag-length-value at $At: the tag, where the value starts and
     # where the element ends. DER only: definite lengths, in their minimal
     # form (a long form for a length under 128, or with a leading zero
-    # byte, is refused - review round 2).
+    # byte, is refused).
     param([byte[]]$B, [int]$At, [int]$Limit)
     if ($At + 2 -gt $Limit) { throw "DER: element at $At runs past its container" }
     $tag = $B[$At]
@@ -187,7 +188,7 @@ function Read-DerTlv {
 
 function Assert-SpcPeImageData {
     # The data value of a PE-image Authenticode signature, parsed against its
-    # own schema rather than walked as generic DER (review rounds 2 to 4):
+    # own schema rather than walked as generic DER:
     #   SpcPeImageData ::= SEQUENCE { flags BIT STRING OPTIONAL,
     #                                 file [0] EXPLICIT SpcLink OPTIONAL }
     #   SpcLink   ::= CHOICE { url [0] IMPLICIT IA5String,
@@ -274,7 +275,7 @@ function ConvertFrom-SpcIndirectData {
     # parameters NULL OPTIONAL }, digest OCTET STRING } }, parsed strictly:
     # every element where it belongs, the optional value an SpcPeImageData by
     # its schema, the parameters absent or exactly NULL, and nothing after
-    # anything (review rounds 1 and 2). Returns the data type's OID, the
+    # anything. Returns the data type's OID, the
     # digest algorithm's OID and the digest as hex.
     param([byte[]]$Content)
     if ($null -eq $Content -or $Content.Length -lt 2) { throw "no SpcIndirectDataContent" }
@@ -428,7 +429,7 @@ function Get-EmbeddedSignature {
     # parsed in full, so that only an Authenticode PE-image signature, with
     # its own digest algorithm and digest, can pass the verdict - not any
     # CMS message by the right certificate that happens to end in the right
-    # bytes (review round 1).
+    # bytes.
     $indirect = ConvertFrom-SpcIndirectData -Content $cms.ContentInfo.Content
 
     $sha1 = [System.Security.Cryptography.SHA1]::Create()
@@ -555,7 +556,7 @@ function Get-TestSignCertificate {
 # 2026-10-13: SNAPON.BAT LEVEL, SNAPGET.BAT NAME), passed on as it came:
 # Args ends in %1, and that one run line is the only line that may carry
 # %1. The default and the check are the tool's (XHCISNAP -on, -report
-# NAME), so no `if` reads %1 (Codex review of 38.1, round 3: a quoted or
+# NAME), so no `if` reads %1 (task 38.1: a quoted or
 # metacharacter %1 broke cmd.exe's `if "%1"==` before the tool could refuse
 # it, and a goto change could route around a level test). No other percent
 # variable (%2, %0, %*, %~1, %DATE%, ...) is admitted anywhere.
@@ -707,8 +708,8 @@ function Get-ReportBatchFaults {
 # The silent install's two batch files and SILENT.REG (roadmap-hcd task
 # 38.2, design record 13 section 6.11.8): what test-package.ps1 holds the
 # repository's sources to, and what make-release.ps1 holds a staged or
-# published tools\silent\ to (Assert-SilentInstallContent; Codex review of
-# 38.2, round 1). The batches are run by COMMAND.COM on Windows 98 SE and
+# published tools\silent\ to (Assert-SilentInstallContent; task 38.2). The
+# batches are run by COMMAND.COM on Windows 98 SE and
 # ME and by cmd.exe elsewhere, so they are held as portsw-on.bat's are:
 # every line from a short list both interpreters run, and a pinned split
 # whose cmd.exe branch only says it changed nothing. silent-on.bat merges

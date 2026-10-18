@@ -48,7 +48,7 @@
 # a key that outlives the device's own. Both bear on what an UNINSTALL
 # does, which this derivation does not model and which nothing in this
 # repository establishes. Drafts made each of them a 'review' - the
-# service one, then the registry one a review round later - and each time
+# service one, then the registry one a draft later - and each time
 # that answered a different question inside a column defined as
 # ownership. An unconditional write puts the value there whatever its
 # root or its association. What happens to it at uninstall is a
@@ -72,7 +72,7 @@
 # prior state. They deliberately do not answer a second question,
 # 'what does uninstall do to it', which depends on the key's lifetime and
 # on the service association and which this file models nowhere. Two
-# drafts mixed the second axis into the first; the review rounds that
+# drafts mixed the second axis into the first; the reviews that
 # caught them are why the distinction is spelled out here.
 #
 # NOT in here, because it is measured rather than claimed: what each

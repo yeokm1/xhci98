@@ -243,9 +243,9 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
  *   - and last, any isochronous endpoint whose interval payload exceeds what
  *     the transfer path carries - one page (XhciPipeIsoFragments) - is
  *     ESIT_REFUSED too, whatever the rules above allowed, until multi-page
- *     isochronous packets exist (Codex review of Phase 29, round 1); and so
- *     is one whose interval needs more than four bursts of its packet size
- *     and Max Burst, which the Isoch TRB's TBC cannot describe (round 2).
+ *     isochronous packets exist (Phase 29); and so is one whose interval
+ *     needs more than four bursts of its packet size and Max Burst, which
+ *     the Isoch TRB's TBC cannot describe.
  *
  * XHCI_PIPE_BAD_PARAM for NULL or an offset whose 7 bytes are not inside
  * `length`.
@@ -260,7 +260,7 @@ ULONG XhciPipeEndpointParamsAt(const UCHAR *config, ULONG length,
  * belongs to interface `interfaceNumber` at `alternate`: a composite
  * function's SELECT_CONFIGURATION carries the function's configuration as
  * its class driver read it, which a filter below that driver may have
- * rewritten (hidusbf; whole-branch review of 2.1.0.0). Taken only from an
+ * rewritten (hidusbf; reviewed and revised for 2.1.0.0). Taken only from an
  * endpoint of the caller's copy of that interface whose first six bytes -
  * bLength, bDescriptorType, bEndpointAddress, bmAttributes, wMaxPacketSize -
  * equal the device's. XHCI_PIPE_OK and *bInterval; XHCI_PIPE_NOT_FOUND when
@@ -874,10 +874,10 @@ ULONG XhciPipeSpeedFromClass(ULONG speedClass);
 /*
  * Submission sequences and abort horizons (hcd_io.c, HcdIoPark): a per-PDO
  * count that never wraps in practice - 64 bits, kept as a Lo/Hi pair, as
- * every 64-bit quantity here is (no 64-bit arithmetic) - and horizons in
- * the same 64-bit space, so a horizon is never retired and never becomes
- * young again (Codex review of 09ed9d1). 0:0 is never a stamp or a horizon
- * (none).
+ * every 64-bit quantity here is (no 64-bit arithmetic) - and horizons in the
+ * same 64-bit space, so a horizon is never retired and never becomes young
+ * again (reviewed and revised after 09ed9d1). 0:0 is never a stamp or a
+ * horizon (none).
  *
  * An IRP carries only the low 32 bits of its stamp (DriverContext[0] is all
  * it has). Its full stamp is reconstructed from the current count as the

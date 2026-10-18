@@ -10,7 +10,7 @@
  * per vendor; no flag on both an exact row and its vendor's row (it would
  * print twice); no duplicate exact rows; the neighbours of a listed id and
  * the same device under another vendor do not match; and the HCIVERSION
- * floor note appears for a listed part below 1.0 only.
+ * floor note appears for a listed part below 0.96 only.
  *
  * Build and run:  test\run-host-tests.cmd
  * Exit code = number of failed checks (0 = pass).
@@ -198,7 +198,7 @@ static void test_rows(void)
 
     for (i = 0; (q = quirk_row(i)) != 0; i++) {
         /* Every row's lines, with the floor note, through the width check. */
-        run(q->vid, q->did == QUIRK_ANY_DID ? 0x0001 : q->did, 1, 0x0096);
+        run(q->vid, q->did == QUIRK_ANY_DID ? 0x0001 : q->did, 1, 0x0095);
         sprintf(what, "row %04X:%04X prints its name", q->vid, q->did);
         CHECK(has(q->name), what);
         for (j = i + 1; (r = quirk_row(j)) != 0; j++) {
@@ -284,23 +284,29 @@ static void test_matching(void)
           "9C31 prints Q5 with its default off");
 
     /* Nothing known. */
-    run(0x1234, 0x5678, 1, 0x0096);
+    run(0x1234, 0x5678, 1, 0x0095);
     CHECK(has("quirks: none known for this VID/DID"), "unknown id");
     CHECK(!has("floor"), "no floor note for an unlisted part");
 }
 
 static void test_floor(void)
 {
+    run(0x1B21, 0x1042, 1, 0x0095);
+    CHECK(has("HCIVERSION 0.95 is below xhci98's floor 0.96"),
+          "a listed part at 0.95 is below the floor");
+    CHECK(has("refused at every XhciAccept096"),
+          "the note says no registry value starts it");
     run(0x1B21, 0x1042, 1, 0x0096);
-    CHECK(has("HCIVERSION 0.96 is below xhci98's floor 1.00"),
-          "ASM1042 at 0.96 is below the floor");
+    CHECK(!has("floor"), "ASM1042 at 0.96 is at the floor: no note");
+    run(0x1B21, 0x1042, 1, 0x0099);
+    CHECK(!has("floor"), "a listed part between 0.96 and 1.0: no note");
     run(0x1B21, 0x1042, 1, 0x0100);
     CHECK(!has("floor"), "a listed part at 1.00 gets no floor note");
     run(0x1B21, 0x1042, 1, 0x0110);
     CHECK(!has("floor"), "a listed part at 1.10 gets no floor note");
     run(0x1B21, 0x1042, 0, 0x0000);
     CHECK(!has("floor"), "HCIVERSION not read: nothing said of the floor");
-    run(0x1106, 0x1234, 1, 0x0096);
+    run(0x1106, 0x1234, 1, 0x0090);
     CHECK(has("below xhci98's floor"),
           "a vendor-wide match below the floor gets the note");
 }

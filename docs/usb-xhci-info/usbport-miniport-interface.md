@@ -1,5 +1,16 @@
 # usbport.sys Miniport Interface - Derivation Guide
 
+> **The `1.2.0.0` miniport's reference, on branch `1.2.0.0`.** Until `1.2.0.0`
+> `xhci98.sys` was a `usbport.sys` miniport, and this document records the
+> interface it was written against. From `2.0.0.0` the successor HCD replaces
+> `usbport.sys` and imports nothing from it (design record 13), so nothing
+> here binds the driver in `src\`. A source file this page names that is not
+> in the tree today (`xhci_dispatch.c`, `xhci_rh.c`, `xhci_slot.c`,
+> `xhci_probe.c`, `xhci_vhub.c`, `test_init.c`) is on branch `1.2.0.0`;
+> `src/xhci_usbport.h` stays because the kept transfer engine still uses its
+> types. The usbport facts remain what the HCD's own door reproduces where it
+> answers a usbport-shaped request (design record 13 section 8).
+
 The `USBPORT_REGISTRATION_PACKET` interface between `usbport.sys` and its
 host-controller miniports is undocumented by Microsoft. This doc is the
 working guide for deriving it: where the authoritative sources are, what shape

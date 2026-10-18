@@ -1396,6 +1396,8 @@ it is.
   `xhcicm.inf`.
 
 
+## 9. The uninstall
+
 ### 9.1 The warning
 
 `INSTALL.BAT /uninstall` prints first, before anything is read:
@@ -1529,9 +1531,11 @@ system's `CFGMGR32.DLL`). So the tool:
 
 1. removes what it owns: its entries in `DevicePath`, then - only once
    that write succeeded, so no search path is left naming a removed
-   source - the files each copy's `XHCIINST.LST` names under
-   `%windir%\XHCI98`, and each directory if it is then empty (a failed
-   `DevicePath` update keeps the copies and ends with exit 2);
+   source - the files the package copy's `XHCIINST.LST` names in the
+   install directory (section 9.6) and those each earlier build's copy
+   names under `%windir%\XHCI98`, and each directory if it is then
+   empty (a failed `DevicePath` update keeps the copies and ends with
+   exit 2);
 2. lists the INF files in `INF` and `INF\OTHER` whose `Provider` is this
    package's and that install one of its drivers (the rule of section 9.2
    step 4) - the device installer's own copies, and the plain copies the

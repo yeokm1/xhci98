@@ -18,8 +18,9 @@
  * every function mutates only the topology it is handed and returns a reading.
  * Task 7b-A.2 consumes it through `XhciTopoHubMark` to mark a hub's own Slot
  * Context, and task 7b-A.3 consumes it to build a downstream device's Route
- * String and TT fields *(written as a task that "will consume" it until
- * a later review; it has been landed since Phase 7b)*. Beside those, the release-build counters are what
+ * String and TT fields *(written as a task that "will consume" it until a
+ * later revision; it has been landed since Phase 7b)*. Beside those, the
+ * release-build counters are what
  * say whether the reconstruction *works* - the question 7b-A.1's own stop
  * rule turns on ("if neither direct fields nor snooping can reconstruct the
  * path reliably on both shipping usbport builds, stop this subphase").
@@ -128,8 +129,8 @@ struct _XHCI_SETUP_PACKET;
  * transcribed from a specification this repository does not hold. Only the two
  * the graph acts on are named; the rest are deliberately absent, because a
  * constant nothing reads is a constant nobody checks. *(It said four, and two
- * are defined - the 2026-09-16 audit's B10, which is the rule catching itself
- * rather than an exception to it.)*
+ * are defined - revised 2026-09-16, which is the rule catching itself rather
+ * than an exception to it.)*
  */
 #define XHCI_TOPO_SEL_PORT_RESET    4U
 #define XHCI_TOPO_SEL_PORT_POWER    8U
@@ -371,6 +372,13 @@ typedef struct _XHCI_TOPOLOGY {
     ULONG Resets;           /* SET_FEATURE(PORT_RESET) observed on a hub */
     ULONG ResetsUnknownHub; /* ...on a device with no node - the parent is lost */
     ULONG ResetsOverwritten;/* a second reset before the first was claimed */
+    /*
+     * HOST-SUITE-ONLY, from here through `MigrationsStale`, and
+     * `AltForgotten` below: moved only by XhciTopoClaimChild, DropPending,
+     * SuppressClaim, Migrate and ForgetAlternate, which no driver file calls
+     * (their caller was the miniport's xhci_slot.c, deleted 2026-10-02). On a
+     * target they read 0; test/test_topo.c is what moves them.
+     */
     ULONG Claims;           /* pending parents handed to an address-0 open */
     ULONG ClaimsUnarmed;    /* an address-0 open with no pending parent */
     /*
@@ -394,7 +402,7 @@ typedef struct _XHCI_TOPOLOGY {
     /*
      * ...and ones given up because the caller judged the arming reset to be
      * usbhub's second per bracket, re-arming a claim the address-0 open had
-     * already spent (Phase 7 review, finding A6). Apart from PendingDropped
+     * already spent (Phase 7, task 7b-A.1.1). Apart from PendingDropped
      * because the two readings disagree about whose bracket was live: a
      * dropped claim was superseded by a root-port enumeration, a suppressed
      * one belonged to the hub-tier bracket still running.
@@ -402,9 +410,9 @@ typedef struct _XHCI_TOPOLOGY {
     ULONG ResetsSuppressed;
     /*
      * Nodes re-keyed when the SET_ADDRESS interception assigned their device a
-     * different address (finding A4), and stale nodes pruned from under a
-     * newly assigned address before they could hand the new device a departed
-     * hub's position (finding A5). Distinct counters because the first is the
+     * different address, and stale nodes pruned from under a newly assigned
+     * address before they could hand the new device a departed hub's
+     * position (both Phase 7). Distinct counters because the first is the
      * ordinary re-enumeration and the second is evidence a detach was missed.
      */
     ULONG Migrations;
@@ -426,7 +434,7 @@ typedef struct _XHCI_TOPOLOGY {
     ULONG Disconnects;      /* connect bit 1 -> 0 on some hub port */
     /*
      * Departures read out of `wPortChange` rather than out of the connect bit
-     * (Phase 7 review, B10): a disconnect+reconnect between usbhub polls
+     * (Phase 7): a disconnect+reconnect between usbhub polls
      * reads connected -> connected, and only the C_PORT_CONNECTION change bit
      * in bytes 2-3 of the reply proves a device left in between. Counted in
      * `Disconnects` too; this line says how many were only visible this way.
@@ -437,14 +445,14 @@ typedef struct _XHCI_TOPOLOGY {
      * and resolved to a node already known to be a hub. A stalled request, one
      * whose record no longer answers to its address, one for a device with no
      * node, and one for a node that is not a hub all reach nothing and count
-     * nothing. *(This read "SET_INTERFACE observed on a hub" until the post-Phase 13 review rounds,
-     * when the apply moved from the placement to the completion and "observed"
-     * stopped being what it counts.)*
+     * nothing. *(This read "SET_INTERFACE observed on a hub" until after
+     * Phase 13, when the apply moved from the placement to the completion and
+     * "observed" stopped being what it counts.)*
      */
     ULONG AltSettings;
     /* Alternate-setting state dropped because the device was reset out from
      * under it (`XhciTopoForgetAlternate`), counted only when there was
-     * something to drop. */
+     * something to drop. Host-suite-only, as Claims above. */
     ULONG AltForgotten;
     ULONG Prunes;           /* nodes removed */
     ULONG MaxTier;          /* the deepest tier any node reached */
@@ -547,6 +555,7 @@ VOID XhciTopoApplySetInterface(PXHCI_TOPOLOGY topo,
  * Records nothing for a NULL graph, for address 0, or for a device with no
  * node. Counted in `AltForgotten` only when something was actually there.
  */
+/* Host-suite-only. */
 VOID XhciTopoForgetAlternate(PXHCI_TOPOLOGY topo, ULONG address);
 
 /*
@@ -572,11 +581,13 @@ ULONG XhciTopoObserveReply(PXHCI_TOPOLOGY topo,
  * already in the graph keeps its learned facts and has its position refreshed.
  *
  * This is the **tier-0** entry point; `XhciTopoAttachChild` below is the one for
- * every deeper tier, and `src/xhci_slot.c` picks between them by whether the
- * record carries a root-hub port or a claimed parent. Returns 1 if the graph
- * holds the node afterwards. *(This said it was "the only one usable while task
+ * every deeper tier, and the hub layer (hcd_hub.c) picks between them by
+ * whether the hub sits on a root port or behind another hub. Returns 1 if
+ * the graph holds the node afterwards. *(This said it was "the only one usable
+ * while task
  * 7b-A.3 has not landed, because a device behind a hub does not enumerate yet"
- * until the post-Phase 13 review rounds; 7b-A.3 landed in Phase 7b and both entry points are live.)*
+ * until after Phase 13; 7b-A.3 landed in Phase 7b and both entry points are
+ * live.)*
  */
 ULONG XhciTopoAttachRoot(PXHCI_TOPOLOGY topo,
                          ULONG address,
@@ -606,13 +617,16 @@ ULONG XhciTopoAttachChild(PXHCI_TOPOLOGY topo,
  * bounded one tier up.
  */
 ULONG XhciTopoClaimChild(PXHCI_TOPOLOGY topo, PXHCI_TOPO_CHILD out);
+/* Host-suite-only, with the four below that say so: no driver file calls
+ * them, and the claim they spend is armed by the snoop but never spent on a
+ * target. */
 
 /*
  * Give up a pending parent that a **root**-port reset has just superseded
  * (task 7b-A.3). Counted in `PendingDropped`; does nothing when none is armed,
  * so the caller need not ask first.
  */
-VOID XhciTopoDropPending(PXHCI_TOPOLOGY topo);
+VOID XhciTopoDropPending(PXHCI_TOPOLOGY topo);  /* host-suite-only */
 
 /* The node for one address, or NULL. */
 const XHCI_TOPO_NODE *XhciTopoFind(const XHCI_TOPOLOGY *topo, ULONG address);
@@ -627,7 +641,7 @@ VOID XhciTopoDetach(PXHCI_TOPOLOGY topo, ULONG address);
 
 /*
  * usbport has just assigned `newAddress` to the device the graph knew as
- * `oldAddress` (Phase 7 review, findings A4/A5). Two obligations, and the
+ * `oldAddress` (Phase 7). Two obligations, and the
  * second does not depend on the first:
  *
  *   - the node follows its device: a re-enumeration clears the record's
@@ -646,19 +660,19 @@ VOID XhciTopoDetach(PXHCI_TOPOLOGY topo, ULONG address);
  * `oldAddress` == `newAddress` (usbport reusing the address, the common
  * recovery cycle) is a no-op: the node under it is this device's own.
  */
-VOID XhciTopoMigrate(PXHCI_TOPOLOGY topo,
+VOID XhciTopoMigrate(PXHCI_TOPOLOGY topo,         /* host-suite-only */
                      ULONG oldAddress,
                      ULONG newAddress);
 
 /*
  * Give up a pending parent that the caller has judged to be usbhub's second
  * port reset of an enumeration bracket re-arming a claim nothing will spend
- * (Phase 7 review, finding A6 - task 7b-A.1.1's rule one tier down). The
+ * (Phase 7 - task 7b-A.1.1's rule one tier down). The
  * judgement lives in the caller because it needs the device records; this is
  * the verb and the counter (`ResetsSuppressed`). Does nothing when no claim is
  * armed.
  */
-VOID XhciTopoSuppressClaim(PXHCI_TOPOLOGY topo);
+VOID XhciTopoSuppressClaim(PXHCI_TOPOLOGY topo);  /* host-suite-only */
 
 /*
  * The position a device plugged into `hubAddress` port `hubPort` would have.

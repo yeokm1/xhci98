@@ -573,9 +573,8 @@ static VOID hcdCountersTrace(const XHCIHC_COUNTERS *cnt)
  * The start numbers, drawn for every controller this image serves rather
  * than kept per controller: a controller FDO removed and created again can
  * be given the same allocation, and a per-extension count would then start
- * again at 1 and publish an identity the reader has already seen (Codex
- * review round 23, finding 3). Interlocked, because controllers start
- * independently.
+ * again at 1 and publish an identity the reader has already seen.
+ * Interlocked, because controllers start independently.
  */
 static LONG hcdCountersStarts;
 
@@ -621,8 +620,8 @@ VOID HcdCountersStart(PHCD_CONTROLLER hc)
  * flavour, the trace. The health poll that
  * moves FatalStatusDetected runs just before this, on the same thread. The
  * stop calls it once more after the thread has gone, since its own
- * XhciDisableInterrupts can count a mask failure (Codex review round 23,
- * finding 4). IRQL: PASSIVE_LEVEL (the controller thread, or the stop).
+ * XhciDisableInterrupts can count a mask failure. IRQL: PASSIVE_LEVEL (the
+ * controller thread, or the stop).
  */
 VOID HcdCountersPoll(PHCD_CONTROLLER hc)
 {

@@ -2312,5 +2312,5 @@ int main(void)
     test_named();
     test_learned();
     printf("test_tbt_topo: %d checks, %d failures\n", checks, failures);
-    return failures != 0;
+    return failures;
 }

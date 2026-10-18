@@ -158,8 +158,8 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * The query routine for hcdReadDword: a value is taken only when it is a
  * REG_DWORD of four bytes. RTL_QUERY_REGISTRY_DIRECT would instead write a
  * value of another type in that type's own form - a REG_SZ as a
- * UNICODE_STRING - over the four-byte destination (Codex review of 26-A.2,
- * round 5, finding 1), and the flag that makes DIRECT check the type is
+ * UNICODE_STRING - over the four-byte destination (task 26-A.2), and the
+ * flag that makes DIRECT check the type is
  * newer than both primary targets. IRQL: PASSIVE_LEVEL.
  */
 static NTSTATUS NTAPI hcdTakeDword(PWSTR ValueName, ULONG ValueType,
@@ -211,7 +211,7 @@ static NTSTATUS hcdReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
     found = 0;
     table[0].QueryRoutine = hcdTakeDword;
     /* NOEXPAND: a value mistakenly stored as REG_EXPAND_SZ is not expanded
-     * before hcdTakeDword refuses its type (Codex review of 26-A.2, round 6). */
+     * before hcdTakeDword refuses its type (task 26-A.2). */
     table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
     table[0].Name = (PWSTR)name;
     table[0].EntryContext = &found;
@@ -1094,8 +1094,8 @@ VOID HcdPirqResume(PHCD_CONTROLLER hc)
 /*
  * Every START_DEVICE, before it goes down the stack: a start the lower
  * driver refuses, or one refused before the routing step, then shows no
- * earlier start's run through a door handle still open (review rounds 1
- * and 2, finding 1). The counts are kept. Under the door gate, which the
+ * earlier start's run through a door handle still open. The counts are
+ * kept. Under the door gate, which the
  * snapshot's copy holds; released before the IRP is forwarded.
  * IRQL: PASSIVE_LEVEL.
  */
@@ -1493,15 +1493,15 @@ static VOID hcdIntxEnable(PHCD_CONTROLLER hc)
     command = 0;
     if (XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command, sizeof(USHORT)) !=
             MP_STATUS_SUCCESS ||
-        command == 0xFFFFU || (command & 0x0400U) == 0) {
+        command == 0xFFFFU || (command & XHCI_PCI_COMMAND_INTX_DISABLE) == 0) {
         return;
     }
-    command = (USHORT)(command & ~0x0400U);
+    command = (USHORT)(command & ~XHCI_PCI_COMMAND_INTX_DISABLE);
     (VOID)XhciWritePciConfig(ext, XHCI_PCI_COMMAND, &command,
                              sizeof(USHORT));
     command = 0xFFFFU;
     (VOID)XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command, sizeof(USHORT));
-    if (command != 0xFFFFU && (command & 0x0400U) == 0) {
+    if (command != 0xFFFFU && (command & XHCI_PCI_COMMAND_INTX_DISABLE) == 0) {
         hc->Counters.IntxDisableCleared++;
         XhciLogNote(ext, "intr.intxdisable.cleared", 1);
     } else {
@@ -1539,7 +1539,7 @@ static BOOLEAN NTAPI hcdIsr(PKINTERRUPT Interrupt, PVOID Context)
 #endif
     /* Counted when queued, not when the DPC starts: a DPC another processor
      * has dequeued but not yet entered is then still in the count the
-     * teardown waits on (Codex review of 26-A.2, round 1, finding 2). */
+     * teardown waits on (task 26-A.2). */
     (VOID)InterlockedIncrement(&hc->DpcsInFlight);
     if (!KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL)) {
         (VOID)InterlockedDecrement(&hc->DpcsInFlight);
@@ -1552,8 +1552,8 @@ static BOOLEAN NTAPI hcdIsr(PKINTERRUPT Interrupt, PVOID Context)
  * other message ID a grant of several connects is declined before the
  * controller is touched, so it can neither claim another device's shared
  * message nor run the ISR body beside message 0's under another message's
- * lock (each message has its own, SpinLock being NULL; Codex review of the
- * 36.15 code, round 1). Message 0 runs the line ISR's body and returns
+ * lock (each message has its own, SpinLock being NULL; task 36.15).
+ * Message 0 runs the line ISR's body and returns
  * XhciIsr's answer - FALSE for an interrupt this controller did not raise,
  * since Windows permits shared message interrupts. */
 static BOOLEAN NTAPI hcdMsgIsr(PKINTERRUPT Interrupt, PVOID Context,
@@ -1894,8 +1894,7 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     /* The power gate excludes every suspend and resume for the whole
      * recovery, and the powered state is re-read under it: a recovery decided
      * before a power-down on another processor would otherwise reprogram a
-     * controller the bus has just taken to D3 (Codex review of 26-A.2, round
-     * 5, finding 2). */
+     * controller the bus has just taken to D3 (task 26-A.2). */
     HcdPowerGateEnter(hc);
     XhciControllerLockAcquire(ext, &oldIrql);
     if (ext->RecoveryRequested && ext->ControllerFailed &&
@@ -2102,8 +2101,8 @@ static ULONG hcdQueueDrain(PHCD_CONTROLLER hc)
  * admission (hcdQueueDrain's, with HCD_DRAIN_FROM_PEEK) - never a drain
  * inline and never a chain: the drain this queues does not peek, so each
  * further drain waits for a moderated interrupt and no run of DPCs can hold
- * a processor at DISPATCH_LEVEL under sustained completions (Codex, 37.4
- * round 1). An event the second drain's own window strands waits for the
+ * a processor at DISPATCH_LEVEL under sustained completions (task 37.4).
+ * An event the second drain's own window strands waits for the
  * backstop, as before. An insertion while IsrDpc is still queued is
  * refused and counted as pending only. No register is written, so the
  * ISR's IE=0 (record 05, "The DIRQL exception") is untouched. IRQL:
@@ -2375,9 +2374,8 @@ static VOID hcdContain(PHCD_CONTROLLER hc)
 /*
  * Declare the controller failed and ask the thread for the in-place
  * recovery: the HCD's answer to a failed resume, which under usbport ended in
- * the stop/start a failed ResumeController asked usbport for (Codex review of
- * 26-A.2, round 1, finding 7). IRQL: <= DISPATCH_LEVEL, controller lock
- * released.
+ * the stop/start a failed ResumeController asked usbport for (task
+ * 26-A.2). IRQL: <= DISPATCH_LEVEL, controller lock released.
  */
 VOID HcdControllerFail(PHCD_CONTROLLER hc)
 {
@@ -2450,8 +2448,8 @@ static VOID NTAPI hcdThread(PVOID Context)
         }
         hcdPoll(hc);
         /* The powered state is read under the gate, as the recovery's is: a
-         * check before it could pass and then lose to a power-down (Codex
-         * review of batch (b), round 1, finding 5). */
+         * check before it could pass and then lose to a power-down (batch
+         * (b)). */
         HcdPowerGateEnter(hc);
         HcdEnumService(hc, (hc->Hc.Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
                                hc->Common.DevicePower == PowerDeviceD0 &&
@@ -2528,11 +2526,11 @@ static NTSTATUS hcdThreadStart(PHCD_CONTROLLER hc)
     if (!NT_SUCCESS(status)) {
         /*
          * On NT the event alone cannot cover a remove's unload, so a start
-         * that could not reference its thread does not proceed (Codex review
-         * of 26-A.2, round 1, note 11). The thread is told to leave and its
+         * that could not reference its thread does not proceed (task
+         * 26-A.2). The thread is told to leave and its
          * event waited for; what it still runs after that is its call into
          * PsTerminateSystemThread from this image. **That window is not
-         * closed** (round 2, finding 5): with the object unreferenced there
+         * closed**: with the object unreferenced there
          * is nothing to join, and a remove that unloaded the image inside it
          * would unload it under the thread. It is the residual of a failure
          * no run has seen - a reference to a handle PsCreateSystemThread has
@@ -2608,7 +2606,7 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
      * does nothing but retire its count - rather than dequeued:
      * KeRemoveQueueDpc's TRUE does not promise, before Vista SP1, that the
      * DPC will not run, and retiring its count here as well would retire it
-     * twice (Codex review of 26-A.2, round 2, finding 1).
+     * twice (task 26-A.2).
      *
      * The tolerance clock's DPC still queues it until HcdTimersDrain below
      * (HcdCtlBackstopTick, task 36.55): it counts DpcsInFlight with an
@@ -2720,11 +2718,10 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * delivery reads XhciMsiAvoid (hcd_quirk.c). */
     HcdQuirkStartBegin(hc);
     /* The power fallback's marker describes the controller this start
-     * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
-     * finding 1). */
+     * rebuilds, so it is reset with it (task 26-A.2). */
     hc->SuspendedInD0 = 0;
     /* And the shutdown latch (37.3): a new lifetime serves its requests
-     * (Codex review of 4de0f999, round 2, finding 2). Before the start
+     * (reviewed and revised after 4de0f999). Before the start
      * admits anything, so no lock is needed against an admission. */
     hc->ShutLatched = 0;
     /* Task 36.3's record was reset when the START_DEVICE arrived, before
@@ -2737,8 +2734,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     hcdXstatStart(hc);
     /* This attempt's decision starts unknown, so a start refused before
      * hcdSettleDelivery reports none rather than the previous start's in
-     * its start-decision record (Codex review of the 36.15 code, round
-     * 3). */
+     * its start-decision record (task 36.15). */
     hc->PollValues.Mode = XHCI_POLL_NOT_FOUND;
     hc->PollDelivery = XHCI_POLL_DELIVERY_NONE;
     hc->PollReason = XHCI_POLL_R_NONE;
@@ -2897,7 +2893,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
         /* No thread ever ran to poll, and the half-built start's fatal
          * status or its stop's mask failure is the reading a refused start
          * leaves; the mirrors are embedded scalars, so the poll is safe
-         * after the release (Codex review round 24, finding 2). */
+         * after the release. */
         HcdCountersPoll(hc);
         /*
          * Task 38.11, D5 (design record 17 section 4.14.7): every refusal of
@@ -3004,8 +3000,8 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
      * Whenever a register window is mapped, not only when INITIALIZED is
      * set: the quiesce and a failed in-place recovery clear INITIALIZED with
      * the controller possibly still running, and XhciStopController carries
-     * the admission checks of its own steps (Codex review of 26-A.2, round
-     * 1, finding 1). XhciDisableInterrupts' contract is DISPATCH_LEVEL - the
+     * the admission checks of its own steps (task 26-A.2).
+     * XhciDisableInterrupts' contract is DISPATCH_LEVEL - the
      * level usbport called it at.
      */
     if (hc->BarVa != NULL && ext->ResourceBase != 0) {

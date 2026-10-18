@@ -17,7 +17,7 @@ rem after the nt label: the goto run before it jumps over it. Every line
 rem from the run label on is COMMAND.COM syntax. The word given is passed on
 rem as it came and tested by XHCISNAP alone, never by an if here, so a
 rem quoted word or one with a cmd.exe character in it reaches the tool to
-rem be refused (Codex review of 38.1, round 3). XHCISNAP runs last and
+rem be refused (task 38.1). XHCISNAP runs last and
 rem prints the outcome itself, its last line what to attach, so nothing
 rem but pause follows it (owner, 2026-10-13). ASCII, CRLF line endings.
 if "%OS%"=="Windows_NT" goto nt

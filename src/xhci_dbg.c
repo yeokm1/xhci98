@@ -1,7 +1,7 @@
 /*
  * xhci_dbg.c - the `qemu` flavour's trace channel (see xhci_dbg.h for the
  * contract and for the three imports this file adds to a qemu binary; it adds
- * none to either published one, and said "the debug binary" until the post-Phase 13 review rounds).
+ * none to either published one, and said "the debug binary" until after Phase 13).
  *
  * Formatting is done by hand rather than by DbgPrint's own %-expansion for one
  * reason: the same finished line has to go to two sinks, and only one of them

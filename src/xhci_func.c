@@ -184,6 +184,13 @@ ULONG XhciFuncSplit(const UCHAR *device, const UCHAR *config, ULONG length,
         if (k < iads) {
             mask = iadMask[k];
             first = (ULONG)config[iadAt[k] + 2];
+            if (first >= 32UL || (mask & XHCI_FUNC_BIT(first)) == 0) {
+                /* bFirstInterface absent: the lowest interface the IAD
+                 * took, as XhciFuncFirsts arms it, whatever order the
+                 * descriptors came in. */
+                for (first = 0; (mask & XHCI_FUNC_BIT(first)) == 0; first++) {
+                }
+            }
             for (j = 0; j < count; j++) {
                 if ((ULONG)config[at[j] + 2] == first) {
                     iface = at[j];

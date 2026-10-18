@@ -9,7 +9,8 @@
  * The rules each value is held to are cm_vals.c's; this file only fetches.
  * A value absent, unreadable or of another type is "not found" and its
  * default stands, which is also what the written default reads as. The
- * one value no INF writes, XhciCmTunnelBridge, is read from the same key.
+ * two values no INF writes, XhciCmTunnelBridge and XhciCmBridgeNumbering,
+ * are read from the same key.
  *
  * IRQL: PASSIVE_LEVEL, in the system thread PnP's start runs in, as
  * IoOpenDeviceRegistryKey needs.

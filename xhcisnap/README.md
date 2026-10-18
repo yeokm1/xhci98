@@ -150,8 +150,8 @@ left standing on that branch until the 2026-09-16 audit, which made the newest
 file in the directory a report of a set that had just been deleted.)
 
 That replacing is `-dump`'s and `-o`'s, where the name is the user's own.
-**`-report` never replaces or deletes a file it did not create** (Codex
-review of 38.1, round 1): its temporaries are created with `CREATE_NEW`, its
+**`-report` never replaces or deletes a file it did not create** (task
+38.1): its temporaries are created with `CREATE_NEW`, its
 `.TXT` with an exclusive create, and its two regions are renamed with a bare
 `MoveFileA`, which refuses a name that exists, with nothing deleted first. A
 failure removes only this run's own files. See "The field report" for what
@@ -309,7 +309,7 @@ so the OS line is not wrapped with the letter on a line of its own.
 instance part of every id not under `PCI\` or `ROOT\` is printed as
 `(instance withheld)`. Every string goes through the same cleaning and
 name-withholding as the "captured on" block, and the rule does not depend on
-`-nosysinfo` (Codex review of 38.1, round 1). With `-nosysinfo` this
+`-nosysinfo` (task 38.1). With `-nosysinfo` this
 machine's names are not read, so nothing can be screened for them: every
 free-text string (a description, `InfSection`, `DriverVersion`,
 `DriverDate`, the Windows directory) is then printed as "withheld: not
@@ -361,7 +361,7 @@ administrator.
 
 Two of them take one optional argument (owner, 2026-10-13), passed on as
 `%1` at the end of the batch's one tool line and read nowhere else: no `IF`
-tests it (Codex review of 38.1, round 3: `SNAPGET "A&B"` broke cmd.exe's
+tests it (task 38.1: `SNAPGET "A&B"` broke cmd.exe's
 `IF "%1"==""` before the tool could refuse it, and `SNAPON "1"` failed the
 batch's compare though the C runtime hands the tool a plain `1`), so the
 default and the check are the tool's. The gate admits `%1` only on that

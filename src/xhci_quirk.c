@@ -106,7 +106,6 @@ static const ULONG xhciQkAmdBit[] = {
 };
 
 typedef struct _XHCI_QK_DEF {
-    const char *Name;
     const char *Flag;
     const char *Label;
     const ULONG *Ids;
@@ -114,40 +113,48 @@ typedef struct _XHCI_QK_DEF {
     ULONG TwoOffered;
 } XHCI_QK_DEF;
 
+#define XHCI_QK_NARROW(s) s,
+
+static const char *const xhciQkNames[] = {
+    XHCI_QK_VALUE_NAMES(XHCI_QK_NARROW)
+};
+XHCI_C_ASSERT(quirk_names_count,
+              sizeof(xhciQkNames) / sizeof(xhciQkNames[0]) == XHCI_QK_COUNT);
+
 static const XHCI_QK_DEF xhciQkDefs[XHCI_QK_COUNT] = {
-    { "XhciMsiAvoid", "XHCI_BROKEN_MSI", "quirk.msiavoid",
+    { "XHCI_BROKEN_MSI", "quirk.msiavoid",
       xhciQkMsiAvoid, 1, 1 },
-    { "XhciStreamsOff", "XHCI_BROKEN_STREAMS", "quirk.streamsoff",
+    { "XHCI_BROKEN_STREAMS", "quirk.streamsoff",
       xhciQkStreamsOff, 1, 1 },
-    { "XhciResumeReinit", "XHCI_RESET_ON_RESUME", "quirk.resumereinit",
+    { "XHCI_RESET_ON_RESUME", "quirk.resumereinit",
       xhciQkResumeReinit, 1, 1 },
-    { "XhciIntelShutdownToEhci", "XHCI_SPURIOUS_REBOOT", "quirk.shuttoehci",
+    { "XHCI_SPURIOUS_REBOOT", "quirk.shuttoehci",
       xhciQkShutToEhci, 1, 0 },
-    { "XhciShutdownReset", "XHCI_SPURIOUS_WAKEUP", "quirk.shutreset",
+    { "XHCI_SPURIOUS_WAKEUP", "quirk.shutreset",
       xhciQkShutReset, 0, 1 },
-    { "XhciSuspendHaltDelay", "XHCI_SUSPEND_DELAY", "quirk.haltdelay",
+    { "XHCI_SUSPEND_DELAY", "quirk.haltdelay",
       xhciQkHaltDelay, 1, 1 },
-    { "XhciSuspendHaltTimeout", "XHCI_SLOW_SUSPEND", "quirk.halttimeout",
+    { "XHCI_SLOW_SUSPEND", "quirk.halttimeout",
       xhciQkHaltTimeout, 1, 1 },
-    { "XhciAsmediaFlowControl", "XHCI_ASMEDIA_MODIFY_FLOWCONTROL",
+    { "XHCI_ASMEDIA_MODIFY_FLOWCONTROL",
       "quirk.asmflow", xhciQkAsmFlow, 1, 0 },
-    { "XhciTiIntervalCap", "XHCI_LIMIT_ENDPOINT_INTERVAL_7", "quirk.ticap",
+    { "XHCI_LIMIT_ENDPOINT_INTERVAL_7", "quirk.ticap",
       xhciQkTiCap, 1, 1 },
-    { "XhciStuckLinkReset", "XHCI_MISSING_CAS", "quirk.stucklink",
+    { "XHCI_MISSING_CAS", "quirk.stucklink",
       xhciQkStuckLink, 1, 1 },
-    { "XhciStreamRingPad", "XHCI_TRB_OVERFETCH", "quirk.ringpad",
+    { "XHCI_TRB_OVERFETCH", "quirk.ringpad",
       xhciQkRingPad, 1, 1 },
-    { "XhciControlLinkNoOp", "XHCI_ETRON_HOST", "quirk.linknoop",
+    { "XHCI_ETRON_HOST", "quirk.linknoop",
       xhciQkEtron, 1, 1 },
-    { "XhciIsochSpuriousSuccess", "XHCI_ETRON_HOST", "quirk.isochsuccess",
+    { "XHCI_ETRON_HOST", "quirk.isochsuccess",
       xhciQkEtron, 1, 1 },
-    { "XhciAmdSuspendBitClear", "XHCI_DISABLE_SPARSE", "quirk.amdbit",
+    { "XHCI_DISABLE_SPARSE", "quirk.amdbit",
       xhciQkAmdBit, 1, 0 }
 };
 
 const char *XhciQuirkValueName(ULONG quirk)
 {
-    return (quirk < XHCI_QK_COUNT) ? xhciQkDefs[quirk].Name : NULL;
+    return (quirk < XHCI_QK_COUNT) ? xhciQkNames[quirk] : NULL;
 }
 
 const char *XhciQuirkLinuxFlag(ULONG quirk)

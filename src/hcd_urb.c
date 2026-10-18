@@ -57,11 +57,10 @@
 #define USBD_DEFAULT_PIPE_TRANSFER 0x00000008
 #endif
 
-/* The first time each URB function reaches any PDO of this image, traced
- * once: a per-function count whose first increment is the trace, so two
- * processors cannot both see "first" (Codex review of batch (c), round 1,
- * finding 5). The per-controller counts are interlocked for the same
- * reason. */
+/* The first time each URB function reaches any PDO of this image, traced once:
+ * a per-function count whose first increment is the trace, so two processors
+ * cannot both see "first" (batch (c)). The per-controller counts are
+ * interlocked for the same reason. */
 static LONG hcdUrbSeen[HCD_URB_FUNCTIONS];
 
 /* The same for each internal IOCTL refused as unserved (hcdIoctlSlot). */
@@ -245,8 +244,7 @@ static NTSTATUS hcdUrbComplete(PIRP irp, PURB urb, USBD_STATUS usbd,
 /* A device gone: refused, but completed at the next tick (HcdIoRefuseLater,
  * hcd_io.c) - never inside this dispatch, which a client's completion
  * routine can re-enter by resubmitting. The PDO's own timer, so an orphan
- * whose controller has gone defers too (Codex review of batch (c), round
- * 9, finding 2). */
+ * whose controller has gone defers too (batch (c)). */
 static NTSTATUS hcdGoneLater(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb)
 {
     return HcdIoRefuseLater(pdo, irp, urb, USBD_STATUS_DEVICE_GONE);
@@ -479,8 +477,8 @@ LONG HcdUrbIoRequest(PVOID urbv, PHCD_IO_REQUEST req)
  * passes to the IRP (HcdIoSubmit). A URB that cannot be parsed is refused
  * inline, as every deterministic dispatch error is - except an isochronous
  * one, which a streaming client resubmits from its completion routine and
- * which therefore completes at the next tick, its packets stamped (Codex
- * review of batch (c), round 16, finding 3). */
+ * which therefore completes at the next tick, its packets stamped (batch
+ * (c)). */
 static NTSTATUS hcdTransferParsed(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                   PIRP irp, PURB urb,
                                   const HCD_IO_REQUEST *req)
@@ -523,8 +521,8 @@ static NTSTATUS hcdTransferUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
  * this driver does not import. Answered inline, as GET_CURRENT_FRAME_NUMBER
  * is: no client resubmits a configuration read from its completion routine.
  * A refusal still waits for the next tick (HcdIoRefuseLater), as every
- * refusal a client can retry from its completion routine does (Codex review
- * of batch (c), round 19, finding 7).
+ * refusal a client can retry from its completion routine does (batch
+ * (c)).
  */
 static NTSTATUS hcdFunctionConfig(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                                   PIRP irp, PURB urb,
@@ -719,13 +717,13 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 
     /* Stamped before anything here reads or rewrites the URB: the order a
      * held request is measured against an abort by (hcd_io.c,
-     * HcdIoStamp; Codex review of 6dae92b, finding 1). */
+     * HcdIoStamp; reviewed and revised after 6dae92b). */
     HcdIoStamp(pdo, irp);
     if (function == URB_FUNCTION_ABORT_PIPE && (hc == NULL || !pdo->Listed)) {
         /*
          * On a PDO whose device has left - or an orphan - the abort is
-         * answered here, with no controller or device record (Codex review
-         * of f99f184, finding 1): its horizon recorded for the pipe if a
+         * answered here, with no controller or device record (reviewed
+         * and revised after f99f184): its horizon recorded for the pipe if a
          * held request or an earlier abort names it, for every pipe
          * otherwise; what that horizon covers completed; and the abort
          * succeeds, as on a pipe with nothing on it. Requests that reach
@@ -794,8 +792,8 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         if (function == URB_FUNCTION_ABORT_PIPE) {
             /* A live device's abort records its horizon only for a pipe
              * the device has open now - a stale or wrong handle the
-             * thread refuses claims nothing (Codex review of 6dae92b,
-             * finding 3) - and leaves the rest to the thread. */
+             * thread refuses claims nothing (reviewed and revised after
+             * 6dae92b) - and leaves the rest to the thread. */
             XhciControllerLockAcquire(&hc->Hc, &lockIrql);
             valid = HcdCfgPipe(dev, urb->UrbPipeRequest.PipeHandle) != NULL;
             XhciControllerLockRelease(&hc->Hc, lockIrql);
@@ -834,8 +832,7 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
  * listed - its device enumerated on the port and has not left - and 0
  * otherwise. Read from the PDO's own state, not PORTSC: a register read here
  * could race a power-down or the stop's unmapping, which this dispatch,
- * possibly at DISPATCH_LEVEL, cannot exclude (Codex review of batch (c),
- * round 1, finding 2).
+ * possibly at DISPATCH_LEVEL, cannot exclude (batch (c)).
  */
 static NTSTATUS hcdPortStatus(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                               PIRP irp, PULONG out)
@@ -954,7 +951,7 @@ static NTSTATUS hcdDeviceHandle(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
  * the cancel lock it is called with, and completed; IdlePending drops only
  * once the completion has returned, the PDO's last touch here, so a REMOVE
  * that waits for it cannot let the client unload under a completion routine
- * still to run (Codex review of 28-A.1, round 1, finding 2). */
+ * still to run (28-A.1). */
 static VOID NTAPI hcdIdleCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PHCD_DEVICE_PDO pdo;
@@ -1031,8 +1028,7 @@ static NTSTATUS hcdIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
  * lock; its completion is counted in IdlePending until it has returned,
  * and the caller's rundown (hcd_susp.c, HcdSuspIdleRundown, design record
  * 14 section 4.4 (e)) waits for that too, after the PDO's URBs are
- * drained (Codex review of 28-A.1, round 1, finding 2). IRQL:
- * PASSIVE_LEVEL.
+ * drained (28-A.1). IRQL: PASSIVE_LEVEL.
  */
 VOID HcdUrbIdleDrain(PHCD_DEVICE_PDO pdo)
 {
@@ -1121,7 +1117,7 @@ static NTSTATUS hcdRecordFailure(PHCD_DEVICE_PDO pdo, PIRP irp,
 /* ----------------------------------------------------------------------- */
 
 /*
- * THE CONTEXT (Codex review of 28-A.1, round 1, finding 3). A client keeps
+ * THE CONTEXT (28-A.1). A client keeps
  * BusContext, and may call through it or dereference it, for as long as it
  * likes - and Windows 7's usbaudio.sys never dereferences it at all: its
  * USBDeviceStart (6.1.7601.17514 x86, 0x1CA0B) puts the interface block in
@@ -1384,7 +1380,7 @@ static NTSTATUS HCD_BUSIFFN hcdBusifLogEntry(PVOID context, ULONG driverTag,
 /* The High-Speed microframe counter: not supported. The bus keeps a
  * 32-bit frame count (XhciFrameNumber) but no microframe count read in the
  * same hold, and the frame times eight would claim a precision it does not
- * have (Codex review of 28-A.1, round 1, finding 4). No class driver read
+ * have (28-A.1). No class driver read
  * asks for V3 (design record 13 section 6.5). */
 static NTSTATUS HCD_BUSIFFN hcdBusifBusTimeEx(PVOID context, PULONG frame)
 {
@@ -1578,7 +1574,7 @@ static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     /* A reference, so the device record cannot be freed - and its record
      * said departed (HcdIoDeviceGone, which waits references out) - while
      * this send is taken; Gone is read under the controller lock with the
-     * update, so a leaving device publishes nothing (review round 2). */
+     * update, so a leaving device publishes nothing. */
     dev = hcdDeviceRef(hc, pdo);
     if (dev == NULL) {
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
@@ -1706,7 +1702,7 @@ static ULONG hcdIoctlSlot(ULONG code)
  * The entry. The PDO's Busy count is raised before its Controller is read,
  * and the parent's release (HcdDevicePdoReleaseAll) clears Controller and
  * then waits Busy out, so a controller read here is not freed under this
- * dispatch (Codex review of batch (c), round 1, finding 1).
+ * dispatch (batch (c)).
  */
 NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
@@ -1731,13 +1727,13 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
         /* Stopping or removed (hcd_pdo.c): nothing more is pended. The
          * refusal completes inside the Busy count, as every other path
          * here does, so the quiesce that closed admission cannot return
-         * before it (Codex review of batch (c), round 4, finding 1). */
+         * before it (batch (c)). */
         stack = IoGetCurrentIrpStackLocation(irp);
         if (stack->Parameters.DeviceIoControl.IoControlCode ==
                 IOCTL_INTERNAL_USB_SUBMIT_URB &&
             stack->Parameters.Others.Argument1 != NULL) {
             /* Completed at the next tick, not here (HcdIoRefuseLater) -
-             * an orphaned PDO's too (round 9, finding 2). */
+             * an orphaned PDO's too. */
             status = HcdIoRefuseLater(
                 pdo, irp, stack->Parameters.Others.Argument1,
                 USBD_STATUS_DEVICE_GONE);
@@ -1859,8 +1855,7 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
  * select and SELECT_INTERFACE take their bInterval from (hcd_cfg.c, rule 2
  * of section 10.14.3). Nothing here configures the device, opens a pipe or
  * waits on the thread: a select pended for the thread could be parked by a
- * containment while the FDO's REMOVE waits on its unconfigure (a review,
- * round 1).
+ * containment while the FDO's REMOVE waits on its unconfigure.
  */
 
 /* The interface handle a select returns, as hcd_cfg.c's. */
@@ -2109,7 +2104,7 @@ static NTSTATUS hcdCompSelect(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     named = 0;
     entries = 0;
     for (p = (PUCHAR)&sc->Interface; p < end; p += ii->Length) {
-        /* Every byte to the URB's end is an entry (a review, round 1): a
+        /* Every byte to the URB's end is an entry: a
          * tail too short for one is refused, never skipped. */
         if (p + fixed > end) {
             usbd = USBD_STATUS_INVALID_PARAMETER;
@@ -2205,8 +2200,8 @@ refused:
     hcdCompSwap(pdo, hc, NULL);
     hcdCount(&hc->Counters.CompositeSelectRefused);
     /* Marked on the request itself, so its sender tells this refusal
-     * from a failure nobody counted (a review, round 2) - only where the
-     * URB's stated length covers the field (round 3). */
+     * from a failure nobody counted - only where the URB's stated length
+     * covers the field. */
     if ((ULONG)urb->UrbHeader.Length >= sizeof(struct _URB_HEADER)) {
         urb->UrbHeader.UsbdFlags = HCD_COMP_REFUSED_MARK;
     }
@@ -2250,7 +2245,7 @@ NTSTATUS HcdCompositePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
     }
     if (hc == NULL) {
         /* Orphaned (HcdDevicePdoReleaseAll): nothing is answered for a
-         * device the bus no longer holds (a review, round 1). */
+         * device the bus no longer holds. */
         status = hcdUrbComplete(irp, urb, (USBD_STATUS)HCD_USBD_DEVICE_GONE,
                                 STATUS_NO_SUCH_DEVICE);
         goto done;
@@ -2479,15 +2474,14 @@ VOID HcdCompositeSelectDown(PDEVICE_OBJECT lower, PHCD_DEVICE_PDO parent,
         step = HCD_COMP_STEP_SELECT;
         /* Counted here unless the parent refused this very request and
          * counted it, which it marks on the URB: an IRP that could not be
-         * allocated, a filter that failed it before or after the parent
-         * (a review, rounds 1 and 2). */
+         * allocated, a filter that failed it before or after the parent. */
         countIt = sel->UrbHeader.UsbdFlags != HCD_COMP_REFUSED_MARK;
     }
 
 cleanup:
     if (step != 0) {
         /* Whatever the parent published before a filter failed the
-         * request goes too (a review, round 2). */
+         * request goes too. */
         HcdCompositeForget(parent);
         hc = hcdCompEnter(parent);
         if (hc != NULL) {

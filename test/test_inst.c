@@ -312,7 +312,8 @@ static void test_real_infs(void)
     free(u64);
 }
 
-/* The Thunderbolt INFs, once task 39-A.1 has put them in src\cm\. */
+/* The Thunderbolt INFs in src\cm\ (task 39-A.1). A missing one is a
+ * failure, as a missing INF of src\ is above: the tree carries them. */
 static void test_cm_infs(void)
 {
     char *cm = load("..\\src\\cm\\xhcicm.inf");
@@ -322,8 +323,9 @@ static void test_cm_infs(void)
     INST_IDLIST ids;
     int i;
 
+    CHECK(cm != NULL && cf != NULL && c64 != NULL,
+          "the three INFs of src\\cm\\ read");
     if (cm == NULL || cf == NULL || c64 == NULL) {
-        printf("test_inst: src\\cm\\ INFs not in this tree; their checks skipped\n");
         free(cm);
         free(cf);
         free(c64);
@@ -1363,6 +1365,7 @@ static void test_tb_ids(void)
     int found;
 
     /* The candidate table against xhcicmf.inf, both ways. */
+    CHECK(cf != NULL, "xhcicmf.inf read");
     if (cf != NULL) {
         const char *p = cf;
         int lines = 0;
@@ -1394,8 +1397,6 @@ static void test_tb_ids(void)
             CHECK(strstr(cf, pat) != NULL, "every table id is an INF model id");
         }
         free(cf);
-    } else {
-        printf("test_inst: xhcicmf.inf not in this tree; the table check skipped\n");
     }
     memset(msz, 0, sizeof(msz));
     strcpy(msz, "PCI\\VEN_8086&DEV_15C0&CC_0604");

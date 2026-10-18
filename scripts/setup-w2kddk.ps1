@@ -51,8 +51,8 @@ Test-SetupHost
 
 Write-Step "Checking Win2K DDK installer"
 #
-# **Absent is not fatal unless -RunInstaller was asked for** (the 2026-09-07
-# audit's H30). This threw whenever the archive was missing, and the archive is
+# **Absent is not fatal unless -RunInstaller was asked for** (the audit of
+# 2026-09-07). This threw whenever the archive was missing, and the archive is
 # needed for exactly one thing: launching the GUI installer. A host whose DDK
 # is already unpacked - which is this project's recommended shape, and the one
 # `install-w2kddk-cabs.ps1` produces - has no use for it, and the throw took
@@ -97,8 +97,8 @@ Ensure-Directory $LocalScriptDir
 # The standard -> release flavour rename renamed a wrapper this
 # script generates, and generating the new name does not remove the old one -
 # scripts\local is git-ignored, so an existing checkout keeps ddk-standard.cmd
-# for as long as nothing deletes it, and a rerun leaves both. Audit round 6
-# found that: a stale wrapper still works, which is what makes it worth
+# for as long as nothing deletes it, and a rerun leaves both.
+# A stale wrapper still works, which is what makes it worth
 # removing rather than harmless - it is the flavour vocabulary surviving in the
 # one place a grep of the tree cannot see.
 $staleWrapper = Join-Path $LocalScriptDir "ddk-standard.cmd"

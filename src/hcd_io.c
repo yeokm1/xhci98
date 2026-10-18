@@ -153,7 +153,7 @@ static ULONG hcdCpuId(VOID)
 }
 
 /* IRQL: any. Below DISPATCH_LEVEL it is raised for the pair, so the count
- * and the processor's ID come from one processor (review round 2). */
+ * and the processor's ID come from one processor. */
 VOID HcdTscStamp(PXHCI_XSTAT_STAMP s)
 {
     KIRQL oldIrql;
@@ -281,8 +281,8 @@ static VOID hcdWideClaim(PHCD_CONTROLLER hc, PHCD_XFER x)
 
 /* The entry back: its first mapping did not promote, or the URB ended.
  * Only an entry of this start's pool counts against InUse: one of a pool
- * a fail-closed stop kept (HcdDmaWideClose) is not this start's (review
- * round 4). Controller lock held. */
+ * a fail-closed stop kept (HcdDmaWideClose) is not this start's.
+ * Controller lock held. */
 static VOID hcdWideRelease(PHCD_CONTROLLER hc, PHCD_XFER x)
 {
     if (x->Wide != NULL) {
@@ -308,7 +308,7 @@ static VOID hcdRefillQueue(PHCD_CONTROLLER hc, PHCD_XFER x)
 }
 
 /* The endpoint's doorbell after a publication, read under the lock as
- * HcdIoMapped does (round 3, finding 2), and the save state a publication
+ * HcdIoMapped does, and the save state a publication
  * spoils. Controller lock held. */
 static VOID hcdWideDoorbell(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
 {
@@ -768,7 +768,7 @@ static VOID NTAPI hcdCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     x = (PHCD_XFER)Irp->Tail.Overlay.DriverContext[1];
     /* The submission's identity, read while the cancel lock still holds
      * the IRP: a record freed and reused by the same IRP meanwhile has a
-     * new Seq (Codex review of batch (c), round 5, finding 4). */
+     * new Seq (batch (c)). */
     seq = x->Seq;
     if (hc != NULL) {
         (VOID)InterlockedIncrement(&hc->CancelsRunning);
@@ -835,8 +835,7 @@ static PHCD_XFER hcdTakeRecord(PHCD_PIPE pipe, PIRP irp)
         x = &pipe->Xfers[i];
         if (x->State == HCD_XFER_FREE) {
             /* Claimed with its IRP, so an abort that runs before the rest
-             * is filled in still finds and marks it (Codex review of batch
-             * (c), round 3, finding 2). */
+             * is filled in still finds and marks it (batch (c)). */
             x->State = HCD_XFER_MAPPING;
             x->Irp = irp;
             x->CancelRequested = 0;
@@ -1024,7 +1023,7 @@ static PIRP hcdRecordRelease(PHCD_PIPE pipe, PHCD_XFER x)
  * behind waiting IRPs without looking for a free record, and a record's
  * release skips an IRP whose cancel routine is running, so without this a
  * waiter could stay listed with every record free once that routine has
- * taken its IRP away (Codex review of batch (c), round 16, finding 1): the
+ * taken its IRP away (batch (c)): the
  * cancel routine and every parking call it. Controller lock held.
  */
 static PHCD_XFER hcdWaitingStart(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
@@ -1079,8 +1078,8 @@ static VOID hcdStart(PHCD_CONTROLLER hc, PHCD_XFER x)
 }
 
 /* A refusal at submission: the device reference goes back now, and the
- * IRP completes at the next tick, never inside this dispatch (Codex review
- * of batch (c), round 8, finding 4; HcdIoRefuseLater). */
+ * IRP completes at the next tick, never inside this dispatch (batch (c);
+ * HcdIoRefuseLater). */
 static NTSTATUS hcdRefuse(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                           PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb, LONG usbd)
 {
@@ -1338,13 +1337,13 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     }
     /* The engine falls back to SIA for a group whose Frame IDs it cannot
      * use, which moves an explicit StartFrame to the controller's next
-     * service (batch (c) review, round 16, finding 2, refused it instead).
+     * service (batch (c) refused it instead).
      * Since 36.57 that is taken: a start the controller cannot be told - no
      * frame sample, a flow already under way on a controller without CFC,
      * a packet cadence the endpoint's Interval does not share, or a packet
      * outside the IST+1 to 895 frame window - is published with SIA, as
      * Linux publishes it, and noted. The plan asks the engine's own
-     * decision, so the two cannot drift (round 17). A start beyond what a
+     * decision, so the two cannot drift. A start beyond what a
      * Frame ID can name is still refused, by hcdIsoAdmit. */
     plan = XhciXferIsoStartPlan(&req, x->Asap, ext->HcInfo.Cfc, sampled,
                                 fresh, ext->HcInfo.HciVersion);
@@ -1468,7 +1467,7 @@ VOID HcdIoIsoRefused(PVOID urb, LONG usbd)
     }
     /* Only what the URB's own length holds: a refusal may be of a URB too
      * short for its fixed fields, or whose NumberOfPackets failed
-     * validation (round 17, finding 2). */
+     * validation. */
     fixed = FIELD_OFFSET(struct _URB_ISOCH_TRANSFER, IsoPacket);
     if (it->Hdr.Length < fixed) {
         return;
@@ -1605,10 +1604,9 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
  * A filled record's IRP made cancellable and the record started. A request
  * split into chunks owns the pipe from its start, and a request started
  * while another owns it waits here unmapped, on the pipe's Held list: it
- * holds no map registers the owner's next chunk may need (round 3, finding
- * 8), and it cannot land between two of the owner's chunks (round 2,
- * finding 7). HcdIoPipeRelease starts it. IRQL: <= DISPATCH_LEVEL, no lock
- * held.
+ * holds no map registers the owner's next chunk may need, and it cannot
+ * land between two of the owner's chunks. HcdIoPipeRelease starts it.
+ * IRQL: <= DISPATCH_LEVEL, no lock held.
  */
 static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
 {
@@ -1623,7 +1621,7 @@ static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
     if (x->CancelRequested || pipe->Closed || dev->Gone || hc->ShutLatched) {
         /* Cancelled, or its pipe or device going, while it was being
          * filled in: it completes now and is never held, so no drain the
-         * thread has already passed can miss it (round 4, finding 2). Past
+         * thread has already passed can miss it. Past
          * the shutdown latch the same, as not responding: no D0 comes to
          * serve it (37.3, record 13 section 5.8). */
         x->Engine = 0;
@@ -1639,8 +1637,7 @@ static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
     if (pipe->Exclusive != NULL || pipe->Paused) {
         /* Held unmapped: behind the pipe's owner, or while the thread has
          * it paused - holding no map registers either way, so an abort's
-         * cancelled work never waits for registers a held request keeps
-         * (round 4, finding 4). */
+         * cancelled work never waits for registers a held request keeps. */
         x->State = HCD_XFER_HELD;
         InsertTailList(&pipe->Held, &x->Link);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -1857,12 +1854,12 @@ static VOID hcdChunkPublished(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
  * routine, from HcdIoSubmit, or for a held record from HcdIoPipeRelease.
  *
  * Two gates hold a record mapped but unpublished, on the pipe's Held list
- * (Codex review of batch (c), round 2, findings 2 and 7): the thread has the
+ * (batch (c)): the thread has the
  * pipe Paused while it stops or edits the endpoint, and a request split into
  * chunks owns the pipe (Exclusive) until its last chunk ends, so no other
  * request's TD lands between two of its chunks. The doorbell's slot and DCI
  * are read under the lock: once it is released the record may complete and
- * its pipe be freed (finding 3).
+ * its pipe be freed.
  *
  * IRQL: <= DISPATCH_LEVEL, no lock held.
  */
@@ -1957,8 +1954,8 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         x->State = HCD_XFER_ON_RING;
         x->Engine = 1;
         /* The device's sequence moves from here (hcd_cfg.c reads it once
-         * the endpoint is paused and settled; Codex review of c4ec1c3,
-         * finding 2). */
+         * the endpoint is paused and settled; reviewed and revised after
+         * c4ec1c3). */
         ep->SeqUsed = 1;
         hc->Counters.TransfersSubmitted++;
         /* On a controller not initialized - suspended, or resuming before
@@ -1973,8 +1970,8 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         }
         /* The doorbell under the lock: once it is released the thread may
          * pause and stop the endpoint, and a doorbell rung after that
-         * would restart it under the thread's edit (Codex review of batch
-         * (c), round 3, finding 2). A doorbell is one register write. */
+         * would restart it under the thread's edit (batch (c)). A doorbell
+         * is one register write. */
         slot = dev->SlotId;
         dci = XhciStreamDoorbell(pipe->Dci, pipe->StreamId);
         XhciWriteDoorbell(&hc->Hc, slot, dci);
@@ -2017,8 +2014,8 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
  * Give the held records of a pipe their turn, in submission order, once
  * the thread is not pausing it. A record held mapped goes back through
  * HcdIoMapped's gate; the owner of the pipe always passes (it can be held
- * mapped while paused, and nothing else would release it - round 3, finding
- * 4), and so does any record submitted before it. A record held unmapped
+ * mapped while paused, and nothing else would release it), and so does
+ * any record submitted before it. A record held unmapped
  * waits for no owner: the first one starts, taking the pipe if it is split
  * into chunks, and the walk stops there. IRQL: <= DISPATCH_LEVEL, no lock
  * held.
@@ -2057,10 +2054,10 @@ again:
                 /* 36.24: a promoted record held mapped is published here,
                  * in this hold of the lock: once it leaves the held list
                  * it is the machine's, and a cancel may finalize it the
-                 * moment the lock is dropped (review round 1, finding 1).
+                 * moment the lock is dropped.
                  * Records listed before it go first, as the walk orders
                  * every record: it stays held until they are published,
-                 * and the walk runs again (review round 2, finding 1). */
+                 * and the walk runs again. */
                 if (!IsListEmpty(&mine)) {
                     more = 1;
                     break;
@@ -2191,8 +2188,7 @@ static ULONG hcdCancelAllOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
         if (x->State != HCD_XFER_FREE && x->Irp != NULL) {
             x->CancelRequested = 1;
             /* The operation's own status, not CANCELED: an abort for a
-             * fault drains with an error a promoted record must report
-             * (review round 1, finding 2). */
+             * fault drains with an error a promoted record must report. */
             HcdIoWideStop(hc, x, usbd);
             marked++;
         }
@@ -2221,12 +2217,12 @@ static ULONG hcdCancelAllOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
  * (HcdIoPipeWaitCancelled). The mark is what keeps a record still in the
  * map pump from being held mapped afterwards: HcdIoMapped completes a
  * marked record instead of putting it on Held, where the endpoint's resume
- * would publish it onto a ring the drain just emptied (Codex review of
- * 31-A.1, round 2, unit A). The waiting IRPs leave in the same hold of the
+ * would publish it onto a ring the drain just emptied (task 31-A.1). The
+ * waiting IRPs leave in the same hold of the
  * lock and complete with `usbd` once it is released: otherwise a marked
  * record could finish meanwhile and be handed one of them, unmarked
- * (hcdRecordRelease), past the cutoff the mark draws (Codex review of the
- * Phase 28-31 integration, finding 3). Returns how many were marked.
+ * (hcdRecordRelease), past the cutoff the mark draws (the Phase 28-31
+ * integration). Returns how many were marked.
  * Controller lock NOT held.
  */
 ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
@@ -2372,7 +2368,7 @@ static VOID hcdWaitCancelledOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
     for (;;) {
         /* A cancelled record that reached the held list after the drain
          * completes from here - the pipe is paused, so nothing else would
-         * release it (round 4, finding 2). */
+         * release it. */
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         for (entry = pipe->Held.Flink; entry != &pipe->Held; entry = next) {
             next = entry->Flink;
@@ -2497,6 +2493,8 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
     ULONG pieceOk;
     ULONG piece;
     ULONG rest;
+    PVOID parkHandle;
+    PVOID parkParent;
     XHCI_XSTAT_STAMP entered;
     XHCI_XSTAT_STAMP done;
 
@@ -2578,7 +2576,7 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
             } else if (status == XHCI_USBD_STATUS_SUCCESS && !x->Control &&
                        !x->ShortOk && x->Offset < x->Length) {
                 /* A short transfer the client did not allow (Windows 2000
-                 * DDK usbdi.h:282-284; round 2, finding 11). */
+                 * DDK usbdi.h:282-284). */
                 status = HCD_USBD_ERROR_SHORT_TRANSFER;
             }
         }
@@ -2600,8 +2598,8 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
         hcdCancelOff(irp);
         /* The owner's release runs while this record is still not free:
          * a record not free keeps its pipe from being closed and freed
-         * (HcdIoWaitPipe), so the pipe is alive for the call (round 3,
-         * finding 6). Any end of a record also releases one that waited
+         * (HcdIoWaitPipe), so the pipe is alive for the call. Any end of a
+         * record also releases one that waited
          * for ring room on the pipe. */
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         isData = hcdIsData(x);
@@ -2653,17 +2651,19 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
                 XhciXstatAddTime(&hc->Xstat.Complete, piece + rest);
             }
         }
+        /* The pipe from the record, never from the URB, whose lengths the
+         * completion has already rewritten (reviewed and revised after
+         * 6dae92b). Taken before the record is released: a free record no
+         * longer keeps its pipe from being closed and freed (HcdIoWaitPipe
+         * polls for FREE), so nothing reads x->Pipe once the lock drops
+         * (2026-10-18). */
+        parkHandle = (x->Pipe == &dev->Ep0Pipe) ? NULL : (PVOID)x->Pipe;
+        parkParent = (PVOID)x->Pipe->Parent;
         nextIrp = hcdRecordRelease(x->Pipe, x);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
 
-        /* The pipe from the record, never from the URB, whose lengths the
-         * completion has already rewritten (Codex review of 6dae92b,
-         * finding 2). */
         parked = status == HCD_USBD_DEVICE_GONE &&
-                 HcdIoPark(pdo, irp, urb,
-                           (x->Pipe == &dev->Ep0Pipe) ? NULL
-                                                      : (PVOID)x->Pipe,
-                           (PVOID)x->Pipe->Parent);
+                 HcdIoPark(pdo, irp, urb, parkHandle, parkParent);
         if (parked) {
             /* Its device left: held, as a request to a device that stopped
              * answering is, until the client aborts or cancels it or its
@@ -2675,7 +2675,7 @@ VOID HcdIoDeferred(PHCD_CONTROLLER hc)
              * be inside the client's submission, so the IRP completes at
              * the next tick (HcdIoRefuseLater), never here: a client that
              * resubmits from its completion routine would recurse (static
-             * sweep of batch (c), after Codex round 8). */
+             * sweep of batch (c)). */
             (VOID)HcdIoRefuseLater(pdo, irp, urb, status);
         } else {
             irp->IoStatus.Status =
@@ -2729,8 +2729,8 @@ static VOID hcdDrainOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hcdWaitingFlush(pipe, &waiting);
     /* The held records too: they are on neither the engine's queue nor
-     * the done list, and a closed or gone pipe never releases them (Codex
-     * review of batch (c), round 3, finding 5). */
+     * the done list, and a closed or gone pipe never releases them (batch
+     * (c)). */
     while (!IsListEmpty(&pipe->Held)) {
         entry = RemoveHeadList(&pipe->Held);
         x = CONTAINING_RECORD(entry, HCD_XFER, Link);
@@ -2838,8 +2838,8 @@ VOID HcdIoWaitPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
  * device has queued, without waiting. A stop or a reset invalidation drains
  * every device first and waits after (HcdIoDeviceGone), so no device's wait
  * holds up another's drain - a request of one waiting for map registers
- * another's outstanding transfers keep would otherwise never end (Codex
- * review of batch (c), round 5, finding 3). Idempotent. Returns 0 when the
+ * another's outstanding transfers keep would otherwise never end (batch
+ * (c)). Idempotent. Returns 0 when the
  * device must be kept (DMA not proven stopped). IRQL: PASSIVE_LEVEL.
  */
 ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
@@ -2858,8 +2858,8 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     if (hc->CommonBufferPinned) {
         /* The controller could not be proven to have stopped mastering:
          * its rings still name the clients' buffers, so none goes back.
-         * The URBs stay pending and the record stays allocated (Codex
-         * review of batch (c), round 2, finding 8). */
+         * The URBs stay pending and the record stays allocated (batch
+         * (c)). */
         return 0;
     }
     HcdCfgFlushDevice(hc, dev);
@@ -2975,11 +2975,11 @@ ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * at or below the pipe's horizon - is completed CANCELED here at once
  * instead of held; one the teardown reaches only after the abort released
  * the list would otherwise be held for good while its client waits for it
- * before passing its removal down (Codex review of f99f184, finding 2).
+ * before passing its removal down (reviewed and revised after f99f184).
  * A later submission cannot revoke that: it only carries a later stamp
- * (Codex review of 6dae92b, finding 1). The pipe is the caller's, from the
+ * (reviewed and revised after 6dae92b). The pipe is the caller's, from the
  * request's record or wait list, never parsed back out of a URB the
- * completion has rewritten (finding 2). Its hardware resources are
+ * completion has rewritten. Its hardware resources are
  * already released by then.
  *
  * Not held once the PDO is closing (a stop or removal under way, read under
@@ -2996,7 +2996,8 @@ static VOID hcdParkedComplete(PHCD_DEVICE_PDO pdo, PIRP irp);
 
 /* Whether an IRP was submitted at or before an abort of its pipe - its own
  * horizon or every pipe's - its full stamp rebuilt from the PDO's 64-bit
- * count (xhci_pipe.h, XhciSeqCovers; Codex review of 09ed9d1). A stream's
+ * count (xhci_pipe.h, XhciSeqCovers; reviewed and revised after 09ed9d1).
+ * A stream's
  * request (31-A.1) has its stream's own handle and, in `endpoint`, its
  * endpoint's: an abort of either covers it, as ABORT_PIPE on the endpoint's
  * handle reaches every stream of a live device (xhci98_streams.h). NULL
@@ -3125,7 +3126,7 @@ NTSTATUS HcdIoHoldUnreadable(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb,
  * aborting one pipe also releases the PDO's held requests on its other
  * pipes, EP0's included. It is consulted only for requests of a departed
  * device, never for live transfers, and never crosses into a sibling
- * function PDO (Codex review of ed025d2, its note). IRQL:
+ * function PDO (reviewed and revised after ed025d2). IRQL:
  * <= DISPATCH_LEVEL.
  */
 VOID HcdIoAbortMark(PHCD_DEVICE_PDO pdo, PIRP abortIrp, PVOID handle,
@@ -3257,16 +3258,16 @@ ULONG HcdIoParkedRelease(PHCD_DEVICE_PDO pdo, ULONG aborted)
  * timer DPC at the next clock tick, which also paces a client's retries to
  * the tick. The timer, not the controller thread: the thread stops before
  * the devices' transfers are drained at a controller stop, and a drained
- * read's completion resubmits (Codex review of batch (c), round 8, finding
- * 1). Every refusal the URB path can reach comes here - device gone, PDO
- * closing, a closed pipe, no record free, no MDL (finding 4).
+ * read's completion resubmits (batch (c)). Every refusal the URB path can
+ * reach comes here - device gone, PDO closing, a closed pipe, no record
+ * free, no MDL.
  *
  * The list, timer and DPC are the PDO's own, not the controller's: a PDO
  * can outlive its controller (orphaned while it awaits its REMOVE), and its
  * refusals must stay deferred then too, while the controller's storage
- * goes (Codex review of batch (c), round 9, findings 1 and 2). The list
- * lives under the cancel spin lock, so a refusal is cancellable like any
- * pended IRP (round 8, finding 3). Counted on the PDO apart from its URBs
+ * goes (batch (c)). The list lives under the cancel spin lock, so a
+ * refusal is cancellable like any pended IRP. Counted on the PDO apart
+ * from its URBs
  * (RefusedPending, which also holds one count while the timer is armed or
  * its DPC runs): a STOP or SURPRISE_REMOVAL waits for the URBs only, since
  * a client may keep resubmitting until its own stack hears of the stop; a
@@ -3352,7 +3353,7 @@ static VOID hcdRefusedDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
         urb = (PURB)IoGetCurrentIrpStackLocation(irp)
                   ->Parameters.Others.Argument1;
         if (irp->Cancel) {
-            /* The URB says what the IRP says (round 9, finding 3). */
+            /* The URB says what the IRP says. */
             urb->UrbHeader.Status = HCD_USBD_CANCELED;
             status = STATUS_CANCELLED;
         } else if (pdo->Closing) {

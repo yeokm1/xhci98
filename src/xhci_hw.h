@@ -17,18 +17,9 @@
 #include "xhci_usbport.h"
 
 /*
- * The registration packet, defined in src/xhci_dispatch.c. usbport writes its
- * 16 service pointers into it during registration and the miniport calls them
- * back through it for the life of the driver, so this layer needs it to reach
- * UsbPortWait and UsbPortReadWriteConfigSpace. It is a file-scope object in
- * both flavours - "static" in the C sense was never what kept it alive.
- */
-extern USBPORT_REGISTRATION_PACKET XhciRegPacket;
-
-/*
- * The ResourcesTypes mask XhciInitController's step 1 requires, defined and
- * settled in src/xhci_dispatch.c. It is not a constant because NT 6.x numbers
- * those bits differently (src/xhci_usbport.h).
+ * The ResourcesTypes mask XhciInitController's step 1 requires, defined in
+ * src/hcd_ctl.c. The HCD fills the USBPORT_RESOURCES copy itself, with the
+ * NT 5.x bits, on every target.
  */
 extern ULONG XhciResourcesRequired;
 
@@ -157,6 +148,8 @@ MPSTATUS XhciWritePciConfig(PXHCI_EXTENSION ext,
 
 #define XHCI_PCI_COMMAND_MSE    0x0002U     /* Memory Space Enable         */
 #define XHCI_PCI_COMMAND_BME    0x0004U     /* Bus Master Enable           */
+#define XHCI_PCI_COMMAND_INTX_DISABLE 0x0400U /* Interrupt Disable, bit 10
+                                             * (PCI 3.0 6.2.2)             */
 
 /* ------------------------------------------------------------------ */
 /* Bounded waits                                                       */
@@ -350,7 +343,7 @@ ULONG XhciWriteCrcrAbort(PXHCI_EXTENSION ext, ULONG *crcrRead);
  * `SavesDeclinedNoFsc`. The resume then has no saved state to restore from and
  * reinitialises. (This said the restore's *error* path was the one the VMs
  * exercised, which would need the save to have happened; `RestoreFailures`
- * has never moved on a VM. The 2026-09-16 audit's B10.) The reinitialisation
+ * has never moved on a VM; revised 2026-09-16.) The reinitialisation
  * ends in XhciSlotInvalidateAll, which tells usbport its addressed devices are
  * gone rather than leaving the address map pointing at slots the xHC no longer
  * has.
@@ -497,34 +490,6 @@ ULONG XhciUnmaskInterrupts(PXHCI_EXTENSION ext);
  * IRQL: DISPATCH_LEVEL, controller lock held.
  */
 ULONG XhciRearmInterrupter(PXHCI_EXTENSION ext);
-#ifdef XHCI_FIX_PORT_POLL
-/* Bench candidate W10 for Finding 3 - see src/xhci_rh.c. Controller lock
- * RELEASED. IRQL: <= DISPATCH_LEVEL. */
-VOID XhciRhPortPollSweep(PXHCI_EXTENSION ext);
-#endif
-#ifdef XHCI_FIX_PORT_POLL_SLOW
-#ifndef XHCI_FIX_PORT_POLL
-#error XHCI_FIX_PORT_POLL_SLOW divides the W10/W11 sweep, so it needs XHCI_FIX_PORT_POLL
-#endif
-/*
- * **Bench candidate W15 for Finding 3** (`run-13e.md` P9): run the sweep on
- * every Nth health poll instead of every poll, so a detection the sweep
- * mediated is separated from one an event delivered by a latency a human can
- * read off a wall clock. W11POLL's "~0.5 s - one health-poll interval" is the
- * single observation the no-event claim rests on, and an operator cannot
- * distinguish 0.5 s from instant against OS enumeration noise; 16 polls at
- * usbport's nominal 500 ms is ~8 s, so an event-driven detection stays at
- * enumeration latency (a second or two) while a sweep-mediated one averages
- * ~4 s from a uniform phase - and three repetitions of a plug cannot all land
- * under 2 s by chance ((1/4)^3).
- */
-#define XHCI_RH_SWEEP_SLOW_POLLS    16UL
-#endif
-#ifdef XHCI_FIX_RH_GATE
-/* Bench candidate W7 for Finding 3 - see src/xhci_rh.c. Controller lock
- * RELEASED. IRQL: <= DISPATCH_LEVEL. */
-VOID XhciRhGateWatchdog(PXHCI_EXTENSION ext);
-#endif
 
 /*
  * Stop the controller: mask its interrupt sources, clear USBCMD.RUN and wait
@@ -699,7 +664,9 @@ VOID XhciFailClosedDma(PXHCI_EXTENSION ext);
 
 /*
  * How long an armed port operation may survive before the health poll concludes
- * that nothing is going to time it.
+ * that nothing is going to time it. The miniport's port ageing (xhci_rh.c,
+ * deleted 2026-10-02) was its one user; nothing under the HCD reads it, and it
+ * is kept as the record of the sizing.
  *
  * **This is not a second timeout competing with the two above.** It exists for
  * the one failure `UsbPortRequestAsyncCallback` cannot report: it "returns 0 on
@@ -719,8 +686,8 @@ VOID XhciFailClosedDma(PXHCI_EXTENSION ext);
  * the margin over the 500 ms deadline it has to clear was 1.2-2.6x instead of
  * 16x, and a reset finishing late could be retired while its own timer was
  * still legitimately running. See the sizing rule above XHCI_COMMAND_AGE_MS;
- * the relationship to XHCI_PORT_RESET_TIMEOUT_MS is checked at compile time in
- * src/xhci_rh.c.
+ * the relationship to XHCI_PORT_RESET_TIMEOUT_MS was checked at compile time
+ * in the miniport's xhci_rh.c.
  */
 #define XHCI_PORT_AGE_MS            8000UL
 
@@ -761,8 +728,8 @@ typedef struct _XHCI_PORT_TIMEOUT {
  *
  * `XhciEventDiscardStale` reuses the constant and **not** this reason: the
  * restore has no producer to outrun, so what the bound does there is bound a
- * walk of a ring nothing is refilling. Audit round 6 separated the two; a
- * change to this value has to be argued for both.
+ * walk of a ring nothing is refilling. The two were separated in a later
+ * revision; a change to this value has to be argued for both.
  */
 #define XHCI_DPC_MAX_EVENTS     (XHCI_EVENT_RING_TRBS * 4UL)
 
@@ -801,8 +768,8 @@ ULONG XhciEventDpcDrained(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
  * stale Command Completion Event left on the ring is a wrong retirement rather
  * than a harmless one, and why some of what it finds may not be discarded.
  *
- * **Which ones is not a list here, and audit round 8 is why it stopped being
- * one.** Rounds 6 and 7 each added a case by hand and each got the set wrong;
+ * **Which ones is not a list here, and why it stopped being one:** two
+ * earlier revisions each added a case by hand and each got the set wrong;
  * the type test is still written out (a Host Controller Event has no completion
  * code worth consulting), but every code-bearing event is now referred to
  * `XhciXferCodeInfo`, which is where Table 6-90 is transcribed. A code that
@@ -822,8 +789,8 @@ ULONG XhciEventDpcDrained(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
  * the ring holds more than one: the Host Controller Event is the controller's
  * own statement, and outranks a completion code carried by one endpoint's event.
  *
- * `COMPLETION_CODE` was `EVENT_LOST` until audit round 8, and the rename is the
- * finding: the arm had stopped meaning "code 32" once it began asking
+ * `COMPLETION_CODE` was `EVENT_LOST` until a later revision, and the rename is
+ * the point: the arm had stopped meaning "code 32" once it began asking
  * `XhciXferCodeInfo` rather than testing one constant, and a name that says
  * which code it was is a name that goes stale the next time the table grows.
  * `RestoreFatalCode` says which code it actually was. */
@@ -851,372 +818,76 @@ ULONG XhciEventDiscardStale(PXHCI_EXTENSION ext, PULONG fatalEvent);
  * from an ERDP write it would be making **outside the controller lock every
  * other writer holds** (design doc 05 section 5). That reason used to read "ERDP
  * has exactly one safe writer until the miniport's own event-ring lock exists
- * (task 9)"; audit round 8 found the phrasing outliving its own condition - the
- * lock arrived in task 9 and section 5 now names three writers - while the
- * conclusion it supports is unchanged. IRQL: <= DISPATCH_LEVEL, no lock held.
+ * (task 9)", a phrasing that outlived its own condition - the lock arrived
+ * in task 9 and section 5 now names three writers - while the conclusion it
+ * supports is unchanged. IRQL: <= DISPATCH_LEVEL, no lock held.
  */
 VOID XhciEnableInterrupts(PXHCI_EXTENSION ext);
 VOID XhciDisableInterrupts(PXHCI_EXTENSION ext);
 VOID XhciFlushInterrupts(PXHCI_EXTENSION ext);
 
 /* ------------------------------------------------------------------ */
-/* The root-hub callback family (src/xhci_rh.c)                        */
+/* The core's call-outs to the device layer (src/hcd_dev.c)            */
 /* ------------------------------------------------------------------ */
 
 /*
- * Root-hub power-on-to-power-good, in the 2 ms units usbport copies straight
- * into the hub descriptor's bPowerOnToPowerGood as a UCHAR (SP4 `0x2E442`,
- * confirmed from the binary). xHCI's rule is that software waits 20 ms after
- * asserting PP before touching the port (5.4.8, p.371), so the value is 10.
+ * The core (xhci_init.c, xhci_evt.c, xhci_cmd.c) calls these at fixed points
+ * of the init sequence, the event drain and the command engine. They were the
+ * miniport's root-hub and slot layers (xhci_rh.c, xhci_slot.c, deleted
+ * 2026-10-02); under the HCD each is implemented in src/hcd_dev.c, and the
+ * contract at each definition there is the current one. The usbport
+ * callbacks those layers also carried have no definition under the HCD and
+ * are no longer declared (2026-10-18).
  */
-#define XHCI_RH_POWER_ON_TO_POWER_GOOD 10
 
 /*
- * usbport's root-hub callbacks, one body each, with the packet wrappers in
- * src/xhci_dispatch.c (roadmap Phase 5 task 1).
- *
- * **Two rules run through the whole family**, both from
- * docs/usb-xhci-info/usbport-miniport-abi.md section 4:
- *
- *   A refusal is `MP_STATUS_NOT_SUPPORTED`, never `MP_STATUS_FAILURE`. The
- *   status mapper is seven instructions in both shipping builds and maps 1 -
- *   and only 1 - to `RH_STATUS_NO_CHANGES`, which leaves an endpoint-0 request
- *   queued rather than failing it.
- *
- *   The two status queries answer `MP_STATUS_SUCCESS` even when there is
- *   nothing to report, because the status-change endpoint's scan treats **any**
- *   nonzero return as a hard error, abandons the whole scan and stalls the root
- *   hub's change pipe on every poll from then on. So an unreadable or
- *   unadmitted controller reports zeros and succeeds; the only nonzero these
- *   two ever answer is for a buffer they cannot write to at all.
- *
- * `Port` is a **hub** port number - 1-based within the managed USB 2.0 ports -
- * and every one of these validates it. usbport validates it too, but only on
- * the class-command path: the status-change scan synthesizes 1..N itself, and
- * Win2000's hub-directed feature path passes **0** to
- * `RH_ClearFeaturePortOvercurrentChange`.
- *
- * IRQL: DISPATCH_LEVEL. The status queries run under usbport's
- * `MiniportSpinLock`; the feature callbacks are documented as running under no
- * usbport lock at all and caller-held locking at callback entry was never
- * established either way, so all of them take the driver's own controller lock
- * (docs/contributing/design/05-locking-model.md section 7). None of them waits, and
- * they call usbport services only through XhciRootHubDeferredWork and
- * XhciSlotDeferredWork, after releasing the controller lock.
+ * Arm every port for the device thread's first PORTSC sweep. Called at
+ * XHCI_INIT_STEP_ROOT_HUB, so once per start, resume reinitialization and
+ * in-place recovery; `afterRestore` is nonzero on the restore-success branch
+ * of XhciResumeController, where the port registers survived. Returns an
+ * XHCI_RH_* status; nonzero refuses the start. IRQL: PASSIVE_LEVEL, or
+ * DISPATCH_LEVEL with InitBelowPassive set.
  */
-VOID XhciRhGetRootHubData(PXHCI_EXTENSION ext, PUSBPORT_ROOT_HUB_DATA data);
-MPSTATUS XhciRhGetStatus(PXHCI_EXTENSION ext, PUSHORT status);
-MPSTATUS XhciRhGetPortStatus(PXHCI_EXTENSION ext,
-                             USHORT port,
-                             PUSBPORT_PORT_STATUS_AND_CHANGE status);
-MPSTATUS XhciRhGetHubStatus(PXHCI_EXTENSION ext,
-                            PUSBPORT_HUB_STATUS_AND_CHANGE status);
-
-MPSTATUS XhciRhSetFeaturePortPower(PXHCI_EXTENSION ext, USHORT port);
-MPSTATUS XhciRhSetFeaturePortEnable(PXHCI_EXTENSION ext, USHORT port);
-MPSTATUS XhciRhSetFeaturePortSuspend(PXHCI_EXTENSION ext, USHORT port);
-/*
- * The two asynchronous operations (Phase 5 task 4). Both return as soon as the
- * first register write is issued - a reset takes effect asynchronously and a
- * resume owes 20 ms of bus signalling, and neither of those may be waited for at
- * DISPATCH_LEVEL - so what they leave behind is an armed per-port generation and
- * an uncancellable timer carrying it.
- *
- * They call XhciRootHubDeferredWork themselves, after releasing the controller
- * lock, rather than leaving it to their wrappers: an armed generation that never
- * got a timer onto it is a port permanently ineligible for any other operation,
- * which is easy to forget at a call site and impossible to forget here.
- */
-MPSTATUS XhciRhSetFeaturePortReset(PXHCI_EXTENSION ext, USHORT port);
-MPSTATUS XhciRhClearFeaturePortPower(PXHCI_EXTENSION ext, USHORT port);
-MPSTATUS XhciRhClearFeaturePortEnable(PXHCI_EXTENSION ext, USHORT port);
-MPSTATUS XhciRhClearFeaturePortSuspend(PXHCI_EXTENSION ext, USHORT port);
-
-/* The five change-clearing callbacks share one body, because they differ only
- * in which latched bit they take down and a per-callback copy would be five
- * chances to take down the wrong one. `changeBit` is an XHCI_HUB_C_PORT_*. */
-MPSTATUS XhciRhClearFeaturePortChange(PXHCI_EXTENSION ext,
-                                      USHORT port,
-                                      ULONG changeBit);
-
-VOID XhciRhDisableIrq(PXHCI_EXTENSION ext);
-VOID XhciRhEnableIrq(PXHCI_EXTENSION ext);
-MPSTATUS XhciRhChirpRootPort(PXHCI_EXTENSION ext, USHORT port);
-
-/*
- * Build the root hub from the post-reset port map and seed every shadow from a
- * live PORTSC read. Called by the init sequence at XHCI_INIT_STEP_ROOT_HUB, so
- * once per start, once per resume reinitialization and once per in-place
- * recovery. Returns an XHCI_RH_* status; nonzero refuses the start. IRQL:
- * PASSIVE_LEVEL, or DISPATCH_LEVEL with InitBelowPassive set.
- */
-/* `afterRestore` nonzero on the one caller that reaches here with the port
- * registers *surviving* - the restore-success branch of XhciResumeController.
- * It suppresses the U3 -> U0 pass, whose premise is that HCRST has just
- * defaulted every port link state (audit finding A5). */
 ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore);
 
 /*
- * Fold one Port Status Change Event into the shadow (Phase 5 task 2).
- *
- * **The caller already holds the controller lock** - this is called from inside
- * the event DPC's bounded drain - so it acquires nothing and calls no usbport
- * service. `portId` is the event's raw 1-based *xHCI* port; a port this driver
- * does not manage is counted and ignored. IRQL: DISPATCH_LEVEL.
- *
- * It can *decide* two things its caller must carry out after the lock is
- * released: an announcement, and - on the device-initiated resume path - a timer
- * arm. Both are recorded in the extension and drained after the DPC's release:
- * by XhciRootHubDeferredWork on NT 5.x, and on NT 6.x by
- * XhciRootHubDeferredReport, which returns the announcement for InterruptDpcEx's
- * port bit instead of making it (round 5).
+ * One Port Status Change Event, from inside the event DPC's drain: records
+ * which port the device thread must read (26-A.3). `portId` is the event's
+ * raw 1-based xHCI port. IRQL: DISPATCH_LEVEL, controller lock held.
  */
 VOID XhciRootHubPortEvent(PXHCI_EXTENSION ext, ULONG portId);
 
 /*
- * Everything the root hub decided under the controller lock and could not do
- * while holding it (Phase 5 tasks 4 and 5): arm the timers ports are owed, then
- * announce any latched change with `UsbPortInvalidateRootHub`.
- *
- * **Call only with the controller lock released**, and the rule has teeth here
- * rather than being the usual lock-order caution: `USBPORT_InvalidateRootHub`
- * calls `RH_DisableIrq` straight back into this miniport
- * (docs/usb-xhci-info/usbport-miniport-abi.md section 4), which takes the same non-recursive
- * spin lock - so announcing from inside it is not a lock-order risk but an
- * immediate self-deadlock.
- *
- * Idempotent and cheap when there is nothing owed, which is what lets every
- * caller that *might* have decided something just call it.
- *
- * **Never from a callback usbport makes under its EpList lock** -
- * `SubmitTransfer`, `AbortTransfer`, `PollEndpoint`, `SetEndpointState`. On
- * NT 6.x `USBPORTSVC_InvalidateRootHub` takes that lock itself (Vista x64
- * FDO+0x1160, Windows 7 x64 FDO+0xF88, static), so the announcement
- * self-deadlocks there on usbport's lock rather than this driver's: task
- * 24.3.4's Vista and Windows 7 hangs. Those callbacks use
- * XhciRootHubDeferredArms.
- *
- * `armMode` is the caller's context (XHCI_ARM_*, roadmap 24.4). From an
- * XHCI_ARM_DEFER context on the Version 300 tier the port arms stay owed
- * **and so does the announcement**: those callers - the root-hub feature
- * callbacks, the port timers, the recovery - may hold usbport's timer-list
- * lock, and on NT 6.x the service takes its RH-IntrEp lock, under which
- * usbport takes its ISR-DPC lock; with the event DPC's Ex arm (ISR-DPC then
- * timer-list) that is a cycle (round 5, static, design record 05). The
- * next context that holds nothing makes both: the health poll here, or the
- * event DPC through XhciRootHubDeferredReport. A reset owes nothing long,
- * because its completion raises a Port Status Change Event; what waits for
- * the poll is a change no hardware event follows (a virtual hub's, a
- * resume's end), up to one poll interval.
- *
- * Not from the event DPC on the Version 300 tier either: it runs under
- * usbport's ISR-DPC lock, and the service there deadlocked Vista and
- * Windows 7 against usbport's own root-hub DPC (round 5). The event DPC calls
- * XhciRootHubDeferredReport there instead.
- *
- * IRQL: <= DISPATCH_LEVEL.
+ * The miniport's post-lock root-hub work; nothing is owed under the HCD and
+ * both return at once (XhciRootHubDeferredReport returns 0, since
+ * RootHubReportThroughDpc is never set). Kept because the core still calls
+ * them at the points the miniport needed them.
+ * IRQL: <= DISPATCH_LEVEL, controller lock released.
  */
 VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext, ULONG armMode);
-
-/*
- * XhciRootHubDeferredWork for the event DPC on the Version 300 tier
- * (XHCI_EXTENSION.RootHubReportThroughDpc): the arms owed are made (an
- * UNLOCKED context), the device layer is drained, and a latched change is
- * taken under the same gate and bookkeeping as an announcement - but
- * returned rather than announced. The caller reports it through
- * InterruptDpcEx's port bit, which usbport's IsrDpc turns into the same
- * `Ev_Rh_IntrEp_Invalidate` after releasing its ISR-DPC lock (static, all
- * four NT 6.x builds). Returns 1 if a change must be reported.
- *
- * IRQL: DISPATCH_LEVEL, controller lock released.
- */
 ULONG XhciRootHubDeferredReport(PXHCI_EXTENSION ext);
 
 /*
- * XhciRootHubDeferredWork less the announcement, for the one caller usbport
- * reaches under its EpList lock that owes a port timer - `SubmitTransfer`,
- * the virtual hub's port operations - and so always an XHCI_ARM_DEFER
- * context: drain the device layer, and on the Version 200 tier arm the
- * timers ports are owed now, as before. On the 300 tier the arms stay owed
- * (roadmap 24.4): an arm here raced the timer DPC through the legacy
- * service, and one through Ex would take usbport's timer-list lock under
- * EpList, the reverse of the timer DPC's order through
- * `UsbPortInvalidateRootHub`. The next event DPC, root-hub peek or health
- * poll makes them, so a resume through a virtual hub's port 1 may end up to
- * one poll interval late there. Any latched change is left in
- * `RootHubInvalidatesOwed` for the next XhciRootHubDeferredWork.
- *
- * IRQL: <= DISPATCH_LEVEL, controller lock released.
- */
-VOID XhciRootHubDeferredArms(PXHCI_EXTENSION ext);
-
-/*
- * The arms owed to an UNLOCKED context, port timers and the command
- * watchdog, made now - and only on the Version 300 tier, the one tier that
- * owes any (the 200 tier arms every one at its own site). For the root-hub
- * status queries, which usbport's peek reaches after every announcement.
- *
- * IRQL: <= DISPATCH_LEVEL, an XHCI_ARM_UNLOCKED context, controller lock
- * released.
- */
-VOID XhciRootHubDrainOwedArms(PXHCI_EXTENSION ext);
-
-/*
- * The root-hub half of usbport's `CheckController` poll (Phase 5 task 6): find a
- * port left signalling resume with nothing timing the end of it, arm the
- * terminating write, and then drain the deferred work.
- *
- * It is a **sweep over link states** rather than a reaction to an event because
- * the event may already have been consumed: PLC is acknowledged by whichever
- * refresh sees it first, so a status query racing the Port Status Change Event
- * takes the notification and the event path finds nothing to arm. The link state
- * survives where the change bit does not.
- *
- * Ends by calling XhciRootHubDeferredWork, so the caller owes nothing.
- * IRQL: DISPATCH_LEVEL, under usbport's MiniportSpinLock (CheckController).
- * Takes and releases the controller lock; calls usbport services only
- * through XhciRootHubDeferredWork, after releasing it.
- */
-VOID XhciRootHubPoll(PXHCI_EXTENSION ext);
-
-/*
- * Retire every armed port operation and every unannounced change (Phase 5
- * task 6). Called from the quiesce transition, so a stop, a suspend and a
- * failed-start teardown all reach it, and after it every outstanding port timer
- * is stale by generation and returns before touching a register.
- *
- * Called with the controller lock **held**. IRQL: <= DISPATCH_LEVEL.
+ * The quiesce transition's call (a stop, a suspend, a failed-start teardown).
+ * The miniport retired its armed port operations here; the HCD arms none, and
+ * it returns at once. IRQL: <= DISPATCH_LEVEL, controller lock held.
  */
 VOID XhciRootHubRetireOperations(PXHCI_EXTENSION ext);
 
-/* ------------------------------------------------------------------ */
-/* Devices, endpoints and transfers (Phase 6 batch B, src/xhci_slot.c) */
-/* ------------------------------------------------------------------ */
-
 /*
- * The rule that runs through this whole family: **decide under the controller
- * lock, act after releasing it**, exactly as the root hub does. Everything that
- * has to talk to usbport - `UsbPortCompleteTransfer`, `UsbPortInvalidateEndpoint`
- * - and everything that goes through the command engine (which takes the lock
- * itself) is deferred to `XhciSlotDeferredWork`.
- *
- * Which side of the lock each entry point is on is stated per function, because
- * getting it wrong is a self-deadlock rather than a style problem.
- */
-
-/*
- * Put the device table at its start-of-day state. usbport has already zeroed the
- * extension on a start, so this is what makes a *resume* reinitialisation -
- * which does not get that zeroing - reach the same state.
- *
- * **Called from XhciInitController after HCRST, and the placement is a safety
- * property rather than a convenience.** Two things depend on the reset having
- * happened first: releasing the records is only true once "all of the
- * Operational and Runtime Registers shall be at their default values" (4.23.1,
- * p.312), and the transfers this drains into the completion list are ones
- * `XhciSlotInvalidateAll` deliberately would not answer while their TRBs were
- * still on a live ring. Called from the preflight instead, it would turn every
- * refusal - a path whose design property is that it writes nothing at all - into
- * a silent release, and would hand usbport back buffers the controller could
- * still be writing into.
- *
- * The caller owes XhciSlotDeferredWork afterwards, which is what actually
- * completes them. IRQL: <= DISPATCH_LEVEL (the in-place recovery reaches it
- * from a DPC through XhciInitController); takes the controller lock, so the
- * caller must not hold it.
+ * HCRST has completed: no slot, ring or TD of the previous run is followed
+ * any more, which is the proof an invalidation raised on a controller not
+ * shown halted waits for (XhciSlotInvalidateAll). Called from the init
+ * sequence after the reset, never from the preflight, whose refusals write
+ * nothing. IRQL: <= DISPATCH_LEVEL, controller lock released.
  */
 VOID XhciSlotInit(PXHCI_EXTENSION ext);
 
 /*
- * usbport's endpoint callbacks. All four run at DISPATCH_LEVEL under
- * MiniportSpinLock with the controller lock **not** held; each takes it around
- * the state it touches and calls XhciSlotDeferredWork on the way out.
- *
- * `XhciSlotQueryEndpointRequirements` is pure policy and touches no state.
- */
-VOID XhciSlotQueryEndpointRequirements(
-    PXHCI_EXTENSION ext,
-    const USBPORT_ENDPOINT_PROPERTIES *properties,
-    PUSBPORT_ENDPOINT_REQUIREMENTS requirements);
-
-MPSTATUS XhciSlotOpenEndpoint(PXHCI_EXTENSION ext,
-                              const USBPORT_ENDPOINT_PROPERTIES *properties,
-                              PXHCI_ENDPOINT endpoint);
-
-/* `SetEndpointState(REMOVE)` is the **only** notice either shipping build gives
- * that an endpoint is going away, and it arrives for both the reopen and the
- * delete path (batch 6-0). Any other state is recorded and ignored. */
-VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
-                              PXHCI_ENDPOINT endpoint,
-                              ULONG state);
-
-/*
- * Task 7a-B.3's three, and all three are **live contract**: both shipping builds
- * call every one of them, unlike `CloseEndpoint` and `GetEndpointState` (batch
- * 6-0). `GetEndpointStatus` reports `USBPORT_ENDPOINT_HALT` while a Transfer
- * Event has left the endpoint halted; `SetEndpointStatus(RUN)` is the reset-pipe
- * request and starts the Reset Endpoint -> Set TR Dequeue Pointer -> doorbell
- * sequence of spec 4.6.8 p.116; `SetEndpointDataToggle` is a no-op because that
- * reset clears the toggle itself with TSP = 0.
- *
- * All three run at DISPATCH_LEVEL under `MiniportSpinLock` with the controller
- * lock not held.
- */
-ULONG XhciSlotGetEndpointStatus(PXHCI_EXTENSION ext, PXHCI_ENDPOINT endpoint);
-VOID XhciSlotSetEndpointStatus(PXHCI_EXTENSION ext,
-                               PXHCI_ENDPOINT endpoint,
-                               ULONG status);
-VOID XhciSlotSetEndpointDataToggle(PXHCI_EXTENSION ext,
-                                   PXHCI_ENDPOINT endpoint,
-                                   ULONG toggle);
-
-/*
- * SubmitTransfer, including the SET_ADDRESS interception (task 6-B.3). A
- * nonzero return leaves the transfer queued for usbport to retry rather than
- * failing it, which is what a device whose command chain is still running
- * needs - and the retry is *asked for* through UsbPortInvalidateEndpoint when
- * the chain completes, rather than waited for on usbport's 500 ms timer.
- *
- * **`SubmitIsoTransfer` comes through here too**, with `isoParams` non-NULL and
- * `sgList` NULL (task 9-A.1). One entry point rather than two, because
- * everything above the endpoint branch is about the *device* - a record that has
- * gone, a controller that has failed, a suspended controller that will come
- * back - and those gates and their counters are the same question for both
- * callbacks. Duplicating them was the alternative, and a second copy of a gate
- * whose whole content is "which refusals are permanent" is how the two answers
- * drift apart. Exactly one of the last two arguments is non-NULL.
- */
-MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
-                                PXHCI_ENDPOINT endpoint,
-                                PUSBPORT_TRANSFER_PARAMETERS parameters,
-                                PXHCI_TRANSFER transfer,
-                                const USBPORT_SCATTER_GATHER_LIST *sgList,
-                                const USBPORT_ISO_TRANSFER *isoParams);
-
-/*
- * Take one transfer back off the queue and report what it moved.
- *
- * **This is the minimum that keeps the completion path honest, not task
- * 7a-B.2's cancellation machine.** It detaches the transfer so nothing can
- * complete it twice, and it deliberately does *not* touch the ring: repositioning
- * an endpoint the xHC may still be executing needs Stop Endpoint and Set TR
- * Dequeue Pointer, which cannot be issued from a callback that may not wait.
- * The TRBs stay outstanding until a later completion retires past them or the
- * slot is torn down.
- */
-VOID XhciSlotAbortTransfer(PXHCI_EXTENSION ext,
-                           PXHCI_ENDPOINT endpoint,
-                           PXHCI_TRANSFER transfer,
-                           PULONG completedLength);
-
-/*
- * One Transfer Event, from inside the event DPC's bounded drain.
- *
- * **The caller already holds the controller lock**, like XhciRootHubPortEvent,
- * so this acquires nothing and calls no usbport service: completed transfers are
- * threaded onto the extension's completion list and handed to the caller's
- * XhciSlotDeferredWork. Returns nonzero when the caller must request a
- * controller reset after dropping the lock. IRQL: DISPATCH_LEVEL.
+ * One Transfer Event, matched by the transfer engine (xhci_xfer.c) against
+ * the queue of the pipe its slot and endpoint name. Returns nonzero when the
+ * caller must request a controller reset after dropping the lock.
+ * IRQL: DISPATCH_LEVEL, controller lock held.
  */
 ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event);
 
@@ -1224,43 +895,31 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event);
  * One Device Notification Event (xHCI 1.2c 6.4.2.7), from inside the event
  * DPC's drain - the interrupt's or the poller's - after its per-type count:
  * selective suspend's stage B latches a FUNCTION_WAKE for the device's
- * suspension in progress (design record 14 section 8.7; the HCD's, in
- * hcd_dev.c). With XhciSelectiveSuspend 0 it returns at once. The caller
- * holds the controller lock; nothing here calls a usbport service.
- * IRQL: DISPATCH_LEVEL.
+ * suspension in progress (design record 14 section 8.7). With
+ * XhciSelectiveSuspend 0 it returns at once. IRQL: DISPATCH_LEVEL,
+ * controller lock held.
  */
 VOID XhciDeviceNotificationEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event);
 
 /*
- * Task 9-0.2. The end of a drain pass that found the event ring **empty**:
+ * Task 9-0.2. The end of a drain pass that observed the event ring **empty**
+ * (a pass that stopped at XHCI_DPC_MAX_EVENTS qualifies only if a peek then
+ * shows the ring empty, because the tail may be one of the events left):
  * settle every transfer whose TD ended on a mid-TD short packet and whose
- * promised tail never arrived, and recheck the deferral partition.
- *
- * **Callable only when the drain pass observed the event ring empty**, which is
- * not the same as which exit it took: a pass that stopped at
- * `XHCI_DPC_MAX_EVENTS` qualifies if a peek then shows the ring empty, and does
- * not if events remain, because the tail may be one of them. Gating on the exit
- * instead is what stranded a deferral whenever the bound and the controller's
- * last event coincided. Called with the controller lock held.
+ * promised tail never arrived, on every open pipe and stream.
+ * IRQL: DISPATCH_LEVEL, controller lock held.
  */
 VOID XhciSlotDrainSettled(PXHCI_EXTENSION ext);
 
 /*
- * The command engine's three notifications, all called with the controller lock
- * held from src/xhci_cmd.c.
- *
- * `XhciSlotCommandEvent` is a completion the engine matched to its own
- * outstanding TRB - so the slot layer needs no address comparison of its own,
- * only the owner it recorded before submitting. `XhciSlotCommandLost` is every
- * other way an outstanding command ends: a timeout that turned into an abort, a
- * stopped ring, or the abandon a quiesce performs. Without it a device would sit
- * in ENABLED for the life of the driver waiting for an event that was already
- * given up on.
- *
- * `XhciSlotCommandSlotFatal` is the third, added by audit round 9: a completion
- * code Table 6-90 calls fatal *to the slot* is a statement about the device
- * rather than about the command, so it is answered after the other two have run
- * and is selected by the event's own Slot ID. IRQL: DISPATCH_LEVEL.
+ * The command engine's three notifications (src/xhci_cmd.c).
+ * XhciSlotCommandEvent is a completion the engine matched to its own
+ * outstanding TRB; XhciSlotCommandLost is every other way an outstanding
+ * command ends (a timeout turned abort, a stopped ring, a quiesce's
+ * abandon), which releases the waiter with the loss; XhciSlotCommandSlotFatal
+ * is a completion code Table 6-90 calls fatal to the slot, selected by the
+ * event's own Slot ID. IRQL: DISPATCH_LEVEL (XhciSlotCommandLost:
+ * <= DISPATCH_LEVEL), controller lock held.
  */
 VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext, ULONG completionCode,
                           ULONG control);
@@ -1269,164 +928,19 @@ VOID XhciSlotCommandSlotFatal(PXHCI_EXTENSION ext, ULONG completionCode,
                               ULONG control);
 
 /*
- * The port's two announcements, from inside the refresh that observed them, with
- * the controller lock held.
- *
- * A connect *change* is the teardown trigger in both directions: a disconnect
- * obviously, and a re-connect too, because the device that was there is gone
- * whether or not anything else arrived. Batch 6-0 established that this is the
- * only trigger there is - neither shipping build calls `CloseEndpoint`, and an
- * endpoint is deleted with no callback at all - so slot teardown is derived from
- * the port and from nothing else (task 6-B.5).
- *
- * `XhciSlotPortReset` records which port usbhub is about to enumerate, which is
- * the only thing that can associate the address-0 pipe with a root port - unless
- * the port is already mid-enumeration, in which case the reset is that
- * enumeration's own pre-SET_ADDRESS one and entitles nothing (task 7b-A.1.1).
- * **That is why the caller announces this one first when both changes latch
- * together**: the record the reset would read belongs to the device that just
- * left, and reading it would deny the arriving device a claim.
- * IRQL: DISPATCH_LEVEL.
- */
-VOID XhciSlotPortConnectChanged(PXHCI_EXTENSION ext, ULONG hubPort);
-/*
- * The **second** teardown trigger, and the one the batch 6-V Win98 run added:
- * the caller has taken this port out of service (a disable or a power-off), so
- * whatever is recorded on it is unreachable and must not keep holding the USB
- * address usbport has recycled. Not derived from an observed `PED` = 0 - a port
- * being reset reads that too. IRQL: DISPATCH_LEVEL, controller lock held.
- */
-/*
- * The software half of the same event, and the half that must not wait: usbport
- * has destroyed its device object and freed the USB address, which is true the
- * moment the callback arrives whatever the PORTSC write did. Announced
- * unconditionally; `XhciSlotPortDisabled` is the release that follows once the
- * port is observed down. IRQL: DISPATCH_LEVEL, controller lock held.
- */
-VOID XhciSlotPortDisowned(PXHCI_EXTENSION ext, ULONG hubPort);
-VOID XhciSlotPortDisabled(PXHCI_EXTENSION ext, ULONG hubPort);
-/*
- * Whether any device record is on the port or behind it (every state but FREE
- * and GONE, disowned records included). With none, a disown has nothing the
- * controller could still be reading to protect, so it settles without waiting
- * for PED or PP to confirm (round 6: QEMU never clears PED on a disable write,
- * and the wait held every virtual-hub port-1 reset for ever - design record 12
- * section 3.3). IRQL: DISPATCH_LEVEL, controller lock held.
- */
-ULONG XhciSlotPortHasRecords(PXHCI_EXTENSION ext, ULONG hubPort);
-/*
- * Whether every record on the port or behind it is DISOWNED and idle - no
- * transfer queued or TRB outstanding on any endpoint, no command outstanding or
- * owed, no intercepted SET_ADDRESS held - and 1 when there is none. With every
- * record idle a disown settles unconfirmed too: the release it then runs
- * proves the slot gone from the controller itself, by Stop Endpoint and
- * Disable Slot (round 7; design record 12 section 3.3). IRQL: DISPATCH_LEVEL,
- * controller lock held.
- */
-ULONG XhciSlotPortRecordsDisownedIdle(PXHCI_EXTENSION ext, ULONG hubPort);
-VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort);
-
-/*
- * Task 24.3's virtual hubs (design record 12), where the root-hub half
- * (src/xhci_rh.c) and the device half (src/xhci_slot.c) meet. Every one is
- * called with the controller lock held, and the caller owes
- * XhciRootHubDeferredWork after releasing it - or, inside a callback usbport
- * makes under its EpList lock, XhciRootHubDeferredArms - both of which reach
- * XhciSlotDeferredWork, where any completion these owe is delivered.
- *
- * `XhciSlotVhubPipe` completes `hubPort`'s held status-change transfer: with
- * `cancel`, as cancelled; without, with its one change byte if port 1 has a
- * change and the hub is configured, and not at all otherwise (section 3.4).
- * `XhciSlotVhubUnbind` is usbport letting go of the hub's pipes - the held
- * transfer cancelled and both bindings dropped. `XhciRhVhubPort1Feature` and
- * `XhciRhVhubPort1Status` are the device half's two ways into the physical
- * port, for the port-1 rows of section 3.3.
- *
- * IRQL: DISPATCH_LEVEL, controller lock held.
- */
-VOID XhciSlotVhubPipe(PXHCI_EXTENSION ext, ULONG hubPort, ULONG cancel);
-VOID XhciSlotVhubUnbind(PXHCI_EXTENSION ext, ULONG hubPort);
-MPSTATUS XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
-                                ULONG hubPort,
-                                ULONG set,
-                                ULONG selector);
-VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
-                           ULONG hubPort,
-                           ULONG *status,
-                           ULONG *change);
-
-/*
- * Drive the command chain and pay usbport what the lock-held paths decided:
- * issue the next owed command, complete retired transfers, and ask for the
- * endpoint retries that are owed.
- *
- * **Call only with the controller lock released** - it submits commands (which
- * take the lock) and calls usbport services. Idempotent and cheap when nothing
- * is owed, which is what lets every caller that might have decided something
- * just call it. `armMode` (XHCI_ARM_*) is the caller's context, carried to the
- * watchdog of any command the pass submits; an UNLOCKED pass first makes the
- * watchdog arm a DEFER one left owed (XhciCommandDrainOwedArm).
- * IRQL: <= DISPATCH_LEVEL.
+ * Complete the URB records the drain retired (HcdIoDeferred, hcd_io.c).
+ * XhciSlotDeferredWorkForced is the lifecycle paths' call (suspend, stop,
+ * resume, recovery). `armMode` (XHCI_ARM_*) is the caller's context.
+ * IRQL: <= DISPATCH_LEVEL, controller lock released.
  */
 VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext, ULONG armMode);
-
-/*
- * Bracket a `SubmitTransfer` callback. Between them `XhciSlotDeferredWork` does
- * everything it normally does *except* deliver completions to usbport, which
- * would hand back a transfer record usbport writes to again after this callback
- * returns (XHCI_EXTENSION.SubmitDepth carries the call site and the fault).
- * Held completions stay on the list and are delivered by the next event DPC or
- * by XhciSlotPoll.
- *
- * Call with the controller lock released, once each and in order, around the
- * one call usbport makes. IRQL: <= DISPATCH_LEVEL.
- */
-VOID XhciSlotEnterSubmit(PXHCI_EXTENSION ext);
-VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext);
-/*
- * XhciSlotDeferredWork from inside a callback usbport makes under its EpList
- * lock - PollEndpoint, AbortTransfer, SetEndpointState - which on the
- * Version 300 tier are the only contexts a completion may be handed over
- * from (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`), naming the endpoint
- * whose lock usbport holds, so that under
- * `XHCI_EXTENSION.DeliverPerEndpointOnly` only that endpoint's completions are
- * handed over. `endpointExtension` is usbport's extension for it. Always an
- * XHCI_ARM_DEFER context: usbport holds its MP-call lock and EpList there.
- * SubmitTransfer is under that lock too and does not use this: its own hold
- * parks every completion until the callback returns.
- *
- * *(There was an endpoint-less `XhciSlotDeferredWorkLocked` beside this until
- * the 2026-09-16 audit's B9. Every caller passes an endpoint, so it had no
- * call site; what it had was four comments and two documents naming it as
- * though it were the one in use.)*
- *
- * IRQL: DISPATCH_LEVEL, controller lock not held.
- */
-VOID XhciSlotDeferredWorkForEndpoint(PXHCI_EXTENSION ext,
-                                     PVOID endpointExtension);
-/*
- * XhciSlotDeferredWork with the tier's delivery gate overridden: for the
- * lifecycle paths (suspend, stop, resume, recovery), where usbport's own
- * deliverers are gated off and a completion left parked would sit until the
- * far side, and for the poll's fallback. `armMode` as XhciSlotDeferredWork:
- * UNLOCKED but for the recovery, which runs from a timer callback.
- * IRQL: <= DISPATCH_LEVEL, controller lock not held.
- */
 VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext, ULONG armMode);
 
 /*
- * The device half of usbport's CheckController poll: age the outstanding command
- * so that one which lost its watchdog is recovered rather than waited on for
- * ever. Ends by calling XhciSlotDeferredWork. IRQL: DISPATCH_LEVEL, controller
- * lock released.
- */
-VOID XhciSlotPoll(PXHCI_EXTENSION ext);
-
-/*
- * After a *successful* restore (task 6-B.6's resume path): take back every
- * quiesce chain that was FAILED only because the controller was unavailable
- * (XHCI_EPQ_UNAVAILABLE - Phase 7 review, B3), and re-arm what each record
- * still says it needs. IRQL: <= DISPATCH_LEVEL, controller lock released.
+ * After a *successful* restore (task 6-B.6's resume path). The miniport took
+ * back its quiesce chains here; the HCD's device thread settles its devices
+ * itself, and this returns at once. IRQL: <= DISPATCH_LEVEL, controller lock
+ * released.
  */
 VOID XhciSlotResumeSweep(PXHCI_EXTENSION ext);
 
@@ -1592,8 +1106,9 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped);
 #define XHCI_COMMAND_AGE_MS      32000UL
 
 /*
- * The same detector one layer up: how long a *device* command may survive
- * before src/xhci_slot.c concludes nothing is going to finish it.
+ * The same detector one layer up: how long a *device* command could survive
+ * before the miniport's slot layer (xhci_slot.c, deleted 2026-10-02) concluded
+ * nothing was going to finish it. Nothing under the HCD reads it.
  *
  * Deliberately **longer** than the engine's own bound, and defined beside it so
  * the relationship is one line rather than two files agreeing by accident. This
@@ -1677,7 +1192,7 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped);
 #define XHCI_RECOVERY_MAX_ATTEMPTS  3UL
 /*
  * How many health polls an armed recovery callback may go undelivered before
- * the arming is declared lost and re-requested (the 2026-09-05 audit's F2).
+ * the arming is declared lost and re-requested (revised 2026-09-05).
  * `UsbPortRequestAsyncCallback` answers 0 on its own pool-allocation failure
  * as well as on success, so a lost arming is invisible at the call; the poll
  * is the one periodic context that survives the latch, and twenty of them at
@@ -1793,9 +1308,10 @@ ULONG XhciControllerUpdateFlags(PXHCI_EXTENSION ext,
  * exists to route around - per-line `DbgPrint` from DPC and ISR contexts is
  * what bugchecks Win98 on real hardware (task 12.2) - so the always-on producer
  * set must be reachable from a `release` build and must never print. These are
- * it. *(This said "both builds" and named debug-build `DbgPrint` until
- * a later review; there are three flavours since task 13-L.1 and the per-line trace
- * is `qemu`'s alone, so shipping `debug` has none of it to reproduce.)*
+ * it. *(This said "both builds" and named debug-build `DbgPrint` until a
+ * later revision; there are three flavours since task 13-L.1 and the per-line
+ * trace is `qemu`'s alone, so shipping `debug` has none of it to
+ * reproduce.)*
  *
  * Both refuse a NULL or unsignatured extension, and both are silent unless the
  * switch in the driver's own software key turned the ring on, so a call site
@@ -1813,11 +1329,12 @@ ULONG XhciControllerUpdateFlags(PXHCI_EXTENSION ext,
  * stranger pastes into a public issue - is built out of the ring. Logging an
  * address through the ordinary form puts it in a level-2 capture and defeats
  * that boundary wherever it is documented, which is what two of these call
- * sites did until the snapshot-value merge. The refusal is counted in `Suppressed` like any
- * other. *(This block still named the pre-merge rungs - addresses at 3,
- * ordinary records at 1 - until the post-Phase 13 review rounds; the snapshot-value merge of
- * `XhciLogSnapshot` into the ladder shifted every one of them by one, and
- * `XhciLogAppendAddress` tests `XHCI_LOG_VERBOSITY_FULL`.)*
+ * sites did until the snapshot-value merge. The refusal is counted in
+ * `Suppressed` like any other. *(This block still named the pre-merge rungs -
+ * addresses at 3, ordinary records at 1 - until after Phase 13; the
+ * snapshot-value merge of `XhciLogSnapshot` into the ladder shifted every one
+ * of them by one, and `XhciLogAppendAddress` tests
+ * `XHCI_LOG_VERBOSITY_FULL`.)*
  *
  * There is deliberately no `Locked` twin of it. Both of the sites that need it
  * are on the start path and neither holds the lock; adding one before it is

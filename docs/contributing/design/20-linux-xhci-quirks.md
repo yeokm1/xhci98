@@ -8,12 +8,10 @@ and one fix to the driver's endpoint bookkeeping the survey exposed
 
 Revision 7, 2026-10-14, carries the owner's decision of that day on a
 STALLed SET_INTERFACE at an interface with one alternate setting (section
-5.3, step 4; section 9). Revision 6, the same day, answered review round 4
-(section 11); revision 5,
-the same day, answered round 3; revision 4,
-2026-10-13, answered round 2; revision 3,
-the same day, answered review round 1 with the
-owner's rulings on it (section 9). Revision 0 (first committed as
+5.3, step 4; section 9). Revisions 3 to 6 (2026-10-13 to 2026-10-14)
+answered the reviews of revisions 1, 3, 4 and 5, revision 3 with the
+owner's rulings (section 9); section 11 lists what each review raised and
+where it is answered. Revision 0 (first committed as
 `c06eda96`, rebased since) was the survey alone, with the decisions open;
 revision 1 folded in the owner's decisions; revision 2 the owner's later
 answers on value 2, the task's renumbering from 38.11 to 38.10 (commits
@@ -46,7 +44,7 @@ the quirks; section 9 is the owner's decisions.
 What it is not:
 
 - **Not the code.** Sections 4 and 5 say where in this driver each change
-  acts; the implementation follows review.
+  acts; the implementation follows the record.
 - **Not a copy.** The survey is facts with `file:line` citations at the
   pinned commit. No Linux code is copied into this record. The
   implementation may adapt Linux's code under the conditions of
@@ -131,7 +129,7 @@ against that copy):
 **Owner, 2026-10-13:** a platform whose firmware has no Compatibility
 Support Module (no legacy BIOS boot) cannot run any operating system this
 driver supports, so a quirk for a controller found only on such platforms
-is not applicable. **And** (owner, the same day, on review round 1): a
+is not applicable. **And** (owner, 2026-10-13, revision 3): a
 platform whose CSM is not established is **deferred pending platform
 evidence**, not "not applicable". So each id below is one of: applicable
 (a CSM read on a machine, or not a platform at all); not applicable (the
@@ -198,7 +196,7 @@ beside it.
 | `XHCI_AVOID_BEI` | `xhci-pci.c:345-349` | every 8086 **(h)** | `xhci-ring.c:4048-4049`: BEI cleared on every eighth isochronous TD | BEI is never set (`xhci_xfer.c`, the isochronous TD builder: every TD carries IOC) |
 | `XHCI_NO_SOFT_RETRY` | `xhci-pci.c:418-425`, `488-491` | 1B6F:7023, 1B6F:7052, 1022:43B9, 1022:43BB | `xhci-ring.c:2529-2533`: no soft retry | the same four ids are excluded from 35-T.2's soft retry (`xhci_tol.c` `XhciTolNoSoftRetry`; record 17 section 4.2) |
 | `XHCI_LIMIT_ENDPOINT_INTERVAL_9` on the AMD ids | `xhci-pci.c:293-302` | 1022:13ED, 13EE, 148C, 15D4, 15D5, 15E0, 15E1, 15E5 | `xhci-mem.c:1452-1458`: interrupt and isochronous Interval 9 or more programmed as 8 | `XhciIntervalCap` 1 caps every 1022 controller, wider than Linux's list, interrupt endpoints only: isochronous ones are not capped, by the owner's decision of 2026-10-06 (record 17 section 4.7). Q11 adds the one id it missed |
-| `XHCI_EP_LIMIT_QUIRK` | `xhci-pci.c:350-353` | 8086:1E31 **(h)** | `xhci.c:2264-2282`, `4202-4214` and the release paths: at most 64 active endpoint contexts, EP0s included | **covered once section 5's fix lands, not before** (review round 1): today a failed Configure Endpoint or SET_INTERFACE leaves endpoints enabled whose pool rings were returned, so the pool does not bound the enabled contexts. With section 5 a pool ring is held until a proof shows the controller has relinquished that allocation (section 5.2), and 32 slots' EP0s (`XHCI_MAX_SLOTS`) plus 32 pooled rings (`XHCI_MAX_POOL_RINGS`) bound the enabled contexts at 64; no quirk of its own (owner, 2026-10-13) |
+| `XHCI_EP_LIMIT_QUIRK` | `xhci-pci.c:350-353` | 8086:1E31 **(h)** | `xhci.c:2264-2282`, `4202-4214` and the release paths: at most 64 active endpoint contexts, EP0s included | **covered once section 5's fix lands, not before** (revision 3): today a failed Configure Endpoint or SET_INTERFACE leaves endpoints enabled whose pool rings were returned, so the pool does not bound the enabled contexts. With section 5 a pool ring is held until a proof shows the controller has relinquished that allocation (section 5.2), and 32 slots' EP0s (`XHCI_MAX_SLOTS`) plus 32 pooled rings (`XHCI_MAX_POOL_RINGS`) bound the enabled contexts at 64; no quirk of its own (owner, 2026-10-13) |
 | `XHCI_SNPS_BROKEN_SUSPEND` | `xhci-pci.c:322-324` | 1022:15E0, 1022:15E1 | `xhci.c:1025-1046`: a save that never clears SSS accepted, and the resume re-initializes | a save that does not complete leaves no valid state (`xhci_init.c` `xhciSaveState`), and the resume then re-initializes - the same end |
 | `XHCI_NO_64BIT_SUPPORT` | `xhci-pci.c:462-470` | 1B21:1142, 1242, 2142, 3242 | `xhci.c:5515-5516`: AC64 ignored, 32-bit DMA | every address is below 4 GB and every high dword written 0 (AGENTS.md, "No 64-bit DMA") |
 | `XHCI_U2_DISABLE_WAKE` | `xhci-pci.c:334-339` | 1022:43B9, 43BA, 43BB, 43BC | `xhci-hub.c:1776-1781` with `pci-quirks.c:506-589`: no wake bits on a USB 2.0 port the firmware disabled | no port wake bit is ever set (`PORTSC` WCE, WDE and WOE are defined in `xhci.h` and written by nothing), and the controller never arms system wake (section 3.4) |
@@ -214,7 +212,7 @@ beside it.
 | Q15, the forced BIOS handoff | `pci-quirks.c:1190-1196` | 104C:8241 **(h)**, 1912:0014 **(h)**: OS Owned set and BIOS Owned cleared in one write. **Dropped** (owner's condition, 2026-10-13: taken only if xHCI 1.2c permits the OS to clear BIOS Owned). Table 7-4 (p.478) gives bit 16 the attribute RW, but assigns it to the BIOS: "The BIOS sets this bit to establish ownership of the xHC. System BIOS will set this bit to a '0' in response to a request for ownership of the xHC by system software". Section 4.22.1 (p.309-310) gives the OS one action - set OS Owned and wait for BIOS Owned to read 0, for no more than a second - and no step in which the OS clears BIOS Owned. So the specification's protocol does not provide for it, though the register would accept the write. (The handoff's comment in `xhciBiosHandoff` that bit 16 is "read-only from the OS side too" overstates the table's RW; a wording fix at implementation) |
 | Q18, `XHCI_SW_BW_CHECKING` | `xhci-pci.c:354` | 8086:1E31 **(h)**: Linux keeps its own periodic bandwidth tables (`xhci.c:2996-3003` and the reservation code behind it) because the controller admits schedules it cannot serve. **Not taken** (owner): a task of its own if a report needs it. Known limitation, stated in the README: on 1E31 the driver relies on the controller's own admission, which Linux holds to be insufficient there, so an over-subscribed periodic schedule may lose data instead of being refused |
 | Q19, `XHCI_AMD_PLL_FIX` | `xhci-pci.c:311-313` | every 1022 xHCI on an SB700 (revision 3Bh or below), SB800, Hudson-2 or Bolton chipset (`pci-quirks.c:153-194`, `209-287`): chipset power management held off while isochronous requests are queued (`pci-quirks.c:340-455`; `xhci-ring.c:832-837`, `4209-4212`), through I/O ports CD6h and CD7h and the northbridge's configuration space. **Not taken** (owner): a task of its own if a report needs it. It needs port-I/O imports, and `HAL.dll!WRITE_PORT_UCHAR` is the import kept out of the shipping flavours because defect 2b's cause is not established (AGENTS.md, "Build flavours"); it writes devices other than the xHCI function; and these FCH parts' HCIVERSION is not in the mirror |
-| Q20, `XHCI_CDNS_SCTX_QUIRK` | `xhci-pci.c:506-508` | 17CD:0200 **(h)**: two reserved dwords of a stream context cleared after Set TR Dequeue (`xhci-ring.c:1490-1502`). **Not taken as such** (owner, on review round 1): the id is added to Q2's `XhciStreamsOff` list instead, so the driver never gives that controller a stream context to corrupt and writes no stream context |
+| Q20, `XHCI_CDNS_SCTX_QUIRK` | `xhci-pci.c:506-508` | 17CD:0200 **(h)**: two reserved dwords of a stream context cleared after Set TR Dequeue (`xhci-ring.c:1490-1502`). **Not taken as such** (owner, revision 3): the id is added to Q2's `XhciStreamsOff` list instead, so the driver never gives that controller a stream context to corrupt and writes no stream context |
 | `XHCI_LINK_TRB_QUIRK` | `xhci.c:5489-5492` | HCIVERSION 0.95 only, and only with a module parameter that defaults to 0. This driver refuses a controller below 1.0 (`xhci_caps.c` `XhciCheckCapDword0`, `XHCI_HC_BAD_VERSION`); task 38.11 moves the floor to 0.96 (owner, 2026-10-13, design record 17 section 4.14), which still refuses 0.95 |
 | `XHCI_AMD_0x96_HOST` | `xhci-pci.c:308-309` | HCIVERSION 0.96 only (its use, `xhci.h:1782-1786`: isochronous Link TRBs kept chained). **Not taken** (owner, 2026-10-13): with task 38.11 the 0.96 controllers start, driven as 1.0 ones but for the TD Size field, and the 0.96-era quirks are not taken there |
 | `XHCI_NEC_HOST` | `xhci-pci.c:290-291` | every 1033 **(h)**: a vendor Get Firmware command at start whose answer is only logged (`xhci.c:652-663`, `xhci-ring.c:1683-1694`, `1935-1941`), and isochronous Link TRBs kept chained (`xhci.h:1779-1786`). The command is diagnostic. **The chaining is not taken** (owner, 2026-10-13, with task 38.11). Linux keys both on the vendor alone, whatever the version, though its comment names "0.96 hardware from AMD and NEC"; that every 1033 part is 0.96 is an assumption this survey does not establish, and the decision does not rest on it. Note (owner, 2026-10-14): Linux also rings the command doorbell right after Run on these hosts (`xhci.c:606-607`) and treats vendor event type 48 as a command completion (`xhci-ring.c:1935-1941`, `TRB_NEC_CMD_COMP` at `xhci.h:1170`); this driver issues no vendor command, and its first command after Run, the No Op self-test, rings doorbell 0 anyway, so neither is taken |
@@ -558,8 +556,8 @@ one). Default 1.
 Linux gives these parts three more bits: Q2's and Q3's lists include them,
 and the soft-retry exclusion is covered (section 3.2). Its third
 `XHCI_ETRON_HOST` behaviour, a Reset Device replaced by Disable Slot and a
-new slot (`xhci.c:3974-3986`), is **left as it is** (owner, on review round
-1): `RESET_PORT` keeps issuing Reset Device here. `XHCIQUAL` marks both
+new slot (`xhci.c:3974-3986`), is **left as it is** (owner, revision
+3): `RESET_PORT` keeps issuing Reset Device here. `XHCIQUAL` marks both
 parts `QF_AVOID`, the project's own verdict.
 
 ### 4.14 Q14c, `XhciIsochSpuriousSuccess` (Etron, `XHCI_ETRON_HOST`)
@@ -602,7 +600,7 @@ is read as 1 and logged. Default 1. Q3 also lists 15E5.
 
 ## 5. Endpoint rings held until the controller drops them
 
-### 5.1 What review round 1 found
+### 5.1 What the review of revision 1 found
 
 A pool ring goes back to the pool in `hcdCfgPipeFree`
 (`XhciPoolRelease`), and the driver frees pipes at two points where the
@@ -1012,8 +1010,8 @@ answered refused (Resource Error) at step 3 (`arg` 0) or at the rollback
 the style of the values already there (`XhciIntelIrqRoute`,
 `XhciIntelPortSwitch`, `XhciIntervalCap`, `XhciAvgTrbEsit`,
 `XhciUsb2HubSpeedFallback`), with the Linux flag given beside each here and
-in `XHCISNAP`; those five keep their names. The names, as amended on
-review round 1 (owner):
+in `XHCISNAP`; those five keep their names. The names, as amended in
+revision 3 (owner):
 
 | Value | Linux flag | Effect | Default | 2 offered |
 |---|---|---|---|---|
@@ -1196,7 +1194,7 @@ From revision 0's open list, each with its recommendation then:
 - **Naming.** Named for the effect in the style of the existing values,
   not `XhciQuirk<LinuxName>`; the Linux flag beside each in this record and
   in `XHCISNAP`; the existing five not renamed. (Recommended: Linux-derived
-  names; not taken.) Amended on review round 1: `XhciIntelShutdownToEhci`,
+  names; not taken.) Amended in revision 3: `XhciIntelShutdownToEhci`,
   `XhciSuspendHaltDelay`, `XhciSuspendHaltTimeout`,
   `XhciAsmediaFlowControl`, the Etron controls split, and the AMD bit named
   without implying its meaning.
@@ -1207,7 +1205,7 @@ From revision 0's open list, each with its recommendation then:
   0.96-era quirks - NEC's isochronous chaining, the AMD 0x96 rules, the
   0.95 link-TRB quirk - are not taken (section 3.3).
 - **CSM.** A platform without a CSM cannot run a supported system, so its
-  quirks are not applicable; on review round 1, a platform whose CSM is not
+  quirks are not applicable; in revision 3, a platform whose CSM is not
   established is deferred pending platform evidence, not "not applicable"
   (section 3.0).
 - **Value 2** (later the same day): offered only where the fix is generic
@@ -1225,17 +1223,17 @@ From revision 0's open list, each with its recommendation then:
   on. **Q10** taken, interrupt endpoints only, on. **Q11** folded into
   `XhciIntervalCap`. **Q12** taken, on, the Polling half. **Q13** taken,
   gated, on. **Q14** (a) and (c) taken, on; (b) - first a refused
-  `RESET_PORT` - **left as it is** on review round 1 (no refusal, no slot
+  `RESET_PORT` - **left as it is** in revision 3 (no refusal, no slot
   rebuild). **Q15** taken only if xHCI 1.2c permits the OS to clear BIOS
   Owned - it does not, so dropped. **Q17** deferred pending platform
-  evidence (round 1; it was "not applicable"). **Q18, Q19** not taken, each
+  evidence (revision 3; it was "not applicable"). **Q18, Q19** not taken, each
   a task of its own if a report needs it. **Q20** not taken as such; its id
-  added to `XhciStreamsOff` (round 1).
-- **The endpoint rings** (round 1): fixed in 38.10 the Linux way (section
+  added to `XhciStreamsOff` (revision 3).
+- **The endpoint rings** (revision 3): fixed in 38.10 the Linux way (section
   5), so Panther Point's 64-endpoint limit is bounded by the pool with no
   quirk of its own. The owner's instruction to re-instate the old
   alternate setting after a failed SET_INTERFACE is carried out where it is
-  known to be safe (review round 2): on a SET_INTERFACE the device STALLed,
+  known to be safe (revision 4): on a SET_INTERFACE the device STALLed,
   with the device's toggles restarted to match; not on an outcome that was
   not established, nor in the function select, where some interfaces may
   already have moved, nor for a setting with streams open (section 5.3,
@@ -1282,73 +1280,75 @@ At implementation:
   commit, so section 2.1's **(h)** values and section 5.3's citation rest
   on it (changes no pin).
 
-## 11. Review round 1, and where each finding is answered
+## 11. What each review raised, and where it is answered
 
-Round 1 ran on revision 1 (`aee03882` after rebasing).
+The review of revision 1 (`aee03882` after rebasing), answered in
+revision 3.
 
-| Finding | Answer |
+| Raised | Answer |
 |---|---|
-| P1-1: the 64-endpoint "covered" claim false; rings returned while endpoints may be enabled | section 5 (owner: fixed in 38.10 the Linux way); section 3.2's row rewritten |
-| P1-2: a refused `RESET_PORT` does not escalate | Q14's (b) left as it is (owner); section 4.13 |
-| P2-3: Q9's hook at DISPATCH_LEVEL and missing the restore; its cost | section 4.8 |
-| P2-4: Q1 needs early identity and a transport-decision input | section 4.1 |
-| P2-5: the CSM exclusions | section 3.0 (owner: deferred pending platform evidence); Q17 in section 3.3 |
-| P2-6: Q5 needs a proven halt | section 4.5 |
-| P2-7: Q16's resource bound | section 4.15 |
-| P2-8: the Sony exemption, the EHCI test, the 184E and bcm2711 exemptions | sections 2.2, 3.2 (switchover row), 3.3 (early-handoff row), 4.4 |
-| P3-9: LPM flags apart; NEC applicability; Q14c's duplicate; the CSM "yes" row | section 3.3 (LPM rows, NEC row), section 4.14, section 3.0 (read and not-read rows) |
-| P3-10: the diagnostic states; the shutdown result across a boot | section 6.4 |
+| P1: the 64-endpoint "covered" claim false; rings returned while endpoints may be enabled | section 5 (owner: fixed in 38.10 the Linux way); section 3.2's row rewritten |
+| P1: a refused `RESET_PORT` does not escalate | Q14's (b) left as it is (owner); section 4.13 |
+| P2: Q9's hook at DISPATCH_LEVEL and missing the restore; its cost | section 4.8 |
+| P2: Q1 needs early identity and a transport-decision input | section 4.1 |
+| P2: the CSM exclusions | section 3.0 (owner: deferred pending platform evidence); Q17 in section 3.3 |
+| P2: Q5 needs a proven halt | section 4.5 |
+| P2: Q16's resource bound | section 4.15 |
+| P2: the Sony exemption, the EHCI test, the 184E and bcm2711 exemptions | sections 2.2, 3.2 (switchover row), 3.3 (early-handoff row), 4.4 |
+| P3: LPM flags apart; NEC applicability; Q14c's duplicate; the CSM "yes" row | section 3.3 (LPM rows, NEC row), section 4.14, section 3.0 (read and not-read rows) |
+| P3: the diagnostic states; the shutdown result across a boot | section 6.4 |
 | Names (Part B) | section 6.1 (owner took them) |
 | Q20 (Part B) | section 3.3 (owner: the id joins `XhciStreamsOff`) |
 
-Round 2 ran on revision 3 (`7c824cfc`).
+The review of revision 3 (`7c824cfc`), answered in revision 4.
 
-| Finding | Answer |
+| Raised | Answer |
 |---|---|
-| P1-1: an unknown Configure Endpoint outcome treated as a refusal | section 5.2 (four outcomes; unknown keeps every allocation owned until the recovery's HCRST) |
-| P1-2: reattaching cancelled old pipes could restart abandoned TDs | section 5.3, step 1 (the reusable abort, `hcdCfgAbortPaused`, before detaching) |
-| P1-3: the rollback did not establish device and controller agreement | section 5.3, step 4 (re-instated only on a STALL, with CLEAR_FEATURE(ENDPOINT_HALT) restarting the device's toggles; not on an outcome not established; not with streams open); section 5.4 (no rollback in the function select) |
-| P2-4: the failed-select handle contract | section 5.3 (old pipe objects kept and reattached with their own handles; the URB's pipe entries filled only on success) |
-| P2-5: "proven Disabled" is the wrong predicate for a replacement | section 5.2 (ownership per allocation - new, owned, superseded - applied to the named allocations before publication) |
-| P2-6: Q1's identity read after delivery is settled; AddDevice before the attach | section 4.1 |
-| P2-7: Q5's live-mapping guard | section 4.5 |
-| P2-8: the shutdown's records not flushed | section 6.4 (a bounded thread flush after the gate is left) |
-| P3-9: the CSM rule against Q7 and Q16 | section 3.0 |
-| P3-10: the HCIVERSION-keyed bits | section 6.2 |
+| P1: an unknown Configure Endpoint outcome treated as a refusal | section 5.2 (four outcomes; unknown keeps every allocation owned until the recovery's HCRST) |
+| P1: reattaching cancelled old pipes could restart abandoned TDs | section 5.3, step 1 (the reusable abort, `hcdCfgAbortPaused`, before detaching) |
+| P1: the rollback did not establish device and controller agreement | section 5.3, step 4 (re-instated only on a STALL, with CLEAR_FEATURE(ENDPOINT_HALT) restarting the device's toggles; not on an outcome not established; not with streams open); section 5.4 (no rollback in the function select) |
+| P2: the failed-select handle contract | section 5.3 (old pipe objects kept and reattached with their own handles; the URB's pipe entries filled only on success) |
+| P2: "proven Disabled" is the wrong predicate for a replacement | section 5.2 (ownership per allocation - new, owned, superseded - applied to the named allocations before publication) |
+| P2: Q1's identity read after delivery is settled; AddDevice before the attach | section 4.1 |
+| P2: Q5's live-mapping guard | section 4.5 |
+| P2: the shutdown's records not flushed | section 6.4 (a bounded thread flush after the gate is left) |
+| P3: the CSM rule against Q7 and Q16 | section 3.0 |
+| P3: the HCIVERSION-keyed bits | section 6.2 |
 
-Round 3 ran on revision 4 (`c7b08912`); it agreed with the STALL-only
-rollback, subject to its findings 1 and 2.
+The review of revision 4 (`c7b08912`), answered in revision 5; it agreed
+with the STALL-only rollback, subject to the first two rows below.
 
-| Finding | Answer |
+| Raised | Answer |
 |---|---|
-| P1-1: a CLEAR_FEATURE failure after a successful rollback freed installed rings | section 5.3, step 4 (ownership decided by the rollback's outcome at once; a later CLEAR_FEATURE failure leaves the old endpoints owned, closed and stale) and section 5.2 (ownership changes on a command's completion only) |
-| P1-2: requests admitted between the abort and the detach | section 5.3, step 1 (unpublish, then `HcdIoDrainPipe` and `HcdIoWaitPipe`; reattach releases only the transaction's pause) |
-| P2-3: the per-device cap of four refuses ordinary switches | section 5.2 (a transaction's reservation counted apart from the cap, still reserved in the pool) and section 5.5 |
-| P2-4: a flush generation does not acknowledge the shutdown records | section 6.4 (a ticket the thread captures before it flushes) |
-| P2-5: Q1 loses an established identity on a failed refresh | section 4.1 (the identity kept; none ever established is treated conservatively) |
-| P3-6: "new" defined by completion; the USB 3.2 citation | section 5.2; section 5.3, step 4 |
+| P1: a CLEAR_FEATURE failure after a successful rollback freed installed rings | section 5.3, step 4 (ownership decided by the rollback's outcome at once; a later CLEAR_FEATURE failure leaves the old endpoints owned, closed and stale) and section 5.2 (ownership changes on a command's completion only) |
+| P1: requests admitted between the abort and the detach | section 5.3, step 1 (unpublish, then `HcdIoDrainPipe` and `HcdIoWaitPipe`; reattach releases only the transaction's pause) |
+| P2: the per-device cap of four refuses ordinary switches | section 5.2 (a transaction's reservation counted apart from the cap, still reserved in the pool) and section 5.5 |
+| P2: a flush generation does not acknowledge the shutdown records | section 6.4 (a ticket the thread captures before it flushes) |
+| P2: Q1 loses an established identity on a failed refresh | section 4.1 (the identity kept; none ever established is treated conservatively) |
+| P3: "new" defined by completion; the USB 3.2 citation | section 5.2; section 5.3, step 4 |
 
-Round 4 ran on revision 5 (`8046e1c7`) and found no P1.
+The review of revision 5 (`8046e1c7`), answered in revision 6; it found
+no P1.
 
-| Finding | Answer |
+| Raised | Answer |
 |---|---|
-| P2-1: stale allocations from an earlier failure not in the next transaction's reservation; one `held` count for cap and fairness | section 5.2 (the reservation is the command's full drop set, stale included, fixed before allocation; the cap count and the physical count kept apart; how a failed transaction settles) |
-| P2-2: Q16 without the live-mapping guard | section 4.15 |
-| P3-3: the cost is fairness refusal too | section 5.5 |
-| P3-4: an acknowledged flush is not an emitted record | section 6.4 |
-| P3-5: the survey row's old predicate | section 3.2 (`XHCI_EP_LIMIT_QUIRK` row) |
+| P2: stale allocations from an earlier failure not in the next transaction's reservation; one `held` count for cap and fairness | section 5.2 (the reservation is the command's full drop set, stale included, fixed before allocation; the cap count and the physical count kept apart; how a failed transaction settles) |
+| P2: Q16 without the live-mapping guard | section 4.15 |
+| P3: the cost is fairness refusal too | section 5.5 |
+| P3: an acknowledged flush is not an emitted record | section 6.4 |
+| P3: the survey row's old predicate | section 3.2 (`XHCI_EP_LIMIT_QUIRK` row) |
 
 The owner's amendment of 2026-10-14 (revision 7, section 5.3's
-one-setting STALL) was reviewed on its own before any code, in two
-rounds; round 2 found no P1 or P2.
+one-setting STALL) was reviewed and revised on its own before any code;
+the second pass found no P1 or P2.
 
-| Finding | Answer |
+| Raised | Answer |
 |---|---|
-| Round 1 P2: the request's status on each exit after a failed clear not stated | section 5.3, "What the request answers" |
-| Round 1 P3: the comment above `hcdCfgSelectInterface` still said every failure leaves no pipe | the comment rewritten for the switch as a whole |
-| Round 1 P3: the same-setting sequence reset cited to the Halt sentence | USB 3.2 9.1.1.5 cited beside 9.4.5 |
-| Round 2 P3: `BUFFER_TOO_SMALL` is not turned into `DEVICE_GONE` | section 5.3, the `DEVICE_GONE` row |
-| Round 2 P3: the comment's streams exclusion read as covering a one-setting success | the comment limits it to the rollback |
+| P2: the request's status on each exit after a failed clear not stated | section 5.3, "What the request answers" |
+| P3: the comment above `hcdCfgSelectInterface` still said every failure leaves no pipe | the comment rewritten for the switch as a whole |
+| P3: the same-setting sequence reset cited to the Halt sentence | USB 3.2 9.1.1.5 cited beside 9.4.5 |
+| P3, second pass: `BUFFER_TOO_SMALL` is not turned into `DEVICE_GONE` | section 5.3, the `DEVICE_GONE` row |
+| P3, second pass: the comment's streams exclusion read as covering a one-setting success | the comment limits it to the rollback |
 
 ## 12. Provenance of this record
 
@@ -1446,7 +1446,7 @@ The revision (configuration byte 08h) is read at each start and logged as
   read differs from the identity Q1 used. A strip the filter made at the
   quirk's asking is kept on the FDO (`MsiAvoidFilterStrips`) and counted,
   with the outcome done, by the next start, since that start is then given
-  the line and its own decision has nothing to refuse (review round 2).
+  the line and its own decision has nothing to refuse.
 - **Q7.** The pause is a 1.5 ms `KeStallExecutionProcessor` stall, bounded
   and exact, not the requested PASSIVE_LEVEL delay of about 1.5 ms that
   section 4.6 describes.
@@ -1458,15 +1458,14 @@ The revision (configuration byte 08h) is read at each start and logged as
   is the outcome (done, or failed with HCH not set).
 - **Q10.** `TiCapped` counts interrupt endpoints capped by it once the
   Configure Endpoint that opens them succeeds, beside the AMD cap's
-  `CapIntervals` (review round 2): `hcdCfgTolerance` marks the endpoint
+  `CapIntervals`: `hcdCfgTolerance` marks the endpoint
   (`Capped` bit 1) and `hcdCfgQuirkCapped` counts it.
 - **Q14c.** The remembered event is the TRB pointer with its reserved low
   bits dropped, as the engine reads it, and is forgotten when that TRB is
   re-let to a new TD or the queue restarts, so a later request's Success at
-  the same place is never taken for the old error's (review rounds 1 and
-  2).
+  the same place is never taken for the old error's.
 - **Q4.** The two registers are written independently; the first failure
-  is the one recorded (review round 1).
+  is the one recorded.
 - **Q12.** After a resume that restored (`Quirk.Restores`, counted by
   `XhciResumeController` on a restore), each USB3 root port's next reading
   is armed (`Link.StuckCheck`) and disarmed after that one reading,
@@ -1490,7 +1489,7 @@ The revision (configuration byte 08h) is read at each start and logged as
   steps, bounded at 500 ms, for the thread to acknowledge it
   (`HcdQuirkFlushAck`, after the `HcdLogFlush` it began with the ticket
   captured); the thread acknowledges with whether that flush emitted any
-  bytes to the sink (`Log.DebugViewBytes` moved: review round 1), so the
+  bytes to the sink (`Log.DebugViewBytes` moved), so the
   outcome is counted as flushed, acknowledged with nothing emitted (the
   sink off, or nothing recorded), or not acknowledged.
 - **Q9 and Q16** count every give-up and every skip (`AsmGiveUps`,

@@ -85,7 +85,7 @@ $fs.Close()
 # `chardev 'probechr' is already in use` - a harness fault wearing a device
 # model's name, which is the failure mode this whole table exists to avoid.
 #
-# **`file` chardevs, not `null`** - the 2026-09-07 audit's H24, and trap 14 in
+# **`file` chardevs, not `null`** - the audit of 2026-09-07, and trap 14 in
 # README.md is the whole reason. `usb-serial` and `usb-braille` put themselves
 # on the bus only when their chardev is OPEN, and a `null` chardev never is:
 # both models realise with `attached=false`, `qom-set attached true` is refused
@@ -109,7 +109,8 @@ $backendArgs = @(
 # Is a device QEMU has realised actually on the bus? `auto_attach = 0` models -
 # the SCSI adapters with no LUN, and the chardev models whose backend is not
 # open - sit in their port with `attached` false, and a guest sees nothing.
-# The matrix runner asks the same question the same way (audit H24).
+# The matrix runner asks the same question the same way (the audit of
+# 2026-09-07).
 #
 function Test-ProbeDeviceAttached {
     param([Parameter(Mandatory = $true)][string]$Id)
@@ -128,7 +129,7 @@ function Test-ProbeDeviceAttached {
     # monitor is not answering. This asks it of every model QEMU has, most of
     # which do not carry it, and treating that silence as a failure would
     # disqualify the majority of the survey. Stated because the difference
-    # reads as an oversight otherwise (the 2026-09-16 audit's D4).
+    # reads as an oversight otherwise (the audit of 2026-09-16).
     return (-not ($state -match "(?i)\bfalse\b"))
 }
 
@@ -164,7 +165,7 @@ $qemuArgs = @(
     "-M", "pc",
     "-m", "64",
     #
-    # **A RAW SOCKET, NOT TELNET** (the 2026-09-07 audit's H25). Every other
+    # **A RAW SOCKET, NOT TELNET** (the audit of 2026-09-07). Every other
     # script here launches with `tcp:...,server=on,wait=off`, and they all talk
     # to it through the same `lib\monitor.ps1` - which reads bytes and strips
     # ANSI escapes and backspaces, and nothing else. A telnet monitor
@@ -290,8 +291,9 @@ try {
                     $row.Status = "attached, invisible"
                     $row.Note = ("device_add returned no error but info usb does not list id={0}" -f $id)
                 } elseif (-not (Test-ProbeDeviceAttached -Id $id)) {
-                    # **On the list is not the same as on the bus** (audit
-                    # H24). A model that realises with `auto_attach = 0` - the
+                    # **On the list is not the same as on the bus** (the
+                    # audit of 2026-09-07). A model that realises with
+                    # `auto_attach = 0` - the
                     # SCSI adapters without a LUN, and the chardev models
                     # whose backend is not open - can be listed by `info usb`
                     # and still be electrically absent, which is what the

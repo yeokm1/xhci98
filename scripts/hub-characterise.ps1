@@ -23,7 +23,7 @@
 #   bMaxPacketSize0  the EP0 max packet size, and for a Full-Speed device
 #                    whether it is 8 (no correction needed) or 16/32/64 (the
 #                    driver addresses at 8 and then issues Evaluate Context).
-#                    Added for batch 13-E's Finding 2.
+#                    Added for batch 13-E.
 #
 # The last three are what task 13-H.1 used to send someone to usbview by hand
 # for; they are here because they decide whether task 13-E.3 clause 3
@@ -632,7 +632,7 @@ if ($Walk) {
         # still prints the summary the walk was run for.
         #
         # **Write-Host throughout, and that is the whole point of the block**
-        # (pre-cut audit, finding B5). After Ctrl+C the pipeline is
+        # (a pre-cut audit). After Ctrl+C the pipeline is
         # already stopping, so the FIRST Write-Output here throws
         # PipelineStoppedException and every line below it dies with it -
         # reproduced on this host. -Seconds defaults to walk-until-Ctrl+C, so

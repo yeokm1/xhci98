@@ -18,7 +18,7 @@ that name their guest.
 
 That is the one structural difference from the six generators that came
 before, each of which carries its own copy of this text, and it is deliberate.
-The 2026-09-07 audit's H28 and J6 are the reason: five copies of the QEMU
+The audit of 2026-09-07 is the reason: five copies of the QEMU
 resolver had drifted apart unnoticed, and two guests born on the same day out
 of one recipe are exactly the pair that would drift next. A per-guest
 difference belongs in a parameter here, never in a second copy of the body.
@@ -327,7 +327,7 @@ function New-Nt6QemuGuest {
             } else {
                 & $qemuImg create -f qcow2 $diskImage $DiskSize | Out-Host
                 # The exit code is read: this used to print "Created" whatever
-                # qemu-img had said (the 2026-09-17 audit's D8).
+                # qemu-img had said (the audit of 2026-09-17).
                 if ($LASTEXITCODE -ne 0) {
                     throw "qemu-img create failed (exit code $LASTEXITCODE) for $diskImage, so no disk image was created."
                 }
@@ -354,7 +354,7 @@ function New-Nt6QemuGuest {
     # QEMU is resolved at RUN time by the launcher, not baked in here: the host
     # that generated a launcher is not always the host that runs it
     # (scripts\local is git-ignored and OneDrive-synced). One resolver for all
-    # the generators, in common.ps1 (the 2026-09-07 audit's H28).
+    # the generators, in common.ps1 (the audit of 2026-09-07).
     $qemuResolve = Get-QemuLauncherResolver -FoundPath $qemuSystemCommand
 
     $accelComment = @()

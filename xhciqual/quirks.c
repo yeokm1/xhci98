@@ -451,7 +451,7 @@ void quirk_report(u16 vid, u16 did, int hciver_ok, u16 hciversion,
         pf("    - HCIVERSION %X.%02X is below xhci98's floor %X.%02X\n",
            hciversion >> 8, hciversion & 0xFF,
            QUIRK_HCI_FLOOR >> 8, QUIRK_HCI_FLOOR & 0xFF);
-        pf("      the driver refuses this controller: none of the above "
+        pf("      refused at every XhciAccept096: none of the above "
            "acts on it\n");
     }
 }

@@ -401,6 +401,14 @@ static void test_remove(void)
     CHECK(!CmNvlinkRemoveRequest(&table, i, 9), "no request on an entry not UP");
     i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
     CHECK(CmNvlinkRemoveRequest(&table, i, 10), "request 10");
+    g = table.Entry[i].LinkGeneration;
+    CHECK_EQ(CmNvlinkPublishUp(&table, 4, 0, TRUE, &o), i,
+             "a fresh exposure over a pending request: the same entry");
+    CHECK_EQ(o, CM_NVLINK_UP_ALREADY, "left as it is (R9a)");
+    CHECK_EQ(table.Entry[i].LinkGeneration, g, "generation unchanged");
+    CHECK_EQ(table.Entry[i].Flags,
+             STOR98LS_IN_USE | STOR98LS_UP | CM_NVLINK_REMOVE_PENDING,
+             "the request still pending");
     CHECK_EQ(CmNvlinkPublishUp(&table, 5, 0, TRUE, &o), 1, "another function");
     CHECK_EQ(CmNvlinkRemoveAnswer(NULL, 0, 1, 1), CM_NVLINK_RM_NONE, "no table");
 }

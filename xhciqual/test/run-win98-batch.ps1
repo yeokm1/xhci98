@@ -126,7 +126,7 @@ foreach ($minute in @("58","59")) {
     }
 }
 
-# Codex round 1 on task 38.1: QUALREP on read-only media. A second floppy,
+# Task 38.1: QUALREP on read-only media. A second floppy,
 # B:, holds only XHCIQUAL.EXE and QUALREP.BAT and is presented read-only,
 # which the floppy controller reports to DOS as a write-protected disk. DOS
 # then asks Abort, Retry, Fail for each write. qualrep_rdonly answers Fail:

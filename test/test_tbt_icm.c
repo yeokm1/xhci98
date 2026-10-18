@@ -1495,7 +1495,7 @@ static void test_reconcile_bounded(void)
 }
 
 
-static void test_round3(void)
+static void test_short_answers_and_retirement(void)
 {
     TBT_ICM_ACTION act[8];
     unsigned long n;
@@ -2002,7 +2002,7 @@ int main(void)
     test_session_boundary();
     test_refresh_reapplies_policy();
     test_reconcile_bounded();
-    test_round3();
+    test_short_answers_and_retirement();
     test_settings();
     test_resume_budget();
     test_lost_and_recover();

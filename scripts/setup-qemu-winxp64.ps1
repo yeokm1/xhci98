@@ -66,7 +66,7 @@ makes the in-box stack place usbport.sys instead - the same escape hatch the
 
 .PARAMETER WinXp64Iso
 The XP Professional x64 SP2 CD image. Empty by default, like every other ISO
-parameter in these scripts (the 2026-09-07 audit's J3): a default naming one
+parameter in these scripts (the audit of 2026-09-07): a default naming one
 host's media is a tracked file that names nothing on any other host. The
 generated launchers carry the "edit this file or pass -WinXp64Iso" guard. The
 run launcher keeps the CD attached when it exists and boots with no CD when it
@@ -206,7 +206,7 @@ Write-Ok "Using CPU model: $Cpu; $MemoryMb MB; monitor port $MonitorPort"
 # QEMU is resolved at RUN time by the launcher, not baked in here: the host
 # that generated a launcher is not always the host that runs it
 # (scripts\local is git-ignored and OneDrive-synced). One resolver for all
-# the generators, in common.ps1 (the 2026-09-07 audit's H28).
+# the generators, in common.ps1 (the audit of 2026-09-07).
 $qemuResolve = Get-QemuLauncherResolver -FoundPath $qemuSystemCommand
 
 $installCmd = Join-Path $LocalScriptDir "qemu-winxp64-install.cmd"

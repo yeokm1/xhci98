@@ -2290,6 +2290,16 @@ typedef BOOL (WINAPI *PFN_MOVEEX)(LPCSTR, LPCSTR, DWORD);
 typedef HWND (WINAPI *PFN_FINDWINDOW)(LPCSTR, LPCSTR);
 typedef BOOL (WINAPI *PFN_POSTMESSAGE)(HWND, UINT, WPARAM, LPARAM);
 
+/* MoveFileExA, looked up at run time like every other NT-only call here:
+ * a static import would load on 98 SE and ME only because their KERNEL32
+ * happens to export a failing stub, and the import check reads module
+ * names, not functions. NULL when the system has none. */
+static PFN_MOVEEX move_ex(void)
+{
+    return (PFN_MOVEEX)GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                      "MoveFileExA");
+}
+
 typedef struct _SHARED_SD {
     SECURITY_DESCRIPTOR Sd;
     SECURITY_ATTRIBUTES Sa;
@@ -4795,6 +4805,7 @@ static int restage_write(void)
     int infs = 0;
     int devsN = 0;
     int ok = 1;
+    PFN_MOVEEX moveEx;
 
     restage_path(path, sizeof(path));
     if (path[0] == '\0') {
@@ -4850,8 +4861,10 @@ static int restage_write(void)
         return 0;
     }
     CloseHandle(h);
-    if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING |
-                                MOVEFILE_WRITE_THROUGH)) {
+    moveEx = move_ex();
+    if (moveEx == NULL ||
+        !moveEx(tmp, path, MOVEFILE_REPLACE_EXISTING |
+                           MOVEFILE_WRITE_THROUGH)) {
         DeleteFileA(tmp);
         return 0;
     }
@@ -7380,6 +7393,7 @@ static void remove_services_and_files(void)
     char path[INST_PATH_CHARS];
     int i;
     int fileOk;
+    PFN_MOVEEX moveEx = move_ex();
 
     if (!opts.List) {
         scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_ALL_ACCESS);
@@ -7455,7 +7469,8 @@ static void remove_services_and_files(void)
         if (DeleteFileA(path)) {
             out("done.\n");
             flagChanged = 1;
-        } else if (MoveFileExA(path, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
+        } else if (moveEx != NULL &&
+                   moveEx(path, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
             out("in use; deleted at the restart.\n");
             flagRestart = 1;
             flagChanged = 1;

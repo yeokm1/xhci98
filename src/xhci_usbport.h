@@ -262,7 +262,7 @@ typedef ULONG RHSTATUS;
  * `ResourceBase` is +8 (`0x28`), `IoSpaceLength` +12 (`0x30`), `StartVA` +16
  * (`0x38`), and `StartPA` and everything after it +20 - `StartPA` at `0x40`,
  * which is the offset M4 measured. *(This said "8 higher from `ShareVector`
- * onward", which is true of no field: the 2026-09-16 audit's B10.)*
+ * onward", which is true of no field; reviewed and revised 2026-09-16.)*
  *
  * **Only two of those are measured.** M4 read `sizeof` = `0x48` and `StartPA`
  * = `0x40` out of the shipping amd64 `usbport.sys`; the rest are what this
@@ -977,8 +977,8 @@ typedef struct _USBPORT_REGISTRATION_PACKET {
  * a reorder inside a group is caught there with a diagnostic that names the
  * field instead of a line number.
  *
- * *(This said test_packet.c pinned **every** field offset, until round 11
- * pointed out that the isochronous block had neither a size assert here nor a
+ * *(This said test_packet.c pinned **every** field offset, until it was
+ * found that the isochronous block had neither a size assert here nor a
  * single offset there. It has both now. The claim is still not "every field of
  * every structure" - the ordinary support structures are pinned by size and by
  * group boundary - so it is written as what it is.)*
@@ -1111,7 +1111,7 @@ XHCI_C_ASSERT(sg_list_element_offset,
               XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElement) == 0x10);
 #endif
 /*
- * The isochronous block had neither of these until the post-Phase 13 review rounds, and the comment
+ * The isochronous block had neither of these until after Phase 13, and the comment
  * above claimed test/test_packet.c pinned every field offset while that file did
  * not mention either structure. It is the block this driver reads at fixed
  * offsets on the strength of a signature word, so an accidental reorder is

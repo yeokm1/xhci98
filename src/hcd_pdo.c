@@ -452,7 +452,7 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
 /* ----------------------------------------------------------------------- */
 
 /*
- * THE LIFECYCLE (Codex review of batch (b), round 1, findings 1-4 and 12).
+ * THE LIFECYCLE (batch (b), reviewed and revised).
  * Only the controller thread lists and unlists a PDO; BusRelations answers
  * mark it, under PdoListLock, in the same hold that copies the list. A PDO is
  *
@@ -553,7 +553,7 @@ static VOID hcdPortNotify(PHCD_CONTROLLER hc, PULONG bits, ULONG port)
 
 /* The one IoDeleteDevice of a PDO. Deleted stays readable while a reference
  * keeps the object, so a later REMOVE completes and deletes nothing again,
- * and touches no controller (Codex review of batch (b), round 2, finding 1). */
+ * and touches no controller (batch (b)). */
 static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
 {
     ULONG keep;
@@ -569,8 +569,7 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
      * the object is kept with its records. */
     keep = !HcdSuspIdleRundown(pdo, 0);
     /* Its interface context forgets it before the extension goes, and no
-     * interface call is inside it then (Codex review of 28-A.1, round 1,
-     * finding 3). */
+     * interface call is inside it then (28-A.1). */
     HcdUrbBusifRelease(pdo);
     /* Its USB device interface off and its link freed (task 36.17): the
      * one place every deletion passes, before the object goes. */
@@ -821,7 +820,7 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pdo->Config = (PUCHAR)HcdPoolAlloc(length);
     if (pdo->Config == NULL) {
         /* Without the configuration the compatible ids would be wrong for
-         * a device whose class is its interfaces' (round 1, finding 13). */
+         * a device whose class is its interfaces'. */
         IoDeleteDevice(obj);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -1049,22 +1048,20 @@ static VOID hcdDormantKeep(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
              * PnP has no devnode to revive it into, and a revived let-go
              * PDO would wait for a cycle its hub's start may have asked
              * before the revival, and lost. Dropped, it is missing at once
-             * and comes back as new PDOs (Codex review of the hub
-             * re-enable fix, round 1). */
+             * and comes back as new PDOs (the hub re-enable fix). */
             keep = 0;
         } else if (pdo->RemoveReceived) {
             /* Disabled in Device Manager and still present (the WDM rule
              * keeps it listed). Behind a hub it is kept with its group and
              * revived still disabled (task 33.4): dropped, it would wait as
-             * gone for an answer only its dormant hub's FDO could give,
-             * and that hub cannot be enumerated again while a port below
-             * it waits - nor may the PDO be taken for absent, since PnP
-             * still holds it present (Codex review of 33.4, round 2,
-             * findings 1 and 2). Under the root hub the root's own answer
-             * settles it, as before 33.4. A function's parent is its
-             * composite parent (task 36.43), dormant with it, so a disabled
-             * function is kept as behind a hub; the parent itself disabled
-             * under the root hub is not. */
+             * gone for an answer only its dormant hub's FDO could give, and
+             * that hub cannot be enumerated again while a port below it waits
+             * - nor may the PDO be taken for absent, since PnP still holds it
+             * present (33.4). Under the root hub the root's own answer settles
+             * it, as before 33.4. A function's parent is its composite parent
+             * (task 36.43), dormant with it, so a disabled function is kept as
+             * behind a hub; the parent itself disabled under the root hub is
+             * not. */
             if (pdo->ParentSerial == 0) {
                 keep = 0;
             }
@@ -1246,9 +1243,9 @@ static ULONG hcdSerialTakenLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
     /* Under another parent (task 33.4), a gone PDO PnP has not yet been
      * told is missing holds the id too: the parent that will report it
      * absent is not the one that reports the newcomer, so the two answers
-     * could present one instance id twice (Codex review of 33.4, final
-     * round, finding 1). Under the same parent one answer does both, as
-     * the move between root ports above relies on. */
+     * could present one instance id twice (33.4). Under the same parent
+     * one answer does both, as the move between root ports above relies
+     * on. */
     for (other = hc->GonePdos; other != NULL; other = other->Next) {
         if (!other->MissingReported && other->Group == other->Serial &&
             other->ParentSerial != pdo->ParentSerial &&
@@ -1312,7 +1309,7 @@ VOID HcdSerialControllerRemove(PHCD_CONTROLLER hc)
 /* Whether a PDO of another controller carries `pdo`'s serial id for its
  * vendor and product id while PnP still holds it as present: listed,
  * present or dormant, or gone and not yet omitted from a relations answer
- * (Codex review of 33.2, round 2, finding 1). Another root hub's answer is
+ * (33.2). Another root hub's answer is
  * not ordered with this one's, so a device moved between controllers
  * faster than that answer takes the location form for that plug rather
  * than reuse an instance id PnP may still see present. hcdSerialLock
@@ -1386,11 +1383,10 @@ static VOID hcdDormantRetireSerialLocked(PHCD_CONTROLLER hc,
  * the group named by `first`'s place (`byPlace`: a group without a serial
  * id whose device read the same serial id as `first`, or none, so a unit
  * on the location form for a duplicate keeps its own and never takes a
- * different unit's - Codex review of 33.2, round 2, finding 2; when every
- * read of `first`'s failed its serial is unknown, not different, and the
- * place and descriptors decide - round 3; likewise when every read of the
- * group's failed and `first` answers the location form too - round 4;
- * XhciFuncReviveByPlace) or by
+ * different unit's - 33.2; when every read of `first`'s failed its serial
+ * is unknown, not different, and the place and descriptors decide;
+ * likewise when every read of the group's failed and `first` answers the
+ * location form too; XhciFuncReviveByPlace) or by
  * `first`'s serial id, exactly. `asLocation`: by place as if `first`
  * answered the location form, as it does once a duplicate's serial id is
  * cleared. NULL for none. PdoListLock held. */
@@ -1457,7 +1453,7 @@ static PHCD_DEVICE_PDO hcdDormantChooseLocked(PHCD_CONTROLLER hc,
         (takenElsewhere || hcdSerialTakenLocked(hc, first, 0))) {
         *clear = 1;
         /* On the location form: a group at this place whose own reads
-         * failed answers the same id (Codex review of 33.2, round 4). */
+         * failed answers the same id (33.2). */
         old = hcdDormantFindLocked(hc, first, 1, 1);
     }
     return old;
@@ -1741,7 +1737,7 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
      * below stays the one that counts: should a dormant group come or go
      * in between, the new PDOs answer "USB Device" for this plug, or the
      * reads ran for nothing; the identity is the decision's either way
-     * (Codex review of the 33.1-33.6 integration, findings 1 and 2). */
+     * (the 33.1-33.6 integration). */
     skipText = first->Hub;
     if (!skipText) {
         KeAcquireSpinLock(&hcdSerialLock, &serialIrql);
@@ -1793,9 +1789,9 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
          * go now; nothing is reported and then removed. Not a failure: the
          * port's machine waits in Present (hcd_enum.c) for the hold
          * service, whose disconnect takes it from there like an unplug or
-         * whose refusal brings it back here, refused in place (Codex
-         * review of Phase 31, round 2, unit C; of the Phase 28-31
-         * integration, finding 2). HcdHoldRequestUsb2 set HoldAsked. */
+         * whose refusal brings it back here, refused in place (Phase 31;
+         * the Phase 28-31 integration). HcdHoldRequestUsb2 set
+         * HoldAsked. */
         XHCI_DBG_VALUE("hcd: sent back to USB 2.0, no PDO, port", dev->Port);
         status = STATUS_SUCCESS;
         goto cleanup;
@@ -1877,7 +1873,7 @@ static VOID hcdUnlinkLocked(PHCD_DEVICE_PDO *head, PHCD_DEVICE_PDO pdo)
  * now. Returns 0 when nothing remains for the port to wait for (no PDO, or
  * every one deleted at once), otherwise the group serial the port must wait
  * on until the relations answer that omits them (HcdDevicePdoExists; the
- * PortPdoRemoved bit only says when to look - round 2, finding 2). The
+ * PortPdoRemoved bit only says when to look). The
  * device record goes with the slot; the PDOs keep nothing of it. Thread, or
  * the stop.
  */
@@ -1929,7 +1925,7 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         } else if (pdo->ParentLetGo || hcdAncestorGoneLocked(hc, pdo)) {
             /* Under a hub PnP has let go of (task 33.4): missing now, since
              * no answer of its parent's FDO can come first, and its port
-             * must not wait for one (Codex review of 33.4, round 1). A PDO
+             * must not wait for one (33.4). A PDO
              * let go of with its hub's removed FDO (HcdDevicePdoLetGo) is
              * one PnP has forgotten the same way. */
             pdo->MissingReported = 1;
@@ -2019,14 +2015,14 @@ static VOID hcdDeleteChain(PHCD_DEVICE_PDO pdo)
 }
 
 /*
- * ORPHANS ON WINDOWS 98 (the Phase 28-31 integration's Codex review, finding
- * 2). An orphan - a device PDO, or the root-hub PDO, whose parent went
- * first while it still awaited its REMOVE - has no controller left to hold
- * it for the next relations answer, so it was deleted inside its REMOVE,
- * exactly the use after free c038326 removed for the attached case. On a
- * system whose configuration manager may send a removed PDO more IRPs (a
- * WDM below 1.10: Windows 98 SE and ME) it is retired to this driver-wide
- * list instead and deleted at the next BusRelations answer of any of this
+ * ORPHANS ON WINDOWS 98 (the Phase 28-31 integration). An orphan - a
+ * device PDO, or the root-hub PDO, whose parent went first while it still
+ * awaited its REMOVE - has no controller left to hold it for the next
+ * relations answer, so it was deleted inside its REMOVE, exactly the use
+ * after free c038326 removed for the attached case. On a system whose
+ * configuration manager may send a removed PDO more IRPs (a WDM below
+ * 1.10: Windows 98 SE and ME) it is retired to this driver-wide list
+ * instead and deleted at the next BusRelations answer of any of this
  * driver's controllers or root hubs - a later pass, as c038326's rule has
  * it - or kept for good, a bounded leak, when none comes. Windows 2000 and
  * later send nothing after a REMOVE, and there it is deleted at once, as
@@ -2046,8 +2042,8 @@ VOID HcdPdoRetireInit(VOID)
 
 /* An orphan's REMOVE, already completed: 1 when it is kept for a later
  * relations answer to delete (always, on Windows 98: the list is linked
- * through the extension, so it never fills - Codex review of the merge,
- * round 2), 0 when the caller deletes it now. IRQL: PASSIVE_LEVEL. */
+ * through the extension, so it never fills), 0 when the caller deletes it
+ * now. IRQL: PASSIVE_LEVEL. */
 ULONG HcdPdoRetire(PDEVICE_OBJECT obj)
 {
     PHCD_COMMON common;
@@ -2100,7 +2096,7 @@ VOID HcdPdoReapRetired(VOID)
  * its port told PDO_REMOVED (the lifecycle above). The marking repeats until
  * nothing more moves, since a hub marked in one sweep frees its children in
  * the next. One hold of PdoListLock for the count, the allocation, the copy
- * and the moves (round 1, finding 3); the PDOs removed before this answer
+ * and the moves; the PDOs removed before this answer
  * are detached in the same hold, so one moved now waits for the next
  * answer. NULL when the pool has nothing, and then nothing moves. IRQL:
  * PASSIVE_LEVEL (the allocation is NonPagedPool, so it is legal under the
@@ -2457,7 +2453,7 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
          * its first request would wait in SlowDeferred for good. Off
          * ACTIVE it starts at D3 with D0 wanted, so the decision resumes
          * the link and writes D0 at ACTIVE (XhciSuspDecide's WantD0;
-         * Codex review of p36-int3, round 1). The thread is the link
+         * p36-int3). The thread is the link
          * machine's, so the state cannot move under this read. */
         if (!HcdSuspLinkActive(dev)) {
             nu->PwrState = XHCI_SUSP_D3;
@@ -2490,9 +2486,8 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
          * replacement first: the device stays configured, so a function
          * the device took FUNCTION_SUSPEND options 03h for is still
          * armed, and the resume's DISARM must still see it; the unlink
-         * clears only the old PDO's copy (Codex review of p36-int4,
-         * round 1, finding 1). Same interface mask, so the same
-         * ownership. */
+         * clears only the old PDO's copy (p36-int4). Same interface mask,
+         * so the same ownership. */
         XhciControllerLockAcquire(&hc->Hc, &ctlIrql);
         nu->FwArmed = pdo->FwArmed;
         XhciControllerLockRelease(&hc->Hc, ctlIrql);
@@ -2541,11 +2536,10 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /*
- * The parent is going (the root hub's remove, or the controller's): every
- * PDO left on either list is settled - deleted when PnP has removed it or
- * never knew it, orphaned when it still awaits its REMOVE (round 1, finding
- * 2). The thread has detached the bus first, so nothing lists more PDOs
- * meanwhile. IRQL: PASSIVE_LEVEL.
+ * The parent is going (the root hub's remove, or the controller's): every PDO
+ * left on either list is settled - deleted when PnP has removed it or never
+ * knew it, orphaned when it still awaits its REMOVE. The thread has detached
+ * the bus first, so nothing lists more PDOs meanwhile. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc)
 {
@@ -2584,7 +2578,7 @@ VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc)
         }
         /* A dispatch that read the controller before the line above is
          * still inside hcd_urb.c; the controller's storage outlives it
-         * (Codex review of batch (c), round 1, finding 1). */
+         * (batch (c)). */
         hcdWaitBusy(pdo);
         if (deleteIt) {
             hcdDeletePdo(pdo);
@@ -2599,8 +2593,8 @@ VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc)
 /* The refusals pended here (hcd_io.c, HcdIoRefuseLater), at a REMOVE only:
  * each completes at a clock tick, but a client may resubmit from its
  * completion routine until its own stack hears of the stop, so a STOP or
- * SURPRISE_REMOVAL that waited for them might never return (Codex review
- * of batch (c), round 8, finding 3). A REMOVE comes after every driver
+ * SURPRISE_REMOVAL that waited for them might never return (batch (c)).
+ * A REMOVE comes after every driver
  * above has handled it and stopped submitting. IRQL: PASSIVE_LEVEL. */
 static VOID hcdPdoRefusalsWait(PHCD_DEVICE_PDO pdo, ULONG removing)
 {
@@ -2627,8 +2621,7 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
 
     /* Admission closes first and the dispatches already inside are
      * waited out, so every URB this stack will ever pend here is counted
-     * before the count is read (Codex review of batch (c), round 3,
-     * finding 1). */
+     * before the count is read (batch (c)). */
     pdo->Closing = 1;
     while (pdo->Busy != 0) {
         HcdRelativeMs(&due, 1);
@@ -2640,7 +2633,7 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
     /* A held idle notification (hcd_urb.c, task 28-A.1) is no URB: it
      * completes here (stage A's with the slot, above: 4.4 (d)), and its
      * completion has returned, before the client's stop or removal goes
-     * on (Codex review of 28-A.1, round 1, finding 2) - waited for after
+     * on (28-A.1) - waited for after
      * the URBs below, since a callback may wait on them (4.4 (b), (e)). */
     HcdUrbIdleDrain(pdo);
     /* What a departed device left held here completes now, CANCELED; with
@@ -2654,8 +2647,7 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
     hc = pdo->Controller;
     if (hc != NULL) {
         /* Referenced while the PDO still names it, as a URB's dispatch
-         * does, so the record cannot be freed under the flag (round 3,
-         * finding 2). */
+         * does, so the record cannot be freed under the flag. */
         KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
         dev = pdo->Device;
         if (dev != NULL) {
@@ -2697,8 +2689,8 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
 /* A removed function's endpoints and alternates handed back while its
  * siblings run on (hcd_cfg.c, HcdCfgReleaseFunction): a REMOVE without a
  * prior unconfigure would otherwise leave an audio function's periodic
- * bandwidth reserved for as long as the device stays (Codex review of
- * batch (c), round 19, finding 4). After hcdPdoQuiesce, so its URBs are
+ * bandwidth reserved for as long as the device stays (batch (c)). After
+ * hcdPdoQuiesce, so its URBs are
  * complete. IRQL: PASSIVE_LEVEL. */
 static VOID hcdPdoFunctionRelease(PHCD_DEVICE_PDO pdo)
 {
@@ -2891,7 +2883,7 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
      * applet lists a removable device only when it is FALSE. A split
      * function keeps TRUE: stopping one function does not make the shared
      * connector safe to pull while its siblings run, and no relations tie
-     * them for the applet (Codex review of 9001ebd). */
+     * them for the applet (reviewed and revised after 9001ebd). */
     caps->SurpriseRemovalOK = pdo->Function ? TRUE : FALSE;
     /* A hub too (task 33.4), so the hot-plug applet offers the devices
      * behind it rather than the hub itself; the applet's rule is unread
@@ -2944,8 +2936,7 @@ static VOID hcdQueryInterfaceTrace(PIO_STACK_LOCATION stack)
     }
     data1 = stack->Parameters.QueryInterface.InterfaceType->Data1;
     /* The slot is claimed interlocked: two PDOs' queries on two
-     * processors share the table (Codex review of batch (c), round 16,
-     * finding 6). */
+     * processors share the table (batch (c)). */
     limit = (ULONG)count;
     if (limit > 8) {
         limit = 8;
@@ -2957,7 +2948,7 @@ static VOID hcdQueryInterfaceTrace(PIO_STACK_LOCATION stack)
     }
     if (count < 8) {
         /* Reserved only while the table has room, so the count stops a
-         * little past 8 rather than wrapping (round 17, finding 3). */
+         * little past 8 rather than wrapping. */
         slot = InterlockedIncrement(&count) - 1;
         if (slot >= 0 && slot < 8) {
             seen[slot] = data1;

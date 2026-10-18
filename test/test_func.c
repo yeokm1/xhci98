@@ -911,20 +911,20 @@ static void test_revive(void)
              "duplicate's location group, same serial read");
     CHECK_EQ(XhciFuncReviveByPlace("", "S1", 0, "S1", 0, 1), 1,
              "duplicate's location group, a duplicate again");
-    /* ... even when its reads fail at the re-enable (round 3). */
+    /* ... even when its reads fail at the re-enable. */
     CHECK_EQ(XhciFuncReviveByPlace("", "S1", 0, "", 1, 1), 1,
              "duplicate's location group, every read failed now");
     /* A group whose reads failed, its device reading S now: not before
-     * the duplicate check (it may be another unit, A of round 2) ... */
+     * the duplicate check (it may be another unit, A below) ... */
     CHECK_EQ(XhciFuncReviveByPlace("", "", 1, "S1", 0, 0), 0,
              "unread group, a serial id now, not yet a duplicate");
-    /* ... and once S proved a duplicate, the same location id (round 4). */
+    /* ... and once S proved a duplicate, the same location id. */
     CHECK_EQ(XhciFuncReviveByPlace("", "", 1, "S1", 0, 1), 1,
              "unread group, now a duplicate on the location form");
     CHECK_EQ(XhciFuncReviveByPlace("", "", 1, "", 0, 1), 1,
              "unread group, no serial or a refused one now");
-    /* A serial-named unit never takes another unit's location group
-     * (round 2): B read nothing, A reads S. */
+    /* A serial-named unit never takes another unit's location group: B
+     * read nothing, A reads S. */
     CHECK_EQ(XhciFuncReviveByPlace("", "", 0, "S1", 0, 0), 0,
              "another unit's location group, serial now");
     CHECK_EQ(XhciFuncReviveByPlace("", "", 0, "S1", 0, 1), 0,
@@ -1362,7 +1362,7 @@ static void test_firsts(void)
              XHCI_FUNC_OK, "an overlapping IAD");
     CHECK_EQ(firsts, 0x1D, "the second IAD ignored: if2, if3 lone");
 
-    /* Whole-branch review (area 1 confirmation): an IAD whose first
+    /* Reviewed and revised for 2.1.0.0: an IAD whose first
      * interface is absent still takes its present interfaces, as
      * XhciFuncSplit takes them, so a later overlapping IAD is ignored and
      * no function straddles two PDOs. Interface 0 renumbered 5, the CDC
@@ -1388,6 +1388,37 @@ static void test_firsts(void)
                     (~set.Func[i].InterfaceMask + 1);
         }
         CHECK_EQ(lows, firsts, "the split's functions are Firsts' functions");
+    }
+
+    /* The same with the descriptors out of order: the CDC IAD (0-2, first
+     * absent) takes interface 2, which comes first in the configuration,
+     * and interface 1 after it. Firsts arms the lowest, 1, and the split
+     * must publish the same interface as the function's first (MI_01), not
+     * the first one met. The UAC IAD's interface 2 is renumbered 5. */
+    memcpy(cfg, iadCfg, sizeof(iadCfg));
+    cfg[17 + 2] = 2;
+    cfg[74 + 2] = 5;
+    cfg[9 + 3] = 3;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(iadCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "an absent-first IAD out of order");
+    CHECK_EQ(firsts, 0x3A, "if1 (its lowest), if3, if4, if5");
+    {
+        XHCI_FUNC_SET set;
+        ULONG i;
+        ULONG found;
+
+        copy_dev(iadDev);
+        CHECK_EQ(XhciFuncSplit(dev, cfg, sizeof(iadCfg), &set), XHCI_FUNC_OK,
+                 "an absent-first IAD out of order: the split");
+        found = 0;
+        for (i = 0; i < set.Count; i++) {
+            if (set.Func[i].InterfaceMask == 0x06) {
+                found = 1;
+                CHECK_EQ(set.Func[i].FirstInterface, 1,
+                         "the IAD's function is published as its lowest, 1");
+            }
+        }
+        CHECK_EQ(found, 1, "the IAD's function holds interfaces 1 and 2");
     }
 
     /* Malformed: as XhciFuncSplit. */

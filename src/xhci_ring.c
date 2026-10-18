@@ -9,10 +9,9 @@
  *
  * Nothing here rings a doorbell or touches a register. That is the split
  * design doc 03 section 2 asks for: encode first, then a caller writes the
- * doorbell - `xhci_cmd.c` for the command ring and `xhci_slot.c` for the six
- * transfer-ring sites. *(This named "one call site in xhci_init.c /
- * xhci_pci.c", which was true before there was a command engine or a slot
- * layer; the 2026-09-16 audit's B10.)* It is also what makes >= 3
+ * doorbell - `xhci_cmd.c` for the command ring and the HCD's device and
+ * transfer code (hcd_io.c, hcd_cfg.c, hcd_enum.c and their siblings) for the
+ * transfer rings. It is also what makes >= 3
  * full laps of a ring - the case no amount of VM testing produces
  * deliberately - a test that runs in milliseconds.
  *
@@ -376,10 +375,11 @@ ULONG XhciTrbSetTrDequeue(XHCI_TRB *trb,
     }
     /*
      * The pointer's low four bits are not part of the address: bit 0 is DCS and
-     * bits 3:1 are SCT, which this driver writes as 0 because it enables no
-     * Streams. So an address carrying any of them is one this builder would
-     * silently turn into a different command, and it is refused for the same
-     * reason a misaligned Input Context pointer is.
+     * bits 3:1 are SCT, which this builder writes as 0 because it is the
+     * stream-less one (a stream's Set TR Dequeue is XhciStreamSetDequeueTrb,
+     * since 31-A.1). So an address carrying any of them is one this builder
+     * would silently turn into a different command, and it is refused for the
+     * same reason a misaligned Input Context pointer is.
      */
     if (dequeuePA == 0 || (dequeuePA & 0x0FUL) != 0 || dcs > 1) {
         return XHCI_RING_BAD_PARAM;
@@ -387,9 +387,10 @@ ULONG XhciTrbSetTrDequeue(XHCI_TRB *trb,
     XhciTrbClear(trb);
     trb->Param0 = dequeuePA | dcs;
     trb->Param1 = 0;
-    /* DW2 carries the Stream ID in 31:16, and this driver has none. Left as the
-     * zero XhciTrbClear wrote, stated here because a nonzero Stream ID with
-     * MaxPStreams = 0 is answered with TRB Error (spec 4.6.10 p.128). */
+    /* DW2 carries the Stream ID in 31:16, which this builder's endpoints have
+     * none of. Left as the zero XhciTrbClear wrote, stated here because a
+     * nonzero Stream ID with MaxPStreams = 0 is answered with TRB Error (spec
+     * 4.6.10 p.128). */
     trb->Control = XHCI_TRB_TYPE(XHCI_TRB_TYPE_SET_TR_DEQUEUE) |
                    XHCI_TRB_EP_ID(dci) | XHCI_TRB_SLOT_ID(slotId);
     return XHCI_RING_OK;
@@ -497,6 +498,14 @@ ULONG XhciRingIndexFromPA(const XHCI_RING *ring, ULONG pa, ULONG *index)
     }
     *index = delta;
     return XHCI_RING_OK;
+}
+
+ULONG XhciRingIsOutstanding(const XHCI_RING *ring, ULONG index)
+{
+    if (ring == NULL) {
+        return 0;
+    }
+    return xhciRingIsOutstanding(ring, index);
 }
 
 ULONG XhciRingNextIndex(const XHCI_RING *ring, ULONG index)

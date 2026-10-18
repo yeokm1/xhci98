@@ -600,9 +600,9 @@ NTSTATUS HcdHubFdoDeviceControl(PHCD_HUB_FDO fdo, PIRP irp)
         return HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
     }
     /* Refused before the PDO's Busy is raised once a STOP or a removal has
-     * begun (Codex review of 33.4, round 1, finding 2): the PDO's quiesce
-     * waits for Busy, and handles already open would otherwise hold it. A
-     * request admitted just before the close is one bounded IOCTL. */
+     * begun (task 33.4): the PDO's quiesce waits for Busy, and handles
+     * already open would otherwise hold it. A request admitted just before
+     * the close is one bounded IOCTL. */
     if (fdo->DoorOpen == 0) {
         hcdHubIoLeave(fdo);
         return HcdCompleteIrp(irp, STATUS_DEVICE_NOT_CONNECTED, 0);

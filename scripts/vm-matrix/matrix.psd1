@@ -245,9 +245,9 @@
                     # has read PASS here and printed "correct the entry"
                     # alongside, so the reading belonged to that carried-along
                     # image and not to Windows 2000 SP4.  The entry is removed
-                    # rather than kept as a curiosity (the 2026-09-07 audit's
-                    # H21): an ExpectNoDriver that does not apply waives a
-                    # GENUINE no-driver result on the row silently, which is
+                    # rather than kept as a curiosity (the audit of
+                    # 2026-09-07): an ExpectNoDriver that does not apply waives
+                    # a GENUINE no-driver result on the row silently, which is
                     # the one thing it must not do.
                 }
                 @{
@@ -266,7 +266,7 @@
                     }
                     # As usb-mouse/hs above: the Phase 10 reading was the
                     # carried-along image's, and every fresh run since has read
-                    # PASS (audit H21).
+                    # PASS (the audit of 2026-09-07).
                 }
                 @{
                     Name = 'usb-tablet/hs'
@@ -310,7 +310,8 @@
                     # An ExpectNoDriver saying SP4 ships no Wacom driver stood
                     # here and was wrong: every 2b-fresh run reads PASS, so SP4
                     # binds this device through its own HID class driver and the
-                    # Phase 10 reading was the carried-along image's (audit H21).
+                    # Phase 10 reading was the carried-along image's (the audit
+                    # of 2026-09-07).
                 }
             )
         }

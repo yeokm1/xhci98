@@ -13,7 +13,7 @@ rem step fail deterministically. This script runs four cases - a clean report,
 rem a write fault, a close fault and a .TXT that cannot be created at all - and
 rem checks the exit codes and the summary lines. A fifth case checks that
 rem `-probe` beside an implied `-dump` is refused before any device is opened
-rem (the 2026-09-17 audit's C4), which needs no controller either.
+rem (the audit of 2026-09-17), which needs no controller either.
 rem
 rem The cases after those drive each decode over canned data, and the last
 rem (task 36.47) the system block, which must not carry the computer or user
@@ -102,7 +102,7 @@ if errorlevel 1 (
 set "XHCISNAP_FAULT="
 
 rem A .TXT that cannot be created: the dump's own fopen-failure branch used to
-rem exit 0 with the report on screen (Phase 20 review, finding 6).
+rem exit 0 with the report on screen (Phase 20).
 attrib +R "%BASE%.TXT"
 "%~dp0XHCISNAP.EXE" -selftest-report "%BASE%" > "%BASE%.readonly.log"
 if not errorlevel 3 (
@@ -432,7 +432,7 @@ for %%S in ("XhciWideMap                 206" "DNCTRL                     0x00EE
     )
 )
 
-rem Task 36.9's review: a header longer than its image is refused by
+rem Task 36.9: a header longer than its image is refused by
 rem print_hcd, and no other section decodes anything from it.
 "%~dp0XHCISNAP.EXE" -selftest-hcd-bad > "%BASE%.hcdbad.log"
 if not "%errorlevel%"=="0" (
@@ -482,7 +482,7 @@ rem The withholding over canned names (SNAPTEST-PC7, jdoe, CORPDOM, a
 rem non-ASCII name, and PC, which is under three characters and not
 rem compared): six strings are withheld (the non-ASCII one in both cases), one of them with the name past the
 rem 96-character cut, and the QEMU product string is kept. It is deterministic, so no
-rem host name is searched for (Codex review of 36.47, round 1: a host search
+rem host name is searched for (task 36.47: a host search
 rem matched the block's own fixed words and missed values under other labels).
 set WITHHELD=0
 for /f "delims=" %%L in ('findstr /C:"clean [(withheld: it contains" "%BASE%.sysinfo.log"') do set /a WITHHELD+=1
@@ -701,7 +701,7 @@ if errorlevel 1 (
     echo FAIL: the -report -o REFUSED.X refusal does not say it carries a dot
     set FAILED=1
 )
-rem Codex review of 38.1, round 1. The screen never names the directory (it
+rem Task 38.1. The screen never names the directory (it
 rem is often the user's profile); -nosysinfo before -report is accepted too;
 rem and with -nosysinfo the names are not read, so the .DEV prints no free
 rem text unscreened - it says so, and the Windows directory is named, not
@@ -861,7 +861,7 @@ if not "%NAMEDCOUNT%"=="2" (
 )
 popd
 
-rem Codex review of 38.1, round 3: SNAPON.BAT runs XHCISNAP -on %1 and
+rem Task 38.1: SNAPON.BAT runs XHCISNAP -on %1 and
 rem SNAPGET.BAT XHCISNAP -report %1, with no if on %1, so the default and
 rem the check are the tool's. -on's parse (-selftest-on, no registry): none
 rem is 2, 1 to 4 and a quoted "1" are taken, 0 (pointing at SNAPOFF.BAT),

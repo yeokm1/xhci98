@@ -53,12 +53,11 @@ first two are not addressable by a single offset, and the last is outside the
 grammar this parser accepts, which is one terminal subscript holding one
 identifier.  That is a choice about how much C this regex should understand,
 not a reader limitation - the readers split rows on whitespace and use the name
-as a literal key, so parentheses would survive them *(round 14 corrected this
-sentence, which had blamed the readers)*.  *(Until
-review round 13 every subscript was excluded, so `ProbeEpEvents[]`'s two print sites
-were silently absent from the table while the roadmap and `src/xhci.h` told a
-reader to take `OpensTotal` against `ProbeEpEvents[OPEN] + [REOPEN]` from it -
-review round 13.)*
+as a literal key, so parentheses would survive them *(this sentence once
+blamed the readers)*.  *(Until a revision of this script every subscript was
+excluded, so `ProbeEpEvents[]`'s two print sites were silently absent from
+the table while the roadmap and `src/xhci.h` told a reader to take
+`OpensTotal` against `ProbeEpEvents[OPEN] + [REOPEN]` from it.)*
 
 THE ONE WAY THIS DERIVATION LOSES A COUNTER SILENTLY.  The pattern above wants
 ONE quoted string before the comma, and C concatenates adjacent string literals,
@@ -71,7 +70,7 @@ still compiles and still prints correctly, and this script simply does not see
 it.  The field then leaves offsets.txt while SIZEOF is unchanged, so
 Assert-OffsetsFresh - which compares SIZEOF against the running driver - passes,
 and the loss surfaces only as a counter nobody can name.  That happened once,
-from a review round widening a label and wrapping it in the doing.
+from a revision widening a label and wrapping it in the doing.
 
 Hence -AllowRemovals below.  A regeneration that DROPS a field the previous
 table had is refused by default and names the field, because the overwhelmingly
@@ -304,8 +303,8 @@ try {
     $obj = Join-Path $work "offsets.obj"
     $srcInc = $SrcDir
     # ErrorActionPreference is relaxed across both native calls on purpose, the
-    # same way `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin
-    # (repo audit D4): in Windows PowerShell 5.1 a native command's stderr line
+    # same way `scripts\import-gate\check-imports.ps1` relaxes it for
+    # dumpbin: in Windows PowerShell 5.1 a native command's stderr line
     # becomes an ErrorRecord, and under "Stop" the first one aborts this script
     # with an EMPTY message instead of the diagnosis below - which is exactly the
     # message that says what cl.exe objected to. cl warns to stderr routinely.
@@ -363,7 +362,7 @@ try {
     foreach ($label in ($fieldOfLabel.Keys | Sort-Object)) {
         $mapLines += ("{0}`t{1}" -f $fieldOfLabel[$label], $label)
     }
-    Set-Content -LiteralPath $mapFile -Value $mapLines -Encoding utf8
+    Set-Content -LiteralPath $mapFile -Value $mapLines -Encoding ascii
 
     if (-not $Quiet) {
         Write-Host ("{0}" -f $sizeofLine)

@@ -1,7 +1,6 @@
 # Design Record 24 - The Thunderbolt and USB4 Device Viewer and Eject
 
-Status: revision 4, 2026-10-15, reviewed and revised three times the same
-day; the code is written against it. Written for the owner's instructions of 2026-10-15: Windows 98 SE and
+Status: revision 4, 2026-10-15, reviewed and revised the same day; the code is written against it. Written for the owner's instructions of 2026-10-15: Windows 98 SE and
 ME have no way to safely remove a device behind a Thunderbolt or USB4
 tunnel, and no target system has a way to see what is connected to one.
 The answer is a viewer of the connected Thunderbolt 3 and USB4 devices,
@@ -11,8 +10,8 @@ this package supports. It ships in `3.0.0.0` with Phases 39 and 40
 each an orchestrator decision for the owner to confirm unless it names the
 owner; section 14 what is open.
 
-Revision 5, 2026-10-16 (the owner, for `3.0.0.0`; roadmap EJRB.1 keeps
-the proper fix): a unit Windows does not mark removable, whatever the
+Revision 5, 2026-10-16 (the owner, for `3.0.0.0`; roadmap-usb4.md 42-0.4
+and 42-A.5, formerly EJRB.1, keep the proper fix): a unit Windows does not mark removable, whatever the
 cause - the first plug of a device Windows has not seen, read on 2000
 with a bridge chain behind the tunnel port, or a stack rebuilt since - is
 stopped by `CM_Query_And_Remove_SubTreeW` on 2000, XP, Vista and 7, as
@@ -126,7 +125,7 @@ version it does not know.
 | 0 | magic `0x534D4358` ("XCMS") | - |
 | 4 | layout version, 1 | - |
 | 8 | the record's size: 128 + count x 128 | - |
-| 12 | generation, bumped on every content change, never 0 once written | - |
+| 12 | generation, bumped on every content change; 0 only in a start's first record (stage stopped, below), never 0 after it | - |
 | 16 | the system's uptime at the write, seconds | - |
 | 20 | the NHI's PCI vendor (15:0) and device (31:16) | - |
 | 24 | the connection manager running: 0 none, 1 the ICM client, 2 the USB4 software connection manager | - |
@@ -166,8 +165,9 @@ version it does not know.
 
 Names are cut to 31 characters, a byte outside printable ASCII written as
 `?`, NUL-padded. A device the ICM rejected is not in the client's table
-(`tbt_icm.c` counts it and drops it), so the record cannot list it; there
-is no "rejected" value. The link speed is kept by neither connection
+(`tbt_icm.c` counts it and drops it), so the record cannot list it:
+value 3 (`CM_ST_APPR_REJECTED`) is defined, and XHCITR decodes it, but
+no path of the driver writes it. The link speed is kept by neither connection
 manager and is not in this layout.
 
 **What is never published**: the ICM's `Key`, any challenge, response or
@@ -739,12 +739,16 @@ In `xhciinst\inst_core.c` (host suite `test\test_inst.c`):
 - the unit selection and protection over a mock tree with parents: the
   enclosure and the dock shapes, the host switch with its NHI and xHCI
   under unverified candidates, an override that verifies the host xHCI's
-  port, an NHI nested inside a unit, an incomplete walk;
+  port, an NHI nested inside a unit (an incomplete walk is not expressible
+  in the pure API's tree; section 5.4's message for one is checked below);
 - the record's decoder and checks (magic, version, sizes, counts, path
   counts), the confirmation (an echo that matches, one that does not, a
   record of an earlier session with the same generation), and the
-  diagnostic boot-time label (two boots minutes apart, a wrapped tick
-  count) - against records built by the driver's own `cm_status.c`;
+  diagnostic boot-time label (the same boot, and two boots minutes
+  apart) - against records the suite builds itself to `cm_status.h`'s
+  layout (`test_inst` links `inst_core.c` alone, so the driver's
+  `cm_status.c` builder is held by `test_cm_status`, below); a wrapped
+  tick count has no vector;
 - the eject sequences with injected answers: a 9x query refused, accepted
   then removed, accepted then the removal failing (the removal always
   attempted after an accepted query, never after a refused one); each NT
@@ -757,7 +761,8 @@ In `xhciinst\inst_core.c` (host suite `test\test_inst.c`):
 In `src\cm\cm_status.c` (host suite `test\test_cm_status.c`): the record
 from an ICM table and from a USB4 port set and its links - names cut and
 filtered, the UUID cut to 16 bits and no `Key` byte anywhere in the record,
-each approval and tunnel state, the port mapping (one active member, a
+each approval state the builder writes (approved, before boot, refused,
+unanswered, pending, held) and each tunnel state, the port mapping (one active member, a
 bind, a conflicted bind), the change compare that ignores the stamp, the
 echo, the entry limit and its flag - and the 98 path over a fake
 configuration space (bus 0, a bridge chain, an unreadable bus, a read

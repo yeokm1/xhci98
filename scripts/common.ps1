@@ -94,8 +94,8 @@ function Write-AsciiFile {
 }
 
 #
-# QEMU, found the same way by every generator (the 2026-09-07 audit's H28 and
-# J6). There were five copies of this, and they had drifted: three fell back to
+# QEMU, found the same way by every generator (the audit of
+# 2026-09-07). There were five copies of this, and they had drifted: three fell back to
 # the bare `qemu-system-x86_64` and two to a hard-coded
 # `C:\Program Files\qemu\...`, so which launchers survived being moved to
 # another host depended on which script wrote them.
@@ -200,7 +200,7 @@ function Get-QemuLauncherResolver {
 
 #
 # **The flavour markers a linked image may carry, in one place** (the
-# 2026-09-07 audit's J6). There were three scanners: this project's
+# audit of 2026-09-07). There were three scanners: this project's
 # `check-flavour-marker.ps1`, `Get-ImageFlavourMarker` in
 # `scripts\package\package-common.ps1`, and the list spelled out again in
 # `build-driver.cmd`'s comments. They agreed, which is the only reason nothing
@@ -264,7 +264,7 @@ function Test-PathUnderRoot {
 #
 # There were two byte-identical copies of this - the identity check and the
 # twenty-line staging block around it - in setup-qemu-win2k.ps1 and
-# setup-qemu-win2k-smp.ps1 (the 2026-09-07 audit's J6, and the same shape as
+# setup-qemu-win2k-smp.ps1 (the audit of 2026-09-07, and the same shape as
 # the Get-QemuTool and flavour-marker duplications above). The pinned length
 # and version are the point of the function, so two copies of them is two
 # places for the pin to drift, in a check whose whole job is that it cannot.

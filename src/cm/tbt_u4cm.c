@@ -4535,7 +4535,12 @@ static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
             (void)tbtU4Follow(cm, p, TRUE, &p->Usb3);
             p->Usb3.Written &= ~(TBT_U4_E_DEV_LANE | TBT_U4_E_DEV_PROTO | TBT_U4_E_DEV_ENABLE);
             p->Pcie.Written &= ~(TBT_U4_E_DEV_LANE | TBT_U4_E_DEV_PROTO | TBT_U4_E_DEV_ENABLE);
-            p->Pcie.Written |= TBT_U4_E_HOST_ENABLE;
+            if (p->Pcie.Written != 0) {
+                /* Path Enable may have cleared itself at the disconnect.
+                 * Only a PCIe path found: USB3 or DP residue alone is no
+                 * PCIe tunnel to state closed (sections 7.3, 9.2). */
+                p->Pcie.Written |= TBT_U4_E_HOST_ENABLE;
+            }
             if (p->Usb3.Written != 0) {
                 /* Path Enable may have cleared itself at the disconnect;
                  * an allocation may still be held: released. */

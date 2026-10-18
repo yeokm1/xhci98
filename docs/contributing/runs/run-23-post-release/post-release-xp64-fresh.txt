@@ -1,4 +1,4 @@
-﻿# post-release run
+# post-release run
 # driver:    1.1.1.0 qemu, 280064 B, sha256 c5c3ec47df2142b9
 # image:     vm\fresh-xp64.img, stamp base-1.1.1.0-qemu, from winxp64.img winxp64-clean-install-smp4
 # qemu:      11.1.0 (v11.1.0-12130-ge470268ff4), accel tcg,thread=multi

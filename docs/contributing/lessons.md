@@ -454,7 +454,7 @@ every USB audio device were "Unknown"; only the on-board microphone was OK),
 which is inferred, not measured, to be why the open took so long: on
 2026-08-30 and on 2026-09-03 the same row attached in time on the same host.
 The prep pass had attached audio instantly the same night because
-`prepare-image.ps1` declares `-audiodev none` (repo audit D4). Unknown:
+`prepare-image.ps1` declares `-audiodev none` (found by a repository audit). Unknown:
 which backend QEMU picked and where inside it the time went.
 
 Rule: a device that takes a host backend names one explicitly, and for a
@@ -3128,7 +3128,7 @@ would have re-scoped the task before it started.
 
 ### "Nothing waits on it" was a claim about the wrong object
 
-The third round found the sharpest version of this task's recurring error.
+A later review found the sharpest version of this task's recurring error.
 "usbport does not wait on `InterruptNextSOF`" is true and was checked
 properly: no event, no timeout, no return value read, the spin-lock release
 is the next instruction at all four sites. It was then written down as
@@ -3153,7 +3153,7 @@ not because nobody is waiting. That promotes the 500 ms timer from a
 convenience to the element the argument rests on, and with it the two open
 questions about when that timer is armed and whether it can be cancelled.
 
-### Attributing the STALL: a localization, after a review round refused the exclusion
+### Attributing the STALL: a localization, after a review refused the exclusion
 
 The first draft of this section claimed the STALL was "the vehicle's, not the
 device's" on three readings. A review scoped to that attribution alone
@@ -3222,10 +3222,11 @@ possibly refuse" is a claim about a specification, and it was made from
 plausibility rather than from the text. A leg built on "no conforming X ever
 does Y" needs the sentence that says so, and needs its preconditions checked;
 here, the device's state at the time of the request, which nothing in the
-capture establishes. That is the same error as Phase 5's round thirteen,
-recorded in this file, committed again on a different subject.
+capture establishes. That is the same error as the thirteenth revision of
+Phase 5's preemption rule, recorded in this file, committed again on a
+different subject.
 
-Correction of record from the same round: the pcap's snaplen is 4160, not 64
+Correction of record from the same review: the pcap's snaplen is 4160, not 64
 as an earlier reading of these files stated. The control records are 64 bytes
 because QEMU writes them header-only by design, so the setup payload cannot
 be recovered by re-capturing with different settings.
@@ -4310,8 +4311,8 @@ a FAILED record, leaving an ADDRESSED one bound to a bus address the device no
 longer had, with nothing anywhere reporting it. Fixing that exposed the second
 half in the port association, where the reset-derived hint required its port
 to have no record bound, a condition that belongs to the fallback scan only,
-where the work is disambiguation. The mechanism was later superseded by the
-fifth repository audit's finding A2; the shape is the thing to look for next
+where the work is disambiguation. The mechanism was later superseded by a
+repository audit's correction; the shape is the thing to look for next
 time.
 
 ## On development host B - the Win2000 `ResumeController` gap is closed as a question: the blocker is the display adapter, not the HAL, and every QEMU route is measured shut
@@ -4844,8 +4845,8 @@ Two rules, and the first is the reason this section existed:
   That last one turned a review-only property into a number: the mutation
   scores 33 firings against a budget of 32.
 - A trace macro's state is per expansion, so it is per driver image while
-  the values it watches are per controller. This was the fourth round's
-  finding and it is the one that generalises furthest. Two xHCI controllers
+  the values it watches are per controller. This was the latest of the
+  review's findings and it is the one that generalises furthest. Two xHCI controllers
   both bind one image and reach the same expansion carrying their own
   extension's value; if the values differ, successive calls alternate, every
   sample counts as "changed", and a 500 ms site spends its 32 prints in
@@ -5001,28 +5002,28 @@ with no new import.
 
 ### Observed, with the evidence
 
-Eleven review rounds went into what a preemption may conclude, each
+Eleven successive revisions went into what a preemption may conclude, each
 overturning the one before, and the last one caught a hardware behaviour
 invented from plausibility. The sequence is kept because each step is a
 distinct way of getting the same register wrong.
 
-Round three: preemption disarmed the port and reported nothing, so a reset
+Third revision: preemption disarmed the port and reported nothing, so a reset
 usbhub was blocked on ended with no `C_PORT_RESET` ever latched.
 
-Round four: the repair latched that change before the interrupting write had
+Fourth revision: the repair latched that change before the interrupting write had
 been issued, while PORTSC still had `PR` set, and `C_PORT_RESET` means the
 sequence is complete. So it left the reset armed instead, to be completed by
 the `PRC` the write would produce.
 
-Round five: that `PRC` is forbidden. "Note that this flag shall not be set to
+Fifth revision: that `PRC` is forbidden. "Note that this flag shall not be set to
 '1' if the reset processing was forced to terminate due to software clearing
 PP or PED to '0'" (PRC, Table 5-27, p.377), and the same exclusion is on CSC,
 PEC, PLC and WRC: a software-initiated power-off produces no change bits at
-all. Round four had reasoned the follow-through instead of reading the
+all. The fourth revision had reasoned the follow-through instead of reading the
 register table, and then the host model was written to match the invention,
 which is what made the wrong rule look tested.
 
-Round six: "after the write" is still not "after the port stopped." The
+Sixth revision: "after the write" is still not "after the port stopped." The
 repair reported on the strength of having issued the write, and footnote 91
 (p.375) names this exact case as why that is not safe: "the PP flag may be
 delayed in reflecting this change, e.g. due to waiting for a port related
@@ -5031,7 +5032,7 @@ read PP and confirm that it is reached its target state ... undefined
 behavior may occur if this procedure is not followed". A reset in progress is
 the spec's own example of what delays a power-off.
 
-Round seven: the read-back was of the wrong bit. `PR` "is '0' if PP is '0'"
+Seventh revision: the read-back was of the wrong bit. `PR` "is '0' if PP is '0'"
 (p.371), so after a power-off that landed it reads 0 whatever the port did;
 the test stood on the state it was confirming. And inside the lag window it
 is wrong the other way: a reset can complete normally (`PR` 1->0, `PRC` set)
@@ -5040,7 +5041,7 @@ it, and leaves a real `PRC` pending to be mis-attributed to the next armed
 operation. `PP` is the bit the spec says to confirm, and it is the state that
 makes the termination true.
 
-Round eight: the confirmed path left a genuine `PRC` behind. A reset that
+Eighth revision: the confirmed path left a genuine `PRC` behind. A reset that
 completed just before the interrupting call leaves `PRC` set (RW1CS, so it
 stays until software writes a 1, which the power-off's neutral write does
 not), and retiring there reported that reset as preempted while leaving a
@@ -5051,7 +5052,7 @@ is real, claims the armed generation as the completion it was. That refresh
 is gated on the same `PP` confirmation, because its acknowledgement is a
 neutral write that carries `PP` as it reads.
 
-Round nine: the confirmation was made once and then forgotten. "Before
+Ninth revision: the confirmation was made once and then forgotten. "Before
 modifying it again" binds every later writer of that port, not the callback
 that issued the change, and the writer that makes it reachable is the least
 conspicuous one. Every value this family writes is built on a neutral base,
@@ -5063,7 +5064,7 @@ outstanding confirmation state on the port, routing all seven of the file's
 PORTSC writes through one helper, refusing operations in that window rather
 than skipping their write, and bounding the wait in the health poll.
 
-Round ten found two more in round nine's own fix. The health poll collected
+The tenth revision found two more in the ninth's own fix. The health poll collected
 the confirmation with a bare read of PORTSC, one bit taken and the rest
 discarded, which breaks the oldest port rule in this driver: a change bit is
 acknowledged the instant it is observed, or the controller stops reporting
@@ -5074,7 +5075,7 @@ quiet port never settled its wait. Both fixed by making the read the place
 the confirmation happens, and by routing the poll through the ordinary
 refresh.
 
-Round eleven collected the debt the previous two left. Introducing a write
+The eleventh revision collected the debt the previous two left. Introducing a write
 helper that can decline a write makes every caller's "I wrote it, therefore
 X" unsound, and neither resume-completion site had been revisited: both
 counted the resume complete whether or not the terminating write went out
@@ -5083,23 +5084,23 @@ line. And the preemption gate tested only the reset, so an interrupting
 write that had not taken effect still abandoned an in-flight resume,
 disarming the one thing that was going to end the signalling.
 
-Round twelve found the last of it a layer below where the rest had been
+The twelfth revision found the last of it a layer below where the rest had been
 looking: the shadow's translation manufactured the completion the driver had
 stopped claiming. `C_PORT_SUSPEND` was derived from "the link left U3 or
 Resume", a shape other things produce too. Derived now only on a port still
 enabled and connected.
 
-Round thirteen corrected why. Round twelve's stated case, "a disable sets
+The thirteenth revision corrected why. The twelfth's stated case, "a disable sets
 `PLC`, because the flag's row excludes only a software-cleared `PP`", was
 invented: "this flag is set to '1' due to the following PLS transitions"
-(p.378) enumerates them, and a disable is not among them. That is round
-five's error again, committed in a file that already carried round five's
+(p.378) enumerates them, and a disable is not among them. That is the fifth
+revision's error again, committed in a file that already carried that
 lesson. The gate survives on a real path this driver builds itself: `PLC` is
 RW1CS, the acknowledgement of a legitimate U3-to-Resume is deferred while a
 Port Power change is in flight, and once the power-off lands `PLS` no longer
 reads Resume, so a stale `PLC` beside it is indistinguishable from a wakeup.
 
-Settled answer, one half from each round: the interrupting write does end
+Settled answer, one half from each revision: the interrupting write does end
 the reset and ends it silently, so the driver that issued it is the only
 thing that can report `C_PORT_RESET` and must, after the write, and only
 when a read-back of `PP` confirms the Powered-off state. Otherwise it
@@ -5159,9 +5160,9 @@ actually drives this family, the hub-class bit order included.
 ### Reusable rules
 
 - "The spec does not forbid it" is not "the spec says it happens", and a
-  list of what sets a flag is not the same as the exclusions under it. Round
-  five learned this and it was written down here; round twelve committed it
-  again, on the same register, arguing from `PLC`'s closing exclusion that a
+  list of what sets a flag is not the same as the exclusions under it. The
+  fifth revision learned this and it was written down here; the twelfth
+  committed it again, on the same register, arguing from `PLC`'s closing exclusion that a
   disable must set the flag. The exclusion narrows an enumerated list it
   does not define. The operational rule that would have caught both: when a
   claim is about hardware behaviour, quote the sentence that asserts the
@@ -5170,7 +5171,7 @@ actually drives this family, the hub-class bit order included.
   into `docs/usb-xhci-info/xhci-data-structures.md`, because what is absent
   from there is what gets reasoned about.
 - Stopping the code from claiming something is not the same as stopping it
-  from reporting it. Four rounds went into what the preemption path may
+  from reporting it. Four revisions went into what the preemption path may
   conclude, and every one was about the driver's own bookkeeping, while the
   translation layer underneath went on deriving "the resume completed" from
   a link-state change a disable produces too. When a report carries an
@@ -5178,13 +5179,13 @@ actually drives this family, the hub-class bit order included.
 - Adding a gate to a shared helper invalidates every caller that assumed the
   helper always succeeds; audit them in the same change. Routing seven
   writes through one function that can now decline silently converted every
-  "the write went out, so the operation is done" into a guess. Three rounds
+  "the write went out, so the operation is done" into a guess. Three revisions
   in a row were spent on consequences of that one refactor, each found by
   review rather than by the suite, because the callers still compiled and
   still passed. The mechanical form: when a helper gains a failure mode,
   grep its call sites and decide for each what a refusal means there.
-- "One way to write it" needs "one way to read it" beside it. Both rounds of
-  this fix were broken by a path that read or wrote the register outside the
+- "One way to write it" needs "one way to read it" beside it. Both revisions
+  of this fix were broken by a path that read or wrote the register outside the
   function that knows the obligations, and in both cases that path was added
   later, for an unrelated reason, by the same author who had just finished
   writing the rule down. Route the readers through one function too, and
@@ -5207,7 +5208,7 @@ actually drives this family, the hub-class bit order included.
 - One flag cannot answer two questions, and the tell is a case that answers
   them differently. "May I write to this port again" and "did my write end
   the reset" looked like one condition until a disable turned up: `settled`
-  but ending nothing. That is round seven's lesson repeating one level down,
+  but ending nothing. That is the seventh revision's lesson repeating one level down,
   inside the fix for it.
 - A read-back has to name the bit the operation targets. Confirming a bit
   that the target state masks is a tautology, not a confirmation: `PR` reads
@@ -5310,11 +5311,11 @@ PowerShell: Git Bash rewrites a `/dump` switch into a path.
 Eight claims were written up and committed. It took three independent
 re-reads of the same binaries to settle them, and the same claim was
 defective in all three: first wrong, then wrongly repaired, then still
-over-general. A fourth round found no defect in that claim but did find that
+over-general. A fourth re-read found no defect in that claim but did find that
 the pass had read the SP4 power/chirp path and written it up as though it
 described both targets, which it does not.
 
-Round one.
+First reading.
 
 - Wrong: "None of the three root-hub request routines acquires a spin lock."
   The class GET_STATUS routine and the status-change scan really take none,
@@ -5333,7 +5334,7 @@ Round one.
   yields "no changes" before validating the buffer, calling any callback, or
   calling `RH_EnableIrq`.
 
-Round two, on the repair. The fix for the first item asserted the
+Second reading, on the repair. The fix for the first item asserted the
 consequence that seemed to follow, "so `RH_SetFeaturePortPower` can be
 entered with a usbport spin lock held", and that is also wrong. The
 replacement does not disprove the claim so much as fail to reach it: the
@@ -5345,19 +5346,19 @@ drops it before calling any miniport callback. NUSB has the same ordering
 (`0x2004F` -> `0x20059` -> `0x222EC`, acquire `0x27465`, release `0x275B4`,
 callbacks `0x22400`/`0x2242C`).
 
-Round two also narrowed the gate wording: "closed before each poll" is not
+The second reading also narrowed the gate wording: "closed before each poll" is not
 shown, because the scan is dispatched with no disable beside it (SP4
 `0x218FB`, NUSB `0x21289`). What is shown is disable-on-invalidate plus a
 single enable site per image, SP4 `0x215F4`, NUSB `0x20F82`, against two
 disable sites each (SP4 `0x21C56`/`0x1D6C9`, NUSB `0x215E4`/`0x1D265`).
 
-Round three, on the retraction. Even the retraction generalised: "no
+Third reading, on the retraction. Even the retraction generalised: "no
 root-hub callback is entered holding that lock" is broader than a trace of
 one helper supports while caller-held locking is untraced. The supportable
 claim is "this helper releases its lock before either of its own downstream
 calls".
 
-Round three also caught a borrowed unchecked claim. Round two's report had
+The third reading also caught a borrowed unchecked claim. The second's report had
 said the surviving GET_STATUS/SCE banners were "accurate for their own call
 graphs", and that phrase was promoted verbatim into the documentation, but
 it had not been a transitive walk, only a re-check of the routines' extents,
@@ -5369,7 +5370,7 @@ in these binaries, and GET_STATUS's enclosing function (`0x2080C`) has other
 request branches that do reach the port-power lock, so the result is about
 the path, not the function.
 
-Round four, on target scope. Not a locking finding at all: the pass had read
+Fourth reading, on target scope. Not a locking finding at all: the pass had read
 SP4's `USBPORT_RootHubPowerAndChirpAllCcPorts` and written its shape as the
 contract. SP4 waits 100 ms (`0x22C55`) and gates the chirp loop on interface
 `Version >= 0xC8` (`0x22CBB`) before calling at `0x22CCE`. NUSB does neither:
@@ -5377,16 +5378,16 @@ power at `0x225EC`, chirp gate at `0x225F7`/`0x225FC`, packet `0x12C` at
 `0x22623`, no wait and no `Version` compare, because its wrapper has no
 `Version` field.
 
-The same round found the mapper is seven instructions and
+The same reading found the mapper is seven instructions and
 not five, the Set/Clear family has twelve packet slots and not ten, and the
 SCE early-return flag lives at `FdoExt+0x1C6` on SP4 but `+0x1C2` on NUSB.
 When two builds are in scope, a fact read from one is a fact about one. The
 existing "trust order" note says the binaries outrank ReactOS, but says
 nothing about the binaries disagreeing with each other, and here they do.
 
-Rounds five and six, on the chirp gate. Round four's own repair said "chirp
-does not imply `Version >= 200`"; round five falsified that, and round six
-falsified round five's replacement ("different mechanisms, same outcome").
+Fifth and sixth readings, on the chirp gate. The fourth's own repair said
+"chirp does not imply `Version >= 200`"; the fifth falsified that, and the
+sixth falsified the fifth's replacement ("different mechanisms, same outcome").
 The verified reading: the registration copy gate is identical in both
 builds. Both withhold packet `0x12C` below Version 200 (SP4 `0x27D9E`,
 `0x27E0F`, `0x27EC0`; NUSB `0x27716`, `0x27782`, `0x27836`). What differs is
@@ -5399,7 +5400,7 @@ something milder.
 
 ### Proven / inferred / unknown
 
-- Proven (re-derived from the binaries in rounds two and three): a lock is
+- Proven (re-derived from the binaries in the second and third readings): a lock is
   reached on the USB2 port-power branch, and this helper releases it before
   either of its own downstream `RH_SetFeaturePortPower` calls, in both
   builds, scoped to that helper and not to callback entry in general; the
@@ -5412,7 +5413,7 @@ something milder.
   masking it would silence transfer completions too. It is a design
   decision, recorded as one.
 - Unknown, and it is the half that decides the question: whether a caller
-  holds `MiniportSpinLock` around these routines. Neither round traced it,
+  holds `MiniportSpinLock` around these routines. Neither reading traced it,
   so ReactOS's split root-hub locking contract is still neither confirmed
   nor refuted. The driver is written not to depend on the answer.
 
@@ -5424,7 +5425,7 @@ something milder.
    second half of the same failure: a negative result from a search is only
    as good as the proof that the search would have found a positive.
 2. Finding a call-graph fact does not license its apparent consequence. This
-   is the rule that cost the extra round. "A lock is acquired somewhere on
+   is the rule that cost the extra reading. "A lock is acquired somewhere on
    this path" and "the callback runs under that lock" are two claims; the
    second needs the acquire/release/call ordering, which is one more read.
    The seductive part is that the consequence is what makes the fact matter,
@@ -5438,8 +5439,8 @@ something milder.
    claim, ask the reviewer what they did, not what they called it. Asking
    cost one message and produced a real transitive walk.
 4. Scope a trace to what was traced. One helper's acquire/release ordering
-   supports a claim about that helper, not about "callback entry". Round
-   three's fix was entirely a matter of putting the subject of the sentence
+   supports a claim about that helper, not about "callback entry". The
+   third reading's fix was entirely a matter of putting the subject of the sentence
    back where the evidence is.
 5. When two builds are in scope, a fact read from one is a fact about one.
    The power/chirp shape, the SCE flag offset, and the mapped-call-site
@@ -5452,9 +5453,9 @@ something milder.
    Write the two as separate sentences, and label the second a decision.
 7. Every defect here has one root: stating a conclusion at a confidence the
    evidence in hand does not carry. The locking claim alone survived three
-   rounds by changing shape each time (an unfounded negative, then an
+   readings by changing shape each time (an unfounded negative, then an
    unfounded positive, then an over-general true statement), and a fourth
-   round found the separate target-scope defect, a single-target reading
+   reading found the separate target-scope defect, a single-target reading
    presented as target-neutral. A fifth then found that repair had
    over-corrected in turn: "chirp does not imply Version >= 200" was false,
    because NUSB withholds the slot at registration instead of testing at the
@@ -5888,8 +5889,8 @@ on `CommandsCompleted == 0` and the address made the site once per start,
 but a resume is not a start. usbport zeroes the miniport extension before
 `StartController` only; `ResumeController` reinitialises the controller and
 issues its own self-test while inheriting every counter, so the gate was
-false exactly when Win98 resumed, which is the silence the first round set
-out to remove. Two rounds of fixes, and the originally-reported symptom was
+false exactly when Win98 resumed, which is the silence the first fix set
+out to remove. Two fixes, and the originally-reported symptom was
 back.
 
 The property wanted is neither a value nor a counter state but one line per
@@ -5898,7 +5899,7 @@ self-test issuance, so it is now a one-shot token in the extension
 matching completion. Start and resume both print; Phase 6 traffic never
 does.
 
-Round four was the token outliving its command. It was cleared in the
+The fourth problem was the token outliving its command. It was cleared in the
 abandon path, the path being looked at when the token was written, and not
 in the two abort paths, so a self-test that timed out and was successfully
 recovered (Command Aborted, or Command Ring Stopped when the abort found the
@@ -5910,7 +5911,7 @@ through it, so the address and the token cannot disagree. This repeats task
 6's rule: give a property several functions share one mechanism, rather
 than adding it where you happen to be looking.
 
-Round five: none of the four rounds had a test. The witness's policy lived
+The fifth: none of the four fixes had a test. The witness's policy lived
 inside a trace macro, and the host suite compiles the release path where
 those macros are empty, so the policy was untestable by construction, which
 is why three wrong bounds in a row survived review. The decision is now
@@ -5937,16 +5938,16 @@ Two traps met while writing that test, both worth keeping:
   function in it at all and produced numbers that looked like results. Copy
   the file aside and copy it back; verify the restored baseline scores zero.
 
-Note the shape of the three rounds: round one removed the symptom (silence
+Note the shape of the first fixes: the first removed the symptom (silence
 on repeat) and kept a flawed premise (that an address identifies the
-self-test); round two fixed that premise and silently reintroduced the
+self-test); the second fixed that premise and silently reintroduced the
 symptom on the resume path, because it reasoned from "usbport zeroes the
 extension per start" without asking which callbacks are starts. Same pattern
 this phase hit in tasks 5 and 7: after fixing a diagnostic, re-derive the
 property it is supposed to have, and check it against every path that
 reaches the site, not just the one that failed.
 
-The cheap check that would have caught round two: the self-test has exactly one call site, in
+The cheap check that would have caught the second fix: the self-test has exactly one call site, in
 `XhciInitController`, which is reached from both `StartController` (with
 resources) and `XhciResumeController` (with NULL), so any gate written in
 terms of "a start" had to be checked against the resume arm, which zeroes
@@ -6080,7 +6081,7 @@ A refused unmask leaves the interrupt off: safe, and usbport enables again
 on the next resume. A refused mask leaves the enable up. Since
 `xhciResetController` publishes `ControllerFailed` on the statement after
 the mask, the ISR then declines a still-asserted shared level-triggered INTx
-without acknowledging it: the UP Win98 livelock the fifth review round fixed
+without acknowledging it: the UP Win98 livelock an earlier repair fixed
 by ordering mask before publication. Reaching it again through the refusal
 path took one plausible-looking symmetry.
 
@@ -6124,7 +6125,7 @@ derive, which fixed the case where one operand was readable. When both read
 all ones it still wrote nothing, and quiesce cleared `INITIALIZED` and
 `ResetController` published `ControllerFailed` anyway, so the ISR declined
 at DIRQL without acknowledging. That is the same shared-INTx livelock the
-fifth round fixed by ordering mask before publication, arriving through the
+earlier repair fixed by ordering mask before publication, arriving through the
 gate instead of through the ordering. Masking before publishing is necessary
 and not sufficient; what the gate needs is whether the mask applied.
 
@@ -6176,7 +6177,7 @@ that stops decoding in between swallows both writes silently, and the field
 then published "the enables are down" about a controller whose enables were
 exactly as up as before. Quiesce or `ResetController` then closed the ISR's
 gate on an asserted INTx, the livelock the field had been added to prevent,
-one level further in. This is the third round in a row where the write was
+one level further in. This is the third repair in a row where the write was
 fixed and the proof about the write was taken from the wrong event.
 
 The reason no test caught it is the part worth keeping.
@@ -6195,14 +6196,14 @@ an unmask, all-ones is indistinguishable from the success being looked for,
 and has to be rejected explicitly. Same sentinel, opposite meanings, decided
 by which direction the check is looking.
 
-Separately, the escalation added last round had been described in two
+Separately, the escalation added by the previous repair had been described in two
 places as producing a stop/start. It does not:
 `UsbPortInvalidateController(RESET)` queues a DPC that calls the miniport's
 own `ResetController` at DISPATCH inside a usbport lock, usbport does
 nothing afterwards, and that callback marks the controller terminally
 failed. The escalation is containment, a silently non-interrupting
 controller traded for a visibly failed one, and describing it as recovery
-was the second time in two rounds a usbport behaviour was asserted from
+was the second time in two repairs a usbport behaviour was asserted from
 plausibility while this repository's own disassembly notes said otherwise.
 
 Reusable rules: prove an MMIO transition from a read back, never from the
@@ -6223,7 +6224,7 @@ Review of the repair above. Host model only; no target VM or real hardware.
 
 ### Observation
 
-The previous round made the mask publish whether it had actually suppressed
+The previous repair made the mask publish whether it had actually suppressed
 delivery. Three of the four callers were then safe by construction, because
 an unproven mask leaves `XhciIsr` admitted and the ISR can still
 acknowledge. `XhciDisableInterrupts` was the exception and nothing checked
@@ -6247,7 +6248,7 @@ but three contracts still said "both". A name is the cheapest place for a
 proof to drift from its statement, and renaming it to
 `InterruptDeliverySuppressed` is what stops the drift recurring. And
 `InterruptMaskFailures` counted only an unreadable operand, so the
-swallowed-write incident, the one the previous round had just made
+swallowed-write incident, the one the previous repair had just made
 detectable, left no trace at all once later lifecycle activity moved the
 state word. A state field answers "now"; a counter answers "did this ever
 happen", and an incident worth detecting is worth counting.
@@ -8888,7 +8889,7 @@ for every NT 5.1 and later `usbport.sys` and `usbehci.sys` in `tools/` - the
 twelve `legal-provenance.md` section 2 lists - fetched by the GUID and
 age in the binary's own `RSDS` record. **Windows 2000 SP4's and NUSB's have
 none and were read without symbols**, which is where the address arithmetic
-still lives (the 2026-09-16 audit's E8: this said "every", and the two that
+still lives (corrected by the audit of 2026-09-16: this said "every", and the two that
 matter most to this project are the exceptions). `kd -z <binary>
 -y srv*tools\symbols` loads them offline (`legal-provenance.md` section 2 has
 the twelve identifiers and the URL shape).
@@ -9804,7 +9805,7 @@ Rule. **Every multi-table name lookup in `XHCISNAP` goes through
 
 ## A hub FDO must pass IRP_MJ_SYSTEM_CONTROL down: Driver Verifier stops with C9 0x220 otherwise
 
-Task 36.16 (finding D4, branch `p36-d4`), 2026-10-10, development host A,
+Task 36.16 (branch `p36-d4`), 2026-10-10, development host A,
 32-bit Windows 7 in QEMU under Driver Verifier. The guest seemed to hang at
 "Starting Windows" with interrupts off; a kernel debugger over the guest's
 serial port showed bugcheck C9 {0x220, ...}. Verifier's started-stack WMI

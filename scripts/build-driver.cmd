@@ -113,10 +113,12 @@ rem binary in it:
 rem
 rem   scripts\package\make-package.ps1 [-Flavor release|debug] [-Arch x86|amd64]
 rem
-rem The media is this project's two files and nothing else; the OS supplies
-rem usbd.sys and usbui.dll through the INF's LayoutFile. The HCD replaces
-rem usbport.sys and usbhub.sys, and the INF gate refuses an INF that fetches
-rem either (OS-HCDREPLACED).
+rem The media holds no Microsoft file: it is the drivers (xhcihlpr.sys on x86
+rem only) and their INFs, txtsetup.oem, on amd64 the test certificate, and a
+rem pinned Stor98 build when one is asked for (make-package.ps1 lists them).
+rem The OS supplies usbd.sys and usbui.dll through the INF's LayoutFile. The
+rem HCD replaces usbport.sys and usbhub.sys, and the INF gate refuses an INF
+rem that fetches either (OS-HCDREPLACED).
 rem
 rem Usage:  scripts\build-driver.cmd [release|debug|qemu|both|all]
 rem                                  [-amd64] [-NoTargetEvidence]
@@ -154,11 +156,14 @@ rem
 rem WHAT AN amd64 BUILD IS GATED ON, since roadmap task 21.3 closed: the import
 rem gate enforces xhci98-imports-amd64.allow and resolves every pair against
 rem authenticated NT 5.2 amd64 baselines (winxp64-baselines.expected), and the
-rem INF gate runs over BOTH production INFs on every build - src\xhci98.inf
-rem under -Arch x86 and src\xhci98-amd64.inf under -Arch amd64 - whichever
-rem architecture is being built. Both, always, because the two are one release
-rem and either drifting from the other is silent on the target;
-rem scripts\inf-gate\test-inf-checks.ps1 also compares them directly.
+rem INF gates run over all eight production INFs on every build, whichever
+rem architecture is being built: check-inf.ps1 over src\xhci98.inf (-Arch
+rem x86) and src\xhci98-amd64.inf (-Arch amd64), check-uas-inf.ps1 over the
+rem two UAS INFs and check-cm-inf.ps1 over the four connection manager INFs
+rem (steps 3, 12 and 14 above). All of them, always, because each x86/amd64
+rem pair is one release and either drifting from the other is silent on the
+rem target; scripts\inf-gate\test-inf-checks.ps1 also compares the two
+rem xhci98 INFs directly.
 rem
 rem Exit codes: 0 = built and gated, 1 = failure, 2 = host tests inconclusive
 rem (a blocked exe launch, not a test failure - just run it again).
@@ -271,7 +276,7 @@ rem **DDKROOT NAMES THE WIN2000 DDK AND MUST NOT REACH THIS LEG.**  It is an
 rem override for the 32-bit build, and it reaches setenv.bat - so an exported
 rem DDKROOT pointing at tools\ntddk was being called with `x64 WNET`, which the
 rem Win2000 DDK does not have.  The run then died at :nooutput naming the wrong
-rem cause entirely (the 2026-09-16 audit's D7).  WDKROOT is this leg's own
+rem cause entirely (the audit of 2026-09-16).  WDKROOT is this leg's own
 rem override - the SAME name the import gate honours, so one
 rem variable redirects the whole 64-bit toolchain rather than each script
 rem having its own.
@@ -308,7 +313,7 @@ if defined XHCI_EXTRA_DEFINES goto extradefines
 rem Two refusals, because the two legs want two different toolchains: on the
 rem -amd64 leg DDKROOT is tools\WinDDK71 (or WDKROOT), and a missing WDK used
 rem to be reported as a missing Windows 2000 DDK, naming tools\ntddk and the
-rem cab installer that cannot supply it (the 2026-09-17 audit's D6).
+rem cab installer that cannot supply it (the audit of 2026-09-17).
 if /i "%ARCH%"=="amd64" if not exist "%DDKROOT%\bin\setenv.bat" goto nowdk
 if not exist "%DDKROOT%\bin\setenv.bat" goto noddk
 
@@ -358,7 +363,7 @@ if errorlevel 1 goto inftestfail
 echo.
 echo === INF gate (x86) ===
 rem INFFILE is what :inffail names; the two gate runs share the label and used
-rem to share the x86 file's name too (the 2026-09-17 audit's D7).
+rem to share the x86 file's name too (the audit of 2026-09-17).
 set "INFFILE=src\xhci98.inf"
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\inf-gate\check-inf.ps1" -Arch x86
@@ -472,8 +477,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
 if errorlevel 1 goto qemutestfail
 
 rem The verdict evaluator's suite (design record 06) and the batch-file
-rem line-ending check were not wired in here until the 2026-09-05 audit's
-rem smaller items; a build that ran every other self-test could still ship a
+rem line-ending check were not wired in here until the audit of
+rem 2026-09-05; a build that ran every other self-test could still ship a
 rem matrix that read a refusal as a pass. Both are guestless and quick.
 echo.
 echo === VM matrix verdict self-tests ===
@@ -597,7 +602,7 @@ if errorlevel 1 goto flavourmissing
 rem Record which sources this binary came from, beside it. make-release.ps1
 rem checks it and refuses to publish a .sys the tree can no longer reproduce -
 rem the driver's equivalent of the "EXE newer than its own sources" refusals it
-rem already makes for XHCIQUAL and XHCISNAP (the 2026-09-07 audit's H13). It is
+rem already makes for XHCIQUAL and XHCISNAP (the audit of 2026-09-07). It is
 rem content rather than timestamps, because an mtime moves on a checkout or a
 rem comment-only commit; scripts\source-stamp.ps1 says why at length.
 powershell -NoProfile -ExecutionPolicy Bypass -File ^

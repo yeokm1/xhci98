@@ -273,7 +273,7 @@ HKR,,EnumPropPages32
 ; 2026-10-09) - the only one in this file. An update from 2.3.0.0 or
 ; 2.3.1.0 leaves no xhcimsi active beside it (record 18 section 15.7,
 ; decision H3): its service deleted, and its file - loaded and in use -
-; deleted at the restart (DELFLG_IN_USE, 0x00010000).
+; deleted at the restart (DELFLG_IN_USE1, 0x00010000).
 [Xhci.Dev6.NTx86]
 AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles,XhciHlpr.CopyFiles
@@ -354,6 +354,11 @@ xhci98.inf
 [DefaultInstall]
 CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 
+; The right-click sections are deliberately driver-only: they copy the
+; driver and the OS files it names, and nothing else. xhcihlpr.sys is
+; left to [Xhci.Dev.NTx86] and [Xhci.Dev6.NTx86], the device install that
+; also adds its boot-start service; copied here it would be a file no
+; service names.
 [DefaultInstall.NTx86]
 CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 

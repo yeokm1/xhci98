@@ -132,8 +132,11 @@ static void fabPump(FAB *f)
         fr = &f->RxQ[0];
         if ((f->RxCtrl & 0x80000000UL) == 0 || f->RxSize == 0 ||
             f->RxProd == f->RxCons) {
-            /* No buffer: a real router retries later (Spec 6.6 for the
-             * events); keep it unless the ring is off. */
+            /* No buffer. The host interface drops such a frame (as
+             * tbt_fake.h does); this fabric keeps it instead, unless the
+             * ring is off, standing for a router's retransmission of an
+             * unacknowledged event (Spec 6.6). A response lost to a full
+             * ring is therefore not modelled here. */
             if ((f->RxCtrl & 0x80000000UL) == 0) {
                 f->RxDropped++;
             } else {
@@ -1690,7 +1693,9 @@ static void fabDisconnect(FAB *f, int pr, unsigned pa)
         setLaneState(&p->Adp[pa + k], 7);
         setLaneWidth(&p->Adp[pa + k], 0);
         p->Adp[pa + k].Cs[4] |= 0x80000000UL;
-        p->Adp[pa + k].Cs[FAB_CAP_LANE + 1] &= ~0x4000UL;
+        /* Lane Disable is left as the connection manager wrote it: an
+         * unplug does not reset the host router, so only the driver's own
+         * write clears it. */
     }
     if (dev >= 0) {
         f->R[dev].Connected = 0;

@@ -1,4 +1,4 @@
-﻿# post-release run
+# post-release run
 # driver:    1.0.0.0 qemu, 156784 B, sha256 2024bdd751dbf202
 # image:     vm\fresh-2a.img, stamp base-1.0.0.0-qemu, from win98.img post-nusb
 # qemu:      11.0.0 (v11.0.0-12122-ga4bb4b10c9), accel tcg

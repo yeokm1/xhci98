@@ -428,8 +428,8 @@ ULONG XhciSsParentNeeded(ULONG hubRank, ULONG childRank);
  *     ranks the same as the hub's: the boundary is further up and the
  *     device sits behind it as the hub does - root, a Gen 2x1 hub A, a
  *     Gen 1x1 hub B behind it (B's pair names A), and a Gen 1x1 device
- *     behind B, which crosses A's boundary too (footnote 110; Codex review
- *     of b6e569e, finding 1), as a Full-Speed device behind a Full-Speed hub
+ *     behind B, which crosses A's boundary too (footnote 110; reviewed and
+ *     revised after b6e569e), as a Full-Speed device behind a Full-Speed hub
  *     keeps the High-Speed hub above both as its TT;
  *   - 0 otherwise, including any unknown rank.
  *
@@ -470,8 +470,8 @@ ULONG XhciSsHubPsiv(const struct _XHCI_PORT_MAP *map, ULONG rootPort,
  * Address Device: `output`, the speed the controller wrote into the output
  * Slot Context, when it differs from `given` (what the bus asked for) and
  * names a SuperSpeed-class rate on `rootPort`'s protocol - the controller
- * is authoritative where the bus guessed (an unmatched SuperSpeedPlus rate,
- * Codex review of 034a119, finding 2) - as xHCI 4.19.9 (p.304-305) has it:
+ * is authoritative where the bus guessed (an unmatched SuperSpeedPlus rate;
+ * reviewed and revised after 034a119) - as xHCI 4.19.9 (p.304-305) has it:
  * a SuperSpeedPlus device sends a Sublink Speed Device Notification after
  * SET_ADDRESS, and the xHC writes the speed it reports into the output Slot
  * Context, ignoring the input's; otherwise `given`, including for an

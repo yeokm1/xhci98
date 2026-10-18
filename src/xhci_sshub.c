@@ -521,8 +521,8 @@ ULONG XhciSsHubPsiv(const XHCI_PORT_MAP *map, ULONG rootPort,
     if (link != NULL && link->Plus) {
         proto = &map->Protocols[map->Protocol[rootPort - 1]];
         if (proto->Major == 3) {
-            /* A PSI DWORD names the aggregate rate (Codex review of
-             * 034a119, finding 2), so a listed entry at it is a match. */
+            /* A PSI DWORD names the aggregate rate (reviewed and revised
+             * after 034a119), so a listed entry at it is a match. */
             v = xhciSsHubPsivAt(map, rootPort, link->Kbps);
             if (v == 0) {
                 v = xhciSsHubDefaultPsiv(map, rootPort, link);

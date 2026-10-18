@@ -168,7 +168,7 @@ function Test-Expectation {
 # matches a target by any of its keys rather than by `Id` alone.  There was a
 # `Test-RowMayWedge` here that did the exact-Id comparison, and nothing but the
 # self-test ever called it - so the harness had two answers to one question and
-# was checking the one it does not use (the 2026-09-16 audit's D4).  The
+# was checking the one it does not use (the audit of 2026-09-16).  The
 # self-test now drives `Test-TargetInList`.
 
 # A typo in that field would silently mean "no target", which is the same
@@ -245,9 +245,8 @@ $script:DriverRefusalLabelTransient = 'endpoint refusals - not ready'
 # enumerated it), so the HCD has no transient refusal. `selects failed` is
 # the HCD's own: a select can fail after every endpoint it named opened on the
 # controller (SET_CONFIGURATION or SET_INTERFACE refused by the device), or on
-# a malformed record before any was counted, and neither moves a cause above
-# (Codex review round 23, finding 2). The BUFFER_TOO_SMALL length probe is
-# not counted in it.
+# a malformed record before any was counted, and neither moves a cause above.
+# The BUFFER_TOO_SMALL length probe is not counted in it.
 $script:HcdRefusalLabelsPermanent = @(
     'endpoint refusals - type'
     'endpoint refusals - params'
@@ -482,8 +481,8 @@ function Get-RowSwitchProblems {
     $covered = @{}
     foreach ($k in $Row.ExpectBySwitch.Keys) {
         # An empty form covers its values with nothing, which is the same
-        # silence as leaving them out, and is refused the same way (Codex
-        # review of 8fabf61: `'1,2' = @()` turned a mismatch FAIL into PASS).
+        # silence as leaving them out, and is refused the same way (commit
+        # 8fabf61: `'1,2' = @()` turned a mismatch FAIL into PASS).
         $lines = @($Row.ExpectBySwitch[$k] | Where-Object { $_ -is [string] -and -not [string]::IsNullOrWhiteSpace($_) })
         if ($lines.Count -eq 0 -or $lines.Count -ne @($Row.ExpectBySwitch[$k]).Count) {
             $out += ("row {0}: ExpectBySwitch '{1}' must hold one or more expectation lines and nothing else" -f $Row.Name, $k)

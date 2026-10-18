@@ -631,8 +631,8 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
     }
 
     /*
-     * One range for admission, mapping and TRB construction (Codex review of
-     * Phase 29, round 1, finding 1). An isochronous URB packet is one
+     * One range for admission, mapping and TRB construction (Phase 29). An
+     * isochronous URB packet is one
      * interval's payload, and the transfer path carries it as at most two
      * page-bounded pieces of one page in all (XhciPipeIsoFragments, through
      * hcd_io.c's fill) with a burst count TBC can hold. An endpoint whose
@@ -647,9 +647,9 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
      * guarantees that only at 1024-byte packets. A small packet size with
      * burst 0 - 4096 bytes in 512-byte packets is eight bursts - would be
      * admitted and then fail every full-sized request, so the builder's
-     * bound is applied here too (Codex review of Phase 29, round 2, finding
-     * 2). Without LEC the Mult the endpoint is programmed with already
-     * covers the bursts (the SS companion's payload is held to it above,
+     * bound is applied here too (Phase 29). Without LEC the Mult the
+     * endpoint is programmed with already covers the bursts (the SS
+     * companion's payload is held to it above,
      * and the SSP derivation computes it from them).
      */
     if (out.TransferType == XHCI_PIPE_XFER_ISOCH && out.MaxPacketSize != 0) {
@@ -902,6 +902,7 @@ ULONG XhciPipeFunctionEndpointFrom(const UCHAR *config, ULONG length,
     ULONG super;
     ULONG total;
     ULONG own;
+    ULONG callerLength;
     ULONG b;
     ULONG i;
 
@@ -918,9 +919,24 @@ ULONG XhciPipeFunctionEndpointFrom(const UCHAR *config, ULONG length,
     super = speed == XHCI_PIPE_SPEED_SUPER ||
             speed == XHCI_PIPE_SPEED_SUPER_PLUS;
     own = (ULONG)config[offset + 6];
+    /*
+     * The URB carries no size for the caller's descriptor, so its own
+     * wTotalLength is all there is - a value the client wrote. It is held to
+     * the device's own configuration length: a copy longer than the
+     * configuration the device returned is not one of it, and the walk is
+     * then bounded by a length the bus read rather than by the client's
+     * word alone (a short or malformed copy still falls through to the
+     * device's byte, as before).
+     */
+    callerLength = 0;
+    if (caller != NULL) {
+        callerLength = (ULONG)caller[2] | ((ULONG)caller[3] << 8);
+        if (callerLength > length) {
+            callerLength = length;
+        }
+    }
     if (caller != NULL &&
-        XhciPipeCallerInterval(config, length, offset, caller,
-                               (ULONG)caller[2] | ((ULONG)caller[3] << 8),
+        XhciPipeCallerInterval(config, length, offset, caller, callerLength,
                                interfaceNumber, alternate, &b) ==
             XHCI_PIPE_OK &&
         b != own) {

@@ -156,7 +156,7 @@ static void test_all_taken(void)
 }
 
 /*
- * stamp_create (Codex round 1): the create is the caller's, exclusive, and
+ * stamp_create (task 38.1): the create is the caller's, exclusive, and
  * the directory can change between the ask and the create. The fake create
  * takes a name; "race" names are ones another writer creates in that gap
  * (free when asked, taken by the time of the create), "dirrace" names the

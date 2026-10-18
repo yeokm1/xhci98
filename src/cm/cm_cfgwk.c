@@ -592,6 +592,12 @@ static ULONG cmWkBusIds(ULONG bridge, PULONG ids, ULONG room)
             if (!cmWkCfgRead(XHCI_TBT_BDF(bus, dev, fn), 0, &id)) {
                 return room + 1;
             }
+            /* Vendor 0001h is Configuration Request Retry Status: the
+             * function is there but not ready, so the bus is not read
+             * completely (tbt_brnum.c defers on the same id). */
+            if ((id & 0xFFFFUL) == 0x0001UL) {
+                return room + 1;
+            }
             if (id == 0xFFFFFFFFUL || (id & 0xFFFFUL) == 0xFFFFUL) {
                 if (fn == 0) {
                     break;
@@ -1438,7 +1444,7 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
         (VOID)XhciTbtNumberBridges(&io, bdf,
                                    XHCI_TBT_BRNUM_F_WINDOWS |
                                        XHCI_TBT_BRNUM_F_IRQ |
-                                       (tries + 1UL < CM_WK_NUMBER_TRIES
+                                       (tries < CM_WK_NUMBER_TRIES
                                             ? XHCI_TBT_BRNUM_F_WAIT_EMPTY
                                             : 0UL),
                                    cmWkNumberGo, w, &r);

@@ -56,7 +56,7 @@ instead. build-and-test.md has the two commands and the VHD alternative.
 The Windows 7 Professional SP1 x64 DVD image - the same media task 21.7 read
 its six measurements out of, so the stack this guest installs is the stack that
 was measured. Empty by default, like every other ISO parameter in these scripts
-(the 2026-09-07 audit's J3). The media is volume-licence, so Setup asks for a
+(the audit of 2026-09-07). The media is volume-licence, so Setup asks for a
 key; the owner drives Setup at the console, the standing decision of
 2026-09-03.
 

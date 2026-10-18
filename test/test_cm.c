@@ -141,6 +141,7 @@ static void test_profiles(void)
 static void test_values(void)
 {
     CM_VALUES v;
+    CM_VALUES before;
     static const WCHAR bdf[] = { '0', '4', ':', '0', '0', '.', '0', 0 };
     WCHAR longer[CM_TUNNEL_BRIDGE_CHARS + 1];
     ULONG i;
@@ -209,8 +210,10 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_APPROVE_TIMEOUT_MS], 60000, "the approve timeout ceiling");
     CmValuesTake(&v, CM_VAL_LOG_VERBOSITY, 1, 9);
     CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 9, "the verbosity passes to the log's own refusal");
+    before = v;
     CmValuesTake(&v, CM_VAL_COUNT, 1, 5);
-    CHECK(1, "an index out of range is ignored");
+    CHECK(memcmp(&before, &v, sizeof(v)) == 0,
+          "an index out of range is ignored: nothing changed");
 
     /* XhciCmLogDebugView: 0 and 1, anything else refused. */
     CmValuesTake(&v, CM_VAL_LOG_DEBUGVIEW, 1, 1);

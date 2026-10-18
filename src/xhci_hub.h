@@ -235,9 +235,9 @@ ULONG XhciHubResumeProgress(ULONG status);
  * A resume's outcome settled against the change bits its last GET_STATUS
  * read: DONE with C_PORT_CONNECTION raised is DISABLED - the device was
  * replaced during the resume, so the held devices are not let go and the
- * port is enumerated afresh (Codex review of the Phase 28-31 merge,
- * finding 1). C_PORT_CONNECTION is bit 0 at USB 2.0 and SuperSpeed alike
- * (xhci_sshub.h), so one rule serves both. Every other outcome stands.
+ * port is enumerated afresh (the Phase 28-31 merge). C_PORT_CONNECTION is
+ * bit 0 at USB 2.0 and SuperSpeed alike (xhci_sshub.h), so one rule serves
+ * both. Every other outcome stands.
  */
 ULONG XhciHubResumeSettle(ULONG progress, ULONG change);
 
@@ -255,11 +255,11 @@ ULONG XhciHubResumeSettle(ULONG progress, ULONG change);
  *   STUCK     with devices held: they stay held and are torn down at once
  *             (GaveUp, Disconnect, then Connect) - a resume that may yet
  *             finish must never meet their traffic before its recovery
- *             (Codex review of the Phase 27 integration, round 5, finding
- *             1); the port's reset tries the resume once more first. With
- *             nothing held: nothing now - the port is looked at again
- *             (Retry) - until XHCI_HUB_RESUME_TRIES have failed in a row,
- *             when the port is enumerated afresh (GaveUp, Connect).
+ *             (the Phase 27 integration); the port's reset tries the
+ *             resume once more first. With nothing held: nothing now -
+ *             the port is looked at again (Retry) - until
+ *             XHCI_HUB_RESUME_TRIES have failed in a row, when the port is
+ *             enumerated afresh (GaveUp, Connect).
  *
  * A held device is never let go on any outcome but DONE: the teardown the
  * others ask for frees it with its pipes still paused.

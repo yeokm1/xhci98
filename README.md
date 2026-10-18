@@ -287,12 +287,12 @@ Each value is a `DWORD` in a driver (software) key; restart Windows after a chan
 | `XhciCmLogVerbosity` | The Thunderbolt driver's log level, read by the USB Tree (`0` to `4`) | `2` |
 | `XhciCmLogDebugView` | The Thunderbolt driver's log sent to DebugView as well | `0` |
 
-[docs/using/tuning.md](docs/using/tuning.md) has every value, its range and its effect, including polling periods, interrupt moderation, controller-fault handling, the per-controller fixes and the Linux-derived controller quirks; the release notes have [the `XhciCm*` values](docs/using/release-notes.md#the-connection-managers-registry-values).
+[docs/using/tuning.md](docs/using/tuning.md) has every value of both drivers, its range and its effect, including polling periods, interrupt moderation, controller-fault handling, the per-controller fixes, the Linux-derived controller quirks and the `XhciCm*` values; the release notes describe [the `XhciCm*` values](docs/using/release-notes.md#the-connection-managers-registry-values) in full.
 
 ## What is tested, and what is not
 
 - Windows 98 SE and Windows 2000 SP4 are the primary targets.
-- Real hardware: Windows 98 SE on the ThinkPad E460 and P14s Gen 1; Windows XP x64 and 7 x64 on the Dell Latitude E7250.
+- Real hardware: Windows 98 SE on the ThinkPad E460 and P14s Gen 1, and the Intel port switchover under Windows 98 SE on the Lenovo B490; Windows XP x64 and 7 x64 on the Dell Latitude E7250.
 - Every other target, Windows 2000 included, has run in QEMU virtual machines only.
 - Per-system detail: the release notes' [Targets and their standing](docs/using/release-notes.md#targets-and-their-standing). The test devices: [test-equipment.md](docs/contributing/test-equipment.md).
 
@@ -409,7 +409,7 @@ The repository tracks no third-party binary on its own, although the tool execut
 - Some files of `xhcicm.sys`'s source, under `src/cm/`, are adapted from the `usb4-emu` project (some lifted from its `tools/usb4cm` under its earlier MIT licence) and from Linux's `drivers/thunderbolt`, and keep their copyright lines and licence notices. The [legal and provenance record](docs/contributing/legal-provenance.md), section 2a, lists each file.
 - `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender.
 - `XHCISNAP.EXE` embeds the MSVC 6.0 runtime.
-- `XHCICLN.EXE` and `XHCIINST.EXE` embed the MSVC 6.0 runtime; `XHCICL64.EXE` and `XHCIIN64.EXE` the WDK 7.1 one. Neither install tool contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
+- `XHCICLN.EXE`, `XHCIINST.EXE` and `XHCITR.EXE` embed the MSVC 6.0 runtime; `XHCICL64.EXE`, `XHCIIN64.EXE` and `XHCITR64.EXE` the WDK 7.1 one. None of them contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
 

@@ -263,7 +263,7 @@ completions while `SubmitDepth != 0`, leaving delivery to the next event
 DPC or `XhciSlotPoll` - and `CompletionsHeldBySubmit` reads 1 in the
 arrest, which looks like a confirmation. **Refuted by the same live read
 that raised it**: `SubmitDepth` is 0 and `CompletionHead` is NULL. That
-counter is a historical latch, once per pass by design (Phase 7 review B5),
+counter is a historical latch, once per pass by design (Phase 7 item B5),
 not a stuck state. Do not re-raise this without re-reading those two
 fields.
 

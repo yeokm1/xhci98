@@ -98,6 +98,14 @@ static ULONG xhciPswMask(const XHCI_PSW_IO *io, ULONG offset, PULONG mask)
     return value != XHCI_PSW_UNREAD;
 }
 
+/* Record the first failure only. */
+static VOID xhciPswFail(PXHCI_PSW_STATE st, ULONG step)
+{
+    if (st->Step == XHCI_PSW_DONE) {
+        st->Step = step;
+    }
+}
+
 ULONG XhciPswRoute(const XHCI_PSW_IO *io, PXHCI_PSW_STATE st)
 {
     if (st == NULL) {
@@ -125,30 +133,22 @@ ULONG XhciPswRoute(const XHCI_PSW_IO *io, PXHCI_PSW_STATE st)
         st->Step = XHCI_PSW_STEP_PSSEN_READ;
     }
 
+    /* From here a PSSEN read-back failure may already be recorded, and it
+     * stays the reported step: the first failure, as the header says. */
     if (!xhciPswMask(io, XHCI_PSW_XUSB2PRM, &st->Usb2Mask)) {
-        st->Step = XHCI_PSW_STEP_XUSB2PRM;
+        xhciPswFail(st, XHCI_PSW_STEP_XUSB2PRM);
         return st->Step;
     }
     if (!io->Write(io->Context, XHCI_PSW_XUSB2PR, st->Usb2Mask)) {
-        st->Step = XHCI_PSW_STEP_XUSB2PR_WRITE;
+        xhciPswFail(st, XHCI_PSW_STEP_XUSB2PR_WRITE);
         return st->Step;
     }
     st->Written |= XHCI_PSW_WROTE_XUSB2PR;
     if (!io->Read(io->Context, XHCI_PSW_XUSB2PR, &st->Usb2Now)) {
         st->Usb2Now = XHCI_PSW_UNREAD;
-        if (st->Step == XHCI_PSW_DONE) {
-            st->Step = XHCI_PSW_STEP_XUSB2PR_READ;
-        }
+        xhciPswFail(st, XHCI_PSW_STEP_XUSB2PR_READ);
     }
     return st->Step;
-}
-
-/* Record the first failure only. */
-static VOID xhciPswFail(PXHCI_PSW_STATE st, ULONG step)
-{
-    if (st->Step == XHCI_PSW_DONE) {
-        st->Step = step;
-    }
 }
 
 ULONG XhciPswRelease(const XHCI_PSW_IO *io, ULONG written,

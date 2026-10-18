@@ -93,8 +93,7 @@
 /* The path the raw IRQ's number names: 16-23 the PIRQs wired direct to
  * I/O APIC inputs 16-23, below 16 a PIRQx_ROUT byte steering a PIRQ to it.
  * The number names a path, not the HAL's mode: an I/O APIC HAL can hand
- * out an IRQ below 16 too (review round 1, finding 2). The names are
- * kept. */
+ * out an IRQ below 16 too. The names are kept. */
 #define XHCI_PIRQ_IRQ_NONE          0UL
 #define XHCI_PIRQ_IRQ_APIC          1UL     /* 16-23: the direct path       */
 #define XHCI_PIRQ_IRQ_PIC           2UL     /* below 16: PIRQx_ROUT steered */
@@ -165,7 +164,7 @@ typedef struct _XHCI_PIRQ_IO {
      * and ME, so the PIRQx_ROUT-steered target may be written; 0 on 2000,
      * XP, Vista and 7, where an I/O APIC HAL can hand out a low IRQ too
      * and which route it uses is not proven: such a run reports
-     * XHCI_PIRQ_D_STEERED_NT (owner, 2026-10-09, after review round 1). */
+     * XHCI_PIRQ_D_STEERED_NT (owner, 2026-10-09). */
     ULONG Steerable;
 } XHCI_PIRQ_IO, *PXHCI_PIRQ_IO;
 

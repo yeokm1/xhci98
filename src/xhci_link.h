@@ -151,10 +151,9 @@ ULONG XhciLinkResetDone(ULONG portsc, PULONG warmSeen);
  * decision: whatever the machine held is fed a disconnect - a Failed machine
  * included, so the link's recovery finds it Empty and the trained link's
  * reset completion, which brings no CSC when CCS never dropped, starts a new
- * enumeration (Codex review of Phase 29, round 1, finding 2) - and the
- * bounded warm reset or the give-up is the action. The link's record is
- * consulted on every change, so a disconnect or a trained link refills the
- * warm-reset budget (finding 3).
+ * enumeration (Phase 29) - and the bounded warm reset or the give-up is the
+ * action. The link's record is consulted on every change, so a disconnect or
+ * a trained link refills the warm-reset budget.
  */
 #define XHCI_LINK_FEED_DISCONNECT   0x1UL
 #define XHCI_LINK_FEED_CONNECT      0x2UL
@@ -168,8 +167,8 @@ ULONG XhciLinkPortFeed(PXHCI_LINK_PORT link, ULONG usb3, ULONG portsc,
 
 /* The serial string, as UTF-16 code units, kept up to this many. A longer
  * serial is truncated, and a truncated identity proves nothing: it neither
- * makes a hold identified nor matches one (Codex review of Phase 29, round
- * 1, note 6). USB string descriptors carry at most 126. */
+ * makes a hold identified nor matches one (Phase 29). USB string descriptors
+ * carry at most 126. */
 #define XHCI_LINK_SERIAL_CHARS      64UL
 
 typedef struct _XHCI_LINK_IDENTITY {

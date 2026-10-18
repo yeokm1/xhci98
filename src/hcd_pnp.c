@@ -95,13 +95,12 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
     /*
      * Admission closes first, then what holds the outstanding-I/O count is
      * waited out, and only then is the controller stopped and its resources
-     * released (Codex review of 26-A.2, round 1, finding 4). What holds it:
-     * every IRP while it is inside this driver's dispatch, and the D0 and
-     * system SET_POWER IRPs - which suspend or resume the controller - until
-     * they complete. An IRP this driver only forwards releases the count when
-     * the lower driver's dispatch returns, and touches nothing of the
-     * controller's after it is forwarded (round 2, note 6). The bias
-     * AddDevice set is dropped here.
+     * released (task 26-A.2). What holds it: every IRP while it is inside
+     * this driver's dispatch, and the D0 and system SET_POWER IRPs - which
+     * suspend or resume the controller - until they complete. An IRP this
+     * driver only forwards releases the count when the lower driver's
+     * dispatch returns, and touches nothing of the controller's after it is
+     * forwarded. The bias AddDevice set is dropped here.
      */
     hc->Common.PnpState = HCD_PNP_REMOVED;
     HcdIoLeave(hc);

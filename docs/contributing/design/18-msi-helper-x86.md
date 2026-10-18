@@ -4,18 +4,19 @@ Design record for the x86 half of message-signalled interrupts on Windows
 Vista and Windows 7 (roadmap-hcd Phase 36, tasks 36.15 and 36.16; the task
 lines for this record's code and legs are the orchestrator's to number).
 Revision 1, 2026-10-09, written before any code, on branch `p36-msi86`;
-revision 2 the same day, after review round 1, revision 3 after round
-2, revision 4 after round 3, and revision 5 after round 4, which
-converged (section 14). **Revision 11, 2026-10-10**: section 12a, as
+revisions 2 to 5 the same day, each answering the review of the one
+before it, revision 5 reviewed and revised with no P1 or P2 remaining
+(section 14). **Revision 11, 2026-10-10**: section 12a, as
 built. **Revision 6** records the owner's answers to
 section 12 (2026-10-09): the import and the strip accepted, a reboot
 requested by the INF (section 5), and mode 1 failing the start where no
 line is offered and no helper is bound (section 4.3). **Revision 7**
-takes review round 5 and the owner's further decision of the same day:
+answers the review of revision 6 and takes the owner's further decision
+of the same day:
 `XhciInterruptMode` 1 on its own forces the line on Vista and 7, x86
-and amd64, through the same filter (section 4.2). Revision 8 takes
-review round 6, revision 9 round 7, and revision 10 round 8, which
-converged.
+and amd64, through the same filter (section 4.2). Revisions 8, 9 and 10
+each answer the review of the one before it; revision 10 was reviewed
+and revised with no P1 or P2 remaining.
 
 **Revision 12, 2026-10-11** records the owner's decision of that day
 (section 12, decision 8; roadmap task 36.53; record 15 revision 7), which
@@ -47,9 +48,9 @@ this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
 architecture's own caller, a NULL in either meaning "not found". On amd64
 the caller asks `MmGetSystemRoutineAddress`. On x86 the one `xhci98.sys`
 also loads on Windows 98, ME, 2000 and XP, so it can import neither
-routine, nor `MmGetSystemRoutineAddress` (absent on 98 and ME), and four
-review rounds of 36.5 found no safe way for it to reach them by itself
-(record 15 section 13.5, rounds 1 to 4: a walk of kernel memory cannot
+routine, nor `MmGetSystemRoutineAddress` (absent on 98 and ME), and the
+review of 36.5's design found no safe way for it to reach them by itself
+(record 15 section 13.5: a walk of kernel memory cannot
 prove its pages mapped; a parse of the kernel's file proves where the
 driver's own imports are, not where the target is).
 
@@ -658,8 +659,8 @@ R2 admit, transformed; and a STRIPPABLE list of a shape not admitted
 first build carries a `qemu`-only switch, `XhciMsi86NoStrip`, under which
 the filter records and does not strip (outcome "disabled"); R1 and R2 are
 read from the complete trace of section 9 on both guests; the shapes they
-show are written into this record as the admitted shapes, by a review
-round, before the code is taken as done, and any other shape takes
+show are written into this record as the admitted shapes, and
+reviewed, before the code is taken as done, and any other shape takes
 "unsupported shape". If R1 shows that the PCI driver offers no line
 configuration for a controller with a pin, the strip is withdrawn: the
 switch's "disabled" becomes the shipped default, the class is still
@@ -981,8 +982,8 @@ the `wlh` libraries can only have the Vista exports. **The `/GS` cookie
 stays on**, the kit's default (`BUFFER_OVERFLOW_CHECKS` unset, so
 `GsDriverEntry` and `BufferOverflowK.lib` initialise the cookie): the
 `wdmsec.lib` members that `IoCreateDeviceSecure` pulls in are precompiled
-with cookie checks (a static reading of the `wlh\i386` library in review
-round 2 found `___security_cookie` and `@__security_check_cookie@4`
+with cookie checks (a static reading of the `wlh\i386` library on
+2026-10-09 found `___security_cookie` and `@__security_check_cookie@4`
 references in `ppregstate.obj` and `cmregutil.obj`), and turning the
 checks off for the helper's own source would leave those library members
 checking a cookie nobody initialised. Which library members and imports
@@ -1593,10 +1594,9 @@ service); `xhcisnap` (36.9's names).
 
 ### 14.1 Revision 1
 
-Round 1 (`69b69f1`, review thread `01a120a8-e037-7a31-b88b-4e325ef35abb`):
-2 P1, 6 P2, 2 P3, all taken in revision 2.
+Reviewed at `69b69f1`: 2 P1, 6 P2, 2 P3, all taken in revision 2.
 
-| # | Finding | Where answered |
+| # | Point | Where answered |
 |---|---|---|
 | 1 | P1: the filter broke the IRP's buffer and completion contract (in-place shrink, forwarded status) | Section 4.2: the list's source, a paged replacement, the old list freed, `STATUS_SUCCESS`, allocation failure kept safe; decision 5 |
 | 2 | P1: removing descriptors does not select the line configuration (`[BAR, MSI]` + `[BAR, INTx]`) | Section 4.2: configurations classed LINE / MSG-ONLY / NONE, only LINE kept; MSI-only left alone; vectors; decision 6 |
@@ -1611,10 +1611,10 @@ Round 1 (`69b69f1`, review thread `01a120a8-e037-7a31-b88b-4e325ef35abb`):
 
 ### 14.2 Revision 2
 
-Round 2 (`a4c8307`, same thread): 1 P1, 5 P2, 2 P3, all taken in
-revision 3. Round-1 findings 3, 5, 6 and 10 were confirmed closed.
+Reviewed at `a4c8307`: 1 P1, 5 P2, 2 P3, all taken in revision 3.
+Section 14.1's points 3, 5, 6 and 10 were confirmed closed.
 
-| # | Finding | Where answered |
+| # | Point | Where answered |
 |---|---|---|
 | 1 | P1: the stack's list pointer was still a fallback, and could be freed | Section 4.2: `IoStatus.Information` only; NULL is "no list", nothing dereferenced; every outcome's completion stated |
 | 2 | P2: a buffer shorter than the header passed the length tests before `Size` was read | Section 3.2: lengths `>= V1_MIN` before any read, `Information = 0` on refusal; `XhciMsi86Answer` host-tested, guarded end-of-allocation vector |
@@ -1627,10 +1627,10 @@ revision 3. Round-1 findings 3, 5, 6 and 10 were confirmed closed.
 
 ### 14.3 Revision 3
 
-Round 3 (`f2fede5`, same thread): 4 P2, 2 P3, all taken in revision 4.
-Round-2 findings 1, 2, 3, 4 and 8 were confirmed closed; no new P1.
+Reviewed at `f2fede5`: 4 P2, 2 P3, all taken in revision 4. Section
+14.2's points 1, 2, 3, 4 and 8 were confirmed closed; no new P1.
 
-| # | Finding | Where answered |
+| # | Point | Where answered |
 |---|---|---|
 | 1 | P2: the list was recorded before it was validated | Section 4.2, step 4: `XhciMsi86Walk`, overflow-safe, before any snapshot, trace or strip; vectors |
 | 2 | P2: the debug channel interleaves and truncates, so the trace was not provably complete | Section 9: fixed-layout checksummed records with counts, under 128 bytes, the existing writer only; a host validator that rejects bad captures |
@@ -1641,8 +1641,8 @@ Round-2 findings 1, 2, 3, 4 and 8 were confirmed closed; no new P1.
 
 ### 14.4 Revision 4
 
-Round 4 (`db66b6a`, same thread): **converged** - "the design is sound
-enough to implement", no P1 or P2; round-3 findings 1 to 4 and 6 closed.
+Reviewed at `db66b6a`: the design sound enough to implement, no P1 or
+P2; section 14.3's points 1 to 4 and 6 closed.
 Two P3s taken in revision 5: the delivery rule restated as a
 resource-choice rule that defers delivery to record 15's mode, pin and
 connection tables (section 4.2), and the last unconditional line promises
@@ -1659,77 +1659,72 @@ roadmap wording to reconcile listed in section 12.
 
 ### 14.6 Revision 6, and the owner's mode-1 decision
 
-Round 5 (`b502184`, same thread): 1 P2, 3 P3, all taken in revision 7,
+Reviewed at `b502184`: 1 P2, 3 P3, all taken in revision 7,
 with the owner's decision 7. The `Reboot` mechanism, `SPSVCINST_STARTSERVICE`
 as the recorded alternative, and the narrow mode-1 rule were found sound.
 
-| # | Finding | Where answered |
+| # | Point | Where answered |
 |---|---|---|
 | 1 | P2: H1a had no stimulus that yields a message grant with no line offered, and the failure's reason had no durable record | Section 10, H1a: `XhciMsi86InjNoLine` defined (mixed runs, its interaction with `NoStrip` and the admitted shapes), run after the restart; section 4.3 and 9: the `S` event before the failure return, the fields kept in `hc` |
 | 2 | P3: the reconciliation list was incomplete | Section 12: `xhci_poll.h`, record 15's import statements, helper-less polling statements, reason catalogue, the call site, `XHCISNAP`; a bound helper's failed connection still polls |
 | 3 | P3: the general rule and the withdrawal paragraph contradicted the exception | Section 4.2: the class NO-LINE computed always and kept for the start; the rule names the exception; withdrawal makes "disabled" the default and keeps the class |
 | 4 | P3: R4's Vista update reading was outside U1 | Section 10, U1 on both guests |
 
-Also from round 5: `MSIHLP-REBOOT` must read a bare directive (section
+Also from the same review: `MSIHLP-REBOOT` must read a bare directive (section
 8.2).
 
 ### 14.7 Revision 7
 
-Round 6 (`17f83ba`, same thread): 1 P1, 2 P2, 1 P3, all taken in
-revision 8. Round-5's fixes were confirmed; the mode-change policy and
+Reviewed at `17f83ba`: 1 P1, 2 P2, 1 P3, all taken in revision 8.
+Section 14.6's changes were confirmed; the mode-change policy and
 mode 1's forced-line properties (routing quirk, no watcher) were found
 coherent.
 
-| # | Finding | Where answered |
+| # | Point | Where answered |
 |---|---|---|
-| 1 | P1: the start's registry reader needs a system thread; the filter arrives in an arbitrary one | Section 4.2: revision 8 used an `ExQueueWorkItem` worker; revision 9 (round 7) replaced it with readings taken at `AddDevice` and at each start, both documented system-thread contexts |
+| 1 | P1: the start's registry reader needs a system thread; the filter arrives in an arbitrary one | Section 4.2: revision 8 used an `ExQueueWorkItem` worker; revision 9 (section 14.8) replaced it with readings taken at `AddDevice` and at each start, both documented system-thread contexts |
 | 2 | P2: a NO-LINE class could survive a later filter that never classified | Section 4.2, step 0: UNKNOWN at `AddDevice` and at every filter entry, published only with that filter's sequence; vectors |
 | 3 | P2: amd64 stripping enabled without amd64 readings | Section 10, R on x64 too, admission per OS and architecture; section 9's labels per architecture |
 | 4 | P3: the filter-time read missing from the reconciliation and the record | Sections 9 and 12; D3 reworded; transition vectors 1 to 0, 0 to 1, 1 to 2 |
 
 ### 14.8 Revision 8
 
-Round 7 (`bb65eae`, same thread): 1 P1, 1 P3, both taken in revision 9.
-Round-6 findings 2 to 4 were confirmed closed.
+Reviewed at `bb65eae`: 1 P1, 1 P3, both taken in revision 9. Section
+14.7's points 2 to 4 were confirmed closed.
 
-| # | Finding | Where answered |
+| # | Point | Where answered |
 |---|---|---|
 | 1 | P1: the worker's completion event does not keep the image loaded until the callback returns (`ExQueueWorkItem` holds no device reference; `xhci98.sys` is unloadable) | Section 4.2: no worker at all; the filter uses the raw mode read at `AddDevice` and refreshed at each start, both documented system-thread contexts; a rebalance after an unannounced value change is recorded |
 | 2 | P3: `START_DEVICE` is documented as a system thread | Section 4.2: the audit note removed; the start's reading is one of the two sources |
 
 ### 14.9 Revision 9
 
-Round 8 (`dede1e1`, same thread): **converged** - "sound enough to
-implement", no P1 or P2. Two P3s taken in revision 10: the filter's use
+Reviewed at `dede1e1`: sound enough to implement, no P1 or P2. Two P3s taken in revision 10: the filter's use
 of the cached reading stated where the strip is asked for and in section
 4.4 (a disable and enable as the supported way to change the mode, the
 rebalance exception kept), and the cache's fields kept apart from the
-filter's snapshot, with a transition vector. Review thread
-`01a120a8-e037-7a31-b88b-4e325ef35abb`, rounds 1 to 8.
+filter's snapshot, with a transition vector. Reviewed and revised.
 
 ### 14.10 The code (task 36.15)
 
-Reviewed 2026-10-10 on the range `bfec7b0..` (thread
-`01a121f2-8cbc-7ac3-8385-b83eb80cb85d`), three rounds; the loop ended at
-the first round with no P1 or P2 (owner rule, 2026-10-10).
+Reviewed 2026-10-10 on the range `bfec7b0..`, three passes; the loop
+ended at the first pass with no P1 or P2 (owner rule, 2026-10-10).
 
-| Round | Findings | Taken in |
+| Pass | Points | Taken in |
 |---|---|---|
 | 1 | P1: every message ID ran the ISR body, so a foreign shared message could be claimed and two messages' ISRs could run at once under their own locks - the ISR now declines every ID but 0 first. P2: the trace validator checked counts, not identity, order or totals. P2: a helper refusal's event was unreachable behind the reference drop. P3: `MSI-VALUES` did not require exactly `0x00010003` | `7212604` |
 | 2 | P2: a damaged lifecycle or start record could vanish unnoticed - every record is now numbered and the validator refuses a gap or a fragment. P2: the start-decision record was written for a failed decision only - now for every start outcome; the routines' source is a lifecycle record. P3: `SynchronizeIrql` 0's meaning | `0308ad2` |
-| 3 | No P1 or P2. P3: a start refused before the decision reported the previous start's | the commit that converged |
+| 3 | No P1 or P2. P3: a start refused before the decision reported the previous start's | the commit that closed the review |
 
 ### 14.11 Revision 13 (task 38.3)
 
 Drafted 2026-10-13 and put to the owner for section 15.13's decisions
-before any review round (the owner's rule for Phase 38's design tasks);
-the answers written in the same day. Review round 1 is recorded with
-record 15's (its section 13.6, the same thread); its record 18 findings
-(5, 7 to 10, 13) are taken in sections 15.4, 15.7, 15.10, 15.11 and
-15.12, and the owner then withdrew the forced restart on 2000 and XP
-(H2). Round 2's E and F are taken in sections 15.4 and 15.10, and round
-3's finding 3 in section 15.10. The loop converged at round 6 (record
-15 section 13.6).
+before any review (the owner's rule for Phase 38's design tasks); the
+answers written in the same day. The review is recorded with record
+15's (its section 13.6); the points of it that touch this record are
+taken in sections 15.4, 15.7, 15.10, 15.11 and 15.12, and after the
+first of them the owner withdrew the forced restart on 2000 and XP (H2).
+Reviewed and revised on 2026-10-13 (record 15 section 13.6).
 
 ## 15. Revision 13: the helper on Windows 2000 and XP, renamed `xhcihlpr.sys` (task 38.3)
 
@@ -1932,8 +1927,8 @@ timer thread, so a helper that is present at all is found.
 
 **SetupAPI does not start a boot-start service it installs** (section 5),
 so after a first install on 2000 or XP the helper is absent until the
-next boot. **The owner's decision (2026-10-13, H2, revised after review
-round 1): no forced restart on 2000 and XP.** `[Xhci.Dev.NTx86]` carries
+next boot. **The owner's decision (2026-10-13, H2, revised the same
+day): no forced restart on 2000 and XP.** `[Xhci.Dev.NTx86]` carries
 no `Reboot`; setup asks for a restart only where it decides one is
 needed by its own rules, as for the release before it. The controller
 starts as before, and a polled controller keeps the clock tick until the
@@ -1991,8 +1986,8 @@ with `XhciMsi.DelFiles=12` in `[DestinationDirs]`. `DelService` and
 `DelFiles` are documented INF directives. The old image is loaded and
 cannot be unloaded when the update runs, and Microsoft's `DelFiles` page
 says an in-use file is deleted only when its entry carries the deferred
-flag, `0x00010000` (`DELFLG_IN_USE`), which queues the deletion for the
-restart (round 1, finding 5); without it the file would survive any
+flag, `0x00010000` (`DELFLG_IN_USE1`), which queues the deletion for the
+restart; without it the file would survive any
 number of reboots. How `DelService` behaves against a running boot-start
 service, and whether the boot loader still loads a service marked for
 deletion at the first boot after it, have not been read here. The design does not depend on
@@ -2136,7 +2131,7 @@ Windows 7 - which no field of the image's header shows, since
   `dumpbin /headers` of each helper link and refuses a subsystem other
   than `native` 5.00, a section alignment other than the `WXP` driver
   default (0x80), or a zero checksum, so a toolchain change cannot move
-  those fields unseen; that is all the header shows (round 2, finding F).
+  those fields unseen; that is all the header shows.
   **The target itself is checked in the build's log**: `build-driver.cmd`
   refuses a helper build whose log lacks the kit's own line
   `BUILDMSG: _NT_TARGET_VERSION SET TO WINXP` (`makefile.new` ~1121), or
@@ -2147,7 +2142,7 @@ Windows 7 - which no field of the image's header shows, since
   and `$(SDK_LIB_PATH)\libcntpr.lib` (`makefile.new` ~4282), and
   `setenv.bat` (~326) points `CRT_LIB_PATH` at `lib\crt\*`, so
   `lib\crt\i386\safecrtnt.lib` is the one library admitted outside
-  `lib\wxp\i386`, by name (round 3, finding 3); both are in the first
+  `lib\wxp\i386`, by name; both are in the first
   link's import audit like every other library. The gate's self-tests:
   a valid `WXP`, subsystem 5.00 build log (accepted), the same with a
   `lib\wlh\i386` library (refused), and with the `WINXP` line missing
@@ -2171,7 +2166,7 @@ extracted from XP SP3 media by `extract-target-baselines.ps1`;
 `tools\winxpsp3-extracted` holds none of them today), and the Vista SP2
 and 7 SP1 x86 images (the two `nt6x86-*` manifests, renamed with the
 profile, their owed `ntkrnlpa.exe` rows still owed). **Every set is
-required** (round 1, finding 8): today's `nt6x86` profile warns and
+required**: today's `nt6x86` profile warns and
 passes when a whole baseline set is missing (`check-imports.ps1` ~1137,
 ~1369), and a release accepts `-NoTargetEvidence`. Under `hlprx86` a
 missing or partial set - 2000, XP, Vista or 7, or one image of a set -
@@ -2273,8 +2268,7 @@ is never made, and nothing of the timer is read.
   2.1's 1 to 6 re-read on 7 x86 for the channel (`ABSENT`, `REFUSED` by
   test); and three new values - 7 the timer service off (bit 1 clear),
   8 the timer pointer NULL with bit 1 set (malformed), 9 the MSI half
-  off on NT 6. Each of 7, 8 and 9 is read twice on 7 x86 (round 1,
-  finding 7): once in mode 0 with the message granted (the MSI verdict
+  off on NT 6. Each of 7, 8 and 9 is read twice on 7 x86: once in mode 0 with the message granted (the MSI verdict
   and delivery: 7 and 8 leave MSI connected, 9 strips to the line), and
   once in mode 2 with a copy running (the timer verdict and the calls:
   7 and 8 give `TmrSource` 3 and no `TRUE`, 9 gives `TmrSource` 1 and
@@ -2317,8 +2311,8 @@ is never made, and nothing of the timer is read.
 - **H1:** the device object renamed with the helper,
   `\Device\Xhci98Helper`, and the channel's V2 answered only there
   (sections 15.2 and 15.3).
-- **H2: no forced restart on 2000 and XP** (revised after review round
-  1; the first answer, a `Reboot` on every install and update there, is
+- **H2: no forced restart on 2000 and XP** (revised the same day; the
+  first answer, a `Reboot` on every install and update there, is
   withdrawn): normal restart behaviour, the finer timer from the next
   boot, documented (section 15.5).
 - **H3: (a)**, `DelService=xhcimsi` and a deferred `DelFiles` of
@@ -2386,8 +2380,7 @@ VM matrix (`docs/contributing/runs/run-38.md`; U4's reading is in section
   be this image's (its `/out:` names the image, and it was finished no
   earlier than the image); `make-package.ps1` runs it again on the helper
   it packages, with the log beside that helper's obj tree, so a helper
-  named by `-HlprDriverPath` is held to the same toolchain (review round 1
-  of the code). The first `WXP` link's log names
+  named by `-HlprDriverPath` is held to the same toolchain. The first `WXP` link's log names
   `lib\wxp\i386`'s `BufferOverflowK.lib`, `libcntpr.lib`, `ntoskrnl.lib`,
   `hal.lib`, `wmilib.lib`, `wdmsec.lib` and `sehupd.lib`, and
   `lib\crt\i386\safecrtnt.lib`; the image is native 5.00, aligned 0x80,

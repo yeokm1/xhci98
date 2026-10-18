@@ -365,7 +365,8 @@ Per the CM table's row, never across rows:
 
 There is no `_OSC` on these operating systems, so the software connection
 manager runs on one of three grounds only (owner's coverage plan of
-2026-10-15, its third review; orchestrator decision, owner to confirm).
+2026-10-15, reviewed and revised; orchestrator decision, owner to
+confirm).
 The first two are automatic, the third the only forced route:
 
 1. **Software-only candidates**, under the Linux and FreeBSD matching
@@ -1235,7 +1236,7 @@ item below is met by a rule that holds for any router.
 
 | What the capture shows | What this driver does |
 |---|---|
-| A Thunderbolt 3 compatible DROM (revision 1, entries from byte 22), whose Unused Adapter Entry marks adapter 4 unused (a USB3 Up adapter by its number, [inf]: its type register was never read; the model types it USB3 Up); Linux leaves it uninitialised ("disabled by eeprom") and builds no USB3 tunnel | The DROM is read before the adapters (as [linux] `switch.c` `tb_switch_add` reads it before `tb_init_port`), its entries parsed from byte 16 in a revision 3 DROM and from byte 22 otherwise ([linux] `eeprom.c` `tb_drom_parse`, `TB_DROM_HEADER_SIZE`, `USB4_DROM_HEADER_SIZE`); an adapter entry with its disabled bit set takes that adapter out of the router: never read or written, so no UTO for it, no USB3 tunnel and no TMU (section 6.6 configures the TMU only for a USB3 tunnel). A DROM whose CRC fails, or whose entry list runs past its data, is not believed at all and every adapter is used, logged. The router's own upstream lanes are never taken out. A preserved router below depth 1 (section 7.1's links) has its DROM read once when its link is found, and the same mask holds when its parent's side is torn down at its removal. The vendor and model names come from the same entries ("ASMedia", "246x") |
+| A Thunderbolt 3 compatible DROM (revision 1, entries from byte 22), whose Unused Adapter Entry marks adapter 4 unused (a USB3 Up adapter by its number, [inf]: its type register was never read; the model types it USB3 Up); Linux leaves it uninitialised ("disabled by eeprom") and builds no USB3 tunnel | The DROM is read before the adapters (as [linux] `switch.c` `tb_switch_add` reads it before `tb_init_port`), its entries parsed from byte 16 in a revision 3 DROM and from byte 22 otherwise ([linux] `eeprom.c` `tb_drom_parse`, `TB_DROM_HEADER_SIZE`, `USB4_DROM_HEADER_SIZE`); an adapter entry with its disabled bit set takes that adapter out of the router: never read or written, so no UTO for it, no USB3 tunnel and no TMU (section 6.6 configures the TMU only for a USB3 tunnel). A DROM whose CRC fails, or whose entry list runs past its data, is not believed at all and every adapter is used, logged. So is one longer than 512 bytes (`TBT_U4_DROM_MAX`; the 12-bit Length field allows 4108), logged as `u4.drom.length` with the length read: its Unused Adapter entries are then not applied. The router's own upstream lanes are never taken out. A preserved router below depth 1 (section 7.1's links) has its DROM read once when its link is found, and the same mask holds when its parent's side is torn down at its removal. The vendor and model names come from the same entries ("ASMedia", "246x") |
 | No CL0s, CL1 or CL2 support (LANE_ADP_CS_0); PORT_CS_18 without Cable Gen 3 Support or CLx Protocol Support | Nothing: no CL state is ever enabled (sections 6.6, 6.10), and neither PORT_CS_18 field is read |
 | The router's TMU capability at `C0h`, then vendor-specific capabilities with IDs 1, 3 and 6 (the last a long one) | The chain is walked (section 6.1) and the TMU found where it is. A vendor-specific capability is taken as the Plug Events or link controller one only on a Thunderbolt 3 router: on a USB4 router those IDs are its vendor's |
 | NVM Sector Size (`25h`) completes with Status 2; Linux tries it three times | Never issued: section 6.7's four operations are all this driver sends |
@@ -1869,8 +1870,9 @@ domain that has a tunnel.
 
 ### 9.2 Discover and preserve (`XhciCmPreOsCleanup` 0, the default)
 
-The acceptance criteria, on every admission route (owner's coverage plan,
-third review; orchestrator decision, owner to confirm):
+The acceptance criteria, on every admission route (owner's coverage plan
+of 2026-10-15, reviewed and revised; orchestrator decision, owner to
+confirm):
 
 - **Every tunnel type is discovered**, PCIe, USB3 and DisplayPort alike,
   as Linux's discovery walks them ([linux] `tb.c` `tb_discover_tunnels`,
@@ -1901,7 +1903,9 @@ third review; orchestrator decision, owner to confirm):
   are torn down on the host side as section 7.3 tears down an unplugged
   port's, since no tunnel can exist through a disconnected lane - that is
   unplug handling, not a reset - with the same quarantine where a step
-  fails.
+  fails. Only a PCIe path found there takes the PCIe steps (the
+  path-closed statement, the owed removal): USB3 or DisplayPort residue
+  alone is torn down or quarantined without them.
 - **Every discovered path has a removal rule.** At the unplug of the port
   it goes through, a discovered PCIe or USB3 tunnel's host-side entries
   are torn down as section 7.3 tears down this driver's own; every other
@@ -2047,7 +2051,8 @@ driver starts itself would go through record 21 section 7.2's
 worker's removal step, `cm_cfgwk.c`); no eject is such a removal yet
 (section 10.4's 9x half is best effort, every 9x child removal of a
 tunnel down is the seam's removal of a vanished function, and the
-tools' 9x eject goes to Windows directly; roadmap-usb4.md NV9X.3).
+tools' 9x eject goes to Windows directly; roadmap-usb4.md 42-0.7 and
+42-A.13, formerly NV9X.3).
 
 ### 10.1 Obligation 1: a link that went down
 
@@ -2340,7 +2345,8 @@ hardware capture shows it, whether or not its code was adapted.
   operations each switchable between supported, not supported, failing and
   never completing, and scripted hot plug events. Cases: a cold device at
   start; a hot plug; an unplug in every state of section 7.2, including in
-  each wait; a quick unplug and re-plug seen only through Lock, TopologyID
+  the Router Ready and Configuration Ready waits (an unplug inside the
+  Detect, L0, lane 1 CL0 or HCA polls has no vector); a quick unplug and re-plug seen only through Lock, TopologyID
   Valid or the UUID; bonding succeeding, impossible, timing out with the
   fallback's preconditions met (lane 1 disabled) and unmet (FAILED, no
   path), and with a predecessor's non-default lane fields; every router operation unsupported; the Detect gate timing
@@ -2357,14 +2363,15 @@ hardware capture shows it, whether or not its code was adapted.
   and the vendor capabilities after it, Router Ready 5, 450 and 700 ms
   after Enumerated, and 5 ms behind a pre-OS tunnel's discovery (waited
   for, preserved, the router written exactly as with Router Ready on
-  time) or never set there (HELD after one bounded wait); on a resume,
-  Router Ready 5 ms late (verified, nothing written to the router), never
-  set, the budget spent inside its wait, and another router (another
-  UUID) in its place during it (never verified as the first),
+  time) or never set there (HELD after one bounded wait),
   Buffer Allocation with PCIe alone, NVM Sector Size
   failing, the 594 ms reconnect after the cleaning's port reset), a USB4
   DROM marking an adapter unused, and a DROM with a bad CRC or an entry
-  list past its end (nothing believed).
+  list past its end (nothing believed); and, on the generic USB4 device
+  router rather than that preset, a resume with Router Ready 5 ms late
+  (verified, nothing written to the router), never set, the budget spent
+  inside its wait, and another router (another UUID) in its place during
+  it (never verified as the first).
 - **`test_u4cm`, containment** (section 7.7): the fake fabric's host
   interface can be lost at any request (reads all ones, writes dropped,
   nothing consumed), with or without the gate's cancellation. Cases:

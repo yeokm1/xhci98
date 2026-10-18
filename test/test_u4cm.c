@@ -517,7 +517,7 @@ static void test_bonding(void)
     fabUnplug(&g_fab, 1);
     poll(&g_cm, &g_fab, 1);
     CHECK_EQ(fabAdp(&g_fab, 0, lane + 1, FAB_CAP_LANE + 1) & 0x4000UL, 0,
-             "Lane Disable cleared at unplug");
+             "Lane Disable cleared at unplug (by the driver: the fabric keeps it)");
 
     /* Bonding that never reaches x2: the fields written back, then lane 1
      * disabled. */
@@ -728,7 +728,10 @@ static void test_quirks(void)
     CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x5786), TBT_U4_QUIRK_USB3_MAX_BW, "Barlow Ridge hub 80G");
     CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x57A4), TBT_U4_QUIRK_USB3_MAX_BW, "Barlow Ridge hub 40G");
     CHECK_EQ(TbtU4QuirkMatch(0x8086, 0x15EF), TBT_U4_QUIRK_NO_CLX, "Titan Ridge DD");
+    CHECK_EQ(TbtU4QuirkMatch(0x0438, 0x0207), 0, "AMD 0207 is not listed");
     CHECK_EQ(TbtU4QuirkMatch(0x0438, 0x0208), TBT_U4_QUIRK_NO_CLX, "AMD 0208");
+    CHECK_EQ(TbtU4QuirkMatch(0x0438, 0x0209), TBT_U4_QUIRK_NO_CLX, "AMD 0209");
+    CHECK_EQ(TbtU4QuirkMatch(0x0438, 0x020A), TBT_U4_QUIRK_NO_CLX, "AMD 020A");
     CHECK_EQ(TbtU4QuirkMatch(0x0438, 0x020B), TBT_U4_QUIRK_NO_CLX, "AMD 020B");
     CHECK_EQ(TbtU4QuirkMatch(0x0438, 0x020C), 0, "AMD 020C is not listed");
     CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x0B26), TBT_U4_QUIRK_DP_CREDITS, "Goshen Ridge");
@@ -1756,7 +1759,7 @@ static void test_coarse_clock(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Review round 1's cases                                              */
+/* Edge cases: enumeration, answers, inventory, quarantine, resume     */
 /* ------------------------------------------------------------------ */
 
 static int g_dropRouter;
@@ -1781,7 +1784,7 @@ static int dropHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
     return FAB_HOOK_GO;
 }
 
-static void test_review_enumeration(void)
+static void test_edge_enumeration(void)
 {
     TBT_U4_CONFIG c;
     int dev;
@@ -1817,7 +1820,7 @@ static void test_review_enumeration(void)
     CHECK_EQ(g_fab.R[dev].Rcs[2], 0x0303UL, "left as found");
 }
 
-static void test_review_lost_answer(void)
+static void test_edge_lost_answer(void)
 {
     TBT_U4_CONFIG c;
     int dev;
@@ -1846,7 +1849,7 @@ static void test_review_lost_answer(void)
     (void)dev;
 }
 
-static void test_review_held_inventory(void)
+static void test_edge_held_inventory(void)
 {
     TBT_U4_CONFIG c;
     int dev;
@@ -1900,7 +1903,7 @@ static void test_review_held_inventory(void)
     CHECK(hostClean(&g_fab, 1), "its USB3 host side torn down too");
 }
 
-static void test_review_quarantine(void)
+static void test_edge_quarantine(void)
 {
     int dev;
     int d2;
@@ -1953,7 +1956,7 @@ static void test_review_quarantine(void)
     (void)lane;
 }
 
-static void test_review_resume(void)
+static void test_edge_resume(void)
 {
     int dev;
     LONG rc;
@@ -2000,7 +2003,7 @@ static void test_review_resume(void)
     CHECK(g_fab.NowUs < TbtU4ResumeBoundUs(2, 0) * 2UL, "bounded");
 }
 
-static void test_review_bandwidth_and_tmu(void)
+static void test_edge_bandwidth_and_tmu(void)
 {
     int dev;
     TBT_U4_CONFIG c;
@@ -2066,7 +2069,7 @@ static void test_review_bandwidth_and_tmu(void)
     CHECK(fabAdp(&g_fab, dev, 1, FAB_CAP_TMU_ADP + 6) & 2UL, "Disable Time Sync on the device");
 }
 
-static void test_review_ba_and_closure(void)
+static void test_edge_ba_and_closure(void)
 {
     int dev;
     TBT_U4_CONFIG c;
@@ -2114,7 +2117,7 @@ static void test_review_ba_and_closure(void)
     g_fab.R[0].Adp[5].LtssmForce = 0;
 }
 
-static void test_review_identity(void)
+static void test_edge_identity(void)
 {
     TBT_U4_CONFIG c;
     int dev;
@@ -2167,7 +2170,7 @@ static void test_review_identity(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Review round 2's cases                                              */
+/* Edge cases: resume budgets, identity and links, restore             */
 /* ------------------------------------------------------------------ */
 
 static int g_swRouter;
@@ -2225,7 +2228,7 @@ static unsigned long boundWith(ULONG n, unsigned long host, unsigned long each)
            host + n * each;
 }
 
-static void test_review2_budget(void)
+static void test_edge_budget(void)
 {
     int dev;
     LONG rc;
@@ -2287,7 +2290,7 @@ static void test_review2_budget(void)
     CHECK(fabPcieUp(&g_fab, 1), "nothing torn down");
 }
 
-static void test_review2_identity_and_links(void)
+static void test_edge_identity_and_links(void)
 {
     TBT_U4_CONFIG c;
     int dev;
@@ -2339,7 +2342,7 @@ static void test_review2_identity_and_links(void)
     CHECK_EQ(g_cm.Counters.LinksRemoved, 1, "another fused UUID: removed");
 }
 
-static void test_review2_restore(void)
+static void test_edge_restore(void)
 {
     TBT_U4_CONFIG c;
     int dev;
@@ -2362,8 +2365,6 @@ static void test_review2_restore(void)
     armSwallow(&g_fab, 0, TBT_CS_ADAPTER, (unsigned long)lane + 1, FAB_CAP_LANE + 1, 1,
                0x4000UL, 0, 2 * TBT_CTL_ATTEMPTS);
     fabUnplug(&g_fab, 1);
-    /* the fabric clears it at a disconnect; this router keeps it */
-    g_fab.R[0].Adp[lane + 1].Cs[FAB_CAP_LANE + 1] |= 0x4000UL;
     poll(&g_cm, &g_fab, 1);
     g_fab.Hook = NULL;
     CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "unplugged: EMPTY");
@@ -2492,7 +2493,7 @@ static int tdHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
     return FAB_HOOK_GO;
 }
 
-static void test_review3(void)
+static void test_budget_and_pending_entries(void)
 {
     TBT_U4_CONFIG c;
     int dev;
@@ -2585,6 +2586,7 @@ static void test_review3(void)
     g_fab.Hook = tdHook;
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     p = TbtU4Port(&g_cm, 1);
+    CHECK(g_cm.HostRouter.CapTmu != 0, "the minimal host router has a TMU");
     if (g_cm.HostRouter.CapTmu != 0) {
         CHECK(g_cm.HostTmuTdOwed, "the disruption owned");
         CHECK(!g_cm.HostTmuOk, "the host TMU not usable");
@@ -2713,7 +2715,7 @@ static int cfgHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
     return FAB_HOOK_GO;
 }
 
-static void test_review4(void)
+static void test_ring_wrap_and_owed_teardown(void)
 {
     TBT_U4_CONFIG c;
     int dev;
@@ -2903,7 +2905,7 @@ static int recoverHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
     return FAB_HOOK_GO;
 }
 
-static void test_review5(void)
+static void test_transitional_and_config_loss(void)
 {
     TBT_U4_CONFIG c;
     int dev;
@@ -3099,7 +3101,7 @@ static int closeHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
     return FAB_HOOK_GO;
 }
 
-static void test_review7(void)
+static void test_lock_across_sleep(void)
 {
     int dev;
     int k;
@@ -4044,21 +4046,21 @@ int main(void)
     test_loss_and_eject();
     test_suspend_resume();
     test_coarse_clock();
-    test_review_enumeration();
-    test_review_lost_answer();
-    test_review_held_inventory();
-    test_review_quarantine();
-    test_review_resume();
-    test_review_bandwidth_and_tmu();
-    test_review_ba_and_closure();
-    test_review_identity();
-    test_review2_budget();
-    test_review2_identity_and_links();
-    test_review2_restore();
-    test_review3();
-    test_review4();
-    test_review5();
-    test_review7();
+    test_edge_enumeration();
+    test_edge_lost_answer();
+    test_edge_held_inventory();
+    test_edge_quarantine();
+    test_edge_resume();
+    test_edge_bandwidth_and_tmu();
+    test_edge_ba_and_closure();
+    test_edge_identity();
+    test_edge_budget();
+    test_edge_identity_and_links();
+    test_edge_restore();
+    test_budget_and_pending_entries();
+    test_ring_wrap_and_owed_teardown();
+    test_transitional_and_config_loss();
+    test_lock_across_sleep();
     test_asm4242();
     test_asm2464();
     test_contain();

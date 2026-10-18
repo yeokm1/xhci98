@@ -1,6 +1,6 @@
 # Tuning
 
-Every registry setting of the xHCI98 controller driver: where it is, its range and default, and what it does. The [README](../../README.md#tuning) lists the few most often changed.
+Every registry setting of the xHCI98 controller driver and of the Thunderbolt and USB4 driver (`xhcicm.sys`): where it is, its range and default, and what it does. The [README](../../README.md#tuning) lists the few most often changed.
 
 ## Contents
 
@@ -87,16 +87,28 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciLogVerbosity` | The driver's log, read by `XHCITR` and `XHCISNAP` | `0` | `4` | `2` | `2` (a fresh install; an update keeps the value there) |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
-**The Thunderbolt driver's log (`xhcicm.sys`)**, from `3.0.0.0`: these two are in the Thunderbolt or USB4 controller's driver key, not the xHCI controller's (`...\Services\Class\System\NNNN` on 98 SE and ME, `...\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 7, the subkey whose `DriverDesc` names the Thunderbolt or USB4 controller; the xHCI98 USB Tree's "Driver log (xhcicm)" item names it in full)
+**The Thunderbolt and USB4 driver (`xhcicm.sys`)**, from `3.0.0.0`: these values are in the Thunderbolt or USB4 controller's driver key, not the xHCI controller's (`HKLM\System\CurrentControlSet\Services\Class\System\NNNN` on 98 SE and ME, `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 7, the subkey whose `DriverDesc` names the Thunderbolt or USB4 controller; the xHCI98 USB Tree's "Driver log (xhcicm)" item names it in full). They are read at each start of that controller: restart Windows, or disable and enable the controller, after a change. A switch outside its range is refused and its default stands; a period or timeout outside its range is held to the nearer bound. The release notes' "The connection manager's registry values" says what each does in full.
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciCmLogVerbosity` | The driver's log, read by the xHCI98 USB Tree | `0` | `4` | `2` | `2` |
+| `XhciCmMode` | `0` off (the controller is bound, logged and left alone); `1` automatic; `2` an unlisted Intel controller driven as an Alpine Ridge and `3` the driver's own USB4 connection manager forced, both **at your own risk** | `0` | `3` | `1` | `1` |
+| `XhciCmApprove` | `1` approves every device, `0` none | `0` | `1` | `1` | `1` |
+| `XhciCmReenum` | `1` makes Windows look at the tunnel ports after each change; `0` leaves it to Refresh | `0` | `1` | `1` | `1` |
+| `XhciCmSafeEject` | `1` offers devices behind a tunnel for safe removal | `0` | `1` | `1` | `1` |
+| `XhciCmPollIdleMs` | How often, in ms, the driver looks at the controller with nothing happening | `50` | `5000` | `200` | `200` |
+| `XhciCmCmdTimeoutMs` | Firmware connection manager: the wait for a command's answer, in ms | `1000` | `60000` | `5000` | `5000` |
+| `XhciCmApproveTimeoutMs` | Firmware connection manager: the wait for an approval's answer, in ms | `1000` | `60000` | `10000` | `10000` |
+| `XhciCmUsb3Tunnel` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one | `0` | `1` | `1` | `1` |
+| `XhciCmLaneBonding` | USB4 connection manager: `1` bonds the link's two lanes | `0` | `1` | `1` | `1` |
+| `XhciCmPreOsCleanup` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify, `1` cleans what it cannot verify, `2` cleans everything | `0` | `2` | `0` | `0` |
+| `XhciCmLogVerbosity` | The driver's log, on `xhci98.sys`'s `0` to `4` ladder, read by the xHCI98 USB Tree (the driver refuses no larger number; the Tree writes only `0` to `4`) | `0` | `4` | `2` | `2` |
 | `XhciCmLogDebugView` | The log sent to DebugView as well, in every build | `0` | `1` | `0` | `0` |
+| `XhciCmBridgeNumbering` | 98 SE and ME: the set-up of PCI bridges behind a tunnel plugged in after start (see "The Thunderbolt driver: bridges behind a tunnel on 98 SE and ME" below) | `0` | `1` | `1` | not written |
+| `XhciCmTunnelBridge` | A `REG_SZ`, not a `DWORD`: a comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports | - | - | absent (no override) | not written |
 
 The xHCI98 USB Tree (`XHCITR`) shows and sets `XhciLogVerbosity` in every `xhci98.sys` controller's driver key, and the Thunderbolt driver's own level, `XhciCmLogVerbosity` in its controller's driver key, beside it: View > Logging level..., with "Set as administrator..." on Windows 2000 to 7 for a user without administrator rights (the release notes, "The xHCI98 USB Tree"). It writes only `0` to `4`, and offers the restart the new level needs.
 
-The install writes every value in these tables, at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
+The install writes every value in these tables but the two marked "not written", at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 
 Restart Windows after changing a value.
 
@@ -338,9 +350,9 @@ The release notes' "Linux's controller quirks" has each value in full.
 
 This value belongs to the Thunderbolt and USB4 driver, `xhcicm.sys`, not to
 the xHCI controller driver: it is in the Thunderbolt or USB4 controller's
-driver key, beside the other `XhciCm*` values the release notes'
-"Thunderbolt 3 and USB4: registry settings" describes, and it is read on
-Windows 98 SE and ME only.
+driver key, beside the other `XhciCm*` values (the table above, and the
+release notes' "The connection manager's registry values"), and it is read
+on Windows 98 SE and ME only.
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|

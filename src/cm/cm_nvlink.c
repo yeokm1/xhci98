@@ -140,7 +140,11 @@ ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
     i = CmNvlinkFind(t, bus, slot);
     if (i != CM_NVLINK_NONE) {
         e = &t->Entry[i];
-        if ((e->Flags & STOR98LS_UP) != 0 && !fresh) {
+        /* R9a: LinkGeneration is not changed, nor the request cleared,
+         * while a removal request is outstanding; a fresh exposure then
+         * waits for CmNvlinkWkWithdraw like any other. */
+        if ((e->Flags & STOR98LS_UP) != 0 &&
+            (!fresh || (e->Flags & CM_NVLINK_REMOVE_PENDING) != 0)) {
             *outcome = CM_NVLINK_UP_ALREADY;
             return i;
         }

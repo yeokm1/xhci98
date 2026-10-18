@@ -3,7 +3,7 @@
  * task 36.34; design record 14 section 10, SUSPa.6). TEST ONLY, NEVER
  * SHIPPED: scripts\package\make-release.ps1 refuses a release carrying it.
  *
- * A WDM function driver for one USB device on a VM leg (pmclient.inf binds
+ * A WDM function driver for one USB device on a VM leg (xhcipm.inf binds
  * it by hardware id), which is its stack's power policy owner and does, on
  * PMCTL.EXE's demand, what a class driver that idles in S0 would: request
  * D1/D2/D3 and D0 (PoRequestPowerIrp), request and cancel IRP_MN_WAIT_WAKE,
@@ -31,6 +31,11 @@
 #ifndef IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION
 #define IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION 0x00220027UL
 #endif
+
+/* 'XhPm' in a pool dump on Windows 2000: the bytes are stored low first.
+ * Tagged allocation and the plain ExFreePool, the pair xhci98.sys uses
+ * (src/hcd_pool.c). */
+#define PM_POOL_TAG 0x6D506858UL
 
 typedef VOID (NTAPI *PM_IDLE_CALLBACK)(PVOID Context);
 
@@ -248,7 +253,7 @@ static VOID pmWaitNonZero(volatile LONG *flag)
 
 /* The completion proven by a flag the routine sets last, not by an event
  * wait whose unsatisfied return on Windows 98 would free or complete a
- * request still in flight (Codex review of 36.34, round 2, finding 3). */
+ * request still in flight (task 36.34). */
 static NTSTATUS NTAPI pmSyncDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
 {
     UNREFERENCED_PARAMETER(dev);
@@ -309,7 +314,7 @@ static VOID pmConfigure(PPM_EXT ext)
     NTSTATUS status;
 
     /* Nothing of an earlier START's configuration survives a failed one
-     * (Codex review of 36.34, round 2, finding 7). */
+     * (task 36.34). */
     ext->InPipe = NULL;
     ext->InMax = 0;
     ext->St.Configured = 0;
@@ -348,7 +353,7 @@ static VOID pmConfigure(PPM_EXT ext)
     pipes = id->bNumEndpoints;
     size = sizeof(struct _URB_SELECT_CONFIGURATION) +
            (pipes != 0 ? pipes - 1 : 0) * sizeof(USBD_PIPE_INFORMATION);
-    sel = (PURB)ExAllocatePool(NonPagedPool, size);
+    sel = (PURB)ExAllocatePoolWithTag(NonPagedPool, size, PM_POOL_TAG);
     if (sel == NULL) {
         return;
     }
@@ -389,8 +394,8 @@ static VOID pmConfigure(PPM_EXT ext)
 /* ------------------------------------------------------------------ */
 
 /*
- * The device transitions, serialized (Codex review of 36.34, rounds 3 and
- * 4): one SET in flight at a time, its slot PowerTarget owned by the
+ * The device transitions, serialized (task 36.34): one SET in flight at a
+ * time, its slot PowerTarget owned by the
  * request that took it and let go only by that request's callback or
  * refusal (pmPowerRelease). A request for the confirmed current state with
  * no SET in flight is answered here, its result accounted with no slot
@@ -427,12 +432,12 @@ static ULONG pmPowerBegin(PPM_EXT ext, UCHAR minor, DEVICE_POWER_STATE d,
     KeAcquireSpinLock(&ext->Lock, &irql);
     if (defer == PM_DEFER_D && ext->St.SystemPower != PowerSystemWorking) {
         /* A wake's or idle completion's D0 has no place below S0: the
-         * system's own transition decides the device state then (Codex
-         * review of 36.34, round 5, finding 2). */
+         * system's own transition decides the device state then (task
+         * 36.34). */
         answer = PM_POWER_BUSY;
     } else if (ext->PowerTarget != 0) {
-        /* A QUERY too: never answered against a state about to change
-         * (round 5, finding 3); only a SET may be deferred. */
+        /* A QUERY too: never answered against a state about to change;
+         * only a SET may be deferred. */
         answer = PM_POWER_BUSY;
         if (minor == IRP_MN_SET_POWER && defer == PM_DEFER_SIRP &&
             ext->DeferredSIrp == NULL) {
@@ -504,7 +509,7 @@ static NTSTATUS pmPowerSend(PPM_EXT ext, ULONG d,
  * the device's, or when its request is refused), then the deferred D - a
  * wake's D0 only while the system is in S0 and the device open - until
  * one request is sent, which then owns the slot, or nothing is left
- * (Codex review of 36.34, round 5, finding 1). IRQL: <= DISPATCH_LEVEL. */
+ * (task 36.34). IRQL: <= DISPATCH_LEVEL. */
 static VOID pmPowerRelease(PPM_EXT ext)
 {
     KIRQL irql;
@@ -518,8 +523,8 @@ static VOID pmPowerRelease(PPM_EXT ext)
     for (;;) {
         if (ext->PowerTarget != 0) {
             /* Another request took the slot while this drain completed
-             * satisfied work unlocked: the rest is its owner's (Codex
-             * review of 36.34, round 6). */
+             * satisfied work unlocked: the rest is its owner's (task
+             * 36.34). */
             KeReleaseSpinLock(&ext->Lock, irql);
             return;
         }
@@ -660,8 +665,7 @@ static VOID NTAPI pmWakeDone(PDEVICE_OBJECT dev, UCHAR minor,
 /* One WAIT_WAKE at a time: reserved here, released when the IRP's last
  * reference in this FDO retires (pmWakeRetire), or here when the request
  * is refused; its callback never touches the reservation, so an older
- * callback cannot release a newer request's (Codex review of 36.34, round
- * 3, finding 2). */
+ * callback cannot release a newer request's (task 36.34). */
 static NTSTATUS pmRequestWake(PPM_EXT ext)
 {
     POWER_STATE state;
@@ -996,8 +1000,8 @@ static NTSTATUS pmReadPost(PPM_EXT ext)
 }
 
 /* READS ON: SUCCESS when a read is posted or already running, BUSY while
- * a stopped read is still retiring (Codex review of 36.34, round 2,
- * finding 6), NOT_READY with no interrupt IN pipe. */
+ * a stopped read is still retiring (task 36.34), NOT_READY with no
+ * interrupt IN pipe. */
 static NTSTATUS pmReadStart(PPM_EXT ext)
 {
     KIRQL irql;
@@ -1016,8 +1020,7 @@ static NTSTATUS pmReadStart(PPM_EXT ext)
     }
     KeReleaseSpinLock(&ext->Lock, irql);
     if (status == STATUS_PENDING) {
-        /* The first post's failure is the request's (Codex review of
-         * 36.34, round 3, finding 4). */
+        /* The first post's failure is the request's (task 36.34). */
         status = pmReadPost(ext);
     }
     return status;
@@ -1072,7 +1075,7 @@ static NTSTATUS NTAPI pmIoctl(PDEVICE_OBJECT dev, PIRP irp)
     code = stack->Parameters.DeviceIoControl.IoControlCode;
     info = 0;
     status = STATUS_SUCCESS;
-    /* Admission (Codex review of 36.34, round 1, finding 4): every request
+    /* Admission (task 36.34): every request
      * but STATUS needs the device open, and runs inside Busy, which a stop
      * waits out after closing admission. */
     InterlockedIncrement(&ext->Busy);
@@ -1192,8 +1195,9 @@ static NTSTATUS NTAPI pmPnp(PDEVICE_OBJECT dev, PIRP irp)
     case IRP_MN_START_DEVICE:
         status = pmForwardSync(ext, irp);
         if (NT_SUCCESS(status) && ext->ReadUrb == NULL) {
-            ext->ReadUrb = (PURB)ExAllocatePool(
-                NonPagedPool, sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER));
+            ext->ReadUrb = (PURB)ExAllocatePoolWithTag(
+                NonPagedPool, sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER),
+                PM_POOL_TAG);
             if (ext->ReadUrb == NULL) {
                 status = STATUS_INSUFFICIENT_RESOURCES;
             }
@@ -1224,7 +1228,7 @@ static NTSTATUS NTAPI pmPnp(PDEVICE_OBJECT dev, PIRP irp)
          * WAIT_WAKE callback that never comes. So the wait is bounded, and
          * one still owed keeps the device object, and with it this
          * extension and the image, for that late callback, which finds
-         * the device closed (Codex review of 36.34, round 2, finding 2). */
+         * the device closed (task 36.34). */
         keep = !pmWaitZero(&ext->Outstanding, 5000);
         if (ext->LinkMade) {
             (VOID)IoDeleteSymbolicLink(&ext->Link);
@@ -1304,8 +1308,8 @@ static VOID NTAPI pmSystemDevDone(PDEVICE_OBJECT dev, UCHAR minor,
 /* A system SET_POWER or QUERY_POWER the stack below has taken: as the
  * device's power policy owner, the client asks the device state it maps
  * to - D0 for S0, D3 below it - with the same minor, and completes the
- * system IRP when that one completes (Codex review of 36.34, rounds 1 to
- * 4). A system SET finding a device transition in flight is held and its
+ * system IRP when that one completes (task 36.34). A system SET finding a
+ * device transition in flight is held and its
  * device request started when that one ends; a QUERY then is refused
  * BUSY. */
 static NTSTATUS NTAPI pmSystemDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
@@ -1367,7 +1371,7 @@ static NTSTATUS NTAPI pmSystemDone(PDEVICE_OBJECT dev, PIRP irp, PVOID ctx)
     if (status != STATUS_PENDING && !NT_SUCCESS(status)) {
         if (stack->MinorFunction == IRP_MN_QUERY_POWER) {
             /* No device query follows, so the system query fails with
-             * the request (Codex review of 36.34, round 3, finding 3). */
+             * the request (task 36.34). */
             irp->IoStatus.Status = status;
         }
         PoStartNextPowerIrp(irp);
@@ -1388,9 +1392,9 @@ static NTSTATUS NTAPI pmPower(PDEVICE_OBJECT dev, PIRP irp)
     if ((stack->MinorFunction == IRP_MN_SET_POWER ||
          stack->MinorFunction == IRP_MN_QUERY_POWER) &&
         stack->Parameters.Power.Type == SystemPowerState) {
-        /* SET and QUERY alike (Codex review of 36.34, round 2, finding
-         * 5): the device request follows the system IRP's success below,
-         * and its verdict completes the system IRP. */
+        /* SET and QUERY alike (task 36.34): the device request follows the
+         * system IRP's success below, and its verdict completes the
+         * system IRP. */
         IoMarkIrpPending(irp);
         IoCopyCurrentIrpStackLocationToNext(irp);
         IoSetCompletionRoutine(irp, pmSystemDone, NULL, TRUE, TRUE, TRUE);

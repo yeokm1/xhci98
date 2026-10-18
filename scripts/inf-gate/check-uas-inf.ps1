@@ -39,7 +39,7 @@ OS file, each rule named as check-inf.ps1 names its families.
            port driver fails every unit (Code 10) - naming the file, never
            copying it; no .NTx86.HW or .NTamd64.HW section exists, so the NT
            path is unchanged. UAS-TMPNAME (x86): xhciuas.sys is copied with
-           no temporary-file name, which on Windows 98 routes the copy
+           no temporary-file name; one would route the copy on Windows 98
            through WININIT.INI and a restart even at a first install.
   PKG-*    With -PackageDir: every [SourceDisksFiles] entry is in the staged
            package (PKG-LAYOUT), and no Microsoft file is, under any of the
@@ -206,8 +206,8 @@ function Test-UasInfText {
     }
     # $checkCopy emits the files its CopyFiles list copies, so each install
     # path is held to its OWN set: $copied is the union over every path, and
-    # a file one path copies says nothing about another (Codex review of
-    # 31-A.2, round 1).
+    # a file one path copies says nothing about another (task 31-A.2,
+    # reviewed and revised).
 
     # [Manufacturer] and the models.
     $mfg = & $get "Manufacturer"

@@ -10,10 +10,12 @@ and the acceptance reminder;
 [`roadmap-miniport-updates.md`](roadmap-miniport-updates.md) carries the
 entries of Phases 17-24, the miniport's public updates, closed with the
 `1.2.0.0` cut;
-and [`roadmap-hcd.md`](roadmap-hcd.md), opened on 2026-10-02, carries Phases
-25 onward, the miniport's successor - the monolithic host controller driver,
-which took over `src\` and the name `xhci98.sys` on 2026-10-02 - including the
-open phase. The detail lives in
+[`roadmap-hcd.md`](roadmap-hcd.md), opened on 2026-10-02, carries Phases
+25 to 38, the miniport's successor - the monolithic host controller driver,
+which took over `src\` and the name `xhci98.sys` on 2026-10-02 - to the
+`2.4.0.0` cut; and [`roadmap-usb4.md`](roadmap-usb4.md), opened on
+2026-10-14, carries Phases 39 onward, including the open phase. The detail
+lives in
 the other documents:
 
 - Build, VMs, install, packaging and the bench rig:
@@ -126,9 +128,11 @@ on branch `1.2.0.0`), and the successor's one cut is `2.0.0.0` after Phase 31. I
 `design/13-superspeed-hcd.md`, grown from the future-plans page that moved
 there the same day.
 
-**Since then** (2026-10-14): `2.0.0.0` (Phase 32), `2.1.0.0` (Phase 33),
-`2.1.1.0` (Phase 34), `2.2.0.0` (Phase 35), `2.3.0.0` (Phase 36) and
-`2.3.1.0` (Phase 37) are cut. **Phase 36 is closed**, release `2.3.0.0` on branch `2.3.0.0`: issue 12's E7250 interrupt
+**Since then** (2026-10-18): `2.0.0.0` (Phase 32), `2.1.0.0` (Phase 33),
+`2.1.1.0` (Phase 34), `2.2.0.0` (Phase 35), `2.3.0.0` (Phase 36),
+`2.3.1.0` (Phase 37, 2026-10-13), `2.4.0.0` (Phase 38, 2026-10-14) and
+`3.0.0.0` (Phases 39 to 41, 2026-10-17) are cut, and Phase 42, release
+`3.1.0.0`, is open. **Phase 36 is closed**, release `2.3.0.0` on branch `2.3.0.0`: issue 12's E7250 interrupt
 routing, polled event delivery, MSI on Vista and 7, three items of
 GitHub issue 17, UAS commands of 1 MiB (36.21 to 36.27, a plan
 reviewed clean at `86db9a3`), and selective suspend, off by default
@@ -136,7 +140,7 @@ reviewed clean at `86db9a3`), and selective suspend, off by default
 the phase (the port switchover off by default, composite devices as
 devnodes, the 98 SE hot-plug hangs, string descriptors, a surplus-endpoint
 mouse, and the system named in the tools' reports). Its plan was reviewed
-to a clean round at `ef7fbac`. It was cut as `2.3.0.0` (`DriverVer`
+and revised to clean at `ef7fbac`. It was cut as `2.3.0.0` (`DriverVer`
 `10/12/2026`) after the owner's bench of 2026-10-11, and the bench work
 that could not be read moved to planned work, "Bench follow-up after
 `2.3.0.0`". **Phase 37 is closed**, release `2.3.1.0` on
@@ -144,11 +148,19 @@ branch `2.3.1.0`, a fix release: the X230's and E7250's STOP 0x7B in
 Windows XP x64 Setup from a USB stick (issue 15), Windows ME read on its
 stock USB stack, the shutdown latch, the event ring check after the
 re-arm and the port switchover's scripts in `portsw\`. **Phase 38 is
-open** (2026-10-13), release `2.4.0.0` (`DriverVer` `10/14/2026`) on
+closed** (2026-10-14), release `2.4.0.0` (`DriverVer` `10/14/2026`) on
 branch `phase-38`: the field-report batch files, the 98 SE and ME silent
 install, the finer timer while polling, the tools directory, the bus's ids
 under `USB\`, Linux's controller quirks and xHCI 0.96 controllers.
-[`roadmap-hcd.md`](roadmap-hcd.md), "Phase 36", is the record.
+[`roadmap-hcd.md`](roadmap-hcd.md), Phases 36 to 38, is the record.
+**Phases 39, 40 and 41 are closed** on the `3.0.0.0` cut of 2026-10-17:
+the Thunderbolt 3 firmware-connection-manager client with tunnel
+re-enumeration and safe eject, the USB4 software connection manager, and
+`XHCITR`, the USB and Thunderbolt tree tool. **Phase 42 is open**
+(2026-10-18), release `3.1.0.0` on branch `3.1.0.0`: the windowed
+installer, the uninstall, the Windows 98 SE and ME device install,
+`XHCISNAP` retired, and the connection-manager follow-ups.
+[`roadmap-usb4.md`](roadmap-usb4.md) is the record from Phase 39 on.
 
 ---
 

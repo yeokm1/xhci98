@@ -5,6 +5,18 @@ concrete so that no source pass bakes in an assumption that is hard to unwind
 later. Each bullet opens with the rule; what follows it is the reason and the
 evidence.
 
+> **Two drivers' rules live on this page.** Until `1.2.0.0` `xhci98.sys` was a
+> `usbport.sys` miniport; from `2.0.0.0` it is the successor HCD (design
+> record 13), which kept the miniport's controller files (`xhci_init.c`,
+> `xhci_cmd.c`, `xhci_evt.c`, `xhci_pci.c`, the pure core) and replaced
+> everything that faced usbport. A rule that speaks of a usbport callback, the
+> miniport extension usbport zeroes, the root-hub callbacks, or a file that
+> left the tree with the miniport (`xhci_dispatch.c`, `xhci_rh.c`,
+> `xhci_slot.c`, `xhci_vhub.c`, `xhci_probe.c`) is the `1.2.0.0` miniport's,
+> kept as the record of that driver on branch `1.2.0.0`; the HCD does not
+> follow it unless a note beside it says so. The rules marked **(1.2.0.0
+> history)** below are ones a reader could otherwise take for the HCD's.
+
 ## Context Stride
 
 - Read `HCCPARAMS1.CSZ` during controller initialization.
@@ -196,7 +208,7 @@ code:
   usbport cancelling the old handle's work and the early Stop Endpoint is what
   keeps the abort's DMA window narrow. Its later `ACTIVE` is still declined, so
   the endpoint stays paused until the bound handle's `ACTIVE` or the health
-  poll's restart (roadmap Phase 20, F1; Phase 20 review, finding 3).
+  poll's restart (roadmap Phase 20, F1, as revised within that phase).
 
 ## Ring Full and Backpressure
 
@@ -463,7 +475,7 @@ code:
   clear of the whole watchdog ladder so it can only catch a ladder that was
   never armed, key the stamp to the command generation so two commands issued
   between two polls do not share an age, and escalate once per crossing.
-- **No threshold in this driver may be expressed as a count of health polls.**
+- **(1.2.0.0 history)** **No threshold in this driver may be expressed as a count of health polls.**
   An earlier rule said the opposite ("count the age in polls, not
   milliseconds: the miniport has no clock it may read at DISPATCH without a
   new import, and a host that polls more slowly then fires later rather than
@@ -498,7 +510,7 @@ code:
     `CheckCallbacks`-to-`HealthPolls` ratios.
   - So: size from the mechanism the wait belongs to, in that mechanism's own
     unit, and compare against `PollClockMs` with an unsigned difference. The
-    six in the shipping tree are `XHCI_COMMAND_AGE_MS`, `XHCI_DEV_AGE_MS`,
+    six in the `1.2.0.0` tree were `XHCI_COMMAND_AGE_MS`, `XHCI_DEV_AGE_MS`,
     `XHCI_DEV_STALL_MS`, `XHCI_PORT_AGE_MS`, `XHCI_EP_RESTART_MS` and
     `XHCI_COMPLETION_FALLBACK_MS` - the last added with issue 7's delivery
     gate and compared against `PollClockMs` in `xhci_slot.c` like the rest,
@@ -506,7 +518,7 @@ code:
     two relationships that have to hold (the command backstop clearing the
     watchdog ladder, the port age clearing the reset deadline) are
     `XHCI_C_ASSERT`s rather than prose. The port age was the worst of them.
-  - Two of the three `*_POLLS` names left in `src/` are inside `#ifdef
+  - Two of the three `*_POLLS` names left in that tree were inside `#ifdef
     XHCI_FIX_*`: `XHCI_RH_SWEEP_SLOW_POLLS` (W15SLOW) and
     `XHCI_RH_GATE_STUCK_POLLS` (W7), so no shipping flavour carries either.
     They are Finding 3 bench candidates whose cadence is the measurement, and
@@ -515,8 +527,9 @@ code:
     rest: twenty polls is ten seconds at 500 ms and 0.7-1.6 s at the E460's
     36-80 ms.
   - The third is `XHCI_RECOVERY_DELIVERY_POLLS` (`src/xhci_hw.h`, used at
-    `xhciCheckController` in `src/xhci_dispatch.c`), and it is unconditional:
-    every shipping flavour carries it. It is a stated exception to this rule,
+    `xhciCheckController` in the miniport's `xhci_dispatch.c`), and it was
+    unconditional: every shipping flavour of `1.2.0.0` carries it. The HCD has
+    no health poll, and no `.c` file in `src/` uses the name now. It is a stated exception to this rule,
     not an oversight. What it bounds is not a duration but a number of
     delivery opportunities: an armed `UsbPortRequestAsyncCallback` that never
     arrives is only observable from the poll that would have preceded it, so
@@ -576,7 +589,8 @@ code:
 
 ## Transfer Buffers
 
-- Under Option A, `usbport.sys` hands the miniport already-mapped scatter/gather physical addresses for URB payloads - confirmed statically in both target binaries, through the NT DMA adapter, page-granular. Program those into TRBs directly. What the static pass does not settle is element ordering versus `SgOffset` and everything else about `SubmitTransfer`; order TRBs by `SgOffset` regardless, which is what `src/xhci_xfer.c` does, so the runtime ordering never has to be assumed. Phase 6 instrumented it rather than trusting it: `src/xhci_probe.c` counts `ProbeSgDisordered`, `ProbeSgGapped`, `ProbeSgHighDwords` and `ProbeSgMapped` in every build, and a run that ends with all four at zero is the probe confirming the static record (`docs/usb-xhci-info/usbport-miniport-interface.md`, "What Phase 3 can and cannot prove about transfer mapping").
+- **(1.2.0.0 history)** Under Option A, `usbport.sys` hands the miniport already-mapped scatter/gather physical addresses for URB payloads - confirmed statically in both target binaries, through the NT DMA adapter, page-granular. Program those into TRBs directly. What the static pass does not settle is element ordering versus `SgOffset` and everything else about `SubmitTransfer`; order TRBs by `SgOffset` regardless, which is what `src/xhci_xfer.c` does, so the runtime ordering never has to be assumed. Phase 6 instrumented it rather than trusting it: `src/xhci_probe.c` counts `ProbeSgDisordered`, `ProbeSgGapped`, `ProbeSgHighDwords` and `ProbeSgMapped` in every build, and a run that ends with all four at zero is the probe confirming the static record (`docs/usb-xhci-info/usbport-miniport-interface.md`, "What Phase 3 can and cannot prove about transfer mapping").
+- The HCD owns the mapping itself (the Option B shape): `hcd_dma.c` maps each chunk of a URB's buffer through the controller's DMA adapter, and `hcd_io.c` hands the physical elements it gets back to the transfer engine, which programs them into TRBs in order (design record 13 sections 7.5 and 11); the HCD has no bounce buffer.
 - A single TRB's data buffer must not span a 64 KB physical boundary (xHCI spec 6.4.1 note). Split every SG fragment at 64 KB boundaries into chained TRBs - length <= 64 KB alone is not sufficient.
 - Common-buffer bounce buffers are the fallback policy only where the driver owns the mapping itself (Option B, or if the spike shows usbport passes virtual buffers): OUT transfers copy caller data into the bounce buffer before ringing the doorbell; IN transfers copy from the bounce buffer back to the caller after completion.
 - **Actual transferred length is `requested_length - residual_length` only for a single-TRB TD.** Without the qualifier it is wrong for every multi-TRB TD: "For multi-TRB TDs, if ED = `0`, the TRB Transfer Length only reflects the number of bytes transferred for the buffer associated with the Transfer TRB pointed to by the Transfer Event, not the total bytes transferred for the TD" (Table 6-39 note, p.441).
@@ -1218,6 +1232,9 @@ Why there is no MSI on either target. MSI is an interrupt delivered as a memory 
 
 ## Root Hub Reporting
 
+**(1.2.0.0 history.)** This section is the miniport's root hub, which usbport
+drove through callbacks; the HCD's root hub is a PDO and FDO of its own
+(`hcd_rh.c`), its ports served on the controller thread (`hcd_enum.c`).
 The callback contracts these rest on are binary-confirmed
 in `docs/usb-xhci-info/usbport-miniport-abi.md` section 4; what is here is what the miniport
 must therefore do.
@@ -1288,7 +1305,7 @@ must therefore do.
   value, and hub-class `C_PORT_SUSPEND` is a completed resume while xHCI has no
   such bit (only PLC, which is any link-state change - so it takes a comparison
   against the previous state).
-- **Every connected managed root port is reported to usbport as High Speed,
+- **(1.2.0.0 history; the HCD enumerates each device at the speed its port decoded, `hcd_enum.c`, and reports to no usbport)** **Every connected managed root port is reported to usbport as High Speed,
   whatever it decoded, and this is the one place the driver knowingly tells
   usbport something untrue.** `XHCI_HUB_PORT_LOW_SPEED` is never set at all.
   usbport applies the EHCI model, in which a root port can only have a High Speed
@@ -1570,7 +1587,7 @@ must therefore do.
   signalling with nothing to end it. Confirm each operation in its own target
   bit (`PP` for a power-off, `PED` for a disable - "there may be a delay in
   disabling or enabling a port", p.372) and retire nothing until it shows.
-- **There is one way to acknowledge a port's change bits, and everything uses
+- **(1.2.0.0 history; in the HCD the controller thread acknowledges a root port's change bits, `hcd_enum.c` through `XhciPortscClearChanges`)** **There is one way to acknowledge a port's change bits, and everything uses
   it.** A reader that acknowledges PORTSC's RW1C change bits must fold them
   into the shadow, so every path that acknowledges does so through
   `xhciRhRefresh`; a second acknowledging reader that looks at one bit and

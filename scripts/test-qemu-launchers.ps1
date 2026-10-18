@@ -99,7 +99,7 @@ try {
             # reboot": `change floppy0 <path>` on the monitor is the
             # guest-to-host courier for 2a and 2b, and a floppy CONTROLLER
             # cannot be added to a running guest - so it has to be on the run
-            # launcher at boot. The 2026-09-07 audit's H27 was that the doc had
+            # launcher at boot. The audit of 2026-09-07 found that the doc had
             # claimed this since batch 13-L with no generator writing it; its
             # first fix then put the drive on 2b's PREPARATION launcher, which
             # is booted once and never during a matrix run, so the claim stayed
@@ -502,7 +502,7 @@ try {
 
     # **A qemu-img that fails is a refusal, not an "OK: Created".** The shared
     # NT 6.x body printed "Created <image>" whatever qemu-img create had
-    # returned (the 2026-09-17 audit's D8). Driven with a qemu-img.exe that is
+    # returned (the audit of 2026-09-17). Driven with a qemu-img.exe that is
     # a copy of the system's find.exe, which exits 2 on these arguments and
     # creates nothing: the one stand-in this suite can make that is a real
     # executable with a deterministic nonzero exit code.
@@ -628,7 +628,7 @@ try {
 
     #
     # **NO TWO GUESTS MAY SHARE A QEMU MONITOR PORT**, and nothing checked it
-    # until the 2026-09-07 audit's H31. Two launchers on one port cannot both
+    # until the audit of 2026-09-07. Two launchers on one port cannot both
     # run: the second QEMU fails to bind and dies, or - worse, and this is the
     # one that costs a run - the harness connects to the FIRST guest's monitor
     # believing it is talking to the second, and every reading it takes is of

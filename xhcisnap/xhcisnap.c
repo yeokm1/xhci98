@@ -110,7 +110,7 @@
  * that is three tidy source lines prints as one 163-column sentence and the DOS
  * box breaks it mid-word - `either the c` / `hannel`. **The defect is invisible
  * in a diff**: no literal in this file is over 79 characters, the longest being
- * a registry path, so four review rounds passed over it and the project owner
+ * a registry path, so four readings of the diff passed over it and the project owner
  * found it in ten seconds on a guest. That is this file's own rule - *re-read
  * the usage text on a real invocation rather than trusting the diff* - earning
  * itself a second time.
@@ -266,8 +266,8 @@ static void say_hang(const char *indent, const char *hang, const char *fmt, ...)
 /* A registry path is one word to the wrapper, and the class key's is 82
  * columns with its HKLM\, so the path is broken after a backslash wherever
  * the next piece would pass column 79, each continuation two further in
- * (legs of 38.1: it wrapped at 80 on XP and 7; Codex review of 38.1, round
- * 5: an instance key, 4 deep, still passed it when broken only once). A
+ * (legs of 38.1: it wrapped at 80 on XP and 7; task 38.1:
+ * an instance key, 4 deep, still passed it when broken only once). A
  * piece is never split, so one past a whole line would still pass it; no
  * class or instance key has one (a GUID is 38, a hardware id about 41). */
 static void print_hklm_path(const char *indent, const char *path,
@@ -712,8 +712,8 @@ static int take_window(HANDLE device, unsigned long region,
         return 0;
     }
     /* The reply must cover the payload it claims: a short one would leave
-     * this buffer's zeroes to be read as data (Codex review of the slots
-     * change, NOTE 3). Every answer the door and usbport give covers the
+     * this buffer's zeroes to be read as data (the slots
+     * change). Every answer the door and usbport give covers the
      * whole block. */
     if (header->PayloadBytes > SNAP_PARAM_BYTES - sizeof(SNAP_HEADER) ||
         (unsigned long)returned < UU_PARAMETERS + sizeof(SNAP_HEADER) +
@@ -754,11 +754,11 @@ static int take_window(HANDLE device, unsigned long region,
  * the two renamed over their final names (`publish_region`), with the old
  * `.TXT` retired at the same moment. The window that is left is the rename
  * pair itself: if the second rename fails, `main` deletes both finals rather
- * than leave a new `.BIN` beside an old `.PSC`. (Codex round 15.)
+ * than leave a new `.BIN` beside an old `.PSC`.
  */
 /*
- * **-report never deletes or replaces a file it did not create** (Codex
- * review of 38.1, round 1). Its base name is chosen from the clock as one no
+ * **-report never deletes or replaces a file it did not create** (task
+ * 38.1). Its base name is chosen from the clock as one no
  * file has, but another run - a second -report, or a -dump -o with that
  * basename - can create one of the set between the choice and the write.
  * So in report mode the temporaries are created with CREATE_NEW, the .TXT
@@ -915,7 +915,7 @@ static int publish_region(const char *tmp, const char *final)
  * leading digit required, the whole argument consumed and no ERANGE; `atoi`
  * accepts anything and says nothing, which is why `-verbosity full` once
  * switched the channel OFF (fixed) and why `-c junk` opened HCD0
- * and `-c 1oops` opened HCD1 until the post-Phase 13 review rounds - on a two-controller machine
+ * and `-c 1oops` opened HCD1 until after Phase 13 - on a two-controller machine
  * the second of those dumps the wrong controller while echoing the command
  * back as if it had been honoured.
  */
@@ -1007,7 +1007,7 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
         }
         /*
          * **And the same question of the region as a whole**, which nothing was
-         * asking (the 2026-09-16 audit's C4). Each window is bounded, and the
+         * asking (the audit of 2026-09-16). Each window is bounded, and the
          * loop below runs until a header stops setting TRUNCATED - so a driver
          * whose windows never stop would write a `.BIN` larger than the region
          * it claims to be, and the summary line would then print a byte count
@@ -1614,13 +1614,13 @@ static const char *sys_os_name(unsigned long platform, unsigned long major,
  * allow list is the firmware's free text (QEMU's `-smbios type=1,product=`
  * takes anything, and an integrator can write a machine's name or tag into
  * SystemProductName), so naming the values is not by itself a guarantee
- * (Codex review of 36.47, round 1). Every registry string printed passes
+ * (task 36.47). Every registry string printed passes
  * through sys_clean, and sys_clean withholds the whole string when it
  * contains this machine's computer name, the user's name, the domain or the
  * workgroup, compared without case, on the string as the registry gave it
- * and again as printed (round 2: a name cut by the truncation, or one with a
+ * and again as printed (a name cut by the truncation, or one with a
  * byte the cleaning turns into '?', must not slip through). The domain is
- * taken three ways, since the environment alone can be missing it (round 2):
+ * taken three ways, since the environment alone can be missing it:
  * USERDOMAIN; NetGetJoinInformation (2000 and later: the domain or workgroup
  * joined), from netapi32.dll loaded at run time; and GetComputerNameExA's
  * DNS domain (2000 and later), looked up at run time. 98 SE and ME give
@@ -1648,7 +1648,7 @@ static int sysNamesLoaded;
  * text string rather than print it unscreened. The same holds where the
  * names were read but this machine's computer name could not be: a screen
  * with no computer name in it is not a screen. The privacy rule does not
- * depend on -nosysinfo (Codex review of 38.1, round 1; until then
+ * depend on -nosysinfo (task 38.1; until then
  * -nosysinfo switched the withholding off and printed the strings).
  */
 static int sysNamesOff;
@@ -1736,9 +1736,9 @@ static void sys_load_names(void)
 /*
  * Upper-case `in` into `out` in the ANSI code page of `sysFoldLcid` (the
  * system's; the self-test names a fixed one), so an accented name matches in
- * either case (round 3: `_strnicmp` folds ASCII only in the C locale).
+ * either case (`_strnicmp` folds ASCII only in the C locale).
  * LCMapStringA is KERNEL32 on 95 and later. Its result is taken at the
- * length it reports, which may differ from the input's (round 4). Only
+ * length it reports, which may differ from the input's. Only
  * where it fails outright does a fold of the ASCII letters stand in, and that
  * fold steps over a DBCS lead byte's trail byte rather than changing it.
  * Both the names and the text go through here, so they fold alike. Returns
@@ -1847,7 +1847,7 @@ static void sys_clean_chars(const char *in, char *out, size_t outBytes,
         }
         /* The text itself stays within SYS_TEXT_MAX, a pending blank
          * counted; "..." and the terminator go beyond it, inside the
-         * buffer (Codex round 1, P3). */
+         * buffer. */
         if (n + ((space && n > 0) ? 2 : 1) > SYS_TEXT_MAX ||
             n + 6 > outBytes) {
             break;
@@ -2316,7 +2316,7 @@ static int selftest_sysinfo(void)
     sysNamesLoaded = 1;
     /* German (Germany), code page 1252, where FC and DC are u-umlaut in its
      * two cases, so the accented fixture means the same on every build host
-     * whatever its own code page (round 4). */
+     * whatever its own code page. */
     sysFoldLcid = MAKELCID(MAKELANGID(LANG_GERMAN, SUBLANG_GERMAN),
                            SORT_DEFAULT);
 
@@ -2407,7 +2407,7 @@ static void write_companion_header(const SNAP_HEADER *h)
     if (h->SwitchRead == 0) {
         /*
          * **This is NOT the "nothing was configured" case, and this branch
-         * said it was until the post-Phase 13 review rounds.** The driver sets SwitchRead on the
+         * said it was until after Phase 13.** The driver sets SwitchRead on the
          * first line of its registry reader, before the registry service is
          * even tested, so a machine with no INF, a hand-copied driver and a
          * packet carrying no registry service all reach the reader and all
@@ -2714,7 +2714,7 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
     }
     /*
      * **And the two things the mask arithmetic below assumes of the header,
-     * which nothing else checks** (the 2026-09-16 audit's C4). Neither can be
+     * which nothing else checks** (the audit of 2026-09-16). Neither can be
      * produced by this driver, and that is the point: every other field of this
      * header is bounds-checked before it is believed, and these two were taken
      * on trust.
@@ -3202,8 +3202,8 @@ static const char *const compsel_counter_names[SNAP_COMPSEL_WORDS] = {
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
  * fails (and says so), and the sections read from the same header
  * (print_intr) decode nothing from it either, so one malformed header
- * cannot be refused by one reader and believed by another (task 36.9's
- * review rounds 1 and 2). The header lies inside the image, the records
+ * cannot be refused by one reader and believed by another (task
+ * 36.9). The header lies inside the image, the records
  * after it, and the counters after the records and inside the image,
  * word-aligned. The products cannot wrap: ports * portBytes is bounded by
  * the bytes after portsAt before it is compared.
@@ -4327,8 +4327,7 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
         "none", "a line (INTx)", "a message (MSI or MSI-X)", "polled"
     };
     /* By the IRQ's number alone, which names a path, not the HAL's mode:
-     * an I/O APIC HAL can hand out an IRQ below 16 too (review round 1,
-     * finding 2). */
+     * an I/O APIC HAL can hand out an IRQ below 16 too. */
     static const char *const irq_text[3] = {
         "in neither range",
         "16-23: PIRQA-H wired direct to I/O APIC inputs 16-23",
@@ -4375,7 +4374,7 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
     if (v == SNAP_PIRQ_UNREAD) {
         /* XhciPirqReset at the start's entry, no latch after it. */
         /* A start still pending reads the same, so nothing is said of
-         * how it ended (review round 3). */
+         * how it ended. */
         comp("  value            not read: the routing step has not run "
              "for this start\n");
     } else {
@@ -4413,8 +4412,7 @@ static void print_pirq(const unsigned char *hcd, unsigned long hcdBytes)
         comp("  raw interrupt    none in the raw resource list\n");
     } else if ((PW(SNAP_PIRQ_IRQ_FLAGS) & 2UL) != 0) {
         /* CM_RESOURCE_INTERRUPT_MESSAGE: the first word is a reserved
-         * USHORT then MessageCount, not a level (review round 1, finding
-         * 3). */
+         * USHORT then MessageCount, not a level. */
         comp("  raw interrupt    %lu descriptor(s), a message grant: %lu "
              "message(s),\n                   vector %lX, flags %lX, share "
              "%lu\n", v, PW(SNAP_PIRQ_IRQ_LEVEL) >> 16,
@@ -4644,7 +4642,7 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
     records = get32(hcd, SNAP_TELE_RECORDS_AT * 4);
     recWords = get32(hcd, SNAP_TELE_WORDS_AT * 4);
     /* Each count held to a bound before the two are multiplied, so the
-     * product cannot wrap past the checks (review round 1, finding 5). */
+     * product cannot wrap past the checks. */
     if (get32(hcd, SNAP_XSTAT_COUNT_AT * 4) < SNAP_XSTAT_WORDS ||
         recWords < SNAP_TELE_BODY + SNAP_TELE_BODY_WORDS || recWords > 1024 ||
         records > 16 ||
@@ -5232,7 +5230,7 @@ static int selftest_intr(void)
     intr_image(hcd, 202, 63);
     print_intr(hcd, (202 + 63) * 4, ext, sizeof(ext));
 
-    /* Shapes refused as print_hcd refuses them (review round 1): a block
+    /* Shapes refused as print_hcd refuses them: a block
      * the image cannot hold, a header longer than the image, and counters
      * overlapping the header; and a block between the two sizes known. */
     intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
@@ -5244,8 +5242,7 @@ static int selftest_intr(void)
     intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
     put32(hcd, 24, (H - 4) * 4);
     print_intr(hcd, bytes, ext, sizeof(ext));
-    /* One port record at the header's end and the counters on top of it
-     * (review round 2). */
+    /* One port record at the header's end and the counters on top of it. */
     intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
     put32(hcd, 8, 1);
     print_intr(hcd, bytes, ext, sizeof(ext));
@@ -5599,7 +5596,7 @@ static void print_ssusp(const unsigned char *image, unsigned long bytes)
 /*
  * The HCD region's report: the ports and counters, then every section read
  * from the same header. When the header does not fit its image print_hcd
- * says so and nothing else is decoded from it (task 36.9's review round 2),
+ * says so and nothing else is decoded from it (task 36.9),
  * so no reader believes a header another refused. `ext` is NULL when the
  * extension image is short or not the driver's size.
  */
@@ -5946,7 +5943,7 @@ static int selftest_xstat(void)
     print_xstat(hcd, sizeof(hcd));
 
     /* A record size whose product with the count wraps 32 bits back into
-     * the header (review round 1, finding 5): refused, not read past. */
+     * the header: refused, not read past. */
     put32(hcd, SNAP_TELE_RECORDS_AT * 4, 3);
     put32(hcd, SNAP_TELE_WORDS_AT * 4, 0x55555573UL);
     print_xstat(hcd, sizeof(hcd));
@@ -5991,7 +5988,7 @@ static void print_xpipe(const unsigned char *hcd, unsigned long hcdBytes)
     }
     /* A count past 64 or past the header is no stage 2 count: a stage B
      * branch build's 273-word header held DNCTRL here (0xFFFFFFFF with
-     * the switch off; Codex review of p36-int4, round 1, finding 2). */
+     * the switch off; branch p36-int4). */
     if (hcdBytes < SNAP_HCD_XPIPE_HEAD_WORDS * 4 ||
         get32(hcd, SNAP_XPIPE_COUNT_AT * 4) < SNAP_XPIPE_WORDS ||
         get32(hcd, SNAP_XPIPE_COUNT_AT * 4) > 64UL ||
@@ -6701,7 +6698,7 @@ static int driverKeyCount;
  * carries. That is what "decisive" has to mean to be worth writing down: the
  * previous version called it decisive and then fell through to the name list
  * anyway, so a Windows 98 key explicitly bound to `other.sys` was still claimed
- * if it happened to carry a colliding name. (Codex review of `d3e4d43`.)
+ * if it happened to carry a colliding name. (Commit `d3e4d43`.)
  *
  * **A weak match is kept and listed, and then not written to unless `-force`
  * says so.** Dropping the weak ones whenever any decisive match existed was an
@@ -6794,7 +6791,7 @@ static int value_exists(HKEY key, const char *name)
  * than the buffer, or of an unexpected type, therefore looked absent and let
  * the key be claimed by a weaker signal further down. That is the one direction
  * this must never fail in, because the whole point of reading `NTMPDriver` is
- * to be told NO. (Codex review of `dcdc5ac`.)
+ * to be told NO. (Commit `dcdc5ac`.)
  */
 #define STR_ABSENT      0   /* no such value                                */
 #define STR_OK          1   /* read, terminated, in `out`                   */
@@ -6986,7 +6983,7 @@ static int key_match(HKEY parent, const char *name, const char **why)
  * buffer it was being `sprintf`ed into. A subkey name that long is not
  * something either setup engine produces - the keys here are four digits - but
  * "no caller does that today" is not a bound, and this walks whatever is in the
- * class key rather than whatever this project put there. (Codex review of
+ * class key rather than whatever this project put there. (Commit
  * `b213e47`.)
  */
 static int compose_key_path(char *out, DWORD outBytes,
@@ -8222,8 +8219,8 @@ static void sha256_hex(const unsigned char *digest, char *out)
  * WOW64's file system redirection off around a read of the native
  * system32, as driver_file_version does: the x86 tool on a 64-bit Windows
  * would otherwise read SysWOW64. Both routines are looked up, so 98 SE, ME
- * and 2000 never see them. **The window is one call wide** (Codex review
- * of 38.1, round 1): redirection off covers a LoadLibrary too, so a
+ * and 2000 never see them. **The window is one call wide** (task
+ * 38.1): redirection off covers a LoadLibrary too, so a
  * version.dll loaded inside it is the native 64-bit one, which an x86
  * process cannot load. So everything is loaded and resolved first
  * (wow64_resolve, ver_load), and the redirection is off only around each
@@ -9256,8 +9253,8 @@ static void res_decode(unsigned long rid, const unsigned char *b,
     default:
         /* Not as bytes: a class-specific or bus-specific descriptor is the
          * driver's own data and can carry anything, a serial or a name
-         * included, and bytes cannot be screened (Codex review of 38.1,
-         * round 1). The memory, I/O, DMA, IRQ and bus-number fallbacks above
+         * included, and bytes cannot be screened (task 38.1).
+         * The memory, I/O, DMA, IRQ and bus-number fallbacks above
          * still print theirs: those layouts are numbers. */
         dev_line("other", "resource type %lu, %lu bytes, not printed",
                  rid, size);
@@ -10175,7 +10172,7 @@ static int take_report(unsigned long controller, const char *given)
         return REPORT_NAMES_FULL;
     }
     /* The current directory is not printed: it is often the user's profile,
-     * named after the user (Codex review of 38.1, round 1). */
+     * named after the user (task 38.1). */
     sprintf(devPath, "%s.DEV", base);
     printf("xhcisnap -report: %04u-%02u-%02u %02u:%02u, files named %s, in "
            "the\ncurrent directory\n", (unsigned)runTime.wYear,
@@ -10751,8 +10748,8 @@ static unsigned long read_slots(HANDLE device, int *state,
             return 0;
         }
         /* Its tear detector joins the dump's, so the coherence line still
-         * speaks for every window taken (Codex review of the slots change,
-         * MINOR 2). */
+         * speaks for every window taken (the slots
+         * change). */
         if (!*tearSeen) {
             *tearFirst = header.TearDetector;
             *tearSeen = 1;
@@ -10766,8 +10763,7 @@ static unsigned long read_slots(HANDLE device, int *state,
             return 0;
         }
         /* Every window must be the one asked for and fit the region it
-         * describes, or the listing would claim devices it never received
-         * (MINOR 1). */
+         * describes, or the listing would claim devices it never received. */
         if (header.Region != SNAP_REGION_SLOTS ||
             header.Offset != have * record ||
             (header.RegionBytes % record) != 0 ||
@@ -10919,8 +10915,8 @@ static int selftest_report(const char *base)
 }
 
 /*
- * `-on [LEVEL]`, SNAPON.BAT's one command line (Codex review of 38.1, round
- * 3). The batch passes its %1 on as it came, with no `if` on it: a quoted or
+ * `-on [LEVEL]`, SNAPON.BAT's one command line (task 38.1).
+ * The batch passes its %1 on as it came, with no `if` on it: a quoted or
  * metacharacter argument broke cmd.exe's `if "%1"==` test before this tool
  * could refuse it, and `SNAPON "1"` failed the batch's compare though the C
  * runtime hands this tool a plain 1. So the default and the check live here.
@@ -11072,7 +11068,7 @@ int main(int argc, char **argv)
     /*
      * `-on [LEVEL]` and `-selftest-on [LEVEL]` stand alone: SNAPON.BAT's line
      * is `XHCISNAP -on %1`, and whatever its %1 was is LEVEL, checked by
-     * parse_on_level (Codex review of 38.1, round 3). The write is
+     * parse_on_level (task 38.1). The write is
      * -verbosity's, with the same key matching, refusals and exit codes;
      * -force is not taken, as SNAPON.BAT never passed it.
      */
@@ -11097,7 +11093,7 @@ int main(int argc, char **argv)
         if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
             /* Naming a controller is asking for a dump of it - the long help
              * says `-dump` is "Implied by -c and -o", and this is where that
-             * is true. It was not until the 2026-09-16 audit's C1: `doDump`
+             * is true. It was not until the audit of 2026-09-16: `doDump`
              * was set only in the literal `-dump` branch, so the refusal
              * below could not see an implied dump and
              * `XHCISNAP -verbosity 2 -o C:\X` wrote the registry, exited 0
@@ -11148,15 +11144,15 @@ int main(int argc, char **argv)
              * the clock. It is a dump as far as the refusals below go. */
             doReport = 1;
             doDump = 1;
-            /* -report NAME (Codex review of 38.1, round 3): SNAPGET.BAT's
+            /* -report NAME (task 38.1): SNAPGET.BAT's
              * line is `XHCISNAP -report %1`, so whatever its %1 was is the
              * next argument, and it is NAME unless it is one of the three
              * options -report goes with. A '-x', a '/?' or a '-help' there
              * is a NAME and is refused by the name rule (exit 2), so no %1
              * makes SNAPGET.BAT run anything but a report. A -o or -c with
              * no word after it is one too: SNAPGET -c would otherwise end
-             * on the generic usage, with no attach line (Codex review of
-             * 38.1, round 4). */
+             * on the generic usage, with no attach line (task
+             * 38.1). */
             if (i + 1 < argc && strcmp(argv[i + 1], "-nosysinfo") != 0 &&
                 ((strcmp(argv[i + 1], "-o") != 0 &&
                   strcmp(argv[i + 1], "-c") != 0) || i + 2 >= argc)) {
@@ -11205,7 +11201,7 @@ int main(int argc, char **argv)
             return selftest_xstat();
         } else if (strcmp(argv[i], "-selftest-sysinfo") == 0) {
             /* Deferred like -selftest-report, so a -nosysinfo after it
-             * still counts (Codex review of 36.47, round 6). */
+             * still counts (task 36.47). */
             doSelftestSysinfo = 1;
         } else if (strcmp(argv[i], "-selftest-res") == 0) {
             return selftest_res();
@@ -11259,8 +11255,8 @@ int main(int argc, char **argv)
              * depth knob; it is not now that the same value is the channel's
              * access control. A whole-argument parse with at least one digit
              * and nothing after it is the only reading that cannot mean
-             * something the user did not type. (Codex review of `29c311f`.)
-             * `parse_ulong` is that reading, and since the post-Phase 13 review rounds `-c` takes
+             * something the user did not type. (Commit `29c311f`.)
+             * `parse_ulong` is that reading, and since Phase 13 `-c` takes
              * the same one - see the parser's own comment for what `atoi`
              * did there.
              */
@@ -11328,7 +11324,7 @@ int main(int argc, char **argv)
      * to a default-named dump - so a user who typed it expecting to override
      * something got three files in the current directory instead, which is the
      * same surprise the bare-invocation refusal above exists to prevent (the
-     * 2026-09-16 audit's C4).
+     * audit of 2026-09-16).
      */
     /* -selftest-sysinfo and -selftest-report are acted on once every
      * argument is read, so that -nosysinfo beside them counts wherever it
@@ -11370,7 +11366,7 @@ int main(int argc, char **argv)
     /*
      * The same omission one branch later: `-probe` returns as soon as the
      * route is checked, so `-probe -o X` or `-probe -c N` used to probe and
-     * silently take no dump (the 2026-09-17 audit's C4).
+     * silently take no dump (the audit of 2026-09-17).
      */
     if (probeOnly && doDump) {
         printf("-probe checks the route and returns; -dump, -c and -o ask "
@@ -11582,7 +11578,7 @@ static int take_dump(unsigned long controller, const char *base,
          * README.md repeats the promise - but the only `DeleteFileA(textPath)`
          * was the success-path one below, so a failed publish left last run's
          * report as the newest file with the set it describes deleted from
-         * under it (the 2026-09-16 audit's C4). */
+         * under it (the audit of 2026-09-16). */
         DeleteFileA(textPath);
         printf("  no dump was published\n");
         _snprintf(dumpWhy, sizeof(dumpWhy) - 1, "read, but %s and %s could "
@@ -11600,7 +11596,7 @@ static int take_dump(unsigned long controller, const char *base,
      * an issue. Everything `comp()` writes from now on goes to the FILE when
      * there is one and to the screen only when there is not - it is one
      * destination, not both *(this comment said "to the screen and to the
-     * file at once" until the post-Phase 13 review rounds, which `comp()` never did)*. The one
+     * file at once" until after Phase 13, which `comp()` never did)*. The one
      * thing the bench must see whatever the level is the PORTSC table, and
      * that is printed to the screen explicitly below.
      */
@@ -11879,8 +11875,8 @@ static int take_dump(unsigned long controller, const char *base,
              * there, an unwritable destination): the report went to the
              * screen above, where on real silicon it has scrolled off. Exit 3
              * like the other two, because the documented meaning of 0 is
-             * "the .TXT is complete" and there is no .TXT (Phase 20 review,
-             * finding 6).
+             * "the .TXT is complete" and there is no .TXT (Phase
+             * 20).
              */
             printf("  report     *** NOT CREATED: %s - the report went to the "
                    "screen only.\n", full);

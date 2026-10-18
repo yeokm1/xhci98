@@ -69,7 +69,7 @@ Write-Step "Checking host"
 Test-SetupHost
 
 # Get-QemuTool lives in common.ps1 - there were five copies of it and they
-# had drifted (the 2026-09-07 audit's H28).
+# had drifted (the audit of 2026-09-07).
 
 Write-Step "Checking QEMU"
 $qemuSystem = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-system-x86_64.exe"
@@ -88,7 +88,7 @@ if ($null -eq $qemuSystem) {
 # (scripts\local is git-ignored and OneDrive-synced), and
 # `setup-qemu.ps1 -Install` in particular writes launchers in a process whose
 # PATH predates the install it just performed. One resolver for all five
-# generators, in common.ps1 (the 2026-09-07 audit's H28 and H29).
+# generators, in common.ps1 (the audit of 2026-09-07).
 $qemuResolve = Get-QemuLauncherResolver -FoundPath $qemuSystemCommand
 
 if ($null -eq $qemuImg) {
@@ -107,7 +107,7 @@ Ensure-Directory $xferDir
 # has said since batch 13-L that "the launcher now carries `-drive if=floppy`",
 # and no generator wrote one - the fix was made by hand in the git-ignored
 # `scripts\local\` copy and was lost the next time this script ran, which is
-# the trap that doc paragraph goes on to name. The 2026-09-07 audit's H27.
+# the trap that doc paragraph goes on to name (the audit of 2026-09-07).
 #
 # What it buys: `change floppy0 <path>` on the monitor inserts a disk into a
 # running guest at once, so `copy C:\SNAP.TXT A:` gets a file out of Windows
@@ -159,7 +159,7 @@ if (-not (Test-Path -LiteralPath $Win2KIso)) {
     Write-Ok "Win2000 ISO: $Win2KIso"
 }
 # Both Win2000 generators stage this file the same way and pin it to the same
-# length and version; common.ps1 holds the one copy (audit J6).
+# length and version; common.ps1 holds the one copy (the audit of 2026-09-07).
 $stagedUsbd = Join-Path $xferDir "USBD.SYS"
 Install-Win2KUsbdSys -XferDir $xferDir -Win2KUsbdSys $Win2KUsbdSys | Out-Null
 

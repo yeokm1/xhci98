@@ -162,7 +162,7 @@ param(
     # hlprx86-vista-baselines.expected, hlprx86-win7-baselines.expected), and
     # the Windows 98 rule does not apply. **Every set is required**: a set
     # missing, or one image of it, fails the gate rather than warning (record
-    # 18 section 15.11, round 1's finding 8); -NoTargetEvidence remains a
+    # 18 section 15.11); -NoTargetEvidence remains a
     # developer's allowlist-only mode, which make-package.ps1 and
     # make-release.ps1 refuse for the helper. The profile refuses an amd64
     # image and the two Vista-only interrupt routines by name, and the
@@ -306,7 +306,7 @@ section 4), or set WDKROOT.
     # exactly like a binary it cannot parse.
     #
     # Membership is tested entry by entry rather than with `-notlike "*$mspdb*"`
-    # (repo audit D5). That test was wrong twice over: `-like` treats `[`, `]`,
+    # (an earlier repository audit). That test was wrong twice over: `-like` treats `[`, `]`,
     # `*` and `?` in the *pattern* as wildcards, so a repository path containing
     # any of them stops matching itself; and a plain substring search says "yes"
     # for a PATH entry that merely contains this one as a prefix. Prepending the
@@ -657,7 +657,7 @@ function Get-Win98Precedent {
 
     # ORDINAL, because a PowerShell hashtable is case-INSENSITIVE by default
     # and this map is evidence. `Test-NtkernName` was made `-cmatch` for the
-    # 2026-09-07 audit's H3 and this half was left as it was, so a precedent
+    # audit of 2026-09-07 and this half was left as it was, so a precedent
     # binary importing `EXALLOCATEPOOL` still answered for the allowlist's
     # `ExAllocatePool` - the same wrong evidence in the other of the two
     # places the Win98 rule is enforced, and the one that is quoted into the
@@ -718,7 +718,7 @@ function Test-NtkernName {
     # symbol name.
     # `-cmatch`, not `-match`: an export name differing only in case is a
     # different symbol, and this line is quoted into the phase records as
-    # evidence for the exact name in the allowlist (the 2026-09-07 audit's H3).
+    # evidence for the exact name in the allowlist (the audit of 2026-09-07).
     return ($Text -cmatch ("\x00" + [regex]::Escape($Symbol) + "\x00"))
 }
 
@@ -733,7 +733,7 @@ function Get-ObjectImportRefs {
     # when the declaration carries dllimport, and the plain symbol
     # `_ExFreePool@4` when it does not and the import library's stub resolves
     # it - so every undefined external is taken, with the decoration stripped
-    # (Codex review of 26-A.2, round 1, finding 9).
+    # (task 26-A.2).
     $names = @()
     foreach ($line in $DumpLines) {
         if ($line -match "\bUNDEF\b.*\bExternal\s+\|\s+(\S+)") {
@@ -758,12 +758,12 @@ function Get-ObjectImportRefs {
 # object's .c file (beside the sources file, two levels above obj<fl>\<arch>)
 # is searched for each restricted symbol as an identifier. A name reached only
 # through a macro of another spelling is not seen, which the per-object check
-# on x86 does see; an amd64-only call written by name is (Codex review of
-# 26-A.2, round 1, finding 10).
+# on x86 does see; an amd64-only call written by name is (task
+# 26-A.2).
 # C joins a backslash-newline before it reads a token (translation phase 2),
 # and `??/` is a backslash under trigraph replacement (phase 1), so a name can
-# be split across lines and still compile to the import (Codex review of
-# 26-A.2, round 5, finding 3). The scan joins them first. What it still cannot
+# be split across lines and still compile to the import (task
+# 26-A.2). The scan joins them first. What it still cannot
 # see is a name assembled by token pasting (`##`) inside a macro - the one
 # spelling that needs the preprocessor itself; the x86 per-object check sees
 # it in shared code, and an amd64-only pasted call is the scan's recorded
@@ -775,8 +775,8 @@ function Join-CSplices {
     # reference (a header that only discusses a pool call is not a site).
     # Comments and string and character literals are read in one pass, left
     # to right, as the compiler's tokenizer does: a "//" inside a string is no
-    # comment, and a "/*" inside one opens none (Codex review of batch (b),
-    # round 1, finding 15). A literal becomes a space as a comment does - no
+    # comment, and a "/*" inside one opens none (batch (b)).
+    # A literal becomes a space as a comment does - no
     # name inside one is a call.
     $joined = $Text -replace "(\\|\?\?/)\r?\n", ""
     $lexeme = '"(?:[^"\\\r\n]|\\.)*"|''(?:[^''\\\r\n]|\\.)*''|/\*.*?\*/|//[^\r\n]*'
@@ -798,7 +798,7 @@ function Test-ImportSitesFromSource {
     $checked = 0
     # A restricted name in a header, at any depth below the sources, can reach
     # any object through a macro, and no per-file scan can attribute it, so
-    # none is allowed in one (Codex review of 26-A.2, rounds 2 and 3).
+    # none is allowed in one (task 26-A.2).
     foreach ($header in @(Get-ChildItem -LiteralPath $srcDir -Filter "*.h" -File -Recurse -ErrorAction SilentlyContinue)) {
         $headerText = Join-CSplices ([System.IO.File]::ReadAllText($header.FullName))
         foreach ($row in $SiteRows) {
@@ -1044,7 +1044,7 @@ function Test-Image {
         #
         # `xhci98-imports.allow` states it: "every pair here must carry Win98
         # evidence of its own, because every addition is a new way for the load
-        # to fail silently on Win98". Until the 2026-09-07 audit's H1 nothing
+        # to fail silently on Win98". Until the audit of 2026-09-07 nothing
         # checked it. The warning above fires only when a pair has NO evidence
         # at all, and a `w2k-export` hit alone satisfies that - so a new kernel
         # or HAL row whose only evidence is that Windows 2000 exports the

@@ -491,7 +491,7 @@ static void test_wake_at_observe(void)
     CHECK_EQ(link.LatchDue, 0, "a wake does not latch: WokeHold holds");
 
     /* A wake sample before the U3 request is an earlier suspension's:
-     * ignored, and the new suspension is observed (round 2, finding 1). */
+     * ignored, and the new suspension is observed. */
     XhciSuspLinkInit(&link, 0, 1);
     step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 1, 0, 0, &wait);
     CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 0,
@@ -508,7 +508,7 @@ static void test_wake_at_observe(void)
 
     /* A hub wake classified during the observation, its C_PORT_SUSPEND
      * acknowledged, then polls that read suspend clear with no change
-     * until the bound: taken, not RECOVERING (round 2, finding 3). */
+     * until the bound: taken, not RECOVERING. */
     CHECK_EQ(XhciSuspEvidence(&link, XHCI_SUSP_EV_WAKE), 0,
              "during the observation: kept");
     CHECK_EQ(link.WakeKept, 1, "kept");
@@ -518,7 +518,7 @@ static void test_wake_at_observe(void)
     CHECK_EQ(link.ClaimDue, 1, "the event taken");
 
     /* The same, but the observation's GET_STATUS itself timed out: a
-     * transport failure stays uncertain (round 3, finding 2). */
+     * transport failure stays uncertain. */
     XhciSuspLinkInit(&link, 0, 1);
     step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
     while (step != XHCI_SUSP_STEP_OBSERVE) {
@@ -539,7 +539,7 @@ static void test_wake_at_observe(void)
              "nothing seen in the bound: RECOVERING");
 
     /* A sample read after the U3 request is issued but before the step
-     * is reported belongs to this suspension (round 3, finding 1). */
+     * is reported belongs to this suspension. */
     XhciSuspLinkInit(&link, 0, 1);
     step = XhciSuspBegin(&link, XHCI_SUSP_RUN_SUSPEND, 0, 0, 0, &wait);
     while (step != XHCI_SUSP_STEP_U3) {
@@ -647,7 +647,7 @@ static void test_resume_outcomes(void)
     step = XhciSuspAdvance(&link, XHCI_SUSP_RES_DISCONNECT, 70, &wait);
     CHECK_EQ(link.State, XHCI_SUSP_GONE, "unplug while resuming: GONE");
 
-    /* Whole-branch review, area 1 round 2: a recovery wait or a restart
+    /* A recovery wait or a restart
      * that did not run (the controller failed between steps) is
      * uncertain, never ACTIVE. */
     XhciSuspLinkInit(&link, 1, 1);
@@ -712,7 +712,7 @@ static void test_latch_and_rearm(void)
     CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_NONE,
              "still latched");
     /* A D0 and a fresh D2 between two passes: the states read as they did,
-     * but the slot's Seq moved twice (round 1, finding 3). */
+     * but the slot's Seq moved twice. */
     f[0].Seq += 2;
     f[0].DxPended = 1;
     CHECK_EQ(XhciSuspDecide(&link, f, 1, 1, 0, &d), XHCI_SUSP_DO_SUSPEND,
@@ -730,7 +730,7 @@ static void test_latch_and_rearm(void)
              "slots changed: suspend again");
     /* Refused again, with the latch taken in the hold that wrote ACTIVE;
      * a D0 and a fresh D2 then land before the next decision: a change
-     * against that baseline (round 2, finding 4). */
+     * against that baseline. */
     XhciSuspLinkInit(&link, 1, 1);
     func_init(&f[0], D2);
     f[0].DxPended = 1;
@@ -752,7 +752,7 @@ static void test_latch_and_rearm(void)
 
     /* An armed STALL refusal: its WAIT_WAKE claimed for NOT_SUPPORTED in
      * the hold, before the latch - that removal alone does not release
-     * it (round 3, finding 3). */
+     * it. */
     XhciSuspLinkInit(&link, 1, 1);
     func_init(&f[0], D2);
     f[0].WaitWake = 1;
@@ -854,7 +854,7 @@ static void test_woke_hold(void)
     CHECK_EQ(XhciSuspDecide(&link, f, 2, 1, 0, &d), XHCI_SUSP_DO_NONE,
              "claimed wake: no re-suspend before its D0");
     CHECK_EQ(f[0].WokeHold, 1, "held");
-    /* A sibling's change does not release it (round 1, finding 2). */
+    /* A sibling's change does not release it. */
     f[1].PwrState = D3;
     f[1].PwrWanted = D3;
     f[1].Seq++;
@@ -881,7 +881,7 @@ static void test_woke_hold(void)
              "and suspends again");
 
     /* D0 and a fresh D2 with no decision between: dispatch's D0
-     * admission is where the hold ends (round 2, finding 2). */
+     * admission is where the hold ends. */
     {
         XHCI_SUSP_ADMIT_IN in;
         ULONG ns;
@@ -930,7 +930,7 @@ static void test_powerdown_d0(void)
     XHCI_SUSP_DECISION d;
 
     /* A D0 pended while the controller goes down is not completed by the
-     * walker that retires old-epoch Dx (round 1, finding 6). */
+     * walker that retires old-epoch Dx. */
     XhciSuspLinkInit(&link, 1, 1);
     func_init(&f[0], D2);
     f[0].PwrWanted = D0;
@@ -1275,8 +1275,7 @@ static void test_idle_submit_and_batch(void)
              "an unstarted sibling in D3 is not of the group");
     f[1].PwrState = D0;
     CHECK_EQ(XhciSuspIdleBatchReady(f, 2, XHCI_SUSP_ACTIVE, 1), 0,
-             "an unstarted sibling at D0 holds the device: no batch "
-             "(round 1, finding 1)");
+             "an unstarted sibling at D0 holds the device: no batch");
     f[1].Started = 1;
     f[1].Closed = 1;
     CHECK_EQ(XhciSuspIdleBatchReady(f, 2, XHCI_SUSP_ACTIVE, 1), 0,
@@ -1439,7 +1438,7 @@ static void test_idle_settle(void)
  * IRP while its callback RUNS, the slot still naming it and no routine
  * set, and then re-publishes it under the lock in the submitter's two
  * steps, the irp->Cancel test included - a cancel that came while it ran
- * must complete it then (Codex review of 36.29, round 1, note).
+ * must complete it then (task 36.29).
  */
 typedef struct _HS {
     int sub;        /* 0 not yet, 1 slot filled + routine set, 2 done    */
@@ -2036,13 +2035,12 @@ static void test_finalize(void)
     CHECK_EQ(fin(0, 1, 0, 0, 0), XHCI_SUSP_FIN_NOW,
              "after exit, nothing owed");
     /* A WAIT_WAKE whose cancel routine owns it, its completion not yet
-     * returned (round 1, finding 4). */
+     * returned. */
     CHECK_EQ(fin2(0, 0, 0, 0, 1, 0, 0), XHCI_SUSP_FIN_WAIT,
              "a power completion still running: waits");
     CHECK_EQ(fin2(1, 0, 0, 0, 1, 0, 0), XHCI_SUSP_FIN_DEFER,
              "...or the thread defers");
-    /* Containment pinned the buffer with the thread alive (round 1,
-     * finding 5). */
+    /* Containment pinned the buffer with the thread alive. */
     CHECK_EQ(fin2(0, 0, 1, 0, 0, 0, 1), XHCI_SUSP_FIN_QUARANTINE,
              "pinned, thread alive, URBs pinned: quarantine");
     CHECK_EQ(fin2(1, 0, 0, 1, 0, 0, 1), XHCI_SUSP_FIN_QUARANTINE,
@@ -2150,8 +2148,8 @@ static void test_composite_parent_not_voter(void)
 
     /* A function re-presented in place on a suspended device
      * (HcdDevicePdoRepresentFunctions): created at D0 it would never ask
-     * the resume; created at D3 with D0 wanted, it does (Codex review of
-     * p36-int3, round 1). */
+     * the resume; created at D3 with D0 wanted, it does (the p36-int3
+     * integration). */
     XhciSuspLinkInit(&link, 1, 7);
     link.State = XHCI_SUSP_SUSPENDED;
     func_init(&f[0], D0);
@@ -2795,8 +2793,8 @@ static void test_ss_device_resume_to_u0(void)
 
 /* A parent stack's system power (design record 13 section 10.12): the
  * hub or composite FDO asks D3 for any sleep state and D0 for S0; on 9x
- * never the state its stack already has, on NT that state again (Codex
- * round 1, P3 1); nothing after a failed system IRP or when not started. */
+ * never the state its stack already has, on NT that state again; nothing
+ * after a failed system IRP or when not started. */
 static void test_parent_want(void)
 {
     ULONG nt;
@@ -2867,5 +2865,5 @@ int main(void)
     test_parent_want();
 
     printf("test_susp: %d checks, %d failures\n", checks, failures);
-    return failures != 0;
+    return failures;
 }

@@ -1,5 +1,16 @@
 # usbport.sys Miniport ABI - Source-Verified Reference (ReactOS transcription)
 
+> **The `1.2.0.0` miniport's reference, on branch `1.2.0.0`.** Until `1.2.0.0`
+> `xhci98.sys` was a `usbport.sys` miniport, and this document records the
+> interface it was written against. From `2.0.0.0` the successor HCD replaces
+> `usbport.sys` and imports nothing from it (design record 13), so nothing
+> here binds the driver in `src\`. A source file this page names that is not
+> in the tree today (`xhci_dispatch.c`, `xhci_rh.c`, `xhci_slot.c`,
+> `xhci_probe.c`, `xhci_vhub.c`, `test_init.c`) is on branch `1.2.0.0`;
+> `src/xhci_usbport.h` stays because the kept transfer engine still uses its
+> types. The usbport facts remain what the HCD's own door reproduces where it
+> answers a usbport-shaped request (design record 13 section 8).
+
 This is the bit-exact companion to `docs/usb-xhci-info/usbport-miniport-interface.md`. That
 document explains the derivation strategy, the xHCI mapping of each callback
 family, and the binary-validation procedure. This one records the ABI as it

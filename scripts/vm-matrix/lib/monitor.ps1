@@ -92,8 +92,9 @@ function Send-Mon {
         # **SYNCHRONISE ON THE BANNER'S PROMPT, THEN DRAIN, THEN SEND.**
         #
         # This used to sleep 150 ms, drain whatever had arrived, and send. The
-        # race that leaves is the 2026-09-07 audit's H19, and it produces the
-        # exact reading the completeness test below exists to prevent. QEMU
+        # race that leaves was found by the audit of 2026-09-07, and it
+        # produces
+        # the exact reading the completeness test below exists to prevent. QEMU
         # prints its banner and a `(qemu)` prompt on connect; if that lands
         # AFTER the drain - a loaded host, a guest mid-boot, a third client
         # queued ahead of this one - the banner's own prompt is still in the
@@ -102,7 +103,7 @@ function Send-Mon {
         # prompt, `Test-MonitorReplyComplete` says the reply is complete, and
         # the caller gets an EMPTY complete reply. For `info usb` that reads as
         # "the device is not listed", which is a departure that never happened
-        # - the same wrong reading audit S-6 fixed from the other side.
+        # - the same wrong reading an earlier repository audit fixed from the other side.
         #
         # So the connect prompt is waited for and consumed here, and only then
         # is anything sent. A monitor that does not produce one within the
@@ -162,7 +163,7 @@ function Send-Mon {
         # QUIET.  Silence alone is also what a busy or wedged guest produces,
         # and what a third monitor client queued behind two others gets, and an
         # empty string read as "the device is not listed" turned every one of
-        # those into a departure that never happened (repo audit S-6).  So a
+        # those into a departure that never happened (an earlier repository audit).  So a
         # reply without a trailing `(qemu)` is given a second window, and one
         # that still lacks it is an error and returns nothing rather than a
         # fragment a caller could mistake for the whole answer.
@@ -196,7 +197,7 @@ function Send-Mon {
 #
 # `-Echo` names the command that was sent. When it is given, the prompt only
 # counts if it comes AFTER that command's echo - which is the second half of
-# the 2026-09-07 audit's H19, and the belt to the connect-time
+# the fix after the audit of 2026-09-07, and the belt to the connect-time
 # synchronisation's brace. QEMU echoes what is written to the monitor, so the
 # echo is where this command's reply begins; a prompt sitting before it
 # belongs to the banner or to somebody else's command, and accepting it hands
@@ -212,7 +213,7 @@ function Send-Mon {
 # whose echo has not arrived yet is judged on whatever prompt IS in the
 # buffer - the banner's, if the connect-time drain lost the race - and an
 # empty reply comes back marked complete. That is the reading the whole of
-# H19 is about, and no timeout can see it, because from a timeout's side a
+# that fix is about, and no timeout can see it, because from a timeout's side a
 # prompt is a prompt.
 #
 function Test-MonitorReplyComplete {
@@ -248,8 +249,8 @@ function ConvertTo-HmpArgument {
 # quoting is right in one place.  HMP recognises a quoted string only as the
 # WHOLE of an argument: `path="C:/out dir/x.log"` embedded inside the
 # comma-separated options string does not stop the parser splitting at the
-# space, and QEMU 11 answers "extraneous characters at the end of line" (the
-# Phase 20 review's round 2 probed it against a null backend).  So the entire
+# space, and QEMU 11 answers "extraneous characters at the end of line" (probed
+# in Phase 20 against a null backend).  So the entire
 # `file,id=...,path=...` string is what gets quoted.  A comma in the path
 # cannot be carried at all - it ends the option whatever the quoting - and is
 # refused with the reason.

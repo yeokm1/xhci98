@@ -56,8 +56,7 @@
 
 /* The PDOs of a device's chain: one per function of a split device, at
  * most XHCI_FUNC_MAX (xhci_func.c), else one. Read into the controller's
- * scratch (hc->SuspFuncs), not onto the enum thread's stack (Codex review
- * of 36.30, round 1, finding 4). */
+ * scratch (hc->SuspFuncs), not onto the enum thread's stack (36.30). */
 #define HCD_SUSP_MAX_FUNCS          XHCI_FUNC_MAX
 
 /* Decisions one device is given in one pass (3.10). */
@@ -115,8 +114,7 @@ static VOID hcdSuspNoteLocked(PHCD_CONTROLLER hc, const char *label,
  * minimum - and only these advance its clock (3.10). Before Windows 8 a
  * relative KeDelayExecutionThread may end up to a clock period early, so
  * a minimum is kept by stalling, in 50 us steps, which never ends early;
- * these waits are tens of milliseconds and rare (Codex review of 36.30,
- * round 3, finding 2).
+ * these waits are tens of milliseconds and rare (36.30).
  */
 static VOID hcdSuspHold(PHCD_CONTROLLER hc, ULONG milliseconds)
 {
@@ -364,7 +362,7 @@ static ULONG hcdSuspRead(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO *pdos,
 /* The claim recorded in the IRP itself as it is claimed - the path in the
  * low byte, the D-state asked in the next - so a later claim of another
  * IRP of the same PDO cannot rewrite what this one's completion reports
- * (review of 38.3, round 1). DriverContext[3] of a power IRP the PDO
+ * (38.3). DriverContext[3] of a power IRP the PDO
  * owns is this driver's; the completion workers use [0] to [2]. */
 #define HCD_SUSP_QEMU_MARK(irp, pdo, path)                                  \
     ((irp)->Tail.Overlay.DriverContext[3] =                                 \
@@ -416,12 +414,12 @@ static VOID hcdSuspCompleteWake(PHCD_DEVICE_PDO pdo, PIRP irp,
 }
 
 /*
- * The PDO's power reports, ordered (Codex review of 36.31, round 4): a
+ * The PDO's power reports, ordered (36.31): a
  * D-IRP's admission with its report, a START's report and the thread's
  * report of a START-driven D0 each run while this flag is owned, so an
  * older D0 report cannot land after a newer Dx's. A test-and-set by
  * InterlockedExchange, polled at 1 ms, rather than a wait on an event,
- * which Windows 98 can end without satisfying (win98-wdm.md; round 5).
+ * which Windows 98 can end without satisfying (win98-wdm.md).
  * Nothing done while owned blocks but the spin locks. IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdSuspReportEnter(PHCD_DEVICE_PDO pdo)
@@ -513,8 +511,8 @@ static VOID hcdSuspTake(PHCD_SUSP_TAKEN t, PHCD_DEVICE_PDO pdo, PIRP irp,
  * (HcdSuspDoneStart). A hand-off queues the IRP through its own storage
  * and wakes a parked worker; a worker completes pending IRPs until none
  * is left, then parks. A callback that waits for another IRP holds only
- * its own worker, and the IRP it waits for is completed by another (Codex
- * review of the first fix, rounds 1 to 3: a single worker, then the
+ * its own worker, and the IRP it waits for is completed by another (the
+ * first fix, reviewed and revised: a single worker, then the
  * system work queues, could each be held by the callback waiting on
  * them). When an IRP has waited HCD_SUSP_DONE_STALL_MS with no worker
  * parked, the grower - a thread of its own, holding nothing - makes one
@@ -681,8 +679,8 @@ static PHCD_SUSP_DONE hcdSuspDoneAlloc(PHCD_CONTROLLER hc)
 }
 
 /* `w`'s thread created; on NT its object referenced, or the handle kept
- * and the reference retried at the join (Codex review of the first fix,
- * round 4, finding 3). IRQL: PASSIVE_LEVEL, a system thread. */
+ * and the reference retried at the join. IRQL: PASSIVE_LEVEL, a system
+ * thread. */
 static NTSTATUS hcdSuspDoneCreate(PHCD_SUSP_DONE w, PKSTART_ROUTINE routine)
 {
     HANDLE handle;
@@ -757,7 +755,7 @@ static VOID hcdSuspDoneJoin(PHCD_SUSP_DONE w)
     LARGE_INTEGER due;
 
     /* NT, the reference still owed: retried until had - never the 9x flag
-     * on NT (Codex review of the first fix, round 4, finding 3). */
+     * on NT. */
     while (w->Handle != NULL) {
         if (NT_SUCCESS(ObReferenceObjectByHandle(w->Handle, THREAD_ALL_ACCESS,
                                                  NULL, KernelMode,
@@ -1391,7 +1389,7 @@ static ULONG hcdSuspControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /* EP0 busy for the arm: a client's transfer queued, or a stall whose
  * recovery (hcdEp0Quiet's Reset Endpoint) would run past the arm's bound -
  * that recovery is the next pass's, the device ACTIVE again after the
- * refusal (Codex review of 36.30, round 2, finding 3). */
+ * refusal (36.30). */
 static ULONG hcdSuspEp0Queued(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     KIRQL oldIrql;
@@ -1418,7 +1416,7 @@ static ULONG hcdSuspArmDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return XHCI_SUSP_RES_NOT_SENT;
     }
     /* An elapsed-time bound, a timer polled with a zero wait, as
-     * hcdEp0Quiet's (Codex review of 36.30, round 1, finding 6). */
+     * hcdEp0Quiet's (36.30). */
     KeInitializeTimer(&deadline);
     HcdRelativeMs(&due, bound);
     (VOID)KeSetTimer(&deadline, due, NULL);
@@ -1467,10 +1465,9 @@ static ULONG hcdSuspArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG bound)
  * flight and leaves the dequeue past it ("data might be lost"), so the
  * restart's doorbell would find no TD. Without the evidence - control,
  * isochronous, a TD already measured, an event elsewhere or none - the
- * endpoint is left as the controller has it (Codex review of the rewind,
- * round 1, finding 1). Returns 0 when a rewind was due and refused: the
- * TD would be stranded again, so the stop reports the uncertain outcome
- * and the device is cycled (finding 2). Thread only.
+ * endpoint is left as the controller has it. Returns 0 when a rewind was
+ * due and refused: the TD would be stranded again, so the stop reports the
+ * uncertain outcome and the device is cycled. Thread only.
  */
 static ULONG hcdSuspRewind(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG dci)
 {
@@ -1609,8 +1606,7 @@ static ULONG hcdSuspSsArm(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                  * them) may have been applied: the function may be in
                  * Function Suspend with no FwArmed bit to disarm it by, so
                  * it is uncertain and the device is cycled. STALL and
-                 * NOT_SENT stay refusals (Codex review of 36.38, round 1,
-                 * finding 1). */
+                 * NOT_SENT stay refusals (36.38). */
                 return (result == XHCI_SUSP_RES_FAILED)
                            ? XHCI_SUSP_RES_TIMEOUT
                            : result;
@@ -1700,8 +1696,7 @@ static ULONG hcdSuspHubFailed(PHCD_CONTROLLER hc, PHCD_HUB hub)
 
 /* Stage B's window opened just before the U3 request when no arm request
  * opened it (8.7): after the stale change is acknowledged, so nothing of an
- * earlier suspension read meanwhile can be latched (Codex review of 36.38,
- * round 2, finding 1). */
+ * earlier suspension read meanwhile can be latched (36.38). */
 static VOID hcdSuspFwOpenNow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     KIRQL oldIrql;
@@ -1770,8 +1765,7 @@ static ULONG hcdSuspU3(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            XHCI_HUB_FEAT_PORT_SUSPEND)) {
         /* The request may have taken effect though its transfer failed:
          * nothing proves the link still U0, so it is uncertain, never a
-         * refusal that would reopen the gate (Codex review of 36.30,
-         * round 2, finding 1). */
+         * refusal that would reopen the gate (36.30). */
         return XHCI_SUSP_RES_TIMEOUT;
     }
     return XHCI_SUSP_RES_OK;
@@ -1862,7 +1856,7 @@ static ULONG hcdSuspPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 !HcdHubPortFeature(hc, q->Hub, q->Number, 0,
                                    XHCI_HUB_FEAT_C_PORT_SUSPEND)) {
                 /* A transport failure stays uncertain whatever the sample
-                 * said (round 1, finding 7). */
+                 * said. */
                 answer = XHCI_SUSP_RES_TIMEOUT;
                 break;
             }
@@ -2152,7 +2146,7 @@ static ULONG hcdSuspRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, ULONG step,
              * machine saw leave off its port when the port's own
              * processing would not (a PED loss with CCS kept): either way
              * the old device is dropped and its slots settled at the
-             * unlink (3.10; round 1, finding 3). Named by its PDO group,
+             * unlink (3.10). Named by its PDO group,
              * so a replacement is not touched. */
             group = hcdSuspPdo(dev->Pdo) != NULL
                         ? hcdSuspPdo(dev->Pdo)->Group
@@ -2390,7 +2384,7 @@ static VOID hcdSuspSample(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         dev->Susp.State == XHCI_SUSP_GONE && hcdSuspPdo(dev->Pdo) != NULL) {
         /* Gone to the machine: dropped through the cycle, which an unplug
          * the port's processing also sees makes no difference to, and
-         * which a PED loss with CCS kept needs (round 1, finding 3). */
+         * which a PED loss with CCS kept needs. */
         HcdEnumCycle(hc, dev->Location, hcdSuspPdo(dev->Pdo)->Group);
     }
     if (dev->SuspWakeDue) {
@@ -2419,7 +2413,7 @@ VOID HcdSuspRootSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG portsc,
  * change bits whose clear the hub took; when C_PORT_SUSPEND was seen and
  * its clear failed (`lost`), the hub may have taken it and report no more:
  * the wake would be stranded, so the device is uncertain and cycled, its
- * gate kept closed (Codex review of 36.30, round 3, finding 1). */
+ * gate kept closed (36.30). */
 VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
                       ULONG acked, ULONG lost)
 {
@@ -2434,7 +2428,7 @@ VOID HcdSuspHubSample(PHCD_CONTROLLER hc, PHCD_PORT q, ULONG status,
     if (lost) {
         /* RECOVERING first, in the hold the dispatch reads it under, so
          * nothing resumes it or opens its gate before the cycle drops it
-         * (Codex review of 36.30, round 4, finding 1). */
+         * (36.30). */
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         XhciSuspUncertain(&dev->Susp);
         dev->SuspWakeDue = 0;
@@ -2564,9 +2558,8 @@ VOID HcdSuspDeviceGone(PHCD_USB_DEVICE dev)
 {
     XhciSuspGone(&dev->Susp);
     dev->SuspWakeDue = 0;
-    /* What the closing window dropped is counted now: the device may be
-     * freed with no further pass (Codex review of 36.38, round 2, finding
-     * 2). The callers hold the controller lock. */
+    /* What the closing window dropped is counted now: the device may be freed
+     * with no further pass (36.38). The callers hold the controller lock. */
     if (dev->Controller != NULL) {
         hcdSuspFwDrain(dev->Controller, dev);
     }
@@ -2839,8 +2832,8 @@ static VOID NTAPI hcdSuspWakeCancel(PDEVICE_OBJECT DeviceObject, PIRP irp)
  * admitted by XhciSuspAdmit. Returns 0 when the switch is off or the PDO
  * is not stage A's - the caller then does today's - else 1 with *status.
  * The caller holds the PDO's Busy count across the call, the completion
- * included, so a REMOVE cannot pass while this dispatch still runs (Codex
- * review of 36.31, round 1, finding 1). IRQL: PASSIVE_LEVEL.
+ * included, so a REMOVE cannot pass while this dispatch still runs
+ * (36.31). IRQL: PASSIVE_LEVEL.
  */
 ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
 {
@@ -2871,7 +2864,7 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     if (in.Requested != XHCI_SUSP_D0) {
         /* A Dx is effective at once (4.1), whatever the admission: its
          * record made before the IRP can be claimed, so no completion
-         * overtakes it (Codex review of 36.31, round 1, finding 2). */
+         * overtakes it (36.31). */
         pdo->Common.DevicePower = stack->Parameters.Power.State.DeviceState;
         (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState,
                               stack->Parameters.Power.State);
@@ -3175,11 +3168,10 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     ULONG report;
 
     /* 4.4: once an earlier teardown's power rundown has finished - a
-     * WAIT_WAKE its stop left to a cancel routine completes first (Codex
-     * review of 36.31, round 1, finding 3). Only after a teardown, whose
-     * closed admission adds nothing: a START with admission open (the
-     * first, or one with no STOP before it) may have a live WAIT_WAKE,
-     * which nothing would end (round 2, finding 1). */
+     * WAIT_WAKE its stop left to a cancel routine completes first
+     * (36.31). Only after a teardown, whose closed admission adds nothing:
+     * a START with admission open (the first, or one with no STOP before
+     * it) may have a live WAIT_WAKE, which nothing would end. */
     while (pdo->PwrClosed && pdo->PowerPending != 0) {
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
@@ -3189,7 +3181,7 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     if (pdo->IdleQuarantined ||
         (pdo->PwrClosed && !HcdSuspIdleRundown(pdo, 1))) {
         /* Sticky: never started again, whatever its count reads now
-         * (Codex review of 36.32, round 1, finding 5). */
+         * (36.32). */
         return 0;
     }
     hcdSuspReportEnter(pdo);
@@ -3198,8 +3190,7 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     dev = pdo->Device;
     if (!pdo->Listed || dev == NULL) {
         /* Unlinked since the caller's check: its slot was settled and
-         * closed there, and stays closed; the START is refused (round 2,
-         * finding 2). */
+         * closed there, and stays closed; the START is refused. */
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         KeReleaseSpinLock(&hc->PdoListLock, listIrql);
         hcdSuspReportLeave(pdo);
@@ -3234,7 +3225,7 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     KeReleaseSpinLock(&hc->PdoListLock, listIrql);
     if (report) {
         /* The bus reports a started stage A PDO's power itself: a START
-         * owes no D0 IRP (Codex review of 36.31, round 3). Only once the
+         * owes no D0 IRP (36.31). Only once the
          * device is powered - on a suspended link the thread reports it
          * when its resume reaches ACTIVE (hcdSuspReportD0) - and, inside
          * the PDO's report mutex, never after a newer Dx's report (round
@@ -3365,9 +3356,8 @@ VOID HcdSuspDoneStart(PHCD_CONTROLLER hc)
  * close is waited for; one after it sees the close and claims nothing
  * (and would find no device). Each side reads after its own locked
  * operation, a full barrier on x86 and amd64, so one always sees the
- * other (Codex review of the pool, round 1, finding 3; round 2, finding
- * 1: the power gate's event wait, which may return unsatisfied on 9x, is
- * not relied on).
+ * other (the power gate's event wait, which may return unsatisfied on 9x,
+ * is not relied on).
  * Then the grower stopped and joined, every worker told to leave once none
  * is pending and the parked ones unparked; while IRPs still wait, the pool
  * grown by the same rule from here (the PnP manager's system thread, no
@@ -3504,8 +3494,7 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
         }
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         KeReleaseSpinLock(&hc->PdoListLock, listIrql);
-        /* Under the power gate: completed by the workers, as the thread's
-         * (Codex review of the fix, round 1, finding 2). */
+        /* Under the power gate: completed by the workers, as the thread's. */
         hcdSuspFinishT(hc, &taken);
     }
     (VOID)InterlockedDecrement((PLONG)&hc->SuspDoneHolds);
@@ -3626,14 +3615,13 @@ ULONG HcdSuspIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc, PIRP irp,
     return 1;
 }
 
-/* A system power IRP at the PDO: its state published under the
- * controller lock, the lock batch formation and the claim read it under,
- * and - a state other than S0 (6.5's third trigger) - in the same hold its
- * idle IRP settled CANCELLED and the device's episode ended, so no fresh
- * idle IRP is batched or called on the old S0 (Codex review of 36.32,
- * round 1, finding 4). Returns 0, publishing nothing, when the controller
- * is released (the caller then writes the state). The caller holds the
- * PDO's Busy count. IRQL: PASSIVE_LEVEL. */
+/* A system power IRP at the PDO: its state published under the controller
+ * lock, the lock batch formation and the claim read it under, and - a state
+ * other than S0 (6.5's third trigger) - in the same hold its idle IRP settled
+ * CANCELLED and the device's episode ended, so no fresh idle IRP is batched or
+ * called on the old S0 (36.32). Returns 0, publishing nothing, when the
+ * controller is released (the caller then writes the state). The caller holds
+ * the PDO's Busy count. IRQL: PASSIVE_LEVEL. */
 ULONG HcdSuspIdleSystem(PHCD_DEVICE_PDO pdo, SYSTEM_POWER_STATE state)
 {
     PHCD_CONTROLLER hc;
@@ -3677,8 +3665,7 @@ ULONG HcdSuspIdleSystem(PHCD_DEVICE_PDO pdo, SYSTEM_POWER_STATE state)
  * and counted, and the caller keeps the object (4.4). The client cannot
  * be unloading under it then: a client lets go of its idle IRP before it
  * passes its REMOVE down, and that IRP completes only at the callback's
- * return (Codex review of 36.32, round 1, finding 2). IRQL:
- * PASSIVE_LEVEL.
+ * return (36.32). IRQL: PASSIVE_LEVEL.
  */
 ULONG HcdSuspIdleRundown(PHCD_DEVICE_PDO pdo, ULONG mayWaitCallback)
 {
@@ -3737,8 +3724,7 @@ static ULONG hcdSuspCbMove(PHCD_SUSP_CB cb, ULONG actor, ULONG from,
 /* Teardown's IN_CALLBACK -> ABANDONED, with the stop's DMA-halt verdict
  * recorded on the callback's PDO in the same hold of the context's lock:
  * the thread's IN_CALLBACK -> RETURNING takes that lock, so the PDO's two
- * references hold it while it is written (Codex review of 36.32, round
- * 2, finding 1). IRQL: PASSIVE_LEVEL. */
+ * references hold it while it is written (36.32). IRQL: PASSIVE_LEVEL. */
 static ULONG hcdSuspCbAbandon(PHCD_SUSP_CB cb, ULONG pinned)
 {
     KIRQL oldIrql;
@@ -3970,8 +3956,7 @@ static VOID NTAPI hcdSuspCbThread(PVOID context)
                            XHCI_SUSP_PH_RETURNING)) {
             /* ABANDONED (4.4): nothing of the controller is touched. The
              * callback has returned, so the rundown waits for the
-             * completion below rather than quarantine past it (Codex
-             * review of 36.32, round 2, finding 2). */
+             * completion below rather than quarantine past it (36.32). */
             pdo = cb->Pdo;
             pdo->IdleRunning = 0;
             (VOID)HcdCompleteIrp(cb->Irp, STATUS_CANCELLED, 0);
@@ -3990,12 +3975,11 @@ static VOID NTAPI hcdSuspCbThread(PVOID context)
     (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
-/* The thread's exit waited for (Codex review of 36.32, round 1, finding
- * 3): on NT its object; on 9x, where a thread-object wait faults and an
- * event wait may return 0xFFFFFFFF unsatisfied (win98-wdm.md), the flag
- * the thread sets last, polled at 1 ms - as the controller thread's stop
- * leaves only the thread's call into PsTerminateSystemThread after it.
- * IRQL: PASSIVE_LEVEL. */
+/* The thread's exit waited for (36.32): on NT its object; on 9x, where a
+ * thread-object wait faults and an event wait may return 0xFFFFFFFF
+ * unsatisfied (win98-wdm.md), the flag the thread sets last, polled at 1 ms -
+ * as the controller thread's stop leaves only the thread's call into
+ * PsTerminateSystemThread after it. IRQL: PASSIVE_LEVEL. */
 static VOID hcdSuspCbExitWait(PHCD_SUSP_CB cb)
 {
     LARGE_INTEGER due;

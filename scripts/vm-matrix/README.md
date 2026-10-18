@@ -51,7 +51,7 @@ Useful narrowings:
 | `selftest.ps1` | Negative controls: drives `lib/verdict.ps1` with synthetic deltas, guestless, and asserts the cases whose answer must not be PASS; then drives the runner's own decisions (`lib/fresh.ps1`) the same way: the snapshot reader against a stand-in `qemu-img`, the target split, the writable-image refusal, the two-leg loop, the verdict, the report file, `prepare-image.ps1`'s clone and stamp refusals, and where the qemu package is read from (`out\pkg-qemu-<arch>`, never the untagged `out\pkg-qemu`). It prints its check count. |
 | `soak-11v.ps1` | Batch 11-V stage F: N unplug/replug cycles per class, then a sustained multi-class load, against an already-running guest whose monitor it is pointed at. |
 | `lifecycle-11v.ps1` | Batch 11-V stage G: an orderly guest shutdown with traffic in flight, a device churned across the whole teardown, and the stop-time counters read out of the stopped guest. Drives an already-running guest. |
-| `wedge-observe.ps1` | Finding 3's wedge as an observatory: the bench plug/pull recipes replayed in QEMU with every trace channel open. |
+| `wedge-observe.ps1` | The batch 13-E wedge as an observatory: the bench plug/pull recipes replayed in QEMU with every trace channel open. |
 | `matrix.broken.psd1`, `matrix-hcd.broken.psd1` | Mutated matrices, the miniport's and the HCD's, run against a real guest as the whole-pipeline half of the same proof. Tracked on purpose; the self-test's guestless half cannot replace them. Do not "fix" their rows. |
 | `gen-offsets.ps1` | Derives the HCD's counter offset table from the driver's own sources. Refuses `-Driver miniport`: that table is frozen. |
 | `offsets-hcd.txt`, `offsets-hcd-amd64.txt` and their `.labels.txt` | Generated from the HCD's counter block (see "Two expectation sets"). Do not edit; regenerate after any change to `src\xhci_counters.h` or its print sites. |
@@ -119,7 +119,7 @@ For an HCD set the harness:
   A new start number at the same VA is a restart (the block does not move on
   a stop and start), and so is a second complete record even when it repeats
   the first (a recreated controller FDO, or a reloaded image, can be given
-  the same allocation; Codex review round 23, finding 3), and the size is checked against `offsets-hcd.txt`'s
+  the same allocation), and the size is checked against `offsets-hcd.txt`'s
   `SIZEOF`. There is no switch read and no `RH_GetRootHubData` wait.
 
 **The block.** `XHCIHC_COUNTERS` in `src\xhci_counters.h` (DDK-free,
@@ -524,8 +524,8 @@ Traps the harness paid for and documents rather than enforces:
     and the whole set was declared with `-drive if=none`, which QEMU deletes
     along with the device that held it - so an Attach / Detach / Attach of the
     same row failed the second time with `can't find value 'prepdrv'`. The run
-    path moved to `-blockdev` at audit S-1; the prep path followed on
-    2026-09-16.
+    path moved to `-blockdev` after an earlier repository audit; the prep path
+    followed on 2026-09-16.
 16. The run declares `-audiodev none,id=matrixaud` and the `usb-audio` row
     names it. Without a backend named, `device_add usb-audio` opens QEMU's
     default host audio backend on its main loop, and on the first `1.0.1.0`
@@ -536,4 +536,4 @@ Traps the harness paid for and documents rather than enforces:
     command against a guestless QEMU took over 16 s by default and about a
     second with `none`. The row plays nothing and its expectations are
     inert, so `none` measures the same thing. `prepare-image.ps1` has
-    declared the same backend since repo audit D4.
+    declared the same backend since an earlier repository audit.

@@ -125,7 +125,7 @@ static void test_c4_verdict(void)
     CHECK(c4_verdict(&s) == V_FAIL, "even with no line");
 
     /* A source that came live late reaches the delivery test as a prompt
-     * one does (review round 3): the same table decides. */
+     * one does: the same table decides. */
     memset(&s, 0, sizeof(s));
     s.ip_seen = 1;
     s.isr_fired = 1;
@@ -185,8 +185,7 @@ static void test_full_dead_line(void)
     CHECK(!has("Also with warnings"), "no warnings line");
 
     /* IP never seen: automatic mode cannot see it, so mode 2 is named;
-     * the message route stays the capability's, untested (review rounds
-     * 1 and 2). */
+     * the message route stays the capability's, untested. */
     c = full_pass();
     c->v_irq = V_POLL;
     c->irq_force_poll = 1;
@@ -347,6 +346,19 @@ static void test_other_modes(void)
     c->irq_selftest = 1;
     c->v_irq = V_FAIL;
     CHECK(final_verdict(c, 1) == VERDICT_NOT, "the self-test's FAIL");
+    CHECK(has("IRQ SELF-TEST FAILED"), "said as a failure");
+
+    /* A static disqualifier with every self-test gate passing is not an
+     * IRQ self-test failure, and must not be closed as one. */
+    c = full_pass();
+    c->irq_selftest = 1;
+    c->usb2_ports = 0;
+    CHECK(final_verdict(c, 1) == VERDICT_NOT,
+          "the self-test with a static disqualifier");
+    CHECK(has("every IRQ self-test gate passed") &&
+          has("a static disqualifier above"), "the disqualifier is named");
+    CHECK(!has("IRQ SELF-TEST FAILED") && !has("IRQ SELF-TEST FAILURE"),
+          "and the self-test is not called failed");
 
     c = full_pass();
     c->irq_selftest = 1;
