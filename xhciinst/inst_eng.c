@@ -11745,6 +11745,7 @@ static int s98_inf_names(const char *infPath, const char *name)
     DWORD n;
     DWORD e;
     int other;
+    int qualified;
     int s;
 
     base = base != NULL ? base + 1 : name;
@@ -11754,14 +11755,16 @@ static int s98_inf_names(const char *infPath, const char *name)
     if (envNow.Nt) {
         return inst_eq(infPath, base) || inst_eq(infPath, name);
     }
+    other = inst_eqn(name, "OTHER\\", 6);
+    qualified = strchr(infPath, '\\') != NULL;
     /* A directory-qualified InfPath ("OTHER\X.INF") names one file. */
-    if (base != name && inst_eq(infPath, name)) {
+    if (qualified && inst_eq(infPath, name)) {
         return 1;
     }
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return -1;
     }
-    if (!inst_eq(infPath, base)) {
+    if (qualified || !inst_eq(infPath, base)) {
         join(path, sizeof(path), win, "INF");
         join(path, sizeof(path), path, name);
         n = GetShortPathNameA(path, alias, sizeof(alias));
@@ -11777,13 +11780,18 @@ static int s98_inf_names(const char *infPath, const char *name)
         }
         abase = strrchr(alias, '\\');
         abase = abase != NULL ? abase + 1 : alias;
+        if (qualified) {
+            /* The alias with the copy's own directory kept. */
+            inst_copy(path, other ? "OTHER\\" : "", sizeof(path));
+            strncat(path, abase, sizeof(path) - strlen(path) - 1);
+            return inst_eq(infPath, path);
+        }
         if (!inst_eq(infPath, abase)) {
             return 0;
         }
     }
     /* 98 SE and ME: a bare name, the copy's own or its alias, is told
      * apart only when the other directory holds no file of that name. */
-    other = inst_eqn(name, "OTHER\\", 6);
     join(path, sizeof(path), win, other ? "INF" : "INF\\OTHER");
     join(path, sizeof(path), path, infPath);
     s = file_state(path);
