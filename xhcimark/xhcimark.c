@@ -145,6 +145,7 @@ static struct {
     PFN_CM_STATUS Status;
     PFN_CM_REL Child;
     PFN_CM_REL Sibling;
+    PFN_CM_REL Parent;
     PFN_CM_ID DeviceId;
     PFN_CM_GETPROP GetProp;
     PFN_CM_SETPROP SetProp;
@@ -348,6 +349,7 @@ static int mk_load(void)
     api.Status = (PFN_CM_STATUS)mk_proc(api.CfgMgr, "CM_Get_DevNode_Status", &missing);
     api.Child = (PFN_CM_REL)mk_proc(api.CfgMgr, "CM_Get_Child", &missing);
     api.Sibling = (PFN_CM_REL)mk_proc(api.CfgMgr, "CM_Get_Sibling", &missing);
+    api.Parent = (PFN_CM_REL)mk_proc(api.CfgMgr, "CM_Get_Parent", &missing);
     api.DeviceId = (PFN_CM_ID)mk_proc(api.CfgMgr, "CM_Get_Device_IDA", &missing);
     api.GetProp = (PFN_CM_GETPROP)mk_proc(api.CfgMgr,
                       "CM_Get_DevNode_Registry_PropertyA", &missing);
@@ -1014,21 +1016,33 @@ static void mk_write(const MK_NHI *h, const MK_ENTRY *e, int unit)
     mk_unlock(m);
 }
 
-/* The entry still reads as the sample did, in a fresh read of its domain. */
+/* The restart's fresh reads (section 7.4, "The first plug"): the NHI's
+ * devnode still present and started, both answers read again eligible,
+ * the same epoch and marks generation as the sample, the member still
+ * active, and the entry reading as it did. */
 static int mk_fresh_same(const MK_NHI *h, const MK_ENTRY *e)
 {
-    MK_NHI f;
+    static MK_NHI f;
+    ULONG st;
+    ULONG pr;
     INST_U32 i;
 
     memset(&f, 0, sizeof(f));
     f.Node = h->Node;
-    if (!mk_read_nhi(&f) || f.Q.EpochLo != h->Q.EpochLo ||
-        f.Q.EpochHi != h->Q.EpochHi || f.M.Gen != h->M.Gen) {
+    if (api.Status(&st, &pr, nodes[h->Node].Dn, 0) != MK_CR_SUCCESS) {
+        return 0;
+    }
+    f.DevOk = (st & MK_DN_STARTED) != 0 && (st & MK_DN_HAS_PROBLEM) == 0;
+    if (!mk_read_nhi(&f) || !mk_verifiable(f.DevOk, &f.Q, &f.M) ||
+        f.Q.EpochLo != h->Q.EpochLo || f.Q.EpochHi != h->Q.EpochHi ||
+        f.M.Gen != h->M.Gen || !mk_member_active(&f.Q, e->Member)) {
         return 0;
     }
     for (i = 0; i < f.M.Count; i++) {
         if (f.M.E[i].Serial == e->Serial) {
-            return f.M.E[i].Flags == e->Flags && f.M.E[i].Pending == 0;
+            return f.M.E[i].Flags == e->Flags &&
+                   f.M.E[i].Member == e->Member && f.M.E[i].Bus == e->Bus &&
+                   f.M.E[i].Address == e->Address;
         }
     }
     return 0;
@@ -1046,21 +1060,46 @@ static int mk_no_install_pending(void)
     return api.WaitInstall(0) == WAIT_OBJECT_0;
 }
 
+/* The unit's devnode as Windows has it now: located afresh, its parent
+ * the member at `member`, its own location the entry's, the mark in its
+ * LowerFilters. 1 with *dn when all hold. */
+static int mk_fresh_unit(const char *id, const MK_ENTRY *e, DWORD *dn)
+{
+    DWORD parent;
+    ULONG bus;
+    ULONG address;
+    int has;
+
+    if (api.Locate(dn, (char *)id, MK_CM_LOCATE_NORMAL) != MK_CR_SUCCESS ||
+        api.Parent(&parent, *dn, 0) != MK_CR_SUCCESS ||
+        !mk_prop_dword(parent, MK_CM_DRP_BUSNUMBER, &bus) ||
+        !mk_prop_dword(parent, MK_CM_DRP_ADDRESS, &address) ||
+        bus != ((e->Member >> 8) & 0xFFUL) || address != mk_addr_of(e->Member) ||
+        !mk_prop_dword(*dn, MK_CM_DRP_BUSNUMBER, &bus) || bus != e->Bus ||
+        !mk_prop_dword(*dn, MK_CM_DRP_ADDRESS, &address) ||
+        address != e->Address) {
+        return 0;
+    }
+    return mk_filters_has(*dn, &has) && has;
+}
+
 /* The first plug's restart (section 7.4, "The first plug"): gated on fresh
- * reads under the tools' eject mutex, once per serial, vetoes respected. */
+ * reads under the tools' eject mutex, once per serial, vetoes respected. A
+ * departure pending on the entry does not hold it back: a first plug's
+ * install removes the BusRelations child after a query-remove and builds
+ * the stack again, and the fresh status below (started, no problem) is
+ * what tells that from a unit Windows holds for eject or a disabled one. */
 static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
 {
     MK_TRIED *t;
     HANDLE em;
-    HDEVINFO set;
+    HDEVINFO set = INVALID_HANDLE_VALUE;
     SP_DEVINFO_DATA data;
     SP_PROPCHANGE_PARAMS pcp;
     SP_DEVINSTALL_PARAMS_A ip;
     DWORD dn;
     ULONG st;
     ULONG pr;
-    int has;
-    int port;
     BOOL called;
     const char *why = NULL;
 
@@ -1076,20 +1115,28 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
         why = "an installation is pending (or cannot be told)";
     } else if (!mk_fresh_same(h, e)) {
         why = "the driver's answer changed since the sample";
-    } else if (api.Locate(&dn, nodes[unit].Id, MK_CM_LOCATE_NORMAL) !=
-                   MK_CR_SUCCESS ||
-               api.Status(&st, &pr, dn, 0) != MK_CR_SUCCESS ||
-               (st & MK_DN_STARTED) == 0 || (st & MK_DN_HAS_PROBLEM) != 0) {
-        why = "the unit is not started (held for eject, disabled or installing)";
-    } else if (!mk_filters_has(dn, &has) || !has) {
-        why = "the mark is not in its LowerFilters";
-    } else {
-        port = nodes[unit].Parent;
-        if (port < 0 || mk_find_loc(e->Member) != port ||
-            !mk_prop_dword(dn, MK_CM_DRP_BUSNUMBER, &st) || st != e->Bus ||
-            !mk_prop_dword(dn, MK_CM_DRP_ADDRESS, &pr) || pr != e->Address) {
-            why = "the unit's identity changed";
+    } else if (!mk_fresh_unit(nodes[unit].Id, e, &dn)) {
+        why = "the unit's identity or mark changed";
+    }
+    if (why == NULL) {
+        set = api.CreateList(NULL, NULL);
+        if (set == INVALID_HANDLE_VALUE) {
+            why = "no device information set";
         }
+    }
+    if (why == NULL) {
+        memset(&data, 0, sizeof(data));
+        data.cbSize = sizeof(data);
+        if (!api.OpenInfo(set, nodes[unit].Id, NULL, 0, &data)) {
+            why = "the unit could not be opened";
+            api.Destroy(set);
+        }
+    }
+    if (why == NULL &&
+        (api.Status(&st, &pr, dn, 0) != MK_CR_SUCCESS ||
+         (st & MK_DN_STARTED) == 0 || (st & MK_DN_HAS_PROBLEM) != 0)) {
+        why = "the unit is not started (held for eject, disabled or installing)";
+        api.Destroy(set);
     }
     if (why != NULL) {
         if (!t->Gated) {
@@ -1099,37 +1146,30 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
         mk_unlock(em);
         return;
     }
+    /* Immediately after the status read: the call itself. */
     t->Restarted = 1;
     t->At = GetTickCount();
     called = FALSE;
-    set = api.CreateList(NULL, NULL);
-    if (set != INVALID_HANDLE_VALUE) {
-        memset(&data, 0, sizeof(data));
-        data.cbSize = sizeof(data);
-        if (api.OpenInfo(set, nodes[unit].Id, NULL, 0, &data)) {
-            memset(&pcp, 0, sizeof(pcp));
-            pcp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
-            pcp.ClassInstallHeader.InstallFunction = MK_DIF_PROPERTYCHANGE;
-            pcp.StateChange = MK_DICS_PROPCHANGE;
-            pcp.Scope = MK_DICS_FLAG_GLOBAL;
-            pcp.HwProfile = 0;
-            if (api.SetCiParams(set, &data, &pcp.ClassInstallHeader,
-                                sizeof(pcp))) {
-                called = api.CallCi(MK_DIF_PROPERTYCHANGE, set, &data);
-                memset(&ip, 0, sizeof(ip));
-                ip.cbSize = sizeof(ip);
-                if (called && api.GetDiParams(set, &data, &ip) &&
-                    (ip.Flags & (MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART)) != 0) {
-                    mk_log("restart not made now (vetoed or needs a restart of "
-                           "Windows): %s; the tool's fallback stands until its "
-                           "next start", nodes[unit].Id);
-                    called = FALSE;
-                    t->Outcome = 1;
-                }
-            }
+    memset(&pcp, 0, sizeof(pcp));
+    pcp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
+    pcp.ClassInstallHeader.InstallFunction = MK_DIF_PROPERTYCHANGE;
+    pcp.StateChange = MK_DICS_PROPCHANGE;
+    pcp.Scope = MK_DICS_FLAG_GLOBAL;
+    pcp.HwProfile = 0;
+    if (api.SetCiParams(set, &data, &pcp.ClassInstallHeader, sizeof(pcp))) {
+        called = api.CallCi(MK_DIF_PROPERTYCHANGE, set, &data);
+        memset(&ip, 0, sizeof(ip));
+        ip.cbSize = sizeof(ip);
+        if (called && api.GetDiParams(set, &data, &ip) &&
+            (ip.Flags & (MK_DI_NEEDREBOOT | MK_DI_NEEDRESTART)) != 0) {
+            mk_log("restart not made now (vetoed or needs a restart of "
+                   "Windows): %s; the tool's fallback stands until its "
+                   "next start", nodes[unit].Id);
+            called = FALSE;
+            t->Outcome = 1;
         }
-        api.Destroy(set);
     }
+    api.Destroy(set);
     if (called) {
         mk_log("restart made: %s (serial %lu)", nodes[unit].Id, e->Serial);
     } else if (!t->Outcome) {
@@ -1140,13 +1180,19 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
     mk_unlock(em);
 }
 
-/* The confirmation of a unit Windows holds for eject (XP and later). */
+/* The confirmation of a unit Windows holds for eject (XP and later), under
+ * the tools' eject mutex, which every writer of the value takes around its
+ * check and write, so no writer overwrites another's: written only while
+ * the value is absent or empty, and again while the departure stays
+ * pending after the thread had the time to read it. */
+#define MK_CONFIRM_AGAIN_MS 5000UL
 static void mk_confirm(const MK_NHI *h, const MK_ENTRY *e, int unit)
 {
     MK_TRIED *t;
     unsigned char v[MK_QC_BYTES];
     char path[200];
     HKEY k;
+    HANDLE em;
     DWORD type;
     DWORD n;
     LONG r;
@@ -1161,30 +1207,43 @@ static void mk_confirm(const MK_NHI *h, const MK_ENTRY *e, int unit)
         return;
     }
     t = mk_tried(&h->M, e->Serial, 1);
-    if (t->Confirmed || h->Driver[0] == '\0') {
+    if (h->Driver[0] == '\0' ||
+        (t->Confirmed && GetTickCount() - t->At < MK_CONFIRM_AGAIN_MS)) {
         return;
     }
     sprintf(path, "SYSTEM\\CurrentControlSet\\Control\\Class\\%.120s",
             h->Driver);
+    em = mk_lock(MK_EJECT_MUTEX, 1000);
+    if (em == NULL) {
+        return;
+    }
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ | KEY_SET_VALUE,
                       &k) != ERROR_SUCCESS) {
+        mk_unlock(em);
         mk_log("confirmation not written: the NHI's driver key did not open");
         return;
     }
     n = sizeof(old);
     r = RegQueryValueExA(k, CM_QC_VALUE, NULL, &type, old, &n);
-    if (r == ERROR_SUCCESS && n != 0) {
+    if (!(r == ERROR_FILE_NOT_FOUND || (r == ERROR_SUCCESS && n == 0))) {
+        /* Another confirmation waits for the thread, or the value cannot
+         * be read: nothing is written over it. */
         RegCloseKey(k);
-        return;     /* another confirmation waits for the thread */
+        mk_unlock(em);
+        return;
     }
     mk_confirm_build(v, &h->M, e);
     if (RegSetValueExA(k, CM_QC_VALUE, 0, REG_BINARY, v, MK_QC_BYTES) ==
         ERROR_SUCCESS) {
+        if (!t->Confirmed) {
+            mk_log("eject confirmed: %s held for eject (serial %lu)",
+                   nodes[unit].Id, e->Serial);
+        }
         t->Confirmed = 1;
-        mk_log("eject confirmed: %s held for eject (serial %lu)",
-               nodes[unit].Id, e->Serial);
+        t->At = GetTickCount();
     }
     RegCloseKey(k);
+    mk_unlock(em);
 }
 
 /* ======================================================================== */
@@ -1197,7 +1256,6 @@ static void mk_entries(const int *prot)
     INST_U32 j;
     int w;
     int unit;
-    int has;
 
     for (i = 0; i < nhiCount; i++) {
         MK_NHI *h = &nhis[i];
@@ -1239,18 +1297,78 @@ static void mk_entries(const int *prot)
                 t->Outcome = 1;
                 mk_log("restarted, now listed: %s", nodes[unit].Id);
             }
-            if (e->Pending != 0) {
-                continue;
-            }
-            has = 1;
-            if (mk_restart_wanted(e, has)) {
+            if (mk_restart_wanted(e, 1) &&
+                (nodes[unit].Status & MK_DN_STARTED) != 0 &&
+                (nodes[unit].Status & MK_DN_HAS_PROBLEM) == 0) {
                 mk_restart(h, e, unit);
             }
         }
     }
 }
 
-/* A record's devnode against the domains (decision M2 and M11). */
+/* A replayed record's last failure, so a replay keeps the write's one
+ * attempt a minute (section 7.4, "The write"). */
+#define MK_MAX_REPLAY 32
+static struct {
+    char Id[INST_ID_CHARS];
+    DWORD At;
+} replay[MK_MAX_REPLAY];
+static int replayNext;
+
+static int mk_replay_due(const char *id)
+{
+    int i;
+
+    for (i = 0; i < MK_MAX_REPLAY; i++) {
+        if (replay[i].Id[0] != '\0' && inst_eq(replay[i].Id, id)) {
+            return GetTickCount() - replay[i].At >= MK_RETRY_MS;
+        }
+    }
+    return 1;
+}
+
+static void mk_replay_failed(const char *id)
+{
+    int i;
+
+    for (i = 0; i < MK_MAX_REPLAY; i++) {
+        if (replay[i].Id[0] != '\0' && inst_eq(replay[i].Id, id)) {
+            replay[i].At = GetTickCount();
+            return;
+        }
+    }
+    inst_copy(replay[replayNext].Id, id, sizeof(replay[replayNext].Id));
+    replay[replayNext].At = GetTickCount();
+    replayNext = (replayNext + 1) % MK_MAX_REPLAY;
+}
+
+/* The domain whose answer lists location `bdf` as a member, or NULL. */
+static MK_NHI *mk_owner(INST_U32 bdf)
+{
+    int i;
+    INST_U32 k;
+
+    if (bdf == 0) {
+        return NULL;
+    }
+    for (i = 0; i < nhiCount; i++) {
+        if (!nhis[i].Answered) {
+            continue;
+        }
+        for (k = 0; k < nhis[i].Q.Ports; k++) {
+            if (nhis[i].Q.Port[k] == bdf) {
+                return &nhis[i];
+            }
+        }
+    }
+    return NULL;
+}
+
+/* A record's devnode against its owning domain (decisions M2 and M11):
+ * the domain whose answer lists the devnode's parent as a member (a
+ * present devnode) or the record's member (an absent one). Nothing is
+ * removed or replayed for a domain that cannot be verified, and a lookup
+ * that fails is never read as an absence. */
 static void mk_judge(const char *id, const char *text)
 {
     INST_U32 member;
@@ -1258,88 +1376,110 @@ static void mk_judge(const char *id, const char *text)
     INST_U32 lo;
     int state;
     DWORD dn;
-    int present;
-    int node;
+    DWORD cr;
+    int presence;
+    int node = -1;
     int parent;
     INST_U32 pbdf = 0;
     int i;
     INST_U32 j;
-    int memberOfVerif = 0;
     int anyVerif = 0;
     int anyUnverif = 0;
     int listed = 0;
     int incomplete = 0;
     int safeOff = 0;
     int verdict;
+    MK_NHI *owner = NULL;
     HANDLE m;
 
     if (!mk_rec_parse(text, &member, &hi, &lo, &state)) {
         member = 0;
         state = MK_REC_WRITTEN;
     }
-    present = api.Locate(&dn, (char *)id, MK_CM_LOCATE_NORMAL) == MK_CR_SUCCESS;
-    node = present ? mk_find_id(id) : -1;
-    if (present && node < 0) {
-        mk_log("record kept: %s is present but not in the walk", id);
-        return;
+    cr = api.Locate(&dn, (char *)id, MK_CM_LOCATE_NORMAL);
+    if (cr == MK_CR_SUCCESS) {
+        presence = MK_P_PRESENT;
+    } else if (cr == MK_CR_NO_SUCH_DEVNODE) {
+        cr = api.Locate(&dn, (char *)id, MK_CM_LOCATE_PHANTOM);
+        if (cr == MK_CR_SUCCESS) {
+            presence = MK_P_ABSENT;
+        } else if (cr == MK_CR_NO_SUCH_DEVNODE) {
+            /* The devnode itself is gone, and its value with it. */
+            m = mk_lock(MK_WRITE_MUTEX, 5000);
+            if (m != NULL) {
+                mk_rec_delete(id);
+                mk_unlock(m);
+                mk_log("record deleted: %s no longer exists", id);
+            }
+            return;
+        } else {
+            presence = MK_P_UNKNOWN;
+        }
+    } else {
+        presence = MK_P_UNKNOWN;
     }
-    parent = node >= 0 ? nodes[node].Parent : -1;
-    if (parent >= 0 && nodes[parent].HasLoc) {
-        pbdf = (nodes[parent].Bus << 8) |
-               (((nodes[parent].Address >> 16) & 0x1FUL) << 3) |
-               (nodes[parent].Address & 7UL);
+    if (presence == MK_P_PRESENT) {
+        node = mk_find_id(id);
+        if (node < 0) {
+            /* Present but not in the walk: nothing can be judged. */
+            return;
+        }
+        parent = nodes[node].Parent;
+        if (parent >= 0 && nodes[parent].HasLoc) {
+            pbdf = (nodes[parent].Bus << 8) |
+                   (((nodes[parent].Address >> 16) & 0x1FUL) << 3) |
+                   (nodes[parent].Address & 7UL);
+            owner = mk_owner(pbdf);
+        }
+    } else {
+        owner = mk_owner(member);
     }
     for (i = 0; i < nhiCount; i++) {
-        MK_NHI *h = &nhis[i];
-        INST_U32 k;
-        if (!h->Verifiable) {
+        if (nhis[i].Verifiable) {
+            anyVerif = 1;
+        } else {
             anyUnverif = 1;
-            continue;
         }
-        anyVerif = 1;
-        for (k = 0; k < h->Q.Ports; k++) {
-            if (parent >= 0 && h->Q.Port[k] == pbdf) {
-                memberOfVerif = 1;
-                if (h->M.Flags & MK_F_INCOMPLETE) {
-                    incomplete = 1;
-                }
-                if (h->M.Flags & MK_F_SAFE_OFF) {
-                    safeOff = 1;
-                }
-                for (j = 0; j < h->M.Count && mk_member_active(&h->Q, pbdf);
-                     j++) {
-                    const MK_ENTRY *e = &h->M.E[j];
-                    if ((e->Flags & MK_EF_REPORTED) && e->Member == pbdf &&
-                        (e->Flags & MK_EF_LOCATED) && node >= 0 &&
-                        e->Bus == nodes[node].Bus &&
-                        e->Address == nodes[node].Address) {
-                        listed = 1;
-                    }
-                }
+    }
+    if (owner != NULL && owner->Verifiable) {
+        incomplete = (owner->M.Flags & MK_F_INCOMPLETE) != 0;
+        safeOff = (owner->M.Flags & MK_F_SAFE_OFF) != 0;
+        for (j = 0; j < owner->M.Count && presence == MK_P_PRESENT &&
+                    mk_member_active(&owner->Q, pbdf);
+             j++) {
+            const MK_ENTRY *e = &owner->M.E[j];
+            if ((e->Flags & MK_EF_REPORTED) && e->Member == pbdf &&
+                (e->Flags & MK_EF_LOCATED) && e->Bus == nodes[node].Bus &&
+                e->Address == nodes[node].Address) {
+                listed = 1;
             }
         }
     }
-    verdict = mk_reconcile(present, memberOfVerif ? 0 : anyUnverif, anyVerif,
-                           listed, incomplete, safeOff);
+    verdict = mk_reconcile(presence, owner != NULL,
+                           owner != NULL && owner->Verifiable, anyUnverif,
+                           anyVerif, listed, incomplete, safeOff);
     if (verdict == MK_R_LEAVE) {
         return;
     }
     if (verdict == MK_R_KEEP) {
-        if (state == MK_REC_WRITING) {
+        if (state == MK_REC_WRITING && mk_replay_due(id)) {
             m = mk_lock(MK_WRITE_MUTEX, 5000);
             if (m != NULL) {
                 if (mk_filters_add(dn)) {
                     (void)mk_rec_set(id, member, hi, lo, MK_REC_WRITTEN);
                     mk_log("record replayed: %s", id);
+                } else {
+                    mk_replay_failed(id);
+                    mk_log("record replay failed, retried within a minute: %s",
+                           id);
                 }
                 mk_unlock(m);
             }
         }
         return;
     }
-    /* Removed: the devnode may be absent, so it is located as a phantom. */
-    if (api.Locate(&dn, (char *)id, MK_CM_LOCATE_PHANTOM) != MK_CR_SUCCESS) {
-        mk_log("record kept: %s cannot be located to remove its mark", id);
+    if (presence == MK_P_PRESENT &&
+        api.Locate(&dn, (char *)id, MK_CM_LOCATE_PHANTOM) != MK_CR_SUCCESS) {
         return;
     }
     m = mk_lock(MK_WRITE_MUTEX, 5000);
@@ -1349,7 +1489,7 @@ static void mk_judge(const char *id, const char *text)
     if (mk_filters_remove(dn)) {
         mk_rec_delete(id);
         mk_log("mark removed: %s (%s)", id,
-               !present ? "the unit left" :
+               presence == MK_P_ABSENT ? "the unit left" :
                safeOff ? "safe eject is off" : "no longer behind an active member");
     } else {
         mk_log("mark removal failed, kept for the next poll: %s (error %lu)",

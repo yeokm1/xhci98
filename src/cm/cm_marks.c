@@ -82,33 +82,35 @@ VOID CmMarksSeen(PCM_MARKS m, ULONG gen)
     }
 }
 
-static ULONG cmMkCount(const CM_MARKS *m, BOOLEAN tombs)
+static ULONG cmMkCount(const CM_MARKS *m, BOOLEAN tombs, ULONG member)
 {
     ULONG i;
     ULONG n;
 
     n = 0;
     for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
-        if (m->E[i].Pdo != NULL && (m->E[i].Tomb != 0) == (tombs != 0)) {
+        if (m->E[i].Pdo != NULL && (m->E[i].Tomb != 0) == (tombs != 0) &&
+            m->E[i].Member == member) {
             n++;
         }
     }
     return n;
 }
 
-/* A current entry made a tombstone, evicting the oldest tombstone first
- * when the set is full. */
+/* A current entry made a tombstone, evicting its member's oldest
+ * tombstone first when that member's set is full. */
 static VOID cmMkBury(PCM_MARKS m, PCM_MARK e, ULONG now)
 {
     ULONG i;
     ULONG oldest;
     BOOLEAN have;
 
-    if (cmMkCount(m, TRUE) >= CM_QM_MAX_TOMBS) {
+    if (cmMkCount(m, TRUE, e->Member) >= CM_QM_MAX_TOMBS) {
         have = FALSE;
         oldest = 0;
         for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
-            if (m->E[i].Pdo == NULL || !m->E[i].Tomb) {
+            if (m->E[i].Pdo == NULL || !m->E[i].Tomb ||
+                m->E[i].Member != e->Member) {
                 continue;
             }
             if (!have ||
@@ -122,6 +124,7 @@ static VOID cmMkBury(PCM_MARKS m, PCM_MARK e, ULONG now)
                 m->Dropped++;
             }
             cmMkZero(&m->E[oldest], sizeof(CM_MARK));
+            cmMkBump(m);
         }
     }
     e->Tomb = 1;
@@ -174,10 +177,13 @@ BOOLEAN CmMarksSync(PCM_MARKS m, ULONG member, ULONG memberBdf,
         if (snap[k] == NULL || CmMarksFind(m, snap[k]) != NULL) {
             continue;
         }
-        if (cmMkCount(m, FALSE) >= CM_QM_MAX_CURRENT) {
+        if (member >= CM_QM_MAX_MEMBERS ||
+            cmMkCount(m, FALSE, member) >= CM_QM_MAX_CURRENT) {
             m->Incomplete = 1;
             continue;
         }
+        /* Each member holds at most its two bounds, so a free slot exists
+         * whenever this member's current set has room. */
         e = NULL;
         for (i = 0; i < CM_QM_MAX_ENTRIES && e == NULL; i++) {
             if (m->E[i].Pdo == NULL) {
@@ -185,26 +191,8 @@ BOOLEAN CmMarksSync(PCM_MARKS m, ULONG member, ULONG memberBdf,
             }
         }
         if (e == NULL) {
-            /* Every slot is a current entry or a tombstone the set's own
-             * bound keeps: the oldest tombstone gives way. */
-            ULONG oldest;
-
-            oldest = CM_QM_MAX_ENTRIES;
-            for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
-                if (m->E[i].Tomb &&
-                    (oldest == CM_QM_MAX_ENTRIES ||
-                     (now - m->E[i].TombAt) > (now - m->E[oldest].TombAt))) {
-                    oldest = i;
-                }
-            }
-            if (oldest == CM_QM_MAX_ENTRIES) {
-                m->Incomplete = 1;
-                continue;
-            }
-            if (!CmMarksWasSeen(m, m->E[oldest].TombGen)) {
-                m->Dropped++;
-            }
-            e = &m->E[oldest];
+            m->Incomplete = 1;
+            continue;
         }
         cmMkZero(e, sizeof(CM_MARK));
         e->Pdo = snap[k];
@@ -251,13 +239,19 @@ VOID CmMarksCount(PCM_MARKS m, PCM_MARK e, ULONG which, ULONG now)
 VOID CmMarksEvict(PCM_MARKS m, ULONG now)
 {
     ULONG i;
+    BOOLEAN any;
 
+    any = FALSE;
     for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
         if (m->E[i].Pdo != NULL && m->E[i].Tomb &&
             now - m->E[i].TombAt >= CM_QM_TOMB_MS &&
             CmMarksWasSeen(m, m->E[i].TombGen)) {
             cmMkZero(&m->E[i], sizeof(CM_MARK));
+            any = TRUE;
         }
+    }
+    if (any) {
+        cmMkBump(m);
     }
 }
 

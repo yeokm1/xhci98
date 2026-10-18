@@ -362,10 +362,17 @@
 #define CM_QM_EF_REMOVABLE      0x10UL  /* Removable answered set */
 #define CM_QM_EF_SAFE_EJECT_OFF 0x20UL  /* the domain's XhciCmSafeEject 0 */
 
+/* The sets are a member's (record 21 section 7.4, revision 3: two sets a
+ * member keeps apart, so that neither can crowd the other out), and no
+ * member's can crowd another's: CM_QM_MAX_CURRENT current entries and
+ * CM_QM_MAX_TOMBS tombstones per member, CM_QM_MAX_MEMBERS members
+ * (XHCI_TBT_MAX_TUNNELS). */
 #define CM_QM_TOMB_MS           60000UL
-#define CM_QM_MAX_CURRENT       32UL    /* CM_SNAP_MAX */
-#define CM_QM_MAX_TOMBS         32UL
-#define CM_QM_MAX_ENTRIES       (CM_QM_MAX_CURRENT + CM_QM_MAX_TOMBS)
+#define CM_QM_MAX_MEMBERS       4UL
+#define CM_QM_MAX_CURRENT       32UL    /* CM_SNAP_MAX, per member */
+#define CM_QM_MAX_TOMBS         32UL    /* per member */
+#define CM_QM_MAX_ENTRIES       (CM_QM_MAX_MEMBERS * \
+                                 (CM_QM_MAX_CURRENT + CM_QM_MAX_TOMBS))
 #define CM_QM_MAX_BYTES         (CM_QM_HDR_BYTES + \
                                  CM_QM_MAX_ENTRIES * CM_QM_ENT_BYTES)
 

@@ -53,9 +53,11 @@ ULONG CmClassifyIds(const WCHAR *ids, ULONG chars, PCM_IDS out);
  * AddDevice's role (record 21 section 7.4, revision 3, decision M15), from
  * the classified ids and whether their vendor and device are one of
  * xhcicmf.inf's bridge models (`filterListed`, cm_ports.c's
- * CmPortsFilterId): CM_ROLE_NHI for an id of the NHI table, the USB4 host
- * class xhcicm.inf also binds (CmProfileFor not UNKNOWN), or an Intel
- * function of class 0880 (XhciCmMode 2's unlisted Intel NHI); CM_ROLE_FILTER
+ * CmPortsFilterId): CM_ROLE_NHI for an id of the NHI table or the USB4 host
+ * class xhcicm.inf also binds (CmProfileFor not UNKNOWN: xhcicm.inf's
+ * matching contract and nothing wider, so a device carrying a stale mark is
+ * never driven as an NHI; an unlisted Intel NHI bound by hand for
+ * XhciCmMode 2 is a passive child since 42-A.5); CM_ROLE_FILTER
  * for a bridge (class 0604) whose id the filter INF names; CM_ROLE_CHILD
  * for every other PDO, an unreadable id list included - which is a device
  * this driver was named a lower filter of, and whose AddDevice must never

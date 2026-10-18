@@ -42,7 +42,7 @@ int mk_query_parse(const unsigned char *b, size_t n, MK_QUERY *q,
 
 /* ---- the marks answer (cm_query.h CM_QM_*) ------------------------------ */
 
-#define MK_MAX_ENTRIES      64
+#define MK_MAX_ENTRIES      256     /* CM_QM_MAX_ENTRIES */
 
 typedef struct _MK_ENTRY {
     INST_U32 Member;
@@ -108,26 +108,38 @@ int mk_member_active(const MK_QUERY *q, INST_U32 bdf);
 const char *mk_w_text(int w);
 
 /* The restart's wish (the first plug a rebuild overtook): the entry
- * reported and located, no departure pending, the value present, and no
+ * reported and located, safe eject on, the value present, and no
  * attachment of this driver on the stack now or one that did not answer
- * Removable. 1 when a restart is to be considered. */
+ * Removable. A pending departure does not stop it (a first plug's install
+ * leaves one); the unit's fresh status decides. 1 when a restart is to be
+ * considered. */
 int mk_restart_wanted(const MK_ENTRY *e, int valuePresent);
 
 /* The reconciliation of one record (section 7.4, "Departures and
  * reconciliation"): MK_R_KEEP, MK_R_REMOVE (the mark taken off and the
  * record deleted) or MK_R_LEAVE (not verifiable now; looked at again).
- *   present     the devnode is present (CM_Locate_DevNode, normal)
- *   anyUnverif  some NHI bound to xhcicm is present but not verifiable
+ *   presence    MK_P_*: present (CM_Locate_DevNode, normal), absent (only
+ *               a phantom), or unknown (a lookup failed)
+ *   ownerKnown  an answer lists the owning member (the parent's location
+ *               for a present devnode, the record's for an absent one)
+ *   ownerVerif  that domain is verifiable
+ *   anyUnverif  some NHI bound to xhcicm is not verifiable
  *   anyVerif    at least one is verifiable
- *   listed      a verifiable domain's complete answer lists a reported
- *               unit at the devnode's location behind its parent
- *   incomplete  the domain the parent is a member of answered incomplete
- *   safeOff     that domain's safe eject is off */
+ *   listed      the owning domain lists a reported unit at the devnode's
+ *               location behind an active member
+ *   incomplete  the owning domain answered incomplete
+ *   safeOff     its safe eject is off
+ * With no owner known, nothing is decided unless every NHI is verifiable
+ * and one is. */
 #define MK_R_KEEP           0
 #define MK_R_REMOVE         1
 #define MK_R_LEAVE          2
-int mk_reconcile(int present, int anyUnverif, int anyVerif, int listed,
-                 int incomplete, int safeOff);
+#define MK_P_ABSENT         0
+#define MK_P_PRESENT        1
+#define MK_P_UNKNOWN        2
+int mk_reconcile(int presence, int ownerKnown, int ownerVerif,
+                 int anyUnverif, int anyVerif, int listed, int incomplete,
+                 int safeOff);
 
 /* ---- the multi-string ----------------------------------------------------- */
 

@@ -77,6 +77,44 @@ static void test_roles(void)
              "an unterminated list ends at its count");
 }
 
+/* AddDevice's role since task 42-A.5 (record 21 section 7.4, revision 3,
+ * decision M15): the NHI table and the USB4 class; a filter INF's bridge;
+ * every other PDO the LowerFilters child. */
+static void test_role_decide(void)
+{
+    static const char nhi[] = "PCI\\VEN_8086&DEV_15BF&CC_088000\0\0";
+    static const char unlisted[] = "PCI\\VEN_8086&DEV_15DC&CC_088000\0\0";
+    static const char usb4[] = "PCI\\VEN_1022&DEV_1668&CC_0C0340\0\0";
+    static const char bridge[] = "PCI\\VEN_8086&DEV_15C0&CC_060400\0\0";
+    static const char usp[] = "PCI\\VEN_1B21&DEV_2421&CC_060400\0\0";
+    static const char nvme[] = "PCI\\VEN_1B36&DEV_0010&CC_010802\0\0";
+    static const char amdOther[] = "PCI\\VEN_1022&DEV_1234&CC_088000\0\0";
+    CM_IDS ids;
+
+    classify(nhi, sizeof(nhi), &ids);
+    CHECK_EQ(CmRoleDecide(&ids, 0), CM_ROLE_NHI, "a listed NHI");
+    classify(unlisted, sizeof(unlisted), &ids);
+    CHECK_EQ(CmRoleDecide(&ids, 0), CM_ROLE_CHILD,
+             "an unlisted Intel 0880 function is no NHI: xhcicm.inf's contract and nothing wider");
+    classify(usb4, sizeof(usb4), &ids);
+    CHECK_EQ(CmRoleDecide(&ids, 0), CM_ROLE_NHI, "the USB4 host class");
+    classify(bridge, sizeof(bridge), &ids);
+    CHECK_EQ(CmRoleDecide(&ids, 1), CM_ROLE_FILTER, "a filter INF bridge");
+    CHECK_EQ(CmRoleDecide(&ids, 0), CM_ROLE_CHILD,
+             "a bridge the filter INF does not name is a child (a dock's upstream port)");
+    classify(usp, sizeof(usp), &ids);
+    CHECK_EQ(CmRoleDecide(&ids, 0), CM_ROLE_CHILD, "the emulator's upstream port");
+    classify(nvme, sizeof(nvme), &ids);
+    CHECK_EQ(CmRoleDecide(&ids, 0), CM_ROLE_CHILD, "an NVMe controller is a child");
+    CHECK_EQ(CmRoleDecide(&ids, 1), CM_ROLE_CHILD,
+             "a listed id that is not a bridge is no filter");
+    classify(amdOther, sizeof(amdOther), &ids);
+    CHECK_EQ(CmRoleDecide(&ids, 0), CM_ROLE_CHILD, "a non-Intel 0880 function is a child");
+    CHECK_EQ(CmClassifyIds(NULL, 0, &ids), CM_ROLE_NONE, "no list");
+    CHECK_EQ(CmRoleDecide(&ids, 0), CM_ROLE_CHILD,
+             "an unreadable list is a child: a lower filter's AddDevice never fails");
+}
+
 static void test_profiles(void)
 {
     static const struct { ULONG dev; ULONG profile; } rows[] = {
@@ -342,6 +380,7 @@ static void test_decision(void)
 int main(void)
 {
     test_roles();
+    test_role_decide();
     test_profiles();
     test_decision();
     test_values();

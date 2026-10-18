@@ -7,12 +7,14 @@
  * and feeds it what the bridge filters' snapshots and the child filters'
  * PnP requests show; the host suite (test\test_cm_marks.c) drives it here.
  *
- * TWO SETS a member keeps apart, so that neither can crowd the other out:
- * CM_QM_MAX_CURRENT current entries (PDOs in a member bridge's last
- * snapshot) and CM_QM_MAX_TOMBS tombstones (entries whose PDO left it). A
- * tombstone is kept CM_QM_TOMB_MS, and longer while no answer read by a
- * poll has carried a marks generation past its departure; when the set is
- * full the oldest goes and, if no poll had seen it, Dropped is bumped.
+ * TWO SETS each member keeps apart, so that neither can crowd the other
+ * out, and no member's another's: CM_QM_MAX_CURRENT current entries (PDOs
+ * in the member bridge's last snapshot) and CM_QM_MAX_TOMBS tombstones
+ * (entries whose PDO left it) per member. A tombstone is kept
+ * CM_QM_TOMB_MS, and longer while no answer read by a poll has carried a
+ * marks generation past its departure; when the member's set is full its
+ * oldest goes and, if no poll had seen it, Dropped is bumped. An eviction
+ * changes the answer, so it moves the generation on too.
  * A PDO is a key compared by pointer and never dereferenced.
  *
  * C89, DDK-free, no allocation, no lock (the caller's). IRQL: any.

@@ -133,16 +133,27 @@ static void test_tombs(void)
     }
     CHECK_EQ(countKind(1), CM_QM_MAX_TOMBS, "the tombstone set holds 32");
     CHECK_EQ(t.Dropped, 8, "eight evicted unseen, counted");
+    /* Another member's departures do not push member 0's out. */
+    for (i = 0; i < 40; i++) {
+        snap[0] = P(150 + (i % 40));
+        CmMarksBegin(&t);
+        (VOID)CmMarksSync(&t, 1, 0x0400, snap, 1, FALSE, TRUE, 1000 + i);
+        CmMarksBegin(&t);
+        (VOID)CmMarksSync(&t, 1, 0x0400, snap, 0, FALSE, TRUE, 1000 + i);
+    }
+    CHECK_EQ(countKind(1), 2 * CM_QM_MAX_TOMBS, "each member keeps its own 32 tombstones");
+    CHECK_EQ(t.Dropped, 16, "eight more dropped, each member's own oldest");
     /* Not seen: kept past the minute. */
     CmMarksEvict(&t, 1000 + 40 + CM_QM_TOMB_MS * 2);
-    CHECK_EQ(countKind(1), CM_QM_MAX_TOMBS, "unseen tombstones outlive the minute");
+    CHECK_EQ(countKind(1), 2 * CM_QM_MAX_TOMBS, "unseen tombstones outlive the minute");
     gen = t.Gen;
     CmMarksSeen(&t, gen);
     CHECK(CmMarksWasSeen(&t, gen), "a generation read is seen");
     CmMarksEvict(&t, 1000 + 40);
-    CHECK_EQ(countKind(1), CM_QM_MAX_TOMBS, "seen but younger than a minute: kept");
+    CHECK_EQ(countKind(1), 2 * CM_QM_MAX_TOMBS, "seen but younger than a minute: kept");
     CmMarksEvict(&t, 1000 + 40 + CM_QM_TOMB_MS);
     CHECK_EQ(countKind(1), 0, "seen and a minute old: gone");
+    CHECK(t.Gen != gen, "an eviction moves the generation on");
     /* The wrap. */
     CmMarksReset(&t);
     CmMarksSeen(&t, 0xFFFFFFF0UL);

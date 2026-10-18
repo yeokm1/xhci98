@@ -251,10 +251,6 @@ ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed)
         if (CmProfileFor(&nhi) != CM_PROFILE_UNKNOWN) {
             return CM_ROLE_NHI;
         }
-        if (ids->Vendor == CM_INTEL_VENDOR &&
-            (ids->ClassCode >> 8) == 0x0880UL) {
-            return CM_ROLE_NHI;
-        }
     }
     return CM_ROLE_CHILD;
 }
