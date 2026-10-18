@@ -61,6 +61,15 @@ static int dtWriteJob(const char *job, const char *devid, const char *inf,
     char text[2048];
     HANDLE f;
     DWORD put = 0;
+    /*
+     * Each operand bounded so the whole stays inside text: longer ones than
+     * the helper takes still reach it (to be refused), absurd ones do not.
+     */
+    if ((devid != NULL && strlen(devid) > 400) || (inf != NULL && strlen(inf) > 400) ||
+        (flags != NULL && strlen(flags) > 64) || strlen(job) > 16) {
+        printf("DITEST: an operand too long for the job file\n");
+        return 0;
+    }
     _snprintf(text, sizeof text - 1, "XHCIDI-JOB 1\r\nJOB %s\r\nRESULT %s\r\nHWND %lu\r\n",
               job, g_result, (unsigned long)(UINT_PTR)g_hwnd);
     text[sizeof text - 1] = 0;

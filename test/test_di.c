@@ -180,6 +180,17 @@ static void test_parse_refused(void)
              DI_PARSE_COMMAND, "no END");
     CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\r\nEND\r\n", &c),
              DI_PARSE_COMMAND, "a line after END");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r extra\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "a CR inside a line hides nothing");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\rJUNK\r\n", &c),
+             DI_PARSE_COMMAND, "content after END behind a CR");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\r\n\x01JOB remove\r\n", &c),
+             DI_PARSE_COMMAND, "a NUL the reader made 0x01, then more records");
+    CHECK(strcmp(c.result, "C:\\X\\R.TXT") == 0, "the refusal still has its result path");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\x7F\r\nEND\r\n", &c),
+             DI_PARSE_COMMAND, "a DEL byte in a record");
+    CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\r", &c),
+             DI_PARSE_OK, "a CR at the file's end");
     CHECK_EQ(parse_text("XHCIDI-JOB 1\r\nJOB probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND now\r\n", &c),
              DI_PARSE_COMMAND, "END with a word");
     CHECK_EQ(parse_text("XHCIDI-JOB 1\r\njob probe\r\nRESULT C:\\X\\R.TXT\r\nHWND 0\r\nEND\r\n", &c),

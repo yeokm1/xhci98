@@ -303,15 +303,40 @@ int di_cmdline(const char *cmdline, char *version, unsigned vsize,
 /*
  * The next line of the job file: its words into t (at most max, *n set to
  * max + 1 when there are more), and the start of the line after it. A line
- * ends at LF; a CR before it is part of the line's end.
+ * ends at LF (or the file's end), and one CR just before it is part of
+ * that end. A line
+ * holding any other byte below a space but TAB, or above '~' (a CR inside
+ * it, a NUL the reader turned into 0x01, anything not ASCII), is no record
+ * at all: *n is -1, which matches no key and is not a blank line. The
+ * words are copied into one static line, so they hold until the next call.
  */
 static const char *di_line(const char *p, DI_TOK *t, int max, int *n)
 {
+    static char line[DI_JOBFILE_MAX + 1];
     const char *e = p;
+    unsigned len;
+    unsigned i;
     while (*e != '\0' && *e != '\n') {
         e++;
     }
-    *n = di_tokens(p, t, max);
+    len = (unsigned)(e - p);
+    if (len > 0 && p[len - 1] == '\r') {
+        len--;
+    }
+    if (len > DI_JOBFILE_MAX) {
+        *n = -1;
+        return *e == '\n' ? e + 1 : e;
+    }
+    for (i = 0; i < len; i++) {
+        char c = p[i];
+        if ((c < ' ' && c != '\t') || c > '~') {
+            *n = -1;
+            return *e == '\n' ? e + 1 : e;
+        }
+        line[i] = c;
+    }
+    line[len] = '\0';
+    *n = di_tokens(line, t, max);
     return *e == '\n' ? e + 1 : e;
 }
 

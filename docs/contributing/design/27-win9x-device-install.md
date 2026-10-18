@@ -883,9 +883,9 @@ key, `INF\OTHER`'s listing, and Device Manager:
 
 | Leg | Reads |
 |---|---|
-| F, fresh install | the controller installed by the helper from the Found page's plan with no hand step; the Windows CD prompt for `usbd.sys` owned by the installer's window; the root hub's and hubs' wizards after the controller's restart, and the settle's wait for them; a cancelled root-hub wizard then installed by the helper; the devnode's class after the install; whether `LDID_SRCPATH` spares the "Copy files from" prompt; the driver key's values of section 8 |
+| F, fresh install | the controller installed by the helper from the Found page's plan with no hand step; the Windows CD prompt for `usbd.sys` owned by the installer's window; the root hub's and hubs' wizards after the controller's restart, and the settle's wait for them; a root-hub wizard finished with no driver then installed by the helper, and a cancelled one answered `not-present` and listed as the restart-and-run-again step (section 5.1); the devnode's class after the install; whether `LDID_SRCPATH` spares the package disk's prompt (the Windows CD's keeps its own default path, section 5.3); the driver key's values of section 8 |
 | U24, update over `2.4.0.0` | the controller and the root hub updated by the helper with no hand step (the hand step record 23's 9x leg needed); the keyboard and mouse behind the controller back after the restart of the devices, not of Windows |
-| U23, update over `2.3.1.0` (98 SE) | the new devnodes and their wizards; the helper's pass over what was cancelled |
+| U23, update over `2.3.1.0` (98 SE) | the new devnodes and their wizards; the helper's pass over what a wizard finished with no driver; a cancelled one's `not-present` and its step |
 | UAS and Stor98 | a UAS disk installed and `force`-reinstalled (the `ERR_DI_DONT_INSTALL` question); Stor98 ticked on an NVMe device with no driver, installed from the copy, its IOS binding read back; an older Stor98 updated with the shutdown afterwards (record 26 section 6.3); two bundled versions in succession, then the uninstall removing every owned staged copy no device names and leaving a hand-installed Stor98's device with the copy its driver key names, and an `INF\OTHER` copy of a hand install whose device was removed before the run, which stays; an NVMe device Windows binds to Stor98 by itself during the settle after the host interface's install, with no Stor98 helper call, recorded with the copy the engine made for it, and the uninstall removing that copy once unreferenced (record 26 section 6.3) |
 | Thunderbolt | the host interface by `xhcicm.inf` on the emulator's Alpine Ridge guest (the 98 SE wizard's "Copy files from" of record 23 section 8.5, now the helper's) |
 | UN, uninstall | each devnode removed through the helper in order, an unplugged UAS disk's entry and a moved controller's old entry among them (the removal of an entry that is not present); the subtree removal; the `INF\OTHER` copies and the files deleted by the installer; the restart; the controller back as an unknown device with no wizard finding a driver |
@@ -893,13 +893,22 @@ key, `INF\OTHER`'s listing, and Device Manager:
 | ME | every row above on ME, and ME's own prompts |
 | Dialogs and handles | that the engine's dialogs are owned by the installer's window; that the process handle of the 16-bit helper signals at its exit and what its exit code reads; the fallback poll of the result file |
 
-What the legs settle that nothing here has read: the install of an INF of
-another class on an `Unknown` entry through `DiCreateDeviceInfo` with the
-INF's class; the listing and removal of an entry that is not present; `DI_ENUMSINGLEINF`
-with an INF outside `%windir%\INF`; `CtlSetLddPath` and the copy prompt;
-`ERR_DI_DONT_INSTALL` on a same-version install; the subtree removal of
-`DiRemoveDevice`; the 16-bit process handle's behaviour; and where the
-engine copies an INF found through `DevicePath`.
+What the 98 SE smoke run of 2026-10-18 read before the legs (task 42-A.1,
+`runs/run-42.md`): the probe and the 16-bit process handle signalling at
+the helper's exit; the 126-character command tail (section 4.1); a
+cancelled wizard's devnode leaving the tree (section 5.1); the install of
+`xhci98.inf` on the controller's `Unknown` entry through
+`DiCreateDeviceInfo` with the INF's class, with `DI_ENUMSINGLEINF` and the
+INF outside `%windir%\INF`; `ERR_DI_DO_DEFAULT` from
+`DIF_SELECTBESTCOMPATDRV` (section 5.2); `LDID_SRCPATH` and the Windows
+CD's prompt (section 5.3); the engine's copy `YEOKHE~1.INF` under
+`INF\OTHER`. Each is read again on the legs with the helper as it now
+is, on 98 SE and ME. What the legs settle that nothing here has read: the
+other devices' installs and ME's; the listing and removal of an entry
+that is not present; `ERR_DI_DONT_INSTALL` on a same-version install;
+the subtree removal of `DiRemoveDevice`; whether `LDID_SRCPATH` is what
+spares the package disk's prompt; and where the engine copies an INF
+found through `DevicePath`.
 
 ## 13. Decisions taken in writing this (the orchestrator's, owner to confirm)
 

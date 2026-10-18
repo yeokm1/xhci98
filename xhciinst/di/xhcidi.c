@@ -67,6 +67,7 @@ static const char *xhcidiReadJob(LPSTR cmdline)
     OFSTRUCT of;
     HFILE f;
     UINT got;
+    UINT i;
     if (!di_cmdline(cmdline, version, sizeof version, path, sizeof path)) {
         return NULL;
     }
@@ -78,6 +79,17 @@ static const char *xhcidiReadJob(LPSTR cmdline)
     _lclose(f);
     if (got == HFILE_ERROR || got > DI_JOBFILE_MAX) {
         return NULL;
+    }
+    /*
+     * A NUL inside the file would end the parser's text early and hide
+     * what follows; made 0x01, it is a control byte, which no record may
+     * hold, so the job is refused and the RESULT line before it still
+     * reports the refusal.
+     */
+    for (i = 0; i < got; i++) {
+        if (g_jobtext[i] == '\0') {
+            g_jobtext[i] = '\x01';
+        }
     }
     g_jobtext[got] = '\0';
     return g_jobtext;
