@@ -14,6 +14,7 @@
  */
 
 #include "hcd.h"
+#include "xhci_hw.h"
 #include "xhci_dbg.h"
 
 static NTSTATUS NTAPI hcdSignalOnComplete(PDEVICE_OBJECT DeviceObject,

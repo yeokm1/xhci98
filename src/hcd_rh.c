@@ -23,6 +23,7 @@
  */
 
 #include "hcd.h"
+#include "xhci_hw.h"
 #include "xhci_dbg.h"
 
 static const WCHAR hcdRootHubId[] = XHCI_ID_WIDE(XHCI_ID_ROOT_HUB);
