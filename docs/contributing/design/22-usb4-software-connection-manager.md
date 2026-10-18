@@ -2261,9 +2261,11 @@ argument becomes (decision U25): *fresh* for a member whose port's tunnel
 came up, *retire* for one whose device departed, *none* for every other
 member of a change, so that an unaffected member's entry is never
 advanced; the containment's own RESYNC (reason UNAVAILABLE, step 4 above)
-takes mode *none* for every member - today it exposes with `fresh` set on
-NT, which advances the generation of an entry still `UP` behind a tunnel
-nobody saw go down; `CmNvlinkLost` is the whole of what containment says
+takes mode *none* for every member - until task 42-A.6 it exposed with
+`fresh` set on NT, which advanced the generation of an entry still `UP`
+behind a tunnel nobody saw go down (since 42-A.6 a RESYNC names no tunnel
+and advances no entry `UP` for the tunnel last named on its bridge,
+section 10); `CmNvlinkLost` is the whole of what containment says
 to the channel, and that RESYNC requests the operating system's
 reconciliation alone. The recovery's own RESYNC after the commit (reason
 "controller recovered", `TBT_ICM_WHY_RECOVERED`) carries mode *none* for
@@ -2750,8 +2752,9 @@ NT, interface 3's proof key `HKEY_DYN_DATA\Stor98LinkState` and locator
 section 7.2; this profile reaches it through the two hooks of the driver
 half (`CmNhiSetU4Hooks`, registered where the selection admits this
 profile): the UP hook records each port's connection generation for the
-presence sample, the table's `UP` itself being published by the seam
-before the re-enumeration exactly as for the ICM profile, and the DOWN
+presence sample and publishes the port's `UP` itself, before anything can
+expose the endpoint (the seam's exposure for the same tunnel up follows,
+as for the ICM profile, and finds it published), and the DOWN
 hook, at the core's statement upcall, makes or withholds the statement
 on section 10.2's condition (`CmNvlinkPortDown`). On Windows 98 SE and
 ME, from `3.0.0.0`, the proof key and locator are published (record 21
@@ -2783,11 +2786,24 @@ than the one its `UP` was last published for (`CmNvlinkPublishUp`,
 `cmNvTunnel`): so the seam's second exposure of a tunnel the hook already
 published, a second port's tunnel up, and a RESYNC leave every other
 port's entry as it is, and a bound Stor98 instance keeps its identity
-(R8d). An entry not `UP` gets its new generation from any exposure. Where
-the port's member is not known, nothing names a tunnel: a function newly
-found gets its generation, and no entry already `UP` is advanced on a
-guess. The tunnels recorded are forgotten at the domain's stop, since a
-later start numbers its connections afresh.
+(R8d). An entry not `UP` gets its new generation from any exposure. The
+latest tunnel named for each member's bridge is kept (`cmNvTunnelOf`), and
+every exposure of that bridge publishes for it, whatever it names itself:
+applied again it changes nothing, and a later exposure - a baseline, an
+owed re-enumeration, the 9x late scan, a RESYNC - pays what an earlier one
+could not (the bus silent, the member not yet active). Where the port's
+member is not known, nothing names a tunnel: a function newly found gets
+its generation, and no entry already `UP` is advanced on a guess (U29's
+rule). What lets a new tunnel there still get its new generation is the
+DOWN hook: where the port's member is not known it states nothing, but
+every member's entry whose function no longer answers leaves `UP`
+(`IN_USE` alone), so the tunnel that follows finds it not `UP`. An entry
+not taken out so (no teardown seen, the function answering throughout)
+keeps its generation until its member's next named tunnel; it is not
+advanced once correspondence is learned, since by then the operating
+system has enumerated the function and a bound instance would read the
+change as identity loss. The tunnels recorded are forgotten at the
+domain's stop, since a later start numbers its connections afresh.
 
 ### 10.1 Obligation 1: a link that went down
 

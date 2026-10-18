@@ -665,11 +665,18 @@ static VOID NTAPI cmThread(PVOID context)
          * to activate anything out of D0 (CmNhiStartWork). */
         if (bits & CM_WORK_START) {
             CmNhiStartWork(nhi);
+            /* A bind still to come after the PnP start returns: recorded
+             * before the start is released, so the query device's seed
+             * does not judge the wait from the state before it. */
+            if (nhi->BindOwed) {
+                nhi->ThreadWait = CM_Q_WAIT_BINDING;
+            }
             (VOID)KeSetEvent(&nhi->PnpDone, IO_NO_INCREMENT, FALSE);
             if (nhi->BindOwed) {
                 nhi->BindOwed = 0;
                 CmNhiBind(nhi);
             }
+            nhi->ThreadWait = CM_Q_WAIT_BUSY;
         }
         if (bits & CM_WORK_D3) {
             CmPowerD3Work(nhi, d3Irp);

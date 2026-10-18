@@ -135,6 +135,34 @@ ULONG CmNvlinkActionTunnel(BOOLEAN up, ULONG port, ULONG generation,
     return CM_NVLINK_TUNNEL(port, generation);
 }
 
+ULONG CmNvlinkBridgeTunnel(PULONG bridges, PULONG tunnels, ULONG count,
+                           ULONG bridge, ULONG named)
+{
+    ULONG k;
+    ULONG f;
+
+    f = count;
+    for (k = 0; k < count; k++) {
+        if (tunnels[k] != CM_NVLINK_TUNNEL_NONE && bridges[k] == bridge) {
+            break;
+        }
+        if (tunnels[k] == CM_NVLINK_TUNNEL_NONE && f == count) {
+            f = k;
+        }
+    }
+    if (named == CM_NVLINK_TUNNEL_NONE) {
+        return k != count ? tunnels[k] : CM_NVLINK_TUNNEL_NONE;
+    }
+    if (k == count) {
+        k = f;
+    }
+    if (k != count) {
+        bridges[k] = bridge;
+        tunnels[k] = named;
+    }
+    return named;
+}
+
 ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
                         ULONG slot, ULONG tunnel, PULONG outcome)
 {

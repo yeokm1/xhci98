@@ -58,7 +58,10 @@ static void rxFind(RX *rx, const STOR98LS_TABLE *t, ULONG bus, ULONG slot)
     }
 }
 
-/* One poll: applies and acknowledges a statement for its generation. */
+/* One poll: applies a statement for its generation or a newer one, and
+ * acknowledges it only for the generation it is bound to (stor98cm.h as
+ * Stor98 revised it on 2026-10-18: a newer generation is a newer
+ * instance's, R8c, R8d). */
 static void rxPoll(RX *rx, STOR98LS_TABLE *t)
 {
     STOR98LS_ENTRY e;
@@ -71,7 +74,9 @@ static void rxPoll(RX *rx, STOR98LS_TABLE *t)
         if (!rx->Done) {
             rx->Applied++;
             rx->Done = 1;
-            t->Entry[rx->Index].AckGeneration = e.LinkGeneration;
+            if (e.LinkGeneration == rx->Recorded) {
+                t->Entry[rx->Index].AckGeneration = e.LinkGeneration;
+            }
         }
         return;
     }
@@ -459,6 +464,13 @@ static void test_fresh(void)
     CmNvlinkSetDown(&table, i, TRUE);
     rxPoll(&rx, &table);
     CHECK_EQ(rx.Applied, 1, "the older instance still applies the newer DOWN");
+    CHECK(!CmNvlinkAcked(&table, i),
+          "but never acknowledges it: the CM's wait runs to its end (R8d)");
+    /* The newer instance, bound to generation 2, acknowledges it. */
+    rxFind(&rx, &table, 4, 0);
+    rx.Recorded = 2;
+    rxPoll(&rx, &table);
+    CHECK(CmNvlinkAcked(&table, i), "its own instance acknowledges it");
 
     /* A statement left in place, acknowledged: a new instance binding to
      * it applies it at once (the reader rule has no other guard) - the
@@ -599,6 +611,57 @@ static void test_two_members(void)
           o == CM_NVLINK_UP_BAD, "no table");
     CHECK(CmNvlinkPublishUp(&table, NULL, 4, 0, T1, &o) == CM_NVLINK_NONE &&
           o == CM_NVLINK_UP_BAD, "no tunnel record");
+}
+
+/*
+ * Task 42-A.6: the bridge's latest tunnel (CmNvlinkBridgeTunnel), so an
+ * exposure naming none - a baseline, an owed re-enumeration, the 9x late
+ * scan, another port's up - still pays the generation an earlier
+ * exposure of a new tunnel could not (its bus silent), and pays it once.
+ */
+static void test_bridge_tunnel(void)
+{
+    ULONG br[2];
+    ULONG tn[2];
+    ULONG o;
+    ULONG a;
+    ULONG t;
+
+    br[0] = br[1] = 0;
+    tn[0] = tn[1] = CM_NVLINK_TUNNEL_NONE;
+    CHECK_EQ(CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, CM_NVLINK_TUNNEL_NONE),
+             CM_NVLINK_TUNNEL_NONE, "nothing named yet: none");
+    CHECK_EQ(CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, T1), T1, "named: T1");
+    CHECK_EQ(CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, CM_NVLINK_TUNNEL_NONE), T1,
+             "an exposure naming none: the bridge's T1");
+    CHECK_EQ(CmNvlinkBridgeTunnel(br, tn, 2, 0x0200, T3), T3, "another bridge");
+    CHECK_EQ(CmNvlinkBridgeTunnel(br, tn, 2, 0x0300, T3), T3,
+             "no slot free: still the named one");
+    CHECK_EQ(CmNvlinkBridgeTunnel(br, tn, 2, 0x0300, CM_NVLINK_TUNNEL_NONE),
+             CM_NVLINK_TUNNEL_NONE, "not recorded: none");
+    CHECK_EQ(CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, T2), T2, "a new tunnel: T2");
+    CHECK_EQ(CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, CM_NVLINK_TUNNEL_NONE), T2,
+             "the latest kept");
+    CHECK_EQ(CmNvlinkBridgeTunnel(br, tn, 2, 0x0200, CM_NVLINK_TUNNEL_NONE), T3,
+             "the other bridge's unchanged");
+
+    /* The sequence: port 1's entry UP for T1; its re-plug's T2 exposure
+     * finds the bus silent (nothing published, the UP of T1 still read);
+     * a later exposure naming none, once the function answers, advances
+     * it once, and the one after leaves it. */
+    tableInit();
+    br[0] = br[1] = 0;
+    tn[0] = tn[1] = CM_NVLINK_TUNNEL_NONE;
+    a = CmNvlinkPublishUp(&table, tun, 4, 0,
+                          CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, T1), &o);
+    (void)CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, T2);
+    t = CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, CM_NVLINK_TUNNEL_NONE);
+    (void)CmNvlinkPublishUp(&table, tun, 4, 0, t, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_AGAIN, "the owed generation paid by a later exposure");
+    CHECK_EQ(table.Entry[a].LinkGeneration, 2, "generation 2");
+    (void)CmNvlinkPublishUp(&table, tun, 4, 0, t, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_ALREADY, "and only once");
+    CHECK_EQ(table.Entry[a].LinkGeneration, 2, "still generation 2");
 }
 
 /* A fake publisher for CmNvlinkPublish9x: each step appends its letter. */
@@ -770,6 +833,7 @@ int main(void)
     test_verdicts();
     test_fresh();
     test_two_members();
+    test_bridge_tunnel();
     test_record();
     test_proof();
     test_remove();

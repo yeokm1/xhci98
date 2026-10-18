@@ -105,18 +105,21 @@ ULONG CmQueryBumpGen(UCHAR *answer, ULONG bytes);
 
 /*
  * The connection-manager thread's wait as it records it (CM_NHI.ThreadWait,
- * cm_thr.c): between waits, in a wait with a timeout, in one with none.
+ * cm_thr.c): between waits, in a wait with a timeout, in one with none, or
+ * in the bind a start left to run after the PnP start returned.
  */
 #define CM_Q_WAIT_BUSY      0UL
 #define CM_Q_WAIT_TIMED     1UL
 #define CM_Q_WAIT_FOREVER   2UL
+#define CM_Q_WAIT_BINDING   3UL
 
 /*
  * The inert flag of the answer the query device holds until the thread's
  * first publication (task 42-A.7, design record 25 section 14): seeded
  * from the thread's actual wait - set with no thread (`running` FALSE) or
  * a thread already in its wait with no timeout, clear for one in a wait
- * with a timeout; for a thread between waits, `next` (whether the wait it
+ * with a timeout or in a start's bind (whose outcome its publication
+ * then gives); for a thread between waits, `next` (whether the wait it
  * goes to has no timeout, as its publication judges it). Its pass after
  * the device's creation publishes the flag in any case.
  */

@@ -912,6 +912,9 @@ static void test_seed_inert(void)
           "no thread: inert");
     CHECK(CmQuerySeedInert(FALSE, CM_Q_WAIT_TIMED, FALSE),
           "no thread, whatever was recorded: inert");
+    CHECK(!CmQuerySeedInert(TRUE, CM_Q_WAIT_BINDING, TRUE),
+          "a start's bind still running (PnpDone set before it): not inert, "
+          "whatever the state before the bind reads");
     CHECK(CM_Q_WAIT_BUSY == 0, "a zeroed extension reads between waits");
 }
 

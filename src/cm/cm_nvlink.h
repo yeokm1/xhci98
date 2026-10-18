@@ -321,6 +321,20 @@ ULONG CmNvlinkActionTunnel(BOOLEAN up, ULONG port, ULONG generation,
                            ULONG member, ULONG i);
 
 /*
+ * The tunnel an exposure of `bridge` publishes for (task 42-A.6), from a
+ * domain's record of the latest tunnel named per bridge (`count` slots of
+ * `bridges` and `tunnels`, CM_NVLINK_TUNNEL_NONE in `tunnels` for a free
+ * one): `named` when the exposure names one, recorded as the bridge's
+ * latest; otherwise the latest named for the bridge before, or
+ * CM_NVLINK_TUNNEL_NONE when none was (or no slot was free for it). Every
+ * exposure of a bridge so publishes for its latest tunnel: applied again
+ * it changes nothing (CmNvlinkPublishUp), and an exposure that names none
+ * pays what an earlier one could not.
+ */
+ULONG CmNvlinkBridgeTunnel(PULONG bridges, PULONG tunnels, ULONG count,
+                           ULONG bridge, ULONG named);
+
+/*
  * Before every exposure of `bus` (after the acknowledgement wait): every
  * entry there that carries a statement (DOWN_QUIESCED, not UP) becomes
  * IN_USE alone with LinkGeneration + 1, so a stor98 instance that binds
