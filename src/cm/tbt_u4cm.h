@@ -352,6 +352,10 @@ typedef struct _TBT_U4_PORT {
      * the recovery - section 9.2's discovery after the commit, its state
      * as found, nothing of the departed router's cleanup applied. */
     BOOLEAN DiscoverOwed;
+    /* RecDeparted: a departed router's recorded host-side drain did not
+     * complete (HELD): retried alone, never an ordinary check or teardown
+     * against what now holds the link (tbtU4Departed). */
+    BOOLEAN RecDeparted;
 } TBT_U4_PORT, *PTBT_U4_PORT;
 
 /* A router below depth 1 a predecessor configured (section 7.1). */
@@ -619,6 +623,9 @@ typedef struct _TBT_U4CM {
                                back over the host router's fresh walk: until
                                then a failure restores them whole, so the
                                next snapshot copies no half-built table */
+    ULONG HwErrors;         /* transport failures of the core's requests
+                               (the ring not moving or stopped): a section
+                               9.2 discovery that saw one did not complete */
 
     TBT_U4_COUNTERS Counters;
 } TBT_U4CM, *PTBT_U4CM;

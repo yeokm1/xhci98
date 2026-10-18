@@ -319,10 +319,17 @@ typedef struct _CM_NHI {
     ULONG RecOnes;          /* an all-ones read inside the attempt
                                (cm_thr.c latches it under PREPARE and
                                RECOVERY): part 5's Rearm                  */
-    ULONG RecBusChanged;    /* members whose buses step 6 found changed:
-                               their old entries are released once the
-                               barrier is lifted (R8a)                    */
+    ULONG RecBusChanged;    /* members whose buses a committed recovery's
+                               step 6 found changed, with the old bus
+                               (RecOldBus): their old entries are released
+                               once their devnode's retirement was observed
+                               (RecRelOk, R8a)                            */
     ULONG RecOldBus[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecBusPend;       /* the same for the attempt now running, read
+                               afresh by each one, taken at its commit    */
+    ULONG RecOldBusPend[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecRelOk;         /* RecBusChanged members whose barrier was
+                               lifted by an observed retirement           */
     /* Decision U27: the bind (1) or the resume (2) the loss interrupted;
      * the stage is then CM_STAGE_FAILED, sampled and recovered as ACTIVE
      * is, never a protocol failure's (0). */

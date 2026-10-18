@@ -1059,6 +1059,7 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
     BOOLEAN excl;
 
     r = &nhi->Reenum;
+    nhi->RecBusPend = 0;
     if (!cmTopoUsable(nhi)) {
         return TRUE;
     }
@@ -1092,8 +1093,8 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
         }
         if (((bus >> 8) & 0xFFFFUL) != ((nhi->RecSetBus[k] >> 8) & 0xFFFFUL)) {
             changed |= 1UL << i;
-            nhi->RecBusChanged |= 1UL << i;
-            nhi->RecOldBus[i] = (nhi->RecSetBus[k] >> 8) & 0xFFUL;
+            nhi->RecBusPend |= 1UL << i;
+            nhi->RecOldBusPend[i] = (nhi->RecSetBus[k] >> 8) & 0xFFUL;
             CmLogNote(nhi, "u4.recover.member.bus",
                       (i << 24) | (bus & 0xFFFFFFUL));
         }
@@ -1186,6 +1187,10 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
                 nhi->RecBarred &= ~bit;
                 CmReenumHold(nhi, nhi->RecBarred);
                 CmNvlinkRetireMember(nhi, nhi->Reenum.Topo.Set[i]);
+                if ((nhi->RecBusChanged & bit) != 0) {
+                    /* The observed retirement authorises R8a's release. */
+                    nhi->RecRelOk |= bit;
+                }
                 CmLogNote(nhi, "u4.recover.retired", i);
                 continue;
             }
@@ -1204,18 +1209,19 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
             }
         }
     }
-    if (nhi->RecBusChanged != 0 && cmTopoUsable(nhi)) {
+    if ((nhi->RecBusChanged & nhi->RecRelOk) != 0 && cmTopoUsable(nhi)) {
         /* R8a: a member whose bus changed has its old entries' IN_USE
-         * cleared once no barrier holds it (its devnode retired), retried
-         * while one of them cannot be released yet. */
+         * cleared only once its devnode's retirement was observed (a
+         * member never barred has none), retried while one of them cannot
+         * be released yet. */
         for (i = 0; i < nhi->Reenum.Topo.Tunnels && i < XHCI_TBT_MAX_TUNNELS;
              i++) {
             bit = 1UL << i;
-            if ((nhi->RecBusChanged & bit) != 0 &&
-                (nhi->RecBarred & bit) == 0 &&
+            if ((nhi->RecBusChanged & nhi->RecRelOk & bit) != 0 &&
                 CmNvlinkReleaseBus(nhi, nhi->Reenum.Topo.Set[i],
                                    nhi->RecOldBus[i]) == 0) {
                 nhi->RecBusChanged &= ~bit;
+                nhi->RecRelOk &= ~bit;
             }
         }
     }
@@ -1298,6 +1304,17 @@ static VOID cmU4AfterCommit(PCM_NHI nhi)
     nhi->RecDebtMask = 0;
     cmU4Unlearn(nhi, nhi->RecChanged);
     nhi->RecChanged = 0;
+    /* R8a's old entries, owed once each member's retirement is observed;
+     * an older change still owed keeps its own old bus. */
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if ((nhi->RecBusPend & (1UL << i)) != 0 &&
+            (nhi->RecBusChanged & (1UL << i)) == 0) {
+            nhi->RecOldBus[i] = nhi->RecOldBusPend[i];
+            nhi->RecBusChanged |= 1UL << i;
+            nhi->RecRelOk &= ~(1UL << i);
+        }
+    }
+    nhi->RecBusPend = 0;
     CmLogNote(nhi, "u4.recover.barrier", nhi->RecBarred);
     nhi->RecRetireSent = 0;
     CmReenumHold(nhi, nhi->RecBarred);
@@ -2745,6 +2762,8 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     nhi->RecDebtMask = 0;
     nhi->RecChanged = 0;
     nhi->RecBusChanged = 0;
+    nhi->RecBusPend = 0;
+    nhi->RecRelOk = 0;
     nhi->RecRetireSent = 0;
     nhi->RecUpValid = 0;
     nhi->DmaBytes = 0;

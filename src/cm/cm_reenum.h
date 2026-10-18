@@ -492,6 +492,10 @@ VOID CmCfgwkGone(struct _CM_CFGWK *w, ULONG members, ULONG active);
  * a later call lifts it. <= DISPATCH_LEVEL. */
 VOID CmCfgwkHold(struct _CM_CFGWK *w, ULONG members);
 ULONG CmCfgwkRetired(struct _CM_CFGWK *w);
+/* The members with a re-enumeration call admitted before the hold and
+ * not yet returned: the removal-only request for one waits until it has.
+ * <= DISPATCH_LEVEL. */
+ULONG CmCfgwkEnumBusy(struct _CM_CFGWK *w);
 
 /* Ends the worker: waits for it when it is between calls (and frees it);
  * when it is inside a CONFIGMG call, which may be waiting for this very

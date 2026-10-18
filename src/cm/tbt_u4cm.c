@@ -143,13 +143,19 @@ static BOOLEAN tbtU4Spent(PTBT_U4CM cm)
 static LONG tbtU4RdN(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
                      ULONG addr, ULONG n, PULONG v)
 {
+    LONG rc;
+
     if (tbtU4Spent(cm)) {
         if (tbtU4Off(cm)) {
             cm->Counters.ContainedRefused++;
         }
         return TBT_E_STOPPED;
     }
-    return TbtCtlRead(&cm->Ctl, r, cs, adp, addr, n, v);
+    rc = TbtCtlRead(&cm->Ctl, r, cs, adp, addr, n, v);
+    if (rc == TBT_E_HW || rc == TBT_E_STOPPED || rc == TBT_E_RING_FULL) {
+        cm->HwErrors++;
+    }
+    return rc;
 }
 
 static LONG tbtU4Rd(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
@@ -161,13 +167,19 @@ static LONG tbtU4Rd(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
 static LONG tbtU4WrN(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
                      ULONG addr, ULONG n, const ULONG *v)
 {
+    LONG rc;
+
     if (tbtU4Spent(cm)) {
         if (tbtU4Off(cm)) {
             cm->Counters.ContainedRefused++;
         }
         return TBT_E_STOPPED;
     }
-    return TbtCtlWrite(&cm->Ctl, r, cs, adp, addr, n, v);
+    rc = TbtCtlWrite(&cm->Ctl, r, cs, adp, addr, n, v);
+    if (rc == TBT_E_HW || rc == TBT_E_STOPPED || rc == TBT_E_RING_FULL) {
+        cm->HwErrors++;
+    }
+    return rc;
 }
 
 static LONG tbtU4Wr(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
@@ -387,6 +399,7 @@ static VOID tbtU4TeardownHead(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN nested);
 static VOID tbtU4TeardownTail(PTBT_U4CM cm, PTBT_U4_PORT p);
 static BOOLEAN tbtU4HostRestore(PTBT_U4CM cm, PTBT_U4_PORT p);
 static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls);
+static BOOLEAN tbtU4Departed(PTBT_U4CM cm, PTBT_U4_PORT p, const BOOLEAN *ob);
 
 /* One step of a poll loop of the connection manager's own: the wait, then
  * the safe point. */
@@ -4515,9 +4528,14 @@ static VOID tbtU4DiscoverRead(PTBT_U4CM cm, PTBT_U4_PORT p);
 
 static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
 {
+    ULONG hw;
+
     p->Discovered = FALSE;
+    hw = cm->HwErrors;
     tbtU4DiscoverRead(cm, p);
-    p->Discovered = (BOOLEAN)!tbtU4Spent(cm);
+    /* A transport failure inside it, cancellation or not, is no completed
+     * discovery either. */
+    p->Discovered = (BOOLEAN)(!tbtU4Spent(cm) && cm->HwErrors == hw);
 }
 
 static VOID tbtU4DiscoverRead(PTBT_U4CM cm, PTBT_U4_PORT p)
@@ -5733,6 +5751,8 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     ULONG i;
     PTBT_U4_PORT p;
     BOOLEAN rebuilt;
+    BOOLEAN ob[2];
+    BOOLEAN debt;
 
     if (cm->Failed || cm->Stage != TBT_U4_STAGE_RUNNING || cm->Suspended ||
         cm->Contained) {
@@ -5755,6 +5775,17 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     tbtU4RetryQuarantine(cm);
     for (i = 0; i < cm->PortCount; i++) {
         p = &cm->Ports[i];
+        if (p->RecDeparted) {
+            /* Section 7.7 step 5: a departed router's recorded host-side
+             * drain, owed - retried alone at each tick (its removal debt
+             * was taken at the commit), nothing else made on the port. */
+            ob[0] = p->RecDrainPcie;
+            ob[1] = p->RecDrainUsb3;
+            debt = p->RemovalDebt;
+            (VOID)tbtU4Departed(cm, p, ob);
+            p->RemovalDebt = debt;
+            continue;
+        }
         if (p->DiscoverOwed && !p->Barred) {
             /* Section 7.7 part 3 step 4: a router found on the link of a
              * departed one during a recovery, discovered after the commit
@@ -6585,41 +6616,149 @@ static BOOLEAN tbtU4RecoverDrain(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3,
     return ok;
 }
 
-/* Part 3 step 4's undo of a sequence the loss (or an earlier attempt)
- * interrupted, on a port with no tunnel up at the loss: the writes its
- * record holds, undone - the device side only on the positively
- * identified router (`dev`), the host side as recorded, no sweep. TRUE
- * when everything recorded was undone and the record was complete; else
- * the record keeps what is left (an unread entry stays Incomplete, a
- * device side not written stays owned) for the quarantine and the sweep
- * before the port connects again. */
-static BOOLEAN tbtU4RecoverUndo(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3,
-                                BOOLEAN dev)
+/* One recorded path entry of an interrupted sequence, read now: TRUE when
+ * it still reads as this driver's write - Valid with the output the
+ * sequence wrote there (the pairs tbtU4Follow reads back: host protocol
+ * HopID 8 to lane 0 at Hd, host lane 0 at Hu to the protocol adapter's
+ * HopID 8, device lane at Hd to its protocol adapter's HopID 8, device
+ * protocol HopID 8 to its lane at Hu), or not Valid (drained whatever it
+ * holds). An entry that cannot be read, or whose HopID was never
+ * recorded, is not proven either way (*unread). */
+static BOOLEAN tbtU4StillWritten(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG adp,
+                                 ULONG hop, ULONG outAdp, ULONG outHop,
+                                 BOOLEAN *unread)
 {
-    PTBT_U4_TUNNEL t;
-    ULONG devBits;
-    BOOLEAN incomplete;
-    BOOLEAN present;
-    BOOLEAN ok;
+    ULONG e[2];
 
-    t = usb3 ? &p->Usb3 : &p->Pcie;
-    if ((t->Written & ~TBT_U4_E_BANDWIDTH) == 0 && !t->Incomplete) {
+    if (hop == 0 || outHop == 0 || tbtU4Entry(cm, r, adp, hop, e) != TBT_OK) {
+        *unread = TRUE;
+        return FALSE;
+    }
+    if ((e[0] & TBT_PATH0_VALID) == 0) {
         return TRUE;
     }
-    devBits = dev ? 0 : (t->Written & (TBT_U4_E_DEV_PROTO | TBT_U4_E_DEV_ENABLE |
-                                       TBT_U4_E_DEV_LANE));
-    t->Written &= ~devBits;
-    incomplete = t->Incomplete;
-    t->Incomplete = FALSE;
-    present = p->Dev.Present;
-    if (!dev) {
-        p->Dev.Present = FALSE;
+    return (BOOLEAN)(TBT_PATH0_OUT_ADP(e[0]) == outAdp &&
+                     TBT_PATH0_OUT_HOP(e[0]) == outHop);
+}
+
+/*
+ * Part 3 step 4's undo of a sequence the loss (or an earlier attempt)
+ * interrupted, on a port with no tunnel up at the loss: each write its
+ * record holds undone only where the entry still reads as written
+ * (tbtU4StillWritten) - the entry invalidated and drained, and the
+ * protocol adapter's Path Enable cleared only where its own path is still
+ * this driver's (or was never written) - the device side only on the
+ * positively identified router (`dev`), no sweep and no other entry. An
+ * entry that reads as another path is not this driver's any more: left as
+ * found, its bit dropped from the record. TRUE when nothing recorded is
+ * left; *residual when an entry could not be read (the quarantine's sweep
+ * before the port connects again owes it). A device side not written is
+ * kept owned, and the port stays HELD.
+ */
+static BOOLEAN tbtU4RecoverUndo(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3,
+                                BOOLEAN dev, BOOLEAN *residual)
+{
+    PTBT_U4_ROUTER h;
+    PTBT_U4_ROUTER d;
+    PTBT_U4_TUNNEL t;
+    ULONG hp;
+    ULONG dp;
+    ULONG w;
+    ULONG pt;
+    BOOLEAN unread;
+    BOOLEAN mHp;
+    BOOLEAN mHl;
+    BOOLEAN mDl;
+    BOOLEAN mDp;
+    BOOLEAN ok;
+
+    h = &cm->HostRouter;
+    d = &p->Dev;
+    t = usb3 ? &p->Usb3 : &p->Pcie;
+    w = t->Written;
+    if ((w & ~TBT_U4_E_BANDWIDTH) == 0 && !t->Incomplete) {
+        return TRUE;
     }
-    ok = tbtU4TunnelDown(cm, p, t, usb3);
-    p->Dev.Present = present;
-    t->Written |= devBits;
-    t->Incomplete = incomplete;
-    return (BOOLEAN)(ok && !incomplete && devBits == 0);
+    pt = usb3 ? TBT_ADP_TYPE_USB3_UP : TBT_ADP_TYPE_PCIE_UP;
+    hp = usb3 ? p->Usb3Down : p->PcieDown;
+    dp = (dev && d->Present) ? tbtU4FirstOf(d, pt) : 0;
+    unread = t->Incomplete;
+    mHp = FALSE;
+    mHl = FALSE;
+    mDl = FALSE;
+    mDp = FALSE;
+    if ((w & TBT_U4_E_HOST_PROTO) != 0 && hp != 0) {
+        mHp = tbtU4StillWritten(cm, &h->Route, hp, TBT_HOP_PROTOCOL, p->Lane0,
+                                t->Hd, &unread);
+    }
+    if ((w & TBT_U4_E_HOST_LANE) != 0 && hp != 0) {
+        mHl = tbtU4StillWritten(cm, &h->Route, p->Lane0, t->Hu, hp,
+                                TBT_HOP_PROTOCOL, &unread);
+    }
+    if ((w & TBT_U4_E_DEV_LANE) != 0 && dp != 0) {
+        mDl = tbtU4StillWritten(cm, &d->Route, d->UpAdp, t->Hd, dp,
+                                TBT_HOP_PROTOCOL, &unread);
+    }
+    if ((w & TBT_U4_E_DEV_PROTO) != 0 && dp != 0) {
+        mDp = tbtU4StillWritten(cm, &d->Route, dp, TBT_HOP_PROTOCOL, d->UpAdp,
+                                t->Hu, &unread);
+    }
+    ok = TRUE;
+    if ((w & TBT_U4_E_HOST_ENABLE) != 0 && hp != 0 && h->Adp[hp].CapAdp != 0 &&
+        ((w & TBT_U4_E_HOST_PROTO) == 0 || mHp)) {
+        ok &= tbtU4Disable(cm, p->Index, &h->Route, hp, h->Adp[hp].CapAdp, usb3);
+        t->Written &= ~TBT_U4_E_HOST_ENABLE;
+    }
+    if ((w & TBT_U4_E_DEV_ENABLE) != 0 && dp != 0 && d->Adp[dp].CapAdp != 0 &&
+        ((w & TBT_U4_E_DEV_PROTO) == 0 || mDp)) {
+        ok &= tbtU4Disable(cm, p->Index, &d->Route, dp, d->Adp[dp].CapAdp, usb3);
+        t->Written &= ~TBT_U4_E_DEV_ENABLE;
+    }
+    if (mHp) {
+        ok &= tbtU4Invalidate(cm, p->Index, &h->Route, hp, TBT_HOP_PROTOCOL);
+        t->Written &= ~TBT_U4_E_HOST_PROTO;
+    }
+    if (mHl) {
+        ok &= tbtU4Invalidate(cm, p->Index, &h->Route, p->Lane0, t->Hu);
+        t->Written &= ~TBT_U4_E_HOST_LANE;
+    }
+    if (mDl) {
+        ok &= tbtU4Invalidate(cm, p->Index, &d->Route, d->UpAdp, t->Hd);
+        t->Written &= ~TBT_U4_E_DEV_LANE;
+    }
+    if (mDp) {
+        ok &= tbtU4Invalidate(cm, p->Index, &d->Route, dp, TBT_HOP_PROTOCOL);
+        t->Written &= ~TBT_U4_E_DEV_PROTO;
+    }
+    if (!unread) {
+        /* Every recorded host entry was read: one that reads as another
+         * path is not this driver's, and neither is that adapter's enable. */
+        if ((w & TBT_U4_E_HOST_PROTO) != 0 && !mHp) {
+            t->Written &= ~(TBT_U4_E_HOST_PROTO | TBT_U4_E_HOST_ENABLE);
+        }
+        if ((w & TBT_U4_E_HOST_LANE) != 0 && !mHl) {
+            t->Written &= ~TBT_U4_E_HOST_LANE;
+        }
+        if (dp != 0 && (w & TBT_U4_E_DEV_PROTO) != 0 && !mDp) {
+            t->Written &= ~(TBT_U4_E_DEV_PROTO | TBT_U4_E_DEV_ENABLE);
+        }
+        if (dp != 0 && (w & TBT_U4_E_DEV_LANE) != 0 && !mDl) {
+            t->Written &= ~TBT_U4_E_DEV_LANE;
+        }
+        t->Incomplete = FALSE;
+    }
+    if (usb3 && (w & ~TBT_U4_E_BANDWIDTH) != 0) {
+        /* Guide 5.5.1 step 1's gap runs from any USB3 path teardown. */
+        p->LastUsb3TeardownUs = tbtU4Now(cm);
+        p->Usb3GapValid = TRUE;
+    }
+    if (usb3 && (t->Written & TBT_U4_E_BANDWIDTH) != 0 && !tbtU4ReleaseBw(cm, p)) {
+        ok = FALSE;
+    }
+    if (unread || !ok) {
+        *residual = TRUE;
+    }
+    return (BOOLEAN)(ok && !unread && (t->Written & ~TBT_U4_E_BANDWIDTH) == 0);
 }
 
 /* Part 3 step 4 (iii): the link's TMU read now, as tbtU4TmuEnable left it
@@ -6632,6 +6771,7 @@ static BOOLEAN tbtU4TmuAsLeft(PTBT_U4CM cm, PTBT_U4_PORT p)
     PTBT_U4_ROUTER h;
     PTBT_U4_ROUTER d;
     ULONG v;
+    ULONG avg;
 
     h = &cm->HostRouter;
     d = &p->Dev;
@@ -6648,15 +6788,33 @@ static BOOLEAN tbtU4TmuAsLeft(PTBT_U4CM cm, PTBT_U4_PORT p)
     if ((v & TBT_TMU_RTR0_TSP_NS) != 0) {
         return TRUE;
     }
+    /* HiFi-Bi completed: no time disruption left set, the measurement
+     * window and averaging constants as written, TSPacketInterval HiFi,
+     * uni-directional mode clear and time sync enabled on both lane 0
+     * adapters. */
+    avg = TBT_TMU_AVG_CONST_HIFI | (TBT_TMU_AVG_CONST_HIFI << 6) |
+          (TBT_TMU_AVG_CONST_HIFI << 12) | (TBT_TMU_AVG_CONST_HIFI << 18);
     if (!p->TmuConfigured || d->Adp[d->UpAdp].CapTmu == 0 ||
         h->Adp[p->Lane0].CapTmu == 0 ||
+        (v & TBT_TMU_RTR0_TD) != 0 ||
+        (v & TBT_TMU_RTR0_FREQ_WIND_MASK) !=
+            (TBT_TMU_FREQ_WINDOW_HIFI << TBT_TMU_RTR0_FREQ_WIND_SHIFT) ||
+        tbtU4Rd(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapTmu + TBT_TMU_RTR_CS_15,
+                &v) != TBT_OK ||
+        (v & TBT_TMU_RTR15_AVG_MASK) != avg ||
         tbtU4Rd(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapTmu + TBT_TMU_RTR_CS_3,
                 &v) != TBT_OK ||
         ((v & TBT_TMU_RTR3_INTERVAL_MASK) >> TBT_TMU_RTR3_INTERVAL_SHIFT) !=
             TBT_TMU_INTERVAL_HIFI ||
         tbtU4Rd(cm, &d->Route, TBT_CS_ADAPTER, d->UpAdp,
+                d->Adp[d->UpAdp].CapTmu + TBT_TMU_ADP_CS_3, &v) != TBT_OK ||
+        (v & TBT_TMU_ADP3_UDM) != 0 ||
+        tbtU4Rd(cm, &d->Route, TBT_CS_ADAPTER, d->UpAdp,
                 d->Adp[d->UpAdp].CapTmu + TBT_TMU_ADP_CS_6, &v) != TBT_OK ||
         (v & TBT_TMU_ADP6_DTS) != 0 ||
+        tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
+                h->Adp[p->Lane0].CapTmu + TBT_TMU_ADP_CS_3, &v) != TBT_OK ||
+        (v & TBT_TMU_ADP3_UDM) != 0 ||
         tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
                 h->Adp[p->Lane0].CapTmu + TBT_TMU_ADP_CS_6, &v) != TBT_OK ||
         (v & TBT_TMU_ADP6_DTS) != 0) {
@@ -6735,6 +6893,65 @@ static VOID tbtU4RecoverEmpty(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN replaced)
     p->CheckPending = TRUE;
 }
 
+/*
+ * A departed port (part 3 steps 4 and 5): each tunnel owed (`ob`) drained
+ * by its recorded teardown on the host side alone, then the port EMPTY
+ * (tbtU4RecoverEmpty, as found on a link another router holds). A drain
+ * that did not complete keeps the port HELD as departed (RecDeparted): its
+ * records and quarantine kept, the device side forgotten, nothing of the
+ * departed router's lane, TMU or tail cleanup left owed on a held link,
+ * and no ordinary check or teardown made for it - the recorded host-side
+ * drain alone is retried, by the next attempt or at each tick after the
+ * commit (TbtU4Poll), until it completes. TRUE when EMPTY.
+ */
+static BOOLEAN tbtU4Departed(PTBT_U4CM cm, PTBT_U4_PORT p, const BOOLEAN *ob)
+{
+    ULONG k;
+    ULONG lane;
+    BOOLEAN held;
+    BOOLEAN replaced;
+
+    /* A link still connected is another router's (a replacement, or the
+     * same one with its enumeration given up): an unreadable lane is
+     * taken as connected. */
+    replaced = (BOOLEAN)(tbtU4LaneRd(cm, &cm->HostRouter, p->Lane0, &lane) != TBT_OK ||
+                         TbtU4LaneClass(TBT_LANE1_STATE(lane)) !=
+                             TBT_U4_LANE_DISCONNECTED);
+    held = FALSE;
+    for (k = 0; k < 2; k++) {
+        if (ob[k] && !tbtU4RecoverDrain(cm, p, (BOOLEAN)(k == 1), FALSE)) {
+            held = TRUE;
+        }
+    }
+    if (held) {
+        tbtU4DropLinks(cm, p);
+        if (replaced) {
+            p->LaneWritten = FALSE;
+            p->Lane1Disabled = FALSE;
+            p->PcSetHost = FALSE;
+            p->TmuConfigured = FALSE;
+            p->TmuQuarantine = FALSE;
+            cm->DeferredTail[p - cm->Ports] = 0;
+        }
+        p->Dev.Present = FALSE;
+        if (!p->RecDeparted || p->State != TBT_U4_HELD) {
+            cm->Counters.RecoverHeld++;
+            cm->Counters.PortsHeld++;
+        }
+        p->RecDeparted = TRUE;
+        p->State = TBT_U4_HELD;
+        p->Why = TBT_U4_WHY_RECOVER;
+        p->ClassifyPending = TRUE;
+        return FALSE;
+    }
+    p->RecDeparted = FALSE;
+    p->RecDrainPcie = FALSE;
+    p->RecDrainUsb3 = FALSE;
+    tbtU4RecoverEmpty(cm, p, replaced);
+    tbtU4Log(cm, "u4.recover.departed", (p->Index << 8) | (replaced ? 1UL : 0UL));
+    return TRUE;
+}
+
 /* Part 3 step 4 for one port, against its record from the snapshot (and
  * whatever an earlier attempt left in it): every tunnel up at the loss, or
  * owed a rebuild or a drain by an earlier attempt, is an obligation of its
@@ -6751,7 +6968,6 @@ static VOID tbtU4RecoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
     BOOLEAN dev;
     ULONG what;
     ULONG k;
-    ULONG lane;
     BOOLEAN usb3;
 
     ob[0] = (BOOLEAN)(p->Pcie.Up || p->RebuildPcie || p->RecDrainPcie);
@@ -6774,10 +6990,11 @@ static VOID tbtU4RecoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
                 (p->Usb3.Written & ~TBT_U4_E_BANDWIDTH) != 0 ||
                 p->Pcie.Incomplete || p->Usb3.Incomplete) {
                 /* Part 3 step 4: the sequence's writes undone from the
-                 * record before the port is classified, the device side
-                 * only on the positively identified router; what was
-                 * never read, or did not undo, is quarantined and swept
-                 * before the port connects again. */
+                 * record before the port is classified, where they still
+                 * read as written, the device side only on the positively
+                 * identified router; an entry never read, or that did not
+                 * undo, is quarantined and swept before the port connects
+                 * again. */
                 dev = FALSE;
                 cm->ActivePort = p->Index;
                 if (p->Dev.Present) {
@@ -6786,10 +7003,12 @@ static VOID tbtU4RecoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
                                     TBT_U4_RES_SAME);
                     cm->RelockExplained = FALSE;
                 }
+                held = FALSE;
                 for (k = 0; k < 2; k++) {
-                    if (!tbtU4RecoverUndo(cm, p, (BOOLEAN)(k == 1), dev)) {
-                        p->HostResidual = TRUE;
-                    }
+                    (VOID)tbtU4RecoverUndo(cm, p, (BOOLEAN)(k == 1), dev, &held);
+                }
+                if (held) {
+                    p->HostResidual = TRUE;
                 }
                 cm->ActivePort = 0;
             }
@@ -6801,9 +7020,15 @@ static VOID tbtU4RecoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
     }
     hadPcie = ob[0];
     cm->ActivePort = p->Index;
-    cm->RelockExplained = (BOOLEAN)!cm->HostRouter.Preserved;
-    what = tbtU4ResumeClass(cm, p);
-    cm->RelockExplained = FALSE;
+    if (p->RecDeparted) {
+        /* An earlier attempt's departed drain, still owed: the router is
+         * gone already, nothing of it is read again. */
+        what = TBT_U4_RES_REMOVED;
+    } else {
+        cm->RelockExplained = (BOOLEAN)!cm->HostRouter.Preserved;
+        what = tbtU4ResumeClass(cm, p);
+        cm->RelockExplained = FALSE;
+    }
     tbtU4Log(cm, "u4.recover.class", (p->Index << 8) | what);
     if (what == TBT_U4_RES_REMOVED || what == TBT_U4_RES_LOST) {
         /* Departed (a router that gave up its enumeration reads as
@@ -6811,39 +7036,9 @@ static VOID tbtU4RecoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
          * alone drained - a replacement's adapters are never written -
          * the port EMPTY, its device gone; connected afresh after the
          * commit when its barrier allows. No TUNNEL_DOWN and no
-         * statement. A drain that did not complete keeps the port HELD
-         * with its records, its entries quarantined and the obligation
-         * (RecDrain*) owed to the next attempt (step 5), never EMPTY. */
-        held = FALSE;
-        for (k = 0; k < 2; k++) {
-            usb3 = (BOOLEAN)(k == 1);
-            if (ob[k] && !tbtU4RecoverDrain(cm, p, usb3, FALSE)) {
-                held = TRUE;
-            }
-        }
+         * statement. */
         cm->Counters.RecoverDeparted += (ob[0] ? 1UL : 0) + (ob[1] ? 1UL : 0);
-        if (hadPcie) {
-            p->RemovalDebt = TRUE;
-        }
-        if (held) {
-            p->State = TBT_U4_HELD;
-            p->Why = TBT_U4_WHY_RECOVER;
-            p->ClassifyPending = TRUE;
-            cm->Counters.RecoverHeld++;
-            cm->Counters.PortsHeld++;
-            cm->ActivePort = 0;
-            return;
-        }
-        /* A link still connected is another router's (a replacement, or
-         * the same one with its enumeration given up): discovered as
-         * found, nothing of the departed router's lane or TMU cleanup
-         * applied to it. An unreadable lane is taken as connected. */
-        dev = (BOOLEAN)(tbtU4LaneRd(cm, &cm->HostRouter, p->Lane0, &lane) != TBT_OK ||
-                        TbtU4LaneClass(TBT_LANE1_STATE(lane)) !=
-                            TBT_U4_LANE_DISCONNECTED);
-        p->RecDrainPcie = FALSE;
-        p->RecDrainUsb3 = FALSE;
-        tbtU4RecoverEmpty(cm, p, dev);
+        (VOID)tbtU4Departed(cm, p, ob);
         if (hadPcie) {
             p->RemovalDebt = TRUE;
         }

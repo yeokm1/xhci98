@@ -2060,9 +2060,15 @@ BOOLEAN CmReenumRetire(PCM_NHI nhi, ULONG i, PULONG answers)
         return TRUE;
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+        CmCfgwkHold(r->Wk, nhi->RecBarred);
+        if ((CmCfgwkEnumBusy(r->Wk) & (1UL << i)) != 0) {
+            /* A re-enumeration admitted before the hold has not returned:
+             * the removal follows it, never precedes it (asked again at
+             * the next pass). */
+            return FALSE;
+        }
         CmNvlinkAwait(nhi);
         r->WkActive = cmOwnedMask(nhi);
-        CmCfgwkHold(r->Wk, nhi->RecBarred);
         CmCfgwkGone(r->Wk, 1UL << i, r->WkActive);
         CmLogNote(nhi, "cm.reenum.9x.retire", i);
         return TRUE;
