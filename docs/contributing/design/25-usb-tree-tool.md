@@ -1036,7 +1036,24 @@ where the mark service of record 21 section 7.4, revision 3, runs (task
 42-0.4; the code is 42-A.5): this section's route stays for a unit the
 service has not reached (its restart vetoed, the service stopped, a value
 not yet in effect), and the window shows the mark's state beside the
-unit as that revision says.
+unit as that revision says. As built (42-A.5's tool part, 2026-10-19): on NT a unit's
+details read "Safe-removal mark: listed by Windows", "mark written; takes
+effect at the next start of the device", "mark written, but Windows does
+not list it", "not marked", or "not read" with the reason, from its NHI's
+marks answer (`IOCTL_XHCICM_MARKS`, read at each refresh with the query and
+held to its epoch) and the unit's `LowerFilters`; the NHI's details add
+"Mark service: running", "stopped", "not installed" or "not read"
+(`QueryServiceStatus`, looked up at run time). After the tool's own
+successful `CM_Request_Device_EjectA` of a unit, and only when it runs as
+an administrator (an elevated run on Vista and 7), it waits up to 3 s for
+the unit's entry with a departure pending and writes
+`XhciCmEjectConfirm` (`CM_QC_*`, 28 bytes) to the NHI's driver key while
+the value is absent or empty, under the shared eject mutex it already
+holds, and says whether the eject was confirmed; the query-and-remove
+fallback confirms nothing (record 21 section 7.4). The pure half
+(`tr_mark_state`, `tr_mark_find`, `tr_msz_has`, `tr_mark_member`) is in
+`test\test_tr.c`; the marks answer is parsed by `xhcimark\mark_core.c`,
+which XHCITR links.
 
 XHCIINST needs nothing new: it runs as an administrator (record 24 section
 7.2).

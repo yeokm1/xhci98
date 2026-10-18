@@ -2575,6 +2575,79 @@ static void test_resources(void)
     }
 }
 
+/* 42-A.5: the mark lines (record 21 section 7.4, revision 3, "The
+ * viewer"). */
+static MK_MARKS markSet;
+
+static void test_marks(void)
+{
+    static const char lf1[] = "PartMgr\0XHCICM\0";
+    static const char lf2[] = "xhcicmf\0xhcicmx\0";
+    static const char lf3[] = "xhcicm";    /* no terminator at all */
+    INST_U32 mem = tr_mark_member(6, 0x00030001UL);
+
+    CHECK_EQ(mem, 0x0619UL, "member: bus 6, device 3, function 1");
+    CHECK_EQ(tr_mark_member(0x106, 0x001F0007UL), 0x06FFUL,
+             "member: masked to 8 bits of bus, 5 of device, 3 of function");
+    CHECK(tr_msz_has(lf1, sizeof(lf1), "xhcicm"), "found without case");
+    CHECK(!tr_msz_has(lf2, sizeof(lf2), "xhcicm"), "no prefix match");
+    CHECK(tr_msz_has(lf3, 6, "xhcicm"), "an unterminated last string");
+    CHECK(!tr_msz_has("", 1, "xhcicm"), "an empty value");
+    CHECK(!tr_msz_has(lf1, 0, "xhcicm"), "no bytes");
+
+    memset(&markSet, 0, sizeof(markSet));
+    markSet.Count = 3;
+    markSet.E[0].Member = mem;
+    markSet.E[0].Bus = 7;
+    markSet.E[0].Address = 0;
+    markSet.E[0].Flags = MK_EF_REPORTED | MK_EF_LOCATED | MK_EF_ADD_ATT |
+                         MK_EF_REMOVABLE;
+    markSet.E[1].Member = mem;
+    markSet.E[1].Bus = 8;
+    markSet.E[1].Address = 0;
+    markSet.E[1].Flags = MK_EF_REPORTED | MK_EF_LOCATED;
+    markSet.E[1].Pending = 1234;
+    markSet.E[2].Member = mem;
+    markSet.E[2].Bus = 9;
+    markSet.E[2].Flags = MK_EF_LOCATED;     /* a tombstone */
+    CHECK_EQ(tr_mark_find(&markSet, mem, 7, 0, 0), 0, "the unit's entry");
+    CHECK_EQ(tr_mark_find(&markSet, mem, 7, 0, 1), -1,
+             "no departure pending on it");
+    CHECK_EQ(tr_mark_find(&markSet, mem, 8, 0, 1), 1, "a pending departure");
+    CHECK_EQ(tr_mark_find(&markSet, mem, 9, 0, 0), -1, "a tombstone is not one");
+    CHECK_EQ(tr_mark_find(&markSet, mem + 8, 7, 0, 0), -1, "another member");
+    CHECK_EQ(tr_mark_find(NULL, mem, 7, 0, 0), -1, "no answer");
+    markSet.E[2].Bus = 7;
+    markSet.E[2].Flags = MK_EF_REPORTED | MK_EF_LOCATED;
+    CHECK_EQ(tr_mark_find(&markSet, mem, 7, 0, 0), -1, "two entries: none");
+    markSet.E[2].Bus = 9;
+
+    CHECK_EQ(tr_mark_state(0, NULL, -1, 0), TR_MK_OLD, "an older driver");
+    CHECK_EQ(tr_mark_state(-1, NULL, -1, 1), TR_MK_FAILED, "a failed answer");
+    CHECK_EQ(tr_mark_state(1, &markSet, 0, 1), TR_MK_LISTED, "Removable set");
+    CHECK_EQ(tr_mark_state(1, &markSet, 0, 0), TR_MK_LISTED,
+             "Removable set without the value (the first plug's attachment)");
+    CHECK_EQ(tr_mark_state(1, &markSet, 1, 1), TR_MK_WRITTEN,
+             "the value, no attachment: at the next start");
+    CHECK_EQ(tr_mark_state(1, &markSet, -1, 1), TR_MK_WRITTEN,
+             "the value, no entry");
+    CHECK_EQ(tr_mark_state(1, &markSet, 1, 0), TR_MK_NOT, "no value, no attachment");
+    markSet.E[1].Flags |= MK_EF_BUS_ATT;
+    CHECK_EQ(tr_mark_state(1, &markSet, 1, 1), TR_MK_NOTLISTED,
+             "the value and an attachment, Removable not set");
+    CHECK_EQ(tr_mark_state(1, &markSet, 7, 1), TR_MK_WRITTEN,
+             "an entry index past the count is none");
+    CHECK(strcmp(tr_mark_text(TR_MK_LISTED), "listed by Windows") == 0,
+          "listed text");
+    CHECK(strcmp(tr_mark_text(TR_MK_WRITTEN), "mark written; takes effect at "
+                 "the next start of the device") == 0, "written text");
+    CHECK(strcmp(tr_mark_text(TR_MK_NOT), "not marked") == 0, "not text");
+    CHECK(strcmp(tr_mksvc_text(TR_SV_RUNNING), "running") == 0, "running");
+    CHECK(strcmp(tr_mksvc_text(TR_SV_ABSENT), "not installed") == 0,
+          "not installed");
+    CHECK(strcmp(tr_mksvc_text(99), "not read") == 0, "unknown state");
+}
+
 int main(void)
 {
     test_printf();
@@ -2594,6 +2667,7 @@ int main(void)
     test_levels();
     test_labels();
     test_resources();
+    test_marks();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {

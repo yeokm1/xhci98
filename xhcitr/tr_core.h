@@ -18,6 +18,7 @@
 #define TR_CORE_H
 
 #include <stddef.h>
+#include "../xhcimark/mark_core.h"
 
 typedef unsigned long TR_U32;
 
@@ -829,5 +830,45 @@ int tr_level_elev_result(int launched, TR_U32 launchErr, int finished,
 /* The offer after a level was written: the drivers read it only at
  * start. */
 const char *tr_level_restart_question(void);
+
+/* ---- 42-A.5: the safe-removal mark, shown (record 21 section 7.4,
+ * revision 3, "The viewer") ------------------------------------------- */
+
+/* A Thunderbolt unit's mark, from the marks answer (cm_query.h CM_QM_*)
+ * and its devnode's LowerFilters. */
+#define TR_MK_OLD       0   /* this xhcicm.sys does not answer the request */
+#define TR_MK_FAILED    1   /* the request failed                          */
+#define TR_MK_LISTED    2   /* Removable read set: Windows lists it        */
+#define TR_MK_WRITTEN   3   /* the value present, no attachment yet        */
+#define TR_MK_NOTLISTED 4   /* the value present and attached, yet Windows
+                               does not list it                            */
+#define TR_MK_NOT       5   /* no value, no attachment                     */
+
+/* 1 when the multi-string msz (bytes long, possibly unterminated at the
+ * end) holds `name` as one of its strings, without case. */
+int tr_msz_has(const char *msz, size_t bytes, const char *name);
+/* A PCI function's location as the marks answer gives a member: bus 15:8,
+ * device 7:3, function 2:0, from its bus number and DevicePropertyAddress
+ * (device 31:16, function 15:0). */
+INST_U32 tr_mark_member(INST_U32 bus, INST_U32 address);
+/* The one entry of m for a unit behind `member` at bus/address, reported
+ * and located, and with `pending` set a departure pending too; -1 for
+ * none or two. */
+int tr_mark_find(const MK_MARKS *m, INST_U32 member, INST_U32 bus,
+                 INST_U32 address, int pending);
+/* The state (TR_MK_*): `answered` 1 read, 0 not served (an older driver),
+ * -1 failed; `entry` tr_mark_find's, with pending 0; filterPresent the
+ * devnode's LowerFilters names xhcicm. */
+int tr_mark_state(int answered, const MK_MARKS *m, int entry,
+                  int filterPresent);
+const char *tr_mark_text(int state);
+
+/* The mark service's state, as QueryServiceStatus read it. */
+#define TR_SV_UNREAD    0
+#define TR_SV_ABSENT    1   /* not installed (ERROR_SERVICE_DOES_NOT_EXIST) */
+#define TR_SV_STOPPED   2
+#define TR_SV_RUNNING   3
+#define TR_SV_OTHER     4   /* starting, stopping, paused                  */
+const char *tr_mksvc_text(int state);
 
 #endif /* TR_CORE_H */

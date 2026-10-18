@@ -101,6 +101,7 @@ typedef TR_NIDA TR_NID;
 #define TR_CM_DRP_FRIENDLYNAME      0x0000000DUL
 #define TR_IOCTL_STORAGE_GET_DEVICE_NUMBER 0x002D1080UL
 #define TR_CM_DRP_CAPABILITIES      0x00000010UL
+#define TR_CM_DRP_LOWERFILTERS      0x00000013UL
 #define TR_CM_DRP_BUSNUMBER         0x00000016UL
 #define TR_CM_DRP_ADDRESS           0x0000001DUL
 #define TR_CM_DEVCAP_REMOVABLE      0x00000004UL
@@ -257,6 +258,8 @@ typedef struct _NHI {
     int HaveRec;            /* the registry record, read only              */
     const unsigned char *R; /* the record shown                            */
     char Why[160];
+    MK_MARKS *M;            /* the marks answer (NT; 42-A.5)               */
+    int MAnswered;          /* 1 read, 0 not served, -1 failed             */
 } NHI;
 
 typedef struct _UCTRL {
@@ -1195,8 +1198,86 @@ static void nhi_free(void)
     for (k = 0; k < nhiCount; k++) {
         free(nhi[k].QBuf);
         nhi[k].QBuf = NULL;
+        free(nhi[k].M);
+        nhi[k].M = NULL;
     }
     nhiCount = 0;
+}
+
+/* The marks answer of query device qname (cm_query.h CM_QM_*; record 21
+ * section 7.4, revision 3): 1 read into m, 0 not served (a driver from
+ * before 42-A.5 answers STATUS_INVALID_DEVICE_REQUEST), -1 failed. */
+static int marks_read(const char *qname, MK_MARKS *m)
+{
+    static unsigned char b[CM_QM_MAX_BYTES];
+    HANDLE h;
+    DWORD got = 0;
+    INST_U32 need = 0;
+    int r;
+
+    memset(m, 0, sizeof(*m));
+    if (qname[0] == '\0') {
+        return -1;
+    }
+    h = open_device(qname);
+    if (h == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    if (!DeviceIoControl(h, CM_QM_IOCTL, NULL, 0, b, sizeof(b), &got, NULL)) {
+        DWORD e = GetLastError();
+        CloseHandle(h);
+        return e == ERROR_INVALID_FUNCTION ? 0 : -1;
+    }
+    CloseHandle(h);
+    if (got > sizeof(b)) {
+        return -1;
+    }
+    r = mk_marks_parse(b, got, m, &need);
+    return r == 1 ? 1 : -1;
+}
+
+typedef SC_HANDLE (WINAPI *PFN_OPENSCM)(LPCSTR, LPCSTR, DWORD);
+typedef SC_HANDLE (WINAPI *PFN_OPENSVC)(SC_HANDLE, LPCSTR, DWORD);
+typedef BOOL (WINAPI *PFN_QSVC)(SC_HANDLE, LPSERVICE_STATUS);
+typedef BOOL (WINAPI *PFN_CLOSESVC)(SC_HANDLE);
+
+/* The mark service's state (TR_SV_*), NT only; the service routines looked
+ * up at run time, as 98 SE's ADVAPI32 is not to be relied on for them. */
+static int mksvc_state(void)
+{
+    HMODULE adv = GetModuleHandleA("advapi32.dll");
+    PFN_OPENSCM openScm = (PFN_OPENSCM)proc(adv, "OpenSCManagerA");
+    PFN_OPENSVC openSvc = (PFN_OPENSVC)proc(adv, "OpenServiceA");
+    PFN_QSVC query = (PFN_QSVC)proc(adv, "QueryServiceStatus");
+    PFN_CLOSESVC closeSvc = (PFN_CLOSESVC)proc(adv, "CloseServiceHandle");
+    SC_HANDLE scm;
+    SC_HANDLE svc;
+    SERVICE_STATUS st;
+    int r = TR_SV_UNREAD;
+
+    if (!envNt || openScm == NULL || openSvc == NULL || query == NULL ||
+        closeSvc == NULL) {
+        return TR_SV_UNREAD;
+    }
+    scm = openScm(NULL, NULL, SC_MANAGER_CONNECT);
+    if (scm == NULL) {
+        return TR_SV_UNREAD;
+    }
+    svc = openSvc(scm, "xhcimark", SERVICE_QUERY_STATUS);
+    if (svc == NULL) {
+        r = GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST ? TR_SV_ABSENT
+                                                           : TR_SV_UNREAD;
+    } else {
+        memset(&st, 0, sizeof(st));
+        if (query(svc, &st)) {
+            r = st.dwCurrentState == SERVICE_RUNNING ? TR_SV_RUNNING
+              : st.dwCurrentState == SERVICE_STOPPED ? TR_SV_STOPPED
+                                                     : TR_SV_OTHER;
+        }
+        closeSvc(svc);
+    }
+    closeSvc(scm);
+    return r;
 }
 
 /* Each NHI's state: its query when the mapping holds, else the registry
@@ -1223,6 +1304,17 @@ static void nhi_read(NHI *h)
         query_read(h->QName, h->Id, &h->QBuf, &h->Q, h->NameUnique, &h->ByName)) {
         h->HaveQ = 1;
         h->R = h->Q.Rec;
+        /* The marks answer, on NT, where the mark is (42-A.5). */
+        if (envNt) {
+            free(h->M);
+            h->M = (MK_MARKS *)calloc(1, sizeof(MK_MARKS));
+            h->MAnswered = h->M != NULL ? marks_read(h->QName, h->M) : -1;
+            if (h->MAnswered == 1 &&
+                (h->M->EpochLo != h->Q.EpochLo || h->M->EpochHi != h->Q.EpochHi)) {
+                /* Another start between the two answers: not this one's. */
+                h->MAnswered = -1;
+            }
+        }
         return;
     }
     tr_copy(h->Why, h->QName[0] ? "its query device did not answer for it"
@@ -2580,6 +2672,43 @@ static void details_devnode(TR_TEXT *t, int dn)
     details_resources(t, d);
 }
 
+/* The NHI index and member location of unit u (its parent, the tunnel
+ * port), or -1. */
+static int unit_member(const WALK *w, int u, INST_U32 *member)
+{
+    int p = w->N[u].Parent;
+
+    if (p < 0 || !w->N[p].HasLoc || !w->N[u].HasLoc) {
+        return -1;
+    }
+    *member = tr_mark_member(w->N[p].Bus, w->N[p].Addr);
+    return w->N[p].PortNhi;
+}
+
+/* Unit u's mark state (TR_MK_*), from its NHI's marks answer and its
+ * devnode's LowerFilters (record 21 section 7.4, revision 3). */
+static int unit_mark(int u)
+{
+    static char lf[1024];
+    INST_U32 member = 0;
+    DWORD n = 0;
+    int k = unit_member(&gw, u, &member);
+    int entry;
+
+    if (k < 0 || k >= nhiCount || !nhi[k].HaveQ) {
+        return TR_MK_FAILED;
+    }
+    if (nhi[k].MAnswered != 1) {
+        return tr_mark_state(nhi[k].MAnswered, NULL, -1, 0);
+    }
+    entry = tr_mark_find(nhi[k].M, member, gw.N[u].Bus, gw.N[u].Addr, 0);
+    if (!prop_ok(cm_prop(gw.N[u].Dn, TR_CM_DRP_LOWERFILTERS, lf, sizeof(lf),
+                         &n))) {
+        return TR_MK_FAILED;
+    }
+    return tr_mark_state(1, nhi[k].M, entry, tr_msz_has(lf, n, "xhcicm"));
+}
+
 static void details_unit(TR_TEXT *t, int dn)
 {
     const DNODE *d = &gw.N[dn];
@@ -2623,6 +2752,9 @@ static void details_unit(TR_TEXT *t, int dn)
             tr_put(t, "  Windows does not list it in Safely Remove Hardware; "
                       "stop it from here.\n");
         }
+    }
+    if (envNt) {
+        tr_printf(t, "  Safe-removal mark: %s.\n", tr_mark_text(unit_mark(u)));
     } else if (!envNt) {
         tr_printf(t, "  %s\n", (gw.N[u].Status & TR_DN_REMOVABLE)
                                   ? "Marked removable by the Thunderbolt driver."
@@ -2660,6 +2792,10 @@ static void details_nhi(TR_TEXT *t, int k)
                   (unsigned long)h->Q.Pass, (unsigned long)h->Q.AgeMs,
                   tr_query_current(&h->Q) ? "" : " (not current)");
         tr_printf(t, "  Liveness:            %s\n", tr_live_text(h->Q.Live));
+        if (envNt) {
+            tr_printf(t, "  Mark service:        %s (xhcimark)\n",
+                      tr_mksvc_text(mksvc_state()));
+        }
         tr_printf(t, "  Start epoch:         %08lX%08lX\n",
                   (unsigned long)h->Q.EpochHi, (unsigned long)h->Q.EpochLo);
         if (h->Q.Flags & CM_Q_F_STOPPING) {
@@ -3860,6 +3996,81 @@ done:
     return kind;
 }
 
+/* XhciCmEjectConfirm (cm_query.h CM_QC_*) for unit u of walk w, after the
+ * tool's own successful CM_Request_Device_EjectA, with the shared eject
+ * mutex held: the unit's entry in its NHI's marks answer with a departure
+ * pending (waited for up to 3 s), the value written to the NHI's driver key
+ * only while it is absent or empty. Returns a line for the answer, or NULL
+ * when there is nothing to say. Only an administrator writes it. */
+static const char *ej_mark_confirm(const WALK *w, int u)
+{
+    MK_MARKS *m;
+    unsigned char v[MK_QC_BYTES];
+    BYTE old[64];
+    char path[200];
+    INST_U32 member = 0;
+    DWORD type;
+    DWORD n;
+    HKEY key;
+    LONG r;
+    int k = unit_member(w, u, &member);
+    int e = -1;
+    int tries;
+    const char *drv;
+
+    if (k < 0 || k >= nhiCount || !nhi[k].HaveQ || nhi[k].Node < 0 ||
+        nhi[k].Node >= gw.Count) {
+        return NULL;
+    }
+    drv = gw.N[nhi[k].Node].Driver;
+    if (drv[0] == '\0') {
+        return NULL;
+    }
+    m = (MK_MARKS *)calloc(1, sizeof(MK_MARKS));
+    if (m == NULL) {
+        return NULL;
+    }
+    for (tries = 0; tries < 30 && e < 0; tries++) {
+        int a = marks_read(nhi[k].QName, m);
+        if (a == 0) {
+            free(m);
+            return NULL;    /* a driver from before 42-A.5 */
+        }
+        if (a == 1) {
+            e = tr_mark_find(m, member, w->N[u].Bus, w->N[u].Addr, 1);
+        }
+        if (e < 0) {
+            Sleep(100);
+        }
+    }
+    if (e < 0) {
+        free(m);
+        return "The Thunderbolt driver did not report the departure, so the "
+               "eject was not confirmed to it.";
+    }
+    mk_confirm_build(v, m, &m->E[e]);
+    free(m);
+    tr_sprintf(path, sizeof(path), "SYSTEM\\CurrentControlSet\\Control\\Class\\%s",
+               drv);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ | KEY_SET_VALUE,
+                      &key) != ERROR_SUCCESS) {
+        return "The eject could not be confirmed to the Thunderbolt driver.";
+    }
+    n = sizeof(old);
+    r = RegQueryValueExA(key, CM_QC_VALUE, NULL, &type, old, &n);
+    if (!(r == ERROR_FILE_NOT_FOUND || (r == ERROR_SUCCESS && n == 0))) {
+        /* Another confirmation waits for the driver (the mark service's,
+         * say): nothing is written over it. */
+        RegCloseKey(key);
+        return NULL;
+    }
+    r = RegSetValueExA(key, CM_QC_VALUE, 0, REG_BINARY, v, MK_QC_BYTES);
+    RegCloseKey(key);
+    return r == ERROR_SUCCESS
+               ? "The eject was confirmed to the Thunderbolt driver."
+               : "The eject could not be confirmed to the Thunderbolt driver.";
+}
+
 /* ---- NT: a unit not marked removable (record 24 section 7.2) ------------- */
 
 typedef BOOL (WINAPI *PFN_OPENTOKEN)(HANDLE, DWORD, PHANDLE);
@@ -4725,6 +4936,14 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         if (notRemovable) {
             tr_put(&t, "Until you unplug it, Windows may start it again when it "
                        "next looks for new hardware.\n");
+        } else if (ej_is_admin()) {
+            /* Record 21 section 7.4, revision 3 (decision M16): an
+             * administrator's own successful eject confirms itself, so
+             * the tunnel comes down; the mutex is still held. */
+            const char *c = ej_mark_confirm(&w, u);
+            if (c != NULL) {
+                tr_printf(&t, "%s\n", c);
+            }
         }
         tunnelNote = ej_watch_tunnel(q);
     } else {
