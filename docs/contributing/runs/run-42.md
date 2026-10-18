@@ -122,9 +122,9 @@ before its code, as the checkpoint asks.
 ## 42-A.17 and 42-A.18: the machine-wide registry key, and value 4's codes (2026-10-18 and 19)
 
 Written on branch `p42-reg` from `3.1.0.0` at `2a89ba74` (`7f25ca3c`, the
-implementation; `2a3e7e9c`, `33e98bc3` and `2b9a2ae2`, three rounds of
-revisions), reviewed and revised until the review converged (round 4
-returned nothing). The owner's decisions are the decisions table's two
+implementation; `2a3e7e9c`, `33e98bc3` and `2b9a2ae2`, its revisions),
+reviewed and revised until the review converged. The owner's decisions
+are the decisions table's two
 rows of 2026-10-18.
 
 - 42-A.17: every `Xhci*` value of `xhci98.sys` (`hcd_ctl.c`
