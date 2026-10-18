@@ -364,6 +364,11 @@ ULONG CmNvlinkBridgeTunnel(PULONG bridges, PULONG tunnels, ULONG count,
  */
 ULONG CmNvlinkRetire(PSTOR98LS_TABLE t, ULONG bus);
 BOOLEAN CmNvlinkRetireEntry(PSTOR98LS_TABLE t, ULONG index);
+/* R8a's release of an entry whose port's bus number changed, after its
+ * devnode was retired (record 22 section 7.7): IN_USE cleared (Flags 0)
+ * in one R6b Sequence update, UP with it, nothing else changed; FALSE for
+ * an entry not IN_USE or with a removal request outstanding (R9a). */
+BOOLEAN CmNvlinkReleaseEntry(PSTOR98LS_TABLE t, ULONG index);
 
 /* An UP entry leaves UP: Flags = IN_USE | DOWN_QUIESCED when `quiesced`,
  * IN_USE alone otherwise. FALSE (nothing written) for an entry not UP. */
@@ -614,6 +619,26 @@ ULONG CmNvlinkIcmDown(struct _CM_NHI *nhi, ULONG pollState);
  * deadline applies. Not called on 98 SE and ME, whose loss reads no bridge
  * (cm_reenum.c CmReenumAction). */
 VOID CmNvlinkLost(struct _CM_NHI *nhi);
+
+/* Record 22 section 7.7's recovery (task 42-A.10). CmNvlinkUpCount: how
+ * many entries behind `bridge` read UP (by the shadow, or by its
+ * secondary bus read now; NT only, as CmNvlinkLost). CmNvlinkRetireMember:
+ * publication mode retire for `bridge`, once its endpoint's devnode was
+ * seen retired - each UP entry there whose function reads absent (its
+ * identifier read, all ones) leaves UP for IN_USE alone, its generation
+ * unchanged: no DOWN_QUIESCED, no increment, nothing published. */
+ULONG CmNvlinkUpCount(struct _CM_NHI *nhi, ULONG bridge);
+VOID CmNvlinkRetireMember(struct _CM_NHI *nhi, ULONG bridge);
+/* R8a, after the retirement of the devnodes of member `bridge`, whose
+ * secondary bus changed from `bus`: every entry recorded for that member
+ * on the old bus (its shadow names the bridge, or names none while no
+ * member of the set has `bus` as its secondary bus now) has IN_USE
+ * cleared through CmNvlinkReleaseEntry - UP or not, since a function
+ * answering at the old address now is another member's or nobody's - and
+ * its shadow forgotten; the rebuild's exposure on the new bus takes a
+ * free entry. Returns how many such entries are left (a removal request
+ * outstanding, an acknowledgement awaited): called again later. */
+ULONG CmNvlinkReleaseBus(struct _CM_NHI *nhi, ULONG bridge, ULONG bus);
 
 /* The host interface lost, every operating system (cm_reenum.c
  * CmReenumLossBegin): the deferred scans of buses an exposure found silent

@@ -559,7 +559,7 @@ rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
 rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
 rem record 25 section 10) and the install tool's, for the record's check.
-call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c"
+call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_trlog links XHCITR's log readers (xhcitr\tr_log.c, design record 25
 rem sections 4.5 and 4.6) and xhcicm.sys's log builder, whose answers it
 rem reads, and holds xhcitr\tr_hcctr.h to src\xhci_counters.h.

@@ -260,6 +260,11 @@ void fabDromMarkUnused(FAB *f, int router, unsigned adp);
  * the host's included, back to its power-on state; links stay connected,
  * the host's lane adapters locked again. */
 void fabPowerCycle(FAB *f);
+/* The host router alone back to its power-on state, its lane adapters
+ * locked again, the ring registers at their defaults: a platform reset of
+ * the host interface whose device routers kept their configuration
+ * (record 22 section 7.7's partial loss). */
+void fabResetHost(FAB *f);
 
 /* Queries */
 int  fabPortLane0(const FAB *f, int port);

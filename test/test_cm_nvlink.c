@@ -1188,10 +1188,43 @@ static void test_waits(void)
     CHECK(CM_NVLINK_POLL_MS <= 50, "read at least every 50 ms (R10)");
 }
 
+/* R8a's release (record 22 section 7.7, task 42-A.10): a port's bus
+ * changed, its old entry's IN_USE cleared in one bracketed update, UP
+ * with it; the entry never given out again, a request outstanding left. */
+static void test_release(void)
+{
+    ULONG i;
+    ULONG k;
+    ULONG o;
+    ULONG seq;
+    RX rx;
+
+    tableInit();
+    i = CmNvlinkPublishUp(&table, tun, 4, 0, CM_NVLINK_TUNNEL_NONE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_NEW, "release: an entry");
+    rxFind(&rx, &table, 4, 0);
+    seq = table.Entry[i].Sequence;
+    CHECK(CmNvlinkReleaseEntry(&table, i), "release: done");
+    CHECK_EQ(table.Entry[i].Flags, 0, "release: IN_USE and UP cleared");
+    CHECK_EQ(table.Entry[i].Sequence, seq + 2, "release: bracketed");
+    CHECK_EQ(table.Entry[i].LinkGeneration, 1, "release: generation kept");
+    rxPoll(&rx, &table);
+    CHECK_EQ(rx.Applied, 0, "release: no statement for the receiver");
+    CHECK(!CmNvlinkReleaseEntry(&table, i), "release: once");
+    CHECK_EQ(CmNvlinkFind(&table, 4, 0), CM_NVLINK_NONE, "release: not found again");
+    k = CmNvlinkPublishUp(&table, tun, 4, 0, CM_NVLINK_TUNNEL_NONE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_NEW, "release: the old address takes a new entry");
+    CHECK(k != i, "release: never the released one");
+    table.Entry[k].Flags |= CM_NVLINK_REMOVE_PENDING;
+    CHECK(!CmNvlinkReleaseEntry(&table, k), "release: not with a request outstanding");
+    CHECK(!CmNvlinkReleaseEntry(&table, STOR98LS_ENTRIES), "release: past the table");
+}
+
 int main(void)
 {
     test_layout();
     test_cycle();
+    test_release();
     test_full();
     test_verdicts();
     test_fresh();

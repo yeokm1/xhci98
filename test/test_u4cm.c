@@ -3987,6 +3987,24 @@ static int goneHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
     return FAB_HOOK_SWALLOW;
 }
 
+/* The host router's path-entry writes unanswered (no loss): an
+ * invalidation that never takes. */
+static int pathWriteHook(FAB *f, unsigned long pdf, int router,
+                         unsigned long cs, unsigned long adp,
+                         unsigned long addr, unsigned long n,
+                         const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    (void)addr;
+    (void)n;
+    (void)data;
+    if (router == 0 && cs == TBT_CS_PATH && pdf == TBT_PDF_WRITE) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
 static void armGone(FAB *f, int router, unsigned long cs, int write,
                     int cancel, unsigned long skip)
 {
@@ -4179,6 +4197,242 @@ static void test_contain(void)
     (void)dev;
 }
 
+/* ------------------------------------------------------------------ */
+/* Section 7.7: recovery of a contained host (task 42-A.10)           */
+/* ------------------------------------------------------------------ */
+
+/* Contained with port 1's tunnels up, the host interface then answering
+ * again as `how` leaves it. */
+static void lossThenBack(void)
+{
+    g_fab.Gone = 1;
+    TbtU4Contain(&g_cm);
+    g_fab.Gone = 0;
+    g_fab.Cancel = 0;
+}
+
+static void test_recover(void)
+{
+    const TBT_U4_PORT *p;
+    LONG rc;
+    BOOLEAN final;
+    ULONG gen;
+    ULONG ld;
+    int dev;
+
+    /* Access back with the registers as programmed (a gate the platform
+     * reopened): the rings stopped, verified and restarted in the kept
+     * buffer, the host router adopted, the tunnel verified and kept;
+     * nothing queued, no statement, nothing published at the commit. */
+    dev = setupMinimal(1, NULL);
+    (void)countActions(&g_cm, 0);
+    p = TbtU4Port(&g_cm, 1);
+    gen = p->Generation;
+    CHECK(p->Pcie.Up, "recover kept: PCIe up first");
+    ld = g_ldCalls;
+    lossThenBack();
+    CHECK(g_cm.SnapValid, "recover kept: snapshot taken at containment");
+    CHECK(g_cm.SnapPorts[0].Pcie.Up, "recover kept: the snapshot has the tunnel");
+    CHECK(g_ring.DmaMayRun, "recover kept: buffer kept, rings never proven stopped");
+    rc = TbtU4Recover(&g_cm, &final);
+    CHECK_EQ(rc, TBT_OK, "recover kept: TBT_OK");
+    CHECK(!final, "recover kept: not final");
+    CHECK(g_cm.Contained, "recover kept: still contained before the commit");
+    CHECK(g_ring.Running && g_ring.DmaMayRun, "recover kept: rings restarted in the buffer");
+    CHECK(g_cm.HostRouter.Preserved, "recover kept: host router adopted");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "recover kept: UP");
+    CHECK(p->Pcie.Up && !p->RebuildPcie && !p->RemovalDebt,
+          "recover kept: tunnel preserved, no debt");
+    CHECK_EQ(p->Generation, gen, "recover kept: generation unchanged");
+    CHECK_EQ(g_cm.ActionCount, 0, "recover kept: nothing queued");
+    CHECK_EQ(g_ldCalls, ld, "recover kept: no statement");
+    CHECK(g_cm.Counters.RecoverPreserved >= 1, "recover kept: counted");
+    CHECK(fabPcieUp(&g_fab, 1), "recover kept: the fabric's tunnel untouched");
+    TbtU4RecoverCommit(&g_cm);
+    CHECK(!g_cm.Contained && !g_cm.Recovering, "recover kept: committed");
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0,
+             "recover kept: no TUNNEL_UP after the commit");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "recover kept: UP after polls");
+    CHECK(fabPcieUp(&g_fab, 1), "recover kept: still up");
+    (void)dev;
+
+    /* The host router reset by the platform, the device router keeping
+     * its configuration: a partial loss - drained at both ends, rebuilt
+     * after the commit through the per-tunnel transition, and only once
+     * the driver's barrier is clear. */
+    dev = setupMinimal(1, NULL);
+    (void)countActions(&g_cm, 0);
+    p = TbtU4Port(&g_cm, 1);
+    gen = p->Generation;
+    ld = g_ldCalls;
+    lossThenBack();
+    fabResetHost(&g_fab);
+    rc = TbtU4Recover(&g_cm, &final);
+    CHECK_EQ(rc, TBT_OK, "recover rebuild: TBT_OK");
+    CHECK(!g_cm.HostRouter.Preserved, "recover rebuild: host enumerated afresh");
+    CHECK(p->RebuildPcie && !p->Pcie.Up, "recover rebuild: PCIe drained, owed");
+    CHECK(p->RemovalDebt, "recover rebuild: removal debt");
+    CHECK(!fabPcieUp(&g_fab, 1), "recover rebuild: nothing built before the commit");
+    CHECK_EQ(g_cm.ActionCount, 0, "recover rebuild: nothing queued");
+    CHECK_EQ(g_ldCalls, ld, "recover rebuild: no statement");
+    TbtU4RecoverCommit(&g_cm);
+    CHECK(TbtU4TakeDebt(&g_cm, 1), "recover rebuild: debt taken");
+    CHECK(!TbtU4TakeDebt(&g_cm, 1), "recover rebuild: once");
+    TbtU4SetBarred(&g_cm, 1, TRUE);
+    poll(&g_cm, &g_fab, 3);
+    CHECK(!fabPcieUp(&g_fab, 1), "recover rebuild: barred - nothing built");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0,
+             "recover rebuild: barred - nothing published");
+    CHECK(p->RebuildPcie, "recover rebuild: still owed");
+    TbtU4SetBarred(&g_cm, 1, FALSE);
+    poll(&g_cm, &g_fab, 3);
+    CHECK(fabPcieUp(&g_fab, 1), "recover rebuild: rebuilt once the barrier cleared");
+    CHECK(p->Pcie.Up && !p->RebuildPcie, "recover rebuild: PCIe up");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "recover rebuild: UP");
+    CHECK_EQ(p->Generation, gen, "recover rebuild: the same connection");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 1,
+             "recover rebuild: one TUNNEL_UP, the exposure's generation");
+    (void)dev;
+
+    /* The whole domain reset (the device router gave up its enumeration):
+     * departed - the host side drained, the port EMPTY, a removal debt,
+     * no statement; connected afresh once the barrier allows. */
+    dev = setupMinimal(1, NULL);
+    (void)countActions(&g_cm, 0);
+    p = TbtU4Port(&g_cm, 1);
+    gen = p->Generation;
+    ld = g_ldCalls;
+    lossThenBack();
+    fabPowerCycle(&g_fab);
+    g_fab.TxCtrl = 0;
+    g_fab.RxCtrl = 0;
+    g_fab.RxSizeReg = 0;
+    rc = TbtU4Recover(&g_cm, &final);
+    CHECK_EQ(rc, TBT_OK, "recover departed: TBT_OK");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "recover departed: EMPTY");
+    CHECK(p->RemovalDebt && !p->RebuildPcie, "recover departed: debt, no rebuild");
+    CHECK(!p->Dev.Present, "recover departed: device gone");
+    CHECK_EQ(g_cm.ActionCount, 0, "recover departed: no TUNNEL_DOWN");
+    CHECK_EQ(g_ldCalls, ld, "recover departed: no statement");
+    CHECK(g_cm.Counters.RecoverDeparted >= 1, "recover departed: counted");
+    CHECK(p->DiscoverOwed, "recover departed: the link's router discovered after the commit");
+    CHECK(!p->LaneWritten && !p->Lane1Disabled && !p->PcSetHost && !p->TmuQuarantine,
+          "recover departed: no lane or TMU cleanup owed on a held link");
+    CHECK(!g_cm.DeferredTail[0], "recover departed: no teardown tail on a held link");
+    TbtU4RecoverCommit(&g_cm);
+    TbtU4SetBarred(&g_cm, 1, TRUE);
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "recover departed: barred - no connect");
+    TbtU4SetBarred(&g_cm, 1, FALSE);
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "recover departed: connected afresh");
+    CHECK(p->Generation != gen, "recover departed: a new connection");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 1,
+             "recover departed: its TUNNEL_UP");
+    (void)dev;
+
+    /* A device unplugged while the host interface was gone: departed. */
+    dev = setupMinimal(1, NULL);
+    (void)countActions(&g_cm, 0);
+    p = TbtU4Port(&g_cm, 1);
+    lossThenBack();
+    fabUnplug(&g_fab, 1);
+    rc = TbtU4Recover(&g_cm, &final);
+    CHECK_EQ(rc, TBT_OK, "recover unplugged: TBT_OK");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "recover unplugged: EMPTY");
+    CHECK(p->RemovalDebt, "recover unplugged: debt");
+    CHECK(hostClean(&g_fab, 1), "recover unplugged: host side drained");
+    CHECK(!p->DiscoverOwed, "recover unplugged: a disconnected link owes no discovery");
+    CHECK(p->RecCleanup, "recover unplugged: the cleanup gated on the link");
+    /* A router plugged before the first tick: the departed router's
+     * cleanup is dropped and the newcomer discovered as found. */
+    TbtU4RecoverCommit(&g_cm);
+    (void)TbtU4TakeDebt(&g_cm, 1);
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 1);
+    CHECK(!p->RecCleanup && p->DiscoverOwed,
+          "recover unplugged: cleanup dropped on a connected link");
+    poll(&g_cm, &g_fab, 4);
+    CHECK(!p->DiscoverOwed, "recover unplugged: the newcomer discovered");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "recover unplugged: the newcomer up");
+    (void)dev;
+
+    /* Departed, the host-side drain not completing (the host router's path
+     * writes unanswered): HELD as departed, its records kept, no ordinary
+     * teardown after the commit; once the writes answer again the recorded
+     * drain alone completes and the port goes EMPTY. */
+    dev = setupMinimal(1, NULL);
+    (void)countActions(&g_cm, 0);
+    p = TbtU4Port(&g_cm, 1);
+    lossThenBack();
+    fabUnplug(&g_fab, 1);
+    g_fab.Hook = pathWriteHook;
+    rc = TbtU4Recover(&g_cm, &final);
+    CHECK_EQ(rc, TBT_OK, "recover departed held: TBT_OK");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "recover departed held: HELD");
+    CHECK(p->RecDeparted && (p->RecDrainPcie || p->RecDrainUsb3),
+          "recover departed held: the drain owed");
+    CHECK(p->RemovalDebt && !p->Dev.Present, "recover departed held: debt, device forgotten");
+    TbtU4RecoverCommit(&g_cm);
+    (void)TbtU4TakeDebt(&g_cm, 1);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "recover departed held: still HELD");
+    CHECK(p->RecDeparted, "recover departed held: still owed");
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 2);
+    CHECK(!p->RecDeparted, "recover departed held: drained at the tick");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "recover departed held: EMPTY");
+    CHECK(hostClean(&g_fab, 1), "recover departed held: host side drained");
+    CHECK(!TbtU4TakeDebt(&g_cm, 1), "recover departed held: no new debt after the commit");
+    (void)dev;
+
+    /* DmaMayRun: a host interface still not answering when the recovery
+     * runs - the verified stop fails, final for the boot, the buffer
+     * kept; the failure path leaves the instance contained. */
+    dev = setupMinimal(1, NULL);
+    (void)countActions(&g_cm, 0);
+    g_fab.Gone = 1;
+    TbtU4Contain(&g_cm);
+    rc = TbtU4Recover(&g_cm, &final);
+    CHECK(rc != TBT_OK, "recover unverified: refused");
+    CHECK(final, "recover unverified: final");
+    CHECK(g_ring.DmaMayRun, "recover unverified: buffer kept");
+    CHECK_EQ(g_cm.Counters.RecoverFinal, 1, "recover unverified: counted");
+    TbtU4RecoverFail(&g_cm);
+    CHECK(g_cm.Contained && !g_cm.Recovering, "recover unverified: contained");
+    CHECK(g_ring.DmaMayRun, "recover unverified: still kept after the failure path");
+    checkSilent("recover unverified: silent afterwards");
+    g_fab.Gone = 0;
+    (void)dev;
+
+    /* The gate closing again inside the recovery (a second loss): the
+     * attempt ends refused, and the failure path stops what it restarted
+     * only where it can. */
+    dev = setupMinimal(1, NULL);
+    (void)countActions(&g_cm, 0);
+    lossThenBack();
+    armGone(&g_fab, 0, TBT_CS_ROUTER, 0, 1, 0);
+    rc = TbtU4Recover(&g_cm, &final);
+    CHECK(rc != TBT_OK, "recover second loss: refused");
+    CHECK(!final, "recover second loss: not final");
+    TbtU4RecoverFail(&g_cm);
+    CHECK(g_cm.Contained && !g_cm.Recovering, "recover second loss: contained");
+    CHECK(g_ring.DmaMayRun, "recover second loss: rings never proven stopped");
+    CHECK(TbtU4Port(&g_cm, 1) != NULL && TbtU4Port(&g_cm, 1)->Pcie.Up &&
+              g_cm.PortCount == g_cm.SnapPortCount,
+          "recover second loss: the snapshot's records back, not the walk's");
+    g_fab.Hook = NULL;
+    g_fab.Gone = 0;
+    g_fab.Cancel = 0;
+    /* A new episode's snapshot, then a recovery without a further outage. */
+    TbtU4Snapshot(&g_cm);
+    rc = TbtU4Recover(&g_cm, &final);
+    CHECK_EQ(rc, TBT_OK, "recover after second loss: TBT_OK");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "recover after second loss: UP");
+    (void)dev;
+}
+
 int main(void)
 {
     test_cold_minimal();
@@ -4224,6 +4478,7 @@ int main(void)
     test_asm4242();
     test_asm2464();
     test_contain();
+    test_recover();
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

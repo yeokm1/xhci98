@@ -2963,6 +2963,42 @@ static VOID hcdQueryInterfaceTrace(PIO_STACK_LOCATION stack)
 #endif
 }
 
+/*
+ * Roadmap-usb4 42-A.16: a stop, query-remove, remove, cancel or surprise
+ * removal a device PDO receives goes into the shipping log (level 2), so a
+ * Save Report taken after a Safely Remove shows which devices the PnP
+ * manager stopped: location << 16 | minor << 8 | listed << 2 | hub << 1 |
+ * function, the location being the device's (hc->Ports' 1-based index:
+ * a root port up to the root port count, a hub's port above it). Read before the IRP is handled; the controller pointer as
+ * hcdPdoRemoved reads it. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdPdoPnpNote(PHCD_DEVICE_PDO pdo, UCHAR minor)
+{
+    PHCD_CONTROLLER hc;
+
+    switch (minor) {
+    case IRP_MN_QUERY_REMOVE_DEVICE:
+    case IRP_MN_REMOVE_DEVICE:
+    case IRP_MN_CANCEL_REMOVE_DEVICE:
+    case IRP_MN_STOP_DEVICE:
+    case IRP_MN_QUERY_STOP_DEVICE:
+    case IRP_MN_CANCEL_STOP_DEVICE:
+    case IRP_MN_SURPRISE_REMOVAL:
+        break;
+    default:
+        return;
+    }
+    hc = pdo->Controller;
+    if (hc == NULL || pdo->Deleted || pdo->DeletePending) {
+        return;
+    }
+    XhciLogNote(&hc->Hc, "pnp.pdo",
+                ((pdo->Port & 0xFFFFUL) << 16) | ((ULONG)minor << 8) |
+                    ((pdo->Listed ? 1UL : 0UL) << 2) |
+                    ((pdo->Hub ? 1UL : 0UL) << 1) |
+                    (pdo->Function ? 1UL : 0UL));
+}
+
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
@@ -2972,6 +3008,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
 
     stack = IoGetCurrentIrpStackLocation(irp);
     XHCI_DBG_VALUE("hcd: device PDO PnP minor", stack->MinorFunction);
+    hcdPdoPnpNote(pdo, stack->MinorFunction);
 
     /* A hub's own name (task 33.4): the INF's model text replaces it once
      * the hub is installed. */

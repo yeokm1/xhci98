@@ -353,6 +353,11 @@ VOID TbtIcmDecodeNames(const ULONG *dw, ULONG words, PTBT_ICM_NAMES out);
  * its configuration (cm_live.h). Presence lost, nothing proven about the
  * endpoint: never a quiescence statement (record 21 section 7.3). */
 #define TBT_ICM_WHY_UNAVAILABLE     9UL
+/* RESYNC: the USB4 profile's host interface recovered in place (record 22
+ * section 7.7 part 4): every member re-enumerated in publication mode
+ * none - no entry advanced - but a member behind the retirement barrier,
+ * which is skipped. */
+#define TBT_ICM_WHY_RECOVERED       10UL
 
 /*
  * One tunnel change for the driver's thread to act on (record 21 section

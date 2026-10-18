@@ -30,8 +30,12 @@
  * transport refused. ABSENT: three in a row. CONFIG_LOST: a readable
  * sample that differs from the baseline. RECOVERING: the driver's own
  * recovery steps, the only access then. RECOVERY_FAILED: no access, slow
- * monitoring for a new episode. CONTAINED: the USB4 profile's terminal
- * state (record 22: no recovery, until a PnP stop and start). REVOKED:
+ * monitoring for a new episode. CONTAINED: the USB4 profile's loss state
+ * (record 22 section 7.7), in one of three substates (Sub): probing once
+ * a second for access back, cooldown waiting for a new episode, or final
+ * for the boot; its exit is PREPARING (the configuration header proven,
+ * the preparation's two writes admitted) and then RECOVERING, which
+ * commits to ACTIVE or falls back to CONTAINED. REVOKED:
  * surprise removal, stop or remove - nothing at all, terminal. */
 #define CM_LIVE_OFF              0UL
 #define CM_LIVE_ACTIVE           1UL
@@ -42,6 +46,20 @@
 #define CM_LIVE_RECOVERY_FAILED  6UL
 #define CM_LIVE_CONTAINED        7UL
 #define CM_LIVE_REVOKED          8UL
+#define CM_LIVE_PREPARING        9UL
+
+/* CONTAINED's substates (record 22 section 7.7 part 5). */
+#define CM_LIVE_SUB_PROBING      0UL
+#define CM_LIVE_SUB_COOLDOWN     1UL
+#define CM_LIVE_SUB_FINAL        2UL
+
+/* What the USB4 profile's probe read (CmLiveProbe): the identity dword
+ * all ones (no answer), another identity, BAR0 not as the healthy start
+ * read it, or the header proven with BAR0 intact. */
+#define CM_LIVE_PROBE_ONES       0UL
+#define CM_LIVE_PROBE_OTHER      1UL
+#define CM_LIVE_PROBE_BAR        2UL
+#define CM_LIVE_PROBE_OK         3UL
 
 /* Access classes the gate (cm_thr.c's BAR accessors) is asked about.
  * ORDINARY: everything the clients do. PROBE: the monitor's and the
@@ -50,6 +68,11 @@
 #define CM_ACCESS_ORDINARY       0UL
 #define CM_ACCESS_PROBE          1UL
 #define CM_ACCESS_RECOVERY       2UL
+/* The USB4 recovery's preparation (record 22 section 7.7 part 2): reads,
+ * and the configuration writes of the Command register and the platform
+ * registers alone (cm_thr.c's cmConfig enforces the offsets); no BAR
+ * write. Admitted in PREPARING only. */
+#define CM_ACCESS_PREPARE        3UL
 
 /* Actions a call asks of the driver, as bits; each at most once per
  * episode where it says so. */
@@ -67,6 +90,10 @@
                                               protocol steps              */
 #define CM_LIVE_ACT_CONTAIN        0x20UL  /* the USB4 profile: contain   */
 #define CM_LIVE_ACT_LOG            0x40UL  /* a transition to log         */
+#define CM_LIVE_ACT_PREPARE        0x80UL  /* USB4: run the preparation,
+                                              report CmLivePrepared       */
+#define CM_LIVE_ACT_SNAPSHOT       0x100UL /* USB4: a new episode - the
+                                              recovery snapshot again     */
 
 /* Defaults: the idle cadence (XhciCmPollIdleMs, 200 ms) between ACTIVE
  * samples, three consecutive all-ones samples for ABSENT, one probe a
@@ -107,7 +134,9 @@ typedef struct _CM_LIVE {
     ULONG Reconciled;       /* the episode whose RECONCILE was asked       */
     ULONG Full;             /* the pending recovery is a full one          */
     ULONG Rearm;            /* after RECOVERY_FAILED: an all-ones sample
-                               was seen, so a sane one may retry           */
+                               was seen, so a sane one may retry; the same
+                               for CONTAINED's cooldown                    */
+    ULONG Sub;              /* CONTAINED's substate, CM_LIVE_SUB_*         */
     CM_LIVE_COUNTERS Counters;
 } CM_LIVE, *PCM_LIVE;
 
@@ -167,5 +196,45 @@ ULONG CmLiveEpisode(const CM_LIVE *live);
 /* After a failed recovery: RECONCILE if this episode had none yet, so the
  * old generations are retired; 0 otherwise. */
 ULONG CmLiveReconcileOwed(PCM_LIVE live);
+
+/*
+ * The USB4 profile's recovery (record 22 section 7.7 part 5's table; the
+ * caller serialises them as the others).
+ *
+ * CmLiveContain: CONTAINED (probing) entered by the driver for a loss the
+ * monitor did not record (a bind, a resume, a surprise removal's
+ * containment): the episode bumped, the first probe a second away.
+ * Nothing once REVOKED or already CONTAINED.
+ *
+ * CmLiveProbe: one probe at `nowMs` in CONTAINED (CM_LIVE_PROBE_*): from
+ * probing, OK -> PREPARING (ACT_PREPARE), BAR -> cooldown, ONES or OTHER
+ * stay; from cooldown, ONES sets Rearm and a readable probe with Rearm
+ * set is a new episode -> probing (ACT_SNAPSHOT); final stays.
+ *
+ * CmLivePrepared: the preparation's result from PREPARING: TRUE ->
+ * RECOVERING (ACT_RECOVER_FULL); FALSE -> CONTAINED (cooldown), Rearm
+ * set where `ones` (a read came back all ones).
+ *
+ * CmLiveU4Recovered: the recovery's end for `episode`: with `ok` and the
+ * fresh `sample` equal to the baseline, ACTIVE (TRUE: commit); `final`
+ * -> CONTAINED (final); anything else -> CONTAINED (cooldown), Rearm set
+ * where `ones` or the sample read all ones. A result for another episode
+ * or after REVOKED is dropped (FALSE), the state unchanged.
+ *
+ * CmLiveU4Interrupt: a system suspend (D3) during PREPARING or
+ * RECOVERING: CONTAINED (cooldown) with Rearm set, so the probe at the
+ * resume (CmLiveU4Wake: due at once, and with Rearm set a new episode
+ * in probing at once, ACT_SNAPSHOT) takes the probing row once the
+ * header is proven: no second outage is asked of a power-cancelled
+ * attempt.
+ */
+VOID CmLiveContain(PCM_LIVE live, ULONG nowMs);
+ULONG CmLiveProbe(PCM_LIVE live, ULONG nowMs, ULONG result);
+ULONG CmLivePrepared(PCM_LIVE live, BOOLEAN ok, BOOLEAN ones);
+BOOLEAN CmLiveU4Recovered(PCM_LIVE live, ULONG episode, BOOLEAN ok,
+                          BOOLEAN final, BOOLEAN ones, ULONG sample,
+                          ULONG nowMs);
+VOID CmLiveU4Interrupt(PCM_LIVE live);
+ULONG CmLiveU4Wake(PCM_LIVE live);
 
 #endif /* CM_LIVE_H */

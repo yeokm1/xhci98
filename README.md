@@ -123,6 +123,7 @@ An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **
 - **Safely Remove:** left-click the icon, pick the device and unplug when told. Works for USB storage on 98 SE and ME too.
 - **Details:** each item's speed, port, IDs, driver, Device Manager status, resources and PCI configuration. File > Save Report writes it all to a text file for a bug report.
 - **Driver log:** each controller has a "Driver log" item, included in Save Report. View > Logging level... sets either driver's level (default 2, `0` for off; takes effect after a restart).
+- **Snapshot:** Save Report ends with the driver's snapshot (its device report and decoded state). File > Save Snapshot..., `XHCITR /snapshot`, `/dump` and `/probe` write the snapshot's files themselves, for when a maintainer asks for them.
 
 Details: [the release notes' USB Tree section](docs/using/release-notes.md#the-xhci98-usb-tree).
 
@@ -159,7 +160,7 @@ XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 Open a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose) and attach:
 
 - **The DOS report:** run `QUALREP.BAT` from real DOS in `TOOLS\XHCIQUAL\` and attach the `.LOG` it names. It is read-only (`XHCIQUAL --probe-only --no-page --log-stamp`) and never overwrites an earlier log. If a maintainer asks for the full run, `XHCIQUAL --no-page --log FULL.LOG` **takes over the controller and resets it and its ports**: use a PS/2 keyboard, and do not write the log to a drive on that controller.
-- **The driver's report:** in `TOOLS\XHCISNAP\` run `SNAPON.BAT`, restart Windows, make the problem happen, run `SNAPGET.BAT`, and attach the `.DEV` and `.TXT` files it names; `SNAPOFF.BAT` turns logging off again. On Vista and 7, Run as administrator.
+- **The driver's report:** make the problem happen, then in the xHCI98 USB Tree (`tools\xhcitr\`) use File > Save Report and attach the `.TXT` file; `XHCITR /report <file>` writes the same from a command prompt. It carries the device tree, both drivers' logs and the driver's snapshot. The log needs the driver's logging level at 2 or more, the default: if View > Logging level... shows less, set 2, restart Windows and make the problem happen again. Attach the raw snapshot files (File > Save Snapshot... or `XHCITR /snapshot`) only if a maintainer asks.
 - **An install problem:** `XHCIINST.LOG` from the root of the system drive.
 
 ### The package
@@ -171,9 +172,8 @@ Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
 | `release-x86\`, `release-x64\` | The drivers to install (below) |
 | `debug-x86\`, `debug-x64\` | The same drivers built for troubleshooting; install only if asked |
 | `INSTALL.BAT`, `tools\xhciinst\` | The installer and the program it runs (`XHCIINST.EXE`, `XHCIIN64.EXE`) |
-| `tools\xhcitr\` | The xHCI98 USB Tree |
+| `tools\xhcitr\` | The xHCI98 USB Tree, also the driver's log and snapshot reader |
 | `tools\xhciqual\` | DOS: `XHCIQUAL.EXE` and `QUALREP.BAT` |
-| `tools\xhcisnap\` | `XHCISNAP.EXE` and its `SNAP*.BAT` files, the driver's log reader (to be deprecated in favour of the USB Tree) |
 | `tools\portsw\` | `portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`: the Intel port switchover |
 | `tools\silent\` | 98 SE and ME: the silent install's list and switch |
 | `tools\xhcicln\` | `XHCICLN.EXE`, `XHCICL64.EXE`: optionally lists, and on 2000 to 7 removes, old `XHCI98\` entries left by an update from `2.3.x` or earlier; nothing needs it |
@@ -273,7 +273,7 @@ Each value is a `DWORD` in a driver (software) key, and from `3.1.0.0` also in t
 
 | Value | What it does | Default |
 |---|---|---|
-| `XhciLogVerbosity` | The driver's log level, read by the USB Tree and `XHCISNAP` (`0` to `4`; `0` off) | `2` (fresh install; an update keeps the value there) |
+| `XhciLogVerbosity` | The driver's log level, read by the USB Tree (`0` to `4`; `0` off) | `2` (fresh install; an update keeps the value there) |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` |
 | `XhciInterruptMode` | How events arrive: `0` automatic, `1` interrupt line, `2` polling, `3` message-signalled interrupt only | `0` |
 | `XhciSelectiveSuspend` | `1` suspends idle devices when Windows asks | `0` |
@@ -348,7 +348,7 @@ The drivers are C89 (no C++ or CRT), built on Windows 11 x64. The toolchain unpa
 
    Stor98, the bundled NVMe driver, builds separately with `src\stor98\scripts\build.cmd` (it also needs the Windows 98 DDK's `SCSI.H` and `SRB.H` in `tools\w98ddk\inc`; [src/stor98/docs/BUILD.md](src/stor98/docs/BUILD.md)), or everything at once with `scripts\build-all.cmd`.
 
-4. The tools build with their own `build.cmd` in `xhciqual\` (needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM`), `xhcisnap\`, `xhcicln\`, `xhciinst\` and `xhcitr\`.
+4. The tools build with their own `build.cmd` in `xhciqual\` (needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM`), `xhcicln\`, `xhciinst\` and `xhcitr\`.
 5. Install media: `scripts\package\make-package.ps1` (to `out\`); a release cut: `scripts\package\make-release.ps1`. Never hand-copy a `.sys` without its INF.
 6. Test in QEMU with `qemu-xhci` (Win98 SE, Win2000 SP4 and an SMP Win2000 guest; `usb-storage` and `usb-uas` for SuperSpeed and UAS).
 
@@ -364,7 +364,6 @@ src/            xhci98.sys (C), its two INFs and DDK build files
 test/           Host-side unit tests (test\run-host-tests.cmd)
 scripts/        Build wrapper, setup helpers, gates, vm-matrix/
 xhciqual/       DOS hardware-qualification tool (Open Watcom)
-xhcisnap/       Reader for the driver's log channel
 xhcicln/        Optional cleanup tool for old XHCI98\ devnodes
 xhciinst/       Install/update/uninstall tool and INSTALL.BAT
 xhcitr/         The xHCI98 USB Tree
@@ -411,7 +410,7 @@ Apart from Stor98's released builds under `src/stor98/releases/` (below), the re
 - `xhci98.sys` and `xhciuas.sys` link no runtime or extender. The 32-bit builds link no third-party object either; the 64-bit builds, linked by WDK 7.1, carry that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls.
 - Some files of `xhcicm.sys`'s source, under `src/cm/`, are adapted from the `usb4-emu` project (some lifted from its `tools/usb4cm` under its earlier MIT licence) and from Linux's `drivers/thunderbolt`, and keep their copyright lines and licence notices. The [legal and provenance record](docs/contributing/legal-provenance.md), section 2a, lists each file.
 - `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender.
-- `XHCISNAP.EXE` embeds the MSVC 6.0 runtime.
+- `XHCISNAP.EXE`, in the releases up to `3.0.0.0`, embeds the MSVC 6.0 runtime.
 - `XHCICLN.EXE`, `XHCIINST.EXE` and `XHCITR.EXE` embed the MSVC 6.0 runtime; `XHCICL64.EXE`, `XHCIIN64.EXE` and `XHCITR64.EXE` the WDK 7.1 one. None of them contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.

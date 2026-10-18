@@ -1,5 +1,8 @@
 @echo off
-rem selftest.cmd - drive XHCISNAP.EXE's report path with no controller present.
+rem snaptest.cmd - drive XHCITR.EXE's snapshot path (XHCISNAP's, moved here by
+rem roadmap-usb4 task 42-A.4) with no controller present. /snaptest hands
+rem the rest of the command line to tr_snap.c as XHCISNAP took it; the
+rem user's spellings (/snapshot, /dump, /probe) are tested at the end.
 rem
 rem The 2026-09-05 audit (roadmap Phase 20, F5, F17) found the tool reporting a
 rem text report as written on the strength of fopen alone: every fprintf and
@@ -28,12 +31,12 @@ rem Exit code 0 = every case behaved. Run it after build.cmd.
 setlocal
 cd /d "%~dp0"
 
-if not exist XHCISNAP.EXE (
-    echo ERROR: XHCISNAP.EXE is not here; run build.cmd first
+if not exist XHCITR.EXE (
+    echo ERROR: XHCITR.EXE is not here; run build.cmd first
     exit /b 1
 )
 
-rem A directory of this run's own under xhcisnap\out\ (ignored), not a name
+rem A directory of this run's own under xhcitr\out\ (ignored), not a name
 rem in %TEMP%: two builds started in the same second draw the same %RANDOM%,
 rem so a shared %TEMP% name is one name, and mkdir is the claim on it. Only a
 rem name that exists is a collision: any other mkdir failure fails at once,
@@ -61,7 +64,7 @@ set "BASE=%RUNDIR%\report"
 set FAILED=0
 
 set "XHCISNAP_FAULT="
-"%~dp0XHCISNAP.EXE" -selftest-report "%BASE%" > "%BASE%.no-fault.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-report "%BASE%" > "%BASE%.no-fault.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: a report with no fault injected exited %errorlevel%, expected 0
     set FAILED=1
@@ -77,7 +80,7 @@ if errorlevel 1 (
 )
 
 set "XHCISNAP_FAULT=write"
-"%~dp0XHCISNAP.EXE" -selftest-report "%BASE%" > "%BASE%.write-fault.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-report "%BASE%" > "%BASE%.write-fault.log"
 if not errorlevel 3 (
     echo FAIL: a report whose writes fail exited %errorlevel%, expected 3
     set FAILED=1
@@ -89,7 +92,7 @@ if errorlevel 1 (
 )
 
 set "XHCISNAP_FAULT=close"
-"%~dp0XHCISNAP.EXE" -selftest-report "%BASE%" > "%BASE%.close-fault.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-report "%BASE%" > "%BASE%.close-fault.log"
 if not errorlevel 3 (
     echo FAIL: a report whose close fails exited %errorlevel%, expected 3
     set FAILED=1
@@ -104,7 +107,7 @@ set "XHCISNAP_FAULT="
 rem A .TXT that cannot be created: the dump's own fopen-failure branch used to
 rem exit 0 with the report on screen (Phase 20).
 attrib +R "%BASE%.TXT"
-"%~dp0XHCISNAP.EXE" -selftest-report "%BASE%" > "%BASE%.readonly.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-report "%BASE%" > "%BASE%.readonly.log"
 if not errorlevel 3 (
     echo FAIL: a report whose .TXT could not be created exited %errorlevel%, expected 3
     set FAILED=1
@@ -118,7 +121,7 @@ attrib -R "%BASE%.TXT"
 
 rem -probe with an implied -dump: refused as a usage error, no device opened,
 rem no file named after the -o argument created.
-"%~dp0XHCISNAP.EXE" -probe -o "%BASE%-probe" > "%BASE%.probe-dump.log"
+"%~dp0XHCITR.EXE" /snaptest -probe -o "%BASE%-probe" > "%BASE%.probe-dump.log"
 if not "%errorlevel%"=="2" (
     echo FAIL: -probe beside -o exited %errorlevel%, expected 2
     set FAILED=1
@@ -136,7 +139,7 @@ if exist "%BASE%-probe.TXT" (
 rem The slots region's decode (2.0.0.0): the Slot Context Speed in words over
 rem canned records - SuperSpeed with its rate and lanes, SuperSpeedPlus by its
 rem rate, High and Low Speed, and a slot whose context could not be read.
-"%~dp0XHCISNAP.EXE" -selftest-slots > "%BASE%.slots.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-slots > "%BASE%.slots.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-slots exited %errorlevel%, expected 0
     set FAILED=1
@@ -152,7 +155,7 @@ for %%S in ("SuperSpeed, 5 Gbit/s, Gen 1x1" "SuperSpeedPlus, 10 Gbit/s, Gen 2x1"
 rem Task 35.3's root port enumeration notes, decoded over a canned ring: 35.0's
 rem E460 failure as 2.1.1.0 met it, the same link with 35.1's fallback, and a
 rem spent budget.
-"%~dp0XHCISNAP.EXE" -selftest-notes > "%BASE%.notes.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-notes > "%BASE%.notes.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-notes exited %errorlevel%, expected 0
     set FAILED=1
@@ -173,7 +176,7 @@ if not errorlevel 1 (
 rem Task 35.3's HCD region decoded over a canned image: a port Failed on the
 rem speed, a working SuperSpeed port by the fallback, an empty port left out,
 rem and the nonzero counters by name.
-"%~dp0XHCISNAP.EXE" -selftest-hcd > "%BASE%.hcd.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-hcd > "%BASE%.hcd.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-hcd exited %errorlevel%, expected 0
     set FAILED=1
@@ -191,7 +194,7 @@ rem place a canned HCD header gives: the values in effect, the controller's
 rem terminal reason and window, the counters and completion codes by name, a
 rem held root port and a re-armed hub port; then a 35.3 header, a state past
 rem the image, and no image at all.
-"%~dp0XHCISNAP.EXE" -selftest-tol > "%BASE%.tol.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-tol > "%BASE%.tol.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-tol exited %errorlevel%, expected 0
     set FAILED=1
@@ -221,7 +224,7 @@ rem E7250's repair (INTA moved from PIRQA to PIRQF for IRQ 21), a reviewed
 rem pair not admitted at value 1, a message grant, IRQ 11 on NT, another vendor, a start
 rem refused before the routing step; then a 2.2.0.0 header, an image cut
 rem short and a record count the header cannot hold.
-"%~dp0XHCISNAP.EXE" -selftest-pirq > "%BASE%.pirq.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-pirq > "%BASE%.pirq.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-pirq exited %errorlevel%, expected 0
     set FAILED=1
@@ -238,7 +241,7 @@ rem Task 36.21's transfer-size readings from canned HCD headers: a streamed
 rem UAS copy at 1 MiB commands over 128 KiB chunks with one class driver
 rem record, a value out of range with no clock yet; then a header from before
 rem 36.21, an image cut short and a record count the header cannot hold.
-"%~dp0XHCISNAP.EXE" -selftest-xstat > "%BASE%.xstat.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-xstat > "%BASE%.xstat.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-xstat exited %errorlevel%, expected 0
     set FAILED=1
@@ -255,7 +258,7 @@ rem Task 36.9's event delivery from canned HCD images: 98 SE forced to
 rem poll, a pin-0 controller polled automatically with its periods replaced,
 rem a line proven dead and moved, a reserved mode on a header that places no
 rem extension words, a driver from before polling, and a block past the image.
-"%~dp0XHCISNAP.EXE" -selftest-intr > "%BASE%.intr.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-intr > "%BASE%.intr.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-intr exited %errorlevel%, expected 0
     set FAILED=1
@@ -272,7 +275,7 @@ rem Task 36.15's message interrupts from canned HCD images: 7 x86 with the
 rem helper bound on MSI, the helper absent and the list stripped, a refused
 rem helper, 98 SE with no filter (not applicable), a driver from before MSI
 rem and a block between the two sizes.
-"%~dp0XHCISNAP.EXE" -selftest-msi > "%BASE%.msi.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-msi > "%BASE%.msi.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-msi exited %errorlevel%, expected 0
     set FAILED=1
@@ -305,21 +308,21 @@ rem canned image whose word i holds i + 1, checked word by word against
 rem XHCIHC_COUNTERS in src\xhci_counters.h - each field by name and value,
 rem any reserved words not printed, the words past the block as
 rem "counter N".
-"%~dp0XHCISNAP.EXE" -selftest-counters > "%BASE%.counters.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-counters > "%BASE%.counters.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-counters exited %errorlevel%, expected 0
     set FAILED=1
 )
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0check-counter-names.ps1" -Log "%BASE%.counters.log"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\scripts\check-counter-names.ps1" -Log "%BASE%.counters.log"
 if errorlevel 1 (
-    echo FAIL: XHCISNAP's counter names do not match src\xhci_counters.h
+    echo FAIL: XHCITR's counter names do not match src\xhci_counters.h
     set FAILED=1
 )
 rem Task 38.11's version line from canned counter words: unwritten, refused
 rem before step 0c, QEMU's 1.0, a 0.96 part accepted and refused, the qemu
 rem flavour's override, an all-ones register, a 0.95 part, and a block from
 rem a driver before 38.11 that prints nothing.
-"%~dp0XHCISNAP.EXE" -selftest-version > "%BASE%.version.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-version > "%BASE%.version.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-version exited %errorlevel%, expected 0
     set FAILED=1
@@ -343,7 +346,7 @@ rem section 7.2.9): a polled 32-bit controller whose helper answered the
 rem timer, a barred release, both phases, the switch set to 1; the switch
 rem absent, off by default (owner, 2026-10-14); and a driver from before
 rem 38.3, which prints none of it.
-"%~dp0XHCISNAP.EXE" -selftest-timer > "%BASE%.timer.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-timer > "%BASE%.timer.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-timer exited %errorlevel%, expected 0
     set FAILED=1
@@ -372,7 +375,7 @@ rem on, off and overridden, each outcome and its reason, codes past the known
 rem ones; the PCI id and revision read and then unread; and a 232-word block
 rem (a driver before 38.10), which prints no section. The lines holding a ?
 rem are checked outside the FOR, which would take a ? as a file wildcard.
-"%~dp0XHCISNAP.EXE" -selftest-quirks > "%BASE%.quirks.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-quirks > "%BASE%.quirks.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-quirks exited %errorlevel%, expected 0
     set FAILED=1
@@ -403,7 +406,7 @@ if not "%QKCOUNT%"=="2" (
 rem Task 36.24's stage 2 counters from canned HCD headers: the switch on
 rem with traffic, the switch absent, Windows 98, a header from before 36.24
 rem and a count it cannot hold.
-"%~dp0XHCISNAP.EXE" -selftest-xpipe > "%BASE%.xpipe.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-xpipe > "%BASE%.xpipe.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-xpipe exited %errorlevel%, expected 0
     set FAILED=1
@@ -419,7 +422,7 @@ for %%S in ("XhciWideMap                 1" "promotion                   on; the
 rem p36-int4: stage B's header words at 237 to 305 after 36.24's stage 2
 rem counters, from a canned header whose word i holds i + 1 (each value
 rem names its word), and a stage B branch build's 273-word header refused.
-"%~dp0XHCISNAP.EXE" -selftest-ssusp > "%BASE%.ssusp.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-ssusp > "%BASE%.ssusp.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-ssusp exited %errorlevel%, expected 0
     set FAILED=1
@@ -434,7 +437,7 @@ for %%S in ("XhciWideMap                 206" "DNCTRL                     0x00EE
 
 rem Task 36.9: a header longer than its image is refused by
 rem print_hcd, and no other section decodes anything from it.
-"%~dp0XHCISNAP.EXE" -selftest-hcd-bad > "%BASE%.hcdbad.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-hcd-bad > "%BASE%.hcdbad.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-hcd-bad exited %errorlevel%, expected 0
     set FAILED=1
@@ -456,12 +459,12 @@ for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event de
 rem Task 36.47's system block: the OS names over canned GetVersionEx answers,
 rem the cleaning of registry text, then this host's own block as a dump's
 rem header writes it.
-"%~dp0XHCISNAP.EXE" -selftest-sysinfo > "%BASE%.sysinfo.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-sysinfo > "%BASE%.sysinfo.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-sysinfo exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("build 950 product 0 arch 65535: Windows 95" "build 1998 product 0 arch 65535: Windows 98" "build 2222 product 0 arch 65535: Windows 98 SE" "4.90 build 3000 product 0 arch 65535: Windows ME" "build 2195 product 1 arch 65535: Windows 2000" "build 2600 product 1 arch 0: Windows XP" "product 1 arch 9: Windows XP x64" "product 3 arch 0: Windows Server 2003" "product 0 arch 65535: Windows Server 2003 or XP x64" "build 6002 product 1 arch 0: Windows Vista" "build 7601 product 1 arch 9: Windows 7" "product 3 arch 9: Windows Server 2008 R2" "Windows 8 or later" "3.51 build 1057 product 0 arch 65535: unknown" "clean [Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz]" "clean [LENOVO 20F5S0??]" "clean 99 chars, ends [x...]" "clean 98 chars, ends [x...]" "clean [Standard PC (i440FX + PIIX, 1996)]" "  captured on - this machine" "    OS                    Windows" "    bitness               " "    CPU                   " "    RAM                   ") do (
+for %%S in ("build 950 product 0 arch 65535: Windows 95" "build 1998 product 0 arch 65535: Windows 98" "build 2222 product 0 arch 65535: Windows 98 SE" "4.90 build 3000 product 0 arch 65535: Windows ME" "build 2195 product 1 arch 65535: Windows 2000" "build 2600 product 1 arch 0: Windows XP" "product 1 arch 9: Windows XP x64" "product 3 arch 0: Windows Server 2003" "product 0 arch 65535: Windows Server 2003 or XP x64" "build 6002 product 1 arch 0: Windows Vista" "build 7601 product 1 arch 9: Windows 7" "product 3 arch 9: Windows Server 2008 R2" "6.2 build 9200 product 1 arch 9: Windows 8" "3.51 build 1057 product 0 arch 65535: unknown" "clean [Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz]" "clean [LENOVO 20F5S0??]" "clean 99 chars, ends [x...]" "clean 98 chars, ends [x...]" "clean [Standard PC (i440FX + PIIX, 1996)]" "  captured on - this machine" "    OS                    Windows" "    bitness               " "    CPU                   " "    RAM                   ") do (
     findstr /C:%%S "%BASE%.sysinfo.log" > nul
     if errorlevel 1 (
         echo FAIL: the system block does not say %%S
@@ -494,7 +497,7 @@ if not "%WITHHELD%"=="6" (
 rem Task 36.47's -nosysinfo (owner, 2026-10-10): the report path with the
 rem option says the details were skipped and prints none of them; without it
 rem the same report carries the block; on its own the option is refused.
-"%~dp0XHCISNAP.EXE" -selftest-report "%BASE%-sys" > "%BASE%.sys-on.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-report "%BASE%-sys" > "%BASE%.sys-on.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: a report with the system block exited %errorlevel%, expected 0
     set FAILED=1
@@ -504,12 +507,12 @@ if errorlevel 1 (
     echo FAIL: the report does not carry the system block by default
     set FAILED=1
 )
-"%~dp0XHCISNAP.EXE" -nosysinfo -selftest-report "%BASE%-nosys" > "%BASE%.sys-off.log"
+"%~dp0XHCITR.EXE" /snaptest -nosysinfo -selftest-report "%BASE%-nosys" > "%BASE%.sys-off.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: a report with -nosysinfo exited %errorlevel%, expected 0
     set FAILED=1
 )
-findstr /C:"system details were skipped by -nosysinfo" "%BASE%-nosys.TXT" > nul
+findstr /C:"system details were skipped by /nosysinfo" "%BASE%-nosys.TXT" > nul
 if errorlevel 1 (
     echo FAIL: the -nosysinfo report does not say the details were skipped
     set FAILED=1
@@ -523,18 +526,18 @@ for %%S in ("captured on - this machine" "    OS " "    CPU " "    RAM ") do (
 )
 rem -selftest-sysinfo honours the option on either side of it: the live
 rem block is skipped, the canned decodes still run.
-"%~dp0XHCISNAP.EXE" -selftest-sysinfo -nosysinfo > "%BASE%.sys-after.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-sysinfo -nosysinfo > "%BASE%.sys-after.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-sysinfo -nosysinfo exited %errorlevel%, expected 0
     set FAILED=1
 )
-"%~dp0XHCISNAP.EXE" -nosysinfo -selftest-sysinfo > "%BASE%.sys-before.log"
+"%~dp0XHCITR.EXE" /snaptest -nosysinfo -selftest-sysinfo > "%BASE%.sys-before.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -nosysinfo -selftest-sysinfo exited %errorlevel%, expected 0
     set FAILED=1
 )
 for %%F in ("%BASE%.sys-after.log" "%BASE%.sys-before.log") do (
-    findstr /C:"system details were skipped by -nosysinfo" %%F > nul
+    findstr /C:"system details were skipped by /nosysinfo" %%F > nul
     if errorlevel 1 (
         echo FAIL: -selftest-sysinfo with -nosysinfo did not skip the block: %%F
         set FAILED=1
@@ -550,7 +553,7 @@ for %%F in ("%BASE%.sys-after.log" "%BASE%.sys-before.log") do (
         set FAILED=1
     )
 )
-"%~dp0XHCISNAP.EXE" -nosysinfo > "%BASE%.sys-alone.log"
+"%~dp0XHCITR.EXE" /snaptest -nosysinfo > "%BASE%.sys-alone.log"
 if not "%errorlevel%"=="2" (
     echo FAIL: -nosysinfo on its own exited %errorlevel%, expected 2
     set FAILED=1
@@ -561,7 +564,7 @@ rem character each, 1-9 then A-C), midnight, a taken name moving A to B
 rem whichever file of the set holds it (case ignored, the .TMP names
 rem included), names outside the set ignored, Z the last, all 26 taken
 rem refused, and impossible clock fields refused with no name.
-"%~dp0XHCISNAP.EXE" -selftest-stamp > "%BASE%.stamp.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-stamp > "%BASE%.stamp.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-stamp exited %errorlevel%, expected 0
     set FAILED=1
@@ -583,7 +586,7 @@ rem Task 38.1's SHA-256, on the real /O2 binary (the miscompile lesson of
 rem task 36.35): the FIPS 180-2 examples and the empty message in memory,
 rem then a million 'a' written to a file and read back through the path the
 rem installed files are hashed by, and the file once deleted.
-"%~dp0XHCISNAP.EXE" -selftest-sha256 "%BASE%" > "%BASE%.sha.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-sha256 "%BASE%" > "%BASE%.sha.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-sha256 exited %errorlevel%, expected 0
     set FAILED=1
@@ -655,17 +658,17 @@ rem first; -nosysinfo is honoured; a name beside -report that is not an 8.3
 rem base is refused, writing nothing.
 mkdir "%RUNDIR%\rep"
 pushd "%RUNDIR%\rep"
-"%~dp0XHCISNAP.EXE" -report -c 99 > "%BASE%.report1.log"
+"%~dp0XHCITR.EXE" /snaptest -report -c 99 > "%BASE%.report1.log"
 if not "%errorlevel%"=="4" (
     echo FAIL: -report with no controller exited %errorlevel%, expected 4
     set FAILED=1
 )
-"%~dp0XHCISNAP.EXE" -report -nosysinfo -c 99 > "%BASE%.report2.log"
+"%~dp0XHCITR.EXE" /snaptest -report -nosysinfo -c 99 > "%BASE%.report2.log"
 if not "%errorlevel%"=="4" (
     echo FAIL: -report -nosysinfo with no controller exited %errorlevel%, expected 4
     set FAILED=1
 )
-"%~dp0XHCISNAP.EXE" -report -o REFUSED.X > "%BASE%.report3.log"
+"%~dp0XHCITR.EXE" /snaptest -report -o REFUSED.X > "%BASE%.report3.log"
 if not "%errorlevel%"=="2" (
     echo FAIL: -report -o REFUSED.X exited %errorlevel%, expected 2
     set FAILED=1
@@ -682,14 +685,14 @@ for %%F in (REFUSED.*) do (
 )
 copy /b *.DEV "%BASE%.devs.txt" > nul
 popd
-for %%S in ("xhci98 device report - xhcisnap -report" "  local time         " "  devices - every PCI xHCI controller" "  installed files - size, file version and SHA-256" "    xhci98.sys   " "    usbui.dll    " "  dump result" "NOT taken: cannot open" "HCD99, error" "end of device report" "captured on - this machine" "skipped by -nosysinfo") do (
+for %%S in ("xhci98 device report - XHCITR /snapshot" "  local time         " "  devices - every PCI xHCI controller" "  installed files - size, file version and SHA-256" "    xhci98.sys   " "    usbui.dll    " "  dump result" "NOT taken: cannot open" "HCD99, error" "end of device report" "captured on - this machine" "skipped by /nosysinfo") do (
     findstr /C:%%S "%BASE%.devs.txt" > nul
     if errorlevel 1 (
         echo FAIL: the .DEV files do not say %%S
         set FAILED=1
     )
 )
-for %%S in ("files named " ".DEV written" "No dump was taken; " "The log channel stays on until you run SNAPOFF.BAT" "Attach: ") do (
+for %%S in ("files named " ".DEV written" "No dump was taken; " "Attach: ") do (
     findstr /C:%%S "%BASE%.report1.log" > nul
     if errorlevel 1 (
         echo FAIL: the -report screen does not say %%S
@@ -716,14 +719,14 @@ for %%F in ("%BASE%.report1.log" "%BASE%.report2.log") do (
 )
 mkdir "%RUNDIR%\rep3"
 pushd "%RUNDIR%\rep3"
-"%~dp0XHCISNAP.EXE" -nosysinfo -report -c 99 > "%BASE%.report4.log"
+"%~dp0XHCITR.EXE" /snaptest -nosysinfo -report -c 99 > "%BASE%.report4.log"
 if not "%errorlevel%"=="4" (
     echo FAIL: -nosysinfo -report with no controller exited %errorlevel%, expected 4
     set FAILED=1
 )
 copy /b *.DEV "%BASE%.nosys.txt" > nul
 popd
-for %%S in ("-nosysinfo: this machine's names were not read, so no free text" "in the Windows directory's System32\Drivers" "skipped by -nosysinfo") do (
+for %%S in ("/nosysinfo: this machine's names were not read, so no free text" "in the Windows directory's System32\Drivers" "skipped by /nosysinfo") do (
     findstr /C:%%S "%BASE%.nosys.txt" > nul
     if errorlevel 1 (
         echo FAIL: the -nosysinfo .DEV does not say %%S
@@ -742,7 +745,7 @@ rem says so, takes no dump under the name, and exits 8.
 mkdir "%RUNDIR%\rep2"
 pushd "%RUNDIR%\rep2"
 set "XHCISNAP_FAULT=clash"
-"%~dp0XHCISNAP.EXE" -report -c 99 > "%BASE%.clash.log"
+"%~dp0XHCITR.EXE" /snaptest -report -c 99 > "%BASE%.clash.log"
 set CLASHRC=%errorlevel%
 set "XHCISNAP_FAULT="
 if not "%CLASHRC%"=="8" (
@@ -791,7 +794,7 @@ rem an empty name, a DOS device name and a leading '-' each exit 2 and write
 rem nothing.
 mkdir "%RUNDIR%\rep4"
 pushd "%RUNDIR%\rep4"
-"%~dp0XHCISNAP.EXE" -report -o MyRep_1 -c 99 > "%BASE%.named1.log"
+"%~dp0XHCITR.EXE" /snaptest -report -o MyRep_1 -c 99 > "%BASE%.named1.log"
 if not "%errorlevel%"=="4" (
     echo FAIL: -report -o MyRep_1 with no controller exited %errorlevel%, expected 4
     set FAILED=1
@@ -811,7 +814,7 @@ if errorlevel 1 (
     set FAILED=1
 )
 copy /b MyRep_1.DEV "%BASE%.named1-dev.txt" > nul
-"%~dp0XHCISNAP.EXE" -report -o myrep_1 -c 99 > "%BASE%.named2.log"
+"%~dp0XHCITR.EXE" /snaptest -report -o myrep_1 -c 99 > "%BASE%.named2.log"
 if not "%errorlevel%"=="6" (
     echo FAIL: -report -o under a taken name exited %errorlevel%, expected 6
     set FAILED=1
@@ -827,7 +830,7 @@ if errorlevel 1 (
     set FAILED=1
 )
 > TAKEN.PSC.TMP echo theirs
-"%~dp0XHCISNAP.EXE" -report -o TAKEN -c 99 > "%BASE%.named3.log"
+"%~dp0XHCITR.EXE" /snaptest -report -o TAKEN -c 99 > "%BASE%.named3.log"
 if not "%errorlevel%"=="6" (
     echo FAIL: -report -o TAKEN beside TAKEN.PSC.TMP exited %errorlevel%, expected 6
     set FAILED=1
@@ -838,7 +841,7 @@ if errorlevel 1 (
     set FAILED=1
 )
 for %%N in ("sub\X" "C:X" "A.B" "ABCDEFGHI" "" "CON" "com1" "-X" "A&B") do (
-    "%~dp0XHCISNAP.EXE" -report -o %%N -c 99 > "%BASE%.badname.log"
+    "%~dp0XHCITR.EXE" /snaptest -report -o %%N -c 99 > "%BASE%.badname.log"
     if errorlevel 3 (
         echo FAIL: -report -o %%N exited past 2, expected 2
         set FAILED=1
@@ -861,257 +864,13 @@ if not "%NAMEDCOUNT%"=="2" (
 )
 popd
 
-rem Task 38.1: SNAPON.BAT runs XHCISNAP -on %1 and
-rem SNAPGET.BAT XHCISNAP -report %1, with no if on %1, so the default and
-rem the check are the tool's. -on's parse (-selftest-on, no registry): none
-rem is 2, 1 to 4 and a quoted "1" are taken, 0 (pointing at SNAPOFF.BAT),
-rem 5, 00, 01, signs, letters, an empty word and two words are refused with
-rem exit 2; -on itself refuses the same before the registry is opened.
-"%~dp0XHCISNAP.EXE" -selftest-on > "%BASE%.on.log"
-if not "%errorlevel%"=="0" (
-    echo FAIL: -selftest-on with no level exited %errorlevel%, expected 0
-    set FAILED=1
-)
-findstr /C:"-on: level 2 accepted" "%BASE%.on.log" > nul
-if errorlevel 1 (
-    echo FAIL: -on with no level did not take level 2
-    set FAILED=1
-)
-for %%L in (1 2 3 4 "4") do (
-    "%~dp0XHCISNAP.EXE" -selftest-on %%L > "%BASE%.on.log"
-    if errorlevel 1 (
-        echo FAIL: -selftest-on %%L exited nonzero, expected 0
-        set FAILED=1
-    ) else if not errorlevel 0 (
-        echo FAIL: -selftest-on %%L exited below 0, expected 0
-        set FAILED=1
-    )
-    findstr /C:"-on: level %%~L accepted" "%BASE%.on.log" > nul
-    if errorlevel 1 (
-        echo FAIL: -selftest-on %%L did not take level %%~L
-        set FAILED=1
-    )
-)
-for %%L in (0 5 9 00 01 02 10 +1 -1 x 2x "" "1 2" "A&B") do (
-    "%~dp0XHCISNAP.EXE" -selftest-on %%L > "%BASE%.on.log"
-    if errorlevel 3 (
-        echo FAIL: -selftest-on %%L exited past 2, expected 2
-        set FAILED=1
-    ) else if not errorlevel 2 (
-        echo FAIL: -selftest-on %%L exited below 2, expected 2
-        set FAILED=1
-    )
-    findstr /C:"Nothing was" "%BASE%.on.log" > nul
-    if errorlevel 1 (
-        echo FAIL: -selftest-on %%L was not refused by -on's rule
-        set FAILED=1
-    )
-)
-"%~dp0XHCISNAP.EXE" -selftest-on 1 2 > "%BASE%.on.log"
-if not "%errorlevel%"=="2" (
-    echo FAIL: -selftest-on 1 2 exited %errorlevel%, expected 2
-    set FAILED=1
-)
-findstr /C:"one level at most" "%BASE%.on.log" > nul
-if errorlevel 1 (
-    echo FAIL: -on with two levels does not say it takes one at most
-    set FAILED=1
-)
-"%~dp0XHCISNAP.EXE" -on 0 > "%BASE%.on.log"
-if not "%errorlevel%"=="2" (
-    echo FAIL: -on 0 exited %errorlevel%, expected 2
-    set FAILED=1
-)
-findstr /C:"SNAPOFF.BAT" "%BASE%.on.log" > nul
-if errorlevel 1 (
-    echo FAIL: -on 0 does not point at SNAPOFF.BAT
-    set FAILED=1
-)
-for %%A in ("5" "00" "1 2" "x") do (
-    "%~dp0XHCISNAP.EXE" -on %%~A > "%BASE%.on.log"
-    if not errorlevel 2 (
-        echo FAIL: -on %%~A was not refused with exit 2
-        set FAILED=1
-    )
-    findstr /C:"level" "%BASE%.on.log" > nul
-    if errorlevel 1 (
-        echo FAIL: -on %%~A was not refused by -on's rule
-        set FAILED=1
-    )
-)
-"%~dp0XHCISNAP.EXE" -force -on 2 > "%BASE%.on.log"
-if not "%errorlevel%"=="2" (
-    echo FAIL: -force -on 2 exited %errorlevel%, expected 2: -on stands alone
-    set FAILED=1
-)
-
-rem -report NAME, the name as -report's own argument: a valid name is the
-rem base (exit 4), the same name again is taken (exit 6), both spellings at
-rem once are refused, and every bad name - a leading '-', '/?', '-help', a
-rem DOS device name, a cmd.exe character - is refused by the name rule
-rem with exit 2, writing nothing.
-mkdir "%RUNDIR%\rep5"
-pushd "%RUNDIR%\rep5"
-"%~dp0XHCISNAP.EXE" -report MyRep_2 -c 99 > "%BASE%.pos1.log"
-if not "%errorlevel%"=="4" (
-    echo FAIL: -report MyRep_2 with no controller exited %errorlevel%, expected 4
-    set FAILED=1
-)
-if not exist MyRep_2.DEV (
-    echo FAIL: -report MyRep_2 wrote no MyRep_2.DEV
-    set FAILED=1
-)
-findstr /C:"files named MyRep_2 (the name given)" "%BASE%.pos1.log" > nul
-if errorlevel 1 (
-    echo FAIL: the -report NAME screen does not say the name was given
-    set FAILED=1
-)
-"%~dp0XHCISNAP.EXE" -report myrep_2 -c 99 > "%BASE%.pos2.log"
-if not "%errorlevel%"=="6" (
-    echo FAIL: -report NAME under a taken name exited %errorlevel%, expected 6
-    set FAILED=1
-)
-"%~dp0XHCISNAP.EXE" -report A1 -o B1 -c 99 > "%BASE%.pos3.log"
-if not "%errorlevel%"=="2" (
-    echo FAIL: -report A1 -o B1 exited %errorlevel%, expected 2
-    set FAILED=1
-)
-"%~dp0XHCISNAP.EXE" -report /? > "%BASE%.pos4.log"
-if not "%errorlevel%"=="2" (
-    echo FAIL: -report /? exited %errorlevel%, expected 2: a name, refused
-    set FAILED=1
-)
-for %%N in ("sub\X" "C:X" "A.B" "ABCDEFGHI" "" "CON" "nul" "Aux" "prn" "COM0" "com9" "LPT0" "lpt9" "-X" "-help" "-dump" "A&B" "A^B" "A B" "A%%B") do (
-    "%~dp0XHCISNAP.EXE" -report %%N -c 99 > "%BASE%.posbad.log"
-    if errorlevel 3 (
-        echo FAIL: -report %%N exited past 2, expected 2
-        set FAILED=1
-    ) else if not errorlevel 2 (
-        echo FAIL: -report %%N exited below 2, expected 2
-        set FAILED=1
-    )
-    findstr /C:"That name is refused" "%BASE%.posbad.log" > nul
-    if errorlevel 1 (
-        echo FAIL: -report %%N was not refused by the name rule
-        set FAILED=1
-    )
-)
-set NAMEDCOUNT=0
-for %%F in (*) do set /a NAMEDCOUNT+=1
-if not "%NAMEDCOUNT%"=="1" (
-    echo FAIL: the -report NAME cases left %NAMEDCOUNT% files, expected 1: MyRep_2.DEV
-    dir /b
-    set FAILED=1
-)
-popd
-
-rem The batches themselves, through cmd.exe, beside a copy of this build: a
-rem quoted word, one with a cmd.exe character in it and a bad one each reach
-rem XHCISNAP and are refused there, with no cmd.exe error first; with
-rem XHCISNAP_FAULT=noreg SNAPON.BAT's levels are parsed and nothing is
-rem written, so a quoted "1" is level 1 and no word is 2. SNAPGET.BAT is not
-rem run with a good name: that would open this host's own controller. A
-rem host shell that sets NoDefaultCurrentDirectoryInExePath would not find
-rem the batches' bare XHCISNAP in their own directory, as no 98 SE to 7
-rem prompt fails to, so it is cleared for these runs (setlocal holds it).
-set "NoDefaultCurrentDirectoryInExePath="
-mkdir "%RUNDIR%\bat"
-copy /b XHCISNAP.EXE "%RUNDIR%\bat\" > nul
-copy /b snapon.bat "%RUNDIR%\bat\" > nul
-copy /b snapget.bat "%RUNDIR%\bat\" > nul
-pushd "%RUNDIR%"
-call "%RUNDIR%\bat\snapget.bat" "A&B" < nul > "%BASE%.bat1.log" 2>&1
-call "%RUNDIR%\bat\snapget.bat" "-X" < nul > "%BASE%.bat3.log" 2>&1
-call "%RUNDIR%\bat\snapget.bat" CON < nul > "%BASE%.bat4.log" 2>&1
-call "%RUNDIR%\bat\snapget.bat" -c < nul > "%BASE%.bat11.log" 2>&1
-call "%RUNDIR%\bat\snapget.bat" -o < nul > "%BASE%.bat12.log" 2>&1
-popd
-for %%F in ("%BASE%.bat1.log" "%BASE%.bat3.log" "%BASE%.bat4.log" "%BASE%.bat11.log" "%BASE%.bat12.log") do (
-    findstr /C:"That name is refused" %%F > nul
-    if errorlevel 1 (
-        echo FAIL: SNAPGET.BAT did not reach XHCISNAP's name refusal: %%F
-        type %%F
-        set FAILED=1
-    )
-    findstr /C:"SNAPGET.BAT takes such a name, or none" %%F > nul
-    if errorlevel 1 (
-        echo FAIL: SNAPGET.BAT's XHCISNAP did not say what it takes: %%F
-        set FAILED=1
-    )
-    findstr /I /C:"unexpected" /C:"not recognized" /C:"syntax" %%F > nul
-    if not errorlevel 1 (
-        echo FAIL: cmd.exe stopped SNAPGET.BAT before XHCISNAP ran: %%F
-        type %%F
-        set FAILED=1
-    )
-)
-set "XHCISNAP_FAULT=noreg"
-pushd "%RUNDIR%"
-call "%RUNDIR%\bat\snapon.bat" < nul > "%BASE%.bat5.log" 2>&1
-call "%RUNDIR%\bat\snapon.bat" "1" < nul > "%BASE%.bat6.log" 2>&1
-call "%RUNDIR%\bat\snapon.bat" 4 < nul > "%BASE%.bat7.log" 2>&1
-call "%RUNDIR%\bat\snapon.bat" "A&B" < nul > "%BASE%.bat8.log" 2>&1
-call "%RUNDIR%\bat\snapon.bat" 0 < nul > "%BASE%.bat9.log" 2>&1
-call "%RUNDIR%\bat\snapon.bat" 00 < nul > "%BASE%.bat10.log" 2>&1
-popd
-set "XHCISNAP_FAULT="
-for %%C in ("bat5:2" "bat6:1" "bat7:4") do (
-    for /f "tokens=1,2 delims=:" %%P in (%%C) do (
-        findstr /C:"-on: level %%Q accepted" "%BASE%.%%P.log" > nul
-        if errorlevel 1 (
-            echo FAIL: SNAPON.BAT did not run XHCISNAP -on at level %%Q: %%P
-            type "%BASE%.%%P.log"
-            set FAILED=1
-        )
-        findstr /C:"The channel is on." "%BASE%.%%P.log" > nul
-        if errorlevel 1 (
-            echo FAIL: SNAPON.BAT did not say the channel is on: %%P
-            set FAILED=1
-        )
-    )
-)
-for %%F in ("%BASE%.bat8.log" "%BASE%.bat9.log" "%BASE%.bat10.log") do (
-    findstr /C:"SNAPON.BAT takes the same" %%F > nul
-    if errorlevel 1 (
-        echo FAIL: SNAPON.BAT did not reach XHCISNAP's level refusal: %%F
-        type %%F
-        set FAILED=1
-    )
-    findstr /C:"The channel is on." %%F > nul
-    if not errorlevel 1 (
-        echo FAIL: SNAPON.BAT said the channel is on for a refused level: %%F
-        set FAILED=1
-    )
-    findstr /I /C:"unexpected" /C:"not recognized" /C:"syntax" %%F > nul
-    if not errorlevel 1 (
-        echo FAIL: cmd.exe stopped SNAPON.BAT before XHCISNAP ran: %%F
-        set FAILED=1
-    )
-)
-findstr /C:"SNAPOFF.BAT (XHCISNAP -disable)" "%BASE%.bat9.log" > nul
-if errorlevel 1 (
-    echo FAIL: SNAPON.BAT 0 does not point at SNAPOFF.BAT
-    set FAILED=1
-)
-rem Owner, 2026-10-13: the last line before pause's prompt names what to
-rem attach - XHCISNAP's, since the batch prints nothing after it.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$bad = 0; foreach ($c in @(@('bat1','Nothing to attach: nothing was written.'), @('bat3','Nothing to attach: nothing was written.'), @('bat4','Nothing to attach: nothing was written.'), @('bat11','Nothing to attach: nothing was written.'), @('bat12','Nothing to attach: nothing was written.'), @('bat5','Nothing to attach yet: restart Windows, reproduce, then run SNAPGET.BAT.'), @('bat6','Nothing to attach yet: restart Windows, reproduce, then run SNAPGET.BAT.'), @('bat8','Nothing to attach: nothing was changed.'), @('bat9','Nothing to attach: nothing was changed.'))) { $l = @(Get-Content -LiteralPath ($env:BASE + '.' + $c[0] + '.log') | Where-Object { $_.Trim() -ne '' -and $_ -notmatch '^Press any key' }); if ($l.Count -eq 0 -or $l[$l.Count - 1] -cne $c[1]) { Write-Output ('FAIL: ' + $c[0] + ' ends with: ' + $(if ($l.Count) { $l[$l.Count - 1] } else { '(nothing)' })); $bad = 1 } }; exit $bad"
-if errorlevel 1 set FAILED=1
-set BATCOUNT=0
-for %%F in ("%RUNDIR%\bat\*") do set /a BATCOUNT+=1
-if not "%BATCOUNT%"=="3" (
-    echo FAIL: the batch cases left %BATCOUNT% files beside the batches, expected 3
-    dir /b "%RUNDIR%\bat"
-    set FAILED=1
-)
-
 rem The memory descriptor 98 SE's and ME's cfgmgr32.dll hands back (the
 rem p38-1 legs, 2026-10-13): NT's 32-byte header and 36-byte range with the
 rem range-size field left at 9x's 20. It decodes as Device Manager showed it,
 rem as do NT's (2000 to 7: count 0 with one range after the header); a size
 rem neither has stays raw. The IRQ descriptors 2000 (32 bytes), XP and XP x64
 rem (36) and 7 (36, message-signalled) handed back decode as 11, 10 and MSI.
-"%~dp0XHCISNAP.EXE" -selftest-res > "%BASE%.res.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-res > "%BASE%.res.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-res exited %errorlevel%, expected 0
     set FAILED=1
@@ -1143,7 +902,7 @@ if errorlevel 1 (
 rem -report's publication on its own (report_publish, region_create): clean,
 rem a .TXT taken first, a .PSC taken after the .BIN was renamed, a temporary
 rem taken first. The other file keeps its contents and this run's are gone.
-"%~dp0XHCISNAP.EXE" -selftest-publish "%BASE%-pub" > "%BASE%.publish.log"
+"%~dp0XHCITR.EXE" /snaptest -selftest-publish "%BASE%-pub" > "%BASE%.publish.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-publish exited %errorlevel%, expected 0
     set FAILED=1
@@ -1156,12 +915,48 @@ for %%S in ("publish clean: ok" "publish .TXT taken: ok" "publish .PSC taken: ok
     )
 )
 
+rem The user's spellings (42-A.4): /snapshot NAME /c N is -report NAME -c N,
+rem /probe /o X is refused as -probe -o X is, and a dashed word of the
+rem user's own is refused before anything is read.
+pushd "%RUNDIR%"
+"%~dp0XHCITR.EXE" /snapshot USR_1 /c 99 > "%BASE%.user1.log"
+if not "%errorlevel%"=="4" (
+    echo FAIL: /snapshot USR_1 /c 99 exited %errorlevel%, expected 4
+    set FAILED=1
+)
+if not exist USR_1.DEV (
+    echo FAIL: /snapshot USR_1 /c 99 wrote no USR_1.DEV
+    set FAILED=1
+)
+"%~dp0XHCITR.EXE" /probe /o X > "%BASE%.user2.log"
+if not "%errorlevel%"=="2" (
+    echo FAIL: /probe /o X exited %errorlevel%, expected 2
+    set FAILED=1
+)
+"%~dp0XHCITR.EXE" /dump -verbosity 2 > "%BASE%.user3.log"
+if not "%errorlevel%"=="2" (
+    echo FAIL: /dump -verbosity 2 exited %errorlevel%, expected 2
+    set FAILED=1
+)
+findstr /C:"Nothing was written." "%BASE%.user3.log" > nul
+if errorlevel 1 (
+    echo FAIL: /dump -verbosity 2 did not say nothing was written
+    set FAILED=1
+)
+"%~dp0XHCITR.EXE" /snaptest -on 2 > "%BASE%.user4.log"
+if not "%errorlevel%"=="2" (
+    echo FAIL: the old -on switch was not refused with exit 2
+    set FAILED=1
+)
+del /q USR_1.* 2> nul
+popd
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
 if "%FAILED%"=="1" (
-    echo xhcisnap selftest FAILED
+    echo xhcitr snapshot selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 33 cases, all passed
+echo xhcitr snapshot selftest: 33 cases, all passed
 exit /b 0

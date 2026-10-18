@@ -246,7 +246,7 @@ static void test_reader(void)
     tr_text_init(&t, text, sizeof(text));
     tr_xhq_log_text(&t, &x, 1);
     CHECK(strstr(text, "Recording:  off (XhciLogVerbosity 0)") != NULL, "off");
-    CHECK(strstr(text, "SNAPON.BAT") != NULL, "advice");
+    CHECK(strstr(text, "View > Logging level") != NULL, "advice");
     CHECK(strstr(text, "Counters") == NULL, "no counters");
     tr_text_init(&t, text, sizeof(text));
     CHECK_EQ(tr_xhq_pci_text(&t, &x), 1, "PCI at level 0");

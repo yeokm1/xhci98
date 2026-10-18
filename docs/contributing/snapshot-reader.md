@@ -1,11 +1,23 @@
-# xhcisnap - reading this driver's own log off a running machine
+# The snapshot reader - reading this driver's own state off a running machine
 
-**To be deprecated in a subsequent release.** From `3.0.0.0` the xHCI98
-USB Tree (`xhcitr`) reads both drivers' logs and sets their logging
-level; `XHCISNAP.EXE` and its batch files still ship in `3.0.0.0` and
-work as before.
+This is the reference for the snapshot route (the door's USBUSER
+`PassThru` request, its schema and regions) and for the files it
+produces. Since `3.1.0.0` the route is read by the xHCI98 USB Tree:
+`XHCITR /snapshot`, `/dump` and `/probe` are what were `XHCISNAP
+-report`, `-dump` and `-probe`, and File > Save Snapshot... and the
+"Snapshot" part of Save Report and `/report` run `/snapshot` (design
+record 25 section 15). Its engine is `xhcitr\tr_snap.c`, moved from
+`xhcisnap\xhcisnap.c`; its self-test is `xhcitr\snaptest.cmd`
+(`XHCITR /snaptest`), and the counter-name check is
+`scripts\check-counter-names.ps1`. `XHCISNAP.EXE` and its `SNAPON.BAT`,
+`SNAPGET.BAT` and `SNAPOFF.BAT` were retired in `3.1.0.0` (roadmap-usb4
+task 42-A.4); the logging level is set by XHCITR's View > Logging
+level... or `XHCITR /setlevel` (record 25 section 7.5). The sections
+below keep XHCISNAP's names where they record its history; read
+`XHCISNAP -report` as `XHCITR /snapshot` for a current build.
 
-`XHCISNAP.EXE` reads `xhci98.sys`'s extension, its raw PORTSC array, (from
+The snapshot reader (`xhcitr\tr_snap.c`; `XHCISNAP.EXE` up to `3.0.0.0`)
+reads `xhci98.sys`'s extension, its raw PORTSC array, (from
 2.0.0.0) its enabled slots and (from 2.2.0.0) its root ports' enumeration and
 counters from user mode, and writes a report a user can send back.
 
@@ -18,9 +30,10 @@ was reached through usbport's `PassThru` vendor escape. Most of this document
 is the 1.x history; where it says usbport or the miniport, that is the 1.x
 route, which the tool still reads.
 
-It ships. The kernel side is in every build flavour of the driver and this tool
-is published in `releases/<version>/tools/xhcisnap/` (before `2.4.0.0`,
-`releases/<version>/xhcisnap/`). It began as a bench companion
+It ships. The kernel side is in every build flavour of the driver and the
+reader is in `XHCITR.EXE` and `XHCITR64.EXE`, published in
+`releases/<version>/tools/xhcitr/` (up to `3.0.0.0` `XHCISNAP.EXE` in
+`tools/xhcisnap/`; before `2.4.0.0`, `releases/<version>/xhcisnap/`). It began as a bench companion
 to a probe build that could not ship either; it is part of the product now.
 
 ## Why it exists
@@ -42,79 +55,73 @@ it.
 
 ## What it needs
 
-- The channel switched on. `XhciLogVerbosity` defaults to `2` since `3.0.0.0`
-  (`0` before, and an update keeps the value an earlier install wrote); `0` is
-  off outright: the driver answers this tool the way a build without the
-  channel would. `XHCISNAP -verbosity 2` sets it on every xhci98 controller
-  the machine has. Then restart.
+- The level. `XhciLogVerbosity` defaults to `2` since `3.0.0.0` (`0`
+  before, and an update keeps the value an earlier install wrote); `0` is
+  off outright: the driver answers the snapshot the way a build without the
+  channel would. XHCITR's View > Logging level... or
+  `XHCITR /setlevel xhci98=<n>` sets it on every xhci98 controller the
+  machine has (record 25 section 7.5). Then restart.
 - Nothing else. No service, no `regedit`, and no `IOCTL_USB_DIAGNOSTIC_MODE_ON`;
   the route itself is ungated.
 
 ## Using it
 
 ```text
-XHCISNAP -verbosity 2    set the level exactly (0-4), then RESTART
-XHCISNAP -report         the field report: mDDhhmmS.DEV, then the dump of
-                         controller 0 into mDDhhmmS.TXT/.BIN/.PSC, named from
-                         the clock in the current directory (from 2.4.0.0;
-                         see "The field report"). Takes -c and -nosysinfo
-XHCISNAP -report MYPC    the same, named MYPC.DEV/.TXT/.BIN/.PSC: an 8.3 base
-                         in the current directory, refused (exit 6) rather
-                         than overwritten when a file of the set exists;
-                         -report -o MYPC is the same name, spelled the old way
-XHCISNAP -on [LEVEL]     SNAPON.BAT's form: -verbosity LEVEL, LEVEL exactly
-                         1-4, 2 when none is given; 0 and anything else
-                         refused (exit 2, nothing changed). It stands alone
-XHCISNAP -dump           dump controller 0 to XHCISNAP.BIN/.PSC/.TXT
-XHCISNAP -dump -c 1 -o WEDGED   controller 1 to WEDGED.BIN/.PSC/.TXT
-XHCISNAP -disable        exactly -verbosity 0: back to 0, which is off outright
-XHCISNAP -probe          check the ROUTE only, with four controls
-XHCISNAP -help           the long help; bare XHCISNAP prints the short one
-XHCISNAP -force ...      write to a key matched by value NAME alone. It is a
-                         modifier on -verbosity / -disable only: on its own it
-                         asks for nothing and is refused with exit 2
-XHCISNAP -nosysinfo -report   a report whose header skips reading the
-                         system details (from 2.3.0.0; see "The machine it was
-                         captured on"). A modifier on -report or a dump only
+XHCITR /snapshot [NAME] [/c N] [/nosysinfo]
+                         the field report: NAME.DEV, then the dump of
+                         controller N (default 0) into NAME.TXT/.BIN/.PSC,
+                         in the current directory. NAME is an 8.3 base,
+                         else made from the clock (mDDhhmmS; see "The field
+                         report"); refused (exit 6) rather than overwritten
+                         when a file of the set exists. /o NAME is the same
+XHCITR /dump [/c N] [/o BASE] [/nosysinfo]
+                         the dump alone into BASE.TXT/.BIN/.PSC, replacing
+                         an earlier set of that BASE
+XHCITR /probe            check the ROUTE only, with four controls
+XHCITR /snapshot /?      the long help
+/nosysinfo               a dump whose header skips reading the system
+                         details (see "The machine it was captured on")
 ```
+
+With the output redirected these write their text there; otherwise a
+message box shows it, with the current directory. A word beginning with `-`
+after `/snapshot`, `/dump` or `/probe` is refused before anything is read.
+In the window, File > Save Snapshot... runs `/snapshot` in a folder the user
+picks, for the first xhci98 controller. Save Report and `XHCITR /report`
+end with a "Snapshot" part: the `.DEV` once (from the run for the first
+xhci98 controller, or for controller 0 when none is listed) and each
+xhci98 controller's dump `.TXT`, whole, withheld when its level is 4 or
+cannot be read (record 25 section 15). The raw `.BIN` and `.PSC` come only
+from `/snapshot` or `/dump`.
 
 The ladder: 0 off; 1 the channel with counters only and the ring still off;
 2 adds the note ring (this is the log, use this one); 3 adds the PORTSC table
 to the `.TXT`; 4 adds everything including kernel addresses.
 
-The published sequence is four steps and none of them is `regedit`:
-`-verbosity 2`, restart, reproduce, `-report` (from 2.4.0.0; before it the
-last step was a dump named with `-o`, and `-o` and `-c` still each imply
-`-dump`). The
-three batch files beside the tool run the steps for a reporter: `SNAPON.BAT`,
-`SNAPGET.BAT` and `SNAPOFF.BAT` (see "The field report"); `SNAPON.BAT` takes
-an optional level (1 to 4, default 2) and `SNAPGET.BAT` an optional name to
-save to. There is one value to set.
-`-verbosity N` sets exactly N, up or down, and is the only knob.
+The published sequence: level 2 (the default), restart, reproduce, Save
+Report (or `/snapshot` when the files are asked for). Up to `3.0.0.0` this
+was `XHCISNAP -verbosity 2` (also `-on`, `-disable` and `-force`), restart,
+reproduce, `XHCISNAP -report`, with `SNAPON.BAT`, `SNAPGET.BAT` and
+`SNAPOFF.BAT` running the steps; the sections below keep XHCISNAP's names
+where they record that history.
 
-`-verbosity N` prints each key's previous level beside the write. A value out
-of range is one the driver refuses rather than clamps (a start that reads it
-applies the default, which is 2 since `3.0.0.0` and was off before), so the tool reports it rather than silently
-correcting it. A reported value cannot drift from the driver's policy; a
-corrected one can.
+The level is about the next start, never about what a running driver did.
+The value is read once per start, so a key edited since the last boot has
+been read by nothing, and a controller may be running at a level its key no
+longer names. The registry cannot tell those apart. The level actually
+applied travels in a dump's header, which is where to read it.
 
-The report is about the next start, never about what a running driver did. The
-value is read once per start, so a key edited since the last boot has been read
-by nothing, and a controller may be running at a level its key no longer names.
-The registry cannot tell those apart. The level actually applied travels in a
-dump's header, which is where to read it.
-
-There is a fifth step that is not one of the four: `-disable`, once the capture
-has been sent. While the channel is on, any local user who can open `\\.\HCD<n>`
-can read this driver's diagnostic state through it. That is accepted rather than
-overlooked. This driver cannot tighten the door, because usbport owns the device
-object, hardcodes the name, completes `IRP_MJ_CREATE` with no work and leaves the
-IOCTL `FILE_ANY_ACCESS`. So the registry value is the whole access story:
-Administrators on Windows 2000, nothing at all on Windows 98, which has no user
-boundary. The content is this driver's own counters, notes, PORTSC and the
-miniport extension (raw in the `.BIN` at any level from 1 up), with kernel
-addresses in the note ring and the `.TXT` only at level 4; no user data and no
-other process's memory.
+Once a capture at level 3 or 4 has been sent, set the level back to 2.
+While the level is above 0, any local user who can open `\\.\HCD<n>` can
+read this driver's diagnostic state through the door. That is accepted
+rather than overlooked: under the 1.x miniport this driver could not tighten
+the door, because usbport owned the device object, hardcoded the name,
+completed `IRP_MJ_CREATE` with no work and left the IOCTL `FILE_ANY_ACCESS`,
+so the registry value was the whole access story: Administrators on Windows
+2000, nothing at all on Windows 98, which has no user boundary. The content
+is this driver's own counters, notes, PORTSC and its extension (raw in the
+`.BIN` at any level from 1 up), with kernel addresses in the note ring and
+the `.TXT` only at level 4; no user data and no other process's memory.
 
 ### Three files, and only one of them is the report
 

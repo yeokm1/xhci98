@@ -356,15 +356,15 @@ The INFs cannot include anything. An INF is a data file Windows setup reads, not
 
 - `scripts\inf-gate\check-inf.ps1`, which every build runs, reads `src\xhci_version.h` as the authority and refuses four different disagreements: the header's two forms of the number differing from each other (nothing in any toolchain would notice, since `rc.exe` wants the integers and every other consumer wants the string), the header's version differing from `DriverVer`'s, the header's date differing from `DriverVer`'s, and a version literal appearing in `src\xhci98.rc` at all, or the include being dropped. That last rule is what keeps the header an authority rather than a suggestion.
 - `scripts\package\make-package.ps1` compares the built binary's own `FileVersion` with the `DriverVer` in the INF staged beside it. That is the copy a source-side gate cannot see and the only one an installed machine reads: bumping the source without rebuilding produces a package that installs cleanly, is accepted by Windows 2000 as an upgrade, and reports the older build for ever afterwards.
-- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` (from `2.4.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`, from `3.0.0.0` also `XHCIINST.EXE`/`XHCIIN64.EXE`, the install tool `INSTALL.BAT` runs, built by `xhciinst\build.cmd` and checked by `xhciinst\selftest.cmd`, which holds both import tables to `KERNEL32.dll` and `ADVAPI32.dll`; `-SkipInstallTool` cuts without it) is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
+- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` (`XHCISNAP.EXE` up to `3.0.0.0`; from `2.4.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`, from `3.0.0.0` also `XHCIINST.EXE`/`XHCIIN64.EXE`, the install tool `INSTALL.BAT` runs, built by `xhciinst\build.cmd` and checked by `xhciinst\selftest.cmd`, which holds both import tables to `KERNEL32.dll` and `ADVAPI32.dll`; `-SkipInstallTool` cuts without it) is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
 
 The header spells the number out twice because `FILEVERSION` takes four comma-separated integers and cannot be given a string, and deriving one form from the other needs preprocessor stringizing that this era's `rc.exe` does not handle reliably. So both are written and the INF gate compares them. Two adjacent lines a gate reads beat one clever line no toolchain agrees about.
 
 One trap is worth knowing before anyone improves on this. An earlier attempt at a macro factored only the string form, so the two strings were tied to each other and left free to drift from the numbers. Worse, it made the INF gate's cross-check vacuous, because that gate searched the `.rc` for the version text and the `#define` line satisfied the search whatever the `VALUE` entries said. The single-source header is only safe because the gate changed with it: it reads the header, not the file it is checking, and it refuses a literal in the `.rc` outright. A gate that can be satisfied by the definition it is checking against is not a gate.
 
-The build stamps are not in the header. `XHCIQUAL` and `XHCISNAP` each print a `built <date> <time>` line from their compiler's `__DATE__`/`__TIME__`. That is a different fact from the version and must stay one: between cuts the version does not move and the tools are rebuilt many times a day, so the stamp is what tells a guest's stale copy from the one just staged. The driver has no such banner in a release build (`DriverEntry (built ...)` is inside `XHCI_DBG_TEXT` and compiles out), so a release binary is identified by its version resource and its SHA-256; a byte compare cannot stand in for either (task 13-L.4 in the roadmap records why).
+The build stamps are not in the header. `XHCIQUAL` and `XHCITR`'s snapshot (`XHCISNAP` up to `3.0.0.0`) each print a `built <date> <time>` line from their compiler's `__DATE__`/`__TIME__`. That is a different fact from the version and must stay one: between cuts the version does not move and the tools are rebuilt many times a day, so the stamp is what tells a guest's stale copy from the one just staged. The driver has no such banner in a release build (`DriverEntry (built ...)` is inside `XHCI_DBG_TEXT` and compiles out), so a release binary is identified by its version resource and its SHA-256; a byte compare cannot stand in for either (task 13-L.4 in the roadmap records why).
 
-A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` (and, from `3.1.0.0`, for `XHCIDI.EXE`, which also needs the Windows 98 SE DDK's `setupx.h`, `prsht.h` and `setupx.lib` in `tools\win98ddk-extracted\` at the hashes `docs\references\README.md` records; design record 27 section 3.3) and the in-repo MSVC 6.0 for `XHCISNAP.EXE`. Neither is skippable on a real cut. `-SkipQualtool` and `-SkipSnapTool` exist for a host that cannot build one, and a release cut with the second publishes a read channel nobody can open. From `2.4.0.0` the cleanup tool (`xhcicln\build.cmd`, roadmap-hcd task 38.8) needs the in-repo MSVC 6.0 for `XHCICLN.EXE` and WDK 7.1, already a prerequisite of the amd64 driver, for `XHCICL64.EXE`; `-SkipCleanTool` leaves it out, and since nothing needs the tool the release is whole without it, its readme saying the directory is missing. Its executables ask for elevation (a manifest), so `xhcicln\selftest.cmd`, which `build-driver.cmd` runs when `XHCICLN.EXE` has been built, starts them with `__COMPAT_LAYER=RunAsInvoker`.
+A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` (and, from `3.1.0.0`, for `XHCIDI.EXE`, which also needs the Windows 98 SE DDK's `setupx.h`, `prsht.h` and `setupx.lib` in `tools\win98ddk-extracted\` at the hashes `docs\references\README.md` records; design record 27 section 3.3) and the in-repo MSVC 6.0 for `XHCITR.EXE`, which since `3.1.0.0` also reads the driver's snapshot (roadmap-usb4 42-A.4; `XHCISNAP.EXE` was retired). `-SkipQualtool` exists for a host that cannot build the qualifier; it is not for a real cut. From `2.4.0.0` the cleanup tool (`xhcicln\build.cmd`, roadmap-hcd task 38.8) needs the in-repo MSVC 6.0 for `XHCICLN.EXE` and WDK 7.1, already a prerequisite of the amd64 driver, for `XHCICL64.EXE`; `-SkipCleanTool` leaves it out, and since nothing needs the tool the release is whole without it, its readme saying the directory is missing. Its executables ask for elevation (a manifest), so `xhcicln\selftest.cmd`, which `build-driver.cmd` runs when `XHCICLN.EXE` has been built, starts them with `__COMPAT_LAYER=RunAsInvoker`.
 
 The scheme is one four-part version per released package, and all four fields have a meaning, settled by the project owner on 2026-09-10 after `1.1.0.0` moved the second one and nothing here said what that meant:
 
@@ -549,8 +549,10 @@ whatever architecture is being built - then the UAS INF gate and the
 each self-tested first and run over both architectures' files, run the packager
 self-tests, the QEMU launcher self-tests, the vm-matrix verdict self-tests,
 the tracked batch files' line-ending check and the source charset check, run
-the XHCISNAP report self-test
-if `xhcisnap\XHCISNAP.EXE` has been built, run `test\run-host-tests.cmd`,
+the snapshot self-test (`xhcitr\snaptest.cmd`, which drives `XHCITR
+/snaptest` and runs `scripts\check-counter-names.ps1` on its counter
+output; `xhcisnap\selftest.cmd` up to `3.0.0.0`)
+if `xhcitr\build.cmd` has built `XHCITR.EXE`, run `test\run-host-tests.cmd`,
 `build` each requested flavour in its own child `cmd` (`setenv.bat` is not
 idempotent across flavours), fail on a build error or on the presence of
 `src\build{chk,fre,chk_qemu}.err`, then run the post-link import gate and the
@@ -3878,7 +3880,8 @@ which is all of `xhciCheckController`'s printing, compiles only into the `qemu`
 flavour; the shipping `debug` build prints nothing as it runs. And per-line
 `DbgPrint` under DebugView bugchecks Win98 metal across three device classes
 (roadmap task 12.2), so that route is banned on the machine it would have
-served. On bare metal the counter route is `XHCISNAP`, shipping in every
+served. On bare metal the counter route is the snapshot (`XHCITR /dump`
+or `/snapshot`; `XHCISNAP` up to `3.0.0.0`), shipping in every
 flavour since `0.0.0.6`, and the snapshot `.BIN` decodes against
 `offsets.txt` exactly as the live reader's dump does. The decision itself,
 counters over a per-host script, is unchanged; only the channel that carries
@@ -3890,9 +3893,9 @@ out of history, and the two channels have distinct jobs:
 | Question | Channel |
 |---|---|
 | Did this family move at all, in a VM | the `CheckController` block in a `qemu` build |
-| Did this family move at all, on bare metal | `XHCISNAP -dump`: the `.BIN` decoded against `offsets.txt`, or the `.TXT` for the note ring. There is no live channel on Win98 metal |
+| Did this family move at all, on bare metal | `XHCITR /dump` (`XHCISNAP -dump` up to `3.0.0.0`): the `.BIN` decoded against `offsets.txt`, or the `.TXT` for the note ring. There is no live channel on Win98 metal |
 | The exact value during continuous traffic, after a site's 32 prints are spent | `readcounters.ps1` against a live QEMU guest |
-| A per-row value that is a number rather than an event (the topology pair table, the device records) | `readcounters.ps1` or an `XHCISNAP` `.BIN`; a table cannot be spent through 32 lines |
+| A per-row value that is a number rather than an event (the topology pair table, the device records) | `readcounters.ps1` or a snapshot `.BIN` (`XHCITR /dump`); a table cannot be spent through 32 lines |
 
 The remaining obligation is a regeneration, not a rebuild: `offsets.c` must be
 re-run after any change to `XHCI_EXTENSION`, and `offsets.txt`'s `SIZEOF`
@@ -7602,8 +7605,10 @@ That leaves three channels, in the order worth trying:
    the target,
    and `CheckController` is DISPATCH_LEVEL under usbport's `MiniportSpinLock`.
 
-3. The snapshot read. `XHCISNAP` reads the counters and the stored log out of
-   the running machine, on demand, through usbport's PassThru escape, shipping
+3. The snapshot read. `XHCITR /dump` (`XHCISNAP` up to `3.0.0.0`) reads the
+   counters and the stored log out of the running machine, on demand,
+   through the door's PassThru request (usbport's escape under the
+   miniport), shipping
    in every flavour since `0.0.0.6` and measured on the E460 at stage L3. It
    is the only number a Windows 98 metal run can produce, so a bare-metal
    session is no longer "behaviour only".
@@ -7615,16 +7620,16 @@ That leaves three channels, in the order worth trying:
    is four steps and the order matters:
 
    ```
-   XHCISNAP -verbosity 2        (on every xhci98 controller)
+   XHCITR /setlevel xhci98=2    (on every xhci98 controller)
    restart
    reproduce the problem
-   XHCISNAP -dump -o C:\NAME
+   XHCITR /dump /o C:\NAME
    ```
 
    So a bare-metal session's first action is the command and the restart, and
    the dump is what happens at the end. Taking the dump at the end of a
    session that was never enabled returns what a machine with no channel
-   returns. `xhcisnap/README.md` is the reference;
+   returns. `docs/contributing/snapshot-reader.md` is the reference;
    `docs/contributing/passthru-snapshot-instrument.md` is the as-built record.
 
 Prove the channel before you trust the run. Every trace this project has

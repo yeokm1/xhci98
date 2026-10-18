@@ -101,6 +101,11 @@ static LIST_ENTRY cmRegFilters;
 static LIST_ENTRY cmRegDomains;
 static ULONG cmRegSerial;
 static ULONG cmRegAttached;
+/* Child filters AddDevice made that no bridge could be named for yet
+ * (CmRegAttLink, CmRegRelations): while any exists, a bridge that ever
+ * answered more functions than its snapshot keeps (TruncSeen) cannot prove
+ * a retirement (record 22 section 7.7). Under the lock. */
+static ULONG cmRegUnattributed;
 static ULONG cmRegSkipped;
 static ULONG cmRegRefused;
 static ULONG cmRegOver;
@@ -479,6 +484,9 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     ULONG count;
     ULONG fresh;
     ULONG i;
+    ULONG j;
+    PLIST_ENTRY e;
+    PCM_FILTER child;
     ULONG attach;
     ULONG over;
     KIRQL irql;
@@ -547,13 +555,49 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     }
     if (seq == filter->ChangeSeq) {
         filter->Unsettled = 0;
+        /* An answer to a query begun after the last change: what the
+         * recovery's retirement proof counts (CmReenumRetired), with
+         * whether that same answer was complete and reported nothing. */
+        filter->RelAnswers++;
+        filter->RelEmptyAt = count == 0 ? filter->RelAnswers : 0;
+    } else if (count != 0) {
+        /* An older query's answer that still reports a function: no
+         * proof of absence stands past it. */
+        filter->RelEmptyAt = 0;
     }
     for (i = 0; i < count; i++) {
         filter->Snap[i] = now[i];
     }
     filter->SnapCount = count;
+    if (relations != NULL) {
+        /* A child filter AddDevice made that no bridge was found for when
+         * it linked (CmRegAttLink): counted for this bridge once its whole
+         * answer, not only the kept snapshot, reports the PDO (record 22
+         * section 7.7's retirement proof). */
+        for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+            child = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+            if (child->Common.Kind != CM_KIND_CHILD || child->Bridge != NULL) {
+                continue;
+            }
+            for (j = 0; j < relations->Count; j++) {
+                if ((PVOID)relations->Objects[j] == (PVOID)child->Common.Pdo) {
+                    child->Bridge = filter;
+                    filter->ChildLive++;
+                    child->ChildCounted = 1;
+                    if (child->Unattributed) {
+                        child->Unattributed = 0;
+                        cmRegUnattributed--;
+                    }
+                    break;
+                }
+            }
+        }
+    }
     filter->SnapTruncated = (ULONG)(relations != NULL &&
                                     relations->Count > CM_SNAP_MAX);
+    if (filter->SnapTruncated) {
+        filter->TruncSeen = 1;
+    }
     if (filter->Published && !filter->Gone && !filter->Baseline) {
         filter->Baseline = 1;
         cmRegRecompute();
@@ -848,12 +892,39 @@ static VOID cmMarkAttOf(PCM_FILTER f)
 VOID CmRegAttLink(PCM_FILTER filter)
 {
     KIRQL irql;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    ULONG i;
 
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (!filter->AttListed) {
         InsertTailList(&cmRegAtts, &filter->AttLink);
         filter->AttListed = 1;
         cmMarkAttOf(filter);
+        if (filter->Common.Kind == CM_KIND_CHILD && filter->Bridge == NULL) {
+            /* A child AddDevice made: the bridge whose last BusRelations
+             * reported its PDO, so record 22 section 7.7's retirement
+             * proof waits for its removal as for one the bridge attached. */
+            for (e = cmRegFilters.Flink;
+                 e != &cmRegFilters && filter->Bridge == NULL; e = e->Flink) {
+                f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
+                for (i = 0; f->Published && !f->Gone && i < f->SnapCount; i++) {
+                    if (f->Snap[i] == (PVOID)filter->Common.Pdo) {
+                        filter->Bridge = f;
+                    }
+                }
+            }
+        }
+        if (filter->Common.Kind == CM_KIND_CHILD && filter->Bridge != NULL &&
+            !filter->ChildCounted) {
+            filter->Bridge->ChildLive++;
+            filter->ChildCounted = 1;
+        }
+        if (filter->Common.Kind == CM_KIND_CHILD && filter->Bridge == NULL &&
+            !filter->Unattributed) {
+            filter->Unattributed = 1;
+            cmRegUnattributed++;
+        }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
@@ -1022,6 +1093,18 @@ VOID CmRegAttRemoved(PCM_FILTER filter, BOOLEAN afterQr)
         RemoveEntryList(&filter->AttLink);
         InitializeListHead(&filter->AttLink);
         filter->AttListed = 0;
+        if (filter->ChildCounted && filter->Bridge != NULL &&
+            filter->Bridge->ChildLive != 0) {
+            /* Record 22 section 7.7 part 4: a child filter this bridge's
+             * BusRelations attached has seen its removal complete
+             * (CmReenumRetired waits for every one). */
+            filter->Bridge->ChildLive--;
+            filter->ChildCounted = 0;
+        }
+        if (filter->Unattributed) {
+            filter->Unattributed = 0;
+            cmRegUnattributed--;
+        }
     }
     m = cmMarkFind((PVOID)filter->Common.Pdo, &d);
     if (m != NULL) {
@@ -1489,7 +1572,8 @@ static VOID cmAskBaselines(PCM_NHI nhi)
         KeAcquireSpinLock(&cmRegLock, &irql);
         f = cmRegFind(r->Port[i].Bdf);
         if (f != NULL && f->Owner == nhi && !f->Baseline &&
-            f->Serial != r->Port[i].AskedSerial) {
+            f->Serial != r->Port[i].AskedSerial &&
+            (nhi->RecBarred & (1UL << i)) == 0) {
             serial = f->Serial;
         }
         KeReleaseSpinLock(&cmRegLock, irql);
@@ -1591,21 +1675,26 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask);
 
 /* Member i's exposure and its route's call: the stor98 UP first
  * (cm_nvlink.h, obligation 1), then the invalidation or the worker's
- * post (with a marking window when `mark`). Only for a member whose
- * stor98 gate is down (cmHeld). */
+ * post (with a marking window when `mark`); with `expose` FALSE the call
+ * alone (publication mode none, record 22 section 7.7). Only for a member
+ * whose stor98 gate is down (cmHeld). */
 static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
-                        BOOLEAN fresh, ULONG tunnel, BOOLEAN mark)
+                        BOOLEAN fresh, ULONG tunnel, BOOLEAN mark,
+                        BOOLEAN expose)
 {
     PCM_REENUM r;
 
     r = &nhi->Reenum;
-    (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, fresh, tunnel);
+    if (expose) {
+        (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, fresh, tunnel);
+    }
     if (r->Route == CM_ROUTE_FILTER) {
         if (!cmInvalidate(nhi, i, TRUE)) {
             /* Lost its filter or its exclusivity since it was read
              * active: owed when it is active again. */
             r->CallFailures++;
             r->Port[i].Missed = 1;
+            r->Port[i].MissedExpose |= expose ? 1UL : 0UL;
         }
     } else if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
         /* Posted: the worker makes the call, and retries it itself. */
@@ -1626,7 +1715,8 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
  * call's flags and FALSE is returned. No other member is looked at.
  */
 static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
-                      BOOLEAN *fresh, ULONG tunnel, BOOLEAN *mark)
+                      BOOLEAN *fresh, ULONG tunnel, BOOLEAN *mark,
+                      BOOLEAN *expose)
 {
     PCM_REENUM r;
     ULONG before;
@@ -1638,7 +1728,9 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
     before = r->Port[i].Held;
     up = CmNvlinkHeld(nhi, r->Port[i].Bdf);
     if (up) {
-        (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, *fresh, tunnel);
+        if (*expose) {
+            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, *fresh, tunnel);
+        }
         if ((before & CM_HELD_REENUM) == 0) {
             r->Holds++;
             CmLogNote(nhi, "cm.reenum.held", r->Port[i].Bdf);
@@ -1647,13 +1739,22 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
     missed = (BOOLEAN)(r->Port[i].Missed != 0);
     if (CmNvlinkHoldReenum(&r->Port[i].Held, up, &missed, removeVanished,
                            fresh)) {
+        /* Its publication mode held with it (record 22 section 7.7, U25):
+         * exposing if this call or an owed change it took in exposes. */
+        r->Port[i].HeldExpose |= (*expose || r->Port[i].MissedExpose) ? 1UL
+                                                                      : 0UL;
         return TRUE;
+    }
+    if (r->Port[i].HeldExpose) {
+        *expose = TRUE;
+        r->Port[i].HeldExpose = 0;
     }
     if (r->Port[i].Missed && !missed) {
         /* An owed skipped change paid by this call: its marking window
          * with it, as the owed call itself would open. */
         *mark = (BOOLEAN)(r->SafeEject != 0);
         r->Port[i].Missed = 0;
+        r->Port[i].MissedExpose = 0;
         r->Port[i].MissedAt = cmNow(nhi);
         CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
     }
@@ -1673,6 +1774,8 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
     ULONG flags;
     ULONG member;
     ULONG tunnel;
+    BOOLEAN none;
+    BOOLEAN expose;
     BOOLEAN vanish;
     BOOLEAN exposeFresh;
     BOOLEAN mark;
@@ -1682,6 +1785,9 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
     if (action->Kind == TBT_ICM_ACT_TUNNEL_UP && nhi->U4On) {
         member = CmNhiActionMember(nhi, action);
     }
+    none = (BOOLEAN)(action->Kind == TBT_ICM_ACT_RESYNC &&
+                     (action->Why == TBT_ICM_WHY_RECOVERED ||
+                      (nhi->U4On && action->Why == TBT_ICM_WHY_UNAVAILABLE)));
     for (i = 0; i < r->Members; i++) {
         flags = cmFlags(nhi, i);
         if ((flags & CM_PORT_ACTIVE) == 0) {
@@ -1690,7 +1796,17 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
              * is re-enumerated once it becomes active (CmReenumService). */
             if (flags & CM_PORT_EXCLUSIVE) {
                 r->Port[i].Missed = 1;
+                r->Port[i].MissedExpose |= none ? 0UL : 1UL;
             }
+            continue;
+        }
+        if ((nhi->RecBarred & (1UL << i)) != 0) {
+            /* Record 22 section 7.7 part 4: a member behind the
+             * retirement barrier gets its removal-only request alone
+             * (CmReenumRetire); the change is owed to it once the
+             * barrier is lifted, in its own publication mode. */
+            r->Port[i].Missed = 1;
+            r->Port[i].MissedExpose |= none ? 0UL : 1UL;
             continue;
         }
         tunnel = CmNvlinkActionTunnel(
@@ -1698,10 +1814,16 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
             action->Serial, member, i);
         vanish = removeVanished;
         exposeFresh = fresh;
+        /* stor98's UP for what the call is about to expose (cm_nvlink.h,
+         * obligation 1); none in publication mode none (record 22 section
+         * 7.7, decision U25), which the USB4 profile's containment RESYNC
+         * and its recovery's take - unless an owed exposing change is paid
+         * by this call. */
+        expose = (BOOLEAN)(!none || r->Port[i].MissedExpose != 0);
         /* A member whose stor98 acknowledgement is pending waits alone;
          * every other member is exposed and called now (task 42-A.12). */
-        if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel, &mark)) {
-            cmReenumOne(nhi, i, vanish, exposeFresh, tunnel, mark);
+        if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel, &mark, &expose)) {
+            cmReenumOne(nhi, i, vanish, exposeFresh, tunnel, mark, expose);
         }
     }
 }
@@ -1881,6 +2003,7 @@ static VOID cmDiscoverAndList(PCM_NHI nhi)
         r->DebtPending = 0;
         for (i = 0; i < r->Members; i++) {
             r->Port[i].Missed = 1;
+            r->Port[i].MissedExpose = 1;
         }
         CmLogNote(nhi, "cm.reenum.debt", r->Members);
     }
@@ -2167,6 +2290,7 @@ VOID CmReenumService(PCM_NHI nhi)
     BOOLEAN vanish;
     BOOLEAN exposeFresh;
     BOOLEAN mark;
+    BOOLEAN heldExpose;
 
     r = &nhi->Reenum;
     /* The stor98 acknowledgement waits, stepped once per pass whatever
@@ -2297,29 +2421,54 @@ VOID CmReenumService(PCM_NHI nhi)
         }
         if (act & CM_HELD_DO_REENUM) {
             /* An owed skipped change paid by this call too: its marking
-             * window with it, as the owed call itself would open. */
+             * window with it, as the owed call itself would open; its
+             * publication mode with the held work's (record 22 section
+             * 7.7, U25). */
+            heldExpose = (BOOLEAN)(r->Port[i].HeldExpose != 0 ||
+                                   (r->Port[i].Missed && !missed &&
+                                    r->Port[i].MissedExpose != 0));
+            r->Port[i].HeldExpose = 0;
             mark = (BOOLEAN)(r->Port[i].Missed && !missed &&
                              r->SafeEject != 0);
             if (r->Port[i].Missed && !missed) {
                 r->Port[i].MissedAt = cmNow(nhi);
                 CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
             }
-            r->Port[i].Missed = missed ? 1UL : 0UL;
-            cmReenumOne(nhi, i, vanish, exposeFresh, CM_NVLINK_TUNNEL_NONE,
-                        mark);
+            if ((nhi->RecBarred & (1UL << i)) != 0) {
+                /* Behind record 22 section 7.7's retirement barrier: the
+                 * held call is owed until it is lifted. */
+                r->Port[i].Missed = 1;
+                r->Port[i].MissedExpose |= heldExpose ? 1UL : 0UL;
+            } else {
+                r->Port[i].Missed = missed ? 1UL : 0UL;
+                if (!missed) {
+                    r->Port[i].MissedExpose = 0;
+                }
+                cmReenumOne(nhi, i, vanish, exposeFresh,
+                            CM_NVLINK_TUNNEL_NONE, mark, heldExpose);
+            }
         } else if (act & CM_HELD_DO_OWE) {
             r->Port[i].Missed = 1;
+            r->Port[i].MissedExpose |= r->Port[i].HeldExpose;
+            r->Port[i].HeldExpose = 0;
+        }
+        if ((r->Port[i].Held & CM_HELD_REENUM) == 0) {
+            /* Run, owed or discarded: the held work's mode goes with it. */
+            r->Port[i].HeldExpose = 0;
         }
     }
     /* A change skipped while a member was not active, now that it is;
      * the debt stays until a call is actually made. */
     for (i = 0; i < r->Members && r->Reenum != 0; i++) {
         if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE) &&
+            (nhi->RecBarred & (1UL << i)) == 0 &&
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS &&
             !CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
             r->Port[i].MissedAt = cmNow(nhi);
-            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
-                                 CM_NVLINK_TUNNEL_NONE);
+            if (r->Port[i].MissedExpose) {
+                (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
+                                     CM_NVLINK_TUNNEL_NONE);
+            }
             if (r->Route == CM_ROUTE_FILTER) {
                 if (cmInvalidate(nhi, i, TRUE)) {
                     r->Port[i].Missed = 0;
@@ -2330,6 +2479,9 @@ VOID CmReenumService(PCM_NHI nhi)
                 cmWkPost(nhi, 1UL << i, 1UL << i,
                          (BOOLEAN)(r->SafeEject != 0));
                 r->Port[i].Missed = 0;
+            }
+            if (!r->Port[i].Missed) {
+                r->Port[i].MissedExpose = 0;
             }
             if (!r->Port[i].Missed) {
                 CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
@@ -2650,4 +2802,149 @@ VOID CmReenumUnavailable(PCM_NHI nhi, ULONG episode)
     CmCfgwkUnavailable(r->Wk, r->WkActive);
     r->Unavailable++;
     CmLogNote(nhi, "cm.reenum.9x.unavailable.members", r->WkActive);
+}
+/* ---- record 22 section 7.7: the retirement barrier ------------------- */
+
+BOOLEAN CmReenumRetire(PCM_NHI nhi, ULONG i, PULONG answers)
+{
+    PCM_REENUM r;
+    PCM_FILTER f;
+    PDEVICE_OBJECT pdo;
+    KIRQL irql;
+
+    r = &nhi->Reenum;
+    *answers = 0;
+    if (i >= r->Members) {
+        return FALSE;
+    }
+    if (CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
+        /* A stor98 statement behind this member still awaits its
+         * acknowledgement: no removal call before it falls (task 42-A.12);
+         * asked again at a later pass. */
+        return FALSE;
+    }
+    if (r->Route == CM_ROUTE_FILTER) {
+        if (!cmRegTake(nhi, i, FALSE, &f, &pdo)) {
+            return FALSE;
+        }
+        /* A change: an answer to a query already in flight does not
+         * count for it (CmRegRelations' seq rule). */
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        f->ChangeSeq++;
+        f->Unsettled = 1;
+        *answers = f->RelAnswers;
+        KeReleaseSpinLock(&cmRegLock, irql);
+        IoInvalidateDeviceRelations(pdo, BusRelations);
+        cmRegRelease(f);
+        r->Port[i].Reenums++;
+        r->Calls++;
+        CmLogNote(nhi, "cm.reenum.retire", (i << 16) | (*answers & 0xFFFFUL));
+        return TRUE;
+    }
+    if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+        CmCfgwkHold(r->Wk, nhi->RecBarred);
+        if ((CmCfgwkEnumBusy(r->Wk) & (1UL << i)) != 0) {
+            /* A re-enumeration admitted before the hold has not returned:
+             * the removal follows it, never precedes it (asked again at
+             * the next pass). */
+            return FALSE;
+        }
+        r->WkActive = cmOwnedMask(nhi);
+        CmCfgwkGone(r->Wk, 1UL << i, r->WkActive);
+        CmLogNote(nhi, "cm.reenum.9x.retire", i);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+BOOLEAN CmReenumRetired(PCM_NHI nhi, ULONG i, ULONG answers)
+{
+    PCM_REENUM r;
+    PCM_FILTER f;
+    PDEVICE_OBJECT pdo;
+    BOOLEAN done;
+    KIRQL irql;
+
+    r = &nhi->Reenum;
+    if (i >= r->Members) {
+        return FALSE;
+    }
+    if (r->Route == CM_ROUTE_FILTER) {
+        if (!cmRegTake(nhi, i, FALSE, &f, &pdo)) {
+            return FALSE;
+        }
+        KeAcquireSpinLock(&cmRegLock, &irql);
+        /* Where a child filter of this driver sat on the endpoint's PDO,
+         * its own observation of the removal (ChildLive back to 0) as
+         * well as the settled answer that no longer reports it. */
+        done = (BOOLEAN)(f->RelEmptyAt != 0 && f->RelEmptyAt != answers &&
+                         f->RelEmptyAt - answers < 0x80000000UL &&
+                         f->SnapCount == 0 && !f->SnapTruncated &&
+                         f->ChildLive == 0 &&
+                         !(f->TruncSeen && cmRegUnattributed != 0));
+        KeReleaseSpinLock(&cmRegLock, irql);
+        cmRegRelease(f);
+        return done;
+    }
+    if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+        return (BOOLEAN)((CmCfgwkRetired(r->Wk) & (1UL << i)) != 0);
+    }
+    return FALSE;
+}
+
+VOID CmReenumHold(PCM_NHI nhi, ULONG members)
+{
+    if (nhi->Reenum.Route == CM_ROUTE_CONFIGMG && nhi->Reenum.Wk != NULL) {
+        CmCfgwkHold(nhi->Reenum.Wk, members);
+    }
+}
+
+BOOLEAN CmReenumSourcesHold(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    XHCI_TBT_TOPO_IN in;
+    const CM_FAMILY *family;
+    ULONG i;
+    ULONG k;
+
+    r = &nhi->Reenum;
+    /* cmDiscover's inputs, as the start gave them. */
+    CmZero(&in, sizeof(in));
+    in.Nhi = r->Nhi;
+    if (nhi->Values.TunnelBridgeChars != 0) {
+        in.Overrides = XhciTbtParseBdfList(nhi->Values.TunnelBridge,
+                                           nhi->Values.TunnelBridgeChars,
+                                           in.Override,
+                                           XHCI_TBT_MAX_TUNNELS);
+    }
+    family = CmPortsFamily(CM_PORTS_ID(nhi->Vendor, nhi->Device));
+    if (family != NULL) {
+        in.FamilyNhiIds = family->NhiIds;
+        in.FamilyNhiIdCount = family->NhiIdCount;
+        in.SwitchPortIds = family->SwitchPortIds;
+        in.SwitchPortIdCount = family->SwitchPortIdCount;
+        in.RootPortIds = family->RootPortIds;
+        in.RootPortIdCount = family->RootPortIdCount;
+    }
+    if (XhciTbtTopoFind(&r->Cfg, &in, &r->RecTopo) ==
+        XHCI_TBT_TOPO_INCOMPLETE) {
+        return FALSE;
+    }
+    for (i = 0; i < r->Topo.Tunnels && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (r->Topo.Source[i] == XHCI_TBT_SRC_ROUTER) {
+            continue;
+        }
+        for (k = 0; k < r->RecTopo.Tunnels && k < XHCI_TBT_MAX_TUNNELS; k++) {
+            if (r->RecTopo.Set[k] == r->Topo.Set[i] &&
+                r->RecTopo.Source[k] == r->Topo.Source[i]) {
+                break;
+            }
+        }
+        if (k == r->RecTopo.Tunnels || k == XHCI_TBT_MAX_TUNNELS) {
+            CmLogNote(nhi, "u4.recover.member.source-lost",
+                      (r->Topo.Set[i] << 8) | r->Topo.Source[i]);
+            return FALSE;
+        }
+    }
+    return TRUE;
 }

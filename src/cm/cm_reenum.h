@@ -212,6 +212,13 @@ typedef struct _CM_REENUM_PORT {
     ULONG Missed;           /* a tunnel change came while the member was
                                exclusive but not active, or its call could
                                not be made: re-enumerated once it is      */
+    ULONG HeldExpose;       /* the work held behind the stor98 gate (Held)
+                               includes an exposing change (record 22
+                               section 7.7, U25)                          */
+    ULONG MissedExpose;     /* one of the changes Missed holds exposes (a
+                               change in publication mode none alone -
+                               record 22 section 7.7, U25 - is serviced as
+                               the re-enumeration alone)                  */
     ULONG EjectSerial;      /* the eject's bridge publication and          */
     ULONG EjectGen;         /* population generation, checked at hand-off */
     ULONG WalkLogged;       /* 98: a failed devnode walk was logged       */
@@ -342,6 +349,9 @@ typedef struct _CM_REENUM {
 
     /* tbt_topo.c's discovery and port state (too large for a stack). */
     XHCI_TBT_TOPO Topo;
+    /* The same discovery read again by a USB4 recovery's revalidation
+     * (CmReenumSourcesHold), never the set itself. */
+    XHCI_TBT_TOPO RecTopo;
     XHCI_TBT_CFG Cfg;
     XHCI_TBT_POLL Poll;
     XHCI_TBT_PORT Reading;
@@ -427,6 +437,37 @@ VOID CmReenumUnavailable(struct _CM_NHI *nhi, ULONG episode);
 VOID CmReenumLossBegin(struct _CM_NHI *nhi);
 VOID CmReenumLossEnd(struct _CM_NHI *nhi);
 
+/*
+ * Record 22 section 7.7 part 4, the retirement barrier's two halves for
+ * member i. CmReenumRetire: the removal-only request - on NT the member's
+ * invalidation with no exposure (publication mode retire: nothing
+ * published, the drained function read absent by pci.sys), its bridge
+ * filter's answer count then written to `answers`; on 98 SE and ME the
+ * worker's removal of the children retained at the member's last healthy
+ * walk (CmCfgwkGone), never by reading the bridge. FALSE when no request
+ * could be made. CmReenumRetired: whether the endpoint's devnode is
+ * retired since that request - on NT a BusRelations answer below the
+ * bridge to a query begun after it (`answers` moved), complete (not
+ * truncated) and reporting no PDO, and every child filter of this driver
+ * below the bridge removed (CmRegChildRemoved); on 98 SE and ME the worker's removal for the member
+ * resolved with every recorded devnode removed or absent (a refusal, an
+ * undecided entry or an abandoned attempt keep it owed). PASSIVE_LEVEL,
+ * the connection-manager thread.
+ */
+BOOLEAN CmReenumRetire(struct _CM_NHI *nhi, ULONG i, PULONG answers);
+/* 98 SE and ME: the members behind the barrier, whose re-enumeration the
+ * worker holds (CmCfgwkHold) until it is lifted; nothing on NT, whose
+ * calls cmReenumAll and the service skip themselves. */
+VOID CmReenumHold(struct _CM_NHI *nhi, ULONG members);
+BOOLEAN CmReenumRetired(struct _CM_NHI *nhi, ULONG i, ULONG answers);
+/* Record 22 section 7.7 part 3 step 6 (U24): the discovery read again,
+ * with the start's inputs, into a scratch record (the set untouched) -
+ * TRUE when every member a switch, listed, SHPC or override source put in
+ * the set is found again by that same source. The router-named members
+ * are the recovery's own mapping comparison (TbtU4Recover). PASSIVE_LEVEL,
+ * the connection-manager thread. */
+BOOLEAN CmReenumSourcesHold(struct _CM_NHI *nhi);
+
 VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,
                       PVOID context);
 /* Writes up to `capacity` active members' locations into `ports` and
@@ -509,6 +550,21 @@ VOID CmCfgwkPrune(struct _CM_CFGWK *w);
  * an operation in progress on the member goes stale). `active` replaces
  * the owned members. Returns at once. <= DISPATCH_LEVEL. */
 VOID CmCfgwkUnavailable(struct _CM_CFGWK *w, ULONG active);
+/* The same removal for the members in `members` alone (record 22 section
+ * 7.7's removal-only request), `active` replacing the owned members; and
+ * the members whose last such removal resolved clean (every recorded
+ * devnode removed or found absent, nothing refused or undecided) with no
+ * newer one owed. <= DISPATCH_LEVEL. */
+VOID CmCfgwkGone(struct _CM_CFGWK *w, ULONG members, ULONG active);
+/* The members whose re-enumeration the worker defers (record 22 section
+ * 7.7's retirement barrier): a request for one stays owed, retried, until
+ * a later call lifts it. <= DISPATCH_LEVEL. */
+VOID CmCfgwkHold(struct _CM_CFGWK *w, ULONG members);
+ULONG CmCfgwkRetired(struct _CM_CFGWK *w);
+/* The members with a re-enumeration call admitted before the hold and
+ * not yet returned: the removal-only request for one waits until it has.
+ * <= DISPATCH_LEVEL. */
+ULONG CmCfgwkEnumBusy(struct _CM_CFGWK *w);
 
 /* Ends the worker: waits for it when it is between calls (and frees it);
  * when it is inside a CONFIGMG call, which may be waiting for this very

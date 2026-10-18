@@ -50,8 +50,11 @@ what it asked for, so a device that wants an IRQ and was given none is
 easy to spot.
 
   File > Refresh (F5)      reads everything again
-  File > Save Report...    writes the whole tree with every detail to a
+  File > Save Report...    writes the whole tree with every detail, the
+                           drivers' logs and the driver's snapshot to a
                            text file, for a problem report
+  File > Save Snapshot...  writes the driver's snapshot files in a
+                           folder you pick (below)
   Edit > Copy              copies the details (or the selected part)
   View                     shows or hides each part of the tree; with
                            Descriptors on, the selected USB device's
@@ -123,15 +126,42 @@ both logs. Nothing in them is an internal address.
 Where a log is off, the item says how to turn it on (the xhcicm
 driver records by default):
 
-  xhci98   run SNAPON.BAT from the package's tools\xhcisnap folder (on
-           Windows 2000 and later as an administrator), then restart
-           Windows; SNAPOFF.BAT turns it off again.
+  xhci98   set its level to 2 in View > Logging level... (below), then
+           restart Windows.
   xhcicm   set the DWORD value XhciCmLogVerbosity to 2 under the key
            the item names (on Windows 2000 and later as an
            administrator), then restart Windows.
 
 Reading a log changes nothing; Logging level (below) is the one driver
 setting the tool writes.
+
+The driver's snapshot
+---------------------
+
+The snapshot is the xhci98 driver's own report: a device report (each
+xHCI controller's and this package's Device Manager entries, status,
+problem code and resources, and the installed driver files' sizes,
+versions and SHA-256 hashes) and a dump of the driver's state (its log,
+the devices in their slots, each root port's enumeration and, at level
+3, the port registers). It replaces XHCISNAP and its SNAPON.BAT,
+SNAPGET.BAT and SNAPOFF.BAT, which the package no longer carries.
+
+File > Save Report and /report end with the snapshot's text for each
+xHCI controller the xhci98 driver runs, so the report alone is what a
+problem report needs. At level 4 the dump can hold memory addresses, so
+the report leaves it out and says so.
+
+File > Save Snapshot... and XHCITR /snapshot write the snapshot's own
+files, for when a maintainer asks for them:
+
+  NAME.DEV   the device report
+  NAME.TXT   the dump, as text
+  NAME.BIN   the driver's raw state, for the maintainer
+  NAME.PSC   the raw port registers
+
+NAME is made from the date and time (for example 3141022A for 14 March
+at 10:22), or is the 1 to 8 letter name you give; an earlier set is
+never overwritten.
 
 PCI configuration
 -----------------
@@ -216,9 +246,9 @@ From a command line
 
   XHCITR                       the window and the icon
   XHCITR /tray                 the icon alone (as started at logon)
-  XHCITR /report <file>        writes the report, the drivers' logs and
-                               PCI configuration included, to <file>
-                               and exits
+  XHCITR /report <file>        writes the report, the drivers' logs, PCI
+                               configuration and the snapshot included,
+                               to <file> and exits
   XHCITR /eject id=<id>        stops the USB device or Thunderbolt/USB4
                                device with that Device Manager instance
                                ID and exits
@@ -226,9 +256,24 @@ From a command line
                                sets either driver's logging level (0 to
                                4; one or both) and exits; needs
                                administrator rights on 2000 to 7
+  XHCITR /snapshot [NAME] [/c N] [/nosysinfo]
+                               writes the snapshot's four files in the
+                               current directory (/c N: controller N,
+                               default 0; /nosysinfo: without the
+                               Windows, processor and BIOS details)
+  XHCITR /dump [/c N] [/o NAME] [/nosysinfo]
+                               writes the dump alone (NAME.TXT, .BIN and
+                               .PSC), replacing an earlier set of NAME
+  XHCITR /probe                checks the route to the driver and
+                               writes nothing
+  XHCITR /snapshot /?          the snapshot's long help
+
+The snapshot commands show their text in a message box, or write it to
+where their output is redirected.
 
 Exit codes: 0 done, 1 refused (nothing changed), 2 failed, 4 Windows
-refused or a step remains for you.
+refused or a step remains for you. /snapshot: 0 both files written in
+full, 2 a name or switch refused, 3 to 8 as XHCITR /snapshot /? says.
 
 Licence
 -------
