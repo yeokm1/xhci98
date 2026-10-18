@@ -404,7 +404,7 @@ the restart; disconnect the dock until then when the answer is 0).
 each with its default, range and warning; design record 28's
 `XhciCmNoIrqStart` (98 SE and ME only) and the mark service's `Restart`
 (2000 to 7 only; record 21 section 7.4, revision 3) join these rows with
-their systems. `XhciCmTunnelBridge` (a string
+their systems, written machine-wide when changed. `XhciCmTunnelBridge` (a string
 for a machine whose ports the driver does not find) is not offered: it is
 a diagnostic the release notes describe for a hand edit.
 

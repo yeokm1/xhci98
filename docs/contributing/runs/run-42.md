@@ -109,5 +109,12 @@ left as an open interface exception). 42-0.5 converged over six rounds
 restores and commits, every rebuild and publication afterwards going
 through the ordinary machinery behind a per-member retirement barrier;
 an immutable snapshot per containment; nothing built or published
-before a guarded commit; decisions U18 to U29). 42-0.6 is recorded
-below when its loop ends.
+before a guarded commit; decisions U18 to U29). 42-0.6, design record
+28, converged over eleven rounds at draft 11 (the candidate's ownership
+by Stor98's binding and version; a journal of the configurations this
+driver created, never recognised by priority and never freed; the work
+as a per-member transaction on the thread with the member's call worker,
+its own admission window independent of safe eject; the descendant walk
+below the member; every hypothesis about `PCI.VXD` marked as one;
+decisions N1 to N10). With it every design of Phase 42 has converged
+before its code, as the checkpoint asks.
