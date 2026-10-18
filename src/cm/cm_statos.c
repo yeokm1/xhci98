@@ -52,6 +52,7 @@
 #define CM_ST_PATH_RETRY_MS 5000UL  /* an unknown 98 path tried again      */
 
 static VOID cmStBrDiag(PCM_NHI nhi);
+static VOID cmStNiDiag(PCM_NHI nhi);
 
 static BOOLEAN cmStNt(VOID)
 {
@@ -426,6 +427,7 @@ static VOID cmStBrDiag(PCM_NHI nhi)
     ULONG i;
     KIRQL irql;
 
+    cmStNiDiag(nhi);
     if (nhi->StatusPub.DevKey == NULL) {
         return;
     }
@@ -442,6 +444,34 @@ static VOID cmStBrDiag(PCM_NHI nhi)
     if (NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &name, 0,
                                  REG_BINARY, (PVOID)copy, sizeof(copy)))) {
         nhi->BrDiagWritten = seq;
+    }
+}
+
+/* XhciCmNoIrqDiag (design record 28 section 7), the same way. */
+static VOID cmStNiDiag(PCM_NHI nhi)
+{
+    UNICODE_STRING name;
+    ULONG copy[CM_NIDIAG_WORDS];
+    ULONG seq;
+    ULONG i;
+    KIRQL irql;
+
+    if (nhi->StatusPub.DevKey == NULL) {
+        return;
+    }
+    KeAcquireSpinLock(&nhi->BrDiagLock, &irql);
+    for (i = 0; i < CM_NIDIAG_WORDS; i++) {
+        copy[i] = nhi->NiDiag[i];
+    }
+    KeReleaseSpinLock(&nhi->BrDiagLock, irql);
+    seq = copy[0];
+    if (seq == 0 || seq == nhi->NiDiagWritten) {
+        return;
+    }
+    RtlInitUnicodeString(&name, L"XhciCmNoIrqDiag");
+    if (NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &name, 0,
+                                 REG_BINARY, (PVOID)copy, sizeof(copy)))) {
+        nhi->NiDiagWritten = seq;
     }
 }
 

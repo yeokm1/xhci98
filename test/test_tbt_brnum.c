@@ -1017,6 +1017,10 @@ static VOID test_irq(VOID)
     CHECK_EQ(m.N[nvme].Intr, 0x0000010AUL, "the NVMe line 10");
     CHECK_EQ(r.IrqFunctions, 3, "three functions with a pin");
     CHECK_EQ(r.IrqSet, 3, "all three set");
+    /* Record 28 rule 5's per-function record. */
+    CHECK_EQ(r.IrqFnCount, 3, "three outcomes");
+    CHECK_EQ(r.IrqFnBdf[2], XHCI_TBT_BDF(0x08, 0, 0), "the NVMe's");
+    CHECK_EQ(r.IrqFnOut[2], XHCI_TBT_BRFN_WRITTEN, "written");
 
     /* A sibling endpoint on device 1 with INTA reaches the port as INTB:
      * not the port's pin, so no line is written; one on device 0 of
@@ -1040,6 +1044,24 @@ static VOID test_irq(VOID)
     CHECK_EQ(m.N[nvme].Intr, 0x0000010BUL, "a line already set is kept");
     CHECK_EQ(r.IrqKept, 1, "counted as kept");
     CHECK_EQ(r.IrqSet, 2, "the two bridges set");
+    {
+        ULONG k, other, already;
+
+        other = 0;
+        already = 0;
+        for (k = 0; k < r.IrqFnCount; k++) {
+            if (r.IrqFnBdf[k] == XHCI_TBT_BDF(0x06, 1, 0) &&
+                r.IrqFnOut[k] == XHCI_TBT_BRFN_OTHER) {
+                other++;
+            }
+            if (r.IrqFnBdf[k] == XHCI_TBT_BDF(0x08, 0, 0) &&
+                r.IrqFnOut[k] == XHCI_TBT_BRFN_ALREADY) {
+                already++;
+            }
+        }
+        CHECK_EQ(other, 1, "the sibling recorded unroutable");
+        CHECK_EQ(already, 1, "the NVMe recorded already set");
+    }
 
     /* An NVMe on INTB behind device-0 bridges arrives on INTB: left. */
     mreset();
@@ -1068,6 +1090,7 @@ static VOID test_irq(VOID)
                                   NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "numbered");
     CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_PORT_NONE, "the port has no line");
     CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing written");
+    CHECK_EQ(r.IrqFnCount, 0, "no per-function record: the port's outcome");
 
     /* Windows refused: no lines either. */
     mreset();
@@ -1101,6 +1124,8 @@ static VOID test_irq(VOID)
     CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_ACCESS, "a line not read: not DONE");
     CHECK_EQ(r.IrqFailed, 1, "counted");
     CHECK_EQ(r.IrqSet, 2, "the two bridges set");
+    CHECK_EQ(r.IrqFnCount, 3, "three outcomes");
+    CHECK_EQ(r.IrqFnOut[2], XHCI_TBT_BRFN_NOT_READ, "the NVMe not read");
 }
 
 /* A 64-bit prefetchable window is closed through 28h and 2Ch as well as

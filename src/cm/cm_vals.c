@@ -301,6 +301,25 @@ VOID CmValuesDefault(PCM_VALUES v)
         v->Value[i] = cmRules[i].Default;
     }
     v->BridgeNumbering = CM_BRIDGE_NUMBERING_DEFAULT;
+    v->NoIrqStart = CM_NOIRQ_START_DEFAULT;
+}
+
+VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->NoIrqStart = CM_NOIRQ_START_DEFAULT;
+    v->NoIrqStartFound = 0;
+    v->NoIrqStartRaw = 0;
+    v->NoIrqStartRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->NoIrqStartFound = 1;
+    v->NoIrqStartRaw = raw;
+    if (raw > 1) {
+        v->NoIrqStartRefused = 1;
+        return;
+    }
+    v->NoIrqStart = raw;
 }
 
 VOID CmValuesTakeBridgeNumbering(PCM_VALUES v, ULONG found, ULONG raw)

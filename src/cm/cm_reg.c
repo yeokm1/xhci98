@@ -48,6 +48,7 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 /* Not written by any INF either (record 21 section 6.1.1): absent is the
  * default, CM_BRIDGE_NUMBERING_DEFAULT. */
 #define CM_VALUE_BRIDGE_NUMBERING L"XhciCmBridgeNumbering"
+#define CM_VALUE_NOIRQ_START L"XhciCmNoIrqStart"
 
 typedef struct _CM_TAKE {
     ULONG Seen;                 /* the routine was called with a value    */
@@ -187,6 +188,8 @@ VOID CmReadValues(PCM_NHI nhi)
     }
     cmQuery(key, CM_VALUE_BRIDGE_NUMBERING, &take, 0);
     CmValuesTakeBridgeNumbering(&nhi->Values, take.Found, take.Dword);
+    cmQuery(key, CM_VALUE_NOIRQ_START, &take, 0);
+    CmValuesTakeNoIrqStart(&nhi->Values, take.Found, take.Dword);
     if (key != NULL) {
         ZwClose(key);
     }

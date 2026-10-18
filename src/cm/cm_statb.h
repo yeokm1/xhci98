@@ -72,6 +72,11 @@ BOOLEAN CmStatusPciPath(const XHCI_TBT_CFG *cfg, ULONG bdf, PULONG path,
  * 19 their counts (functions 7:0, set 15:8, kept 23:16, other pin 31:24). */
 #define CM_BRDIAG_WORDS 20
 
+/* XhciCmNoIrqDiag (design record 28 section 7, task 42-A.15): the last
+ * no-interrupt attempt of any member, twelve dwords as cm_noirq.h's
+ * CM_NI_DIAG_WORDS lays them out (0 the sequence). */
+#define CM_NIDIAG_WORDS 12
+
 typedef struct _CM_STATUS_PUB {
     PVOID DevKey;           /* the hardware key, opened in the start      */
     PVOID DrvKey;           /* the driver key, for the ask                */

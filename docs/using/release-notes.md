@@ -547,6 +547,7 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
 | `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
+| `XhciCmNoIrqStart` | `1` | Windows 98 SE and ME: `1` starts an NVMe drive behind a tunnel whose interrupt cannot be routed with no interrupt, for the bundled Stor98 (0.4.0.0 or later, installed by this package's installer) to poll; `0` leaves it at its problem code. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
 | `XhciCmBridgeNumbering` | `1` | Windows 98 SE and ME: `1` sets up the PCI bridges a device brings up behind a tunnel after Windows has started (bus numbers, memory windows, interrupt lines, as the BIOS would) (a USB4 NVMe enclosure's switch, which otherwise shows Code 29 until a restart); `0` leaves them as they come up. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | A comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports, for a machine whose ports it does not find (the `debug` log says so). Not written by the install |
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
@@ -658,6 +659,18 @@ have every leg.
   Read under the Thunderbolt 3 firmware connection manager on the
   ThinkPad P14s Gen 1 and in the emulator; the USB4 connection manager
   takes the same path but has not been read with such a device.
+- **Windows 98 SE and ME: an NVMe drive behind a tunnel whose interrupt
+  cannot be routed** (Device Manager: Code 29, "the BIOS for the device did
+  not give it an IRQ") **still does not start.** The driver's attempt to
+  start such a drive with no interrupt for the bundled Stor98 to poll
+  (`XhciCmNoIrqStart`, on by default) was read in the emulator and does
+  not apply to the case seen there: Windows' own configuration of the
+  drive asks for no interrupt, so the driver leaves it as it is and
+  changes nothing. Re-plug the drive with the tunnel's bridge routed, or
+  restart with it attached. While xhcicm.sys makes its Windows 98
+  configuration calls, a hardware wizard left open on 98 SE or ME holds
+  its other work for the tunnel ports too (plug, removal and safe-eject
+  marking wait), as any such call it makes does.
 - **Windows 98 SE and ME: after Safely Remove of such a device, unplug it
   before using it again.** Windows' stop closes the switch's memory windows;
   Scan for hardware changes without an unplug leaves the drive at Code 29
