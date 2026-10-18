@@ -905,6 +905,10 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
      * any exposure can retire it or start a removal: a USB4 DOWN hook may
      * have marked one ahead of an UP action in the same batch. */
     CmNvlinkAwait(nhi);
+    /* The tunnel named, recorded first, even where nothing is published
+     * now (the bus unread, the channel not ready): a later exposure of the
+     * bridge publishes for it. */
+    tunnel = cmNvTunnelOf(nhi, bridge, tunnel);
     ready = cmNvEnsure(nhi);
     bus = cmNvSecondary(bridge);
     /* Every exposure retires the statements behind the bridge first, by
@@ -934,9 +938,6 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
         CmLogNote(nhi, "cm.nvlink.up.no-bus", bridge);
         return 0;
     }
-    /* Recorded even where nothing is published now: a later exposure of
-     * the bridge publishes for it. */
-    tunnel = cmNvTunnelOf(nhi, bridge, tunnel);
     if (!ready) {
         CmLogNote(nhi, "cm.nvlink.up.no-channel", bridge);
         return 0;
@@ -978,7 +979,19 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
  * still answering keeps its UP: its link is not shown down). Returns how
  * many were marked DOWN_QUIESCED.
  */
+static ULONG cmNvMarkEx(PCM_NHI nhi, ULONG bridge, ULONG verdict,
+                        BOOLEAN confirmed);
+
 static ULONG cmNvMark(PCM_NHI nhi, ULONG bridge, ULONG verdict)
+{
+    return cmNvMarkEx(nhi, bridge, verdict, FALSE);
+}
+
+/* cmNvMark; with `confirmed`, a withheld entry leaves UP only when its
+ * function's identifier was read and read all-ones (a failed read proves
+ * nothing). */
+static ULONG cmNvMarkEx(PCM_NHI nhi, ULONG bridge, ULONG verdict,
+                        BOOLEAN confirmed)
 {
     ULONG bus;
     ULONG i;
@@ -1005,11 +1018,13 @@ static ULONG cmNvMark(PCM_NHI nhi, ULONG bridge, ULONG verdict)
         }
         seen++;
         absent = TRUE;
-        if (verdict != CM_NVLINK_SEND &&
-            cmNvCfg(cmNvTable->Entry[i].BusNumber,
-                    cmNvTable->Entry[i].SlotNumber, 0, &id) &&
-            id != 0xFFFFFFFFUL && (id & 0xFFFFUL) != 0xFFFFUL) {
-            absent = FALSE;
+        if (verdict != CM_NVLINK_SEND) {
+            if (!cmNvCfg(cmNvTable->Entry[i].BusNumber,
+                         cmNvTable->Entry[i].SlotNumber, 0, &id)) {
+                absent = (BOOLEAN)!confirmed;
+            } else if (id != 0xFFFFFFFFUL && (id & 0xFFFFUL) != 0xFFFFUL) {
+                absent = FALSE;
+            }
         }
         KeAcquireSpinLock(&cmNvLock, &irql);
         if (verdict == CM_NVLINK_SEND) {
@@ -1130,7 +1145,6 @@ ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
     ULONG reading;
     ULONG start;
     ULONG left;
-    ULONG k;
     BOOLEAN emulator;
 
     r = &nhi->Reenum;
@@ -1143,15 +1157,6 @@ ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
                                     remainingMs);
         CmLogNote(nhi, "cm.nvlink.u4-down", verdict << 16);
         cmNvWithheld++;
-        /* The port's member is not known, so nothing is stated; but an
-         * entry whose function no longer answers, on any member, leaves
-         * UP (IN_USE alone, cmNvMark's withheld case), so the tunnel that
-         * follows on that bus publishes a new generation even where no
-         * tunnel can be named for it (task 42-A.6). A function still
-         * answering keeps its UP. */
-        for (k = 0; k < r->Topo.Tunnels; k++) {
-            (VOID)cmNvMark(nhi, r->Topo.Set[k], verdict);
-        }
         return verdict;
     }
     bridge = r->Topo.Set[member];
@@ -1483,17 +1488,56 @@ VOID CmNvlinkU4Up(PVOID context, const TBT_U4_ACTION *action)
     }
 }
 
+/* Whether a USB4 port other than `port` with a live PCIe tunnel
+ * corresponds to member `k` (named or learned): that member's tunnel is
+ * that port's. */
+static BOOLEAN cmNvOtherPortLive(PCM_NHI nhi, ULONG port, ULONG k)
+{
+    const TBT_U4_PORT *p;
+    ULONG q;
+
+    for (q = 1; q <= nhi->U4.PortCount && q <= XHCI_TBT_MAX_PORTS; q++) {
+        if (q == port) {
+            continue;
+        }
+        p = TbtU4Port(&nhi->U4, q);
+        if (p != NULL && p->Pcie.Up &&
+            XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, q) == k) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 ULONG CmNvlinkU4Down(PVOID context, const TBT_U4_LINKDOWN *info)
 {
     PCM_NHI nhi;
     ULONG member;
     ULONG r;
+    ULONG k;
 
     nhi = (PCM_NHI)context;
     member = XHCI_TBT_NO_MEMBER;
     if (info->Port >= 1 && info->Port <= XHCI_TBT_MAX_PORTS) {
         member = XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds,
                                    info->Port);
+    }
+    if (cmNvTable != NULL &&
+        (member == XHCI_TBT_NO_MEMBER || member >= nhi->Reenum.Topo.Tunnels)) {
+        /* The port's member is not known, so nothing is stated; but an
+         * entry whose function is read absent leaves UP (IN_USE alone),
+         * so the tunnel that follows on that bus publishes a new
+         * generation even where no tunnel can be named for it (task
+         * 42-A.6). Not on a member another port with a live PCIe tunnel
+         * corresponds to (its tunnel is that port's, unchanged), and only
+         * on a read that shows the function gone: a failed read, or a
+         * function still answering, keeps its UP. */
+        for (k = 0; k < nhi->Reenum.Topo.Tunnels; k++) {
+            if (!cmNvOtherPortLive(nhi, info->Port, k)) {
+                (VOID)cmNvMarkEx(nhi, nhi->Reenum.Topo.Set[k],
+                                 CM_NVLINK_SEVERAL, TRUE);
+            }
+        }
     }
     r = CmNvlinkPortDown(nhi, member, info->PathClosed,
                          info->AnchorValid ? info->RemainingUs / 1000UL

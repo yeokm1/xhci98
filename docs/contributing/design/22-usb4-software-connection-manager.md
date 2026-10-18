@@ -2246,11 +2246,15 @@ unchanged - no `DOWN_QUIESCED` (no quiescence is claimed), no increment
   a rebuild held so until a re-plug is handled by that re-plug as a
   fresh plug. Each rebuild is then an ordinary tunnel up with unknown
   correspondence whose publication follows task 42-A.6's rule for that
-  case - the fresh exposure for the one member whose secondary bus gains
-  the function, the publication held as debt until the gain attributes
-  it, and record 21 section 7.2's late route for a function that answers
-  only after the 9x enumeration - which that task owns and this record
-  does not redefine. The two-member leg's expected outcome: the two
+  case as section 10 states it - no tunnel named while the member is not
+  known, so the function newly found on the member's bus (its entry not
+  `UP` after the drain) gets the one new generation and no entry still
+  `UP` is advanced, nothing published again once the gain attributes the
+  port, and record 21 section 7.2's late route for a function that
+  answers only after the 9x enumeration - which that task owns and this
+  record does not redefine; a recovery that wants its rebuild's
+  publication held until attribution, before the operating system's
+  enumeration, is 42-A.10's to design and build. The two-member leg's expected outcome: the two
   rebuilds one after the other, each attributed by its gain, each
   publishing one new `UP` on its own member, no other member's generation
   changed; the ambiguous-group leg's: both tunnels drained and rebuilt,
@@ -2796,8 +2800,10 @@ member is not known, nothing names a tunnel: a function newly found gets
 its generation, and no entry already `UP` is advanced on a guess (U29's
 rule). What lets a new tunnel there still get its new generation is the
 DOWN hook: where the port's member is not known it states nothing, but
-every member's entry whose function no longer answers leaves `UP`
-(`IN_USE` alone), so the tunnel that follows finds it not `UP`. An entry
+an entry whose function is read absent (its identifier read, all ones;
+a failed read proves nothing) leaves `UP` (`IN_USE` alone), on every
+member no other port with a live PCIe tunnel corresponds to, so the
+tunnel that follows finds it not `UP`. An entry
 not taken out so (no teardown seen, the function answering throughout)
 keeps its generation until its member's next named tunnel; it is not
 advanced once correspondence is learned, since by then the operating

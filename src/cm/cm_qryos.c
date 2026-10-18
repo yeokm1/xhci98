@@ -415,6 +415,9 @@ static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
     CM_STATUS_IN in;
     CM_QUERY_IN qi;
     UCHAR rec[CM_ST_HDR_BYTES];
+    ULONG wait;
+    ULONG k;
+    BOOLEAN next;
 
     CmZero(&in, sizeof(in));
     in.NhiId = (nhi->Vendor & 0xFFFFUL) | ((nhi->Device & 0xFFFFUL) << 16);
@@ -430,9 +433,21 @@ static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
      * will change until a restart), with no timeout (an inert start), or
      * with one; between waits, the wait it goes to. The wake after the
      * device is installed publishes the flag again in any case. */
+    /* One coherent reading: the wait state read on both sides of the
+     * predicate, again while it moved (a bind ending in between); still
+     * moving after a few readings, not inert (the pass publishes). */
+    next = FALSE;
+    wait = CM_Q_WAIT_BINDING;
+    for (k = 0; k < 8; k++) {
+        wait = nhi->ThreadWait;
+        next = CmThrInertNext(nhi);
+        if (nhi->ThreadWait == wait) {
+            break;
+        }
+        wait = CM_Q_WAIT_BINDING;
+    }
     qi.Inert = (ULONG)CmQuerySeedInert((BOOLEAN)(nhi->ThreadRunning != 0),
-                                       nhi->ThreadWait,
-                                       CmThrInertNext(nhi));
+                                       wait, next);
     qi.EpochLo = nhi->QueryEpochLo;
     qi.EpochHi = nhi->QueryEpochHi;
     qi.NhiBdf = nhi->QueryBdf;
