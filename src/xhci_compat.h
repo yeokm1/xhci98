@@ -6,12 +6,13 @@
  *      **This is policy, not a missing export.** The reason recorded here used
  *      to be "ExAllocatePoolWithTag does not exist on Win98", and the repo
  *      measured the opposite, from Win98 SE's own usbd.sys
- *      (AGENTS.md; docs/usb-xhci-info/win98-wdm.md). The ban stands on another
- *      ground: Option A needs no private pool at all - usbport supplies every
- *      buffer, so a pool call site is a design regression before it is an
- *      import risk. The mechanism below is unchanged; only its justification
- *      was wrong, and a maintainer relaxing the gate should know they are
- *      overturning a policy rather than a fact.
+ *      (AGENTS.md; docs/usb-xhci-info/win98-wdm.md). The rule is the HCD's
+ *      named-site pool policy (design record 13 section 7.5): the pair
+ *      ExAllocatePoolWithTag + ExFreePool, in hcd_pool.obj alone. Undoing the
+ *      rewrite makes a stray untagged ExAllocatePool resolve to the name the
+ *      import gate refuses, rather than silently becoming a tagged call at an
+ *      unnamed site. (The 1.2.0.0 miniport allocated no pool at all, under
+ *      Option A; that was the rule's first ground.)
  *   2. Let the pure hardware-logic core compile on the build host under
  *      XHCI_HOST_TEST with no DDK at all (docs/contributing/design/03-host-unit-tests.md).
  *

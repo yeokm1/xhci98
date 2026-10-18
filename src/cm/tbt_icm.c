@@ -1100,6 +1100,7 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
     ULONG n;
     BOOLEAN match;
     BOOLEAN sent;
+    ULONG published;
     LONG rc;
     TBT_FRAME f;
     TBT_DEADLINE d;
@@ -1132,11 +1133,17 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
              * earlier one is mixed in. */
             icm->TopoReceived = 0;
         }
+        published = icm->Ring->Counters.Tx;
         rc = TbtRingSend(icm->Ring, TBT_PDF_ICM_CMD, req, words);
+        if (icm->Ring->Counters.Tx != published) {
+            /* The descriptor went to the host interface. A send that
+             * then reports TBT_E_HW (not seen consumed in time) may still
+             * be consumed and answered later (tbt_ring.h). */
+            sent = TRUE;
+        }
         if (rc != TBT_OK) {
             break;
         }
-        sent = TRUE;
         icm->Counters.CommandsSent++;
         rc = TBT_E_TIMEOUT;
         TbtDeadlineStart(&d, icm->Host, tbtIcmClip(icm, timeoutMs));
@@ -1247,8 +1254,9 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
         /* Sent and not answered (or abandoned): its answer may still
          * arrive, and no word of a driver-ready answer tells it from the
          * next one's. Only a ring restart ends that (TbtIcmRecover). A
-         * command the ring refused (full, stopped) was never sent and has
-         * no answer to come. */
+         * command the ring refused before publishing it (full, stopped,
+         * an unreadable index) was never sent and has no answer to come;
+         * one published and not seen consumed was. */
         icm->Ambiguous = TRUE;
     }
     icm->InWait = FALSE;

@@ -1836,6 +1836,58 @@ static void test_lost_and_recover(void)
 }
 
 /*
+ * A command the ring published and the host interface did not consume in
+ * time (TbtRingSend's TBT_E_HW after the Producer Index moved) may still
+ * be consumed and answered: the session is ambiguous and the next light
+ * recovery escalates to a ring restart. One refused before publication
+ * (no vacant descriptor) has no answer to come: the light recovery stays
+ * light.
+ */
+static void test_unsent_and_stalled(void)
+{
+    unsigned long before;
+    unsigned long tx;
+
+    /* Consumption stalled: the get route is published, never consumed. */
+    setupLive(0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK(!g_icm.Ambiguous, "a fresh session is not ambiguous");
+    tx = g_ring.Counters.Tx;
+    g_fake.TxConsume = 0;
+    g_fw.Present = 1;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK(g_ring.Counters.Tx != tx, "the command was published");
+    CHECK(g_ring.Counters.TxStuck >= 1, "and not seen consumed");
+    CHECK(g_icm.Ambiguous, "a published, unconsumed command is ambiguous");
+    g_fake.TxConsume = 1;
+    before = g_fake.MboxCount;
+    CHECK_EQ(TbtIcmRecover(&g_icm, FALSE), TBT_OK, "recovery after a stall");
+    CHECK_EQ(g_fake.MboxCount, before + 1,
+             "the light recovery escalated: the ring restart sent 0x23");
+    CHECK(!g_icm.Ambiguous, "the restart clears the ambiguity");
+
+    /* No vacant descriptor: the command is refused before publication. */
+    setupLive(0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    tx = g_ring.Counters.Tx;
+    /* The index as the host interface would show a full ring: the
+     * Consumer one past the Producer. */
+    g_fake.TxIndexOverride = (g_ring.TxNext << 16) |
+                             ((g_ring.TxNext + 1) % g_ring.Entries);
+    g_fw.Present = 1;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK(g_ring.Counters.TxFull >= 1, "the ring refused the command");
+    CHECK_EQ(g_ring.Counters.Tx, tx, "nothing was published");
+    CHECK(!g_icm.Ambiguous, "an unsent command is not ambiguous");
+    g_fake.TxIndexOverride = 0;
+    before = g_fake.MboxCount;
+    CHECK_EQ(TbtIcmRecover(&g_icm, FALSE), TBT_OK, "light recovery");
+    CHECK_EQ(g_fake.MboxCount, before, "no ring restart, no 0x23");
+}
+
+/*
  * The resume's budget (record 21 section 6.3; TBT_ICM_RESUME_BUDGET_MS):
  * every wait clipped to what is left of it, the drain stopped when it is
  * spent, the resume then abandoned whole.
@@ -2006,6 +2058,7 @@ int main(void)
     test_settings();
     test_resume_budget();
     test_lost_and_recover();
+    test_unsent_and_stalled();
     printf("test_tbt_icm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

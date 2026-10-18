@@ -709,14 +709,48 @@ if (-not (Test-SectionExists $inf "Version")) {
             if (-not (Test-Path -LiteralPath $mfPath)) {
                 Add-Failure "BOTH-VERSION" ("{0} is missing, so its version cannot be checked against {1}." -f $mfPath, $hdrName)
             } else {
-                $mfText = Get-Content -LiteralPath $mfPath -Raw
+                #
+                # Parsed as XML, not searched as text: a text search took the
+                # first match anywhere, so an identity inside a comment, or the
+                # Common-Controls dependentAssembly's, could stand in for the
+                # real one. The identity the loader reads is the root
+                # <assembly>'s own direct child in the asm.v1 namespace. The
+                # get_ accessors are used because PowerShell's XML adapter lets
+                # an attribute or child element shadow a property of the name.
+                #
                 $mfName = Split-Path -Leaf $mfPath
-                if ($mfText -notmatch '<assemblyIdentity\s[^>]*?\bname="xhci98\.xhcitr"[^>]*>') {
-                    Add-Failure "BOTH-VERSION" ("{0} has no assemblyIdentity named xhci98.xhcitr to read the version from." -f $mfName)
-                } elseif ($matches[0] -notmatch '\bversion="([^"]*)"') {
-                    Add-Failure "BOTH-VERSION" ("{0}'s assemblyIdentity has no version attribute; an application manifest's identity requires one." -f $mfName)
-                } elseif ($null -ne $str -and $matches[1] -ne $str) {
-                    Add-Failure "BOTH-VERSION" ("{0} says the version is {1} but {2} says {3}. The manifest cannot include the header, so its literal is bumped by hand with the INFs." -f $mfName, $matches[1], $hdrName, $str)
+                $asmV1 = "urn:schemas-microsoft-com:asm.v1"
+                $mfDoc = New-Object System.Xml.XmlDocument
+                $mfDoc.XmlResolver = $null
+                $mfParsed = $true
+                try {
+                    $mfDoc.Load($mfPath)
+                } catch {
+                    $mfParsed = $false
+                    Add-Failure "BOTH-VERSION" ("{0} is not well-formed XML, so its version cannot be read: {1}" -f $mfName, $_.Exception.Message)
+                }
+                if ($mfParsed) {
+                    $mfRoot = $mfDoc.get_DocumentElement()
+                    $mfIds = @()
+                    if ($null -ne $mfRoot -and $mfRoot.get_LocalName() -eq "assembly" -and $mfRoot.get_NamespaceURI() -eq $asmV1) {
+                        foreach ($node in $mfRoot.get_ChildNodes()) {
+                            if ($node.get_NodeType() -eq [System.Xml.XmlNodeType]::Element -and
+                                $node.get_LocalName() -eq "assemblyIdentity" -and $node.get_NamespaceURI() -eq $asmV1) {
+                                $mfIds += $node
+                            }
+                        }
+                    }
+                    if ($null -eq $mfRoot -or $mfRoot.get_LocalName() -ne "assembly" -or $mfRoot.get_NamespaceURI() -ne $asmV1) {
+                        Add-Failure "BOTH-VERSION" ("{0}'s root element is not an <assembly> in {1}, so it has no identity to read the version from." -f $mfName, $asmV1)
+                    } elseif ($mfIds.Count -ne 1) {
+                        Add-Failure "BOTH-VERSION" ("{0}'s <assembly> has {1} direct assemblyIdentity children; an application manifest has exactly one, and it is the one whose version is checked." -f $mfName, $mfIds.Count)
+                    } elseif ($mfIds[0].GetAttribute("name") -ne "xhci98.xhcitr") {
+                        Add-Failure "BOTH-VERSION" ("{0}'s own assemblyIdentity is named '{1}', not xhci98.xhcitr." -f $mfName, $mfIds[0].GetAttribute("name"))
+                    } elseif (-not $mfIds[0].HasAttribute("version")) {
+                        Add-Failure "BOTH-VERSION" ("{0}'s assemblyIdentity has no version attribute; an application manifest's identity requires one." -f $mfName)
+                    } elseif ($null -ne $str -and $mfIds[0].GetAttribute("version") -ne $str) {
+                        Add-Failure "BOTH-VERSION" ("{0} says the version is {1} but {2} says {3}. The manifest cannot include the header, so its literal is bumped by hand with the INFs." -f $mfName, $mfIds[0].GetAttribute("version"), $hdrName, $str)
+                    }
                 }
             }
 

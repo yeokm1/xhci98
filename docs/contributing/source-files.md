@@ -90,7 +90,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `hcd_svc.h` | The services the kept files call, with the usbport service each replaces, and "READING THE KEPT FILES", the key to their comments. | no |
 | `xhci.h` | xHCI types, register and TRB bit definitions, the common-buffer layout, the extension `hcd.h` embeds, the snapshot's layout, and the declarations of most of the pure core. Bit positions are transcribed from [xhci-data-structures.md](../usb-xhci-info/xhci-data-structures.md), never from memory. | yes |
 | `xhci_hw.h` | The driver-only side of the split: MMIO accessors, PCI configuration access and bounded waits (`xhci_pci.c`), and the core's call-outs that `hcd_dev.c` implements. | no |
-| `xhci_compat.h` | Windows 98 and 2000 DDK compatibility shims, chiefly the `ExAllocatePool` policy; included by every driver of the tree. | no |
+| `xhci_compat.h` | Two jobs: the Windows 98 and 2000 DDK shims, chiefly undoing the DDK's `ExAllocatePool` rewrite so a stray untagged call reaches the name the import gate refuses; and, under `XHCI_HOST_TEST`, the DDK-free types the host suites compile the pure core with. Included by every driver of the tree. | yes, under `XHCI_HOST_TEST` |
 | `xhci_counters.h` | The counter block `XHCIHC_COUNTERS` (roadmap-hcd.md 26-A.10), measured by `scripts\vm-matrix\gen-offsets.ps1` under `XHCI_HOST_TEST`, which is why it is a header of its own; `xhcisnap\check-counter-names.ps1` and `xhcitr\tr_hcctr.h` follow it name by name. | yes |
 | `xhci_log.h` | The log ring's contract: the verbosity ladder, the sinks, and the rule that recording is not emission. | yes |
 | `xhci_dbg.h` | The trace channel's macros; empty outside the qemu flavour. | no |

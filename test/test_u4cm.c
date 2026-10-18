@@ -2429,6 +2429,56 @@ static void test_edge_restore(void)
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "then connected");
 }
 
+/*
+ * A dark port at start with USB3 residue only, the PCIe Down's Path Enable
+ * clear and its HopID 8 entry invalid, and one host lane entry unreadable:
+ * the PCIe walk finds nothing (Written 0) and is incomplete. No PCIe
+ * tunnel was found, so no removal and no path-closed statement; the
+ * unread entry still owes the sweep, retried until it is readable.
+ */
+static void test_dark_port_incomplete_pcie(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int lane;
+    int hp;
+    int hu;
+    const TBT_U4_PORT *p;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 1);
+    fabUnplug(&g_fab, 1);
+    lane = fabPortLane0(&g_fab, 1);
+    hp = fabPortPcie(&g_fab, 1);
+    hu = fabPortUsb3(&g_fab, 1);
+    g_fab.R[0].Adp[hp].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    g_fab.R[0].Adp[hp].Path[2 * 8] &= ~0x80000000UL;
+    g_fab.R[0].Adp[lane].Path[2 * 9] &= ~0x80000000UL;
+    g_fab.R[0].Adp[hu].Path[2 * 8] |= 0x80000000UL;
+    g_fab.R[0].Adp[lane].Path[2 * 11] |= 0x80000000UL;
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    g_ldCalls = 0;
+    armSwallow(&g_fab, 0, TBT_CS_PATH, (unsigned long)lane, 2 * 12, 0, 0, 0, 100000UL);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "incomplete PCIe walk on a dark port: EMPTY");
+    CHECK_EQ(g_ldCalls, 0, "no PCIe tunnel found: no statement");
+    CHECK_EQ(g_cm.Counters.PcieTornDown, 0, "no PCIe teardown counted");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "no removal");
+    CHECK_EQ(g_cm.Counters.Usb3TornDown, 1, "the USB3 residue torn down");
+    CHECK(p->HostResidual, "the unread entry owes the sweep");
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 2);
+    CHECK(!p->HostResidual, "swept once readable");
+    CHECK(hostClean(&g_fab, 1), "the host side clean");
+    CHECK_EQ(g_ldCalls, 0, "still no statement");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "still no removal");
+}
+
 static int g_jumpRouter;
 static int g_jumpDone;
 static int g_jumpWrite;             /* 0: the first path read; 1: a write at */
@@ -4057,6 +4107,7 @@ int main(void)
     test_edge_budget();
     test_edge_identity_and_links();
     test_edge_restore();
+    test_dark_port_incomplete_pcie();
     test_budget_and_pending_entries();
     test_ring_wrap_and_owed_teardown();
     test_transitional_and_config_loss();

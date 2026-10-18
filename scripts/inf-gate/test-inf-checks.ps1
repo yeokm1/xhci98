@@ -425,7 +425,11 @@ try {
 
         # The XHCITR manifest's literal version (check-inf.ps1 -ManifestPath):
         # the production one must pass, and a copy one version ahead, one with
-        # the attribute gone and one with no identity must each fail.
+        # the attribute gone and one with no identity must each fail. The gate
+        # parses the XML, so the decoys below carry the header's own version
+        # where a text search would find them first: in a comment ahead of a
+        # stale active identity, and in a dependentAssembly with the active
+        # identity gone. A text search passed both.
         Stage-VersionPair $hdrText $rcText
         $mfProd = Join-Path $repo "xhcitr\xhcitr.manifest"
         $mfText = [System.IO.File]::ReadAllText($mfProd)
@@ -434,7 +438,17 @@ try {
         [System.IO.File]::WriteAllText($mfStaged, $mfText, $ascii)
         $r = Invoke-Gate -Path $path -Extra @("-ManifestPath", $mfStaged)
         Assert-True ($r.ExitCode -eq 0) ("mfgood : the production manifest disagrees with the header:`n" + $r.Output)
+        $mfActive = '(?m)^[ \t]*<assemblyIdentity version="[\d.]+" processorArchitecture="\*" name="xhci98\.xhcitr" type="win32"/>\r?\n'
+        if ($mfText -notmatch '<assemblyIdentity version="([\d.]+)" processorArchitecture="\*" name="xhci98\.xhcitr"') {
+            throw "mf : the production manifest's active identity is not in the shape these cases mutate."
+        }
+        $mfCur = $matches[1]
+        $mfDecoy = '<assemblyIdentity version="' + $mfCur + '" processorArchitecture="*" name="xhci98.xhcitr" type="win32"/>'
         $mfCases = @(
+            @{ Name = "mfcomment"; Pattern = '(?m)^([ \t]*)<assemblyIdentity version="[\d.]+"( processorArchitecture="\*" name="xhci98\.xhcitr")';
+               Replace = ('${1}<!-- ' + $mfDecoy + ' -->' + "`r`n" + '${1}<assemblyIdentity version="9.9.9.9"${2}') },
+            @{ Name = "mfmissing"; Pattern = $mfActive; Replace = '' },
+            @{ Name = "mfdeponly"; Pattern = ($mfActive + '([\s\S]*?<dependentAssembly>\r?\n)'); Replace = ('${1}      ' + $mfDecoy + "`r`n") },
             @{ Name = "mfver";    Pattern = '(<assemblyIdentity version=")[\d.]+(" processorArchitecture="\*" name="xhci98\.xhcitr")'; Replace = '${1}9.9.9.9${2}' },
             @{ Name = "mfnover";  Pattern = '(<assemblyIdentity )version="[\d.]+" (processorArchitecture="\*" name="xhci98\.xhcitr")'; Replace = '${1}${2}' },
             @{ Name = "mfnoname"; Pattern = 'name="xhci98\.xhcitr"'; Replace = 'name="xhci98.other"' }

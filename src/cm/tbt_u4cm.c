@@ -3658,6 +3658,15 @@ static VOID tbtU4TeardownHead(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN nested)
         cm->Counters.PcieTornDown++;
         tbtU4LinkDownUpcall(cm, p, closed, nested);
         p->RemovalOwed = TRUE;
+    } else if (p->Pcie.Incomplete) {
+        /* No PCIe path found, but a host entry was never read
+         * (tbtU4Follow): what it may hold is swept from the registers,
+         * with no removal and no path-closed statement - no PCIe tunnel
+         * was found to state closed (sections 7.3, 9.2). Until a sweep
+         * proves it, the port owes one before it connects again. */
+        if (!tbtU4HostSweep(cm, p, TRUE, FALSE)) {
+            p->HostResidual = TRUE;
+        }
     }
     p->Pcie.Written = 0;
     p->Pcie.Up = FALSE;
@@ -3694,6 +3703,14 @@ static VOID tbtU4TeardownTail(PTBT_U4CM cm, PTBT_U4_PORT p)
             p->HostResidual = TRUE;     /* swept before the next connection */
         }
         cm->Counters.Usb3TornDown++;
+        p->LastUsb3TeardownUs = tbtU4Now(cm);
+        p->Usb3GapValid = TRUE;
+    } else if (p->Usb3.Incomplete && p->Usb3Down != 0) {
+        /* As the head's PCIe case: no USB3 path found, an entry unread;
+         * swept, or owed. Whatever the sweep closed starts the gap. */
+        if (!tbtU4HostSweep(cm, p, FALSE, TRUE)) {
+            p->HostResidual = TRUE;
+        }
         p->LastUsb3TeardownUs = tbtU4Now(cm);
         p->Usb3GapValid = TRUE;
     }

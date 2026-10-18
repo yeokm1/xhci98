@@ -369,6 +369,12 @@ VOID TbtRingSetUnsolicited(PTBT_RING ring, TBT_UNSOLICITED fn, PVOID context);
  * Consumer Index passing it, or DD). TBT_E_PARAM for a frame past the
  * buffer or a PDF above Eh, TBT_E_RING_FULL with no vacant descriptor,
  * TBT_E_HW if it is never consumed, TBT_E_STOPPED before a start.
+ * Counters.Tx counts the descriptors published: it moves exactly when the
+ * Producer Index is written, so a caller tells a send refused before
+ * publication (no answer can come) from one published and not seen
+ * consumed (TBT_E_HW; the host interface may still take it later) by
+ * whether Counters.Tx moved. An unreadable index (all ones) before
+ * publication is also TBT_E_HW, with Counters.Tx unmoved.
  */
 LONG TbtRingSend(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words);
 /* The same, with the consumption bound in microseconds. */

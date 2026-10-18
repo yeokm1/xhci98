@@ -1905,7 +1905,11 @@ confirm):
   unplug handling, not a reset - with the same quarantine where a step
   fails. Only a PCIe path found there takes the PCIe steps (the
   path-closed statement, the owed removal): USB3 or DisplayPort residue
-  alone is torn down or quarantined without them.
+  alone is torn down or quarantined without them. A host entry the walk
+  could not read is swept from the registers all the same, PCIe path
+  found or not, and until a sweep proves the port's host side clear the
+  port owes it, retried at the idle tick and before the port connects
+  again.
 - **Every discovered path has a removal rule.** At the unplug of the port
   it goes through, a discovered PCIe or USB3 tunnel's host-side entries
   are torn down as section 7.3 tears down this driver's own; every other
