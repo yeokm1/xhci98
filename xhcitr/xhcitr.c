@@ -3996,62 +3996,85 @@ done:
     return kind;
 }
 
+/* The identity of the incarnation an eject is about to stop (record 21
+ * section 7.4, decision M16): its entry's serial in the marks answer of
+ * the request's own query device, at the request's epoch. Have 0 when
+ * the driver does not serve the answer, or the unit has no single entry. */
+typedef struct _EJMARK {
+    int Have;
+    INST_U32 Serial;
+} EJMARK;
+
+static MK_MARKS ejMarks;
+
+static void ej_mark_pre(const EJREQ *q, const WALK *w, int u, EJMARK *pre)
+{
+    int e;
+
+    pre->Have = 0;
+    if (!w->N[u].HasLoc || marks_read(q->QName, &ejMarks) != 1 ||
+        ejMarks.EpochLo != q->EpochLo || ejMarks.EpochHi != q->EpochHi) {
+        return;
+    }
+    e = tr_mark_find(&ejMarks, q->PortBdf, w->N[u].Bus, w->N[u].Addr, 0);
+    if (e >= 0) {
+        pre->Have = 1;
+        pre->Serial = ejMarks.E[e].Serial;
+    }
+}
+
 /* XhciCmEjectConfirm (cm_query.h CM_QC_*) for unit u of walk w, after the
  * tool's own successful CM_Request_Device_EjectA, with the shared eject
- * mutex held: the unit's entry in its NHI's marks answer with a departure
- * pending (waited for up to 3 s), the value written to the NHI's driver key
- * only while it is absent or empty. Returns a line for the answer, or NULL
- * when there is nothing to say. Only an administrator writes it. */
-static const char *ej_mark_confirm(const WALK *w, int u)
+ * mutex held: the same incarnation's entry (pre: its serial, the request's
+ * epoch) in the request's own NHI's marks answer with a departure pending,
+ * waited for up to 3 s; the value written to that NHI's driver key, found
+ * by its instance ID, only while absent or empty. Returns a line for the
+ * answer, or NULL when there is nothing to say. Only an administrator
+ * writes it. */
+static const char *ej_mark_confirm(const EJREQ *q, const WALK *w, int u,
+                                   const EJMARK *pre)
 {
-    MK_MARKS *m;
     unsigned char v[MK_QC_BYTES];
     BYTE old[64];
     char path[200];
-    INST_U32 member = 0;
     DWORD type;
     DWORD n;
     HKEY key;
     LONG r;
-    int k = unit_member(w, u, &member);
     int e = -1;
     int tries;
-    const char *drv;
+    int nhiNode = walk_find_id(w, q->NhiId);
 
-    if (k < 0 || k >= nhiCount || !nhi[k].HaveQ || nhi[k].Node < 0 ||
-        nhi[k].Node >= gw.Count) {
-        return NULL;
-    }
-    drv = gw.N[nhi[k].Node].Driver;
-    if (drv[0] == '\0') {
-        return NULL;
-    }
-    m = (MK_MARKS *)calloc(1, sizeof(MK_MARKS));
-    if (m == NULL) {
+    if (!pre->Have || nhiNode < 0 || w->N[nhiNode].Driver[0] == '\0') {
         return NULL;
     }
     for (tries = 0; tries < 30 && e < 0; tries++) {
-        int a = marks_read(nhi[k].QName, m);
-        if (a == 0) {
-            free(m);
-            return NULL;    /* a driver from before 42-A.5 */
+        int a = marks_read(q->QName, &ejMarks);
+        if (a == 1 && (ejMarks.EpochLo != q->EpochLo ||
+                       ejMarks.EpochHi != q->EpochHi)) {
+            /* The controller started again: not the departure stopped. */
+            return "The Thunderbolt controller started again, so the eject "
+                   "was not confirmed to it.";
         }
         if (a == 1) {
-            e = tr_mark_find(m, member, w->N[u].Bus, w->N[u].Addr, 1);
+            e = tr_mark_find(&ejMarks, q->PortBdf, w->N[u].Bus, w->N[u].Addr,
+                             1);
+            if (e >= 0 && ejMarks.E[e].Serial != pre->Serial) {
+                return "The device changed during the eject, so it was not "
+                       "confirmed to the Thunderbolt driver.";
+            }
         }
         if (e < 0) {
             Sleep(100);
         }
     }
     if (e < 0) {
-        free(m);
         return "The Thunderbolt driver did not report the departure, so the "
                "eject was not confirmed to it.";
     }
-    mk_confirm_build(v, m, &m->E[e]);
-    free(m);
+    mk_confirm_build(v, &ejMarks, &ejMarks.E[e]);
     tr_sprintf(path, sizeof(path), "SYSTEM\\CurrentControlSet\\Control\\Class\\%s",
-               drv);
+               w->N[nhiNode].Driver);
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ | KEY_SET_VALUE,
                       &key) != ERROR_SUCCESS) {
         return "The eject could not be confirmed to the Thunderbolt driver.";
@@ -4900,6 +4923,13 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         char vetoName[MAX_PATH];
         int withName;
         int notRemovable = 0;
+        EJMARK pre;
+        int admin = ej_is_admin();
+        pre.Have = 0;
+        if (admin) {
+            /* The incarnation about to stop, for the confirmation. */
+            ej_mark_pre(q, &w, u, &pre);
+        }
         vetoName[0] = '\0';
         cr = api.Eject(w.N[u].Dn, &veto, vetoName, MAX_PATH, 0);
         vetoName[MAX_PATH - 1] = '\0';
@@ -4936,11 +4966,11 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         if (notRemovable) {
             tr_put(&t, "Until you unplug it, Windows may start it again when it "
                        "next looks for new hardware.\n");
-        } else if (ej_is_admin()) {
+        } else if (admin) {
             /* Record 21 section 7.4, revision 3 (decision M16): an
              * administrator's own successful eject confirms itself, so
              * the tunnel comes down; the mutex is still held. */
-            const char *c = ej_mark_confirm(&w, u);
+            const char *c = ej_mark_confirm(q, &w, u, &pre);
             if (c != NULL) {
                 tr_printf(&t, "%s\n", c);
             }

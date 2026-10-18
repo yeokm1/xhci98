@@ -3050,6 +3050,10 @@ try {
            Why  = "a cut no longer refuses a USB tree tool older than its sources (task 41-A.6)" },
         @{ Find = '@(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.c")) +';
            Why  = "the USB tree tool's freshness no longer counts the pure half it links from xhciinst\ (task 41-A.6)" },
+        @{ Find = '@(Get-Item -LiteralPath (Join-Path $repo "xhcimark\mark_core.c")) +';
+           Why  = "the USB tree tool's freshness no longer counts the marks parser it links from xhcimark\ (task 42-A.5)" },
+        @{ Find = '@(Get-Item -LiteralPath (Join-Path $repo "xhcimark\mark_core.h")) +';
+           Why  = "the USB tree tool's freshness no longer counts the marks parser's header (task 42-A.5)" },
         @{ Find = 'Write-GeneratedText -Path (Join-Path $traytoolStaged "readme.txt") -Lines $trayLines';
            Why  = "a cut no longer writes the USB tree tool's readme.txt (task 41-A.6)" },
         @{ Find = 'Write-GeneratedText -Path (Join-Path $traytoolStaged "NOTICE.TXT")';

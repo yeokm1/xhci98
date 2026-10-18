@@ -3856,6 +3856,8 @@ cuts without the tool on a host that cannot build it.
             @(Get-Item -LiteralPath $versionHeader) +
             @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.c")) +
             @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhcimark\mark_core.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhcimark\mark_core.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")))
         foreach ($name in $trayExes) {
             $trayTime = (Get-Item -LiteralPath (Join-Path $TrayToolDir $name)).LastWriteTimeUtc
