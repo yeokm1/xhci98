@@ -1,6 +1,7 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 5, 2026-10-18, reviewed and revised (the ownership leg's
+Status: draft 6, 2026-10-18, reviewed and revised (the settle-binding
+leg); draft 5, 2026-10-18, reviewed and revised (the ownership leg's
 existing-copy case); draft 4, 2026-10-18, reviewed and revised (the
 probe as the test of the process handle, the timeout per job kind, the
 two-versions leg's exception); draft 3, 2026-10-18, reviewed and
@@ -697,7 +698,7 @@ key, `INF\OTHER`'s listing, and Device Manager:
 | F, fresh install | the controller installed by the helper from the Found page's plan with no hand step; the Windows CD prompt for `usbd.sys` owned by the installer's window; the root hub's and hubs' wizards after the controller's restart, and the settle's wait for them; a cancelled root-hub wizard then installed by the helper; the devnode's class after the install; whether `LDID_SRCPATH` spares the "Copy files from" prompt; the driver key's values of section 8 |
 | U24, update over `2.4.0.0` | the controller and the root hub updated by the helper with no hand step (the hand step record 23's 9x leg needed); the keyboard and mouse behind the controller back after the restart of the devices, not of Windows |
 | U23, update over `2.3.1.0` (98 SE) | the new devnodes and their wizards; the helper's pass over what was cancelled |
-| UAS and Stor98 | a UAS disk installed and `force`-reinstalled (the `ERR_DI_DONT_INSTALL` question); Stor98 ticked on an NVMe device with no driver, installed from the copy, its IOS binding read back; an older Stor98 updated with the shutdown afterwards (record 26 section 6.3); two bundled versions in succession, then the uninstall removing every owned staged copy no device names and leaving a hand-installed Stor98's device with the copy its driver key names, and an `INF\OTHER` copy of a hand install whose device was removed before the run, which stays (record 26 section 6.3) |
+| UAS and Stor98 | a UAS disk installed and `force`-reinstalled (the `ERR_DI_DONT_INSTALL` question); Stor98 ticked on an NVMe device with no driver, installed from the copy, its IOS binding read back; an older Stor98 updated with the shutdown afterwards (record 26 section 6.3); two bundled versions in succession, then the uninstall removing every owned staged copy no device names and leaving a hand-installed Stor98's device with the copy its driver key names, and an `INF\OTHER` copy of a hand install whose device was removed before the run, which stays; an NVMe device Windows binds to Stor98 by itself during the settle after the host interface's install, with no Stor98 helper call, recorded with the copy the engine made for it, and the uninstall removing that copy once unreferenced (record 26 section 6.3) |
 | Thunderbolt | the host interface by `xhcicm.inf` on the emulator's Alpine Ridge guest (the 98 SE wizard's "Copy files from" of record 23 section 8.5, now the helper's) |
 | UN, uninstall | each devnode removed through the helper in order, an unplugged UAS disk's entry and a moved controller's old entry among them (the removal of an entry that is not present); the subtree removal; the `INF\OTHER` copies and the files deleted by the installer; the restart; the controller back as an unknown device with no wizard finding a driver |
 | Probe | the `probe` job on 98 SE and ME: the helper loads (its ordinals resolved), writes its version, and refuses a job with another version before any call |

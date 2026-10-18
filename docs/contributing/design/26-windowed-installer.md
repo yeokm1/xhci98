@@ -1,6 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 5, 2026-10-18, reviewed and revised (the 98 SE and ME INF
+Status: draft 6, 2026-10-18, reviewed and revised (the INF inventory
+around every settle as well); draft 5, 2026-10-18, reviewed and revised
+(the 98 SE and ME INF
 copies inventoried before and after, the shutdown line's unfinished
 form, the USB4 reconnection asked of every such update); draft 4,
 2026-10-18, reviewed and revised (Stor98's
@@ -585,11 +587,14 @@ unasked). With the box ticked:
   `oemNN.inf` name `SetupCopyOEMInf` returned when it made a new copy,
   never one it answered with an INF already in the store (that one was
   there before and is left), and on 98 SE and ME an `INF\OTHER` copy
-  the engine created during one of this installer's installs: the
-  engine's `INF` and `INF\OTHER` directories are listed (names, sizes
-  and SHA-256s) before each helper install and after it, and a file that
-  was not there before and is named by the installed device's driver
-  key afterwards is recorded; a file that was there before, referenced
+  the engine created during one of this installer's installs or during
+  a settle of this run: the engine's `INF` and `INF\OTHER` directories
+  are listed (names, sizes and SHA-256s) at the baseline, before and
+  after each helper install, and before and after each settle (record
+  27 section 6), and a file that was not there before and is named by
+  the driver key of a device recorded under `Devices` in that same step
+  (the helper's install, or a binding Windows made during the settle
+  that the rule below attributes to the installer) is recorded; a file that was there before, referenced
   or not (a hand install's copy whose device was removed), is never
   recorded and never deleted by this installer, and a file that appeared
   without being named is left and said in the log (the flat copy in the
