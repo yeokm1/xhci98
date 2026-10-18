@@ -1,0 +1,119 @@
+ started 98 v7 (new) QMP 48030 VNC 48031
+cm9x DriverEntry (interface 3 revision, pin device)
+cm9x 0000000305e20ace c8 c29ae970 bridge devnode; secondary bus, SHPC cap 00000001 00000040
+cm9x 00000003063d116c c8 c29af500 bridge devnode; secondary bus, SHPC cap 00000002 00000040
+cm9x 00000003082ce240 c8 00000003 ports active (bit mask); cookie 59ada928 00000000
+
+=== S1 (P1-1) A terminal and released, devnode registered, B reuses A's block; A's ISR called (IsrProbe)
+[nvme98 000000b711b8d1ad 00175] q9 pool[0]: 2 -> 3 (handshake: acknowledged disable) owner=1 last=0 bus=1 slot=1 gen=1 linear=E459D000 phys=1FE8C000
+[nvme98 000000b711fed1a3 00178] q9 handshake: acknowledged request 1 (token 1 generation 1) outcome 1 detail 0000000F after 208 ms
+[nvme98 000000b71219e5fb 00179] q9 queues detached (terminal): gate closed (was 1), queue and buffer pointers cleared
+[nvme98 000000b7123a237f 00180] q9 pool[0]: 3 -> 4 (released: isolated and given up) owner=0 last=1 bus=1 slot=1 gen=1 linear=E459D000 phys=1FE8C000
+[nvme98 000000b7125d7915 00181] q9 IsrProbe: HwInterrupt -> 0, gate-closed calls 1, queues 00000000/00000000/00000000/00000000, block 00000000
+[nvme98 000000b74867f96a 00182] q9 IsrProbe: HwInterrupt -> 0, gate-closed calls 2, queues 00000000/00000000/00000000/00000000, block 00000000
+[nvme98 000000b77f9db03f 00183] q9 IsrProbe: HwInterrupt -> 0, gate-closed calls 3, queues 00000000/00000000/00000000/00000000, block 00000000
+[nvme98 000000c0b076927c 00027] q9 pool[0]: 1 -> 2 (reused RELEASED block) owner=2 last=1 bus=2 slot=1 gen=1 linear=E459D000 phys=1FE8C000
+[nvme98 000000c0b08e1faa 00029] q9 pool: reused RELEASED block, record 0, linear=E459D000 phys=1FE8C000 pages=33 bounce=E45AD000/1FE9C000 charged=33
+[nvme98 000000c1c9158288 00185] q9 IsrProbe: HwInterrupt -> 0, gate-closed calls 50, queues 00000000/00000000/00000000/00000000, block 00000000
+[nvme98 000000cce8b39b28 00186] q9 IsrProbe: HwInterrupt -> 0, gate-closed calls 100, queues 00000000/00000000/00000000/00000000, block 00000000
+ctl write G:\T2.BIN: 1024 KiB seed 7 written and committed
+[nvme98 000000d770e50104 00188] q9 IsrProbe: HwInterrupt -> 0, gate-closed calls 150, queues 00000000/00000000/00000000/00000000, block 00000000
+ctl verify G:\T2.BIN: 1024 KiB seed 7 OK
+[nvme98 000000e248507de9 00189] q9 IsrProbe: HwInterrupt -> 0, gate-closed calls 200, queues 00000000/00000000/00000000/00000000, block 00000000
+[nvme98 000000ed511e8121 00191] q9 IsrProbe: HwInterrupt -> 0, gate-closed calls 250, queues 00000000/00000000/00000000/00000000, block 00000000
+[nvme98 000000f87fec9ba5 00192] q9 IsrProbe: HwInterrupt -> 0, gate-closed calls 300, queues 00000000/00000000/00000000/00000000, block 00000000
+[nvme98 0000010387537e50 00194] q9 IsrProbe: HwInterrupt -> 0, gate-closed calls 350, queues 00000000/00000000/00000000/00000000, block 00000000
+[nvme98 0000010d09af47c4 00205] q9 stop: HwInterrupt was called 392 times with the queue gate closed
+ctl eject result C1EA after 40421 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_SubTree fai
+
+=== S2 (P2-6) port 1 surprise while port 0 waits for an acknowledgement that never comes (NoAck)
+cm9x 0000018d762eb076 ce 01000002 eject requested; port, generation 00000000 00000002
+cm9x 0000018d83dac139 cd 0c000000 eject: Query_Remove_SubTree; devnode c1c7e040 00000000
+cm9x 0000018d83ee243b ce 03000002 REMOVE_PENDING set; generation, ack before 00000002 00000101
+cm9x 00000197beab9e82 c9 7f0d0d3e SHPC slot status changed; port, empty 00000001 00000001
+cm9x 00000197bee14140 cb 01050001 DOWN published; ack before, endpoint devnode 00000000 c1c97f90
+cm9x 00000197ca47a420 cc 10001401 link-down ack (1) or timeout; gen, ms 00000001 00000014
+cm9x 00000197d5a2be1f cd 0c010000 Query_Remove_SubTree(endpoint); devnode, try c1c97f90 00000000
+cm9x 00000197db779a4d b6 000000c1 endpoint devnode retired; port, generation 00000001 00000001
+cm9x 000001abe31fca40 ce 04ff0002 acknowledgement (FF none): ms, RemoveAck 000036b8 00000101
+cm9x 000001abe32dab42 ce 06ff0002 eject not clean, not isolated: CM isolates first; RemoveAck 00000101 00000000
+cm9x 000001abe94b6019 c9 7f0d0d3e SHPC slot status changed; port, empty 00000000 00000001
+cm9x 000001abe99bac8b cb 00050002 DOWN published; ack before, endpoint devnode 00000000 c1c7e040
+ctl eject result E3FF after 14088 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5x
+cm9x 000001ac1adff076 cc 00005901 link-down ack (1) or timeout; gen, ms 00000002 00000059
+cm9x 000001ac208e1d6d cd 0c000000 Query_Remove_SubTree(endpoint); devnode, try c1c7e040 00000000
+cm9x 000001ac2cc29c1a b6 000000c0 endpoint devnode retired; port, generation 00000000 00000002
+
+=== S3 (P2-7, P2-6) CLEAN, Remove_SubTree failing 30 s (O6), port 1 surprise during the retries
+   (timeout waiting for: retired: removed after link down)
+cm9x 00000217eb8cd6bb ce 01000003 eject requested; port, generation 00000000 00000003
+cm9x 00000217f282ae1b cd 0c000000 eject: Query_Remove_SubTree; devnode c1c97000 00000000
+cm9x 00000217f2a23d7b ce 03000003 REMOVE_PENDING set; generation, ack before 00000003 00000101
+cm9x 000002189c0560b6 ce 04010003 acknowledgement (FF none): ms, RemoveAck 0000013b 00000301
+cm9x 000002189fe15f92 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 00000000
+cm9x 0000021cf85a0057 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 00000001
+cm9x 0000022149107e1a cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 00000002
+cm9x 000002259f46bf86 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 00000003
+cm9x 0000022631728041 c9 7f0d0d3e SHPC slot status changed; port, empty 00000001 00000001
+cm9x 0000022631b9da63 cb 01050002 DOWN published; ack before, endpoint devnode 00000001 c1c950a0
+cm9x 000002265d66b8f7 cc 10005001 link-down ack (1) or timeout; gen, ms 00000002 00000050
+cm9x 000002266a51bfb7 cd 0c010000 Query_Remove_SubTree(endpoint); devnode, try c1c950a0 00000000
+cm9x 000002266fdc6d42 b6 000000c1 endpoint devnode retired; port, generation 00000001 00000002
+cm9x 000002266fe50286 --   retired: no endpoint devnode
+cm9x 00000229ee8df365 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 00000004
+cm9x 0000022e46512523 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 00000005
+cm9x 00000232a319b262 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 00000006
+cm9x 00000236f7f0845b cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 00000007
+cm9x 0000023b4ab3773f cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 00000008
+cm9x 0000023f9861a70f cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 00000009
+cm9x 00000243eba7e9e2 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 0000000a
+cm9x 0000024843995628 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 0000000b
+cm9x 0000024c97de339e b6 000000b5 test: Remove_SubTree failure injected; left 00000002 00000000
+cm9x 0000024c97ef616e cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 0000000c
+cm9x 00000250f4214751 b6 000000b5 test: Remove_SubTree failure injected; left 00000001 00000000
+cm9x 00000250f436fdfd cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 0000000d
+cm9x 000002554b5e03d4 b6 000000b5 test: Remove_SubTree failure injected; left 00000000 00000000
+cm9x 000002554b66fd86 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c97000 0000000e
+cm9x 000002554b70f584 ce 08000003 O6: Remove_SubTree failing for 30 s: eject failed; cr 00000017 00000000
+ctl eject result E517 after 28570 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5x
+cm9x 0000025551c27e8f c9 7f0d0d3e SHPC slot status changed; port, empty 00000000 00000001
+cm9x 0000025551f9ae37 cb 00050003 DOWN published; ack before, endpoint devnode 00000002 c1c97000
+cm9x 0000025582cc4605 cc 00005801 link-down ack (1) or timeout; gen, ms 00000003 00000058
+cm9x 00000255889da5be cd 0c000000 Query_Remove_SubTree(endpoint); devnode, try c1c97000 00000000
+cm9x 000002559368d55f b6 000000c0 endpoint devnode retired; port, generation 00000000 00000003
+cm9x 00000255937f27c9 --   retired: no endpoint devnode
+cm9x 000003baef78a992 ca 00010004 UP published; bus, slot 00000001 00000001
+[nvme98 000003bb114c8ee2 00014] q9 bind: entry 0 generation 4 flags 00000003, removal sequence at binding 3, ack 00000301
+
+=== S4 (P2-7) ISOLATED_NOT_CLEAN (SHST never), Remove_SubTree failing 30 s (O6)
+   (timeout waiting for: retired: removed after link down)
+cm9x 000003db92ace2e6 ce 01000004 eject requested; port, generation 00000000 00000004
+cm9x 000003db98e0a328 ce 03000004 REMOVE_PENDING set; generation, ack before 00000004 00000301
+[nvme98 000003e09a85fbf6 00107] q9 pool[0]: 2 -> 3 (handshake: acknowledged disable) owner=6 last=4 bus=1 slot=1 gen=4 linear=E459D000 phys=1FE8C000
+[nvme98 000003e09ab31126 00110] q9 handshake: acknowledged request 4 (token 6 generation 4) outcome 2 detail 0000000D after 2256 ms
+cm9x 000003e09b0fde92 ce 04020004 acknowledgement (FF none): ms, RemoveAck 0000090b 00000402
+cm9x 0000041d57cee0a1 ce 08000004 O6: Remove_SubTree failing for 30 s: eject failed; cr 00000017 00000000
+cm9x 0000041d5de11080 cb 00050004 DOWN published; ack before, endpoint devnode 00000003 c1c97000
+cm9x 0000041d71178bcb cc 00002401 link-down ack (1) or timeout; gen, ms 00000004 00000024
+ctl eject result E517 after 30482 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5x
+cm9x 0000041d89f161c4 b6 000000c0 endpoint devnode retired; port, generation 00000000 00000004
+cm9x 0000041d89fc6fd8 --   retired: no endpoint devnode
+
+=== S6 (P2-8) FAILED with a read held, then presence lost without a statement (NoFlag): MD-1 must start
+[nvme98 000005cb226db7fc 00121] q9 HwResetBus #1 path=0 state=RUNNING depth=1 nontagged=C138B654 held=00000000 CSTS=00000001
+[nvme98 000005db60041f99 00127] q9 state RESETTING -> FAILED (reset not acknowledged) depth=1 nontagged=C138B654 held=00000000
+[nvme98 000005f13e5c9368 00145] q9 GONE in timer (was FAILED): CSTS all-ones
+[nvme98 000005f13e7213b4 00146] q9 state FAILED -> GONE (timer) depth=1 nontagged=C138B654 held=00000000
+[nvme98 000005fc201a6d98 00156] q9 gone deadline (MD-1) after 5018 ms without evidence: held SRBs completed, block stays OWNED
+[nvme98 000005fc202826fe 00157] q9 completing everything outstanding with 08 (MD-1 deadline): depth=1 nontagged=C138B654 held=00000000
+shot 98/v7-s6
+
+=== decoder
+statement #1 port 0 gen 1 flags 05: cutoff=0.6 cm_down=37.4 rx=- ack=- cm_timeout=38.3 removal=184247.5  -> NO-INSTANCE (devnode retired before the statement)
+statement #2 port 1 gen 1 flags 05: cutoff=0.3 cm_down=3.5 rx=54.6 ack=57.6 cm_ack=67.4 removal=131.0  -> PASS
+statement #3 port 0 gen 2 flags 05: cutoff=0.6 cm_down=35.6 rx=281.5 ack=285.4 cm_ack=311.7 removal=343.5  -> PASS
+statement #4 port 1 gen 2 flags 05: cutoff=0.6 cm_down=4.4 rx=243.7 ack=246.9 cm_ack=249.1 removal=321.5  -> PASS
+statement #5 port 0 gen 3 flags 05: cutoff=0.3 cm_down=36.0 rx=278.6 ack=280.1 cm_ack=309.6 removal=342.2  -> PASS
+statement #6 port 0 gen 4 flags 05: cutoff=0.4 cm_down=33.2 rx=137.4 ack=138.4 cm_ack=140.8 removal=214.9  -> PASS
+statement #7 port 0 gen 5 flags 01: cutoff=0.3 cm_down=12.8 rx=- ack=- cm_timeout=9354.5 removal=9386.2  -> NEGATIVE (statement without QUIESCED)
+summary: NEGATIVE 1, NO-INSTANCE 1, PASS 5

@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# DDK build description for stor98. One source tree, three targets; the
+# target is chosen by STOR98_TARGET, which scripts\build.cmd sets:
+#
+#   9x   Windows 98 SE / ME .mpd: Windows 2000 DDK + MSVC 6.0, NT4 miniport
+#        ABI (NVME2K_W9X implies NVME2K_NT4), with SCSI.H and SRB.H from the
+#        Windows 98 DDK (tools\w98ddk\inc) found ahead of the DDK's own.
+#   nt   Windows 2000 and later: x86 with the Windows 2000 DDK ("w2k x86"),
+#        amd64 with WDK 7.1 ("x64 WNET").
+#
+# build.exe appends BUILD_ALT_DIR and the architecture to TARGETPATH, so the
+# image lands in src\obj<alt>\<arch>\stor98.sys; build.cmd copies it to out\.
+
+TARGETNAME=stor98
+TARGETPATH=obj
+TARGETTYPE=MINIPORT
+
+!IF "$(STOR98_TARGET)" == "9x"
+INCLUDES=..\tools\w98ddk\inc
+C_DEFINES=$(C_DEFINES) -DNVME2K_W9X
+# MD-4: driver DMA memory from the _PageAllocate pool on the stor98 boot block
+# (src\pool9x.c), never the port's uncached extension (docs\INTEGRATION-0.2.md).
+C_DEFINES=$(C_DEFINES) -DSTOR98_DMA_POOL
+# The gate G9 (STOR98_G9) and Q-9x (STOR98_Q9X) prototype layers of branch
+# qual-9x hook into the request path that the engine replaced; they do not
+# build on it (docs\INTEGRATION-0.2.md). src\g9dbg.c and src\q9x.c are kept
+# for reference and later re-merges, not built.
+!IF "$(STOR98_G9)" != "" || "$(STOR98_Q9X)" != ""
+!ERROR STOR98_G9 and STOR98_Q9X are qual-9x prototype builds and do not build on the engine
+!ENDIF
+!ELSEIF "$(STOR98_TARGET)" != "nt"
+!ERROR STOR98_TARGET must be 9x or nt - build with scripts\build.cmd
+!ENDIF
+
+# Test-only instrumentation (src\dbgport.h): build with STOR98_DBGPORT=1 in
+# the environment (scripts\build.cmd puts the images in out\<flavor>-dbgport).
+!IF "$(STOR98_DBGPORT)" == "1"
+C_DEFINES=$(C_DEFINES) -DSTOR98_DBGPORT
+# Test-only defaults where no ArgumentString arrives (9x), for example
+# STOR98_TESTDEF=-DSTOR98_TEST_CAPTO_MS=40000 (docs\TESTING.md).
+!IF "$(STOR98_TESTDEF)" != ""
+C_DEFINES=$(C_DEFINES) $(STOR98_TESTDEF)
+!ENDIF
+!ENDIF
+
+TARGETLIBS=$(DDK_LIB_PATH)\scsiport.lib
+!IF "$(STOR98_TARGET)" == "nt"
+# ntoskrnl imports: the CM link-state receiver (src\cmlinknt.c, MD-6):
+# ExCreateCallback, ExNotifyCallback, ObfDereferenceObject, MmIsAddressValid,
+# MmSystemRangeStart (data);
+# the interrupt report (src\platform.c, PlatIrqReport; PLAN "Polling mode"):
+# ZwOpenKey, ZwSetValueKey, ZwClose. Never on 9x.
+TARGETLIBS=$(TARGETLIBS) $(DDK_LIB_PATH)\ntoskrnl.lib
+!ENDIF
+
+!IF $(ALPHA) || $(AXP64) || $(IA64)
+TARGETLIBS=$(TARGETLIBS) $(CRT_LIB_PATH)\libcntpr.lib
+!ENDIF
+
+MSC_WARNING_LEVEL=/W3 /WX
+
+SOURCES=nvme2k.c       \
+        nvme2k_cpl.c   \
+        nvme2k_nvme.c  \
+        nvme2k_scsi.c  \
+        sense.c        \
+        inqid.c        \
+        utils.c        \
+        engine.c       \
+        lifecycle.c    \
+        clock.c        \
+        platform.c     \
+        cmlinknt.c     \
+        pool9x.c       \
+        dbgport.c      \
+        nvme2k.rc

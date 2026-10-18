@@ -1,0 +1,96 @@
+# G9 Windows ME: QEMU trace excerpts (full traces local in usb4-emu vms/winme-g9/)
+
+## Run a: CMR remove right after COPY D:\CMREENUM.EXE F:\T1.BIN (trace-a.log lines 370-500)
+# FS writes (FAT 0x5F/0x40/0x15F, FSInfo 0x85B, data) before the removal; no CC write (0x14) by the
+# old load; the next load's HwInitialize writes CC=0x460000 (disable) over a controller still enabled.
+pci_nvme_write cid 32808 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x5f
+pci_nvme_write cid 32809 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x85b
+usb4_dbg_stage stage #100 code=0x40 arg=0x5 host_ns=1791996788595271000 vm_ns=179147035900
+pci_nvme_write cid 32810 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+pci_nvme_write cid 32811 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x15f
+pci_nvme_write cid 32812 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x95b
+pci_nvme_write cid 32813 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x1057
+pci_nvme_write cid 32814 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 64 count 32768 lba 0x41067
+pci_nvme_write cid 32815 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 16 count 8192 lba 0x410a7
+pci_nvme_write cid 32816 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x5f
+pci_nvme_write cid 32817 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x85b
+usb4_dbg_stage stage #117 code=0x1 arg=0x0 host_ns=1791996789650235000 vm_ns=180202000700
+usb4_dbg_stage stage #118 code=0x2 arg=0x0 host_ns=1791996789653167000 vm_ns=180204932700
+usb4_dbg_stage stage #119 code=0x3 arg=0x1 host_ns=1791996789660471000 vm_ns=180212236200
+usb4_dbg_stage stage #120 code=0x30 arg=0xff host_ns=1791996789660961000 vm_ns=180212726800
+pci_nvme_mmio_read addr 0x1c size 4
+usb4_dbg_stage stage #122 code=0x4 arg=0x1 host_ns=1791996789664641000 vm_ns=180216405900
+pci_nvme_mmio_read addr 0x1c size 4
+pci_nvme_mmio_read addr 0x14 size 4
+pci_nvme_mmio_read addr 0x1c size 4
+pci_nvme_mmio_read addr 0x14 size 4
+pci_nvme_mmio_read addr 0x1c size 4
+pci_nvme_mmio_read addr 0x14 size 4
+pci_nvme_mmio_write addr 0x14 data 0x460000 size 4
+pci_nvme_mmio_read addr 0x1c size 4
+pci_nvme_mmio_read addr 0x1c size 4
+pci_nvme_mmio_write addr 0x14 data 0x460001 size 4
+pci_nvme_mmio_read addr 0x1c size 4
+
+## Run a: surprise removal during COPY /B F:\BIG.BIN NUL (level 1)
+usb4_tp_gate tb0: access gate closed=1 dma_open=0 host_ns=1791997580887172000 vm_ns=971438937600
+usb4_dbg_stage stage #11613 code=0x10 arg=0x282140 host_ns=1791997580888973000 vm_ns=971440738100
+usb4_dbg_stage stage #11615 code=0x20 arg=0x0 host_ns=1791997603572617000 vm_ns=994124382600
+# last startio before gate at 971.44 s; HwResetBus (code 0x20) at 994.12 s: 22.7 s
+
+## Run a: shutdown (after CMR remove; End Task on the hung DOS box)
+qemu_system_shutdown_request reason=6
+
+## Run b: exact-point fault at=fetch op=read nth=50 act=surprise
+usb4_tp_gate tb0: access gate closed=1 dma_open=0 host_ns=1791998532849752000 vm_ns=448025158000
+usb4_dbg_stage stage #6582 code=0x50 arg=0x1 host_ns=1791998533410617000 vm_ns=448586023200
+usb4_dbg_stage stage #6583 code=0x51 arg=0x1 host_ns=1791998548809279000 vm_ns=463984684200
+
+## Run b: system shutdown with the NVMe volume mounted (last lines of trace-b.log, doorbells omitted)
+pci_nvme_write cid 32815 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+pci_nvme_write cid 32816 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x5f
+pci_nvme_write cid 32817 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x85b
+pci_nvme_write cid 32818 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+qemu_system_shutdown_request reason=6
+
+## Run c: system shutdown with the volume mounted
+pci_nvme_write cid 32776 opname 'NVME_NVM_CMD_WRITE' nsid 1 nlb 1 count 512 lba 0x40
+qemu_system_shutdown_request reason=6
+
+## Prep (second boot): system shutdown with the volume mounted. trace-prep.log tail; the
+# qemu_system_* trace was not yet enabled. Last events are timer ticks, then the process exits
+pci_nvme_mmio_write addr 0x100c data 0x8 size 4
+pci_nvme_mmio_doorbell_cq cqid 1 new_head 8
+usb4_dbg_stage stage #30 code=0x40 arg=0x3 host_ns=1791996511126768000 vm_ns=183291971800
+usb4_dbg_stage stage #31 code=0x40 arg=0x4 host_ns=1791996511227112000 vm_ns=183392315500
+
+## RequestTimerCall(100 ms) back-to-back ticks (stage 0x40, vm time)
+trace-a.log tick 0x1->0x2 101 ms
+trace-a.log tick 0x2->0x3 520 ms
+trace-a.log tick 0x3->0x4 102 ms
+trace-a.log tick 0x1->0x2 102 ms
+trace-a.log tick 0x2->0x3 335 ms
+trace-a.log tick 0x3->0x4 100 ms
+trace-a.log tick 0x1->0x2 100 ms
+trace-a.log tick 0x2->0x3 494 ms
+trace-a.log tick 0x3->0x4 100 ms
+trace-a.log tick 0x1->0x2 326 ms
+trace-a.log tick 0x3->0x4 311 ms
+trace-b.log tick 0x1->0x2 295 ms
+trace-b.log tick 0x2->0x3 1473 ms
+trace-b.log tick 0x3->0x4 287 ms
+trace-b.log tick 0x1->0x2 327 ms
+trace-b.log tick 0x2->0x3 1383 ms
+trace-b.log tick 0x3->0x4 309 ms
+trace-b.log tick 0x1->0x2 314 ms
+trace-b.log tick 0x2->0x3 1028 ms
+trace-b.log tick 0x3->0x4 314 ms
+trace-b.log tick 0x4->0x5 299 ms
+trace-c.log tick 0x1->0x2 313 ms
+trace-c.log tick 0x3->0x4 248 ms
+trace-c.log tick 0x1->0x2 329 ms
+trace-c.log tick 0x2->0x3 1081 ms
+trace-c.log tick 0x3->0x4 325 ms
+trace-prep.log tick 0x1->0x2 100 ms
+trace-prep.log tick 0x2->0x3 505 ms
+trace-prep.log tick 0x3->0x4 100 ms

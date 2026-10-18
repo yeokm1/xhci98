@@ -1,0 +1,31 @@
+=== SHST never
+[nvme98 0000040a3f583b4d 00630] q9 handshake: SHST not complete in 2000 ms
+[nvme98 0000040a3f7c6310 00632] q9 pool[1]: 2 -> 3 (handshake: acknowledged disable) owner=5 last=4 bus=1 slot=1 gen=3 linear=E46C5000 phys=1FE1B000
+[nvme98 0000040a3f9850ac 00635] q9 handshake: acknowledged request 3 (token 5 generation 3) outcome 2 detail 0000000D after 2268 ms
+cm9x 0000040a414d8665 --   retired: isolated, not clean (or cancelled): D2 recovery
+cm9x 0000040a9b215d60 cd 33000000 D2: Reenumerate_DevNode(bridge); port 00000000 00000000
+ctl eject result E202 after 2904 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_SubTree fail
+=== NoAck
+ctl eject result E3FF after 14272 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_SubTree fai
+cm9x 00000453b5236239 --   retired: removed after link down
+=== CancelAfterAck
+[nvme98 0000048b23c1f075 00988] q9 pool[1]: 2 -> 3 (handshake: acknowledged disable) owner=8 last=7 bus=1 slot=1 gen=5 linear=E46C5000 phys=1FE1B000
+[nvme98 0000048b23e6d90d 00991] q9 handshake: acknowledged request 5 (token 8 generation 5) outcome 1 detail 0000000F after 211 ms
+cm9x 0000048b276052ab --   retired: isolated, not clean (or cancelled): D2 recovery
+cm9x 0000048b8178b055 cd 33000000 D2: Reenumerate_DevNode(bridge); port 00000000 00000000
+ctl eject result E201 after 1050 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_SubTree fail
+=== Overlap 1
+[nvme98 000004bb052da0d6 01103] q9 pool[1]: 2 -> 3 (handshake: acknowledged disable) owner=9 last=8 bus=1 slot=1 gen=5 linear=E46C5000 phys=1FE1B000
+[nvme98 000004bb054f0a96 01106] q9 handshake: acknowledged request 6 (token 9 generation 5) outcome 1 detail 0000000F after 211 ms
+[nvme98 000004bb3ecc5210 01109] q9 request 7 overlaps accepted request 6: ignored (first acknowledgement 00000601 stays)
+cm9x 000004bf7abaf1ac --   retired: clean eject
+ctl eject result C1EA after 2389 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_SubTree fail
+cm9x 000004bff2aa58f1 --   retired: no endpoint devnode
+=== Overlap 2
+[nvme98 000004e590a09d75 01217] q9 pool[1]: 2 -> 3 (handshake: acknowledged disable) owner=10 last=9 bus=1 slot=1 gen=6 linear=E46C5000 phys=1FE1B000
+[nvme98 000004e590b9bbe3 01220] q9 handshake: acknowledged request 8 (token 10 generation 6) outcome 1 detail 0000000F after 211 ms
+cm9x 000004e69f43ce81 --   retired: clean eject
+ctl eject result C1EA after 1859 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_SubTree fail
+cm9x 000004e6c6759148 --   retired: no endpoint devnode
+=== veto
+ctl eject result E117 after 205 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5xx Remove_SubTree faili

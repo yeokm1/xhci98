@@ -1,0 +1,47 @@
+# 98 SE v1, S2: port 1's statement while port 0 waits 14 s for an acknowledgement (NoAck)
+cm9x 000000e6ef55c888 ce 03000002 REMOVE_PENDING set; generation, ack before 00000002 00000101
+cm9x 000000eff0aa59d4 c9 7f0d0d3e SHPC slot status changed; port, empty 00000001 00000001
+cm9x 000000eff0c39ab6 c8 00000000 params; link ack ms, request ack ms 00000bb8 000036b0
+cm9x 000000eff0ccfa5c cb 01050001 DOWN published; ack before, endpoint devnode 00000000 c1c83dc0
+cm9x 000000effb1b3771 cc 10003a01 link-down ack (1) or timeout; gen, ms 00000001 0000003a
+cm9x 000000f000361b0d cd 0c010000 Query_Remove_SubTree(endpoint); devnode, try c1c83dc0 00000000
+cm9x 000000f004c2de13 cd 0d010000 Remove_SubTree(endpoint); devnode, port c1c83dc0 00000001
+cm9x 000000f004cc9b01 b6 000000c1 endpoint devnode retired; port, generation 00000001 00000001
+cm9x 000000f004d36161 --   retired: removed after link down
+cm9x 000000f0b5c59ecb ce 04ff0002 acknowledgement (FF none): ms, RemoveAck 000036b4 00000101
+cm9x 000000f0b5d718c7 ce 06ff0002 eject not clean, not isolated: CM isolates first; RemoveAck 00000101 00000000
+cm9x 000000f0b5edd611 cf 00000002 teardown requested (harness stage rule); port 00000000 00000000
+cm9x 000000f0b83f403b c9 7f0d0d3e SHPC slot status changed; port, empty 00000000 00000001
+cm9x 000000f0b855b2df c8 00000000 params; link ack ms, request ack ms 00000bb8 000036b0
+
+# S3: port 1's statement during port 0's Remove_SubTree retries (O6)
+cm9x 000001266fb7d711 ce 03000003 REMOVE_PENDING set; generation, ack before 00000003 00000101
+cm9x 0000012696e61345 ce 04010003 acknowledgement (FF none): ms, RemoveAck 000000db 00000301
+cm9x 0000012699a67680 b6 000000b5 test: Remove_SubTree failure injected; left 0000000e 00000000
+cm9x 0000012699b3a580 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c6eb50 00000000
+cm9x 0000012800609810 b6 000000b5 test: Remove_SubTree failure injected; left 0000000d 00000000
+cm9x 0000012800692e9e cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c6eb50 00000001
+cm9x 000001296709669a b6 000000b5 test: Remove_SubTree failure injected; left 0000000c 00000000
+cm9x 00000129671ba1b6 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c6eb50 00000002
+cm9x 0000012acf9a6e6f b6 000000b5 test: Remove_SubTree failure injected; left 0000000b 00000000
+cm9x 0000012acfa54317 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c6eb50 00000003
+cm9x 0000012c362b7c35 b6 000000b5 test: Remove_SubTree failure injected; left 0000000a 00000000
+cm9x 0000012c3636288d cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c6eb50 00000004
+cm9x 0000012cf523d5b3 c9 7f0d0d3e SHPC slot status changed; port, empty 00000001 00000001
+cm9x 0000012cf54b6a13 c8 00000000 params; link ack ms, request ack ms 00000bb8 000036b0
+cm9x 0000012cf555705d cb 01050002 DOWN published; ack before, endpoint devnode 00000001 c1c967c0
+cm9x 0000012cfb396056 cc 10002001 link-down ack (1) or timeout; gen, ms 00000002 00000020
+cm9x 0000012cfcbdff76 cd 0c010000 Query_Remove_SubTree(endpoint); devnode, try c1c967c0 00000000
+cm9x 0000012cfefc0c83 cd 0d010000 Remove_SubTree(endpoint); devnode, port c1c967c0 00000001
+cm9x 0000012cff0798cd b6 000000c1 endpoint devnode retired; port, generation 00000001 00000002
+cm9x 0000012cff111ae7 --   retired: removed after link down
+cm9x 0000012d9c036225 b6 000000b5 test: Remove_SubTree failure injected; left 00000009 00000000
+cm9x 0000012d9c103d99 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c6eb50 00000005
+cm9x 0000012f037b9f98 b6 000000b5 test: Remove_SubTree failure injected; left 00000008 00000000
+cm9x 0000012f03874712 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c6eb50 00000006
+cm9x 000001306c0834de b6 000000b5 test: Remove_SubTree failure injected; left 00000007 00000000
+cm9x 000001306c14316c cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c6eb50 00000007
+cm9x 00000131d10f92af b6 000000b5 test: Remove_SubTree failure injected; left 00000006 00000000
+cm9x 00000131d1183225 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c6eb50 00000008
+cm9x 00000133368bc39b b6 000000b5 test: Remove_SubTree failure injected; left 00000005 00000000
+cm9x 0000013336969645 cd 0d000017 Remove_SubTree(endpoint); devnode, try c1c6eb50 00000009

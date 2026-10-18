@@ -1,0 +1,38 @@
+         0.0 ms #1      01 DRIVER_ENTRY 0x0
+         0.5 ms #2      90 G57_DRIVER_ENTRY 0x1
+      1109.3 ms #17     04 OPTIONS 0x102
+      1110.0 ms #18     80 G24_OPTIONS 0x1081388
+      1110.8 ms #19     a0 Q_OPTIONS shn=1 stop=1 rdyto=CAP
+      1132.1 ms #37     63 ADAPTER_CONTROL QuerySupported
+     21900.8 ms #287    63 ADAPTER_CONTROL StopAdapter
+     21901.2 ms #288    a9 Q_STOP_ENTER csts=01 dirty=1 state=RUNNING depth=0
+     21901.6 ms #289    aa Q_STOP_FLUSH_SUBMIT 0x22
+     21903.7 ms #291    ab Q_STOP_FLUSH_BUDGET IN-BUDGET polls=9
+     21903.8 ms #292    ac Q_STOP_FLUSH_DONE polls=9 nvme=00
+     21904.0 ms #293    ad Q_STOP_SHN 0x464001
+     21904.1 ms #294    ae Q_STOP_SHST_BUDGET IN-BUDGET polls=0
+     21904.2 ms #295    af Q_STOP_SHST_DONE polls=0 csts=09
+     21904.4 ms #296    b0 Q_STOP_EN0 0x460000
+     21904.5 ms #297    b1 Q_STOP_RDY_BUDGET IN-BUDGET polls=0
+     21904.6 ms #298    b2 Q_STOP_RDY_DONE polls=0 csts=00
+     22446.0 ms #300    01 DRIVER_ENTRY 0x0
+     22446.7 ms #301    90 G57_DRIVER_ENTRY 0x1
+     22533.8 ms #316    04 OPTIONS 0x102
+     22534.1 ms #317    80 G24_OPTIONS 0x1081388
+     22534.4 ms #318    a0 Q_OPTIONS shn=1 stop=1 rdyto=CAP
+     22543.0 ms #336    63 ADAPTER_CONTROL QuerySupported
+     24152.0 ms #551    63 ADAPTER_CONTROL StopAdapter
+     24152.5 ms #552    a9 Q_STOP_ENTER csts=01 dirty=1 state=RUNNING depth=0
+     24153.1 ms #553    aa Q_STOP_FLUSH_SUBMIT 0x1e
+     24155.1 ms #555    ab Q_STOP_FLUSH_BUDGET IN-BUDGET polls=8
+     24155.2 ms #556    ac Q_STOP_FLUSH_DONE polls=8 nvme=00
+     24155.4 ms #557    ad Q_STOP_SHN 0x464001
+     24155.6 ms #558    ae Q_STOP_SHST_BUDGET IN-BUDGET polls=0
+     24155.8 ms #559    af Q_STOP_SHST_DONE polls=0 csts=09
+     24156.0 ms #560    b0 Q_STOP_EN0 0x460000
+     24156.1 ms #561    b1 Q_STOP_RDY_BUDGET IN-BUDGET polls=0
+     24156.3 ms #562    b2 Q_STOP_RDY_DONE polls=0 csts=00
+     24300.2 ms #564    01 DRIVER_ENTRY 0x0
+     24359.2 ms #565    04 OPTIONS 0x102
+     24368.0 ms #573    63 ADAPTER_CONTROL QuerySupported
+    345621.5 ms #1211   63 ADAPTER_CONTROL StopAdapter
