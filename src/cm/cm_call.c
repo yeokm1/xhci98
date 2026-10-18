@@ -52,6 +52,7 @@ ULONG CmCallSubmit(PCM_CALL c, ULONG kind, CM_CALL_RUN run, PVOID context,
     c->OpBytes = bytes;
     c->Run = run;
     c->Late = NULL;
+    c->Withdrawn = 0;
     c->Context = context;
     c->Kind = kind;
     c->SubmittedAt = nowMs;
@@ -73,7 +74,20 @@ BOOLEAN CmCallStopSlot(PCM_CALL c)
     if (c->State != CM_CALL_SUBMITTED || (c->Kind & CM_CALL_K_DETACH) != 0) {
         return FALSE;
     }
-    *(volatile ULONG *)&c->State = CM_CALL_IDLE;
+    cmCallZero((PUCHAR)c->Res, CM_CALL_RES_BYTES);
+    c->ResBytes = 0;
+    c->Withdrawn = 1;
+    c->Ran = c->Id;
+    *(volatile ULONG *)&c->State = CM_CALL_DONE;
+    return TRUE;
+}
+
+BOOLEAN CmCallLateDue(const CM_CALL *c, PULONG outcome)
+{
+    if (c->State != CM_CALL_DONE) {
+        return FALSE;
+    }
+    *outcome = c->Withdrawn ? CM_CALL_L_WITHDRAWN : CM_CALL_L_RESULT;
     return TRUE;
 }
 

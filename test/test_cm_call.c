@@ -262,39 +262,49 @@ static ULONG lateCalls;
 static ULONG lateId;
 static ULONG lateWord;
 static ULONG lateKind;
+static ULONG lateOutcome;
 
-static VOID fakeLate(PVOID context, ULONG kind, ULONG id, const VOID *res,
-                     ULONG bytes)
+static VOID fakeLate(PVOID context, ULONG kind, ULONG id, ULONG outcome,
+                     const VOID *res, ULONG bytes)
 {
     (void)context;
     lateCalls++;
     lateId = id;
     lateKind = kind;
-    lateWord = bytes >= 4 ? ((const ULONG *)res)[0] : 0;
+    lateOutcome = outcome;
+    lateWord = (res != NULL && bytes >= 4) ? ((const ULONG *)res)[0] : 0;
 }
 
-/* The worker after the stop, as cm_callwk.c runs it: a detached operation
- * still taken and run, every result finishing then handed to its taker. */
+/* The member's worker after the stop, as cm_callwk.c runs it: a detached
+ * operation still taken and run; then, before it leaves, the outcome of
+ * whatever the slot holds (a result, or a withdrawal) to its taker. One
+ * finishing after the stop is handed over the same way. */
 static void workerAfterStop(PCM_CALL c)
 {
     ULONG n;
+    ULONG outcome;
 
-    if (!CmCallRunsAfterStop(c) || !CmCallClaim(c)) {
-        return;
+    if (CmCallRunsAfterStop(c) && CmCallClaim(c)) {
+        n = c->Run(NULL, c->Context, c->Op, c->Res);
+        CmCallFinish(c, n);
     }
-    n = c->Run(NULL, c->Context, c->Op, c->Res);
-    CmCallFinish(c, n);
-    if (c->Late != NULL) {
-        c->Late(c->Context, c->Kind, c->Ran, c->Res, c->ResBytes);
+    if (CmCallLateDue(c, &outcome)) {
+        if (c->Late != NULL) {
+            c->Late(c->Context, c->Kind, c->Ran, outcome,
+                    outcome == CM_CALL_L_RESULT ? c->Res : NULL,
+                    outcome == CM_CALL_L_RESULT ? c->ResBytes : 0);
+        }
+        (void)CmCallTake(c, c->Ran, NULL, 0, NULL);
     }
-    (void)CmCallTake(c, c->Ran, NULL, 0, NULL);
 }
 
 /*
  * Record 21 section 7.2 part 0: the stop never waits; an operation not yet
  * taken is withdrawn unless it is detached (an authorised removal), which
- * the worker still runs; a result that comes after the stop reaches the
- * operation's late taker, never the thread.
+ * the worker still runs; every outcome the thread did not take - a
+ * withdrawal, a result finished before the stop, a result finishing
+ * after it - reaches the operation's late taker exactly once, on the
+ * worker, never on the stopping thread.
  */
 static void test_stop(void)
 {
@@ -306,17 +316,24 @@ static void test_stop(void)
     CmCallInit(&c);
     op[0] = 9;
     runs = 0;
+    /* Withdrawn: the taker learns it was never run. */
     id = CmCallSubmit(&c, 5, fakeRun, &runs, op, sizeof(op), 0);
     CmCallSetLate(&c, fakeLate);
     CHECK(CmCallStopSlot(&c), "an ordinary operation not taken: withdrawn");
-    CHECK_EQ(c.State, CM_CALL_IDLE, "idle");
-    CHECK(!CmCallRunsAfterStop(&c), "nothing for the worker after the stop");
+    CHECK_EQ(c.State, CM_CALL_DONE, "held for the worker's handover");
+    CHECK(!CmCallRunsAfterStop(&c), "not run after the stop");
+    CHECK_EQ(lateCalls, 0, "nothing on the stopping thread");
     workerAfterStop(&c);
     CHECK_EQ(runs, 0, "never run");
-    CHECK_EQ(lateCalls, 0, "no late result");
+    CHECK_EQ(lateCalls, 1, "the withdrawal handed over");
+    CHECK_EQ(lateOutcome, CM_CALL_L_WITHDRAWN, "as a withdrawal");
+    CHECK_EQ(lateId, id, "with its id");
+    CHECK_EQ(lateWord, 0, "and no result");
+    CHECK_EQ(c.State, CM_CALL_IDLE, "the slot let go");
+    workerAfterStop(&c);
+    CHECK_EQ(lateCalls, 1, "once");
 
-    /* An authorised removal, detached: run after the stop, its result to
-     * the taker. */
+    /* An authorised removal, detached: run after the stop. */
     id = CmCallSubmit(&c, 6 | CM_CALL_K_DETACH, fakeRun, &runs, op,
                       sizeof(op), 0);
     CmCallSetLate(&c, fakeLate);
@@ -324,26 +341,41 @@ static void test_stop(void)
     CHECK(CmCallRunsAfterStop(&c), "the worker still takes it");
     workerAfterStop(&c);
     CHECK_EQ(runs, 1, "run after the stop");
-    CHECK_EQ(lateCalls, 1, "its result to the late taker");
+    CHECK_EQ(lateCalls, 2, "its result to the late taker");
+    CHECK_EQ(lateOutcome, CM_CALL_L_RESULT, "a result");
     CHECK_EQ(lateId, id, "with its id");
-    CHECK_EQ(lateWord, 10, "and its result");
+    CHECK_EQ(lateWord, 10, "and its value");
     CHECK(lateKind & CM_CALL_K_DETACH, "and its kind");
     CHECK_EQ(c.State, CM_CALL_IDLE, "the slot let go");
 
-    /* One running when the stop came: it finishes on its own. */
+    /* Stop before finish: running when the stop came. */
     id = CmCallSubmit(&c, 5, fakeRun, &runs, op, sizeof(op), 0);
     CmCallSetLate(&c, fakeLate);
     CHECK(CmCallClaim(&c), "running");
     CHECK(!CmCallStopSlot(&c), "a running operation is not withdrawn");
     CmCallFinish(&c, c.Run(NULL, c.Context, c.Op, c.Res));
-    c.Late(c.Context, c.Kind, c.Ran, c.Res, c.ResBytes);
-    CHECK_EQ(lateCalls, 2, "its late result handed over");
+    workerAfterStop(&c);
+    CHECK_EQ(lateCalls, 3, "its late result handed over by the worker");
+    CHECK_EQ(lateOutcome, CM_CALL_L_RESULT, "a result");
     CHECK_EQ(lateId, id, "by its id");
-    CHECK_EQ(CmCallTake(&c, id, NULL, 0, NULL), CM_CALL_T_TAKEN, "let go");
+
+    /* Finish before stop, not taken by the thread: the stop leaves it to
+     * the worker, which hands it over as it leaves. */
+    id = CmCallSubmit(&c, 5, fakeRun, &runs, op, sizeof(op), 0);
+    CmCallSetLate(&c, fakeLate);
+    CHECK(workerStep(&c), "finished before the stop");
+    CHECK(!CmCallStopSlot(&c), "a finished operation is not withdrawn");
+    CHECK_EQ(lateCalls, 3, "nothing on the stopping thread");
+    workerAfterStop(&c);
+    CHECK_EQ(lateCalls, 4, "handed over by the worker, once");
+    CHECK_EQ(lateOutcome, CM_CALL_L_RESULT, "a result");
+    CHECK_EQ(lateId, id, "its id");
+    CHECK_EQ(lateWord, 10, "its value");
 
     /* A new submission forgets an earlier taker. */
     (void)CmCallSubmit(&c, 5, fakeRun, NULL, op, sizeof(op), 0);
     CHECK(c.Late == NULL, "no taker unless set for this operation");
+    CHECK(!c.Withdrawn, "and no withdrawal");
 }
 
 int main(void)

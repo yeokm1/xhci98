@@ -382,8 +382,8 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow)
     return FALSE;
 }
 
-BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN *vanish,
-                           BOOLEAN *fresh)
+BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN *missed,
+                           BOOLEAN *vanish, BOOLEAN *fresh)
 {
     if (gateUp) {
         *held = *held | CM_HELD_REENUM | (*vanish ? CM_HELD_VANISH : 0) |
@@ -394,6 +394,13 @@ BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN *vanish,
         *vanish = (BOOLEAN)(*vanish || (*held & CM_HELD_VANISH) != 0);
         *fresh = (BOOLEAN)(*fresh || (*held & CM_HELD_FRESH) != 0);
         *held = *held & ~(CM_HELD_REENUM | CM_HELD_VANISH | CM_HELD_FRESH);
+    }
+    if (*missed) {
+        /* An owed skipped change paid by this call as well (its own call
+         * is a fresh exposure removing the vanished children). */
+        *vanish = TRUE;
+        *fresh = TRUE;
+        *missed = FALSE;
     }
     return FALSE;
 }
@@ -408,14 +415,23 @@ ULONG CmNvlinkHoldRun(PULONG held, BOOLEAN gateUp, BOOLEAN live,
     h = *held;
     *vanish = FALSE;
     *fresh = FALSE;
-    if (h == 0 || gateUp || !live) {
+    if (h == 0 || gateUp) {
         return 0;
     }
-    *held = 0;
     act = 0;
     if (h & CM_HELD_RELEASE) {
+        /* The resume's release waits for the acknowledgement decision
+         * alone, never for the transport (the hold's own watchdog is not
+         * the release). */
         act |= CM_HELD_DO_RELEASE | ((h & CM_HELD_FAIL) ? CM_HELD_DO_FAIL : 0);
+        h &= ~(CM_HELD_RELEASE | CM_HELD_FAIL);
     }
+    if ((h & CM_HELD_REENUM) != 0 && reenumOn && !live) {
+        /* The re-enumeration waits for the transport. */
+        *held = h;
+        return act;
+    }
+    *held = 0;
     if ((h & CM_HELD_REENUM) == 0 || !reenumOn) {
         return act;
     }

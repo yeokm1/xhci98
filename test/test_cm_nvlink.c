@@ -738,7 +738,8 @@ typedef struct _SEAM {
 static void seamAction(SEAM *s, ULONG i, BOOLEAN gate, BOOLEAN vanish,
                        BOOLEAN fresh)
 {
-    if (!CmNvlinkHoldReenum(&s->Held[i], gate, &vanish, &fresh)) {
+    if (!CmNvlinkHoldReenum(&s->Held[i], gate, &s->Missed[i], &vanish,
+                            &fresh)) {
         s->Calls[i]++;
         s->Vanish[i] += vanish ? 1 : 0;
         s->Fresh[i] += fresh ? 1 : 0;
@@ -832,6 +833,26 @@ static void test_hold(void)
              CM_HELD_DO_RELEASE | CM_HELD_DO_FAIL, "released, failure path");
     CHECK_EQ(s.Releases[0], 1, "once");
     CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), 0, "not again");
+    /* The release waits for its gate alone, never the transport; a held
+     * re-enumeration beside it stays for the transport. */
+    s.Held[0] = CM_HELD_RELEASE | CM_HELD_REENUM;
+    CHECK_EQ(seamPass(&s, 0, FALSE, FALSE, TRUE), CM_HELD_DO_RELEASE,
+             "lost: the release still made once the gate is down");
+    CHECK_EQ(s.Held[0], CM_HELD_REENUM, "the re-enumeration kept");
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), CM_HELD_DO_REENUM,
+             "and made once the transport is back");
+    CHECK_EQ(s.Releases[0], 2, "the release once");
+    /* An action that finds the gate down pays an owed change too. */
+    memset(&s, 0, sizeof(s));
+    s.Missed[0] = TRUE;
+    seamAction(&s, 0, FALSE, FALSE, FALSE);
+    CHECK_EQ(s.Calls[0], 1, "one call");
+    CHECK(!s.Missed[0], "the owed change paid by it");
+    CHECK(s.Vanish[0] == 1 && s.Fresh[0] == 1, "as the owed call makes it");
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), 0, "nothing left for the pass");
+    s.Missed[0] = TRUE;
+    seamAction(&s, 0, TRUE, FALSE, FALSE);
+    CHECK(s.Missed[0], "gate up: still owed, behind the gate");
     s.Held[1] = CM_HELD_RELEASE | CM_HELD_REENUM;
     CHECK_EQ(seamPass(&s, 1, FALSE, TRUE, TRUE),
              CM_HELD_DO_RELEASE | CM_HELD_DO_REENUM,

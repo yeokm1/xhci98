@@ -87,20 +87,27 @@ typedef ULONG (*CM_CALL_RUN)(PVOID route, PVOID context, const VOID *op,
  * The NHI's stop never waits for a call. An operation submitted and not yet
  * taken is withdrawn by the stop, unless its kind carries CM_CALL_K_DETACH:
  * then the worker still takes and runs it after the stop (a removal its
- * transaction was already authorised to make). An operation that finishes
- * after the stop - a detached one, or one that was running when the stop
- * came - hands its result to the operation's `late` callback (CmCallSetLate,
- * on the worker, PASSIVE_LEVEL, no lock held) instead of to the thread, so
- * a transaction's record (an accepted query's CONFIGRET, a removal's
- * success: the member blocker) keeps what a later start must know; with no
- * callback the result is dropped with the block. A client that uses
- * either keeps the operation's context valid until its callback returns:
- * image-static or never-freed state, never the NHI's extension.
+ * transaction was already authorised to make). Every operation the thread
+ * has not taken back by the stop ends at the operation's `late` callback
+ * (CmCallSetLate), called by the member's worker before it leaves -
+ * PASSIVE_LEVEL, no lock held, never on the stopping thread - with
+ * CM_CALL_L_RESULT and the result (one that finished before the stop and
+ * was not taken, or that finished after it: a detached one, or one running
+ * when the stop came) or with CM_CALL_L_WITHDRAWN and no result (never
+ * run). So a transaction's persistent record (an accepted query's
+ * CONFIGRET, a removal's success, a query never made: the member blocker)
+ * learns how every operation it submitted ended; with no callback the
+ * outcome is dropped with the block. A client that sets one keeps the
+ * operation's context valid until its callback returns: image-static or
+ * never-freed state, never the NHI's extension.
  */
 #define CM_CALL_K_DETACH    0x80000000UL
 
+#define CM_CALL_L_RESULT    1UL /* the operation ran: its result          */
+#define CM_CALL_L_WITHDRAWN 2UL /* withdrawn by the stop, never run       */
+
 typedef VOID (*CM_CALL_LATE)(PVOID context, ULONG kind, ULONG id,
-                             const VOID *res, ULONG bytes);
+                             ULONG outcome, const VOID *res, ULONG bytes);
 
 typedef struct _CM_CALL {
     ULONG State;            /* CM_CALL_*: the handoff word               */
@@ -110,7 +117,8 @@ typedef struct _CM_CALL {
     ULONG Kind;             /* the client's operation kind (the log)     */
     ULONG SubmittedAt;      /* the thread's clock at the submission, ms  */
     CM_CALL_RUN Run;
-    CM_CALL_LATE Late;      /* the result's taker after the stop, or NULL */
+    CM_CALL_LATE Late;      /* the outcome's taker after the stop, or NULL */
+    ULONG Withdrawn;        /* DONE by the stop's withdrawal, never run    */
     PVOID Context;
     ULONG OpBytes;
     ULONG ResBytes;
@@ -133,12 +141,16 @@ ULONG CmCallSubmit(PCM_CALL c, ULONG kind, CM_CALL_RUN run, PVOID context,
  * operation's taker after a stop (NULL: none). */
 VOID CmCallSetLate(PCM_CALL c, CM_CALL_LATE late);
 
-/* The stop, on one slot: an operation submitted and not taken is
- * withdrawn unless its kind carries CM_CALL_K_DETACH (TRUE when one was
- * withdrawn). CmCallRunsAfterStop: whether the worker still has an
- * operation to take after the stop (a detached one submitted). */
+/* The stop, on one slot: an operation submitted and not taken, unless its
+ * kind carries CM_CALL_K_DETACH, is withdrawn into DONE with Withdrawn set
+ * and no result, for the worker to hand to its late taker (TRUE when one
+ * was). CmCallRunsAfterStop: whether the worker still has an operation to
+ * take after the stop (a detached one submitted). CmCallLateDue: whether
+ * the slot holds an outcome for the late taker (DONE), and which
+ * (CM_CALL_L_*). */
 BOOLEAN CmCallStopSlot(PCM_CALL c);
 BOOLEAN CmCallRunsAfterStop(const CM_CALL *c);
+BOOLEAN CmCallLateDue(const CM_CALL *c, PULONG outcome);
 
 /* The worker: SUBMITTED -> RUNNING, TRUE once per operation; the result
  * room zeroed. */

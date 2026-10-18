@@ -512,16 +512,19 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow);
  * collapsed into *held with what was held before (a removal of vanished
  * children or a fresh exposure asked by either is kept), TRUE returned;
  * down - any re-enumeration held before folded into *vanish and *fresh and
- * taken out of *held, FALSE returned (the caller makes the call).
+ * taken out of *held, and an owed skipped change (*missed) paid by the same
+ * call (*vanish and *fresh set, *missed cleared), FALSE returned (the
+ * caller makes the call).
  */
-BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN *vanish,
-                           BOOLEAN *fresh);
+BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN *missed,
+                           BOOLEAN *vanish, BOOLEAN *fresh);
 
 /*
  * A pass's decision for a member's held work: nothing while its gate is
- * up or the host interface is lost (`live` FALSE: no bridge is read and
- * nothing posted until the transport is back); otherwise *held emptied and
- * the work returned - the release first, then the re-enumeration when
+ * up. Down: a held resume release is returned (and taken out of *held)
+ * whatever the transport; the re-enumeration is kept while the host
+ * interface is lost (`live` FALSE: no bridge is read and nothing posted
+ * until the transport is back), else taken out and returned when
  * `reenumOn` (XhciCmReenum not 0) and the member is `active`, owed instead
  * (CM_HELD_DO_OWE) when it is only `exclusive`. A member that also owes a
  * skipped change (*missed) is paid by the same call: *vanish and *fresh

@@ -1161,13 +1161,15 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
  * call's flags and FALSE is returned. No other member is looked at.
  */
 static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
-                      BOOLEAN *fresh, ULONG tunnel)
+                      BOOLEAN *fresh, ULONG tunnel, BOOLEAN *mark)
 {
     PCM_REENUM r;
     ULONG before;
     BOOLEAN up;
+    BOOLEAN missed;
 
     r = &nhi->Reenum;
+    *mark = FALSE;
     before = r->Port[i].Held;
     up = CmNvlinkHeld(nhi, r->Port[i].Bdf);
     if (up) {
@@ -1177,7 +1179,20 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
             CmLogNote(nhi, "cm.reenum.held", r->Port[i].Bdf);
         }
     }
-    return CmNvlinkHoldReenum(&r->Port[i].Held, up, removeVanished, fresh);
+    missed = (BOOLEAN)(r->Port[i].Missed != 0);
+    if (CmNvlinkHoldReenum(&r->Port[i].Held, up, &missed, removeVanished,
+                           fresh)) {
+        return TRUE;
+    }
+    if (r->Port[i].Missed && !missed) {
+        /* An owed skipped change paid by this call: its marking window
+         * with it, as the owed call itself would open. */
+        *mark = (BOOLEAN)(r->SafeEject != 0);
+        r->Port[i].Missed = 0;
+        r->Port[i].MissedAt = cmNow(nhi);
+        CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
+    }
+    return FALSE;
 }
 
 /* Every active member re-enumerated by the domain's route. `action` is the
@@ -1195,6 +1210,7 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
     ULONG tunnel;
     BOOLEAN vanish;
     BOOLEAN exposeFresh;
+    BOOLEAN mark;
 
     r = &nhi->Reenum;
     member = XHCI_TBT_NO_MEMBER;
@@ -1219,8 +1235,8 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
         exposeFresh = fresh;
         /* A member whose stor98 acknowledgement is pending waits alone;
          * every other member is exposed and called now (task 42-A.12). */
-        if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel)) {
-            cmReenumOne(nhi, i, vanish, exposeFresh, tunnel, FALSE);
+        if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel, &mark)) {
+            cmReenumOne(nhi, i, vanish, exposeFresh, tunnel, mark);
         }
     }
 }

@@ -100,6 +100,23 @@ static ULONG cmCwOpen(PVOID route, PVOID context, const VOID *op, VOID *res)
     return CM_CW_OPEN_BYTES;
 }
 
+/* A DONE slot after the stop, on its worker: the outcome to the
+ * operation's late taker, then the slot let go. Only the worker writes a
+ * slot once the stop has run. */
+static VOID cmCwHandOver(PCM_CALLWK b, CM_CALLWK_M *m, ULONG outcome)
+{
+    KIRQL irql;
+
+    if (m->Call.Late != NULL) {
+        m->Call.Late(m->Call.Context, m->Call.Kind, m->Call.Ran, outcome,
+                     outcome == CM_CALL_L_RESULT ? m->Call.Res : NULL,
+                     outcome == CM_CALL_L_RESULT ? m->Call.ResBytes : 0);
+    }
+    KeAcquireSpinLock(&b->Lock, &irql);
+    (VOID)CmCallTake(&m->Call, m->Call.Ran, NULL, 0, NULL);
+    KeReleaseSpinLock(&b->Lock, irql);
+}
+
 static VOID NTAPI cmCwThread(PVOID context)
 {
     CM_CALLWK_M *m;
@@ -107,6 +124,8 @@ static VOID NTAPI cmCwThread(PVOID context)
     KIRQL irql;
     BOOLEAN claimed;
     BOOLEAN after;
+    BOOLEAN due;
+    ULONG outcome;
     ULONG n;
 
     m = (CM_CALLWK_M *)context;
@@ -114,7 +133,15 @@ static VOID NTAPI cmCwThread(PVOID context)
     for (;;) {
         KeAcquireSpinLock(&b->Lock, &irql);
         if (b->Exit && !CmCallRunsAfterStop(&m->Call)) {
+            /* Leaving: an outcome the thread never took (a result
+             * finished before the stop, or a withdrawal) goes to its
+             * taker first, here on the worker (cm_call.h). The thread
+             * touches the slot no more once the stop has run. */
+            due = CmCallLateDue(&m->Call, &outcome);
             KeReleaseSpinLock(&b->Lock, irql);
+            if (due) {
+                cmCwHandOver(b, m, outcome);
+            }
             break;
         }
         /* SUBMITTED -> RUNNING under the lock: taken once (R6f). */
@@ -138,13 +165,7 @@ static VOID NTAPI cmCwThread(PVOID context)
             /* Finished after the stop: no thread takes it now; the
              * operation's own taker keeps what its transaction needs
              * (cm_call.h, "AFTER THE STOP"), then the slot is let go. */
-            if (m->Call.Late != NULL) {
-                m->Call.Late(m->Call.Context, m->Call.Kind, m->Call.Ran,
-                             m->Call.Res, m->Call.ResBytes);
-            }
-            KeAcquireSpinLock(&b->Lock, &irql);
-            (VOID)CmCallTake(&m->Call, m->Call.Ran, NULL, 0, NULL);
-            KeReleaseSpinLock(&b->Lock, irql);
+            cmCwHandOver(b, m, CM_CALL_L_RESULT);
         }
     }
     cmCwRelease(b);
@@ -303,37 +324,23 @@ VOID CmCallwkStop(PCM_CALLWK b)
 {
     KIRQL irql;
     ULONG i;
-    ULONG done;
 
     if (b == NULL) {
         return;
     }
-    done = 0;
     KeAcquireSpinLock(&b->Lock, &irql);
     b->Exit = 1;
     for (i = 0; i < b->Members; i++) {
+        /* Withdrawn into DONE: its worker hands the withdrawal, or a
+         * result the thread did not take, to the late taker as it leaves
+         * (never this thread: the taker may call the configuration
+         * manager). */
         (VOID)CmCallStopSlot(&b->M[i].Call);
-        if (b->M[i].Call.State == CM_CALL_DONE && b->M[i].Call.Late != NULL) {
-            /* Finished, not taken by the thread before its stop: handed
-             * to its taker here, as one finishing after the stop is. */
-            done |= 1UL << i;
-        }
         if (b->M[i].Live) {
             (VOID)KeSetEvent(&b->M[i].Wake, IO_NO_INCREMENT, FALSE);
         }
     }
     KeReleaseSpinLock(&b->Lock, irql);
-    for (i = 0; i < b->Members; i++) {
-        if (done & (1UL << i)) {
-            /* A DONE slot is the thread's alone: no worker writes it. */
-            b->M[i].Call.Late(b->M[i].Call.Context, b->M[i].Call.Kind,
-                              b->M[i].Call.Ran, b->M[i].Call.Res,
-                              b->M[i].Call.ResBytes);
-            KeAcquireSpinLock(&b->Lock, &irql);
-            (VOID)CmCallTake(&b->M[i].Call, b->M[i].Call.Ran, NULL, 0, NULL);
-            KeReleaseSpinLock(&b->Lock, irql);
-        }
-    }
     /* The domain's reference; a worker still inside a call keeps the
      * block until it returns. */
     cmCwRelease(b);

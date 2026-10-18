@@ -317,17 +317,27 @@ static VOID cmRelativeMs(PLARGE_INTEGER due, ULONG ms)
 static VOID cmSleep(PVOID context, ULONG milliseconds)
 {
     LARGE_INTEGER due;
+    ULONG part;
 
-    cmRelativeMs(&due, milliseconds);
-    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     /* Every sleeping wait of the core and the seam - the ICM client's
-     * command waits, the USB4 core's transport and teardown waits, the
-     * seam's polls - is a servicing point of the stor98 acknowledgement
-     * waits (task 42-A.12; record 21 section 7.2 part 0): one bounded,
-     * non-reentrant step after each sleep, so no wait inside a pass keeps
-     * another member's acknowledgement unread for longer than one sleep
-     * (TBT_WAIT_SLEEP_MS, CM_NVLINK_POLL_MS). */
-    CmNvlinkStep((PCM_NHI)context);
+     * command and recovery waits, the USB4 core's transport and teardown
+     * waits, the seam's polls - is a servicing point of the stor98
+     * acknowledgement waits (task 42-A.12; record 21 section 7.2 part 0):
+     * while one is pending the sleep is taken in pieces of at most
+     * CM_NVLINK_PEND_MS with one bounded, non-reentrant step after each,
+     * so no wait keeps an acknowledgement unread for longer than 50 ms
+     * (R10); with none pending it is one sleep, as before, so the core's
+     * timing is unchanged where nothing is awaited (a piece can overrun
+     * its request by up to a timer tick on 98 SE and ME). */
+    do {
+        part = (milliseconds > CM_NVLINK_PEND_MS && CmNvlinkPending())
+                   ? CM_NVLINK_PEND_MS
+                   : milliseconds;
+        cmRelativeMs(&due, part);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        CmNvlinkStep((PCM_NHI)context);
+        milliseconds -= part;
+    } while (milliseconds != 0);
 }
 
 static ULONG cmNowMs(PVOID context)
