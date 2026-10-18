@@ -440,8 +440,9 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("mfgood : the production manifest disagrees with the header:`n" + $r.Output)
         # A relative -ManifestPath is PowerShell's location's, not the
         # process directory's: run the gate after Set-Location into the
-        # staging directory, from a process started elsewhere.
-        $mfCmd = "Set-Location -LiteralPath '{0}'; & '{1}' -InfPath '{2}' -ManifestPath 'xhcitr.manifest'; exit `$LASTEXITCODE" -f $script:work, $gate, $path
+        # staging directory, from a process started elsewhere. Each path is
+        # quoted for a single-quoted PowerShell literal (an apostrophe doubled).
+        $mfCmd = "Set-Location -LiteralPath '{0}'; & '{1}' -InfPath '{2}' -ManifestPath 'xhcitr.manifest'; exit `$LASTEXITCODE" -f $script:work.Replace("'", "''"), $gate.Replace("'", "''"), $path.Replace("'", "''")
         $saved = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
