@@ -644,12 +644,18 @@ Windows 2000 DDK's for the 9x image (the copies that came with SweetLow's
 Stor98's Python scripts are test-leg tools (`tests\cm9x\ejects.py`,
 `q9log.py`) and the record of its rename.
 
-`build-driver.cmd` does not build Stor98, and its gates do not read
-Stor98's files, with one exception: `scripts\check-stor98-header.ps1`
-fails the build when `src\cm\stor98cm.h` is not the same bytes as
-`src\stor98\include\stor98cm.h`, the master (`source-files.md`, "Stor98").
-`check-source-charset.ps1` skips `src\stor98\`, which keeps Stor98's own
-rules.
+`build-driver.cmd` does not build Stor98, but three of its steps read
+Stor98's files, so a fault in them fails an xhci98 build whether or not
+`build-all.cmd`'s `-NoStor98` is given (that switch skips only Stor98's
+compile and unit tests): `scripts\check-stor98-header.ps1` fails when
+`src\cm\stor98cm.h` is not the same bytes as
+`src\stor98\include\stor98cm.h`, the master (`source-files.md`,
+"Stor98"); the packager's self-tests (`test-package.ps1`) bundle
+`src\stor98\releases\0.4.0.0\` under its pinned `SHA256SUMS.txt` hash;
+and the batch-file line-ending check (`xhciqual\test\check-bat-eol.ps1`)
+covers every tracked `.bat`, Stor98's two in its `third_party\` copy among
+them. `check-source-charset.ps1` skips `src\stor98\`, which keeps
+Stor98's own rules.
 
 ### Post-link import-compatibility gate (Phase 3 onward)
 
