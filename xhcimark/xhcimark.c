@@ -204,7 +204,7 @@ typedef struct _MK_TRIED {
     INST_U32 EpochHi;
     INST_U32 Serial;
     DWORD At;               /* the last write attempt or restart          */
-    int Restarted;          /* the restart was made (once per serial)     */
+    int Restarted;          /* the restart was made, until seen listed     */
     int Outcome;            /* its outcome was logged                     */
     int Confirmed;          /* the eject confirmation was written         */
     int Gated;              /* a restart gate's refusal was logged        */
@@ -955,7 +955,8 @@ static int mk_filters_remove(DWORD dn)
 /* Per entry                                                                */
 /* ======================================================================== */
 
-/* Whether an attempt may still matter (decision M3, once per serial):
+/* Whether an attempt may still matter (decision M3: a restart once per
+ * serial until the unit is seen listed after it, mk_entries):
  * kept unless there is positive evidence its serial is gone - its NHI's
  * devnode no longer in the tree, its NHI answering under another epoch
  * (a new start), or answering under that epoch without the serial
@@ -1238,7 +1239,8 @@ static int mk_fresh_unit(const char *id, const MK_ENTRY *e, DWORD *dn)
 }
 
 /* The first plug's restart (section 7.4, "The first plug"): gated on fresh
- * reads under the tools' eject mutex, once per serial, vetoes respected. A
+ * reads under the tools' eject mutex, once per serial until the unit is
+ * seen listed after it (mk_entries re-arms it then), vetoes respected. A
  * departure pending on the entry does not hold it back: a first plug's
  * install removes the BusRelations child after a query-remove and builds
  * the stack again, and the fresh status below (started, no problem) is

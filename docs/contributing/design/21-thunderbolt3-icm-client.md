@@ -3958,8 +3958,8 @@ the code (`runs/run-42.md`, "42-A.5"):
 - **Association.** An `AddDevice` child (or a bridge filter at a unit's
   place) answers `Removable` while its bus number equals the secondary bus
   the thread last read from an active, exclusive member's header (at the
-  discovery and after each tunnel action) and the PDO has a current entry
-  in that domain's table.
+  discovery and after each tunnel action), the PDO has a current entry
+  in that domain's table, and that domain's `XhciCmSafeEject` is 1.
 - **The table** keeps each member's 32 current entries and 32 tombstones
   apart (`CM_QM_MAX_ENTRIES` 256, the answer at most 16,448 bytes); an
   eviction moves the generation on; the query device answers
@@ -3979,8 +3979,15 @@ the code (`runs/run-42.md`, "42-A.5"):
   an absence; an inactive member or safe eject off removes the mark even
   from an incomplete answer. A pending departure does not hold the first
   plug's restart back; the unit's fresh status (started, no problem) does.
-  An attempt (restart, confirmation) is forgotten only on evidence that its
-  serial is gone.
+  An attempt's record (restart, confirmation) is kept until there is
+  evidence that its serial is gone. The restart itself is once per serial
+  until the unit is seen listed after it (the mark present and an
+  attachment that answered `Removable`); that re-arms one later gated
+  restart, because Windows' driver installation deletes a device's own
+  `LowerFilters` value (read on XP in 42-V.2: a driver update of a marked,
+  listed unit left it unlisted, the value written again after the
+  install). A restart Windows vetoed leaves the unit unlisted and is never
+  repeated.
 - **Hand registration.** `XHCIMARK -register` and `-unregister` register
   and delete the service from `system32` for a test guest before the
   installer's hooks exist; the installer does it in a release.
