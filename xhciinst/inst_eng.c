@@ -306,7 +306,7 @@ static int own_remove(void);
 static int own_remove_in(const char *dir, int window);
 static int own_any_in(const char *dir);
 static void arp_write(int incomplete);
-static void arp_remove(void);
+static int arp_remove(void);
 static int mw_values_remove(void);
 static void tb_question(void);
 static int tb_decide(int *asked, int *def, int *installed);
@@ -3502,18 +3502,28 @@ static int forget_dir(void)
 
 /* The record put back (the uninstall's last steps, a window that could
  * not go after it was deleted): the entry point keeps its directory. */
-static void remember_dir(void)
+static int remember_dir(void)
 {
     HKEY k;
+    LONG w;
 
-    if (toolDir[0] == '\0' ||
-        RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0, NULL, 0,
-                        KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
-        return;
+    if (toolDir[0] == '\0') {
+        return 0;
     }
-    RegSetValueExA(k, INST_DIR_VALUE, 0, REG_SZ, (const BYTE *)toolDir,
-                   (DWORD)strlen(toolDir) + 1);
-    RegCloseKey(k);
+    w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &k, NULL);
+    if (w == ERROR_SUCCESS) {
+        w = RegSetValueExA(k, INST_DIR_VALUE, 0, REG_SZ,
+                           (const BYTE *)toolDir, (DWORD)strlen(toolDir) + 1);
+        RegCloseKey(k);
+    }
+    if (w != ERROR_SUCCESS) {
+        out("The install directory's record could not be put back (error "
+            "%ld): run the uninstall from %s.\n", (long)w, toolDir);
+        flagFailed = 1;
+        return 0;
+    }
+    return 1;
 }
 
 /* Before a move (record 23 section 9.6), before anything is copied: the
@@ -4252,17 +4262,23 @@ static void finish_remove(void)
         flagSteps = 1;
         return;
     }
+    /* The entry before the records, the records before the window: a
+     * step that fails puts back what the next run needs (the entry and
+     * the directory's record, while the window is there). */
+    if (!arp_remove()) {
+        return;
+    }
     if (!forget_dir()) {
         arp_write(1);
         return;
     }
     if (!own_remove_in(toolDir, 1)) {
-        remember_dir();
-        arp_write(1);
+        if (remember_dir()) {
+            arp_write(1);
+        }
         flagSteps = 1;
         return;
     }
-    arp_remove();
     for (i = 0; i < 2; i++) {
         d = i == 0 ? toolDir : oldToolDir;
         if (d[0] == '\0' || same_dir(d, legacy) ||
@@ -11348,6 +11364,98 @@ static void own_install(void)
  * go keeps the window, so the Add/Remove Programs entry still has its
  * program for the next run. 1 when none is left; on NT a file in use is
  * deleted at the restart. */
+/* A file's presence: 1 there, 0 absent (the one answer that proves it),
+ * -1 unknown (access, I/O). */
+static int file_state(const char *path)
+{
+    DWORD a = GetFileAttributesA(path);
+    DWORD e;
+
+    if (a != 0xFFFFFFFFUL) {
+        return (a & FILE_ATTRIBUTE_DIRECTORY) ? -1 : 1;
+    }
+    e = GetLastError();
+    return (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? 0 : -1;
+}
+
+/* path with its extension replaced by ext (".TMP", ".BAK", ".DEL"). */
+static void own_variant(const char *path, const char *ext, char *out,
+                        size_t cap)
+{
+    char *dot;
+
+    inst_copy(out, path, cap);
+    dot = strrchr(out, '.');
+    if (dot != NULL && strchr(dot, '\\') == NULL && strlen(out) + 4 < cap) {
+        strcpy(dot, ext);
+    }
+}
+
+/* One of the installer's files gone with its .TMP and .BAK (own_put's) and
+ * .DEL (an earlier run's held copy): deleted; on NT, held by a running
+ * program, renamed .DEL and that deleted at the restart, so a later install
+ * that puts the file back is never undone. 1 gone or deferred; 0 said. */
+static int own_delete(const char *path)
+{
+    static const char *const ext[3] = { ".TMP", ".BAK", ".DEL" };
+    char v[INST_PATH_CHARS];
+    char del[INST_PATH_CHARS];
+    int i;
+    int s;
+
+    for (i = 0; i < 3; i++) {
+        own_variant(path, ext[i], v, sizeof(v));
+        s = file_state(v);
+        if (s == 0) {
+            continue;
+        }
+        if (opts.List) {
+            out("(/list) %s would be deleted.\n", v);
+            continue;
+        }
+        if (s > 0 && delete_file(v)) {
+            flagChanged = 1;
+            continue;
+        }
+        if (s > 0 && i == 2 && delete_at_restart(v)) {
+            flagRestart = 1;
+            continue;
+        }
+        out("%s could not be deleted (error %lu): the installer stays for "
+            "the next run.\n", v, (unsigned long)GetLastError());
+        return 0;
+    }
+    s = file_state(path);
+    if (s == 0) {
+        return 1;
+    }
+    if (s < 0) {
+        out("Whether %s is there cannot be read: the installer stays for the "
+            "next run.\n", path);
+        return 0;
+    }
+    if (opts.List) {
+        out("(/list) %s would be deleted.\n", path);
+        return 1;
+    }
+    if (delete_file(path)) {
+        flagChanged = 1;
+        logonly("%s deleted\n", path);
+        return 1;
+    }
+    own_variant(path, ".DEL", del, sizeof(del));
+    if (envNow.Nt && MoveFileA(path, del) && delete_at_restart(del)) {
+        flagChanged = 1;
+        flagRestart = 1;
+        out("%s is in use: renamed %s, which is deleted at the restart.\n",
+            path, del);
+        return 1;
+    }
+    out("%s could not be deleted (error %lu): the installer stays for the "
+        "next run.\n", path, (unsigned long)GetLastError());
+    return 0;
+}
+
 static int own_remove_in(const char *dir, int window)
 {
     const char *names[4];
@@ -11368,23 +11476,7 @@ static int own_remove_in(const char *dir, int window)
     }
     for (i = 0; i < n; i++) {
         join(path, sizeof(path), dir, names[i]);
-        if (!file_exists(path, NULL)) {
-            continue;
-        }
-        if (opts.List) {
-            out("(/list) %s would be deleted.\n", path);
-            continue;
-        }
-        if (delete_file(path)) {
-            flagChanged = 1;
-            logonly("%s deleted\n", path);
-        } else if (delete_at_restart(path)) {
-            flagChanged = 1;
-            flagRestart = 1;
-            out("%s is in use: it is deleted at the restart.\n", path);
-        } else {
-            out("%s could not be deleted (error %lu): the installer stays "
-                "for the next run.\n", path, (unsigned long)GetLastError());
+        if (!own_delete(path)) {
             return 0;
         }
     }
@@ -11396,13 +11488,17 @@ static int own_remove(void)
     return own_remove_in(toolDir, 1);
 }
 
-/* 1 when any of the installer's files is in dir. */
+/* 1 when any of the installer's files (or its .TMP, .BAK or .DEL) is in
+ * dir, or cannot be known not to be. */
 static int own_any_in(const char *dir)
 {
+    static const char *const ext[3] = { ".TMP", ".BAK", ".DEL" };
     const char *names[3];
     char path[INST_PATH_CHARS];
+    char v[INST_PATH_CHARS];
     int n;
     int i;
+    int k;
 
     if (dir == NULL || dir[0] == '\0') {
         return 0;
@@ -11410,8 +11506,14 @@ static int own_any_in(const char *dir)
     n = own_names(names);
     for (i = 0; i < n; i++) {
         join(path, sizeof(path), dir, names[i]);
-        if (file_exists(path, NULL)) {
+        if (file_state(path) != 0) {
             return 1;
+        }
+        for (k = 0; k < 3; k++) {
+            own_variant(path, ext[k], v, sizeof(v));
+            if (file_state(v) != 0) {
+                return 1;
+            }
         }
     }
     return 0;
@@ -11532,18 +11634,23 @@ static void arp_write(int incomplete)
 }
 
 /* The entry deleted, last but for the directory (record 26 section 9.1). */
-static void arp_remove(void)
+/* 1 removed, or never there; 0 said, failed. */
+static int arp_remove(void)
 {
     LONG r = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_ARP_KEY);
 
     if (r == ERROR_SUCCESS) {
         flagChanged = 1;
         out("The Add/Remove Programs entry was removed.\n");
-    } else if (r != ERROR_FILE_NOT_FOUND) {
-        out("The Add/Remove Programs entry could not be removed (error "
-            "%ld).\n", (long)r);
-        flagFailed = 1;
+        return 1;
     }
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    out("The Add/Remove Programs entry could not be removed (error %ld).\n",
+        (long)r);
+    flagFailed = 1;
+    return 0;
 }
 
 /* The machine-wide values the settings table names (record 26 section 9.3
