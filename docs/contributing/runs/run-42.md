@@ -118,3 +118,41 @@ its own admission window independent of safe eject; the descendant walk
 below the member; every hypothesis about `PCI.VXD` marked as one;
 decisions N1 to N10). With it every design of Phase 42 has converged
 before its code, as the checkpoint asks.
+
+## 42-A.4 and 42-A.16: XHCISNAP retired into XHCITR; the Safely Remove stop investigated (2026-10-19)
+
+Branch `p42-tr` from `2a89ba74`: `99c5fc3a` (the code), `955525c1`,
+`3ed6761d` and `ccd9e028` (Codex rounds 1 to 3), `afc2b317` (the gated
+build's fix: `hcd_pnp.c` and `hcd_rh.c` include `xhci_hw.h`). Codex
+reviewed it over five rounds: 2 P1, 3 P2 and 1 P3, then 4 P2, then 1 P2,
+then nothing, then nothing on the build fix.
+
+- 42-A.4, as record 25 section 15 has it. Round 1's P1s were real: the
+  configuration manager's `LOG_CONF` and `RES_DES` handles are pointer
+  sized, which `XHCISNAP` (x86 alone) never met and `XHCITR64` does; and
+  the report's level-4 withholding must read the dump's own header line,
+  not a tail of the file. Read on the x64 build host after the fix:
+  `XHCITR64 /snapshot` decodes allocated memory ranges and MSI interrupts.
+  `test-package.ps1`: 1114 checks pass; host suites pass; `snaptest.cmd`
+  33 cases pass.
+- 42-A.16, read in QEMU on 98 SE with the released `3.0.0.0` (folder
+  `E:\xhci98-vm\p42-tr\a16`): XHCITR's Safely Remove of a Bulk-Only stick
+  stopped that stick alone, at SuperSpeed and at High Speed, on a root
+  port and behind a hub; a second stick kept reading, the tablet kept
+  moving, and the stick came back when plugged again. The confirmation
+  listed the stick's own three devnodes. `XHCIINST /eject` of `3.0.0.0`
+  offers only Thunderbolt units, so it could not be compared. Not
+  reproduced; no cause found. The level-2 log held no record of the stop,
+  so `xhci98.sys` now writes `pnp.pdo`, `pnp.rh` and `pnp.hc` for every
+  stop, query-remove, remove, cancel and surprise removal its device PDOs,
+  root hub PDO and controller receive: the owner's Save Report on the
+  ThinkPad P14s Gen 1 under 98 SE says which devices the PnP manager
+  stopped. Still to read there: a UAS stick, the internal devices on the
+  same root ports, the stick model. The task stays open.
+- The gated build at `afc2b317` (`build-driver.cmd all` and `all
+  -amd64`, every gate): BUILD + GATES PASSED on both.
+- Legs owed: the moved functions on 98 SE and 7 x86 (`/snapshot`,
+  `/dump`, `/probe`, Save Snapshot, Save Report's Snapshot part), x64 with
+  the test-signed package, the package without `XHCISNAP`, and 42-A.16's
+  regression on 98 SE and one NT target with the new records. Guests are
+  ready: `a16` (98 SE, QMP 48010) and `w7` (7 x86, QMP 48011).
