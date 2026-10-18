@@ -144,6 +144,10 @@ typedef struct _CM_CFGWK {
                                scan): CONTROLLER_UNAVAILABLE's           */
     ULONG Hold;             /* members whose re-enumeration is held: the
                                recovery's retirement barrier (CmCfgwkHold) */
+    ULONG GoneOnly;         /* members whose owed removal includes a
+                               removal-only request (CmCfgwkGone): every
+                               child found then is removed, and it is
+                               clean only once the bridge has none        */
     ULONG EnumBusy;         /* members with a CmCfgmgReenumerate admitted
                                and not yet returned (cmWkEnumAdmit): the
                                barrier's removal-only request waits for
@@ -1005,6 +1009,51 @@ static VOID cmWkGoneTake(CM_WK_PORT *p)
     p->GoneTries = 0;
 }
 
+/*
+ * Record 22 section 7.7's removal-only request on member i, whose tunnel
+ * was drained: every child the bridge has now joins the Gone set at this
+ * generation, so the removal takes whatever devnode of the old endpoint is
+ * still there, however the retained inventory was left. With `add` FALSE
+ * it only reads. *none TRUE when a complete list shows no child at all -
+ * the retirement this request waits for. FALSE when the list or an id
+ * could not be read (nothing proven).
+ */
+static BOOLEAN cmWkGoneSeed(PCM_CFGWK w, ULONG i, BOOLEAN add, BOOLEAN *none)
+{
+    CM_WK_PORT *p;
+    ULONG bridge;
+    ULONG children[CM_WK_KNOWN];
+    ULONG count;
+    ULONG c;
+    BOOLEAN complete;
+    char text[CMG_MAX_DEVICE_ID_LEN + 1];
+
+    p = &w->Port[i];
+    *none = FALSE;
+    bridge = cmWkFindDevnode(w, i);
+    if (bridge == 0) {
+        return FALSE;
+    }
+    count = cmWkChildren(w, bridge, children, CM_WK_KNOWN, &complete);
+    if (!complete) {
+        return FALSE;
+    }
+    *none = (BOOLEAN)(count == 0);
+    if (!add) {
+        return TRUE;
+    }
+    for (c = 0; c < count; c++) {
+        if (!cmWkGo(w) ||
+            CmCfgmgDeviceId(&w->Cfgmg, children[c], text, sizeof(text)) !=
+                CMG_CR_SUCCESS) {
+            return FALSE;
+        }
+        text[CMG_MAX_DEVICE_ID_LEN] = '\0';
+        cmWkIdsAdd(&p->Gone, children[c], cmWkIdHash(text), p->PubGen);
+    }
+    return TRUE;
+}
+
 static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
                                ULONG bridge, ULONG devnode);
 
@@ -1316,6 +1365,10 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     /* Stale since the query: the rescan that the removal owes is made
      * here, not left to a request that may already have run. */
     cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
+    /* The generation moved before the admission ends (the caller moves it
+     * again on seeing the call: still one new generation for every entry
+     * recorded before it). */
+    w->Port[i].PubGen++;
     cmWkEnumDone(w, i);
     w->C.Calls++;
     if (cr != CMG_CR_SUCCESS) {
@@ -1674,7 +1727,6 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
         return FALSE;
     }
     cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
-    cmWkEnumDone(w, i);
     p->PubGen++;
     w->C.Calls++;
     if (cr != CMG_CR_SUCCESS) {
@@ -1686,6 +1738,9 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
          * later CONTROLLER_UNAVAILABLE. */
         cmWkRetain(w, i, bridge);
     }
+    /* Admitted until its bookkeeping is done: a removal-only request
+     * posted after this sees the generation and the inventory it left. */
+    cmWkEnumDone(w, i);
     return (BOOLEAN)(cr == CMG_CR_SUCCESS);
 }
 
@@ -1829,9 +1884,12 @@ static VOID cmWkThread(PVOID context)
     ULONG take;
     ULONG noScan;
     ULONG goneRc;
+    ULONG goneOnly;
     ULONG seq[XHCI_TBT_MAX_TUNNELS];
     ULONG i;
     BOOLEAN clean;
+    BOOLEAN only;
+    BOOLEAN none;
     BOOLEAN open;
     BOOLEAN go;
     BOOLEAN timed;
@@ -1879,6 +1937,7 @@ static VOID cmWkThread(PVOID context)
             }
         }
         gone = w->ReqGone;
+        goneOnly = w->GoneOnly;
         if ((gone & ~take) != 0 && cmWkSince(w->GoneAt) < CM_WK_RETRY_MS) {
             /* An unresolved removal is tried again at the retry
              * interval; one just taken at once. */
@@ -1953,6 +2012,13 @@ static VOID cmWkThread(PVOID context)
                 if (!go) {
                     break;
                 }
+                only = (BOOLEAN)((goneOnly & (1UL << i)) != 0);
+                if (only) {
+                    /* A removal-only request: whatever children the
+                     * bridge has now are the old endpoint's. */
+                    cmWkOp(w, i, gen[i]);
+                    (VOID)cmWkGoneSeed(w, i, TRUE, &none);
+                }
                 goneRc = cmWkGone(w, i, gen[i]);
                 if (goneRc == CM_WK_GONE_STALE) {
                     continue;
@@ -1969,6 +2035,13 @@ static VOID cmWkThread(PVOID context)
                     w->C.GoneDone++;
                     /* Nothing refused went back to the retained set. */
                     clean = (BOOLEAN)(w->Port[i].Ret.Count == 0);
+                    if (clean && only) {
+                        /* And the bridge has no child left (a complete
+                         * list read now), whatever the inventory said. */
+                        cmWkOp(w, i, gen[i]);
+                        clean = (BOOLEAN)(cmWkGoneSeed(w, i, FALSE, &none) &&
+                                          none);
+                    }
                 } else {
                     cmWkLog(w, "cm.reenum.9x.gone.abandoned",
                             (w->Port[i].Bdf << 8) | w->Port[i].Gone.Count);
@@ -1983,6 +2056,7 @@ static VOID cmWkThread(PVOID context)
                     /* Only the request this attempt took; a newer one is
                      * taken at the next pass. */
                     w->ReqGone &= ~(1UL << i);
+                    w->GoneOnly &= ~(1UL << i);
                     if (clean) {
                         w->GoneClean |= 1UL << i;
                     }
@@ -2225,6 +2299,8 @@ static VOID cmWkGoneReq(PCM_CFGWK w, ULONG members, ULONG active,
      * no vanished-child scan, here or in a coalesced earlier request. */
     if (reenum) {
         w->ReqReenum |= members;
+    } else {
+        w->GoneOnly |= members;
     }
     w->ReqVanish &= ~members;
     w->NoScan |= members;

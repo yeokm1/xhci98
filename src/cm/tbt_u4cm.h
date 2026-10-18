@@ -623,9 +623,11 @@ typedef struct _TBT_U4CM {
                                back over the host router's fresh walk: until
                                then a failure restores them whole, so the
                                next snapshot copies no half-built table */
-    ULONG HwErrors;         /* transport failures of the core's requests
-                               (the ring not moving or stopped): a section
-                               9.2 discovery that saw one did not complete */
+    ULONG HwErrors;         /* the core's requests that ended with no answer
+                               (the ring not moving or stopped, or no reply
+                               at all): a section 9.2 discovery that saw one
+                               is not recorded complete, and a recovery
+                               discovers the port again                     */
 
     TBT_U4_COUNTERS Counters;
 } TBT_U4CM, *PTBT_U4CM;

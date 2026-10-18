@@ -320,11 +320,12 @@ typedef struct _CM_NHI {
                                (cm_thr.c latches it under PREPARE and
                                RECOVERY): part 5's Rearm                  */
     ULONG RecBusChanged;    /* members whose buses a committed recovery's
-                               step 6 found changed, with the old bus
-                               (RecOldBus): their old entries are released
-                               once their devnode's retirement was observed
-                               (RecRelOk, R8a)                            */
-    ULONG RecOldBus[XHCI_TBT_MAX_TUNNELS];
+                               step 6 found changed, with every old bus
+                               still owed (RecOldBuses, bit b for bus b):
+                               their old entries are released once their
+                               devnode's retirement was observed after the
+                               latest such change (RecRelOk, R8a)          */
+    ULONG RecOldBuses[XHCI_TBT_MAX_TUNNELS][8];
     ULONG RecBusPend;       /* the same for the attempt now running, read
                                afresh by each one, taken at its commit    */
     ULONG RecOldBusPend[XHCI_TBT_MAX_TUNNELS];

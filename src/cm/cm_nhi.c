@@ -1056,6 +1056,7 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
     ULONG bus;
     ULONG changed;
     ULONG member;
+    ULONG kept;
     BOOLEAN excl;
 
     r = &nhi->Reenum;
@@ -1125,6 +1126,17 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
      * until a commit takes it into the barrier, and the bindings are
      * withdrawn only after that commit (cmU4AfterCommit), so a later
      * attempt still names the member a port's debt was taken against. */
+    kept = 0;
+    for (i = 1; i <= nhi->U4.PortCount; i++) {
+        p = TbtU4Port(&nhi->U4, i);
+        if (p == NULL || !p->Pcie.Up || (p->RecVerified & 1) == 0) {
+            continue;
+        }
+        member = XhciTbtPortMember(&r->Topo, &nhi->Binds, i);
+        if (member != XHCI_TBT_NO_MEMBER && member < 32) {
+            kept |= 1UL << member;
+        }
+    }
     for (i = 1; i <= nhi->U4.PortCount; i++) {
         p = TbtU4Port(&nhi->U4, i);
         if (p == NULL || !p->RemovalDebt) {
@@ -1134,7 +1146,10 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
         if (member != XHCI_TBT_NO_MEMBER && member < 32) {
             nhi->RecDebtMask |= 1UL << member;
         } else {
-            nhi->RecDebtMask |= cmU4AllMembers(nhi);
+            /* Every member but one bound to another port whose PCIe
+             * tunnel this attempt verified and kept: a bridge carries one
+             * port's tunnel, so that member's endpoint is that port's. */
+            nhi->RecDebtMask |= cmU4AllMembers(nhi) & ~kept;
         }
     }
     nhi->RecChanged |= changed;
@@ -1160,6 +1175,8 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
     ULONG bit;
     ULONG member;
     ULONG now;
+    ULONG bus;
+    ULONG left;
     BOOLEAN barred;
     BOOLEAN armed;
     BOOLEAN armOk;
@@ -1217,9 +1234,21 @@ VOID CmNhiU4Barrier(PCM_NHI nhi)
         for (i = 0; i < nhi->Reenum.Topo.Tunnels && i < XHCI_TBT_MAX_TUNNELS;
              i++) {
             bit = 1UL << i;
-            if ((nhi->RecBusChanged & nhi->RecRelOk & bit) != 0 &&
-                CmNvlinkReleaseBus(nhi, nhi->Reenum.Topo.Set[i],
-                                   nhi->RecOldBus[i]) == 0) {
+            if ((nhi->RecBusChanged & nhi->RecRelOk & bit) == 0) {
+                continue;
+            }
+            left = 0;
+            for (bus = 1; bus <= 0xFFUL; bus++) {
+                if ((nhi->RecOldBuses[i][bus >> 5] & (1UL << (bus & 31UL))) == 0) {
+                    continue;
+                }
+                if (CmNvlinkReleaseBus(nhi, nhi->Reenum.Topo.Set[i], bus) == 0) {
+                    nhi->RecOldBuses[i][bus >> 5] &= ~(1UL << (bus & 31UL));
+                } else {
+                    left++;
+                }
+            }
+            if (left == 0) {
                 nhi->RecBusChanged &= ~bit;
                 nhi->RecRelOk &= ~bit;
             }
@@ -1304,12 +1333,14 @@ static VOID cmU4AfterCommit(PCM_NHI nhi)
     nhi->RecDebtMask = 0;
     cmU4Unlearn(nhi, nhi->RecChanged);
     nhi->RecChanged = 0;
-    /* R8a's old entries, owed once each member's retirement is observed;
-     * an older change still owed keeps its own old bus. */
+    /* R8a's old entries, owed once each member's retirement is observed
+     * after this change: every old bus still owed is kept beside the new
+     * one, and an earlier authorisation does not cover it. */
     for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
         if ((nhi->RecBusPend & (1UL << i)) != 0 &&
-            (nhi->RecBusChanged & (1UL << i)) == 0) {
-            nhi->RecOldBus[i] = nhi->RecOldBusPend[i];
+            nhi->RecOldBusPend[i] != 0 && nhi->RecOldBusPend[i] <= 0xFFUL) {
+            nhi->RecOldBuses[i][nhi->RecOldBusPend[i] >> 5] |=
+                1UL << (nhi->RecOldBusPend[i] & 31UL);
             nhi->RecBusChanged |= 1UL << i;
             nhi->RecRelOk &= ~(1UL << i);
         }
@@ -2764,6 +2795,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     nhi->RecBusChanged = 0;
     nhi->RecBusPend = 0;
     nhi->RecRelOk = 0;
+    CmZero(nhi->RecOldBuses, sizeof(nhi->RecOldBuses));
     nhi->RecRetireSent = 0;
     nhi->RecUpValid = 0;
     nhi->DmaBytes = 0;

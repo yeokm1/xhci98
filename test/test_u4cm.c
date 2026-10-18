@@ -3987,6 +3987,24 @@ static int goneHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
     return FAB_HOOK_SWALLOW;
 }
 
+/* The host router's path-entry writes unanswered (no loss): an
+ * invalidation that never takes. */
+static int pathWriteHook(FAB *f, unsigned long pdf, int router,
+                         unsigned long cs, unsigned long adp,
+                         unsigned long addr, unsigned long n,
+                         const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    (void)addr;
+    (void)n;
+    (void)data;
+    if (router == 0 && cs == TBT_CS_PATH && pdf == TBT_PDF_WRITE) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
 static void armGone(FAB *f, int router, unsigned long cs, int write,
                     int cancel, unsigned long skip)
 {
@@ -4326,6 +4344,35 @@ static void test_recover(void)
     CHECK(p->RemovalDebt, "recover unplugged: debt");
     CHECK(hostClean(&g_fab, 1), "recover unplugged: host side drained");
     CHECK(!p->DiscoverOwed, "recover unplugged: a disconnected link owes no discovery");
+    (void)dev;
+
+    /* Departed, the host-side drain not completing (the host router's path
+     * writes unanswered): HELD as departed, its records kept, no ordinary
+     * teardown after the commit; once the writes answer again the recorded
+     * drain alone completes and the port goes EMPTY. */
+    dev = setupMinimal(1, NULL);
+    (void)countActions(&g_cm, 0);
+    p = TbtU4Port(&g_cm, 1);
+    lossThenBack();
+    fabUnplug(&g_fab, 1);
+    g_fab.Hook = pathWriteHook;
+    rc = TbtU4Recover(&g_cm, &final);
+    CHECK_EQ(rc, TBT_OK, "recover departed held: TBT_OK");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "recover departed held: HELD");
+    CHECK(p->RecDeparted && (p->RecDrainPcie || p->RecDrainUsb3),
+          "recover departed held: the drain owed");
+    CHECK(p->RemovalDebt && !p->Dev.Present, "recover departed held: debt, device forgotten");
+    TbtU4RecoverCommit(&g_cm);
+    (void)TbtU4TakeDebt(&g_cm, 1);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "recover departed held: still HELD");
+    CHECK(p->RecDeparted, "recover departed held: still owed");
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 2);
+    CHECK(!p->RecDeparted, "recover departed held: drained at the tick");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "recover departed held: EMPTY");
+    CHECK(hostClean(&g_fab, 1), "recover departed held: host side drained");
+    CHECK(!TbtU4TakeDebt(&g_cm, 1), "recover departed held: no new debt after the commit");
     (void)dev;
 
     /* DmaMayRun: a host interface still not answering when the recovery
