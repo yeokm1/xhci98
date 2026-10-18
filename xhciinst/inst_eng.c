@@ -11616,6 +11616,9 @@ static int own_any_in(const char *dir)
     if (file_state(path) != 0) {
         return 1;
     }
+    if (job_file_for(dir, path, sizeof(path)) && file_state(path) != 0) {
+        return 1;
+    }
     n = own_names(names);
     for (i = 0; i < n; i++) {
         join(path, sizeof(path), dir, names[i]);
