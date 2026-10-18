@@ -11729,7 +11729,11 @@ static void s98_inf_log(const char *name, const char *why)
  * name; the copy may be in INF\OTHER). On 98 SE and ME the setup engine's
  * INF\OTHER copy has a long name ("Yeo Kheng Mengstor98.inf", the one the
  * listing holds) and the driver key's InfPath its 8.3 alias (YEOKHE~2.INF,
- * the 42-V.1 leg of 2026-10-19), so the alias is compared too. */
+ * the 42-V.1 leg of 2026-10-19), so the alias is compared too. 1 named,
+ * 0 not named, -1 unknown: the alias cannot be read, or it matches while
+ * the other directory (INF against INF\OTHER) holds a file of that name
+ * too, so the InfPath could mean either. A caller never records a copy on
+ * -1, and the uninstall keeps it. */
 static int s98_inf_names(const char *infPath, const char *name)
 {
     const char *base = strrchr(name, '\\');
@@ -11738,6 +11742,9 @@ static int s98_inf_names(const char *infPath, const char *name)
     char alias[INST_PATH_CHARS];
     const char *abase;
     DWORD n;
+    DWORD e;
+    int other;
+    int s;
 
     base = base != NULL ? base + 1 : name;
     if (infPath == NULL || infPath[0] == '\0') {
@@ -11746,18 +11753,35 @@ static int s98_inf_names(const char *infPath, const char *name)
     if (inst_eq(infPath, base) || inst_eq(infPath, name)) {
         return 1;
     }
-    if (envNow.Nt || GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+    if (envNow.Nt) {
         return 0;
+    }
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return -1;
     }
     join(path, sizeof(path), win, "INF");
     join(path, sizeof(path), path, name);
     n = GetShortPathNameA(path, alias, sizeof(alias));
-    if (n == 0 || n >= sizeof(alias)) {
-        return 0;
+    if (n == 0) {
+        e = GetLastError();
+        /* A copy that is not there has no alias for a driver key to
+         * name. */
+        return (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ?
+               0 : -1;
+    }
+    if (n >= sizeof(alias)) {
+        return -1;
     }
     abase = strrchr(alias, '\\');
     abase = abase != NULL ? abase + 1 : alias;
-    return inst_eq(infPath, abase);
+    if (!inst_eq(infPath, abase)) {
+        return 0;
+    }
+    other = inst_eqn(name, "OTHER\\", 6);
+    join(path, sizeof(path), win, other ? "INF" : "INF\\OTHER");
+    join(path, sizeof(path), path, infPath);
+    s = file_state(path);
+    return s == 0 ? 1 : -1;
 }
 
 /* 1 when, after a settle, a device of stor98.inf recorded as this
@@ -11770,7 +11794,7 @@ static int s98_inf_named_by_recorded(const char *name)
     for (i = 0; i < devCount; i++) {
         const DEVREC *d = &devs[i];
         if (!d->Present || d->Inf != INST_INF_S98 || d->InfPathState <= 0 ||
-            !s98_inf_names(d->InfPath, name)) {
+            s98_inf_names(d->InfPath, name) <= 0) {
             continue;
         }
         for (j = 0; j < s98NewCount; j++) {
@@ -11874,7 +11898,7 @@ static void s98_inf_after(const char *infPath, int settle)
                 continue;
             }
             if (settle > 0 ? s98_inf_named_by_recorded(name) :
-                settle == 0 && s98_inf_names(infPath, name)) {
+                settle == 0 && s98_inf_names(infPath, name) > 0) {
                 s98_inf_log(name, "made in this step and named by the "
                             "device: recorded");
                 s98_rec_text("Staged", name, s98VersionText);
@@ -12790,8 +12814,11 @@ static int s98_inf_named_9x(const char *name)
                           sizeof(text));
             if (g < 0) {
                 found = -1;
-            } else if (g > 0 && s98_inf_names(text, name)) {
-                found = 1;
+            } else if (g > 0) {
+                g = s98_inf_names(text, name);
+                if (g != 0) {
+                    found = g;
+                }
             }
         }
         RegCloseKey(one);
