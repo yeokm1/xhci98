@@ -40,6 +40,7 @@ The rule that organises the directory: files in the pure core **decide** (they e
 | `xhci_own.c` | Who holds an endpoint's ring across an interface switch (record 20 section 5): each step's decision, a completion code as an outcome, the one-setting walk. | `test_own` |
 | `xhci_susp.c` | Selective suspend ([design record 14](design/14-selective-suspend.md)): the switch, eligibility and capabilities, the device's link machine, each function's power slot, the wake episode, the idle notification's batches, and stage B's SuperSpeed decisions. | `test_susp` |
 | `xhci_silent.c` | The Windows 98 SE and ME silent install (design record 13 section 6.11): the `XhciSilentInstall` gate, the `SilentClasses` table's admission and cap, the configuration walk and the PDO's answer. | `test_silent` |
+| `xhci_regsrc.c` | Where a registry value of `xhci98.sys` and `xhcicm.sys` is taken from (roadmap-usb4 42-A.17, design record 13 section 5.5): the machine-wide `Services\USB` key when the value is there in any type, else the driver key. Compiled into both drivers. | `test_regsrc` |
 | `xhci_strict.c` | Strict mode's command precondition table: would a conforming controller accept this command in this Slot and EP state. Debug and qemu flavours only. | `test_strict` |
 | `xhci_inj.c` | Task 35-T.9's fault injection: the `XhciQemuInject` trigger's encoding and sequence rule, the ports a fault may be aimed at, every register answer the layer gives. Compiled into the qemu flavour alone. | `test_inj` |
 | `xhci_qry.c` | The answer of `IOCTL_XHCI98_QUERY` (design record 13 section 8.12): the counter block from level 1, the log ring as text at levels 2 and 3 (withheld at 4), the controller's configuration space at every level, and the sizing answers; `hcd_door.c` gathers and answers. | `test_xhq` |
@@ -121,6 +122,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `xhci_own.h` | Ring ownership (`xhci_own.c`). | yes |
 | `xhci_susp.h` | Selective suspend's pure half (`xhci_susp.c`). | yes |
 | `xhci_silent.h` | The silent install (`xhci_silent.c`). | yes |
+| `xhci_regsrc.h` | Where a registry value is taken from (`xhci_regsrc.c`). | yes |
 | `xhci_strict.h` | Strict mode's table (`xhci_strict.c`). | yes |
 | `xhci_inj.h` | Fault injection's encoding and reserved codes (`xhci_inj.c`, `hcd_inj.c`). | yes |
 | `xhci_qry.h` | `IOCTL_XHCI98_QUERY`'s wire format, shared byte for byte by the driver, `XHCITR` and the host tests. | yes |
@@ -302,6 +304,7 @@ The host suites of `xhci98.sys` and `xhciuas.sys`, and the shared and guest-side
 | `test_stream.c` | `xhci_stream.c`: array sizes, contexts, layouts and encoders. |
 | `test_xport.c` | `xhci_xport.c` over constructed device shapes. |
 | `test_silent.c` | `xhci_silent.c` over constructed configurations. |
+| `test_regsrc.c` | `xhci_regsrc.c`: absent, per-device only, machine-wide only, both, and another type in either key. |
 | `test_psw.c` | `xhci_psw.c` over a modelled configuration space. |
 | `test_pirq.c` | `xhci_pirq.c` over a modelled machine. |
 | `test_msi.c` | `xhci_msi.c` and `xhci_hlpr.c`: the capability read, the requirements list, the helper binding with the timer's event. |
@@ -777,6 +780,13 @@ with Common Controls 6), `build.cmd` (`XHCITR.EXE` with MSVC 6.0,
 switch refusals and the import-table check `build-driver.cmd` runs,
 through `check-imports.ps1`) and `README.TXT` (the published
 `readme.txt`).
+Task 42-A.17 (design record 13 section 5.5) adds the pure `xhci_regsrc.c` /
+`xhci_regsrc.h` (where a registry value is taken from: the machine-wide
+`Services\USB` key when the value is there in any type, else the driver
+key; host suite `test_regsrc`), compiled into `xhci98.sys` from `sources`
+and into `xhcicm.sys` by path as `..\xhci_regsrc.c`, and used by
+`hcd_ctl.c` (`hcdReadDword`, `hcdQueryDword`) and `cm\cm_reg.c`
+(`cmQuery`).
 Task 38.2 (design record 13 section 6.11) adds the pure `xhci_silent.c` /
 `xhci_silent.h` (the Windows 98 SE and ME silent install: the
 `XhciSilentInstall` gate's rule, the `SilentClasses` table's admission,

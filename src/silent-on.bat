@@ -1,9 +1,12 @@
 @echo off
 rem silent-on.bat - turns the xhci98 silent install on: merges SILENT.REG,
 rem checks that the list reads back as its six values, and only then sets
-rem XhciSilentInstall to 1 on every xhci98 controller through silent.vbs,
+rem XhciSilentInstall to 1 machine-wide through silent.vbs,
 rem which is beside it in the download's tools\silent directory (roadmap-hcd
-rem task 38.2, design record 13 section 6.11.8).
+rem task 38.2, design record 13 section 6.11.8), in
+rem HKLM\System\CurrentControlSet\Services\USB, which every controller
+rem reads first; the controllers' own values are left alone (roadmap-usb4
+rem task 42-A.17).
 rem
 rem Windows 98 SE and ME only: double-click it, or run it at a prompt in
 rem this directory, then restart Windows. Run it only once each listed
@@ -35,8 +38,8 @@ if errorlevel 3 goto partial
 if errorlevel 1 goto notset
 goto end
 :unverified
-echo The switch may have changed on some controllers and could not be read
-echo back; the lines above say which. Run silent-off.bat to set it back to
+echo The machine-wide switch may have changed and could not be read
+echo back; the lines above say so. Run silent-off.bat to set it back to
 echo 0, or check XhciSilentInstall in regedit. Restart only once it reads
 echo right.
 goto end

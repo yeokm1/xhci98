@@ -2536,11 +2536,50 @@ const char *tr_level_text(TR_U32 level)
     return NULL;
 }
 
-void tr_level_pick(const TR_RVAL *cur, TR_LEVEL *out)
+void tr_rv_from_query(int status, TR_U32 type, TR_U32 bytes, TR_U32 value,
+                      TR_RVAL *out)
+{
+    out->Value = 0;
+    switch (status) {
+    case TR_Q_OK:
+        if (type == 0 && bytes == 0) {
+            out->State = TR_RV_ABSENT;
+        } else if (type == 4 && bytes == 4) {
+            out->State = TR_RV_DWORD;
+            out->Value = value;
+        } else {
+            out->State = TR_RV_OTHER;
+        }
+        break;
+    case TR_Q_NOT_FOUND:
+        out->State = TR_RV_ABSENT;
+        break;
+    case TR_Q_MORE_DATA:
+        out->State = TR_RV_OTHER;
+        break;
+    default:
+        out->State = TR_RV_UNREAD;
+        break;
+    }
+}
+
+void tr_level_pick(const TR_RVAL *machine, const TR_RVAL *cur, TR_LEVEL *out)
 {
     const TR_RVAL *r = cur;
 
     memset(out, 0, sizeof(*out));
+    out->Machine.State = TR_RV_ABSENT;
+    if (machine != NULL) {
+        out->Machine = *machine;
+    }
+    out->Device = *cur;
+    if (out->Machine.State != TR_RV_ABSENT) {
+        r = &out->Machine;
+        out->From = TR_LV_FROM_MACHINE;
+    } else {
+        out->From = cur->State == TR_RV_ABSENT ? TR_LV_FROM_NONE
+                                               : TR_LV_FROM_DEVICE;
+    }
     out->State = r->State;
     out->Value = r->State == TR_RV_DWORD ? r->Value : 0;
     switch (r->State) {
@@ -2564,6 +2603,7 @@ const char *tr_level_value_name(int driver)
 void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap)
 {
     const char *name = tr_level_value_name(driver);
+    const char *where = l->From == TR_LV_FROM_MACHINE ? "machine-wide" : name;
 
     switch (l->State) {
     case TR_RV_ABSENT:
@@ -2573,14 +2613,15 @@ void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap)
     case TR_RV_DWORD:
         if (l->Level >= 0) {
             tr_sprintf(out, cap, "%d - %s (%s)", l->Level,
-                       tr_level_text((TR_U32)l->Level), name);
+                       tr_level_text((TR_U32)l->Level), where);
         } else {
             tr_sprintf(out, cap, "%lu - out of range, not 0-4 (%s)",
-                       (unsigned long)l->Value, name);
+                       (unsigned long)l->Value, where);
         }
         break;
     case TR_RV_OTHER:
-        tr_sprintf(out, cap, "%s is not a REG_DWORD", name);
+        tr_sprintf(out, cap, "%s%s is not a REG_DWORD", name,
+                   l->From == TR_LV_FROM_MACHINE ? " machine-wide" : "");
         break;
     default:
         tr_copy(out, "not read", cap);
@@ -2588,17 +2629,44 @@ void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap)
     }
 }
 
-void tr_level_head(TR_TEXT *t, int driver, int count)
+/* The machine-wide value's line of the block's head. */
+static void tr_level_machine(TR_TEXT *t, const TR_RVAL *m)
+{
+    tr_put(t, "  Machine-wide (Services\\USB, wins when set): ");
+    switch (m == NULL ? TR_RV_ABSENT : m->State) {
+    case TR_RV_ABSENT:
+        tr_put(t, "not set\n");
+        break;
+    case TR_RV_DWORD:
+        if (m->Value <= TR_LV_MAX) {
+            tr_printf(t, "%lu - %s\n", (unsigned long)m->Value,
+                      tr_level_text(m->Value));
+        } else {
+            tr_printf(t, "%lu - out of range\n", (unsigned long)m->Value);
+        }
+        break;
+    case TR_RV_OTHER:
+        tr_put(t, "not a REG_DWORD\n");
+        break;
+    default:
+        tr_put(t, "not read\n");
+        break;
+    }
+}
+
+void tr_level_head(TR_TEXT *t, int driver, int count, const TR_RVAL *machine)
 {
     if (driver == TR_LV_XHCI98) {
         tr_printf(t, "xhci98 (" TR_LV_NAME_XHCI98 " in each controller's "
                      "driver key):\n");
+        tr_level_machine(t, machine);
         if (count == 0) {
             tr_put(t, "  No USB controller is driven by xhci98.\n");
         }
     } else {
         tr_printf(t, "xhcicm (" TR_LV_NAME_XHCICM " in each host "
                      "interface's driver key):\n");
+        tr_level_machine(t, machine);
         if (count == 0) {
             tr_put(t, "  No Thunderbolt or USB4 host interface is driven by "
                       "xhcicm.\n");
@@ -2613,6 +2681,23 @@ void tr_level_device(TR_TEXT *t, int driver, const char *name,
 
     tr_level_line(driver, l, line, sizeof(line));
     tr_printf(t, "  %s\n    %s\n", name, line);
+    if (l->From != TR_LV_FROM_MACHINE) {
+        return;
+    }
+    switch (l->Device.State) {
+    case TR_RV_DWORD:
+        tr_printf(t, "    its own value, %lu, is not in force\n",
+                  (unsigned long)l->Device.Value);
+        break;
+    case TR_RV_OTHER:
+        tr_put(t, "    its own value, not a REG_DWORD, is not in force\n");
+        break;
+    case TR_RV_UNREAD:
+        tr_put(t, "    its own value was not read\n");
+        break;
+    default:
+        break;
+    }
 }
 
 int tr_level_common(const TR_LEVEL *l, int n, int *level)

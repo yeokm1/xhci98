@@ -387,3 +387,92 @@ and no history; this repository's commit rule (no trailer) applies to
 - **Gated build** at `4da44d52`: `build-driver.cmd all` and
   `all -amd64` passed every gate, the records clean (`dirty=0`), and the
   Stor98 builds and unit tests passed again at the same commit.
+
+## 42-A.17 and 42-A.18: the machine-wide registry key, and value 4's codes (2026-10-18 and 19)
+
+Written on branch `p42-reg` from `3.1.0.0` at `2a89ba74` (`7f25ca3c`, the
+implementation; `2a3e7e9c`, `33e98bc3` and `2b9a2ae2`, its revisions),
+reviewed and revised until the review converged. The owner's decisions
+are the decisions table's two
+rows of 2026-10-18.
+
+- 42-A.17: every `Xhci*` value of `xhci98.sys` (`hcd_ctl.c`
+  `hcdReadDword`, which every read goes through) and every `XhciCm*`
+  value of `xhcicm.sys` (`cm_reg.c` `cmQuery`) is read first from
+  `HKLM\System\CurrentControlSet\Services\USB` and, when it is not there
+  in any type, from the driver key; the decision is the new pure
+  `xhci_regsrc.c` (host suite `test_regsrc`), compiled into both drivers.
+  "There" is the query routine having been called with a value (a
+  zero-length `REG_NONE` excepted), not a status code. A `reg.machine`
+  log note counts the start's values taken machine-wide. The INFs are
+  unchanged. The six helpers write the machine-wide value, create the key,
+  leave the per-controller values alone and show both; XHCITR's levels
+  block and `/report` show both and which won, and its Set writes the
+  machine-wide value where one is in force. `INSTALL /set` and
+  `INSTALL.BAT`'s questions still write the controllers' own keys; the
+  installer's machine-wide write is the installer task's (design record 26
+  section 5.4).
+- 42-A.18: `XhciFastPollFsLs` 4 programs Interval = `bInterval` - 128 for
+  an interrupt endpoint's code 128 to 143, at every speed, on a root port
+  or behind a hub, replacing task 36.19's codes with no compatibility; a
+  code whose Interval is Table 6-12's own is left unmarked; the fallback
+  stays Interval 3; the interval caps still run after it (design record 13
+  section 13.7).
+
+Built after the review converged: `scripts\build-driver.cmd all` and
+`all -amd64` at `2b9a2ae2`, every gate passing, the host suites (with
+`test_regsrc`, `test_fast_codes`, `test_cap_codes` and the XHCITR level
+vectors) passing.
+
+### The legs (development host A, QEMU, the `debug` flavour at `2b9a2ae2`)
+
+Each guest had two `qemu-xhci` controllers, a `usb-tablet` on controller
+1's root port 2 (High Speed), a `usb-mouse` behind a `usb-hub` on its port
+1 (Full Speed behind a hub) and a `usb-mouse` on controller 2's root port
+1. The values were set with a leg aid that writes one DWORD machine-wide
+or on one controller's driver key and lists both (not shipped), and with
+the package's own helpers; each reading is the `XHCITR /report` of the
+next start, searched for `fastpoll.*`, `reg.machine`, `silent.gate` and
+the levels block, and screenshotted. The `qemu` flavour could not be
+used: `XHCIINST` refuses a `qemu` build in the `debug-x86` directory, as
+it should. Installed with `INSTALL /debug /yes` from a package made of
+`3.0.0.0`'s `INSTALL.BAT` and `XHCIINST`, this branch's helpers and
+XHCITR, and the staged `debug` x86 drivers.
+
+| Target | Reading | Result |
+|---|---|---|
+| 98 SE | Absent: no machine-wide value | PASS: `fastpoll.value 0`, `reg.machine 0`; the levels block "Machine-wide ... not set". One controller recorded nothing: its own `XhciLogVerbosity` was the `0` an older INF had written |
+| 98 SE | Machine-wide `XhciFastPollFsLs 3` and `XhciLogVerbosity 3`; controller 2's own `XhciFastPollFsLs 2`, controller 1's own `0` | PASS: both controllers `fastpoll.value 3`, `reg.machine 2`; both now log, the machine-wide level overriding the `0`; XHCITR "3 - adds port status (machine-wide)" for each and "its own value, 0 / 2, is not in force" |
+| 98 SE | `silent-on.bat`, `portsw-on.bat` | PASS: each wrote the machine-wide value, read it back and showed both controllers' own `0` as "NOT IN FORCE"; `portsw.vbs show` before it read the missing value as "no machine-wide value is set" (WSH's not-found error matched on 98 SE). At the next start both controllers `silent.gate.value 1`, `silent.gate 1` |
+| 98 SE | Machine-wide `XhciFastPollFsLs` deleted | PASS: controller 1 `fastpoll.value 0`, controller 2 `2`, each its own; `reg.machine 2` (the log value and the silent switch) |
+| 2000 SP4 | Absent | PASS: `fastpoll.value 0`, `reg.machine 0`, "not set"; `Services\USB` did not exist (`regedit /e` of it wrote no file) |
+| 2000 SP4 | `portsw-on.bat` | PASS: the key created, holding `XhciIntelPortSwitch` dword 1 (`regedit /e`); both controllers' own `0` shown "NOT IN FORCE" |
+| 2000 SP4 | Machine-wide `3` over controller 2's own `2` | PASS: both `fastpoll.value 3`, `reg.machine 2`, XHCITR's "not in force" lines for `0` and `2` |
+| 2000 SP4 | Machine-wide deleted | PASS: `0` and `2`, `reg.machine 1` |
+| 7 SP1 x86 | Absent; `portsw-on.bat`; machine-wide `3` over controller 2's own `2`; deleted | PASS: `0`/`0` and `reg.machine 0`; the helper wrote and showed as on 2000 (`reg query` of the key: `XhciIntelPortSwitch 0x1`); `3`/`3` and `reg.machine 1`; `0`/`2` and `reg.machine 0`. Whether the key existed before the helper ran on 7 was not read |
+
+42-A.18 on 98 SE, hidusbf (the 98/ME `hidusbf.sys` of 2026-10-03)
+on every QEMU HID device as design record 13 section 13.6 step 1 puts it
+by hand, `XhciFastPollFsLs` 4 machine-wide; the programmed Interval is the
+`fastpoll.open` record's last byte (slot, DCI, Table 6-12's Interval, the
+one programmed):
+
+| Code | Tablet, High Speed, root port | Mouse, Full Speed, behind the hub | Mouse, controller 2 root port | Result |
+|---|---|---|---|---|
+| 135 | `02030F07` | `03030A07` | `01030F07` | PASS: Interval 7 (16 ms) everywhere; Full Speed behind a hub applied, as task 42-A.18 asks |
+| 128 | `02030F00` | `03030A00` | `01030F00` | PASS: Interval 0 (125 us); no `fastpoll.fallback`; the tablet's pointer followed |
+| 143 | no record | `03030A0F` | no record | PASS: at High Speed 143 is Table 6-12's own clamp, left unmarked; Full Speed Interval 15 |
+| 144 | no record | no record | no record | PASS: not a code |
+
+What these legs do not show: QEMU accepts any Interval (design record 13
+section 13.4), so no refusal and no fallback was exercised, and nothing
+says how a real controller or a transaction translator schedules
+Interval 0 to 2 or 11 to 15 below High Speed; the 7 guest's hidusbf
+reading of 36.19 was not repeated; the A.17 legs read `XhciFastPollFsLs`,
+`XhciLogVerbosity` and `XhciSilentInstall` as the driver takes them, and
+the port switch only as the helpers write and show it (QEMU's controller
+is not Intel, so the driver never reads that value); no `XhciCm*` value
+was read on a guest with a Thunderbolt or USB4 controller; XHCITR's Set
+under a machine-wide value was not run; `silent-off.bat` and
+`portsw-off.bat` were not run. Owed to 42-V.2 as its text says, with
+these taken.

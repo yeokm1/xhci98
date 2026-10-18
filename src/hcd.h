@@ -28,6 +28,7 @@
 #include "xhci_func.h"
 #include "xhci_xport.h"
 #include "xhci_silent.h"
+#include "xhci_regsrc.h"
 #include "xhci_hub.h"
 #include "xhci_sshub.h"
 #include "xhci_link.h"
@@ -1712,6 +1713,11 @@ typedef struct _HCD_CONTROLLER {
     ULONG FastPollMode;
     ULONG FastPollOpened;
     ULONG FastPollFallbacks;
+    /* Task 42-A.17 (hcd_ctl.c hcdReadDword): how many of the start's
+     * values were taken from the machine-wide key, zeroed before the
+     * delivery's first read and noted as reg.machine after the quirks
+     * and the interrupt route. */
+    ULONG RegMachineWon;
     /* The driver's controllers, for the machine-wide serial check
      * (hcd_pdo.c, hcdSerialLock). */
     struct _HCD_CONTROLLER *SerialNext;
