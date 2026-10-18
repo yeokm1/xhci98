@@ -398,6 +398,10 @@ VOID CmReenumLossEnd(struct _CM_NHI *nhi);
  * the connection-manager thread.
  */
 BOOLEAN CmReenumRetire(struct _CM_NHI *nhi, ULONG i, PULONG answers);
+/* 98 SE and ME: the members behind the barrier, whose re-enumeration the
+ * worker holds (CmCfgwkHold) until it is lifted; nothing on NT, whose
+ * calls cmReenumAll and the service skip themselves. */
+VOID CmReenumHold(struct _CM_NHI *nhi, ULONG members);
 BOOLEAN CmReenumRetired(struct _CM_NHI *nhi, ULONG i, ULONG answers);
 
 VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,
@@ -469,6 +473,10 @@ VOID CmCfgwkUnavailable(struct _CM_CFGWK *w, ULONG active);
  * devnode removed or found absent, nothing refused or undecided) with no
  * newer one owed. <= DISPATCH_LEVEL. */
 VOID CmCfgwkGone(struct _CM_CFGWK *w, ULONG members, ULONG active);
+/* The members whose re-enumeration the worker defers (record 22 section
+ * 7.7's retirement barrier): a request for one stays owed, retried, until
+ * a later call lifts it. <= DISPATCH_LEVEL. */
+VOID CmCfgwkHold(struct _CM_CFGWK *w, ULONG members);
 ULONG CmCfgwkRetired(struct _CM_CFGWK *w);
 
 /* Ends the worker: waits for it when it is between calls (and frees it);

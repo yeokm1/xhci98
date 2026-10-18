@@ -527,8 +527,14 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     if (seq == filter->ChangeSeq) {
         filter->Unsettled = 0;
         /* An answer to a query begun after the last change: what the
-         * recovery's retirement proof counts (CmReenumRetired). */
+         * recovery's retirement proof counts (CmReenumRetired), with
+         * whether that same answer was complete and reported nothing. */
         filter->RelAnswers++;
+        filter->RelEmptyAt = count == 0 ? filter->RelAnswers : 0;
+    } else if (count != 0) {
+        /* An older query's answer that still reports a function: no
+         * proof of absence stands past it. */
+        filter->RelEmptyAt = 0;
     }
     for (i = 0; i < count; i++) {
         filter->Snap[i] = now[i];
@@ -1033,7 +1039,8 @@ static VOID cmAskBaselines(PCM_NHI nhi)
         KeAcquireSpinLock(&cmRegLock, &irql);
         f = cmRegFind(r->Port[i].Bdf);
         if (f != NULL && f->Owner == nhi && !f->Baseline &&
-            f->Serial != r->Port[i].AskedSerial) {
+            f->Serial != r->Port[i].AskedSerial &&
+            (nhi->RecBarred & (1UL << i)) == 0) {
             serial = f->Serial;
         }
         KeReleaseSpinLock(&cmRegLock, irql);
@@ -1158,10 +1165,12 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
             }
             continue;
         }
-        if (action->Why == TBT_ICM_WHY_RECOVERED &&
-            (nhi->RecBarred & (1UL << i)) != 0) {
+        if ((nhi->RecBarred & (1UL << i)) != 0) {
             /* Record 22 section 7.7 part 4: a member behind the
-             * retirement barrier gets its removal-only request alone. */
+             * retirement barrier gets its removal-only request alone
+             * (CmReenumRetire); the change is owed to it once the
+             * barrier is lifted. */
+            r->Port[i].Missed = 1;
             continue;
         }
         /* stor98's UP for what the call is about to expose (cm_nvlink.h,
@@ -1725,6 +1734,7 @@ VOID CmReenumService(PCM_NHI nhi)
      * the debt stays until a call is actually made. */
     for (i = 0; i < r->Members && r->Reenum != 0; i++) {
         if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE) &&
+            (nhi->RecBarred & (1UL << i)) == 0 &&
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS) {
             r->Port[i].MissedAt = cmNow(nhi);
             (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE,
@@ -2043,6 +2053,7 @@ BOOLEAN CmReenumRetire(PCM_NHI nhi, ULONG i, PULONG answers)
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
         CmNvlinkAwait(nhi);
         r->WkActive = cmOwnedMask(nhi);
+        CmCfgwkHold(r->Wk, nhi->RecBarred);
         CmCfgwkGone(r->Wk, 1UL << i, r->WkActive);
         CmLogNote(nhi, "cm.reenum.9x.retire", i);
         return TRUE;
@@ -2070,8 +2081,10 @@ BOOLEAN CmReenumRetired(PCM_NHI nhi, ULONG i, ULONG answers)
         /* Where a child filter of this driver sat on the endpoint's PDO,
          * its own observation of the removal (ChildLive back to 0) as
          * well as the settled answer that no longer reports it. */
-        done = (BOOLEAN)(f->RelAnswers != answers && f->SnapCount == 0 &&
-                         !f->SnapTruncated && f->ChildLive == 0);
+        done = (BOOLEAN)(f->RelEmptyAt != 0 && f->RelEmptyAt != answers &&
+                         f->RelEmptyAt - answers < 0x80000000UL &&
+                         f->SnapCount == 0 && !f->SnapTruncated &&
+                         f->ChildLive == 0);
         KeReleaseSpinLock(&cmRegLock, irql);
         cmRegRelease(f);
         return done;
@@ -2080,4 +2093,11 @@ BOOLEAN CmReenumRetired(PCM_NHI nhi, ULONG i, ULONG answers)
         return (BOOLEAN)((CmCfgwkRetired(r->Wk) & (1UL << i)) != 0);
     }
     return FALSE;
+}
+
+VOID CmReenumHold(PCM_NHI nhi, ULONG members)
+{
+    if (nhi->Reenum.Route == CM_ROUTE_CONFIGMG && nhi->Reenum.Wk != NULL) {
+        CmCfgwkHold(nhi->Reenum.Wk, members);
+    }
 }

@@ -42,10 +42,6 @@
 #include "cm.h"
 #include "cm_nvlink.h"
 
-/* PCI Command (PCI 3.0 6.2.2), the only configuration word written here. */
-#define CM_PCI_COMMAND            0x04UL
-#define CM_PCI_COMMAND_BUS_MASTER 0x0004U
-
 /* 100 ns units per millisecond, for the relative due times. */
 #define CM_CLOCK_UNITS_PER_MS 10000UL
 /* The most ticks one clock read counts: 2^32 us / 15625 us at the usual
@@ -152,12 +148,18 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
 ULONG CmCfgRead32(PCM_NHI nhi, ULONG offset)
 {
     UCHAR b[4];
+    ULONG v;
 
     if (!cmConfig(nhi, TRUE, b, offset, 4)) {
         return 0xFFFFFFFFUL;
     }
-    return (ULONG)b[0] | ((ULONG)b[1] << 8) | ((ULONG)b[2] << 16) |
-           ((ULONG)b[3] << 24);
+    v = (ULONG)b[0] | ((ULONG)b[1] << 8) | ((ULONG)b[2] << 16) |
+        ((ULONG)b[3] << 24);
+    if (v == 0xFFFFFFFFUL && (nhi->AccessClass == CM_ACCESS_PREPARE ||
+                              nhi->AccessClass == CM_ACCESS_RECOVERY)) {
+        nhi->RecOnes = 1;
+    }
+    return v;
 }
 
 /* One word, so a write of the command register leaves the status
@@ -254,6 +256,7 @@ BOOLEAN CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on)
 static ULONG cmBarRead(PVOID context, ULONG offset)
 {
     PCM_NHI nhi;
+    ULONG v;
 
     nhi = (PCM_NHI)context;
     if (nhi->BarVa == NULL || offset > nhi->BarLength - 4 || (offset & 3)) {
@@ -263,7 +266,14 @@ static ULONG cmBarRead(PVOID context, ULONG offset)
         nhi->Live.Counters.RefusedReads++;
         return 0xFFFFFFFFUL;
     }
-    return READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    v = READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    if (v == 0xFFFFFFFFUL && (nhi->AccessClass == CM_ACCESS_PREPARE ||
+                              nhi->AccessClass == CM_ACCESS_RECOVERY)) {
+        /* Record 22 section 7.7 part 5: an outage seen inside a USB4
+         * recovery's attempt is that episode's all-ones probe. */
+        nhi->RecOnes = 1;
+    }
+    return v;
 }
 
 static VOID cmBarWrite(PVOID context, ULONG offset, ULONG value)
@@ -285,11 +295,18 @@ static VOID cmBarWrite(PVOID context, ULONG offset, ULONG value)
 
 ULONG CmThrProbe32(PCM_NHI nhi, ULONG offset)
 {
+    ULONG v;
+
     if (nhi->BarVa == NULL || offset > nhi->BarLength - 4 || (offset & 3) ||
         !CmLiveAdmits(&nhi->Live, CM_ACCESS_PROBE)) {
         return 0xFFFFFFFFUL;
     }
-    return READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    v = READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    if (v == 0xFFFFFFFFUL && (nhi->Live.State == CM_LIVE_PREPARING ||
+                              nhi->Live.State == CM_LIVE_RECOVERING)) {
+        nhi->RecOnes = 1;
+    }
+    return v;
 }
 
 /* TBT_HOST.Cancelled: the gate closed for the current class. */

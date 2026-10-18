@@ -142,6 +142,8 @@ typedef struct _CM_CFGWK {
     ULONG NoScan;           /* members whose next re-enumeration reads no
                                configuration space (no vanished-child
                                scan): CONTROLLER_UNAVAILABLE's           */
+    ULONG Hold;             /* members whose re-enumeration is held: the
+                               recovery's retirement barrier (CmCfgwkHold) */
     ULONG GoneClean;        /* members whose last CONTROLLER_UNAVAILABLE
                                removal resolved with every recorded
                                devnode removed or absent (CmCfgwkRetired,
@@ -875,6 +877,17 @@ static ULONG cmWkIdHash(const char *id)
 
 /* TRUE while member i owes CONTROLLER_UNAVAILABLE's removal (read now,
  * under the lock). */
+static BOOLEAN cmWkHeld(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    BOOLEAN held;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    held = (BOOLEAN)((w->Hold & (1UL << i)) != 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return held;
+}
+
 static BOOLEAN cmWkGoneOwed(PCM_CFGWK w, ULONG i)
 {
     KIRQL irql;
@@ -1933,9 +1946,10 @@ static VOID cmWkThread(PVOID context)
                     !cmWkCurrent(w, i, gen[i])) {
                     continue;
                 }
-                if (cmWkGoneOwed(w, i)) {
-                    /* Its CONTROLLER_UNAVAILABLE removal is still owed:
-                     * no re-enumeration before it, tried again later. */
+                if (cmWkGoneOwed(w, i) || cmWkHeld(w, i)) {
+                    /* Its CONTROLLER_UNAVAILABLE removal is still owed,
+                     * or its barrier stands: no re-enumeration before
+                     * it, tried again later. */
                     failed |= 1UL << i;
                     failedVanish |= vanish & (1UL << i);
                     continue;
@@ -2115,12 +2129,33 @@ VOID CmCfgwkPost(PCM_CFGWK w, ULONG reenum, ULONG vanish, ULONG active,
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
+static VOID cmWkGoneReq(PCM_CFGWK w, ULONG members, ULONG active,
+                        BOOLEAN reenum);
+
 VOID CmCfgwkUnavailable(PCM_CFGWK w, ULONG active)
 {
-    CmCfgwkGone(w, active, active);
+    cmWkGoneReq(w, active, active, TRUE);
 }
 
 VOID CmCfgwkGone(PCM_CFGWK w, ULONG members, ULONG active)
+{
+    /* Removal only: no re-enumeration is asked (the barrier's member is
+     * re-enumerated by the change that lifts it). */
+    cmWkGoneReq(w, members, active, FALSE);
+}
+
+VOID CmCfgwkHold(PCM_CFGWK w, ULONG members)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    w->Hold = members;
+    KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&w->Lock, irql);
+}
+
+static VOID cmWkGoneReq(PCM_CFGWK w, ULONG members, ULONG active,
+                        BOOLEAN reenum)
 {
     KIRQL irql;
     ULONG i;
@@ -2137,7 +2172,9 @@ VOID CmCfgwkGone(PCM_CFGWK w, ULONG members, ULONG active)
     }
     /* The re-enumeration after the removal reads no configuration space:
      * no vanished-child scan, here or in a coalesced earlier request. */
-    w->ReqReenum |= members;
+    if (reenum) {
+        w->ReqReenum |= members;
+    }
     w->ReqVanish &= ~members;
     w->NoScan |= members;
     w->Retry &= ~members;

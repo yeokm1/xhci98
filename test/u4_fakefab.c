@@ -1770,11 +1770,20 @@ void fabPowerCycle(FAB *f)
 void fabResetHost(FAB *f)
 {
     unsigned a;
+    unsigned long lane[FAB_MAX_ADP];
+    unsigned long cs4[FAB_MAX_ADP];
 
+    /* The router's configuration and paths reset; its lane adapters keep
+     * the link as trained (the link itself stayed up), Lock set again. */
+    for (a = 1; a <= f->R[0].MaxAdp && a < FAB_MAX_ADP; a++) {
+        lane[a] = f->R[0].Adp[a].Cs[FAB_CAP_LANE + 1];
+        cs4[a] = f->R[0].Adp[a].Cs[4];
+    }
     fabResetRouter(f, 0);
-    for (a = 1; a <= f->R[0].MaxAdp; a++) {
+    for (a = 1; a <= f->R[0].MaxAdp && a < FAB_MAX_ADP; a++) {
         if (f->R[0].Adp[a].Present && (f->R[0].Adp[a].Cs[2] & 0xFFFFFFUL) == 1) {
-            f->R[0].Adp[a].Cs[4] |= 0x80000000UL;
+            f->R[0].Adp[a].Cs[FAB_CAP_LANE + 1] = lane[a];
+            f->R[0].Adp[a].Cs[4] = cs4[a] | 0x80000000UL;
         }
     }
     f->TxCtrl = 0;

@@ -76,6 +76,12 @@
 
 /* The connection-manager thread's work (CM_NHI.WorkBits), taken in this
  * order on each wake (cm_thr.c). */
+/* PCI Command (PCI 3.0 6.2.2): the configuration word cm_thr.c writes for
+ * Bus Master, and a USB4 recovery's preparation for Memory Space too
+ * (record 22 section 7.7 part 2). */
+#define CM_PCI_COMMAND            0x04UL
+#define CM_PCI_COMMAND_BUS_MASTER 0x0004U
+
 #define CM_WORK_SYSTEM 0x01UL  /* complete the system power IRP            */
 #define CM_WORK_D3     0x02UL  /* a device power IRP below D0              */
 #define CM_WORK_D0     0x04UL  /* a device power IRP to D0, after the bus  */
@@ -307,6 +313,13 @@ typedef struct _CM_NHI {
     ULONG RecRetireAtMs[XHCI_TBT_MAX_TUNNELS];
     ULONG RecRetireAns[XHCI_TBT_MAX_TUNNELS];
     ULONG RecUpValid;       /* U4UpValid as the containment found it      */
+    ULONG RecOnes;          /* an all-ones read inside the attempt
+                               (cm_thr.c latches it under PREPARE and
+                               RECOVERY): part 5's Rearm                  */
+    ULONG RecBusChanged;    /* members whose buses step 6 found changed:
+                               their old entries are released once the
+                               barrier is lifted (R8a)                    */
+    ULONG RecOldBus[XHCI_TBT_MAX_TUNNELS];
     /* Decision U27: the bind (1) or the resume (2) the loss interrupted;
      * the stage is then CM_STAGE_FAILED, sampled and recovered as ACTIVE
      * is, never a protocol failure's (0). */
@@ -508,6 +521,9 @@ typedef struct _CM_FILTER {
                                recovery's retirement proof (record 22
                                section 7.7 part 4) wants one after its
                                removal-only request                       */
+    ULONG RelEmptyAt;       /* the RelAnswers value of the last settled
+                               answer that was complete and reported no
+                               PDO, 0 once a later answer reported one   */
     ULONG ChildLive;        /* child filters attached below and not yet
                                removed (CmRegChildRemoved): that proof
                                waits for each one's own removal           */

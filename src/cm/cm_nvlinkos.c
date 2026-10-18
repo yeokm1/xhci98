@@ -1675,3 +1675,30 @@ VOID CmNvlinkRetireMember(PCM_NHI nhi, ULONG bridge)
     CmLogNote(nhi, "cm.nvlink.retire", bridge);
     (VOID)cmNvMarkEx(nhi, bridge, CM_NVLINK_LOST, TRUE);
 }
+
+VOID CmNvlinkReleaseBus(PCM_NHI nhi, ULONG bus)
+{
+    ULONG i;
+    ULONG n;
+    KIRQL irql;
+
+    if (cmNvTable == NULL || bus == 0 || bus > 0xFFUL) {
+        return;
+    }
+    n = 0;
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if (cmNvTable->Entry[i].BusNumber == bus &&
+            (cmNvTable->Entry[i].Flags & STOR98LS_IN_USE) != 0 &&
+            (cmNvTable->Entry[i].Flags & STOR98LS_UP) == 0 &&
+            (cmNvShadow[i].Owner == NULL || cmNvShadow[i].Owner == nhi) &&
+            !cmNvShadow[i].Waiting) {
+            cmNvTable->Entry[i].Flags = 0;
+            cmNvShadow[i].Owner = NULL;
+            cmNvShadow[i].Bridge = 0;
+            n++;
+        }
+    }
+    KeReleaseSpinLock(&cmNvLock, irql);
+    CmLogNote(nhi, "cm.nvlink.release-bus", (bus << 16) | n);
+}

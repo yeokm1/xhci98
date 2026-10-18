@@ -516,6 +516,12 @@ VOID CmNvlinkLost(struct _CM_NHI *nhi);
  * unchanged: no DOWN_QUIESCED, no increment, nothing published. */
 ULONG CmNvlinkUpCount(struct _CM_NHI *nhi, ULONG bridge);
 VOID CmNvlinkRetireMember(struct _CM_NHI *nhi, ULONG bridge);
+/* R8a, after the retirement of the devnodes of a member whose secondary
+ * bus changed: every entry of this domain's (or of none) on the old bus
+ * `bus` that is not UP is freed (Flags 0), its shadow forgotten, so the
+ * rebuild's exposure on the new bus takes a free entry and the old ones
+ * do not stay allocated. */
+VOID CmNvlinkReleaseBus(struct _CM_NHI *nhi, ULONG bus);
 
 /* The host interface lost, every operating system (cm_reenum.c
  * CmReenumLossBegin): the deferred scans of buses an exposure found silent

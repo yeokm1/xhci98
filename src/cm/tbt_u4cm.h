@@ -338,6 +338,15 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN RebuildUsb3;
     BOOLEAN RemovalDebt;
     BOOLEAN Barred;
+    /* RecDrain*: a recovery's drain of that tunnel did not complete (HELD,
+     * quarantined): the next attempt owes it again. RecVerified: bit 0
+     * PCIe, bit 1 USB3 - verified and kept by this attempt, the only
+     * tunnels TbtU4RecoverDemote may drain. Discovered: section 9.2's
+     * discovery ran for the port (a recovery discovers one it never did). */
+    BOOLEAN RecDrainPcie;
+    BOOLEAN RecDrainUsb3;
+    UCHAR RecVerified;
+    BOOLEAN Discovered;
 } TBT_U4_PORT, *PTBT_U4_PORT;
 
 /* A router below depth 1 a predecessor configured (section 7.1). */
@@ -597,6 +606,7 @@ typedef struct _TBT_U4CM {
     BOOLEAN Recovering;     /* TbtU4Recover's work: the core's gate open
                                for it alone (decision U26) */
     BOOLEAN RecoverRings;   /* this attempt restarted the rings */
+    ULONG SnapDeferred[TBT_U4_MAX_PORTS];   /* tails abandoned at containment */
     BOOLEAN RelockExplained;/* the host router was enumerated afresh by the
                                recovery: its lane 0 Lock set again is its
                                own reset, not removal evidence */
