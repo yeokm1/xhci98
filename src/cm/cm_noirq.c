@@ -1287,10 +1287,24 @@ VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res)
         break;
     case CM_NI_OP_READY:
         d->ReadyTried = 1;
+        if (res->Cr == CM_NI_CR_NO_SUCH_DEVNODE ||
+            res->Cr == CM_NI_CR_INVALID_DEVNODE) {
+            niForget(m, d);
+            break;
+        }
+        if (res->Cr != CM_NI_CR_SUCCESS) {
+            niFail(m, d, CM_NI_W_STEP, res->Cr, 0, 0);
+            d->Txn++;
+            break;
+        }
         d->Step = NI_AT_WAIT;
         break;
     case CM_NI_OP_LINE:
-        d->Line = res->Val[0] & 0xFFUL;
+        /* Started (the status read before it said so); the line only
+         * where it was read - the diagnostic's step word says which. */
+        if (res->Cr == CM_NI_CR_SUCCESS) {
+            d->Line = res->Val[0] & 0xFFUL;
+        }
         d->State = CM_NI_S_DONE;
         d->Step = 0;
         m->C.Started++;

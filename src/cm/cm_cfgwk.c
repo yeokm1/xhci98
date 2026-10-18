@@ -232,6 +232,7 @@ typedef struct _CM_CFGWK {
     ULONG PciHeld;          /* the members' ReqGone | NoScan as the walk in
                                progress began (cmWkQpVxd)                */
     ULONG NoIrq;            /* XhciCmNoIrqStart as the start read it      */
+    ULONG NiActive;         /* the claim the no-IRQ state belongs to      */
     ULONG NiBase;           /* the no-IRQ clock's origin (tick count)     */
     CM_WK_NI_NODE NiStack[CM_WK_NI_STACK];
     CM_CFGMG Cfgmg;
@@ -1982,6 +1983,11 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
                     ok = 0;
                 }
             }
+            /* The gate again: Get_Device_ID may have blocked. */
+            if (ok && !cmWkNiGate(w, i)) {
+                complete = 0;
+                break;
+            }
             bus = ok ? cmWkNiSecondary(w, p->Bdf, cur.ParentBdf) : 0;
             if (bus == 0) {
                 ok = 0;
@@ -1990,6 +1996,9 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
             }
         }
         if (!ok) {
+            /* Present but not placed: the walk cannot prove the others
+             * gone, so nothing is forgotten by it. */
+            complete = 0;
             CmNiUnresolved(&p->Ni);
             continue;
         }
@@ -2260,6 +2269,10 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
     ctx.Stor98 = CM_NI_STOR98_FAILED;
     if (ctx.Gate && CmNiWindow(m)) {
         cmWkNiWalk(w, i);
+        /* The walk's calls may have blocked: the clock and the gate as
+         * they are now. */
+        ctx.Now = cmWkSince(w->NiBase);
+        ctx.Gate = cmWkNiGate(w, i);
     }
     CmNiPass(m, &ctx);
     if (ctx.Gate) {
@@ -2467,13 +2480,16 @@ static VOID cmWkPciServe(PCM_CFGWK w, PCM_CFGWK_PCI req)
     } else {
         reason = CM_QP_NR_GUARD;
     }
+    /* One snapshot for both: the members held for this answer, and the
+     * ones whose later loss stops the reads below (cmWkQpVxd). */
     held = 0;
     KeAcquireSpinLock(&w->Lock, &irql);
     w->PciHeld = w->ReqGone | w->NoScan;
     KeReleaseSpinLock(&w->Lock, irql);
     for (p = 0; p < in.PortCount && p < CM_QP_MAX_PORTS; p++) {
         for (i = 0; i < w->Members; i++) {
-            if (w->Port[i].Bdf == in.Ports[p].Bdf && cmWkNoCfg(w, i)) {
+            if (w->Port[i].Bdf == in.Ports[p].Bdf &&
+                (w->PciHeld & (1UL << i)) != 0) {
                 held |= 1UL << p;
             }
         }
@@ -2642,6 +2658,7 @@ static VOID cmWkThread(PVOID context)
     ULONG goneRc;
     ULONG seq[XHCI_TBT_MAX_TUNNELS];
     ULONG i;
+    ULONG lostClaim;
     PCM_CFGWK_PCI pci;
     BOOLEAN open;
     BOOLEAN go;
@@ -2681,6 +2698,10 @@ static VOID cmWkThread(PVOID context)
          * the one the worker took (its sequence) is taken again: the
          * retained set merged into the owed one. */
         w->ReqGone &= w->Active;
+        /* Record 28: a lost claim ends the member's no-IRQ state and its
+         * journal (retired below, outside the lock; nothing freed). */
+        lostClaim = w->NiActive & ~w->Active;
+        w->NiActive = w->Active;
         take = 0;
         for (i = 0; i < w->Members; i++) {
             seq[i] = w->GoneSeq[i];
@@ -2715,6 +2736,12 @@ static VOID cmWkThread(PVOID context)
         KeReleaseSpinLock(&w->Lock, irql);
 
         cmWkOp(w, CM_WK_NO_OP, 0);
+        for (i = 0; i < w->Members; i++) {
+            if ((lostClaim & (1UL << i)) != 0) {
+                cmWkLog(w, "cm.reenum.9x.noirq.claim-lost", w->Port[i].Bdf);
+                CmNiInit(&w->Port[i].Ni, w->Port[i].Bdf);
+            }
+        }
         if (open) {
             cmWkOpen(w);
         }
@@ -2976,6 +3003,7 @@ PCM_CFGWK CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf, ULONG members,
     w->Active = active;
     w->Numbering = numbering;
     w->NoIrq = noIrq;
+    w->NiActive = active;
     w->NiBase = cmWkNowTicks();
     w->OpenState = CM_CFGWK_OPEN_PENDING;
     w->OpMember = CM_WK_NO_OP;

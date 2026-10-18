@@ -914,6 +914,31 @@ static VOID test_budgets_and_late(VOID)
     pass();
     CHECK_EQ(why(), CM_NI_W_TIMEOUT, "timeout");
     CHECK_EQ(mem.C.Unstarted, 1, "still unstarted");
+    /* A READY refused: FAILED at that step, its code kept. */
+    model();
+    f.StartOnReprocess = 0;
+    f.FailKind = CM_NI_OP_READY;
+    f.FailCr = CM_NI_CR_FAILURE;
+    start();
+    pass();
+    ctx.Now += CM_NI_READY_AFTER_MS + 1;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_STEP, "READY refused: failed");
+    CHECK_EQ(mem.Dev[0].LastStep, CM_NI_OP_READY, "at READY");
+    CHECK_EQ(mem.Dev[0].LastCr, CM_NI_CR_FAILURE, "its code");
+    /* A line read refused after the start: DONE, the line not taken. */
+    model();
+    f.FailKind = CM_NI_OP_LINE;
+    f.FailCr = CM_NI_CR_FAILURE;
+    f.Hdr[15] = 0x000001FFUL;
+    start();
+    pass();
+    ctx.Now += 200;
+    pass();
+    CHECK_EQ(st(), CM_NI_S_DONE, "started");
+    CHECK_EQ(mem.Dev[0].LastStep, CM_NI_OP_LINE, "the line step");
+    CHECK_EQ(mem.Dev[0].LastCr, CM_NI_CR_FAILURE, "not read");
+    CHECK_EQ(mem.Dev[0].Line, 0xFF, "the header's line kept");
     /* The window closing does not end an ATTEMPTED entry. */
     model();
     f.StartOnReprocess = 0;
