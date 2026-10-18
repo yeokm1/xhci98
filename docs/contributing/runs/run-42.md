@@ -29,9 +29,10 @@ their sizes and SHA-256s now in `docs/references/README.md`), the DDK's
 `HELP_WIN98DDK.CHM` (extracted with 7-Zip and searched: no device-installer
 page), the DDK's `net\ipnew` and `plugplay\custom` samples, and the Open
 Watcom 2.0 install at `C:\WATCOM` (its 16-bit compiler, `wlink`, `wrc`,
-`h\win\windows.h`, `lib286\win\windows.lib`). Both records go to
-review before their code tasks; their status lines record the
-revisions.
+`h\win\windows.h`, `lib286\win\windows.lib`). Both records were
+reviewed and revised until the review converged, the same day (record
+26 at draft 7, record 27 at draft 6); their status lines record what
+each revision changed.
 
 Owed to the code tasks: record 23's revision (record 26 section 12), the
 section 2a provenance entry for `XHCIDI.EXE` with its first build (record
