@@ -103,7 +103,12 @@ static ULONG tbtU4Now(PTBT_U4CM cm)
  * to the first. */
 static BOOLEAN tbtU4Off(PTBT_U4CM cm)
 {
+    /* A recovery that could not hold an entry of unestablished ownership
+     * unwritten (RecReserveFull) is ended at once: no further request,
+     * and no nested teardown at a safe point, may write it. The failure
+     * path's ring stop does not pass through here. */
     return (BOOLEAN)((cm->Contained && !cm->Recovering) ||
+                     (cm->Recovering && cm->RecReserveFull) ||
                      (cm->Host->Cancelled != NULL &&
                       cm->Host->Cancelled(cm->Host->Context)));
 }
