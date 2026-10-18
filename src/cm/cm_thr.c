@@ -90,6 +90,11 @@ static NTSTATUS cmConfigOnce(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
             p[i] = fill;
         }
     }
+    if (nhi->Live.Revoked) {
+        /* Read again before each request: a surprise removal during the
+         * first of a strict read's two stops the second. */
+        return STATUS_DEVICE_REMOVED;
+    }
     irp = IoAllocateIrp(nhi->Common.Pdo->StackSize, FALSE);
     if (irp == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
