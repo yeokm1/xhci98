@@ -438,6 +438,19 @@ try {
         [System.IO.File]::WriteAllText($mfStaged, $mfText, $ascii)
         $r = Invoke-Gate -Path $path -Extra @("-ManifestPath", $mfStaged)
         Assert-True ($r.ExitCode -eq 0) ("mfgood : the production manifest disagrees with the header:`n" + $r.Output)
+        # A relative -ManifestPath is PowerShell's location's, not the
+        # process directory's: run the gate after Set-Location into the
+        # staging directory, from a process started elsewhere.
+        $mfCmd = "Set-Location -LiteralPath '{0}'; & '{1}' -InfPath '{2}' -ManifestPath 'xhcitr.manifest'; exit `$LASTEXITCODE" -f $script:work, $gate, $path
+        $saved = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $mfRelOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $mfCmd 2>&1 | Out-String
+            $mfRelExit = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $saved
+        }
+        Assert-True ($mfRelExit -eq 0) ("mfrelative : a relative -ManifestPath after Set-Location was not found or read:`n" + $mfRelOut)
         $mfActive = '(?m)^[ \t]*<assemblyIdentity version="[\d.]+" processorArchitecture="\*" name="xhci98\.xhcitr" type="win32"/>\r?\n'
         if ($mfText -notmatch '<assemblyIdentity version="([\d.]+)" processorArchitecture="\*" name="xhci98\.xhcitr"') {
             throw "mf : the production manifest's active identity is not in the shape these cases mutate."

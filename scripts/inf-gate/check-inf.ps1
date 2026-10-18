@@ -724,7 +724,10 @@ if (-not (Test-SectionExists $inf "Version")) {
                 $mfDoc.XmlResolver = $null
                 $mfParsed = $true
                 try {
-                    $mfDoc.Load($mfPath)
+                    # XmlDocument.Load resolves a relative path against the
+                    # process directory, not PowerShell's location, so hand it
+                    # the provider path Test-Path accepted.
+                    $mfDoc.Load((Resolve-Path -LiteralPath $mfPath).ProviderPath)
                 } catch {
                     $mfParsed = $false
                     Add-Failure "BOTH-VERSION" ("{0} is not well-formed XML, so its version cannot be read: {1}" -f $mfName, $_.Exception.Message)
