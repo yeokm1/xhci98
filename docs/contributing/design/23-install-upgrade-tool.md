@@ -1585,10 +1585,14 @@ after it, reports what was done, and tells the user to restart and run
    read, and `xhcicm` is removed from each value that names it, the other
    names kept in order and the value deleted with a zero length when
    nothing else is in it, each read back. Then the service's `Marks`
-   records, the service (`DeleteService`) and its `system32` copy (the
-   delayed deletion when in use) go. A stop that times out, a listing
-   that does not reach its end, a value that cannot be read or a removal
-   that does not read back fails step 0: the run stops before step 1 with
+   records go, then its `system32` copy (one in use renamed to
+   `<name>.DEL` and that name deleted at the restart, so a later install
+   of the same name is not deleted with it; an earlier `.DEL` deleted or
+   its deletion asked again), and only then the service itself
+   (`DeleteService`). A stop that times out, a listing
+   that does not reach its end, a value that cannot be read, a removal
+   that does not read back, or a copy that can be neither deleted nor
+   scheduled for deletion fails step 0: the run stops before step 1 with
    "steps left", keeping `xhcicm`'s service and file, the mark service's
    registration and its records, and the next run resumes from what is
    left. The same step runs at the end of any install or update that

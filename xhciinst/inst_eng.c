@@ -2513,6 +2513,13 @@ int inst_eng_rows(INST_ROW *rows, int cap)
                     r->Same = 0;
                 }
             }
+            /* A machine-wide value that is not a number wins with a
+             * fallback not known here: no value is shown as in force, the
+             * row starts in the mixed state (writing nothing) and any
+             * value chosen is written over it. */
+            if (r->MwState == -1) {
+                r->Same = 0;
+            }
         }
         n++;
     }
@@ -2662,9 +2669,12 @@ static void write_values(void)
         RegCloseKey(k);
         if (disp == REG_CREATED_NEW_KEY) {
             logonly("made HKLM\\%s\n", INST_MW_KEY);
+            flagChanged = 1;
         }
     } else {
-        logonly("HKLM\\%s could not be made\n", INST_MW_KEY);
+        out("The machine-wide key HKLM\\%s could not be made.\n",
+            INST_MW_KEY);
+        flagFailed = 1;
     }
     for (v = 0; v < instValueCount && v < INST_MAX_VALUES; v++) {
         if (!answerSet[v] || value_inf(v) == NULL) {
@@ -9281,8 +9291,29 @@ static int mk_delete_copy(void)
     inst_copy(del, path, sizeof(del));
     del[strlen(del) - 4] = '\0';
     inst_copy(del + strlen(del), ".DEL", sizeof(del) - strlen(del));
-    if (!file_exists(path, NULL)) {
+    /* An earlier run's .DEL: deleted now, or its deletion at the restart
+     * asked again; one that is neither keeps the registration. */
+    if (file_state(del) != 0) {
+        SetFileAttributesA(del, FILE_ATTRIBUTE_NORMAL);
+        if (!DeleteFileA(del) &&
+            (moveEx == NULL || !moveEx(del, NULL, MOVEFILE_DELAY_UNTIL_REBOOT))) {
+            out("%s could not be deleted (error %lu).\n", del,
+                (unsigned long)GetLastError());
+            return 0;
+        }
+        if (file_state(del) != 0) {
+            flagRestart = 1;
+        }
+    }
+    switch (file_state(path)) {
+    case 0:
         return 1;
+    case 1:
+        break;
+    default:
+        out("%s could not be read (error %lu).\n", path,
+            (unsigned long)GetLastError());
+        return 0;
     }
     SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
     if (DeleteFileA(path)) {
@@ -9291,14 +9322,15 @@ static int mk_delete_copy(void)
         return 1;
     }
     if (moveEx != NULL && moveEx(path, del, MOVEFILE_REPLACE_EXISTING)) {
-        flagChanged = 1;
         if (moveEx(del, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
             out("%s is in use; it is deleted at the restart.\n", path);
+            flagChanged = 1;
             flagRestart = 1;
-        } else {
-            out("%s is in use; delete %s after the restart.\n", path, del);
+            return 1;
         }
-        return 1;
+        /* Nothing would delete it: its own name back, and the step
+         * fails with the registration kept. */
+        (void)moveEx(del, path, 0);
     }
     out("%s could not be deleted (error %lu).\n", path,
         (unsigned long)GetLastError());
