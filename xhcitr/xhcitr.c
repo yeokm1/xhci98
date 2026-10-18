@@ -542,19 +542,11 @@ static void lv_value(HKEY k, const char *name, TR_RVAL *v)
     DWORD n = sizeof(value);
     LONG r = RegQueryValueExA(k, name, NULL, &type, (LPBYTE)&value, &n);
 
-    v->Value = 0;
-    if (r == ERROR_FILE_NOT_FOUND) {
-        v->State = TR_RV_ABSENT;
-    } else if (r == ERROR_MORE_DATA) {
-        v->State = TR_RV_OTHER;
-    } else if (r != ERROR_SUCCESS) {
-        v->State = TR_RV_UNREAD;
-    } else if (type == REG_DWORD && n == sizeof(value)) {
-        v->State = TR_RV_DWORD;
-        v->Value = value;
-    } else {
-        v->State = TR_RV_OTHER;
-    }
+    tr_rv_from_query(r == ERROR_SUCCESS ? TR_Q_OK
+                     : r == ERROR_FILE_NOT_FOUND ? TR_Q_NOT_FOUND
+                     : r == ERROR_MORE_DATA ? TR_Q_MORE_DATA
+                                            : TR_Q_ERROR,
+                     (TR_U32)type, (TR_U32)n, (TR_U32)value, v);
 }
 
 /* A driver's level value in the machine-wide key (task 42-A.17): absent

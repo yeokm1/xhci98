@@ -238,21 +238,44 @@ Function SubKeysProbe()
     SubKeysProbe = s
 End Function
 
+' 0 when the value is not there (RegRead's "file not found" or "path not
+' found"), 1 when it was read into v, 2 when it is there in a type
+' RegRead cannot read (a REG_QWORD, for one): the driver then reads
+' "another type" and its default stands.
+Function ReadState(path, v)
+    Dim n
+    On Error Resume Next
+    Err.Clear
+    v = sh.RegRead(path)
+    n = Err.Number
+    Err.Clear
+    If n = 0 Then
+        ReadState = 1
+    ElseIf n = &H80070002 Or n = &H80070003 Then
+        ReadState = 0
+    Else
+        ReadState = 2
+    End If
+End Function
+
 ' Whether the machine-wide value is there, in any type: then it is the one
 ' every controller uses.
 Function MachineSet()
-    Dim v, ok
-    v = ReadValue(MACHINE_KEY & VALUE_NAME, ok)
-    MachineSet = ok
+    Dim v
+    MachineSet = (ReadState(MACHINE_KEY & VALUE_NAME, v) <> 0)
 End Function
 
 ' What the driver makes of one value: only a DWORD is read, and since
 ' 2.3.0.0 a missing one is off.
 Function DescribeAt(path)
-    Dim v, ok, t
-    v = ReadValue(path, ok)
-    If Not ok Then
+    Dim v, st, t
+    st = ReadState(path, v)
+    If st = 0 Then
         DescribeAt = "not set - off (a missing value is read as 0)"
+        Exit Function
+    End If
+    If st = 2 Then
+        DescribeAt = "set, in a type this script cannot read - off (the driver reads only a DWORD)"
         Exit Function
     End If
     t = VarType(v)
@@ -268,10 +291,9 @@ Function DescribeAt(path)
 End Function
 
 Function Describe(name)
-    Dim v, ok
+    Dim v
     If MachineSet() Then
-        v = ReadValue(base & name & "\" & VALUE_NAME, ok)
-        If ok Then
+        If ReadState(base & name & "\" & VALUE_NAME, v) <> 0 Then
             Describe = "its own value: " & DescribeAt(base & name & "\" & VALUE_NAME) & _
                 vbCrLf & "      NOT IN FORCE: the machine-wide value is used"
         Else

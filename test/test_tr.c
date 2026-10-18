@@ -2156,6 +2156,33 @@ static void test_levels(void)
      * type; the device's own is shown as not in force. */
     {
         TR_RVAL m;
+        /* A query's answer as the drivers read it: a zero-length REG_NONE
+         * is absent, a REG_NONE with data and a REG_QWORD are another
+         * type, a REG_DWORD of four bytes the DWORD. */
+        tr_rv_from_query(TR_Q_OK, 0, 0, 0, &m);
+        CHECK(m.State == TR_RV_ABSENT, "query: zero-length REG_NONE is absent");
+        tr_rv_from_query(TR_Q_OK, 0, 4, 0, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: REG_NONE with data is another type");
+        tr_rv_from_query(TR_Q_OK, 11, 4, 0, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: a short REG_QWORD is another type");
+        tr_rv_from_query(TR_Q_OK, 4, 4, 3, &m);
+        CHECK(m.State == TR_RV_DWORD && m.Value == 3, "query: a DWORD");
+        tr_rv_from_query(TR_Q_OK, 4, 2, 3, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: a 2-byte REG_DWORD is another type");
+        tr_rv_from_query(TR_Q_NOT_FOUND, 0, 0, 0, &m);
+        CHECK(m.State == TR_RV_ABSENT, "query: not found");
+        tr_rv_from_query(TR_Q_MORE_DATA, 1, 40, 0, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: too long is another type");
+        tr_rv_from_query(TR_Q_ERROR, 4, 4, 3, &m);
+        CHECK(m.State == TR_RV_UNREAD, "query: another error is not read");
+        /* A zero-length REG_NONE machine-wide leaves the device's level in
+         * force, so a Set writes the device's key (lv_set: State absent). */
+        cur.State = TR_RV_DWORD;
+        cur.Value = 3;
+        tr_rv_from_query(TR_Q_OK, 0, 0, 0, &m);
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_DEVICE && l.Level == 3,
+              "query: a zero-length REG_NONE machine-wide does not override");
         m.State = TR_RV_ABSENT;
         m.Value = 0;
         cur.State = TR_RV_ABSENT;

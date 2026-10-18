@@ -766,10 +766,11 @@ ULONG XhciPipeFastMode(ULONG value)
  * Table 6-12 derives from it, which for a code is 10 at Full and Low Speed
  * and 15 at High Speed and SuperSpeed - values an ordinary device gives
  * too. 128 to 255 ms are legal Full- and Low-Speed values, which is why it
- * is a mode a user sets. The route is not looked at (owner, 2026-10-18):
- * behind a hub, and an Interval of 0 to 2 or of 11 to 15 below High Speed,
- * are outside Table 6-12's Full- and Low-Speed range and untested ground,
- * which the refusal path below covers where a controller says so. A code
+ * is a mode a user sets. The route is not looked at (owner, 2026-10-18).
+ * Below High Speed an Interval of 0 to 2 or of 11 to 15 is outside Table
+ * 6-12's Full- and Low-Speed range 3 to 10, at any route; a Full- or
+ * Low-Speed device behind a hub is untested ground at every code. The
+ * refusal path covers either where a controller says so. A code
  * whose Interval is the one Table 6-12 already gives changes nothing. The
  * fallback is Interval 3 (1 ms), inside every speed's interrupt range and
  * at or below every interval cap, not the code's Table 6-12 reading.

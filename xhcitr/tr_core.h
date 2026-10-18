@@ -751,6 +751,18 @@ typedef struct _TR_RVAL {
     TR_U32 Value;
 } TR_RVAL;
 
+/* One RegQueryValueEx answer for a 4-byte buffer as a reading, by the
+ * drivers' rule (src/xhci_regsrc.h): not found is absent, and so is a
+ * zero-length REG_NONE (type 0); a 4-byte REG_DWORD (type 4) is the DWORD;
+ * any other stored type, or a value too long for the buffer, is another
+ * type; any other error is not read. */
+#define TR_Q_OK                 0   /* ERROR_SUCCESS                       */
+#define TR_Q_NOT_FOUND          1   /* ERROR_FILE_NOT_FOUND                */
+#define TR_Q_MORE_DATA          2   /* ERROR_MORE_DATA                     */
+#define TR_Q_ERROR              3   /* anything else                       */
+void tr_rv_from_query(int status, TR_U32 type, TR_U32 bytes, TR_U32 value,
+                      TR_RVAL *out);
+
 /* Where a device's level was taken from. */
 #define TR_LV_FROM_NONE         0   /* neither key has the value            */
 #define TR_LV_FROM_MACHINE      1   /* the machine-wide key                 */

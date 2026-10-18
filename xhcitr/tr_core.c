@@ -2536,6 +2536,33 @@ const char *tr_level_text(TR_U32 level)
     return NULL;
 }
 
+void tr_rv_from_query(int status, TR_U32 type, TR_U32 bytes, TR_U32 value,
+                      TR_RVAL *out)
+{
+    out->Value = 0;
+    switch (status) {
+    case TR_Q_OK:
+        if (type == 0 && bytes == 0) {
+            out->State = TR_RV_ABSENT;
+        } else if (type == 4 && bytes == 4) {
+            out->State = TR_RV_DWORD;
+            out->Value = value;
+        } else {
+            out->State = TR_RV_OTHER;
+        }
+        break;
+    case TR_Q_NOT_FOUND:
+        out->State = TR_RV_ABSENT;
+        break;
+    case TR_Q_MORE_DATA:
+        out->State = TR_RV_OTHER;
+        break;
+    default:
+        out->State = TR_RV_UNREAD;
+        break;
+    }
+}
+
 void tr_level_pick(const TR_RVAL *machine, const TR_RVAL *cur, TR_LEVEL *out)
 {
     const TR_RVAL *r = cur;
