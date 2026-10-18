@@ -991,6 +991,50 @@ refused:
     return FALSE;
 }
 
+/* Part 3 step 6's last rule: a learned correspondence is kept only for a
+ * member whose secondary bus is unchanged (`changed`) and whose port's
+ * PCIe tunnel was preserved; every other learned binding is withdrawn
+ * (the port learns again at its next tunnel up). Named bindings stand:
+ * the host router's mapping operation, read again in step 3, is theirs. */
+static VOID cmU4Unlearn(PCM_NHI nhi, ULONG changed)
+{
+    PXHCI_TBT_BINDS b;
+    const TBT_U4_PORT *p;
+    ULONG i;
+    ULONG k;
+    ULONG member;
+    BOOLEAN keep;
+
+    b = &nhi->Binds;
+    i = 0;
+    while (i < b->Count && i < XHCI_TBT_MAX_BINDS) {
+        keep = TRUE;
+        if (b->How[i] == XHCI_TBT_CORR_LEARNED) {
+            p = TbtU4Port(&nhi->U4, b->Port[i]);
+            member = XHCI_TBT_NO_MEMBER;
+            for (k = 0; k < nhi->Reenum.Topo.Tunnels && k < 32; k++) {
+                if (nhi->Reenum.Topo.Set[k] == b->Bdf[i]) {
+                    member = k;
+                }
+            }
+            keep = (BOOLEAN)(p != NULL && p->Pcie.Up &&
+                             member != XHCI_TBT_NO_MEMBER &&
+                             (changed & (1UL << member)) == 0);
+        }
+        if (keep) {
+            i++;
+            continue;
+        }
+        CmLogNote(nhi, "u4.recover.unlearn", (b->Port[i] << 16) | (b->Bdf[i] & 0xFFFFUL));
+        for (k = i; k + 1 < b->Count && k + 1 < XHCI_TBT_MAX_BINDS; k++) {
+            b->Port[k] = b->Port[k + 1];
+            b->Bdf[k] = b->Bdf[k + 1];
+            b->How[k] = b->How[k + 1];
+        }
+        b->Count--;
+    }
+}
+
 /* Part 3 step 6 (decision U24) and the demotions of part 4 (R8a, R8b,
  * U29), under the RECOVERY class before the commit: every member of the
  * set re-read - the same identity, still a bridge, still this domain's
@@ -1012,6 +1056,7 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
     BOOLEAN excl;
 
     r = &nhi->Reenum;
+    nhi->RecDebtMask = 0;
     if (!cmTopoUsable(nhi)) {
         return TRUE;
     }
@@ -1050,20 +1095,36 @@ static BOOLEAN cmU4Revalidate(PCM_NHI nhi)
         }
     }
     changed |= nhi->RecLostUp;
-    if (changed == 0) {
-        return TRUE;
+    if (changed != 0) {
+        for (i = 1; i <= nhi->U4.PortCount; i++) {
+            p = TbtU4Port(&nhi->U4, i);
+            if (p == NULL || !p->Pcie.Up) {
+                continue;
+            }
+            member = XhciTbtPortMember(&r->Topo, &nhi->Binds, i);
+            if (member == XHCI_TBT_NO_MEMBER || member >= 32 ||
+                (changed & (1UL << member)) != 0) {
+                (VOID)TbtU4RecoverDemote(&nhi->U4, i);
+            }
+        }
     }
+    /* The removal debt of the drains, by member, while the bindings still
+     * say which member each port's endpoint sat behind; any port not
+     * known owes it on every member. */
+    nhi->RecDebtMask = 0;
     for (i = 1; i <= nhi->U4.PortCount; i++) {
         p = TbtU4Port(&nhi->U4, i);
-        if (p == NULL || !p->Pcie.Up) {
+        if (p == NULL || !p->RemovalDebt) {
             continue;
         }
         member = XhciTbtPortMember(&r->Topo, &nhi->Binds, i);
-        if (member == XHCI_TBT_NO_MEMBER || member >= 32 ||
-            (changed & (1UL << member)) != 0) {
-            (VOID)TbtU4RecoverDemote(&nhi->U4, i);
+        if (member != XHCI_TBT_NO_MEMBER && member < 32) {
+            nhi->RecDebtMask |= 1UL << member;
+        } else {
+            nhi->RecDebtMask |= cmU4AllMembers(nhi);
         }
     }
+    cmU4Unlearn(nhi, changed);
     return TRUE;
 }
 
@@ -1157,7 +1218,6 @@ static VOID cmU4AfterCommit(PCM_NHI nhi)
     TBT_ICM_ACTION a;
     const TBT_U4_PORT *p;
     ULONG i;
-    ULONG member;
 
     CmLogNote(nhi, "u4.recover.ok", CmLiveEpisode(&nhi->Live));
     nhi->Counters.U4RecoverOk++;
@@ -1170,19 +1230,14 @@ static VOID cmU4AfterCommit(PCM_NHI nhi)
             nhi->U4UpGen[i - 1] == p->Generation) {
             nhi->U4UpValid |= 1UL << (i - 1);
         }
-        if (!TbtU4TakeDebt(&nhi->U4, i)) {
-            continue;
+        if (TbtU4TakeDebt(&nhi->U4, i)) {
+            CmLogNote(nhi, "u4.recover.debt", i);
         }
-        member = cmTopoUsable(nhi)
-                     ? XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, i)
-                     : XHCI_TBT_NO_MEMBER;
-        if (member != XHCI_TBT_NO_MEMBER && member < 32) {
-            nhi->RecBarred |= 1UL << member;
-        } else {
-            nhi->RecBarred |= cmU4AllMembers(nhi);
-        }
-        CmLogNote(nhi, "u4.recover.debt", (i << 16) | (member & 0xFFFFUL));
     }
+    /* Read by step 6 before it withdrew any binding (cmU4Revalidate). */
+    nhi->RecBarred |= nhi->RecDebtMask;
+    nhi->RecDebtMask = 0;
+    CmLogNote(nhi, "u4.recover.barrier", nhi->RecBarred);
     nhi->RecRetireSent = 0;
     if (nhi->U4LossFrom == 1) {
         /* The bind the loss interrupted: its remaining steps, as the bind

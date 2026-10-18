@@ -668,6 +668,9 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
                     DO_POWER_INRUSH);
     self->Flags &= ~DO_DEVICE_INITIALIZING;
     *over = (ULONG)(decision == CM_CHILD_ATTACH_OVER);
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    bridge->ChildLive++;
+    KeReleaseSpinLock(&cmRegLock, irql);
     return STATUS_SUCCESS;
 }
 
@@ -717,6 +720,9 @@ VOID CmRegChildRemoved(PCM_FILTER child, BOOLEAN ejected)
         return;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
+    if (bridge->ChildLive != 0) {
+        bridge->ChildLive--;
+    }
     /* An orderly removal counts only for a function its bridge still
      * reports: one already reported missing belongs to an old connection.
      * A function that arrives later forgets it (CmRegRelations). */
@@ -1131,12 +1137,16 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
     ULONG i;
     ULONG flags;
     ULONG member;
+    BOOLEAN none;
 
     r = &nhi->Reenum;
     member = XHCI_TBT_NO_MEMBER;
     if (action->Kind == TBT_ICM_ACT_TUNNEL_UP && nhi->U4On) {
         member = CmNhiActionMember(nhi, action);
     }
+    none = (BOOLEAN)(action->Kind == TBT_ICM_ACT_RESYNC &&
+                     (action->Why == TBT_ICM_WHY_RECOVERED ||
+                      (nhi->U4On && action->Why == TBT_ICM_WHY_UNAVAILABLE)));
     for (i = 0; i < r->Members; i++) {
         flags = cmFlags(nhi, i);
         if ((flags & CM_PORT_ACTIVE) == 0) {
@@ -1155,12 +1165,16 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
             continue;
         }
         /* stor98's UP for what the call is about to expose (cm_nvlink.h,
-         * obligation 1). */
-        (VOID)CmNvlinkExpose(
-            nhi, r->Port[i].Bdf, fresh,
-            CmNvlinkActionTunnel(
-                (BOOLEAN)(action->Kind == TBT_ICM_ACT_TUNNEL_UP),
-                action->Link, action->Serial, member, i));
+         * obligation 1); none in publication mode none (record 22 section
+         * 7.7, decision U25), which the USB4 profile's containment RESYNC
+         * and its recovery's take: no entry gains a generation from them. */
+        if (!none) {
+            (VOID)CmNvlinkExpose(
+                nhi, r->Port[i].Bdf, fresh,
+                CmNvlinkActionTunnel(
+                    (BOOLEAN)(action->Kind == TBT_ICM_ACT_TUNNEL_UP),
+                    action->Link, action->Serial, member, i));
+        }
         if (r->Route == CM_ROUTE_FILTER) {
             if (!cmInvalidate(nhi, i, TRUE)) {
                 /* Lost its filter or its exclusivity since it was read
@@ -1599,10 +1613,7 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         cmReenumAll(nhi, TRUE, FALSE, action);
     } else {
         CmNvlinkAwait(nhi);
-        /* The recovery's RESYNC is publication mode none (record 22
-         * section 7.7, decision U25): no fresh generation. */
-        cmReenumAll(nhi, TRUE,
-                    (BOOLEAN)(action->Why != TBT_ICM_WHY_RECOVERED), action);
+        cmReenumAll(nhi, TRUE, TRUE, action);
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
         r->SafeEject != 0 && action->Kind != TBT_ICM_ACT_TUNNEL_DOWN) {
@@ -2056,8 +2067,11 @@ BOOLEAN CmReenumRetired(PCM_NHI nhi, ULONG i, ULONG answers)
             return FALSE;
         }
         KeAcquireSpinLock(&cmRegLock, &irql);
+        /* Where a child filter of this driver sat on the endpoint's PDO,
+         * its own observation of the removal (ChildLive back to 0) as
+         * well as the settled answer that no longer reports it. */
         done = (BOOLEAN)(f->RelAnswers != answers && f->SnapCount == 0 &&
-                         !f->SnapTruncated);
+                         !f->SnapTruncated && f->ChildLive == 0);
         KeReleaseSpinLock(&cmRegLock, irql);
         cmRegRelease(f);
         return done;

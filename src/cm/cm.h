@@ -300,6 +300,9 @@ typedef struct _CM_NHI {
     ULONG RecLostUp;
     ULONG RecCmdSet;
     ULONG RecBarred;
+    ULONG RecDebtMask;      /* the members the attempt's drains owe a
+                               removal (read before step 6 withdraws a
+                               binding), barred at the commit              */
     ULONG RecRetireSent;
     ULONG RecRetireAtMs[XHCI_TBT_MAX_TUNNELS];
     ULONG RecRetireAns[XHCI_TBT_MAX_TUNNELS];
@@ -505,6 +508,9 @@ typedef struct _CM_FILTER {
                                recovery's retirement proof (record 22
                                section 7.7 part 4) wants one after its
                                removal-only request                       */
+    ULONG ChildLive;        /* child filters attached below and not yet
+                               removed (CmRegChildRemoved): that proof
+                               waits for each one's own removal           */
 
     /* ---- child ---- */
     struct _CM_FILTER *Bridge;

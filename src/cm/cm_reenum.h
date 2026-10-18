@@ -390,8 +390,9 @@ VOID CmReenumLossEnd(struct _CM_NHI *nhi);
  * walk (CmCfgwkGone), never by reading the bridge. FALSE when no request
  * could be made. CmReenumRetired: whether the endpoint's devnode is
  * retired since that request - on NT a BusRelations answer below the
- * bridge after it (`answers` moved), complete (not truncated) and
- * reporting no PDO; on 98 SE and ME the worker's removal for the member
+ * bridge to a query begun after it (`answers` moved), complete (not
+ * truncated) and reporting no PDO, and every child filter of this driver
+ * below the bridge removed (CmRegChildRemoved); on 98 SE and ME the worker's removal for the member
  * resolved with every recorded devnode removed or absent (a refusal, an
  * undecided entry or an abandoned attempt keep it owed). PASSIVE_LEVEL,
  * the connection-manager thread.
