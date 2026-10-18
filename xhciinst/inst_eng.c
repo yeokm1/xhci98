@@ -320,7 +320,8 @@ static int s98_loader_9x(const DEVREC *d);
 #define INST_S98_PARAM_NT   INST_S98_SVC_NT "\\Parameters\\Device"
 #define INST_S98_SVC_9X     "System\\CurrentControlSet\\Services\\stor98"
 #define INST_S98_CLASS_9X   "System\\CurrentControlSet\\Services\\Class\\SCSIAdapter"
-#define INST_S98_MAX_DEV    32
+/* The id lists hold as many devices as a reading admits. */
+#define INST_S98_MAX_DEV    INST_MAX_DEVS
 #define INST_S98_MAX_INF    2048
 #define INST_S98_RECONNECT_MS 120000UL
 
@@ -335,7 +336,6 @@ static S98BASE *s98Base;
 static int s98BaseCount;
 static char s98TunId[INST_S98_MAX_DEV][INST_ID_CHARS];
 static int s98TunCount;     /* NT: updates of drives behind a tunnel port  */
-static int s98TunFull;      /* ... more than the list holds                */
 static char s98NewId[INST_S98_MAX_DEV][INST_ID_CHARS];
 static int s98NewCount;     /* devices recorded in the step just done      */
 static char s98RemovedId[INST_S98_MAX_DEV][INST_ID_CHARS];
@@ -8215,6 +8215,10 @@ static void helper_installs(void)
 left:
     if (scan()) {
         plan();
+        /* Every exit, a settle that failed too: what Windows bound and the
+         * copies it made are read and recorded by the rules. */
+        s98_record_devices();
+        s98_inf_after(NULL, 1);
     } else {
         flagFailed = 1;
     }
@@ -12241,10 +12245,7 @@ static void s98_tunnel_mark(void)
             continue;
         }
         if (s98TunCount >= INST_S98_MAX_DEV) {
-            /* Full: every further update awaits its reconnection, the
-             * safe side. */
-            s98TunFull = 1;
-            continue;
+            continue;   /* as many as a reading holds: not reached */
         }
         inst_copy(s98TunId[s98TunCount++], d->Id, INST_ID_CHARS);
         logonly("stor98: %s is behind a tunnel port\n", d->Id);
@@ -12260,7 +12261,7 @@ static int s98_tunnelled(const char *id)
             return 1;
         }
     }
-    return s98TunFull;
+    return 0;
 }
 
 /* 1 when the device is present now (located with no phantom flag). */
