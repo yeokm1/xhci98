@@ -344,3 +344,96 @@ and the dock attached at power-on the emulator left no tunnel to adopt
 as a fresh plug, reading its DROM at the connect; the adopted case is the
 fake fabric's (`test_u4cm.c`, `test_tbt3_adopted`). Windows 2000 was not
 run for these tasks.
+
+## 42-A.12: the per-member, non-blocking Stor98 waits and the 9x call workers (2026-10-19)
+
+Code on branch `p42-nvw` (from `3.1.0.0` at `db921f49`): `44eaf47c`, then
+`4a31f545` and `bddf936d`; reviewed and revised until the review
+converged at `bddf936d` (its third round returned nothing). Built at
+`bddf936d` with every gate, `scripts\build-driver.cmd all` and
+`all -amd64`: both pass; the host suites pass (`test_cm_nvlink` 391
+checks, `test_cm_call` 175).
+
+What changed:
+
+- The acknowledgement before a removal is no longer a hold of the
+  connection-manager thread (`CmNvlinkAwait` is gone). Each entry marked
+  `DOWN_QUIESCED` keeps a pending wait with its mark's time, stepped by
+  `CmNvlinkStep` on every pass and after every piece of every sleep of the
+  core and the seam (the host sleep is taken in pieces of at most 50 ms
+  while a wait is pending), the deadline read before the answer. A
+  member's gate (`CmNvlinkHeld`) is raised by its own waits alone: the
+  seam holds that member's exposure and re-enumeration, its baseline ask,
+  its owed re-enumeration and its NT resume release (`CM_REENUM_PORT.Held`,
+  the pure `CmNvlinkHoldReenum` and `CmNvlinkHoldRun`) and runs them from
+  the first pass that finds the gate down; a held re-enumeration waits
+  for the transport after a host-interface loss, a held release does not.
+  The thread passes at most 50 ms apart while a wait is pending (R10).
+- The 9x per-member call workers of record 21 section 7.2 part 0: the
+  R6f handoff word (`cm_call.c`, pure) and one system thread per member
+  with its own CONFIGMG route (`cm_callwk.c`), started beside the CONFIGMG
+  worker, stopped without waiting; an operation of kind
+  `CM_CALL_K_DETACH` still runs after the stop, and every outcome the
+  thread did not take (a result, or a withdrawal) goes to the operation's
+  late taker on the worker. In this branch the only operation run on them
+  is each worker's own route opening; record 28's machine (task 42-A.15)
+  and the removal and statement transactions attach to `CmCallwkSubmit`
+  and `CmCallwkTake`. Moving `cm_cfgwk.c`'s operations onto them is owed
+  (that file was being edited on another branch).
+- `stor98cm.h` R8b (as Stor98 revised it on 2026-10-18): the retirement
+  before an exposure withdraws a statement without advancing the
+  generation, so a re-plug after a statement costs one increment, the new
+  `UP`'s, not two. Keeping the retirement's increment for the next `UP` to
+  reuse was rejected: Stor98's 9x late lookup takes a generation read not
+  `UP` as its floor and binds only an `UP` above it.
+
+The legs, on the reviewed code: the `usb4-emu` QEMU of `bin-2a893ea`
+(SHA-256 checked), i440FX, `usb4-host profile=usb4-generic` at `00:04`
+with tunnel bridges `tb0` at `00:05` (port 1) and `tb1` at `00:06` (port
+2), NVMe enclosures `enc0` and `enc1` over the FAT image of
+`vm\u4-asm\base`, the display on VNC; the gated `qemu` `xhcicm.sys` of
+`bddf936d` (SHA-256 `a83f7f9a7b25ec65...`) copied over the installed one.
+
+**Windows 2000** (the one NT target the statement is qualified on): the
+signed `3.0.0.0` asset installed in the guest (`XHCIINST /dir release-x86
+/defaults /yes /thunderbolt`), Stor98 `0.4.0.0` from its release through
+the Found New Hardware wizard for each drive, then the new `xhcicm.sys`.
+Both enclosures hot-plugged: one `UP` each (`cm.nvlink.up=01000101`,
+`01000201`), F: and G: mounted, `TESTDATA.BIN` on both compared clean
+(`fc /b` against a copy taken first), a file written to F: and compared.
+`enc0` unplugged: the statement made (`cm.nvlink.down=00000001`), the
+member's re-enumeration held behind its gate (`cm.nvlink.up.held=00000028`,
+`cm.reenum.held=00000028`), the acknowledgement 110 ms after the mark
+(`cm.nvlink.await.end=00000100`, `cm.nvlink.await=0000006E`), then the
+held work run (`cm.reenum.held.run=03040028`) and the entry retired. Later
+`enc0` and `enc1` unplugged one second apart: each member held behind its
+own statement and released by its own acknowledgement (`...0028` at 110
+ms, `...0030` at 50 ms), and `enc1` plugged again published its `UP`
+with nothing held. Port 2's next statement read generation 2
+(`cm.nvlink.down=00010002`) after one re-plug that followed a statement,
+where the double increment gave 3. F: and G: compared clean after every
+re-plug. Pass, with one gap: both acknowledgements came within one Stor98
+poll, so no leg had a long wait on one port while the other worked; an
+attempt to make one (the port-1 controller disabled in Device Manager)
+ended in the safe-eject teardown of that port instead, as disabling a
+tunnelled function does under the USB4 profile. A held member left
+unacknowledged for its 5 s while the other plugs and unplugs is the host
+vectors' (`test_cm_nvlink.c`, `test_hold`, `test_pending`); on a guest it
+needs a Stor98 whose acknowledgement is stretched (42-V.6's harness).
+
+**Windows 98 SE** (the `t26` gold image with the `3.0.0.0` asset and
+Stor98 `0.4.0.0`, its `XhciCmMode` put back to 1): the call workers at
+the start (`cm.callwk.started=00000202`, both made) and each opening its
+own route (`cm.callwk.open=0080040B`, `0180040B`: opened, version 040B).
+Both enclosures hot-plugged, F: and G: mounted, compared clean and
+written; `enc0` unplugged (the statement withheld, as 98 SE makes none:
+`09000001`) and plugged again (one `UP`, port 1's entry alone), both
+volumes compared clean. Then the USB4 host router disabled in Device
+Manager (`cm.stop`, the workers stopped without a wait, no hang) and
+enabled again: a second start with two new workers, both routes opened,
+and F: and G: still compared clean. Pass.
+
+Owed: Windows ME and 7 were not run for this task; the long-wait
+two-port leg above; the call workers carrying a real operation (record
+28's, the removal and statement transactions) and their stop with an
+operation in flight, which come with those clients.
