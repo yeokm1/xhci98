@@ -1088,9 +1088,12 @@ int inst_uninstall_route(int selfInInstallDir, int fromGiven,
                          int fromIsInstallDir);
 
 /* The temporary copy's command line: "<exe>" /uninstall /from "<dir>",
- * and /log "<log>" when one was named. 1, or 0 when it does not fit. */
+ * and /log "<log>", /nopause and /yes when this run had them (the console
+ * tool's unattended uninstall stays unattended). 1, or 0 when it does not
+ * fit. */
 int inst_relaunch_cmd(char *out, size_t cap, const char *exe,
-                      const char *fromDir, const char *log, int nopause);
+                      const char *fromDir, const char *log, int nopause,
+                      int yes);
 
 /* ---- the window's switches (record 26 section 10) ------------------------- */
 

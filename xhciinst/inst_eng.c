@@ -303,6 +303,7 @@ static int tbTagAll;        /* package_files lists every file, whatever the
                                answer: the package's identity             */
 static void own_install(void);
 static int own_remove(void);
+static int own_remove_in(const char *dir);
 static void arp_write(int incomplete);
 static void arp_remove(void);
 static void mw_values_remove(void);
@@ -2184,22 +2185,28 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         int i;
         DWORD mwv = 0;
         int asked;
+        int cmRow;
         if (value_inf(v) == NULL ||
             !inst_value_default(v, value_inf(v), &r->Def)) {
             continue;
         }
-        asked = inst_value_applies(v, &envNow);
-        if (!asked && !inst_value_relevant(v, &envNow)) {
+        /* A Thunderbolt value with no controller present is still shown
+         * when the support is ticked, and written machine-wide for the
+         * controller to come (record 26 section 5.5). */
+        cmRow = instValues[v].Inf == INST_INF_CM &&
+                (instValues[v].Apply == INST_APPLY_CM ||
+                 (instValues[v].Apply == INST_APPLY_9X_CM && !envNow.Nt));
+        asked = inst_value_applies(v, &envNow) ||
+                (cmRow && instValues[v].Asked != 0);
+        if (!asked && !cmRow && !inst_value_relevant(v, &envNow)) {
             continue;
         }
         targets = value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
-        /* A Thunderbolt value with no controller present is written
-         * machine-wide for the controller to come (record 26 section 5.5). */
-        if (targets == 0 && instValues[v].Inf != INST_INF_CM) {
+        if (targets == 0 && !cmRow) {
             continue;
         }
         r->Value = v;
-        r->Asked = asked && targets > 0;
+        r->Asked = asked;
         r->Mask = r->Asked ? inst_value_asked_mask(v, &envNow)
                            : inst_value_set_mask(v, &envNow);
         r->MwState = mw_value(instValues[v].Name, &mwv);
@@ -3713,6 +3720,7 @@ static void old_dir_cleanup(void)
     TRAY_PATHS o;
     int toolLeft;
     int flatLeft = 0;
+    int ownLeft;
 
     if (opts.List || !moving()) {
         return;
@@ -3724,10 +3732,23 @@ static void old_dir_cleanup(void)
         flatLeft = !flat_remove(oldToolDir);
         copies_remove(oldToolDir, inst_eq(oldToolDir, legacy));
     }
+    /* The installer's own files move with it (record 26 section 6.2):
+     * the old ones go once the new directory holds the window. */
+    {
+        char win[INST_PATH_CHARS];
+        join(win, sizeof(win), toolDir,
+             inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW));
+        ownLeft = file_exists(win, NULL) ? !own_remove_in(oldToolDir) : 1;
+        if (ownLeft) {
+            join(win, sizeof(win), oldToolDir,
+                 inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW));
+            ownLeft = file_exists(win, NULL);
+        }
+    }
     toolLeft = (tray_paths_in(oldToolDir, &o) &&
                 (file_exists(o.Exe, NULL) || file_exists(o.Bak, NULL) ||
                  file_exists(o.Del, NULL))) ||
-               flatLeft;
+               flatLeft || ownLeft;
     if (RemoveDirectoryA(oldToolDir)) {
         flagChanged = 1;
         out("%s removed.\n", oldToolDir);
@@ -4153,36 +4174,48 @@ static void finish_remove(void)
     const char *d;
     int i;
     int left = 0;
+    int failedBefore = flagFailed;
+    int stepsBefore = flagSteps;
 
     if (!legacy_dir(legacy, sizeof(legacy))) {
         legacy[0] = '\0';
+    }
+    if (opts.List) {
+        tray_remove();
+        own_remove();
+        mw_values_remove();
+        return;
     }
     tray_remove();
     for (i = 0; i < 3; i++) {
         d = i == 0 ? toolDir : i == 1 ? legacy : oldToolDir;
         if (d[0] != '\0' && tray_paths_in(d, &t) &&
             (file_exists(t.Exe, NULL) || file_exists(t.Bak, NULL) ||
+             file_exists(t.Tmp, NULL) ||
              (!envNow.Nt && file_exists(t.Del, NULL)))) {
             left = 1;
         }
     }
-    if (left || opts.List) {
-        if (left) {
-            arp_write(1);
-            flagSteps = 1;
-        }
-        if (opts.List) {
-            own_remove();
-            mw_values_remove();
-        }
-        return;
-    }
-    if (!own_remove()) {
+    /* Anything the tool's removal could not finish (its Run value, a
+     * leftover) keeps the installer and its records for the next run. */
+    if (left || flagFailed != failedBefore || flagSteps != stepsBefore) {
         arp_write(1);
         flagSteps = 1;
         return;
     }
     mw_values_remove();
+    if (flagFailed != failedBefore) {
+        arp_write(1);
+        return;
+    }
+    /* The installer's files of a move an earlier run could not finish
+     * too, then this directory's, the window last. */
+    if ((oldToolDir[0] != '\0' && !own_remove_in(oldToolDir)) ||
+        !own_remove()) {
+        arp_write(1);
+        flagSteps = 1;
+        return;
+    }
     forget_dir();
     arp_remove();
     for (i = 0; i < 2; i++) {
@@ -7005,8 +7038,9 @@ static int steps_9x(const char *dir)
         /* The controller and, for an update, its root hub: the release
          * notes' update is Update Driver on both (the 9x leg, 2026-10-15:
          * the root hub otherwise stays at the old release). Hubs and
-         * composite entries follow by themselves. */
-        if (d->Inf == INST_INF_XHCI && !is_controller(d) &&
+         * composite entries follow by themselves - unless the helper ran
+         * and could not install one, which then has its own steps. */
+        if (!helperRan && d->Inf == INST_INF_XHCI && !is_controller(d) &&
             !(d->Action == INST_ACT_UPDATE && inst_bus_id(d->Id) == 1 &&
               inst_starts(d->Id, "USB\\XHCI98_ROOT_HUB"))) {
             continue;
@@ -7582,10 +7616,14 @@ static void helper_installs(void)
             goto left;
         }
         first = 0;
-        for (i = 0; i < devCount; i++) {
-            if (pass_takes(&devs[i], INST_INF_XHCI, 1) &&
-                !helper_install(&devs[i])) {
-                controllerFailed = 1;
+        for (i = 0; i < devCount && !controllerFailed; i++) {
+            if (pass_takes(&devs[i], INST_INF_XHCI, 1)) {
+                if (!go_on()) {
+                    goto left;
+                }
+                if (!helper_install(&devs[i])) {
+                    controllerFailed = 1;
+                }
             }
         }
         if (controllerFailed) {
@@ -7624,6 +7662,9 @@ static void helper_installs(void)
             first = 0;
             for (i = 0; i < devCount; i++) {
                 if (pass_takes(&devs[i], k, k == INST_INF_XHCI ? 0 : -1)) {
+                    if (!go_on()) {
+                        goto left;
+                    }
                     helper_install(&devs[i]);
                 }
             }
@@ -7777,7 +7818,28 @@ static int run_install_9x(void)
 {
     int i;
     int steps;
+    INST_U32 before;
 
+    /* Before the first change, as on NT (record 23 section 5.1 step 5):
+     * the tree settled, read again and planned again; a plan that no
+     * longer matches the one confirmed is not carried out. */
+    before = devs_signature();
+    i = settle(INST_FIRST_WAIT_MS, 5000UL, 0UL, 1);
+    if (i <= 0) {
+        settle_failed(i, "a minute");
+        return inst_exit_code(0, flagFailed, flagRestart, 1);
+    }
+    if (!scan()) {
+        out("The devices could not be read again: nothing was changed.\n");
+        return inst_exit_code(0, 1, flagRestart, flagSteps);
+    }
+    plan();
+    if (devs_signature() != before) {
+        out("Windows changed the devices while the installer waited, so the "
+            "plan shown is\nout of date. Nothing was changed: run the "
+            "installer again to see the new plan.\n");
+        return inst_exit_code(0, flagFailed, flagRestart, 1);
+    }
     move_ready();
     step(INST_STEP_BEGIN, "Copying the package to %s", toolDir);
     if (!begin_move() || !make_local_copy() || !devicepath_update(srcDir)) {
@@ -8424,6 +8486,11 @@ static int run_uninstall_nt(void)
     restartBefore = flagRestart;
     for (i = 0; i < devCount && ok; i++) {
         if (is_filter_host(&devs[i])) {
+            /* Record 26 section 5.8: a cancel stops at the next step. */
+            if (!opts.List && !go_on()) {
+                api.Destroy(set);
+                return stop_uninstall("cancelled.");
+            }
             ok = unfilter_nt(set, &devs[i]);
         }
     }
@@ -8445,6 +8512,10 @@ static int run_uninstall_nt(void)
     for (rank = 0; rank <= 5 && ok; rank++) {
         for (i = 0; i < devCount && ok; i++) {
             if (inst_remove_rank(devs[i].Id, devs[i].Service, 0) == rank) {
+                if (!opts.List && !go_on()) {
+                    api.Destroy(set);
+                    return stop_uninstall("cancelled.");
+                }
                 ok = remove_nt(set, &devs[i]);
             }
         }
@@ -8482,6 +8553,9 @@ static int run_uninstall_nt(void)
             return stop_uninstall("a device of this package is still "
                                   "recorded.");
         }
+    }
+    if (!go_on()) {
+        return stop_uninstall("cancelled.");
     }
     if (!remove_own_infs()) {
         flagFailed = 1;
@@ -8704,6 +8778,18 @@ static int remove_9x_devnodes(void)
     if (!helper_ready()) {
         return -1;
     }
+    /* Record 27 section 6's gate, before the first removal too: the tree
+     * settled and no hardware wizard open. */
+    out("Waiting for the devices to settle ... ");
+    v = settle(INST_FIRST_WAIT_MS, 20000UL, 0UL, 0);
+    if (v <= 0) {
+        settle_failed(v, "a minute");
+        return 0;
+    }
+    out("done.\n");
+    if (!gate_9x(1)) {
+        return 0;
+    }
     for (rank = 0; rank <= 5; rank++) {
         for (i = 0; i < un9xCount; i++) {
             UN9X *u = &un9x[i];
@@ -8755,6 +8841,26 @@ static int remove_9x_devnodes(void)
             step(INST_STEP_DONE, "%s removed", u->Desc[0] ? u->Desc : u->Id);
         }
     }
+    /* A helper whose process did not end after the last job leaves this
+     * run's removals unconfirmed (record 27 section 4.1). */
+    if (helperState < 0) {
+        flagSteps = 1;
+        return 0;
+    }
+    /* Windows may have made an entry again while the others went: a
+     * fresh, whole reading must find none before anything else goes. */
+    if (!un9x_scan()) {
+        flagFailed = 1;
+        return 0;
+    }
+    if (un9xCount != 0) {
+        out("Still recorded after the removals:\n");
+        for (i = 0; i < un9xCount; i++) {
+            out("  %s\n", un9x[i].Id);
+        }
+        flagSteps = 1;
+        return 0;
+    }
     return 1;
 }
 
@@ -8767,12 +8873,14 @@ static int infs_9x(int list)
     char win[INST_PATH_CHARS];
     char pattern[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
+    char pnf[INST_PATH_CHARS];
     WIN32_FIND_DATAA fd;
     HANDLE h;
     char *text;
     size_t n;
     int i;
     int ok = 1;
+    DWORD e;
 
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return 0;
@@ -8783,19 +8891,47 @@ static int infs_9x(int list)
         join(pattern, sizeof(pattern), pattern, "*.INF");
         h = FindFirstFileA(pattern, &fd);
         if (h == INVALID_HANDLE_VALUE) {
+            /* Only an empty or absent directory is "nothing there". */
+            e = GetLastError();
+            if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND &&
+                e != ERROR_NO_MORE_FILES) {
+                out("%s could not be listed (error %lu).\n", pattern,
+                    (unsigned long)e);
+                ok = 0;
+            }
             continue;
         }
         do {
             join(path, sizeof(path), win, sub);
             join(path, sizeof(path), path, fd.cFileName);
             text = read_file(path, NULL);
-            if (text == NULL || !inst_inf_is_ours(text)) {
+            if (text == NULL) {
+                /* Whose it is cannot be established: the steps after it
+                 * wait (record 23 section 9.2 step 4's rule). */
+                out("%s cannot be read: whether it is this package's is "
+                    "unknown.\n", path);
+                ok = 0;
+                continue;
+            }
+            if (!inst_inf_is_ours(text)) {
                 free(text);
                 continue;
             }
             free(text);
             if (list) {
                 out("  %s\n", path);
+                continue;
+            }
+            inst_copy(pnf, path, sizeof(pnf));
+            n = strlen(pnf);
+            if (n > 4) {
+                strcpy(pnf + n - 4, ".PNF");
+            }
+            SetFileAttributesA(pnf, FILE_ATTRIBUTE_NORMAL);
+            if (GetFileAttributesA(pnf) != 0xFFFFFFFFUL && !DeleteFileA(pnf)) {
+                out("%s could not be deleted (error %lu).\n", pnf,
+                    (unsigned long)GetLastError());
+                ok = 0;
                 continue;
             }
             SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
@@ -8806,15 +8942,15 @@ static int infs_9x(int list)
                 continue;
             }
             flagChanged = 1;
-            out("Deleted %s.\n", path);
-            n = strlen(path);
-            if (n > 4) {
-                strcpy(path + n - 4, ".PNF");
-                SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
-                DeleteFileA(path);
-            }
+            out("Deleted %s (and its .PNF).\n", path);
         } while (FindNextFileA(h, &fd));
+        e = GetLastError();
         FindClose(h);
+        if (e != ERROR_NO_MORE_FILES) {
+            out("%s could not be listed to its end (error %lu).\n", pattern,
+                (unsigned long)e);
+            ok = 0;
+        }
     }
     return ok;
 }
@@ -8881,6 +9017,24 @@ static int run_uninstall_9x(void)
         return stop_uninstall("a device of this package could not be removed, "
                               "or is still recorded.");
     }
+    if (r < 0) {
+        /* No helper here: the devices are removed by hand first, and
+         * nothing else goes before they are (record 26 section 9.3); the
+         * next run, finding none, removes the rest. */
+        out("\nRemove these devices by hand, in this order:\n"
+            "  1. Device Manager: remove \"xHCI98 USB Attached SCSI Storage\" "
+            "and an\n     \"xHCI98 Thunderbolt 2 Controller\", \"xHCI98 "
+            "Thunderbolt 3 Controller\" or\n     \"xHCI98 USB4 Host Router\" "
+            "if there is one; then \"xHCI98 USB 3.x\n     eXtensible Host "
+            "Controller\" (it removes the root hub and everything\n     "
+            "beneath it).\n"
+            "  2. Without restarting, run the uninstall again: it removes the "
+            "rest.\n");
+        return stop_uninstall("the devices are left for the steps above.");
+    }
+    if (!go_on()) {
+        return stop_uninstall("cancelled.");
+    }
     /* The copies go only once DevicePath no longer names them: a search
      * path must never point at a removed source. */
     if (!devicepath_update(NULL)) {
@@ -8891,16 +9045,7 @@ static int run_uninstall_9x(void)
     flagChanged = 1;
     if (!copies_remove_all()) {
         flagSteps = 1;
-    }
-    if (r < 0) {
-        /* No helper here: the record 23 steps for what is left, and the
-         * entry point kept for the run after them. */
-        out("\nThe INF copies Windows keeps for this package:\n");
-        infs_9x(1);
-        out("The driver files:\n");
-        files_9x(1);
-        uninstall_steps_9x();
-        return stop_uninstall("the devices are left for the steps above.");
+        return stop_uninstall("the package copy could not be removed whole.");
     }
     if (!infs_9x(0)) {
         flagFailed = 1;
@@ -9913,8 +10058,8 @@ static void tb_print(void)
         for (i = 0; i < tbnCount; i++) {
             if (tbn[i].Number == 1) {
                 out("\nTo eject: INSTALL /console /eject 1   (or XHCIINST /eject 1)\n");
-                out(envNow.Nt ? "  in a script: INSTALL /console /eject \"id=%s\" /yes\n"
-                              : "  in a script: INSTALL /console /eject id=%s /yes\n",
+                out(envNow.Nt ? "  in a script:\n    INSTALL /console /eject \"id=%s\" /yes\n"
+                              : "  in a script:\n    INSTALL /console /eject id=%s /yes\n",
                     tbn[i].R.Id);
             }
         }
@@ -11085,24 +11230,28 @@ static void own_install(void)
     }
 }
 
-/* The installer's own files removed from the install directory, the
- * helper's result file with them. 1 when none is left; on NT a file in
- * use is deleted at the restart. */
-static int own_remove(void)
+/* The installer's own files removed from dir, the helper's result file
+ * with them, the window last (record 26 section 9.4): a file that cannot
+ * go keeps the window, so the Add/Remove Programs entry still has its
+ * program for the next run. 1 when none is left; on NT a file in use is
+ * deleted at the restart. */
+static int own_remove_in(const char *dir)
 {
-    const char *names[3];
+    const char *names[4];
     char path[INST_PATH_CHARS];
     int n;
     int i;
-    int left = 0;
 
-    if (toolDir[0] == '\0') {
+    if (dir == NULL || dir[0] == '\0') {
         return 1;
     }
+    /* own_names gives the window first: it is taken last here. */
     n = own_names(names);
-    names[n++] = INST_DI_RESULT_NAME;
+    names[0] = INST_DI_RESULT_NAME;
+    names[n] = inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW);
+    n++;
     for (i = 0; i < n; i++) {
-        join(path, sizeof(path), toolDir, names[i]);
+        join(path, sizeof(path), dir, names[i]);
         if (!file_exists(path, NULL)) {
             continue;
         }
@@ -11118,12 +11267,17 @@ static int own_remove(void)
             flagRestart = 1;
             out("%s is in use: it is deleted at the restart.\n", path);
         } else {
-            out("%s could not be deleted (error %lu).\n", path,
-                (unsigned long)GetLastError());
-            left = 1;
+            out("%s could not be deleted (error %lu): the installer stays "
+                "for the next run.\n", path, (unsigned long)GetLastError());
+            return 0;
         }
     }
-    return !left;
+    return 1;
+}
+
+static int own_remove(void)
+{
+    return own_remove_in(toolDir);
 }
 
 /* One REG_SZ or REG_DWORD of the entry written when it differs. */
@@ -11603,12 +11757,6 @@ int inst_eng_un_route(void)
             "records%s.\n", opts.From, selfIn ? ", or this copy is in it" : "");
         return INST_EXIT_REFUSED;
     }
-    if (route == INST_UN_RUN) {
-        if (opts.From[0] != '\0') {
-            inst_copy(tempCopyDir, selfDir, sizeof(tempCopyDir));
-        }
-        return -1;
-    }
     /* The copy goes to TEMP\XHCI98UN, a directory of this program's own. */
     n = GetTempPathA(sizeof(temp), temp);
     if (n == 0 || n >= sizeof(temp)) {
@@ -11616,6 +11764,20 @@ int inst_eng_un_route(void)
         return INST_EXIT_REFUSED;
     }
     join(temp, sizeof(temp), temp, "XHCI98UN");
+    if (route == INST_UN_RUN) {
+        if (opts.From[0] != '\0') {
+            /* /from is the relaunch's alone: a copy anywhere else (the
+             * package's) is refused, and only the relaunch's directory is
+             * ever scheduled for deletion (record 26 section 9.2). */
+            if (!same_dir(selfDir, temp)) {
+                out("REFUSED: /from belongs to the uninstall's own copy in "
+                    "%s.\n", temp);
+                return INST_EXIT_REFUSED;
+            }
+            inst_copy(tempCopyDir, selfDir, sizeof(tempCopyDir));
+        }
+        return -1;
+    }
     CreateDirectoryA(temp, NULL);
     join(to, sizeof(to), temp, INST_MY_NAME);
     SetFileAttributesA(to, FILE_ATTRIBUTE_NORMAL);
@@ -11633,7 +11795,7 @@ int inst_eng_un_route(void)
         }
     }
     if (!inst_relaunch_cmd(cmd, sizeof(cmd), to, toolDir, opts.Log,
-                           opts.NoPause)) {
+                           opts.NoPause, opts.Yes)) {
         return INST_EXIT_REFUSED;
     }
     logonly("relaunch: %s\n", cmd);
@@ -11674,6 +11836,11 @@ int inst_eng_uninstall(void)
         }
     }
     return code;
+}
+
+int inst_eng_relaunched(void)
+{
+    return relaunched;
 }
 
 int inst_eng_end(int code, int *line)

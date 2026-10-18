@@ -141,6 +141,10 @@ int inst_eng_run(void);
  * install directory relaunches a temporary copy and ends (0) - then the
  * whole uninstall. */
 int inst_eng_un_route(void);
+
+/* 1 when the uninstall went on in a temporary copy: this run ends at
+ * once, with no pause, so its image can be removed. */
+int inst_eng_relaunched(void);
 int inst_eng_uninstall(void);
 
 /* INST_PH_END: the last line and the exit code (record 23 section 7.4),

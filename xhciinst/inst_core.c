@@ -4291,7 +4291,8 @@ int inst_uninstall_route(int selfInInstallDir, int fromGiven,
 }
 
 int inst_relaunch_cmd(char *out, size_t cap, const char *exe,
-                      const char *fromDir, const char *log, int nopause)
+                      const char *fromDir, const char *log, int nopause,
+                      int yes)
 {
     char t[INST_LINE_CHARS * 2];
 
@@ -4319,6 +4320,9 @@ int inst_relaunch_cmd(char *out, size_t cap, const char *exe,
     }
     if (nopause) {
         inst_cat(t, sizeof(t), " /nopause");
+    }
+    if (yes) {
+        inst_cat(t, sizeof(t), " /yes");
     }
     if (strlen(t) + 1 > cap) {
         return 0;

@@ -360,6 +360,15 @@ static unsigned __stdcall job_main(void *arg)
                 inst_copy(dirChoice, opts->To, sizeof(dirChoice));
             }
             rowCount = inst_eng_rows(rows, INST_MAX_VALUES);
+            /* /set preselects a value on its page (record 26 section 10);
+             * from here on the pages say what is written. */
+            for (i = 0; i < opts->SetCount; i++) {
+                if (opts->SetIndex[i] >= 0 &&
+                    opts->SetIndex[i] < INST_MAX_VALUES) {
+                    choiceSet[opts->SetIndex[i]] = 1;
+                    choiceVal[opts->SetIndex[i]] = opts->SetValue[i];
+                }
+            }
         }
     } else if (job == JOB_RUN) {
         EnterCriticalSection(&textLock);
@@ -367,6 +376,7 @@ static unsigned __stdcall job_main(void *arg)
         LeaveCriticalSection(&textLock);
         inst_copy(opts->To, dirChoice, sizeof(opts->To));
         opts->NoTray = !trayChoice;
+        opts->SetCount = 0;
         for (i = 0; i < INST_MAX_VALUES; i++) {
             inst_eng_choose_value(i, choiceSet[i], choiceVal[i]);
         }
@@ -744,6 +754,8 @@ static int rows_for(int page, int advanced, int *idx, int cap)
 /* The row's "now", short (the detail goes to the page's note). */
 static void row_now(const INST_ROW *r, char *out, size_t cap)
 {
+    const INST_VALUE *v = &instValues[r->Value];
+
     if (r->MwState == 1) {
         _snprintf(out, cap - 1, "now: %lu, set machine-wide",
                   (unsigned long)r->MwValue);
@@ -757,32 +769,48 @@ static void row_now(const INST_ROW *r, char *out, size_t cap)
                   r->InForce == r->Def ? " (the default)" : "");
     }
     out[cap - 1] = '\0';
+    if (v->Hi != 0 && strlen(out) + 24 < cap) {
+        char range[48];
+        _snprintf(range, sizeof(range) - 1, "; %lu to %lu",
+                  (unsigned long)v->Lo, (unsigned long)v->Hi);
+        range[sizeof(range) - 1] = '\0';
+        strcat(out, range);
+    }
 }
 
-/* The note under a page: what each location holds and the caution. */
+/* What a row is about, whole: its meaning, what each location holds, the
+ * choices, the default and the caution (record 26 sections 5.4 and 5.5),
+ * for a scrolling note. */
 static void row_note(const INST_ROW *r, char *out, size_t cap)
 {
-    char line[256];
+    const INST_VALUE *v = &instValues[r->Value];
+    char line[512];
+    INST_U32 b;
     int i;
 
-    out[0] = '\0';
-    _snprintf(line, sizeof(line) - 1, "%s - %s.", instValues[r->Value].Name,
-              instValues[r->Value].Meaning);
-    line[sizeof(line) - 1] = '\0';
-    inst_copy(out, line, cap);
+    _snprintf(out, cap - 1, "%s - %s.", v->Name, v->Meaning);
+    out[cap - 1] = '\0';
     if (r->MwState == 1) {
+        _snprintf(line, sizeof(line) - 1, " Set machine-wide: %lu, which "
+                  "every controller uses.", (unsigned long)r->MwValue);
+        line[sizeof(line) - 1] = '\0';
+        strncat(out, line, cap - strlen(out) - 1);
         for (i = 0; i < r->NowCount; i++) {
             if (r->Now[i].State > 0 && r->Now[i].Value != r->MwValue) {
-                _snprintf(line, sizeof(line) - 1, " Set machine-wide: %lu; "
-                          "the controller's own value: %lu (the machine-wide "
-                          "one is used).", (unsigned long)r->MwValue,
+                _snprintf(line, sizeof(line) - 1, " %s's own value: %lu (not "
+                          "used).", r->Now[i].Desc,
                           (unsigned long)r->Now[i].Value);
                 line[sizeof(line) - 1] = '\0';
                 strncat(out, line, cap - strlen(out) - 1);
-                break;
             }
         }
-    } else if (!r->Same) {
+    } else if (r->MwState == -1) {
+        strncat(out, " The machine-wide value could not be read.",
+                cap - strlen(out) - 1);
+    }
+    if (!r->Same) {
+        strncat(out, " Each controller keeps its own value until you choose "
+                "one:", cap - strlen(out) - 1);
         for (i = 0; i < r->NowCount; i++) {
             _snprintf(line, sizeof(line) - 1, " %s: %lu.", r->Now[i].Desc,
                       (unsigned long)(r->Now[i].State > 0 ? r->Now[i].Value
@@ -791,18 +819,122 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
             strncat(out, line, cap - strlen(out) - 1);
         }
     }
-    if (instValues[r->Value].Caution != NULL) {
+    if (v->Hi != 0) {
+        _snprintf(line, sizeof(line) - 1, " Allowed: %lu to %lu.",
+                  (unsigned long)v->Lo, (unsigned long)v->Hi);
+        line[sizeof(line) - 1] = '\0';
+        strncat(out, line, cap - strlen(out) - 1);
+    } else {
+        for (b = 0; b < 32UL; b++) {
+            if ((r->Mask & (1UL << b)) == 0) {
+                continue;
+            }
+            _snprintf(line, sizeof(line) - 1, " %lu: %s.", (unsigned long)b,
+                      (b < 4UL && v->Choice[b] != NULL) ? v->Choice[b] :
+                      "allowed");
+            line[sizeof(line) - 1] = '\0';
+            strncat(out, line, cap - strlen(out) - 1);
+        }
+    }
+    _snprintf(line, sizeof(line) - 1, " Default: %lu.", (unsigned long)r->Def);
+    line[sizeof(line) - 1] = '\0';
+    strncat(out, line, cap - strlen(out) - 1);
+    if (v->Caution != NULL) {
         char c[1024];
-        inst_caution_text(r->Value, r->Mask, c, sizeof(c));
+        inst_caution_text(r->Value, v->Hi != 0 ? 0xFFFFFFFFUL : r->Mask, c,
+                          sizeof(c));
         strncat(out, " NOTE: ", cap - strlen(out) - 1);
         strncat(out, c, cap - strlen(out) - 1);
     }
-    if (r->CmNew && (inst_eq(instValues[r->Value].Name, "XhciCmMode") ||
-                     inst_eq(instValues[r->Value].Name, "XhciCmApprove"))) {
+    if (r->CmNew && (inst_eq(v->Name, "XhciCmMode") ||
+                     inst_eq(v->Name, "XhciCmApprove"))) {
         strncat(out, " A new install starts with the default; a change "
                 "applies from the next restart: unplug the dock until then "
                 "if you choose 0.", cap - strlen(out) - 1);
     }
+}
+
+/* The choice a row starts with: the page's own (a /set preselection
+ * included), else the value in force; -1 the mixed state. */
+static INST_U32 row_start(const INST_ROW *r, int *mixed)
+{
+    *mixed = 0;
+    if (choiceSet[r->Value]) {
+        return choiceVal[r->Value];
+    }
+    if (!r->Same && r->MwState != 1) {
+        *mixed = 1;
+        return 0;
+    }
+    return r->InForce;
+}
+
+/* A combo box filled with a row's choices: the mixed state its own item
+ * where the controllers differ, every allowed value with its meaning, the
+ * default marked; the start selected. */
+static void row_fill_combo(HWND combo, const INST_ROW *r)
+{
+    const INST_VALUE *v = &instValues[r->Value];
+    char text[256];
+    INST_U32 b;
+    INST_U32 cur;
+    int mixed;
+    int sel = -1;
+    int item;
+
+    SendMessageA(combo, CB_RESETCONTENT, 0, 0);
+    cur = row_start(r, &mixed);
+    if (!r->Same && r->MwState != 1) {
+        item = (int)SendMessageA(combo, CB_ADDSTRING, 0,
+                                 (LPARAM)"each controller keeps its own");
+        SendMessageA(combo, CB_SETITEMDATA, item, (LPARAM)0xFFFFFFFFUL);
+        if (mixed) {
+            sel = item;
+        }
+    }
+    for (b = 0; b < 32UL; b++) {
+        if ((r->Mask & (1UL << b)) == 0) {
+            continue;
+        }
+        _snprintf(text, sizeof(text) - 1, "%lu  %s%s", (unsigned long)b,
+                  (b < 4UL && v->Choice[b] != NULL) ? v->Choice[b] : "",
+                  b == r->Def ? " (default)" : "");
+        text[sizeof(text) - 1] = '\0';
+        item = (int)SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
+        SendMessageA(combo, CB_SETITEMDATA, item, (LPARAM)b);
+        if (sel < 0 && !mixed && b == cur) {
+            sel = item;
+        }
+    }
+    SendMessageA(combo, CB_SETCURSEL, sel < 0 ? 0 : sel, 0);
+}
+
+/* What a choice writes (record 26 section 5.4): 1 with *v when it differs
+ * from the value in force, or replaces the controllers' mixed values; 0
+ * when it leaves things as they are. Stateless: a page made again reads
+ * the same. */
+static int choice_writes(const INST_ROW *r, int mixedPicked, INST_U32 v)
+{
+    if (mixedPicked) {
+        return 0;
+    }
+    if (!r->Same && r->MwState != 1) {
+        return 1;
+    }
+    return v != r->InForce;
+}
+
+static int combo_read(HWND combo, const INST_ROW *r, INST_U32 *v)
+{
+    int sel = (int)SendMessageA(combo, CB_GETCURSEL, 0, 0);
+    INST_U32 data;
+
+    if (sel < 0) {
+        return 0;
+    }
+    data = (INST_U32)(size_t)SendMessageA(combo, CB_GETITEMDATA, sel, 0);
+    *v = data;
+    return choice_writes(r, data == 0xFFFFFFFFUL, data);
 }
 
 typedef struct _ROWCTL {
@@ -810,14 +942,11 @@ typedef struct _ROWCTL {
     HWND Label;
     HWND Choice;
     HWND Now;
-    int Range;
-    int First;              /* the selection the row was shown with       */
 } ROWCTL;
 
 typedef struct _ROWPAGE {
     int Count;
     ROWCTL R[WIZ_ROWS];
-    HFONT Font;
 } ROWPAGE;
 
 static ROWPAGE pageRows[2];     /* P_USB, P_TBS */
@@ -861,108 +990,68 @@ static HWND make_ctl(HWND dlg, const char *cls, const char *text, DWORD style,
     return c;
 }
 
-/* One row made: the label, the choice with every allowed value and its
- * meaning (the default marked, the mixed state its own item), the short
- * "now". y in dialog units. */
-static void row_make(HWND dlg, ROWCTL *rc, int row, int x, int y, int width,
-                     HFONT font, int id)
+/* The label of a row: the name and the one sentence of meaning. */
+static void row_label(const INST_ROW *r, char *out, size_t cap)
 {
-    const INST_ROW *r = &rows[row];
-    const INST_VALUE *v = &instValues[r->Value];
-    char text[256];
-    INST_U32 b;
-    int sel = -1;
-    int item;
-    int have = choiceSet[r->Value];
-    INST_U32 cur = have ? choiceVal[r->Value] : r->InForce;
-
-    rc->Row = row;
-    rc->Range = v->Hi != 0;
-    if (rc->Range) {
-        _snprintf(text, sizeof(text) - 1, "%s - %s (%lu to %lu, default %lu)",
-                  v->Name, v->Meaning, (unsigned long)v->Lo,
-                  (unsigned long)v->Hi, (unsigned long)r->Def);
-    } else {
-        _snprintf(text, sizeof(text) - 1, "%s - %s", v->Name, v->Meaning);
-    }
-    text[sizeof(text) - 1] = '\0';
-    rc->Label = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, x, y,
-                         width, 10, id, font);
-    if (rc->Range) {
-        _snprintf(text, sizeof(text) - 1, "%lu", (unsigned long)cur);
-        text[sizeof(text) - 1] = '\0';
-        rc->Choice = make_ctl(dlg, "EDIT", text, WS_BORDER | WS_TABSTOP |
-                              ES_AUTOHSCROLL | ES_NUMBER, x, y + 11, 60, 12,
-                              id + 1, font);
-        rc->First = (int)cur;
-    } else {
-        rc->Choice = make_ctl(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST |
-                              WS_VSCROLL | WS_TABSTOP, x, y + 10, 160, 90,
-                              id + 1, font);
-        if (!r->Same && r->MwState != 1 && !have) {
-            item = (int)SendMessageA(rc->Choice, CB_ADDSTRING, 0,
-                                     (LPARAM)"each controller keeps its own");
-            SendMessageA(rc->Choice, CB_SETITEMDATA, item, 0xFFFFFFFFUL);
-            sel = item;
-        }
-        for (b = 0; b < 32UL; b++) {
-            if ((r->Mask & (1UL << b)) == 0) {
-                continue;
-            }
-            _snprintf(text, sizeof(text) - 1, "%lu  %s%s", (unsigned long)b,
-                      (b < 4UL && v->Choice[b] != NULL) ? v->Choice[b] : "",
-                      b == r->Def ? " (default)" : "");
-            text[sizeof(text) - 1] = '\0';
-            item = (int)SendMessageA(rc->Choice, CB_ADDSTRING, 0,
-                                     (LPARAM)text);
-            SendMessageA(rc->Choice, CB_SETITEMDATA, item, (LPARAM)b);
-            if (sel < 0 && b == cur) {
-                sel = item;
-            }
-        }
-        if (sel < 0) {
-            sel = 0;
-        }
-        SendMessageA(rc->Choice, CB_SETCURSEL, sel, 0);
-        rc->First = sel;
-    }
-    row_now(r, text, sizeof(text));
-    rc->Now = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, x + 166,
-                       y + 12, width - 166, 10, id + 2, font);
+    _snprintf(out, cap - 1, "%s - %s", instValues[r->Value].Name,
+              instValues[r->Value].Meaning);
+    out[cap - 1] = '\0';
 }
 
-/* What a row's choice says now: 1 set (value in *v), 0 left as it is. */
+/* One row of a settings page: a label of two lines, the choice under it,
+ * the short "now" beside the choice. y in dialog units. */
+#define WIZ_ROW_DLU 32
+static void row_make(HWND dlg, ROWCTL *rc, int row, int y, HFONT font, int id)
+{
+    const INST_ROW *r = &rows[row];
+    char text[256];
+
+    rc->Row = row;
+    row_label(r, text, sizeof(text));
+    rc->Label = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8, y,
+                         284, 17, id, font);
+    if (instValues[r->Value].Hi != 0) {
+        int mixed;
+        _snprintf(text, sizeof(text) - 1, "%lu",
+                  (unsigned long)row_start(r, &mixed));
+        text[sizeof(text) - 1] = '\0';
+        rc->Choice = make_ctl(dlg, "EDIT", text, WS_BORDER | WS_TABSTOP |
+                              ES_AUTOHSCROLL | ES_NUMBER, 8, y + 18, 60, 12,
+                              id + 1, font);
+    } else {
+        rc->Choice = make_ctl(dlg, "COMBOBOX", "", CBS_DROPDOWNLIST |
+                              WS_VSCROLL | WS_TABSTOP, 8, y + 17, 160, 90,
+                              id + 1, font);
+        row_fill_combo(rc->Choice, r);
+    }
+    row_now(r, text, sizeof(text));
+    rc->Now = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 174, y + 19,
+                       118, 10, id + 2, font);
+}
+
+/* What a row's choice says now: 1 written (value in *v), 0 left as it is.
+ * A range's text that does not parse, or lies outside it, is 0 with *v
+ * the text's number (the page says so). */
 static int row_read(const ROWCTL *rc, INST_U32 *v)
 {
     const INST_ROW *r = &rows[rc->Row];
     char text[32];
-    int sel;
-    size_t data;
 
-    if (rc->Range) {
+    if (instValues[r->Value].Hi != 0) {
         GetWindowTextA(rc->Choice, text, sizeof(text));
         *v = (INST_U32)strtoul(text, NULL, 10);
-        return *v != r->InForce || r->MwState != 1 ? *v != r->InForce : 0;
+        if (*v < instValues[r->Value].Lo || *v > instValues[r->Value].Hi) {
+            return 0;
+        }
+        return choice_writes(r, 0, *v);
     }
-    sel = (int)SendMessageA(rc->Choice, CB_GETCURSEL, 0, 0);
-    if (sel < 0) {
-        return 0;
-    }
-    data = (size_t)SendMessageA(rc->Choice, CB_GETITEMDATA, sel, 0);
-    if ((INST_U32)data == 0xFFFFFFFFUL) {
-        return 0;
-    }
-    *v = (INST_U32)data;
-    /* A value left as it is writes nothing; the mixed state chosen away
-     * writes the machine-wide value (record 26 section 5.4). */
-    return sel != rc->First || (r->Same && *v != r->InForce);
+    return combo_read(rc->Choice, r, v);
 }
 
-static void rows_clear(HWND dlg, ROWPAGE *rp)
+static void rows_clear(ROWPAGE *rp)
 {
     int i;
 
-    (void)dlg;
     for (i = 0; i < rp->Count; i++) {
         DestroyWindow(rp->R[i].Label);
         DestroyWindow(rp->R[i].Choice);
@@ -971,107 +1060,244 @@ static void rows_clear(HWND dlg, ROWPAGE *rp)
     rp->Count = 0;
 }
 
-static void settings_fill(HWND dlg, int page)
+static void settings_note(HWND dlg, int page, int i)
 {
     ROWPAGE *rp = &pageRows[page == P_USB ? 0 : 1];
-    int idx[WIZ_ROWS];
-    int n;
-    int i;
-    int adv;
+    char note[4096];
 
-    rows_clear(dlg, rp);
-    rp->Font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
-    SetDlgItemTextA(dlg, IDC_S_HEAD, inst_page_text(page == P_USB ?
-                                                    INST_PT_USB :
-                                                    INST_PT_TBSET));
-    n = rows_for(page, 0, idx, WIZ_ROWS);
-    for (i = 0; i < n && i < 4; i++) {
-        row_make(dlg, &rp->R[i], idx[i], 8, 24 + 31 * i, 284, rp->Font,
-                 IDC_ROW_BASE + IDC_ROW_STRIDE * i);
-    }
-    rp->Count = i;
-    adv = rows_for(page, 1, idx, WIZ_ROWS);
-    ShowWindow(GetDlgItem(dlg, IDC_S_ADVANCED), adv > 0 ? SW_SHOW : SW_HIDE);
-    if (page == P_TBS && !tbPresent) {
+    if (page == P_TBS && !tbPresent && i < 0) {
         SetDlgItemTextA(dlg, IDC_S_NOTE, inst_page_text(INST_PT_TB_LATER));
-    } else if (rp->Count > 0) {
-        char note[2048];
-        row_note(&rows[rp->R[0].Row], note, sizeof(note));
+    } else if (i >= 0 && i < rp->Count) {
+        row_note(&rows[rp->R[i].Row], note, sizeof(note));
+        if (page == P_TBS && !tbPresent) {
+            strncat(note, " ", sizeof(note) - strlen(note) - 1);
+            strncat(note, inst_page_text(INST_PT_TB_LATER),
+                    sizeof(note) - strlen(note) - 1);
+        }
         SetDlgItemTextA(dlg, IDC_S_NOTE, note);
     } else {
         SetDlgItemTextA(dlg, IDC_S_NOTE, "");
     }
 }
 
-static void settings_leave(int page)
+static void settings_fill(HWND dlg, int page)
+{
+    ROWPAGE *rp = &pageRows[page == P_USB ? 0 : 1];
+    HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
+    int idx[WIZ_ROWS];
+    int n;
+    int i;
+    int adv;
+
+    rows_clear(rp);
+    SetDlgItemTextA(dlg, IDC_S_HEAD, inst_page_text(page == P_USB ?
+                                                    INST_PT_USB :
+                                                    INST_PT_TBSET));
+    n = rows_for(page, 0, idx, WIZ_ROWS);
+    for (i = 0; i < n && i < 4; i++) {
+        row_make(dlg, &rp->R[i], idx[i], 22 + WIZ_ROW_DLU * i, font,
+                 IDC_ROW_BASE + IDC_ROW_STRIDE * i);
+    }
+    rp->Count = i;
+    adv = rows_for(page, 1, idx, WIZ_ROWS);
+    ShowWindow(GetDlgItem(dlg, IDC_S_ADVANCED), adv > 0 ? SW_SHOW : SW_HIDE);
+    settings_note(dlg, page, rp->Count > 0 ? 0 : -1);
+}
+
+/* Leaving a page: each row's choice taken. 0 when a range's text is not
+ * in its range (said; the page stays). */
+static int settings_leave(HWND dlg, int page)
 {
     ROWPAGE *rp = &pageRows[page == P_USB ? 0 : 1];
     int i;
     INST_U32 v;
 
     for (i = 0; i < rp->Count; i++) {
-        int value = rows[rp->R[i].Row].Value;
+        const INST_ROW *r = &rows[rp->R[i].Row];
         if (row_read(&rp->R[i], &v)) {
-            choiceSet[value] = 1;
-            choiceVal[value] = v;
+            choiceSet[r->Value] = 1;
+            choiceVal[r->Value] = v;
+        } else if (instValues[r->Value].Hi != 0 &&
+                   (v < instValues[r->Value].Lo ||
+                    v > instValues[r->Value].Hi)) {
+            char text[256];
+            _snprintf(text, sizeof(text) - 1, "%s takes %lu to %lu.",
+                      instValues[r->Value].Name,
+                      (unsigned long)instValues[r->Value].Lo,
+                      (unsigned long)instValues[r->Value].Hi);
+            text[sizeof(text) - 1] = '\0';
+            MessageBoxA(dlg, text, "xHCI98 Setup", MB_OK | MB_ICONWARNING);
+            return 0;
         } else {
-            choiceSet[value] = 0;
+            choiceSet[r->Value] = 0;
         }
     }
+    return 1;
 }
 
-/* ---- the Advanced dialog -------------------------------------------------- */
+/* ---- the Advanced dialog (record 26 section 5.4) --------------------------- */
 
+/* A list of the page's never-asked values; the one selected shown whole
+ * below it with its choice. The choices are kept apart and taken at OK. */
 static int advPage;
-static ROWPAGE advRows;
+static int advIdx[WIZ_ROWS];
+static int advCount;
+static int advCur = -1;
+static int advSet[WIZ_ROWS];
+static INST_U32 advVal[WIZ_ROWS];
+
+static void adv_cell(HWND lv, int i)
+{
+    const INST_ROW *r = &rows[advIdx[i]];
+    char text[96];
+
+    if (advSet[i]) {
+        _snprintf(text, sizeof(text) - 1, "%lu (to be written)",
+                  (unsigned long)advVal[i]);
+    } else {
+        row_now(r, text, sizeof(text));
+    }
+    text[sizeof(text) - 1] = '\0';
+    ListView_SetItemText(lv, i, 1, text);
+}
+
+/* The selected row's choice read into advSet/advVal. 0 when a range's
+ * text is out of its range (said). */
+static int adv_take(HWND dlg)
+{
+    const INST_ROW *r;
+    char text[32];
+    INST_U32 v;
+
+    if (advCur < 0) {
+        return 1;
+    }
+    r = &rows[advIdx[advCur]];
+    if (instValues[r->Value].Hi != 0) {
+        GetDlgItemTextA(dlg, IDC_A_EDIT, text, sizeof(text));
+        v = (INST_U32)strtoul(text, NULL, 10);
+        if (v < instValues[r->Value].Lo || v > instValues[r->Value].Hi) {
+            _snprintf(text, sizeof(text) - 1, "%lu to %lu.",
+                      (unsigned long)instValues[r->Value].Lo,
+                      (unsigned long)instValues[r->Value].Hi);
+            text[sizeof(text) - 1] = '\0';
+            MessageBoxA(dlg, text, instValues[r->Value].Name, MB_OK |
+                        MB_ICONWARNING);
+            return 0;
+        }
+        advSet[advCur] = choice_writes(r, 0, v);
+    } else {
+        advSet[advCur] = combo_read(GetDlgItem(dlg, IDC_A_CHOICE), r, &v);
+    }
+    advVal[advCur] = v;
+    adv_cell(GetDlgItem(dlg, IDC_LIST), advCur);
+    return 1;
+}
+
+static void adv_show(HWND dlg, int i)
+{
+    const INST_ROW *r = &rows[advIdx[i]];
+    char note[4096];
+    char text[32];
+    int hadSet = choiceSet[r->Value];
+    INST_U32 hadVal = choiceVal[r->Value];
+    int mixed;
+
+    advCur = i;
+    row_note(r, note, sizeof(note));
+    set_edit(dlg, IDC_A_TEXT, note);
+    /* The choice shown starts at what is pending for the row; the pages'
+     * own record is put back at once (Cancel keeps nothing). */
+    choiceSet[r->Value] = advSet[i];
+    choiceVal[r->Value] = advVal[i];
+    if (instValues[r->Value].Hi != 0) {
+        _snprintf(text, sizeof(text) - 1, "%lu",
+                  (unsigned long)row_start(r, &mixed));
+        text[sizeof(text) - 1] = '\0';
+        SetDlgItemTextA(dlg, IDC_A_EDIT, text);
+        ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_SHOW);
+        ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_HIDE);
+    } else {
+        row_fill_combo(GetDlgItem(dlg, IDC_A_CHOICE), r);
+        ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_SHOW);
+        ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_HIDE);
+    }
+    choiceSet[r->Value] = hadSet;
+    choiceVal[r->Value] = hadVal;
+}
 
 static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
-    int idx[WIZ_ROWS];
-    int n;
+    HWND lv;
+    LVCOLUMNA c;
+    LVITEMA it;
+    NMHDR *nm;
     int i;
-    INST_U32 v;
-    HFONT font;
 
-    (void)lp;
     switch (msg) {
     case WM_INITDIALOG:
         SetDlgItemTextA(dlg, IDC_A_HEAD, inst_page_text(INST_PT_ADVANCED));
-        font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
-        n = rows_for(advPage, 1, idx, WIZ_ROWS);
-        for (i = 0; i < n && i < 10; i++) {
-            row_make(dlg, &advRows.R[i], idx[i], 8, 26 + 23 * i, 304, font,
-                     IDC_ROW_BASE + IDC_ROW_STRIDE * i);
+        lv = GetDlgItem(dlg, IDC_LIST);
+        memset(&c, 0, sizeof(c));
+        c.mask = LVCF_TEXT | LVCF_WIDTH;
+        c.cx = dlu_x(dlg, 140);
+        c.pszText = "Value";
+        ListView_InsertColumn(lv, 0, &c);
+        c.cx = dlu_x(dlg, 150);
+        c.pszText = "Setting";
+        ListView_InsertColumn(lv, 1, &c);
+        advCount = rows_for(advPage, 1, advIdx, WIZ_ROWS);
+        for (i = 0; i < advCount; i++) {
+            const INST_ROW *r = &rows[advIdx[i]];
+            int mixed;
+            advSet[i] = choiceSet[r->Value];
+            advVal[i] = advSet[i] ? choiceVal[r->Value]
+                                  : row_start(r, &mixed);
+            memset(&it, 0, sizeof(it));
+            it.mask = LVIF_TEXT;
+            it.iItem = i;
+            it.pszText = (char *)instValues[r->Value].Name;
+            ListView_InsertItem(lv, &it);
+            adv_cell(lv, i);
         }
-        advRows.Count = i;
+        advCur = -1;
+        if (advCount > 0) {
+            ListView_SetItemState(lv, 0, LVIS_SELECTED | LVIS_FOCUSED,
+                                  LVIS_SELECTED | LVIS_FOCUSED);
+            adv_show(dlg, 0);
+        }
         return TRUE;
+    case WM_NOTIFY:
+        nm = (NMHDR *)lp;
+        if (nm->idFrom == IDC_LIST && nm->code == LVN_ITEMCHANGED) {
+            NMLISTVIEW *nl = (NMLISTVIEW *)lp;
+            if ((nl->uNewState & LVIS_SELECTED) && nl->iItem >= 0 &&
+                nl->iItem < advCount && nl->iItem != advCur) {
+                if (adv_take(dlg)) {
+                    adv_show(dlg, nl->iItem);
+                }
+            }
+        }
+        break;
     case WM_COMMAND:
+        if (LOWORD(wp) == IDC_A_CHOICE && HIWORD(wp) == CBN_SELCHANGE) {
+            adv_take(dlg);
+            return TRUE;
+        }
         if (LOWORD(wp) == IDOK) {
-            for (i = 0; i < advRows.Count; i++) {
-                const INST_ROW *r = &rows[advRows.R[i].Row];
-                if (!row_read(&advRows.R[i], &v)) {
-                    choiceSet[r->Value] = 0;
-                    continue;
-                }
-                if (!inst_value_allowed(r->Value, NULL, v) &&
-                    instValues[r->Value].Hi != 0) {
-                    char text[256];
-                    _snprintf(text, sizeof(text) - 1, "%s takes %lu to %lu.",
-                              instValues[r->Value].Name,
-                              (unsigned long)instValues[r->Value].Lo,
-                              (unsigned long)instValues[r->Value].Hi);
-                    text[sizeof(text) - 1] = '\0';
-                    MessageBoxA(dlg, text, "xHCI98 Setup", MB_OK |
-                                MB_ICONWARNING);
-                    return TRUE;
-                }
-                choiceSet[r->Value] = 1;
-                choiceVal[r->Value] = v;
+            if (!adv_take(dlg)) {
+                return TRUE;
+            }
+            for (i = 0; i < advCount; i++) {
+                int value = rows[advIdx[i]].Value;
+                choiceSet[value] = advSet[i];
+                choiceVal[value] = advVal[i];
             }
             EndDialog(dlg, IDOK);
             return TRUE;
         }
         if (LOWORD(wp) == IDCANCEL) {
+            /* Nothing of the dialog is kept. */
             EndDialog(dlg, IDCANCEL);
             return TRUE;
         }
@@ -1411,7 +1637,9 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             comp_browse(dlg);
             return TRUE;
         case IDC_S_ADVANCED:
-            settings_leave(page);
+            if (!settings_leave(dlg, page)) {
+                return TRUE;
+            }
             advPage = page;
             DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_ADVANCED), dlg,
                             adv_proc, 0);
@@ -1430,9 +1658,7 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 for (i = 0; (page == P_USB || page == P_TBS) && i < rp->Count;
                      i++) {
                     if ((HWND)lp == rp->R[i].Choice) {
-                        char note[2048];
-                        row_note(&rows[rp->R[i].Row], note, sizeof(note));
-                        SetDlgItemTextA(dlg, IDC_S_NOTE, note);
+                        settings_note(dlg, page, i);
                     }
                 }
             }
@@ -1492,18 +1718,18 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             SET_RESULT(dlg, 0);
             return TRUE;
         case PSN_WIZNEXT:
-            if (page == P_COMP && !comp_leave(dlg)) {
+            if ((page == P_COMP && !comp_leave(dlg)) ||
+                ((page == P_USB || page == P_TBS) &&
+                 !settings_leave(dlg, page))) {
                 SET_RESULT(dlg, -1);
                 return TRUE;
-            }
-            if (page == P_USB || page == P_TBS) {
-                settings_leave(page);
             }
             SET_RESULT(dlg, 0);
             return TRUE;
         case PSN_WIZBACK:
-            if (page == P_USB || page == P_TBS) {
-                settings_leave(page);
+            if ((page == P_USB || page == P_TBS) && !settings_leave(dlg, page)) {
+                SET_RESULT(dlg, -1);
+                return TRUE;
             }
             SET_RESULT(dlg, 0);
             return TRUE;
@@ -1871,6 +2097,34 @@ static int selftest(void)
         st_page(parent, IDD_STEPS, tIds, tTexts, 1, "the steps");
         st_page(parent, IDD_FINISH, nIds, nTexts, 2, "the finish");
         st_page(parent, IDD_ADVANCED, aIds, aTexts, 1, "the Advanced dialog");
+        /* Every settings row's label, at its size on the page (record 26
+         * section 11): the name and its sentence on two lines. */
+        {
+            HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_SETTINGS),
+                                        parent, st_proc, 0);
+            HFONT font = d != NULL ? (HFONT)SendMessageA(d, WM_GETFONT, 0, 0)
+                                   : NULL;
+            st(d != NULL, "the settings page for its rows");
+            for (i = 0; d != NULL && i < instValueCount; i++) {
+                INST_ROW r;
+                char text[256];
+                char msg[128];
+                HWND c;
+                memset(&r, 0, sizeof(r));
+                r.Value = i;
+                row_label(&r, text, sizeof(text));
+                c = make_ctl(d, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8, 22,
+                             284, 17, IDC_ROW_BASE, font);
+                _snprintf(msg, sizeof(msg) - 1, "the row label of %s fits",
+                          instValues[i].Name);
+                msg[sizeof(msg) - 1] = '\0';
+                st(fits(c), msg);
+                DestroyWindow(c);
+            }
+            if (d != NULL) {
+                DestroyWindow(d);
+            }
+        }
         DestroyWindow(parent);
     }
     printf("%d checks, %d failures\n", stChecks, stFailures);
@@ -1924,14 +2178,16 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE prev, LPSTR cmdLine, int show)
     if (opts->SelfTest) {
         return selftest();
     }
-    r = wow64_start();
-    if (r >= 0) {
-        return r;
-    }
+    /* The switches first, whatever the architecture: a refusal is said
+     * here, never by the x64 window started below. */
     refusal = inst_window_refusal(opts, gArgc, gArgv);
     if (refusal != NULL) {
         say(refusal);
         return INST_EXIT_REFUSED;
+    }
+    r = wow64_start();
+    if (r >= 0) {
+        return r;
     }
     uninstallMode = opts->Uninstall;
     InitCommonControls();

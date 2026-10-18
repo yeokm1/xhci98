@@ -2655,13 +2655,13 @@ static void test_uninstall_entry(void)
           inst_uninstall_route(1, 1, 1) == INST_UN_REFUSE,
           "a /from that is not the install directory, or given in it");
     CHECK(inst_relaunch_cmd(out, sizeof(out), "C:\\WINDOWS\\TEMP\\XHCI98UN\\"
-                            "XHCIWIZ.EXE", "C:\\XHCI98", NULL, 0) &&
+                            "XHCIWIZ.EXE", "C:\\XHCI98", NULL, 0, 0) &&
           strcmp(out, "\"C:\\WINDOWS\\TEMP\\XHCI98UN\\XHCIWIZ.EXE\" /uninstall "
                       "/from \"C:\\XHCI98\"") == 0, "the relaunch's command");
     CHECK(inst_relaunch_cmd(out, sizeof(out), "C:\\T\\X.EXE", "C:\\X",
-                            "D:\\L.LOG", 1) &&
-          strstr(out, " /log \"D:\\L.LOG\" /nopause") != NULL,
-          "the relaunch keeps /log and /nopause");
+                            "D:\\L.LOG", 1, 1) &&
+          strstr(out, " /log \"D:\\L.LOG\" /nopause /yes") != NULL,
+          "the relaunch keeps /log, /nopause and /yes");
     argv[0] = "x";
     argv[1] = "/uninstall";
     argv[2] = "/from";

@@ -53,6 +53,10 @@
 #define IDC_F_LATER             1062
 #define IDC_U_AGREE             1070
 #define IDC_A_HEAD              1080
+#define IDC_A_TEXT              1081
+#define IDC_A_LABEL             1082
+#define IDC_A_CHOICE            1083
+#define IDC_A_EDIT              1084
 
 /* The settings rows, made at run time: a label, a choice (a combo box, or
  * an edit box for a range), a note, per row. */

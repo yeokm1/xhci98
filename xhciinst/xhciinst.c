@@ -122,7 +122,7 @@ static int finish(int code)
     char line[8];
 
     code = inst_eng_end(code, NULL);
-    if (!o->NoPause && !o->List && !o->Devices) {
+    if (!o->NoPause && !o->List && !o->Devices && !inst_eng_relaunched()) {
         printf("Press Enter to close this window.");
         fflush(stdout);
         if (outMirror) {
