@@ -302,6 +302,9 @@ typedef struct _CM_NHI {
     KEVENT ThreadExited;
     PVOID ThreadObject;
     ULONG ThreadRunning;
+    /* The thread's wait as it records it (CM_Q_WAIT_*, cm_qryb.h): read by
+     * the query device's seed (task 42-A.7). */
+    volatile ULONG ThreadWait;
     ULONG ThreadReferenceFailures;
     NTSTATUS StartStatus;
     ULONG BindOwed;
@@ -562,6 +565,10 @@ ULONG CmThrProbe32(PCM_NHI nhi, ULONG offset);
 /* The monitor's sample and its actions, on the thread between the queued
  * work and the poll. IRQL: PASSIVE_LEVEL. */
 VOID CmThrLiveness(PCM_NHI nhi);
+/* Whether the thread's next wait has no timeout: no client to poll and no
+ * monitored state (the query device's inert flag). Any thread; the fields
+ * read are the thread's own and may change after. IRQL: <= DISPATCH_LEVEL. */
+BOOLEAN CmThrInertNext(PCM_NHI nhi);
 BOOLEAN CmCfgWrite16(PCM_NHI nhi, ULONG offset, USHORT value);
 
 /* cm_power.c */

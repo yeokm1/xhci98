@@ -104,6 +104,25 @@ VOID CmQuerySetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs);
 ULONG CmQueryBumpGen(UCHAR *answer, ULONG bytes);
 
 /*
+ * The connection-manager thread's wait as it records it (CM_NHI.ThreadWait,
+ * cm_thr.c): between waits, in a wait with a timeout, in one with none.
+ */
+#define CM_Q_WAIT_BUSY      0UL
+#define CM_Q_WAIT_TIMED     1UL
+#define CM_Q_WAIT_FOREVER   2UL
+
+/*
+ * The inert flag of the answer the query device holds until the thread's
+ * first publication (task 42-A.7, design record 25 section 14): seeded
+ * from the thread's actual wait - set with no thread (`running` FALSE) or
+ * a thread already in its wait with no timeout, clear for one in a wait
+ * with a timeout; for a thread between waits, `next` (whether the wait it
+ * goes to has no timeout, as its publication judges it). Its pass after
+ * the device's creation publishes the flag in any case.
+ */
+BOOLEAN CmQuerySeedInert(BOOLEAN running, ULONG wait, BOOLEAN next);
+
+/*
  * ---- The log answer (cm_query.h CM_QL_*, design record 25 section 4.5) ----
  *
  * The counters are text the thread writes after each pass (CmQueryLines,

@@ -52,8 +52,10 @@
  *     before the IoInvalidateDeviceRelations or Reenumerate_DevNode that
  *     exposes what is behind it. It reads the port's secondary bus and
  *     publishes UP for each NVMe function (class 01h, subclass 08h) that
- *     answers there, with a new LinkGeneration after anything that may be
- *     a new connection (CmNvlinkExpose's `fresh`).
+ *     answers there, with a new LinkGeneration for a new tunnel only: an
+ *     entry not UP, or one UP for another tunnel than the one the exposure
+ *     names (CmNvlinkExpose's `tunnel`, task 42-A.6); an entry UP for a
+ *     tunnel that stayed up keeps its generation.
  *  2. DOWN_QUIESCED only after the tunnel's PCIe path is closed and the
  *     endpoint's link-down reset has completed, read on the conditions the
  *     record qualifies (record 21 section 7.1, record 22 section 10.2):
@@ -165,11 +167,22 @@
 /* PCI class of an NVMe function: base 01h, subclass 08h (any interface). */
 #define CM_NVLINK_CLASS_NVM     0x0108UL
 
+/* A tunnel's identity for CmNvlinkPublishUp: the USB4 port (1 to 127) and
+ * its connection generation (TBT_U4_PORT.Generation, the low 24 bits),
+ * never 0; CM_NVLINK_TUNNEL_NONE for an exposure that names no new
+ * tunnel. */
+#define CM_NVLINK_TUNNEL_NONE   0UL
+#define CM_NVLINK_TUNNEL(port, gen) \
+    (0x80000000UL | (((ULONG)(port) & 0x7FUL) << 24) | \
+     ((ULONG)(gen) & 0xFFFFFFUL))
+
 /* CmNvlinkPublishUp's outcome. */
 #define CM_NVLINK_UP_NEW        1UL /* a fresh entry, generation 1 or the
                                        entry's next                       */
-#define CM_NVLINK_UP_AGAIN      2UL /* its entry, not UP: generation + 1   */
-#define CM_NVLINK_UP_ALREADY    3UL /* its entry is UP: unchanged          */
+#define CM_NVLINK_UP_AGAIN      2UL /* its entry, not UP, or UP for another
+                                       tunnel: generation + 1             */
+#define CM_NVLINK_UP_ALREADY    3UL /* its entry is UP for this tunnel, or
+                                       the exposure names none: unchanged */
 #define CM_NVLINK_UP_FULL       4UL /* no entry free                       */
 #define CM_NVLINK_UP_BAD        5UL /* no table, or a bad argument         */
 
@@ -276,13 +289,36 @@ ULONG CmNvlinkFind(const STOR98LS_TABLE *t, ULONG bus, ULONG slot);
  * Obligation 1 on (bus, slot): its entry, or a never-used one (an entry is
  * never given to another function: a stor98 instance may hold it), gets
  * Flags = IN_USE | UP with LinkGeneration + 1 - unless it is UP already
- * and `fresh` is FALSE (a re-exposure of the same connection). `fresh` is
- * TRUE for every exposure that may follow a new connection: presence on
- * the bus does not prove the link stayed up in between. Writes `*outcome`
- * (CM_NVLINK_UP_*); returns the entry or CM_NVLINK_NONE.
+ * for the same tunnel (stor98cm.h as Stor98 revised it on 2026-10-18,
+ * entry protocol step 1 and R8b: only a new tunnel increments
+ * LinkGeneration, and UP published again for a tunnel that stayed up
+ * keeps it; task 42-A.6). `tunnel` is the exposure's (CM_NVLINK_TUNNEL):
+ * NONE for one that follows no new tunnel on the entry's member, and then
+ * an entry already UP is left as it is; otherwise an entry UP is left as
+ * it is when `tunnels[index]` already names that tunnel, and gets the new
+ * generation when it names another (its UP outlived a tunnel nobody saw
+ * go down). `tunnels` is the caller's record, one per entry, of the
+ * tunnel each entry's UP was last published for, written here with every
+ * new generation. An entry with a removal request outstanding is left as
+ * it is whatever the tunnel (R9a). Writes `*outcome` (CM_NVLINK_UP_*);
+ * returns the entry or CM_NVLINK_NONE.
  */
-ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
-                        BOOLEAN fresh, PULONG outcome);
+ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
+                        ULONG slot, ULONG tunnel, PULONG outcome);
+
+/*
+ * The tunnel the exposure of member `i` carries for an action (task
+ * 42-A.6): CM_NVLINK_TUNNEL(port, generation) for the member a tunnel up
+ * names (`up` TRUE, `member` its index in the set, known by
+ * correspondence, record 22 section 7.6); CM_NVLINK_TUNNEL_NONE for every
+ * other member, for any other action (a tunnel down's, a RESYNC's) and
+ * for a tunnel up whose member is not known (`member` XHCI_TBT_NO_MEMBER,
+ * always so under the firmware connection manager). A function not UP
+ * still gets its new generation then (CmNvlinkPublishUp); no entry
+ * already UP is advanced on a guess.
+ */
+ULONG CmNvlinkActionTunnel(BOOLEAN up, ULONG port, ULONG generation,
+                           ULONG member, ULONG i);
 
 /*
  * Before every exposure of `bus` (after the acknowledgement wait): every
@@ -426,15 +462,21 @@ VOID CmNvlinkStart(struct _CM_NHI *nhi);
  * re-enumeration call that exposes its secondary bus. Every exposure
  * first retires the statements on that bus (and on every entry last
  * published or marked for `bridge`, should the bus not read). `fresh` TRUE
- * after a tunnel up, a RESYNC or an owed re-enumeration: a new generation
- * for every NVMe function found; FALSE on a tunnel down's: an entry UP is
- * left as it is. Windows 98 SE and ME: no UP while the record is not
+ * after a tunnel up, a RESYNC or an owed re-enumeration: a silent bus is
+ * waited for (on NT where the SHPC slot reads a card present) and, on 98
+ * SE and ME, scanned again on later passes (CmNvlinkService); FALSE on a
+ * tunnel down's. `tunnel` (CM_NVLINK_TUNNEL) names the new tunnel on
+ * `bridge` this exposure follows, or is CM_NVLINK_TUNNEL_NONE: a function
+ * found not UP gets a new generation either way, one UP only when it was
+ * published for another tunnel than `tunnel` names (CmNvlinkPublishUp,
+ * task 42-A.6). Windows 98 SE and ME: no UP while the record is not
  * written (the channel is unavailable to that exposure). Only functions on
  * the secondary bus itself are seen: an NVMe function behind an
  * enclosure's own PCIe switch is not, gets no entry and so no statement
  * (stor98's gone deadline stands); nor does one that has not answered by
  * the end of the scan. Returns the number of entries UP for that bus. */
-ULONG CmNvlinkExpose(struct _CM_NHI *nhi, ULONG bridge, BOOLEAN fresh);
+ULONG CmNvlinkExpose(struct _CM_NHI *nhi, ULONG bridge, BOOLEAN fresh,
+                     ULONG tunnel);
 
 /* Obligation 2, ICM profile: a TBT_ICM_ACT_TUNNEL_DOWN after the seam's
  * tunnel-down poll (`pollState`, the poll's last verdict in
@@ -508,8 +550,9 @@ ULONG CmNvlinkIdleMs(ULONG configured);
  * with CmNhiSetU4Hooks where the selection admits that profile, with the
  * NHI as the context. CmNvlinkU4Up (CM_U4_UP_HOOK) records the port's
  * connection generation for the presence sample and publishes the UP
- * itself (CmNvlinkExpose of the port's bridge, or of every member when
- * the correspondence is not known), before anything - the seam's
+ * itself (CmNvlinkExpose of the port's bridge with the port's tunnel, or
+ * of every member with none when the correspondence is not known), before
+ * anything - the seam's
  * re-enumeration, or the release of held D0 requests at a resume - can
  * expose the endpoint. CmNvlinkU4Down (CM_U4_DOWN_HOOK) maps the port to
  * its member by correspondence and calls CmNvlinkPortDown; it returns

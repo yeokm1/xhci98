@@ -426,9 +426,13 @@ static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
     qi.Record = rec;
     qi.RecordBytes = CM_ST_HDR_BYTES;
     qi.Live = nhi->Live.State;
-    /* No thread: nothing will change until a restart. With one, the wake
-     * after the device is installed publishes the real flag. */
-    qi.Inert = (ULONG)!nhi->ThreadRunning;
+    /* Task 42-A.7: the thread's actual wait - none (no thread: nothing
+     * will change until a restart), with no timeout (an inert start), or
+     * with one; between waits, the wait it goes to. The wake after the
+     * device is installed publishes the flag again in any case. */
+    qi.Inert = (ULONG)CmQuerySeedInert((BOOLEAN)(nhi->ThreadRunning != 0),
+                                       nhi->ThreadWait,
+                                       CmThrInertNext(nhi));
     qi.EpochLo = nhi->QueryEpochLo;
     qi.EpochHi = nhi->QueryEpochHi;
     qi.NhiBdf = nhi->QueryBdf;

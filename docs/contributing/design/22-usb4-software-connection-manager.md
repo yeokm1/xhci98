@@ -2499,9 +2499,18 @@ router reporting a USB4 Version of major 0 needs beyond section 6:
    is always deselected and bit-banging disabled again. A router adopted
    from before the start without a connection sequence of this driver's
    (section 9), or rebuilt under a resume budget (section 11, where a
-   spent budget would refuse that release), is not read; one whose
+   spent budget would refuse that release), is not read there; one whose
    preserved tunnels this driver completes with a PCIe tunnel goes
-   through the connect and is.
+   through the connect and is. The first two are owed their names
+   (`DromOwed`, task 42-A.9): the core reads the EEPROM on its first poll
+   with no budget running and the port `UP` (the start's own first poll
+   for an adopted router, the thread's first pass after the resume for a
+   rebuilt one), once, as the port's own sequence so that a removal seen
+   inside it waits for the port check, and takes only the names - the
+   adapters were discovered without the DROM and stay as found, so its
+   unused marks are not applied late. A failed read leaves the router
+   unnamed, as at a connect; the tunnel and the connection generation are
+   untouched, and nothing is re-enumerated (`u4.drom.late`).
 5. **The PCIe tunnel**: the same four entries, except that on the
    Thunderbolt 3 router the protocol adapter's ingress fields (initial
    credits, ingress flow control, shared buffering) are written as for a
@@ -2760,6 +2769,25 @@ Since 2026-10-18 record 21 section 7.2's 9x half (task 42-0.7; the code is
 42-A.13) routes the tools' 9x eject through that worker step, hands a clean
 removal back to the thread for section 10.4's per-port teardown, and makes
 the 9x statement once each system's G3 ordering is read.
+
+**Only a new tunnel moves a generation** (task 42-A.6; `stor98cm.h` as
+Stor98 revised it on 2026-10-18, entry protocol step 1 and R8b). The UP
+hook publishes its port's `UP` itself, on the port's bridge when the
+correspondence (section 7.6) names it, and names the tunnel - the USB4
+port and its connection generation (`CM_NVLINK_TUNNEL`). The seam's
+exposure that follows for the same tunnel up names that tunnel to the
+member the action's port corresponds to (`CmNhiActionMember`) and none to
+every other member; a tunnel down's and a RESYNC's name none. An entry
+already `UP` keeps its generation unless the exposure names a tunnel other
+than the one its `UP` was last published for (`CmNvlinkPublishUp`,
+`cmNvTunnel`): so the seam's second exposure of a tunnel the hook already
+published, a second port's tunnel up, and a RESYNC leave every other
+port's entry as it is, and a bound Stor98 instance keeps its identity
+(R8d). An entry not `UP` gets its new generation from any exposure. Where
+the port's member is not known, nothing names a tunnel: a function newly
+found gets its generation, and no entry already `UP` is advanced on a
+guess. The tunnels recorded are forgotten at the domain's stop, since a
+later start numbers its connections afresh.
 
 ### 10.1 Obligation 1: a link that went down
 

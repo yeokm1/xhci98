@@ -1341,12 +1341,61 @@ static int eeEnableHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
     return FAB_HOOK_GO;
 }
 
+/* A Thunderbolt 3 router a predecessor enumerated and tunnelled (record 22
+ * sections 8 and 9.2): adopted with its tunnel preserved and its adapters
+ * as found, no EEPROM read inside the discovery; its names read on the
+ * first pass after the start (task 42-A.9), the DROM's unused marks not
+ * applied to the adapters already discovered, the tunnel untouched. */
+static void test_tbt3_adopted(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    const TBT_U4_PORT *p;
+    ULONG gen;
+    ULONG writes;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.RxQCount = 0;
+    fabDromMarkUnused(&g_fab, dev, 7);
+    cfgDefault(&c);
+    c.DeferFirstPoll = TRUE;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "TB3 adopted: UP");
+    CHECK(p->Dev.Tbt3 && p->Dev.Preserved && p->Pcie.Preserved,
+          "TB3 adopted: the router and its tunnel preserved");
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "TB3 adopted: no bit-bang in the discovery");
+    CHECK(p->Dev.ModelName[0] == 0 && p->Dev.DromOwed, "TB3 adopted: its names owed");
+    gen = p->Generation;
+    writes = pathWrites(&g_fab);
+    poll(&g_cm, &g_fab, 1);
+    CHECK(strcmp(p->Dev.VendorName, "CalDigit, Inc.") == 0 &&
+          strcmp(p->Dev.ModelName, "TS3 Plus") == 0,
+          "TB3 adopted: named on the first pass");
+    CHECK(!p->Dev.DromOwed, "TB3 adopted: nothing owed");
+    CHECK_EQ(p->Dev.DromUnused[0] & (1UL << 7), 0,
+             "TB3 adopted: the late DROM's unused marks not applied");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 4) & 0x13UL, 0x02UL,
+             "TB3 adopted: the EEPROM left deselected, bit-banging off");
+    CHECK_EQ(p->Generation, gen, "TB3 adopted: the connection unchanged");
+    CHECK_EQ(pathWrites(&g_fab), writes, "TB3 adopted: no path entry written");
+    CHECK(p->Pcie.Up && p->Pcie.Preserved && fabPcieUp(&g_fab, 1),
+          "TB3 adopted: the tunnel as found");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0,
+             "TB3 adopted: nothing re-enumerated by the read");
+}
+
 static void test_tbt3(void)
 {
     TBT_U4_CONFIG c;
     int dev;
     const TBT_U4_PORT *p;
     unsigned long sx;
+    ULONG k;
 
     fabInit(&g_fab);
     fabHostMinimal(&g_fab);
@@ -1462,7 +1511,8 @@ static void test_tbt3(void)
     CHECK(p->Dev.ModelName[0] == 0, "lost enable: no name");
 
     /* Rebuilt under a resume budget: no EEPROM bit-bang (a spent budget
-     * would refuse the part's release), the router up unnamed. */
+     * would refuse the part's release), the router up unnamed; its names
+     * read on the first pass after the resume (task 42-A.9). */
     fabInit(&g_fab);
     fabHostMinimal(&g_fab);
     dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
@@ -1474,9 +1524,67 @@ static void test_tbt3(void)
     g_fab.RxQCount = 0;
     g_fab.R[dev].EeCtlWrites = 0;
     CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "TB3 resume: rebuilt");
-    poll(&g_cm, &g_fab, 2);
+    p = TbtU4Port(&g_cm, 1);
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "TB3 resume: UP");
     CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "TB3 resume: no bit-bang under the budget");
+    CHECK(p->Dev.ModelName[0] == 0 && p->Dev.DromOwed,
+          "TB3 resume: unnamed, its names owed");
+    k = p->Generation;
+    poll(&g_cm, &g_fab, 1);
+    CHECK(g_fab.R[dev].EeCtlWrites > 24UL * 3UL, "TB3 resume: the late read clocked");
+    CHECK(strcmp(p->Dev.VendorName, "CalDigit, Inc.") == 0 &&
+          strcmp(p->Dev.ModelName, "TS3 Plus") == 0,
+          "TB3 resume: named after the resume");
+    CHECK(!p->Dev.DromOwed, "TB3 resume: nothing owed any more");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 4) & 0x13UL, 0x02UL,
+             "TB3 resume: the EEPROM left deselected, bit-banging off");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "TB3 resume: still UP");
+    CHECK_EQ(p->Generation, k, "TB3 resume: the connection unchanged by the read");
+    CHECK(p->Pcie.Up && fabPcieUp(&g_fab, 1), "TB3 resume: the tunnel untouched");
+    g_fab.R[dev].EeCtlWrites = 0;
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "TB3 resume: read once");
+
+    /* Owed, but the read fails (no EEPROM by then): once, unnamed, UP. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.RxQCount = 0;
+    CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "TB3 resume, no EEPROM: rebuilt");
+    g_fab.R[dev].Rcs[FAB_RCAP_PLUG + 4] = 0x00000022UL;
+    g_fab.R[dev].EeCtlWrites = 0;
+    poll(&g_cm, &g_fab, 2);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(p->Dev.ModelName[0] == 0 && !p->Dev.DromOwed,
+          "TB3 resume, no EEPROM: tried once, unnamed");
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "TB3 resume, no EEPROM: never clocked");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "TB3 resume, no EEPROM: UP");
+
+    /* Owed while the resume left the port HELD: not read until it is UP. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_cm.Ports[0].Dev.DromOwed = TRUE;
+    g_cm.Ports[0].Dev.ModelName[0] = 0;
+    g_cm.Ports[0].State = TBT_U4_HELD;
+    g_fab.R[dev].EeCtlWrites = 0;
+    TbtU4Poll(&g_cm);
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "HELD: no late read");
+    CHECK(g_cm.Ports[0].Dev.DromOwed, "HELD: still owed");
+    g_cm.Ports[0].State = TBT_U4_UP;
+    g_cm.Budgeted = TRUE;
+    TbtU4Poll(&g_cm);
+    CHECK_EQ(g_fab.R[dev].EeCtlWrites, 0, "under a budget: no late read");
+    g_cm.Budgeted = FALSE;
+    TbtU4Poll(&g_cm);
+    CHECK(strcmp(g_cm.Ports[0].Dev.ModelName, "TS3 Plus") == 0, "UP, no budget: read");
 
     /* A DROM whose CRC fails: unnamed, still UP. */
     fabInit(&g_fab);
@@ -4092,6 +4200,7 @@ int main(void)
     test_inert_and_domains();
     test_adl();
     test_tbt3();
+    test_tbt3_adopted();
     test_links();
     test_loss_and_eject();
     test_suspend_resume();

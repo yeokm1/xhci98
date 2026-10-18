@@ -62,6 +62,9 @@ typedef struct _CM_NV_SHADOW {
 static PSTOR98LS_TABLE cmNvTable;
 static KSPIN_LOCK cmNvLock;
 static CM_NV_SHADOW cmNvShadow[STOR98LS_ENTRIES];
+/* The tunnel (CM_NVLINK_TUNNEL) each entry's UP was last published for,
+ * CmNvlinkPublishUp's record (task 42-A.6); under cmNvLock. */
+static ULONG cmNvTunnel[STOR98LS_ENTRIES];
 static BOOLEAN cmNvNt;
 static BOOLEAN cmNvOsQualified; /* 2000 x86, XP x64 (record 21 7.2)      */
 static PCALLBACK_OBJECT cmNvObject;
@@ -91,6 +94,7 @@ typedef struct _CM_NV_U4 {
     ULONG LateBridge[XHCI_TBT_MAX_TUNNELS];
     ULONG LateFrom[XHCI_TBT_MAX_TUNNELS];
     ULONG LateOn[XHCI_TBT_MAX_TUNNELS];
+    ULONG LateTunnel[XHCI_TBT_MAX_TUNNELS]; /* the exposure's tunnel */
 } CM_NV_U4;
 
 #define CM_NV_LATE_MS 10000UL
@@ -742,8 +746,10 @@ static CM_NV_U4 *cmNvU4Of(PCM_NHI nhi, BOOLEAN create);
  * debt is paid. The UP so
  * published follows the operating system's enumeration: a stor98
  * instance bound before it finds its entry later, and the retirement
- * before the exposure kept any old statement away from it. */
-static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge, BOOLEAN arm)
+ * before the exposure kept any old statement away from it. The late scan
+ * publishes for `tunnel`, the exposure's (a later exposure naming none
+ * keeps the one an earlier exposure named). */
+static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge, BOOLEAN arm, ULONG tunnel)
 {
     CM_NV_U4 *u;
     ULONG k;
@@ -766,9 +772,13 @@ static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge, BOOLEAN arm)
     if (k == XHCI_TBT_MAX_TUNNELS) {
         for (k = 0; k < XHCI_TBT_MAX_TUNNELS && u->LateOn[k]; k++) {
         }
+        if (k == XHCI_TBT_MAX_TUNNELS) {
+            return;
+        }
+        u->LateTunnel[k] = CM_NVLINK_TUNNEL_NONE;
     }
-    if (k == XHCI_TBT_MAX_TUNNELS) {
-        return;
+    if (tunnel != CM_NVLINK_TUNNEL_NONE) {
+        u->LateTunnel[k] = tunnel;
     }
     u->LateBridge[k] = bridge;
     u->LateFrom[k] = cmNvNow(nhi);
@@ -777,7 +787,7 @@ static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge, BOOLEAN arm)
 
 /* Obligation 1's scan of one secondary bus: UP for each NVMe function
  * answering there. Returns (functions answering << 16) | entries UP. */
-static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, BOOLEAN fresh)
+static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, ULONG tunnel)
 {
     ULONG dev;
     ULONG fn;
@@ -816,7 +826,8 @@ static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, BOOLEAN fresh)
                     /* Another domain's statement is awaited there. */
                     index = CM_NVLINK_NONE;
                 } else {
-                    index = CmNvlinkPublishUp(cmNvTable, bus, slot, fresh,
+                    index = CmNvlinkPublishUp(cmNvTable, cmNvTunnel, bus,
+                                              slot, tunnel,
                                               &outcome);
                 }
                 if (index != CM_NVLINK_NONE) {
@@ -852,7 +863,7 @@ static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, BOOLEAN fresh)
  * configuration cycle before the scan gives up on it. */
 #define CM_NV_ANSWER_MS 1000UL
 
-ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
+ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
 {
     ULONG bus;
     ULONG r;
@@ -909,7 +920,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
         CmLogNote(nhi, "cm.nvlink.up.no-channel", bridge);
         return 0;
     }
-    r = cmNvScan(nhi, bridge, bus, fresh);
+    r = cmNvScan(nhi, bridge, bus, tunnel);
     if ((r >> 16) == 0 && fresh &&
         (!cmNvNt ||
          (cmNvSource(nhi, bridge) == XHCI_TBT_SRC_SHPC &&
@@ -925,7 +936,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
                CmNvlinkLeft(start, cmNvNow(nhi), CM_NV_ANSWER_MS) != 0) {
             CmNhiWaitService(nhi);
             nhi->Host.Sleep(nhi->Host.Context, XHCI_TBT_POLL_STEP_MS);
-            r = cmNvScan(nhi, bridge, bus, fresh);
+            r = cmNvScan(nhi, bridge, bus, tunnel);
         }
         CmLogNote(nhi, "cm.nvlink.up.waited",
                   ((cmNvNow(nhi) - start) << 8) | (r >> 16));
@@ -933,7 +944,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
     if (fresh && !cmNvNt) {
         /* Silent: owed a fresh publication when it answers. Answered: any
          * such debt is paid (no second count for it later). */
-        cmNvLateArm(nhi, bridge, (BOOLEAN)((r >> 16) == 0));
+        cmNvLateArm(nhi, bridge, (BOOLEAN)((r >> 16) == 0), tunnel);
     }
     return r & 0xFFFFUL;
 }
@@ -1319,6 +1330,9 @@ VOID CmNvlinkStop(PCM_NHI nhi)
         if (cmNvShadow[i].Owner == nhi) {
             cmNvShadow[i].Owner = NULL;
             cmNvShadow[i].Waiting = 0;
+            /* A later start numbers its connections afresh: none of its
+             * tunnels may be read as one recorded here. */
+            cmNvTunnel[i] = CM_NVLINK_TUNNEL_NONE;
         }
     }
     for (i = 0; i < CM_NV_DOMAINS; i++) {
@@ -1412,21 +1426,26 @@ VOID CmNvlinkU4Up(PVOID context, const TBT_U4_ACTION *action)
                   (action->Generation & 0xFFFFUL));
     /* The new establishment's UP now: this hook runs before anything can
      * expose the endpoint, also on the resume path, before held D0
-     * requests are released. The seam's later fresh exposure counts the
-     * generation once more; a newer generation with no link-down between
-     * is harmless to the reader rule (a DOWN_QUIESCED of a generation at
-     * or above the one an instance recorded is still about its link). */
+     * requests are released. It names the tunnel (port, connection
+     * generation), so the seam's later exposure of the same tunnel finds
+     * the entry UP for it and leaves its generation as it is (stor98cm.h
+     * R8b: only a new tunnel increments it; task 42-A.6). */
     bridge = XHCI_TBT_NO_BDF;
     if (action->Port >= 1 && action->Port <= XHCI_TBT_MAX_PORTS) {
         bridge = cmNvU4Bridge(nhi, action->Port);
     }
     if (bridge != XHCI_TBT_NO_BDF) {
-        (VOID)CmNvlinkExpose(nhi, bridge, TRUE);
+        (VOID)CmNvlinkExpose(nhi, bridge, TRUE,
+                             CM_NVLINK_TUNNEL(action->Port,
+                                              action->Generation));
     } else {
         /* The port's bridge is not known: every member of the set, as the
-         * seam's own exposure of this change will do. */
+         * seam's own exposure of this change will do, naming no tunnel -
+         * a function not UP gets its generation, and no member's entry
+         * already UP is advanced for a tunnel that may not be its own. */
         for (i = 0; i < nhi->Reenum.Topo.Tunnels; i++) {
-            (VOID)CmNvlinkExpose(nhi, nhi->Reenum.Topo.Set[i], TRUE);
+            (VOID)CmNvlinkExpose(nhi, nhi->Reenum.Topo.Set[i], TRUE,
+                                 CM_NVLINK_TUNNEL_NONE);
         }
     }
 }
@@ -1499,7 +1518,8 @@ VOID CmNvlinkService(PCM_NHI nhi)
         }
         bus = cmNvSecondary(u->LateBridge[i]);
         if (bus != CM_NVLINK_NONE && cmNvExclusive(nhi, u->LateBridge[i]) &&
-            (cmNvScan(nhi, u->LateBridge[i], bus, TRUE) >> 16) != 0) {
+            (cmNvScan(nhi, u->LateBridge[i], bus, u->LateTunnel[i]) >> 16) !=
+                0) {
             u->LateOn[i] = 0;
             CmLogNote(nhi, "cm.nvlink.up.late",
                       ((cmNvNow(nhi) - u->LateFrom[i]) << 8) | i);
