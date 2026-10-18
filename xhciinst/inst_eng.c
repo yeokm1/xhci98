@@ -11751,11 +11751,8 @@ static int s98_inf_names(const char *infPath, const char *name)
     if (infPath == NULL || infPath[0] == '\0') {
         return 0;
     }
-    if (inst_eq(infPath, name)) {
-        return 1;
-    }
     if (envNow.Nt) {
-        return inst_eq(infPath, base);
+        return inst_eq(infPath, base) || inst_eq(infPath, name);
     }
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return -1;
