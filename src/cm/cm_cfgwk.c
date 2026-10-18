@@ -224,8 +224,9 @@ typedef struct _CM_CFGWK {
                                removal-only request (CmCfgwkGone): every
                                child found then is removed, and it is
                                clean only once the bridge has none        */
-    ULONG EnumBusy;         /* members with a CmCfgmgReenumerate admitted
-                               and not yet returned (cmWkEnumAdmit): the
+    ULONG EnumBusy;         /* members with a CmCfgmgReenumerate or a
+                               no-IRQ operation admitted and not yet
+                               returned (cmWkEnumAdmit, cmWkNiAdmit): the
                                barrier's removal-only request waits for
                                them (CmCfgwkEnumBusy)                     */
     ULONG GoneClean;        /* members whose last CONTROLLER_UNAVAILABLE
@@ -1953,6 +1954,27 @@ static ULONG cmWkNiGate(PCM_CFGWK w, ULONG i)
     return open;
 }
 
+/* One no-IRQ operation admitted: the gate read and the operation marked
+ * in flight (EnumBusy) under one lock, so a retirement hold raised after
+ * this either refused it or finds it busy and the removal-only request
+ * follows its completion (record 22 section 7.7, CmCfgwkEnumBusy);
+ * cmWkEnumDone ends it. */
+static BOOLEAN cmWkNiAdmit(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    BOOLEAN open;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    open = (BOOLEAN)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
+                     ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold) &
+                      (1UL << i)) == 0);
+    if (open) {
+        w->EnumBusy |= 1UL << i;
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+    return open;
+}
+
 /* The installer's record of Stor98 (rule 4): CM_NI_STOR98_*. */
 static ULONG cmWkNiStor98(PCM_CFGWK w)
 {
@@ -2420,7 +2442,15 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
     ops = 0;
     while (ops++ < CM_WK_NI_OPS && CmNiNext(m, &ctx, &op)) {
         state = m->Dev[op.Dev].State;
-        cmWkNiExec(w, i, &op, &res);
+        if (cmWkNiAdmit(w, i)) {
+            cmWkNiExec(w, i, &op, &res);
+            cmWkEnumDone(w, i);
+        } else {
+            /* The gate closed since the pass sampled it: not made. */
+            CmZero(&res, sizeof(res));
+            res.Id = op.Id;
+            res.Cr = CMG_CR_FAILURE;
+        }
         ctx.Now = cmWkSince(w->NiBase);
         ctx.Gate = cmWkNiGate(w, i);
         CmNiTake(m, &ctx, &res);
@@ -3303,17 +3333,9 @@ ULONG CmCfgwkEnumBusy(PCM_CFGWK w)
 {
     KIRQL irql;
     ULONG busy;
-    ULONG i;
 
     KeAcquireSpinLock(&w->Lock, &irql);
     busy = w->EnumBusy;
-    for (i = 0; i < w->Members && i < XHCI_TBT_MAX_TUNNELS; i++) {
-        if (w->Port[i].Ni.Out.Id != 0) {
-            /* A no-IRQ operation submitted before the hold (record 28)
-             * still outstanding: the removal follows its completion. */
-            busy |= 1UL << i;
-        }
-    }
     KeReleaseSpinLock(&w->Lock, irql);
     return busy;
 }

@@ -479,6 +479,9 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     ULONG count;
     ULONG fresh;
     ULONG i;
+    ULONG j;
+    PLIST_ENTRY e;
+    PCM_FILTER child;
     ULONG attach;
     ULONG over;
     KIRQL irql;
@@ -561,6 +564,26 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
         filter->Snap[i] = now[i];
     }
     filter->SnapCount = count;
+    if (relations != NULL) {
+        /* A child filter AddDevice made that no bridge was found for when
+         * it linked (CmRegAttLink): counted for this bridge once its whole
+         * answer, not only the kept snapshot, reports the PDO (record 22
+         * section 7.7's retirement proof). */
+        for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+            child = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+            if (child->Common.Kind != CM_KIND_CHILD || child->Bridge != NULL) {
+                continue;
+            }
+            for (j = 0; j < relations->Count; j++) {
+                if ((PVOID)relations->Objects[j] == (PVOID)child->Common.Pdo) {
+                    child->Bridge = filter;
+                    filter->ChildLive++;
+                    child->ChildCounted = 1;
+                    break;
+                }
+            }
+        }
+    }
     filter->SnapTruncated = (ULONG)(relations != NULL &&
                                     relations->Count > CM_SNAP_MAX);
     if (filter->Published && !filter->Gone && !filter->Baseline) {
@@ -2406,6 +2429,10 @@ VOID CmReenumService(PCM_NHI nhi)
         } else if (act & CM_HELD_DO_OWE) {
             r->Port[i].Missed = 1;
             r->Port[i].MissedExpose |= r->Port[i].HeldExpose;
+            r->Port[i].HeldExpose = 0;
+        }
+        if ((r->Port[i].Held & CM_HELD_REENUM) == 0) {
+            /* Run, owed or discarded: the held work's mode goes with it. */
             r->Port[i].HeldExpose = 0;
         }
     }
