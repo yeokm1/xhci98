@@ -204,7 +204,7 @@ third-party documents remain untracked in `docs/references/`.
 
 ## Documents that live outside `docs/`
 
-Seven trees keep their documentation beside the thing it describes. This index
+Eight trees keep their documentation beside the thing it describes. This index
 points at them rather than copying them, so that everything tracked is
 reachable from here or from `AGENTS.md`'s repository layout.
 
@@ -225,6 +225,14 @@ reachable from here or from `AGENTS.md`'s repository layout.
 - [`xhcitr/README.TXT`](../xhcitr/README.TXT) - the xHCI98 USB Tree, the
   graphical tree, eject and tray tool, from `3.0.0.0` (roadmap-usb4 Phase
   41, design record 25); published as the tool's `readme.txt`.
+- [`src/stor98/README.md`](../src/stor98/README.md) - Stor98, the NVMe
+  SCSI miniport the packages bundle, a BSD-3-Clause project in this tree
+  since 2026-10-19 (roadmap-usb4 task 42-A.20), with its own
+  [`AGENTS.md`](../src/stor98/AGENTS.md), [`NOTICE`](../src/stor98/NOTICE)
+  and `docs/` ([`BUILD.md`](../src/stor98/docs/BUILD.md),
+  [`PLAN.md`](../src/stor98/docs/PLAN.md),
+  [`TESTING.md`](../src/stor98/docs/TESTING.md)); its dated records keep
+  the names and paths they were written with.
 - [`scripts/vm-matrix/README.md`](../scripts/vm-matrix/README.md) - the
   automated VM device matrix, its files, and its traps; its `guest/README.md`
   covers the load scripts that must run inside the guest.

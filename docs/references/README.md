@@ -503,6 +503,21 @@ header's text; `legal-provenance.md` section 2 has the row.
   declaration, macro body, comment or sample code is reproduced
   (`docs/contributing/legal-provenance.md` section 4, the CONFIGMG row).
   Fetched, never tracked.
+
+**Stor98's two headers (roadmap-usb4 task 42-A.20).** Stor98's 9x image
+(`src/stor98/`) is compiled with a Windows 98 (or NT4) DDK's `SCSI.H` and
+`SRB.H` ahead of the Windows 2000 DDK's, from the git-ignored
+`tools/w98ddk/inc/` (`src/stor98/docs/BUILD.md`). The copies it builds
+with are the ones that came with SweetLow's `nvme2k-src.zip`
+(`src/stor98/NOTICE`), copied from the Stor98 checkout's own `tools/` on
+2026-10-19; they are not the members of `win98se_ddk.exe` above, whose
+`BLCK_DDK` `SRC_BLOCK_INC_SCSI.H` and `SRC_BLOCK_INC_SRB.H` are other
+files (51,142 and 21,084 bytes) and are not used:
+
+| Save as | Bytes | SHA-256 |
+|---|---|---|
+| `tools/w98ddk/inc/SCSI.H` | 36,501 | `809d57e6756de21524930eb4d17840ab3047c7e1773da634ceb73a81ff8d39b7` |
+| `tools/w98ddk/inc/SRB.H` | 21,056 | `4b3c3305686f2593ceb471ae69f1d690de5d833c8f2047859d735b21affd8396` |
 - The Internet Archive item is a third-party upload, not a Microsoft
   distribution, so the SHA-256 above is what identifies the file: another
   copy of the same package is checked against it, not trusted by its name.
