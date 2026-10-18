@@ -2303,12 +2303,16 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   request (`REMOVE_PENDING`, below) is outstanding on an entry (interface
   3, R9a): it is left as it is until the request is withdrawn. Before
   every exposure, fresh or not (it follows the acknowledgement wait), every entry behind
-  that bridge that carries a statement is retired (`IN_USE` alone,
-  generation + 1), found by the bus and by the bridge it was last published
+  that bridge that carries a statement is retired (`IN_USE` alone, the
+  generation kept), found by the bus and by the bridge it was last published
   or marked for, so a Stor98 instance that binds after the exposure -
   to a function the scan could not see, or one that came back between the
   scan and the enumeration - never records a generation carrying an old
-  statement. On Windows 98 SE and ME no `UP` is published while the
+  statement. (Until task 42-A.12 the retirement also advanced the
+  generation, so a re-plug after a statement cost two increments; R8b
+  allows one per tunnel and none for anything else, and Stor98's 9x late
+  lookup takes a generation read not `UP` as its floor and binds only an
+  `UP` above it, which the re-plug's one increment is.) On Windows 98 SE and ME no `UP` is published while the
   proof and locator are not published. There the tunnel's bus did not answer before
   `Reenumerate_DevNode` (98 SE, run-39): a fresh exposure that finds it
   silent leaves the bus to be scanned again on each pass for 10 s, and the

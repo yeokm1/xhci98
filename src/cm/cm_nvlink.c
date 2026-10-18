@@ -101,8 +101,10 @@ BOOLEAN CmNvlinkRetireEntry(PSTOR98LS_TABLE t, ULONG index)
         /* Unused, UP, or already retired (nothing a reader could apply). */
         return FALSE;
     }
+    /* The statement withdrawn, the generation kept: R8b allows an
+     * increment for a new tunnel and for nothing else, so the next UP on
+     * the entry makes the only one (task 42-A.12). */
     cmNvBegin(e);
-    e->LinkGeneration = e->LinkGeneration + 1;
     e->Flags = STOR98LS_IN_USE;
     cmNvEnd(e);
     return TRUE;
@@ -320,6 +322,75 @@ ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
         return CM_NVLINK_LATE;
     }
     return CM_NVLINK_SEND;
+}
+
+ULONG CmNvlinkWaitStep(const STOR98LS_TABLE *t, CM_NV_SHADOW *shadow,
+                       PVOID owner, BOOLEAN receiver, ULONG nowMs,
+                       ULONG boundMs, PULONG ends, PULONG count)
+{
+    ULONG i;
+    ULONG step;
+    ULONG pending;
+
+    pending = 0;
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if (shadow[i].Owner != owner || !shadow[i].Waiting) {
+            continue;
+        }
+        /* The deadline before the acknowledgement is read: one first seen
+         * after it is late, logged and not taken (R11, R12 S4).
+         * Superseded (a later UP or retirement) and no receiver (no stor98
+         * has the table) end the wait at once. */
+        step = CmNvlinkAckStep(t, i, receiver, shadow[i].MarkedAt, nowMs,
+                               boundMs);
+        if (step == CM_NVLINK_AW_PENDING) {
+            pending++;
+            continue;
+        }
+        shadow[i].Waiting = 0;
+        if (ends != NULL && *count < STOR98LS_ENTRIES) {
+            ends[*count] = (step << 8) | i;
+            *count = *count + 1;
+        }
+    }
+    return pending;
+}
+
+BOOLEAN CmNvlinkWaitHeld(const CM_NV_SHADOW *shadow, PVOID owner,
+                         ULONG bridge)
+{
+    ULONG i;
+
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if (shadow[i].Owner == owner && shadow[i].Waiting &&
+            shadow[i].Bridge == bridge) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow)
+{
+    ULONG i;
+
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if (shadow[i].Owner != NULL && shadow[i].Waiting) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+ULONG CmNvlinkIdleFor(ULONG configured, BOOLEAN up, BOOLEAN pending)
+{
+    if (pending && configured > CM_NVLINK_PEND_MS) {
+        return CM_NVLINK_PEND_MS;
+    }
+    if (up && configured > CM_NVLINK_IDLE_MS) {
+        return CM_NVLINK_IDLE_MS;
+    }
+    return configured;
 }
 
 ULONG CmNvlinkAckBoundMs(BOOLEAN nt)

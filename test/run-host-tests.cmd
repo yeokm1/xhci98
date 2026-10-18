@@ -212,6 +212,11 @@ rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
 rem                  and SHPC
 rem                  readings, a port without the capability bits, and the
 rem                  bounded poll
+rem   test_cm_call - the 9x per-member call workers' handoff word
+rem                  (src\cm\cm_call.c, task 42-A.12): its transitions, a
+rem                  stale id, a withdrawal, a deadline passing while a call
+rem                  runs, two members' slots apart, and a next-operation
+rem                  client driven through one slot
 rem   test_cm_nvlink - the stor98 link-state channel's pure half
 rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
 rem                  table of stor98's stor98cm.h, its entry protocol read
@@ -525,6 +530,9 @@ rem test_cm_nvlink links nothing else: the stor98 link-state channel's entry
 rem protocol, statement conditions, 9x record and REMOVE_PENDING request
 rem are pure, read back by a modelled receiver (39-A.7, 40-A.7).
 call :run test_cm_nvlink "test_cm_nvlink.c ..\src\cm\cm_nvlink.c"
+rem test_cm_call links nothing else: the call workers' handoff word is pure
+rem (42-A.12).
+call :run test_cm_call "test_cm_call.c ..\src\cm\cm_call.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"

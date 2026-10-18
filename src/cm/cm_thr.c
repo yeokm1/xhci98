@@ -41,6 +41,7 @@
 
 #include "cm.h"
 #include "cm_nvlink.h"
+#include "cm_call.h"
 
 /* PCI Command (PCI 3.0 6.2.2), the only configuration word written here. */
 #define CM_PCI_COMMAND            0x04UL
@@ -628,7 +629,19 @@ static VOID NTAPI cmThread(PVOID context)
                                         KernelMode, FALSE, &due);
         } else if (CmLiveWaitMs(&nhi->Live) != 0) {
             /* No transport, but a monitored state: the slow probes. */
-            cmRelativeMs(&due, CmLiveWaitMs(&nhi->Live));
+            cmRelativeMs(&due, CmNvlinkPending() &&
+                                       CmLiveWaitMs(&nhi->Live) >
+                                           CM_NVLINK_PEND_MS
+                                   ? CM_NVLINK_PEND_MS
+                                   : CmLiveWaitMs(&nhi->Live));
+            nhi->ThreadWait = CM_Q_WAIT_TIMED;
+            (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
+                                        KernelMode, FALSE, &due);
+        } else if (CmNvlinkPending()) {
+            /* Not polling, but a stor98 acknowledgement wait pending: the
+             * passes that step it, every 50 ms until it ends (task
+             * 42-A.12; R10). */
+            cmRelativeMs(&due, CM_NVLINK_PEND_MS);
             nhi->ThreadWait = CM_Q_WAIT_TIMED;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
@@ -781,4 +794,19 @@ VOID CmThrStop(PCM_NHI nhi)
                                     KernelMode, FALSE, NULL);
     }
     nhi->ThreadRunning = 0;
+}
+
+/* The per-member call workers' threads (cm_callwk.c, task 42-A.12): made
+ * here so that the handle is closed at this file's site. PASSIVE_LEVEL. */
+NTSTATUS CmThrSpawn(VOID (NTAPI *routine)(PVOID), PVOID context)
+{
+    HANDLE handle;
+    NTSTATUS status;
+
+    status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
+                                  NULL, routine, context);
+    if (NT_SUCCESS(status)) {
+        (VOID)ZwClose(handle);
+    }
+    return status;
 }

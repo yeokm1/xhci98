@@ -482,18 +482,219 @@ static void test_fresh(void)
     /* Retired before the exposure: the binding instance stays off it. */
     CHECK_EQ(CmNvlinkRetire(&table, 4), 1, "one entry retired");
     CHECK_EQ(table.Entry[i].Flags, STOR98LS_IN_USE, "IN_USE alone");
-    CHECK_EQ(table.Entry[i].LinkGeneration, 3, "a new generation with no DOWN");
+    CHECK_EQ(table.Entry[i].LinkGeneration, 2,
+             "the generation kept: no increment but a new tunnel's (R8b)");
     rxFind(&rx, &table, 4, 0);
-    CHECK_EQ(rx.Recorded, 3, "the new instance records it");
     rxPoll(&rx, &table);
-    CHECK_EQ(rx.Applied, 0, "and applies nothing");
+    CHECK_EQ(rx.Applied, 0, "a new instance applies nothing");
     CHECK_EQ(CmNvlinkRetire(&table, 5), 0, "another bus: nothing");
-    CHECK_EQ(CmNvlinkRetire(&table, 4), 0, "an entry already retired: nothing");
+    CHECK_EQ(CmNvlinkRetire(&table, 4), 0,
+             "an entry already retired: nothing");
     CHECK(!CmNvlinkRetireEntry(&table, i), "nor by index");
-    CHECK(!CmNvlinkRetireEntry(&table, STOR98LS_ENTRIES), "an index past the table");
+    CHECK(!CmNvlinkRetireEntry(&table, STOR98LS_ENTRIES),
+          "an index past the table");
     i = CmNvlinkPublishUp(&table, tun, 4, 0, CM_NVLINK_TUNNEL_NONE, &o);
+    CHECK_EQ(table.Entry[i].LinkGeneration, 3, "the next UP: one increment");
     CHECK_EQ(CmNvlinkRetire(&table, 4), 0, "an UP entry is not retired");
     CHECK_EQ(CmNvlinkRetire(NULL, 4), 0, "no table");
+}
+
+/*
+ * Stor98's 9x late lookup (p9bind.h, P9BindScan and P9LateLookup, as
+ * imported in src/stor98): an entry read not UP sets the floor to its
+ * generation, and only an UP above the floor is bound. Returns
+ * the floor a load that found the entry as it reads now would set.
+ */
+static ULONG lateFloor(const STOR98LS_TABLE *t, ULONG i)
+{
+    if ((t->Entry[i].Flags & STOR98LS_UP) == 0) {
+        return t->Entry[i].LinkGeneration;
+    }
+    return 0;
+}
+
+/*
+ * Task 42-A.12, stor98cm.h R8b as Stor98 revised it on 2026-10-18 ("only a
+ * new tunnel increments LinkGeneration"; "LinkGeneration increments by
+ * exactly one per tunnel establishment and for nothing else"): a re-plug
+ * after a statement used to cost two increments, the retirement's before
+ * the exposure and the new UP's. The retirement now only withdraws the
+ * statement, so the generation counts tunnels, and a 9x load that finds
+ * the retired entry before the new UP still binds that UP.
+ */
+static void test_r8b_replug(void)
+{
+    ULONG i;
+    ULONG o;
+    ULONG k;
+    ULONG floor;
+    RX old;
+    RX mid;
+
+    tableInit();
+    i = CmNvlinkPublishUp(&table, tun, 4, 0, T1, &o);
+    rxFind(&old, &table, 4, 0);
+    CHECK_EQ(old.Recorded, 1, "tunnel 1: generation 1");
+    CHECK(CmNvlinkSetDown(&table, i, TRUE), "tunnel 1 down: the statement");
+    rxPoll(&old, &table);
+    CHECK(CmNvlinkAcked(&table, i), "acknowledged by its instance");
+    /* The down's own re-enumeration retires it before its exposure. */
+    CHECK_EQ(CmNvlinkRetire(&table, 4), 1, "retired");
+    CHECK_EQ(table.Entry[i].LinkGeneration, 1, "no increment for it");
+    CHECK_EQ(table.Entry[i].Flags, STOR98LS_IN_USE, "the statement withdrawn");
+    /* An instance that binds now (a function the scan did not see), and
+     * a 9x load that found the entry before the new UP. */
+    rxFind(&mid, &table, 4, 0);
+    rxPoll(&mid, &table);
+    CHECK_EQ(mid.Applied, 0, "no old statement reaches a binder");
+    floor = lateFloor(&table, i);
+    CHECK_EQ(floor, 1, "the 9x late lookup's floor: the retired generation");
+    /* Re-plugged: tunnel 2. */
+    CHECK_EQ(CmNvlinkPublishUp(&table, tun, 4, 0, T2, &o), i, "its entry");
+    CHECK_EQ(o, CM_NVLINK_UP_AGAIN, "a new connection");
+    CHECK_EQ(table.Entry[i].LinkGeneration, 2,
+             "tunnel 2: generation 2, one increment for one tunnel");
+    CHECK(table.Entry[i].LinkGeneration > floor,
+          "above the floor: the 9x load binds the new tunnel's UP");
+    rxPoll(&old, &table);
+    CHECK_EQ(old.Applied, 1, "the old instance applies nothing more");
+    CHECK_EQ(CmNvlinkPublishUp(&table, tun, 4, 0, T2, &o), i, "T2 again");
+    CHECK_EQ(o, CM_NVLINK_UP_ALREADY, "unchanged");
+    /* Withheld (no statement, nothing retired): the next tunnel counts. */
+    CHECK(CmNvlinkSetDown(&table, i, FALSE), "tunnel 2 down, withheld");
+    CHECK_EQ(CmNvlinkRetire(&table, 4), 0, "nothing to retire");
+    (void)CmNvlinkPublishUp(&table, tun, 4, 0, CM_NVLINK_TUNNEL(1, 3), &o);
+    CHECK_EQ(table.Entry[i].LinkGeneration, 3, "tunnel 3: generation 3");
+    /* Retired, then found again with no tunnel named (a resync's
+     * exposure finding the function): one increment, as for any UP of an
+     * entry not UP. */
+    CHECK(CmNvlinkSetDown(&table, i, TRUE), "tunnel 3 down");
+    CHECK_EQ(CmNvlinkRetire(&table, 4), 1, "retired");
+    (void)CmNvlinkPublishUp(&table, tun, 4, 0, CM_NVLINK_TUNNEL_NONE, &o);
+    CHECK_EQ(table.Entry[i].LinkGeneration, 4, "UP: generation 4");
+    CHECK_EQ(table.Entry[i].Flags, STOR98LS_IN_USE | STOR98LS_UP, "UP");
+    /* Five tunnels, each down with a statement in between: five. */
+    tableInit();
+    for (k = 1; k <= 5; k++) {
+        i = CmNvlinkPublishUp(&table, tun, 4, 0, CM_NVLINK_TUNNEL(1, k), &o);
+        CHECK_EQ(table.Entry[i].LinkGeneration, k,
+                 "generation k for the k-th tunnel");
+        CHECK(CmNvlinkSetDown(&table, i, TRUE), "down");
+        (void)CmNvlinkRetire(&table, 4);
+    }
+    CHECK(!CmNvlinkRetireEntry(&table, i), "a retired entry is not retired again");
+}
+
+/*
+ * Task 42-A.12: the acknowledgement waits are per entry and stepped, never
+ * a hold of the thread (record 21 section 7.2 parts 0 and 3; interface 3's
+ * R6e, R10, R11, R12 S4). Two members of one domain, a third member of
+ * another domain.
+ */
+static void test_pending(void)
+{
+    CM_NV_SHADOW sh[STOR98LS_ENTRIES];
+    ULONG ends[STOR98LS_ENTRIES];
+    ULONG n;
+    ULONG a;
+    ULONG b;
+    ULONG c;
+    ULONG o;
+    ULONG bound;
+    int domA;
+    int domB;
+    RX rxa;
+
+    bound = CmNvlinkAckBoundMs(TRUE);
+    memset(sh, 0, sizeof(sh));
+    tableInit();
+    a = CmNvlinkPublishUp(&table, tun, 4, 0, T1, &o);   /* member 0x100 */
+    b = CmNvlinkPublishUp(&table, tun, 5, 0, T3, &o);   /* member 0x200 */
+    c = CmNvlinkPublishUp(&table, tun, 6, 0, T1, &o);   /* domain B     */
+    sh[a].Owner = &domA;
+    sh[a].Bridge = 0x100;
+    sh[b].Owner = &domA;
+    sh[b].Bridge = 0x200;
+    sh[c].Owner = &domB;
+    sh[c].Bridge = 0x300;
+    rxFind(&rxa, &table, 4, 0);
+    CHECK(!CmNvlinkWaitAny(sh), "nothing pending");
+
+    /* A statement on member 0x100 at t = 1000. */
+    CHECK(CmNvlinkSetDown(&table, a, TRUE), "member 0x100 down");
+    sh[a].Waiting = 1;
+    sh[a].MarkedAt = 1000;
+    CHECK(CmNvlinkWaitHeld(sh, &domA, 0x100), "its gate is up");
+    CHECK(!CmNvlinkWaitHeld(sh, &domA, 0x200),
+          "the other member's is not: its exposure and removal go on");
+    CHECK(!CmNvlinkWaitHeld(sh, &domB, 0x100), "another domain's: not");
+    CHECK(CmNvlinkWaitAny(sh), "a wait pending: the 50 ms cadence");
+    n = 0;
+    CHECK_EQ(CmNvlinkWaitStep(&table, sh, &domA, TRUE, 1010, bound, ends, &n),
+             1, "one step, still pending, nothing held for it");
+    CHECK_EQ(n, 0, "no end yet");
+    /* Member 0x200 goes down too, later; it waits on its own deadline. */
+    CHECK(CmNvlinkSetDown(&table, b, TRUE), "member 0x200 down");
+    sh[b].Waiting = 1;
+    sh[b].MarkedAt = 1020;
+    CHECK_EQ(CmNvlinkWaitStep(&table, sh, &domA, TRUE, 1030, bound, ends, &n),
+             2, "two pending");
+    /* Member 0x100's instance acknowledges. */
+    rxPoll(&rxa, &table);
+    CHECK_EQ(CmNvlinkWaitStep(&table, sh, &domA, TRUE, 1040, bound, ends, &n),
+             1, "0x100 acknowledged, 0x200 still pending");
+    CHECK_EQ(n, 1, "one end");
+    CHECK_EQ(ends[0], (CM_NVLINK_AW_ACKED << 8) | a, "acknowledged");
+    CHECK(!CmNvlinkWaitHeld(sh, &domA, 0x100), "0x100's gate falls");
+    CHECK(CmNvlinkWaitHeld(sh, &domA, 0x200), "0x200's stays");
+    /* Domain B's own wait is not stepped by domain A's step. */
+    CHECK(CmNvlinkSetDown(&table, c, TRUE), "domain B's member down");
+    sh[c].Waiting = 1;
+    sh[c].MarkedAt = 0;
+    n = 0;
+    (void)CmNvlinkWaitStep(&table, sh, &domA, TRUE, 1020 + bound - 1, bound,
+                           ends, &n);
+    CHECK_EQ(n, 0, "short of the bound: nothing ends");
+    CHECK(sh[c].Waiting, "domain B's wait untouched by domain A's step");
+    /* At the bound, no answer: a timeout, the gate falls. */
+    CHECK_EQ(CmNvlinkWaitStep(&table, sh, &domA, TRUE, 1020 + bound, bound,
+                              ends, &n), 0, "timed out");
+    CHECK_EQ(ends[0], (CM_NVLINK_AW_TIMEOUT << 8) | b, "a timeout");
+    CHECK(!CmNvlinkWaitHeld(sh, &domA, 0x200), "and its gate falls");
+    /* An answer first seen after the bound is late, never taken. */
+    table.Entry[c].AckGeneration = table.Entry[c].LinkGeneration;
+    n = 0;
+    CHECK_EQ(CmNvlinkWaitStep(&table, sh, &domB, TRUE, bound, bound, ends, &n),
+             0, "domain B: ended");
+    CHECK_EQ(ends[0], (CM_NVLINK_AW_LATE << 8) | c, "late (R11, R12 S4)");
+    CHECK(!CmNvlinkWaitAny(sh), "nothing pending");
+    /* No receiver: no wait at all; a superseded entry ends at once. */
+    CHECK(CmNvlinkSetDown(&table, CmNvlinkPublishUp(&table, tun, 4, 0, T2, &o),
+                          TRUE), "0x100 up and down again");
+    sh[a].Waiting = 1;
+    sh[a].MarkedAt = 5000;
+    n = 0;
+    (void)CmNvlinkWaitStep(&table, sh, &domA, FALSE, 5001, bound, ends, &n);
+    CHECK_EQ(ends[0], (CM_NVLINK_AW_NO_RECEIVER << 8) | a, "no receiver");
+    sh[a].Waiting = 1;
+    (void)CmNvlinkRetireEntry(&table, a);
+    n = 0;
+    (void)CmNvlinkWaitStep(&table, sh, &domA, TRUE, 5002, bound, ends, &n);
+    CHECK_EQ(ends[0], (CM_NVLINK_AW_SUPERSEDED << 8) | a, "superseded");
+    sh[a].Waiting = 1;
+    sh[a].MarkedAt = 5000;
+    (void)CmNvlinkWaitStep(&table, sh, &domA, TRUE, 5003, bound, NULL, &n);
+    CHECK(!sh[a].Waiting, "ends not recorded when no array is given");
+    /* The cadence. */
+    CHECK_EQ(CmNvlinkIdleFor(1000, FALSE, TRUE), CM_NVLINK_PEND_MS,
+             "pending, nothing UP: 50 ms (R10)");
+    CHECK_EQ(CmNvlinkIdleFor(1000, TRUE, TRUE), CM_NVLINK_PEND_MS,
+             "pending and UP: 50 ms");
+    CHECK_EQ(CmNvlinkIdleFor(1000, TRUE, FALSE), CM_NVLINK_IDLE_MS,
+             "UP alone: 250 ms");
+    CHECK_EQ(CmNvlinkIdleFor(30, TRUE, TRUE), 30, "a shorter period kept");
+    CHECK_EQ(CmNvlinkIdleFor(5000, FALSE, FALSE), 5000, "neither: as set");
+    CHECK(CM_NVLINK_PEND_MS <= 50, "at least every 50 ms (R10)");
 }
 /*
  * Task 42-A.6 over two members (the U.11 leg of runs/run-41.md: an NVMe
@@ -832,6 +1033,8 @@ int main(void)
     test_full();
     test_verdicts();
     test_fresh();
+    test_r8b_replug();
+    test_pending();
     test_two_members();
     test_bridge_tunnel();
     test_record();
