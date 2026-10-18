@@ -6983,8 +6983,9 @@ static int snap_txt_level(const char *path)
 
 static int snap_say(HANDLE f, const char *text);
 
-/* A whole file appended to the report, in pieces: 1 done, 0 not opened or
- * a write failed, -1 a read failed part way (the report says so). */
+/* A whole file appended to the report, in pieces: 1 done, 2 the file
+ * could not be opened (nothing written), 0 a write to the report failed,
+ * -1 a read failed part way (the report says so). */
 static int snap_append(HANDLE f, const char *path)
 {
     static char buf[8192];
@@ -6996,7 +6997,7 @@ static int snap_append(HANDLE f, const char *path)
     in = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
                      FILE_ATTRIBUTE_NORMAL, NULL);
     if (in == INVALID_HANDLE_VALUE) {
-        return 0;
+        return 2;
     }
     for (;;) {
         if (!ReadFile(in, buf, sizeof(buf), &got, NULL)) {
@@ -7017,7 +7018,7 @@ static int snap_append(HANDLE f, const char *path)
         return snap_say(f, "\r\n[cut short: the file could not be read "
                            "to its end]\r\n") ? -1 : 0;
     }
-    return ok && WriteFile(f, "\r\n", 2, &w, NULL);
+    return (ok && WriteFile(f, "\r\n", 2, &w, NULL) && w == 2) ? 1 : 0;
 }
 
 static int snap_say(HANDLE f, const char *text)
@@ -7118,12 +7119,12 @@ static int report_snapshots(HANDLE f)
             if (!devDone) {
                 tr_sprintf(file, sizeof(file), "%s\\XHCITR.DEV", dir);
                 got = snap_append(f, file);
-                if (got != 0) {
-                    devDone = 1;
-                    ok = ok && got == 1;
-                } else {
+                if (got == 2) {
                     ok = ok && snap_say(f, "No device report was written."
                                            "\r\n\r\n");
+                } else {
+                    devDone = 1;
+                    ok = ok && got == 1;
                 }
             }
             tr_sprintf(file, sizeof(file), "%s\\XHCITR.TXT", dir);
