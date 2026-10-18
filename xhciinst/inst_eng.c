@@ -8220,6 +8220,9 @@ left:
         s98_record_devices();
         s98_inf_after(NULL, 1);
     } else {
+        /* No fresh reading: the listing is taken and logged, nothing is
+         * attributed. */
+        s98_inf_after(NULL, -1);
         flagFailed = 1;
     }
     for (i = 0; i < devCount; i++) {
@@ -11823,7 +11826,9 @@ static int s98_oem_was(const char *name)
 }
 
 /* After a step - a helper install or update (infPath: that device's
- * driver key's InfPath afterwards) or a settle (settle 1) - each copy that
+ * driver key's InfPath afterwards), a settle (settle 1), or a step with no
+ * fresh reading of the devices (settle -1: nothing attributed) - each copy
+ * that
  * was not in the listing before is recorded under Staged when the device
  * of the step names it (after a settle: a device newly recorded under
  * Devices); another is left and logged. The after-listing becomes the
@@ -11845,8 +11850,8 @@ static void s98_inf_after(const char *infPath, int settle)
             if (s98_inf_in(0, name)) {
                 continue;
             }
-            if (settle ? s98_inf_named_by_recorded(name)
-                       : s98_inf_names(infPath, name)) {
+            if (settle > 0 ? s98_inf_named_by_recorded(name) :
+                settle == 0 && s98_inf_names(infPath, name)) {
                 s98_inf_log(name, "made in this step and named by the "
                             "device: recorded");
                 s98_rec_text("Staged", name, s98VersionText);
@@ -13108,13 +13113,15 @@ static int s98_un_devices(HDEVINFO set)
         }
         /* The record's entry stays until s98_un_verify has read every
          * removed device gone after the other removals. */
-        if (s98RemovedCount >= INST_S98_MAX_DEV) {
-            out("  More Stor98 devices than one run removes: run the "
-                "uninstall again for the rest.\n");
-            flagSteps = 1;
-            return 0;
-        }
         inst_copy(s98RemovedId[s98RemovedCount++], id, INST_ID_CHARS);
+        if (s98RemovedCount >= INST_S98_MAX_DEV && !opts.List) {
+            /* A full batch: verified and retired, then the record read
+             * again from its start. */
+            if (!s98_un_verify()) {
+                return 0;
+            }
+            i = (DWORD)-1;
+        }
     }
     if (r < 0) {
         out("  The record's devices cannot be read.\n");
