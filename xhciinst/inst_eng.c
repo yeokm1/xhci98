@@ -9912,9 +9912,9 @@ static void tb_print(void)
     if (tbUnits > 0) {
         for (i = 0; i < tbnCount; i++) {
             if (tbn[i].Number == 1) {
-                out("\nTo eject: INSTALL /eject 1   (or XHCIINST /eject 1)\n");
-                out(envNow.Nt ? "  in a script: INSTALL /eject \"id=%s\" /yes\n"
-                              : "  in a script: INSTALL /eject id=%s /yes\n",
+                out("\nTo eject: INSTALL /console /eject 1   (or XHCIINST /eject 1)\n");
+                out(envNow.Nt ? "  in a script: INSTALL /console /eject \"id=%s\" /yes\n"
+                              : "  in a script: INSTALL /console /eject id=%s /yes\n",
                     tbn[i].R.Id);
             }
         }

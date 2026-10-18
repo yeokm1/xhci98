@@ -1,6 +1,8 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 10, 2026-10-16 (the console, the questions and the
+Status: revision 11, 2026-10-18 (the window, the helper, the uninstall
+from Add/Remove Programs; see below); revision 10, 2026-10-16 (the
+console, the questions and the
 install directory; see below); revision 9, 2026-10-16 (the USB tree
 tool); revision 8, 2026-10-15, reviewed and revised six times the same day;
 the code is written against it (task 40.5) and was reviewed and revised
@@ -41,6 +43,69 @@ an offer to open Device Manager (section 6.4). The owner then decided, the
 same day, that on 98 SE and ME the package copy goes straight into the
 install directory with no subfolder (section 4.4), and that Enter at the
 confirmation goes on ("Enter for [Y]", section 5.1 step 4).
+
+Revision 11, 2026-10-18 (roadmap-usb4.md tasks 42-A.2 and 42-A.3, design
+record 26 section 12; record 27 section 10): a second front end, the
+window `XHCIWIZ.EXE` / `XHCIWZ64.EXE`, over one engine, and the uninstall
+from Add/Remove Programs. What changes here, section by section:
+
+- **The engine** (sections 3, 10 and 15): the system half moves from
+  `xhciinst.c` to `xhciinst\inst_eng.c` behind the front-end table of
+  record 26 section 3.2; `xhciinst.c` is the console front end. Every rule
+  of this record stays the engine's or the pure half's, and the console's
+  screens are unchanged.
+- **Section 2**: `INSTALL.BAT` opens the window; `/console` as its first
+  word runs the console tool with the rest (on 98 SE and ME the batch file
+  drops the word, seven arguments after it; on NT the console tool takes
+  it). The package's `tools\xhciinst\` holds the window pair beside the
+  console pair, and record 27's helper `XHCIDI.EXE` for 98 SE and ME.
+- **Section 3**: `build.cmd` builds the four executables (the window with
+  the static multithreaded runtime, `/SUBSYSTEM:WINDOWS,4.0`; its import
+  gate the seven modules of record 26 section 4); the helper has its own
+  build (record 27 section 3).
+- **Section 4.2**: the package-layout refusal holds for an install and an
+  update; the uninstall needs no package (W12).
+- **Section 5.5**: the routine's `hwndParent` is the front end's window
+  (the window's sheet; NULL on the console, as before).
+- **Sections 6.1, 6.2 and 6.4**: on 98 SE and ME each device of the plan is
+  installed by record 27's helper after the copy and `DevicePath`, in its
+  order (the controllers; after the settle the root hub, hubs and
+  composite entries, at most four passes; UAS devices; the host
+  interface), each pass behind the gate (the tree settled, and the user's
+  word that no hardware wizard is open; `/yes` asks no word), each device
+  read back afterwards (record 26 section 8). Section 6.4's printed steps
+  stay for a device the helper could not install, and for every device
+  when the package has no helper or its probe fails. "Never drives
+  `SETUPX`" above now reads: never through anything but record 27's
+  documented calls.
+- **Section 7.1**: `/from <dir>` (the uninstall's relaunch), `/console`
+  (the console's no-op word) and `/debug` (the window's own choice of the
+  `debug-` directory); the window refuses the console's switches (record
+  26 section 10).
+- **Sections 8.1, 8.3 and 8.4**: an answer is written machine-wide, to
+  `HKLM\System\CurrentControlSet\Services\USB` (task 42-A.17), and only
+  where it differs from the value in force (the machine-wide one, else
+  each device's own); the question shows the machine-wide value beside
+  each device's own; a per-controller value is left as it is. The table
+  gains the connection manager's waits and log values (ranges) and
+  `XhciCmBridgeNumbering` (98 SE and ME, written by no INF), all never
+  asked, set with `/set` or the window's Advanced dialog.
+- **Section 9**: every install and update writes the Add/Remove Programs
+  entry (record 26 section 9.1) once the installer's own files are in the
+  install directory (record 26 section 6.2); an uninstall started from the
+  install directory relaunches a temporary copy with `/from` (W6); 98 SE
+  and ME remove each package entry through the helper, children first, an
+  entry left stopping the destructive steps, then `DevicePath`, the copy,
+  the INF copies and the driver files (record 26 section 9.3 step 4;
+  section 9.4's printed steps stay only where the helper cannot run); the
+  machine-wide values the table names are deleted; the tools, the
+  installer's files, the records, the entry and the directory go last,
+  only when nothing is left for a later run, and an uninstall that stopped
+  keeps its entry, named "(incomplete: run again)" (W14).
+- **Not in this revision**: the bundled Stor98 component (record 26
+  sections 5.6, 6.3 and 6.4) and the safe-removal mark service (record 21
+  section 7.4 revision 3, task 42-A.5); sections 4.4 and 9.2 stay as they
+  were for them.
 
 The tool never ships `devcon` or any other Microsoft file, never drives
 Windows 98's 16-bit setup engine (`SETUPX`) through anything undocumented,

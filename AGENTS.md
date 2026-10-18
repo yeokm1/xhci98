@@ -237,7 +237,9 @@ xhcisnap/       The host-side reader for the driver's log channel
                 (`XHCISNAP.EXE`); `xhcisnap/README.md` is its guide. Tracked.
 xhciinst/       The install, update and uninstall tool (`XHCIINST.EXE`,
                 `XHCIIN64.EXE`) and the package's `INSTALL.BAT`, from
-                `3.0.0.0` (design record 23). Tracked.
+                `3.0.0.0` (design record 23), and its window
+                (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`) over the same engine, from
+                `3.1.0.0` (design record 26). Tracked.
 xhcicln/        The optional cleanup tool (`XHCICLN.EXE`, `XHCICL64.EXE`)
                 for the devnodes a driver before `2.4.0.0` left under
                 `XHCI98\`, from `2.4.0.0` (roadmap-hcd task 38.8, design
@@ -715,9 +717,9 @@ rules that bind day-to-day work, and none of them is optional.
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"
   anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, from
-  `2.4.0.0` `XHCICLN` and `XHCICL64`, and from `3.0.0.0` `XHCIINST`,
-  `XHCIIN64`, `XHCITR` and `XHCITR64`) carry statically linked runtimes
-  (section 2a).
+  `2.4.0.0` `XHCICLN` and `XHCICL64`, from `3.0.0.0` `XHCIINST`,
+  `XHCIIN64`, `XHCITR` and `XHCITR64`, and from `3.1.0.0` `XHCIWIZ` and
+  `XHCIWZ64`) carry statically linked runtimes (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh

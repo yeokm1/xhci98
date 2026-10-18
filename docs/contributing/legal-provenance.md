@@ -107,7 +107,7 @@ identification.
 | Published snapshot reader binary | Yes | `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` | Built from this project's sources but not only this project's code: the MSVC 6.0 C runtime is statically linked in. See section 2a |
 | Intel xHCI specification PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
 | USB-IF backwards-compatibility testing PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
-| Published install tool binaries, and `INSTALL.BAT` | Yes, from the first cut that carries them (`3.0.0.0`) | `releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`; `releases/<version>/INSTALL.BAT` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each executable (MSVC 6.0's, WDK 7.1's). See section 2a. `INSTALL.BAT` is this project's own text. Neither carries or calls a Microsoft setup program: the routines they use are the system's own, looked up at run time |
+| Published install tool binaries, and `INSTALL.BAT` | Yes, from the first cut that carries them (`3.0.0.0`; the window from `3.1.0.0`, not cut yet) | `releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`, and from `3.1.0.0` `XHCIWIZ.EXE` and `XHCIWZ64.EXE`; `releases/<version>/INSTALL.BAT` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each executable (MSVC 6.0's, WDK 7.1's). See section 2a. `INSTALL.BAT` is this project's own text. Neither carries or calls a Microsoft setup program: the routines they use are the system's own, looked up at run time |
 | Published USB tree tool binaries | Yes, from the first cut that carries them (`3.0.0.0`) | `releases/<version>/tools/xhcitr/XHCITR.EXE` and `XHCITR64.EXE` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each (MSVC 6.0's, WDK 7.1's). See section 2a |
 | Published 98 SE and ME device-install helper binary | Yes, from the first cut that carries it (`3.1.0.0`; not cut yet) | `releases/<version>/tools/xhciinst/XHCIDI.EXE` | Built from this project's sources but not only this project's code (design record 27 section 3): a 16-bit Windows program whose Open Watcom 2.0 C runtime is statically linked in (the Sybase Open Watcom Public License, as the qualifier's), linked against the Windows 98 SE DDK's `setupx.lib`, an import library whose OMF records name the module `SETUPX` and its exports and carry no code, so the image holds module-and-ordinal imports of the running system's `SETUPX.DLL` and no Microsoft code; compiled against that DDK's `inc16\setupx.h` and the `prsht.h` it includes (the three members identified in `docs/references/README.md`, "Windows 98 DDK"). Section 2a gains its entry with the first build |
 | Oney, *Programming the Microsoft Windows Driver Model* (2nd ed., 2003) | No, and it never was; it is in no commit and in no directory of this repository | Nowhere in this tree; a purchased book on the reader's own shelf | The one third-party document cited by printed page that is not kept in `docs/references/`. Edition, page count, SHA-256 of the copy the citations were read from, and the page-index offset are in `docs/references/README.md`. There is no fetch URL to record, because there is no download |
@@ -294,6 +294,34 @@ runs `devcon` or any other Microsoft setup program. `INSTALL.BAT`, staged
 at the version root, is this project's own text. `make-release.ps1`
 generates one `NOTICE.TXT` beside the two executables recording both
 linkages, as for `XHCICLN`.
+
+From `3.1.0.0` (roadmap-usb4.md task 42-A.2, design record 23 revision 11)
+the same tool is built from `xhciinst/inst_eng.c` (the engine) and
+`xhciinst/xhciinst.c` (its console front end), the same linkages.
+
+#### XHCIWIZ.EXE and XHCIWZ64.EXE
+
+`releases/<version>/tools/xhciinst/XHCIWIZ.EXE` and `XHCIWZ64.EXE` are the
+installer's window, from `3.1.0.0` (design record 26), built by
+`xhciinst/build.cmd` from `xhciinst/xhciwiz.c`, `xhciinst/inst_eng.c`,
+`xhciinst/inst_core.c` and `src/xhci_psw.c`, with `xhciinst/xhciwiz.rc`
+embedding `xhciinst/xhciwiz.manifest` and `xhciinst/xhciwiz.ico` (an icon
+drawn for this project in the 16 VGA colours) - all this project's own
+text. Each is not only that, in `XHCITR`'s way:
+
+- `XHCIWIZ.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked
+  multithreaded (`cl /nologo /W3 /WX /O2 /MT`, `LIBCMT`). Re-derivable:
+  `link -dump -imports XHCIWIZ.EXE` names `KERNEL32.dll`, `USER32.dll`,
+  `GDI32.dll`, `ADVAPI32.dll`, `COMCTL32.dll`, `COMDLG32.dll` and
+  `SHELL32.dll` and no C runtime DLL, which `xhciinst/selftest.cmd` checks
+  at every build.
+- `XHCIWZ64.EXE`: the Windows Driver Kit 7.1's amd64 C runtime (`LIBCMT`),
+  statically linked (`/MT`); its import table names the same seven DLLs.
+
+As for the console pair, every SetupAPI, `newdev.dll`,
+configuration-manager and `version.dll` routine is looked up at run time;
+neither executable contains or runs a Microsoft setup program. The one
+`NOTICE.TXT` beside the four executables records all four linkages.
 
 #### XHCITR.EXE and XHCITR64.EXE
 

@@ -3015,7 +3015,7 @@ const char *inst_unplug_text(int kind)
                "running: eject them\ntoo before you unplug it.";
     case INST_UNPLUG_RESTARTED:
         return "The device has started again, so it is not safe to unplug. "
-               "Close the programs\nusing it and run INSTALL /eject again.";
+               "Close the programs\nusing it and run INSTALL /console /eject again.";
     default:
         return "Before you unplug it, make sure none of its other devices "
                "(USB ports, card\nreaders, network) is in use; stop them in "
