@@ -1295,23 +1295,27 @@ static VOID tbtU4Quarantine(PTBT_U4CM cm, ULONG port, const TBT_ROUTE *r,
  * (tbtU4Invalidate, tbtU4Disable, and so the teardowns and the sweeps)
  * until tbtU4RetryQuarantine reads it closed (lifted), or as this driver
  * wrote it (`outAdp`, `outHop`, made writable again; an enable once its
- * adapter's HopID 8 entry reads closed).
+ * adapter's HopID 8 entry reads closed). A reserved protocol entry also
+ * holds its adapter's Path Enable. TRUE when a record now holds it.
  */
-static VOID tbtU4Reserve(PTBT_U4CM cm, ULONG port, const TBT_ROUTE *r,
-                         ULONG adp, ULONG hop, ULONG outAdp, ULONG outHop,
-                         BOOLEAN enable, ULONG cap, ULONG bit)
+static BOOLEAN tbtU4Reserve(PTBT_U4CM cm, ULONG port, const TBT_ROUTE *r,
+                            ULONG adp, ULONG hop, ULONG outAdp, ULONG outHop,
+                            BOOLEAN enable, ULONG cap, ULONG bit)
 {
     ULONG i;
+    BOOLEAN held;
     PTBT_U4_QENTRY q;
 
     tbtU4Quarantine(cm, port, r, adp, hop,
                     ((outAdp << TBT_PATH0_OUT_ADP_SHIFT) & TBT_PATH0_OUT_ADP_MASK) |
                         (outHop & TBT_PATH0_OUT_HOP_MASK),
                     enable, cap, bit);
+    held = FALSE;
     for (i = 0; i < TBT_U4_QUARANTINE; i++) {
         q = &cm->Quarantine[i];
         if (q->Used && q->Enable == enable && q->Adapter == adp &&
             TbtRouteEqual(&q->Route, r) && (enable || q->Hop == hop)) {
+            held = TRUE;
             q->Reserve = TRUE;
             q->OutAdapter = outAdp;
             q->OutHop = outHop;
@@ -1323,6 +1327,14 @@ static VOID tbtU4Reserve(PTBT_U4CM cm, ULONG port, const TBT_ROUTE *r,
                      (adp << 16) | (enable ? 0x8000UL : hop));
         }
     }
+    if (!held) {
+        /* A full table: nothing would keep the writes off it, so the
+         * recovery attempt is refused (TbtU4Recover), the instance kept
+         * contained for the episode. */
+        cm->RecReserveFull = TRUE;
+        tbtU4Log(cm, "u4.quarantine.reserve-full", (adp << 16) | hop);
+    }
+    return held;
 }
 
 /*
@@ -1549,8 +1561,10 @@ static BOOLEAN tbtU4Disable(PTBT_U4CM cm, ULONG port, const TBT_ROUTE *r,
     LONG rc;
 
     bit = usb3 ? TBT_USB3_0_PE : TBT_PCIE0_PE;
-    if (tbtU4Reserved(cm, r, adp, 0, TRUE)) {
-        /* Its ownership not established (section 7.7): never written. */
+    if (tbtU4Reserved(cm, r, adp, 0, TRUE) ||
+        tbtU4Reserved(cm, r, adp, TBT_HOP_PROTOCOL, FALSE)) {
+        /* Its ownership, or that of the adapter's own protocol path, not
+         * established (section 7.7): never written. */
         return FALSE;
     }
     rc = tbtU4Rd(cm, r, TBT_CS_ADAPTER, adp, cap, &v);
@@ -1656,6 +1670,7 @@ static VOID tbtU4RetryQuarantine(PTBT_U4CM cm)
                 if (q->Enable) {
                     q->Reserve = FALSE;
                 } else {
+                    TbtWaitMin(cm->Host, TBT_U4_TEARDOWN_GAP_US);
                     q->Used = FALSE;
                     cm->Counters.QuarantineLifted++;
                     tbtU4QLifted(cm, q);
@@ -1667,6 +1682,10 @@ static VOID tbtU4RetryQuarantine(PTBT_U4CM cm)
                 q->Reserve = FALSE;
             }
             continue;
+        }
+        if (q->Enable &&
+            tbtU4Reserved(cm, &q->Route, q->Adapter, TBT_HOP_PROTOCOL, FALSE)) {
+            continue;   /* its adapter's protocol path held (section 7.7) */
         }
         if (q->Enable) {
             rc = tbtU4Rd(cm, &q->Route, TBT_CS_ADAPTER, q->Adapter, q->EnableCap, &v);
@@ -6761,8 +6780,8 @@ static BOOLEAN tbtU4UndoEnable(PTBT_U4CM cm, ULONG port, const TBT_ROUTE *r,
         (e[0] & TBT_PATH0_VALID) == 0 && (e[1] & TBT_PATH1_PP) == 0) {
         return tbtU4Disable(cm, port, r, adp, cap, usb3);
     }
-    tbtU4Reserve(cm, port, r, adp, 0, 0, 0, TRUE, cap,
-                 usb3 ? TBT_USB3_0_PE : TBT_PCIE0_PE);
+    (VOID)tbtU4Reserve(cm, port, r, adp, 0, 0, 0, TRUE, cap,
+                       usb3 ? TBT_USB3_0_PE : TBT_PCIE0_PE);
     return FALSE;
 }
 
@@ -6822,9 +6841,10 @@ static BOOLEAN tbtU4RecoverUndo(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3,
         mHp = tbtU4StillWritten(cm, &h->Route, hp, TBT_HOP_PROTOCOL, p->Lane0,
                                 t->Hd, &u);
         if (!mHp) {
-            tbtU4Reserve(cm, p->Index, &h->Route, hp, TBT_HOP_PROTOCOL,
-                         p->Lane0, t->Hd, FALSE, 0, 0);
-            t->Written &= ~TBT_U4_E_HOST_PROTO;
+            if (tbtU4Reserve(cm, p->Index, &h->Route, hp, TBT_HOP_PROTOCOL,
+                             p->Lane0, t->Hd, FALSE, 0, 0)) {
+                t->Written &= ~TBT_U4_E_HOST_PROTO;
+            }
             ok = FALSE;
         }
     }
@@ -6833,11 +6853,12 @@ static BOOLEAN tbtU4RecoverUndo(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3,
         mHl = tbtU4StillWritten(cm, &h->Route, p->Lane0, t->Hu, hp,
                                 TBT_HOP_PROTOCOL, &u);
         if (!mHl) {
-            if (t->Hu != 0) {
+            /* No HopID recorded: nothing of it can be named, or written. */
+            if (t->Hu == 0 ||
                 tbtU4Reserve(cm, p->Index, &h->Route, p->Lane0, t->Hu, hp,
-                             TBT_HOP_PROTOCOL, FALSE, 0, 0);
+                             TBT_HOP_PROTOCOL, FALSE, 0, 0)) {
+                t->Written &= ~TBT_U4_E_HOST_LANE;
             }
-            t->Written &= ~TBT_U4_E_HOST_LANE;
             ok = FALSE;
         }
     }
@@ -6846,11 +6867,11 @@ static BOOLEAN tbtU4RecoverUndo(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3,
         mDl = tbtU4StillWritten(cm, &d->Route, d->UpAdp, t->Hd, dp,
                                 TBT_HOP_PROTOCOL, &u);
         if (!mDl) {
-            if (t->Hd != 0) {
+            if (t->Hd == 0 ||
                 tbtU4Reserve(cm, p->Index, &d->Route, d->UpAdp, t->Hd, dp,
-                             TBT_HOP_PROTOCOL, FALSE, 0, 0);
+                             TBT_HOP_PROTOCOL, FALSE, 0, 0)) {
+                t->Written &= ~TBT_U4_E_DEV_LANE;
             }
-            t->Written &= ~TBT_U4_E_DEV_LANE;
             ok = FALSE;
         }
     }
@@ -6859,9 +6880,10 @@ static BOOLEAN tbtU4RecoverUndo(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3,
         mDp = tbtU4StillWritten(cm, &d->Route, dp, TBT_HOP_PROTOCOL, d->UpAdp,
                                 t->Hu, &u);
         if (!mDp) {
-            tbtU4Reserve(cm, p->Index, &d->Route, dp, TBT_HOP_PROTOCOL,
-                         d->UpAdp, t->Hu, FALSE, 0, 0);
-            t->Written &= ~TBT_U4_E_DEV_PROTO;
+            if (tbtU4Reserve(cm, p->Index, &d->Route, dp, TBT_HOP_PROTOCOL,
+                             d->UpAdp, t->Hu, FALSE, 0, 0)) {
+                t->Written &= ~TBT_U4_E_DEV_PROTO;
+            }
             ok = FALSE;
         }
     }
@@ -7422,6 +7444,7 @@ LONG TbtU4Recover(PTBT_U4CM cm, BOOLEAN *final)
     cm->Recovering = TRUE;
     cm->RecoverRings = FALSE;
     cm->RecRestored = FALSE;
+    cm->RecReserveFull = FALSE;
     cm->Budgeted = FALSE;
     cm->BudgetSpent = FALSE;
     /* Step 1 (decision U20): nothing is placed in the kept buffer before
@@ -7544,6 +7567,10 @@ LONG TbtU4Recover(PTBT_U4CM cm, BOOLEAN *final)
         rc = TBT_E_STOPPED;
     } else if (cm->BudgetSpent) {
         rc = TBT_E_TIMEOUT;
+    } else if (cm->RecReserveFull) {
+        /* An entry of unestablished ownership found no quarantine record
+         * to hold it unwritten (tbtU4Reserve). */
+        rc = TBT_E_STATE;
     }
     cm->Budgeted = FALSE;
     cm->BudgetSpent = FALSE;

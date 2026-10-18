@@ -629,6 +629,9 @@ typedef struct _TBT_U4CM {
     BOOLEAN RelockExplained;/* the host router was enumerated afresh by the
                                recovery: its lane 0 Lock set again is its
                                own reset, not removal evidence */
+    BOOLEAN RecReserveFull; /* a record of unestablished ownership found no
+                               quarantine slot to hold it unwritten: the
+                               attempt is refused (tbtU4Reserve)          */
     BOOLEAN RecRestored;    /* this attempt put the snapshot's port records
                                back over the host router's fresh walk: until
                                then a failure restores them whole, so the
