@@ -234,6 +234,11 @@ static VOID exec(const CM_NI_OP *op, CM_NI_RES *res)
             i = lcIndex(op->Lc);
             k = 0;
         }
+        /* As CONFIGMG reads one type: the next descriptor of it. */
+        while (i < f.N && k < f.Lc[i].N && op->ResType != 0 &&
+               f.Lc[i].Type[k] != op->ResType) {
+            k++;
+        }
         if (i >= f.N || k >= f.Lc[i].N) {
             res->Cr = CM_NI_CR_NO_MORE_RES_DES;
             break;
@@ -939,6 +944,27 @@ static VOID test_budgets_and_late(VOID)
     CHECK_EQ(mem.Dev[0].LastStep, CM_NI_OP_LINE, "the line step");
     CHECK_EQ(mem.Dev[0].LastCr, CM_NI_CR_FAILURE, "not read");
     CHECK_EQ(mem.Dev[0].Line, 0xFF, "the header's line kept");
+    /* A status read that blocks past the deadline and returns "gone":
+     * the disappearance first - forgotten, not timed out. */
+    model();
+    f.StartOnReprocess = 0;
+    start();
+    pass();
+    f.ClockAtKind = CM_NI_OP_STATUS;
+    f.ClockBy = CM_NOIRQ_TXN_MS + 1;
+    f.GoneAtKind = CM_NI_OP_STATUS;
+    pass();
+    CHECK_EQ(mem.Dev[0].Used, 0, "gone after the deadline: forgotten");
+    CHECK_EQ(mem.C.Timeouts, 0, "not a timeout");
+    /* The gate closing during the line read: FAILED "controller". */
+    model();
+    f.GateOffAtKind = CM_NI_OP_LINE;
+    start();
+    pass();
+    ctx.Now += 200;
+    pass();
+    CHECK_EQ(why(), CM_NI_W_CONTROLLER, "the loss during the last read");
+    CHECK_EQ(mem.C.Started, 0, "not counted started");
     /* The window closing does not end an ATTEMPTED entry. */
     model();
     f.StartOnReprocess = 0;
@@ -1152,8 +1178,13 @@ static VOID test_readings(VOID)
     CHECK_EQ(irq.Out[2], CM_NI_IRQ_UNKNOWN_HELD, "not held");
     CHECK_EQ(irq.Out[3], CM_NI_IRQ_UNKNOWN_READ, "not read");
     r.IrqOutcome = XHCI_TBT_BRIRQ_PORT_NONE;
+    r.IrqPin = 1;
+    r.IrqLine = 0xFF;
     CmNiIrqFromBrnum(&r, &irq);
     CHECK(irq.Valid && irq.PortNoLine, "the port with no line");
+    r.IrqPin = 0xFF;
+    CmNiIrqFromBrnum(&r, &irq);
+    CHECK_EQ(irq.Valid, 0, "a port read all ones: no record");
     r.IrqOutcome = XHCI_TBT_BRIRQ_NONE;
     CmNiIrqFromBrnum(&r, &irq);
     CHECK_EQ(irq.Valid, 0, "the stage not run: no record");

@@ -101,6 +101,11 @@ section 5.2 is not built: it is the leg's verdict (section 10). The
 operations are each a short series of the services section 11 names,
 made back to back (the place read, for one, is `Get_Device_ID`, then the
 list and the priority).
+The source's descriptors are read one resource type at a time (memory,
+IRQ, I/O, DMA) rather than with `ResType_All`: on 98 SE in the emulator
+(2026-10-19, `runs/run-42.md`) a `ResType_All` read of `PCI.VXD`'s
+configuration of an NVMe at Code 29 answered `CR_NO_MORE_RES_DES` at the
+first descriptor.
 
 The owner's rule binds every line of it (design record 23 section 6.1,
 record 27 section 2): nothing undocumented. What "documented" means here

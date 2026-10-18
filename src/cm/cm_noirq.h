@@ -64,6 +64,8 @@
 #define CM_NI_BASIC_LOG_CONF    0x0UL
 #define CM_NI_FORCED_LOG_CONF   0x4UL
 #define CM_NI_RES_MEM           1UL
+#define CM_NI_RES_IO            2UL
+#define CM_NI_RES_DMA           3UL
 #define CM_NI_RES_IRQ           4UL
 #define CM_NI_CR_SUCCESS        0x00UL
 #define CM_NI_CR_INVALID_DEVNODE 0x05UL
@@ -129,10 +131,18 @@
                                            Val[0], its id (00h) in Val[1] */
 #define CM_NI_OP_LC_LIST        5UL     /* Get_First/Next_Log_Conf(Dn, LcKind)
                                            with each one's priority        */
-#define CM_NI_OP_RD_READ        6UL     /* Get_Next_Res_Des past Lc (a
-                                           configuration or a descriptor),
-                                           its size, and its data into the
-                                           member's Desc at Off, Len room  */
+#define CM_NI_OP_RD_READ        6UL     /* Get_Next_Res_Des of ResType past
+                                           Lc (a configuration or a
+                                           descriptor), its size, and its
+                                           data into the member's Desc at
+                                           Off, Len room. The source's
+                                           descriptors are read one type at
+                                           a time - memory, IRQ, I/O, DMA -
+                                           rather than with ResType_All
+                                           (read on 98 SE, 2026-10-19: a
+                                           ResType_All read of PCI.VXD's
+                                           configuration of an NVMe at Code
+                                           29 answered no descriptor)      */
 #define CM_NI_OP_ADD_EMPTY      7UL     /* Add_Empty_Log_Conf(Dn,
                                            LCPRI_DISABLED, LcKind |
                                            PRIORITY_EQUAL_LAST)            */
@@ -180,6 +190,7 @@ typedef struct _CM_NI_OP {
     ULONG Pri;              /* SET_PRI                                    */
     ULONG Off;              /* RD_READ, ADD_RD: in the member's Desc      */
     ULONG Len;              /* RD_READ: the room; ADD_RD: the length      */
+    ULONG ResType;          /* RD_READ: the resource type asked for       */
 } CM_NI_OP, *PCM_NI_OP;
 
 typedef struct _CM_NI_RES {
@@ -276,6 +287,8 @@ typedef struct _CM_NI_DEV {
     ULONG MemLen[CM_WK_NOIRQ_MEM];
     ULONG MemAdded;
     ULONG RdAt;             /* the descriptor read past next (RD_READ)    */
+    ULONG RdPhase;          /* the type being read: 0 memory, 1 IRQ, 2 I/O,
+                               3 DMA                                     */
     ULONG LastStep;         /* the diagnostic's step reached              */
     ULONG LastCr;
     ULONG Pin0Gen;          /* a pin-0 function counted for gen + 1       */

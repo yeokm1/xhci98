@@ -273,7 +273,8 @@ ULONG CmCfgmgFirstLogConf(PCM_CFGMG cfg, ULONG devnode, ULONG kind,
 ULONG CmCfgmgNextLogConf(PCM_CFGMG cfg, ULONG lc, PULONG next);
 ULONG CmCfgmgLogConfPriority(PCM_CFGMG cfg, ULONG lc, PULONG priority);
 ULONG CmCfgmgSetLogConfPriority(PCM_CFGMG cfg, ULONG lc, ULONG priority);
-ULONG CmCfgmgNextResDes(PCM_CFGMG cfg, ULONG from, PULONG rd, PULONG type);
+ULONG CmCfgmgNextResDes(PCM_CFGMG cfg, ULONG from, ULONG forType, PULONG rd,
+                        PULONG type);
 ULONG CmCfgmgResDesSize(PCM_CFGMG cfg, ULONG rd, PULONG size);
 ULONG CmCfgmgResDesData(PCM_CFGMG cfg, ULONG rd, PVOID buffer, ULONG bytes);
 ULONG CmCfgmgAddResDes(PCM_CFGMG cfg, ULONG lc, ULONG type, PVOID data,

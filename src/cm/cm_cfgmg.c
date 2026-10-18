@@ -398,16 +398,16 @@ ULONG CmCfgmgSetLogConfPriority(PCM_CFGMG cfg, ULONG lc, ULONG priority)
         (ULONG)(ULONG_PTR)&p, lc, CMG_SET_LOG_CONF_PRIORITY);
 }
 
-ULONG CmCfgmgNextResDes(PCM_CFGMG cfg, ULONG from, PULONG rd, PULONG type)
+ULONG CmCfgmgNextResDes(PCM_CFGMG cfg, ULONG from, ULONG forType, PULONG rd,
+                        PULONG type)
 {
     *rd = 0;
-    *type = 0;
+    *type = forType;
     if (!cfg->Open) {
         return CMG_CR_FAILURE;
     }
     return ((CMG_FN5)cmgThunk(cfg, CMG_T_NEXT_RD))(
-        (ULONG)(ULONG_PTR)rd, from, CMG_RESTYPE_ALL,
-        (ULONG)(ULONG_PTR)type, 0);
+        (ULONG)(ULONG_PTR)rd, from, forType, (ULONG)(ULONG_PTR)type, 0);
 }
 
 ULONG CmCfgmgResDesSize(PCM_CFGMG cfg, ULONG rd, PULONG size)
@@ -654,10 +654,12 @@ ULONG CmCfgmgSetLogConfPriority(PCM_CFGMG cfg, ULONG lc, ULONG priority)
     return CMG_CR_FAILURE;
 }
 
-ULONG CmCfgmgNextResDes(PCM_CFGMG cfg, ULONG from, PULONG rd, PULONG type)
+ULONG CmCfgmgNextResDes(PCM_CFGMG cfg, ULONG from, ULONG forType, PULONG rd,
+                        PULONG type)
 {
     UNREFERENCED_PARAMETER(cfg);
     UNREFERENCED_PARAMETER(from);
+    UNREFERENCED_PARAMETER(forType);
     *rd = 0;
     *type = 0;
     return CMG_CR_FAILURE;

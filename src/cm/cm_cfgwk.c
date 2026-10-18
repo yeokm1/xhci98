@@ -233,6 +233,8 @@ typedef struct _CM_CFGWK {
                                progress began (cmWkQpVxd)                */
     ULONG NoIrq;            /* XhciCmNoIrqStart as the start read it      */
     ULONG NiActive;         /* the claim the no-IRQ state belongs to      */
+    ULONG NiClaimLost;      /* members whose claim a post took away since
+                               the worker last looked (bit per index)    */
     ULONG NiBase;           /* the no-IRQ clock's origin (tick count)     */
     CM_WK_NI_NODE NiStack[CM_WK_NI_STACK];
     CM_CFGMG Cfgmg;
@@ -2137,10 +2139,18 @@ static VOID cmWkNiExec(PCM_CFGWK w, ULONG i, const CM_NI_OP *op,
         }
         res->Cr = (cr == CMG_CR_NO_MORE_LOG_CONF && res->Count != 0)
                       ? CMG_CR_SUCCESS : cr;
+        /* The list as read: count, first and second priorities. */
+        cmWkLog(w, "cm.reenum.9x.noirq.lc",
+                ((res->Count & 0xFFUL) << 24) | (res->Pri[0] & 0xFFFFUL) |
+                    (res->Count > 1 ? ((res->Pri[1] >> 8) & 0xFFUL) << 16
+                                    : 0UL));
         break;
     case CM_NI_OP_RD_READ:
-        res->Cr = CmCfgmgNextResDes(&w->Cfgmg, op->Lc, &res->Rd, &res->Type);
+        res->Cr = CmCfgmgNextResDes(&w->Cfgmg, op->Lc, op->ResType, &res->Rd,
+                                    &res->Type);
         if (res->Cr != CMG_CR_SUCCESS) {
+            cmWkLog(w, "cm.reenum.9x.noirq.rd",
+                    (op->ResType << 24) | (res->Cr & 0xFFFFUL));
             break;
         }
         res->Cr = CmCfgmgResDesSize(&w->Cfgmg, res->Rd, &res->Size);
@@ -2149,6 +2159,9 @@ static VOID cmWkNiExec(PCM_CFGWK w, ULONG i, const CM_NI_OP *op,
             res->Cr = CmCfgmgResDesData(&w->Cfgmg, res->Rd,
                                         m->Desc + op->Off, res->Size);
         }
+        cmWkLog(w, "cm.reenum.9x.noirq.rd",
+                (op->ResType << 24) | ((res->Type & 0xFFUL) << 16) |
+                    ((res->Size & 0xFFUL) << 8) | (res->Cr & 0xFFUL));
         break;
     case CM_NI_OP_ADD_EMPTY:
         res->Cr = CmCfgmgAddEmptyLogConf(&w->Cfgmg, op->Dn,
@@ -2700,7 +2713,8 @@ static VOID cmWkThread(PVOID context)
         w->ReqGone &= w->Active;
         /* Record 28: a lost claim ends the member's no-IRQ state and its
          * journal (retired below, outside the lock; nothing freed). */
-        lostClaim = w->NiActive & ~w->Active;
+        lostClaim = w->NiClaimLost | (w->NiActive & ~w->Active);
+        w->NiClaimLost = 0;
         w->NiActive = w->Active;
         take = 0;
         for (i = 0; i < w->Members; i++) {
@@ -2740,6 +2754,7 @@ static VOID cmWkThread(PVOID context)
             if ((lostClaim & (1UL << i)) != 0) {
                 cmWkLog(w, "cm.reenum.9x.noirq.claim-lost", w->Port[i].Bdf);
                 CmNiInit(&w->Port[i].Ni, w->Port[i].Bdf);
+                w->Port[i].NiDiagSeen = 0;
             }
         }
         if (open) {
@@ -3046,6 +3061,9 @@ VOID CmCfgwkPost(PCM_CFGWK w, ULONG reenum, ULONG vanish, ULONG active,
             w->Gen[i]++;
         }
     }
+    /* A claim lost, however soon regained, ends the member's no-IRQ
+     * state: latched for the worker (record 28, "a lost claim"). */
+    w->NiClaimLost |= w->Active & ~active;
     w->Active = active;
     if (mark) {
         w->ReqMark = 1;
@@ -3061,6 +3079,7 @@ VOID CmCfgwkUnavailable(PCM_CFGWK w, ULONG active)
     ULONG i;
 
     KeAcquireSpinLock(&w->Lock, &irql);
+    w->NiClaimLost |= w->Active & ~active;
     w->Active = active;
     w->ReqGone |= active;
     for (i = 0; i < w->Members; i++) {

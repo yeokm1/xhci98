@@ -303,6 +303,11 @@ VOID CmNiIrqFromBrnum(const XHCI_TBT_BRNUM *r, PCM_NI_IRQ irq)
         return;
     }
     if (r->IrqOutcome == XHCI_TBT_BRIRQ_PORT_NONE) {
+        /* A port that read all ones (absent, or not answering) proves
+         * nothing about its line: no record, a fresh reading instead. */
+        if (r->IrqPin > 4 || (r->IrqLine == 0xFFUL && r->IrqPin == 0xFFUL)) {
+            return;
+        }
         irq->Valid = 1;
         irq->PortNoLine = 1;
         return;
@@ -449,6 +454,7 @@ VOID CmNiSeen(PCM_NI_MEMBER m, ULONG dn, ULONG hash, ULONG bdf, ULONG rot)
             d = &m->Dev[k];
             if (d->State == CM_NI_S_EXCLUDED && d->Why == CM_NI_W_HEADER &&
                 d->WalkSeq != m->WalkSeq &&
+                niJrn(m, d->Dn, d->Hash, 0) == NULL &&
                 (m->Out.Id == 0 || m->Out.Dev != k)) {
                 niForget(m, d);
                 free = k;
@@ -686,6 +692,21 @@ static VOID niOp(PCM_NI_MEMBER m, CM_NI_DEV *d, ULONG kind, PCM_NI_OP op)
     op->LcKind = CM_NI_BASIC_LOG_CONF;
 }
 
+/* The resource type of each descriptor-reading phase. */
+static ULONG niPhaseType(ULONG phase)
+{
+    switch (phase) {
+    case 0:
+        return CM_NI_RES_MEM;
+    case 1:
+        return CM_NI_RES_IRQ;
+    case 2:
+        return CM_NI_RES_IO;
+    default:
+        return CM_NI_RES_DMA;
+    }
+}
+
 /* The operation entry d's step wants now, or 0 (nothing this pass). */
 static ULONG niWant(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
                     PCM_NI_OP op)
@@ -734,6 +755,7 @@ static ULONG niWant(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
     case NI_AD_RD:
         niOp(m, d, CM_NI_OP_RD_READ, op);
         op->Lc = d->RdAt;
+        op->ResType = niPhaseType(d->RdPhase);
         /* Room for the next memory descriptor; none once the buffer is
          * full (the descriptor is then read for its type and size alone,
          * and a tenth memory one refuses the attempt). */
@@ -954,6 +976,7 @@ static VOID niGate(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
     d->MemCount = 0;
     d->MemAdded = 0;
     d->RdAt = d->Source;
+    d->RdPhase = 0;
     d->Step = NI_AD_RD;
 }
 
@@ -961,6 +984,12 @@ static VOID niGate(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
 static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
                          const CM_NI_RES *res)
 {
+    if (res->Cr == CM_NI_CR_NO_MORE_RES_DES && d->RdPhase < 3) {
+        /* This type read to its end: the next, from the configuration. */
+        d->RdPhase++;
+        d->RdAt = d->Source;
+        return;
+    }
     if (res->Cr == CM_NI_CR_NO_MORE_RES_DES) {
         if (!d->HaveIrq || d->MemCount == 0) {
             niExclude(m, d, CM_NI_W_CONFIG);
@@ -1080,8 +1109,28 @@ VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res)
         niLate(m, &op, res);
         return;
     }
-    /* A result past the attempt's deadline: the attempt is over, the
-     * result accounted (record 28, "When"). */
+    /* The disappearance first, whatever else (record 28 step 5): a
+     * devnode a read shows gone or replaced is forgotten. */
+    if ((op.Kind == CM_NI_OP_STATUS && niGone(m, d, res)) ||
+        (op.Kind == CM_NI_OP_PLACE && (res->Place == CM_NI_PLACE_GONE ||
+                                       res->Place == CM_NI_PLACE_OTHER))) {
+        if (d->Used) {
+            niForget(m, d);
+        }
+        if (op.Kind == CM_NI_OP_STATUS || op.Kind == CM_NI_OP_PLACE) {
+            return;
+        }
+    }
+    /* A result past the attempt's deadline, or taken with the gate
+     * closed: the attempt is over, the result accounted (record 28,
+     * "When" and "the controller's loss"). */
+    if ((d->State == CM_NI_S_ACTIVE || d->State == CM_NI_S_ATTEMPTED) &&
+        !ctx->Gate) {
+        niFail(m, d, CM_NI_W_CONTROLLER, 0, 0, 0);
+        d->Txn++;
+        niLate(m, &op, res);
+        return;
+    }
     if ((d->State == CM_NI_S_ACTIVE || d->State == CM_NI_S_ATTEMPTED) &&
         niPast(ctx->Now, d->Deadline)) {
         niFail(m, d, CM_NI_W_TIMEOUT, 0, 0, 0);
@@ -1096,9 +1145,6 @@ VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res)
         niHeader(m, d, res);
         break;
     case CM_NI_OP_STATUS:
-        if (niGone(m, d, res)) {
-            break;
-        }
         if (res->Cr != CM_NI_CR_SUCCESS) {
             if (d->State == CM_NI_S_PENDING || d->State == CM_NI_S_ATTEMPTED) {
                 d->Step = NI_AT_WAIT;
