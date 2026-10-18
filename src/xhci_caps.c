@@ -1150,9 +1150,13 @@ ULONG XhciDeriveHcInfo(ULONG capDword0,
     derived.XecpDwords = XHCI_HCCPARAMS1_XECP(hccparams1);
     /* RTSOFF's and DBOFF's rule below, for the third offset: a list that
      * starts inside the capability registers would read them as capability
-     * headers. 0 is the spec's "no list" and stays legal. */
+     * headers. The block is the registers this driver reads, so it reaches
+     * HCCPARAMS2 whenever CAPLENGTH does (the gate further down reads it
+     * then). 0 is the spec's "no list" and stays legal. */
     if (derived.XecpDwords != 0 &&
-        derived.XecpDwords * 4UL < XHCI_CAP_REGISTERS_BYTES) {
+        derived.XecpDwords * 4UL <
+            (derived.CapLength >= XHCI_CAP_HCCPARAMS2_BYTES ?
+                 XHCI_CAP_HCCPARAMS2_BYTES : XHCI_CAP_REGISTERS_BYTES)) {
         return XHCI_HC_BAD_XECP;
     }
 

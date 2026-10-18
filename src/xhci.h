@@ -7488,7 +7488,7 @@ typedef struct _XHCI_EXTENSION {
      * only a settle-time refusal is in both, so subtracting can underflow.
      *
      * Defensive: nothing in a healthy run reaches it. It exists as a counter
-     * rather than as a comment because the batch-9-0 review took three rounds
+     * rather than as a comment because batch 9-0 took three attempts
      * to get this branch right - halting a healthy endpoint, then issuing a Set
      * TR Dequeue Pointer to a Running one, then missing the shape entirely -
      * and a defensive path with no number attached is one nobody can tell has

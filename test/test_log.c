@@ -971,8 +971,8 @@ static void testChannelConsentIsRungZero(void)
  * and is the file a stranger pastes into a public issue. Two records written as
  * soon as recording was on - the `USBPORT_RESOURCES` pointer and the mapped
  * register base - carried exactly what that boundary is drawn around, while the
- * release notes and the generated readme both promised there were none. A
- * review of commit `85c0072` found the documents and the code disagreeing; this
+ * release notes and the generated readme both promised there were none. At
+ * commit `85c0072` the documents and the code disagreed; this
  * vector is what makes the code the one that is right.
  *
  * *(The boundary was between 2 and 3 until the snapshot-value merge shifted every

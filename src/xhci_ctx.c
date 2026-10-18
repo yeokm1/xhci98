@@ -714,8 +714,8 @@ ULONG XhciBuildEndpointParams(ULONG transferType,
         params->Interval = interval;
         /*
          * **Max Burst follows the *device* speed, not usbport's belief** - the
-         * opposite of the interval's *unit*, and the eleventh review caught a
-         * previous round making them symmetric because they looked alike.
+         * opposite of the interval's *unit*; an earlier revision made them
+         * symmetric because they looked alike, and that was corrected.
          *
          * The unit question is "what did the number that arrived mean", and the
          * answer is whatever usbport thought. This is a validity question, and

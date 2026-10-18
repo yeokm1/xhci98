@@ -636,7 +636,7 @@ static void test_xstat_math(void)
              "a counter that ran backwards is no interval");
     CHECK_EQ(discarded, 1, "and is counted as discarded");
     CHECK_EQ(iv(&t, &discarded, &crossed, 1000, 7, 0, 2000, 8, 0), 0,
-             "2^32 + 1000 counts is not 1000 (review round 1, finding 2)");
+             "2^32 + 1000 counts is not 1000");
     CHECK_EQ(iv(&t, &discarded, &crossed, 1000, 7, 0, 999, 8, 0), 0,
              "nor is 2^32 - 1");
     CHECK_EQ(iv(&t, &discarded, &crossed, 1, 7, 0, 0x80000002UL, 7, 0), 0,

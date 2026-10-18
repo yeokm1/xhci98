@@ -1415,7 +1415,7 @@ static void test_missed_service(void)
  * (`test_isoch_trb_error_still_recovers`): it is not a transfer error at all
  * but the xHC reporting a malformed TRB, so p.177's isoch exemption does not
  * reach it and recovery is still owed. *(This sentence said "no completion code
- * on an isoch ring asks for recovery" until the post-Phase 13 review rounds, which this file's own
+ * on an isoch ring asks for recovery" until after Phase 13, which this file's own
  * next vector contradicts.)* "An isoch end point never halts because there is no handshake to
  * report a halt condition. Errors are reported as a Completion Code associated
  * with a TRB for an isochronous transfer, but an isoch pipe is not halted in an
@@ -1551,7 +1551,7 @@ static void test_isoch_errors_never_halt(void)
 }
 
 /*
- * The exception to the exception, and the ninth review round's finding: an
+ * The exception to the exception: an
  * isoch endpoint is exempt from *halting*, not from the Error state.
  *
  * p.177 exempts an isoch pipe because it "never halts because there is no

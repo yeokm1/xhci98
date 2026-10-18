@@ -1335,7 +1335,7 @@ static void test_iso_start_plan(void)
                   "a stale start: SIA");
     /* FirstOnly asks only packet 0, but an ESIT longer than a frame
      * (Interval 4, 2 ms) would need that frame on an ESIT boundary
-     * (4.11.2.5.1): SIA, an even start or an odd one (review, round 2). */
+     * (4.11.2.5.1): SIA, an even start or an odd one. */
     CHECK_EQ(iso_fill(0, 4, 192, 4, 1010, 4, &sg, &length), 1, "filled");
     iso_request(&req, 4, 192, 0, 1000);
     iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
@@ -1348,7 +1348,7 @@ static void test_iso_start_plan(void)
                   "no CFC, Interval 4, an odd start: SIA");
 
     /*
-     * When a request starts a data flow (round 2): a new context, or the
+     * When a request starts a data flow: a new context, or the
      * ring found dry at a service interval with nothing queued - never an
      * empty queue alone. The feedback read at now + 34, no CFC.
      */

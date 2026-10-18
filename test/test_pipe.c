@@ -1617,7 +1617,7 @@ static void test_superspeed_endpoints(void)
     CHECK_EQ(ep.MaxEsitPayload, 2048, "the largest the burst allows");
 
     /* Isochronous IN, 1024, burst 3: one page per interval, the most the
-     * transfer path carries (Codex review of Phase 29, round 1, finding 1). */
+     * transfer path carries (Phase 29). */
     n = ss_config(c, 1, 1024, 1, 3, 0, 4096, 1, 0);
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER, 0,
                                       &ep), XHCI_PIPE_OK, "SS isoch, 4 KiB");
@@ -1698,8 +1698,8 @@ static void test_superspeedplus_isoch(void)
     CHECK_EQ(ep.MaxEsitPayload, 3072, "3 KiB");
 
     /* Within the page but past TBC: 4096 bytes in 512-byte packets at
-     * burst 0 is eight bursts, which the Isoch TRB cannot describe (Codex
-     * review of Phase 29, round 2, finding 2). */
+     * burst 0 is eight bursts, which the Isoch TRB cannot describe (Phase
+     * 29). */
     n = ss_config(c, 1, 512, 1, 0, 0x80, 0, 1, 4096);
     CHECK_EQ(XhciPipeEndpointParamsAt(c, n, 18, XHCI_PIPE_SPEED_SUPER_PLUS,
                                       1, &ep), XHCI_PIPE_ESIT_REFUSED,
@@ -1805,7 +1805,7 @@ static XHCI_SEQ64 seq64(ULONG hi, ULONG lo)
 }
 
 /* Submission sequences and abort horizons in the 64-bit space (hcd_io.c;
- * Codex reviews of ed025d2 and 09ed9d1): the count, the reconstruction of
+ * reviewed and revised after ed025d2 and 09ed9d1): the count, the reconstruction of
  * a stamp from its low word, the order, the bound. */
 static void test_seq(void)
 {
@@ -1827,7 +1827,7 @@ static void test_seq(void)
     XhciSeqFromStamp(&c, 0xFFFFFFFEUL, &f);
     CHECK(f.Hi == 2 && f.Lo == 0xFFFFFFFEUL, "a stamp from the lap before");
 
-    /* Codex's first case: a request stamped 0xFFFFFFFE, then the low word
+    /* The first case: a request stamped 0xFFFFFFFE, then the low word
      * wraps and the abort takes 2. */
     c = seq64(1, 5);
     XhciSeqFromStamp(&c, 2, &h);
@@ -1837,7 +1837,7 @@ static void test_seq(void)
     CHECK(!XhciSeqCovers(&h, 2, &c),
           "a post-wrap request is newer than a pre-wrap abort");
 
-    /* Codex's second case: horizon 100 kept through a full lap with no
+    /* The second case: horizon 100 kept through a full lap with no
      * other abort, then a request stamped 90 in the new lap, the count at
      * 110 - the request is newer and must not be covered. */
     h = seq64(0, 100);

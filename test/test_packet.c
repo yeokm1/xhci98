@@ -504,7 +504,7 @@ static void test_transfer_structures(void)
      * (docs/usb-xhci-info/usbport-miniport-abi.md, "The high DWORD is zero, but
      * usbport does not mask it"). This assertion is about the offset and is
      * unaffected; the sentence explaining it said "usbport forces it to zero"
-     * until the post-Phase 13 review rounds, which is the reading that document corrected. */
+     * until after Phase 13, which is the reading that document corrected. */
     CHECK_EQ(XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_ELEMENT,
                             SgPhysicalAddressHi), 0x04, "SG address high");
     /*

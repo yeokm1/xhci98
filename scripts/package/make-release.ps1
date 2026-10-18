@@ -1677,7 +1677,7 @@ function Assert-UploadSetOutsideRelease {
     # an override points the CUT somewhere else, and the cuts that exist under
     # the canonical root are still written once and never edited, so an
     # -UploadDir under one of them is as wrong with the override as without it
-    # (the Phase 20 review's fifth finding).
+    # (Phase 20, reviewed and revised).
     $protected = @()
     foreach ($p in @($ReleasesRoot, $PublishedRoot, (Join-Path $repo "releases"))) {
         if (-not [string]::IsNullOrEmpty($p)) { $protected += $p.TrimEnd('\') }

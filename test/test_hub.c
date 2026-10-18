@@ -343,8 +343,8 @@ static void test_suspend(void)
     CHECK_EQ(XHCI_HUB_RESUME_RECOVERY_MS, 10UL, "TRSMRCY 10 ms");
 }
 
-/* What a resume's outcome makes of the port (Codex review of the Phase 27
- * integration, round 4): kept for a retry, given up after its tries,
+/* What a resume's outcome makes of the port (the Phase 27
+ * integration): kept for a retry, given up after its tries,
  * re-enumerated after a port error, torn down when the device left. */
 static void test_resume_outcome(void)
 {
@@ -356,8 +356,8 @@ static void test_resume_outcome(void)
          XHCI_HUB_PORT_ENABLE | XHCI_HUB_PORT_SUSPEND;
     tries = 0;
 
-    /* A device replaced during the resume (Codex review of the Phase 28-31
-     * merge, finding 1): its last reading DONE with C_PORT_CONNECTION is
+    /* A device replaced during the resume (the Phase 28-31
+     * merge): its last reading DONE with C_PORT_CONNECTION is
      * re-enumerated, never let go; at SuperSpeed the bit is the same. */
     CHECK_EQ(XhciHubResumeSettle(XHCI_HUB_RESUME_DONE,
                                  XHCI_HUB_C_PORT_CONNECTION),
@@ -409,7 +409,7 @@ static void test_resume_outcome(void)
     CHECK_EQ(tries, 0, "the count restarts");
 
     /* A device held for the resume is never let go on a failure: torn
-     * down at once (round 5, finding 1). */
+     * down at once. */
     tries = 1;
     XhciHubPortDecide(XHCI_ENUM_BOUND, on, 0, &d);
     XhciHubResumeOutcome(XHCI_ENUM_BOUND, XHCI_HUB_RESUME_STUCK, 1, &tries,

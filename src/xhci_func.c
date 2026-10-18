@@ -312,8 +312,8 @@ ULONG XhciFuncFirsts(const UCHAR *config, ULONG length, PULONG firsts,
     }
     /* A function is an IAD's interfaces or one interface no IAD covers
      * (USB 3.2 9.6.4), by XhciFuncSplit's own acceptance policy, so that a
-     * function never straddles two PDOs (whole-branch review, area 1
-     * confirmation round): in descriptor order, an IAD takes the present
+     * function never straddles two PDOs (whole-branch review,
+     * 2026-10-10): in descriptor order, an IAD takes the present
      * interfaces of its range unless one is already taken by an earlier
      * IAD, when it is ignored; an IAD with no present interface takes
      * nothing. Its first interface is its bFirstInterface, or, that absent

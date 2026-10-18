@@ -1877,8 +1877,8 @@ is refused at SELECT_CONFIGURATION or SELECT_INTERFACE
 (`XHCI_PIPE_ESIT_REFUSED`, counted as `superspeed: endpoints refused - ESIT`),
 never admitted and never truncated (from the Phase 29 review). It also refuses one whose interval needs more than four bursts
 of its packet size and Max Burst (4096 bytes in 512-byte packets at burst 0
-is eight), because TBC is two bits without ETC (4.11.2.3, p.197; round 2,
-finding 2). Lifting the limit means multi-page isochronous packets - several
+is eight), because TBC is two bits without ETC (4.11.2.3, p.197; Phase 29).
+Lifting the limit means multi-page isochronous packets - several
 TRBs per packet - in `hcd_io.c` and `xhci_xfer.c`.
 
 A zero-bandwidth isochronous endpoint - Max Packet Size 0, which USB 3.2

@@ -383,8 +383,8 @@ typedef struct _XHCI_TOPOLOGY {
     ULONG ClaimsUnarmed;    /* an address-0 open with no pending parent */
     /*
      * A claim that was armed and spent but could not answer - the node pruned
-     * between the reset and the open, or its position never learned (Phase 7
-     * review, B9). Apart from ClaimsUnarmed because the two mean opposite
+     * between the reset and the open, or its position never learned (Phase 7,
+     * reviewed and revised). Apart from ClaimsUnarmed because the two mean opposite
      * things: unarmed is the ordinary root-port answer, this is a consumed
      * claim that produced nothing, i.e. a channel failure or a lifetime race.
      */

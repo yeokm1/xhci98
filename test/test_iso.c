@@ -351,8 +351,8 @@ static void test_frame_window(void)
     CHECK_EQ(frame_ok(2040, 0, 2040 + 896, &id), 0, "and one past it does not");
 
     /*
-     * **A stale stamp must not alias into the future**, which is the batch 9-A
-     * review's fourth MAJOR and the reason the whole comparison moved out of the
+     * **A stale stamp must not alias into the future**, which the batch 9-A
+     * review found, and the reason the whole comparison moved out of the
      * Frame ID's own 11 bits.
      *
      * At current frame 5,000 a stamp of 3,000 is two thousand frames in the
@@ -788,7 +788,7 @@ static void test_build_frame_ids(void)
      * puts a stale stamp near 2^32 rather than 48 frames ahead. Without the
      * loop this group would be given explicit Frame IDs naming frames that
      * have gone - a Missed Service Error per TD until the pipe resynchronizes,
-     * which is the batch 9-A fourth MAJOR read from the other side.
+     * which is the stale-stamp alias read from the other side.
      */
     iso_init(&iso);
     for (i = 0; i < 4; i++) {
@@ -1196,7 +1196,7 @@ static void test_group_waits_for_its_tail(void)
     XHCI_XFER_EVENT_RESULT result;
 
     /*
-     * **The mid-TD event, and the batch 9-A review's first MAJOR.** The final
+     * **The mid-TD event, found in the batch 9-A review.** The final
      * packet is split across two fragments and an error lands on its *first*
      * TRB, so every packet of the group has an answer while the group's last TRB
      * has produced no event of its own.
@@ -1459,8 +1459,8 @@ static void test_multi_trb_packet_length(void)
     XHCI_XFER_EVENT_RESULT result;
 
     /*
-     * **The residual names one TRB, not the TD** - the batch 9-A review's sixth
-     * MAJOR, and batch 6-A's lesson arriving at a third builder.
+     * **The residual names one TRB, not the TD** - found in the batch 9-A
+     * review, and batch 6-A's lesson arriving at a third builder.
      *
      * Table 6-39 p.441: "For multi-TRB TDs, if ED = `0`, the TRB Transfer Length
      * only reflects the number of bytes transferred for the buffer associated
@@ -1537,7 +1537,7 @@ static void test_frame_cadence_gate(void)
 
     /*
      * **usbport's packet stamps against the Interval this driver programmed** -
-     * the batch 9-A review's fourth MAJOR, and the only runtime measurement this
+     * found in the batch 9-A review, and the only runtime measurement this
      * driver has of an isochronous endpoint's real service interval.
      *
      * usbport stamps packet `i` with `StartFrame + (i >> 3)` on High Speed and
@@ -1645,8 +1645,8 @@ static void test_codes_illegal_on_an_isoch_ring(void)
     XHCI_XFER_CODE info;
 
     /*
-     * **The ring kind's own list, applied on the per-packet path** - the second
-     * review round's fifth MAJOR. This decoder used to fall through to the shared
+     * **The ring kind's own list, applied on the per-packet path**.
+     * This decoder used to fall through to the shared
      * one, which serves the *endpoint* kind and therefore accepts Stall Error and
      * Invalid Stream ID. Neither can happen on an isochronous ring: an isoch pipe
      * "never halts because there is no handshake to report a halt condition"
@@ -1736,8 +1736,8 @@ static void test_trb_error_needs_recovery(void)
     XHCI_XFER_EVENT_RESULT result;
 
     /*
-     * **The one isochronous error software must act on** - the batch 9-A
-     * review's fifth MAJOR. An isoch endpoint "never halts because there is no
+     * **The one isochronous error software must act on** - found in the batch 9-A
+     * review. An isoch endpoint "never halts because there is no
      * handshake to report a halt condition" (p.177), which is why this engine
      * asks for no recovery in general; but 4.8.3 p.149 puts a TRB Error
      * somewhere else entirely - it "should cause a Running Endpoint to
@@ -2065,7 +2065,7 @@ static void spurious_after(ULONG errorCode)
              "a duplicate, as before");
 }
 
-/* Review round 1: the error's TRB re-let to a later request - the ring
+/* The error's TRB re-let to a later request - the ring
  * lapped - is that request's, and its Success is never taken for the old
  * error's duplicate. */
 static void spurious_not_after_reuse(void)
