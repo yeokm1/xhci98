@@ -239,9 +239,10 @@ Function SubKeysProbe()
 End Function
 
 ' 0 when the value is not there (RegRead's "file not found" or "path not
-' found"), 1 when it was read into v, 2 when it is there in a type
-' RegRead cannot read (a REG_QWORD, for one): the driver then reads
-' "another type" and its default stands.
+' found"), 1 when it was read into v, 2 when it could not be read for any
+' other reason (a type RegRead cannot read, such as a REG_QWORD, or no
+' access): whether it is there, and so which value is in force, is then
+' not known to this script, and it says so rather than guess.
 Function ReadState(path, v)
     Dim n
     On Error Resume Next
@@ -258,11 +259,11 @@ Function ReadState(path, v)
     End If
 End Function
 
-' Whether the machine-wide value is there, in any type: then it is the one
+' The machine-wide value's ReadState: when it is there (1) it is the one
 ' every controller uses.
-Function MachineSet()
+Function MachineState()
     Dim v
-    MachineSet = (ReadState(MACHINE_KEY & VALUE_NAME, v) <> 0)
+    MachineState = ReadState(MACHINE_KEY & VALUE_NAME, v)
 End Function
 
 ' What the driver makes of one value: only a DWORD is read, and since
@@ -275,7 +276,7 @@ Function DescribeAt(path)
         Exit Function
     End If
     If st = 2 Then
-        DescribeAt = "set, in a type this script cannot read - off (the driver reads only a DWORD)"
+        DescribeAt = "could not be read by this script - what the driver reads is not known"
         Exit Function
     End If
     t = VarType(v)
@@ -291,17 +292,21 @@ Function DescribeAt(path)
 End Function
 
 Function Describe(name)
-    Dim v
-    If MachineSet() Then
+    Dim v, ms
+    ms = MachineState()
+    If ms = 1 Then
         If ReadState(base & name & "\" & VALUE_NAME, v) <> 0 Then
             Describe = "its own value: " & DescribeAt(base & name & "\" & VALUE_NAME) & _
                 vbCrLf & "      NOT IN FORCE: the machine-wide value is used"
         Else
             Describe = "its own value: not set; the machine-wide value is used"
         End If
-    Else
+    ElseIf ms = 0 Then
         Describe = DescribeAt(base & name & "\" & VALUE_NAME) & _
             vbCrLf & "      in force: no machine-wide value is set"
+    Else
+        Describe = DescribeAt(base & name & "\" & VALUE_NAME) & _
+            vbCrLf & "      in force only if no machine-wide value is set, which is not known"
     End If
 End Function
 
@@ -309,11 +314,14 @@ Function ShowText()
     Dim s, k
     s = VALUE_NAME & " machine-wide, which every xhci98 controller reads first:" & vbCrLf
     s = s & "  " & MACHINE_KEY & vbCrLf & "      "
-    If MachineSet() Then
-        s = s & DescribeAt(MACHINE_KEY & VALUE_NAME) & " - IN FORCE on every controller" & vbCrLf
-    Else
-        s = s & "not set - each controller's own value below is used" & vbCrLf
-    End If
+    Select Case MachineState()
+        Case 1
+            s = s & DescribeAt(MACHINE_KEY & VALUE_NAME) & " - IN FORCE on every controller" & vbCrLf
+        Case 0
+            s = s & "not set - each controller's own value below is used" & vbCrLf
+        Case Else
+            s = s & "could not be read by this script - which value is in force is not known" & vbCrLf
+    End Select
     s = s & VALUE_NAME & " on each xhci98 controller:" & vbCrLf
     For Each k In keys
         s = s & "  " & base & k & vbCrLf & "      " & Describe(k) & vbCrLf
