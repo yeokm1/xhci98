@@ -4351,9 +4351,10 @@ static void test_recover(void)
     (void)TbtU4TakeDebt(&g_cm, 1);
     fabPlug(&g_fab, 1, dev);
     poll(&g_cm, &g_fab, 1);
-    CHECK(!p->RecCleanup && !p->DiscoverOwed,
-          "recover unplugged: cleanup dropped, the link's router discovered");
+    CHECK(!p->RecCleanup && p->DiscoverOwed,
+          "recover unplugged: cleanup dropped on a connected link");
     poll(&g_cm, &g_fab, 4);
+    CHECK(!p->DiscoverOwed, "recover unplugged: the newcomer discovered");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "recover unplugged: the newcomer up");
     (void)dev;
 

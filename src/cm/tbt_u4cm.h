@@ -386,6 +386,12 @@ typedef struct _TBT_U4_LINK {
 typedef struct _TBT_U4_QENTRY {
     BOOLEAN Used;
     BOOLEAN Enable;         /* a Path Enable, not an entry */
+    BOOLEAN Reserve;        /* section 7.7: held out of use and never
+                               written - its ownership not established (an
+                               entry read as another path's, or unread): no
+                               invalidation, disable, sweep or retry writes
+                               it until a read shows it closed, or as this
+                               driver wrote it (OutAdapter, OutHop)      */
     ULONG Port;             /* 0 for the host router alone */
     ULONG Generation;       /* a device router's entries: its connection's */
     TBT_ROUTE Route;
@@ -627,10 +633,6 @@ typedef struct _TBT_U4CM {
                                back over the host router's fresh walk: until
                                then a failure restores them whole, so the
                                next snapshot copies no half-built table */
-    BOOLEAN RecForeign;     /* this attempt read a recorded entry (or a
-                               quarantined one) as another path's: the
-                               fabric is not as this driver left it, and
-                               the attempt is refused for the episode      */
     ULONG HwErrors;         /* the core's requests that ended with no answer
                                (the ring not moving or stopped, or no reply
                                at all): a section 9.2 discovery that saw one
