@@ -1516,7 +1516,6 @@ static void mk_judge(const char *id, const char *text)
     int parent;
     INST_U32 pbdf = 0;
     int i;
-    INST_U32 j;
     int anyVerif = 0;
     int anyUnverif = 0;
     int listed = 0;
@@ -1590,15 +1589,19 @@ static void mk_judge(const char *id, const char *text)
         safeOff = (owner->M.Flags & MK_F_SAFE_OFF) != 0;
         memberActive = mk_member_active(&owner->Q,
                                         presence == MK_P_PRESENT ? pbdf : member);
-        for (j = 0; j < owner->M.Count && presence == MK_P_PRESENT &&
-                    memberActive;
-             j++) {
-            const MK_ENTRY *e = &owner->M.E[j];
-            if ((e->Flags & MK_EF_REPORTED) && e->Member == pbdf &&
-                (e->Flags & MK_EF_LOCATED) && e->Bus == nodes[node].Bus &&
-                e->Address == nodes[node].Address) {
+        if (presence == MK_P_PRESENT && memberActive) {
+            switch (mk_listed(&owner->M, pbdf, nodes[node].Bus,
+                              nodes[node].Address, &le)) {
+            case MK_L_LISTED:
                 listed = 1;
-                le = e;
+                break;
+            case MK_L_UNSURE:
+                /* An entry behind the member that cannot be placed may be
+                 * this unit: as an incomplete answer, it proves nothing. */
+                incomplete = 1;
+                break;
+            default:
+                break;
             }
         }
     }
@@ -1646,9 +1649,12 @@ static void mk_judge(const char *id, const char *text)
     }
     if (mk_filters_remove(dn)) {
         mk_rec_delete(id);
-        mk_log("mark removed: %s (%s)", id,
+        mk_log("mark removed: %s (%s; member %04lX)", id,
                presence == MK_P_ABSENT ? "the unit left" :
-               safeOff ? "safe eject is off" : "no longer behind an active member");
+               safeOff ? "safe eject is off" :
+               !memberActive ? "its member is not an active tunnel port" :
+               "not listed by the driver behind its member",
+               presence == MK_P_PRESENT ? pbdf : member);
     } else {
         mk_log("mark removal failed, kept for the next poll: %s (error %lu)",
                id, GetLastError());
