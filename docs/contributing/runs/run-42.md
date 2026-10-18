@@ -118,3 +118,133 @@ its own admission window independent of safe eject; the descendant walk
 below the member; every hypothesis about `PCI.VXD` marked as one;
 decisions N1 to N10). With it every design of Phase 42 has converged
 before its code, as the checkpoint asks.
+
+## 42-A.6, 42-A.7 and 42-A.9: the connection-manager follow-ups (2026-10-18 and 19)
+
+Code on branch `p42-cm1` (from `3.1.0.0` at `2a89ba74`): `beedb87d`, then
+`c1848d21` and `4a708676`; reviewed and revised until the review
+converged at `4a708676`. Built at `4a708676` with every gate,
+`scripts\build-driver.cmd all` and `all -amd64`: both pass (the x86 `qemu`
+`xhcicm.sys` SHA-256 `e5af1748f54203a9...`); the host suites pass
+(`test_cm_nvlink` 275 checks, `test_cm_query` 259, `test_u4cm` 1058).
+
+What changed:
+
+- 42-A.6: `CmNvlinkPublishUp` advances an entry already `UP` only for a
+  tunnel other than the one its `UP` was published for (`CM_NVLINK_TUNNEL`:
+  the USB4 port and its connection generation), as the text of
+  `stor98cm.h` of 2026-10-18 has it (entry protocol step 1, R8b). The UP
+  hook names its port's tunnel on the port's bridge; the seam's tunnel-up
+  exposure names it to the action's member alone; a tunnel down, a
+  RESYNC, a baseline, an owed re-enumeration and a tunnel up whose member
+  is not known (always under the firmware connection manager) name none.
+  Each bridge keeps the latest tunnel named for it, which every exposure of
+  the bridge publishes for. The USB4 down hook, where the port's member is
+  not known, takes an entry out of `UP` when its function is read absent,
+  on every member no other live port corresponds to. Record 21 section 7.2
+  and record 22 sections 7.7 and 10 say so.
+- 42-A.7: the query device's seeded answer takes its inert flag from the
+  thread's recorded wait (`CM_NHI.ThreadWait`, `CmQuerySeedInert`),
+  a start's bind still running included; record 25 section 14.
+- 42-A.9: a Thunderbolt 3 router adopted at the start or rebuilt under a
+  resume budget is owed its names (`DromOwed`); `TbtU4Poll` reads its
+  EEPROM once, with no budget running and the port `UP`, taking the names
+  only (`u4.drom.late`); record 22 section 8.
+
+The legs, on the reviewed code: the `usb4-emu` QEMU of `bin-2a893ea`
+(SHA-256 checked), i440FX, `usb4-host profile=usb4-generic` at `00:04`
+with two tunnel bridges, `tb0` at `00:05` (USB4 port 1) and `tb1` at
+`00:06` (port 2: not `00:08`, where U.11 of run-41 left the port-2 NVMe
+without an interrupt on 98 SE); NVMe enclosures `enc0` and `enc1` over the
+FAT image of `vm\u4-asm\base`; overlays and launchers in a VM folder of
+this branch's own. Each guest got the signed `3.0.0.0` asset installed
+inside the guest (`INSTALL /defaults /yes /thunderbolt`), Stor98 `0.4.0.0`
+from its release, then the gated `qemu` `xhcicm.sys` of `4a708676` copied
+over the installed one for its log.
+
+**42-A.6, Windows 98 SE** (the `t26` gold image): `enc0` hot-plugged: the
+tunnel up, the 9x late scan publishing the NVMe once
+(`cm.nvlink.up=01000101`, new, bus 1), F: mounted with no Refresh, a file
+written and compared. `enc1` hot-plugged on port 2: one publication, its
+own (`cm.nvlink.up=01000201`, new, bus 2), and no `cm.nvlink.up` for the
+entry of port 1, where U.11 of run-41 logged its republication at a new
+generation (`02000201`) and Stor98 then dropped the first disk. F:
+compared clean after it, and G:, the volume of port 2, mounted beside it
+and was written and compared: two NVMe volumes mounted together on 98 SE.
+`enc0` unplugged (path closed, the statement withheld as 98 SE makes none,
+`cm.nvlink.withheld=09000001`) and plugged again: the entry of port 1
+alone advanced, once (`cm.nvlink.up=02000101`, generation 2), that of port
+2 untouched; F: back with its file, G: compared clean throughout. Pass.
+
+**42-A.6, Windows 7 x86** (the NT target): `enc0`: the UP hook published
+generation 1 (`cm.nvlink.up=01000101`) and the seam's exposure of the same
+tunnel left it (no second publication; before 42-A.6 that exposure was
+fresh and advanced it again); F: mounted (AutoPlay "ORICO (F:)"), a file
+written and compared. `enc1` on port 2: its own entry alone
+(`cm.nvlink.up=01000201`), that of port 1 untouched; F: compared clean
+after it. The NVMe of port 2 gave no volume on 7: both enclosures' disks
+are overlays of one image with one disk signature, which Windows 7 does
+not mount twice (not read further; the publications are the log's).
+`enc0` plugged again: the down withheld as 7 is not a qualified system
+(`09000001`), then the entry of port 1 alone advanced, once
+(`cm.nvlink.up=02000101`); F: back with its file. Pass.
+
+The RESYNC was not reached on either system. Under the USB4 profile a
+RESYNC comes from a router removed below depth 1, an action queue that
+overflowed, or, on NT, the host interface lost: this connection manager
+enumerates no depth-2 router (as U.12 of run-41 read; a depth-2 router
+plugged behind `enc0` and removed logged nothing), an overflow cannot be
+driven from QMP, and after a loss `CmNvlinkLost` has already taken the
+entries out of `UP`. The RESYNC case is the host vectors'
+(`test_cm_nvlink.c`, `test_two_members`).
+
+**42-A.7, Windows 98 SE**: `XhciCmMode` 0 written to the connection
+manager's driver key (`Class\System\0031`) in the guest, restarted:
+`cm.mode=00000000`, `cm.inert=00000001`; `XHCITR /report` shows the
+controller "[no connection manager], idle (inert)", stage "idle (inert)
+(reason 1)". It also says the query device "did not answer for it", and
+so it does with the `3.0.0.0` `xhcicm.sys` on the same guest and sequence
+(a control): on 98 SE XHCITR does not take the query answer of an inert
+start, a behaviour older than this change; noted for the owner, not read
+further.
+
+**42-A.7, Windows 7 x86**: the same value in the driver key
+(`{4D36E97D-...}\0025`), a cold start: `cm.inert=00000001`; `XHCITR
+/report`: source "the driver's query device", XHCICM0, stage "idle
+(inert) (reason 1)", "Counters (pass 1, ...; the driver is idle)": the
+answer read carries the inert flag, from the one pass the creation of the
+device woke. Pass. The moment between the device's creation and that pass
+is too short to read in a guest; the choice of the seed there is the host
+vector's (`test_cm_query.c`, `test_seed_inert`).
+
+**42-A.9, Windows 98 SE**: the TS3 Plus model (`usb4-device ...
+dialect=tb3`) at power-on: the DROM read at the connect
+(`u4.drom.unused=00000620`) and `XHCIINST /devices` naming it "QEMU USB4
+NVMe Enclosure", Thunderbolt 3, 8086:15D3. Then Stand by, the dock removed
+and plugged again while the guest slept (its configuration lost across
+the sleep), `system_wakeup`: `cm.resume=00000001`, the router rebuilt
+inside the resume with no EEPROM read (`u4.router.up=808615D3` before any
+`u4.drom` line), then on the first pass after it `u4.drom.unused=00000620`
+and `u4.drom.late=01000001` (port 1, a model name read). Its name could
+not be read back after this resume: the display stayed in text mode with
+a DOS box open. On an earlier run of the same sequence a bridge's Add New
+Hardware wizard came up after the resume, and keys sent into it ended in
+"A fatal exception 0E has occurred at 017F:BFF87EDE" in an application;
+the same with the `3.0.0.0` `xhcicm.sys` (a control), so not of this
+change; unattributed. Pass on the reading of the log.
+
+**42-A.9, Windows 7 x86**: 7 x86 offers no standby in this emulator
+(`powercfg -a`: "The VGAPNP.SYS display driver does not support
+standby"), so the resume read is a hibernation's: the dock attached,
+`shutdown /h`, QEMU started again with the dock attached: `cm.resume`, the
+router rebuilt inside the resume (`u4.router.up=808615D3`, no DROM read),
+then `u4.drom.unused=00000620` and `u4.drom.late=01000001`; after the
+logon `XHCITR /report` names it "QEMU USB4 NVMe Enclosure (Thunderbolt 3),
+approved", 8086:15D3. Pass.
+
+Not shown: an adopted Thunderbolt 3 router. With `usb4-host preos-cm=on`
+and the dock attached at power-on the emulator left no tunnel to adopt
+(`u4.router.kind=01000502`, no preserved bit), and the driver connected it
+as a fresh plug, reading its DROM at the connect; the adopted case is the
+fake fabric's (`test_u4cm.c`, `test_tbt3_adopted`). Windows 2000 was not
+run for these tasks.
