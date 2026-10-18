@@ -24,12 +24,16 @@ rem      two launchers sharing a monitor port cannot both run
 rem   6. the vm-matrix verdict self-tests - a matrix that reads a refusal as a
 rem      pass makes every later FAIL and NODRIVER word untrustworthy
 rem   7. the tracked batch files' line endings - MS-DOS 7.1 COMMAND.COM can
-rem      fail on an LF-only .BAT, and the field wrappers are .BAT files
+rem      fail on an LF-only .BAT, and the field wrappers are .BAT files -
+rem      then the source charset, and the two copies of Stor98's interface
+rem      header held equal (task 42-A.20, scripts\check-stor98-header.ps1)
 rem   8. the XHCISNAP report self-test, when that EXE has been built (it has a
 rem      build.cmd of its own, and a clone without Open Watcom still runs
 rem      everything else here), and the XHCICLN self-test when that one has
 rem      (task 38.8; xhcicln\build.cmd), and the XHCIINST self-test and import
-rem      check when that one has (task 40.5; xhciinst\build.cmd)
+rem      check when that one has (task 40.5; xhciinst\build.cmd), and the
+rem      XHCIDI import gate when the 16-bit helper has (task 42-A.1;
+rem      xhciinst\di\build.cmd)
 rem   9. test\run-host-tests.cmd - the pure-core suite. It runs before the DDK
 rem      builds, not after: it compiles the same core files in seconds, so a
 rem      bad carve, ring or PORTSC constant should not cost two full builds
@@ -508,6 +512,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-source-charset.ps1"
 if errorlevel 1 goto charsetfail
 
+rem Stor98's interface header is in this tree twice since task 42-A.20:
+rem src\stor98\include\stor98cm.h, the master, and src\cm\stor98cm.h, the
+rem copy xhcicm.sys compiles against. Byte for byte until they are one.
+echo.
+echo === Stor98 interface header ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-stor98-header.ps1" -SelfTest
+if errorlevel 1 goto stor98hdrfail
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-stor98-header.ps1"
+if errorlevel 1 goto stor98hdrfail
+
 rem The snapshot reader's report path, when its EXE has been built (it is a
 rem separate build.cmd, and a clone without Open Watcom still has this one).
 if exist "%REPO%\xhcisnap\XHCISNAP.EXE" (
@@ -545,6 +561,30 @@ if exist "%REPO%\xhcitr\XHCITR.EXE" (
     echo === xhcitr self-test ===
     call "%REPO%\xhcitr\selftest.cmd"
     if errorlevel 1 goto trtestfail
+)
+
+rem The safe-removal mark service (task 42-A.5, design record 21 section
+rem 7.4 revision 3), when its EXE has been built: its -selftest, its switch
+rem refusals and its import table, which must name KERNEL32 and ADVAPI32
+rem alone (xhcimark\selftest.cmd). Nothing of it installs or starts the
+rem service.
+if exist "%REPO%\xhcimark\XHCIMARK.EXE" (
+    echo.
+    echo === xhcimark self-test ===
+    call "%REPO%\xhcimark\selftest.cmd"
+    if errorlevel 1 goto mktestfail
+)
+
+rem The 98 SE and ME device install helper (task 42-A.1, design record 27),
+rem when its EXE has been built (xhciinst\di\build.cmd, Open Watcom): its
+rem import table, by ordinal from KERNEL, USER and SETUPX and each the
+rem allowlist's, the gate's own refusals, and its version stamp
+rem (xhciinst\di\selftest.cmd).
+if exist "%REPO%\xhciinst\di\xhcidi.exe" (
+    echo.
+    echo === xhcidi self-test ===
+    call "%REPO%\xhciinst\di\selftest.cmd"
+    if errorlevel 1 goto ditestfail
 )
 
 echo.
@@ -1197,6 +1237,27 @@ exit /b 1
 echo.
 echo ERROR: tracked source carries a stray control byte or a UTF-8 BOM where the
 echo 1998-era toolchain cannot read one. See the check's output above.
+endlocal
+exit /b 1
+
+:mktestfail
+echo.
+echo ERROR: xhcimark's self-test failed: its pure half, its switches or its
+echo import table cannot be trusted (xhcimark\selftest.cmd).
+endlocal
+exit /b 1
+
+:stor98hdrfail
+echo.
+echo ERROR: src\cm\stor98cm.h is not src\stor98\include\stor98cm.h, the
+echo master, byte for byte - see the check's output above.
+endlocal
+exit /b 1
+
+:ditestfail
+echo.
+echo ERROR: xhcidi's self-test failed: its import table, the gate over it or
+echo its version stamp cannot be trusted (xhciinst\di\selftest.cmd).
 endlocal
 exit /b 1
 

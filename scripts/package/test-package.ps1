@@ -304,6 +304,30 @@ try {
         Assert-True (-not (Test-Path -LiteralPath $out)) "a package refused for its Stor98 input left an output directory."
     }
 
+    # No -Stor98Dir: the folder is Stor98's own in this tree,
+    # src\stor98\releases\<version> (task 42-A.20). Its 0.4.0.0 is the
+    # release xhci98 3.0.0.0 bundled, under the same SHA256SUMS.txt pin, and
+    # bundles unchanged from there; a version with no folder there is refused
+    # by that path.
+    $nvTree = Join-Path $repo "src\stor98\releases\0.4.0.0"
+    $nvTreeSha = "ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7"
+    $nvOut = Join-Path $script:work "pkg-nv-tree"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $nvOut,
+                           "-Stor98Version", "0.4.0.0", "-Stor98SumsSha256", $nvTreeSha,
+                           "-Stor98InterfaceVersion", "4", "-Stor98HeaderPath", $nvHeader4)
+    Assert-True ($r.ExitCode -eq 0) ("an x86 package bundling Stor98 0.4.0.0 from src\stor98\releases was rejected:`n" + $r.Output)
+    Assert-True ($r.Output -match [regex]::Escape("from $nvTree")) `
+        ("the package did not take Stor98 0.4.0.0 from '$nvTree'. Output:`n" + $r.Output)
+    Test-NvCopies -Pkg $nvOut -Rel @{ Dir = $nvTree } -Map (@{ "x86\stor98.inf" = "stor98.inf"; "x86\stor98.mpd" = "stor98.mpd"; "x86\stor98.sys" = "stor98.sys" } + $nvRenamed) -What "the package of Stor98 0.4.0.0 from src\stor98\releases"
+    $out = Join-Path $script:work "pkg-nv-notree"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $out,
+                           "-Stor98Version", "9.9.9.9", "-Stor98SumsSha256", $nvTreeSha,
+                           "-Stor98InterfaceVersion", "4", "-Stor98HeaderPath", $nvHeader4)
+    $want = "no Stor98 release folder at '" + (Join-Path $repo "src\stor98\releases\9.9.9.9") + "'"
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match [regex]::Escape($want)) `
+        ("a version with no folder under src\stor98\releases was not refused with `"$want`". Output:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath $out)) "a package refused for a missing src\stor98\releases folder left an output directory."
+
     # A later Stor98 release bundles the same way, and the substitute header
     # is the self-tests' alone.
     $nv031 = New-Stor98Release -Name "nv-0.3.0.1" -Files (Get-Stor98Files "0.3.0.1")
@@ -2988,8 +3012,20 @@ try {
            Why  = "a cut no longer stages XHCISNAP into tools\xhcisnap\ (task 38.9)" },
         @{ Find = '$toolsLayoutVersion = [version]"2.4.0.0"';
            Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.9)" },
-        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr")';
-           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install, the cleanup tool, the install tool and the USB tree tool (tasks 38.9, 38.2, 38.8, 40.6 and 41-A.6)" },
+        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")';
+           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install, the cleanup tool, the install tool, the USB tree tool and the mark service (tasks 38.9, 38.2, 38.8, 40.6, 41-A.6 and 42-A.5)" },
+        @{ Find = '$markDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcimark")';
+           Why  = "a cut no longer stages XHCIMARK.EXE and XHCIMK64.EXE into tools\xhcimark\ (task 42-A.5)" },
+        @{ Find = '$markExes = @("XHCIMARK.EXE", "XHCIMK64.EXE")';
+           Why  = "a cut no longer stages both builds of the mark service, the 64-bit one the native build the 64-bit system32 needs (task 42-A.5)" },
+        @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $MarkToolDir "xhcimark.c") -Macro "XHCIMARK_VERSION"';
+           Why  = "a cut no longer holds the mark service's version to the shared macro (task 42-A.5)" },
+        @{ Find = '$markNewer = @($markSources | Where-Object { $_.LastWriteTimeUtc -gt $markTime })';
+           Why  = "a cut no longer refuses a mark service older than its sources (task 42-A.5)" },
+        @{ Find = '@(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_status.h")) +';
+           Why  = "a cut no longer holds the mark service to the status record's layout it parses (task 42-A.5)" },
+        @{ Find = '@(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.h")))';
+           Why  = "a cut no longer holds the mark service to the shared pure half's header it compiles (task 42-A.5)" },
         @{ Find = '$cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")';
            Why  = "a cut no longer stages XHCICLN.EXE and XHCICL64.EXE into tools\xhcicln\ (task 38.8)" },
         @{ Find = '$cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")';
@@ -3032,6 +3068,26 @@ try {
            Why  = "a cut no longer writes the USB tree tool's readme.txt (task 41-A.6)" },
         @{ Find = 'Write-GeneratedText -Path (Join-Path $traytoolStaged "NOTICE.TXT")';
            Why  = "a cut no longer writes the NOTICE.TXT recording the USB tree tool's statically linked runtimes (legal-provenance.md section 2a)" },
+        # The 98 SE and ME device install helper (roadmap-usb4.md task 42-A.1,
+        # design record 27 section 3): staged beside the install tool, held to
+        # its DDK's hashes, its sources, its map, its import allowlist and its
+        # version stamp, its notices added to the install tool's NOTICE.TXT.
+        @{ Find = 'Copy-Item -LiteralPath $diExe -Destination (Join-Path $insttoolStaged "XHCIDI.EXE") -Force';
+           Why  = "a cut no longer stages XHCIDI.EXE beside the install tool in tools\xhciinst\, where the installer starts it (task 42-A.1, design record 27 section 4.1)" },
+        @{ Find = 'if (-not $SkipDiHelper -and $null -ne $insttoolStaged) {';
+           Why  = "the helper is no longer staged by default whenever the install tool is, so -SkipDiHelper is no longer the only way to cut without it (design record 27 section 3.3)" },
+        @{ Find = '& (Join-Path $diDir "stage-ddk.ps1") -VerifyOnly';
+           Why  = "a cut no longer holds the Windows 98 SE DDK files the helper is built against to the SHA-256s docs\references\README.md records (design record 27 section 3.3)" },
+        @{ Find = '$diNewer = @($diSources | Where-Object { $_.LastWriteTimeUtc -gt $diTime })';
+           Why  = "a cut no longer refuses a helper older than its sources (task 42-A.1)" },
+        @{ Find = '& (Join-Path $diDir "check-imports.ps1") -Path $diExe';
+           Why  = "a cut no longer holds the helper's ordinal imports to its allowlist, so an image Windows 98 SE or ME refuses to load could be published (design record 27 section 7)" },
+        @{ Find = '$diStamp = "XHCIDI " + $Version + [char]0';
+           Why  = "a cut no longer holds the helper's version stamp to the release's, though the helper refuses an installer of another version (design record 27 section 3.2)" },
+        @{ Find = 'Write-GeneratedText -Path $instNoticePath -Lines ($instNoticeLines + @($diNotice -split "`r?`n"))';
+           Why  = "a cut no longer adds XHCIDI.EXE's statically linked runtime and import library to the install tool's NOTICE.TXT (legal-provenance.md section 2a)" },
+        @{ Find = 'if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }';
+           Why  = "a cut without the helper no longer says so in its readme (design record 27 section 3.3)" },
         @{ Find = 'if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }';
            Why  = "a cut without the USB tree tool no longer says so in its readme (task 41-A.6)" },
         @{ Find = 'INSTALL /notray installs it without starting it at';
@@ -3263,7 +3319,7 @@ try {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut $d) | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "$d\xhci98.inf"), "; stand-in")
         }
-        foreach ($name in @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr")) {
+        foreach ($name in @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")) {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut "tools\$name") | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "tools\$name\readme.txt"), "stand-in")
         }

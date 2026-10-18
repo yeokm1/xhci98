@@ -56,6 +56,9 @@ rem                  task 38.2, design record 13 section 6.11): the gate, the
 rem                  SilentClasses admission and cap, a failed enumeration,
 rem                  the control bits, composite, the package's six, the
 rem                  transport bar, empty lists and malformed descriptors
+rem   test_regsrc  - where a registry value is taken from (src\xhci_regsrc.c,
+rem                  task 42-A.17): absent, per-device only, machine-wide
+rem                  only, both, and another type in either key
 rem   test_psw     - the Intel port switchover (src\xhci_psw.c, task 34.3):
 rem                  the device-id gate, the board exemption, the
 rem                  XhciIntelPortSwitch rule, and the route and release over
@@ -183,6 +186,11 @@ rem   test_xhq     - xhci98.sys's query answer (src\xhci_qry.c, design
 rem                  record 13 section 8.12): what each log level serves,
 rem                  the ring's text and cut, the PCI states, the sizing,
 rem                  XHCITR's reader and texts, the default level 2
+rem   test_di      - XHCIDI.EXE's pure part (xhciinst\di\di_core.c, task
+rem                  42-A.1, design record 27 section 11): the command line
+rem                  and its refusals, the result file's lines, the verdicts,
+rem                  the setup engine's error names held to the 98 SE DDK's
+rem                  setupx.h where tools\ has it
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
@@ -212,6 +220,11 @@ rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
 rem                  and SHPC
 rem                  readings, a port without the capability bits, and the
 rem                  bounded poll
+rem   test_cm_call - the 9x per-member call workers' handoff word
+rem                  (src\cm\cm_call.c, task 42-A.12): its transitions, a
+rem                  stale id, a withdrawal, a deadline passing while a call
+rem                  runs, two members' slots apart, and a next-operation
+rem                  client driven through one slot
 rem   test_cm_nvlink - the stor98 link-state channel's pure half
 rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
 rem                  table of stor98's stor98cm.h, its entry protocol read
@@ -228,6 +241,10 @@ rem                  xhcicm.inf and xhcicmf.inf, Windows 98's PCI device ids
 rem                  (the BUS_&DEV_&FUNC_ instance, the vendor and device),
 rem                  the bridge filter's snapshot, and the resume hold's
 rem                  watchdog bound
+rem   test_cm_marks - the marks answer's table (src\cm\cm_marks.c, task
+rem                  42-A.5, design record 21 section 7.4 revision 3): the
+rem                  current and tombstone sets, eviction once seen, the
+rem                  answer layout and the confirmation's checks
 rem   test_cm_status - the status record xhcicm.sys publishes for the install
 rem                  tool's viewer (src\cm\cm_status.c, design record 24
 rem                  section 3): the record from an ICM table and a USB4
@@ -437,6 +454,10 @@ rem test_silent links nothing else: the gate, the list's admission and the
 rem descriptor walk are pure computations over registry values and bytes
 rem (task 38.2).
 call :run test_silent "test_silent.c ..\src\xhci_silent.c"
+rem test_regsrc links nothing else: where a registry value is taken from,
+rem the machine-wide key or the driver key, is a pure decision over the two
+rem readings (task 42-A.17), shared by xhci98.sys and xhcicm.sys.
+call :run test_regsrc "test_regsrc.c ..\src\xhci_regsrc.c"
 rem test_psw links nothing else: the gate, the value rule, the two
 rem sequences and the lifetime are pure, driven over a modelled
 rem configuration space (34.3, 35.5).
@@ -528,6 +549,9 @@ rem test_cm_nvlink links nothing else: the stor98 link-state channel's entry
 rem protocol, statement conditions, 9x record and REMOVE_PENDING request
 rem are pure, read back by a modelled receiver (39-A.7, 40-A.7).
 call :run test_cm_nvlink "test_cm_nvlink.c ..\src\cm\cm_nvlink.c"
+rem test_cm_call links nothing else: the call workers' handoff word is pure
+rem (42-A.12).
+call :run test_cm_call "test_cm_call.c ..\src\cm\cm_call.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
@@ -552,6 +576,9 @@ rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
 rem Windows 98's PCI device ids, the bridge filter's snapshot and the
 rem resume hold's bound (39-A.5 driver half, 39-A.8).
 call :run test_cm_ports "test_cm_ports.c ..\src\cm\cm_ports.c"
+rem test_cm_marks links the marks answer's table alone (task 42-A.5,
+rem design record 21 section 7.4 revision 3).
+call :run test_cm_marks "test_cm_marks.c ..\src\cm\cm_marks.c"
 rem test_cm_status links the status record's builder alone (design record
 rem 24 section 3), over its own fake configuration space.
 call :run test_cm_status "test_cm_status.c ..\src\cm\cm_status.c"
@@ -567,6 +594,10 @@ rem test_xhq links xhci98.sys's query answer composer (src\xhci_qry.c,
 rem design record 13 section 8.12) and XHCITR's reader of it and the texts
 rem it makes (xhcitr\tr_log.c, tr_pci.c); the shared default level.
 call :run test_xhq "test_xhq.c ..\src\xhci_qry.c ..\xhcitr\tr_log.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src\cm\cm_query.c ..\xhciinst\inst_core.c"
+rem test_di links XHCIDI.EXE's pure part (xhciinst\di\di_core.c, design
+rem record 27 section 11) and reads setupx.h from tools\win98ddk-extracted\
+rem where it is there, a recorded copy of its values where it is not.
+call :run test_di "test_di.c ..\xhciinst\di\di_core.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

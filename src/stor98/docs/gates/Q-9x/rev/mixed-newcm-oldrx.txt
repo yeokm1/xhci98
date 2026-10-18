@@ -1,0 +1,5 @@
+# new CM + prototype (v1) receiver: the old receiver finds no v1 rendezvous; the CM gets no acknowledgement (E3FF) and isolates first
+98/debugcon-r5.log:[nvme98 00000269a9955388 00010] q9 rendezvous: HKEY_DYN_DATA\Nvme98Cm not found (rc=2): CM channel unavailable
+me/debugcon-m3.log:[nvme98 000008616b7bb1c2 00010] q9 rendezvous: HKEY_DYN_DATA\Nvme98Cm not found (rc=2): CM channel unavailable
+98/debugcon-r5.log:ctl eject result E3FF after 14071 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean
+me/debugcon-m3.log:ctl eject result E3FF after 14217 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean

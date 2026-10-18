@@ -1,0 +1,26 @@
+TARGETNAME=nvme2k
+TARGETPATH=.
+TARGETTYPE=MINIPORT
+
+INCLUDES=..\..\inc;..\..\..\inc
+
+TARGETLIBS=$(DDK_LIB_PATH)\scsiport.lib
+TARGETLIBS=$(TARGETLIBS) $(CRT_LIB_PATH)\libcntpr.lib
+
+MSC_WARNING_LEVEL=/W3 /WX
+
+!IF $(ALPHA) || $(IA64) || $(AXP64)
+DRIVER_ALIGNMENT=0x2000
+!ELSE
+DRIVER_ALIGNMENT=0x1000
+!ENDIF
+
+LINKER_FLAGS=/MAP
+
+SOURCES=..\nvme2k.c       \
+        ..\nvme2k_cpl.c   \
+        ..\nvme2k_nvme.c  \
+        ..\nvme2k_scsi.c  \
+        ..\utils.c        \
+        ..\nvme2k.rc
+

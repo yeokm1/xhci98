@@ -52,8 +52,10 @@
  *     before the IoInvalidateDeviceRelations or Reenumerate_DevNode that
  *     exposes what is behind it. It reads the port's secondary bus and
  *     publishes UP for each NVMe function (class 01h, subclass 08h) that
- *     answers there, with a new LinkGeneration after anything that may be
- *     a new connection (CmNvlinkExpose's `fresh`).
+ *     answers there, with a new LinkGeneration for a new tunnel only: an
+ *     entry not UP, or one UP for another tunnel than the one the exposure
+ *     names (CmNvlinkExpose's `tunnel`, task 42-A.6); an entry UP for a
+ *     tunnel that stayed up keeps its generation.
  *  2. DOWN_QUIESCED only after the tunnel's PCIe path is closed and the
  *     endpoint's link-down reset has completed, read on the conditions the
  *     record qualifies (record 21 section 7.1, record 22 section 10.2):
@@ -76,19 +78,28 @@
  *     so no hardware statement is made (record 21 section 7.1); the entry
  *     then goes to IN_USE alone (UP cleared, no DOWN_QUIESCED), which
  *     stor98 ignores, and its gone deadline (MD-1) applies.
- *  3. The acknowledgement before the removal: CmNvlinkAwait, called by the
- *     seam before any removal call it makes for a tunnel down (the
+ *  3. The acknowledgement before the removal, per member and never by
+ *     holding the thread (task 42-A.12, record 21 section 7.2 part 3,
+ *     interface 3's R6e): each entry marked DOWN_QUIESCED carries a
+ *     pending wait with its mark's time (CM_NV_SHADOW.Waiting, MarkedAt),
+ *     stepped by CmNvlinkStep from every pass of the thread and from the
+ *     servicing point of every bounded wait inside one (CmNhiWaitService),
+ *     ended by AckGeneration == LinkGeneration read twice, or
+ *     CmNvlinkAckBoundMs after the mark (5 s on NT, 3 s on 9x: interface
+ *     3's R12 S4), the deadline read first (CmNvlinkWaitStep). While one
+ *     is pending behind a member, that member's gate is up
+ *     (CmNvlinkHeld): the seam makes no removal call for it (the
  *     invalidation that reports the endpoint missing on NT,
- *     Query_Remove_SubTree and Remove_SubTree on 9x). It waits until every
- *     entry this domain marked DOWN_QUIESCED reads AckGeneration ==
- *     LinkGeneration, or CmNvlinkAckBoundMs since its mark (5 s on NT,
- *     3 s on 9x: interface 3's R12 S4), servicing the
- *     connection manager between reads. On NT it does not wait while no
- *     receiver has ever asked for the table (no stor98 is loaded, so none
- *     can acknowledge); on 9x it does not wait where the proof and locator
- *     were never published, nor while no stor98 has read the proof. On
- *     98 SE and ME it is reached only by a statement, which obligation 2
- *     makes there never; the bound is interface 3's all the same.
+ *     Query_Remove_SubTree and Remove_SubTree on 9x), no exposure, and on
+ *     NT no release of its held D0 requests at a resume; it holds the
+ *     member's work and runs it from a later pass once the gate falls,
+ *     while every other member's statement, exposure and removal go on.
+ *     On NT nothing waits while no receiver has ever asked for the table
+ *     (no stor98 is loaded, so none can acknowledge); on 9x nothing waits
+ *     where the proof and locator were never published, nor while no
+ *     stor98 has read the proof. On 98 SE and ME it is reached only by a
+ *     statement, which obligation 2 makes there never; the bound is
+ *     interface 3's all the same.
  *  4. A tunnel re-established only to an endpoint reset since the last one
  *     (MD-2 obligation 1): by construction under the ICM (record 21 section
  *     7.1) and by the Detect gate under the USB4 profile (record 22 section
@@ -159,17 +170,32 @@
 #define CM_NVLINK_RETRY_FOR_MS  30000UL
 /* The idle poll's ceiling while an entry is UP (record 21 section 8). */
 #define CM_NVLINK_IDLE_MS       250UL
+/* ... and while any acknowledgement wait is pending, of any domain,
+ * whether or not an entry reads UP (interface 3's R10: acknowledgements
+ * polled at least every 50 ms; record 21 section 7.2 part 0). */
+#define CM_NVLINK_PEND_MS       50UL
 /* Between reads of an acknowledgement. */
 #define CM_NVLINK_POLL_MS       20UL
 
 /* PCI class of an NVMe function: base 01h, subclass 08h (any interface). */
 #define CM_NVLINK_CLASS_NVM     0x0108UL
 
+/* A tunnel's identity for CmNvlinkPublishUp: the USB4 port (1 to 127) and
+ * its connection generation (TBT_U4_PORT.Generation, the low 24 bits),
+ * never 0; CM_NVLINK_TUNNEL_NONE for an exposure that names no new
+ * tunnel. */
+#define CM_NVLINK_TUNNEL_NONE   0UL
+#define CM_NVLINK_TUNNEL(port, gen) \
+    (0x80000000UL | (((ULONG)(port) & 0x7FUL) << 24) | \
+     ((ULONG)(gen) & 0xFFFFFFUL))
+
 /* CmNvlinkPublishUp's outcome. */
 #define CM_NVLINK_UP_NEW        1UL /* a fresh entry, generation 1 or the
                                        entry's next                       */
-#define CM_NVLINK_UP_AGAIN      2UL /* its entry, not UP: generation + 1   */
-#define CM_NVLINK_UP_ALREADY    3UL /* its entry is UP: unchanged          */
+#define CM_NVLINK_UP_AGAIN      2UL /* its entry, not UP, or UP for another
+                                       tunnel: generation + 1             */
+#define CM_NVLINK_UP_ALREADY    3UL /* its entry is UP for this tunnel, or
+                                       the exposure names none: unchanged */
 #define CM_NVLINK_UP_FULL       4UL /* no entry free                       */
 #define CM_NVLINK_UP_BAD        5UL /* no table, or a bad argument         */
 
@@ -276,23 +302,65 @@ ULONG CmNvlinkFind(const STOR98LS_TABLE *t, ULONG bus, ULONG slot);
  * Obligation 1 on (bus, slot): its entry, or a never-used one (an entry is
  * never given to another function: a stor98 instance may hold it), gets
  * Flags = IN_USE | UP with LinkGeneration + 1 - unless it is UP already
- * and `fresh` is FALSE (a re-exposure of the same connection). `fresh` is
- * TRUE for every exposure that may follow a new connection: presence on
- * the bus does not prove the link stayed up in between. Writes `*outcome`
- * (CM_NVLINK_UP_*); returns the entry or CM_NVLINK_NONE.
+ * for the same tunnel (stor98cm.h as Stor98 revised it on 2026-10-18,
+ * entry protocol step 1 and R8b: only a new tunnel increments
+ * LinkGeneration, and UP published again for a tunnel that stayed up
+ * keeps it; task 42-A.6). `tunnel` is the exposure's (CM_NVLINK_TUNNEL):
+ * NONE for one that follows no new tunnel on the entry's member, and then
+ * an entry already UP is left as it is; otherwise an entry UP is left as
+ * it is when `tunnels[index]` already names that tunnel, and gets the new
+ * generation when it names another (its UP outlived a tunnel nobody saw
+ * go down). `tunnels` is the caller's record, one per entry, of the
+ * tunnel each entry's UP was last published for, written here with every
+ * new generation. An entry with a removal request outstanding is left as
+ * it is whatever the tunnel (R9a). Writes `*outcome` (CM_NVLINK_UP_*);
+ * returns the entry or CM_NVLINK_NONE.
  */
-ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
-                        BOOLEAN fresh, PULONG outcome);
+ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
+                        ULONG slot, ULONG tunnel, PULONG outcome);
+
+/*
+ * The tunnel the exposure of member `i` carries for an action (task
+ * 42-A.6): CM_NVLINK_TUNNEL(port, generation) for the member a tunnel up
+ * names (`up` TRUE, `member` its index in the set, known by
+ * correspondence, record 22 section 7.6); CM_NVLINK_TUNNEL_NONE for every
+ * other member, for any other action (a tunnel down's, a RESYNC's) and
+ * for a tunnel up whose member is not known (`member` XHCI_TBT_NO_MEMBER,
+ * always so under the firmware connection manager). A function not UP
+ * still gets its new generation then (CmNvlinkPublishUp); no entry
+ * already UP is advanced on a guess.
+ */
+ULONG CmNvlinkActionTunnel(BOOLEAN up, ULONG port, ULONG generation,
+                           ULONG member, ULONG i);
+
+/*
+ * The tunnel an exposure of `bridge` publishes for (task 42-A.6), from a
+ * domain's record of the latest tunnel named per bridge (`count` slots of
+ * `bridges` and `tunnels`, CM_NVLINK_TUNNEL_NONE in `tunnels` for a free
+ * one): `named` when the exposure names one, recorded as the bridge's
+ * latest; otherwise the latest named for the bridge before, or
+ * CM_NVLINK_TUNNEL_NONE when none was (or no slot was free for it). Every
+ * exposure of a bridge so publishes for its latest tunnel: applied again
+ * it changes nothing (CmNvlinkPublishUp), and an exposure that names none
+ * pays what an earlier one could not.
+ */
+ULONG CmNvlinkBridgeTunnel(PULONG bridges, PULONG tunnels, ULONG count,
+                           ULONG bridge, ULONG named);
 
 /*
  * Before every exposure of `bus` (after the acknowledgement wait): every
  * entry there that carries a statement (DOWN_QUIESCED, not UP) becomes
- * IN_USE alone with LinkGeneration + 1, so a stor98 instance that binds
+ * IN_USE alone at the same LinkGeneration, so a stor98 instance that binds
  * after the exposure - to a function the scan could not publish, or one
  * that came back between the scan and the operating system's enumeration
- * - records a generation that carries no DOWN_QUIESCED, never an old
- * statement. An entry already IN_USE alone carries nothing and is left.
- * Returns how many; CmNvlinkRetireEntry does one entry, TRUE when it did.
+ * - finds no DOWN_QUIESCED, never an old statement. The generation is not
+ * advanced (task 42-A.12): stor98cm.h as Stor98 revised it on 2026-10-18
+ * increments LinkGeneration "by exactly one per tunnel establishment and
+ * for nothing else" (R8b), so a re-plug after a statement costs the one
+ * increment of its new UP; and Stor98's 9x late lookup takes a generation
+ * read not UP as its floor and binds only an UP above it, which that UP
+ * is. An entry already IN_USE alone carries nothing and is left. Returns
+ * how many; CmNvlinkRetireEntry does one entry, TRUE when it did.
  */
 ULONG CmNvlinkRetire(PSTOR98LS_TABLE t, ULONG bus);
 BOOLEAN CmNvlinkRetireEntry(PSTOR98LS_TABLE t, ULONG index);
@@ -382,6 +450,95 @@ ULONG CmNvlinkAckStep(const STOR98LS_TABLE *t, ULONG index,
                       BOOLEAN receiver, ULONG markedAt, ULONG nowMs,
                       ULONG boundMs);
 
+/*
+ * THE PENDING WAITS (task 42-A.12; record 21 section 7.2 parts 0 and 3).
+ * The connection manager's shadow of each entry (cm_nvlinkos.c keeps one
+ * array of STOR98LS_ENTRIES under its table lock): the domain that last
+ * published or marked it (Owner, opaque here), its tunnel port, whether a
+ * link-down acknowledgement is awaited and since when, and the ids its UP
+ * was published for.
+ */
+typedef struct _CM_NV_SHADOW {
+    PVOID Owner;        /* the domain that last published or marked it   */
+    ULONG Bridge;       /* its tunnel port, XHCI_TBT_BDF                 */
+    ULONG Waiting;      /* DOWN_QUIESCED set, acknowledgement awaited    */
+    ULONG MarkedAt;     /* the owner's clock at the mark, ms             */
+    ULONG Id;           /* the function's ids when UP was published      */
+} CM_NV_SHADOW;
+
+/*
+ * One step of every wait `owner` has pending: CmNvlinkAckStep on each
+ * entry it marked and awaits, the deadline read before the answer; an
+ * entry whose wait ended (acknowledged, superseded, no receiver, timed
+ * out, late) is no longer Waiting, and (CM_NVLINK_AW_* << 8) | entry is
+ * stored in ends[*count] while *count < STOR98LS_ENTRIES (ends NULL: not
+ * recorded). No wait, no call: bounded by the table's size. Returns how
+ * many of `owner`'s waits are still pending.
+ */
+ULONG CmNvlinkWaitStep(const STOR98LS_TABLE *t, CM_NV_SHADOW *shadow,
+                       PVOID owner, BOOLEAN receiver, ULONG nowMs,
+                       ULONG boundMs, PULONG ends, PULONG count);
+
+/* Member `bridge`'s gate (task 42-A.12): TRUE while an entry `owner`
+ * marked behind it awaits its acknowledgement. Another member's waits
+ * never raise it. */
+BOOLEAN CmNvlinkWaitHeld(const CM_NV_SHADOW *shadow, PVOID owner,
+                         ULONG bridge);
+
+/* Any wait pending, of any domain (the 50 ms cadence, R10). */
+BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow);
+
+/*
+ * THE SEAM'S HOLD (task 42-A.12; record 21 section 7.2 part 3). A member
+ * whose gate is up has its work held in CM_REENUM_PORT.Held (cm_reenum.c)
+ * and run by the first pass that finds the gate down; another member's
+ * gate never holds it. The decisions are pure so that the host vectors
+ * drive them across passes.
+ */
+#define CM_HELD_REENUM      0x01UL  /* its exposure and re-enumeration     */
+#define CM_HELD_VANISH      0x02UL  /* ... removing vanished children     */
+#define CM_HELD_FRESH       0x04UL  /* ... a fresh exposure               */
+#define CM_HELD_RELEASE     0x08UL  /* NT: its held D0 requests' release  */
+#define CM_HELD_FAIL        0x10UL  /* ... on the failure path            */
+
+/* CmNvlinkHoldRun's answer, bits. */
+#define CM_HELD_DO_RELEASE  0x01UL  /* release its held D0 requests       */
+#define CM_HELD_DO_FAIL     0x02UL  /* ... on the failure path            */
+#define CM_HELD_DO_REENUM   0x04UL  /* expose and call, *vanish, *fresh    */
+#define CM_HELD_DO_OWE      0x08UL  /* not active: owed (Missed) instead  */
+
+/*
+ * An action's re-enumeration of a member (cmReenumAll): `gateUp` - held,
+ * collapsed into *held with what was held before (a removal of vanished
+ * children or a fresh exposure asked by either is kept), TRUE returned;
+ * down - any re-enumeration held before folded into *vanish and *fresh and
+ * taken out of *held, and an owed skipped change (*missed) paid by the same
+ * call (*vanish and *fresh set, *missed cleared), FALSE returned (the
+ * caller makes the call).
+ */
+BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN *missed,
+                           BOOLEAN *vanish, BOOLEAN *fresh);
+
+/*
+ * A pass's decision for a member's held work: nothing while its gate is
+ * up. Down: a held resume release is returned (and taken out of *held)
+ * whatever the transport; the re-enumeration is kept while the host
+ * interface is lost (`live` FALSE: no bridge is read and nothing posted
+ * until the transport is back), else taken out and returned when
+ * `reenumOn` (XhciCmReenum not 0) and the member is `active`, owed instead
+ * (CM_HELD_DO_OWE) when it is only `exclusive`. A member that also owes a
+ * skipped change (*missed) is paid by the same call: *vanish and *fresh
+ * set and *missed cleared, so one dispatch pays both.
+ */
+ULONG CmNvlinkHoldRun(PULONG held, BOOLEAN gateUp, BOOLEAN live,
+                      BOOLEAN reenumOn, BOOLEAN active, BOOLEAN exclusive,
+                      BOOLEAN *missed, BOOLEAN *vanish, BOOLEAN *fresh);
+
+/* The idle poll period from XhciCmPollIdleMs as read: held to at most
+ * CM_NVLINK_PEND_MS while `pending`, else to CM_NVLINK_IDLE_MS while `up`
+ * (an entry reads UP). */
+ULONG CmNvlinkIdleFor(ULONG configured, BOOLEAN up, BOOLEAN pending);
+
 /* Interface 3's publication in R3's and R4's order: the image resident,
  * the proof key opened first (an existing one is another publisher's, and
  * one whose absence the open did not show may be: nothing is published
@@ -426,19 +583,26 @@ VOID CmNvlinkStart(struct _CM_NHI *nhi);
  * re-enumeration call that exposes its secondary bus. Every exposure
  * first retires the statements on that bus (and on every entry last
  * published or marked for `bridge`, should the bus not read). `fresh` TRUE
- * after a tunnel up, a RESYNC or an owed re-enumeration: a new generation
- * for every NVMe function found; FALSE on a tunnel down's: an entry UP is
- * left as it is. Windows 98 SE and ME: no UP while the record is not
+ * after a tunnel up, a RESYNC or an owed re-enumeration: a silent bus is
+ * waited for (on NT where the SHPC slot reads a card present) and, on 98
+ * SE and ME, scanned again on later passes (CmNvlinkService); FALSE on a
+ * tunnel down's. `tunnel` (CM_NVLINK_TUNNEL) names the new tunnel on
+ * `bridge` this exposure follows, or is CM_NVLINK_TUNNEL_NONE: a function
+ * found not UP gets a new generation either way, one UP only when it was
+ * published for another tunnel than `tunnel` names (CmNvlinkPublishUp,
+ * task 42-A.6). Windows 98 SE and ME: no UP while the record is not
  * written (the channel is unavailable to that exposure). Only functions on
  * the secondary bus itself are seen: an NVMe function behind an
  * enclosure's own PCIe switch is not, gets no entry and so no statement
  * (stor98's gone deadline stands); nor does one that has not answered by
  * the end of the scan. Returns the number of entries UP for that bus. */
-ULONG CmNvlinkExpose(struct _CM_NHI *nhi, ULONG bridge, BOOLEAN fresh);
+ULONG CmNvlinkExpose(struct _CM_NHI *nhi, ULONG bridge, BOOLEAN fresh,
+                     ULONG tunnel);
 
 /* Obligation 2, ICM profile: a TBT_ICM_ACT_TUNNEL_DOWN after the seam's
  * tunnel-down poll (`pollState`, the poll's last verdict in
- * nhi->Reenum.Poll.Last), before CmNvlinkAwait and the removal. Returns
+ * nhi->Reenum.Poll.Last), before the removal, which its pending wait
+ * then holds per member (obligation 3). Returns
  * CM_NVLINK_SEND when DOWN_QUIESCED was set on at least one entry, else
  * why not (every UP entry of the set's buses then leaves UP). */
 ULONG CmNvlinkIcmDown(struct _CM_NHI *nhi, ULONG pollState);
@@ -461,16 +625,29 @@ VOID CmNvlinkDropLate(struct _CM_NHI *nhi);
  * XHCI_TBT_NO_MEMBER, `pathClosed` TBT_U4_LINKDOWN.PathClosed,
  * `remainingMs` what is left of its 3 s (0 when no anchor). Reads the
  * member within that time. Returns as CmNvlinkIcmDown; may run nested at
- * a safe point, and never waits for the acknowledgement (CmNvlinkAwait
- * does, before the removal). */
+ * a safe point, and never waits for the acknowledgement (its pending
+ * wait holds the member's removal, obligation 3). */
 ULONG CmNvlinkPortDown(struct _CM_NHI *nhi, ULONG member,
                        BOOLEAN pathClosed, ULONG remainingMs);
 
-/* Obligation 3: before every call that can start a removal - the seam's
- * invalidations and Reenumerate_DevNode / Remove_SubTree, every exposure,
- * and the release of held D0 requests at a resume. Returns at once when
- * nothing of this domain's is awaited. */
-VOID CmNvlinkAwait(struct _CM_NHI *nhi);
+/*
+ * Obligation 3 (task 42-A.12). CmNvlinkStep steps every acknowledgement
+ * wait of this domain (CmNvlinkWaitStep on the NHI's clock) and logs each
+ * end: from every pass of the thread (CmReenumService) and from the
+ * servicing point of every bounded wait inside one (CmNhiWaitService:
+ * cmPoll's loop, the channel's reading and scan waits, the ICM client's
+ * command wait). Non-reentrant (a step reached from inside a step does
+ * nothing), no wait, no call: it only advances states and writes the log.
+ * CmNvlinkHeld steps first and answers member `bridge`'s gate: TRUE while
+ * a wait of this domain is pending behind it, and then the seam makes no
+ * removal call, no exposure (CmNvlinkExpose refuses one too) and no
+ * release of held D0 requests for that member, and runs them from a pass
+ * after the gate falls; nothing of another member's waits on it.
+ * CmNvlinkPending: any wait of any domain pending (the thread's cadence).
+ */
+VOID CmNvlinkStep(struct _CM_NHI *nhi);
+BOOLEAN CmNvlinkHeld(struct _CM_NHI *nhi, ULONG bridge);
+BOOLEAN CmNvlinkPending(VOID);
 
 /* Windows 98 SE and ME, the CONFIGMG worker's removal step (see the file
  * header). CmNvlinkWkCandidate: whether entry `index` is one domain
@@ -499,8 +676,10 @@ ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence, ULONG gen,
 VOID CmNvlinkWkWithdraw(ULONG index, ULONG sequence);
 
 /* The idle poll period: XhciCmPollIdleMs as read, held to at most
- * CM_NVLINK_IDLE_MS while any entry reads UP (a tunnelled NVMe function is
- * there to be noticed leaving: record 21 section 7.2's budget). Any IRQL. */
+ * CM_NVLINK_PEND_MS while any acknowledgement wait is pending (R10), else
+ * to CM_NVLINK_IDLE_MS while any entry reads UP (a tunnelled NVMe function
+ * is there to be noticed leaving: record 21 section 7.2's budget). Any
+ * IRQL. */
 ULONG CmNvlinkIdleMs(ULONG configured);
 
 /*
@@ -508,13 +687,19 @@ ULONG CmNvlinkIdleMs(ULONG configured);
  * with CmNhiSetU4Hooks where the selection admits that profile, with the
  * NHI as the context. CmNvlinkU4Up (CM_U4_UP_HOOK) records the port's
  * connection generation for the presence sample and publishes the UP
- * itself (CmNvlinkExpose of the port's bridge, or of every member when
- * the correspondence is not known), before anything - the seam's
+ * itself (CmNvlinkExpose of the port's bridge with the port's tunnel, or
+ * of every member with none when the correspondence is not known), before
+ * anything - the seam's
  * re-enumeration, or the release of held D0 requests at a resume - can
  * expose the endpoint. CmNvlinkU4Down (CM_U4_DOWN_HOOK) maps the port to
  * its member by correspondence and calls CmNvlinkPortDown; it returns
  * TBT_U4_STMT_SENT when a DOWN_QUIESCED was written, else
- * TBT_U4_STMT_WITHHELD. CmNvlinkService, once per pass of the thread
+ * TBT_U4_STMT_WITHHELD. While the port's member's gate is up (an
+ * acknowledgement pending behind it: a re-plug inside the wait), the up
+ * hook records the tunnel and publishes nothing: the seam's exposure of
+ * the member, held behind the same gate, publishes for it once the wait
+ * has ended (R8b's order, DOWN_QUIESCED acknowledged or timed out before
+ * the next UP). CmNvlinkService, once per pass of the thread
  * (CmReenumService), offers the core one presence sample per port known
  * by correspondence that has UP entries (TbtU4PresenceSample, the anchor
  * of section 10.3), timestamped at its first read and matched only when

@@ -53,6 +53,12 @@ const CM_FAMILY *CmPortsFamilyAt(ULONG n);
 ULONG CmPortsUnpairedCount(VOID);
 ULONG CmPortsUnpairedAt(ULONG n);
 
+/* TRUE when `id` (CM_PORTS_ID form) is one of xhcicmf.inf's bridge models:
+ * a family's switch or root port id, or an unpaired one (the host suite
+ * holds the two equal both ways). AddDevice's bridge role (cm_vals.h
+ * CmRoleDecide). */
+BOOLEAN CmPortsFilterId(ULONG id);
+
 /*
  * A Windows 98 PCI device id, "PCI\VEN_vvvv&DEV_dddd...\BUS_bb&DEV_dd&
  * FUNC_ff" (ANSI, at most `chars` characters, ending at the first NUL):

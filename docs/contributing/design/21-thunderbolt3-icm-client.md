@@ -2281,21 +2281,38 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   that exposes its secondary bus (the invalidation of section 6.2,
   `Reenumerate_DevNode` of section 6.1), the driver scans that bus and
   publishes `UP` for each function of class 01h subclass 08h that
-  answers, with `LinkGeneration` + 1 - except that an entry already `UP`
-  keeps its generation on a tunnel down's re-enumeration. After a tunnel
-  up, a RESYNC or an owed re-enumeration the exposure is fresh: presence
-  on the bus does not prove the link stayed up in between, so even an
-  entry that reads `UP` gets a new generation - unless a 9x removal
-  request (`REMOVE_PENDING`, below) is outstanding on it: the generation
-  does not change while one is set (interface 3, R9a), so the entry is
-  left as it is until the request is withdrawn. Before every exposure,
-  fresh or not (it follows the acknowledgement wait), every entry behind
-  that bridge that carries a statement is retired (`IN_USE` alone,
-  generation + 1), found by the bus and by the bridge it was last published
+  answers, with `LinkGeneration` + 1 for a new tunnel only (task 42-A.6;
+  `stor98cm.h` as Stor98 revised it on 2026-10-18, entry protocol step 1
+  and R8b: UP published again for a tunnel that stayed up keeps its
+  generation). An entry not `UP` always gets the new generation. An entry
+  already `UP` keeps it - on a tunnel down's re-enumeration, a RESYNC, a
+  baseline's or an owed re-enumeration's exposure, and on every member but
+  the one a tunnel up names - unless the exposure names a tunnel other
+  than the one the entry's `UP` was last published for: under the USB4
+  profile (record 22 section 10) the UP hook and the seam name the port's
+  tunnel (the USB4 port and its connection generation) to the member the
+  port corresponds to, and nothing else names one. Under the firmware
+  connection manager no action names its member, so no tunnel is named
+  and no entry already `UP` is advanced: a member whose function is newly
+  found gets its generation, and the others stay as they are. (Until
+  42-A.6 every exposure after a tunnel up or a RESYNC advanced every
+  member's entry: U.11's two NVMe drives under the USB4 profile,
+  `runs/run-41.md`, where a second port's tunnel up re-published the
+  first drive's entry at a new generation and a bound Stor98 on 98 SE
+  dropped that disk.) Nor does the generation change while a 9x removal
+  request (`REMOVE_PENDING`, below) is outstanding on an entry (interface
+  3, R9a): it is left as it is until the request is withdrawn. Before
+  every exposure, fresh or not (it follows the acknowledgement wait), every entry behind
+  that bridge that carries a statement is retired (`IN_USE` alone, the
+  generation kept), found by the bus and by the bridge it was last published
   or marked for, so a Stor98 instance that binds after the exposure -
   to a function the scan could not see, or one that came back between the
   scan and the enumeration - never records a generation carrying an old
-  statement. On Windows 98 SE and ME no `UP` is published while the
+  statement. (Until task 42-A.12 the retirement also advanced the
+  generation, so a re-plug after a statement cost two increments; R8b
+  allows one per tunnel and none for anything else, and Stor98's 9x late
+  lookup takes a generation read not `UP` as its floor and binds only an
+  `UP` above it, which the re-plug's one increment is.) On Windows 98 SE and ME no `UP` is published while the
   proof and locator are not published. There the tunnel's bus did not answer before
   `Reenumerate_DevNode` (98 SE, run-39): a fresh exposure that finds it
   silent leaves the bus to be scanned again on each pass for 10 s, and the
@@ -2341,9 +2358,14 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   no `DOWN_QUIESCED`), which Stor98 ignores, and its gone deadline (MD-1)
   stands; a function still answering keeps its `UP`.
 - **The acknowledgement before the removal.** Before the removal call of a
-  tunnel down or a RESYNC, the thread waits until every entry this domain
-  marked reads `AckGeneration` = `LinkGeneration`, or the bound from the
-  mark: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
+  tunnel down or a RESYNC for a member, every entry this domain marked
+  behind that member reads `AckGeneration` = `LinkGeneration`, or the bound
+  from the mark has passed. Since task 42-A.12 that is a pending state per
+  entry, stepped on the thread's passes and at every servicing point of a
+  wait inside one (the sleeps of the core's and the seam's waits), and a
+  gate per member that holds that member's removal, exposure and resume
+  release alone (part 3 of "The 9x half" below); until then the thread
+  itself waited for every entry of the domain. The bound: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
   test build; the header gives no number), and 3 s on Windows 98 SE and
   ME, inside interface 3's R12 S4 bounds: at most Stor98's 9x gone
   deadline (`STOR98LS9X_GONE_MS`, 5 s) and not below
@@ -2352,8 +2374,7 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   Stor98 that has not answered by then is a benign timeout (G3 run C:
   nothing was held, and its next request applied the statement), and no
   idle indication shortens or skips the wait - the acknowledgement is the
-  only signal. Orchestrator decision of 2026-10-15, owner to confirm. The thread services the ICM between
-  reads. On NT it does not wait while no driver
+  only signal. Orchestrator decision of 2026-10-15, owner to confirm. On NT nothing waits while no driver
   has ever asked for the table (no Stor98 is loaded, so none can answer);
   on 9x it does not wait where the proof and locator were not published,
   nor while no Stor98 has read the proof. Each read checks the bound
@@ -3933,10 +3954,77 @@ is exported on every NT target the service runs on (record 23 section 5.8
 read it on 2000; the service treats a missing export as "cannot tell" and
 makes no restart).
 
+*As built (task 42-A.5, 2026-10-19, branch `p42-ejrb`).* The code follows
+the revision with these readings of it, each reviewed and revised with
+the code (`runs/run-42.md`, "42-A.5"):
+
+- **Roles.** `CmRoleDecide` (`cm_vals.c`) gives the NHI role to an id of
+  the NHI table or the USB4 host class (`CmProfileFor` not unknown) and
+  nothing wider, so an unlisted Intel NHI bound by hand for `XhciCmMode` 2
+  is a passive child now; the bridge role to a class-0604 id of
+  `xhcicmf.inf`'s models (`CmPortsFilterId`, held to the INF both ways by
+  `test_cm_ports`); every other PDO, an unreadable id list included, to the
+  `AddDevice` child (`CmChildAddDevice`), which answers success even when
+  it cannot attach. A bridge the filter INF names whose value the service
+  wrote is called twice; the second call finds the first object (a bridge
+  filter of this driver on the stack) and attaches nothing, so one object
+  serves both (M15).
+- **The location** is read at the start's way back (`CmRegAttLocate`) and
+  at a capability request's way back from the answer's own `Address` and
+  `IoGetDeviceProperty`'s bus number (`CmRegAttLocateCaps`), never while
+  the object is itself asking: `DevicePropertyAddress` is answered by an
+  `IRP_MN_QUERY_CAPABILITIES` sent down the same stack, and the first
+  build's capability handler, which asked for it, overflowed the kernel
+  stack at boot on Windows 2000 (bug check 0x7F, read in the 42-V.2 leg).
+- **Association.** An `AddDevice` child (or a bridge filter at a unit's
+  place) answers `Removable` while its bus number equals the secondary bus
+  the thread last read from an active, exclusive member's header (at the
+  discovery and after each tunnel action), the PDO has a current entry
+  in that domain's table, and that domain's `XhciCmSafeEject` is 1.
+- **The table** keeps each member's 32 current entries and 32 tombstones
+  apart (`CM_QM_MAX_ENTRIES` 256, the answer at most 16,448 bytes); an
+  eviction moves the generation on; the query device answers
+  `STATUS_DEVICE_NOT_READY` before the first pass has built one.
+- **The confirmation** is read with the status ask on NT only (the driver
+  key opened with `KEY_SET_VALUE` there for it) and written empty after the
+  check (`ZwSetValueKey` with no data, `cm_statos.c`, the file the
+  allowlists admit for it). Writers take the tools' eject mutex around
+  their check of an empty value and their write. Under the USB4 profile
+  the thread drops a member's pending departures when that member's
+  connection generation (`CmNhiMemberGen`) changes.
+- **The service's reconciliation** judges a record by its owning domain
+  (the one whose answer lists the devnode's parent, or the record's member
+  for an absent devnode) and removes nothing while that domain cannot be
+  verified; with no owner listed, only when every NHI is verifiable and
+  discovery is complete; a failed lookup or an unreadable location is never
+  an absence; an inactive member or safe eject off removes the mark even
+  from an incomplete answer. A pending departure does not hold the first
+  plug's restart back; the unit's fresh status (started, no problem) does.
+  An attempt's record (restart, confirmation) is kept until there is
+  evidence that its serial is gone. The restart itself is once per serial
+  until the unit is seen listed after it (the mark present and an
+  attachment that answered `Removable`); that re-arms one later gated
+  restart, because Windows' driver installation deletes a device's own
+  `LowerFilters` value (read on XP in 42-V.2: a driver update of a marked,
+  listed unit left it unlisted, the value written again after the
+  install). A restart Windows vetoed leaves the unit unlisted and is never
+  repeated.
+- **Hand registration.** `XHCIMARK -register` and `-unregister` register
+  and delete the service from `system32` for a test guest before the
+  installer's hooks exist; the installer does it in a release.
+
 ## 8. Registry values, counters, the log and the snapshot
 
 Values, each `REG_DWORD` unless said, each written by every install path at
-its default under the don't-overwrite flag, each read once at start:
+its default under the don't-overwrite flag, each read once at start. From
+`3.1.0.0` (roadmap-usb4 42-A.17; owner, 2026-10-18) every one is read first
+from the machine-wide key `HKLM\System\CurrentControlSet\Services\USB`,
+which `xhci98.sys` reads too, and from the NHI's driver key only when it is
+not there in any type: a machine-wide value wins when present, one of
+another type standing as unreadable with the default, and the machine-wide
+key is read even when the driver key cannot be opened (`cm_reg.c`
+`cmQuery`; the decision is `..\xhci_regsrc.c`'s `XhciRegPick`, design
+record 13 section 5.5). The INFs still write only the driver key:
 
 | Value | Default | Meaning |
 |---|---|---|

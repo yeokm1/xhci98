@@ -40,6 +40,7 @@ The rule that organises the directory: files in the pure core **decide** (they e
 | `xhci_own.c` | Who holds an endpoint's ring across an interface switch (record 20 section 5): each step's decision, a completion code as an outcome, the one-setting walk. | `test_own` |
 | `xhci_susp.c` | Selective suspend ([design record 14](design/14-selective-suspend.md)): the switch, eligibility and capabilities, the device's link machine, each function's power slot, the wake episode, the idle notification's batches, and stage B's SuperSpeed decisions. | `test_susp` |
 | `xhci_silent.c` | The Windows 98 SE and ME silent install (design record 13 section 6.11): the `XhciSilentInstall` gate, the `SilentClasses` table's admission and cap, the configuration walk and the PDO's answer. | `test_silent` |
+| `xhci_regsrc.c` | Where a registry value of `xhci98.sys` and `xhcicm.sys` is taken from (roadmap-usb4 42-A.17, design record 13 section 5.5): the machine-wide `Services\USB` key when the value is there in any type, else the driver key. Compiled into both drivers. | `test_regsrc` |
 | `xhci_strict.c` | Strict mode's command precondition table: would a conforming controller accept this command in this Slot and EP state. Debug and qemu flavours only. | `test_strict` |
 | `xhci_inj.c` | Task 35-T.9's fault injection: the `XhciQemuInject` trigger's encoding and sequence rule, the ports a fault may be aimed at, every register answer the layer gives. Compiled into the qemu flavour alone. | `test_inj` |
 | `xhci_qry.c` | The answer of `IOCTL_XHCI98_QUERY` (design record 13 section 8.12): the counter block from level 1, the log ring as text at levels 2 and 3 (withheld at 4), the controller's configuration space at every level, and the sizing answers; `hcd_door.c` gathers and answers. | `test_xhq` |
@@ -121,6 +122,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `xhci_own.h` | Ring ownership (`xhci_own.c`). | yes |
 | `xhci_susp.h` | Selective suspend's pure half (`xhci_susp.c`). | yes |
 | `xhci_silent.h` | The silent install (`xhci_silent.c`). | yes |
+| `xhci_regsrc.h` | Where a registry value is taken from (`xhci_regsrc.c`). | yes |
 | `xhci_strict.h` | Strict mode's table (`xhci_strict.c`). | yes |
 | `xhci_inj.h` | Fault injection's encoding and reserved codes (`xhci_inj.c`, `hcd_inj.c`). | yes |
 | `xhci_qry.h` | `IOCTL_XHCI98_QUERY`'s wire format, shared byte for byte by the driver, `XHCITR` and the host tests. | yes |
@@ -204,11 +206,14 @@ The three flavours (`debug`, `release`, `qemu`) and what distinguishes their out
 | `cm_thr.c` | The NHI's connection-manager thread (record 21 section 4.4, task 39-A.4): created at start, ended at the stop, with `hcd_ctl.c`'s Windows 98 care around its handle; its work queue (a word of bits and the power IRP slots under a spin lock, PnP work waited for, power work never); the pure core's accessors - BAR0 through `READ_REGISTER_ULONG`, configuration space through `IRP_MN_READ_CONFIG` / `IRP_MN_WRITE_CONFIG` to the PDO (`hcd_svc.c`'s route), the Bus Master bit, the waits and a millisecond clock from the tick count (`KeQueryTickCount` and `KeQueryTimeIncrement`), monotonic. |
 | `cm_power.c` | The NHI's power, as the device's power policy owner (record 21 section 4.4, task 39-A.4, on `hcd_power.c`'s model): the system IRP requests the device IRP and completes after it; a D3 runs the suspend's sequence (or at shutdown the unbind) on the thread before it goes down; a D0 is retained until the thread's reinitialisation and resume finish; no dispatch routine waits. |
 | `cm_reenum.c` / `cm_reenum.h` | Re-enumeration and safe eject (tasks 39-A.5, driver half, and 39-A.8; record 21 sections 3.2, 6 and 7.4): the registration list between the NHI domains and the bridge filters (publish, withdraw, rundown; exclusive ownership and the active mark), the domain's tunnel-port set through `tbt_topo.c` over `HalGetBusData` reads, the port poll of section 6.5, the NT route (`IoInvalidateDeviceRelations` through each active bridge's filter) and the Windows 98 SE and ME route (CONFIGMG), the resume hold of a bridge's D0 IRP with its watchdog, safe eject's child filters and their eject notifications, and record 22's per-port eject entry (`CmReenumSetEject`). |
-| `cm_ports.c` / `cm_ports.h` | The pure half of `cm_reenum.c` (`test_cm_ports`): the families' NHI, switch-port and root-port ids of record 21 section 3.3, checked against both INFs; Windows 98's PCI device ids; the bridge filter's snapshot; the resume hold's bound. |
+| `cm_ports.c` / `cm_ports.h` | The pure half of `cm_reenum.c` (`test_cm_ports`): the families' NHI, switch-port and root-port ids of record 21 section 3.3, checked against both INFs; Windows 98's PCI device ids; the bridge filter's snapshot; the resume hold's bound; whether an id is one of the filter INF's bridge models (`CmPortsFilterId`, AddDevice's bridge role). |
+| `cm_marks.c` / `cm_marks.h` | The pure half of the marks answer (task 42-A.5, record 21 section 7.4 revision 3; `test_cm_marks`): a domain's table of the child PDOs its active members reported, current entries and tombstones kept apart, a tombstone kept until a poll has seen it, the `IOCTL_XHCICM_MARKS` answer (`cm_query.h` `CM_QM_*`) and the eject confirmation's checks (`CM_QC_*`). `cm_reenum.c` keeps it under the registration list's lock. |
 | `cm_cfgmg.c` | CONFIGMG's services through the VMM dynalink (Windows 98 SE and ME, x86 only): the non-paged thunks, the `Get_Version` and root-id guards, and the calls of record 21 sections 6.1 and 7.4; and PCI.VXD's `_PCI_Read_Config` and `_PCI_Write_Config` through the same mechanism, behind their read guard (section 6.1.1) (`cm_cfgmg.h` has the numbers). |
 | `cm_nvlink.c` / `cm_nvlink.h` | The Stor98 link-state channel (tasks 39-A.7 and 40-A.7; record 21 section 7.2, record 22 section 10), its pure half (`test_cm_nvlink`): the entry protocol over `stor98cm.h`'s table (UP with a new generation, `DOWN_QUIESCED`, the acknowledgement), both profiles' statement conditions, interface 3's locator bytes, proof query handler and publication order (residency, the proof opened first, the proof, the locator), its `REMOVE_PENDING` request, and both waits' steps (the deadline read before the acknowledgement). The header is the API the seam and the USB4 driver half call. |
-| `cm_nvlinkos.c` | The channel's driver half: the never-freed table, the `\Callback\Stor98LinkState` callback object (NT), interface 3's `HKEY_DYN_DATA` current-boot proof (a dynamic key this image answers, made resident first, deleted at an unload) and `HKEY_LOCAL_MACHINE` locator through the VMM's registry services (98 SE and ME, x86), the scan that publishes UP before a re-enumeration, the channel's own SHPC reading, the statement, the acknowledgement wait, the 9x orderly removal, the idle poll's ceiling. |
-| `stor98cm.h` | Stor98's interface header, carried byte for byte (BSD-3-Clause, its own notice; `legal-provenance.md` section 2a): never edited here. |
+| `cm_nvlinkos.c` | The channel's driver half: the never-freed table, the `\Callback\Stor98LinkState` callback object (NT), interface 3's `HKEY_DYN_DATA` current-boot proof (a dynamic key this image answers, made resident first, deleted at an unload) and `HKEY_LOCAL_MACHINE` locator through the VMM's registry services (98 SE and ME, x86), the scan that publishes UP before a re-enumeration, the channel's own SHPC reading, the statement, the acknowledgement waits (per entry, stepped from the thread's passes and its waits' servicing point, each member's gate held by its own waits alone; task 42-A.12), the 9x orderly removal, the idle poll's ceiling (50 ms while a wait is pending). |
+| `cm_call.c` / `cm_call.h` | The Windows 98 SE and ME per-member call workers' handoff word (task 42-A.12; record 21 section 7.2 part 0, interface 3's R6f), its pure half (`test_cm_call`): one slot per member, IDLE to SUBMITTED by the thread, SUBMITTED to RUNNING once by the worker, RUNNING to DONE with the id it ran, DONE to IDLE by the thread for the id it names, a withdrawal before any worker took it; the header is also the driver half's API. |
+| `cm_callwk.c` | The call workers' driver half: one system thread per member with its own CONFIGMG route, operations run one at a time through the handoff word under the block's lock, a stop that never waits (the last of the domain and the workers to let go frees the block), each worker's route opening read back by the thread. The clients - record 28's state machine (task 42-A.15) and the 9x removal and statement transactions - submit to it. |
+| `stor98cm.h` | Stor98's interface header, carried byte for byte (BSD-3-Clause, its own notice; `legal-provenance.md` section 2a): never edited here. A copy of `src\stor98\include\stor98cm.h`, the master, since task 42-A.20 (section "Stor98 - `src\stor98\`" below). |
 | `cm_cfgwk.c` | The Windows 98 SE and ME CONFIGMG worker: one system thread per domain that makes every CONFIGMG call of the re-enumeration and of safe eject's 9x half (the route's opening and guards, the bridge devnode walk, the vanished children's query-remove and remove, `Reenumerate_DevNode`, `DN_REMOVABLE`), so the connection-manager thread never blocks when CONFIGMG does (an Add New Hardware wizard open); requests posted and collapsed per member; a stop that finds it inside a call leaves it to free itself. |
 | `cm_statos.c` | The status record's publication (design record 24 section 3.2): the value `XhciCmStatus` (`REG_BINARY`) of the NHI's hardware key, written by the connection-manager thread only when the record `cm_status.c` built has changed, and the install tool's ask `XhciCmStatusAsk` read from the driver key and echoed; both keys opened in the start (`CmStatusOpen`), since on 98 SE and ME `IoOpenDeviceRegistryKey` is a CONFIGMG service that waits while a wizard is open. A failed write is counted and retried at the next pass. |
 | `cm_qryos.c` | The query device (design record 25 section 4.2): one control device object per started NHI, `\Device\XhciCm<n>` linked as `\DosDevices\XHCICM<n>` (n the first free of 0..15) and named in `XhciCmQueryName` beside `XhciCmStatus`; created after a start that succeeded, with a new epoch, and deleted once the thread has ended at a stop or removal (the name value written empty: `ZwDeleteValueKey` has no Windows 98 evidence). Its extension holds the snapshot the thread publishes after each pass under the device's own spin lock and no pointer to the NHI; `IOCTL_XHCICM_QUERY` answers from it with the pass counter, its age and the stopping flag, and never touches the hardware; the same device answers the log request (`CM_QL_IOCTL`) and the PCI request (`CM_QP_IOCTL`, `cm_qpci.c`). `cm_entry.c` routes every request to it by the extension's kind. |
@@ -245,13 +250,15 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 |---|---|
 | `test_cm.c` | `cm_vals.c`: the role a PDO's ids name, the profile table, the inert start's reasons, the registry values' defaults and bounds. |
 | `test_cm_ports.c` | `cm_ports.c`: the families' ids against both INFs, Windows 98's PCI device ids, the bridge filter's snapshot, the resume hold's bound. |
+| `test_cm_marks.c` | `cm_marks.c`: the current and tombstone sets, eviction once seen and the wrap, the answer's layout and sizing, the confirmation's checks (task 42-A.5). |
 | `test_tbt_ring.c` | `tbt_ring.c`, with the specification's Appendix A.2 CRC vectors, wrap, exhaustion and the USB4 transport. |
 | `test_tbt_icm.c` | `tbt_icm.c` over the ring: every frame `ICM-PROTOCOL.md` quotes, the other generations' frames synthesised from Linux's structures, and a disconnect during an approve. |
 | `test_tbt_hw.c`, `test_tbt_select.c` | `tbt_hw.c`: the hardware profiles and their id table against `cm_vals.c`'s, and the selection, every `NVM_AUTH_DONE` and `ICM_EN` combination among its cases. |
 | `test_tbt_topo.c` | `tbt_topo.c` on the P14s and emulator layouts, a generic layout, two-port switches, listed and unlisted root ports, two domains and the override list. |
 | `test_cm_noirq.c` | `cm_noirq.c` over a modelled devnode whose status, header, binding, logical configurations and descriptors its operations read and write: the started case, every rule, the interrupt record and the fresh classification, the gate, leftovers across generations, the attempts bound, the reprocess-only attempt, handles gone or moved, admission changed between steps, the budgets, late results, the gate closing |
 | `test_tbt_brnum.c` | `tbt_brnum.c` over a modelled hierarchy whose configuration cycles route as bridges route them: the P14s tunnel port with the ORICO ASM2464 chain (bus numbers, windows, interrupt lines as its BIOS sets them), a chain present at boot, an endpoint alone, a dock, multi-function and mixed-alignment layouts, tight and short ranges, the bounds, and every refusal with its undo. |
-| `test_cm_nvlink.c` | `cm_nvlink.c`: the Stor98 link-state channel's entry protocol, both profiles' statement conditions and the 9x record's bytes (tasks 39-A.7 and 40-A.7). |
+| `test_cm_nvlink.c` | `cm_nvlink.c`: the Stor98 link-state channel's entry protocol, both profiles' statement conditions and the 9x record's bytes (tasks 39-A.7 and 40-A.7); one generation per tunnel across a retirement (R8b) and the per-entry acknowledgement waits of two members (task 42-A.12). |
+| `test_cm_call.c` | `cm_call.c`: the call workers' handoff word - its transitions, a stale id, a withdrawal, a deadline passing while a call runs, two members' slots apart, and a next-operation client driven through one slot (task 42-A.12). |
 | `test_u4cm.c` | `tbt_u4cm.c` over the fake fabric, with the `minimal`, `intel-adl` and `asm4242` presets and two domains. |
 | `tbt_fake.h` | The modelled host interface `test_tbt_ring`, `test_tbt_icm` and `test_tbt_hw` drive, from the USB4 Specification 2.0 and `ICM-PROTOCOL.md`. |
 | `tbt_topo_p14s.h` | The ThinkPad P14s Gen 1's PCI configuration space as captured under DOS in `usb4-emu`, for `test_tbt_topo`. |
@@ -259,6 +266,7 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23). |
 | `test_tr.c` | `xhcitr\tr_core.c`, the USB tree tool's pure half (design record 25 section 10): text, the connection answers, descriptors, the query's parsing and eject gates, the router keys and event diff, the command line, the report. |
 | `test_trpci.c` | `src\cm\cm_qpci.c` and `xhcitr\tr_pci.c`: the bounded walk below a tunnel port over modelled buses, the capability walk with bad lists, the decoders, 79 columns (design record 25 revision 12). |
+| `test_di.c` | `xhciinst\di\di_core.c`, the 98 SE and ME device install helper's pure part (design record 27 section 11): the command line and its refusals, the result file's lines, the verdicts, the error names and flags held to the DDK's `setupx.h` where `tools\` has it. |
 | `test_trlog.c` | `xhcitr\tr_log.c` with `src\cm\cm_query.c` linked: `xhcicm.sys`'s log answer as the driver's builder makes it, its parse and bounds, `xhci98.sys`'s pass-through window, and `xhcitr\tr_hcctr.h`'s names held to `XHCIHC_COUNTERS` by offset (design record 25 revision 9). |
 | `test_xhq.c` | `src\xhci_qry.c` and the tool's reader of it: what each log level serves, the ring's text and cut, the configuration read's states, the sizing, the default level 2. |
 | `test_cm_live.c` | `cm_live.c`: sampling by elapsed time, SUSPECT on the first unanswered sample and ABSENT on the third, CONFIG_LOST on a changed register, the light and full recovery, its failure and the re-arm rule, the USB4 profile's containment, revocation and the access gate. |
@@ -303,6 +311,7 @@ The host suites of `xhci98.sys` and `xhciuas.sys`, and the shared and guest-side
 | `test_stream.c` | `xhci_stream.c`: array sizes, contexts, layouts and encoders. |
 | `test_xport.c` | `xhci_xport.c` over constructed device shapes. |
 | `test_silent.c` | `xhci_silent.c` over constructed configurations. |
+| `test_regsrc.c` | `xhci_regsrc.c`: absent, per-device only, machine-wide only, both, and another type in either key. |
 | `test_psw.c` | `xhci_psw.c` over a modelled configuration space. |
 | `test_pirq.c` | `xhci_pirq.c` over a modelled machine. |
 | `test_msi.c` | `xhci_msi.c` and `xhci_hlpr.c`: the capability read, the requirements list, the helper binding with the timer's event. |
@@ -324,6 +333,17 @@ The host suites of `xhci98.sys` and `xhciuas.sys`, and the shared and guest-side
 | `pmclient\build.cmd`, `pmclient\sources`, `pmclient\makefile` | The client's build: the driver with the DDK, the tool with MSVC 6.0. |
 | `xfertest\xfertest.c` | `XFERTEST.EXE`, the transfer-size test client (roadmap-hcd tasks 36.21, 36.22 and 36.26): moves data in requests of a given size from or to a file or raw disk and times them. In no package. |
 | `xfertest\build.cmd` | Its MSVC 6.0 build. |
+
+## Stor98 - `src\stor98\`
+
+Stor98, the SCSI miniport for NVMe SSDs that the release packages bundle, in this tree since 2026-10-19 (roadmap-usb4 task 42-A.20): a project of its own, BSD-3-Clause, whose `README.md`, `AGENTS.md`, `NOTICE` and `docs\` (its `BUILD.md`, `PLAN.md` and `TESTING.md` first) describe its files; this page does not map them. It builds its own images (`stor98.mpd`, `stor98.sys` x86 and amd64) with `src\stor98\scripts\build.cmd` into the git-ignored `src\stor98\out\`, its host unit tests with `src\stor98\tests\unit\build.cmd`, and keeps its released builds in `src\stor98\releases\<version>\`, from which a package bundles one (`make-package.ps1 -Stor98*`). Nothing under `src\stor98\` is in `src\sources` or any of this project's build lists.
+
+**The interface header is here twice until the two are made one, and `src\stor98\include\stor98cm.h` is the master**: its own text and Stor98's `NOTICE` name it as the definition of the interface, and Stor98 is its receiving side. A change is made there and copied to `src\cm\stor98cm.h` unchanged, with the new SHA-256 in `legal-provenance.md` section 2a; `scripts\check-stor98-header.ps1`, which `scripts\build-driver.cmd` runs on every build, fails when the two are not the same bytes.
+
+| File | Role |
+|---|---|
+| `scripts\check-stor98-header.ps1` | The gate above: `src\cm\stor98cm.h` against the master byte for byte, its refusals self-tested first (`-SelfTest`). |
+| `scripts\build-all.cmd` | One command for everything: `build-driver.cmd` for x86 and amd64 with every gate, then Stor98's `build.cmd all free` and its unit tests (`-NoStor98` skips them). |
 
 ## The user-mode tools
 
@@ -356,6 +376,31 @@ Each tool is a tree at the repository root, built by its own `build.cmd` and pub
 | `selftest.cmd`, `check-imports.ps1` | The `/selftest`, the switch refusals and the import gate (exactly `KERNEL32.dll` and `ADVAPI32.dll`). |
 | `INSTALL.BAT` | Staged at the package root; runs the tool. |
 | `README.TXT` | The published `readme.txt`. |
+
+### `xhcimark\` - the safe-removal mark service (task 42-A.5)
+
+| File | What it is |
+|---|---|
+| `xhcimark.c` | `XHCIMARK.EXE` (MSVC 6.0) and `XHCIMK64.EXE` (WDK 7.1 amd64), one C89 source: the NT service `xhcimark` of design record 21 section 7.4, revision 3 - polls `xhcicm.sys`'s query device for the query and marks answers, writes the device-specific `LowerFilters` mark on a verified unit (the record first), removes it at a departure and at the reconciliation, the start and daily inventory, the gated first-plug restart, the eject confirmation on XP and later; `-selftest`, `-once`, and `-register`/`-unregister` for a test guest. |
+| `mark_core.c` / `mark_core.h` | Its pure half (the answers' parsers, the verifiable domain, the write's checks, the restart's wish, the reconciliation, the multi-string, the record, the confirmation), run by `-selftest`; links `..\xhciinst\inst_core.c`. |
+| `xhcimark.rc`, `xhcimark.manifest` | The manifest (`asInvoker`). |
+| `build.cmd`, `selftest.cmd`, `check-imports.ps1` | The build, and the `-selftest`, switch refusals and import check (`KERNEL32` and `ADVAPI32` alone) `build-driver.cmd` runs when the executable has been built. |
+| `README.TXT` | The published `readme.txt`. |
+
+### `xhciinst\di\` - the 98 SE and ME device install helper (design record 27)
+
+`XHCIDI.EXE`, a Win16 program (Open Watcom 2.0, large model) the installer
+starts once per device on Windows 98 SE and ME (roadmap-usb4 task 42-A.1).
+
+| File | What it is |
+|---|---|
+| `xhcidi.c` | `WinMain`: the command line, the version and system checks, the job, the result file, the version stamp. |
+| `di_sys.c` / `di_sys.h` | The setup engine's calls of record 27 sections 5 and 9 (install and removal through `DiCallClassInstaller`), and the registry read of the system check; read, not unit-tested. |
+| `di_core.c` / `di_core.h` | The pure part, C89 with no Windows header: the command line, the result file's lines, the engine's error names, the verdicts (host suite `test_di`). |
+| `makefile`, `build.cmd` | The `wmake` build and its environment; `build.cmd` answers 2 on a host without Open Watcom. |
+| `stage-ddk.ps1` | Holds the four Windows 98 SE DDK files to `docs\references\README.md`'s hashes and copies them into the git-ignored `obj\`; `-VerifyOnly` for the cut. |
+| `selftest.cmd`, `check-imports.ps1`, `test-gate.ps1`, `xhcidi-imports.allow` | The NE import gate (`KERNEL`, `USER`, `SETUPX` by ordinal, each the allowlist's and its import library's), its refusals, and the version stamp. |
+| `test\ditest.c`, `test\build.cmd` | `DITEST.EXE`, the 42-V.1 legs' test driver (never packaged). |
 
 ### `xhcicln\` - the cleanup tool (task 38.8)
 
@@ -752,6 +797,13 @@ with Common Controls 6), `build.cmd` (`XHCITR.EXE` with MSVC 6.0,
 switch refusals and the import-table check `build-driver.cmd` runs,
 through `check-imports.ps1`) and `README.TXT` (the published
 `readme.txt`).
+Task 42-A.17 (design record 13 section 5.5) adds the pure `xhci_regsrc.c` /
+`xhci_regsrc.h` (where a registry value is taken from: the machine-wide
+`Services\USB` key when the value is there in any type, else the driver
+key; host suite `test_regsrc`), compiled into `xhci98.sys` from `sources`
+and into `xhcicm.sys` by path as `..\xhci_regsrc.c`, and used by
+`hcd_ctl.c` (`hcdReadDword`, `hcdQueryDword`) and `cm\cm_reg.c`
+(`cmQuery`).
 Task 38.2 (design record 13 section 6.11) adds the pure `xhci_silent.c` /
 `xhci_silent.h` (the Windows 98 SE and ME silent install: the
 `XhciSilentInstall` gate's rule, the `SilentClasses` table's admission,

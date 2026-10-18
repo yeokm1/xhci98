@@ -239,6 +239,22 @@ ULONG CmProfileFor(const CM_IDS *ids)
     return CM_PROFILE_UNKNOWN;
 }
 
+ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed)
+{
+    CM_IDS nhi;
+
+    if (ids->Role == CM_ROLE_FILTER && filterListed) {
+        return CM_ROLE_FILTER;
+    }
+    if (ids->Role == CM_ROLE_NHI) {
+        nhi = *ids;
+        if (CmProfileFor(&nhi) != CM_PROFILE_UNKNOWN) {
+            return CM_ROLE_NHI;
+        }
+    }
+    return CM_ROLE_CHILD;
+}
+
 ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built)
 {
     if (mode == CM_MODE_OFF) {

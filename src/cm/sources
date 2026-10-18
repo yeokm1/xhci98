@@ -19,15 +19,20 @@
 # 9x bus numbering of the bridges below them, tbt_brnum.c (test_tbt_brnum;
 # record 21 section 6.1.1); the 9x start of a function with no interrupt,
 # cm_noirq.c (test_cm_noirq; design record 28); the
-# re-enumeration's own pure half, cm_ports.c (test_cm_ports), and the
-# query device's answers, cm_query.c and cm_qpci.c (test_cm_query); and the
-# shared log ring ..\xhci_log.c (test\test_log.c), compiled in by path.
+# re-enumeration's own pure half, cm_ports.c (test_cm_ports), the marks
+# answer's table, cm_marks.c (test_cm_marks; task 42-A.5), and the
+# query device's answers, cm_query.c and cm_qpci.c (test_cm_query); the
+# shared log ring ..\xhci_log.c (test\test_log.c), compiled in by path; and
+# the registry values' precedence, ..\xhci_regsrc.c (test\test_regsrc.c;
+# task 42-A.17), compiled in the same way.
 # All DDK-free.
 # cm_pool.c is the one file that allocates pool; cm_reg.c the one that
 # opens a registry key; cm_log.c the one DbgPrint site (every flavour,
 # under XhciCmLogDebugView, since the owner's reversal of decision D12 on
 # 2026-10-16). The allowlists hold each to its file with SITES=. cm_cfgmg.c is
 # the one file that calls CONFIGMG (Windows 98 SE and ME, x86 only).
+# cm_call.c is the pure handoff word of the 9x per-member call workers
+# (test_cm_call; task 42-A.12), cm_callwk.c their threads.
 #
 # ADDING A FILE. A new .c is one more line in SOURCES below (a file of
 # src\ by path, as ..\xhci_log.c is); scripts\source-stamp.ps1 reads this
@@ -51,8 +56,10 @@ SOURCES=cm_vals.c      \
         tbt_brnum.c    \
         cm_noirq.c     \
         cm_ports.c     \
+        cm_marks.c     \
         cm_nvlink.c    \
         ..\xhci_log.c  \
+        ..\xhci_regsrc.c \
         cm_pool.c      \
         cm_reg.c       \
         cm_log.c       \
@@ -66,6 +73,8 @@ SOURCES=cm_vals.c      \
         cm_filt.c      \
         cm_live.c      \
         cm_nvlinkos.c  \
+        cm_call.c      \
+        cm_callwk.c    \
         cm_status.c    \
         cm_qpci.c      \
         cm_statos.c            cm_query.c             cm_qryos.c     \

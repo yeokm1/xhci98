@@ -1,0 +1,26 @@
+            (57 read/write stages)
+     15058.4 ms #1527   10 STARTIO EXEC:SYNC10 st=RUNNING
+     15058.9 ms #1528   62 SYNC_CACHE SYNC10 shutdowns=0
+                  .. pci_nvme_flush_ns nsid 0x1
+     15064.8 ms #1529   a2 Q_CLEAN 0x33
+     15065.0 ms #1530   21 SRB_COMPLETE EXEC:SYNC10 SrbStatus=01 nvme=00
+     15065.4 ms #1531   10 STARTIO EXEC:STARTSTOP st=RUNNING
+     15073.5 ms #1532   63 ADAPTER_CONTROL StopAdapter
+     15073.9 ms #1533   a9 Q_STOP_ENTER csts=01 dirty=0 state=RUNNING depth=0
+     15074.3 ms #1534   ac Q_STOP_FLUSH_DONE (clean, no flush)
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x464001
+                  .. pci_nvme_mmio_shutdown_set shutdown bit set
+     15074.5 ms #1535   ad Q_STOP_SHN 0x464001
+     15074.9 ms #1536   ae Q_STOP_SHST_BUDGET IN-BUDGET polls=0
+     15075.1 ms #1537   af Q_STOP_SHST_DONE polls=0 csts=09
+                  .. pci_nvme_mmio_cfg wrote MMIO, config controller config=0x460000
+                  .. pci_nvme_mmio_shutdown_cleared shutdown bit cleared
+                  .. pci_nvme_mmio_stopped cleared controller enable bit
+     15075.8 ms #1538   b0 Q_STOP_EN0 0x460000
+     15076.2 ms #1539   b1 Q_STOP_RDY_BUDGET IN-BUDGET polls=0
+     15076.4 ms #1540   b2 Q_STOP_RDY_DONE polls=0 csts=00
+     15076.6 ms #1541   40 STATE RUNNING -> NONE
+                  .. pci_cfg_write nvme 01:00.0 @0x64 <- 0xb
+                  .. pci_cfg_write nvme 01:00.0 @0x4 <- 0x506
+                  .. pci_cfg_write nvme 01:00.0 @0x42 <- 0x40
+                  .. pci_cfg_write nvme 01:00.0 @0x4 <- 0x500

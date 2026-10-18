@@ -159,12 +159,13 @@ static void test_cap_fastpoll(void)
     }
 }
 
-/* Mode 4 (task 36.19; record 17 section 4.7): before the cap, as the
- * executor runs it (hcd_cfg.c hcdCfgFastPoll). Keyed on the descriptor's
- * byte; a code's Interval (2 or less) is never capped, so a capped
- * controller does not silence it; the fallback 3 is never capped either;
- * an endpoint with no code is capped as before. Every cap mode, FS at a
- * root port, bInterval 1 to 255. */
+/* Mode 4 (task 36.19, task 42-A.18's codes; record 17 section 4.7): before
+ * the cap, as the executor runs it (hcd_cfg.c hcdCfgFastPoll). Keyed on
+ * the descriptor's byte; a code's Interval at or below the cap's 8 is left
+ * as it is, so a capped controller does not silence a fast code, and one
+ * above it (codes 137 to 143) is lowered to 8 like any endpoint's; the
+ * fallback 3 is never capped; an endpoint with no code is capped as
+ * before. Every cap mode, FS at a root port, bInterval 1 to 255. */
 static void test_cap_codes(void)
 {
     ULONG cap;
@@ -192,10 +193,13 @@ static void test_cap_codes(void)
                                     XHCI_PIPE_SPEED_FULL, 0, &ep);
             ep.Interval = XhciTolCapInterval(applies, 1, ep.Interval);
 
-            CHECK(fast == (ULONG)(b >= 128 && b <= 130), "a code applies");
+            CHECK(fast == (ULONG)(b >= 128 && b <= 143 && b != 138),
+                  "a code applies, 138 being Table 6-12's own 10");
             if (fast) {
-                CHECK_EQ(ep.Interval, 130 - b,
-                         "the cap leaves a code's Interval");
+                CHECK_EQ(ep.Interval,
+                         (applies && b - 128 > XHCI_TOL_INTERVAL_CAP)
+                             ? XHCI_TOL_INTERVAL_CAP : b - 128,
+                         "the cap leaves a code's Interval at or below 8");
                 (VOID)XhciPipeFastRevert(&ep);
                 CHECK_EQ(XhciTolCapInterval(applies, 1, ep.Interval), 3,
                          "the fallback 3, never capped");

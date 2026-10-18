@@ -24,6 +24,8 @@
   `setupx.lib` in
   `tools/win98ddk-extracted/`), and never for the driver
 - QEMU, installed normally on the host
+- For Stor98 (`src\stor98\`) only, the Windows 98 DDK's `SCSI.H` and
+  `SRB.H` in `tools\w98ddk\inc\` ("Building Stor98" below)
 
 Neither driver toolchain is installed machine-wide. Both live inside the
 repository, are used in place, and write no registry key: MSVC 6.0 runs from
@@ -57,6 +59,58 @@ by a different compiler from everything else in this repository.
   `.h` or `.asm` next to it, so a stale qualifier stops the release. `-SkipQualtool`
   publishes without it and the resulting directory is incomplete and says so.
 - `xhciqual\README.md` has the tool's own build, test and usage documentation.
+
+The same install builds `XHCIDI.EXE`, the Windows 98 SE and ME device
+install helper (roadmap-usb4 task 42-A.1, design record 27), a Win16 program
+in the large model, from `xhciinst\di\`:
+
+- `xhciinst\di\build.cmd` finds `wcc.exe` under `%WATCOM%` (default
+  `C:\WATCOM`) in `BINNT64`, `BINNT` and `BINW`, in that order, and answers
+  exit 2 ("not built") on a host without it. `xhciinst\build.cmd` calls it
+  as its last step and goes on after a 2, saying so.
+- It needs the Windows 98 SE DDK extracted into
+  `tools\win98ddk-extracted\` (`docs\references\README.md`, "Windows 98
+  DDK"; `DDK98` names another root). `xhciinst\di\stage-ddk.ps1` holds four
+  of its members to the SHA-256s that README's table records, reading each
+  hash from the table row, and copies them into the git-ignored
+  `xhciinst\di\obj\` under the names the sources include: `setupx.h`,
+  `prsht.h` (which `setupx.h` includes), `windows.h` and `setupx.lib`. The
+  DDK's 98 `windows.h` is compiled against, not Open Watcom's `h\win`
+  one: Watcom's is the Windows 3.1 header, with neither the `HKEY`
+  `setupx.h` uses nor the `NMHDR` `prsht.h` uses, so `INCLUDE` is
+  `obj\inc` then `%WATCOM%\H` (the C runtime's headers) and `h\win` is not
+  on it.
+- `wmake` runs `xhciinst\di\makefile`: `wcc -bt=windows -ml -zW -zu -s -wx
+  -we -zq -oas`, then `wlink system windows` with `option stack=16k`, the
+  DDK's `setupx.lib` and Watcom's `windows.lib` (the `system windows`
+  definition in Watcom's `wlink.lnk` adds `option nocaseexact`, which is
+  what resolves the two mixed-case names in the import library,
+  `DiGetINFClass` and `DiSelectBestCompatDrv`). Out come `xhcidi.exe` and
+  `xhcidi.map`.
+- `xhciinst\di\selftest.cmd`, which `build-driver.cmd` runs when the image
+  exists, holds it to `xhciinst\di\check-imports.ps1`: an NE image whose
+  modules are `KERNEL`, `USER` and `SETUPX` exactly, every import by
+  ordinal and each one a row of `xhcidi-imports.allow`, every row
+  imported, each row's name the one the import library binds to that
+  ordinal (the IMPDEF records of `setupx.lib` and of Watcom's
+  `lib286\win\windows.lib`). `test-gate.ps1` runs the gate's refusals, and
+  the image must carry the stamp `XHCIDI <version>` at `XHCI_VER_STR`. A
+  Win16 image does not run on 64-bit Windows, so nothing on the build host
+  runs it: the pure part's suite is `test\test_di.c`, and the engine calls
+  are proved on the 42-V.1 legs.
+- `make-release.ps1` stages it as `tools\xhciinst\XHCIDI.EXE` whenever it
+  stages the install tool, refusing a helper older than its sources or
+  `src\xhci_version.h`, a map older than it, DDK files not at the recorded
+  hashes (`stage-ddk.ps1 -VerifyOnly`), imports the gate refuses or a stamp
+  that is not the release's, and adds its section to that directory's
+  `NOTICE.TXT` with the linker's copyright lines from `xhcidi.map`.
+  `-SkipDiHelper` cuts without it, and the readme then says the download
+  is incomplete: such a package installs on 98 SE and ME through the
+  printed Update Driver steps only.
+- `xhciinst\di\test\build.cmd` builds `DITEST.EXE` (MSVC 6.0), the legs'
+  test driver: it starts the helper as record 27 section 4.1 says the
+  installer does and prints the result file, when its `END` line was read
+  and when the process handle signalled. It is never packaged.
 
 Two consequences worth knowing before they bite:
 
@@ -555,6 +609,53 @@ import the third flavour exists to exclude.
 Useful flags when driving `build` by hand: `-c` clean first, `-e` show
 environment, `-f` force rebuild, `-Z` do not scan for dependencies (`build -cZ`
 is what the wrapper uses).
+
+### Building Stor98 (`src\stor98\`)
+
+Stor98, the NVMe SCSI miniport the packages bundle, is in this tree as
+`src\stor98\` since 2026-10-19 (roadmap-usb4 task 42-A.20), a project of
+its own with its own build: `src\stor98\docs\BUILD.md` is the procedure,
+and `src\stor98\AGENTS.md` the rules. It builds its own files, never into
+this project's binaries:
+
+```
+src\stor98\scripts\build.cmd all free     REM stor98.mpd (98 SE, ME), stor98.sys x86 and amd64
+src\stor98\tests\unit\build.cmd           REM its host unit tests, NT and 9x headers
+scripts\build-all.cmd [flavours]          REM build-driver.cmd x86 and -amd64, then both of the above
+```
+
+`build-all.cmd` calls `build-driver.cmd` unchanged, so the x86 and amd64
+gates, locks and gated-build records are a hand run's; `-NoStor98` skips
+the Stor98 step and `-NoTargetEvidence` goes to both gated runs. Stor98's
+images land in `src\stor98\out\<flavor>\{win9x,x86,amd64}\`
+(`STOR98_DBGPORT=1` puts its test-only debug-port build in
+`out\<flavor>-dbgport\`) and its objects in `src\stor98\src\obj*\`, all
+ignored by its own `.gitignore`. Its scripts find the same kits as this
+project's in `tools\` (`MSVC600`, `ntddk`, `WinDDK71`), because
+`src\stor98\` has no `tools\` of its own (`STOR98_TOOLS` names another
+root), plus two files this project does not otherwise use: the Windows 98
+(or NT4) DDK's `SCSI.H` and `SRB.H` in `tools\w98ddk\inc\`, ahead of the
+Windows 2000 DDK's for the 9x image (the copies that came with SweetLow's
+`nvme2k-src.zip`; `SCSI.H` 36,501 bytes, SHA-256
+`809d57e6756de21524930eb4d17840ab3047c7e1773da634ceb73a81ff8d39b7`,
+`SRB.H` 21,056 bytes, SHA-256
+`4b3c3305686f2593ceb471ae69f1d690de5d833c8f2047859d735b21affd8396`;
+`docs/references/README.md`, "Windows 98 DDK"). The build needs no Python;
+Stor98's Python scripts are test-leg tools (`tests\cm9x\ejects.py`,
+`q9log.py`) and the record of its rename.
+
+`build-driver.cmd` does not build Stor98, but three of its steps read
+Stor98's files, so a fault in them fails an xhci98 build whether or not
+`build-all.cmd`'s `-NoStor98` is given (that switch skips only Stor98's
+compile and unit tests): `scripts\check-stor98-header.ps1` fails when
+`src\cm\stor98cm.h` is not the same bytes as
+`src\stor98\include\stor98cm.h`, the master (`source-files.md`,
+"Stor98"); the packager's self-tests (`test-package.ps1`) bundle
+`src\stor98\releases\0.4.0.0\` under its pinned `SHA256SUMS.txt` hash;
+and the batch-file line-ending check (`xhciqual\test\check-bat-eol.ps1`)
+covers every tracked `.bat`, Stor98's two in its `third_party\` copy among
+them. `check-source-charset.ps1` skips `src\stor98\`, which keeps
+Stor98's own rules.
 
 ### Post-link import-compatibility gate (Phase 3 onward)
 
@@ -3061,15 +3162,17 @@ binaries are never signed.
 
 The release download's `release-x86\` and `release-x64\` carry Stor98, a
 separate BSD-3-Clause project's NVMe driver, as one of its released builds copied
-unchanged from its release folder (owner, 2026-10-16). Nothing of it is
-tracked: `make-package.ps1` copies it into the package, and
-`make-release.ps1` into the upload set's two `release-` directories, never
-into `releases\<version>\`. Four parameters pin it, and they go together:
+unchanged from its release folder (owner, 2026-10-16). `make-package.ps1`
+copies it into the package, and `make-release.ps1` into the upload set's
+two `release-` directories, never into `releases\<version>\`. Since
+2026-10-19 the release folders themselves are tracked, in
+`src\stor98\releases\` ("Building Stor98" above). Four parameters pin it,
+and they go together (`-Stor98Dir` may be left out):
 
 | Parameter | What it pins |
 |---|---|
 | `-Stor98Version` | The build, for example `0.3.0.0`. Anything older than `0.3.0.0`, Stor98's first release, is refused|
-| `-Stor98Dir` | Its release folder (the Stor98 repository's `releases\<version>\`), read only |
+| `-Stor98Dir` | Its release folder, read only. Left out, `src\stor98\releases\<version>\`, Stor98's own in this tree (task 42-A.20); until then the Stor98 repository's `releases\<version>\` |
 | `-Stor98SumsSha256` | The SHA-256 of that folder's `SHA256SUMS.txt`. Checked first; then every file against `SHA256SUMS.txt`, every file in the folder listed there, the release's files present, nothing the layout does not know, every INF's `DriverVer` at the pinned version, and each copy in the package against `SHA256SUMS.txt` again |
 | `-Stor98InterfaceVersion` | The build's link-state interface version (`STOR98LS_VERSION`; `4` for `0.3.0.0`). Compared with `src\cm\stor98cm.h`, the header xhci98 compiles against, and, where the folder carries `include\stor98cm.h`, that file byte for byte with it. A mismatch is refused unless `-Stor98AllowInterfaceMismatch`, which prints the mismatch it overrides |
 
@@ -3104,7 +3207,9 @@ mismatch it overrode, and `-UploadSetOnly` holds a re-assembly to those
 three pins (an override is a verdict against the checkout's header, so a
 re-assembly passes it again where needed); `-Stor98HeaderPath`, the
 self-tests' substitute header, is refused without `-SkipBinaryGates`. For
-example, the `3.0.0.0` cut with Stor98 `0.4.0.0`:
+example, the `3.0.0.0` cut with Stor98 `0.4.0.0` (since task 42-A.20
+`-Stor98Dir` can be left out, and the same folder is
+`src\stor98\releases\0.4.0.0`, whose `SHA256SUMS.txt` has that hash):
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <pfx> ^
@@ -3120,8 +3225,8 @@ beside this project's files, its upload-set date rule and file dating skip
 them (Stor98's INFs carry Stor98's own `DriverVer` date), and a name that
 would replace one of this project's files is a refusal. The INF, import and
 signature gates are run on this project's INFs and binaries by name and
-never read Stor98's, and `check-source-charset.ps1` scans tracked source,
-which Stor98's files never are; the package's `PKG-MSFILE` name rule still
+never read Stor98's, and `check-source-charset.ps1` skips `src\stor98\`,
+which keeps Stor98's own rules; the package's `PKG-MSFILE` name rule still
 covers every file, Stor98's included. `XHCIINST` must copy no file whose
 name starts with `stor98` into its local copy, which is on the hardware
 wizard's search path (design record 23 section 4.4). `scripts\package\test-package.ps1` holds the

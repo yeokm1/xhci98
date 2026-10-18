@@ -246,6 +246,28 @@ Do not stage the USB tree tool. For a host that cannot build it; `XHCIINST`
 then says in one line that the package has none, and the release says so on
 the console and in its readme.
 
+.PARAMETER MarkToolDir
+Where `XHCIMARK.EXE` and `XHCIMK64.EXE` are built. Defaults to `xhcimark\` in
+the repository. Both are staged into `releases\<version>\tools\xhcimark\` with
+a readme.txt and a NOTICE.TXT: the safe-removal mark service, which the
+installer copies into the system directory and registers on Windows 2000 to
+7 with the Thunderbolt 3 / USB4 component (roadmap-usb4.md task 42-A.5,
+design record 21 section 7.4, revision 3).
+
+.PARAMETER SkipMarkTool
+Do not stage the mark service. For a host that cannot build it; without it
+the Thunderbolt component's devices lose their safe-removal mark at a
+rebuild of their drivers, as before 3.1.0.0, and the release says so on the
+console.
+
+.PARAMETER SkipDiHelper
+Do not stage `XHCIDI.EXE`, the 16-bit Windows 98 SE and ME device install
+helper (roadmap-usb4.md task 42-A.1, design record 27), beside the install
+tool. For a host that cannot build it (it needs Open Watcom and the Windows
+98 SE DDK's `setupx.h` and `setupx.lib`); a package without it installs on
+98 SE and ME through the printed Update Driver steps only, and the release
+says so on the console and in its readme. A real cut carries it.
+
 .PARAMETER SkipCleanTool
 Do not stage the cleanup tool. For a host that cannot build it (the 64-bit
 half needs `tools\WinDDK71`); nothing needs the tool, so the release is whole
@@ -346,7 +368,8 @@ the cut fills in), the generated readme lists it, and -UploadSetOnly
 re-assembles a bundled release only with the same pins.
 
 .PARAMETER Stor98Dir
-See -Stor98Version.
+See -Stor98Version. Left out, it is src\stor98\releases\<version>, Stor98's
+own release folder in this tree (task 42-A.20).
 
 .PARAMETER Stor98SumsSha256
 See -Stor98Version.
@@ -381,10 +404,13 @@ param(
     [switch]$SkipSnapTool,
     [string]$CleanToolDir = "",
     [switch]$SkipCleanTool,
+    [string]$MarkToolDir = "",
+    [switch]$SkipMarkTool,
     [string]$InstallToolDir = "",
     [switch]$SkipInstallTool,
     [string]$TrayToolDir = "",
     [switch]$SkipTrayTool,
+    [switch]$SkipDiHelper,
     [string]$UploadDir = "",
     [switch]$SkipUploadSet,
     [switch]$UploadSetOnly,
@@ -450,6 +476,7 @@ if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
 if ($SnapToolDir -eq "") { $SnapToolDir = Join-Path $repo "xhcisnap" }
 if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
+if ($MarkToolDir -eq "") { $MarkToolDir = Join-Path $repo "xhcimark" }
 if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo "xhciinst" }
 if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo "xhcitr" }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
@@ -581,6 +608,7 @@ $ReleasesDir = Resolve-DirectoryArgument $ReleasesDir
 $QualtoolDir = Resolve-DirectoryArgument $QualtoolDir
 $SnapToolDir = Resolve-DirectoryArgument $SnapToolDir
 $CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
+$MarkToolDir = Resolve-DirectoryArgument $MarkToolDir
 $InstallToolDir = Resolve-DirectoryArgument $InstallToolDir
 $TrayToolDir = Resolve-DirectoryArgument $TrayToolDir
 $PackageRoot = Resolve-DirectoryArgument $PackageRoot
@@ -721,9 +749,10 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # and only ever under tools\. xhciinst\, the install tool of task 40.6, is
 # first published in 3.0.0.0, under tools\, with INSTALL.BAT at the root,
 # and so is xhcitr\, the USB tree tool of task 41-A.6 that XHCIINST installs.
+# xhcimark\, the mark service of task 42-A.5, is first published in 3.1.0.0.
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr")
+$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr", "xhcimark")
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
 # design record 13 section 6.11.8): copied once from src\ into tools\silent\
@@ -3781,6 +3810,66 @@ version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
                    "newer than every source beside them and than that header") -f $cleanVersion)
     }
 
+    # --- the mark service (task 42-A.5) -------------------------------------
+    #
+    # XHCIMARK.EXE (MSVC 6.0) and XHCIMK64.EXE (WDK 7.1 amd64), one source:
+    # the safe-removal mark service of design record 21 section 7.4, revision
+    # 3, which the installer copies into %SystemRoot%\system32 and registers
+    # (Windows 2000 to 7, with the Thunderbolt 3 / USB4 component). The same
+    # staleness and version rules as XHCICLN's. Not a driver: the packager's
+    # test signing does not reach XHCIMK64.EXE.
+    $marktoolStaged = $null
+    if (-not $SkipMarkTool) {
+        Write-Step "mark service"
+        $markExes = @("XHCIMARK.EXE", "XHCIMK64.EXE")
+        foreach ($name in ($markExes + @("README.TXT"))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $MarkToolDir $name) -PathType Leaf)) {
+                throw @"
+'$MarkToolDir' has no $name.
+Build both first:  xhcimark\build.cmd
+It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipMarkTool
+cuts without the service on a host that cannot build it.
+"@
+            }
+        }
+        $markSources = @(@(Get-ChildItem -LiteralPath $MarkToolDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
+            @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_status.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.h")))
+        foreach ($name in $markExes) {
+            $markTime = (Get-Item -LiteralPath (Join-Path $MarkToolDir $name)).LastWriteTimeUtc
+            $markNewer = @($markSources | Where-Object { $_.LastWriteTimeUtc -gt $markTime })
+            if ($markNewer.Count -gt 0) {
+                throw @"
+'$(Join-Path $MarkToolDir $name)' is older than $($markNewer.Count) of its own source file(s):
+  - $(($markNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhcimark\build.cmd) before releasing: a stale copy reads the
+driver's answers with a layout the source no longer has.
+"@
+            }
+        }
+        Assert-TakesSharedVersion -Path (Join-Path $MarkToolDir "xhcimark.c") -Macro "XHCIMARK_VERSION"
+        $markVersion = Get-DeclaredVersion -Path $versionHeader
+        if (-not (Test-DriverVersionMatches -Reported $markVersion -Declared $Version)) {
+            throw @"
+'$versionHeader' declares the version as "$markVersion", but this release is $Version.
+XHCIMARK logs that string at every start, so the two must agree. Bump the
+version in src\xhci_version.h and rebuild the service (xhcimark\build.cmd).
+"@
+        }
+        $markDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcimark")
+        Ensure-Directory $markDir
+        foreach ($name in $markExes) {
+            Copy-Item -LiteralPath (Join-Path $MarkToolDir $name) -Destination (Join-Path $markDir $name) -Force
+        }
+        $marktoolStaged = $markDir
+        Write-Ok (("XHCIMARK.EXE and XHCIMK64.EXE staged at version {0} from src\xhci_version.h, " +
+                   "newer than every source beside them and than that header") -f $markVersion)
+    }
+
     # --- the install tool (task 40.6) ----------------------------------------
     #
     # XHCIINST.EXE (MSVC 6.0) and XHCIIN64.EXE (WDK 7.1 amd64), built from
@@ -3904,6 +3993,82 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
         }
         $traytoolStaged = $trayDir
         Write-Ok (("XHCITR.EXE and XHCITR64.EXE staged at version {0}") -f $trayVersion)
+    }
+
+    # --- the 98 SE and ME device install helper (task 42-A.1) ----------------
+    #
+    # XHCIDI.EXE, a Win16 program built with Open Watcom against the Windows 98
+    # SE DDK's setupx.h and setupx.lib (xhciinst\di\, design record 27 section
+    # 3), staged beside the install tool that starts it. Copied, not built, as
+    # the qualifier is, so staleness is the risk and the qualifier's rules are
+    # applied: newer than its sources and the version header, a .MAP no older
+    # than itself. Three of its own: the DDK files are held to the hashes
+    # docs\references\README.md records (section 3.3); its imports, by ordinal
+    # from KERNEL, USER and SETUPX, to its allowlist (its own gate); and, since
+    # a 16-bit image has no PE version resource, its version to the stamp
+    # "XHCIDI <version>" its build puts in its data (section 3.2).
+    $ditoolStaged = $null
+    if (-not $SkipDiHelper -and $null -ne $insttoolStaged) {
+        Write-Step "98 SE and ME device install helper"
+        $diDir = Join-Path $InstallToolDir "di"
+        foreach ($name in @("xhcidi.exe", "xhcidi.map")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $diDir $name) -PathType Leaf)) {
+                throw @"
+'$diDir' has no $name.
+Build the helper first:  xhciinst\di\build.cmd
+It needs Open Watcom (C:\WATCOM) and the Windows 98 SE DDK extracted into
+tools\win98ddk-extracted\ (docs\references\README.md, "Windows 98 DDK").
+-SkipDiHelper cuts without it on a host that cannot build it; that package
+installs on 98 SE and ME through the printed Update Driver steps only.
+"@
+            }
+        }
+        & (Join-Path $diDir "stage-ddk.ps1") -VerifyOnly
+        if ($LASTEXITCODE -ne 0) {
+            throw @"
+The Windows 98 SE DDK files XHCIDI.EXE is built against are missing or not at
+the SHA-256s docs\references\README.md records (see the lines above). Fetch
+and extract the DDK as that README's "Windows 98 DDK" section says, rebuild
+the helper (xhciinst\di\build.cmd), and cut again.
+"@
+        }
+        $diExe = Join-Path $diDir "xhcidi.exe"
+        $diTime = (Get-Item -LiteralPath $diExe).LastWriteTimeUtc
+        $diSources = @(@(Get-ChildItem -LiteralPath $diDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h") -or $_.Name -eq "makefile" }) +
+            @(Get-Item -LiteralPath $versionHeader))
+        $diNewer = @($diSources | Where-Object { $_.LastWriteTimeUtc -gt $diTime })
+        if ($diNewer.Count -gt 0) {
+            throw @"
+'$diExe' is older than $($diNewer.Count) of its own source file(s):
+  - $(($diNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhciinst\di\build.cmd) before releasing: a stale helper refuses
+this release's install tool, or installs with calls the source no longer makes.
+"@
+        }
+        if ((Get-Item -LiteralPath (Join-Path $diDir "xhcidi.map")).LastWriteTimeUtc -lt $diTime) {
+            throw "'$(Join-Path $diDir "xhcidi.map")' is older than '$diExe'; rebuild the helper (xhciinst\di\build.cmd) so the pair comes from one link."
+        }
+        & (Join-Path $diDir "check-imports.ps1") -Path $diExe
+        if ($LASTEXITCODE -ne 0) {
+            throw "XHCIDI.EXE's imports are not its allowlist's (xhciinst\di\check-imports.ps1, above): a Windows 98 SE or ME system would refuse to load it, or it calls what design record 27 does not."
+        }
+        $diVersion = Get-DeclaredVersion -Path $versionHeader
+        $diStamp = "XHCIDI " + $Version + [char]0
+        if (-not (Test-DriverVersionMatches -Reported $diVersion -Declared $Version) -or
+            -not ([System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($diExe)).Contains($diStamp))) {
+            throw @"
+'$diExe' does not carry the stamp "XHCIDI $Version", or '$versionHeader'
+declares "$diVersion". The helper refuses an installer of another version
+before any call, so the two must agree. Bump the version and rebuild the
+helper (xhciinst\di\build.cmd).
+"@
+        }
+        Copy-Item -LiteralPath $diExe -Destination (Join-Path $insttoolStaged "XHCIDI.EXE") -Force
+        $ditoolStaged = $insttoolStaged
+        Write-Ok ("XHCIDI.EXE staged beside the install tool at version {0}, its imports the allowlist's, its DDK as recorded" -f $Version)
+    } elseif ($null -ne $insttoolStaged) {
+        Write-Warn "-SkipDiHelper: no XHCIDI.EXE; this package installs on 98 SE and ME through the printed Update Driver steps only, and its readme says so"
     }
 
     # --- the port switchover's scripts ---------------------------------------
@@ -4095,6 +4260,23 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
         $contents += "      MYPC.DEV and so on; section 6 has the rules."
         $contents += ""
     }
+    if ($null -ne $marktoolStaged) {
+        $m32 = Get-Item -LiteralPath (Join-Path $marktoolStaged "XHCIMARK.EXE")
+        $m64 = Get-Item -LiteralPath (Join-Path $marktoolStaged "XHCIMK64.EXE")
+        $contents += "  TOOLS\XHCIMARK\ - the Thunderbolt safe-removal mark service"
+        $contents += ""
+        $contents += ("      XHCIMARK.EXE {0:N0} bytes, for 32-bit Windows 2000 to 7" -f $m32.Length)
+        $contents += ("      XHCIMK64.EXE {0:N0} bytes, for 64-bit Windows" -f $m64.Length)
+        $contents += "      readme.txt"
+        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
+        $contents += ""
+        $contents += "      Installed by INSTALL.BAT with the Thunderbolt 3 /"
+        $contents += "      USB4 component on Windows 2000 to 7; never run by"
+        $contents += "      hand. It keeps a Thunderbolt device listed in"
+        $contents += "      Safely Remove Hardware across a driver install,"
+        $contents += "      update or a disable and enable."
+        $contents += ""
+    }
     if ($null -ne $cleantoolStaged) {
         $c32 = Get-Item -LiteralPath (Join-Path $cleantoolStaged "XHCICLN.EXE")
         $c64 = Get-Item -LiteralPath (Join-Path $cleantoolStaged "XHCICL64.EXE")
@@ -4125,6 +4307,13 @@ carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
         $contents += ""
         $contents += "      Section 4 has how to run it; INSTALL /list shows what"
         $contents += "      it would do and changes nothing."
+        $contents += ""
+    }
+    if ($null -ne $ditoolStaged) {
+        $dih = Get-Item -LiteralPath (Join-Path $ditoolStaged "XHCIDI.EXE")
+        $contents += ("      XHCIDI.EXE   {0:N0} bytes, beside them: the 16-bit" -f $dih.Length)
+        $contents += "      helper that installs the drivers on Windows 98 SE"
+        $contents += "      and ME devices; the install tool starts it"
         $contents += ""
     }
     if ($null -ne $traytoolStaged) {
@@ -6153,8 +6342,10 @@ which XHCISNAP matches this driver by that number; correct the sentence.
     if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS machine checker of section 1)" }
     if ($null -eq $snaptoolStaged) { $missingTools += "TOOLS\XHCISNAP\ (the report tool of section 6)" }
     if ($null -eq $cleantoolStaged) { $missingTools += "TOOLS\XHCICLN\ (the optional cleanup tool of section 4)" }
+    if ($null -eq $marktoolStaged) { $missingTools += "TOOLS\XHCIMARK\ (the Thunderbolt safe-removal mark service of section 4)" }
     if ($null -eq $insttoolStaged) { $missingTools += "INSTALL.BAT and TOOLS\XHCIINST\ (the install tool of section 4)" }
     if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }
+    if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
         # Leading blank line included, so an empty substitution leaves the
@@ -6874,6 +7065,60 @@ sufficient.
         Write-Ok "NOTICE.TXT written beside XHCICLN.EXE and XHCICL64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
     }
 
+    # --- the mark service's readme and notices (task 42-A.5) ----------------
+    #
+    # As the cleanup tool's: xhcimark\README.TXT with the release's footer,
+    # and NOTICE.TXT recording the two statically linked runtimes.
+    if ($null -ne $marktoolStaged) {
+        $markReadme = @([System.IO.File]::ReadAllText((Join-Path $MarkToolDir "README.TXT")) -split "`r?`n")
+        while ($markReadme.Count -gt 0 -and $markReadme[$markReadme.Count - 1] -eq "") {
+            $markReadme = @($markReadme | Select-Object -First ($markReadme.Count - 1))
+        }
+        $markFooter = @'
+
+------------------------------------------------------------------------------
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
+for the driver itself.
+
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCIMARK.EXE and XHCIMK64.EXE are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside
+this file records.
+'@
+        $markLines = @($markReadme) + @($markFooter.Replace("{VERSION}", $Version) -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $marktoolStaged "readme.txt") -Lines $markLines
+        Write-Ok "readme.txt written beside XHCIMARK.EXE and XHCIMK64.EXE"
+        $markNotice = @'
+==============================================================================
+                          x h c i 9 8   {VERSION}
+           THIRD-PARTY NOTICES FOR XHCIMARK.EXE AND XHCIMK64.EXE
+==============================================================================
+
+XHCIMARK.EXE and XHCIMK64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+
+They are not only this project's code. XHCIMARK.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCIMK64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs, which is what makes each a single file. You can see it in
+the import tables, which name only KERNEL32.dll and ADVAPI32.dll and no C
+runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient.
+'@
+        $markNotice = $markNotice.Replace("{VERSION}", $Version)
+        Write-GeneratedText -Path (Join-Path $marktoolStaged "NOTICE.TXT") `
+                            -Lines ($markNotice -split "`r?`n")
+        Write-Ok "NOTICE.TXT written beside XHCIMARK.EXE and XHCIMK64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+    }
+
     # --- the install tool's readme and notices (task 40.6) --------------------
     #
     # As the cleanup tool's, above: xhciinst\README.TXT with the release's
@@ -6985,6 +7230,50 @@ sufficient.
         Write-GeneratedText -Path (Join-Path $traytoolStaged "NOTICE.TXT") `
                             -Lines ($trayNotice -split "`r?`n")
         Write-Ok "NOTICE.TXT written beside XHCITR.EXE and XHCITR64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+    }
+
+    # --- the 98 SE and ME device install helper's notices (task 42-A.1) ------
+    #
+    # XHCIDI.EXE shares tools\xhciinst\ and its NOTICE.TXT with the install
+    # tool, so its section is added to that file rather than a file of its
+    # own: the Open Watcom runtime it links statically, with the copyright
+    # lines its linker wrote at the head of xhcidi.map (as the qualifier's),
+    # and the import library it was linked against, of which it carries no
+    # byte (legal-provenance.md section 2a; design record 27 section 3.4).
+    if ($null -ne $ditoolStaged) {
+        $diMapLines = @([System.IO.File]::ReadAllLines((Join-Path (Join-Path $InstallToolDir "di") "xhcidi.map")) |
+            Where-Object { $_ -match '^(Portions )?Copyright ' })
+        if ($diMapLines.Count -eq 0) {
+            throw "xhciinst\di\xhcidi.map carries no linker copyright line for NOTICE.TXT; rebuild the helper (xhciinst\di\build.cmd)."
+        }
+        $diNotice = @"
+
+------------------------------------------------------------------------------
+ XHCIDI.EXE
+------------------------------------------------------------------------------
+
+XHCIDI.EXE, the Windows 98 SE and ME device install helper the install tool
+starts, is built from this project's own C source, under the GNU GPL v2,
+with Open Watcom 2.0's 16-bit compiler. It is not only this project's code:
+it statically links modules from the Open Watcom C runtime library for
+16-bit Windows (clibl.lib). The Open Watcom linker records its own
+copyright at the head of the map it wrote for this build:
+
+{MAPLINES}
+
+Open Watcom is distributed under the Sybase Open Watcom Public License.
+
+It is linked against setupx.lib of the Windows 98 SE DDK, an import library:
+the executable carries references, by module name and ordinal, to the
+SETUPX.DLL of the Windows it runs on, and no code or text of the DDK. What
+this file records is the linkage; the project's full provenance record is
+docs\contributing\legal-provenance.md, section 2a.
+"@
+        $diNotice = $diNotice.Replace("{MAPLINES}", (($diMapLines | ForEach-Object { "  " + $_.Trim() }) -join "`r`n"))
+        $instNoticePath = Join-Path $ditoolStaged "NOTICE.TXT"
+        $instNoticeLines = @([System.IO.File]::ReadAllLines($instNoticePath))
+        Write-GeneratedText -Path $instNoticePath -Lines ($instNoticeLines + @($diNotice -split "`r?`n"))
+        Write-Ok "NOTICE.TXT beside XHCIINST.EXE gains XHCIDI.EXE's section (static Open Watcom 16-bit runtime; setupx.lib by ordinal)"
     }
 
     # --- the licence the readme sends the reader to --------------------------
@@ -7208,6 +7497,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     if ($null -eq $cleantoolStaged) {
         Write-Warn "no tools\xhcicln\ in this release (-SkipCleanTool) - nothing needs it, but the readme's update section names it."
+    }
+    if ($null -eq $marktoolStaged) {
+        Write-Warn "no tools\xhcimark\ in this release (-SkipMarkTool) - a Thunderbolt device's safe-removal mark is lost at a rebuild of its drivers, as before 3.1.0.0."
     }
     if ($null -eq $traytoolStaged) {
         Write-Warn "no tools\xhcitr\ in this release (-SkipTrayTool) - INSTALL.BAT installs no USB tree tool from it."

@@ -167,11 +167,18 @@ side, and sets it:
 
 xhci98's level is the XhciLogVerbosity value in each of its USB
 controllers' driver keys; the Thunderbolt driver's is XhciCmLogVerbosity
-in its controller's driver key. The list at the top shows each value as
-it is: no value reads as 2, the default, and a value outside 0 to 4 is
-shown as out of range. Choose a level for either driver and click Set;
-a value out of range is never written. Each driver reads its level only
-when it starts, so the tool then offers to restart Windows.
+in its controller's driver key. From 3.1.0.0 both drivers read the same
+value first from HKLM\System\CurrentControlSet\Services\USB, the
+machine-wide key, and a value there wins for every controller; the list
+shows that value under each driver's heading and, under each device whose
+own value it overrides, the device's own value as not in force. The list
+at the top shows each value as it is: no value reads as 2, the default,
+and a value outside 0 to 4 is shown as out of range. Choose a level for
+either driver and click Set; a value out of range is never written. Where
+a machine-wide value is set, Set writes that one, the value in force for
+every device, and leaves the devices' own values as they are. Each driver
+reads its level only when it starts, so the tool then offers to restart
+Windows.
 
 On Windows 98 SE and ME, and for an administrator, Set writes the values
 at once. On Windows 2000 to 7 without administrator rights the button

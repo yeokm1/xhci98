@@ -422,6 +422,17 @@ ULONG CmQueryBumpGen(UCHAR *answer, ULONG bytes)
     return gen;
 }
 
+BOOLEAN CmQuerySeedInert(BOOLEAN running, ULONG wait, BOOLEAN next)
+{
+    if (!running || wait == CM_Q_WAIT_FOREVER) {
+        return TRUE;
+    }
+    if (wait == CM_Q_WAIT_TIMED || wait == CM_Q_WAIT_BINDING) {
+        return FALSE;
+    }
+    return next;
+}
+
 /* ---------------------------------------------------------------------- */
 /* The log answer (design record 25 section 4.5)                          */
 /* ---------------------------------------------------------------------- */

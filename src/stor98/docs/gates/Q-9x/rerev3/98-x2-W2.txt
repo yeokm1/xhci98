@@ -1,0 +1,25 @@
+cm9x DriverEntry (interface 3 revision, pin device)
+cm9x 000000023e31485d c8 c29ae970 bridge devnode; secondary bus, SHPC cap 00000001 00000040
+cm9x 000000023ec65b69 c8 c29af500 bridge devnode; secondary bus, SHPC cap 00000002 00000040
+cm9x 00000002407708b9 c8 00000003 ports active (bit mask); cookie 666294b5 00000000
+
+=== W2 (O6 late DONE) Remove_SubTree completes 0.1 s after the O6 deadline while the writer is stalled across it: O6, never clean
+cm9x 000000c7907670a5 ce 01000001 eject requested; port, generation 00000000 00000001
+cm9x 000000c7990687f9 cd 0c000000 eject: Query_Remove_SubTree; devnode c1c854a0 00000000
+cm9x 000000c799147ce7 ce 03000001 REMOVE_PENDING set; generation, ack before 00000001 00000000
+cm9x 000000c830d218c8 ce 04010001 acknowledgement (FF none): ms, RemoveAck 0000011b 00000101
+cm9x 000000d2fac29a5a b6 000000b9 CONFIGMG call still running after 5 s (other ports continue); op, port 0000000d 00000000
+cm9x 000001088bef575e b6 000000bf test: writer stall across the O6 deadline; ms, port 000003e8 00000000
+cm9x 0000010ab9ccb1a4 ce 08000001 O6: Remove_SubTree failing for 30 s: eject failed; cr 000000ff 00000000
+cm9x 0000010ab9e922f8 b6 000000be O6 with Remove_SubTree still running: kept for the retries; port, id 00000000 00000003
+cm9x 0000010ac27c2f2a cb 00050001 DOWN published; ack before, endpoint devnode 00000000 00000000
+cm9x 0000010ac293b67c cc 00000000 link-down ack (1) or timeout; gen, ms 00000001 00000000
+cm9x 0000010ac2a01a0c b6 000000ba CONFIGMG call returned after; ms, port 0000785a 00000000
+cm9x 0000010ac2a88d18 cd 0d000000 Remove_SubTree(endpoint); devnode, port c1c854a0 00000000
+cm9x 0000010ac2b15c5e b6 000000c0 endpoint devnode retired; port, generation 00000000 00000001
+cm9x 0000010ac2b9021a --   retired: removed after link down
+ctl eject result E5FF after 31195 ms (C1EA clean; E1xx vetoed (cr); E2xx isolated not clean, D2 recovery; E3xx failed or no ack (FF), CM isolates; E5x
+
+=== decoder
+statement #1 port 0 gen 1 flags 05: cutoff=0.3 cm_down=47.7 rx=- ack=- cm_timeout=48.2 removal=48.6  -> TIMEOUT (no acknowledgement within the CM's wait)
+summary: TIMEOUT 1

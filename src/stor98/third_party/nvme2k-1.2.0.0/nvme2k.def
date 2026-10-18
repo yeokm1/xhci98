@@ -1,0 +1,4 @@
+LIBRARY nvme2k.sys
+
+EXPORTS
+    DriverEntry

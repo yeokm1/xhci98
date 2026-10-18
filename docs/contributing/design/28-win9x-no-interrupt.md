@@ -1,5 +1,19 @@
 # Design Record 28 - A Windows 98 SE or ME Function With No Interrupt
 
+**Note, 2026-10-19 (task 42-A.15's emulator leg, `runs/run-42.md`): the
+basic form is refuted for the case read; a redesign is owed.** On 98 SE,
+an NVMe below a tunnel port with no routing entry sat at Code 29 ("the
+BIOS for the device did not give it an IRQ"), yet `PCI.VXD`'s one basic
+configuration of it (at `LCPRI_NORMAL`) held one memory descriptor and
+no IRQ descriptor. Section 3 item 1's hypothesis - an IRQ requirement
+that cannot be met is what leaves the device unstarted - does not hold
+there: the configuration already is the one section 4 would add, so the
+code refuses the device ("configuration") and changes nothing. The open
+question the redesign starts from: does `Reprocess_DevNode` or
+`Setup_DevNode(CM_SETUP_DEVNODE_READY)` clear a Code 29 that `PCI.VXD`
+itself set on a memory-only configuration, and where (which event, on
+what reading of the function or its route) does `PCI.VXD` set it?
+
 Status: draft 11, 2026-10-18, reviewed and revised (an unstarted device
 with no problem kept ATTEMPTED, the disabled forced leftover's exception
 carried into section 5.3 and N8, the re-creation leg split by what is

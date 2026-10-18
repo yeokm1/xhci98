@@ -221,6 +221,9 @@ src/            Driver source code (C): the HCD, xhci98.sys (roadmap Phases
                 of xhcihlpr.sys, the x86 helper (design record 18 section
                 15), whose code is src/xhci_hlpr.c. The miniport left the
                 tree on 2026-10-02; its last sources are on branch 1.2.0.0
+src/stor98/     Stor98, the NVMe SCSI miniport the packages bundle, a
+                BSD-3-Clause project with its own AGENTS.md, build and
+                releases; see "Stor98 (src/stor98/)" below
 test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
 scripts/        The build wrapper, host setup helpers, and the import/INF/
                 packaging gates. `scripts/local/` is git-ignored per-host
@@ -690,6 +693,31 @@ mirror rule of "Third-Party Material and Provenance" below, with only the
 exception for Linux's xHCI quirks that it names. The mirrors and their
 pinned commits are in `external/README.md`; `legal-provenance.md` section
 3 records the rule and section 4 the fact classes taken.
+
+---
+
+## Stor98 (`src/stor98/`)
+
+`src/stor98/` is Stor98, the SCSI miniport for NVMe SSDs that the release
+packages bundle, in this repository since 2026-10-19 as one snapshot of
+its own repository's tracked files (branch `audit-2026-10-18` at `4253b58`,
+no history; roadmap-usb4 task 42-A.20, owner). It stays its own driver and
+its own files - `stor98.mpd` for 98 SE and ME, `stor98.sys` for x86 and
+x64, its two INFs - built by `src\stor98\scripts\build.cmd` (or with
+everything else by `scripts\build-all.cmd`) into the ignored
+`src\stor98\out\`, never folded into this project's binaries; a package
+bundles only a released build, by default from
+`src\stor98\releases\<version>\`, under `make-package.ps1`'s four pins.
+**Its own `AGENTS.md` governs its technical rules** (provenance, surprise
+removal and DMA, its write-once releases and signing, no "NVMe" in a name),
+and its `LICENSE` and `NOTICE` its files; this file's source rules (C89,
+the arithmetic rules, ASCII, the gates) do not bind it, and
+`check-source-charset.ps1` skips it. This repository's commit rule does
+apply to it: no attribution trailer in a commit message. Its interface
+header is here twice until the two are made one: the master is
+`src\stor98\include\stor98cm.h`, and `src\cm\stor98cm.h` must be the same
+bytes, which `scripts\check-stor98-header.ps1` holds on every gated build
+(`docs/contributing/source-files.md`).
 
 ---
 
