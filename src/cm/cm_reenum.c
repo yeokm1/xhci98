@@ -101,6 +101,11 @@ static LIST_ENTRY cmRegFilters;
 static LIST_ENTRY cmRegDomains;
 static ULONG cmRegSerial;
 static ULONG cmRegAttached;
+/* Child filters AddDevice made that no bridge could be named for yet
+ * (CmRegAttLink, CmRegRelations): while any exists, a bridge that ever
+ * answered more functions than its snapshot keeps (TruncSeen) cannot prove
+ * a retirement (record 22 section 7.7). Under the lock. */
+static ULONG cmRegUnattributed;
 static ULONG cmRegSkipped;
 static ULONG cmRegRefused;
 static ULONG cmRegOver;
@@ -579,6 +584,10 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
                     child->Bridge = filter;
                     filter->ChildLive++;
                     child->ChildCounted = 1;
+                    if (child->Unattributed) {
+                        child->Unattributed = 0;
+                        cmRegUnattributed--;
+                    }
                     break;
                 }
             }
@@ -586,6 +595,9 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     }
     filter->SnapTruncated = (ULONG)(relations != NULL &&
                                     relations->Count > CM_SNAP_MAX);
+    if (filter->SnapTruncated) {
+        filter->TruncSeen = 1;
+    }
     if (filter->Published && !filter->Gone && !filter->Baseline) {
         filter->Baseline = 1;
         cmRegRecompute();
@@ -908,6 +920,11 @@ VOID CmRegAttLink(PCM_FILTER filter)
             filter->Bridge->ChildLive++;
             filter->ChildCounted = 1;
         }
+        if (filter->Common.Kind == CM_KIND_CHILD && filter->Bridge == NULL &&
+            !filter->Unattributed) {
+            filter->Unattributed = 1;
+            cmRegUnattributed++;
+        }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
@@ -1083,6 +1100,10 @@ VOID CmRegAttRemoved(PCM_FILTER filter, BOOLEAN afterQr)
              * (CmReenumRetired waits for every one). */
             filter->Bridge->ChildLive--;
             filter->ChildCounted = 0;
+        }
+        if (filter->Unattributed) {
+            filter->Unattributed = 0;
+            cmRegUnattributed--;
         }
     }
     m = cmMarkFind((PVOID)filter->Common.Pdo, &d);
@@ -2859,7 +2880,8 @@ BOOLEAN CmReenumRetired(PCM_NHI nhi, ULONG i, ULONG answers)
         done = (BOOLEAN)(f->RelEmptyAt != 0 && f->RelEmptyAt != answers &&
                          f->RelEmptyAt - answers < 0x80000000UL &&
                          f->SnapCount == 0 && !f->SnapTruncated &&
-                         f->ChildLive == 0);
+                         f->ChildLive == 0 &&
+                         !(f->TruncSeen && cmRegUnattributed != 0));
         KeReleaseSpinLock(&cmRegLock, irql);
         cmRegRelease(f);
         return done;

@@ -568,6 +568,9 @@ typedef struct _CM_FILTER {
                                AddDevice made the one reporting its PDO when
                                it linked (CmRegAttLink); NULL if none     */
     ULONG ChildCounted;     /* counted in that bridge's ChildLive         */
+    ULONG Unattributed;     /* AddDevice made, no bridge named for it yet */
+    ULONG TruncSeen;        /* a bridge: an answer once held more PDOs than
+                               its snapshot keeps (CM_SNAP_MAX)           */
     ULONG QueryRemoved;     /* a query-remove not cancelled (both kinds)   */
     ULONG SurpriseRemoved;
 
