@@ -270,7 +270,7 @@ static int helperRan;       /* a device job ran: the steps are per device  */
  * each: the steps page's (record 26 section 7), and the steps as text. */
 #define INST_MAX_STEPDEVS 64
 static char stepsId[INST_MAX_STEPDEVS][INST_ID_CHARS];
-static char stepsWhy[INST_MAX_STEPDEVS][96];
+static char stepsWhy[INST_MAX_STEPDEVS][192];
 static int stepsCount;
 static const char *steps_why(const char *id);
 #define INST_STEPS_TEXT 16384
@@ -3500,31 +3500,7 @@ static int forget_dir(void)
     return 1;
 }
 
-/* The record put back (the uninstall's last steps, a window that could
- * not go after it was deleted): the entry point keeps its directory. */
-static int remember_dir(void)
-{
-    HKEY k;
-    LONG w;
 
-    if (toolDir[0] == '\0') {
-        return 0;
-    }
-    w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0, NULL, 0,
-                        KEY_SET_VALUE, NULL, &k, NULL);
-    if (w == ERROR_SUCCESS) {
-        w = RegSetValueExA(k, INST_DIR_VALUE, 0, REG_SZ,
-                           (const BYTE *)toolDir, (DWORD)strlen(toolDir) + 1);
-        RegCloseKey(k);
-    }
-    if (w != ERROR_SUCCESS) {
-        out("The install directory's record could not be put back (error "
-            "%ld): run the uninstall from %s.\n", (long)w, toolDir);
-        flagFailed = 1;
-        return 0;
-    }
-    return 1;
-}
 
 /* Before a move (record 23 section 9.6), before anything is copied: the
  * tool running from the old directory is closed. One that does not close
@@ -4262,21 +4238,20 @@ static void finish_remove(void)
         flagSteps = 1;
         return;
     }
-    /* The entry before the records, the records before the window: a
-     * step that fails puts back what the next run needs (the entry and
-     * the directory's record, while the window is there). */
+    /* The entry, then the window, then the records: a window that cannot
+     * go gets its entry back, its directory's record still in place; the
+     * records go only once nothing they lead to is left. */
     if (!arp_remove()) {
         return;
     }
-    if (!forget_dir()) {
+    if (!own_remove_in(toolDir, 1)) {
         arp_write(1);
+        flagSteps = 1;
         return;
     }
-    if (!own_remove_in(toolDir, 1)) {
-        if (remember_dir()) {
-            arp_write(1);
-        }
-        flagSteps = 1;
+    if (!forget_dir()) {
+        out("Nothing of this package is left but its record HKLM\\%s; delete "
+            "it with regedit.\n", INST_DIR_KEY);
         return;
     }
     for (i = 0; i < 2; i++) {
@@ -7635,7 +7610,11 @@ static int helper_install(DEVREC *d)
         if (c >= 0) {
             changedState[c] = 0;
         }
-        steps_add(d, "recorded, but not running now");
+        /* 98 SE: a cancelled Found New Hardware wizard takes the devnode
+         * away until the next start; the helper then finds nothing. */
+        steps_add(d, "not present now (a cancelled hardware wizard takes "
+                  "it away until Windows starts again): restart Windows, "
+                  "then run the installer again");
         flagSteps = 1;
         step(INST_STEP_LEFT, "%s: not present", d->Desc[0] ? d->Desc : d->Id);
         return 1;
@@ -11444,12 +11423,22 @@ static int own_delete(const char *path)
         return 1;
     }
     own_variant(path, ".DEL", del, sizeof(del));
-    if (envNow.Nt && MoveFileA(path, del) && delete_at_restart(del)) {
-        flagChanged = 1;
-        flagRestart = 1;
-        out("%s is in use: renamed %s, which is deleted at the restart.\n",
-            path, del);
-        return 1;
+    if (envNow.Nt && MoveFileA(path, del)) {
+        if (delete_at_restart(del)) {
+            flagChanged = 1;
+            flagRestart = 1;
+            out("%s is in use: renamed %s, which is deleted at the "
+                "restart.\n", path, del);
+            return 1;
+        }
+        /* Not scheduled: the name goes back, so the file is where the
+         * next run looks for it. */
+        if (!MoveFileA(del, path)) {
+            out("%s could not be deleted, nor renamed back from %s (error "
+                "%lu).\n", path, del, (unsigned long)GetLastError());
+            flagFailed = 1;
+            return 0;
+        }
     }
     out("%s could not be deleted (error %lu): the installer stays for the "
         "next run.\n", path, (unsigned long)GetLastError());
@@ -11502,6 +11491,10 @@ static int own_any_in(const char *dir)
 
     if (dir == NULL || dir[0] == '\0') {
         return 0;
+    }
+    join(path, sizeof(path), dir, INST_DI_RESULT_NAME);
+    if (file_state(path) != 0) {
+        return 1;
     }
     n = own_names(names);
     for (i = 0; i < n; i++) {
