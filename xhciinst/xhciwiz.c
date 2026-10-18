@@ -75,6 +75,7 @@
 #define WM_APP_WAIT         (WM_APP + 3)    /* a wait: lParam text           */
 #define WM_APP_LINE         (WM_APP + 4)    /* report text: lParam text      */
 #define WM_APP_GATE         (WM_APP + 5)    /* sent: 1 go on, 0 stop         */
+#define WM_APP_FOCUS        (WM_APP + 6)    /* the focus to Next or Finish   */
 
 #define JOB_READ            1
 #define JOB_RUN             2
@@ -422,6 +423,12 @@ static int start_job(int job)
 static void buttons(DWORD flags)
 {
     PropSheet_SetWizButtons(sheet, flags);
+    /* The keyboard may be all there is (a USB mouse on the controller this
+     * updates): Enter presses Next or Finish, not a read-only text box's
+     * newline. Posted, so it lands after the sheet's own focus. */
+    if (sheet != NULL && (flags & (PSWIZB_NEXT | PSWIZB_FINISH)) != 0) {
+        PostMessageA(sheet, WM_APP_FOCUS, 0, 0);
+    }
 }
 
 static void next_text(const char *text)
@@ -1824,6 +1831,18 @@ static LRESULT CALLBACK sheet_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     if (msg == WM_APP_GATE) {
         return MessageBoxA(h, inst_page_text(INST_PT_GATE), "xHCI98 Setup",
                            MB_OKCANCEL | MB_ICONINFORMATION) == IDOK ? 1 : 0;
+    }
+    if (msg == WM_APP_FOCUS) {
+        HWND b = GetDlgItem(h, ID_SHEET_NEXT);
+
+        if (b == NULL || !IsWindowVisible(b) || !IsWindowEnabled(b)) {
+            b = GetDlgItem(h, ID_SHEET_FINISH);
+        }
+        if (b != NULL && IsWindowVisible(b) && IsWindowEnabled(b)) {
+            SendMessageA(h, WM_NEXTDLGCTL, (WPARAM)b, TRUE);
+            SendMessageA(h, DM_SETDEFID, (WPARAM)GetDlgCtrlID(b), 0);
+        }
+        return 0;
     }
     return CallWindowProcA(sheetProc, h, msg, wp, lp);
 }
