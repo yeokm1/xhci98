@@ -175,7 +175,8 @@ static VOID niDiag(PCM_NI_MEMBER m, CM_NI_DEV *d, ULONG status,
     m->Diag[1] = m->PortBdf;
     m->Diag[2] = d->Bdf;
     m->Diag[3] = (d->Pin & 0xFFUL) | ((d->Line & 0xFFUL) << 8);
-    m->Diag[4] = d->Irq;
+    m->Diag[4] = (d->Irq & 0xFFUL) | ((d->State & 0xFFUL) << 8) |
+                 ((d->Why & 0xFFUL) << 16);
     m->Diag[5] = d->ProbBefore;
     m->Diag[6] = ((d->LastStep & 0xFFFFUL) << 16) | (d->LastCr & 0xFFFFUL);
     m->Diag[7] = status;
@@ -213,6 +214,17 @@ static VOID niExclude(PCM_NI_MEMBER m, CM_NI_DEV *d, ULONG why)
     if (why < CM_NI_W_COUNT) {
         m->C.Refused[why]++;
     }
+    /* A refusal is the last attempt too: the diagnostic says which entry
+     * and why, and its packed counts move. */
+    niDiag(m, d, 0, 0);
+}
+
+/* The admission window still open at `now` (a result that comes back
+ * after it closed admits nothing). */
+static ULONG niWindowLive(const CM_NI_MEMBER *m, ULONG now)
+{
+    return (ULONG)(m->WindowOpen &&
+                   niSince(now, m->WindowFrom) < CM_NOIRQ_WINDOW_MS);
 }
 
 /* An attempt ended FAILED: an uncommitted configuration it added stays a
@@ -334,6 +346,22 @@ ULONG CmNiWindow(const CM_NI_MEMBER *m)
     return m->WindowOpen;
 }
 
+ULONG CmNiInTransaction(const CM_NI_MEMBER *m)
+{
+    ULONG k;
+
+    if (m->Out.Id != 0) {
+        return 1;
+    }
+    for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
+        if (m->Dev[k].Used && (m->Dev[k].State == CM_NI_S_ACTIVE ||
+                               m->Dev[k].State == CM_NI_S_ATTEMPTED)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 ULONG CmNiBusy(const CM_NI_MEMBER *m)
 {
     ULONG k;
@@ -348,6 +376,35 @@ ULONG CmNiBusy(const CM_NI_MEMBER *m)
         }
     }
     return 0;
+}
+
+VOID CmNiWalkBegin(PCM_NI_MEMBER m)
+{
+    m->WalkSeq++;
+    if (m->WalkSeq == 0) {
+        m->WalkSeq = 1;
+    }
+}
+
+VOID CmNiWalkDone(PCM_NI_MEMBER m, ULONG complete)
+{
+    ULONG k;
+    CM_NI_DEV *d;
+
+    if (!complete) {
+        return;
+    }
+    /* A complete walk proves the others gone: forgotten, their journals
+     * retired, nothing of theirs freed. An attempt in progress is left to
+     * its own reads, which see the disappearance. */
+    for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
+        d = &m->Dev[k];
+        if (d->Used && d->WalkSeq != m->WalkSeq &&
+            d->State != CM_NI_S_ACTIVE && d->State != CM_NI_S_ATTEMPTED &&
+            (m->Out.Id == 0 || m->Out.Dev != k)) {
+            niForget(m, d);
+        }
+    }
 }
 
 VOID CmNiSeen(PCM_NI_MEMBER m, ULONG dn, ULONG hash, ULONG bdf, ULONG rot)
@@ -374,6 +431,7 @@ VOID CmNiSeen(PCM_NI_MEMBER m, ULONG dn, ULONG hash, ULONG bdf, ULONG rot)
         if (d->Hash == hash) {
             d->Bdf = bdf;
             d->Rot = rot;
+            d->WalkSeq = m->WalkSeq;
             return;
         }
         /* The handle reused (record 21 section 7.4): a new device. An
@@ -385,6 +443,20 @@ VOID CmNiSeen(PCM_NI_MEMBER m, ULONG dn, ULONG hash, ULONG bdf, ULONG rot)
         }
     }
     if (free == NI_NONE) {
+        /* Full: an entry refused by its header (a bridge, another class)
+         * makes room, its devnode judged again if it is met again. */
+        for (k = 0; k < CM_NOIRQ_DEVICES && free == NI_NONE; k++) {
+            d = &m->Dev[k];
+            if (d->State == CM_NI_S_EXCLUDED && d->Why == CM_NI_W_HEADER &&
+                d->WalkSeq != m->WalkSeq &&
+                (m->Out.Id == 0 || m->Out.Dev != k)) {
+                niForget(m, d);
+                free = k;
+            }
+        }
+    }
+    if (free == NI_NONE) {
+        m->C.NoRoom++;
         return;
     }
     d = &m->Dev[free];
@@ -394,6 +466,7 @@ VOID CmNiSeen(PCM_NI_MEMBER m, ULONG dn, ULONG hash, ULONG bdf, ULONG rot)
     d->Hash = hash;
     d->Bdf = bdf;
     d->Rot = rot;
+    d->WalkSeq = m->WalkSeq;
     d->Gen = m->Gen;
     d->Txn = 1;
     niPending(d);
@@ -847,6 +920,10 @@ static VOID niGate(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
             d->Source = res->Lc[k];
         }
     }
+    if (!niWindowLive(m, ctx->Now)) {
+        niExclude(m, d, CM_NI_W_NOT_IN_TIME);
+        return;
+    }
     if (c != NULL) {
         /* One reprocess per generation, whatever the attempts count. */
         if (j->ReprocGen == m->Gen + 1) {
@@ -887,6 +964,10 @@ static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
     if (res->Cr == CM_NI_CR_NO_MORE_RES_DES) {
         if (!d->HaveIrq || d->MemCount == 0) {
             niExclude(m, d, CM_NI_W_CONFIG);
+            return;
+        }
+        if (!niWindowLive(m, ctx->Now)) {
+            niExclude(m, d, CM_NI_W_NOT_IN_TIME);
             return;
         }
         /* Every rule passed: ACTIVE, on its own deadline. */
@@ -1119,7 +1200,12 @@ VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res)
         }
         break;
     case CM_NI_OP_PORT_INTR:
-        if (res->Cr != CM_NI_CR_SUCCESS) {
+        /* Val[1] the port's id: one not answering, or answering Retry
+         * Status, proves nothing about its line. */
+        if (res->Cr != CM_NI_CR_SUCCESS || res->Val[0] == 0xFFFFFFFFUL ||
+            res->Val[1] == 0xFFFFFFFFUL ||
+            (res->Val[1] & 0xFFFFUL) == 0x0001UL ||
+            (res->Val[1] & 0xFFFFUL) == 0xFFFFUL) {
             d->Step = NI_AT_WAIT;
             break;
         }

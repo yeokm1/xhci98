@@ -643,13 +643,14 @@ have every leg.
   started with no interrupt, and the bundled Stor98 runs it in its
   polling mode (Stor98's README, "Polling mode"); `XhciCmNoIrqStart`, on
   by default. Only a drive bound to the Stor98 this package's installer
-  installed (0.4.0.0 or later) is started so; a hand-installed Stor98, or
-  a drive plugged in after a Stor98 update and before the restart the
-  installer asks for, is not, and stays at its problem code until a
-  re-plug or that restart. A drive this left unstarted after a Device
+  installed (0.4.0.0 or later) is started so; a hand-installed Stor98 is
+  not, and stays at its problem code. A drive plugged in after a Stor98
+  update and before the restart the installer asks for may still load the
+  older Stor98, whose behaviour without an interrupt has not been
+  measured: restart first. A drive this left unstarted after a Device
   Manager Refresh stays so until the next plug. A drive with no interrupt
   pin (MSI only) is expected to start by itself and has not been read.
-  Read in the emulator only (`runs/run-42.md`); no device at hand
+  The emulator legs of this are `runs/run-42.md`'s; no device at hand
   presents the case on real hardware. While xhcicm.sys makes the calls
   for this, a hardware wizard left open on 98 SE or ME holds its other
   work for the tunnel ports too (plug, removal and safe-eject marking

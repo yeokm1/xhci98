@@ -510,8 +510,10 @@ VOID CmCfgwkDrain(VOID);
  * worker, through PCI.VXD's guarded read, between its other operations.
  * CmCfgwkPciAsk copies `in` (the members and the answer's header fields;
  * its readers and admission are the worker's own) into a request of its
- * own and posts it; NULL when none could be posted (the worker leaving,
- * one already posted, no pool). The caller must hold w alive for the call
+ * own and posts it; NULL when none could be posted, *reason then
+ * CM_QP_NR_BUSY for one already posted and not yet taken, else
+ * CM_QP_NR_NO_WORKER (the worker leaving, no pool). The caller must hold
+ * w alive for the call
  * alone (the query device's rundown, cm_qryos.c). CmCfgwkPciTake then
  * waits up to `waitMs` for the answer and, when it came, copies it
  * (CM_QP_MAX_BYTES at most) into `out` and returns its length; 0 with
@@ -522,7 +524,8 @@ VOID CmCfgwkDrain(VOID);
 struct _CM_CFGWK_PCI;
 struct _CM_QPCI_IN;
 struct _CM_CFGWK_PCI *CmCfgwkPciAsk(struct _CM_CFGWK *w,
-                                    const struct _CM_QPCI_IN *in);
+                                    const struct _CM_QPCI_IN *in,
+                                    PULONG reason);
 ULONG CmCfgwkPciTake(struct _CM_CFGWK_PCI *req, ULONG waitMs, UCHAR *out,
                      PULONG reason);
 

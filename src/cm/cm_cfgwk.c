@@ -229,6 +229,8 @@ typedef struct _CM_CFGWK {
     ULONG NumberMember;     /* the member cmWkNumber works on ...         */
     ULONG NumberGen;        /* ... and its request's generation           */
     PCM_CFGWK_PCI PciReq;   /* a PCI answer asked, not yet taken          */
+    ULONG PciHeld;          /* the members' ReqGone | NoScan as the walk in
+                               progress began (cmWkQpVxd)                */
     ULONG NoIrq;            /* XhciCmNoIrqStart as the start read it      */
     ULONG NiBase;           /* the no-IRQ clock's origin (tick count)     */
     CM_WK_NI_NODE NiStack[CM_WK_NI_STACK];
@@ -1906,20 +1908,32 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
     ULONG k;
     ULONG ok;
     ULONG hash;
+    ULONG cr;
+    ULONG complete;
     char text[CMG_MAX_DEVICE_ID_LEN + 1];
 
     p = &w->Port[i];
     cmWkOp(w, CM_WK_NO_OP, 0);
     bridge = cmWkFindDevnode(w, i);
-    if (bridge == 0 || !p->PathRead || !cmWkPciRoute(w, p->Bdf)) {
+    if (bridge == 0 || !p->PathRead || !cmWkNiGate(w, i) ||
+        !cmWkPciRoute(w, p->Bdf)) {
         return;
     }
     depth = 0;
     nodes = 0;
-    if (CmCfgmgChild(&w->Cfgmg, bridge, &child) != CMG_CR_SUCCESS) {
+    complete = 1;
+    CmNiWalkBegin(&p->Ni);
+    cr = CmCfgmgChild(&w->Cfgmg, bridge, &child);
+    if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+        child = 0;
+    } else if (cr != CMG_CR_SUCCESS) {
         return;
     }
-    while (child != 0 && depth < CM_WK_NI_STACK) {
+    while (child != 0) {
+        if (depth >= CM_WK_NI_STACK) {
+            complete = 0;
+            break;
+        }
         e = &w->NiStack[depth++];
         e->Node = child;
         e->Depth = 1;
@@ -1929,16 +1943,28 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
         for (k = 0; k < p->PathCount && k < CM_PORTS_PATH_MAX; k++) {
             e->Path[k] = p->Path[k];
         }
-        if (CmCfgmgSibling(&w->Cfgmg, child, &child) != CMG_CR_SUCCESS) {
+        cr = CmCfgmgSibling(&w->Cfgmg, child, &child);
+        if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+            break;
+        }
+        if (cr != CMG_CR_SUCCESS) {
+            complete = 0;
             break;
         }
     }
-    while (depth > 0 && nodes < CM_WK_WALK_NODES && cmWkGo(w)) {
+    while (depth > 0) {
+        /* The member's gate after every call that may have blocked: a
+         * loss ends the walk before any bridge below is read. */
+        if (nodes >= CM_WK_WALK_NODES || !cmWkGo(w) || !cmWkNiGate(w, i)) {
+            complete = 0;
+            break;
+        }
         cur = w->NiStack[--depth];
         node = cur.Node;
         nodes++;
         if (CmCfgmgDeviceId(&w->Cfgmg, node, text, sizeof(text)) !=
             CMG_CR_SUCCESS) {
+            complete = 0;
             continue;
         }
         text[CMG_MAX_DEVICE_ID_LEN] = '\0';
@@ -1968,11 +1994,22 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
             continue;
         }
         CmNiSeen(&p->Ni, node, hash, bdf, cur.Rot & 3UL);
-        if (cur.Depth >= CM_WK_NI_DEPTH ||
-            CmCfgmgChild(&w->Cfgmg, node, &child) != CMG_CR_SUCCESS) {
+        if (cur.Depth >= CM_WK_NI_DEPTH) {
             continue;
         }
-        while (child != 0 && depth < CM_WK_NI_STACK) {
+        cr = CmCfgmgChild(&w->Cfgmg, node, &child);
+        if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+            continue;
+        }
+        if (cr != CMG_CR_SUCCESS) {
+            complete = 0;
+            continue;
+        }
+        while (child != 0) {
+            if (depth >= CM_WK_NI_STACK) {
+                complete = 0;
+                break;
+            }
             e = &w->NiStack[depth++];
             e->Node = child;
             e->Depth = cur.Depth + 1;
@@ -1983,11 +2020,17 @@ static VOID cmWkNiWalk(PCM_CFGWK w, ULONG i)
                 e->Path[k + 1] = cur.Path[k];
             }
             e->PathCount = k + 1;
-            if (CmCfgmgSibling(&w->Cfgmg, child, &child) != CMG_CR_SUCCESS) {
+            cr = CmCfgmgSibling(&w->Cfgmg, child, &child);
+            if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+                break;
+            }
+            if (cr != CMG_CR_SUCCESS) {
+                complete = 0;
                 break;
             }
         }
     }
+    CmNiWalkDone(&p->Ni, complete);
 }
 
 /* One operation of cm_noirq.h, made here at once (the interim). */
@@ -2014,7 +2057,9 @@ static VOID cmWkNiExec(PCM_CFGWK w, ULONG i, const CM_NI_OP *op,
     res->Id = op->Id;
     switch (op->Kind) {
     case CM_NI_OP_HEADER:
-        if (!cmWkPciRoute(w, w->Port[i].Bdf)) {
+        /* No configuration space below a member whose controller was
+         * lost, however late the loss came (cmWkNiGate). */
+        if (!cmWkNiGate(w, i) || !cmWkPciRoute(w, w->Port[i].Bdf)) {
             res->Cr = CMG_CR_FAILURE;
             break;
         }
@@ -2027,7 +2072,9 @@ static VOID cmWkNiExec(PCM_CFGWK w, ULONG i, const CM_NI_OP *op,
         break;
     case CM_NI_OP_PORT_INTR:
     case CM_NI_OP_LINE:
-        if (!CmCfgmgPciRead(&w->Cfgmg, op->Bdf, 0x3CUL, &res->Val[0])) {
+        if (!cmWkNiGate(w, i) ||
+            !CmCfgmgPciRead(&w->Cfgmg, op->Bdf, 0x3CUL, &res->Val[0]) ||
+            !CmCfgmgPciRead(&w->Cfgmg, op->Bdf, 0x00UL, &res->Val[1])) {
             res->Cr = CMG_CR_FAILURE;
         }
         break;
@@ -2298,10 +2345,20 @@ static ULONG cmWkQpVxd(PVOID context, ULONG bdf, UCHAR *buf, ULONG bytes,
     ULONG off;
     ULONG v;
     ULONG i;
+    ULONG lost;
+    KIRQL irql;
 
     w = (PCM_CFGWK)context;
     *valid = 0;
     if (bytes == 0 || bytes > CM_QP_CFG_BYTES || (bytes & 3UL) != 0) {
+        return CM_QP_RD_FAIL;
+    }
+    /* A controller lost since the walk began (a member newly held): no
+     * further read below any member, refused. */
+    KeAcquireSpinLock(&w->Lock, &irql);
+    lost = (w->ReqGone | w->NoScan) & ~w->PciHeld;
+    KeReleaseSpinLock(&w->Lock, irql);
+    if (lost != 0) {
         return CM_QP_RD_FAIL;
     }
     for (off = 0; off < bytes; off += 4) {
@@ -2398,6 +2455,7 @@ static VOID cmWkPciServe(PCM_CFGWK w, PCM_CFGWK_PCI req)
     ULONG bytes;
     ULONG p;
     ULONG i;
+    KIRQL irql;
 
     in = req->In;
     reason = CM_QP_NR_SYSTEM;
@@ -2410,6 +2468,9 @@ static VOID cmWkPciServe(PCM_CFGWK w, PCM_CFGWK_PCI req)
         reason = CM_QP_NR_GUARD;
     }
     held = 0;
+    KeAcquireSpinLock(&w->Lock, &irql);
+    w->PciHeld = w->ReqGone | w->NoScan;
+    KeReleaseSpinLock(&w->Lock, irql);
     for (p = 0; p < in.PortCount && p < CM_QP_MAX_PORTS; p++) {
         for (i = 0; i < w->Members; i++) {
             if (w->Port[i].Bdf == in.Ports[p].Bdf && cmWkNoCfg(w, i)) {
@@ -2431,11 +2492,13 @@ static VOID cmWkPciServe(PCM_CFGWK w, PCM_CFGWK_PCI req)
     cmWkPciDone(req, bytes, reason);
 }
 
-PCM_CFGWK_PCI CmCfgwkPciAsk(PCM_CFGWK w, const CM_QPCI_IN *in)
+PCM_CFGWK_PCI CmCfgwkPciAsk(PCM_CFGWK w, const CM_QPCI_IN *in,
+                            PULONG reason)
 {
     PCM_CFGWK_PCI req;
     KIRQL irql;
 
+    *reason = CM_QP_NR_NO_WORKER;
     req = (PCM_CFGWK_PCI)CmAlloc(sizeof(CM_CFGWK_PCI));
     if (req == NULL) {
         return NULL;
@@ -2453,6 +2516,10 @@ PCM_CFGWK_PCI CmCfgwkPciAsk(PCM_CFGWK w, const CM_QPCI_IN *in)
     req->In.AdmitContext = NULL;
     KeAcquireSpinLock(&w->Lock, &irql);
     if (w->Exit || w->PciReq != NULL) {
+        /* An earlier request still waiting for the worker: it is busy. */
+        if (!w->Exit) {
+            *reason = CM_QP_NR_BUSY;
+        }
         KeReleaseSpinLock(&w->Lock, irql);
         CmFree(req);
         return NULL;
@@ -2740,6 +2807,15 @@ static VOID cmWkThread(PVOID context)
             for (i = 0; i < w->Members; i++) {
                 if ((reenum & (1UL << i)) == 0 ||
                     !cmWkCurrent(w, i, gen[i])) {
+                    continue;
+                }
+                if (CmNiInTransaction(&w->Port[i].Ni)) {
+                    /* Record 28: this driver's re-enumerations of the
+                     * member queue behind its no-IRQ attempt (bounded by
+                     * the attempt's budget); a loss aborts the attempt
+                     * through its gate instead. */
+                    failed |= 1UL << i;
+                    failedVanish |= vanish & (1UL << i);
                     continue;
                 }
                 if (cmWkGoneOwed(w, i)) {

@@ -40,6 +40,7 @@ static struct {
     ULONG Hdr[16];
     ULONG Bind;
     ULONG PortIntr;
+    ULONG PortId;
     ULONG N;
     FLC Lc[FLC_MAX];
     ULONG FailKind;         /* an operation of this kind answers FailCr  */
@@ -108,6 +109,7 @@ static VOID model(VOID)
     f.Hdr[15] = 0x00000100UL;   /* pin INTA, line 0                      */
     f.Bind = CM_NI_BIND_OK;
     f.PortIntr = 0x0000010AUL;  /* the port: INTA, IRQ 10                */
+    f.PortId = 0x00011B36UL;
     addlc(0x3000, CM_NI_BASIC_LOG_CONF);
     addrd(0, CM_NI_RES_MEM, 36, 0xA1);
     addrd(0, CM_NI_RES_IRQ, 8, 0xB1);
@@ -203,6 +205,7 @@ static VOID exec(const CM_NI_OP *op, CM_NI_RES *res)
         break;
     case CM_NI_OP_PORT_INTR:
         res->Val[0] = f.PortIntr;
+        res->Val[1] = f.PortId;
         break;
     case CM_NI_OP_LC_LIST:
         n = 0;
@@ -365,7 +368,7 @@ static VOID test_started(VOID)
         CHECK_EQ(d[1], PORT, "the member");
         CHECK_EQ(d[2], FN, "the function");
         CHECK_EQ(d[3], 0x0001UL, "pin 1 line 0");
-        CHECK_EQ(d[4], CM_NI_IRQ_UNROUTABLE, "the outcome used");
+        CHECK_EQ(d[4] & 0xFF, CM_NI_IRQ_UNROUTABLE, "the outcome used");
         CHECK_EQ(d[5], 0x1D, "Code 29 before");
         CHECK_EQ(d[7], CM_NI_DN_STARTED, "started after");
         CHECK_EQ(d[9], 1UL | (1UL << 16), "one created, one candidate");
@@ -996,6 +999,86 @@ static VOID test_budgets_and_late(VOID)
     CHECK_EQ(mem.Dev[1].Used, 1, "two entries");
 }
 
+/* Record 28's admission window, the walk's departures, the port read. */
+static VOID test_window_walk_port(VOID)
+{
+    ULONG k;
+
+    /* An admission read that returns after the window closed admits
+     * nothing. */
+    model();
+    f.ClockAtKind = CM_NI_OP_LC_LIST;
+    f.ClockBy = CM_NOIRQ_WINDOW_MS + 1;
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_NOT_IN_TIME, "the window closed meanwhile");
+    CHECK_EQ(f.Calls[CM_NI_OP_ADD_EMPTY], 0, "nothing created");
+
+    /* A refusal is in the diagnostic. */
+    {
+        ULONG d[CM_NI_DIAG_WORDS];
+
+        CmNiDiag(&mem, d);
+        CHECK(d[0] != 0, "a diagnostic for a refusal");
+        CHECK_EQ((d[4] >> 8) & 0xFF, CM_NI_S_EXCLUDED, "its state");
+        CHECK_EQ((d[4] >> 16) & 0xFF, CM_NI_W_NOT_IN_TIME, "its reason");
+    }
+
+    /* The port not answering, or Retry Status: pending, not "no line". */
+    model();
+    f.PortId = 0xFFFFFFFFUL;
+    f.PortIntr = 0xFFFFFFFFUL;
+    start();
+    pass();
+    CHECK_EQ(st(), CM_NI_S_PENDING, "the port absent: pending");
+    model();
+    f.PortId = 0x00000001UL;
+    start();
+    pass();
+    CHECK_EQ(st(), CM_NI_S_PENDING, "the port in Retry Status: pending");
+
+    /* A complete walk forgets the entries it did not meet; an incomplete
+     * one forgets nothing; an attempt in progress is kept. */
+    model();
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    CmNiWalkBegin(&mem);
+    for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
+        CmNiSeen(&mem, 0x100 + k, 0x200 + k, BDF(9, k, 0), 0);
+    }
+    CmNiWalkDone(&mem, 1);
+    CHECK_EQ(mem.Dev[CM_NOIRQ_DEVICES - 1].Used, 1, "eight entries");
+    CmNiSeen(&mem, 0x999, 0x999, BDF(9, 9, 0), 0);
+    CHECK_EQ(mem.C.NoRoom, 1, "no room for a ninth");
+    CmNiWalkBegin(&mem);
+    CmNiSeen(&mem, 0x100, 0x200, BDF(9, 0, 0), 0);
+    CmNiWalkDone(&mem, 0);
+    CHECK_EQ(mem.Dev[3].Used, 1, "an incomplete walk forgets nothing");
+    mem.Dev[3].State = CM_NI_S_ATTEMPTED;
+    CmNiWalkBegin(&mem);
+    CmNiSeen(&mem, 0x100, 0x200, BDF(9, 0, 0), 0);
+    CmNiWalkDone(&mem, 1);
+    CHECK_EQ(mem.Dev[1].Used, 0, "a departed entry forgotten");
+    CHECK_EQ(mem.Dev[0].Used, 1, "the one met kept");
+    CHECK_EQ(mem.Dev[3].Used, 1, "an attempt in progress kept");
+    CHECK(CmNiInTransaction(&mem), "in a transaction");
+    CmNiSeen(&mem, 0x999, 0x999, BDF(9, 9, 0), 0);
+    CHECK_EQ(mem.C.NoRoom, 1, "room again");
+
+    /* Full of header refusals: one makes room. */
+    model();
+    f.Hdr[2] = 0x06040000UL;        /* every entry a bridge */
+    CmNiOpenWindow(&mem, 1, ctx.Now);
+    for (k = 0; k < CM_NOIRQ_DEVICES; k++) {
+        CmNiSeen(&mem, 0x100 + k, 0x200 + k, BDF(9, k, 0), 0);
+    }
+    pass();
+    CHECK_EQ(mem.Dev[0].Why, CM_NI_W_HEADER, "bridges refused");
+    CmNiWalkBegin(&mem);
+    CmNiSeen(&mem, 0x999, 0x999, BDF(9, 9, 0), 0);
+    CHECK_EQ(mem.C.NoRoom, 0, "a header refusal made room");
+    CHECK(!CmNiInTransaction(&mem), "no transaction");
+}
+
 static VOID test_readings(VOID)
 {
     XHCI_TBT_BRNUM r;
@@ -1064,6 +1147,7 @@ int main(void)
     test_leftovers_and_generations();
     test_handles_and_admission();
     test_budgets_and_late();
+    test_window_walk_port();
     test_readings();
     printf("test_cm_noirq: %d checks, %d failures\n", checks, failures);
     return failures;

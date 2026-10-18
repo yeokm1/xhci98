@@ -125,7 +125,8 @@
 #define CM_NI_OP_BINDING        3UL     /* Read_Registry_Value(Dn, software
                                            key) of DevLoader, PortDriver:
                                            Bind (CmNiBindFlags)            */
-#define CM_NI_OP_PORT_INTR      4UL     /* PCI.VXD: the member's 3Ch       */
+#define CM_NI_OP_PORT_INTR      4UL     /* PCI.VXD: the member's 3Ch in
+                                           Val[0], its id (00h) in Val[1] */
 #define CM_NI_OP_LC_LIST        5UL     /* Get_First/Next_Log_Conf(Dn, LcKind)
                                            with each one's priority        */
 #define CM_NI_OP_RD_READ        6UL     /* Get_Next_Res_Des past Lc (a
@@ -278,6 +279,7 @@ typedef struct _CM_NI_DEV {
     ULONG LastStep;         /* the diagnostic's step reached              */
     ULONG LastCr;
     ULONG Pin0Gen;          /* a pin-0 function counted for gen + 1       */
+    ULONG WalkSeq;          /* the walk it was last met in                */
 } CM_NI_DEV;
 
 typedef struct _CM_NI_COUNTERS {
@@ -296,11 +298,14 @@ typedef struct _CM_NI_COUNTERS {
     ULONG Pin0Seen;         /* NVMe functions with Interrupt Pin 0        */
     ULONG Pin0Started;      /* ... started                                */
     ULONG Unresolved;       /* descendants whose id named no location     */
+    ULONG NoRoom;           /* descendants met with every entry in use    */
 } CM_NI_COUNTERS;
 
 /* XhciCmNoIrqDiag (record 28 section 7), twelve dwords: 0 sequence, 1 the
  * member, 2 the function, 3 its pin 7:0 and line 15:8 as read, 4 the
- * interrupt outcome used (CM_NI_IRQ_*), 5 the problem before, 6 the step
+ * interrupt outcome used (CM_NI_IRQ_*) 7:0 with the entry's state
+ * (CM_NI_S_*) 15:8 and its reason (CM_NI_W_*) 23:16 - the last attempt
+ * or refusal -, 5 the problem before, 6 the step
  * reached (an CM_NI_OP_* kind, 31:16) and its CONFIGRET (15:0), 7 the
  * status after, 8 the problem after, 9 configurations created 15:0 and
  * candidates 31:16, 10 refusals packed four bits a reason (reasons 1 to
@@ -315,6 +320,7 @@ typedef struct _CM_NI_MEMBER {
     ULONG WindowOpen;
     ULONG WindowFrom;
     ULONG Pass;
+    ULONG WalkSeq;          /* bumped by every walk (CmNiWalkBegin)       */
     ULONG NextId;
     CM_NI_OP Out;           /* the operation outstanding (Id 0: none)     */
     ULONG Cur;              /* the entry being stepped, or CM_NOIRQ_DEVICES */
@@ -347,6 +353,17 @@ VOID CmNiSetIrq(PCM_NI_MEMBER m, ULONG gen, const CM_NI_IRQ *irq);
 /* ... built from a numbering's result: the stage's outcomes kept only for
  * a numbering that left its chain (DONE or REOPENED) with the stage run. */
 VOID CmNiIrqFromBrnum(const XHCI_TBT_BRNUM *r, PCM_NI_IRQ irq);
+
+/* A walk begins; one that ended normally (`complete`, every sibling chain
+ * read to its end) forgets the entries it did not meet that have no
+ * attempt in progress. */
+VOID CmNiWalkBegin(PCM_NI_MEMBER m);
+VOID CmNiWalkDone(PCM_NI_MEMBER m, ULONG complete);
+
+/* Nonzero while an attempt is in progress (an entry ACTIVE or ATTEMPTED,
+ * or an operation outstanding): this driver's own re-enumerations of the
+ * member queue behind it (record 28 section 4, "The transaction"). */
+ULONG CmNiInTransaction(const CM_NI_MEMBER *m);
 
 /* Nonzero while the member wants passes: its window open, an entry
  * ACTIVE or ATTEMPTED, or an operation outstanding. */

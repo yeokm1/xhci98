@@ -907,7 +907,7 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
         reason = cmQNt() ? CM_QP_NR_SYSTEM : CM_QP_NR_NO_WORKER;
         if (wk != NULL) {
             /* 98 SE and ME: the walk below the members on the worker. */
-            ask = CmCfgwkPciAsk(wk, &in);
+            ask = CmCfgwkPciAsk(wk, &in, &reason);
             KeAcquireSpinLock(&q->Lock, &irql);
             q->WkUse--;
             KeReleaseSpinLock(&q->Lock, irql);
