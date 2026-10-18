@@ -936,3 +936,117 @@ then nothing, then nothing on the build fix.
   - On 98 SE the test cut's XHCIINST left the installed `xhci98.sys` in
     place (the same version string, 3.0.0.0, judged current); the leg
     copied the new driver over it by hand.
+
+## 42-A.10: recovery of a contained USB4 host (2026-10-19)
+
+Code on branch `p42-u4rec` (from `3.1.0.0` at `db921f49`): `cd9cf616`,
+`2cee3dcc`, then the review's fixes `e0407f6c` to `6450dd09`, reviewed and
+revised until the review converged at `6450dd09`; the emulator leg below
+then found the 98 SE defect fixed in `963618bb`, `4198e863` and `81c7ec93`,
+reviewed again until clean at `81c7ec93`. Built at `81c7ec93` with every
+gate, `scripts\build-driver.cmd all` and `all -amd64`: both pass (the x86
+`qemu` `xhcicm.sys` SHA-256 `3F1EFA7535F8DCE7...`); the host suites pass
+(`test_u4cm` 1154 checks, `test_cm_live` 209, `test_cm_nvlink` 287).
+
+What it is: record 22 section 7.7's recovery as revised for 42-0.5 -
+CONTAINED's substates and PREPARING, the probe (configuration header first,
+then the size register), the preparation (Command, the platform step, the
+selection again), the recovery in the kept buffer after a verified stop,
+the per-tunnel classification and drains, the PCI side revalidated, the
+guarded commit, then the retirement barrier, the removal-only requests and
+the per-tunnel rebuilds after it; the commit messages map every rule.
+
+**The defect the 98 SE leg found** (on `6450dd09`): after `x-gate closed`
+and `normal` the instance stayed contained for 199 probes with 597
+`cm.config.failures`, every strict configuration read of the probe
+refused, while `XHCITR` read the same header through `xhcicm.sys`'s
+ordinary route. 98 SE's PCI bus driver completes `IRP_MN_READ_CONFIG` with
+the data and reports no length, so the strict check never passed and the
+recovery could not happen on 98 SE at all. A strict read that reports no
+length is now made twice, through a buffer of all ones and then of zeros,
+and counts only when both read the same (record 22 section 7.7 part 1).
+The ICM profile's validation shares the route.
+
+The legs, on the reviewed and gated `81c7ec93`: the `usb4-emu` QEMU of
+`bin-2a893ea` (SHA-256 checked), i440FX, `usb4-host profile=usb4-generic`
+behind a gated `usb4-tunnel-bridge` of its own (`nhirp`, `00:06.0`,
+`x-force-tunnel=on`, as run-40's containment leg placed it), the tunnel
+bridge `tb0` at `00:05.0`, the NVMe enclosure `enc0` attached at power-on;
+the loss is the harness override `qom-set /machine/peripheral/nhirp x-gate
+closed`, the return `x-gate normal` (BAR0 and configuration space all ones
+and the NHI's DMA closed meanwhile, no PnP request, no endpoint reset: the
+case of a platform that restores the host interface with its
+configuration intact). Overlays: copies of the p42-cm1 legs' (the signed
+`3.0.0.0` asset and Stor98 `0.4.0.0` installed in the guest), the NHI
+installed again at its new place by the New Hardware wizard, then the
+gated `qemu` `xhcicm.sys` copied over the installed one; every leg on a
+cold boot. The data check is a 4 MB file copied from the transfer disk to
+the NVMe volume and compared with `fc /b`.
+
+**Windows 98 SE** (`l3`): F: written and compared clean; `x-gate closed`:
+`cm.live.state=00000107`, `u4.contained`, the worker's
+CONTROLLER_UNAVAILABLE removal of the NVMe devnode (Stor98 answered the
+removal request, `Remove_SubTree` succeeded): F: gone, as record 22 says of
+98 SE, so no I/O crosses the loss there. `x-gate normal` 5 s later, the
+next probe: `u4.recover.probe=03000010` (header proven, size register as
+programmed), PREPARING, the selection unchanged, `rings-kept`, the host
+router adopted, port 1 classified the same router with its tunnel intact
+(`u4.recover.class=00000103`, preserved), `u4.recover.ok`, no barrier,
+ACTIVE; then the worker's re-enumeration, Stor98 bound again
+(`cm.nvlink.9x.proof-read`), no new `cm.nvlink.up` (the entry kept UP at
+generation 1), F: back with its files and the file written and compared
+clean after it. Four more losses on the same boot: each contained and
+recovered (episodes 2 to 5, the tunnel preserved every time); the
+volume did not come back after episodes 2 to 5 while a DOS prompt sat on
+F:\ (no Stor98 binding after the re-enumeration), and came back after
+episode 6 with nothing holding it. **Pass**, with that observation.
+
+**Windows 7 x86** (`l2`): F: written and compared clean; a copy to F:
+started and `x-gate closed` while it ran: contained at once (`CmNvlinkLost`
+found the NVMe still answering, `cm.nvlink.withheld`, no entry out of UP:
+`u4.contained.lost-up=00000000`), and the copy, started a moment before
+the gate closed, and its compare finished clean across the loss; `x-gate normal` 4 s later: the same recovery sequence,
+preserved, `u4.recover.ok`, no barrier, ACTIVE, nothing published; a
+third copy compared clean after it. **Pass.** A second loss inside the
+attempt (the gate opened, then closed again 50 to 800 ms later, five
+tries): at 600 and 800 ms the attempt was under way - the restart of the
+rings in the kept buffer read all ones (`tbt.ring.tx-index=FFFFFFFF`), the
+attempt failed (`u4.recover.refused=00000303`), the failure path's stop
+not verified, the buffer kept, CONTAINED (cooldown) - and with the gate
+open again a new episode began at once (the outage the attempt saw
+counted as its all-ones probe), whose recovery verified the stop, found
+the rings lost (`rings-lost`), restarted them and preserved the tunnel.
+The other three tries closed the gate before the attempt began. **Pass.**
+The final refusal (a stop that cannot be verified) was not reached: the
+gate would have to close in the moment between the preparation's last
+read and the stop's read-back.
+
+**Owed, and seen:**
+
+- A 98 SE boot (`l2`) where `x-gate closed` was followed by nothing: no
+  containment, no further pass of the connection-manager thread (its last
+  pass at the gate's closing, no NHI access after the gate reopened) and
+  later a shutdown that hung at the hourglass; one of three 98 SE boots
+  and seven losses. Not reproduced, not attributed.
+- Windows 7 under this topology stopped QEMU itself (QMP and the guest
+  frozen a few seconds into the start) with the SDL display, three cold
+  boots in three; with `-display none -vnc` it ran every time. An
+  emulator display matter, as the p42-nvw legs saw on 2000.
+- Not exercised: the host router reset by the platform (the drain, the
+  barrier, the rebuild), a device unplugged or replaced during the loss,
+  a vetoed removal, the bind or resume the loss interrupts, a Thunderbolt
+  3 router, Windows 2000 - 42-V.5's list, which the emulator's root
+  hot-plug `restore` and `acpi` modes serve.
+**After the merge of `3.1.0.0` (`2d2703b9`)**, at `3f646cc8` and its
+review fixes to `03ce451c` (the AddDevice child filters counted for the
+retirement proof, publication mode none kept through 42-A.12's held work,
+the no-IRQ machine admitted against the retirement hold), reviewed until
+clean: `build-driver.cmd all` and `all -amd64` pass every gate at
+`03ce451c` (x86 `qemu` `xhcicm.sys` `2D6F769852663DDE...`). The 98 SE leg
+read again on that build (`l4`, a cold boot): F: compared clean, two
+losses each contained and recovered with the tunnel preserved
+(`u4.recover.class=00000103`, `u4.recover.ok`, no barrier). As before the
+merge, the volume came back after the first recovery and not after the
+second (no Stor98 binding after that re-enumeration, the prompt on C:
+this time, so not a volume held open); owed to the 9x Stor98 rebinding,
+not read further.

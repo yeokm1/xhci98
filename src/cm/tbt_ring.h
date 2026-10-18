@@ -354,6 +354,12 @@ LONG TbtRingStartEx(PTBT_RING ring,
 /* Stop ring 0: both Ring Control registers to their default 0, then the RX
  * Consumer Index to its default (Spec 12.6.3.3.3's note). Idempotent. */
 VOID TbtRingStop(PTBT_RING ring);
+/* Record 22 section 7.7 part 3 step 1: ring 0 of both directions stopped
+ * whatever the records say - each Ring Control to its default, Base
+ * Address Low and High, Ring Size and the index written 0 - then the 1 ms
+ * settle and the read-back that clears DmaMayRun. TRUE only when it did:
+ * the buffer may then be reprogrammed by TbtRingStartEx. */
+BOOLEAN TbtRingStopVerified(PTBT_RING ring);
 /* Both ring 0 configurations as the last start programmed them: bases,
  * sizes, and Valid and Raw Mode set (a recovery that keeps the rings
  * requires it, cm_live.h). */

@@ -78,6 +78,12 @@
 
 /* The connection-manager thread's work (CM_NHI.WorkBits), taken in this
  * order on each wake (cm_thr.c). */
+/* PCI Command (PCI 3.0 6.2.2): the configuration word cm_thr.c writes for
+ * Bus Master, and a USB4 recovery's preparation for Memory Space too
+ * (record 22 section 7.7 part 2). */
+#define CM_PCI_COMMAND            0x04UL
+#define CM_PCI_COMMAND_BUS_MASTER 0x0004U
+
 #define CM_WORK_SYSTEM 0x01UL  /* complete the system power IRP            */
 #define CM_WORK_D3     0x02UL  /* a device power IRP below D0              */
 #define CM_WORK_D0     0x04UL  /* a device power IRP to D0, after the bus  */
@@ -164,6 +170,13 @@ typedef struct _CM_COUNTERS {
     ULONG U4ForcePowerKept; /* a router connected at stop: force power kept */
     ULONG U4Contained;      /* the USB4 profile contained (record 22 7.7)  */
     ULONG U4ContainRefused; /* a lifecycle step refused while contained    */
+    ULONG U4RecoverProbes;  /* record 22 7.7: probes while contained       */
+    ULONG U4RecoverRefused; /* an attempt refused by a step (logged)       */
+    ULONG U4RecoverOk;      /* committed                                   */
+    ULONG U4RecoverFinal;   /* the verified stop failed: final             */
+    ULONG U4RetireRequests; /* removal-only requests made                  */
+    ULONG U4RetirementOwed; /* a pass that found a barrier still standing  */
+    ULONG U4RecoverRearm;   /* an attempt that ended on an all-ones read   */
 } CM_COUNTERS;
 
 typedef struct _CM_NHI {
@@ -280,6 +293,50 @@ typedef struct _CM_NHI {
     volatile ULONG PnpStopPending;
     ULONG U4UpGen[TBT_U4_MAX_PORTS];
     ULONG U4UpValid;
+    /* Record 22 section 7.7's recovery (task 42-A.10), the driver's half.
+     * The tunnel-port set as last read healthy (each member's location,
+     * identity DW and bus-number DW 0x18), for part 3 step 6; the members
+     * whose stor98 entry lost UP at the containment (CmNvlinkLost), for
+     * R8b; the Command bits the preparation set; the retirement barrier
+     * (part 4: bit i, member i), with each barred member's removal-only
+     * request - when it was last made and the bridge filter's answer
+     * count then (NT) - and the members the recovery's RESYNC skips. */
+    ULONG RecSetCount;
+    ULONG RecSetBdf[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecSetId[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecSetBus[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecLostUp;
+    ULONG RecCmdSet;
+    ULONG RecBarred;
+    ULONG RecDebtMask;      /* the members the attempts' drains owe a
+                               removal (accumulated, read while every
+                               binding stands), barred at the commit       */
+    ULONG RecChanged;       /* the members step 6 found changed (bus, or
+                               the entry lost UP): their learned bindings
+                               are withdrawn after the commit             */
+    ULONG RecRetireSent;
+    ULONG RecRetireAtMs[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecRetireAns[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecUpValid;       /* U4UpValid as the containment found it      */
+    ULONG RecOnes;          /* an all-ones read inside the attempt
+                               (cm_thr.c latches it under PREPARE and
+                               RECOVERY): part 5's Rearm                  */
+    ULONG RecBusChanged;    /* members whose buses a committed recovery's
+                               step 6 found changed, with every old bus
+                               still owed (RecOldBuses, bit b for bus b):
+                               their old entries are released once their
+                               devnode's retirement was observed after the
+                               latest such change (RecRelOk, R8a)          */
+    ULONG RecOldBuses[XHCI_TBT_MAX_TUNNELS][8];
+    ULONG RecBusPend;       /* the same for the attempt now running, read
+                               afresh by each one, taken at its commit    */
+    ULONG RecOldBusPend[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecRelOk;         /* RecBusChanged members whose barrier was
+                               lifted by an observed retirement           */
+    /* Decision U27: the bind (1) or the resume (2) the loss interrupted;
+     * the stage is then CM_STAGE_FAILED, sampled and recovered as ACTIVE
+     * is, never a protocol failure's (0). */
+    ULONG U4LossFrom;
     /* The stor98 channel's two moments (CmNhiSetU4Hooks), NULL until task
      * 40-A.7's cm_nvlink.c registers them. */
     CM_U4_UP_HOOK U4UpHook;
@@ -493,9 +550,27 @@ typedef struct _CM_FILTER {
                                eject was posted                           */
     ULONG Unsettled;        /* a tunnel change since its last BusRelations */
     ULONG ChangeSeq;        /* tunnel changes seen, for that settling     */
+    ULONG RelAnswers;       /* successful BusRelations answers seen: the
+                               recovery's retirement proof (record 22
+                               section 7.7 part 4) wants one after its
+                               removal-only request                       */
+    ULONG RelEmptyAt;       /* the RelAnswers value of the last settled
+                               answer that was complete and reported no
+                               PDO, 0 once a later answer reported one   */
+    ULONG ChildLive;        /* child filters attached below and not yet
+                               removed (CmRegAttLink, CmRegAttRemoved):
+                               that proof waits for each one's own
+                               removal                                    */
 
     /* ---- child ---- */
-    struct _CM_FILTER *Bridge;  /* NULL for a child AddDevice made        */
+    struct _CM_FILTER *Bridge;  /* the bridge the child sits below: the one
+                               whose BusRelations attached it, or for one
+                               AddDevice made the one reporting its PDO when
+                               it linked (CmRegAttLink); NULL if none     */
+    ULONG ChildCounted;     /* counted in that bridge's ChildLive         */
+    ULONG Unattributed;     /* AddDevice made, no bridge named for it yet */
+    ULONG TruncSeen;        /* a bridge: an answer once held more PDOs than
+                               its snapshot keeps (CM_SNAP_MAX)           */
     ULONG QueryRemoved;     /* a query-remove not cancelled (both kinds)   */
     ULONG SurpriseRemoved;
 
@@ -582,6 +657,19 @@ VOID CmNhiU4Contain(PCM_NHI nhi);
 /* The same with the reconciliation chosen: FALSE on the stop's path, which
  * never calls into PnP from inside a PnP request (record 22 section 7.7). */
 VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile);
+/* Record 22 section 7.7's recovery (task 42-A.10): one probe of a
+ * contained USB4 instance at `nowMs` and, as the monitor's table admits,
+ * the preparation, the recovery and its commit (cm_nhi.c). The thread,
+ * PASSIVE_LEVEL. */
+VOID CmNhiU4Probe(PCM_NHI nhi, ULONG nowMs);
+/* The retirement barrier of part 4, once per pass of an ACTIVE USB4
+ * instance before its tick: each barred member's devnode retirement read,
+ * its removal-only request made or retried, and every port's Barred set
+ * from it (TbtU4SetBarred). The thread, PASSIVE_LEVEL. */
+VOID CmNhiU4Barrier(PCM_NHI nhi);
+/* Whether the instance is one the probe serves: a contained USB4 instance
+ * ACTIVE, or FAILED by a loss inside its bind or resume (U27). */
+BOOLEAN CmNhiU4Probing(PCM_NHI nhi);
 /* The value RX ring 0's size register holds under the USB4 profile: what
  * the bind and every resume must read back before the monitor is armed. */
 #define CM_U4_RX_SIZE_VALUE \

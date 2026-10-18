@@ -251,6 +251,15 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     LONG rc;
     ULONG v;
 
+    if (nhi->U4On && nhi->DevicePower == PowerDeviceD0 &&
+        nhi->Live.State == CM_LIVE_CONTAINED &&
+        (CmLiveU4Wake(&nhi->Live) & CM_LIVE_ACT_SNAPSHOT) != 0) {
+        /* Record 22 section 7.7 part 5: back in D0, a contained instance
+         * is probed at once; an attempt the suspend cancelled starts a
+         * new episode with no second outage asked of it. */
+        TbtU4Snapshot(&nhi->U4);
+        CmLogNote(nhi, "u4.recover.snapshot", CmLiveEpisode(&nhi->Live));
+    }
     if (!nhi->Suspended || nhi->DevicePower != PowerDeviceD0) {
         return TRUE;
     }
@@ -375,7 +384,10 @@ resumed:
     CmNhiDrainActions(nhi);
     if (lost && nhi->U4On) {
         /* Record 22 section 7.7: the USB4 profile's containment, its own
-         * loss bracket and request inside (CmNhiU4ContainEx). */
+         * loss bracket and request inside (CmNhiU4ContainEx); the stage
+         * is the loss-interrupted resume's (U27), which the probe serves
+         * and the recovery's commit makes ACTIVE again. */
+        nhi->U4LossFrom = 2;
         CmNhiU4Contain(nhi);
     } else if (lost && nhi->ReenumOn) {
         CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));

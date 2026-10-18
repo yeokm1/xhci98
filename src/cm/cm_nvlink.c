@@ -110,6 +110,26 @@ BOOLEAN CmNvlinkRetireEntry(PSTOR98LS_TABLE t, ULONG index)
     return TRUE;
 }
 
+BOOLEAN CmNvlinkReleaseEntry(PSTOR98LS_TABLE t, ULONG index)
+{
+    PSTOR98LS_ENTRY e;
+
+    if (t == NULL || index >= STOR98LS_ENTRIES) {
+        return FALSE;
+    }
+    e = &t->Entry[index];
+    if ((e->Flags & STOR98LS_IN_USE) == 0 ||
+        (e->Flags & CM_NVLINK_REMOVE_PENDING) != 0) {
+        return FALSE;
+    }
+    /* R6b's update; the entry is never given out again (its Sequence is
+     * not 0, cmNvFree), so no other function inherits it. */
+    cmNvBegin(e);
+    e->Flags = 0;
+    cmNvEnd(e);
+    return TRUE;
+}
+
 ULONG CmNvlinkRetire(PSTOR98LS_TABLE t, ULONG bus)
 {
     ULONG i;

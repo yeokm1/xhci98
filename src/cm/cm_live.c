@@ -26,6 +26,9 @@ static ULONG cmLivePeriod(const CM_LIVE *live)
     case CM_LIVE_CONFIG_LOST:
     case CM_LIVE_RECOVERY_FAILED:
         return CM_LIVE_SLOW_MS;
+    case CM_LIVE_CONTAINED:
+        /* Record 22 section 7.7: probed once a second, final excepted. */
+        return live->Sub == CM_LIVE_SUB_FINAL ? 0 : CM_LIVE_SLOW_MS;
     default:
         return 0;
     }
@@ -62,7 +65,9 @@ BOOLEAN CmLiveArm(PCM_LIVE live, ULONG baseline, ULONG nowMs)
 
 VOID CmLiveDisarm(PCM_LIVE live)
 {
-    if (live->State != CM_LIVE_REVOKED && live->State != CM_LIVE_CONTAINED) {
+    if (live->State != CM_LIVE_REVOKED && live->State != CM_LIVE_CONTAINED &&
+        live->State != CM_LIVE_PREPARING &&
+        !(live->Usb4 && live->State == CM_LIVE_RECOVERING)) {
         live->State = CM_LIVE_OFF;
     }
     live->Ones = 0;
@@ -108,6 +113,8 @@ static ULONG cmLiveLoss(PCM_LIVE live, ULONG state)
     live->Episode++;
     if (live->Usb4) {
         live->State = CM_LIVE_CONTAINED;
+        live->Sub = CM_LIVE_SUB_PROBING;
+        live->Rearm = 0;
         live->Counters.Contained++;
         return CM_LIVE_ACT_STOP_TRANSPORT | CM_LIVE_ACT_CONTAIN |
                CM_LIVE_ACT_LOG;
@@ -298,6 +305,8 @@ BOOLEAN CmLiveAdmits(const CM_LIVE *live, ULONG cls)
         return TRUE;
     case CM_ACCESS_RECOVERY:
         return (BOOLEAN)(live->State == CM_LIVE_RECOVERING);
+    case CM_ACCESS_PREPARE:
+        return (BOOLEAN)(live->State == CM_LIVE_PREPARING);
     default:
         return (BOOLEAN)(live->State == CM_LIVE_OFF ||
                          live->State == CM_LIVE_ACTIVE);
@@ -320,4 +329,142 @@ ULONG CmLiveReconcileOwed(PCM_LIVE live)
         return 0;
     }
     return cmLiveReconcile(live);
+}
+
+/* ---- the USB4 profile's recovery (record 22 section 7.7 part 5) ---- */
+
+VOID CmLiveContain(PCM_LIVE live, ULONG nowMs)
+{
+    if (cmLiveRevoked(live) || live->State == CM_LIVE_CONTAINED) {
+        return;
+    }
+    live->Episode++;
+    live->Counters.Contained++;
+    live->State = CM_LIVE_CONTAINED;
+    live->Sub = CM_LIVE_SUB_PROBING;
+    live->Rearm = 0;
+    live->Ones = 0;
+    live->LastMs = nowMs;
+    live->HaveLast = 1;
+}
+
+ULONG CmLiveProbe(PCM_LIVE live, ULONG nowMs, ULONG result)
+{
+    if (cmLiveRevoked(live) || live->State != CM_LIVE_CONTAINED ||
+        live->InTransition) {
+        return 0;
+    }
+    live->Counters.Samples++;
+    live->LastMs = nowMs;
+    live->HaveLast = 1;
+    switch (live->Sub) {
+    case CM_LIVE_SUB_PROBING:
+        if (result == CM_LIVE_PROBE_OK) {
+            live->State = CM_LIVE_PREPARING;
+            return CM_LIVE_ACT_PREPARE | CM_LIVE_ACT_LOG;
+        }
+        if (result == CM_LIVE_PROBE_BAR) {
+            /* A base address is the bus driver's to assign: this episode
+             * is over, a new one is the trigger. */
+            live->Sub = CM_LIVE_SUB_COOLDOWN;
+            live->Rearm = 0;
+            live->Counters.RecoveryFailed++;
+            return CM_LIVE_ACT_LOG;
+        }
+        return 0;
+    case CM_LIVE_SUB_COOLDOWN:
+        if (result == CM_LIVE_PROBE_ONES) {
+            live->Rearm = 1;
+            return 0;
+        }
+        if (live->Rearm) {
+            live->Rearm = 0;
+            live->Episode++;
+            live->Sub = CM_LIVE_SUB_PROBING;
+            return CM_LIVE_ACT_SNAPSHOT | CM_LIVE_ACT_LOG;
+        }
+        return 0;
+    default:
+        return 0;
+    }
+}
+
+static VOID cmLiveCooldown(PCM_LIVE live, BOOLEAN ones)
+{
+    live->State = CM_LIVE_CONTAINED;
+    live->Sub = CM_LIVE_SUB_COOLDOWN;
+    live->Rearm = ones ? 1UL : 0UL;
+    live->Ones = 0;
+    live->Counters.RecoveryFailed++;
+}
+
+ULONG CmLivePrepared(PCM_LIVE live, BOOLEAN ok, BOOLEAN ones)
+{
+    if (cmLiveRevoked(live) || live->State != CM_LIVE_PREPARING) {
+        return 0;
+    }
+    if (!ok) {
+        cmLiveCooldown(live, ones);
+        return CM_LIVE_ACT_LOG;
+    }
+    live->State = CM_LIVE_RECOVERING;
+    live->Counters.Recoveries++;
+    return CM_LIVE_ACT_RECOVER_FULL | CM_LIVE_ACT_LOG;
+}
+
+BOOLEAN CmLiveU4Recovered(PCM_LIVE live, ULONG episode, BOOLEAN ok,
+                          BOOLEAN final, BOOLEAN ones, ULONG sample,
+                          ULONG nowMs)
+{
+    if (cmLiveRevoked(live) || live->State != CM_LIVE_RECOVERING ||
+        episode != live->Episode) {
+        live->Counters.LateCompletions++;
+        return FALSE;
+    }
+    if (final) {
+        live->State = CM_LIVE_CONTAINED;
+        live->Sub = CM_LIVE_SUB_FINAL;
+        live->Counters.RecoveryFailed++;
+        return FALSE;
+    }
+    if (!ok || sample == CM_LIVE_ONES ||
+        (live->Baseline != 0 && sample != live->Baseline)) {
+        cmLiveCooldown(live, (BOOLEAN)(ones || sample == CM_LIVE_ONES));
+        return FALSE;
+    }
+    live->State = CM_LIVE_ACTIVE;
+    live->Sub = CM_LIVE_SUB_PROBING;
+    live->Baseline = sample;
+    live->Ones = 0;
+    live->Rearm = 0;
+    live->LastMs = nowMs;
+    live->HaveLast = 1;
+    live->Counters.RecoveredOk++;
+    return TRUE;
+}
+
+VOID CmLiveU4Interrupt(PCM_LIVE live)
+{
+    if (cmLiveRevoked(live) ||
+        (live->State != CM_LIVE_PREPARING &&
+         !(live->Usb4 && live->State == CM_LIVE_RECOVERING))) {
+        return;
+    }
+    cmLiveCooldown(live, TRUE);
+}
+
+ULONG CmLiveU4Wake(PCM_LIVE live)
+{
+    if (cmLiveRevoked(live) || live->State != CM_LIVE_CONTAINED ||
+        live->Sub == CM_LIVE_SUB_FINAL) {
+        return 0;
+    }
+    live->HaveLast = 0;
+    if (live->Sub == CM_LIVE_SUB_COOLDOWN && live->Rearm) {
+        live->Rearm = 0;
+        live->Episode++;
+        live->Sub = CM_LIVE_SUB_PROBING;
+        return CM_LIVE_ACT_SNAPSHOT | CM_LIVE_ACT_LOG;
+    }
+    return 0;
 }

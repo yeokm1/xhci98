@@ -218,6 +218,21 @@ typedef struct _CM_CFGWK {
     ULONG NoScan;           /* members whose next re-enumeration reads no
                                configuration space (no vanished-child
                                scan): CONTROLLER_UNAVAILABLE's           */
+    ULONG Hold;             /* members whose re-enumeration is held: the
+                               recovery's retirement barrier (CmCfgwkHold) */
+    ULONG GoneOnly;         /* members whose owed removal includes a
+                               removal-only request (CmCfgwkGone): every
+                               child found then is removed, and it is
+                               clean only once the bridge has none        */
+    ULONG EnumBusy;         /* members with a CmCfgmgReenumerate or a
+                               no-IRQ operation admitted and not yet
+                               returned (cmWkEnumAdmit, cmWkNiAdmit): the
+                               barrier's removal-only request waits for
+                               them (CmCfgwkEnumBusy)                     */
+    ULONG GoneClean;        /* members whose last CONTROLLER_UNAVAILABLE
+                               removal resolved with every recorded
+                               devnode removed or absent (CmCfgwkRetired,
+                               record 22 section 7.7's barrier)          */
     ULONG Retry;            /* member calls owed after a failure          */
     ULONG RetryVanish;
     ULONG RetryAt;          /* ms clock of the last failure               */
@@ -956,6 +971,46 @@ static ULONG cmWkIdHash(const char *id)
 
 /* TRUE while member i owes CONTROLLER_UNAVAILABLE's removal (read now,
  * under the lock). */
+static BOOLEAN cmWkHeld(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    BOOLEAN held;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    held = (BOOLEAN)((w->Hold & (1UL << i)) != 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return held;
+}
+
+/* A re-enumeration of member i admitted against the retirement barrier:
+ * the hold read and the call marked in flight under one lock, so a hold
+ * raised after this either refused it or finds it in EnumBusy, and the
+ * barrier's removal-only request is not made until it has returned
+ * (CmCfgwkEnumBusy). The CONFIGMG call itself is made outside the lock;
+ * cmWkEnumDone ends it. */
+static BOOLEAN cmWkEnumAdmit(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    BOOLEAN ok;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    ok = (BOOLEAN)((w->Hold & (1UL << i)) == 0);
+    if (ok) {
+        w->EnumBusy |= 1UL << i;
+    }
+    KeReleaseSpinLock(&w->Lock, irql);
+    return ok;
+}
+
+static VOID cmWkEnumDone(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    w->EnumBusy &= ~(1UL << i);
+    KeReleaseSpinLock(&w->Lock, irql);
+}
+
 static BOOLEAN cmWkGoneOwed(PCM_CFGWK w, ULONG i)
 {
     KIRQL irql;
@@ -1038,6 +1093,51 @@ static VOID cmWkGoneTake(CM_WK_PORT *p)
     }
     p->Ret.Count = 0;
     p->GoneTries = 0;
+}
+
+/*
+ * Record 22 section 7.7's removal-only request on member i, whose tunnel
+ * was drained: every child the bridge has now joins the Gone set at this
+ * generation, so the removal takes whatever devnode of the old endpoint is
+ * still there, however the retained inventory was left. With `add` FALSE
+ * it only reads. *none TRUE when a complete list shows no child at all -
+ * the retirement this request waits for. FALSE when the list or an id
+ * could not be read (nothing proven).
+ */
+static BOOLEAN cmWkGoneSeed(PCM_CFGWK w, ULONG i, BOOLEAN add, BOOLEAN *none)
+{
+    CM_WK_PORT *p;
+    ULONG bridge;
+    ULONG children[CM_WK_KNOWN];
+    ULONG count;
+    ULONG c;
+    BOOLEAN complete;
+    char text[CMG_MAX_DEVICE_ID_LEN + 1];
+
+    p = &w->Port[i];
+    *none = FALSE;
+    bridge = cmWkFindDevnode(w, i);
+    if (bridge == 0) {
+        return FALSE;
+    }
+    count = cmWkChildren(w, bridge, children, CM_WK_KNOWN, &complete);
+    if (!complete) {
+        return FALSE;
+    }
+    *none = (BOOLEAN)(count == 0);
+    if (!add) {
+        return TRUE;
+    }
+    for (c = 0; c < count; c++) {
+        if (!cmWkGo(w) ||
+            CmCfgmgDeviceId(&w->Cfgmg, children[c], text, sizeof(text)) !=
+                CMG_CR_SUCCESS) {
+            return FALSE;
+        }
+        text[CMG_MAX_DEVICE_ID_LEN] = '\0';
+        cmWkIdsAdd(&p->Gone, children[c], cmWkIdHash(text), p->PubGen);
+    }
+    return TRUE;
 }
 
 static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
@@ -1205,6 +1305,7 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     ULONG egen;
     ULONG want[CM_PORTS_PATH_MAX];
     LARGE_INTEGER pause;
+    KIRQL irql;
     char text[CMG_MAX_DEVICE_ID_LEN + 1];
 
     if (!cmWkCurrent(w, i, gen)) {
@@ -1337,9 +1438,24 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     if (cmWkCurrent(w, i, gen)) {
         return TRUE;
     }
+    if (!cmWkEnumAdmit(w, i)) {
+        /* Record 22 section 7.7's retirement barrier stands (the request
+         * that made this stale is its removal-only one): the rescan owed
+         * is posted, and the enumeration pass holds it until the barrier
+         * is lifted. */
+        KeAcquireSpinLock(&w->Lock, &irql);
+        w->ReqReenum |= 1UL << i;
+        KeReleaseSpinLock(&w->Lock, irql);
+        return FALSE;
+    }
     /* Stale since the query: the rescan that the removal owes is made
      * here, not left to a request that may already have run. */
     cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
+    /* The generation moved before the admission ends (the caller moves it
+     * again on seeing the call: still one new generation for every entry
+     * recorded before it). */
+    w->Port[i].PubGen++;
+    cmWkEnumDone(w, i);
     w->C.Calls++;
     if (cr != CMG_CR_SUCCESS) {
         w->C.CallFailures++;
@@ -1718,6 +1834,11 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
             return TRUE;
         }
     }
+    if (!cmWkEnumAdmit(w, i)) {
+        /* The retirement barrier rose while this operation ran (the
+         * pass checked it before): failed, retried once it is lifted. */
+        return FALSE;
+    }
     cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
     p->PubGen++;
     w->C.Calls++;
@@ -1740,6 +1861,9 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
          * later CONTROLLER_UNAVAILABLE. */
         cmWkRetain(w, i, bridge);
     }
+    /* Admitted until its bookkeeping is done: a removal-only request
+     * posted after this sees the generation and the inventory it left. */
+    cmWkEnumDone(w, i);
     return (BOOLEAN)(cr == CMG_CR_SUCCESS);
 }
 
@@ -1813,8 +1937,10 @@ static VOID cmWkMark(PCM_CFGWK w, ULONG i, BOOLEAN mark)
 /* ---- a function with no interrupt (design record 28, task 42-A.15) ----- */
 
 /* Every submission's gate (record 28, "the controller's loss and the
- * member's gates"): the worker not leaving, the claim held, and neither
- * CONTROLLER_UNAVAILABLE's removal nor its no-scan re-enumeration owed. */
+ * member's gates"): the worker not leaving, the claim held, neither
+ * CONTROLLER_UNAVAILABLE's removal nor its no-scan re-enumeration owed,
+ * and no retirement barrier standing on the member (record 22 section
+ * 7.7, CmCfgwkHold). */
 static ULONG cmWkNiGate(PCM_CFGWK w, ULONG i)
 {
     KIRQL irql;
@@ -1822,8 +1948,29 @@ static ULONG cmWkNiGate(PCM_CFGWK w, ULONG i)
 
     KeAcquireSpinLock(&w->Lock, &irql);
     open = (ULONG)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
-                   ((w->ReqGone | w->NoScan | w->NiClaimLost) &
+                   ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold) &
                     (1UL << i)) == 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return open;
+}
+
+/* One no-IRQ operation admitted: the gate read and the operation marked
+ * in flight (EnumBusy) under one lock, so a retirement hold raised after
+ * this either refused it or finds it busy and the removal-only request
+ * follows its completion (record 22 section 7.7, CmCfgwkEnumBusy);
+ * cmWkEnumDone ends it. */
+static BOOLEAN cmWkNiAdmit(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    BOOLEAN open;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    open = (BOOLEAN)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
+                     ((w->ReqGone | w->NoScan | w->NiClaimLost | w->Hold) &
+                      (1UL << i)) == 0);
+    if (open) {
+        w->EnumBusy |= 1UL << i;
+    }
     KeReleaseSpinLock(&w->Lock, irql);
     return open;
 }
@@ -2295,7 +2442,15 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
     ops = 0;
     while (ops++ < CM_WK_NI_OPS && CmNiNext(m, &ctx, &op)) {
         state = m->Dev[op.Dev].State;
-        cmWkNiExec(w, i, &op, &res);
+        if (cmWkNiAdmit(w, i)) {
+            cmWkNiExec(w, i, &op, &res);
+            cmWkEnumDone(w, i);
+        } else {
+            /* The gate closed since the pass sampled it: not made. */
+            CmZero(&res, sizeof(res));
+            res.Id = op.Id;
+            res.Cr = CMG_CR_FAILURE;
+        }
         ctx.Now = cmWkSince(w->NiBase);
         ctx.Gate = cmWkNiGate(w, i);
         CmNiTake(m, &ctx, &res);
@@ -2670,10 +2825,14 @@ static VOID cmWkThread(PVOID context)
     ULONG take;
     ULONG noScan;
     ULONG goneRc;
+    ULONG goneOnly;
     ULONG seq[XHCI_TBT_MAX_TUNNELS];
     ULONG i;
     ULONG lostClaim;
     PCM_CFGWK_PCI pci;
+    BOOLEAN clean;
+    BOOLEAN only;
+    BOOLEAN none;
     BOOLEAN open;
     BOOLEAN go;
     BOOLEAN timed;
@@ -2726,6 +2885,7 @@ static VOID cmWkThread(PVOID context)
             }
         }
         gone = w->ReqGone;
+        goneOnly = w->GoneOnly;
         if ((gone & ~take) != 0 && cmWkSince(w->GoneAt) < CM_WK_RETRY_MS) {
             /* An unresolved removal is tried again at the retry
              * interval; one just taken at once. */
@@ -2814,6 +2974,13 @@ static VOID cmWkThread(PVOID context)
                 if (!go) {
                     break;
                 }
+                only = (BOOLEAN)((goneOnly & (1UL << i)) != 0);
+                if (only) {
+                    /* A removal-only request: whatever children the
+                     * bridge has now are the old endpoint's. */
+                    cmWkOp(w, i, gen[i]);
+                    (VOID)cmWkGoneSeed(w, i, TRUE, &none);
+                }
                 goneRc = cmWkGone(w, i, gen[i]);
                 if (goneRc == CM_WK_GONE_STALE) {
                     continue;
@@ -2825,8 +2992,18 @@ static VOID cmWkThread(PVOID context)
                     KeReleaseSpinLock(&w->Lock, irql);
                     continue;
                 }
+                clean = FALSE;
                 if (goneRc == CM_WK_GONE_DONE) {
                     w->C.GoneDone++;
+                    /* Nothing refused went back to the retained set. */
+                    clean = (BOOLEAN)(w->Port[i].Ret.Count == 0);
+                    if (clean && only) {
+                        /* And the bridge has no child left (a complete
+                         * list read now), whatever the inventory said. */
+                        cmWkOp(w, i, gen[i]);
+                        clean = (BOOLEAN)(cmWkGoneSeed(w, i, FALSE, &none) &&
+                                          none);
+                    }
                 } else {
                     cmWkLog(w, "cm.reenum.9x.gone.abandoned",
                             (w->Port[i].Bdf << 8) | w->Port[i].Gone.Count);
@@ -2841,6 +3018,10 @@ static VOID cmWkThread(PVOID context)
                     /* Only the request this attempt took; a newer one is
                      * taken at the next pass. */
                     w->ReqGone &= ~(1UL << i);
+                    w->GoneOnly &= ~(1UL << i);
+                    if (clean) {
+                        w->GoneClean |= 1UL << i;
+                    }
                 }
                 KeReleaseSpinLock(&w->Lock, irql);
             }
@@ -2861,9 +3042,10 @@ static VOID cmWkThread(PVOID context)
                     failedVanish |= vanish & (1UL << i);
                     continue;
                 }
-                if (cmWkGoneOwed(w, i)) {
-                    /* Its CONTROLLER_UNAVAILABLE removal is still owed:
-                     * no re-enumeration before it, tried again later. */
+                if (cmWkGoneOwed(w, i) || cmWkHeld(w, i)) {
+                    /* Its CONTROLLER_UNAVAILABLE removal is still owed,
+                     * or its barrier stands: no re-enumeration before
+                     * it, tried again later. */
                     failed |= 1UL << i;
                     failedVanish |= vanish & (1UL << i);
                     continue;
@@ -3074,7 +3256,33 @@ VOID CmCfgwkPost(PCM_CFGWK w, ULONG reenum, ULONG vanish, ULONG active,
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
+static VOID cmWkGoneReq(PCM_CFGWK w, ULONG members, ULONG active,
+                        BOOLEAN reenum);
+
 VOID CmCfgwkUnavailable(PCM_CFGWK w, ULONG active)
+{
+    cmWkGoneReq(w, active, active, TRUE);
+}
+
+VOID CmCfgwkGone(PCM_CFGWK w, ULONG members, ULONG active)
+{
+    /* Removal only: no re-enumeration is asked (the barrier's member is
+     * re-enumerated by the change that lifts it). */
+    cmWkGoneReq(w, members, active, FALSE);
+}
+
+VOID CmCfgwkHold(PCM_CFGWK w, ULONG members)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    w->Hold = members;
+    KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&w->Lock, irql);
+}
+
+static VOID cmWkGoneReq(PCM_CFGWK w, ULONG members, ULONG active,
+                        BOOLEAN reenum)
 {
     KIRQL irql;
     ULONG i;
@@ -3082,26 +3290,54 @@ VOID CmCfgwkUnavailable(PCM_CFGWK w, ULONG active)
     KeAcquireSpinLock(&w->Lock, &irql);
     w->NiClaimLost |= w->Active & ~active;
     w->Active = active;
-    w->ReqGone |= active;
+    members &= active;
+    w->ReqGone |= members;
+    w->GoneClean &= ~members;
     for (i = 0; i < w->Members; i++) {
-        if (active & (1UL << i)) {
+        if (members & (1UL << i)) {
             w->GoneSeq[i]++;
         }
     }
     /* The re-enumeration after the removal reads no configuration space:
      * no vanished-child scan, here or in a coalesced earlier request. */
-    w->ReqReenum |= active;
-    w->ReqVanish &= ~active;
-    w->NoScan |= active;
-    w->Retry &= ~active;
-    w->RetryVanish &= ~active;
+    if (reenum) {
+        w->ReqReenum |= members;
+    } else {
+        w->GoneOnly |= members;
+    }
+    w->ReqVanish &= ~members;
+    w->NoScan |= members;
+    w->Retry &= ~members;
+    w->RetryVanish &= ~members;
     for (i = 0; i < w->Members; i++) {
-        if (active & (1UL << i)) {
+        if (members & (1UL << i)) {
             w->Gen[i]++;
         }
     }
     KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&w->Lock, irql);
+}
+
+ULONG CmCfgwkRetired(PCM_CFGWK w)
+{
+    KIRQL irql;
+    ULONG done;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    done = w->GoneClean & ~w->ReqGone;
+    KeReleaseSpinLock(&w->Lock, irql);
+    return done;
+}
+
+ULONG CmCfgwkEnumBusy(PCM_CFGWK w)
+{
+    KIRQL irql;
+    ULONG busy;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    busy = w->EnumBusy;
+    KeReleaseSpinLock(&w->Lock, irql);
+    return busy;
 }
 
 VOID CmCfgwkPrune(PCM_CFGWK w)

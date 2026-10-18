@@ -43,10 +43,6 @@
 #include "cm_nvlink.h"
 #include "cm_call.h"
 
-/* PCI Command (PCI 3.0 6.2.2), the only configuration word written here. */
-#define CM_PCI_COMMAND            0x04UL
-#define CM_PCI_COMMAND_BUS_MASTER 0x0004U
-
 /* 100 ns units per millisecond, for the relative due times. */
 #define CM_CLOCK_UNITS_PER_MS 10000UL
 /* The most ticks one clock read counts: 2^32 us / 15625 us at the usual
@@ -74,10 +70,12 @@ static NTSTATUS NTAPI cmConfigDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
  * never to the attached lower object: hcd_svc.c's route
  * (HcdSvcConfigSpace), read on Windows 98 SE and Windows 2000 for the HCD's
  * Bus Master write (26-A.2), and the one Windows 98 SE's own uhcd.sys
- * takes. A read zero-fills its buffer first. IRQL: PASSIVE_LEVEL.
+ * takes. One request; a read fills its buffer with `fill` first, and the
+ * bytes the bus driver reports (*info) are returned. IRQL: PASSIVE_LEVEL.
  */
-static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
-                        ULONG offset, ULONG length)
+static NTSTATUS cmConfigOnce(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
+                             ULONG offset, ULONG length, UCHAR fill,
+                             PULONG info)
 {
     PIO_STACK_LOCATION next;
     KEVENT done;
@@ -86,26 +84,21 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
     ULONG i;
     NTSTATUS status;
 
+    *info = 0;
     if (read) {
         p = (PUCHAR)buffer;
         for (i = 0; i < length; i++) {
-            p[i] = 0;
+            p[i] = fill;
         }
     }
-    /* After a surprise removal no configuration access either, and no
-     * configuration write the liveness gate does not admit for the current
-     * class (cm_live.h; the BAR accessors' rule): refused like any failed
-     * request. Reads stay open for the validation until revoked. */
-    if (nhi->Live.Revoked ||
-        (!read && (nhi->AccessClass == CM_ACCESS_PROBE ||
-                   !CmLiveAdmits(&nhi->Live, nhi->AccessClass)))) {
-        nhi->Counters.ConfigFailures++;
-        return FALSE;
+    if (nhi->Live.Revoked) {
+        /* Read again before each request: a surprise removal during the
+         * first of a strict read's two stops the second. */
+        return STATUS_DEVICE_REMOVED;
     }
     irp = IoAllocateIrp(nhi->Common.Pdo->StackSize, FALSE);
     if (irp == NULL) {
-        nhi->Counters.ConfigFailures++;
-        return FALSE;
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
     irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
     irp->IoStatus.Information = 0;
@@ -124,16 +117,83 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
                                     NULL);
     }
     status = irp->IoStatus.Status;
-    /* Under a recovery's validation (CfgStrict), a read that answered
-     * fewer bytes than asked is not an answer: its zero fill would pass
-     * for the identity. Not applied elsewhere: whether every target's bus
-     * driver reports the length is not read. */
-    if (NT_SUCCESS(status) && read && nhi->CfgStrict &&
-        irp->IoStatus.Information < length) {
-        status = STATUS_UNSUCCESSFUL;
-    }
+    *info = (ULONG)irp->IoStatus.Information;
     IoFreeIrp(irp);
+    return status;
+}
+
+/*
+ * A configuration access, refused where the gate does not admit it. A
+ * read zero-fills its buffer first. Under a recovery's validation
+ * (CfgStrict) a read is an answer only when it is proven whole: one that
+ * reports fewer bytes than asked is refused, and one that reports no
+ * length at all - Windows 98 SE's PCI bus driver completes the request
+ * with the data and Information 0 (the leg of task 42-A.10, 2026-10-19:
+ * every strict read refused, every other read of the same registers
+ * answered) - is made twice, through a fill of all ones and then of
+ * zeros, and is an answer only when both read the same: a byte the bus
+ * driver did not write differs between them. IRQL: PASSIVE_LEVEL.
+ */
+static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
+                        ULONG offset, ULONG length)
+{
+    UCHAR second[4];
+    PUCHAR p;
+    ULONG info;
+    ULONG i;
+    NTSTATUS status;
+
+    if (read) {
+        p = (PUCHAR)buffer;
+        for (i = 0; i < length; i++) {
+            p[i] = 0;
+        }
+    }
+    /* After a surprise removal no configuration access either, and no
+     * configuration write the liveness gate does not admit for the current
+     * class (cm_live.h; the BAR accessors' rule): refused like any failed
+     * request. Reads stay open for the validation until revoked. */
+    /* The USB4 recovery's preparation (record 22 section 7.7 part 2)
+     * writes the Command register and section 4.2's platform registers,
+     * and nothing else. */
+    if (nhi->Live.Revoked ||
+        (!read && (nhi->AccessClass == CM_ACCESS_PROBE ||
+                   !CmLiveAdmits(&nhi->Live, nhi->AccessClass) ||
+                   (nhi->AccessClass == CM_ACCESS_PREPARE &&
+                    offset != CM_PCI_COMMAND &&
+                    offset != TBT_ICL_VS_CAP_22 &&
+                    offset != TBT_ICL_VS_CAP_15)))) {
+        nhi->Counters.ConfigFailures++;
+        return FALSE;
+    }
+    if (!read || !nhi->CfgStrict) {
+        status = cmConfigOnce(nhi, read, buffer, offset, length, 0, &info);
+    } else if (length > sizeof(second)) {
+        status = STATUS_INVALID_PARAMETER;
+    } else {
+        status = cmConfigOnce(nhi, TRUE, buffer, offset, length, 0xFF, &info);
+        if (NT_SUCCESS(status) && info != 0 && info < length) {
+            status = STATUS_UNSUCCESSFUL;
+        } else if (NT_SUCCESS(status) && info == 0) {
+            status = cmConfigOnce(nhi, TRUE, second, offset, length, 0, &info);
+            if (NT_SUCCESS(status) && info != 0 && info < length) {
+                status = STATUS_UNSUCCESSFUL;
+            }
+            p = (PUCHAR)buffer;
+            for (i = 0; NT_SUCCESS(status) && i < length; i++) {
+                if (p[i] != second[i]) {
+                    status = STATUS_UNSUCCESSFUL;
+                }
+            }
+        }
+    }
     if (!NT_SUCCESS(status)) {
+        if (read) {
+            p = (PUCHAR)buffer;
+            for (i = 0; i < length; i++) {
+                p[i] = 0;
+            }
+        }
         nhi->Counters.ConfigFailures++;
         return FALSE;
     }
@@ -146,12 +206,18 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
 ULONG CmCfgRead32(PCM_NHI nhi, ULONG offset)
 {
     UCHAR b[4];
+    ULONG v;
 
     if (!cmConfig(nhi, TRUE, b, offset, 4)) {
         return 0xFFFFFFFFUL;
     }
-    return (ULONG)b[0] | ((ULONG)b[1] << 8) | ((ULONG)b[2] << 16) |
-           ((ULONG)b[3] << 24);
+    v = (ULONG)b[0] | ((ULONG)b[1] << 8) | ((ULONG)b[2] << 16) |
+        ((ULONG)b[3] << 24);
+    if (v == 0xFFFFFFFFUL && (nhi->AccessClass == CM_ACCESS_PREPARE ||
+                              nhi->AccessClass == CM_ACCESS_RECOVERY)) {
+        nhi->RecOnes = 1;
+    }
+    return v;
 }
 
 /* One word, so a write of the command register leaves the status
@@ -248,6 +314,7 @@ BOOLEAN CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on)
 static ULONG cmBarRead(PVOID context, ULONG offset)
 {
     PCM_NHI nhi;
+    ULONG v;
 
     nhi = (PCM_NHI)context;
     if (nhi->BarVa == NULL || offset > nhi->BarLength - 4 || (offset & 3)) {
@@ -257,7 +324,14 @@ static ULONG cmBarRead(PVOID context, ULONG offset)
         nhi->Live.Counters.RefusedReads++;
         return 0xFFFFFFFFUL;
     }
-    return READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    v = READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    if (v == 0xFFFFFFFFUL && (nhi->AccessClass == CM_ACCESS_PREPARE ||
+                              nhi->AccessClass == CM_ACCESS_RECOVERY)) {
+        /* Record 22 section 7.7 part 5: an outage seen inside a USB4
+         * recovery's attempt is that episode's all-ones probe. */
+        nhi->RecOnes = 1;
+    }
+    return v;
 }
 
 static VOID cmBarWrite(PVOID context, ULONG offset, ULONG value)
@@ -269,6 +343,7 @@ static VOID cmBarWrite(PVOID context, ULONG offset, ULONG value)
         return;
     }
     if (nhi->AccessClass == CM_ACCESS_PROBE ||
+        nhi->AccessClass == CM_ACCESS_PREPARE ||
         !CmLiveAdmits(&nhi->Live, nhi->AccessClass)) {
         nhi->Live.Counters.RefusedWrites++;
         return;
@@ -278,19 +353,33 @@ static VOID cmBarWrite(PVOID context, ULONG offset, ULONG value)
 
 ULONG CmThrProbe32(PCM_NHI nhi, ULONG offset)
 {
+    ULONG v;
+
     if (nhi->BarVa == NULL || offset > nhi->BarLength - 4 || (offset & 3) ||
         !CmLiveAdmits(&nhi->Live, CM_ACCESS_PROBE)) {
         return 0xFFFFFFFFUL;
     }
-    return READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    v = READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    if (v == 0xFFFFFFFFUL && (nhi->Live.State == CM_LIVE_PREPARING ||
+                              nhi->Live.State == CM_LIVE_RECOVERING)) {
+        nhi->RecOnes = 1;
+    }
+    return v;
 }
 
-/* TBT_HOST.Cancelled: the gate closed for the current class. */
+/* TBT_HOST.Cancelled: the gate closed for the current class. Inside a
+ * USB4 recovery's attempt an all-ones read already seen (RecOnes) is the
+ * gate's cancellation too (record 22 section 7.7 part 5): the attempt's
+ * sequences end at their next request or wait, and it fails. */
 static BOOLEAN cmCancelled(PVOID context)
 {
     PCM_NHI nhi;
 
     nhi = (PCM_NHI)context;
+    if (nhi->RecOnes && (nhi->AccessClass == CM_ACCESS_PREPARE ||
+                         nhi->AccessClass == CM_ACCESS_RECOVERY)) {
+        return TRUE;
+    }
     return (BOOLEAN)!CmLiveAdmits(&nhi->Live, nhi->AccessClass);
 }
 
@@ -612,12 +701,19 @@ VOID CmThrLiveness(PCM_NHI nhi)
     ULONG v;
     ULONG act;
 
-    if (nhi->Stage != CM_STAGE_ACTIVE || nhi->DevicePower != PowerDeviceD0 ||
+    if ((nhi->Stage != CM_STAGE_ACTIVE && !CmNhiU4Probing(nhi)) ||
+        nhi->DevicePower != PowerDeviceD0 ||
         nhi->Suspended || CmPowerSleeping(nhi)) {
         return;
     }
     now = cmNowMs(nhi);
     if (!CmLiveDue(&nhi->Live, now)) {
+        return;
+    }
+    if (nhi->U4On && nhi->Live.State == CM_LIVE_CONTAINED) {
+        /* Record 22 section 7.7 part 1: the USB4 profile's probe for
+         * access back, and what follows it. */
+        CmNhiU4Probe(nhi, now);
         return;
     }
     v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
