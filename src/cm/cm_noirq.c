@@ -702,8 +702,10 @@ static ULONG niPhaseType(ULONG phase)
         return CM_NI_RES_IRQ;
     case 2:
         return CM_NI_RES_IO;
-    default:
+    case 3:
         return CM_NI_RES_DMA;
+    default:
+        return CM_NI_RES_ALL;
     }
 }
 
@@ -759,7 +761,7 @@ static ULONG niWant(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
         /* Room for the next memory descriptor; none once the buffer is
          * full (the descriptor is then read for its type and size alone,
          * and a tenth memory one refuses the attempt). */
-        if (d->MemCount < CM_WK_NOIRQ_MEM) {
+        if (d->MemCount < CM_WK_NOIRQ_MEM && d->RdPhase < 4) {
             op->Off = d->MemCount * CM_NI_DESC_BYTES;
             op->Len = CM_NI_DESC_BYTES;
         }
@@ -984,8 +986,9 @@ static VOID niGate(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
 static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
                          const CM_NI_RES *res)
 {
-    if (res->Cr == CM_NI_CR_NO_MORE_RES_DES && d->RdPhase < 3) {
-        /* This type read to its end: the next, from the configuration. */
+    if (res->Cr == CM_NI_CR_NO_MORE_RES_DES && d->RdPhase < 4) {
+        /* This type read to its end: the next, from the configuration;
+         * the last phase reads every type, for any other one. */
         d->RdPhase++;
         d->RdAt = d->Source;
         return;
@@ -1015,6 +1018,14 @@ static VOID niDescriptor(PCM_NI_MEMBER m, CM_NI_DEV *d, const CM_NI_CTX *ctx,
         return;
     }
     d->RdAt = res->Rd;
+    if (d->RdPhase == 4) {
+        /* The every-type read: memory and IRQ were taken by their own
+         * phases; anything else (an OEM or ignored type) refuses. */
+        if (res->Type != CM_NI_RES_MEM && res->Type != CM_NI_RES_IRQ) {
+            niExclude(m, d, CM_NI_W_CONFIG);
+        }
+        return;
+    }
     if (res->Type == CM_NI_RES_IRQ) {
         d->HaveIrq = 1;
         return;
@@ -1113,13 +1124,14 @@ VOID CmNiTake(PCM_NI_MEMBER m, const CM_NI_CTX *ctx, const CM_NI_RES *res)
      * devnode a read shows gone or replaced is forgotten. */
     if ((op.Kind == CM_NI_OP_STATUS && niGone(m, d, res)) ||
         (op.Kind == CM_NI_OP_PLACE && (res->Place == CM_NI_PLACE_GONE ||
-                                       res->Place == CM_NI_PLACE_OTHER))) {
+                                       res->Place == CM_NI_PLACE_OTHER)) ||
+        (op.Kind == CM_NI_OP_READY &&
+         (res->Cr == CM_NI_CR_NO_SUCH_DEVNODE ||
+          res->Cr == CM_NI_CR_INVALID_DEVNODE))) {
         if (d->Used) {
             niForget(m, d);
         }
-        if (op.Kind == CM_NI_OP_STATUS || op.Kind == CM_NI_OP_PLACE) {
-            return;
-        }
+        return;
     }
     /* A result past the attempt's deadline, or taken with the gate
      * closed: the attempt is over, the result accounted (record 28,

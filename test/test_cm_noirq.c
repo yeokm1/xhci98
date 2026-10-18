@@ -667,6 +667,16 @@ static VOID test_gate(VOID)
     pass();
     CHECK_EQ(why(), CM_NI_W_CONFIG, "an I/O descriptor");
     model();
+    addrd(0, 0x8001, 8, 0xD2);
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "an ignored-bit type, read by the last phase");
+    model();
+    addrd(0, 0x21, 8, 0xD3);
+    start();
+    pass();
+    CHECK_EQ(why(), CM_NI_W_CONFIG, "an OEM type");
+    model();
     f.FailKind = CM_NI_OP_LC_LIST;
     f.FailCr = CM_NI_CR_FAILURE;
     start();
@@ -956,6 +966,19 @@ static VOID test_budgets_and_late(VOID)
     pass();
     CHECK_EQ(mem.Dev[0].Used, 0, "gone after the deadline: forgotten");
     CHECK_EQ(mem.C.Timeouts, 0, "not a timeout");
+    /* READY answering "no such devnode" with the gate closed: forgotten. */
+    model();
+    f.StartOnReprocess = 0;
+    f.FailKind = CM_NI_OP_READY;
+    f.FailCr = CM_NI_CR_NO_SUCH_DEVNODE;
+    f.GateOffAtKind = CM_NI_OP_READY;
+    start();
+    pass();
+    ctx.Now += CM_NI_READY_AFTER_MS + 1;
+    pass();
+    CHECK_EQ(mem.Dev[0].Used, 0, "gone at READY: forgotten");
+    CHECK_EQ(mem.Jrn[0].Used, 0, "journal retired");
+    ctx.Gate = 1;
     /* The gate closing during the line read: FAILED "controller". */
     model();
     f.GateOffAtKind = CM_NI_OP_LINE;

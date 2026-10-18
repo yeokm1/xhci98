@@ -63,6 +63,7 @@
 #define CM_NI_LCPRI_DISABLED    0xFFFFUL
 #define CM_NI_BASIC_LOG_CONF    0x0UL
 #define CM_NI_FORCED_LOG_CONF   0x4UL
+#define CM_NI_RES_ALL           0UL
 #define CM_NI_RES_MEM           1UL
 #define CM_NI_RES_IO            2UL
 #define CM_NI_RES_DMA           3UL
@@ -138,11 +139,14 @@
                                            Off, Len room. The source's
                                            descriptors are read one type at
                                            a time - memory, IRQ, I/O, DMA -
-                                           rather than with ResType_All
-                                           (read on 98 SE, 2026-10-19: a
+                                           then with ResType_All for any
+                                           other type, which refuses (read
+                                           on 98 SE, 2026-10-19: a
                                            ResType_All read of PCI.VXD's
                                            configuration of an NVMe at Code
-                                           29 answered no descriptor)      */
+                                           29 answered no descriptor, so it
+                                           is not relied on to find memory
+                                           or IRQ)                         */
 #define CM_NI_OP_ADD_EMPTY      7UL     /* Add_Empty_Log_Conf(Dn,
                                            LCPRI_DISABLED, LcKind |
                                            PRIORITY_EQUAL_LAST)            */
@@ -288,7 +292,7 @@ typedef struct _CM_NI_DEV {
     ULONG MemAdded;
     ULONG RdAt;             /* the descriptor read past next (RD_READ)    */
     ULONG RdPhase;          /* the type being read: 0 memory, 1 IRQ, 2 I/O,
-                               3 DMA                                     */
+                               3 DMA, 4 every type                       */
     ULONG LastStep;         /* the diagnostic's step reached              */
     ULONG LastCr;
     ULONG Pin0Gen;          /* a pin-0 function counted for gen + 1       */

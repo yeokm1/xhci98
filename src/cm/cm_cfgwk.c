@@ -1822,7 +1822,8 @@ static ULONG cmWkNiGate(PCM_CFGWK w, ULONG i)
 
     KeAcquireSpinLock(&w->Lock, &irql);
     open = (ULONG)(!w->Exit && (w->Active & (1UL << i)) != 0 &&
-                   ((w->ReqGone | w->NoScan) & (1UL << i)) == 0);
+                   ((w->ReqGone | w->NoScan | w->NiClaimLost) &
+                    (1UL << i)) == 0);
     KeReleaseSpinLock(&w->Lock, irql);
     return open;
 }
