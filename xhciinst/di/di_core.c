@@ -112,10 +112,15 @@ static int di_name_char(char c)
         (c >= '0' && c <= '9')) {
         return 1;
     }
+    /*
+     * The installer's set for an 8.3 part of its install directory
+     * (xhciinst\inst_core.c, inst_name83), so every directory it accepts
+     * reaches the helper whole.
+     */
     switch (c) {
     case '_': case '-': case '~': case '!': case '#': case '$':
-    case '&': case '@': case '^': case '(': case ')': case '{':
-    case '}':
+    case '&': case '@': case '^': case '\'': case '(': case ')':
+    case '{': case '}':
         return 1;
     default:
         return 0;
@@ -870,6 +875,23 @@ const char *di_out_result_text(DI_OUT *out, const char *verdict,
     }
     if (di_streq(verdict, DI_V_FAILED)) {
         di_field(out, "0", 0);
+    }
+    return di_finish(out);
+}
+
+/*
+ * RESULT refused <reason> [<detail>]: record 27 section 4.4's refusals,
+ * the reason and its detail separate fields ("refused command hwnd",
+ * "refused system 4.10.1998").
+ */
+const char *di_out_refused(DI_OUT *out, const char *reason,
+                           const char *detail)
+{
+    di_begin(out, "RESULT");
+    di_field(out, DI_V_REFUSED, 0);
+    di_field(out, reason, 0);
+    if (detail != 0 && detail[0] != '\0') {
+        di_field(out, detail, 0);
     }
     return di_finish(out);
 }

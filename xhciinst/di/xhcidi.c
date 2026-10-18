@@ -64,13 +64,7 @@ static int xhcidiFinish(int code)
 
 static int xhcidiRefuse(const char *reason, const char *detail)
 {
-    static char text[96];
-    lstrcpy(text, reason);
-    if (detail != NULL && detail[0] != '\0') {
-        lstrcat(text, " ");
-        lstrcat(text, detail);
-    }
-    di_emit(&g_run, di_out_result_text(&g_run.out, DI_V_REFUSED, text));
+    di_emit(&g_run, di_out_refused(&g_run.out, reason, detail));
     return xhcidiFinish(XHCIDI_EXIT_REFUSED);
 }
 
@@ -91,13 +85,19 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpszCmdLine,
     }
 
     /*
-     * Truncated and rewritten (section 4.1), shared with the installer that
-     * reads it while the job runs.
+     * Truncated and rewritten (section 4.1), and shared with the installer
+     * that reads it while the job runs. OpenFile ignores the sharing mode
+     * when it creates a file, so the file is created (or truncated) first,
+     * closed, and opened again for writing with OF_SHARE_DENY_NONE.
      */
     g_run.bad = 0;
     di_out_init(&g_run.out);
-    g_run.file = OpenFile(g_cmd.result, &of,
-                          OF_CREATE | OF_WRITE | OF_SHARE_DENY_NONE);
+    g_run.file = OpenFile(g_cmd.result, &of, OF_CREATE | OF_WRITE);
+    if (g_run.file == HFILE_ERROR) {
+        return XHCIDI_EXIT_NOFILE;
+    }
+    _lclose(g_run.file);
+    g_run.file = OpenFile(g_cmd.result, &of, OF_WRITE | OF_SHARE_DENY_NONE);
     if (g_run.file == HFILE_ERROR) {
         return XHCIDI_EXIT_NOFILE;
     }
@@ -109,6 +109,17 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpszCmdLine,
     if (parsed != DI_PARSE_OK) {
         return xhcidiRefuse("command", g_cmd.why);
     }
+
+    /*
+     * On these systems the 16-bit and 32-bit window handle spaces are one
+     * (record 27 section 4.1), so the installer's window is a window here;
+     * a number that names none is a malformed command line, refused before
+     * the JOB line as every other one is (section 4.4).
+     */
+    hwnd = (HWND)(UINT)g_cmd.hwnd;
+    if (hwnd != NULL && !IsWindow(hwnd)) {
+        return xhcidiRefuse("command", "hwnd");
+    }
     di_emit(&g_run, di_out_job(&g_run.out, &g_cmd));
 
     if ((LOWORD(GetVersion()) & 0xFFFFU) != XHCIDI_WIN16_VERSION ||
@@ -116,16 +127,6 @@ int PASCAL WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpszCmdLine,
         !di_system_supported(g_version_number)) {
         return xhcidiRefuse("system",
                             g_version_number[0] != '\0' ? g_version_number : "-");
-    }
-
-    /*
-     * On these systems the 16-bit and 32-bit window handle spaces are one
-     * (record 27 section 4.1), so the installer's window is a window here;
-     * a number that names none is a malformed command line.
-     */
-    hwnd = (HWND)(UINT)g_cmd.hwnd;
-    if (hwnd != NULL && !IsWindow(hwnd)) {
-        return xhcidiRefuse("command", "hwnd");
     }
 
     switch (g_cmd.job) {

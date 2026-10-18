@@ -4,8 +4,8 @@ test-gate.ps1 - the import gate's own cases (check-imports.ps1), run by
 selftest.cmd: the built image against its allowlist passes, and each of
 these fails - an allowlist missing a row the image imports, one with a row
 the image does not import, one naming an ordinal by another name than its
-import library gives it, one naming a row twice, and an image that is not
-NE (a PE image). The allowlists are temporary copies; nothing tracked is
+import library gives it, one naming a row twice, an image that is not NE
+(a PE image), and the image cut short inside its last relocation table. The allowlists are temporary copies; nothing tracked is
 changed.
 
 Exit code 0 = every case behaved.
@@ -46,6 +46,16 @@ Run 'an ordinal under another name' (@($rows | Where-Object { $_ -ne $first }) +
 Run 'a row twice' (@($rows) + @($first)) $Image 1
 if ($PeImage -ne '' -and (Test-Path -LiteralPath $PeImage)) {
     Run 'a PE image' $null $PeImage 1
+}
+# The image cut short by six bytes: its last relocation record loses its
+# tail, whichever kind it is.
+$cut = [System.IO.Path]::GetTempFileName()
+try {
+    $bytes = [System.IO.File]::ReadAllBytes($Image)
+    [System.IO.File]::WriteAllBytes($cut, $bytes[0..($bytes.Length - 7)])
+    Run 'an image cut short inside its relocation table' $null $cut 1
+} finally {
+    Remove-Item -LiteralPath $cut -ErrorAction SilentlyContinue
 }
 if ($bad -ne 0) { exit 1 }
 exit 0

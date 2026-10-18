@@ -161,6 +161,8 @@ const char *di_out_error(DI_OUT *out, const char *name, unsigned err);
 const char *di_out_result(DI_OUT *out, const char *verdict, unsigned err);
 const char *di_out_result_text(DI_OUT *out, const char *verdict,
                                const char *detail);
+const char *di_out_refused(DI_OUT *out, const char *reason,
+                           const char *detail);
 const char *di_out_end(DI_OUT *out);
 
 #endif

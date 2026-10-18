@@ -58,8 +58,17 @@ static void di_call(DI_RUN *run, const char *routine, const char *arg,
     di_emit(run, di_out_call(&run->out, routine, arg, (unsigned)err));
 }
 
+/*
+ * The end of a job at a call that did not return OK: ERR_DI_USER_CANCEL,
+ * from whichever call a Windows dialog was closed in, is cancelled
+ * (section 5.4); anything else failed, with an ERROR line first.
+ */
 static void di_fail(DI_RUN *run, RETERR err)
 {
+    if (err == ERR_DI_USER_CANCEL) {
+        di_emit(run, di_out_result(&run->out, DI_V_CANCELLED, (unsigned)err));
+        return;
+    }
     di_emit(run, di_out_error(&run->out, di_err_name((unsigned)err),
                               (unsigned)err));
     di_emit(run, di_out_result(&run->out, DI_V_FAILED, (unsigned)err));

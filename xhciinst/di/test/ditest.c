@@ -18,6 +18,9 @@
  *   DITEST list [<prefix>]                    devnodes: id, status, problem
  *   DITEST reg <device id>                    the Enum key and driver key
  *
+ * A device id ending in * is a prefix (install, remove, reg): the first
+ * present devnode whose id begins with it, else the first Enum entry.
+ *
  * Options before the command: /w gives the helper the hwnd of a window of
  * DITEST's own, pumped by MsgWaitForMultipleObjects as the installer's is
  * (without it the hwnd is 0, the console tool's); /r <file> the result file
@@ -168,7 +171,13 @@ static int dtRun(const char *args)
     return ended && signalled ? 0 : 3;
 }
 
-static int dtList(const char *prefix)
+static char g_found[256];
+
+/*
+ * Every devnode (or, with find, the first whose device id begins with the
+ * prefix, without case, kept in g_found and not printed).
+ */
+static int dtList(const char *prefix, int find)
 {
     HMODULE m = LoadLibraryA("cfgmgr32.dll");
     PFN_LOCATE locate;
@@ -202,6 +211,10 @@ static int dtList(const char *prefix)
         id[0] = '\0';
         getid(dn, id, sizeof id, 0);
         if (prefix == NULL || _strnicmp(id, prefix, strlen(prefix)) == 0) {
+            if (find) {
+                strcpy(g_found, id);
+                return 0;
+            }
             status(&st, &pr, dn, 0);
             printf("%*s%s  status %08lX problem %lu\n", depth * 2, "", id, st, pr);
         }
@@ -212,13 +225,73 @@ static int dtList(const char *prefix)
         }
         while (sibling(&next, dn, 0) != 0) {
             if (depth == 0 || parent(&next, dn, 0) != 0) {
-                return 0;
+                return find ? 1 : 0;
             }
             dn = next;
             depth--;
         }
         dn = next;
     }
+}
+
+/*
+ * The first Enum\<enumerator>\<device>\<instance> key whose id begins with
+ * the prefix: an entry that is not present, for a removal.
+ */
+static int dtFindReg(const char *prefix)
+{
+    HKEY e, d, i;
+    DWORD a, b, c;
+    char en[64], dv[200], in[200], id[600];
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum", 0, KEY_READ, &e) != ERROR_SUCCESS) {
+        return 1;
+    }
+    for (a = 0; RegEnumKeyA(e, a, en, sizeof en) == ERROR_SUCCESS; a++) {
+        if (RegOpenKeyExA(e, en, 0, KEY_READ, &d) != ERROR_SUCCESS) {
+            continue;
+        }
+        for (b = 0; RegEnumKeyA(d, b, dv, sizeof dv) == ERROR_SUCCESS; b++) {
+            if (RegOpenKeyExA(d, dv, 0, KEY_READ, &i) != ERROR_SUCCESS) {
+                continue;
+            }
+            for (c = 0; RegEnumKeyA(i, c, in, sizeof in) == ERROR_SUCCESS; c++) {
+                _snprintf(id, sizeof id - 1, "%s\\%s\\%s", en, dv, in);
+                id[sizeof id - 1] = 0;
+                if (_strnicmp(id, prefix, strlen(prefix)) == 0 && strlen(id) < sizeof g_found) {
+                    strcpy(g_found, id);
+                    RegCloseKey(i);
+                    RegCloseKey(d);
+                    RegCloseKey(e);
+                    return 0;
+                }
+            }
+            RegCloseKey(i);
+        }
+        RegCloseKey(d);
+    }
+    RegCloseKey(e);
+    return 1;
+}
+
+/*
+ * A device id ending in * is a prefix: the first present devnode that
+ * matches, else the first Enum entry. Returns the id to use, or NULL.
+ */
+static const char *dtResolve(const char *arg)
+{
+    static char prefix[256];
+    size_t n = strlen(arg);
+    if (n == 0 || arg[n - 1] != '*' || n >= sizeof prefix) {
+        return arg;
+    }
+    memcpy(prefix, arg, n - 1);
+    prefix[n - 1] = 0;
+    if (dtList(prefix, 1) == 0 || dtFindReg(prefix) == 0) {
+        printf("DITEST: %s is %s\n", arg, g_found);
+        return g_found;
+    }
+    printf("DITEST: no device id begins %s\n", prefix);
+    return NULL;
 }
 
 static void dtValues(HKEY root, const char *path)
@@ -316,10 +389,11 @@ int main(int argc, char **argv)
         return 1;
     }
     if (_stricmp(argv[i], "list") == 0) {
-        return dtList(i + 1 < argc ? argv[i + 1] : NULL);
+        return dtList(i + 1 < argc ? argv[i + 1] : NULL, 0);
     }
     if (_stricmp(argv[i], "reg") == 0 && i + 1 < argc) {
-        return dtReg(argv[i + 1]);
+        const char *id = dtResolve(argv[i + 1]);
+        return id != NULL ? dtReg(id) : 1;
     }
     if (want_window && !dtMakeWindow()) {
         printf("DITEST: the window could not be made\n");
@@ -347,13 +421,21 @@ int main(int argc, char **argv)
         return dtRun(args);
     }
     if (_stricmp(argv[i], "remove") == 0 && i + 2 == argc) {
+        const char *id = dtResolve(argv[i + 1]);
+        if (id == NULL) {
+            return 1;
+        }
         _snprintf(args, sizeof args - 1, "%s remove %s %lu %s", XHCI_VER_STR, g_result,
-                  (unsigned long)(UINT_PTR)g_hwnd, argv[i + 1]);
+                  (unsigned long)(UINT_PTR)g_hwnd, id);
         return dtRun(args);
     }
     if (_stricmp(argv[i], "install") == 0 && i + 3 <= argc && i + 5 >= argc) {
+        const char *id = dtResolve(argv[i + 1]);
+        if (id == NULL) {
+            return 1;
+        }
         _snprintf(args, sizeof args - 1, "%s install %s %lu %s %s", XHCI_VER_STR, g_result,
-                  (unsigned long)(UINT_PTR)g_hwnd, argv[i + 1], argv[i + 2]);
+                  (unsigned long)(UINT_PTR)g_hwnd, id, argv[i + 2]);
         for (k = i + 3; k < argc; k++) {
             strcat(args, " ");
             strcat(args, argv[k]);

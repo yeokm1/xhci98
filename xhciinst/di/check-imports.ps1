@@ -86,6 +86,7 @@ for ($s = 0; $s -lt $segCount; $s++) {
     if (($flags -band 0x0100) -eq 0 -or $sector -eq 0) { continue }
     $rel = ($sector -shl $align) + $len
     $count = U16 $rel
+    if ($rel + 2 + 8 * $count -gt $b.Length) { Fail ("segment {0}'s relocation table runs past the end of the image" -f ($s + 1)) }
     for ($r = 0; $r -lt $count; $r++) {
         $o = $rel + 2 + 8 * $r
         $kind = (U8 ($o + 1)) -band 3

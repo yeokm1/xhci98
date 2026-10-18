@@ -155,6 +155,8 @@ static void test_paths(void)
     CHECK(di_path_ok("D:\\A\\B\\C\\D\\E.INF", 1), "deep");
     CHECK(di_path_ok("C:\\XHCI98\\DIRESULT", 0), "a result file with no extension");
     CHECK(di_path_ok("C:\\X~1\\R_1-2.TXT", 0), "a tilde, an underscore and a hyphen");
+    CHECK(di_path_ok("C:\\O'NEIL\\XHCI98.INF", 1), "an apostrophe, which the installer's 8.3 rule takes");
+    CHECK(di_path_ok("C:\\$!#&@^()\\{}.INF", 1), "every other symbol the installer's rule takes");
     CHECK(!di_path_ok("C:\\XHCI98\\DIRESULT", 1), "no extension is no INF");
     CHECK(!di_path_ok("C:\\", 0), "a drive's root alone");
     CHECK(!di_path_ok("C:\\X\\", 0), "a trailing backslash");
@@ -513,9 +515,25 @@ static void test_writer(void)
     file[0] = '\0';
     di_out_init(&o);
     put(di_out_header(&o, V));
-    put(di_out_result_text(&o, DI_V_REFUSED, "version"));
+    put(di_out_refused(&o, "version", NULL));
     put(di_out_end(&o));
     CHECK(strcmp(file, "XHCIDI 3.1.0.0\r\nRESULT refused version\r\nEND 2\r\n") == 0, "a version refusal");
+
+    /* Each refusal's reason and detail are separate fields (section 4.4). */
+    file[0] = '\0';
+    di_out_init(&o);
+    CHECK_EQ(parse(V " probe C:\\X\\R.TXT 99999", &c), DI_PARSE_COMMAND, "a refused hwnd");
+    put(di_out_header(&o, V));
+    put(di_out_refused(&o, "command", c.why));
+    put(di_out_end(&o));
+    CHECK(strcmp(file, "XHCIDI 3.1.0.0\r\nRESULT refused command hwnd\r\nEND 2\r\n") == 0,
+          "a command refusal: no JOB line, the reason and what was refused");
+    di_out_init(&o);
+    CHECK(strcmp(di_out_refused(&o, "system", "4.10.1998"), "RESULT refused system 4.10.1998\r\n") == 0,
+          "a system refusal with the build string");
+    CHECK(strcmp(di_out_refused(&o, "system", "4.10 A"), "RESULT refused system 4.10_A\r\n") == 0,
+          "a build string with a space stays one field");
+    CHECK(strcmp(di_out_refused(&o, "system", ""), "RESULT refused system\r\n") == 0, "no detail");
 
     file[0] = '\0';
     di_out_init(&o);
