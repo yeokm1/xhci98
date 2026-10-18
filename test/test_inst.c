@@ -2403,12 +2403,20 @@ static void test_di_helper(void)
     CHECK(strlen(longId) > INST_DI_JOB_PATH_CHARS &&
           !inst_di_cmdline(tail, sizeof(tail), "3.1.0.0", longId),
           "a job file over 80 characters is not passed");
-    CHECK(inst_di_cmdline(tail, sizeof(tail),
+    CHECK(strlen("C:\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\"
+                 "ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.TXT") == 80 &&
+          inst_di_cmdline(tail, sizeof(tail),
                           "1234567890123456789012345678901",
                           "C:\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\"
-                          "ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEF.TXT") &&
-          strlen(tail) <= INST_DI_TAIL_CHARS,
-          "the longest version and job file fit 126 characters");
+                          "ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.TXT") &&
+          strlen(tail) == 112 && strlen(tail) <= INST_DI_TAIL_CHARS,
+          "a 31-character version and an 80-character job file: 112");
+    CHECK(strlen("C:\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\"
+                 "ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDE\\ABC.TXT") == 81 &&
+          !inst_di_cmdline(tail, sizeof(tail), "3.1.0.0",
+                           "C:\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDEFGH.IJK\\"
+                           "ABCDEFGH.IJK\\ABCDEFGH.IJK\\ABCDE\\ABC.TXT"),
+          "an 81-character 8.3 job file is not passed");
 
     /* The job file's path. */
     CHECK(inst_di_jobpath(tail, sizeof(tail), "C:\\XHCI98") &&

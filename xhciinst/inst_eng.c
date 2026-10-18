@@ -11518,6 +11518,28 @@ static int own_delete(const char *path)
     return 0;
 }
 
+/* The job file a run from dir writes at its drive's root (dir too long or
+ * not 8.3 by its short name): 1 with its path, 0 when it would be
+ * beside the installer (own_remove_in's own name) or none. */
+static int job_file_for(const char *dir, char *out, size_t cap)
+{
+    char s[INST_PATH_CHARS];
+    char beside[INST_PATH_CHARS];
+    DWORD n;
+
+    out[0] = '\0';
+    n = GetShortPathNameA(dir, s, sizeof(s));
+    if (n == 0 || n >= sizeof(s)) {
+        inst_copy(s, dir, sizeof(s));
+    }
+    join(beside, sizeof(beside), s, INST_DI_JOB_NAME);
+    if (!inst_di_jobpath(out, cap, s) || inst_eq(out, beside)) {
+        out[0] = '\0';
+        return 0;
+    }
+    return 1;
+}
+
 static int own_remove_in(const char *dir, int window)
 {
     const char *names[4];
@@ -11536,9 +11558,14 @@ static int own_remove_in(const char *dir, int window)
         names[n] = inst_self_file(INST_MY_ARCH, INST_OWN_WINDOW);
         n++;
     }
-    /* An earlier run's job file (record 27 section 4.1). */
+    /* An earlier run's job file (record 27 section 4.1), beside the
+     * installer or, for a directory too long or not 8.3, at its drive's
+     * root. */
     join(path, sizeof(path), dir, INST_DI_JOB_NAME);
     if (!own_delete(path)) {
+        return 0;
+    }
+    if (job_file_for(dir, path, sizeof(path)) && !own_delete(path)) {
         return 0;
     }
     for (i = 0; i < n; i++) {
@@ -11553,6 +11580,17 @@ static int own_remove_in(const char *dir, int window)
 static int own_remove(void)
 {
     return own_remove_in(toolDir, 1);
+}
+
+/* The run's end: the helper's result and job files go (the job file is
+ * deleted after each job already; a helper that did not end keeps it until
+ * here). */
+static void helper_files_gone(void)
+{
+    if (helperResult[0] != '\0' && !stScreens) {
+        DeleteFileA(helperResult);
+        DeleteFileA(helperJobFile);
+    }
 }
 
 /* 1 when any of the installer's files (or its .TMP, .BAK or .DEL) is in
@@ -11571,6 +11609,10 @@ static int own_any_in(const char *dir)
         return 0;
     }
     join(path, sizeof(path), dir, INST_DI_RESULT_NAME);
+    if (file_state(path) != 0) {
+        return 1;
+    }
+    join(path, sizeof(path), dir, INST_DI_JOB_NAME);
     if (file_state(path) != 0) {
         return 1;
     }
@@ -12034,10 +12076,7 @@ int inst_eng_run(void)
 {
     int code = envNow.Nt ? run_install_nt() : run_install_9x();
 
-    if (helperResult[0] != '\0' && !stScreens) {
-        DeleteFileA(helperResult);
-        DeleteFileA(helperJobFile);
-    }
+    helper_files_gone();
     return code;
 }
 
@@ -12150,6 +12189,7 @@ int inst_eng_uninstall(void)
     PFN_MOVEEX moveEx = move_ex();
     char path[INST_PATH_CHARS];
 
+    helper_files_gone();
     if (tempCopyDir[0] != '\0' && !opts.List) {
         /* This run is the temporary copy (record 26 section 9.2): on NT
          * it goes at the restart; on 98 SE and ME it stays, said. */
