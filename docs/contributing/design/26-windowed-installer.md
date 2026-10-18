@@ -1,10 +1,13 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 4, 2026-10-18, reviewed and revised a third time (Stor98's
+Status: draft 5, 2026-10-18, reviewed and revised (the 98 SE and ME INF
+copies inventoried before and after, the shutdown line's unfinished
+form, the USB4 reconnection asked of every such update); draft 4,
+2026-10-18, reviewed and revised (Stor98's
 explicit bindings recorded on their own evidence, the 98 SE and ME copy
 record, the update precautions per system, the USB4 reconnection
 outcome, the shutdown line); draft 3, 2026-10-18, reviewed and revised
-again (Stor98's
+(Stor98's
 ownership by first binding, its staged copies kept across updates, its
 update precautions, its 98 SE and ME binding, the staging from the copy,
 an incomplete uninstall keeping its entry point); draft 2, 2026-10-18,
@@ -472,13 +475,14 @@ each as the console prints it), and the restart:
   asks for a shutdown and a fresh start rather than a warm restart after
   its update on those two systems (section 6.3); the final line of
   record 23 section 7.4 then reads "Changes were made. Please shut down
-  and start Windows again." in both front ends, with the exit code
-  unchanged (3), the one amendment of that section (section 12). On
+  and start Windows again." in both front ends, and its unfinished form
+  "Changes were made, but not everything is done: do what is said above
+  first, then shut down and start Windows again.", the exit codes (3,
+  and 2 or 4 by the failed and steps flags) unchanged: the one amendment
+  of that section, in the pure half's final-line rule (section 12). On
   2000 to 7 a Stor98 update keeps the ordinary restart. The console tool
-  never
-  restarts the machine (record 23 section 5.9): that is the window's one
-  addition to what the engine may do, and the console's final line is
-  unchanged (W5).
+  never restarts or shuts the machine down (record 23 section 5.9): that
+  is the window's one addition to what the engine may do (W5).
 - Where the run changed nothing, Finish closes.
 - Where steps are left, the second button ("Restart later", or "Shut
   down later" in the case above) is preselected and the page says to do
@@ -556,15 +560,21 @@ unasked). With the box ticked:
   ordinary restart flow stands, and one thing is added: on a USB4 host
   under this package's own connection manager, a driver change on a
   tunnelled drive stops the device, which the connection manager takes as
-  an eject and tears the tunnel down, after the call returns (record 24
-  section 5.2). A Stor98 device that is gone after its update there is
-  therefore not a failure of record 23 section 5.9's rule (section 8) but
-  "updated, awaiting reconnection": the Progress page asks to unplug the
-  drive and plug it in again and waits for it, bounded at two minutes and
-  skippable, then reads it back as any updated device; a device not
-  reconnected is a step left (exit 4), never a success and never a
-  failure, and is verified by the next run. The console tool prints the
-  same request and waits the same way.
+  an eject and tears the tunnel down, and that teardown is not
+  synchronised with the call's return (record 24 section 5.2): a
+  read-back right after the call may still see the device. So every
+  successful update of a Stor98 device behind a tunnel under that
+  connection manager (the device's unit a verified tunnel port's, record
+  24 section 4) is "updated, awaiting reconnection" whatever the first
+  read-back shows: the Progress page asks to unplug the drive and plug
+  it in again and waits, bounded at two minutes and skippable, until the
+  device has been seen gone and present again, and only then reads it
+  back as any updated device; a device not reconnected is a step left
+  (exit 4), never a success and never a failure, whether it is present or
+  gone at the time, and the next run verifies it. Record 23 section 5.9's
+  "gone after its install is a failure" is amended for this case alone
+  (section 12). The console tool prints the same request and waits the
+  same way.
 - **The record** (owner, 2026-10-18: the uninstall removes the bundled
   Stor98 only when this package's installer installed it). A key
   `HKLM\Software\xhci98\Stor98` with: `PreExisting` (`REG_DWORD` 1 when
@@ -574,11 +584,18 @@ unasked). With the box ticked:
   the setup engine made for this installer's installs, on NT the
   `oemNN.inf` name `SetupCopyOEMInf` returned when it made a new copy,
   never one it answered with an INF already in the store (that one was
-  there before and is left), and on 98 SE and ME the `INF\OTHER` copy a
-  recorded device's driver key names after its install when no entry
-  named it before (the flat copy in the install directory is the current
-  source, one directory replaced on an update under record 23 section
-  4.4's lists, not a copy the engine keeps, and is not recorded here);
+  there before and is left), and on 98 SE and ME an `INF\OTHER` copy
+  the engine created during one of this installer's installs: the
+  engine's `INF` and `INF\OTHER` directories are listed (names, sizes
+  and SHA-256s) before each helper install and after it, and a file that
+  was not there before and is named by the installed device's driver
+  key afterwards is recorded; a file that was there before, referenced
+  or not (a hand install's copy whose device was removed), is never
+  recorded and never deleted by this installer, and a file that appeared
+  without being named is left and said in the log (the flat copy in the
+  install directory is the current source, one directory replaced on an
+  update under record 23 section 4.4's lists, not a copy the engine
+  keeps, and is not recorded here);
   each value the Stor98 version, kept across updates, so that two bundled
   versions in succession leave two entries where the engine made two
   copies, which the leg reads; under `Devices` one value per device
@@ -687,9 +704,10 @@ key's `NTMPDriver` naming the group's `.sys`, `DriverVersion` or the
 binary's version at the package's, the devnode present with no problem
 code), and a device gone after its install, or left with a problem code,
 is a failure as on NT, with record 23's exception for a device that
-needs the restart, and the one of section 6.3 for a tunnelled Stor98
-device awaiting reconnection on 2000 to 7 (`DI_NEEDRESTART` or `DI_NEEDREBOOT` in the helper's
-result, record 27 section 5: "installed, restart pending"). A cancelled
+needs the restart (`DI_NEEDRESTART` or `DI_NEEDREBOOT` in the helper's
+result, record 27 section 5: "installed, restart pending") and, on 2000
+to 7 only, section 6.3's for a tunnelled Stor98 device awaiting
+reconnection. A cancelled
 wizard's entry of section 6.3 (recorded, not running now) is a step as
 before.
 
@@ -912,9 +930,12 @@ this list is the whole of it:
   copied unless asked".
 - Section 6.2 to 6.5: the helper in place of the printed steps for the
   devices it reaches; the steps kept for the device it cannot (section 7).
-- Section 7.1: `/stor98`, `/from`, `/console`; 7.4: the final line's one
-  new form, the shutdown line on 98 SE and ME after a Stor98 update, with
-  the exit codes unchanged.
+- Section 5.9: a tunnelled Stor98 device under the USB4 connection
+  manager is "updated, awaiting reconnection" after its update, never
+  a failure by its disappearance (section 6.3).
+- Section 7.1: `/stor98`, `/from`, `/console`; 7.4: the final line's
+  shutdown forms, finished and unfinished, on 98 SE and ME after a Stor98
+  update, with the exit codes unchanged.
 - Section 8.1: the Stor98 rows and the asked-or-advanced column; 8.3: the
   mixed state of two controllers kept; 8.4: the machine-wide location
   (42-A.17) and Stor98's locations; `/defaults` unchanged.
@@ -946,8 +967,8 @@ this list is the whole of it:
   built on the multithreaded static runtime (sections 3.3 and 4).
 - **W4** Under WOW64 the 32-bit window starts the x64 one and returns its
   exit code; the console tool keeps its refusal (section 4).
-- **W5** The window restarts Windows on "Restart now"; the console tool
-  never does (section 5.9).
+- **W5** The window restarts Windows on "Restart now" and shuts it down
+  on "Shut down now"; the console tool never does either (section 5.9).
 - **W6** The uninstall from the install directory relaunches a temporary
   copy of itself; on 98 SE and ME that copy is left in `TEMP` and said
   (section 9.2). Not taken: `WININIT.INI` (record 23 forbids it), a
