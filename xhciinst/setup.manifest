@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  setup.manifest - SETUP.EXE runs as the invoker (design record 26 section
+  2): Windows Vista and 7 would otherwise take a program named SETUP.EXE
+  for an installer and ask for elevation before it starts. The window it
+  starts asks for that itself. No Common Controls dependency: it draws
+  nothing but a message box. Windows 98, ME and 2000 ignore it. Embedded
+  by setup.rc as resource 1 of type 24 (RT_MANIFEST). ASCII only, CRLF
+  line endings.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity version="3.1.0.0" processorArchitecture="*" name="xhci98.setup" type="win32"/>
+  <description>xHCI98 Setup</description>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

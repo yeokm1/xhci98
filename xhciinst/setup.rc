@@ -1,0 +1,42 @@
+/*
+ * setup.rc - the resources of SETUP.EXE, the package root's starter of the
+ * installer's window (design record 26 section 2): the xHCI98 USB Tree's
+ * icon, the version from src/xhci_version.h and the manifest
+ * (setup.manifest, resource 1 of type 24).
+ */
+
+#include <windows.h>
+#include "../src/xhci_version.h"
+
+1 ICON "../xhcitr/xhcitr.ico"
+
+1 24 "setup.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     XHCI_VER_CSV
+PRODUCTVERSION  XHCI_VER_CSV
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS__WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Yeo Kheng Meng\0"
+            VALUE "FileDescription",  "xHCI98 Setup\0"
+            VALUE "FileVersion",      XHCI_VER_STR "\0"
+            VALUE "InternalName",     "setup\0"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"
+            VALUE "OriginalFilename", "SETUP.EXE\0"
+            VALUE "ProductName",      "xhci98 - USB host controller driver for xHCI\0"
+            VALUE "ProductVersion",   XHCI_VER_STR "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
