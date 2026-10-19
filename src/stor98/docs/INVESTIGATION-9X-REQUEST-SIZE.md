@@ -112,3 +112,39 @@ operation it is reached only when a child cannot be mapped, which is rare, but n
 
 Writing the VSD prototype was stopped by a safety check on 2026-10-19 and was not
 retried. Sections 1-4 remain static analysis.
+
+## 7. The IOP pointer and list layout across SCSIPORT.PDR versions (2026-10-19)
+
+The dword after the SRB is documented. The Win98 DDK's `block\inc\SCSIPORT.H` defines
+`PORT_SRB { SCSI_REQUEST_BLOCK BaseSrb; PVOID SrbIopPointer; /* offset 64 */ ... }`, and the
+IOP, IOR and DCB fields come from `IOP.H` (IOP_physical_dcb +0x04, IOP_srb +0x20, IOP_ior
++0x64; callback table depth 6), `IOR.H` (IOR_flags +0x08, IOR_buffer_ptr +0x1C) and `DCB.H`
+(DCB_apparent_blk_shift +0x3C). Read from disassembly, not from the DDK: SCSIPORT sets
+`Srb->DataBuffer` to the first fragment of a logical SG list, and resolves an offset by
+walking that list with the block shift.
+
+Every SCSIPORT.PDR available offline was checked (none downloaded). Sources: the 98 SE CABs
+and guest images on this machine, and the ME guest images. No Windows 98 first edition copy
+was available.
+
+| Version | SHA-256 | Size, date | Where found | Result |
+|---|---|---|---|---|
+| 98 SE original (4.10.2222) | 8a0712513067edb7... | 23,650, 1999-04-23 | 98 SE CAB set; two clean 98 SE images | same code |
+| 98 SE update (4.10.2223) | af7610d41970a589... | 23,674, 2001-01-09 | QuickInstall image (the perf VM) | same code |
+| ME | bfac66edd87be878... | 26,957, 2000-06-08 | three ME images | same code, shifted addresses |
+
+"Same code" means that each version has:
+- `ScsiPortGetPhysicalAddress` reading `[Srb+0x40]` and then `[IOP+0xAC]`;
+- the offset walk reading `[Srb+0x40]`, testing `[IOP+0x6C] & 2`, walking from
+  `[IOP+0x80]` and shifting by `[[IOP+4]+0x3C]`;
+- `DataBuffer = [[IOP+0x80]+4]` when `[IOP+0x6C] & 2`;
+- the internal SRB build storing `IOP_srb = Srb` and `[Srb+0x40] = IOP`.
+
+The 98 SE original and the update differ in object 1 only in data addresses.
+
+What the code adds on top of that layout (`sg9x.h`, `Sg9xClassify`) is defensive and not
+derived from these binaries. The IOP, DCB and list pointers must lie in the system arena,
+the IOP and list must be dword-aligned, the IOP's `IOP_srb` must point back at the SRB, and
+the first fragment must equal `DataBuffer`. Anything else is classified as unknown. The
+request then fails cleanly (HARDWARE ERROR, ASC 44h) instead of being copied through a
+guessed address. Byte-counted lists (`IORF_CHAR_COMMAND`) use shift 0.
