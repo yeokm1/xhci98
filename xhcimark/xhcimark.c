@@ -1626,7 +1626,9 @@ static void mk_judge(const char *id, const char *text)
         return;
     }
     if (verdict == MK_R_KEEP) {
-        if (state != MK_REC_WRITING || le == NULL || curProt == NULL) {
+        if (state != MK_REC_WRITING || le == NULL || curProt == NULL ||
+            !scrubOk) {
+            /* A replay writes a mark: not while the scrub is unproven. */
             return;
         }
         /* A replay is a write: the write's own checks first, the unit the
@@ -1853,11 +1855,20 @@ static int mk_cddb_scrub(int *complete)
                 n = sizeof(f) - 2;
                 r = RegQueryValueExA(k, "LowerFilters", NULL, &type,
                                      (LPBYTE)f, &n);
-                act = (r == ERROR_SUCCESS &&
-                       (type == REG_MULTI_SZ || type == REG_SZ))
-                          ? inst_filter_drop(f, n + 1, MK_NAME, nf,
-                                             sizeof(nf), &ob)
-                          : INST_FD_NONE;
+                if (r == ERROR_SUCCESS &&
+                    (type == REG_MULTI_SZ || type == REG_SZ)) {
+                    act = inst_filter_drop(f, n + 1, MK_NAME, nf, sizeof(nf),
+                                           &ob);
+                } else {
+                    act = INST_FD_NONE;
+                    if (r != ERROR_FILE_NOT_FOUND) {
+                        /* Not gone, not readable: the entry is unresolved. */
+                        *complete = 0;
+                        mk_log("CriticalDeviceDatabase\\%s: its LowerFilters "
+                               "could not be read again (error %ld)", names[c],
+                               r);
+                    }
+                }
             }
             if (act == INST_FD_SET) {
                 r = RegSetValueExA(k, "LowerFilters", 0, REG_MULTI_SZ,

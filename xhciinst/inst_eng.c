@@ -9993,9 +9993,8 @@ static int run_uninstall_nt(void)
         int left;
         if (!mk_inventory(0, &left) || left != 0) {
             return stop_uninstall("a device or a CriticalDeviceDatabase entry "
-                                  "still names xhcicm in its filters - "
-                                  "LowerFilters, so xhcicm's service\nand "
-                                  "file stay.");
+                                  "still names xhcicm in its filters,\nso "
+                                  "xhcicm's service and file stay.");
         }
     }
     remove_services_and_files();
