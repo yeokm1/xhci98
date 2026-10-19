@@ -1696,3 +1696,49 @@ and after `enc1`'s plug - with the bench zip's `xhcicm.sys` nor with the
 `qemu` build of `4a708676` (42-A.6's own). Not attributed: a change to
 `xhcicm.sys` between the bench's source and `4b6d3477` is the likeliest
 place; owed to a bisection.
+
+## Matrix N1 F3 and F6: SETUPX's OEM Name record and /list's start at login (2026-10-19)
+
+Branch `p42-instsmall`, from `3.1.0.0` at `cfcef657` (`1ed43f0b`, then
+`8fa1060d`), with `3.1.0.0` at `94c22687` merged last. Two findings of the
+matrix's 98 SE and ME legs (agent N1, `E:\xhci98-vm\m31\N1\RESULT.md`):
+
+- **F3.** The 98 SE and ME uninstall deleted this package's `INF\OTHER`
+  copy but left SETUPX's record of it,
+  `HKLM\Software\Microsoft\Windows\CurrentVersion\Setup\SetupX\INF\OEM Name`,
+  value `C:\WINDOWS\INF\OTHER\Yeo Kheng Mengxhci98.inf` = `xhci98.inf`.
+  Now each deletion of an INF copy of the package (`infs_9x`) or of a
+  Stor98 copy the run owns (`s98_un_inf_9x`) is followed by
+  `oem_name_forget`, which deletes only the values named by that copy's
+  path or its short alias (`inst_oem_name_ours`, case aside).
+- **F6, second half.** `INSTALL /console /list` after an update with the
+  tray tool unticked said "... and started at login." with no Run value:
+  the line was the planned action. It now says what the Run value is
+  (present, absent, other data or unreadable) and then what a run with
+  the same switches would do (`inst_tray_list_text`).
+
+Design: record 23 revision 20 (sections 6.1 and 9.5), record 26 draft 14
+(section 9.3 step 4); reviewed and revised. 13 host vectors in
+`test_inst`.
+
+| Build | Result |
+|---|---|
+| `xhciinst\build.cmd` and `selftest.cmd`, the merge | passed |
+| host suites, the merge | 0 failures (`test_inst` 1564) |
+| `build-driver.cmd all`, the merge | BUILD + GATES PASSED (debug release qemu) |
+| `build-driver.cmd all -amd64`, the merge | BUILD + GATES PASSED (debug release qemu) |
+
+The leg (development host A, QEMU, kit `E:\xhci98-vm\p42-hubsettle`,
+the 98 SE overlay left by 42-A.27's leg with 3.1.0.0 installed and a hub
+on port 1; the `1ed43f0b` executables):
+
+| Step | Result |
+|---|---|
+| `INSTALL /console /yes /notray` | "The xHCI98 USB Tree no longer starts at login." (exit 4 for the base image's registry-only `DEV_04` controller entry, matrix F5, unrelated) |
+| `INSTALL /console /list /log ...` | **pass**: "C:\XHCI98\XHCITR.EXE; it does not start at login now (a run without /notray makes it start at login)." |
+| `OEM Name` before the uninstall (`regedit /e`) | `C:\WINDOWS\INF\OTHER\Yeo Kheng Mengxhci98.inf` = `xhci98.inf` beside Windows' own values |
+| `INSTALL /console /uninstall /yes` | **pass**: "Deleted C:\WINDOWS\INF\OTHER\Yeo Kheng Mengxhci98.inf (and its .PNF). Removed the setup engine's record of it (SetupX OEM Name)."; exit 3 |
+| `OEM Name` after it | **pass**: no value naming this package's copy; every other value (`USBSTOR.INF`, `USBNTMAP.INF`, Windows' own) kept |
+
+Not taken: ME (the same code path), a Stor98 copy's record (no NVMe in
+the 9x guests; the alias rule rests on the code read).
