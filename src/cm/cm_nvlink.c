@@ -417,6 +417,12 @@ BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN live,
                 (*fresh ? CM_HELD_FRESH : 0);
         return TRUE;
     }
+    if (*held & CM_HELD_LOSS) {
+        /* A held loss call is paid by this one, lost or not: it removes
+         * the vanished children as that call would. */
+        *vanish = TRUE;
+        *held = *held & ~CM_HELD_LOSS;
+    }
     if (!live) {
         /* The loss's own call (NT's unavailable reconciliation) goes
          * alone: held work and an owed change wait for the transport, as

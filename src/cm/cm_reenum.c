@@ -2496,11 +2496,12 @@ VOID CmReenumService(PCM_NHI nhi)
             cmReleaseHeld(nhi, (BOOLEAN)((act & CM_HELD_DO_FAIL) != 0),
                           1UL << i);
         }
-        if ((act & CM_HELD_DO_LOSS) && (nhi->RecBarred & (1UL << i)) == 0) {
+        if (act & CM_HELD_DO_LOSS) {
             /* The loss's own call held behind the gate (NT's unavailable
-             * reconciliation): the removal alone, whatever the transport;
-             * behind the retirement barrier its removal-only request is
-             * that member's instead. */
+             * reconciliation): the removal alone, whatever the transport,
+             * and behind the retirement barrier too - a removal with no
+             * exposure, which the barrier's own request may not come to
+             * replace while the host stays contained. */
             cmReenumOne(nhi, i, TRUE, FALSE, CM_NVLINK_TUNNEL_NONE, FALSE,
                         FALSE);
         }

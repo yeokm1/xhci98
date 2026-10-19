@@ -930,6 +930,22 @@ static void test_hold(void)
              "back: one call");
     CHECK_EQ(s.Losses[0], 0, "no separate removal");
     CHECK(s.Vanish[0] == 1 && s.Fresh[0] == 1, "removing and fresh");
+    /* A held loss call paid by an action that finds the gate down - the
+     * recovery's RESYNC, or another unavailable one while still lost:
+     * the pass makes no second removal. */
+    memset(&s, 0, sizeof(s));
+    seamActionOn(&s, 0, TRUE, FALSE, TRUE, TRUE);
+    seamAction(&s, 0, FALSE, FALSE, TRUE);
+    CHECK_EQ(s.Calls[0], 1, "the action's call");
+    CHECK(s.Vanish[0] == 1, "removing the vanished children");
+    CHECK_EQ(s.Held[0], 0, "the loss call discharged");
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), 0, "no second removal");
+    seamActionOn(&s, 0, TRUE, FALSE, TRUE, TRUE);
+    seamActionOn(&s, 0, FALSE, FALSE, TRUE, TRUE);
+    CHECK_EQ(s.Calls[0], 2, "the second loss's call");
+    CHECK_EQ(s.Held[0], 0, "discharged while lost too");
+    CHECK_EQ(seamPass(&s, 0, FALSE, FALSE, TRUE), 0, "nothing for the pass");
+    CHECK_EQ(s.Losses[0], 0, "never a separate removal");
     /* Not active when the gate falls: nothing to remove through. */
     memset(&s, 0, sizeof(s));
     seamActionOn(&s, 0, TRUE, FALSE, TRUE, TRUE);

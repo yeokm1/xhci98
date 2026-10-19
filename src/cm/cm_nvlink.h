@@ -524,7 +524,8 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow);
  * caller makes the call). Down with the host interface lost (`live`
  * FALSE): FALSE, the call made alone, *held and *missed kept for the pass
  * that finds the transport back (CmNvlinkHoldRun). Up with it lost: the
- * loss's call alone is held (CM_HELD_LOSS), apart from the ordinary work.
+ * loss's call alone is held (CM_HELD_LOSS), apart from the ordinary work;
+ * any later call made with the gate down pays it (*vanish set).
  */
 BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN live,
                            BOOLEAN *missed, BOOLEAN *vanish, BOOLEAN *fresh);
