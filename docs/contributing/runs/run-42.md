@@ -1193,3 +1193,61 @@ cut at `72c69b18`; the 7 x86 leg was read again on the final package.
 Not taken here: `XHCIINST /eject`'s confirmation in a guest (host vectors
 only), the window's settings pages over a machine-wide value that is not
 a `DWORD`, 2000, XP, Vista and the x64 targets.
+
+## 42-A.12 follow-up: busy waits serviced, held work through a loss (2026-10-19)
+
+Code on branch `p42-callfix` (from `3.1.0.0` at `5f63e8e4`): `f0e10a02`,
+then `2f02d5de`, `231fe2ca` and `1ec1a7e2`; reviewed and revised until the
+review converged at `1ec1a7e2`. Built there with every gate,
+`scripts\build-driver.cmd all` and then `all -amd64`: both pass (x86
+`qemu` `xhcicm.sys` SHA-256 `401C566CA834DB78...`); `test_cm_nvlink` 449
+checks, 0 failures.
+
+Four points were raised against the merged 42-A.12 code, read at
+`4a31f545`; each was read again at `5f63e8e4`:
+
+- **The servicing of the acknowledgement waits inside a pass.** Long
+  sleeps: already taken in 50 ms pieces with a step after each while a
+  wait is pending (`bddf936d`), and every mark that starts a wait runs on
+  the NHI's own thread, so a sleep begun with nothing pending in its
+  domain cannot gain one. Busy waits: real. A wait's first 2 ms are
+  stalls, so a run of requests that each end inside them (the TB3 EEPROM
+  reader's hundreds) slept nowhere and stepped nothing. `cmStall` now
+  steps the waits once per 50 ms of the clock since the last step
+  (`CmNvlinkServiceDue`, pure; `cmSleep` records its own step).
+- **Held and owed work during a host-interface loss.** Real on NT: the
+  unavailable reconciliation's action, finding a member's gate down,
+  folded that member's held work and owed change into its own call, with
+  the owed exposure, while the transport was lost; and the pass's
+  owed-change loop exposed and called with no transport check. Both now
+  wait for the transport (`cmTransport`), as the held loop already did.
+  With the gate up, the reconciliation's call is held as an obligation of
+  its own (`CM_HELD_LOSS`), made once the gate falls whatever the
+  transport - a removal of vanished children with no exposure, behind the
+  retirement barrier too - and paid instead by any call made with the gate
+  down, so it is made once.
+- **An action between the held path and the owed path.** Not real at
+  `5f63e8e4`: `bddf936d` made the action's call pay the owed change too.
+  Its vector (held, owed, then an action before the pass: one call) is
+  added.
+- **A result finished before the stop, handed over on the stopping
+  thread.** Not real at `5f63e8e4`: since `bddf936d` the stop only marks
+  the slots and wakes the workers, and each worker hands an outcome the
+  thread did not take to the late taker as it leaves; `test_cm_call`
+  covers both orders.
+
+The leg (development host A, QEMU, the 42-A.10 topology and the `l4`
+overlay's copy, `E:\xhci98-vm\p42-callfix`): **Windows 98 SE**, the gated
+`qemu` `xhcicm.sys` of `1ec1a7e2` copied over the installed one, then a
+shut down and a cold start (`c2`), `enc0` at power-on. The NVMe `UP`
+published (`cm.nvlink.up=01000101`), `DATA.BIN` written to F: and compared
+clean; `x-gate closed`: contained (`cm.live.state=00000107`), the worker's
+CONTROLLER_UNAVAILABLE removal answered by Stor98; `x-gate normal` 8 s
+later: `u4.recover.probe=03000010`, `rings-kept`, the tunnel preserved
+(`u4.recover.class=00000103`), `u4.recover.ok`, no barrier, ACTIVE, the
+re-enumeration, Stor98 bound again (`cm.nvlink.9x.proof-read`); F: back,
+a second file written and compared clean. **Pass.** The same sequence as
+42-A.10's `l4`. The NT paths the change is about (the reconciliation
+behind a gate, a pass of busy waits with a wait pending) were not reached
+in a guest: on 98 SE no statement is made, so no wait is pending; they
+rest on the host vectors.
