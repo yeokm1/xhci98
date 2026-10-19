@@ -115,6 +115,39 @@ function Get-ImageFlavourMarker {
     return ""
 }
 
+# The connection manager's tunnel-port filter INF, where a flavour directory
+# keeps it (design record 21 section 3.3, record 23 section 4.1). The x86
+# package keeps it in nt\, beside nt\xhcicm.sys, its own copy of the
+# binary: Windows 98 SE and ME read a $Windows NT$ INF beside the one they
+# are pointed at and would offer the filter for the tunnel bridge
+# (runs/run-39.md, 39-0.4), and Vista's and 7's driver store takes no
+# source outside the INF's directory. The x64 package keeps it at the root,
+# beside xhcicm.inf and the one xhcicm.sys, from 3.1.0.0: 98 and ME never
+# read it, and no other INF there binds a PCI bridge. -PublishedVersion
+# reads a published tree in the layout it was published with; 3.0.0.0, the
+# one x64 version before, has nt\ as the x86 package does. -Arch takes the
+# packager's amd64 and the release legs' x64 alike.
+function Get-CmFilterRel {
+    param([string]$Arch, [string]$PublishedVersion = "")
+    $isX64 = ($Arch -eq "amd64" -or $Arch -eq "x64")
+    if ($isX64 -and ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge [version]"3.1.0.0")) {
+        return "xhcicmf.inf"
+    }
+    return "nt\xhcicmf.inf"
+}
+
+# The connection manager's published files in a flavour directory of that
+# layout: the NHI INF, the filter INF and the binary, and in nt\'s layout
+# the filter INF's own copy of the binary, nt\xhcicm.sys.
+function Get-CmPublishable {
+    param([string]$Arch, [string]$PublishedVersion = "")
+    $rel = Get-CmFilterRel -Arch $Arch -PublishedVersion $PublishedVersion
+    if ($rel -eq "xhcicmf.inf") {
+        return @("xhcicm.inf", "xhcicmf.inf", "xhcicm.sys")
+    }
+    return @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")
+}
+
 function Test-DriverVersionMatches {
     param(
         [string]$Reported,      # the binary's VersionInfo.FileVersion

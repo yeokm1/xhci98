@@ -2057,9 +2057,12 @@ static int check_package(void)
             continue;
         }
         if (k == INST_INF_CMF) {
-            join(path, sizeof(path), pkgDir, "nt\\xhcicmf.inf");
+            /* nt\ in the x86 package, the flavour directory in the x64
+             * one (inst_cmf_rel). */
+            join(path, sizeof(path), pkgDir, inst_cmf_rel(INST_MY_ARCH));
             if (file_exists(path, NULL)) {
-                inst_copy(infRel[k], "nt\\xhcicmf.inf", sizeof(infRel[k]));
+                inst_copy(infRel[k], inst_cmf_rel(INST_MY_ARCH),
+                          sizeof(infRel[k]));
             }
             if (!envNow.Nt) {
                 /* 98 and ME never read the NT filter INF. */
@@ -4361,13 +4364,25 @@ static void local_remove(const char *dir)
          * INFs may be all that is left. */
         for (k = 0; k < INST_INF_COUNT; k++) {
             char pnf[64];
-            inst_copy(pnf, k == INST_INF_CMF ? "nt\\" : "", sizeof(pnf));
-            strncat(pnf, instInfFile[k], sizeof(pnf) - strlen(pnf) - 1);
-            n = strlen(pnf);
-            if (n > 4) {
-                strcpy(pnf + n - 4, ".PNF");
+            if (k == INST_INF_CMF) {
+                inst_copy(pnf, inst_cmf_pnf(INST_MY_ARCH), sizeof(pnf));
+            } else {
+                inst_copy(pnf, instInfFile[k], sizeof(pnf));
+                n = strlen(pnf);
+                if (n > 4) {
+                    strcpy(pnf + n - 4, ".PNF");
+                }
             }
             join(path, sizeof(path), dir, pnf);
+            SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+            if (DeleteFileA(path)) {
+                flagChanged = 1;
+            }
+        }
+        if (INST_MY_ARCH == INST_ARCH_AMD64) {
+            /* A copy of a 3.0.0.0 x64 package, whose filter INF was in
+             * nt\ as the x86 package's is. */
+            join(path, sizeof(path), dir, inst_cmf_pnf(INST_ARCH_X86));
             SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
             if (DeleteFileA(path)) {
                 flagChanged = 1;
@@ -6125,8 +6140,8 @@ static int install_inf(int inf, int controllers)
                 "and an update at\n  once, which one call cannot do on "
                 "Windows 2000. In Device Manager install\n  the filter on "
                 "EVERY port with this id - those without it too - (Update\n"
-                "  Driver, Have Disk, the package's nt\\ directory), then run "
-                "INSTALL.BAT again.\n", hwid);
+                "  Driver, Have Disk, %s), then run "
+                "INSTALL.BAT again.\n", hwid, inst_cmf_where(INST_MY_ARCH));
             for (j = 0; j < devCount; j++) {
                 if (devs[j].Present && devs[j].Inf == inf &&
                     (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
@@ -6255,8 +6270,8 @@ static int install_inf(int inf, int controllers)
                 "the port higher, and\n  on Windows 2000 the filter's first "
                 "install is never forced (/force does not\n  change that). "
                 "The port keeps Windows' driver without the filter; Device\n"
-                "  Manager's Have Disk on the package's nt\\ directory "
-                "installs it by hand.\n");
+                "  Manager's Have Disk on %s "
+                "installs it by hand.\n", inst_cmf_where(INST_MY_ARCH));
         } else if (err == ERROR_IN_WOW64) {
             out("  A 32-bit program cannot install drivers on 64-bit Windows; "
                 "run %s.\n", INST_OTHER_NAME);

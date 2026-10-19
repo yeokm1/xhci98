@@ -3199,6 +3199,26 @@ int inst_out_mirror(int outIsConsole, int errIsConsole, int inIsConsole)
 }
 
 /* ======================================================================== */
+/* The filter INF's place in a flavour directory (record 23 section 4.1)    */
+/* ======================================================================== */
+
+const char *inst_cmf_rel(int arch)
+{
+    return arch == INST_ARCH_AMD64 ? "xhcicmf.inf" : "nt\\xhcicmf.inf";
+}
+
+const char *inst_cmf_pnf(int arch)
+{
+    return arch == INST_ARCH_AMD64 ? "xhcicmf.PNF" : "nt\\xhcicmf.PNF";
+}
+
+const char *inst_cmf_where(int arch)
+{
+    return arch == INST_ARCH_AMD64 ? "the package's x64 directory" :
+                                     "the package's nt\\ directory";
+}
+
+/* ======================================================================== */
 /* The USB tree tool (record 23 section 9.5, record 25 section 8)            */
 /* ======================================================================== */
 

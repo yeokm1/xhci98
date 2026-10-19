@@ -1916,6 +1916,42 @@ static void test_tb_eject(void)
              "/eject /uninstall refused");
 }
 
+/* The filter INF's place per architecture (record 23 section 4.1): nt\ in
+ * the x86 package, kept as it was; the flavour directory itself in the x64
+ * package. Its .PNF beside it, and the place the Have Disk text names,
+ * short enough that the longest line naming it stays within 79 columns. */
+static void test_cmf_place(void)
+{
+    int a;
+    char pnf[64];
+    size_t n;
+
+    CHECK(strcmp(inst_cmf_rel(INST_ARCH_X86), "nt\\xhcicmf.inf") == 0,
+          "x86: nt\\xhcicmf.inf, as before");
+    CHECK(strcmp(inst_cmf_rel(INST_ARCH_AMD64), "xhcicmf.inf") == 0,
+          "x64: xhcicmf.inf at the flavour directory's root");
+    CHECK(strchr(inst_cmf_rel(INST_ARCH_AMD64), '\\') == NULL,
+          "x64: no subdirectory");
+    CHECK(strcmp(inst_cmf_pnf(INST_ARCH_X86), "nt\\xhcicmf.PNF") == 0,
+          "x86: its .PNF in nt\\");
+    CHECK(strcmp(inst_cmf_pnf(INST_ARCH_AMD64), "xhcicmf.PNF") == 0,
+          "x64: its .PNF at the root");
+    CHECK(strstr(inst_cmf_where(INST_ARCH_X86), "nt\\") != NULL,
+          "x86: the text names nt\\");
+    CHECK(strstr(inst_cmf_where(INST_ARCH_AMD64), "nt\\") == NULL &&
+          strstr(inst_cmf_where(INST_ARCH_AMD64), "x64") != NULL,
+          "x64: the text names the x64 directory, not nt\\");
+    for (a = INST_ARCH_X86; a <= INST_ARCH_AMD64; a++) {
+        strcpy(pnf, inst_cmf_rel(a));
+        n = strlen(pnf);
+        strcpy(pnf + n - 4, ".PNF");
+        CHECK(strcmp(pnf, inst_cmf_pnf(a)) == 0, "the .PNF is the INF's");
+        CHECK(strlen("  Driver, Have Disk, ") + strlen(inst_cmf_where(a)) +
+              strlen("), then run INSTALL.BAT again.") <= 79,
+              "the Have Disk line within 79 columns");
+    }
+}
+
 /* The USB tree tool (record 23 section 9.5, record 25 section 8): its name
  * per architecture, the Run value's data, when it is copied, the leftover
  * .BAK, what becomes of the Run value, and /notray. */
@@ -3220,6 +3256,7 @@ int main(void)
     test_tb_units();
     test_tb_eject();
     test_tb_question();
+    test_cmf_place();
     test_tray();
     test_wrap();
     test_questions();
