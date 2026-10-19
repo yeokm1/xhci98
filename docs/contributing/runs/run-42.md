@@ -1141,8 +1141,10 @@ connection manager and Stor98 installed: the uninstall deleted the two
 entries naming `xhcicm` and kept `pci#cc_010802` naming the Stor98 a drive
 still used; after the restart the NHI had no driver (Code 1 on that disk,
 as before the first install; not Code 19) and no entry named a removed
-service. `xhci98` and `xhciuas` left no entry on that 2000 disk; XP was not
-read.
+service. `xhci98` and `xhciuas` left no entry on that 2000 disk, nor on
+the XP guest with the package installed (its database named `xhcicm` for
+the NHI's id alone). Gated builds passed, x86 then amd64, at 3fec8fd2 (the
+merge of 3.1.0.0 over this work).
 
 The owner's decision: the mark service follows the `XhciCmSafeEject` in
 force after a run (record 23 section 5.1 step 12, `inst_mk_safe_eject` and
