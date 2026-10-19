@@ -28,7 +28,11 @@ day): section 7.4 revision 3, the safe-removal mark across a stack
 rebuild (task 42-0.4); section 7.2's 9x half, the eject asked of the
 connection manager, the 9x link-down statement and the per-port waits
 (task 42-0.7); section 3.2's child filter also created by `AddDevice`;
-section 8's table gains design record 28's value.
+section 8's table gains design record 28's value. Section 3.5, added
+2026-10-19 (task 42-A.21, the owner's request of that day): what the
+connection manager needs of the USB drivers, for the installer's
+connection manager alone; section 7.4's mark service also on Windows 8
+and 8.1.
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
@@ -924,6 +928,77 @@ the driver reads: section 8.
 None. The NHI is never a boot-critical device for Setup, and nothing behind a
 tunnel is one in this project's targets. `txtsetup.oem` is not touched, and
 the `OEM-*` gate rules stay as they are.
+
+### 3.5 Without `xhci98.sys` (task 42-A.21, 2026-10-19)
+
+The owner's request of 2026-10-19 is an install of the connection manager
+alone, for a Windows whose USB 3 driver is someone else's - Microsoft's
+`usbxhci.sys` on Windows 8 and 8.1, a controller vendor's on 2000 to 7
+(record 23 section 4.5). What this driver needs of `xhci98.sys`, read
+from `src\cm\` and the tools on 2026-10-19:
+
+- **No link at all on NT.** `xhcicm.sys` imports nothing from
+  `xhci98.sys`, opens none of its devices, sends it no request (no
+  internal USB request, no `USBUSER` door call, no IOCTL of either
+  driver's), and `xhci98.sys` does not know it exists (section 3.1). The
+  only device requests the driver answers are its own, on
+  `\\.\XHCICM<n>` (`cm_query.h`): `IOCTL_XHCICM_QUERY` and
+  `IOCTL_XHCICM_MARKS`, read by `XHCITR`, `XHCIINST /devices` and
+  `/eject` and the mark service, and the log and PCI configuration
+  snapshot requests (`CM_QL_IOCTL`, `CM_QP_IOCTL`) `XHCITR` reads; and
+  the Stor98 channel is a callback object and a table of the two drivers'
+  own (section 7.2). Its settings come from its own driver key and the
+  machine-wide `Services\USB` key, which only the installer and the
+  user write (`cm_reg.c`), whichever USB driver runs.
+- **The PCIe tunnel** (both profiles) is the connection manager's work
+  on the host interface; what appears behind the tunnel port is
+  enumerated by Windows' PCI bus driver, under the tunnel-port filter of
+  section 3.2 on NT, a filter of `pci.sys`'s bridge stack that never
+  touches a USB device. A device there is bound by whatever driver
+  Windows chooses: an NVMe drive by Stor98 or another NVMe driver (8.1 has
+  its own, `stornvme.sys`; 8 has none), and the xHCI controller of a
+  dock by whichever xHCI driver claims its class id - Windows' own on 8
+  and 8.1, on 2000 to 7 a vendor's where one matches that controller and
+  otherwise nothing.
+- **The USB3 tunnel** (the USB4 profile only, `XhciCmUsb3Tunnel`, design
+  record 22 section 6.9): its devices appear as an ordinary SuperSpeed
+  connect on a root port of the host's own xHCI controller ([model]
+  `XHCI98-HANDOFF` section 2), so whichever driver runs that controller
+  sees them. The bandwidth handshake the path set-up waits on is the
+  host router's and the xHCI hardware's ([linux] `usb4.c`), not a
+  driver's; with no driver on the host's xHCI controller at all the
+  tunnel may come up and nothing shows its devices.
+- **Safe eject and the marks** (section 7.4): the child filter, the mark
+  service and the tools' eject act on the PCI unit behind the tunnel
+  through Windows' own eject and the connection manager's query device;
+  none of it goes through a USB driver.
+- **Windows 98 SE and ME are the exception**, and why the installer keeps
+  the USB drivers required there: those systems have no xHCI driver of
+  their own, so without `xhci98.sys` every xHCI controller is dark, the
+  dock's included; and the CONFIGMG re-enumeration of section 6.1 counts
+  on `xhci98.sys` starting on a controller the tunnel adds (section 3.1).
+
+So on Windows 8 and 8.1 the connection manager alone gives the
+Thunderbolt 3 ICM client and the USB4 software connection manager on the
+hosts of section 3.3's lists, the PCIe tunnel and its re-enumeration, an
+NVMe drive behind it (Stor98 is not offered there; record 23 section
+4.5), a dock's xHCI controller and its devices under Windows' own USB
+driver, the USB3 tunnel's devices on the host's controller under the same
+driver, and safe eject with the marks. None of it has been read on 8 or
+8.1, where no guest exists here. The import gate holds the x86 driver to
+Windows 98's evidence and Windows 2000's export tables, and the amd64
+driver to NT 5.2's (`build-driver.cmd`'s gate for `xhcicm.sys`,
+`check-imports.ps1`); Vista and 7 are read in guests, not by the gate;
+and no export table of 8 is in the tree, so whether 8's kernel and HAL
+still export each routine of
+`xhcicm-imports.allow` (the HAL's `HalGetBusData`, `KfAcquireSpinLock`,
+`KfReleaseSpinLock`, `KeGetCurrentIrql` and `KeStallExecutionProcessor`
+among them on x86) is unread. The driver's own system tests are WDM
+versions (`IoIsWdmVersionAvailable(1, 0x10)` for NT, `(6, 0)` for Vista
+and later), which 8 and 8.1 answer as 7 does, so it takes 7's paths there.
+On 64-bit 8 and 8.1 it loads only as on Vista x64 and 7 x64: test-signing
+mode (Secure Boot off) or a start with signature enforcement disabled
+(design record 19; record 23 section 5.10).
 
 ## 4. The host interface: ring 0, polled
 
@@ -3424,7 +3499,9 @@ configuration-manager routine looked up at run time, the import allowlist,
 Win32 service of its own process (`SERVICE_WIN32_OWN_PROCESS`,
 `SERVICE_AUTO_START`, the `LocalSystem` account, no desktop interaction,
 `SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN`), installed on Windows 2000
-to 7 only, by the installer, only when the Thunderbolt 3 / USB4 component
+to 7 only (and 8 and 8.1 from 2026-10-19, task 42-A.21, where the
+installer installs the connection manager alone; unread there), by the
+installer, only when the Thunderbolt 3 / USB4 component
 is installed (`xhcicm.sys`). **Its executable lives in
 `%SystemRoot%\system32`** (the native directory: `system32` on x86, and
 on x64 the 64-bit binary in the 64-bit `system32`), copied there by the
