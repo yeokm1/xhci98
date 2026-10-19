@@ -399,9 +399,17 @@ static unsigned __stdcall job_main(void *arg)
             }
             rowCount = inst_eng_rows(rows, INST_MAX_VALUES);
             /* /set preselects a value on its page (record 26 section 10);
-             * from here on the pages say what is written. */
+             * from here on the pages say what is written. A greyed row's
+             * is not taken: the Summary never lists what is not written. */
             for (i = 0; i < opts->SetCount; i++) {
-                if (opts->SetIndex[i] >= 0 &&
+                int k;
+                int grey = 0;
+                for (k = 0; k < rowCount; k++) {
+                    if (rows[k].Value == opts->SetIndex[i] && rows[k].Greyed) {
+                        grey = 1;
+                    }
+                }
+                if (!grey && opts->SetIndex[i] >= 0 &&
                     opts->SetIndex[i] < INST_MAX_VALUES) {
                     choiceSet[opts->SetIndex[i]] = 1;
                     choiceVal[opts->SetIndex[i]] = opts->SetValue[i];

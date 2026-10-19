@@ -3797,6 +3797,7 @@ cuts without the tool on a host that cannot build it.
         $instSources = @(@(Get-ChildItem -LiteralPath $InstallToolDir -File |
             Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest", ".ico") }) +
             @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhcitr\xhcitr.ico")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.c")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")))
         foreach ($name in $instExes) {
