@@ -1610,7 +1610,9 @@ static int cln_xhcicm_registered(void)
     return r != ERROR_FILE_NOT_FOUND;
 }
 
-/* One filter value's edit: the name taken out, or the value deleted; 1 done. */
+/* One filter value's edit: the name taken out, or the value deleted; 1 done.
+ * (Unused while the pass lists only; kept with cln_stale_filters' fix path
+ * for the day it may write under the installer's lock.) */
 static int cln_set_value(HKEY k, const char *name, int act, const char *nf,
                          size_t ob)
 {
@@ -1798,112 +1800,30 @@ static int cln_stale_filters(int fix, int *found)
     return complete;
 }
 
-/* The stale-name pass of a run (CLN_STALE_*): listed, and with -remove
- * taken out after the one question, only while xhcicm itself is not
- * installed (while it is, its names are its own) and only where removal is
- * enabled; the absence of the service is read again after the answer, and
- * the change made under the marks' write lock. */
-#define CLN_STALE_NONE      0   /* nothing to do, or listed              */
-#define CLN_STALE_DONE      1   /* taken out                             */
-#define CLN_STALE_CANCELLED 2
-#define CLN_STALE_FAILED    3
-static int cln_stale_pass(int enabled)
+/* The stale-name pass of a run: listed only, while xhcicm itself is not
+ * installed (while it is, its names are its own). Taking them out is the
+ * uninstall's step 0 (XHCIINST /uninstall from a 3.1.0.0 package, which
+ * runs it whatever is installed), gated, verified and serialised with the
+ * installer and the mark service; a second writer here could not be. */
+static void cln_stale_pass(void)
 {
     int found;
-    int left;
     int complete;
-    HANDLE m;
-    DWORD w;
 
     if (cln_xhcicm_registered()) {
-        return CLN_STALE_NONE;
+        return;
     }
     complete = cln_stale_filters(0, &found);
-    if (found == 0 && complete) {
-        return CLN_STALE_NONE;
-    }
     if (found > 0) {
         say("\nThe Thunderbolt driver xhcicm is not installed, but %d filter "
             "value(s) above still\nname it: a new bridge or NVMe drive would "
-            "not start (Code 39 or 19).\n", found);
+            "not start (Code 39 or 19). Run\nINSTALL.BAT /uninstall from the "
+            "xhci98 3.1.0.0 package (or XHCIINST /uninstall) to\ntake them "
+            "out; XHCICLN only lists them.\n", found);
     }
     if (!complete) {
         say("The filter values could not all be read (above).\n");
     }
-    if (!clnRemove) {
-        if (found > 0) {
-            say("Run XHCICLN -remove to take the name out of them.\n");
-        }
-        return complete ? CLN_STALE_NONE : CLN_STALE_FAILED;
-    }
-    if (!enabled) {
-        say("Removal is not enabled on this Windows version; nothing "
-            "changed.\n");
-        return CLN_STALE_FAILED;
-    }
-    if (found > 0 && !clnYes) {
-        char text[1024];
-        char line[32];
-        int a;
-
-        inst_yesno_question(text, sizeof(text),
-                            "Take xhcicm out of the filter values listed "
-                            "above?", "take it out", "leave them", 0);
-        say("\n%s", text);
-        for (;;) {
-            say_flush();
-            inst_wrap_input(&clnWrap);
-            if (!cln_read_line(line, sizeof(line))) {
-                say("\n");
-                return CLN_STALE_CANCELLED;
-            }
-            a = inst_tb_answer(line, 0);
-            if (a == 0) {
-                say("Left as they are.\n");
-                return CLN_STALE_CANCELLED;
-            }
-            if (a == 1) {
-                break;
-            }
-            say("  Type Y or N, or Enter for [N]: ");
-        }
-    }
-    m = CreateMutexA(NULL, FALSE, "Global\\Xhci98MarkWrite");
-    if (m == NULL) {
-        m = OpenMutexA(SYNCHRONIZE | 0x0001, FALSE, "Global\\Xhci98MarkWrite");
-    }
-    w = m != NULL ? WaitForSingleObject(m, 10000) : WAIT_FAILED;
-    if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
-        say("The marks' write lock could not be taken; nothing changed.\n");
-        if (m != NULL) {
-            CloseHandle(m);
-        }
-        return CLN_STALE_FAILED;
-    }
-    /* Read again after the answer: an install meanwhile owns the names. */
-    if (cln_xhcicm_registered()) {
-        say("xhcicm was installed meanwhile: its filter names are left to "
-            "it.\n");
-        ReleaseMutex(m);
-        CloseHandle(m);
-        return CLN_STALE_NONE;
-    }
-    complete = cln_stale_filters(1, &left);
-    if (complete) {
-        int again;
-
-        complete = cln_stale_filters(0, &again);
-        left += again;
-    }
-    ReleaseMutex(m);
-    CloseHandle(m);
-    if (left == 0 && complete) {
-        say("xhcicm was taken out of every one.\n");
-        return CLN_STALE_DONE;
-    }
-    say("%d could not be changed or read; restart Windows and run XHCICLN "
-        "-remove again.\n", left);
-    return CLN_STALE_FAILED;
 }
 
 static int cln_run_nt_devnodes(unsigned long major, unsigned long minor,
@@ -2121,15 +2041,10 @@ static int cln_run_nt_devnodes(unsigned long major, unsigned long minor,
 static int clnChecks;
 static int clnFailures;
 
-/* The NT run: the stale xhcicm names first (not by the 32-bit build on
- * 64-bit Windows, which reads another view of nothing here but cannot
- * change devices), then the old devnodes; a stale pass that failed or was
- * cancelled under -remove makes the exit code say so. */
+/* The NT run: the stale xhcicm names listed first (not by the 32-bit build
+ * on 64-bit Windows), then the old devnodes. */
 static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
 {
-    int stale = CLN_STALE_NONE;
-    int rc;
-
     if (!wow64 && api.SetupApi == NULL) {
         int rm;
         if (cln_load_nt(&rm) > 0) {
@@ -2137,15 +2052,9 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
         }
     }
     if (!wow64) {
-        stale = cln_stale_pass(cln_removal_enabled(major, minor));
+        cln_stale_pass();
     }
-    rc = cln_run_nt_devnodes(major, minor, wow64);
-    if (clnRemove && (stale == CLN_STALE_FAILED || stale == CLN_STALE_CANCELLED)) {
-        if (rc == CLN_EXIT_DONE || rc == CLN_EXIT_RESTART) {
-            rc = stale == CLN_STALE_FAILED ? CLN_EXIT_STOPPED : CLN_EXIT_REFUSED;
-        }
-    }
-    return rc;
+    return cln_run_nt_devnodes(major, minor, wow64);
 }
 
 static void cln_check(int ok, const char *what)
