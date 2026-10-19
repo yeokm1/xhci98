@@ -598,8 +598,13 @@ What is recorded here:
   his port and changes are BSD-3-Clause, the licence of the original
   nvme2k, and his `NVMEVSD.VXD` public domain (neither its source nor its
   binary is in the tree). That code derives from Dominik Behr's nvme2k
-  1.0.0.2, whose own licence the `NOTICE` records as not checked
-  separately. `third_party/nvme2k-1.2.0.0/` is an unmodified copy of
+  1.0.0.2, whose own licence the `NOTICE` records as read in the upstream
+  history (2026-10-19, 42-A.19): at tag `1.0.0.2` (commit `cbbadf0`) the
+  `LICENSE` is the BSD-3-Clause text with the template's unfilled
+  copyright line, `Copyright (c) <year>, <copyright holder>`, and the
+  `README.md` names the 3-Clause BSD License; commit `eb31419` (2025-12-02)
+  filled in "Copyright (c) 2025, Dominik Behr" and changed nothing else.
+  So 1.0.0.2 is BSD-3-Clause on 1.2.0.0's terms. `third_party/nvme2k-1.2.0.0/` is an unmodified copy of
   `https://github.com/techomancer/nvme2k` at commit `0c41727` (release
   1.2.0.0), with its `LICENSE` (BSD-3-Clause). `include/stor98cm.h` is
   Stor98's own, licensed on its own as an interface definition.

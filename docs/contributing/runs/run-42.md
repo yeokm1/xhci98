@@ -1833,3 +1833,33 @@ being 42-A.24's), both again **BUILD + GATES PASSED** (`test_inst` 1562
 checks, 0 failures; `test-package.ps1` with the layout cases), and its
 review came back clean. The legs were not repeated on those merges, which brought no
 change to where the filter INF is read.
+
+## 42-A.19's licence housekeeping: nvme2k 1.0.0.2 read, the `a18-*` branches (2026-10-19)
+
+Documentation and comments only; no driver code changed.
+
+- **nvme2k 1.0.0.2's licence**, read in the upstream history: a clone of
+  `https://github.com/techomancer/nvme2k` (`main` at `0c41727`, the
+  1.2.0.0 commit Stor98's reference copy is taken from) kept beside the
+  emulator on development host A. Tag `1.0.0.2` is commit
+  `cbbadf041d186d084c55d240b3b4d10fb4cc1f07` (2025-11-13). Its `LICENSE`,
+  the same blob since the first commit, is the BSD-3-Clause text with the
+  template's unfilled copyright line `Copyright (c) <year>, <copyright holder>`;
+  its `README.md` names the 3-Clause BSD License; its sources carry no
+  header. Commit `eb31419` (2025-12-02) filled in "Copyright (c) 2025,
+  Dominik Behr" and changed nothing else. Stor98's `NOTICE` and
+  `legal-provenance.md` now say so instead of "not checked".
+- **`src/stor98/src/nvme2k.def` and `makefile`**, both derived from
+  nvme2k, carry the full BSD-3-Clause conditions and disclaimer in their
+  header, as the other nvme2k-derived files of `src/` do, in place of the
+  pointer to `LICENSE`.
+- **The six `a18-*` track branches** in the separate Stor98 repository,
+  each listed by `git branch --merged` from `audit-2026-10-18` (`4253b58`),
+  deleted with `git branch -d` (local only; no remote touched). Tips, to
+  restore with `git branch <name> <sha>`: `a18-build`
+  `41e5e97a3894744f26efb05a3a65deca343e1acf`, `a18-docs`
+  `6383ef55a605f05471cf0274b5b11a54af49eaba`, `a18-engine`
+  `5751ba69f30b0a0b614d985d2ce6f2c58970f278`, `a18-p9`
+  `f9755aee7a27725e2a0edfb0d8c1e1231669f777`, `a18-scsi`
+  `8f5430eb5d54fdf7d3e333e3a1cbe07e398add30`, `a18-tests`
+  `b41c9b71de32ac099f1486e7dcb3c28d4930de50`.
