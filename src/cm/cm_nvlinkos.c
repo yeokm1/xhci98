@@ -88,11 +88,13 @@ typedef struct _CM_NV_U4 {
     ULONG LateFrom[XHCI_TBT_MAX_TUNNELS];
     ULONG LateOn[XHCI_TBT_MAX_TUNNELS];
     /* Task 42-A.6: the latest new tunnel (CM_NVLINK_TUNNEL) named for each
-     * member's bridge, which every later exposure of that bridge publishes
-     * for (cmNvTunnelOf): re-applied, it changes nothing; an exposure that
-     * names none - a resync, a baseline, an owed re-enumeration, a late
-     * scan, another port's tunnel up - still pays a debt an earlier
-     * exposure could not (the bus silent, the member not active). */
+     * member's bridge, with which every later exposure of that bridge
+     * labels what it publishes (cmNvTunnelOf): re-applied, it changes
+     * nothing. An exposure that names none - a resync, a baseline, an owed
+     * re-enumeration, a late scan, another port's tunnel up - publishes a
+     * function not UP under it, but never advances an entry already UP
+     * (the endpoint may be bound by then: the post-resume case on 98 SE
+     * and ME, whose own exposures found the bus not yet numbered). */
     ULONG TunBridge[XHCI_TBT_MAX_TUNNELS];
     ULONG Tun[XHCI_TBT_MAX_TUNNELS];
     /* Task 42-A.12: CmNvlinkStep in progress on this domain's thread (a
@@ -741,9 +743,8 @@ static CM_NV_U4 *cmNvU4Of(PCM_NHI nhi, BOOLEAN create);
  * `arm` FALSE: a function answered, the scan is no longer needed. The UP
  * so published follows the operating system's enumeration: a stor98
  * instance bound before it finds its entry later, and the retirement
- * before the exposure kept any old statement away from it. Whether an
- * entry found UP gets a new generation is the bridge's tunnel's matter
- * (cmNvTunnelOf), not the late scan's. */
+ * before the exposure kept any old statement away from it. An entry
+ * found UP keeps its generation (the late scan names no tunnel). */
 static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge, BOOLEAN arm)
 {
     CM_NV_U4 *u;
@@ -794,7 +795,8 @@ static ULONG cmNvTunnelOf(PCM_NHI nhi, ULONG bridge, ULONG named)
 
 /* Obligation 1's scan of one secondary bus: UP for each NVMe function
  * answering there. Returns (functions answering << 16) | entries UP. */
-static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, ULONG tunnel)
+static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, ULONG tunnel,
+                      BOOLEAN advance)
 {
     ULONG dev;
     ULONG fn;
@@ -833,9 +835,9 @@ static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, ULONG tunnel)
                     /* Another domain's statement is awaited there. */
                     index = CM_NVLINK_NONE;
                 } else {
-                    index = CmNvlinkPublishUp(cmNvTable, cmNvTunnel, bus,
-                                              slot, tunnel,
-                                              &outcome);
+                    index = CmNvlinkPublishUpEx(cmNvTable, cmNvTunnel, bus,
+                                                slot, tunnel, advance,
+                                                &outcome);
                 }
                 if (index != CM_NVLINK_NONE) {
                     cmNvShadow[index].Owner = nhi;
@@ -879,6 +881,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
     ULONG i;
     BOOLEAN emulator;
     BOOLEAN ready;
+    BOOLEAN advance;
     KIRQL irql;
 
     if (cmNvTable == NULL) {
@@ -893,6 +896,12 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
     /* The tunnel named, recorded first, even where nothing is published
      * now (the bus unread, the channel not ready, the gate up): a later
      * exposure of the bridge publishes for it. */
+    /* Only an exposure that names the new tunnel itself may advance an
+     * entry already UP (CmNvlinkPublishUpEx): one that names none, and
+     * publishes for the bridge's recorded tunnel, may come after the
+     * endpoint was enumerated and bound - on 98 SE and ME after a resume
+     * whose own exposures found the secondary bus not yet numbered. */
+    advance = (BOOLEAN)(tunnel != CM_NVLINK_TUNNEL_NONE);
     tunnel = cmNvTunnelOf(nhi, bridge, tunnel);
     /* A statement this domain made behind this member is acknowledged
      * (or timed out) before any exposure can retire it or start a
@@ -937,7 +946,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
         CmLogNote(nhi, "cm.nvlink.up.no-channel", bridge);
         return 0;
     }
-    r = cmNvScan(nhi, bridge, bus, tunnel);
+    r = cmNvScan(nhi, bridge, bus, tunnel, advance);
     if ((r >> 16) == 0 && fresh &&
         (!cmNvNt ||
          (cmNvSource(nhi, bridge) == XHCI_TBT_SRC_SHPC &&
@@ -953,15 +962,16 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
                CmNvlinkLeft(start, cmNvNow(nhi), CM_NV_ANSWER_MS) != 0) {
             CmNhiWaitService(nhi);
             nhi->Host.Sleep(nhi->Host.Context, XHCI_TBT_POLL_STEP_MS);
-            r = cmNvScan(nhi, bridge, bus, tunnel);
+            r = cmNvScan(nhi, bridge, bus, tunnel, advance);
         }
         CmLogNote(nhi, "cm.nvlink.up.waited",
                   ((cmNvNow(nhi) - start) << 8) | (r >> 16));
     }
     if (fresh && !cmNvNt) {
         /* Silent: scanned again on later passes until it answers.
-         * Answered: no later scan; a generation still owed to the bridge's
-         * tunnel is paid by its next exposure (cmNvTunnelOf). */
+         * Answered: no later scan. An entry still UP for an older tunnel
+         * is not advanced later by an exposure naming none (the late scan
+         * included): the endpoint may be bound by then. */
         cmNvLateArm(nhi, bridge, (BOOLEAN)((r >> 16) == 0));
     }
     return r & 0xFFFFUL;
@@ -1600,7 +1610,8 @@ VOID CmNvlinkService(PCM_NHI nhi)
         if (bus != CM_NVLINK_NONE && cmNvExclusive(nhi, u->LateBridge[i]) &&
             (cmNvScan(nhi, u->LateBridge[i], bus,
                       cmNvTunnelOf(nhi, u->LateBridge[i],
-                                   CM_NVLINK_TUNNEL_NONE)) >> 16) != 0) {
+                                   CM_NVLINK_TUNNEL_NONE),
+                      FALSE) >> 16) != 0) {
             u->LateOn[i] = 0;
             CmLogNote(nhi, "cm.nvlink.up.late",
                       ((cmNvNow(nhi) - u->LateFrom[i]) << 8) | i);
