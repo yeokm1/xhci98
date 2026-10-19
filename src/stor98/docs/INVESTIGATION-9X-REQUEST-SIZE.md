@@ -84,3 +84,31 @@ is unmeasured.
   phys_sgd in `DCB_dmd_flags` (an insertion-order question); check with a memory dump.
 - Pass-through (IOR func 0x0F) and SMART paths would also need physical SGDs if phys_sgd
   is dropped.
+
+## 5. The bounce hazard: fix and emulator check (2026-10-19)
+
+Fix (branch stor98-spd, commit 334d8d28): on 9x the engine resolves byte offsets of the
+SRB's data through the IOR's logical scatter/gather list, as SCSIPORT does
+(`src/sg9x.h`, `EngSg9x`/`EngCallerVa`/`EngCallerCopy` in `engine.c`). This applies to both
+bounce copies and to the PRP1 page-offset check. Linear buffers and NT are unchanged. Host
+test: `tests/unit/sg9x_ut.c`, 15 checks pass. Every flavour builds, and the amd64 warning
+count (5) is the same as before the change.
+
+Emulator check (98 SE perf image, NVMe test disk F: on a fresh overlay, debug-port 9x image
+with `STOR98_TEST_BOUNCE=1` (commit 88c3b3b0) so that every data child bounces, cold boot
+between the phases). Workload: copy 501 files / 75.1 MiB from C:\WINDOWS\SYSTEM to F:\T1
+through VCACHE, shut down, cold boot, copy F:\T1 to F:\T2. Compared on the host from the
+disk images:
+
+| Engine | Result |
+|---|---|
+| before the fix | page fault (exception 0E in a VxD, called from 0028:C004B857) during the first copy; reproduced on a second fresh run |
+| with the fix | T1 and T2: 501 of 501 files byte-identical to their sources |
+
+So the hazard is real on 9x as soon as a buffered (VCACHE) request is bounced. In normal
+operation it is reached only when a child cannot be mapped, which is rare, but not never.
+
+## 6. VSD prototype: not built
+
+Writing the VSD prototype was stopped by a safety check on 2026-10-19 and was not
+retried. Sections 1-4 remain static analysis.
