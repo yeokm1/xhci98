@@ -307,11 +307,13 @@ as they are made; the head of this file is rewritten when it is cut.
   package is installed or updated is not listed in Safely Remove Hardware
   until Windows restarts or the drive is plugged in again (`3.0.0.0` did
   the same).
-- **Known limitation: the eject under the USB4 connection manager on 7.**
-  On a Windows 7 computer with ACPI, where the package's own USB4
-  connection manager runs, ejecting a device that connects through a PCI
-  bridge (a dock, or an enclosure with a switch in it) stops it in
-  Windows, but the tunnel to it stays up until you unplug it.
+- **Known limitation: the eject under the USB4 connection manager on 2000
+  to 7.** On a Windows 2000 to 7 computer with ACPI, where the package's
+  own USB4 connection manager runs, ejecting a device that connects
+  through a PCI bridge (a dock, or an enclosure with a switch in it) stops
+  it in Windows, but the tunnel to it stays up until you unplug it. Seen
+  on Windows 7; the cause, ACPI's bus filter left on the ejected bridge,
+  is the same on 2000, XP and Vista.
 
 ## What `3.0.0.0` adds
 
