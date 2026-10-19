@@ -1,6 +1,6 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 18, 2026-10-19 (task 42-A.30: the bundled Stor98 is
+Status: revision 19, 2026-10-19 (task 42-A.30: the bundled Stor98 is
 built with the package at its version, no pins); revision 17, 2026-10-19 (task 42-A.24: the
 CriticalDeviceDatabase service entries and the mark service following
 `XhciCmSafeEject`, sections 5.1 and 9.2); revision 16, 2026-10-19 (task 42-A.22, record 26 draft 11: Stor98

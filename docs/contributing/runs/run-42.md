@@ -1755,7 +1755,7 @@ included; any fix before shipping is a recut of `3.1.0.0`, dated
   drivers. XHCITR's report lists the installed `stor98.sys` /
   `stor98.mpd` with its file version (it had no Stor98 row).
 - **Docs.** AGENTS.md, README.md, records 19 (revision 2), 23 (revision
-  18) and 26 (draft 12), build-and-test.md, source-files.md,
+  19) and 26 (draft 13), build-and-test.md, source-files.md,
   legal-provenance.md, the release notes, `releases\README.md` and
   Stor98's own README, AGENTS, BUILD, TESTING, releases README and a
   `3.1.0.0` history entry.
