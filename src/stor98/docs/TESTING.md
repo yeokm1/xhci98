@@ -241,7 +241,9 @@ Other 9x test defaults: `-DSTOR98_TEST_BOUNCE=1` (`bounce=1`), `-DSTOR98_TEST_FR
 the caller's buffer report "unresolved" before anything is copied, to drive the failure path of
 the 9x caller-buffer lookup (PLAN 0.4, "9x caller buffer"). Each of these refuses to compile
 without `STOR98_DBGPORT`. Check the image before trusting a run: stage 0xCC carries the frag
-and bounce defaults, and a wrong or stale image shows up there.
+and bounce defaults, so an image with the wrong frag or bounce setting shows up there. It does
+not carry `STOR98_TEST_SG9X_FAIL`: for an injection image, compare the installed file's hash
+with the build and check that the injected failures appear (stage 0xBD reason 5).
 
 Guest tools on the engine branch (NT, MSVC 6.0, `cl /O2`):
 
