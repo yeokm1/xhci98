@@ -53,7 +53,7 @@ characterisation record for the hardware this project holds, and
 | # | What | The property that matters |
 |---|---|---|
 | 1 | An xHCI machine | PCI class code `0C0330` and a memory window below 4 GB. Step 3 confirms them. Since `2.3.0.0` an interrupt pin is not required: a controller with none is polled, or takes a message-signalled interrupt on Vista and 7, and `XHCIQUAL` says so (`QUALIFIED WITH CAVEATS`) |
-| 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) (4.5, 7.7-7.8), 32-bit Windows XP SP3 (4.6, 7.9-7.12), Windows XP Professional x64 SP2 (4.8, 7.13-7.16), 32-bit Windows Vista SP2 or Windows 7 SP1 (4.9, 7.17-7.19), or Windows Vista x64 SP2 or Windows 7 x64 SP1 (4.10, 7.17-7.20). **On Windows 98 SE, NUSB 3.3 or 3.6 installed** if the storage clauses (5.2, 5.7, 5.8) are to be taken: storage there needs NUSB's mass-storage component, and without it those clauses are a SKIP with that reason (4.1). Do not install NUSB on any other target. The two 64-bit rows take a different package: separate 64-bit builds in their own directories (step 2); and on Vista x64 and Windows 7 x64 the drivers load only on a boot where driver signature enforcement was disabled, at every start (4.10). One OS per run: a dual-boot machine is two runs and two records |
+| 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) (4.5, 7.7, 7.8 and 7.21), 32-bit Windows XP SP3 (4.6, 7.9-7.12), Windows XP Professional x64 SP2 (4.8, 7.13-7.16), 32-bit Windows Vista SP2 or Windows 7 SP1 (4.9, 7.17-7.19), or Windows Vista x64 SP2 or Windows 7 x64 SP1 (4.10, 7.17-7.20). **On Windows 98 SE, NUSB 3.3 or 3.6 installed** if the storage clauses (5.2, 5.7, 5.8) are to be taken: storage there needs NUSB's mass-storage component, and without it those clauses are a SKIP with that reason (4.1). Do not install NUSB on any other target. The two 64-bit rows take a different package: separate 64-bit builds in their own directories (step 2); and on Vista x64 and Windows 7 x64 the drivers, test-signed with this project's own certificate since `2.3.0.0` (not Microsoft-signed), load only in test-signing mode or, for one boot at a time, on a boot with driver signature enforcement disabled (F8) (4.10). One OS per run: a dual-boot machine is two runs and two records |
 | 3 | A PS/2 or built-in keyboard and pointing device | A USB keyboard on the controller under test is unusable during the DOS pass and can stop responding mid-run. On a laptop the built-in keyboard is normally i8042-attached, but that is per machine; confirm it rather than assuming (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines") |
 | 4 | A real-DOS boot medium, and a way to get a file off it | MS-DOS or FreeDOS on floppy, CD or USB key, booted without EMM386, a V86 monitor or a paging memory manager, but with `HIMEM.SYS` available, which is not one of those and which the qualifier may need (step 3). Not a DOS box inside Windows: the qualifier needs memory it can address one-to-one. Step 3 leaves its probe log (`mDDhhmmS.LOG` from `2.4.0.0`, `PROBE.LOG` before it) on it, and that file is the run's first artefact |
 | 5 | A way to put the package on a machine whose USB does not work yet | Pull the disk and stage from another machine, burn a CD, or use a network share. On an xHCI-only machine there is no USB until this driver works (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines"). Pre-stage generously: every forgotten file is another disk swap |
@@ -71,9 +71,9 @@ A clause whose device is absent is a SKIP with a reason, which is a result.
 | 5.4, optional | A USB Ethernet adapter | With a driver for the target OS. Without one it enumerates and does nothing, which tests the stack above this driver rather than this driver |
 | 5.5, optional | A USB Audio device | UAC 1.0, with the target OS's own driver. On Windows 98 SE, plug it in only once the machine has settled for a couple of minutes after a cold boot (the release notes' "Known limitations", the audio wedge) |
 | 5.7 | A UAS storage device | One that offers the UAS interface (`bInterfaceProtocol` `0x62`). A USB-to-SATA bridge or an enclosure is the usual form. Read at SuperSpeed on a USB 3.x connector; behind a USB 2.0 hub it runs at High Speed, which is a second reading |
-| 5.8 | A SuperSpeed device and a USB 3.x connector | Any USB 3.x storage device. Its SuperSpeed is witnessed by `XHCISNAP` (step 8), not by Device Manager |
+| 5.8 | A SuperSpeed device and a USB 3.x connector | Any USB 3.x storage device. Its SuperSpeed is witnessed by the driver's snapshot (step 8), not by Device Manager |
 | 7.3 | A composite device | One physical unit that is more than one thing at once: a headset with buttons, a keyboard with media keys |
-| Step 8 | Nothing extra | The log channel is `XHCISNAP.EXE` out of this release, one setting it writes for you, and a restart of the machine |
+| Step 8 | Nothing extra | The log channel is the xHCI98 USB Tree out of this release (`XHCISNAP.EXE` up to `3.0.0.0`), one setting it writes for you, and a restart of the machine |
 
 ### Suggested devices
 
@@ -117,7 +117,7 @@ failed" are different findings.
 |---|---|---|
 | 1.1 | Fill every field of "What to record for each machine" in `xhciqual/hardware-testing.md`: model, chipset, BIOS version and date, the DOS version and boot medium, and whether PS/2 or built-in input is available | Every field filled, or explicitly `n/a` with the reason |
 | 1.2 | Read every USB-related BIOS setting and write each one down, before anything else is done to the machine | Each setting with its value. A BIOS that offers no USB option at all is a result; write `NOT PRESENT` |
-| 1.3 | Record the target OS and its build, its architecture, on Windows 98 SE whether NUSB (and which version) or SweetLow's stack is installed, and whether any previous version of this package was ever installed here | The OS and build, the architecture (it decides which package step 4 installs, and on Vista and 7 whether the drivers load without signature enforcement disabled, 4.10), the USB stack, and `none` or the version. A machine that had one produces an upgrade result, which is a different measurement and is not what this test measures |
+| 1.3 | Record the target OS and its build, its architecture, on Windows 98 SE whether NUSB (and which version) or SweetLow's stack is installed, and whether any previous version of this package was ever installed here | The OS and build, the architecture (it decides which package step 4 installs, and on Vista x64 and 7 x64 that test-signing mode is needed, 4.10), the USB stack, and `none` or the version. A machine that had one produces an upgrade result, which is a different measurement and is not what this test measures |
 
 1.2 comes before anything else because on Intel 7-, 8- and 9-series chipsets
 and C610/X99 a BIOS setting decides which controller owns the USB ports at
@@ -149,15 +149,16 @@ Controller Deviations This Driver Acts On".
 
 | # | Do | Expected reading |
 |---|---|---|
-| 2.1 | Unzip the asset and list the top level, then `tools\` | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`) and `tools\` come out directly, and nothing else; `tools\` holds `xhciqual\`, `xhcisnap\` and `portsw\` (roadmap-hcd task 38.9), and from `2.4.0.0` also `silent\` and `xhcicln\` (tasks 38.2 and 38.8). An asset before `2.4.0.0` has no `tools\` and carries `xhciqual\`, `xhcisnap\` and, from `2.3.1.0` (roadmap-hcd task 37.5), `portsw\` at the top level instead |
-| 2.2 | Check that `tools\xhcisnap\` is one of them | Present, holding `XHCISNAP.EXE` with `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside it from `2.4.0.0` (roadmap-hcd task 38.1). It is what step 8 needs, so a download without it is a cut made with `-SkipSnapTool` and step 8 cannot be run against it. Report that rather than skipping the step |
-| 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names: `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`. Read the list off that file rather than from memory |
+| 2.1 | Unzip the asset and list the top level, then `tools\` | No top-level directory: `readme.txt`, `LICENSE`, from `3.0.0.0` `INSTALL.BAT` (from `3.1.0.0` also `SETUP.EXE`), the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`) and `tools\` come out directly, and nothing else; `tools\` holds `xhciqual\`, `xhcisnap\` (up to `3.0.0.0`) and `portsw\` (roadmap-hcd task 38.9), from `2.4.0.0` also `silent\` and `xhcicln\` (tasks 38.2 and 38.8), and from `3.0.0.0` also `xhciinst\` and `xhcitr\` (design records 23 and 25). An asset before `2.4.0.0` has no `tools\` and carries `xhciqual\`, `xhcisnap\` and, from `2.3.1.0` (roadmap-hcd task 37.5), `portsw\` at the top level instead |
+| 2.2 | From `3.1.0.0`: check that `tools\xhcitr\` is one of them and `tools\xhcisnap\` is not; up to `3.0.0.0`, that `tools\xhcisnap\` is one of them | From `3.1.0.0`: `tools\xhcitr\` holds `XHCITR.EXE` and `XHCITR64.EXE`, and no `XHCISNAP.EXE`, `SNAPON.BAT`, `SNAPGET.BAT` or `SNAPOFF.BAT` is anywhere in the asset (roadmap-usb4 task 42-A.4). Up to `3.0.0.0`: `tools\xhcisnap\` holds `XHCISNAP.EXE`, with `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside it from `2.4.0.0` (roadmap-hcd task 38.1), and a download without it is a cut made with `-SkipSnapTool`. It is what step 8 needs, so report a download without it rather than skipping the step |
+| 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names, and nothing else. Read the list off that file rather than from memory. For `3.0.0.0` it is `xhci98.inf`, `xhci98.sys`, `xhciuas.inf`, `xhciuas.sys`, `xhcicm.inf`, `xhcicm.sys`, `txtsetup.oem` and `nt\`, which holds `xhcicmf.inf` and a copy of `xhcicm.sys`; with `xhcihlpr.sys` in the two `-x86` directories and `xhci98-test.cer` in the two `-x64` ones; and in the download `release-x86\` and `release-x64\` also hold the bundled Stor98's files, each name starting `stor98`, as the same section says. From `3.1.0.0` the two `-x64` directories have no `nt\`: `xhcicmf.inf` is at their root beside `xhcicm.sys`, of which they hold one copy. `2.0.0.0`'s list was the first four |
 | 2.4 | Look for a version directory nested inside another | None |
 | 2.5 | On a 64-bit target only: check that the cut carries a 64-bit pair at all | `release-x64\` and `debug-x64\` present, and `readme.txt` naming a 64-bit system among what it supports |
 | 2.6 | List `tools\portsw\`, then look for `portsw.vbs` in each flavour directory | `tools\portsw\` holds `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat` and nothing else, and no flavour directory holds any of them (roadmap-hcd tasks 37.5 and 38.9). The `2.3.1.0` asset has them in `portsw\` at the top level; the `2.3.0.0` asset instead has the three in each flavour directory and no `portsw\` |
-| 2.7 | From `2.4.0.0`: list `tools\xhciqual\` and `tools\xhcisnap\`, then look for `QUALREP.BAT`, `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` anywhere else in the asset | `QUALREP.BAT` beside `XHCIQUAL.EXE`, the three `SNAP*.BAT` beside `XHCISNAP.EXE`, and none of the four anywhere else (roadmap-hcd task 38.1). An asset before `2.4.0.0` has none of them |
-| 2.8 | From `2.4.0.0`: list `tools\xhcicln\` | `XHCICLN.EXE`, `XHCICL64.EXE`, `readme.txt` and `NOTICE.TXT`, and nothing else (roadmap-hcd task 38.8). An asset before `2.4.0.0` has no such directory.
-| 2.9 | From `3.0.0.0`: list `tools\xhciinst\`, and look for `INSTALL.BAT` at the top level | `XHCIINST.EXE`, `XHCIIN64.EXE`, `readme.txt` and `NOTICE.TXT`, and nothing else; `INSTALL.BAT` beside `readme.txt` (roadmap-usb4 task 40.6, design record 23). Then `INSTALL /list` on the target: it names the package, the devices and what it would do, and changes nothing. An asset before `3.0.0.0` has neither. A `2.4.0.0` or later download without it is a cut made with `-SkipCleanTool`: the `XHCICLN` parts of 4.11 and 4.12 cannot be run against it. Report that rather than skipping them |
+| 2.7 | From `2.4.0.0`: list `tools\xhciqual\` (and up to `3.0.0.0` `tools\xhcisnap\`), then look for `QUALREP.BAT`, `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` anywhere else in the asset | `QUALREP.BAT` beside `XHCIQUAL.EXE`, and up to `3.0.0.0` the three `SNAP*.BAT` beside `XHCISNAP.EXE`, and none of the four anywhere else (roadmap-hcd task 38.1); from `3.1.0.0` no `SNAP*.BAT` at all. An asset before `2.4.0.0` has none of them |
+| 2.8 | From `2.4.0.0`: list `tools\xhcicln\` | `XHCICLN.EXE`, `XHCICL64.EXE`, `readme.txt` and `NOTICE.TXT`, and nothing else (roadmap-hcd task 38.8). An asset before `2.4.0.0` has no such directory. A `2.4.0.0` or later download without it is a cut made with `-SkipCleanTool`: the `XHCICLN` parts of 4.11 and 4.12 cannot be run against it. Report that rather than skipping them |
+| 2.9 | From `3.0.0.0`: list `tools\xhciinst\`, and look for `INSTALL.BAT` at the top level | `XHCIINST.EXE`, `XHCIIN64.EXE`, `readme.txt` and `NOTICE.TXT`, and from `3.1.0.0` also `XHCIWIZ.EXE`, `XHCIWZ64.EXE` and `XHCIDI.EXE`, and nothing else; `INSTALL.BAT` beside `readme.txt`, and from `3.1.0.0` `SETUP.EXE` beside it (roadmap-usb4 tasks 40.6, 42-A.2 and 42-A.31, design records 23 and 26). Then `INSTALL /list` (from `3.1.0.0` `INSTALL /console /list`) on the target: it names the package, the devices and what it would do, and changes nothing; from `3.1.0.0` `INSTALL` opens the installer's window. An asset before `3.0.0.0` has neither |
+| 2.10 | From `3.0.0.0`: list `tools\xhcitr\` | `XHCITR.EXE`, `XHCITR64.EXE`, `readme.txt` and `NOTICE.TXT`, and nothing else (roadmap-usb4 Phase 41, design record 25). An asset before `3.0.0.0` has no such directory |
 
 The `release` directory for the machine's architecture is the one to install.
 The `debug` directory beside it is the same drivers built for diagnosis, for a
@@ -166,8 +167,10 @@ architecture's directory is safe in both directions: the wrong directory
 offers no driver at all rather than installing one that cannot load. Record it
 as a wrong pick and point at the other one.
 
-A flavour directory holds the two drivers and their INFs and no Microsoft
-file. What the install needs beyond them, `usbd.sys` and `usbui.dll`, Windows
+A flavour directory holds the drivers and their INFs (from `3.0.0.0`
+`xhci98.sys`, `xhciuas.sys` and `xhcicm.sys`, with `xhcihlpr.sys` in the
+x86 pair) and, in the download's `release-` directories, the bundled
+Stor98, and no Microsoft file. What the install needs beyond them, `usbd.sys` and `usbui.dll`, Windows
 supplies from its own installation source at step 4 (`readme.txt` section 3).
 On Windows 98 SE the storage clauses also need NUSB's mass-storage component,
 which this package does not carry.
@@ -180,9 +183,10 @@ Observed: the layout and the assertion that protects it are
 `scripts/package/make-release.ps1`, `New-UploadSet`; the directory names, and
 why a wrong pick is safe, are `releases/README.md`;
 `docs/contributing/legal-provenance.md` section 5 records why the asset
-carries no Microsoft file. The four-file directory (two drivers, two INFs)
-was staged for the `release` legs of the integration build and is read
-again from the `2.0.0.0` asset.
+carries no Microsoft file. `2.0.0.0`'s four-file directory (two drivers,
+two INFs) was staged for the `release` legs of its integration build and
+read again from its asset; each later release's directory list is its own
+`readme.txt` section 8 and `releases/<version>/`.
 
 ### Step 3. The DOS pass
 
@@ -209,8 +213,8 @@ CAVEATS` (exit code 3), because the driver polls such a controller
 (`XhciInterruptMode` `0` or `2`), or takes a message-signalled interrupt on
 Vista and 7 where the controller offers one. Record the caveat and the
 line saying which applies, and continue to step 4; at step 8, check in
-`XHCISNAP`'s report that the delivery is the one the line named (polling,
-or MSI). Up to `2.2.0.0` it was
+the driver's snapshot (`XHCISNAP`'s report up to `3.0.0.0`) that the
+delivery is the one the line named (polling, or MSI). Up to `2.2.0.0` it was
 `DISQUALIFIED` and a stop. `DISQUALIFIED` on "no USB 2.0 ports" is the qualifier's criterion from
 the `1.x` releases; record it and continue to step 4 (the `2.0.0.0` driver
 accepts such a controller, built from the specification and untested).
@@ -238,9 +242,9 @@ run sheets cite them.
 | 4.2 | Windows 2000 SP4 | Device Manager, the controller (under "Other devices" while it has no driver), Properties -> Driver -> Update Driver -> Search for a suitable driver -> Specify a location -> `RELEASE-X86\`. Over an installed xhci98 the list route also works: Display a list of the known drivers -> Have Disk -> `RELEASE-X86\` | Completes with no prompt and, from `2.4.0.0`, no request to restart, although the INF's `Xhci.Dev.NTx86` path also copies the helper `xhcihlpr.sys` to `System32\Drivers` and adds its boot-start service `xhcihlpr`; record both, and that the controller runs at once (4.3). On a controller with no driver yet the list route fails: it asks for a hardware type first, Windows 2000 does not offer USB controllers there, and Have Disk then answers "The specified location does not contain information about your hardware", since the INF names only the USB class (read on a clean 2000 SP4 guest, 2026-10-13, `docs/contributing/runs/run-37.md`, "37.final") |
 | 4.5 | Windows ME | No USB 2.0 stack is needed (a stock ME was read on `2.3.0.0`; SweetLow's stack, if present, also works); the Windows 98 SE route of 4.1 | Completes, with a request to restart. In the virtual machines no CD was asked for. This target is supported in virtual machines only |
 | 4.6 | Windows XP | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\`; Continue Anyway at the unsigned-driver warning | Completes with no file prompt and, from `2.4.0.0`, no request to restart, with `xhcihlpr.sys` and its service `xhcihlpr` installed as on 4.2. This target is supported in virtual machines only |
-| 4.8 | Windows XP x64 | The Windows 2000 route of 4.2, pointed at `RELEASE-X64\`; Continue Anyway at the unsigned-driver warning | Completes with Windows' signature and Logo prompts only, no file prompt and no restart. `RELEASE-X86\` offers this machine no driver at all, which is what a wrong pick looks like. This target is supported in virtual machines only |
+| 4.8 | Windows XP x64 | The Windows 2000 route of 4.2, pointed at `RELEASE-X64\`; Continue Anyway at the unsigned-driver warning | Completes with Windows' signature and Logo prompts only, no file prompt and no restart. `RELEASE-X86\` offers this machine no driver at all, which is what a wrong pick looks like. This target is supported in virtual machines; of real machines it has run on one, the owner's Dell Latitude E7250, at the `2.3.0.0` bench |
 | 4.9 | Windows Vista, Windows 7 (32-bit) | Device Manager, the unrecognised xHCI device, Update Driver Software -> Browse my computer for driver software -> `RELEASE-X86\`. Use Device Manager rather than right-clicking an INF. If Windows warns that the driver is not signed or its publisher cannot be verified, choose to install it anyway, and write down the prompt's wording | Completes with no file prompt: the INF's `Xhci.Dev6` path copies `xhci98.sys` and the helper, `xhcihlpr.sys` from `2.4.0.0` (`xhcimsi.sys`, the MSI helper, in `2.3.0.0` and `2.3.1.0`). Over `2.3.0.0` or `2.3.1.0` it also marks the `xhcimsi` service for deletion, gone after the restart, and deletes `xhcimsi.sys` from `System32\Drivers` at once, before the restart, with no `PendingFileRenameOperations` entry (read in the Phase 38 VM matrix); record both. Since `2.3.0.0` it then asks for a restart, and until the restart the controller shows Code 28 (Windows 7) or Code 1 (Vista); 4.3 is read after it. 32-bit Vista and Windows 7 do not enforce kernel-mode signing, so the driver starts on the ordinary boot. This target is supported in virtual machines only |
-| 4.10 | Windows Vista x64, Windows 7 x64 | The route of 4.9, pointed at `RELEASE-X64\`. Then restart with driver signature enforcement disabled (the Advanced Boot Options menu); that lasts one boot, and every later boot that is to have working USB needs it again | Completes with no file prompt. The drivers start only on a boot with enforcement disabled; on any other boot Device Manager shows Code 39 on the controller and nothing on it works. This target is supported in virtual machines only, and the package is not signed |
+| 4.10 | Windows Vista x64, Windows 7 x64 | First turn test-signing mode on, once, as `readme.txt` section 4 says: suspend BitLocker on the system drive if it is on, run `bcdedit /set testsigning on` at an elevated Command Prompt, restart, and check that "Test Mode" shows on the desktop. Then the route of 4.9, pointed at `RELEASE-X64\`; at the publisher warning, install anyway. Where test-signing mode cannot be turned on, restart with driver signature enforcement disabled (F8, the Advanced Boot Options menu) instead; that lasts one boot | Completes with no file prompt; the Driver tab then says "Not digitally signed". In test-signing mode the drivers start at every boot. On a boot with neither test-signing mode nor enforcement disabled, Device Manager shows Code 39 (Vista) or Code 52 (Windows 7) on the controller and nothing on it works. The x64 drivers are test-signed with this project's own certificate since `2.3.0.0` (`xhci98-test.cer` beside them; importing it is not needed); that is not Microsoft signing. Record which of the two modes the run used. This target is supported in virtual machines; Windows 7 x64 has also run on one real machine, the owner's Dell Latitude E7250, at the `2.3.0.0` bench |
 | 4.3 | All seven | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark. On Vista x64 and Windows 7 x64, on the boot of 4.10 |
 | 4.4 | Windows 98 SE | Record only: open the controller's Driver File Details and the Driver tab | Driver File Details lists `xhci98.tmp` (the `release` legs, under NUSB and under SweetLow's stack). Under `1.x`, `xhci98.tmp` was left in `System32\Drivers` and listed there (cosmetic), and the Driver tab showed a date but no version; the `2.0.0.0` INF keeps the same temporary-copy line |
 | 4.11 | Every target, from `2.4.0.0` | The root hub of 4.3: on 2000 to 7 its Details tab, Device Instance Id; on 98 SE and ME, `regedit`, `HKEY_LOCAL_MACHINE\Enum\USB`. Then `XHCICLN` (`XHCICL64` on a 64-bit target) from `tools\xhcicln\` at a prompt (on Vista and 7 it asks for elevation) | The root hub's id begins `USB\XHCI98_ROOT_HUB\`, and on 98 SE and ME its key is under `Enum\USB\XHCI98_ROOT_HUB` (roadmap-hcd task 38.8). On a machine that never ran a release before `2.4.0.0`, `XHCICLN` prints "No devnode is left under XHCI98\: nothing to do." and exits 0 |
@@ -256,9 +260,13 @@ xHCI98 USB 3.x eXtensible Host Controller
 
 Both are the INFs' strings, and both architectures' INFs carry the same ones,
 so they do not say which package was installed; what says that is which
-directory was pointed at. External hubs plugged in later appear nowhere in
-Device Manager: the driver runs them itself, and the devices behind them appear
-under the root hub.
+directory was pointed at. An external hub plugged in later appears as
+"xHCI98 USB Hub" beneath the port it is plugged into, with the devices
+behind it beneath it; a USB 3 hub appears twice, the second entry "xHCI98
+USB 3.x Hub" for its SuperSpeed half. The driver still runs every hub
+itself (since `2.1.0.0`; the release notes, "Devices and hubs in Device
+Manager"). On Windows XP each newly plugged hub brings the Found New
+Hardware wizard and the unsigned-driver warning.
 
 If a USB device's own driver fails to load after the install and Windows 98
 SE asked for the CD at 4.1: `usbd.sys` is missing, which means the Insert Disk
@@ -290,12 +298,12 @@ device at a time, and do not cycle a device rapidly.
 |---|---|---|---|
 | 5.1 | A Low-Speed HID | On a root port: plug in, use it, unplug, plug it back in | It appears with the right identity and no warning mark, the pointer moves or the keys type, unplugging removes the node, and replugging brings it back with no Refresh and no prompting. On Windows 98 SE the first HID device may ask for the CD for `hidclass.sys`, once |
 | 5.2 | A High-Speed flash drive | The same, and round-trip a file: write one to it and read it back | A drive letter appears and the file reads back with matching contents, and the node comes and goes with the device. On Windows 98 SE without NUSB's mass-storage component: "Unknown Device", Code 28, which is the missing prerequisite, not this driver; record it and SKIP the rest of the clause |
-| 5.3 | A hub at a root port, with children behind it | Assemble it, then take 5.1 and 5.2 again on the children | Every child named and working, under the root hub. Record whether the hub is self- or bus-powered and, if it can be read, its TT class |
+| 5.3 | A hub at a root port, with children behind it | Assemble it, then take 5.1 and 5.2 again on the children | The hub's own "xHCI98 USB Hub" entry (4.3's note), and every child named and working beneath it. Record whether the hub is self- or bus-powered and, if it can be read, its TT class |
 | 5.4 | A USB Ethernet adapter (optional) | On a root port, then behind the hub: bring it up and pass traffic | It takes an address and passes traffic |
 | 5.5 | A USB Audio device (optional) | On a root port, then behind the hub: play something through it | It plays and is heard |
 | 5.6 | Every device above | Record the negotiated speed wherever the OS will show it | `Low`, `Full` or `High`, the device's true speed, on a root port and behind a hub alike. Device Manager on these systems shows `High` at most, so a SuperSpeed device is 5.8's reading |
 | 5.7 | A UAS storage device | On a USB 3.x connector: plug in; on its first arrival a New Hardware wizard asks for its driver - point it at the same `release` directory. Vista's wizard names the device by its own product string, and it becomes "xHCI98 USB Attached SCSI Storage" once installed. Windows 7 shows no wizard: it searches Windows Update and reports the device was not installed; install it from Device Manager on the device's entry (Update Driver Software, Browse my computer for driver software, the same directory). Round-trip a file, unplug, plug it back in | It installs with no restart, a drive letter appears, and the file reads back with matching contents. On Windows 98 SE without NUSB's mass-storage component it sits at Code 2; that is the missing prerequisite (`readme.txt` section 3), so record it and SKIP. If the device offers both transports, also record which driver Device Manager shows; `XhciForceBulkOnly` is `readme.txt` section 9 and is not this clause |
-| 5.8 | A SuperSpeed device | On a USB 3.x connector: plug in, round-trip a file. Keep it plugged in for step 8 | It works, with matching contents. Its SuperSpeed is read at 8.8 from `XHCISNAP`, not from Device Manager, which shows `High` at most |
+| 5.8 | A SuperSpeed device | On a USB 3.x connector: plug in, round-trip a file. Keep it plugged in for step 8 | It works, with matching contents. Its SuperSpeed is read at 8.8 from the driver's snapshot, not from Device Manager, which shows `High` at most |
 
 On Windows 98 SE, the first storage device installed from NUSB's five
 mass-storage files on their own, rather than from an NUSB install, takes one
@@ -359,7 +367,7 @@ Windows 98 SE
 |---|---|---|
 | 7.1 | Disable the controller in Device Manager, enable it, then remove it and refresh | It goes and comes back each time, with no crash. Under `1.x` with NUSB this blue-screened the machine at `0028:C00312EE`, in NUSB's `usbport.sys`, which `2.0.0.0` does not use |
 | 7.2 | Unplug everything from the machine's USB ports, leave it a full minute, then plug in a mouse | It enumerates on its own, with no Refresh in Device Manager |
-| 7.3 | Plug in one composite device, something that is more than one thing at once | It enumerates and each of its functions loads under the root hub, rather than one entry with a warning mark |
+| 7.3 | Plug in one composite device, something that is more than one thing at once | It enumerates as one "xHCI98 USB Composite Device" entry beneath its port, with each of its functions loaded beneath that entry (since `2.3.0.0`; before it the functions had no parent entry), rather than one entry with a warning mark |
 
 7.1 was read under `2.0.0.0` in Windows 98 SE virtual machines under NUSB 3.3
 and under SweetLow's stack: disable, enable, remove and rescan, with a mouse
@@ -372,8 +380,9 @@ limitations"), so an empty bus is the one condition left to try. **Empty the
 bus properly**: any attached device keeps the bus busy, so a machine with an
 internal USB device cannot show this either way.
 
-7.3 is the driver's own composite split: there is no composite parent driver
-under `2.0.0.0` on any target. Read in virtual machines on both primary
+7.3 is the driver's own composite split: Windows' own composite parent
+driver is not used on any target, and the composite entry is the driver's
+(the release notes, "Devices and hubs in Device Manager"). Read in virtual machines on both primary
 targets with the C-Media `0D8C:0014`, which has no IAD (roadmap-hcd 26-A.7).
 
 Windows 2000 SP4
@@ -393,8 +402,8 @@ Windows ME (virtual machines only)
 | # | Do | Expected reading |
 |---|---|---|
 | 7.7 | Record the USB stack installed, if any | None (stock ME) or SweetLow's USB 2.0 stack; both have been read |
-| 7.8 | Plug in one composite device, as 7.3 | Each function loads under the root hub, as 7.3; read on the integration build with QEMU's `usb-audio` at a root port and behind a hub |
-| 7.9 | With a USB mouse attached, disable the controller in Device Manager, then re-enable it | It goes and comes back with no hang, and the mouse moves. Against `2.0.0.0` do not run it: re-enabling with a mouse or keyboard attached hangs Windows ME there, a known limitation fixed in `2.1.0.0` |
+| 7.8 | Plug in one composite device, as 7.3 | As 7.3; the functions were read on the integration build with QEMU's `usb-audio` at a root port and behind a hub |
+| 7.21 | With a USB mouse attached, disable the controller in Device Manager, then re-enable it | It goes and comes back with no hang, and the mouse moves. Against `2.0.0.0` do not run it: re-enabling with a mouse or keyboard attached hangs Windows ME there, a known limitation fixed in `2.1.0.0` |
 
 Windows XP (virtual machines only)
 
@@ -426,7 +435,7 @@ Windows Vista and Windows 7, 32-bit and x64 (virtual machines only)
 | 7.17 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Absent, as 7.9 |
 | 7.18 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh |
 | 7.19 | Disable the controller in Device Manager and re-enable it, five times, then uninstall it and Scan for hardware changes | It comes back each time, with no crash and no hang; the rescan reinstalls with no media prompt and, on x64, with no second boot needed. Record how long each enable took |
-| 7.20 | x64 only: restart normally, then restart again with driver signature enforcement disabled | On the ordinary boot the controller shows Code 39 and nothing on it works; on the other the two nodes of 4.3 are back and the mouse of step 5 works. Record both. `SKIP - other target` on 32-bit Vista and Windows 7 |
+| 7.20 | x64 only: in test-signing mode (4.10), restart normally. Then turn it off (`bcdedit /set testsigning off`, restart), restart once more with driver signature enforcement disabled (F8), and turn test-signing mode back on | In test-signing mode the two nodes of 4.3 are back on the ordinary boot and the mouse of step 5 works. With it off, the ordinary boot shows Code 39 (Vista) or Code 52 (Windows 7) on the controller and nothing on it works, and the F8 boot brings the nodes and the mouse back. Record each. A run that used F8 alone at 4.10 takes the last two readings only. `SKIP - other target` on 32-bit Vista and Windows 7 |
 
 7.19 was read under `2.0.0.0` in virtual machines: five disable and enable
 cycles each on Windows 7 x86 and x64 with no hang (roadmap-hcd 28.3). The
@@ -439,33 +448,38 @@ under `2.0.0.0`. Windows 7 has not been run on real hardware with `2.0.0.0`.
 The point of a log channel is that a stranger can produce one. This step tests
 the instruction a user is given, not the driver. That instruction is
 `docs/using/release-notes.md`, "The log, and how to send one", and
-`readme.txt` sections 6 and 9 and `tools\xhcisnap\readme.txt`, which say the
-same thing in the user's words.
+`readme.txt` sections 6 and 9 and `tools\xhcitr\readme.txt` (up to
+`3.0.0.0`, `tools\xhcisnap\readme.txt`), which say the same thing in the
+user's words.
 Read them for the target under test and do what they say. The table below
 carries the commands and what to read back, and nothing else those two
 documents own.
 
-It is the same procedure on every target. Everything here runs out of this
-release's `tools\xhcisnap\` directory (`xhcisnap\` at the top of a release
-before `2.4.0.0`). On the 64-bit targets the one `XHCISNAP.EXE`,
-a 32-bit program, runs under WOW64 against the 64-bit driver; `XHCISNAP
--probe` was read that way on Windows XP x64 (roadmap-hcd 28-A.2).
+It is the same procedure on every target. From `3.1.0.0` everything here
+runs from the xHCI98 USB Tree the install put in place, or out of this
+release's `tools\xhcitr\` directory: `XHCITR.EXE` on 32-bit Windows,
+`XHCITR64.EXE` on 64-bit. Up to `3.0.0.0` it ran out of the release's
+`tools\xhcisnap\` directory (`xhcisnap\` at the top of a release before
+`2.4.0.0`), the one 32-bit `XHCISNAP.EXE` under WOW64 on the 64-bit
+targets; `XHCISNAP -probe` was read that way on Windows XP x64
+(roadmap-hcd 28-A.2).
 
 | # | Do | Expected reading |
 |---|---|---|
-| 8.1 | `SNAPON.BAT` from `tools\xhcisnap\` (on Vista and 7, Run as administrator; before `2.4.0.0`, `XHCISNAP -verbosity 2`) | It runs `XHCISNAP -verbosity 2` (from `2.4.0.0`, `XHCISNAP -on`), which names each driver key it wrote to and prints the level that key held before, once per xHCI controller the machine has; from `2.4.0.0` the last line above "Press any key" is `XHCISNAP`'s "Nothing to attach yet: restart Windows, reproduce, then run SNAPGET.BAT.", and nothing of the batch's own follows it. From `2.4.0.0`, first run `SNAPON.BAT 0` and `SNAPON.BAT 5` at a prompt in that directory: each is refused, the first pointing at `SNAPOFF.BAT`, the second naming the levels 1 to 4, and neither writes a key; and `SNAPON.BAT "A&B"` is refused the same way, by `XHCISNAP` and not by a prompt error; then `SNAPON.BAT` with no argument as above (it runs `XHCISNAP -on`, level 2; the optional level, `SNAPON.BAT 3` or `SNAPON.BAT "3"`, runs `XHCISNAP -on 3`) |
+| 8.1 | From `3.1.0.0`: the xHCI98 USB Tree's View > Logging level... (up to `3.0.0.0`, `SNAPON.BAT` from `tools\xhcisnap\`, on Vista and 7 Run as administrator; before `2.4.0.0`, `XHCISNAP -verbosity 2`) | The dialog lists each xHCI controller `xhci98.sys` drives with the level its driver key holds, `2` on a fresh install. If it reads otherwise, set `2` (on 2000 to 7 as a standard user through "Set as administrator..."); the tool writes it to every controller, reads it back and offers the restart. Then, at a prompt: `XHCITR /snapshot -verbosity 2` and `XHCITR /dump -on` are refused, each saying which switches it takes and "Nothing was written.", and write nothing; `XHCITR /setlevel xhci98=5` is refused before anything is read. Up to `3.0.0.0`, `SNAPON.BAT` runs `XHCISNAP -on` (level 2), names each driver key it wrote to and prints the level that key held before; `SNAPON.BAT 0`, `SNAPON.BAT 5` and `SNAPON.BAT "A&B"` are refused by `XHCISNAP` and write no key |
 | 8.2 | Restart the machine | This is what makes it take: the driver reads the value when it starts |
 | 8.3 | Use a device, or reproduce whatever is wrong; leave 5.8's SuperSpeed device plugged in | Nothing to read yet. An empty note ring at 8.5 is a reading rather than a failure |
-| 8.4 | `SNAPGET.BAT` (before `2.4.0.0`, `XHCISNAP -o MYDUMP` from a directory you can write to, which then holds `MYDUMP.TXT`, `.BIN` and `.PSC`) | It runs `XHCISNAP -report`, which writes `mDDhhmmS.DEV`, `.TXT`, `.BIN` and `.PSC` in the directory it runs in, not under `C:\`, the name made from the local date and time, and prints the names; from `2.4.0.0` the last line above "Press any key" is `XHCISNAP`'s "Attach: mDDhhmmS.DEV mDDhhmmS.TXT (the .BIN and .PSC only if asked)". On 98 SE and ME, with the controller disabled in Device Manager (Code 22), the dump is still taken and the `.DEV` and the screen say "dump taken from a controller Device Manager reports as disabled (Code 22)". The channel stays on. Run it again: the second set takes the next letter and the first is unchanged. From `2.4.0.0`, then run `SNAPGET.BAT T84` at a prompt in that directory: it runs `XHCISNAP -report T84` and writes `T84.DEV`, `.TXT`, `.BIN` and `.PSC`. Run `SNAPGET.BAT T84` again: it is refused (exit 6), says a file of that name is there already, and leaves the four `T84` files as they were; `SNAPGET.BAT A.B` is refused for its dot, and `SNAPGET.BAT "A&B"`, `SNAPGET.BAT -X` and `SNAPGET.BAT CON` for the name rule, by `XHCISNAP` and not by a prompt error (exit 2), each writing nothing |
+| 8.4 | From `3.1.0.0`: File > Save Report... in the xHCI98 USB Tree, then `XHCITR /snapshot` (`XHCITR64` on 64-bit Windows) at a prompt in a directory you can write to (up to `3.0.0.0`, `SNAPGET.BAT`; before `2.4.0.0`, `XHCISNAP -o MYDUMP`) | The report ends with a "Snapshot" part: the device report (the `.DEV` text) once, then for each xHCI controller `xhci98.sys` drives the dump's text (the `.TXT`), slots and enumeration regions included; at level 4 the dump is withheld and the report says so. `XHCITR /snapshot` writes `mDDhhmmS.DEV`, `.TXT`, `.BIN` and `.PSC` in the current directory, not under `C:\`, the name made from the local date and time, and its text (a message box, or the file its output is redirected to) ends "Attach: mDDhhmmS.DEV mDDhhmmS.TXT (the .BIN and .PSC only if asked)" and names the directory. On 98 SE and ME, with the controller disabled in Device Manager (Code 22), the dump is still taken and the `.DEV` and the text say "dump taken from a controller Device Manager reports as disabled (Code 22)". Run it again: the second set takes the next letter and the first is unchanged. Then `XHCITR /snapshot T84`: it writes `T84.DEV`, `.TXT`, `.BIN` and `.PSC`; again, and it is refused (exit 6), says a file of that name is there already, and leaves the four `T84` files as they were; `XHCITR /snapshot A.B` is refused for its dot and `XHCITR /snapshot CON` for the name rule (exit 2), each writing nothing. File > Save Snapshot... into a folder you pick writes a set there and shows the same text |
 | 8.5 | Read the `.TXT` file's header | The tool's version and build stamp, the driver's counters, and at level 2 the driver's own note ring below them. A report whose version is not this release's is a report from the wrong build |
-| 8.6 | `SNAPOFF.BAT` (before `2.4.0.0`, `XHCISNAP -disable`) | It runs `XHCISNAP -disable` and reports the channel off again. A machine left with the channel on is a machine whose diagnostic state anyone using it can read |
-| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns`, `XhciForceBulkOnly`, `XhciFastPollFsLs`, `XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`, `XhciIntelPortSwitch`, `XhciIntelIrqRoute`, `XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`, `XhciMaxTransferKB`, `XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`, `XhciPollFineTimer` (from `2.4.0.0`), `XhciWideMap`, `XhciSelectiveSuspend`, `XhciSilentInstall` (from `2.4.0.0`), `XhciUsb2HubSpeedFallback`, `XhciAccept096` (from `2.4.0.0`) and the fourteen values of Linux's controller quirks (`XhciMsiAvoid`, `XhciStreamsOff`, `XhciResumeReinit`, `XhciIntelShutdownToEhci`, `XhciShutdownReset`, `XhciSuspendHaltDelay`, `XhciSuspendHaltTimeout`, `XhciAsmediaFlowControl`, `XhciTiIntervalCap`, `XhciStuckLinkReset`, `XhciStreamRingPad`, `XhciControlLinkNoOp`, `XhciIsochSpuriousSuccess`, `XhciAmdSuspendBitClear`; new in `2.4.0.0`), then read the 8.4 report's "registry values" block and its "Linux quirks" block | Write down whether each value is there and what its data is. On a fresh install the INF writes all thirty-six (nineteen before `2.4.0.0`): `XhciImodInterval250ns` `160`, `XhciFirstEnumWaitMs` `5000`, `XhciFirstEnumPortMs` `2000`, `XhciMaxTransferKB` `1024`, `XhciPollIdleMs` `50`, `XhciIntelIrqRoute`, `XhciTolerance`, `XhciIntervalCap`, `XhciPollActiveMs`, `XhciUsb2HubSpeedFallback`, `XhciAccept096` and every quirk value but `XhciShutdownReset` `1`, and the other twelve `0`, `XhciPollFineTimer` and `XhciSilentInstall` among them (an update keeps a value already there, such as the `1` an earlier install wrote for `XhciIntelPortSwitch`, and adds the values an older install never wrote), and the report shows the interval read and in force. Write down the report's lines for the value read and the interval in force, and from the "Linux quirks" block whether the controller is listed for any quirk |
+| 8.6 | From `3.1.0.0`: View > Logging level... again (up to `3.0.0.0`, `SNAPOFF.BAT`; before `2.4.0.0`, `XHCISNAP -disable`) | `xhci98` reads `2`, the default; if 8.1 or a maintainer set another level, set `2` again. Up to `3.0.0.0`, `SNAPOFF.BAT` runs `XHCISNAP -disable` and reports the channel off again. While the level is above 0, anyone using the machine can read the driver's diagnostic state, and at level 4 that includes internal addresses |
+| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns`, `XhciForceBulkOnly`, `XhciFastPollFsLs`, `XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`, `XhciIntelPortSwitch`, `XhciIntelIrqRoute`, `XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`, `XhciMaxTransferKB`, `XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`, `XhciPollFineTimer` (from `2.4.0.0`), `XhciWideMap`, `XhciSelectiveSuspend`, `XhciSilentInstall` (from `2.4.0.0`), `XhciUsb2HubSpeedFallback`, `XhciAccept096` (from `2.4.0.0`) and the fourteen values of Linux's controller quirks (`XhciMsiAvoid`, `XhciStreamsOff`, `XhciResumeReinit`, `XhciIntelShutdownToEhci`, `XhciShutdownReset`, `XhciSuspendHaltDelay`, `XhciSuspendHaltTimeout`, `XhciAsmediaFlowControl`, `XhciTiIntervalCap`, `XhciStuckLinkReset`, `XhciStreamRingPad`, `XhciControlLinkNoOp`, `XhciIsochSpuriousSuccess`, `XhciAmdSuspendBitClear`; new in `2.4.0.0`), then read the 8.4 report's "registry values" block and its "Linux quirks" block | Write down whether each value is there and what its data is. On a fresh install the INF writes all thirty-six (nineteen before `2.4.0.0`): `XhciImodInterval250ns` `160`, `XhciFirstEnumWaitMs` `5000`, `XhciFirstEnumPortMs` `2000`, `XhciMaxTransferKB` `1024`, `XhciPollIdleMs` `50`, `XhciIntelIrqRoute`, `XhciTolerance`, `XhciIntervalCap`, `XhciPollActiveMs`, `XhciUsb2HubSpeedFallback`, `XhciAccept096` and every quirk value but `XhciShutdownReset` `1`, `XhciLogVerbosity` `2` (from `3.0.0.0`; `0` before it), and the other eleven `0`, `XhciPollFineTimer` and `XhciSilentInstall` among them (an update keeps a value already there, such as the `1` an earlier install wrote for `XhciIntelPortSwitch`, and adds the values an older install never wrote), and the report shows the interval read and in force. Write down the report's lines for the value read and the interval in force, and from the "Linux quirks" block whether the controller is listed for any quirk |
 | 8.8 | The SuperSpeed witness: in the 8.4 report, find 5.8's device | The speed the driver decoded from its port, SuperSpeed, and the speed it programmed into the device's slot, SuperSpeed, agreeing. The slot's speed is the report's slot table: `PSIV` is the Speed field of the controller's own Slot Context for the device, and `speed` is that value decoded, `SuperSpeed, 5 Gbit/s, Gen 1x1` for a 5 Gbit/s link. A SuperSpeed device that reads High Speed here ran on the USB 2.0 port of its connector; record which connector it was in |
 | 8.9 | From `2.4.0.0`: read the 8.4 `.DEV` file | The controller's Device Manager status and problem code (a started controller, problem `0`), the resources it was given (memory window and interrupt, written down beside 3.4's `bar` and `irq`), and a version and SHA-256 for `xhci98.sys`, `xhciuas.sys`, `xhcihlpr.sys`, `usbd.sys` and `usbui.dll`, each file this target has installed, and for `xhcimsi.sys` where it is still on disk (on 32-bit Vista and 7 it should not be, after 4.9's restart). The `xhci98.sys` hash is the one `readme.txt` gives for the directory installed. Where this target cannot report an item, the file says so rather than leaving it out |
 
-If nothing comes back (8.4): run `XHCISNAP -probe`, which answers whether the
-route to a driver exists at all separately from whether this driver answered on
-it. The ordinary cause of an empty report is a skipped 8.2. `xhcisnap/README.md`
+If nothing comes back (8.4): run `XHCITR /probe` (up to `3.0.0.0`,
+`XHCISNAP -probe`), which answers whether the route to a driver exists at
+all separately from whether this driver answered on it. The ordinary cause
+of an empty report is a skipped 8.2. `docs/contributing/snapshot-reader.md`
 decodes what the probe prints.
 
 8.8 is the SuperSpeed clause's witness because nothing else on these systems
@@ -476,7 +490,7 @@ two places, so their agreement is part of the reading.
 
 On Windows 98 real hardware, do not run DebugView while capturing; that route
 crashed the `1.x` driver's machines and has not been read on `2.0.0.0` there.
-`XHCISNAP` is the route.
+The xHCI98 USB Tree (`XHCISNAP` up to `3.0.0.0`) is the route.
 
 Observed: under `2.0.0.0`, `XHCISNAP -probe` answered "the channel is live"
 with the channel on and a full `-o` report was read on Windows 98 SE under NUSB
@@ -513,7 +527,8 @@ shutdown, record only.
 Report it; do not diagnose it. File an issue with
 `.github/ISSUE_TEMPLATE/bug_report.yml`, attach step 3's probe log (the
 `mDDhhmmS.LOG` `QUALREP` wrote; `PROBE.LOG` before `2.4.0.0`), and, where
-Windows still runs, the `.DEV` and `.TXT` files `SNAPGET.BAT` wrote at 8.4,
+Windows still runs, the report File > Save Report... wrote at 8.4 (up to
+`3.0.0.0`, the `.DEV` and `.TXT` files `SNAPGET.BAT` wrote),
 with the readings from the run, and say which substep and which reading.
 `docs/using/release-notes.md`'s "Known limitations" is worth reading first,
 since several of the things a tester will meet are measured and published, but

@@ -1426,8 +1426,8 @@ static PXHCI_RING hcdInjBulkRing(PHCD_PIPE pipe, ULONG stream,
 }
 
 /* Every TD the withholding held back started: the endpoint rung, or each
- * of its streams with one queued, by hcdCfgStreamKick's checks (review
- * round 3). Controller lock taken. IRQL: PASSIVE_LEVEL, powered. */
+ * of its streams with one queued, by hcdCfgStreamKick's checks.
+ * Controller lock taken. IRQL: PASSIVE_LEVEL, powered. */
 static VOID hcdInjBulkKick(PHCD_CONTROLLER hc)
 {
     PHCD_PIPE pipe;
@@ -1469,8 +1469,7 @@ static VOID hcdInjBulkRelease(PHCD_CONTROLLER hc)
 }
 
 /* hcdInjAbandon for a bulk fault: counted and noted the same, and every
- * stream rung, not stream 0 alone (review round 4). IRQL: PASSIVE_LEVEL,
- * powered. */
+ * stream rung, not stream 0 alone. IRQL: PASSIVE_LEVEL, powered. */
 static VOID hcdInjBulkAbandon(PHCD_CONTROLLER hc, ULONG why)
 {
     KIRQL oldIrql;
@@ -1535,12 +1534,11 @@ static PXHCI_TRANSFER hcdInjTdOf(PHCD_PIPE p, ULONG token)
  * that ring's head is lost, and that TD (by its ring and token) becomes
  * the lost one. From then every Transfer Event on that one ring is lost
  * too, so neither a short's tail nor a successor's completion reaches the
- * engine, which would otherwise sweep the lost TD as failed (review round
- * 6): the TD stays outstanding, with the controller past it, until the
- * driver's own stop, reset or dequeue move ends the losing as it is sent
- * (HcdInjCommand) or the TD leaves the queue - then nothing more is lost.
- * Events of other rings pass. Returns 1 to swallow the event. IRQL:
- * DISPATCH_LEVEL.
+ * engine, which would otherwise sweep the lost TD as failed: the TD stays
+ * outstanding, with the controller past it, until the driver's own stop, reset
+ * or dequeue move ends the losing as it is sent (HcdInjCommand) or the TD
+ * leaves the queue - then nothing more is lost. Events of other rings pass.
+ * Returns 1 to swallow the event. IRQL: DISPATCH_LEVEL.
  */
 static ULONG hcdInjBulkLoseEvent(PHCD_CONTROLLER hc, const XHCI_TRB *ev)
 {
@@ -1653,8 +1651,7 @@ static ULONG hcdInjArmBulk(PHCD_CONTROLLER hc, ULONG fault, ULONG port,
             hc->InjBulkStream = 0;
             if (fault == XHCI_INJ_BULK_TIMEOUT) {
                 /* No doorbell withheld: QEMU runs the TD and its
-                 * completion is lost on the way to the driver (review
-                 * round 5). */
+                 * completion is lost on the way to the driver. */
                 hc->InjEp.Block = 0;
                 hc->InjBulkLose = 1;
                 hc->InjBulkLost = 0;
@@ -1855,7 +1852,7 @@ static ULONG hcdInjBulkStop(PHCD_CONTROLLER hc, ULONG stream, ULONG token,
     if (verdict != XHCI_INJ_STOP_OK || !same) {
         /* Already fetched or moved on - QEMU's device wakeup can start a
          * stream behind a withheld doorbell: refused, not reported as
-         * held (review round 4). */
+         * held. */
         hcdInjBulkAbandon(hc, (verdict << 1) | same);
         return 0;
     }
@@ -1913,10 +1910,9 @@ static ULONG hcdInjBulkFire(PHCD_CONTROLLER hc)
     UNREFERENCED_PARAMETER(cycle);
     switch (fault) {
     case XHCI_INJ_BULK_STOP:
-        /* The stop the controller reported for the TD, handed to the
-         * driver as it came; QEMU reports none for a TD it never fetched
-         * (review round 3), so then the event a stop at a TD's start
-         * gives: its first TRB, nothing moved. */
+        /* The stop the controller reported for the TD, handed to the driver as
+         * it came; QEMU reports none for a TD it never fetched, so then the
+         * event a stop at a TD's start gives: its first TRB, nothing moved. */
         if (seen && seenPA == first) {
             XhciInjTransferEvent(&ev, seenPA, seenResidual, seenCode,
                                  hc->InjSlot, hc->InjDci);
@@ -1962,9 +1958,9 @@ static ULONG hcdInjBulkFire(PHCD_CONTROLLER hc)
             delivered = hcdInjDeliver(hc, &ev);
         }
         if (!delivered) {
-            /* Never rewound: a successor may have run meanwhile (review
-             * round 6). The TD is then a lost completion, as code 14's,
-             * for the driver's own timeout. */
+            /* Never rewound: a successor may have run meanwhile. The TD is
+             * then a lost completion, as code 14's, for the driver's own
+             * timeout. */
             XhciLogNote(&hc->Hc, "qemu.inj.undelivered", fault);
         }
         hcdInjBulkRelease(hc);
@@ -2018,14 +2014,13 @@ static VOID hcdInjDisarmEndpoint(PHCD_CONTROLLER hc)
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
     /* 36.22: a bulk doorbell still withheld with nothing emulated is
      * given back by the next thread pass, under the power gate with the
-     * controller running (HcdInjService), never from here (review round
-     * 3). */
+     * controller running (HcdInjService), never from here. */
     if (hc->InjPhase == HCD_INJ_PHASE_BULK_WAIT ||
         hc->InjPhase == HCD_INJ_PHASE_BULK_HELD ||
         hc->InjPhase == HCD_INJ_PHASE_BULK_LOSE) {
         hc->InjPhase = HCD_INJ_PHASE_BULK_CLEAR;
     }
-    /* Nothing more is lost from now (review round 6). */
+    /* Nothing more is lost from now. */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->InjBulkLose = 0;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -2153,8 +2148,7 @@ VOID HcdInjPoll(PHCD_CONTROLLER hc)
      * engine has swallowed an interrupt whose acknowledgement cleared
      * IMAN.IE, and nothing else may drain it (the backstop is off at
      * XhciTolerance 0): one drain of its own, under the power gate and the
-     * drain's admission, apart from the busy retry's count (Codex review of
-     * 36.4, round 1). */
+     * drain's admission, apart from the busy retry's count. */
     if (hc->InjStartHoldTicks != 0 && !HcdInjStartHeld(hc) &&
         InterlockedExchange((PLONG)&hc->InjStartHoldTicks, 0) != 0) {
         HcdPowerGateEnter(hc);

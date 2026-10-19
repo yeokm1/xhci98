@@ -61,15 +61,19 @@ objfre/
 # ...but this project's build/test scripts are .cmd files. Without these
 # negations they are silently ignored (the tracked ones had to be git add -f).
 !xhciqual/build.cmd
-!xhcisnap/build.cmd
-!xhcisnap/selftest.cmd
 !xhcicln/build.cmd
 !xhcicln/selftest.cmd
 !xhciinst/build.cmd
 !xhciinst/selftest.cmd
 !xhcitr/build.cmd
 !xhcitr/selftest.cmd
+!xhcimark/build.cmd
+!xhcimark/selftest.cmd
 !test/xfertest/build.cmd
+!test/pmclient/build.cmd
+!xhciinst/di/build.cmd
+!xhciinst/di/selftest.cmd
+!xhciinst/di/test/build.cmd
 !xhciqual/test/*.cmd
 !scripts/**/*.cmd
 !test/*.cmd
@@ -176,12 +180,13 @@ xhciqual/test/win98hdd/
 xhciqual/test/usb.img
 xhciqual/*.lst
 
-# xhcisnap's own dumps: raw extension images and PORTSC arrays taken off a
-# target. Evidence, not source - they belong in vm/ or an attached report.
-xhcisnap/*.BIN
-xhcisnap/*.PSC
-xhcisnap/*.bin
-xhcisnap/*.psc
+# XHCITR /snapshot's dumps: raw extension images and PORTSC arrays taken off
+# a target (snaptest.cmd's xhcitr/out/ falls under out/ above). Evidence, not
+# source - they belong in vm/ or an attached report.
+xhcitr/*.BIN
+xhcitr/*.PSC
+xhcitr/*.bin
+xhcitr/*.psc
 xhciqual/test/*.bin
 xhciqual/test/*.ppm
 
@@ -234,7 +239,17 @@ handoff.md
 # it). Lives with the harness, not at the repo root; the loaders look only here.
 scripts/vm-matrix/matrix.config.psd1
 
-# build.exe's warning logs, for the HCD (src) and the UAS class driver
-# (src\uas, task 31-A.2): written only when a flavour warns, and never source.
+# build.exe's warning logs, for the HCD (src), the UAS class driver
+# (src\uas, task 31-A.2), the connection manager (src\cm) and the MSI helper
+# (src\hlpr): written only when a flavour warns, and never source.
 src/build*.wrn
 src/uas/build*.wrn
+src/cm/build*.wrn
+src/hlpr/build*.wrn
+
+# src/stor98 is Stor98 (roadmap-usb4 task 42-A.20), with its own .gitignore for
+# its build output (out/, obj*/, build*.log and the rest). Two of the generic
+# patterns above would hide files it tracks: its build scripts (*.cmd) and the
+# debug-console logs its dated gate records cite (docs/gates/**/*.log).
+!src/stor98/**/*.cmd
+!src/stor98/docs/**/*.log

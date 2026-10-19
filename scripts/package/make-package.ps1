@@ -19,18 +19,21 @@ is this project's two files and nothing else:
     xhcicm.inf     the Thunderbolt 3 connection manager's NHI INF
                    (roadmap-usb4.md task 39-A.1; src\cm\xhcicm-amd64.inf
                    under this name for amd64)
-    nt\xhcicmf.inf its NT-only tunnel-port filter INF (src\cm\xhcicmf.inf,
-                   or xhcicmf-amd64.inf under this name for amd64), in a
-                   subdirectory of its own because Windows 98 SE and ME read
-                   a $Windows NT$ INF beside the one they are pointed at
-                   (runs/run-39.md, 39-0.4); its source disk is nt\
-                   itself
-    nt\xhcicm.sys  the filter INF's own copy of xhcicm.sys, the same bytes
-                   as the root's (copied after test-signing): Vista's and
-                   7's driver store refuses a source outside the INF's
-                   directory (SetupCopyOEMInf error 0xA1); check-cm-inf.ps1
-                   (CM-NO9XBRIDGE) compares the two
     xhcicm.sys     the connection manager, the same flavour
+    xhcicmf.inf    its NT-only tunnel-port filter INF: for x86
+                   src\cm\xhcicmf.inf as nt\xhcicmf.inf, in a subdirectory
+                   of its own because Windows 98 SE and ME read a
+                   $Windows NT$ INF beside the one they are pointed at
+                   (runs/run-39.md, 39-0.4), with nt\xhcicm.sys, its own
+                   copy of xhcicm.sys, the same bytes: its source disk is
+                   nt\ itself, and Vista's and 7's driver store refuses a
+                   source outside the INF's directory (SetupCopyOEMInf
+                   error 0xA1); check-cm-inf.ps1 (CM-NO9XBRIDGE) compares
+                   the two. For amd64 src\cm\xhcicmf-amd64.inf as
+                   xhcicmf.inf at the root, beside xhcicm.inf and the one
+                   xhcicm.sys: 98 and ME never read the x64 package, and no
+                   other INF there binds a PCI bridge, so it needs no
+                   subdirectory and no second copy (3.1.0.0)
 
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
 portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
@@ -125,7 +128,8 @@ scripts\inf-gate\check-cm-inf.ps1 under -Arch.
 .PARAMETER CmFilterInfPath
 The connection manager's NT-only tunnel-bridge filter INF, overriding
 `src\cm\xhcicmf.inf` (x86) or `src\cm\xhcicmf-amd64.inf` (amd64). Staged as
-`nt\xhcicmf.inf` and gated by check-cm-inf.ps1 -Filter under -Arch.
+`nt\xhcicmf.inf` for x86 and `xhcicmf.inf` at the root for amd64, and gated
+by check-cm-inf.ps1 -Filter under -Arch.
 
 .PARAMETER CmDriverPath
 The connection manager to stage, overriding
@@ -155,7 +159,8 @@ names -DriverPath (the self-tests' stand-ins) stages it only when it names
 
 .PARAMETER TestSignPfx
 The project test certificate's .pfx (design record 19; owner, 2026-10-11):
-sign the staged xhci98.sys, xhciuas.sys and xhcicm.sys of an amd64 package with an
+sign the staged xhci98.sys, xhciuas.sys, xhcicm.sys and the bundled stor98.sys
+(since 3.1.0.0; one key signs every driver of the package) of an amd64 package with an
 embedded Authenticode signature - SHA-1 file digest, no timestamp, no
 catalog, the INFs unchanged - and stage the certificate's public half beside
 them as xhci98-test.cer. That is what lets Vista x64 and Windows 7 x64 load
@@ -215,43 +220,33 @@ it is refused with -TestSignPfx and without -SignOnly, and a run that names
 it checks the record, says whether it admits the binaries, and stops there,
 staging and signing nothing.
 
-.PARAMETER Stor98Version
-The Stor98 build to bundle (owner, 2026-10-16), 0.3.0.0 or later: Stor98
-is a separate BSD-3-Clause project, and the package may
-carry one of its released builds, copied unchanged from its release folder,
-never its source. The four -Stor98* pins go together; with none of them the
-package is built as before, with no Stor98. The release folder's x86\ goes to
-the x86 package's root and its x64\ (with stor98-test.cer, the public half of
-Stor98's own test certificate) to the amd64 package's root, with Stor98's
-LICENSE, NOTICE.TXT and readme.txt as stor98-LICENSE.txt, stor98-NOTICE.txt
-and stor98-readme.txt beside them (package-common.ps1, "Stor98, the bundled
-NVMe driver"). The x64 stor98.sys keeps Stor98's own test signature; nothing
-here signs it. Any -Flavor takes it; make-release.ps1 passes the pins to its
-release legs alone, so a cut's debug directories carry none of it.
+.PARAMETER NoStor98
+Stage no Stor98. By default (since 3.1.0.0, roadmap-usb4 task 42-A.30,
+owner 2026-10-19) every package bundles the Stor98 that
+scripts\build-driver.cmd built and gated from src\stor98 for this
+architecture: the x86 package stor98.mpd, the x86 stor98.sys and
+inf\stor98-x86.inf as stor98.inf, the amd64 package the amd64 stor98.sys
+and inf\stor98-x64.inf as stor98.inf, each with Stor98's LICENSE, NOTICE
+and docs\package-readme.txt as stor98-LICENSE.txt, stor98-NOTICE.txt and
+stor98-readme.txt (package-common.ps1, "Stor98, the bundled NVMe driver").
+Before staging, each image is held again to its version (src\xhci_version.h),
+its STOR98_FLAVOUR_FREE marker and its imports
+(scripts\check-stor98-build.ps1) and to its source stamp, both INFs to the
+package's DriverVer (scripts\inf-gate\check-stor98-inf.ps1), and Stor98's
+interface header byte for byte to src\cm\stor98cm.h. With -TestSignPfx the
+amd64 stor98.sys is signed with the other x64 drivers, by the same key;
+with -SignOnly its bytes are held to the gated build's record like theirs.
+make-release.ps1 passes this to its debug legs, so a cut's debug
+directories carry no Stor98. A caller that names -DriverPath (the
+self-tests' stand-ins) stages Stor98 only when it names -Stor98Root too.
 
-.PARAMETER Stor98Dir
-The pinned build's release folder, for example the Stor98 repository's
-releases\0.3.0.0. Read only.
-
-.PARAMETER Stor98SumsSha256
-The SHA-256 of that folder's SHA256SUMS.txt. It is checked first, then every
-file against SHA256SUMS.txt, then every copy in the package against it again;
-any mismatch, an unlisted file or a file the release layout does not know is
-a refusal, before the package is staged.
-
-.PARAMETER Stor98InterfaceVersion
-The pinned build's connection-manager link-state interface version, its
-stor98cm.h's STOR98LS_VERSION (4 for 0.3.0.0). Compared with
-src\cm\stor98cm.h, the header xhci98 compiles against, and, where the
-release folder carries include\stor98cm.h, that file byte for byte with it.
-A mismatch is a refusal unless -Stor98AllowInterfaceMismatch.
-
-.PARAMETER Stor98AllowInterfaceMismatch
-Bundle the build although its interface version does not match. The override
-is printed with the mismatch it overrides.
+.PARAMETER Stor98Root
+The Stor98 tree to take the build from, overriding src\stor98. Exists for
+the packager's own self-tests (stand-in images), and is refused without
+-SkipBinaryGates.
 
 .PARAMETER Stor98HeaderPath
-The header the interface version is compared with, overriding
+The header Stor98's interface header is compared with, overriding
 src\cm\stor98cm.h. Exists for the packager's own self-tests, and is refused
 without -SkipBinaryGates, so no package of real binaries is checked against
 anything else.
@@ -311,7 +306,7 @@ refusal lived at build time in three places (on branch 1.2.0.0): src\sources ref
 XHCI_EXTRA_DEFINES that was not exactly -DXHCI_FAIL_START_CONTROLLER (which bound
 a bare `build` from a DDK prompt), scripts\build-driver.cmd refused it earlier
 with a fuller message, and src\xhci_dispatch.c carried an #error for the one
-other define this tree documents. Review finding 2, round 2 finding 4.
+other define this tree documents.
 
 Mutually exclusive with -UnpaddedDriverVerExperiment.
 
@@ -363,11 +358,8 @@ param(
     [string]$TestSignPfx = "",
     [switch]$SignOnly,
     [string]$GatedManifestPath = "",
-    [string]$Stor98Version = "",
-    [string]$Stor98Dir = "",
-    [string]$Stor98SumsSha256 = "",
-    [string]$Stor98InterfaceVersion = "",
-    [switch]$Stor98AllowInterfaceMismatch,
+    [switch]$NoStor98,
+    [string]$Stor98Root = "",
     [string]$Stor98HeaderPath = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
@@ -407,6 +399,9 @@ $stageUas = ($DriverPath -eq "") -or ($UasDriverPath -ne "")
 $stageCm = ($DriverPath -eq "") -or ($CmDriverPath -ne "")
 # The text-mode Setup description (task 33.3), decided the same way.
 $stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
+# The bundled Stor98 (task 42-A.30): by default with the default paths;
+# a caller naming -DriverPath stages it only with -Stor98Root.
+$stor98ByDefault = ($DriverPath -eq "")
 if ($OemPath -eq "") {
     $OemPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\txtsetup-amd64.oem" } else { "src\txtsetup.oem" })
 }
@@ -491,7 +486,7 @@ $OutDir = [System.IO.Path]::GetFullPath($OutDir)
 # directory below is named by appending a suffix to this string, so with
 # `-OutDir out\pkg-debug\` it would be `out\pkg-debug\.staging-xxx` - a *child*
 # of the destination rather than a sibling, and the swap would then delete its
-# own source. Review round 2 finding 1. A path root keeps its separator: "E:\"
+# own source. A path root keeps its separator: "E:\"
 # trimmed is "E:", which names the current directory on that drive.
 #
 if ($OutDir.Length -gt [System.IO.Path]::GetPathRoot($OutDir).Length) {
@@ -499,7 +494,8 @@ if ($OutDir.Length -gt [System.IO.Path]::GetPathRoot($OutDir).Length) {
 }
 #
 # **And the volume-or-repository-root refusal is made HERE**, not at the swap
-# (repo audit D6). The crafted message below is the one a caller who typed
+# (an earlier repository audit). The crafted message below is the one a caller
+# who typed
 # `-OutDir E:\` needs, and it was unreachable: staging runs first and calls
 # `Ensure-Directory (Split-Path -Parent $OutDir)`, which for a volume root is
 # `Ensure-Directory ""` - a parameter-binding error, with no explanation of what
@@ -610,7 +606,7 @@ a signed input is a binary nobody can tie to a build. Rebuild it:
             $left.Count, $Label)
         foreach ($n in $left) {
             # Apostrophes doubled, so the printed line pastes as written
-            # whatever the profile path holds (review round 8).
+            # whatever the profile path holds.
             Write-Warn ("  Remove-Item -LiteralPath '{0}' -Force" -f (Join-Path $after.Dir $n).Replace("'", "''"))
         }
     }
@@ -633,7 +629,7 @@ $gateExtra = @()
 $variantDir = ""
 #
 # Everything is staged here and moved into $OutDir only once every gate has
-# passed. Review finding 1: the packager used to copy straight into
+# passed. The packager used to copy straight into
 # $OutDir, so a run that failed *after* staging left a directory holding a
 # mixture of the new files and whatever was there before - and the only thing
 # that distinguishes a good package from a half-written one, once the run has
@@ -650,7 +646,7 @@ try {
     Write-Step ("Package ({0}, {1}) -> {2}" -f $Flavor, $Arch, $OutDir)
 
     #
-    # Review finding 4: the two special modes are not composable.
+    # The two special modes are not composable.
     # Each exists to vary exactly one thing against the ordinary package - the
     # driver's behaviour (12.3) or the INF's date padding (12.4) - and a package
     # varying both answers neither question while looking like it answers one.
@@ -671,6 +667,31 @@ time; they land in different directories on purpose.
     #
     # (roadmap-usb4.md SIGN.1.) Checked first, so a refusal names the binary or
     # the record rather than whatever later check a stale binary would trip.
+    # The bundled Stor98 build (task 42-A.30), verified before anything is
+    # staged or signed: every file present, the images' version, flavour
+    # marker, imports and source stamp, the INFs' DriverVer, and its
+    # interface header against the copy xhcicm.sys compiles against.
+    if ($Stor98HeaderPath -ne "" -and -not $SkipBinaryGates) {
+        throw "-Stor98HeaderPath replaces the header the interface check reads, so it is for the packager's self-tests only (with -SkipBinaryGates); a package of real binaries is checked against src\cm\stor98cm.h."
+    }
+    if ($Stor98Root -ne "" -and -not $SkipBinaryGates) {
+        throw "-Stor98Root replaces src\stor98, so it is for the packager's self-tests only (with -SkipBinaryGates)."
+    }
+    if ($NoStor98 -and $Stor98Root -ne "") { throw "-NoStor98 and -Stor98Root contradict each other." }
+    if ($Stor98HeaderPath -eq "") { $Stor98HeaderPath = Join-Path $repo "src\cm\stor98cm.h" }
+    $stor98 = $null
+    $stor98Files = @()
+    if (-not $NoStor98 -and ($stor98ByDefault -or $Stor98Root -ne "")) {
+        $stor98 = Resolve-Stor98Build -Repo $repo -Root $Stor98Root -Arch @($Arch) -HeaderPath $Stor98HeaderPath `
+                                      -SkipBinaryGates:$SkipBinaryGates
+        Write-Step ("Stor98 {0} from {1}" -f $stor98.Version, $stor98.Dir)
+        if (-not $SkipBinaryGates) {
+            Write-Ok "its images carry this version and STOR98_FLAVOUR_FREE, import only allowed functions and are the build of the tree as it is"
+        }
+        Write-Ok ("its interface header is {0} byte for byte (link-state interface {1})" -f $Stor98HeaderPath, $stor98.Interface)
+        $stor98Files = @(Get-Stor98PackageFiles -Release $stor98 -Arch $Arch)
+    }
+
     $gated = $null
     if ($GatedManifestPath -ne "" -and ($TestSignPfx -ne "" -or -not $SignOnly)) {
         throw "-GatedManifestPath is for the packager's self-tests: it goes with -SignOnly and never with -TestSignPfx, so a record from anywhere but build-driver.cmd's out\ can never lead to a signature."
@@ -712,6 +733,10 @@ and deletes it when that flavour's build starts. Build and gate it first:
         if ($stageUas)  { $gatedBinaries["xhciuas.sys"] = $UasDriverPath }
         if ($stageCm)   { $gatedBinaries["xhcicm.sys"] = $CmDriverPath }
         if ($stageHlpr) { $gatedBinaries["xhcihlpr.sys"] = $HlprDriverPath }
+        # Stor98's images, in the record since task 42-A.30.
+        foreach ($nf in $stor98Files) {
+            if ($nf.Dest -match '^stor98\.(sys|mpd)$') { $gatedBinaries[$nf.Dest] = $nf.FullPath }
+        }
         #
         # Each binary is read ONCE. The bytes in memory are what is hashed and
         # what is written to a private copy; every later step reads that copy,
@@ -764,6 +789,9 @@ committed tree, or run this without -SignOnly to run every gate here.
         if ($snapBinaries.ContainsKey("xhciuas.sys"))  { $UasDriverPath = $snapBinaries["xhciuas.sys"] }
         if ($snapBinaries.ContainsKey("xhcicm.sys"))   { $CmDriverPath = $snapBinaries["xhcicm.sys"] }
         if ($snapBinaries.ContainsKey("xhcihlpr.sys")) { $HlprDriverPath = $snapBinaries["xhcihlpr.sys"] }
+        foreach ($nf in $stor98Files) {
+            if ($snapBinaries.ContainsKey($nf.Dest)) { $nf.FullPath = $snapBinaries[$nf.Dest] }
+        }
     }
 
     # The x64 test signature (design record 19) is the amd64 package's alone.
@@ -778,27 +806,6 @@ kernel-mode code signing, and the published x86 bytes stay those of the build.
         throw "no test-signing key at '$TestSignPfx' (-TestSignPfx). Design record 19 says how the project's is made and where it is held."
     }
 
-    # The bundled Stor98 build, verified before anything is built or staged:
-    # its pins, its SHA256SUMS.txt and every file, its layout, and its
-    # interface version against the header xhci98 compiles against.
-    if ($Stor98HeaderPath -ne "" -and -not $SkipBinaryGates) {
-        throw "-Stor98HeaderPath replaces the header the interface check reads, so it is for the packager's self-tests only (with -SkipBinaryGates); a package of real binaries is checked against src\cm\stor98cm.h."
-    }
-    if ($Stor98HeaderPath -eq "") { $Stor98HeaderPath = Join-Path $repo "src\cm\stor98cm.h" }
-    $stor98 = Resolve-Stor98Input -Version $Stor98Version -Dir $Stor98Dir -SumsSha256 $Stor98SumsSha256 `
-                                  -InterfaceVersion $Stor98InterfaceVersion -HeaderPath $Stor98HeaderPath `
-                                  -Allow:$Stor98AllowInterfaceMismatch
-    $stor98Files = @()
-    if ($null -ne $stor98) {
-        Write-Step ("Stor98 {0} from {1}" -f $stor98.Version, $stor98.Dir)
-        Write-Ok ("SHA256SUMS.txt is the pinned {0}, and every file matches it" -f $stor98.SumsSha256)
-        if ($stor98.Overridden) {
-            Write-Warn ("Stor98 INTERFACE MISMATCH OVERRIDDEN (-Stor98AllowInterfaceMismatch): {0}" -f $stor98.Mismatch)
-        } else {
-            Write-Ok ("interface version '{0}' matches {1}" -f $stor98.Interface, $Stor98HeaderPath)
-        }
-        $stor98Files = @(Get-Stor98PackageFiles -Release $stor98 -Arch $Arch)
-    }
 
     if (-not (Test-Path -LiteralPath $InfPath)) {
         throw "no INF at '$InfPath'"
@@ -1158,7 +1165,7 @@ The x86 package carries the x86 helper its INF names. Build it first
             # src\hlpr\obj<alt>\i386\xhcihlpr.sys), must name the WXP target
             # and lib\wxp\i386 and be the log of this very link, and the
             # image's header must be native 5.00, aligned 0x80, checksummed
-            # (review of 38.3, round 1).
+            # (task 38.3).
             $hlprObjDir = Split-Path -Parent (Split-Path -Parent $HlprDriverPath)
             $hlprLog = Join-Path (Split-Path -Parent $hlprObjDir) ("build" + ((Split-Path -Leaf $hlprObjDir) -replace '^obj', '') + ".log")
             if (-not (Test-Path -LiteralPath $hlprLog)) {
@@ -1205,7 +1212,7 @@ The x86 package carries the x86 helper its INF names. Build it first
     # After the import gates and before staging. The import gates read the
     # build where it was linked, because their SITES rule needs the objects
     # (or, for LTCG objects, the sources) beside the image, which a copy in
-    # a temporary folder does not have (review round 1). What the gates read
+    # a temporary folder does not have. What the gates read
     # is nevertheless what ships: each signed copy is held to the build byte
     # for byte apart from the checksum, the certificate-table entry and the
     # appended table (Invoke-TestSign), none of which the import table, the
@@ -1242,6 +1249,17 @@ The x86 package carries the x86 helper its INF names. Build it first
                             -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhcicm.sys" `
                             -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256["xhcicm.sys"] } else { "" })
             $CmDriverPath = $signedCm
+        }
+        # The bundled stor98.sys, by the same key in the same step (task
+        # 42-A.30, owner 2026-10-19: one signature signs everything).
+        foreach ($nf in $stor98Files) {
+            if ($nf.Dest -ne "stor98.sys") { continue }
+            $signedS98 = Join-Path $signDir "stor98.sys"
+            Invoke-TestSign -Source $nf.FullPath -Dest $signedS98 -Pfx $TestSignPfx -Password $testSignPassword `
+                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "stor98.sys" `
+                            -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256["stor98.sys"] } else { $nf.Sha256 })
+            $nf.FullPath = $signedS98
+            $nf.Sha256 = (Get-FileHash -LiteralPath $signedS98 -Algorithm SHA256).Hash
         }
         $testSignPassword = $null
     }
@@ -1311,16 +1329,20 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
         Copy-Item -LiteralPath $UasDriverPath -Destination (Join-Path $stageDir "xhciuas.sys") -Force
     }
     # The connection manager's NHI INF and binary at the root, where its
-    # SourceDisksNames entry looks; the filter INF in nt\ with its own copy
-    # of the binary, where the filter INF's entry looks.
+    # SourceDisksNames entry looks. The filter INF: for x86 in nt\ with its
+    # own copy of the binary, where the filter INF's entry looks; for amd64
+    # at the root beside the one binary (Get-CmFilterRel).
     if ($stageCm) {
         Copy-Item -LiteralPath $CmInfPath -Destination (Join-Path $stageDir "xhcicm.inf") -Force
-        Ensure-Directory (Join-Path $stageDir "nt")
-        Copy-Item -LiteralPath $CmFilterInfPath -Destination (Join-Path $stageDir "nt\xhcicmf.inf") -Force
         Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "xhcicm.sys") -Force
-        # The filter INF's own source, beside it: the same (already signed)
-        # bytes, which CM-NO9XBRIDGE compares.
-        Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "nt\xhcicm.sys") -Force
+        $cmFilterRel = Get-CmFilterRel -Arch $Arch
+        Ensure-Directory (Split-Path -Parent (Join-Path $stageDir $cmFilterRel))
+        Copy-Item -LiteralPath $CmFilterInfPath -Destination (Join-Path $stageDir $cmFilterRel) -Force
+        if ($cmFilterRel -ne "xhcicmf.inf") {
+            # The filter INF's own source, beside it: the same (already
+            # signed) bytes, which CM-NO9XBRIDGE compares.
+            Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "nt\xhcicm.sys") -Force
+        }
     }
     # txtsetup.oem at the root: text-mode Setup reads it from A:\ and its
     # [Disks] entry finds xhci98.sys and xhci98.inf beside it.
@@ -1343,16 +1365,16 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
     }
     # The bundled Stor98 build, last, so a name it shares with anything this
     # project staged is a refusal rather than an overwrite; and each copy is
-    # held to SHA256SUMS.txt again, so what was verified is what is staged.
+    # held to the hash it had when it was verified (or signed).
     foreach ($nf in $stor98Files) {
         $dest = Join-Path $stageDir $nf.Dest
         if (Test-Path -LiteralPath $dest) {
             throw "Stor98's '$($nf.Source)' would land at '$($nf.Dest)', where this package already has a file. Bundled files never replace this project's own."
         }
         Ensure-Directory (Split-Path -Parent $dest)
-        Copy-Item -LiteralPath (Join-Path $stor98.Dir $nf.Source) -Destination $dest
+        Copy-Item -LiteralPath $nf.FullPath -Destination $dest
         if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -ne $nf.Sha256) {
-            throw "the staged copy of Stor98's '$($nf.Source)' does not match SHA256SUMS.txt; the release folder changed while it was being copied."
+            throw "the staged copy of Stor98's '$($nf.Source)' is not the file that was verified; it changed while it was being copied."
         }
     }
 
@@ -1460,7 +1482,7 @@ a build that was never made.
             }
         }
         if ($stageCm) {
-            foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "nt\xhcicmf.inf"; Extra = @("-Filter") })) {
+            foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = (Get-CmFilterRel -Arch $Arch); Extra = @("-Filter") })) {
                 $savedEap = $ErrorActionPreference
                 $ErrorActionPreference = "Continue"
                 try {
@@ -1513,8 +1535,8 @@ a build that was never made.
     # paying for a host suite and a link. What is left here is the
     # foreign-directory question, which needs the staged package to exist.
     # There was a second copy of the root refusal in this block, unreachable
-    # behind the early one and therefore untestable (the 2026-09-16 audit's
-    # D6); the file-not-directory check below is NOT a duplicate and stays.
+    # behind the early one and therefore untestable (the audit of 2026-09-16);
+    # the file-not-directory check below is NOT a duplicate and stays.
     #
     $retired = ""
     if (Test-Path -LiteralPath $OutDir) {
@@ -1523,7 +1545,7 @@ a build that was never made.
         }
         #
         # **What counts as "a package this script made" is every entry, not one
-        # of them.** Round 2 finding 2: testing only for xhci98.inf at the root
+        # of them.** Testing only for xhci98.inf at the root
         # calls a transfer directory holding a package *and* a README.TXT ours,
         # and then deletes the README. So the destination is compared against
         # what this run just staged: anything it does not also contain is
@@ -1533,10 +1555,17 @@ a build that was never made.
         foreach ($f in (Get-ChildItem -LiteralPath $stageDir -Recurse -Force)) {
             $stagedRel[$f.FullName.Substring($stageDir.Length).TrimStart('\')] = $true
         }
+        # An x64 package staged before 3.1.0.0 kept the filter INF and its
+        # copy of the binary in nt\; those three entries, and only those,
+        # are this script's own retired layout and are replaced with it.
+        $retiredRel = @{}
+        if ($Arch -eq "amd64") {
+            foreach ($r in @("nt", "nt\xhcicmf.inf", "nt\xhcicm.sys")) { $retiredRel[$r] = $true }
+        }
         $foreign = @()
         foreach ($f in (Get-ChildItem -LiteralPath $OutDir -Recurse -Force)) {
             $rel = $f.FullName.Substring($OutDir.Length).TrimStart('\')
-            if (-not $stagedRel.ContainsKey($rel)) { $foreign += $rel }
+            if (-not $stagedRel.ContainsKey($rel) -and -not $retiredRel.ContainsKey($rel)) { $foreign += $rel }
         }
         if ($foreign.Count -gt 0) {
             throw @"
@@ -1548,7 +1577,7 @@ that does not exist, or clear that one yourself.
 "@
         }
         #
-        # Retire by rename, not by delete. Round 2 finding 2: a recursive
+        # Retire by rename, not by delete. A recursive
         # delete mutates the old package one child at a time, so a single open
         # handle - Explorer, a scanner, a guest's vvfat mount - can leave it
         # half-removed with the replacement not yet in place. A rename either
@@ -1644,14 +1673,15 @@ that does not exist, or clear that one yourself.
         Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"
     }
     if ($null -ne $stor98) {
-        # Where the hardware wizard is pointed for an NVMe controller; nothing
-        # here installs Stor98 (it is a separate project).
-        Write-Host ("  NVMe     Stor98 {0} (bundled, unchanged): Have Disk -> this directory's stor98.inf" -f $stor98.Version)
+        # Where the hardware wizard is pointed for an NVMe controller; the
+        # installer installs it when asked (/stor98).
+        Write-Host ("  NVMe     Stor98 {0} (built from src\stor98): Have Disk -> this directory's stor98.inf" -f $stor98.Version)
         if ($Arch -eq "amd64") {
-            Write-Host "           its stor98.sys carries Stor98's own test signature (stor98-test.cer); test-signing mode loads it"
-        }
-        if ($stor98.Overridden) {
-            Write-Warn ("Stor98 bundled with its interface mismatch overridden: {0}" -f $stor98.Mismatch)
+            if ($null -ne $testSignCert) {
+                Write-Host "           its stor98.sys is signed with the other x64 drivers, by the same key"
+            } else {
+                Write-Host "           its stor98.sys is UNSIGNED, like the other x64 drivers of this package"
+            }
         }
     }
 } catch {

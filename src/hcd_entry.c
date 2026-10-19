@@ -118,6 +118,7 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
     UNICODE_STRING name;
     WCHAR nameBuffer[32];
     ULONG serial;
+    ULONG fdoSerial;
     ULONG n;
     ULONG d;
     WCHAR digits[12];
@@ -136,7 +137,11 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
 
     /* Named, because \DosDevices\HCD<n> must point at a name (hcd_door.c);
      * usbport names its FDO \Device\USBFDO-<n> for the same link. */
-    serial = (ULONG)InterlockedIncrement(&hcdFdoSerial);
+    /* One read of the counter for the name and FdoSerial both: a second
+     * controller's AddDevice may bump it in between, and the door's link
+     * must name this FDO (hcd_door.c). */
+    fdoSerial = (ULONG)InterlockedIncrement(&hcdFdoSerial);
+    serial = fdoSerial;
     n = 0;
     for (d = 0; prefix[d] != 0; d++) {
         nameBuffer[n++] = prefix[d];
@@ -166,7 +171,7 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
     hc->Common.DevicePower = PowerDeviceD3;
     hc->Common.SystemPower = PowerSystemWorking;
     hc->Pdo = Pdo;
-    hc->FdoSerial = (ULONG)hcdFdoSerial;
+    hc->FdoSerial = fdoSerial;
     hc->OutstandingIo = 1;
     KeInitializeEvent(&hc->RemoveEvent, NotificationEvent, FALSE);
     HcdControllerInitObjects(hc);

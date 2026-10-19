@@ -13,9 +13,10 @@
  *   - **`XhciLogVerbosity`** (`DWORD`, **2** by default since 2026-10-16,
  *     0 before) is the 0-4 ladder and
  *     it is the whole switch: **0 is off outright** - the PassThru read channel
- *     (`xhciPassThru` in src/xhci_dispatch.c, the wire format in src/xhci.h)
- *     answers exactly `MP_STATUS_NOT_SUPPORTED`, which is what a binary built
- *     without it would say - **1 engages the channel with the ring still off**,
+ *     (`hcdDoorSnapshot` in src/hcd_door.c, the wire format in src/xhci.h)
+ *     answers USBUSER status 6, what usbport answered for the miniport's
+ *     `MP_STATUS_NOT_SUPPORTED` and so what a binary built without it would
+ *     say - **1 engages the channel with the ring still off**,
  *     **2 is the recording switch** and fills the note ring, and 3 and 4 raise
  *     what the tool's plain-text companion publishes. The raw window itself
  *     carries the whole extension, kernel addresses included, at any level
@@ -58,7 +59,8 @@
  * The ring, the record format, the flush decision, the wrap accounting, the
  * per-code budget and the switch arithmetic are here and in src/xhci_log.c. The
  * registry read, the IRQL measurement and the `DbgPrint` emit are in
- * src/xhci_dispatch.c. **There is no file I/O anywhere in this driver.**
+ * src/hcd_log.c and src/hcd_ctl.c (the miniport's xhci_dispatch.c before).
+ * **There is no file I/O anywhere in this driver.**
  *
  * ## Why this exists
  *
@@ -102,9 +104,9 @@
  * from any IRQL, handed over to its sink only from a PASSIVE-level lifecycle
  * callback** - never a per-line write. That is what this file is.
  *
- * *(This said "flushed to the file" until the post-Phase 13 review rounds. Task 13-L.2 retired the
- * ring-0 file sink; the surviving sink is the bulk `DbgPrint`
- * hand-over in `src/xhci_dispatch.c`. **Every other word of that shape is
+ * *(This said "flushed to the file" until after Phase 13. Task 13-L.2
+ * retired the ring-0 file sink; the surviving sink is the bulk `DbgPrint`
+ * hand-over, now in `src/hcd_log.c`. **Every other word of that shape is
  * unchanged and is what the constraints above buy** - bounded, any-IRQL append,
  * one PASSIVE hand-over, no per-line write - which is why only the destination
  * is corrected.)*
@@ -117,11 +119,11 @@
  * accounting, the record formatting and the flush *decision* live here so the
  * host suite can drive every one of them.
  *
- * The things that need the DDK live in `src/xhci_dispatch.c`:
+ * The things that need the DDK live in `src/hcd_log.c` and `src/hcd_ctl.c`
+ * (in the miniport, `src/xhci_dispatch.c`):
  *
- *   - reading the switch, through the registration packet's
- *     `UsbPortGetMiniportRegistryKeyValue` (**no new import** - see the task
- *     11-V.7 box in `docs/usb-xhci-info/usbport-miniport-abi.md` section 6);
+ *   - reading the switch from the device key (the miniport read it through
+ *     the registration packet's `UsbPortGetMiniportRegistryKeyValue`);
  *   - measuring the IRQL at the flush site;
  *   - the `DbgPrint` hand-over the surviving sink is made of.
  *
@@ -142,10 +144,10 @@
  * other side.
  *
  * *(The hazard here was named as "a driver that writes a file from DISPATCH"
- * until the post-Phase 13 review rounds, which is a call this binary has not made since task 13-L.2
- * retired the file sink. **The guard did not change and neither
+ * until after Phase 13, which is a call this binary has not made since task
+ * 13-L.2 retired the file sink. **The guard did not change and neither
  * did the reason for measuring rather than assuming**; what it protects is now
- * the `DbgPrint` hand-over, and `src/xhci_dispatch.c`'s flush ordering already
+ * the `DbgPrint` hand-over, and the miniport's flush ordering already
  * said so - "the hazard the retired `ZwCreateFile` used to stand for here, and
  * the one that outlived it". The two files describe one guard and now name one
  * hazard.)*
@@ -166,11 +168,11 @@
  * and that set is identical in all three flavours.
  *
  * *(This paragraph said "the release build as well as the debug one" and named
- * debug-build `DbgPrint` as the hazard, until the post-Phase 13 review rounds. Since task 13-L.1 the
- * live trace belongs to the `qemu` flavour alone, so the shipping `debug` build
- * has no trace to keep out and the argument is about the profile rather than
- * about a flavour. What it says about the two channels being disjoint is
- * unchanged and is the point.)*
+ * debug-build `DbgPrint` as the hazard, until after Phase 13. Since task
+ * 13-L.1 the live trace belongs to the `qemu` flavour alone, so the shipping
+ * `debug` build has no trace to keep out and the argument is about the profile
+ * rather than about a flavour. What it says about the two channels being
+ * disjoint is unchanged and is the point.)*
  *
  * **The traced build's own output does not enter the ring**, and an earlier draft
  * of this comment said it did. `XhciDbgEmit` (src/xhci_dbg.c) writes port `0xE9`
@@ -248,12 +250,12 @@
  * user-reachable stop there is the shutdown (docs/contributing/build-and-test.md, "Do not
  * disable the controller in Device Manager").
  *
- * *(Both paragraphs said "a file" and "a file write" until the post-Phase 13 review rounds; there has
- * been no file since task 13-L.2. **The 29-suspend measurement and the
- * conclusion are unchanged** - what a flush at Suspend would cost is now a bulk
- * `DbgPrint` hand-over rather than a write, which is cheaper but is still the
- * whole ring, on a repeating half-second edge, from a callback whose IRQL this
- * driver measures rather than assumes.)*
+ * *(Both paragraphs said "a file" and "a file write" until after Phase 13;
+ * there has been no file since task 13-L.2. **The 29-suspend measurement and
+ * the conclusion are unchanged** - what a flush at Suspend would cost is now a
+ * bulk `DbgPrint` hand-over rather than a write, which is cheaper but is still
+ * the whole ring, on a repeating half-second edge, from a callback whose IRQL
+ * this driver measures rather than assumes.)*
  */
 #define XHCI_LOG_REASON_STOP     0
 #define XHCI_LOG_REASON_FAILURE  1
@@ -443,7 +445,7 @@ typedef struct _XHCI_LOG {
      * as); the distinction is for the reader of a dump.
      *
      * *(This comment, and eight other places in the tree, credited this field
-     * with that distinction until the post-Phase 13 review rounds.)*
+     * with that distinction until after Phase 13.)*
      */
     ULONG SwitchRead;
 
@@ -503,9 +505,9 @@ typedef struct _XHCI_LOG {
     ULONG Flushes;              /* flushes that drained something           */
     ULONG FlushesRefusedIrql;   /* flush sites reached above PASSIVE_LEVEL  */
     /* No sink, or nothing to write. The second reason (XHCI_LOG_FLUSH_EMPTY)
-     * is unreachable from the driver: the flush appends the counter block
-     * before it asks, so the ring is never empty at that point; only the
-     * host suite reaches it. */
+     * is reached by the driver's periodic flush (hcd_log.c), which asks with
+     * nothing appended first; the flush at a stop appends the counter block
+     * before it asks, so that one never finds the ring empty. */
     ULONG FlushesRefusedState;
     ULONG FlushBytes;           /* bytes handed to the sink, cumulative     */
     ULONG FlushFailures;        /* the sink said no                         */
@@ -549,15 +551,15 @@ VOID XhciLogAppend(PXHCI_LOG log,
  *
  * **This is what makes "no addresses below the top level" a property of the
  * driver rather than a promise in a document**, and it exists because the
- * promise was made first and was not true: the ladder's tier boundary between 3
- * and 4 is addresses, `XHCISNAP`'s plain-text companion is what a stranger
+ * promise was made first and was not true: the ladder's tier boundary between
+ * 3 and 4 is addresses, `XHCISNAP`'s plain-text companion is what a stranger
  * pastes into a public issue, and two records written as soon as recording is
  * on - the `USBPORT_RESOURCES` pointer at the start and the mapped register
- * base after it - carried exactly what that boundary is drawn around. A Codex
- * review of commit `85c0072` found the documentation and the code disagreeing;
- * this is the half that had to move. *(The boundary was between 2 and 3 until
- * the snapshot-value merge shifted every rung by one. The behaviour is unchanged
- * under a new number.)*
+ * base after it - carried exactly what that boundary is drawn around. After
+ * commit `85c0072` the documentation and the code disagreed (reviewed and
+ * revised); this is the half that had to move. *(The boundary was between 2
+ * and 3 until the snapshot-value merge shifted every rung by one. The
+ * behaviour is unchanged under a new number.)*
  *
  * It is a separate entry point rather than a flag on the existing one so that
  * **the decision is made where the value is**: a call site that knows it is
@@ -596,7 +598,7 @@ ULONG XhciLogFlushBegin(PXHCI_LOG log, ULONG reason);
  * ring. The reason is not style: a 4 KB local in a kernel function makes MSVC
  * emit a `__chkstk` call the Win2000 DDK's driver libraries do not provide, and
  * a driver has about 12 KB of stack in the first place. The chunk size is the
- * caller's, in src/xhci_dispatch.c.
+ * caller's, in src/hcd_log.c.
  *
  * Repeated calls return the ring in order. Appends made between calls land
  * after what has already been taken, so an interleaving costs ordering nothing.

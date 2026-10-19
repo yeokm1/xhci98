@@ -837,7 +837,7 @@ static void test_pic(void)
 
     /* On 2000 to 7 an IRQ below 16 is reported at every value, the
      * target still derived; 16-23 is written there as on 98 (owner,
-     * 2026-10-09, after review round 1). */
+     * 2026-10-09). */
     for (i = 0; i <= 2; i++) {
         fakeInit(&f, &io, &irq);
         io.Steerable = 0;
@@ -929,8 +929,7 @@ static void test_latch(void)
 }
 
 /* A start attempt resets the record before anything can refuse it: a
- * refused start shows no earlier start's run or value (review round 1,
- * finding 1). */
+ * refused start shows no earlier start's run or value. */
 static void test_reset(void)
 {
     FAKE_PC f;

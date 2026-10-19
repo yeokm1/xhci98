@@ -13,10 +13,12 @@
 # no evidence for). No pair here is new to the evidence base.
 #
 # SITES. The pool pair is held to cm_pool.obj (the HCD's rule of design
-# record 13 section 7.5, as uas_mem.obj holds xhciuas.sys's), and is
-# OPTIONAL while nothing allocates pool (the NHI's state is its device
-# extension; task 39-A.4): nothing allocates, and ExFreePool is called
-# only for the bus driver's IRP_MN_QUERY_ID answer (cm_qryos.c). The registry pairs are held to cm_reg.obj, and to cm_statos.obj for the
+# record 13 section 7.5, as uas_mem.obj holds xhciuas.sys's), through
+# CmAlloc and CmFree, and is REQUIRED: every flavour and architecture
+# allocates (the stor98 link-state table, cm_nvlinkos.c; on the 9x path
+# also the CONFIGMG thunks and worker, cm_cfgmg.c, cm_cfgwk.c) and frees
+# (the query device's link name and IRP_MN_QUERY_ID answer, cm_qryos.c),
+# while the NHI's own state stays its device extension. The registry pairs are held to cm_reg.obj, and to cm_statos.obj for the
 # install tool's status record (design record 24). DbgPrint is
 # held to cm_log.obj in every flavour: since the owner's decision of
 # 2026-10-16, which reversed decision D12 for the release flavour, the
@@ -82,9 +84,9 @@ ntoskrnl.exe!DbgPrint                        all    required  SITES=cm_log.obj t
 # --- The qemu flavour's port-0xE9 mirror of that emission, never published ---
 HAL.dll!WRITE_PORT_UCHAR                     qemu   required  SITES=cm_log.obj w2k-export; ntkern-name; MEASURED NOT LOADING on E460 Win98 SE metal (the miniport's allowlist on branch 1.2.0.0 has the record; design record 08). The qemu flavour is never published, so this row is what keeps the import out of every binary a user can install.
 
-# --- Pool: cm_pool.obj only, optional while nothing allocates pool ---
-ntoskrnl.exe!ExAllocatePoolWithTag           all  optional  SITES=cm_pool.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExAllocatePoolWithTag, hint 7) (+61 other 98 SE); ntkern-name
-ntoskrnl.exe!ExFreePool                      all  optional  SITES=cm_pool.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExFreePool, hint C) (+60 other 98 SE); ntkern-name
+# --- Pool: cm_pool.obj only (CmAlloc, CmFree) ---
+ntoskrnl.exe!ExAllocatePoolWithTag           all  required  SITES=cm_pool.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExAllocatePoolWithTag, hint 7) (+61 other 98 SE); ntkern-name
+ntoskrnl.exe!ExFreePool                      all  required  SITES=cm_pool.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExFreePool, hint C) (+60 other 98 SE); ntkern-name
 
 # --- The NHI driver of task 39-A.4: BAR0, configuration space, the
 # thread and its clock, the power policy owner, the ring block's

@@ -7,6 +7,13 @@
  * None of those produce an error anywhere - the port simply stops working -
  * so the masks are checked here bit by bit rather than in a guest.
  *
+ * Only the PORTSC builders are driver code under the HCD. The logical-port
+ * map, the shadow, its hub-class report and the armed-operation helpers
+ * (sections from XhciRootHubBuild on) were the miniport's root hub and have
+ * no driver caller now; they are kept with these vectors as host-suite-only
+ * code (src/xhci_port.c says so), not as a description of what xhci98.sys
+ * does with a port.
+ *
  * Per docs/contributing/design/03-host-unit-tests.md, every expected value is
  * transcribed by hand from the PORTSC table in docs/usb-xhci-info/xhci-data-structures.md
  * section 3 - never produced by the code under test. The bit positions below
@@ -702,7 +709,7 @@ static void test_shadow_report_translation(void)
     XhciPortShadowReport(&shadow, &status, &change);
     CHECK_EQ(status & (XHCI_HUB_PORT_LOW_SPEED | XHCI_HUB_PORT_HIGH_SPEED),
              XHCI_HUB_PORT_HIGH_SPEED,
-             "a SuperSpeed port should not be managed, but still reports HS");
+             "a SuperSpeed decode still reports HS (the miniport's rule)");
 
     /*
      * The truth survives the untruth: the report must not write back through

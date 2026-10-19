@@ -248,8 +248,11 @@ static void test_usb4_contain(void)
     CHECK(a & CM_LIVE_ACT_CONTAIN, "contain asked");
     CHECK(a & CM_LIVE_ACT_STOP_TRANSPORT, "transport stopped");
     CHECK(!CmLiveTransport(&l), "no transport");
-    CHECK_EQ(CmLiveWaitMs(&l), 0, "no further monitoring");
-    CHECK_EQ(CmLiveSample(&l, 2200, 0x0100000AUL), 0, "never recovers");
+    CHECK_EQ(CmLiveWaitMs(&l), CM_LIVE_SLOW_MS,
+             "contained: probed once a second (record 22 7.7 part 1)");
+    CHECK_EQ(l.Sub, CM_LIVE_SUB_PROBING, "contained: probing");
+    CHECK_EQ(CmLiveSample(&l, 2200, 0x0100000AUL), 0,
+             "a matching sample never reactivates it");
     CHECK(!CmLiveArm(&l, BASE, 3000), "an ordinary resume cannot re-arm");
     CmLiveDisarm(&l);
     CHECK_EQ(l.State, CM_LIVE_CONTAINED, "disarm keeps containment");
@@ -261,6 +264,150 @@ static void test_usb4_contain(void)
     CHECK_EQ(l.Counters.Contained, 1, "counted");
 }
 
+/* Record 22 section 7.7 part 5: every row of the recovery's table. */
+static void test_usb4_recover(void)
+{
+    CM_LIVE l;
+    ULONG a;
+    ULONG ep;
+
+    /* CONTAINED (probing): all ones or another identity - probing on;
+     * the header proven - PREPARING; BAR0 changed - cooldown. */
+    arm(&l, 1);
+    (VOID)CmLiveSample(&l, 1200, ONES);
+    ep = CmLiveEpisode(&l);
+    CHECK_EQ(CmLiveProbe(&l, 2200, CM_LIVE_PROBE_ONES), 0, "probe ones: no action");
+    CHECK_EQ(l.State, CM_LIVE_CONTAINED, "probe ones: contained");
+    CHECK_EQ(CmLiveProbe(&l, 3200, CM_LIVE_PROBE_OTHER), 0, "probe other: no action");
+    CHECK_EQ(l.Sub, CM_LIVE_SUB_PROBING, "probe other: still probing");
+    CHECK(!CmLiveDue(&l, 3300), "probe: once a second");
+    CHECK(CmLiveDue(&l, 4200), "probe: due after a second");
+    a = CmLiveProbe(&l, 4200, CM_LIVE_PROBE_OK);
+    CHECK(a & CM_LIVE_ACT_PREPARE, "header proven: prepare");
+    CHECK_EQ(l.State, CM_LIVE_PREPARING, "PREPARING");
+    CHECK(CmLiveAdmits(&l, CM_ACCESS_PREPARE), "PREPARE admitted");
+    CHECK(CmLiveAdmits(&l, CM_ACCESS_PROBE), "PROBE admitted");
+    CHECK(!CmLiveAdmits(&l, CM_ACCESS_RECOVERY), "PREPARING: no RECOVERY");
+    CHECK(!CmLiveTransport(&l), "PREPARING: no transport");
+    CHECK_EQ(CmLiveWaitMs(&l), 0, "PREPARING: not sampled");
+
+    /* PREPARING refused (no all ones): cooldown, no rearm. */
+    a = CmLivePrepared(&l, FALSE, FALSE);
+    CHECK_EQ(l.State, CM_LIVE_CONTAINED, "prepare refused: contained");
+    CHECK_EQ(l.Sub, CM_LIVE_SUB_COOLDOWN, "prepare refused: cooldown");
+    CHECK_EQ(l.Rearm, 0, "prepare refused: no rearm");
+    CHECK_EQ(CmLiveProbe(&l, 5200, CM_LIVE_PROBE_OK), 0,
+             "cooldown: a readable probe alone is not an episode");
+    CHECK_EQ(CmLiveProbe(&l, 6200, CM_LIVE_PROBE_ONES), 0, "cooldown: ones");
+    CHECK_EQ(l.Rearm, 1, "cooldown: rearmed by an outage");
+    a = CmLiveProbe(&l, 7200, CM_LIVE_PROBE_OK);
+    CHECK(a & CM_LIVE_ACT_SNAPSHOT, "new episode: snapshot asked");
+    CHECK_EQ(CmLiveEpisode(&l), ep + 1, "new episode: bumped");
+    CHECK_EQ(l.Sub, CM_LIVE_SUB_PROBING, "new episode: probing");
+
+    /* PREPARING refused on an all-ones read: cooldown with Rearm, so the
+     * next readable probe is the new episode. */
+    a = CmLiveProbe(&l, 8200, CM_LIVE_PROBE_OK);
+    CHECK_EQ(l.State, CM_LIVE_PREPARING, "again PREPARING");
+    (VOID)CmLivePrepared(&l, FALSE, TRUE);
+    CHECK_EQ(l.Rearm, 1, "prepare all ones: rearm");
+    a = CmLiveProbe(&l, 9200, CM_LIVE_PROBE_OK);
+    CHECK(a & CM_LIVE_ACT_SNAPSHOT, "prepare all ones: next probe a new episode");
+
+    /* PREPARING passed: RECOVERING. A commit for another episode is
+     * dropped; a refused one goes to cooldown; the final stop to final. */
+    a = CmLiveProbe(&l, 10200, CM_LIVE_PROBE_OK);
+    a = CmLivePrepared(&l, TRUE, FALSE);
+    CHECK(a & CM_LIVE_ACT_RECOVER_FULL, "prepared: recover");
+    CHECK_EQ(l.State, CM_LIVE_RECOVERING, "RECOVERING");
+    CHECK(CmLiveAdmits(&l, CM_ACCESS_RECOVERY), "RECOVERY admitted");
+    CHECK(!CmLiveTransport(&l), "RECOVERING: no transport");
+    ep = CmLiveEpisode(&l);
+    CHECK(!CmLiveU4Recovered(&l, ep + 1, TRUE, FALSE, FALSE, BASE, 10300),
+          "another episode: dropped");
+    CHECK_EQ(l.State, CM_LIVE_RECOVERING, "late result: state unchanged");
+    CHECK(!CmLiveU4Recovered(&l, ep, TRUE, FALSE, FALSE, 7, 10300),
+          "a sample not the programmed one: no commit");
+    CHECK_EQ(l.Sub, CM_LIVE_SUB_COOLDOWN, "sample mismatch: cooldown");
+    CHECK_EQ(l.Rearm, 0, "sample mismatch: no rearm");
+
+    (VOID)CmLiveProbe(&l, 11200, CM_LIVE_PROBE_ONES);
+    (VOID)CmLiveProbe(&l, 12200, CM_LIVE_PROBE_OK);
+    (VOID)CmLiveProbe(&l, 13200, CM_LIVE_PROBE_OK);
+    (VOID)CmLivePrepared(&l, TRUE, FALSE);
+    ep = CmLiveEpisode(&l);
+    CHECK(!CmLiveU4Recovered(&l, ep, FALSE, FALSE, FALSE, ONES, 13300),
+          "an all-ones sample: failed");
+    CHECK_EQ(l.Rearm, 1, "a second outage seen: rearm");
+
+    (VOID)CmLiveProbe(&l, 14200, CM_LIVE_PROBE_OK);
+    (VOID)CmLiveProbe(&l, 15200, CM_LIVE_PROBE_OK);
+    (VOID)CmLivePrepared(&l, TRUE, FALSE);
+    ep = CmLiveEpisode(&l);
+    CHECK(!CmLiveU4Recovered(&l, ep, FALSE, TRUE, FALSE, BASE, 15300),
+          "stop unverified: no commit");
+    CHECK_EQ(l.Sub, CM_LIVE_SUB_FINAL, "stop unverified: final");
+    CHECK_EQ(CmLiveWaitMs(&l), 0, "final: no probes");
+    CHECK_EQ(CmLiveProbe(&l, 16200, CM_LIVE_PROBE_ONES), 0, "final: ones nothing");
+    CHECK_EQ(CmLiveProbe(&l, 17200, CM_LIVE_PROBE_OK), 0, "final: ok nothing");
+    CHECK_EQ(l.Sub, CM_LIVE_SUB_FINAL, "final stays");
+
+    /* The commit: ACTIVE with the fresh sample as the baseline, then a
+     * later loss contains it afresh. */
+    arm(&l, 1);
+    (VOID)CmLiveSample(&l, 1200, 7);
+    (VOID)CmLiveProbe(&l, 2200, CM_LIVE_PROBE_OK);
+    (VOID)CmLivePrepared(&l, TRUE, FALSE);
+    ep = CmLiveEpisode(&l);
+    CHECK(CmLiveU4Recovered(&l, ep, TRUE, FALSE, FALSE, BASE, 2300), "committed");
+    CHECK_EQ(l.State, CM_LIVE_ACTIVE, "ACTIVE again");
+    CHECK(CmLiveTransport(&l), "transport again");
+    CHECK_EQ(l.Counters.RecoveredOk, 1, "counted");
+    a = CmLiveSample(&l, 2600, ONES);
+    CHECK(a & CM_LIVE_ACT_CONTAIN, "a later loss contains again");
+    CHECK_EQ(CmLiveEpisode(&l), ep + 1, "a new episode");
+
+    /* BAR0 changed: cooldown at once. */
+    arm(&l, 1);
+    (VOID)CmLiveSample(&l, 1200, ONES);
+    a = CmLiveProbe(&l, 2200, CM_LIVE_PROBE_BAR);
+    CHECK_EQ(l.Sub, CM_LIVE_SUB_COOLDOWN, "bar changed: cooldown");
+    CHECK(!(a & CM_LIVE_ACT_PREPARE), "bar changed: no preparation");
+
+    /* A suspend inside the attempt: cooldown, and the resume probes at
+     * once as a new episode (no second outage asked). */
+    arm(&l, 1);
+    (VOID)CmLiveSample(&l, 1200, ONES);
+    (VOID)CmLiveProbe(&l, 2200, CM_LIVE_PROBE_OK);
+    (VOID)CmLivePrepared(&l, TRUE, FALSE);
+    ep = CmLiveEpisode(&l);
+    CmLiveU4Interrupt(&l);
+    CHECK_EQ(l.State, CM_LIVE_CONTAINED, "interrupted: contained");
+    CHECK_EQ(l.Sub, CM_LIVE_SUB_COOLDOWN, "interrupted: cooldown");
+    a = CmLiveU4Wake(&l);
+    CHECK(a & CM_LIVE_ACT_SNAPSHOT, "wake: new episode");
+    CHECK_EQ(l.Sub, CM_LIVE_SUB_PROBING, "wake: probing");
+    CHECK(CmLiveDue(&l, 2201), "wake: probed at once");
+    CHECK_EQ(CmLiveEpisode(&l), ep + 1, "wake: episode bumped");
+
+    /* The driver's own containment (a bind or resume loss), and the
+     * revocation, which ends everything. */
+    CmLiveInit(&l, 1, 200);
+    CmLiveContain(&l, 500);
+    CHECK_EQ(l.State, CM_LIVE_CONTAINED, "driver contain");
+    CHECK_EQ(CmLiveEpisode(&l), 1, "driver contain: an episode");
+    CmLiveContain(&l, 600);
+    CHECK_EQ(CmLiveEpisode(&l), 1, "driver contain: once");
+    (VOID)CmLiveProbe(&l, 1500, CM_LIVE_PROBE_OK);
+    CHECK_EQ(l.State, CM_LIVE_PREPARING, "driver contain: probes");
+    CmLiveDisarm(&l);
+    CHECK_EQ(l.State, CM_LIVE_PREPARING, "disarm keeps PREPARING");
+    CmLiveRevoke(&l);
+    CHECK_EQ(CmLivePrepared(&l, TRUE, FALSE), 0, "revoked: nothing");
+    CHECK(!CmLiveAdmits(&l, CM_ACCESS_PREPARE), "revoked: no PREPARE");
+    CHECK_EQ(CmLiveProbe(&l, 2500, CM_LIVE_PROBE_OK), 0, "revoked: no probe");
+}
+
 int main(void)
 {
     test_off_and_cadence();
@@ -270,6 +417,7 @@ int main(void)
     test_failure_and_rearm();
     test_transition_and_revoke();
     test_usb4_contain();
+    test_usb4_recover();
     printf("%d checks, %d failures\n", checks, failures);
     return failures;
 }

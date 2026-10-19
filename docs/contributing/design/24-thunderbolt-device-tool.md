@@ -1,7 +1,6 @@
 # Design Record 24 - The Thunderbolt and USB4 Device Viewer and Eject
 
-Status: revision 4, 2026-10-15, reviewed and revised three times the same
-day; the code is written against it. Written for the owner's instructions of 2026-10-15: Windows 98 SE and
+Status: revision 4, 2026-10-15, reviewed and revised the same day; the code is written against it. Written for the owner's instructions of 2026-10-15: Windows 98 SE and
 ME have no way to safely remove a device behind a Thunderbolt or USB4
 tunnel, and no target system has a way to see what is connected to one.
 The answer is a viewer of the connected Thunderbolt 3 and USB4 devices,
@@ -11,8 +10,8 @@ this package supports. It ships in `3.0.0.0` with Phases 39 and 40
 each an orchestrator decision for the owner to confirm unless it names the
 owner; section 14 what is open.
 
-Revision 5, 2026-10-16 (the owner, for `3.0.0.0`; roadmap EJRB.1 keeps
-the proper fix): a unit Windows does not mark removable, whatever the
+Revision 5, 2026-10-16 (the owner, for `3.0.0.0`; roadmap-usb4.md 42-0.4
+and 42-A.5, formerly EJRB.1, keep the proper fix): a unit Windows does not mark removable, whatever the
 cause - the first plug of a device Windows has not seen, read on 2000
 with a bridge chain behind the tunnel port, or a stack rebuilt since - is
 stopped by `CM_Query_And_Remove_SubTreeW` on 2000, XP, Vista and 7, as
@@ -24,6 +23,16 @@ with a veto type to `CM_Request_Device_EjectA` is read as the veto it
 is; `/devices` labels the unit "not marked removable" (section 6). The
 legs are `runs/run-41.md`'s, "The fallback for a unit not marked
 removable".
+
+Revision 6, 2026-10-18 (roadmap-usb4.md tasks 42-0.4 and 42-0.7, their
+designs): on Windows 98 SE and ME the tool's eject of a unit is asked of
+the connection manager, which runs the removal with Stor98's handshake
+(section 7.1's revision; record 21 section 7.2, the 9x half; the code is
+42-A.13), and section 14's handshake item is closed by it; on Windows
+2000 to 7 the mark across a stack rebuild is record 21 section 7.4's
+revision 3 (a privileged service writing a device-specific `LowerFilters`
+value), section 7.2's query-and-remove route staying as the fallback for
+a unit the service has not reached.
 
 It is not a Thunderbolt control panel: it approves nothing, changes no
 security level, updates no firmware, and publishes or shows no secret or
@@ -126,7 +135,7 @@ version it does not know.
 | 0 | magic `0x534D4358` ("XCMS") | - |
 | 4 | layout version, 1 | - |
 | 8 | the record's size: 128 + count x 128 | - |
-| 12 | generation, bumped on every content change, never 0 once written | - |
+| 12 | generation, bumped on every content change; 0 only in a start's first record (stage stopped, below), never 0 after it | - |
 | 16 | the system's uptime at the write, seconds | - |
 | 20 | the NHI's PCI vendor (15:0) and device (31:16) | - |
 | 24 | the connection manager running: 0 none, 1 the ICM client, 2 the USB4 software connection manager | - |
@@ -166,8 +175,9 @@ version it does not know.
 
 Names are cut to 31 characters, a byte outside printable ASCII written as
 `?`, NUL-padded. A device the ICM rejected is not in the client's table
-(`tbt_icm.c` counts it and drops it), so the record cannot list it; there
-is no "rejected" value. The link speed is kept by neither connection
+(`tbt_icm.c` counts it and drops it), so the record cannot list it:
+value 3 (`CM_ST_APPR_REJECTED`) is defined, and XHCITR decodes it, but
+no path of the driver writes it. The link speed is kept by neither connection
 manager and is not in this layout.
 
 **What is never published**: the ICM's `Key`, any challenge, response or
@@ -394,6 +404,14 @@ re-enumeration worker (`cm_cfgwk.c` on branch `p39-reenum`, read
   that promises that teardown on 9x is reported to the connection-manager
   work as inconsistent with this.
 
+Since revision 6 (2026-10-18) the tool's removal on 98 SE and ME no
+longer happens outside the connection manager: it is asked of it (section
+7.1's revision), the worker runs it as its own removal step with Stor98's
+handshake, and under the USB4 software connection manager the per-port
+teardown of record 22 section 10.4 follows a clean removal, so the
+inconsistency the last bullet reports is resolved for the tool's ejects;
+the bullets above describe `3.0.0.0`.
+
 ### 5.2 `xhcicm.sys` on the NT targets
 
 `CM_Request_Device_EjectA` is the call the applet makes, so a unit with
@@ -431,8 +449,8 @@ removal. On 98 SE the remove gives `nvme98` its native stop; on ME
 write-through (its MD-5 and D3). The removal handshake `nvme98`'s MD-5
 plans (a `REMOVE_PENDING` request and a clean acknowledgement before the
 connection manager calls `Remove_SubTree`) is the connection manager's,
-and a removal the tool makes does not run it; when that handshake exists,
-the 9x eject should be asked of the connection manager (section 14). The
+and a removal the tool makes does not run it; since revision 6 the 9x eject is
+asked of the connection manager, which runs it (section 7.1's revision). The
 query goes to the unit - the NVMe controller's PCI devnode - so the IOS
 devnodes of its disk and volume are inside the subtree; the tool never
 climbs to a bridge. On NT `nvme98` receives the query-remove and remove of
@@ -528,6 +546,56 @@ numbered unit for `/eject id=`.
 4. A removal that fails after an accepted query: "Windows began to stop
    the device but could not finish (code 0x...). It is not safe to unplug
    it now. Shut down Windows, then unplug it." Exit 2.
+
+**Revision 6 (2026-10-18): the eject asked of the connection manager.**
+The four steps above are `3.0.0.0`'s direct route. From `3.1.0.0` (record
+21 section 7.2, the 9x half; the code is 42-A.13) the tool makes neither
+call for a unit. After section 7.3's revalidation it writes
+`XhciCmEjectAsk` (a nonce, the port's and the unit's locations, and the
+query device's start epoch and content generation the unit was chosen
+under, record 25 section 4.3 - which XHCIINST reads on 98 SE and ME for
+this, as XHCITR does) to the NHI's driver key beside `XhciCmStatusAsk`,
+under the shared mutex, and polls `XhciCmEjectResult` in the NHI's
+hardware key: the connection manager runs `Query_Remove_SubTree`,
+Stor98's `REMOVE_PENDING` request where the unit is an NVMe function
+with an `UP` entry, the wait for its answer, then - after a clean
+answer, after an answer that says the drive is isolated, or after an
+isolation the connection manager could make itself - `Remove_SubTree`
+and its retries, and reports each step; where the drive did not stop
+and no isolation could be made the removal is **not** made and the unit
+is left stopped until it is unplugged (record 21 section 7.2, the 9x
+half, its decision V6). The driver first answers "accepted" (in the
+result) or a rejection (in `XhciCmEjectReply`, with the reason: a stale
+epoch or generation, not a tunnel port of this controller, nothing at
+that location, busy) before any call; the acceptance is the ownership
+boundary - before it the tool's deletion of its ask cancels the request,
+after it the driver owns the transaction and the tool only observes. The
+outcomes map onto the items above: a rejection is exit 1 with "No
+changes were made"; neither answer within 3 s, the ask then deleted and
+3 s more waited, is the uncertain outcome of section 8.2 (exit 2: "The
+Thunderbolt driver did not answer. Look at the device in the xHCI98 USB
+Tree before you unplug it."), never "No changes were made", since the
+driver may have taken the ask; a refused query (the terminal step
+"query-refused") takes item 2's table by its `CONFIGRET` (exit 4 for a
+veto and any other refusal, exit 1 for `CR_INVALID_DEVNODE`,
+`CR_NO_SUCH_DEVNODE` and `CR_CALL_NOT_IMPLEMENTED`), the one mapping both
+tools use; a removal is item 3 (exit 0): the tool then makes section
+5.4's whole assessment as before - the walk read again, the storage-only
+unit, one router, no USB3 tunnel, no other unit running - which selects
+its first, second or third text, or the restarted-unit outcome (exit 4;
+the expected reading after an answer that said the drive was isolated,
+since that branch re-enumerates it), with "the drive did not confirm a
+clean stop" added where the answer was not clean; "blocked" - the drive did
+not stop and no isolation could be made, or the removal kept failing -
+is item 4 (exit 2), the devnode left stopped until the unplug; a
+transaction not at a terminal step about 50 s after its acceptance, or
+one whose result has not been re-stamped for 20 s, is exit 2 as well. Under the USB4 software connection
+manager a clean removal is followed by the port's PCIe tunnel teardown
+(record 22 section 10.4) only when no other unit behind that port is
+running, and section 5.2's tunnel line is shown on 98 SE and ME too;
+under the firmware connection manager the tunnel stays up, as before. The direct calls stay in the
+tool for the plain USB devices of record 25 section 6.5 alone, and a
+unit's eject is still refused without a confirmed record (section 3.3).
 
 `cfgmgr32.dll` on 98 SE (4.10.2222, 45,056 bytes) and ME (4.90.3000, 40,960
 bytes) exports the same 179 names (read 2026-10-15 from each guest image's
@@ -739,12 +807,16 @@ In `xhciinst\inst_core.c` (host suite `test\test_inst.c`):
 - the unit selection and protection over a mock tree with parents: the
   enclosure and the dock shapes, the host switch with its NHI and xHCI
   under unverified candidates, an override that verifies the host xHCI's
-  port, an NHI nested inside a unit, an incomplete walk;
+  port, an NHI nested inside a unit (an incomplete walk is not expressible
+  in the pure API's tree; section 5.4's message for one is checked below);
 - the record's decoder and checks (magic, version, sizes, counts, path
   counts), the confirmation (an echo that matches, one that does not, a
   record of an earlier session with the same generation), and the
-  diagnostic boot-time label (two boots minutes apart, a wrapped tick
-  count) - against records built by the driver's own `cm_status.c`;
+  diagnostic boot-time label (the same boot, and two boots minutes
+  apart) - against records the suite builds itself to `cm_status.h`'s
+  layout (`test_inst` links `inst_core.c` alone, so the driver's
+  `cm_status.c` builder is held by `test_cm_status`, below); a wrapped
+  tick count has no vector;
 - the eject sequences with injected answers: a 9x query refused, accepted
   then removed, accepted then the removal failing (the removal always
   attempted after an accepted query, never after a refused one); each NT
@@ -757,7 +829,8 @@ In `xhciinst\inst_core.c` (host suite `test\test_inst.c`):
 In `src\cm\cm_status.c` (host suite `test\test_cm_status.c`): the record
 from an ICM table and from a USB4 port set and its links - names cut and
 filtered, the UUID cut to 16 bits and no `Key` byte anywhere in the record,
-each approval and tunnel state, the port mapping (one active member, a
+each approval state the builder writes (approved, before boot, refused,
+unanswered, pending, held) and each tunnel state, the port mapping (one active member, a
 bind, a conflicted bind), the change compare that ignores the stamp, the
 echo, the entry limit and its flag - and the 98 path over a fake
 configuration space (bus 0, a bridge chain, an unreadable bus, a read
@@ -862,9 +935,9 @@ and have no live vehicle here; they are owed to the bench.
   again while it stays connected, with `CM_REMOVE_NO_RESTART` asked (the
   route itself was read on 2000, XP and 7, revision 5).
 - The link speed is kept by neither connection manager.
-- The `nvme98` removal handshake (its MD-5): when it exists, the 9x eject
-  should be asked of the connection manager, which can run it, rather than
-  made by the tool.
+- The Stor98 removal handshake (its MD-5): closed by revision 6 (the 9x
+  eject asked of the connection manager, section 7.1's revision; record 21
+  section 7.2, the 9x half); the legs are 42-V.6.
 - A dock with several units, and its USB devices under USB4: section 5.4's
   messages are written from the design, with no vehicle to read them here.
 - Titan Ridge and the integrated hosts: the record's fields are filled from

@@ -4,17 +4,17 @@
 # batch files, silently breaking the :logerr safety paths.
 *.BAT eol=crlf
 # ...and the lowercase spelling, because gitattributes patterns are CASE
-# SENSITIVE on every platform (repo audit D6). Every batch file in the tree is
-# `.BAT` today, so this pattern currently matches nothing - which is the point:
-# the first `.bat` somebody adds would otherwise be checked out LF-only, with
-# exactly the goto-label failure the rule above exists to prevent, and nothing
-# would say so.
+# SENSITIVE on every platform. The tree holds both spellings (src/portsw-on.bat,
+# src/silent-on.bat beside xhciinst/INSTALL.BAT), and a `.bat` matched by
+# the uppercase rule alone would be checked out LF-only, with exactly the
+# goto-label failure the rule above exists to prevent, and nothing would say
+# so.
 *.bat eol=crlf
 
 # The same hazard, one layer up, and it was open for a long time: cmd.exe's
-# label scanner has the same LF sensitivity, and scripts/build-driver.cmd,
-# scripts/make-usbport-lib.cmd and test/run-host-tests.cmd all depend on
-# goto/call labels for their failure paths. They are stored LF and were getting
+# label scanner has the same LF sensitivity, and scripts/build-driver.cmd and
+# test/run-host-tests.cmd both depend on goto/call labels for their failure
+# paths. They are stored LF and were getting
 # their working-tree CRLF only from core.autocrlf=true, so a clone with
 # autocrlf=false or input silently lost it.
 *.cmd eol=crlf
@@ -62,7 +62,7 @@ LICENSE eol=crlf
 # published as they are checked out, into tools\silent\ as SILENT.REG and
 # SILENT.VBS. The packager holds SILENT.REG to its exact CRLF bytes, so a
 # clone with core.autocrlf false or input would fail the package self-test
-# and cut an LF-only list (Codex review of 38.2, round 1). The scripts are
+# and cut an LF-only list (task 38.2). The scripts are
 # pinned with it (portsw.vbs too), so the published texts follow one rule.
 *.reg eol=crlf
 *.REG eol=crlf
@@ -71,3 +71,10 @@ LICENSE eol=crlf
 # The usb4-emu cross-check runs under MSYS2 bash, which does not take CRLF
 # (roadmap-usb4.md task 40-A.5).
 scripts/usb4-crosscheck/*.sh eol=lf
+
+# src/stor98 is Stor98 (roadmap-usb4 task 42-A.20), whose own .gitattributes
+# sets its line endings. The rules above that match by name alone (LICENSE,
+# sources, *.rc) would otherwise reach into it and check those files out CRLF
+# under core.autocrlf false or input, where Stor98 alone leaves them as
+# stored; this puts eol back to unspecified there, and Stor98's file applies.
+src/stor98/** !eol

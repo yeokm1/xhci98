@@ -9,9 +9,16 @@
  * extension's Kind before anything else, so the NHI's and the filters'
  * paths are what they were. CREATE succeeds for the device itself (on NT,
  * an open with a name past the device's is refused), CLOSE and CLEANUP
- * succeed, DEVICE_CONTROL answers CM_Q_IOCTL, CM_QL_IOCTL and CM_QP_IOCTL
- * (the PCI answer below), everything else is
- * STATUS_INVALID_DEVICE_REQUEST.
+ * succeed, DEVICE_CONTROL answers CM_Q_IOCTL, CM_QL_IOCTL, CM_QP_IOCTL
+ * (the PCI answer below) and CM_QM_IOCTL (the marks, below), everything
+ * else is STATUS_INVALID_DEVICE_REQUEST.
+ *
+ * THE MARKS (design record 21 section 7.4, revision 3; task 42-A.5).
+ * CM_QM_IOCTL answers the domain's marks table as the thread built it
+ * after its last pass (CmReenumMarksBuild into CM_NHI.MarksBuf, copied in
+ * under Lock with the rest), with CM_Q_IOCTL's sizing rules; a whole
+ * answer read records its marks generation (MarksRead), which the next
+ * publish hands back so that a tombstone a poll has seen can go.
  *
  * THE SNAPSHOT lives in the query device's own extension, under its own
  * spin lock, so the device holds no pointer to the NHI and outlives it
@@ -57,10 +64,20 @@
  * domain's tunnel-port set, under Lock), copied out under Lock; the reads
  * themselves hold no lock and follow no pointer to the NHI, so the device
  * still holds none for this request. PciGate lets one request at a time
- * build into the extension's Pci buffer. On Windows 98 SE and ME the
- * functions below a member are not read: a bus a tunnel brought up after
- * boot is not numbered by PCI.VXD (record 21 section 6.1), and a read of a
- * bus number nobody assigned is not made.
+ * build into the extension's Pci buffer. On Windows 98 SE and ME (task
+ * 42-A.14) a bus a tunnel brought up after boot is not numbered by PCI.VXD
+ * (record 21 section 6.1) and the HAL does not answer for a function
+ * PCI.VXD does not know, so the walk below the members is handed to the
+ * NHI's CONFIGMG worker (cm_cfgwk.c, CmCfgwkPciAsk), which reads through
+ * PCI.VXD's guarded route and enters only buses PCI.VXD or its own
+ * numbering assigned; the request waits for it CM_QP_WK_WAIT_MS at most.
+ * The device reaches the worker through Wk, published by the thread and
+ * withdrawn before the worker stops (CmQueryWorkerGone) under a rundown
+ * count, WkUse, that covers the posting alone; the request block is the
+ * worker's and the asker's, so neither the worker's lifetime nor a late
+ * answer touches the device. Without a worker, or past the bound, the
+ * answer is built here as before, the functions below unread, with the
+ * reason in each such entry (CM_QP_NR_*).
  *
  * IRQL: CmQueryInit in DriverEntry; CmQueryOpen, CmQueryStopping and
  * CmQueryClose in the PnP dispatch at PASSIVE_LEVEL; CmQueryPublish on the
@@ -70,6 +87,11 @@
  */
 
 #include "cm.h"
+
+/* How long a 98 PCI request waits for the worker's walk: a walk of the
+ * largest answer is a few thousand PCI.VXD reads, well inside it; a worker
+ * inside a CONFIGMG call that blocks (a wizard open) answers late. */
+#define CM_QP_WK_WAIT_MS    3000UL
 
 /* Indices in use (bit n: \Device\XhciCm<n>) and the last epoch handed
  * out, under CmQueryGlobalLock. */
@@ -415,6 +437,9 @@ static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
     CM_STATUS_IN in;
     CM_QUERY_IN qi;
     UCHAR rec[CM_ST_HDR_BYTES];
+    ULONG wait;
+    ULONG k;
+    BOOLEAN next;
 
     CmZero(&in, sizeof(in));
     in.NhiId = (nhi->Vendor & 0xFFFFUL) | ((nhi->Device & 0xFFFFUL) << 16);
@@ -426,9 +451,25 @@ static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
     qi.Record = rec;
     qi.RecordBytes = CM_ST_HDR_BYTES;
     qi.Live = nhi->Live.State;
-    /* No thread: nothing will change until a restart. With one, the wake
-     * after the device is installed publishes the real flag. */
-    qi.Inert = (ULONG)!nhi->ThreadRunning;
+    /* Task 42-A.7: the thread's actual wait - none (no thread: nothing
+     * will change until a restart), with no timeout (an inert start), or
+     * with one; between waits, the wait it goes to. The wake after the
+     * device is installed publishes the flag again in any case. */
+    /* One coherent reading: the wait state read on both sides of the
+     * predicate, again while it moved (a bind ending in between); still
+     * moving after a few readings, not inert (the pass publishes). */
+    next = FALSE;
+    wait = CM_Q_WAIT_BINDING;
+    for (k = 0; k < 8; k++) {
+        wait = nhi->ThreadWait;
+        next = CmThrInertNext(nhi);
+        if (nhi->ThreadWait == wait) {
+            break;
+        }
+        wait = CM_Q_WAIT_BINDING;
+    }
+    qi.Inert = (ULONG)CmQuerySeedInert((BOOLEAN)(nhi->ThreadRunning != 0),
+                                       wait, next);
     qi.EpochLo = nhi->QueryEpochLo;
     qi.EpochHi = nhi->QueryEpochHi;
     qi.NhiBdf = nhi->QueryBdf;
@@ -560,6 +601,7 @@ VOID CmQueryClose(PCM_NHI nhi)
     CmQueryStopping(nhi);
     self = (PDEVICE_OBJECT)nhi->QueryDev;
     q = (PCM_QUERY_DEV)self->DeviceExtension;
+    CmQueryWorkerGone(nhi);
     KeAcquireSpinLock(&q->Lock, &irql);
     q->Connected = 0;
     q->Log = NULL;
@@ -579,6 +621,9 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     LARGE_INTEGER ticks;
     KIRQL irql;
     ULONG bytes;
+    ULONG mbytes;
+    ULONG readGen;
+    BOOLEAN readAny;
     ULONG n;
     ULONG i;
 
@@ -624,6 +669,10 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
     q->CtrBytes = nhi->QueryCtrBytes;
     q->CtrCut = nhi->QueryCtrCut;
     cmQPorts(nhi, q);
+    /* The 98 worker the PCI answer asks (task 42-A.14), while it runs. */
+    q->Wk = (!cmQNt() && nhi->ReenumOn) ? nhi->Reenum.Wk : NULL;
+    readAny = (BOOLEAN)(q->MarksReadAny != 0);
+    readGen = q->MarksRead;
     /* Once stopping, every answer stays one generation past the thread's
      * own sequence (CmQueryStopping's bump), so it never goes back. */
     if (q->Stopping) {
@@ -640,6 +689,44 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
         nhi->QueryLast[i] = nhi->QueryBuf[i];
     }
     nhi->QueryLastBytes = bytes;
+    /* The marks: built outside the device's lock (the registration list's
+     * lock is taken inside), copied in under it. */
+    mbytes = CmReenumMarksBuild(nhi, nhi->MarksBuf, readAny, readGen);
+    KeAcquireSpinLock(&q->Lock, &irql);
+    for (i = 0; i < mbytes; i++) {
+        q->Marks[i] = nhi->MarksBuf[i];
+    }
+    q->MarksBytes = mbytes;
+    KeReleaseSpinLock(&q->Lock, irql);
+}
+
+VOID CmQueryWorkerGone(PCM_NHI nhi)
+{
+    PDEVICE_OBJECT self;
+    PCM_QUERY_DEV q;
+    LARGE_INTEGER step;
+    KIRQL irql;
+    ULONG use;
+
+    self = (PDEVICE_OBJECT)nhi->QueryDev;
+    if (self == NULL) {
+        return;
+    }
+    q = (PCM_QUERY_DEV)self->DeviceExtension;
+    /* 1 ms relative, in 100 ns units: -10,000. An asker holds WkUse only
+     * across CmCfgwkPciAsk, a spin lock and an allocation. */
+    step.LowPart = 0xFFFFD8F0UL;
+    step.HighPart = -1;
+    for (;;) {
+        KeAcquireSpinLock(&q->Lock, &irql);
+        q->Wk = NULL;
+        use = q->WkUse;
+        KeReleaseSpinLock(&q->Lock, irql);
+        if (use == 0) {
+            return;
+        }
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &step);
+    }
 }
 
 /* IRP_MJ_DEVICE_CONTROL's CM_Q_IOCTL. */
@@ -685,6 +772,56 @@ static NTSTATUS cmQAnswer(PCM_QUERY_DEV q, PIRP irp)
     if (rc == 0xFFFFFFFFUL) {
         return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
                                           : STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (rc == CM_Q_ANS_TOO_SMALL) {
+        return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
+    }
+    return CmCompleteIrp(irp, STATUS_SUCCESS, info);
+}
+
+/* IRP_MJ_DEVICE_CONTROL's CM_QM_IOCTL (record 21 section 7.4, revision
+ * 3): the marks as last published; a whole answer's generation recorded. */
+static NTSTATUS cmQMarks(PCM_QUERY_DEV q, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    ULONG room;
+    ULONG info;
+    ULONG rc;
+    KIRQL irql;
+    PUCHAR out;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    room = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    out = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    if (out == NULL) {
+        room = 0;
+    }
+    info = 0;
+    KeAcquireSpinLock(&q->Lock, &irql);
+    if (!q->Connected) {
+        rc = 0xFFFFFFFFUL;
+    } else if (q->MarksBytes < CM_QM_HDR_BYTES) {
+        /* No pass has built one yet: an empty answer would read as "no
+         * unit", which is not known. */
+        rc = 0xFFFFFFFEUL;
+    } else {
+        rc = CmMarksAnswer(out, room, q->Marks, q->MarksBytes, q->Pass,
+                           (BOOLEAN)(q->Stopping != 0), &info);
+        if (rc == CM_Q_ANS_WHOLE) {
+            q->MarksRead = (ULONG)q->Marks[CM_QM_O_GEN] |
+                           ((ULONG)q->Marks[CM_QM_O_GEN + 1] << 8) |
+                           ((ULONG)q->Marks[CM_QM_O_GEN + 2] << 16) |
+                           ((ULONG)q->Marks[CM_QM_O_GEN + 3] << 24);
+            q->MarksReadAny = 1;
+        }
+    }
+    KeReleaseSpinLock(&q->Lock, irql);
+    if (rc == 0xFFFFFFFFUL) {
+        return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
+                                          : STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (rc == 0xFFFFFFFEUL) {
+        return CmCompleteIrp(irp, STATUS_DEVICE_NOT_READY, 0);
     }
     if (rc == CM_Q_ANS_TOO_SMALL) {
         return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
@@ -814,8 +951,11 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
     ULONG bytes;
     ULONG i;
     ULONG connected;
+    ULONG reason;
     KIRQL irql;
     PUCHAR out;
+    struct _CM_CFGWK *wk;
+    struct _CM_CFGWK_PCI *ask;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     room = stack->Parameters.DeviceIoControl.OutputBufferLength;
@@ -826,6 +966,7 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
     if (room < CM_QP_HDR_BYTES) {
         return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
     }
+    wk = NULL;
     CmZero(&in, sizeof(in));
     /* The gate first: what to read is taken after any request before this
      * one, and the device is checked again after the reads, so an answer
@@ -843,15 +984,37 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
         for (i = 0; i < q->PortCount && i < CM_QP_MAX_PORTS; i++) {
             in.Ports[i] = q->Ports[i];
         }
+        if (!cmQNt() && q->Wk != NULL) {
+            wk = q->Wk;
+            q->WkUse++;
+        }
     }
     KeReleaseSpinLock(&q->Lock, irql);
     rc = CM_Q_ANS_TOO_SMALL;
     info = 0;
     if (connected) {
-        in.ReadBelow = (ULONG)cmQNt();
-        in.Read = cmQpRead;
-        in.Context = q->PciScratch;
-        bytes = CmQpciBuild(q->Pci, CM_QP_MAX_BYTES, &in);
+        bytes = 0;
+        reason = cmQNt() ? CM_QP_NR_SYSTEM : CM_QP_NR_NO_WORKER;
+        if (wk != NULL) {
+            /* 98 SE and ME: the walk below the members on the worker. */
+            ask = CmCfgwkPciAsk(wk, &in, &reason);
+            KeAcquireSpinLock(&q->Lock, &irql);
+            q->WkUse--;
+            KeReleaseSpinLock(&q->Lock, irql);
+            if (ask != NULL) {
+                bytes = CmCfgwkPciTake(ask, CM_QP_WK_WAIT_MS, q->Pci,
+                                       &reason);
+            }
+        }
+        if (bytes < CM_QP_HDR_BYTES) {
+            /* NT, or no answer from the worker: built here, the
+             * functions below unread on 98 SE and ME. */
+            in.ReadBelow = (ULONG)cmQNt();
+            in.Reason = reason;
+            in.Read = cmQpRead;
+            in.Context = q->PciScratch;
+            bytes = CmQpciBuild(q->Pci, CM_QP_MAX_BYTES, &in);
+        }
         KeAcquireSpinLock(&q->Lock, &irql);
         connected = q->Connected;
         if (connected && q->Stopping && bytes >= CM_QP_HDR_BYTES) {
@@ -903,6 +1066,9 @@ NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp)
         }
         if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QP_IOCTL) {
             return cmQPci(q, irp);
+        }
+        if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QM_IOCTL) {
+            return cmQMarks(q, irp);
         }
         break;
     case IRP_MJ_POWER:

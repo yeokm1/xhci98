@@ -24,7 +24,7 @@ What they held has also moved. Task 13-L.2 retired the throwaway
 `XHCI_OBS_SNAPSHOT` instrument these came from, rebuilt the `PassThru` channel
 into every shipping flavour, and changed the counter set underneath:
 `XhciLogSnapshot` retired, `SwitchStatusSnapshot` gone with schema 3,
-`DescSelectionsOffAddress` added by a later review. A successful decode would
+`DescSelectionsOffAddress` added later. A successful decode would
 have landed partly on fields the driver no longer has.
 
 What they decoded to is already written down. The counter blocks are
@@ -130,3 +130,8 @@ not five reads.
 - `wedge2-notering.txt` is 89 records, 2,070 bytes, no wrap, and reproduced the
   first run's wedge identically, which is what made Finding S a mechanism
   rather than an incident.
+- `l3a1.txt`, `l3a2.txt` and `l3d2.txt` carry stray carriage returns: some
+  of their lines end CR CR LF rather than CR LF (108, 159 and 89 lines
+  respectively). The bytes are part of the evidence and are kept as
+  captured; a reader that splits on LF sees a trailing CR on those lines,
+  and nothing in the table is changed by it.

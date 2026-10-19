@@ -209,11 +209,12 @@ XHCI_C_ASSERT(erst_entry_size, sizeof(XHCI_ERST_ENTRY) == 16);
 #define XHCI_TRB_TYPE_SET_TR_DEQUEUE    16
 #define XHCI_TRB_TYPE_RESET_DEVICE      17
 #define XHCI_TRB_TYPE_NOOP_COMMAND      23
-/* The architected command range of Table 6-91, which is what the command ring
- * may carry (a Link TRB is placed by the ring layer, not by a submitter, and
- * Vendor Defined commands 48-63 are deliberately not accepted - this driver
- * issues none, and a vendor type ID means nothing unqualified by PCI
- * Vendor/Device). */
+/* The command range this driver admits to the command ring: Table 6-91's
+ * 9-23. Its 24 and 25 (Get and Set Extended Property, optional) are command
+ * TRBs too and are not admitted because this driver issues neither; a Link
+ * TRB is placed by the ring layer, not by a submitter; and Vendor Defined
+ * commands 48-63 are deliberately not accepted - this driver issues none, and
+ * a vendor type ID means nothing unqualified by PCI Vendor/Device. */
 #define XHCI_TRB_TYPE_COMMAND_FIRST     XHCI_TRB_TYPE_ENABLE_SLOT
 #define XHCI_TRB_TYPE_COMMAND_LAST      XHCI_TRB_TYPE_NOOP_COMMAND
 #define XHCI_TRB_TYPE_TRANSFER_EVENT    32
@@ -755,9 +756,10 @@ XHCI_C_ASSERT(dnctrl_masks_partition_the_register,
  * while a reset runs - writing that back restarts it. WPR is RW1S too but
  * "shall always return 0 when read" (5.4.8, Table 5-27) and is RsvdZ on the
  * USB2 protocol ports this driver manages, so it is stripped against a
- * *composed* value rather than a replayed read *(until the post-Phase 13 review rounds this line
- * lumped it with PR as "a reset in progress"; `xhci-data-structures.md` had
- * the right reason first)*. LWS turns the PLS field into an
+ * *composed* value rather than a replayed read *(until after Phase 13 this
+ * line lumped it with PR as "a reset in progress";
+ * `xhci-data-structures.md` had the right reason first)*. LWS turns the PLS
+ * field into an
  * unintended link-state write. The change bits are RW1C. RsvdZ must be 0.
  */
 #define XHCI_PORTSC_UNSAFE_MASK \
@@ -843,8 +845,9 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
 
 /*
  * The sticky "this start has decoded a device at this speed" set
- * (XHCI_EXTENSION.RhSpeedsSeen). Only the three speeds a USB 2.0 hub class can
- * describe get a bit: SuperSpeed ports are not managed, and an undecodable PSIV
+ * (XHCI_EXTENSION.RhSpeedsSeen, the miniport's). Only the three speeds a USB
+ * 2.0 hub class can describe get a bit: the miniport managed no SuperSpeed
+ * port, and an undecodable PSIV
  * is XHCI_SPEED_UNKNOWN, which is the absence of evidence rather than evidence
  * of a speed. See the field comment for why this is a monotone set and not a
  * count or a tally.
@@ -882,9 +885,11 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
 /* ------------------------------------------------------------------ */
 
 /*
- * MiniPortResourcesSize is committed in DriverEntry, before StartController
- * can read HCSPARAMS1/HCSPARAMS2. Everything below is therefore a worst-case
- * reservation, and hardware that exceeds it is refused with a named
+ * The common buffer's size is fixed before the start can read HCSPARAMS1 and
+ * HCSPARAMS2 (the HCD allocates XHCI_HC_RESOURCES_SIZE at start, hcd_dma.c,
+ * as the miniport committed MiniPortResourcesSize in DriverEntry).
+ * Everything below is therefore a worst-case reservation, and hardware that
+ * exceeds it is refused with a named
  * diagnostic rather than silently under-served. Rationale, measured fleet
  * values, and the levers to change these two numbers are in
  * docs/contributing/design/04-controller-common-buffer.md.
@@ -964,8 +969,9 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
     (XHCI_MAX_SCRATCHPAD * XHCI_PAGE_SIZE)
 
 /*
- * The value DriverEntry puts in USBPORT_REGISTRATION_PACKET.MiniPortResourcesSize.
- * usbport actually allocates ROUND_TO_PAGES(this + 48) - see the design doc.
+ * The controller common buffer's size: what the HCD's AllocateCommonBuffer
+ * asks for (hcd_dma.c). The miniport passed it as MiniPortResourcesSize, of
+ * which usbport allocated ROUND_TO_PAGES(this + 48) - see the design doc.
  */
 #define XHCI_HC_RESOURCES_SIZE \
     (XHCI_REGION_SCRATCHPAD_PAGES + XHCI_REGION_SCRATCHPAD_PAGES_BYTES)
@@ -1139,9 +1145,9 @@ typedef struct _XHCI_HC_LAYOUT {
  * writes hc.scratchpad, hc.maxslots, hc.contextsize and the rest into the log
  * ring at CAP_DECODE, before this carve runs, and XHCISNAP reads them back off
  * the machine. The traced (qemu) build also prints them as XHCI_DBG_VALUE
- * lines. (This comment said "a debug-build diagnostic" until the post-Phase 13 review rounds, which
- * was wrong twice over after task 13-L.1: the trace is qemu's, and the number
- * was never only in it.) */
+ * lines. (This comment said "a debug-build diagnostic" until after Phase 13,
+ * which was wrong twice over after task 13-L.1: the trace is qemu's, and
+ * the number was never only in it.) */
 #define XHCI_LAYOUT_OK                  0
 #define XHCI_LAYOUT_BAD_CONTEXT_SIZE    1
 #define XHCI_LAYOUT_BAD_PAGE_SIZE       2
@@ -1344,14 +1350,15 @@ ULONG XhciScratchpadPageOffset(const XHCI_HC_LAYOUT *layout,
  * descriptor field.
  *
  * *(This block called them the "*derived*" Intervals, "derived from usbport
- * rather than from a descriptor this driver never sees", until the post-Phase 13 review rounds. Task
- * 9-A.2 built that channel: `src/xhci_desc.c` snoops the configuration
- * descriptor on EP0, and where it yields a `bInterval` the Interval really is
+ * rather than from a descriptor this driver never sees", until after Phase
+ * 13. Task 9-A.2 built that channel: `src/xhci_desc.c` snoops the
+ * configuration descriptor on EP0, and where it yields a `bInterval` the
+ * Interval really is
  * derived and these two constants are not used. They are what
  * `src/xhci_ctx.c`'s isochronous branch programs when it is not - no descriptor
  * read, no such endpoint in it, or alternates that disagree with no selection
  * to resolve them - and that branch has stated them as an assumption rather
- * than a derivation since its own review round.)*
+ * than a derivation since it was revised.)*
  */
 #define XHCI_EP_INTERVAL_FS_ISOCH_MIN   3
 #define XHCI_EP_INTERVAL_FS_ISOCH_MAX   18
@@ -1374,15 +1381,19 @@ ULONG XhciInputEndpointContextOffset(const XHCI_HC_LAYOUT *layout,
                                      ULONG dci,
                                      ULONG *offset);
 
-/* Confirm usbport's StartVA/StartPA are usable for this layout. IRQL: any. */
+/* Confirm the common buffer's StartVA/StartPA (hcd_dma.c's block, as
+ * hcd_ctl.c hands it to the start) are usable for this layout. IRQL: any. */
 ULONG XhciCheckResourceBase(ULONG_PTR startVA, ULONG startPA);
 
-/* What usbport will actually ask the DMA adapter for, given a packet
- * MiniPortResourcesSize of resourcesSize. IRQL: any. */
+/* What usbport asked the DMA adapter for, given the miniport's packet
+ * MiniPortResourcesSize of resourcesSize. Host-suite-only (test_membuf.c):
+ * the HCD allocates XHCI_HC_RESOURCES_SIZE itself, with no header and no
+ * usbport rounding. IRQL: any. */
 ULONG XhciCommonBufferAllocationBytes(ULONG resourcesSize);
 
 /* usbport's private common-buffer header, appended after the miniport's
- * request before rounding to pages (read out of both shipping binaries). */
+ * request before rounding to pages (read out of both shipping binaries).
+ * Nothing under the HCD carries it. */
 #define XHCI_USBPORT_CB_HEADER_BYTES 48UL
 
 /* ------------------------------------------------------------------ */
@@ -1635,8 +1646,8 @@ ULONG XhciInitialMps0(ULONG speedClass);
  * schedule table in both shipping `usbehci.sys` builds. usbport hands the
  * miniport no `bInterval`, so the per-speed table in `docs/usb-xhci-info/xhci-data-structures.md`
  * section 8 is *not* this function's job; applying it here would convert twice.
- * *(This said "the miniport never sees `bInterval` at all" until the post-Phase 13 review rounds.
- * Task 9-A.2's descriptor snoop sees it - but on EP0 and for isochronous
+ * *(This said "the miniport never sees `bInterval` at all" until after Phase
+ * 13. Task 9-A.2's descriptor snoop sees it - but on EP0 and for isochronous
  * endpoints only, and never through the `Period` this function is handed, so
  * the conclusion is untouched: what arrives here is already converted.)*
  *
@@ -1868,7 +1879,7 @@ typedef struct _XHCI_HC_INFO {
      * *optional* there, so a 1.0 controller may advertise it and is asked. What
      * can make the register absent is a `CapLength` that stops before 20h, which
      * puts the operational registers on top of the address. This comment said
-     * "HCCPARAMS2 arrived in xHCI 1.1" until audit round 4 refuted it, and the
+     * "HCCPARAMS2 arrived in xHCI 1.1" until that was refuted, and the
      * version gate it described is gone; see XhciDeriveHcInfo for the two gates
      * that remain and XHCI_HCCPARAMS2_FSC for what the bit decides. Below 1.0
      * (task 38.11, D4) the register is not believed at all, which is a
@@ -1903,6 +1914,7 @@ typedef struct _XHCI_HC_INFO {
 #define XHCI_HC_NO_SLOTS            8
 #define XHCI_HC_NO_INTERRUPTERS     9
 #define XHCI_HC_WINDOW_TOO_SMALL    10
+#define XHCI_HC_BAD_XECP            11  /* xECP inside the capability block */
 
 /*
  * The first two capability values, checked before anything else is read.
@@ -1987,8 +1999,8 @@ ULONG XhciHcInfoEqual(const XHCI_HC_INFO *a, const XHCI_HC_INFO *b);
 /*
  * USBLEGCTLSTS (Table 7-5 p.479). The SMI enables are five bits - 0, 4, 13,
  * 14 and 15 - not the whole low half: 3:1, 12:5 and 19:17 are RsvdP, which a
- * write must carry back as read. The handoff's mask was 0x0000FFFF until the
- * 2026-09-05 audit's F13 and zeroed the RsvdP fields, the class of error the
+ * write must carry back as read. The handoff's mask was 0x0000FFFF until
+ * 2026-09-05 and zeroed the RsvdP fields, the class of error the
  * RsvdP helpers in xhci_init.c exist to prevent for the operational
  * registers. The RW1C status bits the handoff acknowledges are 31:29; 28:21
  * are RsvdZ and 16 and 20 are read-only status.
@@ -2405,8 +2417,17 @@ ULONG XhciPortscWarmReset(ULONG portsc);
 ULONG XhciPortscRxDetect(ULONG portsc);
 
 /* ------------------------------------------------------------------ */
-/* The root hub as usbport sees it (src/xhci_port.c, src/xhci_rh.c)    */
+/* The root hub as usbport saw it (src/xhci_port.c)                    */
 /* ------------------------------------------------------------------ */
+
+/*
+ * The hub-class bits just below are shared with the HCD's hub code. The
+ * shadow, XHCI_ROOT_HUB and every function over them in this section are
+ * host-suite-only: their one driver caller was the miniport's root-hub
+ * callback family (xhci_rh.c, deleted 2026-10-02), test/test_port.c is what
+ * still runs them, and XHCI_EXTENSION.RootHub is never written under the HCD
+ * (kept for layout). The text in the section describes the miniport.
+ */
 
 /*
  * USB hub-class port status and change bits - the two USHORTs `RH_GetPortStatus`
@@ -2898,8 +2919,9 @@ typedef struct _XHCI_EVENT_RING {
     ULONG Ccs;
 } XHCI_EVENT_RING, *PXHCI_EVENT_RING;
 
-/* TRB builders. Each fills a caller-owned template; the cycle bit is not the
- * builder's business - XhciRingEnqueue stamps it. IRQL: any. */
+/* TRB builders. Each fills a caller-owned template, and for these the cycle
+ * bit is XhciRingEnqueue's to stamp - except XhciTrbLink, which the ring
+ * layer places itself and which takes its cycle as an argument. IRQL: any. */
 VOID XhciTrbClear(XHCI_TRB *trb);
 VOID XhciTrbNoOpCommand(XHCI_TRB *trb);
 VOID XhciTrbLink(XHCI_TRB *trb, ULONG segmentPA, ULONG toggleCycle, ULONG cycle);
@@ -2999,6 +3021,9 @@ ULONG XhciRingFree(const XHCI_RING *ring);
 ULONG XhciRingHasRoom(const XHCI_RING *ring, ULONG trbs);
 ULONG XhciRingTrbPA(const XHCI_RING *ring, ULONG index);
 ULONG XhciRingIndexFromPA(const XHCI_RING *ring, ULONG pa, ULONG *index);
+/* 1 while `index` is a TRB between the dequeue and enqueue pointers (the
+ * Link TRB never is). IRQL: any. */
+ULONG XhciRingIsOutstanding(const XHCI_RING *ring, ULONG index);
 /*
  * Enqueue a whole Transfer Descriptor - `count` TRBs the hardware must see
  * complete or not at all. Fails with XHCI_RING_FULL, having written nothing,
@@ -3548,7 +3573,7 @@ ULONG XhciEventRingErdpValue(const XHCI_EVENT_RING *ring, ULONG ehb);
 #define XHCI_EXT_FLAG_RH_IRQ      0x00000020UL
 /*
  * The teardown's port-power pass is running, so **no root-hub callback may reach
- * PORTSC** (audit finding A4).
+ * PORTSC**.
  *
  * `xhciUnpowerPorts` writes PORTSC from `XhciStopController` *before* the quiesce
  * clears `INITIALIZED`, and it writes raw - no lock, no `PpArm`/`PpSettled`,
@@ -3716,7 +3741,7 @@ typedef struct _XHCI_TRANSFER {
      * completion; it is usbport's own pointer, stable for the endpoint's life,
      * and it is what the completion is answered through.
      */
-    PVOID EndpointExtension;
+    PVOID EndpointExtension;  /* unwritten under the HCD; kept for layout */
     ULONG Token;                /* per-endpoint serial, for traces and logs */
 
     ULONG FirstIndex;           /* ring index of the first TRB of the group  */
@@ -3743,6 +3768,14 @@ typedef struct _XHCI_TRANSFER {
      * zeroed per transfer.
      */
     ULONG TopoReply;            /* XHCI_TOPO_REPLY_*                           */
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `TopoTenancy` (5 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     ULONG TopoAddress;
     ULONG TopoPort;
     ULONG_PTR TopoReplyVa;
@@ -3751,9 +3784,9 @@ typedef struct _XHCI_TRANSFER {
      * `DescTenancy` below are kept on: `TopoAddress` is usbport's address,
      * which is a recycled name, so a completion parked across a disown plus a
      * re-enumeration would fold one hub's reply into whatever the graph now
-     * holds under that key. The fold had only the address to go on until the
-     * 2026-09-16 audit's B3, while the descriptor half beside it had been
-     * gated on identity since the first review round - one channel, two
+     * holds under that key. The fold had only the address to go on until
+     * 2026-09-16, while the descriptor half beside it had been gated on
+     * identity from the start - one channel, two
      * observers, and only one of them asking.
      *
      * Reachable only through that parked-completion window, which is why it
@@ -3778,13 +3811,21 @@ typedef struct _XHCI_TRANSFER {
      * that signs a transfer record initializes it.
      */
     ULONG DescAction;           /* XHCI_DESC_ACT_*                             */
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `HeldEpoch` (7 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     ULONG DescAddress;
     ULONG DescValue;            /* the selection's value, per XHCI_DESC_SNOOP  */
     ULONG DescIndex;
     ULONG_PTR DescReplyVa;
     /*
      * **Which device record this action belongs to, proved rather than
-     * assumed** - the first review round's finding.
+     * assumed**.
      *
      * A usbport address is recycled: a record released while this transfer sits
      * on the completion list can be re-allocated to another device that is
@@ -3797,7 +3838,7 @@ typedef struct _XHCI_TRANSFER {
     ULONG DescTenancy;
     /*
      * The XHCI_EXTENSION.SubmitEpoch this transfer was threaded onto the
-     * completion list under (Phase 7 review, finding A7). Meaningful only
+     * completion list under (Phase 7). Meaningful only
      * while the transfer is on that list; stamped by the one threading site
      * (xhciDevOweCompletion). A transfer queued outside any submit bracket is
      * stamped `epoch - 1` so every pass may deliver it.
@@ -3905,7 +3946,7 @@ typedef struct _XHCI_TRANSFER {
  */
 #define XHCI_XFER_FLAG_ISOCH        0x00000008UL
 /*
- * Task 24.3.4, round 10. A virtual hub answered this transfer; while one such
+ * Task 24.3.4. A virtual hub answered this transfer; while one such
  * is parked on the completion list the Version 300 tier owes a soft interrupt
  * (XHCI_EXTENSION.SoftInterruptOwed). Read off the transfer, like ISOCH, so a
  * list holding only real devices' completions never asks for one.
@@ -4048,8 +4089,8 @@ typedef struct _XHCI_TRANSFER_QUEUE {
      *                           ("did the controller send a second event?")
      *                           with *yes* while failing the conformance test.
      *                           Folding it into `MidTdDeferralsLost` - which is
-     *                           what happened before the batch-9-0 review round
-     *                           1 - made a two-event controller indistinguish-
+     *                           what happened early in batch 9-0 - made a
+     *                           two-event controller indistinguish-
      *                           able from a teardown, on the one measurement
      *                           this whole task exists to produce.
      *   `MidTdShortRetires`     a drain pass found the event ring empty with
@@ -4136,7 +4177,7 @@ typedef struct _XHCI_TRANSFER_QUEUE {
      * **conforming** controller under bulk IN load, `MidTdShortTails` could
      * legitimately read 0 with `MidTdShortRetires` large - the one-event
      * signature - and only this counter distinguished "the controller withheld
-     * them" from "the driver could not look" (repo audit round 3, finding 1).
+     * them" from "the driver could not look".
      *
      * Task 9-0.2 removes the ordinary source of that: a conforming controller's
      * tail is consumed in-band, no early retire happens and no record is made,
@@ -4307,7 +4348,7 @@ typedef struct _XHCI_TRANSFER_QUEUE {
      *                       packet's tail, that counts only groups whose *last*
      *                       packet was answered by an event short of
      *                       `LastIndex`, so an interior short packet raises
-     *                       this by one and that by nothing (Codex round 2).
+     *                       this by one and that by nothing.
      *                       The dropped-tail reading is the one above -
      *                       `IsoGroupsAwaitingTail` rising while `Completed`
      *                       does not; this counter only says the controller
@@ -4372,7 +4413,8 @@ typedef struct _XHCI_TRANSFER_QUEUE {
  *
  * **An endpoint of a virtual hub (task 24.3, design record 12) has no device
  * record at all**: `XHCI_ENDPOINT_FLAG_VHUB` is set, `DeviceIndex` stays 0 so
- * that no lookup in src/xhci_slot.c can resolve it to a real record, and
+ * that no lookup in the miniport's slot layer could resolve it to a real
+ * record, and
  * `VhubPort` names the root-hub port whose `XHCI_EXTENSION.Vhub` entry it
  * belongs to. Every open of a real endpoint writes `VhubPort` 0, because the
  * extension is not assumed zeroed between tenants.
@@ -4413,7 +4455,7 @@ typedef struct _XHCI_VHUB_BINDING {
 } XHCI_VHUB_BINDING, *PXHCI_VHUB_BINDING;
 
 /* ------------------------------------------------------------------ */
-/* One addressed device (Phase 6 batch B, src/xhci_slot.c)             */
+/* One addressed device (Phase 6 batch B; the miniport's xhci_slot.c)   */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -4515,8 +4557,7 @@ typedef struct _XHCI_VHUB_BINDING {
  */
 #define XHCI_DEV_OP_MARK_HUB        10
 /*
- * Reset Device (4.6.11), the re-enumeration step the repo audit's finding A2
- * found missing.
+ * Reset Device (4.6.11), the re-enumeration step that was found missing.
  *
  * usbhub re-enumerates a device by resetting its port and opening EP0 at address
  * 0 again, and this driver keeps the slot across that. Getting the kept slot back
@@ -4585,7 +4626,7 @@ typedef struct _XHCI_VHUB_BINDING {
 #define XHCI_DEV_FLAG_HUB_MARK_FAILED 0x00000020UL
 /*
  * The one hub-tier reset suppression this record's enumeration bracket is
- * allowed has been spent (Phase 7 review, finding A6 - task 7b-A.1.1's bound,
+ * allowed has been spent (Phase 7 - task 7b-A.1.1's bound,
  * one tier down). Set when a snooped SET_FEATURE(PORT_RESET) naming this
  * record's position was judged to be usbhub's second reset of the bracket and
  * its claim re-arm suppressed; cleared when the next address-0 open at this
@@ -4659,9 +4700,9 @@ typedef struct _XHCI_VHUB_BINDING {
 /*
  * And the child half of the same clause: the TT triple a Low-/Full-Speed
  * device behind a High-Speed hub carries, in the same byte order. TTT is not
- * in it because a child has none - see the trace site in `src/xhci_slot.c`,
- * where the *absence* of a hub line for the same Slot ID is what reads that
- * half of the clause.
+ * in it because a child has none - the miniport's trace site (xhci_slot.c)
+ * read that half of the clause from the *absence* of a hub line for the same
+ * Slot ID.
  */
 #define XHCI_TT_TRACE_WORD(slotId, mtt, parentSlotId, parentPort) \
     ((((ULONG)(slotId) & 0xFFUL) << XHCI_TRACE_SLOT_SHIFT) |      \
@@ -4699,7 +4740,7 @@ typedef struct _XHCI_VHUB_BINDING {
  *                 encoded. Same containment: this endpoint, not this device.
  */
 /* ------------------------------------------------------------------ */
-/* Endpoint quiescence (batch 7a-B, src/xhci_slot.c)                   */
+/* Endpoint quiescence (batch 7a-B; the miniport's xhci_slot.c)        */
 /* ------------------------------------------------------------------ */
 
 /*
@@ -4865,7 +4906,7 @@ typedef struct _XHCI_VHUB_BINDING {
  * It exists because `XHCI_EPQ_STOPPED` alone does not distinguish the two.
  * That bit means "software owns the ring, nothing is executing it", which is
  * true of a Disabled endpoint - and every path that restarts one reads exactly
- * that bit. The ninth review round found the sequence: a `PAUSED` stop, an
+ * that bit. The sequence that breaks it: a `PAUSED` stop, an
  * `ACTIVE` arriving while it is in flight (which sets `XHCI_EPQ_RESTART`), and
  * a completion that finds the endpoint Disabled left the restart honoured
  * against an endpoint the controller does not have.
@@ -4901,7 +4942,7 @@ typedef struct _XHCI_VHUB_BINDING {
 /*
  * The FAILED beside it was written because **the controller was unavailable**
  * - suspended or failed - not because a command for this endpoint failed
- * (Phase 7 review, B3). The distinction matters at resume: a REMOVE or PAUSE
+ * (Phase 7). The distinction matters at resume: a REMOVE or PAUSE
  * delivered inside a suspend window reaches `xhciEpArmQuiesce` with `RUNNING`
  * clear, which correctly refuses to claim quiescence - but a FAILED left
  * standing across a *successful restore* (which touches no device record) is
@@ -5034,7 +5075,7 @@ typedef struct _XHCI_ENDPOINT_RECORD {
      * overwriting `Params` at the request would leave this driver describing an
      * endpoint the xHC does not have, with no way back to the one it does.
      *
-     * **Invariant (Phase 7 review, B1/B2): equal to `Params` except while a
+     * **Invariant (Phase 7): equal to `Params` except while a
      * reprogram is outstanding.** Initialized beside `Params` at the open;
      * re-written by every different-parameters reopen; reconciled only by the
      * commit at the Configure Endpoint's success. "They differ" is therefore
@@ -5090,6 +5131,14 @@ typedef struct _XHCI_DEVICE {
      */
     ULONG Tier;
     ULONG RouteString;
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `TtClaimPort` (4 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     ULONG ParentHubAddress;
     ULONG ParentHubPort;
     /*
@@ -5110,12 +5159,20 @@ typedef struct _XHCI_DEVICE {
     ULONG TtClaimPort;
     ULONG Speed;                /* decoded XHCI_SPEED_* at reservation */
     ULONG Psiv;                 /* the raw PORTSC Port Speed the slot carries */
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `Tenancy` (6 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     ULONG MaxPacketSize0;       /* what the EP0 context currently holds */
     ULONG WantedMaxPacketSize0; /* what the reopen asked for, once it differs */
     ULONG DeviceAddress;        /* usbport's address - unrelated to the xHC's */
     /*
-     * The address the **topology graph** still knows this device by (Phase 7
-     * review, finding A4). The address-0 open clears `DeviceAddress` while the
+     * The address the **topology graph** still knows this device by (Phase
+     * 7). The address-0 open clears `DeviceAddress` while the
      * graph deliberately keeps the node - positions survive the recovery
      * cycle - so a teardown landing in that window used to detach address 0,
      * which is a no-op, and the node leaked for the life of the driver (eight
@@ -5138,8 +5195,8 @@ typedef struct _XHCI_DEVICE {
      */
     XHCI_DESC_STATE IsoDesc;
     /*
-     * Which tenancy of this record slot this device is (task 9-A.2's review
-     * round 1). Assigned from `XHCI_EXTENSION.DeviceTenancyNext` when the
+     * Which tenancy of this record slot this device is (task 9-A.2).
+     * Assigned from `XHCI_EXTENSION.DeviceTenancyNext` when the
      * record is allocated, so a record released and re-allocated to another
      * device never matches a value captured before the release. It exists for
      * the descriptor channel, whose actions are decided at a transfer's
@@ -5149,6 +5206,14 @@ typedef struct _XHCI_DEVICE {
 
     ULONG PendingOp;            /* XHCI_DEV_OP_*, owed */
     ULONG ActiveOp;             /* XHCI_DEV_OP_*, outstanding on the ring */
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `Ep0Ring` (13 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     /*
      * Which endpoint the outstanding **per-endpoint** command is for - the
      * Configure Endpoint of task 7a-A.1 and the three quiescence commands of
@@ -5324,8 +5389,16 @@ typedef struct _XHCI_EXTENSION {
      * having more ports than a smaller array would fit is a refusal on the
      * driver's convenience rather than on evidence.
      */
-    XHCI_ROOT_HUB RootHub;
+    XHCI_ROOT_HUB RootHub;  /* unwritten under the HCD; kept for layout */
 
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `RootHubInvalidatesGated` (39 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     /*
      * What the root-hub callback family has done (Phase 5 task 1). Counters
      * rather than a log, for the same reason every other block here is: a free
@@ -5491,7 +5564,7 @@ typedef struct _XHCI_EXTENSION {
     ULONG RhPortsDriventoU0;
     /*
      * Times that pass was **not** run because a CSS/CRS restore had just
-     * succeeded (audit finding A5). The pass's whole premise is that HCRST has
+     * succeeded. The pass's whole premise is that HCRST has
      * defaulted every port link state a moment earlier, and a successful restore
      * is exactly the path with no HCRST on it - so a port usbhub deliberately
      * suspended would still be in U3 and would be resumed, waking a device
@@ -5551,31 +5624,6 @@ typedef struct _XHCI_EXTENSION {
     ULONG RootHubInvalidatesOwed;
     ULONG RootHubInvalidates;
     ULONG RootHubInvalidatesGated;
-#ifdef XHCI_FIX_PORT_POLL
-    /* Bench candidate W10: changes a polled sweep found that no Port Status
-     * Change Event had announced. Present only under the define. */
-    ULONG RhPolledLatches;
-#endif
-#ifdef XHCI_FIX_PORT_POLL_SLOW
-    /* Bench candidate W15: health polls seen since the sweep last ran. In the
-     * extension rather than a driver-image static so a restart restarts the
-     * cadence with everything else, and so two controllers do not share one
-     * phase. Like every candidate field, this moves MiniPortExtensionSize -
-     * **do not read counters from a binary built with it**. */
-    ULONG RhSweepPollsSeen;
-#endif
-#ifdef XHCI_FIX_RH_GATE
-    /*
-     * **EXPERIMENTAL, bench candidate W7 for Finding 3.** Present only under the
-     * define, so no shipping flavour carries it and no shipping
-     * MiniPortExtensionSize moves - a binary built with it must not be used for
-     * a counter reading.
-     *
-     * Consecutive health polls that found an announcement owed while the
-     * notification gate was shut. See XhciRhGateWatchdog.
-     */
-    ULONG RhGateStuckPolls;
-#endif
 
     XHCI_RING CommandRing;
     XHCI_EVENT_RING EventRing;
@@ -5591,9 +5639,10 @@ typedef struct _XHCI_EXTENSION {
     /*
      * What the port-power step did (Phase 4 task 5). Three counters rather than
      * one because they answer three different questions and only one of them is
-     * a fault: how many managed USB 2.0 ports this driver drove to PP = 1, how
-     * many USB 3.x ports it drove to PP = 0 - the port strategy in AGENTS.md is
-     * not passive, since PP defaults to asserted on every port after HCRST
+     * a fault: how many managed ports this driver drove to PP = 1 (every port a
+     * protocol capability names, USB 3.x included, since task 29-A.1), how many
+     * it held at PP = 0 - since then only ports controller tolerance holds
+     * unpowered (35-T.5), as PP defaults to asserted on every port after HCRST
      * (spec 4.19.4, p.295) - and how many ports never reached the state they
      * were written to. The last one is per-port hardware misbehaviour, traced
      * and counted but never a refusal: one dead port is not a dead controller.
@@ -5664,6 +5713,7 @@ typedef struct _XHCI_EXTENSION {
      */
     ULONG BusMasterClearRetries;
     ULONG DmaFailClosed;
+    /* Unwritten under the HCD; kept for layout. */
     ULONG DmaFailClosedUnavailable;
     /*
      * Task 13-R.1's third outcome, and it is a separate number because it is a
@@ -5701,8 +5751,8 @@ typedef struct _XHCI_EXTENSION {
      * Spike counters. Written without a lock on purpose: they are diagnostics,
      * every documented call site is already serialized by one usbport lock or
      * another, and a torn count costs nothing. Nothing in the driver branches
-     * on them. FrameNumber is the exception that is also functional - see
-     * Get32BitFrameNumber in xhci_dispatch.c.
+     * on them. FrameNumber was the exception that was also functional, through
+     * the miniport's Get32BitFrameNumber (xhci_dispatch.c).
      */
     ULONG FrameNumber;
     ULONG InterruptCount;
@@ -5752,7 +5802,7 @@ typedef struct _XHCI_EXTENSION {
      * a later one (XhciEventDpc's caller in src/xhci_evt.c). It is the only
      * *controller-level* report of them; a TD-related Event Lost is also
      * reported per endpoint as a Transfer Event with code 32, which the transfer
-     * path escalates for the same reason (audit round 7). The count is separate
+     * path escalates for the same reason. The count is separate
      * from EventCounts because it says how many of them turned into a reset
      * request rather than how many arrived.
      */
@@ -5805,6 +5855,7 @@ typedef struct _XHCI_EXTENSION {
      * still cannot retire the head endpoint, i.e. a published frame number that
      * is not moving. See xhciInterruptNextSOF and docs/usb-xhci-info/usbport-miniport-abi.md.
      */
+    /* Unwritten under the HCD; kept for layout. */
     ULONG InterruptNextSofRequests;
     /*
      * An interrupt-enable transition that did not complete cleanly. Counted per
@@ -6078,7 +6129,7 @@ typedef struct _XHCI_EXTENSION {
     /*
      * A Command Ring Stopped whose reported dequeue pointer still named the
      * command the abort had given up on - the xHC never fetched it, so the
-     * abort had nothing to advance past (the 2026-09-05 audit's F12). Adopting
+     * abort had nothing to advance past (revised 2026-09-05). Adopting
      * that position would have left the abandoned TRB valid at the head of the
      * ring, for the next doorbell to execute ahead of the command that
      * doorbell was rung for, with a completion no outstanding command matched.
@@ -6113,10 +6164,10 @@ typedef struct _XHCI_EXTENSION {
     ULONG CommandResetRequests;  /* UsbPortInvalidateController(RESET) calls */
     /*
      * How many of those requests came from a **completion code Table 6-90 calls
-     * fatal** rather than from the ring's own structural divergence, and **audit
-     * round 10 is why it exists**. Round 9 gave the new command-ring severity arm
-     * `CommandResetRequests` to share, on the reasoning that both are this engine
-     * asking for the one repair it has. That is true of the *request* and false
+     * fatal** rather than from the ring's own structural divergence. The
+     * command-ring severity arm first shared `CommandResetRequests`, on the
+     * reasoning that both are this engine asking for the one repair it has.
+     * That is true of the *request* and false
      * of the *diagnosis*: a controller that answered a command with Undefined
      * Error and one whose command ring stopped at a position this driver's ring
      * cannot hold need opposite investigations, and a release snapshot could not
@@ -6308,10 +6359,11 @@ typedef struct _XHCI_EXTENSION {
      * refuses says more about the machine than one that works.
      */
     ULONG RecoveryRequested;
-    ULONG RecoveryArmed;
+    ULONG RecoveryArmed;  /* unwritten under the HCD; kept for layout */
     ULONG RecoveryAttempts;
     ULONG RecoveryCompletions;
     ULONG RecoveryFailures;
+    /* Unwritten under the HCD; kept for layout. */
     ULONG RecoveryStaleCallbacks;
     ULONG RecoveryLastStep;
     ULONG RecoveryLastStatus;
@@ -6335,8 +6387,16 @@ typedef struct _XHCI_EXTENSION {
     ULONG RecoveryFailuresConsecutive;
 
     /*
-     * **A lost delivery is aged out, not waited on for ever** (the 2026-09-05
-     * audit's F2). `UsbPortRequestAsyncCallback` answers 0 on success and 0 on
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `RecoveryCallbacksLate` (4 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
+    /*
+     * **A lost delivery is aged out, not waited on for ever** (revised
+     * 2026-09-05). `UsbPortRequestAsyncCallback` answers 0 on success and 0 on
      * its own pool-allocation failure, so an arming that produced no callback
      * is indistinguishable at the call - and the first version of this latch
      * then sat with `RecoveryArmed` set and nothing ever clearing it: the
@@ -6430,8 +6490,16 @@ typedef struct _XHCI_EXTENSION {
     ULONG CommandOwner;
     ULONG CommandOwnerOp;       /* XHCI_DEV_OP_* the owner has outstanding */
     /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `CompletionsOwed` (12 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
+    /*
      * **Which tenancy of that record reserved the engine**, captured with the
-     * two fields above (audit finding A2's residue).
+     * two fields above.
      *
      * `CommandOwner` is an index plus one and carries no generation, so a
      * completion arriving after usbhub gave up, reset the port and reopened EP0
@@ -6440,10 +6508,10 @@ typedef struct _XHCI_EXTENSION {
      * `ADDRESSED`, re-asserts `XHCI_DEV_FLAG_ADDRESS_VALID` over the
      * `DeviceAddress = 0` the reopen just wrote, and emits `slot.addressed` for
      * a tenancy that no longer exists - a record carrying `ADDRESS_VALID` inside
-     * the hub's own address-0 window, which finding A8's graph fallback
-     * documents as impossible. The mirror case is an owed `ADDRESS_BSR` issued
-     * from a slot a stale Address Device has since moved to Addressed, which
-     * answers Context State Error and costs an enumeration round.
+     * the hub's own address-0 window, which the graph fallback documents as
+     * impossible. The mirror case is an owed `ADDRESS_BSR` issued from a slot
+     * a stale Address Device has since moved to Addressed, which answers
+     * Context State Error and costs an enumeration round.
      *
      * `XHCI_DEVICE.Tenancy` was added for exactly this hazard and was read only
      * by the descriptor fold (`DescTenancy`); the command engine never consulted
@@ -6503,7 +6571,7 @@ typedef struct _XHCI_EXTENSION {
      * `CompletionHead` and the next DPC or `XhciSlotPoll` delivers it, well
      * inside usbport's own 10 s timeout while the controller runs; while
      * suspended neither deliverer fires, so `XhciSuspendController` drains the
-     * list before its quiesce (Phase 7 review, B4). Only the *delivery* is
+     * list before its quiesce (Phase 7). Only the *delivery* is
      * held back: the command pump must still run on the submit stack or every
      * enumeration step would pay the 500 ms poll.
      *
@@ -6515,8 +6583,8 @@ typedef struct _XHCI_EXTENSION {
     ULONG SubmitDepth;
     ULONG CompletionsHeldBySubmit;
     /*
-     * **The depth alone leaves an SMP window of the same class** (Phase 7
-     * review, finding A7, CONFIRMED from both shipping binaries):
+     * **The depth alone leaves an SMP window of the same class** (Phase 7,
+     * CONFIRMED from both shipping binaries):
      * the decrement runs inside the dispatch wrapper, but usbport's
      * post-callback writes (`or [esi+4],8` + the 10 s timeout, SP4 `000165BD`)
      * run *after* the wrapper returns - and the completion path this driver
@@ -6540,7 +6608,7 @@ typedef struct _XHCI_EXTENSION {
      */
     ULONG SubmitEpoch;
     ULONG CompletionsHeldByPass;
-    /* Leaves with no matching Enter (Phase 7 review, C2). The decrement
+    /* Leaves with no matching Enter (Phase 7). The decrement
      * saturates so an imbalance cannot wedge delivery; this is what keeps the
      * saturation from also hiding the imbalance. Zero always. */
     ULONG SubmitUnderflows;
@@ -6588,6 +6656,14 @@ typedef struct _XHCI_EXTENSION {
      * gate is set on the 200 tier too, on both architectures.
      */
     ULONG DeliverUnderUsbportLockOnly;
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `PollEndpointCalls` (7 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     /* The poll's fallback: armed by the first poll that finds the list
      * non-empty with nothing delivering, fired once XHCI_COMPLETION_FALLBACK_MS
      * have passed on the poll clock, disarmed when the list empties. */
@@ -6625,10 +6701,18 @@ typedef struct _XHCI_EXTENSION {
      * nonzero reading says an endpoint was not polled when asked.
      */
     ULONG DeliverPerEndpointOnly;
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `SoftInterruptRequests` (4 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     ULONG CompletionsHeldOtherEndpoint;
     ULONG CompletionPollInvalidates;
     /*
-     * **Task 24.3.4, round 10: a virtual hub's answer asks usbport for a soft
+     * **Task 24.3.4: a virtual hub's answer asks usbport for a soft
      * interrupt on the Version 300 tier.** Nothing on the bus interrupts for
      * it - there is no hardware behind the hub - so the gate above parked it
      * until the next real interrupt's HcInt pass or the fallback, 1 to 2 s on
@@ -6672,8 +6756,8 @@ typedef struct _XHCI_EXTENSION {
     ULONG ArmThroughExOnly;
     /*
      * **Version 300 tier: `UsbPortInvalidateRootHub` only from a context where
-     * usbport holds no spin lock** (round 5's deadlock, design record 05). On
-     * all four NT 6.x builds usbport takes its RH-IntrEp lock and then its
+     * usbport holds no spin lock** (a deadlock, design record 05). On all
+     * four NT 6.x builds usbport takes its RH-IntrEp lock and then its
      * ISR-DPC lock to call RH_Enable/DisableIrq, so the service called from
      * the event DPC (under ISR-DPC) deadlocked Vista and Windows 7 against
      * usbport's own root-hub DPC; called under the timer-list lock (feature
@@ -6706,10 +6790,21 @@ typedef struct _XHCI_EXTENSION {
      * came with no `PipePeriod` and so fell back to `Period`, which no build
      * read should produce (src/xhci_usbport.h, USBPORT_ENDPOINT_PROPERTIES).
      */
+    /* Unwritten under the HCD; kept for layout. */
     ULONG EndpointPeriodsPromoted;
+    /* Unwritten under the HCD; kept for layout. */
     ULONG EndpointPipePeriodsMissing;
+    /* Unwritten under the HCD; kept for layout. */
     ULONG AsyncArmsDeferred;    /* arms a DEFER context left owed             */
     ULONG AsyncArmsRefused;     /* Ex answered an error: the arm was lost     */
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `EnumResetsSuppressed` (8 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     ULONG RootHubChangesReported; /* announcements made through the DPC's
                                    * port bit, not the service              */
     /*
@@ -6896,14 +6991,22 @@ typedef struct _XHCI_EXTENSION {
      * slot is torn down (see XhciSlotEndpointRemoved).
      */
     ULONG SlotsEnabled;
-    ULONG SlotsDisabled;
+    ULONG SlotsDisabled;  /* unwritten under the HCD; kept for layout */
     ULONG DevicesAddressed;
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `OpAgeRecoveries` (33 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     ULONG DevicesReopened;
     ULONG Mps0Corrections;
     /*
      * Evaluate Context completions whose wanted value had gone to zero under
      * them - a re-enumeration cleared `WantedMaxPacketSize0` while the command
-     * was in flight (audit finding A3). Refused rather than committed, because
+     * was in flight. Refused rather than committed, because
      * committing a 0 costs a whole enumeration round: `XhciBuildEp0Params`
      * refuses mps0 = 0 and the record is failed. Expected 0; nonzero says the SMP
      * window is real on this machine, which is worth knowing on its own.
@@ -6921,8 +7024,8 @@ typedef struct _XHCI_EXTENSION {
      * Device commands that stopped belonging to the record they were issued for:
      * it was re-entered while the command was in flight, so either the
      * completion arrived for a tenancy the record no longer holds, or the submit
-     * was refused and the back-out found the same thing (audit finding A2's
-     * residue - see `XHCI_EXTENSION.CommandOwnerTenancy`). **Two causes with the
+     * was refused and the back-out found the same thing (see
+     * `XHCI_EXTENSION.CommandOwnerTenancy`). **Two causes with the
      * same diagnosis share it deliberately** - both say the re-entry window is
      * live on this machine - which is why the print site names the shared thing
      * rather than listing them: the two are told apart here, in the header, and
@@ -6956,7 +7059,7 @@ typedef struct _XHCI_EXTENSION {
     ULONG CommandsStaleTenancy;
     /*
      * The re-enumeration re-entry, split by which command the kept slot needed
-     * (audit finding A2 - see `XHCI_DEV_OP_RESET_DEVICE`).
+     * (see `XHCI_DEV_OP_RESET_DEVICE`).
      *
      * `SlotsResetToDefault` counts Reset Device commands that completed with
      * Success, i.e. slots that were Addressed or Configured when usbhub came back
@@ -6998,14 +7101,14 @@ typedef struct _XHCI_EXTENSION {
      * verdict about the previous enumeration's context must not outlive it - but
      * those are deliberately **not** counted here, because such a record may
      * never have had a context for the controller to drop and counting it would
-     * make the comparison above meaningless (review round 2).
+     * make the comparison above meaningless.
      */
     ULONG SlotsResetToDefault;
     ULONG SlotStatesUnreadable;
     ULONG EndpointContextsDroppedByReset;
     /*
      * Disconnects reported by a hub whose *own* record could not name its root
-     * port, resolved from the topology graph instead (audit finding A8). The
+     * port, resolved from the topology graph instead. The
      * window is the hub's address-0 re-enumeration, during which `ADDRESS_VALID`
      * is clear; before the fallback existed every such disconnect resolved to
      * root port 0 and left the departed child's slot and address standing.
@@ -7045,8 +7148,8 @@ typedef struct _XHCI_EXTENSION {
      * returns; the seven names on the right are every other way out of it.
      * `OpenRefusalsNoRecord` and `OpenRefusalsNoClaim` are **shares** of
      * `OpenRefusals` and are deliberately absent from the sum. A discrepancy is a
-     * return path nobody counted, which is readable on a target from the printed
-     * lines alone and is enforced on the host by `note_open_accounting`.
+     * return path nobody counted, which the miniport printed and its host suite
+     * enforced (`note_open_accounting`, gone with it).
      *
      * `OpensTotal` against `ProbeEpEvents[OPEN] + ProbeEpEvents[REOPEN]` is the
      * second reading and is not the same one: the probe is called in the dispatch
@@ -7161,7 +7264,7 @@ typedef struct _XHCI_EXTENSION {
     ULONG CommandOwnerLost;
     ULONG OpAgeRecoveries;
     ULONG TransfersSubmitted;
-    ULONG TransfersRefused;
+    ULONG TransfersRefused;  /* unwritten under the HCD; kept for layout */
     /*
      * Task 8-A.1. The share of `TransfersRefused` that was **ring-full**, and the
      * re-offers the backpressure latch then asked for. They are two counters and
@@ -7179,10 +7282,19 @@ typedef struct _XHCI_EXTENSION {
      * `EndpointRetriesAsked` is deliberately the controller-wide total of the
      * per-queue `RetriesAsked`, since a queue dies with its endpoint record.
      */
+    /* Unwritten under the HCD; kept for layout. */
     ULONG TransfersRefusedRingFull;
-    ULONG EndpointRetriesAsked;
+    ULONG EndpointRetriesAsked;  /* unwritten under the HCD; kept for layout */
     ULONG TransfersCompleted;
     ULONG TransfersCancelled;
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `EndpointInvalidates` (54 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     ULONG RemovesWithWork;
     ULONG TransferEventsForeign;    /* named a slot/DCI no record has open */
     /*
@@ -7206,8 +7318,8 @@ typedef struct _XHCI_EXTENSION {
      * usbport offered belongs to a handle it has already replaced. Failed
      * with `CANCELED` rather than refused, by the permanent-refusal rule above
      * - the old handle never becomes the bound one again - and the replacement
-     * handle's queue is never touched (the 2026-09-05 audit's F1, whose third
-     * probe queued a transfer on the live device through a closed old handle).
+     * handle's queue is never touched (revised 2026-09-05, when a probe
+     * queued a transfer on the live device through a closed old handle).
      */
     ULONG TransfersFailedStale;
     /*
@@ -7240,8 +7352,8 @@ typedef struct _XHCI_EXTENSION {
     /*
      * Disowns settled with PED (or PP) still unconfirmed because no device
      * record was on the port or behind it (XhciSlotPortHasRecords): nothing
-     * the controller could read was at stake. Round 6 found the unconfirmed
-     * wait holding every virtual-hub port-1 reset on QEMU, where a disable
+     * the controller could read was at stake. The unconfirmed wait was found
+     * holding every virtual-hub port-1 reset on QEMU, where a disable
      * write never clears PED, until usbhub's bus lock timed out (0xFE).
      */
     ULONG DisownsSettledEmpty;
@@ -7250,7 +7362,7 @@ typedef struct _XHCI_EXTENSION {
      * it, every one DISOWNED and idle (XhciSlotPortRecordsDisownedIdle). The
      * release that follows is the controller's own proof - Stop Endpoint on
      * anything busy, then a Disable Slot whose completion code decides
-     * whether the rings go back. Round 7: a port's own disowned device,
+     * whether the rings go back. Before it, a port's own disowned device,
      * address 0 and nothing queued, kept the debt, and the debt kept its
      * release, until usbhub's bus lock timed out on Windows 7 (0xFE).
      */
@@ -7263,8 +7375,8 @@ typedef struct _XHCI_EXTENSION {
      * Addressed, or something in flight), a topology key or a record behind
      * it, an inconsistent owner (a virtual hub, two holders, the claimant
      * itself, or another assignment to it in progress); and an address of 0
-     * or out of range. Round 8: an address freed by a hub's hard reset stayed
-     * held here until the root-port disable, which was queued behind the
+     * or out of range. Before it, an address freed by a hub's hard reset
+     * stayed held here until the root-port disable, which was queued behind the
      * refused enumeration, and usbhub's watchdog fired (0xFE).
      */
     ULONG AddressReclaims;
@@ -7313,7 +7425,7 @@ typedef struct _XHCI_EXTENSION {
      * The older `MidTdShortTailsTotal`-against-this reading survives as the
      * measure of the one window 9-0.2 could not close, and it is a verdict only
      * while `MidTdVerdictVoided` is 0 **and** the derived outstanding term is 0
-     * - see that field. (Successive audit rounds cut that qualification down
+     * - see that field. (Successive revisions cut that qualification down
      * from "dropped is 0", which was twice too weak.)
      */
     ULONG MidTdShortRetiresTotal;
@@ -7337,8 +7449,8 @@ typedef struct _XHCI_EXTENSION {
     /*
      * Deferrals armed and not yet resolved, across every live queue.
      *
-     * It is a **hint with one exact moment**: `XhciSlotDrainSettled` recomputes
-     * it by walking every live queue, so it is exact immediately after any
+     * It was a **hint with one exact moment**: the miniport's settle pass
+     * recomputed it by walking every live queue, so it was exact after any
      * settle pass. Between passes it can only over-state - the arm path sets
      * it, and a transfer that leaves the queue armed does not clear it - and
      * over-stating costs one wasted walk that then corrects it. It cannot
@@ -7365,7 +7477,7 @@ typedef struct _XHCI_EXTENSION {
      * found at the Transfer Event or at the settle, and it is *not* a settle
      * counter: an event-time divergence never armed a deferral at all, so this
      * can rise with `MidTdDeferralsTotal` at zero. Calling it a "settle"
-     * counter, which it was until the batch-9-0 review round 7, would make a
+     * counter, which it was during batch 9-0, would make a
      * target log attribute an event-time disagreement to task 9-0.2's settle.
      *
      * It counts the **request**, not a completed repositioning: whether the
@@ -7376,7 +7488,7 @@ typedef struct _XHCI_EXTENSION {
      * only a settle-time refusal is in both, so subtracting can underflow.
      *
      * Defensive: nothing in a healthy run reaches it. It exists as a counter
-     * rather than as a comment because the batch-9-0 review took three rounds
+     * rather than as a comment because batch 9-0 took three attempts
      * to get this branch right - halting a healthy endpoint, then issuing a Set
      * TR Dequeue Pointer to a Running one, then missing the shape entirely -
      * and a defensive path with no number attached is one nobody can tell has
@@ -7418,7 +7530,7 @@ typedef struct _XHCI_EXTENSION {
      * re-let, or was still outstanding when its queue died. **Pre-9-0.2 this
      * was expected to be large on a bulk IN repost loop even on a conforming
      * controller**, which is why the verdict needs it at zero rather than
-     * merely small (repo audit round 3). Since the retire moved to the end of
+     * merely small. Since the retire moved to the end of
      * an observed-empty drain pass, a conforming controller makes no
      * early-retire record at all, so a large count now means the one-event xHC
      * or the residual post-empty-read window - something to investigate rather
@@ -7429,7 +7541,7 @@ typedef struct _XHCI_EXTENSION {
      * cleared. **This, not the two totals, is what gates the verdict**, because
      * both totals are wrapping ULONGs and "== 0" stops being proof after 2^32
      * of them - a wrap would silently re-enable a conformance claim that had
-     * been invalidated hours earlier (repo audit round 4, finding 4).
+     * been invalidated hours earlier.
      *
      * The other half of the gate is not a counter at all but the identity
      *
@@ -7438,7 +7550,7 @@ typedef struct _XHCI_EXTENSION {
      * whose last term is the records live in some queue right now. A verdict
      * taken while that term is nonzero reads a tail that simply has not arrived
      * yet as one the controller withheld, and `CheckController` polls every
-     * 500 ms into exactly that window (round 4, finding 3). It is derived in
+     * 500 ms into exactly that window. It is derived in
      * the print rather than stored, since the four totals already determine it.
      */
     ULONG MidTdVerdictVoided;
@@ -7474,7 +7586,7 @@ typedef struct _XHCI_EXTENSION {
     ULONG ResidualIgnoredTotal;
     /*
      * The other seven, folded the same way and for the same reason - they had no
-     * reader at all until the repo audit's finding B3.
+     * reader at all until they were folded.
      *
      * `ForeignEventsTotal` is the load-bearing one: `src/xhci_xfer.c` refuses to
      * escalate an event naming another slot or DCI on the reasoning that "the
@@ -7569,14 +7681,17 @@ typedef struct _XHCI_EXTENSION {
      *
      */
     ULONG EndpointsOpened;
-    ULONG EndpointsReopened;
-    ULONG EndpointsConfigured;
-    ULONG EndpointsReleased;
+    ULONG EndpointsReopened;  /* unwritten under the HCD; kept for layout */
+    ULONG EndpointsConfigured;  /* unwritten under the HCD; kept for layout */
+    ULONG EndpointsReleased;  /* unwritten under the HCD; kept for layout */
     ULONG EndpointRefusalsType;
+    /* Unwritten under the HCD; kept for layout. */
     ULONG EndpointRefusalsNoDevice;
     ULONG EndpointRefusalsParams;
     ULONG EndpointRefusalsPool;
+    /* Unwritten under the HCD; kept for layout. */
     ULONG EndpointRefusalsNotReady;
+    /* Unwritten under the HCD; kept for layout. */
     ULONG EndpointSpeedMismatches;
     /*
      * Endpoints whose `Interval` had to be raised to the floor Table 6-12 gives
@@ -7590,11 +7705,20 @@ typedef struct _XHCI_EXTENSION {
      * *matches the descriptor*; usbport's bucketing discarded that before either
      * could (see XhciIntervalForSpeed).
      */
+    /* Unwritten under the HCD; kept for layout. */
     ULONG EndpointIntervalsFloored;
     ULONG EndpointsNoBandwidth;
     ULONG EndpointsNoResources;
     ULONG EndpointConfigureFailures;
 
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `EndpointQuiesceFailures` (26 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     /*
      * The quiescence family (batch 7a-B). Each pair is one command and its
      * refusal, kept apart for the reason the rest of this block is: a command
@@ -7834,8 +7958,8 @@ typedef struct _XHCI_EXTENSION {
      * Devices torn down because an event carried Incompatible Device Error,
      * which Table 6-90 makes the Slot's business and not the endpoint's: the
      * code is "fatal as far as the Slot is concerned. Software shall issue a
-     * Disable Slot Command to recover" (p.468). Added by audit round 8, which
-     * found the code filed with the ordinary transfer errors and answered with a
+     * Disable Slot Command to recover" (p.468). Added when the code was found
+     * filed with the ordinary transfer errors and answered with a
      * halt recovery that leaves the slot exactly as the controller said it could
      * not use it.
      *
@@ -7847,8 +7971,16 @@ typedef struct _XHCI_EXTENSION {
      * re-enumerated by usbport and failing again drives it up once per attempt.
      */
     ULONG IncompatibleDeviceTeardowns;
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `EndpointDataToggleResets` (10 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     /* Pipes whose FAILED-by-unavailability a successful restore took back
-     * (Phase 7 review, B3) - the pair XhciSlotResumeSweep cleared and
+     * (Phase 7) - the pair XhciSlotResumeSweep cleared and
      * re-armed. Nonzero says a REMOVE or PAUSE really was delivered inside a
      * suspend window, which was unestablished when the sweep was written. */
     ULONG EndpointsRevivedByResume;
@@ -7915,7 +8047,7 @@ typedef struct _XHCI_EXTENSION {
     ULONG FrameSynced;
     ULONG FrameCongruent;
     /*
-     * Task 9-A.1, review round 3. `FrameCongruent` says the published number and
+     * Task 9-A.1. `FrameCongruent` says the published number and
      * MFINDEX agree in their low eleven bits; it says nothing about *when* that
      * was last established, and eleven bits cannot distinguish a gap of fifty
      * frames from fifty frames plus a whole 2,048-frame lap. `FrameSampleStale`
@@ -7989,7 +8121,7 @@ typedef struct _XHCI_EXTENSION {
      *
      *       **Read what it can and cannot say.** A first draft of this comment
      *       called it "the one reading that can say the isochronous Interval is
-     *       wrong", and the second review round refuted that: usbport stamps
+     *       wrong", and that was refuted: usbport stamps
      *       packets at a *fixed* indexing - `StartFrame + (i >> 3)` on High Speed,
      *       `StartFrame + i` otherwise - whatever the endpoint descriptor says,
      *       and this driver's Interval is assumed from that same fixed cadence.
@@ -8037,14 +8169,16 @@ typedef struct _XHCI_EXTENSION {
      * which is precisely what the derivation exists to disagree with - and the
      * request going out with SIA is the right answer, not a fallback.
      *
-     * **Split by the Interval's value rather than by its provenance** (review
-     * round 2): a derived Interval that comes out equal to the assumption
+     * **Split by the Interval's value rather than by its provenance**: a
+     * derived Interval that comes out equal to the assumption
      * behaves exactly like the assumption, so its mismatch means what the
      * assumption's means - Phase 5 task 7's root-port speed report - and
      * charging it here would hide that fault behind the derivation.
      */
+    /* Unwritten under the HCD; kept for layout. */
     ULONG IsoCadenceMismatchesDerived;
     ULONG IsoTrbErrorRecoveries;
+    /* Unwritten under the HCD; kept for layout. */
     ULONG IsoTrbErrorsUnarmable;
     ULONG IsoRefusalsTooLarge;
     ULONG IsoRefusalsMalformed;
@@ -8053,6 +8187,14 @@ typedef struct _XHCI_EXTENSION {
     ULONG IsoRingOverruns;
     ULONG IsoEventsUnattributed;
     ULONG IsoDoorbellsSuppressed;
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `IsoGroupsAwaitingTailTotal` (5 fields): no code in the tree writes
+     * them, so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     /* The per-queue isochronous counters, folded across every endpoint that has
      * lived, exactly as the mid-TD family above is folded - a queue dies with
      * its device record and the question is about the run. */
@@ -8067,6 +8209,14 @@ typedef struct _XHCI_EXTENSION {
      * frame axis the stall path invented. */
     ULONG FrameResyncSkew;
 
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `DeviceTenancyNext` (22 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     /*
      * Task 9-A.2's configuration-descriptor snoop (src/xhci_desc.h), and the
      * block exists to answer one question a target run has never been able to
@@ -8086,8 +8236,8 @@ typedef struct _XHCI_EXTENSION {
      *       than left as arithmetic in a comment, so a fifth exit added later
      *       fails a check instead of quietly shrinking the total. (An earlier
      *       draft named a `XhciDescCountsConsistent` function that was never
-     *       written and called the partition three-way; review round 2 caught
-     *       both.)
+     *       written and called the partition three-way; both were since
+     *       corrected.)
      *   `DescConfigsCommitted`  walks that covered a whole `wTotalLength`. This
      *       is the only outcome that updates a device's table.
      *   `DescConfigsPartial`  replies that stopped short. **Expected nonzero and
@@ -8109,7 +8259,7 @@ typedef struct _XHCI_EXTENSION {
      *   `DescInterfacesSelected` / `DescInterfacesDropped`  SET_INTERFACE
      *       requests observed, and ones for an interface past the tracked set.
      *       **A dropped selection makes that interface's alternate unknown**,
-     *       and since review round 3 an unknown alternate refuses a lookup
+     *       and since a later revision an unknown alternate refuses a lookup
      *       rather than reading as alternate 0 - so a nonzero second row means
      *       endpoints fell back to the assumption, not that they were answered
      *       from a guess.
@@ -8158,7 +8308,7 @@ typedef struct _XHCI_EXTENSION {
      *       *measurement* over those endpoints, not a statement about every
      *       device: one that never binds or never opens the endpoint (the
      *       Sound Blaster X4, `bInterval` 3 and 4, run-13e.md Finding Y) is
-     *       outside the comparison. *(Until a later review this said equality
+     *       outside the comparison. *(Until a later revision this said equality
      *       covered "every audio device this project can reach" and named a
      *       "publish it instead" outcome that batch 13-E has since overtaken.)*
      *   `DescIntervalsStaleAfterSelect`  an action that resolved an **already
@@ -8238,40 +8388,40 @@ typedef struct _XHCI_EXTENSION {
      * already completed, which is the ordinary race the step exists for. It is
      * separate from every drain counter because those measure events that were
      * *acted on* and this one measures events deliberately not acted on - and
-     * because it is the only evidence, on a machine, that the collision audit
-     * round 5 found was ever live there. **Both flavours can read it**: it is in
+     * because it is the only evidence, on a machine, that the collision was
+     * ever live there. **Both flavours can read it**: it is in
      * `CheckController`'s dump and in the always-on stored-log counter block,
-     * which audit round 6 found it was not - a counter described as the only
-     * evidence has to be retrievable from the build that ships.
+     * where it once was not - a counter described as the only evidence has to
+     * be retrievable from the build that ships.
      *
-     * **It excludes the fatal ones below**, which audit round 7 found it
-     * including: an event that refuses the restore is an event acted on, and
+     * **It excludes the fatal ones below**, which it once included: an event
+     * that refuses the restore is an event acted on, and
      * counting it here as well would have a machine read the same event as a
      * fault and as harmless residue at the same time.
      */
     ULONG RestoreEventsDiscarded;
     /*
      * The events the drain above may **not** simply drop, counted where they are
-     * found. Three rounds have now widened this set, each finding its material
-     * inside the previous round's fix, and the shape of the mistake was the same
+     * found. Three revisions have widened this set, each finding its material
+     * inside the previous one's fix, and the shape of the mistake was the same
      * every time: an enumeration of fatal events written out by hand.
      *
      * A **Host Controller Event** is a controller-level fault reported nowhere
      * in `USBSTS` - neither Event Ring Full nor Event Lost sets `HCE` or `HSE` -
      * so a stale one is a diagnosis the save gate never excluded and the resume
      * would otherwise discard on its way to restarting the very controller that
-     * raised it. **Audit round 6 found that, in round 5's own fix**: the three
+     * raised it. **That was missed by the first fix**: the three
      * reasons that comment gave for dropping an event cover Command Completion,
      * Transfer and Port Status Change and nothing else.
      *
      * A **Transfer Event carrying `Event Lost`** (completion code 32) is the
      * same loss reported per endpoint rather than per controller: "An Event Lost
      * Error shall be generated for the endpoint ... [and] shall halt the
-     * endpoint" (4.10.1, p.173). **Audit round 7 found that, in round 6's own
-     * fix**, whose prose said Event Lost is reported *only* as a Host Controller
+     * endpoint" (4.10.1, p.173). **That was missed by the second fix**, whose
+     * prose said Event Lost is reported *only* as a Host Controller
      * Event - true of Event Ring Full, false of this.
      *
-     * **Audit round 8 then found that "there are two" was itself the defect.**
+     * **And "there are two" was itself the defect.**
      * Table 6-90 marks a third code fatal in as many words - "An Undefined Error
      * shall be treated as a fatal error by software" (33, p.469) - and hands the
      * whole vendor error range 192-223 the same reading for any code software
@@ -8292,15 +8442,15 @@ typedef struct _XHCI_EXTENSION {
     ULONG RestoreEventsFatal;
     /*
      * Which kind the last one was (`XHCI_RESTORE_FATAL_*`) and the completion
-     * code it carried, both stored because **audit round 8 found the release
-     * build unable to tell the two apart while three separate places claimed it
+     * code it carried, both stored because **the release build was once
+     * unable to tell the two apart while three separate places claimed it
      * could**. `RestoreEventsFatal` is a count and says nothing about kind;
      * `LastHostControllerCode` is written only by the Host Controller Event arm,
      * so a machine reading a nonzero count beside a zero or stale code could not
      * distinguish "an Event Lost refused the restore" from "a Host Controller
      * Event refused it and the code register was never written".
      *
-     * Round 7's answer had been that 32 is the code by construction. That was
+     * An earlier answer had been that 32 is the code by construction. That was
      * true of the arm as it stood and stopped being true the moment the arm
      * became "any fatal completion code" - which is exactly the fragility of
      * deriving a reading from what the code currently happens to admit.
@@ -8309,13 +8459,13 @@ typedef struct _XHCI_EXTENSION {
      * fails on the first one it would report, and the count beside them says how
      * many there were.
      *
-     * **And "last" spans restores, not just events within one - audit round 9
-     * asked which.** Neither field is cleared at the start of an attempt, so a
+     * **And "last" spans restores, not just events within one.** Neither
+     * field is cleared at the start of an attempt, so a
      * refusal's kind and code survive every later *successful* restore and a
      * snapshot taken after a good resume still carries them. That is the
      * intended reading: a refusal is worth keeping, and a resume that worked
-     * afterwards does not make the one that did not uninteresting. What round 9
-     * found was that nothing said so where a machine reads it, so the external
+     * afterwards does not make the one that did not uninteresting. Nothing
+     * once said so where a machine reads it, so the external
      * labels are now `restore: last fatal - ...` and `restore.lastfatal.*`
      * rather than "refused", which invited pairing them with a
      * `RestoreEventsFatal` of zero.
@@ -8357,11 +8507,19 @@ typedef struct _XHCI_EXTENSION {
      * reset"). Since task 23.4 that is the interval the start wrote
      * (`ImodInterval`), which is what the isochronous builder's IOC-per-TD
      * policy leans on; the restore used to write 0 here, so a successful
-     * restore silently removed that moderation (the 2026-09-05 audit's F10).
+     * restore silently removed that moderation (revised 2026-09-05).
      * Meaningful only while `SavedStateValid`.
      */
     ULONG SavedImod;
 
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `ProbeEndpoints` (21 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     /*
      * Task 6-V.1's transfer-contract probe (src/xhci_probe.c). Instrumentation
      * only: nothing in the driver reads any of it, and its whole purpose is to
@@ -8506,6 +8664,14 @@ typedef struct _XHCI_EXTENSION {
     ULONG ImodInterval;     /* what the start wrote to IMOD                   */
     ULONG ImodReadback;     /* IMOD as it read straight after the write       */
 
+    /*
+     * UNWRITTEN UNDER THE HCD, from here through
+     * `VhubBind` (16 fields): no code in the tree writes them,
+     * so a reading of one is a permanent 0. They date from the
+     * miniport, and the comments in the block describe the miniport
+     * (its sources are on branch 1.2.0.0). Kept for the layout the
+     * offset tables and snapshot readers depend on.
+     */
     /*
      * Roadmap task 24.3, design record 12: the virtual USB 2.0 hubs on root
      * ports. After `ImodReadback` for the reason that block gives - no counter
@@ -9189,7 +9355,7 @@ typedef struct _XHCI_SNAPSHOT_HEADER {
      * any other status beside 0 is nothing found. Either way the driver starts
      * normally, which is correct and must not read as a user's setting.
      * *(This field was documented as carrying that distinction itself, here and
-     * in eight other places, until the post-Phase 13 review rounds.)*
+     * in eight other places, until after Phase 13.)*
      */
     ULONG SwitchRead;
     /*

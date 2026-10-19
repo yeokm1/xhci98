@@ -3,7 +3,7 @@
 # with, and the two counters it keeps.
 #
 # There were five byte-identical copies - the INF gate's, the packager's, the
-# launcher generators', and the import gate's two (the 2026-09-07 audit's J6).
+# launcher generators', and the import gate's two (the audit of 2026-09-07).
 # That is the same shape, one language over, as the twelve diverged copies of
 # the C check helpers that `test\test_harness.h` replaced in the same audit,
 # and it has the same failure mode: a suite whose private copy stops counting,

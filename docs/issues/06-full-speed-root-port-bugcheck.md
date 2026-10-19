@@ -1,6 +1,17 @@
 # Issue 6 - A Full-Speed device on a root port bugchecks Windows 98 and 2000, and what reporting every root port as High Speed costs on every target
 
-Status: **open.** The bugcheck this page is named for, on Windows 98 SE and
+Status: **closed, moot from `2.0.0.0`.** The bugcheck is inside
+`usbport.sys` (`USBPORT_GetTt`, section 3), reached only through the
+miniport's report of a root port's speed. From `2.0.0.0` `xhci98.sys` is the
+successor HCD (design record 13), which replaces `usbport.sys` and its hub
+driver, enumerates each device at the speed its port decoded and reports to
+no usbport, so neither the bugcheck nor the High-Speed workaround and its
+costs exist there. The miniport was frozen at `1.2.0.0`, and its virtual hub
+(`xhci_vhub.c`, task 24.3) left the tree with it on 2026-10-02; on `1.2.0.0`
+and earlier everything below still holds. The rest of this page is kept as
+written while the miniport was current, from the status it carried then.
+
+Status while the miniport was current: **open.** The bugcheck this page is named for, on Windows 98 SE and
 Windows 2000, has been worked around since roadmap Phase 5 task 7, before the
 first release: the driver reports every connected root port to usbport as
 High Speed and keeps the true speed for its own contexts. That workaround is

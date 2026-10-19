@@ -56,11 +56,11 @@ set "INCLUDE=%MSVC6%\VC98\Include"
 set "LIB=%MSVC6%\VC98\Lib"
 rc /fo xhcicln.res xhcicln.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /Foxhcicln.obj /FeXHCICLN.EXE xhcicln.c xhcicln.res advapi32.lib /link /SUBSYSTEM:CONSOLE
+cl /nologo /W3 /WX /O2 /FeXHCICLN.EXE xhcicln.c ..\xhciinst\inst_core.c xhcicln.res advapi32.lib /link /SUBSYSTEM:CONSOLE
 if errorlevel 1 exit /b 1
 if not exist XHCICLN.EXE exit /b 1
 endlocal
-del /q xhcicln.obj xhcicln.res 2>nul
+del /q xhcicln.obj inst_core.obj xhcicln.res 2>nul
 echo Built XHCICLN.EXE
 
 if "%WANT64%"=="0" goto done
@@ -75,11 +75,11 @@ set "INCLUDE=%WDK71%\inc\api;%WDK71%\inc\crt"
 set "LIB=%WDK71%\lib\wnet\amd64;%WDK71%\lib\crt\amd64"
 rc /i "%WDK71%\inc\api" /fo xhcicl64.res xhcicln.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /Foxhcicl64.obj /FeXHCICL64.EXE xhcicln.c xhcicl64.res advapi32.lib /link /SUBSYSTEM:CONSOLE,5.02 /MACHINE:X64
+cl /nologo /W3 /WX /O2 /MT /FeXHCICL64.EXE xhcicln.c ..\xhciinst\inst_core.c xhcicl64.res advapi32.lib /link /SUBSYSTEM:CONSOLE,5.02 /MACHINE:X64
 if errorlevel 1 exit /b 1
 if not exist XHCICL64.EXE exit /b 1
 endlocal
-del /q xhcicl64.obj xhcicl64.res 2>nul
+del /q xhcicln.obj inst_core.obj xhcicl64.res 2>nul
 echo Built XHCICL64.EXE
 
 :done

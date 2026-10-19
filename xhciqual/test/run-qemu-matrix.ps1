@@ -193,6 +193,7 @@ $cases = @(
     (Case "log_family_selector" @("-device","pci-ohci,id=hc") ($cmd+" --log ohci") @("Families: OHCI","Found 1 selected","C4 IRQ:      WARN","Done. Report copied to XHCIQUAL.LOG.")),
     (Case "ohci_mouse" @("-device","pci-ohci,id=hc","-device","usb-mouse,bus=hc.0,port=1") ($cmd+" ohci") @("Found 1 selected","C3 DMA:      PASS","C4 IRQ:      WARN","C6 ports:    PASS","Done.")),
     (Case "ohci_storage" @("-device","pci-ohci,id=hc","-drive","if=none,id=ud,file=$usbImage,format=raw","-device","usb-storage,drive=ud,bus=hc.0,port=1") ($cmd+" --ohci") @("Found 1 selected","C3 DMA:      PASS","C4 IRQ:      WARN","C6 ports:    PASS","Done.")),
+    (Case "ohci_poll_mouse" @("-device","pci-ohci,id=hc","-device","usb-mouse,bus=hc.0,port=1") ($cmd+" ohci --poll-only") @("POLL-ONLY","Found 1 selected","C3 DMA:      PASS","C4 IRQ:      WARN","C6 ports:    PASS","PROVISIONAL","Done.")),
     (Case "xhci_ehci_none" @("-device","qemu-xhci,id=xhci,msi=off,msix=off","-device","usb-ehci,id=ehci") $cmd @("Found 2 selected","==== Controller","==== EHCI Controller","Done.")),
     (Case "xhci_ohci_none" @("-device","qemu-xhci,id=xhci,msi=off,msix=off","-device","pci-ohci,id=ohci") $cmd @("Found 2 selected","==== Controller","==== OHCI Controller","Done.")),
     (Case "ehci_ohci_none" @("-device","usb-ehci,id=ehci","-device","pci-ohci,id=ohci") $cmd @("Found 2 selected","==== EHCI Controller","==== OHCI Controller","Done.")),

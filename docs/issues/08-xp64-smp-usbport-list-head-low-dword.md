@@ -399,7 +399,7 @@ drive and was taken again.
 
 - ~~**The 32-bit Version 200 targets** (Windows 98 SE, ME, 2000 SP4, XP SP3)
   still deliver from any context. Their services have not been read for this
-  unlink; `src/xhci.h` already records, from design review A7, that SP4 and
+  unlink; `src/xhci.h` already records, from Phase 7's item A7, that SP4 and
   NUSB's completion path unlinks from the endpoint list "with no endpoint lock
   held", which would put Windows 2000's SMP environment in the same shape.
   Not observed there, and not established.~~ True as written on 2026-09-14;

@@ -486,8 +486,8 @@ ULONG XhciInjCommand(PXHCI_INJ_EP e, const XHCI_TRB *cmd, ULONG icDrop,
         /* 36.22: the driver's own stop, reset or dequeue move of an
          * endpoint whose doorbell a bulk fault withholds - an abort or a
          * cancel taking its TD back, the stop skipped on an endpoint
-         * already Stopped (review round 3) - ends the withholding once it
-         * succeeds; each is sent as it is. */
+         * already Stopped - ends the withholding once it succeeds; each is
+         * sent as it is. */
         if (e->Bulk && e->State == 0 &&
             XHCI_TRB_GET_EP_ID(cmd->Control) == e->Dci) {
             return XHCI_INJ_CMD_SEND_END;

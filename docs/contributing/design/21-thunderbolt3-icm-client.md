@@ -23,7 +23,23 @@ addresses, read from Linux under the owner's source rule of the same day
 sections 3.2 and 7.4). Section 7.4 revision 2 (2026-10-16): the safe
 eject's child filter also goes above bus filters already on a new PDO,
 which is where an ACPI machine leaves a PCI-to-PCI bridge. The USB4
-software connection manager is design record 22's (Phase 40).
+software connection manager is design record 22's (Phase 40). Revised 2026-10-18 for Phase 42 (the owner opened the phase that
+day): section 7.4 revision 3, the safe-removal mark across a stack
+rebuild (task 42-0.4); section 7.2's 9x half, the eject asked of the
+connection manager, the 9x link-down statement and the per-port waits
+(task 42-0.7); section 3.2's child filter also created by `AddDevice`;
+section 8's table gains design record 28's value. Section 3.5, added
+2026-10-19 (task 42-A.21, the owner's request of that day): what the
+connection manager needs of the USB drivers, for the installer's
+connection manager alone; section 7.4's mark service also on Windows 8
+and 8.1. Section 7.2 revised 2026-10-19 (task 42-A.25, from the matrix
+reading on Windows ME that day): a tunnel named but not published at once,
+as on 98 SE and ME right after a resume, is never paid later by an
+exposure that names none. Revised 2026-10-19 (task 42-A.23, the owner's decision of that
+day): the x64 package keeps the filter INF at the flavour directory's
+root beside `xhcicm.inf` and its one `xhcicm.sys`, with no `nt\`; the x86
+package keeps `nt\` (section 3.3, the packaging in section 3.3's last
+paragraphs, section 6.2's filter install).
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
@@ -604,6 +620,15 @@ never created by `AddDevice`:
    detaches and deletes it. No INF names it, and it acts on no device but
    one reported on an active bridge.
 
+Since section 7.4's revision 3 (2026-10-18) the child filter is also
+created by `AddDevice`, for a unit whose devnode carries this driver's
+name in a device-specific `LowerFilters` value written by the mark
+service of that revision; `AddDevice` then decides the NHI and bridge
+roles by id tables and treats every other PDO as such a child, which
+acts only once its location (read at its first request) places it on
+an active member's secondary bus, and never fails for want of a role. The paragraph below describes the registration list both
+children report to.
+
 The two roles find each other through a registration list in the driver's
 own image. The lifetime protocol: a filter
 instance publishes its entry (its PDO, its device object, and its bus,
@@ -655,14 +680,18 @@ the bridge on Windows 2000. The split:
   `$Windows NT$` INF; a plain `PCI\VEN_8086&DEV_15C0` line was installed
   outright on the tunnel bridge of a 98 SE guest, and the `&CC_0604` form,
   though their automatic searches did not choose it, was listed to a user
-  browsing for a driver. So the package stages it in an `nt\`
+  browsing for a driver. So the x86 package stages it in an `nt\`
   subdirectory of each flavour directory, never beside `xhcicm.inf` where
   a 98 user points the wizard, beside its own copy of `xhcicm.sys` (the
   same bytes as the flavour directory's), its one source disk having no
   path: Vista's and 7's driver store refuses a source outside the INF's
   directory (`SetupCopyOEMInf` error `0xA1`, read on 7 SP1 x86 on
   2026-10-15; an earlier layout with the source disk at `..` could not be
-  staged there).
+  staged there). The x64 package stages it as `xhcicmf.inf` at the root of
+  each flavour directory, beside `xhcicm.inf` and the one `xhcicm.sys`,
+  with no `nt\` (from `3.1.0.0`; `3.0.0.0` used `nt\` there too): 98 and
+  ME never read the x64 package, the driver store's same-directory rule is
+  met at the root, and no other INF there binds a PCI bridge.
 - `xhcicm-amd64.inf`, the 64-bit package's, carries the `NTamd64,NTamd64.6.0`
   pair for the NHI and no undecorated section, held by the gate's
   `PATH-NO9X` and `PATH-MFGDEC` rules as the other amd64 INF is; the filter's
@@ -672,8 +701,9 @@ the bridge on Windows 2000. The split:
 has to supply. The gate for the four is `check-cm-inf.ps1`, with the rule
 `CM-NO9XBRIDGE`: no bridge id in any `$CHICAGO$` INF of this driver, the
 filter INF's signature held to `$Windows NT$`, no undecorated install
-section in it, and in a staged package the filter INF in `nt\` with its
-own byte-identical `xhcicm.sys` and nothing else;
+section in it, and in a staged x86 package the filter INF in `nt\` with
+its own byte-identical `xhcicm.sys` and nothing else (in an x64 one at
+the root beside `xhcicm.sys`, with no `nt\`);
 `CM-PORTCC` holds every filter line to the `&CC_0604` form, `CM-CLASSLINE`
 the NHI INF to its one class line, and `CM-NOROUTER` every INF to no
 device router's or unclaimed controller's id.
@@ -682,7 +712,7 @@ Model lines, as the engines see them:
 
 | Engine | What it finds |
 |---|---|
-| Windows 98, ME | `xhcicm.inf` `[CmModels]`: `%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF` and a line of the same shape for each other NHI id, the USB4 lines and the class line; `xhcicmf.inf` not on their path (it is in `nt\`; they would read it there too, `39-0.4`) |
+| Windows 98, ME | `xhcicm.inf` `[CmModels]`: `%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF` and a line of the same shape for each other NHI id, the USB4 lines and the class line; `xhcicmf.inf` not on their path (it is in the x86 package's `nt\`; they would read it there too, `39-0.4`; they never read the x64 package, which has it at the root) |
 | Windows 2000, XP | the same NHI lines through `Cm.Dev.NTx86`; `xhcicmf.inf` `[CmFilterModels]`: the bridge lines |
 | Vista, 7 | the `.NTx86.6.0` halves of both |
 | x64 | the two amd64 INFs |
@@ -713,7 +743,8 @@ again on XP and later, so the install route is re-run, or the filter
 re-applied, once the tree exists. Read on the 32-bit guests only; the
 append flag `0x00010008`, the `.NTx86.6.0` models section and the 64-bit
 guests are not read yet. The packaging stage carries both INFs per
-flavour, the filter's in `nt\`.
+flavour, the filter's in `nt\` in the x86 package and at the root in the
+x64 one.
 
 **The id list (decision D9, owner 2026-10-15, widened the same day to
 every Intel firmware-connection-manager host Linux addresses).** Two sources,
@@ -905,6 +936,77 @@ None. The NHI is never a boot-critical device for Setup, and nothing behind a
 tunnel is one in this project's targets. `txtsetup.oem` is not touched, and
 the `OEM-*` gate rules stay as they are.
 
+### 3.5 Without `xhci98.sys` (task 42-A.21, 2026-10-19)
+
+The owner's request of 2026-10-19 is an install of the connection manager
+alone, for a Windows whose USB 3 driver is someone else's - Microsoft's
+`usbxhci.sys` on Windows 8 and 8.1, a controller vendor's on 2000 to 7
+(record 23 section 4.5). What this driver needs of `xhci98.sys`, read
+from `src\cm\` and the tools on 2026-10-19:
+
+- **No link at all on NT.** `xhcicm.sys` imports nothing from
+  `xhci98.sys`, opens none of its devices, sends it no request (no
+  internal USB request, no `USBUSER` door call, no IOCTL of either
+  driver's), and `xhci98.sys` does not know it exists (section 3.1). The
+  only device requests the driver answers are its own, on
+  `\\.\XHCICM<n>` (`cm_query.h`): `IOCTL_XHCICM_QUERY` and
+  `IOCTL_XHCICM_MARKS`, read by `XHCITR`, `XHCIINST /devices` and
+  `/eject` and the mark service, and the log and PCI configuration
+  snapshot requests (`CM_QL_IOCTL`, `CM_QP_IOCTL`) `XHCITR` reads; and
+  the Stor98 channel is a callback object and a table of the two drivers'
+  own (section 7.2). Its settings come from its own driver key and the
+  machine-wide `Services\USB` key, which only the installer and the
+  user write (`cm_reg.c`), whichever USB driver runs.
+- **The PCIe tunnel** (both profiles) is the connection manager's work
+  on the host interface; what appears behind the tunnel port is
+  enumerated by Windows' PCI bus driver, under the tunnel-port filter of
+  section 3.2 on NT, a filter of `pci.sys`'s bridge stack that never
+  touches a USB device. A device there is bound by whatever driver
+  Windows chooses: an NVMe drive by Stor98 or another NVMe driver (8.1 has
+  its own, `stornvme.sys`; 8 has none), and the xHCI controller of a
+  dock by whichever xHCI driver claims its class id - Windows' own on 8
+  and 8.1, on 2000 to 7 a vendor's where one matches that controller and
+  otherwise nothing.
+- **The USB3 tunnel** (the USB4 profile only, `XhciCmUsb3Tunnel`, design
+  record 22 section 6.9): its devices appear as an ordinary SuperSpeed
+  connect on a root port of the host's own xHCI controller ([model]
+  `XHCI98-HANDOFF` section 2), so whichever driver runs that controller
+  sees them. The bandwidth handshake the path set-up waits on is the
+  host router's and the xHCI hardware's ([linux] `usb4.c`), not a
+  driver's; with no driver on the host's xHCI controller at all the
+  tunnel may come up and nothing shows its devices.
+- **Safe eject and the marks** (section 7.4): the child filter, the mark
+  service and the tools' eject act on the PCI unit behind the tunnel
+  through Windows' own eject and the connection manager's query device;
+  none of it goes through a USB driver.
+- **Windows 98 SE and ME are the exception**, and why the installer keeps
+  the USB drivers required there: those systems have no xHCI driver of
+  their own, so without `xhci98.sys` every xHCI controller is dark, the
+  dock's included; and the CONFIGMG re-enumeration of section 6.1 counts
+  on `xhci98.sys` starting on a controller the tunnel adds (section 3.1).
+
+So on Windows 8 and 8.1 the connection manager alone gives the
+Thunderbolt 3 ICM client and the USB4 software connection manager on the
+hosts of section 3.3's lists, the PCIe tunnel and its re-enumeration, an
+NVMe drive behind it (Stor98 is not offered there; record 23 section
+4.5), a dock's xHCI controller and its devices under Windows' own USB
+driver, the USB3 tunnel's devices on the host's controller under the same
+driver, and safe eject with the marks. None of it has been read on 8 or
+8.1, where no guest exists here. The import gate holds the x86 driver to
+Windows 98's evidence and Windows 2000's export tables, and the amd64
+driver to NT 5.2's (`build-driver.cmd`'s gate for `xhcicm.sys`,
+`check-imports.ps1`); Vista and 7 are read in guests, not by the gate;
+and no export table of 8 is in the tree, so whether 8's kernel and HAL
+still export each routine of
+`xhcicm-imports.allow` (the HAL's `HalGetBusData`, `KfAcquireSpinLock`,
+`KfReleaseSpinLock`, `KeGetCurrentIrql` and `KeStallExecutionProcessor`
+among them on x86) is unread. The driver's own system tests are WDM
+versions (`IoIsWdmVersionAvailable(1, 0x10)` for NT, `(6, 0)` for Vista
+and later), which 8 and 8.1 answer as 7 does, so it takes 7's paths there.
+On 64-bit 8 and 8.1 it loads only as on Vista x64 and 7 x64: test-signing
+mode (Secure Boot off) or a start with signature enforcement disabled
+(design record 19; record 23 section 5.10).
+
 ## 4. The host interface: ring 0, polled
 
 ### 4.1 Registers
@@ -917,7 +1019,7 @@ and no bitfields:
 
 | Register | Offset | Use |
 |---|---|---|
-| host capabilities | `0x39640` | ring count in bits 9:0, interface version in 23:16 (0 on Alpine Ridge; the versions each row accepts are section 1.4.2's test 4, anything else the inert start) |
+| host capabilities | `0x39640` | Total Paths (the ring count) in bits 10:0, interface version in 23:16 (0 on Alpine Ridge; the versions each row accepts are section 1.4.2's test 4, anything else the inert start) |
 | firmware status | `0x39944` | bit 0 ICM enabled, bit 31 NVM authentication done |
 | outbound mailbox | `0x3990c` | operating mode in bits 11:8 |
 | inbound mailbox data and command | `0x39900`, `0x39904` | command in bits 7:0, error bit 30, request bit 31 |
@@ -951,6 +1053,19 @@ numbers, CRC-32C over control packets, and the error notifications. Its
 callback contract (`mmio_rd`, `mmio_wr`, `dma_alloc`, `udelay`, `log`) is
 what makes it host-testable and is kept as the seam between the pure core
 and the driver.
+
+Each ring's index register (offset `8h` of its block: the producer index
+in one 16-bit half, the consumer index in the other, Spec Tables 12-19 and
+12-24) is written as a whole dword: a TX producer write carries 0 in the
+consumer half, and an RX consumer write 0 in the producer half. That is
+correct only if the host interface ignores writes to the half it owns,
+which is an assumption, **unverified on hardware**: it has run on the
+emulator alone (39-V.2). Linux's `nhi.c` writes the 16-bit half alone
+[linux]. On
+a part that latched the written half, the RX producer would read 0 after
+every frame. The writes are left as they are until a reading on the P14s
+settles it; the alternative is a 16-bit write (`WRITE_REGISTER_USHORT`,
+an import the gate would have to admit).
 
 ### 4.3 Polling, and no interrupt at all (decision D3)
 
@@ -1116,9 +1231,11 @@ the observed frames quoted there: `driver ready` (`T:1`, `T:2`), `get route`
 (`T:833`, `T:834`), `approve` (`T:34153`, `T:34154`), `device connected`
 (`T:9`, 61 words, the name block decoded entry by entry), `device
 disconnected` (`T:21087`). Frame type 11 out, 12 and 10 in; the CRC-32C
-trailer is appended to every command and stripped unchecked from every
-response and event, as the Linux client does [inf] and the emulator sends it
-anyway. One command outstanding at a time; a response matches by frame type
+trailer is appended to every command and checked on every response and
+event (`tbt_ring.c`): a mismatch is counted (`cm.ring.crc-errors`), logged
+and flagged on the frame, which is still decoded - an ICM frame is never
+dropped for its trailer, while a control packet with a bad one is (Spec
+6.4.4 has the request retried). One command outstanding at a time; a response matches by frame type
 and code; an event arriving while a command is outstanding is decoded at
 once and acted on as section 4.4 says, never dropped. Error is bit 0 of the
 response flags; an unknown event code is logged and ignored. The encoders
@@ -1292,9 +1409,9 @@ tunnel-up sequence (section 6.5) with its route missing, since the tunnel
 exists whatever the route request did. Entries are removed only by a
 disconnect (with the entries below it), by the reconciliation, or by a
 replacing announcement at the same place (section 5.3).
-A frame longer than its buffer, a response with an unexpected code, or a
-CRC mismatch on a command the firmware reports as an error are counted, not
-acted on. Counters: section 8.
+A frame longer than its buffer, or a response with an unexpected code, is
+counted, not acted on; a CRC mismatch is counted and the frame still
+decoded, as above. Counters: section 8.
 
 **A host interface that stops answering** (reviewed and revised on
 2026-10-15, after the R32 leg of `39-V.2`). With BIOS Assist on, after the
@@ -1454,7 +1571,7 @@ services used:
 | `Get_Device_ID` | 7 | match `PCI\...\BUS_bb&DEV_dd&FUNC_ff` for the tunnel bridge, and `PCI\VEN_vvvv&DEV_dddd` for a vanished child |
 | `Query_Remove_SubTree`, `Remove_SubTree` | 12, 13 | a child whose function has left the bus, before the re-enumeration |
 | `Reenumerate_DevNode` | 51 | the bridge, after a tunnel up or down |
-| `Get_DevNode_Status` | 54 | the log only |
+| `Get_DevNode_Status` | 54 | the log, and safe eject's `DN_REMOVABLE` check before `Change_DevNode_Status` (section 7.4) |
 | `Register_Device_Driver` | 14 | not called: its `CM_REGISTER_DEVICE_DRIVER_REMOVABLE` applies only to a devnode the caller drives (section 7.4) |
 | `Change_DevNode_Status` | 91 | safe eject's 9x half: `DN_REMOVABLE` added to a tunnelled device's devnode, never to a tunnel port's (section 7.4) |
 
@@ -1493,7 +1610,9 @@ What the driver does on a tunnel change on 98 (section 6.5 says when):
 The Windows 98 instance id of a hot-added PCI function is not always the
 `BUS_&DEV_&FUNC_` form (the experiment saw `082800`), so vanished children
 are matched by vendor and device id against what still answers on the bus,
-never by instance id.
+never by instance id. A bus that cannot be read completely - a failed
+read, or a function answering Configuration Request Retry Status (vendor
+id `0001h`, not ready yet) - takes nothing for vanished on that pass.
 
 Reads of the secondary bus for "what still answers" go through
 `HalGetBusData(PCIConfiguration, bus, slot, ...)`, which `hcd_ctl.c` already
@@ -1581,7 +1700,10 @@ is never renumbered under it.
    never reach into the BARs' region, each subtree the same way inside
    its bridge's window; a member whose A-aligned part is smaller than
    the total gets no window at all. Each bridge's I/O and prefetchable
-   windows are closed, and its Memory Space and Bus Master Enable set. A
+   windows are closed (a 64-bit prefetchable window's upper base and
+   limit, `28h` and `2Ch`, written 0 with it and journalled for the undo,
+   since `24h` alone does not close it), and its Memory Space and Bus
+   Master Enable set. A
    member with no memory window, or one too small for the chain and the
    BARs beside it, gets the bus numbers alone.
 5. **Interrupt lines**, once the windows are in place. A function's
@@ -1595,7 +1717,9 @@ is never renumbered under it.
    0 or `FFh`, gets the port's line; its pin, and a bridge's Bridge
    Control, are written back as read. Any other function gets nothing,
    and keeps whatever PCI.VXD makes of it (Code 29 for want of an IRQ on
-   the P14s). Considered and not used: the IRQ Windows recorded at boot
+   the P14s). A function this stage cannot read (a failed read, or one
+   answering Retry Status) is counted as not set up, so the stage does
+   not report every line written. Considered and not used: the IRQ Windows recorded at boot
    for the same position (`HKLM\Enum`'s LogConfig is rewritten at every
    enumeration, as it was in the P14s captures, and `HKEY_DYN_DATA`
    does not survive a restart, so neither is a store a later hot plug
@@ -1734,11 +1858,11 @@ preceded by an eject, which the experiment saw on every cycle; section 7.4
 says what safe eject changes).
 
 The filter is installed by `xhcicmf.inf` from the package's `nt\`
-directory, the device-specific route of decision D2 (section 3.3): unforced
+directory (x86) or the flavour directory itself (x64), the device-specific route of decision D2 (section 3.3): unforced
 on Windows 2000, forced on XP and 7 by the installer, which the unsigned
 INF's rank requires (`39-0.4`).
 
-The filter does no device work: PnP IRPs other than the five it watches
+The filter does no device work: PnP IRPs other than the six it watches
 go down with `IoSkipCurrentIrpStackLocation`; power IRPs go down the way
 NT 5.x requires of a filter, `PoStartNextPowerIrp` then
 `IoSkipCurrentIrpStackLocation` and `PoCallDriver` (the experiment's
@@ -1746,7 +1870,10 @@ NT 5.x requires of a filter, `PoStartNextPowerIrp` then
 member the NHI has marked **held** (section 6.3), which is passed down
 with a completion routine and retained as section 6.3's resume ordering
 says,
-`PoStartNextPowerIrp` and the completion following its release; `IRP_MN_START_DEVICE` is passed down with a
+`PoStartNextPowerIrp` and the completion following its release;
+`IRP_MN_DEVICE_USAGE_NOTIFICATION` sets `DO_POWER_PAGABLE` on the way down
+unless a device above the filter lacks it, and clears it on the way up
+where the device below lacks it (the paging-path rule for a filter); `IRP_MN_START_DEVICE` is passed down with a
 completion wait and the entry published only on success;
 `IRP_MN_STOP_DEVICE` and `IRP_MN_SURPRISE_REMOVAL` withdraw the entry;
 `IRP_MN_REMOVE_DEVICE` withdraws it, waits for the rundown of section 3.2,
@@ -2235,25 +2362,53 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   98 SE and ME), and an eject made with the install or tray tool goes to
   Windows directly (record 24 section 7.1), so the worker's handshake
   below is not reached by it. Stor98 relies on its own gone deadline
-  (about 5 s) and on Windows' removal, as before; roadmap-usb4.md NV9X.3
-  is the work that makes both.
+  (about 5 s) and on Windows' removal, as before; roadmap-usb4.md 42-0.7
+  and 42-A.13 (formerly NV9X.3) are the work that makes both.
 
 - **UP before the enumeration.** For each active member, before the call
   that exposes its secondary bus (the invalidation of section 6.2,
   `Reenumerate_DevNode` of section 6.1), the driver scans that bus and
   publishes `UP` for each function of class 01h subclass 08h that
-  answers, with `LinkGeneration` + 1 - except that an entry already `UP`
-  keeps its generation on a tunnel down's re-enumeration. After a tunnel
-  up, a RESYNC or an owed re-enumeration the exposure is fresh: presence
-  on the bus does not prove the link stayed up in between, so even an
-  entry that reads `UP` gets a new generation. Before every exposure,
-  fresh or not (it follows the acknowledgement wait), every entry behind
-  that bridge that carries a statement is retired (`IN_USE` alone,
-  generation + 1), found by the bus and by the bridge it was last published
+  answers, with `LinkGeneration` + 1 for a new tunnel only (task 42-A.6;
+  `stor98cm.h` as Stor98 revised it on 2026-10-18, entry protocol step 1
+  and R8b: UP published again for a tunnel that stayed up keeps its
+  generation). An entry not `UP` always gets the new generation. An entry
+  already `UP` keeps it - on a tunnel down's re-enumeration, a RESYNC, a
+  baseline's or an owed re-enumeration's exposure, and on every member but
+  the one a tunnel up names - unless the exposure itself names a tunnel
+  other than the one the entry's `UP` was last published for: under the
+  USB4 profile (record 22 section 10) the UP hook and the seam name the
+  port's tunnel (the USB4 port and its connection generation) to the
+  member the port corresponds to, and nothing else names one. A tunnel so
+  named but not published at once - the secondary bus unread, as on 98 SE
+  and ME right after a resume, before the bridges are numbered again - is
+  kept as the bridge's label for what later exposures publish, and no
+  later exposure that names none advances an entry already `UP` for it
+  (task 42-A.25): by then the endpoint has been enumerated, and on Windows
+  ME a Stor98 instance bound since before a Stand by dropped its disk when
+  a second enclosure's plug advanced its entry so (record 22 section 10).
+  Under the firmware
+  connection manager no action names its member, so no tunnel is named
+  and no entry already `UP` is advanced: a member whose function is newly
+  found gets its generation, and the others stay as they are. (Until
+  42-A.6 every exposure after a tunnel up or a RESYNC advanced every
+  member's entry: U.11's two NVMe drives under the USB4 profile,
+  `runs/run-41.md`, where a second port's tunnel up re-published the
+  first drive's entry at a new generation and a bound Stor98 on 98 SE
+  dropped that disk.) Nor does the generation change while a 9x removal
+  request (`REMOVE_PENDING`, below) is outstanding on an entry (interface
+  3, R9a): it is left as it is until the request is withdrawn. Before
+  every exposure, fresh or not (it follows the acknowledgement wait), every entry behind
+  that bridge that carries a statement is retired (`IN_USE` alone, the
+  generation kept), found by the bus and by the bridge it was last published
   or marked for, so a Stor98 instance that binds after the exposure -
   to a function the scan could not see, or one that came back between the
   scan and the enumeration - never records a generation carrying an old
-  statement. On Windows 98 SE and ME no `UP` is published while the
+  statement. (Until task 42-A.12 the retirement also advanced the
+  generation, so a re-plug after a statement cost two increments; R8b
+  allows one per tunnel and none for anything else, and Stor98's 9x late
+  lookup takes a generation read not `UP` as its floor and binds only an
+  `UP` above it, which the re-plug's one increment is.) On Windows 98 SE and ME no `UP` is published while the
   proof and locator are not published. There the tunnel's bus did not answer before
   `Reenumerate_DevNode` (98 SE, run-39): a fresh exposure that finds it
   silent leaves the bus to be scanned again on each pass for 10 s, and the
@@ -2299,9 +2454,14 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   no `DOWN_QUIESCED`), which Stor98 ignores, and its gone deadline (MD-1)
   stands; a function still answering keeps its `UP`.
 - **The acknowledgement before the removal.** Before the removal call of a
-  tunnel down or a RESYNC, the thread waits until every entry this domain
-  marked reads `AckGeneration` = `LinkGeneration`, or the bound from the
-  mark: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
+  tunnel down or a RESYNC for a member, every entry this domain marked
+  behind that member reads `AckGeneration` = `LinkGeneration`, or the bound
+  from the mark has passed. Since task 42-A.12 that is a pending state per
+  entry, stepped on the thread's passes and at every servicing point of a
+  wait inside one (the sleeps of the core's and the seam's waits), and a
+  gate per member that holds that member's removal, exposure and resume
+  release alone (part 3 of "The 9x half" below); until then the thread
+  itself waited for every entry of the domain. The bound: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
   test build; the header gives no number), and 3 s on Windows 98 SE and
   ME, inside interface 3's R12 S4 bounds: at most Stor98's 9x gone
   deadline (`STOR98LS9X_GONE_MS`, 5 s) and not below
@@ -2310,8 +2470,7 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   Stor98 that has not answered by then is a benign timeout (G3 run C:
   nothing was held, and its next request applied the statement), and no
   idle indication shortens or skips the wait - the acknowledgement is the
-  only signal. Orchestrator decision of 2026-10-15, owner to confirm. The thread services the ICM between
-  reads. On NT it does not wait while no driver
+  only signal. Orchestrator decision of 2026-10-15, owner to confirm. On NT nothing waits while no driver
   has ever asked for the table (no Stor98 is loaded, so none can answer);
   on 9x it does not wait where the proof and locator were not published,
   nor while no Stor98 has read the proof. Each read checks the bound
@@ -2349,7 +2508,7 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   `Remove_SubTree` (R11 O5); and after O6's 30 s, to keep the devnode,
   tear the tunnel down, keep retrying and publish no `UP` on that port
   until the removal succeeds. Both belong with the per-port, non-blocking
-  waits of roadmap-usb4.md NV9X.2 (R6e). R4's rule for a connection
+  waits of roadmap-usb4.md 42-0.7 and 42-A.12 (formerly NV9X.2; R6e). R4's rule for a connection
   manager loaded again in the same boot (retire every endpoint devnode
   under its bridges before its first `UP`) does not arise: a load that
   published is resident and never unloads, and one that did not publish
@@ -2379,7 +2538,8 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   which get no request, and after a lost host interface the children it
   retained, which get one only while the function still answers; the
   tools' 9x eject does not come through the worker at all, so no eject
-  reaches the handshake - roadmap-usb4.md NV9X.3 routes it there.
+  reaches the handshake - roadmap-usb4.md 42-A.13 (formerly NV9X.3)
+  routes it there.
 
 **The budget, an estimate and not an enforced deadline.** Stor98
 measures its gone deadline from its own presence loss. The parts: the
@@ -2405,6 +2565,629 @@ member: the condition is read on one port. The release notes say which
 state the pair is in: on the emulator the ordering is read per OS against
 the stage-2 event (`39-A.7`'s legs); on hardware no statement is made
 (section 7.1).
+
+**The 9x half (2026-10-18, roadmap-usb4.md task 42-0.7; planned as
+`NV9X.2` and `NV9X.3`).** Three things this section left to later work,
+designed here and reviewed and revised: the 9x eject asked of the
+connection manager, so that the `REMOVE_PENDING` handshake above is
+reached by an eject at all; the 9x link-down statement, so that "no
+reading on 98 SE and ME" above ends; and the per-port, non-blocking waits
+interface 3's R6e asks for, in place of `CmNvlinkAwait`'s hold of the
+connection-manager thread and the removal step's hold of the worker. The
+code is 42-A.12 (the waits) and 42-A.13 (the two transactions); the legs
+are 42-V.6. Each choice below that is not the owner's is the
+orchestrator's, for the owner to confirm (the list at the end). Record 24
+section 7.1 (the tool's 9x eject) and record 22 sections 10 and 10.4 (the
+USB4 profile's teardown after it) are revised to point here.
+
+*0. The shape: transactions on the thread, calls on per-member workers.*
+Interface 3's R6e: "A CM serving several ports keeps every wait (link
+acknowledgement, removal acknowledgement, the delay before
+Remove_SubTree, removal retries, teardown) as per-port state advanced by
+its one polling loop, so its single writer never blocks; no port's wait
+may delay another port's statements (S2) by more than one CM poll
+period. CONFIGMG calls that can wait on the OS or on other drivers
+(Query_Remove_SubTree, Remove_SubTree, Reenumerate_DevNode) are made off
+the writer, from a per-port worker, and their result is taken by the
+port's state when it arrives." Today one worker serves the domain
+(`cm_cfgwk.c`), and a CONFIGMG call blocked on it - a wizard open, a
+removal that takes its time - blocks every other member's work; and the
+removal step holds that worker for up to 14 s on `RemoveAck` and 30 s on
+the removal retries. The design therefore separates two things that
+`cm_cfgwk.c` has in one thread:
+
+- **The transactions** - a removal (vanished or ejected), a statement
+  decision, an acknowledgement wait, a marking, a slot reading, record
+  28's configuration - are **per-member state** owned and advanced by the
+  connection-manager thread's pass: their deadlines, their retries, their
+  bounds, their results, every one read on the thread's clock, never
+  inside a CONFIGMG call. The thread never calls CONFIGMG or `PCI.VXD`.
+- **The calls** are made by **one call worker per member** (at most
+  `XHCI_TBT_MAX_TUNNELS`, four, per domain), each executing one CONFIGMG or
+  `PCI.VXD` call at a time, handed to it and taken back from it through
+  R6f's handoff word for that member: `IDLE -> SUBMITTED` by the thread
+  after storing the operation (query-remove, remove, re-enumerate,
+  mark, slot read, log-conf step, numbering step), its devnode or
+  location, its arguments and a new operation id; `SUBMITTED -> RUNNING`
+  by the worker with a compare-exchange, so an operation is taken once;
+  `RUNNING -> DONE` by the worker after storing the result and the id it
+  ran; `DONE -> IDLE` by the thread after taking or discarding the
+  result, which it accepts only for the id it submitted for that
+  operation and devnode. One operation at a time per member; a member
+  whose worker is inside a call is "busy" to the thread, and the thread's
+  transaction for it keeps running its deadline meanwhile: a deadline
+  that passes while a call runs is a deadline passed (R11 O6: "an
+  elapsed deadline, also when a call is still running"), the transaction
+  moves on, the call stays the worker's until it returns, and its late
+  result is taken as an O6 retry outcome, never as a clean one. Another
+  member's worker is unaffected, which is what R6e asks and what one
+  worker could not give (decision V5).
+- **Who owns a transaction, and what happens at the NHI's stop.** The
+  transaction records and the call workers live in the domain's 9x
+  re-enumeration block (`cm_cfgwk.c`'s own pool block, never the NHI's
+  extension), and the thread advances them while it runs. `CmCfgwkStop`
+  keeps its rule: the NHI's stop never waits for a CONFIGMG call (that
+  can deadlock the NHI's own removal); it detaches the block, and a
+  worker inside a call finishes that call on its own. What a **detached
+  block** then does, with no thread to advance it: a transaction that
+  **already holds its removal authorisation** - a `CLEAN` or
+  `ISOLATED_NOT_CLEAN` answer taken, or an isolation proven by the
+  thread before the stop, or a vanished child's query accepted (nothing
+  behind it to isolate) - completes that removal alone: the
+  `Remove_SubTree`, retried every 2 s on the worker's own clock until
+  30 s after its first attempt, its request withdrawn on success (O5).
+  A transaction that does not - its answer awaited, its acknowledgement
+  awaited, `FAILED` or unanswered with no isolation made, or blocked - is
+  **not completed**: an accepted query alone never authorises a removal,
+  the controller behind it may still write, and both profiles leave the
+  tunnel up across the NHI's stop; its request is left in place as it
+  stands (a withdrawal is interface 3's cancel, which would need the
+  isolation nobody can make now), and the transaction is kept for a
+  later start. The detached block publishes no `UP`, makes no statement,
+  posts no teardown and writes no result (the results' handles closed
+  with the stop); a call's late result is **kept in the transaction's
+  record** where the transaction needs it to resume - a
+  `Query_Remove_SubTree`'s `CONFIGRET`, matched by operation id (an
+  accepted query is irreversible on 9x, and a later start must know it
+  was accepted and owes the removal, or refused and owes nothing, never
+  re-issue it), and a `Remove_SubTree`'s success - and dropped otherwise.
+  **The retirement debt outlives the workers**: every member
+  with a devnode not retired - a transaction kept, or a removal given up
+  after its 30 s - leaves a persistent **member blocker** in an
+  image-static list, by the member's location, holding the devnode's
+  instance id and the transaction's state (the request's sequence and
+  generation, the answer seen, the branch reached), which the block's
+  exit does not clear. A new start of an NHI in the same boot whose set
+  names such a member **adopts** the blocker before any exposure or
+  re-enumeration of that member: it finds the devnode by its instance
+  id (gone from the tree: retired by its disappearance, the blocker
+  cleared; present: the transaction resumed on the thread where it
+  stood - an outstanding handoff consumed first, before any operation
+  is submitted for that devnode; the query's recorded outcome honoured;
+  the answer read as R6d reads it, the branch taken, the removal made or
+  the member blocked as part 1 says), and the blocker
+  is cleared only by a removal that succeeded, a devnode verified gone,
+  or the recorded **refusal** of an orderly eject's query where no
+  earlier accepted query of that devnode is outstanding (a refused
+  query owes nothing: there is no retirement debt, so the blocker is
+  released and the query is not repeated; a vanished child's vetoed
+  query is not this case and keeps its 2 s retries and its gate) -
+  never by time or by a worker's exit (R8c, S5). The image stays
+  resident, so the code and the lists outlive the stop (section 6.1's
+  rule).
+- **The per-devnode result slot and the member's gates are shared.**
+  Record 22 section 7.7's recovery (task 42-0.5) reads the same
+  per-devnode result slot for its retirement barrier (its decision U23:
+  on 9x the worker's removal result is R8c's retirement) and waits on
+  the same exposure gate before any rebuild's publication; the worker
+  gains nothing further for it.
+- **The persistent per-devnode transaction is not a call.** It outlives
+  every call it submits, keeps its `REMOVE_PENDING` request (R9a: one
+  request per devnode, left in place through retries) until the devnode
+  is retired, and is never cancelled or re-issued by a newer post for the
+  member: a tunnel up, a resync or a tunnel down posted meanwhile queues
+  behind it (the member's requests stay collapsed as today, latest wins,
+  but behind the transaction's barrier), and an accepted query's
+  obligation - `Remove_SubTree` always follows an accepted query on 9x -
+  survives everything but the devnode's own disappearance.
+- **The cadence.** While any member of any domain has a pending
+  acknowledgement, removal or statement state, the thread's pass runs at
+  most 50 ms apart (R10: "The CM polls acknowledgements at least every
+  50 ms while it waits"), whatever `XhciCmPollIdleMs` says and whether or
+  not any entry reads `UP` (today's clamp to 250 ms applies only while
+  one does; after the last `DOWN` the idle period could reach 5 s, which
+  would miss R10): `CmNvlinkIdleMs` gains that rule. The pass between two sleeps is not
+  itself short: the tunnel-up and tunnel-down polls (`cmPoll`, up to 2 s),
+  the exposure's wait for a silent bus (up to 1 s) and the USB4 profile's
+  synchronous teardown (record 22 section 7.3) all wait inside it. So the
+  stepping is a **servicing point**, `CmNvlinkStep`, called from every
+  bounded wait of the thread at least every 50 ms - `cmPoll`'s loop,
+  the exposure's scan wait, `cmNvPause`, the ICM client's command wait
+  and the USB4 core's safe points (record 22 section 7.4, which already
+  distinguish a safe point from a transport wait) - non-reentrant (a
+  flag: a step never nests in a step), bounded (one step per pending
+  state, no call, no wait of its own), and the pass proper steps once
+  more. A step reads the deadline before the answer and takes an answer
+  only when a second read finds it unchanged (R11, R6d), as
+  `CmNvlinkAckStep` and `CmNvlinkRemoveStep` do today. What a step may
+  do from inside another member's wait is bounded to what it does from
+  the pass: advance a state, submit a call to that member's worker, write
+  the table's entry under its lock, publish a result; the host vectors
+  run a step from inside each wait.
+
+*1. The eject asked of the connection manager.* On Windows 98 SE and ME
+`XHCIINST /eject` and XHCITR's Safely Remove of a unit behind a verified
+tunnel port no longer call `CM_Query_Remove_SubTree` and
+`CM_Remove_SubTree` themselves (record 24 section 7.1 steps 1 to 4); they
+ask this driver, and the member's transaction runs the removal step above
+- `Query_Remove_SubTree`, the `REMOVE_PENDING` request where the unit is
+an NVMe function with an `UP` entry, the wait for `RemoveAck`,
+`Remove_SubTree` after an accepted query, the retries - on the function
+still present. The ask is the status record's mechanism (record 24 section
+3.3), widened:
+
+- **The freshness token, shared by both tools.** The query device of
+  record 25 section 4 is open to both tools on 98 SE and ME (XHCITR opens
+  it today; XHCIINST gains the same read for this), and its answer carries
+  the start epoch and the content generation (record 25 section 4.3), the
+  two the tools' transactions already use; the registry record's own
+  generation (record 24 section 3.3) is not a token both can supply, and
+  is not used. An ask names the epoch and content generation the unit was
+  chosen under.
+- **The ask.** The tool writes `XhciCmEjectAsk` (`REG_BINARY`, 28 bytes: a
+  nonzero nonce that differs from the last, the member's bus, device and
+  function, the unit's bus number and device and function, the epoch, the
+  content generation, and flags, 0) to the NHI's driver key beside
+  `XhciCmStatusAsk`, under the tools' eject mutex (`XhciinstTbAsk`, record
+  25 section 6.3), after record 24 section 7.3's revalidation and record
+  25 section 6.2's transaction steps 1 to 5, which stay as they are. The
+  driver key is writable on 98 SE and ME (record 24 section 3.3). The
+  thread reads it with the status ask, at most every 500 ms
+  (`cm_statos.c`), and takes a nonce it has not seen.
+- **Acceptance, on the thread, before anything irreversible.** The ask is
+  **rejected** (the result below written at once with the reason) when
+  its epoch is not this start's or its content generation is not the
+  answer's current one (a delayed ask that may name a replacement at the
+  same location); when the member is not an exclusive, active member of
+  this domain's set; when no function answers at the unit's location (one
+  `HalGetBusData` read of its ids) or the unit's bus is not that member's
+  secondary bus (`tbt_topo.c`'s header reading); when a transaction is
+  already running on that member, or a tool-originated transaction
+  anywhere in the domain whose result the tool has not yet consumed
+  ("busy": one tool eject per domain at a time, so one result slot is
+  enough - the result is consumed when the tool deletes its ask after a
+  terminal step, or 60 s after the terminal step was written). An ask
+  found at the driver's start is never taken (the thread clears the ask
+  value at its start), and the thread re-reads the value **immediately
+  before acceptance**: a deleted ask is never accepted. **Acceptance is
+  the ownership boundary**: before it, the tool's deletion of its ask
+  cancels the request, nothing having been called; after it the driver
+  owns the transaction and its obligations, and the ask's deletion ends
+  the tool's observation only - never a query, an acknowledgement wait,
+  an isolation or a removal the transaction owes (a `Query_Remove_SubTree`
+  already running when the ask goes is simply running). The ask carries
+  no clock, and no age check is made: what the checks guarantee is that
+  the unit was chosen under the topology the driver publishes now (the
+  epoch and the content generation), that the tool still wanted it at
+  acceptance, and that nothing is in flight for it. A rejection is
+  answered in a value of its own, `XhciCmEjectReply` (`REG_BINARY`, 8
+  bytes: the nonce and the reason), so a busy or stale ask never writes
+  into the slot an accepted transaction owns. Otherwise it is
+  **accepted**: the result is written with
+  the step "accepted" before any call is submitted, and the member's
+  transaction begins. So the tool always learns one of accepted,
+  rejected, or nothing - and nothing is not "nothing was changed" (item
+  "The result" below).
+- **The transaction**, on the thread, with the member's call worker making
+  each call: the unit's devnode is found under the member's as
+  `cmWkRemoveChild` finds one today (the instance id in its
+  `BUS_&DEV_&FUNC_` or path form matched against the location and the
+  member's path), its identity re-read at the location (the ids, through
+  `PCI.VXD`'s route), and the existing identity rules kept
+  (`CmNvlinkWkCandidate`'s: the entry `UP`, published for this id, no
+  request outstanding); then `Query_Remove_SubTree` (a refusal is final:
+  the terminal step "query-refused" with its `CONFIGRET`, mapped at the
+  tool by record 24 section 7.1 item 2's table); then, accepted, the request
+  (`CmNvlinkWkRequest`'s rules: the same owner, the same id, still `UP` at
+  the same generation) with T_ack's deadline recorded from before its
+  publication; the answer stepped each pass; then the branches of R11 O5,
+  **kept apart** as the header keeps them:
+  **The population check**, a prerequisite of **every** teardown an
+  eject leads to, in each branch below: every other child of the
+  member's devnode read not started (`DN_STARTED` clear), no other
+  function on its secondary bus answering with a started devnode, and
+  the reading complete (record 24 section 5.4: a dock carries more than
+  one unit behind one port; the NT path's `cmEjectReady` makes the same
+  check). A live sibling, or an incomplete reading, means **no
+  teardown**; what that makes of the branch depends on whether the
+  teardown was the branch's isolation: after a `CLEAN` or
+  `ISOLATED_NOT_CLEAN` answer the removal is made and succeeds all the
+  same, the result is "removed" with the tunnel left up (exit 0 - a
+  removal that succeeded is a success; the unplug advice is the tool's
+  assessment of record 24 section 5.4, which in this case gives its
+  second text); where the teardown would have been the isolation (`FAILED`,
+  none, late) or O6's release, the outcome is **blocked**, as those
+  branches say. No teardown is ever made past a failed check.
+  - `CLEAN`: `Remove_SubTree`, the request withdrawn on success (O5), the
+    result "removed clean"; then, the population check passed, the
+    port's PCIe tunnel is torn down under the USB4 profile (record 22 section 10.4, the port known
+    by correspondence, record 22 section 7.6; a member whose port is not
+    known gets no teardown), the path read closed back (record 22 section
+    7.3 step 1), and `DOWN_QUIESCED` published for the entry's generation
+    (O5: no acknowledgement is waited for, the instance being gone) under
+    part 2's qualification; with the check failed the tunnel stays up,
+    the removal itself done and the result "removed clean", the tool's
+    own assessment then saying what it finds. Under the ICM client there is no per-device teardown (section
+    7.4) and the tunnel stays up; the entry stays `UP` until the unplug, as
+    item 5 of section 7.4 says for NT.
+  - `ISOLATED_NOT_CLEAN`: isolation is proven by the answer itself (the
+    controller disabled, no DMA possible); `Remove_SubTree`, the request
+    withdrawn, then `Reenumerate_DevNode(bridge)` on the **same tunnel**
+    (O5: "D2: the disk returns as a fresh device on the same tunnel"),
+    which the member's ordinary re-enumeration post makes; the result
+    "removed, not clean, the drive returns as a new device".
+  - `FAILED`, no answer within T_ack, or an answer first seen after it:
+    the controller may still DMA, so **isolation first** (O5). Under the
+    USB4 profile with the port known by correspondence and the population
+    check passed: the port's PCIe teardown (record 22 section 10.4), the path read closed back,
+    `DOWN_QUIESCED` and the R12 S4 acknowledgement wait (3 s, a pending
+    state), each step bounded by record 22 section 7.3's; **only a
+    teardown whose read-back proved the path closed is an isolation**,
+    and then `Remove_SubTree` follows and the result is "removed after
+    isolation". Anything else - the ICM client (no per-device teardown
+    exists), a USB4 port not known by correspondence, a sibling still
+    running or an incomplete population reading, a teardown whose
+    read-back failed, a system not qualified for the statement - is **not
+    isolated**, and the design never synthesises isolation or completion:
+    the removal is **not** made (`Remove_SubTree` of a devnode whose
+    controller may still write would free what it may still reach, the
+    9x half of Stor98's G5), the devnode stays query-removed and quiesced,
+    the request stays in place, the member is **blocked** - no `UP`
+    published on it, no re-enumeration of it (R8c) - and the result reads
+    "blocked: the drive did not stop; shut down Windows before you unplug
+    it" (exit 2 at the tool). The block ends at the unplug: the tunnel
+    down's vanished-child removal retires the devnode (the link down
+    having reset the endpoint, assumption A1), after which the member is
+    free again; or at a restart. The release notes say that on 98 SE and
+    ME under the firmware connection manager a drive that does not
+    acknowledge its stop is left stopped until it is unplugged, and that
+    the tunnel is closed after an eject under the USB4 connection manager
+    alone (decision V6).
+  - **O6**, `Remove_SubTree` failing after an accepted query, whichever
+    branch led to it: retried every 2 s on the thread's clock (each
+    attempt a call the worker makes when it is free), until 30 s after
+    the first attempt, measured also while a call is still running; then
+    the devnode kept, the running call left the worker's and its late
+    success counted as a retry's success and never as "clean", the result
+    "blocked", the member blocked as above (no `UP`, no re-enumeration),
+    under the USB4 profile with the population check passed the port's
+    tunnel torn down (`DOWN_QUIESCED` releasing what the terminal
+    instance holds), the retries going on every 2 s with the veto
+    honoured until the removal succeeds, which lifts the block; the
+    returning tunnel then gets a new generation. **Under the ICM client
+    O6 cannot be met as the interface writes it**: it asks for the tunnel
+    to be torn down after the deadline, and a firmware connection manager
+    offers no per-port teardown (section 7.4), so this driver blocks and
+    retries and tears nothing down. That is a departure from interface
+    3's O6 that `stor98cm.h` does not provide for; it is recorded here as
+    an **open interface exception** to be agreed with Stor98's maintainer
+    (an O6 clause for a connection manager without a per-port teardown,
+    or Stor98's own handling of a request left in place past O6) before
+    42-A.13 ships it, and until then the release notes say that under the
+    firmware connection manager on 98 SE and ME a removal that keeps
+    failing leaves the drive stopped until the unplug (decision V8).
+- **A unit that is not an NVMe function** (a dock's switch upstream port)
+  gets the query and the removal with no request, as record 24 section 7.1
+  made them, under the same transaction (the population check before any
+  teardown applies to it too).
+- **The result.** The thread writes `XhciCmEjectResult` (`REG_BINARY`, 32
+  bytes: the nonce; an **acceptance word** written once at acceptance and
+  never changed by later steps (so a transaction that has passed several
+  steps before the tool's first poll still reads accepted: every state
+  with the ask's nonce implies acceptance, rejections living in
+  `XhciCmEjectReply`); the step reached - accepted, queried,
+  query-refused, requested, answered, isolating, removing, removed,
+  blocked - the query's and the
+  removal's `CONFIGRET`, the request's sequence and `RemoveAck` outcome or
+  `FEh`/`FFh` for none or late, the result code, and the thread's clock at
+  the write) to the NHI's hardware key beside `XhciCmStatus`, through the
+  handles the start opened (record 24 section 3.2), at every step change
+  **and at every retry attempt** at the same step (the clock field is
+  what changes, so a retry is visible progress). **The slot belongs to
+  one transaction** from its acceptance until its result is consumed
+  (above); a transaction whose result was consumed writes the slot no
+  more, its continuing cleanup (O6's retries, a block) being visible
+  through the member's state instead - a **member-indexed blocked mask**
+  in the query answer's header (record 25 section 4.3; a new field, so a
+  new answer version as that section's rule requires), beside the
+  record's member list and independent of any router row, since under
+  the ICM client with several members no router corresponds to a member
+  and after an unplug the router row is gone while a vetoed vanished
+  child may still block its member; a change of the mask bumps the
+  content generation, and XHCITR shows it per port - and only then can another ask be accepted and own the slot;
+  rejections go to `XhciCmEjectReply`, never to the slot. A member's
+  surprise-removal work is independent of all this. The
+  tool polls it every 250 ms with these clocks: **the answer** - no result
+  with its nonce within 3 s of the ask is neither accepted nor rejected,
+  the driver may have taken the ask and be writing late or take it
+  later, so the tool deletes its ask (a deleted ask is never acted on
+  afterwards) and waits 3 s more; a result that appears continues the
+  transaction; none is the **uncertain** outcome of record 24 section 8.2
+  (exit 2: "The Thunderbolt driver did not answer. Look at the device in
+  the xHCI98 USB Tree before you unplug it."), never "No changes were
+  made" (decision V7); **the budget** - from acceptance, a terminal step
+  (query-refused, removed, blocked) is waited for up to
+  `STOR98LS9X_CM_ACK_WAIT_MS` plus `CM_NVLINK_RETRY_FOR_MS` plus a 5 s
+  margin (about 50 s), the bound the transaction's own deadlines add up
+  to, after which the tool ends with the uncertain outcome, the
+  transaction going on in the driver and XHCITR showing its state
+  afterwards (the tray's poll of the result); **progress** - inside the
+  budget, a result whose clock field has not changed for 20 s (a call
+  blocked inside the configuration manager: the driver writes at every
+  step and retry, and a pending acknowledgement is re-stamped at least
+  every 5 s) ends the tool's wait the same way, so the budget governs
+  and the progress rule only shortens it. Record 24 section 7.1's
+  outcomes map onto the result: a rejection (`XhciCmEjectReply`) is exit
+  1 with its reason and "No changes were made" (nothing was called);
+  "query-refused" takes item 2's table by its `CONFIGRET`
+  (`CR_REMOVE_VETOED` and any other refusal exit 4; `CR_INVALID_DEVNODE`,
+  `CR_NO_SUCH_DEVNODE` and `CR_CALL_NOT_IMPLEMENTED` exit 1), the one
+  mapping both records and both tools use; "removed" with its branch
+  (clean, after isolation, not clean) is item 3: the removal succeeded,
+  and what the tool then says about unplugging is record 24 section
+  5.4's **whole** assessment, made by the tool after the result as
+  record 25 section 6.2 step 7 makes it - the complete walk read again,
+  a storage-only unit, one router on the port, no USB3 tunnel, no other
+  unit running, which select its first, second or third text, and the
+  restarted-unit outcome (exit 4) where the unit runs again, which the
+  `ISOLATED_NOT_CLEAN` branch's re-enumeration makes the expected
+  reading - with "the drive did not confirm a clean stop" added for the
+  last two branches; the population check decides the teardown alone,
+  never the advice; "blocked" is
+  item 4 (exit 2). The tool deletes its ask at the end of its run as it
+  deletes the status ask; the driver clears the slot's nonce when the
+  ask is gone after a terminal step and at its next start.
+
+The tools keep the direct calls for a plain USB device (record 25 section
+6.5), which is not a unit, and refuse a unit's eject where no record is
+confirmed, as today (record 24 section 3.3); the direct route for a unit
+goes. XHCITR on 98 SE and ME, which reads the query device, writes the
+ask all the same (the driver key is every user's there), so one request
+path serves both tools (decision V1).
+
+*2. The 9x link-down statement.* The condition above needs the member's
+slot read empty within the statement's deadline after a tunnel down,
+through the emulator's SHPC bridge's DWORD Select, "a byte write of the
+capability's DWORD Select into the bridge's configuration space" (section
+6.3 item 4), for which Windows 98 SE and ME had no qualified writer. The
+writer is `PCI.VXD`'s `_PCI_Write_Config`, the dword write section 6.1.1
+qualified for the bus numbering (through its guard): the capability's
+first dword is read, the DWORD Select byte (offset 2 of the capability)
+replaced, the dword written back (the Capability Id and Next Pointer
+bytes, and the status byte at offset 3, written as read: the SHPC
+capability's register at offset 0 has only DWORD Select writable), the
+DWORD Data at offset 4 read, and the first dword restored to what was
+read, each read back - the discipline of the numbering's writes. The
+select-read-restore sequence is one operation of the member's call
+worker, which owns the selector for its duration; whether `PCI.VXD`'s own
+accesses (`_PCI_Lock_Unlock`, PCI.H line 60, exists; what it serialises is
+not documented in the headers) can interleave with it is not claimed
+either way, and the leg qualifies the writer on 98 SE and on ME
+separately. The call is made on the member's worker, never on the
+thread, as a conservative choice: every call into another VxD that may
+wait on the configuration manager is off the thread (section 6.1's rule),
+and the design claims nothing about `PCI.VXD`'s locking (decision V3).
+
+So the tunnel-down action's reading on 9x is a **statement decision** of
+the member's transaction, entered **before** the read is posted and
+**blocking the member's removal** until it is decided: it carries the
+connection's identity (the member, the entry, its generation) and the
+**absolute deadline** - under the ICM client 2 s from the tunnel down, as
+section 6.5's poll has it; under the USB4 profile record 22 section 10.3's
+allowance, 3 s from the presence anchor less the 100 ms the delivery
+keeps, whichever is sooner - and posts the slot reading to the worker.
+The result (present, empty, or unreadable, with the thread's clock at the
+read) is consumed on a later pass, validated against the identity (the
+same generation, the entry still marked for this decision) and the
+deadline (a result after it is late: logged, `CM_NVLINK_NOT_DOWN`, the
+statement withheld), and then the statement is published, as
+`CmNvlinkIcmDown` and `CmNvlinkPortDown` publish it today, or withheld
+with its reason. The USB4 profile's DOWN hook therefore completes
+**asynchronously** on 9x: `CmNvlinkPortDown` answers a new verdict,
+`PENDING`, the core's teardown goes on to its later steps, and the
+decision's completion publishes or withholds within the same allowance;
+on NT the hook stays synchronous. A worker busy inside a CONFIGMG call for
+longer than the allowance (a wizard open) answers too late, and the
+statement is withheld for that unplug with the reason counted, Stor98's
+gone deadline (MD-1) standing: honest, and the common case on an idle
+machine is a read within a tick. Only after the decision - published, and
+then acknowledged or timed out (R12 S4, the 3 s wait, a pending state); or
+withheld - does the member's vanished-child removal proceed (part 3).
+
+The qualification: 98 SE and ME join the pairs the ordering is qualified
+on (`cmNvOsQualified`) only once gate G3's ordering check has passed on
+each - the statement's marker later than the stage-2 reset and quiesce
+event in the emulator's host trace, with the disconnect injected at every
+point section 7.2's budget names and under a saturated queue - read by
+42-V.6 on each system separately (ME is not 98 SE: its port never calls a
+stop, Stor98's MD-5, so its receiver's behaviour is its own). Until a
+system's reading is in `runs/run-42.md`, the verdict there stays
+`CM_NVLINK_UNQUALIFIED` (9) as today, and the release notes say which
+systems make the statement (decision V4). The other prerequisites of the
+condition (the emulator's SHPC bridge, the single member under the ICM,
+the known correspondence under USB4) are unchanged.
+
+*3. The waits, per member, on the thread.* `CmNvlinkAwait` goes. In its
+place every member of a domain carries, in the seam, two gates with the
+reasons each is up, and nothing of another member's:
+
+- **The removal gate**: a statement decision pending (part 2) or an
+  acknowledgement wait pending (an entry behind the member marked
+  `DOWN_QUIESCED` and not yet acknowledged, superseded, timed out or found
+  without a receiver: `CmNvlinkAckStep`'s ends, stepped at every
+  servicing point). While it is up no **removal call** is made for the
+  member - the invalidation on NT, a vanished child's query and removal
+  on 9x - which is obligation 3 (the acknowledgement before the removal).
+  Tunnel-down **evidence** is never held by it or by anything: a DOWN on a
+  member with a transaction running enters its statement decision at
+  once (the member's existing transaction learns that its devnode's
+  function vanished, which retires a blocked transaction through the
+  ordinary vanished-child removal once the gate falls), so a
+  disappearance's statement is never queued behind an orderly
+  acknowledgement wait, and a blocked member's way out (the unplug, part
+  1) is never queued behind the block it is meant to end.
+- **The exposure gate**: the removal gate up, or a removal transaction
+  not yet retired (an ejected unit's, part 1, or a vanished child's
+  below), or the member blocked (part 1), or a detached block still
+  working on the member (part 0). While it is up no `UP` is published on
+  the member and no re-enumeration of it is made (R8c, S5): the up and
+  resync posts for the member queue behind it, collapsed as today, and
+  run when it falls.
+
+Everything that `CmNvlinkAwait` guards today waits on one of the two:
+
+- **The removal and re-enumeration call** of a tunnel down or a resync for
+  that member: its removal half behind the removal gate, its
+  re-enumeration half behind the exposure gate, each made by the
+  servicing point that finds its gate down.
+- **Every exposure** (`CmNvlinkExpose`: the baseline's, a tunnel up's, a
+  resync's): behind the exposure gate.
+  Today `CmNvlinkExpose` awaits the acknowledgement and then retires the
+  entries carrying a statement; the retirement stays **after** the
+  acknowledgement decision (acknowledged, timed out, no receiver), never
+  in place of it: an exposure never ends a wait as `SUPERSEDED` (obligation
+  3 is the acknowledgement before the removal, and R8b's order,
+  `DOWN_QUIESCED` acknowledged or timed out before the next `UP`, is kept).
+  On 9x the exposure gate's "retired" is a removal transaction's
+  `Remove_SubTree` returned success, read as the call's result, never a
+  request made or a request bit cleared (R8c, S5).
+- **The resume's release** of a held member (`cmReleaseHeld` for that
+  member) on NT, behind the removal gate; the failure release at DISPATCH_LEVEL
+  (`CmReenumResumeFailed`) is unchanged, as it never waited.
+- **42-A.6**: a resync, or an `UP` published again for a tunnel that
+  stayed up, keeps the entry's generation (`CmNvlinkPublishUp` never
+  increments an entry already `UP` for the same tunnel); only a new tunnel
+  increments it, and a rebuilt one publishes exactly one new `UP` after
+  the retirement its barrier waited for.
+
+A gate delays the member it belongs to and nothing else: another
+member's statement, exposure and removal run in the same pass, so no
+port's wait delays another's statement by more than one servicing
+interval, 50 ms while any wait is pending (part 0).
+
+**Vanished children** (a tunnel down's removal of functions that no longer
+answer) go through the same transaction as an ejected unit, without the
+request: the query, and on a veto a retry every 2 s (R12 S4: "a veto is
+retried every 2 s and never forced"), the removal, and the member's
+exposure gate up until every vanished child of that member is retired
+(R8c, S5: no re-enumeration and no `UP` before); today a vetoed query of a vanished
+child lets the member's re-enumeration go ahead, which this ends. A
+vanished child's removal that keeps failing is O6's without the request
+part: retried every 2 s with the member blocked, until it succeeds or the
+devnode is gone.
+
+**The worker's other duties** - a member's re-enumeration with the bus
+numbering before it (section 6.1.1), the marking window (section 7.4),
+`CONTROLLER_UNAVAILABLE`'s removal of retained children (section 5.5), and
+record 28's configuration - are each the member's worker's calls submitted
+by the thread, their windows and retries kept on the thread's clock, with
+the member's gates observed where a removal or statement is pending; the
+domain-wide requests (the prune, the loss) are posted per member.
+
+**The table's writers** (R6a, R6b, as built): the connection-manager thread
+writes the table's entries, and the worker's request and withdrawal
+(`CmNvlinkWkRequest`, `CmNvlinkWkWithdraw`) write them from the worker,
+all under the one table lock (`cmNvLock`) and inside the odd/even
+`Sequence` bracket - R6b's "one CM lock" form, which the interface permits;
+`CmNvlinkWkAnswer` only reads. With the transactions on the thread the
+request and the withdrawal become the thread's own writes; the lock form
+is kept, and nothing here needs a single-thread conversion.
+
+*Host vectors* (42-A.12, 42-A.13): two members with a statement pending on
+one and a tunnel up on the other, the up's exposure made within one pass;
+an acknowledgement arriving after the bound (late, not taken) while
+another member's removal runs; the member's transaction driven by a fake
+configuration manager through every state, with the thread's isolation
+proven, failed and never answered; a deadline that passes while a call
+runs, the late result taken as a retry's; the handoff word's transitions
+with a stale id; an eject ask with each acceptance check failing (the
+epoch, the generation, the member, the location, busy, stale) and with a
+unit that is not an NVMe function; the result's layout; the statement
+decision's identity and deadline checks, early, on time and late; a
+member's population check with a second unit running, in each branch; a
+vanished child's vetoed query retried and the exposure held; a DOWN on
+a member whose transaction is blocked (the statement decided, the
+transaction retired by the vanished-child removal); a step run from
+inside `cmPoll`'s wait and from a USB4 safe point while another member
+awaits an acknowledgement; a result read at its third step by a tool
+that polled late (accepted); a second ask while a result is unconsumed
+(busy, answered in the reply value while the slot keeps its owner); a
+detached block completing an authorised removal after the NHI's stop,
+keeping an unauthorised one, and the next start adopting the blocker
+(the devnode present: the transaction resumed; gone: cleared; a stop
+during the query whose late result is a refusal, the devnode still
+present at the next start: no repeated query, no removal, the blocker
+released); a
+removal that succeeded with a sibling running (removed, exit 0, no
+teardown) against a `FAILED` answer with a sibling running (blocked); `cmNvOsQualified` per system
+from a table the leg's reading fills; the 50 ms cadence while a wait is
+pending with no entry `UP`.
+
+*Legs* (42-V.6, on 98 SE and ME with the bundled Stor98, the emulator's
+SHPC bridge): the clean eject from `XHCIINST /eject` and from XHCITR with
+its `RemoveAck` read `CLEAN` and the result's steps shown; an eject with
+a file open (vetoed, nothing changed); an eject whose answer is late
+(Stor98's acknowledgement bound stretched by the harness) reading
+"blocked" under the ICM and "removed after isolation" under the USB4
+profile; a CONFIGMG call held past 30 s (a wizard left open) and the
+member's block and the other member's work going on; a re-plug of the
+same member during an acknowledgement wait; the unit disappearing during
+an eject; a result write failing (the qemu flavour's switch) and the tool's
+uncertain outcome; the two-port legs under the **USB4 profile with known
+correspondence** (one port under an eject or a statement's wait while the
+other plugs and unplugs, the second port's statement within one pass) and
+under the **ICM client with two members** (every statement withheld, as
+the condition says, the ejects and removals still per member); the
+surprise removal's statement under a saturated queue with G3's ordering
+check on 98 SE and on ME, each written into `runs/run-42.md` before its
+system is admitted; the acknowledgement wait measured; the USB4 profile's
+teardown after a clean eject only when the member's other units are at
+rest, and the tunnel staying up under the ICM.
+
+*Decisions* (the orchestrator's, owner to confirm): V1 the eject asked
+through a registry ask beside the status ask, not a new IOCTL, with the
+query device's epoch and content generation as the freshness token both
+tools supply; V2 the result as a second value in the hardware key, no new
+version of the status record; V3 the SHPC DWORD Select written through
+`PCI.VXD`'s dword write from the member's call worker, the statement
+decision owned by the thread with the absolute deadline, the USB4 DOWN
+hook asynchronous on 9x, no claim about `PCI.VXD`'s locking; V4 98 SE and
+ME admitted to the statement one at a time, each on its own G3 reading; V5
+one call worker per member and the transactions on the thread, R6f's one
+word per member, the 50 ms pass while a wait is pending; V6 no isolation
+is ever synthesised: where none can be made the devnode stays
+query-removed and the member blocked until the unplug, said in the release
+notes; V7 no answer to an ask is an uncertain outcome, never "nothing was
+changed"; V8 O6 under the firmware connection manager is an open
+interface exception for Stor98's maintainer, the driver blocking and
+retrying meanwhile; V9 one tool eject per domain at a time, the result
+slot owned by one accepted transaction until consumed, rejections in a
+value of their own, the acceptance word persistent, the budget governing
+the tool's wait; V10 acceptance is the ownership boundary of an ask, and
+a detached block completes only a removal already authorised, the
+retirement debt kept in a persistent member blocker a later start adopts.
+
+*Open.* Interface 3's O6 under a connection manager with no per-port
+teardown (V8), to be settled with Stor98's maintainer before 42-A.13.
+Whether four call workers per domain cost anything measurable on
+98 SE and ME (threads are cheap there, but the leg reads it); whether a
+`Query_Remove_SubTree` left accepted and never followed by `Remove_SubTree`
+(the blocked case) disturbs the configuration manager's own state on ME,
+where the port gives Stor98 no stop; how long a `Reenumerate_DevNode`
+blocks behind an open wizard on each system, which bounds how late a slot
+reading can be; XHCITR's query device on 98 SE and ME reading the result
+from the hardware key while the ask goes to the driver key (two keys, both
+every user's there).
 
 ### 7.3 What this driver never claims
 
@@ -2518,12 +3301,35 @@ reading of D10 for the owner to confirm.
    this rule changes nothing where nothing is attached. Not changed: on
    2000, and in the revision's legs on XP as well, the child is lost when
    Windows installs a bridge's driver for the first time and rebuilds its
-   stack (roadmap EJRB.1), so the first plug of a never-seen unit is not
+   stack (roadmap-usb4.md 42-0.4 and 42-A.5, formerly EJRB.1), so the
+   first plug of a never-seen unit is not
    listed. The re-plugs are listed. Windows 7 x86 listed the first plug
-   too. `cmEjectReady`
-   still reads any attached object as a stack, so on an ACPI machine it
-   depends on that bus filter leaving with the device's stack; the
-   revision's legs read it.
+   too. `cmEjectReady` reads a function as without a stack when nothing
+   is attached to its PDO, or when the only object of this driver's on
+   it is this child with nothing attached above it (`CmPortsStackless`):
+   a function Windows found no driver for (Code 28) keeps the child, and
+   any bus filter below it, on its PDO, because its stack was never built.
+   Before this rule, 7 x86 posted no eject for a unit while a Code 28
+   NVMe drive sat behind the same port (`cm.reenum.confirm` followed by
+   `cm.reenum.eject.stale` on every confirmation), where 2000 posted it. A
+   function driver or an upper filter always attaches above the child, so
+   a built stack still refuses the eject; an object of this driver's that
+   AddDevice made also counts as a stack, and a PDO with other drivers'
+   objects and no child of this one's is not read and counts as a stack.
+   An eject taken holds its member (`EjectHold`, with a reference on the
+   bridge) until the hook returns, and a start reaching an object of this
+   driver's on a PDO that member reported is refused meanwhile
+   (`CmRegStartAllowed`), so a function read stackless cannot start under
+   the teardown. Read again on 7 x86 with this rule, the same layout (a
+   chain's bridge ejected beside a Code 28 NVMe drive) still ended in
+   `cm.reenum.eject.stale`: the ejected bridge's PDO is one ACPI put its
+   bus filter on (`cm.reenum.child.under` `ACPI`, decision 2), and that
+   filter stays on the PDO after the stack above it is removed, so the
+   PDO reads as having a stack. Telling such a filter from a rebuilt stack
+   needs the top of another driver's chain read safely, which this driver
+   does not import; it is open (run-42). Under the firmware connection
+   manager nothing is torn down either way; under the USB4 profile an
+   eject on an ACPI machine leaves the tunnel up until the unplug.
 2. **The capabilities.** The child filter passes
    `IRP_MN_QUERY_CAPABILITIES` down with a completion wait and, when
    `pci.sys` succeeded it, sets `Removable` to 1 on the way up - the way
@@ -2669,7 +3475,8 @@ disable and enable of the device, or its driver installed or updated -
 because the PnP manager rebuilds the stack from the registry (service and
 registered filters) with no BusRelations query, and the child filter is
 created only when the bridge first reports the PDO; the device is offered
-again after a re-plug. **Owed:** a fix that survives a rebuild. A kernel-
+again after a re-plug. **Owed:** a fix that survives a rebuild (designed: revision 3, at the
+end of this section). A kernel-
 only one is not small: the child filter would have to be registered on the
 child devnode as a device-specific `LowerFilters` value, which lives in the
 Enum key the PnP manager owns and is written through SetupAPI or CfgMgr32
@@ -2696,10 +3503,704 @@ not it is marked. Record 24 also carries the status record this driver
 publishes for the viewer, and what the 9x worker must do after a removal
 it did not make.
 
+**Revision 3 (2026-10-18, roadmap-usb4.md task 42-0.4): the mark across a
+stack rebuild.** The owed fix above, designed and reviewed and revised;
+the code is task 42-A.5, the legs 42-V.2. The owner's decision of
+2026-10-18 (the decisions table, "Phase 42, the open choices"): the writer
+of the registry mark is a privileged NT service, not the unprivileged tray
+tool. Each item below that is not the owner's is the orchestrator's, for
+the owner to confirm (the list at the end).
+
+*What the mark is.* A device-specific `LowerFilters` value naming this
+driver's service, `xhcicm`, on the unit's own devnode - the device at the
+top of a verified tunnel port's secondary bus: the NVMe controller of an
+enclosure, or the upstream port of a dock's switch (record 24 section
+4.3's unit) - and on nothing else: never on a tunnel port, a root port or
+any other PCI device. The PnP manager reads the value when it builds the
+unit's stack from the registry (a disable and enable, a driver install or
+update, a restart with the device present) and calls this driver's
+`AddDevice` for it below the function driver, which is where the child
+filter sits when the bridge filter attached it at `BusRelations`; so the
+mark survives exactly the rebuilds that lose the kernel-attached child.
+The value is written from user mode, since the Enum key is the PnP
+manager's (the paragraph above), by a privileged writer; the tray tool
+runs as the user and never writes it.
+
+*The service.* `xhcimark`, display name "xHCI98 Thunderbolt safe-removal
+mark service", one binary per architecture, `XHCIMARK.EXE` (x86) and
+`XHCIMK64.EXE` (x64), in the package under `tools\xhcimark\`, built and
+gated as `XHCIINST` is (MSVC 6.0 and WDK 7.1's amd64 compiler, the C
+runtime static, `/SUBSYSTEM:CONSOLE,4.0`, every SetupAPI and
+configuration-manager routine looked up at run time, the import allowlist,
+`selftest.cmd`, a host suite over its pure half, `test-package.ps1`), a
+Win32 service of its own process (`SERVICE_WIN32_OWN_PROCESS`,
+`SERVICE_AUTO_START`, the `LocalSystem` account, no desktop interaction,
+`SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN`), installed on Windows 2000
+to 7 only (and 8 and 8.1 from 2026-10-19, task 42-A.21, where the
+installer installs the connection manager alone; unread there), by the
+installer, only when the Thunderbolt 3 / USB4 component
+is installed (`xhcicm.sys`). **Its executable lives in
+`%SystemRoot%\system32`** (the native directory: `system32` on x86, and
+on x64 the 64-bit binary in the 64-bit `system32`), copied there by the
+installer and registered with its quoted full path, never in the install
+directory: a program the service controller starts as `LocalSystem` must
+sit where only administrators and the system can replace it, and record
+23 section 9.6's install directory is the user's choice with no such
+guarantee (decision M8). The installer refuses to register the service
+while the copy there is not the one it staged (compared byte for byte
+after the copy), and the move of the install directory (record 23 section
+9.6) does not concern it. Never on Windows 98 SE or ME, which have no NT
+services and where section 7.4's 9x half (the worker's `DN_REMOVABLE`)
+stands as it is. The service writes the mark, records what it wrote,
+removes the mark when the unit leaves, reconciles its records against
+Windows at its start and at every poll, and does nothing else: no general
+registry write, no device start or stop but the one restart below, no
+answer to anything but the service controller.
+
+*What the driver publishes.* The query device of record 25 section 4
+(`\\.\XHCICM<n>`) gains a fourth request, `IOCTL_XHCICM_MARKS`
+(`CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA43, METHOD_BUFFERED, FILE_ANY_ACCESS)`
+= `0x0022290C`; the answer `XCMM`, version 1, laid out in `cm_query.h` as
+the others are: a header with the magic, version, size, the start epoch,
+the published-pass counter, a marks generation that the driver bumps on
+every change below, the count, the entry size and a flags word whose bit 0 says the answer is
+**incomplete** - a current PDO could not be listed; then one 64-byte
+entry per child PDO the domain has seen on an active member since its
+start). Each entry carries **observable facts, never an inference about
+what a user did**, at fixed offsets: 0 the member's bus, device and
+function (as the record packs a location); 4 the child's bus number and 8
+its address, **once known**; 12 a serial assigned at the PDO's first
+appearance; 16 flags - location known, the PDO still in the bridge's last
+snapshot, an attachment by `BusRelations` present, an attachment by
+`AddDevice` present, `Removable` answered set for this PDO, safe eject
+off for the domain; 20, 24 and 28 three words
+each holding two saturating 16-bit counts of what the attachments saw
+(the low half first): at 20 `IRP_MN_QUERY_REMOVE_DEVICE` and
+`IRP_MN_CANCEL_REMOVE_DEVICE`, at 24 `IRP_MN_SURPRISE_REMOVAL` and
+`IRP_MN_REMOVE_DEVICE` after a query-remove, at 28 `IRP_MN_REMOVE_DEVICE`
+with no query-remove since the last start and a start that failed; 32
+the departure pending for this PDO (the thread's clock at the child's
+removal after a query-remove, 0 for none, cleared when an attachment
+returns, the PDO leaves the snapshot or the eject is posted on its
+confirmation); 36 the port's connection generation captured when the
+departure was recorded (under the USB4 profile the generation of record
+22 section 7.2 for the port the member corresponds to; 0 under the ICM
+client, where no connection generation exists and the confirmation's
+check of it is skipped), valid while offset 32 is nonzero and cleared
+with it; 40 to 43 reserved, 0; 44 the thread's clock at the entry's
+last change; 48 to 63 reserved, 0. The driver names no state such as "rebuilt" or "ejected": a
+query-remove is sent for a driver update as for an eject, and a remove
+with no query-remove follows a failed start as well as a rebuild, so
+which happened is for the service to establish from Windows' current
+state (below), not for the driver to guess. The table is per domain,
+two sets a member kept apart so that neither can crowd the other out:
+`CM_SNAP_MAX` (32) **current** entries (PDOs in the bridge's last
+snapshot; a snapshot that had to be truncated sets the header's
+incomplete bit, as section 7.4 already counts a full snapshot) and 32
+**tombstones** (entries whose PDO left the snapshot), kept in the
+registration list under its lock and copied into the query device's
+extension with the rest of the answer after each pass. A tombstone is
+kept for 60 s, and longer while no poll has read a marks generation past
+its departure, up to the set's room: when the set is full the oldest
+tombstone is evicted and the header's count of tombstones dropped unseen
+is bumped (decision M9). So a quick departure is not lost between two
+polls on an ordinary day, and when it is - a stopped service, a burst of
+more than 32 departures in a minute - the answer says so, and the
+service falls back to Windows' own inventory (below) rather than to the
+answer's silence. Reading it needs no rights, as
+the query needs none (record 25 section 4.1; leg T.1).
+
+**When the child's location is read.** The `BusRelations` attachment is
+made before the PnP manager has created the child's devnode (section 7.4
+above: before the answer is completed), and a PDO may not be handed to
+the routines that need a devnode until then. So the child filter reads
+nothing of the PDO at its attachment: it reads `IoGetDeviceProperty`
+`DevicePropertyBusNumber` and `DevicePropertyAddress` when the PnP manager
+first sends it a request for that device - its `IRP_MN_START_DEVICE`
+(passed down with a completion wait, the read on the way back) or an
+`IRP_MN_QUERY_CAPABILITIES` that comes first - and publishes the location
+to the entry then (decision M10). Until then the entry says "location not
+known" and the service does nothing with it. No registry is read in the
+kernel for any of this: the design of 2026-10-18's first draft, which had
+the bridge filter look the devnode's `LowerFilters` up at the
+`BusRelations` completion, is withdrawn, both because no devnode exists
+at that point and because `IoOpenDeviceRegistryKey`'s `PLUGPLAY_REGKEY_DEVICE`
+opens the device-parameters key (record 24 section 3.2), not the devnode
+key the filter value lives in.
+
+*The child by `AddDevice` (the driver's fourth way in).* `cmAddDevice`
+(`cm_entry.c`) decides the roles by the PDO's hardware ids, and the
+classifier changes for it (`CmClassifyIds`, `cm_vals.c`): today it reads
+any `CC_0604` device as the bridge filter and any other non-empty id list
+as the NHI, which would send a unit into the NHI path. Since this
+revision the **NHI role** is decided by the whole of `xhcicm.inf`'s
+matching contract and nothing narrower: an id of section 3.3's NHI
+table, or the USB4 host class the INF also binds (`PCI\CC_0C0340`,
+which is how the emulator's `1B36:00F4` and any host with no explicit
+model line reach the driver; `CmProfileFor` keeps that class fallback
+today), the two carried as the driver's NHI table and checked against
+`xhcicm.inf` by the host suite both ways; the **bridge role** needs one
+of `xhcicmf.inf`'s model ids, carried and checked the same way, as
+record 24 section 4.2's candidate table is; and **every other PDO is
+the lower-filter child**, with no role waiting on the registration list:
+a bridge filter installed by the INF may be added and started before its
+NHI has discovered any set (section 6.2 allows it) and still publishes
+at once. A PDO whose ids are in the filter INF's table and whose value
+the service wrote - a tunnelled switch's port carrying an id the INF also
+names - is a bridge filter **and** a child: one object publishes as the
+bridge filter does and, when its location (read at its first request)
+is a unit on an active member's secondary bus, answers the child's
+capability too; bridge function and child eligibility are decided
+separately, the first by ids and the second by location (decision M15),
+which corrects section 3.2's paragraph of 2026-10-18's first draft that
+had location decide every role. `AddDevice` creates the child filter
+(role 3) and attaches it to the top of what is on the PDO
+(`IoAttachDeviceToDeviceStack`), copying the flags as `CmPortsChildAttach`
+does, and never fails for want of a role (a registered filter whose
+`AddDevice` fails fails the device's start, the Code 39 class of failure
+this revision exists to avoid; decision M7). Such a child is **passive
+until associated**: it reads its location at its first request (above)
+and reports to the registration list; it answers `Removable` in
+`IRP_MN_QUERY_CAPABILITIES` only while the list associates it with an
+active member - its bus number equal to the secondary bus of an active,
+exclusive member of a listed domain, read from the member's header by the
+seam (`tbt_topo.c`) - **and that domain's `XhciCmSafeEject` is 1**; it
+passes the request through unchanged otherwise, attached and passive, and
+the entry says so (the flags "`Removable` answered" and "safe eject
+off"). A value left on a device outside any set stays passive, logged
+and counted (`cm.reenum.child.stray`). **A child attached before it could
+be associated** - its capabilities answered before its NHI listed the set,
+at boot - stays attached and unmarked, since Windows need not ask for
+capabilities again: the entry reads "attached, `Removable` not
+answered", and the service's gated restart (below) applies to it as to
+a first plug the rebuild overtook, so that the PnP manager rebuilds the
+stack and asks again with the set listed; until then the tool-side
+fallback stands. The `AddDevice` child records the same
+pending departure on a removal after a query-remove (never an eject by
+itself, below) and withdraws on
+`IRP_MN_SURPRISE_REMOVAL` and `IRP_MN_REMOVE_DEVICE` as section 3.2's
+protocol says; its entries in the registration list are kept apart from
+the bridge filters'. Driver Verifier on the Windows 2000 SMP guest reads
+it (42-V.2).
+
+*Two children on one PDO.* A `BusRelations` attachment and an `AddDevice`
+attachment meet on one PDO only when the value already exists at a
+`BusRelations` answer that reports the PDO as new - a re-plug of a unit
+whose value was not removed (the service stopped, a departure missed) -
+since on a first plug the stack is built before the service can have
+written anything. The registration list keys attachments by PDO and keeps
+both: `Removable` set by either is idempotent; the departure is recorded once
+per PDO, when the last attachment of this driver on it leaves after a
+query-remove, and the eject follows only on the confirmation below
+(decision M4); the entry reports both attachments and the
+service sees a unit with a child on its stack, which is all it needs. No
+attempt is made to skip either attachment.
+
+*The service's loop.* Every second while any NHI answers, every ten
+seconds while none does (no `XhciCmQueryName`, or an inert driver), the
+cadence the tray tool uses (record 25 section 3.4), on a thread of its
+own, never a pended request - the query device has no cancel path, and a
+pended IRP with `IoSetCancelRoutine` and a cleanup-on-close path is new
+ground on Windows 2000 for this driver, which the design does not open for
+a once-a-second read (decision M1). It finds the NHIs as the tools do (the
+devnodes bound to `xhcicm`, each one's `XhciCmQueryName`, the answer's
+instance id checked against the devnode, record 25 section 4.2) and reads
+the query answer (the epoch, the liveness state, the active members) and
+the marks answer together. A domain is **verifiable** when its NHI devnode
+is present, started and bound to `xhcicm` and its answer is eligible
+(record 25 section 6.2's rule: the stage active, the inert and stopping
+flags clear, the liveness state ACTIVE) with the same epoch in both
+answers; a domain that is not verifiable (no answer, inert, contained,
+stopping, an epoch that changed between the two reads) is skipped for
+that poll, and nothing of its units is written or removed - a unit is
+never unmarked because its driver is momentarily not answering (decision
+M11).
+
+*The write.* For each entry of a verifiable domain whose location is
+known, whose PDO is reported, and which has at least one attachment of
+this driver or none (every reported unit, that is), the service validates
+the notice against Windows before it writes:
+
+1. the member the entry names is an active member of that answer's set
+   (the bit at offset 52 of the record, record 24 section 3.1), and a
+   devnode exists whose `CM_DRP_BUSNUMBER` and `CM_DRP_ADDRESS` equal the
+   member's location - the **verified tunnel port** of record 24 section
+   4.2, found by the same rule;
+2. the child is a child devnode of that port's devnode (`CM_Get_Child`,
+   `CM_Get_Sibling`), whose `CM_DRP_BUSNUMBER` and `CM_DRP_ADDRESS` equal
+   the entry's, present (`CM_Get_DevNode_Status` succeeds), and not
+   protected (record 24 section 4.3's rule: never an NHI or an ancestor of
+   one, never the host's own USB controller; the service carries the same
+   pure rule, from `inst_core.c`);
+3. its `CM_DRP_LOWERFILTERS` (`REG_MULTI_SZ`) is read, and `xhcicm` is
+   absent from it.
+
+Then, under the write mutex (below): **the record first** - a value named
+by the devnode's instance id under
+`HKLM\System\CurrentControlSet\Services\xhcimark\Marks`, `REG_SZ`, its data
+the member's location, the epoch and the word `writing` - then the
+`LowerFilters` value written back with `xhcicm` appended as the last string
+(`CM_Set_DevNode_Registry_PropertyA`, the whole multi-string, the other
+names kept in order; an empty or absent value becomes the one name), then
+the record's word changed to `written` (decision M12: intent recorded
+before the mutation, so a crash between the two leaves a record to
+replay). A write that fails is logged, its record left at `writing`, and
+tried again at the next poll, at most once a minute per entry after the
+first failure. A notice that fails any check is logged with the check
+that failed and nothing is written; a location two devnodes answer to
+(none is expected) writes nothing.
+
+*The first plug.* A unit Windows has never seen gets the kernel-attached
+child at its first `BusRelations` answer, its value within a poll of its
+location becoming known; then Windows installs its driver and rebuilds the
+stack. If the value landed first, the rebuild loads the child through
+`AddDevice` and the unit is listed in Safely Remove Hardware at its first
+plug; if the rebuild came first, the entry reads: the PDO reported, the
+value present, **no attachment of this driver on the stack now**; and a
+child attached before its association (above) reads attached with
+`Removable` not answered. For those two cases alone the service requests
+the documented restart of that one device, `SetupDiCallClassInstaller(DIF_PROPERTYCHANGE)` with
+`DICS_PROPCHANGE` and `DICS_FLAG_GLOBAL` on a device information set
+holding that devnode alone - the route Device Manager takes for a
+property change (SetupAPI, documented since Windows 2000; `DICS_PROPCHANGE`
+is `0x3`, `DIF_PROPERTYCHANGE` `0x12`), which stops the device through
+`IRP_MN_QUERY_REMOVE_DEVICE`, so a volume with open files or any driver of
+the subtree vetoes it and the veto stands, and starts it again from the
+registry, with the value - on these conditions, each read **after** the
+tools' eject mutex (`Global\XhciinstTbAsk`, record 25 section 6.3) has been
+taken, so no restart runs inside an eject transaction of the tools and no
+eject inside a restart, and each read fresh, never from the sample that
+made the service look:
+
+- no installation is in progress: `CMP_WaitNoPendingInstallEvents` with a
+  zero timeout answers "none" (the settle record 23 section 5.8 uses, the
+  same routine), on two reads 500 ms apart;
+- the query and marks answers read again have the same epoch and the
+  marks generation unchanged from the sample, and the entry still reads
+  as above (reported, the value present, no attachment or an attachment
+  that did not answer `Removable`);
+- the driver needs no notice of the restart, because **a child's
+  departure after a query-remove no longer posts an eject by itself**.
+  Windows sends the same query-remove and remove for a disable, a driver
+  update and the service's restart as for an eject, so nothing the child
+  sees, and no time without a rebuild (a wizard or a slow install can
+  hold a rebuild for longer than any bound), tells them apart: the
+  registration list keeps the departure **pending** for the PDO (entry
+  offset 32), and posts the eject - record 22 section 10.4's per-port
+  teardown - only on a **positive, identity-checked confirmation** that
+  the unit was ejected, dropping it when an attachment of this driver
+  returns on the PDO (a rebuild), when the PDO leaves the snapshot (an
+  unplug, whose own tunnel-down path takes over), and **on any change of
+  the port's connection** under the USB4 profile (the connection
+  generation the pending departure was recorded under differs: an
+  unplug and re-plug the connection manager saw before `BusRelations`
+  reported the PDO missing), as `cmEjectsVoid` forgets eject evidence on
+  a connection change today whatever the next snapshot shows. The
+  confirmation is a reading only user mode can make, and it has to be
+  **exclusive**: on XP, Vista and 7 a unit Windows ejected is **held for
+  eject** until it is unplugged (`CM_Get_DevNode_Status`: problem
+  `CM_PROB_HELD_FOR_EJECT`, 47, which Microsoft defines as prepared for
+  ejection and nothing else), while a disabled unit reads
+  `CM_PROB_DISABLED` and a restarting one starts again; on **Windows
+  2000** the held devnode read problem 24 (`runs/run-39.md`), which is
+  `CM_PROB_DEVICE_NOT_THERE` and which a driver whose `DriverEntry`
+  failed also produces on that system, so it is **no confirmation**
+  there - on 2000 an applet eject leaves the tunnel up until the unplug
+  (the behaviour `3.0.0.0` has under the ICM client on every eject), and
+  only a tool's own successful `CM_Request_Device_EjectA` confirms
+  itself: XHCIINST, which runs as an administrator, writes the
+  confirmation after Windows' answer, and XHCITR only when it runs
+  elevated (record 25 section 6.6's run), the unelevated tray reporting
+  the teardown unconfirmed. The service, at its poll, reads the status
+  of every unit with a pending departure and, for one held for eject on
+  XP and later, writes `XhciCmEjectConfirm` (`REG_BINARY`, 28 bytes at
+  fixed offsets: 0 and 4 the query's epoch, low and high words
+  (`CM_Q_O_EPOCH_LO`, `CM_Q_O_EPOCH_HI`); 8 the member's location; 12
+  the unit's bus number; 16 its address; 20 the entry's serial; 24 the
+  port's connection generation the entry reports) to the NHI's driver
+  key as the tools write the status ask (record 24 section 3.3); the
+  tools write the same value for their own confirmed ejects. The thread
+  reads it with the status ask, checks the epoch, the serial, the
+  connection generation and that the PDO is still reported with its
+  departure pending, posts the eject once, and clears the value. No
+  confirmation - the service stopped, Windows 2000's applet, a disabled
+  unit, a unit mid-rebuild, a unit stopped by the query-and-remove
+  fallback of record 24 section 7.2 (which Windows does not hold as
+  ejected, that section says) or one with no child of this driver to
+  leave a departure - leaves the tunnel up until the unplug, the tools
+  saying the driver has not confirmed the teardown (record 24 section
+  5.2's second line), and the release notes' fallback; a unit disabled
+  and enabled, or updated, or restarted by the service, is never read as
+  ejected whatever the rebuild takes. The tools' watch for the tunnel
+  line (record 24 section 5.2, 10 s) covers the service's poll and the
+  thread's status-ask read. This ends a defect `3.0.0.0` has: a driver update or
+  a disable and enable of a unit under the USB4 profile, whose
+  query-remove and remove today post an eject and tear its tunnel down.
+  Record 22 section 10.4's clause that the tunnel is down before the
+  user is told the device may be unplugged is **superseded for Windows
+  2000 and later** (its 9x ordering, section 7.2's 9x half, stands):
+  Windows reports the software removal first, the teardown follows on
+  the confirmation where one exists, and the tools report what they then
+  observe of the tunnel, as record 24 section 5.2 already has it for
+  their own ejects (decision M16);
+- **the unit's own devnode**, read again by a fresh `CM_Get_DevNode_Status`
+  immediately before the call, is present and `DN_STARTED` with no
+  `DN_HAS_PROBLEM` (a unit Windows holds for eject - problem 47, or 24 on
+  2000 - is not started and is left alone; so is a disabled one,
+  `CM_PROB_DISABLED`, and one still installing), its identity the one
+  the entry names (the same parent port, bus number and address) and its
+  `LowerFilters` still carrying `xhcicm`;
+- no restart has been made for this entry's serial, and `Restart` (the
+  service's `Parameters` key, default 1) is not 0.
+
+The outcome - the driver's next answer reads an attachment on the stack
+(restarted); the call fails, or `DI_NEEDREBOOT` or `DI_NEEDRESTART` is set
+in the install parameters afterwards (Windows could not stop it now: a
+veto, or a stack it would not rebuild in place); or an error - is logged
+with the instance id, and a unit that could not be restarted stays as it
+is until its next rebuild or re-plug: the tool-side fallback of record 24
+section 7.2 and record 25 section 6.6 (the query-and-remove route for a
+unit not marked removable) is kept by 42-A.5 exactly for it, and XHCITR
+shows "safe-removal mark written; takes effect at the next start of the
+device" beside such a unit (decision M3). The mutex coordinates this
+project's tools alone, not Windows' own applet; a stop the user makes
+there meanwhile is seen by the fresh reads (the device no longer started)
+or vetoes the restart, and nothing is forced.
+
+*Departures and reconciliation.* At every poll, for every record under
+`Marks` (and once at start and at every epoch change, the same pass with
+nothing skipped): the record's devnode is located (`CM_Locate_DevNodeA`
+with `CM_LOCATE_DEVNODE_PHANTOM`, which reaches a devnode that is not
+present on Windows 2000 and later). A devnode that is **not present**, or
+present but **not a child of an active member of a verifiable domain**
+(not in any marks answer as a reported unit - taken only from an answer
+whose incomplete bit is clear; an incomplete answer never shows a unit
+departed, and the devnode's own presence and parent decide - or behind a
+member no longer active), has `xhcicm` removed from its `LowerFilters` (the value deleted
+with a zero length when nothing else is in it, the rest kept in order
+otherwise) and its record deleted - a departure the tombstone announced,
+or one missed while the service was not running (a stop, a crash, a
+restart of Windows with the unit unplugged meanwhile). A devnode whose
+domain is **not verifiable** at this poll (its NHI not answering, inert,
+contained, or in a new epoch not yet read twice) is left alone and
+re-checked at the next poll: "cannot verify" is never read as "gone"
+(decision M11). A record whose devnode cannot be read is kept and logged.
+A record at `writing` is replayed: the value read, the name appended if
+absent, the record completed. Once at start, and once a day after, the
+service also makes a **full inventory**: every PCI devnode, present or
+not (`SetupDiGetClassDevs` with `DIGCF_ALLCLASSES` and without
+`DIGCF_PRESENT`, the class of each checked), whose `SPDRP_LOWERFILTERS`
+carries `xhcicm` and which has no record is a mark some earlier instance
+left unrecorded (a crash between the write and the record, a reinstall):
+it is recorded and then judged as any record is. So a value exists only
+while its unit is present behind an active member (decision M2), with the
+delay of one poll, which the text everywhere states as "within a poll",
+never as instantaneous; a re-plug is a new `BusRelations` answer, which
+the kernel attachment marks as today, and the value is written again
+within a poll. Another driver's filter in the value is never touched: the
+service edits its own name alone, as record 23 section 9.2 step 1 edits
+`UpperFilters`.
+
+*The installer* (record 23 section 9, record 26 sections 6.2 and 9.3, each
+revised by 42-A.5 and 42-A.3). The invariant the installer keeps at the
+end of **every** run, install, update or uninstall, under the write mutex
+and with the mark service stopped: **a `LowerFilters` value naming
+`xhcicm` exists only while the `xhcicm` service is registered on the
+machine**. So: when the run leaves `xhcicm` registered (an install or
+update of the Thunderbolt component, whatever its verdict for the group -
+record 23 sections 5.4 and 5.9's refusal, which leaves the group as it
+was, and failure, which leaves the old driver installed, both keep the
+service registered), the marks stay and the mark service is installed or
+updated and started; when the run leaves no `xhcicm` service (the
+uninstall; an update that removed the service and did not register it
+again; an install that found a stale `xhcicm` name on a machine with no
+such service, the hand-removed case), every such name is removed. That
+discharges the task's "after a failed upgrade" clause for each verdict
+record 23 defines, by the state the run ends in rather than by its
+verdict (decision M13). The service itself is installed (`CreateService`,
+`StartService`; advapi32, looked up at run time) on 2000 to 7 after
+`xhcicm.sys` and the filter INF, from the `system32` copy; an update stops
+it, replaces the copy (`MoveFileEx` with replace, the `.TMP` route of
+record 23 section 9.5 applied to that directory) and starts it; the
+uninstall's **step 0**, before the filter hosts of record 23 section 9.2
+step 1, is a gated phase like the others: stop the service
+(`ControlService(SERVICE_CONTROL_STOP)`, `SERVICE_STOPPED` within 30 s),
+take the write mutex, enumerate every PCI devnode present or not and read
+each `SPDRP_LOWERFILTERS` (an enumeration that does not reach its end, or
+a value that cannot be read, fails the gate), remove `xhcicm` from each
+that carries it (the other names kept), read each back, delete the `Marks`
+records, delete the service (`DeleteService`) and its `system32` copy (the
+delayed deletion when in use). A stop that times out, an incomplete
+enumeration, an unreadable value or a removal that does not read back
+**fails step 0**: the run stops before step 1 with "steps left" as the
+gated uninstall does, keeps the `Marks` records of what is unresolved,
+keeps `xhcicm`'s service and file and the mark service's registration, and
+tells the user to restart and run the uninstall again, which resumes from
+what is left; and before record 23 section 9.2's step 5 deletes the
+`xhcicm` service and step 6 its file, the installer reads the inventory
+once more and stops if any name remains (decision M14). A `LowerFilters`
+value naming a filter whose service is gone stops the device at its next
+start (Code 39), which is what every rule above exists to prevent. On 98
+SE and ME nothing of this exists.
+
+*The write mutex.* `Global\Xhci98MarkWrite`, taken by the service around
+each record-and-write and each removal, and by the installer for its
+inventory and removals (the shared mutex's security of record 25 section
+6.3: `SYNCHRONIZE` and `MUTEX_MODIFY_STATE` to everyone, full access to
+SYSTEM and the Administrators), so an installer never races a write in
+flight; the service's stop is what ends further writes.
+
+*Switches and settings.* `XhciCmSafeEject` 0 (section 8) attaches no
+child at `BusRelations`; a child the PnP manager loads through a value
+the service wrote earlier still attaches (a registered filter's
+`AddDevice` must succeed) but answers no capability, and the marks answer
+lists every unit with the flag "safe eject off" and its attachments as
+they are: the service writes nothing and removes what it recorded, so
+the loaded filter goes at the unit's next rebuild.
+The service's own `Parameters` key carries `Restart` (default 1) and
+`LogBytes` (the bound of its log, default 262144); nothing else. Neither
+is asked by the installer; record 26's "Advanced..." may show `Restart` as
+an NT-only row.
+
+*The log.* `XHCIMARK.LOG` in `%SystemRoot%\system32\LogFiles\xhci98\`
+(created by the installer with the directory's default rights, which
+admit the system and the administrators), bounded by `LogBytes` and
+rewritten from the top when full, one line per notice, check, write,
+removal, restart and its outcome, with the instance id and the location;
+the release notes ask for it with a Thunderbolt report, beside XHCITR's.
+No event log source (a message file and a registry source are more than
+the service needs).
+
+*The viewer.* XHCITR shows per unit, from the marks answer and the
+devnode's `LowerFilters`: "listed by Windows" (`Removable` read set),
+"mark written; takes effect at the next start of the device" (the value
+present, no attachment), "not marked" (no value, no attachment), and
+whether the service is running (`QueryServiceStatus`); 42-A.5's tool-side
+fallback is offered as today for a unit Windows does not list.
+
+*What changes elsewhere.* Record 24 section 7.2's and record 25 section
+6.6's "not marked removable" routes stay as the fallback. The release
+notes' line that a stop under the USB4 connection manager on NT also
+tears the PCIe tunnel down is qualified by 42-A.5: the teardown needs
+the confirmation above - the mark service running on XP and later, or
+an administrator's tool eject on 2000 - and without it the tunnel stays
+up until the unplug, the tools saying the teardown was not confirmed. The release
+notes' lines on "A device Windows does not list" and "A later release is
+to keep the mark across a rebuild" are rewritten by 42-A.5: the first
+plug, the disable and enable and the driver update keep the mark on 2000
+to 7 where the service runs; a unit whose restart Windows vetoed is listed
+after its next start. `docs/using/release-notes.md`'s report fields gain
+the service's log. Record 23 sections 3 (the build), 5.1 (the service's
+install and start in the order of operations), 9.2 (step 0 and the final
+inventory), 9.5 (the `system32` copy) and 13 are revised by 42-A.5, and
+record 26 section 12 lists them.
+
+*Legs* (42-V.2, on 2000, XP, Vista and 7, x64 included): the first plug of
+a never-seen unit listed (with the restart, and with `Restart` 0 to read
+the unlisted case and the tool's fallback), a disable and enable, a
+driver update, each keeping the unit listed; the value present while the
+unit is present and gone within a poll after an unplug, after the
+uninstall and after the service's reconciliation at a start with the unit
+unplugged; a quick unplug and re-plug between two polls (the tombstone
+read, the value rewritten); the restart vetoed by an open file and the
+unit still listed at its next plug, then a real eject made at once (its
+teardown made on the service's confirmation within a poll on XP and
+later, and on 2000 on `XHCIINST /eject`'s own confirmation, the applet's
+eject leaving the tunnel up there); the
+service's restart, a driver update whose wizard is left open for a
+minute, and a disable held for a minute then an enable, each of a unit
+under the USB4 profile, each with no eject posted and the tunnel kept;
+an applet eject with the service stopped (the tunnel up until the
+unplug, the tools' line saying the driver has not confirmed the
+teardown); an applet eject on Windows 2000 (no confirmation, the tunnel
+up) against `XHCIINST /eject` there (confirmed, torn down); a driver
+update whose new driver fails to start (problem 24 on 2000, no
+teardown); a delayed confirmation across an unplug and re-plug with the
+PCI snapshot held back (dropped on the connection change); the service ended by hand between the restart's gates and
+its call, then a real eject at once (on XP and later confirmed and torn
+down once the service runs again; on 2000 by the tool's confirmation or
+not at all); a disabled unit and a unit held for eject offered
+no restart; the restart refused while an installation is pending; the service stopped by hand and the unit still
+ejectable through the tool, and no record of its unit removed while its
+driver is stopped (the domain not verifiable); a value left with the
+service deleted by hand reading Code 39 on the unit and the installer's
+next run repairing it; a crash injected between the write and the record
+(the qemu flavour's test switch) recovered by the start inventory; the
+`system32` copy and its registration path read; Driver Verifier on the
+Windows 2000 SMP guest with the `AddDevice` child; a restart of Windows
+with the unit present and its value in place (the child attached before
+its NHI lists the set, read unmarked, then restarted by the service with
+no eject posted and no tunnel torn down, then listed); `XhciCmSafeEject`
+0 with a value in place and the service stopped (the child attached and
+passive, the unit not listed); more than 32 departures within a minute
+(the incomplete bit, the Windows inventory deciding); the dock's upstream
+port as the unit on the emulator's bridge chain, with an id the filter
+INF also names.
+
+*Decisions taken in writing this* (the orchestrator's, owner to confirm):
+M1 the service polls the query device, no pended request; M2 the value
+exists only while the unit is present behind an active member, removed
+within a poll of its departure and at the reconciliation; M3 the
+documented per-device restart on a first plug the rebuild overtook,
+veto-respecting, once per serial, gated on fresh reads under the eject
+mutex, on by default; M4 two attachments on one PDO kept and the eject
+posted once per PDO; M5 the service installed only with the Thunderbolt
+component, on 2000 to 7 only; M6 the names `xhcimark`, `XHCIMARK.EXE`,
+`XHCIMK64.EXE`; M7 a child that never fails `AddDevice`, passive until
+associated; M8 the executable in `%SystemRoot%\system32`, never in the
+install directory; M9 the driver publishes facts and keeps a departed
+PDO's entry until a poll has seen it; M10 the child's location read at
+its first request, never at the attachment; M11 a domain that cannot be
+verified neither writes nor removes; M12 the record before the write, the
+start inventory for unrecorded marks; M13 the installer's invariant by
+the run's end state, not its verdict; M14 step 0 a gated phase with the
+final inventory before `xhcicm`'s service and file go; M15 the roles by
+id tables (the NHI's, the filter INF's) and the child by location,
+separately, one object serving both where they meet; M16 a child's departure
+after a query-remove posts no eject by itself: the eject is posted on an
+identity-checked confirmation (`XhciCmEjectConfirm`, bound to the epoch,
+the serial and the connection generation) - the service's reading of
+problem 47 on XP and later, or an administrator tool's own successful
+eject on any NT target - dropped on a rebuild, an unplug or a connection
+change, and with no confirmation (Windows 2000's applet among the
+cases) the tunnel stays up until the unplug; record 22 section 10.4's NT
+ordering clause superseded.
+
+*Open.* How long after the driver install a first plug's rebuild comes on
+each target, which decides how often the restart is needed at all;
+whether Windows 2000's `DICS_PROPCHANGE` restarts a PCI device with a built
+stack as XP's does, read by 42-V.2; whether `CMP_WaitNoPendingInstallEvents`
+is exported on every NT target the service runs on (record 23 section 5.8
+read it on 2000; the service treats a missing export as "cannot tell" and
+makes no restart).
+
+*As built (task 42-A.5, 2026-10-19, branch `p42-ejrb`).* The code follows
+the revision with these readings of it, each reviewed and revised with
+the code (`runs/run-42.md`, "42-A.5"):
+
+- **Roles.** `CmRoleDecide` (`cm_vals.c`) gives the NHI role to an id of
+  the NHI table or the USB4 host class (`CmProfileFor` not unknown) and
+  nothing wider, so an unlisted Intel NHI bound by hand for `XhciCmMode` 2
+  is a passive child now; the bridge role to a class-0604 id of
+  `xhcicmf.inf`'s models (`CmPortsFilterId`, held to the INF both ways by
+  `test_cm_ports`); every other PDO, an unreadable id list included, to the
+  `AddDevice` child (`CmChildAddDevice`), which answers success even when
+  it cannot attach. A bridge the filter INF names whose value the service
+  wrote is called twice; the second call finds the first object (a bridge
+  filter of this driver on the stack) and attaches nothing, so one object
+  serves both (M15).
+- **The location** is read at the start's way back (`CmRegAttLocate`) and
+  at a capability request's way back from the answer's own `Address` and
+  `IoGetDeviceProperty`'s bus number (`CmRegAttLocateCaps`), never while
+  the object is itself asking: `DevicePropertyAddress` is answered by an
+  `IRP_MN_QUERY_CAPABILITIES` sent down the same stack, and the first
+  build's capability handler, which asked for it, overflowed the kernel
+  stack at boot on Windows 2000 (bug check 0x7F, read in the 42-V.2 leg).
+- **Association.** An `AddDevice` child (or a bridge filter at a unit's
+  place) answers `Removable` while its bus number equals the secondary bus
+  the thread last read from an active, exclusive member's header (at the
+  discovery and after each tunnel action), the PDO has a current entry
+  in that domain's table, and that domain's `XhciCmSafeEject` is 1.
+- **The table** keeps each member's 32 current entries and 32 tombstones
+  apart (`CM_QM_MAX_ENTRIES` 256, the answer at most 16,448 bytes); an
+  eviction moves the generation on; the query device answers
+  `STATUS_DEVICE_NOT_READY` before the first pass has built one.
+- **The confirmation** is read with the status ask on NT only (the driver
+  key opened with `KEY_SET_VALUE` there for it) and written empty after the
+  check (`ZwSetValueKey` with no data, `cm_statos.c`, the file the
+  allowlists admit for it). Writers take the tools' eject mutex around
+  their check of an empty value and their write. Under the USB4 profile
+  the thread drops a member's pending departures when that member's
+  connection generation (`CmNhiMemberGen`) changes.
+- **The service's reconciliation** judges a record by its owning domain
+  (the one whose answer lists the devnode's parent, or the record's member
+  for an absent devnode) and removes nothing while that domain cannot be
+  verified; with no owner listed, only when every NHI is verifiable and
+  discovery is complete; a failed lookup or an unreadable location is never
+  an absence; an inactive member or safe eject off removes the mark even
+  from an incomplete answer. A pending departure does not hold the first
+  plug's restart back; the unit's fresh status (started, no problem) does.
+  An attempt's record (restart, confirmation) is kept until there is
+  evidence that its serial is gone. The restart itself is once per serial
+  until the unit is seen listed after it (the mark present and an
+  attachment that answered `Removable`); that re-arms one later gated
+  restart, because Windows' driver installation deletes a device's own
+  `LowerFilters` value (read on XP in 42-V.2: a driver update of a marked,
+  listed unit left it unlisted, the value written again after the
+  install). A restart Windows vetoed leaves the unit unlisted and is never
+  repeated.
+- **The CriticalDeviceDatabase** (read on Windows 2000 SP4 on 2026-10-19,
+  the release matrix, then on XP and 7 x86; roadmap-usb4 42-A.24): when
+  Windows installs a driver for a boot-critical class - a PCI-to-PCI bridge (`machine.inf`), a mass-storage
+  controller (Stor98 on an NVMe) - it copies the device's own filter values
+  into that class's entry under
+  `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase`
+  (`pci#cc_0604`, `pci#cc_010802`), and every device of that class Windows
+  finds afterwards gets them before any INF runs. So a mark written on a
+  unit before its install reached every later bridge and NVMe controller,
+  recorded nowhere: against "never on another PCI device", and after an
+  uninstall a missing filter on any new one (Code 39; on a boot disk, no
+  boot). 2000 makes the copy at a marked unit's first install, through
+  its Found New Hardware install of Stor98 on an NVMe drive as well (so
+  every NVMe drive after the first came up with an unrecorded mark); XP
+  and 7 x86 made it when a marked bridge's driver was installed again (a
+  forced `machine.inf` update), and XP made none for a Stor98 update over
+  a marked NVMe drive. So the copy is possible on every system the service
+  runs on. The service stays on 2000 to 7, where the matrix's tests
+  without the mark found it needed: on 2000 for the first plug, on Vista
+  and 7 (x86 and x64) for a stack rebuilt by a disable and enable or a
+  driver update (the installer puts it on 8 and 8.1 too, for the
+  connection manager alone: `inst_mk_system`). The service therefore takes
+  `xhcicm` out of every entry's `LowerFilters` at every poll (the other
+  names kept, the value deleted when nothing else is left), and runs its
+  inventory at once when it took one out and every minute besides; an
+  unrecorded device-level mark the inventory finds is recorded only to be
+  judged, kept on a unit behind an active member of a verifiable domain and
+  removed from any other device. The `UpperFilters` the filter INF writes
+  there for a tunnel port's id are its own and stay while it is installed;
+  the uninstall's step 0 (record 23 section 9.2) takes both kinds out,
+  from every entry and not only those the filter INF names, before it
+  takes the devices' values out and verifies both again, so an uninstall
+  cleans a machine that ran a 3.1.0.0 test build whatever is installed;
+  so does any install or update run that ends with no `xhcicm` service
+  (`mk_end_of_run`), and the new service's first poll does the
+  `LowerFilters` part. `XHCICLN` only lists such values, with `xhcicm` not
+  installed, and points at that uninstall: a second writer could not be
+  serialised with the installer. Read on 2000 in the leg of 42-A.24: after
+  a plug and install the database held only the filter INF's
+  `UpperFilters`; a never-seen chain and a second enclosure on the other
+  tunnel port of a two-port USB4 host came up with recorded marks only,
+  the copy 2000's Stor98 install made for the second drive taken out at
+  the next poll; after the uninstall nothing under `Enum\PCI` or the
+  database named `xhcicm`, and a new bridge, an NVMe drive behind it and
+  another on bus 0 started (Code 0).
+- **Safe eject off** (the owner, 2026-10-19): the service follows
+  `XhciCmSafeEject`. The installer reads the value in force at the end of
+  each run (the machine-wide value, else each `xhcicm` device's own,
+  else 1): with 0 it does not install the service, and removes one that
+  is installed with every mark and the database's `LowerFilters` copies,
+  as the uninstall's step 0 does, the filter INF's `UpperFilters` copies
+  staying with `xhcicm`; a later `/set XhciCmSafeEject=1` installs it
+  again (record 23 section 5.1 step 12). The setting's note in the
+  installer says so. The service's own reading of a domain's safe eject
+  0 (no new mark, a mark there removed) stays as it was, for the time
+  before the installer's run.
+- **Hand registration.** `XHCIMARK -register` and `-unregister` register
+  and delete the service from `system32` for a test guest before the
+  installer's hooks exist; the installer does it in a release.
+
 ## 8. Registry values, counters, the log and the snapshot
 
 Values, each `REG_DWORD` unless said, each written by every install path at
-its default under the don't-overwrite flag, each read once at start:
+its default under the don't-overwrite flag, each read once at start. From
+`3.1.0.0` (roadmap-usb4 42-A.17; owner, 2026-10-18) every one is read first
+from the machine-wide key `HKLM\System\CurrentControlSet\Services\USB`,
+which `xhci98.sys` reads too, and from the NHI's driver key only when it is
+not there in any type: a machine-wide value wins when present, one of
+another type standing as unreadable with the default, and the machine-wide
+key is read even when the driver key cannot be opened (`cm_reg.c`
+`cmQuery`; the decision is `..\xhci_regsrc.c`'s `XhciRegPick`, design
+record 13 section 5.5). The INFs still write only the driver key:
 
 | Value | Default | Meaning |
 |---|---|---|
@@ -2707,8 +4208,10 @@ its default under the don't-overwrite flag, each read once at start:
 | `XhciCmApprove` | 1 | section 5.4; 0 and 1 only |
 | `XhciCmReenum` | 1 | 0 disables every re-enumeration call (section 6), for a machine where CONFIGMG or the filter misbehaves; the ICM client still runs |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | under the NHI's own device key, so per domain: a comma-separated list of `bb:dd.f` bridges that replaces section 6.3's discovery as the domain's whole tunnel-port set; not written by the INFs (absence is meaningful), and named in the README for machines whose tunnel ports no source lists |
+| `XhciCmNoIrqStart` | 1 (not written by the INFs) | design record 28 section 7, Windows 98 SE and ME only: 1 starts an NVMe function below a tunnel port whose interrupt cannot be routed with no interrupt, for a bound Stor98 0.4.0.0 or later that polls (record 28 section 4); 0 leaves it at its problem code. Read where `XhciCmBridgeNumbering` is read; absent reads as 1; any value but 0 and 1 is refused and 1 stands. Ignored on NT |
 | `XhciCmBridgeNumbering` | 1 (not written by the INFs) | section 6.1.1, Windows 98 SE and ME only: 1 gives the bridges a tunnel brings up below a tunnel port their bus numbers and memory windows before the CONFIGMG re-enumeration; 0 turns that off (a hot-added bridge is then left as it came up: Code 29 on the P14s until a restart). Absent reads as 1; any value but 0 and 1 is refused and 1 stands. Ignored on NT |
 | `XhciCmSafeEject` | 1 | section 7.4: 1 marks the devices behind an active tunnel bridge removable (the NT child filters, and the 9x flag through `Change_DevNode_Status`); 0 marks nothing. Absent reads as 1, as written by the INFs. Read by the NHI at start and handed to the bridge filters with the active mark |
+| `XhciCmNoIrqStart` | 1 (not written by the INFs) | design record 28, Windows 98 SE and ME only, read from `Services\USB` first and then the NHI's driver key (task 42-A.17): 1 gives an NVMe function bound to Stor98 0.4.0.0 or later, whose interrupt pin has no provable route, a second logical configuration without the interrupt, so that it starts and Stor98 polls; 0 leaves it as `PCI.VXD` made it. Absent reads as 1; any other value is refused and 1 stands. Ignored on NT |
 | `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000, and held to at most 250 while any entry of the `nvme98` link-state table reads `UP` (section 7.2) |
 | `XhciCmCmdTimeoutMs` | 5000 | the ordinary ICM command timeout (section 5.5), held to 1000 to 60000, retries 3; the TR and ICL `driver ready` timeouts and tries of section 1.4.4 take precedence for that command |
 | `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
@@ -2731,8 +4234,10 @@ events by code; approvals sent, succeeded, failed; tunnel ups and downs;
 re-enumerations run, skipped (and why), and their `CONFIGRET` or status;
 mailbox commands and their outcomes; idle polls; malformed and unmatched
 frames (section 1.4.6); child filters attached, skipped and refused (section
-7.4). On 98 SE and ME the bus numbering's last attempt is also written to
-the registry as `XhciCmBridgeDiag` (section 6.1.1), in every flavour.
+7.4), and since its revision 3 those created by `AddDevice`, the stray and
+the doubled ones. On 98 SE and ME the bus numbering's last attempt is also written to
+the registry as `XhciCmBridgeDiag` (section 6.1.1), and design record 28's as
+`XhciCmNoIrqDiag`, in every flavour.
 
 The log is the pure ring of `xhci_log.c`, compiled in by path: producers
 record from the thread, and the ring is emitted at stop from the thread at

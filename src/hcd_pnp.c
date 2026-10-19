@@ -14,6 +14,7 @@
  */
 
 #include "hcd.h"
+#include "xhci_hw.h"
 #include "xhci_dbg.h"
 
 static NTSTATUS NTAPI hcdSignalOnComplete(PDEVICE_OBJECT DeviceObject,
@@ -95,13 +96,12 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
     /*
      * Admission closes first, then what holds the outstanding-I/O count is
      * waited out, and only then is the controller stopped and its resources
-     * released (Codex review of 26-A.2, round 1, finding 4). What holds it:
-     * every IRP while it is inside this driver's dispatch, and the D0 and
-     * system SET_POWER IRPs - which suspend or resume the controller - until
-     * they complete. An IRP this driver only forwards releases the count when
-     * the lower driver's dispatch returns, and touches nothing of the
-     * controller's after it is forwarded (round 2, note 6). The bias
-     * AddDevice set is dropped here.
+     * released (task 26-A.2). What holds it: every IRP while it is inside
+     * this driver's dispatch, and the D0 and system SET_POWER IRPs - which
+     * suspend or resume the controller - until they complete. An IRP this
+     * driver only forwards releases the count when the lower driver's
+     * dispatch returns, and touches nothing of the controller's after it is
+     * forwarded. The bias AddDevice set is dropped here.
      */
     hc->Common.PnpState = HCD_PNP_REMOVED;
     HcdIoLeave(hc);
@@ -136,6 +136,14 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
 
     stack = IoGetCurrentIrpStackLocation(irp);
     XHCI_DBG_VALUE("hcd: controller PnP minor", stack->MinorFunction);
+    /* Roadmap-usb4 42-A.16: the controller's stop, query-remove, remove,
+     * cancel and surprise removal in the shipping log, the minor as the
+     * value, before the IRP is handled. */
+    if ((stack->MinorFunction != IRP_MN_START_DEVICE &&
+         stack->MinorFunction <= IRP_MN_CANCEL_STOP_DEVICE) ||
+        stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) {
+        XhciLogNote(&hc->Hc, "pnp.hc", stack->MinorFunction);
+    }
 
     if (stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
         return hcdRemove(hc, irp);

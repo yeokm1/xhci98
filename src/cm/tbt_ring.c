@@ -602,6 +602,27 @@ VOID TbtRingStop(PTBT_RING ring)
     tbtRingVerifyStopped(ring);
 }
 
+BOOLEAN TbtRingStopVerified(PTBT_RING ring)
+{
+    if (ring->Host == NULL) {
+        return FALSE;
+    }
+    ring->Running = FALSE;
+    ring->DmaMayRun = TRUE;
+    TBT_WR(ring, TBT_TX_CTRL(0), 0);
+    TBT_WR(ring, TBT_RX_CTRL(0), 0);
+    TBT_WR(ring, TBT_TX_RING(0) + TBT_RING_BASE_LO, 0);
+    TBT_WR(ring, TBT_TX_RING(0) + TBT_RING_BASE_HI, 0);
+    TBT_WR(ring, TBT_TX_RING(0) + TBT_RING_SIZE_REG, 0);
+    TBT_WR(ring, TBT_TX_RING(0) + TBT_RING_INDEX, 0);
+    TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_BASE_LO, 0);
+    TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_BASE_HI, 0);
+    TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_SIZE_REG, 0);
+    TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, 0);
+    tbtRingVerifyStopped(ring);
+    return (BOOLEAN)!ring->DmaMayRun;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Transmit, Spec 12.3                                                    */
 /* ---------------------------------------------------------------------- */

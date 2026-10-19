@@ -4,9 +4,9 @@ xHCI98 is a USB host controller driver (HCD) for xHCI (USB 3.x) controllers on W
 
 Experimental support for USB4 and Thunderbolt 3/4 is also included.
 
-It replaces Windows' own USB port and hub drivers, so it is not limited to USB 2.0. It drives:
+Supported:
 
-- SuperSpeed (USB 3.x) devices and hubs
+- SuperSpeed (USB 3.2 Gen 1, 5 Gbit/s) devices and hubs, and SuperSpeedPlus (USB 3.2 Gen 2, Gen 1x2 and Gen 2x2, 10 and 20 Gbit/s) ones
 - USB 2.0 and 1.1 (High, Full and Low Speed) devices and hubs
 - UAS (USB Attached SCSI) storage, through a second driver, `xhciuas.sys`
 - Thunderbolt 3 and USB4 docks and NVMe enclosures through a third driver, `xhcicm.sys`
@@ -15,17 +15,23 @@ It is built to Intel's xHCI specification and tested mainly on Intel machines. O
 
 This is a solo human's project with AI assistance, so bugs are not unexpected. Please [report them](https://github.com/yeokm1/xhci98/issues/new/choose).
 
-<img src="images/xhci98-usb-devices.jpg" width="800">
+**Contents:** [Motivation](#motivation) - [SuperSpeed and UAS](#superspeed-and-uas) - [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4) - [The xHCI98 USB Tree](#the-xhci98-usb-tree) - [Installation Steps](#installation-steps) ([SETUP.EXE](#install-with-setupexe), [by hand](#install-by-hand)) - [Tuning](#tuning) - [What is tested](#what-is-tested-and-what-is-not) - [The package](#the-package) - [Reporting a bug](#reporting-a-bug) - [Known limitations](#known-limitationsissues) - [Building](#toolchain-and-building) - [Repository Layout](#repository-layout) - [Documentation](#documentation) - [AI usage](#ai-usage) - [References](#references) - [Licensing](#licensing-and-provenance)
 
-My 2020 ThinkPad P14s Gen 1 (Comet Lake xHCI, no EHCI) on Windows 98 SE, with the 1.x driver: a 7-port hub, USB Ethernet, USB Audio, a USB-to-SATA bridge, two flash drives and a mouse, all on the xHCI controller.
+<img src="images/xhci98-p14s-superspeed-setup.jpg" width="800">
+
+My 2020 ThinkPad P14s Gen 1 on Windows 98 SE with a USB 3.0 hub, two UAS drives, USB Ethernet, USB Audio and a mouse. All run on the xHCI controller, the drives at SuperSpeed.
 
 <img src="images/xhci98-tb3-nvme-win7.jpg" width="800">
 
-CrystalDiskMark sequential on 1151 MB/s read and 1013 MB/s write on Windows 7 with an ORICO USB4 NVMe enclosure on its Thunderbolt 3 port through `xhcicm.sys` and [Stor98](https://github.com/yeokm1/stor98)
+CrystalDiskMark sequential on 1151 MB/s read and 1013 MB/s write on Windows 7 with an ORICO USB4 NVMe enclosure on its Thunderbolt 3 port through `xhcicm.sys` and [Stor98](src/stor98/)
 
 <img src="images/xhci98-tb3-nvme-98se.jpg" width="800">
 
 The same enclosure on Windows 98 SE with the same drivers: CrystalDiskMark sequential about 210 MB/s read and 256 MB/s write. Windows 98's own storage stack, not the Thunderbolt link, is the bottleneck here.
+
+<img src="images/xhci98-xhcitr-and-devmgr.png" width="800">
+
+The xHCI98 USB Tree and Device Manager on Windows 98 SE, with an ASMedia USB4 NVMe enclosure on a USB4 host. Emulated hardware in QEMU.
 
 - Video by [Omores](https://www.youtube.com/@O_mores) featuring this driver in its earlier USB 2.0 days:
 
@@ -35,13 +41,6 @@ The same enclosure on Windows 98 SE with the same drivers: CrystalDiskMark seque
 - Blog post xHCI98v1: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driver/
 - Blog post xHCI98v2 v3: https://yeokhengmeng.com/2026/10/xhci98-usb3-usb4/
 
-* Related projects: 
-  * Stor98 NVME driver: https://github.com/yeokm1/stor98
-  * usb4-emu qemu-port: https://github.com/yeokm1/usb4-emu
-
-## Contents
-
-[Motivation](#motivation) - [SuperSpeed and UAS](#superspeed-and-uas) - [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4) - [The xHCI98 USB Tree](#the-xhci98-usb-tree) - [Installation Steps](#installation-steps) - [Tuning](#tuning) - [What is tested](#what-is-tested-and-what-is-not) - [Known limitations](#known-limitationsissues) - [Building](#toolchain-and-building) - [Repository Layout](#repository-layout) - [Documentation](#documentation) - [AI usage](#ai-usage) - [References](#references) - [Licensing](#licensing-and-provenance)
 
 ## Motivation
 
@@ -81,10 +80,8 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 - Set the Thunderbolt security level to **User Authorization** or **No Security**. Secure Connect, DisplayPort-only and USB-only are not supported.
 - Pre-boot support (boot from Thunderbolt) may be on or off. When on, a device attached at power-on is connected by the BIOS and keeps working under the driver.
 
-### Installing, approving and removing
+### Approving and removing
 
-- **Install:** run `INSTALL.BAT` and answer Y to "Install Thunderbolt 3 / USB4 support?" (see [Install with INSTALL.BAT](#install-with-installbat)). On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`nt\xhcicmf.inf`), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when asked: on Windows 2000 the first install of the filter needs that restart before the controller is used.
-- **Windows 98 SE and ME:** `INSTALL.BAT` prints the remaining steps: update the controller's entry (an unknown PCI device or PCI System Peripheral) from the driver directory. No filter is needed.
 - **Names:** the controller shows under the names in the table above. On Windows 2000 to 7 its PCI ports show as "xHCI98 Thunderbolt PCI Bridge" or "xHCI98 USB4 PCI Bridge": still Windows' own PCI bridges, with the filter on them.
 - **Approval:** by default (`XhciCmApprove` `1`) every device plugged into the port is approved at once. **A device with a PCI Express tunnel can read and write all of the machine's memory**, and these systems cannot fence it off. Where people you do not trust can reach the port, set `XhciCmApprove` to `0`: then only devices the BIOS connected at power-on work. Nothing is remembered: a re-plugged device is approved again by the same rule.
 
@@ -94,20 +91,21 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 |---|---|
 | 2000 | Stop it in "Unplug or Eject Hardware", then unplug. Without the stop, Windows 2000 shows "Unsafe Removal of Device". |
 | XP, Vista, 7 | Stop it in "Safely Remove Hardware", then unplug. |
-| 98 SE, ME | No such dialog: use the [xHCI98 USB Tree](#the-xhci98-usb-tree) or `INSTALL /eject`. Until you unplug, Device Manager's Refresh can start the device again. |
+| 98 SE, ME | No such dialog: use the [xHCI98 USB Tree](#the-xhci98-usb-tree). Until you unplug, Device Manager's Refresh can start the device again. |
 
 - A **dock** is listed under a generic PCI bridge name (its own switch); stopping it stops everything in the dock.
-- A **device missing from Windows' list** (its first plug, or after a disable and enable or a driver update): the USB Tree and `INSTALL /eject` stop it when run as an administrator. Without one, close every program using it, unplug it and plug it in once more; from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
-- `INSTALL /devices` lists the connected devices (name, generation, approval, connections) and the Windows devices behind each. `INSTALL /eject` asks which one, asks Windows to stop it (refused, with nothing changed, while a program has a file open on it), and says "You can now unplug the device." For scripts: `INSTALL /eject 2`, or `INSTALL /eject id=<instance id> /yes`.
-- These commands need administrator permissions on Win 2000+.
+- A **device missing from Windows' list** (its first plug, or after a disable and enable or a driver update): the USB Tree stops it when run as an administrator. Without one, close every program using it, unplug it and plug it in once more; from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
+- For scripts, the console tool lists the connected devices and stops one; `tools\xhciinst\readme.txt` is the reference.
 
 ### NVMe drives
 
-An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **[Stor98](https://github.com/yeokm1/stor98)**, a separate project, is that driver for Windows 98 SE to 7: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive.
+An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **[Stor98](src/stor98/)**, built with this package at the same version, is that driver for Windows 98 SE to 7: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive.
+
+**Stor98 is only for hot-pluggable NVMe drives behind a Thunderbolt or USB4 port. Do not use it for internal NVMe drives.**
 
 - The package carries Stor98 in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). It reads `xhcicm.sys`'s link-state channel on every system, 98 SE to 7.
 - Stor98's settings, install steps and limits are in its own readme, `stor98-readme.txt` beside it. The release notes have [the detail](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).
-- `INSTALL.BAT` does not install it. When the NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
+- `SETUP.EXE` installs it with the Thunderbolt 3 / USB4 support (its box under that one, ticked with it), only on drives behind a Thunderbolt or USB4 tunnel, and updates an earlier one, Stor98 `0.4.0.0` included. Otherwise, when a tunnel drive's NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
 
 ### Things to know
 
@@ -124,6 +122,7 @@ An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **
 - **Safely Remove:** left-click the icon, pick the device and unplug when told. Works for USB storage on 98 SE and ME too.
 - **Details:** each item's speed, port, IDs, driver, Device Manager status, resources and PCI configuration. File > Save Report writes it all to a text file for a bug report.
 - **Driver log:** each controller has a "Driver log" item, included in Save Report. View > Logging level... sets either driver's level (default 2, `0` for off; takes effect after a restart).
+- **Snapshot:** Save Report ends with the driver's snapshot (its device report and decoded state). File > Save Snapshot..., `XHCITR /snapshot`, `/dump` and `/probe` write the snapshot's files themselves, for when a maintainer asks for them.
 
 Details: [the release notes' USB Tree section](docs/using/release-notes.md#the-xhci98-usb-tree).
 
@@ -155,52 +154,26 @@ The read-only quick scan answers in one line. The `xhci` run exercises the contr
 
 XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
-### Reporting a bug
+### Install with SETUP.EXE
 
-Open a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose) and attach:
+There are two ways to install: `SETUP.EXE`, below, or Device Manager by hand ([Install by hand](#install-by-hand)), which still works and remains supported.
 
-- **The DOS report:** run `QUALREP.BAT` from real DOS in `TOOLS\XHCIQUAL\` and attach the `.LOG` it names. It is read-only (`XHCIQUAL --probe-only --no-page --log-stamp`) and never overwrites an earlier log. If a maintainer asks for the full run, `XHCIQUAL --no-page --log FULL.LOG` **takes over the controller and resets it and its ports**: use a PS/2 keyboard, and do not write the log to a drive on that controller.
-- **The driver's report:** in `TOOLS\XHCISNAP\` run `SNAPON.BAT`, restart Windows, make the problem happen, run `SNAPGET.BAT`, and attach the `.DEV` and `.TXT` files it names; `SNAPOFF.BAT` turns logging off again. On Vista and 7, Run as administrator.
-- **An install problem:** `XHCIINST.LOG` from the root of the system drive.
+1. Unzip the whole package.
+2. Double-click `SETUP.EXE` in its top directory. On 2000 and XP, run it as an administrator; on Vista and 7, answer Yes when Windows asks.
+3. Go through the window's pages: what it found, the components, the driver's options and the tools' directory (`C:\XHCI98` by default). Nothing changes until you click Install.
 
-### The package
-
-Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
-
-| Path | Contents |
-|---|---|
-| `release-x86\`, `release-x64\` | The drivers to install (below) |
-| `debug-x86\`, `debug-x64\` | The same drivers built for troubleshooting; install only if asked |
-| `INSTALL.BAT`, `tools\xhciinst\` | The installer and the program it runs (`XHCIINST.EXE`, `XHCIIN64.EXE`) |
-| `tools\xhcitr\` | The xHCI98 USB Tree |
-| `tools\xhciqual\` | DOS: `XHCIQUAL.EXE` and `QUALREP.BAT` |
-| `tools\xhcisnap\` | `XHCISNAP.EXE` and its `SNAP*.BAT` files, the driver's log reader (to be deprecated in favour of the USB Tree) |
-| `tools\portsw\` | `portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`: the Intel port switchover |
-| `tools\silent\` | 98 SE and ME: the silent install's list and switch |
-| `tools\xhcicln\` | `XHCICLN.EXE`, `XHCICL64.EXE`: optionally lists, and on 2000 to 7 removes, old `XHCI98\` entries left by an update from `2.3.x` or earlier; nothing needs it |
-| `readme.txt` | The release notes in plain text |
-
-Each driver directory holds:
-
-- `xhci98.sys`/`.inf` (controller), `xhciuas.sys`/`.inf` (UAS storage), `xhcicm.sys`/`.inf` (Thunderbolt and USB4; its PCI-port filter for 2000 to 7 in `nt\`)
-- `xhcihlpr.sys` (32-bit only): a helper 32-bit 2000, XP, Vista and 7 use for a finer timer while polling and, on Vista and 7, a message-signalled interrupt. 98 SE and ME ignore it.
-- `txtsetup.oem`: for F6 during Windows 2000 or XP Setup
-- `xhci98-test.cer` (64-bit only): the public half of the x64 drivers' test certificate; no need to import it
-- `stor98*` files (`release-` only): the bundled NVMe driver (see [NVMe drives](#nvme-drives))
-
-### Install with INSTALL.BAT
-
-INSTALL.BAT is beta in 3.0.0.0: if it fails or you prefer, install through Device Manager as before ([Install by hand](#install-by-hand)).
-
-Unzip the whole package and run `INSTALL.BAT` from its top directory: double-click it on 98 SE and ME; run it as an administrator on 2000 and XP; Run as administrator on Vista and 7. It shows its plan, asks about a few options ("Enter for [x]" says what Enter keeps) and the tools' install directory (`C:\XHCI98`, or `INSTALL /to <path>`), then asks once before it changes anything.
+To uninstall, use Remove in Add/Remove Programs (Programs and Features on Vista and 7).
 
 - **Windows 2000 to 7:** installs or updates every driver on the devices present, controller first, and stages the package for devices plugged in later. It handles Windows 2000's Have Disk, the root hub's update and Vista and 7's same-`DriverVer` trap. Answer Windows' unsigned-driver questions.
-- **Windows 98 SE and ME:** copies the package into the install directory, adds it to the hardware wizards' search path, prints the Device Manager steps left for each device, and offers to open Device Manager. Run it again after the restart; it then also offers the silent install (off by default).
-- **"Install Thunderbolt 3 / USB4 support?":** Enter answers Y when a controller is found, N when none is. Some laptops show the controller only while a device is plugged in or with a BIOS setting, so answer Y if yours has the port (`INSTALL /thunderbolt` skips the question). N leaves an installed Thunderbolt driver as it is.
-- **At the end:** "Changes were made. Please restart Windows now." if it changed anything. If it stopped with steps left for you (a Found New Hardware window, for instance), do them and run it again. It never runs `XHCICLN`.
-- `INSTALL /list` shows the plan and changes nothing. `INSTALL /uninstall` removes the drivers after a warning and typing REMOVE. Every run but `/list` writes `XHCIINST.LOG` at the root of the system drive. `tools\xhciinst\readme.txt` lists the switches and exit codes.
+- **Windows 98 SE and ME:** copies the package into the install directory, adds it to the hardware wizards' search path, and installs each device's driver through Windows' own device installer; a device it cannot install gets its Device Manager steps on a page of their own.
+- **Thunderbolt 3 / USB4 support (experimental)** (the Components page): never ticked unless you tick it, whether or not a controller is found; the line under it says whether one was found. Some laptops show the controller only while a device is plugged in or with a BIOS setting, so tick it if yours has the port. Ticking it ticks the bundled Stor98 under it too (untick that to leave Stor98 out). Unticked leaves an installed Thunderbolt driver as it is. If the Summary page says "Thunderbolt 3 and USB4 will be turned off (XhciCmMode 0)", go back and check the Thunderbolt settings.
+  - On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`xhcicmf.inf`, in `nt\` in the 32-bit package), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. On Windows 2000 the first install of the filter needs the restart before the controller is used. 98 SE and ME need no filter.
+  - **The connection manager alone:** on Windows 2000 to 7 the installer can leave `xhci98.sys` and `xhciuas.sys` out and install `xhcicm.sys` alone, for a computer whose USB 3 controllers run another driver (untick the USB drivers on the Components page). On Windows 8 and 8.1 that is the only install it offers: Windows' own USB 3 driver runs the USB controllers there. On the 64-bit editions of 8 and 8.1 the driver loads only in test-signing mode (Secure Boot off) or with signature enforcement disabled.
+- **At the end:** the Finish page offers to restart Windows if it changed anything. If it stopped with steps left for you (a Found New Hardware window, for instance), do them and run it again. It never runs `XHCICLN`.
+- **Uninstall:** Remove in Add/Remove Programs (Programs and Features on Vista and 7) removes the drivers after a warning. Every run writes `XHCIINST.LOG` at the root of the system drive; attach it to a bug report about an install.
+- For scripted installs, `tools\xhciinst\readme.txt` is the command-line reference.
 
-Details: [the release notes' INSTALL.BAT section](docs/using/release-notes.md#installing-updating-and-uninstalling-with-installbat-new-in-3000).
+Details: [the release notes' installer section](docs/using/release-notes.md#installing-updating-and-uninstalling-with-installbat-new-in-3000).
 
 ### Install by hand
 
@@ -211,8 +184,13 @@ The established route: the INF install through Device Manager (Update Driver / H
 3. In Device Manager, find the unrecognised xHCI controller (yellow mark, usually under "Other devices", e.g. "Universal Serial Bus Controller" or "PCI System Peripheral").
 4. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> `release-x86\` or `release-x64\`.
 5. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98 USB 3.x Root Hub" beneath. Windows 98 SE may ask for its CD for `usbd.sys`. Reboot if asked.
-6. Plug in a UAS disk; when the wizard asks for "xHCI98 USB Attached SCSI Storage", give it the same directory. No restart is needed.
-7. An external hub installs as "xHCI98 USB Hub" by itself on 98 SE and 2000. On XP every newly plugged hub brings the Found New Hardware wizard and the unsigned-driver warning (Continue Anyway).
+6. A Thunderbolt 3 or USB4 controller installs the same way, from the same directory:
+   - In Device Manager it has a yellow mark, often as "PCI System Peripheral" or "Base System Device".
+   - It installs as "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" (the table under [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4)).
+   - On 2000 to 7, each of its PCI ports then takes the filter: Update Driver on the port, then Have Disk on `release-x86\nt\` (32-bit) or `release-x64\` itself (64-bit).
+   - The ports then show as "xHCI98 Thunderbolt PCI Bridge" or "xHCI98 USB4 PCI Bridge".
+7. Plug in a UAS disk; when the wizard asks for "xHCI98 USB Attached SCSI Storage", give it the same directory. No restart is needed.
+8. An external hub installs as "xHCI98 USB Hub" by itself on 98 SE and 2000. On XP every newly plugged hub brings the Found New Hardware wizard and the unsigned-driver warning (Continue Anyway).
 
 <img src="images/xhci98-driver-info.jpg" width="800">
 
@@ -251,7 +229,7 @@ Details and limits: [the release notes' F6 section](docs/using/release-notes.md#
 
 ### Upgrading the driver
 
-Run `INSTALL.BAT` (see [above](#install-with-installbat)). By hand: Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", pointed at `release-x86\` or `release-x64\`.
+Run `SETUP.EXE` (see [above](#install-with-setupexe)). By hand: Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", pointed at `release-x86\` or `release-x64\`.
 
 - **98 SE and ME:** restart afterwards, although Windows does not ask. The old driver runs until then.
 - **2000:** use Have Disk (Update Driver -> "Display a list of the known drivers" -> Have Disk -> `release-x86\`) and pick the first model listed. Letting Windows search keeps the old driver.
@@ -263,7 +241,7 @@ Run `INSTALL.BAT` (see [above](#install-with-installbat)). By hand: Update Drive
 
 ## Tuning
 
-Each value is a `DWORD` in a driver (software) key; restart Windows after a change (for `XhciCm*`, disabling and enabling the controller also works). The install writes most values and an update keeps any you changed. `INSTALL /set Name=Value` sets one.
+Each value is a `DWORD` in a driver (software) key, and from `3.1.0.0` also in the machine-wide key `HKLM\System\CurrentControlSet\Services\USB`, which wins for every controller when the value is there ([tuning](docs/using/tuning.md#where-the-values-are-and-every-value)); restart Windows after a change (for `XhciCm*`, disabling and enabling the controller also works). The install writes most values (its settings pages, and "Advanced...") and an update keeps any you changed.
 
 | Driver | Windows | Key (`NNNN` is the subkey whose `DriverDesc` names the controller) |
 |---|---|---|
@@ -274,7 +252,7 @@ Each value is a `DWORD` in a driver (software) key; restart Windows after a chan
 
 | Value | What it does | Default |
 |---|---|---|
-| `XhciLogVerbosity` | The driver's log level, read by the USB Tree and `XHCISNAP` (`0` to `4`; `0` off) | `2` (fresh install; an update keeps the value there) |
+| `XhciLogVerbosity` | The driver's log level, read by the USB Tree (`0` to `4`; `0` off) | `2` (fresh install; an update keeps the value there) |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` |
 | `XhciInterruptMode` | How events arrive: `0` automatic, `1` interrupt line, `2` polling, `3` message-signalled interrupt only | `0` |
 | `XhciSelectiveSuspend` | `1` suspends idle devices when Windows asks | `0` |
@@ -282,18 +260,18 @@ Each value is a `DWORD` in a driver (software) key; restart Windows after a chan
 | `XhciForceBulkOnly` | `1` uses Bulk-Only instead of UAS | `0` (`1` if the value is absent) |
 | `XhciIntelPortSwitch` | Intel 7/8/9-series port switchover: `1` on, `2` any Intel controller **at your own risk** (`tools\portsw\`) | `0` |
 | `XhciCmMode` | Thunderbolt/USB4: `0` off, `1` automatic (`2` and `3` are at your own risk) | `1` |
-| `XhciCmApprove` | `1` approves every device, `0` none (see [approval](#installing-approving-and-removing)) | `1` |
+| `XhciCmApprove` | `1` approves every device, `0` none (see [approval](#approving-and-removing)) | `1` |
 | `XhciCmSafeEject` | `1` offers tunnelled devices for safe removal | `1` |
 | `XhciCmBridgeNumbering` | 98 SE and ME: `1` sets up PCI bridges behind a tunnel plugged in after start (else Code 29 until restart) | `1` |
 | `XhciCmLogVerbosity` | The Thunderbolt driver's log level, read by the USB Tree (`0` to `4`) | `2` |
 | `XhciCmLogDebugView` | The Thunderbolt driver's log sent to DebugView as well | `0` |
 
-[docs/using/tuning.md](docs/using/tuning.md) has every value, its range and its effect, including polling periods, interrupt moderation, controller-fault handling, the per-controller fixes and the Linux-derived controller quirks; the release notes have [the `XhciCm*` values](docs/using/release-notes.md#the-connection-managers-registry-values).
+[docs/using/tuning.md](docs/using/tuning.md) has every value of both drivers, its range and its effect, including polling periods, interrupt moderation, controller-fault handling, the per-controller fixes, the Linux-derived controller quirks and the `XhciCm*` values; the release notes describe [the `XhciCm*` values](docs/using/release-notes.md#the-connection-managers-registry-values) in full.
 
 ## What is tested, and what is not
 
 - Windows 98 SE and Windows 2000 SP4 are the primary targets.
-- Real hardware: Windows 98 SE on the ThinkPad E460 and P14s Gen 1; Windows XP x64 and 7 x64 on the Dell Latitude E7250.
+- Real hardware: Windows 98 SE on the ThinkPad E460 and P14s Gen 1, and the Intel port switchover under Windows 98 SE on the Lenovo B490; Windows XP x64 and 7 x64 on the Dell Latitude E7250.
 - Every other target, Windows 2000 included, has run in QEMU virtual machines only.
 - Per-system detail: the release notes' [Targets and their standing](docs/using/release-notes.md#targets-and-their-standing). The test devices: [test-equipment.md](docs/contributing/test-equipment.md).
 
@@ -306,19 +284,65 @@ Each value is a `DWORD` in a driver (software) key; restart Windows after a chan
 | 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | Me |
 | Omores' Intel and AMD desktops | H110, B360, B550, X570, X670 | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) (1.x.x.x) |
 
+## The package
+
+Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
+
+| Path | Contents |
+|---|---|
+| `release-x86\`, `release-x64\` | The drivers to install (below) |
+| `debug-x86\`, `debug-x64\` | The same drivers built for troubleshooting; install only if asked |
+| `SETUP.EXE` | The installer: double-click it to install or update |
+| `INSTALL.BAT`, `tools\xhciinst\` | For command-line and scripted installs (`tools\xhciinst\readme.txt` is the reference), and the programs both run (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE`, `XHCIIN64.EXE`) |
+| `tools\xhcitr\` | The xHCI98 USB Tree, also the driver's log and snapshot reader |
+| `tools\xhciqual\` | DOS: `XHCIQUAL.EXE` and `QUALREP.BAT` |
+| `tools\portsw\` | `portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`: the Intel port switchover |
+| `tools\silent\` | 98 SE and ME: the silent install's list and switch |
+| `tools\xhcicln\` | `XHCICLN.EXE`, `XHCICL64.EXE`: optionally lists, and on 2000 to 7 removes, old `XHCI98\` entries left by an update from `2.3.x` or earlier; nothing needs it |
+| `readme.txt` | The release notes in plain text |
+
+Each driver directory holds:
+
+- `xhci98.sys`/`.inf` (controller), `xhciuas.sys`/`.inf` (UAS storage), `xhcicm.sys`/`.inf` (Thunderbolt and USB4; its PCI-port filter for 2000 to 7, `xhcicmf.inf`, in `nt\` in the x86 directories and beside them in the x64 ones)
+- `xhcihlpr.sys` (32-bit only): a helper 32-bit 2000, XP, Vista and 7 use for a finer timer while polling and, on Vista and 7, a message-signalled interrupt. 98 SE and ME ignore it.
+- `txtsetup.oem`: for F6 during Windows 2000 or XP Setup
+- `xhci98-test.cer` (64-bit only): the public half of the x64 drivers' test certificate; no need to import it
+- `stor98*` files (`release-` only): the bundled NVMe driver (see [NVMe drives](#nvme-drives))
+
+## Reporting a bug
+
+Open a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose) and attach:
+
+- **The DOS report:** run `QUALREP.BAT` from real DOS in `TOOLS\XHCIQUAL\` and attach the `.LOG` it names. It is read-only (`XHCIQUAL --probe-only --no-page --log-stamp`) and never overwrites an earlier log. If a maintainer asks for the full run, `XHCIQUAL --no-page --log FULL.LOG` **takes over the controller and resets it and its ports**: use a PS/2 keyboard, and do not write the log to a drive on that controller.
+- **The driver's report:** make the problem happen, then in the xHCI98 USB Tree (`tools\xhcitr\`) use File > Save Report and attach the `.TXT` file; `XHCITR /report <file>` writes the same from a command prompt. It carries the device tree, both drivers' logs and the driver's snapshot. The log needs the driver's logging level at 2 or more, the default: if View > Logging level... shows less, set 2, restart Windows and make the problem happen again. Attach the raw snapshot files (File > Save Snapshot... or `XHCITR /snapshot`) only if a maintainer asks.
+- **An install problem:** `XHCIINST.LOG` from the root of the system drive.
+
 ## Known limitations/issues
 
 The release notes' [Known limitations](docs/using/release-notes.md#known-limitations), [Thunderbolt and USB4 limitations](docs/using/release-notes.md#thunderbolt-and-usb4-known-limitations) and [Untested ground](docs/using/release-notes.md#untested-ground) have the full lists. The ones most likely to matter:
 
-- **Vista x64 and 7 x64** need test-signing mode or F8 at every start; otherwise the controller sits at Code 39 (Vista) or Code 52 (7).
-- **Stock Windows 98 SE** has no USB storage driver without NUSB. HID and audio still work.
-- **XP from the F6 floppy** needs a PS/2 or built-in keyboard to answer GUI-mode Setup's unsigned-driver question. Windows 2000 does not ask.
-- **Windows ME:** do not unplug a device while Windows is installing it. Shut Down can hang with a USB disk not opened since start; open it once (a `dir` is enough) or remove it first. (Both happen on Microsoft's own USB stack too.)
-- **Windows ME:** a UAS drive plugged in before any ordinary stick shows Code 2. Plug in a stick once, then replug the UAS drive.
-- **Windows 2000:** a mounted USB drive can come back at Code 31 after a controller recovery or hibernation. Replug it, or disable and enable it.
-- Disabling a controller the driver had to close off hangs (very rare). Restart instead.
-- Intel 7-series (`8086:1E31`): too many periodic devices at once (audio, mice) may lose data instead of being refused.
-- Untested: SuperSpeed isochronous, SuperSpeedPlus (USB 3.1 Gen 2 and up), polling above 1000 Hz, controllers below xHCI 1.0 (accepted by default; `XhciAccept096` `0` refuses them), and the Linux-derived controller quirks.
+- **Windows 98 SE and ME**
+  - Stock Windows 98 SE has no USB storage driver without NUSB. HID and audio still work.
+  - The first time an NVMe enclosure is plugged in, Windows' wizard may ask for the "Stor98 Storage Controller Disk". Point it at `C:\XHCI98`.
+  - Windows ME: do not unplug a device while Windows is installing it. Shut Down can hang with a USB disk not opened since start; open it once (a `dir` is enough) or remove it first. (Both happen on Microsoft's own USB stack too.)
+  - Windows ME: a UAS drive plugged in before any ordinary stick shows Code 2. Plug in a stick once, then replug the UAS drive.
+- **Windows 2000**
+  - A mounted USB drive can come back at Code 31 after a controller recovery or hibernation. Replug it, or disable and enable it.
+- **Windows XP**
+  - Installing XP from the F6 floppy needs a PS/2 or built-in keyboard to answer GUI-mode Setup's unsigned-driver question. Windows 2000 does not ask.
+- **Vista x64 and 7 x64**
+  - Test-signing mode or F8 is needed at every start; otherwise the controller sits at Code 39 (Vista) or Code 52 (7).
+- **Thunderbolt and USB4**
+  - Standby and hibernation with a device attached are not supported. Stop and unplug the device first.
+  - A drive attached during the install or update appears in Safely Remove Hardware only after a restart or a replug.
+  - Windows 2000 to 7 with a USB4 host: ejecting a dock, or an enclosure with its own PCIe switch, stops it safely, but its connection stays up until you physically disconnect it.
+  - A dual-mode NVMe enclosure (USB4 or Thunderbolt, and USB) may come up as a USB (UAS) disk instead. Unplug it and plug it in again to get the Thunderbolt or USB4 connection.
+- **Controllers**
+  - Disabling a controller the driver had to close off hangs (very rare). Restart instead.
+  - Intel 7-series (`8086:1E31`): too many periodic devices at once (audio, mice) may lose data instead of being refused.
+- **Untested**
+  - SuperSpeedPlus (USB 3.2 Gen 2, Gen 1x2 and Gen 2x2): supported, but checked only in an emulator, not on real hardware.
+  - SuperSpeed isochronous, polling above 1000 Hz, controllers below xHCI 1.0 (accepted by default; `XhciAccept096` `0` refuses them), and the Linux-derived controller quirks.
 
 ## Toolchain and building
 
@@ -347,7 +371,9 @@ The drivers are C89 (no C++ or CRT), built on Windows 11 x64. The toolchain unpa
    scripts\build-driver.cmd both -amd64
    ```
 
-4. The tools build with their own `build.cmd` in `xhciqual\` (needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM`), `xhcisnap\`, `xhcicln\`, `xhciinst\` and `xhcitr\`.
+   The same runs build and gate Stor98, the bundled NVMe driver, from `src\stor98` (it also needs the Windows 98 DDK's `SCSI.H` and `SRB.H` in `tools\w98ddk\inc`; [src/stor98/docs/BUILD.md](src/stor98/docs/BUILD.md)); `scripts\build-all.cmd` runs both architectures at once.
+
+4. The tools build with their own `build.cmd` in `xhciqual\` (needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM`), `xhcicln\`, `xhciinst\` and `xhcitr\`.
 5. Install media: `scripts\package\make-package.ps1` (to `out\`); a release cut: `scripts\package\make-release.ps1`. Never hand-copy a `.sys` without its INF.
 6. Test in QEMU with `qemu-xhci` (Win98 SE, Win2000 SP4 and an SMP Win2000 guest; `usb-storage` and `usb-uas` for SuperSpeed and UAS).
 
@@ -359,10 +385,10 @@ The version lives in [src/xhci_version.h](src/xhci_version.h). [build-and-test.m
 src/            xhci98.sys (C), its two INFs and DDK build files
   uas/          xhciuas.sys, the UAS class driver
   cm/           xhcicm.sys, the Thunderbolt and USB4 driver
+  stor98/       Stor98, the bundled NVMe driver (BSD-3-Clause)
 test/           Host-side unit tests (test\run-host-tests.cmd)
 scripts/        Build wrapper, setup helpers, gates, vm-matrix/
 xhciqual/       DOS hardware-qualification tool (Open Watcom)
-xhcisnap/       Reader for the driver's log channel
 xhcicln/        Optional cleanup tool for old XHCI98\ devnodes
 xhciinst/       Install/update/uninstall tool and INSTALL.BAT
 xhcitr/         The xHCI98 USB Tree
@@ -404,17 +430,17 @@ None of these PDFs is tracked here; fetch your own into the git-ignored `docs/re
 
 This project's own source is licensed under the GNU General Public License, version 2 ([LICENSE](LICENSE)), `GPL-2.0-only`.
 
-The repository tracks no third-party binary on its own, although the tool executables it tracks under `releases/` carry statically linked third-party runtimes:
+Apart from Stor98's earlier released builds under `src/stor98/releases/` (below), the repository tracks no third-party binary on its own, although the tool executables it tracks under `releases/` carry statically linked third-party runtimes:
 
 - `xhci98.sys` and `xhciuas.sys` link no runtime or extender. The 32-bit builds link no third-party object either; the 64-bit builds, linked by WDK 7.1, carry that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls.
 - Some files of `xhcicm.sys`'s source, under `src/cm/`, are adapted from the `usb4-emu` project (some lifted from its `tools/usb4cm` under its earlier MIT licence) and from Linux's `drivers/thunderbolt`, and keep their copyright lines and licence notices. The [legal and provenance record](docs/contributing/legal-provenance.md), section 2a, lists each file.
 - `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender.
-- `XHCISNAP.EXE` embeds the MSVC 6.0 runtime.
-- `XHCICLN.EXE` and `XHCIINST.EXE` embed the MSVC 6.0 runtime; `XHCICL64.EXE` and `XHCIIN64.EXE` the WDK 7.1 one. Neither install tool contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
+- `XHCISNAP.EXE`, in the releases up to `3.0.0.0`, embeds the MSVC 6.0 runtime.
+- `XHCICLN.EXE`, `XHCIINST.EXE` and `XHCITR.EXE` embed the MSVC 6.0 runtime; `XHCICL64.EXE`, `XHCIIN64.EXE` and `XHCITR64.EXE` the WDK 7.1 one. None of them contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
 
-The release download's `release-x86\` and `release-x64\` carry Stor98, a released build of a separate project under its own licence, unchanged; its `LICENSE` and `NOTICE.TXT` ship beside it as `stor98-LICENSE.txt` and `stor98-NOTICE.txt`. The repository tracks none of its files.
+The release download's `release-x86\` and `release-x64\` carry Stor98, built from this repository's `src/stor98/` with the drivers, under its own licence; its `LICENSE` and `NOTICE` ship beside it as `stor98-LICENSE.txt` and `stor98-NOTICE.txt`. Since 2026-10-19 Stor98 itself - its source and its earlier released builds - is in this repository as [src/stor98/](src/stor98/), under its own licence ([src/stor98/LICENSE](src/stor98/LICENSE), BSD-3-Clause) with its [NOTICE](src/stor98/NOTICE) recording where its code came from.
 
 The release download carries no Microsoft file. `usbd.sys` and `usbui.dll` are the OS's own, copied by Windows Setup from its own install source. On Windows 98, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as a filter on the UAS device; the file is named, never shipped, and NUSB's mass-storage install places it.
 

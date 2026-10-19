@@ -17,11 +17,10 @@
  *     otherwise. A resume that fails declares the controller failed and asks
  *     for the in-place recovery (HcdControllerFail).
  *
- * No dispatch routine waits for its own IRP (Codex review of 26-A.2, round 1,
- * findings 5 and 6). The D0 and system SET_POWER IRPs, which this driver
- * pends, keep the outstanding-I/O count until it completes them, so a remove
- * waits for them (finding 4); a power IRP it only passes down releases the
- * count when PoCallDriver returns (round 3, note 4).
+ * No dispatch routine waits for its own IRP (task 26-A.2). The D0 and system
+ * SET_POWER IRPs, which this driver pends, keep the outstanding-I/O count
+ * until it completes them, so a remove waits for them; a power IRP it only
+ * passes down releases the count when PoCallDriver returns.
  *
  * The Windows 98 rules of win98-wdm.md, each kept here:
  *   - PoStartNextPowerIrp before a power IRP is completed or passed down;
@@ -147,11 +146,10 @@ static VOID hcdResume(PHCD_CONTROLLER hc)
  * and only while the function is still in D0 - the caller sets the new
  * device state after this - so a controller the bus already has in D3
  * keeps its transfers. The quiesce's flags are not the proof: it clears
- * them on a configuration space that reads all-ones too (Codex review of
- * 37.3's design, round 1, finding 1). Idempotent. No thread is created
- * and none waited on (36.35); completions are made here or by each PDO's
- * refusal timer. The power gate held, so the thread is not in a pass;
- * IRQL: PASSIVE_LEVEL.
+ * them on a configuration space that reads all-ones too (task 37.3).
+ * Idempotent. No thread is created and none waited on (36.35); completions
+ * are made here or by each PDO's refusal timer. The power gate held, so the
+ * thread is not in a pass; IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdShutFlush(PHCD_CONTROLLER hc)
 {
@@ -165,7 +163,7 @@ static VOID hcdShutFlush(PHCD_CONTROLLER hc)
     hc->ShutLatched = 1;
     /* A started lifetime with its BAR mapped: a stopped FDO keeps
      * HcInfoStatus and its recorded D0 but its registers are unmapped
-     * (hcd_ctl.c; Codex review of 4de0f999, round 2, finding 1). */
+     * (hcd_ctl.c; reviewed and revised after 4de0f999). */
     if (hc->ControllerStarted && hc->BarVa != NULL &&
         hc->Common.DevicePower == PowerDeviceD0 &&
         hc->Hc.HcInfoStatus == XHCI_HC_OK && !hc->Hc.Tol.Unreadable) {
@@ -239,9 +237,9 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
 /*
  * The device transition a system IRP wanted, when the device IRP that should
  * have carried it could not be requested (PoRequestPowerIrp failed, so no
- * IRP and no callback follow; Codex review of 26-A.2, round 2, finding 3).
- * Without that IRP the bus does not change the function's power, so only
- * what is safe on the bus's present state is done (round 3, finding 1):
+ * IRP and no callback follow; task 26-A.2). Without that IRP the bus does
+ * not change the function's power, so only what is safe on the bus's present
+ * state is done:
  *
  *   - toward sleep, with the function still in D0: the controller is
  *     suspended - its DMA stopped before the system sleeps - and
@@ -438,8 +436,7 @@ static NTSTATUS NTAPI hcdSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         /* 37.3: the shutdown finds the function already out of D0, so no
          * device IRP is asked for and none would latch: the work item
          * latches and flushes at PASSIVE_LEVEL under the power gate, then
-         * completes the system IRP (Codex review of 37.3's design, round
-         * 1, finding 2). */
+         * completes the system IRP. */
         hcdPowerDefer(hc, Irp, HCD_POWER_WORK_SHUT);
         return STATUS_MORE_PROCESSING_REQUIRED;
     }

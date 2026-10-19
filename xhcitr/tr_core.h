@@ -18,6 +18,7 @@
 #define TR_CORE_H
 
 #include <stddef.h>
+#include "../xhcimark/mark_core.h"
 
 typedef unsigned long TR_U32;
 
@@ -516,6 +517,7 @@ int tr_node_is_hub(const char *hw, size_t hwBytes, const char *compat,
  * Windows stops with it (section 6.5). */
 typedef struct _TR_USBF {
     int Nt;
+    int W2k;                    /* 2000, stopped here: Code 24 is held       */
     int HaveDevnode;            /* the port's devnode was found in the walk  */
     int IsHub;                  /* the port says so, or ids of its set do    */
     int IsController;
@@ -539,20 +541,33 @@ typedef struct _TR_USBF {
 #define TR_UE_LISTED    1       /* listed with the reason, not offered     */
 #define TR_UE_OFFER     2       /* Safely Remove offered                   */
 
+/* 1 for a devnode held for eject: Code 47, or, when w2k says Windows 2000
+ * and a stop of this devnode was accepted, Code 24: 2000 has no Code 47
+ * and leaves a removed devnode that is still attached at Code 24 (run 41,
+ * the bridge after its stop; run 42, a USB stick after its stop), and
+ * Code 24 is also its failed start. */
+int tr_held_for_eject(TR_U32 problem, int w2k);
+
+/* That w2k argument: 1 on Windows 2000 (w2k) for a devnode this process
+ * stopped (stoppedHere) and, for the device at a USB port (atPort), only
+ * while the port reports a configuration (config): the stopped device keeps
+ * its configuration until it is unplugged, and one plugged in again starts
+ * unconfigured, so a later failed start at Code 24 is not read as the
+ * stop. */
+int tr_w2k_code24(int w2k, int stoppedHere, int atPort, unsigned int config);
+
 /* The words for a devnode that is not running (record 25 section 14): the
- * tag ("stopped - unplug it" for Code 47, held for eject; "not started -
- * problem code N" for any other problem; "not started") and the sentence
- * ("Stopped: you can unplug it.", "Windows could not start this device
- * (problem code N).", ...). 1 only for Code 47, the one state in which the
- * device may be unplugged. */
-int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
-                    size_t sentenceCap);
+ * tag ("stopped - unplug it" when held for eject, tr_held_for_eject;
+ * "not started - problem code N" for any other problem; "not started") and
+ * the sentence ("Stopped: you can unplug it.", "Windows could not start
+ * this device (problem code N).", ...). 1 only when held for eject, the one
+ * state in which the device may be unplugged. */
+int tr_stopped_text(TR_U32 problem, int w2k, char *tag, size_t tagCap,
+                    char *sentence, size_t sentenceCap);
 
 /* What a walk right after an accepted stop reads (section 6.5 step 5):
- * TR_UA_UNPLUG for the walk whole and the device gone, held for eject
- * (Code 47), or, on Windows 2000 only (w2k), Code 24: 2000 has no Code 47
- * and leaves a removed devnode that is still attached at Code 24 (run 41,
- * the bridge after its stop). TR_UA_STARTED for the device started again;
+ * TR_UA_UNPLUG for the walk whole and the device gone, or held for eject
+ * (tr_held_for_eject). TR_UA_STARTED for the device started again;
  * TR_UA_UNKNOWN for anything else, no walk included. started is DN_STARTED
  * with no problem code. */
 #define TR_UA_UNPLUG    0
@@ -720,7 +735,9 @@ const char *tr_elev_question(void);
 
 /* The two drivers, each with its level in its devices' driver (software)
  * keys: xhci98's XhciLogVerbosity in every controller's, xhcicm's
- * XhciCmLogVerbosity in every NHI's. */
+ * XhciCmLogVerbosity in every NHI's; and, from 3.1.0.0, the same value in
+ * the machine-wide key TR_LV_MACHINE_KEY, which both drivers read first and
+ * which wins when it is there in any type (task 42-A.17). */
 #define TR_LV_XHCI98            0
 #define TR_LV_XHCICM            1
 #define TR_LV_DRIVERS           2
@@ -728,6 +745,7 @@ const char *tr_elev_question(void);
 #define TR_LV_MAX               4
 #define TR_LV_NAME_XHCI98       "XhciLogVerbosity"
 #define TR_LV_NAME_XHCICM       "XhciCmLogVerbosity"
+#define TR_LV_MACHINE_KEY       "System\\CurrentControlSet\\Services\\USB"
 
 /* "xhci98" or "xhcicm"; NULL for anything else. */
 const char *tr_level_driver(int driver);
@@ -748,31 +766,57 @@ typedef struct _TR_RVAL {
     TR_U32 Value;
 } TR_RVAL;
 
-/* A device's level as read: the value's state, and the level that
- * reading stands for - the DWORD when it is 0-4, TR_LV_DEFAULT when no
- * value is there, -1 otherwise (out of range, another type, not read). */
+/* One RegQueryValueEx answer for a 4-byte buffer as a reading, by the
+ * drivers' rule (src/xhci_regsrc.h): not found is absent, and so is a
+ * zero-length REG_NONE (type 0); a 4-byte REG_DWORD (type 4) is the DWORD;
+ * any other stored type, or a value too long for the buffer, is another
+ * type; any other error is not read. */
+#define TR_Q_OK                 0   /* ERROR_SUCCESS                       */
+#define TR_Q_NOT_FOUND          1   /* ERROR_FILE_NOT_FOUND                */
+#define TR_Q_MORE_DATA          2   /* ERROR_MORE_DATA                     */
+#define TR_Q_ERROR              3   /* anything else                       */
+void tr_rv_from_query(int status, TR_U32 type, TR_U32 bytes, TR_U32 value,
+                      TR_RVAL *out);
+
+/* Where a device's level was taken from. */
+#define TR_LV_FROM_NONE         0   /* neither key has the value            */
+#define TR_LV_FROM_MACHINE      1   /* the machine-wide key                 */
+#define TR_LV_FROM_DEVICE       2   /* the device's driver key              */
+
+/* A device's level as read: the state of the value in force, and the level
+ * that reading stands for - the DWORD when it is 0-4, TR_LV_DEFAULT when no
+ * value is there, -1 otherwise (out of range, another type, not read); which
+ * key it came from; and both readings. */
 typedef struct _TR_LEVEL {
-    int State;                  /* TR_RV_* of the value                    */
+    int State;                  /* TR_RV_* of the value in force           */
     TR_U32 Value;
     int Level;
+    int From;                   /* TR_LV_FROM_*                            */
+    TR_RVAL Machine;            /* the machine-wide key's reading          */
+    TR_RVAL Device;             /* the driver key's reading                */
 } TR_LEVEL;
 
-/* The level from the driver's one value, as read. */
-void tr_level_pick(const TR_RVAL *cur, TR_LEVEL *out);
+/* The level from the two readings, as the drivers take it: the machine-wide
+ * one when it is not absent (another type, or not read, included), else the
+ * driver key's. `machine` NULL is absent. */
+void tr_level_pick(const TR_RVAL *machine, const TR_RVAL *cur, TR_LEVEL *out);
 
 /* The value a driver's level is: XhciLogVerbosity or XhciCmLogVerbosity. */
 const char *tr_level_value_name(int driver);
 
 /* One line for a device's level, at most 72 characters: "3 - adds port
- * status (XhciCmLogVerbosity)", "2 - the log (default) (no value set)",
- * "7 - out of range, not 0-4 (XhciLogVerbosity)", "XhciLogVerbosity is
- * not a REG_DWORD", "not read". */
+ * status (XhciCmLogVerbosity)", "3 - adds port status (machine-wide)",
+ * "2 - the log (default) (no value set)", "7 - out of range, not 0-4
+ * (XhciLogVerbosity)", "XhciLogVerbosity is not a REG_DWORD",
+ * "XhciLogVerbosity machine-wide is not a REG_DWORD", "not read". */
 void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap);
 
 /* The levels block of the report and the dialog: per driver a heading
- * line, then each device's name and its line, or that there is none. A
- * line stays within 79 columns but for a long device name. */
-void tr_level_head(TR_TEXT *t, int driver, int count);
+ * line, the machine-wide value's line (`machine` NULL is absent), then
+ * each device's name and its line - with, under a machine-wide value in
+ * force, the device's own value that it overrides - or that there is none.
+ * A line stays within 79 columns but for a long device name. */
+void tr_level_head(TR_TEXT *t, int driver, int count, const TR_RVAL *machine);
 void tr_level_device(TR_TEXT *t, int driver, const char *name,
                      const TR_LEVEL *l);
 
@@ -800,5 +844,45 @@ int tr_level_elev_result(int launched, TR_U32 launchErr, int finished,
 /* The offer after a level was written: the drivers read it only at
  * start. */
 const char *tr_level_restart_question(void);
+
+/* ---- 42-A.5: the safe-removal mark, shown (record 21 section 7.4,
+ * revision 3, "The viewer") ------------------------------------------- */
+
+/* A Thunderbolt unit's mark, from the marks answer (cm_query.h CM_QM_*)
+ * and its devnode's LowerFilters. */
+#define TR_MK_OLD       0   /* this xhcicm.sys does not answer the request */
+#define TR_MK_FAILED    1   /* the request failed                          */
+#define TR_MK_LISTED    2   /* Removable read set: Windows lists it        */
+#define TR_MK_WRITTEN   3   /* the value present, no attachment yet        */
+#define TR_MK_NOTLISTED 4   /* the value present and attached, yet Windows
+                               does not list it                            */
+#define TR_MK_NOT       5   /* no value, no attachment                     */
+
+/* 1 when the multi-string msz (bytes long, possibly unterminated at the
+ * end) holds `name` as one of its strings, without case. */
+int tr_msz_has(const char *msz, size_t bytes, const char *name);
+/* A PCI function's location as the marks answer gives a member: bus 15:8,
+ * device 7:3, function 2:0, from its bus number and DevicePropertyAddress
+ * (device 31:16, function 15:0). */
+INST_U32 tr_mark_member(INST_U32 bus, INST_U32 address);
+/* The one entry of m for a unit behind `member` at bus/address, reported
+ * and located, and with `pending` set a departure pending too; -1 for
+ * none or two. */
+int tr_mark_find(const MK_MARKS *m, INST_U32 member, INST_U32 bus,
+                 INST_U32 address, int pending);
+/* The state (TR_MK_*): `answered` 1 read, 0 not served (an older driver),
+ * -1 failed; `entry` tr_mark_find's, with pending 0; filterPresent the
+ * devnode's LowerFilters names xhcicm. */
+int tr_mark_state(int answered, const MK_MARKS *m, int entry,
+                  int filterPresent);
+const char *tr_mark_text(int state);
+
+/* The mark service's state, as QueryServiceStatus read it. */
+#define TR_SV_UNREAD    0
+#define TR_SV_ABSENT    1   /* not installed (ERROR_SERVICE_DOES_NOT_EXIST) */
+#define TR_SV_STOPPED   2
+#define TR_SV_RUNNING   3
+#define TR_SV_OTHER     4   /* starting, stopping, paused                  */
+const char *tr_mksvc_text(int state);
 
 #endif /* TR_CORE_H */

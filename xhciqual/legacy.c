@@ -643,7 +643,7 @@ static int ehci_ports(LEGACY_CTRL *c, int wait_secs)
     }
     if (!connected && wait_secs > 0) {
         qprintf("  C6: no EHCI device present. Plug a High-Speed device "
-                "now (waiting %d s, ESC to skip)...\n", wait_secs);
+                "now (waiting %d s, any key to skip)...\n", wait_secs);
         while (wait_secs > 0 && !connected) {
             msleep(1000);
             wait_secs--;
@@ -718,7 +718,7 @@ static int ohci_ports(LEGACY_CTRL *c, int wait_secs)
     }
     if (!connected && wait_secs > 0) {
         qprintf("  C6: no OHCI device present. Plug a Full-/Low-Speed "
-                "device now (waiting %d s, ESC to skip)...\n", wait_secs);
+                "device now (waiting %d s, any key to skip)...\n", wait_secs);
         while (wait_secs > 0 && !connected) {
             msleep(1000);
             wait_secs--;
@@ -837,19 +837,15 @@ void legacy_run(LEGACY_CTRL *c, int wait_secs)
             qprintf("  C6: SKIP - %s\n", c->port_note);
         }
     } else {
-        /* **`--poll-only` means no CPU ISR on the OHCI path too** (the
-         * 2026-09-16 audit's C5). `ohci_irq` installs one, so a poll-only run
-         * used to install exactly what the flag forbids and then have the
-         * verdict tell the reader C4 was not tested and end PROVISIONAL - the
-         * report and the run disagreed about what had happened to the machine.
-         * The EHCI arm above has always had this guard. */
-        if (c->poll_only) {
-            c->v_irq = V_SKIP;
-            strcpy(c->irq_note, "poll-only run: no ISR installed; CPU/PIC "
-                   "delivery not tested");
-        } else {
-            ohci_irq(c);
-        }
+        /* **OHCI's C4 runs under `--poll-only` too.** The flag forbids a
+         * protected-mode CPU ISR, and `ohci_irq` installs none in any mode:
+         * it masks the line at the 8259 first and polls the SOF status and
+         * PCI INTx status bits, so it is already within what the flag
+         * allows. A 2026-09-16 change skipped it here on the belief that it
+         * installed a vector; it never did, and the README has always said
+         * this check runs in poll-only mode. Its WARN still does not prove
+         * CPU/PIC delivery, so the poll-only verdict stays PROVISIONAL. */
+        ohci_irq(c);
         qprintf("  C4: %s - %s\n", verdict_name(c->v_irq), c->irq_note);
         qprintf("  C6: checking OHCI root ports...\n");
         ohci_ports(c, wait_secs);
@@ -1099,14 +1095,15 @@ int legacy_final_verdict(LEGACY_CTRL *c, int active_requested)
         if (!qualified) {
             if (disqualified)
                 qprintf("  ==> NOT QUALIFIED - a controller disqualifier "
-                        "above was hit (C4 was not tested)\n");
+                        "above was hit (CPU delivery not tested)\n");
             else
                 qprintf("  ==> NOT QUALIFIED - the tool could not complete "
-                        "C3 (C4 was not tested)\n");
+                        "C3 (CPU delivery not tested)\n");
         } else {
+            /* "CPU", not "C4": OHCI's C4 runs here too (status bits only). */
             qprintf("  ==> PROVISIONAL - C2/C3%s completed with no ISR and "
                     "no fault.\n"
-                    "      C4 interrupt delivery NOT tested; re-run without "
+                    "      CPU interrupt delivery NOT tested; re-run without "
                     "--poll-only to earn a verdict.\n",
                     c->v_port == V_PASS ? "/C6 port reset" : "");
         }

@@ -1,6 +1,13 @@
 /*
  * xhci_probe.h - the runtime transfer-contract probe (roadmap task 6-V.1).
  *
+ * **No probe runs under the HCD.** The probe was the miniport's; its code
+ * (xhci_probe.c and its call sites in xhci_dispatch.c) left the tree on
+ * 2026-10-02 with it. What stays here is the types XHCI_EXTENSION embeds,
+ * kept for the layout the offset tables and snapshot readers depend on; the
+ * Probe* fields are never written, and the text below describes the
+ * miniport.
+ *
  * This is instrumentation, not behaviour. Nothing here decides anything the
  * driver does: the probe sits at the registration-packet surface in
  * src/xhci_dispatch.c, reads what usbport just handed over, folds it into a
@@ -184,7 +191,7 @@ typedef struct _XHCI_PROBE_KEYSET {
  * **only** for a device two non-High-Speed tiers down, and they differ in the
  * value, not in whether it is nonzero. A shape bit cannot separate them, and the
  * per-observation trace that could belongs to the `qemu` flavour alone (task
- * 13-L.1; this said `#if DBG` until the post-Phase 13 review rounds, and `DBG` is now set in a
+ * 13-L.1; this said `#if DBG` until after Phase 13, and `DBG` is now set in a
  * shipping build that has no trace) - so either published build, which is what
  * a long VM run has to be, says "a TT was named" and never which one.
  *
@@ -257,33 +264,5 @@ typedef struct _XHCI_PROBE_REPORT {
                          * newness NewKey reports. Read it per producer. */
     ULONG DumpElements; /* nonzero: the SG elements are worth the lines */
 } XHCI_PROBE_REPORT;
-
-struct _XHCI_EXTENSION;
-struct _USBPORT_TRANSFER_PARAMETERS;
-struct _USBPORT_SCATTER_GATHER_LIST;
-struct _USBPORT_ENDPOINT_PROPERTIES;
-struct _XHCI_ENDPOINT;
-
-/*
- * Observe one SubmitTransfer call. Takes and releases the controller lock
- * itself, and prints nothing while holding it.
- * IRQL: <= DISPATCH_LEVEL, no usbport lock assumptions.
- */
-VOID XhciProbeTransfer(struct _XHCI_EXTENSION *ext,
-                       const struct _USBPORT_TRANSFER_PARAMETERS *parameters,
-                       const struct _USBPORT_SCATTER_GATHER_LIST *sgList);
-
-/*
- * Observe one endpoint-family callback. `properties` is NULL for the callbacks
- * that do not carry one (close, the state pair, abort), `endpoint` is NULL
- * where there is no miniport endpoint extension yet, and `detail` carries the
- * state for SetEndpointState and 0 otherwise.
- * IRQL: <= DISPATCH_LEVEL.
- */
-VOID XhciProbeEndpoint(struct _XHCI_EXTENSION *ext,
-                       ULONG event,
-                       const struct _USBPORT_ENDPOINT_PROPERTIES *properties,
-                       const struct _XHCI_ENDPOINT *endpoint,
-                       ULONG detail);
 
 #endif /* XHCI_PROBE_H */

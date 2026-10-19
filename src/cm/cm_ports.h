@@ -53,6 +53,12 @@ const CM_FAMILY *CmPortsFamilyAt(ULONG n);
 ULONG CmPortsUnpairedCount(VOID);
 ULONG CmPortsUnpairedAt(ULONG n);
 
+/* TRUE when `id` (CM_PORTS_ID form) is one of xhcicmf.inf's bridge models:
+ * a family's switch or root port id, or an unpaired one (the host suite
+ * holds the two equal both ways). AddDevice's bridge role (cm_vals.h
+ * CmRoleDecide). */
+BOOLEAN CmPortsFilterId(ULONG id);
+
 /*
  * A Windows 98 PCI device id, "PCI\VEN_vvvv&DEV_dddd...\BUS_bb&DEV_dd&
  * FUNC_ff" (ANSI, at most `chars` characters, ending at the first NUL):
@@ -136,6 +142,23 @@ ULONG CmPortsChildAttach(ULONG prevTruncated, PVOID const *chain,
  * chain, then CmPortsChildAttach.
  */
 ULONG CmPortsChildFirst(ULONG prevTruncated, ULONG hasAttached);
+
+/*
+ * Whether a function behind a bridge is without a device stack, for the
+ * eject's eligibility (section 7.4): 1 when nothing is attached to its PDO
+ * (`hasAttached` 0), or when the only object of this driver's on it is the
+ * child filter the bridge's BusRelations answer put there (`ownBusChild`,
+ * no AddDevice-made one: `ownAddDev` 0) and nothing is attached above that
+ * child (`aboveChild` 0). The second is a function the PnP manager found
+ * no driver for (Code 28, read on 7 for an NVMe drive): its stack was
+ * never built, so this driver's own child and any bus filter below it
+ * stay on the PDO, and no function driver would see the tunnel go. A
+ * function driver or an upper filter always attaches above the child. 0
+ * otherwise, and when no child of this driver's is on it at all (another
+ * driver's objects are not read).
+ */
+ULONG CmPortsStackless(ULONG hasAttached, ULONG ownBusChild, ULONG ownAddDev,
+                       ULONG aboveChild);
 
 /*
  * The resume hold's watchdog (section 6.3): the NHI's own resume bound

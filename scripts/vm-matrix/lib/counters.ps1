@@ -89,7 +89,7 @@ function Import-CounterTable {
 # The keep-alive pump's sign of life, read off a Read-Counters snapshot the
 # way every other reader here reads one: the label resolved to its field, the
 # field looked up in .Values.  Its own function because the first version of
-# the liveness callback (the 2026-09-17 audit's D2) indexed the snapshot
+# the liveness callback (the audit of 2026-09-17) indexed the snapshot
 # object itself with the label, which yields $null, casts to 0, and read every
 # pumped row as a dead guest; the self-test drives this against a snapshot
 # shaped like the real return so that mistake cannot come back.  A snapshot
@@ -414,7 +414,7 @@ function Find-ExtensionIdentity {
     # callback line is the truncated low half of the pointer, and a boot poll
     # can see a callback line (and even the high half) before the low half is
     # written. So an amd64 identity is the complete high/low pair or nothing,
-    # and the `a=` fallback belongs to x86 alone (Codex review of fcbf9a1).
+    # and the `a=` fallback belongs to x86 alone (commit fcbf9a1).
     param(
         [Parameter(Mandatory = $true)][string]$DebugconLog,
         [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
@@ -479,16 +479,16 @@ function Find-ExtensionIdentity {
 #   xhci98: counters VA low=<8 hex>     the pointer (x86), or its low half
 #
 # The low line completes the record, so a boot poll that sees the start or
-# size line alone has no identity yet - the miniport's amd64 lesson (Codex
-# review of fcbf9a1), applied to both architectures. The start number is what
+# size line alone has no identity yet - the miniport's amd64 lesson (commit
+# fcbf9a1), applied to both architectures. The start number is what
 # the miniport's "a second VA" could not see: the HCD's block lives in the
 # controller FDO's extension, which a STOP_DEVICE and START_DEVICE keep at the
 # same VA, so a restart is a new start number and not a new address. `Spans`
 # is therefore "more than one complete record, or more than one size": a
 # second record is a second lifetime even when it repeats the first's (VA,
 # start), since a reloaded image numbers its starts from 1 again and a
-# recreated FDO can be given the same allocation (Codex review round 23,
-# finding 3). The driver draws start numbers image-wide, so within one load a
+# recreated FDO can be given the same allocation. The driver draws start
+# numbers image-wide, so within one load a
 # repeat cannot be the same start.
 #
 # The kernel-address filter of the miniport's reader is kept: an x86 VA, or an

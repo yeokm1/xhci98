@@ -1,5 +1,6 @@
-xhci98 - an xHCI USB host controller driver, and a USB Attached SCSI class
-driver, for Windows 98 SE to Windows 7.
+xhci98 - an xHCI USB host controller driver, with a USB Attached SCSI class
+driver, a Thunderbolt 3 and USB4 connection manager driver and their tools,
+for Windows 98 SE to Windows 7.
 
 Copyright (c) 2026 Yeo Kheng Meng
 
@@ -388,59 +389,101 @@ directory - a download included;
 and third-party names and marks, used only to identify the hardware and
 software this driver interoperates with.
 
-The driver is written independently of the reference implementations this
-project consults, two of which are themselves GPL-2.0 (ReactOS and Linux). No
-function body from any of them is copied into src/. That rule is unchanged by
-the licence this file now carries, and the change of licence is not a statement
-that anything was ever copied. docs/contributing/legal-provenance.md section 3
-records the rule, the overlap audit that checked it, and what that
-audit did and did not find.
+The drivers are written independently of the reference implementations this
+project consults, two of which are themselves GPL-2.0 (ReactOS and Linux).
+Outside the Thunderbolt 3 and USB4 work described next, no function body from
+any of them is copied into src/. That rule is unchanged by the licence this
+file now carries, and the change of licence is not a statement that anything
+was ever copied. docs/contributing/legal-provenance.md section 3 records the
+rule, the overlap audit that checked it, and what that audit did and did not
+find.
 
-Two of this project's own programs are compiled binaries that statically
-contain third-party code, and both of them are tools rather than the driver:
-XHCIQUAL.EXE, the DOS qualification tool, and XHCISNAP.EXE, the Windows
-snapshot reader. Neither is one file: every cut keeps its own copy, so the
-repository tracks one XHCIQUAL.EXE under releases/<version>/xhciqual/ and one
-XHCISNAP.EXE under releases/<version>/xhcisnap/ for each cut, and a download
-carries one of each beside the driver.
+The Thunderbolt 3 and USB4 work (src/cm/, the source of xhcicm.sys) is the
+recorded exception, and some of its files are not only this project's code.
+src/cm/tbt_ring.c and src/cm/tbt_regs.h were lifted from the usb4-emu
+project's tools/usb4cm while that code was under the MIT licence, and keep its
+copyright line and MIT permission notice. Since 2026-10-15, when usb4-emu was
+relicensed to GPL-2.0-only, code may also be adapted from usb4-emu and from
+Linux's drivers/thunderbolt (GPL-2.0): src/cm/tbt_u4cm.c is adapted from both
+and carries their copyright lines and SPDX-License-Identifier: GPL-2.0-only,
+and outside src/ the host-test file test/u4_fakefab.c and the cross-check
+files scripts/usb4-crosscheck/u4cm-crosscheck.c and run-crosscheck.sh adapt
+usb4-emu code and keep its notice.
+Each adapted file keeps the copyright lines and the licence notice of every
+file it came from. docs/contributing/legal-provenance.md section 2a lists each
+file, the source file, the commit read and what was taken, and section 3
+records the rule. src/cm/stor98cm.h is a third case: the Stor98 project's
+interface header, carried byte for byte under its own BSD-3-Clause notice and
+never edited here (section 2a).
+
+src/stor98/ is the Stor98 project itself, in this repository since 2026-10-19:
+its source, documentation, tests and released builds. Those files carry
+Stor98's own licence, BSD-3-Clause, in src/stor98/LICENSE, not the licence
+above, and src/stor98/NOTICE records where their code came from (SweetLow's
+nvme9x/nvment and Dominik Behr's nvme2k among it).
+docs/contributing/legal-provenance.md, "Stor98 in this tree", has the record.
+
+This project's tools are compiled binaries that statically contain
+third-party code; the drivers are not among them. There are five tools and,
+for 3.0.0.0, eight executables: XHCIQUAL.EXE, the DOS qualification tool;
+XHCISNAP.EXE, the Windows snapshot reader; XHCICLN.EXE and XHCICL64.EXE, the
+cleanup tool, from release 2.4.0.0; and XHCIINST.EXE and XHCIIN64.EXE, the
+install tool, and XHCITR.EXE and XHCITR64.EXE, the xHCI98 USB Tree, from
+release 3.0.0.0. None is one file: every cut keeps its own copies, so the
+repository tracks each under releases/<version>/tools/<tool>/ (XHCIQUAL and
+XHCISNAP at the version root, without tools/, in a release before 2.4.0.0),
+and a download carries them in the same places.
 XHCIQUAL.EXE is linked as a DOS/32 Advanced DOS Extender executable, which
 embeds that extender as the program's stub, and it statically links the Open
-Watcom C runtime. XHCISNAP.EXE statically links the Microsoft Visual C++
-6.0 C runtime: xhcisnap/build.cmd compiles without /MD, so the runtime is bound
-into the image rather than reached through a DLL at run time - its import table
-names only KERNEL32.dll and ADVAPI32.dll. None of those three runtimes and
-extenders is covered by the grant above, and each carries its own terms.
-NOTICE.TXT sits beside each of those executables in a release directory, and
-the two are not the same document: the qualifier's reproduces the DOS/32A
-licence text in full and records the Open Watcom runtime linkage, while the
-reader's records the Visual C++ runtime linkage and quotes none of its terms.
-Each of those two executables is therefore a single file combining this
-project's code with code under other licences, and
+Watcom C runtime. XHCISNAP.EXE and the 32-bit XHCICLN.EXE, XHCIINST.EXE and
+XHCITR.EXE statically link the Microsoft Visual C++ 6.0 C runtime: each tool's
+build.cmd compiles them without /MD, so the runtime is bound into the image
+rather than reached through a DLL at run time, and no C runtime DLL is in
+their import tables. XHCICL64.EXE, XHCIIN64.EXE and XHCITR64.EXE statically
+link the Windows Driver Kit 7.1's amd64 C runtime (LIBCMT, /MT) in the same
+way. None of those runtimes and extenders is covered by the grant above, and
+each carries its own terms.
+NOTICE.TXT sits beside each tool's executables in a release directory, and
+they are not all the same document: the qualifier's reproduces the DOS/32A
+licence text in full and records the Open Watcom runtime linkage, while each
+of the others records the Visual C++ or Windows Driver Kit runtime linkage
+and quotes none of its terms. Each of those executables is therefore a single
+file combining this project's code with code under other licences, and
 docs/contributing/legal-provenance.md section 2a records what is in each.
-The drivers themselves - xhci98.sys, the host controller driver, and
-xhciuas.sys, the USB Attached SCSI class driver - contain no runtime and no
-extender; the one compiler-supplied object in their 64-bit builds is described
-next.
+The drivers themselves - xhci98.sys, the host controller driver; xhciuas.sys,
+the USB Attached SCSI class driver; xhcicm.sys, the Thunderbolt 3 and USB4
+connection manager (one image, staged a second time under nt\ for its
+tunnel-port filter); and xhcihlpr.sys, the x86 helper of Windows 2000 to 7 -
+are described next.
 
-Each driver is linked by the Windows 2000 DDK (the 32-bit build) or by the
-Windows Driver Kit 7.1 (the amd64 build) against import libraries for
-ntoskrnl.exe and hal.dll, and runs only as a component loaded by those
-operating systems' kernels. Since release 2.0.0.0 neither imports usbport.sys:
-xhci98.sys replaces Windows' own USB port and hub drivers rather than plugging
-into them, as the 1.x.x.x releases did. Those import libraries contribute no
-code to the image - the import table names symbols and nothing more, which
-scripts\import-gate\check-imports.ps1 prints in full. No runtime or extender
-is linked into any build. The 32-bit builds link no third-party object at all.
-The amd64 builds carry one object that is not this project's code: WDK 7.1
-compiles amd64 drivers with /GS stack-buffer checks, and its libraries supply
-the cookie check (__security_check_cookie) and the handler it jumps to on a
-mismatch (__report_gsfailure, which calls KeBugCheckEx and is that import's
-only call site in each image). Nothing in this project's source calls it, and
-it runs only on a stack-buffer overrun. Whether that object asks for a notice
-of its own has not been read; docs/contributing/legal-provenance.md section 2
-records it as an open question, and records the boundary above. The drivers
-are distributed by themselves and loaded by a kernel this project does not ship
-and could not ship.
+xhci98.sys, xhciuas.sys and xhcicm.sys are each linked by the Windows 2000
+DDK (the 32-bit build) or by the Windows Driver Kit 7.1 (the amd64 build)
+against import libraries for ntoskrnl.exe and hal.dll, and run only as
+components loaded by those operating systems' kernels. Since release 2.0.0.0
+none imports usbport.sys: xhci98.sys replaces Windows' own USB port and hub
+drivers rather than plugging into them, as the 1.x.x.x releases did. Those
+import libraries contribute no code to the image - the import table names
+symbols and nothing more, which scripts\import-gate\check-imports.ps1 prints
+in full. No runtime or extender is linked into any of those three. Their
+32-bit builds link no third-party object at all (docs/contributing/
+legal-provenance.md section 2 has the reading for xhci98.sys; xhciuas.sys
+and xhcicm.sys are built by the same DDK in the same way). Their amd64
+builds carry
+one object that is not this project's code: WDK 7.1 compiles amd64 drivers
+with /GS stack-buffer checks, and its libraries supply the cookie check
+(__security_check_cookie) and the handler it jumps to on a mismatch
+(__report_gsfailure, which calls KeBugCheckEx and is that import's only call
+site; each driver's amd64 import allowlist under scripts\import-gate\ says
+so). Nothing in this project's source calls it, and it runs only on a
+stack-buffer overrun. xhcihlpr.sys is linked by WDK 7.1 for x86 (the Windows
+XP target) and links objects from that kit's libraries: IoCreateDeviceSecure
+and its members from wdmsec.lib, the same /GS cookie support, and, for its
+subsystem version, safecrtnt.lib and libcntpr.lib from the kit's lib\crt
+directory. Whether any of those objects asks for a notice of its own has not
+been read; docs/contributing/legal-provenance.md section 2 records the
+composition and that open question, and records the boundary above. The
+drivers are distributed by themselves and loaded by a kernel this project
+does not ship and could not ship.
 
 The release download - as distinct from this repository - carries no Microsoft
 file. Since release 2.0.0.0 the drivers depend on two of the operating
@@ -451,8 +494,12 @@ installation source, never overwriting a file already present, and neither is
 in the download or in this repository. The Windows Vista and Windows 7 install
 paths copy neither, because every install of those systems already carries
 both. On Windows 98 SE, xhciuas.inf names NUSB's USBNTMAP.SYS as a filter by
-name and never ships it; the txtsetup.oem files name no Microsoft file.
-Nothing here purports to license any of them to anyone.
+name and never ships it. The 64-bit txtsetup.oem copies no Microsoft file.
+The 32-bit txtsetup.oem's second Windows 2000 entry, since release 2.4.0.0,
+names three files of the Windows 2000 CD - USBD.SY_, HIDCLASS.SY_ and
+HIDPARSE.SY_ - which the user copies from their own CD to the F6 floppy;
+the download carries none of them. Nothing here purports to license any of
+them to anyone.
 
 The 1.x.x.x releases depended on more of them. From release 0.0.0.4 to 1.0.0.0 the assembled download did
 carry three of them, renamed (usbd98.sys and usbd2k.sys, the two systems' own

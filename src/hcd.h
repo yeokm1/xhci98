@@ -28,6 +28,7 @@
 #include "xhci_func.h"
 #include "xhci_xport.h"
 #include "xhci_silent.h"
+#include "xhci_regsrc.h"
 #include "xhci_hub.h"
 #include "xhci_sshub.h"
 #include "xhci_link.h"
@@ -299,7 +300,7 @@ typedef struct _HCD_XFER {
 #define HCD_WIDE_ENTRIES    8UL
 /*
  * XhciWideMap when the value is absent: off (owner, 2026-10-10, for 2.2.0.3
- * and 2.3.0.0, after Codex session 01a124ef: regression unlikely but
+ * and 2.3.0.0: regression unlikely but
  * unquantified, a silent-corruption failure mode, no gate-code defect;
  * record 13 section 11.6). 1 in the key opts in. The one constant to
  * flip. Promotion still needs Windows 2000 or later, the
@@ -1124,7 +1125,7 @@ typedef struct _HCD_HOLD {
  * thread's control transfers use its first 4 KB, the limit a configuration
  * descriptor had before Phase 27, and each hub's status-change report has
  * its own slice after them (hcd_hub.c), so serving hubs takes nothing from
- * that limit (Codex review of 23e7715, finding 8). */
+ * that limit (reviewed and revised after 23e7715). */
 #define HCD_SCRATCH_CONTROL_BYTES 4096UL
 #define HCD_HUB_STATUS_BYTES    XHCI_HUB_STATUS_MAX_BYTES
 #define HCD_SCRATCH_BYTES                                                    \
@@ -1251,8 +1252,8 @@ typedef struct _HCD_CONTROLLER {
                                      * dropped (hcdArmIsOlder)            */
     KEVENT TimersIdle;
     /* The MFINDEX sampler's own timer, not a slot of the service's: a
-     * recurring arm must not be refused when the slots are full (Codex
-     * review of batch (c), round 13, finding 2). FrameArmed under
+     * recurring arm must not be refused when the slots are full (batch
+     * (c), reviewed and revised). FrameArmed under
      * TimerLock; the drain waits it to 0. */
     KTIMER FrameTimer;
     KDPC FrameDpc;
@@ -1633,7 +1634,7 @@ typedef struct _HCD_CONTROLLER {
     ULONG InjSetInterface;
     ULONG InjSelectConfig;
     ULONG InjBulkStream;            /* 36.22: the held TD's stream, 0 none */
-    /* BULK_TIMEOUT (review round 5): armed to lose the target endpoint's
+    /* BULK_TIMEOUT: armed to lose the target endpoint's
      * next TD's completion events; once one is lost, every event inside
      * that TD's TRBs. Controller lock (the drain's hook sets them). */
     ULONG InjBulkLose;
@@ -1712,6 +1713,11 @@ typedef struct _HCD_CONTROLLER {
     ULONG FastPollMode;
     ULONG FastPollOpened;
     ULONG FastPollFallbacks;
+    /* Task 42-A.17 (hcd_ctl.c hcdReadDword): how many of the start's
+     * values were taken from the machine-wide key, zeroed before the
+     * delivery's first read and noted as reg.machine after the quirks
+     * and the interrupt route. */
+    ULONG RegMachineWon;
     /* The driver's controllers, for the machine-wide serial check
      * (hcd_pdo.c, hcdSerialLock). */
     struct _HCD_CONTROLLER *SerialNext;
@@ -2073,8 +2079,8 @@ ULONG HcdThreadCommandRaw(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
  * device record and its enumeration stay as they are until that pass, whose
  * identity read needs them; a caller that gets TRUE must not fail or tear
  * the device down itself (31-A.3's HcdDevicePdoCreate lists no PDO for it
- * and its machine waits in Present; Codex review of Phase 31, round 2,
- * unit C). Sets dev->HoldAsked; a request the service later refuses for a
+ * and its machine waits in Present; Phase 31, reviewed and revised).
+ * Sets dev->HoldAsked; a request the service later refuses for a
  * device still there ends with the device refused in place (hcd_enum.c,
  * hcdHoldResolve).
  * IRQL: <= DISPATCH_LEVEL, controller lock not held.

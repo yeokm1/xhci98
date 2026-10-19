@@ -122,7 +122,7 @@ static void add(u8 type, u8 *f, u8 flen, const char **strs)
 }
 
 /*
- * A window that ends at an inaccessible page (review round 1, P2): any read
+ * A window that ends at an inaccessible page: any read
  * past the length handed to the parser faults the test instead of passing
  * it. Two committed regions of 64 KB, each followed by a PAGE_NOACCESS page.
  */
@@ -692,8 +692,10 @@ static void test_broken_tables(void)
         memset(w + GUARD_SPAN - 32, 0, 32);
         memcpy(w + GUARD_SPAN - 16, "_DMI_", 5);
         memset(&si, 0, sizeof(si));
+        /* _DMI_ in the last paragraph: no overread. Not a CHECK - the
+         * result is not the point; an overread hits the PAGE_NOACCESS
+         * guard and faults the suite, which fails the build. */
         (void)smb_scan(at_guard(w, GUARD_SPAN), GUARD_SPAN, 0xF0000UL, &si);
-        CHECK(1, "_DMI_ in the last paragraph: no overread");
     }
 
     /* Zero padding after the last structure (no type 127) is not damage. */
@@ -825,7 +827,7 @@ static void test_cpu(void)
     CHECK(has("CPU: CPUID 05h/04h/3\n"), "short: no vendor, no brand");
 }
 
-/* Review round 1, P1: an allowed field naming the same string as an
+/* An allowed field naming the same string as an
  * identifier, or carrying an identifier's text, prints "(withheld)". */
 static void test_aliasing(void)
 {
@@ -892,7 +894,7 @@ static void test_aliasing(void)
     CHECK(!has("Test BIOS 9"), "aliased short: the DIMM serial");
 }
 
-/* Review round 2: the UUID as text, short identifiers, and a walk that
+/* The UUID as text, short identifiers, and a walk that
  * cannot finish. */
 static void build_t1(u8 serial_idx, const char **strs, const u8 *uuid)
 {
@@ -938,7 +940,7 @@ static void test_aliasing2(void)
     CHECK(strcmp(si.sys_version, "(withheld)") == 0,
           "uuid: raw-order text withheld");
 
-    /* A three-character serial (review round 3): anywhere, any case. */
+    /* A three-character serial: anywhere, any case. */
     tlen = 0;
     memset(tab, 0, sizeof(tab));
     {
@@ -962,7 +964,7 @@ static void test_aliasing2(void)
     render_short(&si);
     CHECK(!has("A12") && !has("a12"), "short serial: not in the short lines");
 
-    /* A one-character serial "0" (review round 5: no placeholder exception)
+    /* A one-character serial "0" (no placeholder exception)
      * withholds every string holding a 0. */
     tlen = 0;
     memset(tab, 0, sizeof(tab));
@@ -981,8 +983,8 @@ static void test_aliasing2(void)
           strcmp(si.sys_product, "(withheld)") == 0 &&
           strcmp(si.sys_version, "(withheld)") == 0, "serial \"0\": withheld");
 
-    /* A stock filler as the serial (and an allowed field naming it, review
-     * round 5) is withheld like any value. */
+    /* A stock filler as the serial (and an allowed field naming it) is
+     * withheld like any value. */
     tlen = 0;
     memset(tab, 0, sizeof(tab));
     {
@@ -999,7 +1001,7 @@ static void test_aliasing2(void)
     CHECK(strcmp(si.sys_product, "(withheld)") == 0 &&
           strcmp(si.sys_mfr, "Maker") == 0, "filler serial: withheld");
 
-    /* Review round 4: a labelled or repeated-digit serial is no filler. */
+    /* A labelled or repeated-digit serial is no filler. */
     {
         static const char *l1[] = { "Serial Number: SN-123",
                                     "Board Serial Number: SN-123 rev",
@@ -1075,7 +1077,7 @@ static void test_aliasing2(void)
     }
 }
 
-/* Whole-branch review (area 3, round 1, P1): an identifier the 64-character
+/* An identifier the 64-character
  * display bound cuts is still withheld - its head ends the shown string. */
 static void test_cut_identifier(void)
 {
@@ -1136,7 +1138,7 @@ static void parse_and_seal(SYSINFO *si, int cpuid)
     sysinfo_seal(si);
 }
 
-/* Whole-branch review (area 3, rounds 3 and 4, P1s): an identifier that
+/* An identifier that
  * only a printed line carries - across a join of two fields, a field and
  * the line's fixed words (the BIOS line's SMBIOS suffix, the CPU line's
  * "(no CPUID), socket"), or the head a short line's 79-column cut leaves,
@@ -1185,7 +1187,7 @@ static void test_joined_identifier(void)
           strcmp(si.sys_product, "(withheld)") == 0,
           "joined: a UUID across two fields withheld");
 
-    /* Round 5: a second Type 1 with another UUID does not displace the
+    /* A second Type 1 with another UUID does not displace the
      * first, whose split text the first record's fields carry. */
     {
         static const u8 uuid2[16] = { 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
@@ -1289,7 +1291,7 @@ static void test_joined_identifier(void)
     }
 }
 
-/* Review round 3, P3: the 4096-structure limit, well under 64 KB. */
+/* The 4096-structure limit, well under 64 KB. */
 static void test_struct_limit(void)
 {
     static u8 t[4097 * 6];
@@ -1331,7 +1333,7 @@ static void test_skip(void)
           "skip: one short line");
 }
 
-/* Review round 1, P3: an unusable 3.0 entry does not hide a legacy one. */
+/* An unusable 3.0 entry does not hide a legacy one. */
 static void test_ep_order(void)
 {
     SYSINFO si;

@@ -1,0 +1,38 @@
+# Toolchains and Microsoft kit files (MSVC 6.0, Windows 2000 DDK, WDK 7.1,
+# Windows 98 DDK SCSI.H/SRB.H): local only, never committed. See docs/BUILD.md.
+tools/
+# Former location of the Windows 98 DDK headers
+kit/
+# Build outputs: build.exe object trees (src\obj<alt>\<arch>) and logs, and
+# scripts\build.cmd's copies plus the release staging area (out\stage\<ver>)
+out/
+obj*/
+*.obj
+*.sys
+*.mpd
+*.vxd
+*.pdb
+*.lib
+*.exp
+*.res
+*.map
+build*.log
+build*.wrn
+build*.err
+# Signing material is never committed
+*.pfx
+*.p12
+*.pvk
+*.spc
+*.cer
+# Machine-local script state (until 0.4.0.0 also the maintainer's Stor98
+# test-signing key; since xhci98 3.1.0.0 xhci98's key signs stor98.sys)
+scripts/local/
+# The releases made here up to 0.4.0.0 ARE tracked, binaries included;
+# that is the difference between releases\ and out\.
+!releases/**/*.sys
+!releases/**/*.mpd
+# ... and the public half of the certificate their amd64/stor98.sys was signed with
+!releases/**/*.cer
+# Test VM images: vms\ is a junction to the local VM folder (docs/TESTING.md); never committed
+vms

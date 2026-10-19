@@ -198,6 +198,14 @@ static void test_infs(void)
         missing += inList(seen, seenCount, CmPortsUnpairedAt(k)) ? 0 : 1;
     }
     CHECK_EQ(missing, 0, "every family port id and every unpaired id is in xhcicmf.inf");
+    missing = 0;
+    for (i = 0; i < seenCount; i++) {
+        missing += CmPortsFilterId(seen[i]) ? 0 : 1;
+    }
+    CHECK_EQ(missing, 0, "CmPortsFilterId takes every bridge id of xhcicmf.inf (task 42-A.5)");
+    CHECK(!CmPortsFilterId(CM_PORTS_ID(0x1B21, 0x2421)),
+          "and not the emulator's chained upstream port, which the INF does not name");
+    CHECK(!CmPortsFilterId(CM_PORTS_ID(0x8086, 0x15BF)), "nor an NHI");
     CHECK_EQ(seenCount, 38, "38 bridge ids: record 21's 30, record 22's 6, the emulator's 2");
 
     CHECK(readInf("..\\src\\cm\\xhcicm.inf") != 0, "xhcicm.inf read");
@@ -343,6 +351,21 @@ static void test_child_attach(void)
     int other;
     PVOID chain[CM_CHILD_CHAIN_MAX + 1];
     ULONG i;
+
+    CHECK_EQ(CmPortsStackless(0, 0, 0, 0), 1,
+             "stackless: nothing attached (an eject removed the stack)");
+    CHECK_EQ(CmPortsStackless(1, 1, 0, 0), 1,
+             "stackless: only the BusRelations child, nothing above it (no driver, "
+             "Code 28)");
+    CHECK_EQ(CmPortsStackless(1, 1, 0, 1), 0,
+             "stackless: a function driver above the child is a stack");
+    CHECK_EQ(CmPortsStackless(1, 1, 1, 0), 0,
+             "stackless: an AddDevice-made object of this driver's is a stack");
+    CHECK_EQ(CmPortsStackless(1, 0, 1, 0), 0,
+             "stackless: an AddDevice-made object alone is a stack");
+    CHECK_EQ(CmPortsStackless(1, 0, 0, 0), 0,
+             "stackless: another driver's objects and no child of this one's: a "
+             "stack, not read");
 
     CHECK_EQ(CmPortsChildFirst(0, 0), CM_CHILD_ATTACH,
              "the first step: nothing attached attaches with no walk");

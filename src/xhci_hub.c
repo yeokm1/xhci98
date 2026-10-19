@@ -181,7 +181,7 @@ ULONG XhciHubResumeProgress(ULONG status)
         return XHCI_HUB_RESUME_PENDING;
     }
     /* A clear suspend bit alone is not a resume: the port must be enabled
-     * (Codex review of the Phase 27 integration, round 4, finding 3). */
+     * (the Phase 27 integration). */
     return ((status & XHCI_HUB_PORT_ENABLE) != 0) ? XHCI_HUB_RESUME_DONE
                                                   : XHCI_HUB_RESUME_DISABLED;
 }
@@ -250,8 +250,9 @@ ULONG XhciHubResetProgress(ULONG status, ULONG change)
     }
     /* Only a fresh C_PORT_RESET with the reset bit clear says this reset
      * ended: the caller cleared any older one before starting it, and an
-     * enabled port with neither may be one the hub has not reset yet (Codex
-     * review of 23e7715, finding 5; USB 2.0 11.24.2.7.2.5, to transcribe). */
+     * enabled port with neither may be one the hub has not reset yet
+     * (reviewed and revised after 23e7715; USB 2.0 11.24.2.7.2.5, to
+     * transcribe). */
     if ((change & XHCI_HUB_C_PORT_RESET) == 0 ||
         (status & XHCI_HUB_PORT_RESET) != 0) {
         return XHCI_HUB_RESET_PENDING;

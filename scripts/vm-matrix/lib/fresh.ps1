@@ -40,7 +40,7 @@ function Get-ImageSnapshots {
     # A qemu-img that could not open the image (held by a running QEMU, a
     # missing DLL, a corrupt file) prints its reason and exits nonzero, and
     # its empty listing must not be read as "no snapshots": that turned every
-    # such failure into "carries no base- stamp" (repo audit S-5).
+    # such failure into "carries no base- stamp" (an earlier repository audit).
     if ($LASTEXITCODE -ne 0) {
         throw ("qemu-img snapshot -l failed on {0} (exit {1}): {2}" -f $Image, $LASTEXITCODE, $text.Trim())
     }
@@ -296,8 +296,8 @@ function Get-ReplugOutcome {
 # INERT and EXCLUDED do not.  Returns $true when the row counts against the
 # verdict.
 #
-# BOTH HALVES OF THE WEDGE WAIVER ARE REQUIRED.  Until the 2026-09-17 audit's
-# D1 the declaration alone waived any ERROR on the row - a refused device_add,
+# BOTH HALVES OF THE WEDGE WAIVER ARE REQUIRED.  Until the audit of 2026-09-17
+# the declaration alone waived any ERROR on the row - a refused device_add,
 # a device never on the bus, an unconfirmed device_del, identity drift, a
 # monitor timeout - all of them silent on the one row the declaration is keyed
 # to.  The declaration licenses one shape (design record 09 section 4.1: the
@@ -474,7 +474,7 @@ function Invoke-RowLegs {
     return [pscustomobject]@{ Outcome = $rowOutcome; Why = $why; LegOutcomes = $legOutcomes }
 }
 
-# WHAT A GROUP-LEVEL FAILURE ADDS TO THE TALLY (the 2026-09-07 audit's H20,
+# WHAT A GROUP-LEVEL FAILURE ADDS TO THE TALLY (the audit of 2026-09-07,
 # and the correction to its first fix).  `$GroupRows` is the group's row
 # count, `$Reached` how many the loop had entered when it threw, and
 # `$RowInFlight` whether one was actually in flight.
@@ -574,7 +574,7 @@ function Get-CloneProblems {
 # -Stamp's refusals.  A stamp says what was installed, and the last prep
 # boot's debug console is the only witness this side of a boot that anything
 # was; the image the stamp is written to must be the one that boot ran, or the
-# stamp names an install the file does not hold (repo audit S-4).  An empty
+# stamp names an install the file does not hold (an earlier repository audit).  An empty
 # list means the stamp may be taken.
 # -CopyBack's refusals, kept pure so the self-test can drive them. The work
 # copy is named by the paths file's second line; a copy back is refused while

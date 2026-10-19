@@ -24,8 +24,9 @@
  * case for the hardware: its D3 and D0 work does nothing. Where
  * PoRequestPowerIrp fails, the transition is made on the thread without a
  * device IRP (CmPowerDirectWork, hcd_power.c's direct transition). Once a
- * removal has closed admission (CmPowerDrain), a SET_POWER passes down
- * untouched.
+ * removal has closed admission (CmPowerDrain), a power IRP is completed
+ * with STATUS_DELETE_PENDING, touching nothing of the extension's (as
+ * hcd_power.c does after removal).
  *
  * Windows 98 rules (win98-wdm.md, "Power Management"), each kept as
  * hcd_power.c keeps them: PoStartNextPowerIrp before a power IRP is
@@ -250,6 +251,15 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     LONG rc;
     ULONG v;
 
+    if (nhi->U4On && nhi->DevicePower == PowerDeviceD0 &&
+        nhi->Live.State == CM_LIVE_CONTAINED &&
+        (CmLiveU4Wake(&nhi->Live) & CM_LIVE_ACT_SNAPSHOT) != 0) {
+        /* Record 22 section 7.7 part 5: back in D0, a contained instance
+         * is probed at once; an attempt the suspend cancelled starts a
+         * new episode with no second outage asked of it. */
+        TbtU4Snapshot(&nhi->U4);
+        CmLogNote(nhi, "u4.recover.snapshot", CmLiveEpisode(&nhi->Live));
+    }
     if (!nhi->Suspended || nhi->DevicePower != PowerDeviceD0) {
         return TRUE;
     }
@@ -374,7 +384,10 @@ resumed:
     CmNhiDrainActions(nhi);
     if (lost && nhi->U4On) {
         /* Record 22 section 7.7: the USB4 profile's containment, its own
-         * loss bracket and request inside (CmNhiU4ContainEx). */
+         * loss bracket and request inside (CmNhiU4ContainEx); the stage
+         * is the loss-interrupted resume's (U27), which the probe serves
+         * and the recovery's commit makes ACTIVE again. */
+        nhi->U4LossFrom = 2;
         CmNhiU4Contain(nhi);
     } else if (lost && nhi->ReenumOn) {
         CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));

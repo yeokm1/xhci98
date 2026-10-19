@@ -482,7 +482,7 @@ static void test_dead_causes(void)
  * set - so every reconstruction says "nothing wrong" and the fallback used to
  * be DISQUALIFIED. Naming the cause while still disqualifying the part is the
  * contradiction the cause line was added to remove, so the two are checked
- * together here (Codex review of the 2026-09-16 audit's C5 fix).
+ * together here (2026-09-16).
  */
 static void test_tool_limit_is_not_a_disqualification(void)
 {
@@ -563,8 +563,7 @@ static void test_tool_limit_is_not_a_disqualification(void)
  * established - and it stays true when somebody powers the part up, which the
  * D-state and MSE readings do not. Asked after them, a controller that is
  * both in D3 and misdescribing its BAR type came back CANNOT SAY on the
- * D-state and the definitive refusal was never reported (Codex review round
- * 4 of the 2026-09-16 audit).
+ * D-state and the definitive refusal was never reported (2026-09-16).
  */
 static void test_io_bar_outranks_power_and_mse(void)
 {

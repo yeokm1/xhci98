@@ -1203,7 +1203,7 @@ static ULONG uasTmf(PUAS_FDO fdo, ULONG function, ULONG lun, ULONG taskTag)
     UAS_ACT a;
     KEVENT done;
     LARGE_INTEGER timeout;
-    NTSTATUS wait;
+    BOOLEAN answered;
     ULONG tag;
     ULONG code;
     ULONG length;
@@ -1238,17 +1238,20 @@ static ULONG uasTmf(PUAS_FDO fdo, ULONG function, ULONG lun, ULONG taskTag)
 
     timeout.LowPart = (ULONG)-(LONG)(UAS_TMF_TIMEOUT_MS * 10000UL);
     timeout.HighPart = -1;
-    wait = KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                 &timeout);
+    (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
+                                &timeout);
 
     uasActInit(&a);
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    code = (wait == STATUS_SUCCESS && slot->State == UAS_SLOT_FINAL &&
-            !slot->Failed) ? slot->ResponseCode : UAS_RC_TMF_FAILED;
+    /* Decided from the slot, not the wait: a RESPONSE IU parsed between
+     * the timeout and this lock is still the device's answer, and its tag
+     * is then no longer live in the device. */
+    answered = (BOOLEAN)(slot->State == UAS_SLOT_FINAL && !slot->Failed);
+    code = answered ? slot->ResponseCode : UAS_RC_TMF_FAILED;
     /* The event is on this stack: nothing may signal it after this. An
      * unanswered TMF may still be live in the device under its tag. */
     slot->TmfDone = NULL;
-    slot->Quarantine = (BOOLEAN)(code == UAS_RC_TMF_FAILED);
+    slot->Quarantine = (BOOLEAN)!answered;
     slot->Aborted = TRUE;
     slot->State = UAS_SLOT_FINAL;
     for (i = 0; i < UAS_XFERS; i++) {
@@ -1783,8 +1786,8 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
     /* Task 36.21: no telemetry send is built now (Started is FALSE). One
      * a timer run has built is waited for until its IoCallDriver has
      * returned - a timer run on another processor may still be resetting
-     * and sending the IRP, and a cancel before that would be lost (review
-     * round 2) - then, still pending, cancelled; the rundown below waits
+     * and sending the IRP, and a cancel before that would be lost - then,
+     * still pending, cancelled; the rundown below waits
      * for its completion. The IRP is this driver's, freed only by
      * UasEngineFree after that rundown. */
     for (;;) {

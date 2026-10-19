@@ -65,7 +65,7 @@ Write-Step "Checking host"
 Test-SetupHost
 
 # Get-QemuTool lives in common.ps1 - there were five copies of it and they
-# had drifted (the 2026-09-07 audit's H28).
+# had drifted (the audit of 2026-09-07).
 
 Write-Step "Checking QEMU"
 $qemuSystem = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-system-x86_64.exe"
@@ -124,7 +124,7 @@ Write-Ok "Using xHCI device model: $XhciDevice"
 # QEMU is resolved at RUN time by the launcher, not baked in here: the host
 # that generated a launcher is not always the host that runs it
 # (scripts\local is git-ignored and OneDrive-synced). One resolver for all
-# five generators, in common.ps1 (the 2026-09-07 audit's H28).
+# five generators, in common.ps1 (the audit of 2026-09-07).
 $qemuResolve = Get-QemuLauncherResolver -FoundPath $qemuSystemCommand
 
 $installCmd = Join-Path $LocalScriptDir "qemu-win2k-xonly-install.cmd"

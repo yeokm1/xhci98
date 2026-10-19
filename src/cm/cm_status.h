@@ -25,7 +25,8 @@
 #define CM_ST_O_MAGIC           0UL
 #define CM_ST_O_VERSION         4UL
 #define CM_ST_O_BYTES           8UL     /* the whole record */
-#define CM_ST_O_GENERATION      12UL    /* bumped on every change, never 0 */
+#define CM_ST_O_GENERATION      12UL    /* bumped on every change; 0 only in
+                                           a start's first record */
 #define CM_ST_O_UPTIME_S        16UL    /* the system's uptime at the write, in s */
 #define CM_ST_O_NHI_ID          20UL    /* vendor 15:0, device 31:16 */
 #define CM_ST_O_CM              24UL    /* CM_ST_CM_* */

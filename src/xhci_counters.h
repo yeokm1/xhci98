@@ -106,12 +106,11 @@ typedef struct _XHCIHC_COUNTERS {
      * 29-A.5's passive fallback - and SuperSpeed-capable devices (a BOS with
      * a SuperSpeed USB Device Capability) enumerated on a USB 2.0 companion
      * port, which is that fallback seen from the other side. A BOS read for
-     * it on the USB 2.0 path was withdrawn (Codex review of Phase 29, round
-     * 2, finding 1): it counts instead the held device itself enumerating on
-     * its companion, matched by the identity 29-A.5's hold read on the
-     * SuperSpeed port. Then the BOS reads that
-     * failed, and the SuperSpeedPlus isochronous endpoints refused because
-     * their payload does not fit the Endpoint Context (29-A.6). */
+     * it on the USB 2.0 path was withdrawn (Phase 29): it counts instead the
+     * held device itself enumerating on its companion, matched by the
+     * identity 29-A.5's hold read on the SuperSpeed port. Then the BOS reads
+     * that failed, and the SuperSpeedPlus isochronous endpoints refused
+     * because their payload does not fit the Endpoint Context (29-A.6). */
     ULONG PortSpeedSuper;
     ULONG SlotSpeedSuper;
     ULONG PortSpeedSuperPlus;

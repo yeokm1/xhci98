@@ -151,9 +151,9 @@ this driver is measured on.
 There is one miniport lock, so an order exists only against usbport's:
 
 ```
-  MiniportSpinLock  ─┐
-                     ├─►  xhciControllerLock  ─►  (nothing)
-  MiniportInterruptsSpinLock  ─┘
+  MiniportSpinLock  -----------+
+                               +-->  xhciControllerLock  -->  (nothing)
+  MiniportInterruptsSpinLock  -+
 ```
 
 Acquired inside either usbport lock, never around one, and never held across a
@@ -595,7 +595,7 @@ this driver's callback log on Windows 7 x86 and x64 (issue 7 section 7).
 
 **`RH_GetHubStatus` is the second callback that takes no lock of this
 driver's either, and the list above named only `RH_GetStatus`** (the
-2026-09-16 audit's E2). It writes `ext->RhHubStatusQueries++` outside the
+audit of 2026-09-16). It writes `ext->RhHubStatusQueries++` outside the
 controller lock, and the argument that makes that sound is in its own comment
 rather than here: this driver has exactly ONE writer of that counter - that
 line - and every other reference is a read. What the rule forbids is a counter
@@ -1127,7 +1127,7 @@ in the image, so there is no table, cache or default that a second controller
 could find already populated by the first.
 
 **That measurement is out of date in both halves, and the table below now
-carries six objects** (the 2026-09-16 audit's E2). Three post-date the sweep,
+carries six objects** (the audit of 2026-09-16). Three post-date the sweep,
 and one of them is initialised and nonzero - `XhciResourcesRequired` - so the
 "`.data` reads as zero" claim no longer holds as written. Re-run the
 `link -dump -symbols` sweep before quoting a count or a section size from this

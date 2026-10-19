@@ -65,8 +65,7 @@
 #include "xhci_hw.h"
 /* For `XhciXferCodeInfo`: Table 6-90's fatal and slot-fatal instructions are
  * scoped to "any command or transfer", so the command engine reads the same
- * transcription the transfer paths and the restore's drain read (audit round
- * 9). */
+ * transcription the transfer paths and the restore's drain read. */
 #include "xhci_xfer.h"
 #include "xhci_dbg.h"
 #include "hcd_svc.h"
@@ -270,7 +269,7 @@ ULONG XhciAsyncTimerArm(PXHCI_EXTENSION ext,
  * and where it is made: a context one CPU captured can have been overtaken by
  * the time it reaches the latch - its command completed, a newer one owed
  * its own watchdog - and replacing the newer owe with it would leave the
- * newer command untimed (Codex review of roadmap 24.4, finding 2). The host
+ * newer command untimed (roadmap 24.4). The host
  * suite cannot put a second CPU between the capture and the latch, so that
  * half is a review property, like the epoch capture's.
  *
@@ -411,13 +410,13 @@ VOID XhciCommandDrainOwedArm(PXHCI_EXTENSION ext)
 }
 
 /*
- * Can a command be timed at all? The only answerable half of that question:
- * whether usbport gave this driver the service. A pool failure *inside* the
- * legacy service is invisible - it returns 0 either way (the Version 300
- * tier's Ex reports one, and xhciArmCommandTimer re-owes it) - so "every
- * command carries a timeout" is an invariant this driver can honour but not verify, and the
- * residual belongs to CheckController noticing a command that has been pending
- * across many polls (roadmap Phase 4 task 8).
+ * Can a command be timed at all? Whether the timer service is there. Under the
+ * miniport a pool failure *inside* usbport's legacy service was invisible - it
+ * returned 0 either way - so "every command carries a timeout" was an
+ * invariant it could honour but not verify. The HCD's own service
+ * (XhciAsyncTimerArm, HcdSvcArmTimer) reports and counts a refusal, and the
+ * residual still belongs to the health poll noticing a command that has been
+ * pending across many polls (roadmap Phase 4 task 8).
  *
  * Checked before the TRB is enqueued rather than after the doorbell, because the
  * two answers are very different: a refusal before the enqueue is a command that
@@ -588,7 +587,7 @@ static VOID xhciCommandInvalidateLocked(PXHCI_EXTENSION ext)
      * ring: every path through here rebuilds the command ring before the
      * engine runs again, and a marker that outlived the rebuild would match
      * the first new command to land at that address and retire its completion
-     * as the No Op's (the Phase 20 review's first finding).
+     * as the No Op's (Phase 20).
      */
     ext->CommandNoOpRewrittenPA = 0;
 }
@@ -671,7 +670,7 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
 
     ext->HealthPolls++;
     /*
-     * Task 9-A.1, review round 3. Resampling the frame axis here is what bounds
+     * Task 9-A.1. Resampling the frame axis here is what bounds
      * the gap between two readings of MFINDEX's eleven-bit Frame Index to the
      * poll's period, which is far under the 2,048-frame lap at which
      * `XhciFrameIdNow`'s reconstruction of the high bits would silently lose one.
@@ -698,7 +697,7 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
          * Not a fatal-error report. All ones is a window that has stopped
          * decoding, and HCE and HSE are simply two of the thirty-two bits it is
          * answering with - the same operand rule the interrupt masks were taught
-         * over five review rounds. Escalating here would request a reset on the
+         * over five revisions. Escalating here would request a reset on the
          * strength of a read that proves nothing, and the reset is containment
          * rather than repair: it would mark a possibly-healthy controller
          * terminally failed on the evidence of one bad config of the bus.
@@ -770,9 +769,11 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
     /*
      * The command that lost its watchdog.
      *
-     * UsbPortRequestAsyncCallback "returns 0 on success **and** 0 when its pool
-     * allocation fails" (src/xhci_cmd.c, xhciArmCommandTimer), so a command can
-     * be enqueued, doorbelled, and left with nothing scheduled to time it. The
+     * Under the miniport, UsbPortRequestAsyncCallback "returns 0 on success
+     * **and** 0 when its pool allocation fails", so a command could be
+     * enqueued, doorbelled, and left with nothing scheduled to time it. The
+     * HCD's service reports a refusal (XhciAsyncTimerArm), but a timer that
+     * is armed and never fires is still possible, so the measure stays. The
      * engine allows one outstanding command, so that state is not a slow command
      * - it is an engine that answers XHCI_CMD_BUSY to everything, for the life of
      * the driver, with no path that ever notices.
@@ -890,28 +891,6 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
 
     XhciControllerLockRelease(ext, oldIrql);
 
-#ifdef XHCI_FIX_PORT_POLL
-    /*
-     * Bench candidate W10 for Finding 3, and **after the release for the same
-     * reason W7 is**: its announce path re-enters this miniport's lock.
-     */
-    XhciRhPortPollSweep(ext);
-#endif
-
-#ifdef XHCI_FIX_RH_GATE
-    /*
-     * Bench candidate W7 for Finding 3. **After the release, and that placement
-     * is the whole of its safety**: the watchdog's announce path calls
-     * `UsbPortInvalidateRootHub`, which calls `RH_DisableIrq` straight back into
-     * this miniport and takes this same non-recursive lock.
-     *
-     * The health poll is the right heartbeat for it because it is the one thing
-     * usbport keeps calling when the root hub has gone quiet - which is exactly
-     * the state the watchdog exists to break.
-     */
-    XhciRhGateWatchdog(ext);
-#endif
-
     return escalate;
 }
 
@@ -952,8 +931,10 @@ static ULONG xhciCommandSubmitEx(PXHCI_EXTENSION ext,
     /*
      * The ring layer checks capacity and Chain shape but has no opinion about
      * TRB *type* - it is the same code the transfer rings use. So the command
-     * ring's own admission rule is here: Table 6-91 gives 9-23 to commands, and
-     * publishing anything else - a transfer TRB, an event type, a Link TRB the
+     * ring's own admission rule is here: Table 6-91 gives 9-25 to commands
+     * (24 and 25, Get and Set Extended Property, are optional and this driver
+     * issues neither, so the range admitted stops at 23), and publishing
+     * anything else - a transfer TRB, an event type, a Link TRB the
      * ring layer owns placing itself - would have the controller execute a TRB
      * type it is not allowed to find there.
      *
@@ -1151,19 +1132,35 @@ ULONG XhciCommandNoOpSelfTest(PXHCI_EXTENSION ext, ULONG armMode)
 static VOID xhciRetireCommand(PXHCI_EXTENSION ext, ULONG pointer, ULONG code)
 {
     XHCI_TD_COMPLETION completion;
+    ULONG noOpIndex;
 
     if (XhciRingClassifyEvent(&ext->CommandRing, pointer, code,
                               &completion) == XHCI_RING_OK &&
         completion.CanRetire &&
         XhciRingRetireTd(&ext->CommandRing, &completion) == XHCI_RING_OK) {
-        return;
+        /* Retired normally. */
+    } else {
+        ext->CommandsBadCompletion++;
+        XHCI_DBG_VALUE_CHANGED("command: unclassifiable completion code",
+                               code);
+        (VOID)XhciRingSetDequeue(&ext->CommandRing,
+                                 XhciRingTrbPA(&ext->CommandRing,
+                                               ext->CommandRing.Enqueue));
     }
 
-    ext->CommandsBadCompletion++;
-    XHCI_DBG_VALUE_CHANGED("command: unclassifiable completion code", code);
-    (VOID)XhciRingSetDequeue(&ext->CommandRing,
-                             XhciRingTrbPA(&ext->CommandRing,
-                                           ext->CommandRing.Enqueue));
+    /*
+     * Either retirement may sweep the dequeue pointer past a rewritten No Op
+     * whose own completion never came. Its marker must not outlive the TRB:
+     * the command that lands on that position later would have its
+     * completion taken as the No Op's and be left pending for the watchdog
+     * to abort.
+     */
+    if (ext->CommandNoOpRewrittenPA != 0 &&
+        (XhciRingIndexFromPA(&ext->CommandRing, ext->CommandNoOpRewrittenPA,
+                             &noOpIndex) != XHCI_RING_OK ||
+         !XhciRingIsOutstanding(&ext->CommandRing, noOpIndex))) {
+        ext->CommandNoOpRewrittenPA = 0;
+    }
 }
 
 /*
@@ -1205,7 +1202,7 @@ static ULONG xhciCommandCompleted(PXHCI_EXTENSION ext,
          * command counter.
          *
          * **The return value is what the severity arm in `XhciCommandEvent`
-         * reads**, and audit round 10 asked for it: an event this engine could
+         * reads**: an event this engine could
          * not match is an event whose Slot ID this driver has no reason to trust
          * as naming a device it still owns.
          */
@@ -1260,7 +1257,7 @@ static ULONG xhciCommandCompleted(PXHCI_EXTENSION ext,
      * only it can: proved this event names the command that is outstanding. What
      * the slot layer still has to decide - whether the outstanding command was
      * one of *its* - it decides from ext->CommandType, which this function has
-     * deliberately not cleared (src/xhci_slot.c, XhciSlotCommandEvent).
+     * deliberately not cleared (XhciSlotCommandEvent, hcd_dev.c).
      */
     XhciSlotCommandEvent(ext, code, control);
 
@@ -1357,7 +1354,7 @@ static VOID xhciCommandAborted(PXHCI_EXTENSION ext, ULONG pointer)
  * doorbell silent until the reset arrives.
  *
  * **This event is the only thing that ends an abort**, and that is a decision
- * the review round after task 7 reversed. The abort watchdog used to conclude
+ * reversed after task 7. The abort watchdog used to conclude
  * locally that the ring had stopped - it can read CRR - and put the engine back
  * in service without waiting for the event. That opened a window nothing could
  * close honestly: a Command Ring Stopped arriving afterwards, with a new command
@@ -1430,8 +1427,8 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
      * unexecuted. Adopting the position as it stands would make the next
      * doorbell execute the abandoned command ahead of the one it was rung for
      * - a Disable Slot or Address Device the slot layer has already been told
-     * was lost - with a completion no outstanding command matches (the
-     * 2026-09-05 audit's F12). So the TRB is rewritten in place as a No Op
+     * was lost - with a completion no outstanding command matches (reviewed
+     * and revised 2026-09-05). So the TRB is rewritten in place as a No Op
      * Command, which is the command ring's own type 23 and not the transfer
      * ring's type 8 that XhciRingNoOpAt writes, keeping its cycle bit so the
      * xHC still fetches it and answers it harmlessly; its completion is
@@ -1449,8 +1446,7 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
          * place; if the xHC has passed the No Op, its completion is in flight
          * with nothing left to recognise it once this marker is overwritten.
          * Either way the ring's history is beyond what one marker tracks, and
-         * the honest answer is the divergence reset (the Phase 20 review's
-         * second finding).
+         * the honest answer is the divergence reset (Phase 20).
          */
         ext->CommandRingDiverged++;
         ext->CommandResetRequests++;
@@ -1555,8 +1551,9 @@ ULONG XhciCommandEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     }
 
     /*
-     * **Table 6-90's severity, on the event family audit round 9 found bypassing
-     * it.** Round 8 taught the transfer paths and the restore's drain to read the
+     * **Table 6-90's severity, on the event family once found bypassing it.**
+     * An earlier revision taught the transfer paths and the restore's drain to
+     * read the
      * table's fatal and slot-fatal instructions; the live command path was left
      * handing every code to the slot state machine, which reduces it to
      * success/non-success. So a Configure Endpoint answered with Incompatible
@@ -1565,9 +1562,9 @@ ULONG XhciCommandEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
      * while the *same code on the same ring* refused a restore.
      *
      * The table is consulted rather than a list written out here, for the reason
-     * rounds 6, 7 and 8 each established the hard way: `XhciXferCodeInfo` is the
+     * three revisions each established the hard way: `XhciXferCodeInfo` is the
      * one place Table 6-90 is transcribed, and every hand-written copy of it in
-     * this repository has been found short by the next round. It answers
+     * this repository has been found short by the next. It answers
      * `XHCI_XFER_BAD_PARAM` for the two command-ring codes handled above, so
      * neither of those can reach an arm here.
      *
@@ -1577,8 +1574,8 @@ ULONG XhciCommandEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
      * act. Escalating first would leave a command outstanding for ever on an
      * engine that allows one at a time.
      *
-     * **The two severities are gated differently, and audit round 10 is why.**
-     * Round 9 ran both arms on any Command Completion Event, matched or not. A
+     * **The two severities are gated differently.** An earlier version ran
+     * both arms on any Command Completion Event, matched or not. A
      * *controller-level* fault is a statement about the controller and carries
      * the same weight whichever command it names - the escalation is bounded,
      * and refusing to act on an unmatched one would discard the only notice of an
@@ -1603,8 +1600,8 @@ ULONG XhciCommandEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
                  * for, so nothing that read it reads something else now, and
                  * `CommandsFatal` says how much of that total the controller
                  * *reported* rather than this driver *inferred* from a ring
-                 * position it could not adopt. Audit round 10 found the two
-                 * sharing one reading, which is the counter contract this
+                 * position it could not adopt. The two once shared one
+                 * reading, which breaks the counter contract this
                  * repository has enforced since Phase 4 task 8: two causes
                  * needing opposite investigations may not answer as one number.
                  */
@@ -1675,8 +1672,8 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
     /*
      * Only the two pointers are checked before the lock, because they are the
      * only things that can be judged without reading the extension. **Everything
-     * else is validated underneath it**, which is the change the second review
-     * round asked for: an epoch tested outside the lock is a check, not
+     * else is validated underneath it** (reviewed and revised): an epoch
+     * tested outside the lock is a check, not
      * synchronization, and a callback that passed such a check could still be
      * preempted and resume inside KeAcquireSpinLock. That mattered while the lock
      * lived in the extension and a restart re-created it; the lock is now the

@@ -102,9 +102,9 @@ ULONG XhciFuncConfig(const UCHAR *config, ULONG length, const XHCI_FUNC *func,
  * IADs are taken as XhciFuncSplit takes them (the present interfaces of
  * the range; one overlapping an earlier IAD ignored), so a function never
  * straddles two PDOs; an IAD whose bFirstInterface is absent names its
- * lowest present interface. XHCI_FUNC_OK, or
- * XHCI_FUNC_MALFORMED (both 0) for XhciFuncSplit's malformations,
- * XHCI_FUNC_BAD_PARAM.
+ * lowest present interface, as XhciFuncSplit's FirstInterface does.
+ * XHCI_FUNC_OK, or XHCI_FUNC_MALFORMED (both 0) for XhciFuncSplit's
+ * malformations, XHCI_FUNC_BAD_PARAM.
  */
 ULONG XhciFuncFirsts(const UCHAR *config, ULONG length, PULONG firsts,
                      PULONG beyond);
@@ -220,7 +220,7 @@ ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial);
  * serial, 0 for the root hub). The instance key carries no hub identity,
  * so a group under another hub at the same route and root port is not
  * this place's - its own parent's re-enumeration, or its START's wait,
- * settles it (Codex review of the 33.1-33.6 integration, finding 3).
+ * settles it (the 33.1-33.6 integration).
  * 1 when it is retired.
  */
 ULONG XhciFuncRetireByPlace(const char *oldSerial, ULONG oldKey,

@@ -79,7 +79,7 @@ static void probe_smbios(SYSINFO *si)
         return;
     }
     if (si->table_lo < LOW_MEM_END) {
-        /* Straddling 1 MB (review round 1, P2): DPMI 0800h refuses an
+        /* Straddling 1 MB: DPMI 0800h refuses an
          * address below 1 MB, so the low part is copied directly and only
          * the part from 100000h is mapped, into one bounded buffer. */
         u32 low;
@@ -403,7 +403,7 @@ void sys_crit_remove(void)
         return;
     /* atexit runs before the runtime flushes the streams, and a redirected
      * stdout's last write can raise INT 24h: it must still find the chain
-     * (Codex review of the 38.1 leg fixes). */
+     * (task 38.1). */
     fflush(stdout);
     fflush(stderr);
     memset(&r, 0, sizeof(r));

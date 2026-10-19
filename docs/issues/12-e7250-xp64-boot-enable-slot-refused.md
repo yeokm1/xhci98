@@ -1,8 +1,19 @@
 # Issue 12 - On the Dell Latitude E7250, the BIOS routes the xHCI's interrupt to a different IRQ from the one Windows connects, so USB devices crawl, hang or fail
 
-Status: **open, root cause found (2026-10-08); fix planned** (roadmap
-`roadmap-hcd.md` Phase 36, task 36.3 first; branch and target version `2.3.0.0`). There is a
-manual workaround (section 6).
+Status: **fixed in `2.3.0.0`** (roadmap-hcd Phase 36). Root cause found
+2026-10-08; the routing quirk `XhciIntelIrqRoute` (36.3), the bounded BUSY
+retry (36.4), polled event delivery with its dead-line move (36.6 to 36.8)
+and MSI on Vista and 7 (36.15) shipped in `2.3.0.0` and were read on the
+owner's E7250 at the bench of 2026-10-11: the repair rewrote `D20IR`
+`3210` -> `3215` under XP x64 and under Windows 7 x64's line, MSI was taken
+under Windows 7 x64, and with the quirk at 0 XP x64 moved to polling at run
+time. The `36.final` check with no manual write was read under Windows 7
+x64 and XP x64 but for S3 and Windows 98 SE, which moved to the bench
+follow-up (BF.5 and BF.6; `roadmap-hcd.md`, 36.final). Whether Windows 98
+SE and ME answer `HalGetBusData` with real data (section 5.1) is likewise
+not read. Sections 4 to 6 are kept as they were written before the fix:
+"planned" there describes the day it was written, and the manual
+workaround of section 6 is needed only on a release before `2.3.0.0`.
 
 **Machine:**
 - Dell Latitude E7250.
@@ -69,7 +80,8 @@ IRQ 16, where nothing listens. What follows:
     backstop. So both attempts fail before the No Op is drained.
 - **With the EHCI disabled**, no ISR call happens at all.
   - The controller thread blocks for up to 5 s in each command wait
-    (`hcdCommandBody`), so the backstop cannot run either.
+    (`hcdCommandBody` in the diagnostic build `2.2.0.2`; `hcdCommandWaitDone`
+    now), so the backstop cannot run either.
   - The commands time out and three controller recoveries follow. The
     recovery window refuses a fourth, and the controller latches failed.
 
@@ -485,7 +497,8 @@ Sources:
 - coreboot: `src/soc/intel/broadwell/include/soc/rcba.h`, and the
   `bd82x6x` and `lynxpoint` `pch.h` headers.
 - The code: `src/hcd_ctl.c` (`hcdParseResources`, `hcdStart`, `hcdThread`,
-  `hcdBackstop`), `src/hcd_enum.c` (`hcdCommand`, `hcdCommandBody`),
+  `HcdCtlBackstopTick`, `hcdBackstop` in `2.2.0.0`), `src/hcd_enum.c`
+  (`hcdCommand`, `hcdCommandWaitDone`; `hcdCommandBody` in `2.2.0.2`),
   `src/xhci_evt.c` (`XhciIsr`, `XhciEnableInterrupts`), `src/xhci_cmd.c`,
   `src/hcd_cfg.c` (`hcdCfgReset`), `src/hcd_power.c`, `src/hcd_svc.c`
   (`HcdSvcConfigSpace`), `src/xhci_psw.c`.

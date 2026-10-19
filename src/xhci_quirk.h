@@ -49,6 +49,28 @@
 #define XHCI_QK_AMD_BIT             13UL    /* XhciAmdSuspendBitClear       */
 #define XHCI_QK_COUNT               14UL
 
+/*
+ * The registry value names, in XHCI_QK_* order, as one list: the pure table
+ * (XhciQuirkValueName, xhci_quirk.c) and the driver's registry reads
+ * (hcd_quirk.c, as wide strings) are both expanded from it, so the two
+ * cannot drift. `X` is applied to each name's string literal.
+ */
+#define XHCI_QK_VALUE_NAMES(X)                                         \
+    X("XhciMsiAvoid")                                                  \
+    X("XhciStreamsOff")                                                \
+    X("XhciResumeReinit")                                              \
+    X("XhciIntelShutdownToEhci")                                       \
+    X("XhciShutdownReset")                                             \
+    X("XhciSuspendHaltDelay")                                          \
+    X("XhciSuspendHaltTimeout")                                        \
+    X("XhciAsmediaFlowControl")                                        \
+    X("XhciTiIntervalCap")                                             \
+    X("XhciStuckLinkReset")                                            \
+    X("XhciStreamRingPad")                                             \
+    X("XhciControlLinkNoOp")                                           \
+    X("XhciIsochSpuriousSuccess")                                      \
+    X("XhciAmdSuspendBitClear")
+
 /* How a value was found, the read status apart from the value. */
 #define XHCI_QK_FOUND_NONE          0UL     /* absent, or no driver key     */
 #define XHCI_QK_FOUND_DWORD         1UL

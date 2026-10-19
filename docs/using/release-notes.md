@@ -21,7 +21,8 @@ Windows XP x64 and 7 x64, and a ThinkPad E460 under Windows 98 SE. "What
 fix was read on the same E7250 under Windows XP x64 Setup. "What
 `2.4.0.0` adds" says, item by item, what was read of `2.4.0.0`'s changes.
 `3.0.0.0`'s Thunderbolt and USB4 support was read in virtual machines, on
-an emulator of those controllers, and on no real machine yet: "Where
+an emulator of those controllers; of real machines, only its Thunderbolt 3
+half on the owner's ThinkPad P14s Gen 1 under Windows 98 SE: "Where
 `3.0.0.0` was read" lists the readings.
 
 The notes for `1.2.0.0`, the last release of the USB 2.0-only miniport, stay
@@ -120,10 +121,11 @@ included.
   machines: Windows 2000 Setup bugchecked on both physical machines this
   project tried, so the driver has never run on Windows 2000 on real silicon.
   Windows ME, 32-bit Windows XP, Windows Vista and 32-bit Windows 7 are
-  supported in virtual machines only for `2.4.0.0`. Real hardware: Windows
+  supported in virtual machines only for `3.0.0.0`. Real hardware: Windows
   98 SE, at a bench session before the `2.0.0.0` release, on a ThinkPad
-  E460 and a ThinkPad P14s Gen 1, and Windows XP x64 and 7 x64 on the
-  owner's Dell Latitude E7250. `2.1.0.0`'s own
+  E460 and a ThinkPad P14s Gen 1, and later on the owner's Lenovo B490 for
+  the Intel port switchover; and Windows XP x64 and 7 x64 on the owner's
+  Dell Latitude E7250. `2.1.0.0`'s own
   changes were read in virtual machines only; of `2.1.1.0`'s, the Power tab
   and the Intel port switchover were read on the owner's real hardware under
   Windows 98 SE, and the registry values in virtual machines; of
@@ -153,11 +155,165 @@ included.
   suspend is new in `2.3.0.0` and off by default; see
   "XhciSelectiveSuspend: putting idle devices to sleep".
 - It does not write to your disk. The driver creates no file. Its log is read
-  out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
+  out of the running driver by the xHCI98 USB Tree when you ask for a report; see
   "The log, and how to send one".
 - It is not the miniport. `1.2.0.0` is frozen and stays available; nothing
   of it is in this package. An install of this package replaces it, because both are
   called `xhci98.sys` (see "Upgrading from 1.2.0.0").
+
+## What `3.1.0.0` changes
+
+This section collects the changes made for the next release, `3.1.0.0`,
+as they are made; the head of this file is rewritten when it is cut.
+
+- **The x64 package's filter INF is in the main folder.** In
+  `release-x64\` and `debug-x64\`, `xhcicmf.inf` now sits beside
+  `xhcicm.inf` and `xhcicm.sys`, with no `nt\` subdirectory; the x86
+  package keeps `nt\` (never point Windows 98 or ME at it).
+- **`XHCISNAP` removed.** `XHCISNAP.EXE`, `SNAPON.BAT`, `SNAPGET.BAT`
+  and `SNAPOFF.BAT` are no longer in the package (`tools\xhcisnap\` is
+  gone), and the xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE`) does
+  what they did ("The log, and how to send one"):
+  - The field report, `SNAPGET.BAT` (`XHCISNAP -report`): File > Save
+    Report... or `XHCITR /report <file>`, whose report now ends with a
+    "Snapshot" part for each xHCI controller `xhci98.sys` drives - the
+    device report the `.DEV` held and the decoded dump the `.TXT` held,
+    the dump left out at level 4, where it can hold internal addresses.
+    That one file is the bug report. The `.DEV`, `.TXT`, `.BIN` and
+    `.PSC` files themselves: File > Save Snapshot... or
+    `XHCITR /snapshot [NAME]`, with the same names and exit codes.
+  - `SNAPON.BAT`, `SNAPOFF.BAT` and `XHCISNAP -verbosity`, `-on`,
+    `-disable`: View > Logging level... or `XHCITR /setlevel xhci98=<0-4>`
+    (both in `3.0.0.0` already), then a restart.
+  - `XHCISNAP -dump` and `-o NAME`: `XHCITR /dump [/o NAME]`.
+  - `XHCISNAP -probe`: `XHCITR /probe`.
+
+  `xhci98.sys` is unchanged by it: Windows' own property tabs and the
+  tool read it through the same door. Where a section below names
+  `XHCISNAP`'s report, read the snapshot in the tool's report: the same
+  text, from the same code.
+- **The Thunderbolt 3 / USB4 support is experimental, and never chosen
+  for you.** Its box on the Components page reads "Thunderbolt 3 / USB4
+  support (experimental)" and is unticked whether or not a controller is
+  found; the line under it says whether one was found, and its name.
+  Tick it on purpose; the console asks with Enter for N, `/yes` leaves
+  it out, and `/thunderbolt` includes it. The connection manager alone
+  (USB drivers unticked, and Windows 8 and 8.1) is unchanged. An update
+  over an install that has the Thunderbolt driver leaves that driver as
+  it is unless you tick the box.
+- **Stor98 comes with the Thunderbolt 3 / USB4 support.** Ticking the
+  Thunderbolt box ticks the Stor98 box under it, which you can untick;
+  in the console `/thunderbolt` includes Stor98 too (asked, Enter for Y;
+  unasked with `/yes`), and `/nostor98` leaves it out.
+- **Windows 98 SE and ME: Stor98 is updated as a file.** An older
+  `stor98.mpd` is no longer replaced by reinstalling the drive while
+  Stor98 runs it, which stopped Windows 98 SE with "fatal exception 0E"
+  when an update ran with a Thunderbolt or USB4 enclosure attached. The
+  installer writes the new file beside the old one and has Windows swap
+  them at the next start (`WININIT.INI`), refreshes the copy of
+  `stor98.inf` Windows keeps, and asks you to shut down and start
+  Windows again. It does so whether or not the enclosure is plugged in,
+  so an enclosure that was unplugged during the update no longer keeps
+  the old Stor98. The Summary page asks for one tick first, "Please
+  disconnect all external NVMe drives before proceeding" (the console
+  asks the same, Enter for N); unticked, Stor98 is left for a later run.
+  A drive first plugged after the start binds to the new Stor98. And an
+  install the helper could not finish is now reported as unfinished,
+  with steps, rather than as "nothing to do".
+- **No Stor98 record without a Stor98 change.** A run that leaves a
+  Stor98 installed by hand alone no longer writes
+  `HKLM\Software\xhci98\Stor98`; its `Version` is written only when the
+  run installed or updated the bundled Stor98. The uninstall removes
+  that key, and `Software\xhci98` when nothing else is in it, also when
+  Stor98 itself stays.
+- **A warning before Thunderbolt 3 and USB4 are turned off.** When a run
+  will write `XhciCmMode` `0`, the Summary page and the console say
+  "Thunderbolt 3 and USB4 will be turned off (XhciCmMode 0)".
+- **The bundled Stor98 goes on tunnel drives only.** The installer
+  installs Stor98 only when it is chosen (its box, ticked with the
+  Thunderbolt 3 / USB4 one) and only with
+  the Thunderbolt 3 / USB4 support in the same run, and then only on NVMe
+  drives behind a Thunderbolt or USB4 tunnel, as the connection manager
+  reports them; the installer selects tunnel drives only. An internal NVMe
+  drive is left as it is, and so is one whose place cannot be read; the
+  installer says which and why. Stor98 is not for internal NVMe drives:
+  do not install it on one. Stor98's INF matches every NVMe controller
+  (`PCI\CC_010802`), so Windows may still offer Stor98 for an internal
+  NVMe drive that has no driver, later: decline it there. Where a
+  Stor98 the installer did not put on a tunnel drive is installed (by
+  hand, on an internal drive), the installer changes none of its
+  settings, and when that Stor98 is another release than the bundled one
+  it changes nothing of Stor98 at all, since every Stor98 drive shares
+  one driver file. The uninstall removes the bundled Stor98 also from a
+  tunnel drive Windows bound to it after the install (an enclosure first
+  plugged after the restart), when Stor98 was not there before this
+  package's installer.
+- **The Thunderbolt 3 / USB4 connection manager alone.** The installer
+  can install `xhcicm.sys` (with its tunnel-port filter and, on NT, the
+  safe-removal mark service) without `xhci98.sys` and `xhciuas.sys`, for
+  a computer whose USB 3 controllers already run another driver: on
+  Windows 2000 to 7 untick the USB drivers on the Components page. On
+  Windows 98 SE and ME the USB drivers stay
+  required, since those systems have no USB 3 driver of their own. The
+  connection manager needs nothing of `xhci98.sys` on NT: a tunnel's
+  devices are driven by whatever driver Windows has for them, the USB
+  controller of a dock and a USB4 port's USB 3 devices by the computer's
+  own USB 3 driver (design record 21 section 3.5). A run without the USB
+  drivers leaves an installed `xhci98.sys` as it is; the uninstall
+  removes everything, and Add/Remove Programs shows one entry, named for
+  what is installed. `tools\xhciinst\readme.txt`, "The connection manager
+  alone".
+- **The installer opens from `SETUP.EXE`.** To install or update,
+  double-click `SETUP.EXE` at the top of the package (to uninstall, Remove
+  in Add/Remove Programs, or `SETUP /uninstall`): it opens
+  the installer's window with no console window behind it, and on Vista
+  and 7 Windows asks once, for the window. `INSTALL.BAT` still works and
+  is kept for the command line and scripts (`INSTALL /console ...`); run
+  with no arguments it opens the same window.
+- **Windows 8 and 8.1: the connection manager alone.** The installer now
+  starts on Windows 8 and 8.1 (it reads the version through
+  `RtlGetVersion`) and installs the connection manager alone there,
+  without offering the USB drivers: Windows' own `usbxhci.sys` runs the
+  USB controllers. Windows 8 and 8.1 are not a target of this package's
+  USB drivers and have never been run with it: the connection manager
+  installs there through the same INF sections as on Vista and 7,
+  untested. On 64-bit 8 and 8.1 it loads only in test-signing mode, which
+  those systems let you turn on only with Secure Boot off, or on a start
+  with driver signature enforcement disabled; it is not Microsoft-signed.
+  The bundled Stor98 is not offered there. Windows 10 and later are still
+  refused (Windows 11 has a USB4 connection manager of its own).
+- **Stor98 is built with the package, at its version: `3.1.0.0`.** The
+  bundled NVMe driver is now built from this source with the USB drivers
+  (its source has been in this repository since 2026-10-19) and carries
+  the package's version and date, like every other file of the download:
+  `stor98.mpd`, both `stor98.sys` and `stor98.inf` say `3.1.0.0`, dated
+  10/19/2026. Its last release on its own was Stor98 `0.4.0.0`, bundled in
+  `3.0.0.0`; `3.1.0.0` is the next version after it, so the installer
+  updates a `0.4.0.0` (or `0.3.0.x`) it finds, as it updates any older
+  Stor98. What changed in Stor98 since `0.4.0.0` is in its readme's
+  release history (`stor98-readme.txt` points to it). Its link-state
+  interface with `xhcicm.sys` (interface 4) is unchanged.
+- **One signature for every x64 driver.** The 64-bit `stor98.sys` is now
+  test-signed with the same certificate as `xhci98.sys`, `xhciuas.sys`
+  and `xhcicm.sys`, in the same step: `xhci98-test.cer` covers them all.
+  `stor98-test.cer`, the certificate of Stor98's own that signed it up
+  to `0.4.0.0`, is no longer in the download. Test-signing mode on Vista
+  x64 and 7 x64 loads them all, as before.
+- **Stor98 in the published tree.** Stor98's files are now part of each
+  `release-` directory as published, like the USB drivers, rather than
+  added to the download alone.
+- **Known limitation: a drive attached during the install.** On Windows
+  2000 to 7, a Thunderbolt or USB4 drive that is already attached when the
+  package is installed or updated is not listed in Safely Remove Hardware
+  until Windows restarts or the drive is plugged in again (`3.0.0.0` did
+  the same).
+- **Known limitation: the eject under the USB4 connection manager on 2000
+  to 7.** On a Windows 2000 to 7 computer with ACPI, where the package's
+  own USB4 connection manager runs, ejecting a device that connects
+  through a PCI bridge (a dock, or an enclosure with a switch in it) stops
+  it in Windows, but the tunnel to it stays up until you unplug it. Seen
+  on Windows 7; the cause, ACPI's bus filter left on the ejected bridge,
+  is the same on 2000, XP and Vista.
 
 ## What `3.0.0.0` adds
 
@@ -289,7 +445,8 @@ from any of these machines, working or not, is new information.
 `INSTALL.BAT` installs `xhcicm.sys` with the rest of the package, and on
 Windows 2000 to 7 it is the way to install it: besides the controller's
 own driver it puts the package's filter on the controller's PCI ports
-(`nt\xhcicmf.inf` in each flavour directory), which on XP and later
+(`nt\xhcicmf.inf` in each flavour directory; from `3.1.0.0` the x64
+directories have it at the root as `xhcicmf.inf`), which on XP and later
 Windows takes only when it is forced, as the tool does. On Windows 2000
 the first install of that filter takes the Thunderbolt switch's other
 devices away until the restart the tool asks for. On Windows 98 SE and
@@ -417,15 +574,26 @@ every system `INSTALL /devices` shows what is connected and
 - **A dock** is listed under the name of its own PCI switch's upstream
   port, a generic PCI-to-PCI bridge name; stopping it stops everything in
   the dock.
-- **A device Windows does not list (Windows 2000 to 7).** The first time
-  a device Windows has never seen is plugged in behind the tunnel,
-  Windows installs its driver and rebuilds its driver stack without the
-  filter that marks it removable, so "Unplug or Eject Hardware" and
-  "Safely Remove Hardware" do not offer it (read on 2000 and XP; 7 kept
-  the mark on the first plug). The same happens after the device is
-  disabled and enabled or its driver is updated. From the next plug on
-  Windows lists it. The xHCI98 USB Tree and `INSTALL /eject` still stop it when
-  run as an administrator: they ask Windows for the same query-remove and
+- **A device Windows does not list (Windows 2000 to 7).** Until
+  `3.1.0.0`, the first time a device Windows has never seen was plugged
+  in behind the tunnel, Windows installed its driver and rebuilt its
+  driver stack without the filter that marks it removable, so "Unplug or
+  Eject Hardware" and "Safely Remove Hardware" did not offer it (read on
+  2000 and XP; 7 kept the mark on the first plug), and the same happened
+  after the device was disabled and enabled or its driver updated. From
+  `3.1.0.0` the Thunderbolt component installs a small service,
+  `xhcimark` (`tools\xhcimark\`, run by Windows, never by hand), which
+  writes the filter into the device's own driver list (its `LowerFilters`
+  value) within a poll of the device appearing (about a second; ten
+  seconds while the driver is not answering) and takes it out again within
+  a poll of the device leaving, so the first plug, a disable and
+  enable and a driver update keep the device listed. When Windows rebuilt
+  a first plug's drivers before the mark was written, the service
+  restarts that one device once, the way Device Manager applies a
+  property change; a program with a file open on it refuses that, and the
+  device is then listed from its next start. With the service stopped,
+  or for such a refused device, the xHCI98 USB Tree and `INSTALL /eject`
+  still stop it when run as an administrator: they ask Windows for the same query-remove and
   remove by the routine meant for devices that are not removable, and a
   program with a file open still refuses it. The USB Tree asks for the
   rights when it lacks them ("Stop as administrator...": User Account
@@ -463,15 +631,22 @@ Under a firmware connection manager the stop ends the device's drivers
 and leaves its tunnel up, since the firmware has no way to drop one
 tunnel alone; the tunnel goes when the device is unplugged. Under the USB4
 connection manager on Windows 2000 to 7 the stop also takes the PCI
-Express tunnel down (the USB3 tunnel stays).
+Express tunnel down (the USB3 tunnel stays) - from `3.1.0.0` only once
+the stop is confirmed: on XP, Vista and 7 by the `xhcimark` service,
+which sees Windows hold the device for removal, within a poll; on
+2000, whose applet leaves no such sign, only by an administrator's
+`INSTALL /eject` (or the USB Tree run as one). Without the confirmation
+the tunnel stays up until the unplug, and the tools say the driver has
+not confirmed the teardown. A disable, a driver update or the service's
+own restart of a device is never taken for a stop, so it no longer tears
+the tunnel down as it did in `3.0.0.0`.
 
 ### NVMe drives behind a tunnel
 
 An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver,
-which none of these systems has. Stor98, a separate
-project, is that driver for Windows 98 SE to 7, and the download
-carries a release of it as its project released it, with its own licence
-and notes (which release, and where it is: "NVMe drives behind
+which none of these systems has. Stor98, built with this package at its
+version, is that driver for Windows 98 SE to 7, and the download carries
+it with its own licence and notes (which version, and where it is: "NVMe drives behind
 Thunderbolt or USB4", under "Installing"); read them before installing
 it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the
 drive.
@@ -512,7 +687,9 @@ key, a `DWORD` unless it says otherwise:
 `NNNN` is the subkey whose `DriverDesc` is the controller's Device
 Manager name ("Which controllers"). The install writes each value below
 but `XhciCmTunnelBridge` and `XhciCmBridgeNumbering` at its default,
-only where it is missing.
+only where it is missing. From `3.1.0.0` each is also read from
+`HKLM\System\CurrentControlSet\Services\USB` first, where it wins when it
+is there ("Registry settings", "One value for every controller").
 Restart Windows, or disable and enable the controller, after a change.
 
 | Value | Default | What it does |
@@ -524,6 +701,7 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
 | `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
+| `XhciCmNoIrqStart` | `1` | Windows 98 SE and ME: `1` starts an NVMe drive behind a tunnel whose interrupt cannot be routed with no interrupt, for the bundled Stor98 (0.4.0.0 or later; this package's is 3.1.0.0, installed by its installer) to poll; `0` leaves it at its problem code. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
 | `XhciCmBridgeNumbering` | `1` | Windows 98 SE and ME: `1` sets up the PCI bridges a device brings up behind a tunnel after Windows has started (bus numbers, memory windows, interrupt lines, as the BIOS would) (a USB4 NVMe enclosure's switch, which otherwise shows Code 29 until a restart); `0` leaves them as they come up. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | A comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports, for a machine whose ports it does not find (the `debug` log says so). Not written by the install |
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
@@ -532,11 +710,13 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmLogVerbosity` | `2` | The driver's log, on the same `0`-`4` ladder as `xhci98.sys`'s `XhciLogVerbosity`; read by the xHCI98 USB Tree |
 | `XhciCmLogDebugView` | `0` | `1` sends the driver's log to DebugView as well, in every build (the `debug` build always does) |
 
-The install tool asks "Install Thunderbolt 3 / USB4 support?": Enter
-answers Y with a Thunderbolt or USB4 controller present and N with none
-found (a laptop may show its controller only while a device is plugged
-in); `INSTALL /thunderbolt` includes it without asking, and N leaves a
-Thunderbolt driver already installed as it is.
+The install tool asks "Install Thunderbolt 3 / USB4 support?": from
+`3.1.0.0` Enter and `/yes` answer N whether or not a Thunderbolt or USB4
+controller is present (the support is experimental; up to `3.0.0.0`
+Enter answered Y with a controller present), and the tool says whether
+it found one (a laptop may show its controller only while a device is
+plugged in); `INSTALL /thunderbolt` includes it without asking, and N
+leaves a Thunderbolt driver already installed as it is.
 
 `INSTALL.BAT` asks about `XhciCmMode`, `XhciCmApprove` and
 `XhciCmSafeEject` where a Thunderbolt or USB4 controller is present. It
@@ -635,6 +815,18 @@ have every leg.
   Read under the Thunderbolt 3 firmware connection manager on the
   ThinkPad P14s Gen 1 and in the emulator; the USB4 connection manager
   takes the same path but has not been read with such a device.
+- **Windows 98 SE and ME: an NVMe drive behind a tunnel whose interrupt
+  cannot be routed** (Device Manager: Code 29, "the BIOS for the device did
+  not give it an IRQ") **still does not start.** The driver's attempt to
+  start such a drive with no interrupt for the bundled Stor98 to poll
+  (`XhciCmNoIrqStart`, on by default) was read in the emulator and does
+  not apply to the case seen there: Windows' own configuration of the
+  drive asks for no interrupt, so the driver leaves it as it is and
+  changes nothing. Re-plug the drive with the tunnel's bridge routed, or
+  restart with it attached. While xhcicm.sys makes its Windows 98
+  configuration calls, a hardware wizard left open on 98 SE or ME holds
+  its other work for the tunnel ports too (plug, removal and safe-eject
+  marking wait), as any such call it makes does.
 - **Windows 98 SE and ME: after Safely Remove of such a device, unplug it
   before using it again.** Windows' stop closes the switch's memory windows;
   Scan for hardware changes without an unplug leaves the drive at Code 29
@@ -650,8 +842,10 @@ have every leg.
   `INSTALL /eject` stop it when run as
   an administrator ("Removing a Thunderbolt or USB4 device safely"); a
   pull without a stop is a surprise removal, with Windows 2000's warning
-  and cached writes at risk. A later release is to keep the mark across a
-  rebuild.
+  and cached writes at risk. From `3.1.0.0` the `xhcimark` service keeps
+  the mark across those rebuilds; this stays the case for a device whose
+  restart a program refused, until its next start, and while the service
+  is stopped.
 - **A device tunnelled before the driver started** (by the BIOS's pre-boot
   support, or connected while the driver was installed) is offered for
   safe removal only after a re-plug, on Windows 2000 to 7; the xHCI98 USB
@@ -1039,7 +1233,8 @@ detail, and what each rests on.
   refused every mouse, keyboard or other Low- or Full-Speed device behind
   that hub. Such a device now gets the standard speed ID. The fix was built
   without the hardware: it rests on the specification, the reporter's logs
-  and what Linux, FreeBSD and Haiku do, and it has never run on a VL805. It
+  and what Linux, FreeBSD and Haiku do. On a VL805 it is reported working
+  on `2.3.0.0` by the owner, not yet read in detail. It
   is on by default, on any controller, because without it every Low- and
   Full-Speed device on such a controller fails; set
   `XhciUsb2HubSpeedFallback` to `0` to turn it off ("XhciUsb2HubSpeedFallback:
@@ -1103,6 +1298,7 @@ the cut.
 | Windows XP x64 SP2 | Virtual machines, and real hardware on the Dell Latitude E7250; the 64-bit drivers | The same clauses as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and at High Speed, and the same soak. Real hardware: XP x64 on the owner's Dell Latitude E7250 |
 | Windows Vista SP2, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled, the drivers being unsigned then; the test-signed x64 drivers of `2.3.0.0` were read in test-signing mode, with no F8. The same soak |
 | Windows 7 SP1, 32-bit and x64 | Virtual machines; x64 also on real hardware, the Dell Latitude E7250 | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled, the drivers being unsigned then, and the test-signed x64 drivers of `2.3.0.0` in test-signing mode, with no F8; five controller disable and enable cycles on each. The same soak. Windows 7 is not read on real hardware for `2.0.0.0`. Real hardware: 7 x64 on the owner's Dell Latitude E7250 |
+| Windows 8 and 8.1, 32-bit and x64 | The Thunderbolt 3 / USB4 connection manager alone (from `3.1.0.0`); not a target of the USB drivers | Nothing: never run with this package. The installer admits them for `xhcicm.sys` alone ("What `3.1.0.0` changes"); the x64 driver loads only in test-signing mode (Secure Boot off) or with signature enforcement disabled |
 | Every target, from the release package | | For `2.0.0.0`: the `release` flavour of the integration build, on the ten install legs (Windows 98 SE under NUSB and under SweetLow's stack, ME, 2000, XP, XP x64, and Vista and 7 in both architectures): installed, controller and root hub started, HID, storage with a verified file compare, composite audio bound, the controller's disable and enable, and shutdown, with SuperSpeed storage and UAS at SuperSpeed and at High Speed on most legs. The one defect was Windows ME's controller re-enable, which `2.1.0.0` fixes (the Windows ME row). For `2.1.0.0`: the `release` flavour of its integration build, installed over `2.0.0.0` on eleven virtual machines (the ten legs' systems and a stock Windows 98 SE) and read on the same clauses less SuperSpeed storage and UAS, all passing, the file compare skipped on the stock Windows 98 SE, which has no storage driver (see "Updating from 2.y.y.y"); and the ten install legs from the `2.1.0.0` release package, read after the cut, all passed: the same clauses with SuperSpeed storage and UAS at SuperSpeed and at High Speed, Windows ME's controller re-enable with a mouse attached, a hub disabled and enabled with a mouse and a stick behind it on the seven NT systems, and hidusbf Setup reading the mouse behind a hub on 32-bit XP. For `2.1.1.0`: the ten install legs from the `2.1.1.0` release package, read after the cut, all passed, on the same clauses as for `2.1.0.0`. For `2.3.1.0`: the ten install legs from the `2.3.1.0` release package (2026-10-13), all passed: the install, controller and root hub, HID, a Bulk-Only stick and UAS at SuperSpeed with verified file compares, a hub with composite audio behind it, the controller's disable, enable, remove and rescan, and shutdown; the tone played whole in a WAV capture on ME and 2000, read by the driver's isochronous counters on XP, Vista and 7, and not played on Windows 98 SE, whose USB audio does not play in QEMU. For `2.4.0.0`, before the cut: the `release` flavour of the dry cuts (and the never-published `qemu` flavour where a reading needed it), in QEMU on development host A, on the ten install legs' systems. On each, a fresh install with the new device ids (one root hub, `USB\XHCI98_ROOT_HUB`, and each hub and composite device bound to this driver alone, the root hub's install copying no file) and `XHCICLN` finding nothing to do; a mouse, a Bulk-Only stick and UAS with verified file compares, composite audio, and the controller's disable, enable, remove and rescan; and the update over `2.3.1.0` as "From 2.3.x or earlier" describes it, `XHCICLN` listing the old entries and on 2000 to 7 removing them (`XHCICL64` on the 64-bit systems, where the 32-bit tool refused), and on every NT system read a disable of the controller refused while the tool held it. The helper installed on 2000 and XP and replaced `xhcimsi.sys` on 32-bit Vista and 7; the composite entry's configuration selection with two audio devices (a tone played whole from each on ME, 2000, XP, XP x64 and 7 x64); the quirks' code paths at value `2`, on QEMU's controller, which no list names; a 0.96 controller through the `qemu` flavour's version override, and its refusal at `XhciAccept096` `0`, on 98 SE and 2000; the F6 floppy to the desktop on 32-bit XP and, with the Windows 2000 entry, to the desktop and one restart on 2000. The ten install legs from the release package are read after the signed cut |
 | What `2.1.0.0` changed | | All in QEMU on development host A, on the `2.1.0.0` integration build unless the `release` flavour is named. The controller re-enable with devices kept: Windows ME with a mouse (three of three), with a mouse and a stick, with a USB keyboard alone, and with a hub holding a mouse and a stick, every device back and working; Windows 98 SE and 2000 disable and enable with a stick behind a hub and a file compare after, and a 10-cycle soak on each; 32-bit XP disable and enable with no USB keyboard attached (XP refuses the disable while one is). Instance ids from the serial number: a stick moved between root ports kept its one entry and was not found again as new hardware on Windows 98 SE, ME, 2000 and 32-bit XP, and on Vista and 7 in both architectures; moved behind a hub as well on Windows 98 SE, 2000, 32-bit XP and 32-bit Vista, and to a SuperSpeed port on Windows 98 SE. Two sticks with different serial numbers had two entries, and of two with the same one the second was known by its port (Windows 98 SE, 2000 and XP). External hubs as entries of their own, on QEMU's hub, which is a USB 1.1 Full-Speed hub: a mouse and a stick behind it, the tree by connection, the hub unplugged and plugged in again, a device unplugged behind it, and a two-tier chain, on Windows 98 SE, 2000 and 32-bit XP; the tree and the hub unplugged and plugged in again on Vista and 7 in both architectures, the tree on ME and XP x64, and USBView walking into the hub on XP, XP x64, Vista and 7; the hub disabled and enabled in Device Manager with the devices behind it coming back, on Windows 98 SE, and on Windows 2000 and XP with the fix for the defect the first reading found (two disable and enable cycles each in QEMU, the same instance ids and the stick's files intact). A High-Speed hub, its transaction translators, and a USB 3 hub's SuperSpeed half were read in no virtual machine; the owner read a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" on real hardware after the cut, and both work. The Power tab: figures in mA on the root hub's and the hub's Power tabs on Windows 98 SE and 2000 (a mouse, a keyboard and an audio device 100 mA, a stick 0 mA), on 32-bit XP, and on XP x64 (a mouse and a keyboard 100 mA, a stick and the hub 0 mA; QEMU's stick and hub ask for 0 mA in their own descriptors), and a hub's Power tab on 32-bit 7. The Advanced tab's figure while audio plays was not read: Windows 98 SE's `USBAUDIO.VXD` fails on playing in QEMU ("Known limitations"). Device names: where a Windows class INF names the device, its name is shown, on every system read; the device's own product name was read in Windows 98 SE's "New Hardware Found" box, for devices no INF names on Windows 98 SE, 2000 and XP, and as Windows 7's "Bus reported device description" in both architectures. hidusbf: 1000, 500 and 250 Hz at a root port and behind a hub on Windows 98 SE under NUSB 3.6 and on ME, at a root port on 32-bit XP, the filter loaded and its setting reaching the controller on a stock Windows 98 SE (`release`), and behind a hub on 32-bit XP with the fix for the defect the first reading found (Setup read the mouse's speed, and 1000, 500 and 250 Hz programmed Interval 3, 4 and 5). Fast polling: not read. The F6 floppy, on the `release` flavour: Windows 2000 SP4 and 32-bit XP SP3 text-mode Setup with a USB keyboard and a USB stick, and the Recovery Console on both; see that section |
 | What `2.1.1.0` changed | | The registry values: in QEMU on development host A, on the `release` flavour before `XhciIntelPortSwitch` was added, a fresh install on Windows 98 SE and 2000 writing the seven at their defaults, and an update over `2.1.0.0` on Windows 98 SE, 2000 and 32-bit Windows 7 keeping two values set by hand and adding the missing three ("Registry settings"). The Power tab: on the owner's ThinkPad P14s Gen 1, a SuperSpeed drive declaring 896 mA reading 510 mA and `XHCISNAP` giving its exact figure, a USB 2.0 device reading as before ("The controller's Advanced tab and the root hub's Power tab"). The Intel port switchover: on the owner's Lenovo B490 (`1E31`) under Windows 98 SE with NUSB, on Auto and Smart Auto, and its gate staying closed on the P14s Gen 1 and in QEMU ("Intel 7-, 8- and 9-series chipsets: the port switchover") |
@@ -1254,11 +1450,15 @@ date, all 26 names of that minute are taken, or the log cannot be created.
 
 ## Installing
 
-Each flavour directory of the package holds six files (nine in `2.3.0.0`,
-below). Five are in every
-one: `xhci98.inf` and `xhci98.sys`, the host controller driver,
-`xhciuas.inf` and `xhciuas.sys`, the UAS driver, and `txtsetup.oem`, which
-only Windows 2000 and XP Setup read (below). The sixth is
+Each flavour directory of the `3.0.0.0` package holds eight files and an
+`nt\` subdirectory of two (`2.4.0.0`'s held six files; `2.3.0.0`'s nine,
+below). Seven files are in every one: `xhci98.inf` and `xhci98.sys`, the
+host controller driver, `xhciuas.inf` and `xhciuas.sys`, the UAS driver,
+`xhcicm.inf` and `xhcicm.sys`, the Thunderbolt and USB4 driver, and
+`txtsetup.oem`, which only Windows 2000 and XP Setup read (below). `nt\`
+holds `xhcicmf.inf`, the INF of `xhcicm.sys`'s tunnel-port filter on
+Windows 2000 and later, with a copy of `xhcicm.sys` beside it; never point
+Windows 98 or ME at `nt\`. The eighth file is
 `xhcihlpr.sys` in the x86 directories, the helper the INF installs on
 32-bit Windows 2000, XP, Vista and 7 (in `2.3.0.0` and `2.3.1.0`,
 `xhcimsi.sys`, the MSI helper, installed on 32-bit Vista and 7 only), and
@@ -1271,7 +1471,9 @@ download's `tools\portsw\` directory, one copy for every flavour directory;
 in `2.3.1.0`, in `portsw\` at the top of the download; in `2.3.0.0`, at the
 root of each flavour directory. `release-x86\` is the one to install on 32-bit
 Windows and `release-x64\` on 64-bit Windows; the `debug-` directories are the
-same drivers built for troubleshooting. No Microsoft file is in the package.
+same drivers built for troubleshooting. In the download, `release-x86\`
+and `release-x64\` also carry the bundled Stor98 files ("NVMe drives behind
+Thunderbolt or USB4", below). No Microsoft file is in the package.
 
 1. Install the prerequisite, where there is one: on Windows 98 SE, NUSB 3.3
    or 3.6 if you want USB storage (above). On a fresh Windows 98 SE install
@@ -1337,6 +1539,15 @@ second Update Driver filled it.
 
 ### Installing, updating and uninstalling with INSTALL.BAT (new in `3.0.0.0`)
 
+From `3.1.0.0` a normal install, update or uninstall is the installer's
+window: double-click `SETUP.EXE` at the top of the package to install or
+update, and use Remove in Add/Remove Programs (Programs and Features on
+Vista and 7) to uninstall; or install by hand through Device Manager
+("Installing", above, and the update steps below). What follows describes
+the console tool `INSTALL.BAT` runs, which `3.0.0.0` introduced and which
+stays for command-line and scripted installs; `tools\xhciinst\readme.txt`
+is its reference.
+
 INSTALL.BAT is beta in 3.0.0.0: if it fails or you prefer, install through
 Device Manager as before ("Installing", above, and the update steps below).
 
@@ -1385,10 +1596,11 @@ asks once (`Y`, or Enter), and then:
   a keyboard and mouse that do not go through this driver, then run it
   again. On Vista x64 and 7 x64 it says whether it could confirm
   test-signing mode, and never changes it. The Thunderbolt and USB4
-  tunnel-port filter's INF is in each flavour directory's `nt\`, with its
-  own copy of `xhcicm.sys` (the same file as the one beside `xhcicm.inf`):
-  Windows 98 SE and ME never see it, and Vista and 7 accept it only with
-  its driver file beside it.
+  tunnel-port filter's INF is in each x86 flavour directory's `nt\`, with
+  its own copy of `xhcicm.sys` (the same file as the one beside
+  `xhcicm.inf`): Windows 98 SE and ME never see it, and Vista and 7 accept
+  it only with its driver file beside it. In the x64 directories it is
+  beside `xhcicm.inf` and `xhcicm.sys` (from `3.1.0.0`).
 - **Windows 98 SE and ME**: the tool stages the files and you finish the
   installation in Device Manager. It copies the package's drivers into
   the install directory itself (`C:\XHCI98` by default; on these systems
@@ -1435,10 +1647,12 @@ steps left printed. **The log**: every run but `/list` adds to
 `XHCIINST.LOG` at the root of the system drive; attach it to a report
 about an install.
 
-**Uninstall**: `INSTALL.BAT /uninstall` warns first that on a machine
-whose only USB controller is xHCI the USB keyboard and mouse stop working
-until another driver is installed, and goes on only when you type
-`REMOVE`. On Windows 2000 to 7 it removes, in order and stopping at the
+**Uninstall**: Remove in Add/Remove Programs (Programs and Features on
+Vista and 7) warns first that on a machine whose only USB controller is
+xHCI the USB keyboard and mouse stop working until another driver is
+installed, and goes on only when you tick that you have another keyboard
+and mouse or accept it (the console, `INSTALL /console /uninstall`, asks
+for the word `REMOVE`). On Windows 2000 to 7 it removes, in order and stopping at the
 first step that fails or needs a restart (run it again after the
 restart): this package's filter from a Thunderbolt port (the port goes
 back to a suitable Windows or vendor driver), every device entry of the package, its
@@ -1679,8 +1893,8 @@ hidusbf's polling rate, has to be applied again (see "SweetLow's hidusbf").
 
 ### Updating from 2.y.y.y
 
-From `3.0.0.0`, `INSTALL.BAT` does what follows on Windows 2000 to 7 and
-prepares it on 98 SE and ME ("Installing, updating and uninstalling with
+From `3.0.0.0` the installer (`SETUP.EXE` from `3.1.0.0`) does what
+follows on Windows 2000 to 7 and prepares it on 98 SE and ME ("Installing, updating and uninstalling with
 INSTALL.BAT"); this section is the route by hand, and what each system
 does either way.
 
@@ -1898,40 +2112,49 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles Stor98 `0.4.0.0`.
+This download bundles Stor98 `3.1.0.0`.
 
 <!-- The cut replaces the line above with "This download bundles Stor98
 `<version>`." or "This download bundles no Stor98."
 (scripts\package\make-release.ps1 holds it to what the cut bundles). -->
 
 An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of
-its own, which none of these systems has. Stor98, the release named in
+its own, which none of these systems has. Stor98, the version named in
 the line above, is that driver. `xhcicm.sys` brings the drive's tunnel up
 and down, and Stor98 runs the drive.
 
 `release-x86\` and `release-x64\` carry it:
 
-- a separate project under its own licence, bundled as one of its
-  released builds, unchanged;
+- built from this project's source with the USB drivers, at the same
+  version and date (`3.0.0.0` bundled Stor98's own release `0.4.0.0`),
+  under its own licence (BSD-3-Clause);
 - `stor98.inf` and the files beside it whose names start with `stor98`;
-- its `LICENSE`, `NOTICE.TXT` and `readme.txt` beside it, as
+- its `LICENSE`, `NOTICE` and readme beside it, as
   `stor98-LICENSE.txt`, `stor98-NOTICE.txt` and `stor98-readme.txt`.
 
 Its readme is its install guide and lists its known limits; read it
-before installing. The `debug-` directories do not carry it, and
-`INSTALL.BAT` does not install it.
+before installing. The `debug-` directories do not carry it.
+`SETUP.EXE` installs it as part of the Thunderbolt 3 / USB4 support (its
+box under the Thunderbolt 3 / USB4 one on the Components page, ticked
+with that one and needing it ticked; untick it to leave Stor98 out), and
+only on NVMe drives behind a Thunderbolt or USB4 tunnel ("What `3.1.0.0`
+changes"), and updates an older Stor98 on such a drive (on Windows 98 SE
+and ME as a file, at the next start, after a shut down). Stor98 is not for
+internal NVMe drives: do not install it on one. Its INF matches every NVMe
+controller, so Windows may still offer it for an internal NVMe drive that
+has no driver: decline it there.
 
-When the drive's NVMe controller (`PCI\CC_010802`) shows in Device
+When a tunnel drive's NVMe controller (`PCI\CC_010802`) shows in Device
 Manager without a driver, Update Driver, Have Disk, and point it at:
 
 - `release-x86\` on Windows 98 SE, ME and 32-bit 2000, XP, Vista and 7
 - `release-x64\` on Windows XP x64, Vista x64 and 7 x64
 
-The x64 `stor98.sys` is test-signed by Stor98's own project.
-`stor98-test.cer` beside it in `release-x64\` is the public half of that
-project's test certificate. Test-signing mode, which the x64 drivers
-already need on Vista x64 and 7 x64, loads it too. Importing either
-`.cer` is not needed.
+The x64 `stor98.sys` is test-signed with the same certificate as the
+other x64 drivers, in the same step: `xhci98-test.cer` in `release-x64\`
+is its public half. Test-signing mode, which the x64 drivers already need
+on Vista x64 and 7 x64, loads it too. Importing the `.cer` is not
+needed.
 
 ## Devices and hubs in Device Manager
 
@@ -2399,11 +2622,10 @@ behaviours did; those of the behaviours switched off stay at `0`, while
 what applies at every value still counts (a held port after repeated
 incompatible-device reports, a closing-off without proof). **If a USB device stops on your
 machine**, send the controller's id (`XHCIQUAL`'s probe, or Device Manager)
-and two `XHCISNAP` reports at `XhciLogVerbosity` `2`, one while it works and
-one after it stops (from `2.4.0.0`: `SNAPON.BAT` and a restart, then
-`SNAPGET.BAT` once while it works and once after it stops, which leaves the
-channel on between the two and never overwrites the first; "The log, and how
-to send one" below); and if it still stops, the same with `XhciAvgTrbEsit` at
+and two reports at `XhciLogVerbosity` `2`, one while it works and one after
+it stops (the xHCI98 USB Tree's File > Save Report..., once each, under two
+names; "The log, and how to send one" below); and if it still stops, the
+same with `XhciAvgTrbEsit` at
 `1`.
 
 What it rests on. QEMU raises none of these faults, so each was made on
@@ -2511,10 +2733,28 @@ by default, with nothing for the backstop to drain, and the line under
 
 ## Registry settings
 
-From `3.0.0.0`, `INSTALL.BAT` asks about eight of these values where the
-hardware they affect is present, and sets them on request
+From `3.0.0.0`, `INSTALL.BAT` asks about four of these values -
+`XhciIntelPortSwitch`, `XhciInterruptMode`, `XhciForceBulkOnly` and
+`XhciSilentInstall`, seven in all with the three `XhciCm*` values it asks
+about ("The connection manager's registry values") - where the
+hardware or the Windows they affect is present, and sets them on request
 ("Installing, updating and uninstalling with INSTALL.BAT"); everything
 below can still be set by hand.
+
+**One value for every controller (new in `3.1.0.0`).** Every value below,
+and every `XhciCm*` value ("The connection manager's registry values"),
+is read first from `HKLM\System\CurrentControlSet\Services\USB` on every
+Windows, and a value there **wins** over the same value in a controller's
+own key, for every controller; only when it is not there does each
+controller read its own key, as before. A value of the wrong type there
+still wins, and the driver's default stands. The INFs write nothing
+there, so nothing changes until a value is set in it; `portsw.vbs`,
+`silent.vbs` and their batch files set their value there and show both.
+The installer's settings pages, its console questions and `INSTALL /set`
+write the machine-wide value too, never a controller's own, and show
+both; its uninstall deletes the values it names there and leaves the key.
+To give one controller a different value, delete the machine-wide value
+and set that controller's own. `docs/using/tuning.md` has the details.
 
 Each value is a `DWORD` in the controller's driver (software) key, and
 the install writes every value the driver reads, thirty-six, in this key:
@@ -2528,7 +2768,8 @@ the install writes every value the driver reads, thirty-six, in this key:
 Controller". The number varies from machine to machine, and a machine whose
 controller was ever enumerated at another PCI slot can have more than one
 such key: the device's own `Driver` value, under `Enum\PCI`, names the one in
-use. `XHCISNAP -verbosity` finds it for you. On Vista and 7 Device
+use. The xHCI98 USB Tree shows it as the controller's "Driver key", and its
+View > Logging level... finds it for you. On Vista and 7 Device
 Manager also shows it: the controller's Properties, Details tab, the
 "Driver key" property, whose value ends in that `NNNN`. A change takes
 effect when the driver next starts: restart Windows (or, for the values
@@ -2752,6 +2993,12 @@ turns those two settings into fast ones.
 | `3` | 4000 Hz | 8000 Hz |
 | `4` | 31 Hz | 62 Hz (the codes below instead) |
 
+**Changed in `3.1.0.0`: value `4`'s codes.** In `2.3.0.0` to `3.0.0.0`
+value `4` took the codes 128, 129 and 130 for 2000, 4000 and 8000 Hz. From
+`3.1.0.0` it takes 128 to 143, and the order is reversed: 128 is now
+8000 Hz and 130 is 2000 Hz. There is no setting for the old codes. A filter
+set to a code for an earlier release must be set again.
+
 With `2` or `3`:
 
 - **Root ports only.** A device behind a hub keeps its ordinary rate.
@@ -2766,20 +3013,29 @@ With `2` or `3`:
   any Low- or Full-Speed device on a root port whose own polling interval is
   16 to 63 ms is polled faster too, hidusbf or not.
 
-**`4`: the rate the client chooses** (new in `2.3.0.0`; GitHub issue 17).
-An interrupt endpoint whose polling interval in the configuration Windows
-selects is 128, 129 or 130 is polled at 2000, 4000 or 8000 Hz; every other
-interval is polled as the specification reads it, so value `4` does not do
-`2`'s and `3`'s speeding up of 16 to 63 ms, and `2` and `3` do not honour
-the codes. It applies to a Low- or Full-Speed device on a root port only,
-and to a High-Speed or SuperSpeed device at a root port or behind a hub.
-The procedure is the value first, then the client: set `XhciFastPollFsLs`
-to `4` and restart, then set hidusbf (or another filter) to write 128, 129
-or 130. Two cautions:
+**`4`: the rate the client chooses** (new in `2.3.0.0`, GitHub issue 17;
+its codes changed in `3.1.0.0`, from SweetLow's proposal). An interrupt
+endpoint whose polling interval in the configuration Windows selects is a
+code from 128 to 143 is polled every 125 us x 2 to the power (code - 128):
+
+| Code | Polled every | Rate |
+|---|---|---|
+| 128 | 125 us | 8000 Hz |
+| 129 | 250 us | 4000 Hz |
+| 130 | 500 us | 2000 Hz |
+| 131 | 1 ms | 1000 Hz |
+| 132 to 143 | 2 ms to 4.096 s, doubling each step | 500 Hz down |
+
+Every other interval is polled as the specification reads it, so value `4`
+does not do `2`'s and `3`'s speeding up of 16 to 63 ms, and `2` and `3` do
+not honour the codes. It applies at every speed, on a root port or behind a
+hub. The procedure is the value first, then the client: set
+`XhciFastPollFsLs` to `4` and restart, then set hidusbf (or another filter)
+to write the code. Two cautions:
 
 - 128 to 255 ms are legal polling intervals for a Low- or Full-Speed
-  device, so a device that itself asks for 128, 129 or 130 ms is polled at
-  2000 to 8000 Hz while the value is `4`.
+  device, so a device that itself asks for 128 to 143 ms is polled at its
+  code's rate while the value is `4`.
 - A filter that writes a code while the value is not `4` gets what the
   number means without it: a Low- or Full-Speed device is polled every
   128 ms, and a High-Speed or SuperSpeed one, for which the number is out
@@ -2788,12 +3044,16 @@ or 130. Two cautions:
 
 A controller that refuses a code is caught as for `2` and `3` and counted
 in `fastpoll.fallbacks`, and the device is then polled every 1 ms
-(1000 Hz), not at the code's ordinary reading. A controller that accepts
-it and misbehaves cannot be caught; delete the value and restart. At High
-Speed and SuperSpeed the programmed polling interval is inside the
-specification's range; at Low and Full Speed it is outside it, as `2`'s
-and `3`'s are. On an AMD controller
-the code is applied before `XhciIntervalCap`, which leaves it alone. A
+(1000 Hz), whatever the code, not at the code's ordinary reading. A
+controller that accepts it and misbehaves cannot be caught; delete the
+value and restart. At High Speed and SuperSpeed every code's polling
+interval is inside the specification's range; at Low and Full Speed codes
+131 to 138 (1 to 128 ms) are inside it, and the others are outside it, as
+`2`'s and `3`'s are. A Low- or Full-Speed device behind a hub at any code
+is **untested ground**: `2.3.0.0` to `3.0.0.0` left such a device alone,
+and below 1 ms or above 128 ms the specification does not describe it. On an
+AMD controller the code is applied before `XhciIntervalCap`, which leaves a
+code of 136 or faster alone and polls a slower one every 32 ms. A
 part of a composite device keeps the code only until its class driver
 issues a later select of its interface (`SELECT_INTERFACE`), even of the
 same alternate setting, as with `2` and `3`; HID class drivers do not.
@@ -2806,7 +3066,11 @@ QEMU (since `2.3.0.0`, on 32-bit Windows 7 and Windows 98 SE) value `4`
 programmed the intervals the codes ask for, `2` and `3` ignored the
 codes, a mouse behind a hub kept its rate and the mouse moved
 throughout; that shows what the driver asks of the controller, not how
-a real controller and device behave at those rates. The bench reading on
+a real controller and device behave at those rates. The `3.1.0.0` codes
+were read the same way on Windows 98 SE: 128, 135 and 143 programmed
+polling intervals of 125 us, 16 ms and 4.096 s (a Full-Speed mouse behind
+QEMU's hub among them), 143 left a High-Speed device at its own 4.096 s,
+and 144 changed nothing. The bench reading on
 the ThinkPad E460 and P14s Gen 1 was not taken for this release.
 
 ### XhciFirstEnumWaitMs and XhciFirstEnumPortMs: the first report's wait
@@ -2950,8 +3214,8 @@ within USB 2.0 and costs a few polls a second for such a device.
 
 It is applied after a polling rate a setting such as hidusbf's asked for
 and does not change which mouse `XhciFastPollFsLs` speeds up; under
-`XhciFastPollFsLs` `4` a code is applied first, and the cap leaves it
-alone. It is read when the controller starts.
+`XhciFastPollFsLs` `4` a code is applied first, and the cap leaves a code
+of 32 ms or faster alone. It is read when the controller starts.
 
 ### XhciAvgTrbEsit: a comparison switch
 
@@ -3137,7 +3401,8 @@ controller's own ports are not affected.
 | `0` | Off: such a device is refused, as in `2.2.0.0` |
 
 Read at each start of the controller: restart Windows after changing it.
-Built without the hardware and never run on a VL805; in QEMU virtual
+Built without the hardware; on a VL805 reported working on `2.3.0.0` by
+the owner, not yet read in detail; in QEMU virtual
 machines, whose controller lists no speed table, devices behind a hub read
 as before. `XHCISNAP`'s report says whether it is on, how many devices it
 gave an ID and which slots hold one, and on the VL805 the card's firmware
@@ -3385,115 +3650,101 @@ descriptors at High Speed.
 ## The log, and how to send one
 
 The driver keeps a small log of what happened on the bus, inside itself, and
-`XHCISNAP.EXE` (in the download's `tools\xhcisnap\` directory; before
-`2.4.0.0`, `xhcisnap\` at the top of the download) reads it off the running
-machine. From `3.0.0.0` it records by default: a fresh install sets
+the xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE` on 64-bit Windows, in the
+download's `tools\xhcitr\` directory and installed with the drivers) reads
+it off the running machine. Up to `3.0.0.0` that reader was `XHCISNAP.EXE`
+with its `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`; from `3.1.0.0` they
+are gone and the tool does what they did ("What `3.1.0.0` changes"). From
+`3.0.0.0` the driver records by default: a fresh install sets
 `XhciLogVerbosity` to `2` (the log of what happened, with no internal
 addresses); an update keeps the value an earlier install wrote, which was
 `0`, off, until `2.4.0.0`. Recording costs a little speed: on one machine
 (a ThinkPad P14s Gen 1 under 98 SE, a USB disk) about 1 to 2% at large
 transfers and up to about 5% at small ones. For the last few percent set
 the level to `0` in the xHCI98 USB Tree's View > Logging level... (for
-either driver; `SNAPOFF.BAT` still does it for `xhci98.sys`), and
-restart.
+either driver), and restart.
 
-From `2.4.0.0` three batch files beside it do the typing, on every Windows
-the driver runs (under `COMMAND.COM` on 98 SE and ME, `cmd.exe` from 2000 to
-7). Double-click them, or run them at a prompt in that directory; on Vista
-and 7, right-click each one and choose Run as administrator.
+To send a report:
 
 ```
-  1.  SNAPON.BAT     XHCISNAP -verbosity 2: the log channel on
-  2.  restart Windows
-  3.  make the problem happen again
-  4.  SNAPGET.BAT    XHCISNAP -report: the report and the dump
-  5.  SNAPOFF.BAT    XHCISNAP -disable: the channel off, once you have sent them
+  1.  View > Logging level...: check xhci98 reads 2 (set 2 and restart if not)
+  2.  make the problem happen again
+  3.  File > Save Report...: the tree, both drivers' logs and the snapshot
+  4.  attach the .TXT it wrote to the bug report
 ```
 
-`SNAPGET.BAT` writes its files in the directory it runs in, never under
-`C:\`, under a name `XHCISNAP` makes from the local date and time,
-`mDDhhmmS` (the month as one character, `1` to `9` then `A`, `B`, `C`; the
-day, hour and minute; then the first letter `A` to `Z` not yet taken), so a
-second run never overwrites the first; it prints the names. Attach two of
-them to the bug report:
+`XHCITR /report <file>` writes the same report from a prompt, and
+`XHCITR /setlevel xhci98=2` sets the level (on 2000 to 7 as an
+administrator; on Vista and 7, an administrator's prompt). Each driver
+reads its level only when it starts, so a change needs a restart of
+Windows; the tool offers one.
+
+The report ends with a "Snapshot" part for each xHCI controller
+`xhci98.sys` drives: the device report (what the `.DEV` file below holds,
+once) and the decoded dump (the `.TXT` below). At level 4 the dump can
+hold internal addresses, so the report leaves it out and says so: use
+level 2.
+
+When a maintainer asks for the snapshot's files themselves, File > Save
+Snapshot... writes them in a folder you pick, for the first controller,
+and `XHCITR /snapshot` writes them in the current directory, under a name
+made from the local date and time, `mDDhhmmS` (the month as one
+character, `1` to `9` then `A`, `B`, `C`; the day, hour and minute; then
+the first letter `A` to `Z` not yet taken), so a second run never
+overwrites the first; it prints the names:
 
 - `mDDhhmmS.DEV`: the controller as Windows sees it - its Device Manager
   status and problem code, the resources it was given, and the versions and
   SHA-256 hashes of `xhci98.sys`, `xhciuas.sys`, `xhcihlpr.sys`, `usbd.sys` and
   `usbui.dll` as installed, and of `xhcimsi.sys`, the `2.3.x` helper, where
-  it is still on disk (`2.3.x`'s `XHCISNAP` lists `xhcimsi.sys` in place of
-  `xhcihlpr.sys`). `XHCISNAP` reads these itself, through the
+  it is still on disk. The tool reads these itself, through the
   configuration manager, so every target reports the same.
-- `mDDhhmmS.TXT`: the report, plain text with no internal addresses in it.
+- `mDDhhmmS.TXT`: the dump, plain text with no internal addresses in it
+  below level 4.
+- `mDDhhmmS.BIN`, the driver's raw internal state, which only a maintainer
+  holding the exact build can decode, and `mDDhhmmS.PSC`, the raw port
+  registers.
 
-`mDDhhmmS.BIN`, the driver's raw internal state, which only a maintainer
-holding the exact build can decode, and `mDDhhmmS.PSC`, the raw port
-registers, are written beside them; attach those if you are asked for them.
-`SNAPGET.BAT` leaves the channel on, so it can be run again after the next
-attempt.
+`XHCITR /snapshot MYPC` saves the files as `MYPC.DEV`, `MYPC.TXT`,
+`MYPC.BIN` and `MYPC.PSC` instead of the clock's name (`/o MYPC` is the
+same): 1 to 8 letters, digits, `_` or `-`, not starting with `-`, with no
+path, drive or extension, and not a DOS device name (`CON`, `PRN`, `AUX`,
+`NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`), in the same directory. The tool holds
+the name to that rule itself, and refuses a name any file of whose set is
+already there rather than overwrite it. `/c N` picks the controller
+(`\.\HCDN`, default 0). `XHCITR /dump [/o NAME]` writes the dump alone,
+`NAME.TXT` with `NAME.BIN` and `NAME.PSC` beside it, replacing an earlier
+set of that name; `XHCITR /probe` checks the route to the driver and
+dumps nothing; `XHCITR /snapshot /?` is the long help. With the output
+redirected to a file the text goes there; otherwise a message box shows
+it, with the directory the files went to.
 
-Two of the batch files take one optional argument, typed after the name at a
-prompt in their directory (on Vista and 7, an administrator's prompt):
-
-- `SNAPON.BAT 3` sets level 3 instead of 2. The level is 1 to 4, and 2 - the
-  log, the one to use unless you are asked for another - when none is given.
-  `SNAPON.BAT 0` is refused, since 0 is off: `SNAPOFF.BAT` turns the channel
-  off. Anything else is refused too, and neither refusal changes anything.
-  It runs `XHCISNAP -on 3` (`-on` with no level is 2).
-- `SNAPGET.BAT MYPC` saves the files as `MYPC.DEV`, `MYPC.TXT`, `MYPC.BIN`
-  and `MYPC.PSC` instead of the clock's name (it runs
-  `XHCISNAP -report MYPC`; `XHCISNAP -report -o MYPC` is the same): 1 to 8
-  letters, digits, `_` or `-`, not starting with `-`, with no path, drive or
-  extension, and not a DOS device name (`CON`, `PRN`, `AUX`, `NUL`,
-  `COM0`-`COM9`, `LPT0`-`LPT9`), in the same directory. `XHCISNAP` holds the
-  name to that rule itself, and refuses a name any file of whose set is
-  already there rather than overwrite it.
-
-Both batch files pass the word on to `XHCISNAP` exactly as it was typed and
-test nothing themselves, so a quoted word (`SNAPON "1"`) or one with a
-character the prompt treats specially reaches `XHCISNAP`, which takes it or
-refuses it with the reason.
-
-Each batch file runs `XHCISNAP` as its last step, and `XHCISNAP` prints what
-happened and what to do next; its last line, the last on the screen before
-"Press any key", names the files to attach (`Attach: A131554A.DEV
+`/snapshot`'s last line names the files to attach (`Attach: A131554A.DEV
 A131554A.TXT (the .BIN and .PSC only if asked)`), or says there is nothing
-to attach. When the report does not go through, `XHCISNAP -report` says so
-by its exit code (`xhcisnap\README.md` has the same table):
+to attach. When the snapshot does not go through, it says so by its exit
+code (`docs/contributing/snapshot-reader.md` has the same table):
 
 | Exit | What it means | What to do |
 |---|---|---|
 | 0 | the `.DEV` and the `.TXT` were written in full | attach them |
-| 2 | the name given was refused; the line above says why | give a name by the rule above, or no name (if `XHCISNAP` printed its usage instead, the `XHCISNAP.EXE` is older than the batch: use the one from the same download) |
+| 2 | the name given was refused; the line above says why | give a name by the rule above, or no name |
 | 3 | the `.TXT` is not complete | attach it, and say so |
-| 4 | no dump was taken; the `.DEV` says why | often the channel is off: `SNAPON.BAT`, restart, reproduce, `SNAPGET.BAT`; attach the `.DEV` |
-| 5 | the `.DEV` could not be written in full | the disk is full or cannot be written: copy the directory somewhere writable and run it there |
+| 4 | no dump was taken; the `.DEV` says why | often the log is off: Logging level 2, restart, reproduce, run it again; attach the `.DEV` |
+| 5 | the `.DEV` could not be written in full | the disk is full or cannot be written: run it in a directory that can be written |
 | 6 | no free name: all 26 for this minute are taken, or the name given is taken; nothing written or overwritten | wait a minute and run it again, or give another name, or none |
 | 7 | the clock is not a valid date and time; nothing written | set the clock and run it again |
-| 8 | another run made a file of this set while this one ran; that file was left as it was, and no dump was kept under the name | run `SNAPGET.BAT` again: it takes the next letter (with a name, give another, or none) |
+| 8 | another run made a file of this set while this one ran; that file was left as it was, and no dump was kept under the name | run it again: it takes the next letter (with a name, give another, or none) |
 
 A controller Device Manager shows as disabled (Code 22) on Windows 98 SE or
-ME still gives a dump; the `.DEV` and the screen then say "dump taken from
+ME still gives a dump; the `.DEV` and the text then say "dump taken from
 a controller Device Manager reports as disabled (Code 22)", so that the
 dump is read as what the driver held while Windows had it disabled.
 
-Without the batch files, and in every release before `2.4.0.0`, the same
-steps are typed:
-
-```
-  1.  XHCISNAP -verbosity 2
-  2.  restart the machine
-  3.  make the problem happen again
-  4.  XHCISNAP -report       (2.4.0.0 on; before it, XHCISNAP -o MYDUMP)
-```
-
-`XHCISNAP -o NAME` still writes the dump alone, `NAME.TXT` with `NAME.BIN`
-and `NAME.PSC` beside it, under a name you choose. Step 1 finds the right
-registry key for you, on every xHCI controller the machine has. Step 2 is
-not optional: the driver reads these settings when it starts. **Use the
-`XHCISNAP.EXE` from this download**, not a copy kept from an earlier
-release: one from before `2.2.0.0` neither decodes the enumeration records
-nor reads the per-port section below.
+`XHCISNAP`'s level switches did not move to the tool: `-verbosity`, `-on`,
+`SNAPON.BAT`, `-disable` and `SNAPOFF.BAT` are View > Logging level... and
+`XHCITR /setlevel`, and a dashed switch after `/snapshot`, `/dump` or
+`/probe` is refused. On an install up to `3.0.0.0`, use that release's own
+`XHCISNAP.EXE` and its notes.
 
 From `2.3.0.0` the top of the `.TXT` also says which system it came from:
 the Windows version, build and service pack, 32-bit or 64-bit, the
@@ -3505,12 +3756,13 @@ to withhold a firmware string that contains one (a name of three characters
 or more). The file is meant to be pasted into a public issue as it is, but
 if your machine's firmware strings were customised, read the top of the
 file first. If reading those details causes a problem on your machine, add
-`-nosysinfo` to step 4 (`XHCISNAP -nosysinfo -report`): the report then
-says they were skipped and is otherwise the same.
+`/nosysinfo` to `XHCITR /snapshot` or `/dump` (`XHCITR /snapshot
+/nosysinfo`): the dump then says they were skipped and is otherwise the
+same.
 
 | Value | What it does |
 |---|---|
-| `XhciLogVerbosity` | `0` off (the driver does not answer `XHCISNAP` at all); `1` counters only; `2` adds the log of what happened (use this one); `3` adds the USB port register table; `4` everything, including internal addresses in the plain-text report. The default is `2` since `3.0.0.0` (`0` before; an update keeps the value already there). A value outside `0`-`4` is treated as the default |
+| `XhciLogVerbosity` | `0` off (the driver does not answer the snapshot at all); `1` counters only; `2` adds the log of what happened (use this one); `3` adds the USB port register table; `4` everything, including internal addresses in the plain-text report. The default is `2` since `3.0.0.0` (`0` before; an update keeps the value already there). A value outside `0`-`4` is treated as the default |
 | `XhciLogDebugView` | `1` hands the log to a debug-output capture tool (DebugView) from the driver's own thread as it runs, and once more at each stop. Use it only when asked |
 
 Since `2.2.0.0` the report also says what happened to a device on a root
@@ -3522,7 +3774,7 @@ Enable Slot's result, and a failure's cause - decoded in the report under
 enumerations so a port that keeps failing cannot fill the log. And from
 `XhciLogVerbosity` `1`, each root port's enumeration state and failure
 cause, and the driver's counters, are in the report as well, which
-`2.1.1.0`'s was not. `xhcisnap/README.md` lists every record. A report
+`2.1.1.0`'s was not. `docs/contributing/snapshot-reader.md` lists every record. A report
 from `2.1.1.0` on a machine such as the E460 above showed the port trained
 and nothing more; one from `2.2.0.0` names the step that stopped.
 
@@ -3537,18 +3789,23 @@ node under it, and each Thunderbolt or USB4 controller a "Driver log
 whether the driver is recording, its counters, and the log, oldest record
 first. Save Report (and `XHCITR /report <file>`) writes both logs and the
 counters into the report, as plain text with no internal addresses in it.
+With a Thunderbolt or USB4 report on Windows 2000 to 7, also send the
+safe-removal mark service's log (from `3.1.0.0`),
+`%SystemRoot%\System32\LogFiles\xhci98\XHCIMARK.LOG`: one line for each
+mark it wrote or removed, each check that stopped it, and each restart it
+made.
 
 The tool reads `xhci98.sys` through a query request of the driver's own,
-as it reads `xhcicm.sys`, with no `SNAPON.BAT` needed; an `xhci98.sys`
-older than `3.0.0.0` is read through `XHCISNAP`'s channel as before.
+as it reads `xhcicm.sys`; an `xhci98.sys` older than `3.0.0.0` is read
+through the driver's door, as `XHCISNAP` read it.
 Both drivers record at level 2 by default. Where a driver's recording
 is off, the node says how to turn it on; View > Logging level... (or a
 right click on the node) sets either driver's level directly, asking for
 administrator rights on 2000 to 7 when the user has none:
 
 - **`xhci98.sys`**: it records at level 2 after a fresh install. Where an
-  earlier install left it off, run `SNAPON.BAT` as above (on Vista and 7,
-  as an administrator), then restart Windows. At level 1 the node shows
+  earlier install left it off, set level 2 in View > Logging level...
+  (or `XHCITR /setlevel xhci98=2`), then restart Windows. At level 1 the node shows
   the counters only. At level 4 it shows the counters but not the log,
   because that level records internal addresses: use level 2.
 - **`xhcicm.sys`**: set the DWORD value `XhciCmLogVerbosity` to `2` on the
@@ -3570,16 +3827,18 @@ it. The tool reads it without removing anything, so it can be read again.
 Three of its records hold an address as their value; the tool shows those
 values as `--------`.
 
-`XHCISNAP` stays the way to send `xhci98.sys`'s full report (the `.DEV`, the
-port registers and the raw dump); the tool's report is the quick one, and
-the only one that carries `xhcicm.sys`'s log.
+From `3.1.0.0` the same report also carries `xhci98.sys`'s snapshot (the
+device report and the decoded dump), so it is the whole bug report; the
+raw `.BIN` and `.PSC` files come from File > Save Snapshot... or
+`XHCITR /snapshot` when a maintainer asks for them.
 
 The log cannot capture a crash: a machine that has bugchecked is not running
 for anything to read.
 
-> **Run `SNAPOFF.BAT` (`XHCISNAP -disable`) once you have sent the capture.** While the channel
-> is on, anyone using the machine can read the driver's diagnostic state
-> through it, including internal addresses in the raw dump.
+> **Set the level back to 2 (or 0) once you have sent a capture taken at
+> level 3 or 4.** While the level is above 0, anyone using the machine can
+> read the driver's diagnostic state through the tool, and at level 4 that
+> includes internal addresses in the raw dump.
 
 > **Do not run DebugView on Windows 98 on real hardware.** Under the `1.x`
 > miniport, plugging in a device while it captured crashed a ThinkPad E460
@@ -3846,10 +4105,10 @@ information.
 | SuperSpeedPlus hubs | Built from the specification against host tests; no vehicle |
 | SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
-| Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; never run on a VL805 or on any controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
+| Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; on a VL805 reported working on `2.3.0.0` by the owner, not yet read in detail, and not run on any other controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
 | Controllers below xHCI 1.0 (0.96: NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) | Accepted by default (`XhciAccept096`), driven as xHCI 1.0 controllers but for the fields Linux writes differently on them (TD Size in 0.96's units, the control transfer's Transfer Type, the isochronous burst counts, and no isochronous Frame ID) and with the capability register at 1Ch ignored, so a resume from standby re-enumerates their devices; built against host tests and Linux's handling of the same parts; read on no 0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD 0.96 parts are not applied, so isochronous transfers (audio, video) on those parts are the least certain. Set `XhciAccept096` to `0` to refuse such a controller as `2.3.1.0` did |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
-| Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs") |
+| Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs"), and its `3.1.0.0` codes on Windows 98 SE alone, a Full-Speed device behind a hub included |
 | The Intel port switchover beyond two machines | Read on one `1E31` machine under Windows 98 SE and on one `9CB1` machine, the Dell Latitude E7250, under Windows 7 x64 ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1` and `8D31` and every other system rest on Linux's handling of the same chipsets and on host tests of the sequence |
 | `XhciIntelPortSwitch` `2` on an unlisted Intel controller | Built and host-tested; read on no unlisted Intel controller. At your own risk: on one without the switch registers it writes registers of unknown meaning ("Value 2") |
 | A finer system timer while polling (`XhciPollFineTimer`, off by default), and the helper `xhcihlpr.sys` | New in `2.4.0.0`, built against host tests and static checks: the helper's imports were read in the kernels and HALs of 32-bit Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1, statically. The finer timer was read only in QEMU virtual machines without hardware acceleration, polling, on 7 x64, 7 x86 and Vista x86, where while it was held it slowed the guest's clock to a tenth to seven tenths of real time and USB keyboard input was lost; so it ships off; on 32-bit XP and 2000 the guest's clock kept nine tenths of real time or more while it was held. Real hardware is unread. Read in QEMU before the release besides: the helper's install on 2000 and XP with no restart and its replacement of `xhcimsi.sys` on 32-bit Vista and 7; a held request given back at the controller's stop (7 x86) and at a hibernation (7 x86 and x64), and taken again at the next copy after the resume (Vista x86 and 7); a clean shutdown during a polled copy with the finer timer on, on 2000 and 7 x86; two controllers polled at once, holds equal to releases on each (2000, 7 x86). A recovery with the request held, and the finer timer's effect on a copy's rate or on audio, were not read ("XhciPollFineTimer: a finer system timer while polling") |
@@ -3865,9 +4124,10 @@ This driver's own source is under the GNU General Public License, version 2
 record is `docs/contributing/legal-provenance.md`.
 
 `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and their INFs are this
-project's own work. A download that bundles Stor98 carries it as its own
-project released it, with its licence and notice beside it ("NVMe drives
-behind Thunderbolt or USB4"). No Microsoft file is in the download: the `usbd.sys` and `usbui.dll` the install
+project's own work. A download that bundles Stor98 carries it built from
+this project's source tree but under its own licence (BSD-3-Clause), with
+its licence and notice beside it ("NVMe drives behind Thunderbolt or
+USB4"). No Microsoft file is in the download: the `usbd.sys` and `usbui.dll` the install
 needs are Windows' own and are copied by Windows from your own installation
 source. On Windows 98 SE, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as a
 filter on the UAS device; the file is named, never shipped, and NUSB's

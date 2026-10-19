@@ -22,16 +22,6 @@ void msleep(unsigned ms)
     delay(ms);
 }
 
-u32 ticks_now(void)
-{
-    return *(volatile u32 *)0x46CUL;    /* BIOS tick counter, 18.2 Hz */
-}
-
-u32 ticks_to_ms(u32 dt)
-{
-    return dt * 55;
-}
-
 /* ------------------------------------------------------------------ */
 /* DMA memory                                                         */
 /* ------------------------------------------------------------------ */
@@ -515,8 +505,8 @@ static int xhci_irq_source_off(CTRL *c)
      * (docs/usb-xhci-info/xhci-data-structures.md, section 3). Both are RW1C. */
     WR32(c->op + XOP_USBSTS, STS_EINT);
     /* IE off, ack IP - and RsvdP preserved, like every other IMAN write in this
-     * tool. This one was missed by the first pass at repo audit D2 and found by
-     * the review round after it. */
+     * tool. This one was missed at first and added when that change was
+     * reviewed and revised. */
     WR32(c->rt + XRT_IMAN, (RD32(c->rt + XRT_IMAN) & IMAN_RSVDP) | IMAN_IP);
     ok = irq_uninstall();
     c->irq_isr_count = irq_count;
@@ -662,7 +652,7 @@ int qual_irq(CTRL *c)
         }
         if ((RD32(c->rt + XRT_IMAN) & IMAN_IP) != 0)
             ip_any = 1;
-        /* A source that came live late (review round 3): EINT and IP both
+        /* A source that came live late: EINT and IP both
          * up now is the condition the first wait looked for, so delivery
          * is tested as for a prompt one, the completion already in hand
          * carried over. Both are RW1C and nothing here wrote them, so a
@@ -676,7 +666,7 @@ int qual_irq(CTRL *c)
          * the controller failed the command, polled or not. */
         s.event_seen = got_evt;
         c->irq_no_event = got_evt ? 0 : 1;
-        /* IP not seen at any look, through both waits (review round 2):
+        /* IP not seen at any look, through both waits:
          * the driver's automatic mode moves a line to polling only on an
          * IP it sees, so this one is told mode 2. An enabled MSI or MSI-X
          * clears IP itself, which the caveat says (report_caveats). */

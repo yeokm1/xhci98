@@ -211,10 +211,20 @@ driver fills the gap for both.
 
 ```
 src/            Driver source code (C): the HCD, xhci98.sys (roadmap Phases
-                25 onward, design record 13), its two INFs, and under
-                src/uas/ the UAS class driver xhciuas.sys and its two INFs.
-                The miniport left the tree on 2026-10-02; its last sources
-                are on branch 1.2.0.0
+                25 onward, design record 13), its two INFs and the two
+                txtsetup.oem files; under src/uas/ the UAS class driver
+                xhciuas.sys and its two INFs; under src/cm/ xhcicm.sys,
+                the Thunderbolt 3 and USB4 connection manager
+                (roadmap-usb4.md, design records 21 and 22), with its four
+                INFs (xhcicm and its tunnel-port filter xhcicmf, each 32-
+                and 64-bit); and under src/hlpr/ the WDK 7.1 build files
+                of xhcihlpr.sys, the x86 helper (design record 18 section
+                15), whose code is src/xhci_hlpr.c. The miniport left the
+                tree on 2026-10-02; its last sources are on branch 1.2.0.0
+src/stor98/     Stor98, the NVMe SCSI miniport the packages bundle, a
+                BSD-3-Clause driver with its own AGENTS.md and build,
+                built and versioned with this package since 3.1.0.0; see
+                "Stor98 (src/stor98/)" below
 test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
 scripts/        The build wrapper, host setup helpers, and the import/INF/
                 packaging gates. `scripts/local/` is git-ignored per-host
@@ -227,11 +237,24 @@ xhciqual/       Phase 0 DOS hardware-qualification tool (Open Watcom).
                 privacy (owner, 2026-10-07), so a citation of it names where
                 the evidence is held, not a file in the clone. Archive new
                 runs there, and never force-add them.
-xhcisnap/       The host-side reader for the driver's log channel
-                (`XHCISNAP.EXE`); `xhcisnap/README.md` is its guide. Tracked.
 xhciinst/       The install, update and uninstall tool (`XHCIINST.EXE`,
                 `XHCIIN64.EXE`) and the package's `INSTALL.BAT`, from
-                `3.0.0.0` (design record 23). Tracked.
+                `3.0.0.0` (design record 23), and its window
+                (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`) over the same engine, from
+                `3.1.0.0` (design record 26). Tracked.
+xhcicln/        The optional cleanup tool (`XHCICLN.EXE`, `XHCICL64.EXE`)
+                for the devnodes a driver before `2.4.0.0` left under
+                `XHCI98\`, from `2.4.0.0` (roadmap-hcd task 38.8, design
+                record 13 section 10.13.8); `xhcicln/README.TXT` is its
+                guide. Tracked.
+xhcitr/         The xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE`), the
+                graphical tree, eject and tray tool, from `3.0.0.0`
+                (roadmap-usb4 Phase 41, design record 25), and from
+                `3.1.0.0` the reader of the driver's snapshot (`XHCITR
+                /snapshot`, `/dump`, `/probe`; `tr_snap.c`, XHCISNAP's
+                engine, moved; `docs/contributing/snapshot-reader.md` is
+                the route's reference); `xhcitr/README.TXT` is its guide.
+                Tracked.
 images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
@@ -255,6 +278,9 @@ vm/             Guest disk images and transfer disks. The per-run evidence the
                 was taken, not a file a clone can open. Git-ignored.
 out/            Staged install media from `scripts\package\make-package.ps1`.
                 Generated; git-ignored.
+temp/           Scratch: bench dumps land here by hand and are copied to a
+                tracked evidence directory if a document cites them
+                (`.gitignore` has the rule). Git-ignored.
 releases/       The releases that have been cut, one directory per version.
                 `releases/README.md` has the numbering rule and the standing
                 rule that a cut directory is never edited afterwards;
@@ -270,8 +296,8 @@ LICENSE         The license text and its scope note.
 ```
 
 Everything above is tracked except `tools/`, `external/`, the PDFs in
-`docs/references/`, `vm/`, `out/` and `scripts/local/`: third-party material,
-generated output, or host-specific tooling. Nothing under `tools/` goes into
+`docs/references/`, `vm/`, `out/`, `temp/` and `scripts/local/`: third-party material,
+generated output, scratch, or host-specific tooling. Nothing under `tools/` goes into
 the release download since 1.0.0.1; "Third-Party Material and Provenance"
 below has the record. Every version under `releases/` has been uploaded to a
 GitHub release, and the repository is public (which build the third-party
@@ -294,7 +320,12 @@ onward, the USB4 and Thunderbolt connection-manager work: a driver beside
 never modified, with design record 21 as Phase 39's plan (the Thunderbolt
 firmware connection manager client) and design record 22 as Phase 40's
 (the USB4 software connection manager); both phases opened 2026-10-15 and
-ship together as `3.0.0.0`. The miniport is
+shipped together as `3.0.0.0`, cut on 2026-10-17 with Phase 41 (XHCITR,
+design record 25). **The open phase is that file's Phase 42**, opened by
+the owner on 2026-10-18 for release `3.1.0.0` (the windowed installer,
+the uninstall, the Windows 98 SE and ME device install, `XHCISNAP`
+retired, and the connection-manager follow-ups), on branch `3.1.0.0`;
+the file's status line and decisions table are the current state. The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
 are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
 ASCII and CRLF, the three flavours, the import and INF gates - bind the HCD
@@ -353,8 +384,8 @@ target's class drivers expect of a USB PDO is read per target and is design
 record 13 section 6; the object model, the enumeration state machine and the
 lock model are its section 5; hubs and composite devices are section 10. The
 controller's Advanced tab and the root hub's Power tab are answered by the
-driver itself (the `USBUSER` door, section 8), which is also how `XHCISNAP`
-reaches it. `xhciuas.sys` is a class driver of this project's own above a
+driver itself (the `USBUSER` door, section 8), which is also how `XHCITR`'s
+snapshot reaches it. `xhciuas.sys` is a class driver of this project's own above a
 device PDO, for UAS, with streams the bus provides (`roadmap-hcd.md` Phase
 31).
 
@@ -585,8 +616,11 @@ published tree, since every version published before `1.1.0.0` is x86-only.
 
 **Every published x64 directory is test-signed, and only by the packager**
 (owner, 2026-10-11; design record 19 is the authority). `xhci98.sys`,
-`xhciuas.sys` and `xhcicm.sys` (with its `nt\xhcicm.sys` copy, the same
-bytes) of `release-x64` and `debug-x64` carry an embedded Authenticode
+`xhciuas.sys` and `xhcicm.sys` of `release-x64` and `debug-x64` (one copy each
+since 3.1.0.0, whose x64 directories keep the filter INF at the root and
+have no `nt\`), and from `3.1.0.0` the bundled `stor98.sys` of
+`release-x64` (one key signs every driver, owner 2026-10-19; Stor98's own
+certificate is retired), carry an embedded Authenticode
 signature by the project test certificate - SHA-1 file digest, no
 timestamp, no catalog, the INFs unchanged - applied at staging by
 `make-package.ps1 -TestSignPfx` and never by hand, with the certificate's
@@ -670,6 +704,44 @@ pinned commits are in `external/README.md`; `legal-provenance.md` section
 
 ---
 
+## Stor98 (`src/stor98/`)
+
+`src/stor98/` is Stor98, the SCSI miniport for NVMe SSDs that the release
+packages bundle, in this repository since 2026-10-19 as one snapshot of
+its own repository's tracked files (branch `audit-2026-10-18` at `4253b58`,
+no history; roadmap-usb4 task 42-A.20, owner). It stays its own driver and
+its own files - `stor98.mpd` for 98 SE and ME, `stor98.sys` for x86 and
+x64, its two INFs - built by `src\stor98\scripts\build.cmd` into the
+ignored `src\stor98\out\`, never folded into this project's binaries.
+**Since 3.1.0.0 it is built, gated and versioned with this package**
+(roadmap-usb4 task 42-A.30, owner 2026-10-19): `scripts\build-driver.cmd`
+builds its free images for the run's architecture and gates them in every
+flavour (version, the `STOR98_FLAVOUR_FREE` marker and the import
+allowlist, `scripts\check-stor98-build.ps1` and
+`scripts\import-gate\stor98-imports.allow`; the source stamp; the gated
+record), its two INFs carry the package's `DriverVer`
+(`scripts\inf-gate\check-stor98-inf.ps1`), its version resources take
+`src\xhci_version.h` through `src\stor98\src\stor98ver.h`, and
+`make-package.ps1` bundles that build by default (`-NoStor98` leaves it
+out) and signs the x64 `stor98.sys` with the other x64 drivers. One
+version, one date and one signature cover every binary of the package;
+Stor98's interface versions (`STOR98CM_VERSION`, `STOR98LS_VERSION`) are
+protocol versions and stay its own. Its releases up to `0.4.0.0` under
+`src\stor98\releases\` are history; it has no release or signing of its
+own any more.
+**Its own `AGENTS.md` governs its technical rules** (provenance, surprise
+removal and DMA, no "NVMe" in a name),
+and its `LICENSE` and `NOTICE` its files; this file's source rules (C89,
+the arithmetic rules, ASCII, the gates) do not bind it, and
+`check-source-charset.ps1` skips it. This repository's commit rule does
+apply to it: no attribution trailer in a commit message. Its interface
+header is here twice until the two are made one: the master is
+`src\stor98\include\stor98cm.h`, and `src\cm\stor98cm.h` must be the same
+bytes, which `scripts\check-stor98-header.ps1` holds on every gated build
+(`docs/contributing/source-files.md`).
+
+---
+
 ## Third-Party Material and Provenance
 
 This project is GPL-2.0-only licensed and depends on material that is not.
@@ -691,9 +763,10 @@ rules that bind day-to-day work, and none of them is optional.
   on all four paths by it, to dirid 11 rather than 10. **Do not put a
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"
-  anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, from
-  `2.4.0.0` `XHCICLN` and `XHCICL64`, and from `3.0.0.0` `XHCIINST` and
-  `XHCIIN64`) carry statically linked runtimes (section 2a).
+  anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP` up to
+  `3.0.0.0`, from `2.4.0.0` `XHCICLN` and `XHCICL64`, from `3.0.0.0`
+  `XHCIINST`, `XHCIIN64`, `XHCITR` and `XHCITR64`, and from `3.1.0.0`
+  `XHCIWIZ` and `XHCIWZ64`) carry statically linked runtimes (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh
@@ -786,7 +859,7 @@ UTF-8.
 - Do not use C++ syntax, STL, or runtime library functions.
 - Do not take a SuperSpeed or SuperSpeedPlus field, encoding or state transition from memory. Take it from `docs/usb-xhci-info/xhci-data-structures.md` sections 10 and 11, checked against xHCI 1.2c and USB 3.2 (roadmap-hcd tasks 29-0 and 30-0), and say in the release notes what no vehicle has read.
 - Do not attempt to make a USB 3.x logical port operate at USB 2.0 speeds; it is electrically impossible.
-- Do not write against a guessed function-driver contract. What a target's class drivers send a USB PDO, and what the property pages and `XHCISNAP` send the door, is read per target and recorded in design record 13 sections 6 and 8; a contract taken from the DDK headers alone, or one target's assumed for another's, is what Phase 25 exists to prevent.
+- Do not write against a guessed function-driver contract. What a target's class drivers send a USB PDO, and what the property pages and `XHCITR`'s snapshot (`XHCISNAP` up to `3.0.0.0`) send the door, is read per target and recorded in design record 13 sections 6 and 8; a contract taken from the DDK headers alone, or one target's assumed for another's, is what Phase 25 exists to prevent.
 - Do not bring `usbport.sys`, `usbhub.sys` or a composite parent back underneath or beside the HCD, and do not bind the root hub to `USB\ROOT_HUB`: the bus owns the root hub, hubs and composite splitting (`roadmap-hcd.md`, decisions table).
 - Do not place a SET_ADDRESS setup packet on a transfer ring. xHCI forbids software-issued SET_ADDRESS (spec section 4.5.4.1: the xHC blocks it and completes the TRB with TRB Error). The bus addresses a device with the Address Device command in its own enumeration state machine (design record 13 section 5.3), and a SET_ADDRESS a client sends is never put on a ring.
 - Do not use undocumented Win98 kernel internals without documenting why there is no other option.
@@ -794,4 +867,5 @@ UTF-8.
 - Do not sign a binary by hand, sign an x86 binary, or let the test-signing key (`.pfx`) or its password reach a tracked file, a package, a log or a note. The packager signs the x64 binaries at staging (design record 19).
 - Do not describe a fact as runtime-observed when it was read out of a disassembly. Tag the method you actually used.
 - Do not write a legal conclusion into any file in this repository. `docs/contributing/legal-provenance.md` records facts, not verdicts.
+- Do not name the review tool, a review round or a finding number in a tracked file (owner, 2026-10-14; made explicit 2026-10-18): no tracked document and no source or script comment says which tool reviewed a change, "review round N" or "finding N". Cite the commit, the date, the task id or the run section instead, and say "reviewed and revised" at most. The dated run sheets (`docs/contributing/runs/run-*.md` and `run-13e.md`) are left as they were written, and so is the credit line in `README.md`'s "AI usage", which names the agents on purpose.
 - Do not write a development machine's name (its `hostname`) into any tracked file, commit message or report. Name the host by its alias - "development host A", "B", "C" - as every run record here does; the key from name to alias is kept out of the repository (owner, 2026-09-28). Logs that print `$env:COMPUTERNAME` are git-ignored; do not transcribe that field.

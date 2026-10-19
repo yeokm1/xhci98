@@ -1660,6 +1660,15 @@ static void test_usb_eject(void)
     CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS,
           "rule: an input device held for eject is still not listed");
     f.Hid = 0;
+    f.Problem = 24;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS &&
+          strcmp(why, "no disk on it") == 0,
+          "rule: Code 24 with no disk is not held for eject outside 2000");
+    f.W2k = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
+          strcmp(why, "stopped - unplug it") == 0,
+          "rule: Code 24 after its disk went with the stop (2000)");
+    f.W2k = 0;
     f.Disks = 1;
     f.Problem = 28;
     CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
@@ -1681,23 +1690,41 @@ static void test_usb_eject(void)
     f.CallAvailable = 0;
     CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: no routine");
 
-    /* the words for a devnode that is not running: only Code 47 says unplug */
+    /* the words for a devnode that is not running: only held for eject
+     * (Code 47, or 24 on 2000 after an accepted stop) says unplug */
     {
         char tag[64];
         char sen[96];
-        CHECK(tr_stopped_text(47, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
+        CHECK(tr_stopped_text(47, 0, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
               strcmp(tag, "stopped - unplug it") == 0 &&
               strcmp(sen, "Stopped: you can unplug it.") == 0, "stopped: Code 47");
-        CHECK(tr_stopped_text(29, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+        CHECK(tr_stopped_text(29, 0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
               strcmp(tag, "not started - problem code 29") == 0 &&
               strcmp(sen, "Windows could not start this device (problem code 29).") == 0 &&
               !has(tag, "unplug") && !has(sen, "unplug"),
               "stopped: Code 29 is a failed start, never 'unplug it'");
-        CHECK(tr_stopped_text(28, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+        CHECK(tr_stopped_text(28, 0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
               has(tag, "code 28"), "stopped: Code 28, no driver");
-        CHECK(tr_stopped_text(0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+        CHECK(tr_stopped_text(0, 0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
               strcmp(tag, "not started") == 0 && !has(sen, "unplug"),
               "stopped: not started, no problem code");
+        CHECK(tr_stopped_text(24, 1, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
+              strcmp(tag, "stopped - unplug it") == 0 &&
+              strcmp(sen, "Stopped: you can unplug it.") == 0,
+              "stopped: Code 24 on 2000 is held for eject");
+        CHECK(tr_stopped_text(24, 0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              has(tag, "code 24") && !has(sen, "unplug"),
+              "stopped: Code 24 elsewhere is not");
+        CHECK(tr_stopped_text(47, 1, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
+              tr_stopped_text(28, 1, tag, sizeof(tag), sen, sizeof(sen)) == 0,
+              "stopped: 2000 keeps the other codes");
+        CHECK(tr_w2k_code24(1, 1, 1, 1) && tr_w2k_code24(1, 1, 0, 0),
+              "code 24: 2000, stopped here, still configured (or a unit)");
+        CHECK(!tr_w2k_code24(1, 1, 1, 0),
+              "code 24: plugged in again and failed to start, unconfigured");
+        CHECK(!tr_w2k_code24(1, 0, 1, 1) && !tr_w2k_code24(1, 0, 0, 0),
+              "code 24: not stopped here (a failed start, or another tool)");
+        CHECK(!tr_w2k_code24(0, 1, 1, 1), "code 24: not 2000");
     }
 
     /* what a walk right after an accepted stop reads (section 6.5 step 5) */
@@ -2056,7 +2083,7 @@ static void test_levels(void)
     /* Reading: each driver's one value. */
     cur.State = TR_RV_ABSENT;
     cur.Value = 0;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     CHECK(l.State == TR_RV_ABSENT && l.Level == TR_LV_DEFAULT,
           "an absent value reads as the default 2");
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
@@ -2067,7 +2094,7 @@ static void test_levels(void)
           "xhcicm: absent, the line");
     cur.State = TR_RV_DWORD;
     cur.Value = 3;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     CHECK(l.Level == 3, "3 read");
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(strcmp(line, "3 - adds port status (XhciLogVerbosity)") == 0,
@@ -2079,16 +2106,16 @@ static void test_levels(void)
               strcmp(tr_level_value_name(TR_LV_XHCICM), "XhciCmLogVerbosity") == 0,
           "each driver's one value name");
     cur.Value = 0;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     CHECK(l.Level == 0, "0 is a level, not absent");
     cur.Value = 4;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     CHECK(l.Level == 4, "4 is a level");
     cur.Value = 5;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     CHECK(l.Level == -1 && l.Value == 5, "5 is out of range");
     cur.Value = 7;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(l.Level == -1 &&
               strcmp(line, "7 - out of range, not 0-4 (XhciLogVerbosity)") == 0,
@@ -2097,17 +2124,17 @@ static void test_levels(void)
     CHECK(strcmp(line, "7 - out of range, not 0-4 (XhciCmLogVerbosity)") == 0,
           "xhcicm: out of range shown as such");
     cur.Value = 0xFFFFFFFFUL;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(l.Level == -1 && strncmp(line, "4294967295 - out of range", 25) == 0,
           "the largest DWORD, unsigned");
     cur.State = TR_RV_OTHER;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
     CHECK(l.Level == -1 && strcmp(line, "XhciCmLogVerbosity is not a REG_DWORD") == 0,
           "another type");
     cur.State = TR_RV_UNREAD;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
     CHECK(l.Level == -1 && strcmp(line, "not read") == 0, "not read");
 
@@ -2119,7 +2146,12 @@ static void test_levels(void)
             for (dd = 0; dd < TR_LV_DRIVERS; dd++) {
                 cur.State = s;
                 cur.Value = k == 12 ? 0xFFFFFFFFUL : k;
-                tr_level_pick(&cur, &l);
+                tr_level_pick(NULL, &cur, &l);
+                tr_level_line(dd, &l, line, sizeof(line));
+                if ((int)strlen(line) > maxLen) {
+                    maxLen = (int)strlen(line);
+                }
+                tr_level_pick(&cur, &cur, &l);
                 tr_level_line(dd, &l, line, sizeof(line));
                 if ((int)strlen(line) > maxLen) {
                     maxLen = (int)strlen(line);
@@ -2131,19 +2163,113 @@ static void test_levels(void)
 
     /* The block. */
     tr_text_init(&t, big, sizeof(big));
-    tr_level_head(&t, TR_LV_XHCI98, 0);
-    tr_level_head(&t, TR_LV_XHCICM, 1);
+    tr_level_head(&t, TR_LV_XHCI98, 0, NULL);
+    tr_level_head(&t, TR_LV_XHCICM, 1, NULL);
     cur.State = TR_RV_DWORD;
     cur.Value = 3;
-    tr_level_pick(&cur, &l);
+    tr_level_pick(NULL, &cur, &l);
     tr_level_device(&t, TR_LV_XHCICM, "Thunderbolt(TM) Controller - 15EB", &l);
     CHECK(strcmp(big,
                  "xhci98 (XhciLogVerbosity in each controller's driver key):\r\n"
+                 "  Machine-wide (Services\\USB, wins when set): not set\r\n"
                  "  No USB controller is driven by xhci98.\r\n"
                  "xhcicm (XhciCmLogVerbosity in each host interface's driver key):\r\n"
+                 "  Machine-wide (Services\\USB, wins when set): not set\r\n"
                  "  Thunderbolt(TM) Controller - 15EB\r\n"
                  "    3 - adds port status (XhciCmLogVerbosity)\r\n") == 0,
           "levels: the report's block");
+
+    /* Task 42-A.17: the machine-wide value wins when it is there, in any
+     * type; the device's own is shown as not in force. */
+    {
+        TR_RVAL m;
+        /* A query's answer as the drivers read it: a zero-length REG_NONE
+         * is absent, a REG_NONE with data and a REG_QWORD are another
+         * type, a REG_DWORD of four bytes the DWORD. */
+        tr_rv_from_query(TR_Q_OK, 0, 0, 0, &m);
+        CHECK(m.State == TR_RV_ABSENT, "query: zero-length REG_NONE is absent");
+        tr_rv_from_query(TR_Q_OK, 0, 4, 0, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: REG_NONE with data is another type");
+        tr_rv_from_query(TR_Q_OK, 11, 4, 0, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: a short REG_QWORD is another type");
+        tr_rv_from_query(TR_Q_OK, 4, 4, 3, &m);
+        CHECK(m.State == TR_RV_DWORD && m.Value == 3, "query: a DWORD");
+        tr_rv_from_query(TR_Q_OK, 4, 2, 3, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: a 2-byte REG_DWORD is another type");
+        tr_rv_from_query(TR_Q_NOT_FOUND, 0, 0, 0, &m);
+        CHECK(m.State == TR_RV_ABSENT, "query: not found");
+        tr_rv_from_query(TR_Q_MORE_DATA, 1, 40, 0, &m);
+        CHECK(m.State == TR_RV_OTHER, "query: too long is another type");
+        tr_rv_from_query(TR_Q_ERROR, 4, 4, 3, &m);
+        CHECK(m.State == TR_RV_UNREAD, "query: another error is not read");
+        /* A zero-length REG_NONE machine-wide leaves the device's level in
+         * force, so a Set writes the device's key (lv_set: State absent). */
+        cur.State = TR_RV_DWORD;
+        cur.Value = 3;
+        tr_rv_from_query(TR_Q_OK, 0, 0, 0, &m);
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_DEVICE && l.Level == 3,
+              "query: a zero-length REG_NONE machine-wide does not override");
+        m.State = TR_RV_ABSENT;
+        m.Value = 0;
+        cur.State = TR_RV_ABSENT;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_NONE && l.Level == TR_LV_DEFAULT,
+              "machine-wide: absent from both is the default, from neither");
+        cur.State = TR_RV_DWORD;
+        cur.Value = 1;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_DEVICE && l.Level == 1,
+              "machine-wide: per-device only");
+        m.State = TR_RV_DWORD;
+        m.Value = 4;
+        cur.State = TR_RV_ABSENT;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_MACHINE && l.Level == 4,
+              "machine-wide only");
+        tr_level_line(TR_LV_XHCICM, &l, line, sizeof(line));
+        CHECK(strcmp(line, "4 - adds memory addresses (for developers) "
+                           "(machine-wide)") == 0,
+              "machine-wide: the line says where");
+        cur.State = TR_RV_DWORD;
+        cur.Value = 1;
+        m.Value = 3;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_MACHINE && l.Level == 3 &&
+                  l.Device.State == TR_RV_DWORD && l.Device.Value == 1,
+              "machine-wide: both, the machine-wide value wins");
+        m.State = TR_RV_OTHER;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_MACHINE && l.Level == -1,
+              "machine-wide of another type still wins");
+        tr_level_line(TR_LV_XHCI98, &l, line, sizeof(line));
+        CHECK(strcmp(line, "XhciLogVerbosity machine-wide is not a REG_DWORD") == 0,
+              "machine-wide: another type, the line");
+        m.State = TR_RV_UNREAD;
+        tr_level_pick(&m, &cur, &l);
+        CHECK(l.From == TR_LV_FROM_MACHINE && l.Level == -1,
+              "machine-wide not read: no level claimed");
+
+        m.State = TR_RV_DWORD;
+        m.Value = 3;
+        tr_text_init(&t, big, sizeof(big));
+        tr_level_head(&t, TR_LV_XHCI98, 1, &m);
+        tr_level_pick(&m, &cur, &l);
+        tr_level_device(&t, TR_LV_XHCI98,
+                        "xHCI98 USB 3.x eXtensible Host Controller", &l);
+        CHECK(strcmp(big,
+                     "xhci98 (XhciLogVerbosity in each controller's driver key):\r\n"
+                     "  Machine-wide (Services\\USB, wins when set): 3 - adds port status\r\n"
+                     "  xHCI98 USB 3.x eXtensible Host Controller\r\n"
+                     "    3 - adds port status (machine-wide)\r\n"
+                     "    its own value, 1, is not in force\r\n") == 0,
+              "levels: the block with both set");
+        m.Value = 9;
+        tr_text_init(&t, big, sizeof(big));
+        tr_level_head(&t, TR_LV_XHCICM, 0, &m);
+        CHECK(strstr(big, "wins when set): 9 - out of range\r\n") != NULL,
+              "levels: a machine-wide value out of range");
+    }
 
     /* One level for all, or not. */
     ls[0].Level = 3;
@@ -2476,6 +2602,79 @@ static void test_resources(void)
     }
 }
 
+/* 42-A.5: the mark lines (record 21 section 7.4, revision 3, "The
+ * viewer"). */
+static MK_MARKS markSet;
+
+static void test_marks(void)
+{
+    static const char lf1[] = "PartMgr\0XHCICM\0";
+    static const char lf2[] = "xhcicmf\0xhcicmx\0";
+    static const char lf3[] = "xhcicm";    /* no terminator at all */
+    INST_U32 mem = tr_mark_member(6, 0x00030001UL);
+
+    CHECK_EQ(mem, 0x0619UL, "member: bus 6, device 3, function 1");
+    CHECK_EQ(tr_mark_member(0x106, 0x001F0007UL), 0x06FFUL,
+             "member: masked to 8 bits of bus, 5 of device, 3 of function");
+    CHECK(tr_msz_has(lf1, sizeof(lf1), "xhcicm"), "found without case");
+    CHECK(!tr_msz_has(lf2, sizeof(lf2), "xhcicm"), "no prefix match");
+    CHECK(tr_msz_has(lf3, 6, "xhcicm"), "an unterminated last string");
+    CHECK(!tr_msz_has("", 1, "xhcicm"), "an empty value");
+    CHECK(!tr_msz_has(lf1, 0, "xhcicm"), "no bytes");
+
+    memset(&markSet, 0, sizeof(markSet));
+    markSet.Count = 3;
+    markSet.E[0].Member = mem;
+    markSet.E[0].Bus = 7;
+    markSet.E[0].Address = 0;
+    markSet.E[0].Flags = MK_EF_REPORTED | MK_EF_LOCATED | MK_EF_ADD_ATT |
+                         MK_EF_REMOVABLE;
+    markSet.E[1].Member = mem;
+    markSet.E[1].Bus = 8;
+    markSet.E[1].Address = 0;
+    markSet.E[1].Flags = MK_EF_REPORTED | MK_EF_LOCATED;
+    markSet.E[1].Pending = 1234;
+    markSet.E[2].Member = mem;
+    markSet.E[2].Bus = 9;
+    markSet.E[2].Flags = MK_EF_LOCATED;     /* a tombstone */
+    CHECK_EQ(tr_mark_find(&markSet, mem, 7, 0, 0), 0, "the unit's entry");
+    CHECK_EQ(tr_mark_find(&markSet, mem, 7, 0, 1), -1,
+             "no departure pending on it");
+    CHECK_EQ(tr_mark_find(&markSet, mem, 8, 0, 1), 1, "a pending departure");
+    CHECK_EQ(tr_mark_find(&markSet, mem, 9, 0, 0), -1, "a tombstone is not one");
+    CHECK_EQ(tr_mark_find(&markSet, mem + 8, 7, 0, 0), -1, "another member");
+    CHECK_EQ(tr_mark_find(NULL, mem, 7, 0, 0), -1, "no answer");
+    markSet.E[2].Bus = 7;
+    markSet.E[2].Flags = MK_EF_REPORTED | MK_EF_LOCATED;
+    CHECK_EQ(tr_mark_find(&markSet, mem, 7, 0, 0), -1, "two entries: none");
+    markSet.E[2].Bus = 9;
+
+    CHECK_EQ(tr_mark_state(0, NULL, -1, 0), TR_MK_OLD, "an older driver");
+    CHECK_EQ(tr_mark_state(-1, NULL, -1, 1), TR_MK_FAILED, "a failed answer");
+    CHECK_EQ(tr_mark_state(1, &markSet, 0, 1), TR_MK_LISTED, "Removable set");
+    CHECK_EQ(tr_mark_state(1, &markSet, 0, 0), TR_MK_LISTED,
+             "Removable set without the value (the first plug's attachment)");
+    CHECK_EQ(tr_mark_state(1, &markSet, 1, 1), TR_MK_WRITTEN,
+             "the value, no attachment: at the next start");
+    CHECK_EQ(tr_mark_state(1, &markSet, -1, 1), TR_MK_WRITTEN,
+             "the value, no entry");
+    CHECK_EQ(tr_mark_state(1, &markSet, 1, 0), TR_MK_NOT, "no value, no attachment");
+    markSet.E[1].Flags |= MK_EF_BUS_ATT;
+    CHECK_EQ(tr_mark_state(1, &markSet, 1, 1), TR_MK_NOTLISTED,
+             "the value and an attachment, Removable not set");
+    CHECK_EQ(tr_mark_state(1, &markSet, 7, 1), TR_MK_WRITTEN,
+             "an entry index past the count is none");
+    CHECK(strcmp(tr_mark_text(TR_MK_LISTED), "listed by Windows") == 0,
+          "listed text");
+    CHECK(strcmp(tr_mark_text(TR_MK_WRITTEN), "mark written; takes effect at "
+                 "the next start of the device") == 0, "written text");
+    CHECK(strcmp(tr_mark_text(TR_MK_NOT), "not marked") == 0, "not text");
+    CHECK(strcmp(tr_mksvc_text(TR_SV_RUNNING), "running") == 0, "running");
+    CHECK(strcmp(tr_mksvc_text(TR_SV_ABSENT), "not installed") == 0,
+          "not installed");
+    CHECK(strcmp(tr_mksvc_text(99), "not read") == 0, "unknown state");
+}
+
 int main(void)
 {
     test_printf();
@@ -2495,6 +2694,7 @@ int main(void)
     test_levels();
     test_labels();
     test_resources();
+    test_marks();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {

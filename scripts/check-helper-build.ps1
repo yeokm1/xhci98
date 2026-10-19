@@ -17,12 +17,12 @@ the target. So two things are read, each refused on its own:
     library the link names must come from lib\wxp\i386 - except the one the
     kit adds for a driver whose subsystem is below 6.01,
     lib\crt\i386\safecrtnt.lib, admitted by that name alone (record 18
-    section 15.10, round 3's finding 3). A wlh, win7 or wnet library path is
+    section 15.10). A wlh, win7 or wnet library path is
     refused by name, and so is any other directory.
   - **The image's header** (link /dump /headers): subsystem Native at version
     5.00, section alignment 0x80 (the WXP driver default) and a non-zero
     checksum, so a toolchain change cannot move those fields unseen. That is
-    all the header shows (round 2's finding F).
+    all the header shows.
 
 scripts\build-driver.cmd runs it after every helper link. -SelfTest proves
 the rules on synthetic logs and headers: a valid WXP subsystem 5.00 build
@@ -65,8 +65,8 @@ function Get-HelperLogErrors {
     }
     # Every library operand, quoted or not (a quoted one may hold spaces),
     # and every /DEFAULTLIB: argument, with or without its extension; a
-    # /NODEFAULTLIB: exclusion links nothing and is passed over (review of
-    # 38.3, rounds 1 and 2).
+    # /NODEFAULTLIB: exclusion links nothing and is passed over (task
+    # 38.3).
     $libs = @()
     foreach ($line in $Lines) {
         $text = ($line -replace "^\d+>", "").Trim()
@@ -106,7 +106,7 @@ function Get-HelperLogErrors {
     return $errors
 }
 
-# The log tied to the image (review of 38.3, round 1): its link wrote this
+# The log tied to the image (task 38.3): its link wrote this
 # very file (/out: names it) and the log was finished no earlier than the
 # image, so a log of another build cannot vouch for it.
 function Get-HelperLogTieErrors {

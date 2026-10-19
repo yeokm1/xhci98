@@ -22,7 +22,9 @@
  *                NHI asks it through (task 39-A.5).
  *   [CM_CHILD]   safe eject's child filter (task 39-A.8), NT only,
  *                created by a bridge filter above a device newly reported
- *                on an active tunnel bridge: cm_filt.c.
+ *                on an active tunnel bridge, or (task 42-A.5, record 21
+ *                section 7.4 revision 3) by AddDevice for a device whose
+ *                LowerFilters value the mark service wrote: cm_filt.c.
  *
  * FILES. cm_entry.c (DriverEntry, AddDevice, the dispatch table),
  * cm_nhi.c, cm_thr.c, cm_power.c, cm_reenum.c (the re-enumeration and
@@ -76,6 +78,12 @@
 
 /* The connection-manager thread's work (CM_NHI.WorkBits), taken in this
  * order on each wake (cm_thr.c). */
+/* PCI Command (PCI 3.0 6.2.2): the configuration word cm_thr.c writes for
+ * Bus Master, and a USB4 recovery's preparation for Memory Space too
+ * (record 22 section 7.7 part 2). */
+#define CM_PCI_COMMAND            0x04UL
+#define CM_PCI_COMMAND_BUS_MASTER 0x0004U
+
 #define CM_WORK_SYSTEM 0x01UL  /* complete the system power IRP            */
 #define CM_WORK_D3     0x02UL  /* a device power IRP below D0              */
 #define CM_WORK_D0     0x04UL  /* a device power IRP to D0, after the bus  */
@@ -162,6 +170,13 @@ typedef struct _CM_COUNTERS {
     ULONG U4ForcePowerKept; /* a router connected at stop: force power kept */
     ULONG U4Contained;      /* the USB4 profile contained (record 22 7.7)  */
     ULONG U4ContainRefused; /* a lifecycle step refused while contained    */
+    ULONG U4RecoverProbes;  /* record 22 7.7: probes while contained       */
+    ULONG U4RecoverRefused; /* an attempt refused by a step (logged)       */
+    ULONG U4RecoverOk;      /* committed                                   */
+    ULONG U4RecoverFinal;   /* the verified stop failed: final             */
+    ULONG U4RetireRequests; /* removal-only requests made                  */
+    ULONG U4RetirementOwed; /* a pass that found a barrier still standing  */
+    ULONG U4RecoverRearm;   /* an attempt that ended on an all-ones read   */
 } CM_COUNTERS;
 
 typedef struct _CM_NHI {
@@ -225,6 +240,7 @@ typedef struct _CM_NHI {
     ULONG ClockTickUs;      /* KeQueryTimeIncrement, in microseconds     */
     ULONG ClockRest;        /* microseconds not yet a millisecond        */
     ULONG ClockMs;          /* the millisecond clock TBT_HOST.NowMs reads */
+    ULONG StepUs;           /* cmClockUs at the host waits' last step     */
     TBT_RING Ring;
     TBT_ICM Icm;
     /* The common buffer's size: the ICM's ten-entry rings, or the USB4
@@ -278,6 +294,50 @@ typedef struct _CM_NHI {
     volatile ULONG PnpStopPending;
     ULONG U4UpGen[TBT_U4_MAX_PORTS];
     ULONG U4UpValid;
+    /* Record 22 section 7.7's recovery (task 42-A.10), the driver's half.
+     * The tunnel-port set as last read healthy (each member's location,
+     * identity DW and bus-number DW 0x18), for part 3 step 6; the members
+     * whose stor98 entry lost UP at the containment (CmNvlinkLost), for
+     * R8b; the Command bits the preparation set; the retirement barrier
+     * (part 4: bit i, member i), with each barred member's removal-only
+     * request - when it was last made and the bridge filter's answer
+     * count then (NT) - and the members the recovery's RESYNC skips. */
+    ULONG RecSetCount;
+    ULONG RecSetBdf[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecSetId[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecSetBus[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecLostUp;
+    ULONG RecCmdSet;
+    ULONG RecBarred;
+    ULONG RecDebtMask;      /* the members the attempts' drains owe a
+                               removal (accumulated, read while every
+                               binding stands), barred at the commit       */
+    ULONG RecChanged;       /* the members step 6 found changed (bus, or
+                               the entry lost UP): their learned bindings
+                               are withdrawn after the commit             */
+    ULONG RecRetireSent;
+    ULONG RecRetireAtMs[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecRetireAns[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecUpValid;       /* U4UpValid as the containment found it      */
+    ULONG RecOnes;          /* an all-ones read inside the attempt
+                               (cm_thr.c latches it under PREPARE and
+                               RECOVERY): part 5's Rearm                  */
+    ULONG RecBusChanged;    /* members whose buses a committed recovery's
+                               step 6 found changed, with every old bus
+                               still owed (RecOldBuses, bit b for bus b):
+                               their old entries are released once their
+                               devnode's retirement was observed after the
+                               latest such change (RecRelOk, R8a)          */
+    ULONG RecOldBuses[XHCI_TBT_MAX_TUNNELS][8];
+    ULONG RecBusPend;       /* the same for the attempt now running, read
+                               afresh by each one, taken at its commit    */
+    ULONG RecOldBusPend[XHCI_TBT_MAX_TUNNELS];
+    ULONG RecRelOk;         /* RecBusChanged members whose barrier was
+                               lifted by an observed retirement           */
+    /* Decision U27: the bind (1) or the resume (2) the loss interrupted;
+     * the stage is then CM_STAGE_FAILED, sampled and recovered as ACTIVE
+     * is, never a protocol failure's (0). */
+    ULONG U4LossFrom;
     /* The stor98 channel's two moments (CmNhiSetU4Hooks), NULL until task
      * 40-A.7's cm_nvlink.c registers them. */
     CM_U4_UP_HOOK U4UpHook;
@@ -302,6 +362,9 @@ typedef struct _CM_NHI {
     KEVENT ThreadExited;
     PVOID ThreadObject;
     ULONG ThreadRunning;
+    /* The thread's wait as it records it (CM_Q_WAIT_*, cm_qryb.h): read by
+     * the query device's seed (task 42-A.7). */
+    volatile ULONG ThreadWait;
     ULONG ThreadReferenceFailures;
     NTSTATUS StartStatus;
     ULONG BindOwed;
@@ -346,6 +409,11 @@ typedef struct _CM_NHI {
     ULONG BrDiag[CM_BRDIAG_WORDS];
     ULONG BrDiagSeq;        /* the last sequence given, across workers    */
     ULONG BrDiagWritten;
+    /* The same for design record 28's XhciCmNoIrqDiag (CM_NIDIAG_WORDS),
+     * under BrDiagLock too. */
+    ULONG NiDiag[CM_NIDIAG_WORDS];
+    ULONG NiDiagSeq;
+    ULONG NiDiagWritten;
     KSPIN_LOCK BrDiagLock;  /* BrDiag and BrDiagSeq; taken inside the
                                worker's own lock, never around a call     */
 
@@ -366,6 +434,7 @@ typedef struct _CM_NHI {
     UCHAR QueryBuf[CM_Q_BUILD_MAX];
     ULONG QueryLastBytes;   /* the answer last published, for its content */
     UCHAR QueryLast[CM_Q_BUILD_MAX];    /* generation                    */
+    UCHAR MarksBuf[CM_QM_MAX_BYTES];    /* the marks answer, thread-owned */
     /* The counters' text for the log answer (record 25 section 4.5), the
      * thread's own, built after each pass and published with the answer. */
     ULONG QueryCtrBytes;
@@ -410,6 +479,20 @@ typedef struct _CM_QUERY_DEV {
     KEVENT PciGate;
     UCHAR Pci[CM_QP_MAX_BYTES];
     UCHAR PciScratch[CM_QP_CFG_BYTES];  /* one prefix read, under PciGate */
+    /* Windows 98 SE and ME (task 42-A.14): the NHI's CONFIGMG worker, which
+     * walks below the members, as the thread last published it, and the
+     * askers inside CmCfgwkPciAsk on it, both under Lock; the thread clears
+     * Wk and waits for WkUse to fall to 0 before it stops the worker
+     * (CmQueryWorkerGone). */
+    struct _CM_CFGWK *Wk;
+    ULONG WkUse;
+    /* The marks answer (task 42-A.5): as the thread last built it, under
+     * Lock; MarksRead the newest marks generation a whole answer carried
+     * out, which the thread's next publish takes back (MarksReadAny). */
+    ULONG MarksBytes;
+    ULONG MarksRead;
+    ULONG MarksReadAny;
+    UCHAR Marks[CM_QM_MAX_BYTES];
 } CM_QUERY_DEV, *PCM_QUERY_DEV;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
@@ -463,16 +546,66 @@ typedef struct _CM_FILTER {
     ULONG SnapCount;
     PVOID Snap[CM_SNAP_MAX];
     ULONG SnapTruncated;    /* the last answer held more than CM_SNAP_MAX  */
+    /* Beside each snapshot PDO, the location an attachment of this driver
+     * read for it (task 42-A.5), kept while the PDO stays in the snapshot,
+     * which is the bridge's rule for "the same device": the marks table
+     * takes it back when an entry is made again after its member was
+     * inactive (CmMarksLocate). Under the list's lock. */
+    ULONG SnapLocd[CM_SNAP_MAX];
+    ULONG SnapBus[CM_SNAP_MAX];
+    ULONG SnapAddr[CM_SNAP_MAX];
     ULONG RelGen;           /* bumped when the reported population changes */
     ULONG EjectSeen;        /* an orderly child removal since the last
                                eject was posted                           */
+    ULONG EjectHold;        /* an eject taken for this member, its tunnel
+                               teardown not yet returned: no function
+                               behind it is started meanwhile
+                               (CmRegStartAllowed)                        */
     ULONG Unsettled;        /* a tunnel change since its last BusRelations */
     ULONG ChangeSeq;        /* tunnel changes seen, for that settling     */
+    ULONG RelAnswers;       /* successful BusRelations answers seen: the
+                               recovery's retirement proof (record 22
+                               section 7.7 part 4) wants one after its
+                               removal-only request                       */
+    ULONG RelEmptyAt;       /* the RelAnswers value of the last settled
+                               answer that was complete and reported no
+                               PDO, 0 once a later answer reported one   */
+    ULONG ChildLive;        /* child filters attached below and not yet
+                               removed (CmRegAttLink, CmRegAttRemoved):
+                               that proof waits for each one's own
+                               removal                                    */
 
     /* ---- child ---- */
-    struct _CM_FILTER *Bridge;
-    ULONG QueryRemoved;     /* a query-remove not cancelled                */
+    struct _CM_FILTER *Bridge;  /* the bridge the child sits below: the one
+                               whose BusRelations attached it, or for one
+                               AddDevice made the one reporting its PDO when
+                               it linked (CmRegAttLink); NULL if none     */
+    ULONG ChildCounted;     /* counted in that bridge's ChildLive         */
+    ULONG Unattributed;     /* AddDevice made, no bridge named for it yet */
+    ULONG TruncSeen;        /* a bridge: an answer once held more PDOs than
+                               its snapshot keeps (CM_SNAP_MAX)           */
+    ULONG QueryRemoved;     /* a query-remove not cancelled (both kinds)   */
     ULONG SurpriseRemoved;
+
+    /* ---- the marks (task 42-A.5): every attachment of this driver on a
+     * device, a bridge filter's or a child's, on the registration list's
+     * attachment list, every field under its lock ---- */
+    LIST_ENTRY AttLink;
+    ULONG AttListed;
+    ULONG AddDev;           /* made by AddDevice: a LowerFilters child, or
+                               a bridge filter (which may also be a unit) */
+    ULONG Located;          /* LocBus and LocAddress read                  */
+    ULONG LocBus;
+    ULONG LocAddress;       /* DevicePropertyAddress                        */
+    ULONG Answered;         /* Removable answered set                      */
+    ULONG Stray;            /* counted once as cm.reenum.child.stray       */
+    /* Set while this object asks IoGetDeviceProperty for its PDO's
+     * location: the PnP manager answers DevicePropertyAddress with an
+     * IRP_MN_QUERY_CAPABILITIES sent to the top of this very stack, which
+     * must pass through this object unlocated (read on Windows 2000: a
+     * double fault, the stack overflowed by the recursion). The PnP
+     * dispatch alone touches it. */
+    ULONG InLocate;
 } CM_FILTER, *PCM_FILTER;
 
 /* cm_entry.c */
@@ -511,6 +644,10 @@ VOID CmNhiSetU4Hooks(PCM_NHI nhi, CM_U4_UP_HOOK up, CM_U4_DOWN_HOOK down,
 /* For cm_reenum.c, profile-neutral (cm_reenum.h, "THE USB4 PROFILE"). */
 VOID CmNhiNamePorts(PCM_NHI nhi);
 VOID CmNhiSetChanged(PCM_NHI nhi);
+/* The connection generation of the USB4 port member `member` corresponds
+ * to (record 22 section 7.2), 0 where none does or under the ICM client;
+ * on the thread (task 42-A.5's pending departures). */
+ULONG CmNhiMemberGen(PCM_NHI nhi, ULONG member);
 /* cm_power.c's resume: the USB4 batch taken and its UPs published before
  * the held bridges are released (cm_nhi.c, cmU4Drain). */
 VOID CmNhiU4Take(PCM_NHI nhi);
@@ -533,6 +670,19 @@ VOID CmNhiU4Contain(PCM_NHI nhi);
 /* The same with the reconciliation chosen: FALSE on the stop's path, which
  * never calls into PnP from inside a PnP request (record 22 section 7.7). */
 VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile);
+/* Record 22 section 7.7's recovery (task 42-A.10): one probe of a
+ * contained USB4 instance at `nowMs` and, as the monitor's table admits,
+ * the preparation, the recovery and its commit (cm_nhi.c). The thread,
+ * PASSIVE_LEVEL. */
+VOID CmNhiU4Probe(PCM_NHI nhi, ULONG nowMs);
+/* The retirement barrier of part 4, once per pass of an ACTIVE USB4
+ * instance before its tick: each barred member's devnode retirement read,
+ * its removal-only request made or retried, and every port's Barred set
+ * from it (TbtU4SetBarred). The thread, PASSIVE_LEVEL. */
+VOID CmNhiU4Barrier(PCM_NHI nhi);
+/* Whether the instance is one the probe serves: a contained USB4 instance
+ * ACTIVE, or FAILED by a loss inside its bind or resume (U27). */
+BOOLEAN CmNhiU4Probing(PCM_NHI nhi);
 /* The value RX ring 0's size register holds under the USB4 profile: what
  * the bind and every resume must read back before the monitor is armed. */
 #define CM_U4_RX_SIZE_VALUE \
@@ -562,6 +712,10 @@ ULONG CmThrProbe32(PCM_NHI nhi, ULONG offset);
 /* The monitor's sample and its actions, on the thread between the queued
  * work and the poll. IRQL: PASSIVE_LEVEL. */
 VOID CmThrLiveness(PCM_NHI nhi);
+/* Whether the thread's next wait has no timeout: no client to poll and no
+ * monitored state (the query device's inert flag). Any thread; the fields
+ * read are the thread's own and may change after. IRQL: <= DISPATCH_LEVEL. */
+BOOLEAN CmThrInertNext(PCM_NHI nhi);
 BOOLEAN CmCfgWrite16(PCM_NHI nhi, ULONG offset, USHORT value);
 
 /* cm_power.c */
@@ -578,6 +732,10 @@ BOOLEAN CmPowerSleeping(PCM_NHI nhi);
 
 /* cm_filt.c */
 NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
+/* The child by AddDevice (record 21 section 7.4, revision 3): attached to
+ * the top of what is on the PDO, passive until associated, and never a
+ * failed AddDevice for want of a role (decision M7). */
+NTSTATUS CmChildAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
 NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp);
 NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp);
 
@@ -606,6 +764,9 @@ VOID CmQueryOpen(PCM_NHI nhi);
 VOID CmQueryStopping(PCM_NHI nhi);
 VOID CmQueryClose(PCM_NHI nhi);
 VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert);
+/* Before the 98 worker is stopped (cm_reenum.c): the query device lets go
+ * of it, every asker already posting done. On the thread, PASSIVE_LEVEL. */
+VOID CmQueryWorkerGone(PCM_NHI nhi);
 NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp);
 
 /* cm_nhi.c: the counter blocks the stop dump writes (the NHI's, the

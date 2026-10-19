@@ -5,8 +5,9 @@ Status: **fixed in source for `3.0.0.0` in `xhcicm.sys`, behind
 on Windows 98 SE and ME only.** Read on the owner's ThinkPad P14s Gen 1
 under Windows 98 SE on 2026-10-16 with the third of three prototypes:
 an ASMedia ASM2464 NVMe enclosure plugged in after the start got its
-drive letter (issue 18). The build as merged has not yet been read on the
-P14s (issue 18 section 8). Windows 2000 to 7 never had the defect:
+drive letter (issue 18). The build as merged was read on the P14s by the
+owner the same evening, a hot plug after a start and a re-plug after Safely
+Remove, each to a drive letter (issue 18 section 8). Windows 2000 to 7 never had the defect:
 `pci.sys` configures such a chain itself (section 3). What is still not
 answered is a function behind the tunnel that Windows 98 can give no
 IRQ at all (section 7).
@@ -195,9 +196,9 @@ the same section). Not read on ME: Stor98 on that chain.
   arrives on another of the port's pins, nothing is written, and PCI.VXD
   leaves the function at Code 29 before its driver loads. A function
   with no interrupt pin at all (MSI only, which Windows 98 cannot use)
-  is in the same place. That is roadmap NOIRQ.1
-  (`docs/contributing/roadmap-usb4.md`, "Planned - A Tunnelled Function
-  With No Interrupt on Windows 98 SE and ME"), paired with Stor98's
+  is in the same place. That is roadmap-usb4 tasks 42-0.6 (design record
+  28, the design) and 42-A.15 (its code), which replaced the planned item
+  NOIRQ.1 (`docs/contributing/roadmap-usb4.md`, Phase 42), paired with Stor98's
   planned polling mode; until then such a device needs to be attached at
   power-on with pre-boot support on.
 - I/O and prefetchable windows, a CardBus bridge, a chain the BIOS left
@@ -217,7 +218,7 @@ the same section). Not read on ME: Stor98 on that chain.
   again with a chain (section 3).
 - **Set only what is provable.** The interrupt line is written only where
   the swizzle puts the function on the port's own wire; a guess at any
-  other routing is left to NOIRQ.1.
+  other routing is left to tasks 42-0.6 and 42-A.15.
 - **A release build reports in the registry.** A field machine has no
   debugger; twenty dwords in an export were enough to read each
   prototype.
@@ -233,5 +234,5 @@ the same section). Not read on ME: Stor98 on that chain.
   NT"; `docs/contributing/runs/run-40.md`, 40-V.2 U.11.
 - Design record 24 revision 5 and design record 25 revision 11 (the
   stop of a unit not marked removable on NT).
-- `docs/contributing/roadmap-usb4.md`, NOIRQ.1.
+- `docs/contributing/roadmap-usb4.md`, tasks 42-0.6 and 42-A.15 (was NOIRQ.1).
 - Issue 18, the P14s reading, and its sources.

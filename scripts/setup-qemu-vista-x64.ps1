@@ -64,7 +64,7 @@ disagreement with this one, then wedged at its first restart.
 The Windows Vista SP2 x64 DVD image - the same media task 21.7 read its six
 measurements out of, so the stack this guest installs is the stack that was
 measured. Empty by default, like every other ISO parameter in these scripts
-(the 2026-09-07 audit's J3): a default naming one host's media is a tracked
+(the audit of 2026-09-07): a default naming one host's media is a tracked
 file that names nothing on any other host. The generated launchers carry the
 "edit this file or pass -VistaX64Iso" guard.
 

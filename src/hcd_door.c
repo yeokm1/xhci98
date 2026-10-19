@@ -868,12 +868,11 @@ static ULONG hcdDoorTeleWord(PHCD_CONTROLLER hc, ULONG index)
  * design record 14 section 8.10), `word` a header word from DNCTRL_LIVE:
  * DNCTRL as read now - only with the switch on, so the switch at 0 adds no
  * register access, and only while the door's own MMIO predicate holds
- * (`mmio`: started, mapped, in D0; Codex review of 36.38, round 1, finding
- * 2) - the extension's two DNCTRL words, and the first eight devices'
- * stage B records in Slot ID order. A device record leaves
- * SlotDevice[] under this lock before it is freed, so each read here is of
- * a live record; its link record and masks are written under this lock.
- * Controller lock held. IRQL: DISPATCH_LEVEL.
+ * (`mmio`: started, mapped, in D0; task 36.38) - the extension's two DNCTRL
+ * words, and the first eight devices' stage B records in Slot ID order. A
+ * device record leaves SlotDevice[] under this lock before it is freed, so
+ * each read here is of a live record; its link record and masks are written
+ * under this lock. Controller lock held. IRQL: DISPATCH_LEVEL.
  */
 static ULONG hcdDoorSuspWord(PHCD_CONTROLLER hc, ULONG word, ULONG mmio)
 {
@@ -1201,9 +1200,8 @@ static ULONG hcdDoorSnapshot(PHCD_CONTROLLER hc, const UCHAR *guid,
 
     /* MMIO only on a started controller in D0: the door gate keeps the
      * mapping, and the power gate, held from this check to the last register
-     * read, keeps a suspend from falling between the two (Codex review of
-     * 26-A.8, round 22, finding 2) - every path that changes DevicePower or
-     * SuspendedInD0 holds it. */
+     * read, keeps a suspend from falling between the two (task 26-A.8) -
+     * every path that changes DevicePower or SuspendedInD0 holds it. */
     HcdPowerGateEnter(hc);
     mmio = (hc->ControllerStarted && hc->BarVa != NULL &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0 &&
@@ -1610,17 +1608,16 @@ static VOID hcdDoorDeviceLocked(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /*
  * A root port whose device is a hub the bus serves with no PDO standing for
  * it (its creation failed; task 33.4 gives every other hub one), so the
- * device record answers (Codex
- * review of 23e7715, finding 9). It is read under the controller lock and
- * referenced there unless already Gone - the teardown sets Gone under that
- * lock before the record leaves the port, and the record's freeing waits
- * out every reference (HcdIoDeviceGone) - so the descriptors stay while
- * they are copied. It is reported as a connected device, DeviceIsHub
- * FALSE: with no devnode and no door it has no name a caller could open
- * to walk its ports (Codex review of d54eef0, finding 3), and devices
- * behind it are not reported here - this door answers for the root hub's
- * own ports. Returns 1 when it answered. IRQL:
- * <= DISPATCH_LEVEL, no lock held.
+ * device record answers (reviewed and revised after 23e7715). It is read
+ * under the controller lock and referenced there unless already Gone - the
+ * teardown sets Gone under that lock before the record leaves the port, and
+ * the record's freeing waits out every reference (HcdIoDeviceGone) - so the
+ * descriptors stay while they are copied. It is reported as a connected
+ * device, DeviceIsHub FALSE: with no devnode and no door it has no name a
+ * caller could open to walk its ports (reviewed and revised after d54eef0),
+ * and devices behind it are not reported here - this door answers for the
+ * root hub's own ports. Returns 1 when it answered. IRQL: <= DISPATCH_LEVEL,
+ * no lock held.
  */
 static ULONG hcdDoorHubConnection(PHCD_CONTROLLER hc, ULONG port,
                                   PHCD_DOOR_CONN c, PUCHAR config,

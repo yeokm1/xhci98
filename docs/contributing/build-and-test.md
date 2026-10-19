@@ -17,9 +17,15 @@
 - Windows 11 x64 is the current host development machine
 - Visual C++ 6.0 unpacked from `tools/MSVC600.zip` into `tools/MSVC600`
 - Windows 2000 DDK unpacked from `tools/WIN2KDDK.EXE` into `tools/ntddk`
-- Open Watcom 2.0, installed to `C:\WATCOM`, used only for the `xhciqual/`
-  DOS qualifier and never for the driver
+- Open Watcom 2.0, installed to `C:\WATCOM`, used for the `xhciqual/`
+  DOS qualifier and, from `3.1.0.0`, for the 16-bit Windows 98 SE and ME
+  device-install helper `XHCIDI.EXE` (design record 27, its Win16
+  target against the Windows 98 SE DDK's `setupx.h`, `prsht.h` and
+  `setupx.lib` in
+  `tools/win98ddk-extracted/`), and never for the driver
 - QEMU, installed normally on the host
+- For Stor98 (`src\stor98\`) only, the Windows 98 DDK's `SCSI.H` and
+  `SRB.H` in `tools\w98ddk\inc\` ("Building Stor98" below)
 
 Neither driver toolchain is installed machine-wide. Both live inside the
 repository, are used in place, and write no registry key: MSVC 6.0 runs from
@@ -30,8 +36,9 @@ self-contained apart from QEMU and Open Watcom. `DDKROOT` overrides where the
 DDK is found for a host that has one installed elsewhere, and because the DDK
 build takes its compiler from `setenv.bat`, that redirects the compiler the
 driver is built with. `MSVC6` does not: it redirects only the host-side tools
-that need a `cl` and `dumpbin` of their own (`test\run-host-tests.cmd`,
-`scripts\make-usbport-lib.cmd`, `scripts\vm-matrix\gen-offsets.ps1`).
+that need a `cl` and `dumpbin` of their own (`test\run-host-tests.cmd`, the
+import gate's `dumpbin`, `scripts\vm-matrix\gen-offsets.ps1`, and the
+user-mode tools' and test clients' `build.cmd` files).
 
 Open Watcom 2.0 is the exception: it is a real host install. The DOS qualifier
 is a 32-bit protected-mode DOS binary with the DOS/32A extender embedded as its
@@ -52,6 +59,58 @@ by a different compiler from everything else in this repository.
   `.h` or `.asm` next to it, so a stale qualifier stops the release. `-SkipQualtool`
   publishes without it and the resulting directory is incomplete and says so.
 - `xhciqual\README.md` has the tool's own build, test and usage documentation.
+
+The same install builds `XHCIDI.EXE`, the Windows 98 SE and ME device
+install helper (roadmap-usb4 task 42-A.1, design record 27), a Win16 program
+in the large model, from `xhciinst\di\`:
+
+- `xhciinst\di\build.cmd` finds `wcc.exe` under `%WATCOM%` (default
+  `C:\WATCOM`) in `BINNT64`, `BINNT` and `BINW`, in that order, and answers
+  exit 2 ("not built") on a host without it. `xhciinst\build.cmd` calls it
+  as its last step and goes on after a 2, saying so.
+- It needs the Windows 98 SE DDK extracted into
+  `tools\win98ddk-extracted\` (`docs\references\README.md`, "Windows 98
+  DDK"; `DDK98` names another root). `xhciinst\di\stage-ddk.ps1` holds four
+  of its members to the SHA-256s that README's table records, reading each
+  hash from the table row, and copies them into the git-ignored
+  `xhciinst\di\obj\` under the names the sources include: `setupx.h`,
+  `prsht.h` (which `setupx.h` includes), `windows.h` and `setupx.lib`. The
+  DDK's 98 `windows.h` is compiled against, not Open Watcom's `h\win`
+  one: Watcom's is the Windows 3.1 header, with neither the `HKEY`
+  `setupx.h` uses nor the `NMHDR` `prsht.h` uses, so `INCLUDE` is
+  `obj\inc` then `%WATCOM%\H` (the C runtime's headers) and `h\win` is not
+  on it.
+- `wmake` runs `xhciinst\di\makefile`: `wcc -bt=windows -ml -zW -zu -s -wx
+  -we -zq -oas`, then `wlink system windows` with `option stack=16k`, the
+  DDK's `setupx.lib` and Watcom's `windows.lib` (the `system windows`
+  definition in Watcom's `wlink.lnk` adds `option nocaseexact`, which is
+  what resolves the two mixed-case names in the import library,
+  `DiGetINFClass` and `DiSelectBestCompatDrv`). Out come `xhcidi.exe` and
+  `xhcidi.map`.
+- `xhciinst\di\selftest.cmd`, which `build-driver.cmd` runs when the image
+  exists, holds it to `xhciinst\di\check-imports.ps1`: an NE image whose
+  modules are `KERNEL`, `USER` and `SETUPX` exactly, every import by
+  ordinal and each one a row of `xhcidi-imports.allow`, every row
+  imported, each row's name the one the import library binds to that
+  ordinal (the IMPDEF records of `setupx.lib` and of Watcom's
+  `lib286\win\windows.lib`). `test-gate.ps1` runs the gate's refusals, and
+  the image must carry the stamp `XHCIDI <version>` at `XHCI_VER_STR`. A
+  Win16 image does not run on 64-bit Windows, so nothing on the build host
+  runs it: the pure part's suite is `test\test_di.c`, and the engine calls
+  are proved on the 42-V.1 legs.
+- `make-release.ps1` stages it as `tools\xhciinst\XHCIDI.EXE` whenever it
+  stages the install tool, refusing a helper older than its sources or
+  `src\xhci_version.h`, a map older than it, DDK files not at the recorded
+  hashes (`stage-ddk.ps1 -VerifyOnly`), imports the gate refuses or a stamp
+  that is not the release's, and adds its section to that directory's
+  `NOTICE.TXT` with the linker's copyright lines from `xhcidi.map`.
+  `-SkipDiHelper` cuts without it, and the readme then says the download
+  is incomplete: such a package installs on 98 SE and ME through the
+  printed Update Driver steps only.
+- `xhciinst\di\test\build.cmd` builds `DITEST.EXE` (MSVC 6.0), the legs'
+  test driver: it starts the helper as record 27 section 4.1 says the
+  installer does and prints the result file, when its `END` line was read
+  and when the process handle signalled. It is never packaged.
 
 Two consequences worth knowing before they bite:
 
@@ -259,8 +318,8 @@ The DDK uses a `sources` file (no extension) instead of a Makefile. Alongside it
 
 `src/sources` has this shape, abridged - the file's own comments and the
 flavour-conditional `C_DEFINES` blocks are left out, and `SOURCES` grows as
-files are added (eighteen `.c` files plus `xhci98.rc` on 2026-09-17; the
-file itself is the list):
+files are added (the file itself is the list, and
+[source-files.md](source-files.md) says what each file is):
 ```
 TARGETNAME=xhci98
 TARGETTYPE=DRIVER
@@ -271,22 +330,17 @@ INCLUDES=$(BASEDIR)\inc;$(BASEDIR)\inc\ddk
 SOURCES=xhci_mem.c    \
         xhci_ring.c   \
         ...           \
-        xhci_dispatch.c \
+        hcd_entry.c   \
+        ...           \
+        hcd_msi86.c   \
         xhci98.rc
-
-!IF "$(_BUILDARCH)" == "AMD64"
-TARGETLIBS=.\usbport_amd64.lib
-!ELSE
-TARGETLIBS=.\usbport.lib
-!ENDIF
 
 LINKER_FLAGS=-merge:.rdata=.text
 ```
 
-`TARGETLIBS` is conditional because the two import libraries cannot be one
-file: amd64 has no `__stdcall` name decoration, so the x86 library's
-`_Name@N` symbols do not resolve an amd64 miniport's references.
-`_BUILDARCH` is `setenv.bat`'s own word for the target architecture.
+There is no `TARGETLIBS` line: the HCD links no import library beyond the
+kit's defaults and imports nothing from `usbport.sys` (the miniport's
+`usbport.lib` and `usbport_amd64.lib` left the tree with it on 2026-10-02).
 
 `build` appends the flavour to `TARGETPATH`, so the debug output lands in `src\objchk\i386\` and the release output in `src\objfre\i386\`, not `src\obj\`.
 
@@ -296,21 +350,21 @@ file: amd64 has no `__stdcall` name decoration, so the x86 library's
 
 The version and the release date are edited in one place, `src\xhci_version.h`. It declares three macros: `XHCI_VER_CSV` (the four-part number as four integers, which is what a `VERSIONINFO` resource takes), `XHCI_VER_STR` (the same number as a string, which is what everything else takes) and `XHCI_DRIVERVER_DATE` (the release date, in the `MM/DD/YYYY` form `DriverVer` takes). The file is `#define` lines and comments only, because three toolchains include it: the DDK's `rc.exe`, MSVC 6.0's `cl.exe`, and Open Watcom's `wcc386`.
 
-Four sites include it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in `src\xhci98.rc`. Two more include it across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h` and `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`. Both tools are published inside a release directory (`releases\<version>\tools\xhciqual\`, `releases\<version>\tools\xhcisnap\`; before `2.4.0.0`, roadmap-hcd task 38.9, at the version root) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
+Every compiled site includes it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in each driver's version resource (`src\xhci98.rc`, `src\uas\xhciuas.rc`, `src\cm\xhcicm.rc`, `src\hlpr\xhcihlpr.rc`), each driver's version string (`src\hcd_entry.c`, `src\hcd_msi86.c`, `src\uas\uas_entry.c`, `src\cm\cm_entry.c`, `src\hlpr\hlpr_entry.c`), and the user-mode tools across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h`, `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`, and `xhcicln\xhcicln.c`, `xhciinst\xhciinst.c`, `xhcitr\xhcitr.c` and `xhcitr\xhcitr.rc`. `XHCIQUAL` and `XHCISNAP` were the first tools published inside a release directory (`releases\<version>\tools\xhciqual\`, `releases\<version>\tools\xhcisnap\`; before `2.4.0.0`, roadmap-hcd task 38.9, at the version root) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
 
-The last two sites cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so the `DriverVer` in `src\xhci98.inf` **and** the one in `src\xhci98-amd64.inf` each keep a literal and are checked against the header instead. There have been two since roadmap task 21.3, `check-inf.ps1 -Arch` cross-checks whichever file it is given against the `xhci_version.h` beside it, and `build-driver.cmd` runs it over both on every build - so a bumped header with a stale date in the 64-bit file fails the build rather than shipping. Three gates cover what is left:
+The INFs cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so **every `*.inf` under `src\`, `src\uas\` and `src\cm\`** keeps a `DriverVer` literal and is checked against the header instead: `src\xhci98.inf` and `src\xhci98-amd64.inf` (two since roadmap task 21.3), `src\uas\xhciuas.inf` and `xhciuas-amd64.inf`, and `src\cm\xhcicm.inf`, `xhcicm-amd64.inf`, `xhcicmf.inf` and `xhcicmf-amd64.inf`, and since `3.1.0.0` (roadmap-usb4 task 42-A.30) Stor98's `src\stor98\inf\stor98-x86.inf` and `stor98-x64.inf` - ten literals to bump with the header, and an eleventh outside the INFs, the `version` of `xhcitr\xhcitr.manifest`'s `assemblyIdentity`, which `check-inf.ps1` holds to `XHCI_VER_STR` under the same rule name `BOTH-VERSION`. Each has its gate: `check-inf.ps1 -Arch` cross-checks whichever of the first two it is given against the `xhci_version.h` beside it, and `scripts\inf-gate\check-uas-inf.ps1` and `scripts\inf-gate\check-cm-inf.ps1` hold the UAS and connection-manager INFs to the header's `XHCI_VER_STR` and `XHCI_DRIVERVER_DATE` by their rule `BOTH-VERSION`, and `scripts\inf-gate\check-stor98-inf.ps1` holds Stor98's two to the same two values (one `DriverVer` line each, zero-padded). `build-driver.cmd` runs all four over every one of the ten on every build - so a bumped header with a stale date in any INF fails the build rather than shipping. Three gates cover what is left:
 
 - `scripts\inf-gate\check-inf.ps1`, which every build runs, reads `src\xhci_version.h` as the authority and refuses four different disagreements: the header's two forms of the number differing from each other (nothing in any toolchain would notice, since `rc.exe` wants the integers and every other consumer wants the string), the header's version differing from `DriverVer`'s, the header's date differing from `DriverVer`'s, and a version literal appearing in `src\xhci98.rc` at all, or the include being dropped. That last rule is what keeps the header an authority rather than a suggestion.
 - `scripts\package\make-package.ps1` compares the built binary's own `FileVersion` with the `DriverVer` in the INF staged beside it. That is the copy a source-side gate cannot see and the only one an installed machine reads: bumping the source without rebuilding produces a package that installs cleanly, is accepted by Windows 2000 as an upgrade, and reports the older build for ever afterwards.
-- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` (from `2.4.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`, from `3.0.0.0` also `XHCIINST.EXE`/`XHCIIN64.EXE`, the install tool `INSTALL.BAT` runs, built by `xhciinst\build.cmd` and checked by `xhciinst\selftest.cmd`, which holds both import tables to `KERNEL32.dll` and `ADVAPI32.dll`; `-SkipInstallTool` cuts without it) is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
+- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` (`XHCISNAP.EXE` up to `3.0.0.0`; from `2.4.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`, from `3.0.0.0` also `XHCIINST.EXE`/`XHCIIN64.EXE`, the install tool `INSTALL.BAT` runs, built by `xhciinst\build.cmd` and checked by `xhciinst\selftest.cmd`, which holds both import tables to `KERNEL32.dll` and `ADVAPI32.dll`; `-SkipInstallTool` cuts without it) is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
 
 The header spells the number out twice because `FILEVERSION` takes four comma-separated integers and cannot be given a string, and deriving one form from the other needs preprocessor stringizing that this era's `rc.exe` does not handle reliably. So both are written and the INF gate compares them. Two adjacent lines a gate reads beat one clever line no toolchain agrees about.
 
 One trap is worth knowing before anyone improves on this. An earlier attempt at a macro factored only the string form, so the two strings were tied to each other and left free to drift from the numbers. Worse, it made the INF gate's cross-check vacuous, because that gate searched the `.rc` for the version text and the `#define` line satisfied the search whatever the `VALUE` entries said. The single-source header is only safe because the gate changed with it: it reads the header, not the file it is checking, and it refuses a literal in the `.rc` outright. A gate that can be satisfied by the definition it is checking against is not a gate.
 
-The build stamps are not in the header. `XHCIQUAL` and `XHCISNAP` each print a `built <date> <time>` line from their compiler's `__DATE__`/`__TIME__`. That is a different fact from the version and must stay one: between cuts the version does not move and the tools are rebuilt many times a day, so the stamp is what tells a guest's stale copy from the one just staged. The driver has no such banner in a release build (`DriverEntry (built ...)` is inside `XHCI_DBG_TEXT` and compiles out), so a release binary is identified by its version resource and its SHA-256; a byte compare cannot stand in for either (task 13-L.4 in the roadmap records why).
+The build stamps are not in the header. `XHCIQUAL` and `XHCITR`'s snapshot (`XHCISNAP` up to `3.0.0.0`) each print a `built <date> <time>` line from their compiler's `__DATE__`/`__TIME__`. That is a different fact from the version and must stay one: between cuts the version does not move and the tools are rebuilt many times a day, so the stamp is what tells a guest's stale copy from the one just staged. The driver has no such banner in a release build (`DriverEntry (built ...)` is inside `XHCI_DBG_TEXT` and compiles out), so a release binary is identified by its version resource and its SHA-256; a byte compare cannot stand in for either (task 13-L.4 in the roadmap records why).
 
-A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` and the in-repo MSVC 6.0 for `XHCISNAP.EXE`. Neither is skippable on a real cut. `-SkipQualtool` and `-SkipSnapTool` exist for a host that cannot build one, and a release cut with the second publishes a read channel nobody can open. From `2.4.0.0` the cleanup tool (`xhcicln\build.cmd`, roadmap-hcd task 38.8) needs the in-repo MSVC 6.0 for `XHCICLN.EXE` and WDK 7.1, already a prerequisite of the amd64 driver, for `XHCICL64.EXE`; `-SkipCleanTool` leaves it out, and since nothing needs the tool the release is whole without it, its readme saying the directory is missing. Its executables ask for elevation (a manifest), so `xhcicln\selftest.cmd`, which `build-driver.cmd` runs when `XHCICLN.EXE` has been built, starts them with `__COMPAT_LAYER=RunAsInvoker`.
+A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` (and, from `3.1.0.0`, for `XHCIDI.EXE`, which also needs the Windows 98 SE DDK's `setupx.h`, `prsht.h` and `setupx.lib` in `tools\win98ddk-extracted\` at the hashes `docs\references\README.md` records; design record 27 section 3.3) and the in-repo MSVC 6.0 for `XHCITR.EXE`, which since `3.1.0.0` also reads the driver's snapshot (roadmap-usb4 42-A.4; `XHCISNAP.EXE` was retired). `-SkipQualtool` exists for a host that cannot build the qualifier; it is not for a real cut. From `2.4.0.0` the cleanup tool (`xhcicln\build.cmd`, roadmap-hcd task 38.8) needs the in-repo MSVC 6.0 for `XHCICLN.EXE` and WDK 7.1, already a prerequisite of the amd64 driver, for `XHCICL64.EXE`; `-SkipCleanTool` leaves it out, and since nothing needs the tool the release is whole without it, its readme saying the directory is missing. Its executables ask for elevation (a manifest), so `xhcicln\selftest.cmd`, which `build-driver.cmd` runs when `XHCICLN.EXE` has been built, starts them with `__COMPAT_LAYER=RunAsInvoker`.
 
 The scheme is one four-part version per released package, and all four fields have a meaning, settled by the project owner on 2026-09-10 after `1.1.0.0` moved the second one and nothing here said what that meant:
 
@@ -385,25 +439,7 @@ This is not cosmetic. `DriverVer`'s date is the first key Windows 2000 ranks can
 
 Code signing is out of scope and is not a missing field. `xhci98.sys` has no Authenticode signature, so the Digital Signer property in file properties is empty on both targets. Neither Windows 98 SE nor Windows 2000 SP4 enforces driver signing for an unsigned INF install (both warn at most), and a WHQL or self-signed Authenticode path is a project of its own. `docs/using/release-notes.md` says the same under "What this is not".
 
-`usbport.lib` is an import library for the private `usbport.sys` exports; the Win2K DDK ships no import library for them. It is a build artifact, not a checked-in file (`*.lib` is git-ignored): once MSVC 6.0 is set up, run `scripts\make-usbport-lib.cmd` before the first `build` in a fresh clone. No extracted `usbport.sys` is required: the tracked exact-name manifest was verified against all three recorded shipping binaries.
-
-Do not use plain `lib /def:` for this (verified with the MSVC 6.0 toolchain): the usbport exports are `__stdcall` functions exported by undecorated name, and `lib /def:` with plain names emits cdecl-style `_USBPORT_GetHciMn` symbols. A miniport that prototypes them correctly as `NTAPI` references `_USBPORT_GetHciMn@0` / `_USBPORT_RegisterUSBPortDriver@12` and fails to link; re-declaring them cdecl to force the link would corrupt the stack at the 3-argument registration call (caller and callee would both pop the arguments). Use the stub-DLL method instead:
-
-1. `dumpbin /exports usbport.sys` (record alongside the ABI record; `DllUnload` is also exported but is not imported).
-2. Write stub bodies with the real stdcall signatures (`usbport-stub.c`: `USBPORT_GetHciMn(void)`, `USBPORT_RegisterUSBPortDriver(ptr, ULONG, ptr)`, bodies never executed) and a plain-name `.def` (`LIBRARY USBPORT.SYS` + the two export names).
-3. `cl /nologo /c usbport-stub.c`, then `link /nologo /DLL /NOENTRY /NODEFAULTLIB /machine:ix86 /def:usbport-stub.def usbport-stub.obj /out:usbport-stub.sys /implib:usbport.lib`. `LNK4070` ("`/OUT:USBPORT.SYS` directive in .EXP differs from output filename") is expected and wanted: the `.def`'s `LIBRARY` name is what gets baked into the import library.
-4. Check the result: `dumpbin /linkermember:1 usbport.lib` must show `_USBPORT_GetHciMn@0` / `_USBPORT_RegisterUSBPortDriver@12`, and the archive members must carry `DLL name : USBPORT.SYS`.
-5. Link-test it: compile an NTAPI-prototyped caller and link it against the lib, then confirm the image's import descriptor names `USBPORT.SYS` and both symbols. Steps 1-4 can all pass on a lib that a real miniport still cannot link against; this is the step that catches it, and it costs one throwaway object file.
-
 Where `dumpbin` is named here and in the static disassembly passes, `link -dump` from `tools\ntddk\bin` is the same COFF dumper (the DDK ships it), so no Visual Studio install is needed to repeat them; the root-hub disassembly pass in Phase 5 was done with `link -dump -disasm`.
-
-`scripts\make-usbport-lib.cmd` does all five and writes `src\usbport.lib`. Its inputs (`scripts\usbport-lib\usbport-stub.{c,def}`, `linktest.c`, `usbport-imports.expected`, and the exact-name verifier) are tracked; the lib is a git-ignored artifact regenerated per clone. The script always requires the DEF to match the tracked manifest exactly.
-
-For the export names it also takes the strongest evidence available: argument 1 if you pass a `usbport.sys` path, otherwise the first of the known `tools\{nusb,win2ksp4,winxpsp3}-extracted\` binaries that this working copy happens to have, otherwise the manifest alone. Matching is exact and case-sensitive (`USBPORT_GetHciMnEx` does not satisfy `USBPORT_GetHciMn`, which a substring `findstr` would have accepted). The last line of output names which of the three ran, so the weakest form is never silent; the reference is only ever read, so it cannot change the generated lib.
-
-`usbport-imports.expected` is the single source for the `USBPORT.SYS` half of the driver's import surface. The post-link import gate below reads it rather than restating the names.
-
-The library is staged under a unique temporary name in `src` and moved to `src\usbport.lib` only after the decoration, module, and NTAPI link checks pass. A failed run therefore cannot replace the last verified library with a partial or invalid artifact.
 
 ## Building
 
@@ -462,12 +498,11 @@ scripts\build-driver.cmd both -amd64    REM the shipping pair, 64-bit
 scripts\build-driver.cmd all  -amd64    REM all three - what a release cut gates
 ```
 
-It selects WDK 7.1 (`x64 WNET`) instead of the Windows 2000 DDK,
-`src\usbport_amd64.lib` instead of `src\usbport.lib`, and
+It selects WDK 7.1 (`x64 WNET`) instead of the Windows 2000 DDK, and
 `src\obj<flavour>\amd64\` instead of `src\obj<flavour>\i386\`. A release cut
 runs both legs. `DDKROOT` overrides the 32-bit DDK only and is REFUSED on this
 leg - `WDKROOT` is the 64-bit override, and it is the one name the import gate
-and `make-usbport-lib.cmd` read too - because handing the Win2000 DDK's
+reads too - because handing the Win2000 DDK's
 `setenv.bat` an `x64 WNET` argument fails with a message about the wrong thing
 entirely.
 
@@ -505,7 +540,7 @@ Do not reintroduce the DDK vocabulary anywhere else: "free" reads as free of
 charge to a user, so `releases\` never says it.
 
 In order: validate the flavour word and the optional `-NoTargetEvidence`,
-generate `src\usbport.lib` if it is missing, run the import gate's
+run the import gate's
 authenticated-baseline regression tests and its flavour-rules tests, run the
 INF gate's self-tests and then the gate on **both** INFs - `src\xhci98.inf`
 under `-Arch x86` and `src\xhci98-amd64.inf` under `-Arch amd64`, two runs
@@ -514,8 +549,10 @@ whatever architecture is being built - then the UAS INF gate and the
 each self-tested first and run over both architectures' files, run the packager
 self-tests, the QEMU launcher self-tests, the vm-matrix verdict self-tests,
 the tracked batch files' line-ending check and the source charset check, run
-the XHCISNAP report self-test
-if `xhcisnap\XHCISNAP.EXE` has been built, run `test\run-host-tests.cmd`,
+the snapshot self-test (`xhcitr\snaptest.cmd`, which drives `XHCITR
+/snaptest` and runs `scripts\check-counter-names.ps1` on its counter
+output; `xhcisnap\selftest.cmd` up to `3.0.0.0`)
+if `xhcitr\build.cmd` has built `XHCITR.EXE`, run `test\run-host-tests.cmd`,
 `build` each requested flavour in its own child `cmd` (`setenv.bat` is not
 idempotent across flavours), fail on a build error or on the presence of
 `src\build{chk,fre,chk_qemu}.err`, then run the post-link import gate and the
@@ -575,6 +612,82 @@ Useful flags when driving `build` by hand: `-c` clean first, `-e` show
 environment, `-f` force rebuild, `-Z` do not scan for dependencies (`build -cZ`
 is what the wrapper uses).
 
+### Building Stor98 (`src\stor98\`)
+
+Stor98, the NVMe SCSI miniport the packages bundle, is in this tree as
+`src\stor98\` since 2026-10-19 (roadmap-usb4 task 42-A.20), a driver of
+its own with its own build script: `src\stor98\docs\BUILD.md` is the
+procedure, and `src\stor98\AGENTS.md` the rules. It builds its own files,
+never into this project's binaries. **Since `3.1.0.0` (task 42-A.30, owner
+2026-10-19) `build-driver.cmd` builds and gates it with the drivers**, and
+it carries the package's version and date:
+
+- **Version.** `src\stor98\src\stor98ver.h` includes `src\xhci_version.h`
+  (two directories up) and hands `XHCI_VER_CSV` and `XHCI_VER_STR` to
+  `nvme2k.rc`, so `stor98.mpd` and both `stor98.sys` images carry the
+  package's version; its two INFs' `DriverVer` is the package's
+  ("Versioning the driver" above). Stor98's interface versions
+  (`STOR98CM_VERSION`, `STOR98LS_VERSION` and the others in
+  `include\stor98cm.h`) are protocol versions and stay as they are; its
+  releases up to `0.4.0.0` had numbers of their own, so `3.1.0.0` is the
+  next version after `0.4.0.0`.
+- **The build.** After the host suite, the x86 run runs Stor98's unit tests
+  (`src\stor98\tests\unit\build.cmd`), and every run then builds, once,
+  the free images of its architecture with `src\stor98\scripts\build.cmd`
+  (`9x x86` on x86: `stor98.mpd` and the x86 `stor98.sys`; `amd64` on
+  amd64), deleting the old images first. The package ships the free build
+  whatever this project's flavour.
+- **The gates, in every flavour** (`:gatestor98`): each image is hashed,
+  held to `scripts\check-stor98-build.ps1` - its fixed and string
+  `FileVersion` and `ProductVersion` equal to `XHCI_VER_STR`, exactly one
+  flavour marker and it `STOR98_FLAVOUR_FREE` (emitted by
+  `src\stor98\src\nvme2k.c`, `_CHECKED` or `_DBGPORT` in the other
+  builds) and none of this project's `XHCI98_FLAVOUR_*`, its machine, and
+  every by-name import listed for its target in
+  `scripts\import-gate\stor98-imports.allow` (Stor98 has no import gate of
+  its own; this is the allowlist half of this project's, without the
+  target-evidence half) - captured into the gated record
+  (`stor98.mpd`, `stor98.sys`), and stamped (`scripts\source-stamp.ps1
+  -Driver stor98` or `stor98mpd`, `stor98.srcstamp` beside the image: its
+  `SOURCES`, its headers, `include\stor98cm.h` and `src\xhci_version.h`).
+  The INF gate runs `check-stor98-inf.ps1 -SelfTest` and then over both
+  INFs with the others.
+
+```
+scripts\build-driver.cmd <flavours> [-amd64]   REM the drivers and Stor98, gated
+scripts\build-all.cmd [flavours]               REM build-driver.cmd x86, then -amd64
+src\stor98\scripts\build.cmd all free         REM Stor98 alone, by hand (not gated)
+src\stor98\tests\unit\build.cmd               REM its host unit tests, NT and 9x headers
+```
+
+`build-all.cmd` calls `build-driver.cmd` unchanged, so the x86 and amd64
+gates, locks and gated-build records are a hand run's; `-NoTargetEvidence`
+goes to both gated runs. Stor98's images land in
+`src\stor98\out\<flavor>\{win9x,x86,amd64}\` (`STOR98_DBGPORT=1` puts its
+test-only debug-port build in `out\<flavor>-dbgport\`, which the gated
+build never does) and its objects in `src\stor98\src\obj*\`, all ignored
+by its own `.gitignore`. Its scripts find the same kits as this project's
+in `tools\` (`MSVC600`, `ntddk`, `WinDDK71`), because `src\stor98\` has no
+`tools\` of its own (`STOR98_TOOLS` names another root), plus two files
+this project does not otherwise use: the Windows 98 (or NT4) DDK's
+`SCSI.H` and `SRB.H` in `tools\w98ddk\inc\`, ahead of the Windows 2000
+DDK's for the 9x image (the copies that came with SweetLow's
+`nvme2k-src.zip`; `SCSI.H` 36,501 bytes, SHA-256
+`809d57e6756de21524930eb4d17840ab3047c7e1773da634ceb73a81ff8d39b7`,
+`SRB.H` 21,056 bytes, SHA-256
+`4b3c3305686f2593ceb471ae69f1d690de5d833c8f2047859d735b21affd8396`;
+`docs/references/README.md`, "Windows 98 DDK"). The build needs no Python;
+Stor98's Python scripts are test-leg tools (`tests\cm9x\ejects.py`,
+`q9log.py`) and the record of its rename.
+
+Two more of `build-driver.cmd`'s steps read Stor98's files:
+`scripts\check-stor98-header.ps1` fails when `src\cm\stor98cm.h` is not
+the same bytes as `src\stor98\include\stor98cm.h`, the master
+(`source-files.md`, "Stor98"), and the batch-file line-ending check
+(`xhciqual\test\check-bat-eol.ps1`) covers every tracked `.bat`, Stor98's
+two in its `third_party\` copy among them. `check-source-charset.ps1`
+skips `src\stor98\`, which keeps Stor98's own rules.
+
 ### Post-link import-compatibility gate (Phase 3 onward)
 
 An unresolved import prevents `xhci98.sys` from reaching `DriverEntry`. On
@@ -600,7 +713,6 @@ Tracked inputs:
 | File | Role |
 |---|---|
 | `scripts\import-gate\xhci98-imports.allow` | The committed decision: allowed module/symbol pairs per build flavour, plus a `[deny]` section of names that must never appear, each with its diagnosed reason |
-| `scripts\usbport-lib\usbport-imports.expected` | The `USBPORT.SYS` rows, read rather than restated; it is already the single source the `.def` and the import library come from |
 | `scripts\import-gate\win2k-baselines.expected` | Every SP4 kernel/HAL source image the targets can run, with its provider, version, length, and SHA-256 |
 | `scripts\import-gate\win98-evidence.list` | The Win98 evidence sources, `[precedent]` binaries and the `[nametable]` file, each with why it counts and its version, length, and SHA-256 |
 
@@ -3077,75 +3189,67 @@ binaries are never signed.
   its activation is in grace (`-Rtc base=2026-09-20T12:00:00`); with it
   expired the not-genuine watermark replaces it and the mode is still on.
 
-#### The bundled Stor98 build (`3.0.0.0`)
+#### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 
-The release download's `release-x86\` and `release-x64\` carry Stor98, a
-separate BSD-3-Clause project's NVMe driver, as one of its released builds copied
-unchanged from its release folder (owner, 2026-10-16). Nothing of it is
-tracked: `make-package.ps1` copies it into the package, and
-`make-release.ps1` into the upload set's two `release-` directories, never
-into `releases\<version>\`. Four parameters pin it, and they go together:
+The release download's `release-x86\` and `release-x64\` carry Stor98, the
+NVMe driver (BSD-3-Clause, `src\stor98\`). **Since `3.1.0.0` (roadmap-usb4
+task 42-A.30, owner 2026-10-19) it is the Stor98 `build-driver.cmd` built
+and gated from `src\stor98\`** ("Building Stor98" above), at the package's
+version and date, and one signature covers it with the other x64 drivers.
+`3.0.0.0` bundled a pinned Stor98 release instead (`0.4.0.0`, copied
+unchanged from its release folder under four `-Stor98*` pins, with Stor98's
+own test signature and `stor98-test.cer`); the pins and that path are gone.
 
-| Parameter | What it pins |
-|---|---|
-| `-Stor98Version` | The build, for example `0.3.0.0`. Anything older than `0.3.0.0`, Stor98's first release, is refused|
-| `-Stor98Dir` | Its release folder (the Stor98 repository's `releases\<version>\`), read only |
-| `-Stor98SumsSha256` | The SHA-256 of that folder's `SHA256SUMS.txt`. Checked first; then every file against `SHA256SUMS.txt`, every file in the folder listed there, the release's files present, nothing the layout does not know, every INF's `DriverVer` at the pinned version, and each copy in the package against `SHA256SUMS.txt` again |
-| `-Stor98InterfaceVersion` | The build's link-state interface version (`STOR98LS_VERSION`; `4` for `0.3.0.0`). Compared with `src\cm\stor98cm.h`, the header xhci98 compiles against, and, where the folder carries `include\stor98cm.h`, that file byte for byte with it. A mismatch is refused unless `-Stor98AllowInterfaceMismatch`, which prints the mismatch it overrides |
+`make-package.ps1` bundles it by default; `-NoStor98` leaves it out, and a
+caller naming `-DriverPath` (the self-tests' stand-ins) gets it only with
+`-Stor98Root`, a substitute Stor98 tree the self-tests alone may use (with
+`-SkipBinaryGates`, like `-Stor98HeaderPath`, the substitute interface
+header). What a package carries, at its root with no `stor98\` folder,
+every name starting with `stor98`:
 
-Without them the package and the cut are built as before, with no Stor98.
-The release folder's `x86\` (`stor98.inf`, `stor98.mpd`, `stor98.sys`) goes
-to the root of the x86 package and its `x64\` (`stor98.inf`, `stor98.sys`,
-`stor98-test.cer`) to the root of the amd64 package, with no `stor98\`
-folder; every name there starts with `stor98`. Both also carry the release's
-`LICENSE`, `NOTICE.TXT` and `readme.txt` as `stor98-LICENSE.txt`,
-`stor98-NOTICE.txt` and `stor98-readme.txt` beside the driver files. A cut
-passes the pins to its release legs alone, so the `debug-` directories carry
-none of it; `make-package.ps1` run by hand bundles it into whichever flavour
-it is asked for, which is how a debug package for a guest gets it.
+| Package | Files | From |
+|---|---|---|
+| x86 | `stor98.mpd`, `stor98.sys`, `stor98.inf` | `src\stor98\out\free\win9x\`, `\x86\`, `inf\stor98-x86.inf` |
+| amd64 | `stor98.sys`, `stor98.inf` | `src\stor98\out\free\amd64\`, `inf\stor98-x64.inf` |
+| both | `stor98-LICENSE.txt`, `stor98-NOTICE.txt`, `stor98-readme.txt` | `LICENSE`, `NOTICE`, `docs\package-readme.txt` |
 
-The 64-bit `stor98.sys` keeps Stor98's own embedded test signature, by a
-certificate that is not this project's (design record 19),
-and `stor98-test.cer` beside it is that certificate's public half, under
-Stor98's own name. Nothing here signs, re-signs or imports it, and no
-installer step is needed: test-signing mode on Vista x64 and 7 x64 loads a
-driver signed by any certificate, trusted or not (design record 19), so the
-one `bcdedit /set testsigning on` that loads this project's x64 drivers loads
-it too, and importing either `.cer` is not needed. The generated readme says
-so when the cut has an x64 half.
+Before anything is staged (`Resolve-Stor98Build`,
+`scripts\package\package-common.ps1`) every file must be there, both INFs
+must carry the package's version and pass `check-stor98-inf.ps1`, each
+image must pass `check-stor98-build.ps1` again and its source stamp must
+say it is the build of the tree as it is, and Stor98's interface header must
+be byte for byte `src\cm\stor98cm.h` (its `STOR98LS_VERSION` is printed).
+With `-TestSignPfx` the amd64 `stor98.sys` is signed in the same step and
+with the same key as `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys` and held
+to the same two checks (design record 19); with `-SignOnly` its bytes are
+held to the gated build's record like theirs. Each staged copy is held to
+the hash it had when it was verified or signed.
 
-A cut also needs the release notes' one declaration line ("NVMe drives
-behind Thunderbolt or USB4") to agree with it, exactly: "This download
-bundles Stor98 `<version>`." or "This download bundles no Stor98."; the
-unfilled placeholder or a disagreement is refused (a `-TestLabel` cut is
-only warned). The generated readme records the version, the SHA-256 of
-`SHA256SUMS.txt` and the interface version, and an override with the
-mismatch it overrode, and `-UploadSetOnly` holds a re-assembly to those
-three pins (an override is a verdict against the checkout's header, so a
-re-assembly passes it again where needed); `-Stor98HeaderPath`, the
-self-tests' substitute header, is refused without `-SkipBinaryGates`. For
-example, the `3.0.0.0` cut with Stor98 `0.4.0.0`:
+`make-release.ps1` verifies the build once up front for every architecture
+it publishes, holds `src\stor98\docs\package-readme.txt`'s SETTINGS table
+to `test\stor98-settings.txt` (the table the installer's Stor98 rows were
+checked against), passes `-NoStor98` to its debug legs, and **publishes the
+Stor98 files of a release leg into `releases\<version>\release-x86\` and
+`release-x64\` with this project's own** (the x64 `stor98.sys` signed), so
+the upload set and `-UploadSetOnly` take them from the published tree, the
+upload set's one-date rule and file dating cover Stor98's INFs and files,
+and each published `stor98.mpd` and `stor98.sys` is held to the release's
+version. `-NoStor98` cuts without it. The release notes' one declaration
+line ("NVMe drives behind Thunderbolt or USB4") must agree with the cut,
+exactly: "This download bundles Stor98 `<version>`." or "This download
+bundles no Stor98."; the unfilled placeholder or a disagreement is refused
+(a `-TestLabel` cut is only warned). The generated readme names the
+bundled version.
 
-```
-powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <pfx> ^
-    -Stor98Version 0.4.0.0 -Stor98Dir <stor98>\releases\0.4.0.0 ^
-    -Stor98SumsSha256 ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7 ^
-    -Stor98InterfaceVersion 4
-```
-
-The gates hold these files by exactly the paths the pin produces
-(`Get-Stor98PackageFiles`, `scripts\package\package-common.ps1`) and by
-nothing wider: `make-release.ps1`'s declared-media check accepts them
-beside this project's files, its upload-set date rule and file dating skip
-them (Stor98's INFs carry Stor98's own `DriverVer` date), and a name that
-would replace one of this project's files is a refusal. The INF, import and
-signature gates are run on this project's INFs and binaries by name and
-never read Stor98's, and `check-source-charset.ps1` scans tracked source,
-which Stor98's files never are; the package's `PKG-MSFILE` name rule still
-covers every file, Stor98's included. `XHCIINST` must copy no file whose
-name starts with `stor98` into its local copy, which is on the hardware
-wizard's search path (design record 23 section 4.4). `scripts\package\test-package.ps1` holds the
-layout with synthetic release folders.
+The gates hold these files by exactly the paths `Get-Stor98PackageFiles`
+returns and by nothing wider: `make-release.ps1`'s declared-media check
+accepts them beside this project's files, and a name that would replace
+one of this project's files is a refusal. The package's `PKG-MSFILE` name
+rule covers every file, Stor98's included. `XHCIINST` must copy no file
+whose name starts with `stor98` into its local copy, which is on the
+hardware wizard's search path (design record 23 section 4.4).
+`scripts\package\test-package.ps1` holds the layout with a stand-in Stor98
+tree.
 
 #### And the install path is not the one the INF was written for
 
@@ -3793,7 +3897,8 @@ which is all of `xhciCheckController`'s printing, compiles only into the `qemu`
 flavour; the shipping `debug` build prints nothing as it runs. And per-line
 `DbgPrint` under DebugView bugchecks Win98 metal across three device classes
 (roadmap task 12.2), so that route is banned on the machine it would have
-served. On bare metal the counter route is `XHCISNAP`, shipping in every
+served. On bare metal the counter route is the snapshot (`XHCITR /dump`
+or `/snapshot`; `XHCISNAP` up to `3.0.0.0`), shipping in every
 flavour since `0.0.0.6`, and the snapshot `.BIN` decodes against
 `offsets.txt` exactly as the live reader's dump does. The decision itself,
 counters over a per-host script, is unchanged; only the channel that carries
@@ -3805,9 +3910,9 @@ out of history, and the two channels have distinct jobs:
 | Question | Channel |
 |---|---|
 | Did this family move at all, in a VM | the `CheckController` block in a `qemu` build |
-| Did this family move at all, on bare metal | `XHCISNAP -dump`: the `.BIN` decoded against `offsets.txt`, or the `.TXT` for the note ring. There is no live channel on Win98 metal |
+| Did this family move at all, on bare metal | `XHCITR /dump` (`XHCISNAP -dump` up to `3.0.0.0`): the `.BIN` decoded against `offsets.txt`, or the `.TXT` for the note ring. There is no live channel on Win98 metal |
 | The exact value during continuous traffic, after a site's 32 prints are spent | `readcounters.ps1` against a live QEMU guest |
-| A per-row value that is a number rather than an event (the topology pair table, the device records) | `readcounters.ps1` or an `XHCISNAP` `.BIN`; a table cannot be spent through 32 lines |
+| A per-row value that is a number rather than an event (the topology pair table, the device records) | `readcounters.ps1` or a snapshot `.BIN` (`XHCITR /dump`); a table cannot be spent through 32 lines |
 
 The remaining obligation is a regeneration, not a rebuild: `offsets.c` must be
 re-run after any change to `XHCI_EXTENSION`, and `offsets.txt`'s `SIZEOF`
@@ -4050,7 +4155,7 @@ now has Windows supply it on the Windows 98 path, the way it gets `usbd.sys`
 (release 1.0.0.1; the 1.0.0.0 media carried both under other names).
 
 Task 13-E.1 closed on that remedy without an SE CD install ever being run;
-`run-13e.md`'s "Finding 1 - RESOLVED" has the reading, including the reverse
+`run-13e.md`'s bench session 2 record, where the result is resolved, has the reading, including the reverse
 rename that reproduced `Code 2` on the 2a guest. The method that found it was
 derivation from the binaries, the way `usbd.sys` was handled, rather than
 copying a file and seeing whether the bang goes away: the `usbd.sys` precedent
@@ -6757,7 +6862,7 @@ preflight and the post-reset parse alike (`XhciPortMapOverridePsi`,
 `qemu.psi.e460`. A change takes effect at the next start (disable and enable
 the controller). It is kept apart from the injection below.
 
-**`XhciQemuStartHold`** (roadmap-hcd task 36.4, issue 12 Finding 1). A
+**`XhciQemuStartHold`** (roadmap-hcd task 36.4; issue 12's device present at boot that fails "no slot"). A
 REG_DWORD read at every start: a number of milliseconds, held to 3000, for
 which the start holds back the ISR's event drains (it acknowledges and queues
 nothing, as fault `01` below) and the backstop's. The No Op self-test's
@@ -7517,8 +7622,10 @@ That leaves three channels, in the order worth trying:
    the target,
    and `CheckController` is DISPATCH_LEVEL under usbport's `MiniportSpinLock`.
 
-3. The snapshot read. `XHCISNAP` reads the counters and the stored log out of
-   the running machine, on demand, through usbport's PassThru escape, shipping
+3. The snapshot read. `XHCITR /dump` (`XHCISNAP` up to `3.0.0.0`) reads the
+   counters and the stored log out of the running machine, on demand,
+   through the door's PassThru request (usbport's escape under the
+   miniport), shipping
    in every flavour since `0.0.0.6` and measured on the E460 at stage L3. It
    is the only number a Windows 98 metal run can produce, so a bare-metal
    session is no longer "behaviour only".
@@ -7530,16 +7637,16 @@ That leaves three channels, in the order worth trying:
    is four steps and the order matters:
 
    ```
-   XHCISNAP -verbosity 2        (on every xhci98 controller)
+   XHCITR /setlevel xhci98=2    (on every xhci98 controller)
    restart
    reproduce the problem
-   XHCISNAP -dump -o C:\NAME
+   XHCITR /dump /o C:\NAME
    ```
 
    So a bare-metal session's first action is the command and the restart, and
    the dump is what happens at the end. Taking the dump at the end of a
    session that was never enabled returns what a machine with no channel
-   returns. `xhcisnap/README.md` is the reference;
+   returns. `docs/contributing/snapshot-reader.md` is the reference;
    `docs/contributing/passthru-snapshot-instrument.md` is the as-built record.
 
 Prove the channel before you trust the run. Every trace this project has
@@ -7998,7 +8105,7 @@ any vehicle; what it established is the block below, published in
         The churn wedges Windows 98 only when `xhci98.sys` carries it, so the finding is this driver's and is not published as a Windows 98 limitation. An EHCI leg with a high-speed churn device on both sides would test the narrower claim and is unrun. What it hands on is a mechanism hunt with no owner; the evidence directories named here are the record
 - Phase 13, batch 13-E (E460, one bench trip, one bag of devices):
   - [x] Real hardware confirmed working under Win98 SE (E460, batch 7b-M)
-  - [x] Task 13-E.1: composite devices under NUSB. Closed on a remedy, and the premise of the line was wrong: it is not NUSB, and the SE CD experiment was never needed. Windows 98's composite parent is `usbhub.sys`, which Setup places only when it finds a USB controller it recognises, so an xHCI-only machine never gets one. The package now carries it, Windows 98 path only. `run-13e.md`'s "Finding 1 - RESOLVED" is the record, and the `[Xhci.CopyW98]` row of "The finished file: `src/xhci98.inf`" above is the package side
+  - [x] Task 13-E.1: composite devices under NUSB. Closed on a remedy, and the premise of the line was wrong: it is not NUSB, and the SE CD experiment was never needed. Windows 98's composite parent is `usbhub.sys`, which Setup places only when it finds a USB controller it recognises, so an xHCI-only machine never gets one. The package now carries it, Windows 98 path only. `run-13e.md`'s bench session 2 record is the record, and the `[Xhci.CopyW98]` row of "The finished file: `src/xhci98.inf`" above is the package side
   - [x] Full-Speed or Low-Speed device works behind both single-TT and multi-TT hubs: task 13-E.2, the behavioural half (the `MTT`/`TTT` numbers need a counter channel and have no vehicle). Closed: stage E3 passed on both trees, the `1A40:0101` <-> `1A40:0201` one-variable swap at position T with the Low-Speed `046D:C077` at H1 and all four other children unchanged either side of it
   - [x] Task 13-E.3: a physical USB audio device plays, on a root port and behind a High-Speed hub, one of them declaring `bInterval > 1`. Closed: clauses 1 and 2 played clean on the E460 (a UAC 1.0 device at a root port, then behind the multi-TT `1A40:0201`), which made the published Windows 98 audio limitation wrong, and the release notes were corrected; clause 3 was read and is unreadable on this target, since the Sound Blaster X4 declares `bInterval` 3 and 4 and never bound an audio alternate, so no Endpoint Context was built from them (`run-13e.md` Findings X and Y)
 - Windows 2000 on metal, and the Intel port mux: closed unobserved on the published-limitation branch. No clause below was taken, and none has a vehicle. Batch `13-T` held them and was removed; this block is the record:
@@ -8022,19 +8129,19 @@ The package's third driver (design record 21; source map in `source-files.md`, "
 
 | Rule | What it holds |
 |---|---|
-| `CM-NO9XBRIDGE` | No bridge id (a class 06/xx id, a Thunderbolt bridge id, or any id the filter INFs bind) in a `$CHICAGO$` INF of this driver: a WDM driver on a bridge devnode breaks the bridge on Windows 98 (record 21 section 6.1). And, since Windows 98 SE and ME read a `$Windows NT$` INF too (`runs/run-39.md`, 39-0.4): the filter INFs' signature held to `$Windows NT$`, no undecorated install section in them, and in a staged package the filter INF in the flavour directory's `nt\` alone, nowhere else, `nt\` holding it and its own copy of `xhcicm.sys` - the same bytes as the flavour directory's - and nothing else. |
+| `CM-NO9XBRIDGE` | No bridge id (a class 06/xx id, a Thunderbolt bridge id, or any id the filter INFs bind) in a `$CHICAGO$` INF of this driver: a WDM driver on a bridge devnode breaks the bridge on Windows 98 (record 21 section 6.1). And, since Windows 98 SE and ME read a `$Windows NT$` INF too (`runs/run-39.md`, 39-0.4): the filter INFs' signature held to `$Windows NT$`, no undecorated install section in them, and in a staged package the filter INF in its one place: in an x86 flavour directory `nt\` alone, nowhere else, `nt\` holding it and its own copy of `xhcicm.sys` - the same bytes as the flavour directory's - and nothing else; in an x64 one (from 3.1.0.0) the root alone, beside `xhcicm.inf` and the one `xhcicm.sys`, with no `nt\`. |
 | `CM-ID`, `CM-IDSET`, `CM-IDLIST` | The NHI models bind `PCI\VEN_8086&DEV_xxxx`, `PCI\VEN_1022&DEV_xxxx` or the class line, every models section the same set, and the id lines exactly the rows of `src\cm\cm_vals.c`'s Intel and AMD tables (ICM and USB4 profiles), so the INF and the profile the code gives an id cannot drift. |
 | `CM-CLASSLINE` | Every NHI models section carries exactly one class line, `PCI\CC_0C0340` (design record 22 section 3.7), which its id lines outrank, and no other `PCI\CC_` id. |
 | `CM-NOROUTER` | No device router's or device-side bridge's id (Titan Ridge DD, Goshen Ridge, the Barlow Ridge hubs, AMD's USB4 router functions, ASM2464PD), no USB-only NHI and no unclaimed generation's id in any of the four (design record 22 section 3.1). |
 | `CM-PORTCC` | Every filter model binds `PCI\VEN_xxxx&DEV_xxxx&CC_0604` and nothing else: the driver takes the filter role by that class, and 98 SE's and ME's automatic search did not choose that form. |
 | `VAL-*` | Every install path writes every value the driver reads, once, at the default `cm_vals.c`'s rule table holds, as a `REG_DWORD` under `FLG_ADDREG_NOCLOBBER`, and nothing else; `XhciCmTunnelBridge` is never written (its absence is meaningful, record 21 section 8). |
-| `CM-FILTER` | The install sections include `machine.inf` and need `PCI_DRV`, `PCI_DRV.HW` and `PCI_DRV.Services` (the 39-0.4 shape) so `pci.sys` stays the port's service, copy the driver from a source disk with no path (`nt\`'s own `xhcicm.sys`: Vista's and 7's driver store refuses a source outside the INF's directory, error `0xA1`), write `HKR,,UpperFilters,0x00010008,"xhcicm"` in `.HW` and nothing else, and add the service without the function-driver flag. |
+| `CM-FILTER` | The install sections include `machine.inf` and need `PCI_DRV`, `PCI_DRV.HW` and `PCI_DRV.Services` (the 39-0.4 shape) so `pci.sys` stays the port's service, copy the driver from a source disk with no path (the `xhcicm.sys` beside the INF - `nt\`'s own in x86, the root's in x64: Vista's and 7's driver store refuses a source outside the INF's directory, error `0xA1`), write `HKR,,UpperFilters,0x00010008,"xhcicm"` in `.HW` and nothing else, and add the service without the function-driver flag. |
 | `CM-TWIN` | The x86 and amd64 INF of each kind bind the same ids and, for the NHI, write the same values. |
 | `CM-DESC` | Every model line's description names its controller's generation, never the connection manager running it, and every description string reads as decided (record 21 section 3.3, "Class and names"): NHI lines `Tb2Desc` (Falcon Ridge), `NhiDesc` (Alpine Ridge, Titan Ridge, Ice Lake) or `U4Desc` (every other id and the class line); filter lines `TbBridgeDesc` (the Thunderbolt 2 and 3 generation's ports), `BridgeDesc` (QEMU's `1B36` bridges) or `U4BridgeDesc`; `CmSvcDesc` the same in all four. |
 | `PATH-NO9X`, `PATH-MFGDEC` | As for the other two drivers: the amd64 INFs carry `NTamd64,NTamd64.6.0` and no undecorated section; the x86 NHI INF `NTx86.6.0` alone. |
 
-**Packaging.** `scripts\package\make-package.ps1` stages `xhcicm.inf` and `xhcicm.sys` at the root of every flavour directory and the filter INF as `nt\xhcicmf.inf` (the amd64 INFs under the x86 names; the filter INF out of the 9x engine's way, record 21 section 3.3), holds the binary to its flavour marker and import gate and both INFs to `check-cm-inf.ps1` before staging, gates the two INFs again against the staged package, and test-signs the amd64 `xhcicm.sys` with the other two binaries (design record 19). `make-release.ps1` publishes the three beside the UAS pair, verifies the published binary at release time with `Assert-CmPublished` (the refusals `xhciuas.sys` is held to: version, flavour, the built bytes, the source stamp, the x64 signature), and refuses an upload set whose flavour directory carries some of the three files without the others.
+**Packaging.** `scripts\package\make-package.ps1` stages `xhcicm.inf` and `xhcicm.sys` at the root of every flavour directory, and the filter INF in an x86 directory as `nt\xhcicmf.inf` beside its own copy `nt\xhcicm.sys` (out of the 9x engine's way, record 21 section 3.3) and in an x64 directory as `xhcicmf.inf` at the root beside the one `xhcicm.sys`, with no `nt\` (from 3.1.0.0: 98 and ME never read the x64 package, the driver store's same-directory rule is met at the root, and no other INF there binds a PCI bridge); the amd64 INFs go under the x86 names. It holds the binary to its flavour marker and import gate and both INFs to `check-cm-inf.ps1` before staging, gates the two INFs again against the staged package, and test-signs the amd64 `xhcicm.sys` with the other two binaries (design record 19). `make-release.ps1` publishes the three beside the UAS pair, verifies the published binary at release time with `Assert-CmPublished` (the refusals `xhciuas.sys` is held to: version, flavour, the built bytes, the source stamp, the x64 signature), and refuses an upload set whose flavour directory carries some of the connection manager's files (four in x86, with `nt\xhcicm.sys`; three in x64) without the others.
 
-**Installing it by hand.** On Windows 98 SE and ME, Device Manager -> the NHI ("PCI System peripheral" or "Base system device", class 08/80) -> Update Driver -> Specify a location -> the package directory; on Windows 2000 and later, Update Driver -> Have Disk -> the same directory, `xhcicm.inf`. The filter INF, `nt\xhcicmf.inf`, is for the NT targets alone, never pointed at from Windows 98 or ME: on each tunnel port (a Thunderbolt switch port, or the root port the platform tunnels through), Update Driver -> "Don't search" -> Have Disk -> the `nt\` directory, which Windows 2000 also takes unforced and XP and 7 need (the unsigned INF otherwise loses to `machine.inf`; task 39-0.4, record 21 section 3.3). Once installed, the NHI reads "xHCI98 Thunderbolt 2 Controller", "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" by its generation, and each port the filter attaches to "xHCI98 Thunderbolt PCI Bridge", "xHCI98 USB4 PCI Bridge" or "xHCI98 PCI Bridge".
+**Installing it by hand.** On Windows 98 SE and ME, Device Manager -> the NHI ("PCI System peripheral" or "Base system device", class 08/80) -> Update Driver -> Specify a location -> the package directory; on Windows 2000 and later, Update Driver -> Have Disk -> the same directory, `xhcicm.inf`. The filter INF (`nt\xhcicmf.inf` in the x86 package, `xhcicmf.inf` at the root of the x64 one) is for the NT targets alone, never pointed at from Windows 98 or ME: on each tunnel port (a Thunderbolt switch port, or the root port the platform tunnels through), Update Driver -> "Don't search" -> Have Disk -> the `nt\` directory on x86, the flavour directory itself on x64, which Windows 2000 also takes unforced and XP and 7 need (the unsigned INF otherwise loses to `machine.inf`; task 39-0.4, record 21 section 3.3). Once installed, the NHI reads "xHCI98 Thunderbolt 2 Controller", "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" by its generation, and each port the filter attaches to "xHCI98 Thunderbolt PCI Bridge", "xHCI98 USB4 PCI Bridge" or "xHCI98 PCI Bridge".
 
 **The registry values** (record 21 section 8), in the NHI's driver key, each written by the INF at its default: `XhciCmMode` (1; 0 off, 2 the ICM client on an unlisted Intel NHI, 3 the software connection manager), `XhciCmApprove` (1), `XhciCmReenum` (1), `XhciCmPollIdleMs` (200, held to 50-5000), `XhciCmCmdTimeoutMs` (5000, held to 1000-60000), `XhciCmApproveTimeoutMs` (10000, the same bounds), `XhciCmSafeEject` (1), `XhciLogVerbosity` (0), and the USB4 profile's three of design record 22 section 12, `XhciCmUsb3Tunnel` (1), `XhciCmLaneBonding` (1) and `XhciCmPreOsCleanup` (0; 1 cleans what does not verify, 2 everything); and `XhciCmTunnelBridge` (`REG_SZ`, never written: a comma-separated `bb:dd.f` list that replaces the tunnel-port discovery). A switch out of its range is refused and its default stands; a period is held to its bounds; both are recorded in the log ring at start (`cm.values.refused`, `cm.values.clamped`).

@@ -238,6 +238,14 @@ in a derivation would make it a mixture of two kinds of claim.
 Like -EmitMediaLayout, it is written from the parse rather than from the
 verdict, so callers must check the exit code before trusting it.
 
+.PARAMETER ManifestPath
+Optional. The XHCITR manifest whose assemblyIdentity version is held to
+XHCI_VER_STR, by default xhcitr\xhcitr.manifest under the repository
+root. It is read only when xhci_version.h is beside the INF, as the other
+version cross-checks are. The manifest is XML and includes nothing, so
+its version is a literal like DriverVer's; the gate's own regression
+suite passes a mutated copy here.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\inf-gate\check-inf.ps1
 
@@ -253,6 +261,7 @@ param(
     [string]$PackageDir = "",
     [string]$EmitMediaLayout = "",
     [string]$EmitFootprint = "",
+    [string]$ManifestPath = "",
     [switch]$AllowUnpaddedDriverVer
 )
 
@@ -537,7 +546,7 @@ if ($nonAscii.Count -gt 0) {
 }
 
 # Every LF must be the tail of a CRLF **and every CR the head of one**. Counting
-# LF against CRLF alone catches a bare LF and not a bare CR (repo audit D5), and
+# LF against CRLF alone catches a bare LF and not a bare CR, and
 # a bare CR is a line ending some readers honour - a classic-Mac-style line, or
 # the tail of a botched rewrite - that this file's own CRLF splitting does not
 # see at all, so the section and key parsing below would silently join two
@@ -685,6 +694,67 @@ if (-not (Test-SectionExists $inf "Version")) {
             }
             if ($null -ne $hdrDate -and $hdrDate -ne $infDate) {
                 Add-Failure "BOTH-VERSION" ("{0} says the release date is {1} but this INF's DriverVer says {2}. Windows 2000 ranks a candidate driver by that date before it looks at the version, so the two disagreeing is not cosmetic." -f $hdrName, $hdrDate, $infDate)
+            }
+
+            #
+            # **The XHCITR manifest's version is the other literal.** Its
+            # assemblyIdentity carries the package version (checked since
+            # 2026-10-18) and XML cannot include the header, so without this a
+            # bump would leave it at the old number with nothing to say so.
+            #
+            $mfPath = $ManifestPath
+            if ($mfPath -eq "") {
+                $mfPath = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "xhcitr\xhcitr.manifest"
+            }
+            if (-not (Test-Path -LiteralPath $mfPath)) {
+                Add-Failure "BOTH-VERSION" ("{0} is missing, so its version cannot be checked against {1}." -f $mfPath, $hdrName)
+            } else {
+                #
+                # Parsed as XML, not searched as text: a text search took the
+                # first match anywhere, so an identity inside a comment, or the
+                # Common-Controls dependentAssembly's, could stand in for the
+                # real one. The identity the loader reads is the root
+                # <assembly>'s own direct child in the asm.v1 namespace. The
+                # get_ accessors are used because PowerShell's XML adapter lets
+                # an attribute or child element shadow a property of the name.
+                #
+                $mfName = Split-Path -Leaf $mfPath
+                $asmV1 = "urn:schemas-microsoft-com:asm.v1"
+                $mfDoc = New-Object System.Xml.XmlDocument
+                $mfDoc.XmlResolver = $null
+                $mfParsed = $true
+                try {
+                    # XmlDocument.Load resolves a relative path against the
+                    # process directory, not PowerShell's location, so hand it
+                    # the provider path Test-Path accepted.
+                    $mfDoc.Load((Resolve-Path -LiteralPath $mfPath).ProviderPath)
+                } catch {
+                    $mfParsed = $false
+                    Add-Failure "BOTH-VERSION" ("{0} is not well-formed XML, so its version cannot be read: {1}" -f $mfName, $_.Exception.Message)
+                }
+                if ($mfParsed) {
+                    $mfRoot = $mfDoc.get_DocumentElement()
+                    $mfIds = @()
+                    if ($null -ne $mfRoot -and $mfRoot.get_LocalName() -eq "assembly" -and $mfRoot.get_NamespaceURI() -eq $asmV1) {
+                        foreach ($node in $mfRoot.get_ChildNodes()) {
+                            if ($node.get_NodeType() -eq [System.Xml.XmlNodeType]::Element -and
+                                $node.get_LocalName() -eq "assemblyIdentity" -and $node.get_NamespaceURI() -eq $asmV1) {
+                                $mfIds += $node
+                            }
+                        }
+                    }
+                    if ($null -eq $mfRoot -or $mfRoot.get_LocalName() -ne "assembly" -or $mfRoot.get_NamespaceURI() -ne $asmV1) {
+                        Add-Failure "BOTH-VERSION" ("{0}'s root element is not an <assembly> in {1}, so it has no identity to read the version from." -f $mfName, $asmV1)
+                    } elseif ($mfIds.Count -ne 1) {
+                        Add-Failure "BOTH-VERSION" ("{0}'s <assembly> has {1} direct assemblyIdentity children; an application manifest has exactly one, and it is the one whose version is checked." -f $mfName, $mfIds.Count)
+                    } elseif ($mfIds[0].GetAttribute("name") -ne "xhci98.xhcitr") {
+                        Add-Failure "BOTH-VERSION" ("{0}'s own assemblyIdentity is named '{1}', not xhci98.xhcitr." -f $mfName, $mfIds[0].GetAttribute("name"))
+                    } elseif (-not $mfIds[0].HasAttribute("version")) {
+                        Add-Failure "BOTH-VERSION" ("{0}'s assemblyIdentity has no version attribute; an application manifest's identity requires one." -f $mfName)
+                    } elseif ($null -ne $str -and $mfIds[0].GetAttribute("version") -ne $str) {
+                        Add-Failure "BOTH-VERSION" ("{0} says the version is {1} but {2} says {3}. The manifest cannot include the header, so its literal is bumped by hand with the INFs." -f $mfName, $mfIds[0].GetAttribute("version"), $hdrName, $str)
+                    }
+                }
             }
 
             #
@@ -969,8 +1039,7 @@ foreach ($m in $models) {
 # A %token% is expanded from [Strings] before the scan, as the setup engines
 # expand it, so `%Bus%\XHCI98_NOXPORT` with Bus="USB" is the id it becomes;
 # and a model line's ids may carry no %token% at all, so that every id this
-# package binds is one the role rules above read literally (round 1 of the
-# 38.8 code review, finding 1).
+# package binds is one the role rules above read literally (task 38.8).
 $infStrings = @{}
 foreach ($e in @(Get-Section $inf "Strings")) {
     if ($null -eq $e) { continue }
@@ -1068,7 +1137,7 @@ foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq 
         # by name - [<install>.CoInstallers], .HW, .Services, .Interfaces and
         # the rest - copy nothing either, and none of them may pull another
         # INF's sections in by Include/Needs, which this gate cannot follow
-        # (Codex review of 33.4, round 1, finding 3).
+        # (task 33.4).
         $hubSections = @($install) + @($inf.SectionOrder | Where-Object { $_.ToLowerInvariant().StartsWith(($install + ".").ToLowerInvariant()) })
         foreach ($hs in $hubSections) {
             $hubCopy = @(Get-Directive $inf $hs "CopyFiles")
@@ -1106,7 +1175,7 @@ foreach ($m in $models) {
     #
     # **The fallback chain is .NTamd64, then .NTx86, then .NT, then
     # undecorated, and the rule refused only the last of the four** (the
-    # 2026-09-16 audit's D7). A 32-bit engine looking for this model reaches
+    # audit of 2026-09-16). A 32-bit engine looking for this model reaches
     # `[<base>.NTx86]` and `[<base>.NT]` before it ever falls back to the bare
     # name, so either of those in the amd64 file puts an amd64 binary on a
     # 32-bit machine just as surely - and more directly, since no fallback is
@@ -1184,8 +1253,8 @@ foreach ($m in $models) {
                 }
 
                 #
-                # **The temporary name on the driver's own copy row**, which is the
-                # 2026-09-07 audit's H10: a documented Windows 98 trap with no rule
+                # **The temporary name on the driver's own copy row**, which the
+                # audit of 2026-09-07 found: a documented Windows 98 trap with no rule
                 # behind it. Removing the third field passed the whole gate, and
                 # only the tracked footprint diff noticed - a diff whose likely
                 # answer is to regenerate the footprint.
@@ -2057,7 +2126,7 @@ $osNeverNamed = @(
 $retiredMediaNames = @("usbd98.sys", "usbd2k.sys", "usbhub98.sys")
 # Every Microsoft file name PKG-MSFILE refuses on the media: the four the OS
 # supplies, the three retired 1.0.0.0 media names, and the never-named ones.
-# usbhub20.sys was missing from this set until the 2026-09-07 audit's H6, so a
+# usbhub20.sys was missing from this set until the audit of 2026-09-07, so a
 # staged package holding it passed the package scan - against AGENTS.md, which
 # says "the INF gate's OS-* and PKG-MSFILE rules refuse it". OS-NEVER covers
 # only the INF; nothing covered the media.
@@ -2301,7 +2370,7 @@ if ($mfgDecoration -eq "") {
     # `[DefaultInstall.NT]` in the 64-bit file are not fallbacks at all - they
     # are the section that engine was looking for - so they are the same
     # hazard arriving sooner, and only the fallback was refused (the
-    # 2026-09-16 audit's D7).
+    # audit of 2026-09-16).
     foreach ($reachable in @("DefaultInstall", "DefaultInstall.NT",
                              "DefaultInstall.NTx86")) {
         if (Test-SectionExists $inf $reachable) {
@@ -2311,8 +2380,8 @@ if ($mfgDecoration -eq "") {
 }
 
 #
-# **BOTH right-click sections must exist at all**, which is the 2026-09-07
-# audit's H8. The OS-* rules below build their route list by APPENDING a
+# **BOTH right-click sections must exist at all**, which the audit of
+# 2026-09-07 found missing. The OS-* rules below build their route list by APPENDING a
 # right-click route only when its section exists, so deleting both
 # `[DefaultInstall]` and `[DefaultInstall.NTx86]` does not fail anything: it
 # silently halves the number of routes checked and the gate reports green over
@@ -2404,7 +2473,7 @@ foreach ($m in $models) {
                         foreach ($bad in @(
                             @{ Bit = $COPYFLG_NOVERSIONCHECK; Name = "COPYFLG_NOVERSIONCHECK (4)"; Why = "it overwrites the target regardless of version" },
                             @{ Bit = $COPYFLG_FORCE_FILE_IN_USE; Name = "COPYFLG_FORCE_FILE_IN_USE (8)"; Why = "it schedules a replacement of a file that is in use" },
-                            @{ Bit = $COPYFLG_NO_VERSION_DIALOG; Name = "COPYFLG_NO_VERSION_DIALOG (32)"; Why = "it still replaces an equal-or-older target for no benefit, and asks for the Windows CD to do it - the table in build-and-test.md rejects it for exactly that, and nothing here refused it until the 2026-09-07 audit's H11" },
+                            @{ Bit = $COPYFLG_NO_VERSION_DIALOG; Name = "COPYFLG_NO_VERSION_DIALOG (32)"; Why = "it still replaces an equal-or-older target for no benefit, and asks for the Windows CD to do it - the table in build-and-test.md rejects it for exactly that, and nothing here refused it until the audit of 2026-09-07" },
                             @{ Bit = $COPYFLG_OVERWRITE_OLDER_ONLY; Name = "COPYFLG_OVERWRITE_OLDER_ONLY (64)"; Why = "it still replaces an older target file for no benefit" }
                         )) {
                             if (($flags -band $bad.Bit) -ne 0) {
@@ -2501,7 +2570,7 @@ foreach ($secName in @($inf.SectionOrder)) {
     if ($null -eq $entries) { continue }
     foreach ($e in $entries) {
         # A value name and a subkey may be quoted; setup reads both forms as
-        # one, so the rules take either (Codex review of task 36.51, round 1).
+        # one, so the rules take either (task 36.51).
         if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*"?{0}"?\s*,' -f [regex]::Escape($suspValue))) {
             if ($matches[1].Trim().Trim('"') -ieq $suspKey) {
                 Add-Failure "SUSP-GLOBAL" ("[{0}] line {1} writes HKLM,{2},{3}. This package stopped writing it at 1.1.0.0: it is machine-wide, so it reaches every controller usbport drives and outlives the devnode that installed it. The miniport declared USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the HCD, which replaces usbport, owns its idle policy itself (docs\issues\05-idle-suspend-and-disableselectivesuspend.md for the readings)." -f $secName, $e.Line, $suspKey, $suspValue)
@@ -2558,7 +2627,7 @@ foreach ($secName in @($inf.SectionOrder)) {
 #                 Vista and 7 controller's .Services, and xhcimsi.sys
 #                 anywhere but the one DelFiles section that controller
 #                 section names, whose one entry carries exactly the flag
-#                 0x00010000 (DELFLG_IN_USE: the loaded file deleted at the
+#                 0x00010000 (DELFLG_IN_USE1: the loaded file deleted at the
 #                 restart) and whose [DestinationDirs] entry is
 #                 10,System32\Drivers (record 18 section 15.7, as built:
 #                 dirid 12 is W98-DIRID12's refusal, and 10,System32\Drivers
@@ -2769,7 +2838,7 @@ if ($Arch -eq "amd64") {
                 $df = @($entries[0].Text -split ',' | ForEach-Object { $_.Trim() })
                 $dflags = if ($df.Count -ge 4) { ConvertTo-CopyFlags $df[3] } else { $null }
                 if ($df.Count -ne 4 -or $df[0] -ine $oldHelperBinary -or $null -eq $dflags -or $dflags -ne 0x00010000) {
-                    Add-Failure "HLPR-OLD" ("[{0}] line {1}: the entry must be '{2},,,0x00010000' - DELFLG_IN_USE, so the loaded file is deleted at the restart rather than never (Microsoft's DelFiles directive; record 18 section 15.7); found '{3}'." -f $oldFileSec, $entries[0].Line, $oldHelperBinary, $entries[0].Text.Trim())
+                    Add-Failure "HLPR-OLD" ("[{0}] line {1}: the entry must be '{2},,,0x00010000' - DELFLG_IN_USE1, so the loaded file is deleted at the restart rather than never (Microsoft's DelFiles directive; record 18 section 15.7); found '{3}'." -f $oldFileSec, $entries[0].Line, $oldHelperBinary, $entries[0].Text.Trim())
                 }
             }
             $dk = $oldFileSec.ToLowerInvariant()
@@ -2872,7 +2941,7 @@ if ($EmitFootprint -ne "") {
     # Name the INF relative to the repository when it is inside one. This file
     # is tracked and diffed across machines, unlike -EmitMediaLayout's temp
     # file, so an absolute host path in it would be noise in every review.
-    # The trailing separator is part of the test (repo audit D6). Without it,
+    # The trailing separator is part of the test. Without it,
     # `C:\work\xhci98` is a prefix of `C:\work\xhci98-scratch\...` too, and the
     # substring taken from such a path starts mid-name: the emitted header then
     # reads `-scratch\src\xhci98.inf`, which is not a path to anything.
@@ -2932,7 +3001,7 @@ if ($EmitFootprint -ne "") {
         "# a key that outlives the device's own. Both bear on what an UNINSTALL",
         "# does, which this derivation does not model and which nothing in this",
         "# repository establishes. Drafts made each of them a 'review' - the",
-        "# service one, then the registry one a review round later - and each time",
+        "# service one, then the registry one a draft later - and each time",
         "# that answered a different question inside a column defined as",
         "# ownership. An unconditional write puts the value there whatever its",
         "# root or its association. What happens to it at uninstall is a",
@@ -2956,7 +3025,7 @@ if ($EmitFootprint -ne "") {
         "# prior state. They deliberately do not answer a second question,",
         "# 'what does uninstall do to it', which depends on the key's lifetime and",
         "# on the service association and which this file models nowhere. Two",
-        "# drafts mixed the second axis into the first; the review rounds that",
+        "# drafts mixed the second axis into the first; the reviews that",
         "# caught them are why the distinction is spelled out here.",
         "#",
         "# NOT in here, because it is measured rather than claimed: what each",
@@ -3043,7 +3112,7 @@ if ($EmitFootprint -ne "") {
         # **The root is emitted, and it is not part of the verdict.** A draft
         # returned `review` for every non-HKR root on the grounds that such a key
         # outlives the devnode - which is the same category error the service
-        # verdict made with SPSVCINST_ASSOCSERVICE, caught one review round
+        # verdict made with SPSVCINST_ASSOCSERVICE, caught one draft
         # later here: an unconditional HKLM write puts its value there exactly as
         # an unconditional HKR write does, and *what removing the device does to
         # it afterwards* is uninstall behaviour this file does not model. The

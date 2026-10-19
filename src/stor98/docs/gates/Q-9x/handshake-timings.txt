@@ -1,0 +1,20 @@
+# Q-9x handshake timings (host ms after the CM set REMOVE_PENDING; s1..s4 = drain, flush, CC.SHN, CC.EN=0 steps)
+# produced by tests/cm9x/q9log.py --ejects from the usb4-emu traces (local, E:\nvme98-vm\9x\<os>\trace-<run>.log)
+trace-a2.log req 1: seen +131, s1=133 s2=446 s3=725 s4=726, ack +727 (outcome 1), CM ack +729, Remove +807, HwAdapterState(FALSE) +763, end clean
+trace-b1.log req 1: seen +231, s1=233 s2=543 s3=839 s4=839, ack +840 (outcome 1), CM ack +842, Remove +-, HwAdapterState(FALSE) +-, end aborted
+trace-b1.log req 2: seen +25, s1=26 s2=315 s3=595 s4=595, ack +596 (outcome 1), CM ack +597, Remove +-, HwAdapterState(FALSE) +-, end aborted
+trace-b2.log req 1: seen +120, s1=121 s2=387 s3=682 s4=682, ack +683 (outcome 1), CM ack +684, Remove +-, HwAdapterState(FALSE) +-, end aborted
+trace-b2.log req 2: seen +115, s1=116 s2=430 s3=726 s4=7109, ack +7111 (outcome 2), CM ack +7113, Remove +-, HwAdapterState(FALSE) +-, end aborted
+trace-b2.log req 3: seen +284, , ack +- (outcome -), CM ack +15216, Remove +-, HwAdapterState(FALSE) +-, end aborted
+trace-b2.log req 4: seen +10, , ack +- (outcome -), CM ack +15328, Remove +-, HwAdapterState(FALSE) +-, end aborted
+trace-b2.log req 5: seen +28, , ack +28 (outcome 3), CM ack +41, Remove +-, HwAdapterState(FALSE) +-, end aborted
+trace-b2.log req 6: seen +300, s1=301 s2=609 s3=904 s4=905, ack +906 (outcome 1), CM ack +907, Remove +969, HwAdapterState(FALSE) +925, end clean
+trace-m1.log req 1: seen +176, s1=177 s2=487 s3=782 s4=782, ack +783 (outcome 1), CM ack +785, Remove +826, HwAdapterState(FALSE) +-, end clean
+trace-m2.log req 1: seen +3, s1=4 s2=103 s3=203 s4=204, ack +205 (outcome 1), CM ack +206, Remove +226, HwAdapterState(FALSE) +-, end clean
+trace-m2.log req 2: seen +40, s1=41 s2=140 s3=240 s4=241, ack +241 (outcome 1), CM ack +242, Remove +251, HwAdapterState(FALSE) +-, end clean
+trace-m2.log req 3: seen +27, s1=28 s2=128 s3=228 s4=229, ack +230 (outcome 1), CM ack +231, Remove +245, HwAdapterState(FALSE) +-, end clean
+trace-m2.log req 4: seen +68, , ack +69 (outcome 3), CM ack +70, Remove +-, HwAdapterState(FALSE) +-, end aborted
+trace-m2.log req 5: seen +45, s1=46 s2=146 s3=246 s4=246, ack +248 (outcome 1), CM ack +249, Remove +261, HwAdapterState(FALSE) +-, end clean
+trace-m2.log req 6: seen +73, s1=74 s2=180 s3=281 s4=281, ack +283 (outcome 1), CM ack +285, Remove +311, HwAdapterState(FALSE) +-, end clean
+trace-m2.log req 7: seen +1, s1=3 s2=103 s3=203 s4=203, ack +205 (outcome 1), CM ack +206, Remove +257, HwAdapterState(FALSE) +-, end clean
+trace-m2.log req 8: seen +55, , ack +55 (outcome 3), CM ack +56, Remove +-, HwAdapterState(FALSE) +-, end aborted

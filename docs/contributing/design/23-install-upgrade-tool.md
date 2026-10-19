@@ -1,6 +1,33 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 10, 2026-10-16 (the console, the questions and the
+Status: revision 23, 2026-10-19 (the fix round of that night, owner:
+on 98 SE and ME the bundled Stor98 is updated as a file through
+`WININIT.INI`, never by reinstalling a running device, section 4.4 and
+record 26 draft 16; Stor98 chosen with the Thunderbolt 3 / USB4
+support, `/nostor98`, section 7.1; that support experimental and never
+ticked or answered Y unasked, section 8.5; no Stor98 install record
+without a Stor98 change; the `XhciCmMode` 0 warning, section 8.3);
+revision 22, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
+for the command line; see below); revision 21, 2026-10-19 (the x64 package's filter INF at the
+flavour directory's root; see below); revision 20, 2026-10-19 (the 98 SE
+and ME uninstall removes SETUPX's `OEM Name` record of each INF copy it
+deletes, section 6.1, and section 9.5's `/list` line reads the Run value;
+the matrix's 98 SE and ME legs of that day); revision 19, 2026-10-19 (task 42-A.30: the bundled Stor98 is
+built with the package at its version, no pins); revision 18, 2026-10-19
+(task 42-A.26: the bundled Stor98 on tunnel drives only; see below);
+revision 17, 2026-10-19 (task 42-A.24: the
+CriticalDeviceDatabase service entries and the mark service following
+`XhciCmSafeEject`, sections 5.1 and 9.2); revision 16, 2026-10-19 (task 42-A.22, record 26 draft 11: Stor98
+part of the Thunderbolt support, the UAS driver a component of its own;
+sections 4.4, 7.1 and 8.1); revision 15, 2026-10-19 (`XhciFastPollFsLs`
+settable; see below); revision 14, 2026-10-19 (task 42-A.27: a
+parent's job and the devices below it, sections 5.8 and 10); revision
+13, 2026-10-19 (the connection manager alone, and
+Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
+service and the machine-wide key); revision 11, 2026-10-18 (the window,
+the helper, the uninstall
+from Add/Remove Programs; see below); revision 10, 2026-10-16 (the
+console, the questions and the
 install directory; see below); revision 9, 2026-10-16 (the USB tree
 tool); revision 8, 2026-10-15, reviewed and revised six times the same day;
 the code is written against it (task 40.5) and was reviewed and revised
@@ -41,6 +68,213 @@ an offer to open Device Manager (section 6.4). The owner then decided, the
 same day, that on 98 SE and ME the package copy goes straight into the
 install directory with no subfolder (section 4.4), and that Enter at the
 confirmation goes on ("Enter for [Y]", section 5.1 step 4).
+
+Revision 11, 2026-10-18 (roadmap-usb4.md tasks 42-A.2 and 42-A.3, design
+record 26 section 12; record 27 section 10): a second front end, the
+window `XHCIWIZ.EXE` / `XHCIWZ64.EXE`, over one engine, and the uninstall
+from Add/Remove Programs. What changes here, section by section:
+
+- **The engine** (sections 3, 10 and 15): the system half moves from
+  `xhciinst.c` to `xhciinst\inst_eng.c` behind the front-end table of
+  record 26 section 3.2; `xhciinst.c` is the console front end. Every rule
+  of this record stays the engine's or the pure half's, and the split
+  itself leaves the console's screens as they were (the bullets below
+  change some of their content).
+- **Section 2**: `INSTALL.BAT` opens the window; `/console` as its first
+  word runs the console tool with the rest (on 98 SE and ME the batch file
+  drops the word, seven arguments after it; on NT the console tool takes
+  it). The package's `tools\xhciinst\` holds the window pair beside the
+  console pair, and record 27's helper `XHCIDI.EXE` for 98 SE and ME
+  (staged by the helper's own task, 42-A.1; a package without it keeps
+  the printed steps).
+- **Section 3**: `build.cmd` builds the four executables (the window with
+  the static multithreaded runtime, `/SUBSYSTEM:WINDOWS,4.0` for
+  `XHCIWIZ.EXE` and `5.02` for `XHCIWZ64.EXE`; its import gate the seven
+  modules of record 26 section 4); the helper has its own build (record
+  27 section 3).
+- **Section 4.2**: the package-layout refusal holds for an install and an
+  update; the uninstall needs no package (W12).
+- **Section 5.5**: the routine's `hwndParent` is the front end's window
+  (the window's sheet; NULL on the console, as before).
+- **Sections 6.1, 6.2 and 6.4**: on 98 SE and ME each device of the plan is
+  installed by record 27's helper after the copy and `DevicePath`, in its
+  order (the controllers; after the settle the root hub, hubs and
+  composite entries, at most four passes; UAS devices; the host
+  interface), each pass behind the gate (the tree settled, and the user's
+  word that no hardware wizard is open; `/yes` asks no word), each device
+  read back afterwards (record 26 section 8). Section 6.4's printed steps
+  stay for a device the helper could not install (with a line of its own
+  for one gone after its install), and in their old form - the controller
+  and an updated root hub, the wizards doing the rest - when the package
+  has no helper or its probe fails. "Never drives
+  `SETUPX`" above now reads: never through anything but record 27's
+  documented calls.
+- **Section 7.1**: `/from <dir>` (the uninstall's relaunch), `/console`
+  (the console's no-op word) and `/debug` (the window's own choice of the
+  `debug-` directory); the window refuses the console's switches (record
+  26 section 10).
+- **Sections 8.1, 8.3 and 8.4**: an answer is written machine-wide, to
+  `HKLM\System\CurrentControlSet\Services\USB` (task 42-A.17), and only
+  where it differs from the value in force (the machine-wide one, else
+  each device's own); the question shows the machine-wide value beside
+  each device's own; a per-controller value is left as it is. The table
+  gains the connection manager's waits and log values (ranges) and
+  `XhciCmBridgeNumbering` (98 SE and ME, written by no INF), all never
+  asked, set with `/set` or the window's Advanced dialog.
+- **Section 9**: every install and update writes the Add/Remove Programs
+  entry (record 26 section 9.1) once the installer's own files are in the
+  install directory (record 26 section 6.2); an uninstall started from the
+  install directory relaunches a temporary copy with `/from` (W6); 98 SE
+  and ME remove each package entry through the helper, children first,
+  behind the settle and the gate, an entry left stopping the destructive
+  steps, a fresh reading finding none before `DevicePath`, the copy, the
+  INF copies and the driver files go (record 26 section 9.3 step 4); where
+  the helper cannot run, nothing goes: the devices are removed in Device
+  Manager by hand and the uninstall run again, which, finding none, goes
+  on; the machine-wide values the table names are deleted; the tools, the
+  installer's files (the window last), the records, the entry and the
+  directory go last, only when nothing is left for a later run, and an
+  uninstall that stopped, or could not remove one of these, keeps its
+  entry, named "(incomplete: run again)", with its program and records
+  (W14).
+- **Not in this revision**: the bundled Stor98 component (record 26
+  sections 5.6, 6.3 and 6.4) and the safe-removal mark service (record 21
+  section 7.4 revision 3, task 42-A.5); sections 4.4 and 9.2 stay as they
+  were for them. The mark service is revision 12's.
+
+Revision 12, 2026-10-19 (roadmap-usb4.md task 42-A.5's installer hooks and
+task 42-A.17's installer part; record 21 section 7.4 revision 3, "The
+installer"; record 26 section 12): the safe-removal mark service
+`xhcimark` and the marks it writes, and the machine-wide key.
+
+- **Section 3**: the package carries `tools\xhcimark\` (`XHCIMARK.EXE`,
+  `XHCIMK64.EXE`, built by `xhcimark\build.cmd`); the tool copies one of
+  them, never runs it. `CreateServiceA`, `ChangeServiceConfigA`,
+  `StartServiceA` and `ControlService` are looked up at run time like the
+  other routines; the import table stays `KERNEL32` and `ADVAPI32`.
+- **Section 5.1**: a step 12 at the end of every install and update run,
+  whatever its verdict (record 21 section 7.4, decision M13): with the
+  `xhcicm` service registered and the Thunderbolt component in the run,
+  on 2000 to 7, the mark service installed or updated and started; with
+  no `xhcicm` service registered, step 0 of section 9.2 run, so no
+  `LowerFilters` value names `xhcicm` once the run ends (a filter with no
+  service stops the device at its next start, Code 39).
+- **Section 8.4**: the machine-wide key is made where it is absent at
+  every install and update, a value is read there by the drivers' rule
+  (present in any type wins, a zero-length `REG_NONE` is absent; a value
+  that is not a `DWORD` wins with the driver's own fallback, which is not
+  always the INF's default, so it is shown as unreadable and a value
+  chosen for it is always written over it), and every write goes there,
+  never to a controller's own key.
+- **`/eject`** (record 24 section 7.2; record 21 section 7.4, decision
+  M16): on NT, after its own successful `CM_Request_Device_EjectA` (not
+  the query-and-remove fallback), the tool reads the NHI's marks answer
+  (`IOCTL_XHCICM_MARKS`) for the unit's one located entry with a pending
+  departure, and writes `XhciCmEjectConfirm` (`REG_BINARY`, 28 bytes,
+  `cm_query.h`'s `CM_QC_*`) into the NHI's driver key while that value is
+  absent or empty, under the eject lock it already holds
+  (`Global\XhciinstTbAsk`): the driver then tears the tunnel down, which on
+  Windows 2000 nothing else confirms.
+- **Section 9.2**: step 0 before the filter hosts, and the inventory read
+  again before step 5.
+- **Section 9.5**: the mark service's copy in `system32`.
+- **Section 13**: D16.
+
+Revision 21, 2026-10-19 (roadmap-usb4.md task 42-A.23, the owner's
+decision of that day): the x64 package keeps the tunnel-port filter INF at
+the flavour directory's root, beside `xhcicm.inf` and its one
+`xhcicm.sys`, with no `nt\` and no second copy of the binary; the x86
+package keeps `nt\` as before. The place is a pure function of the
+architecture (`inst_cmf_rel`, with `inst_cmf_pnf` and `inst_cmf_where`):
+section 4.1's table, section 4.4's listing, section 8.5's file set, and
+section 10's list.
+
+Revision 13, 2026-10-19 (roadmap-usb4.md task 42-A.21; record 26 draft 8;
+record 21 section 3.5). The owner, 2026-10-19: "The installer should give
+people the option not to install xhci98 but just the CM. Reason is that in
+case some Win 8 users which have native USB3 but not USB4 or TB may want
+it". What changes here:
+
+- **Section 4.5, new**: the connection manager alone. On 2000 to 7 the
+  USB drivers (`xhci98.sys`, `xhciuas.sys` and on x86 `xhcihlpr.sys`)
+  can be left out of a run that carries the connection manager
+  (`/cmonly`, or the window's box unticked); on Windows 8 and 8.1 that
+  is the only run there is; on 98 SE and ME the USB drivers stay
+  required. A run without them plans, stages and installs only the
+  Thunderbolt group, asks no USB value, and leaves an installed
+  `xhci98.sys` exactly as it is.
+- **Section 4.3**: Windows 8 and 8.1 (NT 6.2 and 6.3) are admitted for
+  the connection manager alone; 10 and later stay refused, as before. The
+  version is read through `ntdll.dll`'s `RtlGetVersion` on NT, because
+  `GetVersionEx` in a program with no compatibility manifest answers 6.2
+  on 8.1, 10 and 11 alike.
+- **Section 5.10**: the note reads the connection manager's binary when
+  the USB drivers are not in the run, and on 8 and 8.1 x64 adds that
+  test-signing mode can be turned on only with Secure Boot off.
+- **Section 7.1**: `/cmonly`.
+- **Section 8.5**: with the USB drivers out of the run the Thunderbolt
+  support is in it unasked: it is all the run installs.
+- **Section 9.1**: the warning names the connection manager alone when
+  the `xhci98` service is not registered and `xhcicm`'s is (a machine
+  where only the connection manager was installed); the typed word stays.
+- **Sections 9.5 and 5.1 step 12**: the mark service on 8 and 8.1 too.
+- **Section 13**: D17 to D19.
+
+Revision 15, 2026-10-19 (roadmap-usb4.md task 42-A.29; the owner, for
+`3.1.0.0`: "XhciFastPollFsLs
+should be in advanced settings"). What changes here:
+
+- **Section 8.1**: `XhciFastPollFsLs` joins the table, never asked,
+  settable with `/set` and the window's "Advanced..." for 0, 2, 3 and 4
+  (1 is not a mode), written machine-wide like the other `xhci98.inf`
+  values (section 8.4). A choice list now names values 0 to 4, so the
+  table's choice texts reach value 4.
+
+Revision 17, 2026-10-19 (roadmap-usb4.md task 42-A.24; the owner,
+2026-10-19, for the mark service and `XhciCmSafeEject`). What changes here:
+
+- **Section 9.2 step 0**: the CriticalDeviceDatabase's `LowerFilters`
+  and `UpperFilters` copies of `xhcicm`, every entry, first and read again
+  at the end (record 21 section 7.4).
+- **Section 9.2 step 6a, new**: every CriticalDeviceDatabase entry whose
+  `Service` names a service of the package that is gone is deleted.
+- **Section 5.1 step 12**: the mark service follows the `XhciCmSafeEject`
+  in force after the run; step 6a's scrub runs at the end of every NT
+  install and update run too.
+
+Revision 18, 2026-10-19 (roadmap-usb4.md task 42-A.26; the owner's
+decision of 2026-10-19): the bundled Stor98 is installed on NVMe drives
+behind a Thunderbolt or USB4 tunnel only.
+
+- **Section 4.4**: the paragraph on the bundled Stor98 now says what is
+  copied, staged and installed, and where: tunnel drives only, with the
+  Thunderbolt component, the place read from the connection manager's
+  confirmed reading; the shared file and service held when a Stor98 the
+  installer did not put on a tunnel drive exists.
+- **Sections 5.4 and 6.2**: the plan's verdict for a device `stor98.inf`
+  matches passes the gate of section 4.4 after every reading, so an
+  install, an update, a repair, `/force` and `/restage` are all held to
+  it; section 5.5's refusal of a hardware id shared with a device the run
+  leaves stands, with its own sentence for a drive the gate leaves.
+- **Record 26 sections 5.3, 6.3, 6.4 and 9.3** carry the rest: the
+  Components page's sentence, the uninstall's adoption of tunnel drives
+  Windows bound after the run.
+
+Revision 22, 2026-10-19 (roadmap-usb4.md task 42-A.31; record 26 draft 15
+section 2 and W17). The owner, 2026-10-19: "setup.exe by tonight". The
+package root gains `SETUP.EXE`, the program a person double-clicks: it
+starts the installer's window and exits, with no console window behind
+it. `INSTALL.BAT` stays, its behaviour unchanged, for the command line
+and scripts. This supersedes decision D1's one entry point (the owner's
+of 2026-10-15, kept by record 26 W2 on 2026-10-18). What changes here:
+
+- **Section 2**: the layout gains `SETUP.EXE` at the root, and the
+  paragraph on the one batch file says who uses which. `README.md` and
+  the release readme name two ways only, `SETUP.EXE` or Device Manager
+  by hand; `INSTALL.BAT` and the console are documented in
+  `tools\xhciinst\readme.txt` alone (record 26 section 2).
+- **Section 7.4**: `SETUP.EXE` does not pass the code on.
+- **Sections 13 and 15**: D1 revised; the files.
 
 The tool never ships `devcon` or any other Microsoft file, never drives
 Windows 98's 16-bit setup engine (`SETUPX`) through anything undocumented,
@@ -108,7 +342,8 @@ program around them, in the shape `XHCICLN` already has.
 ## 2. Where it lives in the package (decision D1)
 
 ```
-<package>\INSTALL.BAT              the one entry point
+<package>\SETUP.EXE                for people: starts the window (revision 22)
+<package>\INSTALL.BAT              the command line's entry point
 <package>\release-x86\ ...         unchanged: the drivers and their INFs
 <package>\release-x64\ ...
 <package>\debug-x86\, debug-x64\
@@ -119,9 +354,12 @@ program around them, in the shape `XHCICLN` already has.
 ```
 
 Since `3.0.0.0` the release download's `release-x86\` and `release-x64\`
-may also carry Stor98, a separate project's NVMe
-driver, bundled unchanged (`build-and-test.md`, "The bundled Stor98
-build"): at the directory's root, every name starting with `stor98`. The
+may also carry Stor98, the NVMe driver (`build-and-test.md`, "The bundled
+Stor98 build"): at the directory's root, every name starting with
+`stor98`. In `3.0.0.0` it was a pinned Stor98 release (`0.4.0.0`) copied
+unchanged; since `3.1.0.0` (roadmap-usb4 task 42-A.30) it is built from
+`src\stor98` with the drivers, carries the package's version and date, and
+is published in `releases\<version>\` like them. The
 tool does not install it (section 4.4).
 
 `INSTALL.BAT` sits at the package root, beside `readme.txt`, because it is
@@ -140,6 +378,16 @@ is `INSTALL.BAT /uninstall`. A second batch file at the root is one
 double-click from removing the driver of the only keyboard on an
 xHCI-only machine; behind a switch it is one typed word and a confirmation
 (section 9.1).
+
+Since revision 22 a person is not sent to `INSTALL.BAT` at all: the
+readme's first instruction is "To install or update, double-click
+SETUP.EXE; to uninstall, use Remove in Add/Remove Programs (or SETUP
+/uninstall)", and `SETUP.EXE` starts the window (record 26
+section 2). `INSTALL.BAT` is for the command line and scripts
+(`INSTALL /console ...`); with no argument it still opens the same
+window. `SETUP.EXE` is a program, not a second batch file, and does
+nothing an `INSTALL` with the same arguments would not: the uninstall
+stays behind `/uninstall`.
 
 `INSTALL.BAT` runs under Windows 98's `COMMAND.COM` and under `cmd.exe`.
 It chooses the executable and the flavour directory and passes the
@@ -213,6 +461,14 @@ stages it from `xhciinst\INSTALL.BAT`.
   gains their rows and `NOTICE.TXT` records the linkage. `XHCIIN64.EXE` is a
   user-mode program, not a driver: the packager's test signing (design
   record 19) does not apply to it.
+- **The mark service's binaries** (revision 12; record 21 section 7.4,
+  revision 3): `XHCIMARK.EXE` and `XHCIMK64.EXE`, built by
+  `xhcimark\build.cmd` and staged under the package's `tools\xhcimark\`;
+  the tool copies the one of its own architecture into `system32`
+  (section 9.5) and never runs it. The service routines it needs beyond
+  those it already imports (`CreateServiceA`, `ChangeServiceConfigA`,
+  `StartServiceA`, `ControlService`) are looked up at run time, so the
+  import table stays `KERNEL32` and `ADVAPI32`.
 
 ## 4. The package as the tool sees it, and the refusals
 
@@ -225,7 +481,7 @@ The tool knows the package's drivers by file, never by hardware id:
 | `xhci98.inf` | `xhci98.sys` (and `xhcihlpr.sys` in x86) | `xhci98` (`xhcihlpr`) | all | required |
 | `xhciuas.inf` | `xhciuas.sys` | `xhciuas` | all | required |
 | `xhcicm.inf` | `xhcicm.sys` | `xhcicm` | all | the set of three, all or none |
-| `nt\xhcicmf.inf` | `xhcicm.sys` as an upper filter | `xhcicm` | NT only (`$Windows NT$`) - in the flavour directory's `nt\` subdirectory, because Windows 98 and ME read a `$Windows NT$` INF and would offer the filter for the tunnel bridge (task 39-0.4, `runs/run-39.md`); read and copied on NT only, never on 98 or ME; beside its own copy of `xhcicm.sys`, `nt\xhcicm.sys`, the same bytes, because Vista's and 7's driver store refuses a source outside the INF's directory (`SetupCopyOEMInf` error `0xA1`, read on 7 SP1 x86) | the set of four (on 98 and ME, `xhcicm.inf` and `xhcicm.sys`) |
+| `nt\xhcicmf.inf` (x86), `xhcicmf.inf` (x64) | `xhcicm.sys` as an upper filter | `xhcicm` | NT only (`$Windows NT$`) - in the x86 package in the flavour directory's `nt\` subdirectory, because Windows 98 and ME read a `$Windows NT$` INF and would offer the filter for the tunnel bridge (task 39-0.4, `runs/run-39.md`); read and copied on NT only, never on 98 or ME; beside its own copy of `xhcicm.sys`, `nt\xhcicm.sys`, the same bytes, because Vista's and 7's driver store refuses a source outside the INF's directory (`SetupCopyOEMInf` error `0xA1`, read on 7 SP1 x86). In the x64 package, from `3.1.0.0`, at the flavour directory's root beside `xhcicm.inf` and the one `xhcicm.sys`, with no `nt\`: 98 and ME never read it, the same-directory rule is met at the root, and no other INF there binds a PCI bridge. `inst_cmf_rel` (section 10) gives the place per architecture | the set of four on x86 and of three on x64 (on 98 and ME, `xhcicm.inf` and `xhcicm.sys`) |
 
 The hardware ids come from the INFs themselves (section 5.2): a model line
 added to an INF reaches the tool with no change to it. A package without
@@ -278,7 +534,21 @@ not start there: Windows reports it is not a valid application, which
 `INSTALL.BAT` never invites, since it picks by `PROCESSOR_ARCHITECTURE`);
 an x64 flavour directory given to the 32-bit tool or the reverse
 (section 4.2 items 2, 5 and 6). A Windows newer than 7 or older than 2000
-or 98 SE is refused too: it is not a target of this package.
+or 98 SE is refused too: it is not a target of this package. The one
+exception (revision 13) is Windows 8 and 8.1, NT 6.2 and 6.3, admitted for
+the connection manager alone (section 4.5); 10 and later stay refused.
+
+On NT the version is read through `ntdll.dll`'s `RtlGetVersion`, looked
+up at run time, and `GetVersionExA` is the fallback where the routine is
+missing (2000 and XP report their own version through either). Windows
+8.1 and later answer `GetVersionEx` with 6.2 in a program whose manifest
+names no supported system, which the tool's do not, so before revision 13
+the refusal of 10 and 11 rested on that 6.2 being above 6.1; with 6.2
+admitted that reading cannot tell 8 from 11. A `GetVersionExA` answer of
+6.2 or above with no `RtlGetVersion` to read is refused for that reason.
+The rule is pure (`inst_os_kind`, section 10): 98 SE (4.10, build 2222
+or later) and ME (4.90) and NT 5.0 to 6.1 are full targets, NT 6.2 and 6.3
+the connection manager's alone, anything else refused.
 
 ### 4.4 The local copy
 
@@ -334,13 +604,216 @@ of 98 SE writes beside an INF it reads in place (the 98 SE uninstall leg,
 reinstall refused); a copy whose list is already gone loses only the
 `.PNF`s of this package's INFs, never another file.
 
-**The bundled Stor98 driver is not copied.** The listing takes the
-flavour directory's files and `nt\`, never another subdirectory, and it
-leaves out every file whose name starts with `stor98`
-(`inst_bundled_file`), because a copy of `stor98.inf` on `DevicePath`
-would have the hardware wizard install Stor98 unasked. Where a flavour
-directory carries Stor98, the run names where it is and says the tool
-does not install it.
+**The bundled Stor98 driver: tunnel drives only** (owner, 2026-10-19;
+revision 18). The listing takes the flavour directory's files and `nt\` (the x64
+package has none),
+never another subdirectory, and it leaves out every file whose name
+starts with `stor98` (`inst_bundled_file`) unless Stor98 is in the run,
+because a copy of `stor98.inf` on `DevicePath` or in the driver store
+would have Windows offer Stor98 when nobody chose it. Stor98 is in the run only when
+it is chosen (its box, the console's question, `/stor98`) **and** the
+Thunderbolt component is, which Stor98 is part of (revision 16,
+`inst_s98_box_open`, the window's rule for its box, which the engine's
+`s98_set` applies too): the engine keeps it out otherwise, and the
+console says so and asks nothing. Since revision 23 (owner, 2026-10-19,
+replacing "never unasked" of 2026-10-18) it is chosen with that
+component: its box is ticked whenever the Thunderbolt box is, and can be
+unticked; the console's question answers Y on Enter and under `/yes`,
+and `/nostor98` leaves it out (section 7.1, `inst_s98_decide`). The
+Thunderbolt component itself is never chosen unasked (section 8.5).
+
+In the run, the tool installs, updates and reconfigures Stor98 only on
+an NVMe drive behind a Thunderbolt or USB4 tunnel. Where a drive sits is
+read once per reading of the devices from the connection manager's
+confirmed reading, the walk of record 24 sections 3.3 and 4 that
+`/devices` and `/eject` take (`tb_read_all`: the status record asked and
+echoed, its tunnel ports matched by bus and address on NT and by PCI path
+on 98 SE and ME), under the lock `XHCITR` shares
+(`inst_s98_place`):
+
+- **behind a tunnel**: a verified tunnel port above the drive;
+- **internal**: no verified port above it, in a reading that is whole
+  (every devnode read, no record moved), with at least one connection
+  manager confirmed and every one found confirmed, and no Thunderbolt or
+  USB4 port by its id, nor one carrying the tunnel-port filter, above it;
+- **unknown**: anything else - the drive not in the walk, a record that
+  moved, a reading not whole, no manager or one unconfirmed, an
+  unverified port above it. Unknown is never taken for internal and never
+  for a tunnel.
+
+After every plan (`plan`, which runs after every reading, so after each
+settle and barrier too), each present device `stor98.inf` matches is
+eligible only behind a tunnel with the Thunderbolt component in the run
+(`inst_s98_eligible`); an internal drive is left ("skip-internal"), one
+of unknown place is left and is work left for a later run when it is
+still unknown at the end ("skip-unknown", exit 4). Whatever the plan
+decided for it - an install, an update, a repair of a missing file,
+`/force`, `/restage` - a device the gate leaves is not run, gets no
+printed steps on 98 SE and ME, and is named on screen and in the log with
+its reason (the plan's `LEFT:` line, a line when a later reading changes
+it, the window's found page). On NT one call reaches every device of a
+hardware id (section 5.5), so a tunnel drive that shares its id with a
+drive the gate leaves is refused too, with that sentence.
+
+**The shared file and service.** Every Stor98 device runs one
+`stor98.sys` (2000 to 7) or `stor98.mpd` (98 SE and ME) and reads one
+service's settings, so a change made for a tunnel drive reaches an
+internal drive on Stor98 as well. A device bound to Stor98 counts as
+another when it is not a known tunnel drive (`inst_s98_known_tunnel`):
+present and not behind a tunnel, or, on NT, not present and not named
+by the install record (an unreadable record names none); on 98 SE and
+ME every driver key naming `stor98.mpd` is read for it, present or not,
+and since revision 23 one with no present devnode is a drive gone with
+its tunnel, not another: an internal drive there is always present, and
+the uninstall's adoption reads a drive that is not present the same way
+(record 26 section 6.3). So on those systems an enclosure that is not
+plugged in no longer holds Stor98 at its old release for ever (the 98 SE
+update of 2026-10-19 left `stor98.mpd` at `0.4.0.0` with the enclosure
+absent; the owner's coordinator asked that the update run whether or
+not a drive is present). What that accepts: an internal drive on a
+Stor98 installed by hand that is absent at the update - taken out, or
+off in the firmware - is not seen, and finds the bundled release when
+it comes back. With another, the
+conservative choice is taken (`inst_s98_share`): when the installed file
+is another release than the bundled one, or cannot be read, the run
+makes **no Stor98 change at all** - `stor98.inf` is not staged, no
+`stor98` file goes into the 98 SE and ME install directory, no device is
+installed or updated and no setting is written - and says so, naming
+Stor98's readme for an update by hand; when it is the bundled release,
+tunnel drives are installed (the file stays what it is) but no setting
+is written, and that is said too. A run whose copy was made held stays
+held to its end, even when a later reading would lift the hold, since
+its copy has no Stor98. On 98 SE and ME the driver key of an unplugged
+drive is matched to the record through its `Enum\PCI` entry. On NT
+`stor98.inf` is not staged either, and no `/restage` reaches it, while
+another build of it is in the driver store and another Stor98 exists.
+The devnode of an internal drive on Stor98 is never updated or
+reconfigured by the tool.
+
+**98 SE and ME: the file, never a running device** (revision 23; owner,
+2026-10-19). Replacing a running `stor98.mpd` through Windows' device
+installer stopped 98 SE with "fatal exception 0E at 0028:FF09E842",
+every time, in the update over `3.0.0.0` and Stor98 `0.4.0.0` with a
+tunnel enclosure attached and mounted (the helper had run
+`DIF_SELECTBESTCOMPATDRV` and `CtlSetLddPath`). So on those systems a
+device Stor98 runs is never installed again, whatever the plan says of
+it (an update, a repair, `/force`). When the installed
+`IOSUBSYS\stor98.mpd` is an older release than the bundled one and the
+shared-file rule leaves the file free (`inst_s98_file_update`), the run
+replaces the file instead, whether or not a drive is present: the new
+`stor98.mpd` is written beside the old one as `STOR98.TMP` and compared
+with the package's, and its swap is asked in `WININIT.INI`'s `[rename]`
+section with 8.3 names, the mechanism the setup engine uses for a
+running `xhci98.sys` (read back by `wininit_pending`); the INF copy each
+Stor98 driver key names, in `INF` or `INF\OTHER`, is made the bundled
+`stor98.inf` (`s98_inf_refresh_9x`), and the install directory's copy
+is the package's through the flat copy. The run then asks for a shut
+down and a start, not a restart. A drive first plugged after that start
+binds to the new file by itself. The update waits for the user's word,
+one box on the Summary page and one question in the console, both
+"Please disconnect all external NVMe drives before proceeding" (Enter
+and `/yes` give N); without it Stor98 is left for a later run, out of
+this one whole - no copy of its files, no job, no setting, no record
+(exit 4). A Stor98 drive no helper job touches may be unplugged between
+the plan and Install, as the confirmation asks: the comparison of the
+plan with the devices read again leaves it out. The INF copies are made
+the bundled one's again by every later run while the file is the
+bundled release, so a refresh cut short is finished then.
+A device with no driver behind a tunnel is still installed by the
+helper. NT is unchanged: SetupAPI updates Stor98 there.
+
+What remains, said in the release notes and the package's readme:
+`stor98.inf` matches every NVMe controller (`PCI\CC_010802`), and it is
+staged on NT and in the install directory on 98 SE and ME so that a
+tunnel drive that appears later - the usual case, since the tunnel may
+come up only after the restart - installs, so Windows may still offer
+Stor98 for an internal NVMe drive that has no driver. The tool never
+selects one.
+
+**The UAS driver left out (revision 16).** Under `/nouas`, or its
+unticked box in the window (record 26 section 5.3), `xhciuas.inf` and
+`xhciuas.sys` are left out of the 98 SE and ME copy, since a copy on
+`DevicePath` would have the hardware wizard install it unasked; on NT
+`xhciuas.inf` is not staged. An `xhciuas` already installed stays as it
+is and gets no group verdict (`group_verdicts`), and an unfinished
+`/restage` that includes it is refused while it is left out.
+
+### 4.5 The connection manager alone (revision 13)
+
+The owner, 2026-10-19: a user whose Windows already has a USB 3 driver
+(Windows 8 and 8.1 carry Microsoft's own, and on 2000 to 7 a controller
+vendor's may run) may want the Thunderbolt 3 / USB4 connection manager
+without this package's USB drivers. What the connection manager needs of
+the USB drivers is record 21 section 3.5: nothing, on NT; the devices a
+tunnel brings are driven by whatever driver Windows binds to them.
+
+**Which systems** (`inst_usb_decide`, pure, host-tested case by case):
+
+| System | The USB drivers | `/cmonly` |
+|---|---|---|
+| 98 SE, ME | required, as before | refused: "the connection manager alone is not offered on Windows 98 SE and ME" |
+| 2000, XP, XP x64, Vista, 7 | in the run unless left out; can be left out only when the package carries the connection manager | leaves them out; refused when the package carries no connection manager |
+| 8, 8.1 | never in the run, never offered | accepted, and changes nothing |
+
+98 SE and ME keep them required because those systems have no USB 3
+driver of their own: a machine with the connection manager and no
+`xhci98.sys` has every xHCI controller dark, the dock's controller behind
+a tunnel included, and on those two systems the connection manager's
+re-enumeration counts on `xhci98.sys` starting on a controller a tunnel
+adds (record 21 section 3.1). On 8 and 8.1 the USB drivers are not
+offered: this package's USB drivers have never been read on those
+systems, Windows' own `usbxhci.sys` runs every xHCI controller there, and
+a second driver for the same class id is what the plan would then
+propose. A package without the connection manager's files is refused on
+8 and 8.1 ("this package carries no Thunderbolt or USB4 driver: there is
+nothing to install on Windows 8 or 8.1").
+
+**A run without the USB drivers** is the Thunderbolt question's N
+(section 8.5) applied to the other groups: `xhci98.inf` and `xhciuas.inf`
+are left out of the run - not planned, not staged, no verdict on their
+groups, no USB value asked (a `/set` of an `Xhci*` value of those INFs is
+refused, as one the run cannot apply) - and the Thunderbolt support is
+in the run unasked (section 8.5). The package check (section 4.2) is
+unchanged: the package must still be whole. The local copy is the whole
+package, as before, so a later run with the USB drivers ticked uses the
+same copy; on NT nothing searches that copy, so the INFs it holds and
+does not stage are offered to no device. An `xhci98.sys` or `xhciuas.sys`
+already installed is neither updated nor removed: its devices are not
+part of the run, its group gets no verdict, and the plan says "The xHCI98
+USB drivers already installed stay as they are (INSTALL.BAT /uninstall
+removes the whole package)". An unfinished `/restage` that owes
+`xhci98.inf` or `xhciuas.inf` is refused under `/cmonly` with "run it
+again with the USB drivers to finish it", as section 8.5 refuses one that
+owes the Thunderbolt INFs under N. The bundled Stor98 is not offered on 8
+and 8.1 (it is not one of its targets; the decision is the owner's); on
+2000 to 7 it stays what record 26 section 6.3 says, whichever drivers are
+in the run.
+
+**From one to the other.** A machine with the connection manager alone
+gets the USB drivers from a later run with them in it, which installs
+them as a fresh install (a controller another vendor's driver runs is
+foreign and left, decision D3). The way back, from the whole package to
+the connection manager alone, is the uninstall (section 9) followed by a
+run with `/cmonly`: a run that leaves the USB drivers out never removes
+them, because removing the controller's driver on an xHCI-only machine
+takes its USB keyboard and mouse, which only the uninstall's warning and
+typed word may do (D17). One Add/Remove Programs entry covers both
+(record 26 section 9.1), its name following what the machine has.
+
+**On Windows 8 and 8.1** the NT route of section 5 runs for the
+Thunderbolt group as on Vista and 7: the INFs' `.NTx86.6.0` and
+`.NTamd64.6.0` models sections (the highest decoration not above 6.2,
+section 5.2), the driver store and its trap (5.7, from 6.0 on), the
+filter's forced install (5.5), the mark service (9.5) and the test-signing
+note on x64 (5.10). None of it has been read on 8 or 8.1: no guest of
+either exists here. The x64 connection manager loads there only as on
+Vista x64 and 7 x64 - test-signing mode, which 8 and 8.1 let a user turn
+on only with Secure Boot off in the firmware setup, or a start with
+driver signature enforcement disabled (Advanced startup, Startup
+Settings) - because 64-bit Windows 8 enforces kernel-mode signatures and
+the package's x64 binaries carry the project's test signature at most
+(design record 19). The installer never signs anything and never changes
+a boot setting (D6).
 
 ## 5. The NT route: Windows 2000, XP, XP x64, Vista and 7
 
@@ -401,6 +874,39 @@ does not install it.
     started, or a stated reason why not.
 11. Report the restart (section 5.9), and, where old `XHCI98\` entries
     exist, one line naming `tools\xhcicln\` (section 5.11).
+12. **The marks' invariant** (revision 12; record 21 section 7.4, decision
+    M13), at the end of every run that got this far or stopped on the
+    way, whatever its verdict: a `LowerFilters` value naming `xhcicm`
+    exists only while the `xhcicm` service is registered and safe eject
+    is on. Safe eject is the `XhciCmSafeEject` in force once the run's own
+    writes are done, by task 42-A.17's precedence (revision 17; the owner,
+    2026-10-19): the machine-wide value when present (one that is not a
+    `DWORD` reads as the driver's default 1), else the value in the
+    driver key of every present device whose service is `xhcicm`, read
+    whatever this run plans for it, else the default 1; it is off only
+    when the value in force is 0 for every such device
+    (`inst_mk_safe_eject`). With the `xhcicm` service registered, safe
+    eject on and the Thunderbolt component in the run, on Windows 2000 to
+    8.1 (8 and 8.1 from revision 13), the mark service is installed or
+    updated and started (section 9.5); with it registered, safe eject on
+    and the component not in the run, nothing of the marks changes; with
+    it registered and safe eject off, or with no `xhcicm` service (an
+    update that ended without it, a name left on a machine where the
+    service was removed by hand), section 9.2's step 0 runs, so every
+    such name is removed, the CriticalDeviceDatabase's copies with them,
+    and the mark service, if any, deleted; with `xhcicm` registered and
+    safe eject off, the database's `UpperFilters` copies stay, being the
+    tunnel-port filter's and not a mark's (read on 7: an install with
+    `XhciCmSafeEject=0` had taken the filter INF's out before this rule),
+    while with no `xhcicm` service and at the uninstall both values go. So a later
+    `INSTALL /console /set XhciCmSafeEject=0` removes the service and its
+    marks at the end of that run, and `=1` installs it again at the end
+    of a run that carries the Thunderbolt component. A step 0 that fails
+    is a failure of the run, said with "restart Windows and run
+    INSTALL.BAT again". A state of the `xhcicm` service that cannot be
+    read changes nothing. Then, on NT, step 6a of section 9.2 runs (an
+    update's INF retires `xhcimsi` on Vista and 7), its failure a failure
+    of the run.
 
 Steps 6 to 8 stop at the first failure that leaves the order meaningless
 (a controller update failed), report what was done and exit 2; a failure
@@ -691,9 +1197,12 @@ its ports. So step 8 runs per INF, repeated while new targets appear (at
 most four passes): before each pass the system must settle, and the
 devices are read and planned again, with every safeguard of sections 5.4
 and 5.5 applied afresh; a timeout or a failed question stops the run with
-"finish or cancel the windows Windows shows, then run INSTALL.BAT again"
-(exit 4), and the next run continues from what it finds - a root hub
-whose wizard was cancelled is a device with no driver, installed then.
+"finish the windows Windows shows (Next through Finish, even when they
+find no driver; never cancel one), then run INSTALL.BAT again" (exit 4),
+and the next run continues from what it finds - a root hub whose wizard
+was finished with no driver is a device with no driver, installed then
+(on 98 SE a cancelled wizard takes the devnode away until the next start:
+record 27 section 5.1).
 
 **The settle** (read on the 2000 leg, 2026-10-15: the controller updated
 from `2.3.1.0`, a single `CMP_WaitNoPendingInstallEvents` answered "none"
@@ -732,13 +1241,38 @@ barrier and a fresh plan: a device the plan would still install - one the
 last allowed pass exposed - is listed as "not finished", the steps flag is
 set and the run ends with exit 4 and "run INSTALL.BAT again".
 
+**A parent's job and the devices below it** (revision 14, task 42-A.27;
+read on the 98
+SE update over `3.0.0.0` with an external hub, 2026-10-19: the root hub's
+reinstall restarted it, its hub was gone for about four seconds, and the
+hub's job, made at once, found it not present and left a step for a device
+the next start showed current). A parent is a controller or a device of
+the bus (root hub, hub, composite entry): its job may restart the devices
+below it. Within a pass, a parent's job that reached its device (on NT a
+call that succeeded; on 98 SE and ME any helper verdict but `not-present`
+and `refused`) is followed, when another job of the same pass comes after
+it, by a wait of its own: up to 15 seconds for the parent to be present
+again, then the settle above with no device expected (the quiet stretch
+alone, inside the 10-minute bound). And a job that finds its device not
+present (the helper's `not-present`; on NT `ERROR_NO_SUCH_DEVINST` from
+the call) after a parent's job earlier in the run waits up to 15 seconds
+for the device to come back, settles, and is made once more; only then is
+the device "not present" (a step) or the call a failure. A device that is
+really gone costs that one wait and no more. A wait there that fails or is
+cancelled stops the run as the barrier's does. The controllers' pass needs
+no wait of its own (one controller's job does not touch another, and the
+next pass begins with the barrier), and the later passes' devices begin
+behind the barrier too. The pure half holds the three decisions
+(`inst_parent_kind`, `inst_settle_after_job`, `inst_absent_retry`).
+
 - **XP and XP x64** show Found New Hardware for each, and the unsigned
   question; Windows 2000 can too (the leg above). The settle waits while
   the wizard waits for the user, and says so; answered, the run goes on
   and finds the devices current. **A timeout, or a failed question, stops
   the run** (exit 4) with
-  "finish or cancel the Found New Hardware windows, then run INSTALL.BAT
-  again": an installation in progress is not the tool's to compete with
+  "finish the Found New Hardware windows (Next through Finish, never
+  Cancel), then run INSTALL.BAT again": an installation in progress is not
+  the tool's to compete with
   (Microsoft's "Checking for In-Progress Installations"). The second run
   finds the new devnodes installed by the wizard, or without a driver if
   it was cancelled, and installs those.
@@ -825,6 +1359,15 @@ The run goes on if the user confirms. The tool never runs
 `bcdedit`. What the value holds in test-signing mode and on an F8 start is
 read on the legs (section 12).
 
+Revision 13 (section 4.5): in a run without the USB drivers the signature
+read is the x64 `xhcicm.sys`'s and the note names the connection manager
+(its device, the NHI, is then the one that shows the code), and on
+Windows 8 and 8.1 x64 the note adds that test-signing mode can be turned
+on only with Secure Boot off in the computer's firmware setup, and that
+the other way is Advanced startup's Startup Settings, "Disable driver
+signature enforcement", at every start. The same reading of
+`SystemStartOptions` is made; it is unread on 8 and 8.1.
+
 ### 5.11 `XHCICLN` stays the user's (owner, 2026-10-15)
 
 The tool never runs `XHCICLN`: no question, no switch, no call path.
@@ -854,7 +1397,14 @@ its set.
   has installed from, and records its original name under
   `HKLM\Software\Microsoft\Windows\CurrentVersion\Setup\SetupX\INF\OEM Name`
   (`REGSTR_PATH_INF_OEMNAME`, the Windows 98 DDK's `regstr.h`). Writing
-  into either by hand is driving the engine's own bookkeeping. Not used.
+  into either by hand is driving the engine's own bookkeeping. Not used
+  to install. (Revision 20) The uninstall that deletes one of this
+  package's copies there (record 26 section 9.3 step 4, Stor98's owned
+  copies too) deletes the `OEM Name` value named by that copy's path, or
+  by its short alias, and no other value (`inst_oem_name_ours`): read on
+  the 98 SE and ME uninstall legs of 2026-10-19, which left
+  `C:\WINDOWS\INF\OTHER\Yeo Kheng Mengxhci98.inf` = `xhci98.inf` naming
+  a deleted file.
 - **`DevicePath`** is the documented knob:
   `HKLM\Software\Microsoft\Windows\CurrentVersion`, value `DevicePath`,
   "default search path for .INFs" (`REGSTR_VAL_DEVICEPATH`, the Windows 98
@@ -1044,7 +1594,11 @@ these systems.
 | `/set Name=Value` | answer one registry question, repeatable; validated against the value table and the system (section 8.1); applies even where the question would not be asked |
 | `/force` | reinstall a current device, and install over a newer group (section 5.4) |
 | `/thunderbolt` | include the Thunderbolt 3 / USB4 support without asking (section 8.5) |
+| `/cmonly` | (revision 13) the connection manager alone: the USB drivers left out of the run, the Thunderbolt support in it unasked (section 4.5); refused on 98 SE and ME, with `/uninstall`, `/devices` and `/eject`, and where the package carries no connection manager; on 8 and 8.1 every install run is one |
+| `/stor98` | include the bundled Stor98 without asking (record 26 section 6.4); refused without `/thunderbolt` or `/cmonly`, since Stor98 is part of the Thunderbolt 3 / USB4 support (owner, 2026-10-19), and with `/uninstall`, `/devices` and `/eject`; never offered on 8 and 8.1. Since revision 23 it is what `/thunderbolt /yes` does anyway |
+| `/nostor98` | (revision 23) leave the bundled Stor98 out of a run that has the Thunderbolt support. The console follows the window: Stor98 is chosen with the Thunderbolt support (owner, 2026-10-19), so `/thunderbolt` alone implies Stor98 - asked with Enter for Y, unasked under `/yes` - unless `/nostor98` is given; `/thunderbolt` itself stays explicit (section 8.5). Refused with `/stor98`, `/uninstall`, `/devices` and `/eject` |
 | `/to <path>` | the install directory (section 9.6) without asking; refused with `/uninstall`, `/devices` and `/eject`, and checked as a typed answer is (a path that fails refuses the run, exit 1) |
+| `/nouas` | leave the UAS disk driver out of the run (owner, 2026-10-19; record 26 section 5.3): `xhciuas.inf` neither staged nor installed, nor copied to `DevicePath` on 98 SE and ME, and an `xhciuas` already installed left as it is; refused with `/uninstall`, `/devices` and `/eject` |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
@@ -1105,7 +1659,9 @@ section 4 gains a row when a reading rests on one).
 Failed, restart and steps are three flags; the code is 2 when failed is
 set, else 4 when steps is set, else 3 when restart is set, else 0. The
 console says every flag that is set, so a 2 or a 4 that also needs a
-restart says so. `INSTALL.BAT` passes the code on.
+restart says so. `INSTALL.BAT` passes the code on; `SETUP.EXE` does not
+wait for the window and returns 0 once it is started (revision 22,
+record 26 section 2).
 
 **The last line before the exit code** (owner, 2026-10-15): when the run
 changed anything - a driver installed, updated or removed, a filter added
@@ -1194,8 +1750,9 @@ user-visible effect, off or on by default for a reason the user can judge
 | `XhciInterruptMode` | `xhci98.inf`, the controller's | any xHCI controller | 0, 1, 2; 3 on Vista and 7 only | 0, 1, 2; 3 on Vista and 7 only (it fails the start elsewhere) | automatic, line only, polling always, message only |
 | `XhciPollFineTimer` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | a finer system clock while polling |
 | `XhciSelectiveSuspend` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | put idle devices to sleep (off by default; read on the release notes' terms) |
-| `XhciSilentInstall` | `xhci98.inf`, the controller's | 98 SE and ME with an xHCI controller (owner, 2026-10-15); never on 2000 and later | 0, 1 | 0, 1 on 98 and ME; refused on NT | install hubs, boot keyboards and mice and Bulk-Only storage with no Add New Hardware wizard; on is `tools\silent\silent-on.bat`'s effect, off `silent-off.bat`'s (section 8.4) |
+| `XhciSilentInstall` | `xhci98.inf`, the controller's | 98 SE and ME with an xHCI controller (owner, 2026-10-15); never on 2000 and later, where the window shows it greyed (record 26 section 5.4) | 0, 1 | 0, 1 on 98 and ME; refused on NT | install hubs, boot keyboards and mice and Bulk-Only storage with no Add New Hardware wizard; on is `tools\silent\silent-on.bat`'s effect, off `silent-off.bat`'s (section 8.4) |
 | `XhciForceBulkOnly` | `xhci98.inf`, the controller's | any xHCI controller | 0, 1 | 0, 1 | Bulk-Only instead of UAS for a disk that offers both, from its next connection; a UAS-only disk is not affected |
+| `XhciFastPollFsLs` | `xhci98.inf`, the controller's | never (owner, 2026-10-19; the window's "Advanced...") | - | 0, 2, 3, 4 (1 is not a mode) | poll a mouse faster than 1000 Hz, with SweetLow's hidusbf: off (0); a root-port mouse set to 31/62 Hz in hidusbf at 2000/4000 Hz (2) or 4000/8000 Hz (3); the rate the client chooses, codes 128 to 143 (4). Its caution: outside the xHCI specification for Low and Full Speed, read at the controller's start so restart after changing it, and with 4 the value set and Windows restarted before the filter's code |
 | `XhciCmMode` | `xhcicm.inf`, the NHI's | a present NHI `xhcicm.inf` matches | 0, 1 | 0 to 3 | the connection manager off or automatic (2 and 3 are the record 21 overrides, `/set` only) |
 | `XhciCmApprove` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | approve Thunderbolt devices automatically |
 | `XhciCmSafeEject` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | offer Safely Remove for the dock's devices |
@@ -1218,7 +1775,10 @@ unchanged; and, by the owner's decision of the same day, `XhciCmReenum`
 `XhciCmUsb3Tunnel` and `XhciCmLaneBonding` (USB4 diagnostics whose
 defaults are the point) and `XhciCmPreOsCleanup` (an override of design
 record 22 section 9's tunnel preservation), settable with `/set
-Name=Value` only. Any of them stays settable by hand, as today.
+Name=Value` only; and, by the owner's decision of 2026-10-19,
+`XhciFastPollFsLs` (tuning for hidusbf, outside the specification at Low
+and Full Speed), settable with `/set Name=Value` and the window's
+"Advanced..." only. Any of them stays settable by hand, as today.
 
 Each value's default is taken from its INF's `AddReg` line, not from the
 table; a value the INF does not write is not asked, and the host suite
@@ -1299,6 +1859,13 @@ after changing it; `XhciForceBulkOnly` is read as each device is connected, and 
 2000 and later a disk already installed keeps its driver until it is
 uninstalled in Device Manager and plugged in again; `XhciInterruptMode` 1
 and 3 refuse a controller Windows gives no line or no message.
+**Revision 23 (owner, 2026-10-19):** a run that will write `XhciCmMode`
+0 says so before its confirmation, "*** Thunderbolt 3 and USB4 will be
+turned off (XhciCmMode 0). ***", and the window's Summary carries the
+same line at the head of its list (record 26 section 5.7;
+`inst_cm_mode_off`, `instCmOffText`): on real hardware that night an
+accidental mouse-wheel change set it to 0 and turned Thunderbolt off
+with nothing said.
 Two controllers with different values are listed apart and asked once: the
 answer goes to both. Enter keeps each device's value. An answer outside the
 allowed set is asked again; end of input keeps every value.
@@ -1344,17 +1911,29 @@ is off.
 
 Before the plan is shown, after the first reading of the devices, the tool
 asks "Install Thunderbolt 3 / USB4 support?", on every system, whenever the
-package carries the Thunderbolt driver (`xhcicm.inf`, `nt\xhcicmf.inf`,
-`xhcicm.sys`). The decision is a pure function (`inst_tb_decide`,
+package carries the Thunderbolt driver (`xhcicm.inf`, `nt\xhcicmf.inf`
+or on x64 `xhcicmf.inf`, `xhcicm.sys`). The decision is a pure function (`inst_tb_decide`,
 host-tested case by case):
 
 | Situation | Asked | Enter, and `/yes` |
 |---|---|---|
-| a device `xhcicm.inf` matches is present (section 8.2's detection) | yes | Y |
+| a device `xhcicm.inf` matches is present (section 8.2's detection) | yes, the controller named | N (revision 23; Y until then) |
 | none is present | yes - some laptops show their controller only while a device is plugged in, or only with a BIOS setting (the P14s with Assist on and pre-boot support off) | N |
 | `/thunderbolt` | no | Y, present or not |
+| the USB drivers out of the run (`/cmonly`, Windows 8 and 8.1; revision 13, section 4.5) | no | Y, present or not |
 | `/list` | no; the question and its default are shown | the default |
 | the package carries no Thunderbolt driver | no | - |
+
+**Revision 23 (owner, 2026-10-19):** the support is labelled
+"(experimental)" in the question's heading and on the window's box, and
+is never chosen unasked: Enter and `/yes` give N whether or not a
+controller is found, and `/thunderbolt` (or the window's box) is the
+way in. The heading's next line says whether a controller was found,
+"A Thunderbolt 3 / USB4 controller was found: <name>", or that none was
+and why that can be. The connection manager alone (`/cmonly`, 8 and
+8.1) is unchanged: there the support is all the run installs. An update
+over an install that has `xhcicm` therefore leaves it out unless asked,
+and N keeps the installed Thunderbolt driver as it is (below).
 
 The text says, in plain terms, that a device plugged into that port is then
 approved automatically and can reach the computer's memory, names
@@ -1366,7 +1945,7 @@ it is.
 - **Y** with a controller present: the run as before - its devices planned
   and installed (the NHI, and the tunnel-port filter on NT), the INFs
   staged, the `XhciCm*` questions asked.
-- **Y** with none present: on 2000 to 7 `xhcicm.inf` and `nt\xhcicmf.inf`
+- **Y** with none present: on 2000 to 7 `xhcicm.inf` and the filter INF
   are staged with the rest (section 5.6), so Windows installs the NHI by
   itself when the controller appears; the filter, which the tunnel ports
   take only by an install the tool forces on XP and 7 (record 21 section
@@ -1396,6 +1975,8 @@ it is.
   `xhcicm.inf`.
 
 
+## 9. The uninstall
+
 ### 9.1 The warning
 
 `INSTALL.BAT /uninstall` prints first, before anything is read:
@@ -1408,6 +1989,22 @@ another driver is installed. Have a PS/2 keyboard, a laptop's built-in one,
 or a USB controller another driver runs, before you go on.
 Type REMOVE and press Enter to go on; anything else cancels.
 ```
+
+Where the `xhci98` service is read as not registered and `xhcicm`'s as
+registered (revision 13: a machine that has the connection manager alone;
+read before anything else, and on NT only), the first lines read
+instead:
+
+```
+*** This removes the xHCI98 Thunderbolt 3 / USB4 connection manager. ***
+Devices connected through a Thunderbolt or USB4 port stop working when it
+is removed. Close every program that uses one, and save your work, before
+you go on.
+```
+
+and the question "Remove the connection manager?"; the typed word is the
+same. Any other reading, an unreadable one included, gives the first
+text.
 
 Only `REMOVE` goes on. With no console answer (end of input) the tool
 refuses unless `/yes` is given, which is for the legs and scripts; `/yes`
@@ -1433,6 +2030,49 @@ next starts; a failure or a deferred result stops the destructive phases
 after it, reports what was done, and tells the user to restart and run
 `INSTALL.BAT /uninstall` again, which resumes from what is left.
 
+0. **The safe-removal marks** (revision 12; record 21 section 7.4,
+   decision M14), before anything of `xhcicm` goes. The mark service
+   `xhcimark`, if registered, is stopped (`ControlService`,
+   `SERVICE_STOPPED` within 30 s); the marks' write mutex
+   `Global\Xhci98MarkWrite` is taken (opened, or created with the shared
+   security of section 9.5's locks); every PCI devnode, present or not
+   (`SetupDiGetClassDevsA` with the `PCI` enumerator and
+   `DIGCF_ALLCLASSES`, no `DIGCF_PRESENT`), has its `SPDRP_LOWERFILTERS`
+   read, and `xhcicm` is removed from each value that names it, the other
+   names kept in order and the value deleted with a zero length when
+   nothing else is in it, each read back; and every entry of
+   `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase` has
+   `xhcicm` taken out of its `LowerFilters` and its `UpperFilters` the
+   same way, every entry and not only the ids the filter INF names (the
+   copies Windows makes there of a boot-critical device's own filter
+   values when it installs it: a marked unit's `LowerFilters` into
+   `pci#cc_0604` or `pci#cc_010802`, the filter INF's `UpperFilters` into
+   the tunnel port's id - read on 2000 on 2026-10-19, then on XP and 7 x86
+   for a marked bridge's driver installed again; roadmap-usb4 42-A.24 -
+   which would otherwise give every new bridge or NVMe controller, a
+   boot disk among them, a filter that no longer exists), a key that cannot
+   be read whole or a removal that does not read back failing step 0 as a
+   device's does. Then the service's `Marks`
+   records go, then its `system32` copy (one in use renamed to
+   `<name>.DEL` and that name deleted at the restart, so a later install
+   of the same name is not deleted with it; an earlier `.DEL` deleted or
+   its deletion asked again), and only then the service itself
+   (`DeleteService`). A stop that times out, a listing
+   that does not reach its end, a value that cannot be read, a removal
+   that does not read back, or a copy that can be neither deleted nor
+   scheduled for deletion fails step 0: the run stops before step 1 with
+   "steps left", keeping `xhcicm`'s service and file and the mark
+   service's registration (and, when the marks themselves were not all
+   removed, its records; a copy that fails after them leaves the records
+   already deleted), and the next run resumes from what is left. The
+   database is taken first, as the source new devices take the name from,
+   and once every value is out both the database and the devices are read
+   once more before the records and the service go, since Windows takes no
+   lock of the installer's and a device found meanwhile may have taken the
+   name from a copy. Step 0 needs neither a registered `xhcicm` nor a
+   record, so the uninstall of a 3.1.0.0 package cleans what a test build
+   left; `XHCICLN` only lists such values and points at it. The same step runs at the end of any install or update that
+   leaves no `xhcicm` service (section 5.1 step 12).
 1. **The filter hosts.** For each: `xhcicm` is removed from its
    `UpperFilters` multi-string and the rest kept in order
    (`SetupDiSetDeviceRegistryPropertyA(SPDRP_UPPERFILTERS)`; a value left
@@ -1495,7 +2135,9 @@ after it, reports what was done, and tells the user to restart and run
    present or not, has its driver key's `InfPath` read, and an INF any of
    them names, or any `InfPath` that cannot be read, is kept and stops
    the run; then the `.pnf`, then the `.inf`.
-5. **The services** `xhci98`, `xhciuas`, `xhcicm`, `xhcihlpr` and the
+5. **The services** - first the inventory of step 0 read once more, a
+   name left (or a listing that cannot be read) stopping the run before
+   `xhcicm`'s service and file go - then `xhci98`, `xhciuas`, `xhcicm`, `xhcihlpr` and the
    `2.3.x` `xhcimsi`, each with `DeleteService` (advapi32), the handle
    closed at once. Microsoft's documentation: the service is deleted once
    it has stopped **and** every handle to it is closed - for a running
@@ -1508,6 +2150,30 @@ after it, reports what was done, and tells the user to restart and run
    scheduled with `MoveFileEx(..., MOVEFILE_DELAY_UNTIL_REBOOT)` and
    reported as pending. A service whose deletion failed keeps its file.
    Then the local copies and the `/restage` work file (section 4.4).
+6a. **The CriticalDeviceDatabase's service entries** (revision 17): when
+   Windows installs a boot-critical device it writes an entry under
+   `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase` for
+   its ids and class with its `Service`; left after the uninstall, the
+   next install of that device starts from a service that no longer
+   exists (read on 2000: the NHI came back at Code 19 through
+   `pci#cc_0c0340` and `pci#ven_8086&dev_15bf` naming `xhcicm`; the same
+   entries were left on XP and 7). Every entry whose `Service` names, case
+   ignored, a service of the package that this run removed or marked for
+   deletion, or that the service manager reads absent or marked now
+   (`xhci98`, `xhciuas`, `xhcicm`, `xhcihlpr`, `xhcimsi`, and `stor98`,
+   which is gone only when Stor98's own removal took its service, so a
+   Stor98 that was there before the package or that a device still uses
+   keeps its entries), is deleted with `RegDeleteKeyA` and read back gone
+   (`inst_cddb_service_gone`). An entry naming another driver's service
+   is never touched. An entry or a `Service` value that cannot be read,
+   or a deletion that does not read back, fails the step as step 6's
+   failures do; `/list` names the entries it would delete. Read on 2000
+   in 42-A.24's leg: the uninstall deleted the two entries naming
+   `xhcicm`, kept `pci#cc_010802` naming the Stor98 a drive still used,
+   and after the restart the NHI came back with no driver (Code 1, as
+   before the package was first installed, the Found New Hardware wizard
+   finding none), not Code 19. `xhci98` and `xhciuas` left no entry on
+   that 2000 disk.
 
 ### 9.3 What it never removes
 
@@ -1529,9 +2195,11 @@ system's `CFGMGR32.DLL`). So the tool:
 
 1. removes what it owns: its entries in `DevicePath`, then - only once
    that write succeeded, so no search path is left naming a removed
-   source - the files each copy's `XHCIINST.LST` names under
-   `%windir%\XHCI98`, and each directory if it is then empty (a failed
-   `DevicePath` update keeps the copies and ends with exit 2);
+   source - the files the package copy's `XHCIINST.LST` names in the
+   install directory (section 9.6) and those each earlier build's copy
+   names under `%windir%\XHCI98`, and each directory if it is then
+   empty (a failed `DevicePath` update keeps the copies and ends with
+   exit 2);
 2. lists the INF files in `INF` and `INF\OTHER` whose `Provider` is this
    package's and that install one of its drivers (the rule of section 9.2
    step 4) - the device installer's own copies, and the plain copies the
@@ -1578,7 +2246,12 @@ deferred on NT, and `WININIT.INI` is never edited.
 - **Install and update.** Every run that passes its confirmation, on both
   routes, after the drivers (NT: after the results and `/restage`'s work
   file; 98 SE and ME: after the registry values, before the printed
-  steps), and under `/list` as one line of what would be done.
+  steps), and under `/list` as one line of what would be done. (Revision
+  20) That line says what the Run value is now - present, absent, or
+  holding other data or unreadable - and then what a run with the same switches would
+  do to it (`inst_tray_list_text`); it never says "started at login" with
+  no Run value (the 98 SE leg of 2026-10-19, after an update with the
+  tool unticked).
   1. A package without `tools\xhcitr\<name>` (an older or a development
      one) is said in one line, and nothing else of the tool is touched.
   2. The file is copied when it is missing, or when the package's version
@@ -1635,6 +2308,28 @@ deferred on NT, and `WININIT.INI` is never edited.
   `SetSecurityDescriptorDacl`, `FreeSid`) are looked up in
   `advapi32.dll` at run time on NT only, so the import table and 98 SE's
   advapi32 are untouched.
+
+**The safe-removal mark service** (revision 12; record 21 section 7.4,
+revision 3, decision M8), Windows 2000 to 7, and 8 and 8.1 from
+revision 13 (section 4.5), never 98 SE or ME. Its executable is never
+in the install directory: a program the service controller starts as
+`LocalSystem` sits where only administrators and the system can replace
+it. The tool copies the package's `tools\xhcimark\XHCIMARK.EXE` (32-bit
+Windows) or `XHCIMK64.EXE` (x64, into the 64-bit `system32`) to
+`%SystemRoot%\system32\<name>.TMP`, compares it byte for byte, moves it
+over `<name>.EXE` with `MoveFileExA(MOVEFILE_REPLACE_EXISTING)` (the
+`.TMP` route above, applied to that directory) and compares the result
+again: a copy that is not the package's is never registered. A running
+service is stopped first (`SERVICE_STOPPED` within 30 s, or the service is
+left as it was and the run fails) and started again after. A new service
+is `CreateServiceA` `xhcimark`, "xHCI98 Thunderbolt safe-removal mark
+service", `SERVICE_WIN32_OWN_PROCESS`, `SERVICE_AUTO_START`, the
+`LocalSystem` account, with the quoted full path; an existing one has the
+same set again with `ChangeServiceConfigA`. The tool makes
+`system32\LogFiles\xhci98\` (the directory's default rights) for the
+service's log, then starts it. The uninstall's step 0 (section 9.2) stops
+and deletes it with its copy; the move of the install directory does not
+concern it.
 
 ### 9.6 The install directory (owner, 2026-10-16; revision 10)
 
@@ -1741,14 +2436,24 @@ and the tool links the same file:
 - `SystemStartOptions`' test-signing word;
 - the switch parser, `/set`'s validation and section 7.4's exit code,
   last line and confirmation wording;
-- section 5.8's settle state machine and busy-retry rule, section 5.9's
+- section 5.8's settle state machine, busy-retry rule and (revision 14)
+  parent rule, section 5.9's
   device state text, and section 5.6's "staged already" test;
 - the registry value table, its applicability (section 8.2) and its
   answer parser;
 - (revision 10) the console's word wrap and width, the questions' text
   (`inst_value_question`, `inst_yesno_question`, `inst_dir_question`),
   the install directory's checks and default, and `DevicePath`'s removal
-  of a chosen directory's copies.
+  of a chosen directory's copies;
+- (revision 13) the system's kind (`inst_os_kind`: a full target, the
+  connection manager's alone, refused) and its name, the USB drivers'
+  decision (`inst_usb_decide`, section 4.5), the Add/Remove Programs name
+  and the uninstall warning by what is registered, and the models
+  section chosen for 6.2 and 6.3.
+- (3.1.0.0) the filter INF's place per architecture (`inst_cmf_rel`:
+  `nt\xhcicmf.inf` on x86, `xhcicmf.inf` at the flavour directory's root
+  on x64), its `.PNF` (`inst_cmf_pnf`) and the place the Have Disk text
+  names (`inst_cmf_where`).
 
 The suite reads `src\xhci98.inf`, `src\xhci98-amd64.inf`, the two UAS INFs
 and, once task 39-A.1 has merged, the `src\cm\` INFs, and checks that each
@@ -1855,6 +2560,9 @@ the user.
 
 - **D1** The executables in `tools\xhciinst\`, `INSTALL.BAT` at the root;
   one batch file, the uninstall behind `/uninstall` (section 2).
+  Revision 22 (the owner, 2026-10-19): `SETUP.EXE` beside it at the root
+  is what a person runs, `INSTALL.BAT` the command line's and scripts'
+  (record 26 W17); still one batch file.
 - **D2** Windows 98 SE and ME through `DevicePath` and the local copy in
   in this package's own directory under `%windir%\XHCI98\`, which
   `DevicePath` names in place of an earlier copy's, never `INF\OTHER` or
@@ -1895,6 +2603,28 @@ the user.
   package's by the per-device driver-node route, never by an ID-wide
   call; a disconnected one stops the uninstall until it is connected
   (section 9.2).
+- **D16** (revision 12) The marks are kept by the state a run ends in,
+  not its verdict (record 21 section 7.4, decisions M13 and M14): the
+  mark service is installed only from this package's `tools\xhcimark\`
+  into `system32`, only with `xhcicm` registered and the Thunderbolt
+  component in the run, on 2000 to 7; every name is removed, step 0
+  first, whenever no `xhcicm` service is left; and the Advanced dialog
+  does not yet offer the service's `Restart` (it is set by hand under
+  `Services\xhcimark\Parameters`).
+- **D17** (revision 13; the owner's request of 2026-10-19, the choices
+  below the orchestrator's) The connection manager alone: offered on 2000
+  to 7 by `/cmonly` or the window's box, the only install on 8 and 8.1,
+  refused on 98 SE and ME; a run without the USB drivers never updates
+  or removes an installed `xhci98.sys`, and the way back from the whole
+  package is the uninstall and a run with `/cmonly` (section 4.5). Not
+  taken: removing the USB drivers in an install run that leaves them out
+  (it would take an xHCI-only machine's keyboard without the uninstall's
+  warning).
+- **D18** (revision 13) Windows 8 and 8.1 admitted for the connection
+  manager alone, read through `RtlGetVersion`; 10 and later refused as
+  before; the bundled Stor98 not offered on 8 and 8.1 (section 4.5).
+- **D19** (revision 13) The mark service on 8 and 8.1 as on 2000 to 7
+  (section 9.5).
 
 ## 14. Open, and the risks
 
@@ -1910,6 +2640,13 @@ the user.
   section 8 as they stand on 2026-10-15.
 - `SystemStartOptions` as the test-signing signal is a reading to take,
   not a documented contract; the tool's note is advice, never a refusal.
+- Windows 8 and 8.1 (revision 13) have no guest here: the connection
+  manager's install, its filter's (whose INF includes `machine.inf`'s
+  `PCI_DRV` sections, read on 2000, XP and 7 only), the driver's imports
+  (the import gate holds the x86 driver to Windows 98's evidence and
+  Windows 2000's exports and the amd64 driver to NT 5.2's; Vista and 7
+  are read in guests; no export table of 8 is in the tree; record 21
+  section 3.5) and the mark service are unread there.
 
 ## 15. Files
 
@@ -1920,6 +2657,7 @@ the user.
 | `xhciinst\xhciinst.rc`, `xhciinst.manifest` | the elevation manifest |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the two builds; the self-test and the import check |
 | `xhciinst\INSTALL.BAT` | staged at the package root |
+| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, staged at the package root (revision 22; record 26 section 2) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt` |
 | `test\test_inst.c` | the host suite |
 | `scripts\build-driver.cmd`, `scripts\package\make-release.ps1`, `scripts\package\test-package.ps1`, `test\run-host-tests.cmd`, `.gitignore` | wiring |

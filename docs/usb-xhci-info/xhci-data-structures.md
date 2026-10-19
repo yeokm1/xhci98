@@ -68,7 +68,7 @@ Additional rules:
 | 0x10 | 4 | HCCPARAMS1 | AC64 `0`, BNC `1`, CSZ `2`, PPC `3`, PIND `4`, LHRC `5`, LTC `6`, NSS `7`, PAE `8`, SPC `9`, SEC `10`, CFC `11`, MaxPSASize `15:12`, xECP `31:16` |
 | 0x14 | 4 | DBOFF | Doorbell array offset from BAR0, bits `31:2` (low 2 bits RsvdZ - mask them) |
 | 0x18 | 4 | RTSOFF | Runtime registers offset from BAR0, bits `31:5` (low 5 bits RsvdZ - mask them) |
-| 0x1C | 4 | HCCPARAMS2 | U3C `0`, CMC `1`, FSC `2`, and higher bits this driver does not use (spec 5.3.9, Table 5-16 p.355-356; only bits 0-2 are transcribed here). Revision 1.2c defined two more, DIC `11` and E2V2C `12` (both RO, eUSB2 features); nothing here reads them |
+| 0x1C | 4 | HCCPARAMS2 | U3C `0`, CMC `1`, FSC `2`, CTC `3`, LEC `4`, CIC `5`, ETC `6`, ETC_TSC `7`, GSC `8`, VTC `9`, DIC `11`, E2V2C `12` (spec 5.3.9, Table 5-16 p.355-357; the whole field list is section 10.2's, below). The driver reads FSC and LEC (`XHCI_HCCPARAMS2_LEC`, bit 4); nothing here reads the others |
 
 Notes:
 
@@ -434,6 +434,14 @@ DW3 (control). DW3 always has Cycle `0` and TRB Type `15:10`.
 | 11 | Address Device Cmd | Command | | 37 | Host Controller Event | Event |
 | 12 | Configure Endpoint Cmd | Command | | 38 | Device Notification Event | Event |
 | 13 | Evaluate Context Cmd | Command | | 39 | MFINDEX Wrap Event | Event |
+
+The table names the types this driver uses. Table 6-91 (p.470-471, verified)
+gives commands 9 to 25: besides those above, 18 Force Event (virtualization
+only), 19 Negotiate Bandwidth, 20 Set Latency Tolerance Value, 21 Get Port
+Bandwidth, 22 Force Header, 24 Get Extended Property and 25 Set Extended
+Property (19-21, 24 and 25 marked optional); 26-31 are reserved. The
+command ring admits 9 to 23 only (`XHCI_TRB_TYPE_COMMAND_LAST`), since the
+driver issues neither of the last two.
 
 ### Transfer TRBs
 
@@ -1064,52 +1072,48 @@ falls through to `finish_td` whether or not the event named `td->end_trb`. In
 the trust order of `docs/contributing/failure-diagnosis.md` that is #2
 outranking #3, this file's reading of the spec.
 
-Reading the counters. `XHCI_EXTENSION.MidTdShortRetiresTotal` counts how often
-the departure fires. The conformance verdict is `MidTdDeferralsTailedTotal`
-against `MidTdDeferralsTotal`:
+Reading the counters. What the code counts is per queue: each
+`XHCI_TRANSFER_QUEUE` carries `MidTdShortRetires` (the departure fired),
+`MidTdDeferrals` and the three that end a deferral - `MidTdDeferralsTailed`,
+`MidTdDeferralsTailedSpurious` and `MidTdDeferralsLost` - and, for the
+unclosed window, `MidTdShortTails`, `MidTdTailsDropped` and
+`MidTdTailsCensored`, all written by `src/xhci_xfer.c` and pinned by
+`test/test_xfer.c`. The conformance verdict is read on one queue:
 
     tailed == deferrals          -> conforming: every promised tail arrived
-    retired > 0 with *both* the   -> one event only, which is QEMU's xHC
+    retires > 0 with *both* the  -> one event only, which is QEMU's xHC
     tailed counters 0
 
-`MidTdDeferralsTailedSpuriousTotal` is a third reading between those two: a
+`MidTdDeferralsTailedSpurious` is a third reading between those two: a
 second event did arrive on the TD's last TRB but carried Success where p.175
 requires Short Packet, a case Linux carries explicit handling for. It answers
 the verdict's question with yes while failing the conformance test, so it is
 counted apart rather than folded into either neighbour; folding it into `Lost`
 would make a two-event controller indistinguishable from a teardown.
 
-`MidTdDeferralsLostTotal` is neither verdict: a teardown, an abort, or a settle
-whose retire the ring refused ended the observation. The two refusal counters
-(`MidTdRefusedRetires`, `MidTdRefusedRetiresUnarmable`) are related but are not
-a decomposition of it. They also count event-time divergences, which never
-armed a deferral and so move them without moving `Lost`, and subtracting can
-underflow. `MidTdDeferPending` is the fifth term; the five partition the
-deferrals, and `XhciSlotDrainSettled` checks that identity at the one instant
-it can be checked, setting the sticky `MidTdDeferAccountingBroken` if it does
-not hold.
+`MidTdDeferralsLost` is neither verdict: a teardown, an abort, or a settle
+whose retire the ring refused ended the observation. The deferrals still armed
+on the queue are the fifth term, counted by walking it, and the five partition
+`MidTdDeferrals`. The unclosed window's measure is `MidTdShortTails` against
+`MidTdShortRetires`, which is a reading only while `MidTdTailsDropped` (a tail
+index evicted from the queue's fixed slot ring) is 0.
 
-The unclosed window has its own measure: `MidTdShortTailsTotal` against
-`MidTdShortRetiresTotal`. That is a reading at all only while the sticky
-`MidTdVerdictVoided` is 0 and the derived `still outstanding` term is 0. The
-gate is the sticky flag and not the two totals `MidTdTailsDroppedTotal` and
-`MidTdTailsCensoredTotal`, because both totals are wrapping `ULONG`s and "== 0"
-stops being proof after 2^32 of them (`src/xhci.h` says so where they are
-declared).
+Nothing under the HCD sums those per-queue counters or prints them. The
+extension's `*Total` fields named for them (`MidTdShortRetiresTotal`,
+`MidTdDeferralsTotal` and the rest), the refusal pair `MidTdRefusedRetires`
+and `MidTdRefusedRetiresUnarmable`, `MidTdDeferPending`, and the sticky
+`MidTdDeferAccountingBroken` and `MidTdVerdictVoided` belonged to the
+miniport's slot layer and print site (`xhci_slot.c`, `xhci_dispatch.c`,
+deleted 2026-10-02); nothing in the tree writes them, so a snapshot reads
+them as a permanent 0, not as a measurement, and `src/xhci.h` keeps them for
+the layout alone. A verdict on an HCD target therefore needs a queue's own
+counters, which no published channel carries today.
 
-`src/xhci_dispatch.c`'s print site requires `outstanding` 0 as the
-other half, since a verdict taken while records are live in a queue reads a
-tail that has not arrived yet as one the controller withheld. The two totals
-still say what was dropped and why. A conforming controller answers in-band and
-records no tail at all, so censoring at zero on such a machine is the check
-that the deferral is working.
-
-From the bulk IN measurement (runtime, both targets): the records retired by
-the settle satisfy a four-state identity, `retired == tails + dropped +
-censored + outstanding`, which closes to zero after the teardown fold on both
-targets. `MidTdTailsDroppedTotal` is folded by `xhciDevFoldTailsDropped` at
-both of its sites so the two cannot drift; a run in which the identity does not
-close is a run whose dropped term has a mover the fold is not bracketing.
+An earlier bulk IN measurement on both targets (runtime) was taken through
+those totals and a fold (`xhciDevFoldTailsDropped`) that no longer exist: the
+records retired by the settle satisfied a four-state identity,
+`retired == tails + dropped + censored + outstanding`, which closed to zero
+after the teardown fold. It describes the code of its day, not the HCD.
 
 `DrainBoundHits` = 0 is structurally unreachable in this vehicle rather than a
 negative result: the bounded exit needs `XHCI_DPC_MAX_EVENTS` =
@@ -1739,7 +1743,7 @@ needs LWS = 1 in the same write.
 | 10 | Compliance Mode | USB3 ports only: sets the port's internal CTE flag, which **enables** the Polling-to-Compliance transition; 4.19.1.2.4.1 (p.281-282) honours it only in the Disconnected state. Not an immediate transition. The driver never writes it |
 | 11 | Test Mode: on a USB3 port, **the Loopback link state** (footnote 89) | ignored |
 | 12-14 | reserved | ignored |
-| 15 | Resume | USB2 ports only |
+| 15 | Resume: on a USB2 port the resume substate; on a USB3 port too, after a device-initiated U3 exit, which software ends by writing 0 (4.15.2.1, p.255-256, steps 10 and 12 d; footnote 53) | USB2 ports only (a USB3 host-initiated resume writes 0: 4.15.2.2, p.256, step 14 f) |
 
 `src/xhci.h` names them `XHCI_PLS_*`; every value there matches.
 
@@ -1873,8 +1877,8 @@ is refused at SELECT_CONFIGURATION or SELECT_INTERFACE
 (`XHCI_PIPE_ESIT_REFUSED`, counted as `superspeed: endpoints refused - ESIT`),
 never admitted and never truncated (from the Phase 29 review). It also refuses one whose interval needs more than four bursts
 of its packet size and Max Burst (4096 bytes in 512-byte packets at burst 0
-is eight), because TBC is two bits without ETC (4.11.2.3, p.197; round 2,
-finding 2). Lifting the limit means multi-page isochronous packets - several
+is eight), because TBC is two bits without ETC (4.11.2.3, p.197; Phase 29).
+Lifting the limit means multi-page isochronous packets - several
 TRBs per packet - in `hcd_io.c` and `xhci_xfer.c`.
 
 A zero-bandwidth isochronous endpoint - Max Packet Size 0, which USB 3.2

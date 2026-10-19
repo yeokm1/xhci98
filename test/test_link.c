@@ -354,7 +354,7 @@ static void test_hold_kinds(void)
 
     CHECK_EQ(XhciLinkSameDevice(&held, &held), 1, "a device is itself");
     /* A serial longer than the kept prefix is a truncated identity, which
-     * neither identifies a hold nor matches one (round 1, note 6). */
+     * neither identifies a hold nor matches one. */
     noSerial = held;
     noSerial.SerialLength = XHCI_LINK_SERIAL_CHARS + 1;
     CHECK_EQ(XhciLinkSameDevice(&noSerial, &noSerial), 0,
@@ -369,8 +369,8 @@ static void test_hold_kinds(void)
 
 /*
  * The port-change wiring as hcd_enum.c's hcdPortChanged runs it - the feed
- * XhciLinkPortFeed decides, applied to a real enumeration machine (Codex
- * review of Phase 29, round 1, findings 2 and 3).
+ * XhciLinkPortFeed decides, applied to a real enumeration machine (Phase
+ * 29).
  */
 static ULONG feed_apply(PXHCI_ENUM_PORT e, ULONG feed)
 {

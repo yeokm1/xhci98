@@ -36,6 +36,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <commdlg.h>
 #include <setupapi.h>
 #include <dbt.h>
@@ -52,6 +53,9 @@
 #include "tr_pci.h"
 #include "tr_res.h"
 #include "../src/xhci_qry.h"
+
+static int report_snapshots(HANDLE f);
+static void save_snapshot_dialog(void);
 
 #define XHCITR_VERSION XHCI_VER_STR
 
@@ -93,10 +97,12 @@ typedef TR_NIDA TR_NID;
 #define TR_CM_DRP_COMPATIBLEIDS     0x00000003UL
 #define TR_CM_DRP_SERVICE           0x00000005UL
 #define TR_CM_DRP_CLASS             0x00000008UL
+#define TR_CM_DRP_CLASSGUID         0x00000009UL
 #define TR_CM_DRP_DRIVER            0x0000000AUL
 #define TR_CM_DRP_FRIENDLYNAME      0x0000000DUL
 #define TR_IOCTL_STORAGE_GET_DEVICE_NUMBER 0x002D1080UL
 #define TR_CM_DRP_CAPABILITIES      0x00000010UL
+#define TR_CM_DRP_LOWERFILTERS      0x00000013UL
 #define TR_CM_DRP_BUSNUMBER         0x00000016UL
 #define TR_CM_DRP_ADDRESS           0x0000001DUL
 #define TR_CM_DEVCAP_REMOVABLE      0x00000004UL
@@ -253,6 +259,8 @@ typedef struct _NHI {
     int HaveRec;            /* the registry record, read only              */
     const unsigned char *R; /* the record shown                            */
     char Why[160];
+    MK_MARKS *M;            /* the marks answer (NT; 42-A.5)               */
+    int MAnswered;          /* 1 read, 0 not served, -1 failed             */
 } NHI;
 
 typedef struct _UCTRL {
@@ -403,6 +411,48 @@ static void log_node_add(int parentT, int which, int index, const char *id);
 static void pci_node_add(int parentT, int which, int index, const char *id);
 static void say(const char *text, int warn);
 
+/* Windows 2000, whose devnode held for eject reads Code 24. */
+static int env_w2k(void)
+{
+    return envNt && envMajor == 5 && envMinor == 0;
+}
+
+/* Code 24 is also 2000's failed start, so it reads as held for eject only
+ * for a devnode this process stopped, until it starts again or leaves. */
+static char w2kStopped[16][INST_ID_CHARS];
+static int w2kStoppedN;
+
+static void w2k_stopped_add(const char *id)
+{
+    int i;
+
+    for (i = 0; i < w2kStoppedN; i++) {
+        if (tr_eq(w2kStopped[i], id)) {
+            return;
+        }
+    }
+    if (w2kStoppedN == 16) {
+        memmove(w2kStopped[0], w2kStopped[1], 15 * sizeof(w2kStopped[0]));
+        w2kStoppedN = 15;
+    }
+    tr_copy(w2kStopped[w2kStoppedN++], id, sizeof(w2kStopped[0]));
+}
+
+/* The w2k argument of tr_held_for_eject for devnode n. */
+static int w2k_code24(const DNODE *n)
+{
+    int i;
+    int here = 0;
+
+    for (i = 0; i < w2kStoppedN; i++) {
+        if (tr_eq(w2kStopped[i], n->Id)) {
+            here = 1;
+        }
+    }
+    return tr_w2k_code24(env_w2k(), here, n->UPort >= 0,
+                         n->UPort >= 0 ? up[n->UPort].Conn.Config : 0);
+}
+
 static FARPROC proc(HMODULE module, const char *name)
 {
     return module != NULL ? GetProcAddress(module, name) : NULL;
@@ -542,27 +592,40 @@ static void lv_value(HKEY k, const char *name, TR_RVAL *v)
     DWORD n = sizeof(value);
     LONG r = RegQueryValueExA(k, name, NULL, &type, (LPBYTE)&value, &n);
 
-    v->Value = 0;
+    tr_rv_from_query(r == ERROR_SUCCESS ? TR_Q_OK
+                     : r == ERROR_FILE_NOT_FOUND ? TR_Q_NOT_FOUND
+                     : r == ERROR_MORE_DATA ? TR_Q_MORE_DATA
+                                            : TR_Q_ERROR,
+                     (TR_U32)type, (TR_U32)n, (TR_U32)value, v);
+}
+
+/* A driver's level value in the machine-wide key (task 42-A.17): absent
+ * when the key is not there. */
+static void lv_machine(int driver, TR_RVAL *m)
+{
+    HKEY k;
+    LONG r;
+
+    m->State = TR_RV_UNREAD;
+    m->Value = 0;
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, TR_LV_MACHINE_KEY, 0,
+                      KEY_QUERY_VALUE, &k);
     if (r == ERROR_FILE_NOT_FOUND) {
-        v->State = TR_RV_ABSENT;
-    } else if (r == ERROR_MORE_DATA) {
-        v->State = TR_RV_OTHER;
-    } else if (r != ERROR_SUCCESS) {
-        v->State = TR_RV_UNREAD;
-    } else if (type == REG_DWORD && n == sizeof(value)) {
-        v->State = TR_RV_DWORD;
-        v->Value = value;
-    } else {
-        v->State = TR_RV_OTHER;
+        m->State = TR_RV_ABSENT;
+    } else if (r == ERROR_SUCCESS) {
+        lv_value(k, tr_level_value_name(driver), m);
+        RegCloseKey(k);
     }
 }
 
-/* Devnode dn's level as its driver reads it. */
+/* Devnode dn's level as its driver reads it: the machine-wide value when
+ * it is there, else its driver key's. */
 static void lv_read(int dn, int driver, TR_LEVEL *l)
 {
     char path[300];
     HKEY k;
     TR_RVAL cur;
+    TR_RVAL m;
 
     cur.State = TR_RV_UNREAD;
     cur.Value = 0;
@@ -572,7 +635,8 @@ static void lv_read(int dn, int driver, TR_LEVEL *l)
         lv_value(k, tr_level_value_name(driver), &cur);
         RegCloseKey(k);
     }
-    tr_level_pick(&cur, l);
+    lv_machine(driver, &m);
+    tr_level_pick(&m, &cur, l);
 }
 
 /* Every device's level, from the walk in gw. */
@@ -601,7 +665,9 @@ static void lv_block(TR_TEXT *t)
 
     lv_collect();
     for (d = 0; d < TR_LV_DRIVERS; d++) {
-        tr_level_head(t, d, lvCount[d]);
+        TR_RVAL m;
+        lv_machine(d, &m);
+        tr_level_head(t, d, lvCount[d], &m);
         for (i = 0; i < lvCount[d]; i++) {
             tr_level_device(t, d, dn_name(&gw.N[lvDev[d][i].Dn]),
                             &lvDev[d][i].L);
@@ -626,7 +692,10 @@ static void lv_details(TR_TEXT *t, int dn, int driver)
 /* Writes the levels asked (level[driver] 0-4, or -1 for none) into every
  * device of each driver the walk in gw found, and reads each back.
  * XHCIINST's exit code; the outcome, one line a driver, in msg. Only the
- * two values, only in those keys, and only 0-4. */
+ * two values, only in those keys, and only 0-4. Where the driver's value
+ * is set machine-wide (task 42-A.17), that one value is the one in force
+ * for every device, so it is the one written, and the devices' own are
+ * left as they are. */
 static int lv_set(const int *level, char *msg, size_t cap)
 {
     TR_TEXT t;
@@ -657,6 +726,49 @@ static int lv_set(const int *level, char *msg, size_t cap)
                       tr_level_driver(d), tr_level_driver(d));
             failed++;
             continue;
+        }
+        {
+            TR_RVAL m;
+            lv_machine(d, &m);
+            if (m.State != TR_RV_ABSENT) {
+                HKEY k;
+                LONG r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, TR_LV_MACHINE_KEY,
+                                       0, KEY_SET_VALUE | KEY_QUERY_VALUE, &k);
+                if (r == ERROR_SUCCESS) {
+                    r = RegSetValueExA(k, name, 0, REG_DWORD,
+                                       (const BYTE *)&v, sizeof(v));
+                    if (r == ERROR_SUCCESS) {
+                        changed++;
+                    }
+                    RegCloseKey(k);
+                }
+                for (i = 0; i < lvCount[d]; i++) {
+                    lv_read(lvDev[d][i].Dn, d, &lvDev[d][i].L);
+                    if (lvDev[d][i].L.State == TR_RV_DWORD &&
+                        lvDev[d][i].L.Value == v) {
+                        ok++;
+                    }
+                }
+                if (r != ERROR_SUCCESS) {
+                    tr_printf(&t, "%s: %s was not written machine-wide "
+                              "(error %ld).\n", tr_level_driver(d), name,
+                              (long)r);
+                    failed++;
+                } else if (ok != lvCount[d]) {
+                    tr_printf(&t, "%s: %s machine-wide did not read back as "
+                              "written.\n", tr_level_driver(d), name);
+                    failed++;
+                } else {
+                    wrote += ok;
+                    tr_printf(&t, "%s: %s set to %d - %s, machine-wide "
+                              "(Services\\USB), for every %s.\n",
+                              tr_level_driver(d), name, level[d],
+                              tr_level_text(v),
+                              d == TR_LV_XHCICM ? "host interface"
+                                                : "controller");
+                }
+                continue;
+            }
         }
         for (i = 0; i < lvCount[d]; i++) {
             const DNODE *n = &gw.N[lvDev[d][i].Dn];
@@ -833,6 +945,19 @@ static int dn_read(DNODE *t)
             if (!prop_ok(cm_prop(t->Dn, TR_CM_DRP_CLASS, t->Cls, sizeof(t->Cls),
                                  NULL))) {
                 ok = 0;
+            }
+            if (t->Cls[0] == '\0') {
+                /* Windows 2000 gives a USB disk its class GUID alone, no
+                 * class name (run 42): the name is its class key's. */
+                char guid[64];
+                char path[128];
+                if (cm_prop(t->Dn, TR_CM_DRP_CLASSGUID, guid, sizeof(guid),
+                            NULL) == TR_CR_SUCCESS && guid[0] == '{') {
+                    join(path, sizeof(path),
+                         "SYSTEM\\CurrentControlSet\\Control\\Class", guid);
+                    reg_text(HKEY_LOCAL_MACHINE, path, "Class", t->Cls,
+                             sizeof(t->Cls));
+                }
             }
             t->IsDisk = tr_eq(t->Cls, "DiskDrive");
             t->IsVolume = tr_eq(t->Cls, "Volume");
@@ -1129,8 +1254,86 @@ static void nhi_free(void)
     for (k = 0; k < nhiCount; k++) {
         free(nhi[k].QBuf);
         nhi[k].QBuf = NULL;
+        free(nhi[k].M);
+        nhi[k].M = NULL;
     }
     nhiCount = 0;
+}
+
+/* The marks answer of query device qname (cm_query.h CM_QM_*; record 21
+ * section 7.4, revision 3): 1 read into m, 0 not served (a driver from
+ * before 42-A.5 answers STATUS_INVALID_DEVICE_REQUEST), -1 failed. */
+static int marks_read(const char *qname, MK_MARKS *m)
+{
+    static unsigned char b[CM_QM_MAX_BYTES];
+    HANDLE h;
+    DWORD got = 0;
+    INST_U32 need = 0;
+    int r;
+
+    memset(m, 0, sizeof(*m));
+    if (qname[0] == '\0') {
+        return -1;
+    }
+    h = open_device(qname);
+    if (h == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    if (!DeviceIoControl(h, CM_QM_IOCTL, NULL, 0, b, sizeof(b), &got, NULL)) {
+        DWORD e = GetLastError();
+        CloseHandle(h);
+        return e == ERROR_INVALID_FUNCTION ? 0 : -1;
+    }
+    CloseHandle(h);
+    if (got > sizeof(b)) {
+        return -1;
+    }
+    r = mk_marks_parse(b, got, m, &need);
+    return r == 1 ? 1 : -1;
+}
+
+typedef SC_HANDLE (WINAPI *PFN_OPENSCM)(LPCSTR, LPCSTR, DWORD);
+typedef SC_HANDLE (WINAPI *PFN_OPENSVC)(SC_HANDLE, LPCSTR, DWORD);
+typedef BOOL (WINAPI *PFN_QSVC)(SC_HANDLE, LPSERVICE_STATUS);
+typedef BOOL (WINAPI *PFN_CLOSESVC)(SC_HANDLE);
+
+/* The mark service's state (TR_SV_*), NT only; the service routines looked
+ * up at run time, as 98 SE's ADVAPI32 is not to be relied on for them. */
+static int mksvc_state(void)
+{
+    HMODULE adv = GetModuleHandleA("advapi32.dll");
+    PFN_OPENSCM openScm = (PFN_OPENSCM)proc(adv, "OpenSCManagerA");
+    PFN_OPENSVC openSvc = (PFN_OPENSVC)proc(adv, "OpenServiceA");
+    PFN_QSVC query = (PFN_QSVC)proc(adv, "QueryServiceStatus");
+    PFN_CLOSESVC closeSvc = (PFN_CLOSESVC)proc(adv, "CloseServiceHandle");
+    SC_HANDLE scm;
+    SC_HANDLE svc;
+    SERVICE_STATUS st;
+    int r = TR_SV_UNREAD;
+
+    if (!envNt || openScm == NULL || openSvc == NULL || query == NULL ||
+        closeSvc == NULL) {
+        return TR_SV_UNREAD;
+    }
+    scm = openScm(NULL, NULL, SC_MANAGER_CONNECT);
+    if (scm == NULL) {
+        return TR_SV_UNREAD;
+    }
+    svc = openSvc(scm, "xhcimark", SERVICE_QUERY_STATUS);
+    if (svc == NULL) {
+        r = GetLastError() == ERROR_SERVICE_DOES_NOT_EXIST ? TR_SV_ABSENT
+                                                           : TR_SV_UNREAD;
+    } else {
+        memset(&st, 0, sizeof(st));
+        if (query(svc, &st)) {
+            r = st.dwCurrentState == SERVICE_RUNNING ? TR_SV_RUNNING
+              : st.dwCurrentState == SERVICE_STOPPED ? TR_SV_STOPPED
+                                                     : TR_SV_OTHER;
+        }
+        closeSvc(svc);
+    }
+    closeSvc(scm);
+    return r;
 }
 
 /* Each NHI's state: its query when the mapping holds, else the registry
@@ -1157,6 +1360,17 @@ static void nhi_read(NHI *h)
         query_read(h->QName, h->Id, &h->QBuf, &h->Q, h->NameUnique, &h->ByName)) {
         h->HaveQ = 1;
         h->R = h->Q.Rec;
+        /* The marks answer, on NT, where the mark is (42-A.5). */
+        if (envNt) {
+            free(h->M);
+            h->M = (MK_MARKS *)calloc(1, sizeof(MK_MARKS));
+            h->MAnswered = h->M != NULL ? marks_read(h->QName, h->M) : -1;
+            if (h->MAnswered == 1 &&
+                (h->M->EpochLo != h->Q.EpochLo || h->M->EpochHi != h->Q.EpochHi)) {
+                /* Another start between the two answers: not this one's. */
+                h->MAnswered = -1;
+            }
+        }
         return;
     }
     tr_copy(h->Why, h->QName[0] ? "its query device did not answer for it"
@@ -2145,7 +2359,8 @@ static void add_devs_below(int parentT, int dn, int depth)
             if (gw.N[i].UnitOf == i && !dn_started(&gw.N[i])) {
                 char tag[64];
                 char sen[8];
-                tr_stopped_text(gw.N[i].Problem, tag, sizeof(tag), sen, sizeof(sen));
+                tr_stopped_text(gw.N[i].Problem, w2k_code24(&gw.N[i]), tag,
+                                sizeof(tag), sen, sizeof(sen));
                 tr_sprintf(label, sizeof(label), "%s  [%s]", name, tag);
             } else if (usb_listed(i)) {
                 usb_label(i, name, sizeof(name));
@@ -2345,6 +2560,7 @@ static void model_free_usb(void)
 static void refresh_model(int withUsb)
 {
     int root;
+    int s;
 
     model_free_usb();
     tnCount = 0;
@@ -2360,6 +2576,15 @@ static void refresh_model(int withUsb)
         free(pollBuf[root]);
         pollBuf[root] = NULL;
         pollId[root][0] = '\0';
+    }
+    for (s = w2kStoppedN - 1; s >= 0; s--) {
+        int k = walk_find_id(&gw, w2kStopped[s]);
+        if ((k >= 0 && dn_started(&gw.N[k])) ||
+            (k < 0 && gw.Count > 0 && gw.Bad == 0)) {
+            memmove(w2kStopped[s], w2kStopped[s + 1],
+                    (w2kStoppedN - s - 1) * sizeof(w2kStopped[0]));
+            w2kStoppedN--;
+        }
     }
     nhi_find(&gw);
     derive(&gw, nhi, nhiCount);
@@ -2514,6 +2739,43 @@ static void details_devnode(TR_TEXT *t, int dn)
     details_resources(t, d);
 }
 
+/* The NHI index and member location of unit u (its parent, the tunnel
+ * port), or -1. */
+static int unit_member(const WALK *w, int u, INST_U32 *member)
+{
+    int p = w->N[u].Parent;
+
+    if (p < 0 || !w->N[p].HasLoc || !w->N[u].HasLoc) {
+        return -1;
+    }
+    *member = tr_mark_member(w->N[p].Bus, w->N[p].Addr);
+    return w->N[p].PortNhi;
+}
+
+/* Unit u's mark state (TR_MK_*), from its NHI's marks answer and its
+ * devnode's LowerFilters (record 21 section 7.4, revision 3). */
+static int unit_mark(int u)
+{
+    static char lf[1024];
+    INST_U32 member = 0;
+    DWORD n = 0;
+    int k = unit_member(&gw, u, &member);
+    int entry;
+
+    if (k < 0 || k >= nhiCount || !nhi[k].HaveQ) {
+        return TR_MK_FAILED;
+    }
+    if (nhi[k].MAnswered != 1) {
+        return tr_mark_state(nhi[k].MAnswered, NULL, -1, 0);
+    }
+    entry = tr_mark_find(nhi[k].M, member, gw.N[u].Bus, gw.N[u].Addr, 0);
+    if (!prop_ok(cm_prop(gw.N[u].Dn, TR_CM_DRP_LOWERFILTERS, lf, sizeof(lf),
+                         &n))) {
+        return TR_MK_FAILED;
+    }
+    return tr_mark_state(1, nhi[k].M, entry, tr_msz_has(lf, n, "xhcicm"));
+}
+
 static void details_unit(TR_TEXT *t, int dn)
 {
     const DNODE *d = &gw.N[dn];
@@ -2537,7 +2799,8 @@ static void details_unit(TR_TEXT *t, int dn)
     } else if (!dn_started(&gw.N[u])) {
         char tag[64];
         char sen[96];
-        tr_stopped_text(gw.N[u].Problem, tag, sizeof(tag), sen, sizeof(sen));
+        tr_stopped_text(gw.N[u].Problem, w2k_code24(&gw.N[u]), tag,
+                        sizeof(tag), sen, sizeof(sen));
         tr_printf(t, "  %s\n", sen);
     } else {
         tr_printf(t, "  It cannot be stopped here now: %s.\n", ej_why_not(u));
@@ -2557,6 +2820,9 @@ static void details_unit(TR_TEXT *t, int dn)
             tr_put(t, "  Windows does not list it in Safely Remove Hardware; "
                       "stop it from here.\n");
         }
+    }
+    if (envNt) {
+        tr_printf(t, "  Safe-removal mark: %s.\n", tr_mark_text(unit_mark(u)));
     } else if (!envNt) {
         tr_printf(t, "  %s\n", (gw.N[u].Status & TR_DN_REMOVABLE)
                                   ? "Marked removable by the Thunderbolt driver."
@@ -2594,6 +2860,10 @@ static void details_nhi(TR_TEXT *t, int k)
                   (unsigned long)h->Q.Pass, (unsigned long)h->Q.AgeMs,
                   tr_query_current(&h->Q) ? "" : " (not current)");
         tr_printf(t, "  Liveness:            %s\n", tr_live_text(h->Q.Live));
+        if (envNt) {
+            tr_printf(t, "  Mark service:        %s (xhcimark)\n",
+                      tr_mksvc_text(mksvc_state()));
+        }
         tr_printf(t, "  Start epoch:         %08lX%08lX\n",
                   (unsigned long)h->Q.EpochHi, (unsigned long)h->Q.EpochLo);
         if (h->Q.Flags & CM_Q_F_STOPPING) {
@@ -2959,7 +3229,7 @@ static void log_hcd(TR_TEXT *t, int c)
                       (unsigned long)w.UuStatus);
         } else {
             tr_put(t, "  The driver's answer is not one this tool reads: "
-                      "use the XHCISNAP\n  of the same package.\n");
+                      "use the XHCITR\n  of the same package.\n");
         }
         goto done;
     }
@@ -3322,6 +3592,8 @@ static int write_report(const char *path)
         tr_put(&t, "\n");
         ok = WriteFile(f, text, (DWORD)t.Len, &w, NULL) && w == t.Len;
     }
+    /* What XHCISNAP's field report carried (section 15). */
+    ok = ok && report_snapshots(f);
     CloseHandle(f);
     reportMode = 0;
     return ok;
@@ -3526,10 +3798,12 @@ static const char *ej_why_not(int u)
     if (!dn_started(&gw.N[u])) {
         /* Held for the eject (Code 47): the ICM keeps the tunnel until the
          * unplug, so it is still listed. Any other problem is a failed
-         * start, never "unplug it". */
+         * start, never "unplug it" (Code 24 on 2000 is held for eject
+         * only for a unit this process stopped). */
         static char tag[64];
         char sen[8];
-        tr_stopped_text(gw.N[u].Problem, tag, sizeof(tag), sen, sizeof(sen));
+        tr_stopped_text(gw.N[u].Problem, w2k_code24(&gw.N[u]), tag,
+                        sizeof(tag), sen, sizeof(sen));
         return tag;
     }
     if (!nhi[k].HaveQ) {
@@ -3790,6 +4064,104 @@ done:
     free(w.N);
     free(one);
     return kind;
+}
+
+/* The identity of the incarnation an eject is about to stop (record 21
+ * section 7.4, decision M16): its entry's serial in the marks answer of
+ * the request's own query device, at the request's epoch. Have 0 when
+ * the driver does not serve the answer, or the unit has no single entry. */
+typedef struct _EJMARK {
+    int Have;
+    INST_U32 Serial;
+} EJMARK;
+
+static MK_MARKS ejMarks;
+
+static void ej_mark_pre(const EJREQ *q, const WALK *w, int u, EJMARK *pre)
+{
+    int e;
+
+    pre->Have = 0;
+    if (!w->N[u].HasLoc || marks_read(q->QName, &ejMarks) != 1 ||
+        ejMarks.EpochLo != q->EpochLo || ejMarks.EpochHi != q->EpochHi) {
+        return;
+    }
+    e = tr_mark_find(&ejMarks, q->PortBdf, w->N[u].Bus, w->N[u].Addr, 0);
+    if (e >= 0) {
+        pre->Have = 1;
+        pre->Serial = ejMarks.E[e].Serial;
+    }
+}
+
+/* XhciCmEjectConfirm (cm_query.h CM_QC_*) for unit u of walk w, after the
+ * tool's own successful CM_Request_Device_EjectA, with the shared eject
+ * mutex held: the same incarnation's entry (pre: its serial, the request's
+ * epoch) in the request's own NHI's marks answer with a departure pending,
+ * waited for up to 3 s; the value written to that NHI's driver key, found
+ * by its instance ID, only while absent or empty. Returns a line for the
+ * answer, or NULL when there is nothing to say. Only an administrator
+ * writes it. */
+static const char *ej_mark_confirm(const EJREQ *q, const WALK *w, int u,
+                                   const EJMARK *pre)
+{
+    unsigned char v[MK_QC_BYTES];
+    BYTE old[64];
+    char path[200];
+    DWORD type;
+    DWORD n;
+    HKEY key;
+    LONG r;
+    int e = -1;
+    int tries;
+    int nhiNode = walk_find_id(w, q->NhiId);
+
+    if (!pre->Have || nhiNode < 0 || w->N[nhiNode].Driver[0] == '\0') {
+        return NULL;
+    }
+    for (tries = 0; tries < 30 && e < 0; tries++) {
+        int a = marks_read(q->QName, &ejMarks);
+        if (a == 1 && (ejMarks.EpochLo != q->EpochLo ||
+                       ejMarks.EpochHi != q->EpochHi)) {
+            /* The controller started again: not the departure stopped. */
+            return "The Thunderbolt controller started again, so the eject "
+                   "was not confirmed to it.";
+        }
+        if (a == 1) {
+            e = tr_mark_find(&ejMarks, q->PortBdf, w->N[u].Bus, w->N[u].Addr,
+                             1);
+            if (e >= 0 && ejMarks.E[e].Serial != pre->Serial) {
+                return "The device changed during the eject, so it was not "
+                       "confirmed to the Thunderbolt driver.";
+            }
+        }
+        if (e < 0) {
+            Sleep(100);
+        }
+    }
+    if (e < 0) {
+        return "The Thunderbolt driver did not report the departure, so the "
+               "eject was not confirmed to it.";
+    }
+    mk_confirm_build(v, &ejMarks, &ejMarks.E[e]);
+    tr_sprintf(path, sizeof(path), "SYSTEM\\CurrentControlSet\\Control\\Class\\%s",
+               w->N[nhiNode].Driver);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ | KEY_SET_VALUE,
+                      &key) != ERROR_SUCCESS) {
+        return "The eject could not be confirmed to the Thunderbolt driver.";
+    }
+    n = sizeof(old);
+    r = RegQueryValueExA(key, CM_QC_VALUE, NULL, &type, old, &n);
+    if (!(r == ERROR_FILE_NOT_FOUND || (r == ERROR_SUCCESS && n == 0))) {
+        /* Another confirmation waits for the driver (the mark service's,
+         * say): nothing is written over it. */
+        RegCloseKey(key);
+        return NULL;
+    }
+    r = RegSetValueExA(key, CM_QC_VALUE, 0, REG_BINARY, v, MK_QC_BYTES);
+    RegCloseKey(key);
+    return r == ERROR_SUCCESS
+               ? "The eject was confirmed to the Thunderbolt driver."
+               : "The eject could not be confirmed to the Thunderbolt driver.";
 }
 
 /* ---- NT: a unit not marked removable (record 24 section 7.2) ------------- */
@@ -4595,7 +4967,8 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
     if (!dn_started(&w.N[u])) {
         char tag[64];
         char sen[96];
-        if (tr_stopped_text(w.N[u].Problem, tag, sizeof(tag), sen, sizeof(sen))) {
+        if (tr_stopped_text(w.N[u].Problem, w2k_code24(&w.N[u]), tag,
+                            sizeof(tag), sen, sizeof(sen))) {
             tr_printf(&t, "%s is stopped already: you can unplug it.", q->Desc);
         } else {
             tr_printf(&t, "%s is not running. %s Nothing was stopped.", q->Desc, sen);
@@ -4621,6 +4994,13 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         char vetoName[MAX_PATH];
         int withName;
         int notRemovable = 0;
+        EJMARK pre;
+        int admin = ej_is_admin();
+        pre.Have = 0;
+        if (admin) {
+            /* The incarnation about to stop, for the confirmation. */
+            ej_mark_pre(q, &w, u, &pre);
+        }
         vetoName[0] = '\0';
         cr = api.Eject(w.N[u].Dn, &veto, vetoName, MAX_PATH, 0);
         vetoName[MAX_PATH - 1] = '\0';
@@ -4654,9 +5034,20 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
             goto out;
         }
         tr_printf(&t, "Windows has stopped %s.\n", q->Desc);
+        if (env_w2k()) {
+            w2k_stopped_add(w.N[u].Id);
+        }
         if (notRemovable) {
             tr_put(&t, "Until you unplug it, Windows may start it again when it "
                        "next looks for new hardware.\n");
+        } else if (admin) {
+            /* Record 21 section 7.4, revision 3 (decision M16): an
+             * administrator's own successful eject confirms itself, so
+             * the tunnel comes down; the mutex is still held. */
+            const char *c = ej_mark_confirm(q, &w, u, &pre);
+            if (c != NULL) {
+                tr_printf(&t, "%s\n", c);
+            }
         }
         tunnelNote = ej_watch_tunnel(q);
     } else {
@@ -4866,6 +5257,7 @@ static void usb_facts(const WALK *w, int d, int portIsHub, int devClass,
 
     memset(f, 0, sizeof(*f));
     f->Nt = envNt;
+    f->W2k = d >= 0 && w2k_code24(&w->N[d]);
     f->HaveDevnode = d >= 0;
     f->IsHub = portIsHub;
     f->Radio = devClass == 0xE0;
@@ -5002,7 +5394,7 @@ static const char *usb_suffix(int d)
     if (gw.N[d].UsbRule == TR_UE_OFFER) {
         return "  [can be stopped]";
     }
-    if (gw.N[d].Problem == TR_CM_PROB_HELD_FOR_EJECT) {
+    if (tr_held_for_eject(gw.N[d].Problem, w2k_code24(&gw.N[d]))) {
         return "  [stopped - unplug it]";
     }
     return "";
@@ -5149,12 +5541,14 @@ static int usb_after(const USBREQ *q, TR_TEXT *t)
     }
     kind = tr_usb_after_kind(walked, d >= 0, w.Bad,
                              d >= 0 && dn_started(&w.N[d]),
-                             d >= 0 ? w.N[d].Problem : 0,
-                             envNt && envMajor == 5 && envMinor == 0);
+                             d >= 0 ? w.N[d].Problem : 0, env_w2k());
     if (kind == TR_UA_STARTED) {
         tr_put(t, "\nThe device has started again, so it is not safe to unplug.");
         code = INST_EXIT_STEPS;
     } else if (kind == TR_UA_UNPLUG) {
+        if (d >= 0 && env_w2k()) {
+            w2k_stopped_add(q->Id);
+        }
         tr_put(t, "\nYou can now unplug the device.");
     } else {
         tr_put(t, "\nIts state could not be read again: check that it is not "
@@ -6069,6 +6463,9 @@ static int command(HWND w, UINT id)
     case IDM_SAVE:
         save_report_dialog();
         return 1;
+    case IDM_SNAPSHOT:
+        save_snapshot_dialog();
+        return 1;
     case IDM_EXIT:
         quit_all();
         return 1;
@@ -6700,6 +7097,526 @@ static int run_report(void)
     return INST_EXIT_DONE;
 }
 
+/* ======================================================================== */
+/* XHCISNAP's reading, moved here (42-A.4; record 25 section 15)             */
+/* ======================================================================== */
+
+/* tr_snap.c: XHCISNAP's engine, its command line spelled with dashes. */
+int tr_snap_main(int argc, char **argv);
+
+/* The snapshot modes: /snapshot, /dump, /probe, and /snaptest for
+ * snaptest.cmd. Each takes the whole command line. */
+static int snap_is_mode(const char *a)
+{
+    return a != NULL && (lstrcmpiA(a, "/snapshot") == 0 ||
+                         lstrcmpiA(a, "/dump") == 0 ||
+                         lstrcmpiA(a, "/probe") == 0 ||
+                         strcmp(a, "/snaptest") == 0);
+}
+
+static int stdout_redirected(void)
+{
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    return out != NULL && out != INVALID_HANDLE_VALUE &&
+           GetFileType(out) != FILE_TYPE_UNKNOWN;
+}
+
+/* A file's text, at most cap - 1 bytes of its end, NUL-terminated; with
+ * more, the head is cut at a line and "..." says so. Returns its length. */
+static size_t snap_read_tail(const char *path, char *buf, size_t cap)
+{
+    HANDLE f;
+    DWORD size;
+    DWORD got = 0;
+    DWORD from = 0;
+
+    buf[0] = '\0';
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    size = GetFileSize(f, NULL);
+    if (size == 0xFFFFFFFFUL) {
+        size = 0;
+    }
+    if (size > cap - 8) {
+        from = size - (DWORD)(cap - 8);
+        SetFilePointer(f, (LONG)from, NULL, FILE_BEGIN);
+        tr_copy(buf, "...\r\n", cap);
+    }
+    if (ReadFile(f, buf + strlen(buf), (DWORD)(cap - 1 - strlen(buf)), &got,
+                 NULL)) {
+        buf[(from != 0 ? 5 : 0) + got] = '\0';
+    }
+    CloseHandle(f);
+    return strlen(buf);
+}
+
+/* A temporary file's path in %TEMP%, made empty. */
+static int snap_temp(char *path)
+{
+    char dir[MAX_PATH];
+    DWORD n = GetTempPathA(sizeof(dir), dir);
+
+    if (n == 0 || n >= sizeof(dir)) {
+        return 0;
+    }
+    return GetTempFileNameA(dir, "xtr", 0, path) != 0;
+}
+
+/* The words the user typed, as tr_snap.c's command line: /snapshot is
+ * -report, /dump -dump, /probe -probe, and after it /c, /o and /nosysinfo
+ * their dashed forms; a word of the user's own that begins with '-' is
+ * refused, so no switch of the old tool is reached by its spelling.
+ * Returns the count, or 0 having said why. */
+static int snap_args(int argc, char **argv, char **av, int cap)
+{
+    int n = 0;
+    int i;
+
+    if (argc + 2 > cap) {
+        printf("Too many words on the command line.\n");
+        return 0;
+    }
+    av[n++] = "XHCITR";
+    if (strcmp(argv[1], "/snaptest") == 0) {
+        for (i = 2; i < argc; i++) {
+            av[n++] = argv[i];
+        }
+        av[n] = NULL;
+        return n;
+    }
+    if (argc == 3 && strcmp(argv[2], "/?") == 0) {
+        av[n++] = "-help";
+        av[n] = NULL;
+        return n;
+    }
+    av[n++] = lstrcmpiA(argv[1], "/snapshot") == 0 ? "-report"
+            : lstrcmpiA(argv[1], "/dump") == 0     ? "-dump"
+                                                   : "-probe";
+    for (i = 2; i < argc; i++) {
+        const char *a = argv[i];
+        if (a[0] == '-') {
+            printf("%s is not taken: %s takes /c N, /o NAME and /nosysinfo "
+                   "(/snapshot also a NAME).\nNothing was written.\n", a,
+                   argv[1]);
+            return 0;
+        }
+        av[n++] = lstrcmpiA(a, "/c") == 0          ? "-c"
+                : lstrcmpiA(a, "/o") == 0          ? "-o"
+                : lstrcmpiA(a, "/nosysinfo") == 0  ? "-nosysinfo"
+                                                   : argv[i];
+    }
+    av[n] = NULL;
+    return n;
+}
+
+/* A snapshot mode: its text to the redirected output, else, captured, to
+ * a message box with the directory the files went to (shown on this
+ * machine only; the files never name it). */
+static int run_snap(int argc, char **argv)
+{
+    static char *av[72];
+    static char text[6144];
+    char tmp[MAX_PATH];
+    char cwd[MAX_PATH];
+    char *box;
+    int capture = !stdout_redirected();
+    int n;
+    int rc;
+
+    if (capture) {
+        if (!snap_temp(tmp) || freopen(tmp, "w", stdout) == NULL) {
+            say("The snapshot's text has nowhere to go: no temporary file "
+                "could be made. Run it from a command prompt with its output "
+                "redirected to a file.", 1);
+            return 2;
+        }
+    }
+    n = snap_args(argc, argv, av, sizeof(av) / sizeof(av[0]));
+    rc = (n == 0) ? 2 : tr_snap_main(n, av);
+    fflush(stdout);
+    if (!capture) {
+        return rc;
+    }
+    fclose(stdout);
+    snap_read_tail(tmp, text, sizeof(text));
+    DeleteFileA(tmp);
+    if (GetCurrentDirectoryA(sizeof(cwd), cwd) == 0) {
+        cwd[0] = '\0';
+    }
+    box = (char *)malloc(strlen(text) + sizeof(cwd) + 64);
+    if (box != NULL) {
+        sprintf(box, "%s\r\n(The current directory is %s.)", text, cwd);
+        MessageBoxA(NULL, box, "xHCI98 USB Tree - snapshot",
+                    MB_OK | (rc != 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
+        free(box);
+    }
+    return rc;
+}
+
+/* This executable run with `args` in `dir`, its output to a temporary
+ * file whose path comes back in outPath; waits up to waitMs. Returns the
+ * exit code, or -1 when it did not start or end. */
+static int snap_child(const char *args, const char *dir, char *outPath,
+                      DWORD waitMs)
+{
+    char exe[MAX_PATH];
+    char cmd[MAX_PATH * 2 + 64];
+    SECURITY_ATTRIBUTES sa;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    HANDLE out;
+    DWORD code = (DWORD)-1;
+
+    outPath[0] = '\0';
+    if (GetModuleFileNameA(NULL, exe, sizeof(exe)) == 0 || !snap_temp(outPath)) {
+        outPath[0] = '\0';
+        return -1;
+    }
+    memset(&sa, 0, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    out = CreateFileA(outPath, GENERIC_WRITE, FILE_SHARE_READ, &sa,
+                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (out == INVALID_HANDLE_VALUE) {
+        DeleteFileA(outPath);
+        outPath[0] = '\0';
+        return -1;
+    }
+    tr_sprintf(cmd, sizeof(cmd), "\"%s\" %s", exe, args);
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = out;
+    si.hStdError = out;
+    if (!CreateProcessA(exe, cmd, NULL, NULL, TRUE, 0, NULL, dir, &si, &pi)) {
+        CloseHandle(out);
+        return -1;
+    }
+    CloseHandle(out);
+    CloseHandle(pi.hThread);
+    if (WaitForSingleObject(pi.hProcess, waitMs) != WAIT_OBJECT_0) {
+        /* Not ended in time: ended here, and waited for, so nothing it
+         * writes can race the caller's reads and removals. */
+        TerminateProcess(pi.hProcess, 2);
+        (void)WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hProcess);
+        return -1;
+    }
+    if (!GetExitCodeProcess(pi.hProcess, &code)) {
+        code = (DWORD)-1;
+    }
+    CloseHandle(pi.hProcess);
+    return (int)code;
+}
+
+/* The HCD number of a controller, from its \\.\HCD<n> name, or -1. */
+static int snap_hcd_number(const UCTRL *c)
+{
+    const char *p = c->Hcd;
+    const char *q;
+    int n = 0;
+
+    q = strstr(p, "HCD");
+    if (q == NULL) {
+        return -1;
+    }
+    q += 3;
+    if (*q < '0' || *q > '9') {
+        return -1;
+    }
+    while (*q >= '0' && *q <= '9' && n < 1000) {
+        n = n * 10 + (*q++ - '0');
+    }
+    return *q == '\0' ? n : -1;
+}
+
+/* The level a dump's .TXT says it was taken at: its "verbosity tier"
+ * header line, "read N, APPLIED M", in the file's first 16 KiB, where the
+ * header is written. -1 when no such line is there. */
+static int snap_txt_level(const char *path)
+{
+    static char head[16384];
+    static const char key[] = "verbosity tier     read ";
+    HANDLE f;
+    DWORD got = 0;
+    const char *p;
+    const char *q;
+
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    if (!ReadFile(f, head, sizeof(head) - 1, &got, NULL)) {
+        got = 0;
+    }
+    CloseHandle(f);
+    head[got] = '\0';
+    p = strstr(head, key);
+    if (p == NULL) {
+        return -1;
+    }
+    q = strstr(p, "APPLIED ");
+    if (q == NULL || q - p > 40 || q[8] < '0' || q[8] > '9' ||
+        (q[9] >= '0' && q[9] <= '9')) {
+        return -1;
+    }
+    return q[8] - '0';
+}
+
+static int snap_say(HANDLE f, const char *text);
+
+/* A whole file appended to the report, in pieces: 1 done, 2 the file
+ * could not be opened (nothing written), 0 a write to the report failed,
+ * -1 a read failed part way (the report says so). */
+static int snap_append(HANDLE f, const char *path)
+{
+    static char buf[8192];
+    HANDLE in;
+    DWORD got;
+    DWORD w;
+    int ok = 1;
+
+    in = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                     FILE_ATTRIBUTE_NORMAL, NULL);
+    if (in == INVALID_HANDLE_VALUE) {
+        return 2;
+    }
+    for (;;) {
+        if (!ReadFile(in, buf, sizeof(buf), &got, NULL)) {
+            ok = -1;
+            break;
+        }
+        if (got == 0) {
+            break;
+        }
+        if (!WriteFile(f, buf, got, &w, NULL) || w != got) {
+            ok = 0;
+            break;
+        }
+    }
+    CloseHandle(in);
+    if (ok == -1) {
+        /* What was read stands; the report says it is cut short. */
+        return snap_say(f, "\r\n[cut short: the file could not be read "
+                           "to its end]\r\n") ? -1 : 0;
+    }
+    return (ok && WriteFile(f, "\r\n", 2, &w, NULL) && w == 2) ? 1 : 0;
+}
+
+static int snap_say(HANDLE f, const char *text)
+{
+    DWORD w;
+    DWORD n = (DWORD)strlen(text);
+
+    return WriteFile(f, text, n, &w, NULL) && w == n;
+}
+
+/* A directory of this run's own under %TEMP%, made new. */
+static int snap_temp_dir(char *dir, size_t cap)
+{
+    char tdir[MAX_PATH];
+    DWORD n = GetTempPathA(sizeof(tdir), tdir);
+    int k;
+
+    if (n == 0 || n >= sizeof(tdir)) {
+        return 0;
+    }
+    for (k = 0; k < 16; k++) {
+        tr_sprintf(dir, cap, "%sxtr%lX-%lX-%d", tdir,
+                   (unsigned long)GetCurrentProcessId(),
+                   (unsigned long)GetTickCount(), k);
+        if (CreateDirectoryA(dir, NULL)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The report's snapshot part (section 15): one /snapshot run per xhci98
+ * controller, each in a new directory under %TEMP%, as a child process of
+ * this executable. The .DEV, the machine's device report, comes from the
+ * first run - and with no xhci98 controller listed, from a run for
+ * controller 0 that may take no dump, since the .DEV is written before
+ * any controller is opened and reports exactly that case. Each dump's
+ * .TXT follows, whole, unless its header says level 4 (it can hold kernel
+ * addresses) or says no level at all; then it is withheld, as the Driver
+ * log node withholds the ring (section 3.5). The files are removed after;
+ * the raw .BIN and .PSC never reach the report. */
+static int report_snapshots(HANDLE f)
+{
+    static const char *const ext[] = { ".DEV", ".TXT", ".BIN", ".PSC" };
+    int hcds[TR_MAX_CTRL];
+    char dir[MAX_PATH];
+    char out[MAX_PATH];
+    char file[MAX_PATH + 16];
+    char args[64];
+    char line[200];
+    int nh = 0;
+    int ok;
+    int devDone = 0;
+    int i;
+    int k;
+
+    for (i = 0; i < ucCount && nh < TR_MAX_CTRL; i++) {
+        int h;
+        if (uc[i].Ours && (h = snap_hcd_number(&uc[i])) >= 0) {
+            hcds[nh++] = h;
+        }
+    }
+    ok = snap_say(f, "Snapshot (the device report and the dumps XHCITR "
+                     "/snapshot writes)\r\n\r\n");
+    for (i = 0; i < (nh == 0 ? 1 : nh) && ok; i++) {
+        int hcd = nh == 0 ? 0 : hcds[i];
+        int rc;
+        int level;
+
+        if (!snap_temp_dir(dir, sizeof(dir))) {
+            tr_sprintf(line, sizeof(line), "HCD%d: no snapshot: no temporary "
+                       "directory could be made.\r\n\r\n", hcd);
+            ok = snap_say(f, line);
+            continue;
+        }
+        tr_sprintf(args, sizeof(args), "/snapshot XHCITR /c %d", hcd);
+        rc = snap_child(args, dir, out, 120000);
+        if (out[0] != '\0') {
+            DeleteFileA(out);
+        }
+        /* The child's own outcome first (its exit codes are /snapshot's,
+         * record 25 section 15): 0 both complete, 3 the dump's .TXT
+         * incomplete, 4 no dump (the .DEV says why), 5 the .DEV
+         * incomplete; anything else is said with its number. */
+        tr_sprintf(line, sizeof(line), "HCD%d: snapshot %s (exit %d)\r\n",
+                   hcd,
+                   rc == 0   ? "complete"
+                   : rc == 3 ? "taken, but its dump .TXT is NOT complete"
+                   : rc == 4 ? "taken: the device report, no dump"
+                   : rc == 5 ? "taken, but its device report is NOT complete"
+                   : rc == -1 ? "not run, or not ended within two minutes"
+                              : "not complete",
+                   rc);
+        ok = snap_say(f, line);
+        if (rc != -1) {
+            int got;
+
+            if (!devDone) {
+                tr_sprintf(file, sizeof(file), "%s\\XHCITR.DEV", dir);
+                got = snap_append(f, file);
+                if (got == 2) {
+                    ok = ok && snap_say(f, "No device report was written."
+                                           "\r\n\r\n");
+                } else {
+                    devDone = 1;
+                    ok = ok && got == 1;
+                }
+            }
+            tr_sprintf(file, sizeof(file), "%s\\XHCITR.TXT", dir);
+            level = snap_txt_level(file);
+            if (GetFileAttributesA(file) == 0xFFFFFFFFUL) {
+                if (nh != 0) {
+                    tr_sprintf(line, sizeof(line), "HCD%d: no dump (the "
+                               "snapshot answered %d; the device report says "
+                               "why).\r\n\r\n", hcd, rc);
+                    ok = ok && snap_say(f, line);
+                }
+            } else if (level < 0 || level >= 4) {
+                tr_sprintf(line, sizeof(line), "HCD%d: the dump is withheld: "
+                           "%s Use level 2.\r\n\r\n", hcd,
+                           level < 0 ? "its level could not be read."
+                                     : "at level 4 it can hold memory "
+                                       "addresses.");
+                ok = ok && snap_say(f, line);
+            } else {
+                ok = ok && snap_append(f, file) == 1;
+            }
+        }
+        for (k = 0; k < 4; k++) {
+            tr_sprintf(file, sizeof(file), "%s\\XHCITR%s", dir, ext[k]);
+            DeleteFileA(file);
+            tr_sprintf(file, sizeof(file), "%s\\XHCITR%s.TMP", dir, ext[k]);
+            DeleteFileA(file);
+        }
+        RemoveDirectoryA(dir);
+    }
+    return ok;
+}
+
+/* File > Save Snapshot...: /snapshot in a folder the user picks, for the
+ * selected xhci98 controller (else the first), its text in a message box. */
+static void save_snapshot_dialog(void)
+{
+    static char text[6144];
+    BROWSEINFOA bi;
+    LPITEMIDLIST pidl;
+    IMalloc *m;
+    char dir[MAX_PATH];
+    char out[MAX_PATH];
+    char args[64];
+    char *box;
+    HCURSOR old;
+    int hcd = -1;
+    int rc;
+    int i;
+
+    for (i = 0; i < ucCount && hcd < 0; i++) {
+        if (uc[i].Ours) {
+            hcd = snap_hcd_number(&uc[i]);
+        }
+    }
+    if (hcd < 0) {
+        MessageBoxA(hMain, "No controller here is driven by xhci98.sys, so "
+                    "there is nothing to take a snapshot of.",
+                    "xHCI98 USB Tree", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    memset(&bi, 0, sizeof(bi));
+    bi.hwndOwner = hMain;
+    bi.pszDisplayName = dir;
+    bi.lpszTitle = "Save the snapshot (a .DEV, .TXT, .BIN and .PSC) in:";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS;
+    pidl = SHBrowseForFolderA(&bi);
+    if (pidl == NULL) {
+        return;
+    }
+    dir[0] = '\0';
+    i = SHGetPathFromIDListA(pidl, dir);
+    if (SHGetMalloc(&m) == NOERROR) {
+        m->lpVtbl->Free(m, pidl);
+        m->lpVtbl->Release(m);
+    }
+    if (!i || dir[0] == '\0') {
+        return;
+    }
+    tr_sprintf(args, sizeof(args), "/snapshot /c %d", hcd);
+    old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+    rc = snap_child(args, dir, out, 120000);
+    SetCursor(old);
+    text[0] = '\0';
+    if (out[0] != '\0') {
+        snap_read_tail(out, text, sizeof(text));
+        DeleteFileA(out);
+    }
+    box = (char *)malloc(strlen(text) + MAX_PATH + 96);
+    if (box == NULL) {
+        return;
+    }
+    if (rc == -1) {
+        tr_sprintf(box, strlen(text) + MAX_PATH + 96,
+                   "The snapshot did not run, or did not end within two "
+                   "minutes.\r\n%s", text);
+    } else {
+        sprintf(box, "%s\r\n(The files are in %s.)", text, dir);
+    }
+    MessageBoxA(hMain, box, "xHCI98 USB Tree - snapshot",
+                MB_OK | (rc != 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
+    free(box);
+}
+
 /* /eject id=<instance id>: the whole transaction once, then exit (record
  * 25 section 6.4). The user confirmed in the run that started this one. */
 static int run_eject(void)
@@ -6900,6 +7817,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     envNt = osv.dwPlatformId == VER_PLATFORM_WIN32_NT;
     envMajor = osv.dwMajorVersion;
     envMinor = osv.dwMinorVersion;
+    /* XHCISNAP's reading (42-A.4): the whole command line is the mode's. */
+    if (__argc >= 2 && snap_is_mode(__argv[1])) {
+        return run_snap(__argc, __argv);
+    }
     if (tr_parse_args(__argc, __argv, &opts, err, sizeof(err)) != 0) {
         say(err, 1);
         return INST_EXIT_REFUSED;

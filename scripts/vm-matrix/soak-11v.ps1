@@ -482,7 +482,8 @@ if ($ident0.Spans) {
 }
 # The whole reason a stale reading cannot be mistaken for a wrong value.
 #
-# The null guard is its own throw and not a silent skip (repo audit D4): a $null
+# The null guard is its own throw and not a silent skip (an earlier repository
+# audit): a $null
 # Size binds to the [int] parameter as 0, so the freshness check would report
 # "STALE OFFSETS ... the running driver reports MiniPortExtensionSize=0" - an
 # operator sent to regenerate offsets that are perfectly fine, when the real
@@ -851,7 +852,7 @@ if ($id2['gap'] -eq 0) {
         # reason its comment gives: a backtick is PowerShell's escape character,
         # so "`t" here rendered a literal TAB and the persisted report read
         # "...<tab>ansfers aborted is 2...". The fix was applied to one branch
-        # and not its sibling (repo audit D3).
+        # and not its sibling (an earlier repository audit).
         Add-Line ("  'transfers aborted' is {0}, which does NOT account for the gap of {1}." -f $aborted, $id2['gap'])
         Add-Line  "  The residue is the stage E shape - parked interrupt IN requests on HID and hub"
         Add-Line  "  status-change endpoints. A reading to explain, NOT automatically a leak."

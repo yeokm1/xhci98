@@ -631,8 +631,8 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
     }
 
     /*
-     * One range for admission, mapping and TRB construction (Codex review of
-     * Phase 29, round 1, finding 1). An isochronous URB packet is one
+     * One range for admission, mapping and TRB construction (Phase 29). An
+     * isochronous URB packet is one
      * interval's payload, and the transfer path carries it as at most two
      * page-bounded pieces of one page in all (XhciPipeIsoFragments, through
      * hcd_io.c's fill) with a burst count TBC can hold. An endpoint whose
@@ -647,9 +647,9 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
      * guarantees that only at 1024-byte packets. A small packet size with
      * burst 0 - 4096 bytes in 512-byte packets is eight bursts - would be
      * admitted and then fail every full-sized request, so the builder's
-     * bound is applied here too (Codex review of Phase 29, round 2, finding
-     * 2). Without LEC the Mult the endpoint is programmed with already
-     * covers the bursts (the SS companion's payload is held to it above,
+     * bound is applied here too (Phase 29). Without LEC the Mult the
+     * endpoint is programmed with already covers the bursts (the SS
+     * companion's payload is held to it above,
      * and the SSP derivation computes it from them).
      */
     if (out.TransferType == XHCI_PIPE_XFER_ISOCH && out.MaxPacketSize != 0) {
@@ -761,31 +761,39 @@ ULONG XhciPipeFastMode(ULONG value)
 }
 
 /*
- * Mode 4 (task 36.19, design record 13 section 13.7): keyed on the
- * descriptor's byte, never on the Interval Table 6-12 derives from it, which
- * for a code is 10 at Full and Low Speed and 15 at High Speed and SuperSpeed
- * - values an ordinary device gives too. 128 to 255 ms are legal Full- and
- * Low-Speed values, which is why it is a mode a user sets. The fallback is
- * Interval 3 (1 ms), inside every speed's interrupt range, not the code's
- * Table 6-12 reading of 128 ms or more.
+ * Mode 4 (task 36.19; the encoding of task 42-A.18, design record 13
+ * section 13.7): keyed on the descriptor's byte, never on the Interval
+ * Table 6-12 derives from it, which for a code is 10 at Full and Low Speed
+ * and 15 at High Speed and SuperSpeed - values an ordinary device gives
+ * too. 128 to 255 ms are legal Full- and Low-Speed values, which is why it
+ * is a mode a user sets. The route is not looked at (owner, 2026-10-18).
+ * Below High Speed an Interval of 0 to 2 or of 11 to 15 is outside Table
+ * 6-12's Full- and Low-Speed range 3 to 10, at any route; a Full- or
+ * Low-Speed device behind a hub is untested ground at every code. The
+ * refusal path covers either where a controller says so. A code
+ * whose Interval is the one Table 6-12 already gives changes nothing. The
+ * fallback is Interval 3 (1 ms), inside every speed's interrupt range and
+ * at or below every interval cap, not the code's Table 6-12 reading.
  */
-static ULONG xhciPipeFastCodes(ULONG speed, ULONG route, PXHCI_PIPE_EP ep)
+static ULONG xhciPipeFastCodes(ULONG speed, PXHCI_PIPE_EP ep)
 {
+    ULONG interval;
+
     if (ep->TransferType != XHCI_PIPE_XFER_INTERRUPT ||
         ep->BInterval < XHCI_PIPE_FAST_CODE_LOW ||
         ep->BInterval > XHCI_PIPE_FAST_CODE_HIGH) {
         return 0;
     }
-    if (speed == XHCI_PIPE_SPEED_LOW || speed == XHCI_PIPE_SPEED_FULL) {
-        if (route != 0) {
-            return 0;
-        }
-    } else if (speed != XHCI_PIPE_SPEED_HIGH &&
-               speed != XHCI_PIPE_SPEED_SUPER &&
-               speed != XHCI_PIPE_SPEED_SUPER_PLUS) {
+    if (speed != XHCI_PIPE_SPEED_LOW && speed != XHCI_PIPE_SPEED_FULL &&
+        speed != XHCI_PIPE_SPEED_HIGH && speed != XHCI_PIPE_SPEED_SUPER &&
+        speed != XHCI_PIPE_SPEED_SUPER_PLUS) {
         return 0;
     }
-    ep->Interval = XHCI_PIPE_FAST_CODE_HIGH - ep->BInterval;
+    interval = ep->BInterval - XHCI_PIPE_FAST_CODE_LOW;
+    if (interval == ep->Interval) {
+        return 0;
+    }
+    ep->Interval = interval;
     ep->FallbackInterval = XHCI_PIPE_FAST_CODE_FALLBACK;
     ep->FastPoll = 1;
     return 1;
@@ -800,7 +808,7 @@ ULONG XhciPipeFastPoll(ULONG mode, ULONG speed, ULONG route,
         return 0;
     }
     if (mode == XHCI_PIPE_FAST_CODES) {
-        return xhciPipeFastCodes(speed, route, ep);
+        return xhciPipeFastCodes(speed, ep);
     }
     if (
         (mode != XHCI_PIPE_FAST_2K4K && mode != XHCI_PIPE_FAST_4K8K) ||
@@ -902,6 +910,7 @@ ULONG XhciPipeFunctionEndpointFrom(const UCHAR *config, ULONG length,
     ULONG super;
     ULONG total;
     ULONG own;
+    ULONG callerLength;
     ULONG b;
     ULONG i;
 
@@ -918,9 +927,24 @@ ULONG XhciPipeFunctionEndpointFrom(const UCHAR *config, ULONG length,
     super = speed == XHCI_PIPE_SPEED_SUPER ||
             speed == XHCI_PIPE_SPEED_SUPER_PLUS;
     own = (ULONG)config[offset + 6];
+    /*
+     * The URB carries no size for the caller's descriptor, so its own
+     * wTotalLength is all there is - a value the client wrote. It is held to
+     * the device's own configuration length: a copy longer than the
+     * configuration the device returned is not one of it, and the walk is
+     * then bounded by a length the bus read rather than by the client's
+     * word alone (a short or malformed copy still falls through to the
+     * device's byte, as before).
+     */
+    callerLength = 0;
+    if (caller != NULL) {
+        callerLength = (ULONG)caller[2] | ((ULONG)caller[3] << 8);
+        if (callerLength > length) {
+            callerLength = length;
+        }
+    }
     if (caller != NULL &&
-        XhciPipeCallerInterval(config, length, offset, caller,
-                               (ULONG)caller[2] | ((ULONG)caller[3] << 8),
+        XhciPipeCallerInterval(config, length, offset, caller, callerLength,
                                interfaceNumber, alternate, &b) ==
             XHCI_PIPE_OK &&
         b != own) {

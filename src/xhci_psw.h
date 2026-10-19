@@ -57,8 +57,9 @@
 #define XHCI_PSW_USB3PRM        0xDCUL  /* which of them the OS may enable  */
 
 /*
- * What a route or release stopped at (XHCI_PSW_STATE.Step); 0 when every
- * access was made. A route stops at a failed mask read or a failed write,
+ * The first access a route or release found failed (XHCI_PSW_STATE.Step);
+ * 0 when every access was made. A route stops at a failed mask read or a
+ * failed write,
  * so the USB 2.0 pairs never move to xHCI without the SuperSpeed
  * terminations; a release attempts each write its set selects, whatever
  * an earlier one did.
@@ -147,7 +148,8 @@ ULONG XhciPswBoardRefused(ULONG subsystem);
 ULONG XhciPswMode(ULONG vendorDevice, ULONG found, ULONG value);
 
 /* Every switchable connector to xHCI, SuperSpeed terminations first.
- * Returns st->Step; st->Written says which writes were accepted. */
+ * Returns st->Step, the first access that failed; st->Written says which
+ * writes were accepted. */
 ULONG XhciPswRoute(const XHCI_PSW_IO *io, PXHCI_PSW_STATE st);
 
 /* The registers in written back to EHCI: USB3_PSSEN then XUSB2PR written

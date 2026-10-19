@@ -62,6 +62,17 @@
 #define CMG_SVC_QUERY_REMOVE_SUBTREE    12  /* line 545, _CONFIGMG_Query_Remove_SubTree */
 #define CMG_SVC_REMOVE_SUBTREE          13  /* line 546, _CONFIGMG_Remove_SubTree */
 #define CMG_SVC_REGISTER_DEVICE_DRIVER  14  /* line 547, _CONFIGMG_Register_Device_Driver */
+/* Design record 28 (task 42-A.15): the logical-configuration services. */
+#define CMG_SVC_ADD_EMPTY_LOG_CONF      24  /* line 557, _CONFIGMG_Add_Empty_Log_Conf */
+#define CMG_SVC_GET_FIRST_LOG_CONF      26  /* line 559, _CONFIGMG_Get_First_Log_Conf */
+#define CMG_SVC_GET_NEXT_LOG_CONF       27  /* line 560, _CONFIGMG_Get_Next_Log_Conf */
+#define CMG_SVC_ADD_RES_DES             28  /* line 561, _CONFIGMG_Add_Res_Des */
+#define CMG_SVC_GET_NEXT_RES_DES        31  /* line 564, _CONFIGMG_Get_Next_Res_Des */
+#define CMG_SVC_GET_RES_DES_DATA_SIZE   33  /* line 566, _CONFIGMG_Get_Res_Des_Data_Size */
+#define CMG_SVC_GET_RES_DES_DATA        34  /* line 567, _CONFIGMG_Get_Res_Des_Data */
+#define CMG_SVC_READ_REGISTRY_VALUE     62  /* line 595, _CONFIGMG_Read_Registry_Value */
+#define CMG_SVC_REPROCESS_DEVNODE       92  /* line 628, _CONFIGMG_Reprocess_DevNode, in the "4.0 OPK2" group */
+#define CMG_SVC_GET_SET_LOG_CONF_PRIORITY 106 /* line 642, _CONFIGMG_Get_Set_Log_Conf_Priority, in the "4.0 OPK2" group */
 #define CMG_SVC_LOCK                    22  /* line 555, _CONFIGMG_Lock */
 #define CMG_SVC_UNLOCK                  23  /* line 556, _CONFIGMG_Unlock */
 #define CMG_SVC_REENUMERATE_DEVNODE     51  /* line 584, _CONFIGMG_Reenumerate_DevNode */
@@ -110,6 +121,22 @@
 #define CMG_REENUMERATE_SYNCHRONOUS 0x01    /* line 1257, CM_REENUMERATE_SYNCHRONOUS */
 #define CMG_CHANGE_STATUS_REMOVE_FLAGS 0x00 /* line 1283, CM_CHANGE_DEVNODE_STATUS_REMOVE_FLAGS */
 #define CMG_CHANGE_STATUS_ADD_FLAGS 0x01    /* line 1284, CM_CHANGE_DEVNODE_STATUS_ADD_FLAGS */
+#define CMG_REGISTRY_SOFTWARE       0x01    /* line 1227, CM_REGISTRY_SOFTWARE */
+#define CMG_REPROCESS_ASYNCHRONOUS  0x00    /* line 1287, CM_REPROCESS_DEVNODE_ASYNCHRONOUS */
+#define CMG_GET_LOG_CONF_PRIORITY   0x00    /* line 1342, CM_GET_LOG_CONF_PRIORITY */
+#define CMG_SET_LOG_CONF_PRIORITY   0x01    /* line 1343, CM_SET_LOG_CONF_PRIORITY */
+#define CMG_BASIC_LOG_CONF          0x00    /* line 2212, BASIC_LOG_CONF */
+#define CMG_FORCED_LOG_CONF         0x04    /* line 2216, FORCED_LOG_CONF */
+#define CMG_PRIORITY_EQUAL_LAST     0x00    /* line 2235, PRIORITY_EQUAL_LAST */
+#define CMG_LCPRI_SUBOPTIMAL        0x5000UL /* line 445, LCPRI_SUBOPTIMAL */
+#define CMG_LCPRI_DISABLED          0xFFFFUL /* line 453, LCPRI_DISABLED */
+#define CMG_RESTYPE_ALL             0x00    /* line 92, ResType_All */
+#define CMG_RESTYPE_MEM             0x01    /* line 94, ResType_Mem */
+#define CMG_RESTYPE_IRQ             0x04    /* line 97, ResType_IRQ */
+#define CMG_CR_NO_MORE_LOG_CONF     0x0E    /* line 951, CR_NO_MORE_LOG_CONF */
+#define CMG_CR_NO_MORE_RES_DES      0x0F    /* line 952, CR_NO_MORE_RES_DES */
+#define CMG_CR_NO_SUCH_VALUE        0x25    /* line 974, CR_NO_SUCH_VALUE */
+#define CMG_REG_SZ                  0x01    /* VMM.H line 2231, REG_SZ */
 
 /*
  * Devnode status bits, as Get_DevNode_Status returns them (CONFIGMG.H
@@ -147,6 +174,20 @@
  * it with HalGetBusData's reading before Write_Config is ever called.
  */
 #define CMG_PCI_VXD_ID              0x0043  /* VMM.H line 197, PCI_DEVICE_ID */
+
+/*
+ * The VMM's registry services, for the installer's Stor98 record (design
+ * record 28 section 4 rule 4): VMM.H's table, _RegOpenKey at line 2216 is
+ * service 0x148 and the table numbers on one a line, so _RegCloseKey (line
+ * 2217) is 0x149 and _RegQueryValueEx (line 2225) 0x151; VXDWRAPS.H lines
+ * 430 and 439 give their cdecl signatures (cm_nvlinkos.c reaches 0x148 and
+ * 0x149 the same way).
+ */
+#define CMG_VMM_VXD_ID              0x0001  /* VMM.H, VMM_DEVICE_ID */
+#define CMG_VMM_REG_OPEN_KEY        0x0148  /* VMM.H line 2216, _RegOpenKey */
+#define CMG_VMM_REG_CLOSE_KEY       0x0149  /* VMM.H line 2217, _RegCloseKey */
+#define CMG_VMM_REG_QUERY_VALUE_EX  0x0151  /* VMM.H line 2225, _RegQueryValueEx */
+#define CMG_HKEY_LOCAL_MACHINE      0x80000002UL
 #define CMG_PCI_SVC_READ_CONFIG     1       /* PCI.H line 58, _PCI_Read_Config */
 #define CMG_PCI_SVC_WRITE_CONFIG    2       /* PCI.H line 59, _PCI_Write_Config */
 
@@ -156,5 +197,13 @@
 #define CMG_PROB_WILL_BE_REMOVED    0x15    /* line 1068, CM_PROB_WILL_BE_REMOVED */
 #define CMG_PROB_DISABLED           0x16    /* line 1069, CM_PROB_DISABLED */
 #define CMG_PROB_DEVICE_NOT_THERE   0x18    /* line 1071, CM_PROB_DEVICE_NOT_THERE */
+/* Record 28 rule 2's problems. */
+#define CMG_PROB_DEVLOADER_NOT_FOUND 0x08   /* line 1055, CM_PROB_DEVLOADER_NOT_FOUND */
+#define CMG_PROB_NORMAL_CONFLICT    0x0C    /* line 1059, CM_PROB_NORMAL_CONFLICT */
+#define CMG_PROB_PARTIAL_LOG_CONF   0x10    /* line 1063, CM_PROB_PARTIAL_LOG_CONF */
+#define CMG_PROB_REINSTALL          0x12    /* line 1065, CM_PROB_REINSTALL */
+#define CMG_PROB_NO_VALID_LOG_CONF  0x1B    /* line 1074, CM_PROB_NO_VALID_LOG_CONF */
+#define CMG_PROB_FAILED_INSTALL     0x1C    /* line 1075, CM_PROB_FAILED_INSTALL */
+#define CMG_PROB_HARDWARE_DISABLED  0x1D    /* line 1076, CM_PROB_HARDWARE_DISABLED */
 
 #endif /* CM_CFGMG_H */

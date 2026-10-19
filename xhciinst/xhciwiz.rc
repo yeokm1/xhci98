@@ -1,0 +1,190 @@
+/*
+ * xhciwiz.rc - the resources of XHCIWIZ.EXE and XHCIWZ64.EXE, the
+ * installer's window (design record 26 sections 4 and 5): the icon, the
+ * version from src\xhci_version.h, the manifest (xhciwiz.manifest,
+ * resource 1 of type 24), the wizard's page templates and the Advanced
+ * dialog. Every text a page shows is set at run time from the pure half
+ * (inst_core.c), so the templates hold the controls alone.
+ */
+
+#include <windows.h>
+#include "../src/xhci_version.h"
+#include "xhciwiz_res.h"
+
+/* XHCITR's icon: the project's windows show one (owner, 2026-10-19). */
+IDI_WIZ ICON "../xhcitr/xhcitr.ico"
+
+1 24 "xhciwiz.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     XHCI_VER_CSV
+PRODUCTVERSION  XHCI_VER_CSV
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS__WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Yeo Kheng Meng\0"
+            VALUE "FileDescription",  "xHCI98 Setup\0"
+            VALUE "FileVersion",      XHCI_VER_STR "\0"
+            VALUE "InternalName",     "xhciwiz\0"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"
+            VALUE "OriginalFilename", "XHCIWIZ.EXE\0"
+            VALUE "ProductName",      "xhci98 - USB host controller driver for xHCI\0"
+            VALUE "ProductVersion",   XHCI_VER_STR "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+IDD_WELCOME DIALOG 0, 0, 300, 172
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Welcome"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_TITLE, 8, 4, 284, 10
+    LTEXT           "", IDC_TEXT, 8, 18, 284, 58
+    LTEXT           "", IDC_SYSTEM, 8, 80, 284, 18
+    LTEXT           "", IDC_LOG, 8, 100, 284, 10
+    EDITTEXT        IDC_STATUS, 8, 114, 284, 54, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL
+END
+
+IDD_UWELCOME DIALOG 0, 0, 300, 172
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Uninstall"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_TITLE, 8, 4, 284, 10
+    LTEXT           "", IDC_TEXT, 8, 18, 284, 50
+    AUTOCHECKBOX    "", IDC_U_AGREE, 8, 70, 284, 20, BS_MULTILINE | BS_TOP |
+                    WS_TABSTOP
+    LTEXT           "", IDC_SYSTEM, 8, 94, 284, 18
+    LTEXT           "", IDC_LOG, 8, 114, 284, 10
+    EDITTEXT        IDC_STATUS, 8, 126, 284, 42, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL
+END
+
+IDD_FOUND DIALOG 0, 0, 300, 172
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "What was found"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_TEXT, 8, 4, 284, 10
+    CONTROL         "", IDC_LIST, "SysListView32", LVS_REPORT |
+                    LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER |
+                    WS_TABSTOP, 8, 16, 284, 74
+    EDITTEXT        IDC_DETAIL, 8, 94, 284, 74, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL
+END
+
+IDD_COMPONENTS DIALOG 0, 0, 300, 210
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Components"
+FONT 8, "MS Sans Serif"
+BEGIN
+    AUTOCHECKBOX    "", IDC_C_DRIVERS, 8, 4, 284, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_DRIVERS_T, 20, 15, 272, 16
+    AUTOCHECKBOX    "", IDC_C_UAS, 20, 33, 272, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_UAS_T, 32, 44, 260, 18
+    AUTOCHECKBOX    "", IDC_C_TB, 8, 65, 284, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_TB_T, 20, 76, 272, 26
+    AUTOCHECKBOX    "", IDC_C_S98, 20, 105, 272, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_S98_T, 32, 116, 260, 18
+    AUTOCHECKBOX    "", IDC_C_TRAY, 8, 137, 284, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_TRAY_T, 20, 148, 272, 10
+    LTEXT           "", IDC_C_DIR_L, 8, 161, 284, 10
+    EDITTEXT        IDC_C_DIR, 8, 172, 226, 13, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "B&rowse...", IDC_C_BROWSE, 240, 171, 52, 14
+    LTEXT           "", IDC_C_DIR_T, 8, 189, 284, 18
+    LTEXT           "", IDC_C_DIR_WHY, 8, 189, 284, 18
+END
+
+IDD_SETTINGS DIALOG 0, 0, 300, 200
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Settings"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_S_HEAD, 8, 2, 284, 18
+    EDITTEXT        IDC_S_NOTE, 8, 176, 218, 20, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL
+    PUSHBUTTON      "&Advanced...", IDC_S_ADVANCED, 232, 179, 60, 14
+END
+
+IDD_SUMMARY DIALOG 0, 0, 300, 172
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Summary"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_TEXT, 8, 4, 284, 18
+    EDITTEXT        IDC_DETAIL, 8, 24, 284, 144, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL
+END
+
+IDD_PROGRESS DIALOG 0, 0, 300, 172
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Progress"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_TEXT, 8, 4, 284, 10
+    CONTROL         "", IDC_PROGRESSBAR, "msctls_progress32", WS_BORDER,
+                    8, 16, 284, 10
+    LISTBOX         IDC_STEPLIST, 8, 30, 284, 66, LBS_NOINTEGRALHEIGHT |
+                    WS_VSCROLL | WS_BORDER
+    LTEXT           "", IDC_STATUS, 8, 100, 284, 20
+    EDITTEXT        IDC_DETAIL, 8, 122, 284, 46, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL
+END
+
+IDD_STEPS DIALOG 0, 0, 300, 172
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Steps left for you"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_TEXT, 8, 4, 284, 20
+    EDITTEXT        IDC_DETAIL, 8, 26, 284, 122, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL
+    PUSHBUTTON      "&Save as text file...", IDC_SAVE, 8, 154, 100, 14
+    PUSHBUTTON      "Open &Device Manager", IDC_DEVMGR, 114, 154, 100, 14
+END
+
+IDD_FINISH DIALOG 0, 0, 300, 172
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Finish"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_F_LAST, 8, 4, 284, 20
+    EDITTEXT        IDC_DETAIL, 8, 26, 284, 110, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL
+    AUTORADIOBUTTON "", IDC_F_NOW, 8, 142, 284, 10, WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "", IDC_F_LATER, 8, 154, 284, 10
+END
+
+IDD_ADVANCED DIALOG 0, 0, 320, 250
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION |
+      WS_SYSMENU
+CAPTION "Advanced settings"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_A_HEAD, 8, 6, 304, 18
+    CONTROL         "", IDC_LIST, "SysListView32", LVS_REPORT |
+                    LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER |
+                    WS_TABSTOP, 8, 26, 304, 96
+    EDITTEXT        IDC_A_TEXT, 8, 126, 304, 70, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL
+    LTEXT           "Setting:", IDC_A_LABEL, 8, 204, 40, 10
+    COMBOBOX        IDC_A_CHOICE, 50, 202, 200, 90, CBS_DROPDOWNLIST |
+                    WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        IDC_A_EDIT, 50, 202, 80, 13, ES_AUTOHSCROLL | ES_NUMBER |
+                    WS_TABSTOP
+    DEFPUSHBUTTON   "OK", IDOK, 206, 228, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 262, 228, 50, 14
+END

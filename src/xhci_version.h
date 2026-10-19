@@ -3,14 +3,32 @@
  * (roadmap task 14.1.10).
  *
  * **This file is the single editable source of the version.** Bump it here and
- * nowhere else. Four other sites take their value from it by including it -
- * `src\xhci98.rc`'s four resource fields, `xhciqual\qual.h`'s `TOOL_VERSION`,
- * and `xhcisnap\xhcisnap.c`'s `XHCISNAP_VERSION` - and two cannot, because an
- * INF is not compiled: the `DriverVer` in `src\xhci98.inf` and the one in
- * `src\xhci98-amd64.inf` (the 64-bit package's, since roadmap task 21.3). Both
- * keep a literal and both are **checked** against this file by
- * `scripts\inf-gate\check-inf.ps1`, which `build-driver.cmd` runs over each
- * file on every build.
+ * in the eleven literals listed below, and nowhere else. These take their value
+ * from it by including it:
+ *
+ *   - the four drivers: `src\xhci98.rc`'s four resource fields and
+ *     `src\hcd_entry.c` and `src\hcd_msi86.c`; `src\uas\xhciuas.rc` and
+ *     `uas_entry.c`; `src\cm\xhcicm.rc` and `cm_entry.c`;
+ *     `src\hlpr\xhcihlpr.rc` and `hlpr_entry.c`
+ *   - Stor98 (roadmap-usb4 task 42-A.30): `src\stor98\src\stor98ver.h`,
+ *     which `nvme2k.rc` reads for stor98.mpd and both stor98.sys images
+ *   - the tools: `xhciqual\qual.h`'s `TOOL_VERSION`, `xhcisnap\xhcisnap.c`'s
+ *     `XHCISNAP_VERSION`, `xhciinst\xhciinst.c`, `xhcicln\xhcicln.c`,
+ *     `xhcitr\xhcitr.c` and `xhcitr\xhcitr.rc`
+ *
+ * Eleven cannot include it, because an INF and a manifest are not compiled, and
+ * keep a literal that a gate **checks** against this file on every build
+ * (`build-driver.cmd` runs each gate):
+ *
+ *   - the `DriverVer` of all ten INFs: `src\xhci98.inf` and
+ *     `src\xhci98-amd64.inf` (`scripts\inf-gate\check-inf.ps1`),
+ *     `src\uas\xhciuas.inf` and `xhciuas-amd64.inf` (`check-uas-inf.ps1`),
+ *     and `src\cm\xhcicm.inf`, `xhcicm-amd64.inf`, `xhcicmf.inf` and
+ *     `xhcicmf-amd64.inf` (`check-cm-inf.ps1`), and Stor98's
+ *     `src\stor98\inf\stor98-x86.inf` and `stor98-x64.inf`
+ *     (`check-stor98-inf.ps1`)
+ *   - the `assemblyIdentity` version in `xhcitr\xhcitr.manifest`
+ *     (`check-inf.ps1`, since 2026-10-18)
  *
  * **Three toolchains include this**: the Win2000 DDK's `rc.exe` (the driver
  * resource), MSVC 6.0's `cl.exe` (the snapshot reader and the host test suite)
@@ -51,16 +69,16 @@
 
 /* The four-part package version, as four integers - what FILEVERSION and
  * PRODUCTVERSION take, and what the Windows shell sorts by. */
-#define XHCI_VER_CSV            3,0,0,0
+#define XHCI_VER_CSV            3,1,0,0
 
 /* The same number as a string - the resource's two version strings, the DOS
  * qualifier's banner, and the snapshot reader's report header. Must agree with
  * XHCI_VER_CSV above; the INF gate refuses a build where it does not. */
-#define XHCI_VER_STR            "3.0.0.0"
+#define XHCI_VER_STR            "3.1.0.0"
 
 /* The release date, in the MM/DD/YYYY form `DriverVer` takes, zero-padded -
  * the INF gate refuses an unpadded one, because Windows 98's 16-bit parser is
  * the reason the padding rule exists. */
-#define XHCI_DRIVERVER_DATE     "10/17/2026"
+#define XHCI_DRIVERVER_DATE     "10/19/2026"
 
 #endif /* XHCI_VERSION_H */

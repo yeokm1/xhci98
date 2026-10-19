@@ -281,6 +281,90 @@ static void test_bounds(void)
     CHECK_EQ(CmQpciBuild(built, CM_QP_MAX_BYTES - 1, &in), 0, "room refused");
 }
 
+/* ---- Windows 98 SE and ME: the worker's walk (task 42-A.14) ---------- */
+
+static unsigned long belowReads;
+static unsigned long admitAsked;
+static unsigned long admitRefuse = 0xFFFFFFFFUL;  /* a bridge refused */
+
+static ULONG model_below(PVOID ctx, ULONG bdf, UCHAR *buf, ULONG bytes,
+                         PULONG valid)
+{
+    belowReads++;
+    return model_read(ctx, bdf, buf, bytes, valid);
+}
+
+static ULONG model_admit(PVOID ctx, ULONG bridge, ULONG buses)
+{
+    (void)ctx;
+    (void)buses;
+    admitAsked++;
+    return bridge != admitRefuse;
+}
+
+static void test_below_9x(void)
+{
+    CM_QPCI_IN in;
+    ULONG n;
+
+    /* The below-reader reads only below the port; the NHI and the port
+     * stay with the main reader; every bridge entered is admitted first. */
+    p14s();
+    in_one_port(&in, BDF(4, 1, 0));
+    in.BelowRead = model_below;
+    in.Admit = model_admit;
+    belowReads = 0;
+    admitAsked = 0;
+    admitRefuse = 0xFFFFFFFFUL;
+    n = CmQpciBuild(built, sizeof(built), &in);
+    CHECK_EQ(n, CM_QP_HDR_BYTES + 5 * CM_QP_ENT_BYTES, "the whole chain");
+    CHECK_EQ(belowReads, 96 + 3, "below through the below-reader");
+    CHECK_EQ(readsMade - belowReads, 2, "the NHI and the port by the main");
+    CHECK_EQ(admitAsked, 3, "the port, the USP and the DSP asked");
+    CHECK_EQ(get32(built, CM_QP_O_FLAGS) & CM_QP_F_BELOW_OS, 0, "read");
+
+    /* A bridge whose numbers nobody trusted: listed, its bus not entered. */
+    p14s();
+    in_one_port(&in, BDF(4, 1, 0));
+    in.BelowRead = model_below;
+    in.Admit = model_admit;
+    admitRefuse = BDF(7, 0, 0);
+    n = CmQpciBuild(built, sizeof(built), &in);
+    CHECK_EQ(n, CM_QP_HDR_BYTES + 4 * CM_QP_ENT_BYTES, "DSP listed, no NVMe");
+    CHECK_EQ(ent(built, 3, CM_QP_E_BDF), BDF(7, 0, 0), "the DSP kept");
+    CHECK_EQ(ent(built, 3, CM_QP_E_STATE), CM_QP_S_READ, "and read");
+
+    /* The port itself refused: nothing below. */
+    p14s();
+    in_one_port(&in, BDF(4, 1, 0));
+    in.Admit = model_admit;
+    admitRefuse = BDF(4, 1, 0);
+    n = CmQpciBuild(built, sizeof(built), &in);
+    CHECK_EQ(n, CM_QP_HDR_BYTES + 2 * CM_QP_ENT_BYTES, "nothing below");
+    admitRefuse = 0xFFFFFFFFUL;
+
+    /* A held member (its controller lost): one entry, HELD, no read. */
+    p14s();
+    in_one_port(&in, BDF(4, 1, 0));
+    in.BelowRead = model_below;
+    in.Held = 1;
+    belowReads = 0;
+    n = CmQpciBuild(built, sizeof(built), &in);
+    CHECK_EQ(n, CM_QP_HDR_BYTES + 3 * CM_QP_ENT_BYTES, "one entry");
+    CHECK_EQ(ent(built, 2, CM_QP_E_STATE), CM_QP_S_NOT_READ_OS, "not read");
+    CHECK_EQ(ent(built, 2, CM_QP_E_INFO), CM_QP_NR_HELD, "held");
+    CHECK_EQ(belowReads, 0, "nothing read below");
+
+    /* Not read at all, with the worker's reason. */
+    p14s();
+    in_one_port(&in, BDF(4, 1, 0));
+    in.ReadBelow = 0;
+    in.Reason = CM_QP_NR_BUSY;
+    n = CmQpciBuild(built, sizeof(built), &in);
+    CHECK_EQ(ent(built, 2, CM_QP_E_INFO), CM_QP_NR_BUSY, "the reason");
+    CHECK(get32(built, CM_QP_O_FLAGS) & CM_QP_F_BELOW_OS, "flag");
+}
+
 static void test_states(void)
 {
     CM_QPCI_IN in;
@@ -694,9 +778,26 @@ static void test_node_text(void)
     CHECK_EQ(tr_qpci_parse(outb, info, &q), 1, "parsed 9x");
     tr_text_init(&t, text, sizeof(text));
     tr_qpci_text(&t, &q, 0);
-    CHECK(strstr(text, "Not read on this system") != NULL, "9x");
+    CHECK(strstr(text, "Not read on this system") != NULL, "9x, old driver");
     CHECK(strstr(text, "PCI 08:00.0") == NULL, "nothing below");
     CHECK(widest(text) <= 79, "79 columns, 9x");
+
+    /* Each reason a 98 SE or ME driver gives (task 42-A.14). */
+    for (n = CM_QP_NR_NO_WORKER; n <= CM_QP_NR_HELD; n++) {
+        in.Reason = n;
+        info = CmQpciBuild(built, sizeof(built), &in);
+        (void)CmQpciAnswer(outb, sizeof(outb), built, info, &info);
+        CHECK_EQ(tr_qpci_parse(outb, info, &q), 1, "parsed reason");
+        tr_text_init(&t, text, sizeof(text));
+        tr_qpci_text(&t, &q, 0);
+        CHECK(strstr(text, "Not read on this system") == NULL, "a reason");
+        CHECK(strstr(text, n == CM_QP_NR_BUSY ? "Refresh later" :
+                           n == CM_QP_NR_GUARD ? "PCI.VXD" :
+                           n == CM_QP_NR_HELD ? "controller was lost" :
+                           "no configuration-manager") != NULL, "its text");
+        CHECK(widest(text) <= 79, "79 columns, each reason");
+    }
+    in.Reason = 0;
 }
 
 /* A switch with two downstream ports: the walk finds both bridges before
@@ -928,6 +1029,7 @@ int main(void)
     test_chain();
     test_bounds();
     test_states();
+    test_below_9x();
     test_answer();
     test_short();
     test_walk();

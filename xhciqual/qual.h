@@ -268,13 +268,15 @@ void pir_read(PIRINFO *pi);
 #define QUIRK_ANY_DID 0xFFFFU
 
 /*
- * The driver's HCIVERSION floor: xhci98 refuses a controller below it
- * (src/xhci_caps.c, XhciCheckCapDword0 against XHCI_HCIVERSION_1_0, which
- * returns XHCI_HC_BAD_VERSION). 1.0 today; roadmap-hcd task 38.11 moves it
- * to 0.96 (0x0096), and this follows it then. The report says when a listed
- * part is below it, so no value it names is read as acting on that part.
+ * The driver's lowest HCIVERSION floor: xhci98 refuses a controller below
+ * 0.96 at every XhciAccept096 (src/xhci_caps.c, XhciVersionFloor and
+ * XhciCheckCapDword0, roadmap-hcd task 38.11). Between 0.96 and 1.0 the
+ * floor is the registry value's to set (report.c says which), so only a
+ * part below 0.96 is one the driver never starts. The report says when a
+ * listed part is below it, so no value it names is read as acting on that
+ * part.
  */
-#define QUIRK_HCI_FLOOR 0x0100U
+#define QUIRK_HCI_FLOOR 0x0096U
 
 typedef struct {
     u16 vid, did;          /* did QUIRK_ANY_DID: a vendor-wide row */
@@ -765,8 +767,6 @@ const char *usb_class_name(u8 cls);
 
 /* timing */
 void msleep(unsigned ms);
-u32  ticks_now(void);                  /* BIOS 18.2 Hz tick counter */
-u32  ticks_to_ms(u32 dt);
 
 /* ------------------------------------------------------------------ */
 /* irq.c                                                              */
@@ -1087,8 +1087,9 @@ void sys_crit_remove(void);
  * read, and the header says the option skipped it. */
 void sysinfo_skip(SYSINFO *si);
 /* sysasm.asm: EFLAGS.ID toggles (1) or not; CPUID with every register but
- * EAX saved and restored (lesson-cpuid-ebx: CPUID clobbers EBX, which
- * Watcom's register convention, like MSVC's, expects preserved). */
+ * EAX saved and restored (docs/contributing/lessons.md, "MSVC 6.0 inline
+ * __asm CPUID clobbers EBX": CPUID writes EBX, which Watcom's register
+ * convention, like MSVC's, expects preserved). */
 int  sys_has_cpuid(void);
 void sys_cpuid(u32 leaf, u32 *out4);
 /* report.c: the console alone (paged), for the quick scan's screen lines

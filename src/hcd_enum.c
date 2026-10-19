@@ -141,8 +141,8 @@ static ULONG hcdHalted(PHCD_CONTROLLER hc)
  * to complete or lose, so whatever the waiter sees after the submit is its
  * own command's: a loss published between a clear outside the lock and the
  * submit - an earlier command's abort ending - would otherwise be taken for
- * the new command's (review of 36.4, round 2; it predates 36.4). An
- * invalidation in between is the controller's failure or stop, which the
+ * the new command's (reviewed and revised with 36.4; it predates 36.4).
+ * An invalidation in between is the controller's failure or stop, which the
  * submit then refuses. Returns whether the engine read idle. Thread only.
  */
 static ULONG hcdCommandArm(PHCD_CONTROLLER hc)
@@ -264,8 +264,8 @@ static VOID hcdThreadWaitDrain(PHCD_CONTROLLER hc)
  * a slice at a time, a drain asked for between slices (hcdThreadWaitDrain).
  * A deadline found passed is followed by one more zero-time look at the
  * event, so a completion signalled before the deadline is never taken for
- * a timeout because the thread ran late (Codex review of 5bca7bd, round 1,
- * finding 1). Returns whether the event was signalled. Thread only.
+ * a timeout because the thread ran late (reviewed and revised after
+ * 5bca7bd). Returns whether the event was signalled. Thread only.
  */
 static ULONG hcdCommandWaitDone(PHCD_CONTROLLER hc)
 {
@@ -308,7 +308,7 @@ static ULONG hcdCommandWaitDone(PHCD_CONTROLLER hc)
  * A completion counts only when its TRB is the one this submit placed
  * (CmdDonePA, from hcd_dev.c): a completion of an earlier command, the
  * start's No Op among them, can land between the clear and the submit
- * (Codex review of batch (b), round 1, finding 7). The event is cleared
+ * (batch (b)). The event is cleared
  * before the address is read, so a completion arriving in between still
  * leaves it signalled. A command that never answers is the controller's
  * failure: the reset is requested, and the recovery's invalidation settles
@@ -356,7 +356,7 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
         if (hc->CmdDoneLost) {
             /* The engine's own watchdog aborted it: what the command did,
              * an Enable Slot's slot among it, is unknown, and only the
-             * reset settles that (round 2, finding 5). */
+             * reset settles that. */
             break;
         }
         if (hc->CmdDonePA == trbPA) {
@@ -539,8 +539,7 @@ static ULONG hcdDisableSlotId(PHCD_CONTROLLER hc, ULONG slotId)
  * record freed. A Disable Slot the controller did not confirm leaves the
  * record quarantined instead - off the port, still in SlotDevice[], its
  * DCBAA entry and EP0 ring untouched - until the recovery the failure
- * requested invalidates every slot and the thread frees it (Codex review of
- * batch (b), round 1, finding 8).
+ * requested invalidates every slot and the thread frees it (batch (b)).
  */
 static VOID hcdDisableRecord(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
@@ -639,7 +638,7 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     hc->Ep0Resets++;
     /* EP0's pipe paused for the commands: a URB's doorbell meanwhile would
-     * run on the endpoint being repositioned (round 3, finding 2). */
+     * run on the endpoint being repositioned. */
     HcdIoPipePause(hc, &dev->Ep0Pipe);
     state = hcdEp0State(hc, dev);
     if (state == XHCI_EP_STATE_RUNNING) {
@@ -677,7 +676,7 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             XHCI_RING_OK ||
         hcdCommand(hc, &trb, &control) != XHCI_CC_SUCCESS) {
         /* EP0 stays paused until the reset the failure asked for
-         * invalidates the device (round 5, finding 1). */
+         * invalidates the device. */
         HcdSvcRequestReset(&hc->Hc);
         return 0;
     }
@@ -687,7 +686,7 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         HcdHubClearTt(hc, dev, 0, XHCI_HUB_TT_EP_CONTROL, 0);
     }
     /* Not for a device being torn down: its freeze set Gone under this
-     * lock (Codex review of d54eef0, finding 1). */
+     * lock (reviewed and revised after d54eef0). */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (waiting && !dev->Gone && dev->Susp.State != XHCI_SUSP_SUSPENDED &&
         dev->Susp.State != XHCI_SUSP_RECOVERING &&
@@ -695,7 +694,7 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         /* Not on a suspended link, one whose state is unknown, or one
          * the machine saw leave: the survivors wait for selective
          * suspend's restart, or go with the device (design record 14
-         * section 3.2; Codex review of 36.30, rounds 1 and 2). */
+         * section 3.2; task 36.30). */
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -785,15 +784,15 @@ static ULONG hcdEp0Withdraw(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * The records an unpowered root-hub detach left Abandoned - off their
  * ports, their slots still enabled - get their Disable Slot at the first
  * powered pass, so a restore that kept the slots does not strand them
- * (Codex review of batch (b), round 2, finding 3). Deepest tier first, as
+ * (batch (b)). Deepest tier first, as
  * every other teardown goes (hcdSubtreeGo), never by slot ID: a hub may
  * hold a higher or lower slot than the devices behind it, and a device's
  * Parent Hub Slot ID - a TT's, or since 29-0 a higher-rank SuperSpeed
  * hub's (xHCI Table 6-6) - must not name a slot already disabled. A
  * failure quarantines the record as a departing device's does, and ends
  * the sweep: the reset that failure requested invalidates every slot left,
- * so no hub is disabled under a child the controller still holds (Codex
- * review of b6e569e, finding 2). Thread only, powered.
+ * so no hub is disabled under a child the controller still holds
+ * (reviewed and revised after b6e569e). Thread only, powered.
  */
 static VOID hcdSweepAbandoned(PHCD_CONTROLLER hc)
 {
@@ -1098,7 +1097,7 @@ static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ULONG ok;
 
     /* An elapsed-time bound, not a count of 1 ms sleeps, whose length the
-     * clock's resolution decides (round 13, finding 3): a timer, polled
+     * clock's resolution decides: a timer, polled
      * with a zero wait - no clock read is on the import allowlist. */
     KeInitializeTimer(&deadline);
     HcdRelativeMs(&due, HCD_TRANSFER_WAIT_MS);
@@ -1108,7 +1107,7 @@ static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     for (;;) {
         /* Both under the lock the retirement and the halt are recorded
          * under, so the last client request's STALL cannot fall between
-         * the two reads (round 13, finding 1). */
+         * the two reads. */
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         halted = dev->Ep0Halted;
         count = dev->Ep0Queue.Count;
@@ -1164,8 +1163,7 @@ ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
 /* HcdThreadControl, and *stalled 1 only when the request reached the device
  * and the device answered it with a STALL - not when it never went out, or
- * failed any other way (Codex review of batch (c), round 19, finding 2).
- * Thread only. */
+ * failed any other way (batch (c)). Thread only. */
 ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                          UCHAR requestType, UCHAR request, USHORT value,
                          USHORT index, ULONG length, PULONG bytes,
@@ -1183,7 +1181,7 @@ ULONG HcdThreadControlEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * refused - STALLED, or FAILED with another completion - apart from one
  * that never reached it (NOT_SENT: EP0 still busy with a client's transfer,
  * the device going, or a timeout), which says nothing about the device
- * (Codex review of c4ec1c3, finding 1). Thread only. */
+ * (reviewed and revised after c4ec1c3). Thread only. */
 ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               UCHAR requestType, UCHAR request,
                               USHORT value, USHORT index, ULONG length,
@@ -1219,7 +1217,7 @@ static ULONG hcdThreadControlAny(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     if (dev->Ep0Stuck || hc->ScratchHeld != 0) {
         /* Its record is still queued from a timeout: reusing it would
-         * relink the engine's queue (round 2, finding 10). Or another
+         * relink the engine's queue. Or another
          * device's abandoned TD may still write the scratch until that
          * slot is taken back (35-T.3). */
         return HCD_CTL_NOT_SENT;
@@ -1247,8 +1245,8 @@ static ULONG hcdThreadControlAny(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * EP0 to itself: client URBs are held at the pipe's gate, those already
      * on the ring are let finish, and a STALL among them is recovered here,
      * before this SETUP - a control transfer queued behind a Halted EP0
-     * would only time out into a controller reset (Codex review of batch
-     * (c), round 11, finding 2, and round 12, finding 1). A client transfer
+     * would only time out into a controller reset (batch (c)). A client
+     * transfer
      * that never ends within the transfer wait fails this request instead,
      * without a reset.
      */
@@ -1330,7 +1328,7 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     zero.QuadPart = 0;
 
     /* Published and rung under the lock, and never for a device being
-     * torn down (Gone; Codex review of d54eef0, finding 1). In the same
+     * torn down (Gone; reviewed and revised after d54eef0). In the same
      * hold the thread registers as this device's waiter and looks for a
      * cycle mark (35-T.3/4): one made after hcdEp0Quiet's last look and
      * before this hold is read here, before anything goes out, and one
@@ -1468,7 +1466,7 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (!done) {
         /* The TD is still on the ring and may yet DMA into the scratch:
          * nothing reuses it until the recovery's HCRST has taken every slot
-         * (Codex review of batch (b), round 1, finding 8). The record stays
+         * (batch (b)). The record stays
          * on the queue; the invalidation frees the device with it. */
         hc->EnumTransfersTimedOut++;
         hc->ScratchTainted = 1;
@@ -1639,10 +1637,9 @@ static ULONG hcdResetPort(PHCD_CONTROLLER hc, PHCD_PORT p, PULONG speed,
         ok = XhciLinkResetDone(portsc, &warm);
         /* A hot reset asked for that the xHC carried out warm - after a
          * failed hot-reset handshake (4.19.5.1) - shows as WRC; counted
-         * from what was observed, not from what was written (Codex review
-         * of Phase 29, round 1, finding 5), and whether or not the link
-         * then trained: WRC has just been acknowledged, so this is the one
-         * chance to see it (round 2, finding 3). */
+         * from what was observed, not from what was written (Phase 29),
+         * and whether or not the link then trained: WRC has just been
+         * acknowledged, so this is the one chance to see it. */
         if (warm && p->Link.LastReset == XHCI_LINK_ACT_HOT_RESET) {
             hc->Counters.SsResetsConverted++;
             XHCI_DBG_VALUE("hcd: hot reset converted to warm, port/ok",
@@ -1793,7 +1790,7 @@ ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
      * Port Number (xHCI Table 6-6; HcdHubPlace) were placed for the old
      * one. Readdressing would carry them over stale, so a changed rank
      * fails the RESET_PORT, which drops the device to be enumerated afresh
-     * at the link it now has (Codex review of b6e569e, finding 3). */
+     * at the link it now has (reviewed and revised after b6e569e). */
     if (was == XHCI_SPEED_SUPER) {
         speed = hcdLinkRankNow(hc, dev);
         if (speed != dev->SsLinkRank) {
@@ -2318,8 +2315,8 @@ ULONG HcdDeviceReadText(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * and only a device with the held vendor and product id costs a serial read
  * - the one extra request on the USB 2.0 path, made only while such a hold
  * exists. The held device itself is 29-A.5's passive fallback seen from the
- * USB 2.0 side, counted as SsDevicesOnUsb2 (Codex review of Phase 29, round
- * 2, finding 1, which withdrew the BOS probe that counted it before). Thread.
+ * USB 2.0 side, counted as SsDevicesOnUsb2 (Phase 29, which withdrew the
+ * BOS probe that counted it before). Thread.
  */
 static VOID hcdHoldCompanionSaw(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
@@ -2539,7 +2536,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
                              p->Hub == NULL ? p->LinkPsiv : p->Enum.Speed) ==
                 NULL) {
                 /* The slot is enabled but unowned: give it back here, the
-                 * machine never learns of it (round 1, finding 11). */
+                 * machine never learns of it. */
                 (VOID)hcdDisableSlotId(hc, next->SlotId);
                 next->SlotId = 0;
                 return 1;
@@ -2686,8 +2683,8 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
                                p->PortId);
             }
             /* The port enumerated: a later give-up of it starts its re-arm
-             * waits from the first (hcd_hub.c; Codex review of the Phase
-             * 28-31 integration, round 3, finding 2). */
+             * waits from the first (hcd_hub.c; the Phase 28-31
+             * integration). */
             p->HubSsRearms = 0;
             XhciEnumNoteRefill(&p->Notes);
             (VOID)XhciEnumStep(&p->Enum, next, &none);
@@ -2737,8 +2734,8 @@ static ULONG hcdTimerFired(PKTIMER t);
 /* A hub port deferred for the first answer, remembered by its physical
  * path - the hub's root port and Route String and the port's number - so
  * the recovery a halt brings, which frees the hub object and builds it
- * again, keeps it deferred (HcdHubStart; Codex review of 33.3, round 1,
- * finding 1). A full table defers nothing more by path. Thread only. */
+ * again, keeps it deferred (HcdHubStart; task 33.3). A full table defers
+ * nothing more by path. Thread only. */
 static VOID hcdSettleRememberHubPort(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
     PHCD_USB_DEVICE hubDev;
@@ -2760,8 +2757,7 @@ static VOID hcdSettleRememberHubPort(PHCD_CONTROLLER hc, PHCD_PORT p)
         }
     }
     /* The table is full: every hub port a rebuild numbers is taken as
-     * deferred until the settle, rather than this one forgotten (round 2,
-     * finding 2). */
+     * deferred until the settle, rather than this one forgotten. */
     hc->SettleDeferHubFull = 1;
 }
 
@@ -2864,7 +2860,7 @@ static ULONG hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
          * looked for only between the machine's step and the next action,
          * so a PDO just created is recorded (PdoExists) and the
          * invalidation that follows takes the port to Gone, not Empty
-         * (Codex review of batch (b), round 3, finding 1). */
+         * (batch (b)). */
         (VOID)XhciEnumStep(&p->Enum, &event, &act);
         if (act.Kind != XHCI_ENUM_ACT_NONE && hcdHalted(hc)) {
             break;
@@ -3061,8 +3057,7 @@ static VOID hcdPortInspectAgain(PHCD_CONTROLLER hc, PHCD_PORT p)
  * owed again at the next pass, until an inspection completes on readable
  * reads; a port that stays unreadable hands the controller to recovery,
  * whose invalidation settles every port. An unreadable PORTSC never drops
- * pending port work (Codex review of the Phase 28-31 integration, rounds 5
- * and 6). Thread.
+ * pending port work (the Phase 28-31 integration). Thread.
  */
 static VOID hcdPortUnreadable(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
@@ -3442,10 +3437,9 @@ static ULONG hcdTolPortFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
 /*
  * One root port marked changed: read it, acknowledge the change bits this
  * read saw - only those, so a change arriving after the read stays for the
- * next pass (Codex review of batch (b), round 1, finding 10) - and feed its
- * machine what XhciLinkPortFeed decides (xhci_link.c), which is design
- * record 13 section 5.3's connect rule (finding 9) for a USB 2.0 port and a
- * usable USB3 link:
+ * next pass (batch (b)) - and feed its machine what XhciLinkPortFeed
+ * decides (xhci_link.c), which is design record 13 section 5.3's connect
+ * rule for a USB 2.0 port and a usable USB3 link:
  *
  *   CSC set     the device left, or left and came back: whatever the port
  *               held goes (DISCONNECT), and a connection now is a new device
@@ -3458,8 +3452,7 @@ static ULONG hcdTolPortFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
  * A USB3 link in SS.Inactive, Compliance Mode or Cold Attach (29-A.2) is fed
  * a disconnect from any state that holds something, Failed included, and is
  * warm-reset within its budget or given up; the trained link's reset
- * completion then finds the machine Empty and starts it (Codex review of
- * Phase 29, round 1, findings 2 and 3).
+ * completion then finds the machine Empty and starts it (Phase 29).
  */
 static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
@@ -3482,12 +3475,12 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
      * port still reads it in progress: the inspection is owed again and
      * nothing is acknowledged or fed until it reads otherwise, so neither a
      * first answer nor the machine takes a link still training for settled
-     * (Codex review of 33.3, round 2, finding 1). A reset still in progress
+     * (task 33.3). A reset still in progress
      * past twice its own wait (HCD_WARM_RESET_WAIT_MS, by a relative timer,
      * and by passes as a fallback) is the controller's
      * failure, as an unreadable port is: its recovery is asked for once and
      * the inspection stays owed - never an ordinary inspection of a port
-     * still in reset (round 3). */
+     * still in reset. */
     if (p->LinkRecovering != 0 && (portsc & XHCI_PORTSC_PR) != 0) {
         if (p->LinkRecovering != HCD_LINK_RECOVERY_FAILED) {
             p->LinkRecovering++;
@@ -3517,8 +3510,8 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
          * - a device that may not be the one before: the next device's
          * refused send-back gets its own recreation budget
          * (hcdHoldResolve). The resolver's own disconnect is software
-         * only, raises no CSC and keeps the count (Codex review of the
-         * Phase 28-31 integration, round 4, finding 2). */
+         * only, raises no CSC and keeps the count (the Phase 28-31
+         * integration). */
         p->HoldRecoverFails = 0;
     }
     /* A held SuperSpeed port is not served: its link is Disabled and stays
@@ -3563,14 +3556,14 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     }
     /* The disconnect may have torn a subtree down and had a Stop Endpoint
      * fail, which hands the controller to recovery: no link action on its
-     * old slots' port then, as the hub-port path decides (Codex review of
-     * the Phase 28-31 integration, finding 4). */
+     * old slots' port then, as the hub-port path decides (the Phase 28-31
+     * integration). */
     if (hcdHalted(hc)) {
         return;
     }
     /* Its outcome is read at the next inspection, which the reset's own
      * change brings; until then the first answer counts it in flight
-     * (task 33.3; Codex review of 33.3, round 1, finding 2). */
+     * (task 33.3). */
     p->LinkRecovering = (act.Kind == XHCI_LINK_ACT_WARM_RESET) ? 1UL : 0UL;
     if (p->LinkRecovering) {
         /* The link's absence through its warm reset is the driver's
@@ -3579,7 +3572,7 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
         /* One relative timer for every root link in recovery, re-armed by
          * each warm reset (a later one extends the others' bound), armed
          * only here and cancelled when the thread leaves (hcd_ctl.c), so
-         * none outlives the controller's storage (round 4). */
+         * none outlives the controller's storage. */
         HcdRelativeMs(&due, 2UL * HCD_WARM_RESET_WAIT_MS);
         (VOID)KeSetTimer(&hc->LinkRecoverTimer, due, NULL);
     }
@@ -3602,8 +3595,8 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     }
     /* The resolver reads the port as it is now, through the same rule: an
      * unreadable read owes the whole inspection again, and the budget is
-     * charged until an inspection completes (Codex review of the Phase
-     * 28-31 integration, round 6, finding 1). */
+     * charged until an inspection completes (the Phase 28-31
+     * integration). */
     portsc = XhciReadPortsc(ext, p->PortId);
     if (portsc == 0xFFFFFFFFUL) {
         hcdPortUnreadable(hc, p);
@@ -3690,8 +3683,8 @@ static ULONG hcdHoldPendingOn(PHCD_CONTROLLER hc, ULONG port)
  * The one way out of Present-with-no-PDO on a root port: a device whose
  * PDO creation listed nothing because a send-back was accepted for it
  * (hcd_pdo.c), once no send-back is pending for its port any more - the
- * service refused it, or it was forgotten (Codex review of the Phase 28-31
- * integration, finding 2, and round 2, finding D). Called with a readable
+ * service refused it, or it was forgotten (the Phase 28-31 integration).
+ * Called with a readable
  * PORTSC: by the hold service on a refusal, and by every inspection of the
  * root port (hcdPortChanged), so no other path can leave it stuck. A device
  * still connected is refused in place: HoldAsked cleared, HoldRefused set
@@ -3731,7 +3724,7 @@ static VOID hcdHoldResolve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc)
      * while the count is nonzero (hcd_pdo.c); after
      * HCD_HOLD_RECOVER_TRIES the device is left refused, with no PDO and
      * nothing more tried, until the port reads physically disconnected
-     * (Codex review of the Phase 28-31 integration, round 3, finding 3). */
+     * (the Phase 28-31 integration). */
     if (++p->HoldRecoverFails >= HCD_HOLD_RECOVER_TRIES) {
         hc->HoldRecoverGiveUps++;
         XHCI_DBG_VALUE("hcd: hold refused, PDOs not created, left, port",
@@ -3782,8 +3775,8 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
             /* Unreadable says nothing about the device: the request stays
              * pending and is looked at again next pass, and a port that
              * stays unreadable hands the controller to recovery, whose
-             * invalidation drops the device and forgets the hold (Codex
-             * review of the Phase 28-31 integration, round 2, finding D). */
+             * invalidation drops the device and forgets the hold (the
+             * Phase 28-31 integration). */
             if (++h->Unreadable >= HCD_HOLD_UNREADABLE_PASSES) {
                 XHCI_DBG_VALUE("hcd: hold, PORTSC unreadable, recovery, port",
                                h->Port);
@@ -3812,8 +3805,7 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
         hcdReadIdentity(hc, p->Device, &id);
         /* The identity transfers may have met a controller failure: the
          * request stays pending and the recovery's invalidation forgets it
-         * with the device (Codex review of the Phase 28-31 integration,
-         * round 3, finding 1). */
+         * with the device (the Phase 28-31 integration). */
         if (hcdHalted(hc)) {
             break;
         }
@@ -3821,7 +3813,7 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
          * the port says now, through the same neutral base - and only on a
          * readable PORTSC. An unreadable one leaves the request pending,
          * on the same budget as the first read, and nothing is committed:
-         * no active hold, no disconnect (round 3, finding 1). */
+         * no active hold, no disconnect. */
         portsc = XhciReadPortsc(&hc->Hc, h->Port);
         if (portsc == 0xFFFFFFFFUL) {
             if (++h->Unreadable >= HCD_HOLD_UNREADABLE_PASSES) {
@@ -3838,8 +3830,8 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
          * would disable. Otherwise the request ends, never as an active
          * hold: the port is marked changed and this pass's ordinary
          * inspection (hcdPortChanged) feeds the departure or the new
-         * connection and settles the device (hcdHoldResolve) (Codex
-         * review of the Phase 28-31 integration, round 4, finding 1). */
+         * connection and settles the device (hcdHoldResolve; the Phase
+         * 28-31 integration). */
         if ((portsc & XHCI_PORTSC_CCS) == 0 ||
             (portsc & XHCI_PORTSC_CSC) != 0 || p->Device == NULL ||
             !p->Device->HoldAsked ||
@@ -3907,8 +3899,8 @@ static ULONG hcdHubQuiet(PHCD_CONTROLLER hc, PHCD_HUB hub);
 /*
  * Whether a port in Gone may leave it: the PDO group it reported has been
  * reported missing to PnP (or deleted) - that group, by serial, not
- * whichever PDO last named its location (Codex review of batch (b), round
- * 2, finding 2) - and, where a hub left from it, every port of that hub's
+ * whichever PDO last named its location (batch (b)) - and, where a hub
+ * left from it, every port of that hub's
  * subtree has settled the same way, the departed hub object then freed. A
  * PDO reported missing no longer holds the place: its REMOVE may never
  * come on Windows ME (hcd_pdo.c, the lifecycle), and a new device there
@@ -3921,7 +3913,7 @@ static ULONG hcdPortQuiet(PHCD_CONTROLLER hc, PHCD_PORT p)
     /* A port still holding its record has not run its teardown - its
      * machine reached Gone with the action cut short by a halt (hcdRun) -
      * and no PDO serial says so: it waits for the invalidation's drop
-     * (Codex review of 23e7715, finding 1). */
+     * (reviewed and revised after 23e7715). */
     if (p->Device != NULL) {
         return 0;
     }
@@ -4033,7 +4025,7 @@ static VOID hcdSettleWaiting(PHCD_CONTROLLER hc, PULONG changed)
  * thread's EP0 transfer), an isochronous underrun's or overrun's restart
  * (hcd_dev.c, hcdIsoEvent), EP0 recovery and a cancel's restart - so an
  * endpoint the teardown stops stays stopped until its slot is disabled
- * (Codex review of d54eef0, finding 1). */
+ * (reviewed and revised after d54eef0). */
 static VOID hcdDeviceFreeze(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     KIRQL oldIrql;
@@ -4371,7 +4363,7 @@ static VOID hcdDropPort(PHCD_CONTROLLER hc, PHCD_PORT p)
 }
 
 /* Every device's URBs drained before any one device is waited out
- * (HcdIoDeviceDrain; round 5, finding 3). The slot is gone for each. */
+ * (HcdIoDeviceDrain). The slot is gone for each. */
 static VOID hcdDrainAll(PHCD_CONTROLLER hc)
 {
     ULONG i;
@@ -4396,8 +4388,7 @@ static VOID hcdDrainAll(PHCD_CONTROLLER hc)
  * their hubs' subtrees with them; a port left holding a device in a hub
  * already departing (a teardown a halt cut short) is dropped after them. A
  * port whose PDO PnP still holds waits in Gone for its removal; the rescan
- * that follows finds what is connected now (Codex review of batch (b),
- * round 1, finding 6).
+ * that follows finds what is connected now (batch (b)).
  */
 static VOID hcdDropAll(PHCD_CONTROLLER hc)
 {
@@ -4421,7 +4412,7 @@ static VOID hcdDropAll(PHCD_CONTROLLER hc)
     for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
         /* A quarantined record's PDOs went with its teardown; any other
          * left here never had its PDOs reported missing, and a PDO must
-         * not keep naming a freed record (finding 1). */
+         * not keep naming a freed record. */
         if (hc->SlotDevice[i] != NULL) {
             (VOID)HcdDevicePdoGone(hc, hc->SlotDevice[i]);
         }
@@ -4481,11 +4472,11 @@ static VOID hcdDetachPort(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG powered)
 /*
  * The root hub is going (HcdEnumDetach): every device leaves the bus and
  * every machine starts again from Empty, so a root hub started again
- * enumerates afresh (Codex review of batch (b), round 1, finding 1) - the
+ * enumerates afresh (batch (b)) - the
  * hubs' subtrees with the root ports', every hub object freed, a departing
  * one's leftovers too. With the controller unpowered no command can run: the
  * records are left Abandoned, and the first powered pass disables their
- * slots (hcdSweepAbandoned; round 2, finding 3) unless an invalidation has
+ * slots (hcdSweepAbandoned) unless an invalidation has
  * dropped them first.
  */
 static VOID hcdDetach(PHCD_CONTROLLER hc, ULONG powered)
@@ -4537,7 +4528,7 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     if (!HcdHubPortLook(hc, hub, n, q->Enum.State, &d)) {
         /* A look that read nothing is owed again, a bounded number of
          * times, so a first answer does not take the port as looked at
-         * (task 33.3; Codex review of 33.3, round 1, finding 3). */
+         * (task 33.3). */
         if (++q->LookFails < HCD_HUB_LOOK_TRIES) {
             hub->Changed |= 1UL << n;
         }
@@ -4560,8 +4551,8 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     if (q->HubSsRecover) {
         /* A SuperSpeed hub port's link recovery (30-A.1): the warm reset
          * only now, with the device it held and that device's subtree torn
-         * down by the disconnect just fed (Codex review of 034a119,
-         * finding 1). */
+         * down by the disconnect just fed (reviewed and revised after
+         * 034a119). */
         d.Connect = !hcdHalted(hc) && HcdSsHubPortRecover(hc, hub, n);
         q->HubSsRecover = 0;
     }
@@ -4980,8 +4971,8 @@ static VOID hcdRepresentService(PHCD_CONTROLLER hc)
 
 /*
  * The thread's port service, under the power gate; `powered` is the
- * controller's state read under it (Codex review of batch (b), round 1,
- * finding 5). In order: an invalidation HCRST left, a detach the root hub
+ * controller's state read under it (batch (b)). In order: an invalidation
+ * HCRST left, a detach the root hub
  * asked for, the abandoned slots' sweep, the PDO handshake (design record 13
  * section 5.3: PDO_REMOVED takes a Gone port to Empty and a connected one on
  * to a new enumeration, PDO_STARTED takes Present to Bound) at every port
@@ -5052,7 +5043,7 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
 
     /* An invalidation first: what HCRST took needs no Disable Slot, which a
      * detach after it would otherwise send and, refused, turn into another
-     * reset (round 3, finding 2). */
+     * reset. */
     if (invalidated) {
         /* Raised by a recovery or a resume before its halt, which then
          * never completed an HCRST (the halt timed out, or an earlier step
@@ -5443,7 +5434,7 @@ VOID HcdEnumSettleEnd(PHCD_CONTROLLER hc, ULONG target, ULONG startLow,
 /* At a start: every port empty, every port numbered, the topology graph
  * empty, no request pending - except a port still waiting in Gone for a PDO
  * PnP holds across the controller's stop, or for a departed hub's subtree,
- * which keeps waiting (round 2, finding 2); the hub objects it waits on stay
+ * which keeps waiting; the hub objects it waits on stay
  * with it. RootHubStarted is kept: a root hub started before a controller
  * restart is still started. IRQL: PASSIVE_LEVEL, the thread not yet
  * running. */
@@ -5523,7 +5514,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
 /* At a stop: the HCRST that follows takes every slot, so the records go
  * without commands, the quarantined and abandoned ones with the rest, and
  * each port is dropped as an invalidation drops it - a port whose PDO PnP
- * still holds waits for it in Gone (round 2, finding 2). IRQL:
+ * still holds waits for it in Gone. IRQL:
  * PASSIVE_LEVEL, the thread stopped. */
 VOID HcdEnumDrop(PHCD_CONTROLLER hc)
 {

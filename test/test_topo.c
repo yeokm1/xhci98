@@ -15,8 +15,9 @@
  * tier order"), because the defining document (USB3 section 8.9) is not in
  * docs/references.
  *
- * The claim identity at the end is task 7b-A.1.0's row-set net applied here:
- * every XhciTopoClaimChild call increments exactly one of
+ * The claim identity at the end is task 7b-A.1.0's row-set net applied here
+ * (the claim, migrate and forget calls are host-suite-only under the HCD,
+ * src/xhci_topo.h): every XhciTopoClaimChild call increments exactly one of
  * Claims/ClaimsUnarmed/ClaimsUnusable, so the three must sum to the calls made
  * - enforced by routing every claim in this file through one wrapper, so a
  * vector written later cannot opt out.
@@ -116,7 +117,7 @@ static UCHAR hubDescBytes[11] = {
 static UCHAR portConnectedBytes[4] = { 0x01, 0x01, 0x00, 0x00 };
 static UCHAR portEmptyBytes[4]     = { 0x00, 0x01, 0x00, 0x00 };
 /* Connected + powered with C_PORT_CONNECTION set in wPortChange - the shape a
- * disconnect+reconnect between polls leaves behind (Phase 7 review, B10). */
+ * disconnect+reconnect between polls leaves behind (Phase 7). */
 static UCHAR portReconnectBytes[4] = { 0x01, 0x01, 0x01, 0x00 };
 
 /* ------------------------------------------------------------------ */
@@ -420,14 +421,14 @@ static void testPowerSweepHighWater(void)
 
     /*
      * **`CLEAR_TT_BUFFER` must not move the high-water mark**, and neither
-     * must the three requests beside it. This is audit finding A7, and the
+     * must the three requests beside it (reviewed and revised), and the
      * defect it fixed was real on a real bus: usbhub sends `CLEAR_TT_BUFFER`
      * (bRequest 8, recipient Other, the same `0x23` request type as a port
      * feature) to a multi-TT hub whenever a full- or low-speed transaction
      * below it fails, and its `wIndex` is not a port number at all - it packs
      * an endpoint number, device address, endpoint type and direction, so it
      * reads as a port number in the thousands. `src/xhci_topo.c` filters on
-     * `bRequest` for exactly this reason, and until the 2026-09-07 audit's G8
+     * `bRequest` for exactly this reason, and until 2026-09-07
      * no packet with one of these requests appeared anywhere in this suite:
      * deleting the filter passed the whole file and let the bug back in.
      *
@@ -788,7 +789,7 @@ static void testDisconnectReport(void)
 
     /*
      * **Connected-to-connected with C_PORT_CONNECTION set is a departure**
-     * (Phase 7 review, B10): a disconnect and reconnect between usbhub polls
+     * (Phase 7): a disconnect and reconnect between usbhub polls
      * never shows the graph an empty port, and only the change word carries
      * the proof a device left in between.
      */
@@ -812,7 +813,7 @@ static void testDisconnectReport(void)
 }
 
 /*
- * A spent claim that cannot answer is its own reading (Phase 7 review, B9):
+ * A spent claim that cannot answer is its own reading (Phase 7):
  * `ClaimsUnarmed` means "an address-0 open with no pending parent" - the
  * ordinary root-port answer - and a consumed claim whose node was pruned
  * between the reset and the open used to be folded into it, making a channel
@@ -890,7 +891,7 @@ static void testPruning(void)
 }
 
 /*
- * XhciTopoMigrate (Phase 7 review, findings A4/A5): the node follows a
+ * XhciTopoMigrate (Phase 7): the node follows a
  * re-assigned address, a stale node under the new address is pruned with its
  * subtree, and a migrated hub's own children are not carried across.
  */
@@ -966,7 +967,7 @@ static void testMigration(void)
 }
 
 /*
- * XhciTopoSuppressClaim (Phase 7 review, finding A6): the verb the caller uses
+ * XhciTopoSuppressClaim (Phase 7): the verb the caller uses
  * when it judges an arm to be usbhub's second reset of a bracket. Counted
  * apart from PendingDropped, because the two readings disagree about whose
  * bracket was live.
@@ -1018,8 +1019,9 @@ static void testMultiTt(void)
 
     /*
      * **Observing the request changes nothing** - it is the completion that
-     * says the hub enabled the interface (xHCI 4.5.2), and until the post-Phase 13 review rounds
-     * this graph applied MTT on placement while the descriptor half of the
+     * says the hub enabled the interface (xHCI 4.5.2), and until after
+     * Phase 13 this graph applied MTT on placement while the descriptor half
+     * of the
      * same packet already waited. A hub that STALLs its SET_INTERFACE would
      * otherwise be programmed as multi-TT.
      */
@@ -1060,7 +1062,7 @@ static void testMultiTt(void)
     /*
      * **A reset returns every interface to alternate 0**, so a re-enumeration
      * has to drop both flags - and `ALT_SEEN` with `MTT`, because nothing has
-     * been *asked* of the device that came back. Round 11: the graph kept MTT
+     * been *asked* of the device that came back. The graph once kept MTT
      * across a re-enumeration while the descriptor half of the same fact was
      * reset, so the pump could re-derive the previous tenancy's MTT onto a hub
      * that had never been asked to be one.

@@ -90,8 +90,9 @@ function Resolve-QemuBinary {
 # `$ErrorActionPreference = 'Stop'` - which every script in this directory sets -
 # the first one aborts the script with an EMPTY message, whatever the exe's exit
 # code was.  `scripts\import-gate\check-imports.ps1` documented and relaxed this
-# for dumpbin; the vm-matrix callers had the same trap and no relaxation (repo
-# audit D4).  QEMU writes to stderr for ordinary things, so this is not
+# for dumpbin; the vm-matrix callers had the same trap and no relaxation (an
+# earlier repository audit).  QEMU writes to stderr for ordinary things, so
+# this is not
 # hypothetical.
 #
 # The preference is restored in `finally`, so a caller's own error handling is
@@ -114,8 +115,8 @@ function Invoke-NativeText {
 function Get-QemuVersion {
     param([Parameter(Mandatory = $true)][string]$Qemu)
     $text = Invoke-NativeText -Exe $Qemu -Arguments @("--version")
-    # A QEMU that cannot start is not a QEMU of unknown version (the
-    # 2026-09-17 audit's D10); $LASTEXITCODE is global, so the child's code is
+    # A QEMU that cannot start is not a QEMU of unknown version (the audit of
+    # 2026-09-17); $LASTEXITCODE is global, so the child's code is
     # readable here.
     if ($LASTEXITCODE -ne 0) {
         throw ("{0} --version exited {1}, so this QEMU cannot start: {2}" -f $Qemu, $LASTEXITCODE, $text.Trim())
@@ -334,7 +335,7 @@ function Get-ProcessStateText {
 # not a halted kernel services it, so a BUGCHECKED guest reads `running` with
 # an `info irq` delta and came out of here alive; a crash mid-row was then
 # judged from its counters and could read NODRIVER, which an ExpectNoDriver
-# entry waives (the 2026-09-17 audit's D2).  A caller that has a keep-alive
+# entry waives (the audit of 2026-09-17).  A caller that has a keep-alive
 # pump passes -SignOfLife, a scriptblock returning a guest-side counter only a
 # running kernel advances (the pump's `transfers completed`), and -Stimulus,
 # what drives it across the sample; with both, the counter has to advance too.

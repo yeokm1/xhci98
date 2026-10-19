@@ -101,9 +101,31 @@ BOOLEAN CmNvlinkRetireEntry(PSTOR98LS_TABLE t, ULONG index)
         /* Unused, UP, or already retired (nothing a reader could apply). */
         return FALSE;
     }
+    /* The statement withdrawn, the generation kept: R8b allows an
+     * increment for a new tunnel and for nothing else, so the next UP on
+     * the entry makes the only one (task 42-A.12). */
     cmNvBegin(e);
-    e->LinkGeneration = e->LinkGeneration + 1;
     e->Flags = STOR98LS_IN_USE;
+    cmNvEnd(e);
+    return TRUE;
+}
+
+BOOLEAN CmNvlinkReleaseEntry(PSTOR98LS_TABLE t, ULONG index)
+{
+    PSTOR98LS_ENTRY e;
+
+    if (t == NULL || index >= STOR98LS_ENTRIES) {
+        return FALSE;
+    }
+    e = &t->Entry[index];
+    if ((e->Flags & STOR98LS_IN_USE) == 0 ||
+        (e->Flags & CM_NVLINK_REMOVE_PENDING) != 0) {
+        return FALSE;
+    }
+    /* R6b's update; the entry is never given out again (its Sequence is
+     * not 0, cmNvFree), so no other function inherits it. */
+    cmNvBegin(e);
+    e->Flags = 0;
     cmNvEnd(e);
     return TRUE;
 }
@@ -126,21 +148,75 @@ ULONG CmNvlinkRetire(PSTOR98LS_TABLE t, ULONG bus)
     return n;
 }
 
-ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
-                        BOOLEAN fresh, PULONG outcome)
+ULONG CmNvlinkActionTunnel(BOOLEAN up, ULONG port, ULONG generation,
+                           ULONG member, ULONG i)
+{
+    if (!up || member == XHCI_TBT_NO_MEMBER || member != i) {
+        return CM_NVLINK_TUNNEL_NONE;
+    }
+    return CM_NVLINK_TUNNEL(port, generation);
+}
+
+ULONG CmNvlinkBridgeTunnel(PULONG bridges, PULONG tunnels, ULONG count,
+                           ULONG bridge, ULONG named)
+{
+    ULONG k;
+    ULONG f;
+
+    f = count;
+    for (k = 0; k < count; k++) {
+        if (tunnels[k] != CM_NVLINK_TUNNEL_NONE && bridges[k] == bridge) {
+            break;
+        }
+        if (tunnels[k] == CM_NVLINK_TUNNEL_NONE && f == count) {
+            f = k;
+        }
+    }
+    if (named == CM_NVLINK_TUNNEL_NONE) {
+        return k != count ? tunnels[k] : CM_NVLINK_TUNNEL_NONE;
+    }
+    if (k == count) {
+        k = f;
+    }
+    if (k != count) {
+        bridges[k] = bridge;
+        tunnels[k] = named;
+    }
+    return named;
+}
+
+ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
+                        ULONG slot, ULONG tunnel, PULONG outcome)
+{
+    return CmNvlinkPublishUpEx(t, tunnels, bus, slot, tunnel,
+                               (BOOLEAN)(tunnel != CM_NVLINK_TUNNEL_NONE),
+                               outcome);
+}
+
+ULONG CmNvlinkPublishUpEx(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
+                          ULONG slot, ULONG tunnel, BOOLEAN advance,
+                          PULONG outcome)
 {
     ULONG i;
     ULONG pick;
     PSTOR98LS_ENTRY e;
 
     *outcome = CM_NVLINK_UP_BAD;
-    if (t == NULL || bus > 0xFFUL || slot > 0xFFUL) {
+    if (t == NULL || tunnels == NULL || bus > 0xFFUL || slot > 0xFFUL) {
         return CM_NVLINK_NONE;
     }
     i = CmNvlinkFind(t, bus, slot);
     if (i != CM_NVLINK_NONE) {
         e = &t->Entry[i];
-        if ((e->Flags & STOR98LS_UP) != 0 && !fresh) {
+        /* R8b: only a new tunnel increments the generation - one this
+         * exposure names (`advance`) and the entry's UP was not published
+         * for. R9a: nor is it changed, or the request cleared, while a
+         * removal request is outstanding; an exposure then waits for
+         * CmNvlinkWkWithdraw like any other. */
+        if ((e->Flags & STOR98LS_UP) != 0 &&
+            (!advance || tunnel == CM_NVLINK_TUNNEL_NONE ||
+             tunnels[i] == tunnel ||
+             (e->Flags & CM_NVLINK_REMOVE_PENDING) != 0)) {
             *outcome = CM_NVLINK_UP_ALREADY;
             return i;
         }
@@ -148,6 +224,7 @@ ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
         e->LinkGeneration = e->LinkGeneration + 1;
         e->Flags = STOR98LS_IN_USE | STOR98LS_UP;
         cmNvEnd(e);
+        tunnels[i] = tunnel;
         *outcome = CM_NVLINK_UP_AGAIN;
         return i;
     }
@@ -170,6 +247,7 @@ ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
     e->LinkGeneration = e->LinkGeneration + 1;
     e->Flags = STOR98LS_IN_USE | STOR98LS_UP;
     cmNvEnd(e);
+    tunnels[pick] = tunnel;
     *outcome = CM_NVLINK_UP_NEW;
     return pick;
 }
@@ -274,6 +352,190 @@ ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
         return CM_NVLINK_LATE;
     }
     return CM_NVLINK_SEND;
+}
+
+ULONG CmNvlinkWaitStep(const STOR98LS_TABLE *t, CM_NV_SHADOW *shadow,
+                       PVOID owner, BOOLEAN receiver, ULONG nowMs,
+                       ULONG boundMs, PULONG ends, PULONG count)
+{
+    ULONG i;
+    ULONG step;
+    ULONG pending;
+
+    pending = 0;
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if (shadow[i].Owner != owner || !shadow[i].Waiting) {
+            continue;
+        }
+        /* The deadline before the acknowledgement is read: one first seen
+         * after it is late, logged and not taken (R11, R12 S4).
+         * Superseded (a later UP or retirement) and no receiver (no stor98
+         * has the table) end the wait at once. */
+        step = CmNvlinkAckStep(t, i, receiver, shadow[i].MarkedAt, nowMs,
+                               boundMs);
+        if (step == CM_NVLINK_AW_PENDING) {
+            pending++;
+            continue;
+        }
+        shadow[i].Waiting = 0;
+        if (ends != NULL && *count < STOR98LS_ENTRIES) {
+            ends[*count] = (step << 8) | i;
+            *count = *count + 1;
+        }
+    }
+    return pending;
+}
+
+BOOLEAN CmNvlinkWaitHeld(const CM_NV_SHADOW *shadow, PVOID owner,
+                         ULONG bridge)
+{
+    ULONG i;
+
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if (shadow[i].Owner == owner && shadow[i].Waiting &&
+            shadow[i].Bridge == bridge) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow)
+{
+    ULONG i;
+
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if (shadow[i].Owner != NULL && shadow[i].Waiting) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN live,
+                           BOOLEAN *missed, BOOLEAN *vanish, BOOLEAN *fresh)
+{
+    if (gateUp && !live) {
+        /* The loss's own call behind the gate: an obligation of its own,
+         * made once the gate falls whatever the transport, and never the
+         * ordinary held work's (CmNvlinkHoldRun). */
+        *held = *held | CM_HELD_LOSS;
+        return TRUE;
+    }
+    if (gateUp) {
+        *held = *held | CM_HELD_REENUM | (*vanish ? CM_HELD_VANISH : 0) |
+                (*fresh ? CM_HELD_FRESH : 0);
+        return TRUE;
+    }
+    if (*held & CM_HELD_LOSS) {
+        /* A held loss call is paid by this one, lost or not: it removes
+         * the vanished children as that call would. */
+        *vanish = TRUE;
+        *held = *held & ~CM_HELD_LOSS;
+    }
+    if (!live) {
+        /* The loss's own call (NT's unavailable reconciliation) goes
+         * alone: held work and an owed change wait for the transport, as
+         * CmNvlinkHoldRun keeps them, since paying them would read the
+         * bridge and expose while the host interface is lost. */
+        return FALSE;
+    }
+    if (*held & CM_HELD_REENUM) {
+        *vanish = (BOOLEAN)(*vanish || (*held & CM_HELD_VANISH) != 0);
+        *fresh = (BOOLEAN)(*fresh || (*held & CM_HELD_FRESH) != 0);
+        *held = *held & ~(CM_HELD_REENUM | CM_HELD_VANISH | CM_HELD_FRESH);
+    }
+    if (*missed) {
+        /* An owed skipped change paid by this call as well (its own call
+         * is a fresh exposure removing the vanished children). */
+        *vanish = TRUE;
+        *fresh = TRUE;
+        *missed = FALSE;
+    }
+    return FALSE;
+}
+
+ULONG CmNvlinkHoldRun(PULONG held, BOOLEAN gateUp, BOOLEAN live,
+                      BOOLEAN reenumOn, BOOLEAN active, BOOLEAN exclusive,
+                      BOOLEAN *missed, BOOLEAN *vanish, BOOLEAN *fresh)
+{
+    ULONG h;
+    ULONG act;
+
+    h = *held;
+    *vanish = FALSE;
+    *fresh = FALSE;
+    if (h == 0 || gateUp) {
+        return 0;
+    }
+    act = 0;
+    if (h & CM_HELD_RELEASE) {
+        /* The resume's release waits for the acknowledgement decision
+         * alone, never for the transport (the hold's own watchdog is not
+         * the release). */
+        act |= CM_HELD_DO_RELEASE | ((h & CM_HELD_FAIL) ? CM_HELD_DO_FAIL : 0);
+        h &= ~(CM_HELD_RELEASE | CM_HELD_FAIL);
+    }
+    if (h & CM_HELD_LOSS) {
+        /* The loss's call (NT's unavailable reconciliation) waits for the
+         * gate alone: made now, removing vanished children with no
+         * exposure, unless a held re-enumeration runs in this pass and
+         * carries the removal itself. */
+        h &= ~CM_HELD_LOSS;
+        if (reenumOn && active) {
+            if ((h & CM_HELD_REENUM) != 0 && live) {
+                h |= CM_HELD_VANISH;
+            } else {
+                act |= CM_HELD_DO_LOSS;
+            }
+        }
+    }
+    if ((h & CM_HELD_REENUM) != 0 && reenumOn && !live) {
+        /* The re-enumeration waits for the transport. */
+        *held = h;
+        return act;
+    }
+    *held = 0;
+    if ((h & CM_HELD_REENUM) == 0 || !reenumOn) {
+        return act;
+    }
+    if (!active) {
+        if (exclusive) {
+            *missed = TRUE;
+            act |= CM_HELD_DO_OWE;
+        }
+        return act;
+    }
+    *vanish = (BOOLEAN)((h & CM_HELD_VANISH) != 0);
+    *fresh = (BOOLEAN)((h & CM_HELD_FRESH) != 0);
+    if (*missed) {
+        /* The skipped change's own call is a fresh exposure removing the
+         * vanished children (CmReenumService): paid here, once. */
+        *vanish = TRUE;
+        *fresh = TRUE;
+        *missed = FALSE;
+    }
+    return act | CM_HELD_DO_REENUM;
+}
+
+ULONG CmNvlinkIdleFor(ULONG configured, BOOLEAN up, BOOLEAN pending)
+{
+    if (pending && configured > CM_NVLINK_PEND_MS) {
+        return CM_NVLINK_PEND_MS;
+    }
+    if (up && configured > CM_NVLINK_IDLE_MS) {
+        return CM_NVLINK_IDLE_MS;
+    }
+    return configured;
+}
+
+BOOLEAN CmNvlinkServiceDue(PULONG lastUs, ULONG nowUs)
+{
+    if (nowUs - *lastUs < CM_NVLINK_PEND_MS * 1000UL) {
+        return FALSE;
+    }
+    *lastUs = nowUs;
+    return TRUE;
 }
 
 ULONG CmNvlinkAckBoundMs(BOOLEAN nt)

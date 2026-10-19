@@ -282,7 +282,7 @@ static void drive_full(PXHCI_ENUM_PORT p, ULONG count, PXHCI_ENUM_ACTION a)
 }
 
 /* Every step's failure, its cause, and the slot given back from the step
- * that owns one on (Codex review of batch (b), round 1, finding 16). */
+ * that owns one on (batch (b)). */
 static void test_each_step_fails(void)
 {
     static const ULONG cause[FULL_SEQUENCE] = {
@@ -308,7 +308,7 @@ static void test_each_step_fails(void)
     }
 }
 
-/* Short reads that report success (round 1, finding 16): each is refused. */
+/* Short reads that report success (batch (b)): each is refused. */
 static void test_short_reads(void)
 {
     XHCI_ENUM_PORT p;
@@ -356,7 +356,7 @@ static void test_short_reads(void)
     CHECK_EQ(p.FailCause, XHCI_ENUM_FAIL_CONFIG, "35 of 34 bytes");
 }
 
-/* A disconnect after every step of the sequence (round 1, finding 16). */
+/* A disconnect after every step of the sequence (batch (b)). */
 static void test_disconnect_every_stage(void)
 {
     XHCI_ENUM_PORT p;

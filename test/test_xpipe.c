@@ -566,7 +566,7 @@ static void test_rec_early(void)
     (VOID)ret(&r, 100, ST_OK);
     CHECK_EQ(XhciXpipeRecStatus(&r, 0, ST_SHORTX, ST_CAN), ST_OK,
              "a stop that moved every byte is success");
-    /* Review round 2, finding 2: only a cancel racing the last byte is
+    /* Only a cancel racing the last byte is
      * success; a removal at a device's going or a fault's abort with full
      * progress keeps its status (DEVICE_GONE is what parks the IRP). */
     XhciXpipeRecInit(&r, 200, XHCI_XPIPE_MAP_ALLOCATED);
@@ -644,7 +644,7 @@ static void test_rec_prefail(void)
     CHECK_EQ(XhciXpipeRecStatus(&r, 1, ST_SHORTX, ST_CAN), ST_ERR,
              "the error replaces the failure");
     CHECK_EQ(r.Committed, 110, "with its bytes");
-    /* Review round 1, finding 3: a refill fails with its predecessor still
+    /* A refill fails with its predecessor still
      * queued, then a cancel; the thread's walk takes the predecessor off
      * with its stopped progress (a removal, not a device's end), so the
      * publication failure stays the status. */

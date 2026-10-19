@@ -982,7 +982,7 @@ so `(6, 1)` would be wrong in the other direction - the obvious "tighten it for
 with task 22.5's work, so the branch is unconditional, the 32-bit binary DOES
 carry it, and `xhci98-imports.allow` carries `IoIsWdmVersionAvailable` for x86
 as well. The section below records the removal; these sentences are the state
-on the day and are marked rather than rewritten - the 2026-09-16 audit's E4.)*
+on the day and are marked rather than rewritten - the audit of 2026-09-16.)*
 
 **What this retires.** Section 6.1's "the test fails towards four on purpose"
 was a hedge against an *unidentified* system. It is retired with the constant it
@@ -992,7 +992,7 @@ drive both branches. Note also that the defect proved the claim the hedge
 rested on - a fourth argument on NT 5.2 really is inert, because XP x64 was
 sent down the four-argument arm by the bug and registration still returned
 `STATUS_SUCCESS` with all sixteen service pointers written. *(Read as eight:
-until the 2026-09-17 audit's B1 the verifier walked the service block as
+until the audit of 2026-09-17 the verifier walked the service block as
 sixteen `ULONG`s, which on amd64 is the first eight pointers, so this line
 and every other amd64 "all sixteen" reading before that date cover the first
 eight service pointers only. The verifier now walks sixteen `PVOID`s; that
@@ -1228,8 +1228,8 @@ design needs it:
   registers a three-argument `xhciCloseEndpointNt5` when the load is NT 5.x
   and the four-argument form otherwise. So the guest step should expect the
   NT 6.x form, which is a different callee from the one the NT 5.x legs
-  exercise (this bullet said all three were the same call - the 2026-09-16
-  audit's E4).
+  exercise (this bullet said all three were the same call - the audit of
+  2026-09-16).
 - **Two OUT service pointers are written into the caller's packet at
   `>= 300`**, `UsbPortRequestAsyncCallbackEx` at `0x1B0` / `0x308` and
   `UsbPortCancelAsyncCallback` at `0x1B4` / `0x310`; the declaration names
@@ -1259,7 +1259,7 @@ the first pointer, `InterruptDpcEx` and the two OUT slots; `xhciInterruptDpc`
 returning a `ULONG` (2 after a pass that consumed a port status change event,
 0 otherwise, keeping the `UsbPortInvalidateRootHub` call it makes today - as
 built, it also ORs in bit 0 whenever the drain left a completion parked for
-`PollEndpoint`, issue 7's delivery gate; the 2026-09-17 audit's B11; and
+`PollEndpoint`, issue 7's delivery gate; the audit of 2026-09-17; and
 since round 5 of task 24.3.4 the call is no longer made there on this tier,
 because it deadlocked against usbport's root-hub DPC - bit 1 carries a change
 latched elsewhere too, and usbport makes the call; design record 05, "Where
@@ -1291,7 +1291,7 @@ slots, returning the port bit after a pass that consumed a Port Status Change
 Event - derived from the event counter the drain already keeps - and zero
 otherwise (that evening; since issue 7's delivery gate it also ORs in the
 transfer-work bit 0 whenever the drain left a completion parked for
-`PollEndpoint` - the 2026-09-17 audit's B11). `DriverEntry`'s NT 6.x branch
+`PollEndpoint` - the audit of 2026-09-17). `DriverEntry`'s NT 6.x branch
 lost its `_WIN64` guard: the same
 `IoIsWdmVersionAvailable(6, 0)` answer now selects the registration arity,
 the resource mask and the interface version on both architectures, and on
@@ -1795,7 +1795,7 @@ dumper is `link /dump`; they are the same tool.
    the right to assert - `xhci_usbport.h` now pins the size and seven offsets
    on each architecture from measured numbers, so the asserts can fail. (Six
    when this was written; `PortNumber` was added with the seventh. The
-   2026-09-16 audit's E4.)
+   audit of 2026-09-16.)
    The paragraph below is kept because it is still the rule, and 2b is the
    structure it now applies to.
 

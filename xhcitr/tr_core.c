@@ -2014,9 +2014,9 @@ int tr_usb_rule(const TR_USBF *f, const char **why)
         *why = "a wireless radio";
         return TR_UE_DETAILS;
     }
-    /* Held for eject (Code 47): its disks are gone with the eject, and it
-     * is shown stopped, never offered. */
-    if (f->Problem == TR_CM_PROB_HELD_FOR_EJECT) {
+    /* Held for eject (Code 47, or 24 on 2000): its disks are gone with the
+     * eject, and it is shown stopped, never offered. */
+    if (tr_held_for_eject(f->Problem, f->W2k)) {
         *why = "stopped - unplug it";
         return TR_UE_LISTED;
     }
@@ -2026,10 +2026,6 @@ int tr_usb_rule(const TR_USBF *f, const char **why)
     if (f->Disks == 0 && (!f->Nt || f->Volumes == 0)) {
         *why = "no disk on it";
         return TR_UE_DETAILS;
-    }
-    if (f->Problem == TR_CM_PROB_HELD_FOR_EJECT) {
-        *why = "stopped - unplug it";
-        return TR_UE_LISTED;
     }
     if (f->Problem != 0) {
         *why = "Windows could not start it";
@@ -2287,10 +2283,21 @@ void tr_wrap(const char *in, char *out, size_t cap, int width)
     }
 }
 
-int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
-                    size_t sentenceCap)
+int tr_held_for_eject(TR_U32 problem, int w2k)
 {
-    if (problem == TR_CM_PROB_HELD_FOR_EJECT) {
+    return problem == TR_CM_PROB_HELD_FOR_EJECT ||
+           (w2k && problem == TR_CM_PROB_DEVICE_NOT_THERE);
+}
+
+int tr_w2k_code24(int w2k, int stoppedHere, int atPort, unsigned int config)
+{
+    return w2k && stoppedHere && (!atPort || config != 0);
+}
+
+int tr_stopped_text(TR_U32 problem, int w2k, char *tag, size_t tagCap,
+                    char *sentence, size_t sentenceCap)
+{
+    if (tr_held_for_eject(problem, w2k)) {
         tr_copy(tag, "stopped - unplug it", tagCap);
         tr_copy(sentence, "Stopped: you can unplug it.", sentenceCap);
         return 1;
@@ -2319,10 +2326,7 @@ int tr_usb_after_kind(int walked, int found, int walkBad, int started,
     if (!found) {
         return walkBad == 0 ? TR_UA_UNPLUG : TR_UA_UNKNOWN;
     }
-    if (problem == TR_CM_PROB_HELD_FOR_EJECT) {
-        return TR_UA_UNPLUG;
-    }
-    if (w2k && problem == TR_CM_PROB_DEVICE_NOT_THERE) {
+    if (tr_held_for_eject(problem, w2k)) {
         return TR_UA_UNPLUG;
     }
     return TR_UA_UNKNOWN;
@@ -2536,11 +2540,50 @@ const char *tr_level_text(TR_U32 level)
     return NULL;
 }
 
-void tr_level_pick(const TR_RVAL *cur, TR_LEVEL *out)
+void tr_rv_from_query(int status, TR_U32 type, TR_U32 bytes, TR_U32 value,
+                      TR_RVAL *out)
+{
+    out->Value = 0;
+    switch (status) {
+    case TR_Q_OK:
+        if (type == 0 && bytes == 0) {
+            out->State = TR_RV_ABSENT;
+        } else if (type == 4 && bytes == 4) {
+            out->State = TR_RV_DWORD;
+            out->Value = value;
+        } else {
+            out->State = TR_RV_OTHER;
+        }
+        break;
+    case TR_Q_NOT_FOUND:
+        out->State = TR_RV_ABSENT;
+        break;
+    case TR_Q_MORE_DATA:
+        out->State = TR_RV_OTHER;
+        break;
+    default:
+        out->State = TR_RV_UNREAD;
+        break;
+    }
+}
+
+void tr_level_pick(const TR_RVAL *machine, const TR_RVAL *cur, TR_LEVEL *out)
 {
     const TR_RVAL *r = cur;
 
     memset(out, 0, sizeof(*out));
+    out->Machine.State = TR_RV_ABSENT;
+    if (machine != NULL) {
+        out->Machine = *machine;
+    }
+    out->Device = *cur;
+    if (out->Machine.State != TR_RV_ABSENT) {
+        r = &out->Machine;
+        out->From = TR_LV_FROM_MACHINE;
+    } else {
+        out->From = cur->State == TR_RV_ABSENT ? TR_LV_FROM_NONE
+                                               : TR_LV_FROM_DEVICE;
+    }
     out->State = r->State;
     out->Value = r->State == TR_RV_DWORD ? r->Value : 0;
     switch (r->State) {
@@ -2564,6 +2607,7 @@ const char *tr_level_value_name(int driver)
 void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap)
 {
     const char *name = tr_level_value_name(driver);
+    const char *where = l->From == TR_LV_FROM_MACHINE ? "machine-wide" : name;
 
     switch (l->State) {
     case TR_RV_ABSENT:
@@ -2573,14 +2617,15 @@ void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap)
     case TR_RV_DWORD:
         if (l->Level >= 0) {
             tr_sprintf(out, cap, "%d - %s (%s)", l->Level,
-                       tr_level_text((TR_U32)l->Level), name);
+                       tr_level_text((TR_U32)l->Level), where);
         } else {
             tr_sprintf(out, cap, "%lu - out of range, not 0-4 (%s)",
-                       (unsigned long)l->Value, name);
+                       (unsigned long)l->Value, where);
         }
         break;
     case TR_RV_OTHER:
-        tr_sprintf(out, cap, "%s is not a REG_DWORD", name);
+        tr_sprintf(out, cap, "%s%s is not a REG_DWORD", name,
+                   l->From == TR_LV_FROM_MACHINE ? " machine-wide" : "");
         break;
     default:
         tr_copy(out, "not read", cap);
@@ -2588,17 +2633,44 @@ void tr_level_line(int driver, const TR_LEVEL *l, char *out, size_t cap)
     }
 }
 
-void tr_level_head(TR_TEXT *t, int driver, int count)
+/* The machine-wide value's line of the block's head. */
+static void tr_level_machine(TR_TEXT *t, const TR_RVAL *m)
+{
+    tr_put(t, "  Machine-wide (Services\\USB, wins when set): ");
+    switch (m == NULL ? TR_RV_ABSENT : m->State) {
+    case TR_RV_ABSENT:
+        tr_put(t, "not set\n");
+        break;
+    case TR_RV_DWORD:
+        if (m->Value <= TR_LV_MAX) {
+            tr_printf(t, "%lu - %s\n", (unsigned long)m->Value,
+                      tr_level_text(m->Value));
+        } else {
+            tr_printf(t, "%lu - out of range\n", (unsigned long)m->Value);
+        }
+        break;
+    case TR_RV_OTHER:
+        tr_put(t, "not a REG_DWORD\n");
+        break;
+    default:
+        tr_put(t, "not read\n");
+        break;
+    }
+}
+
+void tr_level_head(TR_TEXT *t, int driver, int count, const TR_RVAL *machine)
 {
     if (driver == TR_LV_XHCI98) {
         tr_printf(t, "xhci98 (" TR_LV_NAME_XHCI98 " in each controller's "
                      "driver key):\n");
+        tr_level_machine(t, machine);
         if (count == 0) {
             tr_put(t, "  No USB controller is driven by xhci98.\n");
         }
     } else {
         tr_printf(t, "xhcicm (" TR_LV_NAME_XHCICM " in each host "
                      "interface's driver key):\n");
+        tr_level_machine(t, machine);
         if (count == 0) {
             tr_put(t, "  No Thunderbolt or USB4 host interface is driven by "
                       "xhcicm.\n");
@@ -2613,6 +2685,23 @@ void tr_level_device(TR_TEXT *t, int driver, const char *name,
 
     tr_level_line(driver, l, line, sizeof(line));
     tr_printf(t, "  %s\n    %s\n", name, line);
+    if (l->From != TR_LV_FROM_MACHINE) {
+        return;
+    }
+    switch (l->Device.State) {
+    case TR_RV_DWORD:
+        tr_printf(t, "    its own value, %lu, is not in force\n",
+                  (unsigned long)l->Device.Value);
+        break;
+    case TR_RV_OTHER:
+        tr_put(t, "    its own value, not a REG_DWORD, is not in force\n");
+        break;
+    case TR_RV_UNREAD:
+        tr_put(t, "    its own value was not read\n");
+        break;
+    default:
+        break;
+    }
 }
 
 int tr_level_common(const TR_LEVEL *l, int n, int *level)
@@ -3047,4 +3136,129 @@ int tr_res_text(TR_TEXT *t, TR_U32 type, const unsigned char *d, size_t n,
         }
     }
     return 1;
+}
+
+/* ======================================================================== */
+/* 42-A.5: the safe-removal mark, shown                                     */
+/* ======================================================================== */
+
+int tr_msz_has(const char *msz, size_t bytes, const char *name)
+{
+    size_t i = 0;
+
+    while (i < bytes && msz[i] != '\0') {
+        size_t n = 0;
+        while (i + n < bytes && msz[i + n] != '\0') {
+            n++;
+        }
+        if (n == strlen(name)) {
+            size_t k;
+            for (k = 0; k < n; k++) {
+                char a = msz[i + k];
+                char b = name[k];
+                if (a >= 'a' && a <= 'z') {
+                    a = (char)(a - 'a' + 'A');
+                }
+                if (b >= 'a' && b <= 'z') {
+                    b = (char)(b - 'a' + 'A');
+                }
+                if (a != b) {
+                    break;
+                }
+            }
+            if (k == n) {
+                return 1;
+            }
+        }
+        i += n + 1;
+    }
+    return 0;
+}
+
+INST_U32 tr_mark_member(INST_U32 bus, INST_U32 address)
+{
+    return ((bus & 0xFFUL) << 8) | (((address >> 16) & 0x1FUL) << 3) |
+           (address & 0x7UL);
+}
+
+int tr_mark_find(const MK_MARKS *m, INST_U32 member, INST_U32 bus,
+                 INST_U32 address, int pending)
+{
+    INST_U32 i;
+    int found = -1;
+
+    if (m == NULL) {
+        return -1;
+    }
+    for (i = 0; i < m->Count && i < MK_MAX_ENTRIES; i++) {
+        const MK_ENTRY *e = &m->E[i];
+        if (e->Member != member || e->Bus != bus || e->Address != address ||
+            (e->Flags & (MK_EF_REPORTED | MK_EF_LOCATED)) !=
+                (MK_EF_REPORTED | MK_EF_LOCATED) ||
+            (pending && e->Pending == 0)) {
+            continue;
+        }
+        if (found >= 0) {
+            return -1;
+        }
+        found = (int)i;
+    }
+    return found;
+}
+
+int tr_mark_state(int answered, const MK_MARKS *m, int entry,
+                  int filterPresent)
+{
+    const MK_ENTRY *e;
+
+    if (answered == 0) {
+        return TR_MK_OLD;
+    }
+    if (answered < 0 || m == NULL) {
+        return TR_MK_FAILED;
+    }
+    e = (entry >= 0 && (INST_U32)entry < m->Count) ? &m->E[entry] : NULL;
+    if (e != NULL && (e->Flags & MK_EF_REMOVABLE)) {
+        return TR_MK_LISTED;
+    }
+    if (filterPresent) {
+        return (e != NULL && (e->Flags & (MK_EF_BUS_ATT | MK_EF_ADD_ATT)))
+                   ? TR_MK_NOTLISTED
+                   : TR_MK_WRITTEN;
+    }
+    return TR_MK_NOT;
+}
+
+const char *tr_mark_text(int state)
+{
+    switch (state) {
+    case TR_MK_OLD:
+        return "not read: this xhcicm.sys does not answer for it";
+    case TR_MK_FAILED:
+        return "not read: the Thunderbolt driver did not answer";
+    case TR_MK_LISTED:
+        return "listed by Windows";
+    case TR_MK_WRITTEN:
+        return "mark written; takes effect at the next start of the device";
+    case TR_MK_NOTLISTED:
+        return "mark written, but Windows does not list it";
+    default:
+        return "not marked";
+    }
+}
+
+const char *tr_mksvc_text(int state)
+{
+    switch (state) {
+    case TR_SV_ABSENT:
+        return "not installed";
+    case TR_SV_STOPPED:
+        return "stopped";
+    case TR_SV_RUNNING:
+        return "running";
+    case TR_SV_OTHER:
+        return "starting or stopping";
+    default:
+        return "not read";
+    }
 }

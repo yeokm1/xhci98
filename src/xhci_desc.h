@@ -20,7 +20,7 @@
  * Interval, has the assumption on **both** sides and cannot see it: a
  * High-Speed endpoint with `bInterval = 4` - one ESIT per millisecond, a common
  * USB Audio shape - is serviced eight times too fast and agrees with itself
- * (batch 9-A review round 3, roadmap task 9-A.2).
+ * (batch 9-A, roadmap task 9-A.2).
  *
  * The one channel that carries `bInterval` is the **configuration descriptor**,
  * which crosses EP0 as a `GET_DESCRIPTOR(Configuration)` reply. Task 7b-A.1
@@ -45,7 +45,7 @@
  * a second one would be two statements of one fact. Only the isochronous type -
  * the one usbport discards - is kept.
  *
- * ## Which descriptor is in force, which was the first review round's subject
+ * ## Which descriptor is in force
  *
  * A descriptor says what a configuration and an alternate setting *would*
  * declare. What the device is actually running is said by two other requests on

@@ -1099,6 +1099,8 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
     ULONG k;
     ULONG n;
     BOOLEAN match;
+    BOOLEAN sent;
+    ULONG published;
     LONG rc;
     TBT_FRAME f;
     TBT_DEADLINE d;
@@ -1106,6 +1108,7 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
     if (icm->InWait) {
         return TBT_E_PARAM;
     }
+    sent = FALSE;
     icm->InWait = TRUE;
     icm->WaitSlot = slot;
     icm->WaitSerial = serial;
@@ -1130,7 +1133,14 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
              * earlier one is mixed in. */
             icm->TopoReceived = 0;
         }
+        published = icm->Ring->Counters.Tx;
         rc = TbtRingSend(icm->Ring, TBT_PDF_ICM_CMD, req, words);
+        if (icm->Ring->Counters.Tx != published) {
+            /* The descriptor went to the host interface. A send that
+             * then reports TBT_E_HW (not seen consumed in time) may still
+             * be consumed and answered later (tbt_ring.h). */
+            sent = TRUE;
+        }
         if (rc != TBT_OK) {
             break;
         }
@@ -1239,10 +1249,14 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
     if (rc == TBT_E_TIMEOUT && icm->WaitGone) {
         rc = TBT_E_GONE;
     }
-    if (rc != TBT_OK && rc != TBT_E_ERROR_FLAG && rc != TBT_E_PARAM) {
+    if (sent && rc != TBT_OK && rc != TBT_E_ERROR_FLAG &&
+        rc != TBT_E_PARAM) {
         /* Sent and not answered (or abandoned): its answer may still
          * arrive, and no word of a driver-ready answer tells it from the
-         * next one's. Only a ring restart ends that (TbtIcmRecover). */
+         * next one's. Only a ring restart ends that (TbtIcmRecover). A
+         * command the ring refused before publishing it (full, stopped,
+         * an unreadable index) was never sent and has no answer to come;
+         * one published and not seen consumed was. */
         icm->Ambiguous = TRUE;
     }
     icm->InWait = FALSE;

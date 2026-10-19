@@ -119,6 +119,31 @@ ULONG CmPortsUnpairedAt(ULONG n)
     return n < CM_N(cmUnpaired) ? cmUnpaired[n] : 0;
 }
 
+BOOLEAN CmPortsFilterId(ULONG id)
+{
+    ULONG f;
+    ULONG i;
+
+    for (i = 0; i < CM_N(cmUnpaired); i++) {
+        if (cmUnpaired[i] == id) {
+            return TRUE;
+        }
+    }
+    for (f = 0; f < CM_N(cmFamilies); f++) {
+        for (i = 0; i < cmFamilies[f].SwitchPortIdCount; i++) {
+            if (cmFamilies[f].SwitchPortIds[i] == id) {
+                return TRUE;
+            }
+        }
+        for (i = 0; i < cmFamilies[f].RootPortIdCount; i++) {
+            if (cmFamilies[f].RootPortIds[i] == id) {
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
 ULONG CmPortsFamilyCount(VOID)
 {
     return (ULONG)CM_N(cmFamilies);
@@ -401,6 +426,18 @@ ULONG CmPortsChildAttach(ULONG prevTruncated, PVOID const *chain,
         }
     }
     return CM_CHILD_ATTACH_OVER;
+}
+
+ULONG CmPortsStackless(ULONG hasAttached, ULONG ownBusChild, ULONG ownAddDev,
+                       ULONG aboveChild)
+{
+    if (!hasAttached) {
+        return 1;
+    }
+    if (ownAddDev || !ownBusChild || aboveChild) {
+        return 0;
+    }
+    return 1;
 }
 
 ULONG CmPortsChildFirst(ULONG prevTruncated, ULONG hasAttached)

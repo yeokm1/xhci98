@@ -233,7 +233,7 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
          pipe->TransferType == XHCI_PIPE_XFER_ISOCH)) {
         /* The ring and the record disagree about where the TD ends: the
          * endpoint is Running and owes a Stop plus a drain, which the
-         * thread performs (hcd_cfg.c; round 2, finding 9). */
+         * thread performs (hcd_cfg.c). */
         pipe->DrainPending = 1;
         hc->CancelWork = 1;
         HcdThreadWake(hc);
@@ -297,8 +297,8 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
             /* Gone: the device's teardown froze it and may already have
              * stopped this endpoint to complete its requests before the
              * Disable Slot; a late underrun's doorbell would restart it
-             * under buffers about to go back (Codex review of d54eef0,
-             * finding 1). */
+             * under buffers about to go back (reviewed and revised after
+             * d54eef0). */
             hc->Hc.IsoDoorbellsSuppressed++;
         } else {
             XhciWriteDoorbell(&hc->Hc, slotId, dci);
@@ -526,9 +526,9 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
         XhciXferEventHighRefused(pipe->Queue, event->Control, event->Param1)) {
         /* A TRB pointer above 4 GB names no ring of this driver; its low
          * dword alone could alias a queued TD and complete or retry it.
-         * Refused as foreign before anything reads the pointer (review
-         * round 1 of 35-T.2, finding 3), and escalated when fatal, as an
-         * event no queue owns is. */
+         * Refused as foreign before anything reads the pointer (task
+         * 35-T.2), and escalated when fatal, as an event no queue owns
+         * is. */
         ext->Tol.Stats.QueueForeign++;
         cc = XHCI_TRB_GET_COMPLETION(event->Status);
         reset = XhciXferCodeInfo(cc, &code) == XHCI_XFER_OK;
@@ -565,8 +565,7 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     if (pipe == NULL) {
         /* An event no queue owns is still the controller's to escalate
          * when its code is fatal (xhci_xfer.h, XhciXferEvent: "escalating
-         * that belongs to the caller that routed the event"; Codex review
-         * of batch (c), round 1, finding 3). */
+         * that belongs to the caller that routed the event"; batch (c)). */
         hc->Counters.TransferEventsUnclaimed++;
         cc = XHCI_TRB_GET_COMPLETION(event->Status);
         reset = XhciXferCodeInfo(cc, &code) == XHCI_XFER_OK;
@@ -585,7 +584,7 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
         cc == XHCI_CC_STOPPED_SHORT_PACKET) {
         /* A Stop Endpoint's event: it completes nothing, but its byte
          * count is the only measure of what a stopped TD moved, latched
-         * for the abort or cancel that follows (round 2, finding 12). */
+         * for the abort or cancel that follows. */
         (VOID)XhciXferQueueStopped(pipe->Queue, pipe->Ring, event->Param0,
                                    event->Status);
         /* Selective suspend's stop (36.35): positive evidence that the
@@ -670,8 +669,7 @@ ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token)
 /* One pipe's settle: a short packet's promised tail that never came. The
  * ring refusing the settle's retire leaves the transfer queued on a Running
  * endpoint, which owes Stop plus a drain (xhci_xfer.h, XhciXferDrainSettled;
- * round 3 of the batch (c) review, round-2 finding 9). Controller lock
- * held. */
+ * batch (c)). Controller lock held. */
 static VOID hcdSettlePipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG dci)
 {
     XHCI_XFER_EVENT_RESULT result;

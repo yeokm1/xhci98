@@ -1073,7 +1073,7 @@ static void test_tmr_schedules(void)
     CHECK_EQ(m.Falses, 1, "PERIODIC after ACTIVE releases");
     CHECK_EQ(m.LastCause, XHCI_POLL_TMR_CAUSE_IDLE, "cause: left ACTIVE");
 
-    /* Round 1's finding 3, schedule 1: a revoke, the release, a grant, the
+    /* Schedule 1: a revoke, the release, a grant, the
      * next decision still ACTIVE - one release, then one hold after the
      * grant's signal. */
     sim_init(&m);
@@ -1373,5 +1373,5 @@ int main(void)
     test_tmr_schedules();
     test_tmr_observe();
     printf("test_poll: %d checks, %d failures\n", checks, failures);
-    return failures != 0;
+    return failures;
 }

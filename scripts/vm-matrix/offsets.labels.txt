@@ -1,4 +1,4 @@
-﻿AbortsBeforeStopped	aborts before the endpoint stopped
+AbortsBeforeStopped	aborts before the endpoint stopped
 AbortsDuringCompletion	aborts racing a completion
 AbortsFromCompletionList	aborts taken off the completion list
 AbortsUnmatched	aborts unmatched

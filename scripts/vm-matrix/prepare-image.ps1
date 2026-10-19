@@ -254,7 +254,8 @@ $children = @{
 }
 
 # The QEMU id one of these rows will create, so `-Detach` can be given the same
-# name `-Attach` was (repo audit D4).  Deriving the id from the SPEC rather than
+# name `-Attach` was (an earlier repository audit).  Deriving the id from the
+# SPEC rather than
 # from the key is the whole point: `mouse` is an alias for `mouse-hs`, so the
 # old `"prep_" + ($Detach -replace '-','_')` composed `prep_mouse` and asked
 # QEMU to delete a device id that does not exist - which fails at the monitor
@@ -426,7 +427,7 @@ if ($Boot) {
         # day produced two snapshots with the same name - and "revert to the
         # tag" is then ambiguous, which is the one thing a safety snapshot may
         # not be. qemu-img accepts the duplicate silently and `qemu-img
-        # snapshot -a <tag>` picks one of them. The 2026-09-07 audit's H25.
+        # snapshot -a <tag>` picks one of them. The audit of 2026-09-07.
         $tag = "pre-phase10-prep-{0}" -f (Get-Date -Format "yyyy-MM-dd-HHmm")
         Write-Host ("taking a safety snapshot '{0}' of {1}" -f $tag, $image)
         $text = Invoke-NativeText -Exe $qemuImg -Arguments @("snapshot", "-c", $tag, $image)
@@ -480,7 +481,7 @@ if ($Boot) {
     if (-not (Test-Path $scratch)) { $fs = [IO.File]::Create($scratch); $fs.SetLength(64MB); $fs.Close() }
     # A scratch per consumer: a block node can back exactly one device at a
     # time, so `storage`, `bot` and `uas` need one each.  `bot` and `uas` shared
-    # `prepdrv2` until the 2026-09-16 audit's D3, which made `-Attach bot` then
+    # `prepdrv2` until the audit of 2026-09-16, which made `-Attach bot` then
     # `-Attach uas` refuse loudly - and README trap 15 says "a second scratch
     # drive" as though two were enough.
     $scratch2 = Join-Path $outDir ("prep-{0}-scratch2.img" -f $Target)
@@ -599,9 +600,9 @@ if ($Boot) {
         # an Attach / Detach / Attach of the same row answers
         # `Property 'usb-storage.drive' can't find value 'prepdrv'` the second
         # time.  A node name declared with -blockdev is accepted by `drive=` and
-        # survives the unplug.  The run path moved to -blockdev at repo audit
-        # S-1; the prep path did not, and it drives exactly the same devices
-        # through exactly the same monitor commands (the 2026-09-16 audit's D3).
+        # survives the unplug.  The run path moved to -blockdev after an earlier
+        # repository audit; the prep path did not, and it drives exactly the same devices
+        # through exactly the same monitor commands (the audit of 2026-09-16).
         #
         # One node per consumer, because a node may back exactly one device at a
         # time: `storage`, and then the SCSI children of `bot` and `uas`, which
@@ -620,7 +621,8 @@ if ($Boot) {
         "-chardev", ("file,id=prepchr2,path={0}" -f (Join-Path $outDir ("prep-{0}-chr2.log" -f $Target))),
         # And an audiodev, for the same reason and with the same property:
         # `usb-audio` REFUSES TO ATTACH without one, so the `audio` row of $specs
-        # could never have worked (repo audit D4).  `none` is a real audiodev
+        # could never have worked (an earlier repository audit).  `none` is a
+        # real audiodev
         # backend that plays nothing and, like the chardevs, creates no PCI
         # device - which is the constraint that rules out `-netdev` here.
         "-audiodev", "none,id=prepaud",
@@ -680,7 +682,7 @@ if ($Boot) {
     }
     # THE TRANSFER DRIVE ITSELF.  The staging above filled the directory, and
     # until this argument existed nothing attached it, so the banner below
-    # described a drive the guest could not see (repo audit S-2).  VVFAT
+    # described a drive the guest could not see (an earlier repository audit).  VVFAT
     # presents the directory as a FAT volume; `index=1` is the primary slave,
     # which collides with neither the image (index 0) nor `-cdrom` (index 2,
     # `ide1-cd0`); `snapshot=on` keeps the guest from writing back into the
@@ -797,9 +799,10 @@ if ($Boot) {
         Start-Sleep -Milliseconds 400
 
         #
-        # **THE SCSI ADAPTERS NEED THEIR LUN HERE TOO** (the 2026-09-07 audit's
-        # H23). The `-Attach` path above adds the child and repairs `attached`;
-        # this one did not, so `-Preload bot,uas` put an adapter in the port
+        # **THE SCSI ADAPTERS NEED THEIR LUN HERE TOO** (the audit of
+        # 2026-09-07). The `-Attach` path above adds the child and repairs
+        # `attached`; this one did not, so `-Preload bot,uas` put an adapter in
+        # the port
         # that QEMU never electrically attaches - `auto_attach = 0` until a
         # `scsi-hd` child exists - and Windows saw nothing at all. That is
         # exactly the failure trap 15 in README.md records, reached through the
@@ -939,7 +942,7 @@ if ($Attach -ne "") {
         # The advice quotes back the name THIS invocation was given, rather than
         # spelling one out: -Detach resolves spec-table keys (`kbd-hs`), and the
         # hard-coded `kbd_hs` that used to stand here was a QEMU id, which only
-        # worked under the pre-D4 id composition. An operator who cannot type is
+        # worked under the old id composition. An operator who cannot type is
         # the last person who should be handed a name that throws.
         Write-Host "  NOTE: a USB keyboard takes the guest's key events until Windows binds it."
         Write-Host ("        If you cannot type, detach it (-Detach {0}), finish the dialog," -f $Attach)

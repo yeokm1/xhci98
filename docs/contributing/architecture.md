@@ -1,5 +1,7 @@
 # Driver Architecture
 
+> **This page describes the frozen `1.2.0.0` miniport, not the driver in `src\`.** Until `1.2.0.0` `xhci98.sys` was a `usbport.sys` miniport, and everything below - the stack diagram, the callbacks, the IRQ and DPC model, the INF's import dependency on `usbport.sys` - is that driver's, on branch `1.2.0.0`. From `2.0.0.0` the successor host controller driver replaced it under the same name: a monolithic WDM bus driver that replaces `usbport.sys`, the hub driver and the composite parent, and imports nothing from `usbport.sys`. Its architecture is `AGENTS.md`, "Architecture Overview", and [design record 13](design/13-superspeed-hcd.md) (section 5 for the object model, the enumeration machine and the locks); its file map is [source-files.md](source-files.md). The one note below about the HCD is marked as such.
+
 ## Overview
 
 `xhci98.sys` is a WDM kernel-mode USB host controller miniport for xHCI hardware. It does not talk to `usbhub.sys` directly. Instead it plugs in underneath Microsoft's `usbport.sys` port driver, the same way `usbehci.sys`/`usbuhci.sys`/`usbohci.sys` do, and reuses the entire generic USB stack above it.
@@ -306,9 +308,9 @@ needs at most `ceil(N / 4096) + 1` data TRBs.
 
 ## IRQ and DPC Model
 
-**Since `2.3.0.0` (amended in roadmap-hcd 36.20).** This section is the
+**The HCD (a note in the miniport's section).** The bullets below are the
 miniport's. The HCD that replaced it from `2.0.0.0` connects its own
-interrupt, and from `2.3.0.0` is no longer line-only: a controller with
+interrupt (`hcd_ctl.c`), and from `2.3.0.0` is no longer line-only: a controller with
 Interrupt Pin 0 is polled on a timer of the driver's own, and on Windows Vista and 7 the controller may take a
 message-signalled interrupt (MSI or MSI-X), on amd64 directly and on x86
 through the helper `xhcihlpr.sys` (`xhcimsi.sys` until task 38.3; since
@@ -345,4 +347,4 @@ The section shapes, the dirid-12 trap, and the parser limits that constrain the 
 
 ## Fallback: Option B (monolithic HCD)
 
-Had the Phase 3 spike shown that the miniport ABI could not be matched against the shipping `usbport.sys` (version mismatch, undocumented behavior we could not reproduce), the fallback was a monolithic HCD: `xhci98.sys` re-implements `usbport.sys`'s role itself (creates the root hub PDO, handles `IOCTL_INTERNAL_USB_*`, parses URBs, and runs enumeration) on top of the same xHCI hardware layer described above. This is substantially more work (it amounts to "be usbport.sys") and was never needed by this driver. It is now the plan for this driver's successor: on 2026-10-02 the owner froze the miniport at `1.2.0.0` and scheduled the monolithic HCD as roadmap Phases 25 onward (since the same day it is `xhci98.sys` itself, built from `src\`, the miniport having left the tree) (`roadmap-hcd.md`), with `design/13-superspeed-hcd.md` as its design record. The successor also takes the hub class and the composite parent inside the bus, which the fallback as described here did not contemplate.
+Had the Phase 3 spike shown that the miniport ABI could not be matched against the shipping `usbport.sys` (version mismatch, undocumented behavior we could not reproduce), the fallback was a monolithic HCD: `xhci98.sys` re-implements `usbport.sys`'s role itself (creates the root hub PDO, handles `IOCTL_INTERNAL_USB_*`, parses URBs, and runs enumeration) on top of the same xHCI hardware layer described above. This is substantially more work (it amounts to "be usbport.sys") and was never needed by the miniport. It became the miniport's successor: on 2026-10-02 the owner froze the miniport at `1.2.0.0` and scheduled the monolithic HCD as roadmap Phases 25 onward (`roadmap-hcd.md`), with `design/13-superspeed-hcd.md` as its design record; the same day the miniport left the tree and the HCD became `xhci98.sys`, built from `src\`, first released as `2.0.0.0`. The successor also takes the hub class and the composite parent inside the bus, which the fallback as described here did not contemplate.

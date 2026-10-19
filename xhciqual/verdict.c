@@ -98,7 +98,7 @@ const char *msi_route_text(const PCIINFO *p, int broken_msi)
 
 /*
  * The caveats, said in full wherever the outcome is reached. Which polling
- * mode serves depends on what C4 saw (review rounds 1 and 2): the driver's
+ * mode serves depends on what C4 saw: the driver's
  * automatic mode polls a controller with no pin or no interrupt resource,
  * and moves a line to polling when it sees IMAN.IP asserted and nothing
  * claimed (record 15 section 4.2) - so a controller whose IP was never seen
@@ -150,6 +150,7 @@ int final_verdict(CTRL *c, int active_requested)
     int disqualified = 0;
     int tool_limited = 0;
     int caveats = 0;
+    int st_ok = 1;
     int quick;
 
     qprintf("\n---- Verdict for %04X:%04X ----\n", c->pci.vid, c->pci.did);
@@ -209,7 +210,7 @@ int final_verdict(CTRL *c, int active_requested)
             warned = 1;
         if (c->v_reset != V_PASS) {
             qprintf("  IRQ SELF-TEST FAILURE: halt/reset (C2) failed\n");
-            qualified = 0;
+            st_ok = 0;
         } else if (c->v_dma == V_WARN) {
             /* The full run treats a No Op that completed with a non-success
              * code as warned-only; the self-test used to turn the same
@@ -220,7 +221,7 @@ int final_verdict(CTRL *c, int active_requested)
         } else if (c->v_dma != V_PASS) {
             qprintf("  IRQ SELF-TEST FAILURE: DMA round-trip (C3) was %s - "
                     "%s\n", verdict_name(c->v_dma), c->dma_note);
-            qualified = 0;
+            st_ok = 0;
         }
         if (c->v_reset == V_PASS &&
             (c->v_dma == V_PASS || c->v_dma == V_WARN)) {
@@ -230,14 +231,16 @@ int final_verdict(CTRL *c, int active_requested)
                 caveats = 1;
             } else if (c->v_irq != V_PASS) {
                 qprintf("  IRQ SELF-TEST FAILURE: C4: %s\n", c->irq_note);
-                qualified = 0;
+                st_ok = 0;
             }
         }
         if (c->cleanup_failed) {
             qprintf("  IRQ SELF-TEST FAILURE: cleanup: %s\n",
                     c->cleanup_note);
-            qualified = 0;
+            st_ok = 0;
         }
+        if (!st_ok)
+            qualified = 0;
         if (qualified && caveats) {
             qprintf("  ==> IRQ SELF-TEST: NO WORKING INTERRUPT%s - the "
                     "controller completed the\n"
@@ -252,6 +255,14 @@ int final_verdict(CTRL *c, int active_requested)
         } else if (c->cleanup_failed) {
             qprintf("  ==> IRQ SELF-TEST FAILED - cleanup could not safely "
                     "quiesce the controller.\n");
+        } else if (st_ok) {
+            /* Every self-test gate passed: what withholds the verdict is
+             * the read-only classification above, and FAILED would blame
+             * the interrupt path for it. */
+            qprintf("  ==> NOT QUALIFIED - every IRQ self-test gate passed, "
+                    "but\n"
+                    "      %s above withholds the verdict.\n",
+                    disqualified ? "a static disqualifier" : "a tool limit");
         } else {
             qprintf("  ==> IRQ SELF-TEST FAILED - controller is not "
                     "disqualified by a tool/DPMI failure.\n");

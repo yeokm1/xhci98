@@ -962,7 +962,7 @@ static void test_bulk(void)
     cmd(&t, XHCI_TRB_TYPE_SET_TR_DEQUEUE, 4, 6);
     CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_SEND_END,
              "a dequeue move on an endpoint already Stopped takes the TD "
-             "back too (review round 3)");
+             "back too");
     cmd(&t, XHCI_TRB_TYPE_SET_TR_DEQUEUE, 4, 2);
     CHECK_EQ(command(&e, &t, &code), XHCI_INJ_CMD_PASS,
              "another endpoint's passes");

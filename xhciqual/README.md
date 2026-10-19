@@ -172,13 +172,15 @@ is printed on every revision of the Fresco Logic FL1000 although Linux
 keys `XHCI_SLOW_SUSPEND` on revision 04, because the driver takes it on
 every revision. The revision is in the report's heading line.
 
-When a listed controller's HCIVERSION is below the driver's floor (1.0
-today; 0.96 once roadmap-hcd task 38.11 lands), the last item says so -
-`HCIVERSION 0.96 is below xhci98's floor 1.00`, then `the driver refuses
-this controller: none of the above acts on it` - because the driver will
-not start it and no value named above acts on it. The ASMedia ASM1042, which Linux
-says reports 0.96, is the known case. Nothing is said when MMIO was not
-readable.
+When a listed controller's HCIVERSION is below the driver's floor of 0.96
+(roadmap-hcd task 38.11; the floor at every `XhciAccept096`), the last item
+says so - for example `HCIVERSION 0.95 is below xhci98's floor 0.96`, then
+`refused at every XhciAccept096: none of the above acts on it` - because the
+driver will not start it and no value named above acts on it. A part from
+0.96 up to 1.0, such as the ASMedia ASM1042, which Linux says reports 0.96,
+gets no such item: the driver drives it at `XhciAccept096`'s default, and
+the controller block's own line says what it does at each value. Nothing is
+said when MMIO was not readable.
 
 ## Build (Windows host)
 
@@ -259,7 +261,8 @@ their vendor and are never what `quirk_find` returns; at most one per
 vendor, no flag on both an exact row and its vendor's row, no duplicate
 row; the neighbours of listed ids and the same device under another
 vendor do not match; and the HCIVERSION floor note appears for a listed
-part below 1.0 only, and not when HCIVERSION was not read.
+part below 0.96 only (not at 0.96 or above), and not when HCIVERSION was
+not read.
 
 That code lives in its own translation unit so it can be tested here, because
 the QEMU matrix cannot reach the field-dependent branches. SeaBIOS leaves
@@ -289,10 +292,10 @@ form of the host-test wiring in `build.cmd` stopped the build (no
 failing test suite as a passing build. `wmake` failures were unaffected, so
 it went unnoticed.
 
-This check asserts the contract with five cases: a clean build succeeds and
+This check asserts the contract with six cases: a clean build succeeds and
 produces the EXE, `NOHOSTTEST` still builds, a failing host test fails the
-build, a failing test runner fails the build, and an invalid `wmake` target
-fails the build. The first case is a positive control; without it, a
+build, a crashing host test (an access violation) fails the build, a failing
+test runner fails the build, and an invalid `wmake` target fails the build. The first case is a positive control; without it, a
 `build.cmd` broken in some unrelated way would make every negative case pass
 for the wrong reason.
 
@@ -645,7 +648,9 @@ The ISR disables and acknowledges xHCI, re-masks the line, increments its
 locked counter, sends EOI, and returns with an explicit 32-bit `IRETD`.
 Teardown restores the prior protected-mode vector before restoring the saved
 PIC masks. C6/C8 do not run and the result is `IRQ SELF-TEST PASS/FAILED`,
-not a full machine qualification verdict.
+not a full machine qualification verdict. A controller with a static
+disqualifier (no USB 2.0 ports, for example) whose self-test gates all pass
+closes `NOT QUALIFIED - every IRQ self-test gate passed`, not `FAILED`.
 
 ```bat
 XHCIQUAL xhci --irq-selftest --no-page --log XIRQ.LOG
@@ -795,8 +800,9 @@ from a stock Win98 boot floppy by keeping only `IO.SYS`, `MSDOS.SYS`,
 
 ### What the matrix covers
 
-The matrix stands at 53 cases: one standalone-help case, the isolated xHCI
-IRQ self-test, 27 controller/device cases, two `--probe-only` cases (one
+The matrix stands at 54 cases: one standalone-help case, the isolated xHCI
+IRQ self-test, 28 controller/device cases (since 2026-10-18 one is OHCI
+under `--poll-only`, whose C4 still runs and reads WARN), two `--probe-only` cases (one
 scanning xHCI alone, one scanning xHCI, EHCI and OHCI together), one
 read-only quick scan per controller-presence mask (none, each family, every
 pair, all three), one that checks `--full` still reaches the old
@@ -838,9 +844,9 @@ The cases cover all eight controller presence masks, empty and attached
 variants, HS storage, FS HID, OHCI HID/storage, a USB hub, an unmanaged
 SuperSpeed-only xHCI attachment, mixed devices across multiple controllers,
 combined family selectors, a selected-but-absent family, and `--log ohci`
-log-name/selector disambiguation. Four `--poll-only` cases (xHCI empty, xHCI
+log-name/selector disambiguation. Five `--poll-only` cases (xHCI empty, xHCI
 HS storage, an xHCI hub that generates repeated port-status-change events,
-and EHCI HS storage) confirm the no-ISR active path reaches a `PROVISIONAL`
+EHCI HS storage, and an OHCI mouse, whose C4 still reads WARN) confirm the no-ISR active path reaches a `PROVISIONAL`
 verdict and `Done.` with no DOS/32A exception.
 
 QEMU proves these code paths and cleanup behaviour, not real firmware.

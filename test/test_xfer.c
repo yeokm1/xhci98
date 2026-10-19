@@ -220,8 +220,8 @@ static void test_completion_code_mapping(void)
                 "Invalid Stream ID");
 
     /*
-     * The controller-level failures. **Event Lost was the only one here until
-     * audit round 8**, which found Table 6-90 marking a second in as many words:
+     * The controller-level failures. **Event Lost was once the only one
+     * here**, though Table 6-90 marks a second in as many words:
      * "An Undefined Error shall be treated as a fatal error by software" (33,
      * p.469). The status handed to usbport is unchanged for both - there is no
      * USB-level equivalent of either - and what changed is the treatment.
@@ -242,8 +242,8 @@ static void test_completion_code_mapping(void)
                 "Stopped - Short Packet reports EDTLA, not a residual");
 
     /*
-     * Table 6-90's vendor ranges carry their own default reading, and **audit
-     * round 8 found the error range taking half of it**: "If software does not
+     * Table 6-90's vendor ranges carry their own default reading, and **the
+     * error range once took half of it**: "If software does not
      * recognize the code, it shall interpret this range of vendor defined values
      * as a Undefined Error condition" (p.470). This driver recognises none of
      * them, so the whole range is that condition - fatal included, or the
@@ -259,7 +259,7 @@ static void test_completion_code_mapping(void)
                 "vendor information ceiling is Success");
 
     /*
-     * `SlotFatal` is the other half of round 8's finding and is deliberately
+     * `SlotFatal` is the other half of the same correction and is deliberately
      * *not* `Fatal`: Incompatible Device Error is "fatal as far as the Slot is
      * concerned. Software shall issue a Disable Slot Command to recover" (22,
      * p.468), so it takes one device down and not the controller. Checked with
@@ -296,8 +296,8 @@ static void test_completion_code_mapping(void)
     expect_code_rejected(9, "No Slots Available is a command result");
     expect_code_rejected(11, "Slot Not Enabled is a command result");
     /*
-     * **Code 12 is not a command result, and audit round 9 found this line
-     * saying it was.** Table 6-90 p.467 asserts it "if a doorbell is rung for an
+     * **Code 12 is not a command result, and this line once said it
+     * was.** Table 6-90 p.467 asserts it "if a doorbell is rung for an
      * endpoint that is in the Disabled state", and 4.7 p.143 says the xHC
      * "should generate a Transfer Event TRB with the TRB Pointer, TRB Transfer
      * Length, Event Data (ED) fields set to '0'" for it. So it belongs to this
@@ -305,8 +305,8 @@ static void test_completion_code_mapping(void)
      * usable TRB pointer - rather than for belonging to another one. That it is
      * refused and not acted on *here* is a deviation recorded in
      * docs/contributing/implementation-invariants.md, "Fatal Errors"; recovery
-     * is delayed to usbport's timeout rather than absent, which audit round 10
-     * corrected.
+     * is delayed to usbport's timeout rather than absent (reviewed and
+     * revised).
      */
     expect_code_rejected(12, "Endpoint Not Enabled has no valid TRB pointer "
                              "either - it is a pointerless Transfer Event, not "
@@ -385,8 +385,9 @@ static void test_completion_code_mapping(void)
  * SET_CONFIGURATION is the no-data shape every configured device goes through;
  * SET_INTERFACE and CLEAR_FEATURE are the same shape. The vector used to pin
  * SET_ADDRESS, which is also zero-length - but that is the one request that
- * must never reach a ring at all (task 6-B.3 intercepts it, and test_init
- * asserts it is never placed), so encoding it as a correct TD taught the suite
+ * must never reach a ring at all (the bus addresses a device with Address
+ * Device, and hcd_urb.c refuses a client's SET_ADDRESS before any ring sees
+ * it), so encoding it as a correct TD taught the suite
  * the forbidden request's ring shape (roadmap Phase 20, smaller items).
  */
 static void test_build_no_data(void)
@@ -962,9 +963,10 @@ typedef struct _XFER_FIXTURE {
     XHCI_TRB scratch[XHCI_XFER_MAX_CONTROL_TRBS];
     /*
      * Eight, not four. `test_submit_normal_ring_full` needs seven distinct
-     * records to fill a ring and be refused on the eighth, and until the
-     * 2026-09-07 audit's G3 it re-used records 0, 1 and 2 while they were
-     * still queued - which design record 03 section 5 forbids by name, and
+     * records to fill a ring and be refused on the eighth, and until
+     * 2026-09-07 (reviewed and revised) it re-used records 0, 1 and 2 while
+     * they were still queued - which design record 03 section 5 forbids by
+     * name, and
      * which left the queue corrupt and two records unreachable for the rest
      * of that vector.
      */
@@ -1439,8 +1441,8 @@ static ULONG fixture_submit_interrupt_multi(XFER_FIXTURE *fix, ULONG which)
  * event, and this vector asserted that.
  *
  * Task 9-0.2 keeps the departure and moves *when* it is taken, because retiring
- * on the first event re-lets TRBs a delayed tail is then matched against (repo
- * audit finding 21). So the first event now only defers, and a conforming
+ * on the first event re-lets TRBs a delayed tail is then matched against (the
+ * delayed-tail hazard). So the first event now only defers, and a conforming
  * controller never reaches the departure at all: its tail arrives first and ends
  * the transfer positionally. That is what is asserted here, and
  * `test_event_normal_short_packet_tail_withheld` is the other controller.
@@ -1466,7 +1468,7 @@ static void test_event_normal_short_packet_terminates(void)
              "the short packet event");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE,
              "deferred, not completed - the tail p.175 promises may still be in "
-             "the event ring, and retiring here is what finding 21 named");
+             "the event ring, and retiring here is the delayed-tail hazard");
     CHECK_EQ(result.CompletedCount, 0, "nothing completed");
     CHECK_EQ(fix.queue.MidTdDeferrals, 1, "one deferral armed");
     CHECK_EQ(fix.queue.Count, 1, "and the transfer is still queued");
@@ -1610,8 +1612,8 @@ static void test_event_mid_td_tail_eviction_is_counted(void)
  *
  * The first implementation wrote to the next *physical* slot whichever way the
  * cursor happened to be pointing, so a queue holding one waiting record and
- * three empty slots could evict the waiting one and count a drop (repo audit
- * round 2, finding 2). The count stayed arithmetically consistent, which is
+ * three empty slots could evict the waiting one and count a drop. The count
+ * stayed arithmetically consistent, which is
  * what makes it worth a vector: the number was believable and wrong.
  *
  * Fill the ring of records, answer all but one, then record more. Nothing may
@@ -1674,7 +1676,7 @@ static void test_event_mid_td_tail_reuses_free_slots(void)
 }
 
 /*
- * **The hazard finding 21 named, and the half of it task 9-0.2 closes.**
+ * **The delayed-tail hazard, and the half of it task 9-0.2 closes.**
  *
  * A Transfer Event names a TRB address, not a generation. Once a retired TD's
  * TRBs are re-let, a tail event that was sent but not yet consumed names a TRB
@@ -1683,7 +1685,7 @@ static void test_event_mid_td_tail_reuses_free_slots(void)
  * happening, deliberately, as a defect pinned in executable form.
  *
  * **What the fix changes is the ordering that made it reachable.** The path
- * finding 21 walked was: the drain stops at `XHCI_DPC_MAX_EVENTS` with the
+ * the hazard walked was: the drain stops at `XHCI_DPC_MAX_EVENTS` with the
  * tail still unread, the short TD is retired and completed anyway,
  * `XhciSlotDeferredWork` hands it to usbport, usbport reposts from inside that
  * call over the very TRBs the tail names, and the next pass then delivers the
@@ -1742,8 +1744,8 @@ static void test_event_delayed_tail_after_reuse_is_misattributed(void)
              "with nothing written for it: a refused placement writes nothing, "
              "so the only TRBs consumed are the second TD's");
 
-    /* Now the tail, which in finding 21's scenario was the event sitting unread
-     * in the ring while the retire and the repost happened. */
+    /* Now the tail, which in the hazard's scenario was the event sitting
+     * unread in the ring while the retire and the repost happened. */
     CHECK_EQ(fix.queue.Count, 2, "(its own transfer still owns those TRBs)");
     CHECK_EQ(deliver(&fix, tail, XHCI_CC_SHORT_PACKET, 40, &result),
              XHCI_XFER_OK, "the tail event");
@@ -1846,8 +1848,7 @@ static void test_event_tail_after_the_settle_is_still_misattributed(void)
  * cannot be re-let. That holds only until the ring laps: the TRB *is* reused,
  * and if the transfer occupying it later ends and produces its own unowned
  * event, a stale record would claim it and report a tail the controller never
- * sent - inflating the reading in the direction that says "conforming" (repo
- * audit round 2, finding 1).
+ * sent - inflating the reading in the direction that says "conforming".
  *
  * A tiny ring makes the lap cheap. Retire one TD early, publish over the same
  * TRBs, and confirm the record is gone rather than waiting to be matched.
@@ -1895,8 +1896,7 @@ static void test_event_mid_td_tail_retracted_on_reuse(void)
          * record disappears exactly when its TRBs are re-let, and survives
          * every placement that does not touch them. Without this an over-broad
          * retraction - one that dropped records on any submission - would pass
-         * the "it eventually went away" test just as well (repo audit round 3,
-         * finding 2).
+         * the "it eventually went away" test just as well.
          */
         covered = 0;
         for (i = 0; i < fix.transfers[0].TrbCount; i++) {
@@ -2025,8 +2025,8 @@ static void test_event_normal_short_packet_tail_withheld(void)
  * `DataTrbCount == TrbCount`. Every shape this driver builds today differs in
  * both at once (a control transfer's data starts one TRB in and never covers
  * the Setup and Status TRBs), so a mutation dropping either conjunct failed
- * zero checks; `xhci_xfer.c` says so in a comment and the repo audit
- * finding 3 called that in as the test gap it is.
+ * zero checks; `xhci_xfer.c` says so in a comment, and this is the test gap
+ * that left.
  *
  * These build the two half-mismatched records directly. Neither is a shape the
  * builder emits, which is the point: the predicate has to refuse them before
@@ -2063,7 +2063,7 @@ static void test_event_half_data_range_refuses_early_retire(void)
      * left equal on purpose: it is what makes the *second* conjunct hold, so
      * this vector fails only if the **first** one is missing. A first draft set
      * both fields and therefore isolated neither - it passed with the first
-     * conjunct deleted, which is the very mutation finding 3 asked about. */
+     * conjunct deleted, which is the very mutation the gap above names. */
     fixture_init(&fix, 32);
     CHECK_EQ(fixture_submit_interrupt_multi(&fix, 0), XHCI_XFER_OK, "submitted");
     t = &fix.transfers[0];
@@ -2172,7 +2172,7 @@ static void test_event_mid_td_deferral_swept_by_a_later_td(void)
  *     deferrals == tailed + tailedSpurious + retired + lost + still armed
  *
  * is what makes `MidTdDeferralsTailed` readable as a verdict. Counting the loss
- * in nothing is the shape repo audit finding 17 removed from the censored
+ * in nothing is the shape once removed from the censored
  * accounting once already: it makes this driver's inability to look
  * indistinguishable from the controller's answer.
  *
@@ -2281,7 +2281,7 @@ static void test_settle_refuses_when_the_ring_moved(void)
     CHECK_EQ(settle(&fix, &result), XHCI_XFER_OK, "the pass empties");
     /*
      * **The transfer is NOT ended here**, and that assertion used to say the
-     * opposite. The batch-9-0 review round 2 found why it matters: this branch's
+     * opposite. Batch 9-0 showed why it matters: this branch's
      * whole premise is that nothing halted the endpoint, so it is *Running* -
      * and completing the transfer hands its mapped buffer back to usbport while
      * the xHC may still own or have prefetched the TRBs that name it. The
@@ -2300,11 +2300,9 @@ static void test_settle_refuses_when_the_ring_moved(void)
     /* The *request*, which is all this layer can see: the transfer core has no
      * endpoint, no quiesce and no command engine, so it cannot say what the
      * slot layer does with it. "The endpoint is stopped" was a claim about code
-     * this vector never executes - and that gap is why the slot layer's
-     * response to this refusal went unchecked long enough for the batch-9-0
-     * review to find two different defects in it. The property is pinned by
-     * `test_slot_bulk_settle_refusal_does_not_halt_the_endpoint` in
-     * `test_init.c`. */
+     * this vector never executes. The miniport pinned the slot layer's side
+     * in test_init.c, which left the tree with it; under the HCD the response
+     * is hcd_dev.c's (hcdSettlePipe), and no host suite covers it. */
     CHECK_EQ(result.NeedsRecovery, 1,
              "and recovery is requested rather than quietly carrying on");
     CHECK_EQ(fix.queue.Count, 2,
@@ -2365,8 +2363,8 @@ static void test_event_normal_short_ring_record_disagree(void)
              "no early retire on a TD the ring and the record disagree about - "
              "the ring's tail would have taken the next transfer's TRBs with it");
     /*
-     * **And nothing is completed either**, which is the batch-9-0 review round
-     * 5 finding. This used to fall through to `xhciXferFinishGroup`: the
+     * **And nothing is completed either** (batch 9-0, reviewed and revised).
+     * This used to fall through to `xhciXferFinishGroup`: the
      * `wholeTdIsData && SHORT` clause made it terminal, so the transfer was
      * detached and handed up with `OrphanedGroups` and a plain `NeedsRecovery`
      * - and the slot layer's recovery for a Short Packet code **halts the
@@ -2784,7 +2782,7 @@ static void test_event_success(void)
     CHECK_EQ(deliver(&fix, 2, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK, "ok");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "nothing to do");
     /*
-     * Counted apart, not summed. Until the 2026-09-07 audit's G11 this was
+     * Counted apart, not summed. Until 2026-09-07 this was
      * `UnmatchedEvents + ForeignEvents == 1`, which passes whichever of the
      * two the classifier picked - and the two mean different things: an
      * unmatched event names a TRB on this ring that no record owns, while a
@@ -2929,7 +2927,7 @@ static void test_event_short_packet_multi_trb(void)
  * computed correctly from the residual, nothing fixes it because the code says
  * Success, and the terminal Status Stage event then overwrites it with the full
  * requested length. usbport hands the URB back claiming bytes that never
- * arrived. Found by the stop-time review, not by this suite - which is why the
+ * arrived. Found outside this suite - which is why the
  * negative control below is here too.
  */
 static void test_event_spurious_success(void)
@@ -3345,8 +3343,8 @@ static void test_event_rejections(void)
              XHCI_XFER_OK, "ok");
     CHECK_EQ(fix.queue.ForeignEvents, 4, "off this ring");
 
-    /* RsvdZ bits 3:0 set on an address that IS on this ring (the 2026-09-05
-     * audit's first smaller item): masked off and counted, so the event
+    /* RsvdZ bits 3:0 set on an address that IS on this ring (reviewed and
+     * revised 2026-09-05): masked off and counted, so the event
      * resolves to its TRB instead of being refused as misaligned - here to an
      * index no transfer owns, which is the unmatched count, not the foreign
      * one. Before the mask this read as a fifth foreign event. */
@@ -3366,8 +3364,8 @@ static void test_event_rejections(void)
         CHECK_EQ(fix.queue.Count, 1, "with the transfer untouched");
     }
     /* ...and on an OWNED TRB the event has to go all the way to a completion:
-     * the mask must reach the classifier, not only the first lookup (the
-     * Phase 20 review's round 2 found it stopping short, and this vector's
+     * the mask must reach the classifier, not only the first lookup (in
+     * Phase 20 it once stopped short, and this vector's
      * unowned cousin above returned before the classifier could refuse). A
      * fresh fixture, so the rejections above keep their transfer. */
     {
@@ -3581,8 +3579,8 @@ static void test_queue_stopped_latches_length(void)
     CHECK_EQ(fix.transfers[0].BytesTransferred, 0, "with nothing reported");
 
     /*
-     * **Stopped on the Status Stage TRB: the whole data stage moved** (the
-     * 2026-09-16 audit's B7).
+     * **Stopped on the Status Stage TRB: the whole data stage moved**
+     * (reviewed and revised 2026-09-16).
      *
      * The Status Stage is the TD's last TRB and the xHC reaches it only once
      * every Data Stage TRB has completed, so 18 bytes are on the wire by the
@@ -3688,7 +3686,7 @@ static void test_queue_stopped_latches_length(void)
          * The **Status Stage** at index 4 is the other one outside the data
          * range, and it answers differently: the xHC reaches it only once every
          * Data Stage TRB has completed, so all 320 bytes moved. This latched
-         * nothing until the 2026-09-16 audit's B7 - the walk above stays inside
+         * nothing until 2026-09-16 - the walk above stays inside
          * the data range, did not find it, and returned - which made
          * `AbortTransfer` report nought for a transfer that had finished its
          * data stage.
@@ -3779,7 +3777,7 @@ static void test_token_never_zero(void)
  * Produced here by moving the ring out from under the transfer record, which is
  * what a divergence between the two would look like from this side.
  *
- * **What it does about it changed in the batch-9-0 review round 6.** This used
+ * **What it does about it changed in batch 9-0.** This used
  * to complete the transfer and ask for recovery - and the completion code here
  * is `Success`, which halts nothing, so the slot layer's generic recovery
  * halted a **Running** endpoint and the completion handed a mapped buffer back
@@ -3837,13 +3835,13 @@ static void test_orphaned_group(void)
  * **The orphan backstop, which only an error can reach now.**
  *
  * `xhciXferFinishGroup` still counts "the group ended and nothing was
- * reclaimed" and forces `NeedsRecovery`. Since the batch-9-0 review round 6,
+ * reclaimed" and forces `NeedsRecovery`. Since batch 9-0,
  * every *non-halting* way of reaching that is intercepted earlier and leaves
  * the transfer queued instead - so the backstop is reachable only by an error
  * or a cancellation, where the endpoint really is Halted or Stopped and
  * completing is legal.
  *
- * Round 7 found that no vector reached it any more: `test_orphaned_group` used
+ * Then no vector reached it any more: `test_orphaned_group` used
  * to, and now returns at the interception. Without this one, deleting the
  * backstop would leave an endpoint halted by hardware with the slot layer never
  * asked to recover it, and the suite would stay green.
@@ -4209,7 +4207,7 @@ static void test_retry_recovered_short(void)
              "counted recovered, though the event's own TD was never retried");
 }
 
-/* Review round 1, finding 1: an operation's quiesce must settle a deferred
+/* An operation's quiesce must settle a deferred
  * outcome before programming the dequeue. Until the replay, the software
  * dequeue is on the failed TD's first TRB - a Set TR Dequeue there would
  * discard the controller's saved progress in the TD (xHCI 4.6.8) and run it
@@ -4311,7 +4309,7 @@ static void test_retry_stream_wrap(void)
     CHECK_EQ(XhciXferQueueRestart(NULL), 0, "no queue");
 }
 
-/* Review round 1 of 35-T.2, finding 3: an event whose pointer's low dword
+/* Task 35-T.2: an event whose pointer's low dword
  * aliases a queued TD's TRB but whose high dword is nonzero names no TRB of
  * this driver. It is refused as foreign before the engine sees it, so it
  * neither completes nor diverts the TD; one below 4 GB, and an Event Data

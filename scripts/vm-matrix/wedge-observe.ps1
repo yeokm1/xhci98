@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-Finding 3's wedge, as an OBSERVATORY - drive the bench recipes in QEMU with
+The batch 13-E wedge, as an OBSERVATORY - drive the bench recipes in QEMU with
 every relevant trace channel open, and record what each plug and each pull did.
 
 .DESCRIPTION
-`docs/contributing/runs/run-13e.md`, "Finding H", reduced Finding 3 to one named
+`docs/contributing/runs/run-13e.md`, "Finding H", reduced the wedge to one named
 variable on the E460 - a device that is NOT High Speed using a root port in
 between two High-Speed enumerations - from four conditions with device
 identity, plug count and the port held constant:
@@ -403,7 +403,7 @@ function Get-TraceEventTally {
 
 # ------------------------------------------------------------------ the run ---
 $reportLines = @()
-$reportLines += "xhci98 - Finding 3's wedge, observed in QEMU"
+$reportLines += "xhci98 - the batch 13-E wedge, observed in QEMU"
 $reportLines += ""
 $reportLines += ("qemu         : {0}" -f $qemuVer)
 $reportLines += ("target       : {0} ({1})" -f $tgt.Id, $tgt.Name)
@@ -491,8 +491,8 @@ foreach ($armName in $Arm) {
     # The line-800 guard of run-matrix.ps1, and for the reason recorded there:
     # `$tgt.Accel` on a hashtable with no `Accel` key answers $null, and
     # `$null -ne ""` is TRUE - so a target without the key got a bare `-accel`
-    # that ate the next argument (the 2026-09-07 audit's H25, whose fix reached
-    # the launch site and not this one; the 2026-09-16 audit's D2).
+    # that ate the next argument (the audit of 2026-09-07, whose fix reached
+    # the launch site and not this one; the audit of 2026-09-16).
     if ($tgt.ContainsKey('Accel') -and $null -ne $tgt.Accel -and "$($tgt.Accel)" -ne "") {
         $qargs += @("-accel", "$($tgt.Accel)")
     }

@@ -9,7 +9,7 @@
  * for its outcome, and feeds the outcome back as the next event. The machine
  * touches no register, calls no kernel service and holds no lock, so the
  * host suite drives it with no controller at all (test\test_enum.c), the
- * split xhci_vhub.c made for the virtual hub in the miniport.
+ * split the miniport's xhci_vhub.c (since deleted) made for its virtual hub.
  *
  * DDK-free: part of the pure core.
  */

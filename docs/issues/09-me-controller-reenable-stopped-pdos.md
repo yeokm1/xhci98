@@ -349,7 +349,7 @@ not get past. Neither is right while the stop is treated as a departure.
 Commit `fa2af9b` (`src/hcd.h`, `src/hcd_pnp.c`, `src/hcd_enum.c`,
 `src/hcd_pdo.c`; 289 lines added, none removed), written first as `5b554f4`
 on `e0cc62f` and rebased onto `main` with its `src` unchanged but for the
-version stamps, reviewed and found clean in one round, merged into
+version stamps, reviewed and found clean, merged into
 the release branch at `a9a7577`:
 
 - **The controller's orderly PnP STOP marks itself.** The FDO's

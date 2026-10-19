@@ -354,6 +354,12 @@ LONG TbtRingStartEx(PTBT_RING ring,
 /* Stop ring 0: both Ring Control registers to their default 0, then the RX
  * Consumer Index to its default (Spec 12.6.3.3.3's note). Idempotent. */
 VOID TbtRingStop(PTBT_RING ring);
+/* Record 22 section 7.7 part 3 step 1: ring 0 of both directions stopped
+ * whatever the records say - each Ring Control to its default, Base
+ * Address Low and High, Ring Size and the index written 0 - then the 1 ms
+ * settle and the read-back that clears DmaMayRun. TRUE only when it did:
+ * the buffer may then be reprogrammed by TbtRingStartEx. */
+BOOLEAN TbtRingStopVerified(PTBT_RING ring);
 /* Both ring 0 configurations as the last start programmed them: bases,
  * sizes, and Valid and Raw Mode set (a recovery that keeps the rings
  * requires it, cm_live.h). */
@@ -369,6 +375,12 @@ VOID TbtRingSetUnsolicited(PTBT_RING ring, TBT_UNSOLICITED fn, PVOID context);
  * Consumer Index passing it, or DD). TBT_E_PARAM for a frame past the
  * buffer or a PDF above Eh, TBT_E_RING_FULL with no vacant descriptor,
  * TBT_E_HW if it is never consumed, TBT_E_STOPPED before a start.
+ * Counters.Tx counts the descriptors published: it moves exactly when the
+ * Producer Index is written, so a caller tells a send refused before
+ * publication (no answer can come) from one published and not seen
+ * consumed (TBT_E_HW; the host interface may still take it later) by
+ * whether Counters.Tx moved. An unreadable index (all ones) before
+ * publication is also TBT_E_HW, with Counters.Tx unmoved.
  */
 LONG TbtRingSend(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words);
 /* The same, with the consumption bound in microseconds. */

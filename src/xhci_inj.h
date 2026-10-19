@@ -23,8 +23,9 @@
  * "qemu.inj.*" notes for every command taken, refused or ended.
  *
  * THE ENDPOINT FAULTS (codes 08 to 12 hex: 35-T.2's soft retry, 35-T.3/4's
- * device cycle) meet the driver at five hooks, all qemu-only: the event drain
- * (xhci_evt.c), which swallows the Stopped event of the layer's own Stop
+ * device cycle; and 14 to 17 hex, 36.22's bulk ones) meet the driver at
+ * five hooks, all qemu-only: the event drain (xhci_evt.c), which swallows the
+ * Stopped event of the layer's own Stop
  * Endpoint and hands an injected Transfer Event to the handler a ring event
  * meets; the Endpoint Context state reads (hcd_enum.c, hcd_cfg.c, hcd_hub.c),
  * answered Halted or Error; every command the thread issues (hcd_enum.c,
@@ -126,7 +127,8 @@
 #define XHCI_INJ_TAKE_UNKNOWN    3UL  /* no such code: refused, noted        */
 
 /* XhciInjKind: how a fault is carried out. */
-#define XHCI_INJ_KIND_OTHER      0UL  /* 01 to 07, CLEAR: hcd_inj.c's own    */
+#define XHCI_INJ_KIND_OTHER      0UL  /* 01-07, 13, 18, 19 hex and CLEAR:
+                                       * hcd_inj.c's own                     */
 #define XHCI_INJ_KIND_RETRY      1UL  /* a stop, emulated Halted, a TE       */
 #define XHCI_INJ_KIND_HALT       2UL  /* a stop, a Stall naming no TD        */
 #define XHCI_INJ_KIND_REFUSED    3UL  /* a refused code, no stop             */
@@ -303,7 +305,7 @@ ULONG XhciInjNeedsLive(ULONG fault);
 ULONG XhciInjLostCount(ULONG arg);
 
 /* ----------------------------------------------------------------------- */
-/* The endpoint faults (08 to 12 hex)                                       */
+/* The endpoint faults (08 to 12 hex, 14 to 17 hex)                        */
 /* ----------------------------------------------------------------------- */
 
 /* XHCI_INJ_KIND_* of a fault code. */
@@ -313,8 +315,8 @@ ULONG XhciInjKind(ULONG fault);
 ULONG XhciInjHoldOf(ULONG fault);
 
 /* The EP State a fault's context reads answer: Halted for TRANSACTION, the
- * RESET_EP_FAIL and RACE ones and HALT_HALTED, Error for HALT_ERROR, 0 (the
- * real state) for the rest. */
+ * RESET_EP_FAIL and RACE ones, HALT_HALTED and BULK_ERROR, Error for
+ * HALT_ERROR, 0 (the real state) for the rest. */
 ULONG XhciInjHaltStateOf(ULONG fault);
 
 /* One of a count spent: 0 when none was left. 0xFFFFFFFF never runs out. */

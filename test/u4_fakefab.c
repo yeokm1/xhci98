@@ -132,8 +132,11 @@ static void fabPump(FAB *f)
         fr = &f->RxQ[0];
         if ((f->RxCtrl & 0x80000000UL) == 0 || f->RxSize == 0 ||
             f->RxProd == f->RxCons) {
-            /* No buffer: a real router retries later (Spec 6.6 for the
-             * events); keep it unless the ring is off. */
+            /* No buffer. The host interface drops such a frame (as
+             * tbt_fake.h does); this fabric keeps it instead, unless the
+             * ring is off, standing for a router's retransmission of an
+             * unacknowledged event (Spec 6.6). A response lost to a full
+             * ring is therefore not modelled here. */
             if ((f->RxCtrl & 0x80000000UL) == 0) {
                 f->RxDropped++;
             } else {
@@ -1690,7 +1693,9 @@ static void fabDisconnect(FAB *f, int pr, unsigned pa)
         setLaneState(&p->Adp[pa + k], 7);
         setLaneWidth(&p->Adp[pa + k], 0);
         p->Adp[pa + k].Cs[4] |= 0x80000000UL;
-        p->Adp[pa + k].Cs[FAB_CAP_LANE + 1] &= ~0x4000UL;
+        /* Lane Disable is left as the connection manager wrote it: an
+         * unplug does not reset the host router, so only the driver's own
+         * write clears it. */
     }
     if (dev >= 0) {
         f->R[dev].Connected = 0;
@@ -1759,6 +1764,33 @@ void fabPowerCycle(FAB *f)
             setLaneWidth(&f->R[i].Adp[f->R[i].UpAdp + 1], 1);
         }
     }
+    f->RxQCount = 0;
+}
+
+void fabResetHost(FAB *f)
+{
+    unsigned a;
+    unsigned long lane[FAB_MAX_ADP];
+    unsigned long cs4[FAB_MAX_ADP];
+
+    /* The router's configuration and paths reset; its lane adapters keep
+     * the link as trained (the link itself stayed up), Lock set again. */
+    for (a = 1; a <= f->R[0].MaxAdp && a < FAB_MAX_ADP; a++) {
+        lane[a] = f->R[0].Adp[a].Cs[FAB_CAP_LANE + 1];
+        cs4[a] = f->R[0].Adp[a].Cs[4];
+    }
+    fabResetRouter(f, 0);
+    for (a = 1; a <= f->R[0].MaxAdp && a < FAB_MAX_ADP; a++) {
+        if (f->R[0].Adp[a].Present && (f->R[0].Adp[a].Cs[2] & 0xFFFFFFUL) == 1) {
+            f->R[0].Adp[a].Cs[FAB_CAP_LANE + 1] = lane[a];
+            f->R[0].Adp[a].Cs[4] = cs4[a] | 0x80000000UL;
+        }
+    }
+    f->TxCtrl = 0;
+    f->RxCtrl = 0;
+    f->TxSize = 0;
+    f->RxSizeReg = 0;
+    f->RxSize = 0;
     f->RxQCount = 0;
 }
 

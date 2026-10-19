@@ -123,7 +123,7 @@ typedef struct _XHCI_SUSP_FUNC {
                              * in the hold in which it writes PwrState D0
                              * (XhciSuspAdmit's *newState D0), so a D0 and
                              * a fresh Dx between two passes still ends
-                             * it (round 2, finding 2)                   */
+                             * it                                       */
     /* outputs of XhciSuspDecide */
     ULONG CompleteDx;       /* claim and complete the pended Dx, SUCCESS */
     ULONG ToD0;             /* write PwrState D0: the link is ACTIVE and
@@ -341,8 +341,7 @@ ULONG XhciSuspBegin(PXHCI_SUSP_LINK link, ULONG kind, ULONG armWanted,
 
 /* The executor has issued the U3 step's request (before it reports the
  * step): wake samples it feeds from now on belong to this suspension,
- * including any it reads before reporting the step (Codex review of
- * 36.29, round 3, finding 1). */
+ * including any it reads before reporting the step (36.29). */
 VOID XhciSuspU3Issued(PXHCI_SUSP_LINK link);
 
 /* The current step's result at `nowMs`: the next step, or END with
@@ -361,10 +360,10 @@ VOID XhciSuspRecovered(PXHCI_SUSP_LINK link, ULONG ok);
  * device's slots IN THE SAME controller-lock hold in which that ACTIVE
  * became visible to dispatch (the Advance or Recovered call that wrote it),
  * so a slot change dispatch makes afterwards is a change against the
- * baseline (Codex review of 36.29, round 2, finding 4). The refusal's own
+ * baseline (36.29). The refusal's own
  * slot edits - a STALL's WAIT_WAKEs claimed for NOT_SUPPORTED - are made
  * earlier in that same hold, before this call, so they are in the
- * baseline and do not release it (round 3, finding 3); the claimed IRPs
+ * baseline and do not release it; the claimed IRPs
  * are completed after the hold. Does nothing when no latch is due.
  */
 VOID XhciSuspLatch(PXHCI_SUSP_LINK link, const XHCI_SUSP_FUNC *funcs,
@@ -416,7 +415,15 @@ ULONG XhciSuspFwTake(PXHCI_SUSP_LINK link, PULONG bits, PULONG beyond);
 #define XHCI_SUSP_EV_RESUME_DONE    5UL /* the host's resume finished     */
 
 /* A root USB 2.0 port's sample: PORTSC read before the acknowledgement,
- * the change mask acknowledged, the generation the port held. */
+ * the change mask acknowledged, the generation the port held.
+ *
+ * SUSPEND_ENTRY differs between the two samplers, deliberately: here it is
+ * reported in any link state, because PLC with PLS = U3 is an edge - the
+ * port has just entered U3 - while the hub sampler below reports it only
+ * while SUSPENDING, because PORT_SUSPEND in wPortStatus is a level that
+ * stays set for as long as the port is suspended and so says nothing new
+ * outside that step. XhciSuspEvidence acts on neither (it takes DISCONNECT
+ * and WAKE); the value is for the caller's log. */
 ULONG XhciSuspRootEvidence(const XHCI_SUSP_LINK *link, ULONG portsc,
                            ULONG acked, ULONG generation);
 

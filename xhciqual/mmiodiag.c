@@ -258,7 +258,7 @@ int report_mmio_unavailable(const PCIINFO *p, int active_requested)
          * DISQUALIFIED for it, so without this the run returned 1 - a hard
          * disqualifier - while printing "No controller fault inferred" and
          * advice about powering the part up or enabling MSE. The verdict and
-         * the words under it have to be one answer (Codex review round 5). */
+         * the words under it have to be one answer. */
         qprintf("  DISQUALIFIED: BAR0 selects I/O space, and xHCI 5.2.1 "
                 "requires a memory BAR\n");
         qprintf("      True whatever the power state and Memory Space Enable "

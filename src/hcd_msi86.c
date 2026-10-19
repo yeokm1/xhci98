@@ -417,7 +417,7 @@ step:
     act = XhciHlprBindStep(&hc->HlprBind, event);
     HcdMsiTraceLife(hc, HCD_MSI_LIFE_LOOK, event, (ULONG)hc->HlprStatus);
     /* The refusal's own event, with the channel test that failed, before
-     * the look's reference goes (Codex review of the 36.15 code, round 1). */
+     * the look's reference goes (task 36.15). */
     if (event == XHCI_HLPR_EV_LOOK_REFUSED) {
         HcdMsiTraceLife(hc, HCD_MSI_LIFE_REFUSE, hc->HlprRefusal,
                         (ULONG)hc->HlprStatus);
@@ -817,7 +817,7 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
     }
     XhciMsiFilterPublish(&hc->MsiFilter, hc->FilterClassify.Class, outcome);
     /* 38.10: a strip the quirk asked for, kept for the next start's dump
-     * (review round 2; hcd_quirk.c, HcdQuirkMsiAvoid). */
+     * (hcd_quirk.c, HcdQuirkMsiAvoid). */
     hc->MsiAvoidFilterStrips = 0;
     if (quirkAsked && outcome == XHCI_MSI_OUT_REPLACED) {
         hc->MsiAvoidFilterStrips = hc->FilterStripped;

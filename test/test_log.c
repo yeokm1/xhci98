@@ -147,7 +147,7 @@ static void noteRingBytes(int line)
         ringConservationFailures++;
         printf("FAIL %s:%d: the ring lost %lu byte(s): %lu handed in, %lu "
                "accounted for now\n",
-               "test_log.c", line, ringBytesInLast - live, ringBytesInLast,
+               __FILE__, line, ringBytesInLast - live, ringBytesInLast,
                live);
         failures++;
     } else {
@@ -173,8 +173,9 @@ static void checkByteConservation(unsigned long extra, const char *where)
     if (extra == 0) {
         check_eq_impl(live, expectedBytesIn, where, __FILE__, __LINE__);
     } else if (live < expectedBytesIn) {
-        printf("FAIL %s: the ring accounts for %lu byte(s), but the appends "
-               "this file made are worth %lu\n", where, live, expectedBytesIn);
+        printf("FAIL %s:%d: %s: the ring accounts for %lu byte(s), but the "
+               "appends this file made are worth %lu\n", __FILE__, __LINE__,
+               where, live, expectedBytesIn);
         failures++;
     }
 }
@@ -676,8 +677,8 @@ static void testPublishingBypassesTheSwitch(void)
  * took nothing would otherwise turn a bounded ring into a permanently full one
  * that drops every later record - which is the state a user would be trying to
  * diagnose. *(Named `testFailedWriteEmptiesTheRing` and worded around "the file
- * cannot be created" until the post-Phase 13 review rounds; the file sink left and the
- * property is the ring's, not any sink's.)*
+ * cannot be created" until it was reviewed and revised after Phase 13; the
+ * file sink left and the property is the ring's, not any sink's.)*
  */
 static void testFailedHandoverEmptiesTheRing(void)
 {
@@ -970,8 +971,8 @@ static void testChannelConsentIsRungZero(void)
  * and is the file a stranger pastes into a public issue. Two records written as
  * soon as recording was on - the `USBPORT_RESOURCES` pointer and the mapped
  * register base - carried exactly what that boundary is drawn around, while the
- * release notes and the generated readme both promised there were none. A Codex
- * review of commit `85c0072` found the documents and the code disagreeing; this
+ * release notes and the generated readme both promised there were none. At
+ * commit `85c0072` the documents and the code disagreed; this
  * vector is what makes the code the one that is right.
  *
  * *(The boundary was between 2 and 3 until the snapshot-value merge shifted every
@@ -1033,9 +1034,11 @@ static void testAddressRecordsNeedTheTopRung(void)
  *
  * **This test assigns `SwitchRead` by hand and does not exercise the reader**,
  * so it says nothing about that field's meaning; `test_init.c`'s
- * `test_log_two_values` drives the real path and shows even the
- * missing-service case leaving it at 1. *(This comment credited `SwitchRead`
- * with the distinction until the post-Phase 13 review rounds.)*
+ * `test_log_two_values` drove the real path, and showed even the
+ * missing-service case leaving it at 1, until `test_init` was retired with
+ * the miniport on 2026-10-02; no host suite drives the reader since. *(This
+ * comment credited `SwitchRead` with the distinction until it was reviewed
+ * and revised after Phase 13.)*
  */
 static void testAbsentValuesAreOff(void)
 {

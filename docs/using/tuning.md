@@ -1,6 +1,6 @@
 # Tuning
 
-Every registry setting of the xHCI98 controller driver: where it is, its range and default, and what it does. The [README](../../README.md#tuning) lists the few most often changed.
+Every registry setting of the xHCI98 controller driver and of the Thunderbolt and USB4 driver (`xhcicm.sys`): where it is, its range and default, and what it does. The [README](../../README.md#tuning) lists the few most often changed.
 
 ## Contents
 
@@ -31,13 +31,21 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 `NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller". The number varies from machine to machine.
 
+**One value for every controller (from `3.1.0.0`).** Every value below, and every `XhciCm*` value of the Thunderbolt driver, can also be set once for the whole machine, in this key on every Windows:
+
+| Windows | Key |
+|---|---|
+| 98 SE to 7 (x86/x64) | `HKLM\System\CurrentControlSet\Services\USB` |
+
+A value there **wins** over the same value in a controller's own key, for every controller, whatever its type: a value of the wrong type there is read as "not set to a number" and its default stands. Only when the value is not there does each controller read its own key, as before. The INFs still write their numbers into each controller's own key and never into this one, so nothing changes until a value is set here. The installer's settings pages, its console questions and `INSTALL /set` write their value here too, never into a controller's own key, and show both; its uninstall deletes the values it names here and leaves the key. To give one controller a different value, delete the value here and set it in that controller's key. `portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`, `silent.vbs`, `silent-on.bat` and `silent-off.bat` write their value here, show both and say which one is in force. Windows 2000 and later may not have this key; the scripts and the installer create it, and regedit can too (Edit > New > Key under `Services`). The key also holds `SilentClasses` and Windows' own `DisableSelectiveSuspend`, which are not this driver's values; leave them.
+
 **The driver's own settings**
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
 | `XhciImodInterval250ns` | The interrupt moderation interval | `10` | `4000` | `4000` | `160` |
 | `XhciForceBulkOnly` | Bulk-Only instead of UAS | `0` | `1` | `1` | `0` |
-| `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `4` | `0` | `0` |
+| `XhciFastPollFsLs` | A mouse polled above 1000 Hz: `2` and `3` a root-port Low- or Full-Speed one, `4` any interrupt endpoint set to a code `128` to `143` | `0` | `4` | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
 | `XhciTolerance` | The handling of controller faults, all together; `0` turns most of it off (see "Controller faults") | `0` | `1` | `1` | `1` |
@@ -84,19 +92,32 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciLogVerbosity` | The driver's log, read by `XHCITR` and `XHCISNAP` | `0` | `4` | `2` | `2` (a fresh install; an update keeps the value there) |
+| `XhciLogVerbosity` | The driver's log, read by `XHCITR` (its Driver log item and its snapshot) | `0` | `4` | `2` | `2` (a fresh install; an update keeps the value there) |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
-**The Thunderbolt driver's log (`xhcicm.sys`)**, from `3.0.0.0`: these two are in the Thunderbolt or USB4 controller's driver key, not the xHCI controller's (`...\Services\Class\System\NNNN` on 98 SE and ME, `...\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 7, the subkey whose `DriverDesc` names the Thunderbolt or USB4 controller; the xHCI98 USB Tree's "Driver log (xhcicm)" item names it in full)
+**The Thunderbolt and USB4 driver (`xhcicm.sys`)**, from `3.0.0.0`: these values are in the Thunderbolt or USB4 controller's driver key, not the xHCI controller's (`HKLM\System\CurrentControlSet\Services\Class\System\NNNN` on 98 SE and ME, `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 7, the subkey whose `DriverDesc` names the Thunderbolt or USB4 controller; the xHCI98 USB Tree's "Driver log (xhcicm)" item names it in full), and from `3.1.0.0` also in the machine-wide `Services\USB` key above, which wins when the value is there. They are read at each start of that controller: restart Windows, or disable and enable the controller, after a change. A switch outside its range is refused and its default stands; a period or timeout outside its range is held to the nearer bound. The release notes' "The connection manager's registry values" says what each does in full.
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciCmLogVerbosity` | The driver's log, read by the xHCI98 USB Tree | `0` | `4` | `2` | `2` |
+| `XhciCmMode` | `0` off (the controller is bound, logged and left alone); `1` automatic; `2` an unlisted Intel controller driven as an Alpine Ridge and `3` the driver's own USB4 connection manager forced, both **at your own risk** | `0` | `3` | `1` | `1` |
+| `XhciCmApprove` | `1` approves every device, `0` none | `0` | `1` | `1` | `1` |
+| `XhciCmReenum` | `1` makes Windows look at the tunnel ports after each change; `0` leaves it to Refresh | `0` | `1` | `1` | `1` |
+| `XhciCmSafeEject` | `1` offers devices behind a tunnel for safe removal | `0` | `1` | `1` | `1` |
+| `XhciCmPollIdleMs` | How often, in ms, the driver looks at the controller with nothing happening | `50` | `5000` | `200` | `200` |
+| `XhciCmCmdTimeoutMs` | Firmware connection manager: the wait for a command's answer, in ms | `1000` | `60000` | `5000` | `5000` |
+| `XhciCmApproveTimeoutMs` | Firmware connection manager: the wait for an approval's answer, in ms | `1000` | `60000` | `10000` | `10000` |
+| `XhciCmUsb3Tunnel` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one | `0` | `1` | `1` | `1` |
+| `XhciCmLaneBonding` | USB4 connection manager: `1` bonds the link's two lanes | `0` | `1` | `1` | `1` |
+| `XhciCmPreOsCleanup` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify, `1` cleans what it cannot verify, `2` cleans everything | `0` | `2` | `0` | `0` |
+| `XhciCmLogVerbosity` | The driver's log, on `xhci98.sys`'s `0` to `4` ladder, read by the xHCI98 USB Tree (the driver refuses no larger number; the Tree writes only `0` to `4`) | `0` | `4` | `2` | `2` |
 | `XhciCmLogDebugView` | The log sent to DebugView as well, in every build | `0` | `1` | `0` | `0` |
+| `XhciCmBridgeNumbering` | 98 SE and ME: the set-up of PCI bridges behind a tunnel plugged in after start (see "The Thunderbolt driver: bridges behind a tunnel on 98 SE and ME" below) | `0` | `1` | `1` | not written |
+| `XhciCmNoIrqStart` | 98 SE and ME: an NVMe drive behind a tunnel whose interrupt cannot be routed started with none, for the bundled Stor98 to poll (see below) | `0` | `1` | `1` | not written |
+| `XhciCmTunnelBridge` | A `REG_SZ`, not a `DWORD`: a comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports | - | - | absent (no override) | not written |
 
-The xHCI98 USB Tree (`XHCITR`) shows and sets `XhciLogVerbosity` in every `xhci98.sys` controller's driver key, and the Thunderbolt driver's own level, `XhciCmLogVerbosity` in its controller's driver key, beside it: View > Logging level..., with "Set as administrator..." on Windows 2000 to 7 for a user without administrator rights (the release notes, "The xHCI98 USB Tree"). It writes only `0` to `4`, and offers the restart the new level needs.
+The xHCI98 USB Tree (`XHCITR`) shows and sets `XhciLogVerbosity` in every `xhci98.sys` controller's driver key, and the Thunderbolt driver's own level, `XhciCmLogVerbosity` in its controller's driver key, beside it: View > Logging level..., with "Set as administrator..." on Windows 2000 to 7 for a user without administrator rights (the release notes, "The xHCI98 USB Tree"). It writes only `0` to `4`, and offers the restart the new level needs. From `3.1.0.0` it also shows the machine-wide value and, under it, each device's own value that it overrides; where the machine-wide value is set, "Set" writes that one, the value in force for every device.
 
-The install writes every value in these tables, at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
+The install writes every value in these tables but the two marked "not written", at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 
 Restart Windows after changing a value.
 
@@ -126,7 +147,7 @@ A UAS-only device stays on UAS either way. The value is read each time a device 
 
 ## Polling a Low- or Full-Speed mouse above 1000 Hz (`XhciFastPollFsLs`)
 
-`XhciFastPollFsLs` polls a mouse faster than 1000 Hz, together with SweetLow's hidusbf. It is read when the controller starts, so restart after changing it.
+`XhciFastPollFsLs` polls a mouse faster than 1000 Hz, together with SweetLow's hidusbf. It is read when the controller starts, so restart after changing it. It is set by the installer's "Advanced..." on the USB settings page (or `/set XhciFastPollFsLs=<value>`) as well, which writes it machine-wide.
 
 - `0` (default): off.
 - `2` or `3`: a mouse on a **root port**, set in hidusbf to "31 Hz" or "62 Hz", is polled at the rate below. A device behind a hub keeps its normal rate, and any root-port Low- or Full-Speed device that asks for 16 to 63 ms is polled faster too.
@@ -136,11 +157,22 @@ A UAS-only device stays on UAS either way. The value is read each time a device 
   | `2` | 2000 Hz | 4000 Hz |
   | `3` | 4000 Hz | 8000 Hz |
 
-- `4`: the rate the client chooses. An interrupt endpoint set to `128`, `129` or `130` is polled at 2000, 4000 or 8000 Hz, and every other interval as normal. It covers a Low- or Full-Speed device on a root port, and a High-Speed or SuperSpeed device at a root port or behind a hub.
+- `4`: the rate the client chooses, changed in `3.1.0.0`. An interrupt endpoint set to a code from `128` to `143` is polled every 125 us x 2^(code - 128): `128` is 8000 Hz, `129` 4000 Hz, `130` 2000 Hz, `131` 1000 Hz, and so on up to `143`, every 4.096 s. Every other interval is polled as normal. It covers every speed, on a root port or behind a hub.
 
-With `4`, set the value and restart first, then set hidusbf (or another filter) to `128`, `129` or `130`. A device that itself asks for 128 to 130 ms is polled that fast too, and a code written without `4` set means 128 ms (Low or Full Speed) or 4.096 s (High Speed or SuperSpeed).
+  | Code | Polled every | Rate |
+  |---|---|---|
+  | `128` | 125 us | 8000 Hz |
+  | `129` | 250 us | 4000 Hz |
+  | `130` | 500 us | 2000 Hz |
+  | `131` | 1 ms | 1000 Hz |
+  | `132` | 2 ms | 500 Hz |
+  | `133` to `143` | 4 ms to 4.096 s, doubling each step | 250 Hz down |
 
-This is outside the xHCI specification, and untested ground. A controller that refuses it is caught, and the device falls back to its normal rate (every 1 ms for a `4` code). A controller that accepts it and then misbehaves cannot be caught.
+  **In `2.3.0.0` to `3.0.0.0` value `4` took only `128`, `129` and `130`, the other way round** (`128` was 2000 Hz and `130` 8000 Hz). A filter set up for those releases must be set again: `128` for 8000 Hz, `130` for 2000 Hz.
+
+With `4`, set the value and restart first, then set hidusbf (or another filter) to the code. A device that itself asks for 128 to 143 ms is polled at its code's rate too, and a code written without `4` set means 128 ms (Low or Full Speed) or 4.096 s (High Speed or SuperSpeed).
+
+This is outside the xHCI specification for a Low- or Full-Speed device below `131` and above `138` (the specification allows 1 ms to 128 ms there), on a root port or behind a hub. A Low- or Full-Speed device behind a hub at any code is untested ground, and so is every code below `131` or above `138` at Low or Full Speed. A controller that refuses it is caught, and the device falls back to polling every 1 ms, whatever the code. A controller that accepts it and then misbehaves cannot be caught. On a controller where `XhciIntervalCap` applies, a code slower than 32 ms (`137` to `143`) is polled every 32 ms, and where `XhciTiIntervalCap` applies a High-Speed or faster code slower than 8 ms (`135` to `143`) every 8 ms.
 
 ## The first report's wait (`XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`)
 
@@ -169,7 +201,7 @@ A device on a switchable connector under a running USB 2.0 driver (NUSB's, for e
 
 The value is read when the controller starts, so restart Windows after changing it.
 
-`portsw.vbs`, in the download's `tools\portsw\` directory, shows the value on every xhci98 controller and sets it to `1` or `0`. Double-click it to see the value and be asked for a new one, or run it from a command prompt in that directory:
+`portsw.vbs`, in the download's `tools\portsw\` directory, shows the value and sets it to `1` or `0`. From `3.1.0.0` it sets it machine-wide, in `Services\USB` (see "Where the values are"), for every controller at once, and leaves each controller's own value as it is; it shows both and says which one is in force. Double-click it to see the value and be asked for a new one, or run it from a command prompt in that directory:
 
 ```
 cscript //nologo portsw.vbs show
@@ -177,7 +209,7 @@ cscript //nologo portsw.vbs 1
 cscript //nologo portsw.vbs 0
 ```
 
-- `show`: the value on every xhci98 controller.
+- `show`: the machine-wide value, and the value on every xhci98 controller.
 - `1`: turns the switchover on.
 - `0`: turns it off.
 
@@ -267,7 +299,7 @@ On Windows 98 SE, a device Windows already has drivers for still brings the Add 
 - `0` (default): off. Any value but `1` is off.
 - `1`: on.
 
-`silent-on.bat` in `tools\silent\` merges the list (`SILENT.REG`: hubs, boot keyboards and mice, Bulk-Only storage) and then sets `1`. `silent-off.bat` sets `0` and keeps the list, as another USB stack may read it too. Restart after either. An update keeps the `1`.
+`silent-on.bat` in `tools\silent\` merges the list (`SILENT.REG`: hubs, boot keyboards and mice, Bulk-Only storage) and then sets `1`. `silent-off.bat` sets `0` and keeps the list, as another USB stack may read it too. Restart after either. An update keeps the `1`. From `3.1.0.0` both set the value machine-wide, in `Services\USB` beside the list, and leave each controller's own value as it is; `silent.vbs show` shows both.
 
 Run `silent-on.bat` only once each listed class's drivers have been installed at least once, by plugging such a device and finishing its wizard. With no wizard, 98 SE asks for a missing driver file from its CD.
 
@@ -328,7 +360,7 @@ Linux's xHCI driver works around faults of particular controllers, each named by
 - `1` (the default, except `XhciShutdownReset`, which is `0`): on the controllers in the table.
 - `2`: on every controller, except `XhciIntelShutdownToEhci`, `XhciAsmediaFlowControl` and `XhciAmdSuspendBitClear`, which are vendor-specific (a `2` there is read as `1`).
 
-Absent, not a `DWORD`, or any other number is the default. The revision of the controller is logged but never matched. Each value is read when the controller starts, so restart after changing one. `XHCISNAP`'s report has a "Linux quirks" block: each value as read, whether this controller is listed, whether the quirk applies, and what it last did.
+Absent, not a `DWORD`, or any other number is the default. The revision of the controller is logged but never matched. Each value is read when the controller starts, so restart after changing one. The driver's snapshot (in `XHCITR`'s Save Report, or `XHCITR /snapshot`) has a "Linux quirks" block: each value as read, whether this controller is listed, whether the quirk applies, and what it last did.
 
 What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is logged, but the log lives in memory and is gone at the next start. It can be seen only in a capture of that shutdown: `XhciLogVerbosity` at `2` or above (below it nothing is recorded) and `XhciLogDebugView` set to `1`, with a debug-output viewer or a kernel debugger attached (see the release notes, "The log, and how to send one").
 
@@ -338,12 +370,13 @@ The release notes' "Linux's controller quirks" has each value in full.
 
 This value belongs to the Thunderbolt and USB4 driver, `xhcicm.sys`, not to
 the xHCI controller driver: it is in the Thunderbolt or USB4 controller's
-driver key, beside the other `XhciCm*` values the release notes'
-"Thunderbolt 3 and USB4: registry settings" describes, and it is read on
-Windows 98 SE and ME only.
+driver key, beside the other `XhciCm*` values (the table above, and the
+release notes' "The connection manager's registry values"), and it is read
+on Windows 98 SE and ME only.
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
+| `XhciCmNoIrqStart` | An NVMe drive behind a Thunderbolt or USB4 tunnel whose interrupt cannot be routed (Device Manager: Code 29, 12, 16 or 27) started with no interrupt, when it is bound to the bundled Stor98 0.4.0.0 or later, which then polls (98 SE and ME; ignored on 2000 to 7; read in the emulator not to apply yet - the release notes, "Known limitations") | `0` | `1` | `1` | not written |
 | `XhciCmBridgeNumbering` | The set-up (bus numbers, memory windows, interrupt lines) of the PCI bridges a device brings up behind a Thunderbolt tunnel after Windows has started (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | not written |
 
 A device whose PCI Express side has a bridge of its own, such as a USB4

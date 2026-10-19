@@ -6,12 +6,13 @@
  *      **This is policy, not a missing export.** The reason recorded here used
  *      to be "ExAllocatePoolWithTag does not exist on Win98", and the repo
  *      measured the opposite, from Win98 SE's own usbd.sys
- *      (AGENTS.md; docs/usb-xhci-info/win98-wdm.md). The ban stands on another
- *      ground: Option A needs no private pool at all - usbport supplies every
- *      buffer, so a pool call site is a design regression before it is an
- *      import risk. The mechanism below is unchanged; only its justification
- *      was wrong, and a maintainer relaxing the gate should know they are
- *      overturning a policy rather than a fact.
+ *      (AGENTS.md; docs/usb-xhci-info/win98-wdm.md). The rule is the HCD's
+ *      named-site pool policy (design record 13 section 7.5): the pair
+ *      ExAllocatePoolWithTag + ExFreePool, in hcd_pool.obj alone. Undoing the
+ *      rewrite makes a stray untagged ExAllocatePool resolve to the name the
+ *      import gate refuses, rather than silently becoming a tagged call at an
+ *      unnamed site. (The 1.2.0.0 miniport allocated no pool at all, under
+ *      Option A; that was the rule's first ground.)
  *   2. Let the pure hardware-logic core compile on the build host under
  *      XHCI_HOST_TEST with no DDK at all (docs/contributing/design/03-host-unit-tests.md).
  *
@@ -75,7 +76,7 @@ typedef unsigned long * PULONG;
  * *(This block was written for task 11-V.9's `XhciLogFile`, a REG_SZ value with
  * path validation in src/xhci_log.c. Task 13-L.2 retired that value and its
  * validation; the typedef stays because the value names do, and
- * this comment said otherwise until the post-Phase 13 review rounds.)*
+ * this comment said otherwise until after Phase 13.)*
  */
 typedef unsigned short  WCHAR;
 typedef WCHAR *         PWSTR;
@@ -109,55 +110,6 @@ typedef KIRQL *         PKIRQL;
 #define NULL ((void *)0)
 #endif
 
-/*
- * The three DDK primitives src/xhci_pci.c is built out of, redirected to hooks
- * a test provides. This is a deliberate widening of what XHCI_HOST_TEST covers:
- * the rest of this header exists so the *pure* core needs no DDK, and these
- * three exist so the MMIO layer and the init sequence written against it can be
- * driven against a synthetic controller (test/test_init.c).
- *
- * The distinction that keeps the split meaningful is what such a suite can
- * prove. It sees the sequence of accesses this driver's source performs, so it
- * can check ordering and that a refusal wrote nothing at all - neither of which
- * a suite over finished bytes can see. It cannot say anything about what the
- * bus does with those accesses, so the QEMU register trace stays owed
- * (docs/contributing/design/03-host-unit-tests.md).
- */
-ULONG XhciHostReadRegister(PULONG address);
-VOID XhciHostWriteRegister(PULONG address, ULONG value);
-VOID XhciHostStall(ULONG microseconds);
-
-#define READ_REGISTER_ULONG(a)          XhciHostReadRegister(a)
-#define WRITE_REGISTER_ULONG(a, v)      XhciHostWriteRegister((a), (v))
-#define KeStallExecutionProcessor(us)   XhciHostStall(us)
-
-/*
- * The miniport's own interior lock (Phase 4 task 7, src/xhci_cmd.c), redirected
- * for the same reason the three above are: the property worth testing is not
- * what the lock *does* on a single-threaded host - nothing - but *where* it is
- * taken. Three unsynchronized contexts reach the command engine (a submit under
- * usbport's MiniportSpinLock, the DPC under MiniportInterruptsSpinLock, and an
- * async timer callback under neither), so "the claim happened inside the lock",
- * "no usbport service is called while holding it", and "every acquire has a
- * release" are the checks, and all three need a hook to be visible at all.
- */
-VOID XhciHostInitSpinLock(PKSPIN_LOCK lock);
-VOID XhciHostAcquireSpinLock(PKSPIN_LOCK lock, PKIRQL oldIrql);
-VOID XhciHostReleaseSpinLock(PKSPIN_LOCK lock, KIRQL oldIrql);
-
-#define KeInitializeSpinLock(l)         XhciHostInitSpinLock(l)
-#define KeAcquireSpinLock(l, i)         XhciHostAcquireSpinLock((l), (i))
-#define KeReleaseSpinLock(l, i)         XhciHostReleaseSpinLock((l), (i))
-
-/*
- * A single-threaded host cannot make this atomic mean anything, so the shim is
- * the plain increment the DDK primitive performs. It exists only so the file
- * that needs the real one compiles here.
- */
-LONG XhciHostInterlockedIncrement(LONG *addend);
-
-#define InterlockedIncrement(a)         XhciHostInterlockedIncrement(a)
-
 #else /* driver build */
 
 #include <ntddk.h>
@@ -169,10 +121,9 @@ LONG XhciHostInterlockedIncrement(LONG *addend);
  * and let the post-link import gate (Phase 3 task 5) confirm the binary really
  * imports the two-argument entry point.
  *
- * Under Option A the miniport should not need pool at all: usbport.sys owns
- * the miniport extension, the endpoint extensions, and the common buffer.
- * This shim exists so that a later accidental use fails loudly on the host
- * rather than silently at load time on the guest.
+ * The HCD allocates pool through ExAllocatePoolWithTag at named sites only
+ * (design record 13 section 7.5); this shim keeps an accidental untagged call
+ * resolving to the name the import gate refuses.
  */
 #ifdef ExAllocatePool
 #undef ExAllocatePool

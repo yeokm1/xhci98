@@ -24,7 +24,8 @@
  * memory BAR behind the chain sized (all-ones written, read back, the
  * value read written back and checked), and each numbered bridge's memory
  * window (20h) placed inside the port's own window, its I/O (1Ch) and
- * prefetchable (24h) windows closed and its Memory Space and Bus Master
+ * prefetchable (24h, with 28h and 2Ch at 0 where it is a 64-bit one)
+ * windows closed and its Memory Space and Bus Master
  * Enable (04h) set. Before each write the bridge is read again and must
  * still be the function journalled (identity, a type 1 header), and the
  * caller's go callback must still allow it; each bus-number write is
@@ -86,12 +87,24 @@
 #define XHCI_TBT_BRIRQ_NONE         0UL /* not asked, or nothing set up      */
 #define XHCI_TBT_BRIRQ_DONE         1UL /* every eligible line written       */
 #define XHCI_TBT_BRIRQ_PORT_NONE    2UL /* the port has no line of its own   */
-#define XHCI_TBT_BRIRQ_ACCESS       3UL /* a read failed or a line not held  */
+#define XHCI_TBT_BRIRQ_ACCESS       3UL /* a read failed, a function not
+                                           ready (Retry Status) or a line
+                                           not held                        */
 #define XHCI_TBT_BRIRQ_STALE        4UL /* the go callback refused: every
                                            line, window and bus number
                                            written is undone               */
 
 #define XHCI_TBT_BRNUM_MAX_LINES    32UL    /* interrupt lines journalled  */
+
+/* XHCI_TBT_BRNUM.IrqFnOut: each function the line stage met with an
+ * Interrupt Pin (design record 28 section 4 rule 5, task 42-A.15). */
+#define XHCI_TBT_BRFN_WRITTEN       1UL /* the port's line written, held  */
+#define XHCI_TBT_BRFN_ALREADY       2UL /* a line already set, left       */
+#define XHCI_TBT_BRFN_OTHER         3UL /* its pin arrives on another of
+                                           the port's pins: unroutable   */
+#define XHCI_TBT_BRFN_NOT_HELD      4UL /* a write not held, or past the
+                                           journal's room                 */
+#define XHCI_TBT_BRFN_NOT_READ      5UL /* its 3Ch read failed            */
 
 /* Flags. */
 #define XHCI_TBT_BRNUM_F_WINDOWS    0x1UL   /* also give the chain windows   */
@@ -111,6 +124,9 @@
 #define XHCI_TBT_CFG_IOWIN          0x1CUL  /* I/O base, limit; Sec. Status */
 #define XHCI_TBT_CFG_MEMWIN         0x20UL  /* memory base 15:0, limit 31:16 */
 #define XHCI_TBT_CFG_PFWIN          0x24UL  /* prefetchable base, limit     */
+#define XHCI_TBT_CFG_PFUPBASE       0x28UL  /* ... upper 32 bits of the base */
+#define XHCI_TBT_CFG_PFUPLIMIT      0x2CUL  /* ... and of the limit         */
+#define XHCI_TBT_PF_64BIT(pf)       (((pf) & 0xFUL) == 1UL) /* 24h 3:0 */
 
 /* Asked before each numbering write: nonzero while the operation may go
  * on. NULL allows every write. */
@@ -155,10 +171,19 @@ typedef struct _XHCI_TBT_BRNUM {
     ULONG IrqFailed;        /* ... whose write did not hold (or past the
                                journal's room)                            */
     ULONG IrqJournal;       /* lines written, for the undo                */
+    ULONG IrqFnCount;       /* functions with a pin met, each one's
+                               outcome (XHCI_TBT_BRFN_*); 0 after an
+                               undo of the lines                         */
+    ULONG IrqFnBdf[XHCI_TBT_BRNUM_MAX_LINES];
+    ULONG IrqFnOut[XHCI_TBT_BRNUM_MAX_LINES];
     ULONG IrqBdf[XHCI_TBT_BRNUM_MAX_LINES];  /* each function written     */
     ULONG IrqWas[XHCI_TBT_BRNUM_MAX_LINES];  /* its 3Ch as read           */
     ULONG Was[XHCI_TBT_BRNUM_MAX_BRIDGES];   /* its 18h dword as read     */
     ULONG Now[XHCI_TBT_BRNUM_MAX_BRIDGES];   /* ... and as left           */
+    /* A 64-bit prefetchable window's 28h and 2Ch as read before (0 for a
+     * 32-bit one): 24h alone does not close it. */
+    ULONG WasPfUp[XHCI_TBT_BRNUM_MAX_BRIDGES];
+    ULONG WasPfLimit[XHCI_TBT_BRNUM_MAX_BRIDGES];
 } XHCI_TBT_BRNUM, *PXHCI_TBT_BRNUM;
 
 /*

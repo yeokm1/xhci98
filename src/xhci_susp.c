@@ -149,8 +149,8 @@ ULONG XhciSuspDigest(const XHCI_SUSP_FUNC *funcs, ULONG count)
 
     /* Seq moves with every change dispatch accepts, so a D0 and a fresh
      * Dx between two passes is a change though the states read alike
-     * (Codex review of 36.29, round 1, finding 3). A pended Dx is not in
-     * it: the machine's own completion of it must not read as one. */
+     * (36.29). A pended Dx is not in it: the machine's own completion of it
+     * must not read as one. */
     d = 0x811C9DC5UL ^ count;
     for (i = 0; i < count; i++) {
         d = (d ^ ((funcs[i].PwrState & 7UL) |
@@ -193,7 +193,7 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
 
     active = (link->State == XHCI_SUSP_ACTIVE) ? 1UL : 0UL;
     /* D0 is written and completed only on a powered ACTIVE link (4.3,
-     * 4.4), or completed on GONE, never powered (round 1, finding 6). */
+     * 4.4), or completed on GONE, never powered. */
     awake = (active && !powerDown) ? 1UL : 0UL;
     for (i = 0; i < count; i++) {
         funcs[i].ToD0 = 0;
@@ -227,7 +227,7 @@ ULONG XhciSuspDecide(PXHCI_SUSP_LINK link, PXHCI_SUSP_FUNC funcs,
             allDx = 0;
         }
         /* A woken function's hold ends at its own D0, or when it is
-         * closed or its device gone (round 1, finding 2). */
+         * closed or its device gone. */
         if (funcs[i].WokeHold &&
             (funcs[i].PwrState == XHCI_SUSP_D0 || funcs[i].ToD0 ||
              funcs[i].Closed || link->State == XHCI_SUSP_GONE)) {
@@ -644,7 +644,7 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
              * now, or kept from a sample of this observation whose change
              * is acknowledged since - taken when the bound then runs out,
              * but never over a transport timeout, which stays uncertain
-             * (Codex review of 36.29, rounds 1 to 3). */
+             * (36.29). */
             link->U3Ms = nowMs;
             return xhciSuspWakeBranch(link, nowMs, waitMs);
         }
@@ -711,15 +711,15 @@ ULONG XhciSuspAdvance(PXHCI_SUSP_LINK link, ULONG result, ULONG nowMs,
         }
         /* Best effort on a usable link (3.9). Only a disarm the device
          * took clears Armed: after a refusal the feature may still be set,
-         * and the next resume tries again (round 1, finding 9). */
+         * and the next resume tries again. */
         if (result == XHCI_SUSP_RES_OK) {
             link->Armed = 0;
         }
         return xhciSuspStep(link, XHCI_SUSP_STEP_RESTART, 0, nowMs, waitMs);
 
     case XHCI_SUSP_STEP_RESTART:
-        /* A restart that did not run (the controller failed between steps,
-         * whole-branch review area 1 round 2) leaves the gate closed and
+        /* A restart that did not run (the controller failed between steps)
+         * leaves the gate closed and
          * the endpoints stopped: never ACTIVE, which would admit a D0. */
         if (result != XHCI_SUSP_RES_OK) {
             return xhciSuspEnd(link, XHCI_SUSP_RECOVERING,
@@ -872,7 +872,7 @@ ULONG XhciSuspEvidence(PXHCI_SUSP_LINK link, ULONG event)
     if (link->State == XHCI_SUSP_SUSPENDING) {
         /* Only a sample taken after this suspension's U3 request belongs
          * to it: before it the link is U0, and a wake read then is an
-         * earlier suspension's (round 2, finding 1). */
+         * earlier suspension's. */
         if (link->Step == XHCI_SUSP_STEP_OBSERVE ||
             (link->Step == XHCI_SUSP_STEP_U3 && link->U3Issued)) {
             link->WakeKept = 1;
@@ -1101,7 +1101,7 @@ ULONG XhciSuspIdleBatchReady(const XHCI_SUSP_IDLE_FUNC *funcs, ULONG count,
             if (funcs[i].PwrState == XHCI_SUSP_D0) {
                 /* It holds the device awake (3.9): a callback now would
                  * leave its siblings in Dx on a link that cannot
-                 * suspend (Codex review of 36.29, round 1, finding 1). */
+                 * suspend (36.29). */
                 return 0;
             }
             continue;
@@ -1252,7 +1252,7 @@ ULONG XhciSuspFinalize(const XHCI_SUSP_FIN_IN *in)
     if (in->Pinned) {
         /* The proof failed: the pinned URBs never end, and a callback
          * waiting on them never returns, whether or not the thread is
-         * alive (4.4 quarantine; round 1, finding 5). */
+         * alive (4.4 quarantine). */
         return XHCI_SUSP_FIN_QUARANTINE;
     }
     if (in->CallerIsThread) {

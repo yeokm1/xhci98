@@ -149,8 +149,7 @@ static VOID NTAPI hcdTimerDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
 
     /* The count and the idle event change together, under the slot lock:
      * decided outside it, a zero seen here could be published after another
-     * processor had armed again and cleared the event (Codex review of
-     * 26-A.2, round 1, finding 3). */
+     * processor had armed again and cleared the event (task 26-A.2). */
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
     slot->Busy = 0;
     hc->TimersInFlight--;
@@ -164,9 +163,9 @@ static VOID NTAPI hcdTimerDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
  * MFINDEX sampled every HCD_FRAME_SAMPLE_MS, well inside its 2,048-frame
  * lap, so GET_CURRENT_FRAME_NUMBER (XhciFrameNumber's masked delta) loses
  * no lap while the thread is busy in a long command or control wait: the
- * health poll alone samples only between the thread's passes (Codex review
- * of batch (c), round 12, finding 2). Its own timer, re-armed by its DPC
- * under TimerLock until the service closes (round 13, finding 2).
+ * health poll alone samples only between the thread's passes (batch (c)).
+ * Its own timer, re-armed by its DPC under TimerLock until the service
+ * closes.
  * XhciFrameSample reads nothing from a controller not running. IRQL:
  * DISPATCH_LEVEL.
  */
@@ -299,11 +298,10 @@ VOID HcdTimersInit(PHCD_CONTROLLER hc)
  * only caller arms with an XHCI_COMMAND_TIMEOUT, whose (Epoch, Generation,
  * Phase, Attempt) orders its arms: a command timeout's abort-arm, made after
  * the controller lock is dropped, can land after the next command's own
- * watchdog, and superseding that would leave the newer command unwatched
- * (Codex review round 23, finding 1). Epoch and generation wrap, so they are
- * ordered by signed difference. An older arm is always a stale one: its
- * callback could only count itself stale. IRQL: DISPATCH_LEVEL, TimerLock
- * held.
+ * watchdog, and superseding that would leave the newer command unwatched.
+ * Epoch and generation wrap, so they are ordered by signed difference. An
+ * older arm is always a stale one: its callback could only count itself
+ * stale. IRQL: DISPATCH_LEVEL, TimerLock held.
  */
 static ULONG hcdArmIsOlder(const HCD_TIMER *pending, PVOID context,
                            ULONG contextLength)
@@ -469,8 +467,8 @@ VOID HcdTimersDrain(PHCD_CONTROLLER hc)
                                 NULL);
     /* The last callback sets the event while it still holds TimerLock, which
      * lives in this object: taking the lock once more waits until it has let
-     * go, so nothing of the controller's is touched after this returns (Codex
-     * review of 26-A.2, round 2, finding 2). */
+     * go, so nothing of the controller's is touched after this returns (task
+     * 26-A.2). */
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
     KeReleaseSpinLock(&hc->TimerLock, oldIrql);
 }

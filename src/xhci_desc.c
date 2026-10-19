@@ -22,7 +22,7 @@
  *   (`Dropped`) - each is counted and dropped, and the endpoint falls back to
  *   the assumption the driver used before this file existed.
  *
- *   *(This list ended "two alternate settings that disagree" until the post-Phase 13 review rounds,
+ *   *(This list ended "two alternate settings that disagree" until after Phase 13,
  *   and that is **not** a refusal this file makes: the first draft refused on
  *   that ground, on the reasoning that the miniport cannot tell which alternate
  *   is in force, and it can - `SET_INTERFACE` crosses the same pipe. So a
@@ -204,8 +204,8 @@ static VOID xhciDescRecord(PXHCI_DESC_ISO_TABLE table,
              * than contradictory, and refusing them would throw away a reading
              * nothing disputes.
              *
-             * **The range check above no longer returns through this test**
-             * (review round 4): a valid declaration followed by an out-of-range
+             * **The range check above no longer returns through this test**:
+             * a valid declaration followed by an out-of-range
              * duplicate is two conflicting statements about one endpoint just
              * as surely as two valid ones are, and returning early left the
              * first answering confidently.
@@ -307,8 +307,8 @@ ULONG XhciDescSelectConfig(PXHCI_DESC_STATE state, ULONG configValue)
      * selection carried over from the previous configuration would name an
      * alternate the device has left.
      *
-     * **`AltDropped` goes with them**, and review round 4 is why: round 3 made
-     * it *state* - an interface absent from the tracked set reads as unknown
+     * **`AltDropped` goes with them**, because an earlier revision made it
+     * *state* - an interface absent from the tracked set reads as unknown
      * rather than as alternate 0 while it is nonzero - and an earlier comment
      * here kept it on the grounds that it was "a reading about this driver's
      * table size rather than about the device". That was true while it was only
@@ -365,8 +365,8 @@ VOID XhciDescSelectInterface(PXHCI_DESC_STATE state,
  * 0 for one no SET_INTERFACE has named, which is what a SET_CONFIGURATION
  * leaves every interface in - **unless a selection has been dropped for want of
  * room**, in which case an untracked interface is one this file does not know
- * about rather than one at alternate 0, and `*known` says so. Review round 3
- * found the earlier version answering alternate 0 confidently in exactly that
+ * about rather than one at alternate 0, and `*known` says so. The earlier
+ * version answered alternate 0 confidently in exactly that
  * case, which is the shape of wrong answer this whole file is written to avoid.
  *
  * IRQL: any.

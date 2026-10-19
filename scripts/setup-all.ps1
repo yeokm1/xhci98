@@ -84,7 +84,7 @@ Invoke-SetupChild -Name "setup-msvc6.ps1" -Arguments $msvcArgs
 # command wrappers and, without -RunInstaller, only PRINTS the name of the
 # script that unpacks the DDK - so a fresh clone that followed
 # build-and-test.md's "Run all setup helpers" got wrappers pointing at a DDK
-# that was not there and could not build anything. The 2026-09-07 audit's H26.
+# that was not there and could not build anything (the audit of 2026-09-07).
 #
 # Unpacking is idempotent and needs no GUI and no machine-wide install, which
 # is why it belongs in the "run everything" path rather than behind

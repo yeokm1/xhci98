@@ -1165,6 +1165,28 @@ static void test_hc_info(void)
     CHECK_EQ(derive(HC_CAP_DWORD0, HC_HCSPARAMS1, HC_HCSPARAMS2, HC_HCCPARAMS1,
                     0, HC_RTSOFF, HC_MAPPED, &info),
              XHCI_HC_BAD_DBOFF, "DBOFF 0 overlaps the capability registers");
+    CHECK_EQ(derive(HC_CAP_DWORD0, HC_HCSPARAMS1, HC_HCSPARAMS2,
+                    (HC_HCCPARAMS1 & 0x0000FFFFUL) | (6UL << 16), HC_DBOFF,
+                    HC_RTSOFF, HC_MAPPED, &info),
+             XHCI_HC_BAD_XECP, "xECP 0x18 overlaps the capability registers");
+    CHECK_EQ(derive(HC_CAP_DWORD0, HC_HCSPARAMS1, HC_HCSPARAMS2,
+                    (HC_HCCPARAMS1 & 0x0000FFFFUL) | (7UL << 16), HC_DBOFF,
+                    HC_RTSOFF, HC_MAPPED, &info),
+             XHCI_HC_BAD_XECP,
+             "xECP 0x1C overlaps HCCPARAMS2 when CAPLENGTH reaches it");
+    CHECK_EQ(derive(HC_CAP_DWORD0, HC_HCSPARAMS1, HC_HCSPARAMS2,
+                    (HC_HCCPARAMS1 & 0x0000FFFFUL) | (8UL << 16), HC_DBOFF,
+                    HC_RTSOFF, HC_MAPPED, &info),
+             XHCI_HC_OK, "xECP 0x20, just past them, is not");
+    CHECK_EQ(derive((HC_CAP_DWORD0 & 0xFFFFFF00UL) | 0x1CUL, HC_HCSPARAMS1,
+                    HC_HCSPARAMS2,
+                    (HC_HCCPARAMS1 & 0x0000FFFFUL) | (7UL << 16), HC_DBOFF,
+                    HC_RTSOFF, HC_MAPPED, &info),
+             XHCI_HC_OK, "xECP 0x1C is past them when CAPLENGTH is 0x1C");
+    CHECK_EQ(derive(HC_CAP_DWORD0, HC_HCSPARAMS1, HC_HCSPARAMS2,
+                    HC_HCCPARAMS1 & 0x0000FFFFUL, HC_DBOFF, HC_RTSOFF,
+                    HC_MAPPED, &info),
+             XHCI_HC_OK, "xECP 0 is no list, not a refusal");
 
     /*
      * The wrap cases, and the whole reason the bounds are two subtractions.

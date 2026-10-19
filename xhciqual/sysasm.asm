@@ -3,7 +3,8 @@
 ; Watcom's register calling convention: the first argument in EAX, the
 ; second in EDX, the result in EAX, and the callee preserves EVERY other
 ; register. CPUID writes EAX, EBX, ECX and EDX, so each routine saves what
-; it touches and restores it before RET. The 36.21 lesson (lesson-cpuid-ebx,
+; it touches and restores it before RET. The 36.21 lesson
+; (docs/contributing/lessons.md, "MSVC 6.0 inline __asm CPUID clobbers EBX";
 ; STOP 0xB8 on Windows 2000) was an EBX that CPUID clobbered unsaved; do not
 ; drop a push below to "simplify".
 ;

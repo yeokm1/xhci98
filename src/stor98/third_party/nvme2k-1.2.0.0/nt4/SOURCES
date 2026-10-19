@@ -1,0 +1,14 @@
+TARGETNAME=nvme2k
+TARGETPATH=.
+TARGETTYPE=MINIPORT
+
+INCLUDES=$(BASEDIR)\src\storage\inc
+
+TARGETLIBS=$(BASEDIR)\lib\*\$(DDKBUILDENV)\scsiport.lib
+
+SOURCES=..\nvme2k.c        \
+	..\nvme2k_cpl.c    \
+	..\nvme2k_scsi.c   \
+	..\nvme2k_nvme.c   \
+	..\utils.c         \
+	..\nvme2k.rc

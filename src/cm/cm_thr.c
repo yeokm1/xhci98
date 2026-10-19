@@ -41,10 +41,7 @@
 
 #include "cm.h"
 #include "cm_nvlink.h"
-
-/* PCI Command (PCI 3.0 6.2.2), the only configuration word written here. */
-#define CM_PCI_COMMAND            0x04UL
-#define CM_PCI_COMMAND_BUS_MASTER 0x0004U
+#include "cm_call.h"
 
 /* 100 ns units per millisecond, for the relative due times. */
 #define CM_CLOCK_UNITS_PER_MS 10000UL
@@ -73,10 +70,12 @@ static NTSTATUS NTAPI cmConfigDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
  * never to the attached lower object: hcd_svc.c's route
  * (HcdSvcConfigSpace), read on Windows 98 SE and Windows 2000 for the HCD's
  * Bus Master write (26-A.2), and the one Windows 98 SE's own uhcd.sys
- * takes. A read zero-fills its buffer first. IRQL: PASSIVE_LEVEL.
+ * takes. One request; a read fills its buffer with `fill` first, and the
+ * bytes the bus driver reports (*info) are returned. IRQL: PASSIVE_LEVEL.
  */
-static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
-                        ULONG offset, ULONG length)
+static NTSTATUS cmConfigOnce(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
+                             ULONG offset, ULONG length, UCHAR fill,
+                             PULONG info)
 {
     PIO_STACK_LOCATION next;
     KEVENT done;
@@ -85,26 +84,21 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
     ULONG i;
     NTSTATUS status;
 
+    *info = 0;
     if (read) {
         p = (PUCHAR)buffer;
         for (i = 0; i < length; i++) {
-            p[i] = 0;
+            p[i] = fill;
         }
     }
-    /* After a surprise removal no configuration access either, and no
-     * configuration write the liveness gate does not admit for the current
-     * class (cm_live.h; the BAR accessors' rule): refused like any failed
-     * request. Reads stay open for the validation until revoked. */
-    if (nhi->Live.Revoked ||
-        (!read && (nhi->AccessClass == CM_ACCESS_PROBE ||
-                   !CmLiveAdmits(&nhi->Live, nhi->AccessClass)))) {
-        nhi->Counters.ConfigFailures++;
-        return FALSE;
+    if (nhi->Live.Revoked) {
+        /* Read again before each request: a surprise removal during the
+         * first of a strict read's two stops the second. */
+        return STATUS_DEVICE_REMOVED;
     }
     irp = IoAllocateIrp(nhi->Common.Pdo->StackSize, FALSE);
     if (irp == NULL) {
-        nhi->Counters.ConfigFailures++;
-        return FALSE;
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
     irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
     irp->IoStatus.Information = 0;
@@ -123,16 +117,83 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
                                     NULL);
     }
     status = irp->IoStatus.Status;
-    /* Under a recovery's validation (CfgStrict), a read that answered
-     * fewer bytes than asked is not an answer: its zero fill would pass
-     * for the identity. Not applied elsewhere: whether every target's bus
-     * driver reports the length is not read. */
-    if (NT_SUCCESS(status) && read && nhi->CfgStrict &&
-        irp->IoStatus.Information < length) {
-        status = STATUS_UNSUCCESSFUL;
-    }
+    *info = (ULONG)irp->IoStatus.Information;
     IoFreeIrp(irp);
+    return status;
+}
+
+/*
+ * A configuration access, refused where the gate does not admit it. A
+ * read zero-fills its buffer first. Under a recovery's validation
+ * (CfgStrict) a read is an answer only when it is proven whole: one that
+ * reports fewer bytes than asked is refused, and one that reports no
+ * length at all - Windows 98 SE's PCI bus driver completes the request
+ * with the data and Information 0 (the leg of task 42-A.10, 2026-10-19:
+ * every strict read refused, every other read of the same registers
+ * answered) - is made twice, through a fill of all ones and then of
+ * zeros, and is an answer only when both read the same: a byte the bus
+ * driver did not write differs between them. IRQL: PASSIVE_LEVEL.
+ */
+static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
+                        ULONG offset, ULONG length)
+{
+    UCHAR second[4];
+    PUCHAR p;
+    ULONG info;
+    ULONG i;
+    NTSTATUS status;
+
+    if (read) {
+        p = (PUCHAR)buffer;
+        for (i = 0; i < length; i++) {
+            p[i] = 0;
+        }
+    }
+    /* After a surprise removal no configuration access either, and no
+     * configuration write the liveness gate does not admit for the current
+     * class (cm_live.h; the BAR accessors' rule): refused like any failed
+     * request. Reads stay open for the validation until revoked. */
+    /* The USB4 recovery's preparation (record 22 section 7.7 part 2)
+     * writes the Command register and section 4.2's platform registers,
+     * and nothing else. */
+    if (nhi->Live.Revoked ||
+        (!read && (nhi->AccessClass == CM_ACCESS_PROBE ||
+                   !CmLiveAdmits(&nhi->Live, nhi->AccessClass) ||
+                   (nhi->AccessClass == CM_ACCESS_PREPARE &&
+                    offset != CM_PCI_COMMAND &&
+                    offset != TBT_ICL_VS_CAP_22 &&
+                    offset != TBT_ICL_VS_CAP_15)))) {
+        nhi->Counters.ConfigFailures++;
+        return FALSE;
+    }
+    if (!read || !nhi->CfgStrict) {
+        status = cmConfigOnce(nhi, read, buffer, offset, length, 0, &info);
+    } else if (length > sizeof(second)) {
+        status = STATUS_INVALID_PARAMETER;
+    } else {
+        status = cmConfigOnce(nhi, TRUE, buffer, offset, length, 0xFF, &info);
+        if (NT_SUCCESS(status) && info != 0 && info < length) {
+            status = STATUS_UNSUCCESSFUL;
+        } else if (NT_SUCCESS(status) && info == 0) {
+            status = cmConfigOnce(nhi, TRUE, second, offset, length, 0, &info);
+            if (NT_SUCCESS(status) && info != 0 && info < length) {
+                status = STATUS_UNSUCCESSFUL;
+            }
+            p = (PUCHAR)buffer;
+            for (i = 0; NT_SUCCESS(status) && i < length; i++) {
+                if (p[i] != second[i]) {
+                    status = STATUS_UNSUCCESSFUL;
+                }
+            }
+        }
+    }
     if (!NT_SUCCESS(status)) {
+        if (read) {
+            p = (PUCHAR)buffer;
+            for (i = 0; i < length; i++) {
+                p[i] = 0;
+            }
+        }
         nhi->Counters.ConfigFailures++;
         return FALSE;
     }
@@ -145,12 +206,18 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
 ULONG CmCfgRead32(PCM_NHI nhi, ULONG offset)
 {
     UCHAR b[4];
+    ULONG v;
 
     if (!cmConfig(nhi, TRUE, b, offset, 4)) {
         return 0xFFFFFFFFUL;
     }
-    return (ULONG)b[0] | ((ULONG)b[1] << 8) | ((ULONG)b[2] << 16) |
-           ((ULONG)b[3] << 24);
+    v = (ULONG)b[0] | ((ULONG)b[1] << 8) | ((ULONG)b[2] << 16) |
+        ((ULONG)b[3] << 24);
+    if (v == 0xFFFFFFFFUL && (nhi->AccessClass == CM_ACCESS_PREPARE ||
+                              nhi->AccessClass == CM_ACCESS_RECOVERY)) {
+        nhi->RecOnes = 1;
+    }
+    return v;
 }
 
 /* One word, so a write of the command register leaves the status
@@ -247,6 +314,7 @@ BOOLEAN CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on)
 static ULONG cmBarRead(PVOID context, ULONG offset)
 {
     PCM_NHI nhi;
+    ULONG v;
 
     nhi = (PCM_NHI)context;
     if (nhi->BarVa == NULL || offset > nhi->BarLength - 4 || (offset & 3)) {
@@ -256,7 +324,14 @@ static ULONG cmBarRead(PVOID context, ULONG offset)
         nhi->Live.Counters.RefusedReads++;
         return 0xFFFFFFFFUL;
     }
-    return READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    v = READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    if (v == 0xFFFFFFFFUL && (nhi->AccessClass == CM_ACCESS_PREPARE ||
+                              nhi->AccessClass == CM_ACCESS_RECOVERY)) {
+        /* Record 22 section 7.7 part 5: an outage seen inside a USB4
+         * recovery's attempt is that episode's all-ones probe. */
+        nhi->RecOnes = 1;
+    }
+    return v;
 }
 
 static VOID cmBarWrite(PVOID context, ULONG offset, ULONG value)
@@ -268,6 +343,7 @@ static VOID cmBarWrite(PVOID context, ULONG offset, ULONG value)
         return;
     }
     if (nhi->AccessClass == CM_ACCESS_PROBE ||
+        nhi->AccessClass == CM_ACCESS_PREPARE ||
         !CmLiveAdmits(&nhi->Live, nhi->AccessClass)) {
         nhi->Live.Counters.RefusedWrites++;
         return;
@@ -277,26 +353,53 @@ static VOID cmBarWrite(PVOID context, ULONG offset, ULONG value)
 
 ULONG CmThrProbe32(PCM_NHI nhi, ULONG offset)
 {
+    ULONG v;
+
     if (nhi->BarVa == NULL || offset > nhi->BarLength - 4 || (offset & 3) ||
         !CmLiveAdmits(&nhi->Live, CM_ACCESS_PROBE)) {
         return 0xFFFFFFFFUL;
     }
-    return READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    v = READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+    if (v == 0xFFFFFFFFUL && (nhi->Live.State == CM_LIVE_PREPARING ||
+                              nhi->Live.State == CM_LIVE_RECOVERING)) {
+        nhi->RecOnes = 1;
+    }
+    return v;
 }
 
-/* TBT_HOST.Cancelled: the gate closed for the current class. */
+/* TBT_HOST.Cancelled: the gate closed for the current class. Inside a
+ * USB4 recovery's attempt an all-ones read already seen (RecOnes) is the
+ * gate's cancellation too (record 22 section 7.7 part 5): the attempt's
+ * sequences end at their next request or wait, and it fails. */
 static BOOLEAN cmCancelled(PVOID context)
 {
     PCM_NHI nhi;
 
     nhi = (PCM_NHI)context;
+    if (nhi->RecOnes && (nhi->AccessClass == CM_ACCESS_PREPARE ||
+                         nhi->AccessClass == CM_ACCESS_RECOVERY)) {
+        return TRUE;
+    }
     return (BOOLEAN)!CmLiveAdmits(&nhi->Live, nhi->AccessClass);
 }
 
+static ULONG cmClockUs(PVOID context);
+
 static VOID cmStall(PVOID context, ULONG microseconds)
 {
-    UNREFERENCED_PARAMETER(context);
+    PCM_NHI nhi;
+
+    nhi = (PCM_NHI)context;
     KeStallExecutionProcessor(microseconds);
+    /* A wait's busy phase (TbtDeadlineWait, TbtWaitStep: 2 ms of stalls)
+     * never sleeps, so a run of requests that each end inside it - the
+     * TB3 EEPROM reader's hundreds - would pass no servicing point: the
+     * stor98 acknowledgement waits are stepped from here too, at most
+     * once per CM_NVLINK_PEND_MS of the clock since the last step (R10;
+     * task 42-A.12). The contexts are cmSleep's: one wait calls both. */
+    if (CmNvlinkServiceDue(&nhi->StepUs, cmClockUs(nhi))) {
+        CmNvlinkStep(nhi);
+    }
 }
 
 /* A relative due time of `ms` milliseconds in 100 ns units, negative, from
@@ -316,10 +419,28 @@ static VOID cmRelativeMs(PLARGE_INTEGER due, ULONG ms)
 static VOID cmSleep(PVOID context, ULONG milliseconds)
 {
     LARGE_INTEGER due;
+    ULONG part;
 
-    UNREFERENCED_PARAMETER(context);
-    cmRelativeMs(&due, milliseconds);
-    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    /* Every sleeping wait of the core and the seam - the ICM client's
+     * command and recovery waits, the USB4 core's transport and teardown
+     * waits, the seam's polls - is a servicing point of the stor98
+     * acknowledgement waits (task 42-A.12; record 21 section 7.2 part 0):
+     * while one is pending the sleep is taken in pieces of at most
+     * CM_NVLINK_PEND_MS with one bounded, non-reentrant step after each,
+     * so no wait keeps an acknowledgement unread for longer than 50 ms
+     * (R10); with none pending it is one sleep, as before, so the core's
+     * timing is unchanged where nothing is awaited (a piece can overrun
+     * its request by up to a timer tick on 98 SE and ME). */
+    do {
+        part = (milliseconds > CM_NVLINK_PEND_MS && CmNvlinkPending())
+                   ? CM_NVLINK_PEND_MS
+                   : milliseconds;
+        cmRelativeMs(&due, part);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        CmNvlinkStep((PCM_NHI)context);
+        ((PCM_NHI)context)->StepUs = cmClockUs(context);
+        milliseconds -= part;
+    } while (milliseconds != 0);
 }
 
 static ULONG cmNowMs(PVOID context)
@@ -490,8 +611,8 @@ VOID CmThrRunPnp(PCM_NHI nhi, ULONG work)
 /* Power IRPs this driver holds (pended, or a device IRP requested for a
  * system IRP): a removal closes admission (Removing), then waits until
  * none is left (cm_nhi.c, CmPowerDrain). FALSE once Removing is set: the
- * caller then passes the IRP down touching nothing of the extension's
- * after it. The release is each holder's last access to the extension.
+ * caller then completes the IRP with STATUS_DELETE_PENDING, touching
+ * nothing of the extension's after it. The release is each holder's last access to the extension.
  * IRQL: <= DISPATCH_LEVEL. */
 BOOLEAN CmPowerHold(PCM_NHI nhi)
 {
@@ -574,6 +695,14 @@ static BOOLEAN cmPolling(PCM_NHI nhi)
                      CmLiveTransport(&nhi->Live));
 }
 
+BOOLEAN CmThrInertNext(PCM_NHI nhi)
+{
+    /* The wait the thread enters next (cmThread): a timed one while a
+     * stor98 acknowledgement wait is pending, so not inert then. */
+    return (BOOLEAN)(!cmPolling(nhi) && CmLiveWaitMs(&nhi->Live) == 0 &&
+                     !CmNvlinkPending());
+}
+
 /*
  * The liveness monitor's sample (cm_live.h, record 21 section 5.5): only
  * for an active instance in D0 with the system working, by elapsed time,
@@ -586,12 +715,19 @@ VOID CmThrLiveness(PCM_NHI nhi)
     ULONG v;
     ULONG act;
 
-    if (nhi->Stage != CM_STAGE_ACTIVE || nhi->DevicePower != PowerDeviceD0 ||
+    if ((nhi->Stage != CM_STAGE_ACTIVE && !CmNhiU4Probing(nhi)) ||
+        nhi->DevicePower != PowerDeviceD0 ||
         nhi->Suspended || CmPowerSleeping(nhi)) {
         return;
     }
     now = cmNowMs(nhi);
     if (!CmLiveDue(&nhi->Live, now)) {
+        return;
+    }
+    if (nhi->U4On && nhi->Live.State == CM_LIVE_CONTAINED) {
+        /* Record 22 section 7.7 part 1: the USB4 profile's probe for
+         * access back, and what follows it. */
+        CmNhiU4Probe(nhi, now);
         return;
     }
     v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
@@ -613,19 +749,38 @@ static VOID NTAPI cmThread(PVOID context)
 
     nhi = (PCM_NHI)context;
     for (;;) {
+        /* The wait recorded before it is entered and cleared after it
+         * returns (an aligned volatile ULONG: one store), for the query
+         * device's seed (task 42-A.7). */
         if (cmPolling(nhi)) {
             cmRelativeMs(&due, CmNvlinkIdleMs(nhi->Values.Value[CM_VAL_POLL_IDLE_MS]));
+            nhi->ThreadWait = CM_Q_WAIT_TIMED;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
         } else if (CmLiveWaitMs(&nhi->Live) != 0) {
             /* No transport, but a monitored state: the slow probes. */
-            cmRelativeMs(&due, CmLiveWaitMs(&nhi->Live));
+            cmRelativeMs(&due, CmNvlinkPending() &&
+                                       CmLiveWaitMs(&nhi->Live) >
+                                           CM_NVLINK_PEND_MS
+                                   ? CM_NVLINK_PEND_MS
+                                   : CmLiveWaitMs(&nhi->Live));
+            nhi->ThreadWait = CM_Q_WAIT_TIMED;
+            (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
+                                        KernelMode, FALSE, &due);
+        } else if (CmNvlinkPending()) {
+            /* Not polling, but a stor98 acknowledgement wait pending: the
+             * passes that step it, every 50 ms until it ends (task
+             * 42-A.12; R10). */
+            cmRelativeMs(&due, CM_NVLINK_PEND_MS);
+            nhi->ThreadWait = CM_Q_WAIT_TIMED;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
         } else {
+            nhi->ThreadWait = CM_Q_WAIT_FOREVER;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, NULL);
         }
+        nhi->ThreadWait = CM_Q_WAIT_BUSY;
         nhi->Counters.Passes++;
         (VOID)cmNowMs(nhi);
 
@@ -653,11 +808,18 @@ static VOID NTAPI cmThread(PVOID context)
          * to activate anything out of D0 (CmNhiStartWork). */
         if (bits & CM_WORK_START) {
             CmNhiStartWork(nhi);
+            /* A bind still to come after the PnP start returns: recorded
+             * before the start is released, so the query device's seed
+             * does not judge the wait from the state before it. */
+            if (nhi->BindOwed) {
+                nhi->ThreadWait = CM_Q_WAIT_BINDING;
+            }
             (VOID)KeSetEvent(&nhi->PnpDone, IO_NO_INCREMENT, FALSE);
             if (nhi->BindOwed) {
                 nhi->BindOwed = 0;
                 CmNhiBind(nhi);
             }
+            nhi->ThreadWait = CM_Q_WAIT_BUSY;
         }
         if (bits & CM_WORK_D3) {
             CmPowerD3Work(nhi, d3Irp);
@@ -683,8 +845,7 @@ static VOID NTAPI cmThread(PVOID context)
         CmStatusPass(nhi);
         /* The query device's snapshot, inert when the wait at the top of
          * the loop will have no timeout. */
-        CmQueryPublish(nhi, (BOOLEAN)(!cmPolling(nhi) &&
-                                      CmLiveWaitMs(&nhi->Live) == 0));
+        CmQueryPublish(nhi, CmThrInertNext(nhi));
         /* The checked flavours' emission (decision D12), from here at
          * PASSIVE_LEVEL after each pass that recorded something; the
          * release flavour's CmLogEmit does nothing. */
@@ -711,6 +872,7 @@ NTSTATUS CmThrStart(PCM_NHI nhi)
     nhi->ThreadRunning = 0;
     nhi->ThreadObject = NULL;
     nhi->WorkBits = 0;
+    nhi->ThreadWait = CM_Q_WAIT_BUSY;
     KeClearEvent(&nhi->ThreadExited);
     status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
                                   NULL, cmThread, nhi);
@@ -762,4 +924,19 @@ VOID CmThrStop(PCM_NHI nhi)
                                     KernelMode, FALSE, NULL);
     }
     nhi->ThreadRunning = 0;
+}
+
+/* The per-member call workers' threads (cm_callwk.c, task 42-A.12): made
+ * here so that the handle is closed at this file's site. PASSIVE_LEVEL. */
+NTSTATUS CmThrSpawn(VOID (NTAPI *routine)(PVOID), PVOID context)
+{
+    HANDLE handle;
+    NTSTATUS status;
+
+    status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
+                                  NULL, routine, context);
+    if (NT_SUCCESS(status)) {
+        (VOID)ZwClose(handle);
+    }
+    return status;
 }

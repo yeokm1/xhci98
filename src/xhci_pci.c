@@ -200,8 +200,8 @@ VOID XhciWriteDoorbell(PXHCI_EXTENSION ext, ULONG slot, ULONG value)
  * called it with a length the mapping does not have.
  *
  * All-ones is the honest answer to give on a refusal: it is what the bus
- * returns for an access nothing decodes, and the parser already treats it as
- * "no capability here" rather than as data.
+ * returns for an access nothing decodes, and the parser already refuses it
+ * (XHCI_CAPS_OUT_OF_RANGE, xhci_caps.c) rather than reading it as data.
  *
  * IRQL: any.
  */

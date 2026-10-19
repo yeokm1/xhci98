@@ -156,7 +156,7 @@ $CLEAN = @('RH resumes abandoned', 'command timer failures', 'RH resets not conf
 # EXPECTED TO MOVE and a zero is the suspicious reading: the stop arrives on a
 # controller the suspend has already halted, PORTSC is unwritable once it stops,
 # so the port pass cannot run.  What the counter proves is that the skip is
-# counted rather than silent - the defect a Phase 4 task 8 review round found.
+# counted rather than silent - the defect found in Phase 4 task 8.
 $SHAPE = @('suspends', 'teardowns', 'port teardowns skipped - suspended',
            'RH ports driven out of U3', 'resume reinitialisations', 'resume failures')
 

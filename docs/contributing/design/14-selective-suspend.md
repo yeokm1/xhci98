@@ -6,14 +6,14 @@ Design record for roadmap-hcd's selective suspend work (tasks
 SUSP.1 is 36.28, SUSPa.1 to SUSPa.6 are 36.29 to 36.34, SUSPa-V and
 SUSPa-E 36.35 and 36.36, SUSPb.1, SUSPb.2, SUSPb-V and SUSPb-E 36.37 to
 36.40, SUSP.2 is 36.41, and SUSP.3 and SUSP.4 joined 36.20 and 36.final.
-This record keeps the old ids, and its review history the old phase
+This record keeps the old ids, and its revision history the old phase
 numbers). DRAFT, revision 10,
 2026-10-05: written at the owner's request to solve the known limitation "the
 driver never initiates selective suspend" (roadmap-hcd decisions table, row
-"The idle power policy (28.3)"; release notes, "Known limitations"). Reviews
-covered revisions 1 to 9 the same day (13, 12, 10, 9, 3, 4, 1, 2 and 1 findings, all taken;
-section 9 maps each to where it is answered); the review of revision 10
-was clean (`b2d03d5`). Revision 11, 2026-10-09: section 3.9, the pure
+"The idle power policy (28.3)"; release notes, "Known limitations").
+Revisions 1 to 10 were reviewed and revised the same day, revision 10
+unchanged (`b2d03d5`); section 9 maps each hazard raised to where it is
+answered. Revision 11, 2026-10-09: section 3.9, the pure
 core's split and the rules implementing it settled (36.29), reviewed with
 its code. Stage A is being built: 36.29 and 36.30 done; section 3.11,
 dispatch's executor, with 36.31; section 3.12, the idle notification's
@@ -1112,8 +1112,7 @@ returned. A remote wake ends it through the woken function's D0.
 
 `XhciSelectiveSuspend`, REG_DWORD under the controller's driver key, read at
 start like `XhciFirstEnumWaitMs`. **Default 0** (owner, 2026-10-09, when
-the work joined Phase 36; it was default 1 from 2026-10-05, over review
-round 2's advice of 0): 0 is today's behaviour bit for bit (capabilities,
+the work joined Phase 36; it was default 1 from 2026-10-05): 0 is today's behaviour bit for bit (capabilities,
 WAIT_WAKE refused, idle callbacks never called, Dx recorded only), so the
 release that carries sections 3 to 6 changes nothing for a user who does
 not set the value, and 1 turns them on - what the release notes tell a user
@@ -1434,7 +1433,9 @@ completes the device's WAIT_WAKEs `STATUS_NO_SUCH_DEVICE` at the unlink
   endpoint's doorbell to restart it" is 3.2's restart.
 
 **`xhci_link.c`.** `XhciLinkClassify` reads PLS=Resume on a USB3 port as
-`XHCI_LINK_UNKNOWN` (Resume was a USB2 encoding when it was written), and
+`XHCI_LINK_UNKNOWN` (written as though Resume were a USB2 encoding alone;
+a USB3 port also reads it after a device-initiated U3 exit, 4.15.2.1,
+p.255-256), and
 `XHCI_LINK_WANT_RESUME` accepts only SUSPENDED. The classification stays
 as it is: every caller that runs with the switch at 0 - the enumeration's
 reset (`hcdUsb3ResetWrite`, WANT_RESET), the inspection
@@ -1886,136 +1887,94 @@ from a guest.
   for those a notification latched during that suspension claimed first
   (`STATUS_SUCCESS`, 8.4).
 
-## 9. Review of revision 1 (2026-10-05), where each finding is taken
+## 9. Where each hazard raised against the design is answered
 
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | Callback on the enum thread deadlocks | 6, first bullet |
-| 2 | Idle cancel unsafe while a callback runs | 6, callback ownership |
-| 3 | USB2 wake arming is the bus's | 5, arming |
-| 4 | SS root wake goes via Resume; link builder wrong | 1 (stage B), 8 |
-| 5 | SS hub wake needs Function Wake notification | 8 |
-| 6 | Hub look undoes a deliberate suspend | 3, hub port look |
-| 7 | Gate must close before the first stop; rollback | 3, admission gate and rollback |
-| 8 | Bitmap + serial is not IRP ownership | 4, ownership and drain |
-| 9 | `SystemPower` does not classify a Dx | 4, cause of a Dx |
-| 10 | Idle completion and composite rules | 4 composite, 6 completion and composite |
-| 11 | 98 WAIT_WAKE completion defect | 5, Windows 98 caveat; 10 |
-| 12 | 10 ms after U3, wake classification, verify state | 3, resume and wake events |
-| 13 | Whole capabilities contract | 5, capabilities |
+Stage A's design (sections 1 to 7) was reviewed and revised on
+2026-10-05, revisions 1 to 10; stage B's (section 8, task 36.37) from
+2026-10-10. Each hazard raised is answered in the section named.
 
-Revision 2's review (same thread) found 12; revision 3 takes them:
+Stage A:
 
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | Gate suppressed doorbells, TDs still published | 3, admission gate (off the ring via `Paused`) |
-| 2 | Controller settlement circular | 4, controller transitions (restore list) |
-| 3 | Blanket rollback unsafe | 3, failure classes |
-| 4 | Work-item cancel/rundown | 6, callback thread and ownership |
-| 5 | Generation check and slot take not atomic | 4, one request slot (claim under lock) |
-| 6 | Privileged EP0 traffic, cancel restart | 3, privileged thread traffic |
-| 7 | Hub remote-wake branch at 837 | 3, hub ports |
-| 8 | Wake during SUSPENDING, resume bounds | 3, suspend step (5), resume |
-| 9 | Composite wake aggregation | 5, aggregate and episode |
-| 10 | Physical ACTIVE is not PDO D0; idle statuses | 3 intro, 6 claim and completion |
-| 11 | 9x fallback does not restore input | 5, wake disabled on 9x if the defect holds |
-| 12 | Hub and SS exclusions; WAIT_WAKE D-state | 5 eligibility and WAIT_WAKE, 6 eligibility |
+| Hazard | Answered in |
+|---|---|
+| Callback on the enum thread deadlocks | 6, first bullet |
+| Idle cancel unsafe while a callback runs | 6, callback ownership |
+| USB2 wake arming is the bus's | 5, arming |
+| SS root wake goes via Resume; link builder wrong | 1 (stage B), 8 |
+| SS hub wake needs Function Wake notification | 8 |
+| Hub look undoes a deliberate suspend | 3, hub port look |
+| Gate must close before the first stop; rollback | 3, admission gate and rollback |
+| Bitmap + serial is not IRP ownership | 4, ownership and drain |
+| `SystemPower` does not classify a Dx | 4, cause of a Dx |
+| Idle completion and composite rules | 4 composite, 6 completion and composite |
+| 98 WAIT_WAKE completion defect | 5, Windows 98 caveat; 10 |
+| 10 ms after U3, wake classification, verify state | 3, resume and wake events |
+| Whole capabilities contract | 5, capabilities |
+| Gate suppressed doorbells, TDs still published | 3, admission gate (off the ring via `Paused`) |
+| Controller settlement circular | 4, controller transitions (restore list) |
+| Blanket rollback unsafe | 3, failure classes |
+| Work-item cancel/rundown | 6, callback thread and ownership |
+| Generation check and slot take not atomic | 4, one request slot (claim under lock) |
+| Privileged EP0 traffic, cancel restart | 3, privileged thread traffic |
+| Hub remote-wake branch at 837 | 3, hub ports |
+| Wake during SUSPENDING, resume bounds | 3, suspend step (5), resume |
+| Composite wake aggregation | 5, aggregate and episode |
+| Physical ACTIVE is not PDO D0; idle statuses | 3 intro, 6 claim and completion |
+| 9x fallback does not restore input | 5, wake disabled on 9x if the defect holds |
+| Hub and SS exclusions; WAIT_WAKE D-state | 5 eligibility and WAIT_WAKE, 6 eligibility |
+| Queued results outlive PDO and device | 3.1 (level-triggered, nothing queued), 4.2 |
+| Restore list had two owners | 4.4, the controller (no list; slots stay, thread walks) |
+| Callback teardown can block the enum thread | 4.4 teardown order (a)-(d), deferred delete |
+| Aborted composite batch strands a function in D2 | 6.2 batches and abort |
+| Late WAIT_WAKE never serviced | 5.4 completion by identity, rearm |
+| EP0 not quiet; survivors on the stopped ring | 3.5 NOT_SENT as refusal busy, 3.2 explicit restart |
+| Deferral needs a scheduler | 3.3 per-device deferral |
+| RECOVERING ownership, full sample, hub finished wake | 3 intro, 3.7, 3.4 (5), 3.8 |
+| Hub children wrongly excluded | 5.1 |
+| Lock contract and pause ownership | 4.1, 3.2 SuspendPause |
+| Function release sends SET_INTERFACE | 3.3 host-side and device-side halves |
+| Idle cancel after the callback returned | 6.4 table, RETURNED |
+| Cancel-routine arbitration | 4.2 handshake |
+| Teardown order; deferred delete after thread exit | 4.4 (b) before (e); after the enum thread exits |
+| START and revival never reopen | 4.4 START |
+| Refusal busy leaves an idle client asleep | 3.5 a refusal ends the episode |
+| Batch lookup and controller lifetime | 6.2 per-PDO IdleBatchCur, 4.2 reaching the controller |
+| Wake watermark | 5.3 stamp, 5.4 one event, completed at once |
+| Idle completion precedence | 6.5 |
+| Quiesce waits on the enum thread | 4.4 (b) initiate / service / finish |
+| Cancel ownership contradictory | 4.2 one handshake, 6.3 claim, 6.4 table |
+| Settlement of every idle IRP; D3 as a trigger | 6.5 settlement table |
+| Recovery at DISPATCH cannot complete | 4.4 the controller (epoch-stamped Dx, PASSIVE walker) |
+| Unlink precedes the drain; pinned URBs never drain | 4.4 (b) finish: prerequisite, deferred finalization, quarantine |
+| Callback claim needs three branches | 6.3 |
+| Completion under the controller lock | 4.4 (b) initiate: detach, then complete |
+| Dx accepted after the controller went down | 4.4 the controller: PowerDown admission |
+| Quarantine does not cover callback rundown | 4.4 quarantine (self-owned callback context, no join inside a callback, PDO kept), (e) |
+| Callback return vs quarantine not synchronized | 4.4 the context's Phase (compare-exchange) and reference count |
+| Quarantine strands queued entries | 4.4 teardown's handoff (1) |
+| Claimed entry before IN_CALLBACK can lose to EXITING | 4.4 the CLAIMING phase, held across dequeue and claim |
 
-Revision 3's review found 10; revision 4 takes them:
+Stage B:
 
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | Queued results outlive PDO and device | 3.1 (level-triggered, nothing queued), 4.2 |
-| 2 | Restore list had two owners | 4.4, the controller (no list; slots stay, thread walks) |
-| 3 | Callback teardown can block the enum thread | 4.4 teardown order (a)-(d), deferred delete |
-| 4 | Aborted composite batch strands a function in D2 | 6.2 batches and abort |
-| 5 | Late WAIT_WAKE never serviced | 5.4 completion by identity, rearm |
-| 6 | EP0 not quiet; survivors on the stopped ring | 3.5 NOT_SENT as refusal busy, 3.2 explicit restart |
-| 7 | Deferral needs a scheduler | 3.3 per-device deferral |
-| 8 | RECOVERING ownership, full sample, hub finished wake | 3 intro, 3.7, 3.4 (5), 3.8 |
-| 9 | Hub children wrongly excluded | 5.1 |
-| 10 | Lock contract and pause ownership | 4.1, 3.2 SuspendPause |
-
-Revision 4's review found 9; revision 5 takes them:
-
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | Function release sends SET_INTERFACE | 3.3 host-side and device-side halves |
-| 2 | Idle cancel after the callback returned | 6.4 table, RETURNED |
-| 3 | Cancel-routine arbitration | 4.2 handshake |
-| 4 | Teardown order; deferred delete after thread exit | 4.4 (b) before (e); after the enum thread exits |
-| 5 | START and revival never reopen | 4.4 START |
-| 6 | Refusal busy leaves an idle client asleep | 3.5 a refusal ends the episode |
-| 7 | Batch lookup and controller lifetime | 6.2 per-PDO IdleBatchCur, 4.2 reaching the controller |
-| 8 | Wake watermark | 5.3 stamp, 5.4 one event, completed at once |
-| 9 | Idle completion precedence | 6.5 |
-
-Revision 5's review found 3; revision 6 takes them:
-
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | Quiesce waits on the enum thread | 4.4 (b) initiate / service / finish |
-| 2 | Cancel ownership contradictory | 4.2 one handshake, 6.3 claim, 6.4 table |
-| 3 | Settlement of every idle IRP; D3 as a trigger | 6.5 settlement table |
-| - | Recovery at DISPATCH cannot complete | 4.4 the controller (epoch-stamped Dx, PASSIVE walker) |
-
-Revision 6's review found 4; revision 7 takes them:
-
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | Unlink precedes the drain; pinned URBs never drain | 4.4 (b) finish: prerequisite, deferred finalization, quarantine |
-| 2 | Callback claim needs three branches | 6.3 |
-| 3 | Completion under the controller lock | 4.4 (b) initiate: detach, then complete |
-| 4 | Dx accepted after the controller went down | 4.4 the controller: PowerDown admission |
-
-Revision 7's review found 1; revision 8 takes it:
-
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | Quarantine does not cover callback rundown | 4.4 quarantine (self-owned callback context, no join inside a callback, PDO kept), (e) |
-
-Revision 8's review found 2; revision 9 takes them:
-
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | Callback return vs quarantine not synchronized | 4.4 the context's Phase (compare-exchange) and reference count |
-| 2 | Quarantine strands queued entries | 4.4 teardown's handoff (1) |
-
-Revision 9's review found 1; revision 10 takes it:
-
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | Claimed entry before IN_CALLBACK can lose to EXITING | 4.4 the CLAIMING phase, held across dequeue and claim |
-
-Stage B's design (section 8, task 36.37) was reviewed from 2026-10-10.
-Round 1 found 8 (1 P1, 5 P2, 2 P3), all taken:
-
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | A new Resume link class changes WANT_RESET and WANT_HOLD with the switch at 0 | 8.5 `xhci_link.c`: no new class, only WANT_RESUME; 8.11 |
-| 2 | An unsplit PDO's `InterfaceMask` is 0: no wake function | 8.3 the ownership mask |
-| 3 | Latched notifications cross suspensions | 8.7 the window, opened at the arm or U3 request, closed at every sequence boundary |
-| 4 | `FwArmed` has no lifetime across unlink and dormant revival | 8.5 `FwArmed`'s lifetime; 8.9 `hcd_pdo.c` |
-| 5 | A configuration change leaves WAIT_WAKEs without capability; an empty arm sets `Armed` | 8.3 the change of configuration; 8.4 `Armed` derived |
-| 6 | "A hot reset cannot start from U3" is wrong (xHCI 4.19.1.2.9) | 8.5, the claim withdrawn, the warm reset named policy |
-| 7 | Slot-reuse ordering stated backwards | 8.7 slot reuse |
-| 8 | D1 stated unconditional | 8.3 capabilities |
-
-Round 2 found 6 (1 P1, 4 P2, 1 P3), all taken:
-
-| # | Finding | Answered in |
-|---|---|---|
-| 1 | A notification sent before U3 taken as proof the link resumed: no dwell, no U0 restored | 8.5 every SuperSpeed wake branch is the host's resume after the dwell; 8.6 |
-| 2 | The window opened after the first arm request loses a notification sent while the device answers it | 8.7 the window opens before the first arm request |
-| 3 | A refusal's kept wake misses bits still in the latch; order against the STALL claim and the latch | 8.4 the refusal's order; 8.7 consumption (c) |
-| 4 | The configuration change's failure exits and RESET_PORT interval undefined | 8.3 one transaction per path, entry and every exit; RESET_PORT keeps the masks |
-| 5 | Dormant detachment bypasses the unlink that clears `FwArmed` | 8.5 cleared in `hcdDormantKeep` |
-| 6 | `DevNotifyDropped` counted with the switch at 0 | 8.10 |
-
-Round 3 found 3 (0 P1, 0 P2, 3 P3), all taken: RESET_PORT dropped from
-the read rule (8.3), the root wake vector restated (8.11), the STALL's
-settlement qualified by the wake's claim (8.4, 8.13). The review ended
-there, the first round with no P1 or P2.
+| Hazard | Answered in |
+|---|---|
+| A new Resume link class changes WANT_RESET and WANT_HOLD with the switch at 0 | 8.5 `xhci_link.c`: no new class, only WANT_RESUME; 8.11 |
+| An unsplit PDO's `InterfaceMask` is 0: no wake function | 8.3 the ownership mask |
+| Latched notifications cross suspensions | 8.7 the window, opened at the arm or U3 request, closed at every sequence boundary |
+| `FwArmed` has no lifetime across unlink and dormant revival | 8.5 `FwArmed`'s lifetime; 8.9 `hcd_pdo.c` |
+| A configuration change leaves WAIT_WAKEs without capability; an empty arm sets `Armed` | 8.3 the change of configuration; 8.4 `Armed` derived |
+| "A hot reset cannot start from U3" is wrong (xHCI 4.19.1.2.9) | 8.5, the claim withdrawn, the warm reset named policy |
+| Slot-reuse ordering stated backwards | 8.7 slot reuse |
+| D1 stated unconditional | 8.3 capabilities |
+| A notification sent before U3 taken as proof the link resumed: no dwell, no U0 restored | 8.5 every SuperSpeed wake branch is the host's resume after the dwell; 8.6 |
+| The window opened after the first arm request loses a notification sent while the device answers it | 8.7 the window opens before the first arm request |
+| A refusal's kept wake misses bits still in the latch; order against the STALL claim and the latch | 8.4 the refusal's order; 8.7 consumption (c) |
+| The configuration change's failure exits and RESET_PORT interval undefined | 8.3 one transaction per path, entry and every exit; RESET_PORT keeps the masks |
+| Dormant detachment bypasses the unlink that clears `FwArmed` | 8.5 cleared in `hcdDormantKeep` |
+| `DevNotifyDropped` counted with the switch at 0 | 8.10 |
+| RESET_PORT in the read rule | 8.3 |
+| The root wake vector | 8.11 |
+| The STALL's settlement against the wake's claim | 8.4, 8.13 |
 
 ## 10. Tasks and verification (stage A)
 

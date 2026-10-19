@@ -285,8 +285,8 @@ static void test_window(void)
     CHECK_EQ(tr_hcd_ring_text(&t, &w, 0x500), TR_RING_OFF, "level 1");
     CHECK(strstr(text, "off (XhciLogVerbosity 1: counters only)") != NULL,
           "off");
-    CHECK(strstr(text, "SNAPON.BAT") != NULL, "the advice");
-    CHECK(strstr(text, "Run as administrator") != NULL, "NT: admin");
+    CHECK(strstr(text, "View > Logging level") != NULL, "the advice");
+    CHECK(strstr(text, "Set as administrator") != NULL, "NT: admin");
     tr_text_init(&t, text, sizeof(text));
     tr_hcd_off_text(&t, 0);
     CHECK(strstr(text, "XhciLogVerbosity 0") != NULL, "level 0");

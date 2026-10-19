@@ -1,5 +1,16 @@
 # Failure Diagnosis Guide (symptom -> ordered causes -> discriminating test)
 
+> **Written for the `1.2.0.0` miniport, on branch `1.2.0.0`.** Most of this
+> guide's symptoms are the miniport's: usbport not calling it, its root-hub
+> callbacks, its health poll, and functions in files that left the tree with
+> it on 2026-10-02 (`xhci_dispatch.c`, `xhci_rh.c`, `xhci_slot.c`). From
+> `2.0.0.0` `xhci98.sys` is the successor HCD, which replaces `usbport.sys`
+> (design record 13); its failure records are the issue pages under
+> `docs/issues/`, the run sheets and design records 13 to 25. The method
+> below - localise silence with instrumentation and differentials, and read
+> the trust order - still holds; a test that names a usbport callback or a
+> deleted file applies to `1.2.0.0` and earlier.
+
 The other docs say what to build and which invariants to keep. This one
 captures the diagnostic reasoning for when a phase checkpoint fails: for each
 symptom, the causes in descending order of likelihood, and the cheapest test
@@ -88,11 +99,12 @@ DOS tool runs, but available in-situ for the lifetime of the driver.
    2000 metal DebugView remains the trace channel.
 6. The snapshot read, the one rung that works on Windows 98 bare metal.
    The driver's counters and its note ring sit inside `XHCI_EXTENSION`, and
-   `XHCISNAP.EXE` reads them out of the running machine from ring 3, through
-   usbport's PassThru escape, so nothing is pushed, nothing is printed, and
-   no PASSIVE moment has to be found. It ships in every flavour from
-   `0.0.0.6`, is off until `XhciLogVerbosity` is set and the machine
-   restarted, and works the same on both targets.
+   `XHCITR /snapshot` (`XHCISNAP.EXE` up to `3.0.0.0`) reads them out of the
+   running machine from ring 3, through the door's PassThru request
+   (usbport's PassThru escape under the miniport), so nothing is pushed,
+   nothing is printed, and no PASSIVE moment has to be found. It ships in
+   every flavour from `0.0.0.6`, is off until `XhciLogVerbosity` is set and
+   the machine restarted, and works the same on both targets.
 
    Keep the distinction clear: what task 12.2 closed is the trace, a running record of what
    happened as it happens plus a capture of a crash, and neither exists on
@@ -127,7 +139,7 @@ prints its own line (a counter whose expected value is zero and whose only
 trace site is past an early return proves nothing when it is right), so
 absence means the pass never ran. The two lines are `root hub: no port needed
 driving out of U3, total` and `root hub: ports driven out of U3 after the D0
-transition`, both in `xhciRhDriveSuspendedPortsToU0` (`src/xhci_rh.c`). The
+transition`, both in `xhciRhDriveSuspendedPortsToU0` (`xhci_rh.c`, on `1.2.0.0`). The
 anchor is `XhciRootHubInit`, which calls the pass and then prints four lines
 unconditionally. Line numbers are not given: they drift, and every one of
 these labels is unique in the tree, so `grep` finds them.
@@ -208,7 +220,7 @@ and the set behind it instead.
 
 ---
 
-## Phase 3 - usbport never calls the miniport
+## Phase 3 - usbport never calls the miniport (1.2.0.0)
 
 Symptom: driver installed, but no lifecycle callback ever logs.
 
@@ -271,7 +283,7 @@ order, and do not start by writing a symbol checker:
    failure is in the qemu-only import set.
 2. There is no finer import bisect inside the trace channel. `XHCI_DBG_NO_IRQL`
    does not drop `HAL.DLL!KeGetCurrentIrql`: the flush guard (`xhciLogAtPassive`,
-   `src/xhci_dispatch.c`) calls that symbol in every flavour and the
+   `xhci_dispatch.c` on `1.2.0.0`) calls that symbol in every flavour and the
    allowlist carries it as `all required`. All the define still does is put
    `0xFF` in a trace line's IRQL field, which no published binary prints. A
    target that rejects that HAL symbol therefore cannot be bisected around, and
@@ -326,7 +338,7 @@ A release build gives two readings before any of the rows above.
 `XHCI_EXTENSION.InitStep` and `.InitStatus` record the failing step and its
 refusal code, because a release build has no trace channel and most refusal
 codes are shared between steps (`XHCI_HC_WINDOW_TOO_SMALL` alone does not say
-which window). Read them out of the extension (`XHCISNAP`, or the monitor-side
+which window). Read them out of the extension (`XHCITR /snapshot`, or the monitor-side
 counter reader) before reasoning from the symptom. On a shared interrupt
 line, also read `InterruptCount` (ISR entries) against `InterruptsClaimed` (the
 entries that were ours). "Our interrupt never routes here" and "it routes but
@@ -361,7 +373,7 @@ Ring/cycle bugs have distinctive signatures. Recognize them by shape:
 
    **On the HCD, read the root port's own account first** (since `2.2.0.0`,
    roadmap-hcd task 35.3). With `XhciLogVerbosity` at 2 or above each root
-   port's enumeration leaves `enum.port.` notes, which `XHCISNAP` decodes
+   port's enumeration leaves `enum.port.` notes, which the snapshot decodes
    after the note ring ("root port enumeration notes, decoded"):
    `enum.port.look` says why the port was inspected and what PORTSC read,
    `enum.port.reset` the reset's result, `enum.port.speed` the raw speed ID,
@@ -382,7 +394,7 @@ Ring/cycle bugs have distinctive signatures. Recognize them by shape:
    `enum.port.speed` with class 0 and `enum.port.fail` with cause 7, the
    speed; on the E460 under `2.2.0.0` the port reads class 4 by the
    fallback and Enable Slot succeeds (issue 11 section 6). Ports behind
-   a hub are not noted. `xhcisnap/README.md` has every layout.
+   a hub are not noted. `docs/contributing/snapshot-reader.md` has every layout.
 2. Address Device completes with Parameter/Context State Error (codes in
    `docs/usb-xhci-info/xhci-data-structures.md` "Completion Codes"). The input context
    content is wrong. Checklist, in order of how often each is the culprit:
@@ -461,7 +473,8 @@ Ring/cycle bugs have distinctive signatures. Recognize them by shape:
   interrupt's backstop, which keeps delivering (at most one drain per 100 ms
   while an event stands) and has no terminal, so the symptom
   under `2.2.0.0` is either a recovery that worked (and is only counted) or
-  a stated terminal state. Read, in this order, from an `XHCISNAP` report
+  a stated terminal state. Read, in this order, from a snapshot (`XHCITR`'s
+  Save Report or `/snapshot`; an `XHCISNAP` report up to `3.0.0.0`)
   taken after the symptom (and one taken before it, to subtract):
   1. The values in effect, `XhciTolerance`, `XhciIntervalCap` and
      `XhciAvgTrbEsit`. At `XhciTolerance` 0 none of the behaviours acts

@@ -12,6 +12,50 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 3.1.0.0 - 2026-10-19
+
+Every system `3.0.0.0` supports is supported, from the same four
+directories. This release is mostly about installing: a windowed
+installer, an uninstall from Add/Remove Programs, and Stor98 built and
+versioned with the package. It was read in QEMU virtual machines on
+98 SE to 7, and the Thunderbolt 3 and USB4 parts against the same emulated
+hosts and enclosure as `3.0.0.0`; the release notes say what was read
+where.
+
+### What changed
+
+- `SETUP.EXE` at the top of the package opens a windowed installer: it
+  shows what it found, the components, the driver's options and the
+  tools' directory, and changes nothing before you click Install. On
+  98 SE and ME it installs the controller and its root hub itself.
+  `INSTALL.BAT` stays for the command line and scripts.
+- Uninstall from Add/Remove Programs (Programs and Features on Vista and
+  7), in one step, with one entry however many times you update.
+- The Thunderbolt 3 / USB4 connection manager can be installed alone,
+  for a computer whose USB 3 controllers run another driver, and on
+  Windows 8 and 8.1 (not yet read on those two).
+- Stor98, the bundled NVMe driver, is built with the package at
+  `3.1.0.0` and replaces an older Stor98, `0.4.0.0` included. The
+  installer puts it only on NVMe drives behind a Thunderbolt or USB4
+  tunnel, never on an internal drive. It now copies a request whose
+  buffer is not physically contiguous on 98 SE and ME instead of
+  refusing it.
+- Every 64-bit driver, `stor98.sys` included, carries the one test
+  signature; `stor98-test.cer` is gone.
+- In the 64-bit package the Thunderbolt filter INF `xhcicmf.inf` sits in
+  `release-x64\` itself; there is no `nt\` folder any more.
+- Safe removal on Windows 2000 to 7: a tunnelled drive stays in "Safely
+  Remove Hardware" after a disable and enable or a driver update. The
+  service behind it follows `XhciCmSafeEject`, and the uninstall leaves no
+  entry behind that would stop the controller reinstalling.
+- On 98 SE and ME, after a Stand by, plugging a second USB4 NVMe
+  enclosure no longer drops the first one's drive.
+- `XHCISNAP` is gone; the xHCI98 USB Tree does what it did (File > Save
+  Report is the bug report).
+- `XhciFastPollFsLs` is on the installer's Advanced settings.
+- Updating from `3.0.0.0`: run `SETUP.EXE`. From `2.3.x` or earlier,
+  read the release notes' update section first.
+
 ## 3.0.0.0 - 2026-10-17
 
 Every system `2.4.0.0` supports is supported, from the same four

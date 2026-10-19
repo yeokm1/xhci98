@@ -361,6 +361,15 @@ static void test_route_refusals(void)
              "an all-ones XUSB2PRM");
     CHECK_EQ(f.Count, 4, "XUSB2PR not written");
 
+    /* Two failures: the first is the one reported. */
+    fakeInit(&f, &io);
+    f.FailKind = 'r';
+    f.FailOffset = XHCI_PSW_USB3_PSSEN;
+    f.Usb2Mask = 0xFFFFFFFFUL;
+    CHECK_EQ(XhciPswRoute(&io, &st), XHCI_PSW_STEP_PSSEN_READ,
+             "a read-back failure, then an all-ones XUSB2PRM");
+    CHECK_EQ(f.Count, 4, "XUSB2PR still not written");
+
     fakeInit(&f, &io);
     f.FailKind = 'w';
     f.FailOffset = XHCI_PSW_XUSB2PR;

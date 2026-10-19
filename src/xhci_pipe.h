@@ -243,9 +243,9 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
  *   - and last, any isochronous endpoint whose interval payload exceeds what
  *     the transfer path carries - one page (XhciPipeIsoFragments) - is
  *     ESIT_REFUSED too, whatever the rules above allowed, until multi-page
- *     isochronous packets exist (Codex review of Phase 29, round 1); and so
- *     is one whose interval needs more than four bursts of its packet size
- *     and Max Burst, which the Isoch TRB's TBC cannot describe (round 2).
+ *     isochronous packets exist (Phase 29); and so is one whose interval
+ *     needs more than four bursts of its packet size and Max Burst, which
+ *     the Isoch TRB's TBC cannot describe.
  *
  * XHCI_PIPE_BAD_PARAM for NULL or an offset whose 7 bytes are not inside
  * `length`.
@@ -260,7 +260,7 @@ ULONG XhciPipeEndpointParamsAt(const UCHAR *config, ULONG length,
  * belongs to interface `interfaceNumber` at `alternate`: a composite
  * function's SELECT_CONFIGURATION carries the function's configuration as
  * its class driver read it, which a filter below that driver may have
- * rewritten (hidusbf; whole-branch review of 2.1.0.0). Taken only from an
+ * rewritten (hidusbf; reviewed and revised for 2.1.0.0). Taken only from an
  * endpoint of the caller's copy of that interface whose first six bytes -
  * bLength, bDescriptorType, bEndpointAddress, bmAttributes, wMaxPacketSize -
  * equal the device's. XHCI_PIPE_OK and *bInterval; XHCI_PIPE_NOT_FOUND when
@@ -309,17 +309,18 @@ ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
 #define XHCI_PIPE_FAST_4K8K     3UL
 
 /*
- * Mode 4, CODES (task 36.19; design record 13 section 13.7): the client
- * chooses. An interrupt endpoint whose descriptor bInterval is 128, 129 or
- * 130 is programmed at Interval 2, 1 or 0 (500, 250, 125 us) - at Full and
- * Low Speed on a root port only, at High Speed and SuperSpeed anywhere -
- * and every other bInterval by Table 6-12. It does not do modes 2 and 3's
- * mapping, and they do not honour the codes. Applied before the interval
- * cap, and a refusal falls back to Interval 3 (1 ms).
+ * Mode 4, CODES (task 36.19, its encoding replaced by task 42-A.18 in
+ * 3.1.0.0; design record 13 section 13.7): the client chooses. An
+ * interrupt endpoint whose descriptor bInterval is a code, 128 to 143, is
+ * programmed at Interval = bInterval - 128 (128 is 125 us, 8000 Hz; 143 is
+ * 4.096 s), at every speed, on a root port or behind a hub, and every
+ * other bInterval by Table 6-12. It does not do modes 2 and 3's mapping,
+ * and they do not honour the codes. Applied before the interval cap, and a
+ * refusal falls back to Interval 3 (1 ms).
  */
 #define XHCI_PIPE_FAST_CODES    4UL
 #define XHCI_PIPE_FAST_CODE_LOW     128UL
-#define XHCI_PIPE_FAST_CODE_HIGH    130UL
+#define XHCI_PIPE_FAST_CODE_HIGH    143UL
 #define XHCI_PIPE_FAST_CODE_FALLBACK 3UL
 
 /* The mode a registry value asks for: 1 to 4 as themselves, anything else
@@ -332,14 +333,15 @@ ULONG XhciPipeFastMode(ULONG value);
  * Full-Speed interrupt endpoint of a device on a root port (route 0) whose
  * Interval is 7 or 8 is changed: Interval becomes the table's, SpecInterval
  * and FallbackInterval keep the Interval it replaced and FastPoll is set,
- * and the return is 1. Mode 4: an interrupt endpoint whose BInterval is a
- * code (128 to 130) - Low or Full Speed on a root port, High Speed,
- * SuperSpeed or SuperSpeedPlus at any route - takes the code's Interval,
+ * and the return is 1. Modes 2 and 3 leave a Full- or Low-Speed device
+ * behind a hub alone, whose periodic traffic a transaction translator or a
+ * Full-Speed hub carries one frame at a time. Mode 4: an interrupt
+ * endpoint whose BInterval is a code (128 to 143) at Low, Full or High
+ * Speed, SuperSpeed or SuperSpeedPlus, at any route, whose Interval
+ * (BInterval - 128) differs from the one it has, takes that Interval,
  * FallbackInterval 3 and FastPoll, SpecInterval left at the Table 6-12
  * value, and the return is 1. Every other endpoint, mode and NULL returns 0
- * with `ep` untouched - a Full- or Low-Speed device behind a hub included,
- * whose periodic traffic a transaction translator or a Full-Speed hub
- * carries one frame at a time - and so does an endpoint already changed.
+ * with `ep` untouched, and so does an endpoint already changed.
  */
 ULONG XhciPipeFastPoll(ULONG mode, ULONG speed, ULONG route,
                        PXHCI_PIPE_EP ep);
@@ -874,10 +876,10 @@ ULONG XhciPipeSpeedFromClass(ULONG speedClass);
 /*
  * Submission sequences and abort horizons (hcd_io.c, HcdIoPark): a per-PDO
  * count that never wraps in practice - 64 bits, kept as a Lo/Hi pair, as
- * every 64-bit quantity here is (no 64-bit arithmetic) - and horizons in
- * the same 64-bit space, so a horizon is never retired and never becomes
- * young again (Codex review of 09ed9d1). 0:0 is never a stamp or a horizon
- * (none).
+ * every 64-bit quantity here is (no 64-bit arithmetic) - and horizons in the
+ * same 64-bit space, so a horizon is never retired and never becomes young
+ * again (reviewed and revised after 09ed9d1). 0:0 is never a stamp or a
+ * horizon (none).
  *
  * An IRP carries only the low 32 bits of its stamp (DriverContext[0] is all
  * it has). Its full stamp is reconstructed from the current count as the

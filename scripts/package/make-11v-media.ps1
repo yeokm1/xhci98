@@ -61,7 +61,7 @@ takes release, debug, qemu or all - because a row written about two builds must
 not silently cover three.
 
 *(This parameter defaulted to `debug` and described it as "what a run reads
-counters from" until the post-Phase 13 review rounds. That was true before the three-flavour split
+counters from" until it was reviewed and revised after Phase 13. That was true before the three-flavour split
 and false after it, and it fails the way the vm-matrix harness failed: the guest boots and drives devices perfectly well, and the run then
 dies as a timeout on an identity line that build cannot print.)*
 

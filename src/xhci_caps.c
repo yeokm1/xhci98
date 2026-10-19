@@ -14,10 +14,10 @@
  * data, so the degenerate shapes (zero-length groups, a NEXT that leaves the
  * BAR, a protocol claiming ports the controller does not have) are tests.
  *
- * What this file decides is which ports the driver manages. The port strategy
- * itself is not negotiable and is stated in AGENTS.md: USB 2.0 protocol ports
- * only. USB 3.x logical ports are left unpowered and unmanaged, whether they
- * have a USB 2.0 companion or not.
+ * What this file decides is which ports the driver manages: since task 29-A.1
+ * every port a Supported Protocol capability names, USB 2.0 and USB 3.x alike
+ * (AGENTS.md, "Port Strategy"); the class of each - and a USB 3.x port's USB
+ * 2.0 companion, where it has one - is what the pairing below records.
  *
  * C89 only. IRQL: every function is callable at any IRQL - the reader the
  * driver passes is a register read.
@@ -1148,6 +1148,17 @@ ULONG XhciDeriveHcInfo(ULONG capDword0,
     derived.Ppc = XHCI_HCCPARAMS1_PPC(hccparams1);
     derived.Cfc = XHCI_HCCPARAMS1_CFC(hccparams1);
     derived.XecpDwords = XHCI_HCCPARAMS1_XECP(hccparams1);
+    /* RTSOFF's and DBOFF's rule below, for the third offset: a list that
+     * starts inside the capability registers would read them as capability
+     * headers. The block is the registers this driver reads, so it reaches
+     * HCCPARAMS2 whenever CAPLENGTH does (the gate further down reads it
+     * then). 0 is the spec's "no list" and stays legal. */
+    if (derived.XecpDwords != 0 &&
+        derived.XecpDwords * 4UL <
+            (derived.CapLength >= XHCI_CAP_HCCPARAMS2_BYTES ?
+                 XHCI_CAP_HCCPARAMS2_BYTES : XHCI_CAP_REGISTERS_BYTES)) {
+        return XHCI_HC_BAD_XECP;
+    }
 
     /*
      * FSC, and the gate is about **reach**, not about version.

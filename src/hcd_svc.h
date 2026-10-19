@@ -63,8 +63,27 @@
  *   the root hub's RH_* callbacks the device layer (hcd_dev.c); there is no
  *     and "usbport's root hub"    usbport root hub, and the HCD's own root hub
  *                                 is task 26-A.4's
- *   UsbPortCompleteTransfer /     nothing yet: the transfer path is 26-A.5's
- *     InvalidateEndpoint
+ *   UsbPortCompleteTransfer /     the URB records' completion (HcdIoDeferred,
+ *     InvalidateEndpoint          hcd_io.c, through XhciSlotDeferredWork)
+ *
+ * The kept files, and the pure core beside them, also cite miniport files
+ * that left the tree on 2026-10-02 (their last sources are on branch
+ * 1.2.0.0). Read those names with this key:
+ *
+ *   xhci_dispatch.c               DriverEntry and dispatch (hcd_entry.c,
+ *                                 hcd_pnp.c), the log's DDK half and its
+ *                                 flush (hcd_log.c), the pass-through
+ *                                 (hcd_door.c, hcdDoorSnapshot), the common
+ *                                 buffer (hcd_dma.c)
+ *   xhci_slot.c                   the device layer the core calls (hcd_dev.c),
+ *                                 enumeration (hcd_enum.c), configurations
+ *                                 and pipes (hcd_cfg.c), the URB path
+ *                                 (hcd_io.c, hcd_urb.c)
+ *   xhci_rh.c                     the ports, read by the controller thread
+ *                                 (hcd_enum.c) and answered by the root hub
+ *                                 (hcd_rh.c)
+ *   xhci_vhub.c, xhci_probe.c     nothing: the HCD has no virtual hub and no
+ *                                 probe
  *
  * A comment that cites a usbport binary (a hint, an offset, a measured
  * ordering) is history: it records why the step exists, not a dependency.

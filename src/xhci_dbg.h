@@ -1,7 +1,7 @@
 /*
  * xhci_dbg.h - the `qemu` flavour's trace channel.
  *
- * *(Titled "debug-build trace channel" until the post-Phase 13 review rounds, and the two sentences
+ * *(Titled "debug-build trace channel" until after Phase 13, and the two sentences
  * that followed it said the imports were "real in the two checked flavours" -
  * which contradicted the parenthetical four lines below and has been wrong since
  * task 13-L.1. `debug` is a checked build and gets none of this.)*
@@ -45,7 +45,7 @@
  * `src/sources` for the `qemu` flavour and by nothing else, and without it
  * every macro below compiles to nothing. What `debug` keeps is the DDK's own
  * `DBG`, and what that is worth here is **smaller than it sounds** - this
- * comment said "asserts, no optimisation" until the post-Phase 13 review rounds and both halves were
+ * comment said "asserts, no optimisation" until after Phase 13 and both halves were
  * wrong. **Both flavours build `/Oxs`**: the checked build differs by `/Oy-`
  * against `/Oy`, so it keeps frame pointers and is otherwise optimised the same
  * (compare `src/buildchk.log` and `src/buildfre.log`, which print the line).
@@ -55,7 +55,7 @@
  * `XHCI_SNAPSHOT_B_DEBUG` bit a snapshot reports, and whatever the DDK's own
  * checked headers change - and the measured compiler delta is exactly `-DDBG=1`,
  * `-DFPO=0` against `-DFPO=1`, the flavour define, and `/Oy-` against `/Oy`.
- * **The ESP probe gate in `xhci_dispatch.c` was in this list until the post-Phase 13 review rounds
+ * **The ESP probe gate in `xhci_dispatch.c` was in this list until after Phase 13
  * and is not `DBG`'s any more**: it reports through `XHCI_DBG_VALUE`, which
  * compiles to nothing without `XHCI_DBG_LIVE`, so under `DBG` alone `debug`
  * spent the instructions on a report it could not make. It is now guarded on
@@ -70,8 +70,8 @@
  *
  * *(Design record 08 section 5's table has said "debug: live per-line
  * emission - no" since the split was designed. It was not true in the first
- * implementation of it, which gated only the `0xE9` half; a Codex review of
- * commit `efa86a3` caught that, and this is the repair.)*
+ * implementation of it, which gated only the `0xE9` half; commit `efa86a3`
+ * was reviewed and revised for that, and this is the repair.)*
  *
  * `XHCI_DBG_NO_IRQL` survives as a negative and is **not** a flavour axis -
  * but it is no longer the fallback it was built as. It once removed
@@ -81,7 +81,7 @@
  * changes only what a trace line prints in its `irql=` field - `0xFF` instead
  * of the measured value. It cannot be used to bisect a target that rejects
  * that symbol. *(This comment called it a fallback for exactly that until
- * a later review.)*
+ * it was reviewed and revised.)*
  *
  * Output goes to two places at once (docs/contributing/build-and-test.md "Debugging"):
  * DbgPrint, which DebugView captures inside a Win9x guest and a kernel

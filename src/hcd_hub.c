@@ -145,7 +145,7 @@ VOID HcdDeviceSlotParams(PHCD_USB_DEVICE dev, ULONG withHub,
  * (XHCI_PIPE_SPEED_*, xhci_pipe.h), decoded from the Protocol Speed ID its
  * Slot Context carries: a controller may advertise its own PSIVs (xHCI
  * 7.2.1), so dev->Speed is not that encoding, and only the Slot Context may
- * take it raw (Codex review of 23e7715, finding 4). SuperSpeedPlus apart
+ * take it raw (reviewed and revised after 23e7715). SuperSpeedPlus apart
  * from SuperSpeed by the trained rate (dev->Plus, 29-A.1, 29-A.6). 0, which
  * every endpoint refuses, for a speed the root port's protocol does not
  * name. The one decode for every endpoint rule (Phase 29's hcdCfgPipeSpeed
@@ -407,7 +407,7 @@ ULONG HcdHubPortStatus(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
  * HCD_HUB_DEBOUNCE_STEP_MS; a connect change seen meanwhile is a bounce,
  * cleared here - so it does not start the device over once it is
  * enumerated - and starts the interval again, as does a read that finds the
- * port disconnected (Codex review of 23e7715, finding 7). Returns 1 once
+ * port disconnected (reviewed and revised after 23e7715). Returns 1 once
  * connected and stable; 0 once stably disconnected, once
  * HCD_HUB_DEBOUNCE_LIMIT_MS have elapsed without a stable connection, or
  * when the hub does not answer. The limit is soft: it is checked between
@@ -428,8 +428,8 @@ ULONG HcdHubPortDebounce(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
 
     /* The give-up bound is elapsed time, the class requests and the
      * scheduling included, not a sum of the sleeps asked for: a timer,
-     * polled with a zero wait, as hcdEp0Quiet bounds its wait (Codex review
-     * of d54eef0, finding 4). */
+     * polled with a zero wait, as hcdEp0Quiet bounds its wait (reviewed and
+     * revised after d54eef0). */
     KeInitializeTimer(&deadline);
     HcdRelativeMs(&due, HCD_HUB_DEBOUNCE_LIMIT_MS);
     (VOID)KeSetTimer(&deadline, due, NULL);
@@ -537,8 +537,8 @@ static ULONG hcdHubPipeQueued(PHCD_PIPE pipe)
  * No traffic reaches the devices on hub port q - the device there and, when
  * it is a hub, every device below it - from before the bus resumes the port
  * until after the resume recovery: USB 2.0 7.1.7.7 allows no device access
- * on the resumed segment during TRSMRCY (to transcribe; Codex review of the
- * Phase 27 integration, round 4, finding 1). Every pipe of each such device
+ * on the resumed segment during TRSMRCY (to transcribe; the Phase 27
+ * integration). Every pipe of each such device
  * is paused, so nothing is published, and every endpoint with work on its
  * ring that is Running is stopped (Stop Endpoint), so nothing already
  * published runs; the devices go into devs[]. A Stop Endpoint that fails
@@ -629,8 +629,7 @@ static VOID hcdHubReleaseBelow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE *devs,
             if (!dev->Gone && state == XHCI_EP_STATE_STOPPED &&
                 !pipe->SuspendPause) {
                 /* Not a device selective suspend holds: its own restart
-                 * rings it (design record 14 section 3.2; Codex review of
-                 * 36.30, round 1, finding 5). */
+                 * rings it (design record 14 section 3.2; 36.30). */
                 if (pipe->Queue->Count != 0) {
                     pipe->SeqUsed = 1;
                     XhciWriteDoorbell(&hc->Hc, dev->SlotId, dci);
@@ -667,8 +666,8 @@ static VOID hcdHubReleaseBelow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE *devs,
  * and the caller's teardown frees them with their pipes still paused (or
  * the invalidation does, once the controller has failed): a resume that
  * may still finish must never meet their traffic before its recovery, and
- * nothing more is asked of a controller whose recovery is due (Codex
- * review of the Phase 27 integration, round 5, finding 1).
+ * nothing more is asked of a controller whose recovery is due (the Phase
+ * 27 integration).
  *
  * On a SuperSpeed hub's port the same resume brings a link found in U3 back
  * to U0: SetPortFeature(PORT_LINK_STATE) with U0 in wIndex 15:8 in place of
@@ -676,8 +675,8 @@ static VOID hcdHubReleaseBelow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE *devs,
  * XhciSsHubResumeProgress, and C_PORT_LINK_STATE cleared in place of
  * C_PORT_SUSPEND; the quiesce, the deadline, the recovery wait and the
  * outcome are the USB 2.0 port's (USB 3.2 r1.1 10.16.2.6 and 10.16.2.10,
- * printed pp.446-454, read in the merge's Codex review; the
- * Phase 27 and Phase 30 merge, p28-31-int). No SuperSpeed port is resumed
+ * printed pp.446-454, read at the merge: the Phase 27 and Phase 30 merge,
+ * p28-31-int). No SuperSpeed port is resumed
  * before a reset: a warm reset may start from U3 (XhciSsHubResetKind).
  * Thread only, powered.
  */
@@ -793,7 +792,7 @@ ULONG HcdHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     /* A device the port still holds - a RESET_PORT's - and failing to
      * resume stays held: the failed reset cycles it, and its teardown frees
      * it (hcd_enum.c, HcdEnumCycle). A resume that finishes clears the
-     * port's resume debt (round 5, finding 3). */
+     * port's resume debt. */
     if (XhciHubResumeBeforeReset(status)) {
         if (hcdHubPortResume(hc, hub, n, &held) != XHCI_HUB_RESUME_DONE ||
             !HcdHubPortStatus(hc, hub, n, &status, &change)) {
@@ -883,8 +882,8 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
             }
             /* A resume owed from an earlier look is not lost with this
              * look's GET_STATUS: it counts as one more that did not
-             * finish, and is retried or given up as one (Codex review of
-             * the Phase 27 integration, round 5, finding 2). Nothing was
+             * finish, and is retried or given up as one (the Phase 27
+             * integration). Nothing was
              * held: a retried resume holds nothing. */
             XhciHubPortDecide(state, 0, 0, d);
             d->Disconnect = 0;
@@ -925,8 +924,7 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
             if (d->Suspended) {
                 /* Only the changes the hub took back are evidence: a
                  * clear that failed leaves the transport uncertain, and
-                 * C_PORT_SUSPEND without its clear is no wake (Codex
-                 * review of 36.30, round 2, finding 4). */
+                 * C_PORT_SUSPEND without its clear is no wake (36.30). */
                 d->Suspended = 0;
                 HcdSuspHubSample(hc, q, status, acked,
                                  (d->Clear & XHCI_HUB_C_PORT_SUSPEND) != 0 &&
@@ -936,7 +934,7 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     }
     if (!d->Resume) {
         /* Not suspended now - resumed between looks, or the device gone or
-         * new: whatever resume was owed is settled (round 5, finding 3). */
+         * new: whatever resume was owed is settled. */
         q->ResumeTries = 0;
         q->ResumePending = 0;
     }
@@ -945,8 +943,8 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
          * device (handled, never initiated; xhci_hub.h). Its outcome
          * decides the port again; one that did not finish keeps its bit
          * for the next pass, until it has failed XHCI_HUB_RESUME_TRIES
-         * times and the port is enumerated afresh (Codex review of the
-         * Phase 27 integration, round 4, findings 2 and 3). */
+         * times and the port is enumerated afresh (the Phase 27
+         * integration). */
         outcome = hcdHubPortResume(hc, hub, n, &held);
         XhciHubResumeOutcome(state, outcome, held, &q->ResumeTries, d);
         goto resumed;
@@ -1018,8 +1016,8 @@ static VOID hcdHubSelf(PHCD_CONTROLLER hc, PHCD_HUB hub)
 
 /*
  * Whether a failure on the device on port q may be counted: 1 unless some
- * port on its path confirms the device has left (Codex review of d54eef0,
- * finding 2). Each hub port above it is read with GET_STATUS; a reply that
+ * port on its path confirms the device has left (reviewed and revised
+ * after d54eef0). Each hub port above it is read with GET_STATUS; a reply that
  * says disconnected, disabled, or with a connect or enable change raised
  * is a confirmed departure, as is a hub already departing (Draining, or no
  * device). A hub that does not answer confirms nothing for its port - its
@@ -1027,14 +1025,14 @@ static VOID hcdHubSelf(PHCD_CONTROLLER hc, PHCD_HUB hub)
  * a pending status-change report or Changed bit, which may name another
  * port. The root port the path starts at confirms a departure when it reads
  * disconnected or with a connect change; a PORTSC of all ones could not be
- * read and confirms nothing (Codex review round 25). The reads clear no
+ * read and confirms nothing. The reads clear no
  * change bit - the hub service acts on each - but a GET_STATUS reply is
  * folded into the topology graph as every hub request's is (hcdHubRequest).
  * Once the controller has failed or a timed-out transfer may still DMA into
  * the scratch (a GET_STATUS here can be what requested that recovery), no
  * further hub is asked: the probe stops and the failure is counted, since
- * nothing more was learnt (Codex review of the Phase 27 integration, round
- * 3). Thread only, powered.
+ * nothing more was learnt (the Phase 27 integration). Thread only,
+ * powered.
  */
 ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q)
 {
@@ -1077,7 +1075,7 @@ ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q)
  * forgotten: whenever the hub stops being served (HcdHubForget, and
  * HcdHubFree), whether or not its object is kept for PnP's removals - a
  * queued KTIMER must never outlive the controller extension that holds it
- * (Codex review of the Phase 28-31 integration, round 2, finding A). */
+ * (the Phase 28-31 integration). */
 static VOID hcdHubRearmStop(PHCD_HUB hub)
 {
     if (hub->RearmArmed) {
@@ -1120,13 +1118,12 @@ static VOID hcdHubRearmTick(PHCD_HUB hub)
  * DSPORT.Disconnected (USB 3.2 10.16.2.10, USB 3.2 p.454, and 10.3.1.2,
  * p.387; verified); never BH_PORT_RESET, which a port in DSPORT.Disabled
  * ignores (10.3.1.6, p.388) - and each one
- * looked at in this pass, as a change (Codex review of the Phase 28-31
- * integration, finding 1). A port stays pending until its request
- * succeeds: a failed one is tried again after the next, longer wait (round
- * 2, finding B). Nothing here restarts the waits - a port read empty just
- * after RxDetect may only be detecting its receiver; HcdSsHubPortLook does
- * it on an independent departure, and hcd_enum.c on an enumeration that
- * reached Present (round 2, finding C). Called once a pass for each live
+ * looked at in this pass, as a change (the Phase 28-31 integration). A
+ * port stays pending until its request succeeds: a failed one is tried
+ * again after the next, longer wait. Nothing here restarts the waits - a
+ * port read empty just after RxDetect may only be detecting its receiver;
+ * HcdSsHubPortLook does it on an independent departure, and hcd_enum.c on
+ * an enumeration that reached Present. Called once a pass for each live
  * hub, before its ports are looked at; the timer is polled with a zero
  * wait, as the debounce polls its own. Thread only, powered.
  */
@@ -1232,7 +1229,7 @@ VOID HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
  * until it is cleared: a request that failed short of a STALL - the hub's
  * own refusal - is sent once more, and one that still fails is counted
  * (TtBufferClearFailures) and logged, and the endpoint's next halt asks
- * again (Codex review of d54eef0, the TT note). Thread only, powered.
+ * again (reviewed and revised after d54eef0). Thread only, powered.
  */
 VOID HcdHubClearTt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                    ULONG endpointAddress, ULONG type, ULONG addressZero)
@@ -1311,7 +1308,7 @@ VOID HcdHubXferRetired(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * One interrupt IN transfer on the status-change pipe, unless one is out
  * already: the report's slice of the scratch zeroed, the TD published under
  * the controller lock and its doorbell rung there, as hcd_io.c publishes
- * (Codex review of batch (c), round 3, finding 2). A pipe that will not
+ * (batch (c)). A pipe that will not
  * take it is given up for polling.
  */
 VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub)
@@ -1386,7 +1383,7 @@ VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub)
  * past 14, a SuperSpeed hub's fifteenth) is never enumerated, but its
  * change bits are still the hub's to report: left set, they would complete
  * every status-change transfer at once with the same bit for as long as the
- * hub is up (Codex review of 034a119, finding 3). So such a port is
+ * hub is up (reviewed and revised after 034a119). So such a port is
  * unpowered at bring-up, and each change it reports is read and cleared
  * here - by the SuperSpeed selectors on a SuperSpeed hub, by USB 2.0's
  * otherwise - and nothing else is done with it.

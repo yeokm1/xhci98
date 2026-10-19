@@ -475,8 +475,8 @@ static void testAlternateSettings(void)
              "nothing here");
 
     /*
-     * **A table the walk had no room for cannot be reasoned about as a set**
-     * (review round 2). Pass 1 reads one declaration and is exact; pass 2 asks
+     * **A table the walk had no room for cannot be reasoned about as a set**.
+     * Pass 1 reads one declaration and is exact; pass 2 asks
      * whether *all* of them agree, and a set with a declaration missing can
      * agree with itself and still be wrong - so a dropped declaration disables
      * the second pass rather than being ignored by it.
@@ -517,8 +517,8 @@ static void testAlternateSettings(void)
     CHECK_EQ(value, 2, "with its own cadence");
 
     /*
-     * **More interfaces than the tracked set, which is where review round 3
-     * found a confident wrong answer**: an untracked interface used to read as
+     * **More interfaces than the tracked set, which is where a confident
+     * wrong answer was found**: an untracked interface used to read as
      * running alternate 0, so a lookup answered alternate 0's cadence for an
      * interface that is demonstrably running something else. An unknown
      * alternate now refuses.
@@ -548,8 +548,8 @@ static void testAlternateSettings(void)
              "alternate it has demonstrably left");
 
     /*
-     * **...and that uncertainty may not outlive the configuration it was about**
-     * (review round 4). A SET_CONFIGURATION returns every interface to alternate
+     * **...and that uncertainty may not outlive the configuration it was about**.
+     * A SET_CONFIGURATION returns every interface to alternate
      * 0 and this file knows it, so a selection it could not keep stops being a
      * reason to doubt anything. Leaving the flag set made a device's own valid
      * alternate-0 declarations permanently unanswerable.
@@ -613,7 +613,7 @@ static void testTableFullAndBadIntervals(void)
 
     CHECK_EQ(descWalk(&parse, &d), XHCI_DESC_FOLD_COMMIT, "committed");
     /*
-     * Each takes an entry and each is born unusable (review round 4): the entry
+     * Each takes an entry and each is born unusable: the entry
      * is what makes a later valid duplicate of the same endpoint find the
      * contradiction rather than becoming the answer.
      */
@@ -713,7 +713,7 @@ static void testTableFullAndBadIntervals(void)
      * differently.** No selection can choose between them - they are the same
      * setting - so the entry stops being usable rather than answering from
      * whichever arrived first, which is what the first draft did while its
-     * comment said it could not choose (review round 2).
+     * comment said it could not choose.
      */
     descBegin(&d);
     descInterface(&d, 1, 1, 2);

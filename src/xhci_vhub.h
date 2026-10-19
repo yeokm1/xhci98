@@ -1,50 +1,29 @@
 /*
- * xhci_vhub.h - the virtual USB 2.0 hub on a root port (src/xhci_vhub.c),
- * roadmap task 24.3, design record 12
- * (docs/contributing/design/12-virtual-hub-on-root-ports.md).
+ * xhci_vhub.h - the virtual USB 2.0 hub on a root port, roadmap task 24.3,
+ * design record 12 (docs/contributing/design/12-virtual-hub-on-root-ports.md).
  *
- * ## What this file is, and what it deliberately is not
+ * **The virtual hub was the miniport's, and the HCD has none.** Its pure core
+ * (xhci_vhub.c), its host suite (test_vhub.c) and the root-hub and device
+ * halves that drove it (xhci_rh.c, xhci_slot.c) left the tree on 2026-10-02;
+ * the HCD reads no XhciVirtualHSHub* value (hcd_ctl.c). What stays here is
+ * the types and values XHCI_EXTENSION embeds (`VhubConfig`, `Vhub[]`), kept
+ * for the layout the offset tables and snapshot readers depend on; those
+ * fields are never written, and the text below describes the miniport. The
+ * functions this header used to declare have no definition anywhere and are
+ * no longer declared.
  *
- * It is the **pure core** of the virtual hub in the design record 03 section 2
- * sense: computation over caller-supplied state, no MMIO, no DDK, no IRQL, no
- * usbport service, no lock. Sub-task 24.3.2 wrote it with its host vectors
- * (test/test_vhub.c); 24.3.3 embedded the per-port records in the extension
- * (`XHCI_EXTENSION.Vhub`) and wired the root-hub half (src/xhci_rh.c) and the
- * device half - the address-0 open, `SubmitTransfer` and the completion list
- * (src/xhci_slot.c) - to it. Record 12's rule 2 (off means today's driver) is
- * held there, by testing the applied mode before any call into this file;
- * record 12 section 10 says where each verdict is carried out.
- *
- * Everything here is one of four things, each a section below:
- *
- *   - the switch and the two id strings (record 12 section 3.1): what was read,
- *     what is applied, and why a value was refused;
- *   - the request table (3.3): the whole virtual device, as the answer to one
- *     SETUP packet;
- *   - the per-port state (3.2, 3.5, 3.8): the value-1 decision, the two views of
- *     one physical port, and what each root-hub event does to them;
- *   - the status-change pipe's one byte (3.4).
- *
- * What it decides it returns as a verdict for the caller to carry out - "run
- * the existing disable body", "resume the physical port", "hold this reset" -
- * so that every PORTSC write, every slot and every transfer stays where it is
- * today, in src/xhci_rh.c and src/xhci_slot.c.
- *
- * C89 only. Every function is callable at any IRQL.
+ * C89 only.
  */
 
 #ifndef XHCI_VHUB_H
 #define XHCI_VHUB_H
 
 /*
- * Only the compat shim, on src/xhci_topo.h's terms: the extension will embed
+ * Only the compat shim, on src/xhci_topo.h's terms: the extension embeds
  * XHCI_VHUB, so src/xhci.h has to be able to include this header, and nothing
- * here may include xhci.h back. The setup packet is taken through a forward
- * declaration; src/xhci_vhub.c includes the real headers.
+ * here may include xhci.h back.
  */
 #include "xhci_compat.h"
-
-struct _XHCI_SETUP_PACKET;
 
 /* ------------------------------------------------------------------ */
 /* The switch and the ids (record 12 section 3.1)                      */
@@ -122,45 +101,6 @@ typedef struct _XHCI_VHUB_CONFIG {
     UCHAR Reserved[6];
 } XHCI_VHUB_CONFIG, *PXHCI_VHUB_CONFIG;
 
-/*
- * Parse one id string out of the service's buffer. `length` is the byte count
- * the buffer holds (XHCI_VHUB_ID_BUF_BYTES when the driver calls it); only the
- * bytes before the first terminator are read. UTF-16LE or single-byte is
- * decided from byte 1 alone: every accepted form is at least four ASCII
- * characters, so byte 1 is 0 in UTF-16 and a character in single-byte (3.1).
- * Returns XHCI_VHUB_ID_*; `*id` and `*encoding` are written on every return.
- */
-ULONG XhciVhubParseId(const UCHAR *buffer,
-                      ULONG length,
-                      ULONG isVendor,
-                      USHORT *id,
-                      UCHAR *encoding);
-
-/*
- * Take the switch read. Resets `config`, records the read, and applies OFF on
- * a failed read, a 0 or a refused value. Returns nonzero exactly when the ids
- * must be read next - that is, the value was 1 or 2 - so the caller's
- * "never consult them with the switch off" is this return and nothing else.
- */
-ULONG XhciVhubConfigSwitch(PXHCI_VHUB_CONFIG config,
-                           ULONG status,
-                           ULONG value);
-
-/*
- * Take the two id reads, after XhciVhubConfigSwitch returned nonzero. Both are
- * parsed and recorded whichever fails first, so a dump names every bad value
- * at once; the mode is applied only when both are XHCI_VHUB_ID_OK, and
- * otherwise OFF with `Refused` naming the vendor id first. A buffer is read
- * only when its status is success. Called with no mode pending it changes
- * nothing. Returns the applied mode.
- */
-ULONG XhciVhubConfigIds(PXHCI_VHUB_CONFIG config,
-                        ULONG vidStatus,
-                        const UCHAR *vidBuffer,
-                        ULONG pidStatus,
-                        const UCHAR *pidBuffer,
-                        ULONG length);
-
 /* ------------------------------------------------------------------ */
 /* The request table (record 12 section 3.3)                           */
 /* ------------------------------------------------------------------ */
@@ -236,27 +176,6 @@ typedef struct _XHCI_VHUB_IDENTITY {
 
 /* The interrupt endpoint's bInterval (3.3's configuration row). */
 #define XHCI_VHUB_INTERRUPT_INTERVAL 12U
-
-/*
- * Answer one SETUP packet. `reply` must hold XHCI_VHUB_REPLY_MAX bytes; on
- * DATA `*replyLength` is the count to return, which is never more than
- * `wLength`. Pure: nothing here changes any state, and a request that would
- * (an address, a configuration, a port feature) comes back as a verdict.
- */
-ULONG XhciVhubRequest(const XHCI_VHUB_IDENTITY *identity,
-                      const struct _XHCI_SETUP_PACKET *setup,
-                      UCHAR *reply,
-                      ULONG *replyLength,
-                      ULONG *arg);
-
-/*
- * A four-byte status answer - GET_PORT_STATUS(1)'s wPortStatus then
- * wPortChange, little-endian - truncated to `wLength`. Returns the count.
- */
-ULONG XhciVhubStatusBytes(ULONG status,
-                          ULONG change,
-                          ULONG wLength,
-                          UCHAR *reply);
 
 /* ------------------------------------------------------------------ */
 /* The per-port state (record 12 sections 3.2, 3.5, 3.8)               */
@@ -372,175 +291,6 @@ typedef struct _XHCI_VHUB {
                              * if one comes, is nobody's (task 24.3.4)    */
     UCHAR Reserved[4];
 } XHCI_VHUB, *PXHCI_VHUB;
-
-/*
- * StartController. Clears the record; at value 2 stands the hub up - powered,
- * not enabled, port 1 powered - and latches the root port's one
- * C_PORT_CONNECTION (3.8), with port 1's if `connected`. The driver passes 0
- * and leaves port 1's to the root hub's seed reading, whose CSC reaches it
- * through XhciVhubAbsorb; the argument is for a caller that has read the
- * port first.
- */
-ULONG XhciVhubStart(PXHCI_VHUB hub, ULONG applied, ULONG connected);
-
-/*
- * RH_SetFeaturePortReset. At 0, and at 1 on a port with no hub, the answer is
- * PHYS_RESET alone, which is today's path. At 1 with a hub it is a physical
- * reset owned by the upstream view, held while `disownPending`. At 2 it is
- * synthetic: the hub goes back to Default at once, port 1 reads disabled, and
- * a device enabled on the physical port is taken out of service by DISABLE
- * (3.8). A hub reset that re-arms the hub latches port 1's C_PORT_CONNECTION
- * when a device is there, as a real hub's reset - a power cycle of its ports -
- * does, so the hub enumerates it again once configured. Either way the second
- * reset of the hub's own enumeration bracket keeps the EP0 binding and arms
- * nothing, once per claim.
- *
- * Every `physStatus` below is XhciPortShadowReport's wPortStatus for the
- * physical port, read after the shadow's last refresh.
- */
-ULONG XhciVhubRootReset(PXHCI_VHUB hub,
-                        ULONG applied,
-                        ULONG generation,
-                        ULONG disownPending,
-                        ULONG physStatus);
-
-/*
- * A physical reset ended: its PRC, or the deadline with `timedOut`. Only a
- * reset this record owns under `generation` is taken; anything else returns
- * NONE and is today's. A root reset at 1 takes the decision of 3.2 here - a
- * decoded Full or Low `speed` is HUB, anything else or a timeout is DIRECT -
- * and a decision that changes one already taken asks FORCE_CONNECT and drops
- * the hub. A port-1 reset latches port 1's C_PORT_RESET, the timeout included,
- * as the root port's does today. A port-1 reset whose deadline passes, or one
- * owned by nobody, leaves `LateEnd` set until the next reset on the port or a
- * reinitialisation: its PRC may still come, and is nobody's even after the
- * hub has gone.
- */
-ULONG XhciVhubResetDone(PXHCI_VHUB hub,
-                        ULONG applied,
-                        ULONG generation,
-                        ULONG timedOut,
-                        ULONG speed,
-                        ULONG physStatus);
-
-/*
- * The disable owed on this port has been confirmed. A reset held by 3.3's gate
- * starts now, under `generation`.
- */
-ULONG XhciVhubDisownCollected(PXHCI_VHUB hub,
-                              ULONG applied,
-                              ULONG generation);
-
-/*
- * The change bits one shadow refresh latched (XhciPortShadowUpdate's return),
- * given the physical status after it (XhciPortShadowReport's). Routes each to
- * the view that owns it and returns in `*strip` the bits the caller removes
- * from the shadow's `Changes`, since the root report no longer reads them
- * there. Call it after XhciVhubResetDone for the same refresh, and do not
- * feed it again a connect change a caller already spent on a hub that reset
- * stood up. At 1 a reading with no device, or with a connect change, retires
- * the hub (DROP) and strips nothing: usbhub removes the hub it believes is
- * there, on NT 6.x without disabling the port (task 24.3.4).
- */
-ULONG XhciVhubAbsorb(PXHCI_VHUB hub,
-                     ULONG applied,
-                     ULONG latched,
-                     ULONG physStatus,
-                     ULONG *strip);
-
-/*
- * The root port's RH_GetPortStatus answer, from today's (`todayStatus`,
- * `todayChange`, XhciPortShadowReport's). Unchanged at 0 and on a port with no
- * hub; at 1 with a hub the enable, reset and suspend groups are the upstream
- * view's; at 2 it is the upstream view's entirely.
- */
-VOID XhciVhubRootReport(const XHCI_VHUB *hub,
-                        ULONG applied,
-                        ULONG todayStatus,
-                        ULONG todayChange,
-                        ULONG *status,
-                        ULONG *change);
-
-/*
- * RH_ClearFeaturePortXChange for `bit` (one XHCI_HUB_C_PORT_*). Clears the
- * upstream view's copy; the caller clears the shadow's as today, which is
- * harmless where the shadow has none.
- */
-VOID XhciVhubRootClearChange(PXHCI_VHUB hub, ULONG applied, ULONG bit);
-
-/* RH_ClearFeaturePortEnable, and RH_ClearFeaturePortPower (`on` 0) or
- * RH_SetFeaturePortPower (`on` 1). At 1 with a hub both clears are DROP and
- * today's body runs as it does now; at 2 they are 3.8's. */
-ULONG XhciVhubRootDisable(PXHCI_VHUB hub, ULONG applied, ULONG physStatus);
-ULONG XhciVhubRootPower(PXHCI_VHUB hub,
-                        ULONG applied,
-                        ULONG on,
-                        ULONG physStatus);
-
-/* RH_SetFeaturePortSuspend (`set` 1) and RH_ClearFeaturePortSuspend (`set` 0)
- * on a port with a hub: the upstream half of 3.5's merge. */
-ULONG XhciVhubRootSuspend(PXHCI_VHUB hub,
-                          ULONG applied,
-                          ULONG set,
-                          ULONG physStatus);
-
-/*
- * SET_PORT_FEATURE (`set` 1) or CLEAR_PORT_FEATURE (`set` 0) on port 1, the
- * selector already checked by XhciVhubRequest. `generation` is what a reset
- * started here is owned under. A port-1 disable or power-off ends a port-1
- * reset the owed disable was holding, with port 1's C_PORT_RESET.
- */
-ULONG XhciVhubPort1Feature(PXHCI_VHUB hub,
-                           ULONG set,
-                           ULONG selector,
-                           ULONG generation,
-                           ULONG disownPending,
-                           ULONG physStatus);
-
-/* GET_PORT_STATUS(1): wPortStatus and wPortChange from the physical status
- * (XhciPortShadowReport's) and the decoded speed. */
-VOID XhciVhubPort1Report(const XHCI_VHUB *hub,
-                         ULONG physStatus,
-                         ULONG speed,
-                         ULONG *status,
-                         ULONG *change);
-
-/* A resume this record asked of the physical port has finished; and a resume
- * the device started (remote wake). */
-ULONG XhciVhubResumeDone(PXHCI_VHUB hub);
-ULONG XhciVhubRemoteWake(PXHCI_VHUB hub);
-
-/*
- * The hub's own device lifecycle. ClaimOpen answers whether an address-0
- * OpenEndpoint on this port is the hub's, and spends the arm; SetAddress and
- * SetConfig follow the verdicts of XhciVhubRequest.
- */
-ULONG XhciVhubClaimOpen(PXHCI_VHUB hub);
-VOID XhciVhubEp0Closed(PXHCI_VHUB hub);
-VOID XhciVhubSetAddress(PXHCI_VHUB hub, ULONG address);
-VOID XhciVhubSetConfig(PXHCI_VHUB hub, ULONG value);
-
-/* The root hub rebuilt without a start - a resume, restored (`restored`) or
- * reinitialised, or a recovery in place. Every reset the record owns ends, a
- * hub-less record's too; after a restore a port-1 or nobody's reset leaves
- * `LateEnd`, since the registers survived and its PRC may still come. At 2
- * the hub is kept and a device the reinitialisation took (`deviceLost`) is a
- * connect change on port 1 (3.8). */
-ULONG XhciVhubReinit(PXHCI_VHUB hub,
-                     ULONG applied,
-                     ULONG deviceLost,
-                     ULONG restored);
-
-/* The status-change pipe's byte (3.4): 0x02 while port 1 has a change and the
- * hub is configured, else 0, which means "keep the transfer pending". */
-ULONG XhciVhubPipeByte(const XHCI_VHUB *hub);
-
-/*
- * The root-hub port (1-based) whose virtual hub holds usbport address
- * `address`, or 0. What 3.6's TT comparison asks: a `HubAddr` naming a virtual
- * hub is an agreed pair, since the graph never holds one.
- */
-ULONG XhciVhubFindAddress(const XHCI_VHUB *hubs, ULONG count, ULONG address);
 
 XHCI_C_ASSERT(vhub_config_size, sizeof(XHCI_VHUB_CONFIG) == 32);
 XHCI_C_ASSERT(vhub_size, sizeof(XHCI_VHUB) == 32);

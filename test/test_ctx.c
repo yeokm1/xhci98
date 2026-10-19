@@ -756,7 +756,7 @@ static void test_both_strides(void)
  *
  * These are *not* the `bInterval` conversion in docs/usb-xhci-info/xhci-data-structures.md
  * section 8 - usbport hands the miniport no `bInterval` *(this said the miniport
- * "never sees" one until the post-Phase 13 review rounds; task 9-A.2's descriptor snoop sees it, on
+ * "never sees" one until after Phase 13; task 9-A.2's descriptor snoop sees it, on
  * EP0 and for isochronous endpoints only, and it never reaches this path)*.
  * usbport has already applied
  * that table and hands over a bucketed `Period` whose unit **differs by speed**:
@@ -962,7 +962,7 @@ static void test_endpoint_params(void)
 
     /*
      * Low Speed, which had **no valid vector through this function at all**
-     * until the ninth review pointed it out - every LS check was against
+     * until a later revision - every LS check was against
      * `XhciIntervalFromPeriod` directly, so the speed had never been carried
      * through the builder that consumes it. This is the shape of a real HID
      * endpoint on a Low-Speed keyboard: 8-byte packets, 8 ms.
@@ -1050,7 +1050,7 @@ static void test_endpoint_params(void)
      * assumption rather than a derivation.
      *
      * *(This said the Interval comes from neither `Period` nor "a descriptor
-     * (which the miniport never sees)", until the post-Phase 13 review rounds. Task 9-A.2 built that
+     * (which the miniport never sees)", until after Phase 13. Task 9-A.2 built that
      * channel: where the snooped `bInterval` is known, `src/xhci_ctx.c` derives
      * the Interval from it and these two constants are not used. The vectors
      * below are the case where it is not known - which is why they still read
@@ -1269,8 +1269,7 @@ static void test_endpoint_params_refusals(void)
 }
 
 /*
- * **The two speeds, and what happens when they disagree** (tenth review,
- * finding 3).
+ * **The two speeds, and what happens when they disagree**.
  *
  * usbport buckets `Period` against the speed *it* believes, which decides the
  * unit; the Endpoint Context's `Interval` must be legal for the speed the
@@ -1361,8 +1360,8 @@ static void test_interval_for_speed(void)
 
     /*
      * **Max Burst follows the *device* speed**, which is the opposite of the
-     * interval's unit and is the asymmetry the eleventh review caught an earlier
-     * vector pinning backwards. Spec 6.2.3.4 p.418: "For all Low-/Full-Speed
+     * interval's unit and is the asymmetry an earlier vector pinned
+     * backwards until it was corrected. Spec 6.2.3.4 p.418: "For all Low-/Full-Speed
      * endpoints this field shall be cleared to '0'." So a Full-Speed endpoint
      * arriving with a transaction count above one is refused, not given a burst
      * - whatever usbport believed its speed to be.

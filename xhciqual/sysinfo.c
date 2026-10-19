@@ -162,7 +162,7 @@ int smb_scan(const u8 *area, u32 len, u32 area_phys, SYSINFO *si)
         si->table_count = rd16(p + 0x1C);
     } else if (gotd) {
         /* Before an unusable 3.0 entry: a legacy table below 4 GB can
-         * still be read (review round 1, P3). */
+         * still be read. */
         const u8 *p = area + offd;
 
         si->smb_kind = SMB_EP_DMI;
@@ -344,7 +344,7 @@ static void take(const SMB_STRUCT *st, u8 type, SYSINFO *si)
 }
 
 /*
- * **Identifiers by value, not only by field** (review round 1, P1). Not
+ * **Identifiers by value, not only by field**. Not
  * copying the serial's field is not enough: a Type 1 whose manufacturer and
  * serial number name the same string index, or a product string whose text
  * is the board's serial, prints the identifier through an allowed field.
@@ -357,7 +357,7 @@ static void take(const SMB_STRUCT *st, u8 type, SYSINFO *si)
  * orders, ignoring case and separators. The identifier itself is never
  * stored in SYSINFO.
  *
- * **No exception for firmware placeholders** (review rounds 3 to 5): a
+ * **No exception for firmware placeholders**: a
  * list of "fillers" cannot know that this unit's "123456789" is not its
  * serial, and the rule is absolute. So a serial of "0" or "Default string"
  * withholds every printed string holding it, a BIOS date included; a
@@ -366,7 +366,7 @@ static void take(const SMB_STRUCT *st, u8 type, SYSINFO *si)
  * And when the walk cannot finish - a malformed structure, or a table
  * longer than SMB_TABLE_MAX or 4096 structures - an identifier in the
  * unread part could match an earlier printed string, so every SMBIOS
- * string is withheld (review round 2, P1); the version, memory sums and
+ * string is withheld; the version, memory sums and
  * the rest still print.
  */
 #define WITHHELD "(withheld)"
@@ -476,8 +476,8 @@ static void withhold_if(char *shown, const char *id)
  * a maker "ACME" and a product "12345678" print a serial "ACME 12345678"
  * that neither field carries - or a field and the line's fixed words, or
  * the field a 79-column cut leaves at the end of a short line; and one
- * withholding can move that cut onto another identifier (whole-branch
- * review, area 3, rounds 3 and 4). So the identifiers the scrubber fetches
+ * withholding can move that cut onto another identifier. So the
+ * identifiers the scrubber fetches
  * are also held here, in this file's own list, never in SYSINFO, until
  * sysinfo_seal - run once every field is filled - has checked both
  * reports exactly as printed, line by line, against all of them, and

@@ -1,16 +1,19 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 13, 2026-10-16 (revision 13, the drivers' logging
-level, below; revision 12, PCI configuration and xhci98's query
-request, below). Revision 11 adds the not-removable
-unit's stop (below). Revision 10 adds a per-user "Start at login" choice
+Status: revision 15, 2026-10-19 (revision 15, Windows 2000's USB disk
+class and its stopped mark, roadmap-usb4 task 42-A.28: sections 6.5 and
+14; revision 14, XHCISNAP's reading
+moved here, below; revision 13, the drivers' logging level, below;
+revision 12, PCI configuration and xhci98's query request, below).
+Revision 11 adds the not-removable unit's stop (below).
+Revision 10 adds a per-user "Start at login" choice
 (section 7.4, the owner's request of 2026-10-16), with an addendum on the
 tree's labels (end of section 7.4). Revision 9 adds the drivers' logs
 (below). Revision 7 adds Safely Remove for plain USB
 devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
 decision T6; sections 1.3, 3.1, 7.1, 7.3, 11, 12 and 14 change with it.
-Revision 6 was reviewed and revised five times the night before; the code
-is written against both. Revision 8, the same day, adds the install
+Revision 6 was reviewed and revised five times early on 2026-10-16
+(`63cbfdbe`); the code is written against both. Revision 8, the same day, adds the install
 directory (see below). Written for the owner's instructions of
 2026-10-16: the command-line `INSTALL /devices` and `INSTALL /eject` of
 design record 24 are not easy to use, so a separate graphical tool shows
@@ -70,6 +73,14 @@ replaces `XHCISNAP -verbosity` and `SNAPON.BAT` (XHCISNAP still ships in
 driver setting the tool writes (section 7.5). A standard user on 2000 to 7 sets
 it through a second mode of section 6.6's elevated run, `/setlevel`.
 Sections 1.2, 1.3, 7.3, 11 and 12 change with it.
+
+Revision 14, 2026-10-19 (roadmap-usb4 42-A.4, the owner's 42-0.3
+decision of 2026-10-18): XHCISNAP is retired in `3.1.0.0` and its
+reading moves into the tool: `XHCITR /snapshot`, `/dump` and `/probe`,
+File > Save Snapshot..., and a "Snapshot" part at the end of Save Report
+and `/report` (section 15). XHCISNAP.EXE and its SNAPON.BAT, SNAPGET.BAT
+and SNAPOFF.BAT leave the package. Sections 4.6, 4.8 and 12 change with
+it.
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
@@ -146,8 +157,8 @@ authentication material.
   section 6.5 does not offer (one with no disk or volume on it). Until
   revision 7 plain USB devices got details only (decision T6); section 6.5
   is what replaced that.
-- Writing `LowerFilters` to repair a missing child filter (Planned
-  EJRB.1); the tool shows the condition (record 24 section 4.3) and says
+- Writing `LowerFilters` to repair a missing child filter (roadmap-usb4
+  42-0.4 and 42-A.5, was EJRB.1); the tool shows the condition (record 24 section 4.3) and says
   what to do.
 
 ## 2. Where it lives
@@ -281,10 +292,11 @@ branch, marked "(behind <router name>)".
 - **Recording off.** Reading a log writes nothing; the levels are set in
   section 7.5's dialog (revision 13). The node's advice:
   - xhci98, level 0 (the driver does not answer) or 1 (counters only):
-    "To record the log, run SNAPON.BAT from the package's
-    tools\xhcisnap folder, then restart Windows." On 2000 and later the
-    text adds "as an administrator" (on Vista and 7: right-click, Run as
-    administrator).
+    "To record the log, set xhci98's level to 2 in View > Logging level,
+    then restart Windows." On 2000 and later the text adds "(as an
+    administrator, or with Set as administrator...)". Until revision 14
+    (section 15) it named SNAPON.BAT in the package's tools\xhcisnap
+    folder.
   - xhcicm, level below 2: "To record the log, set the DWORD value
     XhciCmLogVerbosity to 2 under HKEY_LOCAL_MACHINE\<the NHI's driver
     key> (as an administrator on 2000 and later), then restart
@@ -379,9 +391,11 @@ unelevated user can open it on every target is read by leg T.1 (section
   the link is global on XP and later), with `FILE_DEVICE_SECURE_OPEN` on
   NT and the system's default security. The name is published as
   `XhciCmQueryName` (REG_SZ) in the NHI's hardware key after the link
-  exists and deleted before the link goes. The tool trusts the mapping
-  only when the answer's instance ID equals the devnode it read it from,
-  so a stale or recycled name never stands for another NHI.
+  exists and written empty before the link goes (not deleted:
+  `ZwDeleteValueKey` has no Windows 98 evidence, section 14). The tool
+  reads an empty value as no query device, and trusts the mapping only
+  when the answer's instance ID equals the devnode it read it from, so a
+  stale or recycled name never stands for another NHI.
 - **Lifetime.** Created after the NHI's start has succeeded (removed again
   if a later start step fails). On stop, surprise removal and remove the
   driver sets `CM_Q_F_STOPPING`, deletes the value and the link, marks the
@@ -531,10 +545,11 @@ Since revision 12 the tool reads xhci98's log through its query request
 No driver change (decision T3 holds). The tool opens the controller as it
 already does (`\\.\HCD<n>`, or its interface path) and sends
 `IOCTL_USB_USER_REQUEST` with `USBUSER_PASS_THRU` and the snapshot GUID,
-schema 5 (design record 08, `xhcisnap\README.md`), exactly as
-`XHCISNAP`'s `take_window`: a window of the extension region at offset 0
-for the header (the ring's offset), then one window at the ring's offset
-that must hold the whole ring, and the HCD region (version 1) for the
+schema 5 (design record 08, `docs\contributing\snapshot-reader.md`),
+exactly as `XHCISNAP`'s `take_window` (now `xhcitr\tr_snap.c`'s): a
+window of the extension region at offset 0 for the header (the ring's
+offset), then one window at the ring's offset that must hold the whole ring,
+and the HCD region (version 1) for the
 counter block `XHCIHC_COUNTERS`. The ring is decoded with the header of
 the window that carried it - the door fills header and payload together
 under the controller lock (`hcd_door.c`) - and its verbosity, offset,
@@ -550,8 +565,9 @@ tool does not know is shown as such, not decoded.
 - **Levels 2 and 3**: the counters and the ring.
 - **Level 4**: the counters; the ring is withheld, because at level 4 it
   holds kernel addresses (`start.bar`, `start.ok`, `xhci_log.h`), and the
-  node says to use level 2 for a log the tool can show (`XHCISNAP`'s
-  maintainer report is the level-4 reading).
+  node says to use level 2 for a log the tool can show (`XHCITR
+  /snapshot`, `XHCISNAP`'s maintainer report up to `3.0.0.0`, is the
+  level-4 reading; section 15).
 - The counters are named from `XHCIHC_COUNTERS`'s own fields
   (`xhcitr\tr_hcctr.h`, one line a field, which the host suite holds to
   `src\xhci_counters.h` field by field by offset); a word past the table is
@@ -610,12 +626,27 @@ header type and bus numbers its walk needs.
   8 bridges deep, 4 ports; a bound reached sets `CM_QP_F_TRUNCATED`, so
   the largest answer is 64 + 37 x 288 = 10,720 bytes and the tool's first
   buffer (16 KiB) holds it. A port with no bus numbers has nothing below.
-- **Windows 98 SE and ME**: the NHI and the tunnel ports are read; the
-  functions below are not (one entry a port, "not read on this system").
-  A bus a tunnel brings up after boot is not numbered by `PCI.VXD` (record
-  21 section 6.1), and the route that reads below a port with a guard
-  is branch `tb-code29`'s `PCI.VXD` `_PCI_Read_Config`, not yet on this
-  line; once it is, this request moves to it.
+- **Windows 98 SE and ME** (roadmap-usb4 task 42-A.14, 2026-10-19): the
+  NHI and the tunnel ports are read as above; the walk below them is
+  handed to the 98 CONFIGMG worker (`cm_cfgwk.c`, `CmCfgwkPciAsk`) and
+  waited for 3 s at most. The worker reads below each member through
+  `PCI.VXD`'s guarded `_PCI_Read_Config` (`CmCfgmgPciRead` behind
+  `CmCfgmgPciOpen`, record 21 section 6.1.1), between its other
+  operations and never alongside a numbering, and enters a bridge's bus
+  only where `PCI.VXD` reads that bridge with the same bus numbers itself
+  (the HAL, which on 98 SE answers only functions `PCI.VXD` knows) or
+  where its own numbering gave them; a member whose controller was lost
+  (`CONTROLLER_UNAVAILABLE`'s removal or no-scan re-enumeration owed) is
+  not read below. The query device reaches the worker through a pointer
+  the thread publishes and withdraws before it stops the worker, under a
+  rundown count that covers the posting alone; the request is a block of
+  its own that the asker and the worker share, freed by whichever lets go
+  last, so a worker inside a blocked CONFIGMG call answers late or never
+  and touches nothing of the device. Where the walk is not made, each
+  member keeps one `CM_QP_S_NOT_READ_OS` entry with its reason in
+  `CM_QP_E_INFO` (`CM_QP_NR_*`: no worker, the worker busy, `PCI.VXD`'s
+  guard refused, the controller lost; 0 from a driver before it), and
+  the tool says which.
 - **No kernel address.** The answer holds configuration space and the
   driver's own counts. The BARs and bridge windows are bus addresses,
   shown by the owner's request; they are the ranges Device Manager's
@@ -673,9 +704,11 @@ read's state, the build flavour), then the parts. Sizing is `XCMQ`'s.
   before. An older `xhci98.sys` answers the request with
   `STATUS_INVALID_DEVICE_REQUEST`: the tool reads its log through the
   door as section 4.6 has it, and says "not served by this xhci98.sys"
-  for its configuration space. `XHCISNAP` stays in `3.0.0.0` unchanged;
-  its retirement is the roadmap's "Planned - Retiring XHCISNAP" (SNAP.1
-  to SNAP.3).
+  for its configuration space. `XHCISNAP` stayed in `3.0.0.0` unchanged;
+  it was retired in `3.1.0.0` (roadmap-usb4 tasks 42-0.3 and 42-A.4,
+  were SNAP.1 to SNAP.3), its reading moved into this tool (section 15),
+  and the pass-through stays: Windows' own property tabs use it, and the
+  tool's snapshot reads through it.
 
 ## 5. The USB branch
 
@@ -742,7 +775,12 @@ record.
    (setupapi on 2000), with the not-removable fallback
    `CM_Query_And_Remove_SubTreeA`; on 98 SE and ME
    `CM_Query_Remove_SubTree` then, if accepted, always `CM_Remove_SubTree`,
-   both `UI_NOT_OK`. Never forced, never `DIF_REMOVE`, one unit at a
+   both `UI_NOT_OK` - since 2026-10-18 (record 24 section 7.1's revision;
+   record 21 section 7.2, the 9x half; the code is 42-A.13) a unit's
+   eject on 98 SE and ME is asked of the connection manager through
+   record 24's ask and result values instead, the two calls staying for
+   the plain USB devices of section 6.5. Never forced, never
+   `DIF_REMOVE`, one unit at a
    time. Since revision 11 the not-removable fallback is
    `CM_Query_And_Remove_SubTreeW`, decided by `inst_eject_nt_step` as
    record 24 section 7.2 has it, and a unit not marked removable in a
@@ -778,6 +816,196 @@ releases the mutex and starts itself with `runas` (Vista and 7) and
 whole transaction itself and exits. Since revision 11 a unit's elevated
 run is section 6.6's, waited for and answered; a USB device's is as
 before.
+
+### 6.5 Plain USB devices (revision 7)
+
+The owner's decision of 2026-10-16: the tool stops a plain USB device too,
+on every target, as Windows' own Safely Remove does. Sections 6.1 to 6.4
+stay the Thunderbolt units'; this section is the USB devices'. Nothing of
+`xhci98.sys`, `xhciuas.sys` or `xhcicm.sys` changes for it.
+
+**The device and what stops with it.** A USB device is the devnode a
+port of section 5 names (`IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME`,
+found in the walk by its driver key), on any controller the tool lists -
+xhci98's or Windows' own, a dock's behind a tunnel included. Its **set**
+is everything Windows stops with it:
+
+- on 98 SE and ME, the device and every devnode below it in the walk (a
+  composite device's functions, a storage device's disks): the removal of
+  a subtree there is the subtree;
+- on NT, the same, and then, until nothing new is added, the removal and
+  ejection relations of every member (`CM_Get_Device_ID_ListA` with
+  `CM_GETIDLIST_FILTER_REMOVALRELATIONS` and `_EJECTRELATIONS`, from
+  `cfgmgr32.dll`, else `setupapi.dll`, looked up at run time) and every
+  devnode below each: a disk's volumes are its removal relations, outside
+  its subtree. A relation that cannot be read, or that names a devnode
+  the walk does not hold, leaves the set unknown.
+
+The port scan runs on every refresh, in the tray too, whatever the View
+check boxes show, so the tray and `/eject` see the same devices as the
+window.
+
+**Listed.** A device is listed (in the tree with its state, in the tray's
+menu, for `/eject`) when its set holds none of:
+
+- a hub (the port says so, or the hardware or compatible IDs carry
+  `USB\Class_09`), a root hub, or a host controller;
+- an input device: a devnode of setup class `HIDClass`, `Keyboard` or
+  `Mouse`, bound to `hidusb`, or with an instance, hardware or compatible
+  ID beginning `USB\Class_03` or `HID\` - so a keyboard, a mouse, a
+  tablet and a composite device with an input function are never listed;
+- a wireless radio (device class `E0`, a Bluetooth adapter);
+
+its devnode was found in the walk (a device with no driver has none on
+98 SE and ME, and no disk anywhere), and its set holds a disk (setup
+class `DiskDrive`), or, on NT, a volume (setup class `Volume`); on 98 SE
+and ME the disks are found as section 14's drive labels already find
+them. On NT the setup class is `CM_DRP_CLASS`; where that is empty, the
+`Class` value of the class key its `CM_DRP_CLASSGUID` names (revision
+15: Windows 2000 writes a USB disk's `ClassGUID` alone, so without it
+the disk was no disk). Everything else connected gets details only, with the reason ("a
+hub", "an input device", "a wireless radio", "no disk on it").
+
+**Why not "removable" on NT.** The owner's instruction allowed a device
+Windows reports removable. `xhci98.sys` reports `Removable` on every
+device it presents (`src\hcd_pdo.c`), internal ports included: it reads
+no ACPI `_UPC` or `_PLD`. The owner's ThinkPad P14s Gen 1 under 98 SE
+has, on xhci98's root ports, a touchscreen, an integrated camera (a
+composite device), a fingerprint reader and a Bluetooth radio, all
+internal; under the capability rule the camera's parent is
+`SurpriseRemovalOK` and drops out, but a fingerprint reader with a driver
+or the radio would be offered, as Windows' own applet would list them.
+So on every target a disk or a volume decides, and a USB device with no
+storage (a camera, a network adapter, an audio device) is stopped by
+unplugging it, as before. Windows' own applet still lists what it lists.
+
+**Offered.** A listed device is offered when it is started and has no
+problem code, its set is known, holds no more than 64 devnodes, and each
+of them was read whole. One that is stopped is shown "[stopped - unplug
+it]" (held for eject, `tr_held_for_eject`: Code 47 after an eject on XP
+and later; on Windows 2000, which has no Code 47, Code 24, revision 15,
+below); one with another problem code is shown with the code, and is not
+offered.
+
+On 2000 Code 24 is also a failed start, so it reads as held for eject
+only for a devnode this process stopped (step 5's reading at Code 24, or
+a unit's accepted stop), kept until a walk finds it started or a whole
+walk no longer finds it, and, for the device at a USB port, only while
+the port still reports a configuration (`tr_w2k_code24`): the stopped
+device keeps its configuration until it is unplugged, and one plugged in
+again starts unconfigured. A device stopped elsewhere (Windows' own
+Unplug or Eject Hardware, or an elevated child of this tool) reads as
+any Code 24 does. The tray and the window are one process, so a stop
+from either marks both.
+
+**What it is called.** Its disks' names and their drive letters, as units
+are (section 14, "A unit named by its drive" in run 41): "USB Flash Disk
+(F:)"; without a disk, the device's own name. The letters come from the
+same code: on NT the storage device number of each disk's interface
+against each `\\.\X:`, on 98 SE and ME the disk's
+`CurrentDriveLetterAssignment`. On NT a disk is named by its friendly
+name and found by its setup class, so on 2000 both depend on the class
+read above (revision 15); the interface and device-number reads answer
+on 2000 as on XP and 7 (`runs/run-42.md`, "XHCITR on Windows 2000").
+
+**The transaction.** No query device, no epoch and no passes:
+
+1. Confirm, as section 6.2 step 1 and with the same layout: "This stops
+   <device> and everything on it:", each disk with its volumes, then every
+   devnode of the set. Nothing below waits on the user. A thread of the
+   tool's own, with a hidden top-level window and a message loop of its
+   own, in every mode (`/eject` included), counts the device-change
+   notifications Windows broadcasts (`WM_DEVICECHANGE`); it never waits on
+   anything else, so no wait of the eject's thread - the question, the
+   mutex, a walk - can make it miss one. The request carries the count read
+   just before the model it was built from was read.
+2. Take the shared mutex of section 6.3, so that no XHCIINST and no other
+   XHCITR eject runs beside it.
+3. Walk the devnodes again and find the device by its instance ID: its
+   parent must be the devnode it was under when confirmed, its set (read
+   again, relations included) exactly the devnodes confirmed, and it must
+   still be offered by the rules above. Then, immediately before the call,
+   read the count again: any notification since the request's count -
+   while the question was open, the mutex awaited or the walk read -
+   refuses, and the request's count is never moved forward. Otherwise
+   nothing is called and the reason is shown ("The device list changed;
+   nothing was stopped. Look at the tree again."). An instance ID alone
+   cannot tell a device from an identical one plugged into the same port
+   (a location ID, without a serial number); the count is what catches a
+   re-plug. It narrows that case rather than closing it: a USB device has
+   no attachment-lifetime token, and a re-plug faster than Windows'
+   broadcast of it, between the last count and the call, is not seen.
+4. The call on the device's devnode, never on a disk or a function below
+   it:
+   - NT: `CM_Request_Device_EjectA` (setupapi on 2000, as section 6.2),
+     taking the veto type and name. No not-removable fallback: a refusal
+     is shown as it is.
+   - 98 SE and ME: `CM_Query_Remove_SubTree` with `UI_NOT_OK`, then, only
+     if accepted, always `CM_Remove_SubTree`, as section 6.2 step 6 does
+     for a unit.
+5. Release the mutex, then show the result:
+   - stopped: "Windows has stopped <name>.", then what a walk right
+     after reads: the walk whole and the device gone, or held for eject
+     (Code 47, or Code 24 on 2000, the addendum below) - "You can now
+     unplug the device."; the device started
+     again - "The device has started again, so it is not safe to
+     unplug." (exit 4, as record 24 section 8.2 has it); anything else,
+     the walk incomplete included - "Its state could not be read again:
+     check that it is not running before you unplug it." On 98 SE and ME
+     also "Until you unplug it, Device Manager's Refresh can start it
+     again.";
+   - refused: in plain words, with the drive letters where Windows'
+     answer allows it. NT `PNP_VetoOutstandingOpen`: "Windows refused: a
+     program is using F:. Close it and try again." (the device's name in
+     place of the letters when it has none); `PNP_VetoWindowsApp` and
+     `PNP_VetoWindowsService`: "<name> is using F:"; the other veto types
+     and answers as record 24 section 7.2. 98 SE and ME
+     `CR_REMOVE_VETOED`, which names no cause: "Windows refused: F: is in
+     use. A program may have a file open on it, or a DOS box may be using
+     it. Close it and try again." Nothing was changed by any refusal.
+   - exit codes as record 24 section 8.2: stopped 0, refused or started
+     again 4, the list changed or the call not offered 1, a removal that
+     failed after an accepted query 2.
+6. From the tray, a balloon with the outcome (a message box on 98 SE, and
+   for an outcome longer than a balloon), as section 14 has it for units.
+
+Never forced: no `CM_Remove_SubTree` without an accepted query, no veto
+overridden, no `CM_Query_And_Remove_SubTreeA`, no `DIF_REMOVE`, one device
+at a time.
+
+Addendum (2026-10-17, branch `tr-w2kmsg`): Windows 2000 has no Code 47
+(its DDK's `cfg.h` ends at `NUM_CM_PROB` 0x25), so a stopped USB device
+left in its tree read "could not be read again" (the release matrix's 2000
+stick). Step 5 now reads Code 24 on 2000, and on 2000 alone, as stopped:
+"You can now unplug the device." (`tr_usb_after_kind`). Code 24 is run 41's
+2000 bridge after `CM_Query_And_Remove_SubTreeW`; for a USB device after
+`CM_Request_Device_EjectA` it is inferred. Host-tested only. Revision 15
+read it: a Bulk-Only stick and a UAS disk after
+`CM_Request_Device_EjectA` on 2000 read status `0x01806400`, Code 24,
+and this reading now also records the stop that lets the tree and the
+tray mark the device ("Offered", above).
+
+**Rights.** On NT a removable device needs no administrator (Windows'
+own applet runs as the user); a rights refusal is offered elevated on
+Vista and 7 as section 6.4 says, with `/eject id=<instance id>`.
+
+**Where it shows.**
+
+- The window: the USB branch's label of an offered device ends "[can be
+  stopped]"; its details say "Safely Remove: can be stopped here" or why
+  not. Action > Safely Remove..., Delete and the right-click menu act on a
+  USB port node whose device is offered, and on a node of the
+  Thunderbolt branch that is that device's devnode; a USB device behind a
+  dock's controller is stopped by itself, its dock only from the dock's
+  unit.
+- The tray's left-click menu has two groups, each under a grey heading
+  and only when it has an entry: "USB devices" and "Thunderbolt and USB4
+  devices", each item "Safely remove <name>" (grey with the reason when
+  listed but not offered); "No device to stop" when both are empty.
+- `/eject id=<instance id>` takes a USB device's instance ID as it takes
+  a unit's; `/report` writes each device's "Safely Remove:" line.
+- A one-shot answer written to a redirected output (`/eject`, an error
+  of `/report`) is console text, and is wrapped at 79 columns.
 
 ### 6.6 A unit not marked removable (revision 11)
 
@@ -829,174 +1057,32 @@ for those rights for this stop only, when it lacks them.
 6. `/eject id=` started by a user with no administrator rights takes the
    same route for such a unit.
 
+Since 2026-10-18 the mark itself survives a rebuild on Windows 2000 to 7
+where the mark service of record 21 section 7.4, revision 3, runs (task
+42-0.4; the code is 42-A.5): this section's route stays for a unit the
+service has not reached (its restart vetoed, the service stopped, a value
+not yet in effect), and the window shows the mark's state beside the
+unit as that revision says. As built (42-A.5's tool part, 2026-10-19): on NT a unit's
+details read "Safe-removal mark: listed by Windows", "mark written; takes
+effect at the next start of the device", "mark written, but Windows does
+not list it", "not marked", or "not read" with the reason, from its NHI's
+marks answer (`IOCTL_XHCICM_MARKS`, read at each refresh with the query and
+held to its epoch) and the unit's `LowerFilters`; the NHI's details add
+"Mark service: running", "stopped", "not installed" or "not read"
+(`QueryServiceStatus`, looked up at run time). After the tool's own
+successful `CM_Request_Device_EjectA` of a unit, and only when it runs as
+an administrator (an elevated run on Vista and 7), it waits up to 3 s for
+the unit's entry with a departure pending and writes
+`XhciCmEjectConfirm` (`CM_QC_*`, 28 bytes) to the NHI's driver key while
+the value is absent or empty, under the shared eject mutex it already
+holds, and says whether the eject was confirmed; the query-and-remove
+fallback confirms nothing (record 21 section 7.4). The pure half
+(`tr_mark_state`, `tr_mark_find`, `tr_msz_has`, `tr_mark_member`) is in
+`test\test_tr.c`; the marks answer is parsed by `xhcimark\mark_core.c`,
+which XHCITR links.
+
 XHCIINST needs nothing new: it runs as an administrator (record 24 section
 7.2).
-
-### 6.5 Plain USB devices (revision 7)
-
-The owner's decision of 2026-10-16: the tool stops a plain USB device too,
-on every target, as Windows' own Safely Remove does. Sections 6.1 to 6.4
-stay the Thunderbolt units'; this section is the USB devices'. Nothing of
-`xhci98.sys`, `xhciuas.sys` or `xhcicm.sys` changes for it.
-
-**The device and what stops with it.** A USB device is the devnode a
-port of section 5 names (`IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME`,
-found in the walk by its driver key), on any controller the tool lists -
-xhci98's or Windows' own, a dock's behind a tunnel included. Its **set**
-is everything Windows stops with it:
-
-- on 98 SE and ME, the device and every devnode below it in the walk (a
-  composite device's functions, a storage device's disks): the removal of
-  a subtree there is the subtree;
-- on NT, the same, and then, until nothing new is added, the removal and
-  ejection relations of every member (`CM_Get_Device_ID_ListA` with
-  `CM_GETIDLIST_FILTER_REMOVALRELATIONS` and `_EJECTRELATIONS`, from
-  `cfgmgr32.dll`, else `setupapi.dll`, looked up at run time) and every
-  devnode below each: a disk's volumes are its removal relations, outside
-  its subtree. A relation that cannot be read, or that names a devnode
-  the walk does not hold, leaves the set unknown.
-
-The port scan runs on every refresh, in the tray too, whatever the View
-check boxes show, so the tray and `/eject` see the same devices as the
-window.
-
-**Listed.** A device is listed (in the tree with its state, in the tray's
-menu, for `/eject`) when its set holds none of:
-
-- a hub (the port says so, or the hardware or compatible IDs carry
-  `USB\Class_09`), a root hub, or a host controller;
-- an input device: a devnode of setup class `HIDClass`, `Keyboard` or
-  `Mouse`, bound to `hidusb`, or with an instance, hardware or compatible
-  ID beginning `USB\Class_03` or `HID\` - so a keyboard, a mouse, a
-  tablet and a composite device with an input function are never listed;
-- a wireless radio (device class `E0`, a Bluetooth adapter);
-
-its devnode was found in the walk (a device with no driver has none on
-98 SE and ME, and no disk anywhere), and its set holds a disk (setup
-class `DiskDrive`), or, on NT, a volume (setup class `Volume`); on 98 SE
-and ME the disks are found as section 14's drive labels already find
-them. Everything else connected gets details only, with the reason ("a
-hub", "an input device", "a wireless radio", "no disk on it").
-
-**Why not "removable" on NT.** The owner's instruction allowed a device
-Windows reports removable. `xhci98.sys` reports `Removable` on every
-device it presents (`src\hcd_pdo.c`), internal ports included: it reads
-no ACPI `_UPC` or `_PLD`. The owner's ThinkPad P14s Gen 1 under 98 SE
-has, on xhci98's root ports, a touchscreen, an integrated camera (a
-composite device), a fingerprint reader and a Bluetooth radio, all
-internal; under the capability rule the camera's parent is
-`SurpriseRemovalOK` and drops out, but a fingerprint reader with a driver
-or the radio would be offered, as Windows' own applet would list them.
-So on every target a disk or a volume decides, and a USB device with no
-storage (a camera, a network adapter, an audio device) is stopped by
-unplugging it, as before. Windows' own applet still lists what it lists.
-
-**Offered.** A listed device is offered when it is started and has no
-problem code, its set is known, holds no more than 64 devnodes, and each
-of them was read whole. One that is stopped is shown "[stopped - unplug
-it]" (Code 47, held for eject, after an eject on XP and later); one with
-another problem code is shown with the code, and is not offered.
-
-**What it is called.** Its disks' names and their drive letters, as units
-are (section 14, "A unit named by its drive" in run 41): "USB Flash Disk
-(F:)"; without a disk, the device's own name. The letters come from the
-same code: on NT the storage device number of each disk's interface
-against each `\\.\X:`, on 98 SE and ME the disk's
-`CurrentDriveLetterAssignment`.
-
-**The transaction.** No query device, no epoch and no passes:
-
-1. Confirm, as section 6.2 step 1 and with the same layout: "This stops
-   <device> and everything on it:", each disk with its volumes, then every
-   devnode of the set. Nothing below waits on the user. A thread of the
-   tool's own, with a hidden top-level window and a message loop of its
-   own, in every mode (`/eject` included), counts the device-change
-   notifications Windows broadcasts (`WM_DEVICECHANGE`); it never waits on
-   anything else, so no wait of the eject's thread - the question, the
-   mutex, a walk - can make it miss one. The request carries the count read
-   just before the model it was built from was read.
-2. Take the shared mutex of section 6.3, so that no XHCIINST and no other
-   XHCITR eject runs beside it.
-3. Walk the devnodes again and find the device by its instance ID: its
-   parent must be the devnode it was under when confirmed, its set (read
-   again, relations included) exactly the devnodes confirmed, and it must
-   still be offered by the rules above. Then, immediately before the call,
-   read the count again: any notification since the request's count -
-   while the question was open, the mutex awaited or the walk read -
-   refuses, and the request's count is never moved forward. Otherwise
-   nothing is called and the reason is shown ("The device list changed;
-   nothing was stopped. Look at the tree again."). An instance ID alone
-   cannot tell a device from an identical one plugged into the same port
-   (a location ID, without a serial number); the count is what catches a
-   re-plug. It narrows that case rather than closing it: a USB device has
-   no attachment-lifetime token, and a re-plug faster than Windows'
-   broadcast of it, between the last count and the call, is not seen.
-4. The call on the device's devnode, never on a disk or a function below
-   it:
-   - NT: `CM_Request_Device_EjectA` (setupapi on 2000, as section 6.2),
-     taking the veto type and name. No not-removable fallback: a refusal
-     is shown as it is.
-   - 98 SE and ME: `CM_Query_Remove_SubTree` with `UI_NOT_OK`, then, only
-     if accepted, always `CM_Remove_SubTree`, as section 6.2 step 6 does
-     for a unit.
-5. Release the mutex, then show the result:
-   - stopped: "Windows has stopped <name>.", then what a walk right
-     after reads: the walk whole and the device gone, or held for eject
-     (Code 47) - "You can now unplug the device."; the device started
-     again - "The device has started again, so it is not safe to
-     unplug." (exit 4, as record 24 section 8.2 has it); anything else,
-     the walk incomplete included - "Its state could not be read again:
-     check that it is not running before you unplug it." On 98 SE and ME
-     also "Until you unplug it, Device Manager's Refresh can start it
-     again.";
-   - refused: in plain words, with the drive letters where Windows'
-     answer allows it. NT `PNP_VetoOutstandingOpen`: "Windows refused: a
-     program is using F:. Close it and try again." (the device's name in
-     place of the letters when it has none); `PNP_VetoWindowsApp` and
-     `PNP_VetoWindowsService`: "<name> is using F:"; the other veto types
-     and answers as record 24 section 7.2. 98 SE and ME
-     `CR_REMOVE_VETOED`, which names no cause: "Windows refused: F: is in
-     use. A program may have a file open on it, or a DOS box may be using
-     it. Close it and try again." Nothing was changed by any refusal.
-   - exit codes as record 24 section 8.2: stopped 0, refused or started
-     again 4, the list changed or the call not offered 1, a removal that
-     failed after an accepted query 2.
-6. From the tray, a balloon with the outcome (a message box on 98 SE, and
-   for an outcome longer than a balloon), as section 14 has it for units.
-
-Never forced: no `CM_Remove_SubTree` without an accepted query, no veto
-overridden, no `CM_Query_And_Remove_SubTreeA`, no `DIF_REMOVE`, one device
-at a time.
-
-Addendum (2026-10-17, branch `tr-w2kmsg`): Windows 2000 has no Code 47
-(its DDK's `cfg.h` ends at `NUM_CM_PROB` 0x25), so a stopped USB device
-left in its tree read "could not be read again" (the release matrix's 2000
-stick). Step 5 now reads Code 24 on 2000, and on 2000 alone, as stopped:
-"You can now unplug the device." (`tr_usb_after_kind`). Code 24 is run 41's
-2000 bridge after `CM_Query_And_Remove_SubTreeW`; for a USB device after
-`CM_Request_Device_EjectA` it is inferred. Host-tested only.
-
-**Rights.** On NT a removable device needs no administrator (Windows'
-own applet runs as the user); a rights refusal is offered elevated on
-Vista and 7 as section 6.4 says, with `/eject id=<instance id>`.
-
-**Where it shows.**
-
-- The window: the USB branch's label of an offered device ends "[can be
-  stopped]"; its details say "Safely Remove: can be stopped here" or why
-  not. Action > Safely Remove..., Delete and the right-click menu act on a
-  USB port node whose device is offered, and on a node of the
-  Thunderbolt branch that is that device's devnode; a USB device behind a
-  dock's controller is stopped by itself, its dock only from the dock's
-  unit.
-- The tray's left-click menu has two groups, each under a grey heading
-  and only when it has an entry: "USB devices" and "Thunderbolt and USB4
-  devices", each item "Safely remove <name>" (grey with the reason when
-  listed but not offered); "No device to stop" when both are empty.
-- `/eject id=<instance id>` takes a USB device's instance ID as it takes
-  a unit's; `/report` writes each device's "Safely Remove:" line.
-- A one-shot answer written to a redirected output (`/eject`, an error
-  of `/report`) is console text, and is wrapped at 79 columns.
 
 ## 7. The tray icon
 
@@ -1416,6 +1502,13 @@ states, the sizing) and the tool's reader and texts of it in
   elevated run finds the keys itself. (T13 to T19 are revisions 9 and
   12's.)
 
+- **T21** (owner, 2026-10-18, roadmap-usb4 42-0.3; revision 14)
+  XHCISNAP is retired in `3.1.0.0` and its reading moves into XHCITR
+  (section 15): its engine is linked into the tool, its `-report`,
+  `-dump` and `-probe` become `/snapshot`, `/dump` and `/probe`, and Save
+  Report carries the snapshot, so one file is the bug report. Its level
+  switches do not move: section 7.5 already replaces them.
+
 ## 13. Open
 
 - Revision 7: whether a USB disk on 98 SE (NUSB's `usbstor.sys` and
@@ -1452,9 +1545,16 @@ what they left open:
   element only; `IRP_MN_QUERY_ID` is the fallback.
 - **An empty file name on create** is required on NT only; what NTKERN
   leaves in the file name for a `\\.\` open is unread.
-- **An inert start's first answer** can lack `CM_Q_F_INERT` for the moment
-  between the device's creation and the thread's first pass. An eject
-  refuses it anyway (the record's stage is inert); planned work.
+- **An inert start's first answer** carries `CM_Q_F_INERT` (task
+  42-A.7). The answer the device holds until the thread's first pass is
+  seeded from the thread's actual wait, which the thread records before
+  each wait and clears after it (`CM_NHI.ThreadWait`,
+  `CmQuerySeedInert`): no thread, or a thread already in its wait with no
+  timeout, is inert; one in a timed wait is not; a thread between waits is
+  judged by the wait it goes to, as its own publication judges it
+  (`CmThrInertNext`). Until 42-A.7 the seed was set only with no thread,
+  so the moment between the device's creation and that pass read as not
+  inert; an eject refused it all the same (the record's stage is inert).
 - **The confirmation** is a message box listing the unit and every
   devnode that will stop (at most 64; a larger unit is refused), not a
   dialog of its own.
@@ -1491,7 +1591,8 @@ Revision 7, from leg T.7 (`runs/run-41.md`, "Plain USB devices"):
   the stick's own volume (`PNP_VetoDevice`, a `STORAGE\RemovableMedia`
   devnode); a device or driver veto from a devnode of the device's own set
   reads "F: is in use (a program has a file or folder open on it)".
-- **Code 47 after an eject** (XP and 7): the disks go with the eject, so a
+- **Code 47 after an eject** (XP and 7; Code 24 on 2000 after a stop made
+  here, revision 15): the disks go with the eject, so a
   device held for eject is listed, "[stopped - unplug it]", before the
   disk rule is applied. Any other problem code reads "not started -
   problem code N", never "unplug it", for a unit too.
@@ -1508,3 +1609,90 @@ Revision 7, from leg T.7 (`runs/run-41.md`, "Plain USB devices"):
   read is a node not read.
 - **The UAS disk's re-plug** was not read: the emulated UAS device does not
   attach when added to a running machine.
+
+Windows 2000, from the `3.1.0.0` matrix (`runs/run-42.md`, "XHCITR on
+Windows 2000: the disk names, the letters and the stopped mark"):
+
+- **A USB disk's setup class** is in its Enum key as `ClassGUID` alone,
+  with no `Class` value, so the class read empty and the disk was no
+  disk: the device was offered through its volume, under its own name,
+  with no letter. An empty class name is now taken from the class key
+  the `ClassGUID` names.
+- **2000 has no Code 47.** A USB device stopped here stays attached at
+  Code 24 (status `0x01806400`), which is also 2000's failed start. A
+  devnode reads as held for eject at Code 24 only when this process
+  stopped it, until it starts again or leaves the tree; a stop made
+  elsewhere still reads "not started - problem code 24".
+
+## 15. XHCISNAP's reading, moved here (revision 14)
+
+The owner's 42-0.3 decision of 2026-10-18 (decision T21): `3.1.0.0`
+ships no `XHCISNAP.EXE`, `SNAPON.BAT`, `SNAPGET.BAT` or `SNAPOFF.BAT`,
+and `XHCITR.EXE` and `XHCITR64.EXE` take over exactly XHCISNAP's
+reading. `docs\contributing\snapshot-reader.md` (XHCISNAP's guide,
+moved) stays the reference for the route and the files.
+
+1. **The source.** `xhcisnap\xhcisnap.c` is `xhcitr\tr_snap.c`, its
+   `main` renamed `tr_snap_main` and its command line still spelled with
+   dashes inside; `xhcitr\xhcitr.c` maps the user's words onto it.
+   `xhcisnap\selftest.cmd` is `xhcitr\snaptest.cmd`, and
+   `xhcisnap\check-counter-names.ps1` is
+   `scripts\check-counter-names.ps1`. The `xhcisnap\` directory, its
+   `build.cmd` and its three batch files are gone.
+2. **`XHCITR /snapshot [NAME] [/c N] [/nosysinfo]`** is XHCISNAP's
+   `-report`, the field report. It writes `BASE.DEV` first - every PCI
+   xHCI controller's and this package's devnodes with their Device
+   Manager status, problem code and allocated resources, the installed
+   driver files' size, version and SHA-256, and the "captured on" system
+   block - then the dump: `BASE.TXT` (the decoded header, note ring,
+   slots region, root port enumeration and HCD region, PORTSC at level
+   3), `BASE.BIN` (the raw extension image) and `BASE.PSC` (the raw
+   PORTSC array). The files go in the current directory under the 8.3
+   NAME given, else a name from the clock (`mDDhhmmS`); a set is never
+   overwritten. The exit codes are XHCISNAP's, 0 and 2 to 8.
+3. **`XHCITR /dump [/c N] [/o BASE] [/nosysinfo]`** is `-dump`:
+   `BASE.TXT`, `.BIN` and `.PSC`, replacing an earlier set of that BASE.
+4. **`XHCITR /probe`** is `-probe`: the route's four controls, nothing
+   dumped.
+5. **`XHCITR /snapshot /?`** is the long help. With its output
+   redirected each of these modes writes its text there; otherwise a
+   message box shows the text with the current directory.
+6. **What is refused.** A word beginning with `-` after `/snapshot`,
+   `/dump` or `/probe` is refused before anything is read, so no switch
+   of the old tool is reached by its old spelling. XHCISNAP's level
+   switches (`-verbosity`, `-on`, `-disable`, `-force`) did not move:
+   section 7.5's Logging level and `/setlevel xhci98=<0-4>
+   xhcicm=<0-4>` replace them and SNAPON.BAT and SNAPOFF.BAT, and the
+   engine's answer to one names Logging level and `/setlevel`.
+7. **`/snaptest`** is `snaptest.cmd`'s entry, not for users: it hands the
+   rest of the command line to the engine unmapped, so the self-test
+   reaches the canned decodes (`-selftest-*`) as XHCISNAP's did. The
+   gated build runs `xhcitr\snaptest.cmd` after `xhcitr\build.cmd`, and
+   `scripts\check-counter-names.ps1` checks the counter names that
+   `XHCITR /snaptest -selftest-counters` prints against
+   `src\xhci_counters.h`, as it checked XHCISNAP's.
+8. **File > Save Snapshot...** picks a folder (`SHBrowseForFolder`),
+   runs `/snapshot` there for the first xhci98 controller and shows the
+   text, with the folder, in a message box.
+9. **Save Report and `/report <file>`** end with a "Snapshot" part,
+   always with the `.DEV`, once (it is the machine's): from the run for
+   the first xhci98 controller, or, when none is listed, from a run for
+   controller 0, which may take no dump, the `.DEV` being written before
+   any controller is opened and reporting that case. Each xhci98
+   controller's dump `.TXT` follows, whole, slots and enumeration regions
+   included; a dump whose header says level 4, where it can hold memory
+   addresses, or says no level at all is withheld, as the "Driver log"
+   node withholds the ring (section 3.5). Save Report, or
+   `/report`, alone is therefore the bug report; the raw `.BIN` and
+   `.PSC` come only from `/snapshot` or `/dump`, when the maintainer
+   asks for them.
+10. **A child process.** The window and `/report` do not call the engine
+    in their own process: they run the tool itself with `/snapshot` in a
+    folder - for Save Snapshot the one picked, for `/report` a directory
+    of its own under `%TEMP%`, removed afterwards with its files - and
+    read the files and the text back, waiting up to two minutes. The
+    moved engine keeps XHCISNAP's process-wide state, so it runs once per
+    process, as it did in XHCISNAP.
+11. **The door.** `xhci98.sys`'s USBUSER pass-through is kept unchanged
+    (section 4.8): Windows' own property tabs use it, and the snapshot
+    reads through it.

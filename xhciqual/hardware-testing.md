@@ -4,7 +4,7 @@ This is the field procedure for testing `XHCIQUAL.EXE` on physical
 machines. The automated QEMU regression (see "QEMU matrix test" in
 [README.md](README.md)) covers the code paths: a built-in-help case, the
 isolated xHCI IRQ self-test, the read-only probe and quick-scan cases, and
-the controller/device cases including four `--poll-only` runs. QEMU cannot
+the controller/device cases including five `--poll-only` runs. QEMU cannot
 validate a machine's BIOS ownership handoff, physical port routing, or
 motherboard PIC wiring. That is what this procedure is for.
 
@@ -124,8 +124,8 @@ polls the controller, or an MSI-capable OS takes a message interrupt - since
 2.2.0.3, roadmap-hcd task 36.10; until then it disqualified), `DISQUALIFIED`
 (something a read-only pass genuinely sees: no xHCI function, BAR0 unusable or
 above 4 GB, no USB2 protocol ports), and `CANNOT SAY` (the controller is not
-in D0, or Memory Space Enable is clear). Each ends with the next
-command to run.
+in D0, or Memory Space Enable is clear). The screen ends on the verdict
+and does not print a next command (`README.md`, "Start here").
 
 **A `DISQUALIFIED` here ends the session for that controller.** Nothing in
 the staged runs below can overturn it; the disqualifiers a read-only pass
@@ -149,7 +149,8 @@ root of `C:\`. Boot MS-DOS 7.x, change to that directory, and run:
 QUALREP
 ```
 
-It is read-only: it runs `XHCIQUAL --probe-only --no-page --log-stamp`,
+It is read-only: it runs
+`XHCIQUAL --probe-only --no-page --log-stamp --done-flag QUALREP.FLG`,
 the step 1 inventory below, which makes no PCI configuration write and
 takes no ownership, so none of the cold boots or device handling of the
 staged procedure is needed. The log is named from the DOS clock and saved
@@ -328,9 +329,9 @@ compiled on the build host, not by a run on the machine, whose saved
 
 A controller can print two `quirks:` lines, its own id's and its
 vendor's (VIA, Zhaoxin and AMD have vendor-wide rows). A listed controller
-whose HCIVERSION is below the driver's floor gets a last item saying the
-driver refuses it, so none of the values above acts there; record such a
-part, since the driver will not start it.
+whose HCIVERSION is below the driver's floor of 0.96 gets a last item
+saying the driver refuses it at every `XhciAccept096`, so none of the values
+above acts there; record such a part, since the driver will not start it.
 
 Each controller report carries a PCI Power Management block, which on real
 silicon looks like:

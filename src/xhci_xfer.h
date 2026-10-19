@@ -8,11 +8,11 @@
  * the host), so the property that matters is preserved; what would break it is
  * putting these declarations in xhci.h, which every pure file includes.
  *
- * **It began as Phase 6 batch A's control engine and is no longer scoped that
- * way** (the 2026-09-16 audit's B10): bulk and interrupt transfers arrived with
- * `XhciXferSubmitNormal`, and isochronous with the `XhciXferSubmitIso` /
- * `XhciXferIsoEvent` pair and the frame-policy helpers beside them. What is
- * here now:
+ * **It began as Phase 6 batch A's control engine and is no longer scoped
+ * that way** (reviewed and revised 2026-09-16): bulk and interrupt transfers
+ * arrived with `XhciXferSubmitNormal`, and isochronous with the
+ * `XhciXferSubmitIso` / `XhciXferIsoEvent` pair and the frame-policy helpers
+ * beside them. What is here now:
  *
  *   6-A.1  XhciXferBuildControl / XhciXferSubmitControl - the control-transfer
  *          engine: the whole SG list in SgOffset order, split again at 64 KB
@@ -169,9 +169,9 @@ typedef struct _XHCI_XFER_CODE {
      * (docs/contributing/implementation-invariants.md, "Fatal Errors"). **Two
      * architected codes carry it - Event Lost (32) and Undefined Error (33) -
      * plus every code in the vendor error range 192-223**, which Table 6-90
-     * directs software to read as the second of them. Round 8 found 33 and the
-     * range missing; **audit round 9 found this comment still saying "two
-     * codes"** after round 8's own change had made three readings carry it.
+     * directs software to read as the second of them. 33 and the range were
+     * once missing, and this comment then still said "two codes" after the
+     * change that made three readings carry it.
      *
      * Event Lost says the controller dropped events, and a dropped event is not
      * a late one - every completion here is matched by identity - so the
@@ -187,7 +187,7 @@ typedef struct _XHCI_XFER_CODE {
      * recognises none of them. */
     ULONG Fatal;
     /* Fatal to the **slot**, not to the controller, which is a distinction
-     * Table 6-90 draws and this structure did not until audit round 8.
+     * Table 6-90 draws and this structure once did not.
      * Incompatible Device Error is "fatal as far as the Slot is concerned.
      * Software shall issue a Disable Slot Command to recover" (p.468), so
      * endpoint-level halt recovery cannot discharge it however well it runs -
@@ -195,14 +195,14 @@ typedef struct _XHCI_XFER_CODE {
      * device to answer for one.
      *
      * **`xhciDevSlotFatalEvent` is what routes it to the device teardown**,
-     * which owes exactly that Disable Slot. Audit round 9 found this naming
+     * which owes exactly that Disable Slot. This once named
      * `xhciEpRecoveryNeeded` instead, which is the function beside it in both
      * transfer-event paths and reads only the endpoint's half of the code.
      * There are three call sites and none of them is that one: the bulk and
      * isochronous transfer-event paths call it directly, and the command path
      * reaches it through `XhciSlotCommandSlotFatal` - because "this error may be
-     * returned by any command or transfer" (p.468) and round 9 found the command
-     * half of that sentence unimplemented. */
+     * returned by any command or transfer" (p.468), and the command half of
+     * that sentence was once unimplemented. */
     ULONG SlotFatal;
 } XHCI_XFER_CODE, *PXHCI_XFER_CODE;
 
@@ -511,8 +511,8 @@ typedef struct _XHCI_XFER_EVENT_RESULT {
      * where a Set TR Dequeue Pointer alone is both necessary and sufficient
      * (4.8.3 p.149) and a Reset Endpoint is illegal (4.6.8 p.118 restricts it
      * to Halted). The caller reads the completion code to tell them apart. This
-     * contract said "is halted" until the batch-9-0 review round 7, which is an
-     * invitation to issue the wrong command.
+     * contract once said "is halted" (batch 9-0), which is an invitation to
+     * issue the wrong command.
      */
     ULONG NeedsRecovery;
     /*
@@ -527,8 +527,8 @@ typedef struct _XHCI_XFER_EVENT_RESULT {
      * own or have prefetched the TRBs those transfers name. The caller owes a
      * Stop Endpoint with a drain continuation, which is what makes both legal.
      *
-     * Routing this through the ordinary `NeedsRecovery` handling is what the
-     * batch-9-0 review found twice, once per path: it reaches
+     * Routing this through the ordinary `NeedsRecovery` handling was a defect
+     * twice in batch 9-0, once per path: it reaches
      * `xhciEpRecoveryNeeded` with a Short Packet code and halts a healthy
      * endpoint.
      */
@@ -704,7 +704,7 @@ ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
  * `MidTdDeferrals == tailed + tailedSpurious + retired + lost + armed`, and a
  * stored copy of
  * something the state already determines can drift from it - which is the shape
- * repo audit finding 23 removed from the mid-TD accounting once already.
+ * already removed from the mid-TD accounting once.
  */
 ULONG XhciXferDeferralsArmed(const XHCI_TRANSFER_QUEUE *queue);
 
@@ -781,8 +781,8 @@ ULONG XhciXferQueueOwnsIndex(const XHCI_TRANSFER_QUEUE *queue,
  * carries no length field and sits outside the data range, so 26's residual
  * arithmetic answered zero and 27's walk answered nothing at all. The data
  * range is summed instead. Stopped - Short Packet is not affected: its EDTLA is
- * a measurement of this TD and a sum would be a derivation replacing it. (The
- * 2026-09-16 audit's B7.)
+ * a measurement of this TD and a sum would be a derivation replacing it.
+ * (Reviewed and revised 2026-09-16.)
  *
  * The number matters because `AbortTransfer` has to report the bytes the
  * cancelled transfer moved, and this is the only event that ever measures them:
@@ -839,7 +839,7 @@ typedef struct _XHCI_ISO_FRAME_POLICY {
     ULONG Allowed;
     /*
      * **The current frame in the driver's published 32-bit domain**, not the
-     * 11-bit Frame Index, and the second review round of batch 9-A is why.
+     * 11-bit Frame Index, and batch 9-A is why.
      *
      * A window test done in 11 bits cannot tell a near-future stamp from a stale
      * one a whole lap behind: at current frame 5,000 a stamp of 3,000 is 2,000
@@ -964,8 +964,7 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
  * handled with nothing of the pipe's queued, cleared by every publication.
  * An empty queue alone is not enough: the last TD's completion can be seen
  * before the controller reaches the empty ring at the next service
- * interval, and until then the flow is still running (review of 36.57,
- * round 2).
+ * interval, and until then the flow is still running (task 36.57).
  *
  * XhciXferIsoFramePolicy sets the request's Allowed and FirstOnly from
  * `asap` (the client's flag), `cfc` (HCCPARAMS1.CFC), `sampled` (the frame
@@ -1076,14 +1075,14 @@ ULONG XhciXferSubmitIso(PXHCI_TRANSFER_QUEUE queue,
  * and the separation is deliberate: almost nothing the bulk path does is right
  * here. An isoch endpoint never halts (p.177, restated 4.10.2.8 p.184), so no
  * *halt* recovery is ever right - though a TRB Error still puts it in the Error
- * state and does need one, which is the distinction the first review round found
- * this sentence had flattened into "no recovery at all"; a Missed Service Error
+ * state and does need one, which is the distinction this sentence once
+ * flattened into "no recovery at all"; a Missed Service Error
  * is the pipe resynchronizing
  * rather than a fault (4.10.3.2 p.187); the mid-TD short-packet deferral machine
  * exists to protect a *reposted bulk IN* and has no counterpart on a pipe whose
  * TDs are consumed one per interval; and the completion carries a status per
  * packet rather than one status for the request. Folding those five differences
- * into the existing branches is how the batch-9-0 review's five MAJORs happened.
+ * into the existing branches is how five major defects of batch 9-0 happened.
  *
  * **Ring Underrun and Ring Overrun must not reach here.** Their TRB Pointer is
  * "the value of the Dequeue Pointer where the Overrun or Ring Underrun condition

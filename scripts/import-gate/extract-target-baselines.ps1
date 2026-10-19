@@ -180,7 +180,7 @@ try {
         #
         # **Expanded into the work directory and authenticated there, BEFORE
         # anything is copied into tools\** - the same order the ntkern.vxd half
-        # below already used, and the 2026-09-07 audit's H5. It used to expand
+        # below already used (the audit of 2026-09-07). It used to expand
         # straight into $w2kDir and validate afterwards, so a run against the
         # wrong SP4 media installed the files it was about to condemn and left
         # them behind; the next run's "already staged" early-out then found
@@ -518,8 +518,8 @@ import is believed.
             throw "ntkern.vxd was not extracted from $cabName"
         }
         #
-        # **Authenticated at stage time, like the Windows 2000 half above** (repo
-        # audit D6). `check-imports.ps1` does validate this file against
+        # **Authenticated at stage time, like the Windows 2000 half above** (an earlier
+        # repository audit). `check-imports.ps1` does validate this file against
         # `win98-evidence.list` before quoting it as evidence, so a wrong build
         # was never believed - but it was found by the *next build*, with a
         # failure that names the manifest rather than the media it came from, and

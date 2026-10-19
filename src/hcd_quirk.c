@@ -58,23 +58,15 @@
 #define HCD_QK_FLUSH_WAIT_MS        500UL
 #define HCD_QK_FLUSH_STEP_MS        10UL
 
-/* The value names, in xhci_quirk.h's order, for the registry reads. */
-static const PCWSTR hcdQuirkValues[XHCI_QK_COUNT] = {
-    L"XhciMsiAvoid",
-    L"XhciStreamsOff",
-    L"XhciResumeReinit",
-    L"XhciIntelShutdownToEhci",
-    L"XhciShutdownReset",
-    L"XhciSuspendHaltDelay",
-    L"XhciSuspendHaltTimeout",
-    L"XhciAsmediaFlowControl",
-    L"XhciTiIntervalCap",
-    L"XhciStuckLinkReset",
-    L"XhciStreamRingPad",
-    L"XhciControlLinkNoOp",
-    L"XhciIsochSpuriousSuccess",
-    L"XhciAmdSuspendBitClear"
+/* The value names, from xhci_quirk.h's one list, for the registry reads. */
+#define HCD_QK_WIDE(s) L ## s,
+
+static const PCWSTR hcdQuirkValues[] = {
+    XHCI_QK_VALUE_NAMES(HCD_QK_WIDE)
 };
+XHCI_C_ASSERT(hcd_quirk_values_count,
+              sizeof(hcdQuirkValues) / sizeof(hcdQuirkValues[0]) ==
+                  XHCI_QK_COUNT);
 
 /* One value, as found: XHCI_QK_FOUND_*. IRQL: PASSIVE_LEVEL. */
 static ULONG hcdQuirkRead(PHCD_CONTROLLER hc, ULONG quirk, PULONG value)
@@ -212,8 +204,8 @@ ULONG HcdQuirkMsiAvoid(PHCD_CONTROLLER hc, ULONG interruptMode)
     }
     XhciQuirkSetEffective(st, XHCI_QK_MSI_AVOID, matched, avoid, 0);
     /* The requirements filter that ran before this start stripped the
-     * messages at the quirk's asking: the quirk acted there (review round
-     * 2), so the line this start was given is its doing. */
+     * messages at the quirk's asking: the quirk acted there, so the line
+     * this start was given is its doing. */
     if (hc->MsiAvoidFilterStrips != 0) {
         st->MsiRefused += hc->MsiAvoidFilterStrips;
         XhciQuirkOutcome(st, XHCI_QK_MSI_AVOID, XHCI_QK_OUT_DONE,
@@ -572,9 +564,9 @@ ULONG HcdQuirkShutdown(PHCD_CONTROLLER hc)
     if (XhciQuirkOn(st, XHCI_QK_SHUT_TO_EHCI)) {
         attempted = 1;
         if (ready) {
-            /* Both registers whatever the first's outcome (review round 1):
-             * a USB3_PSSEN that would not clear does not keep the USB 2.0
-             * pairs on the xHCI. The first failure is the one reported. */
+            /* Both registers whatever the first's outcome: a USB3_PSSEN
+             * that would not clear does not keep the USB 2.0 pairs on the
+             * xHCI. The first failure is the one reported. */
             why = hcdQuirkEhciWrite(hc, HCD_QK_USB3_PSSEN);
             why2 = hcdQuirkEhciWrite(hc, HCD_QK_XUSB2PR);
             if (why == XHCI_QK_WHY_NONE) {
@@ -681,7 +673,7 @@ VOID HcdQuirkShutdownFlush(PHCD_CONTROLLER hc)
 /* The thread, after the HcdLogFlush it began with `ticket` captured: the
  * ticket published as acknowledged, with whether that flush emitted any
  * record to the sink (`emitted`, HcdLogFlush's own count: 0 with the sink
- * off or the records not kept, review round 1). A flush already under way
+ * off or the records not kept). A flush already under way
  * when the records were written captured an older ticket, so it never
  * acknowledges them. IRQL: PASSIVE_LEVEL (the controller thread). */
 VOID HcdQuirkFlushAck(PHCD_CONTROLLER hc, LONG ticket, ULONG emitted)

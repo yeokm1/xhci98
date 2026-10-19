@@ -6,7 +6,10 @@ test-signing mode rather than only on a start where F8 -> Disable Driver
 Signature Enforcement was chosen (roadmap-hcd Phase 36, task 36.50).
 Revision 1, 2026-10-11, on branch `p36-tsign`, written with the packager
 change it describes; the guest readings of section 10 follow the first
-signed cut.
+signed cut. Revision 2, 2026-10-19 (roadmap-usb4 task 42-A.30, owner): the
+bundled Stor98's x64 `stor98.sys` is signed in the same step with the same
+key, so one signature covers every driver of the package, and Stor98's own
+test certificate (`stor98-test.cer`) and signing scripts are retired.
 
 ## 1. Context
 
@@ -60,8 +63,18 @@ no opinion - is kept whole. Record 11 decision 9 now points here.
 
 - **The files:** `xhci98.sys`, `xhciuas.sys` and, since the Thunderbolt 3
   connection manager joined the package, `xhcicm.sys` of both published
-  x64 flavours; `nt\xhcicm.sys`, the filter INF's own copy, is the signed
-  file staged a second time, the same bytes. The `qemu` flavour may be signed for a guest
+  x64 flavours, each signed once. In `3.0.0.0` `nt\xhcicm.sys`, the
+  filter INF's own copy, was the signed file staged a second time, the
+  same bytes; from `3.1.0.0` the x64 package keeps the filter INF at the
+  flavour directory's root beside the one `xhcicm.sys` and has no `nt\`.
+  Since `3.1.0.0` also the
+  bundled Stor98's `stor98.sys` of an amd64 package (`release-x64`; the
+  debug directories carry no Stor98): Stor98 is built from `src\stor98`
+  with the drivers and versioned with them, and the owner's decision of
+  2026-10-19 is that one signature signs everything. Until then the
+  bundled `stor98.sys` (Stor98 `0.3.0.0` to `0.4.0.0`) carried Stor98's
+  own test signature, with its `stor98-test.cer` beside it; neither is
+  shipped any more, and `xhci98-test.cer` covers every driver. The `qemu` flavour may be signed for a guest
   (`make-package.ps1 -Flavor qemu -Arch amd64 -TestSignPfx ...`) and is
   never published either way.
 - **Never the x86 binaries.** 32-bit Windows does not enforce kernel-mode
@@ -182,7 +195,10 @@ password are not.
   `package-common.ps1`), lets the import gates read the build where it was
   linked (their `SITES` rule needs the objects, or for LTCG objects the
   sources, beside the image), and then signs **copies** of `xhci98.sys`,
-  `xhciuas.sys` and `xhcicm.sys` in a temporary folder before staging. Each copy is
+  `xhciuas.sys`, `xhcicm.sys` and the bundled `stor98.sys` (from
+  `src\stor98\out\free\amd64`, already held to its version, flavour marker,
+  imports and source stamp; with `-SignOnly`, to the gated build's record
+  like the others) in a temporary folder before staging. Each copy is
   held to two checks before it is used: its parsed signature is the
   project certificate's by thumbprint, an Authenticode PE-image signature
   (content `SPC_INDIRECT_DATA`, data `SPC_PE_IMAGE_DATA`, the
@@ -284,8 +300,8 @@ recovery key. Secure Boot does not arise: Vista and 7 do not support it.
 signing mode loads the driver without it, and it does not quiet the install
 prompt either: Plug and Play judges the driver package by its catalog, and
 this package deliberately has none (section 3), so trusting the binaries'
-signer does not sign the package (review round 1, which corrected an
-earlier draft of this record). Imported into a trusted store it would only
+signer does not sign the package (this corrects an earlier draft of
+this record). Imported into a trusted store it would only
 make the machine trust a certificate this project made - which is the
 user's decision, and the docs advise against it. The `.cer` is shipped so
 that anyone can compare a signed binary's signer with the thumbprint of
@@ -305,7 +321,8 @@ on. The release notes say so beside the tier.
 ## 9. The rule
 
 Every published x64 package directory carries `xhci98.sys`, `xhciuas.sys`
-and `xhcicm.sys` (and its `nt\xhcicm.sys` copy) with an embedded
+and `xhcicm.sys` (and, in `3.0.0.0`, its `nt\xhcicm.sys` copy), and a
+`release-x64` directory from `3.1.0.0` also the bundled `stor98.sys`, with an embedded
 Authenticode signature by the project test
 certificate - SHA-1 file digest, no timestamp, no catalog, the INFs
 unchanged - applied by `make-package.ps1 -TestSignPfx` at staging and
@@ -413,7 +430,9 @@ points here.
   the staged `xhci98-test.cer`.
 - `scripts\package\make-release.ps1`: `-TestSignPfx`, the x64 refusal,
   `Assert-TestSigned`, the published `xhci98-test.cer`, the readme text.
-- `scripts\package\make-testcert.ps1`: the certificate's creation.
+- `scripts\package\make-testcert.ps1`: the certificate's creation (the one
+  certificate; Stor98's own `scripts\make-testcert.ps1` and `sign-x64.ps1`
+  were removed on 2026-10-19).
 - `scripts\package\test-package.ps1`: the cases of section 5.
 - Docs: design record 11 (section 6 and decision 9), `build-and-test.md`,
   `legal-provenance.md`, `README.md`, `docs\using\release-notes.md`,

@@ -159,12 +159,13 @@ static void test_cap_fastpoll(void)
     }
 }
 
-/* Mode 4 (task 36.19; record 17 section 4.7): before the cap, as the
- * executor runs it (hcd_cfg.c hcdCfgFastPoll). Keyed on the descriptor's
- * byte; a code's Interval (2 or less) is never capped, so a capped
- * controller does not silence it; the fallback 3 is never capped either;
- * an endpoint with no code is capped as before. Every cap mode, FS at a
- * root port, bInterval 1 to 255. */
+/* Mode 4 (task 36.19, task 42-A.18's codes; record 17 section 4.7): before
+ * the cap, as the executor runs it (hcd_cfg.c hcdCfgFastPoll). Keyed on
+ * the descriptor's byte; a code's Interval at or below the cap's 8 is left
+ * as it is, so a capped controller does not silence a fast code, and one
+ * above it (codes 137 to 143) is lowered to 8 like any endpoint's; the
+ * fallback 3 is never capped; an endpoint with no code is capped as
+ * before. Every cap mode, FS at a root port, bInterval 1 to 255. */
 static void test_cap_codes(void)
 {
     ULONG cap;
@@ -192,10 +193,13 @@ static void test_cap_codes(void)
                                     XHCI_PIPE_SPEED_FULL, 0, &ep);
             ep.Interval = XhciTolCapInterval(applies, 1, ep.Interval);
 
-            CHECK(fast == (ULONG)(b >= 128 && b <= 130), "a code applies");
+            CHECK(fast == (ULONG)(b >= 128 && b <= 143 && b != 138),
+                  "a code applies, 138 being Table 6-12's own 10");
             if (fast) {
-                CHECK_EQ(ep.Interval, 130 - b,
-                         "the cap leaves a code's Interval");
+                CHECK_EQ(ep.Interval,
+                         (applies && b - 128 > XHCI_TOL_INTERVAL_CAP)
+                             ? XHCI_TOL_INTERVAL_CAP : b - 128,
+                         "the cap leaves a code's Interval at or below 8");
                 (VOID)XhciPipeFastRevert(&ep);
                 CHECK_EQ(XhciTolCapInterval(applies, 1, ep.Interval), 3,
                          "the fallback 3, never capped");
@@ -216,18 +220,17 @@ static void test_retry(void)
     CHECK_EQ(XhciTolNoSoftRetry(ETRON_NOSR), 1, "7052 listed");
     CHECK_EQ(XhciTolNoSoftRetry(AMD_ID), 0, "other AMD not");
 
+    /* The function sees one bit, bulkOrInt; which endpoint types set it
+     * (bulk, interrupt and, since 36.54, a stream's own queue; never EP0
+     * or isochronous) is the caller's mapping in src/hcd_cfg.c, which no
+     * host suite compiles. So the bit is checked once each way here, and
+     * the per-type mapping is not claimed. */
     CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 0), 1,
-             "bulk in scope");
-    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 0),
-             1, "interrupt in scope");
-    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 0), 1,
-             "36.54: a stream's own queue in scope on the same terms");
+             "bulkOrInt 1: in scope");
     CHECK_EQ(XhciTolRetryScope(0, AMD_ID, 1, 0), 0,
              "tolerance 0");
     CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 0, 0), 0,
-             "EP0 not");
-    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 0, 0), 0,
-             "isochronous not");
+             "bulkOrInt 0: not in scope");
     CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 1), 0,
              "behind a TT not");
     CHECK_EQ(XhciTolRetryScope(1, AMD_NOSR, 1, 0), 0,
@@ -993,7 +996,7 @@ static void test_port_oc(void)
     XhciTolLocHold(NULL, XHCI_TOL_HOLD_OC_WAIT);
     CHECK_EQ(XhciTolLocUnpowered(NULL), 0, "NULL");
 
-    /* Review round 1, finding 4: a late connected look is no evidence that
+    /* A late connected look is no evidence that
      * the port stayed disconnected; the stable disconnect stands only on a
      * disconnected look made once the interval has passed (XhciTolLocDiscDue
      * says when one is owed), with no connection change between. */
@@ -1024,7 +1027,7 @@ static void test_port_oc(void)
     CHECK_EQ(l.Reenums, 0, "budget back");
     CHECK_EQ(l.Rearms, 1, "re-arm counted");
 
-    /* Finding 2: the recovery's own disconnect - an over-current's lost
+    /* The recovery's own disconnect - an over-current's lost
      * power, its device not back after the power-on wait - is no evidence,
      * through the reconnect that ends it; disconnects after that are. */
     XhciTolLocInit(&l);
@@ -1272,7 +1275,7 @@ static void test_terminal_release(void)
     CHECK_EQ(XhciTolSaveRefused(0), 0, "running: saved as before");
 }
 
-/* Review round 2: a transfer waiting on its mapping when the save gate
+/* A transfer waiting on its mapping when the save gate
  * looks. The gate declines on the record (any state but free); one that
  * passes the gate and is published before the commit, or before a
  * restore runs the controller, spoils the image, so the resume
@@ -1344,7 +1347,7 @@ static void test_save_publish(void)
     CHECK_EQ(s_published, 0, "and nothing is spoiled");
 }
 
-/* Review round 1, finding 2: at tolerance 0, the run of failures spent and
+/* At tolerance 0, the run of failures spent and
  * its devices released, a suspend and resume must not clear the latch while
  * the run and the release stay spent - a later fault would then get
  * neither a recovery nor a release. The resume is refused instead. */

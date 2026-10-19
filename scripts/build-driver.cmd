@@ -24,12 +24,19 @@ rem      two launchers sharing a monitor port cannot both run
 rem   6. the vm-matrix verdict self-tests - a matrix that reads a refusal as a
 rem      pass makes every later FAIL and NODRIVER word untrustworthy
 rem   7. the tracked batch files' line endings - MS-DOS 7.1 COMMAND.COM can
-rem      fail on an LF-only .BAT, and the field wrappers are .BAT files
-rem   8. the XHCISNAP report self-test, when that EXE has been built (it has a
+rem      fail on an LF-only .BAT, and the field wrappers are .BAT files -
+rem      then the source charset, and the two copies of Stor98's interface
+rem      header held equal (task 42-A.20, scripts\check-stor98-header.ps1),
+rem      and on the x86 run XHCICLN and XHCITR rebuilt (xhcicln\build.cmd,
+rem      xhcitr\build.cmd), the two tools that compile xhciinst\inst_core.c
+rem   8. the XHCICLN self-test, when that EXE has been built (it has a
 rem      build.cmd of its own, and a clone without Open Watcom still runs
-rem      everything else here), and the XHCICLN self-test when that one has
-rem      (task 38.8; xhcicln\build.cmd), and the XHCIINST self-test and import
-rem      check when that one has (task 40.5; xhciinst\build.cmd)
+rem      everything else here; task 38.8; xhcicln\build.cmd), XHCITR's own
+rem      and its snapshot self-tests when that one has (xhcitr\snaptest.cmd,
+rem      XHCISNAP's, moved by roadmap-usb4 task 42-A.4), and the XHCIINST self-test and import
+rem      check when that one has (task 40.5; xhciinst\build.cmd), and the
+rem      XHCIDI import gate when the 16-bit helper has (task 42-A.1;
+rem      xhciinst\di\build.cmd)
 rem   9. test\run-host-tests.cmd - the pure-core suite. It runs before the DDK
 rem      builds, not after: it compiles the same core files in seconds, so a
 rem      bad carve, ring or PORTSC constant should not cost two full builds
@@ -66,6 +73,18 @@ rem      source stamp, and its four INFs' own gate
 rem      (scripts\inf-gate\check-cm-inf.ps1, self-tested first, run over
 rem      src\cm\xhcicm.inf, xhcicm-amd64.inf, xhcicmf.inf and
 rem      xhcicmf-amd64.inf on every build)
+rem  14a. Stor98 (src\stor98; roadmap-usb4 task 42-A.30), which the package
+rem      bundles from this build since 3.1.0.0: its two INFs held to
+rem      src\xhci_version.h's DriverVer (scripts\inf-gate\check-stor98-inf.ps1,
+rem      self-tested first) beside the other INF gates; on the x86 run its
+rem      host unit suite (src\stor98\tests\unit\build.cmd) after this
+rem      project's; then, once per run, src\stor98\scripts\build.cmd builds
+rem      the free images of this architecture (stor98.mpd and the x86
+rem      stor98.sys, or the amd64 stor98.sys) into src\stor98\out\free\,
+rem      and every flavour gates them (:gatestor98): the version, the
+rem      STOR98_FLAVOUR_FREE marker and the import allowlist
+rem      (scripts\check-stor98-build.ps1, scripts\import-gate\
+rem      stor98-imports.allow), the source stamp, and the gated record
 rem  15. the gated build's record, out\gated-<arch>-<flavour>.txt
 rem      (scripts\package\write-gated-manifest.ps1; roadmap-usb4.md SIGN.1),
 rem      which make-package.ps1 -SignOnly reads instead of running the host
@@ -113,10 +132,12 @@ rem binary in it:
 rem
 rem   scripts\package\make-package.ps1 [-Flavor release|debug] [-Arch x86|amd64]
 rem
-rem The media is this project's two files and nothing else; the OS supplies
-rem usbd.sys and usbui.dll through the INF's LayoutFile. The HCD replaces
-rem usbport.sys and usbhub.sys, and the INF gate refuses an INF that fetches
-rem either (OS-HCDREPLACED).
+rem The media holds no Microsoft file: it is the drivers (xhcihlpr.sys on x86
+rem only) and their INFs, txtsetup.oem, on amd64 the test certificate, and a
+rem pinned Stor98 build when one is asked for (make-package.ps1 lists them).
+rem The OS supplies usbd.sys and usbui.dll through the INF's LayoutFile. The
+rem HCD replaces usbport.sys and usbhub.sys, and the INF gate refuses an INF
+rem that fetches either (OS-HCDREPLACED).
 rem
 rem Usage:  scripts\build-driver.cmd [release|debug|qemu|both|all]
 rem                                  [-amd64] [-NoTargetEvidence]
@@ -154,11 +175,14 @@ rem
 rem WHAT AN amd64 BUILD IS GATED ON, since roadmap task 21.3 closed: the import
 rem gate enforces xhci98-imports-amd64.allow and resolves every pair against
 rem authenticated NT 5.2 amd64 baselines (winxp64-baselines.expected), and the
-rem INF gate runs over BOTH production INFs on every build - src\xhci98.inf
-rem under -Arch x86 and src\xhci98-amd64.inf under -Arch amd64 - whichever
-rem architecture is being built. Both, always, because the two are one release
-rem and either drifting from the other is silent on the target;
-rem scripts\inf-gate\test-inf-checks.ps1 also compares them directly.
+rem INF gates run over all eight production INFs on every build, whichever
+rem architecture is being built: check-inf.ps1 over src\xhci98.inf (-Arch
+rem x86) and src\xhci98-amd64.inf (-Arch amd64), check-uas-inf.ps1 over the
+rem two UAS INFs and check-cm-inf.ps1 over the four connection manager INFs
+rem (steps 3, 12 and 14 above). All of them, always, because each x86/amd64
+rem pair is one release and either drifting from the other is silent on the
+rem target; scripts\inf-gate\test-inf-checks.ps1 also compares the two
+rem xhci98 INFs directly.
 rem
 rem Exit codes: 0 = built and gated, 1 = failure, 2 = host tests inconclusive
 rem (a blocked exe launch, not a test failure - just run it again).
@@ -271,7 +295,7 @@ rem **DDKROOT NAMES THE WIN2000 DDK AND MUST NOT REACH THIS LEG.**  It is an
 rem override for the 32-bit build, and it reaches setenv.bat - so an exported
 rem DDKROOT pointing at tools\ntddk was being called with `x64 WNET`, which the
 rem Win2000 DDK does not have.  The run then died at :nooutput naming the wrong
-rem cause entirely (the 2026-09-16 audit's D7).  WDKROOT is this leg's own
+rem cause entirely (the audit of 2026-09-16).  WDKROOT is this leg's own
 rem override - the SAME name the import gate honours, so one
 rem variable redirects the whole 64-bit toolchain rather than each script
 rem having its own.
@@ -308,7 +332,7 @@ if defined XHCI_EXTRA_DEFINES goto extradefines
 rem Two refusals, because the two legs want two different toolchains: on the
 rem -amd64 leg DDKROOT is tools\WinDDK71 (or WDKROOT), and a missing WDK used
 rem to be reported as a missing Windows 2000 DDK, naming tools\ntddk and the
-rem cab installer that cannot supply it (the 2026-09-17 audit's D6).
+rem cab installer that cannot supply it (the audit of 2026-09-17).
 if /i "%ARCH%"=="amd64" if not exist "%DDKROOT%\bin\setenv.bat" goto nowdk
 if not exist "%DDKROOT%\bin\setenv.bat" goto noddk
 
@@ -358,7 +382,7 @@ if errorlevel 1 goto inftestfail
 echo.
 echo === INF gate (x86) ===
 rem INFFILE is what :inffail names; the two gate runs share the label and used
-rem to share the x86 file's name too (the 2026-09-17 audit's D7).
+rem to share the x86 file's name too (the audit of 2026-09-17).
 set "INFFILE=src\xhci98.inf"
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\inf-gate\check-inf.ps1" -Arch x86
@@ -434,6 +458,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -Filter -Arch amd64
 if errorlevel 1 goto inffail
 
+rem Stor98's two INFs (task 42-A.30): the package's one DriverVer, from
+rem src\xhci_version.h, self-tested by mutation first.
+echo.
+echo === Stor98 INF gate ===
+set "INFFILE=src\stor98\inf\stor98-x86.inf and stor98-x64.inf"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-stor98-inf.ps1" -SelfTest
+if errorlevel 1 goto inftestfail
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-stor98-inf.ps1"
+if errorlevel 1 goto inffail
+
 rem The text-mode Setup driver descriptions (task 33.3): src\txtsetup.oem and
 rem src\txtsetup-amd64.oem, self-tested by mutation first, then each gated
 rem against the INF of its own architecture and against the other file.
@@ -472,8 +508,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
 if errorlevel 1 goto qemutestfail
 
 rem The verdict evaluator's suite (design record 06) and the batch-file
-rem line-ending check were not wired in here until the 2026-09-05 audit's
-rem smaller items; a build that ran every other self-test could still ship a
+rem line-ending check were not wired in here until the audit of
+rem 2026-09-05; a build that ran every other self-test could still ship a
 rem matrix that read a refusal as a pass. Both are guestless and quick.
 echo.
 echo === VM matrix verdict self-tests ===
@@ -503,17 +539,34 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-source-charset.ps1"
 if errorlevel 1 goto charsetfail
 
-rem The snapshot reader's report path, when its EXE has been built (it is a
-rem separate build.cmd, and a clone without Open Watcom still has this one).
-if exist "%REPO%\xhcisnap\XHCISNAP.EXE" (
+rem XHCICLN and XHCITR compile the installer's pure half
+rem (xhciinst\inst_core.c), so a change there makes both stale and
+rem make-release.ps1 refuses them; the x86 run rebuilds both, the x64 halves
+rem included, before their self-tests below, so a cut never needs them
+rem built by hand.
+if /i "%ARCH%"=="x86" (
     echo.
-    echo === xhcisnap report self-test ===
-    call "%REPO%\xhcisnap\selftest.cmd"
-    if errorlevel 1 goto snaptestfail
+    echo === xhcicln and xhcitr, rebuilt ===
+    call "%REPO%\xhcicln\build.cmd"
+    if errorlevel 1 goto toolbuildfail
+    call "%REPO%\xhcitr\build.cmd"
+    if errorlevel 1 goto toolbuildfail
 )
 
+rem Stor98's interface header is in this tree twice since task 42-A.20:
+rem src\stor98\include\stor98cm.h, the master, and src\cm\stor98cm.h, the
+rem copy xhcicm.sys compiles against. Byte for byte until they are one.
+echo.
+echo === Stor98 interface header ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-stor98-header.ps1" -SelfTest
+if errorlevel 1 goto stor98hdrfail
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-stor98-header.ps1"
+if errorlevel 1 goto stor98hdrfail
+
 rem The cleanup tool's pure half (task 38.8), when its EXE has been built (it
-rem has a build.cmd of its own, as XHCISNAP has).
+rem has a build.cmd of its own).
 if exist "%REPO%\xhcicln\XHCICLN.EXE" (
     echo.
     echo === xhcicln self-test ===
@@ -540,6 +593,37 @@ if exist "%REPO%\xhcitr\XHCITR.EXE" (
     echo === xhcitr self-test ===
     call "%REPO%\xhcitr\selftest.cmd"
     if errorlevel 1 goto trtestfail
+    rem The snapshot reader, XHCISNAP's until 42-A.4: its report path with
+    rem no controller, its decodes over canned data and the counter-name
+    rem check (scripts\check-counter-names.ps1) on the built image.
+    echo.
+    echo === xhcitr snapshot self-test ===
+    call "%REPO%\xhcitr\snaptest.cmd"
+    if errorlevel 1 goto snaptestfail
+)
+
+rem The safe-removal mark service (task 42-A.5, design record 21 section
+rem 7.4 revision 3), when its EXE has been built: its -selftest, its switch
+rem refusals and its import table, which must name KERNEL32 and ADVAPI32
+rem alone (xhcimark\selftest.cmd). Nothing of it installs or starts the
+rem service.
+if exist "%REPO%\xhcimark\XHCIMARK.EXE" (
+    echo.
+    echo === xhcimark self-test ===
+    call "%REPO%\xhcimark\selftest.cmd"
+    if errorlevel 1 goto mktestfail
+)
+
+rem The 98 SE and ME device install helper (task 42-A.1, design record 27),
+rem when its EXE has been built (xhciinst\di\build.cmd, Open Watcom): its
+rem import table, by ordinal from KERNEL, USER and SETUPX and each the
+rem allowlist's, the gate's own refusals, and its version stamp
+rem (xhciinst\di\selftest.cmd).
+if exist "%REPO%\xhciinst\di\xhcidi.exe" (
+    echo.
+    echo === xhcidi self-test ===
+    call "%REPO%\xhciinst\di\selftest.cmd"
+    if errorlevel 1 goto ditestfail
 )
 
 echo.
@@ -547,6 +631,30 @@ echo === host tests ===
 call "%REPO%\test\run-host-tests.cmd"
 if errorlevel 2 goto inconclusive
 if errorlevel 1 goto failed
+
+rem Stor98's own host unit suite, on the x86 run (its compiler is MSVC 6.0).
+if /i "%ARCH%"=="amd64" goto skipstor98unit
+echo.
+echo === Stor98 unit tests ===
+call "%REPO%\src\stor98\tests\unit\build.cmd"
+if errorlevel 1 goto stor98fail
+:skipstor98unit
+
+rem Stor98 (task 42-A.30): built once per run, free only - the package ships
+rem its free build whatever this project's flavour - for this architecture,
+rem then gated in each flavour below (:gatestor98). The images it replaces
+rem (this architecture's only; the other run's stay) are deleted first, so a
+rem failed build cannot leave an old one to gate.
+echo.
+echo === build Stor98 (free, %ARCH%) ===
+set "STOR98_DBGPORT="
+set "S98TARGETS=9x x86"
+set "S98IMAGES=win9x\stor98.mpd x86\stor98.sys"
+if /i "%ARCH%"=="amd64" set "S98TARGETS=amd64"
+if /i "%ARCH%"=="amd64" set "S98IMAGES=amd64\stor98.sys"
+for %%T in (%S98IMAGES%) do if exist "%REPO%\src\stor98\out\free\%%T" del "%REPO%\src\stor98\out\free\%%T"
+call "%REPO%\src\stor98\scripts\build.cmd" "%S98TARGETS%" free
+if errorlevel 1 goto stor98fail
 
 rem `if errorlevel` inside the block is evaluated per iteration, so a first
 rem flavor that fails cannot be masked by a second one that succeeds.
@@ -597,7 +705,7 @@ if errorlevel 1 goto flavourmissing
 rem Record which sources this binary came from, beside it. make-release.ps1
 rem checks it and refuses to publish a .sys the tree can no longer reproduce -
 rem the driver's equivalent of the "EXE newer than its own sources" refusals it
-rem already makes for XHCIQUAL and XHCISNAP (the 2026-09-07 audit's H13). It is
+rem already makes for XHCIQUAL (and made for XHCISNAP; the audit of 2026-09-07). It is
 rem content rather than timestamps, because an mtime moves on a checkout or a
 rem comment-only commit; scripts\source-stamp.ps1 says why at length.
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
@@ -758,6 +866,11 @@ call :buildhlpr %FLAVOR%
 if errorlevel 1 goto hlprfail
 :skiphlpr
 
+rem Stor98's images, built once before the flavours, in every flavour's
+rem record (task 42-A.30).
+call :gatestor98
+if errorlevel 1 goto stor98gatefail
+
 rem Every gate of this flavour has passed: record what they read (roadmap-usb4.md
 rem SIGN.1), for make-package.ps1 -SignOnly - from the hashes captured after
 rem each import gate, and only if every file still has its captured hash.
@@ -787,6 +900,58 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
 set "GATEDRC=%errorlevel%"
 set "XHCI98_GATED_RUN="
 exit /b %GATEDRC%
+
+rem ------------------------------------------------------------------
+rem :gatestor98
+rem
+rem The Stor98 images of this architecture (task 42-A.30), in the current
+rem flavour's record: each hashed, held to scripts\check-stor98-build.ps1
+rem (version from src\xhci_version.h, STOR98_FLAVOUR_FREE, machine, the
+rem import allowlist scripts\import-gate\stor98-imports.allow), captured,
+rem and stamped (scripts\source-stamp.ps1 -Driver stor98 / stor98mpd).
+rem ------------------------------------------------------------------
+:gatestor98
+if /i "%ARCH%"=="amd64" (
+    call :gateonestor98 amd64 stor98.sys stor98
+    exit /b
+)
+call :gateonestor98 win9x stor98.mpd stor98mpd
+if errorlevel 1 exit /b 1
+call :gateonestor98 x86 stor98.sys stor98
+exit /b
+
+:gateonestor98
+set "S98IMG=%REPO%\src\stor98\out\free\%~1\%~2"
+echo.
+echo === Stor98 gate (%FLAVOR%: %~1 %~2) ===
+if not exist "%S98IMG%" (
+    echo ERROR: no "%S98IMG%"
+    exit /b 1
+)
+call :gated -Hash -Name %~2 -Image "%S98IMG%"
+if errorlevel 1 exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-stor98-build.ps1" -Image "%S98IMG%" -Target %~1
+if errorlevel 1 exit /b 1
+call :gated -Capture -Name %~2 -Image "%S98IMG%"
+if errorlevel 1 exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\source-stamp.ps1" -Driver %~3 -Write "%REPO%\src\stor98\out\free\%~1"
+exit /b %errorlevel%
+
+:stor98fail
+echo.
+echo ERROR: Stor98 (src\stor98) failed to build or its unit tests failed - see
+echo above. The package bundles the Stor98 this run builds.
+endlocal
+exit /b 1
+
+:stor98gatefail
+echo.
+echo ERROR: a Stor98 image failed its gate in the %FLAVOR% build - its version,
+echo flavour marker, imports, record or stamp; see above. Do not package it.
+endlocal
+exit /b 1
 
 :gatedrecfail
 echo.
@@ -1195,6 +1360,27 @@ echo 1998-era toolchain cannot read one. See the check's output above.
 endlocal
 exit /b 1
 
+:mktestfail
+echo.
+echo ERROR: xhcimark's self-test failed: its pure half, its switches or its
+echo import table cannot be trusted (xhcimark\selftest.cmd).
+endlocal
+exit /b 1
+
+:stor98hdrfail
+echo.
+echo ERROR: src\cm\stor98cm.h is not src\stor98\include\stor98cm.h, the
+echo master, byte for byte - see the check's output above.
+endlocal
+exit /b 1
+
+:ditestfail
+echo.
+echo ERROR: xhcidi's self-test failed: its import table, the gate over it or
+echo its version stamp cannot be trusted (xhciinst\di\selftest.cmd).
+endlocal
+exit /b 1
+
 :trtestfail
 echo.
 echo ERROR: xhcitr's self-test failed: its switches, its pure half or its
@@ -1209,6 +1395,13 @@ echo import table cannot be trusted (xhciinst\selftest.cmd).
 endlocal
 exit /b 1
 
+:toolbuildfail
+echo.
+echo ERROR: xhcicln\build.cmd or xhcitr\build.cmd failed: the tools that
+echo compile the installer's pure half are not current.
+endlocal
+exit /b 1
+
 :clntestfail
 echo.
 echo ERROR: xhcicln's self-test failed, so its choice of which old devnodes
@@ -1218,7 +1411,7 @@ exit /b 1
 
 :snaptestfail
 echo.
-echo ERROR: xhcisnap's report self-test failed, so a dump's "send this" line
+echo ERROR: xhcitr's snapshot self-test failed, so a dump's "send this" line
 echo cannot be trusted to mean the report was written in full.
 endlocal
 exit /b 1

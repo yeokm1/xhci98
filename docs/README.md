@@ -8,7 +8,8 @@ source comments, scripts, and other docs use these same locations.
 - [Release notes](using/release-notes.md) - what the driver does, what it does
   not, and its known limitations.
 - [Tuning](using/tuning.md) - every registry setting of the controller
-  driver: where it is, its range and default, and what it does.
+  driver and of the Thunderbolt and USB4 driver: where it is, its range and
+  default, and what it does.
 - [Release acceptance test](using/release-acceptance-test.md) - the fixed
   procedure a stranger runs against a published release on a machine this
   project has never seen: nine steps, the longer ones a checklist table of
@@ -28,8 +29,8 @@ source comments, scripts, and other docs use these same locations.
   [its second file](contributing/roadmap-miniport-updates.md), and Phases 25
   onward, the successor host controller driver's, in
   [its third](contributing/roadmap-hcd.md); the USB4 and Thunderbolt 3
-  connection-manager work, Phases 39 and 40 (`3.0.0.0`), is in
-  [its fourth](contributing/roadmap-usb4.md).
+  connection-manager work, Phases 39 to 41 (`3.0.0.0`) and the open Phase
+  42 (`3.1.0.0`), is in [its fourth](contributing/roadmap-usb4.md).
 - [Source files](contributing/source-files.md) - what every file in `src/` is
   for, and which belong to the host-tested pure core.
 - [Architecture](contributing/architecture.md) - component boundaries and data
@@ -178,6 +179,7 @@ turn out to need.
 | Phases 25-32 (the successor host controller driver, `xhci98.sys` since 2026-10-02: the design record and contract capture, the USB 2.0 bus driver on root ports, USB 2.0 hubs inside the bus, the other targets and the bench, SuperSpeed on root ports, SuperSpeed hubs, streams and UAS, **and the `2.0.0.0` cut**) | `docs/contributing/roadmap-hcd.md` (the decisions table, the shape of the successor, every phase's task table and checkpoint); `docs/contributing/runs/run-26.md` (what each Phase 26 task did and every guest reading); `docs/contributing/design/13-superspeed-hcd.md` (the design record, grown from the future-plans page on 2026-10-02 and filled by Phase 25: the design, the per-target contract, the Windows 98 export evidence, the door, the harness plan, hubs and composites, and the transfer-buffer policy); `docs/usb-xhci-info/win98-wdm.md` "PnP Dispatch Requirements", "Power Management", "IOCTL_INTERNAL_USB_* Codes", "URB Function Codes" and "DMA Memory Allocation" (written as the Option B checklist, which this is) | `docs/contributing/architecture.md` "Fallback: Option B"; `docs/contributing/design/02-hub-topology-route-string.md`, `04-controller-common-buffer.md` and `05-locking-model.md` (what the bus keeps and what it re-derives); `docs/contributing/test-equipment.md` (the SuperSpeed, UAS and hub units every bench clause names); the superspeed-storage-behind-a-switch proposal (the SuperSpeed transcription list its `-0` batch drew up, which Phase 29's reuses; removed with `docs/future-plans/` on 2026-10-12, in git history at `00a3b9e`) |
 | Phase 39 (the Thunderbolt firmware connection manager client `xhcicm.sys`, tunnel re-enumeration and safe eject; closed by `39.final` with a dry build, cut with Phase 40 as `3.0.0.0`) | `docs/contributing/roadmap-usb4.md` (the decisions table and Phase 39's tasks); `docs/contributing/design/21-thunderbolt3-icm-client.md` (the design record: selection and profiles, INFs and ids, the ICM client, re-enumeration, the Stor98 contract, safe eject, the legs); `docs/contributing/design/24-thunderbolt-device-tool.md` (the device viewer and eject, `XHCIINST /devices` and `/eject`, and the status record `xhcicm.sys` publishes for it); `usb4-emu`'s `docs/XHCI98-HANDOFF.md` and `docs/ICM-PROTOCOL.md` (read there, never modified) | `docs/usb-xhci-info/win98-wdm.md` (the WDM rules on 98); Linux `drivers/thunderbolt` and FreeBSD `sys/dev/thunderbolt` under `external/` as interface documentation (`legal-provenance.md` section 3); `docs/references/README.md` (the USB4 2.0 bundle and the Windows 98 DDK) |
 | Phase 40 (the USB4 software connection manager, and the `3.0.0.0` cut) | `docs/contributing/roadmap-usb4.md` (Phase 40's tasks); design record 22 (the software connection manager); design record 21 sections 1.4 and 13 (what the two profiles share); `docs/contributing/design/23-install-upgrade-tool.md` (the install, update and uninstall tool `INSTALL.BAT` runs, tasks 40.4 to 40.6, and its value table) | `usb4-emu`'s `tools/usb4cm` and `docs/ARCHITECTURE.md`; the USB4 Specification 2.0 and Connection Manager Guide 2.0 |
+| Phase 42 (the windowed installer, the uninstall from Add/Remove Programs, the Windows 98 SE and ME device install, `XHCISNAP` retired, the safe-removal mark across a stack rebuild, the connection-manager follow-ups, and the `3.1.0.0` cut) | `docs/contributing/roadmap-usb4.md` (Phase 42's tasks and the decisions table); `docs/contributing/design/23-install-upgrade-tool.md` (the install tool, its routes per system, its value table and its uninstall); design record 26 (the windowed installer) and design record 27 (the Windows 98 SE and ME device install through the 16-bit setup engine's documented device installer); design record 25 (XHCITR, which takes over from `XHCISNAP`); design record 21 sections 7.2 and 7.4 (the Stor98 channel's 9x half and the safe-removal mark across a stack rebuild, revised 2026-10-18) and design record 24 (the device viewer and eject, revision 6); design record 22 sections 7.7 and 10 (the USB4 host's recovery after loss, revised 2026-10-18, and the channel's USB4 half); design record 28 (a 9x function with no interrupt) | `xhciinst\README.TXT` and `xhcisnap\README.md` (the tools as they ship in `3.0.0.0`); the Windows 98 DDK's `SETUPX` documentation (`docs/references/README.md`) |
 | Any debugging or real-hardware qualification | `docs/contributing/lessons.md`; `docs/contributing/failure-diagnosis.md` | The phase-specific sources above |
 
 When a phase checkpoint fails or goes silent, read
@@ -202,7 +204,7 @@ third-party documents remain untracked in `docs/references/`.
 
 ## Documents that live outside `docs/`
 
-Four trees keep their documentation beside the thing it describes. This index
+Eight trees keep their documentation beside the thing it describes. This index
 points at them rather than copying them, so that everything tracked is
 reachable from here or from `AGENTS.md`'s repository layout.
 
@@ -217,9 +219,21 @@ reachable from here or from `AGENTS.md`'s repository layout.
   `2.4.0.0` left under `XHCI98\` (roadmap-hcd task 38.8, design record 13
   section 10.13.8); published as the tool's `readme.txt`.
 - [`xhciinst/README.TXT`](../xhciinst/README.TXT) - the install, update and
-  uninstall tool `INSTALL.BAT` runs, from `3.0.0.0` (roadmap-usb4 task 40.5,
+  uninstall tool `INSTALL.BAT` runs, from `3.0.0.0` (roadmap-usb4 task 40.4,
   design record 23), with its Thunderbolt and USB4 device modes `/devices`
   and `/eject` (design record 24); published as the tool's `readme.txt`.
+- [`xhcitr/README.TXT`](../xhcitr/README.TXT) - the xHCI98 USB Tree, the
+  graphical tree, eject and tray tool, from `3.0.0.0` (roadmap-usb4 Phase
+  41, design record 25); published as the tool's `readme.txt`.
+- [`src/stor98/README.md`](../src/stor98/README.md) - Stor98, the NVMe
+  SCSI miniport the packages bundle, a BSD-3-Clause project in this tree
+  since 2026-10-19 (roadmap-usb4 task 42-A.20) and built, versioned and
+  signed with the package since `3.1.0.0` (task 42-A.30), with its own
+  [`AGENTS.md`](../src/stor98/AGENTS.md), [`NOTICE`](../src/stor98/NOTICE)
+  and `docs/` ([`BUILD.md`](../src/stor98/docs/BUILD.md),
+  [`PLAN.md`](../src/stor98/docs/PLAN.md),
+  [`TESTING.md`](../src/stor98/docs/TESTING.md)); its dated records keep
+  the names and paths they were written with.
 - [`scripts/vm-matrix/README.md`](../scripts/vm-matrix/README.md) - the
   automated VM device matrix, its files, and its traps; its `guest/README.md`
   covers the load scripts that must run inside the guest.

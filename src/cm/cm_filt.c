@@ -15,11 +15,22 @@
  *       on a bridge the NHI holds for its resume is retained (section 6.3).
  *   [CM_KIND_CHILD]   role 3, safe eject's child filter, created by the
  *       bridge filter above a new device's PDO (directly, or above the bus
- *       filters already there, CmPortsChildAttach). Its one act is
- *       Removable in the IRP_MN_QUERY_CAPABILITIES answer, on the way up;
- *       a removal after a query-remove (an eject, not a surprise removal)
- *       is posted to the owning domain (record 22 section 10.4's per-port
- *       entry).
+ *       filters already there, CmPortsChildAttach), or since task 42-A.5
+ *       by AddDevice for a device whose LowerFilters value names this
+ *       driver (CmChildAddDevice; record 21 section 7.4, revision 3). Its
+ *       one act is Removable in the IRP_MN_QUERY_CAPABILITIES answer, on
+ *       the way up - always for the first kind, and for the second only
+ *       while its location is a unit on an active member's secondary bus
+ *       with safe eject on (CmRegAttMayMark); a removal after a
+ *       query-remove is recorded on the PDO's marks entry as a pending
+ *       departure (CmRegAttRemoved), and an eject follows only on its
+ *       confirmation.
+ *
+ * Every attachment, bridge or child, is on the registration list's
+ * attachment list from its attach to its removal and reads its PDO's
+ * location at the first request the PnP manager sends it (CmRegAttLocate);
+ * a bridge filter whose location is a unit answers Removable as the
+ * second kind of child does (decision M15: one object serving both).
  *
  * Every other IRP goes down unchanged (a device-usage notification with
  * the power flags mimicked, as a filter must). Each filter detaches and
@@ -65,6 +76,55 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
                    (DO_BUFFERED_IO | DO_DIRECT_IO | DO_POWER_PAGABLE |
                     DO_POWER_INRUSH);
     self->Flags &= ~DO_DEVICE_INITIALIZING;
+    filter->AddDev = 1;
+    CmRegAttLink(filter);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * The child by AddDevice (record 21 section 7.4, revision 3): this driver
+ * named in the device's LowerFilters value by the mark service. Attached
+ * to the top of what is on the PDO, copying its flags as CmPortsChildAttach
+ * does; passive until associated (CmRegAttMayMark). A failed attach is no
+ * failed AddDevice: a registered filter whose AddDevice fails fails the
+ * device's start (decision M7), so this answers STATUS_SUCCESS with no
+ * device object rather than stop the unit.
+ */
+NTSTATUS CmChildAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
+{
+    PDEVICE_OBJECT self;
+    PDEVICE_OBJECT lower;
+    PCM_FILTER child;
+    NTSTATUS status;
+
+    status = IoCreateDevice(driver, sizeof(CM_FILTER), NULL,
+                            FILE_DEVICE_UNKNOWN, 0, FALSE, &self);
+    if (!NT_SUCCESS(status)) {
+        return STATUS_SUCCESS;
+    }
+    child = (PCM_FILTER)self->DeviceExtension;
+    CmZero(child, sizeof(CM_FILTER));
+    child->Common.Kind = CM_KIND_CHILD;
+    child->Common.Self = self;
+    child->Common.Pdo = pdo;
+    child->Outstanding = 1;
+    child->AddDev = 1;
+    KeInitializeSpinLock(&child->Lock);
+    KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
+    CmRegFilterInit(child);
+    lower = IoAttachDeviceToDeviceStack(self, pdo);
+    if (lower == NULL) {
+        IoDeleteDevice(self);
+        return STATUS_SUCCESS;
+    }
+    child->Common.Lower = lower;
+    self->DeviceType = lower->DeviceType;
+    self->Characteristics = lower->Characteristics;
+    self->Flags |= lower->Flags &
+                   (DO_BUFFERED_IO | DO_DIRECT_IO | DO_POWER_PAGABLE |
+                    DO_POWER_INRUSH);
+    self->Flags &= ~DO_DEVICE_INITIALIZING;
+    CmRegAttLink(child);
     return STATUS_SUCCESS;
 }
 
@@ -130,9 +190,16 @@ static NTSTATUS cmFilterUsageDone(PDEVICE_OBJECT device, PIRP irp,
 }
 
 /*
- * The child filter's answer (record 21 section 7.4 step 2): Removable set
- * on the way up, where pci.sys succeeded the request. SurpriseRemovalOK,
- * EjectSupported and LockSupported are left as the bus driver set them.
+ * The child's answer (record 21 section 7.4 step 2): Removable set on the
+ * way up, where pci.sys succeeded the request and CmRegAttMayMark says
+ * this attachment may mark the device (any child of the bridge filter's;
+ * an AddDevice child or a bridge filter only while it is a unit of an
+ * active member with safe eject on). SurpriseRemovalOK, EjectSupported and
+ * LockSupported are left as the bus driver set them. The location is read
+ * on the way up, the address from the answer itself (CmRegAttLocateCaps),
+ * so that a capability request before the start - a never-seen device's
+ * first, before any driver of its own - finds it; a request this object
+ * caused by asking for its own location passes through unlocated.
  * PASSIVE_LEVEL.
  */
 static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
@@ -142,12 +209,14 @@ static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
     NTSTATUS status;
 
     status = CmForwardSync(&child->Common, irp);
-    if (NT_SUCCESS(status)) {
-        stack = IoGetCurrentIrpStackLocation(irp);
-        caps = stack->Parameters.DeviceCapabilities.Capabilities;
-        if (caps != NULL && caps->Version >= 1 &&
-            caps->Size >= sizeof(DEVICE_CAPABILITIES)) {
+    stack = IoGetCurrentIrpStackLocation(irp);
+    caps = stack->Parameters.DeviceCapabilities.Capabilities;
+    if (NT_SUCCESS(status) && caps != NULL && caps->Version >= 1 &&
+        caps->Size >= sizeof(DEVICE_CAPABILITIES)) {
+        CmRegAttLocateCaps(child, caps->Address);
+        if (CmRegAttMayMark(child)) {
             caps->Removable = 1;
+            CmRegAttAnswered(child);
         }
     }
     return CmCompleteIrp(irp, status, irp->IoStatus.Information);
@@ -196,17 +265,28 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         return IoCallDriver(filter->Common.Lower, irp);
 
     case IRP_MN_START_DEVICE:
+        if ((child || filter->AddDev) && !CmRegStartAllowed(filter)) {
+            /* Its tunnel is being torn down for an eject (the function
+             * read stackless when the eject was taken). */
+            CmRegAttEvent(filter, CM_MK_START_FAILED);
+            return CmCompleteIrp(irp, STATUS_DEVICE_NOT_READY, 0);
+        }
         status = CmForwardSync(&filter->Common, irp);
+        CmRegAttLocate(filter);
         if (NT_SUCCESS(status)) {
             filter->Started = 1;
+            filter->QueryRemoved = 0;
+            filter->SurpriseRemoved = 0;
             if (!child) {
                 CmRegPublish(filter);
             }
+        } else {
+            CmRegAttEvent(filter, CM_MK_START_FAILED);
         }
         return CmCompleteIrp(irp, status, irp->IoStatus.Information);
 
     case IRP_MN_QUERY_CAPABILITIES:
-        if (child) {
+        if (child || filter->AddDev) {
             return cmChildCapabilities(filter, irp);
         }
         break;
@@ -219,15 +299,13 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         break;
 
     case IRP_MN_QUERY_REMOVE_DEVICE:
-        if (child) {
-            filter->QueryRemoved = 1;
-        }
+        filter->QueryRemoved = 1;
+        CmRegAttEvent(filter, CM_MK_QUERY_REMOVE);
         break;
 
     case IRP_MN_CANCEL_REMOVE_DEVICE:
-        if (child) {
-            filter->QueryRemoved = 0;
-        }
+        filter->QueryRemoved = 0;
+        CmRegAttEvent(filter, CM_MK_CANCEL_REMOVE);
         break;
 
     case IRP_MN_STOP_DEVICE:
@@ -239,9 +317,9 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
 
     case IRP_MN_SURPRISE_REMOVAL:
         filter->Started = 0;
-        if (child) {
-            filter->SurpriseRemoved = 1;
-        } else {
+        filter->SurpriseRemoved = 1;
+        CmRegAttEvent(filter, CM_MK_SURPRISE);
+        if (!child) {
             CmRegWithdraw(filter);
         }
         break;
@@ -259,16 +337,16 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         KeReleaseSpinLock(&filter->Lock, irql);
         if (child) {
             /* The child waits for the removal to finish below, detaches,
-             * and only then counts the port's eject (CmRegChildRemoved),
-             * so it is posted once this function's stack is gone. */
+             * and only then records the departure (CmRegAttRemoved), so it
+             * is recorded once this function's stack is gone. */
             status = CmForwardSync(&filter->Common, irp);
             cmFilterRelease(filter);
             (VOID)KeWaitForSingleObject(&filter->Drained, Executive,
                                         KernelMode, FALSE, NULL);
             IoDetachDevice(filter->Common.Lower);
-            CmRegChildRemoved(filter,
-                              (BOOLEAN)(filter->QueryRemoved &&
-                                        !filter->SurpriseRemoved));
+            CmRegAttRemoved(filter,
+                            (BOOLEAN)(filter->QueryRemoved &&
+                                      !filter->SurpriseRemoved));
             (VOID)CmCompleteIrp(irp, status, irp->IoStatus.Information);
             IoDeleteDevice(filter->Common.Self);
             return status;
@@ -279,6 +357,8 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         (VOID)KeWaitForSingleObject(&filter->Drained, Executive, KernelMode,
                                     FALSE, NULL);
         IoDetachDevice(filter->Common.Lower);
+        CmRegAttRemoved(filter, (BOOLEAN)(filter->QueryRemoved &&
+                                          !filter->SurpriseRemoved));
         IoDeleteDevice(filter->Common.Self);
         return status;
 

@@ -30,9 +30,6 @@ XHCI_C_ASSERT(hcd_poll_cnr, XHCI_POLL_USBSTS_CNR == XHCI_USBSTS_CNR);
 XHCI_C_ASSERT(hcd_poll_ip, XHCI_POLL_IMAN_IP == XHCI_IMAN_IP);
 XHCI_C_ASSERT(hcd_poll_ie, XHCI_POLL_IMAN_IE == XHCI_IMAN_IE);
 
-/* PCI Command, bit 10: Interrupt Disable (PCI 3.0 6.2.2). */
-#define HCD_PCI_COMMAND_INTX_DISABLE 0x0400U
-
 static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
                              PVOID Arg2);
 static VOID hcdPollQemuLatch(PHCD_CONTROLLER hc, ULONG now);
@@ -340,8 +337,8 @@ ULONG HcdPollContain(PHCD_CONTROLLER hc)
         command == 0xFFFFU) {
         return 0;
     }
-    if ((command & HCD_PCI_COMMAND_INTX_DISABLE) == 0) {
-        command = (USHORT)(command | HCD_PCI_COMMAND_INTX_DISABLE);
+    if ((command & XHCI_PCI_COMMAND_INTX_DISABLE) == 0) {
+        command = (USHORT)(command | XHCI_PCI_COMMAND_INTX_DISABLE);
         if (XhciWritePciConfig(ext, XHCI_PCI_COMMAND, &command,
                                sizeof(USHORT)) != MP_STATUS_SUCCESS) {
             return 0;
@@ -350,7 +347,7 @@ ULONG HcdPollContain(PHCD_CONTROLLER hc)
         if (XhciReadPciConfig(ext, XHCI_PCI_COMMAND, &command,
                               sizeof(USHORT)) != MP_STATUS_SUCCESS ||
             command == 0xFFFFU ||
-            (command & HCD_PCI_COMMAND_INTX_DISABLE) == 0) {
+            (command & XHCI_PCI_COMMAND_INTX_DISABLE) == 0) {
             return 0;
         }
     }
@@ -743,7 +740,7 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     hc = (PHCD_CONTROLLER)Context;
     ext = &hc->Hc;
     /* The finer timer's observation epoch, read BEFORE the entry time
-     * (record 15 section 7.2.9; review of 38.3, round 1): a call that
+     * (record 15 section 7.2.9; task 38.3): a call that
      * lands between the two reads moves the epoch past this value, so the
      * observation's read below sees it and the sample counts nothing. Read
      * after the time, a call landing between them would date a pre-call

@@ -1,4 +1,4 @@
-﻿CommandsGivenUp	commands the engine gave up on
+CommandsGivenUp	commands the engine gave up on
 DevicesAddressed	devices addressed
 EndpointConfigureFailures	endpoint configure failures
 EndpointRefusalsParams	endpoint refusals - params
