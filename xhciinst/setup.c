@@ -36,6 +36,10 @@
 #ifndef SEE_MASK_FLAG_NO_UI
 #define SEE_MASK_FLAG_NO_UI 0x00000400
 #endif
+/* SEE_MASK_NOASYNC's older name, in every shell from Windows 95 on. */
+#ifndef SEE_MASK_FLAG_DDEWAIT
+#define SEE_MASK_FLAG_DDEWAIT 0x00000100
+#endif
 #ifndef ERROR_CANCELLED
 #define ERROR_CANCELLED 1223L
 #endif
@@ -230,7 +234,10 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE prev, LPSTR cmdLine, int show)
     }
     memset(&sei, 0, sizeof(sei));
     sei.cbSize = sizeof(sei);
-    sei.fMask = SEE_MASK_FLAG_NO_UI;
+    /* The process ends straight after the call, with no message loop, so
+     * the shell is asked to finish the start before it returns (it does
+     * not wait for the window to end). */
+    sei.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_FLAG_DDEWAIT;
     sei.lpVerb = "open";
     sei.lpFile = wiz;
     sei.lpParameters = *tail != '\0' ? tail : NULL;

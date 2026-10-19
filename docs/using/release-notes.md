@@ -203,6 +203,12 @@ as they are made; the head of this file is rewritten when it is cut.
   removes everything, and Add/Remove Programs shows one entry, named for
   what is installed. `tools\xhciinst\readme.txt`, "The connection manager
   alone".
+- **The installer opens from `SETUP.EXE`.** To install, update or
+  uninstall, double-click `SETUP.EXE` at the top of the package: it opens
+  the installer's window with no console window behind it, and on Vista
+  and 7 Windows asks once, for the window. `INSTALL.BAT` still works and
+  is kept for the command line and scripts (`INSTALL /console ...`); run
+  with no arguments it opens the same window.
 - **Windows 8 and 8.1: the connection manager alone.** The installer now
   starts on Windows 8 and 8.1 (it reads the version through
   `RtlGetVersion`) and installs the connection manager alone there,

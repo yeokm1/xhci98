@@ -1,7 +1,8 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 13, 2026-10-19 (the connection manager alone, and
-Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
+Status: revision 14, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
+for the command line; see below); revision 13, 2026-10-19 (the
+connection manager alone, and Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
 service and the machine-wide key); revision 11, 2026-10-18 (the window,
 the helper, the uninstall
 from Add/Remove Programs; see below); revision 10, 2026-10-16 (the
@@ -189,6 +190,19 @@ it". What changes here:
 - **Sections 9.5 and 5.1 step 12**: the mark service on 8 and 8.1 too.
 - **Section 13**: D17 to D19.
 
+Revision 14, 2026-10-19 (roadmap-usb4.md task 42-A.31; record 26 draft 9
+section 2 and W17). The owner, 2026-10-19: "setup.exe by tonight". The
+package root gains `SETUP.EXE`, the program a person double-clicks: it
+starts the installer's window and exits, with no console window behind
+it. `INSTALL.BAT` stays, its behaviour unchanged, for the command line
+and scripts. This supersedes decision D1's one entry point (the owner's
+of 2026-10-15, kept by record 26 W2 on 2026-10-18). What changes here:
+
+- **Section 2**: the layout gains `SETUP.EXE` at the root, and the
+  paragraph on the one batch file says who uses which.
+- **Section 7.4**: `SETUP.EXE` does not pass the code on.
+- **Sections 13 and 15**: D1 revised; the files.
+
 The tool never ships `devcon` or any other Microsoft file, never drives
 Windows 98's 16-bit setup engine (`SETUPX`) through anything undocumented,
 and never changes a boot setting.
@@ -255,7 +269,8 @@ program around them, in the shape `XHCICLN` already has.
 ## 2. Where it lives in the package (decision D1)
 
 ```
-<package>\INSTALL.BAT              the one entry point
+<package>\SETUP.EXE                for people: starts the window (revision 14)
+<package>\INSTALL.BAT              the command line's entry point
 <package>\release-x86\ ...         unchanged: the drivers and their INFs
 <package>\release-x64\ ...
 <package>\debug-x86\, debug-x64\
@@ -287,6 +302,15 @@ is `INSTALL.BAT /uninstall`. A second batch file at the root is one
 double-click from removing the driver of the only keyboard on an
 xHCI-only machine; behind a switch it is one typed word and a confirmation
 (section 9.1).
+
+Since revision 14 a person is not sent to `INSTALL.BAT` at all: the
+readme's first instruction is "To install, update or uninstall,
+double-click SETUP.EXE", and `SETUP.EXE` starts the window (record 26
+section 2). `INSTALL.BAT` is for the command line and scripts
+(`INSTALL /console ...`); with no argument it still opens the same
+window. `SETUP.EXE` is a program, not a second batch file, and does
+nothing an `INSTALL` with the same arguments would not: the uninstall
+stays behind `/uninstall`.
 
 `INSTALL.BAT` runs under Windows 98's `COMMAND.COM` and under `cmd.exe`.
 It chooses the executable and the flavour directory and passes the
@@ -1380,7 +1404,9 @@ section 4 gains a row when a reading rests on one).
 Failed, restart and steps are three flags; the code is 2 when failed is
 set, else 4 when steps is set, else 3 when restart is set, else 0. The
 console says every flag that is set, so a 2 or a 4 that also needs a
-restart says so. `INSTALL.BAT` passes the code on.
+restart says so. `INSTALL.BAT` passes the code on; `SETUP.EXE` does not
+wait for the window and returns 0 once it is started (revision 14,
+record 26 section 2).
 
 **The last line before the exit code** (owner, 2026-10-15): when the run
 changed anything - a driver installed, updated or removed, a filter added
@@ -2204,6 +2230,9 @@ the user.
 
 - **D1** The executables in `tools\xhciinst\`, `INSTALL.BAT` at the root;
   one batch file, the uninstall behind `/uninstall` (section 2).
+  Revision 14 (the owner, 2026-10-19): `SETUP.EXE` beside it at the root
+  is what a person runs, `INSTALL.BAT` the command line's and scripts'
+  (record 26 W17); still one batch file.
 - **D2** Windows 98 SE and ME through `DevicePath` and the local copy in
   in this package's own directory under `%windir%\XHCI98\`, which
   `DevicePath` names in place of an earlier copy's, never `INF\OTHER` or
@@ -2298,6 +2327,7 @@ the user.
 | `xhciinst\xhciinst.rc`, `xhciinst.manifest` | the elevation manifest |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the two builds; the self-test and the import check |
 | `xhciinst\INSTALL.BAT` | staged at the package root |
+| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, staged at the package root (revision 14; record 26 section 2) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt` |
 | `test\test_inst.c` | the host suite |
 | `scripts\build-driver.cmd`, `scripts\package\make-release.ps1`, `scripts\package\test-package.ps1`, `test\run-host-tests.cmd`, `.gitignore` | wiring |

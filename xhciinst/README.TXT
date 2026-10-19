@@ -4,8 +4,12 @@ XHCIWIZ and XHCIINST - install, update or uninstall the xhci98 drivers
 What it is for
 --------------
 
-INSTALL.BAT, at the top of the package, opens the installer's window. On
-Windows 2000, XP, XP x64, Vista and 7 it installs or updates every driver
+To install, update or uninstall, double-click SETUP.EXE, at the top of
+the package: it opens the installer's window. INSTALL.BAT, beside it, is
+for the command line and scripts (INSTALL /console ...); run with no
+arguments it opens the same window.
+
+On Windows 2000, XP, XP x64, Vista and 7 it installs or updates every driver
 of the package on the devices it finds - the xHCI controller first, then
 its root hub, hubs and composite entries, then UAS disks and a
 Thunderbolt or USB4 controller - and puts the package's INFs (all but one
@@ -49,8 +53,10 @@ Which file
   XHCIDI.EXE     Windows 98 SE and ME only: the helper that installs a
                  driver on a device; run by the other two, never by hand
 
-INSTALL.BAT picks the right one and the right directory (release-x86 or
-release-x64).
+SETUP.EXE, at the top of the package, starts the right window and ends at
+once; INSTALL.BAT picks the right one and the right directory (release-x86
+or release-x64) and waits for it. Either passes its arguments on (SETUP
+/uninstall, INSTALL /console /list).
 
 The installer's window
 ----------------------
@@ -60,9 +66,16 @@ but its own tools\xhciinst directory of an unzipped package, and checks
 that every file of the driver directory belongs to this release, this
 architecture and this build.
 
-  Windows 98 SE, ME: double-click INSTALL.BAT.
-  Windows 2000, XP:  run it as an administrator.
-  Windows Vista, 7:  right-click INSTALL.BAT, Run as administrator.
+  Windows 98 SE, ME: double-click SETUP.EXE.
+  Windows 2000, XP:  sign in as an administrator, then double-click
+                     SETUP.EXE.
+  Windows Vista, 7:  double-click SETUP.EXE and answer Yes when Windows
+                     asks for an administrator's approval (once, for the
+                     window; SETUP.EXE itself asks for none).
+
+SETUP.EXE leaves no console window behind; INSTALL.BAT, double-clicked,
+keeps one open until the window closes. If the window cannot be started
+(a file missing, or the approval refused) SETUP.EXE says so in a message.
 
 The window walks you through:
 
@@ -360,9 +373,14 @@ Exit codes
   0  done, nothing needed a change (or /list)
   1  refused or cancelled; nothing was changed
   2  something failed; the screen and the log say what was done
-  3  done, something changed; restart Windows (and run INSTALL.BAT again
+  3  done, something changed; restart Windows (and run SETUP.EXE again
      after it if it says so)
   4  done as far as the installer can; it said what is left for you
+
+INSTALL /console, and INSTALL without it (which waits for the window),
+return the code to a script. SETUP.EXE does not wait: it returns 0 once
+the window is started and 1 when it could not start it; the window's
+result is on its Finish page and in the log.
 
 The log
 -------
