@@ -1870,3 +1870,34 @@ was staged into it, but starting the VMs was refused by the session's
 permission check. All three legs are owed: a fresh install with a file
 copy and compare on the NVMe on 98 SE and on 2000, and the update from
 `0.4.0.0` to `3.1.0.0`.
+
+### The merges of the evening and the rebuild
+
+`3.1.0.0` was merged in twice more: at `f5678586` (`94c22687`; conflicts
+in `make-release.ps1`'s readme paragraph, the release notes, this file
+and records 23 and 26, both sides kept) and at `234884a3` (`9cf98652`,
+which brings Stor98's 9x bounce fix of 42-A.33 and the 98 SE / ME
+`OEM Name` cleanup; Stor98's `3.1.0.0` history entry now names the
+bounce fix). This task's record revisions are record 23 revision 19 and
+record 26 draft 13 (42-A.26 took 18 and 12; the `OEM Name` cleanup took
+20 and 14). The merge review found one P2: the bundled
+`stor98-readme.txt`, `README.md` and the release notes still said
+`/stor98` alone, which the installer now refuses without `/thunderbolt`;
+fixed in `6ae57798`, then a confirmation round and the review of the last
+merge found nothing.
+
+| Build | Result |
+|---|---|
+| `build-driver.cmd both`, `234884a3` | BUILD + GATES PASSED (debug release): packager self-tests 1098 checks, host tests passed (`test_inst` 1562 checks), Stor98 unit tests all passed (the bounce fix's `sg9x_ut` with them), Stor98 gate win9x and x86 in both flavours |
+| `build-driver.cmd both -amd64`, `234884a3` | BUILD + GATES PASSED (debug release): packager self-tests 1098 checks, host tests passed (`test_inst` 1575 checks), Stor98 gate amd64 in both flavours |
+| `make-release.ps1 -Arch x86 -SkipQualtool -TestLabel ...` into `out\testrel2`, `7e84f8ef` (before the last merge) | passed; every binary `3.1.0.0`, every INF `10/19/2026,3.1.0.0` |
+| `make-package.ps1 -Flavor release -Arch amd64`, unsigned | passed at `234884a3`; every binary `3.1.0.0`, every INF `10/19/2026,3.1.0.0` |
+
+The Stor98 images of the last merge, the bounce fix in, pass the same
+gate: version `3.1.0.0`, `STOR98_FLAVOUR_FREE`, 11, 19 and 18 imports,
+none new.
+
+The legs were allowed by the owner in the evening, but starting the
+guests was refused by the session's permission check again, so they are
+still owed; the kit `E:\xhci98-vm\p42-s98ver` now starts its guests
+headless (`-display none`, VNC on its own ports).
