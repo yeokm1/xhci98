@@ -2522,9 +2522,14 @@ VOID CmReenumService(PCM_NHI nhi)
             }
             if ((nhi->RecBarred & (1UL << i)) != 0) {
                 /* Behind record 22 section 7.7's retirement barrier: the
-                 * held call is owed until it is lifted. */
+                 * held call is owed until it is lifted; a loss call it
+                 * carried is made now, alone, as CM_HELD_DO_LOSS is. */
                 r->Port[i].Missed = 1;
                 r->Port[i].MissedExpose |= heldExpose ? 1UL : 0UL;
+                if (held & CM_HELD_LOSS) {
+                    cmReenumOne(nhi, i, TRUE, FALSE, CM_NVLINK_TUNNEL_NONE,
+                                FALSE, FALSE);
+                }
             } else {
                 r->Port[i].Missed = missed ? 1UL : 0UL;
                 if (!missed) {
