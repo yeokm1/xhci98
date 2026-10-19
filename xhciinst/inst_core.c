@@ -1617,7 +1617,9 @@ const INST_VALUE instValues[] = {
       { "no", "yes", NULL, NULL } },
     { "XhciCmSafeEject", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0x3UL,
       "offer Safely Remove for the devices behind a dock",
-      NULL, 0, { "no", "yes", NULL, NULL } },
+      "no also leaves out the safe-removal mark service, and removes it "
+      "with its marks where it is installed.", 0x1UL,
+      { "no", "yes", NULL, NULL } },
     /* Owner, 2026-10-15: never asked, /set Name=Value only (record 23
      * section 8.1, record 24 section 11). */
     { "XhciCmReenum", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
@@ -2814,15 +2816,59 @@ int inst_mk_system(const INST_ENV *env)
                        (env->Major == 6UL && env->Minor <= 3UL));
 }
 
-int inst_mk_end_action(int cmService, int tbInRun, int markSystem)
+int inst_mk_end_action(int cmService, int tbInRun, int markSystem,
+                       int safeEject)
 {
     if (cmService == 0) {
         return INST_MK_REMOVE;
     }
-    if (cmService == 1 && tbInRun && markSystem) {
+    if (cmService != 1) {
+        return INST_MK_LEAVE;
+    }
+    if (!safeEject) {
+        /* Safe eject off: no mark has a use, and the service goes with
+         * its marks as the uninstall's step 0 takes them. */
+        return INST_MK_REMOVE;
+    }
+    if (tbInRun && markSystem) {
         return INST_MK_INSTALL;
     }
     return INST_MK_LEAVE;
+}
+
+int inst_cddb_service_gone(const char *service, const char *const *gone,
+                           int n)
+{
+    int i;
+
+    if (service == NULL || service[0] == '\0' || gone == NULL) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (gone[i] != NULL && inst_eq(service, gone[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_mk_safe_eject(int mwState, INST_U32 mwValue, const INST_VNOW *now,
+                       int nNow)
+{
+    int i;
+
+    if (mwState > 0) {
+        return mwValue != 0 ? 1 : 0;
+    }
+    if (mwState < 0 || now == NULL || nNow <= 0) {
+        return 1;
+    }
+    for (i = 0; i < nNow; i++) {
+        if (now[i].State != 1 || now[i].Value != 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* The marks answer's and the confirmation's layouts (src\cm\cm_query.h),

@@ -1,7 +1,9 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 17, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
-for the command line; see below); revision 16, 2026-10-19 (task 42-A.22, record 26 draft 11: Stor98
+Status: revision 22, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
+for the command line; see below); revision 17, 2026-10-19 (task 42-A.24: the
+CriticalDeviceDatabase service entries and the mark service following
+`XhciCmSafeEject`, sections 5.1 and 9.2); revision 16, 2026-10-19 (task 42-A.22, record 26 draft 11: Stor98
 part of the Thunderbolt support, the UAS driver a component of its own;
 sections 4.4, 7.1 and 8.1); revision 15, 2026-10-19 (`XhciFastPollFsLs`
 settable; see below); revision 14, 2026-10-19 (task 42-A.27: a
@@ -205,7 +207,19 @@ should be in advanced settings"). What changes here:
   values (section 8.4). A choice list now names values 0 to 4, so the
   table's choice texts reach value 4.
 
-Revision 17, 2026-10-19 (roadmap-usb4.md task 42-A.31; record 26 draft 12
+Revision 17, 2026-10-19 (roadmap-usb4.md task 42-A.24; the owner,
+2026-10-19, for the mark service and `XhciCmSafeEject`). What changes here:
+
+- **Section 9.2 step 0**: the CriticalDeviceDatabase's `LowerFilters`
+  and `UpperFilters` copies of `xhcicm`, every entry, first and read again
+  at the end (record 21 section 7.4).
+- **Section 9.2 step 6a, new**: every CriticalDeviceDatabase entry whose
+  `Service` names a service of the package that is gone is deleted.
+- **Section 5.1 step 12**: the mark service follows the `XhciCmSafeEject`
+  in force after the run; step 6a's scrub runs at the end of every NT
+  install and update run too.
+
+Revision 22, 2026-10-19 (roadmap-usb4.md task 42-A.31; record 26 draft 15
 section 2 and W17). The owner, 2026-10-19: "setup.exe by tonight". The
 package root gains `SETUP.EXE`, the program a person double-clicks: it
 starts the installer's window and exits, with no console window behind
@@ -284,7 +298,7 @@ program around them, in the shape `XHCICLN` already has.
 ## 2. Where it lives in the package (decision D1)
 
 ```
-<package>\SETUP.EXE                for people: starts the window (revision 17)
+<package>\SETUP.EXE                for people: starts the window (revision 22)
 <package>\INSTALL.BAT              the command line's entry point
 <package>\release-x86\ ...         unchanged: the drivers and their INFs
 <package>\release-x64\ ...
@@ -318,7 +332,7 @@ double-click from removing the driver of the only keyboard on an
 xHCI-only machine; behind a switch it is one typed word and a confirmation
 (section 9.1).
 
-Since revision 17 a person is not sent to `INSTALL.BAT` at all: the
+Since revision 22 a person is not sent to `INSTALL.BAT` at all: the
 readme's first instruction is "To install or update, double-click
 SETUP.EXE; to uninstall, use Remove in Add/Remove Programs (or SETUP
 /uninstall)", and `SETUP.EXE` starts the window (record 26
@@ -700,18 +714,36 @@ a boot setting (D6).
 12. **The marks' invariant** (revision 12; record 21 section 7.4, decision
     M13), at the end of every run that got this far or stopped on the
     way, whatever its verdict: a `LowerFilters` value naming `xhcicm`
-    exists only while the `xhcicm` service is registered. With that
-    service registered and the Thunderbolt component in the run, on
-    Windows 2000 to 8.1 (8 and 8.1 from revision 13), the mark service
-    is installed or updated and
-    started (section 9.5); with it registered and the component not in
-    the run, nothing of the marks changes; with no `xhcicm` service (an
+    exists only while the `xhcicm` service is registered and safe eject
+    is on. Safe eject is the `XhciCmSafeEject` in force once the run's own
+    writes are done, by task 42-A.17's precedence (revision 17; the owner,
+    2026-10-19): the machine-wide value when present (one that is not a
+    `DWORD` reads as the driver's default 1), else the value in the
+    driver key of every present device whose service is `xhcicm`, read
+    whatever this run plans for it, else the default 1; it is off only
+    when the value in force is 0 for every such device
+    (`inst_mk_safe_eject`). With the `xhcicm` service registered, safe
+    eject on and the Thunderbolt component in the run, on Windows 2000 to
+    8.1 (8 and 8.1 from revision 13), the mark service is installed or
+    updated and started (section 9.5); with it registered, safe eject on
+    and the component not in the run, nothing of the marks changes; with
+    it registered and safe eject off, or with no `xhcicm` service (an
     update that ended without it, a name left on a machine where the
     service was removed by hand), section 9.2's step 0 runs, so every
-    such name is removed and the mark service, if any, deleted. A step 0
-    that fails is a failure of the run, said with "restart Windows and
-    run INSTALL.BAT again". A state of the `xhcicm` service that cannot
-    be read changes nothing.
+    such name is removed, the CriticalDeviceDatabase's copies with them,
+    and the mark service, if any, deleted; with `xhcicm` registered and
+    safe eject off, the database's `UpperFilters` copies stay, being the
+    tunnel-port filter's and not a mark's (read on 7: an install with
+    `XhciCmSafeEject=0` had taken the filter INF's out before this rule),
+    while with no `xhcicm` service and at the uninstall both values go. So a later
+    `INSTALL /console /set XhciCmSafeEject=0` removes the service and its
+    marks at the end of that run, and `=1` installs it again at the end
+    of a run that carries the Thunderbolt component. A step 0 that fails
+    is a failure of the run, said with "restart Windows and run
+    INSTALL.BAT again". A state of the `xhcicm` service that cannot be
+    read changes nothing. Then, on NT, step 6a of section 9.2 runs (an
+    update's INF retires `xhcimsi` on Vista and 7), its failure a failure
+    of the run.
 
 Steps 6 to 8 stop at the first failure that leaves the order meaningless
 (a controller update failed), report what was done and exit 2; a failure
@@ -1457,7 +1489,7 @@ Failed, restart and steps are three flags; the code is 2 when failed is
 set, else 4 when steps is set, else 3 when restart is set, else 0. The
 console says every flag that is set, so a 2 or a 4 that also needs a
 restart says so. `INSTALL.BAT` passes the code on; `SETUP.EXE` does not
-wait for the window and returns 0 once it is started (revision 17,
+wait for the window and returns 0 once it is started (revision 22,
 record 26 section 2).
 
 **The last line before the exit code** (owner, 2026-10-15): when the run
@@ -1929,6 +1961,30 @@ after it, reports what was done, and tells the user to restart and run
    scheduled with `MoveFileEx(..., MOVEFILE_DELAY_UNTIL_REBOOT)` and
    reported as pending. A service whose deletion failed keeps its file.
    Then the local copies and the `/restage` work file (section 4.4).
+6a. **The CriticalDeviceDatabase's service entries** (revision 17): when
+   Windows installs a boot-critical device it writes an entry under
+   `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase` for
+   its ids and class with its `Service`; left after the uninstall, the
+   next install of that device starts from a service that no longer
+   exists (read on 2000: the NHI came back at Code 19 through
+   `pci#cc_0c0340` and `pci#ven_8086&dev_15bf` naming `xhcicm`; the same
+   entries were left on XP and 7). Every entry whose `Service` names, case
+   ignored, a service of the package that this run removed or marked for
+   deletion, or that the service manager reads absent or marked now
+   (`xhci98`, `xhciuas`, `xhcicm`, `xhcihlpr`, `xhcimsi`, and `stor98`,
+   which is gone only when Stor98's own removal took its service, so a
+   Stor98 that was there before the package or that a device still uses
+   keeps its entries), is deleted with `RegDeleteKeyA` and read back gone
+   (`inst_cddb_service_gone`). An entry naming another driver's service
+   is never touched. An entry or a `Service` value that cannot be read,
+   or a deletion that does not read back, fails the step as step 6's
+   failures do; `/list` names the entries it would delete. Read on 2000
+   in 42-A.24's leg: the uninstall deleted the two entries naming
+   `xhcicm`, kept `pci#cc_010802` naming the Stor98 a drive still used,
+   and after the restart the NHI came back with no driver (Code 1, as
+   before the package was first installed, the Found New Hardware wizard
+   finding none), not Code 19. `xhci98` and `xhciuas` left no entry on
+   that 2000 disk.
 
 ### 9.3 What it never removes
 
@@ -2306,7 +2362,7 @@ the user.
 
 - **D1** The executables in `tools\xhciinst\`, `INSTALL.BAT` at the root;
   one batch file, the uninstall behind `/uninstall` (section 2).
-  Revision 17 (the owner, 2026-10-19): `SETUP.EXE` beside it at the root
+  Revision 22 (the owner, 2026-10-19): `SETUP.EXE` beside it at the root
   is what a person runs, `INSTALL.BAT` the command line's and scripts'
   (record 26 W17); still one batch file.
 - **D2** Windows 98 SE and ME through `DevicePath` and the local copy in
@@ -2403,7 +2459,7 @@ the user.
 | `xhciinst\xhciinst.rc`, `xhciinst.manifest` | the elevation manifest |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the two builds; the self-test and the import check |
 | `xhciinst\INSTALL.BAT` | staged at the package root |
-| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, staged at the package root (revision 17; record 26 section 2) |
+| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, staged at the package root (revision 22; record 26 section 2) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt` |
 | `test\test_inst.c` | the host suite |
 | `scripts\build-driver.cmd`, `scripts\package\make-release.ps1`, `scripts\package\test-package.ps1`, `test\run-host-tests.cmd`, `.gitignore` | wiring |

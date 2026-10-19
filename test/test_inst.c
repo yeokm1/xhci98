@@ -3505,13 +3505,71 @@ static void test_marks(void)
               "the mark service: Windows 2000 to 8.1 (8 and 8.1 for the "
               "connection manager alone)");
     }
-    CHECK(inst_mk_end_action(1, 1, 1) == INST_MK_INSTALL &&
-          inst_mk_end_action(1, 0, 1) == INST_MK_LEAVE &&
-          inst_mk_end_action(1, 1, 0) == INST_MK_LEAVE &&
-          inst_mk_end_action(0, 1, 1) == INST_MK_REMOVE &&
-          inst_mk_end_action(0, 0, 0) == INST_MK_REMOVE &&
-          inst_mk_end_action(-1, 1, 1) == INST_MK_LEAVE,
+    CHECK(inst_mk_end_action(1, 1, 1, 1) == INST_MK_INSTALL &&
+          inst_mk_end_action(1, 0, 1, 1) == INST_MK_LEAVE &&
+          inst_mk_end_action(1, 1, 0, 1) == INST_MK_LEAVE &&
+          inst_mk_end_action(0, 1, 1, 1) == INST_MK_REMOVE &&
+          inst_mk_end_action(0, 0, 0, 1) == INST_MK_REMOVE &&
+          inst_mk_end_action(-1, 1, 1, 1) == INST_MK_LEAVE,
           "a run's end: the service with xhcicm, every mark gone without it");
+    CHECK(inst_mk_end_action(1, 1, 1, 0) == INST_MK_REMOVE &&
+          inst_mk_end_action(1, 0, 1, 0) == INST_MK_REMOVE &&
+          inst_mk_end_action(1, 1, 0, 0) == INST_MK_REMOVE &&
+          inst_mk_end_action(0, 1, 1, 0) == INST_MK_REMOVE &&
+          inst_mk_end_action(-1, 1, 1, 0) == INST_MK_LEAVE,
+          "a run's end with XhciCmSafeEject 0: no service, every mark gone "
+          "(a run that set it without the Thunderbolt component too)");
+    {
+        static const char *const gone[] = { "xhci98", "xhcicm" };
+
+        CHECK(inst_cddb_service_gone("xhcicm", gone, 2) &&
+              inst_cddb_service_gone("XHCI98", gone, 2) &&
+              !inst_cddb_service_gone("xhciuas", gone, 2) &&
+              !inst_cddb_service_gone("pci", gone, 2) &&
+              !inst_cddb_service_gone("usbxhci", gone, 2) &&
+              !inst_cddb_service_gone("xhcicmx", gone, 2) &&
+              !inst_cddb_service_gone("", gone, 2) &&
+              !inst_cddb_service_gone(NULL, gone, 2) &&
+              !inst_cddb_service_gone("xhcicm", gone, 0) &&
+              !inst_cddb_service_gone("xhcicm", NULL, 2),
+              "a CriticalDeviceDatabase entry goes only when its Service is a "
+              "service of this package the run removed (case ignored), never "
+              "another driver's");
+    }
+    {
+        INST_VNOW n0[2];
+        INST_VNOW n1[2];
+        INST_VNOW nn[1];
+
+        n0[0].State = 1;
+        n0[0].Value = 0;
+        n0[0].Desc = "a";
+        n0[1] = n0[0];
+        n1[0] = n0[0];
+        n1[1].State = 1;
+        n1[1].Value = 1;
+        n1[1].Desc = "b";
+        nn[0].State = 0;
+        nn[0].Value = 0;
+        nn[0].Desc = "c";
+        CHECK(inst_mk_safe_eject(1, 0, n1, 2) == 0 &&
+              inst_mk_safe_eject(1, 1, n0, 2) == 1 &&
+              inst_mk_safe_eject(1, 2, n0, 2) == 1,
+              "safe eject in force: the machine-wide value wins over every "
+              "device's own");
+        CHECK(inst_mk_safe_eject(-1, 0, n0, 2) == 1,
+              "safe eject in force: a machine-wide value not a DWORD is the "
+              "driver's default 1");
+        CHECK(inst_mk_safe_eject(0, 0, n0, 2) == 0 &&
+              inst_mk_safe_eject(0, 0, n1, 2) == 1 &&
+              inst_mk_safe_eject(0, 0, nn, 1) == 1,
+              "safe eject in force with no machine-wide value: 0 only when "
+              "every device holds 0; one not set is the default 1");
+        CHECK(inst_mk_safe_eject(0, 0, NULL, 0) == 1 &&
+              inst_mk_safe_eject(0, 0, n0, 0) == 1,
+              "safe eject in force with no device and no machine-wide value: "
+              "the default 1");
+    }
 
     /* The confirmation, against cm_query.h's layout. */
     CHECK(INST_QC_BYTES == CM_QC_BYTES && CM_QC_O_GEN + 4 == CM_QC_BYTES,
