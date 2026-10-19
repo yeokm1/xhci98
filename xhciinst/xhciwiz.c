@@ -1941,8 +1941,22 @@ static void summary_fill(HWND dlg)
                "drivers' devices.\nNothing of another USB stack is put back: "
                "Windows finds the controller again\nat the next start.\n");
     } else {
+        int writes = 0;
+        int other;
         SetDlgItemTextA(dlg, IDC_TEXT, inst_page_text(INST_PT_SUMMARY));
-        _snprintf(line, sizeof(line) - 1, "%s.\n\n", inst_eng_confirm_text());
+        /* The headline from what the page lists below it, not from the
+         * engine's answers, which the pages hand over only at Install
+         * (matrix N1, 2026-10-19). */
+        for (i = 0; i < INST_MAX_VALUES && i < instValueCount; i++) {
+            writes |= choiceSet[i];
+        }
+        for (i = 0; s98Choice && i < INST_S98_COUNT; i++) {
+            writes |= s98WinSet[i];
+        }
+        other = (tbChoice && !tbInstalled) || s98Choice ||
+                (dirNow[0] != '\0' && !inst_eq(dirNow, dirChoice));
+        _snprintf(line, sizeof(line) - 1, "%s.\n\n",
+                  inst_eng_summary_head(writes, other));
         line[sizeof(line) - 1] = '\0';
         tb_add(&t, line);
         tb_add(&t, "The devices:\n");

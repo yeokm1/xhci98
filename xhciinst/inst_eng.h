@@ -222,6 +222,10 @@ int inst_eng_controller_changes(void);
 /* The confirmation's wording for the plan as it stands. */
 const char *inst_eng_confirm_text(void);
 
+/* The window's Summary headline: inst_summary_head with this run's
+ * device plan and the page's own writes and other changes. */
+const char *inst_eng_summary_head(int writes, int other);
+
 /* ---- Stor98, the bundled NVMe driver (record 26 sections 5.3, 5.6, 6.3) -- */
 
 /* Whether the flavour directory carries it (and its version), and whether

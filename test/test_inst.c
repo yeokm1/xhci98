@@ -2785,6 +2785,29 @@ static void test_greyed(void)
           "Stor98: the words of a greyed row");
 }
 
+/* ---- record 26 section 5.7: the Summary's headline (matrix N1) --------- */
+
+static void test_summary_head(void)
+{
+    CHECK(strstr(inst_summary_head(0, 0, 0, 1), "Every device is current") !=
+          NULL && strstr(inst_summary_head(0, 0, 0, 0),
+                         "Every device is current") != NULL,
+          "nothing changes: every device is current");
+    CHECK(strstr(inst_summary_head(0, 1, 0, 0), "Every device") == NULL &&
+          strstr(inst_summary_head(0, 1, 0, 0), "settings") != NULL,
+          "a setting written: said, never \"every device is current\"");
+    CHECK(strstr(inst_summary_head(0, 0, 1, 1), "Every device") == NULL &&
+          strstr(inst_summary_head(0, 0, 1, 1), "changes listed") != NULL,
+          "a component added: said");
+    CHECK(strstr(inst_summary_head(0, 1, 1, 1), "settings") != NULL &&
+          strstr(inst_summary_head(0, 1, 1, 1), "other changes") != NULL,
+          "both: both said");
+    CHECK(strcmp(inst_summary_head(1, 1, 1, 1), inst_confirm_text(1, 0, 1, 0))
+          == 0 && strcmp(inst_summary_head(1, 0, 0, 0),
+                         inst_confirm_text(1, 0, 0, 0)) == 0,
+          "a device run: the install's own line");
+}
+
 /* ---- record 26 sections 9.1 and 9.2: the entry, the relaunch ------------ */
 
 static void test_uninstall_entry(void)
@@ -3286,6 +3309,7 @@ int main(void)
     test_di_helper();
     test_mw_values();
     test_greyed();
+    test_summary_head();
     test_uninstall_entry();
     test_page_texts();
     test_s98();

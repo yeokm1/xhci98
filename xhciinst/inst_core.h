@@ -703,6 +703,13 @@ int inst_staged_again(int hadIdentical, int copiedNow, const char *before,
  * ME, record 23 section 6.3): then no claim that every device is current. */
 const char *inst_confirm_text(int runs, int writes, int nt, int unsure);
 
+/* The window's Summary headline (matrix N1, 2026-10-19): runs, a device
+ * installed or updated; writes, a setting the pages chose (the drivers'
+ * or Stor98's); other, any other change the page lists (a component
+ * added, the tools folder moved). "Every device is current" only when
+ * nothing at all changes. */
+const char *inst_summary_head(int runs, int writes, int other, int nt);
+
 /* ---- the uninstall's selection and order (record 23 section 9.2) ---------------------- */
 
 /* 1 when the service is one of this package's (xhci98, xhciuas, xhcicm). */

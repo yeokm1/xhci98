@@ -15766,3 +15766,8 @@ const char *inst_eng_confirm_text(void)
 {
     return inst_confirm_text(planned_runs(), values_to_write(), envNow.Nt, 0);
 }
+
+const char *inst_eng_summary_head(int writes, int other)
+{
+    return inst_summary_head(planned_runs(), writes, other, envNow.Nt);
+}

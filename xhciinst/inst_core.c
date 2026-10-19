@@ -2486,6 +2486,20 @@ const char *inst_confirm_text(int runs, int writes, int nt, int unsure)
                 "local copy and\nDevicePath now";
 }
 
+const char *inst_summary_head(int runs, int writes, int other, int nt)
+{
+    if (runs || (!writes && !other)) {
+        return inst_confirm_text(runs, 0, nt, 0);
+    }
+    if (!other) {
+        return inst_confirm_text(0, 1, nt, 0);
+    }
+    return writes ? "Write the changed settings and make the other changes "
+                    "listed below now (no\ndevice needs a new driver)" :
+                    "Make the changes listed below now (no device needs a new "
+                    "driver)";
+}
+
 /* ======================================================================== */
 /* The uninstall's selection and order                                       */
 /* ======================================================================== */
