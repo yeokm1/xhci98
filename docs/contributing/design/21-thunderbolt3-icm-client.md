@@ -4157,8 +4157,9 @@ the code (`runs/run-42.md`, "42-A.5"):
   `XhciCmSafeEject`. The installer reads the value in force at the end of
   each run (the machine-wide value, else each `xhcicm` device's own,
   else 1): with 0 it does not install the service, and removes one that
-  is installed with every mark and the database's copies, as the
-  uninstall's step 0 does; a later `/set XhciCmSafeEject=1` installs it
+  is installed with every mark and the database's `LowerFilters` copies,
+  as the uninstall's step 0 does, the filter INF's `UpperFilters` copies
+  staying with `xhcicm`; a later `/set XhciCmSafeEject=1` installs it
   again (record 23 section 5.1 step 12). The setting's note in the
   installer says so. The service's own reading of a domain's safe eject
   0 (no new mark, a mark there removed) stays as it was, for the time

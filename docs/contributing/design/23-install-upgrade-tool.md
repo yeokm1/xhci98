@@ -679,7 +679,11 @@ a boot setting (D6).
     update that ended without it, a name left on a machine where the
     service was removed by hand), section 9.2's step 0 runs, so every
     such name is removed, the CriticalDeviceDatabase's copies with them,
-    and the mark service, if any, deleted. So a later
+    and the mark service, if any, deleted; with `xhcicm` registered and
+    safe eject off, the database's `UpperFilters` copies stay, being the
+    tunnel-port filter's and not a mark's (read on 7: an install with
+    `XhciCmSafeEject=0` had taken the filter INF's out before this rule),
+    while with no `xhcicm` service and at the uninstall both values go. So a later
     `INSTALL /console /set XhciCmSafeEject=0` removes the service and its
     marks at the end of that run, and `=1` installs it again at the end
     of a run that carries the Thunderbolt component. A step 0 that fails
