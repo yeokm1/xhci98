@@ -336,6 +336,7 @@ The release notes' [Known limitations](docs/using/release-notes.md#known-limitat
   - Standby and hibernation with a device attached are not supported. Stop and unplug the device first.
   - A drive attached during the install or update appears in Safely Remove Hardware only after a restart or a replug.
   - Windows 2000 to 7 with a USB4 host: ejecting a dock, or an enclosure with its own PCIe switch, stops it safely, but its connection stays up until you physically disconnect it.
+  - A dual-mode NVMe enclosure (USB4 or Thunderbolt, and USB) may come up as a USB (UAS) disk instead. Unplug it and plug it in again to get the Thunderbolt or USB4 connection.
 - **Controllers**
   - Disabling a controller the driver had to close off hangs (very rare). Restart instead.
   - Intel 7-series (`8086:1E31`): too many periodic devices at once (audio, mice) may lose data instead of being refused.
