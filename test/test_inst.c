@@ -12,6 +12,7 @@
 #include <string.h>
 #include "../xhciinst/inst_core.h"
 #include "../src/cm/cm_status.h"
+#include "../src/cm/cm_query.h"
 #include "test_harness.h"
 
 static char *load(const char *path)
@@ -3101,6 +3102,102 @@ static void test_s98(void)
           "a tunnelled drive's update awaits its reconnection");
 }
 
+/* ---- task 42-A.17's reading rule; task 42-A.5's installer hooks --------- */
+
+static void test_marks(void)
+{
+    static unsigned char a[CM_QM_HDR_BYTES + 3 * CM_QM_ENT_BYTES];
+    unsigned char c[INST_QC_BYTES];
+    unsigned char *e;
+    INST_U32 v = 0;
+    INST_U32 need;
+    int i;
+
+    /* The machine-wide reading, as xhci_regsrc.c decides. */
+    CHECK(inst_mw_reading(0, INST_REG_DWORD, 4, 1, 0, &v) == 0,
+          "machine-wide: a name not found is absent");
+    CHECK(inst_mw_reading(1, INST_REG_NONE, 0, 1, 0, &v) == 0,
+          "machine-wide: a zero-length REG_NONE is absent");
+    CHECK(inst_mw_reading(1, INST_REG_DWORD, 4, 2, 0, &v) == 1 && v == 2,
+          "machine-wide: a DWORD is its number");
+    v = 9;
+    CHECK(inst_mw_reading(1, 1UL /* REG_SZ */, 4, 2, 3, &v) == 2,
+          "machine-wide: another type is present and not a number");
+    CHECK(inst_mw_reading(1, INST_REG_NONE, 2, 2, 1, &v) == 2,
+          "machine-wide: a REG_NONE with data is present");
+    CHECK(inst_mw_reading(1, INST_REG_DWORD, 2, 2, 0, &v) == 2,
+          "machine-wide: a short DWORD is present and not a number");
+
+    /* Where the service goes, and what a run's end does. */
+    {
+        INST_ENV w2k = env(1, 5, 0, INST_ARCH_X86);
+        INST_ENV w7 = env(1, 6, 1, INST_ARCH_AMD64);
+        INST_ENV w8 = env(1, 6, 2, INST_ARCH_AMD64);
+        INST_ENV w98 = env(0, 4, 10, INST_ARCH_X86);
+        CHECK(inst_mk_system(&w2k) && inst_mk_system(&w7) &&
+              !inst_mk_system(&w8) && !inst_mk_system(&w98),
+              "the mark service: Windows 2000 to 7 only");
+    }
+    CHECK(inst_mk_end_action(1, 1, 1) == INST_MK_INSTALL &&
+          inst_mk_end_action(1, 0, 1) == INST_MK_LEAVE &&
+          inst_mk_end_action(1, 1, 0) == INST_MK_LEAVE &&
+          inst_mk_end_action(0, 1, 1) == INST_MK_REMOVE &&
+          inst_mk_end_action(0, 0, 0) == INST_MK_REMOVE &&
+          inst_mk_end_action(-1, 1, 1) == INST_MK_LEAVE,
+          "a run's end: the service with xhcicm, every mark gone without it");
+
+    /* The confirmation, against cm_query.h's layout. */
+    CHECK(INST_QC_BYTES == CM_QC_BYTES && CM_QC_O_GEN + 4 == CM_QC_BYTES,
+          "the confirmation's size is cm_query.h's");
+    memset(a, 0, sizeof(a));
+    put32(a, CM_QM_O_MAGIC, CM_QM_MAGIC);
+    put32(a, CM_QM_O_VERSION, CM_QM_VERSION);
+    put32(a, CM_QM_O_BYTES, sizeof(a));
+    put32(a, CM_QM_O_EPOCH_LO, 0x11112222UL);
+    put32(a, CM_QM_O_EPOCH_HI, 0x33334444UL);
+    put32(a, CM_QM_O_COUNT, 3);
+    put32(a, CM_QM_O_ENT_BYTES, CM_QM_ENT_BYTES);
+    put32(a, CM_QM_O_ENT_OFFSET, CM_QM_HDR_BYTES);
+    for (i = 0; i < 3; i++) {
+        e = a + CM_QM_HDR_BYTES + i * CM_QM_ENT_BYTES;
+        put32(e, CM_QM_E_MEMBER, 0x0108UL);
+        put32(e, CM_QM_E_BUS, 5UL + (INST_U32)i);
+        put32(e, CM_QM_E_ADDRESS, 0x00000000UL);
+        put32(e, CM_QM_E_SERIAL, 40UL + (INST_U32)i);
+        put32(e, CM_QM_E_FLAGS, CM_QM_EF_LOCATED);
+        put32(e, CM_QM_E_PENDING_GEN, 7UL);
+    }
+    /* Entry 1 departed after a query-remove. */
+    put32(a + CM_QM_HDR_BYTES + CM_QM_ENT_BYTES, CM_QM_E_PENDING, 1234UL);
+    CHECK(inst_qc_build(a, sizeof(a), 0x0108UL, 6, 0, c, &need) == 1 &&
+          inst_get32(c, CM_QC_O_EPOCH_LO) == 0x11112222UL &&
+          inst_get32(c, CM_QC_O_EPOCH_HI) == 0x33334444UL &&
+          inst_get32(c, CM_QC_O_MEMBER) == 0x0108UL &&
+          inst_get32(c, CM_QC_O_BUS) == 6UL &&
+          inst_get32(c, CM_QC_O_ADDRESS) == 0UL &&
+          inst_get32(c, CM_QC_O_SERIAL) == 41UL &&
+          inst_get32(c, CM_QC_O_GEN) == 7UL,
+          "the confirmation names the entry's epoch, serial and generation");
+    CHECK(inst_qc_build(a, sizeof(a), 0x0108UL, 5, 0, c, &need) == 0,
+          "no confirmation without a pending departure");
+    CHECK(inst_qc_build(a, sizeof(a), 0x0110UL, 6, 0, c, &need) == 0,
+          "no confirmation behind another member");
+    put32(a + CM_QM_HDR_BYTES + CM_QM_ENT_BYTES, CM_QM_E_FLAGS, 0);
+    CHECK(inst_qc_build(a, sizeof(a), 0x0108UL, 6, 0, c, &need) == 0,
+          "no confirmation for an entry whose location is not known");
+    put32(a + CM_QM_HDR_BYTES + CM_QM_ENT_BYTES, CM_QM_E_FLAGS,
+          CM_QM_EF_LOCATED);
+    put32(a + CM_QM_HDR_BYTES + 2 * CM_QM_ENT_BYTES, CM_QM_E_BUS, 6UL);
+    put32(a + CM_QM_HDR_BYTES + 2 * CM_QM_ENT_BYTES, CM_QM_E_PENDING, 9UL);
+    CHECK(inst_qc_build(a, sizeof(a), 0x0108UL, 6, 0, c, &need) == -1,
+          "two pending entries at one place: none confirmed");
+    CHECK(inst_qc_build(a, CM_QM_HDR_BYTES, 0x0108UL, 6, 0, c, &need) == -2 &&
+          need == sizeof(a), "a header alone asks for the whole answer");
+    put32(a, CM_QM_O_MAGIC, CM_Q_MAGIC);
+    CHECK(inst_qc_build(a, sizeof(a), 0x0108UL, 6, 0, c, &need) == 0,
+          "another answer is no marks answer");
+}
+
 int main(void)
 {
     test_versions();
@@ -3133,6 +3230,7 @@ int main(void)
     test_uninstall_entry();
     test_page_texts();
     test_s98();
+    test_marks();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

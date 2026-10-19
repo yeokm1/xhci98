@@ -63,6 +63,7 @@
 #include "inst_core.h"
 #include "inst_eng.h"
 #include "../src/cm/cm_status.h"
+#include "../src/cm/cm_query.h"
 
 /* The driver's own switchover gate (src\xhci_psw.c), declared here rather
  * than through xhci_psw.h, whose compatibility header is the driver's. */
@@ -2214,17 +2215,27 @@ static int value_now(const DEVREC *d, const char *name, DWORD *value)
 
 #define INST_MAX_NOW 16
 
+static const char *value_inf(int v);
+
 /* The machine-wide value (record 26 section 5.4; task 42-A.17, owner
  * 2026-10-18): HKLM\System\CurrentControlSet\Services\USB, which both
- * drivers read before a controller's own key. 1 set, 0 not set (the key
- * or the value absent), -1 unreadable. */
-static int mw_value(const char *name, DWORD *value)
+ * drivers read before a controller's own key, by their rule
+ * (inst_mw_reading): present in any type wins, a zero-length REG_NONE is
+ * absent. 1 set (*value the number in force), 0 not set (the key or the
+ * value absent), -1 unreadable or not a DWORD: it wins with the driver's
+ * own fallback, which the installer does not know, so it is shown as
+ * unreadable and a value chosen for it is always written over it. */
+static int mw_value(int v, DWORD *value)
 {
     HKEY k;
-    DWORD t;
-    DWORD n = sizeof(DWORD);
+    DWORD t = REG_NONE;
+    BYTE data[64];
+    DWORD n = sizeof(data);
+    INST_U32 in;
+    int got;
     LONG r;
 
+    *value = 0;
     if (stScreens) {
         return 0;
     }
@@ -2235,13 +2246,30 @@ static int mw_value(const char *name, DWORD *value)
     if (r != ERROR_SUCCESS) {
         return -1;
     }
-    r = RegQueryValueExA(k, name, NULL, &t, (LPBYTE)value, &n);
+    memset(data, 0, sizeof(data));
+    r = RegQueryValueExA(k, instValues[v].Name, NULL, &t, data, &n);
     RegCloseKey(k);
     if (r == ERROR_FILE_NOT_FOUND) {
         return 0;
     }
-    return (r == ERROR_SUCCESS && t == REG_DWORD && n == sizeof(DWORD)) ? 1
-                                                                        : -1;
+    if (r == ERROR_MORE_DATA) {
+        n = sizeof(data) + 1;   /* present, and longer than any DWORD */
+    } else if (r != ERROR_SUCCESS) {
+        return -1;
+    }
+    got = inst_mw_reading(1, (INST_U32)t, (INST_U32)n, inst_get32(data, 0), 0,
+                          &in);
+    if (got == 0) {
+        return 0;
+    }
+    if (got == 2) {
+        logonly("machine-wide %s is not a DWORD (type %lu, %lu bytes): it "
+                "wins with the driver's own fallback\n", instValues[v].Name,
+                (unsigned long)t, (unsigned long)n);
+        return -1;
+    }
+    *value = (DWORD)in;
+    return 1;
 }
 
 /* The INF a value's default comes from, NULL when that INF is not in this
@@ -2374,7 +2402,7 @@ static void ask_values(void)
         }
         /* Owner, 2026-10-16: each choice on its own line with its meaning,
          * and "Enter for [x]", x what Enter keeps (inst_value_question). */
-        mw = mw_value(instValues[v].Name, &mwv);
+        mw = mw_value(v, &mwv);
         same = inst_value_question_mw(question, sizeof(question), v, m, def,
                                       vnow, nNow, mw, (INST_U32)mwv, cmNew,
                                       opts.List, &enterValue);
@@ -2464,7 +2492,7 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         /* Every value /set may give, so a setting in force is never
          * shown as another (its caution is in the row's note). */
         r->Mask = inst_value_set_mask(v, &envNow);
-        r->MwState = mw_value(instValues[v].Name, &mwv);
+        r->MwState = mw_value(v, &mwv);
         r->MwValue = (INST_U32)mwv;
         r->CmNew = cmNew;
         r->NowCount = nNow < INST_ROW_NOW_MAX ? nNow : INST_ROW_NOW_MAX;
@@ -2484,6 +2512,13 @@ int inst_eng_rows(INST_ROW *rows, int cap)
                 } else if (eff != r->InForce) {
                     r->Same = 0;
                 }
+            }
+            /* A machine-wide value that is not a number wins with a
+             * fallback not known here: no value is shown as in force, the
+             * row starts in the mixed state (writing nothing) and any
+             * value chosen is written over it. */
+            if (r->MwState == -1) {
+                r->Same = 0;
             }
         }
         n++;
@@ -2608,7 +2643,10 @@ static int value_needs_write(int v)
     }
     inst_value_default(v, value_inf(v), &def);
     value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
-    mw = mw_value(instValues[v].Name, &mwv);
+    mw = mw_value(v, &mwv);
+    if (mw < 0) {
+        return 1;   /* a value there that is not a number wins: replaced */
+    }
     return inst_mw_write_needed(mw > 0 ? 1 : 0, (INST_U32)mwv, vnow, nNow,
                                 def, answerValue[v]);
 }
@@ -2619,9 +2657,25 @@ static void write_values(void)
     HKEY k;
     DWORD val;
     DWORD old;
+    DWORD disp = 0;
     int had;
     LONG w;
 
+    /* The machine-wide key made where it is absent (task 42-A.17: 2000
+     * has none until something makes it), so a value can be set there by
+     * hand or by the helpers. */
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0, NULL, 0,
+                        KEY_QUERY_VALUE, NULL, &k, &disp) == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        if (disp == REG_CREATED_NEW_KEY) {
+            logonly("made HKLM\\%s\n", INST_MW_KEY);
+            flagChanged = 1;
+        }
+    } else {
+        out("The machine-wide key HKLM\\%s could not be made.\n",
+            INST_MW_KEY);
+        flagFailed = 1;
+    }
     for (v = 0; v < instValueCount && v < INST_MAX_VALUES; v++) {
         if (!answerSet[v] || value_inf(v) == NULL) {
             continue;
@@ -2647,7 +2701,7 @@ static void write_values(void)
                 instValues[v].Name, (unsigned long)answerValue[v]);
             continue;
         }
-        had = mw_value(instValues[v].Name, &old) > 0;
+        had = mw_value(v, &old) > 0;
         val = (DWORD)answerValue[v];
         if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0, NULL, 0,
                             KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) {
@@ -8235,11 +8289,66 @@ left:
     }
 }
 
+/* 98 SE and ME: the setup engine cannot replace a driver binary that is
+ * loaded, so an update over a running driver copies the new file beside
+ * it and asks for the swap in WININIT.INI's [rename] section, done at the
+ * next start ("target=source", read on the 98 SE update leg of
+ * 2026-10-19: xhci98.sys=...\xhci98.tmp). 1 when such an entry renames a
+ * file of version `want` over `bin`. */
+static int wininit_pending(const char *bin, const INST_U32 *want)
+{
+    char win[INST_PATH_CHARS];
+    char ini[INST_PATH_CHARS];
+    char *sec;
+    char *p;
+    char sb[INST_PATH_CHARS];
+    char st[INST_PATH_CHARS];
+    INST_U32 v[4];
+    DWORD n;
+    int hit = 0;
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(ini, sizeof(ini), win, "WININIT.INI");
+    sec = (char *)calloc(1, 32768);
+    if (sec == NULL) {
+        return 0;
+    }
+    n = GetPrivateProfileSectionA("rename", sec, 32766, ini);
+    n = GetShortPathNameA(bin, sb, sizeof(sb));
+    if (n == 0 || n >= sizeof(sb)) {
+        inst_copy(sb, bin, sizeof(sb));
+    }
+    for (p = sec; *p != '\0' && !hit; p += strlen(p) + 1) {
+        char *eq = strchr(p, '=');
+        if (eq == NULL || eq == p) {
+            continue;
+        }
+        *eq = '\0';
+        n = GetShortPathNameA(p, st, sizeof(st));
+        if (n == 0 || n >= sizeof(st)) {
+            inst_copy(st, p, sizeof(st));
+        }
+        if ((inst_eq(p, bin) || inst_eq(st, sb)) &&
+            file_version(eq + 1, v) > 0 && inst_ver_cmp(v, want) == 0) {
+            hit = 1;
+        }
+        *eq = '=';
+    }
+    free(sec);
+    logonly("WININIT.INI: %s %s\n", bin,
+            hit ? "is replaced by this package's at the next start"
+                : "has no pending replacement");
+    return hit;
+}
+
 /* Record 26 section 8: each device the helper installed read again - its
  * driver key's NTMPDriver naming the group's .sys, its version the
  * package's (DriverVersion, or the group's binary), the devnode present
  * with no problem code; a device gone, or left with a problem code, is a
- * failure, except one whose install asked for the restart. */
+ * failure, except one whose install asked for the restart, and one whose
+ * binary the next start replaces (wininit_pending). */
 static void check_results_9x(void)
 {
     int c;
@@ -8255,6 +8364,7 @@ static void check_results_9x(void)
     for (c = 0; c < changedCount; c++) {
         const DEVREC *d = NULL;
         int ok;
+        int swapped = 0;
         if (changedState[c] != 2) {
             continue;
         }
@@ -8282,11 +8392,18 @@ static void check_results_9x(void)
             group_binary(group_of_inf(changedInf[c]), bin, sizeof(bin));
             ok = file_version(bin, v) > 0 &&
                  inst_ver_cmp(v, inf_version(changedInf[c])) == 0;
+            if (!ok && wininit_pending(bin, inf_version(changedInf[c]))) {
+                swapped = 1;
+            }
         }
         inst_state_text(state, sizeof(state), d->Service, d->VersionText,
                         (d->Status & INST_DN_STARTED) != 0, d->Problem);
         if (ok) {
             out("  %s: %s\n", d->Desc[0] ? d->Desc : d->Id, state);
+        } else if (swapped) {
+            out("  %s: updated; the new driver file replaces the running one "
+                "at the next start.\n", d->Desc[0] ? d->Desc : d->Id);
+            flagRestart = 1;
         } else if (changedReboot[c]) {
             out("  %s: installed, restart pending (%s)\n",
                 d->Desc[0] ? d->Desc : d->Id, state);
@@ -8981,6 +9098,593 @@ static void remove_services_and_files(void)
     }
 }
 
+/* ======================================================================== */
+/* The safe-removal mark service and its marks (record 21 section 7.4,      */
+/* revision 3; task 42-A.5)                                                 */
+/* ======================================================================== */
+
+#define INST_MK_SERVICE     "xhcimark"
+#define INST_MK_DISPLAY     "xHCI98 Thunderbolt safe-removal mark service"
+#define INST_MK_MARKS_KEY   "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Marks"
+#define INST_MK_MUTEX       "Global\\Xhci98MarkWrite"
+#define INST_MK_NAME        "xhcicm"
+#define INST_MK_STOP_MS     30000UL
+#define INST_MK_FILTERS     1024
+#define INST_MK_LOG_DIR     "LogFiles\\xhci98"
+
+typedef SC_HANDLE (WINAPI *PFN_CREATESVC)(SC_HANDLE, LPCSTR, LPCSTR, DWORD,
+                                          DWORD, DWORD, DWORD, LPCSTR, LPCSTR,
+                                          LPDWORD, LPCSTR, LPCSTR, LPCSTR);
+typedef BOOL (WINAPI *PFN_CHANGESVC)(SC_HANDLE, DWORD, DWORD, DWORD, LPCSTR,
+                                     LPCSTR, LPDWORD, LPCSTR, LPCSTR, LPCSTR,
+                                     LPCSTR);
+typedef BOOL (WINAPI *PFN_STARTSVC)(SC_HANDLE, DWORD, LPCSTR *);
+typedef BOOL (WINAPI *PFN_CONTROLSVC)(SC_HANDLE, DWORD, LPSERVICE_STATUS);
+
+/* The service routines this file does not import, looked up at run time
+ * as record 21 section 7.4 has them (98 SE and ME never get here). */
+static FARPROC adv_proc(const char *name)
+{
+    HMODULE adv = GetModuleHandleA("advapi32.dll");
+
+    return adv != NULL ? GetProcAddress(adv, name) : NULL;
+}
+
+static const char *mk_exe(void)
+{
+    return INST_MY_ARCH == INST_ARCH_X86 ? "XHCIMARK.EXE" : "XHCIMK64.EXE";
+}
+
+/* A service's state: 1 registered, 0 not (or marked for deletion, which
+ * leaves it gone at the restart), -1 unreadable. OpenService still opens
+ * a service marked for deletion, so a change that changes nothing asks:
+ * ChangeServiceConfig refuses such a service with its own error. */
+static int svc_state(const char *name)
+{
+    PFN_CHANGESVC changeSvc = (PFN_CHANGESVC)adv_proc("ChangeServiceConfigA");
+    SC_HANDLE scm;
+    SC_HANDLE s;
+    DWORD e;
+    int r;
+
+    if (changeSvc == NULL) {
+        return -1;
+    }
+    scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
+    if (scm == NULL) {
+        return -1;
+    }
+    s = OpenServiceA(scm, name, SERVICE_QUERY_STATUS | SERVICE_CHANGE_CONFIG);
+    e = GetLastError();
+    if (s != NULL) {
+        if (changeSvc(s, SERVICE_NO_CHANGE, SERVICE_NO_CHANGE,
+                      SERVICE_NO_CHANGE, NULL, NULL, NULL, NULL, NULL, NULL,
+                      NULL)) {
+            r = 1;
+        } else {
+            r = GetLastError() == ERROR_SERVICE_MARKED_FOR_DELETE ? 0 : -1;
+        }
+        CloseServiceHandle(s);
+    } else {
+        r = (e == ERROR_SERVICE_DOES_NOT_EXIST ||
+             e == ERROR_SERVICE_MARKED_FOR_DELETE) ? 0 : -1;
+    }
+    CloseServiceHandle(scm);
+    return r;
+}
+
+/* The mark service stopped: SERVICE_STOPPED within 30 s. 1 stopped, or
+ * not registered (*had 0); 0 it could not be stopped or read. */
+static int mk_stop(SC_HANDLE scm, int *had)
+{
+    PFN_CONTROLSVC controlSvc = (PFN_CONTROLSVC)adv_proc("ControlService");
+    SC_HANDLE s;
+    SERVICE_STATUS st;
+    DWORD t0;
+    DWORD e;
+
+    *had = 0;
+    s = OpenServiceA(scm, INST_MK_SERVICE, SERVICE_STOP | SERVICE_QUERY_STATUS);
+    if (s == NULL) {
+        e = GetLastError();
+        if (e == ERROR_SERVICE_DOES_NOT_EXIST ||
+            e == ERROR_SERVICE_MARKED_FOR_DELETE) {
+            return 1;
+        }
+        out("The service %s could not be opened (error %lu).\n",
+            INST_MK_SERVICE, (unsigned long)e);
+        return 0;
+    }
+    *had = 1;
+    if (!QueryServiceStatus(s, &st)) {
+        out("The state of the service %s could not be read (error %lu).\n",
+            INST_MK_SERVICE, (unsigned long)GetLastError());
+        CloseServiceHandle(s);
+        return 0;
+    }
+    if (st.dwCurrentState != SERVICE_STOPPED) {
+        if (controlSvc == NULL) {
+            out("ControlService is missing: the service %s cannot be "
+                "stopped.\n", INST_MK_SERVICE);
+            CloseServiceHandle(s);
+            return 0;
+        }
+        out("Stopping the service %s ... ", INST_MK_SERVICE);
+        if (st.dwCurrentState != SERVICE_STOP_PENDING) {
+            (void)controlSvc(s, SERVICE_CONTROL_STOP, &st);
+        }
+        t0 = GetTickCount();
+        while (QueryServiceStatus(s, &st) &&
+               st.dwCurrentState != SERVICE_STOPPED &&
+               GetTickCount() - t0 < INST_MK_STOP_MS) {
+            Sleep(250);
+        }
+        if (st.dwCurrentState != SERVICE_STOPPED) {
+            out("it did not stop within 30 seconds.\n");
+            CloseServiceHandle(s);
+            return 0;
+        }
+        out("stopped.\n");
+    }
+    CloseServiceHandle(s);
+    return 1;
+}
+
+/* Every PCI devnode, present or not, its LowerFilters read (record 21
+ * section 7.4, step 0). With fix, xhcicm is removed from each value that
+ * names it, the other names kept in order, the value deleted when nothing
+ * else is in it, and each read back. 1 when the enumeration reached its end
+ * and every value was read (and, with fix, every removal read back); *left
+ * the values still naming xhcicm. */
+static int mk_inventory(int fix, int *left)
+{
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    DWORD i;
+    DWORD type;
+    DWORD n;
+    DWORD e;
+    char id[INST_ID_CHARS];
+    char f[INST_MK_FILTERS];
+    char nf[INST_MK_FILTERS];
+    size_t m;
+    int removed;
+    int ok = 1;
+    BOOL w;
+
+    *left = 0;
+    if (api.GetClassDevs == NULL || api.EnumInfo == NULL ||
+        api.GetRegProp == NULL || api.GetInstanceId == NULL ||
+        api.Destroy == NULL || (fix && api.SetRegProp == NULL)) {
+        out("The device-property routines are missing: the Thunderbolt "
+            "safe-removal marks\ncannot be read.\n");
+        return 0;
+    }
+    set = api.GetClassDevs(NULL, "PCI", NULL, DIGCF_ALLCLASSES);
+    if (set == INVALID_HANDLE_VALUE) {
+        out("The PCI device list could not be opened (error %lu): the "
+            "Thunderbolt\nsafe-removal marks cannot be read.\n",
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    for (i = 0;; i++) {
+        memset(&data, 0, sizeof(data));
+        data.cbSize = sizeof(data);
+        if (!api.EnumInfo(set, i, &data)) {
+            e = GetLastError();
+            if (e != ERROR_NO_MORE_ITEMS) {
+                out("The PCI device list ended early (error %lu).\n",
+                    (unsigned long)e);
+                ok = 0;
+            }
+            break;
+        }
+        if (!api.GetInstanceId(set, &data, id, sizeof(id), NULL)) {
+            inst_copy(id, "(a PCI device)", sizeof(id));
+        }
+        memset(f, 0, sizeof(f));
+        n = 0;
+        if (!api.GetRegProp(set, &data, SPDRP_LOWERFILTERS, &type, (PBYTE)f,
+                            sizeof(f) - 2, &n)) {
+            e = GetLastError();
+            if (e == ERROR_INVALID_DATA) {
+                continue;   /* no LowerFilters value */
+            }
+            out("The LowerFilters of %s could not be read (error %lu).\n", id,
+                (unsigned long)e);
+            ok = 0;
+            continue;
+        }
+        if (!inst_msz_has(f, n, INST_MK_NAME)) {
+            continue;
+        }
+        logonly("mark: %s names %s in its LowerFilters\n", id, INST_MK_NAME);
+        if (!fix) {
+            (*left)++;
+            continue;
+        }
+        m = inst_msz_remove(f, n, INST_MK_NAME, nf, sizeof(nf), &removed);
+        if (m == (size_t)-1) {
+            out("The LowerFilters of %s could not be edited.\n", id);
+            (*left)++;
+            ok = 0;
+            continue;
+        }
+        w = m == 0 ? api.SetRegProp(set, &data, SPDRP_LOWERFILTERS, NULL, 0)
+                   : api.SetRegProp(set, &data, SPDRP_LOWERFILTERS,
+                                    (const BYTE *)nf, (DWORD)m);
+        memset(f, 0, sizeof(f));
+        n = 0;
+        if (!w ||
+            (api.GetRegProp(set, &data, SPDRP_LOWERFILTERS, &type, (PBYTE)f,
+                            sizeof(f) - 2, &n)
+                 ? inst_msz_has(f, n, INST_MK_NAME)
+                 : GetLastError() != ERROR_INVALID_DATA)) {
+            out("%s could not be removed from the LowerFilters of %s.\n",
+                INST_MK_NAME, id);
+            (*left)++;
+            ok = 0;
+            continue;
+        }
+        flagChanged = 1;
+        out("The safe-removal mark (%s in LowerFilters) was removed from %s.\n",
+            INST_MK_NAME, id);
+    }
+    api.Destroy(set);
+    return ok;
+}
+
+/* The mark service's system32 copy deleted. One in use is renamed to
+ * <name>.DEL and that name deleted at the restart, as the tray tool's
+ * copy is (record 23 section 9.5), so a later install of the same name
+ * before the restart is not deleted with it. 1 gone or renamed; 0 it
+ * stays (the service's registration then stays too). */
+static int mk_delete_copy(void)
+{
+    char sys[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char del[INST_PATH_CHARS];
+    PFN_MOVEEX moveEx = move_ex();
+
+    if (GetSystemDirectoryA(sys, sizeof(sys)) == 0) {
+        out("The system directory could not be read.\n");
+        return 0;
+    }
+    join(path, sizeof(path), sys, mk_exe());
+    inst_copy(del, path, sizeof(del));
+    del[strlen(del) - 4] = '\0';
+    inst_copy(del + strlen(del), ".DEL", sizeof(del) - strlen(del));
+    /* An earlier run's .DEL: deleted now, or its deletion at the restart
+     * asked again; one that is neither keeps the registration. */
+    if (file_state(del) != 0) {
+        SetFileAttributesA(del, FILE_ATTRIBUTE_NORMAL);
+        if (!DeleteFileA(del) &&
+            (moveEx == NULL || !moveEx(del, NULL, MOVEFILE_DELAY_UNTIL_REBOOT))) {
+            out("%s could not be deleted (error %lu).\n", del,
+                (unsigned long)GetLastError());
+            return 0;
+        }
+        flagChanged = 1;
+        if (file_state(del) != 0) {
+            flagRestart = 1;
+        }
+    }
+    switch (file_state(path)) {
+    case 0:
+        return 1;
+    case 1:
+        break;
+    default:
+        out("%s could not be read (error %lu).\n", path,
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+    if (DeleteFileA(path)) {
+        out("Deleted %s.\n", path);
+        flagChanged = 1;
+        return 1;
+    }
+    if (moveEx != NULL && moveEx(path, del, MOVEFILE_REPLACE_EXISTING)) {
+        if (moveEx(del, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
+            out("%s is in use; it is deleted at the restart.\n", path);
+            flagChanged = 1;
+            flagRestart = 1;
+            return 1;
+        }
+        /* Nothing would delete it: its own name back, and the step
+         * fails with the registration kept. */
+        (void)moveEx(del, path, 0);
+    }
+    out("%s could not be deleted (error %lu).\n", path,
+        (unsigned long)GetLastError());
+    return 0;
+}
+
+/* Step 0 of the uninstall (decision M14), and the end of any run that
+ * leaves no xhcicm service (decision M13): the mark service stopped, the
+ * write mutex taken, every mark removed and read back, then the service's
+ * records, the service and its system32 copy deleted. 1 done; 0 failed,
+ * nothing after the marks touched (the records, the service and its
+ * registration stay for the next run). */
+static int mk_remove(void)
+{
+    SC_HANDLE scm;
+    SC_HANDLE s;
+    HANDLE mx;
+    DWORD w;
+    int had;
+    int left;
+    int ok;
+
+    if (opts.List) {
+        ok = mk_inventory(0, &left);
+        if (left > 0) {
+            out("(/list) %s would be removed from %d device(s)' LowerFilters.\n",
+                INST_MK_NAME, left);
+        }
+        if (svc_state(INST_MK_SERVICE) == 1) {
+            out("(/list) The service %s would be stopped and removed.\n",
+                INST_MK_SERVICE);
+        }
+        return ok;
+    }
+    scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_ALL_ACCESS);
+    if (scm == NULL) {
+        out("The service manager could not be opened (error %lu): the "
+            "Thunderbolt\nsafe-removal marks stay.\n",
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    if (!mk_stop(scm, &had)) {
+        CloseServiceHandle(scm);
+        return 0;
+    }
+    mx = shared_mutex(INST_MK_MUTEX);
+    w = mx != NULL ? WaitForSingleObject(mx, INST_MK_STOP_MS) : WAIT_FAILED;
+    if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
+        out("The marks' write lock %s could not be taken.\n", INST_MK_MUTEX);
+        if (mx != NULL) {
+            CloseHandle(mx);
+        }
+        CloseServiceHandle(scm);
+        return 0;
+    }
+    ok = mk_inventory(1, &left) && left == 0;
+    if (ok) {
+        LONG r = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_MK_MARKS_KEY);
+        if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
+            out("The mark service's records could not be deleted (error "
+                "%ld).\n", (long)r);
+            ok = 0;
+        }
+    }
+    /* The copy before the registration: a copy that stays keeps the
+     * service registered for the next run. */
+    if (ok && !mk_delete_copy()) {
+        ok = 0;
+    }
+    if (ok && had) {
+        s = OpenServiceA(scm, INST_MK_SERVICE, DELETE);
+        if (s == NULL || !DeleteService(s)) {
+            DWORD e = GetLastError();
+            if (e != ERROR_SERVICE_MARKED_FOR_DELETE &&
+                e != ERROR_SERVICE_DOES_NOT_EXIST) {
+                out("The service %s could not be removed (error %lu).\n",
+                    INST_MK_SERVICE, (unsigned long)e);
+                ok = 0;
+            }
+        } else {
+            out("The service %s was removed.\n", INST_MK_SERVICE);
+            flagChanged = 1;
+        }
+        if (s != NULL) {
+            CloseServiceHandle(s);
+        }
+    }
+    ReleaseMutex(mx);
+    CloseHandle(mx);
+    CloseServiceHandle(scm);
+    return ok;
+}
+
+/* StartService returns before the service has prepared itself: 1 once it
+ * reads SERVICE_RUNNING within 30 s, 0 stopped or still starting. The
+ * handle needs SERVICE_QUERY_STATUS. */
+static int mk_running(SC_HANDLE s)
+{
+    SERVICE_STATUS st;
+    DWORD t0 = GetTickCount();
+
+    for (;;) {
+        if (!QueryServiceStatus(s, &st)) {
+            return 0;
+        }
+        if (st.dwCurrentState == SERVICE_RUNNING) {
+            return 1;
+        }
+        if (st.dwCurrentState == SERVICE_STOPPED ||
+            GetTickCount() - t0 >= INST_MK_STOP_MS) {
+            return 0;
+        }
+        Sleep(250);
+    }
+}
+
+/* The service installed or updated and started (decision M8): the
+ * package's copy put into system32 through a .TMP and compared byte for
+ * byte, registered with its quoted full path (its own process, automatic
+ * start, LocalSystem), the log's directory made, then started. */
+static void mk_install(void)
+{
+    char src[INST_PATH_CHARS];
+    char sys[INST_PATH_CHARS];
+    char dst[INST_PATH_CHARS];
+    char tmp[INST_PATH_CHARS];
+    char dir[INST_PATH_CHARS];
+    char quoted[INST_PATH_CHARS + 4];
+    PFN_CREATESVC createSvc = (PFN_CREATESVC)adv_proc("CreateServiceA");
+    PFN_CHANGESVC changeSvc = (PFN_CHANGESVC)adv_proc("ChangeServiceConfigA");
+    PFN_STARTSVC startSvc = (PFN_STARTSVC)adv_proc("StartServiceA");
+    PFN_MOVEEX moveEx = move_ex();
+    SC_HANDLE scm;
+    SC_HANDLE s = NULL;
+    int had;
+    int put = 1;
+
+    join(src, sizeof(src), root, "tools\\xhcimark");
+    join(src, sizeof(src), src, mk_exe());
+    if (!file_exists(src, NULL)) {
+        out("This package has no tools\\xhcimark\\%s: the safe-removal mark "
+            "service is not\ninstalled, and a Thunderbolt device's mark is lost "
+            "when its drivers are rebuilt.\n", mk_exe());
+        return;
+    }
+    if (createSvc == NULL || changeSvc == NULL || startSvc == NULL ||
+        moveEx == NULL || GetSystemDirectoryA(sys, sizeof(sys)) == 0) {
+        out("The service routines are missing: the safe-removal mark service "
+            "is not\ninstalled.\n");
+        flagFailed = 1;
+        return;
+    }
+    join(dst, sizeof(dst), sys, mk_exe());
+    inst_copy(tmp, dst, sizeof(tmp));
+    tmp[strlen(tmp) - 4] = '\0';
+    inst_copy(tmp + strlen(tmp), ".DEL", sizeof(tmp) - strlen(tmp));
+    /* An earlier uninstall's copy, renamed while in use, if it is free
+     * now; one still waiting for the restart is a name of its own. */
+    if (file_exists(tmp, NULL)) {
+        SetFileAttributesA(tmp, FILE_ATTRIBUTE_NORMAL);
+        DeleteFileA(tmp);
+    }
+    tmp[strlen(tmp) - 4] = '\0';
+    inst_copy(tmp + strlen(tmp), ".TMP", sizeof(tmp) - strlen(tmp));
+    scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_ALL_ACCESS);
+    if (scm == NULL) {
+        out("The service manager could not be opened (error %lu): the "
+            "safe-removal mark\nservice is not installed.\n",
+            (unsigned long)GetLastError());
+        flagFailed = 1;
+        return;
+    }
+    step(INST_STEP_BEGIN, "Installing the Thunderbolt safe-removal mark "
+         "service");
+    if (!mk_stop(scm, &had)) {
+        out("The safe-removal mark service is left as it is.\n");
+        flagFailed = 1;
+        goto done;
+    }
+    if (same_file3(src, dst) != 1) {
+        SetFileAttributesA(tmp, FILE_ATTRIBUTE_NORMAL);
+        DeleteFileA(tmp);
+        if (!CopyFileA(src, tmp, FALSE) || same_file3(src, tmp) != 1 ||
+            !moveEx(tmp, dst, MOVEFILE_REPLACE_EXISTING)) {
+            out("%s could not be put into %s (error %lu).\n", mk_exe(), sys,
+                (unsigned long)GetLastError());
+            DeleteFileA(tmp);
+            flagFailed = 1;
+            put = 0;
+        } else {
+            flagChanged = 1;
+            logonly("mark service: %s copied to %s\n", src, dst);
+        }
+    }
+    if (put && same_file3(src, dst) != 1) {
+        out("REFUSED: %s is not the copy this package carries: the service is "
+            "not\nregistered from it.\n", dst);
+        flagFailed = 1;
+        put = 0;
+    }
+    if (!put) {
+        if (had) {
+            /* The earlier copy stays; so does its service, started again. */
+            s = OpenServiceA(scm, INST_MK_SERVICE,
+                             SERVICE_START | SERVICE_QUERY_STATUS);
+        }
+        goto start;
+    }
+    _snprintf(quoted, sizeof(quoted) - 1, "\"%s\"", dst);
+    quoted[sizeof(quoted) - 1] = '\0';
+    if (!had) {
+        s = createSvc(scm, INST_MK_SERVICE, INST_MK_DISPLAY, SERVICE_ALL_ACCESS,
+                      SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START,
+                      SERVICE_ERROR_NORMAL, quoted, NULL, NULL, NULL, NULL,
+                      NULL);
+        if (s != NULL) {
+            flagChanged = 1;
+        }
+    } else {
+        s = OpenServiceA(scm, INST_MK_SERVICE, SERVICE_ALL_ACCESS);
+        if (s != NULL &&
+            !changeSvc(s, SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START,
+                       SERVICE_ERROR_NORMAL, quoted, NULL, NULL, NULL,
+                       "LocalSystem", "", INST_MK_DISPLAY)) {
+            out("The service %s could not be set up (error %lu).\n",
+                INST_MK_SERVICE, (unsigned long)GetLastError());
+            flagFailed = 1;
+        }
+    }
+    if (s == NULL) {
+        out("The service %s could not be registered (error %lu).\n",
+            INST_MK_SERVICE, (unsigned long)GetLastError());
+        flagFailed = 1;
+        goto done;
+    }
+    join(dir, sizeof(dir), sys, INST_MK_LOG_DIR);
+    if (!make_dirs(dir)) {
+        out("The service's log directory %s could not be made.\n", dir);
+    }
+start:
+    if (s == NULL) {
+        goto done;
+    }
+    if (!startSvc(s, 0, NULL) &&
+        GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) {
+        out("The service %s did not start (error %lu).\n", INST_MK_SERVICE,
+            (unsigned long)GetLastError());
+        flagFailed = 1;
+    } else if (!mk_running(s)) {
+        out("The service %s did not reach the running state within 30 "
+            "seconds\n(its log: system32\\LogFiles\\xhci98\\XHCIMARK.LOG).\n",
+            INST_MK_SERVICE);
+        flagFailed = 1;
+    } else if (put) {
+        out("The Thunderbolt safe-removal mark service %s is %s and running:\n"
+            "  %s\n", INST_MK_SERVICE, had ? "updated" : "installed", quoted);
+        step(INST_STEP_DONE, "The safe-removal mark service is running");
+    }
+done:
+    if (s != NULL) {
+        CloseServiceHandle(s);
+    }
+    CloseServiceHandle(scm);
+}
+
+/* The end of an install or update run (decision M13): with xhcicm
+ * registered and the Thunderbolt component in the run, the service
+ * installed or updated; with no xhcicm service, every mark removed, a
+ * LowerFilters naming a filter with no service being what stops a device
+ * at its next start (Code 39). */
+static void mk_end_of_run(void)
+{
+    int a;
+
+    if (!envNow.Nt) {
+        return;
+    }
+    a = inst_mk_end_action(svc_state(INST_MK_NAME), haveCm && tbInclude,
+                           inst_mk_system(&envNow));
+    logonly("mark service: end-of-run action %d\n", a);
+    if (a == INST_MK_INSTALL) {
+        mk_install();
+    } else if (a == INST_MK_REMOVE && !mk_remove()) {
+        out("A Thunderbolt safe-removal mark could not be removed, and the "
+            "xhcicm service\nis not installed: a device naming it would not "
+            "start (Code 39). Restart\nWindows and run INSTALL.BAT again.\n");
+        flagFailed = 1;
+    }
+}
+
 /* An uninstall that stopped at a gate (record 26 section 9.3): the
  * installer's own files, the records and the Add/Remove Programs entry
  * stay, the entry's name saying so, so the next run has its entry point
@@ -9028,6 +9732,16 @@ static int run_uninstall_nt(void)
     if (set == INVALID_HANDLE_VALUE) {
         out("The device list could not be opened.\n");
         return INST_EXIT_REFUSED;
+    }
+    /* Step 0 (record 21 section 7.4, decision M14): the mark service
+     * stopped and every safe-removal mark removed before anything of
+     * xhcicm goes, since a LowerFilters naming a filter with no service
+     * stops the device (Code 39). A failure keeps everything after it. */
+    if (!mk_remove()) {
+        api.Destroy(set);
+        return stop_uninstall("a Thunderbolt safe-removal mark (xhcicm in a "
+                              "device's LowerFilters) could not\nbe removed, "
+                              "so xhcicm and the mark service stay.");
     }
     /* The bundled Stor98's recorded devices first: children before the
      * NVMe device's parent port, a filter host that stays (record 26
@@ -9126,6 +9840,16 @@ static int run_uninstall_nt(void)
     }
     if (!go_on()) {
         return stop_uninstall("cancelled.");
+    }
+    /* The inventory once more before xhcicm's service and file go
+     * (decision M14). */
+    {
+        int left;
+        if (!mk_inventory(0, &left) || left != 0) {
+            return stop_uninstall("a device still names xhcicm in its "
+                                  "LowerFilters, so xhcicm's service\nand "
+                                  "file stay.");
+        }
     }
     remove_services_and_files();
     if (!go_on()) {
@@ -10876,6 +11600,109 @@ static void tb_watch_tunnel(int nhiK, INST_U32 bdf)
     }
 }
 
+/* NT: this run's own successful CM_Request_Device_EjectA confirmed to the
+ * driver (record 21 section 7.4, decision M16; on Windows 2000 nothing
+ * else confirms an eject): the unit's entry in the marks answer whose
+ * departure is pending, written as XhciCmEjectConfirm (cm_query.h CM_QC_*)
+ * into the NHI's driver key, only while the value is absent or empty. The
+ * run holds the eject lock (tb_lock) every writer of the value takes. */
+static void tb_confirm(int nhiK, int u, INST_U32 member)
+{
+    char path[INST_PATH_CHARS];
+    char name[64];
+    char dev[80];
+    unsigned char c[INST_QC_BYTES];
+    unsigned char old[64];
+    unsigned char *b;
+    HKEY k;
+    HANDLE dh;
+    DWORD type;
+    DWORD n;
+    DWORD got;
+    DWORD t0;
+    INST_U32 need;
+    LONG w;
+    int r = 0;
+
+    if (nhiK < 0 || tbh[nhiK].Node < 0 || !tbn[u].HasLoc ||
+        tbh[nhiK].DrvPath[0] == '\0') {
+        logonly("eject confirmation: no location or driver key\n");
+        return;
+    }
+    join(path, sizeof(path), "SYSTEM\\CurrentControlSet\\Enum",
+         tbn[tbh[nhiK].Node].R.Id);
+    join(path, sizeof(path), path, "Device Parameters");
+    name[0] = '\0';
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k) ==
+        ERROR_SUCCESS) {
+        n = sizeof(name) - 1;
+        if (RegQueryValueExA(k, CM_Q_NAME_VALUE, NULL, &type, (LPBYTE)name,
+                             &n) != ERROR_SUCCESS || type != REG_SZ) {
+            name[0] = '\0';
+        }
+        name[sizeof(name) - 1] = '\0';
+        RegCloseKey(k);
+    }
+    if (name[0] == '\0' || strlen(name) > 16) {
+        logonly("eject confirmation: the NHI names no query device\n");
+        return;
+    }
+    _snprintf(dev, sizeof(dev) - 1, "\\\\.\\%s", name);
+    dev[sizeof(dev) - 1] = '\0';
+    b = (unsigned char *)malloc(CM_QM_MAX_BYTES);
+    dh = CreateFileA(dev, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                     OPEN_EXISTING, 0, NULL);
+    if (b == NULL || dh == INVALID_HANDLE_VALUE) {
+        logonly("eject confirmation: %s did not open\n", dev);
+        free(b);
+        if (dh != INVALID_HANDLE_VALUE) {
+            CloseHandle(dh);
+        }
+        return;
+    }
+    /* The departure is recorded as Windows removes the unit's stack; a
+     * moment is allowed for the answer to show it. */
+    t0 = GetTickCount();
+    for (;;) {
+        got = 0;
+        r = DeviceIoControl(dh, CM_QM_IOCTL, NULL, 0, b, CM_QM_MAX_BYTES, &got,
+                            NULL)
+                ? inst_qc_build(b, got, member, tbn[u].Bus, tbn[u].Addr, c,
+                                &need)
+                : 0;
+        if (r != 0 || GetTickCount() - t0 >= INST_TB_ASK_WAIT_MS) {
+            break;
+        }
+        Sleep(250);
+    }
+    CloseHandle(dh);
+    free(b);
+    if (r != 1) {
+        logonly("eject confirmation: no single pending departure at bus %lu "
+                "address 0x%08lX (%d)\n", (unsigned long)tbn[u].Bus,
+                (unsigned long)tbn[u].Addr, r);
+        return;
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, tbh[nhiK].DrvPath, 0,
+                      KEY_QUERY_VALUE | KEY_SET_VALUE, &k) != ERROR_SUCCESS) {
+        logonly("eject confirmation: the driver key %s is not writable\n",
+                tbh[nhiK].DrvPath);
+        return;
+    }
+    n = sizeof(old);
+    w = RegQueryValueExA(k, CM_QC_VALUE, NULL, &type, old, &n);
+    if (w == ERROR_FILE_NOT_FOUND || (w == ERROR_SUCCESS && n == 0)) {
+        w = RegSetValueExA(k, CM_QC_VALUE, 0, REG_BINARY, c, INST_QC_BYTES);
+        logonly("eject confirmation: %s (serial %lu) %s\n", CM_QC_VALUE,
+                (unsigned long)inst_get32(c, CM_QC_O_SERIAL),
+                w == ERROR_SUCCESS ? "written" : "refused");
+    } else {
+        logonly("eject confirmation: another confirmation waits; nothing "
+                "written\n");
+    }
+    RegCloseKey(k);
+}
+
 /* The device to eject, one choice a line (owner, 2026-10-16). 0 when
  * cancelled (Enter, or end of input). */
 static int eject_choose(INST_U32 *n)
@@ -11083,6 +11910,8 @@ static int run_eject(void)
         if (notRemovable) {
             out("Until you unplug it, Windows may start it again when it next "
                 "looks for new\nhardware.\n");
+        } else {
+            tb_confirm(nhiK, u, portBdf);
         }
         tb_watch_tunnel(nhiK, portBdf);
     } else {
@@ -14626,7 +15455,20 @@ int inst_eng_ask(void)
 int inst_eng_run(void)
 {
     int code = envNow.Nt ? run_install_nt() : run_install_9x();
+    int f = flagFailed;
+    int r = flagRestart;
+    int s = flagSteps;
 
+    /* Whatever the run's verdict, the invariant of record 21 section 7.4
+     * holds at its end (decision M13). */
+    mk_end_of_run();
+    /* The marks' flags join the run's verdict, which a failure returned
+     * without flagFailed (a refused baseline) keeps. */
+    if (code != INST_EXIT_REFUSED && code != INST_EXIT_FAILED &&
+        (f != flagFailed || r != flagRestart || s != flagSteps)) {
+        code = inst_exit_code(0, flagFailed, flagRestart,
+                              flagSteps || code == INST_EXIT_STEPS);
+    }
     helper_files_gone();
     return code;
 }

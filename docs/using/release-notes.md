@@ -2600,9 +2600,9 @@ controller read its own key, as before. A value of the wrong type there
 still wins, and the driver's default stands. The INFs write nothing
 there, so nothing changes until a value is set in it; `portsw.vbs`,
 `silent.vbs` and their batch files set their value there and show both.
-`INSTALL /set` and `INSTALL.BAT`'s questions still write each
-controller's own key, which a machine-wide value overrides: delete the
-machine-wide value first, or set it there.
+The installer's settings pages, its console questions and `INSTALL /set`
+write the machine-wide value too, never a controller's own, and show
+both; its uninstall deletes the values it names there and leaves the key.
 To give one controller a different value, delete the machine-wide value
 and set that controller's own. `docs/using/tuning.md` has the details.
 
