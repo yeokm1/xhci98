@@ -1898,6 +1898,79 @@ try {
         Assert-True (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) `
             "no upload archive was written for the four-directory tree."
 
+        # --- the connection manager's filter INF per architecture (3.1.0.0) ---
+        #
+        # An x86 directory keeps it in nt\ beside nt\xhcicm.sys, out of the
+        # way of Windows 98 and ME, which read a $Windows NT$ INF (39-0.4);
+        # an x64 directory keeps it at the root beside xhcicm.inf and the one
+        # xhcicm.sys, with no nt\, from 3.1.0.0 (3.0.0.0's x64 tree has nt\).
+        Write-Step "the connection manager's filter INF: nt\ in an x86 directory, the root in an x64 one"
+        Assert-True ((Get-CmFilterRel -Arch "x86") -eq "nt\xhcicmf.inf" -and
+                     (Get-CmFilterRel -Arch "x86" -PublishedVersion "3.1.0.0") -eq "nt\xhcicmf.inf" -and
+                     (Get-CmFilterRel -Arch "amd64") -eq "xhcicmf.inf" -and
+                     (Get-CmFilterRel -Arch "x64") -eq "xhcicmf.inf" -and
+                     (Get-CmFilterRel -Arch "x64" -PublishedVersion "3.1.0.0") -eq "xhcicmf.inf" -and
+                     (Get-CmFilterRel -Arch "x64" -PublishedVersion "3.0.0.0") -eq "nt\xhcicmf.inf") `
+            "Get-CmFilterRel does not put the filter INF in nt\ for x86 and for 3.0.0.0's x64, and at the root for x64 from 3.1.0.0."
+        Assert-True ((@(Get-CmPublishable -Arch "x86") -join ",") -eq "xhcicm.inf,nt\xhcicmf.inf,xhcicm.sys,nt\xhcicm.sys" -and
+                     (@(Get-CmPublishable -Arch "amd64") -join ",") -eq "xhcicm.inf,xhcicmf.inf,xhcicm.sys" -and
+                     (@(Get-CmPublishable -Arch "x64" -PublishedVersion "3.0.0.0") -join ",") -eq "xhcicm.inf,nt\xhcicmf.inf,xhcicm.sys,nt\xhcicm.sys") `
+            "Get-CmPublishable does not name the connection manager's files of each layout."
+        $putCm4 = {
+            param([bool]$X64InNt)
+            foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64")) {
+                $dd = Join-Path $pubRoot4 $d
+                $isX64 = $d -like "*-x64"
+                if (Test-Path -LiteralPath (Join-Path $dd "nt")) { Remove-Item -LiteralPath (Join-Path $dd "nt") -Recurse -Force }
+                foreach ($n in @("xhcicm.inf", "xhcicmf.inf", "xhcicm.sys")) {
+                    if (Test-Path -LiteralPath (Join-Path $dd $n)) { Remove-Item -LiteralPath (Join-Path $dd $n) -Force }
+                }
+                $nhi = Join-Path $repo $(if ($isX64) { "src\cm\xhcicm-amd64.inf" } else { "src\cm\xhcicm.inf" })
+                $flt = Join-Path $repo $(if ($isX64) { "src\cm\xhcicmf-amd64.inf" } else { "src\cm\xhcicmf.inf" })
+                $sysBytes = [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys, $d")
+                Copy-Item -LiteralPath $nhi -Destination (Join-Path $dd "xhcicm.inf") -Force
+                [System.IO.File]::WriteAllBytes((Join-Path $dd "xhcicm.sys"), $sysBytes)
+                if (-not $isX64 -or $X64InNt) {
+                    Ensure-Directory (Join-Path $dd "nt")
+                    Copy-Item -LiteralPath $flt -Destination (Join-Path $dd "nt\xhcicmf.inf") -Force
+                    [System.IO.File]::WriteAllBytes((Join-Path $dd "nt\xhcicm.sys"), $sysBytes)
+                } else {
+                    Copy-Item -LiteralPath $flt -Destination (Join-Path $dd "xhcicmf.inf") -Force
+                }
+            }
+        }
+        & $putCm4 $false
+        if (Test-Path -LiteralPath $uploadDir4) { Remove-Item -LiteralPath $uploadDir4 -Recurse -Force }
+        if (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) { Remove-Item -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")) -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
+                               "-PackageRoot", $noOut, "-UploadDir", $up4)
+        Assert-True ($r.ExitCode -eq 0) `
+            ("-UploadSetOnly refused a four-directory tree with the filter INF in nt\ for x86 and at the root for x64:`n" + $r.Output)
+        Assert-True ($r.Output -match "release-x64\\ carries the connection manager's xhcicmf\.inf" -and
+                     $r.Output -match "release-x86\\ carries the connection manager's nt\\xhcicmf\.inf") `
+            ("expected each directory's filter INF gated at its own place. Output:`n" + $r.Output)
+        foreach ($d in @("release-x64", "debug-x64")) {
+            Assert-True ((Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\xhcicmf.inf")) -and
+                         -not (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\nt"))) `
+                "the upload set's $d\ does not carry the filter INF at its root with no nt\."
+        }
+        foreach ($d in @("release-x86", "debug-x86")) {
+            Assert-True ((Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\nt\xhcicmf.inf")) -and
+                         (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\nt\xhcicm.sys")) -and
+                         -not (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\xhcicmf.inf"))) `
+                "the upload set's $d\ does not carry the filter INF and its copy of the binary in nt\ alone."
+        }
+        # The x86 layout in an x64 directory of this version is refused.
+        & $putCm4 $true
+        if (Test-Path -LiteralPath $uploadDir4) { Remove-Item -LiteralPath $uploadDir4 -Recurse -Force }
+        if (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) { Remove-Item -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")) -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
+                               "-PackageRoot", $noOut, "-UploadDir", $up4)
+        Assert-True ($r.ExitCode -ne 0) "an x64 directory of $relVersion with its filter INF in nt\ was assembled into the asset."
+        Assert-True ($r.Output -match "CM-NO9XBRIDGE") ("expected the refusal to name CM-NO9XBRIDGE. Output:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")))) `
+            "an upload archive was written around an x64 directory with an nt\ filter INF."
+
         # --- the switches that contradict -UploadSetOnly --------------------
         Write-Step "-UploadSetOnly refuses the switches that contradict it"
         foreach ($bad in @(
@@ -2818,6 +2891,21 @@ try {
     # both architectures' media carry xhci98.inf and xhci98.sys, which is why
     # they need directories of their own rather than names of their own.
     Assert-True (Test-Path -LiteralPath (Join-Path $arch64Out "xhci98.sys")) "the amd64 package has no xhci98.sys."
+    # An amd64 output directory staged before 3.1.0.0, with the filter INF
+    # and its copy of the binary in nt\, is this script's own and is
+    # replaced; anything else in nt\ is still somebody else's.
+    Ensure-Directory (Join-Path $arch64Out "nt")
+    foreach ($n in @("xhcicmf.inf", "xhcicm.sys")) {
+        [System.IO.File]::WriteAllText((Join-Path $arch64Out "nt\$n"), "stand-in from a 3.0.0.0 x64 package")
+    }
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver, "-OutDir", $arch64Out)
+    Assert-True ($r.ExitCode -eq 0) ("the amd64 package did not replace one staged in the 3.0.0.0 nt\ layout:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $arch64Out "nt"))) "the replaced amd64 package still has an nt\ subdirectory."
+    Ensure-Directory (Join-Path $arch64Out "nt")
+    [System.IO.File]::WriteAllText((Join-Path $arch64Out "nt\README.TXT"), "somebody else's")
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver, "-OutDir", $arch64Out)
+    Assert-True ($r.ExitCode -ne 0) "the amd64 packager replaced a directory holding nt\README.TXT, which it never staged."
+    Remove-Item -LiteralPath (Join-Path $arch64Out "nt") -Recurse -Force
 
     #
     # **The wrong INF under the 64-bit architecture must be refused**, and this
@@ -2889,10 +2977,12 @@ try {
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
-        @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $cmPublishable + $oemPublishable';
-           Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's four files and txtsetup.oem" },
-        @{ Find = '$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")';
-           Why  = "the connection manager's NHI INF, filter INF, binary and the filter INF's own copy of it in nt\ (roadmap-usb4.md task 39-A.1; Vista's and 7's driver store refuses a source outside the INF's directory) are no longer what a flavour directory publishes for it" },
+        @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable';
+           Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's files and txtsetup.oem" },
+        @{ Find = '$legCmPublishable = @(Get-CmPublishable -Arch $leg.Arch)';
+           Why  = "the connection manager's NHI INF, filter INF and binary, and in an x86 directory the filter INF's own copy of it in nt\ (roadmap-usb4.md task 39-A.1; Vista's and 7's driver store refuses a source outside the INF's directory), are no longer what a flavour directory publishes for it, per architecture" },
+        @{ Find = '$cmFilterRel = Get-CmFilterRel -Arch $LegArches[$f] -PublishedVersion $Version';
+           Why  = "the upload assembly no longer holds each directory's filter INF to the place its architecture and version put it" },
         @{ Find = 'Assert-CmPublished -Sys $cmSys -Leg $leg -Flavor $f -Version $Version';
            Why  = "the published xhcicm.sys is no longer held to the refusals xhciuas.sys is" },
         @{ Find = 'if ($legSigned) { $legCopy += $certPublishable }';

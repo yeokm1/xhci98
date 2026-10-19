@@ -63,8 +63,11 @@ no opinion - is kept whole. Record 11 decision 9 now points here.
 
 - **The files:** `xhci98.sys`, `xhciuas.sys` and, since the Thunderbolt 3
   connection manager joined the package, `xhcicm.sys` of both published
-  x64 flavours; `nt\xhcicm.sys`, the filter INF's own copy, is the signed
-  file staged a second time, the same bytes. Since `3.1.0.0` also the
+  x64 flavours, each signed once. In `3.0.0.0` `nt\xhcicm.sys`, the
+  filter INF's own copy, was the signed file staged a second time, the
+  same bytes; from `3.1.0.0` the x64 package keeps the filter INF at the
+  flavour directory's root beside the one `xhcicm.sys` and has no `nt\`.
+  Since `3.1.0.0` also the
   bundled Stor98's `stor98.sys` of an amd64 package (`release-x64`; the
   debug directories carry no Stor98): Stor98 is built from `src\stor98`
   with the drivers and versioned with them, and the owner's decision of
@@ -318,8 +321,8 @@ on. The release notes say so beside the tier.
 ## 9. The rule
 
 Every published x64 package directory carries `xhci98.sys`, `xhciuas.sys`
-and `xhcicm.sys` (and its `nt\xhcicm.sys` copy), and a `release-x64`
-directory from `3.1.0.0` also the bundled `stor98.sys`, with an embedded
+and `xhcicm.sys` (and, in `3.0.0.0`, its `nt\xhcicm.sys` copy), and a
+`release-x64` directory from `3.1.0.0` also the bundled `stor98.sys`, with an embedded
 Authenticode signature by the project test
 certificate - SHA-1 file digest, no timestamp, no catalog, the INFs
 unchanged - applied by `make-package.ps1 -TestSignPfx` at staging and

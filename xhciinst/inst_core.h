@@ -973,8 +973,18 @@ const char *inst_unplug_text(int kind);
 
 /* ---- the Thunderbolt 3 / USB4 question (record 23 section 8.5) ---------------- */
 
+/* Where a flavour directory keeps the tunnel-port filter's INF, relative to
+ * it: nt\xhcicmf.inf in the x86 package, out of the way of Windows 98 and
+ * ME, which read a $Windows NT$ INF (task 39-0.4); xhcicmf.inf, beside
+ * xhcicm.inf and xhcicm.sys, in the x64 package, which 98 and ME never
+ * read. inst_cmf_pnf is the device installer's precompiled copy of it, and
+ * inst_cmf_where the place as the run's text names it for Have Disk. */
+const char *inst_cmf_rel(int arch);
+const char *inst_cmf_pnf(int arch);
+const char *inst_cmf_where(int arch);
+
 /* Whether the run installs and stages the Thunderbolt driver (xhcicm.inf,
- * nt\xhcicmf.inf, xhcicm.sys). haveCm: the package carries it; nhiPresent:
+ * the filter INF, xhcicm.sys). haveCm: the package carries it; nhiPresent:
  * a device xhcicm.inf matches is present. Returns the decision when no
  * question is asked (*ask 0), else 0 with *ask 1 and *defaultYes the
  * answer Enter gives:

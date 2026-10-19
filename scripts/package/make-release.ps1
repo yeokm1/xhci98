@@ -667,20 +667,22 @@ function Get-LegPublishable {
 # it is present and does not require it.
 $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 
-# The Thunderbolt 3 connection manager's four files (roadmap-usb4.md task
+# The Thunderbolt 3 connection manager's files (roadmap-usb4.md task
 # 39-A.1): its NHI INF, its NT-only tunnel-port filter INF and the binary,
 # published beside the UAS pair on the same terms - its own INFs declare
 # them, its own gate (scripts\inf-gate\check-cm-inf.ps1) checks them in
 # place, and the binary is held to every refusal xhciuas.sys is
-# (Assert-CmPublished). The filter INF is in the flavour directory's nt\
-# subdirectory, out of Windows 98's and ME's way (runs/run-39.md, 39-0.4;
-# the gate's CM-NO9XBRIDGE), beside its own copy of the binary,
-# nt\xhcicm.sys, the same bytes as the root's: Vista's and 7's driver
-# store refuses an INF source outside the INF's directory (SetupCopyOEMInf
-# error 0xA1), and the assembly refuses two copies that differ. A version
+# (Assert-CmPublished). Which files, and where the filter INF is, follow
+# the architecture (package-common.ps1's Get-CmPublishable and
+# Get-CmFilterRel): an x86 directory has it in nt\, out of Windows 98's
+# and ME's way (runs/run-39.md, 39-0.4; the gate's CM-NO9XBRIDGE), beside
+# its own copy of the binary, nt\xhcicm.sys, the same bytes as the root's
+# (Vista's and 7's driver store refuses an INF source outside the INF's
+# directory, SetupCopyOEMInf error 0xA1), and the assembly refuses two
+# copies that differ; an x64 directory has it at the root beside the one
+# binary from 3.1.0.0 (3.0.0.0's has nt\ as x86 does). A version
 # published before 3.0.0.0 has none, so -UploadSetOnly gates them where
 # present and does not require them.
-$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")
 
 # The text-mode Setup driver description (roadmap task 33.3), published at the
 # root of every flavour directory a cut writes, where text-mode Setup of
@@ -1760,7 +1762,7 @@ function Assert-PackageMatchesDeclaredMedia {
         [string]$Flavor,
         # Files accepted beside the declared set, by their path relative to
         # the package root: the UAS pair, which its own INF declares and its
-        # own gate checks, and the connection manager's four (two in nt\).
+        # own gate checks, and the connection manager's (Get-CmPublishable).
         [string[]]$Also = @()
     )
 
@@ -2270,7 +2272,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File -Filter "stor98*" | ForEach-Object { $_.Name } }))
+                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File -Filter "stor98*" | ForEach-Object { $_.Name } }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -2386,30 +2388,37 @@ $gateOut
         # (roadmap-usb4.md task 39-A.1). Required of a directory this cut
         # built; gated where present in one -UploadSetOnly reads, since a
         # version published before 3.0.0.0 has none.
-        # The four files go together: a directory holding any of them holds
-        # all three, so a reconstruction never publishes the NHI's installer
+        # The files go together: a directory holding any of them holds them
+        # all, so a reconstruction never publishes the NHI's installer
         # without the filter's, or an INF without its binary.
         $cmGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1"
-        # The filter INF anywhere but nt\ is refused whatever else is there:
-        # Windows 98 SE and ME read a $Windows NT$ INF beside the one they are
-        # pointed at (runs/run-39.md, 39-0.4; the gate's CM-NO9XBRIDGE).
+        $cmPublishable = @(Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version)
+        $cmFilterRel = Get-CmFilterRel -Arch $LegArches[$f] -PublishedVersion $Version
+        # The filter INF anywhere but its one place is refused whatever else
+        # is there: in an x86 directory nt\, because Windows 98 SE and ME
+        # read a $Windows NT$ INF beside the one they are pointed at
+        # (runs/run-39.md, 39-0.4; the gate's CM-NO9XBRIDGE); in an x64 one
+        # the root from 3.1.0.0, nt\ before.
         foreach ($item in @(Get-ChildItem -LiteralPath $uploadFlavorDir -Recurse -Force -File -Filter "xhcicmf.inf")) {
             $rel = $item.FullName.Substring($uploadFlavorDir.TrimEnd('\').Length + 1)
-            if ($rel -ine "nt\xhcicmf.inf") {
-                throw "CM-NO9XBRIDGE (scripts\inf-gate\check-cm-inf.ps1's rule): the assembled upload set's $f\ directory holds $rel; the connection manager's filter INF is published in nt\ alone, out of Windows 98's and ME's way."
+            if ($rel -ine $cmFilterRel) {
+                throw "CM-NO9XBRIDGE (scripts\inf-gate\check-cm-inf.ps1's rule): the assembled upload set's $f\ directory holds $rel; the connection manager's filter INF is published as $cmFilterRel alone."
             }
+        }
+        if ($cmFilterRel -eq "xhcicmf.inf" -and (Test-Path -LiteralPath (Join-Path $uploadFlavorDir "nt"))) {
+            throw "CM-NO9XBRIDGE (scripts\inf-gate\check-cm-inf.ps1's rule): the assembled upload set's $f\ directory has an nt\ subdirectory; an x64 directory keeps the filter INF at its root and has none."
         }
         $cmHave = @($cmPublishable | Where-Object { Test-Path -LiteralPath (Join-Path $uploadFlavorDir $_) })
         if ($cmHave.Count -ne 0 -and $cmHave.Count -ne $cmPublishable.Count) {
             $cmMissing = @($cmPublishable | Where-Object { $cmHave -notcontains $_ })
-            throw "the assembled upload set's $f\ directory carries $($cmHave -join ', ') of the connection manager but not $($cmMissing -join ', '): the four files go together."
+            throw "the assembled upload set's $f\ directory carries $($cmHave -join ', ') of the connection manager but not $($cmMissing -join ', '): the $($cmPublishable.Count) files go together."
         }
-        if ($cmHave.Count -ne 0 -and
+        if ($cmHave.Count -ne 0 -and $cmPublishable -contains "nt\xhcicm.sys" -and
             (Get-FileHash -LiteralPath (Join-Path $uploadFlavorDir "xhcicm.sys") -Algorithm SHA256).Hash -ne
             (Get-FileHash -LiteralPath (Join-Path $uploadFlavorDir "nt\xhcicm.sys") -Algorithm SHA256).Hash) {
             throw "the assembled upload set's $f\ directory carries an nt\xhcicm.sys that is not the same bytes as its xhcicm.sys: the filter INF's copy must be the published binary itself (signed before it is copied)."
         }
-        foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "nt\xhcicmf.inf"; Extra = @("-Filter") })) {
+        foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = $cmFilterRel; Extra = @("-Filter") })) {
             $cmInfPath = Join-Path $uploadFlavorDir $cmInf.Name
             if (Test-Path -LiteralPath $cmInfPath) {
                 $savedEap = $ErrorActionPreference
@@ -2417,7 +2426,8 @@ $gateOut
                 try {
                     $gateOut = & powershell.exe (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $cmGate,
                                                    "-InfPath", $cmInfPath, "-Arch", $LegArches[$f],
-                                                   "-PackageDir", $uploadFlavorDir) + $cmInf.Extra) 2>&1 | Out-String
+                                                   "-PackageDir", $uploadFlavorDir,
+                                                   "-PublishedVersion", $Version) + $cmInf.Extra) 2>&1 | Out-String
                 } finally {
                     $ErrorActionPreference = $savedEap
                 }
@@ -3192,7 +3202,8 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $cmPublishable + $oemPublishable + $legStor98
+        $legCmPublishable = @(Get-CmPublishable -Arch $leg.Arch)
+        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable + $legStor98
         if ($legSigned) { $legCopy += $certPublishable }
         foreach ($name in $legCopy) {
             $src = Join-Path $pkgDir $name
@@ -3202,9 +3213,11 @@ runs are what stand between a broken binary and a guest that cannot boot.
             Ensure-Directory (Split-Path -Parent (Join-Path $destDir $name))
             Copy-Item -LiteralPath $src -Destination (Join-Path $destDir $name) -Force
         }
-        # The filter INF's own copy of the connection manager is the
-        # published binary itself, byte for byte (signed before the copy).
-        if ((Get-FileHash -LiteralPath (Join-Path $destDir "xhcicm.sys") -Algorithm SHA256).Hash -ne
+        # The filter INF's own copy of the connection manager, where the
+        # leg has one (x86: nt\xhcicm.sys), is the published binary itself,
+        # byte for byte (signed before the copy).
+        if ($legCmPublishable -contains "nt\xhcicm.sys" -and
+            (Get-FileHash -LiteralPath (Join-Path $destDir "xhcicm.sys") -Algorithm SHA256).Hash -ne
             (Get-FileHash -LiteralPath (Join-Path $destDir "nt\xhcicm.sys") -Algorithm SHA256).Hash) {
             throw "the $($leg.Id) leg's nt\xhcicm.sys is not the same bytes as its xhcicm.sys; make-package.ps1 copies the one binary to both places."
         }
@@ -3218,7 +3231,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)
+                                           -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)
         Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
         # The published Stor98 images carry this release's version, like
         # xhci98.sys below (task 42-A.30).
@@ -4049,8 +4062,12 @@ helper (xhciinst\di\build.cmd).
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      xhcicm.inf   (the Thunderbolt 3 connection manager's INF)"
-        $contents += "      nt\xhcicmf.inf  (its tunnel-port filter's INF, Windows 2000 and"
-        $contents += "                   later only: never point Windows 98 or ME at nt\)"
+        if ($leg.Arch -eq "x86") {
+            $contents += "      nt\xhcicmf.inf  (its tunnel-port filter's INF, Windows 2000 and"
+            $contents += "                   later only: never point Windows 98 or ME at nt\)"
+        } else {
+            $contents += "      xhcicmf.inf  (its tunnel-port filter's INF)"
+        }
         $contents += ("      xhcicm.sys   {0:N0} bytes" -f $s.CmLength)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.CmSha256)
@@ -7082,10 +7099,10 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Write-Step "Done"
     Write-Host "Tracked:    $destRoot"
     Write-Host "            Each published directory holds this project's own files only: its"
-    Write-Host "            drivers, their INFs, txtsetup.oem, nt\ beside them, and in an x64"
-    Write-Host "            directory the test certificate; tools\ and INSTALL.BAT at the root;"
-    Write-Host "            in each release- directory the Stor98 built with them. No Microsoft"
-    Write-Host "            file. Commit this."
+    Write-Host "            drivers, their INFs, txtsetup.oem, in an x86 directory nt\ beside"
+    Write-Host "            them, and in an x64 directory the test certificate; tools\ and"
+    Write-Host "            INSTALL.BAT at the root; in each release- directory the Stor98"
+    Write-Host "            built with them. No Microsoft file. Commit this."
     if ($null -ne $uploadRoot) {
         Write-Host ""
         Write-Host "Upload:     $uploadZip"
