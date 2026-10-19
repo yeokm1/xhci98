@@ -1128,6 +1128,38 @@ that filter from a rebuilt stack needs another driver's chain top read
 safely, an import this driver does not have; under the USB4 profile on an
 ACPI machine an eject leaves the tunnel up until the unplug.
 
+### 42-A.24, continued: the service entries, and the mark service following XhciCmSafeEject (2026-10-19)
+
+The matrix found `pci#cc_0c0340` and the NHI's own id left in the
+CriticalDeviceDatabase naming `xhcicm` after an uninstall (2000, XP and 7),
+the NHI back at Code 19 after the restart. The uninstall now deletes every
+entry whose `Service` is a service of the package that is gone (record 23
+section 9.2 step 6a, `inst_cddb_service_gone` with host vectors; Stor98's
+only when its removal took the service), and every NT install run ends with
+the same pass. Read on the 2000 disk on a two-port USB4 host with the
+connection manager and Stor98 installed: the uninstall deleted the two
+entries naming `xhcicm` and kept `pci#cc_010802` naming the Stor98 a drive
+still used; after the restart the NHI had no driver (Code 1 on that disk,
+as before the first install; not Code 19) and no entry named a removed
+service. `xhci98` and `xhciuas` left no entry on that 2000 disk, nor on
+the XP guest with the package installed (its database named `xhcicm` for
+the NHI's id alone). Gated builds passed, x86 then amd64, at 3fec8fd2 (the
+merge of 3.1.0.0 over this work).
+
+The owner's decision: the mark service follows the `XhciCmSafeEject` in
+force after a run (record 23 section 5.1 step 12, `inst_mk_safe_eject` and
+`inst_mk_end_action` with host vectors). Read on 7 x86: an install with
+`/set XhciCmSafeEject=0` left no `xhcimark`; `/set XhciCmSafeEject=1`
+installed and started it, and after the restart and a plug the unit was
+marked; `/set XhciCmSafeEject=0` again stopped and deleted the service and
+took the unit's mark out, nothing in the database naming `xhcicm` in a
+`LowerFilters`. The first run of that leg also took the filter INF's
+`UpperFilters` copy out of the database while `xhcicm` stayed; that copy
+is the tunnel-port filter's, and a run with safe eject off now leaves it.
+
+Reviewed until the review converged (its last round found one wording
+point in these records, fixed).
+
 ## Phase 42 integration: the installer's hooks, the bench cut and its smoke legs (2026-10-19)
 
 Branch `p42-int` from `3.1.0.0` at `2d2703b9`, with `3.1.0.0` merged in

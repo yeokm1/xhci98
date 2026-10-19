@@ -4136,10 +4136,11 @@ the code (`runs/run-42.md`, "42-A.5"):
   and 7 x86 made it when a marked bridge's driver was installed again (a
   forced `machine.inf` update), and XP made none for a Stor98 update over
   a marked NVMe drive. So the copy is possible on every system the service
-  runs on, 2000 to 7 (`inst_mk_system`), which is where the matrix's tests
+  runs on. The service stays on 2000 to 7, where the matrix's tests
   without the mark found it needed: on 2000 for the first plug, on Vista
   and 7 (x86 and x64) for a stack rebuilt by a disable and enable or a
-  driver update. The service therefore takes
+  driver update (the installer puts it on 8 and 8.1 too, for the
+  connection manager alone: `inst_mk_system`). The service therefore takes
   `xhcicm` out of every entry's `LowerFilters` at every poll (the other
   names kept, the value deleted when nothing else is left), and runs its
   inventory at once when it took one out and every minute besides; an
@@ -4163,6 +4164,17 @@ the code (`runs/run-42.md`, "42-A.5"):
   the next poll; after the uninstall nothing under `Enum\PCI` or the
   database named `xhcicm`, and a new bridge, an NVMe drive behind it and
   another on bus 0 started (Code 0).
+- **Safe eject off** (the owner, 2026-10-19): the service follows
+  `XhciCmSafeEject`. The installer reads the value in force at the end of
+  each run (the machine-wide value, else each `xhcicm` device's own,
+  else 1): with 0 it does not install the service, and removes one that
+  is installed with every mark and the database's `LowerFilters` copies,
+  as the uninstall's step 0 does, the filter INF's `UpperFilters` copies
+  staying with `xhcicm`; a later `/set XhciCmSafeEject=1` installs it
+  again (record 23 section 5.1 step 12). The setting's note in the
+  installer says so. The service's own reading of a domain's safe eject
+  0 (no new mark, a mark there removed) stays as it was, for the time
+  before the installer's run.
 - **Hand registration.** `XHCIMARK -register` and `-unregister` register
   and delete the service from `system32` for a test guest before the
   installer's hooks exist; the installer does it in a release.

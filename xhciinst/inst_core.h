@@ -293,6 +293,17 @@ int inst_filter_drop(const char *in, size_t inBytes, const char *name,
  * device, and every new device of that class then gets them. */
 #define INST_CDDB_KEY "SYSTEM\\CurrentControlSet\\Control\\CriticalDeviceDatabase"
 
+/* Whether a CriticalDeviceDatabase entry goes with an uninstall: 1 when
+ * its Service value (service, NULL when it has none or it is not a
+ * string) names, ignoring case, one of the gone[0..n-1] services this run
+ * removed or found absent. Windows writes such an entry when it installs a
+ * boot-critical device (the NHI's id and its class, read on 2000, XP and
+ * 7); left behind it makes the device's next install start from a service
+ * that no longer exists (Code 19). An entry naming another driver's
+ * service is never one. */
+int inst_cddb_service_gone(const char *service, const char *const *gone,
+                           int n);
+
 /* 1 when a SystemStartOptions value holds the word TESTSIGNING. */
 int inst_testsigning(const char *options);
 
@@ -1436,11 +1447,24 @@ int inst_mk_system(const INST_ENV *env);
 /* What the end of an install or update run does about the marks (decision
  * M13, by the state the run ends in): cmService is the xhcicm service's
  * state (1 registered, 0 not, -1 unreadable), tbInRun whether the
- * Thunderbolt component was in this run, markSystem inst_mk_system. */
+ * Thunderbolt component was in this run, markSystem inst_mk_system,
+ * safeEject the XhciCmSafeEject in force after the run (inst_mk_safe_eject;
+ * owner, 2026-10-19: with 0 the service is neither installed nor kept). */
 #define INST_MK_LEAVE       0   /* nothing changes                         */
 #define INST_MK_INSTALL     1   /* the service installed or updated, started */
 #define INST_MK_REMOVE      2   /* every mark removed, the service deleted */
-int inst_mk_end_action(int cmService, int tbInRun, int markSystem);
+int inst_mk_end_action(int cmService, int tbInRun, int markSystem,
+                       int safeEject);
+
+/* The XhciCmSafeEject in force after a run, by task 42-A.17's precedence:
+ * the machine-wide value when present (mwState 1, mwValue; -1 present and
+ * not a DWORD, which the driver reads as its default 1), else each
+ * connection manager device's own (now[0..nNow-1], as value_targets reads
+ * them: State 1 set, 0 not set or -1 a new install, both the default 1).
+ * 0 only when the value in force is 0 for every device; with no device
+ * and no machine-wide value, the default 1. */
+int inst_mk_safe_eject(int mwState, INST_U32 mwValue, const INST_VNOW *now,
+                       int nNow);
 
 /* The confirmation of an administrator tool's own eject (decision M16;
  * cm_query.h CM_QC_*), from the marks answer b[0..n) (cm_query.h CM_QM_*):
