@@ -126,9 +126,17 @@ int main(void)
         iop[0x20 / 4] = (ULONG)srb;
         srb[0x40 / 4] = 0;
         check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_UNKNOWN, "classify: no IOP -> unknown");
-        srb[0x40 / 4] = (ULONG)iop + 2;
-        check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_UNKNOWN, "classify: misaligned IOP -> unknown");
-        srb[0x40 / 4] = (ULONG)iop;
+        {
+            /* IOS's splitter: a one-entry list at an odd address is accepted */
+            static UCHAR odd[96];
+            STOR98_SGD9X *ol = (STOR98_SGD9X *)(odd + 0x39);
+            srb[0x40 / 4] = (ULONG)iop;
+            ol[0].Count = 2; ol[0].Linear = l[1].Linear; ol[1].Count = 0;
+            iop[(0x64 + 0x1C) / 4] = (ULONG)ol;
+            check(Sg9xClassify(srb, (void *)ol[0].Linear, &got, &sh) == SG9X_SG && got == ol,
+                  "classify: odd-address list (IOS big-request splitter) accepted");
+            iop[(0x64 + 0x1C) / 4] = (ULONG)l;
+        }
         iop[0x04 / 4] = 0x100;
         check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_UNKNOWN, "classify: DCB outside the arena -> unknown");
         iop[0x04 / 4] = (ULONG)dcb;

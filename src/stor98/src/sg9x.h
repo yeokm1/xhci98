@@ -71,7 +71,9 @@ static BOOLEAN Sg9xResolve(const STOR98_SGD9X *Sgd, UCHAR Shift, ULONG Offset,
 // 4.10.2223 update and ME (docs/INVESTIGATION-9X-REQUEST-SIZE.md, section 7).
 // Every pointer is checked to lie in the system arena before it is read, and
 // the IOP must point back at the SRB (IOP_srb), so a different layout is
-// reported as unknown rather than followed.
+// reported as unknown rather than followed. No alignment is required: IOS's
+// big-request splitter hands down a one-entry list at an odd address inside
+// its own block (IOS obj1 0x0F3E-0x0F5C, + 0x39; emulator 2026-10-19).
 //
 #define SG9X_SRB_IOP        0x40        // PORT_SRB.SrbIopPointer
 #define SG9X_IOP_PDCB       0x04        // IOP_physical_dcb
@@ -97,7 +99,7 @@ static ULONG Sg9xClassify(const void *Srb, const void *DataBuffer, const STOR98_
     *Sgd = NULL;
     *Shift = 0;
     iop = *(const ULONG *)((const UCHAR *)Srb + SG9X_SRB_IOP);
-    if (iop < SG9X_ARENA || (iop & 3) != 0 || *(const ULONG *)(iop + SG9X_IOP_SRB) != (ULONG)Srb) {
+    if (iop < SG9X_ARENA || *(const ULONG *)(iop + SG9X_IOP_SRB) != (ULONG)Srb) {
         return SG9X_UNKNOWN;
     }
     flags = *(const ULONG *)(iop + SG9X_IOR_FLAGS);
@@ -106,7 +108,7 @@ static ULONG Sg9xClassify(const void *Srb, const void *DataBuffer, const STOR98_
     }
     dcb = *(const ULONG *)(iop + SG9X_IOP_PDCB);
     sgd = *(const ULONG *)(iop + SG9X_IOR_BUFFER);
-    if (dcb < SG9X_ARENA || sgd < SG9X_ARENA || (sgd & 3) != 0 ||
+    if (dcb < SG9X_ARENA || sgd < SG9X_ARENA ||
         ((const STOR98_SGD9X *)sgd)->Linear != (ULONG)DataBuffer) {
         return SG9X_UNKNOWN;
     }
@@ -122,7 +124,7 @@ static ULONG Sg9xIorFunc(const void *Srb)
 {
     ULONG iop = *(const ULONG *)((const UCHAR *)Srb + SG9X_SRB_IOP);
 
-    if (iop < SG9X_ARENA || (iop & 3) != 0 || *(const ULONG *)(iop + SG9X_IOP_SRB) != (ULONG)Srb) {
+    if (iop < SG9X_ARENA || *(const ULONG *)(iop + SG9X_IOP_SRB) != (ULONG)Srb) {
         return 0xFFFF;
     }
     return *(const USHORT *)(iop + SG9X_IOR_FUNC);

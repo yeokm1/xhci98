@@ -144,7 +144,10 @@ The 98 SE original and the update differ in object 1 only in data addresses.
 
 What the code adds on top of that layout (`sg9x.h`, `Sg9xClassify`) is defensive and not
 derived from these binaries. The IOP, DCB and list pointers must lie in the system arena,
-the IOP and list must be dword-aligned, the IOP's `IOP_srb` must point back at the SRB, and
-the first fragment must equal `DataBuffer`. Anything else is classified as unknown. The
+the IOP's `IOP_srb` must point back at the SRB, and the first fragment must equal
+`DataBuffer`. No alignment is required: IOS's big-request splitter hands SCSIPORT a
+one-entry list at an odd address (its own block + 0x39, IOS obj1 0x0F3E-0x0F5C). An
+earlier dword-alignment check therefore failed every split request on the first emulator
+run (raw I/O of 255 sectors or more, file I/O of 512 KiB or more) and was removed. Anything else is classified as unknown. The
 request then fails cleanly (HARDWARE ERROR, ASC 44h) instead of being copied through a
 guessed address. Byte-counted lists (`IORF_CHAR_COMMAND`) use shift 0.
