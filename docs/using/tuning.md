@@ -147,7 +147,7 @@ A UAS-only device stays on UAS either way. The value is read each time a device 
 
 ## Polling a Low- or Full-Speed mouse above 1000 Hz (`XhciFastPollFsLs`)
 
-`XhciFastPollFsLs` polls a mouse faster than 1000 Hz, together with SweetLow's hidusbf. It is read when the controller starts, so restart after changing it.
+`XhciFastPollFsLs` polls a mouse faster than 1000 Hz, together with SweetLow's hidusbf. It is read when the controller starts, so restart after changing it. It is set by the installer's "Advanced..." on the USB settings page (or `/set XhciFastPollFsLs=<value>`) as well, which writes it machine-wide.
 
 - `0` (default): off.
 - `2` or `3`: a mouse on a **root port**, set in hidusbf to "31 Hz" or "62 Hz", is polled at the rate below. A device behind a hub keeps its normal rate, and any root-port Low- or Full-Speed device that asks for 16 to 63 ms is polled faster too.
