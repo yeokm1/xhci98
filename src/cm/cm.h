@@ -557,6 +557,10 @@ typedef struct _CM_FILTER {
     ULONG RelGen;           /* bumped when the reported population changes */
     ULONG EjectSeen;        /* an orderly child removal since the last
                                eject was posted                           */
+    ULONG EjectHold;        /* an eject taken for this member, its tunnel
+                               teardown not yet returned: no function
+                               behind it is started meanwhile
+                               (CmRegStartAllowed)                        */
     ULONG Unsettled;        /* a tunnel change since its last BusRelations */
     ULONG ChangeSeq;        /* tunnel changes seen, for that settling     */
     ULONG RelAnswers;       /* successful BusRelations answers seen: the

@@ -381,6 +381,9 @@ VOID CmRegPublish(PCM_FILTER filter)
         filter->InFlight = 0;
         filter->Held = 0;
         filter->HeldBy = NULL;
+        /* A new publication: an eject's hold ended before the withdrawal
+         * completed (it holds a reference), so none is carried over. */
+        filter->EjectHold = 0;
         cmRegSerial++;
         filter->Serial = cmRegSerial;
         KeClearEvent(&filter->Rundown);
@@ -765,26 +768,89 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
 
 /*
  * Whether every function behind a bridge is without a device stack: each
- * PDO its last BusRelations reported has nothing attached (an eject, a
- * disable or no driver removed or never built its stack), and that answer
- * was not truncated. Whatever put a stack back - a re-enable, a driver
- * installed - shows as an attached device, so no state is remembered per
- * PDO. The snapshot's PDOs are those pci.sys still reports, so they are
- * not yet deleted. Under the lock.
+ * PDO its last BusRelations reported has nothing attached, or only the
+ * child filter that answer put on it with nothing above it (an eject, a
+ * disable or no driver removed or never built its stack: CmPortsStackless),
+ * and that answer was not truncated. Whatever put a stack back - a
+ * re-enable, a driver installed - shows as an object attached above the
+ * child, so no state is remembered per PDO. The snapshot's PDOs are those
+ * pci.sys still reports, so they are not yet deleted; a child on the
+ * attachment list is not yet deleted either (it leaves the list before
+ * IoDeleteDevice). Under the lock.
  */
 static BOOLEAN cmEjectReady(PCM_FILTER bridge)
 {
     ULONG i;
+    PDEVICE_OBJECT pdo;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    ULONG busChild;
+    ULONG addDev;
+    ULONG above;
 
     if (!bridge->Published || bridge->Gone || bridge->SnapTruncated) {
         return FALSE;
     }
     for (i = 0; i < bridge->SnapCount; i++) {
-        if (((PDEVICE_OBJECT)bridge->Snap[i])->AttachedDevice != NULL) {
+        pdo = (PDEVICE_OBJECT)bridge->Snap[i];
+        if (pdo->AttachedDevice == NULL) {
+            continue;
+        }
+        busChild = 0;
+        addDev = 0;
+        above = 0;
+        for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+            f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+            if (f->Common.Pdo != pdo) {
+                continue;
+            }
+            if (f->Common.Kind == CM_KIND_CHILD && !f->AddDev) {
+                busChild = 1;
+                if (f->Common.Self->AttachedDevice != NULL) {
+                    above = 1;
+                }
+            } else {
+                addDev = 1;
+            }
+        }
+        if (!CmPortsStackless(1, busChild, addDev, above)) {
             return FALSE;
         }
     }
     return TRUE;
+}
+
+BOOLEAN CmRegStartAllowed(PCM_FILTER filter)
+{
+    KIRQL irql;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    PCM_FILTER held;
+    ULONG i;
+
+    held = NULL;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (e = cmRegFilters.Flink; e != &cmRegFilters && held == NULL;
+         e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
+        if (!f->EjectHold) {
+            continue;
+        }
+        for (i = 0; i < f->SnapCount; i++) {
+            if (f->Snap[i] == (PVOID)filter->Common.Pdo) {
+                held = f;
+                break;
+            }
+        }
+    }
+    /* Refused whoever owns the member now (a claim recomputed meanwhile
+     * does not end the teardown); the owner, used under the lock only as
+     * its other notes are, is only where the note goes. */
+    if (held != NULL && held->Owner != NULL) {
+        CmLogNote(held->Owner, "cm.reenum.eject.start-refused", held->Bdf);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return (BOOLEAN)(held == NULL);
 }
 
 /* ---- the marks (record 21 section 7.4, revision 3; task 42-A.5) ------- */
@@ -2357,6 +2423,7 @@ VOID CmReenumService(PCM_NHI nhi)
     PCM_REENUM r;
     KIRQL irql;
     PCM_FILTER f;
+    PCM_FILTER ejHeld[XHCI_TBT_MAX_TUNNELS];
     ULONG pending;
     ULONG stale;
     ULONG mask;
@@ -2411,6 +2478,9 @@ VOID CmReenumService(PCM_NHI nhi)
      * population, and still no function with a stack behind it. One that
      * no longer holds is dropped and logged; the hook is called after the
      * lock is released. */
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        ejHeld[i] = NULL;
+    }
     KeAcquireSpinLock(&cmRegLock, &irql);
     pending = r->EjectPending;
     r->EjectPending = 0;
@@ -2438,6 +2508,16 @@ VOID CmReenumService(PCM_NHI nhi)
             stale |= 1UL << i;
         } else {
             taken = 1;
+            if (r->EjectHook != NULL) {
+                /* Held with the eligibility, under the lock: a function
+                 * found stackless here cannot start before its tunnel is
+                 * torn down (CmRegStartAllowed). The reference keeps the
+                 * bridge from withdrawing (and so from a new publication)
+                 * until the hook has returned. */
+                f->EjectHold = 1;
+                f->InFlight++;
+                ejHeld[i] = f;
+            }
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
@@ -2453,6 +2533,12 @@ VOID CmReenumService(PCM_NHI nhi)
         CmLogNote(nhi, "cm.reenum.eject", r->Port[i].Bdf);
         if (r->EjectHook != NULL) {
             r->EjectHook(r->EjectContext, r->Port[i].Bdf);
+            if (ejHeld[i] != NULL) {
+                KeAcquireSpinLock(&cmRegLock, &irql);
+                ejHeld[i]->EjectHold = 0;
+                cmRegDrop(ejHeld[i]);
+                KeReleaseSpinLock(&cmRegLock, irql);
+            }
         } else {
             /* Under the firmware connection manager there is no
              * per-device teardown: the tunnel stays up and the user

@@ -1,9 +1,12 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 9, 2026-10-19 (task 42-A.31, the owner's request of that
+Status: draft 11, 2026-10-19 (task 42-A.31, the owner's request of that
 day: `SETUP.EXE` at the package root, the program a person double-clicks,
 and `INSTALL.BAT` kept for the command line; sections 2, 5.9, 10, 12, 13
-and 15, and record 23 revision 14); draft 8, 2026-10-19 (task 42-A.21, the owner's request of that
+and 15, and record 23 revision 16); draft 9, 2026-10-19 (task 42-A.27,
+section 7: the settle after a root hub's or hub's job within a pass,
+record 23 revision 14); draft 8, 2026-10-19
+(task 42-A.21, the owner's request of that
 day: the connection manager alone, and Windows 8 and 8.1 for it; sections
 1.2, 5.1, 5.3, 9.1, 9.3, 10, 12 and 13, and record 23 revision 13);
 draft 7, 2026-10-18, reviewed and revised (an INF copy made by
@@ -96,7 +99,7 @@ asks for the restart.
 ## 2. Where it lives in the package
 
 ```
-<package>\SETUP.EXE                     the entry point for people (draft 9)
+<package>\SETUP.EXE                     the entry point for people (draft 11)
 <package>\INSTALL.BAT                   the command line's entry point, kept
 <package>\tools\xhciinst\XHCIWIZ.EXE    the window, 32-bit (W1)
 <package>\tools\xhciinst\XHCIWZ64.EXE   the window, x64
@@ -130,7 +133,7 @@ its refusal text as today's eight are. The release notes' examples are
 rewritten with the word.
 
 **`SETUP.EXE` is the entry point for people** (owner, 2026-10-19; draft
-9, task 42-A.31; W17). It supersedes the paragraph above for a person:
+11, task 42-A.31; W17). It supersedes the paragraph above for a person:
 the readme's first instruction is "To install or update, double-click
 SETUP.EXE; to uninstall, use Remove in Add/Remove Programs (or SETUP
 /uninstall)", and `INSTALL.BAT` is for the command line and
@@ -574,7 +577,7 @@ each as the console prints it), and the restart:
 
 The exit code is record 23's, so `INSTALL.BAT` passes it on unchanged
 whichever front end ran. `SETUP.EXE` does not wait for the window and
-returns 0 once it is started (section 2, draft 9): the result a person
+returns 0 once it is started (section 2, draft 11): the result a person
 reads is this page, and the log.
 
 ## 6. What it installs
@@ -772,7 +775,11 @@ machine, its reading of the tree through `cfgmgr32.dll`), shows "Windows
 is installing the devices the controller shows; answer its windows: Next,
 Next, Finish, and type `C:\XHCI98` where it asks", and only then reads the
 tree again and installs, through the helper, what still has no driver (a
-wizard the user cancelled) or an older one (an update's root hub). How
+wizard the user cancelled) or an older one (an update's root hub). Within
+a pass the same settle follows each root hub's, hub's or composite
+entry's job before the next one, and a device such a job hid for a moment
+is waited for and tried once more before it is a step (record 23 section
+5.8, revision 14). How
 the wizards and the helper meet is a reading of the 42-V.1 legs (record 27
 section 12), and the design holds to this order until they are read.
 
@@ -1010,7 +1017,7 @@ and the legs read them as today; the log is 7.5's, appended by the window
 as by the console, with every page's answers recorded as the console's
 answers are. A window closed by the user before Install is exit 1 with
 nothing changed; closed during the progress, the cancel of section 5.8. Started by
-`SETUP.EXE`, the window's code reaches no one (section 2, draft 9): a
+`SETUP.EXE`, the window's code reaches no one (section 2, draft 11): a
 script runs `INSTALL /console`, or `INSTALL` with the window's switches,
 which waits.
 
@@ -1057,7 +1064,7 @@ Record 23 is revised in the same change as the code (task 42-A.2), and
 this list is the whole of it:
 
 - Section 2: the package layout of section 2 here; `INSTALL.BAT`'s
-  `/console` rule; (draft 9, record 23 revision 14) `SETUP.EXE` at the
+  `/console` rule; (draft 11, record 23 revision 16) `SETUP.EXE` at the
   root for people, `INSTALL.BAT` for the command line, and D1 revised.
 - Section 4.2: the package-layout refusal applies to an install and an
   update; the uninstall and the device modes run without a package
@@ -1108,7 +1115,7 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   console it has to attach to loses the console's redirection rules record
   23 section 7.6 reads).
 - **W2** `INSTALL.BAT` starts the window unless its first argument is
-  `/console` (section 2); for people, superseded by W17 (draft 9). Not taken: a second batch file (record 23
+  `/console` (section 2); for people, superseded by W17 (draft 11). Not taken: a second batch file (record 23
   decision D1's reason stands), or choosing by the presence of any switch
   (the Add/Remove entry's `/uninstall` and a user's `/to` want the window).
 - **W3** The engine is single threaded; the window runs `RUN` on one
@@ -1159,7 +1166,7 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   from the install directory's copy or the temporary one and read the
   system alone; the package-layout refusal stays for an install and an
   update (sections 2 and 9.2).
-- **W17** (draft 9; the owner, 2026-10-19, "setup.exe by tonight")
+- **W17** (draft 11; the owner, 2026-10-19, "setup.exe by tonight")
   `SETUP.EXE` at the package root is what a person double-clicks: a
   32-bit `asInvoker` windows program that starts the window of the
   system's architecture through `ShellExecuteEx` with its own arguments
@@ -1199,7 +1206,7 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 | `xhciinst\inst_core.c`, `inst_core.h` | the pure half (section 11) |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the four builds and the helper's; the self-tests; the import allowlists per executable |
 | `xhciinst\INSTALL.BAT` | the launcher with `/console` |
-| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, the package root's starter of the window (draft 9) |
+| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, the package root's starter of the window (draft 11) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt`; the wizard first, the console second |
 | `test\test_inst.c` | the host suite |
 | `scripts\package\make-release.ps1`, `test-package.ps1`, `scripts\build-driver.cmd` | staging, the mutation cases, the gates |

@@ -1,8 +1,10 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 14, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
-for the command line; see below); revision 13, 2026-10-19 (the
-connection manager alone, and Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
+Status: revision 16, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
+for the command line; see below); revision 14, 2026-10-19 (task 42-A.27:
+a parent's job and the devices below it, sections 5.8 and 10); revision
+13, 2026-10-19 (the connection manager alone, and
+Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
 service and the machine-wide key); revision 11, 2026-10-18 (the window,
 the helper, the uninstall
 from Add/Remove Programs; see below); revision 10, 2026-10-16 (the
@@ -190,7 +192,7 @@ it". What changes here:
 - **Sections 9.5 and 5.1 step 12**: the mark service on 8 and 8.1 too.
 - **Section 13**: D17 to D19.
 
-Revision 14, 2026-10-19 (roadmap-usb4.md task 42-A.31; record 26 draft 9
+Revision 16, 2026-10-19 (roadmap-usb4.md task 42-A.31; record 26 draft 11
 section 2 and W17). The owner, 2026-10-19: "setup.exe by tonight". The
 package root gains `SETUP.EXE`, the program a person double-clicks: it
 starts the installer's window and exits, with no console window behind
@@ -269,7 +271,7 @@ program around them, in the shape `XHCICLN` already has.
 ## 2. Where it lives in the package (decision D1)
 
 ```
-<package>\SETUP.EXE                for people: starts the window (revision 14)
+<package>\SETUP.EXE                for people: starts the window (revision 16)
 <package>\INSTALL.BAT              the command line's entry point
 <package>\release-x86\ ...         unchanged: the drivers and their INFs
 <package>\release-x64\ ...
@@ -303,7 +305,7 @@ double-click from removing the driver of the only keyboard on an
 xHCI-only machine; behind a switch it is one typed word and a confirmation
 (section 9.1).
 
-Since revision 14 a person is not sent to `INSTALL.BAT` at all: the
+Since revision 16 a person is not sent to `INSTALL.BAT` at all: the
 readme's first instruction is "To install or update, double-click
 SETUP.EXE; to uninstall, use Remove in Add/Remove Programs (or SETUP
 /uninstall)", and `SETUP.EXE` starts the window (record 26
@@ -1021,6 +1023,30 @@ barrier and a fresh plan: a device the plan would still install - one the
 last allowed pass exposed - is listed as "not finished", the steps flag is
 set and the run ends with exit 4 and "run INSTALL.BAT again".
 
+**A parent's job and the devices below it** (revision 14, task 42-A.27;
+read on the 98
+SE update over `3.0.0.0` with an external hub, 2026-10-19: the root hub's
+reinstall restarted it, its hub was gone for about four seconds, and the
+hub's job, made at once, found it not present and left a step for a device
+the next start showed current). A parent is a controller or a device of
+the bus (root hub, hub, composite entry): its job may restart the devices
+below it. Within a pass, a parent's job that reached its device (on NT a
+call that succeeded; on 98 SE and ME any helper verdict but `not-present`
+and `refused`) is followed, when another job of the same pass comes after
+it, by a wait of its own: up to 15 seconds for the parent to be present
+again, then the settle above with no device expected (the quiet stretch
+alone, inside the 10-minute bound). And a job that finds its device not
+present (the helper's `not-present`; on NT `ERROR_NO_SUCH_DEVINST` from
+the call) after a parent's job earlier in the run waits up to 15 seconds
+for the device to come back, settles, and is made once more; only then is
+the device "not present" (a step) or the call a failure. A device that is
+really gone costs that one wait and no more. A wait there that fails or is
+cancelled stops the run as the barrier's does. The controllers' pass needs
+no wait of its own (one controller's job does not touch another, and the
+next pass begins with the barrier), and the later passes' devices begin
+behind the barrier too. The pure half holds the three decisions
+(`inst_parent_kind`, `inst_settle_after_job`, `inst_absent_retry`).
+
 - **XP and XP x64** show Found New Hardware for each, and the unsigned
   question; Windows 2000 can too (the leg above). The settle waits while
   the wizard waits for the user, and says so; answered, the run goes on
@@ -1406,7 +1432,7 @@ Failed, restart and steps are three flags; the code is 2 when failed is
 set, else 4 when steps is set, else 3 when restart is set, else 0. The
 console says every flag that is set, so a 2 or a 4 that also needs a
 restart says so. `INSTALL.BAT` passes the code on; `SETUP.EXE` does not
-wait for the window and returns 0 once it is started (revision 14,
+wait for the window and returns 0 once it is started (revision 16,
 record 26 section 2).
 
 **The last line before the exit code** (owner, 2026-10-15): when the run
@@ -1764,7 +1790,19 @@ after it, reports what was done, and tells the user to restart and run
    `DIGCF_ALLCLASSES`, no `DIGCF_PRESENT`), has its `SPDRP_LOWERFILTERS`
    read, and `xhcicm` is removed from each value that names it, the other
    names kept in order and the value deleted with a zero length when
-   nothing else is in it, each read back. Then the service's `Marks`
+   nothing else is in it, each read back; and every entry of
+   `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase` has
+   `xhcicm` taken out of its `LowerFilters` and its `UpperFilters` the
+   same way, every entry and not only the ids the filter INF names (the
+   copies Windows makes there of a boot-critical device's own filter
+   values when it installs it: a marked unit's `LowerFilters` into
+   `pci#cc_0604` or `pci#cc_010802`, the filter INF's `UpperFilters` into
+   the tunnel port's id - read on 2000 on 2026-10-19, then on XP and 7 x86
+   for a marked bridge's driver installed again; roadmap-usb4 42-A.24 -
+   which would otherwise give every new bridge or NVMe controller, a
+   boot disk among them, a filter that no longer exists), a key that cannot
+   be read whole or a removal that does not read back failing step 0 as a
+   device's does. Then the service's `Marks`
    records go, then its `system32` copy (one in use renamed to
    `<name>.DEL` and that name deleted at the restart, so a later install
    of the same name is not deleted with it; an earlier `.DEL` deleted or
@@ -1776,7 +1814,14 @@ after it, reports what was done, and tells the user to restart and run
    "steps left", keeping `xhcicm`'s service and file and the mark
    service's registration (and, when the marks themselves were not all
    removed, its records; a copy that fails after them leaves the records
-   already deleted), and the next run resumes from what is left. The same step runs at the end of any install or update that
+   already deleted), and the next run resumes from what is left. The
+   database is taken first, as the source new devices take the name from,
+   and once every value is out both the database and the devices are read
+   once more before the records and the service go, since Windows takes no
+   lock of the installer's and a device found meanwhile may have taken the
+   name from a copy. Step 0 needs neither a registered `xhcicm` nor a
+   record, so the uninstall of a 3.1.0.0 package cleans what a test build
+   left; `XHCICLN` only lists such values and points at it. The same step runs at the end of any install or update that
    leaves no `xhcicm` service (section 5.1 step 12).
 1. **The filter hosts.** For each: `xhcicm` is removed from its
    `UpperFilters` multi-string and the rest kept in order
@@ -2112,7 +2157,8 @@ and the tool links the same file:
 - `SystemStartOptions`' test-signing word;
 - the switch parser, `/set`'s validation and section 7.4's exit code,
   last line and confirmation wording;
-- section 5.8's settle state machine and busy-retry rule, section 5.9's
+- section 5.8's settle state machine, busy-retry rule and (revision 14)
+  parent rule, section 5.9's
   device state text, and section 5.6's "staged already" test;
 - the registry value table, its applicability (section 8.2) and its
   answer parser;
@@ -2231,7 +2277,7 @@ the user.
 
 - **D1** The executables in `tools\xhciinst\`, `INSTALL.BAT` at the root;
   one batch file, the uninstall behind `/uninstall` (section 2).
-  Revision 14 (the owner, 2026-10-19): `SETUP.EXE` beside it at the root
+  Revision 16 (the owner, 2026-10-19): `SETUP.EXE` beside it at the root
   is what a person runs, `INSTALL.BAT` the command line's and scripts'
   (record 26 W17); still one batch file.
 - **D2** Windows 98 SE and ME through `DevicePath` and the local copy in
@@ -2328,7 +2374,7 @@ the user.
 | `xhciinst\xhciinst.rc`, `xhciinst.manifest` | the elevation manifest |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the two builds; the self-test and the import check |
 | `xhciinst\INSTALL.BAT` | staged at the package root |
-| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, staged at the package root (revision 14; record 26 section 2) |
+| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, staged at the package root (revision 16; record 26 section 2) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt` |
 | `test\test_inst.c` | the host suite |
 | `scripts\build-driver.cmd`, `scripts\package\make-release.ps1`, `scripts\package\test-package.ps1`, `test\run-host-tests.cmd`, `.gitignore` | wiring |
