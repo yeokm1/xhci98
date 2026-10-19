@@ -236,10 +236,10 @@ as they are made; the head of this file is rewritten when it is cut.
   drives behind a Thunderbolt or USB4 tunnel, as the connection manager
   reports them; the installer selects tunnel drives only. An internal NVMe
   drive is left as it is, and so is one whose place cannot be read; the
-  installer says which and why. Install Stor98 on an internal drive by
-  hand ("NVMe drives behind Thunderbolt or USB4"). Stor98's INF matches
-  every NVMe controller (`PCI\CC_010802`), so Windows may still offer
-  Stor98 for an internal NVMe drive that has no driver, later. Where a
+  installer says which and why. Stor98 is not for internal NVMe drives:
+  do not install it on one. Stor98's INF matches every NVMe controller
+  (`PCI\CC_010802`), so Windows may still offer Stor98 for an internal
+  NVMe drive that has no driver, later: decline it there. Where a
   Stor98 the installer did not put on a tunnel drive is installed (by
   hand, on an internal drive), the installer changes none of its
   settings, and when that Stor98 is another release than the bundled one
@@ -2139,11 +2139,12 @@ box under the Thunderbolt 3 / USB4 one on the Components page, ticked
 with that one and needing it ticked; untick it to leave Stor98 out), and
 only on NVMe drives behind a Thunderbolt or USB4 tunnel ("What `3.1.0.0`
 changes"), and updates an older Stor98 on such a drive (on Windows 98 SE
-and ME as a file, at the next start, after a shut down); an internal NVMe drive is installed by hand,
-as below. Stor98's INF matches every NVMe controller, so Windows may still
-offer it for an internal NVMe drive that has no driver.
+and ME as a file, at the next start, after a shut down). Stor98 is not for
+internal NVMe drives: do not install it on one. Its INF matches every NVMe
+controller, so Windows may still offer it for an internal NVMe drive that
+has no driver: decline it there.
 
-When the drive's NVMe controller (`PCI\CC_010802`) shows in Device
+When a tunnel drive's NVMe controller (`PCI\CC_010802`) shows in Device
 Manager without a driver, Update Driver, Have Disk, and point it at:
 
 - `release-x86\` on Windows 98 SE, ME and 32-bit 2000, XP, Vista and 7

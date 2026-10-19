@@ -56,11 +56,13 @@ disk is not.)
 
 INSTALLING
 
-The xhci98 installer (INSTALL.BAT) installs Stor98 when it is asked to,
-as part of the Thunderbolt 3 / USB4 support: its box sits under the
-Thunderbolt 3 / USB4 one on the Components page, which must be ticked
-too, or on the command line /thunderbolt /stor98. It updates an earlier
-Stor98 the same way. By hand:
+The xhci98 installer (SETUP.EXE) installs Stor98 with the Thunderbolt 3
+/ USB4 support: its box sits under the Thunderbolt 3 / USB4 one on the
+Components page and is ticked with it. It installs Stor98 only on NVMe
+drives behind a Thunderbolt or USB4 tunnel, and updates an earlier
+Stor98 the same way. Stor98 is not for internal NVMe drives: do not
+install it on one, and decline it if Windows offers it for one. By
+hand, for a drive behind a tunnel:
 
 Windows 98 SE / ME
   Device Manager lists the NVMe controller as a PCI device without a
