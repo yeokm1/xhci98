@@ -15771,3 +15771,11 @@ const char *inst_eng_summary_head(int writes, int other)
 {
     return inst_summary_head(planned_runs(), writes, other, envNow.Nt);
 }
+
+int inst_eng_tray_started(void)
+{
+    char cur[INST_PATH_CHARS + 16];
+
+    return reg_text3(HKEY_LOCAL_MACHINE, INST_TRAY_RUN_KEY,
+                     INST_TRAY_RUN_VALUE, cur, sizeof(cur)) == 1;
+}

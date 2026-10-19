@@ -1953,8 +1953,11 @@ static void summary_fill(HWND dlg)
         for (i = 0; s98Choice && i < INST_S98_COUNT; i++) {
             writes |= s98WinSet[i];
         }
+        /* The tools installed for the first time or moved, and the
+         * USB Tree's start at login turned on or off, count too. */
         other = (tbChoice && !tbInstalled) || s98Choice ||
-                (dirNow[0] != '\0' && !inst_eq(dirNow, dirChoice));
+                dirNow[0] == '\0' || !inst_eq(dirNow, dirChoice) ||
+                (trayHere && trayChoice != inst_eng_tray_started());
         _snprintf(line, sizeof(line) - 1, "%s.\n\n",
                   inst_eng_summary_head(writes, other));
         line[sizeof(line) - 1] = '\0';

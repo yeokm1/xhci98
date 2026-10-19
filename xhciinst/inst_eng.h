@@ -226,6 +226,10 @@ const char *inst_eng_confirm_text(void);
  * device plan and the page's own writes and other changes. */
 const char *inst_eng_summary_head(int writes, int other);
 
+/* 1 when the xHCI98 USB Tree is started at login now (its Run value is
+ * there). */
+int inst_eng_tray_started(void);
+
 /* ---- Stor98, the bundled NVMe driver (record 26 sections 5.3, 5.6, 6.3) -- */
 
 /* Whether the flavour directory carries it (and its version), and whether
