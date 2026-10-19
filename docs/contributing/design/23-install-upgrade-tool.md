@@ -1,6 +1,6 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 18, 2026-10-19 (the 98 SE and ME uninstall removes
+Status: revision 20, 2026-10-19 (the 98 SE and ME uninstall removes
 SETUPX's `OEM Name` record of each INF copy it deletes, section 6.1, and
 section 9.5's `/list` line reads the Run value; the matrix's 98 SE and
 ME legs of that day); revision 17, 2026-10-19 (task 42-A.24: the
@@ -1213,7 +1213,7 @@ its set.
   `HKLM\Software\Microsoft\Windows\CurrentVersion\Setup\SetupX\INF\OEM Name`
   (`REGSTR_PATH_INF_OEMNAME`, the Windows 98 DDK's `regstr.h`). Writing
   into either by hand is driving the engine's own bookkeeping. Not used
-  to install. (Revision 18) The uninstall that deletes one of this
+  to install. (Revision 20) The uninstall that deletes one of this
   package's copies there (record 26 section 9.3 step 4, Stor98's owned
   copies too) deletes the `OEM Name` value named by that copy's path, or
   by its short alias, and no other value (`inst_oem_name_ours`): read on
@@ -2041,7 +2041,7 @@ deferred on NT, and `WININIT.INI` is never edited.
   routes, after the drivers (NT: after the results and `/restage`'s work
   file; 98 SE and ME: after the registry values, before the printed
   steps), and under `/list` as one line of what would be done. (Revision
-  18) That line says what the Run value is now - present, absent, or
+  20) That line says what the Run value is now - present, absent, or
   holding other data or unreadable - and then what a run with the same switches would
   do to it (`inst_tray_list_text`); it never says "started at login" with
   no Run value (the 98 SE leg of 2026-10-19, after an update with the

@@ -1,8 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 12, 2026-10-19 (section 9.3 step 4: the setup engine's
+Status: draft 14, 2026-10-19 (section 9.3 step 4: the setup engine's
 `OEM Name` record of each deleted INF copy removed, record 23 revision
-18); draft 11, 2026-10-19 (task 42-A.22), the owner's (a wider gap
+20); draft 11, 2026-10-19 (task 42-A.22), the owner's (a wider gap
 and a line between settings rows, XHCITR's icon, a row of another
 system shown greyed, Stor98's box a child of the Thunderbolt one, the
 UAS driver a box of its own under the USB drivers') and the matrix
