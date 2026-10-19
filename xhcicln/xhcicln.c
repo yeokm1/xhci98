@@ -1565,6 +1565,231 @@ static int cln_run_9x(void)
     return CLN_EXIT_DONE;
 }
 
+/* ========================================================================== */
+/* A stale xhcicm filter name (3.1.0.0, record 21 section 7.4)                  */
+/* ========================================================================== */
+
+typedef BOOL (WINAPI *PFN_SETREGPROP)(HDEVINFO, PSP_DEVINFO_DATA, DWORD,
+                                      const BYTE *, DWORD);
+
+#define CLN_FILTER_NAME "xhcicm"
+#define CLN_FILTER_BYTES 1024
+#define CLN_SPDRP_UPPERFILTERS 0x00000011UL
+#define CLN_SPDRP_LOWERFILTERS 0x00000012UL
+
+/* 1 when the xhcicm service is registered (or cannot be ruled out). */
+static int cln_xhcicm_registered(void)
+{
+    HKEY k;
+    LONG r;
+
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                      "SYSTEM\\CurrentControlSet\\Services\\xhcicm", 0,
+                      KEY_READ, &k);
+    if (r == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        return 1;
+    }
+    return r != ERROR_FILE_NOT_FOUND;
+}
+
+/* The filter values naming xhcicm with no xhcicm service on the machine:
+ * every CriticalDeviceDatabase entry's LowerFilters and UpperFilters
+ * (Windows 2000 and XP copy a boot-critical device's own filter values
+ * there when they install it, and every new device of that class then gets
+ * them) and every PCI devnode's, present or not. A filter named with no
+ * service stops a device (Code 39, Code 19 read on 2000 for an NVMe given
+ * the name from such a copy), so with fix each is taken out, the other names
+ * kept, the value deleted when nothing else is left. A test build of
+ * 3.1.0.0's uninstall cleaned the devices only. Returns how many values
+ * name it (with fix: how many could not be cleaned); -1 when it could not
+ * look. */
+static int cln_stale_filters(int fix)
+{
+    static const char *const vals[2] = { "LowerFilters", "UpperFilters" };
+    static const DWORD props[2] = { CLN_SPDRP_LOWERFILTERS,
+                                    CLN_SPDRP_UPPERFILTERS };
+    PFN_SETREGPROP setProp;
+    HKEY root;
+    HKEY k;
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    DWORD i;
+    DWORD nn;
+    DWORD type;
+    DWORD n;
+    LONG r;
+    char name[256];
+    char id[CLN_ID_CHARS];
+    char f[CLN_FILTER_BYTES];
+    char nf[CLN_FILTER_BYTES];
+    size_t ob;
+    int act;
+    int v;
+    int count = 0;
+
+    setProp = (PFN_SETREGPROP)GetProcAddress(api.SetupApi,
+                                             "SetupDiSetDeviceRegistryPropertyA");
+    if (fix && setProp == NULL) {
+        say("not available: SetupDiSetDeviceRegistryPropertyA\n");
+        return -1;
+    }
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                      "SYSTEM\\CurrentControlSet\\Control\\CriticalDeviceDatabase",
+                      0, KEY_READ, &root);
+    if (r == ERROR_SUCCESS) {
+        for (i = 0;; i++) {
+            nn = sizeof(name);
+            if (RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL) !=
+                ERROR_SUCCESS) {
+                break;
+            }
+            if (RegOpenKeyExA(root, name, 0,
+                              fix ? KEY_QUERY_VALUE | KEY_SET_VALUE
+                                  : KEY_QUERY_VALUE, &k) != ERROR_SUCCESS) {
+                continue;
+            }
+            for (v = 0; v < 2; v++) {
+                memset(f, 0, sizeof(f));
+                n = sizeof(f) - 2;
+                if (RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n) !=
+                        ERROR_SUCCESS ||
+                    (type != REG_MULTI_SZ && type != REG_SZ)) {
+                    continue;
+                }
+                act = inst_filter_drop(f, n + 1, CLN_FILTER_NAME, nf,
+                                       sizeof(nf), &ob);
+                if (act == INST_FD_NONE) {
+                    continue;
+                }
+                say("  CriticalDeviceDatabase\\%s: %s names %s\n", name,
+                    vals[v], CLN_FILTER_NAME);
+                if (!fix) {
+                    count++;
+                    continue;
+                }
+                r = act == INST_FD_SET
+                        ? RegSetValueExA(k, vals[v], 0, REG_MULTI_SZ,
+                                         (const BYTE *)nf, (DWORD)ob)
+                        : act == INST_FD_DELETE ? RegDeleteValueA(k, vals[v])
+                                                : ERROR_INSUFFICIENT_BUFFER;
+                if (r == ERROR_SUCCESS) {
+                    say("    removed\n");
+                } else {
+                    say("    could not be removed (error %ld)\n", r);
+                    count++;
+                }
+            }
+            RegCloseKey(k);
+        }
+        RegCloseKey(root);
+    } else if (r != ERROR_FILE_NOT_FOUND) {
+        say("  The CriticalDeviceDatabase could not be read (error %ld).\n", r);
+        return -1;
+    }
+    set = api.GetClassDevs(NULL, "PCI", NULL, DIGCF_ALLCLASSES);
+    if (set == INVALID_HANDLE_VALUE) {
+        say("  The PCI device list could not be opened (error %lu).\n",
+            (unsigned long)GetLastError());
+        return -1;
+    }
+    for (i = 0;; i++) {
+        memset(&data, 0, sizeof(data));
+        data.cbSize = sizeof(data);
+        if (!api.EnumInfo(set, i, &data)) {
+            break;
+        }
+        if (!api.GetInstanceId(set, &data, id, sizeof(id), NULL)) {
+            cln_copy(id, "(a PCI device)", sizeof(id));
+        }
+        for (v = 0; v < 2; v++) {
+            memset(f, 0, sizeof(f));
+            n = 0;
+            if (!api.GetRegProp(set, &data, props[v], &type, (PBYTE)f,
+                                sizeof(f) - 2, &n)) {
+                continue;
+            }
+            act = inst_filter_drop(f, n + 1, CLN_FILTER_NAME, nf, sizeof(nf),
+                                   &ob);
+            if (act == INST_FD_NONE) {
+                continue;
+            }
+            say("  %s: %s names %s\n", id, vals[v], CLN_FILTER_NAME);
+            if (!fix) {
+                count++;
+                continue;
+            }
+            if (act == INST_FD_ERROR ||
+                !setProp(set, &data, props[v],
+                         act == INST_FD_SET ? (const BYTE *)nf : NULL,
+                         act == INST_FD_SET ? (DWORD)ob : 0)) {
+                say("    could not be removed (error %lu)\n",
+                    (unsigned long)GetLastError());
+                count++;
+            } else {
+                say("    removed\n");
+            }
+        }
+    }
+    api.Destroy(set);
+    return count;
+}
+
+/* The stale-name pass of a run: listed, and with -remove taken out after
+ * the one question, only when xhcicm itself is not installed (while it is,
+ * its names are its own: the mark service and the uninstall look after
+ * them). */
+static void cln_stale_pass(void)
+{
+    int found;
+    int left;
+
+    if (cln_xhcicm_registered()) {
+        return;
+    }
+    found = cln_stale_filters(0);
+    if (found <= 0) {
+        return;
+    }
+    say("\nThe Thunderbolt driver xhcicm is not installed, but %d filter "
+        "value(s) above still\nname it: a new bridge or NVMe drive would not "
+        "start (Code 39 or 19).\n", found);
+    if (!clnRemove) {
+        say("Run XHCICLN -remove to take the name out of them.\n");
+        return;
+    }
+    if (!clnYes) {
+        char text[1024];
+        char line[32];
+        int a;
+
+        inst_yesno_question(text, sizeof(text),
+                            "Take xhcicm out of the filter values listed "
+                            "above?", "take it out", "leave them", 0);
+        say("\n%s", text);
+        for (;;) {
+            say_flush();
+            inst_wrap_input(&clnWrap);
+            if (fgets(line, sizeof(line), stdin) == NULL) {
+                say("\n");
+                return;
+            }
+            a = inst_tb_answer(line, 0);
+            if (a == 0) {
+                return;
+            }
+            if (a == 1) {
+                break;
+            }
+            say("  Type Y or N, or Enter for [N]: ");
+        }
+    }
+    left = cln_stale_filters(1);
+    say(left == 0 ? "xhcicm was taken out of every one.\n"
+                  : "%d could not be changed; restart Windows and run "
+                    "XHCICLN -remove again.\n", left);
+}
+
 static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
 {
     char why[640];
@@ -1589,6 +1814,9 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
         say("xhcicln: a routine the listing needs is missing (above); "
                "nothing listed or removed.\n");
         return CLN_EXIT_REFUSED;
+    }
+    if (!wow64) {
+        cln_stale_pass();
     }
     if (cln_nt_candidates() != 0) {
         return CLN_EXIT_REFUSED;
