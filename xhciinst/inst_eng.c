@@ -9510,6 +9510,11 @@ static int mk_stop(SC_HANDLE scm, int *had)
  * nothing else is in it, and each read back. 1 when the key was read whole
  * (and, with fix, every change read back); *left the values still naming
  * xhcicm. */
+/* 0 while the marks are removed with the xhcicm service staying (safe eject
+ * off): the filter INF's UpperFilters copies are the tunnel-port filter's,
+ * not a mark's, and stay with it. */
+static int cddbUpper = 1;
+
 static int cddb_scrub(int fix, int *left)
 {
     static const char *const vals[2] = { "LowerFilters", "UpperFilters" };
@@ -9555,7 +9560,7 @@ static int cddb_scrub(int fix, int *left)
             ok = 0;
             continue;
         }
-        for (v = 0; v < 2; v++) {
+        for (v = 0; v < (cddbUpper ? 2 : 1); v++) {
             memset(f, 0, sizeof(f));
             n = sizeof(f) - 2;
             r = RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n);
@@ -10075,6 +10080,18 @@ done:
     CloseServiceHandle(scm);
 }
 
+/* mk_remove at a run's end: with safe eject off and xhcicm staying, the
+ * database's UpperFilters (the tunnel-port filter's) are left. */
+static int mk_remove_safe_off(int safe)
+{
+    int ok;
+
+    cddbUpper = (safe || svc_state(INST_MK_NAME) != 1) ? 1 : 0;
+    ok = mk_remove();
+    cddbUpper = 1;
+    return ok;
+}
+
 /* The XhciCmSafeEject in force after the run (inst_mk_safe_eject): the
  * machine-wide value, else the own value of every present connection
  * manager device, whether or not the Thunderbolt component is in this run
@@ -10157,7 +10174,7 @@ static void mk_end_of_run(void)
     }
     if (a == INST_MK_INSTALL) {
         mk_install();
-    } else if (a == INST_MK_REMOVE && !mk_remove()) {
+    } else if (a == INST_MK_REMOVE && !mk_remove_safe_off(safe)) {
         out("A Thunderbolt safe-removal mark could not be removed%s. "
             "Restart Windows and\nrun INSTALL.BAT again.\n",
             safe ? ", and the xhcicm service is not installed: a\ndevice "
