@@ -285,7 +285,11 @@ VOID EngParseTunables(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentString)
         t->HoldMarginMs = 1000;
         t->Hold9xMs = 4000;
         t->FragBytes = 0;
+#ifdef STOR98_TEST_BOUNCE
+        t->ForceBounce = 1;     // 9x test images: no ArgumentString (TESTING)
+#else
         t->ForceBounce = 0;
+#endif
         t->CalPct = 0;
         t->ShnFlush = 0;
         t->StormTest = 0;
