@@ -2874,6 +2874,28 @@ static void test_greyed(void)
           "Stor98: the words of a greyed row");
 }
 
+/* ---- record 26 section 5.3: the UAS driver's box (owner, 2026-10-19) --- */
+
+static void test_uas(void)
+{
+    INST_OPTS o;
+    char err[128];
+    char *argv[4];
+
+    CHECK(inst_uas_decide(1, 0) && !inst_uas_decide(1, 1) &&
+          !inst_uas_decide(0, 0) && !inst_uas_decide(0, 1),
+          "UAS in the run only with the USB drivers and without /nouas");
+    argv[0] = "x";
+    argv[1] = "/nouas";
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.NoUas,
+          "/nouas");
+    argv[2] = "/uninstall";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) == 1,
+          "/nouas belongs to an install");
+    CHECK(inst_parse_args(1, argv, &o, err, sizeof(err)) == 0 && !o.NoUas,
+          "no switch: UAS in the run");
+}
+
 /* ---- record 26 section 5.7: the Summary's headline (matrix N1) --------- */
 
 static void test_summary_head(void)
@@ -3445,6 +3467,7 @@ int main(void)
     test_mw_values();
     test_greyed();
     test_summary_head();
+    test_uas();
     test_uninstall_entry();
     test_page_texts();
     test_s98();

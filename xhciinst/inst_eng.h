@@ -140,6 +140,12 @@ void inst_eng_tb_choose(int include);
  * record 23 section 4.3 reads it (1 read; 0 not). */
 int inst_eng_usb_state(int *offered, int *notOnThisSystem);
 void inst_eng_usb_choose(int include);
+
+/* The UAS disk driver's box, a child of the USB drivers' (owner,
+ * 2026-10-19): whether xhciuas.inf is in the run, and the choice,
+ * planned again. */
+int inst_eng_uas_state(void);
+void inst_eng_uas_choose(int include);
 int inst_eng_cm_only_machine(void);
 int inst_eng_os_read(OSVERSIONINFOA *v);
 

@@ -113,8 +113,8 @@ there: a Stor98 installed before, by hand or by an earlier tool, stays.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
-/thunderbolt or /cmonly), /notray and /cmonly (the components,
-preselected), /set Name=Value (an option, preselected), /defaults,
+/thunderbolt or /cmonly), /notray, /nouas and /cmonly (the
+components, preselected), /set Name=Value (an option, preselected), /defaults,
 /force (reinstall this release, or go back to it from a newer one),
 /restage (Vista and 7: replace a stored development build with the same
 DriverVer), /debug (the debug- directory, only if a maintainer asks),
@@ -144,6 +144,9 @@ The console tool
                                 /cmonly); never offered on 8 and 8.1
                                 (without /stor98 the console asks, Enter
                                 for N; /yes leaves it out)
+  INSTALL /console /nouas       installs without the UAS disk driver
+                                (xhciuas.sys); one already installed
+                                stays as it is
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /to path     installs the xHCI98 tools in that

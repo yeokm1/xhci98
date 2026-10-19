@@ -537,6 +537,7 @@ typedef struct _INST_OPTS {
                                23 section 4.5)                           */
     int Stor98;             /* /stor98: the bundled Stor98, unasked      */
     int NoTray;             /* /notray: XHCITR not started at login     */
+    int NoUas;              /* /nouas: xhciuas.inf left out of the run  */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -887,6 +888,12 @@ const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor);
 int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
                     const char **refusal);
 
+/* The UAS disk driver, xhciuas.sys (owner, 2026-10-19): a child of the
+ * USB drivers, in the run only with them and unless /nouas or its
+ * unticked box leaves it out. Left out, xhciuas.inf is neither staged nor
+ * installed and an xhciuas already installed stays as it is. */
+int inst_uas_decide(int usbInclude, int noUas);
+
 /* The step when that routine is not implemented either: exit 4, nothing
  * changed. */
 const char *inst_not_removable_text(void);
@@ -1212,6 +1219,8 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 #define INST_PT_UN_TITLE_CM     36
 #define INST_PT_UN_WARN_CM      37
 #define INST_PT_UN_AGREE_CM     38
+#define INST_PT_UAS             39  /* the UAS box (owner, 2026-10-19)    */
+#define INST_PT_UAS_T           40
 
 typedef struct _INST_PAGE_TEXT {
     int Id;

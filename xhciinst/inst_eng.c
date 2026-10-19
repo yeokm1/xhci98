@@ -407,6 +407,7 @@ static int haveCm;
 static int osKind = INST_OS_FULL;
 static int usbInclude = 1;
 static int usbOffered;
+static int uasInclude = 1;  /* xhciuas.inf in the run, with the USB drivers */
 static void usb_apply(int include);
 static int usb_decide(void);
 static int pkgCmSigned = -1;    /* xhcicm.sys signed: as pkgSigned */
@@ -4673,6 +4674,14 @@ static int package_files(PKG_EACH each, void *ctx)
             if (inst_bundled_file(fd.cFileName) && !s98Include) {
                 continue;
             }
+            /* The UAS driver left out (owner, 2026-10-19): on 98 SE and ME
+             * the copy is on DevicePath, where its INF would install it
+             * unasked; on NT it is simply not staged. */
+            if (!envNow.Nt && !uasInclude &&
+                (inst_eq(fd.cFileName, "xhciuas.inf") ||
+                 inst_eq(fd.cFileName, "xhciuas.sys"))) {
+                continue;
+            }
             /* A No to the Thunderbolt question: none of its files in the
              * copy, so no wizard and no store offers them (section 8.5). */
             if (!tbInclude && !tbTagAll &&
@@ -7281,6 +7290,13 @@ static int plan_nt(void)
             out("REFUSED: an unfinished /restage of another package (%s) is "
                 "recorded. Run that\npackage's INSTALL.BAT to finish it; this "
                 "one is %s.\n", restagePkg, name);
+            return INST_EXIT_REFUSED;
+        }
+        if (usbInclude && !uasInclude && restagePending[INST_INF_UAS]) {
+            out("REFUSED: the unfinished /restage includes the UAS disk "
+                "driver.\n%s\n", instWindow ? "Tick it on the Components "
+                "page to finish it." : "Run it again without /nouas to "
+                "finish it.");
             return INST_EXIT_REFUSED;
         }
         if (!usbInclude &&
@@ -12213,7 +12229,8 @@ static void usb_apply(int include)
         if (infKeep[k] == NULL) {
             infKeep[k] = infText[k];
         }
-        infText[k] = include ? infKeep[k] : NULL;
+        infText[k] = (include && (k != INST_INF_UAS || uasInclude)) ?
+                     infKeep[k] : NULL;
     }
     usbInclude = include ? 1 : 0;
 }
@@ -14385,6 +14402,7 @@ void inst_eng_usage(void)
 "  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
 "                without the USB drivers (2000 to 7; on 8 and 8.1 always)\n"
 "  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
+"  /nouas        leave the UAS disk driver (xhciuas.sys) out of this run\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
@@ -15684,9 +15702,14 @@ static int usb_decide(void)
         out("/cmonly: the Thunderbolt 3 / USB4 connection manager alone; the "
             "USB drivers\nare left out of this run.\n\n");
     }
+    uasInclude = inst_uas_decide(1, opts.NoUas);
+    if (r != 0 && !uasInclude) {
+        out("/nouas: the UAS disk driver (xhciuas.sys) is left out of this run; "
+            "one already\ninstalled stays as it is.\n\n");
+    }
     usb_apply(r);
-    logonly("usb drivers: kind %d, offered %d, include %d\n", osKind,
-            usbOffered, usbInclude);
+    logonly("usb drivers: kind %d, offered %d, include %d, uas %d\n", osKind,
+            usbOffered, usbInclude, uasInclude);
     return 1;
 }
 
@@ -15697,6 +15720,19 @@ int inst_eng_usb_state(int *offered, int *notOnThisSystem)
     *offered = usbOffered;
     *notOnThisSystem = osKind == INST_OS_CMONLY;
     return usbInclude;
+}
+
+int inst_eng_uas_state(void)
+{
+    return uasInclude;
+}
+
+void inst_eng_uas_choose(int include)
+{
+    uasInclude = include ? 1 : 0;
+    usb_apply(usbInclude);
+    plan();
+    logonly("uas driver: chosen %d\n", uasInclude);
 }
 
 void inst_eng_usb_choose(int include)

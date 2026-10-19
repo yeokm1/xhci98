@@ -1321,6 +1321,7 @@ these systems.
 | `/cmonly` | (revision 13) the connection manager alone: the USB drivers left out of the run, the Thunderbolt support in it unasked (section 4.5); refused on 98 SE and ME, with `/uninstall`, `/devices` and `/eject`, and where the package carries no connection manager; on 8 and 8.1 every install run is one |
 | `/stor98` | include the bundled Stor98 without asking (record 26 section 6.4); refused without `/thunderbolt` or `/cmonly`, since Stor98 is part of the Thunderbolt 3 / USB4 support (owner, 2026-10-19), and with `/uninstall`, `/devices` and `/eject`; never offered on 8 and 8.1 |
 | `/to <path>` | the install directory (section 9.6) without asking; refused with `/uninstall`, `/devices` and `/eject`, and checked as a typed answer is (a path that fails refuses the run, exit 1) |
+| `/nouas` | leave the UAS disk driver out of the run (owner, 2026-10-19; record 26 section 5.3): `xhciuas.inf` neither staged nor installed, nor copied to `DevicePath` on 98 SE and ME, and an `xhciuas` already installed left as it is; refused with `/uninstall`, `/devices` and `/eject` |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |

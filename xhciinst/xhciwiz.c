@@ -130,6 +130,8 @@ static int usbChoice = 1;
 static int usbOffered;
 static int usbNotHere;
 static int tbOwn;
+static int uasChoice = 1;       /* the UAS driver's box (owner, 2026-10-19) */
+static int uasOwn = 1;          /* its own state while the USB box is off   */
 static int trayChoice = 1;
 static int trayHere;
 
@@ -405,6 +407,8 @@ static unsigned __stdcall job_main(void *arg)
         }
         if (readCode < 0 && !uninstallMode) {
             usbChoice = inst_eng_usb_state(&usbOffered, &usbNotHere);
+            uasChoice = inst_eng_uas_state();
+            uasOwn = uasChoice;
             inst_eng_tb_state(&tbHave, &tbPresent, &tbDefault, &tbInstalled);
             tbChoice = tbHave && (opts->Thunderbolt || tbDefault);
             tbOwn = tbChoice;
@@ -735,6 +739,7 @@ static void replan(void)
     if (busy) {
         return;
     }
+    inst_eng_uas_choose(uasChoice);
     inst_eng_usb_choose(usbChoice);
     inst_eng_tb_choose(tbChoice);
     inst_eng_s98_choose(s98Choice);
@@ -772,6 +777,14 @@ static void comp_usb_state(HWND dlg)
 {
     int usb = IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED;
 
+    /* The UAS driver's box, the USB drivers' child: open only while they
+     * are ticked, unticked and greyed with them, its own state back when
+     * they are ticked again (owner, 2026-10-19). */
+    CheckDlgButton(dlg, IDC_C_UAS, (usb && uasOwn) ? BST_CHECKED :
+                                                    BST_UNCHECKED);
+    EnableWindow(GetDlgItem(dlg, IDC_C_UAS), usb);
+    EnableWindow(GetDlgItem(dlg, IDC_C_UAS_T), usb);
+
     SetDlgItemTextA(dlg, IDC_C_DRIVERS_T, inst_page_text(
                     usbNotHere ? INST_PT_DRIVERS_T8 :
                     usb ? INST_PT_DRIVERS_T : INST_PT_DRIVERS_OFF));
@@ -799,6 +812,8 @@ static void comp_fill(HWND dlg)
     SetDlgItemTextA(dlg, IDC_C_DRIVERS, inst_page_text(INST_PT_DRIVERS));
     CheckDlgButton(dlg, IDC_C_DRIVERS, usbChoice ? BST_CHECKED : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_C_DRIVERS), usbOffered);
+    SetDlgItemTextA(dlg, IDC_C_UAS, inst_page_text(INST_PT_UAS));
+    SetDlgItemTextA(dlg, IDC_C_UAS_T, inst_page_text(INST_PT_UAS_T));
     SetDlgItemTextA(dlg, IDC_C_TB, inst_page_text(INST_PT_TB));
     SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(tbPresent ?
                                                     INST_PT_TB_T :
@@ -870,6 +885,7 @@ static int comp_leave(HWND dlg)
     int tb;
     int s98;
     int usb;
+    int uas;
 
     GetDlgItemTextA(dlg, IDC_C_DIR, typed, sizeof(typed));
     why = inst_eng_dir_check(typed, checked, sizeof(checked));
@@ -891,8 +907,15 @@ static int comp_leave(HWND dlg)
     }
     s98 = inst_s98_box_open(s98Have, tbHave, tb) &&
           IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
-    if (usb != usbChoice || tb != tbChoice || s98 != s98Choice) {
+    uas = inst_uas_decide(usb, IsDlgButtonChecked(dlg, IDC_C_UAS) !=
+                               BST_CHECKED);
+    if (usb) {
+        uasOwn = uas;
+    }
+    if (usb != usbChoice || tb != tbChoice || s98 != s98Choice ||
+        uas != uasChoice) {
         usbChoice = usb;
+        uasChoice = uas;
         tbChoice = tb;
         s98Choice = s98;
         replan();
@@ -2077,9 +2100,14 @@ static void summary_fill(HWND dlg)
         if (!any) {
             tb_add(&t, "- none present: the drivers are staged for later.\n");
         }
-        tb_add(&t, usbChoice ? "\nThe components:\n- xhci98.sys and "
-               "xhciuas.sys\n" : "\nThe components:\n- xhci98.sys and "
-               "xhciuas.sys: left out (the connection manager alone)\n");
+        tb_add(&t, usbChoice ? "\nThe components:\n- xhci98.sys\n" :
+               "\nThe components:\n- xhci98.sys and xhciuas.sys: left out "
+               "(the connection manager alone)\n");
+        if (usbChoice) {
+            tb_add(&t, uasChoice ? "- xhciuas.sys, the UAS disk driver\n" :
+                   "- xhciuas.sys, the UAS disk driver: left out (one "
+                   "installed stays)\n");
+        }
         if (tbHave) {
             tb_add(&t, tbChoice ? "- Thunderbolt 3 / USB4 support\n" :
                    "- Thunderbolt 3 / USB4 support: left out\n");
@@ -2431,6 +2459,11 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         case IDC_C_TB:
             if (HIWORD(wp) == BN_CLICKED) {
                 comp_s98_sync(dlg);
+            }
+            return TRUE;
+        case IDC_C_UAS:
+            if (HIWORD(wp) == BN_CLICKED) {
+                uasOwn = IsDlgButtonChecked(dlg, IDC_C_UAS) == BST_CHECKED;
             }
             return TRUE;
         case IDC_C_DRIVERS:
@@ -2875,12 +2908,13 @@ static int selftest(void)
     static const int fTexts[] = { INST_PT_FOUND };
     static const int cIds[] = {
         IDC_C_DRIVERS, IDC_C_DRIVERS_T, IDC_C_TB, IDC_C_TB_T, IDC_C_S98,
-        IDC_C_S98_T, IDC_C_TRAY, IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR_T
+        IDC_C_S98_T, IDC_C_TRAY, IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR_T,
+        IDC_C_UAS, IDC_C_UAS_T
     };
     static const int cTexts[] = {
         INST_PT_DRIVERS, INST_PT_DRIVERS_T, INST_PT_TB, INST_PT_TB_T,
         INST_PT_S98, INST_PT_S98_T, INST_PT_TRAY, INST_PT_TRAY_T, INST_PT_DIR,
-        INST_PT_DIR_9X
+        INST_PT_DIR_9X, INST_PT_UAS, INST_PT_UAS_T
     };
     static const int s3Ids[] = { IDC_S_HEAD };
     static const int s3Texts[] = { INST_PT_S98SET };

@@ -1996,6 +1996,8 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->CmOnly = 1;
         } else if (inst_switch(a, "stor98")) {
             opts->Stor98 = 1;
+        } else if (inst_switch(a, "nouas")) {
+            opts->NoUas = 1;
         } else if (inst_switch(a, "notray")) {
             opts->NoTray = 1;
         } else if (inst_switch(a, "devices")) {
@@ -2167,6 +2169,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     if (opts->Stor98 && !opts->Thunderbolt && !opts->CmOnly) {
         inst_err(err, errCap, "/stor98 needs /thunderbolt (or /cmonly): "
                  "Stor98 is part of the Thunderbolt 3 / USB4 support", NULL);
+        return 1;
+    }
+    if (opts->NoUas && (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, "/nouas belongs to an install", NULL);
         return 1;
     }
     if (opts->NoTray && (opts->Uninstall || opts->Devices || opts->Eject)) {
@@ -3253,6 +3259,11 @@ const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor)
                "Windows";
     }
     return "Windows";
+}
+
+int inst_uas_decide(int usbInclude, int noUas)
+{
+    return usbInclude && !noUas;
 }
 
 int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
@@ -4731,11 +4742,15 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "The devices this package's drivers are for, and what will be done:",
       284, 10 },
     { INST_PT_DRIVERS,
-      "xHCI98 USB 3.x host controller driver and UAS driver", 270, 10 },
+      "xHCI98 USB 3.x host controller driver (xhci98.sys)", 270, 10 },
     { INST_PT_DRIVERS_T,
-      "xhci98.sys and xhciuas.sys: the controller, its hubs and devices, "
-      "and UAS disks.",
+      "The controller, its hubs and devices, and Bulk-Only disks.",
       272, 16 },
+    { INST_PT_UAS, "UAS disk driver (xhciuas.sys)", 258, 10 },
+    { INST_PT_UAS_T,
+      "Untick only if you use another UAS driver. Bulk-Only disks are not "
+      "affected; XhciForceBulkOnly also avoids UAS.",
+      260, 18 },
     { INST_PT_TB, "Thunderbolt 3 / USB4 support (xhcicm.sys)", 270, 10 },
     { INST_PT_TB_T,
       "The connection manager. A device plugged into a Thunderbolt or USB4 "

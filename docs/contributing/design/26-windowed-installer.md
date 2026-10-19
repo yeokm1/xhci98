@@ -2,7 +2,8 @@
 
 Status: draft 9, 2026-10-19, the owner's (a wider gap and a line between
 settings rows, XHCITR's icon, a row of another system shown greyed,
-Stor98's box a child of the Thunderbolt one) and the matrix legs' (each
+Stor98's box a child of the Thunderbolt one, the UAS driver a box of its
+own under the USB drivers') and the matrix legs' (each
 Progress row's outcome in place, the Summary's headline from what it
 lists); draft 8, 2026-10-19 (task 42-A.21, the owner's request of that
 day: the connection manager alone, and Windows 8 and 8.1 for it; sections
@@ -351,6 +352,7 @@ Check boxes, one a line, each with one sentence:
 | Component | Ticked | Can be unticked | What it is |
 |---|---|---|---|
 | xHCI98 USB 3.x host controller driver (`xhci98.sys`) and UAS driver (`xhciuas.sys`) | yes, but on Windows 8 and 8.1 (draft 8) | on 2000 to 7, when the package carries the connection manager (record 23 section 4.5; `/cmonly` preselects it unticked); on 98 SE and ME no, shown ticked and disabled; on 8 and 8.1 shown unticked and disabled | the drivers for the controller, its hubs and devices, and UAS disks; on 8 and 8.1 the sentence says Windows' own USB 3 driver runs the controllers there; unticked on 2000 to 7, the sentence under the box says the run leaves an installed `xhci98.sys` as it is and that the uninstall removes the whole package |
+| UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still asked, being `xhci98.sys`'s (`inst_uas_decide`) |
 | Thunderbolt 3 / USB4 support (`xhcicm.sys`) | as record 23 section 8.5 decides: with a controller present yes, with none no | yes | the connection manager; its warning sentence (a device plugged into that port can reach the computer's memory) stands under the box, with "see `XhciCmApprove` on the Thunderbolt settings page" |
 | Stor98, the NVMe driver (bundled) | never unasked (record 23 section 4.4; owner, 2026-10-18) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked, unticked and greyed when it is unticked or greyed (a package without the support shows both greyed; `inst_s98_box_open`); shown only when the flavour directory carries it; one sentence saying what it is for (an NVMe drive behind a Thunderbolt or USB4 tunnel, or an internal one) and that it installs on NVMe drives that have no driver (section 6.3) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
@@ -957,7 +959,7 @@ page:
 | `/uninstall` | the uninstall wizard (section 9) |
 | `/from <dir>` | the relaunch of section 9.2; refused from a package directory |
 | `/to <path>` | preselects the tools folder; the page still shows it |
-| `/thunderbolt`, `/stor98`, `/notray` | preselect the components; the page still shows them (`/stor98` needs `/thunderbolt` or `/cmonly`, section 6.4) |
+| `/thunderbolt`, `/stor98`, `/notray`, `/nouas` | preselect the components; the page still shows them (`/stor98` needs `/thunderbolt` or `/cmonly`, section 6.4) |
 | `/cmonly` | (draft 8) preselects the USB drivers unticked on 2000 to 7; refused on 98 SE and ME with the console's text; on 8 and 8.1 changes nothing |
 | `/set Name=Value` | preselects a setting (and makes it "changed", so it is written); the page still shows it |
 | `/defaults` | as record 23 section 7.1: every current value kept and no value question asked, which in the window means the settings pages are shown with the values in force and nothing marked changed (a page left alone writes nothing) |
