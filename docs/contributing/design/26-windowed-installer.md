@@ -695,8 +695,12 @@ unasked). With the box ticked:
   present or not, that the record does not name (on 98 SE and ME every
   `Enum\PCI` entry whose driver key names `stor98.mpd`) is added under
   `Devices`, with the INF copy its driver key's `InfPath` names (on 98 SE
-  and ME the `INF\OTHER` copy whose long or 8.3 name it is) under
-  `Staged` when that copy's text names Stor98 - provided every such
+  and ME the `INF\OTHER` copy whose long or 8.3 name it is; exactly one
+  candidate, or none is taken, and an unreadable directory stops the
+  uninstall) under `Staged` when that copy's active text names Stor98's
+  driver file as a word (`inst_inf_names_file`), the copy recorded
+  before the device and a record that cannot be written stopping the
+  uninstall - provided every such
   device sits behind a tunnel by record 23 section 4.4's reading, or is
   not present (gone with its tunnel) (`inst_s98_adoptable`). One that is
   internal, or whose place cannot be read, keeps Stor98 for all of them:

@@ -580,10 +580,14 @@ makes **no Stor98 change at all** - `stor98.inf` is not staged, no
 installed or updated and no setting is written - and says so, naming
 Stor98's readme for an update by hand; when it is the bundled release,
 tunnel drives are installed (the file stays what it is) but no setting
-is written, and that is said too. On NT `stor98.inf` is not staged
-either, and no `/restage` reaches it, while another build of it is in
-the driver store and another Stor98 exists. The devnode of an internal
-drive on Stor98 is never updated or reconfigured by the tool.
+is written, and that is said too. A run whose copy was made held stays
+held to its end, even when a later reading would lift the hold, since
+its copy has no Stor98. On 98 SE and ME the driver key of an unplugged
+drive is matched to the record through its `Enum\PCI` entry. On NT
+`stor98.inf` is not staged either, and no `/restage` reaches it, while
+another build of it is in the driver store and another Stor98 exists.
+The devnode of an internal drive on Stor98 is never updated or
+reconfigured by the tool.
 
 What remains, said in the release notes and the package's readme:
 `stor98.inf` matches every NVMe controller (`PCI\CC_010802`), and it is
