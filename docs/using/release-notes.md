@@ -323,8 +323,8 @@ from any of these machines, working or not, is new information.
 `INSTALL.BAT` installs `xhcicm.sys` with the rest of the package, and on
 Windows 2000 to 7 it is the way to install it: besides the controller's
 own driver it puts the package's filter on the controller's PCI ports
-(`nt\xhcicmf.inf` in the x86 directories, `xhcicmf.inf` at the root
-of the x64 ones), which on XP and later
+(`nt\xhcicmf.inf` in each flavour directory; from `3.1.0.0` the x64
+directories have it at the root as `xhcicmf.inf`), which on XP and later
 Windows takes only when it is forced, as the tool does. On Windows 2000
 the first install of that filter takes the Thunderbolt switch's other
 devices away until the restart the tool asks for. On Windows 98 SE and

@@ -918,8 +918,7 @@ other problem code stays what it is elsewhere: on a device the run
 changed a failure (exit 2, with the restart advice when the hint was
 given), on one it did not change "already had problem code N" (steps,
 exit 4). The release notes carry
-the same reading for a filter installed by hand from `nt\` (x86) or the
-flavour directory (x64).
+the same reading for a filter installed by hand from `nt\`.
 Anything else is reported per device:
 
 | After | Meaning | Exit |
