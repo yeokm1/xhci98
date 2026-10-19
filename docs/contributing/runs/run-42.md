@@ -1171,7 +1171,15 @@ cut at `72c69b18`; the 7 x86 leg was read again on the final package.
   now reads a pending rename of a file of the package version as
   "updated; the new driver file replaces the running one at the next
   start" with the restart flag. (This is the gold row 42-A.2's legs left
-  owed.)
+  owed.) Read again on the bench zip as cut (SHA-256 `7034b1b5...6cad1b`)
+  from a fresh overlay: both devices "updated; the new driver file
+  replaces the running one at the next start", no steps, "Changes were
+  made. Please restart Windows now.", exit 3; `WININIT.INI` held
+  `xhci98.sys=...\xhci98.tmp` (`XHCI98.TMP` 300,160 bytes beside the old
+  299,298). After a shut down and a cold start `XHCI98.SYS` was the
+  300,160-byte file, the `.TMP` gone, and `/list` read both devices
+  "current (this release)" (the base image's old `DEV_04` entry, not
+  present, still "install (no driver)" as on every run). **Pass.**
 - **Windows 98 SE, fresh install and uninstall**
   (`vm\t26\win98-clean.qcow2`): the controller's wizard finished with no
   driver, then `INSTALL /console /yes /nopause`: "installed, restart
