@@ -6,7 +6,7 @@ Experimental support for USB4 and Thunderbolt 3/4 is also included.
 
 It replaces Windows' own USB port and hub drivers, so it is not limited to USB 2.0. It drives:
 
-- SuperSpeed (USB 3.x) devices and hubs
+- SuperSpeed (USB 3.2 Gen 1, 5 Gbit/s) devices and hubs, and SuperSpeedPlus (USB 3.2 Gen 2, Gen 1x2 and Gen 2x2, 10 and 20 Gbit/s) ones at their trained rate (untested)
 - USB 2.0 and 1.1 (High, Full and Low Speed) devices and hubs
 - UAS (USB Attached SCSI) storage, through a second driver, `xhciuas.sys`
 - Thunderbolt 3 and USB4 docks and NVMe enclosures through a third driver, `xhcicm.sys`
