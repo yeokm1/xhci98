@@ -103,7 +103,6 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 - A **dock** is listed under a generic PCI bridge name (its own switch); stopping it stops everything in the dock.
 - A **device missing from Windows' list** (its first plug, or after a disable and enable or a driver update): the USB Tree stops it when run as an administrator. Without one, close every program using it, unplug it and plug it in once more; from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
 - For scripts, the console tool lists the connected devices and stops one; `tools\xhciinst\readme.txt` is the reference.
-- Stopping a device needs administrator permissions on Win 2000+.
 
 ### NVMe drives
 
