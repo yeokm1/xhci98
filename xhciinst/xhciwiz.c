@@ -836,7 +836,10 @@ static void comp_fill(HWND dlg)
     SetDlgItemTextA(dlg, IDC_C_DIR, dirChoice);
     SetDlgItemTextA(dlg, IDC_C_DIR_T, is_9x() ? inst_page_text(INST_PT_DIR_9X)
                                               : "");
+    /* The folder's refusal takes the place of the 98 SE and ME line
+     * under it, so the page fits a 640 by 480 screen with the UAS box. */
     SetDlgItemTextA(dlg, IDC_C_DIR_WHY, "");
+    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_SHOW);
 }
 
 static int CALLBACK browse_cb(HWND h, UINT msg, LPARAM lp, LPARAM data)
@@ -894,9 +897,11 @@ static int comp_leave(HWND dlg)
         _snprintf(text, sizeof(text) - 1, "Not that folder: %s.", why);
         text[sizeof(text) - 1] = '\0';
         SetDlgItemTextA(dlg, IDC_C_DIR_WHY, text);
+        ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_HIDE);
         return 0;
     }
     SetDlgItemTextA(dlg, IDC_C_DIR_WHY, "");
+    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_SHOW);
     inst_copy(dirChoice, checked, sizeof(dirChoice));
     trayChoice = IsDlgButtonChecked(dlg, IDC_C_TRAY) == BST_CHECKED;
     usb = usbOffered ? IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED
