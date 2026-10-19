@@ -2287,11 +2287,19 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   generation). An entry not `UP` always gets the new generation. An entry
   already `UP` keeps it - on a tunnel down's re-enumeration, a RESYNC, a
   baseline's or an owed re-enumeration's exposure, and on every member but
-  the one a tunnel up names - unless the exposure names a tunnel other
-  than the one the entry's `UP` was last published for: under the USB4
-  profile (record 22 section 10) the UP hook and the seam name the port's
-  tunnel (the USB4 port and its connection generation) to the member the
-  port corresponds to, and nothing else names one. Under the firmware
+  the one a tunnel up names - unless the exposure itself names a tunnel
+  other than the one the entry's `UP` was last published for: under the
+  USB4 profile (record 22 section 10) the UP hook and the seam name the
+  port's tunnel (the USB4 port and its connection generation) to the
+  member the port corresponds to, and nothing else names one. A tunnel so
+  named but not published at once - the secondary bus unread, as on 98 SE
+  and ME right after a resume, before the bridges are numbered again - is
+  kept as the bridge's label for what later exposures publish, and no
+  later exposure that names none advances an entry already `UP` for it
+  (task 42-A.25): by then the endpoint has been enumerated, and on Windows
+  ME a Stor98 instance bound since before a Stand by dropped its disk when
+  a second enclosure's plug advanced its entry so (record 22 section 10).
+  Under the firmware
   connection manager no action names its member, so no tunnel is named
   and no entry already `UP` is advanced: a member whose function is newly
   found gets its generation, and the others stay as they are. (Until

@@ -2805,7 +2805,8 @@ member not yet active) is not advanced again by the named exposure of the
 same tunnel. Only an exposure that itself names a new tunnel advances an
 entry already `UP` (`CmNvlinkPublishUpEx`'s `advance`); an exposure that
 names none never does, since it may come after the operating system has
-enumerated the endpoint. Read on Windows ME (the bench zip of 2026-10-19):
+enumerated the endpoint (task 42-A.25). Read on Windows ME (the bench zip
+of 2026-10-19):
 after a Stand by the resume rebuilt port 1's tunnel, and its UP hook and
 the seam's exposure named the new tunnel but found the secondary bus not
 yet numbered, so nothing was published; when a second enclosure was
