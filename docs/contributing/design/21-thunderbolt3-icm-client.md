@@ -32,7 +32,11 @@ section 8's table gains design record 28's value. Section 3.5, added
 2026-10-19 (task 42-A.21, the owner's request of that day): what the
 connection manager needs of the USB drivers, for the installer's
 connection manager alone; section 7.4's mark service also on Windows 8
-and 8.1.
+and 8.1. Revised 2026-10-19 (task 42-A.23, the owner's decision of that
+day): the x64 package keeps the filter INF at the flavour directory's
+root beside `xhcicm.inf` and its one `xhcicm.sys`, with no `nt\`; the x86
+package keeps `nt\` (section 3.3, the packaging in section 3.3's last
+paragraphs, section 6.2's filter install).
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`

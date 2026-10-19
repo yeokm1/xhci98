@@ -1,6 +1,8 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 13, 2026-10-19 (the connection manager alone, and
+Status: revision 14, 2026-10-19 (the x64 package's filter INF at the
+flavour directory's root; see below); revision 13, 2026-10-19 (the
+connection manager alone, and
 Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
 service and the machine-wide key); revision 11, 2026-10-18 (the window,
 the helper, the uninstall
@@ -157,6 +159,15 @@ installer"; record 26 section 12): the safe-removal mark service
   again before step 5.
 - **Section 9.5**: the mark service's copy in `system32`.
 - **Section 13**: D16.
+
+Revision 14, 2026-10-19 (roadmap-usb4.md task 42-A.23, the owner's
+decision of that day): the x64 package keeps the tunnel-port filter INF at
+the flavour directory's root, beside `xhcicm.inf` and its one
+`xhcicm.sys`, with no `nt\` and no second copy of the binary; the x86
+package keeps `nt\` as before. The place is a pure function of the
+architecture (`inst_cmf_rel`, with `inst_cmf_pnf` and `inst_cmf_where`):
+section 4.1's table, section 4.4's listing, section 8.5's file set, and
+section 10's list.
 
 Revision 13, 2026-10-19 (roadmap-usb4.md task 42-A.21; record 26 draft 8;
 record 21 section 3.5). The owner, 2026-10-19: "The installer should give
