@@ -3,7 +3,9 @@
 Status: draft 15, 2026-10-19 (task 42-A.31, the owner's request of that
 day: `SETUP.EXE` at the package root, the program a person double-clicks,
 and `INSTALL.BAT` kept for the command line; sections 2, 5.9, 10, 12, 13
-and 15, and record 23 revision 22); draft 11, 2026-10-19 (task 42-A.22), the owner's (a wider gap
+and 15, and record 23 revision 22); draft 14, 2026-10-19 (section 9.3 step 4: the setup engine's
+`OEM Name` record of each deleted INF copy removed, record 23 revision
+20); draft 11, 2026-10-19 (task 42-A.22), the owner's (a wider gap
 and a line between settings rows, XHCITR's icon, a row of another
 system shown greyed, Stor98's box a child of the Thunderbolt one, the
 UAS driver a box of its own under the USB drivers') and the matrix
@@ -990,7 +992,8 @@ gated on the one before, shown on the Progress page:
    `DevicePath` entry, the copy's files, the directories), then the INF
    copies the engine kept (`INF` and `INF\OTHER`, the rule of 9.2 step 4,
    now deleted rather than listed, each only after no devnode of the
-   package is left), then the driver files in `SYSTEM32\DRIVERS`, each
+   package is left, and with each the `OEM Name` value SETUPX recorded
+   for it, record 23 section 6.1), then the driver files in `SYSTEM32\DRIVERS`, each
    deleted where it is not in use and otherwise left with a step and the
    restart flag (a running `xhci98.sys` whose last device was removed is
    unloaded by Windows; one still held is said). A removal the helper

@@ -809,6 +809,9 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
         return TRUE;
     }
 
+#if defined(NVME2K_W9X) && defined(STOR98_DBGPORT)
+    EngProbeSg9x(Srb);
+#endif
     return EngStartIo(DevExt, Srb);
 }
 

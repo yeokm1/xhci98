@@ -256,6 +256,8 @@ typedef struct _ENG_TUNABLES {
     ULONG Hold9xMs;         // 9x fixed hold bound (TimeOutValue unusable, G9)
     ULONG FragBytes;        // test: maximum child size (0 = MDTS / port limit)
     ULONG ForceBounce;      // test: bounce every data child (exercises 0.4 bounce)
+    ULONG Sg9xFailEvery;    // test (9x): every Nth caller-buffer copy reports unresolved (failure paths)
+    ULONG Sg9xFailCount;    // test: copies counted for Sg9xFailEvery
     ULONG CalPct;           // test: TSC calibration scaled to this percent (0 = as measured)
     ULONG ShnFlush;         // test: SRB_FUNCTION_FLUSH runs the restartable shutdown (late-Flush tests)
     ULONG CapToMs;          // test: bring-up and disable wait longer than CAP.TO (0 = CAP.TO)
@@ -308,6 +310,9 @@ VOID EngStop(IN struct _HW_DEVICE_EXTENSION *DevExt);
 // Request submission from the SCSI handlers
 BOOLEAN EngSubmitReadWrite(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN EngSubmitFlush(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb);
+#if defined(NVME2K_W9X) && defined(STOR98_DBGPORT)
+VOID EngProbeSg9x(IN PSCSI_REQUEST_BLOCK Srb);
+#endif
 BOOLEAN EngSubmitLogPage(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN UCHAR LogId);
 VOID EngCompleteSrb(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 
