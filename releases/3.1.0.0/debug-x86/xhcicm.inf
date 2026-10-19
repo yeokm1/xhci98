@@ -1,0 +1,239 @@
+; xhcicm.inf - the Thunderbolt and USB4 connection manager, xhcicm.sys
+; (design records 21 and 22; roadmap-usb4.md tasks 39-A.1 and 40-0.2), on
+; the Thunderbolt or USB4 NHI (the native host interface): the 32-bit
+; package's NHI INF.
+;
+; It binds the driver as the NHI's function driver and never names a
+; bridge: the tunnel ports' filter is installed by xhcicmf.inf, an NT-only
+; file the package keeps in its nt\ subdirectory, out of the Windows 98
+; engine's way, because Windows 2000 reads the undecorated models section
+; this file shares with Windows 98 (record 21 section 3.3; the gate's
+; CM-NO9XBRIDGE rule).
+;
+; The NHI ids: record 21 section 3.3's list (decision D9, owner 2026-10-15),
+; every Intel firmware-connection-manager host Linux's drivers/thunderbolt
+; addresses; and design record 22 section 3.7's USB4 hosts, the Intel ones
+; with no firmware connection manager, AMD's Pink Sardine and the class
+; line for any other. src\cm\cm_vals.c maps each id to its profile (the
+; gate's CM-IDLIST). Only 15BF (Alpine Ridge LP, the ThinkPad P14s Gen 1's)
+; has been read by this project; every other line is untested. A user who
+; needs another id adds a model line to a copy of this file (record 21
+; section 8, XhciCmMode 2).
+;
+; The description names the controller's generation, never the connection
+; manager that runs it: Tb2Desc for Falcon Ridge, NhiDesc for Alpine Ridge,
+; Titan Ridge and Ice Lake, U4Desc for Maple Ridge, Tiger Lake and every
+; later USB4 host and the class line (record 21 section 3.3; the gate's
+; CM-DESC).
+;
+; Three install paths, as xhci98.inf: Windows 98 SE and ME read the
+; undecorated sections and load the driver through *NTKERN/NTMPDriver;
+; Windows 2000 and XP read the .NTx86 sections and install a kernel
+; service; Vista and 7 read the .NTx86.6.0 models section and its install
+; sections. The driver needs no OS-supplied file, so there is no LayoutFile
+; and every path copies the driver alone.
+;
+; Every registry value the driver reads (record 21 section 8, record 22
+; section 12) is written by
+; every install path at the driver's own default as a REG_DWORD under
+; FLG_ADDREG_NOCLOBBER (0x00010003), so a value a user set survives a
+; reinstall and a written default reads exactly as an absent one - except
+; XhciCmTunnelBridge, whose absence is meaningful and which no INF writes.
+;
+; scripts\inf-gate\check-cm-inf.ps1 gates this file on every build.
+;
+; ASCII only, CRLF line endings.
+
+[Version]
+Signature="$CHICAGO$"
+Class=System
+ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+; Must equal src\xhci_version.h.
+DriverVer=10/19/2026,3.1.0.0
+
+[Manufacturer]
+%Mfg%=CmModels,NTx86.6.0
+
+[CmModels]
+; Record 21 section 3.3's list: Intel's firmware connection manager hosts.
+; 15BF has been read by this project; every other line is untested.
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF
+%Tb2Desc%=Cm.Dev,PCI\VEN_8086&DEV_156A
+%Tb2Desc%=Cm.Dev,PCI\VEN_8086&DEV_156C
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1575
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1577
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D2
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D9
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15E8
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15EB
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_1134
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_1137
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A17
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A0D
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_9A1B
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_9A1D
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_9A1F
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_9A21
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_463E
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_466D
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A73E
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A76D
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_7EB2
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_7EC2
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3
+; Design record 22 section 3.7: the USB4 software connection manager's
+; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
+; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine named beside the
+; class line, and any other USB4 host (class 0C/03/40) by the class line,
+; which the id lines outrank. All untested.
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A833
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A834
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E333
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E334
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E433
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E434
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_4D33
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_5781
+%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_5784
+%U4Desc%=Cm.Dev,PCI\VEN_1022&DEV_1668
+%U4Desc%=Cm.Dev,PCI\VEN_1022&DEV_1669
+%U4Desc%=Cm.Dev,PCI\CC_0C0340
+
+[CmModels.NTx86.6.0]
+; Record 21 section 3.3's list: Intel's firmware connection manager hosts.
+; 15BF has been read by this project; every other line is untested.
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF
+%Tb2Desc%=Cm.Dev6,PCI\VEN_8086&DEV_156A
+%Tb2Desc%=Cm.Dev6,PCI\VEN_8086&DEV_156C
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1575
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1577
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15D2
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15D9
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15E8
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15EB
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_1134
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_1137
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A17
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A0D
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1B
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1D
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1F
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_9A21
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_463E
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_466D
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A73E
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A76D
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_7EB2
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC2
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3
+; Design record 22 section 3.7: the USB4 software connection manager's
+; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
+; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine named beside the
+; class line, and any other USB4 host (class 0C/03/40) by the class line,
+; which the id lines outrank. All untested.
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A833
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A834
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E333
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E334
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E433
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E434
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_4D33
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_5781
+%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_5784
+%U4Desc%=Cm.Dev6,PCI\VEN_1022&DEV_1668
+%U4Desc%=Cm.Dev6,PCI\VEN_1022&DEV_1669
+%U4Desc%=Cm.Dev6,PCI\CC_0C0340
+
+[SourceDisksNames]
+1=%DiskName%,xhcicm.sys,,
+
+[SourceDisksFiles]
+xhcicm.sys=1
+xhcicm.inf=1
+
+[DestinationDirs]
+DefaultDestDir=10
+Cm.CopyFiles=10,System32\Drivers
+Inf.CopyFiles=17
+
+; --- Windows 98 SE and ME ---------------------------------------------------
+
+[Cm.Dev]
+AddReg=Cm.AddReg,Cm.Values
+CopyFiles=Cm.CopyFiles
+
+[Cm.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,xhcicm.sys
+
+; --- Windows 2000 and XP ----------------------------------------------------
+
+[Cm.Dev.NTx86]
+AddReg=Cm.Values
+CopyFiles=Cm.CopyFiles
+
+[Cm.Dev.NTx86.Services]
+AddService=xhcicm,0x00000002,Cm.AddService
+
+; --- Windows Vista and 7 ----------------------------------------------------
+
+[Cm.Dev6.NTx86]
+AddReg=Cm.Values
+CopyFiles=Cm.CopyFiles
+
+[Cm.Dev6.NTx86.Services]
+AddService=xhcicm,0x00000002,Cm.AddService
+
+; --- Shared -----------------------------------------------------------------
+
+; The driver's values (record 21 section 8, record 22 section 12), each at the driver's default.
+; XhciCmTunnelBridge is not written: its absence means no override.
+[Cm.Values]
+HKR,,XhciCmMode,0x00010003,1
+HKR,,XhciCmApprove,0x00010003,1
+HKR,,XhciCmReenum,0x00010003,1
+HKR,,XhciCmPollIdleMs,0x00010003,200
+HKR,,XhciCmCmdTimeoutMs,0x00010003,5000
+HKR,,XhciCmApproveTimeoutMs,0x00010003,10000
+HKR,,XhciCmSafeEject,0x00010003,1
+HKR,,XhciCmLogVerbosity,0x00010003,2
+; The USB4 profile's (design record 22 section 12).
+HKR,,XhciCmUsb3Tunnel,0x00010003,1
+HKR,,XhciCmLaneBonding,0x00010003,1
+HKR,,XhciCmPreOsCleanup,0x00010003,0
+; The log's emission (record 21 section 8): 1 prints it to a debugger.
+HKR,,XhciCmLogDebugView,0x00010003,0
+
+[Cm.AddService]
+DisplayName=%CmSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhcicm.sys
+LoadOrderGroup=Base
+
+; No temporary-file field, as xhciuas.inf: at a first install this driver is
+; not loaded, and Windows 98 would route the copy through WININIT.INI and a
+; restart.
+[Cm.CopyFiles]
+xhcicm.sys
+
+[Inf.CopyFiles]
+xhcicm.inf
+
+; Right-click Install pre-stages the driver with no device present.
+[DefaultInstall]
+CopyFiles=Inf.CopyFiles,Cm.CopyFiles
+
+[DefaultInstall.NTx86]
+CopyFiles=Cm.CopyFiles
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Host Controller Disk"
+Tb2Desc="xHCI98 Thunderbolt 2 Controller"
+NhiDesc="xHCI98 Thunderbolt 3 Controller"
+U4Desc="xHCI98 USB4 Host Router"
+CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"
