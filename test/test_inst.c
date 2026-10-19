@@ -831,6 +831,34 @@ static void test_helpers(void)
     CHECK(!removed && n == sizeof(filters), "absent: unchanged");
     n = inst_msz_remove(filters, sizeof(filters), "absent", msz, 4, &removed);
     CHECK(n == (size_t)-1, "too small");
+    {
+        /* The CriticalDeviceDatabase scrub (record 21 section 7.4): Windows
+         * 2000's pci#cc_0604 and pci#cc_010802 read LowerFilters=xhcicm
+         * after a marked unit's driver install (2026-10-19). */
+        static const char cddbOnly[] = "xhcicm\0\0";
+        static const char cddbMixed[] = "partmgr\0XHCICM\0other\0\0";
+        static const char cddbOther[] = "partmgr\0\0";
+        size_t ob;
+
+        CHECK_EQ(inst_filter_drop(cddbOnly, sizeof(cddbOnly), "xhcicm", msz,
+                                  sizeof(msz), &ob), INST_FD_DELETE,
+                 "xhcicm alone: the value deleted, never written empty");
+        CHECK_EQ(inst_filter_drop(cddbMixed, sizeof(cddbMixed), "xhcicm", msz,
+                                  sizeof(msz), &ob), INST_FD_SET,
+                 "with other filters: written back");
+        CHECK(ob == 15 && memcmp(msz, "partmgr\0other\0\0", 15) == 0,
+              "the other names kept in order, case ignored for ours");
+        CHECK_EQ(inst_filter_drop(cddbOther, sizeof(cddbOther), "xhcicm", msz,
+                                  sizeof(msz), &ob), INST_FD_NONE,
+                 "another driver's filter alone: untouched");
+        CHECK_EQ(inst_filter_drop(NULL, 0, "xhcicm", msz, sizeof(msz), &ob),
+                 INST_FD_NONE, "no value: nothing");
+        CHECK_EQ(inst_filter_drop(cddbMixed, sizeof(cddbMixed), "xhcicm", msz,
+                                  4, &ob), INST_FD_ERROR, "too small: an error");
+        CHECK_EQ(inst_filter_drop("xhcicmx\0\0", 10, "xhcicm", msz,
+                                  sizeof(msz), &ob), INST_FD_NONE,
+                 "a longer name is not ours");
+    }
 
     CHECK(inst_testsigning(" NOEXECUTE=OPTIN  TESTSIGNING"), "testsigning on");
     CHECK(inst_testsigning("/testsigning /noexecute=optin"), "slash form");

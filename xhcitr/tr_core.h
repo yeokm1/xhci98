@@ -517,6 +517,7 @@ int tr_node_is_hub(const char *hw, size_t hwBytes, const char *compat,
  * Windows stops with it (section 6.5). */
 typedef struct _TR_USBF {
     int Nt;
+    int W2k;                    /* 2000, stopped here: Code 24 is held       */
     int HaveDevnode;            /* the port's devnode was found in the walk  */
     int IsHub;                  /* the port says so, or ids of its set do    */
     int IsController;
@@ -540,20 +541,33 @@ typedef struct _TR_USBF {
 #define TR_UE_LISTED    1       /* listed with the reason, not offered     */
 #define TR_UE_OFFER     2       /* Safely Remove offered                   */
 
+/* 1 for a devnode held for eject: Code 47, or, when w2k says Windows 2000
+ * and a stop of this devnode was accepted, Code 24: 2000 has no Code 47
+ * and leaves a removed devnode that is still attached at Code 24 (run 41,
+ * the bridge after its stop; run 42, a USB stick after its stop), and
+ * Code 24 is also its failed start. */
+int tr_held_for_eject(TR_U32 problem, int w2k);
+
+/* That w2k argument: 1 on Windows 2000 (w2k) for a devnode this process
+ * stopped (stoppedHere) and, for the device at a USB port (atPort), only
+ * while the port reports a configuration (config): the stopped device keeps
+ * its configuration until it is unplugged, and one plugged in again starts
+ * unconfigured, so a later failed start at Code 24 is not read as the
+ * stop. */
+int tr_w2k_code24(int w2k, int stoppedHere, int atPort, unsigned int config);
+
 /* The words for a devnode that is not running (record 25 section 14): the
- * tag ("stopped - unplug it" for Code 47, held for eject; "not started -
- * problem code N" for any other problem; "not started") and the sentence
- * ("Stopped: you can unplug it.", "Windows could not start this device
- * (problem code N).", ...). 1 only for Code 47, the one state in which the
- * device may be unplugged. */
-int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
-                    size_t sentenceCap);
+ * tag ("stopped - unplug it" when held for eject, tr_held_for_eject;
+ * "not started - problem code N" for any other problem; "not started") and
+ * the sentence ("Stopped: you can unplug it.", "Windows could not start
+ * this device (problem code N).", ...). 1 only when held for eject, the one
+ * state in which the device may be unplugged. */
+int tr_stopped_text(TR_U32 problem, int w2k, char *tag, size_t tagCap,
+                    char *sentence, size_t sentenceCap);
 
 /* What a walk right after an accepted stop reads (section 6.5 step 5):
- * TR_UA_UNPLUG for the walk whole and the device gone, held for eject
- * (Code 47), or, on Windows 2000 only (w2k), Code 24: 2000 has no Code 47
- * and leaves a removed devnode that is still attached at Code 24 (run 41,
- * the bridge after its stop). TR_UA_STARTED for the device started again;
+ * TR_UA_UNPLUG for the walk whole and the device gone, or held for eject
+ * (tr_held_for_eject). TR_UA_STARTED for the device started again;
  * TR_UA_UNKNOWN for anything else, no walk included. started is DN_STARTED
  * with no problem code. */
 #define TR_UA_UNPLUG    0

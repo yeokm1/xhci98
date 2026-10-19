@@ -9408,12 +9408,134 @@ static int mk_stop(SC_HANDLE scm, int *had)
     return 1;
 }
 
+/* The CriticalDeviceDatabase's copies (record 21 section 7.4, step 0):
+ * Windows 2000 and XP copy a boot-critical device's own filter values into
+ * its class's entry there when they install it - a marked unit's
+ * LowerFilters, and the filter INF's UpperFilters of a tunnel port - and
+ * every new device of that class then gets them; with xhcicm gone, a new
+ * bridge or NVMe controller (a boot disk among them) would name a missing
+ * filter. With fix, xhcicm is taken out of every entry's LowerFilters and
+ * UpperFilters, the other names kept in order, the value deleted when
+ * nothing else is in it, and each read back. 1 when the key was read whole
+ * (and, with fix, every change read back); *left the values still naming
+ * xhcicm. */
+static int cddb_scrub(int fix, int *left)
+{
+    static const char *const vals[2] = { "LowerFilters", "UpperFilters" };
+    HKEY root;
+    HKEY k;
+    DWORD i;
+    DWORD nn;
+    DWORD type;
+    DWORD n;
+    LONG r;
+    char name[256];
+    char f[INST_MK_FILTERS];
+    char nf[INST_MK_FILTERS];
+    size_t ob;
+    int act;
+    int v;
+    int ok = 1;
+
+    *left = 0;
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_CDDB_KEY, 0, KEY_READ, &root);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (r != ERROR_SUCCESS) {
+        out("The CriticalDeviceDatabase could not be read (error %ld).\n", r);
+        return 0;
+    }
+    for (i = 0;; i++) {
+        nn = sizeof(name);
+        r = RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS) {
+            out("The CriticalDeviceDatabase ended early (error %ld).\n", r);
+            ok = 0;
+            break;
+        }
+        if (RegOpenKeyExA(root, name, 0,
+                          fix ? KEY_QUERY_VALUE | KEY_SET_VALUE : KEY_QUERY_VALUE,
+                          &k) != ERROR_SUCCESS) {
+            out("CriticalDeviceDatabase\\%s could not be opened.\n", name);
+            ok = 0;
+            continue;
+        }
+        for (v = 0; v < 2; v++) {
+            memset(f, 0, sizeof(f));
+            n = sizeof(f) - 2;
+            r = RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n);
+            if (r == ERROR_FILE_NOT_FOUND) {
+                continue;
+            }
+            if (r != ERROR_SUCCESS) {
+                out("CriticalDeviceDatabase\\%s's %s could not be read.\n",
+                    name, vals[v]);
+                ok = 0;
+                continue;
+            }
+            if (type != REG_MULTI_SZ && type != REG_SZ) {
+                continue;
+            }
+            act = inst_filter_drop(f, n + 1, INST_MK_NAME, nf, sizeof(nf), &ob);
+            if (act == INST_FD_NONE) {
+                continue;
+            }
+            logonly("cddb: %s names %s in its %s\n", name, INST_MK_NAME,
+                    vals[v]);
+            if (!fix) {
+                (*left)++;
+                continue;
+            }
+            if (act == INST_FD_SET) {
+                r = RegSetValueExA(k, vals[v], 0, REG_MULTI_SZ,
+                                   (const BYTE *)nf, (DWORD)ob);
+            } else if (act == INST_FD_DELETE) {
+                r = RegDeleteValueA(k, vals[v]);
+            } else {
+                r = ERROR_INSUFFICIENT_BUFFER;
+            }
+            /* Read back. */
+            memset(f, 0, sizeof(f));
+            n = sizeof(f) - 2;
+            if (r == ERROR_SUCCESS) {
+                r = RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n);
+                if (r == ERROR_FILE_NOT_FOUND) {
+                    r = ERROR_SUCCESS;
+                } else if (r == ERROR_SUCCESS &&
+                           inst_filter_drop(f, n + 1, INST_MK_NAME, nf,
+                                            sizeof(nf), &ob) != INST_FD_NONE) {
+                    r = ERROR_INVALID_DATA;
+                }
+            }
+            if (r != ERROR_SUCCESS) {
+                out("%s could not be removed from CriticalDeviceDatabase\\%s's "
+                    "%s (error %ld).\n", INST_MK_NAME, name, vals[v], r);
+                (*left)++;
+                ok = 0;
+                continue;
+            }
+            flagChanged = 1;
+            out("%s was removed from CriticalDeviceDatabase\\%s's %s (a copy "
+                "Windows made at a device's install).\n", INST_MK_NAME, name,
+                vals[v]);
+        }
+        RegCloseKey(k);
+    }
+    RegCloseKey(root);
+    return ok;
+}
+
 /* Every PCI devnode, present or not, its LowerFilters read (record 21
- * section 7.4, step 0). With fix, xhcicm is removed from each value that
- * names it, the other names kept in order, the value deleted when nothing
- * else is in it, and each read back. 1 when the enumeration reached its end
- * and every value was read (and, with fix, every removal read back); *left
- * the values still naming xhcicm. */
+ * section 7.4, step 0), and the CriticalDeviceDatabase's copies
+ * (cddb_scrub). With fix, xhcicm is removed from each value that names it,
+ * the other names kept in order, the value deleted when nothing else is in
+ * it, and each read back. 1 when the enumeration reached its end and every
+ * value was read (and, with fix, every removal read back); *left the values
+ * still naming xhcicm. */
 static int mk_inventory(int fix, int *left)
 {
     HDEVINFO set;
@@ -9437,6 +9559,16 @@ static int mk_inventory(int fix, int *left)
         out("The device-property routines are missing: the Thunderbolt "
             "safe-removal marks\ncannot be read.\n");
         return 0;
+    }
+    /* The CriticalDeviceDatabase first: it is the source new devices take
+     * the name from, so the devices are read after it is clean. */
+    {
+        int cleft;
+
+        if (!cddb_scrub(fix, &cleft)) {
+            ok = 0;
+        }
+        *left += cleft;
     }
     set = api.GetClassDevs(NULL, "PCI", NULL, DIGCF_ALLCLASSES);
     if (set == INVALID_HANDLE_VALUE) {
@@ -9598,7 +9730,9 @@ static int mk_remove(void)
     if (opts.List) {
         ok = mk_inventory(0, &left);
         if (left > 0) {
-            out("(/list) %s would be removed from %d device(s)' LowerFilters.\n",
+            out("(/list) %s would be removed from %d filter value(s) (devices' "
+                "LowerFilters,\nthe CriticalDeviceDatabase's LowerFilters and "
+                "UpperFilters).\n",
                 INST_MK_NAME, left);
         }
         if (svc_state(INST_MK_SERVICE) == 1) {
@@ -9629,6 +9763,18 @@ static int mk_remove(void)
         return 0;
     }
     ok = mk_inventory(1, &left) && left == 0;
+    if (ok) {
+        /* Read once more, both the database and the devices: Windows does
+         * not take the write lock, and a device it found during the
+         * removal may have taken the name from a copy. */
+        int again;
+
+        ok = mk_inventory(0, &again) && again == 0;
+        if (!ok) {
+            out("A Thunderbolt safe-removal mark (xhcicm) is still named after "
+                "its removal.\n");
+        }
+    }
     if (ok) {
         LONG r = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_MK_MARKS_KEY);
         if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
@@ -10024,9 +10170,9 @@ static int run_uninstall_nt(void)
     {
         int left;
         if (!mk_inventory(0, &left) || left != 0) {
-            return stop_uninstall("a device still names xhcicm in its "
-                                  "LowerFilters, so xhcicm's service\nand "
-                                  "file stay.");
+            return stop_uninstall("a device or a CriticalDeviceDatabase entry "
+                                  "still names xhcicm in its filters,\nso "
+                                  "xhcicm's service and file stay.");
         }
     }
     remove_services_and_files();

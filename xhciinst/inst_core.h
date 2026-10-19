@@ -272,6 +272,27 @@ int inst_path_remove_copies(const char *list, const char *root, char *out,
 size_t inst_msz_remove(const char *in, size_t inBytes, const char *name,
                        char *out, size_t cap, int *removed);
 
+/* A filter list value (LowerFilters or UpperFilters, read as a
+ * multi-string of inBytes; a REG_SZ is passed with its NUL pair) with
+ * every entry equal to `name` taken out, the other names kept in order
+ * (record 21 section 7.4, the CriticalDeviceDatabase scrub, and the
+ * uninstall's step 0): INST_FD_NONE when `name` is not in it (nothing to
+ * write), INST_FD_SET with out[0..*outBytes) the value to write back,
+ * INST_FD_DELETE when nothing else is left (the value is deleted, never
+ * written empty), INST_FD_ERROR when out (cap bytes) is too small. */
+#define INST_FD_NONE        0
+#define INST_FD_SET         1
+#define INST_FD_DELETE      2
+#define INST_FD_ERROR       3
+int inst_filter_drop(const char *in, size_t inBytes, const char *name,
+                     char *out, size_t cap, size_t *outBytes);
+
+/* The CriticalDeviceDatabase key, under HKEY_LOCAL_MACHINE. Windows 2000
+ * and XP copy a boot-critical class's device-specific filter values into
+ * its entries there (pci#cc_0604, pci#cc_010802) when they install such a
+ * device, and every new device of that class then gets them. */
+#define INST_CDDB_KEY "SYSTEM\\CurrentControlSet\\Control\\CriticalDeviceDatabase"
+
 /* 1 when a SystemStartOptions value holds the word TESTSIGNING. */
 int inst_testsigning(const char *options);
 

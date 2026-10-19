@@ -428,6 +428,18 @@ ULONG CmPortsChildAttach(ULONG prevTruncated, PVOID const *chain,
     return CM_CHILD_ATTACH_OVER;
 }
 
+ULONG CmPortsStackless(ULONG hasAttached, ULONG ownBusChild, ULONG ownAddDev,
+                       ULONG aboveChild)
+{
+    if (!hasAttached) {
+        return 1;
+    }
+    if (ownAddDev || !ownBusChild || aboveChild) {
+        return 0;
+    }
+    return 1;
+}
+
 ULONG CmPortsChildFirst(ULONG prevTruncated, ULONG hasAttached)
 {
     if (!hasAttached) {

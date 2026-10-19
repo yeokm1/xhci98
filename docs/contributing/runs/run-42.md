@@ -1072,6 +1072,62 @@ search and written again, then kept (two minutes, "removable: yes ...
 listed in Safely Remove Hardware" at Code 28); unplugged, removed within a
 poll ("the unit left").
 
+### 42-A.24: the CriticalDeviceDatabase copies of xhcicm (2026-10-19)
+
+The matrix's 2000 legs found `LowerFilters=xhcicm` under
+`Control\CriticalDeviceDatabase\pci#cc_0604` and `pci#cc_010802`, copied
+there by Windows from a marked unit's install, and the filter INF's
+`UpperFilters` under the tunnel port's id; every later bridge and NVMe
+drive took them with no record, and after an uninstall a new NVMe drive
+stopped at Code 19. XP and 7 x86 made the `cc_0604` copy for a marked
+bridge's driver installed again. The fix (record 21 section 7.4 "As
+built", record 23 section 9.2 step 0): the service takes `xhcicm` out of
+every entry's `LowerFilters` at every poll, on every system it runs on
+(2000 to 7), and writes no new mark while that scrub is unproven; its
+inventory runs at once after a hit and every minute, an unrecorded
+device-level mark recorded only to be judged (kept on a unit behind an
+active member, removed elsewhere); the uninstall's step 0, and any run that
+ends with no `xhcicm` service, take `xhcicm` out of every entry's
+`LowerFilters` and `UpperFilters` first, then every PCI devnode's, and read
+both again before the records and the service go; `XHCICLN` lists such
+values and points at that uninstall (`inst_filter_drop`, with host vectors;
+the service's self-test vectors). Reviewed until the review converged;
+gated builds passed, x86 then amd64, at 5ac042b9.
+
+Legs, release flavour, the gated binaries in the bench package:
+
+- **2000** (a copy of the matrix's 2000 disk, its leak cleaned by the new
+  service's first poll): after a plug and install the database held only
+  the filter INF's `UpperFilters`; a never-seen chain (USP, DSP, NVMe) got
+  a recorded mark on its unit and nothing on the DSP or the drive; the
+  uninstall removed the `UpperFilters` copy and the unit's mark, and
+  afterwards nothing under `Enum\PCI` or the database named `xhcicm`;
+  booted with a new bridge, an NVMe drive behind it and another on bus 0,
+  all three started (Code 0). Installed again on a two-port USB4 host
+  (`usb4-generic`): a second enclosure on the other tunnel port was marked
+  and listed, the `cc_010802` copy 2000's Found New Hardware install of
+  Stor98 made for its drive was taken out at the next poll ("Windows copied
+  it there from a marked unit's install"), and an NVMe drive added at the
+  next boot and installed through the wizard came up with no filter. The
+  unit present when the new `xhcicm` loaded was not marked until the
+  restart (the matrix's XP finding; 3.0.0.0 did the same).
+- **7 x86**: a new bridge added at boot while 3.0.0.0's service ran had no
+  filter; updated to this build with a chain and an NVMe drive at Code 28
+  behind the port, both units were marked and kept, the database held only
+  the filter INF's `UpperFilters`; the uninstall left no value naming
+  `xhcicm` among 178 read.
+
+The eject on 7 (`cm.reenum.eject.stale` after every confirmation): the
+eligibility now reads a function at Code 28 - only this driver's
+BusRelations child on its PDO, nothing above it - as without a stack, with
+the member held against a start until the hook returns (host vectors for
+`CmPortsStackless`). Read again on 7 x86 the same layout still ended
+`stale`: the ejected bridge's PDO keeps ACPI's bus filter
+(`cm.reenum.child.under` `ACPI`) after its stack is removed. Open: telling
+that filter from a rebuilt stack needs another driver's chain top read
+safely, an import this driver does not have; under the USB4 profile on an
+ACPI machine an eject leaves the tunnel up until the unplug.
+
 ## Phase 42 integration: the installer's hooks, the bench cut and its smoke legs (2026-10-19)
 
 Branch `p42-int` from `3.1.0.0` at `2d2703b9`, with `3.1.0.0` merged in
@@ -1267,3 +1323,153 @@ guest here, `usb4-emu`'s, did not boot under a new overlay and its own
 emulator build; the refusal rests on the host vectors of `inst_os_kind`
 and the code read); 2000 and XP; 98 SE's `/cmonly` refusal (host vector
 only); the x64 half.
+
+## 42-A.12 follow-up: busy waits serviced, held work through a loss (2026-10-19)
+
+Code on branch `p42-callfix` (from `3.1.0.0` at `5f63e8e4`): `f0e10a02`,
+then `2f02d5de`, `231fe2ca` and `1ec1a7e2`; reviewed and revised until the
+review converged at `1ec1a7e2`. Built there with every gate,
+`scripts\build-driver.cmd all` and then `all -amd64`: both pass (x86
+`qemu` `xhcicm.sys` SHA-256 `401C566CA834DB78...`); `test_cm_nvlink` 449
+checks, 0 failures.
+
+Four points were raised against the merged 42-A.12 code, read at
+`4a31f545`; each was read again at `5f63e8e4`:
+
+- **The servicing of the acknowledgement waits inside a pass.** Long
+  sleeps: already taken in 50 ms pieces with a step after each while a
+  wait is pending (`bddf936d`), and every mark that starts a wait runs on
+  the NHI's own thread, so a sleep begun with nothing pending in its
+  domain cannot gain one. Busy waits: real. A wait's first 2 ms are
+  stalls, so a run of requests that each end inside them (the TB3 EEPROM
+  reader's hundreds) slept nowhere and stepped nothing. `cmStall` now
+  steps the waits once per 50 ms of the clock since the last step
+  (`CmNvlinkServiceDue`, pure; `cmSleep` records its own step).
+- **Held and owed work during a host-interface loss.** Real on NT: the
+  unavailable reconciliation's action, finding a member's gate down,
+  folded that member's held work and owed change into its own call, with
+  the owed exposure, while the transport was lost; and the pass's
+  owed-change loop exposed and called with no transport check. Both now
+  wait for the transport (`cmTransport`), as the held loop already did.
+  With the gate up, the reconciliation's call is held as an obligation of
+  its own (`CM_HELD_LOSS`), made once the gate falls whatever the
+  transport - a removal of vanished children with no exposure, behind the
+  retirement barrier too - and paid instead by any call made with the gate
+  down, so it is made once.
+- **An action between the held path and the owed path.** Not real at
+  `5f63e8e4`: `bddf936d` made the action's call pay the owed change too.
+  Its vector (held, owed, then an action before the pass: one call) is
+  added.
+- **A result finished before the stop, handed over on the stopping
+  thread.** Not real at `5f63e8e4`: since `bddf936d` the stop only marks
+  the slots and wakes the workers, and each worker hands an outcome the
+  thread did not take to the late taker as it leaves; `test_cm_call`
+  covers both orders.
+
+The leg (development host A, QEMU, the 42-A.10 topology and the `l4`
+overlay's copy, `E:\xhci98-vm\p42-callfix`): **Windows 98 SE**, the gated
+`qemu` `xhcicm.sys` of `1ec1a7e2` copied over the installed one, then a
+shut down and a cold start (`c2`), `enc0` at power-on. The NVMe `UP`
+published (`cm.nvlink.up=01000101`), `DATA.BIN` written to F: and compared
+clean; `x-gate closed`: contained (`cm.live.state=00000107`), the worker's
+CONTROLLER_UNAVAILABLE removal answered by Stor98; `x-gate normal` 8 s
+later: `u4.recover.probe=03000010`, `rings-kept`, the tunnel preserved
+(`u4.recover.class=00000103`), `u4.recover.ok`, no barrier, ACTIVE, the
+re-enumeration, Stor98 bound again (`cm.nvlink.9x.proof-read`); F: back,
+a second file written and compared clean. **Pass.** The same sequence as
+42-A.10's `l4`. The NT paths the change is about (the reconciliation
+behind a gate, a pass of busy waits with a wait pending) were not reached
+in a guest: on 98 SE no statement is made, so no wait is pending; they
+rest on the host vectors.
+
+## XHCITR on Windows 2000: the disk names, the letters and the stopped mark (2026-10-19)
+
+The `3.1.0.0` matrix read two faults on Windows 2000 SP4 with the bench
+cut: the tray menu and the tree named a Bulk-Only stick and a UAS disk
+by the USB device's own name with no drive letter, where 98 SE reads
+"... (F:)", and a device stopped from the tray showed no
+"[stopped - unplug it]", which the README promises. Branch `p42-trfix`
+from `3.1.0.0` `4b6d3477`: `5494c288` (the fix), `e1ff85f5` and
+`d74bf6cf` (revisions after review), `def3d558` and the record's
+revision 15 (design record 25 sections 6.5 and 14); roadmap-usb4 task
+42-A.28.
+
+**The causes**, read in a 2000 guest (below) with the bench's
+`XHCITR.EXE` (SHA-256 `a9931e76...48d787`):
+
+- The disk. `HKLM\SYSTEM\CurrentControlSet\Enum\USBSTOR\Disk&Ven_QEMU&...`
+  holds `ClassGUID` `{4D36E967-...}`, `DeviceDesc` "Disk drive" and
+  `FriendlyName` "QEMU QEMU HARDDISK USB Device", and no `Class` value.
+  `CM_DRP_CLASS` answered "no such value", so the node's setup class was
+  empty and it was no disk: no friendly name was read, `disk_letters_nt`
+  skipped it, and the label fell back to the USB device's name. The
+  device was still offered because its removal relations hold the
+  volume ("Generic volume"). The letter lookup itself works on 2000: a
+  scratch program in the guest read every disk interface by its
+  instance ID and `IOCTL_STORAGE_GET_DEVICE_NUMBER` on each `\\.\X:`
+  (`E:` 7/3 for the stick, `F:` 7/2 for the UAS disk, matched). XP and
+  7 write the `Class` value (7's bench report already named both disks
+  with their letters).
+- The mark. After the stop ("Windows has stopped USB Mass Storage
+  Device. You can now unplug the device.") the devnode read status
+  `0x01806400`, problem code 24, not 47: 2000 has no Code 47. Only the
+  after-stop reading knew Code 24 (run 41); the rule saw no disk and no
+  problem it knew, and said "not offered - no disk on it".
+
+**The fix.** `dn_read` takes an empty class name from the class key the
+devnode's `ClassGUID` names. `tr_held_for_eject` (Code 47, or Code 24
+when allowed) now decides the USB rule, the tree and tray suffix,
+`tr_stopped_text` and `tr_usb_after_kind`. Since Code 24 is also 2000's
+failed start, it is allowed only for a devnode this process stopped (the
+USB stop's after-reading at Code 24, a unit's accepted stop), until it
+starts again or leaves a whole walk, and, at a USB port, only while the
+port still reports a configuration (`tr_w2k_code24`): the stopped device
+kept "Configuration: 1", and one plugged in again starts unconfigured. A
+stop made elsewhere (Windows' own Unplug or Eject Hardware) reads as
+before. Reviewed and revised twice (`e1ff85f5`, `d74bf6cf`); the last
+review found nothing.
+
+**Tests and builds.** `xhcitr\build.cmd`, `selftest.cmd` (11 and 10
+checks), `snaptest.cmd` (33 cases) and `test\run-host-tests.cmd`
+(`test_tr` 909 checks) passed; the gated build on `def3d558`,
+`build-driver.cmd all` then `all -amd64`, one after the other:
+BUILD + GATES PASSED (debug release qemu) on both, the build record
+naming `def3d558` with no uncommitted change. The leg binary, `XHCITR.EXE` SHA-256
+`018aef42...877ff7` (`XHCITR64.EXE` `f7f6002d...7e8554`), was built
+from `d74bf6cf`'s sources, which `def3d558` does not change.
+
+**The legs** (QEMU only, `vm\usb4\bin-2a893ea`, headless; QMP
+48190-48191; a Bulk-Only stick `usb-storage` on root port 3 and a
+`usb-uas` + `scsi-hd` disk on root port 4, both on
+`vm\u4-asm\base\nvme-fat.qcow2` overlays, a `usb-tablet` on port 2;
+the bench package by hand, `INSTALL /console /yes`, exit 3, then the
+new `XHCITR.EXE` copied over `C:\XHCI98\XHCITR.EXE`):
+
+- **Windows 2000 SP4** (`vm\t26\win2k-clean.qcow2`, `pc,acpi=off`,
+  one vCPU). Before (bench): as the matrix read it, plus the causes
+  above. After: the tray menu read "Safely remove QEMU QEMU HARDDISK UAS
+  Device (E:)" and "... USB Device (F:)", the tree the same names with
+  their letters. The stick stopped from the tray: the balloon, then the
+  tray item "Safely remove USB Mass Storage Device (stopped - unplug
+  it)" greyed, the tree "[Port 3, USB 3] USB Mass Storage Device
+  SuperSpeed [stopped - unplug it]", the details "Safely Remove: not
+  now - stopped - unplug it", Code 24, "Configuration: 1". Unplugged:
+  "(empty)"; plugged in again: started, "can be stopped", "(F:)" back
+  in the tray. The UAS disk stopped from the tray: "[stopped - unplug
+  it]", Code 24; the emulated UAS device does not attach when added to
+  a running machine (section 14), so its return was read at the cold
+  start, with its letter. The stick stopped from Windows' own icon:
+  Code 24, "not offered - no disk on it", no mark (not stopped here).
+  **Pass.**
+- **Windows 7 x86** (`vm\win7.img`, two vCPUs): the bench already named
+  "QEMU QEMU HARDDISK USB Device (D:)" and "... UAS Device (F:)"; the
+  new tool the same. The stick stopped from the tray: Code 47, "[stopped
+  - unplug it]"; plugged in again: started, "(D:)" back in the tray. The
+  UAS disk stopped: Code 47, "[stopped - unplug it]". **Pass**, no
+  change from the bench.
+
+Not taken here: XP (the same Code 47 path as 7; whether its USB disks
+carry the `Class` value was not read, and either way is now handled), 98 SE and ME (their letters come from
+`CurrentDriveLetterAssignment`, a path this change does not touch), a
+Thunderbolt unit stopped on 2000 (the same `tr_w2k_code24` rule, no
+port), and the x64 tool.
