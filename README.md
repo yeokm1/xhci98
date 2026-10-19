@@ -98,12 +98,12 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 |---|---|
 | 2000 | Stop it in "Unplug or Eject Hardware", then unplug. Without the stop, Windows 2000 shows "Unsafe Removal of Device". |
 | XP, Vista, 7 | Stop it in "Safely Remove Hardware", then unplug. |
-| 98 SE, ME | No such dialog: use the [xHCI98 USB Tree](#the-xhci98-usb-tree) or `INSTALL /eject`. Until you unplug, Device Manager's Refresh can start the device again. |
+| 98 SE, ME | No such dialog: use the [xHCI98 USB Tree](#the-xhci98-usb-tree). Until you unplug, Device Manager's Refresh can start the device again. |
 
 - A **dock** is listed under a generic PCI bridge name (its own switch); stopping it stops everything in the dock.
-- A **device missing from Windows' list** (its first plug, or after a disable and enable or a driver update): the USB Tree and `INSTALL /eject` stop it when run as an administrator. Without one, close every program using it, unplug it and plug it in once more; from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
-- `INSTALL /devices` lists the connected devices (name, generation, approval, connections) and the Windows devices behind each. `INSTALL /eject` asks which one, asks Windows to stop it (refused, with nothing changed, while a program has a file open on it), and says "You can now unplug the device." For scripts: `INSTALL /eject 2`, or `INSTALL /eject id=<instance id> /yes`.
-- These commands need administrator permissions on Win 2000+.
+- A **device missing from Windows' list** (its first plug, or after a disable and enable or a driver update): the USB Tree stops it when run as an administrator. Without one, close every program using it, unplug it and plug it in once more; from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
+- For scripts, the console tool lists the connected devices and stops one; `tools\xhciinst\readme.txt` is the reference.
+- Stopping a device needs administrator permissions on Win 2000+.
 
 ### NVMe drives
 

@@ -4200,8 +4200,8 @@ helper (xhciinst\di\build.cmd).
         $i64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIIN64.EXE")
         $s32 = Get-Item -LiteralPath (Join-Path $destRoot "SETUP.EXE")
         $contents += ("  SETUP.EXE       - installs or updates the drivers: double-click")
-        $contents += ("                    it ({0:N0} bytes); SETUP /uninstall, or" -f $s32.Length)
-        $contents += "                    Add/Remove Programs, uninstalls them"
+        $contents += ("                    it ({0:N0} bytes); Remove in Add/Remove" -f $s32.Length)
+        $contents += "                    Programs uninstalls them"
         $contents += "  INSTALL.BAT     - for command-line and scripted installs:"
         $contents += "                    TOOLS\XHCIINST\readme.txt is the reference"
         $contents += ""
@@ -4333,7 +4333,7 @@ helper (xhciinst\di\build.cmd).
             " Stor98, an NVMe storage driver for NVMe drives such as one in a Thunderbolt or USB4 enclosure:" +
             " stor98.inf and the files beside it whose names start with stor98. It is a separate project" +
             " with its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
-            " and stor98-readme.txt is its own guide. SETUP.EXE installs it only when asked (its box under the Thunderbolt 3 / USB4 one on the installer's Components page, or /thunderbolt /stor98). By hand, in the hardware" +
+            " and stor98-readme.txt is its own guide. SETUP.EXE installs it only when asked (its box under the Thunderbolt 3 / USB4 one on the installer's Components page). By hand, in the hardware" +
             " wizard (Have Disk), point at " +
             $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `
             -Width 78 -FirstPrefix "  " -RestPrefix "  ")
@@ -4872,9 +4872,10 @@ options (section 9), shows a summary, and on Install:
     its Device Manager steps on a page of their own, which you can save.
 
 It ends by offering to restart Windows. Add/Remove Programs (Programs and
-Features on Vista and 7, in Control Panel) lists the package as "xHCI98 USB 3.x drivers"; Remove there takes every
-driver of the package away again (it warns first: on a machine whose only
-USB controller is xHCI, the USB keyboard and mouse stop working).
+Features on Vista and 7, in Control Panel) lists the package as "xHCI98
+USB 3.x drivers"; Remove there takes every driver of the package away
+again (it warns first: on a machine whose only USB controller is xHCI,
+the USB keyboard and mouse stop working).
 
 Every run adds to XHCIINST.LOG at the root of the system drive; attach it
 to a bug report about an install. For scripted installs,
