@@ -8519,6 +8519,7 @@ static int run_install_9x(void)
     if (!record_dir()) {
         /* Unrecorded, the copy is not one the uninstall would find: the
          * earlier layouts and the old directory are kept as they are. */
+        step(INST_STEP_FAILED, "The package's copy, not recorded");
         return inst_exit_code(0, 1, 0, 1);
     }
     step(INST_STEP_DONE, "The package is in %s and on DevicePath", srcDir);
@@ -9540,6 +9541,7 @@ static void mk_install(void)
     SC_HANDLE s = NULL;
     int had;
     int put = 1;
+    int running = 0;
 
     join(src, sizeof(src), root, "tools\\xhcimark");
     join(src, sizeof(src), src, mk_exe());
@@ -9661,8 +9663,13 @@ start:
         out("The Thunderbolt safe-removal mark service %s is %s and running:\n"
             "  %s\n", INST_MK_SERVICE, had ? "updated" : "installed", quoted);
         step(INST_STEP_DONE, "The safe-removal mark service is running");
+        running = 1;
     }
 done:
+    /* Every begun step ends: the window's row says how. */
+    if (!running) {
+        step(INST_STEP_FAILED, "The safe-removal mark service");
+    }
     if (s != NULL) {
         CloseServiceHandle(s);
     }

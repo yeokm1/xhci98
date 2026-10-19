@@ -2052,7 +2052,11 @@ static void summary_fill(HWND dlg)
 
 static int stepsTotal;
 static int stepsDone;
+static int stepOpen = -1;       /* the list's "running" row, or -1 */
 
+/* A step's outcome takes the place of its "running" row (matrix N2,
+ * 2026-10-19: the copy's row stayed "running" above its own "done"); an
+ * outcome with no step open is a row of its own. */
 static void progress_add(HWND dlg, int state, const char *text)
 {
     char line[600];
@@ -2065,7 +2069,17 @@ static void progress_add(HWND dlg, int state, const char *text)
     _snprintf(line, sizeof(line) - 1, "%s - %s", text,
               (state >= 0 && state <= 4) ? mark[state] : "");
     line[sizeof(line) - 1] = '\0';
-    n = (int)SendMessageA(lb, LB_ADDSTRING, 0, (LPARAM)line);
+    if (state != INST_STEP_BEGIN && stepOpen >= 0) {
+        SendMessageA(lb, LB_DELETESTRING, (WPARAM)stepOpen, 0);
+        n = (int)SendMessageA(lb, LB_INSERTSTRING, (WPARAM)stepOpen,
+                              (LPARAM)line);
+        stepOpen = -1;
+    } else {
+        n = (int)SendMessageA(lb, LB_ADDSTRING, 0, (LPARAM)line);
+        if (state == INST_STEP_BEGIN) {
+            stepOpen = n;
+        }
+    }
     SendMessageA(lb, LB_SETCURSEL, n, 0);
     if (state == INST_STEP_BEGIN) {
         stepsTotal++;
