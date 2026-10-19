@@ -3391,13 +3391,13 @@ const char *inst_tray_list_text(int runState, int action)
                "; it does not start at login.";
     }
     if (action == INST_TRAY_RUN_SET) {
-        return "; its start at login names another file (a run without "
-               "/notray names this one).";
+        return "; its start at login holds other data, or could not be read "
+               "(a run without /notray sets it to this file).";
     }
     return action == INST_TRAY_RUN_DELETE ?
-           "; its start at login names another file, and would be removed "
-           "(/notray)." :
-           "; its start at login names another file.";
+           "; its start at login holds other data, or could not be read; it "
+           "would be removed (/notray)." :
+           "; its start at login holds other data, or could not be read.";
 }
 
 int inst_oem_name_ours(const char *valueName, const char *path,

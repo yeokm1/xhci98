@@ -14153,6 +14153,7 @@ static int s98_un_inf_9x(const char *name)
     char win[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
     char pnf[INST_PATH_CHARS];
+    char alias[INST_PATH_CHARS];
     int named = s98_inf_named_9x(name);
     int s;
 
@@ -14174,6 +14175,12 @@ static int s98_un_inf_9x(const char *name)
         out("(/list) %s would be deleted.\n", path);
         return 1;
     }
+    /* The copy's short alias, read while it exists: SETUPX's OEM Name
+     * record may name it by either. */
+    s = (int)GetShortPathNameA(path, alias, sizeof(alias));
+    if (s <= 0 || s >= (int)sizeof(alias)) {
+        alias[0] = '\0';
+    }
     /* Its .PNF first, then the copy (KB 813449's order). */
     s = file_state(pnf);
     if (s < 0 || (s > 0 && !delete_file(pnf))) {
@@ -14188,7 +14195,7 @@ static int s98_un_inf_9x(const char *name)
         return 0;
     }
     out("Stor98's INF copy %s was deleted.\n", path);
-    oem_name_forget(path, NULL);
+    oem_name_forget(path, alias);
     flagChanged = 1;
     return s98_rec_del("Staged", name);
 }

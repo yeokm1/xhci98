@@ -2150,9 +2150,9 @@ static void test_tray(void)
     CHECK(strstr(inst_tray_list_text(1, INST_TRAY_RUN_DELETE),
                  "would no longer") != NULL, "/list /notray over the value");
     CHECK(strstr(inst_tray_list_text(2, INST_TRAY_RUN_SET),
-                 "another file") != NULL, "/list: other data");
+                 "other data") != NULL, "/list: other data");
     CHECK(strstr(inst_tray_list_text(2, INST_TRAY_RUN_KEEP),
-                 "another file") != NULL, "/list: other data, kept");
+                 "other data") != NULL, "/list: other data, kept");
     CHECK(strstr(inst_tray_list_text(2, INST_TRAY_RUN_DELETE),
                  "removed") != NULL, "/list: other data, /notray");
     /* SETUPX's OEM Name record of a deleted INF\OTHER copy. */
