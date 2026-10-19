@@ -43,6 +43,8 @@
 #define IDC_C_DIR_L             1020
 #define IDC_C_S98               1021
 #define IDC_C_S98_T             1022
+#define IDC_C_UAS               1023
+#define IDC_C_UAS_T             1024
 #define IDC_S_HEAD              1030
 #define IDC_S_ADVANCED          1031
 #define IDC_S_NOTE              1032

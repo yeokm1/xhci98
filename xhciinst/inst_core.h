@@ -382,6 +382,17 @@ int inst_value_allowed(int index, const INST_ENV *env, INST_U32 v);
  * (the window's Advanced rows): its Apply rule's hardware and system. */
 int inst_value_relevant(int index, const INST_ENV *env);
 
+/* 1 when value `index` is shown greyed on this system (owner, 2026-10-19):
+ * its hardware is here and its system is not (a 98 SE and ME value on
+ * 2000 to 7, a 2000-to-7 value on 98 SE and ME), or its controller is not
+ * one the port switch is for. The window shows such a row disabled, with
+ * inst_value_only's words, and it never writes. */
+int inst_value_greyed(int index, const INST_ENV *env);
+
+/* What a greyed row says it is for ("Windows 98 SE and ME only"), or NULL
+ * for a value every system takes. */
+const char *inst_value_only(int index);
+
 /* The value's default: the INF's AddReg line, or, for a value no INF
  * writes (NoInf), the table's. 1 when there is one. */
 int inst_value_default(int index, const char *infText, INST_U32 *def);
@@ -551,6 +562,7 @@ typedef struct _INST_OPTS {
                                23 section 4.5)                           */
     int Stor98;             /* /stor98: the bundled Stor98, unasked      */
     int NoTray;             /* /notray: XHCITR not started at login     */
+    int NoUas;              /* /nouas: xhciuas.inf left out of the run  */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -738,6 +750,13 @@ int inst_staged_again(int hadIdentical, int copiedNow, const char *before,
  * ME, record 23 section 6.3): then no claim that every device is current. */
 const char *inst_confirm_text(int runs, int writes, int nt, int unsure);
 
+/* The window's Summary headline (matrix N1, 2026-10-19): runs, a device
+ * installed or updated; writes, a setting the pages chose (the drivers'
+ * or Stor98's); other, any other change the page lists (a component
+ * added, the tools folder moved). "Every device is current" only when
+ * nothing at all changes. */
+const char *inst_summary_head(int runs, int writes, int other, int nt);
+
 /* ---- the uninstall's selection and order (record 23 section 9.2) ---------------------- */
 
 /* 1 when the service is one of this package's (xhci98, xhciuas, xhcicm). */
@@ -912,6 +931,12 @@ const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor);
  * box can be unticked. */
 int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
                     const char **refusal);
+
+/* The UAS disk driver, xhciuas.sys (owner, 2026-10-19): a child of the
+ * USB drivers, in the run only with them and unless /nouas or its
+ * unticked box leaves it out. Left out, xhciuas.inf is neither staged nor
+ * installed and an xhciuas already installed stays as it is. */
+int inst_uas_decide(int usbInclude, int noUas);
 
 /* The step when that routine is not implemented either: exit 4, nothing
  * changed. */
@@ -1238,6 +1263,8 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 #define INST_PT_UN_TITLE_CM     36
 #define INST_PT_UN_WARN_CM      37
 #define INST_PT_UN_AGREE_CM     38
+#define INST_PT_UAS             39  /* the UAS box (owner, 2026-10-19)    */
+#define INST_PT_UAS_T           40
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1310,6 +1337,13 @@ extern const INST_S98_VALUE instS98Values[INST_S98_COUNT];
  * 98 SE and ME). */
 int inst_s98_applies(int i, int nt);
 
+/* 1 when Stor98's row i is shown greyed on this system: settable on the
+ * other systems only (gone and idle on 98 SE and ME). */
+int inst_s98_greyed(int i, int nt);
+
+/* What such a row says it is for, or NULL for a row of every system. */
+const char *inst_s98_only(int i);
+
 /* The built-in default as text ("auto", "512"), and its one-line sense
  * for the system ("cacheoff on ME, off elsewhere"); me: Windows ME. */
 const char *inst_s98_default(int i, int nt);
@@ -1366,11 +1400,16 @@ void inst_sha256(const unsigned char *data, size_t len, char *hex65);
 
 /* The question "Install Stor98, the bundled NVMe driver?" (record 26
  * section 6.4): never unasked (record 23 section 4.4), so Enter and /yes
- * give N; /stor98 installs it without asking; /list asks nothing. Returns
- * the decision when it is not asked; *asked whether it is, *def what Enter
- * gives. */
-int inst_s98_decide(int haveS98, int yes, int stor98Switch, int list,
+ * give N; /stor98 installs it without asking; /list asks nothing. Part of
+ * the Thunderbolt 3 / USB4 support (owner, 2026-10-19): with tb (that
+ * support in the run) 0, neither asked nor installed. Returns the decision
+ * when it is not asked; *asked whether it is, *def what Enter gives. */
+int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch, int list,
                     int *asked, int *def);
+
+/* The window's Stor98 box (owner, 2026-10-19): under the Thunderbolt 3 /
+ * USB4 box, and open only while that box can be and is ticked. */
+int inst_s98_box_open(int haveS98, int tbHave, int tbTicked);
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
                              int behindTunnel);
 
