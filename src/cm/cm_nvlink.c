@@ -412,13 +412,33 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow)
     return FALSE;
 }
 
-BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN *missed,
-                           BOOLEAN *vanish, BOOLEAN *fresh)
+BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN live,
+                           BOOLEAN *missed, BOOLEAN *vanish, BOOLEAN *fresh)
 {
+    if (gateUp && !live) {
+        /* The loss's own call behind the gate: an obligation of its own,
+         * made once the gate falls whatever the transport, and never the
+         * ordinary held work's (CmNvlinkHoldRun). */
+        *held = *held | CM_HELD_LOSS;
+        return TRUE;
+    }
     if (gateUp) {
         *held = *held | CM_HELD_REENUM | (*vanish ? CM_HELD_VANISH : 0) |
                 (*fresh ? CM_HELD_FRESH : 0);
         return TRUE;
+    }
+    if (*held & CM_HELD_LOSS) {
+        /* A held loss call is paid by this one, lost or not: it removes
+         * the vanished children as that call would. */
+        *vanish = TRUE;
+        *held = *held & ~CM_HELD_LOSS;
+    }
+    if (!live) {
+        /* The loss's own call (NT's unavailable reconciliation) goes
+         * alone: held work and an owed change wait for the transport, as
+         * CmNvlinkHoldRun keeps them, since paying them would read the
+         * bridge and expose while the host interface is lost. */
+        return FALSE;
     }
     if (*held & CM_HELD_REENUM) {
         *vanish = (BOOLEAN)(*vanish || (*held & CM_HELD_VANISH) != 0);
@@ -455,6 +475,20 @@ ULONG CmNvlinkHoldRun(PULONG held, BOOLEAN gateUp, BOOLEAN live,
          * the release). */
         act |= CM_HELD_DO_RELEASE | ((h & CM_HELD_FAIL) ? CM_HELD_DO_FAIL : 0);
         h &= ~(CM_HELD_RELEASE | CM_HELD_FAIL);
+    }
+    if (h & CM_HELD_LOSS) {
+        /* The loss's call (NT's unavailable reconciliation) waits for the
+         * gate alone: made now, removing vanished children with no
+         * exposure, unless a held re-enumeration runs in this pass and
+         * carries the removal itself. */
+        h &= ~CM_HELD_LOSS;
+        if (reenumOn && active) {
+            if ((h & CM_HELD_REENUM) != 0 && live) {
+                h |= CM_HELD_VANISH;
+            } else {
+                act |= CM_HELD_DO_LOSS;
+            }
+        }
     }
     if ((h & CM_HELD_REENUM) != 0 && reenumOn && !live) {
         /* The re-enumeration waits for the transport. */
@@ -493,6 +527,15 @@ ULONG CmNvlinkIdleFor(ULONG configured, BOOLEAN up, BOOLEAN pending)
         return CM_NVLINK_IDLE_MS;
     }
     return configured;
+}
+
+BOOLEAN CmNvlinkServiceDue(PULONG lastUs, ULONG nowUs)
+{
+    if (nowUs - *lastUs < CM_NVLINK_PEND_MS * 1000UL) {
+        return FALSE;
+    }
+    *lastUs = nowUs;
+    return TRUE;
 }
 
 ULONG CmNvlinkAckBoundMs(BOOLEAN nt)

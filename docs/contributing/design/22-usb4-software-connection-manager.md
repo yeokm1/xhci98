@@ -32,6 +32,12 @@ phase; sections 10 and 10.4 point to record 21 section 7.2's 9x half
 manager and reaches this profile's per-port teardown on Windows 98 SE
 and ME.
 
+Revised 2026-10-19 (task 42-A.25, from the matrix reading on Windows ME
+that day): section 10 - only an exposure that itself names a new tunnel
+advances an entry already `UP`; a tunnel named after a resume while the
+secondary bus is not yet numbered labels later publications and is never
+paid by a later exposure that names none.
+
 The sources, and the tag each fact carries below:
 
 - **[spec]** the USB4 Specification 2.0 ("Spec") and the USB4 Connection

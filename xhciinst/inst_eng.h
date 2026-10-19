@@ -132,6 +132,17 @@ int inst_eng_tb_state(int *haveCm, int *present, int *defaultYes,
                       int *installed);
 void inst_eng_tb_choose(int include);
 
+/* The connection manager alone (record 23 section 4.5; record 26 section
+ * 5.3, draft 8): the USB drivers' box, offered (can be unticked) or not,
+ * and whether this is Windows 8 or 8.1, where they are never offered;
+ * the choice, planned again; whether the machine has the connection
+ * manager alone registered (the uninstall's warning); and the version as
+ * record 23 section 4.3 reads it (1 read; 0 not). */
+int inst_eng_usb_state(int *offered, int *notOnThisSystem);
+void inst_eng_usb_choose(int include);
+int inst_eng_cm_only_machine(void);
+int inst_eng_os_read(OSVERSIONINFOA *v);
+
 /* INST_PH_PLAN: the plan for the choices as they stand, its text through
  * Line; run again when they change. Nothing written. -1, or a refusal's
  * code (an unfinished /restage of another package). */

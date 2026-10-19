@@ -1501,6 +1501,27 @@ size_t inst_msz_remove(const char *in, size_t inBytes, const char *name,
     return used;
 }
 
+int inst_filter_drop(const char *in, size_t inBytes, const char *name,
+                     char *out, size_t cap, size_t *outBytes)
+{
+    size_t n;
+    int removed;
+
+    *outBytes = 0;
+    if (in == NULL || !inst_msz_has(in, inBytes, name)) {
+        return INST_FD_NONE;
+    }
+    n = inst_msz_remove(in, inBytes, name, out, cap, &removed);
+    if (n == (size_t)-1) {
+        return INST_FD_ERROR;
+    }
+    if (n == 0) {
+        return INST_FD_DELETE;
+    }
+    *outBytes = n;
+    return INST_FD_SET;
+}
+
 int inst_testsigning(const char *options)
 {
     const char *s = options;
@@ -1957,6 +1978,8 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->SelfTest = 1;
         } else if (inst_switch(a, "thunderbolt")) {
             opts->Thunderbolt = 1;
+        } else if (inst_switch(a, "cmonly")) {
+            opts->CmOnly = 1;
         } else if (inst_switch(a, "stor98")) {
             opts->Stor98 = 1;
         } else if (inst_switch(a, "notray")) {
@@ -2117,6 +2140,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     }
     if (opts->Thunderbolt && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/thunderbolt belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->CmOnly && (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, "/cmonly belongs to an install", NULL);
         return 1;
     }
     if (opts->Stor98 && (opts->Uninstall || opts->Devices || opts->Eject)) {
@@ -2351,6 +2378,24 @@ int inst_busy_spent(const int *tries, int n)
         }
     }
     return 0;
+}
+
+int inst_parent_kind(const char *instanceId, int controller)
+{
+    int old;
+
+    return controller || inst_bus_base(instanceId, &old) != 0;
+}
+
+int inst_settle_after_job(int parent, int outcome, int more)
+{
+    return parent && more && outcome != INST_DI_OUT_ABSENT &&
+           outcome != INST_DI_OUT_REFUSED;
+}
+
+int inst_absent_retry(int outcome, int parentJobs, int retries)
+{
+    return outcome == INST_DI_OUT_ABSENT && parentJobs > 0 && retries == 0;
 }
 
 int inst_tunnel_restart(int win2000, int filterInstalled, int inf, int gone,
@@ -2691,8 +2736,10 @@ int inst_mw_reading(int found, INST_U32 type, INST_U32 bytes, INST_U32 dword,
 
 int inst_mk_system(const INST_ENV *env)
 {
+    /* 2000 to 7, and 8 and 8.1 for the connection manager alone (record 23
+     * section 4.5, revision 13). */
     return env->Nt && (env->Major == 5UL ||
-                       (env->Major == 6UL && env->Minor <= 1UL));
+                       (env->Major == 6UL && env->Minor <= 3UL));
 }
 
 int inst_mk_end_action(int cmService, int tbInRun, int markSystem)
@@ -3149,6 +3196,85 @@ const char *inst_unplug_text(int kind)
                "(USB ports, card\nreaders, network) is in use; stop them in "
                "Windows first.";
     }
+}
+
+/* ======================================================================== */
+/* The system's kind and the USB drivers (record 23 sections 4.3, 4.5)       */
+/* ======================================================================== */
+
+int inst_os_kind(int nt, INST_U32 major, INST_U32 minor, INST_U32 build)
+{
+    if (!nt) {
+        /* 98 SE is 4.10.2222, ME 4.90.3000; 98 (4.10.1998) and 95 are
+         * not targets. */
+        return (major == 4UL && ((minor == 10UL && build >= 2222UL) ||
+                                 minor == 90UL)) ? INST_OS_FULL
+                                                 : INST_OS_REFUSED;
+    }
+    if (major == 5UL && minor <= 2UL) {
+        return INST_OS_FULL;
+    }
+    if (major == 6UL && minor <= 1UL) {
+        return INST_OS_FULL;
+    }
+    if (major == 6UL && (minor == 2UL || minor == 3UL)) {
+        return INST_OS_CMONLY;
+    }
+    return INST_OS_REFUSED;
+}
+
+const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor)
+{
+    if (!nt) {
+        return minor >= 90UL ? "Windows ME" : "Windows 98 SE";
+    }
+    if (major == 5UL) {
+        return minor == 0UL ? "Windows 2000" : minor == 1UL ? "Windows XP"
+                                                            : "Windows XP x64";
+    }
+    if (major == 6UL) {
+        return minor == 0UL ? "Windows Vista" : minor == 1UL ? "Windows 7" :
+               minor == 2UL ? "Windows 8" : minor == 3UL ? "Windows 8.1" :
+               "Windows";
+    }
+    return "Windows";
+}
+
+int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
+                    const char **refusal)
+{
+    *offered = 0;
+    *refusal = NULL;
+    if (osKind == INST_OS_CMONLY) {
+        if (!haveCm) {
+            *refusal = "this package carries no Thunderbolt or USB4 driver: "
+                       "there is nothing to install on Windows 8 or 8.1.";
+            return -1;
+        }
+        return 0;
+    }
+    if (osKind != INST_OS_FULL) {
+        *refusal = "this Windows is not one this package supports.";
+        return -1;
+    }
+    if (!nt) {
+        if (cmOnly) {
+            *refusal = "/cmonly: the connection manager alone is not offered "
+                       "on Windows 98 SE and ME.";
+            return -1;
+        }
+        return 1;
+    }
+    if (!haveCm) {
+        if (cmOnly) {
+            *refusal = "/cmonly: this package carries no Thunderbolt or USB4 "
+                       "driver.";
+            return -1;
+        }
+        return 1;
+    }
+    *offered = 1;
+    return cmOnly ? 0 : 1;
 }
 
 /* ======================================================================== */
@@ -4445,13 +4571,21 @@ const char *inst_self_file(int arch, int which)
     return which == INST_OWN_WINDOW ? "XHCIWIZ.EXE" : "XHCIINST.EXE";
 }
 
-void inst_arp_name(char *out, size_t cap, const char *version, int incomplete)
+int inst_arp_cm_only(int xhciService, int cmService, int runCmOnly)
+{
+    return xhciService == 0 && (cmService == 1 || runCmOnly);
+}
+
+void inst_arp_name(char *out, size_t cap, const char *version, int incomplete,
+                   int cmOnly)
 {
     if (cap == 0) {
         return;
     }
     out[0] = '\0';
-    inst_cat(out, cap, "xHCI98 USB 3.x drivers ");
+    inst_cat(out, cap, cmOnly ? "xHCI98 Thunderbolt 3 / USB4 connection "
+                                "manager "
+                              : "xHCI98 USB 3.x drivers ");
     inst_cat(out, cap, version);
     if (incomplete) {
         inst_cat(out, cap, " (incomplete: run again)");
@@ -4585,7 +4719,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "xHCI98 USB 3.x host controller driver and UAS driver", 270, 10 },
     { INST_PT_DRIVERS_T,
       "xhci98.sys and xhciuas.sys: the controller, its hubs and devices, "
-      "and UAS disks. Always installed.",
+      "and UAS disks.",
       272, 16 },
     { INST_PT_TB, "Thunderbolt 3 / USB4 support (xhcicm.sys)", 270, 10 },
     { INST_PT_TB_T,
@@ -4650,6 +4784,32 @@ const INST_PAGE_TEXT instPageTexts[] = {
       284, 18 },
     { INST_PT_SHUT_NOW, "Shut down now, then start Windows again", 284, 10 },
     { INST_PT_SHUT_LATER, "Shut down later", 284, 10 },
+    { INST_PT_WELCOME_CM,
+      "This installs or updates the xHCI98 Thunderbolt 3 / USB4 connection "
+      "manager on this computer, puts the xHCI98 tools in a folder you "
+      "choose, and asks you to restart Windows at the end. Windows' own USB "
+      "3 driver keeps running the USB controllers. Nothing is changed until "
+      "you click Install on the Summary page. Help opens the readme.",
+      284, 58 },
+    { INST_PT_DRIVERS_T8,
+      "Not offered on Windows 8 and 8.1: Windows' own USB 3 driver runs the "
+      "USB controllers there.",
+      272, 16 },
+    { INST_PT_DRIVERS_OFF,
+      "Left out: the connection manager alone. USB drivers already "
+      "installed stay as they are; the uninstall removes all of them.",
+      272, 16 },
+    { INST_PT_UN_TITLE_CM, "Remove the xHCI98 connection manager", 284, 10 },
+    { INST_PT_UN_WARN_CM,
+      "This removes the xHCI98 Thunderbolt 3 / USB4 connection manager from "
+      "Windows. Devices connected through a Thunderbolt or USB4 port stop "
+      "working when it is removed. Close every program that uses one, and "
+      "save your work, before you go on.",
+      284, 50 },
+    { INST_PT_UN_AGREE_CM,
+      "I have closed every program that uses a device connected through a "
+      "Thunderbolt or USB4 port.",
+      270, 20 },
     { INST_PT_UN_TITLE, "Remove the xHCI98 USB 3.x drivers", 284, 10 },
     { INST_PT_UN_WARN,
       "This removes the xhci98 drivers from Windows. On a machine whose "

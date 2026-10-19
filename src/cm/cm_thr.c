@@ -383,10 +383,23 @@ static BOOLEAN cmCancelled(PVOID context)
     return (BOOLEAN)!CmLiveAdmits(&nhi->Live, nhi->AccessClass);
 }
 
+static ULONG cmClockUs(PVOID context);
+
 static VOID cmStall(PVOID context, ULONG microseconds)
 {
-    UNREFERENCED_PARAMETER(context);
+    PCM_NHI nhi;
+
+    nhi = (PCM_NHI)context;
     KeStallExecutionProcessor(microseconds);
+    /* A wait's busy phase (TbtDeadlineWait, TbtWaitStep: 2 ms of stalls)
+     * never sleeps, so a run of requests that each end inside it - the
+     * TB3 EEPROM reader's hundreds - would pass no servicing point: the
+     * stor98 acknowledgement waits are stepped from here too, at most
+     * once per CM_NVLINK_PEND_MS of the clock since the last step (R10;
+     * task 42-A.12). The contexts are cmSleep's: one wait calls both. */
+    if (CmNvlinkServiceDue(&nhi->StepUs, cmClockUs(nhi))) {
+        CmNvlinkStep(nhi);
+    }
 }
 
 /* A relative due time of `ms` milliseconds in 100 ns units, negative, from
@@ -425,6 +438,7 @@ static VOID cmSleep(PVOID context, ULONG milliseconds)
         cmRelativeMs(&due, part);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         CmNvlinkStep((PCM_NHI)context);
+        ((PCM_NHI)context)->StepUs = cmClockUs(context);
         milliseconds -= part;
     } while (milliseconds != 0);
 }

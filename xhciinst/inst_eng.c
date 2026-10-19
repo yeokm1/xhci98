@@ -109,9 +109,13 @@ static INST_FRONT front;
 #define INST_CM_DRP_DRIVER          0x0000000AUL
 #define INST_INSTALL_WAIT_MS        600000UL   /* the barrier: a wizard answered */
 #define INST_FIRST_WAIT_MS          60000UL    /* before the first change      */
+#define INST_REAPPEAR_MS            15000UL    /* a device a parent's job hid */
 
 #ifndef ERROR_IN_WOW64
 #define ERROR_IN_WOW64 0xE0000235UL
+#endif
+#ifndef ERROR_NO_SUCH_DEVINST
+#define ERROR_NO_SUCH_DEVINST 0xE000020BUL
 #endif
 
 #define INST_MAX_DEVS       1536
@@ -156,6 +160,10 @@ typedef DWORD (WINAPI *PFN_CM_PROP)(DWORD, ULONG, ULONG *, void *, ULONG *,
                                     ULONG);
 typedef DWORD (WINAPI *PFN_CM_WAIT)(DWORD);
 typedef BOOL (WINAPI *PFN_ISWOW64)(HANDLE, PBOOL);
+/* ntdll's RtlGetVersion (record 23 section 4.3, revision 13): the version
+ * GetVersionEx gives a program with no compatibility manifest stops at
+ * 6.2 from Windows 8.1 on. */
+typedef LONG (WINAPI *PFN_RTLGETVERSION)(OSVERSIONINFOW *);
 
 static struct {
     HMODULE SetupApi;
@@ -269,6 +277,11 @@ static char helperPath[INST_PATH_CHARS];    /* its short path, no space   */
 static char helperResult[INST_PATH_CHARS];  /* the result file            */
 static char helperJobFile[INST_PATH_CHARS]; /* the job file (section 4.1) */
 static int helperRan;       /* a device job ran: the steps are per device  */
+static int helperLastOut;   /* the last job's INST_DI_OUT_*, -1 none made  */
+static int parentJobs;      /* parents' jobs (or NT calls) that reached
+                               their device this run: inst_absent_retry */
+static int helperStop;      /* a settle inside a helper job failed: the
+                               passes stop (said by settle_failed)      */
 
 /* The devices the helper could not do, by id, with the line said for
  * each: the steps page's (record 26 section 7), and the steps as text. */
@@ -398,6 +411,14 @@ static int s98_rec_has(const char *sub, const char *name);
 static int file_state(const char *path);
 
 static int haveCm;
+/* The connection manager alone (record 23 section 4.5, revision 13): the
+ * system's kind, and the USB drivers in this run or out of it. */
+static int osKind = INST_OS_FULL;
+static int usbInclude = 1;
+static int usbOffered;
+static void usb_apply(int include);
+static int usb_decide(void);
+static int pkgCmSigned = -1;    /* xhcicm.sys signed: as pkgSigned */
 static int tbInclude = 1;   /* the Thunderbolt question's answer (section 8.5) */
 static int tbNhiPresent;
 static int tbStaged;        /* NT: xhcicm.inf was staged by this run       */
@@ -437,6 +458,8 @@ static int answerChosen[INST_MAX_VALUES];
  * screens front end, which wraps and measures, shown only when
  * XHCIINST_SCREENS is set. */
 static int stScreens;
+static int stCmOnly;        /* the screens: the machine has the connection
+                               manager alone (the uninstall's warning) */
 static int stShow;
 static const char *const *stInput;     /* the self-test's answers */
 
@@ -1547,6 +1570,12 @@ static void group_verdicts(void)
             groupVerdict[g] = INST_GROUP_OK;
             continue;
         }
+        if ((g == 0 || g == 1) && !usbInclude) {
+            /* The connection manager alone: an installed xhci98 or xhciuas
+             * is not part of the run (section 4.5). */
+            groupVerdict[g] = INST_GROUP_OK;
+            continue;
+        }
         for (i = 0; i < devCount; i++) {
             const DEVREC *d = &devs[i];
             if (group_of(d) != g) {
@@ -1776,6 +1805,17 @@ static void print_plan(void)
     if (!any) {
         out("  none present. The INFs are still staged for devices that "
             "appear later.\n");
+    }
+    if (!usbInclude) {
+        for (i = 0; i < devCount; i++) {
+            if (inst_eq(devs[i].Service, "xhci98") ||
+                inst_eq(devs[i].Service, "xhciuas")) {
+                out("  The xHCI98 USB drivers already installed stay as they "
+                    "are (INSTALL.BAT\n  /uninstall removes the whole "
+                    "package).\n");
+                break;
+            }
+        }
     }
     /* Section 5.4: a group's verdict, and the members not present that it
      * covers - they run the same binary, so a refusal or a /force going
@@ -2136,6 +2176,10 @@ static int check_package(void)
                                               flavour, sizeof(flavour));
                 if (inst_eq(name, "xhci98.sys")) {
                     pkgSigned = inst_pe_signed((const unsigned char *)buf, size);
+                }
+                if (inst_eq(name, "xhcicm.sys") && k == INST_INF_CM) {
+                    pkgCmSigned = inst_pe_signed((const unsigned char *)buf,
+                                                 size);
                 }
                 free(buf);
                 if ((markers == 0 && (inst_eq(name, "xhci98.sys") ||
@@ -6040,6 +6084,70 @@ static DWORD call_flags(const DEVREC *x, int inf)
 /* Install or update the planned devices of one INF; controllers selects the
  * xhci98 controllers (1), the rest of xhci98's devices (0), or every device
  * (-1). Returns 0 when a failure leaves the order meaningless. */
+static int settle(INST_U32 limitMs, INST_U32 tellMs, INST_U32 expectMs,
+                  int first);
+static void settle_failed(int r, const char *bound);
+
+/* 1 when device i's call is not the last install_inf makes: a device
+ * after it in the list is one the same call of install_inf (inf,
+ * controllers) still takes. */
+static int nt_more_after(int i, int inf, int controllers)
+{
+    int j;
+
+    for (j = i + 1; j < devCount; j++) {
+        const DEVREC *d = &devs[j];
+        if (!d->Present || d->Inf != inf || !d->Runs || d->Done) {
+            continue;
+        }
+        if ((controllers == 1 && !is_controller(d)) ||
+            (controllers == 0 && is_controller(d))) {
+            continue;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* Up to INST_REAPPEAR_MS for a device a parent's job took away (it comes
+ * back as the parent restarts), then the settle with nothing expected.
+ * 1 settled (whether or not it came back) and not cancelled; 0 the settle
+ * failed or the run was cancelled (said): the caller stops. */
+static int reappear_settle(const char *id)
+{
+    DWORD t0 = GetTickCount();
+    DWORD dn;
+    char want[INST_ID_CHARS];
+    int r;
+
+    inst_copy(want, id, sizeof(want));
+    out("Waiting for the devices to settle ... ");
+    out_flush();
+    while (api.Locate != NULL &&
+           api.Locate(&dn, want, 0) != INST_CR_SUCCESS &&
+           (INST_U32)(GetTickCount() - t0) < INST_REAPPEAR_MS) {
+        if (!waiting(INST_WAIT_SETTLE, (unsigned long)(GetTickCount() - t0),
+                     INST_REAPPEAR_MS, "a device above it is restarting")) {
+            runCancelled = 1;
+            flagSteps = 1;
+            settle_failed(-3, "10 minutes");
+            return 0;
+        }
+        Sleep(INST_SETTLE_POLL_MS);
+    }
+    r = settle(INST_INSTALL_WAIT_MS, 20000UL, 0UL, 0);
+    if (r <= 0) {
+        settle_failed(r, "10 minutes");
+        return 0;
+    }
+    out("done.\n");
+    /* A cancel during the settle's last poll is seen here, before the
+     * next call. */
+    return go_on();
+}
+
+/* 1 done, 0 a controller's call failed (the rest is not attempted), -1 a
+ * settle inside it failed or was cancelled: the run stops (said). */
 static int install_inf(int inf, int controllers)
 {
     static int callIdx[INST_MAX_DEVS];
@@ -6055,6 +6163,7 @@ static int install_inf(int inf, int controllers)
     DWORD flags;
     int mixed;
     int again;
+    int retried;
     int ok = 1;
 
     join(path, sizeof(path), srcDir, infRel[inf]);
@@ -6198,11 +6307,16 @@ static int install_inf(int inf, int controllers)
         out("%s %s ... ", d->Action == INST_ACT_INSTALL ? "Installing" :
             d->Action == INST_ACT_FILTER ? "Adding the filter to" : "Updating",
             d->Desc[0] ? d->Desc : d->Id);
+        retried = 0;
+call:
         reboot = FALSE;
         logonly("\nUpdateDriverForPlugAndPlayDevices(\"%s\", \"%s\", %s)\n",
                 hwid, path, flags ? "FORCE" : "0");
         if (api.UpdateDriver(front.Owner, hwid, path, flags, &reboot)) {
             out("done%s.\n", reboot ? ", restart needed" : "");
+            if (inst_parent_kind(d->Id, is_controller(d))) {
+                parentJobs++;
+            }
             flagChanged = 1;
             if (flags == 0 && inf == INST_INF_CMF) {
                 /* The filter's first install on Windows 2000 goes
@@ -6218,9 +6332,36 @@ static int install_inf(int inf, int controllers)
             if (reboot) {
                 flagRestart = 1;
             }
+            /* A root hub's or hub's update restarts it and takes the
+             * devices below it away for seconds: the next call waits for
+             * them (98 SE leg, 2026-10-19; record 23 section 5.8). */
+            if (controllers != 1 &&
+                inst_settle_after_job(inst_parent_kind(d->Id, 0),
+                                      INST_DI_OUT_OK,
+                                      nt_more_after(i, inf, controllers))) {
+                if (!reappear_settle(d->Id)) {
+                    return -1;
+                }
+            }
             continue;
         }
         err = GetLastError();
+        if (err == ERROR_NO_SUCH_DEVINST &&
+            inst_absent_retry(INST_DI_OUT_ABSENT, parentJobs, retried)) {
+            out("not present at the moment.\n");
+            retried = 1;
+            if (!reappear_settle(d->Id)) {
+                for (j = 0; j < n; j++) {
+                    changedState[callIdx[j]] = 0;
+                }
+                return -1;
+            }
+            out("%s %s again ... ", d->Action == INST_ACT_INSTALL ?
+                "Installing" : d->Action == INST_ACT_FILTER ?
+                "Adding the filter to" : "Updating",
+                d->Desc[0] ? d->Desc : d->Id);
+            goto call;
+        }
         /* Windows' own installer had the device at that moment (2000 leg,
          * 2026-10-15: the new root hub, 0x20, while its Found New Hardware
          * ran): the call is made again after the next barrier's settle, if
@@ -6845,6 +6986,7 @@ static void note_old_entries(void)
 }
 
 static void testsigning_note0(void);
+static void testsigning_note_cm(void);
 
 /* Record 26 section 6.3: with Stor98 ticked, its x64 driver keeps
  * Stor98's own test signature, and its certificate is never imported. */
@@ -6864,6 +7006,10 @@ static void testsigning_note0(void)
 
     testSigningConfirmed = 0;
     if (INST_MY_ARCH != INST_ARCH_AMD64 || envNow.Major < 6) {
+        return;
+    }
+    if (!usbInclude) {
+        testsigning_note_cm();
         return;
     }
     if (reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
@@ -6907,6 +7053,59 @@ static void testsigning_note0(void)
         "change it (the package's readme.txt,\n\"WINDOWS VISTA X64 AND "
         "WINDOWS 7 X64: TEST-SIGNING MODE\"). If this start is\n"
         "an F8 start, go on.\n\n");
+}
+
+/* The note for the connection manager alone (record 23 section 5.10,
+ * revision 13): the binary read is xhcicm.sys, the device that shows the
+ * code the NHI, and on 8 and 8.1 the Secure Boot condition. */
+static void testsigning_note_cm(void)
+{
+    char opt[512];
+    int w8 = envNow.Major == 6 && envNow.Minor >= 2;
+
+    if (!stScreens &&
+        reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
+                 "SystemStartOptions", opt, sizeof(opt), NULL)) {
+        logonly("SystemStartOptions: %s\n", opt);
+        if (inst_testsigning(opt)) {
+            testSigningConfirmed = 1;
+        }
+    }
+    if (pkgCmSigned < 0) {
+        testSigningConfirmed = 0;
+        out("NOTE: whether the x64 connection manager (xhcicm.sys) carries "
+            "a\nsignature could not be read. 64-bit Windows loads a test-signed "
+            "driver\nonly in test-signing mode, and an unsigned one only on a "
+            "start with\ndriver signature enforcement disabled.\n");
+    } else if (pkgCmSigned == 0) {
+        testSigningConfirmed = 0;
+        out("NOTE: the x64 connection manager (xhcicm.sys) in this package "
+            "carries no\nsignature (built without the project's test-signing "
+            "key). 64-bit Windows\nloads it only on a start with driver "
+            "signature enforcement disabled;\ntest-signing mode is not "
+            "enough.\n");
+    } else if (testSigningConfirmed) {
+        out("Test-signing mode is on: the test-signed x64 connection manager "
+            "loads.\n\n");
+        return;
+    } else {
+        out("NOTE: test-signing mode could not be confirmed. The x64 "
+            "connection manager\n(xhcicm.sys) is test-signed: it loads in "
+            "test-signing mode (an elevated\nCommand Prompt: bcdedit /set "
+            "testsigning on  then restart), or on a start\nwith driver "
+            "signature enforcement disabled. This tool does not change "
+            "it.\n");
+    }
+    if (w8) {
+        out("Windows 8 and 8.1: test-signing mode can be turned on only with "
+            "Secure Boot\noff in the computer's firmware setup. The start "
+            "without signature enforcement\nis Advanced startup, Troubleshoot, "
+            "Startup Settings, \"Disable driver\nsignature enforcement\", at "
+            "every start.\n");
+    }
+    out("Otherwise the Thunderbolt or USB4 controller shows a problem code "
+        "(52 on 7).\nIf this start is one without signature enforcement, go "
+        "on.\n\n");
 }
 
 static int confirm(const char *what)
@@ -7181,6 +7380,14 @@ static int plan_nt(void)
                 "one is %s.\n", restagePkg, name);
             return INST_EXIT_REFUSED;
         }
+        if (!usbInclude &&
+            (restagePending[INST_INF_XHCI] || restagePending[INST_INF_UAS])) {
+            out("REFUSED: the unfinished /restage includes the USB "
+                "drivers.\n%s\n", instWindow ? "Tick the xHCI98 USB 3.x "
+                "drivers on the Components page to finish it." : "Run it "
+                "again without /cmonly to finish it.");
+            return INST_EXIT_REFUSED;
+        }
         if (haveCm && !tbInclude &&
             (restagePending[INST_INF_CM] || restagePending[INST_INF_CMF])) {
             out("REFUSED: the unfinished /restage includes the Thunderbolt "
@@ -7251,7 +7458,11 @@ static int run_install_nt(void)
         if (!go_on()) {
             goto stopped;
         }
-        if (!install_inf(INST_INF_XHCI, 1)) {
+        i = install_inf(INST_INF_XHCI, 1);
+        if (i < 0) {
+            goto stopped;
+        }
+        if (i == 0) {
             out("A controller's update failed: the rest is not attempted.\n");
             return inst_exit_code(0, 1, flagRestart, flagSteps);
         }
@@ -7278,7 +7489,9 @@ static int run_install_nt(void)
                  * read too. */
                 s98_tunnel_mark();
             }
-            install_inf(k, k == INST_INF_XHCI ? 0 : -1);
+            if (install_inf(k, k == INST_INF_XHCI ? 0 : -1) < 0) {
+                goto stopped;
+            }
         }
     }
     s98_reconnect_nt();
@@ -7319,7 +7532,8 @@ static int run_install_nt(void)
         /* The second sentence only where it can apply (the 2000 leg read
          * it after a settings-only run). */
         out("\nRESTART Windows to finish.%s\n",
-            (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86) ?
+            (usbInclude && envNow.Major == 6 &&
+             INST_MY_ARCH == INST_ARCH_X86) ?
             " If the controller was updated from 2.3.x on 32-bit\nVista or "
             "7, run INSTALL.BAT again after the restart for the root hub and "
             "hubs." : "");
@@ -8053,6 +8267,7 @@ static int helper_install(DEVREC *d)
             return 1;
         }
     }
+    helperLastOut = -1;
     out("Installing %s ...\n", d->Desc[0] ? d->Desc : d->Id);
     step(INST_STEP_BEGIN, "Installing %s", d->Desc[0] ? d->Desc : d->Id);
     out_flush();
@@ -8070,6 +8285,21 @@ static int helper_install(DEVREC *d)
      * section 6.3): a copy made in it is that device's step. */
     s98_inf_sync();
     v = helper_job(INST_DI_INSTALL, d, inf, force, &r);
+    if (d->Inf != INST_INF_S98 && helperState >= 0 &&
+        inst_absent_retry(inst_di_outcome(INST_DI_INSTALL, v), parentJobs, 0)) {
+        /* A parent's job of this run may have restarted it: the tree
+         * settled, and the job made once more (98 SE update over 3.0.0.0,
+         * 2026-10-19: the hub after its root hub's reinstall). */
+        out("  not present at the moment.\n");
+        if (!reappear_settle(d->Id)) {
+            /* The absent verdict stands for it; the passes stop. */
+            helperStop = 1;
+        } else {
+            out("Installing %s again ...\n", d->Desc[0] ? d->Desc : d->Id);
+            out_flush();
+            v = helper_job(INST_DI_INSTALL, d, inf, force, &r);
+        }
+    }
     c = note_changed(d, 1);
     d->Done = 1;
     if (d->Inf != INST_INF_S98) {
@@ -8086,6 +8316,11 @@ static int helper_install(DEVREC *d)
         }
     }
     out9x = inst_di_outcome(INST_DI_INSTALL, v);
+    helperLastOut = out9x;
+    if (inst_settle_after_job(inst_parent_kind(d->Id, is_controller(d)),
+                              out9x, 1)) {
+        parentJobs++;
+    }
     _snprintf(why, sizeof(why) - 1, "%s%s%s", inst_di_verdict_text(v),
               r.Error[0] ? ": " : (r.Detail[0] && v == INST_DI_V_NONE ? ": " :
                                    ""),
@@ -8201,6 +8436,9 @@ static void helper_installs(void)
                 if (!helper_install(&devs[i])) {
                     controllerFailed = 1;
                 }
+                if (helperStop) {
+                    goto left;
+                }
             }
         }
         if (controllerFailed) {
@@ -8242,10 +8480,31 @@ static void helper_installs(void)
             first = 0;
             for (i = 0; i < devCount; i++) {
                 if (pass_takes(&devs[i], k, k == INST_INF_XHCI ? 0 : -1)) {
+                    int j;
+                    int more = 0;
                     if (!go_on()) {
                         goto left;
                     }
+                    helperLastOut = -1;
                     helper_install(&devs[i]);
+                    if (helperStop) {
+                        goto left;
+                    }
+                    for (j = i + 1; j < devCount && !more; j++) {
+                        more = pass_takes(&devs[j], k,
+                                          k == INST_INF_XHCI ? 0 : -1);
+                    }
+                    /* A root hub's or hub's reinstall restarts it and
+                     * takes the devices below it away for seconds (98 SE
+                     * leg, 2026-10-19): the next job waits for them. */
+                    if (helperLastOut >= 0 &&
+                        inst_settle_after_job(
+                            inst_parent_kind(devs[i].Id,
+                                             is_controller(&devs[i])),
+                            helperLastOut, more) &&
+                        !reappear_settle(devs[i].Id)) {
+                        goto left;
+                    }
                 }
             }
         }
@@ -8550,13 +8809,23 @@ static int run_install_9x(void)
 static int warn_uninstall(void)
 {
     char line[32];
+    int cmOnly = envNow.Nt && inst_eng_cm_only_machine();
 
-    out("*** This removes the xhci98 drivers from Windows. ***\n"
-        "On a machine whose only USB controller is xHCI, the USB keyboard and "
-        "mouse\nstop working when the controller's driver is removed, and stay "
-        "dead until\nanother driver is installed. Have a PS/2 keyboard, a "
-        "laptop's built-in one,\nor a USB controller another driver runs, "
-        "before you go on.\n");
+    if (cmOnly) {
+        /* The connection manager alone (record 23 section 9.1, revision
+         * 13): no USB driver of this package is registered. */
+        out("*** This removes the xHCI98 Thunderbolt 3 / USB4 connection "
+            "manager. ***\nDevices connected through a Thunderbolt or USB4 "
+            "port stop working when it\nis removed. Close every program that "
+            "uses one, and save your work, before\nyou go on.\n");
+    } else {
+        out("*** This removes the xhci98 drivers from Windows. ***\n"
+            "On a machine whose only USB controller is xHCI, the USB keyboard "
+            "and mouse\nstop working when the controller's driver is removed, "
+            "and stay dead until\nanother driver is installed. Have a PS/2 "
+            "keyboard, a laptop's built-in one,\nor a USB controller another "
+            "driver runs, before you go on.\n");
+    }
     if (opts.List) {
         out("(/list: nothing will be changed.)\n\n");
         return 1;
@@ -8565,7 +8834,10 @@ static int warn_uninstall(void)
         out("/yes given: going on without the typed word.\n\n");
         return 1;
     }
-    if (!ask(INST_Q_REMOVE, "Remove the drivers?\n"
+    if (!ask(INST_Q_REMOVE, cmOnly ? "Remove the connection manager?\n"
+             "  REMOVE  go on (type the word in capitals)\n"
+             "  N       cancel: nothing is changed (so does anything else)\n"
+             "  Enter for [N]: " : "Remove the drivers?\n"
              "  REMOVE  go on (type the word in capitals)\n"
              "  N       cancel: nothing is changed (so does anything else)\n"
              "  Enter for [N]: ", 0, 0, 0, NULL, line, sizeof(line))) {
@@ -9230,12 +9502,134 @@ static int mk_stop(SC_HANDLE scm, int *had)
     return 1;
 }
 
+/* The CriticalDeviceDatabase's copies (record 21 section 7.4, step 0):
+ * Windows 2000 and XP copy a boot-critical device's own filter values into
+ * its class's entry there when they install it - a marked unit's
+ * LowerFilters, and the filter INF's UpperFilters of a tunnel port - and
+ * every new device of that class then gets them; with xhcicm gone, a new
+ * bridge or NVMe controller (a boot disk among them) would name a missing
+ * filter. With fix, xhcicm is taken out of every entry's LowerFilters and
+ * UpperFilters, the other names kept in order, the value deleted when
+ * nothing else is in it, and each read back. 1 when the key was read whole
+ * (and, with fix, every change read back); *left the values still naming
+ * xhcicm. */
+static int cddb_scrub(int fix, int *left)
+{
+    static const char *const vals[2] = { "LowerFilters", "UpperFilters" };
+    HKEY root;
+    HKEY k;
+    DWORD i;
+    DWORD nn;
+    DWORD type;
+    DWORD n;
+    LONG r;
+    char name[256];
+    char f[INST_MK_FILTERS];
+    char nf[INST_MK_FILTERS];
+    size_t ob;
+    int act;
+    int v;
+    int ok = 1;
+
+    *left = 0;
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_CDDB_KEY, 0, KEY_READ, &root);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (r != ERROR_SUCCESS) {
+        out("The CriticalDeviceDatabase could not be read (error %ld).\n", r);
+        return 0;
+    }
+    for (i = 0;; i++) {
+        nn = sizeof(name);
+        r = RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS) {
+            out("The CriticalDeviceDatabase ended early (error %ld).\n", r);
+            ok = 0;
+            break;
+        }
+        if (RegOpenKeyExA(root, name, 0,
+                          fix ? KEY_QUERY_VALUE | KEY_SET_VALUE : KEY_QUERY_VALUE,
+                          &k) != ERROR_SUCCESS) {
+            out("CriticalDeviceDatabase\\%s could not be opened.\n", name);
+            ok = 0;
+            continue;
+        }
+        for (v = 0; v < 2; v++) {
+            memset(f, 0, sizeof(f));
+            n = sizeof(f) - 2;
+            r = RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n);
+            if (r == ERROR_FILE_NOT_FOUND) {
+                continue;
+            }
+            if (r != ERROR_SUCCESS) {
+                out("CriticalDeviceDatabase\\%s's %s could not be read.\n",
+                    name, vals[v]);
+                ok = 0;
+                continue;
+            }
+            if (type != REG_MULTI_SZ && type != REG_SZ) {
+                continue;
+            }
+            act = inst_filter_drop(f, n + 1, INST_MK_NAME, nf, sizeof(nf), &ob);
+            if (act == INST_FD_NONE) {
+                continue;
+            }
+            logonly("cddb: %s names %s in its %s\n", name, INST_MK_NAME,
+                    vals[v]);
+            if (!fix) {
+                (*left)++;
+                continue;
+            }
+            if (act == INST_FD_SET) {
+                r = RegSetValueExA(k, vals[v], 0, REG_MULTI_SZ,
+                                   (const BYTE *)nf, (DWORD)ob);
+            } else if (act == INST_FD_DELETE) {
+                r = RegDeleteValueA(k, vals[v]);
+            } else {
+                r = ERROR_INSUFFICIENT_BUFFER;
+            }
+            /* Read back. */
+            memset(f, 0, sizeof(f));
+            n = sizeof(f) - 2;
+            if (r == ERROR_SUCCESS) {
+                r = RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n);
+                if (r == ERROR_FILE_NOT_FOUND) {
+                    r = ERROR_SUCCESS;
+                } else if (r == ERROR_SUCCESS &&
+                           inst_filter_drop(f, n + 1, INST_MK_NAME, nf,
+                                            sizeof(nf), &ob) != INST_FD_NONE) {
+                    r = ERROR_INVALID_DATA;
+                }
+            }
+            if (r != ERROR_SUCCESS) {
+                out("%s could not be removed from CriticalDeviceDatabase\\%s's "
+                    "%s (error %ld).\n", INST_MK_NAME, name, vals[v], r);
+                (*left)++;
+                ok = 0;
+                continue;
+            }
+            flagChanged = 1;
+            out("%s was removed from CriticalDeviceDatabase\\%s's %s (a copy "
+                "Windows made at a device's install).\n", INST_MK_NAME, name,
+                vals[v]);
+        }
+        RegCloseKey(k);
+    }
+    RegCloseKey(root);
+    return ok;
+}
+
 /* Every PCI devnode, present or not, its LowerFilters read (record 21
- * section 7.4, step 0). With fix, xhcicm is removed from each value that
- * names it, the other names kept in order, the value deleted when nothing
- * else is in it, and each read back. 1 when the enumeration reached its end
- * and every value was read (and, with fix, every removal read back); *left
- * the values still naming xhcicm. */
+ * section 7.4, step 0), and the CriticalDeviceDatabase's copies
+ * (cddb_scrub). With fix, xhcicm is removed from each value that names it,
+ * the other names kept in order, the value deleted when nothing else is in
+ * it, and each read back. 1 when the enumeration reached its end and every
+ * value was read (and, with fix, every removal read back); *left the values
+ * still naming xhcicm. */
 static int mk_inventory(int fix, int *left)
 {
     HDEVINFO set;
@@ -9259,6 +9653,16 @@ static int mk_inventory(int fix, int *left)
         out("The device-property routines are missing: the Thunderbolt "
             "safe-removal marks\ncannot be read.\n");
         return 0;
+    }
+    /* The CriticalDeviceDatabase first: it is the source new devices take
+     * the name from, so the devices are read after it is clean. */
+    {
+        int cleft;
+
+        if (!cddb_scrub(fix, &cleft)) {
+            ok = 0;
+        }
+        *left += cleft;
     }
     set = api.GetClassDevs(NULL, "PCI", NULL, DIGCF_ALLCLASSES);
     if (set == INVALID_HANDLE_VALUE) {
@@ -9420,7 +9824,9 @@ static int mk_remove(void)
     if (opts.List) {
         ok = mk_inventory(0, &left);
         if (left > 0) {
-            out("(/list) %s would be removed from %d device(s)' LowerFilters.\n",
+            out("(/list) %s would be removed from %d filter value(s) (devices' "
+                "LowerFilters,\nthe CriticalDeviceDatabase's LowerFilters and "
+                "UpperFilters).\n",
                 INST_MK_NAME, left);
         }
         if (svc_state(INST_MK_SERVICE) == 1) {
@@ -9451,6 +9857,18 @@ static int mk_remove(void)
         return 0;
     }
     ok = mk_inventory(1, &left) && left == 0;
+    if (ok) {
+        /* Read once more, both the database and the devices: Windows does
+         * not take the write lock, and a device it found during the
+         * removal may have taken the name from a copy. */
+        int again;
+
+        ok = mk_inventory(0, &again) && again == 0;
+        if (!ok) {
+            out("A Thunderbolt safe-removal mark (xhcicm) is still named after "
+                "its removal.\n");
+        }
+    }
     if (ok) {
         LONG r = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_MK_MARKS_KEY);
         if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
@@ -9846,9 +10264,9 @@ static int run_uninstall_nt(void)
     {
         int left;
         if (!mk_inventory(0, &left) || left != 0) {
-            return stop_uninstall("a device still names xhcicm in its "
-                                  "LowerFilters, so xhcicm's service\nand "
-                                  "file stay.");
+            return stop_uninstall("a device or a CriticalDeviceDatabase entry "
+                                  "still names xhcicm in its filters,\nso "
+                                  "xhcicm's service and file stay.");
         }
     }
     remove_services_and_files();
@@ -12007,6 +12425,8 @@ static void tb_question(void)
             }
         }
         tbInclude = r;
+    } else if (!usbInclude) {
+        out("  The connection manager alone: installed without asking.\n");
     } else if (opts.Thunderbolt) {
         out("  /thunderbolt: installed without asking.\n");
     } else if (opts.List) {
@@ -12035,8 +12455,11 @@ static int tb_decide(int *asked, int *def, int *installed)
 
     tb_apply(1);
     tbNhiPresent = envNow.CmNhi;
-    include = inst_tb_decide(haveCm, tbNhiPresent, opts.Yes, opts.Thunderbolt,
-                             opts.List, asked, def);
+    /* Without the USB drivers the Thunderbolt support is all the run
+     * installs: in it unasked (section 8.5, revision 13). */
+    include = inst_tb_decide(haveCm, tbNhiPresent, opts.Yes,
+                             opts.Thunderbolt || !usbInclude, opts.List, asked,
+                             def);
     *installed = 0;
     for (i = 0; i < devCount; i++) {
         if (inst_eq(devs[i].Service, "xhcicm") ||
@@ -12061,6 +12484,23 @@ static void s98_apply(int include)
         inst_inf_models(s98Text, &envNow, &infIds[INST_INF_S98]);
     }
     plan();
+}
+
+/* The USB drivers in this run or out of it (record 23 section 4.5): the
+ * connection manager alone takes xhci98.inf and xhciuas.inf out, as a No
+ * to the Thunderbolt question takes its INFs out. The texts are kept, so
+ * the window can tick the box again; the caller plans again. */
+static void usb_apply(int include)
+{
+    int k;
+
+    for (k = INST_INF_XHCI; k <= INST_INF_UAS; k++) {
+        if (infKeep[k] == NULL) {
+            infKeep[k] = infText[k];
+        }
+        infText[k] = include ? infKeep[k] : NULL;
+    }
+    usbInclude = include ? 1 : 0;
 }
 
 static void tb_apply(int include)
@@ -14219,6 +14659,8 @@ void inst_eng_usage(void)
 "                (default C:\\XHCI98, or where an earlier install put them)\n"
 "  /force        reinstall this release, or install it over a newer one\n"
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
+"  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
+"                without the USB drivers (2000 to 7; on 8 and 8.1 always)\n"
 "  /stor98       install the bundled Stor98 NVMe driver without asking\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
@@ -14425,6 +14867,42 @@ static void st_screens_once(int longest)
         stInput = un;
         warn_uninstall();
     }
+
+    /* The connection manager alone (record 23 section 4.5): Windows 8.1,
+     * the USB drivers out of the run, the controller's installed xhci98
+     * left as it is, the Thunderbolt controller a new install; then
+     * /cmonly on 7, and the uninstall's warning on such a machine. */
+    for (k = 0; k < 2; k++) {
+        memset(&opts, 0, sizeof(opts));
+        envNow.Nt = 1;
+        envNow.Major = 6;
+        envNow.Minor = k == 0 ? 3 : 1;
+        osKind = k == 0 ? INST_OS_CMONLY : INST_OS_FULL;
+        opts.CmOnly = k == 1;
+        infText[INST_INF_XHCI] = (char *)stInfXhci;
+        load_ids();
+        out("==== %s, the connection manager alone\n", k == 0 ? "8.1" : "7");
+        usb_decide();
+        devs[0].Inf = -1;
+        devs[1].Inf = -1;
+        devs[2].Inf = INST_INF_CM;
+        devs[2].Action = INST_ACT_INSTALL;
+        stInput = nt1;
+        tb_question();
+        print_plan();
+        for (i = -1; i <= 1; i++) {
+            pkgCmSigned = i;
+            testsigning_note_cm();
+        }
+        pkgCmSigned = -1;
+        testSigningConfirmed = 0;
+        stCmOnly = 1;
+        stInput = un;
+        warn_uninstall();
+        stCmOnly = 0;
+        usb_apply(1);
+    }
+    osKind = INST_OS_FULL;
     stInput = NULL;
     infText[INST_INF_XHCI] = NULL;
     infText[INST_INF_CM] = NULL;
@@ -15071,7 +15549,12 @@ static void arp_write(int incomplete)
                 window, toolDir);
         return;
     }
-    inst_arp_name(name, sizeof(name), XHCIINST_VERSION, incomplete);
+    /* Named by what is registered (record 26 section 9.1, draft 8). */
+    inst_arp_name(name, sizeof(name), XHCIINST_VERSION, incomplete,
+                  envNow.Nt && inst_arp_cm_only(svc_state("xhci98"),
+                                                svc_state("xhcicm"),
+                                                !opts.Uninstall &&
+                                                !usbInclude));
     if (!inst_arp_command(cmd, sizeof(cmd), toolDir, window, envNow.Nt)) {
         out("The Add/Remove Programs entry cannot name %s.\n", exe);
         flagFailed = 1;
@@ -15226,6 +15709,44 @@ int inst_eng_selftest(void)
     return selftest();
 }
 
+/* The version as record 23 section 4.3 reads it (revision 13): on NT
+ * RtlGetVersion's, looked up at run time, the CSD string GetVersionExA's;
+ * where the routine is missing GetVersionExA's alone, which is true below
+ * 6.2 and refused from it. 0: not read (dwOSVersionInfoSize nonzero when
+ * only the exact reading failed). */
+int inst_eng_os_read(OSVERSIONINFOA *v)
+{
+    PFN_RTLGETVERSION rtl;
+    OSVERSIONINFOW w;
+    HMODULE nt;
+
+    memset(v, 0, sizeof(*v));
+    v->dwOSVersionInfoSize = sizeof(*v);
+    if (!GetVersionExA(v)) {
+        v->dwOSVersionInfoSize = 0;
+        return 0;
+    }
+    if (v->dwPlatformId != VER_PLATFORM_WIN32_NT) {
+        return 1;
+    }
+    nt = GetModuleHandleA("ntdll.dll");
+    rtl = nt != NULL ? (PFN_RTLGETVERSION)GetProcAddress(nt, "RtlGetVersion")
+                     : NULL;
+    memset(&w, 0, sizeof(w));
+    w.dwOSVersionInfoSize = sizeof(w);
+    if (rtl != NULL && rtl(&w) == 0) {
+        v->dwMajorVersion = w.dwMajorVersion;
+        v->dwMinorVersion = w.dwMinorVersion;
+        v->dwBuildNumber = w.dwBuildNumber;
+        return 1;
+    }
+    if (v->dwMajorVersion > 6 ||
+        (v->dwMajorVersion == 6 && v->dwMinorVersion >= 2)) {
+        return 0;
+    }
+    return 1;
+}
+
 int inst_eng_begin(int argc, char **argv)
 {
     PFN_ISWOW64 isWow64;
@@ -15245,12 +15766,16 @@ int inst_eng_begin(int argc, char **argv)
         logonly("argv[%d] = %s\n", i, argv[i]);
     }
 
-    memset(&osv, 0, sizeof(osv));
-    osv.dwOSVersionInfoSize = sizeof(osv);
-    if (!GetVersionExA(&osv)) {
-        out("The Windows version could not be read.\n");
+    if (!inst_eng_os_read(&osv)) {
+        out("The Windows version could not be read%s.\n",
+            osv.dwOSVersionInfoSize != 0 ? " exactly (ntdll.dll's "
+            "RtlGetVersion is missing, and Windows answers 6.2 or later)"
+            : "");
         return INST_EXIT_REFUSED;
     }
+    osKind = inst_os_kind(osv.dwPlatformId == VER_PLATFORM_WIN32_NT,
+                          osv.dwMajorVersion, osv.dwMinorVersion,
+                          osv.dwBuildNumber & 0xFFFFUL);
     out("Windows %lu.%lu.%lu %s\n\n", (unsigned long)osv.dwMajorVersion,
         (unsigned long)osv.dwMinorVersion,
         (unsigned long)(osv.dwBuildNumber & 0xFFFFUL), osv.szCSDVersion);
@@ -15271,11 +15796,10 @@ int inst_eng_begin(int argc, char **argv)
         }
     } else if (osv.dwPlatformId == VER_PLATFORM_WIN32_NT) {
         envNow.Nt = 1;
-        if (osv.dwMajorVersion < 5 ||
-            (osv.dwMajorVersion == 6 && osv.dwMinorVersion > 1) ||
-            osv.dwMajorVersion > 6) {
+        if (osKind == INST_OS_REFUSED) {
             out("This Windows is not one this package supports (2000, XP, "
-                "XP x64, Vista, 7).\n");
+                "XP x64, Vista, 7;\n8 and 8.1 for the Thunderbolt 3 / USB4 "
+                "connection manager alone).\n");
             return INST_EXIT_REFUSED;
         }
         isWow64 = (PFN_ISWOW64)GetProcAddress(GetModuleHandleA("kernel32.dll"),
@@ -15303,6 +15827,22 @@ int inst_eng_begin(int argc, char **argv)
     }
     if (!envNow.Nt && INST_MY_ARCH != INST_ARCH_X86) {
         return INST_EXIT_REFUSED;
+    }
+    if (opts.CmOnly && !envNow.Nt) {
+        out("REFUSED: /cmonly: the connection manager alone is not offered on "
+            "Windows 98 SE\nand ME; the USB drivers are what runs the "
+            "controllers there.\n");
+        return INST_EXIT_REFUSED;
+    }
+    for (i = 0; i < opts.SetCount; i++) {
+        int sk = instValues[opts.SetIndex[i]].Inf;
+        if ((opts.CmOnly || osKind == INST_OS_CMONLY) &&
+            (sk == INST_INF_XHCI || sk == INST_INF_UAS)) {
+            out("REFUSED: /set %s:\nthe USB drivers are not in this run "
+                "(/cmonly, or Windows 8 and 8.1).\n",
+                instValues[opts.SetIndex[i]].Name);
+            return INST_EXIT_REFUSED;
+        }
     }
     for (i = 0; i < opts.SetCount; i++) {
         if (!inst_value_allowed(opts.SetIndex[i], &envNow, opts.SetValue[i])) {
@@ -15386,8 +15926,77 @@ int inst_eng_read(void)
         }
         return INST_EXIT_REFUSED;
     }
+    if (!usb_decide()) {
+        return INST_EXIT_REFUSED;
+    }
     plan();
     return -1;
+}
+
+/* Record 23 section 4.5: the USB drivers in the run or out of it, before
+ * the first plan. 0 refused. */
+static int usb_decide(void)
+{
+    const char *why;
+    int r = inst_usb_decide(osKind, envNow.Nt, haveCm, opts.CmOnly,
+                            &usbOffered, &why);
+
+    if (r < 0) {
+        out("REFUSED: %s\n", why != NULL ? why : "the components.");
+        return 0;
+    }
+    if (osKind == INST_OS_CMONLY) {
+        out("%s: this package installs the Thunderbolt 3 / USB4 connection "
+            "manager\nalone here. Windows' own USB 3 driver keeps running the "
+            "USB controllers.\n\n",
+            inst_os_name(1, envNow.Major, envNow.Minor));
+        if (haveS98) {
+            /* Not one of Stor98's targets (decision D18). */
+            out("Stor98, the bundled NVMe driver, is not offered on Windows 8 "
+                "or 8.1.\n\n");
+            haveS98 = 0;
+            s98_apply(0);
+        }
+    } else if (r == 0) {
+        out("/cmonly: the Thunderbolt 3 / USB4 connection manager alone; the "
+            "USB drivers\nare left out of this run.\n\n");
+    }
+    usb_apply(r);
+    logonly("usb drivers: kind %d, offered %d, include %d\n", osKind,
+            usbOffered, usbInclude);
+    return 1;
+}
+
+/* The window's USB drivers' box (record 26 section 5.3, draft 8): *offered
+ * 1 when it can be unticked; returns whether they are in the run. */
+int inst_eng_usb_state(int *offered, int *notOnThisSystem)
+{
+    *offered = usbOffered;
+    *notOnThisSystem = osKind == INST_OS_CMONLY;
+    return usbInclude;
+}
+
+void inst_eng_usb_choose(int include)
+{
+    if (!usbOffered) {
+        return;
+    }
+    usb_apply(include);
+    plan();
+    logonly("usb drivers: chosen %d\n", usbInclude);
+}
+
+/* 1 when this machine has the connection manager alone registered (the
+ * uninstall's warning, record 23 section 9.1, revision 13). */
+int inst_eng_cm_only_machine(void)
+{
+    if (stScreens) {
+        return stCmOnly;
+    }
+    if (!envNow.Nt && (GetVersion() & 0x80000000UL) != 0) {
+        return 0;
+    }
+    return inst_arp_cm_only(svc_state("xhci98"), svc_state("xhcicm"), 0);
 }
 
 void inst_eng_tb_question(void)

@@ -2014,9 +2014,9 @@ int tr_usb_rule(const TR_USBF *f, const char **why)
         *why = "a wireless radio";
         return TR_UE_DETAILS;
     }
-    /* Held for eject (Code 47): its disks are gone with the eject, and it
-     * is shown stopped, never offered. */
-    if (f->Problem == TR_CM_PROB_HELD_FOR_EJECT) {
+    /* Held for eject (Code 47, or 24 on 2000): its disks are gone with the
+     * eject, and it is shown stopped, never offered. */
+    if (tr_held_for_eject(f->Problem, f->W2k)) {
         *why = "stopped - unplug it";
         return TR_UE_LISTED;
     }
@@ -2026,10 +2026,6 @@ int tr_usb_rule(const TR_USBF *f, const char **why)
     if (f->Disks == 0 && (!f->Nt || f->Volumes == 0)) {
         *why = "no disk on it";
         return TR_UE_DETAILS;
-    }
-    if (f->Problem == TR_CM_PROB_HELD_FOR_EJECT) {
-        *why = "stopped - unplug it";
-        return TR_UE_LISTED;
     }
     if (f->Problem != 0) {
         *why = "Windows could not start it";
@@ -2287,10 +2283,21 @@ void tr_wrap(const char *in, char *out, size_t cap, int width)
     }
 }
 
-int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
-                    size_t sentenceCap)
+int tr_held_for_eject(TR_U32 problem, int w2k)
 {
-    if (problem == TR_CM_PROB_HELD_FOR_EJECT) {
+    return problem == TR_CM_PROB_HELD_FOR_EJECT ||
+           (w2k && problem == TR_CM_PROB_DEVICE_NOT_THERE);
+}
+
+int tr_w2k_code24(int w2k, int stoppedHere, int atPort, unsigned int config)
+{
+    return w2k && stoppedHere && (!atPort || config != 0);
+}
+
+int tr_stopped_text(TR_U32 problem, int w2k, char *tag, size_t tagCap,
+                    char *sentence, size_t sentenceCap)
+{
+    if (tr_held_for_eject(problem, w2k)) {
         tr_copy(tag, "stopped - unplug it", tagCap);
         tr_copy(sentence, "Stopped: you can unplug it.", sentenceCap);
         return 1;
@@ -2319,10 +2326,7 @@ int tr_usb_after_kind(int walked, int found, int walkBad, int started,
     if (!found) {
         return walkBad == 0 ? TR_UA_UNPLUG : TR_UA_UNKNOWN;
     }
-    if (problem == TR_CM_PROB_HELD_FOR_EJECT) {
-        return TR_UA_UNPLUG;
-    }
-    if (w2k && problem == TR_CM_PROB_DEVICE_NOT_THERE) {
+    if (tr_held_for_eject(problem, w2k)) {
         return TR_UA_UNPLUG;
     }
     return TR_UA_UNKNOWN;
