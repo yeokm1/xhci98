@@ -1,7 +1,9 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 13, 2026-10-19 (the connection manager alone, and
-Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
+Status: revision 14, 2026-10-19 (task 42-A.22, record 26 draft 9: Stor98
+part of the Thunderbolt support, the UAS driver a component of its own;
+sections 4.4, 7.1 and 8.1); revision 13, 2026-10-19 (the connection
+manager alone, and Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
 service and the machine-wide key); revision 11, 2026-10-18 (the window,
 the helper, the uninstall
 from Add/Remove Programs; see below); revision 10, 2026-10-16 (the
@@ -509,7 +511,17 @@ leaves out every file whose name starts with `stor98`
 (`inst_bundled_file`), because a copy of `stor98.inf` on `DevicePath`
 would have the hardware wizard install Stor98 unasked. Where a flavour
 directory carries Stor98, the run names where it is and says the tool
-does not install it.
+does not install it. (Revision 11 copies it when the user ticks it,
+record 26 section 6.3; revision 14 only with the Thunderbolt 3 / USB4
+support in the run, which Stor98 is part of, owner, 2026-10-19.)
+
+**The UAS driver left out (revision 14).** Under `/nouas`, or its
+unticked box in the window (record 26 section 5.3), `xhciuas.inf` and
+`xhciuas.sys` are left out of the 98 SE and ME copy, since a copy on
+`DevicePath` would have the hardware wizard install it unasked; on NT
+`xhciuas.inf` is not staged. An `xhciuas` already installed stays as it
+is and gets no group verdict (`group_verdicts`), and an unfinished
+`/restage` that includes it is refused while it is left out.
 
 ### 4.5 The connection manager alone (revision 13)
 

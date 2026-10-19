@@ -356,7 +356,7 @@ Check boxes, one a line, each with one sentence:
 | Thunderbolt 3 / USB4 support (`xhcicm.sys`) | as record 23 section 8.5 decides: with a controller present yes, with none no | yes | the connection manager; its warning sentence (a device plugged into that port can reach the computer's memory) stands under the box, with "see `XhciCmApprove` on the Thunderbolt settings page" |
 | Stor98, the NVMe driver (bundled) | never unasked (record 23 section 4.4; owner, 2026-10-18) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked, unticked and greyed when it is unticked or greyed (a package without the support shows both greyed; `inst_s98_box_open`); shown only when the flavour directory carries it; one sentence saying what it is for (an NVMe drive behind a Thunderbolt or USB4 tunnel, or an internal one) and that it installs on NVMe drives that have no driver (section 6.3) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
-| The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, Next disabled until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
+| The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next disabled until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
 The component page is not shown under `/uninstall`. Unticking Thunderbolt
 support does what record 23 section 8.5's N does; unticking the tray tool
@@ -471,7 +471,8 @@ DWORD); on 2000 to 7 the one `DriverParameter` string (`REG_SZ`) under
 separated by semicolons (`writethrough=`, `pollmode=`, `maxtransferkb=`,
 `pollbusyus=`, `pollidlems=`, `pollspinus=`, `gone=`, `idle=`), which the
 engine reads, edits one key at a time and writes back whole, keeping a
-pair it does not know and the order it found. The page names Stor98's
+pair it does not know and the order it found. Its rows are 48 dialog units apart with an etched line between them, as
+section 5.4's are (owner, 2026-10-19). The page names Stor98's
 readme as the authority, from which the table's meanings, defaults,
 ranges, types and key names are copied at the version the package bundles
 (`-Stor98Version`), and the host suite checks every row against that
@@ -484,7 +485,15 @@ The page is not shown when Stor98 is unticked.
 
 What will happen, in the console's confirmation words (record 23 section
 7.4: install and stage, write settings only, or check only), then the
-list: each device and its action, each component, each setting that will
+list. The headline is decided from what the list under it shows
+(`inst_summary_head`, matrix N1, 2026-10-19): a device run gives the
+install's line; otherwise a setting the pages chose (the drivers', only
+for a component in the run, or Stor98's) gives "Write the changed
+settings", any other listed change (the Thunderbolt support added,
+Stor98 ticked, the tools installed for the first time or moved, the USB
+Tree's start at login turned on or off) "Make the changes listed
+below", both together say both, and "Every device is current and no
+setting changes" stands only when nothing changes. The list: each device and its action, each component, each setting that will
 be written with its location, the tools folder, and on 98 SE and ME the
 sentence that Windows' own wizards may open for the devices the controller
 shows after its restart. The button is Install (Remove under `/uninstall`,
@@ -495,7 +504,11 @@ section 9). Nothing is written before it.
 A list of record 23's steps in order as `INST_STEP`s arrive (the copy, the
 staging, each device, each barrier's wait, each value, the tray tool),
 each with its state (waiting, running, done, failed, skipped, left for the
-user), a progress bar over the steps, and the log's path. A wait shows
+user): a step's outcome takes the place of its "running" row, so no row
+stays "running" once its step has ended (matrix N2, 2026-10-19; the
+engine ends every step it begins, a failure included), and an outcome
+with no step open, a value written, is a row of its own; a progress bar
+over the steps, and the log's path. A wait shows
 what it waits for and its bound (`INST_WAIT`): "Windows is installing a
 device it found (2 of 10 minutes); answer the window it opened". Cancel
 during the progress is record 23's stop at a step boundary; the page says
@@ -984,7 +997,11 @@ nothing changed; closed during the progress, the cancel of section 5.8.
   warning, and its location rule (machine-wide for the drivers' values,
   Stor98's two forms for Stor98's); the suite checks every asked and
   advanced row against the INFs of `src\` and `src\cm\` as today, which
-  rows are shown greyed on which system (section 5.4), and every
+  rows are shown greyed on which system (section 5.4; `inst_value_greyed`,
+  `inst_value_only`, `inst_s98_greyed`, `inst_s98_only`), the component
+  boxes' dependencies (`inst_s98_box_open`, `inst_uas_decide`, Stor98
+  with the Thunderbolt support in `inst_s98_decide`), the Summary's
+  headline (`inst_summary_head`), and every
   Stor98 row against the bundled Stor98's readme table (the row names and
   ranges, read from `docs\` of the pinned Stor98 release folder at build
   time by the suite, so a renamed value fails the build);
@@ -1053,6 +1070,12 @@ this list is the whole of it:
   cases, the self-test of the window.
 - Section 13: D2 (the 98 SE and ME route) gains the helper; D10, D11 and
   D14 unchanged.
+
+Draft 9 (task 42-A.22) changes record 23 by its revision 14: section
+4.4 (Stor98 copied only with the Thunderbolt support; `xhciuas` left out
+of the 98 SE and ME copy under `/nouas`), 7.1 (`/stor98` needs
+`/thunderbolt` or `/cmonly`; `/nouas`), 8.1 (`XhciSilentInstall` shown
+greyed by the window on 2000 to 7).
 
 Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 (the connection manager alone), 4.3 (Windows 8 and 8.1, `RtlGetVersion`),

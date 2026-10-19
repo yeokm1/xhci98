@@ -839,6 +839,7 @@ static void comp_fill(HWND dlg)
     /* The folder's refusal takes the place of the 98 SE and ME line
      * under it, so the page fits a 640 by 480 screen with the UAS box. */
     SetDlgItemTextA(dlg, IDC_C_DIR_WHY, "");
+    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_HIDE);
     ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_SHOW);
 }
 
@@ -898,9 +899,11 @@ static int comp_leave(HWND dlg)
         text[sizeof(text) - 1] = '\0';
         SetDlgItemTextA(dlg, IDC_C_DIR_WHY, text);
         ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_HIDE);
+        ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_SHOW);
         return 0;
     }
     SetDlgItemTextA(dlg, IDC_C_DIR_WHY, "");
+    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_HIDE);
     ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_SHOW);
     inst_copy(dirChoice, checked, sizeof(dirChoice));
     trayChoice = IsDlgButtonChecked(dlg, IDC_C_TRAY) == BST_CHECKED;
