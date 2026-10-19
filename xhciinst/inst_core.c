@@ -4951,8 +4951,8 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_S98, "Stor98, the bundled NVMe driver (a separate project)",
       258, 10 },
     { INST_PT_S98_T,
-      "For an NVMe drive behind a Thunderbolt or USB4 tunnel, or an "
-      "internal one; it installs only on NVMe drives with no driver.",
+      "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer "
+      "selects tunnel drives only.",
       260, 18 },
     { INST_PT_S98SET,
       "Stor98's settings (its readme, SETTINGS). A row left as it is writes "
@@ -5475,6 +5475,111 @@ int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
                              int behindTunnel)
 {
     return nt && updatedOk && ownCm && behindTunnel;
+}
+
+int inst_s98_place(int found, int changing, int whole, int cmAll,
+                   int verifiedAbove, int portAbove)
+{
+    if (!found || changing) {
+        return INST_S98_AT_UNKNOWN;
+    }
+    if (verifiedAbove) {
+        return INST_S98_AT_TUNNEL;
+    }
+    if (!whole || !cmAll || portAbove) {
+        return INST_S98_AT_UNKNOWN;
+    }
+    return INST_S98_AT_INTERNAL;
+}
+
+int inst_s98_eligible(int tbInRun, int place)
+{
+    if (!tbInRun) {
+        return INST_S98_NEEDS_TB;
+    }
+    if (place == INST_S98_AT_TUNNEL) {
+        return INST_S98_ELIGIBLE;
+    }
+    return place == INST_S98_AT_INTERNAL ? INST_S98_SKIP_INTERNAL :
+           INST_S98_SKIP_UNKNOWN;
+}
+
+const char *inst_s98_skip_text(int why, int brief)
+{
+    switch (why) {
+    case INST_S98_SKIP_INTERNAL:
+        return brief ? "left: an internal drive (Stor98 goes on tunnel drives)" :
+               "an internal drive, not behind a Thunderbolt or USB4 tunnel: "
+               "the installer leaves it as it is (Stor98 goes on tunnel "
+               "drives only)";
+    case INST_S98_SKIP_UNKNOWN:
+        return brief ? "left: where it sits could not be read" :
+               "where it sits could not be read (no Thunderbolt connection "
+               "manager answered, or the reading was not whole): left as it "
+               "is; run the installer again once the Thunderbolt driver runs";
+    case INST_S98_NEEDS_TB:
+        return brief ? "left: Stor98 needs Thunderbolt 3 / USB4 support" :
+               "Stor98 needs Thunderbolt 3 / USB4 support, which this run "
+               "leaves out";
+    case INST_S98_SKIP_SHARED:
+        return brief ? "left: another Stor98 shares its file" :
+               "a Stor98 the installer did not put on a tunnel drive shares "
+               "its file at another release: no Stor98 change in this run";
+    default:
+        return NULL;
+    }
+}
+
+int inst_inf_names_file(const char *text, size_t n, const char *file)
+{
+    size_t w = strlen(file);
+    size_t i;
+    int comment = 0;
+
+    for (i = 0; i < n; i++) {
+        char c = text[i];
+        if (c == '\n' || c == '\r') {
+            comment = 0;
+            continue;
+        }
+        if (c == ';') {
+            comment = 1;
+        }
+        if (comment || i + w > n || !inst_eqn(text + i, file, w)) {
+            continue;
+        }
+        if ((i == 0 || strchr(" \t,=\"\\\r\n", text[i - 1]) != NULL) &&
+            (i + w == n || strchr(" \t,=\"\r\n;", text[i + w]) != NULL)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_s98_adoptable(int preExisting, int present, int place)
+{
+    if (preExisting) {
+        return 0;
+    }
+    return !present || place == INST_S98_AT_TUNNEL;
+}
+
+int inst_s98_svc_value_stor98(const char *name)
+{
+    return !inst_eq(name, "LinkState");
+}
+
+int inst_s98_stray_inf_ours(int preExisting, int namesStor98)
+{
+    return !preExisting && namesStor98;
+}
+
+int inst_s98_share(int otherBound, int fileSame)
+{
+    if (!otherBound) {
+        return INST_S98_SHARE_FREE;
+    }
+    return fileSame ? INST_S98_SHARE_SAME : INST_S98_SHARE_HOLD;
 }
 
 /* ---- SHA-256 (FIPS 180-4): the 98 SE and ME INF listings' file hashes ---- */

@@ -2209,3 +2209,142 @@ were run again and both gated builds passed once more at `49d35844`
 (x86, then amd64); the x86 TEST cut was taken again there (`SETUP.EXE`
 `f7e9b102...`). No leg was taken on that last cut: `SETUP.EXE`'s source
 is unchanged since `7995a30e`.
+
+## 42-A.26: the bundled Stor98 on tunnel drives only (2026-10-19)
+
+Worker p42-s98tun, branch `p42-s98tun` from `3.1.0.0` at `4b6d3477`,
+with `3.1.0.0` merged in four times (`c598a252`, 42-A.21's connection
+manager alone; `87403775`, the 42-A.24 and 42-A.28 work; `b8238676`, 42-A.27;
+`54bb23c2`, 42-A.29). The owner's decision of
+2026-10-19: the installer's bundled Stor98 goes only on NVMe controllers
+behind a Thunderbolt or USB4 tunnel, never on internal ones; a user with
+an internal NVMe drive installs Stor98 by hand. The Components page's
+layout is the window branch's (p42-wizgap), untouched here; this branch
+is the engine's and the console's side.
+
+What was done (record 23 revision 18, section 4.4; record 26 draft 12,
+sections 5.3, 6.3, 6.4 and 9.3):
+
+- **The place of a drive** (`inst_s98_place`): from the connection
+  manager's confirmed reading, the walk `/devices` and `/eject` take
+  (`tb_read_all`, NT location, 98 SE and ME PCI path), read once per
+  reading of the devices under the lock `XHCITR` shares. Behind a tunnel:
+  a verified tunnel port above it. Internal: a whole reading, every
+  manager found confirmed, no verified or unverified Thunderbolt port
+  above it. Anything else is unknown, never either.
+- **The gate** (`inst_s98_eligible`), at the end of every plan, so after
+  every scan, settle and barrier: install, update, repair, `/force` and
+  `/restage` all held to it; eligible, skip-internal, skip-unknown,
+  needs-TB. A drive left is named with its reason on screen, in the log
+  and on the window's found page, and gets no printed 98 SE and ME steps;
+  an unknown place still unknown at the end of the run is work left
+  (exit 4). NT's refusal of a hardware id shared with a device the run
+  leaves stays (one call reaches every device of the id), with its own
+  sentence.
+- **Stor98 needs the Thunderbolt component**: the engine keeps it out of
+  a run without it (`s98_set`, from both the Stor98 and the Thunderbolt
+  choice), and the console says so and does not ask.
+- **The shared file, the decision** (`inst_s98_share`): every Stor98
+  device shares one `stor98.sys` or `stor98.mpd` and one service's
+  settings. Where a device on Stor98 is not a known tunnel drive (an
+  internal one installed by hand, one of unknown place, one not present
+  that the record does not name; on 98 SE and ME every driver key naming
+  `stor98.mpd`), the conservative choice: at another installed release
+  than the bundled one, **no Stor98 change at all** in the run (no
+  staging, no file in the 98 SE and ME install directory, no install,
+  no update, no setting), said on screen and in the log with the readme's
+  update by hand; at the same release, tunnel drives are installed and no
+  setting is written. A run whose copy was made held stays held. The
+  internal drive's devnode is never updated or reconfigured.
+- **Wording**: the Components sentence (`INST_PT_S98_T`) and the
+  console's: "For NVMe drives behind a Thunderbolt or USB4 tunnel; the
+  installer selects tunnel drives only." The release notes and the
+  generated readme add that Stor98's INF matches `PCI\CC_010802`, so
+  Windows may still offer it for a later driverless internal NVMe drive.
+- **The uninstall** (the owner's coordinator, from the ME matrix leg N3
+  of the same day): with Stor98 brought by this package's installer
+  (`PreExisting` clear), devices Windows bound to Stor98 after the run
+  (an enclosure first plugged after the restart, its wizard taking the
+  staged INF) are adopted into the record with the one INF copy their
+  driver key names, when each is behind a tunnel or not present; an
+  internal or unknown one keeps Stor98 and is named. An INF copy that
+  appeared outside a Stor98 step of a 98 SE or ME install is recorded
+  when its active text names `stor98.mpd` and `PreExisting` is clear
+  (`inst_s98_adoptable`, `inst_s98_stray_inf_ours`,
+  `inst_inf_names_file`).
+
+Commits: `7b077075` (the gate, the place, the share, the wording);
+`d008870f` (reviewed and revised; the uninstall's adoption); `76bd0d31`
+(records 23 and 26, the release notes, the readme template); `3f9876b0`,
+`e6ec24cf` (reviewed and revised); `ab4b0458` (the records again);
+`952c47df` (the 98 SE baseline below, and no immediate NT retry of a
+Stor98 call after 42-A.27's wait); `061d9ca1` (record 26). Reviewed and
+revised in six rounds: four to no findings on `e6ec24cf`, a delta round
+on the merge `b8238676` (one finding, fixed in `952c47df`) and a
+confirmation round on `952c47df` with no findings. Two points were kept as they were, with their reasons: the
+staged INF and the 98 SE and ME install directory keep `stor98.inf`
+while Stor98 is in the run and not held, because a tunnel drive that
+appears after the restart must find it (the release notes' sentence
+covers the internal case); and at the same release the INF's own service
+section writes the values that release's INF wrote already.
+
+Host suite: `test_inst` 1476 checks, 0 failures (eligible, skip-internal,
+skip-unknown, needs-TB; the place; the share; the adoption; the stray
+copy; the INF word test; the 98 SE `LinkState` key; the Components
+sentence).
+
+The legs, in QEMU (the `usb4-emu` build `bin-2a893ea`), kit and
+evidence in `E:\xhci98-vm\p42-s98tun` (QMP 48200 to 48202; `logs\`,
+`shots\`): each guest with the emulator's `tb3-alpine-ridge` host, its
+tunnel bridge `tb0` and the enclosure `enc0` (an NVMe behind the
+tunnel, hot-plugged after the desktop), and a second QEMU `nvme` on the
+root bus (the internal drive), both at `1B36:0010` with one subsystem
+id. Each guest was prepared with the bench package
+(`xhci98-3.1.0.0-bench.zip`, `INSTALL /console /yes /thunderbolt`, so
+`xhcicm` installed and running and no Stor98), both NVMe drives without
+a driver; the package for the legs is that bench package with this
+branch's installer in `tools\xhciinst\`.
+
+| Leg | Installer | Result |
+|---|---|---|
+| 98 SE, enclosure plugged: `INSTALL /console /yes /thunderbolt /stor98`, cold start, uninstall | `e6ec24cf` | install **pass**; uninstall **fail**: "Stor98 stays: it was installed before this package's installer first ran" - the baseline had read `Services\stor98`, which `xhcicm.sys` makes on 98 SE for the link-state locator (`LinkState` alone, exported from the untouched snapshot), as Stor98 there before; fixed in `952c47df` |
+| the same | `952c47df` | **pass**: the reading "61 devnodes, 0 not read whole, changing 0, 1 connection managers, all confirmed 1"; the tunnel NVMe (`...\082800`) "behind a tunnel (below a verified port 1)", installed by the helper and recorded; the root-bus NVMe (`...\BUS_00&DEV_09&FUNC_00`) "internal", "LEFT: an internal drive, not behind a Thunderbolt or USB4 tunnel: the installer leaves it as it is (Stor98 goes on tunnel drives only)", on screen and in the log; "found before 0, PreExisting 0"; exit 3. After the cold start Stor98 under SCSI controllers on the tunnel drive (Code 29: the emulator's no-interrupt case of 42-A.15, the same before any install), the internal drive still without a driver. The uninstall deleted the `INF\OTHER` copy and `stor98.mpd` and removed the record; afterwards no `STOR98.MPD`, `INF\OTHER` empty, no `Software\xhci98` |
+| 98 SE, enclosure first plugged after the restart: install with no enclosure, cold start, the drive bound to Stor98 from `C:\XHCI98` by hand (Update Driver; the snapshot's devnode already existed, so no New Hardware wizard), uninstall | `e6ec24cf` | install **pass** (exit 4: a stale registry-only `1B36:000D` entry's steps, not Stor98); uninstall **fail** ("Stor98 stays: a device is still bound to it", the same baseline cause) |
+| the same | `952c47df` | **pass**: Stor98 staged into `C:\XHCI98`, nothing installed, the internal drive left; at the uninstall "...\082800: bound to Stor98 after this installer's run (behind a tunnel): it goes with Stor98", "INF\OTHER\Yeo Kheng Mengstor98.inf adopted with its device"; the device removed, the copy and `stor98.mpd` deleted, the record removed; nothing of Stor98 left but the key below |
+| XP SP3, enclosure plugged, `INSTALL /console /yes /thunderbolt /stor98` | `e6ec24cf` | **pass**: the internal NVMe "internal", LEFT; the tunnel NVMe "behind a tunnel"; then, the two sharing one hardware id, NT's refusal: "... is shared with ...\3&267A616A&0&48, which this run leaves (left: an internal drive (Stor98 goes on tunnel drives)); neither is changed. Install Stor98 on the tunnel drive in Device Manager ..."; neither drive got a driver; exit 4 |
+| 7 x86, the same | `e6ec24cf` | **pass**: the same readings, the same refusal, neither drive changed; exit 4 |
+
+Not read, or left: the Windows 2000 leg (XP was taken); the window's
+pages (the Components layout is the window branch's); the shared-file
+hold and its same-release case in a guest (host vectors and review
+only); an XP or 7 tunnel drive actually installed (QEMU's NVMe gives
+both drives one hardware id, so NT's refusal is what a guest can show).
+Two observations for the owner: on XP and 7 `stor98.inf` is staged
+although neither drive got it this run (as decided: a tunnel drive that
+appears later needs it; Windows may offer it for the internal drive, as
+the release notes say); and on 98 SE `Services\stor98` keeps `LinkState`
+(`xhcicm`'s) and Stor98's runtime `StorInterrupt 1.1.0` value after the
+uninstall, the leftover the 42-A.2 legs listed.
+
+Builds: the gated build, x86 `all` then `all -amd64`, on the final
+merge `54bb23c2`: both **passed** (BUILD + GATES PASSED, debug, release
+and qemu, each architecture). The legs ran this branch's installer as
+built at `e6ec24cf` and `952c47df`; the later merges brought 42-A.27's
+and 42-A.29's installer changes, not this task's code.
+
+**After the last merge** (`473323ae`, 3.1.0.0's 42-A.22, 42-A.24 and
+42-A.25): Stor98's needs-Thunderbolt rule is one rule, the window's
+`inst_s98_box_open`, which the engine's `s98_set` applies; the console's
+duplicate sentence went (42-A.22's refusal of `/stor98` without
+`/thunderbolt` or `/cmonly` stands). 42-A.26 is record 23 revision 18
+and record 26 draft 12. 42-A.24's step 6a removes Stor98's
+CriticalDeviceDatabase entries only once its service is gone, so an
+adoption refused for an internal drive keeps them with the service. The
+integration delta was reviewed with no findings. `test_inst` 1568 checks,
+0 failures; the gated build, x86 `all` then `all -amd64`, **passed** on
+`473323ae`. One more 98 SE leg on the merged installer, from the
+prepared snapshot, enclosure plugged after the desktop, `INSTALL /console
+/yes /thunderbolt /stor98`: **pass** - the tunnel NVMe behind a tunnel and
+on Stor98, the internal NVMe LEFT as internal, "found before 0,
+PreExisting 0", exit 3; the uninstall then deleted the `INF\OTHER` copy
+and `stor98.mpd` (exit 3); `logs\N1-98-473323ae.log`.

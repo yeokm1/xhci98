@@ -7,7 +7,11 @@ and 15, and record 23 revision 22); draft 14, 2026-10-19 (section 9.3 step 4: th
 `OEM Name` record of each deleted INF copy removed, record 23 revision
 20); draft 13, 2026-10-19 (task 42-A.30: the bundled Stor98 at the
 package version, one signature, sections 5.6 and 6.3, record 23 revision
-19); draft 11, 2026-10-19 (task 42-A.22), the owner's (a wider gap
+19); draft 12, 2026-10-19 (task 42-A.26, the owner's decision of that
+day: the bundled Stor98 on drives behind a Thunderbolt or USB4 tunnel
+only, and the uninstall's adoption of tunnel drives Windows bound after
+the run; sections 5.3, 6.3, 6.4 and 9.3, and record 23 revision 18);
+draft 11, 2026-10-19 (task 42-A.22), the owner's (a wider gap
 and a line between settings rows, XHCITR's icon, a row of another
 system shown greyed, Stor98's box a child of the Thunderbolt one, the
 UAS driver a box of its own under the USB drivers') and the matrix
@@ -432,7 +436,7 @@ Check boxes, one a line, each with one sentence:
 | xHCI98 USB 3.x host controller driver (`xhci98.sys`; until 2026-10-19 with `xhciuas.sys` in the same box) | yes, but on Windows 8 and 8.1 (draft 8) | on 2000 to 7, when the package carries the connection manager (record 23 section 4.5; `/cmonly` preselects it unticked); on 98 SE and ME no, shown ticked and disabled; on 8 and 8.1 shown unticked and disabled | the driver for the controller, its hubs and devices, and Bulk-Only disks (UAS disks: the box under it); on 8 and 8.1 the sentence says Windows' own USB 3 driver runs the controllers there; unticked on 2000 to 7, the sentence under the box says the run leaves an installed `xhci98.sys` as it is and that the uninstall removes the whole package |
 | UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still asked, being `xhci98.sys`'s (`inst_uas_decide`) |
 | Thunderbolt 3 / USB4 support (`xhcicm.sys`) | as record 23 section 8.5 decides: with a controller present yes, with none no | yes | the connection manager; its warning sentence (a device plugged into that port can reach the computer's memory) stands under the box, with "see `XhciCmApprove` on the Thunderbolt settings page" |
-| Stor98, the NVMe driver (bundled) | never unasked (record 23 section 4.4; owner, 2026-10-18) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; one sentence saying what it is for (an NVMe drive behind a Thunderbolt or USB4 tunnel, or an internal one) and that it installs on NVMe drives that have no driver (section 6.3) |
+| Stor98, the NVMe driver (bundled) | never unasked (record 23 section 4.4; owner, 2026-10-18) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 12: it no longer offers an internal drive), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next checks it and stays on the page until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
@@ -677,6 +681,12 @@ unasked). With the box ticked:
   bound to it, present or not (NT: `Service` = `stor98`; 98 SE and ME: the
   driver key naming Stor98's files, as its INF binds them). Those are
   pre-existing, and the uninstall never counts them as this installer's.
+  On 98 SE and ME `xhcicm.sys` makes `Services\stor98` itself for
+  Stor98's link-state locator (its value `LinkState`), Stor98 installed
+  or not, so there that key counts only with a subkey or another value
+  (draft 12; the 98 SE legs of 2026-10-19 read a pristine machine as
+  "Stor98 there before" without it, and the uninstall then kept the
+  Stor98 the installer brought).
 - **NT**: the local copy is made first, every `stor98*` file included
   when the box is ticked (record 23 section 4.4 and 5.6's order: the copy,
   then the staging from it, so a device found later takes its files from
@@ -685,18 +695,26 @@ unasked). With the box ticked:
   tunnel installs by itself; then it is installed now
   (`UpdateDriverForPlugAndPlayDevices`, unforced) on every present device
   `stor98.inf`'s models match that has **no** driver (`Service` absent, or
-  problem code 28), never on one another driver runs (record 23 decision
-  D3 applies to Stor98's devices as to this package's: an internal NVMe
-  drive under a vendor's driver is listed and left). A drive Stor98
-  already runs at an older release is updated as record 23 section 5.4
-  updates this package's own devices, with the same version rule and the
-  precautions below, whether this installer or the user bound it; the
-  update never makes the device the installer's (the record, below).
+  problem code 28) **and sits behind a Thunderbolt or USB4 tunnel** (draft
+  12; record 23 section 4.4's gate and place reading), never on one another
+  driver runs (record 23 decision D3 applies to Stor98's devices as to
+  this package's: an internal NVMe drive under a vendor's driver is listed
+  and left), and never on an internal drive or one whose place cannot be
+  read, which is left with its reason on screen and in the log. A tunnel
+  drive Stor98 already runs at an older release is updated as record 23
+  section 5.4 updates this package's own devices, with the same version
+  rule and the precautions below, whether this installer or the user
+  bound it; the update never makes the device the installer's (the
+  record, below). An internal drive Stor98 already runs (installed by
+  hand) is never updated or reconfigured, and record 23 section 4.4's
+  shared-file rule holds the file and the settings for it.
 - **98 SE and ME**: the `stor98*` files go into the install directory with
   the package's drivers (the flat copy's list names them), where the
-  wizards find `stor98.inf`; record 27's helper installs it now on every
-  present NVMe device with no driver, and updates one Stor98 runs at an
-  older release, by the same route and rules as the package's own
+  wizards find `stor98.inf` (none when record 23 section 4.4 holds
+  Stor98); record 27's helper installs it now on every present NVMe
+  device with no driver behind a tunnel, and updates one such device
+  Stor98 runs at an older release, by the same route and rules as the
+  package's own
   devices (record 27 section 6 step 6), with Stor98's own read-back after
   it (section 8).
 - **An update of a Stor98 device** follows Stor98's readme ("Updating the
@@ -794,6 +812,35 @@ unasked). With the box ticked:
   still names (an update of the hand-installed device from the bundled
   release points its driver key at the newest copy) stays with it, by
   the reference check, and the finish page says so.
+- **Tunnel drives Windows bound after the run** (draft 12; the owner's
+  coordinator, 2026-10-19, from the Windows ME matrix leg of that day).
+  The install stages Stor98 and records no device when no tunnel was up
+  during the run; after the restart the enclosure appears, and Windows'
+  own New Hardware wizard binds its NVMe to Stor98 from the staged INF
+  (or the install directory), making an `INF\OTHER` copy on 98 SE and
+  ME. That is the usual flow, so the uninstall's first Stor98 step adopts
+  such devices when `PreExisting` is clear: every devnode bound to Stor98,
+  present or not, that the record does not name (on 98 SE and ME every
+  `Enum\PCI` entry whose driver key names `stor98.mpd`) is added under
+  `Devices`, with the INF copy its driver key's `InfPath` names (on 98 SE
+  and ME the `INF\OTHER` copy whose long or 8.3 name it is; exactly one
+  candidate, or none is taken, and an unreadable directory stops the
+  uninstall) under `Staged` when that copy's active text names Stor98's
+  driver file as a word (`inst_inf_names_file`), the copy recorded
+  before the device and a record that cannot be written stopping the
+  uninstall - provided every such
+  device sits behind a tunnel by record 23 section 4.4's reading, or is
+  not present (gone with its tunnel) (`inst_s98_adoptable`). One that is
+  internal, or whose place cannot be read, keeps Stor98 for all of them:
+  nothing is adopted, it is named with its reason, and the service step
+  below leaves Stor98 as before. The adopted devices and copies then go
+  by the steps above; Stor98's CriticalDeviceDatabase entries go by
+  record 23 section 9.2 step 6a only once its service is gone, so an
+  adoption refused for an internal drive leaves them with the service. And at the install, on 98 SE and ME, a copy that
+  appeared outside a Stor98 step (a wizard of Windows' own racing the
+  helper) is recorded under `Staged` when its text names Stor98 and
+  `PreExisting` is clear (`inst_s98_stray_inf_ours`); otherwise it is
+  left and logged, as before.
 - The x64 `stor98.sys` is signed in the package's one signing step, by
   the same certificate as this package's drivers, from `3.1.0.0` (Stor98
   `0.4.0.0` and earlier carried Stor98's own test signature and
@@ -817,6 +864,13 @@ carries it and the Thunderbolt support is in the run (left out, and said,
 otherwise; `inst_s98_decide`), and the Stor98
 rows in its value questions (asked only when Stor98 is installed by the
 run). Record 23 sections 4.4, 7.1 and 8.1 are revised (section 12).
+Draft 12: the question's text says "For NVMe drives behind a Thunderbolt
+or USB4 tunnel; the installer selects tunnel drives only", and that an
+internal drive is left for a hand install; with the Thunderbolt
+component out of the run (a No, or `/yes` with no controller) it is not
+asked and Stor98 is left out, as draft 11 has it (the console refuses
+`/stor98` without `/thunderbolt` or `/cmonly`). The value questions are not asked when record 23 section
+4.4's shared-file rule holds the settings.
 
 ## 7. Windows 98 SE and ME: the helper, and the steps page
 
@@ -993,10 +1047,11 @@ gated on the one before, shown on the Progress page:
    children first, the check, the
    INFs, the services, the files (record 23 section 9.2, unchanged but for
    that first step); the
-   bundled Stor98's recorded devices, its staged INF and, when nothing
-   else depends on them, its service and files first, as section 6.3's
-   record says (children before the NVMe device's parent port, which is a
-   filter host and stays).
+   bundled Stor98's recorded devices (with the tunnel drives Windows bound
+   after the run, adopted first by section 6.3's draft 12 rule), its
+   staged INF and, when nothing else depends on them, its service and
+   files first, as section 6.3's record says (children before the NVMe
+   device's parent port, which is a filter host and stays).
 4. On 98 SE and ME: record 27's removal for each devnode of the package,
    present or not, children first (UAS devices, Stor98's recorded
    devices, the NHI, hubs and composite entries, root hubs, controllers
