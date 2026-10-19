@@ -176,7 +176,7 @@ Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
 |---|---|
 | `release-x86\`, `release-x64\` | The drivers to install (below) |
 | `debug-x86\`, `debug-x64\` | The same drivers built for troubleshooting; install only if asked |
-| `SETUP.EXE` | The installer: double-click it to install, update or uninstall |
+| `SETUP.EXE` | The installer: double-click it to install or update |
 | `INSTALL.BAT`, `tools\xhciinst\` | The same from the command line and scripts (`INSTALL /console ...`), and the programs both run (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE`, `XHCIIN64.EXE`) |
 | `tools\xhcitr\` | The xHCI98 USB Tree, also the driver's log and snapshot reader |
 | `tools\xhciqual\` | DOS: `XHCIQUAL.EXE` and `QUALREP.BAT` |
@@ -197,12 +197,12 @@ Each driver directory holds:
 
 If the installer fails or you prefer, install through Device Manager as before ([Install by hand](#install-by-hand)).
 
-To install, update or uninstall, unzip the whole package and double-click `SETUP.EXE` in its top directory (on 2000 and XP as an administrator; on Vista and 7 answer Yes when Windows asks for an administrator's approval). It opens the installer's window, which shows what it found, the components, a few of the driver's options and the tools' install directory (`C:\XHCI98` unless you choose another), and a summary, and changes nothing before you click Install. `INSTALL.BAT` is for the command line and scripts (`INSTALL /console ...`); run with no arguments it opens the same window.
+To install or update, unzip the whole package and double-click `SETUP.EXE` in its top directory (on 2000 and XP as an administrator; on Vista and 7 answer Yes when Windows asks for an administrator's approval). It opens the installer's window, which shows what it found, the components, a few of the driver's options and the tools' install directory (`C:\XHCI98` unless you choose another), and a summary, and changes nothing before you click Install. `INSTALL.BAT` is for the command line and scripts (`INSTALL /console ...`); run with no arguments it opens the same window.
 
 - **Windows 2000 to 7:** installs or updates every driver on the devices present, controller first, and stages the package for devices plugged in later. It handles Windows 2000's Have Disk, the root hub's update and Vista and 7's same-`DriverVer` trap. Answer Windows' unsigned-driver questions.
-- **Windows 98 SE and ME:** copies the package into the install directory, adds it to the hardware wizards' search path, prints the Device Manager steps left for each device, and offers to open Device Manager. Run it again after the restart; it then also offers the silent install (off by default).
-- **"Install Thunderbolt 3 / USB4 support?":** Enter answers Y when a controller is found, N when none is. Some laptops show the controller only while a device is plugged in or with a BIOS setting, so answer Y if yours has the port (`INSTALL /thunderbolt` skips the question). N leaves an installed Thunderbolt driver as it is.
-- **At the end:** "Changes were made. Please restart Windows now." if it changed anything. If it stopped with steps left for you (a Found New Hardware window, for instance), do them and run it again. It never runs `XHCICLN`.
+- **Windows 98 SE and ME:** copies the package into the install directory, adds it to the hardware wizards' search path, and installs each device's driver through Windows' own device installer; a device it cannot install gets its Device Manager steps on a page of their own.
+- **Thunderbolt 3 / USB4 support** (the Components page): ticked when a controller is found, unticked when none is. Some laptops show the controller only while a device is plugged in or with a BIOS setting, so tick it if yours has the port (`/thunderbolt` preselects it). Unticked leaves an installed Thunderbolt driver as it is. The console (`INSTALL /console`) asks the same as a Y/N question.
+- **At the end:** the Finish page offers to restart Windows if it changed anything. If it stopped with steps left for you (a Found New Hardware window, for instance), do them and run it again. It never runs `XHCICLN`.
 - `INSTALL /console /list` shows the plan and changes nothing. `SETUP /uninstall`, or Remove in Add/Remove Programs, removes the drivers after a warning. Every run but `/list` writes `XHCIINST.LOG` at the root of the system drive. `tools\xhciinst\readme.txt` lists the switches and exit codes.
 
 Details: [the release notes' installer section](docs/using/release-notes.md#installing-updating-and-uninstalling-with-installbat-new-in-3000).

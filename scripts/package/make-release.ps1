@@ -4847,9 +4847,10 @@ directory, never at a loose .sys file.{ARCHNOTE}
 If the installer fails or you prefer, install through Device Manager as
 before (BY HAND, below). That route still works and remains supported.
 
-THE EASY WAY: SETUP.EXE. To install, update or uninstall, double-click
-SETUP.EXE. INSTALL.BAT is for the command line and scripts (INSTALL /console
-...); run with no arguments it opens the same window.
+THE EASY WAY: SETUP.EXE. To install or update, double-click SETUP.EXE; to
+uninstall, use Remove in Add/Remove Programs (or SETUP /uninstall).
+INSTALL.BAT is for the command line and scripts (INSTALL /console ...); run
+with no arguments it opens the same window.
 
 Unzip the WHOLE package first, then double-click SETUP.EXE in its top
 directory. On Windows 2000 and XP sign in as an administrator; on Vista and

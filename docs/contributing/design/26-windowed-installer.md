@@ -131,8 +131,9 @@ rewritten with the word.
 
 **`SETUP.EXE` is the entry point for people** (owner, 2026-10-19; draft
 9, task 42-A.31; W17). It supersedes the paragraph above for a person:
-the readme's first instruction is "To install, update or uninstall,
-double-click SETUP.EXE", and `INSTALL.BAT` is for the command line and
+the readme's first instruction is "To install or update, double-click
+SETUP.EXE; to uninstall, use Remove in Add/Remove Programs (or SETUP
+/uninstall)", and `INSTALL.BAT` is for the command line and
 scripts, its behaviour unchanged (with no argument it still opens the
 window, and waits for it). Double-clicked, a batch file keeps a console
 window open behind the window for the whole run, an MS-DOS box on 98 SE

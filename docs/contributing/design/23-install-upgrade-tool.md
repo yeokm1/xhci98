@@ -304,8 +304,9 @@ xHCI-only machine; behind a switch it is one typed word and a confirmation
 (section 9.1).
 
 Since revision 14 a person is not sent to `INSTALL.BAT` at all: the
-readme's first instruction is "To install, update or uninstall,
-double-click SETUP.EXE", and `SETUP.EXE` starts the window (record 26
+readme's first instruction is "To install or update, double-click
+SETUP.EXE; to uninstall, use Remove in Add/Remove Programs (or SETUP
+/uninstall)", and `SETUP.EXE` starts the window (record 26
 section 2). `INSTALL.BAT` is for the command line and scripts
 (`INSTALL /console ...`); with no argument it still opens the same
 window. `SETUP.EXE` is a program, not a second batch file, and does

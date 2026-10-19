@@ -1,8 +1,9 @@
 @echo off
 rem INSTALL.BAT - install, update or uninstall this package's drivers
-rem (design records 23 and 26). To install, update or uninstall, double-click
-rem SETUP.EXE beside this file: it opens the installer's window with no
-rem console behind it. INSTALL.BAT is for the command line and scripts
+rem (design records 23 and 26). To install or update, double-click SETUP.EXE
+rem beside this file: it opens the installer's window with no console
+rem behind it (to uninstall: Add/Remove Programs, or SETUP /uninstall).
+rem INSTALL.BAT is for the command line and scripts
 rem (INSTALL /console ...); run with no arguments it opens the same window,
 rem and waits for it. With no /console it opens the installer's
 rem window, tools\xhciinst\XHCIWIZ.EXE (32-bit Windows) or XHCIWZ64.EXE

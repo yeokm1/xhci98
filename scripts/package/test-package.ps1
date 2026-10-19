@@ -3034,7 +3034,7 @@ try {
            Why  = "a cut no longer puts SETUP.EXE, the program a person double-clicks, at the version root (task 42-A.31, design record 26 section 2)" },
         @{ Find = 'foreach ($name in ($instExes + $rootExes)) {';
            Why  = "a cut no longer refuses a SETUP.EXE older than its sources (task 42-A.31)" },
-        @{ Find = 'THE EASY WAY: SETUP.EXE. To install, update or uninstall, double-click';
+        @{ Find = 'THE EASY WAY: SETUP.EXE. To install or update, double-click SETUP.EXE; to';
            Why  = "the readme's section 4 no longer sends a person to SETUP.EXE first (task 42-A.31)" },
         @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "inst_eng.c") -Macro "XHCIINST_VERSION"';
            Why  = "a cut no longer holds the install tool's version to the shared macro (task 40.6)" },

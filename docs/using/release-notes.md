@@ -203,8 +203,9 @@ as they are made; the head of this file is rewritten when it is cut.
   removes everything, and Add/Remove Programs shows one entry, named for
   what is installed. `tools\xhciinst\readme.txt`, "The connection manager
   alone".
-- **The installer opens from `SETUP.EXE`.** To install, update or
-  uninstall, double-click `SETUP.EXE` at the top of the package: it opens
+- **The installer opens from `SETUP.EXE`.** To install or update,
+  double-click `SETUP.EXE` at the top of the package (to uninstall, Remove
+  in Add/Remove Programs, or `SETUP /uninstall`): it opens
   the installer's window with no console window behind it, and on Vista
   and 7 Windows asks once, for the window. `INSTALL.BAT` still works and
   is kept for the command line and scripts (`INSTALL /console ...`); run

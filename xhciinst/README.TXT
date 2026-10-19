@@ -4,10 +4,11 @@ XHCIWIZ and XHCIINST - install, update or uninstall the xhci98 drivers
 What it is for
 --------------
 
-To install, update or uninstall, double-click SETUP.EXE, at the top of
-the package: it opens the installer's window. INSTALL.BAT, beside it, is
-for the command line and scripts (INSTALL /console ...); run with no
-arguments it opens the same window.
+To install or update, double-click SETUP.EXE, at the top of the package:
+it opens the installer's window. To uninstall, use Remove in Add/Remove
+Programs (or SETUP /uninstall). INSTALL.BAT, beside it, is for the
+command line and scripts (INSTALL /console ...); run with no arguments it
+opens the same window.
 
 On Windows 2000, XP, XP x64, Vista and 7 it installs or updates every driver
 of the package on the devices it finds - the xHCI controller first, then
