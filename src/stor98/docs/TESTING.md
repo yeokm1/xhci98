@@ -60,7 +60,7 @@ evidence (PLAN 0.0).
 - **Test signing on 7 SP1 needs SHA-1.** With test signing on, a test build signed with a
   certificate whose own signature is SHA-256 gives Code 52: Windows 7 SP1 code integrity
   does not take it. Use a SHA-1 certificate signature and a SHA-1 file digest (no
-  timestamp), as the project test certificate does (BUILD.md, "Test signing"). Never import
+  timestamp), as xhci98's test certificate does (BUILD.md, "Test signing"). Never import
   a certificate into a store on the host.
 - **Hibernate under WHPX does not resume** (black screen, kernel running, no disk I/O).
   Run hibernate and resume cases under TCG; WHPX is fine for the other cases.
@@ -104,9 +104,11 @@ on the NVMe (PLAN 4, scenarios B and C). In usb4-emu (G6, 2000 and XP x64):
 
 ## Release package install check
 
-Run whenever the INFs or the release layout change. Stage an unsigned test package with
-`scripts\make-release.ps1 -Stage -Test` (releases/README.md) and install from it with the
-OS's own tools, no copying by hand:
+Run whenever the INFs or the package layout change. Stage an unsigned test package with
+xhci98's `scripts\package\make-package.ps1` (the x86 or amd64 package carries `stor98.inf`
+and its images at its root; BUILD.md, "Releases") and install from it with the OS's own
+tools, no copying by hand. The `x86\` and `x64\` folders named below are those packages'
+roots (until 0.4.0.0, the folders of a release stage):
 
 - **98 SE, ME**: Device Manager, Update Driver (or the Found New Hardware wizard), "specify
   a location", the stage's `x86\` folder. QEMU's plain `nvme` device works; on 9x hot-add

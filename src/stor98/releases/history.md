@@ -1,9 +1,57 @@
 # Release history
 
 One entry per version, newest first, written for the person installing
-the driver. scripts\make-release.ps1 requires the entry for the version it
-cuts and copies everything from that entry down into the release's
-readme.txt, so keep lines within 78 columns and plain ASCII.
+the driver; plain ASCII within 78 columns. Since 3.1.0.0 Stor98 is built
+and released as part of xhci98, with xhci98's version.
+
+## 3.1.0.0 - 2026-10-19
+
+The first Stor98 built with xhci98 and released in its package, at the
+package's version. 3.1.0.0 is the next version after 0.4.0.0: there is
+no Stor98 1.x or 2.x, and an installed 0.4.0.0 (or 0.3.0.x) is older,
+so xhci98's installer updates it. The connection manager's link-state
+interface (interface 4) is unchanged.
+
+- Version and date: stor98.mpd, both stor98.sys and stor98.inf carry
+  xhci98's version and date, like every other file of the package.
+- Signing: the 64-bit stor98.sys is signed with the same test
+  certificate as xhci98's own 64-bit drivers, in the same step;
+  xhci98-test.cer covers it. Stor98's own certificate is retired and
+  stor98-test.cer is no longer shipped. Test-signing mode on Vista x64
+  and 7 x64 loads it as before.
+- The driver file now names which build it is (free, checked or a
+  test-only build) in a marker string, which xhci98's build checks.
+- Write requests with Force Unit Access (FUA) set now reach the drive
+  as FUA writes, and a read with FUA set is passed on too; MODE SENSE
+  reports that FUA is supported, the drive's write cache state (from
+  the controller and the write-through setting) and the values that
+  can really be changed.
+- INQUIRY: requests for vital product data are now decoded correctly,
+  with the supported-pages, serial number and device identification
+  pages; refused commands return sense data saying why.
+- A namespace in a format the driver cannot present is refused instead
+  of being reported with 512-byte sectors. Drives formatted with 4096-
+  byte sectors (4Kn) are still not supported.
+- Finding the controller: a 64-bit BAR0 is sized correctly (with decode
+  off while sizing), configuration reads are checked, Windows 2000 and
+  later keep the interrupt Plug and Play assigned, and a slot that is
+  not Stor98's is reported as not found instead of starting a bus scan.
+- Recovery: a flush while the controller has failed succeeds only when
+  nothing was left unwritten; re-enabling after a shutdown replays the
+  held requests instead of reporting a bus reset; nothing of the drive's
+  identity is carried into a new start; tunable numbers that are too
+  large are capped instead of wrapping; a busy drive's retries are
+  counted per request.
+- Windows 98 SE / ME with xhci98's connection manager: a newer link
+  generation without the "link down, quiesced" statement counts as
+  proof only after the drive stopped answering; while it answers, it is
+  treated as a different drive. A quarantined memory block is no longer
+  released by a later generation alone.
+- Windows 2000 to 7: the connection manager's table is accepted only at
+  a system-space address.
+- Device Manager names the product "Stor98" in the disk and file
+  descriptions, and the file description names the SSDs, not the
+  protocol.
 
 ## 0.4.0.0 - 2026-10-16
 

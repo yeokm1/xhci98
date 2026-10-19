@@ -342,32 +342,19 @@ before anything is built. Refused with -UploadSetOnly, which stages nothing,
 and with an -Arch that has no x64. The x86 binaries are never signed. Where
 the key is held and how it was made: design record 19.
 
-.PARAMETER Stor98Version
-The Stor98 build the download bundles (owner, 2026-10-16; 0.3.0.0 or later), with
--Stor98Dir, -Stor98SumsSha256 and -Stor98InterfaceVersion: the four pins go
-together and mean what make-package.ps1's parameters of the same names mean,
-and -Stor98AllowInterfaceMismatch is passed through to it. Without them the
-cut bundles no Stor98, and its release notes must say so. With them each
-release-x86 and release-x64 package is built with the build's files (the
-debug directories carry none), and the upload set's release-x86\ and
-release-x64\ carry them; releases\<version>\ does not, since Stor98 is a
-third-party binary and nothing third-party is tracked. The release notes
-must name the version ("Stor98 `<version>`", in place of the placeholder
-the cut fills in), the generated readme lists it, and -UploadSetOnly
-re-assembles a bundled release only with the same pins.
-
-.PARAMETER Stor98Dir
-See -Stor98Version. Left out, it is src\stor98\releases\<version>, Stor98's
-own release folder in this tree (task 42-A.20).
-
-.PARAMETER Stor98SumsSha256
-See -Stor98Version.
-
-.PARAMETER Stor98InterfaceVersion
-See -Stor98Version.
-
-.PARAMETER Stor98AllowInterfaceMismatch
-See -Stor98Version; the override is printed, and passed to each package run.
+.PARAMETER NoStor98
+Cut without the bundled Stor98. By default (since 3.1.0.0, roadmap-usb4
+task 42-A.30, owner 2026-10-19) every release leg's package carries the
+Stor98 that scripts\build-driver.cmd built and gated from src\stor98, at
+the package's version and date (make-package.ps1, -NoStor98), and the
+debug legs carry none. Its files are published like this project's own:
+releases\<version>\release-x86\ and release-x64\ hold them (the x64
+stor98.sys signed with the other x64 drivers, by the same key), so the
+upload set and -UploadSetOnly take them from the published tree. Its
+readme's SETTINGS table is held to test\stor98-settings.txt, and the
+release notes must declare the bundled version ("This download bundles
+Stor98 `<version>`.", or "This download bundles no Stor98." with this
+switch).
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
@@ -407,11 +394,7 @@ param(
     [switch]$AllowUnstampedDriver,
     [string]$TestLabel = "",
     [string]$TestSignPfx = "",
-    [string]$Stor98Version = "",
-    [string]$Stor98Dir = "",
-    [string]$Stor98SumsSha256 = "",
-    [string]$Stor98InterfaceVersion = "",
-    [switch]$Stor98AllowInterfaceMismatch
+    [switch]$NoStor98
 )
 
 $ErrorActionPreference = "Stop"
@@ -1121,23 +1104,6 @@ function Assert-ReportBatchContent {
     }
 }
 
-# The line the generated readme carries when the download bundles Stor98
-# (package-common.ps1, "Stor98, the bundled NVMe driver"), which is how
-# -UploadSetOnly knows which build a published release was cut with.
-$stor98ReadmePattern = '(?m)^  Bundled in this download: Stor98 (\d+\.\d+\.\d+\.\d+)\.\r?\n  Its SHA256SUMS\.txt has the SHA-256\r?\n  ([0-9A-F]{64})\.\r?\n  Interface version: (\S+?)( \(MISMATCH OVERRIDDEN, see below\))?\.'
-
-
-# The content pins that line records - version, SHA256SUMS.txt hash and
-# interface version - for -UploadSetOnly's comparison. Whether the interface
-# check was overridden is not a pin: it is a verdict against the checkout's
-# header, which may have moved since the cut, so a re-assembly passes
-# -Stor98AllowInterfaceMismatch where today's header needs it.
-function Get-Stor98PinText {
-    param($Release)
-    if ($null -eq $Release) { return "" }
-    return ("{0}|{1}|{2}" -f $Release.Version, $Release.SumsSha256, $Release.Interface)
-}
-
 # The project test certificate's public half (design record 19), published at
 # the root of every x64 directory a cut writes since 2.3.0.0, beside the
 # binaries it signed. Not an INF-declared file: the setup engine never reads
@@ -1642,15 +1608,7 @@ function Get-UploadSetRepairCommand {
     $quote = { param([string]$s) return $q + ($s -replace $q, ($q + $q)) + $q }
     if ($bound.ContainsKey("ReleasesDir")) { $cmd += " -ReleasesDir " + (& $quote $ReleasesDir) }
     if ($bound.ContainsKey("UploadDir")) { $cmd += " -UploadDir " + (& $quote $UploadDir) }
-    # A bundled release is re-assembled only with the pins it was cut with.
-    # Read without StrictMode's unset-variable error: the self-tests render
-    # this helper in a scope that has no $stor98.
-    $nv = Get-Variable -Name stor98 -Scope Script -ValueOnly -ErrorAction SilentlyContinue
-    if ($null -ne $nv) {
-        $cmd += " -Stor98Version " + $nv.Version + " -Stor98Dir " + (& $quote $nv.Dir) +
-                " -Stor98SumsSha256 " + $nv.SumsSha256 + " -Stor98InterfaceVersion " + $nv.Interface
-        if ($nv.Overridden) { $cmd += " -Stor98AllowInterfaceMismatch" }
-    }
+    if ($bound.ContainsKey("NoStor98")) { $cmd += " -NoStor98" }
     return $cmd
 }
 
@@ -2120,8 +2078,8 @@ function New-UploadSet {
         [string]$UploadDir,
         [string]$Repo,
         [string[]]$Publishable,
-        # The verified Stor98 build (Resolve-Stor98Input) the release-
-        # directories bundle, or $null for none.
+        # Unused since task 42-A.30: Stor98's files are in the published
+        # tree like this project's own. Kept so callers need not change.
         $Stor98 = $null,
         # Build under the `.staging` names of Get-UploadSetPaths -Staged; the
         # caller moves the result onto the final names with Publish-UploadSet
@@ -2185,8 +2143,6 @@ function New-UploadSet {
     Copy-Item -LiteralPath $PublishedRoot -Destination $uploadRoot -Recurse -Force
 
     $publishableKeys = @($Publishable | ForEach-Object { $_.ToLowerInvariant() })
-    # Full paths (lower case) of the bundled Stor98 files copied below.
-    $nvUploaded = @{}
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
 
     # **Which directories have to be completed is read off the tree, not taken
@@ -2308,34 +2264,13 @@ their defaults.
         if ($null -ne $PkgDirs -and $PkgDirs.ContainsKey($f)) { $pkgDir = $PkgDirs[$f] }
         $uploadFlavorDir = Join-Path $uploadRoot $f
         $mediaPaths = @{}
-        # The bundled Stor98 files of a release- directory: copied here from
-        # the pinned release folder (releases\ holds none), each refused if
-        # it would replace a file and held to SHA256SUMS.txt once copied.
-        $nvFiles = @()
-        if ($null -ne $Stor98 -and $f -like "release-*") {
-            $nvFiles = @(Get-Stor98PackageFiles -Release $Stor98 -Arch $LegArches[$f])
-            foreach ($nf in $nvFiles) {
-                $nvDest = Join-Path $uploadFlavorDir $nf.Dest
-                if (Test-Path -LiteralPath $nvDest) {
-                    throw "Stor98's '$($nf.Source)' would land at '$f\$($nf.Dest)' in the upload set, where the published tree already has a file."
-                }
-                Ensure-Directory (Split-Path -Parent $nvDest)
-                Copy-Item -LiteralPath (Join-Path $Stor98.Dir $nf.Source) -Destination $nvDest
-                $nvUploaded[([System.IO.Path]::GetFullPath($nvDest)).ToLowerInvariant()] = $true
-                if ((Get-FileHash -LiteralPath $nvDest -Algorithm SHA256).Hash -ne $nf.Sha256) {
-                    throw "the upload set's copy of Stor98's '$($nf.Source)' does not match SHA256SUMS.txt."
-                }
-            }
-            Write-Ok ("{0}\ bundles Stor98 {1}: {2} file(s), each matching SHA256SUMS.txt" -f $f, $Stor98.Version, $nvFiles.Count)
-        }
-
         if ($null -ne $pkgDir) {
             # The ordinary cut: the backstop for the check the build loop
             # already made on the package it has just built.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }) + @($nvFiles | ForEach-Object { $_.Dest }))
+                                               -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File -Filter "stor98*" | ForEach-Object { $_.Name } }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -2570,10 +2505,8 @@ $gateOut
     # And what they say, before anything is archived: the cut checked them
     # when it staged them, but -UploadSetOnly reads a tree it did not stage.
     Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
-    # The bundled Stor98 files keep their own DriverVer date and their own
-    # file times: they are another project's release, copied unchanged.
+    # Stor98's INFs too, since task 42-A.30: one date for every INF.
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
-                  Where-Object { -not $nvUploaded.ContainsKey($_.FullName.ToLowerInvariant()) } |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
         throw "the assembled upload set's INFs declare $($infDates.Count) DriverVer dates ($($infDates -join ', ')), not one: the release has no single date to give its files."
@@ -2581,7 +2514,6 @@ $gateOut
     $fileStamp = [datetime]::ParseExact($infDates[0], 'yyyy-MM-dd',
         [Globalization.CultureInfo]::InvariantCulture).AddHours(12)
     foreach ($item in (Get-ChildItem -LiteralPath $uploadRoot -File -Recurse)) {
-        if ($nvUploaded.ContainsKey($item.FullName.ToLowerInvariant())) { continue }
         $item.LastWriteTime = $fileStamp
     }
     Write-Ok ("every file dated {0:yyyy-MM-dd HH:mm}, the INFs' DriverVer date" -f $fileStamp)
@@ -2740,26 +2672,18 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
 
     # --- the bundled Stor98 build, verified before anything is built --------
     #
-    # make-package.ps1 verifies it again for each release leg; this run
-    # verifies it once up front, so a wrong pin costs nothing, and holds the
-    # result for the upload set, which copies the files from the release
-    # folder itself, never from releases\ (nothing third-party is tracked).
-    $stor98 = Resolve-Stor98Input -Version $Stor98Version -Dir $Stor98Dir -SumsSha256 $Stor98SumsSha256 `
-                                  -InterfaceVersion $Stor98InterfaceVersion `
-                                  -HeaderPath (Join-Path $repo "src\cm\stor98cm.h") `
-                                  -Allow:$Stor98AllowInterfaceMismatch
-    if ($null -ne $stor98) {
-        Assert-Stor98SettingsTable -Dir $stor98.Dir -Version $stor98.Version
+    # Built and gated from src\stor98 by scripts\build-driver.cmd with this
+    # project's drivers (task 42-A.30). make-package.ps1 verifies it again
+    # for each release leg; this run verifies it once up front for every
+    # architecture it publishes, so a missing or stale build costs nothing.
+    if (-not $NoStor98 -and -not $UploadSetOnly -and $Flavor -contains "release") {
+        $s98Arches = @($Arch | ForEach-Object { if ($_ -eq "x64") { "amd64" } else { "x86" } })
+        $stor98 = Resolve-Stor98Build -Repo $repo -Arch $s98Arches -HeaderPath (Join-Path $repo "src\cm\stor98cm.h")
+        Assert-Stor98SettingsTable -ReadmePath (Join-Path $stor98.Dir "docs\package-readme.txt") -Version $stor98.Version
         Write-Ok ("Stor98 {0}: its readme's SETTINGS table is the one the installer's Stor98 rows were checked against" -f `
             $stor98.Version)
-        Write-Ok ("Stor98 {0}: SHA256SUMS.txt is the pinned {1}, and every file matches it" -f `
-            $stor98.Version, $stor98.SumsSha256)
-        if ($stor98.Overridden) {
-            Write-Warn ("Stor98 INTERFACE MISMATCH OVERRIDDEN (-Stor98AllowInterfaceMismatch): {0}" -f $stor98.Mismatch)
-        }
-        if ($Flavor -notcontains "release") {
-            throw "Stor98 is bundled into the release- directories only, and this run publishes none (-Flavor $($Flavor -join ','))."
-        }
+        Write-Ok ("Stor98 {0} built from src\stor98 for {1}: version, flavour marker, imports, source stamp and INFs checked" -f `
+            $stor98.Version, ($s98Arches -join " and "))
     }
 
     # --- the version, from the INF ------------------------------------------
@@ -2911,23 +2835,6 @@ To cut one, run this script without it.
             $legDirs += $dirName
             $legArches[$dirName] = $leg.PkgArch
             Write-Ok ("{0}\: '{1}' holds the published binary and INF" -f $dirName, $pubDir)
-        }
-
-        # A release cut with Stor98 says so in its readme; it is re-assembled
-        # only with the same build, and one cut without it only without.
-        $pubReadme = Join-Path $finalRoot "readme.txt"
-        $pubStor98 = ""
-        if (Test-Path -LiteralPath $pubReadme) {
-            $m = [regex]::Match([System.IO.File]::ReadAllText($pubReadme), $stor98ReadmePattern)
-            if ($m.Success) {
-                $pubStor98 = "{0}|{1}|{2}" -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value
-            }
-        }
-        $askStor98 = Get-Stor98PinText -Release $stor98
-        if ($pubStor98 -ne $askStor98) {
-            $was = if ($pubStor98 -ne "") { "Stor98 pinned as $pubStor98" } else { "no Stor98" }
-            $now = if ($askStor98 -ne "") { "Stor98 pinned as $askStor98" } else { "no Stor98" }
-            throw "'$finalRoot' was cut with $was (version, SHA256SUMS.txt hash, interface; its readme.txt records them), and this run was given $now. Re-assemble it with the pins it was cut with."
         }
 
         $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
@@ -3230,14 +3137,15 @@ the result in place of the marker, then cut again. The first:
             }
             $pkgArgs += @("-TestSignPfx", $TestSignPfx)
         }
-        # The bundled Stor98 build, in the release legs only; its files are
-        # accepted beside the declared set by exactly the paths it lands at.
+        # The bundled Stor98 build, in the release legs only (make-package.ps1
+        # bundles it by default; the debug legs pass -NoStor98); its files
+        # are accepted beside the declared set by exactly the paths it lands
+        # at, and published with this project's own (task 42-A.30).
         $legStor98 = @()
         if ($null -ne $stor98 -and $f -eq "release") {
-            $pkgArgs += @("-Stor98Version", $stor98.Version, "-Stor98Dir", $stor98.Dir,
-                          "-Stor98SumsSha256", $stor98.SumsSha256, "-Stor98InterfaceVersion", $stor98.Interface)
-            if ($Stor98AllowInterfaceMismatch) { $pkgArgs += "-Stor98AllowInterfaceMismatch" }
             $legStor98 = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | ForEach-Object { $_.Dest })
+        } else {
+            $pkgArgs += "-NoStor98"
         }
         # ErrorActionPreference relaxed across the call, as every other native
         # call in this script does and this one did not until the audit of
@@ -3275,7 +3183,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $cmPublishable + $oemPublishable
+        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $cmPublishable + $oemPublishable + $legStor98
         if ($legSigned) { $legCopy += $certPublishable }
         foreach ($name in $legCopy) {
             $src = Join-Path $pkgDir $name
@@ -3303,12 +3211,21 @@ runs are what stand between a broken binary and a guest that cannot boot.
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
                                            -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legStor98)
         Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
-        # The bundled Stor98 files are in the package, and stay out of
-        # releases\<version>\ ($legCopy names this project's files alone):
-        # the upload set takes them from the pinned release folder.
-        foreach ($nvRel in $legStor98) {
-            if (-not (Test-Path -LiteralPath (Join-Path $pkgDir $nvRel) -PathType Leaf)) {
-                throw "make-package.ps1 produced no Stor98 '$nvRel' in '$pkgDir'."
+        # The published Stor98 images carry this release's version, like
+        # xhci98.sys below (task 42-A.30).
+        foreach ($nvRel in @($legStor98 | Where-Object { $_ -match '^stor98\.(sys|mpd)$' })) {
+            $nvVer = (Get-Item -LiteralPath (Join-Path $destDir $nvRel)).VersionInfo.FileVersion
+            if (-not (Test-DriverVersionMatches -Reported $nvVer -Declared $Version)) {
+                throw "the $($leg.Dir)\$nvRel reports FileVersion '$nvVer', not $Version."
+            }
+            # And the bytes are the build's (signed, on a signed leg, by this
+            # cut's key like the other x64 drivers: one signature for all).
+            $nvBuilt = \(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | Where-Object { $_.Dest -eq $nvRel })[0].FullPath
+            if ($legSigned -and $nvRel -eq "stor98.sys") {
+                Assert-TestSigned -Sys (Join-Path $destDir $nvRel) -BuiltSys $nvBuilt -Label "$($leg.Dir)\$nvRel"
+            } elseif ((Get-FileHash -LiteralPath (Join-Path $destDir $nvRel) -Algorithm SHA256).Hash -ne
+                      (Get-FileHash -LiteralPath $nvBuilt -Algorithm SHA256).Hash) {
+                throw "the $($leg.Dir)\$nvRel about to be published is not the build at '$nvBuilt'."
             }
         }
         # The certificate beside a signed leg's binaries must be this key's
@@ -4296,23 +4213,9 @@ helper (xhciinst\di\build.cmd).
     $contents += "  covered by it. The LICENCE section at the end points here."
     $contents += ""
 
-    # The bundled Stor98 build: in the download's release- directories only
-    # (not in releases\, where nothing third-party is tracked). The first
-    # line is the one -UploadSetOnly reads ($stor98ReadmePattern).
+    # The bundled Stor98 build (task 42-A.30): in the release- directories.
     if ($null -ne $stor98) {
-        $contents += ("  Bundled in this download: Stor98 {0}." -f $stor98.Version)
-        # Each pin on a line of its own, within the readme's 78 columns.
-        $contents += "  Its SHA256SUMS.txt has the SHA-256"
-        $contents += ("  {0}." -f $stor98.SumsSha256)
-        $contents += ("  Interface version: {0}{1}." -f $stor98.Interface,
-                      $(if ($stor98.Overridden) { " (MISMATCH OVERRIDDEN, see below)" } else { "" }))
-        if ($stor98.Overridden) {
-            # The override is logged where the download's reader sees it
-            # (-Stor98AllowInterfaceMismatch; a dry cut against a checkout
-            # whose header is not yet the pinned build's).
-            $contents += @(Format-Wrapped -Text ("The interface check was overridden for this cut " +
-                "(-Stor98AllowInterfaceMismatch): " + $stor98.Mismatch.Replace($repo.TrimEnd('\') + '\', "")) -Width 78 -FirstPrefix "  " -RestPrefix "  ")
-        }
+        $contents += ("  Bundled in this download: Stor98 {0}, built with this release." -f $stor98.Version)
         $contents += ""
         $stor98X86 = @($legs | Where-Object { $_.Arch -eq "x86" }).Count -gt 0
         $stor98X64 = @($legs | Where-Object { $_.Arch -eq "x64" }).Count -gt 0
@@ -4321,20 +4224,17 @@ helper (xhciinst\di\build.cmd).
         if ($stor98X64) { $stor98Dirs += "RELEASE-X64" }
         $contents += @(Format-Wrapped -Text (($stor98Dirs -join " and ") + $(if ($stor98Dirs.Count -gt 1) { " hold" } else { " holds" }) +
             " Stor98, an NVMe storage driver for NVMe drives such as one in a Thunderbolt or USB4 enclosure:" +
-            " stor98.inf and the files beside it whose names start with stor98. It is a separate project" +
-            " with its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
-            " and stor98-readme.txt is its own guide. INSTALL.BAT installs it only when asked (its box on the installer's Components page, or /stor98). By hand, in the hardware" +
+            " stor98.inf and the files beside it whose names start with stor98. It carries this release's version" +
+            " and date, and its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
+            " and stor98-readme.txt is its guide. INSTALL.BAT installs it only when asked (its box on the installer's Components page, or /stor98). By hand, in the hardware" +
             " wizard (Have Disk), point at " +
             $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `
             -Width 78 -FirstPrefix "  " -RestPrefix "  ")
         if ($stor98X64) {
             $contents += ""
-            $contents += "  RELEASE-X64's stor98.sys is test-signed by Stor98's own test"
-            $contents += "  certificate, not by this project's: stor98-test.cer beside it is"
-            $contents += "  that certificate's public half, as xhci98-test.cer is this"
-            $contents += "  project's. On Vista x64 and 7 x64, test-signing mode (bcdedit /set"
-            $contents += "  testsigning on) loads both; importing either certificate is not"
-            $contents += "  needed."
+            $contents += "  RELEASE-X64's stor98.sys is signed with the same test certificate as"
+            $contents += "  this project's other x64 drivers (xhci98-test.cer), in the same"
+            $contents += "  step: test-signing mode loads them all."
         }
         $contents += ""
     }
@@ -7173,17 +7073,13 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Write-Host "Tracked:    $destRoot"
     Write-Host "            Each published directory holds this project's own files only: its"
     Write-Host "            drivers, their INFs, txtsetup.oem, nt\ beside them, and in an x64"
-    Write-Host "            directory the test certificate; tools\ and INSTALL.BAT at the root."
-    Write-Host "            No Stor98 file and no Microsoft file. Commit this."
+    Write-Host "            directory the test certificate; tools\ and INSTALL.BAT at the root;"
+    Write-Host "            in each release- directory the Stor98 built with them. No Microsoft"
+    Write-Host "            file. Commit this."
     if ($null -ne $uploadRoot) {
         Write-Host ""
         Write-Host "Upload:     $uploadZip"
-        if ($null -ne $stor98) {
-            Write-Host ("            The same tree, zipped, with Stor98 {0}'s own files added to each" -f $stor98.Version)
-            Write-Host "            release- directory; no Microsoft file. This is the"
-        } else {
-            Write-Host "            The same tree, zipped, with no Stor98 and no Microsoft file. This is the"
-        }
+        Write-Host "            The same tree, zipped, with no Microsoft file. This is the"
         Write-Host "            GitHub release asset; it is git-ignored and must stay that way."
         Write-Host "            See releases\README.md and docs\contributing\legal-provenance.md"
         Write-Host "            section 5."
