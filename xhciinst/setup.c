@@ -197,7 +197,8 @@ static int selftest(void)
  * the right Explorer's start gave it. A declined prompt hands the
  * foreground back to its owner; with no owner it went to Explorer, and the
  * message box, even topmost, opened behind Explorer's window (read on
- * Windows 7). */
+ * Windows 7). It sits at the screen's centre, where the prompt, placed by
+ * its owner, then opens. */
 static HWND gOwner;
 
 static int fail(const char *text)
@@ -226,7 +227,9 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE prev, LPSTR cmdLine, int show)
         return selftest();
     }
     gOwner = CreateWindowExA(WS_EX_TOOLWINDOW, "STATIC", SETUP_TITLE,
-                             WS_POPUP, 0, 0, 0, 0, NULL, NULL, hi, NULL);
+                             WS_POPUP, GetSystemMetrics(SM_CXSCREEN) / 2,
+                             GetSystemMetrics(SM_CYSCREEN) / 2, 0, 0, NULL,
+                             NULL, hi, NULL);
     if (gOwner != NULL) {
         ShowWindow(gOwner, SW_SHOWNORMAL);
         SetForegroundWindow(gOwner);
