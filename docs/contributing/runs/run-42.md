@@ -1193,3 +1193,95 @@ cut at `72c69b18`; the 7 x86 leg was read again on the final package.
 Not taken here: `XHCIINST /eject`'s confirmation in a guest (host vectors
 only), the window's settings pages over a machine-wide value that is not
 a `DWORD`, 2000, XP, Vista and the x64 targets.
+
+## XHCITR on Windows 2000: the disk names, the letters and the stopped mark (2026-10-19)
+
+The `3.1.0.0` matrix read two faults on Windows 2000 SP4 with the bench
+cut: the tray menu and the tree named a Bulk-Only stick and a UAS disk
+by the USB device's own name with no drive letter, where 98 SE reads
+"... (F:)", and a device stopped from the tray showed no
+"[stopped - unplug it]", which the README promises. Branch `p42-trfix`
+from `3.1.0.0` `4b6d3477`: `5494c288` (the fix), `e1ff85f5` and
+`d74bf6cf` (revisions after review), `def3d558` and the record's
+revision 15 (design record 25 sections 6.5 and 14); roadmap-usb4 task
+42-A.28.
+
+**The causes**, read in a 2000 guest (below) with the bench's
+`XHCITR.EXE` (SHA-256 `a9931e76...48d787`):
+
+- The disk. `HKLM\SYSTEM\CurrentControlSet\Enum\USBSTOR\Disk&Ven_QEMU&...`
+  holds `ClassGUID` `{4D36E967-...}`, `DeviceDesc` "Disk drive" and
+  `FriendlyName` "QEMU QEMU HARDDISK USB Device", and no `Class` value.
+  `CM_DRP_CLASS` answered "no such value", so the node's setup class was
+  empty and it was no disk: no friendly name was read, `disk_letters_nt`
+  skipped it, and the label fell back to the USB device's name. The
+  device was still offered because its removal relations hold the
+  volume ("Generic volume"). The letter lookup itself works on 2000: a
+  scratch program in the guest read every disk interface by its
+  instance ID and `IOCTL_STORAGE_GET_DEVICE_NUMBER` on each `\\.\X:`
+  (`E:` 7/3 for the stick, `F:` 7/2 for the UAS disk, matched). XP and
+  7 write the `Class` value (7's bench report already named both disks
+  with their letters).
+- The mark. After the stop ("Windows has stopped USB Mass Storage
+  Device. You can now unplug the device.") the devnode read status
+  `0x01806400`, problem code 24, not 47: 2000 has no Code 47. Only the
+  after-stop reading knew Code 24 (run 41); the rule saw no disk and no
+  problem it knew, and said "not offered - no disk on it".
+
+**The fix.** `dn_read` takes an empty class name from the class key the
+devnode's `ClassGUID` names. `tr_held_for_eject` (Code 47, or Code 24
+when allowed) now decides the USB rule, the tree and tray suffix,
+`tr_stopped_text` and `tr_usb_after_kind`. Since Code 24 is also 2000's
+failed start, it is allowed only for a devnode this process stopped (the
+USB stop's after-reading at Code 24, a unit's accepted stop), until it
+starts again or leaves a whole walk, and, at a USB port, only while the
+port still reports a configuration (`tr_w2k_code24`): the stopped device
+kept "Configuration: 1", and one plugged in again starts unconfigured. A
+stop made elsewhere (Windows' own Unplug or Eject Hardware) reads as
+before. Reviewed and revised twice (`e1ff85f5`, `d74bf6cf`); the last
+review found nothing.
+
+**Tests and builds.** `xhcitr\build.cmd`, `selftest.cmd` (11 and 10
+checks), `snaptest.cmd` (33 cases) and `test\run-host-tests.cmd`
+(`test_tr` 909 checks) passed; the gated build on `def3d558`,
+`build-driver.cmd all` then `all -amd64`, one after the other:
+BUILD + GATES PASSED (debug release qemu) on both, the build record
+naming `def3d558` with no uncommitted change. The leg binary, `XHCITR.EXE` SHA-256
+`018aef42...877ff7` (`XHCITR64.EXE` `f7f6002d...7e8554`), was built
+from `d74bf6cf`'s sources, which `def3d558` does not change.
+
+**The legs** (QEMU only, `vm\usb4\bin-2a893ea`, headless; QMP
+48190-48191; a Bulk-Only stick `usb-storage` on root port 3 and a
+`usb-uas` + `scsi-hd` disk on root port 4, both on
+`vm\u4-asm\base\nvme-fat.qcow2` overlays, a `usb-tablet` on port 2;
+the bench package by hand, `INSTALL /console /yes`, exit 3, then the
+new `XHCITR.EXE` copied over `C:\XHCI98\XHCITR.EXE`):
+
+- **Windows 2000 SP4** (`vm\t26\win2k-clean.qcow2`, `pc,acpi=off`,
+  one vCPU). Before (bench): as the matrix read it, plus the causes
+  above. After: the tray menu read "Safely remove QEMU QEMU HARDDISK UAS
+  Device (E:)" and "... USB Device (F:)", the tree the same names with
+  their letters. The stick stopped from the tray: the balloon, then the
+  tray item "Safely remove USB Mass Storage Device (stopped - unplug
+  it)" greyed, the tree "[Port 3, USB 3] USB Mass Storage Device
+  SuperSpeed [stopped - unplug it]", the details "Safely Remove: not
+  now - stopped - unplug it", Code 24, "Configuration: 1". Unplugged:
+  "(empty)"; plugged in again: started, "can be stopped", "(F:)" back
+  in the tray. The UAS disk stopped from the tray: "[stopped - unplug
+  it]", Code 24; the emulated UAS device does not attach when added to
+  a running machine (section 14), so its return was read at the cold
+  start, with its letter. The stick stopped from Windows' own icon:
+  Code 24, "not offered - no disk on it", no mark (not stopped here).
+  **Pass.**
+- **Windows 7 x86** (`vm\win7.img`, two vCPUs): the bench already named
+  "QEMU QEMU HARDDISK USB Device (D:)" and "... UAS Device (F:)"; the
+  new tool the same. The stick stopped from the tray: Code 47, "[stopped
+  - unplug it]"; plugged in again: started, "(D:)" back in the tray. The
+  UAS disk stopped: Code 47, "[stopped - unplug it]". **Pass**, no
+  change from the bench.
+
+Not taken here: XP (the same Code 47 path as 7; whether its USB disks
+carry the `Class` value was not read, and either way is now handled), 98 SE and ME (their letters come from
+`CurrentDriveLetterAssignment`, a path this change does not touch), a
+Thunderbolt unit stopped on 2000 (the same `tr_w2k_code24` rule, no
+port), and the x64 tool.
