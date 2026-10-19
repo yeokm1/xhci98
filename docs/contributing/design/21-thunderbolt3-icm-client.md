@@ -32,7 +32,10 @@ section 8's table gains design record 28's value. Section 3.5, added
 2026-10-19 (task 42-A.21, the owner's request of that day): what the
 connection manager needs of the USB drivers, for the installer's
 connection manager alone; section 7.4's mark service also on Windows 8
-and 8.1. Revised 2026-10-19 (task 42-A.23, the owner's decision of that
+and 8.1. Section 7.2 revised 2026-10-19 (task 42-A.25, from the matrix
+reading on Windows ME that day): a tunnel named but not published at once,
+as on 98 SE and ME right after a resume, is never paid later by an
+exposure that names none. Revised 2026-10-19 (task 42-A.23, the owner's decision of that
 day): the x64 package keeps the filter INF at the flavour directory's
 root beside `xhcicm.inf` and its one `xhcicm.sys`, with no `nt\`; the x86
 package keeps `nt\` (section 3.3, the packaging in section 3.3's last
@@ -2372,11 +2375,19 @@ handler, host-tested) and `cm_nvlinkos.c` implement this side.
   generation). An entry not `UP` always gets the new generation. An entry
   already `UP` keeps it - on a tunnel down's re-enumeration, a RESYNC, a
   baseline's or an owed re-enumeration's exposure, and on every member but
-  the one a tunnel up names - unless the exposure names a tunnel other
-  than the one the entry's `UP` was last published for: under the USB4
-  profile (record 22 section 10) the UP hook and the seam name the port's
-  tunnel (the USB4 port and its connection generation) to the member the
-  port corresponds to, and nothing else names one. Under the firmware
+  the one a tunnel up names - unless the exposure itself names a tunnel
+  other than the one the entry's `UP` was last published for: under the
+  USB4 profile (record 22 section 10) the UP hook and the seam name the
+  port's tunnel (the USB4 port and its connection generation) to the
+  member the port corresponds to, and nothing else names one. A tunnel so
+  named but not published at once - the secondary bus unread, as on 98 SE
+  and ME right after a resume, before the bridges are numbered again - is
+  kept as the bridge's label for what later exposures publish, and no
+  later exposure that names none advances an entry already `UP` for it
+  (task 42-A.25): by then the endpoint has been enumerated, and on Windows
+  ME a Stor98 instance bound since before a Stand by dropped its disk when
+  a second enclosure's plug advanced its entry so (record 22 section 10).
+  Under the firmware
   connection manager no action names its member, so no tunnel is named
   and no entry already `UP` is advanced: a member whose function is newly
   found gets its generation, and the others stay as they are. (Until
@@ -4135,10 +4146,11 @@ the code (`runs/run-42.md`, "42-A.5"):
   and 7 x86 made it when a marked bridge's driver was installed again (a
   forced `machine.inf` update), and XP made none for a Stor98 update over
   a marked NVMe drive. So the copy is possible on every system the service
-  runs on, 2000 to 7 (`inst_mk_system`), which is where the matrix's tests
+  runs on. The service stays on 2000 to 7, where the matrix's tests
   without the mark found it needed: on 2000 for the first plug, on Vista
   and 7 (x86 and x64) for a stack rebuilt by a disable and enable or a
-  driver update. The service therefore takes
+  driver update (the installer puts it on 8 and 8.1 too, for the
+  connection manager alone: `inst_mk_system`). The service therefore takes
   `xhcicm` out of every entry's `LowerFilters` at every poll (the other
   names kept, the value deleted when nothing else is left), and runs its
   inventory at once when it took one out and every minute besides; an
@@ -4162,6 +4174,17 @@ the code (`runs/run-42.md`, "42-A.5"):
   the next poll; after the uninstall nothing under `Enum\PCI` or the
   database named `xhcicm`, and a new bridge, an NVMe drive behind it and
   another on bus 0 started (Code 0).
+- **Safe eject off** (the owner, 2026-10-19): the service follows
+  `XhciCmSafeEject`. The installer reads the value in force at the end of
+  each run (the machine-wide value, else each `xhcicm` device's own,
+  else 1): with 0 it does not install the service, and removes one that
+  is installed with every mark and the database's `LowerFilters` copies,
+  as the uninstall's step 0 does, the filter INF's `UpperFilters` copies
+  staying with `xhcicm`; a later `/set XhciCmSafeEject=1` installs it
+  again (record 23 section 5.1 step 12). The setting's note in the
+  installer says so. The service's own reading of a domain's safe eject
+  0 (no new mark, a mark there removed) stays as it was, for the time
+  before the installer's run.
 - **Hand registration.** `XHCIMARK -register` and `-unregister` register
   and delete the service from `system32` for a test guest before the
   installer's hooks exist; the installer does it in a release.

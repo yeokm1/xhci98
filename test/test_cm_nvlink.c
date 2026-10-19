@@ -1148,8 +1148,9 @@ static void test_bridge_tunnel(void)
 
     /* The sequence: port 1's entry UP for T1; its re-plug's T2 exposure
      * finds the bus silent (nothing published, the UP of T1 still read);
-     * a later exposure naming none, once the function answers, advances
-     * it once, and the one after leaves it. */
+     * a later exposure naming none, once the function answers, does not
+     * advance it (the endpoint may be bound by then), only labels what it
+     * publishes; the exposure that names T2 itself advances it, once. */
     tableInit();
     br[0] = br[1] = 0;
     tn[0] = tn[1] = CM_NVLINK_TUNNEL_NONE;
@@ -1157,12 +1158,105 @@ static void test_bridge_tunnel(void)
                           CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, T1), &o);
     (void)CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, T2);
     t = CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, CM_NVLINK_TUNNEL_NONE);
-    (void)CmNvlinkPublishUp(&table, tun, 4, 0, t, &o);
-    CHECK_EQ(o, CM_NVLINK_UP_AGAIN, "the owed generation paid by a later exposure");
+    (void)CmNvlinkPublishUpEx(&table, tun, 4, 0, t, FALSE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_ALREADY,
+             "a later exposure naming none: the entry UP for T1 kept");
+    CHECK_EQ(table.Entry[a].LinkGeneration, 1, "generation 1");
+    (void)CmNvlinkPublishUpEx(&table, tun, 4, 0, T2, TRUE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_AGAIN, "the exposure naming T2: advanced");
     CHECK_EQ(table.Entry[a].LinkGeneration, 2, "generation 2");
-    (void)CmNvlinkPublishUp(&table, tun, 4, 0, t, &o);
+    (void)CmNvlinkPublishUpEx(&table, tun, 4, 0, T2, TRUE, &o);
     CHECK_EQ(o, CM_NVLINK_UP_ALREADY, "and only once");
     CHECK_EQ(table.Entry[a].LinkGeneration, 2, "still generation 2");
+
+    /* A function not UP published by an exposure naming none carries the
+     * bridge's tunnel, so the named exposure of that tunnel leaves it. */
+    CHECK(CmNvlinkSetDown(&table, a, FALSE), "down, withheld");
+    (void)CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, CM_NVLINK_TUNNEL(1, 3));
+    t = CmNvlinkBridgeTunnel(br, tn, 2, 0x0100, CM_NVLINK_TUNNEL_NONE);
+    (void)CmNvlinkPublishUpEx(&table, tun, 4, 0, t, FALSE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_AGAIN, "not UP: published by the unnamed exposure");
+    CHECK_EQ(table.Entry[a].LinkGeneration, 3, "generation 3");
+    CHECK_EQ(tun[a], CM_NVLINK_TUNNEL(1, 3), "labelled with the bridge's tunnel");
+    (void)CmNvlinkPublishUpEx(&table, tun, 4, 0, CM_NVLINK_TUNNEL(1, 3), TRUE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_ALREADY, "the named exposure of it: left");
+    CHECK_EQ(table.Entry[a].LinkGeneration, 3, "still generation 3");
+    CHECK_EQ(CmNvlinkPublishUp(&table, tun, 4, 0, CM_NVLINK_TUNNEL(1, 4), &o), a,
+             "CmNvlinkPublishUp: a named tunnel advances");
+    CHECK_EQ(o, CM_NVLINK_UP_AGAIN, "as CmNvlinkPublishUpEx with advance");
+}
+
+/*
+ * Task 42-A.6 after a 98 SE or ME resume (ME, the bench zip: the volume of
+ * port 1 lost when port 2 was plugged after a Stand by): two NVMe UP at
+ * generation 1, bus 4 behind bridge A (port 1) and bus 5 behind bridge B
+ * (port 2). The resume rebuilds port 1 (connection 2): its UP hook and the
+ * seam's exposure name T(1,2) for bridge A, but neither publishes - the
+ * secondary bus is not numbered yet after the resume - so only bridge A's
+ * record holds it; port 2's tunnel goes down (its entry out of UP). Then
+ * port 2 is plugged again (connection 2): the seam exposes every member,
+ * bridge A with no tunnel named. Port 1's entry, UP since before the sleep
+ * and bound by its instance, keeps its generation; port 2's function gets
+ * its new one.
+ */
+static void test_resume_no_bus(void)
+{
+    ULONG br[2];
+    ULONG tn[2];
+    ULONG o;
+    ULONG a;
+    ULONG b;
+    ULONG t;
+    RX rx;
+    const ULONG brA = 0x0028;
+    const ULONG brB = 0x0030;
+
+    tableInit();
+    br[0] = br[1] = 0;
+    tn[0] = tn[1] = CM_NVLINK_TUNNEL_NONE;
+    a = CmNvlinkPublishUpEx(&table, tun, 4, 1,
+                            CmNvlinkBridgeTunnel(br, tn, 2, brA, T1), TRUE, &o);
+    b = CmNvlinkPublishUpEx(&table, tun, 5, 1,
+                            CmNvlinkBridgeTunnel(br, tn, 2, brB, T3), TRUE, &o);
+    CHECK(a != CM_NVLINK_NONE && b != CM_NVLINK_NONE && a != b, "two entries");
+    rxFind(&rx, &table, 4, 1);
+    CHECK_EQ(rx.Recorded, 1, "port 1's instance bound at generation 1");
+
+    /* The resume: T(1,2) named for bridge A, its bus unread: recorded
+     * only (CmNvlinkExpose records before its bus check). */
+    (void)CmNvlinkBridgeTunnel(br, tn, 2, brA, T2);
+    /* Port 2's tunnel down: its entry out of UP (withheld). */
+    CHECK(CmNvlinkSetDown(&table, b, FALSE), "port 2 down");
+
+    /* Port 2's connection 2: the seam's exposure of member 0 names none. */
+    t = CmNvlinkBridgeTunnel(br, tn, 2, brA, CM_NVLINK_TUNNEL_NONE);
+    CHECK_EQ(t, T2, "bridge A's record still holds T(1,2)");
+    (void)CmNvlinkPublishUpEx(&table, tun, 4, 1, t, FALSE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_ALREADY,
+             "port 1's entry kept: not republished on port 2's action");
+    CHECK_EQ(table.Entry[a].LinkGeneration, 1, "port 1: generation 1");
+    CHECK_EQ(table.Entry[a].Sequence, 2, "port 1's entry never written again");
+    rxPoll(&rx, &table);
+    CHECK_EQ(rx.Applied, 0, "port 1's instance sees nothing to apply");
+    CHECK_EQ(rx.Recorded, table.Entry[a].LinkGeneration,
+             "and keeps its identity (R8d)");
+
+    /* Member 1, named for its own new tunnel. */
+    (void)CmNvlinkPublishUpEx(&table, tun, 5, 1,
+                              CmNvlinkBridgeTunnel(br, tn, 2, brB,
+                                                   CM_NVLINK_TUNNEL(2, 2)),
+                              TRUE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_AGAIN, "port 2's function: its new generation");
+    CHECK_EQ(table.Entry[b].LinkGeneration, 2, "port 2: generation 2");
+    CHECK_EQ(table.Entry[a].LinkGeneration, 1, "port 1 still generation 1");
+
+    /* The 9x late scan of bridge A, naming none: still kept. */
+    (void)CmNvlinkPublishUpEx(&table, tun, 4, 1,
+                              CmNvlinkBridgeTunnel(br, tn, 2, brA,
+                                                   CM_NVLINK_TUNNEL_NONE),
+                              FALSE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_ALREADY, "the late scan: kept");
+    CHECK_EQ(table.Entry[a].LinkGeneration, 1, "port 1 still generation 1");
 }
 
 /* A fake publisher for CmNvlinkPublish9x: each step appends its letter. */
@@ -1372,6 +1466,7 @@ int main(void)
     test_service_due();
     test_two_members();
     test_bridge_tunnel();
+    test_resume_no_bus();
     test_record();
     test_proof();
     test_remove();
