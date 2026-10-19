@@ -8,6 +8,12 @@ the profile's list and no delay-load imports:
   -Profile window   XHCIWIZ.EXE, XHCIWZ64.EXE: KERNEL32, USER32, GDI32,
                     ADVAPI32, COMCTL32, COMDLG32 and SHELL32, each present
                     on Windows 98 SE
+  -Profile setup    SETUP.EXE: KERNEL32, USER32 and SHELL32; and, since
+                    the program exists to stay unelevated, a windows-
+                    subsystem image whose embedded manifest asks for
+                    asInvoker (Vista's installer detection elevates a
+                    SETUP.EXE that does not say so) and declares Windows 7
+                    (whose compatibility assistant questions it otherwise)
 Any other name - whatever its characters (api-ms-win-*.dll, a name with
 dots) - fails, and so does an image whose import table cannot be read.
 selftest.cmd runs it.
@@ -15,7 +21,7 @@ selftest.cmd runs it.
 Exit code 0 = the profile's modules alone; 1 = anything else.
 #>
 param([Parameter(Mandatory = $true)][string]$Path,
-      [ValidateSet('console', 'window')][string]$Profile = 'console')
+      [ValidateSet('console', 'window', 'setup')][string]$Profile = 'console')
 $ErrorActionPreference = 'Stop'
 
 function Fail([string]$why) {
@@ -84,6 +90,21 @@ for ($n = 0; ; $n++) {
 if ($Profile -eq 'window') {
     $want = @('KERNEL32.DLL', 'USER32.DLL', 'GDI32.DLL', 'ADVAPI32.DLL',
               'COMCTL32.DLL', 'COMDLG32.DLL', 'SHELL32.DLL')
+} elseif ($Profile -eq 'setup') {
+    $want = @('KERNEL32.DLL', 'USER32.DLL', 'SHELL32.DLL')
+    if ((U16 ($opt + 68)) -ne 2) { Fail 'not a windows-subsystem image' }
+    $text = [System.Text.Encoding]::ASCII.GetString($b)
+    if (-not $text.Contains('<requestedExecutionLevel level="asInvoker"')) {
+        Fail 'its manifest does not ask for asInvoker'
+    }
+    if ($text.Contains('requireAdministrator') -or $text.Contains('highestAvailable')) {
+        Fail 'it names an elevated execution level'
+    }
+    # Windows 7's supportedOS entry, without which its Program Compatibility
+    # Assistant questions SETUP.EXE once the window has closed.
+    if (-not $text.Contains('<supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>')) {
+        Fail 'its manifest does not declare Windows 7 (the Program Compatibility Assistant would question it)'
+    }
 } else {
     $want = @('KERNEL32.DLL', 'ADVAPI32.DLL')
 }

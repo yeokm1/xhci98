@@ -1,13 +1,15 @@
 @echo off
-rem build.cmd - build the installer's four executables (roadmap-usb4.md
-rem tasks 40.6 and 42-A.2; design record 23 section 3, record 26 section 4):
-rem the console tool XHCIINST.EXE and XHCIIN64.EXE, as xhcicln\build.cmd
-rem builds XHCICLN.EXE and XHCICL64.EXE, and the window XHCIWIZ.EXE and
-rem XHCIWZ64.EXE, as xhcitr\build.cmd builds XHCITR.EXE.
+rem build.cmd - build the installer's five executables (roadmap-usb4.md
+rem tasks 40.6, 42-A.2 and 42-A.31; design record 23 section 3, record 26
+rem sections 2 and 4): the console tool XHCIINST.EXE and XHCIIN64.EXE, as
+rem xhcicln\build.cmd builds XHCICLN.EXE and XHCICL64.EXE, the window
+rem XHCIWIZ.EXE and XHCIWZ64.EXE, as xhcitr\build.cmd builds XHCITR.EXE,
+rem and SETUP.EXE, the package root's starter of the window (setup.c), one
+rem 32-bit image for every target.
 rem
-rem   build.cmd        all four
-rem   build.cmd x86    XHCIINST.EXE and XHCIWIZ.EXE alone, for a host without
-rem                    tools\WinDDK71
+rem   build.cmd        all five
+rem   build.cmd x86    XHCIINST.EXE, XHCIWIZ.EXE and SETUP.EXE alone, for a
+rem                    host without tools\WinDDK71
 rem
 rem Nothing is installed machine-wide. The 32-bit pair, which starts on
 rem Windows 98 SE, ME, 2000, XP and 32-bit Vista and 7, is built with the
@@ -18,8 +20,8 @@ rem same sources built a second time with WDK 7.1's amd64 compiler
 rem (tools\WinDDK71; WDK71 overrides it), /MT, for XP x64, Vista x64 and 7
 rem x64: a 32-bit program cannot install a driver on 64-bit Windows. The
 rem console tool imports KERNEL32 and ADVAPI32 alone, the window those and
-rem USER32, GDI32, COMCTL32, COMDLG32 and SHELL32 (selftest.cmd holds them
-rem to it); every SetupAPI, newdev and configuration-manager routine is
+rem USER32, GDI32, COMCTL32, COMDLG32 and SHELL32, SETUP.EXE KERNEL32,
+rem USER32 and SHELL32 (selftest.cmd holds them to it); every SetupAPI, newdev and configuration-manager routine is
 rem looked up at run time. Each embeds its manifest through its .rc.
 rem
 rem The sources: xhciinst.c (the console front end), xhciwiz.c (the window),
@@ -54,7 +56,7 @@ if "%WANT64%"=="1" if not exist "%WDK71%\bin\x86\amd64\cl.exe" (
     exit /b 1
 )
 
-for %%F in (XHCIINST.EXE XHCIIN64.EXE XHCIWIZ.EXE XHCIWZ64.EXE xhciinst.res xhciin64.res xhciwiz.res xhciwz64.res) do if exist %%F del %%F
+for %%F in (XHCIINST.EXE XHCIIN64.EXE XHCIWIZ.EXE XHCIWZ64.EXE SETUP.EXE setup.res xhciinst.res xhciin64.res xhciwiz.res xhciwz64.res) do if exist %%F del %%F
 
 set "WLIBS=user32.lib gdi32.lib advapi32.lib comctl32.lib comdlg32.lib shell32.lib"
 
@@ -82,6 +84,18 @@ if not exist XHCIWIZ.EXE exit /b 1
 endlocal
 del /q xhciwiz.obj inst_eng.obj inst_core.obj inst_psw.obj xhciwiz.res 2>nul
 echo Built XHCIWIZ.EXE
+setlocal
+set "PATH=%MSVC6%\VC98\Bin;%MSVC6%\Common\MSDev98\Bin;%PATH%"
+set "INCLUDE=%MSVC6%\VC98\Include"
+set "LIB=%MSVC6%\VC98\Lib"
+rc /fo setup.res setup.rc
+if errorlevel 1 exit /b 1
+cl /nologo /W3 /WX /O2 /FeSETUP.EXE setup.c setup.res user32.lib shell32.lib /link /SUBSYSTEM:WINDOWS,4.0
+if errorlevel 1 exit /b 1
+if not exist SETUP.EXE exit /b 1
+endlocal
+del /q setup.obj setup.res 2>nul
+echo Built SETUP.EXE
 
 if "%WANT64%"=="0" goto done
 

@@ -1,7 +1,10 @@
 @echo off
-rem selftest.cmd - the installer's four executables' /selftest, their switch
+rem selftest.cmd - the installer's five executables' /selftest, their switch
 rem refusals and their import tables (design record 23 sections 10 and 11,
-rem record 26 section 11).
+rem record 26 sections 2 and 11). SETUP.EXE has no switch of its own to
+rem refuse: it passes its command line to the window; its /selftest reads
+rem that command line's tail and the window's path, and its import gate
+rem also holds its manifest to asInvoker.
 rem The console tool's /selftest renders every screen of an interactive and
 rem a listing run with made-up devices and fails on a line wider than 79
 rem columns, or on questions asked out of record 23's order
@@ -19,7 +22,8 @@ rem only). The x64 pair is run only where it can run: on 64-bit Windows.
 rem
 rem THE IMPORT GATE FOR THE TOOL: the console tool's import table must name
 rem KERNEL32.dll and ADVAPI32.dll and nothing else, the window's those and
-rem USER32, GDI32, COMCTL32, COMDLG32 and SHELL32 - every SetupAPI,
+rem USER32, GDI32, COMCTL32, COMDLG32 and SHELL32, SETUP.EXE's KERNEL32,
+rem USER32 and SHELL32 - every SetupAPI,
 rem newdev, configuration-manager and version routine is looked up at run
 rem time, which is what lets one image start on Windows 98 SE.
 rem check-imports.ps1 reads the PE import directory of each image itself (a
@@ -46,10 +50,16 @@ if not exist XHCIWIZ.EXE (
     echo ERROR: XHCIWIZ.EXE is not here; run build.cmd first
     exit /b 1
 )
+if not exist SETUP.EXE (
+    echo ERROR: SETUP.EXE is not here; run build.cmd first
+    exit /b 1
+)
 
 call :imports XHCIINST.EXE console
 if errorlevel 1 exit /b 1
 call :imports XHCIWIZ.EXE window
+if errorlevel 1 exit /b 1
+call :imports SETUP.EXE setup
 if errorlevel 1 exit /b 1
 if exist XHCIIN64.EXE (
     call :imports XHCIIN64.EXE console
@@ -63,6 +73,8 @@ if exist XHCIWZ64.EXE (
 call :one XHCIINST.EXE
 if errorlevel 1 exit /b 1
 call :wiz XHCIWIZ.EXE
+if errorlevel 1 exit /b 1
+call :selftest SETUP.EXE
 if errorlevel 1 exit /b 1
 if "%IS64%"=="1" (
     if exist XHCIIN64.EXE (

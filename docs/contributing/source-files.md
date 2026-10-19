@@ -384,9 +384,11 @@ Each tool is a tree at the repository root, built by its own `build.cmd` and pub
 | `inst_core.c` / `inst_core.h` | The pure half: the INF reader, the models section per system, the action per device and per service group, the registry value table and its applicability, record 24's unit rules, the switches and exit codes, the helper's command line and result file, the uninstall entry and route, the window's texts (host suite `test_inst`). |
 | `xhciinst.rc`, `xhciinst.manifest` | The console tool's version resource and elevation request. |
 | `xhciwiz.rc`, `xhciwiz_res.h`, `xhciwiz.manifest` | The window's icon (`xhcitr\xhcitr.ico`, XHCITR's), version, page templates, elevation and Common Controls 6 requests. |
-| `build.cmd` | The four executables, each also compiling `src\xhci_psw.c` for the driver's own switchover gate. |
-| `selftest.cmd`, `check-imports.ps1` | The `/selftest`s, the switch refusals and the import gate (the console pair exactly `KERNEL32.dll` and `ADVAPI32.dll`; the window pair those and `USER32`, `GDI32`, `COMCTL32`, `COMDLG32` and `SHELL32`). |
-| `INSTALL.BAT` | Staged at the package root; opens the window, or with `/console` runs the console tool. |
+| `setup.c` | `SETUP.EXE` (design record 26 section 2, task 42-A.31): the package root's program a person double-clicks; starts `XHCIWIZ.EXE`, or `XHCIWZ64.EXE` on 64-bit Windows, through `ShellExecuteEx` with its own arguments and exits; its `/selftest`. |
+| `setup.rc`, `setup.manifest` | `SETUP.EXE`'s icon (the USB Tree's, `..\xhcitr\xhcitr.ico`), version and `asInvoker` manifest. |
+| `build.cmd` | The five executables, the four engine ones each also compiling `src\xhci_psw.c` for the driver's own switchover gate. |
+| `selftest.cmd`, `check-imports.ps1` | The `/selftest`s, the switch refusals and the import gate (the console pair exactly `KERNEL32.dll` and `ADVAPI32.dll`; the window pair those and `USER32`, `GDI32`, `COMCTL32`, `COMDLG32` and `SHELL32`; `SETUP.EXE` `KERNEL32`, `USER32` and `SHELL32`, a windows-subsystem image with an `asInvoker` manifest). |
+| `INSTALL.BAT` | Staged at the package root, for the command line and scripts; opens the window and waits for it, or with `/console` runs the console tool. |
 | `README.TXT` | The published `readme.txt`. |
 
 ### `xhcimark\` - the safe-removal mark service (task 42-A.5)

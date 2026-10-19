@@ -86,9 +86,9 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 
 ### Installing, approving and removing
 
-- **Install:** run `INSTALL.BAT` and answer Y to "Install Thunderbolt 3 / USB4 support?" (see [Install with INSTALL.BAT](#install-with-installbat)). On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`xhcicmf.inf`, in `nt\` in the 32-bit package), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when asked: on Windows 2000 the first install of the filter needs that restart before the controller is used.
-- **Windows 98 SE and ME:** `INSTALL.BAT` prints the remaining steps: update the controller's entry (an unknown PCI device or PCI System Peripheral) from the driver directory. No filter is needed.
-- **The connection manager alone:** on Windows 2000 to 7 the installer can leave `xhci98.sys` and `xhciuas.sys` out and install `xhcicm.sys` alone, for a computer whose USB 3 controllers run another driver (untick the USB drivers, or `INSTALL /console /cmonly`). On Windows 8 and 8.1 that is the only install it offers: Windows' own USB 3 driver runs the USB controllers there. On the 64-bit editions of 8 and 8.1 the driver loads only in test-signing mode (Secure Boot off) or with signature enforcement disabled.
+- **Install:** double-click `SETUP.EXE` and keep Thunderbolt 3 / USB4 support ticked (see [Install with SETUP.EXE](#install-with-setupexe)). On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`xhcicmf.inf`, in `nt\` in the 32-bit package), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when asked: on Windows 2000 the first install of the filter needs that restart before the controller is used.
+- **Windows 98 SE and ME:** the installer installs the controller's entry (an unknown PCI device or PCI System Peripheral) through Windows' own device installer; one it cannot install gets its Device Manager steps (update it from the driver directory). No filter is needed.
+- **The connection manager alone:** on Windows 2000 to 7 the installer can leave `xhci98.sys` and `xhciuas.sys` out and install `xhcicm.sys` alone, for a computer whose USB 3 controllers run another driver (untick the USB drivers on its Components page). On Windows 8 and 8.1 that is the only install it offers: Windows' own USB 3 driver runs the USB controllers there. On the 64-bit editions of 8 and 8.1 the driver loads only in test-signing mode (Secure Boot off) or with signature enforcement disabled.
 - **Names:** the controller shows under the names in the table above. On Windows 2000 to 7 its PCI ports show as "xHCI98 Thunderbolt PCI Bridge" or "xHCI98 USB4 PCI Bridge": still Windows' own PCI bridges, with the filter on them.
 - **Approval:** by default (`XhciCmApprove` `1`) every device plugged into the port is approved at once. **A device with a PCI Express tunnel can read and write all of the machine's memory**, and these systems cannot fence it off. Where people you do not trust can reach the port, set `XhciCmApprove` to `0`: then only devices the BIOS connected at power-on work. Nothing is remembered: a re-plugged device is approved again by the same rule.
 
@@ -98,12 +98,11 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 |---|---|
 | 2000 | Stop it in "Unplug or Eject Hardware", then unplug. Without the stop, Windows 2000 shows "Unsafe Removal of Device". |
 | XP, Vista, 7 | Stop it in "Safely Remove Hardware", then unplug. |
-| 98 SE, ME | No such dialog: use the [xHCI98 USB Tree](#the-xhci98-usb-tree) or `INSTALL /eject`. Until you unplug, Device Manager's Refresh can start the device again. |
+| 98 SE, ME | No such dialog: use the [xHCI98 USB Tree](#the-xhci98-usb-tree). Until you unplug, Device Manager's Refresh can start the device again. |
 
 - A **dock** is listed under a generic PCI bridge name (its own switch); stopping it stops everything in the dock.
-- A **device missing from Windows' list** (its first plug, or after a disable and enable or a driver update): the USB Tree and `INSTALL /eject` stop it when run as an administrator. Without one, close every program using it, unplug it and plug it in once more; from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
-- `INSTALL /devices` lists the connected devices (name, generation, approval, connections) and the Windows devices behind each. `INSTALL /eject` asks which one, asks Windows to stop it (refused, with nothing changed, while a program has a file open on it), and says "You can now unplug the device." For scripts: `INSTALL /eject 2`, or `INSTALL /eject id=<instance id> /yes`.
-- These commands need administrator permissions on Win 2000+.
+- A **device missing from Windows' list** (its first plug, or after a disable and enable or a driver update): the USB Tree stops it when run as an administrator. Without one, close every program using it, unplug it and plug it in once more; from then on Windows lists it. That unplug is a surprise removal, so cached writes can be lost.
+- For scripts, the console tool lists the connected devices and stops one; `tools\xhciinst\readme.txt` is the reference.
 
 ### NVMe drives
 
@@ -111,7 +110,7 @@ An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **
 
 - The package carries Stor98 in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). It reads `xhcicm.sys`'s link-state channel on every system, 98 SE to 7.
 - Stor98's settings, install steps and limits are in its own readme, `stor98-readme.txt` beside it. The release notes have [the detail](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).
-- `INSTALL.BAT` installs it when asked (its box under the Thunderbolt 3 / USB4 one on the Components page, which needs that one ticked too, or `/thunderbolt /stor98`), and updates an earlier one, Stor98 `0.4.0.0` included. Otherwise, when the NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
+- `SETUP.EXE` installs it when asked (its box under the Thunderbolt 3 / USB4 one on the Components page, which needs that one ticked too), and updates an earlier one, Stor98 `0.4.0.0` included. Otherwise, when the NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
 
 ### Things to know
 
@@ -176,7 +175,8 @@ Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
 |---|---|
 | `release-x86\`, `release-x64\` | The drivers to install (below) |
 | `debug-x86\`, `debug-x64\` | The same drivers built for troubleshooting; install only if asked |
-| `INSTALL.BAT`, `tools\xhciinst\` | The installer and the program it runs (`XHCIINST.EXE`, `XHCIIN64.EXE`) |
+| `SETUP.EXE` | The installer: double-click it to install or update |
+| `INSTALL.BAT`, `tools\xhciinst\` | For command-line and scripted installs (`tools\xhciinst\readme.txt` is the reference), and the programs both run (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE`, `XHCIIN64.EXE`) |
 | `tools\xhcitr\` | The xHCI98 USB Tree, also the driver's log and snapshot reader |
 | `tools\xhciqual\` | DOS: `XHCIQUAL.EXE` and `QUALREP.BAT` |
 | `tools\portsw\` | `portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`: the Intel port switchover |
@@ -192,19 +192,20 @@ Each driver directory holds:
 - `xhci98-test.cer` (64-bit only): the public half of the x64 drivers' test certificate; no need to import it
 - `stor98*` files (`release-` only): the bundled NVMe driver (see [NVMe drives](#nvme-drives))
 
-### Install with INSTALL.BAT
+### Install with SETUP.EXE
 
-INSTALL.BAT is beta in 3.0.0.0: if it fails or you prefer, install through Device Manager as before ([Install by hand](#install-by-hand)).
+There are two ways to install: `SETUP.EXE`, below, or Device Manager by hand ([Install by hand](#install-by-hand)), which still works and remains supported.
 
-Unzip the whole package and run `INSTALL.BAT` from its top directory: double-click it on 98 SE and ME; run it as an administrator on 2000 and XP; Run as administrator on Vista and 7. It shows its plan, asks about a few options ("Enter for [x]" says what Enter keeps) and the tools' install directory (`C:\XHCI98`, or `INSTALL /to <path>`), then asks once before it changes anything.
+To install or update, unzip the whole package and double-click `SETUP.EXE` in its top directory (on 2000 and XP as an administrator; on Vista and 7 answer Yes when Windows asks for an administrator's approval). It opens the installer's window, which shows what it found, the components, a few of the driver's options and the tools' install directory (`C:\XHCI98` unless you choose another), and a summary, and changes nothing before you click Install. To uninstall, use Remove in Add/Remove Programs (Programs and Features on Vista and 7).
 
 - **Windows 2000 to 7:** installs or updates every driver on the devices present, controller first, and stages the package for devices plugged in later. It handles Windows 2000's Have Disk, the root hub's update and Vista and 7's same-`DriverVer` trap. Answer Windows' unsigned-driver questions.
-- **Windows 98 SE and ME:** copies the package into the install directory, adds it to the hardware wizards' search path, prints the Device Manager steps left for each device, and offers to open Device Manager. Run it again after the restart; it then also offers the silent install (off by default).
-- **"Install Thunderbolt 3 / USB4 support?":** Enter answers Y when a controller is found, N when none is. Some laptops show the controller only while a device is plugged in or with a BIOS setting, so answer Y if yours has the port (`INSTALL /thunderbolt` skips the question). N leaves an installed Thunderbolt driver as it is.
-- **At the end:** "Changes were made. Please restart Windows now." if it changed anything. If it stopped with steps left for you (a Found New Hardware window, for instance), do them and run it again. It never runs `XHCICLN`.
-- `INSTALL /list` shows the plan and changes nothing. `INSTALL /uninstall` removes the drivers after a warning and typing REMOVE. Every run but `/list` writes `XHCIINST.LOG` at the root of the system drive. `tools\xhciinst\readme.txt` lists the switches and exit codes.
+- **Windows 98 SE and ME:** copies the package into the install directory, adds it to the hardware wizards' search path, and installs each device's driver through Windows' own device installer; a device it cannot install gets its Device Manager steps on a page of their own.
+- **Thunderbolt 3 / USB4 support** (the Components page): ticked when a controller is found, unticked when none is. Some laptops show the controller only while a device is plugged in or with a BIOS setting, so tick it if yours has the port. Unticked leaves an installed Thunderbolt driver as it is.
+- **At the end:** the Finish page offers to restart Windows if it changed anything. If it stopped with steps left for you (a Found New Hardware window, for instance), do them and run it again. It never runs `XHCICLN`.
+- **Uninstall:** Remove in Add/Remove Programs (Programs and Features on Vista and 7) removes the drivers after a warning. Every run writes `XHCIINST.LOG` at the root of the system drive; attach it to a bug report about an install.
+- For scripted installs, `tools\xhciinst\readme.txt` is the command-line reference.
 
-Details: [the release notes' INSTALL.BAT section](docs/using/release-notes.md#installing-updating-and-uninstalling-with-installbat-new-in-3000).
+Details: [the release notes' installer section](docs/using/release-notes.md#installing-updating-and-uninstalling-with-installbat-new-in-3000).
 
 ### Install by hand
 
@@ -255,7 +256,7 @@ Details and limits: [the release notes' F6 section](docs/using/release-notes.md#
 
 ### Upgrading the driver
 
-Run `INSTALL.BAT` (see [above](#install-with-installbat)). By hand: Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", pointed at `release-x86\` or `release-x64\`.
+Run `SETUP.EXE` (see [above](#install-with-setupexe)). By hand: Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", pointed at `release-x86\` or `release-x64\`.
 
 - **98 SE and ME:** restart afterwards, although Windows does not ask. The old driver runs until then.
 - **2000:** use Have Disk (Update Driver -> "Display a list of the known drivers" -> Have Disk -> `release-x86\`) and pick the first model listed. Letting Windows search keeps the old driver.
@@ -267,7 +268,7 @@ Run `INSTALL.BAT` (see [above](#install-with-installbat)). By hand: Update Drive
 
 ## Tuning
 
-Each value is a `DWORD` in a driver (software) key, and from `3.1.0.0` also in the machine-wide key `HKLM\System\CurrentControlSet\Services\USB`, which wins for every controller when the value is there ([tuning](docs/using/tuning.md#where-the-values-are-and-every-value)); restart Windows after a change (for `XhciCm*`, disabling and enabling the controller also works). The install writes most values and an update keeps any you changed. `INSTALL /set Name=Value` sets one.
+Each value is a `DWORD` in a driver (software) key, and from `3.1.0.0` also in the machine-wide key `HKLM\System\CurrentControlSet\Services\USB`, which wins for every controller when the value is there ([tuning](docs/using/tuning.md#where-the-values-are-and-every-value)); restart Windows after a change (for `XhciCm*`, disabling and enabling the controller also works). The install writes most values (its settings pages, and "Advanced...") and an update keeps any you changed.
 
 | Driver | Windows | Key (`NNNN` is the subkey whose `DriverDesc` names the controller) |
 |---|---|---|

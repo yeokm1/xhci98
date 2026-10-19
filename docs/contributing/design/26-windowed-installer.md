@@ -1,6 +1,9 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 14, 2026-10-19 (section 9.3 step 4: the setup engine's
+Status: draft 15, 2026-10-19 (task 42-A.31, the owner's request of that
+day: `SETUP.EXE` at the package root, the program a person double-clicks,
+and `INSTALL.BAT` kept for the command line; sections 2, 5.9, 10, 12, 13
+and 15, and record 23 revision 22); draft 14, 2026-10-19 (section 9.3 step 4: the setup engine's
 `OEM Name` record of each deleted INF copy removed, record 23 revision
 20); draft 13, 2026-10-19 (task 42-A.30: the bundled Stor98 at the
 package version, one signature, sections 5.6 and 6.3, record 23 revision
@@ -107,7 +110,8 @@ asks for the restart.
 ## 2. Where it lives in the package
 
 ```
-<package>\INSTALL.BAT                   the one entry point, kept
+<package>\SETUP.EXE                     the entry point for people (draft 15)
+<package>\INSTALL.BAT                   the command line's entry point, kept
 <package>\tools\xhciinst\XHCIWIZ.EXE    the window, 32-bit (W1)
 <package>\tools\xhciinst\XHCIWZ64.EXE   the window, x64
 <package>\tools\xhciinst\XHCIINST.EXE   the console tool, 32-bit, kept
@@ -138,6 +142,71 @@ the first word. Under `COMMAND.COM` the `/console` form costs one of the
 nine arguments, so the batch file's limit there is seven after it, said in
 its refusal text as today's eight are. The release notes' examples are
 rewritten with the word.
+
+**`SETUP.EXE` is the entry point for people** (owner, 2026-10-19; draft
+15, task 42-A.31; W17). It supersedes the paragraph above for a person:
+the readme's first instruction is "To install or update, double-click
+SETUP.EXE; to uninstall, use Remove in Add/Remove Programs (or SETUP
+/uninstall)", and `INSTALL.BAT` is for the command line and
+scripts, its behaviour unchanged (with no argument it still opens the
+window, and waits for it). Double-clicked, a batch file keeps a console
+window open behind the window for the whole run, an MS-DOS box on 98 SE
+and ME; a windows-subsystem program opens none. `SETUP.EXE`
+(`xhciinst\setup.c`) is one 32-bit image for every target:
+
+- It finds its own directory (`GetModuleFileNameA`), the package root, and
+  starts `tools\xhciinst\XHCIWZ64.EXE` on 64-bit Windows
+  (`IsWow64Process`, looked up at run time, absent meaning 32-bit) and
+  `tools\xhciinst\XHCIWIZ.EXE` otherwise, 98 SE and ME included.
+- It starts the window with `ShellExecuteExA`, verb `open`, the working
+  directory the package root, and its own command line after its name
+  passed on unchanged (`SETUP /uninstall`, `/debug`), then exits at
+  once. `ShellExecuteEx` is what raises the window's own
+  `requireAdministrator` prompt on Vista and 7; `CreateProcess` refuses
+  such an image with `ERROR_ELEVATION_REQUIRED`.
+- Its manifest asks for `asInvoker` (no Common Controls: it draws only a
+  message box). Without it, Vista's and 7's installer detection would
+  elevate a program named `SETUP.EXE` before it starts, a second prompt;
+  with it there is exactly one, the window's. It also declares the
+  supported systems Vista to 10, as `XHCITR`'s does: without that,
+  Windows 7's Program Compatibility Assistant, which takes a program
+  named `SETUP.EXE` for an installer, asked "This program might not have
+  installed correctly" once the window closed (read in a Windows 7
+  guest, 2026-10-19).
+- An empty popup of no size, made the foreground window while
+  `SETUP.EXE` still has the right Explorer's start gave it, owns the
+  elevation prompt (`SHELLEXECUTEINFO.hwnd`) and the message box: a
+  declined prompt hands the foreground back to its owner, and with none
+  it went to Explorer, so the message opened behind Explorer's window,
+  even topmost (read in the same guest).
+- A missing window, a path it cannot read, or a failed start is a message
+  box naming the problem; the elevation declined (`ERROR_CANCELLED`) has
+  its own text. It returns 0 once the window is started and 1 otherwise:
+  it does not wait, so the window's exit code is not its own (section
+  10). Scripts use `INSTALL /console`.
+- Built by `xhciinst\build.cmd` with MSVC 6.0, the C runtime static,
+  `/SUBSYSTEM:WINDOWS,4.0`, with the xHCI98 USB Tree's icon
+  (`xhcitr\xhcitr.ico`) and the version resource from
+  `src\xhci_version.h`; it imports KERNEL32, USER32 and SHELL32 alone, and
+  `check-imports.ps1`'s `setup` profile also holds the image to the
+  windows subsystem and an embedded `asInvoker` manifest. Its
+  `/selftest` (alone on the command line) checks the command-line tail
+  and the paths it builds; `selftest.cmd` runs it.
+- `make-release.ps1` stages it at the version root beside `INSTALL.BAT`,
+  under the install tool's staleness rule; `test-package.ps1` holds the
+  staging and the readme's first instruction.
+- `README.md` and the release readme offer two ways to install, update
+  and uninstall: `SETUP.EXE` (and Remove in Add/Remove Programs), or
+  Device Manager by hand (the owner, 2026-10-19). `INSTALL.BAT`, the
+  console and its switches are documented in `tools\xhciinst\readme.txt`
+  alone, the command-line and scripting reference, which the two point
+  at in one line.
+
+Not taken: `INSTALL.BAT` starting the window detached and ending at once
+(on 98 SE and ME an MS-DOS box started from Explorer stays open on
+"Finished" unless a PIF or a last `CLS` closes it, and on NT the console
+still flashes); a renamed copy of `XHCIWIZ.EXE` at the root (the window
+finds its package two levels up from itself, section 2).
 
 A double-click on `XHCIWIZ.EXE` itself is the same as `INSTALL` with no
 argument: the window reads its own location and picks the `release-`
@@ -561,7 +630,9 @@ each as the console prints it), and the restart:
   them first, as the console's unfinished line does.
 
 The exit code is record 23's, so `INSTALL.BAT` passes it on unchanged
-whichever front end ran.
+whichever front end ran. `SETUP.EXE` does not wait for the window and
+returns 0 once it is started (section 2, draft 15): the result a person
+reads is this page, and the log.
 
 ## 6. What it installs
 
@@ -1011,7 +1082,10 @@ The exit codes are record 23 section 7.4's, unchanged, so `INSTALL.BAT`
 and the legs read them as today; the log is 7.5's, appended by the window
 as by the console, with every page's answers recorded as the console's
 answers are. A window closed by the user before Install is exit 1 with
-nothing changed; closed during the progress, the cancel of section 5.8.
+nothing changed; closed during the progress, the cancel of section 5.8. Started by
+`SETUP.EXE`, the window's code reaches no one (section 2, draft 15): a
+script runs `INSTALL /console`, or `INSTALL` with the window's switches,
+which waits.
 
 ## 11. The pure half and the host suite
 
@@ -1063,7 +1137,8 @@ Record 23 is revised in the same change as the code (task 42-A.2), and
 this list is the whole of it:
 
 - Section 2: the package layout of section 2 here; `INSTALL.BAT`'s
-  `/console` rule.
+  `/console` rule; (draft 15, record 23 revision 22) `SETUP.EXE` at the
+  root for people, `INSTALL.BAT` for the command line, and D1 revised.
 - Section 4.2: the package-layout refusal applies to an install and an
   update; the uninstall and the device modes run without a package
   (section 9.2).
@@ -1119,7 +1194,7 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   console it has to attach to loses the console's redirection rules record
   23 section 7.6 reads).
 - **W2** `INSTALL.BAT` starts the window unless its first argument is
-  `/console` (section 2). Not taken: a second batch file (record 23
+  `/console` (section 2); for people, superseded by W17 (draft 15). Not taken: a second batch file (record 23
   decision D1's reason stands), or choosing by the presence of any switch
   (the Add/Remove entry's `/uninstall` and a user's `/to` want the window).
 - **W3** The engine is single threaded; the window runs `RUN` on one
@@ -1170,6 +1245,13 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   from the install directory's copy or the temporary one and read the
   system alone; the package-layout refusal stays for an install and an
   update (sections 2 and 9.2).
+- **W17** (draft 15; the owner, 2026-10-19, "setup.exe by tonight")
+  `SETUP.EXE` at the package root is what a person double-clicks: a
+  32-bit `asInvoker` windows program that starts the window of the
+  system's architecture through `ShellExecuteEx` with its own arguments
+  and exits, 0 once started; `INSTALL.BAT` stays, unchanged, for the
+  command line and scripts. It supersedes record 23 decision D1's one
+  entry point (section 2).
 
 ## 14. Open, and the risks
 
@@ -1203,6 +1285,7 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 | `xhciinst\inst_core.c`, `inst_core.h` | the pure half (section 11) |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the four builds and the helper's; the self-tests; the import allowlists per executable |
 | `xhciinst\INSTALL.BAT` | the launcher with `/console` |
+| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, the package root's starter of the window (draft 15) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt`; the wizard first, the console second |
 | `test\test_inst.c` | the host suite |
 | `scripts\package\make-release.ps1`, `test-package.ps1`, `scripts\build-driver.cmd` | staging, the mutation cases, the gates |
