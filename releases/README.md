@@ -447,8 +447,9 @@ project test certificate's `.pfx`, held only on the maintainer's disk
 password comes from the `XHCI98_TESTSIGN_PW` environment variable or a
 prompt that does not echo, once per cut, and is never stored. Each x64 leg's
 `make-package.ps1` run signs `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys`
-(SHA-1 file digest, no timestamp, no catalog), stages the signed
-`xhcicm.sys` again as `nt\xhcicm.sys`, the same bytes, and stages
+(SHA-1 file digest, no timestamp, no catalog), each once (`3.0.0.0`
+staged the signed `xhcicm.sys` again as `nt\xhcicm.sys`; from `3.1.0.0`
+an x64 directory has no `nt\`), and stages
 `xhci98-test.cer` beside them;
 the cut then holds each published x64 binary to that signature by the key's
 thumbprint and to the build's bytes. The x86 legs are never signed. A clone

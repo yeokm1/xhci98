@@ -60,8 +60,10 @@ no opinion - is kept whole. Record 11 decision 9 now points here.
 
 - **The files:** `xhci98.sys`, `xhciuas.sys` and, since the Thunderbolt 3
   connection manager joined the package, `xhcicm.sys` of both published
-  x64 flavours; `nt\xhcicm.sys`, the filter INF's own copy, is the signed
-  file staged a second time, the same bytes. The `qemu` flavour may be signed for a guest
+  x64 flavours, each signed once. In `3.0.0.0` `nt\xhcicm.sys`, the
+  filter INF's own copy, was the signed file staged a second time, the
+  same bytes; from `3.1.0.0` the x64 package keeps the filter INF at the
+  flavour directory's root beside the one `xhcicm.sys` and has no `nt\`. The `qemu` flavour may be signed for a guest
   (`make-package.ps1 -Flavor qemu -Arch amd64 -TestSignPfx ...`) and is
   never published either way.
 - **Never the x86 binaries.** 32-bit Windows does not enforce kernel-mode
@@ -305,7 +307,7 @@ on. The release notes say so beside the tier.
 ## 9. The rule
 
 Every published x64 package directory carries `xhci98.sys`, `xhciuas.sys`
-and `xhcicm.sys` (and its `nt\xhcicm.sys` copy) with an embedded
+and `xhcicm.sys` (and, in `3.0.0.0`, its `nt\xhcicm.sys` copy) with an embedded
 Authenticode signature by the project test
 certificate - SHA-1 file digest, no timestamp, no catalog, the INFs
 unchanged - applied by `make-package.ps1 -TestSignPfx` at staging and
