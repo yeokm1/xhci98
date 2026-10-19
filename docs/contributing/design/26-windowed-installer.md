@@ -561,6 +561,12 @@ unasked). With the box ticked:
   bound to it, present or not (NT: `Service` = `stor98`; 98 SE and ME: the
   driver key naming Stor98's files, as its INF binds them). Those are
   pre-existing, and the uninstall never counts them as this installer's.
+  On 98 SE and ME `xhcicm.sys` makes `Services\stor98` itself for
+  Stor98's link-state locator (its value `LinkState`), Stor98 installed
+  or not, so there that key counts only with a subkey or another value
+  (draft 11; the 98 SE legs of 2026-10-19 read a pristine machine as
+  "Stor98 there before" without it, and the uninstall then kept the
+  Stor98 the installer brought).
 - **NT**: the local copy is made first, every `stor98*` file included
   when the box is ticked (record 23 section 4.4 and 5.6's order: the copy,
   then the staging from it, so a device found later takes its files from
