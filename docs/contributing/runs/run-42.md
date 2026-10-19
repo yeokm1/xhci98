@@ -1743,6 +1743,97 @@ on port 1; the `1ed43f0b` executables):
 Not taken: ME (the same code path), a Stor98 copy's record (no NVMe in
 the 9x guests; the alias rule rests on the code read).
 
+## The x64 package's filter INF at the flavour directory's root (2026-10-19)
+
+The owner asked why the x64 package keeps the tunnel-port filter INF in
+`nt\` when the files are the same as the root's, and decided, for
+`3.1.0.0`, that it should not: Windows 98 and ME never read the x64
+package, the driver store's same-directory rule (`SetupCopyOEMInf` error
+`0xA1` on 7 SP1 x86, 2026-10-15) is met at the root, and no other INF in an
+x64 flavour directory binds a PCI bridge. The x86 package keeps `nt\` with
+its own `nt\xhcicm.sys`, because 98 SE and ME read a `$Windows NT$` INF and
+would offer the filter for the tunnel bridge (task 39-0.4, record 23
+section 4.1).
+
+Branch `p42-x64flat`, from `3.1.0.0` at `4b6d3477`, with `3.1.0.0` merged
+in at `470ea34c` (42-A.21), `bc63b037` (42-A.24, 42-A.27, 42-A.28),
+`8dd99004` (42-A.22) and last at the head (42-A.24's revision 17 of
+record 23, 42-A.25):
+
+| Commit | What |
+|---|---|
+| `be8e4358` | the change: `package-common.ps1`'s `Get-CmFilterRel` and `Get-CmPublishable` (per architecture, and per version for a published tree: `3.0.0.0`'s x64 directories keep `nt\`); `make-package.ps1` stages `xhcicmf.inf` at the x64 root and `nt\xhcicm.sys` for x86 alone, the amd64 `xhcicm.sys` signed once and copied once; `make-release.ps1`'s copy set, the `nt\` copy comparison (x86 only), the upload assembly's layout rule and its `check-cm-inf.ps1 -PublishedVersion` call, the readme's file list; `check-cm-inf.ps1`'s CM-NO9XBRIDGE package half by `-Arch` (x86 `nt\` as before; amd64 the root, no `nt\`), with self-test layouts for both and for `3.0.0.0`'s x64 tree; `test-package.ps1`'s four-directory case with the connection manager in both layouts and an x64 `nt\` refused; the installer's `inst_cmf_rel`, `inst_cmf_pnf` and `inst_cmf_where` in `inst_core.c` (host vectors in `test_inst`), used for the filter INF's path, the list-less copy cleanup and the two Have Disk texts, x86 unchanged |
+| `e23e34c5` | an amd64 output directory staged in the `3.0.0.0` `nt\` layout is replaced by `make-package.ps1` (those three entries only), with a test |
+| `654a7b10`, `f399fe0e` | the documents: AGENTS.md, README.md, `build-and-test.md` (packaging; the by-hand install: Have Disk to the main folder on x64, `nt\` on x86), records 19, 21 and 23, `source-files.md`, `legal-provenance.md`, `releases/README.md`, the release notes (the `3.1.0.0` line) and the acceptance test's file-list row |
+| `41361afd` | records 21 and 23 name the revision (record 23 revision 21 after the merges, 17 being 42-A.24's; record 21's status paragraph) |
+| `470ea34c`, `bc63b037`, `8dd99004`, the head | `3.1.0.0` merged in; record 23 section 10's list keeps both new entries, and its status line every revision |
+
+Reviewed and revised: the review of `be8e4358` found the replacement of an
+old amd64 output directory (fixed in `e23e34c5`); the fix and the merge
+came back clean; the documents gave four wording points, taken in
+`f399fe0e`; the three merges came back clean.
+
+Builds at `470ea34c` (development host A), x86 then amd64, one after the
+other, before the legs: `build-driver.cmd all` and `all -amd64` each **BUILD + GATES
+PASSED** (host suites `test_inst` 1443 checks, 0 failures; the CM INF gate's
+self-tests 122 cases; `test-package.ps1` with the new cases; the installer
+self-test). `xhciinst\build.cmd` built the four installer programs for the
+legs. `make-package.ps1 -Flavor release`, both architectures, Stor98
+`0.4.0.0` bundled, unsigned (nothing was signed).
+
+The staged trees against the bench cut's
+(`E:\xhci98-vm\m31\pkg-bench\xhci98-3.1.0.0`, from `be9b9bf6`):
+
+| Directory | Bench cut | This branch |
+|---|---|---|
+| `release-x86` | 16 files, `nt\xhcicmf.inf` and `nt\xhcicm.sys` | the same 16 names; `nt\xhcicm.sys` the same bytes as `xhcicm.sys`; `nt\xhcicmf.inf` the same bytes as the bench's |
+| `release-x64` | 15 files, `nt\xhcicmf.inf` and `nt\xhcicm.sys` | 14 files: `xhcicmf.inf` at the root (the bytes of `src\cm\xhcicmf-amd64.inf`), no `nt\`; every other name the same |
+
+The legs, QEMU only (kit `E:\xhci98-vm\p42-x64flat`, QMP 48170 to 48173,
+emulator `vm\usb4\bin-2a893ea`, the `tb3` tree: root bridge `1B36:0001`,
+four `8086:15C0` switch ports, the NHI `8086:15BF`, the switch's xHCI
+`8086:15C1`, and `qemu-xhci`), on the packages staged at `470ea34c` with
+the installer programs built from it, unsigned; every x64 boot chose
+"Disable Driver Signature Enforcement" from the boot menu. The guests were
+clean (no xhci98, `xhcicm` or Stor98).
+
+| Leg | Result |
+|---|---|
+| 7 SP1 x86, `INSTALL /console /yes /thunderbolt` (regression) | **pass**: `SetupCopyOEMInf("C:\Windows\XHCI98\D2BF7BD7\nt\xhcicmf.inf", "...\nt", SPOST_PATH, 0)`, staged as `oem5.inf`; the filter put on `8086:15C0` (four ports) and `1B36:0001` from `nt\xhcicmf.inf`; the NHI on `xhcicm`; exit 3; after the restart every port `pci` with upper filter `xhcicm` from `oem5.inf`, problem 0, and `/list` "current (this release)" |
+| 7 SP1 x64, `INSTALL /console /yes /thunderbolt` | **pass**: the plan read `E:\PKG31\release-x64` and named `xhcicmf.inf` for the five ports; `SetupCopyOEMInf("C:\Windows\XHCI98\195E4F69\xhcicmf.inf", "C:\Windows\XHCI98\195E4F69", SPOST_PATH, 0)`, staged as `oem5.inf`, no error and no `0xA1`; the filter on the five ports and `xhcicm` on the NHI, all started; exit 3; after the restart the five ports upper `xhcicm` from `oem5.inf`, problem 0, `xhci98`, `xhcicm` and `xhcimark` running, `/list` current |
+| 7 SP1 x64, `INSTALL /console /uninstall` after it | **pass**: the filter taken off the five ports, the four INFs (`oem2` to `oem5`), the services, the binaries, the mark service and the copies removed; after the restart `sc` 1060 for each service, `pnputil -e` Microsoft's two alone, the five ports back on `machine.inf` with no upper filter, `usbd.sys` and `usbui.dll` kept |
+| 7 SP1 x64, by hand after the uninstall: a `15C0` port, Update Driver, Let me pick, Have Disk on `release-x64` itself | **pass**: the list offered "xHCI98 Thunderbolt PCI Bridge" (Windows' own bridge alone before Have Disk); installed, and after the restart that port `pci` with upper filter `xhcicm`, problem 0, `xhcicm` running |
+| 7 SP1 x64, `INSTALL /console /yes /cmonly` on a clean guest (42-A.21) | **pass**: `xhcicm.inf` and `xhcicmf.inf` staged from the copy's root (`SetupCopyOEMInf(... "\195E4F69\xhcicmf.inf", "...\195E4F69", ...)`, `oem3.inf`), nothing else; the NHI and the five ports done; after the restart `xhcicm` and `xhcimark` running, no `xhci98` |
+| Vista SP2 x64, `INSTALL /console /yes /thunderbolt` | **pass** on the third run: the first two refused with exit 4 and changed nothing, Vista's own Found New Hardware windows still open; then `xhcicmf.inf` staged from the copy's root as `oem6.inf`, the filter on the five ports, all started; after the restart upper `xhcicm` on the five ports, problem 0 |
+
+Seen beside the legs, not from this change: QEMU froze six times on the 7
+x64 guest with the whole package (the process at no CPU, QMP silent) -
+four cold boots of one installed overlay, at the NHI's first control-ring
+reads, and two fresh installs, right after the two xHCI controllers'
+installs and before `xhcicm`'s - on both emulator builds tried and with
+single-threaded TCG. None on the connection-manager-only 7 x64 guest, on
+Vista x64 or on 7 x86. Two full installs and their warm restarts went
+through; a cold start of 7 x64 with the full package installed is owed.
+Read afterwards (2026-10-19, the 42-A.25 agent): the frozen R2 overlay,
+its `xhcicm.sys` unchanged, cold-booted twice to the desktop on the same
+command line with `-display sdl` replaced by `-display none -vnc`, the
+connection manager's NHI accesses in the trace (1,116 and 1,139; the
+frozen run's trace has none). The same wedge hit two SDL-window 7 x86
+guests that day and went with the window. So the freezes are QEMU's SDL
+front end on development host A, not the driver; guests run headless
+since. Why they clustered at the first ring reads is not known.
+The frozen overlays are kept in the kit (`w7x64\disk-*-frozen.qcow2`).
+
+After the legs `3.1.0.0` was merged in twice more. At `bc63b037` both
+gated builds passed (`test_inst` 1470 checks, 0 failures); at `8dd99004`,
+the branch's head, `build-driver.cmd all` and `all -amd64`
+each **BUILD + GATES PASSED** (`test_inst` 1556 checks, 0 failures). At
+the last merge, `9aab6759` (record 23's revision renumbered 21, 17
+being 42-A.24's), both again **BUILD + GATES PASSED** (`test_inst` 1562
+checks, 0 failures; `test-package.ps1` with the layout cases), and its
+review came back clean. The legs were not repeated on those merges, which brought no
+change to where the filter INF is read.
+
 ## 42-A.31: SETUP.EXE, the installer's entry point for people (2026-10-19)
 
 Branch `p42-batlaunch` from `3.1.0.0` at `08709480`. The owner asked

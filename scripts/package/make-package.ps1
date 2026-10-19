@@ -19,18 +19,21 @@ is this project's two files and nothing else:
     xhcicm.inf     the Thunderbolt 3 connection manager's NHI INF
                    (roadmap-usb4.md task 39-A.1; src\cm\xhcicm-amd64.inf
                    under this name for amd64)
-    nt\xhcicmf.inf its NT-only tunnel-port filter INF (src\cm\xhcicmf.inf,
-                   or xhcicmf-amd64.inf under this name for amd64), in a
-                   subdirectory of its own because Windows 98 SE and ME read
-                   a $Windows NT$ INF beside the one they are pointed at
-                   (runs/run-39.md, 39-0.4); its source disk is nt\
-                   itself
-    nt\xhcicm.sys  the filter INF's own copy of xhcicm.sys, the same bytes
-                   as the root's (copied after test-signing): Vista's and
-                   7's driver store refuses a source outside the INF's
-                   directory (SetupCopyOEMInf error 0xA1); check-cm-inf.ps1
-                   (CM-NO9XBRIDGE) compares the two
     xhcicm.sys     the connection manager, the same flavour
+    xhcicmf.inf    its NT-only tunnel-port filter INF: for x86
+                   src\cm\xhcicmf.inf as nt\xhcicmf.inf, in a subdirectory
+                   of its own because Windows 98 SE and ME read a
+                   $Windows NT$ INF beside the one they are pointed at
+                   (runs/run-39.md, 39-0.4), with nt\xhcicm.sys, its own
+                   copy of xhcicm.sys, the same bytes: its source disk is
+                   nt\ itself, and Vista's and 7's driver store refuses a
+                   source outside the INF's directory (SetupCopyOEMInf
+                   error 0xA1); check-cm-inf.ps1 (CM-NO9XBRIDGE) compares
+                   the two. For amd64 src\cm\xhcicmf-amd64.inf as
+                   xhcicmf.inf at the root, beside xhcicm.inf and the one
+                   xhcicm.sys: 98 and ME never read the x64 package, and no
+                   other INF there binds a PCI bridge, so it needs no
+                   subdirectory and no second copy (3.1.0.0)
 
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
 portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
@@ -125,7 +128,8 @@ scripts\inf-gate\check-cm-inf.ps1 under -Arch.
 .PARAMETER CmFilterInfPath
 The connection manager's NT-only tunnel-bridge filter INF, overriding
 `src\cm\xhcicmf.inf` (x86) or `src\cm\xhcicmf-amd64.inf` (amd64). Staged as
-`nt\xhcicmf.inf` and gated by check-cm-inf.ps1 -Filter under -Arch.
+`nt\xhcicmf.inf` for x86 and `xhcicmf.inf` at the root for amd64, and gated
+by check-cm-inf.ps1 -Filter under -Arch.
 
 .PARAMETER CmDriverPath
 The connection manager to stage, overriding
@@ -1314,16 +1318,20 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
         Copy-Item -LiteralPath $UasDriverPath -Destination (Join-Path $stageDir "xhciuas.sys") -Force
     }
     # The connection manager's NHI INF and binary at the root, where its
-    # SourceDisksNames entry looks; the filter INF in nt\ with its own copy
-    # of the binary, where the filter INF's entry looks.
+    # SourceDisksNames entry looks. The filter INF: for x86 in nt\ with its
+    # own copy of the binary, where the filter INF's entry looks; for amd64
+    # at the root beside the one binary (Get-CmFilterRel).
     if ($stageCm) {
         Copy-Item -LiteralPath $CmInfPath -Destination (Join-Path $stageDir "xhcicm.inf") -Force
-        Ensure-Directory (Join-Path $stageDir "nt")
-        Copy-Item -LiteralPath $CmFilterInfPath -Destination (Join-Path $stageDir "nt\xhcicmf.inf") -Force
         Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "xhcicm.sys") -Force
-        # The filter INF's own source, beside it: the same (already signed)
-        # bytes, which CM-NO9XBRIDGE compares.
-        Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "nt\xhcicm.sys") -Force
+        $cmFilterRel = Get-CmFilterRel -Arch $Arch
+        Ensure-Directory (Split-Path -Parent (Join-Path $stageDir $cmFilterRel))
+        Copy-Item -LiteralPath $CmFilterInfPath -Destination (Join-Path $stageDir $cmFilterRel) -Force
+        if ($cmFilterRel -ne "xhcicmf.inf") {
+            # The filter INF's own source, beside it: the same (already
+            # signed) bytes, which CM-NO9XBRIDGE compares.
+            Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "nt\xhcicm.sys") -Force
+        }
     }
     # txtsetup.oem at the root: text-mode Setup reads it from A:\ and its
     # [Disks] entry finds xhci98.sys and xhci98.inf beside it.
@@ -1463,7 +1471,7 @@ a build that was never made.
             }
         }
         if ($stageCm) {
-            foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "nt\xhcicmf.inf"; Extra = @("-Filter") })) {
+            foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = (Get-CmFilterRel -Arch $Arch); Extra = @("-Filter") })) {
                 $savedEap = $ErrorActionPreference
                 $ErrorActionPreference = "Continue"
                 try {
@@ -1536,10 +1544,17 @@ a build that was never made.
         foreach ($f in (Get-ChildItem -LiteralPath $stageDir -Recurse -Force)) {
             $stagedRel[$f.FullName.Substring($stageDir.Length).TrimStart('\')] = $true
         }
+        # An x64 package staged before 3.1.0.0 kept the filter INF and its
+        # copy of the binary in nt\; those three entries, and only those,
+        # are this script's own retired layout and are replaced with it.
+        $retiredRel = @{}
+        if ($Arch -eq "amd64") {
+            foreach ($r in @("nt", "nt\xhcicmf.inf", "nt\xhcicm.sys")) { $retiredRel[$r] = $true }
+        }
         $foreign = @()
         foreach ($f in (Get-ChildItem -LiteralPath $OutDir -Recurse -Force)) {
             $rel = $f.FullName.Substring($OutDir.Length).TrimStart('\')
-            if (-not $stagedRel.ContainsKey($rel)) { $foreign += $rel }
+            if (-not $stagedRel.ContainsKey($rel) -and -not $retiredRel.ContainsKey($rel)) { $foreign += $rel }
         }
         if ($foreign.Count -gt 0) {
             throw @"

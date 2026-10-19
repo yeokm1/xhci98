@@ -1,10 +1,11 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
 Status: revision 22, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
-for the command line; see below); revision 20, 2026-10-19 (the 98 SE and ME uninstall removes
-SETUPX's `OEM Name` record of each INF copy it deletes, section 6.1, and
-section 9.5's `/list` line reads the Run value; the matrix's 98 SE and
-ME legs of that day); revision 17, 2026-10-19 (task 42-A.24: the
+for the command line; see below); revision 21, 2026-10-19 (the x64 package's filter INF at the
+flavour directory's root; see below); revision 20, 2026-10-19 (the 98 SE
+and ME uninstall removes SETUPX's `OEM Name` record of each INF copy it
+deletes, section 6.1, and section 9.5's `/list` line reads the Run value;
+the matrix's 98 SE and ME legs of that day); revision 17, 2026-10-19 (task 42-A.24: the
 CriticalDeviceDatabase service entries and the mark service following
 `XhciCmSafeEject`, sections 5.1 and 9.2); revision 16, 2026-10-19 (task 42-A.22, record 26 draft 11: Stor98
 part of the Thunderbolt support, the UAS driver a component of its own;
@@ -168,6 +169,15 @@ installer"; record 26 section 12): the safe-removal mark service
   again before step 5.
 - **Section 9.5**: the mark service's copy in `system32`.
 - **Section 13**: D16.
+
+Revision 21, 2026-10-19 (roadmap-usb4.md task 42-A.23, the owner's
+decision of that day): the x64 package keeps the tunnel-port filter INF at
+the flavour directory's root, beside `xhcicm.inf` and its one
+`xhcicm.sys`, with no `nt\` and no second copy of the binary; the x86
+package keeps `nt\` as before. The place is a pure function of the
+architecture (`inst_cmf_rel`, with `inst_cmf_pnf` and `inst_cmf_where`):
+section 4.1's table, section 4.4's listing, section 8.5's file set, and
+section 10's list.
 
 Revision 13, 2026-10-19 (roadmap-usb4.md task 42-A.21; record 26 draft 8;
 record 21 section 3.5). The owner, 2026-10-19: "The installer should give
@@ -440,7 +450,7 @@ The tool knows the package's drivers by file, never by hardware id:
 | `xhci98.inf` | `xhci98.sys` (and `xhcihlpr.sys` in x86) | `xhci98` (`xhcihlpr`) | all | required |
 | `xhciuas.inf` | `xhciuas.sys` | `xhciuas` | all | required |
 | `xhcicm.inf` | `xhcicm.sys` | `xhcicm` | all | the set of three, all or none |
-| `nt\xhcicmf.inf` | `xhcicm.sys` as an upper filter | `xhcicm` | NT only (`$Windows NT$`) - in the flavour directory's `nt\` subdirectory, because Windows 98 and ME read a `$Windows NT$` INF and would offer the filter for the tunnel bridge (task 39-0.4, `runs/run-39.md`); read and copied on NT only, never on 98 or ME; beside its own copy of `xhcicm.sys`, `nt\xhcicm.sys`, the same bytes, because Vista's and 7's driver store refuses a source outside the INF's directory (`SetupCopyOEMInf` error `0xA1`, read on 7 SP1 x86) | the set of four (on 98 and ME, `xhcicm.inf` and `xhcicm.sys`) |
+| `nt\xhcicmf.inf` (x86), `xhcicmf.inf` (x64) | `xhcicm.sys` as an upper filter | `xhcicm` | NT only (`$Windows NT$`) - in the x86 package in the flavour directory's `nt\` subdirectory, because Windows 98 and ME read a `$Windows NT$` INF and would offer the filter for the tunnel bridge (task 39-0.4, `runs/run-39.md`); read and copied on NT only, never on 98 or ME; beside its own copy of `xhcicm.sys`, `nt\xhcicm.sys`, the same bytes, because Vista's and 7's driver store refuses a source outside the INF's directory (`SetupCopyOEMInf` error `0xA1`, read on 7 SP1 x86). In the x64 package, from `3.1.0.0`, at the flavour directory's root beside `xhcicm.inf` and the one `xhcicm.sys`, with no `nt\`: 98 and ME never read it, the same-directory rule is met at the root, and no other INF there binds a PCI bridge. `inst_cmf_rel` (section 10) gives the place per architecture | the set of four on x86 and of three on x64 (on 98 and ME, `xhcicm.inf` and `xhcicm.sys`) |
 
 The hardware ids come from the INFs themselves (section 5.2): a model line
 added to an INF reaches the tool with no change to it. A package without
@@ -564,7 +574,7 @@ reinstall refused); a copy whose list is already gone loses only the
 `.PNF`s of this package's INFs, never another file.
 
 **The bundled Stor98 driver is not copied.** The listing takes the
-flavour directory's files and `nt\`, never another subdirectory, and it
+flavour directory's files and `nt\` (the x64 package has none), never another subdirectory, and it
 leaves out every file whose name starts with `stor98`
 (`inst_bundled_file`), because a copy of `stor98.inf` on `DevicePath`
 would have the hardware wizard install Stor98 unasked. Where a flavour
@@ -1746,8 +1756,8 @@ is off.
 
 Before the plan is shown, after the first reading of the devices, the tool
 asks "Install Thunderbolt 3 / USB4 support?", on every system, whenever the
-package carries the Thunderbolt driver (`xhcicm.inf`, `nt\xhcicmf.inf`,
-`xhcicm.sys`). The decision is a pure function (`inst_tb_decide`,
+package carries the Thunderbolt driver (`xhcicm.inf`, `nt\xhcicmf.inf`
+or on x64 `xhcicmf.inf`, `xhcicm.sys`). The decision is a pure function (`inst_tb_decide`,
 host-tested case by case):
 
 | Situation | Asked | Enter, and `/yes` |
@@ -1769,7 +1779,7 @@ it is.
 - **Y** with a controller present: the run as before - its devices planned
   and installed (the NHI, and the tunnel-port filter on NT), the INFs
   staged, the `XhciCm*` questions asked.
-- **Y** with none present: on 2000 to 7 `xhcicm.inf` and `nt\xhcicmf.inf`
+- **Y** with none present: on 2000 to 7 `xhcicm.inf` and the filter INF
   are staged with the rest (section 5.6), so Windows installs the NHI by
   itself when the controller appears; the filter, which the tunnel ports
   take only by an install the tool forces on XP and 7 (record 21 section
@@ -2274,6 +2284,10 @@ and the tool links the same file:
   decision (`inst_usb_decide`, section 4.5), the Add/Remove Programs name
   and the uninstall warning by what is registered, and the models
   section chosen for 6.2 and 6.3.
+- (3.1.0.0) the filter INF's place per architecture (`inst_cmf_rel`:
+  `nt\xhcicmf.inf` on x86, `xhcicmf.inf` at the flavour directory's root
+  on x64), its `.PNF` (`inst_cmf_pnf`) and the place the Have Disk text
+  names (`inst_cmf_where`).
 
 The suite reads `src\xhci98.inf`, `src\xhci98-amd64.inf`, the two UAS INFs
 and, once task 39-A.1 has merged, the `src\cm\` INFs, and checks that each

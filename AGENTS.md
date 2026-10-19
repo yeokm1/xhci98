@@ -615,8 +615,9 @@ published tree, since every version published before `1.1.0.0` is x86-only.
 
 **Every published x64 directory is test-signed, and only by the packager**
 (owner, 2026-10-11; design record 19 is the authority). `xhci98.sys`,
-`xhciuas.sys` and `xhcicm.sys` (with its `nt\xhcicm.sys` copy, the same
-bytes) of `release-x64` and `debug-x64` carry an embedded Authenticode
+`xhciuas.sys` and `xhcicm.sys` of `release-x64` and `debug-x64` (one copy each
+since 3.1.0.0, whose x64 directories keep the filter INF at the root and
+have no `nt\`) carry an embedded Authenticode
 signature by the project test certificate - SHA-1 file digest, no
 timestamp, no catalog, the INFs unchanged - applied at staging by
 `make-package.ps1 -TestSignPfx` and never by hand, with the certificate's

@@ -35,7 +35,11 @@ connection manager alone; section 7.4's mark service also on Windows 8
 and 8.1. Section 7.2 revised 2026-10-19 (task 42-A.25, from the matrix
 reading on Windows ME that day): a tunnel named but not published at once,
 as on 98 SE and ME right after a resume, is never paid later by an
-exposure that names none.
+exposure that names none. Revised 2026-10-19 (task 42-A.23, the owner's decision of that
+day): the x64 package keeps the filter INF at the flavour directory's
+root beside `xhcicm.inf` and its one `xhcicm.sys`, with no `nt\`; the x86
+package keeps `nt\` (section 3.3, the packaging in section 3.3's last
+paragraphs, section 6.2's filter install).
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
@@ -676,14 +680,18 @@ the bridge on Windows 2000. The split:
   `$Windows NT$` INF; a plain `PCI\VEN_8086&DEV_15C0` line was installed
   outright on the tunnel bridge of a 98 SE guest, and the `&CC_0604` form,
   though their automatic searches did not choose it, was listed to a user
-  browsing for a driver. So the package stages it in an `nt\`
+  browsing for a driver. So the x86 package stages it in an `nt\`
   subdirectory of each flavour directory, never beside `xhcicm.inf` where
   a 98 user points the wizard, beside its own copy of `xhcicm.sys` (the
   same bytes as the flavour directory's), its one source disk having no
   path: Vista's and 7's driver store refuses a source outside the INF's
   directory (`SetupCopyOEMInf` error `0xA1`, read on 7 SP1 x86 on
   2026-10-15; an earlier layout with the source disk at `..` could not be
-  staged there).
+  staged there). The x64 package stages it as `xhcicmf.inf` at the root of
+  each flavour directory, beside `xhcicm.inf` and the one `xhcicm.sys`,
+  with no `nt\` (from `3.1.0.0`; `3.0.0.0` used `nt\` there too): 98 and
+  ME never read the x64 package, the driver store's same-directory rule is
+  met at the root, and no other INF there binds a PCI bridge.
 - `xhcicm-amd64.inf`, the 64-bit package's, carries the `NTamd64,NTamd64.6.0`
   pair for the NHI and no undecorated section, held by the gate's
   `PATH-NO9X` and `PATH-MFGDEC` rules as the other amd64 INF is; the filter's
@@ -693,8 +701,9 @@ the bridge on Windows 2000. The split:
 has to supply. The gate for the four is `check-cm-inf.ps1`, with the rule
 `CM-NO9XBRIDGE`: no bridge id in any `$CHICAGO$` INF of this driver, the
 filter INF's signature held to `$Windows NT$`, no undecorated install
-section in it, and in a staged package the filter INF in `nt\` with its
-own byte-identical `xhcicm.sys` and nothing else;
+section in it, and in a staged x86 package the filter INF in `nt\` with
+its own byte-identical `xhcicm.sys` and nothing else (in an x64 one at
+the root beside `xhcicm.sys`, with no `nt\`);
 `CM-PORTCC` holds every filter line to the `&CC_0604` form, `CM-CLASSLINE`
 the NHI INF to its one class line, and `CM-NOROUTER` every INF to no
 device router's or unclaimed controller's id.
@@ -703,7 +712,7 @@ Model lines, as the engines see them:
 
 | Engine | What it finds |
 |---|---|
-| Windows 98, ME | `xhcicm.inf` `[CmModels]`: `%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF` and a line of the same shape for each other NHI id, the USB4 lines and the class line; `xhcicmf.inf` not on their path (it is in `nt\`; they would read it there too, `39-0.4`) |
+| Windows 98, ME | `xhcicm.inf` `[CmModels]`: `%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF` and a line of the same shape for each other NHI id, the USB4 lines and the class line; `xhcicmf.inf` not on their path (it is in the x86 package's `nt\`; they would read it there too, `39-0.4`; they never read the x64 package, which has it at the root) |
 | Windows 2000, XP | the same NHI lines through `Cm.Dev.NTx86`; `xhcicmf.inf` `[CmFilterModels]`: the bridge lines |
 | Vista, 7 | the `.NTx86.6.0` halves of both |
 | x64 | the two amd64 INFs |
@@ -734,7 +743,8 @@ again on XP and later, so the install route is re-run, or the filter
 re-applied, once the tree exists. Read on the 32-bit guests only; the
 append flag `0x00010008`, the `.NTx86.6.0` models section and the 64-bit
 guests are not read yet. The packaging stage carries both INFs per
-flavour, the filter's in `nt\`.
+flavour, the filter's in `nt\` in the x86 package and at the root in the
+x64 one.
 
 **The id list (decision D9, owner 2026-10-15, widened the same day to
 every Intel firmware-connection-manager host Linux addresses).** Two sources,
@@ -1848,7 +1858,7 @@ preceded by an eject, which the experiment saw on every cycle; section 7.4
 says what safe eject changes).
 
 The filter is installed by `xhcicmf.inf` from the package's `nt\`
-directory, the device-specific route of decision D2 (section 3.3): unforced
+directory (x86) or the flavour directory itself (x64), the device-specific route of decision D2 (section 3.3): unforced
 on Windows 2000, forced on XP and 7 by the installer, which the unsigned
 INF's rank requires (`39-0.4`).
 

@@ -86,7 +86,7 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 
 ### Installing, approving and removing
 
-- **Install:** double-click `SETUP.EXE` and keep Thunderbolt 3 / USB4 support ticked (see [Install with SETUP.EXE](#install-with-setupexe)). On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`nt\xhcicmf.inf`), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when asked: on Windows 2000 the first install of the filter needs that restart before the controller is used.
+- **Install:** double-click `SETUP.EXE` and keep Thunderbolt 3 / USB4 support ticked (see [Install with SETUP.EXE](#install-with-setupexe)). On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`xhcicmf.inf`, in `nt\` in the 32-bit package), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when asked: on Windows 2000 the first install of the filter needs that restart before the controller is used.
 - **Windows 98 SE and ME:** the installer installs the controller's entry (an unknown PCI device or PCI System Peripheral) through Windows' own device installer; one it cannot install gets its Device Manager steps (update it from the driver directory). No filter is needed.
 - **The connection manager alone:** on Windows 2000 to 7 the installer can leave `xhci98.sys` and `xhciuas.sys` out and install `xhcicm.sys` alone, for a computer whose USB 3 controllers run another driver (untick the USB drivers on its Components page). On Windows 8 and 8.1 that is the only install it offers: Windows' own USB 3 driver runs the USB controllers there. On the 64-bit editions of 8 and 8.1 the driver loads only in test-signing mode (Secure Boot off) or with signature enforcement disabled.
 - **Names:** the controller shows under the names in the table above. On Windows 2000 to 7 its PCI ports show as "xHCI98 Thunderbolt PCI Bridge" or "xHCI98 USB4 PCI Bridge": still Windows' own PCI bridges, with the filter on them.
@@ -186,7 +186,7 @@ Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
 
 Each driver directory holds:
 
-- `xhci98.sys`/`.inf` (controller), `xhciuas.sys`/`.inf` (UAS storage), `xhcicm.sys`/`.inf` (Thunderbolt and USB4; its PCI-port filter for 2000 to 7 in `nt\`)
+- `xhci98.sys`/`.inf` (controller), `xhciuas.sys`/`.inf` (UAS storage), `xhcicm.sys`/`.inf` (Thunderbolt and USB4; its PCI-port filter for 2000 to 7, `xhcicmf.inf`, in `nt\` in the x86 directories and beside them in the x64 ones)
 - `xhcihlpr.sys` (32-bit only): a helper 32-bit 2000, XP, Vista and 7 use for a finer timer while polling and, on Vista and 7, a message-signalled interrupt. 98 SE and ME ignore it.
 - `txtsetup.oem`: for F6 during Windows 2000 or XP Setup
 - `xhci98-test.cer` (64-bit only): the public half of the x64 drivers' test certificate; no need to import it
