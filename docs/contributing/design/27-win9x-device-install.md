@@ -1,6 +1,7 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 8, 2026-10-19 (section 6: the settle after a parent's job
+Status: draft 8, 2026-10-19 (task 42-A.27, section 6: the settle after a
+parent's job
 within a pass, and a device a parent's job hid tried once more, record 23
 section 5.8 revision 14, from the 98 SE update leg with an external hub);
 draft 7, 2026-10-19, revised from the 98 SE smoke readings of

@@ -1,7 +1,7 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 9, 2026-10-19 (section 7: the settle after a root hub's or
-hub's job within a pass, record 23 revision 14); draft 8, 2026-10-19
+Status: draft 9, 2026-10-19 (task 42-A.27, section 7: the settle after a
+root hub's or hub's job within a pass, record 23 revision 14); draft 8, 2026-10-19
 (task 42-A.21, the owner's request of that
 day: the connection manager alone, and Windows 8 and 8.1 for it; sections
 1.2, 5.1, 5.3, 9.1, 9.3, 10, 12 and 13, and record 23 revision 13);

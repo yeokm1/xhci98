@@ -1,7 +1,7 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 14, 2026-10-19 (a parent's job and the devices below
-it, section 5.8); revision 13, 2026-10-19 (the connection manager alone, and
+Status: revision 14, 2026-10-19 (task 42-A.27: a parent's job and the
+devices below it, sections 5.8 and 10); revision 13, 2026-10-19 (the connection manager alone, and
 Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
 service and the machine-wide key); revision 11, 2026-10-18 (the window,
 the helper, the uninstall
@@ -997,7 +997,8 @@ barrier and a fresh plan: a device the plan would still install - one the
 last allowed pass exposed - is listed as "not finished", the steps flag is
 set and the run ends with exit 4 and "run INSTALL.BAT again".
 
-**A parent's job and the devices below it** (revision 14; read on the 98
+**A parent's job and the devices below it** (revision 14, task 42-A.27;
+read on the 98
 SE update over `3.0.0.0` with an external hub, 2026-10-19: the root hub's
 reinstall restarted it, its hub was gone for about four seconds, and the
 hub's job, made at once, found it not present and left a step for a device
@@ -1013,7 +1014,8 @@ present (the helper's `not-present`; on NT `ERROR_NO_SUCH_DEVINST` from
 the call) after a parent's job earlier in the run waits up to 15 seconds
 for the device to come back, settles, and is made once more; only then is
 the device "not present" (a step) or the call a failure. A device that is
-really gone costs that one wait and no more. The controllers' pass needs
+really gone costs that one wait and no more. A wait there that fails or is
+cancelled stops the run as the barrier's does. The controllers' pass needs
 no wait of its own (one controller's job does not touch another, and the
 next pass begins with the barrier), and the later passes' devices begin
 behind the barrier too. The pure half holds the three decisions
