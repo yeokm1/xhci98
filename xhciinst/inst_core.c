@@ -1501,6 +1501,27 @@ size_t inst_msz_remove(const char *in, size_t inBytes, const char *name,
     return used;
 }
 
+int inst_filter_drop(const char *in, size_t inBytes, const char *name,
+                     char *out, size_t cap, size_t *outBytes)
+{
+    size_t n;
+    int removed;
+
+    *outBytes = 0;
+    if (in == NULL || !inst_msz_has(in, inBytes, name)) {
+        return INST_FD_NONE;
+    }
+    n = inst_msz_remove(in, inBytes, name, out, cap, &removed);
+    if (n == (size_t)-1) {
+        return INST_FD_ERROR;
+    }
+    if (n == 0) {
+        return INST_FD_DELETE;
+    }
+    *outBytes = n;
+    return INST_FD_SET;
+}
+
 int inst_testsigning(const char *options)
 {
     const char *s = options;

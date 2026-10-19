@@ -1737,7 +1737,19 @@ after it, reports what was done, and tells the user to restart and run
    `DIGCF_ALLCLASSES`, no `DIGCF_PRESENT`), has its `SPDRP_LOWERFILTERS`
    read, and `xhcicm` is removed from each value that names it, the other
    names kept in order and the value deleted with a zero length when
-   nothing else is in it, each read back. Then the service's `Marks`
+   nothing else is in it, each read back; and every entry of
+   `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase` has
+   `xhcicm` taken out of its `LowerFilters` and its `UpperFilters` the
+   same way, every entry and not only the ids the filter INF names (the
+   copies Windows makes there of a boot-critical device's own filter
+   values when it installs it: a marked unit's `LowerFilters` into
+   `pci#cc_0604` or `pci#cc_010802`, the filter INF's `UpperFilters` into
+   the tunnel port's id - read on 2000 on 2026-10-19, then on XP and 7 x86
+   for a marked bridge's driver installed again; roadmap-usb4 42-A.24 -
+   which would otherwise give every new bridge or NVMe controller, a
+   boot disk among them, a filter that no longer exists), a key that cannot
+   be read whole or a removal that does not read back failing step 0 as a
+   device's does. Then the service's `Marks`
    records go, then its `system32` copy (one in use renamed to
    `<name>.DEL` and that name deleted at the restart, so a later install
    of the same name is not deleted with it; an earlier `.DEL` deleted or
@@ -1749,7 +1761,14 @@ after it, reports what was done, and tells the user to restart and run
    "steps left", keeping `xhcicm`'s service and file and the mark
    service's registration (and, when the marks themselves were not all
    removed, its records; a copy that fails after them leaves the records
-   already deleted), and the next run resumes from what is left. The same step runs at the end of any install or update that
+   already deleted), and the next run resumes from what is left. The
+   database is taken first, as the source new devices take the name from,
+   and once every value is out both the database and the devices are read
+   once more before the records and the service go, since Windows takes no
+   lock of the installer's and a device found meanwhile may have taken the
+   name from a copy. Step 0 needs neither a registered `xhcicm` nor a
+   record, so the uninstall of a 3.1.0.0 package cleans what a test build
+   left; `XHCICLN` only lists such values and points at it. The same step runs at the end of any install or update that
    leaves no `xhcicm` service (section 5.1 step 12).
 1. **The filter hosts.** For each: `xhcicm` is removed from its
    `UpperFilters` multi-string and the rest kept in order

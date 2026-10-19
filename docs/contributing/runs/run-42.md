@@ -1072,6 +1072,62 @@ search and written again, then kept (two minutes, "removable: yes ...
 listed in Safely Remove Hardware" at Code 28); unplugged, removed within a
 poll ("the unit left").
 
+### 42-A.24: the CriticalDeviceDatabase copies of xhcicm (2026-10-19)
+
+The matrix's 2000 legs found `LowerFilters=xhcicm` under
+`Control\CriticalDeviceDatabase\pci#cc_0604` and `pci#cc_010802`, copied
+there by Windows from a marked unit's install, and the filter INF's
+`UpperFilters` under the tunnel port's id; every later bridge and NVMe
+drive took them with no record, and after an uninstall a new NVMe drive
+stopped at Code 19. XP and 7 x86 made the `cc_0604` copy for a marked
+bridge's driver installed again. The fix (record 21 section 7.4 "As
+built", record 23 section 9.2 step 0): the service takes `xhcicm` out of
+every entry's `LowerFilters` at every poll, on every system it runs on
+(2000 to 7), and writes no new mark while that scrub is unproven; its
+inventory runs at once after a hit and every minute, an unrecorded
+device-level mark recorded only to be judged (kept on a unit behind an
+active member, removed elsewhere); the uninstall's step 0, and any run that
+ends with no `xhcicm` service, take `xhcicm` out of every entry's
+`LowerFilters` and `UpperFilters` first, then every PCI devnode's, and read
+both again before the records and the service go; `XHCICLN` lists such
+values and points at that uninstall (`inst_filter_drop`, with host vectors;
+the service's self-test vectors). Reviewed until the review converged;
+gated builds passed, x86 then amd64, at 5ac042b9.
+
+Legs, release flavour, the gated binaries in the bench package:
+
+- **2000** (a copy of the matrix's 2000 disk, its leak cleaned by the new
+  service's first poll): after a plug and install the database held only
+  the filter INF's `UpperFilters`; a never-seen chain (USP, DSP, NVMe) got
+  a recorded mark on its unit and nothing on the DSP or the drive; the
+  uninstall removed the `UpperFilters` copy and the unit's mark, and
+  afterwards nothing under `Enum\PCI` or the database named `xhcicm`;
+  booted with a new bridge, an NVMe drive behind it and another on bus 0,
+  all three started (Code 0). Installed again on a two-port USB4 host
+  (`usb4-generic`): a second enclosure on the other tunnel port was marked
+  and listed, the `cc_010802` copy 2000's Found New Hardware install of
+  Stor98 made for its drive was taken out at the next poll ("Windows copied
+  it there from a marked unit's install"), and an NVMe drive added at the
+  next boot and installed through the wizard came up with no filter. The
+  unit present when the new `xhcicm` loaded was not marked until the
+  restart (the matrix's XP finding; 3.0.0.0 did the same).
+- **7 x86**: a new bridge added at boot while 3.0.0.0's service ran had no
+  filter; updated to this build with a chain and an NVMe drive at Code 28
+  behind the port, both units were marked and kept, the database held only
+  the filter INF's `UpperFilters`; the uninstall left no value naming
+  `xhcicm` among 178 read.
+
+The eject on 7 (`cm.reenum.eject.stale` after every confirmation): the
+eligibility now reads a function at Code 28 - only this driver's
+BusRelations child on its PDO, nothing above it - as without a stack, with
+the member held against a start until the hook returns (host vectors for
+`CmPortsStackless`). Read again on 7 x86 the same layout still ended
+`stale`: the ejected bridge's PDO keeps ACPI's bus filter
+(`cm.reenum.child.under` `ACPI`) after its stack is removed. Open: telling
+that filter from a rebuilt stack needs another driver's chain top read
+safely, an import this driver does not have; under the USB4 profile on an
+ACPI machine an eject leaves the tunnel up until the unplug.
+
 ## Phase 42 integration: the installer's hooks, the bench cut and its smoke legs (2026-10-19)
 
 Branch `p42-int` from `3.1.0.0` at `2d2703b9`, with `3.1.0.0` merged in
