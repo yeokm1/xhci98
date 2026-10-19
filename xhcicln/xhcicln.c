@@ -95,6 +95,7 @@
  * section 7.6; roadmap-usb4.md task 42-A.3), and every question lists its
  * choices one a line and ends "Enter for [x]". */
 static INST_WRAP clnWrap;
+static int cln_read_line(char *line, int cap);
 static int clnWrapReady;
 
 static void say(const char *fmt, ...)
@@ -1500,7 +1501,7 @@ static int cln_ask(int count)
     for (;;) {
         say_flush();
         inst_wrap_input(&clnWrap);
-        if (fgets(line, sizeof(line), stdin) == NULL) {
+        if (!cln_read_line(line, sizeof(line))) {
             say("\n");
             return 0;
         }
@@ -1577,6 +1578,22 @@ typedef BOOL (WINAPI *PFN_SETREGPROP)(HDEVINFO, PSP_DEVINFO_DATA, DWORD,
 #define CLN_SPDRP_UPPERFILTERS 0x00000011UL
 #define CLN_SPDRP_LOWERFILTERS 0x00000012UL
 
+/* A line read from the console with its CR and LF taken off; 0 at the end
+ * of input. */
+static int cln_read_line(char *line, int cap)
+{
+    size_t n;
+
+    if (fgets(line, cap, stdin) == NULL) {
+        return 0;
+    }
+    n = strlen(line);
+    while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
+        line[--n] = '\0';
+    }
+    return 1;
+}
+
 /* 1 when the xhcicm service is registered (or cannot be ruled out). */
 static int cln_xhcicm_registered(void)
 {
@@ -1593,18 +1610,41 @@ static int cln_xhcicm_registered(void)
     return r != ERROR_FILE_NOT_FOUND;
 }
 
+/* One filter value's edit: the name taken out, or the value deleted; 1 done. */
+static int cln_set_value(HKEY k, const char *name, int act, const char *nf,
+                         size_t ob)
+{
+    LONG r;
+
+    if (act == INST_FD_SET) {
+        r = RegSetValueExA(k, name, 0, REG_MULTI_SZ, (const BYTE *)nf,
+                           (DWORD)ob);
+    } else if (act == INST_FD_DELETE) {
+        r = RegDeleteValueA(k, name);
+    } else {
+        r = ERROR_INSUFFICIENT_BUFFER;
+    }
+    if (r != ERROR_SUCCESS) {
+        say("    could not be removed (error %ld)\n", r);
+        return 0;
+    }
+    say("    removed\n");
+    return 1;
+}
+
 /* The filter values naming xhcicm with no xhcicm service on the machine:
  * every CriticalDeviceDatabase entry's LowerFilters and UpperFilters
  * (Windows 2000 and XP copy a boot-critical device's own filter values
  * there when they install it, and every new device of that class then gets
  * them) and every PCI devnode's, present or not. A filter named with no
- * service stops a device (Code 39, Code 19 read on 2000 for an NVMe given
- * the name from such a copy), so with fix each is taken out, the other names
- * kept, the value deleted when nothing else is left. A test build of
- * 3.1.0.0's uninstall cleaned the devices only. Returns how many values
- * name it (with fix: how many could not be cleaned); -1 when it could not
- * look. */
-static int cln_stale_filters(int fix)
+ * service stops a device (Code 39; Code 19 read on 2000 for an NVMe given
+ * the name from such a copy), so with fix each is taken out, the other
+ * names kept, the value deleted when nothing else is left. A 3.1.0.0 test
+ * build's uninstall cleaned the devices only. *found the values naming it
+ * (with fix: those that could not be cleaned); returns 1 when every key,
+ * entry and value was read (a value or key that is simply absent is no
+ * error), 0 when the reading was incomplete. */
+static int cln_stale_filters(int fix, int *found)
 {
     static const char *const vals[2] = { "LowerFilters", "UpperFilters" };
     static const DWORD props[2] = { CLN_SPDRP_LOWERFILTERS,
@@ -1618,6 +1658,7 @@ static int cln_stale_filters(int fix)
     DWORD nn;
     DWORD type;
     DWORD n;
+    DWORD e;
     LONG r;
     char name[256];
     char id[CLN_ID_CHARS];
@@ -1626,13 +1667,14 @@ static int cln_stale_filters(int fix)
     size_t ob;
     int act;
     int v;
-    int count = 0;
+    int complete = 1;
 
+    *found = 0;
     setProp = (PFN_SETREGPROP)GetProcAddress(api.SetupApi,
                                              "SetupDiSetDeviceRegistryPropertyA");
     if (fix && setProp == NULL) {
-        say("not available: SetupDiSetDeviceRegistryPropertyA\n");
-        return -1;
+        say("  not available: SetupDiSetDeviceRegistryPropertyA\n");
+        return 0;
     }
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
                       "SYSTEM\\CurrentControlSet\\Control\\CriticalDeviceDatabase",
@@ -1640,21 +1682,42 @@ static int cln_stale_filters(int fix)
     if (r == ERROR_SUCCESS) {
         for (i = 0;; i++) {
             nn = sizeof(name);
-            if (RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL) !=
-                ERROR_SUCCESS) {
+            r = RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL);
+            if (r == ERROR_NO_MORE_ITEMS) {
                 break;
             }
-            if (RegOpenKeyExA(root, name, 0,
+            if (r != ERROR_SUCCESS) {
+                say("  The CriticalDeviceDatabase could not be read whole "
+                    "(error %ld).\n", r);
+                complete = 0;
+                if (r == ERROR_MORE_DATA) {
+                    continue;
+                }
+                break;
+            }
+            r = RegOpenKeyExA(root, name, 0,
                               fix ? KEY_QUERY_VALUE | KEY_SET_VALUE
-                                  : KEY_QUERY_VALUE, &k) != ERROR_SUCCESS) {
+                                  : KEY_QUERY_VALUE, &k);
+            if (r != ERROR_SUCCESS) {
+                say("  CriticalDeviceDatabase\\%s could not be opened (error "
+                    "%ld).\n", name, r);
+                complete = 0;
                 continue;
             }
             for (v = 0; v < 2; v++) {
                 memset(f, 0, sizeof(f));
                 n = sizeof(f) - 2;
-                if (RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n) !=
-                        ERROR_SUCCESS ||
-                    (type != REG_MULTI_SZ && type != REG_SZ)) {
+                r = RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n);
+                if (r == ERROR_FILE_NOT_FOUND) {
+                    continue;
+                }
+                if (r != ERROR_SUCCESS) {
+                    say("  CriticalDeviceDatabase\\%s: %s could not be read "
+                        "(error %ld).\n", name, vals[v], r);
+                    complete = 0;
+                    continue;
+                }
+                if (type != REG_MULTI_SZ && type != REG_SZ) {
                     continue;
                 }
                 act = inst_filter_drop(f, n + 1, CLN_FILTER_NAME, nf,
@@ -1664,20 +1727,8 @@ static int cln_stale_filters(int fix)
                 }
                 say("  CriticalDeviceDatabase\\%s: %s names %s\n", name,
                     vals[v], CLN_FILTER_NAME);
-                if (!fix) {
-                    count++;
-                    continue;
-                }
-                r = act == INST_FD_SET
-                        ? RegSetValueExA(k, vals[v], 0, REG_MULTI_SZ,
-                                         (const BYTE *)nf, (DWORD)ob)
-                        : act == INST_FD_DELETE ? RegDeleteValueA(k, vals[v])
-                                                : ERROR_INSUFFICIENT_BUFFER;
-                if (r == ERROR_SUCCESS) {
-                    say("    removed\n");
-                } else {
-                    say("    could not be removed (error %ld)\n", r);
-                    count++;
+                if (!fix || !cln_set_value(k, vals[v], act, nf, ob)) {
+                    (*found)++;
                 }
             }
             RegCloseKey(k);
@@ -1685,18 +1736,24 @@ static int cln_stale_filters(int fix)
         RegCloseKey(root);
     } else if (r != ERROR_FILE_NOT_FOUND) {
         say("  The CriticalDeviceDatabase could not be read (error %ld).\n", r);
-        return -1;
+        complete = 0;
     }
     set = api.GetClassDevs(NULL, "PCI", NULL, DIGCF_ALLCLASSES);
     if (set == INVALID_HANDLE_VALUE) {
         say("  The PCI device list could not be opened (error %lu).\n",
             (unsigned long)GetLastError());
-        return -1;
+        return 0;
     }
     for (i = 0;; i++) {
         memset(&data, 0, sizeof(data));
         data.cbSize = sizeof(data);
         if (!api.EnumInfo(set, i, &data)) {
+            e = GetLastError();
+            if (e != ERROR_NO_MORE_ITEMS) {
+                say("  The PCI device list ended early (error %lu).\n",
+                    (unsigned long)e);
+                complete = 0;
+            }
             break;
         }
         if (!api.GetInstanceId(set, &data, id, sizeof(id), NULL)) {
@@ -1707,6 +1764,12 @@ static int cln_stale_filters(int fix)
             n = 0;
             if (!api.GetRegProp(set, &data, props[v], &type, (PBYTE)f,
                                 sizeof(f) - 2, &n)) {
+                e = GetLastError();
+                if (e != ERROR_INVALID_DATA) {
+                    say("  %s: %s could not be read (error %lu).\n", id,
+                        vals[v], (unsigned long)e);
+                    complete = 0;
+                }
                 continue;
             }
             act = inst_filter_drop(f, n + 1, CLN_FILTER_NAME, nf, sizeof(nf),
@@ -1716,7 +1779,7 @@ static int cln_stale_filters(int fix)
             }
             say("  %s: %s names %s\n", id, vals[v], CLN_FILTER_NAME);
             if (!fix) {
-                count++;
+                (*found)++;
                 continue;
             }
             if (act == INST_FD_ERROR ||
@@ -1725,40 +1788,60 @@ static int cln_stale_filters(int fix)
                          act == INST_FD_SET ? (DWORD)ob : 0)) {
                 say("    could not be removed (error %lu)\n",
                     (unsigned long)GetLastError());
-                count++;
+                (*found)++;
             } else {
                 say("    removed\n");
             }
         }
     }
     api.Destroy(set);
-    return count;
+    return complete;
 }
 
-/* The stale-name pass of a run: listed, and with -remove taken out after
- * the one question, only when xhcicm itself is not installed (while it is,
- * its names are its own: the mark service and the uninstall look after
- * them). */
-static void cln_stale_pass(void)
+/* The stale-name pass of a run (CLN_STALE_*): listed, and with -remove
+ * taken out after the one question, only while xhcicm itself is not
+ * installed (while it is, its names are its own) and only where removal is
+ * enabled; the absence of the service is read again after the answer, and
+ * the change made under the marks' write lock. */
+#define CLN_STALE_NONE      0   /* nothing to do, or listed              */
+#define CLN_STALE_DONE      1   /* taken out                             */
+#define CLN_STALE_CANCELLED 2
+#define CLN_STALE_FAILED    3
+static int cln_stale_pass(int enabled)
 {
     int found;
     int left;
+    int complete;
+    HANDLE m;
+    DWORD w;
 
     if (cln_xhcicm_registered()) {
-        return;
+        return CLN_STALE_NONE;
     }
-    found = cln_stale_filters(0);
-    if (found <= 0) {
-        return;
+    complete = cln_stale_filters(0, &found);
+    if (found == 0 && complete) {
+        return CLN_STALE_NONE;
     }
-    say("\nThe Thunderbolt driver xhcicm is not installed, but %d filter "
-        "value(s) above still\nname it: a new bridge or NVMe drive would not "
-        "start (Code 39 or 19).\n", found);
+    if (found > 0) {
+        say("\nThe Thunderbolt driver xhcicm is not installed, but %d filter "
+            "value(s) above still\nname it: a new bridge or NVMe drive would "
+            "not start (Code 39 or 19).\n", found);
+    }
+    if (!complete) {
+        say("The filter values could not all be read (above).\n");
+    }
     if (!clnRemove) {
-        say("Run XHCICLN -remove to take the name out of them.\n");
-        return;
+        if (found > 0) {
+            say("Run XHCICLN -remove to take the name out of them.\n");
+        }
+        return complete ? CLN_STALE_NONE : CLN_STALE_FAILED;
     }
-    if (!clnYes) {
+    if (!enabled) {
+        say("Removal is not enabled on this Windows version; nothing "
+            "changed.\n");
+        return CLN_STALE_FAILED;
+    }
+    if (found > 0 && !clnYes) {
         char text[1024];
         char line[32];
         int a;
@@ -1770,13 +1853,14 @@ static void cln_stale_pass(void)
         for (;;) {
             say_flush();
             inst_wrap_input(&clnWrap);
-            if (fgets(line, sizeof(line), stdin) == NULL) {
+            if (!cln_read_line(line, sizeof(line))) {
                 say("\n");
-                return;
+                return CLN_STALE_CANCELLED;
             }
             a = inst_tb_answer(line, 0);
             if (a == 0) {
-                return;
+                say("Left as they are.\n");
+                return CLN_STALE_CANCELLED;
             }
             if (a == 1) {
                 break;
@@ -1784,13 +1868,46 @@ static void cln_stale_pass(void)
             say("  Type Y or N, or Enter for [N]: ");
         }
     }
-    left = cln_stale_filters(1);
-    say(left == 0 ? "xhcicm was taken out of every one.\n"
-                  : "%d could not be changed; restart Windows and run "
-                    "XHCICLN -remove again.\n", left);
+    m = CreateMutexA(NULL, FALSE, "Global\\Xhci98MarkWrite");
+    if (m == NULL) {
+        m = OpenMutexA(SYNCHRONIZE | 0x0001, FALSE, "Global\\Xhci98MarkWrite");
+    }
+    w = m != NULL ? WaitForSingleObject(m, 10000) : WAIT_FAILED;
+    if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
+        say("The marks' write lock could not be taken; nothing changed.\n");
+        if (m != NULL) {
+            CloseHandle(m);
+        }
+        return CLN_STALE_FAILED;
+    }
+    /* Read again after the answer: an install meanwhile owns the names. */
+    if (cln_xhcicm_registered()) {
+        say("xhcicm was installed meanwhile: its filter names are left to "
+            "it.\n");
+        ReleaseMutex(m);
+        CloseHandle(m);
+        return CLN_STALE_NONE;
+    }
+    complete = cln_stale_filters(1, &left);
+    if (complete) {
+        int again;
+
+        complete = cln_stale_filters(0, &again);
+        left += again;
+    }
+    ReleaseMutex(m);
+    CloseHandle(m);
+    if (left == 0 && complete) {
+        say("xhcicm was taken out of every one.\n");
+        return CLN_STALE_DONE;
+    }
+    say("%d could not be changed or read; restart Windows and run XHCICLN "
+        "-remove again.\n", left);
+    return CLN_STALE_FAILED;
 }
 
-static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
+static int cln_run_nt_devnodes(unsigned long major, unsigned long minor,
+                               int wow64)
 {
     char why[640];
     int missing;
@@ -1814,9 +1931,6 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
         say("xhcicln: a routine the listing needs is missing (above); "
                "nothing listed or removed.\n");
         return CLN_EXIT_REFUSED;
-    }
-    if (!wow64) {
-        cln_stale_pass();
     }
     if (cln_nt_candidates() != 0) {
         return CLN_EXIT_REFUSED;
@@ -2006,6 +2120,33 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
 
 static int clnChecks;
 static int clnFailures;
+
+/* The NT run: the stale xhcicm names first (not by the 32-bit build on
+ * 64-bit Windows, which reads another view of nothing here but cannot
+ * change devices), then the old devnodes; a stale pass that failed or was
+ * cancelled under -remove makes the exit code say so. */
+static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
+{
+    int stale = CLN_STALE_NONE;
+    int rc;
+
+    if (!wow64 && api.SetupApi == NULL) {
+        int rm;
+        if (cln_load_nt(&rm) > 0) {
+            return cln_run_nt_devnodes(major, minor, wow64);
+        }
+    }
+    if (!wow64) {
+        stale = cln_stale_pass(cln_removal_enabled(major, minor));
+    }
+    rc = cln_run_nt_devnodes(major, minor, wow64);
+    if (clnRemove && (stale == CLN_STALE_FAILED || stale == CLN_STALE_CANCELLED)) {
+        if (rc == CLN_EXIT_DONE || rc == CLN_EXIT_RESTART) {
+            rc = stale == CLN_STALE_FAILED ? CLN_EXIT_STOPPED : CLN_EXIT_REFUSED;
+        }
+    }
+    return rc;
+}
 
 static void cln_check(int ok, const char *what)
 {
