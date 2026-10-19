@@ -35,7 +35,7 @@ The repository path must not contain a space: the DDKs' `setenv.bat` takes its r
 
 In the xhci98 repository, where Stor98 is `src\stor98\` (since 2026-10-19), there is no
 `tools\` here: `scripts\build.cmd`, `tests\unit\build.cmd`, `tests\cm9x\build.cmd`,
-`tests\cmnt\build.cmd` and the signing scripts then use xhci98's own `tools\`, two levels
+`tests\cmnt\build.cmd` then use xhci98's own `tools\`, two levels
 up, which holds the same kits (its `tools\w98ddk\inc` the two headers below). `STOR98_TOOLS`
 in the environment names any other root; the layout under it is the one above.
 
@@ -83,9 +83,10 @@ out\free\x86\stor98.sys       out\checked\x86\stor98.sys
 out\free\amd64\stor98.sys     out\checked\amd64\stor98.sys
 ```
 
-These build folders are not the release layout: `make-release.ps1` puts `win9x\stor98.mpd`
-and `x86\stor98.sys` together in the release's `x86\` and `amd64\stor98.sys` in its `x64\`
-(see "INFs and version").
+These build folders are not the package layout: xhci98's `make-package.ps1` puts
+`win9x\stor98.mpd`, `x86\stor98.sys` and `inf\stor98-x86.inf` (as `stor98.inf`) at the root
+of its x86 package and `amd64\stor98.sys` with `inf\stor98-x64.inf` at the root of its amd64
+package (see "INFs and version" and "Releases").
 
 `build.cmd` fails if `build.exe` fails, writes a `build*.err`, or produces no image, and prints
 any `build*.wrn`. Sources compile at `/W3 /WX`.
@@ -116,9 +117,19 @@ copies only its own image; both files are listed in `[SourceDisksFiles]`. 64-bit
 ignores undecorated models, so it does not offer the x86 INF, and 32-bit Windows finds no
 models in the x64 INF. The unpublished builds 0.1.0.0 and 0.1.1.0 (under the former name) had a
 separate 9x INF in `win9x\` and one NT INF (undecorated, `NTx86` and `NTamd64` models) in
-both `x86\` and `amd64\`, each shipped under the former name with the `.inf` extension. The version lives in `src\stor98ver.h` (version resource) and in each INF's
-`DriverVer`; `scripts\make-release.ps1` checks that they agree with each other and with
-`releases\history.md`.
+both `x86\` and `amd64\`, each shipped under the former name with the `.inf` extension.
+
+**The version is xhci98's** since xhci98 3.1.0.0 (owner, 2026-10-19; xhci98 roadmap-usb4
+task 42-A.30): `src\stor98ver.h` includes xhci98's `src\xhci_version.h` (two directories
+up, `#define` lines only) and gives `nvme2k.rc` its `XHCI_VER_CSV` and `XHCI_VER_STR`, so
+every image carries the xhci98 package's version; each INF's `DriverVer` carries the
+package's version and date (`XHCI_DRIVERVER_DATE`) as a literal, which xhci98's
+`scripts\inf-gate\check-stor98-inf.ps1` checks on every gated build. Stor98 is therefore
+built only inside the xhci98 tree. The interface versions in `include\stor98cm.h`
+(`STOR98CM_VERSION`, `STOR98LS_VERSION` and the others) are protocol versions and are not
+this. Each image also carries one flavour marker string, `STOR98_FLAVOUR_FREE`,
+`STOR98_FLAVOUR_CHECKED` or `STOR98_FLAVOUR_DBGPORT` (`src\nvme2k.c`), which `DriverEntry`
+reads so the linker keeps it; xhci98's gated build ships only the free one.
 
 The NT sections of both INFs install the `stor98` service as **demand-start** (`StartType=3`,
 `ErrorControl=1`, group `SCSI Miniport`), for data disks only: Plug and Play loads the
@@ -134,163 +145,40 @@ start type and are unaffected.
 
 ## Releases
 
-`scripts\make-release.ps1 -Stage -TestSignPfx <file.pfx>` builds and stages a release in
-`out\stage\<version>\` (`x86\` and `x64\`), signing the x64 image with the project test
-certificate as it stages; then `scripts\make-release.ps1 -Finalize` copies it to
-`releases\<version>\`. `-Stage -Test` writes an unsigned stage for install tests to
-`out\stage\<version>-test\`, which is never finalized. The rules and the exact commands are
-in [releases/README.md](../releases/README.md).
+Since xhci98 3.1.0.0 Stor98 has no releases of its own: xhci98's gated build
+(`scripts\build-driver.cmd` there) builds the free images of each architecture from this
+source, after the unit tests on its x86 run, and gates them in every flavour - the version,
+the flavour marker and the import allowlist (xhci98's `scripts\check-stor98-build.ps1` and
+`scripts\import-gate\stor98-imports.allow`), a source stamp beside each image, and the
+gated record its signing step reads. xhci98's `make-package.ps1` bundles that build in each
+package, with `LICENSE`, `NOTICE` and [package-readme.txt](package-readme.txt) as
+`stor98-LICENSE.txt`, `stor98-NOTICE.txt` and `stor98-readme.txt`, and xhci98's
+`make-release.ps1` publishes it in the release's `release-x86\` and `release-x64\`
+(xhci98's `docs\contributing\build-and-test.md`, "Building Stor98" and "The bundled Stor98
+build"). The releases made here up to `0.4.0.0` stay in `releases\` as history
+([releases/README.md](../releases/README.md)); the release script that made them was
+removed.
 
 ## Test signing
-
-The procedure is the one xhci98 uses for its x64 drivers, written again for Stor98.
-
-### Why, and what is signed
 
 Vista x64 and Windows 7 x64 refuse a kernel-mode driver without a signature they accept;
 XP x64, Server 2003 x64 and every 32-bit Windows do not check. In test-signing mode
 (`bcdedit /set testsigning on`) those two load a driver signed by any certificate, trusted
-or not, at every start. Without a signature the only route is F8, Disable Driver Signature
-Enforcement, which lasts one start. So the released `x64\stor98.sys` (`amd64\` up to 0.1.1.0) carries:
+or not, at every start.
 
-- an **embedded Authenticode signature** by the Stor98 project test certificate. There
-  is no catalog, so the kernel checks the image's embedded signature when Plug and Play
-  loads the demand-start service (`inf\stor98-x64.inf`);
-- **SHA-1 file digest** (`/fd sha1`): Vista verifies SHA-1 only, and Windows 7 verifies
-  SHA-256 only after a later update a user may not have;
-- **no timestamp**: the cut stays offline, and the same bytes signed with the same key give
-  the same bytes, so a re-cut is reproducible;
-- **no page hashes** (`/nph`), **no catalog**, and the INFs unchanged. A catalog would only
-  govern the install-time "can't verify the publisher" prompt, which therefore stays.
+**Since xhci98 3.1.0.0 one signature signs every driver of the package** (owner,
+2026-10-19): the amd64 `stor98.sys` is signed by xhci98's `make-package.ps1 -TestSignPfx`,
+in the same step and with the same key as `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys` -
+an embedded Authenticode signature, SHA-1 file digest, no timestamp, no catalog, the INFs
+unchanged - and `xhci98-test.cer` beside them is that certificate's public half (xhci98's
+design record 19). The 32-bit and Windows 9x images are never signed. Stor98's own test
+certificate (`CN=stor98 project test signing (not trusted)`), which signed the amd64 image
+of `0.3.0.0` to `0.4.0.0` with `stor98-test.cer` beside it, signs nothing any more, and its
+scripts (`make-testcert.ps1`, `sign-x64.ps1`, `testsign-common.ps1`) were removed. Windows 7
+SP1 needs the SHA-1 certificate signature and file digest ([TESTING.md](TESTING.md), "Windows
+7 x64 notes"). This is not Microsoft signing and nothing may say it is.
 
-The x86 and Windows 9x images are **never signed**: nothing there checks, and a signature
-would change bytes every 32-bit reading was taken on. The signed image differs from the
-build only in the PE checksum, the certificate-table directory entry, up to seven bytes of
-zero padding and the appended `WIN_CERTIFICATE`; the scripts check exactly that.
-
-This is not Microsoft signing and nothing may say it is. The certificate is self-signed,
-trusted nowhere, and does not make the driver load on Windows in its ordinary mode.
-
-### The certificate (once, by the maintainer)
-
-```
-powershell -ExecutionPolicy Bypass -File scripts\make-testcert.ps1
-```
-
-The rename to Stor98 changed the expected subject and file names: a certificate made
-before it (its subject and .pfx name carry the former name) is refused by `-TestSignPfx`. Make a new one with this script, or sign a stage with the old
-one through `scripts\sign-x64.ps1 -Pfx <file>`, which accepts any certificate
-([RENAME-STOR98.md](RENAME-STOR98.md), "For the maintainer").
-
-It runs WDK 7.1's MakeCert and pvk2pfx from `tools\WinDDK71\bin\x86` with guards: it
-refuses to overwrite an existing key, refuses to write into a folder of the repository git
-does not ignore (the default, `scripts\local\testsign\`, is ignored as a whole), asks for
-the .pfx password twice without echo, deletes the intermediate .pvk, and prints the
-certificate's facts and SHA-1 thumbprint. The raw commands are:
-
-```
-cd scripts\local\testsign
-set WDK=<repo>\tools\WinDDK71\bin\x86
-"%WDK%\MakeCert.exe" -r -pe -n "CN=stor98 project test signing (not trusted)" -a sha1 -len 2048 -eku 1.3.6.1.5.5.7.3.3 -b 01/01/2000 -e 12/31/2039 -sv stor98-test.pvk stor98-test.cer
-"%WDK%\pvk2pfx.exe" -pvk stor98-test.pvk -spc stor98-test.cer -pfx stor98-test.pfx -po <pfx password>
-```
-
-`-r` self-signed; `-pe` exportable key, which pvk2pfx needs; `-a sha1` a certificate
-signature Vista can check; `-len 2048` RSA 2048; `-eku 1.3.6.1.5.5.7.3.3` Code Signing,
-which SignTool requires; `-b 01/01/2000` already valid on a machine whose clock is behind;
-`-e 12/31/2039` long, since there is no timestamp. MakeCert and pvk2pfx ask for the .pvk
-password in dialogs. pvk2pfx takes the .pfx password only on its command line (so does
-SignTool at every cut), where local processes that read command lines can briefly see it.
-
-| File | What | Where |
-|---|---|---|
-| `stor98-test.pfx` | private key and certificate | `scripts\local\testsign\`, git-ignored. Never committed, packaged, printed or copied into notes. |
-| `stor98-test.cer` | public half | the same folder; a copy is staged next to every signed `x64\stor98.sys` |
-| .pfx password | | typed at a prompt that does not echo, or `STOR98_TESTSIGN_PW` in the process environment; never stored |
-
-If the repository is in a synchronised folder (OneDrive, Dropbox, ...), a key under
-`scripts\local\testsign\` is synchronised too (git-ignored is not local-only). `make-testcert.ps1 -OutDir <folder>` writes
-outside the repository instead, and `-TestSignPfx` takes any path.
-
-After making it, record the printed thumbprint in `scripts\testsign-common.ps1`
-(`$Stor98TestSignThumbprint`) and commit that: from then on `-TestSignPfx` accepts that
-certificate and no other. While it is empty, any .pfx with the project subject is accepted.
-
-### Cutting with the signature
-
-```
-powershell -ExecutionPolicy Bypass -File scripts\make-release.ps1 -Stage -TestSignPfx scripts\local\testsign\stor98-test.pfx
-powershell -ExecutionPolicy Bypass -File scripts\make-release.ps1 -Finalize
-```
-
-`-Stage -TestSignPfx` opens the .pfx before building (a wrong password costs a prompt, not
-a build) and refuses one whose subject is not `CN=stor98 project test signing (not
-trusted)` or which has no private key. After staging it signs a copy of the amd64 image
-(`SignTool sign /f ... /fd sha1 /nph`), checks the copy (signer thumbprint, one PKCS #7
-signer with SHA-1 as both digests, the vouched digest equal to the image's, no timestamp,
-and the build's bytes plus the signature and nothing else), puts it in place and writes
-`x64\stor98-test.cer`. Only an amd64 PE32+ image is ever signed. `-Finalize` refuses an
-unsigned amd64 image, an `stor98-test.cer` that is not the signer's certificate, and a
-signed image that is not the staged build plus a signature. It does not check who the
-signer is, and it accepts a timestamp: any certificate that `stor98-test.cer` matches
-passes, so that `scripts\sign-x64.ps1` can sign with another certificate (and
-`-TimestampUrl`). The project certificate and "no timestamp" are enforced only where
-`-TestSignPfx` signs; SHA-1 as both digests is required on both routes.
-
-**SignTool leaves key containers.** SignTool `/f` imports the .pfx's private key into a
-CryptoAPI key container under `%APPDATA%\Microsoft\Crypto\RSA\<user SID>\` and leaves it
-there: a copy of the private key outside the key folder. The scripts compare that folder
-before and after signing and print each new file as a ready `Remove-Item -LiteralPath ...
--Force` line; they do not delete them. Delete the files named. They are hidden system
-files; list the newest with:
-
-```
-Get-ChildItem "$env:APPDATA\Microsoft\Crypto\RSA" -Recurse -Force -File | Sort-Object LastWriteTime -Descending | Select-Object -First 5 FullName, LastWriteTime
-```
-
-### Another certificate: `scripts\sign-x64.ps1`
-
-`make-release.ps1 -Stage` without `-TestSignPfx` stages the amd64 image unsigned, and
-`scripts\sign-x64.ps1` signs that stage with any certificate, through the same code and to
-the same layout (the signer's public half is staged as `x64\stor98-test.cer`):
-
-```
-powershell -ExecutionPolicy Bypass -File scripts\sign-x64.ps1 -Pfx <file.pfx>
-powershell -ExecutionPolicy Bypass -File scripts\sign-x64.ps1 -Thumbprint <sha1>
-```
-
-An option, not the default: sign with xhci98's existing test certificate
-(`-Pfx <xhci98 checkout>\scripts\local\testsign\xhci98-test.pfx`), so a test machine has
-one certificate to trust for both drivers. The released `stor98-test.cer` is then
-xhci98's certificate. With the same certificate the two routes give byte-identical stages.
-
-### Checking a signed image
-
-```
-tools\WinDDK71\bin\x86\SignTool.exe verify /pa /v releases\<version>\x64\stor98.sys
-```
-
-prints `Hash of file (sha1)`, the chain with the signer's SHA-1 hash, `File is not
-timestamped.`, and then fails with "terminated in a root certificate which is not trusted".
-That failure is expected for a test certificate; what is checked is the thumbprint and
-`sha1`.
-
-### What users do
-
-On Vista x64 and Windows 7 x64, once: an elevated Command Prompt, `bcdedit /set
-testsigning on`, restart. "Test Mode" then shows on the desktop and the driver loads at
-every start. `bcdedit /enum {current}` shows `testsigning Yes`; `bcdedit /set testsigning
-off` and a restart undo it. F8, Disable Driver Signature Enforcement, still works for one
-start without test mode. With BitLocker on the system drive, suspend it before changing the
-boot setting. Without test-signing mode the driver is refused and the controller shows Code
-52; Windows still starts. To leave test-signing mode, uninstall Stor98 or run `sc config
-stor98 start= disabled` first, then `bcdedit /set testsigning off` and restart. With 0.1.0.0
-(boot-start) installed, turning test-signing off makes Windows 7 x64 fail to start
-(Startup Repair, then System Restore removes the driver); recovery is F8, Disable Driver
-Signature Enforcement, or test-signing on again. With test-signing on, `pnputil -i -a
-stor98.inf` (or Device Manager) starts the driver at once, without a restart. Setup still
-says it cannot verify the publisher (no catalog): "Install this
-driver software anyway". Importing `stor98-test.cer` into Trusted Root Certification
-Authorities and Trusted Publishers is optional and not needed: test-signing mode loads the
-driver without it, and it does not remove the install prompt. XP x64, Server 2003 x64 and
-32-bit Windows need none of this. The release `readme.txt` carries the same steps.
+What users do on Vista x64 and Windows 7 x64 is xhci98's (its readme and release notes):
+once, `bcdedit /set testsigning on` in an elevated Command Prompt and a restart, or F8,
+Disable Driver Signature Enforcement, for one start. Without either the controller shows
+Code 52 and Windows still starts (the service is demand-start).

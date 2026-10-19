@@ -52,7 +52,13 @@ includes `xhci_compat.h`, `xhci_version.h` and `xhci98_streams.h` from
 `src\`, every header in `src\` too - over-covering, as above. `xhcicm`, the
 Thunderbolt 3 connection manager of roadmap-usb4.md task 39-A.1
 (`src\cm\`, `xhcicm.srcstamp` beside `xhcicm.sys`), is stamped the same
-way, its `SOURCES` entry `..\xhci_log.c` hashed by path.
+way, its `SOURCES` entry `..\xhci_log.c` hashed by path. `stor98` and
+`stor98mpd` are Stor98 (`src\stor98\src\`, roadmap-usb4 task 42-A.30),
+`stor98.srcstamp` beside `stor98.sys` (x86 or amd64) or `stor98.mpd` (98
+SE and ME) in `src\stor98\out\free\<target>\`: its `SOURCES` list, every
+header in `src\stor98\src\`, its interface header
+`src\stor98\include\stor98cm.h` and `src\xhci_version.h`, the version it
+takes since 3.1.0.0.
 
 .PARAMETER Write
 The `src\obj*\i386` (or `src\uas\obj*\<arch>`) directory holding the
@@ -76,7 +82,7 @@ Both take the directory, not the file: the stamp is written beside
 param(
     [string]$Write = "",
     [string]$Check = "",
-    [ValidateSet("xhci98", "xhciuas", "xhcihlpr", "xhcicm")]
+    [ValidateSet("xhci98", "xhciuas", "xhcihlpr", "xhcicm", "stor98", "stor98mpd")]
     [string]$Driver = "xhci98"
 )
 
@@ -114,6 +120,15 @@ if ($Driver -eq "xhcicm") {
     $binaryName = "xhcicm.sys"
     $parentHeaders = $true
 }
+# Stor98 (src\stor98\src, task 42-A.30): one source tree for stor98.mpd and
+# both stor98.sys images. Its headers outside that folder are named here.
+$extraFiles = @()
+if ($Driver -eq "stor98" -or $Driver -eq "stor98mpd") {
+    $srcDir = Join-Path $repo "src\stor98\src"
+    $stampName = "stor98.srcstamp"
+    $binaryName = if ($Driver -eq "stor98mpd") { "stor98.mpd" } else { "stor98.sys" }
+    $extraFiles = @("..\include\stor98cm.h", "..\..\xhci_version.h")
+}
 # Prefixed rather than listed like a source file, so the source comparison
 # below cannot mistake it for a file that appeared in src\.
 $binaryTag = "BINARY"
@@ -123,7 +138,9 @@ function Get-SourceFiles {
 
     # The .c list comes from src\sources, so it cannot drift from the build.
     $sources = [System.IO.File]::ReadAllText((Join-Path $srcDir "sources"))
-    $m = [regex]::Match($sources, '(?ms)^SOURCES\s*=(.*?)(?:\r?\n\r?\n|\r?\n[A-Z])')
+    # The list ends at a blank line, the next directive or, as src\stor98\src\sources'
+    # does, the end of the file.
+    $m = [regex]::Match($sources, '(?ms)^SOURCES\s*=(.*?)(?:\r?\n\r?\n|\r?\n[A-Z]|\r?\n?\z)')
     if (-not $m.Success) {
         throw "src\sources has no SOURCES= list this script can read."
     }
@@ -152,6 +169,7 @@ function Get-SourceFiles {
             if ($f.Extension -ieq ".h") { $wanted.Add("..\" + $f.Name) }
         }
     }
+    foreach ($x in $extraFiles) { $wanted.Add($x) }
 
     return @($wanted | Sort-Object -Unique)
 }

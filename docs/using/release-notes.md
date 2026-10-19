@@ -219,6 +219,26 @@ as they are made; the head of this file is rewritten when it is cut.
   with driver signature enforcement disabled; it is not Microsoft-signed.
   The bundled Stor98 is not offered there. Windows 10 and later are still
   refused (Windows 11 has a USB4 connection manager of its own).
+- **Stor98 is built with the package, at its version: `3.1.0.0`.** The
+  bundled NVMe driver is now built from this source with the USB drivers
+  (its source has been in this repository since 2026-10-19) and carries
+  the package's version and date, like every other file of the download:
+  `stor98.mpd`, both `stor98.sys` and `stor98.inf` say `3.1.0.0`, dated
+  10/19/2026. Its last release on its own was Stor98 `0.4.0.0`, bundled in
+  `3.0.0.0`; `3.1.0.0` is the next version after it, so the installer
+  updates a `0.4.0.0` (or `0.3.0.x`) it finds, as it updates any older
+  Stor98. What changed in Stor98 since `0.4.0.0` is in its readme's
+  release history (`stor98-readme.txt` points to it). Its link-state
+  interface with `xhcicm.sys` (interface 4) is unchanged.
+- **One signature for every x64 driver.** The 64-bit `stor98.sys` is now
+  test-signed with the same certificate as `xhci98.sys`, `xhciuas.sys`
+  and `xhcicm.sys`, in the same step: `xhci98-test.cer` covers them all.
+  `stor98-test.cer`, the certificate of Stor98's own that signed it up
+  to `0.4.0.0`, is no longer in the download. Test-signing mode on Vista
+  x64 and 7 x64 loads them all, as before.
+- **Stor98 in the published tree.** Stor98's files are now part of each
+  `release-` directory as published, like the USB drivers, rather than
+  added to the download alone.
 - **Known limitation: a drive attached during the install.** On Windows
   2000 to 7, a Thunderbolt or USB4 drive that is already attached when the
   package is installed or updated is not listed in Safely Remove Hardware
@@ -559,10 +579,9 @@ the tunnel down as it did in `3.0.0.0`.
 ### NVMe drives behind a tunnel
 
 An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver,
-which none of these systems has. Stor98, a separate
-project, is that driver for Windows 98 SE to 7, and the download
-carries a release of it as its project released it, with its own licence
-and notes (which release, and where it is: "NVMe drives behind
+which none of these systems has. Stor98, built with this package at its
+version, is that driver for Windows 98 SE to 7, and the download carries
+it with its own licence and notes (which version, and where it is: "NVMe drives behind
 Thunderbolt or USB4", under "Installing"); read them before installing
 it. `xhcicm.sys` brings the drive's tunnel up and down; Stor98 runs the
 drive.
@@ -617,7 +636,7 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
 | `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
-| `XhciCmNoIrqStart` | `1` | Windows 98 SE and ME: `1` starts an NVMe drive behind a tunnel whose interrupt cannot be routed with no interrupt, for the bundled Stor98 (0.4.0.0 or later, installed by this package's installer) to poll; `0` leaves it at its problem code. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
+| `XhciCmNoIrqStart` | `1` | Windows 98 SE and ME: `1` starts an NVMe drive behind a tunnel whose interrupt cannot be routed with no interrupt, for the bundled Stor98 (0.4.0.0 or later; this package's is 3.1.0.0, installed by its installer) to poll; `0` leaves it at its problem code. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
 | `XhciCmBridgeNumbering` | `1` | Windows 98 SE and ME: `1` sets up the PCI bridges a device brings up behind a tunnel after Windows has started (bus numbers, memory windows, interrupt lines, as the BIOS would) (a USB4 NVMe enclosure's switch, which otherwise shows Code 29 until a restart); `0` leaves them as they come up. `0` to `1`. Ignored on 2000 to 7. Not written by the install |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | A comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports, for a machine whose ports it does not find (the `debug` log says so). Not written by the install |
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
@@ -2015,28 +2034,32 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles Stor98 `0.4.0.0`.
+This download bundles Stor98 `3.1.0.0`.
 
 <!-- The cut replaces the line above with "This download bundles Stor98
 `<version>`." or "This download bundles no Stor98."
 (scripts\package\make-release.ps1 holds it to what the cut bundles). -->
 
 An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of
-its own, which none of these systems has. Stor98, the release named in
+its own, which none of these systems has. Stor98, the version named in
 the line above, is that driver. `xhcicm.sys` brings the drive's tunnel up
 and down, and Stor98 runs the drive.
 
 `release-x86\` and `release-x64\` carry it:
 
-- a separate project under its own licence, bundled as one of its
-  released builds, unchanged;
+- built from this project's source with the USB drivers, at the same
+  version and date (`3.0.0.0` bundled Stor98's own release `0.4.0.0`),
+  under its own licence (BSD-3-Clause);
 - `stor98.inf` and the files beside it whose names start with `stor98`;
-- its `LICENSE`, `NOTICE.TXT` and `readme.txt` beside it, as
+- its `LICENSE`, `NOTICE` and readme beside it, as
   `stor98-LICENSE.txt`, `stor98-NOTICE.txt` and `stor98-readme.txt`.
 
 Its readme is its install guide and lists its known limits; read it
-before installing. The `debug-` directories do not carry it, and
-`INSTALL.BAT` does not install it.
+before installing. The `debug-` directories do not carry it.
+`INSTALL.BAT` installs it when asked, as part of the Thunderbolt 3 / USB4
+support (its box under the Thunderbolt 3 / USB4 one on the Components
+page, which needs that one ticked too, or `/thunderbolt /stor98`) and
+updates an older Stor98.
 
 When the drive's NVMe controller (`PCI\CC_010802`) shows in Device
 Manager without a driver, Update Driver, Have Disk, and point it at:
@@ -2044,11 +2067,11 @@ Manager without a driver, Update Driver, Have Disk, and point it at:
 - `release-x86\` on Windows 98 SE, ME and 32-bit 2000, XP, Vista and 7
 - `release-x64\` on Windows XP x64, Vista x64 and 7 x64
 
-The x64 `stor98.sys` is test-signed by Stor98's own project.
-`stor98-test.cer` beside it in `release-x64\` is the public half of that
-project's test certificate. Test-signing mode, which the x64 drivers
-already need on Vista x64 and 7 x64, loads it too. Importing either
-`.cer` is not needed.
+The x64 `stor98.sys` is test-signed with the same certificate as the
+other x64 drivers, in the same step: `xhci98-test.cer` in `release-x64\`
+is its public half. Test-signing mode, which the x64 drivers already need
+on Vista x64 and 7 x64, loads it too. Importing the `.cer` is not
+needed.
 
 ## Devices and hubs in Device Manager
 
@@ -4018,9 +4041,10 @@ This driver's own source is under the GNU General Public License, version 2
 record is `docs/contributing/legal-provenance.md`.
 
 `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and their INFs are this
-project's own work. A download that bundles Stor98 carries it as its own
-project released it, with its licence and notice beside it ("NVMe drives
-behind Thunderbolt or USB4"). No Microsoft file is in the download: the `usbd.sys` and `usbui.dll` the install
+project's own work. A download that bundles Stor98 carries it built from
+this project's source tree but under its own licence (BSD-3-Clause), with
+its licence and notice beside it ("NVMe drives behind Thunderbolt or
+USB4"). No Microsoft file is in the download: the `usbd.sys` and `usbui.dll` the install
 needs are Windows' own and are copied by Windows from your own installation
 source. On Windows 98 SE, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as a
 filter on the UAS device; the file is named, never shipped, and NUSB's

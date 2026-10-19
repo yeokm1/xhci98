@@ -9339,7 +9339,11 @@ static void write_dev_devices(void)
  * The installed files, where this package's INFs put them: the three
  * drivers and usbd.sys in dirid 10's System32\Drivers (the Windows
  * directory's, on every target, 98 SE and ME included), usbui.dll in dirid
- * 11, the system directory (SYSTEM on 9x, system32 on NT).
+ * 11, the system directory (SYSTEM on 9x, system32 on NT), and the bundled
+ * Stor98 where stor98.inf puts it (SystemDir 2): stor98.sys in
+ * System32\Drivers on 2000 and later, stor98.mpd in dirid 12, the system
+ * directory's IOSUBSYS, on 98 SE and ME. Its file version is the package's
+ * from 3.1.0.0 (0.4.0.0 or earlier where a 3.0.0.0 package installed it).
  */
 static const struct {
     const char *Name;
@@ -9352,8 +9356,11 @@ static const struct {
      * update's leftover is seen (design record 18 section 15.12, U4). */
     { "xhcimsi.sys", 0 },
     { "usbd.sys", 0 },
-    { "usbui.dll", 1 }
+    { "usbui.dll", 1 },
+    { "stor98.sys", 2 }
 };
+
+static int on_nt(void);
 
 #pragma auto_inline(off)
 static void write_dev_files(void)
@@ -9369,6 +9376,8 @@ static void write_dev_files(void)
     UINT n;
     int i;
     int rc;
+    int sysDir;
+    const char *name;
 
     comp("\n  installed files - size, file version and SHA-256, computed by "
          "XHCITR:\n");
@@ -9376,19 +9385,32 @@ static void write_dev_files(void)
     wow64_resolve();
     ver_load();
     for (i = 0; i < (int)(sizeof(instFiles) / sizeof(instFiles[0])); i++) {
-        n = instFiles[i].SystemDir
+        name = instFiles[i].Name;
+        sysDir = instFiles[i].SystemDir;
+        if (sysDir == 2) {
+            /* Stor98: stor98.sys under Drivers on NT; stor98.mpd under
+             * the system directory's IOSUBSYS on 98 SE and ME. */
+            if (on_nt()) {
+                sysDir = 0;
+            } else {
+                name = "stor98.mpd";
+            }
+        }
+        n = sysDir
                 ? GetSystemDirectoryA(dir, sizeof(dir))
                 : GetWindowsDirectoryA(dir, sizeof(dir));
         comp("\n");
         if (n == 0 || n + 40 > sizeof(dir)) {
-            dev_line(instFiles[i].Name, "not read: the %s directory was not "
-                     "found", instFiles[i].SystemDir ? "system" : "Windows");
+            dev_line(name, "not read: the %s directory was not "
+                     "found", sysDir ? "system" : "Windows");
             continue;
         }
-        if (instFiles[i].SystemDir) {
-            sprintf(path, "%s\\%s", dir, instFiles[i].Name);
+        if (sysDir == 2) {
+            sprintf(path, "%s\\IOSUBSYS\\%s", dir, name);
+        } else if (sysDir) {
+            sprintf(path, "%s\\%s", dir, name);
         } else {
-            sprintf(path, "%s\\System32\\Drivers\\%s", dir, instFiles[i].Name);
+            sprintf(path, "%s\\System32\\Drivers\\%s", dir, name);
         }
         if (sys_can_screen()) {
             sys_clean(path, clean, sizeof(clean));
@@ -9396,12 +9418,13 @@ static void write_dev_files(void)
             /* The directory is free text (a per-user one under Terminal
              * Services), so with nothing to screen it is named, not shown. */
             _snprintf(clean, sizeof(clean) - 1, "in the %s",
-                      instFiles[i].SystemDir ? "system directory"
-                                             : "Windows directory's "
-                                               "System32\\Drivers");
+                      sysDir == 2 ? "system directory's IOSUBSYS" :
+                      sysDir ? "system directory"
+                             : "Windows directory's "
+                               "System32\\Drivers");
             clean[sizeof(clean) - 1] = '\0';
         }
-        dev_line(instFiles[i].Name, "%s", clean);
+        dev_line(name, "%s", clean);
         rc = file_sha256(path, 1, &size, digest, &err);
         if (rc == HASH_ABSENT) {
             /* 98 SE and ME copy a driver that is in use under a .TMP name
@@ -9420,17 +9443,16 @@ static void write_dev_files(void)
                 dev_line("", "not present; its .TMP is, pending rename at "
                          "the next restart");
                 say("  ", "%-12s not present (its .TMP is: pending rename "
-                    "at restart)", instFiles[i].Name);
+                    "at restart)", name);
             } else {
                 dev_line("", "not present");
-                say("  ", "%-12s not present", instFiles[i].Name);
+                say("  ", "%-12s not present", name);
             }
             continue;
         }
         if (rc != HASH_OK) {
             dev_line("", "present, not read (error %lu)", err);
-            say("  ", "%-12s present, not read (error %lu)", instFiles[i].Name,
-                err);
+            say("  ", "%-12s present, not read (error %lu)", name, err);
             continue;
         }
         file_version_text(path, ver, sizeof(ver));
@@ -9438,7 +9460,7 @@ static void write_dev_files(void)
         dev_line("", "present, %lu bytes, version %s", size, ver);
         /* Its own short indent: 64 digits under the column would pass 79. */
         comp("      SHA-256 %s\n", hex);
-        say("  ", "%-12s %lu bytes, version %s", instFiles[i].Name, size, ver);
+        say("  ", "%-12s %lu bytes, version %s", name, size, ver);
     }
     ver_unload();
 }

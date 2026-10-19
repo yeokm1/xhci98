@@ -352,7 +352,7 @@ The version and the release date are edited in one place, `src\xhci_version.h`. 
 
 Every compiled site includes it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in each driver's version resource (`src\xhci98.rc`, `src\uas\xhciuas.rc`, `src\cm\xhcicm.rc`, `src\hlpr\xhcihlpr.rc`), each driver's version string (`src\hcd_entry.c`, `src\hcd_msi86.c`, `src\uas\uas_entry.c`, `src\cm\cm_entry.c`, `src\hlpr\hlpr_entry.c`), and the user-mode tools across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h`, `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`, and `xhcicln\xhcicln.c`, `xhciinst\xhciinst.c`, `xhcitr\xhcitr.c` and `xhcitr\xhcitr.rc`. `XHCIQUAL` and `XHCISNAP` were the first tools published inside a release directory (`releases\<version>\tools\xhciqual\`, `releases\<version>\tools\xhcisnap\`; before `2.4.0.0`, roadmap-hcd task 38.9, at the version root) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
 
-The INFs cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so **every `*.inf` under `src\`, `src\uas\` and `src\cm\`** keeps a `DriverVer` literal and is checked against the header instead: `src\xhci98.inf` and `src\xhci98-amd64.inf` (two since roadmap task 21.3), `src\uas\xhciuas.inf` and `xhciuas-amd64.inf`, and `src\cm\xhcicm.inf`, `xhcicm-amd64.inf`, `xhcicmf.inf` and `xhcicmf-amd64.inf` - eight literals to bump with the header, and a ninth outside the INFs, the `version` of `xhcitr\xhcitr.manifest`'s `assemblyIdentity`, which `check-inf.ps1` holds to `XHCI_VER_STR` under the same rule name `BOTH-VERSION`. Each has its gate: `check-inf.ps1 -Arch` cross-checks whichever of the first two it is given against the `xhci_version.h` beside it, and `scripts\inf-gate\check-uas-inf.ps1` and `scripts\inf-gate\check-cm-inf.ps1` hold the UAS and connection-manager INFs to the header's `XHCI_VER_STR` and `XHCI_DRIVERVER_DATE` by their rule `BOTH-VERSION`. `build-driver.cmd` runs all three over every one of the eight on every build - so a bumped header with a stale date in any INF fails the build rather than shipping. Three gates cover what is left:
+The INFs cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so **every `*.inf` under `src\`, `src\uas\` and `src\cm\`** keeps a `DriverVer` literal and is checked against the header instead: `src\xhci98.inf` and `src\xhci98-amd64.inf` (two since roadmap task 21.3), `src\uas\xhciuas.inf` and `xhciuas-amd64.inf`, and `src\cm\xhcicm.inf`, `xhcicm-amd64.inf`, `xhcicmf.inf` and `xhcicmf-amd64.inf`, and since `3.1.0.0` (roadmap-usb4 task 42-A.30) Stor98's `src\stor98\inf\stor98-x86.inf` and `stor98-x64.inf` - ten literals to bump with the header, and an eleventh outside the INFs, the `version` of `xhcitr\xhcitr.manifest`'s `assemblyIdentity`, which `check-inf.ps1` holds to `XHCI_VER_STR` under the same rule name `BOTH-VERSION`. Each has its gate: `check-inf.ps1 -Arch` cross-checks whichever of the first two it is given against the `xhci_version.h` beside it, and `scripts\inf-gate\check-uas-inf.ps1` and `scripts\inf-gate\check-cm-inf.ps1` hold the UAS and connection-manager INFs to the header's `XHCI_VER_STR` and `XHCI_DRIVERVER_DATE` by their rule `BOTH-VERSION`, and `scripts\inf-gate\check-stor98-inf.ps1` holds Stor98's two to the same two values (one `DriverVer` line each, zero-padded). `build-driver.cmd` runs all four over every one of the ten on every build - so a bumped header with a stale date in any INF fails the build rather than shipping. Three gates cover what is left:
 
 - `scripts\inf-gate\check-inf.ps1`, which every build runs, reads `src\xhci_version.h` as the authority and refuses four different disagreements: the header's two forms of the number differing from each other (nothing in any toolchain would notice, since `rc.exe` wants the integers and every other consumer wants the string), the header's version differing from `DriverVer`'s, the header's date differing from `DriverVer`'s, and a version literal appearing in `src\xhci98.rc` at all, or the include being dropped. That last rule is what keeps the header an authority rather than a suggestion.
 - `scripts\package\make-package.ps1` compares the built binary's own `FileVersion` with the `DriverVer` in the INF staged beside it. That is the copy a source-side gate cannot see and the only one an installed machine reads: bumping the source without rebuilding produces a package that installs cleanly, is accepted by Windows 2000 as an upgrade, and reports the older build for ever afterwards.
@@ -615,29 +615,63 @@ is what the wrapper uses).
 ### Building Stor98 (`src\stor98\`)
 
 Stor98, the NVMe SCSI miniport the packages bundle, is in this tree as
-`src\stor98\` since 2026-10-19 (roadmap-usb4 task 42-A.20), a project of
-its own with its own build: `src\stor98\docs\BUILD.md` is the procedure,
-and `src\stor98\AGENTS.md` the rules. It builds its own files, never into
-this project's binaries:
+`src\stor98\` since 2026-10-19 (roadmap-usb4 task 42-A.20), a driver of
+its own with its own build script: `src\stor98\docs\BUILD.md` is the
+procedure, and `src\stor98\AGENTS.md` the rules. It builds its own files,
+never into this project's binaries. **Since `3.1.0.0` (task 42-A.30, owner
+2026-10-19) `build-driver.cmd` builds and gates it with the drivers**, and
+it carries the package's version and date:
+
+- **Version.** `src\stor98\src\stor98ver.h` includes `src\xhci_version.h`
+  (two directories up) and hands `XHCI_VER_CSV` and `XHCI_VER_STR` to
+  `nvme2k.rc`, so `stor98.mpd` and both `stor98.sys` images carry the
+  package's version; its two INFs' `DriverVer` is the package's
+  ("Versioning the driver" above). Stor98's interface versions
+  (`STOR98CM_VERSION`, `STOR98LS_VERSION` and the others in
+  `include\stor98cm.h`) are protocol versions and stay as they are; its
+  releases up to `0.4.0.0` had numbers of their own, so `3.1.0.0` is the
+  next version after `0.4.0.0`.
+- **The build.** After the host suite, the x86 run runs Stor98's unit tests
+  (`src\stor98\tests\unit\build.cmd`), and every run then builds, once,
+  the free images of its architecture with `src\stor98\scripts\build.cmd`
+  (`9x x86` on x86: `stor98.mpd` and the x86 `stor98.sys`; `amd64` on
+  amd64), deleting the old images first. The package ships the free build
+  whatever this project's flavour.
+- **The gates, in every flavour** (`:gatestor98`): each image is hashed,
+  held to `scripts\check-stor98-build.ps1` - its fixed and string
+  `FileVersion` and `ProductVersion` equal to `XHCI_VER_STR`, exactly one
+  flavour marker and it `STOR98_FLAVOUR_FREE` (emitted by
+  `src\stor98\src\nvme2k.c`, `_CHECKED` or `_DBGPORT` in the other
+  builds) and none of this project's `XHCI98_FLAVOUR_*`, its machine, and
+  every by-name import listed for its target in
+  `scripts\import-gate\stor98-imports.allow` (Stor98 has no import gate of
+  its own; this is the allowlist half of this project's, without the
+  target-evidence half) - captured into the gated record
+  (`stor98.mpd`, `stor98.sys`), and stamped (`scripts\source-stamp.ps1
+  -Driver stor98` or `stor98mpd`, `stor98.srcstamp` beside the image: its
+  `SOURCES`, its headers, `include\stor98cm.h` and `src\xhci_version.h`).
+  The INF gate runs `check-stor98-inf.ps1 -SelfTest` and then over both
+  INFs with the others.
 
 ```
-src\stor98\scripts\build.cmd all free     REM stor98.mpd (98 SE, ME), stor98.sys x86 and amd64
-src\stor98\tests\unit\build.cmd           REM its host unit tests, NT and 9x headers
-scripts\build-all.cmd [flavours]          REM build-driver.cmd x86 and -amd64, then both of the above
+scripts\build-driver.cmd <flavours> [-amd64]   REM the drivers and Stor98, gated
+scripts\build-all.cmd [flavours]               REM build-driver.cmd x86, then -amd64
+src\stor98\scripts\build.cmd all free         REM Stor98 alone, by hand (not gated)
+src\stor98\tests\unit\build.cmd               REM its host unit tests, NT and 9x headers
 ```
 
 `build-all.cmd` calls `build-driver.cmd` unchanged, so the x86 and amd64
-gates, locks and gated-build records are a hand run's; `-NoStor98` skips
-the Stor98 step and `-NoTargetEvidence` goes to both gated runs. Stor98's
-images land in `src\stor98\out\<flavor>\{win9x,x86,amd64}\`
-(`STOR98_DBGPORT=1` puts its test-only debug-port build in
-`out\<flavor>-dbgport\`) and its objects in `src\stor98\src\obj*\`, all
-ignored by its own `.gitignore`. Its scripts find the same kits as this
-project's in `tools\` (`MSVC600`, `ntddk`, `WinDDK71`), because
-`src\stor98\` has no `tools\` of its own (`STOR98_TOOLS` names another
-root), plus two files this project does not otherwise use: the Windows 98
-(or NT4) DDK's `SCSI.H` and `SRB.H` in `tools\w98ddk\inc\`, ahead of the
-Windows 2000 DDK's for the 9x image (the copies that came with SweetLow's
+gates, locks and gated-build records are a hand run's; `-NoTargetEvidence`
+goes to both gated runs. Stor98's images land in
+`src\stor98\out\<flavor>\{win9x,x86,amd64}\` (`STOR98_DBGPORT=1` puts its
+test-only debug-port build in `out\<flavor>-dbgport\`, which the gated
+build never does) and its objects in `src\stor98\src\obj*\`, all ignored
+by its own `.gitignore`. Its scripts find the same kits as this project's
+in `tools\` (`MSVC600`, `ntddk`, `WinDDK71`), because `src\stor98\` has no
+`tools\` of its own (`STOR98_TOOLS` names another root), plus two files
+this project does not otherwise use: the Windows 98 (or NT4) DDK's
+`SCSI.H` and `SRB.H` in `tools\w98ddk\inc\`, ahead of the Windows 2000
+DDK's for the 9x image (the copies that came with SweetLow's
 `nvme2k-src.zip`; `SCSI.H` 36,501 bytes, SHA-256
 `809d57e6756de21524930eb4d17840ab3047c7e1773da634ceb73a81ff8d39b7`,
 `SRB.H` 21,056 bytes, SHA-256
@@ -646,18 +680,13 @@ Windows 2000 DDK's for the 9x image (the copies that came with SweetLow's
 Stor98's Python scripts are test-leg tools (`tests\cm9x\ejects.py`,
 `q9log.py`) and the record of its rename.
 
-`build-driver.cmd` does not build Stor98, but three of its steps read
-Stor98's files, so a fault in them fails an xhci98 build whether or not
-`build-all.cmd`'s `-NoStor98` is given (that switch skips only Stor98's
-compile and unit tests): `scripts\check-stor98-header.ps1` fails when
-`src\cm\stor98cm.h` is not the same bytes as
-`src\stor98\include\stor98cm.h`, the master (`source-files.md`,
-"Stor98"); the packager's self-tests (`test-package.ps1`) bundle
-`src\stor98\releases\0.4.0.0\` under its pinned `SHA256SUMS.txt` hash;
-and the batch-file line-ending check (`xhciqual\test\check-bat-eol.ps1`)
-covers every tracked `.bat`, Stor98's two in its `third_party\` copy among
-them. `check-source-charset.ps1` skips `src\stor98\`, which keeps
-Stor98's own rules.
+Two more of `build-driver.cmd`'s steps read Stor98's files:
+`scripts\check-stor98-header.ps1` fails when `src\cm\stor98cm.h` is not
+the same bytes as `src\stor98\include\stor98cm.h`, the master
+(`source-files.md`, "Stor98"), and the batch-file line-ending check
+(`xhciqual\test\check-bat-eol.ps1`) covers every tracked `.bat`, Stor98's
+two in its `third_party\` copy among them. `check-source-charset.ps1`
+skips `src\stor98\`, which keeps Stor98's own rules.
 
 ### Post-link import-compatibility gate (Phase 3 onward)
 
@@ -3160,79 +3189,67 @@ binaries are never signed.
   its activation is in grace (`-Rtc base=2026-09-20T12:00:00`); with it
   expired the not-genuine watermark replaces it and the mode is still on.
 
-#### The bundled Stor98 build (`3.0.0.0`)
+#### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 
-The release download's `release-x86\` and `release-x64\` carry Stor98, a
-separate BSD-3-Clause project's NVMe driver, as one of its released builds copied
-unchanged from its release folder (owner, 2026-10-16). `make-package.ps1`
-copies it into the package, and `make-release.ps1` into the upload set's
-two `release-` directories, never into `releases\<version>\`. Since
-2026-10-19 the release folders themselves are tracked, in
-`src\stor98\releases\` ("Building Stor98" above). Four parameters pin it,
-and they go together (`-Stor98Dir` may be left out):
+The release download's `release-x86\` and `release-x64\` carry Stor98, the
+NVMe driver (BSD-3-Clause, `src\stor98\`). **Since `3.1.0.0` (roadmap-usb4
+task 42-A.30, owner 2026-10-19) it is the Stor98 `build-driver.cmd` built
+and gated from `src\stor98\`** ("Building Stor98" above), at the package's
+version and date, and one signature covers it with the other x64 drivers.
+`3.0.0.0` bundled a pinned Stor98 release instead (`0.4.0.0`, copied
+unchanged from its release folder under four `-Stor98*` pins, with Stor98's
+own test signature and `stor98-test.cer`); the pins and that path are gone.
 
-| Parameter | What it pins |
-|---|---|
-| `-Stor98Version` | The build, for example `0.3.0.0`. Anything older than `0.3.0.0`, Stor98's first release, is refused|
-| `-Stor98Dir` | Its release folder, read only. Left out, `src\stor98\releases\<version>\`, Stor98's own in this tree (task 42-A.20); until then the Stor98 repository's `releases\<version>\` |
-| `-Stor98SumsSha256` | The SHA-256 of that folder's `SHA256SUMS.txt`. Checked first; then every file against `SHA256SUMS.txt`, every file in the folder listed there, the release's files present, nothing the layout does not know, every INF's `DriverVer` at the pinned version, and each copy in the package against `SHA256SUMS.txt` again |
-| `-Stor98InterfaceVersion` | The build's link-state interface version (`STOR98LS_VERSION`; `4` for `0.3.0.0`). Compared with `src\cm\stor98cm.h`, the header xhci98 compiles against, and, where the folder carries `include\stor98cm.h`, that file byte for byte with it. A mismatch is refused unless `-Stor98AllowInterfaceMismatch`, which prints the mismatch it overrides |
+`make-package.ps1` bundles it by default; `-NoStor98` leaves it out, and a
+caller naming `-DriverPath` (the self-tests' stand-ins) gets it only with
+`-Stor98Root`, a substitute Stor98 tree the self-tests alone may use (with
+`-SkipBinaryGates`, like `-Stor98HeaderPath`, the substitute interface
+header). What a package carries, at its root with no `stor98\` folder,
+every name starting with `stor98`:
 
-Without them the package and the cut are built as before, with no Stor98.
-The release folder's `x86\` (`stor98.inf`, `stor98.mpd`, `stor98.sys`) goes
-to the root of the x86 package and its `x64\` (`stor98.inf`, `stor98.sys`,
-`stor98-test.cer`) to the root of the amd64 package, with no `stor98\`
-folder; every name there starts with `stor98`. Both also carry the release's
-`LICENSE`, `NOTICE.TXT` and `readme.txt` as `stor98-LICENSE.txt`,
-`stor98-NOTICE.txt` and `stor98-readme.txt` beside the driver files. A cut
-passes the pins to its release legs alone, so the `debug-` directories carry
-none of it; `make-package.ps1` run by hand bundles it into whichever flavour
-it is asked for, which is how a debug package for a guest gets it.
+| Package | Files | From |
+|---|---|---|
+| x86 | `stor98.mpd`, `stor98.sys`, `stor98.inf` | `src\stor98\out\free\win9x\`, `\x86\`, `inf\stor98-x86.inf` |
+| amd64 | `stor98.sys`, `stor98.inf` | `src\stor98\out\free\amd64\`, `inf\stor98-x64.inf` |
+| both | `stor98-LICENSE.txt`, `stor98-NOTICE.txt`, `stor98-readme.txt` | `LICENSE`, `NOTICE`, `docs\package-readme.txt` |
 
-The 64-bit `stor98.sys` keeps Stor98's own embedded test signature, by a
-certificate that is not this project's (design record 19),
-and `stor98-test.cer` beside it is that certificate's public half, under
-Stor98's own name. Nothing here signs, re-signs or imports it, and no
-installer step is needed: test-signing mode on Vista x64 and 7 x64 loads a
-driver signed by any certificate, trusted or not (design record 19), so the
-one `bcdedit /set testsigning on` that loads this project's x64 drivers loads
-it too, and importing either `.cer` is not needed. The generated readme says
-so when the cut has an x64 half.
+Before anything is staged (`Resolve-Stor98Build`,
+`scripts\package\package-common.ps1`) every file must be there, both INFs
+must carry the package's version and pass `check-stor98-inf.ps1`, each
+image must pass `check-stor98-build.ps1` again and its source stamp must
+say it is the build of the tree as it is, and Stor98's interface header must
+be byte for byte `src\cm\stor98cm.h` (its `STOR98LS_VERSION` is printed).
+With `-TestSignPfx` the amd64 `stor98.sys` is signed in the same step and
+with the same key as `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys` and held
+to the same two checks (design record 19); with `-SignOnly` its bytes are
+held to the gated build's record like theirs. Each staged copy is held to
+the hash it had when it was verified or signed.
 
-A cut also needs the release notes' one declaration line ("NVMe drives
-behind Thunderbolt or USB4") to agree with it, exactly: "This download
-bundles Stor98 `<version>`." or "This download bundles no Stor98."; the
-unfilled placeholder or a disagreement is refused (a `-TestLabel` cut is
-only warned). The generated readme records the version, the SHA-256 of
-`SHA256SUMS.txt` and the interface version, and an override with the
-mismatch it overrode, and `-UploadSetOnly` holds a re-assembly to those
-three pins (an override is a verdict against the checkout's header, so a
-re-assembly passes it again where needed); `-Stor98HeaderPath`, the
-self-tests' substitute header, is refused without `-SkipBinaryGates`. For
-example, the `3.0.0.0` cut with Stor98 `0.4.0.0` (since task 42-A.20
-`-Stor98Dir` can be left out, and the same folder is
-`src\stor98\releases\0.4.0.0`, whose `SHA256SUMS.txt` has that hash):
+`make-release.ps1` verifies the build once up front for every architecture
+it publishes, holds `src\stor98\docs\package-readme.txt`'s SETTINGS table
+to `test\stor98-settings.txt` (the table the installer's Stor98 rows were
+checked against), passes `-NoStor98` to its debug legs, and **publishes the
+Stor98 files of a release leg into `releases\<version>\release-x86\` and
+`release-x64\` with this project's own** (the x64 `stor98.sys` signed), so
+the upload set and `-UploadSetOnly` take them from the published tree, the
+upload set's one-date rule and file dating cover Stor98's INFs and files,
+and each published `stor98.mpd` and `stor98.sys` is held to the release's
+version. `-NoStor98` cuts without it. The release notes' one declaration
+line ("NVMe drives behind Thunderbolt or USB4") must agree with the cut,
+exactly: "This download bundles Stor98 `<version>`." or "This download
+bundles no Stor98."; the unfilled placeholder or a disagreement is refused
+(a `-TestLabel` cut is only warned). The generated readme names the
+bundled version.
 
-```
-powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <pfx> ^
-    -Stor98Version 0.4.0.0 -Stor98Dir <stor98>\releases\0.4.0.0 ^
-    -Stor98SumsSha256 ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7 ^
-    -Stor98InterfaceVersion 4
-```
-
-The gates hold these files by exactly the paths the pin produces
-(`Get-Stor98PackageFiles`, `scripts\package\package-common.ps1`) and by
-nothing wider: `make-release.ps1`'s declared-media check accepts them
-beside this project's files, its upload-set date rule and file dating skip
-them (Stor98's INFs carry Stor98's own `DriverVer` date), and a name that
-would replace one of this project's files is a refusal. The INF, import and
-signature gates are run on this project's INFs and binaries by name and
-never read Stor98's, and `check-source-charset.ps1` skips `src\stor98\`,
-which keeps Stor98's own rules; the package's `PKG-MSFILE` name rule still
-covers every file, Stor98's included. `XHCIINST` must copy no file whose
-name starts with `stor98` into its local copy, which is on the hardware
-wizard's search path (design record 23 section 4.4). `scripts\package\test-package.ps1` holds the
-layout with synthetic release folders.
+The gates hold these files by exactly the paths `Get-Stor98PackageFiles`
+returns and by nothing wider: `make-release.ps1`'s declared-media check
+accepts them beside this project's files, and a name that would replace
+one of this project's files is a refusal. The package's `PKG-MSFILE` name
+rule covers every file, Stor98's included. `XHCIINST` must copy no file
+whose name starts with `stor98` into its local copy, which is on the
+hardware wizard's search path (design record 23 section 4.4).
+`scripts\package\test-package.ps1` holds the layout with a stand-in Stor98
+tree.
 
 #### And the install path is not the one the INF was written for
 
