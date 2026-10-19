@@ -211,6 +211,9 @@ typedef struct _DEVREC {
     int RegOnly;            /* 98/ME: an Enum entry with no devnode */
     char InfPath[64];       /* the driver key's InfPath       */
     int InfPathState;       /* 1 read, 0 absent, -1 unreadable */
+    int S98Place;           /* Stor98: INST_S98_AT_*          */
+    int S98Why;             /* Stor98: INST_S98_ELIGIBLE or the
+                               reason it is left             */
 } DEVREC;
 
 static int is_controller(const DEVREC *d);
@@ -305,7 +308,13 @@ static INST_U32 pkgVersion[4];
  * version. */
 static char *s98Text;       /* stor98.inf, read when the package has it   */
 static int haveS98;         /* the flavour directory carries Stor98       */
-static int s98Include;      /* ticked, or /stor98                          */
+static int s98Include;      /* ticked, or /stor98, with the Thunderbolt
+                               component in the run                       */
+static int s98Want;         /* ticked, or /stor98                          */
+static int s98TopoFresh;    /* the places were read since the last scan   */
+static int s98Share;        /* INST_S98_SHARE_*, the latest plan's        */
+static int s98Shown;        /* the plan was printed: later reasons are said */
+static void s98_places(void);
 static INST_U32 s98Version[4];
 static char s98VersionText[32];
 static const INST_U32 *inf_version(int k);
@@ -1444,6 +1453,7 @@ static int scan_9x(void)
 
 static int scan(void)
 {
+    s98TopoFresh = 0;
     return envNow.Nt ? scan_nt() : scan_9x();
 }
 
@@ -1695,6 +1705,7 @@ static void plan(void)
         }
     }
     group_verdicts();
+    s98_places();
 }
 
 /* USBNTMAP.SYS in System32\Drivers: the upper filter xhciuas.inf names on
@@ -1739,6 +1750,8 @@ static void print_uas_fix(int fix, const char *lead)
     }
 }
 
+static void s98_share_note(int first);
+
 static void print_plan(void)
 {
     int i;
@@ -1772,7 +1785,13 @@ static void print_plan(void)
         } else if (d->Runs && opts.Restage && trapOem[d->Inf][0] != '\0') {
             out("    /restage: reinstalled from this package\n");
         }
+        if (d->Inf == INST_INF_S98 && d->Present &&
+            d->S98Why != INST_S98_ELIGIBLE) {
+            out("    LEFT: %s\n", inst_s98_skip_text(d->S98Why, 0));
+        }
     }
+    s98_share_note(1);
+    s98Shown = 1;
     if (!any) {
         out("  none present. The INFs are still staged for devices that "
             "appear later.\n");
@@ -5855,6 +5874,12 @@ static int stage_nt(void)
                 "unknown.\n", instInfFile[k]);
             continue;
         }
+        if (k == INST_INF_S98 && s98Share == INST_S98_SHARE_HOLD) {
+            out("%s is not staged: a Stor98 the installer did not put on a "
+                "tunnel drive runs\nanother release (see above).\n",
+                instInfFile[k]);
+            continue;
+        }
         if (trapUnknown[k]) {
             infTrap[k] = 1;
             flagSteps = 1;
@@ -5969,6 +5994,17 @@ static int hwid_clear(const char *hwid, int inf)
          * reach it again with the same driver. */
         if (idle_filtered_port(d, inf)) {
             continue;
+        }
+        if (inf == INST_INF_S98 && d->Inf == inf && !d->Runs &&
+            d->S98Why != INST_S98_ELIGIBLE) {
+            /* NT's call reaches every device with the id: a drive the
+             * installer leaves keeps the tunnel drive from it too. */
+            out("  %s is shared with %s, which this run leaves (%s);\n"
+                "  neither is changed. Install Stor98 on the tunnel drive "
+                "in Device Manager\n  (Update Driver, Have Disk, this "
+                "package's directory) if you want it.\n", hwid, d->Id,
+                inst_s98_skip_text(d->S98Why, 1));
+            return 0;
         }
         if (d->Inf != inf || !d->Runs) {
             out("  %s is shared with %s (%s), which this run leaves;\n"
@@ -10511,6 +10547,7 @@ typedef struct _TBNHI {
 } TBNHI;
 
 static TBNODE *tbn;
+static int tbnFull;         /* tbn holds INST_MAX_DEVS nodes          */
 static int tbnCount;
 static int tbnBad;          /* reads that failed, or a cut-short walk */
 static TBNHI tbh[INST_TB_MAX_NHI];
@@ -12051,14 +12088,26 @@ static int tb_decide(int *asked, int *def, int *installed)
  * the window's box unticked), and the plan made again for it. The texts
  * are kept, so the window can tick the box again. */
 /* Stor98 in this run or out of it (the Components page's box, the console's
- * question, /stor98), and the plan made again for it. */
-static void s98_apply(int include)
+ * question, /stor98), and the plan made again for it. Stor98 needs the
+ * Thunderbolt component (owner, 2026-10-19): it is in the run only while
+ * that component is, so tb_apply sets it again too. */
+static void s98_set(void)
 {
-    s98Include = include && haveS98;
+    s98Include = s98Want && haveS98 && tbInclude;
     infText[INST_INF_S98] = s98Include ? s98Text : NULL;
     infIds[INST_INF_S98].Count = 0;
     if (s98Include) {
         inst_inf_models(s98Text, &envNow, &infIds[INST_INF_S98]);
+    }
+}
+
+static void s98_apply(int include)
+{
+    s98Want = include;
+    s98_set();
+    if (s98Want && haveS98 && !s98Include) {
+        logonly("stor98: left out, %s\n",
+                inst_s98_skip_text(INST_S98_NEEDS_TB, 0));
     }
     plan();
 }
@@ -12074,6 +12123,7 @@ static void tb_apply(int include)
         infText[k] = (include && haveCm) ? infKeep[k] : NULL;
     }
     tbInclude = include && haveCm;
+    s98_set();
     plan();
 }
 
@@ -13073,39 +13123,262 @@ static void s98_ask_unused(void)
     }
 }
 
-/* NT: 1 when the device sits below a port this package's connection
- * manager filters (xhcicm in a parent's UpperFilters): a tunnel port of
- * its own, which tears the tunnel down when the drive's driver changes
- * (record 24 section 5.2). */
-static int s98_behind_tunnel(const char *id)
+/* 1 when a devnode the scan read carries the tunnel-port filter. */
+static int s98_filtered(const char *id)
 {
-    DWORD dn;
-    DWORD parent;
-    char want[INST_ID_CHARS];
-    char pid[INST_ID_CHARS];
-    int depth;
     int i;
 
-    if (!envNow.Nt || api.Locate == NULL || api.Parent == NULL ||
-        api.DeviceId == NULL) {
-        return 0;
-    }
-    inst_copy(want, id, sizeof(want));
-    if (api.Locate(&dn, want, 0) != INST_CR_SUCCESS) {
-        return 0;
-    }
-    for (depth = 0; depth < 16; depth++) {
-        if (api.Parent(&parent, dn, 0) != INST_CR_SUCCESS ||
-            api.DeviceId(parent, pid, sizeof(pid), 0) != INST_CR_SUCCESS) {
-            return 0;
+    for (i = 0; i < devCount; i++) {
+        if (inst_eq(devs[i].Id, id) &&
+            inst_msz_has(devs[i].Upper, devs[i].UpperBytes, "xhcicm")) {
+            return 1;
         }
-        for (i = 0; i < devCount; i++) {
-            if (inst_eq(devs[i].Id, pid) &&
-                inst_msz_has(devs[i].Upper, devs[i].UpperBytes, "xhcicm")) {
-                return 1;
+    }
+    return 0;
+}
+
+static const char *s98_place_text(int place)
+{
+    return place == INST_S98_AT_TUNNEL ? "behind a tunnel" :
+           place == INST_S98_AT_INTERNAL ? "internal" : "unknown";
+}
+
+/* The connection manager's confirmed reading (record 24 sections 3.3 and
+ * 4, the walk /devices and /eject take), and from it the place of every
+ * present device stor98.inf matches or Stor98 runs. Anything not read is
+ * unknown. */
+static void s98_read_places(void)
+{
+    int i;
+    int j;
+    int k;
+    int p;
+    int n;
+    int ok;
+    int cmAll;
+    DWORD w;
+
+    for (i = 0; i < devCount; i++) {
+        devs[i].S98Place = INST_S98_AT_UNKNOWN;
+    }
+    if (!tbnFull) {
+        if (tbn != NULL) {
+            return;     /* the self-test's few nodes: no reading */
+        }
+        tbn = (TBNODE *)calloc(INST_MAX_DEVS, sizeof(TBNODE));
+        if (tbn == NULL) {
+            logonly("stor98: no memory for the tunnel reading\n");
+            return;
+        }
+        tbnFull = 1;
+    }
+    if (tbMutex == NULL) {
+        tbMutex = shared_mutex(envNow.Nt ? "Global\\XhciinstTbAsk"
+                                         : "XhciinstTbAsk");
+    }
+    if (tbMutex == NULL) {
+        logonly("stor98: the tunnel reading's lock could not be opened "
+                "(error %lu)\n", (unsigned long)GetLastError());
+        return;
+    }
+    w = WaitForSingleObject(tbMutex, 10000);
+    if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
+        logonly("stor98: the tunnel reading's lock is held elsewhere\n");
+        return;
+    }
+    ok = tb_read_all();
+    tb_unask();
+    ReleaseMutex(tbMutex);
+    if (!ok) {
+        logonly("stor98: the tunnel reading failed\n");
+        return;
+    }
+    cmAll = tbhCount > 0;
+    for (k = 0; k < tbhCount; k++) {
+        if (!tbh[k].Confirmed) {
+            cmAll = 0;
+        }
+    }
+    logonly("stor98: tunnel reading: %d devnodes, %d not read whole, "
+            "changing %d, %d connection managers, all confirmed %d\n",
+            tbnCount, tbnBad, tbChanging, tbhCount, cmAll);
+    for (i = 0; i < devCount; i++) {
+        DEVREC *d = &devs[i];
+        int found = -1;
+        int verified = 0;
+        int port = 0;
+        if (!d->Present ||
+            (d->Inf != INST_INF_S98 && !inst_eq(d->Service, "stor98"))) {
+            continue;
+        }
+        for (j = 0; j < tbnCount; j++) {
+            if (inst_eq(tbn[j].R.Id, d->Id)) {
+                found = j;
+                break;
             }
         }
-        dn = parent;
+        if (found >= 0) {
+            for (p = tbn[found].Parent, n = 0; p >= 0 && n < 64;
+                 p = tbn[p].Parent, n++) {
+                if (tbn[p].Verified) {
+                    verified = 1;
+                } else if (tbn[p].Candidate || s98_filtered(tbn[p].R.Id)) {
+                    port = 1;
+                }
+            }
+        }
+        d->S98Place = inst_s98_place(found >= 0, tbChanging, tbnBad == 0,
+                                     cmAll, verified, port);
+        logonly("stor98: %s is %s (found %d, below a verified port %d, "
+                "below an unverified port %d)\n", d->Id,
+                s98_place_text(d->S98Place), found >= 0, verified, port);
+    }
+}
+
+/* The reasons said once each after the plan was printed. */
+#define INST_S98_SAID 64
+static char s98SaidId[INST_S98_SAID][INST_ID_CHARS];
+static int s98SaidWhy[INST_S98_SAID];
+static int s98SaidCount;
+static int s98ShareSaid = -1;
+
+static int s98_said(const char *id, int why)
+{
+    int i;
+
+    for (i = 0; i < s98SaidCount; i++) {
+        if (inst_eq(s98SaidId[i], id)) {
+            if (s98SaidWhy[i] == why) {
+                return 1;
+            }
+            s98SaidWhy[i] = why;
+            return 0;
+        }
+    }
+    if (s98SaidCount < INST_S98_SAID) {
+        inst_copy(s98SaidId[s98SaidCount], id, INST_ID_CHARS);
+        s98SaidWhy[s98SaidCount++] = why;
+    }
+    return 0;
+}
+
+/* The shared file's decision, said on screen and in the log. */
+static void s98_share_note(int first)
+{
+    if (!s98Include || (s98Share == s98ShareSaid && !first)) {
+        return;
+    }
+    s98ShareSaid = s98Share;
+    if (s98Share == INST_S98_SHARE_SAME) {
+        out("  Stor98's settings are not written in this run: a Stor98 the "
+            "installer did not put on a tunnel drive (an internal one, one "
+            "whose place could not be read, or one not present) reads them "
+            "too. Its file is already the bundled release.\n");
+    } else if (s98Share == INST_S98_SHARE_HOLD) {
+        out("  Stor98 is LEFT as it is in this run: a Stor98 the installer "
+            "did not put on a tunnel drive (an internal one, one whose place "
+            "could not be read, or one not present) runs another release, "
+            "and installing or updating a tunnel drive would replace the "
+            "file and settings it shares. Update Stor98 by hand if you want "
+            "the bundled %s (its readme, \"Updating the driver\").\n",
+            s98VersionText);
+    }
+}
+
+/* Stor98's gate (owner, 2026-10-19), after every plan: each device the
+ * Stor98 INF matches runs only behind a tunnel, with the Thunderbolt
+ * component in the run, and only when no other Stor98 shares its file at
+ * another release; whatever the plan decided (install, update, repair,
+ * /force, /restage). The places are read once per scan. */
+static void s98_places(void)
+{
+    int i;
+    int any = 0;
+    int other = 0;
+    int r;
+    INST_U32 v[4];
+    char path[INST_PATH_CHARS];
+
+    s98Share = INST_S98_SHARE_FREE;
+    for (i = 0; i < devCount; i++) {
+        devs[i].S98Why = INST_S98_ELIGIBLE;
+        if (devs[i].Present && (devs[i].Inf == INST_INF_S98 ||
+                                inst_eq(devs[i].Service, "stor98"))) {
+            any = 1;
+        }
+    }
+    if (!s98Include) {
+        return;
+    }
+    if (any && !s98TopoFresh) {
+        s98TopoFresh = 1;
+        s98_read_places();
+    }
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (!inst_eq(d->Service, "stor98")) {
+            continue;
+        }
+        if (d->Present ? d->S98Place == INST_S98_AT_TUNNEL
+                       : s98_rec_has("Devices", d->Id)) {
+            continue;
+        }
+        other = 1;
+        logonly("stor98: %s runs Stor98 and is not a known tunnel drive "
+                "(%s)\n", d->Id, d->Present ?
+                s98_place_text(d->S98Place) : "not present, not recorded");
+    }
+    group_binary(INST_GROUP_S98, path, sizeof(path));
+    r = file_version(path, v);
+    s98Share = inst_s98_share(other, r > 0 && inst_ver_cmp(v, s98Version) == 0);
+    logonly("stor98: other bindings %d, the file %s (%d), share %d\n", other,
+            path, r, s98Share);
+    for (i = 0; i < devCount; i++) {
+        DEVREC *d = &devs[i];
+        int why;
+        if (!d->Present || d->Inf != INST_INF_S98) {
+            continue;
+        }
+        why = inst_s98_eligible(tbInclude, d->S98Place);
+        if (why == INST_S98_ELIGIBLE && s98Share == INST_S98_SHARE_HOLD) {
+            why = INST_S98_SKIP_SHARED;
+        }
+        d->S98Why = why;
+        if (why == INST_S98_ELIGIBLE) {
+            continue;
+        }
+        if (d->Runs) {
+            logonly("stor98: %s (%s) left: %s\n", d->Id,
+                    inst_action_text(d->Action), inst_s98_skip_text(why, 0));
+        }
+        d->Runs = 0;
+        if (why == INST_S98_SKIP_UNKNOWN) {
+            flagSteps = 1;
+        }
+        if (s98Shown && !s98_said(d->Id, why)) {
+            out("Stor98: %s (%s) is left: %s.\n",
+                d->Desc[0] ? d->Desc : "an NVMe drive", d->Id,
+                inst_s98_skip_text(why, 0));
+        } else if (!s98Shown) {
+            (void)s98_said(d->Id, why);
+        }
+    }
+    if (s98Shown) {
+        s98_share_note(0);
+    }
+}
+
+/* 1 when the device sits behind a tunnel port this package's connection
+ * manager verified, by the latest reading: its driver change tears the
+ * tunnel down (record 24 section 5.2). */
+static int s98_behind_tunnel(const char *id)
+{
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        if (inst_eq(devs[i].Id, id) && devs[i].Present) {
+            return devs[i].S98Place == INST_S98_AT_TUNNEL;
+        }
     }
     return 0;
 }
@@ -13351,6 +13624,18 @@ static void s98_write_values(void)
     if (!s98Include || opts.List) {
         return;
     }
+    if (s98Share != INST_S98_SHARE_FREE) {
+        for (i = 0; i < INST_S98_COUNT; i++) {
+            if (s98Set[i]) {
+                out("Stor98's settings were not written: a Stor98 the "
+                    "installer did not put on a tunnel drive reads them "
+                    "too.\n");
+                logonly("stor98: settings held, share %d\n", s98Share);
+                break;
+            }
+        }
+        return;
+    }
     for (i = 0; i < INST_S98_COUNT; i++) {
         if (!s98Set[i] || !inst_s98_applies(i, envNow.Nt)) {
             continue;
@@ -13436,7 +13721,8 @@ static void s98_ask_values(void)
     int st;
     int me = !envNow.Nt && envNow.Minor == 90;
 
-    if (instWindow || !s98Include || opts.List || opts.Yes || opts.Defaults) {
+    if (instWindow || !s98Include || opts.List || opts.Yes || opts.Defaults ||
+        s98Share != INST_S98_SHARE_FREE) {
         return;
     }
     out("Stor98's settings (its readme, SETTINGS); Enter keeps each as it "
@@ -13511,9 +13797,18 @@ static void s98_question(void)
     }
     out("Stor98 %s, the bundled NVMe driver (a separate project)\n",
         s98VersionText);
-    out("  For an NVMe drive behind a Thunderbolt or USB4 tunnel, or an "
-        "internal one. It\n  installs only on NVMe drives with no driver, "
-        "and updates an older Stor98.\n");
+    out("  For NVMe drives behind a Thunderbolt or USB4 tunnel; the "
+        "installer selects tunnel drives only. On such a drive it installs "
+        "where no driver is, and updates an older Stor98. An internal NVMe "
+        "drive is left as it is: install Stor98 on one by hand (its "
+        "readme).\n");
+    if (!tbInclude) {
+        out("  It needs Thunderbolt 3 / USB4 support, which this run leaves "
+            "out: Stor98 is left out too.\n\n");
+        logonly("stor98: asked 0, include 0 (no Thunderbolt component)\n");
+        s98_apply(0);
+        return;
+    }
     if (asked) {
         inst_yesno_question(text, sizeof(text),
                             "Install Stor98, the bundled NVMe driver?",
@@ -15331,6 +15626,7 @@ int inst_eng_devices(void)
         out("Out of memory.\n");
         return INST_EXIT_REFUSED;
     }
+    tbnFull = 1;
     load_routines();
     tb_routines();
     if (!tb_lock()) {
@@ -15662,6 +15958,9 @@ int inst_eng_found(int i, INST_FOUND *f)
                   !d->Present ? " (not present)" : "");
         f->Now[sizeof(f->Now) - 1] = '\0';
         f->Action = d->Refused ? "left: a newer or unreadable release" :
+                    (d->Inf == INST_INF_S98 && d->Present &&
+                     d->S98Why != INST_S98_ELIGIBLE) ?
+                        inst_s98_skip_text(d->S98Why, 1) :
                     (d->Runs && (d->Action == INST_ACT_CURRENT ||
                                  d->Action == INST_ACT_NEWER)) ?
                         "reinstall (/force)" : inst_action_text(d->Action);

@@ -1297,6 +1297,51 @@ int inst_s98_decide(int haveS98, int yes, int stor98Switch, int list,
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
                              int behindTunnel);
 
+/* Where a Stor98 drive sits (owner, 2026-10-19: the installer installs,
+ * updates and reconfigures Stor98 only on NVMe drives behind a
+ * Thunderbolt or USB4 tunnel). From the connection manager's confirmed
+ * reading (record 24 sections 3.3 and 4): found, the device is in the
+ * walk; changing, a record moved during it, so nothing is confirmed;
+ * whole, every devnode was read; cmAll, at least one connection
+ * manager's record was confirmed and every one found was; verifiedAbove,
+ * an ancestor is a tunnel port that record names; portAbove, an ancestor
+ * is a Thunderbolt or USB4 port by its id, or carries the tunnel-port
+ * filter, without being verified. A tunnel needs a verified port; an
+ * internal drive needs all of a whole reading; anything else is unknown,
+ * never either. */
+#define INST_S98_AT_UNKNOWN     0
+#define INST_S98_AT_TUNNEL      1
+#define INST_S98_AT_INTERNAL    2
+int inst_s98_place(int found, int changing, int whole, int cmAll,
+                   int verifiedAbove, int portAbove);
+
+/* What the installer may do with a Stor98 device: eligible only behind a
+ * tunnel and with the Thunderbolt component in the run; an internal or
+ * unknown place is left, and so is every device when another Stor98
+ * device shares the file at another release (inst_s98_share). */
+#define INST_S98_ELIGIBLE       0
+#define INST_S98_SKIP_INTERNAL  1
+#define INST_S98_SKIP_UNKNOWN   2
+#define INST_S98_NEEDS_TB       3
+#define INST_S98_SKIP_SHARED    4
+int inst_s98_eligible(int tbInRun, int place);
+/* The sentence for a reason (long: the console and the log; short: the
+ * window's found page). NULL for INST_S98_ELIGIBLE. */
+const char *inst_s98_skip_text(int why, int brief);
+
+/* The shared file and service (owner, 2026-10-19): every Stor98 device
+ * runs one stor98.sys or stor98.mpd and reads one service's settings.
+ * otherBound: devices bound to Stor98, present or not, that are not known
+ * tunnel drives (internal, unknown, or not present and not recorded as
+ * this installer's); fileSame: the installed file is the bundled
+ * release's version. FREE: the run may change both; SAME: the devices
+ * may be installed (the file stays what it is) but no setting is
+ * written; HOLD: no Stor98 change at all. */
+#define INST_S98_SHARE_FREE     0
+#define INST_S98_SHARE_SAME     1
+#define INST_S98_SHARE_HOLD     2
+int inst_s98_share(int otherBound, int fileSame);
+
 /* ---- the machine-wide value as the drivers read it (task 42-A.17) ------ */
 
 /* xhci_regsrc.c's rule (XhciRegCallSeen, XhciRegPick): `found` is whether

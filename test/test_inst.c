@@ -3100,6 +3100,51 @@ static void test_s98(void)
           !inst_s98_await_reconnect(1, 1, 0, 1) &&
           !inst_s98_await_reconnect(1, 1, 1, 0),
           "a tunnelled drive's update awaits its reconnection");
+
+    /* Stor98's place and eligibility (owner, 2026-10-19): tunnel drives
+     * only, with the Thunderbolt component; unknown is never internal and
+     * never a tunnel. */
+    CHECK(inst_s98_place(1, 0, 1, 1, 1, 0) == INST_S98_AT_TUNNEL &&
+          inst_s98_place(1, 0, 0, 0, 1, 1) == INST_S98_AT_TUNNEL,
+          "below a verified tunnel port: a tunnel drive");
+    CHECK(inst_s98_place(1, 0, 1, 1, 0, 0) == INST_S98_AT_INTERNAL,
+          "a whole, confirmed reading, below no port: internal");
+    CHECK(inst_s98_place(0, 0, 1, 1, 0, 0) == INST_S98_AT_UNKNOWN &&
+          inst_s98_place(1, 1, 1, 1, 1, 0) == INST_S98_AT_UNKNOWN &&
+          inst_s98_place(1, 0, 0, 1, 0, 0) == INST_S98_AT_UNKNOWN &&
+          inst_s98_place(1, 0, 1, 0, 0, 0) == INST_S98_AT_UNKNOWN &&
+          inst_s98_place(1, 0, 1, 1, 0, 1) == INST_S98_AT_UNKNOWN,
+          "not found, changing, not whole, a manager unconfirmed, an "
+          "unverified port above: unknown");
+    CHECK(inst_s98_eligible(1, INST_S98_AT_TUNNEL) == INST_S98_ELIGIBLE,
+          "eligible: a tunnel drive with the Thunderbolt component");
+    CHECK(inst_s98_eligible(1, INST_S98_AT_INTERNAL) ==
+              INST_S98_SKIP_INTERNAL,
+          "skip-internal");
+    CHECK(inst_s98_eligible(1, INST_S98_AT_UNKNOWN) == INST_S98_SKIP_UNKNOWN,
+          "skip-unknown");
+    CHECK(inst_s98_eligible(0, INST_S98_AT_TUNNEL) == INST_S98_NEEDS_TB &&
+          inst_s98_eligible(0, INST_S98_AT_INTERNAL) == INST_S98_NEEDS_TB &&
+          inst_s98_eligible(0, INST_S98_AT_UNKNOWN) == INST_S98_NEEDS_TB,
+          "needs-TB, wherever the drive sits");
+    CHECK(inst_s98_skip_text(INST_S98_ELIGIBLE, 0) == NULL &&
+          inst_s98_skip_text(INST_S98_SKIP_INTERNAL, 0) != NULL &&
+          strstr(inst_s98_skip_text(INST_S98_SKIP_INTERNAL, 1),
+                 "internal") != NULL &&
+          inst_s98_skip_text(INST_S98_SKIP_UNKNOWN, 1) != NULL &&
+          inst_s98_skip_text(INST_S98_NEEDS_TB, 1) != NULL &&
+          inst_s98_skip_text(INST_S98_SKIP_SHARED, 1) != NULL,
+          "every reason has its sentence");
+    CHECK(inst_s98_share(0, 0) == INST_S98_SHARE_FREE &&
+          inst_s98_share(0, 1) == INST_S98_SHARE_FREE &&
+          inst_s98_share(1, 1) == INST_S98_SHARE_SAME &&
+          inst_s98_share(1, 0) == INST_S98_SHARE_HOLD,
+          "the shared file: changed only with no other Stor98, or kept at "
+          "its release");
+    CHECK(strstr(inst_page_text(INST_PT_S98_T), "tunnel drives only") !=
+              NULL &&
+          strstr(inst_page_text(INST_PT_S98_T), "internal") == NULL,
+          "the Components page's sentence");
 }
 
 /* ---- task 42-A.17's reading rule; task 42-A.5's installer hooks --------- */
