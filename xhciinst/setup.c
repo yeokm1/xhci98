@@ -192,12 +192,17 @@ static int selftest(void)
 
 /* ---- WinMain ------------------------------------------------------------------- */
 
-/* Topmost and asking for the foreground: after a declined elevation prompt
- * the foreground has passed on, and a plain message box opened behind the
- * Explorer window SETUP.EXE was started from (read on Windows 7). */
+/* The owner of the elevation prompt and of the message box: an empty
+ * popup of no size, made the foreground window while SETUP.EXE still has
+ * the right Explorer's start gave it. A declined prompt hands the
+ * foreground back to its owner; with no owner it went to Explorer, and the
+ * message box, even topmost, opened behind Explorer's window (read on
+ * Windows 7). */
+static HWND gOwner;
+
 static int fail(const char *text)
 {
-    MessageBoxA(NULL, text, SETUP_TITLE,
+    MessageBoxA(gOwner, text, SETUP_TITLE,
                 MB_OK | MB_ICONSTOP | MB_SETFOREGROUND | MB_TOPMOST);
     return 1;
 }
@@ -213,13 +218,18 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE prev, LPSTR cmdLine, int show)
     DWORD err;
     DWORD len;
 
-    (void)hi;
     (void)prev;
     (void)cmdLine;
     (void)show;
     tail = setup_tail(GetCommandLineA());
     if (setup_is_selftest(tail)) {
         return selftest();
+    }
+    gOwner = CreateWindowExA(WS_EX_TOOLWINDOW, "STATIC", SETUP_TITLE,
+                             WS_POPUP, 0, 0, 0, 0, NULL, NULL, hi, NULL);
+    if (gOwner != NULL) {
+        ShowWindow(gOwner, SW_SHOWNORMAL);
+        SetForegroundWindow(gOwner);
     }
     len = GetModuleFileNameA(NULL, self, sizeof(self));
     if (len == 0 || len >= sizeof(self) ||
@@ -242,6 +252,7 @@ int WINAPI WinMain(HINSTANCE hi, HINSTANCE prev, LPSTR cmdLine, int show)
      * the shell is asked to finish the start before it returns (it does
      * not wait for the window to end). */
     sei.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_FLAG_DDEWAIT;
+    sei.hwnd = gOwner;
     sei.lpVerb = "open";
     sei.lpFile = wiz;
     sei.lpParameters = *tail != '\0' ? tail : NULL;
