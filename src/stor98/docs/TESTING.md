@@ -218,7 +218,9 @@ bounce, mapping failure, cancellation, idle flush) and 0xC7-0xD9 (queue capabili
 BUSY limit, engine accounting, clock calibration, DMA negotiation, tunables, isolation
 violation, blocked double completion, stop result, admissions, evidence, DMA memory,
 clock re-calibration and OS-clock state, disable rewritten in quarantine, settle before a
-re-enable, sense kept and read, 9x DMA quarantine gap).
+re-enable, sense kept and read, 9x DMA quarantine gap). Stage 0x170 (`STG_SG9X`, 9x test builds)
+records how a caller buffer was resolved (linear, SG list or unknown; the use; the IOR function
+and CDB) for every bounce copy, every non-linear lookup and every pass-through SRB with data.
 The 9x build writes the port with plain IN/OUT. Test-only tunables, read from
 DriverParameter in test builds only: `frag=<KiB>` (largest child, to make multi-child
 parents), `bounce=1` (bounce every data child) and `calx=<percent>` (scale the TSC
@@ -236,6 +238,14 @@ together with `STOR98_DBGPORT=1` (the image lands in the same `out\<flavor>-dbgp
 folder; copy it away before the next build). build.exe does not track `C_DEFINES`: touch
 `src\lifecycle.c` before building with a different `STOR98_TESTDEF` and again before the next
 ordinary build, or the objects of the previous build are linked unchanged.
+Other 9x test defaults: `-DSTOR98_TEST_BOUNCE=1` (`bounce=1`), `-DSTOR98_TEST_FRAG_KB=<KiB>`
+(`frag=`), and `-DSTOR98_TEST_SG9X_FAIL=<n>`, which makes every n-th copy between a bounce buffer and
+the caller's buffer report "unresolved" before anything is copied, to drive the failure path of
+the 9x caller-buffer lookup (PLAN 0.4, "9x caller buffer"). Each of these refuses to compile
+without `STOR98_DBGPORT`. Check the image before trusting a run: stage 0xCC carries the frag
+and bounce defaults, so an image with the wrong frag or bounce setting shows up there. It does
+not carry `STOR98_TEST_SG9X_FAIL`: for an injection image, compare the installed file's hash
+with the build and check that the injected failures appear (stage 0xBD reason 5).
 
 Guest tools on the engine branch (NT, MSVC 6.0, `cl /O2`):
 
@@ -390,6 +400,7 @@ are the dated notes in the rows.
 | Namespaces (PLAN 1.9) | only NSID 2 active; several namespaces | lowest active NSID exposed as LUN 0; others logged |
 | Interrupt modes (PLAN 2.3) | each data-path case under INTx, INTx with lost interrupts, and polling only | same results; every command completes within the watchdog period plus 1 s |
 | Polling mode (PLAN "Polling mode (0.4.0.0)") | polling forced (`StorPollMode` = 1 on 98 SE, `pollmode=1` on 2000, XP x64 and 7 x86; run before the `Stor` prefix, as `PollMode`): install, the interrupt report value (`regedit /e` of `Services\stor98`), I/O with data compare (9x: absw through VWIN32 7305h; NT: raw `PhysicalDrive` write-back and compare at QD1 and QD8, on 7 reads only and a file copy with `fc /b`), surprise removal during I/O, shutdown; the rate check with `StorPollBusyUs` 1000, 10000 and 50000 on 98 SE; polling against interrupts at the defaults; plus the 9x interrupt-mode regression against 0.3.0.1 (98 SE and ME) for the timer re-arm finding | data compares pass; removal reaches gone (and the MD-1 deadline or evidence 2) as with an interrupt; SHUTDOWN or the stop path completes; the time per request follows `StorPollBusyUs`; `HwInterrupt` is not called (stage 0x156 absent). Run 2026-10-16 on the merged tree: pass (numbers in PLAN) |
+| 9x caller buffer (PLAN 0.4 "9x caller buffer", 42-A.33) | 98 SE (perf/98 base, SCSIPORT 4.10.2223) and ME on the emulator, the NVMe test disk F: on a fresh overlay, cm9x stand-in, one image per run: the install batch copies `D:\<name>.MPD` over the miniport and writes the name to the log; the MD5s of the copies on D: were recorded (N 8dd6ae72, D be2b6009, B afdee19c, F f176c567, O b3f7444a); stage 0xCC was checked for D, B and F (frag and bounce), and F also showed its 0xBD reason-5 stages; N and O write no debug output and are told apart only by the file the batch copied; the installed file was not hashed in the guest. Images: N (free), D (debug port), B (`STOR98_TEST_BOUNCE=1`: every data child bounces), F (B plus `STOR98_TEST_FRAG_KB=16` and `STOR98_TEST_SG9X_FAIL`: every n-th bounce copy reported unresolved) and O (the engine before the fix, as the baseline). **Copy suite** (N, D, B, O): copy C:\WINDOWS\SYSTEM to F:\T1 through VCACHE; then, in the same boot, `t9x aspi` (INQUIRY, VPD 80h, READ CAPACITY, LOG SENSE, SMART IDENTIFY and READ DATA by pass-through, then READ/WRITE(10) of 1, 7, 8, 9, 64, 128 and 255 sectors at buffer offsets 0, 4, 512, 2052 and 4092, each compared, and the scratch area restored), `t9x abs` (VWIN32 absolute reads and writes, compared) and `t9x file`; cold boot; copy F:\T1 to F:\T2; shut down; compare T1 and T2 with their sources on the host. **Fault suite** (F): one boot, `t9x abs`, `t9x file` and `t9x aspi` (or `aspi` first), shut down | every file of T1 and T2 byte-identical; 0 failures in `aspi`, `abs` and `file`; the SMART and identify data correct. F: each injected failure is a stage 0xBD reason 5 and ends the request as HARDWARE ERROR, ASC 44h; no compare mismatch, ever; shutdown clean. **Run 2026-10-19 (images of 6f945f20, cold boots only):** 98 SE N, D, B and O: 501 of 501 files (75.1 MiB) identical in T1 and T2, `aspi`, `abs` and `file` 0 failures. ME N, D, B and O: 614 of 614 files (103.6 MiB) identical, 0 failures. F, fault suite: 98 SE 28 injected failures (15 on writes, 13 on reads), ME 28 (14 and 14); the failed requests were retried above the driver, and `abs` and `file` reported 0 failures; shutdown clean. F with `aspi` first (98 SE): 30 injected failures; `aspi` reported 3 failures: a 128-sector pair ERROR and the restore WRITE(10), each ASPI status 04 with sense 04/44/00, and the restore check that followed (the restore write had not happened); no MISMATCH; `abs` and `file` 0 failures. Not from this fix, and not explained: when `t9x aspi` runs after `abs` and `file` in the same boot, its first 255-sector READ(10) is still pending after 20 s (ASPI status 00). With the debug-port images (F on 98 SE and ME, B without injection) no StartIo appeared in the log in the 20 minutes up to shutdown, and the admitted and completed counts were equal when it stalled. O, the engine before the fix, which writes no debug output, shows the same pending-ASPI symptom |
 
 ### Lifecycle and recovery
 

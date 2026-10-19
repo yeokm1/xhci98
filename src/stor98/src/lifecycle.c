@@ -284,8 +284,28 @@ VOID EngParseTunables(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentString)
         t->GoneMarginMs = 1500;
         t->HoldMarginMs = 1000;
         t->Hold9xMs = 4000;
+#if (defined(STOR98_TEST_FRAG_KB) || defined(STOR98_TEST_SG9X_FAIL)) && !defined(STOR98_DBGPORT)
+#error STOR98_TEST_FRAG_KB and STOR98_TEST_SG9X_FAIL are test-only: build them with STOR98_DBGPORT=1
+#endif
+#ifdef STOR98_TEST_FRAG_KB
+        t->FragBytes = STOR98_TEST_FRAG_KB * 1024;  // 9x test images: no ArgumentString
+#else
         t->FragBytes = 0;
+#endif
+#ifdef STOR98_TEST_SG9X_FAIL
+        t->Sg9xFailEvery = STOR98_TEST_SG9X_FAIL;
+#else
+        t->Sg9xFailEvery = 0;
+#endif
+        t->Sg9xFailCount = 0;
+#if defined(STOR98_TEST_BOUNCE) && !defined(STOR98_DBGPORT)
+#error STOR98_TEST_BOUNCE is test-only: build it with STOR98_DBGPORT=1 (out\<flavor>-dbgport, never staged)
+#endif
+#ifdef STOR98_TEST_BOUNCE
+        t->ForceBounce = 1;     // 9x test images: no ArgumentString (TESTING)
+#else
         t->ForceBounce = 0;
+#endif
         t->CalPct = 0;
         t->ShnFlush = 0;
         t->StormTest = 0;

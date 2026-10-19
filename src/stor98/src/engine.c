@@ -57,8 +57,111 @@
 
 #include "nvme2k.h"
 #include "utils.h"
+#ifdef NVME2K_W9X
+#include "sg9x.h"
+#endif
 
 #define ENG_ALL_ONES    0xFFFFFFFF
+#define ENG_MAP_UNRESOLVED  5     // STG_ENG_MAP_FAIL: the caller's buffer could not be resolved (9x)
+
+#ifdef NVME2K_W9X
+// STG_SG9X argument (dbgport.h).
+static ULONG EngSg9xStage(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Kind, IN ULONG Use, IN BOOLEAN Ok)
+{
+    ULONG func = Sg9xIorFunc(Srb);
+
+    return Kind | (Use << 2) | ((ULONG)(Ok ? 1 : 0) << 4) | ((func > 0x3E ? 0x3F : func) << 8) |
+           ((ULONG)Srb->Cdb[0] << 16);
+}
+#endif
+
+// Linear address of byte Offset of the SRB's data, or NULL when it cannot be
+// established (9x: an SG list that does not cover it, or an unknown layout;
+// sg9x.h, Sg9xClassify).
+static PUCHAR EngCallerVa(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset)
+{
+#ifdef NVME2K_W9X
+    UCHAR shift;
+    ULONG lin, run;
+    const STOR98_SGD9X *sgd;
+
+    ULONG kind = Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift);
+    BOOLEAN ok;
+
+    ok = (BOOLEAN)(kind == SG9X_LINEAR || (kind == SG9X_SG && Sg9xResolve(sgd, shift, Offset, &lin, &run)));
+#ifdef STOR98_DBGPORT
+    if (kind != SG9X_LINEAR || Sg9xIorFunc(Srb) > 1) {
+        DBGSTAGE(STG_SG9X, EngSg9xStage(Srb, kind, 0, ok));
+    }
+#endif
+    if (kind != SG9X_LINEAR) {
+        return ok ? (PUCHAR)(ULONG_PTR)lin : NULL;
+    }
+#endif
+    return (PUCHAR)Srb->DataBuffer + Offset;
+}
+
+#if defined(NVME2K_W9X) && defined(STOR98_DBGPORT)
+// Test builds: how the buffer of an SRB that is not READ/WRITE is laid out
+// (pass-through, SMART), logged as STG_SG9X use 3. Nothing is changed.
+VOID EngProbeSg9x(IN PSCSI_REQUEST_BLOCK Srb)
+{
+    UCHAR shift;
+    const STOR98_SGD9X *sgd;
+    ULONG kind;
+
+    if (Srb->Function != SRB_FUNCTION_EXECUTE_SCSI || Srb->DataBuffer == NULL || Srb->DataTransferLength == 0) {
+        return;
+    }
+    switch (Srb->Cdb[0]) {
+    case SCSIOP_READ6: case SCSIOP_READ: case SCSIOP_READ16:
+    case SCSIOP_WRITE6: case SCSIOP_WRITE: case SCSIOP_WRITE16:
+        return;
+    }
+    kind = Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift);
+    DBGSTAGE(STG_SG9X, EngSg9xStage(Srb, kind, 3, (BOOLEAN)(kind == SG9X_LINEAR)));
+}
+#endif
+
+// Copy Bytes between the bounce pages and the SRB's data at Offset, fragment
+// by fragment on 9x. ToCaller: bounce -> caller (a read), else caller ->
+// bounce (a write). FALSE, with nothing copied, when the whole span cannot
+// be resolved: the caller fails the parent instead of guessing an address.
+static BOOLEAN EngCallerCopy(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset, IN PUCHAR Bounce,
+                             IN ULONG Bytes, IN BOOLEAN ToCaller)
+{
+#ifdef NVME2K_W9X
+    UCHAR shift;
+    const STOR98_SGD9X *sgd;
+
+    ULONG kind = Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift);
+    BOOLEAN ok = TRUE;
+
+#ifdef STOR98_DBGPORT
+    // Test builds: report every Nth copy unresolved, before anything is
+    // copied, to exercise the failure paths (STOR98_TEST_SG9X_FAIL).
+    if (DevExt->Tun.Sg9xFailEvery != 0 && ++DevExt->Tun.Sg9xFailCount % DevExt->Tun.Sg9xFailEvery == 0) {
+        DBGSTAGE(STG_SG9X, EngSg9xStage(Srb, SG9X_UNKNOWN, ToCaller ? 2 : 1, FALSE));
+        return FALSE;
+    }
+#endif
+    if (kind == SG9X_SG) {
+        ok = Sg9xCopy(sgd, shift, Offset, Bounce, Bytes, ToCaller);
+    } else if (kind != SG9X_LINEAR) {
+        ok = FALSE;
+    }
+    DBGSTAGE(STG_SG9X, EngSg9xStage(Srb, kind, ToCaller ? 2 : 1, ok));
+    if (kind != SG9X_LINEAR) {
+        return ok;
+    }
+#endif
+    if (ToCaller) {
+        RtlCopyMemory((PUCHAR)Srb->DataBuffer + Offset, Bounce, Bytes);
+    } else {
+        RtlCopyMemory(Bounce, (PUCHAR)Srb->DataBuffer + Offset, Bytes);
+    }
+    return TRUE;
+}
 
 static ULONG EngNow(IN PHW_DEVICE_EXTENSION DevExt)
 {
@@ -693,6 +796,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
                           IN PNVME_COMMAND Cmd)
 {
     PUCHAR va = (PUCHAR)Srb->DataBuffer + c->BufOffset;
+    PUCHAR callerVa;
     PHYSICAL_ADDRESS pa;
     ULONG len, need, offsetInPage, firstBytes, pages, i;
     PULONGLONG list;
@@ -707,7 +811,9 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
     }
     // PRP entry 1: DWORD aligned (bits 1:0 zero); its page offset is the
     // buffer's page offset.
-    if ((pa.LowPart & 3) != 0 || (pa.LowPart & (PAGE_SIZE - 1)) != ((ULONG)(ULONG_PTR)va & (PAGE_SIZE - 1))) {
+    callerVa = EngCallerVa(Srb, c->BufOffset);
+    if (callerVa == NULL || (pa.LowPart & 3) != 0 ||
+        (pa.LowPart & (PAGE_SIZE - 1)) != ((ULONG)(ULONG_PTR)callerVa & (PAGE_SIZE - 1))) {
         return 2;
     }
     offsetInPage = pa.LowPart & (PAGE_SIZE - 1);
@@ -873,8 +979,23 @@ static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
             c->State = ENG_CH_FREE;
             return ENG_WAIT_PRP;
         }
-        if (c->Opcode == NVME_CMD_WRITE) {
-            RtlCopyMemory(EngBounceVa(DevExt, c->BouncePage), (PUCHAR)srb->DataBuffer + c->BufOffset, bytes);
+        if (c->Opcode == NVME_CMD_WRITE &&
+            !EngCallerCopy(DevExt, srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), bytes, FALSE)) {
+            // The caller's buffer cannot be resolved (9x): fail the parent;
+            // children already issued still quiesce first (the dispatcher
+            // finishes it once none is outstanding).
+            if (c->PrpPage != ENG_NONE) {
+                EngPrpFree(DevExt, c->PrpPage);
+                c->PrpPage = ENG_NONE;
+            }
+            EngBounceFree(DevExt, c->BouncePage, c->BounceCount);
+            c->BouncePage = ENG_NONE;
+            c->BounceCount = 0;
+            c->State = ENG_CH_FREE;
+            DBGSTAGE(STG_ENG_MAP_FAIL, ENG_MAP_UNRESOLVED | (Index << 8));
+            EngParentError(p, SRB_STATUS_ERROR, SCSI_SENSE_HARDWARE_ERROR, 0x44, 0x00, 0);
+            p->BlocksLeft = 0;
+            return ENG_WAIT_NONE;
         }
         DBGSTAGE(STG_ENG_BOUNCE, c->Cid | (pages << 16) | ((ULONG)(DevExt->Tun.ForceBounce != 0) << 24));
     }
@@ -1120,6 +1241,11 @@ static VOID EngDispatchEx(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN SoftwareOnl
             }
             if (why != ENG_WAIT_NONE) {
                 break;
+            }
+            if (p->ErrSrbStatus != 0 && p->Outstanding == 0) {
+                // Failed before any child was outstanding (EngIssueRwChild).
+                EngFinishParent(DevExt, (ULONG)idx);
+                continue;
             }
             p->State = ENG_PA_ISSUED;
             continue;
@@ -1426,6 +1552,7 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
     PENG_PARENT p = NULL;
     ULONG reason = 0;
     BOOLEAN ok = (BOOLEAN)((Status & 0x7FF) == 0);
+    BOOLEAN copyFailed;
 
     UNREFERENCED_PARAMETER(Dw0);
 
@@ -1463,8 +1590,11 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
     }
 
     // Data copies first, while everything is still owned.
-    if (p != NULL && p->Srb != NULL && ok && c->BouncePage != ENG_NONE && c->Opcode == NVME_CMD_READ) {
-        RtlCopyMemory((PUCHAR)p->Srb->DataBuffer + c->BufOffset, EngBounceVa(DevExt, c->BouncePage), c->Bytes);
+    copyFailed = FALSE;
+    if (p != NULL && p->Srb != NULL && ok && c->BouncePage != ENG_NONE && c->Opcode == NVME_CMD_READ &&
+        !EngCallerCopy(DevExt, p->Srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), c->Bytes, TRUE)) {
+        DBGSTAGE(STG_ENG_MAP_FAIL, ENG_MAP_UNRESOLVED | ((ULONG)c->Parent << 8));
+        copyFailed = TRUE;
     }
     if (p != NULL && p->Srb != NULL && p->Kind == ENG_K_LOG && c->PrpPage != ENG_NONE &&
         p->Cancel == ENG_CANCEL_NONE) {
@@ -1494,6 +1624,10 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
         return;
     }
     p->Outstanding--;
+    if (copyFailed && p->Kind != ENG_K_SHUTDOWN) {
+        EngParentError(p, SRB_STATUS_ERROR, SCSI_SENSE_HARDWARE_ERROR, 0x44, 0x00, 0);
+        p->BlocksLeft = 0;
+    }
     if (!ok && !(p->Flags & ENG_PF_PRESET)) {
         if (p->Kind == ENG_K_SHUTDOWN) {
             // The shutdown proceeds; the failed Flush is logged and the

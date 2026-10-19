@@ -19,6 +19,12 @@ interface (interface 4) is unchanged.
   xhci98-test.cer covers it. Stor98's own certificate is retired and
   stor98-test.cer is no longer shipped. Test-signing mode on Vista x64
   and 7 x64 loads it as before.
+- Windows 98 SE / ME: when a request's data must go through the
+  driver's own bounce buffer, the copy now follows the request's
+  scatter/gather list as the port driver does, instead of assuming one
+  contiguous buffer, so requests the system splits into several pieces
+  are copied correctly; a buffer that cannot be resolved fails the
+  request instead of copying a guessed address.
 - The driver file now names which build it is (free, checked or a
   test-only build) in a marker string, which xhci98's build checks.
 - Write requests with Force Unit Access (FUA) set now reach the drive
