@@ -4009,6 +4009,26 @@ the code (`runs/run-42.md`, "42-A.5"):
   listed unit left it unlisted, the value written again after the
   install). A restart Windows vetoed leaves the unit unlisted and is never
   repeated.
+- **The CriticalDeviceDatabase** (read on Windows 2000 SP4 on 2026-10-19,
+  the release matrix): when Windows 2000 (and XP) installs a driver for a
+  boot-critical class - a PCI-to-PCI bridge (`machine.inf`), a mass-storage
+  controller (Stor98 on an NVMe) - it copies the device's own filter values
+  into that class's entry under
+  `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase`
+  (`pci#cc_0604`, `pci#cc_010802`), and every device of that class Windows
+  finds afterwards gets them before any INF runs. So a mark written on a
+  unit before its install reached every later bridge and NVMe controller,
+  recorded nowhere: against "never on another PCI device", and after an
+  uninstall a missing filter on any new one (Code 39; on a boot disk, no
+  boot). Windows 7 x86 made no such copy. The service therefore takes
+  `xhcicm` out of every entry's `LowerFilters` at every poll (the other
+  names kept, the value deleted when nothing else is left), and runs its
+  inventory at once when it took one out and every minute besides; an
+  unrecorded device-level mark the inventory finds is recorded only to be
+  judged, kept on a unit behind an active member of a verifiable domain and
+  removed from any other device. The `UpperFilters` the filter INF writes
+  there for a tunnel port's id are its own and stay while it is installed;
+  the uninstall's step 0 (record 23 section 9.2) takes both kinds out.
 - **Hand registration.** `XHCIMARK -register` and `-unregister` register
   and delete the service from `system32` for a test guest before the
   installer's hooks exist; the installer does it in a release.

@@ -1584,7 +1584,17 @@ after it, reports what was done, and tells the user to restart and run
    `DIGCF_ALLCLASSES`, no `DIGCF_PRESENT`), has its `SPDRP_LOWERFILTERS`
    read, and `xhcicm` is removed from each value that names it, the other
    names kept in order and the value deleted with a zero length when
-   nothing else is in it, each read back. Then the service's `Marks`
+   nothing else is in it, each read back; and every entry of
+   `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase` has
+   `xhcicm` taken out of its `LowerFilters` and its `UpperFilters` the
+   same way (the copies Windows 2000 and XP make there of a boot-critical
+   device's own filter values when they install it: a marked unit's
+   `LowerFilters` into `pci#cc_0604` or `pci#cc_010802`, the filter INF's
+   `UpperFilters` into the tunnel port's id - read on 2000 on 2026-10-19
+   - which would otherwise give every new bridge or NVMe controller, a
+   boot disk among them, a filter that no longer exists), a key that cannot
+   be read whole or a removal that does not read back failing step 0 as a
+   device's does. Then the service's `Marks`
    records go, then its `system32` copy (one in use renamed to
    `<name>.DEL` and that name deleted at the restart, so a later install
    of the same name is not deleted with it; an earlier `.DEL` deleted or
