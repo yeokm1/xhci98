@@ -1071,3 +1071,125 @@ written within a second of the plug, deleted by Windows' failed driver
 search and written again, then kept (two minutes, "removable: yes ...
 listed in Safely Remove Hardware" at Code 28); unplugged, removed within a
 poll ("the unit left").
+
+## Phase 42 integration: the installer's hooks, the bench cut and its smoke legs (2026-10-19)
+
+Branch `p42-int` from `3.1.0.0` at `2d2703b9`, with `3.1.0.0` merged in
+again at `916d6936` (42-A.4, 42-A.10) and `103974c2` (the `p42-ejrb` fix
+`fda7a2fe`).
+
+### What it adds
+
+- **42-A.5's installer hooks** (`ca16de51`; record 21 section 7.4, "The
+  installer"; record 23 revision 12): at the end of every NT install or
+  update run, with `xhcicm` registered and the Thunderbolt component in
+  the run on 2000 to 7, the mark service `xhcimark` copied from
+  `tools\xhcimark\` into `system32` through a `.TMP`, compared byte for
+  byte, registered (own process, automatic start, `LocalSystem`, the
+  quoted path) or set up again, `system32\LogFiles\xhci98\` made, and
+  started, counted only at `SERVICE_RUNNING`; with no `xhcicm` service
+  left, step 0 instead. The uninstall's step 0 before the filter hosts:
+  the service stopped (30 s), `Global\Xhci98MarkWrite` taken, `xhcicm`
+  removed from every PCI devnode's `LowerFilters` (present or not, order
+  kept, deleted when empty, read back), then `Marks`, the `system32`
+  copy (`.DEL` and the delayed deletion when in use) and the service; a
+  failure stops with steps left; the inventory read again before
+  `xhcicm`'s service and file go. `XHCIINST /eject` on NT writes
+  `XhciCmEjectConfirm` after its own successful
+  `CM_Request_Device_EjectA`. The Advanced row for the service's
+  `Restart` is not offered (record 23 D16).
+- **42-A.17's installer part**: `Services\USB` made at every install and
+  update; the machine-wide value read by the drivers' rule, a value that
+  is not a `DWORD` shown as unknown and replaced by a value chosen for it;
+  every write there. `tuning.md`, the release notes and record 13 no
+  longer say the installer writes the controllers' own keys.
+- **The build gap** (`c4119049`): the x86 gated run rebuilds `XHCICLN`
+  and `XHCITR`.
+- **Version `3.1.0.0`** (`cebca284`), `DriverVer` 10/19/2026, so the bench
+  package updates over `3.0.0.0`; 42.final's cut sets its own date.
+- **A fix from the 98 SE update leg** (`be9b9bf6`): see below.
+
+Reviewed and revised until the review converged (five rounds; the last
+two clean, the merge resolutions of `3.1.0.0`'s merges and of
+`916d6936` included). Host suite `test_inst`: 1374 checks, 0 failures.
+
+### Builds
+
+| Build | Result |
+|---|---|
+| `build-driver.cmd all`, `72c69b18` | BUILD + GATES PASSED (debug release qemu) |
+| `build-driver.cmd all -amd64`, `72c69b18` | BUILD + GATES PASSED (debug release qemu) |
+| `build-driver.cmd all` and `all -amd64`, `916d6936` (merge) | both PASSED |
+| `build-driver.cmd all` and `all -amd64`, `103974c2` (the last merge) | both PASSED (debug release qemu); host tests 2080 checks, 0 failures |
+
+The bench cut, at `103974c2`: `make-release.ps1 -Flavor release -Arch
+x86 -TestLabel "bench, Phase 42 integration" -ReleasesDir out\benchrel
+-UploadDir out\benchup -SkipUploadSet` with Stor98 `0.4.0.0` pinned
+(`SHA256SUMS.txt` `ef7a2302...96b7`, interface 4; a `3.1.0.0` entry in
+the cut's own copy of `history.md`, not the tracked one), its
+`release-x86\` replaced by the staged `out\pkg-release-x86\` (which
+carries Stor98) and `release-x64\` added from `make-package.ps1 -Flavor
+release -Arch amd64`, unsigned (the x64 half of a cut needs the owner's
+key); zipped as `out\xhci98-3.1.0.0-bench.zip`.
+
+### The legs (development host A, QEMU, release flavour)
+
+Kit `E:\xhci98-vm\p42-int` (QMP 48070 to 48079). The first package was
+cut at `72c69b18`; the 7 x86 leg was read again on the final package.
+
+- **Windows 7 SP1 x86, update over `3.0.0.0` with the Thunderbolt
+  component** (`vm\win7.img`, the emulator's `tb3-alpine-ridge` host,
+  the tunnel bridge `tb0` with the chained upstream port `1B21:2421` and
+  an NVMe behind it, and the enclosure `enc0` plugged): `3.0.0.0`'s
+  `INSTALL /yes /thunderbolt /notray /nopause` from its own package, a
+  restart, both units listed (first plug). Then the bench package's
+  `INSTALL /console /yes /thunderbolt /nopause`: every device updated to
+  `3.1.0.0` and started, "The Thunderbolt safe-removal mark service
+  xhcimark is installed and running: "C:\Windows\system32\XHCIMARK.EXE"",
+  exit 3; `sc qc xhcimark`: `WIN32_OWN_PROCESS`, `AUTO_START`, the quoted
+  path, `LocalSystem`; `XHCIMARK.LOG` in `system32\LogFiles\xhci98`. After
+  the restart (and a re-plug of the enclosure, which the emulator drops
+  across a guest restart) both units' `LowerFilters` read `xhcicm` and
+  `Services\xhcimark\Marks` held both records. **Pass.** Then
+  `INSTALL /console /uninstall /nopause`: step 0 stopped the service,
+  removed both marks ("The safe-removal mark ... was removed from ..."),
+  deleted `XHCIMARK.EXE` and the service, then the rest of the package
+  went; afterwards no `LowerFilters` value under `Enum\PCI`, no
+  `xhcimark` service, no `XHCIM*` in `system32`; exit 3. **Pass.** Read
+  again from a fresh overlay on the final package (`103974c2`): the
+  same, step by step. **Pass.**
+- **Windows 98 SE, update over `3.0.0.0`** (a flattened copy of the
+  `3.0.0.0` guest of 42-A.4's legs): the helper installed the controller
+  and the root hub (`RESULT installed`), but the engine said "did not end
+  as installed" with the Device Manager steps, exit 2: the setup engine
+  had copied the new `xhci98.sys` to `XHCI98.TMP` and asked for the swap
+  in `WININIT.INI` (`[rename]`, `xhci98.sys=...\xhci98.tmp`), since the
+  loaded binary cannot be replaced, and the check read the old binary's
+  version. After a shut down and a cold start both devices read "current
+  (this release)" (the swap made). **Pass for the driver, fail for the
+  installer's verdict on the first run**, fixed in `be9b9bf6`: the check
+  now reads a pending rename of a file of the package version as
+  "updated; the new driver file replaces the running one at the next
+  start" with the restart flag. (This is the gold row 42-A.2's legs left
+  owed.) Read again on the bench zip as cut (SHA-256 `7034b1b5...6cad1b`)
+  from a fresh overlay: both devices "updated; the new driver file
+  replaces the running one at the next start", no steps, "Changes were
+  made. Please restart Windows now.", exit 3; `WININIT.INI` held
+  `xhci98.sys=...\xhci98.tmp` (`XHCI98.TMP` 300,160 bytes beside the old
+  299,298). After a shut down and a cold start `XHCI98.SYS` was the
+  300,160-byte file, the `.TMP` gone, and `/list` read both devices
+  "current (this release)" (the base image's old `DEV_04` entry, not
+  present, still "install (no driver)" as on every run). **Pass.**
+- **Windows 98 SE, fresh install and uninstall**
+  (`vm\t26\win98-clean.qcow2`): the controller's wizard finished with no
+  driver, then `INSTALL /console /yes /nopause`: "installed, restart
+  pending", exit 3; after a shut down and a cold start the root hub came,
+  the tablet's HID wizard installed from Windows' own `HIDDEV.INF`, the
+  tray tool ran. `INSTALL /console /uninstall /nopause`, `REMOVE`, the
+  wizard word: both devnodes removed through the helper, the `INF\OTHER`
+  copy and its `.PNF`, `XHCI98.SYS`, the tray tool, the Add/Remove
+  Programs entry and `C:\XHCI98` gone, exit 3. **Pass.**
+
+Not taken here: `XHCIINST /eject`'s confirmation in a guest (host vectors
+only), the window's settings pages over a machine-wide value that is not
+a `DWORD`, 2000, XP, Vista and the x64 targets.

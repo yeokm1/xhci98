@@ -115,7 +115,45 @@ from Add/Remove Programs. What changes here, section by section:
 - **Not in this revision**: the bundled Stor98 component (record 26
   sections 5.6, 6.3 and 6.4) and the safe-removal mark service (record 21
   section 7.4 revision 3, task 42-A.5); sections 4.4 and 9.2 stay as they
-  were for them.
+  were for them. The mark service is revision 12's.
+
+Revision 12, 2026-10-19 (roadmap-usb4.md task 42-A.5's installer hooks and
+task 42-A.17's installer part; record 21 section 7.4 revision 3, "The
+installer"; record 26 section 12): the safe-removal mark service
+`xhcimark` and the marks it writes, and the machine-wide key.
+
+- **Section 3**: the package carries `tools\xhcimark\` (`XHCIMARK.EXE`,
+  `XHCIMK64.EXE`, built by `xhcimark\build.cmd`); the tool copies one of
+  them, never runs it. `CreateServiceA`, `ChangeServiceConfigA`,
+  `StartServiceA` and `ControlService` are looked up at run time like the
+  other routines; the import table stays `KERNEL32` and `ADVAPI32`.
+- **Section 5.1**: a step 12 at the end of every install and update run,
+  whatever its verdict (record 21 section 7.4, decision M13): with the
+  `xhcicm` service registered and the Thunderbolt component in the run,
+  on 2000 to 7, the mark service installed or updated and started; with
+  no `xhcicm` service registered, step 0 of section 9.2 run, so no
+  `LowerFilters` value names `xhcicm` once the run ends (a filter with no
+  service stops the device at its next start, Code 39).
+- **Section 8.4**: the machine-wide key is made where it is absent at
+  every install and update, a value is read there by the drivers' rule
+  (present in any type wins, a zero-length `REG_NONE` is absent; a value
+  that is not a `DWORD` wins with the driver's own fallback, which is not
+  always the INF's default, so it is shown as unreadable and a value
+  chosen for it is always written over it), and every write goes there,
+  never to a controller's own key.
+- **`/eject`** (record 24 section 7.2; record 21 section 7.4, decision
+  M16): on NT, after its own successful `CM_Request_Device_EjectA` (not
+  the query-and-remove fallback), the tool reads the NHI's marks answer
+  (`IOCTL_XHCICM_MARKS`) for the unit's one located entry with a pending
+  departure, and writes `XhciCmEjectConfirm` (`REG_BINARY`, 28 bytes,
+  `cm_query.h`'s `CM_QC_*`) into the NHI's driver key while that value is
+  absent or empty, under the eject lock it already holds
+  (`Global\XhciinstTbAsk`): the driver then tears the tunnel down, which on
+  Windows 2000 nothing else confirms.
+- **Section 9.2**: step 0 before the filter hosts, and the inventory read
+  again before step 5.
+- **Section 9.5**: the mark service's copy in `system32`.
+- **Section 13**: D16.
 
 The tool never ships `devcon` or any other Microsoft file, never drives
 Windows 98's 16-bit setup engine (`SETUPX`) through anything undocumented,
@@ -288,6 +326,14 @@ stages it from `xhciinst\INSTALL.BAT`.
   gains their rows and `NOTICE.TXT` records the linkage. `XHCIIN64.EXE` is a
   user-mode program, not a driver: the packager's test signing (design
   record 19) does not apply to it.
+- **The mark service's binaries** (revision 12; record 21 section 7.4,
+  revision 3): `XHCIMARK.EXE` and `XHCIMK64.EXE`, built by
+  `xhcimark\build.cmd` and staged under the package's `tools\xhcimark\`;
+  the tool copies the one of its own architecture into `system32`
+  (section 9.5) and never runs it. The service routines it needs beyond
+  those it already imports (`CreateServiceA`, `ChangeServiceConfigA`,
+  `StartServiceA`, `ControlService`) are looked up at run time, so the
+  import table stays `KERNEL32` and `ADVAPI32`.
 
 ## 4. The package as the tool sees it, and the refusals
 
@@ -476,6 +522,20 @@ does not install it.
     started, or a stated reason why not.
 11. Report the restart (section 5.9), and, where old `XHCI98\` entries
     exist, one line naming `tools\xhcicln\` (section 5.11).
+12. **The marks' invariant** (revision 12; record 21 section 7.4, decision
+    M13), at the end of every run that got this far or stopped on the
+    way, whatever its verdict: a `LowerFilters` value naming `xhcicm`
+    exists only while the `xhcicm` service is registered. With that
+    service registered and the Thunderbolt component in the run, on
+    Windows 2000 to 7, the mark service is installed or updated and
+    started (section 9.5); with it registered and the component not in
+    the run, nothing of the marks changes; with no `xhcicm` service (an
+    update that ended without it, a name left on a machine where the
+    service was removed by hand), section 9.2's step 0 runs, so every
+    such name is removed and the mark service, if any, deleted. A step 0
+    that fails is a failure of the run, said with "restart Windows and
+    run INSTALL.BAT again". A state of the `xhcicm` service that cannot
+    be read changes nothing.
 
 Steps 6 to 8 stop at the first failure that leaves the order meaningless
 (a controller update failed), report what was done and exit 2; a failure
@@ -1514,6 +1574,30 @@ next starts; a failure or a deferred result stops the destructive phases
 after it, reports what was done, and tells the user to restart and run
 `INSTALL.BAT /uninstall` again, which resumes from what is left.
 
+0. **The safe-removal marks** (revision 12; record 21 section 7.4,
+   decision M14), before anything of `xhcicm` goes. The mark service
+   `xhcimark`, if registered, is stopped (`ControlService`,
+   `SERVICE_STOPPED` within 30 s); the marks' write mutex
+   `Global\Xhci98MarkWrite` is taken (opened, or created with the shared
+   security of section 9.5's locks); every PCI devnode, present or not
+   (`SetupDiGetClassDevsA` with the `PCI` enumerator and
+   `DIGCF_ALLCLASSES`, no `DIGCF_PRESENT`), has its `SPDRP_LOWERFILTERS`
+   read, and `xhcicm` is removed from each value that names it, the other
+   names kept in order and the value deleted with a zero length when
+   nothing else is in it, each read back. Then the service's `Marks`
+   records go, then its `system32` copy (one in use renamed to
+   `<name>.DEL` and that name deleted at the restart, so a later install
+   of the same name is not deleted with it; an earlier `.DEL` deleted or
+   its deletion asked again), and only then the service itself
+   (`DeleteService`). A stop that times out, a listing
+   that does not reach its end, a value that cannot be read, a removal
+   that does not read back, or a copy that can be neither deleted nor
+   scheduled for deletion fails step 0: the run stops before step 1 with
+   "steps left", keeping `xhcicm`'s service and file and the mark
+   service's registration (and, when the marks themselves were not all
+   removed, its records; a copy that fails after them leaves the records
+   already deleted), and the next run resumes from what is left. The same step runs at the end of any install or update that
+   leaves no `xhcicm` service (section 5.1 step 12).
 1. **The filter hosts.** For each: `xhcicm` is removed from its
    `UpperFilters` multi-string and the rest kept in order
    (`SetupDiSetDeviceRegistryPropertyA(SPDRP_UPPERFILTERS)`; a value left
@@ -1576,7 +1660,9 @@ after it, reports what was done, and tells the user to restart and run
    present or not, has its driver key's `InfPath` read, and an INF any of
    them names, or any `InfPath` that cannot be read, is kept and stops
    the run; then the `.pnf`, then the `.inf`.
-5. **The services** `xhci98`, `xhciuas`, `xhcicm`, `xhcihlpr` and the
+5. **The services** - first the inventory of step 0 read once more, a
+   name left (or a listing that cannot be read) stopping the run before
+   `xhcicm`'s service and file go - then `xhci98`, `xhciuas`, `xhcicm`, `xhcihlpr` and the
    `2.3.x` `xhcimsi`, each with `DeleteService` (advapi32), the handle
    closed at once. Microsoft's documentation: the service is deleted once
    it has stopped **and** every handle to it is closed - for a running
@@ -1718,6 +1804,27 @@ deferred on NT, and `WININIT.INI` is never edited.
   `SetSecurityDescriptorDacl`, `FreeSid`) are looked up in
   `advapi32.dll` at run time on NT only, so the import table and 98 SE's
   advapi32 are untouched.
+
+**The safe-removal mark service** (revision 12; record 21 section 7.4,
+revision 3, decision M8), Windows 2000 to 7 only. Its executable is never
+in the install directory: a program the service controller starts as
+`LocalSystem` sits where only administrators and the system can replace
+it. The tool copies the package's `tools\xhcimark\XHCIMARK.EXE` (32-bit
+Windows) or `XHCIMK64.EXE` (x64, into the 64-bit `system32`) to
+`%SystemRoot%\system32\<name>.TMP`, compares it byte for byte, moves it
+over `<name>.EXE` with `MoveFileExA(MOVEFILE_REPLACE_EXISTING)` (the
+`.TMP` route above, applied to that directory) and compares the result
+again: a copy that is not the package's is never registered. A running
+service is stopped first (`SERVICE_STOPPED` within 30 s, or the service is
+left as it was and the run fails) and started again after. A new service
+is `CreateServiceA` `xhcimark`, "xHCI98 Thunderbolt safe-removal mark
+service", `SERVICE_WIN32_OWN_PROCESS`, `SERVICE_AUTO_START`, the
+`LocalSystem` account, with the quoted full path; an existing one has the
+same set again with `ChangeServiceConfigA`. The tool makes
+`system32\LogFiles\xhci98\` (the directory's default rights) for the
+service's log, then starts it. The uninstall's step 0 (section 9.2) stops
+and deletes it with its copy; the move of the install directory does not
+concern it.
 
 ### 9.6 The install directory (owner, 2026-10-16; revision 10)
 
@@ -1978,6 +2085,14 @@ the user.
   package's by the per-device driver-node route, never by an ID-wide
   call; a disconnected one stops the uninstall until it is connected
   (section 9.2).
+- **D16** (revision 12) The marks are kept by the state a run ends in,
+  not its verdict (record 21 section 7.4, decisions M13 and M14): the
+  mark service is installed only from this package's `tools\xhcimark\`
+  into `system32`, only with `xhcicm` registered and the Thunderbolt
+  component in the run, on 2000 to 7; every name is removed, step 0
+  first, whenever no `xhcicm` service is left; and the Advanced dialog
+  does not yet offer the service's `Restart` (it is set by hand under
+  `Services\xhcimark\Parameters`).
 
 ## 14. Open, and the risks
 

@@ -1297,4 +1297,44 @@ int inst_s98_decide(int haveS98, int yes, int stor98Switch, int list,
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
                              int behindTunnel);
 
+/* ---- the machine-wide value as the drivers read it (task 42-A.17) ------ */
+
+/* xhci_regsrc.c's rule (XhciRegCallSeen, XhciRegPick): `found` is whether
+ * the query found the name at all; a zero-length REG_NONE is absent; a
+ * REG_DWORD of four bytes is its number; any other type or size is present
+ * and wins with the driver's own fallback, which is not always the INF's
+ * default (XhciForceBulkOnly's is 1). 1 present with *value its number;
+ * 2 present and not a number (*value def, a guess the caller must not
+ * decide by); 0 absent. */
+#define INST_REG_NONE       0UL
+#define INST_REG_DWORD      4UL
+int inst_mw_reading(int found, INST_U32 type, INST_U32 bytes, INST_U32 dword,
+                    INST_U32 def, INST_U32 *value);
+
+/* ---- the safe-removal mark service (record 21 section 7.4, revision 3;
+ * task 42-A.5) ------------------------------------------------------------- */
+
+/* Where the service is installed: Windows 2000 to 7 (decision M5). */
+int inst_mk_system(const INST_ENV *env);
+
+/* What the end of an install or update run does about the marks (decision
+ * M13, by the state the run ends in): cmService is the xhcicm service's
+ * state (1 registered, 0 not, -1 unreadable), tbInRun whether the
+ * Thunderbolt component was in this run, markSystem inst_mk_system. */
+#define INST_MK_LEAVE       0   /* nothing changes                         */
+#define INST_MK_INSTALL     1   /* the service installed or updated, started */
+#define INST_MK_REMOVE      2   /* every mark removed, the service deleted */
+int inst_mk_end_action(int cmService, int tbInRun, int markSystem);
+
+/* The confirmation of an administrator tool's own eject (decision M16;
+ * cm_query.h CM_QC_*), from the marks answer b[0..n) (cm_query.h CM_QM_*):
+ * the one located entry at member location `member`, bus `bus` and address
+ * `address` whose departure is pending, built into out[INST_QC_BYTES].
+ * 1 built; 0 no such entry, or not an answer; -1 more than one such entry
+ * (nothing is built); -2 a header asking for *need bytes. */
+#define INST_QC_BYTES       28
+int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
+                  INST_U32 bus, INST_U32 address, unsigned char *out,
+                  INST_U32 *need);
+
 #endif /* INST_CORE_H */

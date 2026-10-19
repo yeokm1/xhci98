@@ -26,7 +26,9 @@ rem      pass makes every later FAIL and NODRIVER word untrustworthy
 rem   7. the tracked batch files' line endings - MS-DOS 7.1 COMMAND.COM can
 rem      fail on an LF-only .BAT, and the field wrappers are .BAT files -
 rem      then the source charset, and the two copies of Stor98's interface
-rem      header held equal (task 42-A.20, scripts\check-stor98-header.ps1)
+rem      header held equal (task 42-A.20, scripts\check-stor98-header.ps1),
+rem      and on the x86 run XHCICLN and XHCITR rebuilt (xhcicln\build.cmd,
+rem      xhcitr\build.cmd), the two tools that compile xhciinst\inst_core.c
 rem   8. the XHCICLN self-test, when that EXE has been built (it has a
 rem      build.cmd of its own, and a clone without Open Watcom still runs
 rem      everything else here; task 38.8; xhcicln\build.cmd), XHCITR's own
@@ -512,6 +514,20 @@ echo === source charset ===
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-source-charset.ps1"
 if errorlevel 1 goto charsetfail
+
+rem XHCICLN and XHCITR compile the installer's pure half
+rem (xhciinst\inst_core.c), so a change there makes both stale and
+rem make-release.ps1 refuses them; the x86 run rebuilds both, the x64 halves
+rem included, before their self-tests below, so a cut never needs them
+rem built by hand.
+if /i "%ARCH%"=="x86" (
+    echo.
+    echo === xhcicln and xhcitr, rebuilt ===
+    call "%REPO%\xhcicln\build.cmd"
+    if errorlevel 1 goto toolbuildfail
+    call "%REPO%\xhcitr\build.cmd"
+    if errorlevel 1 goto toolbuildfail
+)
 
 rem Stor98's interface header is in this tree twice since task 42-A.20:
 rem src\stor98\include\stor98cm.h, the master, and src\cm\stor98cm.h, the
@@ -1271,6 +1287,13 @@ exit /b 1
 echo.
 echo ERROR: xhciinst's self-test failed: its switches, its decisions or its
 echo import table cannot be trusted (xhciinst\selftest.cmd).
+endlocal
+exit /b 1
+
+:toolbuildfail
+echo.
+echo ERROR: xhcicln\build.cmd or xhcitr\build.cmd failed: the tools that
+echo compile the installer's pure half are not current.
 endlocal
 exit /b 1
 

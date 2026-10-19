@@ -815,6 +815,8 @@ static void row_now(const INST_ROW *r, char *out, size_t cap)
     if (r->MwState == 1) {
         _snprintf(out, cap - 1, "now: %lu, set machine-wide",
                   (unsigned long)r->MwValue);
+    } else if (r->MwState == -1) {
+        _snprintf(out, cap - 1, "now: not known");
     } else if (!r->Same) {
         _snprintf(out, cap - 1, "now: each controller its own");
     } else if (r->NowCount == 0) {
@@ -861,10 +863,11 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
             }
         }
     } else if (r->MwState == -1) {
-        strncat(out, " The machine-wide value could not be read.",
-                cap - strlen(out) - 1);
-    }
-    if (!r->Same) {
+        strncat(out, " The machine-wide value could not be read as a "
+                "number, and it is what every controller uses: the value in "
+                "force is not known. Leave it, or choose a value to write "
+                "over it.", cap - strlen(out) - 1);
+    } else if (!r->Same) {
         strncat(out, " Each controller keeps its own value until you choose "
                 "one:", cap - strlen(out) - 1);
         for (i = 0; i < r->NowCount; i++) {
@@ -942,7 +945,9 @@ static void row_fill_combo(HWND combo, const INST_ROW *r)
     cur = row_start(r, &mixed);
     if (!r->Same && r->MwState != 1) {
         item = (int)SendMessageA(combo, CB_ADDSTRING, 0,
-                                 (LPARAM)"each controller keeps its own");
+                                 (LPARAM)(r->MwState == -1
+                                              ? "leave it as it is"
+                                              : "each controller keeps its own"));
         SendMessageA(combo, CB_SETITEMDATA, item, (LPARAM)0xFFFFFFFFUL);
         if (mixed) {
             sel = item;
