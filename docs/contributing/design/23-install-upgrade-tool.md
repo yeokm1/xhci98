@@ -190,7 +190,8 @@ it". What changes here:
 - **Sections 9.5 and 5.1 step 12**: the mark service on 8 and 8.1 too.
 - **Section 13**: D17 to D19.
 
-Revision 14, 2026-10-19 (the owner, for `3.1.0.0`: "XhciFastPollFsLs
+Revision 14, 2026-10-19 (roadmap-usb4.md task 42-A.29; the owner, for
+`3.1.0.0`: "XhciFastPollFsLs
 should be in advanced settings"). What changes here:
 
 - **Section 8.1**: `XhciFastPollFsLs` joins the table, never asked,

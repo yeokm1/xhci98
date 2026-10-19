@@ -1,8 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 9, 2026-10-19 (the owner: `XhciFastPollFsLs` among the
-USB page's "Advanced..." rows; sections 5.4 and 11, record 23 revision
-14); draft 8, 2026-10-19 (task 42-A.21, the owner's request of that
+Status: draft 9, 2026-10-19 (task 42-A.29, the owner: `XhciFastPollFsLs`
+among the USB page's "Advanced..." rows; sections 5.4 and 11, record
+23 revision 14); draft 8, 2026-10-19 (task 42-A.21, the owner's request of that
 day: the connection manager alone, and Windows 8 and 8.1 for it; sections
 1.2, 5.1, 5.3, 9.1, 9.3, 10, 12 and 13, and record 23 revision 13);
 draft 7, 2026-10-18, reviewed and revised (an INF copy made by
