@@ -188,6 +188,24 @@ as they are made; the head of this file is rewritten when it is cut.
   tool read it through the same door. Where a section below names
   `XHCISNAP`'s report, read the snapshot in the tool's report: the same
   text, from the same code.
+- **The bundled Stor98 goes on tunnel drives only.** The installer
+  installs Stor98 only when asked (its box, or `/stor98`) and only with
+  the Thunderbolt 3 / USB4 support in the same run, and then only on NVMe
+  drives behind a Thunderbolt or USB4 tunnel, as the connection manager
+  reports them; the installer selects tunnel drives only. An internal NVMe
+  drive is left as it is, and so is one whose place cannot be read; the
+  installer says which and why. Install Stor98 on an internal drive by
+  hand ("NVMe drives behind Thunderbolt or USB4"). Stor98's INF matches
+  every NVMe controller (`PCI\CC_010802`), so Windows may still offer
+  Stor98 for an internal NVMe drive that has no driver, later. Where a
+  Stor98 the installer did not put on a tunnel drive is installed (by
+  hand, on an internal drive), the installer changes none of its
+  settings, and when that Stor98 is another release than the bundled one
+  it changes nothing of Stor98 at all, since every Stor98 drive shares
+  one driver file. The uninstall removes the bundled Stor98 also from a
+  tunnel drive Windows bound to it after the install (an enclosure first
+  plugged after the restart), when Stor98 was not there before this
+  package's installer.
 - **The Thunderbolt 3 / USB4 connection manager alone.** The installer
   can install `xhcicm.sys` (with its tunnel-port filter and, on NT, the
   safe-removal mark service) without `xhci98.sys` and `xhciuas.sys`, for
@@ -2019,8 +2037,13 @@ and down, and Stor98 runs the drive.
   `stor98-LICENSE.txt`, `stor98-NOTICE.txt` and `stor98-readme.txt`.
 
 Its readme is its install guide and lists its known limits; read it
-before installing. The `debug-` directories do not carry it, and
-`INSTALL.BAT` does not install it.
+before installing. The `debug-` directories do not carry it.
+`INSTALL.BAT` installs it only when asked, with the Thunderbolt 3 /
+USB4 support, and only on NVMe drives behind a Thunderbolt or USB4
+tunnel ("What `3.1.0.0` changes"); an internal NVMe drive is installed
+by hand, as below. Stor98's INF matches every NVMe controller, so
+Windows may still offer it for an internal NVMe drive that has no
+driver.
 
 When the drive's NVMe controller (`PCI\CC_010802`) shows in Device
 Manager without a driver, Update Driver, Have Disk, and point it at:

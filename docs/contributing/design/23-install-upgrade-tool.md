@@ -1,6 +1,7 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 13, 2026-10-19 (the connection manager alone, and
+Status: revision 14, 2026-10-19 (the bundled Stor98 on tunnel drives
+only; see below); revision 13, 2026-10-19 (the connection manager alone, and
 Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
 service and the machine-wide key); revision 11, 2026-10-18 (the window,
 the helper, the uninstall
@@ -188,6 +189,24 @@ it". What changes here:
   where only the connection manager was installed); the typed word stays.
 - **Sections 9.5 and 5.1 step 12**: the mark service on 8 and 8.1 too.
 - **Section 13**: D17 to D19.
+
+Revision 14, 2026-10-19 (roadmap-usb4.md task 42-A.26; the owner's
+decision of 2026-10-19): the bundled Stor98 is installed on NVMe drives
+behind a Thunderbolt or USB4 tunnel only.
+
+- **Section 4.4**: the paragraph on the bundled Stor98 now says what is
+  copied, staged and installed, and where: tunnel drives only, with the
+  Thunderbolt component, the place read from the connection manager's
+  confirmed reading; the shared file and service held when a Stor98 the
+  installer did not put on a tunnel drive exists.
+- **Sections 5.4 and 6.2**: the plan's verdict for a device `stor98.inf`
+  matches passes the gate of section 4.4 after every reading, so an
+  install, an update, a repair, `/force` and `/restage` are all held to
+  it; section 5.5's refusal of a hardware id shared with a device the run
+  leaves stands, with its own sentence for a drive the gate leaves.
+- **Record 26 sections 5.3, 6.3, 6.4 and 9.3** carry the rest: the
+  Components page's sentence, the uninstall's adoption of tunnel drives
+  Windows bound after the run.
 
 The tool never ships `devcon` or any other Microsoft file, never drives
 Windows 98's 16-bit setup engine (`SETUPX`) through anything undocumented,
@@ -503,13 +522,76 @@ of 98 SE writes beside an INF it reads in place (the 98 SE uninstall leg,
 reinstall refused); a copy whose list is already gone loses only the
 `.PNF`s of this package's INFs, never another file.
 
-**The bundled Stor98 driver is not copied.** The listing takes the
-flavour directory's files and `nt\`, never another subdirectory, and it
-leaves out every file whose name starts with `stor98`
-(`inst_bundled_file`), because a copy of `stor98.inf` on `DevicePath`
-would have the hardware wizard install Stor98 unasked. Where a flavour
-directory carries Stor98, the run names where it is and says the tool
-does not install it.
+**The bundled Stor98 driver: tunnel drives only** (owner, 2026-10-19;
+revision 14). The listing takes the flavour directory's files and `nt\`,
+never another subdirectory, and it leaves out every file whose name
+starts with `stor98` (`inst_bundled_file`) unless Stor98 is in the run,
+because a copy of `stor98.inf` on `DevicePath` or in the driver store
+would have Windows offer Stor98 unasked. Stor98 is in the run only when
+it is chosen (its box, the console's question, `/stor98`) **and** the
+Thunderbolt component is: the engine keeps it out otherwise, and the
+console says so and asks nothing (`s98_set`).
+
+In the run, the tool installs, updates and reconfigures Stor98 only on
+an NVMe drive behind a Thunderbolt or USB4 tunnel. Where a drive sits is
+read once per reading of the devices from the connection manager's
+confirmed reading, the walk of record 24 sections 3.3 and 4 that
+`/devices` and `/eject` take (`tb_read_all`: the status record asked and
+echoed, its tunnel ports matched by bus and address on NT and by PCI path
+on 98 SE and ME), under the lock `XHCITR` shares
+(`inst_s98_place`):
+
+- **behind a tunnel**: a verified tunnel port above the drive;
+- **internal**: no verified port above it, in a reading that is whole
+  (every devnode read, no record moved), with at least one connection
+  manager confirmed and every one found confirmed, and no Thunderbolt or
+  USB4 port by its id, nor one carrying the tunnel-port filter, above it;
+- **unknown**: anything else - the drive not in the walk, a record that
+  moved, a reading not whole, no manager or one unconfirmed, an
+  unverified port above it. Unknown is never taken for internal and never
+  for a tunnel.
+
+After every plan (`plan`, which runs after every reading, so after each
+settle and barrier too), each present device `stor98.inf` matches is
+eligible only behind a tunnel with the Thunderbolt component in the run
+(`inst_s98_eligible`); an internal drive is left ("skip-internal"), one
+of unknown place is left and is work left for a later run when it is
+still unknown at the end ("skip-unknown", exit 4). Whatever the plan
+decided for it - an install, an update, a repair of a missing file,
+`/force`, `/restage` - a device the gate leaves is not run, gets no
+printed steps on 98 SE and ME, and is named on screen and in the log with
+its reason (the plan's `LEFT:` line, a line when a later reading changes
+it, the window's found page). On NT one call reaches every device of a
+hardware id (section 5.5), so a tunnel drive that shares its id with a
+drive the gate leaves is refused too, with that sentence.
+
+**The shared file and service.** Every Stor98 device runs one
+`stor98.sys` (2000 to 7) or `stor98.mpd` (98 SE and ME) and reads one
+service's settings, so a change made for a tunnel drive reaches an
+internal drive on Stor98 as well. A device bound to Stor98 counts as
+another when it is not a known tunnel drive: present and not behind a
+tunnel, or not present and not named by the install record (an
+unreadable record names none); on 98 SE and ME every driver key naming
+`stor98.mpd` is read for it, present or not. With another, the
+conservative choice is taken (`inst_s98_share`): when the installed file
+is another release than the bundled one, or cannot be read, the run
+makes **no Stor98 change at all** - `stor98.inf` is not staged, no
+`stor98` file goes into the 98 SE and ME install directory, no device is
+installed or updated and no setting is written - and says so, naming
+Stor98's readme for an update by hand; when it is the bundled release,
+tunnel drives are installed (the file stays what it is) but no setting
+is written, and that is said too. On NT `stor98.inf` is not staged
+either, and no `/restage` reaches it, while another build of it is in
+the driver store and another Stor98 exists. The devnode of an internal
+drive on Stor98 is never updated or reconfigured by the tool.
+
+What remains, said in the release notes and the package's readme:
+`stor98.inf` matches every NVMe controller (`PCI\CC_010802`), and it is
+staged on NT and in the install directory on 98 SE and ME so that a
+tunnel drive that appears later - the usual case, since the tunnel may
+come up only after the restart - installs, so Windows may still offer
+Stor98 for an internal NVMe drive that has no driver. The tool never
+selects one.
 
 ### 4.5 The connection manager alone (revision 13)
 
