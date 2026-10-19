@@ -1205,6 +1205,48 @@ static void test_flow(void)
         CHECK_EQ(inst_busy_spent(tries, 0), 0, "nobody");
     }
 
+    /* A parent's job and the devices below it (98 SE, 2026-10-19). */
+    CHECK_EQ(inst_parent_kind("USB\\XHCI98_ROOT_HUB\\0PCI&VEN_1B36", 0), 1,
+             "the root hub is a parent");
+    CHECK_EQ(inst_parent_kind("USB\\XHCI98_HUB&VID_0409&PID_55AA\\314159", 0),
+             1, "a hub is a parent");
+    CHECK_EQ(inst_parent_kind("USB\\XHCI98_HUB30&VID_1&PID_2\\1", 0), 1,
+             "a SuperSpeed hub is a parent");
+    CHECK_EQ(inst_parent_kind("USB\\XHCI98_COMPOSITE&VID_1&PID_2\\1", 0), 1,
+             "a composite entry is a parent");
+    CHECK_EQ(inst_parent_kind("PCI\\VEN_1B36&DEV_000D\\3", 1), 1,
+             "a controller is a parent");
+    CHECK_EQ(inst_parent_kind("USB\\VID_0627&PID_0001\\28754", 0), 0,
+             "a function is not");
+    CHECK_EQ(inst_parent_kind("USB\\XHCI98_HUBX\\1", 0), 0,
+             "a near name is not");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_OK, 1), 1,
+             "root hub installed, hub next: settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_RESTART, 1), 1,
+             "installed, restart pending: settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_FAILED, 1), 1,
+             "a failed install may have restarted it: settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_STEPS, 1), 1,
+             "cancelled in a dialog: settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_ABSENT, 1), 0,
+             "nothing was reached: no settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_REFUSED, 1), 0,
+             "the helper refused: no settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_OK, 0), 0,
+             "the last job of the pass: the pass's own settle follows");
+    CHECK_EQ(inst_settle_after_job(0, INST_DI_OUT_OK, 1), 0,
+             "a function's job: no settle");
+    CHECK_EQ(inst_absent_retry(INST_DI_OUT_ABSENT, 1, 0), 1,
+             "not present after a parent's job: once more after a settle");
+    CHECK_EQ(inst_absent_retry(INST_DI_OUT_ABSENT, 1, 1), 0,
+             "still not present after the retry: not present");
+    CHECK_EQ(inst_absent_retry(INST_DI_OUT_ABSENT, 0, 0), 0,
+             "no parent's job this run: not present at once");
+    CHECK_EQ(inst_absent_retry(INST_DI_OUT_OK, 1, 0), 0,
+             "installed: no retry");
+    CHECK_EQ(inst_absent_retry(INST_DI_OUT_FAILED, 1, 0), 0,
+             "failed: no retry");
+
     /* Windows 2000 after a first filter install (owner, 2026-10-15): the
      * NHI's or a port's Code 12, or a device gone, waits for the restart;
      * nothing else does. */

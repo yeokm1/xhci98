@@ -1,6 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 8, 2026-10-19 (task 42-A.21, the owner's request of that
+Status: draft 9, 2026-10-19 (task 42-A.27, section 7: the settle after a
+root hub's or hub's job within a pass, record 23 revision 14); draft 8, 2026-10-19
+(task 42-A.21, the owner's request of that
 day: the connection manager alone, and Windows 8 and 8.1 for it; sections
 1.2, 5.1, 5.3, 9.1, 9.3, 10, 12 and 13, and record 23 revision 13);
 draft 7, 2026-10-18, reviewed and revised (an INF copy made by
@@ -707,7 +709,11 @@ machine, its reading of the tree through `cfgmgr32.dll`), shows "Windows
 is installing the devices the controller shows; answer its windows: Next,
 Next, Finish, and type `C:\XHCI98` where it asks", and only then reads the
 tree again and installs, through the helper, what still has no driver (a
-wizard the user cancelled) or an older one (an update's root hub). How
+wizard the user cancelled) or an older one (an update's root hub). Within
+a pass the same settle follows each root hub's, hub's or composite
+entry's job before the next one, and a device such a job hid for a moment
+is waited for and tried once more before it is a step (record 23 section
+5.8, revision 14). How
 the wizards and the helper meet is a reading of the 42-V.1 legs (record 27
 section 12), and the design holds to this order until they are read.
 

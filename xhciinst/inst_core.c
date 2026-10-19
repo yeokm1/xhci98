@@ -2380,6 +2380,24 @@ int inst_busy_spent(const int *tries, int n)
     return 0;
 }
 
+int inst_parent_kind(const char *instanceId, int controller)
+{
+    int old;
+
+    return controller || inst_bus_base(instanceId, &old) != 0;
+}
+
+int inst_settle_after_job(int parent, int outcome, int more)
+{
+    return parent && more && outcome != INST_DI_OUT_ABSENT &&
+           outcome != INST_DI_OUT_REFUSED;
+}
+
+int inst_absent_retry(int outcome, int parentJobs, int retries)
+{
+    return outcome == INST_DI_OUT_ABSENT && parentJobs > 0 && retries == 0;
+}
+
 int inst_tunnel_restart(int win2000, int filterInstalled, int inf, int gone,
                         INST_U32 problem)
 {

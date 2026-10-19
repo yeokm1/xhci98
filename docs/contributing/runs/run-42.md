@@ -1473,3 +1473,79 @@ carry the `Class` value was not read, and either way is now handled), 98 SE and 
 `CurrentDriveLetterAssignment`, a path this change does not touch), a
 Thunderbolt unit stopped on 2000 (the same `tr_w2k_code24` rule, no
 port), and the x64 tool.
+
+## 42-A.27: the hub's job after its root hub's reinstall (2026-10-19)
+
+Branch `p42-hubsettle`, from `3.1.0.0` at `08709480`. The matrix leg of
+the bench package on Windows 98 SE (an overlay of the `3.0.0.0` image,
+`qemu-xhci` with a `usb-hub` on port 1 and the tablet on port 2) ended
+the update over `3.0.0.0` with "Changes were made, but not everything is
+done" (exit 4) and a step for "xHCI98 USB Hub: The helper could not
+install it: not present now". Its log: the controller's job and a settle;
+the root hub's job (`installed`) with no settle after it; at once the
+hub's job, whose `DiGetClassDevsEx(DIGCF_PRESENT)` found nothing
+(`not-present`); then the pass's settle (4305 ms, devices moved), after
+which the hub was back under `xhci98`. The root hub's reinstall restarts
+it and takes its hub away for a few seconds; the next start showed
+everything current. An engine defect, not the driver's.
+
+### What changed
+
+Design: record 23 revision 14 (section 5.8, "A parent's job and the
+devices below it", and the pure-half list of section 10), record 26
+draft 9 (section 7), record 27 draft 8 (section 6, step 3); reviewed and
+revised. Code (`a0ff9fc6`, `04f9fb36`, `ee886ce5`):
+
+- A parent is a controller or a device of the bus (root hub, hub,
+  composite entry). Within a pass, a parent's job that reached its device
+  is followed, when another job of the pass comes after it, by a wait of
+  up to 15 s for the parent to be present and the settle with no device
+  expected (`reappear_settle`); 98 SE and ME in `helper_installs`, NT in
+  `install_inf` after a successful call on a bus device.
+- A job that finds its device not present after a parent's job earlier in
+  the run (the helper's `not-present`; on NT `ERROR_NO_SUCH_DEVINST`)
+  waits up to 15 s for it, settles, and is made once more; only then is it
+  a step (or, on NT, a failure). Not for Stor98's devices, and not once the
+  helper is out of the run.
+- A wait there that fails or is cancelled stops the run: `install_inf`
+  returns -1 and `run_install_nt` goes to its stopped path; on 98 SE and
+  ME `helperStop` ends the passes.
+- Pure decisions in `inst_core.c`: `inst_parent_kind`,
+  `inst_settle_after_job`, `inst_absent_retry`, with 20 host vectors in
+  `test_inst`.
+
+Functions touched: `inst_core.c` (the three above, new);
+`inst_eng.c` `nt_more_after` and `reappear_settle` (new), `install_inf`,
+`run_install_nt` (its two `install_inf` calls), `helper_install`,
+`helper_installs`.
+
+### Builds
+
+| Build | Result |
+|---|---|
+| `xhciinst\build.cmd` and `selftest.cmd`, `ee886ce5` | passed (the four executables and `XHCIDI.EXE`, their imports and screens) |
+| host suites, `ee886ce5` | 2080 checks, 0 failures (`test_inst` 1452) |
+| `build-driver.cmd all`, `04f9fb36` (the gated sources unchanged since) | BUILD + GATES PASSED (debug release qemu) |
+| `build-driver.cmd all -amd64`, `d8dbd272` | BUILD + GATES PASSED (debug release qemu) |
+
+### The legs (development host A, QEMU, release flavour)
+
+Kit `E:\xhci98-vm\p42-hubsettle` (QMP 48220 to 48229): the bench package
+`E:\xhci98-vm\m31\pkg-bench` with `tools\xhciinst` replaced by the
+executables of `ee886ce5` (`XHCIDI.EXE` unchanged), `qemu-xhci`
+`p2=4,p3=4`, a `usb-hub` on port 1 at power-on, the tablet on port 2.
+Logs under `caps\`.
+
+| Step | Result |
+|---|---|
+| 98 SE, a fresh overlay of `w98-300.qcow2` (`3.0.0.0` installed; the image N1 used), `INSTALL /console /yes` | **pass**: the controller's job and settle; the root hub's job `installed`, then "Waiting for the devices to settle ... [4564 ms, devices moved]"; the hub's job `FOUND 1`, `installed`; all three "updated; the new driver file replaces the running one at the next start"; no steps; exit 3 |
+| shut down, cold start, `INSTALL /console /list` | **pass**: controller, root hub and hub on `xhci98`, "current (this release)"; nothing to do, exit 0 |
+| ME, the stock image with the hub: `INSTALL /console /yes` (fresh), shut down, cold start; Windows installed the root hub and hub from the copy | exit 3 (controller `installed-restart`) |
+| ME, `INSTALL /console /yes /force` (the same ordering: root hub, then hub) | **pass**: the root hub's job, the settle (3031 ms, nothing moved on ME), the hub's job `FOUND 1`, `installed`; no steps; exit 3 |
+| ME, shut down, cold start, `INSTALL /console /list` | **pass**: all three `xhci98 3.1.0.0`, current; exit 0 |
+
+The registry-only "PCI Universal Serial Bus" at `DEV_04` the listings
+show is an Enum entry of the base images with no devnode, as in N1's
+logs; the run does not touch it. Not taken: the window (the console runs
+the same engine), NT (no hub ordering leg; the NT rule rests on the code
+read and the vectors), ME over `3.0.0.0` (no such image).

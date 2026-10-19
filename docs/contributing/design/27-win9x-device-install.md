@@ -1,6 +1,10 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 7, 2026-10-19, revised from the 98 SE smoke readings of
+Status: draft 8, 2026-10-19 (task 42-A.27, section 6: the settle after a
+parent's job
+within a pass, and a device a parent's job hid tried once more, record 23
+section 5.8 revision 14, from the 98 SE update leg with an external hub);
+draft 7, 2026-10-19, revised from the 98 SE smoke readings of
 task 42-A.1 (`runs/run-42.md`) with the owner's two decisions of
 2026-10-18: the job's operands in a job file, since a 16-bit program's
 command tail holds 126 characters (section 4.1); the helper's own choice
@@ -720,7 +724,13 @@ plan goes on.
    a cancelled one is `not-present`, section 5.1) or an older one (an update: the 9x leg of
    2026-10-15, where the root hub otherwise stayed at the old release),
    each by `xhci98.inf`, repeated while new targets appear, at most four
-   passes as on NT, each pass after a settle.
+   passes as on NT, each pass after a settle. Within a pass a job on the
+   root hub, a hub or a composite entry is followed by a settle before the
+   next job (its reinstall restarts it and takes the devices below it away
+   for seconds: the 98 SE update with an external hub, 2026-10-19), and a
+   device the helper answers `not-present` for after a parent's job of the
+   run is waited for, the tree settled, and the job made once more before
+   it is a step (record 23 section 5.8, revision 14).
 4. **UAS devices** (`xhciuas.inf`) present, install or update; on 98 SE
    the NUSB mass-storage prerequisite and on ME the first-stick advice
    stay as record 23 section 6.4 says them, on the Found page.
