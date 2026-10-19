@@ -1,6 +1,8 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 14, 2026-10-19 (revision 14, XHCISNAP's reading
+Status: revision 15, 2026-10-19 (revision 15, Windows 2000's USB disk
+class and its stopped mark, roadmap-usb4 task 42-A.28: sections 6.5 and
+14; revision 14, XHCISNAP's reading
 moved here, below; revision 13, the drivers' logging level, below;
 revision 12, PCI configuration and xhci98's query request, below).
 Revision 11 adds the not-removable unit's stop (below).
@@ -858,7 +860,10 @@ its devnode was found in the walk (a device with no driver has none on
 98 SE and ME, and no disk anywhere), and its set holds a disk (setup
 class `DiskDrive`), or, on NT, a volume (setup class `Volume`); on 98 SE
 and ME the disks are found as section 14's drive labels already find
-them. Everything else connected gets details only, with the reason ("a
+them. On NT the setup class is `CM_DRP_CLASS`; where that is empty, the
+`Class` value of the class key its `CM_DRP_CLASSGUID` names (revision
+15: Windows 2000 writes a USB disk's `ClassGUID` alone, so without it
+the disk was no disk). Everything else connected gets details only, with the reason ("a
 hub", "an input device", "a wireless radio", "no disk on it").
 
 **Why not "removable" on NT.** The owner's instruction allowed a device
@@ -877,15 +882,31 @@ unplugging it, as before. Windows' own applet still lists what it lists.
 **Offered.** A listed device is offered when it is started and has no
 problem code, its set is known, holds no more than 64 devnodes, and each
 of them was read whole. One that is stopped is shown "[stopped - unplug
-it]" (Code 47, held for eject, after an eject on XP and later); one with
-another problem code is shown with the code, and is not offered.
+it]" (held for eject, `tr_held_for_eject`: Code 47 after an eject on XP
+and later; on Windows 2000, which has no Code 47, Code 24, revision 15,
+below); one with another problem code is shown with the code, and is not
+offered.
+
+On 2000 Code 24 is also a failed start, so it reads as held for eject
+only for a devnode this process stopped (step 5's reading at Code 24, or
+a unit's accepted stop), kept until a walk finds it started or a whole
+walk no longer finds it, and, for the device at a USB port, only while
+the port still reports a configuration (`tr_w2k_code24`): the stopped
+device keeps its configuration until it is unplugged, and one plugged in
+again starts unconfigured. A device stopped elsewhere (Windows' own
+Unplug or Eject Hardware, or an elevated child of this tool) reads as
+any Code 24 does. The tray and the window are one process, so a stop
+from either marks both.
 
 **What it is called.** Its disks' names and their drive letters, as units
 are (section 14, "A unit named by its drive" in run 41): "USB Flash Disk
 (F:)"; without a disk, the device's own name. The letters come from the
 same code: on NT the storage device number of each disk's interface
 against each `\\.\X:`, on 98 SE and ME the disk's
-`CurrentDriveLetterAssignment`.
+`CurrentDriveLetterAssignment`. On NT a disk is named by its friendly
+name and found by its setup class, so on 2000 both depend on the class
+read above (revision 15); the interface and device-number reads answer
+on 2000 as on XP and 7 (`runs/run-42.md`, "XHCITR on Windows 2000").
 
 **The transaction.** No query device, no epoch and no passes:
 
@@ -925,7 +946,8 @@ against each `\\.\X:`, on 98 SE and ME the disk's
 5. Release the mutex, then show the result:
    - stopped: "Windows has stopped <name>.", then what a walk right
      after reads: the walk whole and the device gone, or held for eject
-     (Code 47) - "You can now unplug the device."; the device started
+     (Code 47, or Code 24 on 2000, the addendum below) - "You can now
+     unplug the device."; the device started
      again - "The device has started again, so it is not safe to
      unplug." (exit 4, as record 24 section 8.2 has it); anything else,
      the walk incomplete included - "Its state could not be read again:
@@ -957,7 +979,11 @@ left in its tree read "could not be read again" (the release matrix's 2000
 stick). Step 5 now reads Code 24 on 2000, and on 2000 alone, as stopped:
 "You can now unplug the device." (`tr_usb_after_kind`). Code 24 is run 41's
 2000 bridge after `CM_Query_And_Remove_SubTreeW`; for a USB device after
-`CM_Request_Device_EjectA` it is inferred. Host-tested only.
+`CM_Request_Device_EjectA` it is inferred. Host-tested only. Revision 15
+read it: a Bulk-Only stick and a UAS disk after
+`CM_Request_Device_EjectA` on 2000 read status `0x01806400`, Code 24,
+and this reading now also records the stop that lets the tree and the
+tray mark the device ("Offered", above).
 
 **Rights.** On NT a removable device needs no administrator (Windows'
 own applet runs as the user); a rights refusal is offered elevated on
@@ -1565,7 +1591,8 @@ Revision 7, from leg T.7 (`runs/run-41.md`, "Plain USB devices"):
   the stick's own volume (`PNP_VetoDevice`, a `STORAGE\RemovableMedia`
   devnode); a device or driver veto from a devnode of the device's own set
   reads "F: is in use (a program has a file or folder open on it)".
-- **Code 47 after an eject** (XP and 7): the disks go with the eject, so a
+- **Code 47 after an eject** (XP and 7; Code 24 on 2000 after a stop made
+  here, revision 15): the disks go with the eject, so a
   device held for eject is listed, "[stopped - unplug it]", before the
   disk rule is applied. Any other problem code reads "not started -
   problem code N", never "unplug it", for a unit too.
@@ -1582,6 +1609,20 @@ Revision 7, from leg T.7 (`runs/run-41.md`, "Plain USB devices"):
   read is a node not read.
 - **The UAS disk's re-plug** was not read: the emulated UAS device does not
   attach when added to a running machine.
+
+Windows 2000, from the `3.1.0.0` matrix (`runs/run-42.md`, "XHCITR on
+Windows 2000: the disk names, the letters and the stopped mark"):
+
+- **A USB disk's setup class** is in its Enum key as `ClassGUID` alone,
+  with no `Class` value, so the class read empty and the disk was no
+  disk: the device was offered through its volume, under its own name,
+  with no letter. An empty class name is now taken from the class key
+  the `ClassGUID` names.
+- **2000 has no Code 47.** A USB device stopped here stays attached at
+  Code 24 (status `0x01806400`), which is also 2000's failed start. A
+  devnode reads as held for eject at Code 24 only when this process
+  stopped it, until it starts again or leaves the tree; a stop made
+  elsewhere still reads "not started - problem code 24".
 
 ## 15. XHCISNAP's reading, moved here (revision 14)
 
