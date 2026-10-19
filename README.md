@@ -6,7 +6,7 @@ Experimental support for USB4 and Thunderbolt 3/4 is also included.
 
 It replaces Windows' own USB port and hub drivers, so it is not limited to USB 2.0. It drives:
 
-- SuperSpeed (USB 3.x) devices and hubs
+- SuperSpeed (USB 3.2 Gen 1, 5 Gbit/s) devices and hubs, and SuperSpeedPlus (USB 3.2 Gen 2, Gen 1x2 and Gen 2x2, 10 and 20 Gbit/s) ones
 - USB 2.0 and 1.1 (High, Full and Low Speed) devices and hubs
 - UAS (USB Attached SCSI) storage, through a second driver, `xhciuas.sys`
 - Thunderbolt 3 and USB4 docks and NVMe enclosures through a third driver, `xhcicm.sys`
@@ -15,9 +15,9 @@ It is built to Intel's xHCI specification and tested mainly on Intel machines. O
 
 This is a solo human's project with AI assistance, so bugs are not unexpected. Please [report them](https://github.com/yeokm1/xhci98/issues/new/choose).
 
-<img src="images/xhci98-usb-devices.jpg" width="800">
+<img src="images/xhci98-p14s-superspeed-setup.jpg" width="800">
 
-My 2020 ThinkPad P14s Gen 1 (Comet Lake xHCI, no EHCI) on Windows 98 SE, with the 1.x driver: a 7-port hub, USB Ethernet, USB Audio, a USB-to-SATA bridge, two flash drives and a mouse, all on the xHCI controller.
+My 2020 ThinkPad P14s Gen 1 on Windows 98 SE with a USB 3.0 hub, two UAS drives, USB Ethernet, USB Audio and a mouse. All run on the xHCI controller, the drives at SuperSpeed.
 
 <img src="images/xhci98-tb3-nvme-win7.jpg" width="800">
 
@@ -88,6 +88,7 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 
 - **Install:** run `INSTALL.BAT` and answer Y to "Install Thunderbolt 3 / USB4 support?" (see [Install with INSTALL.BAT](#install-with-installbat)). On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`nt\xhcicmf.inf`), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when asked: on Windows 2000 the first install of the filter needs that restart before the controller is used.
 - **Windows 98 SE and ME:** `INSTALL.BAT` prints the remaining steps: update the controller's entry (an unknown PCI device or PCI System Peripheral) from the driver directory. No filter is needed.
+- **The connection manager alone:** on Windows 2000 to 7 the installer can leave `xhci98.sys` and `xhciuas.sys` out and install `xhcicm.sys` alone, for a computer whose USB 3 controllers run another driver (untick the USB drivers, or `INSTALL /console /cmonly`). On Windows 8 and 8.1 that is the only install it offers: Windows' own USB 3 driver runs the USB controllers there. On the 64-bit editions of 8 and 8.1 the driver loads only in test-signing mode (Secure Boot off) or with signature enforcement disabled.
 - **Names:** the controller shows under the names in the table above. On Windows 2000 to 7 its PCI ports show as "xHCI98 Thunderbolt PCI Bridge" or "xHCI98 USB4 PCI Bridge": still Windows' own PCI bridges, with the filter on them.
 - **Approval:** by default (`XhciCmApprove` `1`) every device plugged into the port is approved at once. **A device with a PCI Express tunnel can read and write all of the machine's memory**, and these systems cannot fence it off. Where people you do not trust can reach the port, set `XhciCmApprove` to `0`: then only devices the BIOS connected at power-on work. Nothing is remembered: a re-plugged device is approved again by the same rule.
 

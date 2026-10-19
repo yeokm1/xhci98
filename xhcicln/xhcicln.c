@@ -95,6 +95,7 @@
  * section 7.6; roadmap-usb4.md task 42-A.3), and every question lists its
  * choices one a line and ends "Enter for [x]". */
 static INST_WRAP clnWrap;
+static int cln_read_line(char *line, int cap);
 static int clnWrapReady;
 
 static void say(const char *fmt, ...)
@@ -1500,7 +1501,7 @@ static int cln_ask(int count)
     for (;;) {
         say_flush();
         inst_wrap_input(&clnWrap);
-        if (fgets(line, sizeof(line), stdin) == NULL) {
+        if (!cln_read_line(line, sizeof(line))) {
             say("\n");
             return 0;
         }
@@ -1565,7 +1566,268 @@ static int cln_run_9x(void)
     return CLN_EXIT_DONE;
 }
 
-static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
+/* ========================================================================== */
+/* A stale xhcicm filter name (3.1.0.0, record 21 section 7.4)                  */
+/* ========================================================================== */
+
+typedef BOOL (WINAPI *PFN_SETREGPROP)(HDEVINFO, PSP_DEVINFO_DATA, DWORD,
+                                      const BYTE *, DWORD);
+
+#define CLN_FILTER_NAME "xhcicm"
+#define CLN_FILTER_BYTES 1024
+#define CLN_SPDRP_UPPERFILTERS 0x00000011UL
+#define CLN_SPDRP_LOWERFILTERS 0x00000012UL
+
+/* A line read from the console with its CR and LF taken off; 0 at the end
+ * of input. */
+static int cln_read_line(char *line, int cap)
+{
+    size_t n;
+
+    if (fgets(line, cap, stdin) == NULL) {
+        return 0;
+    }
+    n = strlen(line);
+    while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
+        line[--n] = '\0';
+    }
+    return 1;
+}
+
+/* 1 when the xhcicm service is registered (or cannot be ruled out). */
+static int cln_xhcicm_registered(void)
+{
+    HKEY k;
+    LONG r;
+
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                      "SYSTEM\\CurrentControlSet\\Services\\xhcicm", 0,
+                      KEY_READ, &k);
+    if (r == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        return 1;
+    }
+    return r != ERROR_FILE_NOT_FOUND;
+}
+
+/* One filter value's edit: the name taken out, or the value deleted; 1 done.
+ * (Unused while the pass lists only; kept with cln_stale_filters' fix path
+ * for the day it may write under the installer's lock.) */
+static int cln_set_value(HKEY k, const char *name, int act, const char *nf,
+                         size_t ob)
+{
+    LONG r;
+
+    if (act == INST_FD_SET) {
+        r = RegSetValueExA(k, name, 0, REG_MULTI_SZ, (const BYTE *)nf,
+                           (DWORD)ob);
+    } else if (act == INST_FD_DELETE) {
+        r = RegDeleteValueA(k, name);
+    } else {
+        r = ERROR_INSUFFICIENT_BUFFER;
+    }
+    if (r != ERROR_SUCCESS) {
+        say("    could not be removed (error %ld)\n", r);
+        return 0;
+    }
+    say("    removed\n");
+    return 1;
+}
+
+/* The filter values naming xhcicm with no xhcicm service on the machine:
+ * every CriticalDeviceDatabase entry's LowerFilters and UpperFilters
+ * (Windows 2000 and XP copy a boot-critical device's own filter values
+ * there when they install it, and every new device of that class then gets
+ * them) and every PCI devnode's, present or not. A filter named with no
+ * service stops a device (Code 39; Code 19 read on 2000 for an NVMe given
+ * the name from such a copy), so with fix each is taken out, the other
+ * names kept, the value deleted when nothing else is left. A 3.1.0.0 test
+ * build's uninstall cleaned the devices only. *found the values naming it
+ * (with fix: those that could not be cleaned); returns 1 when every key,
+ * entry and value was read (a value or key that is simply absent is no
+ * error), 0 when the reading was incomplete. */
+static int cln_stale_filters(int fix, int *found)
+{
+    static const char *const vals[2] = { "LowerFilters", "UpperFilters" };
+    static const DWORD props[2] = { CLN_SPDRP_LOWERFILTERS,
+                                    CLN_SPDRP_UPPERFILTERS };
+    PFN_SETREGPROP setProp;
+    HKEY root;
+    HKEY k;
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    DWORD i;
+    DWORD nn;
+    DWORD type;
+    DWORD n;
+    DWORD e;
+    LONG r;
+    char name[256];
+    char id[CLN_ID_CHARS];
+    char f[CLN_FILTER_BYTES];
+    char nf[CLN_FILTER_BYTES];
+    size_t ob;
+    int act;
+    int v;
+    int complete = 1;
+
+    *found = 0;
+    setProp = (PFN_SETREGPROP)GetProcAddress(api.SetupApi,
+                                             "SetupDiSetDeviceRegistryPropertyA");
+    if (fix && setProp == NULL) {
+        say("  not available: SetupDiSetDeviceRegistryPropertyA\n");
+        return 0;
+    }
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                      "SYSTEM\\CurrentControlSet\\Control\\CriticalDeviceDatabase",
+                      0, KEY_READ, &root);
+    if (r == ERROR_SUCCESS) {
+        for (i = 0;; i++) {
+            nn = sizeof(name);
+            r = RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL);
+            if (r == ERROR_NO_MORE_ITEMS) {
+                break;
+            }
+            if (r != ERROR_SUCCESS) {
+                say("  The CriticalDeviceDatabase could not be read whole "
+                    "(error %ld).\n", r);
+                complete = 0;
+                if (r == ERROR_MORE_DATA) {
+                    continue;
+                }
+                break;
+            }
+            r = RegOpenKeyExA(root, name, 0,
+                              fix ? KEY_QUERY_VALUE | KEY_SET_VALUE
+                                  : KEY_QUERY_VALUE, &k);
+            if (r != ERROR_SUCCESS) {
+                say("  CriticalDeviceDatabase\\%s could not be opened (error "
+                    "%ld).\n", name, r);
+                complete = 0;
+                continue;
+            }
+            for (v = 0; v < 2; v++) {
+                memset(f, 0, sizeof(f));
+                n = sizeof(f) - 2;
+                r = RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n);
+                if (r == ERROR_FILE_NOT_FOUND) {
+                    continue;
+                }
+                if (r != ERROR_SUCCESS) {
+                    say("  CriticalDeviceDatabase\\%s: %s could not be read "
+                        "(error %ld).\n", name, vals[v], r);
+                    complete = 0;
+                    continue;
+                }
+                if (type != REG_MULTI_SZ && type != REG_SZ) {
+                    continue;
+                }
+                act = inst_filter_drop(f, n + 1, CLN_FILTER_NAME, nf,
+                                       sizeof(nf), &ob);
+                if (act == INST_FD_NONE) {
+                    continue;
+                }
+                say("  CriticalDeviceDatabase\\%s: %s names %s\n", name,
+                    vals[v], CLN_FILTER_NAME);
+                if (!fix || !cln_set_value(k, vals[v], act, nf, ob)) {
+                    (*found)++;
+                }
+            }
+            RegCloseKey(k);
+        }
+        RegCloseKey(root);
+    } else if (r != ERROR_FILE_NOT_FOUND) {
+        say("  The CriticalDeviceDatabase could not be read (error %ld).\n", r);
+        complete = 0;
+    }
+    set = api.GetClassDevs(NULL, "PCI", NULL, DIGCF_ALLCLASSES);
+    if (set == INVALID_HANDLE_VALUE) {
+        say("  The PCI device list could not be opened (error %lu).\n",
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    for (i = 0;; i++) {
+        memset(&data, 0, sizeof(data));
+        data.cbSize = sizeof(data);
+        if (!api.EnumInfo(set, i, &data)) {
+            e = GetLastError();
+            if (e != ERROR_NO_MORE_ITEMS) {
+                say("  The PCI device list ended early (error %lu).\n",
+                    (unsigned long)e);
+                complete = 0;
+            }
+            break;
+        }
+        if (!api.GetInstanceId(set, &data, id, sizeof(id), NULL)) {
+            cln_copy(id, "(a PCI device)", sizeof(id));
+        }
+        for (v = 0; v < 2; v++) {
+            memset(f, 0, sizeof(f));
+            n = 0;
+            if (!api.GetRegProp(set, &data, props[v], &type, (PBYTE)f,
+                                sizeof(f) - 2, &n)) {
+                e = GetLastError();
+                if (e != ERROR_INVALID_DATA) {
+                    say("  %s: %s could not be read (error %lu).\n", id,
+                        vals[v], (unsigned long)e);
+                    complete = 0;
+                }
+                continue;
+            }
+            act = inst_filter_drop(f, n + 1, CLN_FILTER_NAME, nf, sizeof(nf),
+                                   &ob);
+            if (act == INST_FD_NONE) {
+                continue;
+            }
+            say("  %s: %s names %s\n", id, vals[v], CLN_FILTER_NAME);
+            if (!fix) {
+                (*found)++;
+                continue;
+            }
+            if (act == INST_FD_ERROR ||
+                !setProp(set, &data, props[v],
+                         act == INST_FD_SET ? (const BYTE *)nf : NULL,
+                         act == INST_FD_SET ? (DWORD)ob : 0)) {
+                say("    could not be removed (error %lu)\n",
+                    (unsigned long)GetLastError());
+                (*found)++;
+            } else {
+                say("    removed\n");
+            }
+        }
+    }
+    api.Destroy(set);
+    return complete;
+}
+
+/* The stale-name pass of a run: listed only, while xhcicm itself is not
+ * installed (while it is, its names are its own). Taking them out is the
+ * uninstall's step 0 (XHCIINST /uninstall from a 3.1.0.0 package, which
+ * runs it whatever is installed), gated, verified and serialised with the
+ * installer and the mark service; a second writer here could not be. */
+static void cln_stale_pass(void)
+{
+    int found;
+    int complete;
+
+    if (cln_xhcicm_registered()) {
+        return;
+    }
+    complete = cln_stale_filters(0, &found);
+    if (found > 0) {
+        say("\nThe Thunderbolt driver xhcicm is not installed, but %d filter "
+            "value(s) above still\nname it: a new bridge or NVMe drive would "
+            "not start (Code 39 or 19). Run\nINSTALL.BAT /uninstall from the "
+            "xhci98 3.1.0.0 package (or XHCIINST /uninstall) to\ntake them "
+            "out; XHCICLN only lists them.\n", found);
+    }
+    if (!complete) {
+        say("The filter values could not all be read (above).\n");
+    }
+}
+
+static int cln_run_nt_devnodes(unsigned long major, unsigned long minor,
+                               int wow64)
 {
     char why[640];
     int missing;
@@ -1778,6 +2040,22 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
 
 static int clnChecks;
 static int clnFailures;
+
+/* The NT run: the stale xhcicm names listed first (not by the 32-bit build
+ * on 64-bit Windows), then the old devnodes. */
+static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
+{
+    if (!wow64 && api.SetupApi == NULL) {
+        int rm;
+        if (cln_load_nt(&rm) > 0) {
+            return cln_run_nt_devnodes(major, minor, wow64);
+        }
+    }
+    if (!wow64) {
+        cln_stale_pass();
+    }
+    return cln_run_nt_devnodes(major, minor, wow64);
+}
 
 static void cln_check(int ok, const char *what)
 {

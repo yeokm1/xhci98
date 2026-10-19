@@ -1,6 +1,9 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 11, 2026-10-18 (the window, the helper, the uninstall
+Status: revision 13, 2026-10-19 (the connection manager alone, and
+Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
+service and the machine-wide key); revision 11, 2026-10-18 (the window,
+the helper, the uninstall
 from Add/Remove Programs; see below); revision 10, 2026-10-16 (the
 console, the questions and the
 install directory; see below); revision 9, 2026-10-16 (the USB tree
@@ -154,6 +157,37 @@ installer"; record 26 section 12): the safe-removal mark service
   again before step 5.
 - **Section 9.5**: the mark service's copy in `system32`.
 - **Section 13**: D16.
+
+Revision 13, 2026-10-19 (roadmap-usb4.md task 42-A.21; record 26 draft 8;
+record 21 section 3.5). The owner, 2026-10-19: "The installer should give
+people the option not to install xhci98 but just the CM. Reason is that in
+case some Win 8 users which have native USB3 but not USB4 or TB may want
+it". What changes here:
+
+- **Section 4.5, new**: the connection manager alone. On 2000 to 7 the
+  USB drivers (`xhci98.sys`, `xhciuas.sys` and on x86 `xhcihlpr.sys`)
+  can be left out of a run that carries the connection manager
+  (`/cmonly`, or the window's box unticked); on Windows 8 and 8.1 that
+  is the only run there is; on 98 SE and ME the USB drivers stay
+  required. A run without them plans, stages and installs only the
+  Thunderbolt group, asks no USB value, and leaves an installed
+  `xhci98.sys` exactly as it is.
+- **Section 4.3**: Windows 8 and 8.1 (NT 6.2 and 6.3) are admitted for
+  the connection manager alone; 10 and later stay refused, as before. The
+  version is read through `ntdll.dll`'s `RtlGetVersion` on NT, because
+  `GetVersionEx` in a program with no compatibility manifest answers 6.2
+  on 8.1, 10 and 11 alike.
+- **Section 5.10**: the note reads the connection manager's binary when
+  the USB drivers are not in the run, and on 8 and 8.1 x64 adds that
+  test-signing mode can be turned on only with Secure Boot off.
+- **Section 7.1**: `/cmonly`.
+- **Section 8.5**: with the USB drivers out of the run the Thunderbolt
+  support is in it unasked: it is all the run installs.
+- **Section 9.1**: the warning names the connection manager alone when
+  the `xhci98` service is not registered and `xhcicm`'s is (a machine
+  where only the connection manager was installed); the typed word stays.
+- **Sections 9.5 and 5.1 step 12**: the mark service on 8 and 8.1 too.
+- **Section 13**: D17 to D19.
 
 The tool never ships `devcon` or any other Microsoft file, never drives
 Windows 98's 16-bit setup engine (`SETUPX`) through anything undocumented,
@@ -399,7 +433,21 @@ not start there: Windows reports it is not a valid application, which
 `INSTALL.BAT` never invites, since it picks by `PROCESSOR_ARCHITECTURE`);
 an x64 flavour directory given to the 32-bit tool or the reverse
 (section 4.2 items 2, 5 and 6). A Windows newer than 7 or older than 2000
-or 98 SE is refused too: it is not a target of this package.
+or 98 SE is refused too: it is not a target of this package. The one
+exception (revision 13) is Windows 8 and 8.1, NT 6.2 and 6.3, admitted for
+the connection manager alone (section 4.5); 10 and later stay refused.
+
+On NT the version is read through `ntdll.dll`'s `RtlGetVersion`, looked
+up at run time, and `GetVersionExA` is the fallback where the routine is
+missing (2000 and XP report their own version through either). Windows
+8.1 and later answer `GetVersionEx` with 6.2 in a program whose manifest
+names no supported system, which the tool's do not, so before revision 13
+the refusal of 10 and 11 rested on that 6.2 being above 6.1; with 6.2
+admitted that reading cannot tell 8 from 11. A `GetVersionExA` answer of
+6.2 or above with no `RtlGetVersion` to read is refused for that reason.
+The rule is pure (`inst_os_kind`, section 10): 98 SE (4.10, build 2222
+or later) and ME (4.90) and NT 5.0 to 6.1 are full targets, NT 6.2 and 6.3
+the connection manager's alone, anything else refused.
 
 ### 4.4 The local copy
 
@@ -462,6 +510,83 @@ leaves out every file whose name starts with `stor98`
 would have the hardware wizard install Stor98 unasked. Where a flavour
 directory carries Stor98, the run names where it is and says the tool
 does not install it.
+
+### 4.5 The connection manager alone (revision 13)
+
+The owner, 2026-10-19: a user whose Windows already has a USB 3 driver
+(Windows 8 and 8.1 carry Microsoft's own, and on 2000 to 7 a controller
+vendor's may run) may want the Thunderbolt 3 / USB4 connection manager
+without this package's USB drivers. What the connection manager needs of
+the USB drivers is record 21 section 3.5: nothing, on NT; the devices a
+tunnel brings are driven by whatever driver Windows binds to them.
+
+**Which systems** (`inst_usb_decide`, pure, host-tested case by case):
+
+| System | The USB drivers | `/cmonly` |
+|---|---|---|
+| 98 SE, ME | required, as before | refused: "the connection manager alone is not offered on Windows 98 SE and ME" |
+| 2000, XP, XP x64, Vista, 7 | in the run unless left out; can be left out only when the package carries the connection manager | leaves them out; refused when the package carries no connection manager |
+| 8, 8.1 | never in the run, never offered | accepted, and changes nothing |
+
+98 SE and ME keep them required because those systems have no USB 3
+driver of their own: a machine with the connection manager and no
+`xhci98.sys` has every xHCI controller dark, the dock's controller behind
+a tunnel included, and on those two systems the connection manager's
+re-enumeration counts on `xhci98.sys` starting on a controller a tunnel
+adds (record 21 section 3.1). On 8 and 8.1 the USB drivers are not
+offered: this package's USB drivers have never been read on those
+systems, Windows' own `usbxhci.sys` runs every xHCI controller there, and
+a second driver for the same class id is what the plan would then
+propose. A package without the connection manager's files is refused on
+8 and 8.1 ("this package carries no Thunderbolt or USB4 driver: there is
+nothing to install on Windows 8 or 8.1").
+
+**A run without the USB drivers** is the Thunderbolt question's N
+(section 8.5) applied to the other groups: `xhci98.inf` and `xhciuas.inf`
+are left out of the run - not planned, not staged, no verdict on their
+groups, no USB value asked (a `/set` of an `Xhci*` value of those INFs is
+refused, as one the run cannot apply) - and the Thunderbolt support is
+in the run unasked (section 8.5). The package check (section 4.2) is
+unchanged: the package must still be whole. The local copy is the whole
+package, as before, so a later run with the USB drivers ticked uses the
+same copy; on NT nothing searches that copy, so the INFs it holds and
+does not stage are offered to no device. An `xhci98.sys` or `xhciuas.sys`
+already installed is neither updated nor removed: its devices are not
+part of the run, its group gets no verdict, and the plan says "The xHCI98
+USB drivers already installed stay as they are (INSTALL.BAT /uninstall
+removes the whole package)". An unfinished `/restage` that owes
+`xhci98.inf` or `xhciuas.inf` is refused under `/cmonly` with "run it
+again with the USB drivers to finish it", as section 8.5 refuses one that
+owes the Thunderbolt INFs under N. The bundled Stor98 is not offered on 8
+and 8.1 (it is not one of its targets; the decision is the owner's); on
+2000 to 7 it stays what record 26 section 6.3 says, whichever drivers are
+in the run.
+
+**From one to the other.** A machine with the connection manager alone
+gets the USB drivers from a later run with them in it, which installs
+them as a fresh install (a controller another vendor's driver runs is
+foreign and left, decision D3). The way back, from the whole package to
+the connection manager alone, is the uninstall (section 9) followed by a
+run with `/cmonly`: a run that leaves the USB drivers out never removes
+them, because removing the controller's driver on an xHCI-only machine
+takes its USB keyboard and mouse, which only the uninstall's warning and
+typed word may do (D17). One Add/Remove Programs entry covers both
+(record 26 section 9.1), its name following what the machine has.
+
+**On Windows 8 and 8.1** the NT route of section 5 runs for the
+Thunderbolt group as on Vista and 7: the INFs' `.NTx86.6.0` and
+`.NTamd64.6.0` models sections (the highest decoration not above 6.2,
+section 5.2), the driver store and its trap (5.7, from 6.0 on), the
+filter's forced install (5.5), the mark service (9.5) and the test-signing
+note on x64 (5.10). None of it has been read on 8 or 8.1: no guest of
+either exists here. The x64 connection manager loads there only as on
+Vista x64 and 7 x64 - test-signing mode, which 8 and 8.1 let a user turn
+on only with Secure Boot off in the firmware setup, or a start with
+driver signature enforcement disabled (Advanced startup, Startup
+Settings) - because 64-bit Windows 8 enforces kernel-mode signatures and
+the package's x64 binaries carry the project's test signature at most
+(design record 19). The installer never signs anything and never changes
+a boot setting (D6).
 
 ## 5. The NT route: Windows 2000, XP, XP x64, Vista and 7
 
@@ -527,7 +652,8 @@ does not install it.
     way, whatever its verdict: a `LowerFilters` value naming `xhcicm`
     exists only while the `xhcicm` service is registered. With that
     service registered and the Thunderbolt component in the run, on
-    Windows 2000 to 7, the mark service is installed or updated and
+    Windows 2000 to 8.1 (8 and 8.1 from revision 13), the mark service
+    is installed or updated and
     started (section 9.5); with it registered and the component not in
     the run, nothing of the marks changes; with no `xhcicm` service (an
     update that ended without it, a name left on a machine where the
@@ -964,6 +1090,15 @@ The run goes on if the user confirms. The tool never runs
 `bcdedit`. What the value holds in test-signing mode and on an F8 start is
 read on the legs (section 12).
 
+Revision 13 (section 4.5): in a run without the USB drivers the signature
+read is the x64 `xhcicm.sys`'s and the note names the connection manager
+(its device, the NHI, is then the one that shows the code), and on
+Windows 8 and 8.1 x64 the note adds that test-signing mode can be turned
+on only with Secure Boot off in the computer's firmware setup, and that
+the other way is Advanced startup's Startup Settings, "Disable driver
+signature enforcement", at every start. The same reading of
+`SystemStartOptions` is made; it is unread on 8 and 8.1.
+
 ### 5.11 `XHCICLN` stays the user's (owner, 2026-10-15)
 
 The tool never runs `XHCICLN`: no question, no switch, no call path.
@@ -1183,6 +1318,7 @@ these systems.
 | `/set Name=Value` | answer one registry question, repeatable; validated against the value table and the system (section 8.1); applies even where the question would not be asked |
 | `/force` | reinstall a current device, and install over a newer group (section 5.4) |
 | `/thunderbolt` | include the Thunderbolt 3 / USB4 support without asking (section 8.5) |
+| `/cmonly` | (revision 13) the connection manager alone: the USB drivers left out of the run, the Thunderbolt support in it unasked (section 4.5); refused on 98 SE and ME, with `/uninstall`, `/devices` and `/eject`, and where the package carries no connection manager; on 8 and 8.1 every install run is one |
 | `/to <path>` | the install directory (section 9.6) without asking; refused with `/uninstall`, `/devices` and `/eject`, and checked as a typed answer is (a path that fails refuses the run, exit 1) |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
@@ -1492,6 +1628,7 @@ host-tested case by case):
 | a device `xhcicm.inf` matches is present (section 8.2's detection) | yes | Y |
 | none is present | yes - some laptops show their controller only while a device is plugged in, or only with a BIOS setting (the P14s with Assist on and pre-boot support off) | N |
 | `/thunderbolt` | no | Y, present or not |
+| the USB drivers out of the run (`/cmonly`, Windows 8 and 8.1; revision 13, section 4.5) | no | Y, present or not |
 | `/list` | no; the question and its default are shown | the default |
 | the package carries no Thunderbolt driver | no | - |
 
@@ -1550,6 +1687,22 @@ or a USB controller another driver runs, before you go on.
 Type REMOVE and press Enter to go on; anything else cancels.
 ```
 
+Where the `xhci98` service is read as not registered and `xhcicm`'s as
+registered (revision 13: a machine that has the connection manager alone;
+read before anything else, and on NT only), the first lines read
+instead:
+
+```
+*** This removes the xHCI98 Thunderbolt 3 / USB4 connection manager. ***
+Devices connected through a Thunderbolt or USB4 port stop working when it
+is removed. Close every program that uses one, and save your work, before
+you go on.
+```
+
+and the question "Remove the connection manager?"; the typed word is the
+same. Any other reading, an unreadable one included, gives the first
+text.
+
 Only `REMOVE` goes on. With no console answer (end of input) the tool
 refuses unless `/yes` is given, which is for the legs and scripts; `/yes`
 is the one way past the word, and the tool says it was used. `/list`
@@ -1584,7 +1737,19 @@ after it, reports what was done, and tells the user to restart and run
    `DIGCF_ALLCLASSES`, no `DIGCF_PRESENT`), has its `SPDRP_LOWERFILTERS`
    read, and `xhcicm` is removed from each value that names it, the other
    names kept in order and the value deleted with a zero length when
-   nothing else is in it, each read back. Then the service's `Marks`
+   nothing else is in it, each read back; and every entry of
+   `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase` has
+   `xhcicm` taken out of its `LowerFilters` and its `UpperFilters` the
+   same way, every entry and not only the ids the filter INF names (the
+   copies Windows makes there of a boot-critical device's own filter
+   values when it installs it: a marked unit's `LowerFilters` into
+   `pci#cc_0604` or `pci#cc_010802`, the filter INF's `UpperFilters` into
+   the tunnel port's id - read on 2000 on 2026-10-19, then on XP and 7 x86
+   for a marked bridge's driver installed again; roadmap-usb4 42-A.24 -
+   which would otherwise give every new bridge or NVMe controller, a
+   boot disk among them, a filter that no longer exists), a key that cannot
+   be read whole or a removal that does not read back failing step 0 as a
+   device's does. Then the service's `Marks`
    records go, then its `system32` copy (one in use renamed to
    `<name>.DEL` and that name deleted at the restart, so a later install
    of the same name is not deleted with it; an earlier `.DEL` deleted or
@@ -1596,7 +1761,14 @@ after it, reports what was done, and tells the user to restart and run
    "steps left", keeping `xhcicm`'s service and file and the mark
    service's registration (and, when the marks themselves were not all
    removed, its records; a copy that fails after them leaves the records
-   already deleted), and the next run resumes from what is left. The same step runs at the end of any install or update that
+   already deleted), and the next run resumes from what is left. The
+   database is taken first, as the source new devices take the name from,
+   and once every value is out both the database and the devices are read
+   once more before the records and the service go, since Windows takes no
+   lock of the installer's and a device found meanwhile may have taken the
+   name from a copy. Step 0 needs neither a registered `xhcicm` nor a
+   record, so the uninstall of a 3.1.0.0 package cleans what a test build
+   left; `XHCICLN` only lists such values and points at it. The same step runs at the end of any install or update that
    leaves no `xhcicm` service (section 5.1 step 12).
 1. **The filter hosts.** For each: `xhcicm` is removed from its
    `UpperFilters` multi-string and the rest kept in order
@@ -1806,7 +1978,8 @@ deferred on NT, and `WININIT.INI` is never edited.
   advapi32 are untouched.
 
 **The safe-removal mark service** (revision 12; record 21 section 7.4,
-revision 3, decision M8), Windows 2000 to 7 only. Its executable is never
+revision 3, decision M8), Windows 2000 to 7, and 8 and 8.1 from
+revision 13 (section 4.5), never 98 SE or ME. Its executable is never
 in the install directory: a program the service controller starts as
 `LocalSystem` sits where only administrators and the system can replace
 it. The tool copies the package's `tools\xhcimark\XHCIMARK.EXE` (32-bit
@@ -1938,7 +2111,12 @@ and the tool links the same file:
 - (revision 10) the console's word wrap and width, the questions' text
   (`inst_value_question`, `inst_yesno_question`, `inst_dir_question`),
   the install directory's checks and default, and `DevicePath`'s removal
-  of a chosen directory's copies.
+  of a chosen directory's copies;
+- (revision 13) the system's kind (`inst_os_kind`: a full target, the
+  connection manager's alone, refused) and its name, the USB drivers'
+  decision (`inst_usb_decide`, section 4.5), the Add/Remove Programs name
+  and the uninstall warning by what is registered, and the models
+  section chosen for 6.2 and 6.3.
 
 The suite reads `src\xhci98.inf`, `src\xhci98-amd64.inf`, the two UAS INFs
 and, once task 39-A.1 has merged, the `src\cm\` INFs, and checks that each
@@ -2093,6 +2271,20 @@ the user.
   first, whenever no `xhcicm` service is left; and the Advanced dialog
   does not yet offer the service's `Restart` (it is set by hand under
   `Services\xhcimark\Parameters`).
+- **D17** (revision 13; the owner's request of 2026-10-19, the choices
+  below the orchestrator's) The connection manager alone: offered on 2000
+  to 7 by `/cmonly` or the window's box, the only install on 8 and 8.1,
+  refused on 98 SE and ME; a run without the USB drivers never updates
+  or removes an installed `xhci98.sys`, and the way back from the whole
+  package is the uninstall and a run with `/cmonly` (section 4.5). Not
+  taken: removing the USB drivers in an install run that leaves them out
+  (it would take an xHCI-only machine's keyboard without the uninstall's
+  warning).
+- **D18** (revision 13) Windows 8 and 8.1 admitted for the connection
+  manager alone, read through `RtlGetVersion`; 10 and later refused as
+  before; the bundled Stor98 not offered on 8 and 8.1 (section 4.5).
+- **D19** (revision 13) The mark service on 8 and 8.1 as on 2000 to 7
+  (section 9.5).
 
 ## 14. Open, and the risks
 
@@ -2108,6 +2300,13 @@ the user.
   section 8 as they stand on 2026-10-15.
 - `SystemStartOptions` as the test-signing signal is a reading to take,
   not a documented contract; the tool's note is advice, never a refusal.
+- Windows 8 and 8.1 (revision 13) have no guest here: the connection
+  manager's install, its filter's (whose INF includes `machine.inf`'s
+  `PCI_DRV` sections, read on 2000, XP and 7 only), the driver's imports
+  (the import gate holds the x86 driver to Windows 98's evidence and
+  Windows 2000's exports and the amd64 driver to NT 5.2's; Vista and 7
+  are read in guests; no export table of 8 is in the tree; record 21
+  section 3.5) and the mark service are unread there.
 
 ## 15. Files
 

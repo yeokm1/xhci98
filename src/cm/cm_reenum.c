@@ -381,6 +381,9 @@ VOID CmRegPublish(PCM_FILTER filter)
         filter->InFlight = 0;
         filter->Held = 0;
         filter->HeldBy = NULL;
+        /* A new publication: an eject's hold ended before the withdrawal
+         * completed (it holds a reference), so none is carried over. */
+        filter->EjectHold = 0;
         cmRegSerial++;
         filter->Serial = cmRegSerial;
         KeClearEvent(&filter->Rundown);
@@ -765,26 +768,89 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
 
 /*
  * Whether every function behind a bridge is without a device stack: each
- * PDO its last BusRelations reported has nothing attached (an eject, a
- * disable or no driver removed or never built its stack), and that answer
- * was not truncated. Whatever put a stack back - a re-enable, a driver
- * installed - shows as an attached device, so no state is remembered per
- * PDO. The snapshot's PDOs are those pci.sys still reports, so they are
- * not yet deleted. Under the lock.
+ * PDO its last BusRelations reported has nothing attached, or only the
+ * child filter that answer put on it with nothing above it (an eject, a
+ * disable or no driver removed or never built its stack: CmPortsStackless),
+ * and that answer was not truncated. Whatever put a stack back - a
+ * re-enable, a driver installed - shows as an object attached above the
+ * child, so no state is remembered per PDO. The snapshot's PDOs are those
+ * pci.sys still reports, so they are not yet deleted; a child on the
+ * attachment list is not yet deleted either (it leaves the list before
+ * IoDeleteDevice). Under the lock.
  */
 static BOOLEAN cmEjectReady(PCM_FILTER bridge)
 {
     ULONG i;
+    PDEVICE_OBJECT pdo;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    ULONG busChild;
+    ULONG addDev;
+    ULONG above;
 
     if (!bridge->Published || bridge->Gone || bridge->SnapTruncated) {
         return FALSE;
     }
     for (i = 0; i < bridge->SnapCount; i++) {
-        if (((PDEVICE_OBJECT)bridge->Snap[i])->AttachedDevice != NULL) {
+        pdo = (PDEVICE_OBJECT)bridge->Snap[i];
+        if (pdo->AttachedDevice == NULL) {
+            continue;
+        }
+        busChild = 0;
+        addDev = 0;
+        above = 0;
+        for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+            f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+            if (f->Common.Pdo != pdo) {
+                continue;
+            }
+            if (f->Common.Kind == CM_KIND_CHILD && !f->AddDev) {
+                busChild = 1;
+                if (f->Common.Self->AttachedDevice != NULL) {
+                    above = 1;
+                }
+            } else {
+                addDev = 1;
+            }
+        }
+        if (!CmPortsStackless(1, busChild, addDev, above)) {
             return FALSE;
         }
     }
     return TRUE;
+}
+
+BOOLEAN CmRegStartAllowed(PCM_FILTER filter)
+{
+    KIRQL irql;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    PCM_FILTER held;
+    ULONG i;
+
+    held = NULL;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (e = cmRegFilters.Flink; e != &cmRegFilters && held == NULL;
+         e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
+        if (!f->EjectHold) {
+            continue;
+        }
+        for (i = 0; i < f->SnapCount; i++) {
+            if (f->Snap[i] == (PVOID)filter->Common.Pdo) {
+                held = f;
+                break;
+            }
+        }
+    }
+    /* Refused whoever owns the member now (a claim recomputed meanwhile
+     * does not end the teardown); the owner, used under the lock only as
+     * its other notes are, is only where the note goes. */
+    if (held != NULL && held->Owner != NULL) {
+        CmLogNote(held->Owner, "cm.reenum.eject.start-refused", held->Bdf);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return (BOOLEAN)(held == NULL);
 }
 
 /* ---- the marks (record 21 section 7.4, revision 3; task 42-A.5) ------- */
@@ -1729,6 +1795,15 @@ BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
 
 static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask);
 
+/* The host interface there and not draining a loss: a member's held work
+ * and its owed skipped change are consumed only then, by every path (the
+ * exposure reads the bridge and a post would undo the loss's own
+ * reconciliation; record 21 section 5.5). */
+static BOOLEAN cmTransport(PCM_NHI nhi)
+{
+    return (BOOLEAN)(CmLiveTransport(&nhi->Live) && !nhi->Reenum.LossDrain);
+}
+
 /* Member i's exposure and its route's call: the stor98 UP first
  * (cm_nvlink.h, obligation 1), then the invalidation or the worker's
  * post (with a marking window when `mark`); with `expose` FALSE the call
@@ -1768,7 +1843,10 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
  * finds the gate down. The exposure is still offered, so the tunnel it
  * names is recorded for the held one (CmNvlinkExpose publishes nothing
  * while the gate is up). Down, any work held before is folded into this
- * call's flags and FALSE is returned. No other member is looked at.
+ * call's flags and FALSE is returned - unless the host interface is lost
+ * (cmTransport): the loss's own call is then made alone and the held work
+ * and owed change kept for the pass that finds the transport back. No
+ * other member is looked at.
  */
 static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
                       BOOLEAN *fresh, ULONG tunnel, BOOLEAN *mark,
@@ -1778,28 +1856,37 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
     ULONG before;
     BOOLEAN up;
     BOOLEAN missed;
+    BOOLEAN live;
 
     r = &nhi->Reenum;
     *mark = FALSE;
+    live = cmTransport(nhi);
     before = r->Port[i].Held;
     up = CmNvlinkHeld(nhi, r->Port[i].Bdf);
     if (up) {
-        if (*expose) {
+        if (*expose && live) {
             (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, *fresh, tunnel);
         }
-        if ((before & CM_HELD_REENUM) == 0) {
+        if ((before & (CM_HELD_REENUM | CM_HELD_LOSS)) == 0) {
             r->Holds++;
             CmLogNote(nhi, "cm.reenum.held", r->Port[i].Bdf);
         }
     }
     missed = (BOOLEAN)(r->Port[i].Missed != 0);
-    if (CmNvlinkHoldReenum(&r->Port[i].Held, up, &missed, removeVanished,
-                           fresh)) {
+    if (CmNvlinkHoldReenum(&r->Port[i].Held, up, live, &missed,
+                           removeVanished, fresh)) {
         /* Its publication mode held with it (record 22 section 7.7, U25):
-         * exposing if this call or an owed change it took in exposes. */
-        r->Port[i].HeldExpose |= (*expose || r->Port[i].MissedExpose) ? 1UL
-                                                                      : 0UL;
+         * exposing if this call or an owed change it took in exposes. The
+         * loss's call (CM_HELD_LOSS) exposes nothing and changes no mode. */
+        if (live) {
+            r->Port[i].HeldExpose |= (*expose || r->Port[i].MissedExpose)
+                                         ? 1UL
+                                         : 0UL;
+        }
         return TRUE;
+    }
+    if (!live) {
+        return FALSE;
     }
     if (r->Port[i].HeldExpose) {
         *expose = TRUE;
@@ -1875,7 +1962,8 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
          * 7.7, decision U25), which the USB4 profile's containment RESYNC
          * and its recovery's take - unless an owed exposing change is paid
          * by this call. */
-        expose = (BOOLEAN)(!none || r->Port[i].MissedExpose != 0);
+        expose = (BOOLEAN)(!none || (r->Port[i].MissedExpose != 0 &&
+                                     cmTransport(nhi)));
         /* A member whose stor98 acknowledgement is pending waits alone;
          * every other member is exposed and called now (task 42-A.12). */
         if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel, &mark, &expose)) {
@@ -2335,6 +2423,7 @@ VOID CmReenumService(PCM_NHI nhi)
     PCM_REENUM r;
     KIRQL irql;
     PCM_FILTER f;
+    PCM_FILTER ejHeld[XHCI_TBT_MAX_TUNNELS];
     ULONG pending;
     ULONG stale;
     ULONG mask;
@@ -2389,6 +2478,9 @@ VOID CmReenumService(PCM_NHI nhi)
      * population, and still no function with a stack behind it. One that
      * no longer holds is dropped and logged; the hook is called after the
      * lock is released. */
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        ejHeld[i] = NULL;
+    }
     KeAcquireSpinLock(&cmRegLock, &irql);
     pending = r->EjectPending;
     r->EjectPending = 0;
@@ -2416,6 +2508,16 @@ VOID CmReenumService(PCM_NHI nhi)
             stale |= 1UL << i;
         } else {
             taken = 1;
+            if (r->EjectHook != NULL) {
+                /* Held with the eligibility, under the lock: a function
+                 * found stackless here cannot start before its tunnel is
+                 * torn down (CmRegStartAllowed). The reference keeps the
+                 * bridge from withdrawing (and so from a new publication)
+                 * until the hook has returned. */
+                f->EjectHold = 1;
+                f->InFlight++;
+                ejHeld[i] = f;
+            }
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
@@ -2431,6 +2533,12 @@ VOID CmReenumService(PCM_NHI nhi)
         CmLogNote(nhi, "cm.reenum.eject", r->Port[i].Bdf);
         if (r->EjectHook != NULL) {
             r->EjectHook(r->EjectContext, r->Port[i].Bdf);
+            if (ejHeld[i] != NULL) {
+                KeAcquireSpinLock(&cmRegLock, &irql);
+                ejHeld[i]->EjectHold = 0;
+                cmRegDrop(ejHeld[i]);
+                KeReleaseSpinLock(&cmRegLock, irql);
+            }
         } else {
             /* Under the firmware connection manager there is no
              * per-device teardown: the tunnel stays up and the user
@@ -2457,8 +2565,7 @@ VOID CmReenumService(PCM_NHI nhi)
         missed = (BOOLEAN)(r->Port[i].Missed != 0);
         act = CmNvlinkHoldRun(&r->Port[i].Held,
                               CmNvlinkHeld(nhi, r->Port[i].Bdf),
-                              (BOOLEAN)(CmLiveTransport(&nhi->Live) &&
-                                        !r->LossDrain),
+                              cmTransport(nhi),
                               (BOOLEAN)(r->Reenum != 0),
                               (BOOLEAN)((cmFlags(nhi, i) & CM_PORT_ACTIVE) !=
                                         0),
@@ -2474,6 +2581,15 @@ VOID CmReenumService(PCM_NHI nhi)
         if (act & CM_HELD_DO_RELEASE) {
             cmReleaseHeld(nhi, (BOOLEAN)((act & CM_HELD_DO_FAIL) != 0),
                           1UL << i);
+        }
+        if (act & CM_HELD_DO_LOSS) {
+            /* The loss's own call held behind the gate (NT's unavailable
+             * reconciliation): the removal alone, whatever the transport,
+             * and behind the retirement barrier too - a removal with no
+             * exposure, which the barrier's own request may not come to
+             * replace while the host stays contained. */
+            cmReenumOne(nhi, i, TRUE, FALSE, CM_NVLINK_TUNNEL_NONE, FALSE,
+                        FALSE);
         }
         if (act & CM_HELD_DO_REENUM) {
             /* An owed skipped change paid by this call too: its marking
@@ -2492,9 +2608,14 @@ VOID CmReenumService(PCM_NHI nhi)
             }
             if ((nhi->RecBarred & (1UL << i)) != 0) {
                 /* Behind record 22 section 7.7's retirement barrier: the
-                 * held call is owed until it is lifted. */
+                 * held call is owed until it is lifted; a loss call it
+                 * carried is made now, alone, as CM_HELD_DO_LOSS is. */
                 r->Port[i].Missed = 1;
                 r->Port[i].MissedExpose |= heldExpose ? 1UL : 0UL;
+                if (held & CM_HELD_LOSS) {
+                    cmReenumOne(nhi, i, TRUE, FALSE, CM_NVLINK_TUNNEL_NONE,
+                                FALSE, FALSE);
+                }
             } else {
                 r->Port[i].Missed = missed ? 1UL : 0UL;
                 if (!missed) {
@@ -2514,8 +2635,9 @@ VOID CmReenumService(PCM_NHI nhi)
         }
     }
     /* A change skipped while a member was not active, now that it is;
-     * the debt stays until a call is actually made. */
-    for (i = 0; i < r->Members && r->Reenum != 0; i++) {
+     * the debt stays until a call is actually made, and while the host
+     * interface is lost (cmTransport). */
+    for (i = 0; i < r->Members && r->Reenum != 0 && cmTransport(nhi); i++) {
         if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE) &&
             (nhi->RecBarred & (1UL << i)) == 0 &&
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS &&
