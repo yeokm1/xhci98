@@ -1,0 +1,375 @@
+; xhci98.inf - the successor xHCI host controller driver, the 32-bit package
+;
+; xhci98.sys is a monolithic bus driver (design record 13): it replaces
+; usbport.sys, the hub driver and the composite parent, so this file installs
+; it in TWO roles from one binary - as the function driver of the PCI xHCI
+; controller, and as the function driver of the root hub the controller
+; creates under a project-owned hardware id, never USB\ROOT_HUB, which the
+; OS's own usbhub.sys claims on every NT target (roadmap-hcd.md, decisions
+; table). Device PDOs are children of that root hub, or of the external hub
+; they sit behind, which the bus presents as a third role of the same binary
+; under USB\XHCI98_HUB or USB\XHCI98_HUB30 (task 33.4); a composite device's
+; function PDOs are children of its composite parent, a fourth role under
+; USB\XHCI98_COMPOSITE (task 36.43).
+;
+; Since 2.4.0.0 (task 38.8; design record 13 section 10.13) the four ids are
+; under USB\, as a device id's first component names its enumerator; they
+; were XHCI98\ROOT_HUB, XHCI98\HUB, XHCI98\HUB30 and XHCI98\COMPOSITE. This
+; file names only the new ones (a clean move): an update gives each root
+; hub, hub and composite device a new devnode, and the old ones stay
+; non-present until XHCICLN.EXE (tools\xhcicln\) removes them, if ever.
+; src\xhci_hub.h spells the four once, and the gate ties these lines to it
+; (HCD-IDSRC) and refuses any other USB\XHCI98_ id here (HCD-USBRES).
+;
+; Written as task 25.8's scaffold INF and stageable since 26-A.1 removed the
+; scaffold marker from the image; the root hub's id is the one task 25.4
+; chose (design record 13, section 8). Its first install was task 26-V.0's.
+;
+; The install-path rules are the ones the miniport's INF carried until
+; 1.2.0.0, and scripts\inf-gate\check-inf.ps1 enforces them: Windows 98 SE and ME read the undecorated
+; sections and load the driver through *NTKERN/NTMPDriver; Windows 2000 and
+; 32-bit XP the .NTx86 sections, as a kernel service; 32-bit Vista and
+; Windows 7 the NT 6.x models section, which copies the driver alone.
+;
+; ASCII only, CRLF line endings.
+;
+; The OS supplies usbd.sys - the class drivers above the HCD's device PDOs
+; import its helper exports - and usbui.dll, the property-page provider,
+; through LayoutFile exactly as for the miniport. usbport.sys and usbhub.sys
+; are NOT fetched: the HCD replaces both.
+
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+LayoutFile=layout.inf
+; Must equal src\xhci_version.h.
+DriverVer=10/19/2026,3.1.0.0
+
+[Manufacturer]
+%Mfg%=XhciModels,NTx86.6.0
+
+[XhciModels]
+%XhciDesc%=Xhci.Dev,PCI\CC_0C0330
+%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB
+%HubDesc%=Hub.Dev,USB\XHCI98_HUB
+%Hub30Desc%=Hub.Dev,USB\XHCI98_HUB30
+%CompositeDesc%=Comp.Dev,USB\XHCI98_COMPOSITE
+
+[XhciModels.NTx86.6.0]
+%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
+%RootHubDesc%=RootHub.Dev6,USB\XHCI98_ROOT_HUB
+%HubDesc%=Hub.Dev6,USB\XHCI98_HUB
+%Hub30Desc%=Hub.Dev6,USB\XHCI98_HUB30
+%CompositeDesc%=Comp.Dev6,USB\XHCI98_COMPOSITE
+
+[SourceDisksNames]
+1=%DiskName%,xhci98.sys,,
+
+[SourceDisksFiles]
+xhci98.sys=1
+xhcihlpr.sys=1
+xhci98.inf=1
+
+[DestinationDirs]
+DefaultDestDir=10
+Xhci.CopyFiles=10,System32\Drivers
+XhciHlpr.CopyFiles=10,System32\Drivers
+XhciMsi.DelFiles=10,System32\Drivers
+Xhci.CopyOS=10,System32\Drivers
+Xhci.CopyUI=11
+Inf.CopyFiles=17
+
+; --- Windows 98 SE and ME ---------------------------------------------------
+
+[Xhci.Dev]
+AddReg=Xhci.AddReg
+CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
+
+[Xhci.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,xhci98.sys
+HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
+HKR,,XhciLogVerbosity,0x00010003,2
+HKR,,XhciLogDebugView,0x00010003,0
+HKR,,XhciForceBulkOnly,0x00010003,0
+HKR,,XhciFastPollFsLs,0x00010003,0
+HKR,,XhciFirstEnumWaitMs,0x00010003,5000
+HKR,,XhciFirstEnumPortMs,0x00010003,2000
+HKR,,XhciIntelPortSwitch,0x00010003,0
+HKR,,XhciIntelIrqRoute,0x00010003,1
+HKR,,XhciTolerance,0x00010003,1
+HKR,,XhciIntervalCap,0x00010003,1
+HKR,,XhciAvgTrbEsit,0x00010003,0
+HKR,,XhciMaxTransferKB,0x00010003,1024
+HKR,,XhciInterruptMode,0x00010003,0
+HKR,,XhciPollIdleMs,0x00010003,50
+HKR,,XhciPollActiveMs,0x00010003,1
+HKR,,XhciPollFineTimer,0x00010003,0
+HKR,,XhciWideMap,0x00010003,0
+HKR,,XhciSelectiveSuspend,0x00010003,0
+HKR,,XhciSilentInstall,0x00010003,0
+HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
+HKR,,XhciAccept096,0x00010003,1
+; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20
+; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller
+; where the record offers it. Absent reads as the default written here.
+HKR,,XhciMsiAvoid,0x00010003,1
+HKR,,XhciStreamsOff,0x00010003,1
+HKR,,XhciResumeReinit,0x00010003,1
+HKR,,XhciIntelShutdownToEhci,0x00010003,1
+HKR,,XhciShutdownReset,0x00010003,0
+HKR,,XhciSuspendHaltDelay,0x00010003,1
+HKR,,XhciSuspendHaltTimeout,0x00010003,1
+HKR,,XhciAsmediaFlowControl,0x00010003,1
+HKR,,XhciTiIntervalCap,0x00010003,1
+HKR,,XhciStuckLinkReset,0x00010003,1
+HKR,,XhciStreamRingPad,0x00010003,1
+HKR,,XhciControlLinkNoOp,0x00010003,1
+HKR,,XhciIsochSpuriousSuccess,0x00010003,1
+HKR,,XhciAmdSuspendBitClear,0x00010003,1
+HKR,,XhciImodInterval250ns,0x00010003,160
+
+[RootHub.Dev]
+AddReg=RootHub.AddReg
+; The root hub copies NOTHING since 2.4.0.0 (task 38.8, decision D3), on any
+; path: the devnode exists only under a running xhci98.sys, and after an
+; update it is a new devnode at the start where the new binary already runs,
+; so a copy here would replace the running file from wherever the update came
+; from. The gate holds it with the hubs' rule (HCD-HUBCOPY).
+
+[RootHub.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,xhci98.sys
+; The root hub's Power tab, as Windows 98 SE's, ME's and NUSB's own INFs register it
+; for their root hubs (design record 13, section 8).
+HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"
+
+; An external hub (task 33.4; design record 13, section 10.11): the bus
+; serves it and presents it as a devnode under USB\XHCI98_HUB or
+; USB\XHCI98_HUB30,
+; bound to xhci98.sys again. Its sections copy NOTHING: the devnode exists
+; only under a running xhci98.sys, so the binary is on disk and loaded, and
+; a hub plugged in long after the install must not send the setup engine
+; looking for the original media. The gate holds that (HCD-HUBCOPY).
+[Hub.Dev]
+AddReg=Hub.AddReg
+
+[Hub.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,xhci98.sys
+HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"
+
+; A composite device (task 36.43; design record 13, section 10.12): the bus
+; splits it and presents its functions beneath a devnode of its own under
+; USB\XHCI98_COMPOSITE, bound to xhci98.sys again. Like a hub's, its sections
+; copy NOTHING (HCD-HUBCOPY) and, a composite not being a hub, register no
+; property page (HCD-COMPPAGE).
+[Comp.Dev]
+AddReg=Comp.AddReg
+
+[Comp.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,xhci98.sys
+
+; --- Windows 2000 and 32-bit XP ---------------------------------------------
+
+; The controller on Windows 2000 and 32-bit XP also gets xhcihlpr.sys, the
+; x86 helper (design record 18 section 15), for its timer service: a
+; boot-start service that hands ExSetTimerResolution to xhci98.sys, which
+; also loads on Windows 98 and so cannot import it. No Reboot here (owner,
+; 2026-10-13, decision H2): setup asks for a restart only by its own rules,
+; and a polled controller with XhciPollFineTimer 1 (0, off, by default)
+; keeps the clock tick until the next boot, when the helper is there. No
+; .HW section (no MSI below NT 6) and no DelService (xhcimsi was never
+; installed on these systems).
+[Xhci.Dev.NTx86]
+AddReg=Xhci.AddReg.NT
+CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI,XhciHlpr.CopyFiles
+
+[Xhci.Dev.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+AddService=xhcihlpr,,XhciHlpr.AddService
+
+[Xhci.AddReg.NT]
+HKR,,XhciLogVerbosity,0x00010003,2
+HKR,,XhciLogDebugView,0x00010003,0
+HKR,,XhciForceBulkOnly,0x00010003,0
+HKR,,XhciFastPollFsLs,0x00010003,0
+HKR,,XhciFirstEnumWaitMs,0x00010003,5000
+HKR,,XhciFirstEnumPortMs,0x00010003,2000
+HKR,,XhciIntelPortSwitch,0x00010003,0
+HKR,,XhciIntelIrqRoute,0x00010003,1
+HKR,,XhciTolerance,0x00010003,1
+HKR,,XhciIntervalCap,0x00010003,1
+HKR,,XhciAvgTrbEsit,0x00010003,0
+HKR,,XhciMaxTransferKB,0x00010003,1024
+HKR,,XhciInterruptMode,0x00010003,0
+HKR,,XhciPollIdleMs,0x00010003,50
+HKR,,XhciPollActiveMs,0x00010003,1
+HKR,,XhciPollFineTimer,0x00010003,0
+HKR,,XhciWideMap,0x00010003,0
+HKR,,XhciSelectiveSuspend,0x00010003,0
+HKR,,XhciSilentInstall,0x00010003,0
+HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
+HKR,,XhciAccept096,0x00010003,1
+; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20
+; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller
+; where the record offers it. Absent reads as the default written here.
+HKR,,XhciMsiAvoid,0x00010003,1
+HKR,,XhciStreamsOff,0x00010003,1
+HKR,,XhciResumeReinit,0x00010003,1
+HKR,,XhciIntelShutdownToEhci,0x00010003,1
+HKR,,XhciShutdownReset,0x00010003,0
+HKR,,XhciSuspendHaltDelay,0x00010003,1
+HKR,,XhciSuspendHaltTimeout,0x00010003,1
+HKR,,XhciAsmediaFlowControl,0x00010003,1
+HKR,,XhciTiIntervalCap,0x00010003,1
+HKR,,XhciStuckLinkReset,0x00010003,1
+HKR,,XhciStreamRingPad,0x00010003,1
+HKR,,XhciControlLinkNoOp,0x00010003,1
+HKR,,XhciIsochSpuriousSuccess,0x00010003,1
+HKR,,XhciAmdSuspendBitClear,0x00010003,1
+HKR,,XhciImodInterval250ns,0x00010003,160
+HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
+HKR,,Controller,1,01
+
+[RootHub.Dev.NTx86]
+AddReg=RootHub.AddReg.NT
+
+[RootHub.Dev.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+; The root hub's Power tab on every NT target: the provider each NT usb.inf
+; registers for its own root hubs (design record 13, section 8).
+[RootHub.AddReg.NT]
+HKR,,EnumPropPages32,,"usbui.dll,USBHubPropPageProvider"
+
+[Hub.Dev.NTx86]
+AddReg=RootHub.AddReg.NT
+
+[Hub.Dev.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+; As XP's own usb.inf installs its composite parent: the hub page an
+; earlier driver may have left on the devnode's key goes.
+[Comp.Dev.NTx86]
+DelReg=Comp.DelReg.NT
+
+[Comp.Dev.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Comp.DelReg.NT]
+HKR,,EnumPropPages32
+
+; --- 32-bit Vista and Windows 7 ---------------------------------------------
+
+; The controller on 32-bit Vista and 7 also gets xhcihlpr.sys, the x86
+; helper (design record 18): a boot-start service that hands
+; IoConnectInterruptEx and ExSetTimerResolution to xhci98.sys, which also
+; loads on Windows 98 and so cannot import them. A boot-start service starts
+; at the next boot, so this section asks for a restart (Reboot; owner,
+; 2026-10-09) - the only one in this file. An update from 2.3.0.0 or
+; 2.3.1.0 leaves no xhcimsi active beside it (record 18 section 15.7,
+; decision H3): its service deleted, and its file - loaded and in use -
+; deleted at the restart (DELFLG_IN_USE1, 0x00010000).
+[Xhci.Dev6.NTx86]
+AddReg=Xhci.AddReg.NT
+CopyFiles=Xhci.CopyFiles,XhciHlpr.CopyFiles
+DelFiles=XhciMsi.DelFiles
+Reboot
+
+[Xhci.Dev6.NTx86.HW]
+AddReg=Xhci.Msi.AddReg
+
+[Xhci.Dev6.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+AddService=xhcihlpr,,XhciHlpr.AddService
+DelService=xhcimsi
+
+[RootHub.Dev6.NTx86]
+AddReg=RootHub.AddReg.NT
+
+[RootHub.Dev6.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Hub.Dev6.NTx86]
+AddReg=RootHub.AddReg.NT
+
+[Hub.Dev6.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Comp.Dev6.NTx86]
+DelReg=Comp.DelReg.NT
+
+[Comp.Dev6.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Xhci.AddService]
+DisplayName=%XhciSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhci98.sys
+LoadOrderGroup=Base
+
+[Xhci.CopyFiles]
+xhci98.sys,,xhci98.tmp
+
+[XhciHlpr.AddService]
+DisplayName=%XhciHlprSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=0                         ; SERVICE_BOOT_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhcihlpr.sys
+
+[XhciHlpr.CopyFiles]
+xhcihlpr.sys,,xhcihlpr.tmp
+
+; The 2.3.x helper's file, deleted at the restart (record 18 section 15.7).
+[XhciMsi.DelFiles]
+xhcimsi.sys,,,0x00010000
+
+; Message-signalled interrupts on Vista and 7 (design record 15 section
+; 4.3, task 36.15): one message asked for in the controller's hardware key.
+; NOCLOBBER keeps a user's MSISupported 0 - the way to force the line besides
+; XhciInterruptMode 1 - across an update; the driver, not this limit, holds
+; the delivery to Interrupter 0's one message.
+[Xhci.Msi.AddReg]
+HKR,"Interrupt Management",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",,0x00000010
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MSISupported,0x00010003,1
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MessageNumberLimit,0x00010003,1
+
+[Xhci.CopyOS]
+usbd.sys,,,16
+
+[Xhci.CopyUI]
+usbui.dll,,,16
+
+[Inf.CopyFiles]
+xhci98.inf
+
+[DefaultInstall]
+CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
+
+; The right-click sections are deliberately driver-only: they copy the
+; driver and the OS files it names, and nothing else. xhcihlpr.sys is
+; left to [Xhci.Dev.NTx86] and [Xhci.Dev6.NTx86], the device install that
+; also adds its boot-start service; copied here it would be a file no
+; service names.
+[DefaultInstall.NTx86]
+CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Host Controller Disk"
+XhciDesc="xHCI98 USB 3.x eXtensible Host Controller"
+RootHubDesc="xHCI98 USB 3.x Root Hub"
+HubDesc="xHCI98 USB Hub"
+Hub30Desc="xHCI98 USB 3.x Hub"
+CompositeDesc="xHCI98 USB Composite Device"
+XhciSvcDesc="xHCI98 USB 3.x eXtensible Host Controller Driver (xhci98)"
+XhciHlprSvcDesc="xHCI98 helper for 32-bit Windows 2000, XP, Vista and 7 (xhcihlpr)"
