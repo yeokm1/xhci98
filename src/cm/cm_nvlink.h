@@ -320,6 +320,25 @@ ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
                         ULONG slot, ULONG tunnel, PULONG outcome);
 
 /*
+ * CmNvlinkPublishUp with the advance said apart from the label: an entry
+ * already UP is advanced only when `advance` is TRUE (and `tunnel` names a
+ * tunnel other than the one recorded for it); with `advance` FALSE no
+ * entry UP is advanced whatever `tunnel` names, and `tunnel` only labels
+ * an entry this call publishes (a new one, or one not UP). The driver
+ * passes `advance` TRUE only for an exposure that itself names the new
+ * tunnel (the UP hook's, the seam's for the action's member): an exposure
+ * that names none and publishes for the bridge's recorded tunnel
+ * (CmNvlinkBridgeTunnel) may come after the operating system has
+ * enumerated the endpoint, and across a 9x resume a bound Stor98 instance
+ * may then read the new generation as its quiescence (task 42-A.6, the
+ * post-resume case). CmNvlinkPublishUp is this with `advance` TRUE for
+ * any tunnel named.
+ */
+ULONG CmNvlinkPublishUpEx(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
+                          ULONG slot, ULONG tunnel, BOOLEAN advance,
+                          PULONG outcome);
+
+/*
  * The tunnel the exposure of member `i` carries for an action (task
  * 42-A.6): CM_NVLINK_TUNNEL(port, generation) for the member a tunnel up
  * names (`up` TRUE, `member` its index in the set, known by
@@ -340,9 +359,11 @@ ULONG CmNvlinkActionTunnel(BOOLEAN up, ULONG port, ULONG generation,
  * one): `named` when the exposure names one, recorded as the bridge's
  * latest; otherwise the latest named for the bridge before, or
  * CM_NVLINK_TUNNEL_NONE when none was (or no slot was free for it). Every
- * exposure of a bridge so publishes for its latest tunnel: applied again
- * it changes nothing (CmNvlinkPublishUp), and an exposure that names none
- * pays what an earlier one could not.
+ * exposure of a bridge so labels what it publishes with its latest tunnel:
+ * applied again it changes nothing (CmNvlinkPublishUp), and an entry an
+ * exposure naming none publishes is not advanced again by the named
+ * exposure of the same tunnel. An exposure that names none never advances
+ * an entry already UP for it (CmNvlinkPublishUpEx's `advance` FALSE).
  */
 ULONG CmNvlinkBridgeTunnel(PULONG bridges, PULONG tunnels, ULONG count,
                            ULONG bridge, ULONG named);

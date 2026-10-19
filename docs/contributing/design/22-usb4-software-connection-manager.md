@@ -2797,10 +2797,22 @@ published, a second port's tunnel up, and a RESYNC leave every other
 port's entry as it is, and a bound Stor98 instance keeps its identity
 (R8d). An entry not `UP` gets its new generation from any exposure. The
 latest tunnel named for each member's bridge is kept (`cmNvTunnelOf`), and
-every exposure of that bridge publishes for it, whatever it names itself:
-applied again it changes nothing, and a later exposure - a baseline, an
-owed re-enumeration, the 9x late scan, a RESYNC - pays what an earlier one
-could not (the bus silent, the member not yet active). Where the port's
+every exposure of that bridge labels what it publishes with it, whatever
+it names itself: applied again it changes nothing, and a function a later
+exposure - a baseline, an owed re-enumeration, the 9x late scan, a
+RESYNC - publishes where an earlier one could not (the bus silent, the
+member not yet active) is not advanced again by the named exposure of the
+same tunnel. Only an exposure that itself names a new tunnel advances an
+entry already `UP` (`CmNvlinkPublishUpEx`'s `advance`); an exposure that
+names none never does, since it may come after the operating system has
+enumerated the endpoint. Read on Windows ME (the bench zip of 2026-10-19):
+after a Stand by the resume rebuilt port 1's tunnel, and its UP hook and
+the seam's exposure named the new tunnel but found the secondary bus not
+yet numbered, so nothing was published; when a second enclosure was
+plugged into port 2, the seam's exposure of port 1's member, naming no
+tunnel, advanced port 1's entry for the recorded one, and Stor98, bound
+since before the sleep, dropped that disk. Such an entry keeps its
+generation now, as an entry does whose new tunnel nothing named. Where the port's
 member is not known, nothing names a tunnel: a function newly found gets
 its generation, and no entry already `UP` is advanced on a guess (U29's
 rule). What lets a new tunnel there still get its new generation is the

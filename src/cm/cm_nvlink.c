@@ -188,6 +188,15 @@ ULONG CmNvlinkBridgeTunnel(PULONG bridges, PULONG tunnels, ULONG count,
 ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
                         ULONG slot, ULONG tunnel, PULONG outcome)
 {
+    return CmNvlinkPublishUpEx(t, tunnels, bus, slot, tunnel,
+                               (BOOLEAN)(tunnel != CM_NVLINK_TUNNEL_NONE),
+                               outcome);
+}
+
+ULONG CmNvlinkPublishUpEx(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
+                          ULONG slot, ULONG tunnel, BOOLEAN advance,
+                          PULONG outcome)
+{
     ULONG i;
     ULONG pick;
     PSTOR98LS_ENTRY e;
@@ -200,12 +209,13 @@ ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, PULONG tunnels, ULONG bus,
     if (i != CM_NVLINK_NONE) {
         e = &t->Entry[i];
         /* R8b: only a new tunnel increments the generation - one this
-         * exposure names and the entry's UP was not published for. R9a:
-         * nor is it changed, or the request cleared, while a removal
-         * request is outstanding; an exposure then waits for
+         * exposure names (`advance`) and the entry's UP was not published
+         * for. R9a: nor is it changed, or the request cleared, while a
+         * removal request is outstanding; an exposure then waits for
          * CmNvlinkWkWithdraw like any other. */
         if ((e->Flags & STOR98LS_UP) != 0 &&
-            (tunnel == CM_NVLINK_TUNNEL_NONE || tunnels[i] == tunnel ||
+            (!advance || tunnel == CM_NVLINK_TUNNEL_NONE ||
+             tunnels[i] == tunnel ||
              (e->Flags & CM_NVLINK_REMOVE_PENDING) != 0)) {
             *outcome = CM_NVLINK_UP_ALREADY;
             return i;
