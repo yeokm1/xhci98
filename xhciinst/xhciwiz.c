@@ -2983,7 +2983,7 @@ static int selftest(void)
         st_page(parent, IDD_UWELCOME, uIds, uTexts, 3, "the uninstall's "
                 "welcome");
         st_page(parent, IDD_FOUND, fIds, fTexts, 1, "what was found");
-        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 10, "the components");
+        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 12, "the components");
         st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
         st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "
                 "shutdown");

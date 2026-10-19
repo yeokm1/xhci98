@@ -1568,6 +1568,12 @@ static void group_verdicts(void)
             groupVerdict[g] = INST_GROUP_OK;
             continue;
         }
+        if (g == 1 && !uasInclude) {
+            /* The UAS driver left out (owner, 2026-10-19): an installed
+             * xhciuas is not part of the run either. */
+            groupVerdict[g] = INST_GROUP_OK;
+            continue;
+        }
         for (i = 0; i < devCount; i++) {
             const DEVREC *d = &devs[i];
             if (group_of(d) != g) {
