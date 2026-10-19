@@ -352,6 +352,21 @@ static void test_child_attach(void)
     PVOID chain[CM_CHILD_CHAIN_MAX + 1];
     ULONG i;
 
+    CHECK_EQ(CmPortsStackless(0, 0, 0, 0), 1,
+             "stackless: nothing attached (an eject removed the stack)");
+    CHECK_EQ(CmPortsStackless(1, 1, 0, 0), 1,
+             "stackless: only the BusRelations child, nothing above it (no driver, "
+             "Code 28)");
+    CHECK_EQ(CmPortsStackless(1, 1, 0, 1), 0,
+             "stackless: a function driver above the child is a stack");
+    CHECK_EQ(CmPortsStackless(1, 1, 1, 0), 0,
+             "stackless: an AddDevice-made object of this driver's is a stack");
+    CHECK_EQ(CmPortsStackless(1, 0, 1, 0), 0,
+             "stackless: an AddDevice-made object alone is a stack");
+    CHECK_EQ(CmPortsStackless(1, 0, 0, 0), 0,
+             "stackless: another driver's objects and no child of this one's: a "
+             "stack, not read");
+
     CHECK_EQ(CmPortsChildFirst(0, 0), CM_CHILD_ATTACH,
              "the first step: nothing attached attaches with no walk");
     CHECK_EQ(CmPortsChildFirst(1, 0), CM_CHILD_ATTACH,

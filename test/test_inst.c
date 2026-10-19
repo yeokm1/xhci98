@@ -831,6 +831,34 @@ static void test_helpers(void)
     CHECK(!removed && n == sizeof(filters), "absent: unchanged");
     n = inst_msz_remove(filters, sizeof(filters), "absent", msz, 4, &removed);
     CHECK(n == (size_t)-1, "too small");
+    {
+        /* The CriticalDeviceDatabase scrub (record 21 section 7.4): Windows
+         * 2000's pci#cc_0604 and pci#cc_010802 read LowerFilters=xhcicm
+         * after a marked unit's driver install (2026-10-19). */
+        static const char cddbOnly[] = "xhcicm\0\0";
+        static const char cddbMixed[] = "partmgr\0XHCICM\0other\0\0";
+        static const char cddbOther[] = "partmgr\0\0";
+        size_t ob;
+
+        CHECK_EQ(inst_filter_drop(cddbOnly, sizeof(cddbOnly), "xhcicm", msz,
+                                  sizeof(msz), &ob), INST_FD_DELETE,
+                 "xhcicm alone: the value deleted, never written empty");
+        CHECK_EQ(inst_filter_drop(cddbMixed, sizeof(cddbMixed), "xhcicm", msz,
+                                  sizeof(msz), &ob), INST_FD_SET,
+                 "with other filters: written back");
+        CHECK(ob == 15 && memcmp(msz, "partmgr\0other\0\0", 15) == 0,
+              "the other names kept in order, case ignored for ours");
+        CHECK_EQ(inst_filter_drop(cddbOther, sizeof(cddbOther), "xhcicm", msz,
+                                  sizeof(msz), &ob), INST_FD_NONE,
+                 "another driver's filter alone: untouched");
+        CHECK_EQ(inst_filter_drop(NULL, 0, "xhcicm", msz, sizeof(msz), &ob),
+                 INST_FD_NONE, "no value: nothing");
+        CHECK_EQ(inst_filter_drop(cddbMixed, sizeof(cddbMixed), "xhcicm", msz,
+                                  4, &ob), INST_FD_ERROR, "too small: an error");
+        CHECK_EQ(inst_filter_drop("xhcicmx\0\0", 10, "xhcicm", msz,
+                                  sizeof(msz), &ob), INST_FD_NONE,
+                 "a longer name is not ours");
+    }
 
     CHECK(inst_testsigning(" NOEXECUTE=OPTIN  TESTSIGNING"), "testsigning on");
     CHECK(inst_testsigning("/testsigning /noexecute=optin"), "slash form");
@@ -1176,6 +1204,48 @@ static void test_flow(void)
         CHECK_EQ(inst_busy_spent(tries, 3), 1, "a spent member blocks");
         CHECK_EQ(inst_busy_spent(tries, 0), 0, "nobody");
     }
+
+    /* A parent's job and the devices below it (98 SE, 2026-10-19). */
+    CHECK_EQ(inst_parent_kind("USB\\XHCI98_ROOT_HUB\\0PCI&VEN_1B36", 0), 1,
+             "the root hub is a parent");
+    CHECK_EQ(inst_parent_kind("USB\\XHCI98_HUB&VID_0409&PID_55AA\\314159", 0),
+             1, "a hub is a parent");
+    CHECK_EQ(inst_parent_kind("USB\\XHCI98_HUB30&VID_1&PID_2\\1", 0), 1,
+             "a SuperSpeed hub is a parent");
+    CHECK_EQ(inst_parent_kind("USB\\XHCI98_COMPOSITE&VID_1&PID_2\\1", 0), 1,
+             "a composite entry is a parent");
+    CHECK_EQ(inst_parent_kind("PCI\\VEN_1B36&DEV_000D\\3", 1), 1,
+             "a controller is a parent");
+    CHECK_EQ(inst_parent_kind("USB\\VID_0627&PID_0001\\28754", 0), 0,
+             "a function is not");
+    CHECK_EQ(inst_parent_kind("USB\\XHCI98_HUBX\\1", 0), 0,
+             "a near name is not");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_OK, 1), 1,
+             "root hub installed, hub next: settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_RESTART, 1), 1,
+             "installed, restart pending: settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_FAILED, 1), 1,
+             "a failed install may have restarted it: settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_STEPS, 1), 1,
+             "cancelled in a dialog: settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_ABSENT, 1), 0,
+             "nothing was reached: no settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_REFUSED, 1), 0,
+             "the helper refused: no settle");
+    CHECK_EQ(inst_settle_after_job(1, INST_DI_OUT_OK, 0), 0,
+             "the last job of the pass: the pass's own settle follows");
+    CHECK_EQ(inst_settle_after_job(0, INST_DI_OUT_OK, 1), 0,
+             "a function's job: no settle");
+    CHECK_EQ(inst_absent_retry(INST_DI_OUT_ABSENT, 1, 0), 1,
+             "not present after a parent's job: once more after a settle");
+    CHECK_EQ(inst_absent_retry(INST_DI_OUT_ABSENT, 1, 1), 0,
+             "still not present after the retry: not present");
+    CHECK_EQ(inst_absent_retry(INST_DI_OUT_ABSENT, 0, 0), 0,
+             "no parent's job this run: not present at once");
+    CHECK_EQ(inst_absent_retry(INST_DI_OUT_OK, 1, 0), 0,
+             "installed: no retry");
+    CHECK_EQ(inst_absent_retry(INST_DI_OUT_FAILED, 1, 0), 0,
+             "failed: no retry");
 
     /* Windows 2000 after a first filter install (owner, 2026-10-15): the
      * NHI's or a port's Code 12, or a device gone, waits for the restart;

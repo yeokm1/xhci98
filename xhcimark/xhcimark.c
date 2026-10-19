@@ -77,7 +77,7 @@
 #define MK_LOG_DIR          "\\LogFiles\\xhci98"
 #define MK_LOG_NAME         "\\XHCIMARK.LOG"
 #define MK_LOG_DEFAULT      262144UL
-#define MK_DAY_MS           86400000UL
+#define MK_INVENTORY_MS     60000UL
 #define MK_RETRY_MS         60000UL
 
 #define MK_MAX_NODES        2048
@@ -230,6 +230,8 @@ static SERVICE_STATUS status;
 static DWORD lastInventory;
 static int inventoryDone;
 static const int *curProt;      /* this poll's protected nodes (mk_poll)  */
+static int scrubOk;             /* the last CDDB scrub completed          */
+static int scrubFailLogged;     /* its failure was logged (once per run)  */
 
 /* ======================================================================== */
 /* The log                                                                  */
@@ -1145,7 +1147,8 @@ static void mk_write(const MK_NHI *h, const MK_ENTRY *e, int unit)
     HANDLE m;
     int ok;
 
-    if (!mk_write_due(nodes[unit].Id)) {
+    if (!mk_write_due(nodes[unit].Id) || !scrubOk) {
+        /* An unproven scrub: a new mark could reach the database unseen. */
         return;
     }
     m = mk_lock(MK_WRITE_MUTEX, 5000);
@@ -1562,15 +1565,25 @@ static void mk_judge(const char *id, const char *text)
             return;
         }
         parent = nodes[node].Parent;
-        if (!nodes[node].HasLoc || parent < 0 || !nodes[parent].HasLoc) {
+        if (parent >= 0 && !mk_is_pci(&nodes[parent]) &&
+            nodes[parent].Id[0] != '\0') {
+            /* A parent read and not a PCI function (the root bus, ACPI's
+             * PCI bus): the devnode is no child of a tunnel port, so no
+             * domain owns it; one that took the name from a
+             * CriticalDeviceDatabase copy is removed once every NHI is
+             * verifiable. */
+            owner = NULL;
+        } else if (!nodes[node].HasLoc || parent < 0 ||
+                   !nodes[parent].HasLoc) {
             /* A location that cannot be read is no proof the unit is
              * outside every domain. */
             return;
+        } else {
+            pbdf = (nodes[parent].Bus << 8) |
+                   (((nodes[parent].Address >> 16) & 0x1FUL) << 3) |
+                   (nodes[parent].Address & 7UL);
+            owner = mk_owner(pbdf);
         }
-        pbdf = (nodes[parent].Bus << 8) |
-               (((nodes[parent].Address >> 16) & 0x1FUL) << 3) |
-               (nodes[parent].Address & 7UL);
-        owner = mk_owner(pbdf);
     } else {
         owner = mk_owner(member);
     }
@@ -1613,7 +1626,9 @@ static void mk_judge(const char *id, const char *text)
         return;
     }
     if (verdict == MK_R_KEEP) {
-        if (state != MK_REC_WRITING || le == NULL || curProt == NULL) {
+        if (state != MK_REC_WRITING || le == NULL || curProt == NULL ||
+            !scrubOk) {
+            /* A replay writes a mark: not while the scrub is unproven. */
             return;
         }
         /* A replay is a write: the write's own checks first, the unit the
@@ -1727,9 +1742,172 @@ static void mk_reconcile_all(void)
     free(texts);
 }
 
+/* The CriticalDeviceDatabase scrub (record 21 section 7.4): Windows 2000
+ * and XP copy a boot-critical device's own LowerFilters into its class's
+ * entry there when they install it (pci#cc_0604 for a bridge,
+ * pci#cc_010802 for an NVMe controller, read on 2000 on 2026-10-19), and
+ * from then on every new device of that class would get xhcicm as a lower
+ * filter, recorded nowhere - against "never on another PCI device". Every
+ * poll, under the write mutex, xhcicm is taken out of every entry's
+ * LowerFilters, the other names kept, the value deleted when nothing else
+ * is in it. The entries' UpperFilters copies of the filter INF are its own
+ * and stay while it is installed; the uninstall removes those. Returns how
+ * many values it changed; -1 when the key could not be read. */
+static int mk_cddb_scrub(int *complete)
+{
+    HKEY root;
+    HKEY k;
+    HANDLE m;
+    DWORD i;
+    DWORD nn;
+    DWORD type;
+    DWORD n;
+    LONG r;
+    char name[256];
+    char (*names)[256];
+    DWORD count = 0;
+    DWORD c;
+    char f[MK_FILTERS_BYTES];
+    char nf[MK_FILTERS_BYTES];
+    size_t ob;
+    int changed = 0;
+    int act;
+
+    *complete = 0;
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_CDDB_KEY, 0, KEY_READ, &root);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        *complete = 1;
+        return 0;
+    }
+    if (r != ERROR_SUCCESS) {
+        mk_log("CriticalDeviceDatabase: the key did not open (error %ld)", r);
+        return 0;
+    }
+    if (RegQueryInfoKeyA(root, NULL, NULL, NULL, &count, NULL, NULL, NULL,
+                         NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+        mk_log("CriticalDeviceDatabase: the key could not be read");
+        RegCloseKey(root);
+        return 0;
+    }
+    if (count == 0) {
+        RegCloseKey(root);
+        *complete = 1;
+        return 0;
+    }
+    names = malloc(count * sizeof(*names));
+    if (names == NULL) {
+        RegCloseKey(root);
+        return 0;
+    }
+    *complete = 1;
+    for (i = 0, c = 0; c < count; i++) {
+        nn = sizeof(name);
+        r = RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS) {
+            /* A name longer than the buffer or a read that failed: the walk
+             * cannot prove every entry clean. */
+            *complete = 0;
+            if (r != ERROR_MORE_DATA) {
+                break;
+            }
+            continue;
+        }
+        inst_copy(names[c], name, sizeof(names[c]));
+        c++;
+    }
+    count = c;
+    m = NULL;
+    for (c = 0; c < count; c++) {
+        r = RegOpenKeyExA(root, names[c], 0, KEY_QUERY_VALUE | KEY_SET_VALUE,
+                          &k);
+        if (r != ERROR_SUCCESS) {
+            if (r != ERROR_FILE_NOT_FOUND) {
+                *complete = 0;
+            }
+            continue;
+        }
+        memset(f, 0, sizeof(f));
+        n = sizeof(f) - 2;
+        r = RegQueryValueExA(k, "LowerFilters", NULL, &type, (LPBYTE)f, &n);
+        if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
+            *complete = 0;
+            if (!scrubFailLogged) {
+                mk_log("CriticalDeviceDatabase\\%s: its LowerFilters could "
+                       "not be read (error %ld)", names[c], r);
+            }
+        }
+        if (r == ERROR_SUCCESS && (type == REG_MULTI_SZ || type == REG_SZ)) {
+            act = inst_filter_drop(f, n + 1, MK_NAME, nf, sizeof(nf), &ob);
+            if (act != INST_FD_NONE) {
+                if (m == NULL) {
+                    m = mk_lock(MK_WRITE_MUTEX, 5000);
+                    if (m == NULL) {
+                        RegCloseKey(k);
+                        *complete = 0;
+                        break;
+                    }
+                }
+                /* Read again under the lock: the installer edits it too. */
+                memset(f, 0, sizeof(f));
+                n = sizeof(f) - 2;
+                r = RegQueryValueExA(k, "LowerFilters", NULL, &type,
+                                     (LPBYTE)f, &n);
+                if (r == ERROR_SUCCESS &&
+                    (type == REG_MULTI_SZ || type == REG_SZ)) {
+                    act = inst_filter_drop(f, n + 1, MK_NAME, nf, sizeof(nf),
+                                           &ob);
+                } else {
+                    act = INST_FD_NONE;
+                    if (r != ERROR_FILE_NOT_FOUND) {
+                        /* Not gone, not readable: the entry is unresolved. */
+                        *complete = 0;
+                        mk_log("CriticalDeviceDatabase\\%s: its LowerFilters "
+                               "could not be read again (error %ld)", names[c],
+                               r);
+                    }
+                }
+            }
+            if (act == INST_FD_SET) {
+                r = RegSetValueExA(k, "LowerFilters", 0, REG_MULTI_SZ,
+                                   (const BYTE *)nf, (DWORD)ob);
+            } else if (act == INST_FD_DELETE) {
+                r = RegDeleteValueA(k, "LowerFilters");
+            } else if (act == INST_FD_ERROR) {
+                r = ERROR_INSUFFICIENT_BUFFER;
+            }
+            if (act != INST_FD_NONE) {
+                if (r != ERROR_SUCCESS) {
+                    *complete = 0;
+                }
+                if (r == ERROR_SUCCESS) {
+                    changed++;
+                    mk_log("CriticalDeviceDatabase\\%s: %s taken out of its "
+                           "LowerFilters (Windows copied it there from a "
+                           "marked unit's install)", names[c], MK_NAME);
+                } else {
+                    mk_log("CriticalDeviceDatabase\\%s: %s could not be taken "
+                           "out of its LowerFilters (error %ld)", names[c],
+                           MK_NAME, r);
+                }
+            }
+        }
+        RegCloseKey(k);
+    }
+    mk_unlock(m);
+    free(names);
+    RegCloseKey(root);
+    return changed;
+}
+
 /* Every PCI devnode, present or not, whose LowerFilters carries the name
- * and which has no record: recorded, then judged as any record is. */
-static void mk_inventory(void)
+ * and which has no record: recorded, then judged at once as any record is -
+ * kept only on a unit behind an active member of a verifiable domain,
+ * removed from any other device (one that took the name from a
+ * CriticalDeviceDatabase copy, say) once its domain can be judged. */
+static void mk_inventory(int quiet)
 {
     HDEVINFO set;
     SP_DEVINFO_DATA data;
@@ -1763,12 +1941,15 @@ static void mk_inventory(void)
         }
         if (inst_msz_has(f, n, MK_NAME) && !mk_rec_get(id, text, sizeof(text))) {
             (void)mk_rec_set(id, 0, 0, 0, MK_REC_WRITTEN);
-            mk_log("inventory: an unrecorded mark on %s, now recorded", id);
+            mk_log("inventory: an unrecorded mark on %s, recorded to be "
+                   "judged (kept only on a unit behind an active member)", id);
             found++;
         }
     }
     api.Destroy(set);
-    mk_log("inventory: %d unrecorded mark(s)", found);
+    if (!quiet || found != 0) {
+        mk_log("inventory: %d unrecorded mark(s)", found);
+    }
 }
 
 /* One poll; returns the milliseconds to the next. */
@@ -1782,8 +1963,28 @@ static DWORD mk_poll(void)
         return 10000;
     }
     any = mk_read_nhis();
-    if (!inventoryDone || GetTickCount() - lastInventory >= MK_DAY_MS) {
-        mk_inventory();
+    /* The scrub every poll; when it found a copy, or every
+     * MK_INVENTORY_MS, the inventory too, since a device Windows found
+     * meanwhile may have taken the name from it. */
+    {
+        int complete;
+        int hits = mk_cddb_scrub(&complete);
+
+        if (!complete && !scrubFailLogged) {
+            mk_log("CriticalDeviceDatabase: the scrub did not complete; no "
+                   "new mark is written until it does");
+            scrubFailLogged = 1;
+        } else if (complete && scrubFailLogged) {
+            mk_log("CriticalDeviceDatabase: the scrub completes again");
+            scrubFailLogged = 0;
+        }
+        scrubOk = complete;
+        if (hits > 0) {
+            lastInventory = GetTickCount() - MK_INVENTORY_MS;
+        }
+    }
+    if (!inventoryDone || GetTickCount() - lastInventory >= MK_INVENTORY_MS) {
+        mk_inventory(inventoryDone);
         inventoryDone = 1;
         lastInventory = GetTickCount();
     }

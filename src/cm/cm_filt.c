@@ -265,6 +265,12 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         return IoCallDriver(filter->Common.Lower, irp);
 
     case IRP_MN_START_DEVICE:
+        if ((child || filter->AddDev) && !CmRegStartAllowed(filter)) {
+            /* Its tunnel is being torn down for an eject (the function
+             * read stackless when the eject was taken). */
+            CmRegAttEvent(filter, CM_MK_START_FAILED);
+            return CmCompleteIrp(irp, STATUS_DEVICE_NOT_READY, 0);
+        }
         status = CmForwardSync(&filter->Common, irp);
         CmRegAttLocate(filter);
         if (NT_SUCCESS(status)) {

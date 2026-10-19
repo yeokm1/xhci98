@@ -109,9 +109,13 @@ static INST_FRONT front;
 #define INST_CM_DRP_DRIVER          0x0000000AUL
 #define INST_INSTALL_WAIT_MS        600000UL   /* the barrier: a wizard answered */
 #define INST_FIRST_WAIT_MS          60000UL    /* before the first change      */
+#define INST_REAPPEAR_MS            15000UL    /* a device a parent's job hid */
 
 #ifndef ERROR_IN_WOW64
 #define ERROR_IN_WOW64 0xE0000235UL
+#endif
+#ifndef ERROR_NO_SUCH_DEVINST
+#define ERROR_NO_SUCH_DEVINST 0xE000020BUL
 #endif
 
 #define INST_MAX_DEVS       1536
@@ -273,6 +277,11 @@ static char helperPath[INST_PATH_CHARS];    /* its short path, no space   */
 static char helperResult[INST_PATH_CHARS];  /* the result file            */
 static char helperJobFile[INST_PATH_CHARS]; /* the job file (section 4.1) */
 static int helperRan;       /* a device job ran: the steps are per device  */
+static int helperLastOut;   /* the last job's INST_DI_OUT_*, -1 none made  */
+static int parentJobs;      /* parents' jobs (or NT calls) that reached
+                               their device this run: inst_absent_retry */
+static int helperStop;      /* a settle inside a helper job failed: the
+                               passes stop (said by settle_failed)      */
 
 /* The devices the helper could not do, by id, with the line said for
  * each: the steps page's (record 26 section 7), and the steps as text. */
@@ -6090,6 +6099,70 @@ static DWORD call_flags(const DEVREC *x, int inf)
 /* Install or update the planned devices of one INF; controllers selects the
  * xhci98 controllers (1), the rest of xhci98's devices (0), or every device
  * (-1). Returns 0 when a failure leaves the order meaningless. */
+static int settle(INST_U32 limitMs, INST_U32 tellMs, INST_U32 expectMs,
+                  int first);
+static void settle_failed(int r, const char *bound);
+
+/* 1 when device i's call is not the last install_inf makes: a device
+ * after it in the list is one the same call of install_inf (inf,
+ * controllers) still takes. */
+static int nt_more_after(int i, int inf, int controllers)
+{
+    int j;
+
+    for (j = i + 1; j < devCount; j++) {
+        const DEVREC *d = &devs[j];
+        if (!d->Present || d->Inf != inf || !d->Runs || d->Done) {
+            continue;
+        }
+        if ((controllers == 1 && !is_controller(d)) ||
+            (controllers == 0 && is_controller(d))) {
+            continue;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* Up to INST_REAPPEAR_MS for a device a parent's job took away (it comes
+ * back as the parent restarts), then the settle with nothing expected.
+ * 1 settled (whether or not it came back) and not cancelled; 0 the settle
+ * failed or the run was cancelled (said): the caller stops. */
+static int reappear_settle(const char *id)
+{
+    DWORD t0 = GetTickCount();
+    DWORD dn;
+    char want[INST_ID_CHARS];
+    int r;
+
+    inst_copy(want, id, sizeof(want));
+    out("Waiting for the devices to settle ... ");
+    out_flush();
+    while (api.Locate != NULL &&
+           api.Locate(&dn, want, 0) != INST_CR_SUCCESS &&
+           (INST_U32)(GetTickCount() - t0) < INST_REAPPEAR_MS) {
+        if (!waiting(INST_WAIT_SETTLE, (unsigned long)(GetTickCount() - t0),
+                     INST_REAPPEAR_MS, "a device above it is restarting")) {
+            runCancelled = 1;
+            flagSteps = 1;
+            settle_failed(-3, "10 minutes");
+            return 0;
+        }
+        Sleep(INST_SETTLE_POLL_MS);
+    }
+    r = settle(INST_INSTALL_WAIT_MS, 20000UL, 0UL, 0);
+    if (r <= 0) {
+        settle_failed(r, "10 minutes");
+        return 0;
+    }
+    out("done.\n");
+    /* A cancel during the settle's last poll is seen here, before the
+     * next call. */
+    return go_on();
+}
+
+/* 1 done, 0 a controller's call failed (the rest is not attempted), -1 a
+ * settle inside it failed or was cancelled: the run stops (said). */
 static int install_inf(int inf, int controllers)
 {
     static int callIdx[INST_MAX_DEVS];
@@ -6105,6 +6178,7 @@ static int install_inf(int inf, int controllers)
     DWORD flags;
     int mixed;
     int again;
+    int retried;
     int ok = 1;
 
     join(path, sizeof(path), srcDir, infRel[inf]);
@@ -6248,11 +6322,16 @@ static int install_inf(int inf, int controllers)
         out("%s %s ... ", d->Action == INST_ACT_INSTALL ? "Installing" :
             d->Action == INST_ACT_FILTER ? "Adding the filter to" : "Updating",
             d->Desc[0] ? d->Desc : d->Id);
+        retried = 0;
+call:
         reboot = FALSE;
         logonly("\nUpdateDriverForPlugAndPlayDevices(\"%s\", \"%s\", %s)\n",
                 hwid, path, flags ? "FORCE" : "0");
         if (api.UpdateDriver(front.Owner, hwid, path, flags, &reboot)) {
             out("done%s.\n", reboot ? ", restart needed" : "");
+            if (inst_parent_kind(d->Id, is_controller(d))) {
+                parentJobs++;
+            }
             flagChanged = 1;
             if (flags == 0 && inf == INST_INF_CMF) {
                 /* The filter's first install on Windows 2000 goes
@@ -6268,9 +6347,36 @@ static int install_inf(int inf, int controllers)
             if (reboot) {
                 flagRestart = 1;
             }
+            /* A root hub's or hub's update restarts it and takes the
+             * devices below it away for seconds: the next call waits for
+             * them (98 SE leg, 2026-10-19; record 23 section 5.8). */
+            if (controllers != 1 &&
+                inst_settle_after_job(inst_parent_kind(d->Id, 0),
+                                      INST_DI_OUT_OK,
+                                      nt_more_after(i, inf, controllers))) {
+                if (!reappear_settle(d->Id)) {
+                    return -1;
+                }
+            }
             continue;
         }
         err = GetLastError();
+        if (err == ERROR_NO_SUCH_DEVINST &&
+            inst_absent_retry(INST_DI_OUT_ABSENT, parentJobs, retried)) {
+            out("not present at the moment.\n");
+            retried = 1;
+            if (!reappear_settle(d->Id)) {
+                for (j = 0; j < n; j++) {
+                    changedState[callIdx[j]] = 0;
+                }
+                return -1;
+            }
+            out("%s %s again ... ", d->Action == INST_ACT_INSTALL ?
+                "Installing" : d->Action == INST_ACT_FILTER ?
+                "Adding the filter to" : "Updating",
+                d->Desc[0] ? d->Desc : d->Id);
+            goto call;
+        }
         /* Windows' own installer had the device at that moment (2000 leg,
          * 2026-10-15: the new root hub, 0x20, while its Found New Hardware
          * ran): the call is made again after the next barrier's settle, if
@@ -7367,7 +7473,11 @@ static int run_install_nt(void)
         if (!go_on()) {
             goto stopped;
         }
-        if (!install_inf(INST_INF_XHCI, 1)) {
+        i = install_inf(INST_INF_XHCI, 1);
+        if (i < 0) {
+            goto stopped;
+        }
+        if (i == 0) {
             out("A controller's update failed: the rest is not attempted.\n");
             return inst_exit_code(0, 1, flagRestart, flagSteps);
         }
@@ -7394,7 +7504,9 @@ static int run_install_nt(void)
                  * read too. */
                 s98_tunnel_mark();
             }
-            install_inf(k, k == INST_INF_XHCI ? 0 : -1);
+            if (install_inf(k, k == INST_INF_XHCI ? 0 : -1) < 0) {
+                goto stopped;
+            }
         }
     }
     s98_reconnect_nt();
@@ -8170,6 +8282,7 @@ static int helper_install(DEVREC *d)
             return 1;
         }
     }
+    helperLastOut = -1;
     out("Installing %s ...\n", d->Desc[0] ? d->Desc : d->Id);
     step(INST_STEP_BEGIN, "Installing %s", d->Desc[0] ? d->Desc : d->Id);
     out_flush();
@@ -8187,6 +8300,21 @@ static int helper_install(DEVREC *d)
      * section 6.3): a copy made in it is that device's step. */
     s98_inf_sync();
     v = helper_job(INST_DI_INSTALL, d, inf, force, &r);
+    if (d->Inf != INST_INF_S98 && helperState >= 0 &&
+        inst_absent_retry(inst_di_outcome(INST_DI_INSTALL, v), parentJobs, 0)) {
+        /* A parent's job of this run may have restarted it: the tree
+         * settled, and the job made once more (98 SE update over 3.0.0.0,
+         * 2026-10-19: the hub after its root hub's reinstall). */
+        out("  not present at the moment.\n");
+        if (!reappear_settle(d->Id)) {
+            /* The absent verdict stands for it; the passes stop. */
+            helperStop = 1;
+        } else {
+            out("Installing %s again ...\n", d->Desc[0] ? d->Desc : d->Id);
+            out_flush();
+            v = helper_job(INST_DI_INSTALL, d, inf, force, &r);
+        }
+    }
     c = note_changed(d, 1);
     d->Done = 1;
     if (d->Inf != INST_INF_S98) {
@@ -8203,6 +8331,11 @@ static int helper_install(DEVREC *d)
         }
     }
     out9x = inst_di_outcome(INST_DI_INSTALL, v);
+    helperLastOut = out9x;
+    if (inst_settle_after_job(inst_parent_kind(d->Id, is_controller(d)),
+                              out9x, 1)) {
+        parentJobs++;
+    }
     _snprintf(why, sizeof(why) - 1, "%s%s%s", inst_di_verdict_text(v),
               r.Error[0] ? ": " : (r.Detail[0] && v == INST_DI_V_NONE ? ": " :
                                    ""),
@@ -8318,6 +8451,9 @@ static void helper_installs(void)
                 if (!helper_install(&devs[i])) {
                     controllerFailed = 1;
                 }
+                if (helperStop) {
+                    goto left;
+                }
             }
         }
         if (controllerFailed) {
@@ -8359,10 +8495,31 @@ static void helper_installs(void)
             first = 0;
             for (i = 0; i < devCount; i++) {
                 if (pass_takes(&devs[i], k, k == INST_INF_XHCI ? 0 : -1)) {
+                    int j;
+                    int more = 0;
                     if (!go_on()) {
                         goto left;
                     }
+                    helperLastOut = -1;
                     helper_install(&devs[i]);
+                    if (helperStop) {
+                        goto left;
+                    }
+                    for (j = i + 1; j < devCount && !more; j++) {
+                        more = pass_takes(&devs[j], k,
+                                          k == INST_INF_XHCI ? 0 : -1);
+                    }
+                    /* A root hub's or hub's reinstall restarts it and
+                     * takes the devices below it away for seconds (98 SE
+                     * leg, 2026-10-19): the next job waits for them. */
+                    if (helperLastOut >= 0 &&
+                        inst_settle_after_job(
+                            inst_parent_kind(devs[i].Id,
+                                             is_controller(&devs[i])),
+                            helperLastOut, more) &&
+                        !reappear_settle(devs[i].Id)) {
+                        goto left;
+                    }
                 }
             }
         }
@@ -9360,12 +9517,134 @@ static int mk_stop(SC_HANDLE scm, int *had)
     return 1;
 }
 
+/* The CriticalDeviceDatabase's copies (record 21 section 7.4, step 0):
+ * Windows 2000 and XP copy a boot-critical device's own filter values into
+ * its class's entry there when they install it - a marked unit's
+ * LowerFilters, and the filter INF's UpperFilters of a tunnel port - and
+ * every new device of that class then gets them; with xhcicm gone, a new
+ * bridge or NVMe controller (a boot disk among them) would name a missing
+ * filter. With fix, xhcicm is taken out of every entry's LowerFilters and
+ * UpperFilters, the other names kept in order, the value deleted when
+ * nothing else is in it, and each read back. 1 when the key was read whole
+ * (and, with fix, every change read back); *left the values still naming
+ * xhcicm. */
+static int cddb_scrub(int fix, int *left)
+{
+    static const char *const vals[2] = { "LowerFilters", "UpperFilters" };
+    HKEY root;
+    HKEY k;
+    DWORD i;
+    DWORD nn;
+    DWORD type;
+    DWORD n;
+    LONG r;
+    char name[256];
+    char f[INST_MK_FILTERS];
+    char nf[INST_MK_FILTERS];
+    size_t ob;
+    int act;
+    int v;
+    int ok = 1;
+
+    *left = 0;
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_CDDB_KEY, 0, KEY_READ, &root);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (r != ERROR_SUCCESS) {
+        out("The CriticalDeviceDatabase could not be read (error %ld).\n", r);
+        return 0;
+    }
+    for (i = 0;; i++) {
+        nn = sizeof(name);
+        r = RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS) {
+            out("The CriticalDeviceDatabase ended early (error %ld).\n", r);
+            ok = 0;
+            break;
+        }
+        if (RegOpenKeyExA(root, name, 0,
+                          fix ? KEY_QUERY_VALUE | KEY_SET_VALUE : KEY_QUERY_VALUE,
+                          &k) != ERROR_SUCCESS) {
+            out("CriticalDeviceDatabase\\%s could not be opened.\n", name);
+            ok = 0;
+            continue;
+        }
+        for (v = 0; v < 2; v++) {
+            memset(f, 0, sizeof(f));
+            n = sizeof(f) - 2;
+            r = RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n);
+            if (r == ERROR_FILE_NOT_FOUND) {
+                continue;
+            }
+            if (r != ERROR_SUCCESS) {
+                out("CriticalDeviceDatabase\\%s's %s could not be read.\n",
+                    name, vals[v]);
+                ok = 0;
+                continue;
+            }
+            if (type != REG_MULTI_SZ && type != REG_SZ) {
+                continue;
+            }
+            act = inst_filter_drop(f, n + 1, INST_MK_NAME, nf, sizeof(nf), &ob);
+            if (act == INST_FD_NONE) {
+                continue;
+            }
+            logonly("cddb: %s names %s in its %s\n", name, INST_MK_NAME,
+                    vals[v]);
+            if (!fix) {
+                (*left)++;
+                continue;
+            }
+            if (act == INST_FD_SET) {
+                r = RegSetValueExA(k, vals[v], 0, REG_MULTI_SZ,
+                                   (const BYTE *)nf, (DWORD)ob);
+            } else if (act == INST_FD_DELETE) {
+                r = RegDeleteValueA(k, vals[v]);
+            } else {
+                r = ERROR_INSUFFICIENT_BUFFER;
+            }
+            /* Read back. */
+            memset(f, 0, sizeof(f));
+            n = sizeof(f) - 2;
+            if (r == ERROR_SUCCESS) {
+                r = RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n);
+                if (r == ERROR_FILE_NOT_FOUND) {
+                    r = ERROR_SUCCESS;
+                } else if (r == ERROR_SUCCESS &&
+                           inst_filter_drop(f, n + 1, INST_MK_NAME, nf,
+                                            sizeof(nf), &ob) != INST_FD_NONE) {
+                    r = ERROR_INVALID_DATA;
+                }
+            }
+            if (r != ERROR_SUCCESS) {
+                out("%s could not be removed from CriticalDeviceDatabase\\%s's "
+                    "%s (error %ld).\n", INST_MK_NAME, name, vals[v], r);
+                (*left)++;
+                ok = 0;
+                continue;
+            }
+            flagChanged = 1;
+            out("%s was removed from CriticalDeviceDatabase\\%s's %s (a copy "
+                "Windows made at a device's install).\n", INST_MK_NAME, name,
+                vals[v]);
+        }
+        RegCloseKey(k);
+    }
+    RegCloseKey(root);
+    return ok;
+}
+
 /* Every PCI devnode, present or not, its LowerFilters read (record 21
- * section 7.4, step 0). With fix, xhcicm is removed from each value that
- * names it, the other names kept in order, the value deleted when nothing
- * else is in it, and each read back. 1 when the enumeration reached its end
- * and every value was read (and, with fix, every removal read back); *left
- * the values still naming xhcicm. */
+ * section 7.4, step 0), and the CriticalDeviceDatabase's copies
+ * (cddb_scrub). With fix, xhcicm is removed from each value that names it,
+ * the other names kept in order, the value deleted when nothing else is in
+ * it, and each read back. 1 when the enumeration reached its end and every
+ * value was read (and, with fix, every removal read back); *left the values
+ * still naming xhcicm. */
 static int mk_inventory(int fix, int *left)
 {
     HDEVINFO set;
@@ -9389,6 +9668,16 @@ static int mk_inventory(int fix, int *left)
         out("The device-property routines are missing: the Thunderbolt "
             "safe-removal marks\ncannot be read.\n");
         return 0;
+    }
+    /* The CriticalDeviceDatabase first: it is the source new devices take
+     * the name from, so the devices are read after it is clean. */
+    {
+        int cleft;
+
+        if (!cddb_scrub(fix, &cleft)) {
+            ok = 0;
+        }
+        *left += cleft;
     }
     set = api.GetClassDevs(NULL, "PCI", NULL, DIGCF_ALLCLASSES);
     if (set == INVALID_HANDLE_VALUE) {
@@ -9550,7 +9839,9 @@ static int mk_remove(void)
     if (opts.List) {
         ok = mk_inventory(0, &left);
         if (left > 0) {
-            out("(/list) %s would be removed from %d device(s)' LowerFilters.\n",
+            out("(/list) %s would be removed from %d filter value(s) (devices' "
+                "LowerFilters,\nthe CriticalDeviceDatabase's LowerFilters and "
+                "UpperFilters).\n",
                 INST_MK_NAME, left);
         }
         if (svc_state(INST_MK_SERVICE) == 1) {
@@ -9581,6 +9872,18 @@ static int mk_remove(void)
         return 0;
     }
     ok = mk_inventory(1, &left) && left == 0;
+    if (ok) {
+        /* Read once more, both the database and the devices: Windows does
+         * not take the write lock, and a device it found during the
+         * removal may have taken the name from a copy. */
+        int again;
+
+        ok = mk_inventory(0, &again) && again == 0;
+        if (!ok) {
+            out("A Thunderbolt safe-removal mark (xhcicm) is still named after "
+                "its removal.\n");
+        }
+    }
     if (ok) {
         LONG r = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_MK_MARKS_KEY);
         if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
@@ -9976,9 +10279,9 @@ static int run_uninstall_nt(void)
     {
         int left;
         if (!mk_inventory(0, &left) || left != 0) {
-            return stop_uninstall("a device still names xhcicm in its "
-                                  "LowerFilters, so xhcicm's service\nand "
-                                  "file stay.");
+            return stop_uninstall("a device or a CriticalDeviceDatabase entry "
+                                  "still names xhcicm in its filters,\nso "
+                                  "xhcicm's service and file stay.");
         }
     }
     remove_services_and_files();
