@@ -669,7 +669,11 @@ the uninstall's adoption reads a drive that is not present the same way
 (record 26 section 6.3). So on those systems an enclosure that is not
 plugged in no longer holds Stor98 at its old release for ever (the 98 SE
 update of 2026-10-19 left `stor98.mpd` at `0.4.0.0` with the enclosure
-absent). With another, the
+absent; the owner's coordinator asked that the update run whether or
+not a drive is present). What that accepts: an internal drive on a
+Stor98 installed by hand that is absent at the update - taken out, or
+off in the firmware - is not seen, and finds the bundled release when
+it comes back. With another, the
 conservative choice is taken (`inst_s98_share`): when the installed file
 is another release than the bundled one, or cannot be read, the run
 makes **no Stor98 change at all** - `stor98.inf` is not staged, no
@@ -708,7 +712,13 @@ down and a start, not a restart. A drive first plugged after that start
 binds to the new file by itself. The update waits for the user's word,
 one box on the Summary page and one question in the console, both
 "Please disconnect all external NVMe drives before proceeding" (Enter
-and `/yes` give N); without it Stor98 is left for a later run (exit 4).
+and `/yes` give N); without it Stor98 is left for a later run, out of
+this one whole - no copy of its files, no job, no setting, no record
+(exit 4). A Stor98 drive no helper job touches may be unplugged between
+the plan and Install, as the confirmation asks: the comparison of the
+plan with the devices read again leaves it out. The INF copies are made
+the bundled one's again by every later run while the file is the
+bundled release, so a refresh cut short is finished then.
 A device with no driver behind a tunnel is still installed by the
 helper. NT is unchanged: SetupAPI updates Stor98 there.
 

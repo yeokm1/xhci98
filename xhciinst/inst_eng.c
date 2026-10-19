@@ -373,6 +373,9 @@ static int s98Left;         /* the uninstall left a Stor98 it did not install */
 static int s98FileUpd;      /* 98 SE and ME: the plan replaces stor98.mpd  */
 static int s98FileOk;       /* ... and the user confirmed it (the box, Y)  */
 static int s98FileDone;     /* ... and the replacement is queued           */
+static int s98Declined;     /* ... not confirmed: Stor98 out of the run    */
+static int s98InfRefresh;   /* 98 SE and ME: the INF copies made the bundled
+                               one's (the file is it, or replaced next)   */
 static char s98AwaitId[INST_S98_MAX_DEV][INST_ID_CHARS];
 static int s98AwaitCount;   /* NT: updated, awaiting reconnection          */
 static int s98Set[INST_S98_COUNT];
@@ -1671,7 +1674,11 @@ static void plan(void)
     envNow.AnyXhci = 0;
     envNow.PswController = 0;
     envNow.CmNhi = 0;
-    tbNhiName[0] = '\0';
+    if (infText[INST_INF_CM] != NULL) {
+        /* Read again only while the connection manager's INF is in the
+         * run; the name found stays for the unticked box's note. */
+        tbNhiName[0] = '\0';
+    }
     for (i = 0; i < devCount; i++) {
         DEVREC *d = &devs[i];
         d->Inf = -1;
@@ -7581,11 +7588,10 @@ static int run_install_nt(void)
         return inst_exit_code(0, 1, flagRestart, flagSteps);
     }
     step(INST_STEP_BEGIN, "Copying the package to %%windir%%\\XHCI98");
-    /* The record's PreExisting before the staging, the first Stor98
-     * change Windows can see (record 26 section 6.3, draft 16). */
-    if (!make_local_copy() ||
-        (s98Include && s98Share != INST_S98_SHARE_HOLD && !s98_pre_commit()) ||
-        !stage_nt()) {
+    /* The record's PreExisting goes with its first entry (a staged copy,
+     * a device, a setting; s98_rec_put): no record in a run that makes no
+     * Stor98 change (record 26 section 6.3, draft 16). */
+    if (!make_local_copy() || !stage_nt()) {
         step(INST_STEP_FAILED, "The package's copy and staging");
         flagFailed = 1;
         return inst_exit_code(0, 1, flagRestart, flagSteps);
@@ -7820,7 +7826,7 @@ static int steps_9x(const char *dir)
     old23 = envNow.Minor == 10 && file_version(bin, bv) > 0 &&
             inst_ver_cmp(bv, v24) < 0;
 
-    if (s98FileUpd && !s98FileDone && !opts.List) {
+    if ((s98FileUpd || s98Declined) && !s98FileDone && !opts.List) {
         out("\nStor98\n  Its driver file was not updated in this run. "
             "Disconnect every external NVMe\n  drive, run the installer "
             "again and confirm it; never use Update Driver on\n  a drive "
@@ -7858,7 +7864,16 @@ static int steps_9x(const char *dir)
         if (d->Inf == INST_INF_S98 && inst_eq(d->Service, "stor98")) {
             /* Never Update Driver over a running Stor98 here (the fatal
              * exception 0E of 2026-10-19): its file is the installer's
-             * to replace, said below. */
+             * to replace, said below. A job of this run cut short keeps
+             * its steps. */
+            if (helperRan && steps_why(d->Id) != NULL) {
+                any = 1;
+                out("\n%s\n  The helper could not install it: %s.\n"
+                    "  Shut down Windows and start it again, then run the "
+                    "installer again; never\n  use Update Driver on a drive "
+                    "Stor98 runs.\n", d->Desc[0] ? d->Desc : d->Id,
+                    steps_why(d->Id));
+            }
             continue;
         }
         fix = uas_fix(d);
@@ -8933,6 +8948,16 @@ static int run_install_9x(void)
             "installer again to see the new plan.\n");
         return inst_exit_code(0, flagFailed, flagRestart, 1);
     }
+    /* The file update not confirmed (the Summary's box, the console's
+     * question): Stor98 is left for a later run, out of this one whole -
+     * no copy of it, no job, no setting, no record (record 26 section
+     * 6.3, draft 16). */
+    if (s98Include && s98FileUpd && !s98FileOk) {
+        s98Declined = 1;
+        s98_apply(0);
+        logonly("stor98: left out of the run, the file update not "
+                "confirmed\n");
+    }
     if (!s98_baseline()) {
         return inst_exit_code(0, 1, flagRestart, 1);
     }
@@ -8942,8 +8967,8 @@ static int run_install_9x(void)
      * and before DevicePath names it, the first Stor98 change Windows
      * can see (record 26 section 6.3, draft 16). */
     if (!begin_move() || !make_local_copy() ||
-        (s98Include && !s98HoldRun && s98Share != INST_S98_SHARE_HOLD &&
-         !s98_pre_commit()) ||
+        (copiedNow && s98Include && !s98HoldRun &&
+         s98Share != INST_S98_SHARE_HOLD && !s98_pre_commit()) ||
         !devicepath_update(srcDir)) {
         step(INST_STEP_FAILED, "The package's copy and DevicePath");
         return inst_exit_code(0, 1, 0, 1);
@@ -14364,6 +14389,7 @@ static void s98_places(void)
 
     s98Share = INST_S98_SHARE_FREE;
     s98FileUpd = 0;
+    s98InfRefresh = 0;
     for (i = 0; i < devCount; i++) {
         devs[i].S98Why = INST_S98_ELIGIBLE;
         if (devs[i].Present && (devs[i].Inf == INST_INF_S98 ||
@@ -14405,6 +14431,9 @@ static void s98_places(void)
     s98FileUpd = inst_s98_file_update(envNow.Nt, s98Include, s98Share,
                                       r > 0 ? 1 : r < 0 ? -1 : 0,
                                       r > 0 ? inst_ver_cmp(v, s98Version) : 0);
+    s98InfRefresh = !envNow.Nt && s98Include &&
+                    s98Share == INST_S98_SHARE_FREE && r > 0 &&
+                    inst_ver_cmp(v, s98Version) <= 0;
     logonly("stor98: other bindings %d, the file %s (%d), share %d, file "
             "update %d\n", other, path, r, s98Share, s98FileUpd);
     for (i = 0; i < devCount; i++) {
@@ -15439,6 +15468,11 @@ static int s98_inf_refresh_9x(void)
         if (c != 1) {
             logonly("stor98: InfPath %s of SCSIAdapter\\%s: %d candidate "
                     "copies, left\n", infPath, sub, c);
+            if (c < 0) {
+                out("The INF copies could not be read: Stor98's INF copy is "
+                    "left; run the\ninstaller again.\n");
+                ok = 0;
+            }
             continue;
         }
         join(path, sizeof(path), dir, pick);
@@ -15482,11 +15516,18 @@ static void s98_file_update_9x(void)
     DWORD n;
     char *slash;
 
-    if (!s98FileUpd || !s98Include || envNow.Nt || opts.List) {
+    if (s98Declined && !envNow.Nt && !opts.List) {
+        step(INST_STEP_BEGIN, "Updating Stor98's driver file");
+    } else if (!s98FileUpd || !s98Include || envNow.Nt || opts.List) {
+        if (s98InfRefresh && s98Include && !envNow.Nt && !opts.List &&
+            !s98_inf_refresh_9x()) {
+            flagSteps = 1;
+        }
         return;
+    } else {
+        step(INST_STEP_BEGIN, "Updating Stor98's driver file");
     }
-    step(INST_STEP_BEGIN, "Updating Stor98's driver file");
-    if (!s98FileOk) {
+    if (!s98FileOk || s98Declined) {
         out("Stor98's driver file is not updated in this run: \"%s\" was "
             "not confirmed.\nRun the installer again to update it.\n",
             instS98DisconnectText);
@@ -15546,7 +15587,8 @@ static void s98_file_update_9x(void)
     out("Stor98 %s replaces %s when Windows next starts; no drive is "
         "reinstalled.\n", s98VersionText, bin);
     if (!s98_inf_refresh_9x()) {
-        flagFailed = 1;
+        /* Retried by the next run (s98InfRefresh), the file then current. */
+        flagSteps = 1;
     }
     step(INST_STEP_DONE, "Stor98's driver file: replaced at the next start");
 }

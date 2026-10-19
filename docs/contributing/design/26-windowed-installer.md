@@ -754,7 +754,8 @@ unasked. With the box ticked:
   drives before proceeding" (draft 16, owner 2026-10-19; until then one
   box per drive, "nothing is using this drive", that Install required):
   ticked, the file update goes ahead; unticked, Install still runs and
-  Stor98 is left for a later run (a step, exit 4). The finish page offers
+  Stor98 is left for a later run, out of this run whole (no copy of its
+  files, no job, no setting, no record; a step, exit 4). The finish page offers
   "Shut down now" in place of "Restart now" (section 5.9); the console
   tool asks the same sentence as one yes/no question (`INST_Q_S98_UNUSED`,
   Enter and `/yes` give N) and ends with the shutdown line. On 2000 to 7 the
@@ -781,10 +782,12 @@ unasked. With the box ticked:
   `HKLM\Software\xhci98\Stor98` with: `PreExisting` (`REG_DWORD` 1 when
   the baseline of the first bullet found any Stor98, a service, a driver
   key or a bound devnode; written once, never cleared, and since draft 16
-  written with the run's first Stor98 change Windows can see - once the
-  local copy that carries Stor98 is made, before it is staged or named on
-  `DevicePath` - never by a run that makes none, such as one that leaves
-  a hand-installed Stor98 alone);
+  written with the run's first Stor98 change - with the record's first
+  entry (a staged copy, a device, a setting) on NT, and on 98 SE and ME
+  also once a new local copy that carries Stor98 is made, before
+  `DevicePath` names it, and before a helper job or the file update -
+  never by a run that makes none, such as one that leaves a
+  hand-installed Stor98 alone);
   `Version` (the bundled release last installed: written only by a run
   that installed or updated it, a device the call or the helper bound or
   updated, or the 98 SE and ME file update; record 28 section 4 item 4
