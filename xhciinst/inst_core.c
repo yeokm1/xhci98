@@ -2031,6 +2031,8 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->CmOnly = 1;
         } else if (inst_switch(a, "stor98")) {
             opts->Stor98 = 1;
+        } else if (inst_switch(a, "nostor98")) {
+            opts->NoStor98 = 1;
         } else if (inst_switch(a, "nouas")) {
             opts->NoUas = 1;
         } else if (inst_switch(a, "notray")) {
@@ -2204,6 +2206,15 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     if (opts->Stor98 && !opts->Thunderbolt && !opts->CmOnly) {
         inst_err(err, errCap, "/stor98 needs /thunderbolt (or /cmonly): "
                  "Stor98 is part of the Thunderbolt 3 / USB4 support", NULL);
+        return 1;
+    }
+    if (opts->NoStor98 && (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, "/nostor98 belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->NoStor98 && opts->Stor98) {
+        inst_err(err, errCap, "/stor98 and /nostor98 contradict each other",
+                 NULL);
         return 1;
     }
     if (opts->NoUas && (opts->Uninstall || opts->Devices || opts->Eject)) {
@@ -3407,10 +3418,10 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
 int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
                    int optList, int *ask, int *defaultYes)
 {
+    (void)nhiPresent;
     *ask = 0;
-    *defaultYes = nhiPresent ? 1 : 0;
+    *defaultYes = 0;
     if (!haveCm) {
-        *defaultYes = 0;
         return 0;
     }
     if (optThunderbolt) {
@@ -4717,6 +4728,26 @@ int inst_di_outcome(int job, int verdict)
     }
 }
 
+int inst_di_unfinished(int verdict)
+{
+    switch (verdict) {
+    case INST_DI_V_INSTALLED:
+    case INST_DI_V_INSTALLED_RESTART:
+    case INST_DI_V_CANCELLED:
+    case INST_DI_V_NO_MATCH:
+    case INST_DI_V_NOT_PRESENT:
+    case INST_DI_V_FAILED:
+    case INST_DI_V_REFUSED:
+    case INST_DI_V_REMOVED:
+    case INST_DI_V_REMOVED_RESTART:
+    case INST_DI_V_NOT_FOUND:
+    case INST_DI_V_PROBED:
+        return 0;
+    default:
+        return 1;
+    }
+}
+
 const char *inst_di_verdict_text(int verdict)
 {
     switch (verdict) {
@@ -4901,16 +4932,17 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "Untick only if you use another UAS driver. Bulk-Only disks are not "
       "affected; XhciForceBulkOnly also avoids UAS.",
       260, 18 },
-    { INST_PT_TB, "Thunderbolt 3 / USB4 support (xhcicm.sys)", 270, 10 },
+    { INST_PT_TB,
+      "Thunderbolt 3 / USB4 support (experimental) (xhcicm.sys)", 270, 10 },
     { INST_PT_TB_T,
-      "The connection manager. A device plugged into a Thunderbolt or USB4 "
-      "port is then approved and can reach the computer's memory: see "
-      "XhciCmApprove on the Thunderbolt settings page.",
+      "A Thunderbolt 3 / USB4 controller was found. With this, a device "
+      "plugged into its port can reach the computer's memory: see "
+      "XhciCmApprove.",
       272, 26 },
     { INST_PT_TB_ABSENT,
-      "No Thunderbolt or USB4 controller was found. Some computers show "
-      "theirs only while a device is plugged in, or only with a BIOS "
-      "setting: tick it if this computer has such a port.",
+      "No Thunderbolt 3 / USB4 controller was found (some laptops show it "
+      "only with a device plugged in or a BIOS setting). Tick it only if "
+      "this computer has such a port.",
       272, 26 },
     { INST_PT_TRAY, "xHCI98 USB Tree, started at login", 270, 10 },
     { INST_PT_TRAY_T,
@@ -4958,10 +4990,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "Stor98's settings (its readme, SETTINGS). A row left as it is writes "
       "nothing; Stor98 keeps its built-in default.",
       284, 18 },
-    { INST_PT_S98_UNUSED,
-      "Nothing is using this drive (Stor98's readme: close every program "
-      "and window that uses it before the update).",
-      284, 18 },
+    { INST_PT_S98_UNUSED, instS98DisconnectText, 284, 10 },
     { INST_PT_SHUT_NOW, "Shut down now, then start Windows again", 284, 10 },
     { INST_PT_SHUT_LATER, "Shut down later", 284, 10 },
     { INST_PT_WELCOME_CM,
@@ -5458,12 +5487,57 @@ int inst_s98_cold_start(int nt)
     return !nt;
 }
 
-int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch, int list,
-                    int *asked, int *def)
+int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
+                    int noStor98, int list, int *asked, int *def)
 {
-    *def = 0;
-    *asked = haveS98 && tb && !yes && !stor98Switch && !list;
-    return haveS98 && tb && stor98Switch;
+    *def = 1;
+    *asked = haveS98 && tb && !yes && !stor98Switch && !noStor98 && !list;
+    return haveS98 && tb && !noStor98;
+}
+
+int inst_s98_known_tunnel(int nt, int present, int place, int recorded)
+{
+    if (present) {
+        return place == INST_S98_AT_TUNNEL;
+    }
+    return nt ? recorded != 0 : 1;
+}
+
+int inst_s98_file_update(int nt, int include, int share, int installed,
+                         int cmp)
+{
+    return !nt && include && share == INST_S98_SHARE_FREE &&
+           installed > 0 && cmp < 0;
+}
+
+const char instS98DisconnectText[] =
+    "Please disconnect all external NVMe drives before proceeding";
+
+int inst_cm_mode_off(const char *name, INST_U32 value)
+{
+    return name != NULL && inst_eq(name, "XhciCmMode") && value == 0;
+}
+
+const char instCmOffText[] =
+    "Thunderbolt 3 and USB4 will be turned off (XhciCmMode 0)";
+
+void inst_tb_found_text(char *out, size_t cap, const char *name)
+{
+    const char *all = inst_page_text(INST_PT_TB_T);
+    const char *rest = strstr(all, ". ");
+    char cut[INST_TB_NAME_SHOWN + 1];
+
+    if (cap == 0) {
+        return;
+    }
+    if (name == NULL || name[0] == '\0' || rest == NULL) {
+        inst_copy(out, all, cap);
+        return;
+    }
+    inst_copy(cut, name, sizeof(cut));
+    inst_copy(out, "A Thunderbolt 3 / USB4 controller was found: ", cap);
+    inst_cat(out, cap, cut);
+    inst_cat(out, cap, rest);
 }
 
 int inst_s98_box_open(int haveS98, int tbHave, int tbTicked)

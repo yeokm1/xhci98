@@ -367,10 +367,12 @@ static char *s98OemNames;   /* NT: %windir%\inf\oem*.inf before staging    */
 static int s98OemOk;
 static int s98Baseline;     /* the baseline was taken in this run          */
 static int s98Pre;          /* the record's PreExisting                    */
-static int s98Cold;         /* 98 SE and ME: a Stor98 device was updated   */
+static int s98PreOwed;      /* PreExisting read, written at the first change */
+static int s98Cold;         /* 98 SE and ME: Stor98's file was replaced    */
 static int s98Left;         /* the uninstall left a Stor98 it did not install */
-static char s98OkId[INST_S98_MAX_DEV][INST_ID_CHARS];
-static int s98OkCount;      /* 98 SE and ME: "nothing is using this drive" */
+static int s98FileUpd;      /* 98 SE and ME: the plan replaces stor98.mpd  */
+static int s98FileOk;       /* ... and the user confirmed it (the box, Y)  */
+static int s98FileDone;     /* ... and the replacement is queued           */
 static char s98AwaitId[INST_S98_MAX_DEV][INST_ID_CHARS];
 static int s98AwaitCount;   /* NT: updated, awaiting reconnection          */
 static int s98Set[INST_S98_COUNT];
@@ -396,6 +398,8 @@ static void s98_record_version(void);
 static void s98_write_values(void);
 static void s98_ask_values(void);
 static void s98_ask_unused(void);
+static void s98_file_update_9x(void);
+static int s98_pre_commit(void);
 static void s98_question(void);
 static void s98_reconnect_nt(void);
 static int s98_awaiting(const char *id);
@@ -415,8 +419,6 @@ static int s98_rec_devices_any(int present);
 static void s98_oem_before(void);
 static int s98_oem_was(const char *name);
 static int s98_reread_9x(const char *id, char *infPath, size_t cap);
-static int s98_update_9x(const DEVREC *d);
-static int s98_ok(const char *id);
 
 static int s98_base_state(const char *id);
 static int s98_rec_text(const char *sub, const char *name, const char *text);
@@ -435,6 +437,7 @@ static int usb_decide(void);
 static int pkgCmSigned = -1;    /* xhcicm.sys signed: as pkgSigned */
 static int tbInclude = 1;   /* the Thunderbolt question's answer (section 8.5) */
 static int tbNhiPresent;
+static char tbNhiName[INST_ID_CHARS];   /* the first controller's name   */
 static int tbStaged;        /* NT: xhcicm.inf was staged by this run       */
 static int tbTagAll;        /* package_files lists every file, whatever the
                                answer: the package's identity             */
@@ -1667,6 +1670,7 @@ static void plan(void)
     envNow.AnyXhci = 0;
     envNow.PswController = 0;
     envNow.CmNhi = 0;
+    tbNhiName[0] = '\0';
     for (i = 0; i < devCount; i++) {
         DEVREC *d = &devs[i];
         d->Inf = -1;
@@ -1695,6 +1699,10 @@ static void plan(void)
             continue;
         }
         if (d->Inf == INST_INF_CM) {
+            if (!envNow.CmNhi) {
+                inst_copy(tbNhiName, d->Desc[0] ? d->Desc : d->Id,
+                          sizeof(tbNhiName));
+            }
             envNow.CmNhi = 1;
         }
         memset(&dv, 0, sizeof(dv));
@@ -3851,6 +3859,22 @@ static int forget_dir(void)
     DWORD values = 0;
     LONG r;
 
+    /* The Stor98 record goes too, also when Stor98 itself stays (record
+     * 26 section 9.3 step 6, draft 16): nothing of this package is left
+     * for it to describe. */
+    if (!opts.List) {
+        LONG w;
+        RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Staged");
+        RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Devices");
+        RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Settings");
+        w = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY);
+        if (w == ERROR_SUCCESS) {
+            logonly("deleted HKLM\\%s\n", INST_S98_KEY);
+        } else if (w != ERROR_FILE_NOT_FOUND) {
+            out("Stor98's install record could not be removed (error %ld).\n",
+                (long)w);
+        }
+    }
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0,
                       KEY_SET_VALUE | KEY_QUERY_VALUE, &k);
     if (r == ERROR_FILE_NOT_FOUND) {
@@ -7530,7 +7554,7 @@ static int planned_runs(void)
     for (i = 0; i < devCount; i++) {
         runs += devs[i].Runs;
     }
-    return runs;
+    return runs + (s98FileUpd ? 1 : 0);
 }
 
 /* INST_PH_RUN on NT, after the confirmation. */
@@ -7546,6 +7570,10 @@ static int run_install_nt(void)
         return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
     }
     if (!s98_baseline()) {
+        return inst_exit_code(0, 1, flagRestart, flagSteps);
+    }
+    if (s98Include && s98Share != INST_S98_SHARE_HOLD && !s98_pre_commit()) {
+        out("Nothing was changed.\n");
         return inst_exit_code(0, 1, flagRestart, flagSteps);
     }
     step(INST_STEP_BEGIN, "Copying the package to %%windir%%\\XHCI98");
@@ -7840,6 +7868,18 @@ static int steps_9x(const char *dir)
         if (d->Refused) {
             out("  Left: its version could not be compared.\n");
             print_uas_fix(fix, "  - ");
+            continue;
+        }
+        if (helperRan && (d->Action == INST_ACT_CURRENT ||
+                          d->Action == INST_ACT_NEWER) &&
+            inst_starts(steps_why(d->Id),
+                        inst_di_verdict_text(INST_DI_V_NONE))) {
+            /* Its install was cut short: what the reading shows now is
+             * not a finished install (98 SE update, 2026-10-19). */
+            needs = 1;
+            out("  Its install did not finish. Shut down Windows and start it "
+                "again, then run\n  the installer again: it checks this "
+                "device and finishes what is left.\n");
             continue;
         }
         switch (d->Action) {
@@ -8359,23 +8399,18 @@ static int helper_install(DEVREC *d)
     int out9x;
     int v;
     int c;
-    int s98Update;
     char why[96];
 
     join(inf, sizeof(inf), srcDir, instInfFile[d->Inf]);
     force = d->Action == INST_ACT_CURRENT || d->Action == INST_ACT_NEWER;
     if (d->Inf == INST_INF_S98) {
-        /* Unforced, as on NT (record 26 section 6.3); an update only on the
-         * user's word that nothing uses the drive (Stor98's readme). */
+        /* Unforced, as on NT (record 26 section 6.3). Only a device with
+         * no driver comes here: one Stor98 runs is never reinstalled on
+         * 98 SE and ME (s98_places; the file update replaces its file). */
         force = 0;
-        if (s98_update_9x(d) && !s98_ok(d->Id)) {
-            out("%s is not updated: nothing may be using the drive while "
-                "Stor98 is\nupdated, and that was not confirmed. Run the "
-                "installer again to update it.\n",
-                d->Desc[0] ? d->Desc : d->Id);
-            steps_add(d, "not updated: confirm that nothing uses the drive, "
-                      "then run the installer again");
-            flagSteps = 1;
+        if (!s98_pre_commit()) {
+            steps_add(d, "Stor98's install record could not be written");
+            flagFailed = 1;
             d->Done = 1;
             return 1;
         }
@@ -8393,7 +8428,6 @@ static int helper_install(DEVREC *d)
         d->Done = 1;
         return 1;
     }
-    s98Update = d->Inf == INST_INF_S98 && s98_update_9x(d);
     /* Every helper install is bracketed by the INF listings (record 26
      * section 6.3): a copy made in it is that device's step. */
     s98_inf_sync();
@@ -8421,12 +8455,6 @@ static int helper_install(DEVREC *d)
         char infPath[64];
         s98_reread_9x(d->Id, infPath, sizeof(infPath));
         s98_inf_after(infPath, 0);
-        /* An update that succeeded asks for the shutdown whatever the
-         * drive does after it (a tunnelled one may be gone). */
-        if (s98Update && inst_di_outcome(INST_DI_INSTALL, v) <=
-                         INST_DI_OUT_RESTART) {
-            s98Cold = 1;
-        }
     }
     out9x = inst_di_outcome(INST_DI_INSTALL, v);
     helperLastOut = out9x;
@@ -8490,8 +8518,17 @@ static int helper_install(DEVREC *d)
             changedState[c] = 3;
         }
         steps_add(d, why);
-        flagFailed = 1;
-        step(INST_STEP_FAILED, "%s: %s", d->Desc[0] ? d->Desc : d->Id, why);
+        if (inst_di_unfinished(v)) {
+            /* The helper did not finish: the install is unfinished, with
+             * steps, never a failure of the device (98 SE update,
+             * 2026-10-19). */
+            flagSteps = 1;
+            step(INST_STEP_LEFT, "%s: %s", d->Desc[0] ? d->Desc : d->Id, why);
+        } else {
+            flagFailed = 1;
+            step(INST_STEP_FAILED, "%s: %s", d->Desc[0] ? d->Desc : d->Id,
+                 why);
+        }
         return !is_controller(d);
     }
 }
@@ -8797,6 +8834,12 @@ static int plan_9x(void)
         "install\ndirectory, adds that copy to DevicePath (where the hardware "
         "wizards search),\nand installs each device's driver through Windows' "
         "own device installer.\n\n");
+    if (s98FileUpd) {
+        out("Stor98: the installed stor98.mpd is an older release. This run "
+            "replaces it with\n%s as a file when Windows next starts (a drive "
+            "Stor98 runs is never\nreinstalled); Windows is then shut down and "
+            "started again.\n\n", s98VersionText);
+    }
     return -1;
 }
 
@@ -8873,6 +8916,12 @@ static int run_install_9x(void)
     if (!s98_baseline()) {
         return inst_exit_code(0, 1, flagRestart, 1);
     }
+    /* A copy that carries Stor98 is its first change (record 26 section
+     * 6.3, draft 16): the record's PreExisting before it. */
+    if (s98Include && s98Share != INST_S98_SHARE_HOLD && !s98_pre_commit()) {
+        out("Nothing was changed.\n");
+        return inst_exit_code(0, 1, flagRestart, 1);
+    }
     move_ready();
     step(INST_STEP_BEGIN, "Copying the package to %s", toolDir);
     if (!begin_move() || !make_local_copy() || !devicepath_update(srcDir)) {
@@ -8888,6 +8937,7 @@ static int run_install_9x(void)
     step(INST_STEP_DONE, "The package is in %s and on DevicePath", srcDir);
     hashed_cleanup();
     helper_installs();
+    s98_file_update_9x();
     write_values();
     s98_write_values();
     tray_install();
@@ -12796,14 +12846,13 @@ static void tb_question(void)
         tbInclude = 0;
         return;
     }
-    out("Thunderbolt 3 / USB4 support\n");
+    out("Thunderbolt 3 / USB4 support (experimental)\n");
     if (tbNhiPresent) {
-        out("  A Thunderbolt or USB4 controller is present.\n");
+        out("  A Thunderbolt 3 / USB4 controller was found: %s.\n", tbNhiName);
     } else {
-        out("  No Thunderbolt or USB4 controller was found. Some computers show "
-            "theirs only\n  while a device is plugged in, or only with a BIOS "
-            "setting: answer Y if this\n  computer has a Thunderbolt or USB4 "
-            "port.\n");
+        out("  No Thunderbolt 3 / USB4 controller was found (some laptops show "
+            "it only with\n  a device plugged in or a BIOS setting): answer Y "
+            "only if this computer has\n  a Thunderbolt or USB4 port.\n");
     }
     out("  With it, a device plugged into that port is approved automatically "
         "and can\n  reach the computer's memory (the setting XhciCmApprove; "
@@ -12843,9 +12892,7 @@ static void tb_question(void)
             "    Y  install it\n    N  leave it out\n"
             "  Enter would give [%s].\n", def ? "Y" : "N");
     } else {
-        out("  /yes: %s.\n", tbInclude ? "Y, a controller is present"
-                                       : "N, none was found (/thunderbolt "
-                                         "installs it anyway)");
+        out("  /yes: N (/thunderbolt installs it).\n");
     }
     out("\n");
     logonly("thunderbolt: present %d, installed %d, asked %d, default %d, "
@@ -13009,6 +13056,15 @@ static int s98_rec_put(const char *sub, const char *name, DWORD type,
 
     if (opts.List) {
         return 1;
+    }
+    /* No record before a Stor98 change (record 26 section 6.3, draft 16):
+     * the baseline's PreExisting goes first, with the first entry. */
+    if (s98PreOwed && !(sub == NULL && inst_eq(name, "PreExisting"))) {
+        DWORD one = (DWORD)s98Pre;
+        if (!s98_rec_put(NULL, "PreExisting", REG_DWORD, &one, sizeof(one))) {
+            return 0;
+        }
+        s98PreOwed = 0;
     }
     inst_copy(path, INST_S98_KEY, sizeof(path));
     if (sub != NULL) {
@@ -13294,17 +13350,17 @@ static int s98_baseline(void)
         s98Baseline = 0;
         return 0;
     }
+    s98PreOwed = 0;
     if (h > 0) {
         s98Pre = pre != 0;
     } else {
+        /* Written with the run's first Stor98 change (s98_pre_commit, or
+         * the first entry of the record), never in a run that makes none
+         * (record 26 section 6.3, draft 16). */
         s98Pre = any;
-        one = (DWORD)s98Pre;
-        if (!s98_rec_put(NULL, "PreExisting", REG_DWORD, &one, sizeof(one))) {
-            out("Nothing was changed.\n");
-            s98Baseline = 0;
-            return 0;
-        }
+        s98PreOwed = 1;
     }
+    (void)one;
     logonly("stor98: found before %d, PreExisting %d\n", any, s98Pre);
     /* 98 SE and ME: the setup engine's INF copies, before anything. */
     s98_inf_take(0, 1);
@@ -13897,119 +13953,85 @@ static void s98_record_devices(void)
     }
 }
 
-/* The bundled release this installer last installed. */
+/* The record's PreExisting, written before the run's first Stor98 change
+ * (the copy that carries Stor98, its staging, an install or the file
+ * update): 0 when it cannot be written, said. */
+static int s98_pre_commit(void)
+{
+    DWORD one;
+
+    if (!s98PreOwed || opts.List) {
+        return 1;
+    }
+    one = (DWORD)s98Pre;
+    if (!s98_rec_put(NULL, "PreExisting", REG_DWORD, &one, sizeof(one))) {
+        return 0;
+    }
+    s98PreOwed = 0;
+    return 1;
+}
+
+/* The bundled release this installer last installed: written only by a
+ * run that installed or updated it (record 26 section 6.3, draft 16) -
+ * a device the call or the helper bound or updated, or the file update. */
 static void s98_record_version(void)
 {
-    if (s98Include && s98Baseline && !opts.List) {
+    int c;
+    int changed = s98FileDone;
+
+    for (c = 0; c < changedCount && !changed; c++) {
+        changed = changedInf[c] == INST_INF_S98 && changedState[c] == 2;
+    }
+    if (s98Include && s98Baseline && !opts.List && changed) {
         s98_rec_text(NULL, "Version", s98VersionText);
     }
 }
 
-/* ---- the update precautions (record 26 section 6.3) ---------------------- */
+/* ---- the file update's confirmation (record 26 section 6.3, draft 16) --- */
 
-static int s98_ok(const char *id)
-{
-    int i;
-
-    for (i = 0; i < s98OkCount; i++) {
-        if (inst_eq(s98OkId[i], id)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static void s98_ok_set(const char *id, int ok)
-{
-    int i;
-
-    for (i = 0; i < s98OkCount; i++) {
-        if (inst_eq(s98OkId[i], id)) {
-            if (!ok) {
-                s98OkCount--;
-                memmove(s98OkId[i], s98OkId[i + 1],
-                        (size_t)(s98OkCount - i) * INST_ID_CHARS);
-            }
-            return;
-        }
-    }
-    if (ok && s98OkCount < INST_S98_MAX_DEV) {
-        inst_copy(s98OkId[s98OkCount++], id, INST_ID_CHARS);
-    }
-}
-
-/* 1 when device d is a Stor98 update this run makes on 98 SE or ME (the
- * one that needs the user's word, and a shutdown after it). */
-static int s98_update_9x(const DEVREC *d)
-{
-    return !envNow.Nt && s98Include && d->Present &&
-           d->Inf == INST_INF_S98 && d->Runs && !d->Refused &&
-           inst_eq(d->Service, "stor98");
-}
-
-/* The i-th of those, or NULL. */
-static const DEVREC *s98_update_nth(int n)
-{
-    int i;
-
-    for (i = 0; i < devCount; i++) {
-        if (s98_update_9x(&devs[i]) && n-- == 0) {
-            return &devs[i];
-        }
-    }
-    return NULL;
-}
-
-/* The console's question before such an update (record 26 section 6.3):
- * nothing may be using the drive's volume; N leaves it for a later run. */
+/* The console's question before the 98 SE and ME file update (owner,
+ * 2026-10-19): one yes/no, Enter for N; N leaves Stor98 for a later
+ * run. The window's Summary box answers it there. */
 static void s98_ask_unused(void)
 {
     char text[1024];
+    char q[1300];
     char line[16];
-    int n;
     int k;
-    int r;
-    const DEVREC *d;
+    int r = 0;
 
-    if (instWindow || opts.List) {
+    if (instWindow || opts.List || !s98FileUpd) {
         return;
     }
-    for (n = 0; (d = s98_update_nth(n)) != NULL; n++) {
-        if (opts.Yes) {
-            /* Unasked, the drive is not known to be idle: left. */
-            out("/yes: %s is not updated (Stor98's readme: nothing may be "
-                "using the drive;\nrun the installer again without /yes to "
-                "update it).\n", d->Desc[0] ? d->Desc : d->Id);
-            continue;
-        }
-        _snprintf(text, sizeof(text) - 1,
-                  "Stor98 is updated on %s. Nothing may be using this "
-                  "drive while it is: close every program and window that "
-                  "uses its drive letter. Afterwards shut Windows down and "
-                  "start it again (not a restart).", d->Desc[0] ? d->Desc :
-                  d->Id);
-        text[sizeof(text) - 1] = '\0';
-        {
-            char q[1300];
-            inst_yesno_question(q, sizeof(q), text,
-                                "nothing is using this drive: update it",
-                                "leave it for a later run", 0);
-            for (k = 0;; k++) {
-                if (!ask(INST_Q_S98_UNUSED, k == 0 ? q :
-                         "  Type Y or N, or Enter for [N]: ", k > 0, 0, 0,
-                         NULL, line, sizeof(line))) {
-                    r = 0;
-                    out("\n");
-                    break;
-                }
-                r = inst_tb_answer(line, 0);
-                if (r >= 0) {
-                    break;
-                }
-            }
-        }
-        s98_ok_set(d->Id, r == 1);
+    if (opts.Yes) {
+        out("/yes: Stor98's driver file is not updated (\"%s\" is not "
+            "confirmed unasked;\nrun the installer again without /yes to "
+            "update it).\n\n", instS98DisconnectText);
+        s98FileOk = 0;
+        return;
     }
+    _snprintf(text, sizeof(text) - 1,
+              "Stor98 %s replaces the installed stor98.mpd when Windows next "
+              "starts. %s.", s98VersionText, instS98DisconnectText);
+    text[sizeof(text) - 1] = '\0';
+    inst_yesno_question(q, sizeof(q), text,
+                        "they are disconnected: update Stor98",
+                        "leave Stor98 for a later run", 0);
+    for (k = 0;; k++) {
+        if (!ask(INST_Q_S98_UNUSED, k == 0 ? q :
+                 "  Type Y or N, or Enter for [N]: ", k > 0, 0, 0,
+                 NULL, line, sizeof(line))) {
+            r = 0;
+            out("\n");
+            break;
+        }
+        r = inst_tb_answer(line, 0);
+        if (r >= 0) {
+            break;
+        }
+    }
+    s98FileOk = r == 1;
+    logonly("stor98: file update confirmed %d\n", s98FileOk);
 }
 
 /* 1 when a devnode the scan read carries the tunnel-port filter. */
@@ -14190,6 +14212,7 @@ static int s98_other_9x(void)
     int g;
     int j;
     int known;
+    int present;
     int other = 0;
 
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_S98_CLASS_9X, 0, KEY_READ,
@@ -14222,26 +14245,22 @@ static int s98_other_9x(void)
         }
         join(drv, sizeof(drv), "SCSIAdapter", sub);
         known = 0;
+        present = 0;
         for (j = 0; j < devCount; j++) {
-            if (inst_eq(devs[j].Driver, drv) &&
-                ((devs[j].Present && !devs[j].RegOnly &&
-                  devs[j].S98Place == INST_S98_AT_TUNNEL) ||
-                 s98_rec_has("Devices", devs[j].Id) == 1)) {
-                known = 1;
+            if (inst_eq(devs[j].Driver, drv) && devs[j].Present &&
+                !devs[j].RegOnly) {
+                present = 1;
+                if (inst_s98_known_tunnel(0, 1, devs[j].S98Place, 0)) {
+                    known = 1;
+                }
             }
         }
-        if (!known) {
-            /* An unplugged drive is in no reading: its Enum entry names the
-             * key, and the record may name that entry. */
-            char eid[INST_ID_CHARS];
-            int e = s98_enum_id_9x(drv, eid, sizeof(eid));
-            if (e < 0) {
-                other = 1;
-                break;
-            }
-            if (e > 0 && s98_rec_has("Devices", eid) == 1) {
-                known = 1;
-            }
+        if (!present) {
+            /* An unplugged drive is in no reading: on 98 SE and ME an
+             * internal drive is always present, so a key with no present
+             * devnode is a drive gone with its tunnel (record 23 section
+             * 4.4, revision 23; the uninstall's adoption reads it so). */
+            known = inst_s98_known_tunnel(0, 0, INST_S98_AT_UNKNOWN, 0);
         }
         if (!known) {
             logonly("stor98: the driver key SCSIAdapter\\%s is Stor98's and "
@@ -14337,8 +14356,9 @@ static void s98_places(void)
         if (!inst_eq(d->Service, "stor98")) {
             continue;
         }
-        if (d->Present ? d->S98Place == INST_S98_AT_TUNNEL
-                       : s98_rec_has("Devices", d->Id) == 1) {
+        if (inst_s98_known_tunnel(envNow.Nt, d->Present, d->S98Place,
+                                  !d->Present &&
+                                  s98_rec_has("Devices", d->Id) == 1)) {
             continue;
         }
         other = 1;
@@ -14355,8 +14375,11 @@ static void s98_places(void)
     if (s98HoldRun) {
         s98Share = INST_S98_SHARE_HOLD;
     }
-    logonly("stor98: other bindings %d, the file %s (%d), share %d\n", other,
-            path, r, s98Share);
+    s98FileUpd = inst_s98_file_update(envNow.Nt, s98Include, s98Share,
+                                      r > 0 ? 1 : r < 0 ? -1 : 0,
+                                      r > 0 ? inst_ver_cmp(v, s98Version) : 0);
+    logonly("stor98: other bindings %d, the file %s (%d), share %d, file "
+            "update %d\n", other, path, r, s98Share, s98FileUpd);
     for (i = 0; i < devCount; i++) {
         DEVREC *d = &devs[i];
         int why;
@@ -14368,6 +14391,19 @@ static void s98_places(void)
             why = INST_S98_SKIP_SHARED;
         }
         d->S98Why = why;
+        if (why == INST_S98_ELIGIBLE && !envNow.Nt &&
+            inst_eq(d->Service, "stor98")) {
+            /* 98 SE and ME: a device Stor98 runs is never reinstalled
+             * (the fatal exception 0E of 2026-10-19); its file is
+             * replaced at the next start when it is older. */
+            if (d->Runs) {
+                logonly("stor98: %s (%s) not reinstalled: %s\n", d->Id,
+                        inst_action_text(d->Action), s98FileUpd ?
+                        "the file update covers it" : "Stor98 runs it");
+            }
+            d->Runs = 0;
+            continue;
+        }
         if (why == INST_S98_ELIGIBLE) {
             continue;
         }
@@ -14811,7 +14847,7 @@ static void s98_question(void)
     char text[1024];
 
     r = inst_s98_decide(haveS98, haveCm && tbInclude, opts.Yes, opts.Stor98,
-                        opts.List, &asked, &def);
+                        opts.NoStor98, opts.List, &asked, &def);
     if (!haveS98) {
         s98_apply(0);
         return;
@@ -14836,8 +14872,8 @@ static void s98_question(void)
                             "install it", "leave it out", def);
         for (k = 0;; k++) {
             if (!ask(INST_Q_S98, k == 0 ? text : "  Type Y or N, or Enter "
-                     "for [N]: ", k > 0, 0, def, NULL, line, sizeof(line))) {
-                r = 0;
+                     "for [Y]: ", k > 0, 0, def, NULL, line, sizeof(line))) {
+                r = def;
                 out("\n");
                 break;
             }
@@ -14846,13 +14882,16 @@ static void s98_question(void)
                 break;
             }
         }
+    } else if (opts.NoStor98) {
+        out("  /nostor98: left out without asking.\n");
     } else if (opts.Stor98) {
         out("  /stor98: installed without asking.\n");
     } else if (opts.List) {
         out("  /list: it would be asked:\n    Y  install it\n"
-            "    N  leave it out\n  Enter would give [N].\n");
+            "    N  leave it out\n  Enter would give [Y].\n");
     } else {
-        out("  /yes: N (/thunderbolt /stor98 installs it).\n");
+        out("  /yes: Y, with the Thunderbolt support (/nostor98 leaves it "
+            "out).\n");
     }
     out("\n");
     logonly("stor98: asked %d, include %d\n", asked, r);
@@ -15269,29 +15308,32 @@ static int s98_file_names_stor98(const char *path)
  * whose long or 8.3 name a bare InfPath is. Exactly one is adopted; none
  * or more than one (the name could mean either) adopts nothing, logged.
  * 0 when the record could not be written. */
-static int s98_adopt_inf(const char *infPath)
+/* The candidates for a driver key's InfPath, as s98_adopt_inf takes
+ * them: their count (the last one in pick, relative to dir, the engine's
+ * INF directory), 0 for none or no InfPath, -1 when a directory cannot
+ * be read. */
+static int s98_inf_find(const char *infPath, char *dir, size_t dcap,
+                        char *pick, size_t pcap)
 {
     char win[INST_PATH_CHARS];
-    char dir[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
     char rel[INST_PATH_CHARS];
-    char pick[INST_PATH_CHARS];
     WIN32_FIND_DATAA fd;
     HANDLE h;
     int count = 0;
     int h1;
 
     if (infPath[0] == '\0' || GetWindowsDirectoryA(win, sizeof(win)) == 0) {
-        return 1;
+        return 0;
     }
-    join(dir, sizeof(dir), win, "INF");
+    join(dir, dcap, win, "INF");
     join(path, sizeof(path), dir, infPath);
     h1 = file_state(path);
     if (h1 < 0) {
-        return 0;   /* unreadable: no candidate can be ruled out */
+        return -1;
     }
     if (h1 > 0) {
-        inst_copy(pick, infPath, sizeof(pick));
+        inst_copy(pick, infPath, pcap);
         count++;
     }
     if (!envNow.Nt && strchr(infPath, '\\') == NULL) {
@@ -15301,23 +15343,198 @@ static int s98_adopt_inf(const char *infPath)
             DWORD e = GetLastError();
             if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND &&
                 e != ERROR_NO_MORE_FILES) {
-                return 0;
+                return -1;
             }
         } else {
             do {
                 if (inst_eq(fd.cFileName, infPath) ||
                     inst_eq(fd.cAlternateFileName, infPath)) {
                     join(rel, sizeof(rel), "OTHER", fd.cFileName);
-                    inst_copy(pick, rel, sizeof(pick));
+                    inst_copy(pick, rel, pcap);
                     count++;
                 }
             } while (FindNextFileA(h, &fd));
             h1 = GetLastError() != ERROR_NO_MORE_FILES;
             FindClose(h);
             if (h1) {
-                return 0;
+                return -1;
             }
         }
+    }
+    return count;
+}
+
+/* 98 SE and ME, the file update (record 26 section 6.3, draft 16): the
+ * INF copy each Stor98 driver key names, in INF or INF\OTHER, made the
+ * bundled stor98.inf, so a drive first plugged later finds this release
+ * there too. A copy whose name is ambiguous, or whose text does not name
+ * stor98.mpd, is left and logged. 0 when one could not be written. */
+static int s98_inf_refresh_9x(void)
+{
+    HKEY cls;
+    char sub[16];
+    char key[INST_PATH_CHARS];
+    char text[64];
+    char infPath[INST_PATH_CHARS];
+    char dir[INST_PATH_CHARS];
+    char pick[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char src[INST_PATH_CHARS];
+    DWORD i;
+    DWORD n;
+    LONG r;
+    int c;
+    int ok = 1;
+
+    join(src, sizeof(src), srcDir, instInfFile[INST_INF_S98]);
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_S98_CLASS_9X, 0, KEY_READ,
+                      &cls);
+    if (r != ERROR_SUCCESS) {
+        return r == ERROR_FILE_NOT_FOUND;
+    }
+    for (i = 0;; i++) {
+        n = sizeof(sub);
+        r = RegEnumKeyExA(cls, i, sub, &n, NULL, NULL, NULL, NULL);
+        if (r != ERROR_SUCCESS) {
+            break;
+        }
+        join(key, sizeof(key), INST_S98_CLASS_9X, sub);
+        if (reg_text3(HKEY_LOCAL_MACHINE, key, "PortDriver", text,
+                      sizeof(text)) <= 0 || !inst_eq(text, "stor98.mpd") ||
+            reg_text3(HKEY_LOCAL_MACHINE, key, "InfPath", infPath,
+                      sizeof(infPath)) <= 0) {
+            continue;
+        }
+        c = s98_inf_find(infPath, dir, sizeof(dir), pick, sizeof(pick));
+        if (c != 1) {
+            logonly("stor98: InfPath %s of SCSIAdapter\\%s: %d candidate "
+                    "copies, left\n", infPath, sub, c);
+            continue;
+        }
+        join(path, sizeof(path), dir, pick);
+        if (!s98_file_names_stor98(path)) {
+            logonly("stor98: INF\\%s does not name stor98.mpd: left\n", pick);
+            continue;
+        }
+        if (same_file(src, path)) {
+            continue;
+        }
+        if (!CopyFileA(src, path, FALSE) || !same_file(src, path)) {
+            out("INF\\%s could not be made this release's stor98.inf (error "
+                "%lu).\n", pick, (unsigned long)GetLastError());
+            ok = 0;
+            continue;
+        }
+        out("INF\\%s is now this release's stor98.inf.\n", pick);
+    }
+    RegCloseKey(cls);
+    return ok;
+}
+
+/* 98 SE and ME: the bundled Stor98 put in as a file (record 26 section
+ * 6.3, draft 16; the 98 SE update of 2026-10-19 stopped with a fatal
+ * exception 0E when Windows' device installer replaced the running
+ * stor98.mpd). The new file is written beside the old one as STOR98.TMP
+ * and checked, and the swap asked in WININIT.INI's [rename] section, as
+ * the setup engine does for a running xhci98.sys (wininit_pending reads
+ * it back); the INF copies the driver keys name are refreshed; no device
+ * is reinstalled. Windows is then shut down and started again. */
+static void s98_file_update_9x(void)
+{
+    char bin[INST_PATH_CHARS];
+    char tmp[INST_PATH_CHARS];
+    char src[INST_PATH_CHARS];
+    char win[INST_PATH_CHARS];
+    char ini[INST_PATH_CHARS];
+    char sb[INST_PATH_CHARS];
+    char st[INST_PATH_CHARS];
+    INST_U32 v[4];
+    DWORD n;
+    char *slash;
+
+    if (!s98FileUpd || opts.List) {
+        return;
+    }
+    step(INST_STEP_BEGIN, "Updating Stor98's driver file");
+    if (!s98FileOk) {
+        out("Stor98's driver file is not updated in this run: \"%s\" was "
+            "not confirmed.\nRun the installer again to update it.\n",
+            instS98DisconnectText);
+        steps_add_id("stor98.mpd", "not updated: disconnect every external "
+                     "NVMe drive, confirm it, and run the installer again");
+        flagSteps = 1;
+        step(INST_STEP_LEFT, "Stor98's driver file: left for a later run");
+        return;
+    }
+    group_binary(INST_GROUP_S98, bin, sizeof(bin));
+    join(src, sizeof(src), srcDir, "stor98.mpd");
+    inst_copy(tmp, bin, sizeof(tmp));
+    slash = strrchr(tmp, '\\');
+    if (slash == NULL || GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        flagFailed = 1;
+        step(INST_STEP_FAILED, "Stor98's driver file: no path");
+        return;
+    }
+    inst_copy(slash + 1, "STOR98.TMP", sizeof(tmp) - (size_t)(slash + 1 - tmp));
+    if (!s98_pre_commit()) {
+        flagFailed = 1;
+        step(INST_STEP_FAILED, "Stor98's driver file: the record");
+        return;
+    }
+    if (!CopyFileA(src, tmp, FALSE) || !same_file(src, tmp) ||
+        file_version(tmp, v) <= 0 || inst_ver_cmp(v, s98Version) != 0) {
+        out("The new stor98.mpd could not be written beside the old one as "
+            "%s (error %lu).\n", tmp, (unsigned long)GetLastError());
+        DeleteFileA(tmp);
+        flagFailed = 1;
+        step(INST_STEP_FAILED, "Stor98's driver file: not written");
+        return;
+    }
+    /* WININIT.INI is read before Windows runs: 8.3 names on both sides. */
+    n = GetShortPathNameA(bin, sb, sizeof(sb));
+    if (n == 0 || n >= sizeof(sb)) {
+        inst_copy(sb, bin, sizeof(sb));
+    }
+    n = GetShortPathNameA(tmp, st, sizeof(st));
+    if (n == 0 || n >= sizeof(st)) {
+        inst_copy(st, tmp, sizeof(st));
+    }
+    join(ini, sizeof(ini), win, "WININIT.INI");
+    if (!WritePrivateProfileStringA("rename", sb, st, ini) ||
+        !wininit_pending(bin, s98Version)) {
+        out("The replacement of %s could not be queued in %s.\n", bin, ini);
+        DeleteFileA(tmp);
+        flagFailed = 1;
+        step(INST_STEP_FAILED, "Stor98's driver file: not queued");
+        return;
+    }
+    logonly("stor98: WININIT.INI [rename] %s=%s\n", sb, st);
+    s98FileDone = 1;
+    s98Cold = 1;
+    flagRestart = 1;
+    flagChanged = 1;
+    out("Stor98 %s replaces %s when Windows next starts; no drive is "
+        "reinstalled.\n", s98VersionText, bin);
+    if (!s98_inf_refresh_9x()) {
+        flagFailed = 1;
+    }
+    step(INST_STEP_DONE, "Stor98's driver file: replaced at the next start");
+}
+
+static int s98_adopt_inf(const char *infPath)
+{
+    char dir[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char pick[INST_PATH_CHARS];
+    int count;
+    int h1;
+
+    if (infPath[0] == '\0') {
+        return 1;
+    }
+    count = s98_inf_find(infPath, dir, sizeof(dir), pick, sizeof(pick));
+    if (count < 0) {
+        return 0;   /* unreadable: no candidate can be ruled out */
     }
     if (count != 1) {
         logonly("stor98: InfPath %s: %d candidate copies, none adopted\n",
@@ -15794,20 +16011,20 @@ const char *inst_eng_s98_choose_value(int i, int set, const char *text)
     return NULL;
 }
 
-const char *inst_eng_s98_update(int n, const char **id)
+int inst_eng_s98_file_update(void)
 {
-    const DEVREC *d = s98_update_nth(n);
-
-    if (d == NULL) {
-        return NULL;
-    }
-    *id = d->Id;
-    return d->Desc[0] ? d->Desc : d->Id;
+    return !envNow.Nt && s98FileUpd;
 }
 
-void inst_eng_s98_unused(const char *id, int ok)
+void inst_eng_s98_file_ok(int ok)
 {
-    s98_ok_set(id, ok);
+    s98FileOk = ok != 0;
+    logonly("stor98: file update confirmed %d\n", s98FileOk);
+}
+
+const char *inst_eng_tb_name(void)
+{
+    return tbNhiPresent ? tbNhiName : "";
 }
 
 int inst_eng_shutdown(void)
@@ -15842,6 +16059,8 @@ void inst_eng_usage(void)
 "  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
 "                without the USB drivers (2000 to 7; on 8 and 8.1 always)\n"
 "  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
+"                (the default with /thunderbolt /yes)\n"
+"  /nostor98     leave the bundled Stor98 out of a /thunderbolt run\n"
 "  /nouas        leave the UAS disk driver (xhciuas.sys) out of this run\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
@@ -17234,6 +17453,21 @@ int inst_eng_plan(void)
     return planResult;
 }
 
+/* Owner, 2026-10-19: a run that writes XhciCmMode 0 says so plainly (a
+ * wheel turned the support off unnoticed on real hardware). */
+static void cm_off_warning(void)
+{
+    int v;
+
+    for (v = 0; v < instValueCount && v < INST_MAX_VALUES; v++) {
+        if (inst_cm_mode_off(instValues[v].Name, answerValue[v]) &&
+            value_needs_write(v)) {
+            out("*** %s. ***\n\n", instCmOffText);
+            logonly("warned: %s\n", instCmOffText);
+        }
+    }
+}
+
 int inst_eng_ask(void)
 {
     if (planResult >= 0) {
@@ -17245,6 +17479,7 @@ int inst_eng_ask(void)
         return INST_EXIT_REFUSED;
     }
     s98_ask_unused();
+    cm_off_warning();
     if (opts.List) {
         tray_install();
         out("/list: nothing was changed.\n");
