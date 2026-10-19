@@ -5363,6 +5363,11 @@ int inst_s98_adoptable(int preExisting, int present, int place)
     return !present || place == INST_S98_AT_TUNNEL;
 }
 
+int inst_s98_svc_value_stor98(const char *name)
+{
+    return !inst_eq(name, "LinkState");
+}
+
 int inst_s98_stray_inf_ours(int preExisting, int namesStor98)
 {
     return !preExisting && namesStor98;

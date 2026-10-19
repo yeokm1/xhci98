@@ -1424,6 +1424,10 @@ int inst_s98_adoptable(int preExisting, int present, int place);
  * after it. */
 int inst_inf_names_file(const char *text, size_t n, const char *file);
 int inst_s98_stray_inf_ours(int preExisting, int namesStor98);
+/* 98 SE and ME: xhcicm.sys makes Services\stor98 itself for Stor98's
+ * link-state locator, its value LinkState; 1 when a value of that key is
+ * another, so Stor98's (the baseline's "Stor98 there before"). */
+int inst_s98_svc_value_stor98(const char *name);
 
 #define INST_S98_SHARE_FREE     0
 #define INST_S98_SHARE_SAME     1

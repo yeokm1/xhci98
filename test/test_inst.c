@@ -3352,6 +3352,12 @@ static void test_s98(void)
               !inst_inf_names_file(c, sizeof(c) - 1, "stor98.sys"),
               "a comment, a longer word or another file is not the file");
     }
+    CHECK(!inst_s98_svc_value_stor98("LinkState") &&
+          !inst_s98_svc_value_stor98("linkstate") &&
+          inst_s98_svc_value_stor98("StorInterrupt") &&
+          inst_s98_svc_value_stor98("StorWriteThrough"),
+          "98 SE and ME: xhcicm's LinkState alone is not Stor98 there "
+          "before");
     CHECK(inst_s98_stray_inf_ours(0, 1) && !inst_s98_stray_inf_ours(1, 1) &&
           !inst_s98_stray_inf_ours(0, 0),
           "a stray INF copy: the package's when Stor98's and none before");

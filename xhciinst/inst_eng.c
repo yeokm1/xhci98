@@ -6404,7 +6404,10 @@ call:
             continue;
         }
         err = GetLastError();
-        if (err == ERROR_NO_SUCH_DEVINST &&
+        /* Not Stor98: its call reaches every device of the id, and its gate
+         * (the place, the shared file, the shared id) is read again only by
+         * a fresh scan and plan, so a Stor98 drive waits for the next pass. */
+        if (err == ERROR_NO_SUCH_DEVINST && inf != INST_INF_S98 &&
             inst_absent_retry(INST_DI_OUT_ABSENT, parentJobs, retried)) {
             out("not present at the moment.\n");
             retried = 1;
@@ -12835,6 +12838,32 @@ static int s98_bound_any(void)
  * machine has, kept for the record's rules; PreExisting written once. 0
  * stops the run (the baseline cannot be read, so no device could be told
  * the installer's). */
+/* 98 SE and ME: 1 when the open Services\stor98 key holds a subkey, or a
+ * value inst_s98_svc_value_stor98 counts; an unreadable entry counts. */
+static int s98_svc_key_stor98_9x(HKEY k)
+{
+    char name[128];
+    DWORD n;
+    DWORD i;
+    LONG r;
+
+    n = sizeof(name);
+    r = RegEnumKeyExA(k, 0, name, &n, NULL, NULL, NULL, NULL);
+    if (r != ERROR_NO_MORE_ITEMS) {
+        return 1;
+    }
+    for (i = 0;; i++) {
+        n = sizeof(name);
+        r = RegEnumValueA(k, i, name, &n, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            return 0;
+        }
+        if (r != ERROR_SUCCESS || inst_s98_svc_value_stor98(name)) {
+            return 1;
+        }
+    }
+}
+
 static int s98_baseline(void)
 {
     HKEY k;
@@ -12864,8 +12893,12 @@ static int s98_baseline(void)
                       envNow.Nt ? INST_S98_SVC_NT : INST_S98_SVC_9X, 0,
                       KEY_READ, &k);
     if (r == ERROR_SUCCESS) {
+        /* 98 SE and ME: xhcicm.sys makes this key itself for the link-state
+         * locator (its LinkState value), Stor98 installed or not; only a
+         * value or subkey of another name is Stor98's (the 98 SE leg of
+         * 2026-10-19). */
+        any = envNow.Nt ? 1 : s98_svc_key_stor98_9x(k);
         RegCloseKey(k);
-        any = 1;
     } else if (r != ERROR_FILE_NOT_FOUND) {
         out("Whether Stor98 is installed cannot be read (error %ld): nothing "
             "was changed.\n", (long)r);
