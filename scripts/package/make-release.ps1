@@ -4202,9 +4202,8 @@ helper (xhciinst\di\build.cmd).
         $contents += ("  SETUP.EXE       - installs or updates the drivers: double-click")
         $contents += ("                    it ({0:N0} bytes); SETUP /uninstall, or" -f $s32.Length)
         $contents += "                    Add/Remove Programs, uninstalls them"
-        $contents += "  INSTALL.BAT     - the same from the command line and scripts"
-        $contents += "                    (INSTALL /console); with no arguments it"
-        $contents += "                    opens the same window"
+        $contents += "  INSTALL.BAT     - for command-line and scripted installs:"
+        $contents += "                    TOOLS\XHCIINST\readme.txt is the reference"
         $contents += ""
         $contents += "  TOOLS\XHCIINST\ - the programs SETUP.EXE and INSTALL.BAT run"
         $contents += ""
@@ -4215,8 +4214,8 @@ helper (xhciinst\di\build.cmd).
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
-        $contents += "      Section 4 has how to run them; INSTALL /console /list"
-        $contents += "      shows what would be done and changes nothing."
+        $contents += "      Section 4 has how to install; readme.txt here is the"
+        $contents += "      command-line reference."
         $contents += ""
     }
     if ($null -ne $ditoolStaged) {
@@ -4846,13 +4845,12 @@ has already gone wrong. It prints nothing as it runs. Section 8 describes
 both, and nothing about a copied file says which one it is - so point at a
 directory, never at a loose .sys file.{ARCHNOTE}
 
-If the installer fails or you prefer, install through Device Manager as
-before (BY HAND, below). That route still works and remains supported.
+There are two ways to install: SETUP.EXE, or Device Manager by hand (BY
+HAND, below), which still works and remains supported.
 
-THE EASY WAY: SETUP.EXE. To install or update, double-click SETUP.EXE; to
-uninstall, use Remove in Add/Remove Programs (or SETUP /uninstall).
-INSTALL.BAT is for the command line and scripts (INSTALL /console ...); run
-with no arguments it opens the same window.
+THE EASY WAY: SETUP.EXE. To install or update, double-click SETUP.EXE. To
+uninstall, use Remove in Add/Remove Programs (Programs and Features on
+Vista and 7).
 
 Unzip the WHOLE package first, then double-click SETUP.EXE in its top
 directory. On Windows 2000 and XP sign in as an administrator; on Vista and
@@ -4873,25 +4871,24 @@ options (section 9), shows a summary, and on Install:
     through Windows' own device installer; a device it cannot install gets
     its Device Manager steps on a page of their own, which you can save.
 
-It ends by offering to restart Windows. Add/Remove Programs (Control Panel)
-lists the package as "xHCI98 USB 3.x drivers"; Remove there takes every
+It ends by offering to restart Windows. Add/Remove Programs (Programs and
+Features on Vista and 7, in Control Panel) lists the package as "xHCI98 USB 3.x drivers"; Remove there takes every
 driver of the package away again (it warns first: on a machine whose only
 USB controller is xHCI, the USB keyboard and mouse stop working).
 
-For scripts there is the console tool: INSTALL /console runs it, and
-INSTALL /console /list shows what it would do and changes nothing. Every
-run adds to XHCIINST.LOG at the root of the system drive; attach it to a bug
-report about an install. TOOLS\XHCIINST\readme.txt has the rest.
+Every run adds to XHCIINST.LOG at the root of the system drive; attach it
+to a bug report about an install. For scripted installs,
+TOOLS\XHCIINST\readme.txt is the command-line reference.
 
 SETUP.EXE also installs the xHCI98 USB Tree (XHCITR) in the install
-directory you choose (C:\XHCI98 unless you choose another, or INSTALL /to
-path) and starts it at each login. Its window shows
+directory you choose (C:\XHCI98 unless you choose another) and starts it
+at each login. Its window shows
 every USB controller, hub and device, and the Thunderbolt and USB4 devices
 with what is connected behind them; its icon in the notification area of
 the taskbar removes a Thunderbolt or USB4 device safely, as Windows' own
 Safely Remove Hardware icon does for other devices. It needs no
-administrator to run. INSTALL /notray installs it without starting it at
-login; the uninstall removes it with the drivers.
+administrator to run. The installer's Components page can leave out its
+start at login; the uninstall removes it with the drivers.
 TOOLS\XHCITR\readme.txt has the rest.
 
 On Windows XP, XP x64 and 98 SE, updating from 2.3.x or earlier needs a

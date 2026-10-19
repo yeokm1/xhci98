@@ -87,8 +87,8 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 ### Installing, approving and removing
 
 - **Install:** double-click `SETUP.EXE` and keep Thunderbolt 3 / USB4 support ticked (see [Install with SETUP.EXE](#install-with-setupexe)). On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`nt\xhcicmf.inf`), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when asked: on Windows 2000 the first install of the filter needs that restart before the controller is used.
-- **Windows 98 SE and ME:** the installer shows the remaining steps: update the controller's entry (an unknown PCI device or PCI System Peripheral) from the driver directory. No filter is needed.
-- **The connection manager alone:** on Windows 2000 to 7 the installer can leave `xhci98.sys` and `xhciuas.sys` out and install `xhcicm.sys` alone, for a computer whose USB 3 controllers run another driver (untick the USB drivers, or `INSTALL /console /cmonly`). On Windows 8 and 8.1 that is the only install it offers: Windows' own USB 3 driver runs the USB controllers there. On the 64-bit editions of 8 and 8.1 the driver loads only in test-signing mode (Secure Boot off) or with signature enforcement disabled.
+- **Windows 98 SE and ME:** the installer installs the controller's entry (an unknown PCI device or PCI System Peripheral) through Windows' own device installer; one it cannot install gets its Device Manager steps (update it from the driver directory). No filter is needed.
+- **The connection manager alone:** on Windows 2000 to 7 the installer can leave `xhci98.sys` and `xhciuas.sys` out and install `xhcicm.sys` alone, for a computer whose USB 3 controllers run another driver (untick the USB drivers on its Components page). On Windows 8 and 8.1 that is the only install it offers: Windows' own USB 3 driver runs the USB controllers there. On the 64-bit editions of 8 and 8.1 the driver loads only in test-signing mode (Secure Boot off) or with signature enforcement disabled.
 - **Names:** the controller shows under the names in the table above. On Windows 2000 to 7 its PCI ports show as "xHCI98 Thunderbolt PCI Bridge" or "xHCI98 USB4 PCI Bridge": still Windows' own PCI bridges, with the filter on them.
 - **Approval:** by default (`XhciCmApprove` `1`) every device plugged into the port is approved at once. **A device with a PCI Express tunnel can read and write all of the machine's memory**, and these systems cannot fence it off. Where people you do not trust can reach the port, set `XhciCmApprove` to `0`: then only devices the BIOS connected at power-on work. Nothing is remembered: a re-plugged device is approved again by the same rule.
 
@@ -177,7 +177,7 @@ Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
 | `release-x86\`, `release-x64\` | The drivers to install (below) |
 | `debug-x86\`, `debug-x64\` | The same drivers built for troubleshooting; install only if asked |
 | `SETUP.EXE` | The installer: double-click it to install or update |
-| `INSTALL.BAT`, `tools\xhciinst\` | The same from the command line and scripts (`INSTALL /console ...`), and the programs both run (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE`, `XHCIIN64.EXE`) |
+| `INSTALL.BAT`, `tools\xhciinst\` | For command-line and scripted installs (`tools\xhciinst\readme.txt` is the reference), and the programs both run (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE`, `XHCIIN64.EXE`) |
 | `tools\xhcitr\` | The xHCI98 USB Tree, also the driver's log and snapshot reader |
 | `tools\xhciqual\` | DOS: `XHCIQUAL.EXE` and `QUALREP.BAT` |
 | `tools\portsw\` | `portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`: the Intel port switchover |
@@ -195,15 +195,16 @@ Each driver directory holds:
 
 ### Install with SETUP.EXE
 
-If the installer fails or you prefer, install through Device Manager as before ([Install by hand](#install-by-hand)).
+There are two ways to install: `SETUP.EXE`, below, or Device Manager by hand ([Install by hand](#install-by-hand)), which still works and remains supported.
 
-To install or update, unzip the whole package and double-click `SETUP.EXE` in its top directory (on 2000 and XP as an administrator; on Vista and 7 answer Yes when Windows asks for an administrator's approval). It opens the installer's window, which shows what it found, the components, a few of the driver's options and the tools' install directory (`C:\XHCI98` unless you choose another), and a summary, and changes nothing before you click Install. `INSTALL.BAT` is for the command line and scripts (`INSTALL /console ...`); run with no arguments it opens the same window.
+To install or update, unzip the whole package and double-click `SETUP.EXE` in its top directory (on 2000 and XP as an administrator; on Vista and 7 answer Yes when Windows asks for an administrator's approval). It opens the installer's window, which shows what it found, the components, a few of the driver's options and the tools' install directory (`C:\XHCI98` unless you choose another), and a summary, and changes nothing before you click Install. To uninstall, use Remove in Add/Remove Programs (Programs and Features on Vista and 7).
 
 - **Windows 2000 to 7:** installs or updates every driver on the devices present, controller first, and stages the package for devices plugged in later. It handles Windows 2000's Have Disk, the root hub's update and Vista and 7's same-`DriverVer` trap. Answer Windows' unsigned-driver questions.
 - **Windows 98 SE and ME:** copies the package into the install directory, adds it to the hardware wizards' search path, and installs each device's driver through Windows' own device installer; a device it cannot install gets its Device Manager steps on a page of their own.
-- **Thunderbolt 3 / USB4 support** (the Components page): ticked when a controller is found, unticked when none is. Some laptops show the controller only while a device is plugged in or with a BIOS setting, so tick it if yours has the port (`/thunderbolt` preselects it). Unticked leaves an installed Thunderbolt driver as it is. The console (`INSTALL /console`) asks the same as a Y/N question.
+- **Thunderbolt 3 / USB4 support** (the Components page): ticked when a controller is found, unticked when none is. Some laptops show the controller only while a device is plugged in or with a BIOS setting, so tick it if yours has the port. Unticked leaves an installed Thunderbolt driver as it is.
 - **At the end:** the Finish page offers to restart Windows if it changed anything. If it stopped with steps left for you (a Found New Hardware window, for instance), do them and run it again. It never runs `XHCICLN`.
-- `INSTALL /console /list` shows the plan and changes nothing. `SETUP /uninstall`, or Remove in Add/Remove Programs, removes the drivers after a warning. Every run but `/list` writes `XHCIINST.LOG` at the root of the system drive. `tools\xhciinst\readme.txt` lists the switches and exit codes.
+- **Uninstall:** Remove in Add/Remove Programs (Programs and Features on Vista and 7) removes the drivers after a warning. Every run writes `XHCIINST.LOG` at the root of the system drive; attach it to a bug report about an install.
+- For scripted installs, `tools\xhciinst\readme.txt` is the command-line reference.
 
 Details: [the release notes' installer section](docs/using/release-notes.md#installing-updating-and-uninstalling-with-installbat-new-in-3000).
 
@@ -268,7 +269,7 @@ Run `SETUP.EXE` (see [above](#install-with-setupexe)). By hand: Update Driver on
 
 ## Tuning
 
-Each value is a `DWORD` in a driver (software) key, and from `3.1.0.0` also in the machine-wide key `HKLM\System\CurrentControlSet\Services\USB`, which wins for every controller when the value is there ([tuning](docs/using/tuning.md#where-the-values-are-and-every-value)); restart Windows after a change (for `XhciCm*`, disabling and enabling the controller also works). The install writes most values and an update keeps any you changed. `INSTALL /set Name=Value` sets one.
+Each value is a `DWORD` in a driver (software) key, and from `3.1.0.0` also in the machine-wide key `HKLM\System\CurrentControlSet\Services\USB`, which wins for every controller when the value is there ([tuning](docs/using/tuning.md#where-the-values-are-and-every-value)); restart Windows after a change (for `XhciCm*`, disabling and enabling the controller also works). The install writes most values (its settings pages, and "Advanced...") and an update keeps any you changed.
 
 | Driver | Windows | Key (`NNNN` is the subkey whose `DriverDesc` names the controller) |
 |---|---|---|

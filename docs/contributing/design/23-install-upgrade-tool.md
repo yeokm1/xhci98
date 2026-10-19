@@ -228,7 +228,10 @@ and scripts. This supersedes decision D1's one entry point (the owner's
 of 2026-10-15, kept by record 26 W2 on 2026-10-18). What changes here:
 
 - **Section 2**: the layout gains `SETUP.EXE` at the root, and the
-  paragraph on the one batch file says who uses which.
+  paragraph on the one batch file says who uses which. `README.md` and
+  the release readme name two ways only, `SETUP.EXE` or Device Manager
+  by hand; `INSTALL.BAT` and the console are documented in
+  `tools\xhciinst\readme.txt` alone (record 26 section 2).
 - **Section 7.4**: `SETUP.EXE` does not pass the code on.
 - **Sections 13 and 15**: D1 revised; the files.
 

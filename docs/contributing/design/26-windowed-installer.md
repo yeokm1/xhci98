@@ -191,6 +191,12 @@ and ME; a windows-subsystem program opens none. `SETUP.EXE`
 - `make-release.ps1` stages it at the version root beside `INSTALL.BAT`,
   under the install tool's staleness rule; `test-package.ps1` holds the
   staging and the readme's first instruction.
+- `README.md` and the release readme offer two ways to install, update
+  and uninstall: `SETUP.EXE` (and Remove in Add/Remove Programs), or
+  Device Manager by hand (the owner, 2026-10-19). `INSTALL.BAT`, the
+  console and its switches are documented in `tools\xhciinst\readme.txt`
+  alone, the command-line and scripting reference, which the two point
+  at in one line.
 
 Not taken: `INSTALL.BAT` starting the window detached and ending at once
 (on 98 SE and ME an MS-DOS box started from Explorer stays open on

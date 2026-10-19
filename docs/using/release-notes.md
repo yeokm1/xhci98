@@ -192,8 +192,8 @@ as they are made; the head of this file is rewritten when it is cut.
   can install `xhcicm.sys` (with its tunnel-port filter and, on NT, the
   safe-removal mark service) without `xhci98.sys` and `xhciuas.sys`, for
   a computer whose USB 3 controllers already run another driver: on
-  Windows 2000 to 7 untick the USB drivers on the Components page, or
-  `INSTALL /console /cmonly`. On Windows 98 SE and ME the USB drivers stay
+  Windows 2000 to 7 untick the USB drivers on the Components page. On
+  Windows 98 SE and ME the USB drivers stay
   required, since those systems have no USB 3 driver of their own. The
   connection manager needs nothing of `xhci98.sys` on NT: a tunnel's
   devices are driven by whatever driver Windows has for them, the USB
@@ -1455,6 +1455,15 @@ second Update Driver filled it.
 
 ### Installing, updating and uninstalling with INSTALL.BAT (new in `3.0.0.0`)
 
+From `3.1.0.0` a normal install, update or uninstall is the installer's
+window: double-click `SETUP.EXE` at the top of the package to install or
+update, and use Remove in Add/Remove Programs (Programs and Features on
+Vista and 7) to uninstall; or install by hand through Device Manager
+("Installing", above, and the update steps below). What follows describes
+the console tool `INSTALL.BAT` runs, which `3.0.0.0` introduced and which
+stays for command-line and scripted installs; `tools\xhciinst\readme.txt`
+is its reference.
+
 INSTALL.BAT is beta in 3.0.0.0: if it fails or you prefer, install through
 Device Manager as before ("Installing", above, and the update steps below).
 
@@ -1553,10 +1562,12 @@ steps left printed. **The log**: every run but `/list` adds to
 `XHCIINST.LOG` at the root of the system drive; attach it to a report
 about an install.
 
-**Uninstall**: `INSTALL.BAT /uninstall` warns first that on a machine
-whose only USB controller is xHCI the USB keyboard and mouse stop working
-until another driver is installed, and goes on only when you type
-`REMOVE`. On Windows 2000 to 7 it removes, in order and stopping at the
+**Uninstall**: Remove in Add/Remove Programs (Programs and Features on
+Vista and 7) warns first that on a machine whose only USB controller is
+xHCI the USB keyboard and mouse stop working until another driver is
+installed, and goes on only when you tick that you have another keyboard
+and mouse or accept it (the console, `INSTALL /console /uninstall`, asks
+for the word `REMOVE`). On Windows 2000 to 7 it removes, in order and stopping at the
 first step that fails or needs a restart (run it again after the
 restart): this package's filter from a Thunderbolt port (the port goes
 back to a suitable Windows or vendor driver), every device entry of the package, its
@@ -1797,8 +1808,8 @@ hidusbf's polling rate, has to be applied again (see "SweetLow's hidusbf").
 
 ### Updating from 2.y.y.y
 
-From `3.0.0.0`, `INSTALL.BAT` does what follows on Windows 2000 to 7 and
-prepares it on 98 SE and ME ("Installing, updating and uninstalling with
+From `3.0.0.0` the installer (`SETUP.EXE` from `3.1.0.0`) does what
+follows on Windows 2000 to 7 and prepares it on 98 SE and ME ("Installing, updating and uninstalling with
 INSTALL.BAT"); this section is the route by hand, and what each system
 does either way.
 
@@ -2036,8 +2047,8 @@ and down, and Stor98 runs the drive.
   `stor98-LICENSE.txt`, `stor98-NOTICE.txt` and `stor98-readme.txt`.
 
 Its readme is its install guide and lists its known limits; read it
-before installing. The `debug-` directories do not carry it, and
-`INSTALL.BAT` does not install it.
+before installing. The `debug-` directories do not carry it, and the
+installer installs it only when its box is ticked.
 
 When the drive's NVMe controller (`PCI\CC_010802`) shows in Device
 Manager without a driver, Update Driver, Have Disk, and point it at:

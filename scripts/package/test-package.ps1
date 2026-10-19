@@ -3088,7 +3088,7 @@ try {
            Why  = "a cut without the helper no longer says so in its readme (design record 27 section 3.3)" },
         @{ Find = 'if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }';
            Why  = "a cut without the USB tree tool no longer says so in its readme (task 41-A.6)" },
-        @{ Find = 'INSTALL /notray installs it without starting it at';
+        @{ Find = "administrator to run. The installer's Components page can leave out its";
            Why  = "the readme's section 4 no longer describes the xHCI98 USB Tree INSTALL.BAT installs, or /notray (task 41-A.6)" },
         @{ Find = '$silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")';
            Why  = "a cut no longer publishes the silent install's list and scripts once, from src\, into tools\silent\ (task 38.2)" },
