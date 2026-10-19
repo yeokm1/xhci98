@@ -103,6 +103,14 @@ cl /nologo /W3 /O2 /D_X86_=1 /DNVME2K_W9X /DCLOCK_HOST_TEST /Fo"%OUT%\clock.obj"
 if not defined FAILED "%OUT%\clock_ut.exe" || set "FAILED=1"
 if defined CLKFAILED set "FAILED=1"
 
+rem The 9x logical scatter/gather walk (src/sg9x.h), no DDK header needed
+set "SGFAILED=%FAILED%"
+set "FAILED="
+set "INCLUDE=%REPO%\src;%MSVC%\VC98\Include"
+cl /nologo /W3 /WX /O2 /Fo"%OUT%\sg9x.obj" /Fe"%OUT%\sg9x_ut.exe" "%~dp0sg9x_ut.c" || set "FAILED=1"
+if not defined FAILED "%OUT%\sg9x_ut.exe" || set "FAILED=1"
+if defined SGFAILED set "FAILED=1"
+
 if defined FAILED (
     echo *** UNIT TESTS FAILED ***
     exit /b 1

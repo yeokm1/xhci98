@@ -129,7 +129,7 @@
 #define STG_ENG_CAP_WAIT        0xBA    // arg: reason (1 parents, 2 children, 3 PRP page, 4 bounce, 5 barrier) | waiting parents << 8
 #define STG_ENG_CAP_RESUME      0xBB    // arg: free parents | free children << 8
 #define STG_ENG_BOUNCE          0xBC    // arg: CID | pages << 16 | forced << 24
-#define STG_ENG_MAP_FAIL        0xBD    // arg: reason (1 zero length, 2 alignment, 3 PA zero, 4 span not covered) | parent << 8
+#define STG_ENG_MAP_FAIL        0xBD    // arg: reason (1 zero length, 2 alignment, 3 PA zero, 4 span not covered, 5 caller buffer unresolved: parent failed) | parent << 8
 #define STG_ENG_CANCEL          0xBE    // arg: parent | cause << 8 | outstanding << 16
 #define STG_ENG_IDLE_FLUSH      0xBF    // arg: write generation; MD-7 (a) idle flush submitted
 #define STG_QUEUE_CAPS          0xC7    // arg: queue size | DSTRD << 16 | MPSMIN << 20 | result << 24 (0 ok)
@@ -169,6 +169,8 @@
 // Maximum transfer setting (xfertun.h; PLAN "0.4.0.0 plan", owner decision 2026-10-16), 0x160-0x16F
 #define STG_XFER_TUNABLE        0x160   // arg: limit used, KiB (15:0) | result (XFER_DEFAULT 0, XFER_SET 1, XFER_REFUSED 2) << 16 | resumed << 20 | parsed << 21; every HwFindAdapter
 #define STG_XFER_REFUSED        0x161   // arg: the refused raw value as read (KiB; 0xFFFFFFFF saturated); 0 also when it is not a number
+// 9x caller-buffer resolution (sg9x.h; docs/INVESTIGATION-9X-REQUEST-SIZE.md), 0x170
+#define STG_SG9X                0x170   // arg: kind (0 linear, 1 SG list, 2 unknown) | use (0 PRP1 check, 1 copy to bounce, 2 copy to caller, 3 probe of a non-READ/WRITE SRB with data) << 2 | resolved << 4 | IOR_func (0x3F = unknown) << 8 | CDB[0] << 16; for kind != linear, IOR_func not READ/WRITE, every bounce copy, every probe
 
 // Packed request description: function | cdb0 << 8 | state << 16 | flags << 24
 // (flags bit 0 tagged, bit 1 queue action ORDERED)
