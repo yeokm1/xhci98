@@ -504,6 +504,14 @@ int mk_selftest(void (*report)(int ok, const char *what))
              "its domain verifiable and complete, not listed: removed (another domain's state aside)");
     mk_check(mk_reconcile(MK_P_PRESENT, 0, 0, 0, 1, 0, 0, 0, 0) == MK_R_REMOVE,
              "behind no member, every NHI verifiable: removed");
+    /* Windows 2000, 2026-10-19: a never-seen chain's downstream port and
+     * NVMe took xhcicm from a CriticalDeviceDatabase copy, with no record
+     * (the inventory records them to be judged): neither is a unit behind
+     * an active member, so each is removed once every NHI is verifiable. */
+    mk_check(mk_reconcile(MK_P_PRESENT, 0, 0, 0, 1, 0, 0, 0, 0) == MK_R_REMOVE,
+             "an unrecorded mark below a unit (a CDDB copy): removed");
+    mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 0, 1, 1, 0, 0, 0) == MK_R_REMOVE,
+             "an unrecorded mark on a device behind the member that the driver does not report: removed");
 
     /* The 7 x86 reading of 2026-10-19 (p42-tr's leg): a unit at Code 28
      * behind an active member, its entry reported with no location known
