@@ -442,16 +442,15 @@ static void w2k_stopped_add(const char *id)
 static int w2k_code24(const DNODE *n)
 {
     int i;
+    int here = 0;
 
-    if (!env_w2k()) {
-        return 0;
-    }
     for (i = 0; i < w2kStoppedN; i++) {
         if (tr_eq(w2kStopped[i], n->Id)) {
-            return 1;
+            here = 1;
         }
     }
-    return 0;
+    return tr_w2k_code24(env_w2k(), here, n->UPort >= 0,
+                         n->UPort >= 0 ? up[n->UPort].Conn.Config : 0);
 }
 
 static FARPROC proc(HMODULE module, const char *name)

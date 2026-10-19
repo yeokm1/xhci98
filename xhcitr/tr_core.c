@@ -2289,6 +2289,11 @@ int tr_held_for_eject(TR_U32 problem, int w2k)
            (w2k && problem == TR_CM_PROB_DEVICE_NOT_THERE);
 }
 
+int tr_w2k_code24(int w2k, int stoppedHere, int atPort, unsigned int config)
+{
+    return w2k && stoppedHere && (!atPort || config != 0);
+}
+
 int tr_stopped_text(TR_U32 problem, int w2k, char *tag, size_t tagCap,
                     char *sentence, size_t sentenceCap)
 {

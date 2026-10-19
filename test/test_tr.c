@@ -1718,6 +1718,13 @@ static void test_usb_eject(void)
         CHECK(tr_stopped_text(47, 1, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
               tr_stopped_text(28, 1, tag, sizeof(tag), sen, sizeof(sen)) == 0,
               "stopped: 2000 keeps the other codes");
+        CHECK(tr_w2k_code24(1, 1, 1, 1) && tr_w2k_code24(1, 1, 0, 0),
+              "code 24: 2000, stopped here, still configured (or a unit)");
+        CHECK(!tr_w2k_code24(1, 1, 1, 0),
+              "code 24: plugged in again and failed to start, unconfigured");
+        CHECK(!tr_w2k_code24(1, 0, 1, 1) && !tr_w2k_code24(1, 0, 0, 0),
+              "code 24: not stopped here (a failed start, or another tool)");
+        CHECK(!tr_w2k_code24(0, 1, 1, 1), "code 24: not 2000");
     }
 
     /* what a walk right after an accepted stop reads (section 6.5 step 5) */

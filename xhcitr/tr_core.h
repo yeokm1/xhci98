@@ -548,6 +548,14 @@ typedef struct _TR_USBF {
  * Code 24 is also its failed start. */
 int tr_held_for_eject(TR_U32 problem, int w2k);
 
+/* That w2k argument: 1 on Windows 2000 (w2k) for a devnode this process
+ * stopped (stoppedHere) and, for the device at a USB port (atPort), only
+ * while the port reports a configuration (config): the stopped device keeps
+ * its configuration until it is unplugged, and one plugged in again starts
+ * unconfigured, so a later failed start at Code 24 is not read as the
+ * stop. */
+int tr_w2k_code24(int w2k, int stoppedHere, int atPort, unsigned int config);
+
 /* The words for a devnode that is not running (record 25 section 14): the
  * tag ("stopped - unplug it" when held for eject, tr_held_for_eject;
  * "not started - problem code N" for any other problem; "not started") and
