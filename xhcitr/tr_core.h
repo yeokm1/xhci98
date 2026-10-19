@@ -517,7 +517,7 @@ int tr_node_is_hub(const char *hw, size_t hwBytes, const char *compat,
  * Windows stops with it (section 6.5). */
 typedef struct _TR_USBF {
     int Nt;
-    int W2k;                    /* Windows 2000: Code 24 is held for eject   */
+    int W2k;                    /* 2000, stopped here: Code 24 is held       */
     int HaveDevnode;            /* the port's devnode was found in the walk  */
     int IsHub;                  /* the port says so, or ids of its set do    */
     int IsController;
@@ -541,10 +541,11 @@ typedef struct _TR_USBF {
 #define TR_UE_LISTED    1       /* listed with the reason, not offered     */
 #define TR_UE_OFFER     2       /* Safely Remove offered                   */
 
-/* 1 for a devnode held for eject: Code 47, or, on Windows 2000 only
- * (w2k), Code 24: 2000 has no Code 47 and leaves a removed devnode that is
- * still attached at Code 24 (run 41, the bridge after its stop; run 42, a
- * USB stick after its stop). */
+/* 1 for a devnode held for eject: Code 47, or, when w2k says Windows 2000
+ * and a stop of this devnode was accepted, Code 24: 2000 has no Code 47
+ * and leaves a removed devnode that is still attached at Code 24 (run 41,
+ * the bridge after its stop; run 42, a USB stick after its stop), and
+ * Code 24 is also its failed start. */
 int tr_held_for_eject(TR_U32 problem, int w2k);
 
 /* The words for a devnode that is not running (record 25 section 14): the

@@ -1690,7 +1690,8 @@ static void test_usb_eject(void)
     f.CallAvailable = 0;
     CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: no routine");
 
-    /* the words for a devnode that is not running: only Code 47 says unplug */
+    /* the words for a devnode that is not running: only held for eject
+     * (Code 47, or 24 on 2000 after an accepted stop) says unplug */
     {
         char tag[64];
         char sen[96];

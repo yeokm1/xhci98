@@ -417,6 +417,43 @@ static int env_w2k(void)
     return envNt && envMajor == 5 && envMinor == 0;
 }
 
+/* Code 24 is also 2000's failed start, so it reads as held for eject only
+ * for a devnode this process stopped, until it starts again or leaves. */
+static char w2kStopped[16][INST_ID_CHARS];
+static int w2kStoppedN;
+
+static void w2k_stopped_add(const char *id)
+{
+    int i;
+
+    for (i = 0; i < w2kStoppedN; i++) {
+        if (tr_eq(w2kStopped[i], id)) {
+            return;
+        }
+    }
+    if (w2kStoppedN == 16) {
+        memmove(w2kStopped[0], w2kStopped[1], 15 * sizeof(w2kStopped[0]));
+        w2kStoppedN = 15;
+    }
+    tr_copy(w2kStopped[w2kStoppedN++], id, sizeof(w2kStopped[0]));
+}
+
+/* The w2k argument of tr_held_for_eject for devnode n. */
+static int w2k_code24(const DNODE *n)
+{
+    int i;
+
+    if (!env_w2k()) {
+        return 0;
+    }
+    for (i = 0; i < w2kStoppedN; i++) {
+        if (tr_eq(w2kStopped[i], n->Id)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static FARPROC proc(HMODULE module, const char *name)
 {
     return module != NULL ? GetProcAddress(module, name) : NULL;
@@ -2323,8 +2360,8 @@ static void add_devs_below(int parentT, int dn, int depth)
             if (gw.N[i].UnitOf == i && !dn_started(&gw.N[i])) {
                 char tag[64];
                 char sen[8];
-                tr_stopped_text(gw.N[i].Problem, env_w2k(), tag, sizeof(tag),
-                                sen, sizeof(sen));
+                tr_stopped_text(gw.N[i].Problem, w2k_code24(&gw.N[i]), tag,
+                                sizeof(tag), sen, sizeof(sen));
                 tr_sprintf(label, sizeof(label), "%s  [%s]", name, tag);
             } else if (usb_listed(i)) {
                 usb_label(i, name, sizeof(name));
@@ -2524,6 +2561,7 @@ static void model_free_usb(void)
 static void refresh_model(int withUsb)
 {
     int root;
+    int s;
 
     model_free_usb();
     tnCount = 0;
@@ -2539,6 +2577,15 @@ static void refresh_model(int withUsb)
         free(pollBuf[root]);
         pollBuf[root] = NULL;
         pollId[root][0] = '\0';
+    }
+    for (s = w2kStoppedN - 1; s >= 0; s--) {
+        int k = walk_find_id(&gw, w2kStopped[s]);
+        if ((k >= 0 && dn_started(&gw.N[k])) ||
+            (k < 0 && gw.Count > 0 && gw.Bad == 0)) {
+            memmove(w2kStopped[s], w2kStopped[s + 1],
+                    (w2kStoppedN - s - 1) * sizeof(w2kStopped[0]));
+            w2kStoppedN--;
+        }
     }
     nhi_find(&gw);
     derive(&gw, nhi, nhiCount);
@@ -2753,8 +2800,8 @@ static void details_unit(TR_TEXT *t, int dn)
     } else if (!dn_started(&gw.N[u])) {
         char tag[64];
         char sen[96];
-        tr_stopped_text(gw.N[u].Problem, env_w2k(), tag, sizeof(tag), sen,
-                        sizeof(sen));
+        tr_stopped_text(gw.N[u].Problem, w2k_code24(&gw.N[u]), tag,
+                        sizeof(tag), sen, sizeof(sen));
         tr_printf(t, "  %s\n", sen);
     } else {
         tr_printf(t, "  It cannot be stopped here now: %s.\n", ej_why_not(u));
@@ -3752,11 +3799,12 @@ static const char *ej_why_not(int u)
     if (!dn_started(&gw.N[u])) {
         /* Held for the eject (Code 47): the ICM keeps the tunnel until the
          * unplug, so it is still listed. Any other problem is a failed
-         * start, never "unplug it". */
+         * start, never "unplug it" (Code 24 on 2000 is held for eject
+         * only for a unit this process stopped). */
         static char tag[64];
         char sen[8];
-        tr_stopped_text(gw.N[u].Problem, env_w2k(), tag, sizeof(tag), sen,
-                        sizeof(sen));
+        tr_stopped_text(gw.N[u].Problem, w2k_code24(&gw.N[u]), tag,
+                        sizeof(tag), sen, sizeof(sen));
         return tag;
     }
     if (!nhi[k].HaveQ) {
@@ -4920,8 +4968,8 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
     if (!dn_started(&w.N[u])) {
         char tag[64];
         char sen[96];
-        if (tr_stopped_text(w.N[u].Problem, env_w2k(), tag, sizeof(tag), sen,
-                            sizeof(sen))) {
+        if (tr_stopped_text(w.N[u].Problem, w2k_code24(&w.N[u]), tag,
+                            sizeof(tag), sen, sizeof(sen))) {
             tr_printf(&t, "%s is stopped already: you can unplug it.", q->Desc);
         } else {
             tr_printf(&t, "%s is not running. %s Nothing was stopped.", q->Desc, sen);
@@ -4987,6 +5035,9 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
             goto out;
         }
         tr_printf(&t, "Windows has stopped %s.\n", q->Desc);
+        if (env_w2k()) {
+            w2k_stopped_add(w.N[u].Id);
+        }
         if (notRemovable) {
             tr_put(&t, "Until you unplug it, Windows may start it again when it "
                        "next looks for new hardware.\n");
@@ -5207,7 +5258,7 @@ static void usb_facts(const WALK *w, int d, int portIsHub, int devClass,
 
     memset(f, 0, sizeof(*f));
     f->Nt = envNt;
-    f->W2k = env_w2k();
+    f->W2k = d >= 0 && w2k_code24(&w->N[d]);
     f->HaveDevnode = d >= 0;
     f->IsHub = portIsHub;
     f->Radio = devClass == 0xE0;
@@ -5344,7 +5395,7 @@ static const char *usb_suffix(int d)
     if (gw.N[d].UsbRule == TR_UE_OFFER) {
         return "  [can be stopped]";
     }
-    if (tr_held_for_eject(gw.N[d].Problem, env_w2k())) {
+    if (tr_held_for_eject(gw.N[d].Problem, w2k_code24(&gw.N[d]))) {
         return "  [stopped - unplug it]";
     }
     return "";
@@ -5496,6 +5547,9 @@ static int usb_after(const USBREQ *q, TR_TEXT *t)
         tr_put(t, "\nThe device has started again, so it is not safe to unplug.");
         code = INST_EXIT_STEPS;
     } else if (kind == TR_UA_UNPLUG) {
+        if (d >= 0 && env_w2k()) {
+            w2k_stopped_add(q->Id);
+        }
         tr_put(t, "\nYou can now unplug the device.");
     } else {
         tr_put(t, "\nIts state could not be read again: check that it is not "
