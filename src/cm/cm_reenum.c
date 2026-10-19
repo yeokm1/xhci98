@@ -381,6 +381,10 @@ VOID CmRegPublish(PCM_FILTER filter)
         filter->InFlight = 0;
         filter->Held = 0;
         filter->HeldBy = NULL;
+        /* A new publication: no eject taken before it holds it (one whose
+         * hook returned while this bridge was withdrawn found it off the
+         * list). */
+        filter->EjectHold = 0;
         cmRegSerial++;
         filter->Serial = cmRegSerial;
         KeClearEvent(&filter->Rundown);
@@ -822,7 +826,7 @@ BOOLEAN CmRegStartAllowed(PCM_FILTER filter)
     KIRQL irql;
     PLIST_ENTRY e;
     PCM_FILTER f;
-    PCM_NHI held;
+    PCM_FILTER held;
     ULONG i;
 
     held = NULL;
@@ -835,14 +839,16 @@ BOOLEAN CmRegStartAllowed(PCM_FILTER filter)
         }
         for (i = 0; i < f->SnapCount; i++) {
             if (f->Snap[i] == (PVOID)filter->Common.Pdo) {
-                held = f->Owner;
+                held = f;
                 break;
             }
         }
     }
-    if (held != NULL) {
-        /* The owner is used under the lock only, as its other notes are. */
-        CmLogNote(held, "cm.reenum.eject.start-refused", f->Bdf);
+    /* Refused whoever owns the member now (a claim recomputed meanwhile
+     * does not end the teardown); the owner, used under the lock only as
+     * its other notes are, is only where the note goes. */
+    if (held != NULL && held->Owner != NULL) {
+        CmLogNote(held->Owner, "cm.reenum.eject.start-refused", held->Bdf);
     }
     KeReleaseSpinLock(&cmRegLock, irql);
     return (BOOLEAN)(held == NULL);
