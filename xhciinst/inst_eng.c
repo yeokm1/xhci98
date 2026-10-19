@@ -7420,7 +7420,8 @@ static int run_install_nt(void)
         /* The second sentence only where it can apply (the 2000 leg read
          * it after a settings-only run). */
         out("\nRESTART Windows to finish.%s\n",
-            (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86) ?
+            (usbInclude && envNow.Major == 6 &&
+             INST_MY_ARCH == INST_ARCH_X86) ?
             " If the controller was updated from 2.3.x on 32-bit\nVista or "
             "7, run INSTALL.BAT again after the restart for the root hub and "
             "hubs." : "");
