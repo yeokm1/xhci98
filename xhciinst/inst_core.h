@@ -1015,6 +1015,21 @@ int inst_tray_leftover(int bakExists, int exeExists);
 #define INST_TRAY_RUN_DELETE    2
 int inst_tray_run_action(int noTray, int runState, int inPlace);
 
+/* /list's words for the start at login (98 SE leg, 2026-10-19: after an
+ * update with the tool unticked, /list said "started at login" with no Run
+ * value): what the value is now (runState as above), then what a run with
+ * the same switches would do to it (action, INST_TRAY_RUN_*). */
+const char *inst_tray_list_text(int runState, int action);
+
+/* 98 SE and ME: SETUPX records each INF\OTHER copy it makes as a value of
+ * this key, named by the copy's path, the INF's own name its data. 1 when
+ * value name is the path of a copy the uninstall deleted (path, or its
+ * short alias shortPath; either may be NULL or empty), case aside. */
+#define INST_OEM_NAME_KEY \
+    "Software\\Microsoft\\Windows\\CurrentVersion\\Setup\\SetupX\\INF\\OEM Name"
+int inst_oem_name_ours(const char *valueName, const char *path,
+                       const char *shortPath);
+
 /* ---- the machine-wide value (record 26 section 5.4; task 42-A.17) ------------ */
 
 /* The value question with the machine-wide value beside each device's own:

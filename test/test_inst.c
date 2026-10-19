@@ -2138,6 +2138,44 @@ static void test_tray(void)
              "/notray: deleted");
     CHECK_EQ(inst_tray_run_action(1, 2, 0), INST_TRAY_RUN_DELETE,
              "/notray, other data: deleted");
+    /* /list says what the Run value is now (98 SE leg, 2026-10-19). */
+    CHECK(strcmp(inst_tray_list_text(0, INST_TRAY_RUN_KEEP),
+                 "; it does not start at login.") == 0,
+          "/list: no Run value, /notray: does not start");
+    CHECK(strstr(inst_tray_list_text(0, INST_TRAY_RUN_SET),
+                 "does not start at login now") != NULL,
+          "/list: no Run value after an unticked update: not started now");
+    CHECK(strcmp(inst_tray_list_text(1, INST_TRAY_RUN_KEEP),
+                 "; it starts at login.") == 0, "/list: the value: starts");
+    CHECK(strstr(inst_tray_list_text(1, INST_TRAY_RUN_DELETE),
+                 "would no longer") != NULL, "/list /notray over the value");
+    CHECK(strstr(inst_tray_list_text(2, INST_TRAY_RUN_SET),
+                 "another file") != NULL, "/list: other data");
+    CHECK(strstr(inst_tray_list_text(2, INST_TRAY_RUN_KEEP),
+                 "another file") != NULL, "/list: other data, kept");
+    CHECK(strstr(inst_tray_list_text(2, INST_TRAY_RUN_DELETE),
+                 "removed") != NULL, "/list: other data, /notray");
+    /* SETUPX's OEM Name record of a deleted INF\OTHER copy. */
+    CHECK_EQ(inst_oem_name_ours("C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                "C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                "C:\\WINDOWS\\INF\\OTHER\\YEOKHE~1.INF"), 1,
+             "OEM Name: our deleted copy");
+    CHECK_EQ(inst_oem_name_ours("c:\\windows\\inf\\other\\YEO KHENG MENGXHCI98.INF",
+                                "C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                NULL), 1, "OEM Name: case aside");
+    CHECK_EQ(inst_oem_name_ours("C:\\WINDOWS\\INF\\OTHER\\YEOKHE~1.INF",
+                                "C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                "C:\\WINDOWS\\INF\\OTHER\\YEOKHE~1.INF"), 1,
+             "OEM Name: the short alias");
+    CHECK_EQ(inst_oem_name_ours("C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98uas.inf",
+                                "C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                ""), 0, "OEM Name: a longer name is not ours");
+    CHECK_EQ(inst_oem_name_ours("C:\\WINDOWS\\INF\\OTHER\\Other Vendorfoo.inf",
+                                "C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                NULL), 0, "OEM Name: another vendor's stays");
+    CHECK_EQ(inst_oem_name_ours("", "", NULL), 0,
+             "OEM Name: nothing deleted matches nothing");
+
     /* A copy left in use keeps the installed tool and its Run value. */
     CHECK_EQ(inst_tray_run_action(0, 1, 1), INST_TRAY_RUN_KEEP,
              "left in use: the Run value kept");

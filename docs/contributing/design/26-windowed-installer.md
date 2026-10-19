@@ -1,6 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 9, 2026-10-19 (task 42-A.27, section 7: the settle after a
+Status: draft 10, 2026-10-19 (section 9.3 step 4: the setup engine's
+`OEM Name` record of each deleted INF copy removed, record 23 revision
+15); draft 9, 2026-10-19 (task 42-A.27, section 7: the settle after a
 root hub's or hub's job within a pass, record 23 revision 14); draft 8, 2026-10-19
 (task 42-A.21, the owner's request of that
 day: the connection manager alone, and Windows 8 and 8.1 for it; sections
@@ -874,7 +876,8 @@ gated on the one before, shown on the Progress page:
    `DevicePath` entry, the copy's files, the directories), then the INF
    copies the engine kept (`INF` and `INF\OTHER`, the rule of 9.2 step 4,
    now deleted rather than listed, each only after no devnode of the
-   package is left), then the driver files in `SYSTEM32\DRIVERS`, each
+   package is left, and with each the `OEM Name` value SETUPX recorded
+   for it, record 23 section 6.1), then the driver files in `SYSTEM32\DRIVERS`, each
    deleted where it is not in use and otherwise left with a step and the
    restart flag (a running `xhci98.sys` whose last device was removed is
    unloaded by Windows; one still held is said). A removal the helper

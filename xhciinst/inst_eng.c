@@ -4210,13 +4210,12 @@ static void tray_install(void)
     }
     copy = inst_tray_copy_needed(inst, iv, pkg, pv);
     if (opts.List) {
-        action = inst_tray_run_action(opts.NoTray, tray_run_state(t.Run),
+        int runState = tray_run_state(t.Run);
+        action = inst_tray_run_action(opts.NoTray, runState,
                                       copy || inst != 0);
         out("The xHCI98 USB Tree: %s\n  %s%s\n",
             copy ? "would be copied to" : "is current at", t.Exe,
-            action == INST_TRAY_RUN_SET ? ", and started at login." :
-            action == INST_TRAY_RUN_DELETE ? "; it would no longer start at "
-                                             "login (/notray)." : ".");
+            inst_tray_list_text(runState, action));
         if (moving()) {
             out("  The copy in %s would be removed.\n", oldToolDir);
         }
@@ -10609,6 +10608,38 @@ static int remove_9x_devnodes(void)
     return 1;
 }
 
+/* 98 SE and ME: the setup engine's record of an INF copy the uninstall
+ * deleted (its OEM Name value, record 23 section 9.2 step 4), removed;
+ * only a value named by that copy's path or short alias. */
+static void oem_name_forget(const char *path, const char *shortPath)
+{
+    char name[INST_PATH_CHARS];
+    HKEY k;
+    DWORD i = 0;
+    DWORD n;
+    LONG r;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_OEM_NAME_KEY, 0,
+                      KEY_QUERY_VALUE | KEY_SET_VALUE, &k) != ERROR_SUCCESS) {
+        return;
+    }
+    for (;;) {
+        n = sizeof(name);
+        r = RegEnumValueA(k, i, name, &n, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r == ERROR_SUCCESS && inst_oem_name_ours(name, path, shortPath) &&
+            RegDeleteValueA(k, name) == ERROR_SUCCESS) {
+            /* The values after it move down one: the same index again. */
+            out("Removed the setup engine's record of it (SetupX OEM Name).\n");
+            continue;
+        }
+        i++;
+    }
+    RegCloseKey(k);
+}
+
 /* The INF copies the device installer keeps for this package (record 23
  * section 9.2 step 4's rule), in INF and INF\OTHER, each with its .PNF:
  * listed (list 1), or deleted once no entry of the package is left. 0
@@ -10691,6 +10722,13 @@ static int infs_9x(int list)
             }
             flagChanged = 1;
             out("Deleted %s (and its .PNF).\n", path);
+            join(pnf, sizeof(pnf), win, sub);
+            if (fd.cAlternateFileName[0] != '\0') {
+                join(pnf, sizeof(pnf), pnf, fd.cAlternateFileName);
+            } else {
+                pnf[0] = '\0';
+            }
+            oem_name_forget(path, pnf);
         } while (FindNextFileA(h, &fd));
         e = GetLastError();
         FindClose(h);
@@ -14150,6 +14188,7 @@ static int s98_un_inf_9x(const char *name)
         return 0;
     }
     out("Stor98's INF copy %s was deleted.\n", path);
+    oem_name_forget(path, NULL);
     flagChanged = 1;
     return s98_rec_del("Staged", name);
 }

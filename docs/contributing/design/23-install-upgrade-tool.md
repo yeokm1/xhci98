@@ -1,6 +1,9 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 14, 2026-10-19 (task 42-A.27: a parent's job and the
+Status: revision 15, 2026-10-19 (the 98 SE and ME uninstall removes
+SETUPX's `OEM Name` record of each INF copy it deletes, sections 6.1 and
+9.5's `/list` line reads the Run value; the matrix's 98 SE and ME legs of
+that day); revision 14, 2026-10-19 (task 42-A.27: a parent's job and the
 devices below it, sections 5.8 and 10); revision 13, 2026-10-19 (the connection manager alone, and
 Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
 service and the machine-wide key); revision 11, 2026-10-18 (the window,
@@ -1153,7 +1156,14 @@ its set.
   has installed from, and records its original name under
   `HKLM\Software\Microsoft\Windows\CurrentVersion\Setup\SetupX\INF\OEM Name`
   (`REGSTR_PATH_INF_OEMNAME`, the Windows 98 DDK's `regstr.h`). Writing
-  into either by hand is driving the engine's own bookkeeping. Not used.
+  into either by hand is driving the engine's own bookkeeping. Not used
+  to install. (Revision 15) The uninstall that deletes one of this
+  package's copies there (record 26 section 9.3 step 4, Stor98's owned
+  copies too) deletes the `OEM Name` value named by that copy's path, or
+  by its short alias, and no other value (`inst_oem_name_ours`): read on
+  the 98 SE and ME uninstall legs of 2026-10-19, which left
+  `C:\WINDOWS\INF\OTHER\Yeo Kheng Mengxhci98.inf` = `xhci98.inf` naming
+  a deleted file.
 - **`DevicePath`** is the documented knob:
   `HKLM\Software\Microsoft\Windows\CurrentVersion`, value `DevicePath`,
   "default search path for .INFs" (`REGSTR_VAL_DEVICEPATH`, the Windows 98
@@ -1944,7 +1954,12 @@ deferred on NT, and `WININIT.INI` is never edited.
 - **Install and update.** Every run that passes its confirmation, on both
   routes, after the drivers (NT: after the results and `/restage`'s work
   file; 98 SE and ME: after the registry values, before the printed
-  steps), and under `/list` as one line of what would be done.
+  steps), and under `/list` as one line of what would be done. (Revision
+  15) That line says what the Run value is now - present, absent, or
+  naming another file - and then what a run with the same switches would
+  do to it (`inst_tray_list_text`); it never says "started at login" with
+  no Run value (the 98 SE leg of 2026-10-19, after an update with the
+  tool unticked).
   1. A package without `tools\xhcitr\<name>` (an older or a development
      one) is said in one line, and nothing else of the tool is touched.
   2. The file is copied when it is missing, or when the package's version
