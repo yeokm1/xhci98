@@ -668,6 +668,25 @@ int inst_busy_retry(INST_U32 error, int tries);
  * group, a member that joined later included). */
 int inst_busy_spent(const int *tries, int n);
 
+/* A parent's job and the devices below it (98 SE update over 3.0.0.0 with
+ * an external hub, 2026-10-19: the root hub's reinstall restarted it, its
+ * hub was gone for about four seconds, and the hub's job, made at once,
+ * found it not present). A parent is a controller or a device of the bus
+ * (root hub, hub, composite entry): its job may restart the devices below
+ * it. Outcomes are INST_DI_OUT_* (NT's install call mapped onto them). */
+int inst_parent_kind(const char *instanceId, int controller);
+
+/* 1 when the tree settles before the next job of the same pass: the job
+ * just made was a parent's, it reached its device (not absent, not
+ * refused), and another job of the pass follows. */
+int inst_settle_after_job(int parent, int outcome, int more);
+
+/* 1 when a job that found its device not present is made once more after
+ * a settle: a parent's job ran earlier in this run (parentJobs), and this
+ * device has not been tried again yet (retries). A device that is still
+ * not present then is "not present"; one settle is all it costs. */
+int inst_absent_retry(int outcome, int parentJobs, int retries);
+
 /* Windows 2000 after a tunnel port's first filter install succeeded in
  * this run (owner, 2026-10-15): a device of the connection manager's INFs
  * (inf INST_INF_CM or INST_INF_CMF) that is gone, or at Code 12, is waiting
