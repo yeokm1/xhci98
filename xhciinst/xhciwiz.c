@@ -786,6 +786,11 @@ static void comp_usb_state(HWND dlg)
                     usbNotHere ? INST_PT_DRIVERS_T8 :
                     usb ? INST_PT_DRIVERS_T : INST_PT_DRIVERS_OFF));
     if (!usb && tbHave) {
+        /* Locked on: Stor98 follows its parent here too (owner,
+         * 2026-10-19), as on a click of the Thunderbolt box. */
+        if (IsDlgButtonChecked(dlg, IDC_C_TB) != BST_CHECKED) {
+            CheckDlgButton(dlg, IDC_C_S98, BST_CHECKED);
+        }
         CheckDlgButton(dlg, IDC_C_TB, BST_CHECKED);
     }
     EnableWindow(GetDlgItem(dlg, IDC_C_TB), usb && tbHave);

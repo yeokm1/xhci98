@@ -738,7 +738,11 @@ unasked. With the box ticked:
   `[rename]` entry, the `INF` or `INF\OTHER` copy each Stor98 driver key
   names made the bundled `stor98.inf`, with or without a drive present,
   then a shut down and a start; a drive first plugged after it binds to
-  the new file.
+  the new file. The printed steps never send the user to Update Driver
+  on a drive Stor98 runs, and a Stor98 drive no helper job touches may
+  be unplugged between the plan and Install, as the confirmation asks,
+  without the run refusing a changed plan (the plan made again reads
+  the gate again).
 - **An update of a Stor98 device** follows Stor98's readme ("Updating the
   driver"), whose two precautions are each for its own systems. On 98 SE
   and ME: nothing may be using the drive's volume, and the machine is
@@ -777,9 +781,10 @@ unasked. With the box ticked:
   `HKLM\Software\xhci98\Stor98` with: `PreExisting` (`REG_DWORD` 1 when
   the baseline of the first bullet found any Stor98, a service, a driver
   key or a bound devnode; written once, never cleared, and since draft 16
-  written with the run's first Stor98 change - the local copy that
-  carries Stor98, an install, the file update - never by a run that makes
-  none, such as one that leaves a hand-installed Stor98 alone);
+  written with the run's first Stor98 change Windows can see - once the
+  local copy that carries Stor98 is made, before it is staged or named on
+  `DevicePath` - never by a run that makes none, such as one that leaves
+  a hand-installed Stor98 alone);
   `Version` (the bundled release last installed: written only by a run
   that installed or updated it, a device the call or the helper bound or
   updated, or the 98 SE and ME file update; record 28 section 4 item 4
@@ -835,7 +840,10 @@ unasked. With the box ticked:
   files and the `INF\OTHER` copies by the same check), so an INF a
   pre-existing or unlisted device still names stays; then the `stor98`
   service, its files and the recorded settings only when no devnode,
-  present or not, is bound to Stor98 any more and `PreExisting` is clear;
+  present or not, is bound to Stor98 any more and `PreExisting` is clear
+  (on 98 SE and ME a file update this installer queued and the next
+  start has not done yet goes with the file: its `[rename]` entry and
+  `STOR98.TMP`, draft 16);
   otherwise they stay, and the finish page says that a Stor98 this
   installer did not install was left. A device the user installed and
   this installer only updated keeps its binding, and two devices sharing
