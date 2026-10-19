@@ -116,7 +116,8 @@ Stor98, the bundled NVMe driver (a separate project, with its own
 stor98-readme.txt): ticked with the Thunderbolt 3 / USB4 box, and you
 can untick it. Ticked, it is installed on every NVMe drive behind a
 Thunderbolt or USB4 tunnel that has no driver - never on one another
-driver runs, nor on an internal drive - and an older Stor98 is updated. Its settings page shows
+driver runs, nor on an internal drive - and an older Stor98 is
+updated. Its settings page shows
 each of Stor98's options as it is now ("not set" means Stor98's built-in
 default); a row left alone writes nothing. On Windows 98 SE and ME an
 older Stor98 is updated as a file, replaced when Windows next starts
@@ -133,7 +134,8 @@ there: a Stor98 installed before, by hand or by an earlier tool, stays.
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
 /thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /notray,
-/nouas and /cmonly (the components, preselected), /set Name=Value (an option, preselected), /defaults,
+/nouas and /cmonly (the components, preselected), /set Name=Value
+(an option, preselected), /defaults,
 /force (reinstall this release, or go back to it from a newer one),
 /restage (Vista and 7: replace a stored development build with the same
 DriverVer), /debug (the debug- directory, only if a maintainer asks),

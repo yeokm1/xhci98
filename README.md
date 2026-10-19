@@ -23,7 +23,7 @@ My 2020 ThinkPad P14s Gen 1 on Windows 98 SE with a USB 3.0 hub, two UAS drives,
 
 <img src="images/xhci98-tb3-nvme-win7.jpg" width="800">
 
-CrystalDiskMark sequential on 1151 MB/s read and 1013 MB/s write on Windows 7 with an ORICO USB4 NVMe enclosure on its Thunderbolt 3 port through `xhcicm.sys` and [Stor98](https://github.com/yeokm1/stor98)
+CrystalDiskMark sequential on 1151 MB/s read and 1013 MB/s write on Windows 7 with an ORICO USB4 NVMe enclosure on its Thunderbolt 3 port through `xhcicm.sys` and [Stor98](src/stor98/)
 
 <img src="images/xhci98-tb3-nvme-98se.jpg" width="800">
 
@@ -41,8 +41,6 @@ The xHCI98 USB Tree and Device Manager on Windows 98 SE, with an ASMedia USB4 NV
 - Blog post xHCI98v1: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driver/
 - Blog post xHCI98v2 v3: https://yeokhengmeng.com/2026/10/xhci98-usb3-usb4/
 
-* Related projects: 
-  * Stor98 NVME driver: https://github.com/yeokm1/stor98
 
 ## Motivation
 
@@ -103,9 +101,11 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 
 An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **[Stor98](src/stor98/)**, built with this package at the same version, is that driver for Windows 98 SE to 7: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive.
 
+**Stor98 is only for hot-pluggable NVMe drives behind a Thunderbolt or USB4 port. Do not use it for internal NVMe drives.**
+
 - The package carries Stor98 in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). It reads `xhcicm.sys`'s link-state channel on every system, 98 SE to 7.
 - Stor98's settings, install steps and limits are in its own readme, `stor98-readme.txt` beside it. The release notes have [the detail](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).
-- `SETUP.EXE` installs it when asked (its box under the Thunderbolt 3 / USB4 one on the Components page, which needs that one ticked too), and updates an earlier one, Stor98 `0.4.0.0` included. Otherwise, when the NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
+- `SETUP.EXE` installs it with the Thunderbolt 3 / USB4 support (its box under that one, ticked with it), only on drives behind a Thunderbolt or USB4 tunnel, and updates an earlier one, Stor98 `0.4.0.0` included. Otherwise, when a tunnel drive's NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
 
 ### Things to know
 
@@ -372,7 +372,7 @@ The version lives in [src/xhci_version.h](src/xhci_version.h). [build-and-test.m
 src/            xhci98.sys (C), its two INFs and DDK build files
   uas/          xhciuas.sys, the UAS class driver
   cm/           xhcicm.sys, the Thunderbolt and USB4 driver
-  stor98/       Stor98, the bundled NVMe driver (its own project, BSD-3-Clause)
+  stor98/       Stor98, the bundled NVMe driver (BSD-3-Clause)
 test/           Host-side unit tests (test\run-host-tests.cmd)
 scripts/        Build wrapper, setup helpers, gates, vm-matrix/
 xhciqual/       DOS hardware-qualification tool (Open Watcom)
