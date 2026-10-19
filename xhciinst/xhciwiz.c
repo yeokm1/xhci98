@@ -162,6 +162,23 @@ static char dirNow[WIZ_PATH];
 /* The settings chosen on the pages and in Advanced (record 26 section
  * 5.4): set, and the value; handed to the engine at Install. */
 static int choiceSet[INST_MAX_VALUES];
+
+/* A choice whose driver is in the run as the components stand: a value of
+ * the USB drivers' INFs only with them ticked, the connection manager's
+ * only with it. A choice of a component left out is kept, not shown and
+ * not handed to the engine, so ticking the box again brings it back. */
+static int choice_live(int v)
+{
+    int inf = instValues[v].Inf;
+
+    if (inf == INST_INF_XHCI || inf == INST_INF_UAS) {
+        return usbChoice;
+    }
+    if (inf == INST_INF_CM) {
+        return tbChoice;
+    }
+    return 1;
+}
 static INST_U32 choiceVal[INST_MAX_VALUES];
 
 static INST_ROW rows[INST_MAX_VALUES];
@@ -427,7 +444,8 @@ static unsigned __stdcall job_main(void *arg)
         opts->NoTray = !trayChoice;
         opts->SetCount = 0;
         for (i = 0; i < INST_MAX_VALUES; i++) {
-            inst_eng_choose_value(i, choiceSet[i], choiceVal[i]);
+            inst_eng_choose_value(i, choiceSet[i] && choice_live(i),
+                                  choiceVal[i]);
         }
         for (i = 0; i < INST_S98_COUNT; i++) {
             inst_eng_s98_choose_value(i, s98Choice && s98WinSet[i],
@@ -1947,7 +1965,7 @@ static void summary_fill(HWND dlg)
         tb_add(&t, "\nThe settings written machine-wide:\n");
         any = 0;
         for (i = 0; i < INST_MAX_VALUES && i < instValueCount; i++) {
-            if (choiceSet[i]) {
+            if (choiceSet[i] && choice_live(i)) {
                 _snprintf(line, sizeof(line) - 1, "- %s = %lu\n",
                           instValues[i].Name, (unsigned long)choiceVal[i]);
                 line[sizeof(line) - 1] = '\0';

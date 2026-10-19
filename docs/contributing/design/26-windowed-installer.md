@@ -796,7 +796,14 @@ manager with no controller present, which registers no service yet),
 "xHCI98 Thunderbolt 3 / USB4 connection manager 3.1.0.0"; otherwise the
 name above (`inst_arp_cm_only`, host-tested). The key, the
 program it runs and the uninstall are the same either way, so moving
-between the two rewrites the one entry.
+between the two rewrites the one entry. The owner's rule (2026-10-19,
+task 42-A.21): "let user update existing driver by installing over it.
+Should not have multiple entries in Add remove programs in Control
+Panel." So every run, whatever components it installs over whatever is
+there, is an update in place of the one key above, never a second key;
+on x64 the entry is written by the 64-bit program into the native view
+(the 32-bit window starts the x64 one under WOW64 and never writes the
+registry there, section 4), so no `Wow6432Node` entry is made.
 
 ### 9.2 Running from the install directory
 

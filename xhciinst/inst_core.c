@@ -4680,7 +4680,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "xHCI98 USB 3.x host controller driver and UAS driver", 270, 10 },
     { INST_PT_DRIVERS_T,
       "xhci98.sys and xhciuas.sys: the controller, its hubs and devices, "
-      "and UAS disks. Always installed.",
+      "and UAS disks.",
       272, 16 },
     { INST_PT_TB, "Thunderbolt 3 / USB4 support (xhcicm.sys)", 270, 10 },
     { INST_PT_TB_T,

@@ -2848,6 +2848,12 @@ static void test_uninstall_entry(void)
     CHECK(inst_arp_cm_only(0, 0, 1) && inst_arp_cm_only(0, -1, 1) &&
           !inst_arp_cm_only(1, 0, 1) && !inst_arp_cm_only(-1, 0, 1),
           "the connection manager alone: a staging-only run");
+    /* The owner's rule (2026-10-19): one entry for every set of
+     * components, an install over any of them an update in place. The
+     * key is one constant, whatever the name says. */
+    CHECK(strcmp(INST_ARP_KEY, "Software\\Microsoft\\Windows\\"
+                 "CurrentVersion\\Uninstall\\xhci98") == 0,
+          "one Add/Remove Programs key, whichever components");
     CHECK(inst_arp_command(out, sizeof(out), "C:\\Tools\\My xHCI98",
                            "XHCIWZ64.EXE", 1) &&
           strcmp(out, "\"C:\\Tools\\My xHCI98\\XHCIWZ64.EXE\" /uninstall") == 0,
