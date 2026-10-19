@@ -140,6 +140,12 @@ void inst_eng_tb_choose(int include);
  * record 23 section 4.3 reads it (1 read; 0 not). */
 int inst_eng_usb_state(int *offered, int *notOnThisSystem);
 void inst_eng_usb_choose(int include);
+
+/* The UAS disk driver's box, a child of the USB drivers' (owner,
+ * 2026-10-19): whether xhciuas.inf is in the run, and the choice,
+ * planned again. */
+int inst_eng_uas_state(void);
+void inst_eng_uas_choose(int include);
 int inst_eng_cm_only_machine(void);
 int inst_eng_os_read(OSVERSIONINFOA *v);
 
@@ -202,6 +208,7 @@ typedef struct _INST_ROW {
     int Same;               /* every device runs one value: InForce      */
     INST_U32 InForce;
     int CmNew;              /* a new install of the Thunderbolt driver    */
+    int Greyed;             /* inst_value_greyed: shown, never written    */
 } INST_ROW;
 int inst_eng_rows(INST_ROW *rows, int cap);
 
@@ -231,6 +238,14 @@ int inst_eng_controller_changes(void);
 
 /* The confirmation's wording for the plan as it stands. */
 const char *inst_eng_confirm_text(void);
+
+/* The window's Summary headline: inst_summary_head with this run's
+ * device plan and the page's own writes and other changes. */
+const char *inst_eng_summary_head(int writes, int other);
+
+/* 1 when the xHCI98 USB Tree is started at login now (its Run value is
+ * there). */
+int inst_eng_tray_started(void);
 
 /* ---- Stor98, the bundled NVMe driver (record 26 sections 5.3, 5.6, 6.3) -- */
 

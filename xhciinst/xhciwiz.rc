@@ -11,7 +11,8 @@
 #include "../src/xhci_version.h"
 #include "xhciwiz_res.h"
 
-IDI_WIZ ICON "xhciwiz.ico"
+/* XHCITR's icon: the project's windows show one (owner, 2026-10-19). */
+IDI_WIZ ICON "../xhcitr/xhcitr.ico"
 
 1 24 "xhciwiz.manifest"
 
@@ -85,35 +86,37 @@ BEGIN
                     ES_AUTOVSCROLL | WS_VSCROLL
 END
 
-IDD_COMPONENTS DIALOG 0, 0, 300, 200
+IDD_COMPONENTS DIALOG 0, 0, 300, 210
 STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Components"
 FONT 8, "MS Sans Serif"
 BEGIN
     AUTOCHECKBOX    "", IDC_C_DRIVERS, 8, 4, 284, 10, WS_TABSTOP
     LTEXT           "", IDC_C_DRIVERS_T, 20, 15, 272, 16
-    AUTOCHECKBOX    "", IDC_C_TB, 8, 34, 284, 10, WS_TABSTOP
-    LTEXT           "", IDC_C_TB_T, 20, 45, 272, 26
-    AUTOCHECKBOX    "", IDC_C_S98, 8, 74, 284, 10, WS_TABSTOP
-    LTEXT           "", IDC_C_S98_T, 20, 85, 272, 18
-    AUTOCHECKBOX    "", IDC_C_TRAY, 8, 106, 284, 10, WS_TABSTOP
-    LTEXT           "", IDC_C_TRAY_T, 20, 117, 272, 10
-    LTEXT           "", IDC_C_DIR_L, 8, 130, 284, 10
-    EDITTEXT        IDC_C_DIR, 8, 141, 226, 13, ES_AUTOHSCROLL | WS_TABSTOP
-    PUSHBUTTON      "B&rowse...", IDC_C_BROWSE, 240, 140, 52, 14
-    LTEXT           "", IDC_C_DIR_T, 8, 158, 284, 18
-    LTEXT           "", IDC_C_DIR_WHY, 8, 178, 284, 20
+    AUTOCHECKBOX    "", IDC_C_UAS, 20, 33, 272, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_UAS_T, 32, 44, 260, 18
+    AUTOCHECKBOX    "", IDC_C_TB, 8, 65, 284, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_TB_T, 20, 76, 272, 26
+    AUTOCHECKBOX    "", IDC_C_S98, 20, 105, 272, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_S98_T, 32, 116, 260, 18
+    AUTOCHECKBOX    "", IDC_C_TRAY, 8, 137, 284, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_TRAY_T, 20, 148, 272, 10
+    LTEXT           "", IDC_C_DIR_L, 8, 161, 284, 10
+    EDITTEXT        IDC_C_DIR, 8, 172, 226, 13, ES_AUTOHSCROLL | WS_TABSTOP
+    PUSHBUTTON      "B&rowse...", IDC_C_BROWSE, 240, 171, 52, 14
+    LTEXT           "", IDC_C_DIR_T, 8, 189, 284, 18
+    LTEXT           "", IDC_C_DIR_WHY, 8, 189, 284, 18
 END
 
-IDD_SETTINGS DIALOG 0, 0, 300, 172
+IDD_SETTINGS DIALOG 0, 0, 300, 200
 STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Settings"
 FONT 8, "MS Sans Serif"
 BEGIN
     LTEXT           "", IDC_S_HEAD, 8, 2, 284, 18
-    EDITTEXT        IDC_S_NOTE, 8, 151, 218, 20, ES_MULTILINE | ES_READONLY |
+    EDITTEXT        IDC_S_NOTE, 8, 176, 218, 20, ES_MULTILINE | ES_READONLY |
                     ES_AUTOVSCROLL | WS_VSCROLL
-    PUSHBUTTON      "&Advanced...", IDC_S_ADVANCED, 232, 154, 60, 14
+    PUSHBUTTON      "&Advanced...", IDC_S_ADVANCED, 232, 179, 60, 14
 END
 
 IDD_SUMMARY DIALOG 0, 0, 300, 172
