@@ -1818,3 +1818,20 @@ merge `54bb23c2`: both **passed** (BUILD + GATES PASSED, debug, release
 and qemu, each architecture). The legs ran this branch's installer as
 built at `e6ec24cf` and `952c47df`; the later merges brought 42-A.27's
 and 42-A.29's installer changes, not this task's code.
+
+**After the last merge** (`473323ae`, 3.1.0.0's 42-A.22, 42-A.24 and
+42-A.25): Stor98's needs-Thunderbolt rule is one rule, the window's
+`inst_s98_box_open`, which the engine's `s98_set` applies; the console's
+duplicate sentence went (42-A.22's refusal of `/stor98` without
+`/thunderbolt` or `/cmonly` stands). 42-A.26 is record 23 revision 18
+and record 26 draft 12. 42-A.24's step 6a removes Stor98's
+CriticalDeviceDatabase entries only once its service is gone, so an
+adoption refused for an internal drive keeps them with the service. The
+integration delta was reviewed with no findings. `test_inst` 1568 checks,
+0 failures; the gated build, x86 `all` then `all -amd64`, **passed** on
+`473323ae`. One more 98 SE leg on the merged installer, from the
+prepared snapshot, enclosure plugged after the desktop, `INSTALL /console
+/yes /thunderbolt /stor98`: **pass** - the tunnel NVMe behind a tunnel and
+on Stor98, the internal NVMe LEFT as internal, "found before 0,
+PreExisting 0", exit 3; the uninstall then deleted the `INF\OTHER` copy
+and `stor98.mpd` (exit 3); `logs\N1-98-473323ae.log`.
