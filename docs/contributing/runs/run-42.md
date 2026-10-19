@@ -1549,3 +1549,166 @@ show is an Enum entry of the base images with no devnode, as in N1's
 logs; the run does not touch it. Not taken: the window (the console runs
 the same engine), NT (no hub ordering leg; the NT rule rests on the code
 read and the vectors), ME over `3.0.0.0` (no such image).
+
+## 42-A.31: SETUP.EXE, the installer's entry point for people (2026-10-19)
+
+Branch `p42-batlaunch` from `3.1.0.0` at `08709480`. The owner asked
+first that `INSTALL.BAT`, double-clicked, start the installer's window
+and close at once, so that no console sits behind the wizard; then, the
+same afternoon, for a `SETUP.EXE` at the package root instead ("setup.exe
+by tonight"), with `INSTALL.BAT` kept, unchanged, for the command line.
+The detached `INSTALL.BAT` was not committed.
+
+### What it adds
+
+- **`SETUP.EXE`** (`xhciinst\setup.c`, `setup.rc`, `setup.manifest`;
+  record 26 draft 11 section 2 and W17, record 23 revision 16): a 32-bit
+  windows-subsystem program, MSVC 6.0, the C runtime static,
+  `/SUBSYSTEM:WINDOWS,4.0`, the xHCI98 USB Tree's icon and the version
+  resource of `src\xhci_version.h`. It finds its own directory, picks
+  `tools\xhciinst\XHCIWZ64.EXE` on 64-bit Windows (`IsWow64Process`
+  looked up at run time) and `XHCIWIZ.EXE` otherwise, starts it with
+  `ShellExecuteExA` (`open`, its own arguments after its name, the
+  package root as the working directory, `SEE_MASK_FLAG_DDEWAIT` so the
+  start is finished before it exits) and returns 0, or 1 after a message
+  box naming the problem (the window missing, its own path unreadable,
+  the start failed, the elevation declined). The manifest asks for
+  `asInvoker` and declares Vista to 10; an empty popup of no size at the
+  screen's centre owns the elevation prompt and the message box.
+- **The gates**: `xhciinst\build.cmd` builds it with the 32-bit pair;
+  `selftest.cmd` runs its `/selftest` (13 checks: the command-line tail,
+  `/selftest` recognised with the blank `cmd.exe` leaves before a
+  redirection, the paths for a folder with a space, a drive's root and a
+  share, the refusals) and `check-imports.ps1`'s new `setup` profile
+  (KERNEL32, USER32 and SHELL32 alone, the windows subsystem, an embedded
+  `asInvoker` and no elevated level, Windows 7's `supportedOS` entry).
+- **The packager**: `make-release.ps1` requires it, holds it to the
+  install tool's staleness rule, stages it at the version root beside
+  `INSTALL.BAT`, lists it in the readme's file list and its linkage in
+  `tools\xhciinst\NOTICE.TXT`; `test-package.ps1` holds the staging, the
+  staleness rule and the readme's first instruction.
+- **The words**: the readme's section 4 begins "THE EASY WAY: SETUP.EXE.
+  To install or update, double-click SETUP.EXE; to uninstall, use Remove
+  in Add/Remove Programs (or SETUP /uninstall). INSTALL.BAT is for the
+  command line and scripts (INSTALL /console ...); run with no arguments
+  it opens the same window." The window started with no argument installs
+  or updates; it has no uninstall page of its own, so the owner's "To
+  install, update or uninstall, double-click SETUP.EXE" became this.
+  `tools\xhciinst\readme.txt`, `INSTALL.BAT`'s header, `README.md`'s
+  install section (now the window's pages, not the console's questions),
+  a line in "What `3.1.0.0` changes", `source-files.md` and
+  `legal-provenance.md` follow.
+- **The exit code**: `INSTALL.BAT` keeps waiting for the window and
+  passing its code on, and `INSTALL /console` is unchanged. `SETUP.EXE`
+  does not wait: the window's result is its Finish page and the log, and
+  a script runs `INSTALL /console`.
+
+### What the legs changed
+
+Three things were read in the Windows 7 guests and fixed before the last
+legs (`9f526670`, `a56f2818`, `7fcdbe67`, `7995a30e`):
+
+- With the elevation declined, the message box opened behind the
+  Explorer window `SETUP.EXE` was started from (the taskbar button
+  flashed), first with no flags and then with `MB_TOPMOST |
+  MB_SETFOREGROUND` as well: the declined prompt handed the foreground
+  back to Explorer. The owner window, made the foreground while
+  `SETUP.EXE` still had the right to, and passed as the prompt's
+  `hwnd`, fixed it.
+- After the window was cancelled, Windows 7's Program Compatibility
+  Assistant asked "This program might not have installed correctly"
+  about `SETUP.EXE` (installer detection by name). The manifest's
+  `supportedOS` section exempts it; not seen again on 7 x86 or x64.
+- With the owner at 0,0 the elevation prompt opened in the screen's
+  corner; the owner now sits at the centre.
+
+### Review
+
+Reviewed in six rounds, each on the commits before it: the shell start
+finished before exit (`SEE_MASK_FLAG_DDEWAIT`, `277dd147`); the uninstall
+wording and `README.md`'s console prompts (`7b843d4d`); then no findings
+on the documents, the message box, the manifest, the owner window, its
+place, and the merge of `3.1.0.0` (`7950d900`), where 42-A.27 held record
+23 revision 14 and record 26 draft 9 and 42-A.29 takes 15 and 10, so this
+task's text is revision 16 and draft 11.
+
+### Builds
+
+Both gated builds on the merged tree, `7950d900`: `build-driver.cmd all`
+(x86) and `all -amd64`, BUILD + GATES PASSED, the installer's self-test
+with `SETUP.EXE`'s 13 checks and its `setup` import profile among them
+(`xhciinst\build.cmd` and `xhcimark\build.cmd` run by hand first: the
+gated build rebuilds neither). The packager's self-tests passed again
+(1150 checks) after the text fixes below.
+
+The TEST cut: `make-release.ps1 -Flavor release -Arch x86 -TestLabel
+"SETUP.EXE, task 42-A.31" -ReleasesDir out\blrel -SkipQualtool
+-SkipUploadSet` (no Stor98; the bench cut's `history.md` copied beside
+it). The first two tries refused `tools\xhciinst\NOTICE.TXT`: the
+sentence that gained `SETUP.EXE` ran past 78 columns, which no gate
+renders (`80693c4c`, `f177637f`); the readme's file list then said
+`SETUP.EXE` uninstalls too (`d78eb68f`). The cut at `d78eb68f` holds
+`SETUP.EXE` (`a4b3c922...`) and `INSTALL.BAT` at its root, its readme's
+section 4 opening with the instruction above.
+
+### The legs (development host A, QEMU)
+
+Kit `E:\xhci98-vm\p42-batlaunch` (QMP 48240 to 48249; screenshots in
+`shots\`), copied from `p42-int`'s. The package: the bench package
+(`E:\xhci98-vm\m31\pkg-bench`, checked against its `SHA256SUMS-bench.txt`)
+with this branch's `SETUP.EXE` and `INSTALL.BAT` at its root, given to
+each guest as a read-only FAT drive. Every start was from Explorer, the
+file selected and opened with Enter (Explorer's default verb, as a
+double-click): the guests have no pointer before xhci98 is installed.
+Nothing was installed; every window was cancelled on its Welcome page.
+
+- **Windows 98 SE** (`win98-clean.qcow2` overlay, `w98c`): `SETUP.EXE`
+  showed the USB Tree's icon in Explorer; opened, the window's Welcome
+  page appeared ("Windows 98 SE (4.10.2222 A), 32-bit", package `D:\`,
+  `release-x86`) with no MS-DOS box, the taskbar holding Explorer and
+  Welcome alone; Cancel closed it (`bl-98-setup`, `bl-98b-setup`, and on
+  the final `SETUP.EXE` `bl-98c-setup`, `bl-98c-cancel`). **Pass.** A
+  Ctrl+Alt+Del task list taken with the window open (`bl-98-tasklist`)
+  froze that guest's display; it was powered off and started cold, and
+  the leg taken again.
+- **Windows ME** (`winme-stock-base.qcow2` overlay): the same, "Windows
+  ME (4.90.3000), 32-bit", no MS-DOS box, cancelled at Welcome
+  (`bl-me-setup`, `bl-me-cancel`; final `SETUP.EXE` `bl-me2-setup`,
+  `bl-me2-cancel`). **Pass.**
+- **Windows XP SP3** (`winxp.img` overlay, signed in as an
+  administrator): the window opened with no console; `tasklist` listed
+  `XHCIWIZ.EXE` and no `SETUP.EXE` (`bl-xp-setup`, `bl-xp-tasklist3`);
+  cancelled at Welcome. Then, in a command prompt, `INSTALL /console
+  /list` from the package's top directory: the console tool's plan,
+  "No changes were made.", "Exit code 0. The log is (none).", and the
+  batch file's `%errorlevel%` 0 (`bl-xp-console`): the console path is
+  unchanged. **Pass.**
+- **Windows 7 SP1 x86** (`win7.img` overlay, UAC at its default): one
+  elevation prompt, naming `XHCIWIZ.EXE` (not `SETUP.EXE`), centred
+  (`bl-w7d-uac`); No: `SETUP.EXE`'s message in front of Explorer
+  (`bl-w7d-uacno`); run again, Yes: the window, "Windows 7 (6.1.7601
+  Service Pack 1), 32-bit", `release-x86` (`bl-w7d-wiz`); `tasklist`
+  listed `XHCIWIZ.EXE` and no `SETUP.EXE` (`bl-w7-tasklist2`); cancelled,
+  and no compatibility question followed (`bl-w7d-cancel`). Taken on the
+  final `SETUP.EXE`; the earlier builds' two defects above were read
+  here (`bl-w7-uacno`, `bl-w7b-uacno`, `bl-w7-cancel`). **Pass.**
+- **Windows 7 SP1 x64** (`w7x64-ts` overlay): the prompt named
+  `XHCIWZ64.EXE` (`bl-x64b-uac`); No: the message in front
+  (`bl-x64b-uacno`); Yes: the window, "Windows 7 (6.1.7601 Service Pack
+  1), x64", `release-x64` (`bl-x64b-wiz`); `tasklist` listed
+  `XHCIWZ64.EXE` alone, no `XHCIWIZ.EXE` and no `SETUP.EXE`
+  (`bl-x64b-tasklist`); cancelled, no compatibility question
+  (`bl-x64b-cancel`). Taken on the build before the centred owner
+  (`7fcdbe67`), whose prompt opened in the screen's corner. **Pass.**
+
+`SETUP.EXE` of the final legs: `309466a0...79e8` (`7995a30e`); the
+window's executables are the bench package's (`XHCIWIZ.EXE`
+`ad09907e...`, `XHCIWZ64.EXE` `d47ce891...`). The cut of this branch
+rebuilds all of them from the merged tree.
+
+The cut package itself (`out\blrel\3.1.0.0`, x86 only) on fresh starts
+of the same overlays: **Windows 7 x86** one prompt for `XHCIWIZ.EXE`,
+the window, cancelled, no compatibility question (`bl-cut-w7-uac`,
+`bl-cut-w7-wiz`, `bl-cut-w7-cancel`); **Windows 98 SE** the window with
+no MS-DOS box, cancelled (`bl-cut-98-setup`, `bl-cut-98-cancel`).
+**Pass.**
