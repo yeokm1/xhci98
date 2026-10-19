@@ -6111,8 +6111,8 @@ static int nt_more_after(int i, int inf, int controllers)
 
 /* Up to INST_REAPPEAR_MS for a device a parent's job took away (it comes
  * back as the parent restarts), then the settle with nothing expected.
- * 1 settled (whether or not it came back); 0 the settle failed (said, and
- * the run stops at the next step point when it was cancelled). */
+ * 1 settled (whether or not it came back) and not cancelled; 0 the settle
+ * failed or the run was cancelled (said): the caller stops. */
 static int reappear_settle(const char *id)
 {
     DWORD t0 = GetTickCount();
@@ -6141,7 +6141,9 @@ static int reappear_settle(const char *id)
         return 0;
     }
     out("done.\n");
-    return 1;
+    /* A cancel during the settle's last poll is seen here, before the
+     * next call. */
+    return go_on();
 }
 
 /* 1 done, 0 a controller's call failed (the rest is not attempted), -1 a
@@ -8283,7 +8285,7 @@ static int helper_install(DEVREC *d)
      * section 6.3): a copy made in it is that device's step. */
     s98_inf_sync();
     v = helper_job(INST_DI_INSTALL, d, inf, force, &r);
-    if (d->Inf != INST_INF_S98 &&
+    if (d->Inf != INST_INF_S98 && helperState >= 0 &&
         inst_absent_retry(inst_di_outcome(INST_DI_INSTALL, v), parentJobs, 0)) {
         /* A parent's job of this run may have restarted it: the tree
          * settled, and the job made once more (98 SE update over 3.0.0.0,
@@ -8292,7 +8294,7 @@ static int helper_install(DEVREC *d)
         if (!reappear_settle(d->Id)) {
             /* The absent verdict stands for it; the passes stop. */
             helperStop = 1;
-        } else if (go_on()) {
+        } else {
             out("Installing %s again ...\n", d->Desc[0] ? d->Desc : d->Id);
             out_flush();
             v = helper_job(INST_DI_INSTALL, d, inf, force, &r);
