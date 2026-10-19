@@ -192,9 +192,13 @@ static int selftest(void)
 
 /* ---- WinMain ------------------------------------------------------------------- */
 
+/* Topmost and asking for the foreground: after a declined elevation prompt
+ * the foreground has passed on, and a plain message box opened behind the
+ * Explorer window SETUP.EXE was started from (read on Windows 7). */
 static int fail(const char *text)
 {
-    MessageBoxA(NULL, text, SETUP_TITLE, MB_OK | MB_ICONSTOP);
+    MessageBoxA(NULL, text, SETUP_TITLE,
+                MB_OK | MB_ICONSTOP | MB_SETFOREGROUND | MB_TOPMOST);
     return 1;
 }
 
