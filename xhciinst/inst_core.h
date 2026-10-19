@@ -312,6 +312,9 @@ int inst_testsigning(const char *options);
 #define INST_APPLY_9X_XHCI  4   /* 98 SE and ME with an xHCI controller */
 #define INST_APPLY_9X_CM    5   /* 98 SE and ME with a device xhcicm.inf matches */
 
+/* The values a choice list names (0 to 4: XhciFastPollFsLs's 4). */
+#define INST_CHOICES        5
+
 typedef struct _INST_VALUE {
     const char *Name;
     int Inf;                /* INST_INF_*: whose driver key            */
@@ -321,8 +324,9 @@ typedef struct _INST_VALUE {
     const char *Meaning;
     const char *Caution;    /* shown with the question and with /set, or NULL */
     INST_U32 CautionMask;   /* the values the caution is about (0: every one) */
-    const char *Choice[4];  /* what value n means, or NULL (owner, 2026-10-16:
-                               each choice on its own line with its meaning) */
+    const char *Choice[INST_CHOICES]; /* what value n means, or NULL (owner,
+                               2026-10-16: each choice on its own line with
+                               its meaning) */
     /* Record 26 section 11 (task 42-A.2): a value whose allowed set is a
      * range rather than a list (Hi nonzero: Lo to Hi, the masks unused),
      * and a value the INFs do not write (NoInf: Def is its default, the
@@ -688,6 +692,25 @@ int inst_busy_retry(INST_U32 error, int tries);
  * already: the whole call is not made (one call reaches the whole id
  * group, a member that joined later included). */
 int inst_busy_spent(const int *tries, int n);
+
+/* A parent's job and the devices below it (98 SE update over 3.0.0.0 with
+ * an external hub, 2026-10-19: the root hub's reinstall restarted it, its
+ * hub was gone for about four seconds, and the hub's job, made at once,
+ * found it not present). A parent is a controller or a device of the bus
+ * (root hub, hub, composite entry): its job may restart the devices below
+ * it. Outcomes are INST_DI_OUT_* (NT's install call mapped onto them). */
+int inst_parent_kind(const char *instanceId, int controller);
+
+/* 1 when the tree settles before the next job of the same pass: the job
+ * just made was a parent's, it reached its device (not absent, not
+ * refused), and another job of the pass follows. */
+int inst_settle_after_job(int parent, int outcome, int more);
+
+/* 1 when a job that found its device not present is made once more after
+ * a settle: a parent's job ran earlier in this run (parentJobs), and this
+ * device has not been tried again yet (retries). A device that is still
+ * not present then is "not present"; one settle is all it costs. */
+int inst_absent_retry(int outcome, int parentJobs, int retries);
 
 /* Windows 2000 after a tunnel port's first filter install succeeded in
  * this run (owner, 2026-10-15): a device of the connection manager's INFs

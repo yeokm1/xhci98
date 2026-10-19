@@ -1,6 +1,8 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 13, 2026-10-19 (the connection manager alone, and
+Status: revision 15, 2026-10-19 (`XhciFastPollFsLs` settable; see
+below); revision 14, 2026-10-19 (task 42-A.27: a parent's job and the
+devices below it, sections 5.8 and 10); revision 13, 2026-10-19 (the connection manager alone, and
 Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
 service and the machine-wide key); revision 11, 2026-10-18 (the window,
 the helper, the uninstall
@@ -188,6 +190,16 @@ it". What changes here:
   where only the connection manager was installed); the typed word stays.
 - **Sections 9.5 and 5.1 step 12**: the mark service on 8 and 8.1 too.
 - **Section 13**: D17 to D19.
+
+Revision 15, 2026-10-19 (roadmap-usb4.md task 42-A.29; the owner, for
+`3.1.0.0`: "XhciFastPollFsLs
+should be in advanced settings"). What changes here:
+
+- **Section 8.1**: `XhciFastPollFsLs` joins the table, never asked,
+  settable with `/set` and the window's "Advanced..." for 0, 2, 3 and 4
+  (1 is not a mode), written machine-wide like the other `xhci98.inf`
+  values (section 8.4). A choice list now names values 0 to 4, so the
+  table's choice texts reach value 4.
 
 The tool never ships `devcon` or any other Microsoft file, never drives
 Windows 98's 16-bit setup engine (`SETUPX`) through anything undocumented,
@@ -996,6 +1008,30 @@ barrier and a fresh plan: a device the plan would still install - one the
 last allowed pass exposed - is listed as "not finished", the steps flag is
 set and the run ends with exit 4 and "run INSTALL.BAT again".
 
+**A parent's job and the devices below it** (revision 14, task 42-A.27;
+read on the 98
+SE update over `3.0.0.0` with an external hub, 2026-10-19: the root hub's
+reinstall restarted it, its hub was gone for about four seconds, and the
+hub's job, made at once, found it not present and left a step for a device
+the next start showed current). A parent is a controller or a device of
+the bus (root hub, hub, composite entry): its job may restart the devices
+below it. Within a pass, a parent's job that reached its device (on NT a
+call that succeeded; on 98 SE and ME any helper verdict but `not-present`
+and `refused`) is followed, when another job of the same pass comes after
+it, by a wait of its own: up to 15 seconds for the parent to be present
+again, then the settle above with no device expected (the quiet stretch
+alone, inside the 10-minute bound). And a job that finds its device not
+present (the helper's `not-present`; on NT `ERROR_NO_SUCH_DEVINST` from
+the call) after a parent's job earlier in the run waits up to 15 seconds
+for the device to come back, settles, and is made once more; only then is
+the device "not present" (a step) or the call a failure. A device that is
+really gone costs that one wait and no more. A wait there that fails or is
+cancelled stops the run as the barrier's does. The controllers' pass needs
+no wait of its own (one controller's job does not touch another, and the
+next pass begins with the barrier), and the later passes' devices begin
+behind the barrier too. The pure half holds the three decisions
+(`inst_parent_kind`, `inst_settle_after_job`, `inst_absent_retry`).
+
 - **XP and XP x64** show Found New Hardware for each, and the unsigned
   question; Windows 2000 can too (the leg above). The settle waits while
   the wizard waits for the user, and says so; answered, the run goes on
@@ -1471,6 +1507,7 @@ user-visible effect, off or on by default for a reason the user can judge
 | `XhciSelectiveSuspend` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | put idle devices to sleep (off by default; read on the release notes' terms) |
 | `XhciSilentInstall` | `xhci98.inf`, the controller's | 98 SE and ME with an xHCI controller (owner, 2026-10-15); never on 2000 and later | 0, 1 | 0, 1 on 98 and ME; refused on NT | install hubs, boot keyboards and mice and Bulk-Only storage with no Add New Hardware wizard; on is `tools\silent\silent-on.bat`'s effect, off `silent-off.bat`'s (section 8.4) |
 | `XhciForceBulkOnly` | `xhci98.inf`, the controller's | any xHCI controller | 0, 1 | 0, 1 | Bulk-Only instead of UAS for a disk that offers both, from its next connection; a UAS-only disk is not affected |
+| `XhciFastPollFsLs` | `xhci98.inf`, the controller's | never (owner, 2026-10-19; the window's "Advanced...") | - | 0, 2, 3, 4 (1 is not a mode) | poll a mouse faster than 1000 Hz, with SweetLow's hidusbf: off (0); a root-port mouse set to 31/62 Hz in hidusbf at 2000/4000 Hz (2) or 4000/8000 Hz (3); the rate the client chooses, codes 128 to 143 (4). Its caution: outside the xHCI specification for Low and Full Speed, read at the controller's start so restart after changing it, and with 4 the value set and Windows restarted before the filter's code |
 | `XhciCmMode` | `xhcicm.inf`, the NHI's | a present NHI `xhcicm.inf` matches | 0, 1 | 0 to 3 | the connection manager off or automatic (2 and 3 are the record 21 overrides, `/set` only) |
 | `XhciCmApprove` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | approve Thunderbolt devices automatically |
 | `XhciCmSafeEject` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | offer Safely Remove for the dock's devices |
@@ -1493,7 +1530,10 @@ unchanged; and, by the owner's decision of the same day, `XhciCmReenum`
 `XhciCmUsb3Tunnel` and `XhciCmLaneBonding` (USB4 diagnostics whose
 defaults are the point) and `XhciCmPreOsCleanup` (an override of design
 record 22 section 9's tunnel preservation), settable with `/set
-Name=Value` only. Any of them stays settable by hand, as today.
+Name=Value` only; and, by the owner's decision of 2026-10-19,
+`XhciFastPollFsLs` (tuning for hidusbf, outside the specification at Low
+and Full Speed), settable with `/set Name=Value` and the window's
+"Advanced..." only. Any of them stays settable by hand, as today.
 
 Each value's default is taken from its INF's `AddReg` line, not from the
 table; a value the INF does not write is not asked, and the host suite
@@ -2104,7 +2144,8 @@ and the tool links the same file:
 - `SystemStartOptions`' test-signing word;
 - the switch parser, `/set`'s validation and section 7.4's exit code,
   last line and confirmation wording;
-- section 5.8's settle state machine and busy-retry rule, section 5.9's
+- section 5.8's settle state machine, busy-retry rule and (revision 14)
+  parent rule, section 5.9's
   device state text, and section 5.6's "staged already" test;
 - the registry value table, its applicability (section 8.2) and its
   answer parser;

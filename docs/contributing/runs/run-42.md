@@ -1473,3 +1473,144 @@ carry the `Class` value was not read, and either way is now handled), 98 SE and 
 `CurrentDriveLetterAssignment`, a path this change does not touch), a
 Thunderbolt unit stopped on 2000 (the same `tr_w2k_code24` rule, no
 port), and the x64 tool.
+
+## 42-A.27: the hub's job after its root hub's reinstall (2026-10-19)
+
+Branch `p42-hubsettle`, from `3.1.0.0` at `08709480`. The matrix leg of
+the bench package on Windows 98 SE (an overlay of the `3.0.0.0` image,
+`qemu-xhci` with a `usb-hub` on port 1 and the tablet on port 2) ended
+the update over `3.0.0.0` with "Changes were made, but not everything is
+done" (exit 4) and a step for "xHCI98 USB Hub: The helper could not
+install it: not present now". Its log: the controller's job and a settle;
+the root hub's job (`installed`) with no settle after it; at once the
+hub's job, whose `DiGetClassDevsEx(DIGCF_PRESENT)` found nothing
+(`not-present`); then the pass's settle (4305 ms, devices moved), after
+which the hub was back under `xhci98`. The root hub's reinstall restarts
+it and takes its hub away for a few seconds; the next start showed
+everything current. An engine defect, not the driver's.
+
+### What changed
+
+Design: record 23 revision 14 (section 5.8, "A parent's job and the
+devices below it", and the pure-half list of section 10), record 26
+draft 9 (section 7), record 27 draft 8 (section 6, step 3); reviewed and
+revised. Code (`a0ff9fc6`, `04f9fb36`, `ee886ce5`):
+
+- A parent is a controller or a device of the bus (root hub, hub,
+  composite entry). Within a pass, a parent's job that reached its device
+  is followed, when another job of the pass comes after it, by a wait of
+  up to 15 s for the parent to be present and the settle with no device
+  expected (`reappear_settle`); 98 SE and ME in `helper_installs`, NT in
+  `install_inf` after a successful call on a bus device.
+- A job that finds its device not present after a parent's job earlier in
+  the run (the helper's `not-present`; on NT `ERROR_NO_SUCH_DEVINST`)
+  waits up to 15 s for it, settles, and is made once more; only then is it
+  a step (or, on NT, a failure). Not for Stor98's devices, and not once the
+  helper is out of the run.
+- A wait there that fails or is cancelled stops the run: `install_inf`
+  returns -1 and `run_install_nt` goes to its stopped path; on 98 SE and
+  ME `helperStop` ends the passes.
+- Pure decisions in `inst_core.c`: `inst_parent_kind`,
+  `inst_settle_after_job`, `inst_absent_retry`, with 20 host vectors in
+  `test_inst`.
+
+Functions touched: `inst_core.c` (the three above, new);
+`inst_eng.c` `nt_more_after` and `reappear_settle` (new), `install_inf`,
+`run_install_nt` (its two `install_inf` calls), `helper_install`,
+`helper_installs`.
+
+### Builds
+
+| Build | Result |
+|---|---|
+| `xhciinst\build.cmd` and `selftest.cmd`, `ee886ce5` | passed (the four executables and `XHCIDI.EXE`, their imports and screens) |
+| host suites, `ee886ce5` | 2080 checks, 0 failures (`test_inst` 1452) |
+| `build-driver.cmd all`, `04f9fb36` (the gated sources unchanged since) | BUILD + GATES PASSED (debug release qemu) |
+| `build-driver.cmd all -amd64`, `d8dbd272` | BUILD + GATES PASSED (debug release qemu) |
+
+### The legs (development host A, QEMU, release flavour)
+
+Kit `E:\xhci98-vm\p42-hubsettle` (QMP 48220 to 48229): the bench package
+`E:\xhci98-vm\m31\pkg-bench` with `tools\xhciinst` replaced by the
+executables of `ee886ce5` (`XHCIDI.EXE` unchanged), `qemu-xhci`
+`p2=4,p3=4`, a `usb-hub` on port 1 at power-on, the tablet on port 2.
+Logs under `caps\`.
+
+| Step | Result |
+|---|---|
+| 98 SE, a fresh overlay of `w98-300.qcow2` (`3.0.0.0` installed; the image N1 used), `INSTALL /console /yes` | **pass**: the controller's job and settle; the root hub's job `installed`, then "Waiting for the devices to settle ... [4564 ms, devices moved]"; the hub's job `FOUND 1`, `installed`; all three "updated; the new driver file replaces the running one at the next start"; no steps; exit 3 |
+| shut down, cold start, `INSTALL /console /list` | **pass**: controller, root hub and hub on `xhci98`, "current (this release)"; nothing to do, exit 0 |
+| ME, the stock image with the hub: `INSTALL /console /yes` (fresh), shut down, cold start; Windows installed the root hub and hub from the copy | exit 3 (controller `installed-restart`) |
+| ME, `INSTALL /console /yes /force` (the same ordering: root hub, then hub) | **pass**: the root hub's job, the settle (3031 ms, nothing moved on ME), the hub's job `FOUND 1`, `installed`; no steps; exit 3 |
+| ME, shut down, cold start, `INSTALL /console /list` | **pass**: all three `xhci98 3.1.0.0`, current; exit 0 |
+
+The registry-only "PCI Universal Serial Bus" at `DEV_04` the listings
+show is an Enum entry of the base images with no devnode, as in N1's
+logs; the run does not touch it. Not taken: the window (the console runs
+the same engine), NT (no hub ordering leg; the NT rule rests on the code
+read and the vectors), ME over `3.0.0.0` (no such image).
+
+## 42-A.29: `XhciFastPollFsLs` among the USB page's "Advanced..." rows (2026-10-19)
+
+Branch `p42-fastpoll`, from `3.1.0.0` at `08709480`. The owner, 2026-10-19:
+"XhciFastPollFsLs should be in advanced settings." Design: record 23
+revision 15 (section 8.1), record 26 draft 10 (sections 5.4 and 11);
+reviewed and revised (clean, then a clean confirmation of `3733302e`).
+
+### What it does
+
+- A new row of `instValues`: an `xhci98.inf` value on every system, never
+  asked, so the window shows it behind the USB settings page's
+  "Advanced..." and the console sets it with `/set` alone. Allowed 0, 2,
+  3 and 4; 1 is not a mode and is refused, as is 5. The default stays the
+  INF's `AddReg` line (0); the value is written machine-wide under
+  `Services\USB` like the other `xhci98.inf` values.
+- The choices: 0 off; 2 a root-port mouse set to 31/62 Hz in hidusbf runs
+  at 2000/4000 Hz; 3 the same at 4000/8000 Hz; 4 the rate the client
+  chooses, codes 128 to 143. The caution, shown with every value: outside
+  the xHCI specification for Low- and Full-Speed devices, read when the
+  controller starts so restart after changing it, and with 4 the value
+  set and Windows restarted before the filter's code. By the owner's
+  instruction it says nothing of value 4's earlier meaning.
+- `INST_VALUE`'s choice list is `INST_CHOICES` (5) entries long, so value
+  4 has its text; the masks already allowed a gap. The two lookups in
+  `inst_core.c` and the two in `xhciwiz.c` (the row's note and
+  `row_fill_combo`) take the constant in place of 4; nothing else in
+  `xhciwiz.c` changed. `XHCITR` and `XHCICLN` compile `inst_core.c` but
+  read no choice text.
+
+### Builds
+
+| Build | Result |
+|---|---|
+| host suites, `544a9640` | 2080 checks, 0 failures (`test_inst` 1488) |
+| `xhciinst\build.cmd` and `selftest.cmd`, `544a9640` | passed (the four executables, their imports, the switch refusals) |
+| `build-driver.cmd all`, `544a9640` | BUILD + GATES PASSED (debug release qemu) |
+| `build-driver.cmd all -amd64`, `3733302e` | BUILD + GATES PASSED (debug release qemu) |
+| `xhcitr`, `xhcicln`, `xhcimark` `build.cmd`, `3733302e` | built by hand (the gated build rebuilds none of them) |
+| after the merge of `3.1.0.0` (`cfcef657`), `646762d8`: `xhciinst\build.cmd`, `selftest.cmd`, host suites, `build-driver.cmd all` | passed; 2080 checks, 0 failures (`test_inst` 1515); BUILD + GATES PASSED (debug release qemu) |
+
+`3733302e` changes only the two records' revision notes.
+
+### The leg (development host A, QEMU)
+
+Kit `E:\xhci98-vm\p42-fastpoll` (QMP 48230 to 48239): Windows 98 SE on a
+fresh overlay of the gold image (an older xhci98 installed), `qemu-xhci`
+with a tablet, the package a copy of the `3.1.0.0` bench package with
+`XHCIINST.EXE` and `XHCIWIZ.EXE` of `544a9640`, on the transfer drive.
+Cold start only; the guest was powered off at the end, never restarted.
+
+| Step | Result |
+|---|---|
+| `INSTALL /console /set XhciFastPollFsLs=1` | **pass**: "xhciinst: /set: not an allowed value: XhciFastPollFsLs=1", then the usage; nothing done |
+| `INSTALL`, the USB settings page, "Advanced..." | **pass**: the row `XhciFastPollFsLs`, "now: 0 (the default)", beside `XhciSelectiveSuspend`; the note carries the meaning, the four choices and the caution; the combo box offers 0, 2, 3 and 4, no 1 |
+| 4 chosen, OK, Next | **pass**: the row "4 (to be written)"; the Summary's "The settings written machine-wide: - XhciFastPollFsLs = 4" |
+| Install, Finish with "Restart Windows later" | **pass**: the controller updated; the Finish page lists "XhciFastPollFsLs: set to 4 on the settings page" with its note |
+| `regedit /e` of `HKLM\System\CurrentControlSet\Services\USB` | **pass**: `"XhciFastPollFsLs"=dword:00000004` |
+
+Seen, not changed: the combo box's drop-down is as wide as the box, so the
+two long choices of 2 and 3 are cut at its edge there; the note above it
+carries them whole.
+
+Not taken: the driver reading the machine-wide 4 after a cold start, and
+hidusbf codes (42-V.2's leg); Windows 7 and the x64 half.
