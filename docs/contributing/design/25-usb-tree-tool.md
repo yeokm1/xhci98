@@ -1583,6 +1583,20 @@ Revision 7, from leg T.7 (`runs/run-41.md`, "Plain USB devices"):
 - **The UAS disk's re-plug** was not read: the emulated UAS device does not
   attach when added to a running machine.
 
+Windows 2000, from the `3.1.0.0` matrix (`runs/run-42.md`, "XHCITR on
+Windows 2000: the disk names, the letters and the stopped mark"):
+
+- **A USB disk's setup class** is in its Enum key as `ClassGUID` alone,
+  with no `Class` value, so the class read empty and the disk was no
+  disk: the device was offered through its volume, under its own name,
+  with no letter. An empty class name is now taken from the class key
+  the `ClassGUID` names.
+- **2000 has no Code 47.** A USB device stopped here stays attached at
+  Code 24 (status `0x01806400`), which is also 2000's failed start. A
+  devnode reads as held for eject at Code 24 only when this process
+  stopped it, until it starts again or leaves the tree; a stop made
+  elsewhere still reads "not started - problem code 24".
+
 ## 15. XHCISNAP's reading, moved here (revision 14)
 
 The owner's 42-0.3 decision of 2026-10-18 (decision T21): `3.1.0.0`
