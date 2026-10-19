@@ -131,6 +131,95 @@ static void test_models_rule(void)
     CHECK(inst_eq(out, "XhciModels"), "a product-type field is not read");
     inst_models_section("XhciModels,NTx86.6.", &e, out, sizeof(out));
     CHECK(inst_eq(out, "XhciModels"), "a trailing dot is not a version");
+    /* Record 23 section 4.5: Windows 8 and 8.1 read the .6.0 sections. */
+    e = env(1, 6, 2, INST_ARCH_X86);
+    inst_models_section("CmModels,NTx86.6.0", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "CmModels.NTx86.6.0"), "8 x86: .NTx86.6.0");
+    e = env(1, 6, 3, INST_ARCH_X86);
+    inst_models_section("CmModels,NTx86.6.0", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "CmModels.NTx86.6.0"), "8.1 x86: .NTx86.6.0");
+    e = env(1, 6, 2, INST_ARCH_AMD64);
+    inst_models_section("CmModels,NTamd64,NTamd64.6.0", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "CmModels.NTamd64.6.0"), "8 x64: NTamd64.6.0");
+    e = env(1, 6, 3, INST_ARCH_AMD64);
+    inst_models_section("CmModels,NTamd64,NTamd64.6.0", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "CmModels.NTamd64.6.0"), "8.1 x64: NTamd64.6.0");
+}
+
+/* ---- record 23 sections 4.3 and 4.5: the system, the USB drivers -------- */
+
+static void test_cm_only(void)
+{
+    INST_OPTS o;
+    char err[128];
+    char *argv[4];
+    const char *why;
+    int offered;
+
+    /* The system's kind (revision 13). */
+    CHECK(inst_os_kind(0, 4, 10, 2222) == INST_OS_FULL, "98 SE: full");
+    CHECK(inst_os_kind(0, 4, 10, 1998) == INST_OS_REFUSED, "98: refused");
+    CHECK(inst_os_kind(0, 4, 90, 3000) == INST_OS_FULL, "ME: full");
+    CHECK(inst_os_kind(0, 4, 0, 950) == INST_OS_REFUSED, "95: refused");
+    CHECK(inst_os_kind(1, 4, 0, 1381) == INST_OS_REFUSED, "NT 4: refused");
+    CHECK(inst_os_kind(1, 5, 0, 2195) == INST_OS_FULL, "2000: full");
+    CHECK(inst_os_kind(1, 5, 1, 2600) == INST_OS_FULL, "XP: full");
+    CHECK(inst_os_kind(1, 5, 2, 3790) == INST_OS_FULL, "XP x64: full");
+    CHECK(inst_os_kind(1, 6, 0, 6002) == INST_OS_FULL, "Vista: full");
+    CHECK(inst_os_kind(1, 6, 1, 7601) == INST_OS_FULL, "7: full");
+    CHECK(inst_os_kind(1, 6, 2, 9200) == INST_OS_CMONLY,
+          "8: the connection manager alone");
+    CHECK(inst_os_kind(1, 6, 3, 9600) == INST_OS_CMONLY,
+          "8.1: the connection manager alone");
+    CHECK(inst_os_kind(1, 6, 4, 9841) == INST_OS_REFUSED,
+          "10's previews (6.4): refused");
+    CHECK(inst_os_kind(1, 10, 0, 19045) == INST_OS_REFUSED, "10: refused");
+    CHECK(inst_os_kind(1, 10, 0, 26100) == INST_OS_REFUSED, "11: refused");
+    CHECK(inst_os_kind(1, 7, 0, 0) == INST_OS_REFUSED, "7.0: refused");
+    CHECK(strcmp(inst_os_name(1, 6, 2), "Windows 8") == 0 &&
+          strcmp(inst_os_name(1, 6, 3), "Windows 8.1") == 0 &&
+          strcmp(inst_os_name(1, 6, 1), "Windows 7") == 0 &&
+          strcmp(inst_os_name(1, 5, 2), "Windows XP x64") == 0 &&
+          strcmp(inst_os_name(0, 4, 90), "Windows ME") == 0 &&
+          strcmp(inst_os_name(0, 4, 10), "Windows 98 SE") == 0 &&
+          strcmp(inst_os_name(1, 10, 0), "Windows") == 0, "the names");
+
+    /* The USB drivers (section 4.5). */
+    CHECK(inst_usb_decide(INST_OS_FULL, 0, 1, 0, &offered, &why) == 1 &&
+          !offered && why == NULL, "98 SE and ME: required, not offered");
+    CHECK(inst_usb_decide(INST_OS_FULL, 0, 1, 1, &offered, &why) == -1 &&
+          why != NULL, "98 SE and ME: /cmonly refused");
+    CHECK(inst_usb_decide(INST_OS_FULL, 1, 1, 0, &offered, &why) == 1 &&
+          offered, "2000 to 7 with the connection manager: offered, in");
+    CHECK(inst_usb_decide(INST_OS_FULL, 1, 1, 1, &offered, &why) == 0 &&
+          offered, "2000 to 7, /cmonly: out");
+    CHECK(inst_usb_decide(INST_OS_FULL, 1, 0, 0, &offered, &why) == 1 &&
+          !offered, "2000 to 7 without the connection manager: required");
+    CHECK(inst_usb_decide(INST_OS_FULL, 1, 0, 1, &offered, &why) == -1 &&
+          why != NULL, "/cmonly with no connection manager: refused");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 1, 0, &offered, &why) == 0 &&
+          !offered, "8 and 8.1: out, not offered");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 1, 1, &offered, &why) == 0 &&
+          !offered, "8 and 8.1, /cmonly: the same");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 0, &offered, &why) == -1 &&
+          why != NULL, "8 and 8.1 with no connection manager: refused");
+    CHECK(inst_usb_decide(INST_OS_REFUSED, 1, 1, 0, &offered, &why) == -1,
+          "a refused system");
+
+    /* /cmonly belongs to an install. */
+    argv[0] = "xhciinst";
+    argv[1] = "/cmonly";
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.CmOnly,
+          "/cmonly parsed");
+    argv[2] = "/uninstall";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) != 0,
+          "/cmonly /uninstall refused");
+    argv[2] = "/devices";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) != 0,
+          "/cmonly /devices refused");
+    argv[2] = "/thunderbolt";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) == 0 &&
+          o.CmOnly && o.Thunderbolt, "/cmonly /thunderbolt taken");
 }
 
 static void test_reg_hex(void)
@@ -2736,11 +2825,35 @@ static void test_uninstall_entry(void)
     char err[128];
     char *argv[5];
 
-    inst_arp_name(out, sizeof(out), "3.1.0.0", 0);
+    inst_arp_name(out, sizeof(out), "3.1.0.0", 0, 0);
     CHECK(strcmp(out, "xHCI98 USB 3.x drivers 3.1.0.0") == 0, "the name");
-    inst_arp_name(out, sizeof(out), "3.1.0.0", 1);
+    inst_arp_name(out, sizeof(out), "3.1.0.0", 1, 0);
     CHECK(strcmp(out, "xHCI98 USB 3.x drivers 3.1.0.0 (incomplete: run "
                       "again)") == 0, "an incomplete uninstall's name");
+    /* Record 26 section 9.1, draft 8: named by what is registered. */
+    inst_arp_name(out, sizeof(out), "3.1.0.0", 0, 1);
+    CHECK(strcmp(out, "xHCI98 Thunderbolt 3 / USB4 connection manager "
+                      "3.1.0.0") == 0, "the connection manager alone's name");
+    inst_arp_name(out, sizeof(out), "3.1.0.0", 1, 1);
+    CHECK(strcmp(out, "xHCI98 Thunderbolt 3 / USB4 connection manager "
+                      "3.1.0.0 (incomplete: run again)") == 0,
+          "the connection manager alone, incomplete");
+    CHECK(inst_arp_cm_only(0, 1, 0) && !inst_arp_cm_only(1, 1, 0) &&
+          !inst_arp_cm_only(-1, 1, 0) && !inst_arp_cm_only(0, 0, 0) &&
+          !inst_arp_cm_only(0, -1, 0) && !inst_arp_cm_only(1, 0, 0),
+          "the connection manager alone: xhci98 absent, xhcicm registered");
+    /* A run without the USB drivers that only staged (no controller yet,
+     * no service registered) is named for the connection manager; an
+     * xhci98 still registered keeps the USB drivers' name. */
+    CHECK(inst_arp_cm_only(0, 0, 1) && inst_arp_cm_only(0, -1, 1) &&
+          !inst_arp_cm_only(1, 0, 1) && !inst_arp_cm_only(-1, 0, 1),
+          "the connection manager alone: a staging-only run");
+    /* The owner's rule (2026-10-19): one entry for every set of
+     * components, an install over any of them an update in place. The
+     * key is one constant, whatever the name says. */
+    CHECK(strcmp(INST_ARP_KEY, "Software\\Microsoft\\Windows\\"
+                 "CurrentVersion\\Uninstall\\xhci98") == 0,
+          "one Add/Remove Programs key, whichever components");
     CHECK(inst_arp_command(out, sizeof(out), "C:\\Tools\\My xHCI98",
                            "XHCIWZ64.EXE", 1) &&
           strcmp(out, "\"C:\\Tools\\My xHCI98\\XHCIWZ64.EXE\" /uninstall") == 0,
@@ -3133,10 +3246,16 @@ static void test_marks(void)
         INST_ENV w2k = env(1, 5, 0, INST_ARCH_X86);
         INST_ENV w7 = env(1, 6, 1, INST_ARCH_AMD64);
         INST_ENV w8 = env(1, 6, 2, INST_ARCH_AMD64);
+        INST_ENV w81 = env(1, 6, 3, INST_ARCH_X86);
+        INST_ENV w10 = env(1, 10, 0, INST_ARCH_AMD64);
+        INST_ENV w64 = env(1, 6, 4, INST_ARCH_AMD64);
         INST_ENV w98 = env(0, 4, 10, INST_ARCH_X86);
         CHECK(inst_mk_system(&w2k) && inst_mk_system(&w7) &&
-              !inst_mk_system(&w8) && !inst_mk_system(&w98),
-              "the mark service: Windows 2000 to 7 only");
+              inst_mk_system(&w8) && inst_mk_system(&w81) &&
+              !inst_mk_system(&w10) && !inst_mk_system(&w64) &&
+              !inst_mk_system(&w98),
+              "the mark service: Windows 2000 to 8.1 (8 and 8.1 for the "
+              "connection manager alone)");
     }
     CHECK(inst_mk_end_action(1, 1, 1) == INST_MK_INSTALL &&
           inst_mk_end_action(1, 0, 1) == INST_MK_LEAVE &&
@@ -3202,6 +3321,7 @@ int main(void)
 {
     test_versions();
     test_models_rule();
+    test_cm_only();
     test_decorations();
     test_reg_hex();
     test_real_infs();

@@ -1193,3 +1193,77 @@ cut at `72c69b18`; the 7 x86 leg was read again on the final package.
 Not taken here: `XHCIINST /eject`'s confirmation in a guest (host vectors
 only), the window's settings pages over a machine-wide value that is not
 a `DWORD`, 2000, XP, Vista and the x64 targets.
+
+## 42-A.21: the connection manager alone, and Windows 8 and 8.1 for it (2026-10-19)
+
+Branch `p42-cmo`, from `3.1.0.0` at `3e35879f`. The owner, 2026-10-19:
+"The installer should give people the option not to install xhci98 but
+just the CM. Reason is that in case some Win 8 users which have native
+USB3 but not USB4 or TB may want it"; and, the same day, "let user update
+existing driver by installing over it. Should not have multiple entries
+in Add remove programs in Control Panel." Design: record 23 revision 13
+(section 4.5), record 26 draft 8, record 21 section 3.5; reviewed and
+revised (`24eec496`, then `7cc49d41`, `dfc07321`, and the leg fix below).
+
+### What it does
+
+- On 2000 to 7 the USB drivers (`xhci98.sys`, `xhciuas.sys`,
+  `xhcihlpr.sys`) can be left out: the window's box, or `/cmonly`; the
+  Thunderbolt support is then in the run unasked and the box locked on.
+- On Windows 8 and 8.1 (NT 6.2 and 6.3, read through `RtlGetVersion`,
+  since `GetVersionEx` answers 6.2 to these tools on 8.1, 10 and 11) the
+  connection manager alone is the only install; the bundled Stor98 is not
+  offered there. 10 and later are refused, as before.
+- On 98 SE and ME the USB drivers stay required; `/cmonly` is refused.
+- A run without the USB drivers never updates or removes an installed
+  `xhci98.sys`; it says so. One Add/Remove Programs entry,
+  `Uninstall\xhci98`, named by what is registered.
+
+### Builds
+
+| Build | Result |
+|---|---|
+| host suites, `7cc49d41` | 2080 checks, 0 failures (`test_inst` 1431) |
+| `build-driver.cmd all`, `dfc07321` | BUILD + GATES PASSED (debug release qemu) |
+| `build-driver.cmd all -amd64`, `dfc07321` | BUILD + GATES PASSED (debug release qemu) |
+| `xhciinst\build.cmd` and `selftest.cmd`, the final head | passed (the four executables, their imports, the screens of 8.1 and of 7 with `/cmonly`) |
+
+The legs' package: `make-release.ps1 -Flavor release -Arch x86 -TestLabel
+"connection manager alone legs" -ReleasesDir out\cmorel -SkipQualtool
+-SkipUploadSet` at `dfc07321` (no Stor98), `xhcimark\`, `xhciinst\` and
+`xhcitr\` rebuilt by hand first (the gated build rebuilds neither `xhcimark` nor
+`xhciinst`; its x86 run rebuilds `xhcitr`, which a later edit had made
+older than its sources again).
+
+### The legs (development host A, QEMU, release flavour)
+
+Kit `E:\xhci98-vm\p42-cmo` (QMP 48080 to 48089): Windows 7 SP1 x86 on a
+fresh overlay of `vm\win7.img` (no xhci98), `qemu-xhci` with a tablet and
+a stick, the emulator's `tb3-alpine-ridge` host and its tunnel bridge
+`tb0`, the enclosure `enc0` plugged by QMP. The package reached the guest
+on an ISO; the tablet has no driver without xhci98, so the publisher
+prompts were answered with the PS/2 mouse.
+
+| Step | Result |
+|---|---|
+| `INSTALL /console /cmonly /yes` on the clean guest | **pass**: the plan named only the NHI and the tunnel port; `xhcicm.inf` and `xhcicmf.inf` staged and nothing else; the NHI on `xhcicm` and the port filtered, both started; `xhcimark` installed and running; no `xhci98` service; Add/Remove Programs "xHCI98 Thunderbolt 3 / USB4 connection manager 3.1.0.0", one key; exit 3 |
+| restart, `enc0` plugged, `C:\XHCI98\XHCIINST /devices` | **pass**: the device approved, PCIe up, the NVMe behind the tunnel enumerated (Code 28: no NVMe driver on 7), "removable: yes ... listed in Safely Remove Hardware" |
+| `XHCIINST /eject`, device 1 | **pass**: "Windows has stopped PCI Device", exit 0 |
+| `INSTALL /console /yes` over it (the whole package) | **pass**: the same local copy reused; `xhci98.inf` and `xhciuas.inf` staged; both xHCI controllers (`qemu-xhci`, the emulator's) on `xhci98`, pending the restart as 32-bit 7 does; the entry renamed "xHCI98 USB 3.x drivers 3.1.0.0", still one key |
+| `INSTALL /console /cmonly /yes` over the whole package | **pass**: "The xHCI98 USB drivers already installed stay as they are", the `xhci98` service kept, the entry keeps its name; exit 0 |
+| restart, `INSTALL /console /uninstall /yes` | **pass**: the usual warning; every service, file, INF, the copy, the directory and the entry removed; exit 3 |
+| restart, `INSTALL /console /cmonly /yes` again, then `INSTALL /console /uninstall` | **pass**: the connection manager's warning ("This removes the xHCI98 Thunderbolt 3 / USB4 connection manager") and `REMOVE`; the mark service, the filter (the port given back to `machine.inf`), the NHI, both INFs, `xhcicm`, the tools and the entry removed; afterwards no entry, no `xhcicm` or `xhcimark` service, no `LowerFilters` under `Enum\PCI` |
+| the window: `INSTALL` | **pass**: the USB drivers' box enabled; unticked, the Thunderbolt box ticked and disabled with the sentence "Left out: the connection manager alone ..."; the USB settings page skipped, the Thunderbolt page shown; the Summary "xhci98.sys and xhciuas.sys: left out (the connection manager alone)"; Install, the Finish page's Restart |
+| the window's uninstall, `C:\XHCI98\XHCIWIZ.EXE /uninstall` | **pass**: the title "Remove the xHCI98 connection manager", the connection manager's warning and box; removed; after the restart `C:\XHCI98` and the temporary copy gone |
+
+The leg found one wording defect: a run without the USB drivers ended
+with "If the controller was updated from 2.3.x on 32-bit Vista or 7, run
+INSTALL.BAT again ..."; that sentence now needs the USB drivers in the
+run.
+
+Not taken: Windows 8 and 8.1 (no image of either on this host; none was
+downloaded); Windows 10 or 11's refusal in a guest (the one Windows 11
+guest here, `usb4-emu`'s, did not boot under a new overlay and its own
+emulator build; the refusal rests on the host vectors of `inst_os_kind`
+and the code read); 2000 and XP; 98 SE's `/cmonly` refusal (host vector
+only); the x64 half.
