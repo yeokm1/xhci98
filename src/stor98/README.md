@@ -236,9 +236,17 @@ driver is for, as in "Stor98 Storage Controller for NVMe SSDs". See also
 
 `scripts\build.cmd` builds all three targets (`stor98.mpd` for Windows 98 SE/ME,
 `stor98.sys` for x86 and amd64) from `src/` with the kits in the git-ignored `tools/` folder.
-[docs/BUILD.md](docs/BUILD.md) lists what goes there and where each kit comes from. Releases
-are cut by `scripts\make-release.ps1` into `x86\` (98 SE to 7, 32-bit) and `x64\`; see
-[releases/README.md](releases/README.md).
+[docs/BUILD.md](docs/BUILD.md) lists what goes there and where each kit comes from.
+
+Since xhci98 3.1.0.0 Stor98 lives in the xhci98 repository as `src/stor98/` and is built,
+versioned and released with it: xhci98's gated build builds and checks these images, they
+carry the xhci98 package's version and date (`src\stor98ver.h` takes them from xhci98's
+`src\xhci_version.h`; `0.4.0.0` was the last release made on its own, so the next version
+is `3.1.0.0`), and the 64-bit `stor98.sys` is test-signed with the same certificate as
+xhci98's own 64-bit drivers, in the same step. Stor98's interface versions in
+[`include/stor98cm.h`](include/stor98cm.h) are protocol versions and stay its own. See
+[docs/BUILD.md](docs/BUILD.md), "Releases" and "Test signing", and
+[releases/README.md](releases/README.md) for the releases up to `0.4.0.0`.
 
 ## Lineage and licensing
 
@@ -265,28 +273,26 @@ BSD-3-Clause) to Windows 9x and NT4, with 64-bit LBA support and fixes.
 
 ## For redistributors
 
-Other projects (for example xhci98, which is GPL-2.0-only) bundle Stor98 as **released
-binaries**, not as source. Copy one complete release folder from `releases/<version>/`
-unchanged. Do not cherry-pick files or rebuild from a mixed tree.
+Stor98 ships inside xhci98's release download (its `release-x86` and `release-x64`
+directories), built from this source with xhci98's drivers and at their version. xhci98 is
+GPL-2.0-only; Stor98 stays BSD-3-Clause, and its files keep their own names and licence
+there:
 
-A release has two driver folders, matching the `release-x86` and
-`release-x64` folders of xhci98 packages; copy each folder's files together, as they are:
-
-| File | Needed for |
+| File in the xhci98 package | Needed for |
 |---|---|
-| `x86/stor98.inf`, `x86/stor98.mpd`, `x86/stor98.sys` | Windows 98 SE and ME (`stor98.mpd`) and Windows 2000, XP, Vista, 7 32-bit (`stor98.sys`). One `$CHICAGO$` INF installs the right image on each system, so the three files go together. |
-| `x64/stor98.inf`, `x64/stor98.sys` | XP x64, Vista and 7 (64-bit). The `.sys` is test-signed; ship `x64/stor98-test.cer` with it only while releases are test-signed. |
-| `LICENSE`, `NOTICE.TXT` | **Required.** BSD-3-Clause clause 2 says the copyright notices, conditions and disclaimer must go with the binaries. |
-| `readme.txt`, `SHA256SUMS.txt` | Recommended: install notes and an integrity check. |
+| `stor98.inf`, `stor98.mpd`, `stor98.sys` (32-bit package) | Windows 98 SE and ME (`stor98.mpd`) and Windows 2000, XP, Vista, 7 32-bit (`stor98.sys`). One `$CHICAGO$` INF installs the right image on each system, so the three files go together. |
+| `stor98.inf`, `stor98.sys` (64-bit package) | XP x64, Vista and 7 (64-bit). The `.sys` is test-signed with xhci98's test certificate (`xhci98-test.cer`), like xhci98's own drivers. |
+| `stor98-LICENSE.txt`, `stor98-NOTICE.txt` | **Required.** BSD-3-Clause clause 2 says the copyright notices, conditions and disclaimer must go with the binaries. |
+| `stor98-readme.txt` | Recommended: install notes and settings. |
 
-- State which Stor98 version the bundle was tested with. Update only to another complete
-  release.
+- Another project that bundles Stor98 takes these files from an xhci98 release, unchanged
+  and complete. The releases made on their own up to `0.4.0.0` are in `releases/`.
 - Keep the Stor98 file names. Clause 3 also applies: do not use the names of the Stor98,
   nvme2k or nvme9x authors to promote the bundling product without permission.
 - The connection-manager link-state interface is the header
   [`include/stor98cm.h`](include/stor98cm.h), which is BSD-3-Clause. A CM may copy it
   unchanged, with its notice. Check that the interface version in the header matches the
-  bundled release.
+  bundled build; xhci98's build holds its copy to this file byte for byte.
 - Code from GPL projects must not be copied into Stor98, so that Stor98 stays BSD-3-Clause.
 
 ## Trademarks

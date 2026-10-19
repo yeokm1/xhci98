@@ -5,7 +5,8 @@ for the command line; see below); revision 21, 2026-10-19 (the x64 package's fil
 flavour directory's root; see below); revision 20, 2026-10-19 (the 98 SE
 and ME uninstall removes SETUPX's `OEM Name` record of each INF copy it
 deletes, section 6.1, and section 9.5's `/list` line reads the Run value;
-the matrix's 98 SE and ME legs of that day); revision 17, 2026-10-19 (task 42-A.24: the
+the matrix's 98 SE and ME legs of that day); revision 19, 2026-10-19 (task 42-A.30: the bundled Stor98 is
+built with the package at its version, no pins); revision 17, 2026-10-19 (task 42-A.24: the
 CriticalDeviceDatabase service entries and the mark service following
 `XhciCmSafeEject`, sections 5.1 and 9.2); revision 16, 2026-10-19 (task 42-A.22, record 26 draft 11: Stor98
 part of the Thunderbolt support, the UAS driver a component of its own;
@@ -326,9 +327,12 @@ program around them, in the shape `XHCICLN` already has.
 ```
 
 Since `3.0.0.0` the release download's `release-x86\` and `release-x64\`
-may also carry Stor98, a separate project's NVMe
-driver, bundled unchanged (`build-and-test.md`, "The bundled Stor98
-build"): at the directory's root, every name starting with `stor98`. The
+may also carry Stor98, the NVMe driver (`build-and-test.md`, "The bundled
+Stor98 build"): at the directory's root, every name starting with
+`stor98`. In `3.0.0.0` it was a pinned Stor98 release (`0.4.0.0`) copied
+unchanged; since `3.1.0.0` (roadmap-usb4 task 42-A.30) it is built from
+`src\stor98` with the drivers, carries the package's version and date, and
+is published in `releases\<version>\` like them. The
 tool does not install it (section 4.4).
 
 `INSTALL.BAT` sits at the package root, beside `readme.txt`, because it is

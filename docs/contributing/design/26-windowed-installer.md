@@ -5,7 +5,9 @@ day: `SETUP.EXE` at the package root, the program a person double-clicks,
 and `INSTALL.BAT` kept for the command line; sections 2, 5.9, 10, 12, 13
 and 15, and record 23 revision 22); draft 14, 2026-10-19 (section 9.3 step 4: the setup engine's
 `OEM Name` record of each deleted INF copy removed, record 23 revision
-20); draft 11, 2026-10-19 (task 42-A.22), the owner's (a wider gap
+20); draft 13, 2026-10-19 (task 42-A.30: the bundled Stor98 at the
+package version, one signature, sections 5.6 and 6.3, record 23 revision
+19); draft 11, 2026-10-19 (task 42-A.22), the owner's (a wider gap
 and a line between settings rows, XHCITR's icon, a row of another
 system shown greyed, Stor98's box a child of the Thunderbolt one, the
 UAS driver a box of its own under the USB drivers') and the matrix
@@ -552,9 +554,12 @@ pair it does not know and the order it found. Its rows are 48 dialog units apart
 section 5.4's are (owner, 2026-10-19). The page names Stor98's
 readme as the authority, from which the table's meanings, defaults,
 ranges, types and key names are copied at the version the package bundles
-(`-Stor98Version`), and the host suite checks every row against that
-readme's table, so a Stor98 release that renames or retypes a value fails
-the build rather than the user. Every Stor98 value the installer writes is
+(since `3.1.0.0` the package's own version: Stor98 is built from
+`src\stor98` with the drivers, roadmap-usb4 task 42-A.30), and the host
+suite checks every row against that readme's table
+(`test\stor98-settings.txt`; `make-release.ps1` holds
+`src\stor98\docs\package-readme.txt`'s table to it), so a Stor98 change
+that renames or retypes a value fails the build rather than the user. Every Stor98 value the installer writes is
 recorded by name under the `Stor98` key of section 6.3, for the uninstall.
 The page is not shown when Stor98 is unticked.
 
@@ -789,10 +794,18 @@ unasked). With the box ticked:
   still names (an update of the hand-installed device from the bundled
   release points its driver key at the newest copy) stays with it, by
   the reference check, and the finish page says so.
-- The x64 `stor98.sys` keeps Stor98's own test signature; the test-signing
+- The x64 `stor98.sys` is signed in the package's one signing step, by
+  the same certificate as this package's drivers, from `3.1.0.0` (Stor98
+  `0.4.0.0` and earlier carried Stor98's own test signature and
+  `stor98-test.cer`, which the package no longer ships); the test-signing
   note of record 23 section 5.10 names it beside this package's drivers
-  when the box is ticked, and `stor98-test.cer` is never imported (the
-  bundled-Stor98 rule of `build-and-test.md`).
+  when the box is ticked, and no certificate is imported.
+- From `3.1.0.0` the bundled Stor98 carries the package's version (its
+  `stor98.inf` `DriverVer` and its file versions), read from `stor98.inf`
+  as before; a Stor98 `0.4.0.0` or `0.3.0.x` an earlier package installed
+  is older than it by the four-number comparison, so its devices are
+  updated, and `PreExisting` alone, never a version, decides whose Stor98
+  it is.
 
 ### 6.4 The console tool
 
@@ -1091,8 +1104,9 @@ which waits.
   with the Thunderbolt support in `inst_s98_decide`), the Summary's
   headline (`inst_summary_head`), and every
   Stor98 row against the bundled Stor98's readme table (the row names and
-  ranges, read from `docs\` of the pinned Stor98 release folder at build
-  time by the suite, so a renamed value fails the build);
+  ranges, as `test\stor98-settings.txt` holds them and the cut holds the
+  bundled readme, `src\stor98\docs\package-readme.txt`, to them, so a
+  renamed value fails the build);
 - the `DriverParameter` string's edit (parse the pairs, set one, write them
   back in order, keep unknown pairs);
 - the component rules: which boxes are shown, their defaults (record 23
@@ -1252,9 +1266,9 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   no interactive desktop (a service session) is to be read when the gate
   first runs there; the fallback is the pure half's text check alone, said
   in the self-test's output.
-- The Stor98 rows depend on the bundled release's readme table; a release
-  that changes its forms fails the build by design, and the fix is the
-  table's, with the cut's `-Stor98Version` bump.
+- The Stor98 rows depend on the bundled Stor98's readme table; a change
+  to its forms fails the build by design, and the fix is the table's
+  (`test\stor98-settings.txt` and the installer's rows) in the same change.
 - The 98 SE and ME uninstall's removal of the INF copies and driver files
   through the engine rather than by hand, and whether the controller comes
   back as an unknown device after the restart, is read on the legs

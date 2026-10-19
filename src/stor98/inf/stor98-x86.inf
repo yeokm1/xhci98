@@ -28,15 +28,17 @@
 ; Booting from an NVMe disk needs StartType=0, which no release supports yet
 ; (docs/BUILD.md, "INFs and version").
 ;
-; DriverVer must equal src\stor98ver.h and x64\stor98.inf; make-release.ps1
-; checks it. ASCII only, CRLF line endings.
+; DriverVer is xhci98's package version and release date, from
+; src\xhci_version.h (XHCI_VER_STR, XHCI_DRIVERVER_DATE), as in the other
+; INF; xhci98's scripts\inf-gate\check-stor98-inf.ps1 checks it.
+; ASCII only, CRLF line endings.
 
 [Version]
 Signature="$CHICAGO$"
 Class=SCSIAdapter
 ClassGUID={4D36E97B-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/16/2026,0.4.0.0
+DriverVer=10/19/2026,3.1.0.0
 
 [DestinationDirs]
 ; DIRID 12: Windows\System\IoSubsys on Windows 9x, system32\drivers on NT.

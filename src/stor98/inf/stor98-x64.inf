@@ -22,15 +22,17 @@
 ; 7 x64, a signature they trust or test-signing left on permanently; this
 ; release does not support booting from NVMe.
 ;
-; DriverVer must equal src\stor98ver.h and x86\stor98.inf; make-release.ps1
-; checks it. ASCII only, CRLF line endings.
+; DriverVer is xhci98's package version and release date, from
+; src\xhci_version.h (XHCI_VER_STR, XHCI_DRIVERVER_DATE), as in the other
+; INF; xhci98's scripts\inf-gate\check-stor98-inf.ps1 checks it.
+; ASCII only, CRLF line endings.
 
 [Version]
 Signature="$Windows NT$"
 Class=SCSIAdapter
 ClassGUID={4D36E97B-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/16/2026,0.4.0.0
+DriverVer=10/19/2026,3.1.0.0
 
 [DestinationDirs]
 DefaultDestDir=12   ; DIRID_DRIVERS

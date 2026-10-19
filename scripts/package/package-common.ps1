@@ -876,91 +876,40 @@ function Get-SilentRegFaults {
 
 # ---- Stor98, the bundled NVMe driver ----------------------------------------
 #
-# Stor98 is a separate project under BSD-3-Clause; its first release is
-# 0.3.0.0. A release package may carry
-# one of its released builds, copied unchanged from that build's release
-# folder at packaging time: never built from its source. Since task 42-A.20
-# its source and release folders are tracked here as src\stor98, and the
-# release folder defaults to src\stor98\releases\<version>; make-release.ps1
-# still copies the build into the upload set only, not into this project's
-# releases\. The input is pinned three ways: the
-# version, the folder, and the SHA-256 of the folder's SHA256SUMS.txt, which
-# in turn pins every file. The release folder's x86\ (one $CHICAGO$ INF,
-# stor98.mpd for 98 and ME and stor98.sys for 2000 to 7) is copied to an x86
-# package's root, and its x64\ (stor98.inf, stor98.sys and stor98-test.cer)
-# to an amd64 package's root; every name there starts with "stor98", so none
-# can clash with this project's own files.
+# Stor98 is the NVMe SCSI miniport in src\stor98 (BSD-3-Clause; roadmap-usb4
+# task 42-A.20 brought it into this tree). Since 3.1.0.0 (task 42-A.30,
+# owner 2026-10-19) a package bundles the Stor98 that scripts\build-driver.cmd
+# built and gated from src\stor98, not a pinned release, and it carries the
+# package's one version and date: its version resources take XHCI_VER_STR
+# from src\xhci_version.h (src\stor98\src\stor98ver.h) and its two INFs'
+# DriverVer is the package's (scripts\inf-gate\check-stor98-inf.ps1). The
+# x64 stor98.sys is signed by the packager with the other x64 drivers, by the
+# same key, and Stor98 has no certificate of its own any more.
 #
-# x64\stor98.sys carries Stor98's own embedded test signature, by a
-# certificate that is not this project's; stor98-test.cer is
-# its public half and is shipped beside it unchanged, as Stor98 ships it.
-# Test-signing mode on Vista x64 and 7 x64 loads a driver signed by any
-# certificate, trusted or not (design record 19), so the one boot setting
-# that loads this project's x64 drivers loads it too: nothing is imported,
-# and nothing here signs or re-signs it.
-#
-# LICENSE, NOTICE.TXT and readme.txt go beside the driver files as
-# stor98-LICENSE.txt, stor98-NOTICE.txt and stor98-readme.txt. Builds before
-# 0.3.0.0 are refused. The
-# package checks that would otherwise judge these files as this project's
-# own are given exactly the list Get-Stor98PackageFiles returns, and nothing
-# wider.
+# What one package carries, every name at its root starting with "stor98" so
+# none can clash with this project's own files:
+#   x86    stor98.mpd (98 SE, ME) and stor98.sys (2000 to 7) from
+#          src\stor98\out\free\win9x and \x86, and inf\stor98-x86.inf as
+#          stor98.inf
+#   amd64  stor98.sys from src\stor98\out\free\amd64, and inf\stor98-x64.inf
+#          as stor98.inf
+#   both   LICENSE, NOTICE and docs\package-readme.txt as stor98-LICENSE.txt,
+#          stor98-NOTICE.txt and stor98-readme.txt
+# The package checks that would otherwise judge these files as this
+# project's own are given exactly the list Get-Stor98PackageFiles returns.
 
-$script:Stor98FirstVersion = [version]"0.3.0.0"
+$script:Stor98Images = @{
+    "x86"   = @(@{ Source = "out\free\win9x\stor98.mpd"; Dest = "stor98.mpd"; Target = "win9x"; Stamp = "stor98mpd" },
+                @{ Source = "out\free\x86\stor98.sys";   Dest = "stor98.sys"; Target = "x86";   Stamp = "stor98" })
+    "amd64" = @(@{ Source = "out\free\amd64\stor98.sys"; Dest = "stor98.sys"; Target = "amd64"; Stamp = "stor98" })
+}
+$script:Stor98Infs = @{ "x86" = "inf\stor98-x86.inf"; "amd64" = "inf\stor98-x64.inf" }
 $script:Stor98RenamedTop = [ordered]@{
-    "LICENSE"    = "stor98-LICENSE.txt"
-    "NOTICE.TXT" = "stor98-NOTICE.txt"
-    "readme.txt" = "stor98-readme.txt"
+    "LICENSE"                  = "stor98-LICENSE.txt"
+    "NOTICE"                   = "stor98-NOTICE.txt"
+    "docs\package-readme.txt"  = "stor98-readme.txt"
 }
-# A copy of the interface header a release may carry; used for the
-# interface check only and never shipped.
-$script:Stor98ReleaseHeader = "include\stor98cm.h"
-
-function Assert-Stor98Version {
-    # Throws unless $Version is one a package may bundle.
-    param([string]$Version)
-    if ($Version -notmatch '^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$') {
-        throw "-Stor98Version '$Version' is not a four-part version such as 0.3.0.0: the bundled Stor98 build is pinned explicitly."
-    }
-    if ([version]$Version -lt $script:Stor98FirstVersion) {
-        throw "Stor98 $Version is older than 0.3.0.0, Stor98's first release."
-    }
-}
-
-function Read-Stor98Sums {
-    # SHA256SUMS.txt's text, "<sha256>  <path>" or "<sha256> *<path>" per
-    # line, with / or \ separators. Returns an ordered map of relative path
-    # (with \) to upper-case hash; refuses anything else.
-    param([string]$Text)
-    $map = [ordered]@{}
-    $seen = @{}
-    $n = 0
-    foreach ($line in ($Text -split "\r?\n")) {
-        $n++
-        if ($line.Trim() -eq "") { continue }
-        if ($line -notmatch '^([0-9A-Fa-f]{64}) [ *](.+)$') {
-            throw "SHA256SUMS.txt line $n is not '<sha256>  <path>': $line"
-        }
-        $hash = $Matches[1].ToUpperInvariant()
-        $rel = $Matches[2].Trim().Replace('/', '\')
-        $parts = @($rel.Split('\'))
-        if ($rel -eq "" -or $rel.StartsWith('\') -or $rel.Contains(':') -or
-            ($parts -contains '..') -or ($parts -contains '.') -or ($parts -contains '')) {
-            throw "SHA256SUMS.txt line $n names '$rel', which is not a plain path inside the release folder."
-        }
-        if ($rel -ieq "SHA256SUMS.txt") {
-            throw "SHA256SUMS.txt lists itself (line $n)."
-        }
-        $key = $rel.ToLowerInvariant()
-        if ($seen.ContainsKey($key)) {
-            throw "SHA256SUMS.txt lists '$rel' twice (line $n)."
-        }
-        $seen[$key] = $true
-        $map[$rel] = $hash
-    }
-    if ($map.Count -eq 0) { throw "SHA256SUMS.txt lists no file." }
-    return $map
-}
+$script:Stor98MasterHeader = "include\stor98cm.h"
 
 function Get-Stor98InfVersion {
     param([string]$Path)
@@ -970,116 +919,114 @@ function Get-Stor98InfVersion {
     return $m.Groups[1].Value
 }
 
-function Assert-Stor98Release {
-    # The pinned release folder, verified: SHA256SUMS.txt's own hash first,
-    # then every file against it, every file on disk listed, the release's
-    # files present and nothing it does not know, and every INF's DriverVer
-    # at the pinned version. Returns what the package step needs; throws on
-    # any mismatch, before anything is copied.
-    param([string]$Dir, [string]$Version, [string]$SumsSha256)
+function Get-Stor98HeaderVersion {
+    # STOR98LS_VERSION of a stor98cm.h, or "" where it has none.
+    param([string]$Path)
+    $m = [regex]::Match([System.IO.File]::ReadAllText($Path), '(?m)^\s*#\s*define\s+STOR98LS_VERSION\s+(\d+)\b')
+    if (-not $m.Success) { return "" }
+    return $m.Groups[1].Value
+}
 
-    Assert-Stor98Version -Version $Version
-    if ($SumsSha256 -notmatch '^[0-9A-Fa-f]{64}$') {
-        throw "-Stor98SumsSha256 must be the SHA-256 (64 hex digits) of the release folder's SHA256SUMS.txt."
-    }
-    if ($Dir -eq "" -or -not (Test-Path -LiteralPath $Dir -PathType Container)) {
-        throw "no Stor98 release folder at '$Dir' (-Stor98Dir)."
-    }
-    $Dir = (Resolve-Path -LiteralPath $Dir).ProviderPath.TrimEnd('\')
-    $sumsPath = Join-Path $Dir "SHA256SUMS.txt"
-    if (-not (Test-Path -LiteralPath $sumsPath -PathType Leaf)) {
-        throw "'$Dir' has no SHA256SUMS.txt, so nothing in it can be checked; it is not an Stor98 release folder."
-    }
-    # Read once: the bytes that are hashed are the bytes that are parsed, so
-    # the list cannot be swapped between the pin check and its use.
-    $sumsBytes = [System.IO.File]::ReadAllBytes($sumsPath)
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try { $sumsHash = (($sha.ComputeHash($sumsBytes) | ForEach-Object { $_.ToString("X2") }) -join "") }
-    finally { $sha.Dispose() }
-    if ($sumsHash -ne $SumsSha256.ToUpperInvariant()) {
-        throw "'$sumsPath' hashes to $sumsHash, not the pinned $($SumsSha256.ToUpperInvariant()): this is not the Stor98 $Version release that was pinned. Nothing was copied."
-    }
-    if (@($sumsBytes | Where-Object { $_ -ge 0x80 }).Count -gt 0) {
-        throw "'$sumsPath' is not ASCII."
-    }
-    $sums = Read-Stor98Sums -Text ([System.Text.Encoding]::ASCII.GetString($sumsBytes))
-    $listed = @{}
-    foreach ($rel in $sums.Keys) {
-        $listed[$rel.ToLowerInvariant()] = $rel
-        $full = Join-Path $Dir $rel
-        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
-            throw "SHA256SUMS.txt lists '$rel', which is not in '$Dir'."
-        }
-        $h = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash
-        if ($h -ne $sums[$rel]) {
-            throw "'$rel' in '$Dir' hashes to $h, not the $($sums[$rel]) SHA256SUMS.txt lists. Release folders are write-once; this one has changed. Nothing was copied."
-        }
-    }
-    foreach ($item in @(Get-ChildItem -LiteralPath $Dir -File -Recurse -Force)) {
-        $rel = $item.FullName.Substring($Dir.Length + 1)
-        if ($rel -ieq "SHA256SUMS.txt") { continue }
-        if (-not $listed.ContainsKey($rel.ToLowerInvariant())) {
-            throw "'$rel' is in '$Dir' but not in its SHA256SUMS.txt, so it is not part of the release."
-        }
-    }
+function Get-PackageVersion {
+    # XHCI_VER_STR of src\xhci_version.h.
+    param([string]$Repo)
+    $h = [System.IO.File]::ReadAllText((Join-Path $Repo "src\xhci_version.h"))
+    $m = [regex]::Match($h, '(?m)^#define\s+XHCI_VER_STR\s+"(\d+\.\d+\.\d+\.\d+)"')
+    if (-not $m.Success) { throw "src\xhci_version.h has no XHCI_VER_STR." }
+    return $m.Groups[1].Value
+}
 
-    $archDirs = @("x86", "x64")
-    $required = @("x86\stor98.inf", "x86\stor98.mpd", "x86\stor98.sys",
-                  "x64\stor98.inf", "x64\stor98.sys", "x64\stor98-test.cer", "LICENSE", "NOTICE.TXT",
-                  "readme.txt")
-    foreach ($r in $required) {
-        if (-not $listed.ContainsKey($r.ToLowerInvariant())) {
-            throw "the Stor98 $Version release has no '$r', which every Stor98 release carries."
-        }
-    }
-    $header = $null
-    foreach ($rel in $sums.Keys) {
-        $parts = @($rel.Split('\'))
-        if ($rel -ieq $script:Stor98ReleaseHeader) {
-            $header = Join-Path $Dir $rel
-            continue
-        }
-        if ($parts.Count -eq 1) {
-            if (-not ($script:Stor98RenamedTop.Keys | Where-Object { $_ -ieq $rel })) {
-                throw "the Stor98 $Version release has '$rel' at its top, which this script does not know where to put. Update scripts\package\package-common.ps1 for it rather than bundling a file blind."
+function Resolve-Stor98Build {
+    # The Stor98 build one package (-Arch) bundles, verified before anything
+    # is staged: every file present; both INFs at the package's DriverVer
+    # (check-stor98-inf.ps1); each image's version, STOR98_FLAVOUR_FREE marker
+    # and imports (check-stor98-build.ps1) and its source stamp
+    # (source-stamp.ps1 -Check: built from the tree as it is), unless
+    # -SkipBinaryGates (the packager's self-tests, whose images are stand-ins);
+    # and Stor98's interface header byte for byte the copy xhcicm.sys
+    # compiles against (-HeaderPath, src\cm\stor98cm.h). -Root is src\stor98,
+    # or the self-tests' stand-in tree. Returns Version, Dir, Interface and
+    # Files (per architecture: Source relative to Dir, FullPath, Dest, Sha256).
+    param([string]$Repo, [string]$Root = "", [string[]]$Arch, [string]$HeaderPath,
+          [switch]$SkipBinaryGates)
+    if ($Root -eq "") { $Root = Join-Path $Repo "src\stor98" }
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { throw "no Stor98 tree at '$Root'." }
+    $Root = (Resolve-Path -LiteralPath $Root).ProviderPath.TrimEnd('\')
+    $version = Get-PackageVersion -Repo $Repo
+    $files = @{}
+    foreach ($a in $Arch) {
+        $list = @()
+        $items = @($script:Stor98Images[$a]) + @(@{ Source = $script:Stor98Infs[$a]; Dest = "stor98.inf" })
+        foreach ($k in $script:Stor98RenamedTop.Keys) { $items += @{ Source = $k; Dest = $script:Stor98RenamedTop[$k] } }
+        foreach ($it in $items) {
+            $full = Join-Path $Root $it.Source
+            if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+                throw ("Stor98 has no '{0}' for the {1} package. Build and gate it first: scripts\build-driver.cmd{2} builds Stor98 with this project's drivers." -f `
+                    $full, $a, $(if ($a -eq "amd64") { " <flavour> -amd64" } else { "" }))
             }
-            continue
+            $list += [pscustomobject]@{ Source = $it.Source; FullPath = $full; Dest = $it.Dest
+                                        Sha256 = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash }
         }
-        if ($parts.Count -ne 2 -or -not ($archDirs -contains $parts[0].ToLowerInvariant())) {
-            throw "the Stor98 $Version release has '$rel', outside its $($archDirs -join '\ and ')\ directories."
+        $infVer = Get-Stor98InfVersion -Path (Join-Path $Root $script:Stor98Infs[$a])
+        if ($infVer -ne $version) {
+            throw "'$($script:Stor98Infs[$a])' of Stor98 declares DriverVer version '$infVer', and the package is $version (src\xhci_version.h)."
         }
-        if (-not $parts[1].StartsWith("stor98", [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "the Stor98 $Version release has '$rel': every file goes to the package root, and a name not starting with stor98 could clash with this project's own files."
+        if (-not $SkipBinaryGates) {
+            foreach ($img in $script:Stor98Images[$a]) {
+                $full = Join-Path $Root $img.Source
+                $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Repo "scripts\check-stor98-build.ps1") -Image $full -Target $img.Target 2>&1
+                if ($LASTEXITCODE -ne 0) { throw ("Stor98's {0} failed its gate:`n{1}" -f $img.Source, (($out | Out-String).TrimEnd())) }
+                $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Repo "scripts\source-stamp.ps1") -Driver $img.Stamp -Check (Split-Path -Parent $full) 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    throw ("Stor98's {0} is not the build of src\stor98 as it is now (source stamp, exit {1}):`n{2}`nRebuild it with scripts\build-driver.cmd." -f `
+                        $img.Source, $LASTEXITCODE, (($out | Out-String).TrimEnd()))
+                }
+            }
         }
+        $files[$a] = $list
     }
-    foreach ($rel in $sums.Keys) {
-        if ($rel -notmatch '(?i)\.inf$') { continue }
-        $infVer = Get-Stor98InfVersion -Path (Join-Path $Dir $rel)
-        if ($infVer -ne $Version) {
-            throw "'$rel' of the Stor98 release declares DriverVer '$infVer', not the pinned $Version."
-        }
+    if (-not $SkipBinaryGates) {
+        $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Repo "scripts\inf-gate\check-stor98-inf.ps1") 2>&1
+        if ($LASTEXITCODE -ne 0) { throw ("Stor98's INFs failed their gate:`n" + (($out | Out-String).TrimEnd())) }
     }
-    return [pscustomobject]@{
-        Dir        = $Dir
-        Version    = $Version
-        Sums       = $sums
-        SumsSha256 = $sumsHash
-        Header     = $header
+    # The interface: Stor98's master header and the copy xhcicm.sys compiles
+    # against, byte for byte (scripts\check-stor98-header.ps1 holds the same
+    # on every gated build), and the link-state version it declares.
+    $master = Join-Path $Root $script:Stor98MasterHeader
+    if (-not (Test-Path -LiteralPath $master -PathType Leaf)) { throw "Stor98 has no '$master'." }
+    if ($HeaderPath -eq "" -or -not (Test-Path -LiteralPath $HeaderPath -PathType Leaf)) {
+        throw "xhci98 has no '$HeaderPath' to hold Stor98's interface header against."
     }
+    if ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($master)) -ne
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($HeaderPath))) {
+        throw "Stor98's '$master' is not byte for byte '$HeaderPath': the connection manager would be built against another interface than the Stor98 it is bundled with."
+    }
+    $iface = Get-Stor98HeaderVersion -Path $master
+    if ($iface -eq "") { throw "'$master' defines no STOR98LS_VERSION." }
+    return [pscustomobject]@{ Version = $version; Dir = $Root; Interface = $iface; Files = $files }
+}
+
+function Get-Stor98PackageFiles {
+    # The Stor98 files one package carries (Resolve-Stor98Build's list).
+    # -Arch is the packager's: x86 or amd64.
+    param($Release, [ValidateSet("x86", "amd64")][string]$Arch)
+    if (-not $Release.Files.ContainsKey($Arch)) {
+        throw "the Stor98 build was resolved without the $Arch package's files."
+    }
+    return @($Release.Files[$Arch])
 }
 
 function Assert-Stor98SettingsTable {
-    # make-release.ps1's check of a real cut's bundled Stor98 (not the
-    # packager's synthetic releases, whose readmes carry no table).
-    param([string]$Dir, [string]$Version)
+    # make-release.ps1's check of the bundled Stor98's readme.
+    param([string]$ReadmePath, [string]$Version)
 
     # The installer's Stor98 settings (record 26 section 5.6) are copied from
     # this readme's SETTINGS table; test\stor98-settings.txt is that table as
-    # the installer's rows were checked against it (test_inst). A release
+    # the installer's rows were checked against it (test_inst). A readme
     # whose table differs - a value renamed, retyped or given another range -
     # fails here rather than the user.
     $tableCopy = Join-Path $PSScriptRoot "..\..\test\stor98-settings.txt"
-    $readmeLines = @(([System.IO.File]::ReadAllText((Join-Path $Dir "readme.txt"))) -split "\r?\n")
+    $readmeLines = @(([System.IO.File]::ReadAllText($ReadmePath)) -split "\r?\n")
     $start = -1
     $end = -1
     for ($i = 0; $i -lt $readmeLines.Count; $i++) {
@@ -1096,79 +1043,6 @@ function Assert-Stor98SettingsTable {
     if (($table -join "`n") -cne ($copy -join "`n")) {
         throw "the Stor98 $Version readme's SETTINGS table differs from test\stor98-settings.txt, the table the installer's Stor98 rows were checked against. Update xhciinst\inst_core.c's instS98Values and INST_S98_TABLE_VERSION and that file to this readme, and run test\run-host-tests.cmd."
     }
-}
-
-function Get-Stor98PackageFiles {
-    # The Stor98 files one package carries: Source (relative to the release
-    # folder), Dest (relative to the package root) and Sha256. -Arch is the
-    # packager's: x86 or amd64.
-    param($Release, [ValidateSet("x86", "amd64")][string]$Arch)
-    $dir = if ($Arch -eq "amd64") { "x64" } else { "x86" }
-    $out = @()
-    $dests = @{}
-    foreach ($rel in $Release.Sums.Keys) {
-        $parts = @($rel.Split('\'))
-        $dest = $null
-        if ($parts.Count -eq 1) {
-            $top = @($script:Stor98RenamedTop.Keys | Where-Object { $_ -ieq $rel })
-            if ($top.Count -eq 1) { $dest = $script:Stor98RenamedTop[$top[0]] }
-        } elseif ($parts.Count -eq 2 -and $parts[0] -ieq $dir) {
-            $dest = $parts[1]
-        }
-        if ($null -eq $dest) { continue }
-        $key = $dest.ToLowerInvariant()
-        if ($dests.ContainsKey($key)) {
-            throw "two files of the Stor98 $($Release.Version) release would land at '$dest' in the $Arch package."
-        }
-        $dests[$key] = $true
-        $out += [pscustomobject]@{ Source = $rel; Dest = $dest; Sha256 = $Release.Sums[$rel] }
-    }
-    return $out
-}
-
-function Get-Stor98HeaderVersion {
-    # STOR98LS_VERSION of a stor98cm.h, or "" where it has none.
-    param([string]$Path)
-    $m = [regex]::Match([System.IO.File]::ReadAllText($Path), '(?m)^\s*#\s*define\s+STOR98LS_VERSION\s+(\d+)\b')
-    if (-not $m.Success) { return "" }
-    return $m.Groups[1].Value
-}
-
-function Test-Stor98Interface {
-    # The pinned build's link-state interface version (STOR98LS_VERSION; 4
-    # for 0.3.0.0) against the header xhci98 compiles against; and, where the
-    # release carries its header, the two byte for byte. Returns "" when they
-    # agree, else why not.
-    param($Release, [string]$Pinned, [string]$HeaderPath)
-    if ($Pinned -notmatch '^\d{1,5}$') {
-        throw "-Stor98InterfaceVersion is the pinned build's STOR98LS_VERSION, a number (4 for Stor98 0.3.0.0)."
-    }
-    $have = ($HeaderPath -ne "") -and (Test-Path -LiteralPath $HeaderPath -PathType Leaf)
-    $ours = if ($have) { Get-Stor98HeaderVersion -Path $HeaderPath } else { "" }
-    if ($have -and $ours -eq "") {
-        return "'$HeaderPath' defines no STOR98LS_VERSION."
-    }
-    if ($null -ne $Release.Header) {
-        if (-not $have) {
-            return "the Stor98 $($Release.Version) release carries $($script:Stor98ReleaseHeader), and xhci98 has no '$HeaderPath' to compare it with."
-        }
-        $a = [System.IO.File]::ReadAllBytes($Release.Header)
-        $b = [System.IO.File]::ReadAllBytes($HeaderPath)
-        if ([Convert]::ToBase64String($a) -ne [Convert]::ToBase64String($b)) {
-            return "$($script:Stor98ReleaseHeader) of the Stor98 $($Release.Version) release is not byte for byte '$HeaderPath'."
-        }
-        $theirs = Get-Stor98HeaderVersion -Path $Release.Header
-        if ($Pinned -ne $theirs) {
-            return "the Stor98 $($Release.Version) release's header declares interface version '$theirs', and -Stor98InterfaceVersion pins '$Pinned'."
-        }
-    }
-    if (-not $have) {
-        return "Stor98 $($Release.Version) is pinned at interface version $Pinned, and xhci98 has no '$HeaderPath' (it compiles against no Stor98 interface)."
-    }
-    if ($ours -ne $Pinned) {
-        return "Stor98 $($Release.Version) is pinned at interface version $Pinned, and '$HeaderPath' declares STOR98LS_VERSION $ours."
-    }
-    return ""
 }
 
 function Get-Stor98NotesFault {
@@ -1192,39 +1066,6 @@ function Get-Stor98NotesFault {
         return "docs\using\release-notes.md says 'This download bundles $said.', and this cut bundles ${what}: write 'This download bundles $want.'"
     }
     return ""
-}
-
-function Resolve-Stor98Input {
-    # The packaging scripts' one entry point: $null when no Stor98 input was
-    # named (the package is built as before, with no Stor98), else the
-    # verified release with its interface verdict. The four pins go
-    # together; a mismatch of the interface is refused unless -Allow, and the
-    # override is reported, never silent. A version named without a folder
-    # takes Stor98's own release folder in this tree,
-    # src\stor98\releases\<version> (task 42-A.20); the other pins and every
-    # check are the same whichever folder it is.
-    param([string]$Version, [string]$Dir, [string]$SumsSha256, [string]$InterfaceVersion,
-          [string]$HeaderPath, [switch]$Allow)
-    if ($Version -ne "" -and $Dir -eq "") {
-        $Dir = Join-Path (Get-RepoRoot) ("src\stor98\releases\" + $Version)
-    }
-    $named = @(@($Version, $Dir, $SumsSha256, $InterfaceVersion) | Where-Object { $_ -ne "" })
-    if ($named.Count -eq 0) {
-        if ($Allow) { throw "-Stor98AllowInterfaceMismatch was given with no Stor98 input to apply it to." }
-        return $null
-    }
-    if ($named.Count -ne 4) {
-        throw "the bundled Stor98 build is pinned explicitly: -Stor98Version, -Stor98Dir, -Stor98SumsSha256 and -Stor98InterfaceVersion go together (-Stor98Dir defaults to src\stor98\releases\<version>), and only $($named.Count) of them were given."
-    }
-    $release = Assert-Stor98Release -Dir $Dir -Version $Version -SumsSha256 $SumsSha256
-    $why = Test-Stor98Interface -Release $release -Pinned $InterfaceVersion -HeaderPath $HeaderPath
-    if ($why -ne "" -and -not $Allow) {
-        throw "the Stor98 interface does not match: $why Bundle a build whose interface matches, or pass -Stor98AllowInterfaceMismatch to bundle it anyway (the override is logged)."
-    }
-    $release | Add-Member -NotePropertyName Interface -NotePropertyValue $InterfaceVersion
-    $release | Add-Member -NotePropertyName Mismatch -NotePropertyValue $why
-    $release | Add-Member -NotePropertyName Overridden -NotePropertyValue ($why -ne "")
-    return $release
 }
 
 # ------------------------------------------------------------------
@@ -1287,7 +1128,8 @@ function ConvertFrom-GatedManifest {
         $seen[$key] = $true
         if ($key.StartsWith("sha256.")) {
             $name = $key.Substring(7)
-            if ($name -notmatch '^[a-z0-9_]+\.sys$') { throw "'$key' does not name a .sys" }
+            # stor98.mpd, Stor98's 98 SE / ME image, since task 42-A.30.
+            if ($name -notmatch '^[a-z0-9_]+\.sys$' -and $name -ne 'stor98.mpd') { throw "'$key' does not name a .sys or stor98.mpd" }
             if ($val -notmatch '^[0-9A-Fa-f]{64}$') { throw "'$key' is not a SHA-256" }
             $m.Sha256[$name] = $val.ToUpperInvariant()
             continue

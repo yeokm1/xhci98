@@ -264,7 +264,7 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `tbt_topo_p14s.h` | The ThinkPad P14s Gen 1's PCI configuration space as captured under DOS in `usb4-emu`, for `test_tbt_topo`. |
 | `u4_fakefab.c` / `u4_fakefab.h` | `test_u4cm`'s C89 fake USB4 fabric, one domain per instance, written from the specification and `usb4-emu`'s documented host models, independently of `tbt_u4cm.c` (decision U11). |
 | `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23); its Stor98 rows held to `stor98-settings.txt` (record 26 section 5.6). |
-| `stor98-settings.txt` | The bundled Stor98 readme's SETTINGS table, as the installer's Stor98 rows were checked against it; `make-release.ps1` compares a cut's bundled readme with it. |
+| `stor98-settings.txt` | The bundled Stor98 readme's SETTINGS table, as the installer's Stor98 rows were checked against it; `make-release.ps1` compares the bundled readme, `src\stor98\docs\package-readme.txt`, with it. |
 | `test_dijob.c` | `xhciinst\inst_core.c` with `xhciinst\di\di_core.c`: the installer's job files read by the helper's parser, the helper's result files by the installer's (design record 27 sections 4.1 and 4.2). |
 | `test_tr.c` | `xhcitr\tr_core.c`, the USB tree tool's pure half (design record 25 section 10): text, the connection answers, descriptors, the query's parsing and eject gates, the router keys and event diff, the command line, the report. |
 | `test_trpci.c` | `src\cm\cm_qpci.c` and `xhcitr\tr_pci.c`: the bounded walk below a tunnel port over modelled buses, the capability walk with bad lists, the decoders, 79 columns (design record 25 revision 12). |
@@ -338,14 +338,17 @@ The host suites of `xhci98.sys` and `xhciuas.sys`, and the shared and guest-side
 
 ## Stor98 - `src\stor98\`
 
-Stor98, the SCSI miniport for NVMe SSDs that the release packages bundle, in this tree since 2026-10-19 (roadmap-usb4 task 42-A.20): a project of its own, BSD-3-Clause, whose `README.md`, `AGENTS.md`, `NOTICE` and `docs\` (its `BUILD.md`, `PLAN.md` and `TESTING.md` first) describe its files; this page does not map them. It builds its own images (`stor98.mpd`, `stor98.sys` x86 and amd64) with `src\stor98\scripts\build.cmd` into the git-ignored `src\stor98\out\`, its host unit tests with `src\stor98\tests\unit\build.cmd`, and keeps its released builds in `src\stor98\releases\<version>\`, from which a package bundles one (`make-package.ps1 -Stor98*`). Nothing under `src\stor98\` is in `src\sources` or any of this project's build lists.
+Stor98, the SCSI miniport for NVMe SSDs that the release packages bundle, in this tree since 2026-10-19 (roadmap-usb4 task 42-A.20): a project of its own, BSD-3-Clause, whose `README.md`, `AGENTS.md`, `NOTICE` and `docs\` (its `BUILD.md`, `PLAN.md` and `TESTING.md` first) describe its files; this page does not map them. It builds its own images (`stor98.mpd`, `stor98.sys` x86 and amd64) with `src\stor98\scripts\build.cmd` into the git-ignored `src\stor98\out\`, and its host unit tests with `src\stor98\tests\unit\build.cmd`. Since `3.1.0.0` (task 42-A.30) `scripts\build-driver.cmd` runs both - the unit tests on the x86 run, the free images of the run's architecture once per run - and gates the images in every flavour, and a package bundles that build at the package's version (`build-and-test.md`, "Building Stor98" and "The bundled Stor98 build"): `src\stor98\src\stor98ver.h` takes the version from `src\xhci_version.h`, `src\stor98\src\nvme2k.c` emits the `STOR98_FLAVOUR_*` marker, and `src\stor98\docs\package-readme.txt` is the readme a package carries as `stor98-readme.txt`. Its releases up to `0.4.0.0` stay in `src\stor98\releases\<version>\` as history; its own release and signing scripts were removed with that change. Nothing under `src\stor98\` is in `src\sources` or any of this project's build lists.
 
 **The interface header is here twice until the two are made one, and `src\stor98\include\stor98cm.h` is the master**: its own text and Stor98's `NOTICE` name it as the definition of the interface, and Stor98 is its receiving side. A change is made there and copied to `src\cm\stor98cm.h` unchanged, with the new SHA-256 in `legal-provenance.md` section 2a; `scripts\check-stor98-header.ps1`, which `scripts\build-driver.cmd` runs on every build, fails when the two are not the same bytes.
 
 | File | Role |
 |---|---|
 | `scripts\check-stor98-header.ps1` | The gate above: `src\cm\stor98cm.h` against the master byte for byte, its refusals self-tested first (`-SelfTest`). |
-| `scripts\build-all.cmd` | One command for everything: `build-driver.cmd` for x86 and amd64 with every gate, then Stor98's `build.cmd all free` and its unit tests (`-NoStor98` skips them). |
+| `scripts\check-stor98-build.ps1` | The gate on one built Stor98 image (task 42-A.30), run by `build-driver.cmd` in every flavour and by the packager: its version resource against `src\xhci_version.h`, exactly the `STOR98_FLAVOUR_FREE` marker and none of this project's, its machine, and its imports against the allowlist below (`-List` prints them in the allowlist's form). |
+| `scripts\import-gate\stor98-imports.allow` | The `<target> DLL!function` pairs Stor98's images may import, per target (`win9x`, `x86`, `amd64`); a new import fails the gate until it is added here. |
+| `scripts\inf-gate\check-stor98-inf.ps1` | Stor98's two INFs held to the package's `DriverVer` (`XHCI_DRIVERVER_DATE`, `XHCI_VER_STR`) and their `Signature`, with its self-test (`-SelfTest`). |
+| `scripts\build-all.cmd` | One command for both architectures: `build-driver.cmd` for x86 and amd64 with every gate, Stor98 included. |
 
 ## The user-mode tools
 

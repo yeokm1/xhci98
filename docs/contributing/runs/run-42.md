@@ -1834,6 +1834,178 @@ checks, 0 failures; `test-package.ps1` with the layout cases), and its
 review came back clean. The legs were not repeated on those merges, which brought no
 change to where the filter INF is read.
 
+## 42-A.30: Stor98 built in-tree, one version, one date, one signature (2026-10-19)
+
+Branch `p42-s98ver` from `3.1.0.0` at `08709480`, with `3.1.0.0` merged in
+at `7e1ab583` (`cfcef657`). The owner's decisions of the day: every binary
+and INF of the package carries one version and one date, Stor98's
+included; Stor98 is built from `src\stor98` by this repository's build, not
+bundled from a pinned release; one key signs every x64 driver, `stor98.sys`
+included; any fix before shipping is a recut of `3.1.0.0`, dated
+`2026-10-19`.
+
+### What it does
+
+- **Version.** `src\stor98\src\stor98ver.h` includes `src\xhci_version.h`
+  and gives `nvme2k.rc` `XHCI_VER_CSV` and `XHCI_VER_STR`: `stor98.mpd`
+  and both `stor98.sys` are `3.1.0.0`. Both Stor98 INFs carry
+  `DriverVer=10/19/2026,3.1.0.0`, held to the header by the new
+  `scripts\inf-gate\check-stor98-inf.ps1` (self-tested by six mutants)
+  beside the other INF gates. Stor98 logs and reports no release version
+  of its own (the version resource was its only one). Its interface
+  versions (`STOR98LS_VERSION` 4 and the rest) are unchanged, and
+  `check-stor98-header.ps1` still holds `src\cm\stor98cm.h` to the master.
+- **Flavour marker.** `nvme2k.c` carries exactly one of
+  `STOR98_FLAVOUR_FREE`, `_CHECKED` or `_DBGPORT`, read in `DriverEntry`
+  so the linker keeps it.
+- **The gated run.** `build-driver.cmd` runs Stor98's unit suite on the
+  x86 run, builds Stor98 free once per run for its architecture (it
+  deletes only that architecture's images first), and gates each image in
+  every flavour: `scripts\check-stor98-build.ps1` (version, the free
+  marker, machine, imports against the new
+  `scripts\import-gate\stor98-imports.allow`; Stor98 had no import gate of
+  its own), the gated record (`stor98.sys`, and `stor98.mpd` on x86) and
+  the source stamp (`source-stamp.ps1 -Driver stor98 / stor98mpd`, whose
+  SOURCES reader now also takes a list that ends the file).
+  `build-all.cmd` lost its separate Stor98 step.
+- **The packager.** `make-package.ps1` bundles that build by default
+  (`-NoStor98` leaves it out; `-Stor98Root` is for its self-tests),
+  re-checks it before staging (`Resolve-Stor98Build`), holds it to the
+  gated record under `-SignOnly`, and with `-TestSignPfx` signs the amd64
+  `stor98.sys` in the same step and with the same key as the other x64
+  drivers. The four pins, the SHA256SUMS handling and `stor98-test.cer`
+  are gone; `src\stor98\docs\package-readme.txt` is the bundled
+  `stor98-readme.txt`. `make-release.ps1`: the release legs publish
+  Stor98 with the project's files into `releases\<ver>\release-*`, each
+  image held to the release version and, on x64, to the cut's signature;
+  the debug legs pass `-NoStor98`; Stor98's INFs join the one-date rule;
+  `-UploadSetOnly` refuses `3.0.0.0`, whose pinned Stor98 was in its upload
+  set only. Stor98's own `make-release.ps1`, `sign-x64.ps1`,
+  `make-testcert.ps1` and `testsign-common.ps1` are removed.
+- **The installer and XHCITR.** XHCIINST/XHCIWIZ read the bundled
+  version from `stor98.inf` and compare four-part versions, so an
+  installed `0.4.0.0` (or `0.3.0.x`) ranks below `3.1.0.0` and is
+  updated; no code change was needed. New `test_inst` vectors: `0.4.0.0`
+  and `0.3.0.1` updated, `3.1.0.0` current, `3.2.0.0` refused without
+  `/force`, PreExisting deciding removal whatever the version. The
+  test-signing note now says `stor98.sys` is signed with the other
+  drivers. XHCITR's report lists the installed `stor98.sys` /
+  `stor98.mpd` with its file version (it had no Stor98 row).
+- **Docs.** AGENTS.md, README.md, records 19 (revision 2), 23 (revision
+  19) and 26 (draft 13), build-and-test.md, source-files.md,
+  legal-provenance.md, the release notes, `releases\README.md` and
+  Stor98's own README, AGENTS, BUILD, TESTING, releases README and a
+  `3.1.0.0` history entry.
+
+Commits: `ce48f465` (installer, XHCITR, vectors), `cf6ca042` (build,
+packager, version), `36a9b701` (docs), `514b5bcf` (review fixes),
+`7e1ab583` (merge of `3.1.0.0`).
+
+### Review
+
+Round 1 on `ce48f465..36a9b701`: three P1 (the Stor98 stamp's SOURCES
+reader, the amd64 run deleting the x86 images, a stray backslash in
+`make-release.ps1`) and two P2 (the manifest reader refusing
+`stor98.mpd`, `-UploadSetOnly` dropping `3.0.0.0`'s Stor98), fixed in
+`514b5bcf`. Round 2 on `514b5bcf`: no findings. Round 3 on the merge
+`7e1ab583`: no findings.
+
+### Builds
+
+| Build | Result |
+|---|---|
+| `test-package.ps1`, `cf6ca042` | 1098 checks passed |
+| `build-driver.cmd both`, `7e1ab583` | BUILD + GATES PASSED (debug release): host tests passed (`test_inst` 1470 checks), Stor98 unit tests all passed, Stor98 INF gate, Stor98 gate x86 and win9x in both flavours |
+| `build-driver.cmd both -amd64`, `7e1ab583` | BUILD + GATES PASSED (debug release), Stor98 gate amd64 in both flavours |
+| gated records | x86 and amd64, release and debug, commit `7e1ab583`, `dirty=0` |
+| `make-release.ps1 -Arch x86 -SkipQualtool -TestLabel "42-A.30, Stor98 built in-tree"` into `out\testrel` | passed; `release-x86\` carries Stor98, `debug-x86\` none |
+| `make-package.ps1 -Flavor release -Arch amd64`, unsigned | passed |
+
+Every binary's file version and every INF's DriverVer, read from the
+staged trees (`out\testrel\3.1.0.0` and `out\pkg-s98-release-amd64`):
+
+| File | x86 (release-x86, debug-x86) | amd64 |
+|---|---|---|
+| `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys`, `nt\xhcicm.sys` | 3.1.0.0 | 3.1.0.0 |
+| `xhcihlpr.sys` | 3.1.0.0 | - |
+| `stor98.mpd` | 3.1.0.0 (release-x86) | - |
+| `stor98.sys` | 3.1.0.0 (release-x86) | 3.1.0.0 |
+| `xhci98.inf`, `xhciuas.inf`, `xhcicm.inf`, `nt\xhcicmf.inf` | 10/19/2026,3.1.0.0 | 10/19/2026,3.1.0.0 |
+| `stor98.inf` | 10/19/2026,3.1.0.0 | 10/19/2026,3.1.0.0 |
+| `XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCITR.EXE`, `XHCITR64.EXE` | 3.1.0.0 | |
+
+`txtsetup.oem` names no driver version. The console tools (XHCIINST,
+XHCICLN, XHCIMARK, XHCIDI and their 64-bit twins) carry no version
+resource, as before; they print `XHCI_VER_STR`. No version resource
+carries a build date or time.
+
+The staged Stor98 against `0.4.0.0`: built from `src\stor98` (the stor98
+repository's `4253b58`, 82 commits after the `0.4.0.0` release commit
+`d2e6056`; 34 files of `src`, `inf` and `include` changed, +1463/-437:
+the audit of 2026-10-18's fixes, FUA, MODE SENSE, the find and recovery
+fixes, the 9x generation rule). `stor98.mpd` 51296 bytes (`0.4.0.0`
+48237), x86 `stor98.sys` 41678 (39403), amd64 `stor98.sys` 49664 (47064);
+imports: `ScsiPortConvertUlongToPhysicalAddress` dropped on all three,
+`NTOSKRNL.EXE!MmSystemRangeStart` added on both `stor98.sys`. SHA-256:
+`stor98.mpd` `1d2bf9f5...9e9ce4`, x86 `stor98.sys` `fe620cd4...776691`,
+amd64 `stor98.sys` `87f02518...`. The `stor98-spd` bounce fix is not in
+it.
+
+### The legs
+
+Not run. The kit was prepared in `E:\xhci98-vm\p42-s98ver` (98 SE fresh
+with the enclosure, 2000 fresh with the Alpine Ridge enclosure, and 98 SE
+with `3.0.0.0` and Stor98 `0.4.0.0` installed for the update, its guest
+read as `0.4.0.0` with the NVMe volume working), and the package above
+was staged into it, but starting the VMs was refused by the session's
+permission check. All three legs are owed: a fresh install with a file
+copy and compare on the NVMe on 98 SE and on 2000, and the update from
+`0.4.0.0` to `3.1.0.0`.
+
+### The merges of the evening and the rebuild
+
+`3.1.0.0` was merged in twice more: at `f5678586` (`94c22687`; conflicts
+in `make-release.ps1`'s readme paragraph, the release notes, this file
+and records 23 and 26, both sides kept) and at `234884a3` (`9cf98652`,
+which brings Stor98's 9x bounce fix of 42-A.33 and the 98 SE / ME
+`OEM Name` cleanup; Stor98's `3.1.0.0` history entry now names the
+bounce fix). This task's record revisions are record 23 revision 19 and
+record 26 draft 13 (42-A.26 took 18 and 12; the `OEM Name` cleanup took
+20 and 14). The merge review found one P2: the bundled
+`stor98-readme.txt`, `README.md` and the release notes still said
+`/stor98` alone, which the installer now refuses without `/thunderbolt`;
+fixed in `6ae57798`, then a confirmation round and the review of the last
+merge found nothing.
+
+| Build | Result |
+|---|---|
+| `build-driver.cmd both`, `234884a3` | BUILD + GATES PASSED (debug release): packager self-tests 1098 checks, host tests passed (`test_inst` 1562 checks), Stor98 unit tests all passed (the bounce fix's `sg9x_ut` with them), Stor98 gate win9x and x86 in both flavours |
+| `build-driver.cmd both -amd64`, `234884a3` | BUILD + GATES PASSED (debug release): packager self-tests 1098 checks, host tests passed (`test_inst` 1575 checks), Stor98 gate amd64 in both flavours |
+| `make-release.ps1 -Arch x86 -SkipQualtool -TestLabel ...` into `out\testrel2`, `7e84f8ef` (before the last merge) | passed; every binary `3.1.0.0`, every INF `10/19/2026,3.1.0.0` |
+| `make-package.ps1 -Flavor release -Arch amd64`, unsigned | passed at `234884a3`; every binary `3.1.0.0`, every INF `10/19/2026,3.1.0.0` |
+
+The Stor98 images of the last merge, the bounce fix in, pass the same
+gate: version `3.1.0.0`, `STOR98_FLAVOUR_FREE`, 11, 19 and 18 imports,
+none new.
+
+The legs were allowed by the owner in the evening, but starting the
+guests was refused by the session's permission check again, so they are
+still owed; the kit `E:\xhci98-vm\p42-s98ver` now starts its guests
+headless (`-display none`, VNC on its own ports).
+
+A third merge, at `2f7dd861` (`200d841b`: the x64 package's filter INF
+at the flavour directory's root, 42-A.23), kept Stor98 in the flat x64
+layout (the upload set's and the release leg's lists take the
+connection manager's files from `Get-CmPublishable` and Stor98's beside
+them); its review found nothing. Rebuilt there: `build-driver.cmd both`
+and `both -amd64` BUILD + GATES PASSED (packager self-tests 1113 checks,
+`test_inst` 1586 checks, Stor98 unit tests passed), gated records of
+both architectures at `2f7dd861`, `dirty=0`; `make-package.ps1
+-Flavor release` for x86 and amd64 (unsigned) passed, every binary
+`3.1.0.0` and every INF `10/19/2026,3.1.0.0`, the amd64 package's
+`xhcicmf.inf` at its root. `3.1.0.0`'s roadmap-only `53619ce4` was
+merged after it.
+
 ## 42-A.31: SETUP.EXE, the installer's entry point for people (2026-10-19)
 
 Branch `p42-batlaunch` from `3.1.0.0` at `08709480`. The owner asked
