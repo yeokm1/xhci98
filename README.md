@@ -340,7 +340,8 @@ The release notes' [Known limitations](docs/using/release-notes.md#known-limitat
   - Disabling a controller the driver had to close off hangs (very rare). Restart instead.
   - Intel 7-series (`8086:1E31`): too many periodic devices at once (audio, mice) may lose data instead of being refused.
 - **Untested**
-  - SuperSpeed isochronous, SuperSpeedPlus (USB 3.1 Gen 2 and up), polling above 1000 Hz, controllers below xHCI 1.0 (accepted by default; `XhciAccept096` `0` refuses them), and the Linux-derived controller quirks.
+  - SuperSpeedPlus (USB 3.2 Gen 2, Gen 1x2 and Gen 2x2): supported, but checked only in an emulator, not on real hardware.
+  - SuperSpeed isochronous, polling above 1000 Hz, controllers below xHCI 1.0 (accepted by default; `XhciAccept096` `0` refuses them), and the Linux-derived controller quirks.
 
 ## Toolchain and building
 
