@@ -235,6 +235,16 @@ as they are made; the head of this file is rewritten when it is cut.
 - **Stor98 in the published tree.** Stor98's files are now part of each
   `release-` directory as published, like the USB drivers, rather than
   added to the download alone.
+- **Known limitation: a drive attached during the install.** On Windows
+  2000 to 7, a Thunderbolt or USB4 drive that is already attached when the
+  package is installed or updated is not listed in Safely Remove Hardware
+  until Windows restarts or the drive is plugged in again (`3.0.0.0` did
+  the same).
+- **Known limitation: the eject under the USB4 connection manager on 7.**
+  On a Windows 7 computer with ACPI, where the package's own USB4
+  connection manager runs, ejecting a device that connects through a PCI
+  bridge (a dock, or an enclosure with a switch in it) stops it in
+  Windows, but the tunnel to it stays up until you unplug it.
 
 ## What `3.0.0.0` adds
 

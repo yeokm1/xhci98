@@ -3723,6 +3723,7 @@ cuts without the tool on a host that cannot build it.
         $instSources = @(@(Get-ChildItem -LiteralPath $InstallToolDir -File |
             Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest", ".ico") }) +
             @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhcitr\xhcitr.ico")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.c")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")))
         foreach ($name in $instExes) {
@@ -4235,7 +4236,7 @@ helper (xhciinst\di\build.cmd).
             " Stor98, an NVMe storage driver for NVMe drives such as one in a Thunderbolt or USB4 enclosure:" +
             " stor98.inf and the files beside it whose names start with stor98. It carries this release's version" +
             " and date, and its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
-            " and stor98-readme.txt is its guide. INSTALL.BAT installs it only when asked (its box on the installer's Components page, or /stor98). By hand, in the hardware" +
+            " and stor98-readme.txt is its guide. INSTALL.BAT installs it only when asked (its box under the Thunderbolt 3 / USB4 one on the installer's Components page, or /thunderbolt /stor98). By hand, in the hardware" +
             " wizard (Have Disk), point at " +
             $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `
             -Width 78 -FirstPrefix "  " -RestPrefix "  ")

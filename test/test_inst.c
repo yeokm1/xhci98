@@ -1067,6 +1067,66 @@ static void test_values(void)
         }
     }
 
+    /* Owner, 2026-10-19: XhciFastPollFsLs, never asked, settable for 0, 2,
+     * 3 and 4 (1 is not a mode), each choice named, 4 included. */
+    {
+        int fp = inst_value_find("XhciFastPollFsLs");
+        INST_ENV en = env(0, 4, 10, INST_ARCH_X86);
+        INST_ENV nt = env(1, 6, 1, INST_ARCH_X86);
+        INST_VNOW fnow[1];
+        INST_U32 fenter;
+        char q[4096];
+        en.AnyXhci = 1;
+        nt.AnyXhci = 1;
+        CHECK(fp >= 0, "the fast-poll row");
+        if (fp >= 0) {
+            CHECK_EQ(instValues[fp].Inf, INST_INF_XHCI, "an xhci98 value");
+            CHECK_EQ(instValues[fp].Apply, INST_APPLY_ANY_XHCI, "any system");
+            CHECK_EQ(instValues[fp].Asked, 0, "fast poll never asked");
+            CHECK(!inst_value_applies(fp, &en), "98 SE: not asked");
+            CHECK(inst_value_relevant(fp, &en), "98 SE: an Advanced row");
+            CHECK(inst_value_relevant(fp, &nt), "7: an Advanced row");
+            CHECK_EQ(inst_value_set_mask(fp, &en), 0x1D, "98 SE: 0, 2, 3, 4");
+            CHECK_EQ(inst_value_set_mask(fp, &nt), 0x1D, "7: 0, 2, 3, 4");
+            CHECK(inst_value_set("XhciFastPollFsLs=0", &idx, &v) == 1 &&
+                  idx == fp && v == 0, "/set takes fast poll 0");
+            CHECK_EQ(inst_value_set("XhciFastPollFsLs=1", &idx, &v), -1,
+                     "/set refuses fast poll 1");
+            CHECK(inst_value_set("XhciFastPollFsLs=2", &idx, &v) == 1 &&
+                  v == 2, "/set takes fast poll 2");
+            CHECK(inst_value_set("XhciFastPollFsLs=3", &idx, &v) == 1 &&
+                  v == 3, "/set takes fast poll 3");
+            CHECK(inst_value_set("XhciFastPollFsLs=4", &idx, &v) == 1 &&
+                  idx == fp && v == 4, "/set takes fast poll 4");
+            CHECK_EQ(inst_value_set("XhciFastPollFsLs=5", &idx, &v), -1,
+                     "/set refuses fast poll 5");
+            CHECK(!inst_value_allowed(fp, &nt, 1), "Advanced: 1 refused");
+            CHECK(inst_value_allowed(fp, &nt, 4), "Advanced: 4 taken");
+            CHECK(!inst_value_allowed(fp, &nt, 5), "Advanced: 5 refused");
+            CHECK(instValues[fp].Choice[1] == NULL, "1 has no meaning");
+            CHECK(instValues[fp].Choice[4] != NULL &&
+                  inst_eq(instValues[fp].Choice[4],
+                          "the rate the client chooses, codes 128 to 143"),
+                  "4 named");
+            CHECK(instValues[fp].Caution != NULL &&
+                  instValues[fp].CautionMask == 0 &&
+                  strstr(instValues[fp].Caution, "restart") != NULL &&
+                  strstr(instValues[fp].Caution, "3.1.0.0") == NULL,
+                  "its caution every time, no release history");
+            memset(fnow, 0, sizeof(fnow));
+            fnow[0].State = 1;
+            fnow[0].Value = 0;
+            CHECK(inst_value_question(q, sizeof(q), fp, 0x1D, 0, fnow, 1, 0,
+                                      0, &fenter) == 1, "the row renders");
+            CHECK(strstr(q, "    4  the rate the client chooses, codes 128 "
+                            "to 143\n") != NULL, "choice 4 listed");
+            CHECK(strstr(q, "    2  a root-port mouse set to 31/62 Hz in "
+                            "hidusbf runs at 2000/4000 Hz\n") != NULL,
+                  "choice 2 listed");
+            CHECK(strstr(q, "\n    1") == NULL, "1 not listed");
+        }
+    }
+
     inst_mask_text(0x7, text, sizeof(text));
     CHECK(inst_eq(text, "0, 1, 2"), "mask text");
     inst_mask_text(0x0, text, sizeof(text));
@@ -2304,7 +2364,7 @@ static void test_questions(void)
     for (i = 0; i < instValueCount; i++) {
         int b;
         int named = 0;
-        for (b = 0; b < 4; b++) {
+        for (b = 0; b < INST_CHOICES; b++) {
             named += instValues[i].Choice[b] != NULL;
             if ((instValues[i].Settable & (1UL << b)) == 0) {
                 CHECK(instValues[i].Choice[b] == NULL,
@@ -2938,6 +2998,109 @@ static void test_mw_values(void)
           "a list's values by the system");
 }
 
+/* ---- record 26 section 5.4: a row of another system, greyed ----------- */
+
+static void test_greyed(void)
+{
+    INST_ENV e;
+    int sil = inst_value_find("XhciSilentInstall");
+    int fine = inst_value_find("XhciPollFineTimer");
+    int psw = inst_value_find("XhciIntelPortSwitch");
+    int mode = inst_value_find("XhciInterruptMode");
+    int br = inst_value_find("XhciCmBridgeNumbering");
+    int cm = inst_value_find("XhciCmMode");
+
+    CHECK(sil >= 0 && fine >= 0 && psw >= 0 && mode >= 0 && br >= 0 &&
+          cm >= 0, "the values are in the table");
+    e = env(1, 6, 1, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    e.PswController = 1;
+    CHECK(inst_value_greyed(sil, &e) && !inst_value_applies(sil, &e) &&
+          inst_value_set_mask(sil, &e) == 0,
+          "7: the 98 SE and ME switch greyed, never asked or set");
+    CHECK(strcmp(inst_value_only(sil), "Windows 98 SE and ME only") == 0,
+          "and says which systems");
+    CHECK(inst_value_greyed(br, &e) && !inst_value_greyed(cm, &e) &&
+          !inst_value_greyed(fine, &e) && !inst_value_greyed(mode, &e) &&
+          !inst_value_greyed(psw, &e),
+          "7: the 98 SE and ME Thunderbolt value greyed, the rest not");
+    e.PswController = 0;
+    CHECK(inst_value_greyed(psw, &e) && !inst_value_applies(psw, &e) &&
+          strcmp(inst_value_only(psw), "Intel 7-9 series, C610 only") == 0,
+          "no port-switch controller: the switch greyed");
+    e = env(0, 4, 10, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    e.PswController = 1;
+    CHECK(inst_value_greyed(fine, &e) && !inst_value_relevant(fine, &e) &&
+          strcmp(inst_value_only(fine), "Windows 2000 to 7 only") == 0,
+          "98 SE: the 2000-to-7 value greyed");
+    CHECK(!inst_value_greyed(sil, &e) && !inst_value_greyed(br, &e) &&
+          !inst_value_greyed(mode, &e) && !inst_value_greyed(psw, &e),
+          "98 SE: its own values not greyed");
+    CHECK(inst_value_only(mode) == NULL && inst_value_only(cm) == NULL &&
+          inst_value_only(-1) == NULL && !inst_value_greyed(-1, &e),
+          "a value of every system has no words");
+    e.AnyXhci = 0;
+    CHECK(!inst_value_greyed(fine, &e) && !inst_value_greyed(psw, &e),
+          "no controller: nothing greyed for it");
+    CHECK(inst_s98_greyed(INST_S98_GONE, 0) &&
+          inst_s98_greyed(INST_S98_IDLE, 0) &&
+          !inst_s98_greyed(INST_S98_GONE, 1) &&
+          !inst_s98_greyed(INST_S98_WRITETHROUGH, 0) &&
+          !inst_s98_greyed(INST_S98_WRITETHROUGH, 1) &&
+          !inst_s98_greyed(-1, 0),
+          "Stor98: gone and idle greyed on 98 SE and ME alone");
+    CHECK(strcmp(inst_s98_only(INST_S98_GONE), "Windows 2000 to 7 only") == 0 &&
+          inst_s98_only(INST_S98_WRITETHROUGH) == NULL &&
+          inst_s98_only(INST_S98_COUNT) == NULL,
+          "Stor98: the words of a greyed row");
+}
+
+/* ---- record 26 section 5.3: the UAS driver's box (owner, 2026-10-19) --- */
+
+static void test_uas(void)
+{
+    INST_OPTS o;
+    char err[128];
+    char *argv[4];
+
+    CHECK(inst_uas_decide(1, 0) && !inst_uas_decide(1, 1) &&
+          !inst_uas_decide(0, 0) && !inst_uas_decide(0, 1),
+          "UAS in the run only with the USB drivers and without /nouas");
+    argv[0] = "x";
+    argv[1] = "/nouas";
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.NoUas,
+          "/nouas");
+    argv[2] = "/uninstall";
+    CHECK(inst_parse_args(3, argv, &o, err, sizeof(err)) == 1,
+          "/nouas belongs to an install");
+    CHECK(inst_parse_args(1, argv, &o, err, sizeof(err)) == 0 && !o.NoUas,
+          "no switch: UAS in the run");
+}
+
+/* ---- record 26 section 5.7: the Summary's headline (matrix N1) --------- */
+
+static void test_summary_head(void)
+{
+    CHECK(strstr(inst_summary_head(0, 0, 0, 1), "Every device is current") !=
+          NULL && strstr(inst_summary_head(0, 0, 0, 0),
+                         "Every device is current") != NULL,
+          "nothing changes: every device is current");
+    CHECK(strstr(inst_summary_head(0, 1, 0, 0), "Every device") == NULL &&
+          strstr(inst_summary_head(0, 1, 0, 0), "settings") != NULL,
+          "a setting written: said, never \"every device is current\"");
+    CHECK(strstr(inst_summary_head(0, 0, 1, 1), "Every device") == NULL &&
+          strstr(inst_summary_head(0, 0, 1, 1), "changes listed") != NULL,
+          "a component added: said");
+    CHECK(strstr(inst_summary_head(0, 1, 1, 1), "settings") != NULL &&
+          strstr(inst_summary_head(0, 1, 1, 1), "other changes") != NULL,
+          "both: both said");
+    CHECK(strcmp(inst_summary_head(1, 1, 1, 1), inst_confirm_text(1, 0, 1, 0))
+          == 0 && strcmp(inst_summary_head(1, 0, 0, 0),
+                         inst_confirm_text(1, 0, 0, 0)) == 0,
+          "a device run: the install's own line");
+}
+
 /* ---- record 26 sections 9.1 and 9.2: the entry, the relaunch ------------ */
 
 static void test_uninstall_entry(void)
@@ -3284,21 +3447,36 @@ static void test_s98(void)
         int def;
         argv1[0] = "x";
         argv1[1] = "/stor98";
-        CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Stor98,
-              "/stor98");
+        CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 1 &&
+              strstr(err, "/thunderbolt") != NULL,
+              "/stor98 alone: refused, it needs /thunderbolt");
+        argv1[2] = "/thunderbolt";
+        CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
+              o.Stor98 && o.Thunderbolt, "/stor98 /thunderbolt");
+        argv1[2] = "/cmonly";
+        CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
+              o.Stor98 && o.CmOnly, "/stor98 /cmonly: the support is in the "
+              "run");
         argv1[2] = "/uninstall";
         CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
               "/stor98 belongs to an install");
-        CHECK(!inst_s98_decide(1, 0, 0, 0, &asked, &def) && asked && !def,
+        CHECK(!inst_s98_decide(1, 1, 0, 0, 0, &asked, &def) && asked && !def,
               "asked, Enter gives N");
-        CHECK(!inst_s98_decide(1, 1, 0, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(1, 1, 1, 0, 0, &asked, &def) && !asked,
               "/yes: N, not asked");
-        CHECK(inst_s98_decide(1, 1, 1, 0, &asked, &def) && !asked,
+        CHECK(inst_s98_decide(1, 1, 1, 1, 0, &asked, &def) && !asked,
               "/stor98: installed unasked");
-        CHECK(!inst_s98_decide(0, 0, 1, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(0, 1, 0, 1, 0, &asked, &def) && !asked,
               "no Stor98 in the package: nothing");
-        CHECK(!inst_s98_decide(1, 0, 0, 1, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(1, 1, 0, 0, 1, &asked, &def) && !asked,
               "/list asks nothing");
+        CHECK(!inst_s98_decide(1, 0, 0, 0, 0, &asked, &def) && !asked &&
+              !inst_s98_decide(1, 0, 1, 1, 0, &asked, &def) && !asked,
+              "no Thunderbolt support in the run: Stor98 neither asked nor "
+              "installed");
+        CHECK(inst_s98_box_open(1, 1, 1) && !inst_s98_box_open(1, 1, 0) &&
+              !inst_s98_box_open(1, 0, 1) && !inst_s98_box_open(0, 1, 1),
+              "the window's box: open only under a ticked Thunderbolt box");
         CHECK(strcmp(inst_final_text_cold(INST_FINAL_RESTART, 1),
                      "Changes were made. Please shut down and start Windows "
                      "again.") == 0 &&
@@ -3379,13 +3557,71 @@ static void test_marks(void)
               "the mark service: Windows 2000 to 8.1 (8 and 8.1 for the "
               "connection manager alone)");
     }
-    CHECK(inst_mk_end_action(1, 1, 1) == INST_MK_INSTALL &&
-          inst_mk_end_action(1, 0, 1) == INST_MK_LEAVE &&
-          inst_mk_end_action(1, 1, 0) == INST_MK_LEAVE &&
-          inst_mk_end_action(0, 1, 1) == INST_MK_REMOVE &&
-          inst_mk_end_action(0, 0, 0) == INST_MK_REMOVE &&
-          inst_mk_end_action(-1, 1, 1) == INST_MK_LEAVE,
+    CHECK(inst_mk_end_action(1, 1, 1, 1) == INST_MK_INSTALL &&
+          inst_mk_end_action(1, 0, 1, 1) == INST_MK_LEAVE &&
+          inst_mk_end_action(1, 1, 0, 1) == INST_MK_LEAVE &&
+          inst_mk_end_action(0, 1, 1, 1) == INST_MK_REMOVE &&
+          inst_mk_end_action(0, 0, 0, 1) == INST_MK_REMOVE &&
+          inst_mk_end_action(-1, 1, 1, 1) == INST_MK_LEAVE,
           "a run's end: the service with xhcicm, every mark gone without it");
+    CHECK(inst_mk_end_action(1, 1, 1, 0) == INST_MK_REMOVE &&
+          inst_mk_end_action(1, 0, 1, 0) == INST_MK_REMOVE &&
+          inst_mk_end_action(1, 1, 0, 0) == INST_MK_REMOVE &&
+          inst_mk_end_action(0, 1, 1, 0) == INST_MK_REMOVE &&
+          inst_mk_end_action(-1, 1, 1, 0) == INST_MK_LEAVE,
+          "a run's end with XhciCmSafeEject 0: no service, every mark gone "
+          "(a run that set it without the Thunderbolt component too)");
+    {
+        static const char *const gone[] = { "xhci98", "xhcicm" };
+
+        CHECK(inst_cddb_service_gone("xhcicm", gone, 2) &&
+              inst_cddb_service_gone("XHCI98", gone, 2) &&
+              !inst_cddb_service_gone("xhciuas", gone, 2) &&
+              !inst_cddb_service_gone("pci", gone, 2) &&
+              !inst_cddb_service_gone("usbxhci", gone, 2) &&
+              !inst_cddb_service_gone("xhcicmx", gone, 2) &&
+              !inst_cddb_service_gone("", gone, 2) &&
+              !inst_cddb_service_gone(NULL, gone, 2) &&
+              !inst_cddb_service_gone("xhcicm", gone, 0) &&
+              !inst_cddb_service_gone("xhcicm", NULL, 2),
+              "a CriticalDeviceDatabase entry goes only when its Service is a "
+              "service of this package the run removed (case ignored), never "
+              "another driver's");
+    }
+    {
+        INST_VNOW n0[2];
+        INST_VNOW n1[2];
+        INST_VNOW nn[1];
+
+        n0[0].State = 1;
+        n0[0].Value = 0;
+        n0[0].Desc = "a";
+        n0[1] = n0[0];
+        n1[0] = n0[0];
+        n1[1].State = 1;
+        n1[1].Value = 1;
+        n1[1].Desc = "b";
+        nn[0].State = 0;
+        nn[0].Value = 0;
+        nn[0].Desc = "c";
+        CHECK(inst_mk_safe_eject(1, 0, n1, 2) == 0 &&
+              inst_mk_safe_eject(1, 1, n0, 2) == 1 &&
+              inst_mk_safe_eject(1, 2, n0, 2) == 1,
+              "safe eject in force: the machine-wide value wins over every "
+              "device's own");
+        CHECK(inst_mk_safe_eject(-1, 0, n0, 2) == 1,
+              "safe eject in force: a machine-wide value not a DWORD is the "
+              "driver's default 1");
+        CHECK(inst_mk_safe_eject(0, 0, n0, 2) == 0 &&
+              inst_mk_safe_eject(0, 0, n1, 2) == 1 &&
+              inst_mk_safe_eject(0, 0, nn, 1) == 1,
+              "safe eject in force with no machine-wide value: 0 only when "
+              "every device holds 0; one not set is the default 1");
+        CHECK(inst_mk_safe_eject(0, 0, NULL, 0) == 1 &&
+              inst_mk_safe_eject(0, 0, n0, 0) == 1,
+              "safe eject in force with no device and no machine-wide value: "
+              "the default 1");
+    }
 
     /* The confirmation, against cm_query.h's layout. */
     CHECK(INST_QC_BYTES == CM_QC_BYTES && CM_QC_O_GEN + 4 == CM_QC_BYTES,
@@ -3469,6 +3705,9 @@ int main(void)
     test_to_switch();
     test_di_helper();
     test_mw_values();
+    test_greyed();
+    test_summary_head();
+    test_uas();
     test_uninstall_entry();
     test_page_texts();
     test_s98();
