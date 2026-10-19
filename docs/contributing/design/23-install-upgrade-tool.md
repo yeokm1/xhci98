@@ -1,6 +1,13 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 22, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
+Status: revision 23, 2026-10-19 (the fix round of that night, owner:
+on 98 SE and ME the bundled Stor98 is updated as a file through
+`WININIT.INI`, never by reinstalling a running device, section 4.4 and
+record 26 draft 16; Stor98 chosen with the Thunderbolt 3 / USB4
+support, `/nostor98`, section 7.1; that support experimental and never
+ticked or answered Y unasked, section 8.5; no Stor98 install record
+without a Stor98 change; the `XhciCmMode` 0 warning, section 8.3);
+revision 22, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
 for the command line; see below); revision 21, 2026-10-19 (the x64 package's filter INF at the
 flavour directory's root; see below); revision 20, 2026-10-19 (the 98 SE
 and ME uninstall removes SETUPX's `OEM Name` record of each INF copy it
@@ -603,12 +610,17 @@ package has none),
 never another subdirectory, and it leaves out every file whose name
 starts with `stor98` (`inst_bundled_file`) unless Stor98 is in the run,
 because a copy of `stor98.inf` on `DevicePath` or in the driver store
-would have Windows offer Stor98 unasked. Stor98 is in the run only when
+would have Windows offer Stor98 when nobody chose it. Stor98 is in the run only when
 it is chosen (its box, the console's question, `/stor98`) **and** the
 Thunderbolt component is, which Stor98 is part of (revision 16,
 `inst_s98_box_open`, the window's rule for its box, which the engine's
 `s98_set` applies too): the engine keeps it out otherwise, and the
-console says so and asks nothing.
+console says so and asks nothing. Since revision 23 (owner, 2026-10-19,
+replacing "never unasked" of 2026-10-18) it is chosen with that
+component: its box is ticked whenever the Thunderbolt box is, and can be
+unticked; the console's question answers Y on Enter and under `/yes`,
+and `/nostor98` leaves it out (section 7.1, `inst_s98_decide`). The
+Thunderbolt component itself is never chosen unasked (section 8.5).
 
 In the run, the tool installs, updates and reconfigures Stor98 only on
 an NVMe drive behind a Thunderbolt or USB4 tunnel. Where a drive sits is
@@ -647,10 +659,17 @@ drive the gate leaves is refused too, with that sentence.
 `stor98.sys` (2000 to 7) or `stor98.mpd` (98 SE and ME) and reads one
 service's settings, so a change made for a tunnel drive reaches an
 internal drive on Stor98 as well. A device bound to Stor98 counts as
-another when it is not a known tunnel drive: present and not behind a
-tunnel, or not present and not named by the install record (an
-unreadable record names none); on 98 SE and ME every driver key naming
-`stor98.mpd` is read for it, present or not. With another, the
+another when it is not a known tunnel drive (`inst_s98_known_tunnel`):
+present and not behind a tunnel, or, on NT, not present and not named
+by the install record (an unreadable record names none); on 98 SE and
+ME every driver key naming `stor98.mpd` is read for it, present or not,
+and since revision 23 one with no present devnode is a drive gone with
+its tunnel, not another: an internal drive there is always present, and
+the uninstall's adoption reads a drive that is not present the same way
+(record 26 section 6.3). So on those systems an enclosure that is not
+plugged in no longer holds Stor98 at its old release for ever (the 98 SE
+update of 2026-10-19 left `stor98.mpd` at `0.4.0.0` with the enclosure
+absent). With another, the
 conservative choice is taken (`inst_s98_share`): when the installed file
 is another release than the bundled one, or cannot be read, the run
 makes **no Stor98 change at all** - `stor98.inf` is not staged, no
@@ -666,6 +685,32 @@ drive is matched to the record through its `Enum\PCI` entry. On NT
 another build of it is in the driver store and another Stor98 exists.
 The devnode of an internal drive on Stor98 is never updated or
 reconfigured by the tool.
+
+**98 SE and ME: the file, never a running device** (revision 23; owner,
+2026-10-19). Replacing a running `stor98.mpd` through Windows' device
+installer stopped 98 SE with "fatal exception 0E at 0028:FF09E842",
+every time, in the update over `3.0.0.0` and Stor98 `0.4.0.0` with a
+tunnel enclosure attached and mounted (the helper had run
+`DIF_SELECTBESTCOMPATDRV` and `CtlSetLddPath`). So on those systems a
+device Stor98 runs is never installed again, whatever the plan says of
+it (an update, a repair, `/force`). When the installed
+`IOSUBSYS\stor98.mpd` is an older release than the bundled one and the
+shared-file rule leaves the file free (`inst_s98_file_update`), the run
+replaces the file instead, whether or not a drive is present: the new
+`stor98.mpd` is written beside the old one as `STOR98.TMP` and compared
+with the package's, and its swap is asked in `WININIT.INI`'s `[rename]`
+section with 8.3 names, the mechanism the setup engine uses for a
+running `xhci98.sys` (read back by `wininit_pending`); the INF copy each
+Stor98 driver key names, in `INF` or `INF\OTHER`, is made the bundled
+`stor98.inf` (`s98_inf_refresh_9x`), and the install directory's copy
+is the package's through the flat copy. The run then asks for a shut
+down and a start, not a restart. A drive first plugged after that start
+binds to the new file by itself. The update waits for the user's word,
+one box on the Summary page and one question in the console, both
+"Please disconnect all external NVMe drives before proceeding" (Enter
+and `/yes` give N); without it Stor98 is left for a later run (exit 4).
+A device with no driver behind a tunnel is still installed by the
+helper. NT is unchanged: SetupAPI updates Stor98 there.
 
 What remains, said in the release notes and the package's readme:
 `stor98.inf` matches every NVMe controller (`PCI\CC_010802`), and it is
@@ -1540,7 +1585,8 @@ these systems.
 | `/force` | reinstall a current device, and install over a newer group (section 5.4) |
 | `/thunderbolt` | include the Thunderbolt 3 / USB4 support without asking (section 8.5) |
 | `/cmonly` | (revision 13) the connection manager alone: the USB drivers left out of the run, the Thunderbolt support in it unasked (section 4.5); refused on 98 SE and ME, with `/uninstall`, `/devices` and `/eject`, and where the package carries no connection manager; on 8 and 8.1 every install run is one |
-| `/stor98` | include the bundled Stor98 without asking (record 26 section 6.4); refused without `/thunderbolt` or `/cmonly`, since Stor98 is part of the Thunderbolt 3 / USB4 support (owner, 2026-10-19), and with `/uninstall`, `/devices` and `/eject`; never offered on 8 and 8.1 |
+| `/stor98` | include the bundled Stor98 without asking (record 26 section 6.4); refused without `/thunderbolt` or `/cmonly`, since Stor98 is part of the Thunderbolt 3 / USB4 support (owner, 2026-10-19), and with `/uninstall`, `/devices` and `/eject`; never offered on 8 and 8.1. Since revision 23 it is what `/thunderbolt /yes` does anyway |
+| `/nostor98` | (revision 23) leave the bundled Stor98 out of a run that has the Thunderbolt support. The console follows the window: Stor98 is chosen with the Thunderbolt support (owner, 2026-10-19), so `/thunderbolt` alone implies Stor98 - asked with Enter for Y, unasked under `/yes` - unless `/nostor98` is given; `/thunderbolt` itself stays explicit (section 8.5). Refused with `/stor98`, `/uninstall`, `/devices` and `/eject` |
 | `/to <path>` | the install directory (section 9.6) without asking; refused with `/uninstall`, `/devices` and `/eject`, and checked as a typed answer is (a path that fails refuses the run, exit 1) |
 | `/nouas` | leave the UAS disk driver out of the run (owner, 2026-10-19; record 26 section 5.3): `xhciuas.inf` neither staged nor installed, nor copied to `DevicePath` on 98 SE and ME, and an `xhciuas` already installed left as it is; refused with `/uninstall`, `/devices` and `/eject` |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
@@ -1803,6 +1849,13 @@ after changing it; `XhciForceBulkOnly` is read as each device is connected, and 
 2000 and later a disk already installed keeps its driver until it is
 uninstalled in Device Manager and plugged in again; `XhciInterruptMode` 1
 and 3 refuse a controller Windows gives no line or no message.
+**Revision 23 (owner, 2026-10-19):** a run that will write `XhciCmMode`
+0 says so before its confirmation, "*** Thunderbolt 3 and USB4 will be
+turned off (XhciCmMode 0). ***", and the window's Summary carries the
+same line at the head of its list (record 26 section 5.7;
+`inst_cm_mode_off`, `instCmOffText`): on real hardware that night an
+accidental mouse-wheel change set it to 0 and turned Thunderbolt off
+with nothing said.
 Two controllers with different values are listed apart and asked once: the
 answer goes to both. Enter keeps each device's value. An answer outside the
 allowed set is asked again; end of input keeps every value.
@@ -1854,12 +1907,23 @@ host-tested case by case):
 
 | Situation | Asked | Enter, and `/yes` |
 |---|---|---|
-| a device `xhcicm.inf` matches is present (section 8.2's detection) | yes | Y |
+| a device `xhcicm.inf` matches is present (section 8.2's detection) | yes, the controller named | N (revision 23; Y until then) |
 | none is present | yes - some laptops show their controller only while a device is plugged in, or only with a BIOS setting (the P14s with Assist on and pre-boot support off) | N |
 | `/thunderbolt` | no | Y, present or not |
 | the USB drivers out of the run (`/cmonly`, Windows 8 and 8.1; revision 13, section 4.5) | no | Y, present or not |
 | `/list` | no; the question and its default are shown | the default |
 | the package carries no Thunderbolt driver | no | - |
+
+**Revision 23 (owner, 2026-10-19):** the support is labelled
+"(experimental)" in the question's heading and on the window's box, and
+is never chosen unasked: Enter and `/yes` give N whether or not a
+controller is found, and `/thunderbolt` (or the window's box) is the
+way in. The heading's next line says whether a controller was found,
+"A Thunderbolt 3 / USB4 controller was found: <name>", or that none was
+and why that can be. The connection manager alone (`/cmonly`, 8 and
+8.1) is unchanged: there the support is all the run installs. An update
+over an install that has `xhcicm` therefore leaves it out unless asked,
+and N keeps the installed Thunderbolt driver as it is (below).
 
 The text says, in plain terms, that a device plugged into that port is then
 approved automatically and can reach the computer's memory, names

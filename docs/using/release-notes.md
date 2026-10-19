@@ -192,8 +192,46 @@ as they are made; the head of this file is rewritten when it is cut.
   tool read it through the same door. Where a section below names
   `XHCISNAP`'s report, read the snapshot in the tool's report: the same
   text, from the same code.
+- **The Thunderbolt 3 / USB4 support is experimental, and never chosen
+  for you.** Its box on the Components page reads "Thunderbolt 3 / USB4
+  support (experimental)" and is unticked whether or not a controller is
+  found; the line under it says whether one was found, and its name.
+  Tick it on purpose; the console asks with Enter for N, `/yes` leaves
+  it out, and `/thunderbolt` includes it. The connection manager alone
+  (USB drivers unticked, and Windows 8 and 8.1) is unchanged. An update
+  over an install that has the Thunderbolt driver leaves that driver as
+  it is unless you tick the box.
+- **Stor98 comes with the Thunderbolt 3 / USB4 support.** Ticking the
+  Thunderbolt box ticks the Stor98 box under it, which you can untick;
+  in the console `/thunderbolt` includes Stor98 too (asked, Enter for Y;
+  unasked with `/yes`), and `/nostor98` leaves it out.
+- **Windows 98 SE and ME: Stor98 is updated as a file.** An older
+  `stor98.mpd` is no longer replaced by reinstalling the drive while
+  Stor98 runs it, which stopped Windows 98 SE with "fatal exception 0E"
+  when an update ran with a Thunderbolt or USB4 enclosure attached. The
+  installer writes the new file beside the old one and has Windows swap
+  them at the next start (`WININIT.INI`), refreshes the copy of
+  `stor98.inf` Windows keeps, and asks you to shut down and start
+  Windows again. It does so whether or not the enclosure is plugged in,
+  so an enclosure that was unplugged during the update no longer keeps
+  the old Stor98. The Summary page asks for one tick first, "Please
+  disconnect all external NVMe drives before proceeding" (the console
+  asks the same, Enter for N); unticked, Stor98 is left for a later run.
+  A drive first plugged after the start binds to the new Stor98. And an
+  install the helper could not finish is now reported as unfinished,
+  with steps, rather than as "nothing to do".
+- **No Stor98 record without a Stor98 change.** A run that leaves a
+  Stor98 installed by hand alone no longer writes
+  `HKLM\Software\xhci98\Stor98`; its `Version` is written only when the
+  run installed or updated the bundled Stor98. The uninstall removes
+  that key, and `Software\xhci98` when nothing else is in it, also when
+  Stor98 itself stays.
+- **A warning before Thunderbolt 3 and USB4 are turned off.** When a run
+  will write `XhciCmMode` `0`, the Summary page and the console say
+  "Thunderbolt 3 and USB4 will be turned off (XhciCmMode 0)".
 - **The bundled Stor98 goes on tunnel drives only.** The installer
-  installs Stor98 only when asked (its box) and only with
+  installs Stor98 only when it is chosen (its box, ticked with the
+  Thunderbolt 3 / USB4 one) and only with
   the Thunderbolt 3 / USB4 support in the same run, and then only on NVMe
   drives behind a Thunderbolt or USB4 tunnel, as the connection manager
   reports them; the installer selects tunnel drives only. An internal NVMe
@@ -670,11 +708,13 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmLogVerbosity` | `2` | The driver's log, on the same `0`-`4` ladder as `xhci98.sys`'s `XhciLogVerbosity`; read by the xHCI98 USB Tree |
 | `XhciCmLogDebugView` | `0` | `1` sends the driver's log to DebugView as well, in every build (the `debug` build always does) |
 
-The install tool asks "Install Thunderbolt 3 / USB4 support?": Enter
-answers Y with a Thunderbolt or USB4 controller present and N with none
-found (a laptop may show its controller only while a device is plugged
-in); `INSTALL /thunderbolt` includes it without asking, and N leaves a
-Thunderbolt driver already installed as it is.
+The install tool asks "Install Thunderbolt 3 / USB4 support?": from
+`3.1.0.0` Enter and `/yes` answer N whether or not a Thunderbolt or USB4
+controller is present (the support is experimental; up to `3.0.0.0`
+Enter answered Y with a controller present), and the tool says whether
+it found one (a laptop may show its controller only while a device is
+plugged in); `INSTALL /thunderbolt` includes it without asking, and N
+leaves a Thunderbolt driver already installed as it is.
 
 `INSTALL.BAT` asks about `XhciCmMode`, `XhciCmApprove` and
 `XhciCmSafeEject` where a Thunderbolt or USB4 controller is present. It
@@ -2092,11 +2132,12 @@ and down, and Stor98 runs the drive.
 
 Its readme is its install guide and lists its known limits; read it
 before installing. The `debug-` directories do not carry it.
-`SETUP.EXE` installs it only when asked, as part of the Thunderbolt 3 /
-USB4 support (its box under the Thunderbolt 3 / USB4 one on the Components
-page, which needs that one ticked too), and only on NVMe drives behind a
-Thunderbolt or USB4 tunnel ("What `3.1.0.0` changes"), and updates an
-older Stor98 on such a drive; an internal NVMe drive is installed by hand,
+`SETUP.EXE` installs it as part of the Thunderbolt 3 / USB4 support (its
+box under the Thunderbolt 3 / USB4 one on the Components page, ticked
+with that one and needing it ticked; untick it to leave Stor98 out), and
+only on NVMe drives behind a Thunderbolt or USB4 tunnel ("What `3.1.0.0`
+changes"), and updates an older Stor98 on such a drive (on Windows 98 SE
+and ME as a file, at the next start, after a shut down); an internal NVMe drive is installed by hand,
 as below. Stor98's INF matches every NVMe controller, so Windows may still
 offer it for an internal NVMe drive that has no driver.
 

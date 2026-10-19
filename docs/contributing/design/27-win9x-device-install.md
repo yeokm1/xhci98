@@ -1,6 +1,10 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 8, 2026-10-19 (task 42-A.27, section 6: the settle after a
+Status: draft 9, 2026-10-19 (the fix round of that night: a helper that
+did not finish is an unfinished install with steps, exit 4, never a
+failure of the device and never "nothing to do", sections 4.1 and 4.2;
+and the installer never runs a job on a device Stor98 runs, record 26
+section 6.3 draft 16); draft 8, 2026-10-19 (task 42-A.27, section 6: the settle after a
 parent's job
 within a pass, and a device a parent's job hid tried once more, record 23
 section 5.8 revision 14, from the 98 SE update leg with an external hub);
@@ -398,7 +402,8 @@ process handle with a one-second timeout in the window
 (`WaitForSingleObject` with the same timeout in the console tool), and at
 each tick reads the result file for its `END` line. The outcomes: the
 handle signalled and `END` present is a finished job; signalled without
-`END` is "the helper did not finish", a failure of that device; `END`
+`END` is "the helper did not finish", an unfinished install of that
+device with its steps (draft 9; a failure until then); `END`
 present with the process still alive is waited for up to 60 s more; a
 process still alive after that (the probe having shown the handle does
 signal here) ends the helper's part of this run: the job is reported
@@ -448,8 +453,10 @@ no `END`, a count that differs, a version that is not the installer's, a
 `JOB` that is not the one started (the job file's `JOB`, `DEVICE` and
 `INF` records, in that order, as section 4.4 says), or an unknown verdict
 is "the helper
-did not finish", reported as a failure of that device with the steps page
-(record 26 section 7). The installer copies every line into its log.
+did not finish", reported as an unfinished install of that device with
+the steps page (record 26 section 7, draft 16: the steps flag, exit 4,
+and steps that say to shut down, start Windows and run the installer
+again, never "nothing to do"). The installer copies every line into its log.
 
 ### 4.3 What the helper never does
 
