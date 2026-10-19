@@ -2050,8 +2050,10 @@ and down, and Stor98 runs the drive.
 
 Its readme is its install guide and lists its known limits; read it
 before installing. The `debug-` directories do not carry it.
-`INSTALL.BAT` installs it when asked (its box on the Components page, or
-`/stor98`) and updates an older Stor98.
+`INSTALL.BAT` installs it when asked, as part of the Thunderbolt 3 / USB4
+support (its box under the Thunderbolt 3 / USB4 one on the Components
+page, which needs that one ticked too, or `/thunderbolt /stor98`) and
+updates an older Stor98.
 
 When the drive's NVMe controller (`PCI\CC_010802`) shows in Device
 Manager without a driver, Update Driver, Have Disk, and point it at:

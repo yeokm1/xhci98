@@ -56,8 +56,10 @@ disk is not.)
 
 INSTALLING
 
-The xhci98 installer (INSTALL.BAT) installs Stor98 when it is asked to
-(its box on the Components page, or /stor98), and updates an earlier
+The xhci98 installer (INSTALL.BAT) installs Stor98 when it is asked to,
+as part of the Thunderbolt 3 / USB4 support: its box sits under the
+Thunderbolt 3 / USB4 one on the Components page, which must be ticked
+too, or on the command line /thunderbolt /stor98. It updates an earlier
 Stor98 the same way. By hand:
 
 Windows 98 SE / ME

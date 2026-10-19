@@ -111,7 +111,7 @@ An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **
 
 - The package carries Stor98 in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). It reads `xhcicm.sys`'s link-state channel on every system, 98 SE to 7.
 - Stor98's settings, install steps and limits are in its own readme, `stor98-readme.txt` beside it. The release notes have [the detail](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).
-- `INSTALL.BAT` installs it when asked (its box on the Components page, or `/stor98`), and updates an earlier one, Stor98 `0.4.0.0` included. Otherwise, when the NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
+- `INSTALL.BAT` installs it when asked (its box under the Thunderbolt 3 / USB4 one on the Components page, which needs that one ticked too, or `/thunderbolt /stor98`), and updates an earlier one, Stor98 `0.4.0.0` included. Otherwise, when the NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
 
 ### Things to know
 
