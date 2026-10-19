@@ -159,9 +159,12 @@ and ME; a windows-subsystem program opens none. `SETUP.EXE`
   named `SETUP.EXE` for an installer, asked "This program might not have
   installed correctly" once the window closed (read in a Windows 7
   guest, 2026-10-19).
-- Its message box is topmost and asks for the foreground: after a
-  declined elevation prompt a plain one opened behind the Explorer
-  window it was started from (read in the same guest).
+- An empty popup of no size, made the foreground window while
+  `SETUP.EXE` still has the right Explorer's start gave it, owns the
+  elevation prompt (`SHELLEXECUTEINFO.hwnd`) and the message box: a
+  declined prompt hands the foreground back to its owner, and with none
+  it went to Explorer, so the message opened behind Explorer's window,
+  even topmost (read in the same guest).
 - A missing window, a path it cannot read, or a failed start is a message
   box naming the problem; the elevation declined (`ERROR_CANCELLED`) has
   its own text. It returns 0 once the window is started and 1 otherwise:
