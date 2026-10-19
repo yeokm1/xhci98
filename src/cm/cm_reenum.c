@@ -817,6 +817,37 @@ static BOOLEAN cmEjectReady(PCM_FILTER bridge)
     return TRUE;
 }
 
+BOOLEAN CmRegStartAllowed(PCM_FILTER filter)
+{
+    KIRQL irql;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    PCM_NHI held;
+    ULONG i;
+
+    held = NULL;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (e = cmRegFilters.Flink; e != &cmRegFilters && held == NULL;
+         e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
+        if (!f->EjectHold) {
+            continue;
+        }
+        for (i = 0; i < f->SnapCount; i++) {
+            if (f->Snap[i] == (PVOID)filter->Common.Pdo) {
+                held = f->Owner;
+                break;
+            }
+        }
+    }
+    if (held != NULL) {
+        /* The owner is used under the lock only, as its other notes are. */
+        CmLogNote(held, "cm.reenum.eject.start-refused", f->Bdf);
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return (BOOLEAN)(held == NULL);
+}
+
 /* ---- the marks (record 21 section 7.4, revision 3; task 42-A.5) ------- */
 
 /* The domain's clock as its thread last set it, never 0 (a departure's
@@ -2446,6 +2477,12 @@ VOID CmReenumService(PCM_NHI nhi)
             stale |= 1UL << i;
         } else {
             taken = 1;
+            if (r->EjectHook != NULL) {
+                /* Held with the eligibility, under the lock: a function
+                 * found stackless here cannot start before its tunnel is
+                 * torn down (CmRegStartAllowed). */
+                f->EjectHold = 1;
+            }
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
@@ -2460,7 +2497,17 @@ VOID CmReenumService(PCM_NHI nhi)
         r->Ejects++;
         CmLogNote(nhi, "cm.reenum.eject", r->Port[i].Bdf);
         if (r->EjectHook != NULL) {
+            PLIST_ENTRY e;
+
             r->EjectHook(r->EjectContext, r->Port[i].Bdf);
+            KeAcquireSpinLock(&cmRegLock, &irql);
+            for (e = cmRegFilters.Flink; e != &cmRegFilters; e = e->Flink) {
+                f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
+                if (f->Bdf == r->Port[i].Bdf) {
+                    f->EjectHold = 0;
+                }
+            }
+            KeReleaseSpinLock(&cmRegLock, irql);
         } else {
             /* Under the firmware connection manager there is no
              * per-device teardown: the tunnel stays up and the user
