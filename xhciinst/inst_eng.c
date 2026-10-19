@@ -14243,6 +14243,10 @@ static int s98_un_service(void)
         out("(/list) Stor98's service, its driver file and its recorded "
             "settings would be\nremoved when no device is bound to it and "
             "none was there before.\n");
+        r = s98_bound_any();
+        if (r == 0 && inst_s98_service_removable(0, s98Pre)) {
+            svc_gone("stor98");     /* its database entries in the preview */
+        }
         return 1;
     }
     r = s98_bound_any();
