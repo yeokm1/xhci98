@@ -405,6 +405,13 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow)
 BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN live,
                            BOOLEAN *missed, BOOLEAN *vanish, BOOLEAN *fresh)
 {
+    if (gateUp && !live) {
+        /* The loss's own call behind the gate: an obligation of its own,
+         * made once the gate falls whatever the transport, and never the
+         * ordinary held work's (CmNvlinkHoldRun). */
+        *held = *held | CM_HELD_LOSS;
+        return TRUE;
+    }
     if (gateUp) {
         *held = *held | CM_HELD_REENUM | (*vanish ? CM_HELD_VANISH : 0) |
                 (*fresh ? CM_HELD_FRESH : 0);
@@ -452,6 +459,20 @@ ULONG CmNvlinkHoldRun(PULONG held, BOOLEAN gateUp, BOOLEAN live,
          * the release). */
         act |= CM_HELD_DO_RELEASE | ((h & CM_HELD_FAIL) ? CM_HELD_DO_FAIL : 0);
         h &= ~(CM_HELD_RELEASE | CM_HELD_FAIL);
+    }
+    if (h & CM_HELD_LOSS) {
+        /* The loss's call (NT's unavailable reconciliation) waits for the
+         * gate alone: made now, removing vanished children with no
+         * exposure, unless a held re-enumeration runs in this pass and
+         * carries the removal itself. */
+        h &= ~CM_HELD_LOSS;
+        if (reenumOn && active) {
+            if ((h & CM_HELD_REENUM) != 0 && live) {
+                h |= CM_HELD_VANISH;
+            } else {
+                act |= CM_HELD_DO_LOSS;
+            }
+        }
     }
     if ((h & CM_HELD_REENUM) != 0 && reenumOn && !live) {
         /* The re-enumeration waits for the transport. */

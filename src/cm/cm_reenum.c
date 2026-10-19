@@ -1798,10 +1798,10 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
     before = r->Port[i].Held;
     up = CmNvlinkHeld(nhi, r->Port[i].Bdf);
     if (up) {
-        if (*expose) {
+        if (*expose && live) {
             (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, *fresh, tunnel);
         }
-        if ((before & CM_HELD_REENUM) == 0) {
+        if ((before & (CM_HELD_REENUM | CM_HELD_LOSS)) == 0) {
             r->Holds++;
             CmLogNote(nhi, "cm.reenum.held", r->Port[i].Bdf);
         }
@@ -1810,9 +1810,13 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
     if (CmNvlinkHoldReenum(&r->Port[i].Held, up, live, &missed,
                            removeVanished, fresh)) {
         /* Its publication mode held with it (record 22 section 7.7, U25):
-         * exposing if this call or an owed change it took in exposes. */
-        r->Port[i].HeldExpose |= (*expose || r->Port[i].MissedExpose) ? 1UL
-                                                                      : 0UL;
+         * exposing if this call or an owed change it took in exposes. The
+         * loss's call (CM_HELD_LOSS) exposes nothing and changes no mode. */
+        if (live) {
+            r->Port[i].HeldExpose |= (*expose || r->Port[i].MissedExpose)
+                                         ? 1UL
+                                         : 0UL;
+        }
         return TRUE;
     }
     if (!live) {
@@ -2491,6 +2495,14 @@ VOID CmReenumService(PCM_NHI nhi)
         if (act & CM_HELD_DO_RELEASE) {
             cmReleaseHeld(nhi, (BOOLEAN)((act & CM_HELD_DO_FAIL) != 0),
                           1UL << i);
+        }
+        if ((act & CM_HELD_DO_LOSS) && (nhi->RecBarred & (1UL << i)) == 0) {
+            /* The loss's own call held behind the gate (NT's unavailable
+             * reconciliation): the removal alone, whatever the transport;
+             * behind the retirement barrier its removal-only request is
+             * that member's instead. */
+            cmReenumOne(nhi, i, TRUE, FALSE, CM_NVLINK_TUNNEL_NONE, FALSE,
+                        FALSE);
         }
         if (act & CM_HELD_DO_REENUM) {
             /* An owed skipped change paid by this call too: its marking

@@ -733,6 +733,7 @@ typedef struct _SEAM {
     ULONG Fresh[2];
     ULONG Releases[2];
     ULONG Fails[2];
+    ULONG Losses[2];
 } SEAM;
 
 static void seamActionOn(SEAM *s, ULONG i, BOOLEAN gate, BOOLEAN live,
@@ -764,6 +765,9 @@ static ULONG seamPass(SEAM *s, ULONG i, BOOLEAN gate, BOOLEAN live,
     if (act & CM_HELD_DO_RELEASE) {
         s->Releases[i]++;
         s->Fails[i] += (act & CM_HELD_DO_FAIL) ? 1 : 0;
+    }
+    if (act & CM_HELD_DO_LOSS) {
+        s->Losses[i]++;
     }
     if (act & CM_HELD_DO_REENUM) {
         s->Calls[i]++;
@@ -893,10 +897,44 @@ static void test_hold(void)
     CHECK_EQ(s.Calls[0], 2, "once");
     CHECK(!s.Missed[0] && s.Held[0] == 0, "both paid");
     CHECK(s.Vanish[0] == 2 && s.Fresh[0] == 1, "fresh, removing vanished");
-    /* Lost with the gate up: held as ever. */
+    /* Lost with the gate up: the loss's call held apart from the ordinary
+     * work, and made once the gate falls though the transport stays lost
+     * (a recovery that fails, a host left contained). */
     seamActionOn(&s, 0, TRUE, FALSE, TRUE, FALSE);
-    CHECK_EQ(s.Calls[0], 2, "gate up and lost: held");
-    CHECK(s.Held[0] & CM_HELD_REENUM, "held");
+    CHECK_EQ(s.Calls[0], 2, "gate up and lost: no call");
+    CHECK_EQ(s.Held[0], CM_HELD_LOSS, "the loss's call held alone");
+    CHECK_EQ(seamPass(&s, 0, TRUE, FALSE, TRUE), 0, "gate up: kept");
+    CHECK_EQ(seamPass(&s, 0, FALSE, FALSE, TRUE), CM_HELD_DO_LOSS,
+             "gate down, still lost: the removal made");
+    CHECK_EQ(s.Losses[0], 1, "once");
+    CHECK_EQ(s.Held[0], 0, "nothing left");
+    CHECK_EQ(seamPass(&s, 0, FALSE, FALSE, TRUE), 0, "never twice");
+    /* With ordinary work held too: the removal goes alone while lost, the
+     * work stays for the transport. */
+    memset(&s, 0, sizeof(s));
+    seamAction(&s, 0, TRUE, FALSE, TRUE);
+    seamActionOn(&s, 0, TRUE, FALSE, TRUE, TRUE);
+    CHECK_EQ(s.Held[0], CM_HELD_REENUM | CM_HELD_FRESH | CM_HELD_LOSS,
+             "both held, apart");
+    CHECK_EQ(seamPass(&s, 0, FALSE, FALSE, TRUE), CM_HELD_DO_LOSS,
+             "lost: the removal alone");
+    CHECK_EQ(s.Held[0], CM_HELD_REENUM | CM_HELD_FRESH, "the work kept");
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), CM_HELD_DO_REENUM,
+             "back: the work");
+    CHECK(s.Vanish[0] == 0 && s.Fresh[0] == 1, "its own flags");
+    /* The gate falls with the transport back: one call carries both. */
+    memset(&s, 0, sizeof(s));
+    seamAction(&s, 0, TRUE, FALSE, TRUE);
+    seamActionOn(&s, 0, TRUE, FALSE, TRUE, TRUE);
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), CM_HELD_DO_REENUM,
+             "back: one call");
+    CHECK_EQ(s.Losses[0], 0, "no separate removal");
+    CHECK(s.Vanish[0] == 1 && s.Fresh[0] == 1, "removing and fresh");
+    /* Not active when the gate falls: nothing to remove through. */
+    memset(&s, 0, sizeof(s));
+    seamActionOn(&s, 0, TRUE, FALSE, TRUE, TRUE);
+    CHECK_EQ(seamPass(&s, 0, FALSE, FALSE, FALSE), 0, "inactive: dropped");
+    CHECK_EQ(s.Held[0], 0, "nothing left");
 }
 
 /*

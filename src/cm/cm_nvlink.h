@@ -505,12 +505,14 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow);
 #define CM_HELD_FRESH       0x04UL  /* ... a fresh exposure               */
 #define CM_HELD_RELEASE     0x08UL  /* NT: its held D0 requests' release  */
 #define CM_HELD_FAIL        0x10UL  /* ... on the failure path            */
+#define CM_HELD_LOSS        0x20UL  /* NT: the loss's own call (removal)  */
 
 /* CmNvlinkHoldRun's answer, bits. */
 #define CM_HELD_DO_RELEASE  0x01UL  /* release its held D0 requests       */
 #define CM_HELD_DO_FAIL     0x02UL  /* ... on the failure path            */
 #define CM_HELD_DO_REENUM   0x04UL  /* expose and call, *vanish, *fresh    */
 #define CM_HELD_DO_OWE      0x08UL  /* not active: owed (Missed) instead  */
+#define CM_HELD_DO_LOSS     0x10UL  /* the loss's call: removal, no UP    */
 
 /*
  * An action's re-enumeration of a member (cmReenumAll): `gateUp` - held,
@@ -521,7 +523,8 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow);
  * call (*vanish and *fresh set, *missed cleared), FALSE returned (the
  * caller makes the call). Down with the host interface lost (`live`
  * FALSE): FALSE, the call made alone, *held and *missed kept for the pass
- * that finds the transport back (CmNvlinkHoldRun).
+ * that finds the transport back (CmNvlinkHoldRun). Up with it lost: the
+ * loss's call alone is held (CM_HELD_LOSS), apart from the ordinary work.
  */
 BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN live,
                            BOOLEAN *missed, BOOLEAN *vanish, BOOLEAN *fresh);
@@ -544,7 +547,10 @@ BOOLEAN CmNvlinkServiceDue(PULONG lastUs, ULONG nowUs);
  * `reenumOn` (XhciCmReenum not 0) and the member is `active`, owed instead
  * (CM_HELD_DO_OWE) when it is only `exclusive`. A member that also owes a
  * skipped change (*missed) is paid by the same call: *vanish and *fresh
- * set and *missed cleared, so one dispatch pays both.
+ * set and *missed cleared, so one dispatch pays both. A held loss call
+ * (CM_HELD_LOSS) waits for the gate alone: CM_HELD_DO_LOSS for an active
+ * member (a removal of vanished children, no exposure), folded instead
+ * into a held re-enumeration that runs in the same pass.
  */
 ULONG CmNvlinkHoldRun(PULONG held, BOOLEAN gateUp, BOOLEAN live,
                       BOOLEAN reenumOn, BOOLEAN active, BOOLEAN exclusive,
