@@ -10082,11 +10082,13 @@ done:
 
 /* mk_remove at a run's end: with safe eject off and xhcicm staying, the
  * database's UpperFilters (the tunnel-port filter's) are left. */
-static int mk_remove_safe_off(int safe)
+static int mk_remove_safe_off(int safe, int cmService)
 {
     int ok;
 
-    cddbUpper = (safe || svc_state(INST_MK_NAME) != 1) ? 1 : 0;
+    /* cmService is the state the decision read (inst_mk_end_action gives
+     * REMOVE for 0, and for safe eject off only with 1 registered). */
+    cddbUpper = (safe || cmService != 1) ? 1 : 0;
     ok = mk_remove();
     cddbUpper = 1;
     return ok;
@@ -10159,13 +10161,15 @@ static void mk_end_of_run(void)
 {
     int a;
     int safe;
+    int cm;
 
     if (!envNow.Nt) {
         return;
     }
     safe = mk_safe_eject_now();
-    a = inst_mk_end_action(svc_state(INST_MK_NAME), haveCm && tbInclude,
-                           inst_mk_system(&envNow), safe);
+    cm = svc_state(INST_MK_NAME);
+    a = inst_mk_end_action(cm, haveCm && tbInclude, inst_mk_system(&envNow),
+                           safe);
     logonly("mark service: end-of-run action %d (XhciCmSafeEject in force "
             "%d)\n", a, safe);
     if (a == INST_MK_REMOVE && !safe) {
@@ -10174,7 +10178,7 @@ static void mk_end_of_run(void)
     }
     if (a == INST_MK_INSTALL) {
         mk_install();
-    } else if (a == INST_MK_REMOVE && !mk_remove_safe_off(safe)) {
+    } else if (a == INST_MK_REMOVE && !mk_remove_safe_off(safe, cm)) {
         out("A Thunderbolt safe-removal mark could not be removed%s. "
             "Restart Windows and\nrun INSTALL.BAT again.\n",
             safe ? ", and the xhcicm service is not installed: a\ndevice "
