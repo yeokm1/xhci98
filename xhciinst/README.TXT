@@ -126,12 +126,12 @@ minutes. The uninstall removes Stor98 only where this installer put it
 there: a Stor98 installed before, by hand or by an earlier tool, stays.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
-(the tools folder, preselected), /thunderbolt, /stor98, /notray and
-/cmonly (the components, preselected), /set Name=Value (an option,
-preselected),
-/defaults, /force (reinstall this release, or go back to it from a newer
-one), /restage (Vista and 7: replace a stored development build with the
-same DriverVer), /debug (the debug- directory, only if a maintainer asks),
+(the tools folder, preselected), /thunderbolt, /stor98 (only with
+/thunderbolt or /cmonly), /notray, /nouas and /cmonly (the
+components, preselected), /set Name=Value (an option, preselected), /defaults,
+/force (reinstall this release, or go back to it from a newer one),
+/restage (Vista and 7: replace a stored development build with the same
+DriverVer), /debug (the debug- directory, only if a maintainer asks),
 /log path.
 
 The console tool
@@ -151,9 +151,16 @@ The console tool
                                 connection manager alone, without the
                                 USB drivers (2000 to 7; on 8 and 8.1 every
                                 install is this)
-  INSTALL /console /stor98      installs the bundled Stor98 without asking
-                                (without it the console asks, Enter for N;
-                                /yes leaves it out)
+  INSTALL /console /thunderbolt /stor98
+                                installs the bundled Stor98 without asking;
+                                it is part of the Thunderbolt 3 / USB4
+                                support, so /stor98 needs /thunderbolt (or
+                                /cmonly); never offered on 8 and 8.1
+                                (without /stor98 the console asks, Enter
+                                for N; /yes leaves it out)
+  INSTALL /console /nouas       installs without the UAS disk driver
+                                (xhciuas.sys); one already installed
+                                stays as it is
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /to path     installs the xHCI98 tools in that

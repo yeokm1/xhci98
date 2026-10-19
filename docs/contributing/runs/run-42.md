@@ -1550,6 +1550,71 @@ logs; the run does not touch it. Not taken: the window (the console runs
 the same engine), NT (no hub ordering leg; the NT rule rests on the code
 read and the vectors), ME over `3.0.0.0` (no such image).
 
+## 42-A.29: `XhciFastPollFsLs` among the USB page's "Advanced..." rows (2026-10-19)
+
+Branch `p42-fastpoll`, from `3.1.0.0` at `08709480`. The owner, 2026-10-19:
+"XhciFastPollFsLs should be in advanced settings." Design: record 23
+revision 15 (section 8.1), record 26 draft 10 (sections 5.4 and 11);
+reviewed and revised (clean, then a clean confirmation of `3733302e`).
+
+### What it does
+
+- A new row of `instValues`: an `xhci98.inf` value on every system, never
+  asked, so the window shows it behind the USB settings page's
+  "Advanced..." and the console sets it with `/set` alone. Allowed 0, 2,
+  3 and 4; 1 is not a mode and is refused, as is 5. The default stays the
+  INF's `AddReg` line (0); the value is written machine-wide under
+  `Services\USB` like the other `xhci98.inf` values.
+- The choices: 0 off; 2 a root-port mouse set to 31/62 Hz in hidusbf runs
+  at 2000/4000 Hz; 3 the same at 4000/8000 Hz; 4 the rate the client
+  chooses, codes 128 to 143. The caution, shown with every value: outside
+  the xHCI specification for Low- and Full-Speed devices, read when the
+  controller starts so restart after changing it, and with 4 the value
+  set and Windows restarted before the filter's code. By the owner's
+  instruction it says nothing of value 4's earlier meaning.
+- `INST_VALUE`'s choice list is `INST_CHOICES` (5) entries long, so value
+  4 has its text; the masks already allowed a gap. The two lookups in
+  `inst_core.c` and the two in `xhciwiz.c` (the row's note and
+  `row_fill_combo`) take the constant in place of 4; nothing else in
+  `xhciwiz.c` changed. `XHCITR` and `XHCICLN` compile `inst_core.c` but
+  read no choice text.
+
+### Builds
+
+| Build | Result |
+|---|---|
+| host suites, `544a9640` | 2080 checks, 0 failures (`test_inst` 1488) |
+| `xhciinst\build.cmd` and `selftest.cmd`, `544a9640` | passed (the four executables, their imports, the switch refusals) |
+| `build-driver.cmd all`, `544a9640` | BUILD + GATES PASSED (debug release qemu) |
+| `build-driver.cmd all -amd64`, `3733302e` | BUILD + GATES PASSED (debug release qemu) |
+| `xhcitr`, `xhcicln`, `xhcimark` `build.cmd`, `3733302e` | built by hand (the gated build rebuilds none of them) |
+| after the merge of `3.1.0.0` (`cfcef657`), `646762d8`: `xhciinst\build.cmd`, `selftest.cmd`, host suites, `build-driver.cmd all` | passed; 2080 checks, 0 failures (`test_inst` 1515); BUILD + GATES PASSED (debug release qemu) |
+
+`3733302e` changes only the two records' revision notes.
+
+### The leg (development host A, QEMU)
+
+Kit `E:\xhci98-vm\p42-fastpoll` (QMP 48230 to 48239): Windows 98 SE on a
+fresh overlay of the gold image (an older xhci98 installed), `qemu-xhci`
+with a tablet, the package a copy of the `3.1.0.0` bench package with
+`XHCIINST.EXE` and `XHCIWIZ.EXE` of `544a9640`, on the transfer drive.
+Cold start only; the guest was powered off at the end, never restarted.
+
+| Step | Result |
+|---|---|
+| `INSTALL /console /set XhciFastPollFsLs=1` | **pass**: "xhciinst: /set: not an allowed value: XhciFastPollFsLs=1", then the usage; nothing done |
+| `INSTALL`, the USB settings page, "Advanced..." | **pass**: the row `XhciFastPollFsLs`, "now: 0 (the default)", beside `XhciSelectiveSuspend`; the note carries the meaning, the four choices and the caution; the combo box offers 0, 2, 3 and 4, no 1 |
+| 4 chosen, OK, Next | **pass**: the row "4 (to be written)"; the Summary's "The settings written machine-wide: - XhciFastPollFsLs = 4" |
+| Install, Finish with "Restart Windows later" | **pass**: the controller updated; the Finish page lists "XhciFastPollFsLs: set to 4 on the settings page" with its note |
+| `regedit /e` of `HKLM\System\CurrentControlSet\Services\USB` | **pass**: `"XhciFastPollFsLs"=dword:00000004` |
+
+Seen, not changed: the combo box's drop-down is as wide as the box, so the
+two long choices of 2 and 3 are cut at its edge there; the note above it
+carries them whole.
+
+Not taken: the driver reading the machine-wide 4 after a cold start, and
+hidusbf codes (42-V.2's leg); Windows 7 and the x64 half.
+
 ## 42-A.31: SETUP.EXE, the installer's entry point for people (2026-10-19)
 
 Branch `p42-batlaunch` from `3.1.0.0` at `08709480`. The owner asked
@@ -1562,7 +1627,7 @@ The detached `INSTALL.BAT` was not committed.
 ### What it adds
 
 - **`SETUP.EXE`** (`xhciinst\setup.c`, `setup.rc`, `setup.manifest`;
-  record 26 draft 11 section 2 and W17, record 23 revision 16): a 32-bit
+  record 26 draft 12 section 2 and W17, record 23 revision 17): a 32-bit
   windows-subsystem program, MSVC 6.0, the C runtime static,
   `/SUBSYSTEM:WINDOWS,4.0`, the xHCI98 USB Tree's icon and the version
   resource of `src\xhci_version.h`. It finds its own directory, picks
@@ -1630,7 +1695,8 @@ wording and `README.md`'s console prompts (`7b843d4d`); then no findings
 on the documents, the message box, the manifest, the owner window, its
 place, and the merge of `3.1.0.0` (`7950d900`), where 42-A.27 held record
 23 revision 14 and record 26 draft 9 and 42-A.29 takes 15 and 10, so this
-task's text is revision 16 and draft 11.
+task's text was revision 16 and draft 11; 42-A.22 then took those, and it is
+revision 17 and draft 12 since the second merge.
 
 ### Builds
 

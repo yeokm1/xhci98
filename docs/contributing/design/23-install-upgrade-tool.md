@@ -1,8 +1,11 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 16, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
-for the command line; see below); revision 14, 2026-10-19 (task 42-A.27:
-a parent's job and the devices below it, sections 5.8 and 10); revision
+Status: revision 17, 2026-10-19 (`SETUP.EXE` for people, `INSTALL.BAT`
+for the command line; see below); revision 16, 2026-10-19 (task 42-A.22, record 26 draft 11: Stor98
+part of the Thunderbolt support, the UAS driver a component of its own;
+sections 4.4, 7.1 and 8.1); revision 15, 2026-10-19 (`XhciFastPollFsLs`
+settable; see below); revision 14, 2026-10-19 (task 42-A.27: a
+parent's job and the devices below it, sections 5.8 and 10); revision
 13, 2026-10-19 (the connection manager alone, and
 Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
 service and the machine-wide key); revision 11, 2026-10-18 (the window,
@@ -192,7 +195,17 @@ it". What changes here:
 - **Sections 9.5 and 5.1 step 12**: the mark service on 8 and 8.1 too.
 - **Section 13**: D17 to D19.
 
-Revision 16, 2026-10-19 (roadmap-usb4.md task 42-A.31; record 26 draft 11
+Revision 15, 2026-10-19 (roadmap-usb4.md task 42-A.29; the owner, for
+`3.1.0.0`: "XhciFastPollFsLs
+should be in advanced settings"). What changes here:
+
+- **Section 8.1**: `XhciFastPollFsLs` joins the table, never asked,
+  settable with `/set` and the window's "Advanced..." for 0, 2, 3 and 4
+  (1 is not a mode), written machine-wide like the other `xhci98.inf`
+  values (section 8.4). A choice list now names values 0 to 4, so the
+  table's choice texts reach value 4.
+
+Revision 17, 2026-10-19 (roadmap-usb4.md task 42-A.31; record 26 draft 12
 section 2 and W17). The owner, 2026-10-19: "setup.exe by tonight". The
 package root gains `SETUP.EXE`, the program a person double-clicks: it
 starts the installer's window and exits, with no console window behind
@@ -271,7 +284,7 @@ program around them, in the shape `XHCICLN` already has.
 ## 2. Where it lives in the package (decision D1)
 
 ```
-<package>\SETUP.EXE                for people: starts the window (revision 16)
+<package>\SETUP.EXE                for people: starts the window (revision 17)
 <package>\INSTALL.BAT              the command line's entry point
 <package>\release-x86\ ...         unchanged: the drivers and their INFs
 <package>\release-x64\ ...
@@ -305,7 +318,7 @@ double-click from removing the driver of the only keyboard on an
 xHCI-only machine; behind a switch it is one typed word and a confirmation
 (section 9.1).
 
-Since revision 16 a person is not sent to `INSTALL.BAT` at all: the
+Since revision 17 a person is not sent to `INSTALL.BAT` at all: the
 readme's first instruction is "To install or update, double-click
 SETUP.EXE; to uninstall, use Remove in Add/Remove Programs (or SETUP
 /uninstall)", and `SETUP.EXE` starts the window (record 26
@@ -536,7 +549,17 @@ leaves out every file whose name starts with `stor98`
 (`inst_bundled_file`), because a copy of `stor98.inf` on `DevicePath`
 would have the hardware wizard install Stor98 unasked. Where a flavour
 directory carries Stor98, the run names where it is and says the tool
-does not install it.
+does not install it. (Revision 11 copies it when the user ticks it,
+record 26 section 6.3; revision 16 only with the Thunderbolt 3 / USB4
+support in the run, which Stor98 is part of, owner, 2026-10-19.)
+
+**The UAS driver left out (revision 16).** Under `/nouas`, or its
+unticked box in the window (record 26 section 5.3), `xhciuas.inf` and
+`xhciuas.sys` are left out of the 98 SE and ME copy, since a copy on
+`DevicePath` would have the hardware wizard install it unasked; on NT
+`xhciuas.inf` is not staged. An `xhciuas` already installed stays as it
+is and gets no group verdict (`group_verdicts`), and an unfinished
+`/restage` that includes it is refused while it is left out.
 
 ### 4.5 The connection manager alone (revision 13)
 
@@ -1370,7 +1393,9 @@ these systems.
 | `/force` | reinstall a current device, and install over a newer group (section 5.4) |
 | `/thunderbolt` | include the Thunderbolt 3 / USB4 support without asking (section 8.5) |
 | `/cmonly` | (revision 13) the connection manager alone: the USB drivers left out of the run, the Thunderbolt support in it unasked (section 4.5); refused on 98 SE and ME, with `/uninstall`, `/devices` and `/eject`, and where the package carries no connection manager; on 8 and 8.1 every install run is one |
+| `/stor98` | include the bundled Stor98 without asking (record 26 section 6.4); refused without `/thunderbolt` or `/cmonly`, since Stor98 is part of the Thunderbolt 3 / USB4 support (owner, 2026-10-19), and with `/uninstall`, `/devices` and `/eject`; never offered on 8 and 8.1 |
 | `/to <path>` | the install directory (section 9.6) without asking; refused with `/uninstall`, `/devices` and `/eject`, and checked as a typed answer is (a path that fails refuses the run, exit 1) |
+| `/nouas` | leave the UAS disk driver out of the run (owner, 2026-10-19; record 26 section 5.3): `xhciuas.inf` neither staged nor installed, nor copied to `DevicePath` on 98 SE and ME, and an `xhciuas` already installed left as it is; refused with `/uninstall`, `/devices` and `/eject` |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
@@ -1432,7 +1457,7 @@ Failed, restart and steps are three flags; the code is 2 when failed is
 set, else 4 when steps is set, else 3 when restart is set, else 0. The
 console says every flag that is set, so a 2 or a 4 that also needs a
 restart says so. `INSTALL.BAT` passes the code on; `SETUP.EXE` does not
-wait for the window and returns 0 once it is started (revision 16,
+wait for the window and returns 0 once it is started (revision 17,
 record 26 section 2).
 
 **The last line before the exit code** (owner, 2026-10-15): when the run
@@ -1522,8 +1547,9 @@ user-visible effect, off or on by default for a reason the user can judge
 | `XhciInterruptMode` | `xhci98.inf`, the controller's | any xHCI controller | 0, 1, 2; 3 on Vista and 7 only | 0, 1, 2; 3 on Vista and 7 only (it fails the start elsewhere) | automatic, line only, polling always, message only |
 | `XhciPollFineTimer` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | a finer system clock while polling |
 | `XhciSelectiveSuspend` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | put idle devices to sleep (off by default; read on the release notes' terms) |
-| `XhciSilentInstall` | `xhci98.inf`, the controller's | 98 SE and ME with an xHCI controller (owner, 2026-10-15); never on 2000 and later | 0, 1 | 0, 1 on 98 and ME; refused on NT | install hubs, boot keyboards and mice and Bulk-Only storage with no Add New Hardware wizard; on is `tools\silent\silent-on.bat`'s effect, off `silent-off.bat`'s (section 8.4) |
+| `XhciSilentInstall` | `xhci98.inf`, the controller's | 98 SE and ME with an xHCI controller (owner, 2026-10-15); never on 2000 and later, where the window shows it greyed (record 26 section 5.4) | 0, 1 | 0, 1 on 98 and ME; refused on NT | install hubs, boot keyboards and mice and Bulk-Only storage with no Add New Hardware wizard; on is `tools\silent\silent-on.bat`'s effect, off `silent-off.bat`'s (section 8.4) |
 | `XhciForceBulkOnly` | `xhci98.inf`, the controller's | any xHCI controller | 0, 1 | 0, 1 | Bulk-Only instead of UAS for a disk that offers both, from its next connection; a UAS-only disk is not affected |
+| `XhciFastPollFsLs` | `xhci98.inf`, the controller's | never (owner, 2026-10-19; the window's "Advanced...") | - | 0, 2, 3, 4 (1 is not a mode) | poll a mouse faster than 1000 Hz, with SweetLow's hidusbf: off (0); a root-port mouse set to 31/62 Hz in hidusbf at 2000/4000 Hz (2) or 4000/8000 Hz (3); the rate the client chooses, codes 128 to 143 (4). Its caution: outside the xHCI specification for Low and Full Speed, read at the controller's start so restart after changing it, and with 4 the value set and Windows restarted before the filter's code |
 | `XhciCmMode` | `xhcicm.inf`, the NHI's | a present NHI `xhcicm.inf` matches | 0, 1 | 0 to 3 | the connection manager off or automatic (2 and 3 are the record 21 overrides, `/set` only) |
 | `XhciCmApprove` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | approve Thunderbolt devices automatically |
 | `XhciCmSafeEject` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | offer Safely Remove for the dock's devices |
@@ -1546,7 +1572,10 @@ unchanged; and, by the owner's decision of the same day, `XhciCmReenum`
 `XhciCmUsb3Tunnel` and `XhciCmLaneBonding` (USB4 diagnostics whose
 defaults are the point) and `XhciCmPreOsCleanup` (an override of design
 record 22 section 9's tunnel preservation), settable with `/set
-Name=Value` only. Any of them stays settable by hand, as today.
+Name=Value` only; and, by the owner's decision of 2026-10-19,
+`XhciFastPollFsLs` (tuning for hidusbf, outside the specification at Low
+and Full Speed), settable with `/set Name=Value` and the window's
+"Advanced..." only. Any of them stays settable by hand, as today.
 
 Each value's default is taken from its INF's `AddReg` line, not from the
 table; a value the INF does not write is not asked, and the host suite
@@ -2277,7 +2306,7 @@ the user.
 
 - **D1** The executables in `tools\xhciinst\`, `INSTALL.BAT` at the root;
   one batch file, the uninstall behind `/uninstall` (section 2).
-  Revision 16 (the owner, 2026-10-19): `SETUP.EXE` beside it at the root
+  Revision 17 (the owner, 2026-10-19): `SETUP.EXE` beside it at the root
   is what a person runs, `INSTALL.BAT` the command line's and scripts'
   (record 26 W17); still one batch file.
 - **D2** Windows 98 SE and ME through `DevicePath` and the local copy in
@@ -2374,7 +2403,7 @@ the user.
 | `xhciinst\xhciinst.rc`, `xhciinst.manifest` | the elevation manifest |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the two builds; the self-test and the import check |
 | `xhciinst\INSTALL.BAT` | staged at the package root |
-| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, staged at the package root (revision 16; record 26 section 2) |
+| `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, staged at the package root (revision 17; record 26 section 2) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt` |
 | `test\test_inst.c` | the host suite |
 | `scripts\build-driver.cmd`, `scripts\package\make-release.ps1`, `scripts\package\test-package.ps1`, `test\run-host-tests.cmd`, `.gitignore` | wiring |
