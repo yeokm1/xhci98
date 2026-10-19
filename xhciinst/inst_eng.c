@@ -416,6 +416,7 @@ static int haveCm;
 static int osKind = INST_OS_FULL;
 static int usbInclude = 1;
 static int usbOffered;
+static int uasInclude = 1;  /* xhciuas.inf in the run, with the USB drivers */
 static void usb_apply(int include);
 static int usb_decide(void);
 static int pkgCmSigned = -1;    /* xhcicm.sys signed: as pkgSigned */
@@ -1576,6 +1577,12 @@ static void group_verdicts(void)
             groupVerdict[g] = INST_GROUP_OK;
             continue;
         }
+        if (g == 1 && !uasInclude) {
+            /* The UAS driver left out (owner, 2026-10-19): an installed
+             * xhciuas is not part of the run either. */
+            groupVerdict[g] = INST_GROUP_OK;
+            continue;
+        }
         for (i = 0; i < devCount; i++) {
             const DEVREC *d = &devs[i];
             if (group_of(d) != g) {
@@ -2370,7 +2377,8 @@ void inst_eng_choose_value(int value, int set, INST_U32 v)
     if (value < 0 || value >= instValueCount || value >= INST_MAX_VALUES) {
         return;
     }
-    chosenSet[value] = set ? 1 : 0;
+    /* A greyed row's value is for another system: never written. */
+    chosenSet[value] = set && !inst_value_greyed(value, &envNow) ? 1 : 0;
     chosenValue[value] = v;
 }
 
@@ -2515,6 +2523,7 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         DWORD mwv = 0;
         int asked;
         int cmRow;
+        int greyed;
         if (value_inf(v) == NULL ||
             !inst_value_default(v, value_inf(v), &r->Def)) {
             continue;
@@ -2522,23 +2531,30 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         /* A Thunderbolt value with no controller present is still shown
          * when the support is ticked, and written machine-wide for the
          * controller to come (record 26 section 5.5). */
+        /* A value of another system is shown greyed where it would be
+         * asked or behind Advanced there (owner, 2026-10-19). */
+        greyed = inst_value_greyed(v, &envNow);
         cmRow = instValues[v].Inf == INST_INF_CM &&
                 (instValues[v].Apply == INST_APPLY_CM ||
-                 (instValues[v].Apply == INST_APPLY_9X_CM && !envNow.Nt));
+                 instValues[v].Apply == INST_APPLY_9X_CM);
         asked = inst_value_applies(v, &envNow) ||
-                (cmRow && instValues[v].Asked != 0);
-        if (!asked && !cmRow && !inst_value_relevant(v, &envNow)) {
+                (cmRow && !greyed && instValues[v].Asked != 0) ||
+                (greyed && instValues[v].Asked != 0);
+        if (!asked && !cmRow && !greyed && !inst_value_relevant(v, &envNow)) {
             continue;
         }
         targets = value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
-        if (targets == 0 && !cmRow) {
+        if (targets == 0 && !cmRow && !greyed) {
             continue;
         }
         r->Value = v;
         r->Asked = asked;
+        r->Greyed = greyed;
         /* Every value /set may give, so a setting in force is never
-         * shown as another (its caution is in the row's note). */
-        r->Mask = inst_value_set_mask(v, &envNow);
+         * shown as another (its caution is in the row's note); a greyed
+         * row lists its own system's. */
+        r->Mask = greyed ? instValues[v].Settable
+                         : inst_value_set_mask(v, &envNow);
         r->MwState = mw_value(v, &mwv);
         r->MwValue = (INST_U32)mwv;
         r->CmNew = cmNew;
@@ -4686,6 +4702,14 @@ static int package_files(PKG_EACH each, void *ctx)
              * (record 26 section 6.3): a copy of its INF on DevicePath, or
              * in the store, would install it unasked. */
             if (inst_bundled_file(fd.cFileName) && !s98Include) {
+                continue;
+            }
+            /* The UAS driver left out (owner, 2026-10-19): on 98 SE and ME
+             * the copy is on DevicePath, where its INF would install it
+             * unasked; on NT it is simply not staged. */
+            if (!envNow.Nt && !uasInclude &&
+                (inst_eq(fd.cFileName, "xhciuas.inf") ||
+                 inst_eq(fd.cFileName, "xhciuas.sys"))) {
                 continue;
             }
             /* A No to the Thunderbolt question: none of its files in the
@@ -7395,6 +7419,13 @@ static int plan_nt(void)
                 "one is %s.\n", restagePkg, name);
             return INST_EXIT_REFUSED;
         }
+        if (usbInclude && !uasInclude && restagePending[INST_INF_UAS]) {
+            out("REFUSED: the unfinished /restage includes the UAS disk "
+                "driver.\n%s\n", instWindow ? "Tick it on the Components "
+                "page to finish it." : "Run it again without /nouas to "
+                "finish it.");
+            return INST_EXIT_REFUSED;
+        }
         if (!usbInclude &&
             (restagePending[INST_INF_XHCI] || restagePending[INST_INF_UAS])) {
             out("REFUSED: the unfinished /restage includes the USB "
@@ -8784,6 +8815,7 @@ static int run_install_9x(void)
     if (!record_dir()) {
         /* Unrecorded, the copy is not one the uninstall would find: the
          * earlier layouts and the old directory are kept as they are. */
+        step(INST_STEP_FAILED, "The package's copy, not recorded");
         return inst_exit_code(0, 1, 0, 1);
     }
     step(INST_STEP_DONE, "The package is in %s and on DevicePath", srcDir);
@@ -9964,6 +9996,7 @@ static void mk_install(void)
     SC_HANDLE s = NULL;
     int had;
     int put = 1;
+    int running = 0;
 
     join(src, sizeof(src), root, "tools\\xhcimark");
     join(src, sizeof(src), src, mk_exe());
@@ -10085,8 +10118,13 @@ start:
         out("The Thunderbolt safe-removal mark service %s is %s and running:\n"
             "  %s\n", INST_MK_SERVICE, had ? "updated" : "installed", quoted);
         step(INST_STEP_DONE, "The safe-removal mark service is running");
+        running = 1;
     }
 done:
+    /* Every begun step ends: the window's row says how. */
+    if (!running) {
+        step(INST_STEP_FAILED, "The safe-removal mark service");
+    }
     if (s != NULL) {
         CloseServiceHandle(s);
     }
@@ -10555,6 +10593,8 @@ static int remove_9x_devnodes(void)
             out("Removing %s ...\n", u->Desc[0] ? u->Desc : u->Id);
             step(INST_STEP_BEGIN, "Removing %s", u->Desc[0] ? u->Desc : u->Id);
             if (helperState < 0) {
+                step(INST_STEP_FAILED, "%s: the helper is not running",
+                     u->Desc[0] ? u->Desc : u->Id);
                 return -1;
             }
             v = helper_job(INST_DI_REMOVE, &d, NULL, 0, &r);
@@ -12513,7 +12553,8 @@ static void usb_apply(int include)
         if (infKeep[k] == NULL) {
             infKeep[k] = infText[k];
         }
-        infText[k] = include ? infKeep[k] : NULL;
+        infText[k] = (include && (k != INST_INF_UAS || uasInclude)) ?
+                     infKeep[k] : NULL;
     }
     usbInclude = include ? 1 : 0;
 }
@@ -13958,9 +13999,16 @@ static void s98_question(void)
     char line[16];
     char text[1024];
 
-    r = inst_s98_decide(haveS98, opts.Yes, opts.Stor98, opts.List, &asked,
-                        &def);
+    r = inst_s98_decide(haveS98, haveCm && tbInclude, opts.Yes, opts.Stor98,
+                        opts.List, &asked, &def);
     if (!haveS98) {
+        s98_apply(0);
+        return;
+    }
+    if (!haveCm || !tbInclude) {
+        out("Stor98 %s, the bundled NVMe driver: left out, it comes with the "
+            "Thunderbolt 3 /\nUSB4 support.\n\n", s98VersionText);
+        logonly("stor98: left out with the Thunderbolt support\n");
         s98_apply(0);
         return;
     }
@@ -13991,7 +14039,7 @@ static void s98_question(void)
         out("  /list: it would be asked:\n    Y  install it\n"
             "    N  leave it out\n  Enter would give [N].\n");
     } else {
-        out("  /yes: N (/stor98 installs it).\n");
+        out("  /yes: N (/thunderbolt /stor98 installs it).\n");
     }
     out("\n");
     logonly("stor98: asked %d, include %d\n", asked, r);
@@ -14583,7 +14631,8 @@ int inst_eng_s98_state(int *have, char *version, size_t cap)
 
 void inst_eng_s98_choose(int include)
 {
-    s98_apply(include);
+    /* Part of the Thunderbolt support (owner, 2026-10-19). */
+    s98_apply(include && haveCm && tbInclude);
     logonly("stor98: chosen %d\n", s98Include);
 }
 
@@ -14617,7 +14666,7 @@ const char *inst_eng_s98_choose_value(int i, int set, const char *text)
     if (i < 0 || i >= INST_S98_COUNT) {
         return "no such setting";
     }
-    if (!set) {
+    if (!set || !inst_s98_applies(i, envNow.Nt)) {
         s98Set[i] = 0;
         return NULL;
     }
@@ -14676,7 +14725,8 @@ void inst_eng_usage(void)
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
 "  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
 "                without the USB drivers (2000 to 7; on 8 and 8.1 always)\n"
-"  /stor98       install the bundled Stor98 NVMe driver without asking\n"
+"  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
+"  /nouas        leave the UAS disk driver (xhciuas.sys) out of this run\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
@@ -15976,9 +16026,14 @@ static int usb_decide(void)
         out("/cmonly: the Thunderbolt 3 / USB4 connection manager alone; the "
             "USB drivers\nare left out of this run.\n\n");
     }
+    uasInclude = inst_uas_decide(1, opts.NoUas);
+    if (r != 0 && !uasInclude) {
+        out("/nouas: the UAS disk driver (xhciuas.sys) is left out of this run; "
+            "one already\ninstalled stays as it is.\n\n");
+    }
     usb_apply(r);
-    logonly("usb drivers: kind %d, offered %d, include %d\n", osKind,
-            usbOffered, usbInclude);
+    logonly("usb drivers: kind %d, offered %d, include %d, uas %d\n", osKind,
+            usbOffered, usbInclude, uasInclude);
     return 1;
 }
 
@@ -15989,6 +16044,19 @@ int inst_eng_usb_state(int *offered, int *notOnThisSystem)
     *offered = usbOffered;
     *notOnThisSystem = osKind == INST_OS_CMONLY;
     return usbInclude;
+}
+
+int inst_eng_uas_state(void)
+{
+    return uasInclude;
+}
+
+void inst_eng_uas_choose(int include)
+{
+    uasInclude = include ? 1 : 0;
+    usb_apply(usbInclude);
+    plan();
+    logonly("uas driver: chosen %d\n", uasInclude);
 }
 
 void inst_eng_usb_choose(int include)
@@ -16371,4 +16439,17 @@ int inst_eng_controller_changes(void)
 const char *inst_eng_confirm_text(void)
 {
     return inst_confirm_text(planned_runs(), values_to_write(), envNow.Nt, 0);
+}
+
+const char *inst_eng_summary_head(int writes, int other)
+{
+    return inst_summary_head(planned_runs(), writes, other, envNow.Nt);
+}
+
+int inst_eng_tray_started(void)
+{
+    char cur[INST_PATH_CHARS + 16];
+
+    return reg_text3(HKEY_LOCAL_MACHINE, INST_TRAY_RUN_KEY,
+                     INST_TRAY_RUN_VALUE, cur, sizeof(cur)) == 1;
 }

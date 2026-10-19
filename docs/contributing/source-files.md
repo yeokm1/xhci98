@@ -380,7 +380,7 @@ Each tool is a tree at the repository root, built by its own `build.cmd` and pub
 | `xhciwiz.c` | The window, `XHCIWIZ.EXE` and `XHCIWZ64.EXE` (design record 26): the wizard's pages, the worker thread, the start of the x64 window under WOW64, the restart, the window's `/selftest`. |
 | `inst_core.c` / `inst_core.h` | The pure half: the INF reader, the models section per system, the action per device and per service group, the registry value table and its applicability, record 24's unit rules, the switches and exit codes, the helper's command line and result file, the uninstall entry and route, the window's texts (host suite `test_inst`). |
 | `xhciinst.rc`, `xhciinst.manifest` | The console tool's version resource and elevation request. |
-| `xhciwiz.rc`, `xhciwiz_res.h`, `xhciwiz.manifest`, `xhciwiz.ico` | The window's icon, version, page templates, elevation and Common Controls 6 requests. |
+| `xhciwiz.rc`, `xhciwiz_res.h`, `xhciwiz.manifest` | The window's icon (`xhcitr\xhcitr.ico`, XHCITR's), version, page templates, elevation and Common Controls 6 requests. |
 | `build.cmd` | The four executables, each also compiling `src\xhci_psw.c` for the driver's own switchover gate. |
 | `selftest.cmd`, `check-imports.ps1` | The `/selftest`s, the switch refusals and the import gate (the console pair exactly `KERNEL32.dll` and `ADVAPI32.dll`; the window pair those and `USER32`, `GDI32`, `COMCTL32`, `COMDLG32` and `SHELL32`). |
 | `INSTALL.BAT` | Staged at the package root; opens the window, or with `/console` runs the console tool. |
@@ -782,8 +782,9 @@ at the package root) and `README.TXT` (the published `readme.txt`).
 Tasks 42-A.2 and 42-A.3 (roadmap-usb4.md, design record 26) split the
 system half into the engine, `inst_eng.c` / `inst_eng.h`, behind a
 front-end table, leave `xhciinst.c` as the console front end, and add the
-window `xhciwiz.c` (with `xhciwiz.rc`, `xhciwiz_res.h`, `xhciwiz.manifest`
-and `xhciwiz.ico`), which `build.cmd` builds as `XHCIWIZ.EXE` and
+window `xhciwiz.c` (with `xhciwiz.rc`, `xhciwiz_res.h` and
+`xhciwiz.manifest`, and XHCITR's icon `xhcitr\xhcitr.ico`), which
+`build.cmd` builds as `XHCIWIZ.EXE` and
 `XHCIWZ64.EXE` and `selftest.cmd` holds to its own import list.
 Tasks 41-A.2 to 41-A.5 (roadmap-usb4.md, design record 25) add the USB
 and Thunderbolt tree tool beside it: `xhcitr\xhcitr.c` (the system half:

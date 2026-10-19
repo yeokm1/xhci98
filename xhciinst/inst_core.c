@@ -1593,6 +1593,18 @@ const INST_VALUE instValues[] = {
       "Device Manager and plugged in again. A UAS-only disk stays on "
       "UAS.", 0,
       { "UAS where the disk offers it", "Bulk-Only", NULL, NULL } },
+    /* Owner, 2026-10-19: never asked, the USB page's "Advanced..." row
+     * and /set; 1 is not a mode (docs\using\tuning.md). */
+    { "XhciFastPollFsLs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
+      0x1DUL, "poll a mouse faster than 1000 Hz, with SweetLow's hidusbf",
+      "this is outside the xHCI specification for Low- and Full-Speed "
+      "devices. It is read when the controller starts: restart Windows "
+      "after changing it. With 4, set the value and restart before "
+      "setting the filter's code.", 0,
+      { "off", NULL,
+        "a root-port mouse set to 31/62 Hz in hidusbf runs at 2000/4000 Hz",
+        "a root-port mouse set to 31/62 Hz in hidusbf runs at 4000/8000 Hz",
+        "the rate the client chooses, codes 128 to 143" } },
     { "XhciCmMode", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0xFUL,
       "the Thunderbolt and USB4 connection manager",
       "2 and 3 force one connection manager whatever the controller "
@@ -1764,6 +1776,41 @@ int inst_value_relevant(int index, const INST_ENV *env)
         return (!env->Nt && env->CmNhi) ? 1 : 0;
     default:
         return 0;
+    }
+}
+
+int inst_value_greyed(int index, const INST_ENV *env)
+{
+    switch (index >= 0 && index < instValueCount ? instValues[index].Apply
+                                                 : -1) {
+    case INST_APPLY_PSW:
+        return (env->AnyXhci && !env->PswController) ? 1 : 0;
+    case INST_APPLY_NT_XHCI:
+        return (!env->Nt && env->AnyXhci) ? 1 : 0;
+    case INST_APPLY_9X_XHCI:
+        return (env->Nt && env->AnyXhci) ? 1 : 0;
+    case INST_APPLY_9X_CM:
+        /* The Thunderbolt rows are shown with no host interface present
+         * too (record 26 section 5.5), so this one is as well. */
+        return env->Nt ? 1 : 0;
+    default:
+        return 0;
+    }
+}
+
+const char *inst_value_only(int index)
+{
+    switch (index >= 0 && index < instValueCount ? instValues[index].Apply
+                                                 : -1) {
+    case INST_APPLY_PSW:
+        return "Intel 7-9 series, C610 only";
+    case INST_APPLY_NT_XHCI:
+        return "Windows 2000 to 7 only";
+    case INST_APPLY_9X_XHCI:
+    case INST_APPLY_9X_CM:
+        return "Windows 98 SE and ME only";
+    default:
+        return NULL;
     }
 }
 
@@ -1982,6 +2029,8 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->CmOnly = 1;
         } else if (inst_switch(a, "stor98")) {
             opts->Stor98 = 1;
+        } else if (inst_switch(a, "nouas")) {
+            opts->NoUas = 1;
         } else if (inst_switch(a, "notray")) {
             opts->NoTray = 1;
         } else if (inst_switch(a, "devices")) {
@@ -2148,6 +2197,15 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     }
     if (opts->Stor98 && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/stor98 belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->Stor98 && !opts->Thunderbolt && !opts->CmOnly) {
+        inst_err(err, errCap, "/stor98 needs /thunderbolt (or /cmonly): "
+                 "Stor98 is part of the Thunderbolt 3 / USB4 support", NULL);
+        return 1;
+    }
+    if (opts->NoUas && (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, "/nouas belongs to an install", NULL);
         return 1;
     }
     if (opts->NoTray && (opts->Uninstall || opts->Devices || opts->Eject)) {
@@ -2494,6 +2552,20 @@ const char *inst_confirm_text(int runs, int writes, int nt, int unsure)
                 "staged INFs (and\nstage any missing) now" :
                 "Every device is current and no setting changes. Check the "
                 "local copy and\nDevicePath now";
+}
+
+const char *inst_summary_head(int runs, int writes, int other, int nt)
+{
+    if (runs || (!writes && !other)) {
+        return inst_confirm_text(runs, 0, nt, 0);
+    }
+    if (!other) {
+        return inst_confirm_text(0, 1, nt, 0);
+    }
+    return writes ? "Write the changed settings and make the other changes "
+                    "listed below now (no\ndevice needs a new driver)" :
+                    "Make the changes listed below now (no device needs a new "
+                    "driver)";
 }
 
 /* ======================================================================== */
@@ -3240,6 +3312,11 @@ const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor)
     return "Windows";
 }
 
+int inst_uas_decide(int usbInclude, int noUas)
+{
+    return usbInclude && !noUas;
+}
+
 int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
                     const char **refusal)
 {
@@ -3847,7 +3924,7 @@ static int inst_value_question_at(char *out, size_t cap, int index,
             lo = b;
         }
         hi = b;
-        if (b < 4UL && v->Choice[b] != NULL) {
+        if (b < INST_CHOICES && v->Choice[b] != NULL) {
             named = 1;
         }
     }
@@ -3859,7 +3936,7 @@ static int inst_value_question_at(char *out, size_t cap, int index,
             }
             inst_cat(raw, sizeof(raw), "    ");
             inst_cat_number(raw, sizeof(raw), b);
-            if (b < 4UL && v->Choice[b] != NULL) {
+            if (b < INST_CHOICES && v->Choice[b] != NULL) {
                 inst_cat(raw, sizeof(raw), "  ");
                 inst_cat(raw, sizeof(raw), v->Choice[b]);
             }
@@ -4736,11 +4813,15 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "The devices this package's drivers are for, and what will be done:",
       284, 10 },
     { INST_PT_DRIVERS,
-      "xHCI98 USB 3.x host controller driver and UAS driver", 270, 10 },
+      "xHCI98 USB 3.x host controller driver (xhci98.sys)", 270, 10 },
     { INST_PT_DRIVERS_T,
-      "xhci98.sys and xhciuas.sys: the controller, its hubs and devices, "
-      "and UAS disks.",
+      "The controller, its hubs and devices, and Bulk-Only disks.",
       272, 16 },
+    { INST_PT_UAS, "UAS disk driver (xhciuas.sys)", 258, 10 },
+    { INST_PT_UAS_T,
+      "Untick only if you use another UAS driver. Bulk-Only disks are not "
+      "affected; XhciForceBulkOnly also avoids UAS.",
+      260, 18 },
     { INST_PT_TB, "Thunderbolt 3 / USB4 support (xhcicm.sys)", 270, 10 },
     { INST_PT_TB_T,
       "The connection manager. A device plugged into a Thunderbolt or USB4 "
@@ -4789,11 +4870,11 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_NOW, "Restart Windows now", 284, 10 },
     { INST_PT_LATER, "Restart Windows later", 284, 10 },
     { INST_PT_S98, "Stor98, the bundled NVMe driver (a separate project)",
-      270, 10 },
+      258, 10 },
     { INST_PT_S98_T,
       "For an NVMe drive behind a Thunderbolt or USB4 tunnel, or an "
       "internal one; it installs only on NVMe drives with no driver.",
-      272, 18 },
+      260, 18 },
     { INST_PT_S98SET,
       "Stor98's settings (its readme, SETTINGS). A row left as it is writes "
       "nothing; Stor98 keeps its built-in default.",
@@ -4974,6 +5055,22 @@ int inst_s98_applies(int i, int nt)
     }
     return nt ? instS98Values[i].KeyNt != NULL
               : instS98Values[i].Name9x != NULL;
+}
+
+int inst_s98_greyed(int i, int nt)
+{
+    return !inst_s98_applies(i, nt) && inst_s98_applies(i, !nt);
+}
+
+const char *inst_s98_only(int i)
+{
+    if (i < 0 || i >= INST_S98_COUNT) {
+        return NULL;
+    }
+    if (instS98Values[i].Name9x == NULL) {
+        return "Windows 2000 to 7 only";
+    }
+    return instS98Values[i].KeyNt == NULL ? "Windows 98 SE and ME only" : NULL;
 }
 
 const char *inst_s98_default(int i, int nt)
@@ -5282,12 +5379,17 @@ int inst_s98_cold_start(int nt)
     return !nt;
 }
 
-int inst_s98_decide(int haveS98, int yes, int stor98Switch, int list,
+int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch, int list,
                     int *asked, int *def)
 {
     *def = 0;
-    *asked = haveS98 && !yes && !stor98Switch && !list;
-    return haveS98 && stor98Switch;
+    *asked = haveS98 && tb && !yes && !stor98Switch && !list;
+    return haveS98 && tb && stor98Switch;
+}
+
+int inst_s98_box_open(int haveS98, int tbHave, int tbTicked)
+{
+    return haveS98 && tbHave && tbTicked;
 }
 
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
