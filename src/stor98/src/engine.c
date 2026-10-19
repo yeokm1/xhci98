@@ -127,7 +127,7 @@ VOID EngProbeSg9x(IN PSCSI_REQUEST_BLOCK Srb)
 // by fragment on 9x. ToCaller: bounce -> caller (a read), else caller ->
 // bounce (a write). FALSE, with nothing copied, when the whole span cannot
 // be resolved: the caller fails the parent instead of guessing an address.
-static BOOLEAN EngCallerCopy(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset, IN PUCHAR Bounce,
+static BOOLEAN EngCallerCopy(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset, IN PUCHAR Bounce,
                              IN ULONG Bytes, IN BOOLEAN ToCaller)
 {
 #ifdef NVME2K_W9X
@@ -137,6 +137,14 @@ static BOOLEAN EngCallerCopy(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset, IN PUC
     ULONG kind = Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift);
     BOOLEAN ok = TRUE;
 
+#ifdef STOR98_DBGPORT
+    // Test builds: report every Nth copy unresolved, before anything is
+    // copied, to exercise the failure paths (STOR98_TEST_SG9X_FAIL).
+    if (DevExt->Tun.Sg9xFailEvery != 0 && ++DevExt->Tun.Sg9xFailCount % DevExt->Tun.Sg9xFailEvery == 0) {
+        DBGSTAGE(STG_SG9X, EngSg9xStage(Srb, SG9X_UNKNOWN, ToCaller ? 2 : 1, FALSE));
+        return FALSE;
+    }
+#endif
     if (kind == SG9X_SG) {
         ok = Sg9xCopy(sgd, shift, Offset, Bounce, Bytes, ToCaller);
     } else if (kind != SG9X_LINEAR) {
@@ -972,7 +980,7 @@ static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
             return ENG_WAIT_PRP;
         }
         if (c->Opcode == NVME_CMD_WRITE &&
-            !EngCallerCopy(srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), bytes, FALSE)) {
+            !EngCallerCopy(DevExt, srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), bytes, FALSE)) {
             // The caller's buffer cannot be resolved (9x): fail the parent;
             // children already issued still quiesce first (the dispatcher
             // finishes it once none is outstanding).
@@ -1584,7 +1592,7 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
     // Data copies first, while everything is still owned.
     copyFailed = FALSE;
     if (p != NULL && p->Srb != NULL && ok && c->BouncePage != ENG_NONE && c->Opcode == NVME_CMD_READ &&
-        !EngCallerCopy(p->Srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), c->Bytes, TRUE)) {
+        !EngCallerCopy(DevExt, p->Srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), c->Bytes, TRUE)) {
         DBGSTAGE(STG_ENG_MAP_FAIL, ENG_MAP_UNRESOLVED | ((ULONG)c->Parent << 8));
         copyFailed = TRUE;
     }
