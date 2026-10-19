@@ -1778,3 +1778,11 @@ the window, cancelled, no compatibility question (`bl-cut-w7-uac`,
 `bl-cut-w7-wiz`, `bl-cut-w7-cancel`); **Windows 98 SE** the window with
 no MS-DOS box, cancelled (`bl-cut-98-setup`, `bl-cut-98-cancel`).
 **Pass.**
+
+
+After the second merge of `3.1.0.0` (`49d35844`: 42-A.22 and 42-A.29,
+reviewed with no findings), `xhciinst\build.cmd` and `xhcimark\build.cmd`
+were run again and both gated builds passed once more at `49d35844`
+(x86, then amd64); the x86 TEST cut was taken again there (`SETUP.EXE`
+`f7e9b102...`). No leg was taken on that last cut: `SETUP.EXE`'s source
+is unchanged since `7995a30e`.
