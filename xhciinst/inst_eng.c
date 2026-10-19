@@ -10138,6 +10138,8 @@ static int remove_9x_devnodes(void)
             out("Removing %s ...\n", u->Desc[0] ? u->Desc : u->Id);
             step(INST_STEP_BEGIN, "Removing %s", u->Desc[0] ? u->Desc : u->Id);
             if (helperState < 0) {
+                step(INST_STEP_FAILED, "%s: the helper is not running",
+                     u->Desc[0] ? u->Desc : u->Id);
                 return -1;
             }
             v = helper_job(INST_DI_REMOVE, &d, NULL, 0, &r);
