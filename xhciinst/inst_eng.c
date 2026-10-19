@@ -13521,9 +13521,16 @@ static void s98_question(void)
     char line[16];
     char text[1024];
 
-    r = inst_s98_decide(haveS98, opts.Yes, opts.Stor98, opts.List, &asked,
-                        &def);
+    r = inst_s98_decide(haveS98, haveCm && tbInclude, opts.Yes, opts.Stor98,
+                        opts.List, &asked, &def);
     if (!haveS98) {
+        s98_apply(0);
+        return;
+    }
+    if (!haveCm || !tbInclude) {
+        out("Stor98 %s, the bundled NVMe driver: left out, it comes with the "
+            "Thunderbolt 3 /\nUSB4 support.\n\n", s98VersionText);
+        logonly("stor98: left out with the Thunderbolt support\n");
         s98_apply(0);
         return;
     }
@@ -14146,7 +14153,8 @@ int inst_eng_s98_state(int *have, char *version, size_t cap)
 
 void inst_eng_s98_choose(int include)
 {
-    s98_apply(include);
+    /* Part of the Thunderbolt support (owner, 2026-10-19). */
+    s98_apply(include && haveCm && tbInclude);
     logonly("stor98: chosen %d\n", s98Include);
 }
 

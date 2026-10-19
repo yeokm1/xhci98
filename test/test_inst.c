@@ -3130,21 +3130,32 @@ static void test_s98(void)
         int def;
         argv1[0] = "x";
         argv1[1] = "/stor98";
-        CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Stor98,
-              "/stor98");
+        CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 1 &&
+              strstr(err, "/thunderbolt") != NULL,
+              "/stor98 alone: refused, it needs /thunderbolt");
+        argv1[2] = "/thunderbolt";
+        CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
+              o.Stor98 && o.Thunderbolt, "/stor98 /thunderbolt");
         argv1[2] = "/uninstall";
         CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
               "/stor98 belongs to an install");
-        CHECK(!inst_s98_decide(1, 0, 0, 0, &asked, &def) && asked && !def,
+        CHECK(!inst_s98_decide(1, 1, 0, 0, 0, &asked, &def) && asked && !def,
               "asked, Enter gives N");
-        CHECK(!inst_s98_decide(1, 1, 0, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(1, 1, 1, 0, 0, &asked, &def) && !asked,
               "/yes: N, not asked");
-        CHECK(inst_s98_decide(1, 1, 1, 0, &asked, &def) && !asked,
+        CHECK(inst_s98_decide(1, 1, 1, 1, 0, &asked, &def) && !asked,
               "/stor98: installed unasked");
-        CHECK(!inst_s98_decide(0, 0, 1, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(0, 1, 0, 1, 0, &asked, &def) && !asked,
               "no Stor98 in the package: nothing");
-        CHECK(!inst_s98_decide(1, 0, 0, 1, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(1, 1, 0, 0, 1, &asked, &def) && !asked,
               "/list asks nothing");
+        CHECK(!inst_s98_decide(1, 0, 0, 0, 0, &asked, &def) && !asked &&
+              !inst_s98_decide(1, 0, 1, 1, 0, &asked, &def) && !asked,
+              "no Thunderbolt support in the run: Stor98 neither asked nor "
+              "installed");
+        CHECK(inst_s98_box_open(1, 1, 1) && !inst_s98_box_open(1, 1, 0) &&
+              !inst_s98_box_open(1, 0, 1) && !inst_s98_box_open(0, 1, 1),
+              "the window's box: open only under a ticked Thunderbolt box");
         CHECK(strcmp(inst_final_text_cold(INST_FINAL_RESTART, 1),
                      "Changes were made. Please shut down and start Windows "
                      "again.") == 0 &&

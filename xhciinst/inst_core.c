@@ -2158,6 +2158,11 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
         inst_err(err, errCap, "/stor98 belongs to an install", NULL);
         return 1;
     }
+    if (opts->Stor98 && !opts->Thunderbolt) {
+        inst_err(err, errCap, "/stor98 needs /thunderbolt: Stor98 is part of "
+                 "the Thunderbolt 3 / USB4 support", NULL);
+        return 1;
+    }
     if (opts->NoTray && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/notray belongs to an install", NULL);
         return 1;
@@ -4684,11 +4689,11 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_NOW, "Restart Windows now", 284, 10 },
     { INST_PT_LATER, "Restart Windows later", 284, 10 },
     { INST_PT_S98, "Stor98, the bundled NVMe driver (a separate project)",
-      270, 10 },
+      258, 10 },
     { INST_PT_S98_T,
       "For an NVMe drive behind a Thunderbolt or USB4 tunnel, or an "
       "internal one; it installs only on NVMe drives with no driver.",
-      272, 18 },
+      260, 18 },
     { INST_PT_S98SET,
       "Stor98's settings (its readme, SETTINGS). A row left as it is writes "
       "nothing; Stor98 keeps its built-in default.",
@@ -5167,12 +5172,17 @@ int inst_s98_cold_start(int nt)
     return !nt;
 }
 
-int inst_s98_decide(int haveS98, int yes, int stor98Switch, int list,
+int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch, int list,
                     int *asked, int *def)
 {
     *def = 0;
-    *asked = haveS98 && !yes && !stor98Switch && !list;
-    return haveS98 && stor98Switch;
+    *asked = haveS98 && tb && !yes && !stor98Switch && !list;
+    return haveS98 && tb && stor98Switch;
+}
+
+int inst_s98_box_open(int haveS98, int tbHave, int tbTicked)
+{
+    return haveS98 && tbHave && tbTicked;
 }
 
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,

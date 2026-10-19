@@ -1,7 +1,10 @@
 # Design Record 26 - The Windowed Installer
 
 Status: draft 8, 2026-10-19, the owner's (a wider gap and a line between
-settings rows, XHCITR's icon, a row of another system shown greyed);
+settings rows, XHCITR's icon, a row of another system shown greyed,
+Stor98's box a child of the Thunderbolt one) and the matrix legs' (each
+Progress row's outcome in place, the Summary's headline from what it
+lists);
 draft 7, 2026-10-18, reviewed and revised (an INF copy made by
 an update recorded without the device); draft 6, 2026-10-18, reviewed
 and revised (the INF inventory
@@ -339,7 +342,7 @@ Check boxes, one a line, each with one sentence:
 |---|---|---|---|
 | xHCI98 USB 3.x host controller driver (`xhci98.sys`) and UAS driver (`xhciuas.sys`) | always | no (shown ticked and disabled: the package is these two) | the drivers for the controller, its hubs and devices, and UAS disks |
 | Thunderbolt 3 / USB4 support (`xhcicm.sys`) | as record 23 section 8.5 decides: with a controller present yes, with none no | yes | the connection manager; its warning sentence (a device plugged into that port can reach the computer's memory) stands under the box, with "see `XhciCmApprove` on the Thunderbolt settings page" |
-| Stor98, the NVMe driver (bundled) | never unasked (record 23 section 4.4; owner, 2026-10-18) | yes | shown only when the flavour directory carries it; one sentence saying what it is for (an NVMe drive behind a Thunderbolt or USB4 tunnel, or an internal one) and that it installs on NVMe drives that have no driver (section 6.3) |
+| Stor98, the NVMe driver (bundled) | never unasked (record 23 section 4.4; owner, 2026-10-18) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked, unticked and greyed when it is unticked or greyed (a package without the support shows both greyed; `inst_s98_box_open`); shown only when the flavour directory carries it; one sentence saying what it is for (an NVMe drive behind a Thunderbolt or USB4 tunnel, or an internal one) and that it installs on NVMe drives that have no driver (section 6.3) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, Next disabled until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
@@ -687,8 +690,11 @@ unasked). With the box ticked:
 ### 6.4 The console tool
 
 Gains the same: `/stor98` installs the bundled Stor98 without asking (the
-pair of `/thunderbolt`), the question "Install Stor98, the bundled NVMe
-driver?" with Enter for N where the package carries it, and the Stor98
+pair of `/thunderbolt`, and refused without it: Stor98 is part of the
+Thunderbolt 3 / USB4 support, owner, 2026-10-19), the question "Install
+Stor98, the bundled NVMe driver?" with Enter for N where the package
+carries it and the Thunderbolt support is in the run (left out, and said,
+otherwise; `inst_s98_decide`), and the Stor98
 rows in its value questions (asked only when Stor98 is installed by the
 run). Record 23 sections 4.4, 7.1 and 8.1 are revised (section 12).
 
@@ -914,7 +920,7 @@ page:
 | `/uninstall` | the uninstall wizard (section 9) |
 | `/from <dir>` | the relaunch of section 9.2; refused from a package directory |
 | `/to <path>` | preselects the tools folder; the page still shows it |
-| `/thunderbolt`, `/stor98`, `/notray` | preselect the components; the page still shows them |
+| `/thunderbolt`, `/stor98`, `/notray` | preselect the components; the page still shows them (`/stor98` needs `/thunderbolt`, section 6.4) |
 | `/set Name=Value` | preselects a setting (and makes it "changed", so it is written); the page still shows it |
 | `/defaults` | as record 23 section 7.1: every current value kept and no value question asked, which in the window means the settings pages are shown with the values in force and nothing marked changed (a page left alone writes nothing) |
 | `/force`, `/restage` | as record 23; the Found page shows what they add |

@@ -1183,6 +1183,7 @@ these systems.
 | `/set Name=Value` | answer one registry question, repeatable; validated against the value table and the system (section 8.1); applies even where the question would not be asked |
 | `/force` | reinstall a current device, and install over a newer group (section 5.4) |
 | `/thunderbolt` | include the Thunderbolt 3 / USB4 support without asking (section 8.5) |
+| `/stor98` | include the bundled Stor98 without asking (record 26 section 6.4); refused without `/thunderbolt`, since Stor98 is part of the Thunderbolt 3 / USB4 support (owner, 2026-10-19), and with `/uninstall`, `/devices` and `/eject` |
 | `/to <path>` | the install directory (section 9.6) without asking; refused with `/uninstall`, `/devices` and `/eject`, and checked as a typed answer is (a path that fails refuses the run, exit 1) |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |

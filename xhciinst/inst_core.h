@@ -1314,11 +1314,16 @@ void inst_sha256(const unsigned char *data, size_t len, char *hex65);
 
 /* The question "Install Stor98, the bundled NVMe driver?" (record 26
  * section 6.4): never unasked (record 23 section 4.4), so Enter and /yes
- * give N; /stor98 installs it without asking; /list asks nothing. Returns
- * the decision when it is not asked; *asked whether it is, *def what Enter
- * gives. */
-int inst_s98_decide(int haveS98, int yes, int stor98Switch, int list,
+ * give N; /stor98 installs it without asking; /list asks nothing. Part of
+ * the Thunderbolt 3 / USB4 support (owner, 2026-10-19): with tb (that
+ * support in the run) 0, neither asked nor installed. Returns the decision
+ * when it is not asked; *asked whether it is, *def what Enter gives. */
+int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch, int list,
                     int *asked, int *def);
+
+/* The window's Stor98 box (owner, 2026-10-19): under the Thunderbolt 3 /
+ * USB4 box, and open only while that box can be and is ticked. */
+int inst_s98_box_open(int haveS98, int tbHave, int tbTicked);
 int inst_s98_await_reconnect(int nt, int updatedOk, int ownCm,
                              int behindTunnel);
 

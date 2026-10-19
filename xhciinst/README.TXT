@@ -99,12 +99,12 @@ minutes. The uninstall removes Stor98 only where this installer put it
 there: a Stor98 installed before, by hand or by an earlier tool, stays.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
-(the tools folder, preselected), /thunderbolt, /stor98 and /notray (the
-components, preselected), /set Name=Value (an option, preselected),
-/defaults, /force (reinstall this release, or go back to it from a newer
-one), /restage (Vista and 7: replace a stored development build with the
-same DriverVer), /debug (the debug- directory, only if a maintainer asks),
-/log path.
+(the tools folder, preselected), /thunderbolt, /stor98 (only with
+/thunderbolt) and /notray (the components, preselected), /set
+Name=Value (an option, preselected), /defaults, /force (reinstall this
+release, or go back to it from a newer one), /restage (Vista and 7:
+replace a stored development build with the same DriverVer), /debug
+(the debug- directory, only if a maintainer asks), /log path.
 
 The console tool
 ----------------
@@ -119,9 +119,12 @@ The console tool
   INSTALL /console /uninstall   removes the drivers (see below)
   INSTALL /console /thunderbolt installs the Thunderbolt 3 / USB4 support
                                 without asking
-  INSTALL /console /stor98      installs the bundled Stor98 without asking
-                                (without it the console asks, Enter for N;
-                                /yes leaves it out)
+  INSTALL /console /thunderbolt /stor98
+                                installs the bundled Stor98 without asking;
+                                it is part of the Thunderbolt 3 / USB4
+                                support, so /stor98 needs /thunderbolt
+                                (without /stor98 the console asks, Enter
+                                for N; /yes leaves it out)
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /to path     installs the xHCI98 tools in that

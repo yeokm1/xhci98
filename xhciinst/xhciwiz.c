@@ -700,6 +700,21 @@ static void replan(void)
 
 /* ---- the Components page (record 26 section 5.3) ------------------------- */
 
+/* Stor98's box, under the Thunderbolt one: open only while that is
+ * ticked; unticking it unticks Stor98 (owner, 2026-10-19). */
+static void comp_s98_sync(HWND dlg)
+{
+    int open = inst_s98_box_open(s98Have, tbHave,
+                                 IsDlgButtonChecked(dlg, IDC_C_TB) ==
+                                 BST_CHECKED);
+
+    if (!open) {
+        CheckDlgButton(dlg, IDC_C_S98, BST_UNCHECKED);
+    }
+    EnableWindow(GetDlgItem(dlg, IDC_C_S98), open);
+    EnableWindow(GetDlgItem(dlg, IDC_C_S98_T), open);
+}
+
 static void comp_fill(HWND dlg)
 {
     SetDlgItemTextA(dlg, IDC_C_DRIVERS, inst_page_text(INST_PT_DRIVERS));
@@ -711,13 +726,16 @@ static void comp_fill(HWND dlg)
                                                     INST_PT_TB_T :
                                                     INST_PT_TB_ABSENT));
     CheckDlgButton(dlg, IDC_C_TB, tbChoice ? BST_CHECKED : BST_UNCHECKED);
-    ShowWindow(GetDlgItem(dlg, IDC_C_TB), tbHave ? SW_SHOW : SW_HIDE);
-    ShowWindow(GetDlgItem(dlg, IDC_C_TB_T), tbHave ? SW_SHOW : SW_HIDE);
+    /* A package without the Thunderbolt support shows its box greyed,
+     * and Stor98's under it with it (owner, 2026-10-19). */
+    EnableWindow(GetDlgItem(dlg, IDC_C_TB), tbHave);
+    EnableWindow(GetDlgItem(dlg, IDC_C_TB_T), tbHave);
     SetDlgItemTextA(dlg, IDC_C_S98, inst_page_text(INST_PT_S98));
     SetDlgItemTextA(dlg, IDC_C_S98_T, inst_page_text(INST_PT_S98_T));
     CheckDlgButton(dlg, IDC_C_S98, s98Choice ? BST_CHECKED : BST_UNCHECKED);
     ShowWindow(GetDlgItem(dlg, IDC_C_S98), s98Have ? SW_SHOW : SW_HIDE);
     ShowWindow(GetDlgItem(dlg, IDC_C_S98_T), s98Have ? SW_SHOW : SW_HIDE);
+    comp_s98_sync(dlg);
     SetDlgItemTextA(dlg, IDC_C_TRAY, inst_page_text(INST_PT_TRAY));
     SetDlgItemTextA(dlg, IDC_C_TRAY_T, inst_page_text(INST_PT_TRAY_T));
     CheckDlgButton(dlg, IDC_C_TRAY, trayChoice ? BST_CHECKED : BST_UNCHECKED);
@@ -789,7 +807,8 @@ static int comp_leave(HWND dlg)
     inst_copy(dirChoice, checked, sizeof(dirChoice));
     trayChoice = IsDlgButtonChecked(dlg, IDC_C_TRAY) == BST_CHECKED;
     tb = tbHave && IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED;
-    s98 = s98Have && IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
+    s98 = inst_s98_box_open(s98Have, tbHave, tb) &&
+          IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
     if (tb != tbChoice || s98 != s98Choice) {
         tbChoice = tb;
         s98Choice = s98;
@@ -2323,6 +2342,11 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             return TRUE;
         case IDC_C_BROWSE:
             comp_browse(dlg);
+            return TRUE;
+        case IDC_C_TB:
+            if (HIWORD(wp) == BN_CLICKED) {
+                comp_s98_sync(dlg);
+            }
             return TRUE;
         case IDC_S_ADVANCED:
             if (page == P_S98) {
