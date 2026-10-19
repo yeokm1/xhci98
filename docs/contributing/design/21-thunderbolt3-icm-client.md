@@ -935,9 +935,11 @@ from `src\cm\` and the tools on 2026-10-19:
   `xhci98.sys`, opens none of its devices, sends it no request (no
   internal USB request, no `USBUSER` door call, no IOCTL of either
   driver's), and `xhci98.sys` does not know it exists (section 3.1). The
-  only device requests the driver answers are its own: `IOCTL_XHCICM_QUERY`
-  and `IOCTL_XHCICM_MARKS` on `\.\XHCICM<n>` (`cm_query.h`), read by
-  `XHCITR`, `XHCIINST /devices` and `/eject` and the mark service; and
+  only device requests the driver answers are its own, on
+  `\\.\XHCICM<n>` (`cm_query.h`): `IOCTL_XHCICM_QUERY` and
+  `IOCTL_XHCICM_MARKS`, read by `XHCITR`, `XHCIINST /devices` and
+  `/eject` and the mark service, and the log and PCI configuration
+  snapshot requests (`CM_QL_IOCTL`, `CM_QP_IOCTL`) `XHCITR` reads; and
   the Stor98 channel is a callback object and a table of the two drivers'
   own (section 7.2). Its settings come from its own driver key and the
   machine-wide `Services\USB` key, which only the installer and the
@@ -977,9 +979,12 @@ NVMe drive behind it (Stor98 is not offered there; record 23 section
 4.5), a dock's xHCI controller and its devices under Windows' own USB
 driver, the USB3 tunnel's devices on the host's controller under the same
 driver, and safe eject with the marks. None of it has been read on 8 or
-8.1, where no guest exists here, and the import gate holds the driver to
-the export tables of 2000 SP4, XP SP3, Vista SP2 and 7 SP1 only: whether
-8's kernel and HAL still export each routine of
+8.1, where no guest exists here. The import gate holds the x86 driver to
+Windows 98's evidence and Windows 2000's export tables, and the amd64
+driver to NT 5.2's (`build-driver.cmd`'s gate for `xhcicm.sys`,
+`check-imports.ps1`); Vista and 7 are read in guests, not by the gate;
+and no export table of 8 is in the tree, so whether 8's kernel and HAL
+still export each routine of
 `xhcicm-imports.allow` (the HAL's `HalGetBusData`, `KfAcquireSpinLock`,
 `KfReleaseSpinLock`, `KeGetCurrentIrql` and `KeStallExecutionProcessor`
 among them on x86) is unread. The driver's own system tests are WDM

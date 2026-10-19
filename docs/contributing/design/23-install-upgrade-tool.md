@@ -183,9 +183,9 @@ it". What changes here:
 - **Section 7.1**: `/cmonly`.
 - **Section 8.5**: with the USB drivers out of the run the Thunderbolt
   support is in it unasked: it is all the run installs.
-- **Section 9.1**: the warning names the connection manager alone when no
-  `xhci98` service is registered (a machine where only the connection
-  manager was installed); the typed word stays.
+- **Section 9.1**: the warning names the connection manager alone when
+  the `xhci98` service is not registered and `xhcicm`'s is (a machine
+  where only the connection manager was installed); the typed word stays.
 - **Sections 9.5 and 5.1 step 12**: the mark service on 8 and 8.1 too.
 - **Section 13**: D17 to D19.
 
@@ -1687,9 +1687,10 @@ or a USB controller another driver runs, before you go on.
 Type REMOVE and press Enter to go on; anything else cancels.
 ```
 
-Where no `xhci98` service is registered (revision 13: a machine that has
-the connection manager alone; read before anything else, and on NT only),
-the first lines read instead:
+Where the `xhci98` service is read as not registered and `xhcicm`'s as
+registered (revision 13: a machine that has the connection manager alone;
+read before anything else, and on NT only), the first lines read
+instead:
 
 ```
 *** This removes the xHCI98 Thunderbolt 3 / USB4 connection manager. ***
@@ -1699,7 +1700,8 @@ you go on.
 ```
 
 and the question "Remove the connection manager?"; the typed word is the
-same. A registration that cannot be read gives the first text.
+same. Any other reading, an unreadable one included, gives the first
+text.
 
 Only `REMOVE` goes on. With no console answer (end of input) the tool
 refuses unless `/yes` is given, which is for the legs and scripts; `/yes`
@@ -2282,9 +2284,10 @@ the user.
 - Windows 8 and 8.1 (revision 13) have no guest here: the connection
   manager's install, its filter's (whose INF includes `machine.inf`'s
   `PCI_DRV` sections, read on 2000, XP and 7 only), the driver's imports
-  (the import gate holds them to the export tables of 2000 SP4, XP SP3,
-  Vista SP2 and 7 SP1; none of 8 is in the tree) and the mark service are
-  unread there.
+  (the import gate holds the x86 driver to Windows 98's evidence and
+  Windows 2000's exports and the amd64 driver to NT 5.2's; Vista and 7
+  are read in guests; no export table of 8 is in the tree; record 21
+  section 3.5) and the mark service are unread there.
 
 ## 15. Files
 

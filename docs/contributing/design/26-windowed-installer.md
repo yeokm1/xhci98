@@ -788,10 +788,13 @@ shows (`tools\nusb36-extracted\_nusb.inf`: a display name and a
 is deleted by the uninstall, last but for the directory.
 
 From draft 8 the display name
-follows what the machine has when the entry is written: with no `xhci98`
-service registered and the `xhcicm` service registered (the connection
-manager alone, record 23 section 4.5), "xHCI98 Thunderbolt 3 / USB4
-connection manager 3.1.0.0"; otherwise the name above. The key, the
+follows what the machine has when the entry is written: with the `xhci98`
+service read as not registered and either the `xhcicm` service registered
+or this run one without the USB drivers (the connection manager alone,
+record 23 section 4.5; the second for a run that staged the connection
+manager with no controller present, which registers no service yet),
+"xHCI98 Thunderbolt 3 / USB4 connection manager 3.1.0.0"; otherwise the
+name above (`inst_arp_cm_only`, host-tested). The key, the
 program it runs and the uninstall are the same either way, so moving
 between the two rewrites the one entry.
 
@@ -830,8 +833,9 @@ gated on the one before, shown on the Progress page:
    and the window's equivalent of the typed word: a check box "I have a
    keyboard and mouse that do not go through this driver, or I accept
    that the USB ones stop working" that enables the Remove button (W7).
-   The console keeps `REMOVE`. Where no `xhci98` service is registered
-   (draft 8: the connection manager alone), the page's title, warning and
+   The console keeps `REMOVE`. Where the `xhci98` service is not
+   registered and `xhcicm`'s is (draft 8: the connection manager alone,
+   record 23 section 9.1's rule), the page's title, warning and
    box are the connection manager's: "Remove the xHCI98 Thunderbolt 3 /
    USB4 connection manager", record 23 section 9.1's second text, and "I
    have closed every program that uses a device connected through a
