@@ -2323,7 +2323,8 @@ void inst_eng_choose_value(int value, int set, INST_U32 v)
     if (value < 0 || value >= instValueCount || value >= INST_MAX_VALUES) {
         return;
     }
-    chosenSet[value] = set ? 1 : 0;
+    /* A greyed row's value is for another system: never written. */
+    chosenSet[value] = set && !inst_value_greyed(value, &envNow) ? 1 : 0;
     chosenValue[value] = v;
 }
 
@@ -2468,6 +2469,7 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         DWORD mwv = 0;
         int asked;
         int cmRow;
+        int greyed;
         if (value_inf(v) == NULL ||
             !inst_value_default(v, value_inf(v), &r->Def)) {
             continue;
@@ -2475,23 +2477,30 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         /* A Thunderbolt value with no controller present is still shown
          * when the support is ticked, and written machine-wide for the
          * controller to come (record 26 section 5.5). */
+        /* A value of another system is shown greyed where it would be
+         * asked or behind Advanced there (owner, 2026-10-19). */
+        greyed = inst_value_greyed(v, &envNow);
         cmRow = instValues[v].Inf == INST_INF_CM &&
                 (instValues[v].Apply == INST_APPLY_CM ||
-                 (instValues[v].Apply == INST_APPLY_9X_CM && !envNow.Nt));
+                 instValues[v].Apply == INST_APPLY_9X_CM);
         asked = inst_value_applies(v, &envNow) ||
-                (cmRow && instValues[v].Asked != 0);
-        if (!asked && !cmRow && !inst_value_relevant(v, &envNow)) {
+                (cmRow && !greyed && instValues[v].Asked != 0) ||
+                (greyed && instValues[v].Asked != 0);
+        if (!asked && !cmRow && !greyed && !inst_value_relevant(v, &envNow)) {
             continue;
         }
         targets = value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
-        if (targets == 0 && !cmRow) {
+        if (targets == 0 && !cmRow && !greyed) {
             continue;
         }
         r->Value = v;
         r->Asked = asked;
+        r->Greyed = greyed;
         /* Every value /set may give, so a setting in force is never
-         * shown as another (its caution is in the row's note). */
-        r->Mask = inst_value_set_mask(v, &envNow);
+         * shown as another (its caution is in the row's note); a greyed
+         * row lists its own system's. */
+        r->Mask = greyed ? instValues[v].Settable
+                         : inst_value_set_mask(v, &envNow);
         r->MwState = mw_value(v, &mwv);
         r->MwValue = (INST_U32)mwv;
         r->CmNew = cmNew;
@@ -14162,7 +14171,7 @@ const char *inst_eng_s98_choose_value(int i, int set, const char *text)
     if (i < 0 || i >= INST_S98_COUNT) {
         return "no such setting";
     }
-    if (!set) {
+    if (!set || !inst_s98_applies(i, envNow.Nt)) {
         s98Set[i] = 0;
         return NULL;
     }

@@ -191,6 +191,7 @@ typedef struct _INST_ROW {
     int Same;               /* every device runs one value: InForce      */
     INST_U32 InForce;
     int CmNew;              /* a new install of the Thunderbolt driver    */
+    int Greyed;             /* inst_value_greyed: shown, never written    */
 } INST_ROW;
 int inst_eng_rows(INST_ROW *rows, int cap);
 

@@ -1,6 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 7, 2026-10-18, reviewed and revised (an INF copy made by
+Status: draft 8, 2026-10-19, the owner's (a wider gap and a line between
+settings rows, XHCITR's icon, a row of another system shown greyed);
+draft 7, 2026-10-18, reviewed and revised (an INF copy made by
 an update recorded without the device); draft 6, 2026-10-18, reviewed
 and revised (the INF inventory
 around every settle as well); draft 5, 2026-10-18, reviewed and revised
@@ -356,6 +358,21 @@ value now where one is set. The caution of 8.3 stands under its row. A
 value the user changes is written as 8.4 says; a value left as it is is not
 written (the INF's don't-overwrite flag stays the rule).
 
+**A row of another system is shown greyed** (owner, 2026-10-19: "grey out
+if system does not support that option"): where a value's controller is
+here and its system is not - `XhciSilentInstall` on 2000 to 7,
+`XhciPollFineTimer` on 98 SE and ME, `XhciCmBridgeNumbering` on 2000 to 7,
+and `XhciIntelPortSwitch` on a controller `XhciPswGate` does not admit -
+the row is shown where its own system shows it (on the page or behind
+Advanced), its label and its choice disabled, its "now" replaced by the
+systems it is for ("(Windows 98 SE and ME only)", "(Windows 2000 to 7
+only)", "(Intel 7-9 series, C610 only)"), and it never writes: the page
+does not take it and the engine refuses it (`inst_value_greyed`,
+`inst_value_only`, host-tested). A value with no controller for it at all
+stays off the pages. Rows are 38 dialog units apart with an etched line
+between them, so a label is not read as the title of the choice above it
+(owner, 2026-10-19).
+
 **Where it is written** (task 42-A.17, the owner's decision of 2026-10-18,
 "The machine-wide registry key"): the settings pages write the machine-wide
 value under `HKLM\System\CurrentControlSet\Services\USB`, which the drivers
@@ -402,7 +419,8 @@ the restart; disconnect the dock until then when the answer is 0).
 `XhciCmPreOsCleanup`, and from the release notes' table `XhciCmBridgeNumbering`
 (98 SE and ME only), `XhciCmPollIdleMs`, `XhciCmCmdTimeoutMs`,
 `XhciCmApproveTimeoutMs`, `XhciCmLogVerbosity` and `XhciCmLogDebugView`,
-each with its default, range and warning; design record 28's
+each with its default, range and warning (`XhciCmBridgeNumbering` shown
+greyed on 2000 to 7, as section 5.4 says); design record 28's
 `XhciCmNoIrqStart` (98 SE and ME only) and the mark service's `Restart`
 (2000 to 7 only; record 21 section 7.4, revision 3) join these rows with
 their systems, written machine-wide when changed. `XhciCmTunnelBridge` (a string
@@ -420,9 +438,11 @@ the default's value where none was set writes it explicitly, which the
 row says. The rows asked: `StorWriteThrough` (`auto`, `off`, `cacheoff`,
 `fua`, each with Stor98's one-line meaning; a string on every system) and
 `StorPollMode` (0 or 1). "Advanced...": `StorMaxTransferKB`,
-`StorPollBusyUs`, `StorPollIdleMs`, `StorPollSpinUs`, and on 2000 to 7
-only the two that readme marks not settable on 98 SE and ME, `gone` and
-`idle`, each with Stor98's default, unit and range. Where they are
+`StorPollBusyUs`, `StorPollIdleMs`, `StorPollSpinUs`, and the two that
+readme marks not settable on 98 SE and ME, `gone` and `idle`, each with
+Stor98's default, unit and range; on 98 SE and ME those two are shown
+greyed, "(Windows 2000 to 7 only)", and never written
+(`inst_s98_greyed`, owner, 2026-10-19). Where they are
 written is Stor98's rule, not this package's, and the table carries it
 per value: on 98 SE and ME a value of the row's name under
 `HKLM\System\CurrentControlSet\Services\stor98`, a `REG_SZ` for
@@ -917,7 +937,8 @@ nothing changed; closed during the progress, the cancel of section 5.8.
   default, its range or list with meanings, the systems it applies to, its
   warning, and its location rule (machine-wide for the drivers' values,
   Stor98's two forms for Stor98's); the suite checks every asked and
-  advanced row against the INFs of `src\` and `src\cm\` as today, and every
+  advanced row against the INFs of `src\` and `src\cm\` as today, which
+  rows are shown greyed on which system (section 5.4), and every
   Stor98 row against the bundled Stor98's readme table (the row names and
   ranges, read from `docs\` of the pinned Stor98 release folder at build
   time by the suite, so a renamed value fails the build);

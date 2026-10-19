@@ -2727,6 +2727,64 @@ static void test_mw_values(void)
           "a list's values by the system");
 }
 
+/* ---- record 26 section 5.4: a row of another system, greyed ----------- */
+
+static void test_greyed(void)
+{
+    INST_ENV e;
+    int sil = inst_value_find("XhciSilentInstall");
+    int fine = inst_value_find("XhciPollFineTimer");
+    int psw = inst_value_find("XhciIntelPortSwitch");
+    int mode = inst_value_find("XhciInterruptMode");
+    int br = inst_value_find("XhciCmBridgeNumbering");
+    int cm = inst_value_find("XhciCmMode");
+
+    CHECK(sil >= 0 && fine >= 0 && psw >= 0 && mode >= 0 && br >= 0 &&
+          cm >= 0, "the values are in the table");
+    e = env(1, 6, 1, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    e.PswController = 1;
+    CHECK(inst_value_greyed(sil, &e) && !inst_value_applies(sil, &e) &&
+          inst_value_set_mask(sil, &e) == 0,
+          "7: the 98 SE and ME switch greyed, never asked or set");
+    CHECK(strcmp(inst_value_only(sil), "Windows 98 SE and ME only") == 0,
+          "and says which systems");
+    CHECK(inst_value_greyed(br, &e) && !inst_value_greyed(cm, &e) &&
+          !inst_value_greyed(fine, &e) && !inst_value_greyed(mode, &e) &&
+          !inst_value_greyed(psw, &e),
+          "7: the 98 SE and ME Thunderbolt value greyed, the rest not");
+    e.PswController = 0;
+    CHECK(inst_value_greyed(psw, &e) && !inst_value_applies(psw, &e) &&
+          strcmp(inst_value_only(psw), "Intel 7-9 series, C610 only") == 0,
+          "no port-switch controller: the switch greyed");
+    e = env(0, 4, 10, INST_ARCH_X86);
+    e.AnyXhci = 1;
+    e.PswController = 1;
+    CHECK(inst_value_greyed(fine, &e) && !inst_value_relevant(fine, &e) &&
+          strcmp(inst_value_only(fine), "Windows 2000 to 7 only") == 0,
+          "98 SE: the 2000-to-7 value greyed");
+    CHECK(!inst_value_greyed(sil, &e) && !inst_value_greyed(br, &e) &&
+          !inst_value_greyed(mode, &e) && !inst_value_greyed(psw, &e),
+          "98 SE: its own values not greyed");
+    CHECK(inst_value_only(mode) == NULL && inst_value_only(cm) == NULL &&
+          inst_value_only(-1) == NULL && !inst_value_greyed(-1, &e),
+          "a value of every system has no words");
+    e.AnyXhci = 0;
+    CHECK(!inst_value_greyed(fine, &e) && !inst_value_greyed(psw, &e),
+          "no controller: nothing greyed for it");
+    CHECK(inst_s98_greyed(INST_S98_GONE, 0) &&
+          inst_s98_greyed(INST_S98_IDLE, 0) &&
+          !inst_s98_greyed(INST_S98_GONE, 1) &&
+          !inst_s98_greyed(INST_S98_WRITETHROUGH, 0) &&
+          !inst_s98_greyed(INST_S98_WRITETHROUGH, 1) &&
+          !inst_s98_greyed(-1, 0),
+          "Stor98: gone and idle greyed on 98 SE and ME alone");
+    CHECK(strcmp(inst_s98_only(INST_S98_GONE), "Windows 2000 to 7 only") == 0 &&
+          inst_s98_only(INST_S98_WRITETHROUGH) == NULL &&
+          inst_s98_only(INST_S98_COUNT) == NULL,
+          "Stor98: the words of a greyed row");
+}
+
 /* ---- record 26 sections 9.1 and 9.2: the entry, the relaunch ------------ */
 
 static void test_uninstall_entry(void)
@@ -3227,6 +3285,7 @@ int main(void)
     test_to_switch();
     test_di_helper();
     test_mw_values();
+    test_greyed();
     test_uninstall_entry();
     test_page_texts();
     test_s98();

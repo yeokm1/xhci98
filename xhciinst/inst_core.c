@@ -1746,6 +1746,41 @@ int inst_value_relevant(int index, const INST_ENV *env)
     }
 }
 
+int inst_value_greyed(int index, const INST_ENV *env)
+{
+    switch (index >= 0 && index < instValueCount ? instValues[index].Apply
+                                                 : -1) {
+    case INST_APPLY_PSW:
+        return (env->AnyXhci && !env->PswController) ? 1 : 0;
+    case INST_APPLY_NT_XHCI:
+        return (!env->Nt && env->AnyXhci) ? 1 : 0;
+    case INST_APPLY_9X_XHCI:
+        return (env->Nt && env->AnyXhci) ? 1 : 0;
+    case INST_APPLY_9X_CM:
+        /* The Thunderbolt rows are shown with no host interface present
+         * too (record 26 section 5.5), so this one is as well. */
+        return env->Nt ? 1 : 0;
+    default:
+        return 0;
+    }
+}
+
+const char *inst_value_only(int index)
+{
+    switch (index >= 0 && index < instValueCount ? instValues[index].Apply
+                                                 : -1) {
+    case INST_APPLY_PSW:
+        return "Intel 7-9 series, C610 only";
+    case INST_APPLY_NT_XHCI:
+        return "Windows 2000 to 7 only";
+    case INST_APPLY_9X_XHCI:
+    case INST_APPLY_9X_CM:
+        return "Windows 98 SE and ME only";
+    default:
+        return NULL;
+    }
+}
+
 int inst_value_default(int index, const char *infText, INST_U32 *def)
 {
     if (index < 0 || index >= instValueCount) {
@@ -4794,6 +4829,22 @@ int inst_s98_applies(int i, int nt)
     }
     return nt ? instS98Values[i].KeyNt != NULL
               : instS98Values[i].Name9x != NULL;
+}
+
+int inst_s98_greyed(int i, int nt)
+{
+    return !inst_s98_applies(i, nt) && inst_s98_applies(i, !nt);
+}
+
+const char *inst_s98_only(int i)
+{
+    if (i < 0 || i >= INST_S98_COUNT) {
+        return NULL;
+    }
+    if (instS98Values[i].Name9x == NULL) {
+        return "Windows 2000 to 7 only";
+    }
+    return instS98Values[i].KeyNt == NULL ? "Windows 98 SE and ME only" : NULL;
 }
 
 const char *inst_s98_default(int i, int nt)

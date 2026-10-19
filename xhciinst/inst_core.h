@@ -357,6 +357,17 @@ int inst_value_allowed(int index, const INST_ENV *env, INST_U32 v);
  * (the window's Advanced rows): its Apply rule's hardware and system. */
 int inst_value_relevant(int index, const INST_ENV *env);
 
+/* 1 when value `index` is shown greyed on this system (owner, 2026-10-19):
+ * its hardware is here and its system is not (a 98 SE and ME value on
+ * 2000 to 7, a 2000-to-7 value on 98 SE and ME), or its controller is not
+ * one the port switch is for. The window shows such a row disabled, with
+ * inst_value_only's words, and it never writes. */
+int inst_value_greyed(int index, const INST_ENV *env);
+
+/* What a greyed row says it is for ("Windows 98 SE and ME only"), or NULL
+ * for a value every system takes. */
+const char *inst_value_only(int index);
+
 /* The value's default: the INF's AddReg line, or, for a value no INF
  * writes (NoInf), the table's. 1 when there is one. */
 int inst_value_default(int index, const char *infText, INST_U32 *def);
@@ -1232,6 +1243,13 @@ extern const INST_S98_VALUE instS98Values[INST_S98_COUNT];
 /* 1 when row i is settable on this system (the NT-only two are not on
  * 98 SE and ME). */
 int inst_s98_applies(int i, int nt);
+
+/* 1 when Stor98's row i is shown greyed on this system: settable on the
+ * other systems only (gone and idle on 98 SE and ME). */
+int inst_s98_greyed(int i, int nt);
+
+/* What such a row says it is for, or NULL for a row of every system. */
+const char *inst_s98_only(int i);
 
 /* The built-in default as text ("auto", "512"), and its one-line sense
  * for the system ("cacheoff on ME, off elsewhere"); me: Windows ME. */

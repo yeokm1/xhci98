@@ -849,6 +849,13 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
 
     _snprintf(out, cap - 1, "%s - %s.", v->Name, v->Meaning);
     out[cap - 1] = '\0';
+    if (r->Greyed) {
+        _snprintf(line, sizeof(line) - 1, " %s: not used on this system, "
+                  "so it is greyed and nothing is written.",
+                  inst_value_only(r->Value));
+        line[sizeof(line) - 1] = '\0';
+        strncat(out, line, cap - strlen(out) - 1);
+    }
     if (r->MwState == 1) {
         _snprintf(line, sizeof(line) - 1, " Set machine-wide: %lu, which "
                   "every controller uses.", (unsigned long)r->MwValue);
@@ -1113,6 +1120,14 @@ static void row_make(HWND dlg, ROWCTL *rc, int row, int y, HFONT font, int id)
         row_fill_combo(rc->Choice, r);
     }
     row_now(r, text, sizeof(text));
+    if (r->Greyed) {
+        /* Shown, not hidden, so the page reads the same on every system
+         * (owner, 2026-10-19); row_read never takes it. */
+        _snprintf(text, sizeof(text) - 1, "(%s)", inst_value_only(r->Value));
+        text[sizeof(text) - 1] = '\0';
+        EnableWindow(rc->Label, FALSE);
+        EnableWindow(rc->Choice, FALSE);
+    }
     rc->Now = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 174, y + 19,
                        118, 10, id + 2, font);
 }
@@ -1125,6 +1140,10 @@ static int row_read(const ROWCTL *rc, INST_U32 *v)
     const INST_ROW *r = &rows[rc->Row];
     char text[32];
 
+    if (r->Greyed) {
+        *v = r->InForce;
+        return 0;
+    }
     if (instValues[r->Value].Hi != 0) {
         GetWindowTextA(rc->Choice, text, sizeof(text));
         if (text[0] == '\0') {
@@ -1211,6 +1230,10 @@ static int settings_leave(HWND dlg, int page)
         const INST_ROW *r = &rows[rp->R[i].Row];
         char typed[32];
         typed[0] = '\0';
+        if (r->Greyed) {
+            choiceSet[r->Value] = 0;
+            continue;
+        }
         if (instValues[r->Value].Hi != 0) {
             GetWindowTextA(rp->R[i].Choice, typed, sizeof(typed));
         }
@@ -1251,7 +1274,9 @@ static void adv_cell(HWND lv, int i)
     const INST_ROW *r = &rows[advIdx[i]];
     char text[96];
 
-    if (advSet[i]) {
+    if (r->Greyed) {
+        _snprintf(text, sizeof(text) - 1, "(%s)", inst_value_only(r->Value));
+    } else if (advSet[i]) {
         _snprintf(text, sizeof(text) - 1, "%lu (to be written)",
                   (unsigned long)advVal[i]);
     } else {
@@ -1273,6 +1298,10 @@ static int adv_take(HWND dlg)
         return 1;
     }
     r = &rows[advIdx[advCur]];
+    if (r->Greyed) {
+        advSet[advCur] = 0;
+        return 1;
+    }
     if (instValues[r->Value].Hi != 0) {
         GetDlgItemTextA(dlg, IDC_A_EDIT, text, sizeof(text));
         if (text[0] == '\0') {
@@ -1333,6 +1362,9 @@ static void adv_show(HWND dlg, int i)
         ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_SHOW);
         ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_HIDE);
     }
+    EnableWindow(GetDlgItem(dlg, IDC_A_LABEL), !r->Greyed);
+    EnableWindow(GetDlgItem(dlg, IDC_A_CHOICE), !r->Greyed);
+    EnableWindow(GetDlgItem(dlg, IDC_A_EDIT), !r->Greyed);
     choiceSet[r->Value] = hadSet;
     choiceVal[r->Value] = hadVal;
 }
@@ -1558,6 +1590,7 @@ static int s98AdvCount;
 static int s98AdvCur = -1;
 static int s98AdvSet[INST_S98_COUNT];
 static char s98AdvVal[INST_S98_COUNT][32];
+static int s98AdvGrey[INST_S98_COUNT];   /* inst_s98_greyed: never written */
 
 static void s98_adv_cell(HWND lv, int n)
 {
@@ -1565,7 +1598,11 @@ static void s98_adv_cell(HWND lv, int n)
     char text[192];
 
     inst_eng_s98_row(s98AdvRow[n], &r);
-    if (s98AdvSet[n]) {
+    if (s98AdvGrey[n]) {
+        _snprintf(text, sizeof(text) - 1, "(%s)",
+                  inst_s98_only(s98AdvRow[n]));
+        text[sizeof(text) - 1] = '\0';
+    } else if (s98AdvSet[n]) {
         _snprintf(text, sizeof(text) - 1, "%s (to be written)",
                   s98AdvVal[n]);
         text[sizeof(text) - 1] = '\0';
@@ -1584,6 +1621,10 @@ static int s98_adv_take(HWND dlg)
     int i;
 
     if (s98AdvCur < 0) {
+        return 1;
+    }
+    if (s98AdvGrey[s98AdvCur]) {
+        s98AdvSet[s98AdvCur] = 0;
         return 1;
     }
     i = s98AdvRow[s98AdvCur];
@@ -1630,6 +1671,21 @@ static void s98_adv_show(HWND dlg, int n)
     INST_U32 hi = v->Hi;
 
     s98AdvCur = n;
+    EnableWindow(GetDlgItem(dlg, IDC_A_LABEL), !s98AdvGrey[n]);
+    EnableWindow(GetDlgItem(dlg, IDC_A_EDIT), !s98AdvGrey[n]);
+    SetDlgItemTextA(dlg, IDC_A_LABEL, "The value:");
+    ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_SHOW);
+    ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_HIDE);
+    if (s98AdvGrey[n]) {
+        _snprintf(note, sizeof(note) - 1, "%s: %s.\r\n%s: not used on this "
+                  "system, so it is greyed and nothing is written.",
+                  v->KeyNt != NULL ? v->KeyNt : v->Name9x, v->What,
+                  inst_s98_only(s98AdvRow[n]));
+        note[sizeof(note) - 1] = '\0';
+        SetDlgItemTextA(dlg, IDC_A_TEXT, note);
+        SetDlgItemTextA(dlg, IDC_A_EDIT, "");
+        return;
+    }
     inst_eng_s98_row(s98AdvRow[n], &r);
     if (s98AdvRow[n] == INST_S98_MAXTRANSFERKB) {
         hi = is_9x() ? 512UL : 256UL;
@@ -1686,9 +1742,20 @@ static WIZ_DLGRET CALLBACK s98_adv_proc(HWND dlg, UINT msg, WPARAM wp,
         ListView_InsertColumn(lv, 1, &c);
         s98AdvCount = 0;
         for (i = 0; i < INST_S98_COUNT; i++) {
-            if (!inst_eng_s98_row(i, &r) || r.Asked) {
+            int grey = 0;
+            if (!inst_eng_s98_row(i, &r)) {
+                /* Another system's row: shown greyed (owner,
+                 * 2026-10-19), named as that system names it. */
+                if (!inst_s98_greyed(i, !is_9x()) || instS98Values[i].Asked) {
+                    continue;
+                }
+                grey = 1;
+                r.Name = instS98Values[i].KeyNt != NULL ?
+                         instS98Values[i].KeyNt : instS98Values[i].Name9x;
+            } else if (r.Asked) {
                 continue;
             }
+            s98AdvGrey[s98AdvCount] = grey;
             s98AdvRow[s98AdvCount] = i;
             s98AdvSet[s98AdvCount] = s98WinSet[i];
             inst_copy(s98AdvVal[s98AdvCount], s98WinVal[i],
@@ -2761,6 +2828,20 @@ static int selftest(void)
                 msg[sizeof(msg) - 1] = '\0';
                 st(fits(c), msg);
                 DestroyWindow(c);
+                /* A greyed row's words, in its "now" box. */
+                if (inst_value_only(i) != NULL) {
+                    _snprintf(text, sizeof(text) - 1, "(%s)",
+                              inst_value_only(i));
+                    text[sizeof(text) - 1] = '\0';
+                    c = make_ctl(d, "STATIC", text, SS_LEFT | SS_NOPREFIX |
+                                 SS_LEFTNOWORDWRAP, 174, 41, 118, 10,
+                                 IDC_ROW_BASE, font);
+                    _snprintf(msg, sizeof(msg) - 1, "the greyed words of %s "
+                              "fit", instValues[i].Name);
+                    msg[sizeof(msg) - 1] = '\0';
+                    st(fits(c), msg);
+                    DestroyWindow(c);
+                }
             }
             /* Stor98's rows: the label, and each choice in its box. */
             for (i = 0; d != NULL && i < INST_S98_COUNT; i++) {
