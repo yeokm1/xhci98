@@ -6836,9 +6836,9 @@ which is under the GNU GPL v2 - see the LICENSE file two directories up.
 
 They are not only this project's code. XHCIINST.EXE, XHCIWIZ.EXE and
 SETUP.EXE are compiled with Microsoft Visual C++ 6.0 and linked against
-that compiler's STATIC C runtime (LIBC and LIBCMT); XHCIIN64.EXE and XHCIWZ64.EXE are
-compiled with the Windows Driver Kit 7.1's amd64 compiler and linked
-against that kit's STATIC C runtime (LIBCMT). Those runtime modules are
+that compiler's STATIC C runtime (LIBC and LIBCMT); XHCIIN64.EXE and
+XHCIWZ64.EXE are compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those runtime modules are
 bound into each executable rather than loaded from a DLL when it runs,
 which is what makes each tool a single file. You can see it in the import
 tables, which name Windows' own DLLs and no C runtime DLL.
