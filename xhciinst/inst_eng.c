@@ -416,6 +416,7 @@ static int haveCm;
 static int osKind = INST_OS_FULL;
 static int usbInclude = 1;
 static int usbOffered;
+static int uasInclude = 1;  /* xhciuas.inf in the run, with the USB drivers */
 static void usb_apply(int include);
 static int usb_decide(void);
 static int pkgCmSigned = -1;    /* xhcicm.sys signed: as pkgSigned */
@@ -1576,6 +1577,12 @@ static void group_verdicts(void)
             groupVerdict[g] = INST_GROUP_OK;
             continue;
         }
+        if (g == 1 && !uasInclude) {
+            /* The UAS driver left out (owner, 2026-10-19): an installed
+             * xhciuas is not part of the run either. */
+            groupVerdict[g] = INST_GROUP_OK;
+            continue;
+        }
         for (i = 0; i < devCount; i++) {
             const DEVREC *d = &devs[i];
             if (group_of(d) != g) {
@@ -2367,7 +2374,8 @@ void inst_eng_choose_value(int value, int set, INST_U32 v)
     if (value < 0 || value >= instValueCount || value >= INST_MAX_VALUES) {
         return;
     }
-    chosenSet[value] = set ? 1 : 0;
+    /* A greyed row's value is for another system: never written. */
+    chosenSet[value] = set && !inst_value_greyed(value, &envNow) ? 1 : 0;
     chosenValue[value] = v;
 }
 
@@ -2512,6 +2520,7 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         DWORD mwv = 0;
         int asked;
         int cmRow;
+        int greyed;
         if (value_inf(v) == NULL ||
             !inst_value_default(v, value_inf(v), &r->Def)) {
             continue;
@@ -2519,23 +2528,30 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         /* A Thunderbolt value with no controller present is still shown
          * when the support is ticked, and written machine-wide for the
          * controller to come (record 26 section 5.5). */
+        /* A value of another system is shown greyed where it would be
+         * asked or behind Advanced there (owner, 2026-10-19). */
+        greyed = inst_value_greyed(v, &envNow);
         cmRow = instValues[v].Inf == INST_INF_CM &&
                 (instValues[v].Apply == INST_APPLY_CM ||
-                 (instValues[v].Apply == INST_APPLY_9X_CM && !envNow.Nt));
+                 instValues[v].Apply == INST_APPLY_9X_CM);
         asked = inst_value_applies(v, &envNow) ||
-                (cmRow && instValues[v].Asked != 0);
-        if (!asked && !cmRow && !inst_value_relevant(v, &envNow)) {
+                (cmRow && !greyed && instValues[v].Asked != 0) ||
+                (greyed && instValues[v].Asked != 0);
+        if (!asked && !cmRow && !greyed && !inst_value_relevant(v, &envNow)) {
             continue;
         }
         targets = value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
-        if (targets == 0 && !cmRow) {
+        if (targets == 0 && !cmRow && !greyed) {
             continue;
         }
         r->Value = v;
         r->Asked = asked;
+        r->Greyed = greyed;
         /* Every value /set may give, so a setting in force is never
-         * shown as another (its caution is in the row's note). */
-        r->Mask = inst_value_set_mask(v, &envNow);
+         * shown as another (its caution is in the row's note); a greyed
+         * row lists its own system's. */
+        r->Mask = greyed ? instValues[v].Settable
+                         : inst_value_set_mask(v, &envNow);
         r->MwState = mw_value(v, &mwv);
         r->MwValue = (INST_U32)mwv;
         r->CmNew = cmNew;
@@ -4670,6 +4686,14 @@ static int package_files(PKG_EACH each, void *ctx)
              * (record 26 section 6.3): a copy of its INF on DevicePath, or
              * in the store, would install it unasked. */
             if (inst_bundled_file(fd.cFileName) && !s98Include) {
+                continue;
+            }
+            /* The UAS driver left out (owner, 2026-10-19): on 98 SE and ME
+             * the copy is on DevicePath, where its INF would install it
+             * unasked; on NT it is simply not staged. */
+            if (!envNow.Nt && !uasInclude &&
+                (inst_eq(fd.cFileName, "xhciuas.inf") ||
+                 inst_eq(fd.cFileName, "xhciuas.sys"))) {
                 continue;
             }
             /* A No to the Thunderbolt question: none of its files in the
@@ -7379,6 +7403,13 @@ static int plan_nt(void)
                 "one is %s.\n", restagePkg, name);
             return INST_EXIT_REFUSED;
         }
+        if (usbInclude && !uasInclude && restagePending[INST_INF_UAS]) {
+            out("REFUSED: the unfinished /restage includes the UAS disk "
+                "driver.\n%s\n", instWindow ? "Tick it on the Components "
+                "page to finish it." : "Run it again without /nouas to "
+                "finish it.");
+            return INST_EXIT_REFUSED;
+        }
         if (!usbInclude &&
             (restagePending[INST_INF_XHCI] || restagePending[INST_INF_UAS])) {
             out("REFUSED: the unfinished /restage includes the USB "
@@ -8768,6 +8799,7 @@ static int run_install_9x(void)
     if (!record_dir()) {
         /* Unrecorded, the copy is not one the uninstall would find: the
          * earlier layouts and the old directory are kept as they are. */
+        step(INST_STEP_FAILED, "The package's copy, not recorded");
         return inst_exit_code(0, 1, 0, 1);
     }
     step(INST_STEP_DONE, "The package is in %s and on DevicePath", srcDir);
@@ -9263,6 +9295,154 @@ static int remove_own_infs(void)
 static const char *const instServices[] = {
     "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi"
 };
+
+/* The package's services this run removed or found absent (the
+ * CriticalDeviceDatabase entries naming them go: cddb_service_scrub). */
+static const char *svcGone[8];
+static int svcGoneCount;
+static const char *const cddbOwn[] = {
+    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi", "stor98"
+};
+static int svc_state(const char *name);
+
+static void svc_gone(const char *name)
+{
+    int i;
+
+    for (i = 0; i < svcGoneCount; i++) {
+        if (inst_eq(svcGone[i], name)) {
+            return;
+        }
+    }
+    if (svcGoneCount < (int)(sizeof(svcGone) / sizeof(svcGone[0]))) {
+        svcGone[svcGoneCount++] = name;
+    }
+}
+
+/* Record 23 section 9.2 step 6a: every CriticalDeviceDatabase entry whose
+ * Service names a service of this package the run removed or found absent
+ * is deleted, and read back gone (inst_cddb_service_gone); an entry naming
+ * another driver's service is never touched. 1 done. */
+static int cddb_service_scrub(void)
+{
+    HKEY root;
+    HKEY k;
+    DWORD i;
+    DWORD nn;
+    DWORD type;
+    DWORD n;
+    LONG r;
+    char name[256];
+    char svc[256];
+    char (*hit)[256] = NULL;
+    int hits = 0;
+    int cap = 0;
+    int ok = 1;
+    int j;
+
+    /* A service of the package absent now (or marked for deletion) is gone
+     * whoever removed it: a retried uninstall, Stor98 removed by an earlier
+     * run, xhcimsi retired by an update's INF. */
+    for (j = 0; j < (int)(sizeof(cddbOwn) / sizeof(cddbOwn[0])); j++) {
+        if (svc_state(cddbOwn[j]) == 0) {
+            svc_gone(cddbOwn[j]);
+        }
+    }
+    if (svcGoneCount == 0) {
+        return 1;
+    }
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_CDDB_KEY, 0,
+                      KEY_READ | DELETE, &root);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (r != ERROR_SUCCESS) {
+        out("The CriticalDeviceDatabase could not be opened (error %ld).\n", r);
+        return 0;
+    }
+    for (i = 0;; i++) {
+        nn = sizeof(name);
+        r = RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS) {
+            out("The CriticalDeviceDatabase ended early (error %ld).\n", r);
+            ok = 0;
+            break;
+        }
+        r = RegOpenKeyExA(root, name, 0, KEY_QUERY_VALUE, &k);
+        if (r != ERROR_SUCCESS) {
+            if (r != ERROR_FILE_NOT_FOUND) {
+                out("CriticalDeviceDatabase\\%s could not be read (error "
+                    "%ld).\n", name, r);
+                ok = 0;
+            }
+            continue;
+        }
+        memset(svc, 0, sizeof(svc));
+        n = sizeof(svc) - 1;
+        r = RegQueryValueExA(k, "Service", NULL, &type, (LPBYTE)svc, &n);
+        RegCloseKey(k);
+        if (r == ERROR_FILE_NOT_FOUND) {
+            continue;
+        }
+        if (r != ERROR_SUCCESS) {
+            /* ERROR_MORE_DATA: longer than any service name of ours, but
+             * not proven another driver's either. */
+            out("CriticalDeviceDatabase\\%s's Service could not be read "
+                "(error %ld).\n", name, r);
+            ok = 0;
+            continue;
+        }
+        if ((type != REG_SZ && type != REG_EXPAND_SZ) ||
+            !inst_cddb_service_gone(svc, svcGone, svcGoneCount)) {
+            continue;
+        }
+        if (hits == cap) {
+            char (*more)[256];
+            cap = cap ? cap * 2 : 8;
+            more = realloc(hit, (size_t)cap * sizeof(*hit));
+            if (more == NULL) {
+                ok = 0;
+                break;
+            }
+            hit = more;
+        }
+        inst_copy(hit[hits], name, sizeof(hit[hits]));
+        hits++;
+    }
+    for (j = 0; j < hits; j++) {
+        if (opts.List) {
+            out("(/list) CriticalDeviceDatabase\\%s would be deleted (its "
+                "service is this package's).\n", hit[j]);
+            continue;
+        }
+        r = RegDeleteKeyA(root, hit[j]);
+        if (r == ERROR_SUCCESS || r == ERROR_FILE_NOT_FOUND) {
+            r = RegOpenKeyExA(root, hit[j], 0, KEY_QUERY_VALUE, &k);
+            if (r == ERROR_SUCCESS) {
+                RegCloseKey(k);
+                r = ERROR_INVALID_DATA;
+            } else if (r == ERROR_FILE_NOT_FOUND) {
+                r = ERROR_SUCCESS;
+            }
+        }
+        if (r == ERROR_SUCCESS) {
+            out("CriticalDeviceDatabase\\%s was deleted (it named a service "
+                "of this package).\n", hit[j]);
+            flagChanged = 1;
+        } else {
+            out("CriticalDeviceDatabase\\%s could not be deleted (error "
+                "%ld): a device of that id\nwould not start (Code 19).\n",
+                hit[j], r);
+            ok = 0;
+        }
+    }
+    free(hit);
+    RegCloseKey(root);
+    return ok;
+}
 static const char *const instFiles[] = {
     "xhci98.sys", "xhciuas.sys", "xhcicm.sys", "xhcihlpr.sys", "xhcimsi.sys"
 };
@@ -9305,6 +9485,8 @@ static void remove_services_and_files(void)
                         "file stays.\n", instServices[i], (unsigned long)e);
                     flagFailed = 1;
                     fileOk = 0;
+                } else {
+                    svc_gone(instServices[i]);
                 }
             } else {
                 /* A state that cannot be read is taken as running: the
@@ -9318,6 +9500,7 @@ static void remove_services_and_files(void)
                     if (e == ERROR_SERVICE_MARKED_FOR_DELETE) {
                         out("already marked for deletion.\n");
                         flagRestart = 1;
+                        svc_gone(instServices[i]);
                     } else {
                         out("FAILED (error %lu): its file stays.\n",
                             (unsigned long)e);
@@ -9328,15 +9511,18 @@ static void remove_services_and_files(void)
                     out("marked for deletion; it goes at the restart.\n");
                     flagRestart = 1;
                     flagChanged = 1;
+                    svc_gone(instServices[i]);
                 } else {
                     out("done.\n");
                     flagChanged = 1;
+                    svc_gone(instServices[i]);
                 }
                 CloseServiceHandle(s);
             }
         } else if (opts.List) {
             out("The service %s, if present, would be removed.\n",
                 instServices[i]);
+            svc_gone(instServices[i]);
         }
         if (!fileOk || sys[0] == '\0') {
             continue;
@@ -9512,6 +9698,11 @@ static int mk_stop(SC_HANDLE scm, int *had)
  * nothing else is in it, and each read back. 1 when the key was read whole
  * (and, with fix, every change read back); *left the values still naming
  * xhcicm. */
+/* 0 while the marks are removed with the xhcicm service staying (safe eject
+ * off): the filter INF's UpperFilters copies are the tunnel-port filter's,
+ * not a mark's, and stay with it. */
+static int cddbUpper = 1;
+
 static int cddb_scrub(int fix, int *left)
 {
     static const char *const vals[2] = { "LowerFilters", "UpperFilters" };
@@ -9557,7 +9748,7 @@ static int cddb_scrub(int fix, int *left)
             ok = 0;
             continue;
         }
-        for (v = 0; v < 2; v++) {
+        for (v = 0; v < (cddbUpper ? 2 : 1); v++) {
             memset(f, 0, sizeof(f));
             n = sizeof(f) - 2;
             r = RegQueryValueExA(k, vals[v], NULL, &type, (LPBYTE)f, &n);
@@ -9948,6 +10139,7 @@ static void mk_install(void)
     SC_HANDLE s = NULL;
     int had;
     int put = 1;
+    int running = 0;
 
     join(src, sizeof(src), root, "tools\\xhcimark");
     join(src, sizeof(src), src, mk_exe());
@@ -10069,12 +10261,89 @@ start:
         out("The Thunderbolt safe-removal mark service %s is %s and running:\n"
             "  %s\n", INST_MK_SERVICE, had ? "updated" : "installed", quoted);
         step(INST_STEP_DONE, "The safe-removal mark service is running");
+        running = 1;
     }
 done:
+    /* Every begun step ends: the window's row says how. */
+    if (!running) {
+        step(INST_STEP_FAILED, "The safe-removal mark service");
+    }
     if (s != NULL) {
         CloseServiceHandle(s);
     }
     CloseServiceHandle(scm);
+}
+
+/* mk_remove at a run's end: with safe eject off and xhcicm staying, the
+ * database's UpperFilters (the tunnel-port filter's) are left. */
+static int mk_remove_safe_off(int safe, int cmService)
+{
+    int ok;
+
+    /* cmService is the state the decision read (inst_mk_end_action gives
+     * REMOVE for 0, and for safe eject off only with 1 registered). */
+    cddbUpper = (safe || cmService != 1) ? 1 : 0;
+    ok = mk_remove();
+    cddbUpper = 1;
+    return ok;
+}
+
+/* The XhciCmSafeEject in force after the run (inst_mk_safe_eject): the
+ * machine-wide value, else the own value of every present connection
+ * manager device, whether or not the Thunderbolt component is in this run
+ * and with no limit on their number (a reading that cannot be had is the
+ * default 1, which keeps the service). */
+static int mk_safe_eject_now(void)
+{
+    INST_VNOW *vnow;
+    int nNow = 0;
+    int v;
+    int i;
+    int mw;
+    int r;
+    int safe;
+    DWORD mwv = 0;
+    DWORD now;
+
+    for (v = 0; v < instValueCount; v++) {
+        if (inst_eq(instValues[v].Name, "XhciCmSafeEject")) {
+            break;
+        }
+    }
+    if (v >= instValueCount) {
+        return 1;
+    }
+    mw = mw_value(v, &mwv);
+    if (mw != 0) {
+        return inst_mk_safe_eject(mw, (INST_U32)mwv, NULL, 0);
+    }
+    vnow = (INST_VNOW *)malloc((devCount > 0 ? devCount : 1) *
+                               sizeof(INST_VNOW));
+    if (vnow == NULL) {
+        return 1;
+    }
+    for (i = 0; i < devCount; i++) {
+        char path[INST_PATH_CHARS];
+
+        /* Every present device the connection manager runs on now, by its
+         * service, whatever this run's plan for it. */
+        if (!devs[i].Present || !inst_eq(devs[i].Service, INST_MK_NAME)) {
+            continue;
+        }
+        r = -1;
+        if (devs[i].Driver[0] != '\0') {
+            driver_key_path(&devs[i], path, sizeof(path));
+            r = reg_dword(HKEY_LOCAL_MACHINE, path, instValues[v].Name, &now)
+                    ? 1 : 0;
+        }
+        vnow[nNow].State = r > 0 ? 1 : r;
+        vnow[nNow].Value = r > 0 ? (INST_U32)now : 0;
+        vnow[nNow].Desc = devs[i].Id;
+        nNow++;
+    }
+    safe = inst_mk_safe_eject(0, 0, vnow, nNow);
+    free(vnow);
+    return safe;
 }
 
 /* The end of an install or update run (decision M13): with xhcicm
@@ -10085,19 +10354,30 @@ done:
 static void mk_end_of_run(void)
 {
     int a;
+    int safe;
+    int cm;
 
     if (!envNow.Nt) {
         return;
     }
-    a = inst_mk_end_action(svc_state(INST_MK_NAME), haveCm && tbInclude,
-                           inst_mk_system(&envNow));
-    logonly("mark service: end-of-run action %d\n", a);
+    safe = mk_safe_eject_now();
+    cm = svc_state(INST_MK_NAME);
+    a = inst_mk_end_action(cm, haveCm && tbInclude, inst_mk_system(&envNow),
+                           safe);
+    logonly("mark service: end-of-run action %d (XhciCmSafeEject in force "
+            "%d)\n", a, safe);
+    if (a == INST_MK_REMOVE && !safe) {
+        out("XhciCmSafeEject is 0: the safe-removal mark service is not "
+            "used; it is removed\nwith every mark where it is installed.\n");
+    }
     if (a == INST_MK_INSTALL) {
         mk_install();
-    } else if (a == INST_MK_REMOVE && !mk_remove()) {
-        out("A Thunderbolt safe-removal mark could not be removed, and the "
-            "xhcicm service\nis not installed: a device naming it would not "
-            "start (Code 39). Restart\nWindows and run INSTALL.BAT again.\n");
+    } else if (a == INST_MK_REMOVE && !mk_remove_safe_off(safe, cm)) {
+        out("A Thunderbolt safe-removal mark could not be removed%s. "
+            "Restart Windows and\nrun INSTALL.BAT again.\n",
+            safe ? ", and the xhcicm service is not installed: a\ndevice "
+                   "naming it would not start (Code 39)"
+                 : " (XhciCmSafeEject is 0)");
         flagFailed = 1;
     }
 }
@@ -10225,6 +10505,7 @@ static int run_uninstall_nt(void)
     if (opts.List) {
         remove_own_infs();
         remove_services_and_files();
+        cddb_service_scrub();
         finish_remove();
         out("\n/list: nothing was changed.\n");
         return INST_EXIT_DONE;
@@ -10273,6 +10554,9 @@ static int run_uninstall_nt(void)
         return stop_uninstall("cancelled.");
     }
     copies_remove_all();
+    if (!cddb_service_scrub()) {
+        flagFailed = 1;
+    }
     if (flagFailed || flagSteps) {
         return stop_uninstall("a service or a file of this package could not "
                               "be removed.");
@@ -10539,6 +10823,8 @@ static int remove_9x_devnodes(void)
             out("Removing %s ...\n", u->Desc[0] ? u->Desc : u->Id);
             step(INST_STEP_BEGIN, "Removing %s", u->Desc[0] ? u->Desc : u->Id);
             if (helperState < 0) {
+                step(INST_STEP_FAILED, "%s: the helper is not running",
+                     u->Desc[0] ? u->Desc : u->Id);
                 return -1;
             }
             v = helper_job(INST_DI_REMOVE, &d, NULL, 0, &r);
@@ -12536,7 +12822,8 @@ static void usb_apply(int include)
         if (infKeep[k] == NULL) {
             infKeep[k] = infText[k];
         }
-        infText[k] = include ? infKeep[k] : NULL;
+        infText[k] = (include && (k != INST_INF_UAS || uasInclude)) ?
+                     infKeep[k] : NULL;
     }
     usbInclude = include ? 1 : 0;
 }
@@ -13981,9 +14268,16 @@ static void s98_question(void)
     char line[16];
     char text[1024];
 
-    r = inst_s98_decide(haveS98, opts.Yes, opts.Stor98, opts.List, &asked,
-                        &def);
+    r = inst_s98_decide(haveS98, haveCm && tbInclude, opts.Yes, opts.Stor98,
+                        opts.List, &asked, &def);
     if (!haveS98) {
+        s98_apply(0);
+        return;
+    }
+    if (!haveCm || !tbInclude) {
+        out("Stor98 %s, the bundled NVMe driver: left out, it comes with the "
+            "Thunderbolt 3 /\nUSB4 support.\n\n", s98VersionText);
+        logonly("stor98: left out with the Thunderbolt support\n");
         s98_apply(0);
         return;
     }
@@ -14014,7 +14308,7 @@ static void s98_question(void)
         out("  /list: it would be asked:\n    Y  install it\n"
             "    N  leave it out\n  Enter would give [N].\n");
     } else {
-        out("  /yes: N (/stor98 installs it).\n");
+        out("  /yes: N (/thunderbolt /stor98 installs it).\n");
     }
     out("\n");
     logonly("stor98: asked %d, include %d\n", asked, r);
@@ -14221,6 +14515,10 @@ static int s98_un_service(void)
         out("(/list) Stor98's service, its driver file and its recorded "
             "settings would be\nremoved when no device is bound to it and "
             "none was there before.\n");
+        r = s98_bound_any();
+        if (r == 0 && inst_s98_service_removable(0, s98Pre)) {
+            svc_gone("stor98");     /* its database entries in the preview */
+        }
         return 1;
     }
     r = s98_bound_any();
@@ -14306,11 +14604,15 @@ static int s98_un_service(void)
                     (unsigned long)e);
                 return 0;
             }
+            svc_gone("stor98");
         } else {
             if (DeleteService(svc)) {
                 out("The stor98 service was removed.\n");
                 flagChanged = 1;
-            } else if (GetLastError() != ERROR_SERVICE_MARKED_FOR_DELETE) {
+                svc_gone("stor98");
+            } else if (GetLastError() == ERROR_SERVICE_MARKED_FOR_DELETE) {
+                svc_gone("stor98");
+            } else {
                 out("The stor98 service could not be removed (error %lu).\n",
                     (unsigned long)GetLastError());
                 CloseServiceHandle(svc);
@@ -14614,7 +14916,8 @@ int inst_eng_s98_state(int *have, char *version, size_t cap)
 
 void inst_eng_s98_choose(int include)
 {
-    s98_apply(include);
+    /* Part of the Thunderbolt support (owner, 2026-10-19). */
+    s98_apply(include && haveCm && tbInclude);
     logonly("stor98: chosen %d\n", s98Include);
 }
 
@@ -14648,7 +14951,7 @@ const char *inst_eng_s98_choose_value(int i, int set, const char *text)
     if (i < 0 || i >= INST_S98_COUNT) {
         return "no such setting";
     }
-    if (!set) {
+    if (!set || !inst_s98_applies(i, envNow.Nt)) {
         s98Set[i] = 0;
         return NULL;
     }
@@ -14707,7 +15010,8 @@ void inst_eng_usage(void)
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
 "  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
 "                without the USB drivers (2000 to 7; on 8 and 8.1 always)\n"
-"  /stor98       install the bundled Stor98 NVMe driver without asking\n"
+"  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
+"  /nouas        leave the UAS disk driver (xhciuas.sys) out of this run\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
@@ -16007,9 +16311,14 @@ static int usb_decide(void)
         out("/cmonly: the Thunderbolt 3 / USB4 connection manager alone; the "
             "USB drivers\nare left out of this run.\n\n");
     }
+    uasInclude = inst_uas_decide(1, opts.NoUas);
+    if (r != 0 && !uasInclude) {
+        out("/nouas: the UAS disk driver (xhciuas.sys) is left out of this run; "
+            "one already\ninstalled stays as it is.\n\n");
+    }
     usb_apply(r);
-    logonly("usb drivers: kind %d, offered %d, include %d\n", osKind,
-            usbOffered, usbInclude);
+    logonly("usb drivers: kind %d, offered %d, include %d, uas %d\n", osKind,
+            usbOffered, usbInclude, uasInclude);
     return 1;
 }
 
@@ -16020,6 +16329,19 @@ int inst_eng_usb_state(int *offered, int *notOnThisSystem)
     *offered = usbOffered;
     *notOnThisSystem = osKind == INST_OS_CMONLY;
     return usbInclude;
+}
+
+int inst_eng_uas_state(void)
+{
+    return uasInclude;
+}
+
+void inst_eng_uas_choose(int include)
+{
+    uasInclude = include ? 1 : 0;
+    usb_apply(usbInclude);
+    plan();
+    logonly("uas driver: chosen %d\n", uasInclude);
 }
 
 void inst_eng_usb_choose(int include)
@@ -16117,6 +16439,11 @@ int inst_eng_run(void)
     /* Whatever the run's verdict, the invariant of record 21 section 7.4
      * holds at its end (decision M13). */
     mk_end_of_run();
+    /* And no CriticalDeviceDatabase entry names a service of the package
+     * that is gone (an update's INF retires xhcimsi on Vista and 7). */
+    if (envNow.Nt && !opts.List && !cddb_service_scrub()) {
+        flagFailed = 1;
+    }
     /* The marks' flags join the run's verdict, which a failure returned
      * without flagFailed (a refused baseline) keeps. */
     if (code != INST_EXIT_REFUSED && code != INST_EXIT_FAILED &&
@@ -16402,4 +16729,17 @@ int inst_eng_controller_changes(void)
 const char *inst_eng_confirm_text(void)
 {
     return inst_confirm_text(planned_runs(), values_to_write(), envNow.Nt, 0);
+}
+
+const char *inst_eng_summary_head(int writes, int other)
+{
+    return inst_summary_head(planned_runs(), writes, other, envNow.Nt);
+}
+
+int inst_eng_tray_started(void)
+{
+    char cur[INST_PATH_CHARS + 16];
+
+    return reg_text3(HKEY_LOCAL_MACHINE, INST_TRAY_RUN_KEY,
+                     INST_TRAY_RUN_VALUE, cur, sizeof(cur)) == 1;
 }

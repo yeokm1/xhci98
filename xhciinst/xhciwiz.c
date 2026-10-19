@@ -130,6 +130,8 @@ static int usbChoice = 1;
 static int usbOffered;
 static int usbNotHere;
 static int tbOwn;
+static int uasChoice = 1;       /* the UAS driver's box (owner, 2026-10-19) */
+static int uasOwn = 1;          /* its own state while the USB box is off   */
 static int trayChoice = 1;
 static int trayHere;
 
@@ -146,6 +148,7 @@ static char s98WinVal[INST_S98_COUNT][32];
 static HWND s98Label[WIZ_S98_ASKED];
 static HWND s98Combo[WIZ_S98_ASKED];
 static HWND s98Now[WIZ_S98_ASKED];
+static HWND s98Sep[WIZ_S98_ASKED];
 static int s98ComboRow[WIZ_S98_ASKED];
 static int s98ComboCount;
 /* One box per drive for the first three; a fourth for every drive after
@@ -404,6 +407,8 @@ static unsigned __stdcall job_main(void *arg)
         }
         if (readCode < 0 && !uninstallMode) {
             usbChoice = inst_eng_usb_state(&usbOffered, &usbNotHere);
+            uasChoice = inst_eng_uas_state();
+            uasOwn = uasChoice;
             inst_eng_tb_state(&tbHave, &tbPresent, &tbDefault, &tbInstalled);
             tbChoice = tbHave && (opts->Thunderbolt || tbDefault);
             tbOwn = tbChoice;
@@ -427,9 +432,17 @@ static unsigned __stdcall job_main(void *arg)
             }
             rowCount = inst_eng_rows(rows, INST_MAX_VALUES);
             /* /set preselects a value on its page (record 26 section 10);
-             * from here on the pages say what is written. */
+             * from here on the pages say what is written. A greyed row's
+             * is not taken: the Summary never lists what is not written. */
             for (i = 0; i < opts->SetCount; i++) {
-                if (opts->SetIndex[i] >= 0 &&
+                int k;
+                int grey = 0;
+                for (k = 0; k < rowCount; k++) {
+                    if (rows[k].Value == opts->SetIndex[i] && rows[k].Greyed) {
+                        grey = 1;
+                    }
+                }
+                if (!grey && opts->SetIndex[i] >= 0 &&
                     opts->SetIndex[i] < INST_MAX_VALUES) {
                     choiceSet[opts->SetIndex[i]] = 1;
                     choiceVal[opts->SetIndex[i]] = opts->SetValue[i];
@@ -726,6 +739,7 @@ static void replan(void)
     if (busy) {
         return;
     }
+    inst_eng_uas_choose(uasChoice);
     inst_eng_usb_choose(usbChoice);
     inst_eng_tb_choose(tbChoice);
     inst_eng_s98_choose(s98Choice);
@@ -739,12 +753,37 @@ static void replan(void)
 
 /* ---- the Components page (record 26 section 5.3) ------------------------- */
 
+/* Stor98's box, under the Thunderbolt one: open only while that is
+ * ticked; unticking it unticks Stor98 (owner, 2026-10-19). */
+static void comp_s98_sync(HWND dlg)
+{
+    int open = inst_s98_box_open(s98Have, tbHave,
+                                 IsDlgButtonChecked(dlg, IDC_C_TB) ==
+                                 BST_CHECKED);
+
+    if (!open) {
+        CheckDlgButton(dlg, IDC_C_S98, BST_UNCHECKED);
+    }
+    EnableWindow(GetDlgItem(dlg, IDC_C_S98), open);
+    EnableWindow(GetDlgItem(dlg, IDC_C_S98_T), open);
+}
+
 /* The USB drivers' box and what it locks (record 26 section 5.3, draft
  * 8): unticked, the Thunderbolt box is ticked and disabled, it being all
- * the run installs; ticked again, the Thunderbolt box has its own state. */
+ * the run installs; ticked again, the Thunderbolt box has its own state.
+ * A package without the Thunderbolt support keeps that box greyed, and
+ * Stor98's, its child, follows it (owner, 2026-10-19). */
 static void comp_usb_state(HWND dlg)
 {
     int usb = IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED;
+
+    /* The UAS driver's box, the USB drivers' child: open only while they
+     * are ticked, unticked and greyed with them, its own state back when
+     * they are ticked again (owner, 2026-10-19). */
+    CheckDlgButton(dlg, IDC_C_UAS, (usb && uasOwn) ? BST_CHECKED :
+                                                    BST_UNCHECKED);
+    EnableWindow(GetDlgItem(dlg, IDC_C_UAS), usb);
+    EnableWindow(GetDlgItem(dlg, IDC_C_UAS_T), usb);
 
     SetDlgItemTextA(dlg, IDC_C_DRIVERS_T, inst_page_text(
                     usbNotHere ? INST_PT_DRIVERS_T8 :
@@ -752,7 +791,8 @@ static void comp_usb_state(HWND dlg)
     if (!usb && tbHave) {
         CheckDlgButton(dlg, IDC_C_TB, BST_CHECKED);
     }
-    EnableWindow(GetDlgItem(dlg, IDC_C_TB), usb);
+    EnableWindow(GetDlgItem(dlg, IDC_C_TB), usb && tbHave);
+    comp_s98_sync(dlg);
 }
 
 static void comp_usb_click(HWND dlg)
@@ -772,19 +812,21 @@ static void comp_fill(HWND dlg)
     SetDlgItemTextA(dlg, IDC_C_DRIVERS, inst_page_text(INST_PT_DRIVERS));
     CheckDlgButton(dlg, IDC_C_DRIVERS, usbChoice ? BST_CHECKED : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_C_DRIVERS), usbOffered);
+    SetDlgItemTextA(dlg, IDC_C_UAS, inst_page_text(INST_PT_UAS));
+    SetDlgItemTextA(dlg, IDC_C_UAS_T, inst_page_text(INST_PT_UAS_T));
     SetDlgItemTextA(dlg, IDC_C_TB, inst_page_text(INST_PT_TB));
     SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(tbPresent ?
                                                     INST_PT_TB_T :
                                                     INST_PT_TB_ABSENT));
     CheckDlgButton(dlg, IDC_C_TB, tbChoice ? BST_CHECKED : BST_UNCHECKED);
+    EnableWindow(GetDlgItem(dlg, IDC_C_TB_T), tbHave);
     comp_usb_state(dlg);
-    ShowWindow(GetDlgItem(dlg, IDC_C_TB), tbHave ? SW_SHOW : SW_HIDE);
-    ShowWindow(GetDlgItem(dlg, IDC_C_TB_T), tbHave ? SW_SHOW : SW_HIDE);
     SetDlgItemTextA(dlg, IDC_C_S98, inst_page_text(INST_PT_S98));
     SetDlgItemTextA(dlg, IDC_C_S98_T, inst_page_text(INST_PT_S98_T));
     CheckDlgButton(dlg, IDC_C_S98, s98Choice ? BST_CHECKED : BST_UNCHECKED);
     ShowWindow(GetDlgItem(dlg, IDC_C_S98), s98Have ? SW_SHOW : SW_HIDE);
     ShowWindow(GetDlgItem(dlg, IDC_C_S98_T), s98Have ? SW_SHOW : SW_HIDE);
+    comp_s98_sync(dlg);
     SetDlgItemTextA(dlg, IDC_C_TRAY, inst_page_text(INST_PT_TRAY));
     SetDlgItemTextA(dlg, IDC_C_TRAY_T, inst_page_text(INST_PT_TRAY_T));
     CheckDlgButton(dlg, IDC_C_TRAY, trayChoice ? BST_CHECKED : BST_UNCHECKED);
@@ -794,7 +836,11 @@ static void comp_fill(HWND dlg)
     SetDlgItemTextA(dlg, IDC_C_DIR, dirChoice);
     SetDlgItemTextA(dlg, IDC_C_DIR_T, is_9x() ? inst_page_text(INST_PT_DIR_9X)
                                               : "");
+    /* The folder's refusal takes the place of the 98 SE and ME line
+     * under it, so the page fits a 640 by 480 screen with the UAS box. */
     SetDlgItemTextA(dlg, IDC_C_DIR_WHY, "");
+    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_HIDE);
+    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_SHOW);
 }
 
 static int CALLBACK browse_cb(HWND h, UINT msg, LPARAM lp, LPARAM data)
@@ -843,6 +889,7 @@ static int comp_leave(HWND dlg)
     int tb;
     int s98;
     int usb;
+    int uas;
 
     GetDlgItemTextA(dlg, IDC_C_DIR, typed, sizeof(typed));
     why = inst_eng_dir_check(typed, checked, sizeof(checked));
@@ -851,9 +898,13 @@ static int comp_leave(HWND dlg)
         _snprintf(text, sizeof(text) - 1, "Not that folder: %s.", why);
         text[sizeof(text) - 1] = '\0';
         SetDlgItemTextA(dlg, IDC_C_DIR_WHY, text);
+        ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_HIDE);
+        ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_SHOW);
         return 0;
     }
     SetDlgItemTextA(dlg, IDC_C_DIR_WHY, "");
+    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_WHY), SW_HIDE);
+    ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_SHOW);
     inst_copy(dirChoice, checked, sizeof(dirChoice));
     trayChoice = IsDlgButtonChecked(dlg, IDC_C_TRAY) == BST_CHECKED;
     usb = usbOffered ? IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED
@@ -862,9 +913,17 @@ static int comp_leave(HWND dlg)
     if (usb) {
         tbOwn = tb;
     }
-    s98 = s98Have && IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
-    if (usb != usbChoice || tb != tbChoice || s98 != s98Choice) {
+    s98 = inst_s98_box_open(s98Have, tbHave, tb) &&
+          IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
+    uas = inst_uas_decide(usb, IsDlgButtonChecked(dlg, IDC_C_UAS) !=
+                               BST_CHECKED);
+    if (usb) {
+        uasOwn = uas;
+    }
+    if (usb != usbChoice || tb != tbChoice || s98 != s98Choice ||
+        uas != uasChoice) {
         usbChoice = usb;
+        uasChoice = uas;
         tbChoice = tb;
         s98Choice = s98;
         replan();
@@ -931,6 +990,13 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
 
     _snprintf(out, cap - 1, "%s - %s.", v->Name, v->Meaning);
     out[cap - 1] = '\0';
+    if (r->Greyed) {
+        _snprintf(line, sizeof(line) - 1, " %s: not used on this system, "
+                  "so it is greyed and nothing is written.",
+                  inst_value_only(r->Value));
+        line[sizeof(line) - 1] = '\0';
+        strncat(out, line, cap - strlen(out) - 1);
+    }
     if (r->MwState == 1) {
         _snprintf(line, sizeof(line) - 1, " Set machine-wide: %lu, which "
                   "every controller uses.", (unsigned long)r->MwValue);
@@ -972,7 +1038,7 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
                 continue;
             }
             _snprintf(line, sizeof(line) - 1, " %lu: %s.", (unsigned long)b,
-                      (b < 4UL && v->Choice[b] != NULL) ? v->Choice[b] :
+                      (b < INST_CHOICES && v->Choice[b] != NULL) ? v->Choice[b] :
                       "allowed");
             line[sizeof(line) - 1] = '\0';
             strncat(out, line, cap - strlen(out) - 1);
@@ -1041,7 +1107,7 @@ static void row_fill_combo(HWND combo, const INST_ROW *r)
             continue;
         }
         _snprintf(text, sizeof(text) - 1, "%lu  %s%s", (unsigned long)b,
-                  (b < 4UL && v->Choice[b] != NULL) ? v->Choice[b] : "",
+                  (b < INST_CHOICES && v->Choice[b] != NULL) ? v->Choice[b] : "",
                   b == r->Def ? " (default)" : "");
         text[sizeof(text) - 1] = '\0';
         item = (int)SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
@@ -1094,6 +1160,7 @@ typedef struct _ROWCTL {
     HWND Label;
     HWND Choice;
     HWND Now;
+    HWND Sep;               /* the line above the row; NULL on the first  */
 } ROWCTL;
 
 typedef struct _ROWPAGE {
@@ -1150,15 +1217,27 @@ static void row_label(const INST_ROW *r, char *out, size_t cap)
     out[cap - 1] = '\0';
 }
 
+/* An etched line across the page, between one row and the next, with the
+ * gap under a choice wider than the one under its own label: a label is
+ * not read as the title of the choice above it (owner, 2026-10-19). */
+static HWND row_sep(HWND dlg, int y, int id)
+{
+    return make_ctl(dlg, "STATIC", "", SS_ETCHEDHORZ, 8, y, 284, 1, id, NULL);
+}
+
 /* One row of a settings page: a label of two lines, the choice under it,
- * the short "now" beside the choice. y in dialog units. */
-#define WIZ_ROW_DLU 32
+ * the short "now" beside the choice, and above a row after the first the
+ * line between rows. y in dialog units; four rows end at 22 + 3 * 38 + 30
+ * = 166, above the note at 176. */
+#define WIZ_ROW_DLU 38
+#define WIZ_ROW_SEP 4
 static void row_make(HWND dlg, ROWCTL *rc, int row, int y, HFONT font, int id)
 {
     const INST_ROW *r = &rows[row];
     char text[256];
 
     rc->Row = row;
+    rc->Sep = y > 22 ? row_sep(dlg, y - WIZ_ROW_SEP, id + 3) : NULL;
     row_label(r, text, sizeof(text));
     rc->Label = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8, y,
                          284, 17, id, font);
@@ -1182,6 +1261,14 @@ static void row_make(HWND dlg, ROWCTL *rc, int row, int y, HFONT font, int id)
         row_fill_combo(rc->Choice, r);
     }
     row_now(r, text, sizeof(text));
+    if (r->Greyed) {
+        /* Shown, not hidden, so the page reads the same on every system
+         * (owner, 2026-10-19); row_read never takes it. */
+        _snprintf(text, sizeof(text) - 1, "(%s)", inst_value_only(r->Value));
+        text[sizeof(text) - 1] = '\0';
+        EnableWindow(rc->Label, FALSE);
+        EnableWindow(rc->Choice, FALSE);
+    }
     rc->Now = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 174, y + 19,
                        118, 10, id + 2, font);
 }
@@ -1194,6 +1281,10 @@ static int row_read(const ROWCTL *rc, INST_U32 *v)
     const INST_ROW *r = &rows[rc->Row];
     char text[32];
 
+    if (r->Greyed) {
+        *v = r->InForce;
+        return 0;
+    }
     if (instValues[r->Value].Hi != 0) {
         GetWindowTextA(rc->Choice, text, sizeof(text));
         if (text[0] == '\0') {
@@ -1217,6 +1308,9 @@ static void rows_clear(ROWPAGE *rp)
         DestroyWindow(rp->R[i].Label);
         DestroyWindow(rp->R[i].Choice);
         DestroyWindow(rp->R[i].Now);
+        if (rp->R[i].Sep != NULL) {
+            DestroyWindow(rp->R[i].Sep);
+        }
     }
     rp->Count = 0;
 }
@@ -1277,6 +1371,10 @@ static int settings_leave(HWND dlg, int page)
         const INST_ROW *r = &rows[rp->R[i].Row];
         char typed[32];
         typed[0] = '\0';
+        if (r->Greyed) {
+            choiceSet[r->Value] = 0;
+            continue;
+        }
         if (instValues[r->Value].Hi != 0) {
             GetWindowTextA(rp->R[i].Choice, typed, sizeof(typed));
         }
@@ -1317,7 +1415,9 @@ static void adv_cell(HWND lv, int i)
     const INST_ROW *r = &rows[advIdx[i]];
     char text[96];
 
-    if (advSet[i]) {
+    if (r->Greyed) {
+        _snprintf(text, sizeof(text) - 1, "(%s)", inst_value_only(r->Value));
+    } else if (advSet[i]) {
         _snprintf(text, sizeof(text) - 1, "%lu (to be written)",
                   (unsigned long)advVal[i]);
     } else {
@@ -1339,6 +1439,10 @@ static int adv_take(HWND dlg)
         return 1;
     }
     r = &rows[advIdx[advCur]];
+    if (r->Greyed) {
+        advSet[advCur] = 0;
+        return 1;
+    }
     if (instValues[r->Value].Hi != 0) {
         GetDlgItemTextA(dlg, IDC_A_EDIT, text, sizeof(text));
         if (text[0] == '\0') {
@@ -1399,6 +1503,9 @@ static void adv_show(HWND dlg, int i)
         ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_SHOW);
         ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_HIDE);
     }
+    EnableWindow(GetDlgItem(dlg, IDC_A_LABEL), !r->Greyed);
+    EnableWindow(GetDlgItem(dlg, IDC_A_CHOICE), !r->Greyed);
+    EnableWindow(GetDlgItem(dlg, IDC_A_EDIT), !r->Greyed);
     choiceSet[r->Value] = hadSet;
     choiceVal[r->Value] = hadVal;
 }
@@ -1518,6 +1625,9 @@ static void s98_page_clear(void)
         DestroyWindow(s98Label[i]);
         DestroyWindow(s98Combo[i]);
         DestroyWindow(s98Now[i]);
+        if (s98Sep[i] != NULL) {
+            DestroyWindow(s98Sep[i]);
+        }
     }
     s98ComboCount = 0;
 }
@@ -1554,6 +1664,10 @@ static void s98_page_fill(HWND dlg)
         }
         _snprintf(text, sizeof(text) - 1, "%s - %s", r.Name, v->What);
         text[sizeof(text) - 1] = '\0';
+        /* The rows' line as on the USB pages: the row's "now" ends at
+         * y + 36, the next label starts 12 under it. */
+        s98Sep[n] = n > 0 ? row_sep(dlg, y - 6, IDC_ROW_BASE +
+                                    IDC_ROW_STRIDE * n + 3) : NULL;
         s98Label[n] = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8,
                                y, 284, 10, IDC_ROW_BASE + IDC_ROW_STRIDE * n,
                                font);
@@ -1582,7 +1696,7 @@ static void s98_page_fill(HWND dlg)
         }
         SendMessageA(s98Combo[n], CB_SETCURSEL, (WPARAM)sel, 0);
         s98ComboCount++;
-        y += 40;
+        y += 48;
     }
     SetDlgItemTextA(dlg, IDC_S_NOTE, s98_where());
     ShowWindow(GetDlgItem(dlg, IDC_S_ADVANCED), SW_SHOW);
@@ -1617,6 +1731,7 @@ static int s98AdvCount;
 static int s98AdvCur = -1;
 static int s98AdvSet[INST_S98_COUNT];
 static char s98AdvVal[INST_S98_COUNT][32];
+static int s98AdvGrey[INST_S98_COUNT];   /* inst_s98_greyed: never written */
 
 static void s98_adv_cell(HWND lv, int n)
 {
@@ -1624,7 +1739,11 @@ static void s98_adv_cell(HWND lv, int n)
     char text[192];
 
     inst_eng_s98_row(s98AdvRow[n], &r);
-    if (s98AdvSet[n]) {
+    if (s98AdvGrey[n]) {
+        _snprintf(text, sizeof(text) - 1, "(%s)",
+                  inst_s98_only(s98AdvRow[n]));
+        text[sizeof(text) - 1] = '\0';
+    } else if (s98AdvSet[n]) {
         _snprintf(text, sizeof(text) - 1, "%s (to be written)",
                   s98AdvVal[n]);
         text[sizeof(text) - 1] = '\0';
@@ -1643,6 +1762,10 @@ static int s98_adv_take(HWND dlg)
     int i;
 
     if (s98AdvCur < 0) {
+        return 1;
+    }
+    if (s98AdvGrey[s98AdvCur]) {
+        s98AdvSet[s98AdvCur] = 0;
         return 1;
     }
     i = s98AdvRow[s98AdvCur];
@@ -1689,6 +1812,21 @@ static void s98_adv_show(HWND dlg, int n)
     INST_U32 hi = v->Hi;
 
     s98AdvCur = n;
+    EnableWindow(GetDlgItem(dlg, IDC_A_LABEL), !s98AdvGrey[n]);
+    EnableWindow(GetDlgItem(dlg, IDC_A_EDIT), !s98AdvGrey[n]);
+    SetDlgItemTextA(dlg, IDC_A_LABEL, "The value:");
+    ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_SHOW);
+    ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_HIDE);
+    if (s98AdvGrey[n]) {
+        _snprintf(note, sizeof(note) - 1, "%s: %s.\r\n%s: not used on this "
+                  "system, so it is greyed and nothing is written.",
+                  v->KeyNt != NULL ? v->KeyNt : v->Name9x, v->What,
+                  inst_s98_only(s98AdvRow[n]));
+        note[sizeof(note) - 1] = '\0';
+        SetDlgItemTextA(dlg, IDC_A_TEXT, note);
+        SetDlgItemTextA(dlg, IDC_A_EDIT, "");
+        return;
+    }
     inst_eng_s98_row(s98AdvRow[n], &r);
     if (s98AdvRow[n] == INST_S98_MAXTRANSFERKB) {
         hi = is_9x() ? 512UL : 256UL;
@@ -1745,9 +1883,20 @@ static WIZ_DLGRET CALLBACK s98_adv_proc(HWND dlg, UINT msg, WPARAM wp,
         ListView_InsertColumn(lv, 1, &c);
         s98AdvCount = 0;
         for (i = 0; i < INST_S98_COUNT; i++) {
-            if (!inst_eng_s98_row(i, &r) || r.Asked) {
+            int grey = 0;
+            if (!inst_eng_s98_row(i, &r)) {
+                /* Another system's row: shown greyed (owner,
+                 * 2026-10-19), named as that system names it. */
+                if (!inst_s98_greyed(i, !is_9x()) || instS98Values[i].Asked) {
+                    continue;
+                }
+                grey = 1;
+                r.Name = instS98Values[i].KeyNt != NULL ?
+                         instS98Values[i].KeyNt : instS98Values[i].Name9x;
+            } else if (r.Asked) {
                 continue;
             }
+            s98AdvGrey[s98AdvCount] = grey;
             s98AdvRow[s98AdvCount] = i;
             s98AdvSet[s98AdvCount] = s98WinSet[i];
             inst_copy(s98AdvVal[s98AdvCount], s98WinVal[i],
@@ -1925,8 +2074,25 @@ static void summary_fill(HWND dlg)
                "drivers' devices.\nNothing of another USB stack is put back: "
                "Windows finds the controller again\nat the next start.\n");
     } else {
+        int writes = 0;
+        int other;
         SetDlgItemTextA(dlg, IDC_TEXT, inst_page_text(INST_PT_SUMMARY));
-        _snprintf(line, sizeof(line) - 1, "%s.\n\n", inst_eng_confirm_text());
+        /* The headline from what the page lists below it, not from the
+         * engine's answers, which the pages hand over only at Install
+         * (matrix N1, 2026-10-19). */
+        for (i = 0; i < INST_MAX_VALUES && i < instValueCount; i++) {
+            writes |= choiceSet[i] && choice_live(i);
+        }
+        for (i = 0; s98Choice && i < INST_S98_COUNT; i++) {
+            writes |= s98WinSet[i];
+        }
+        /* The tools installed for the first time or moved, and the
+         * USB Tree's start at login turned on or off, count too. */
+        other = (tbChoice && !tbInstalled) || s98Choice ||
+                dirNow[0] == '\0' || !inst_eq(dirNow, dirChoice) ||
+                (trayHere && trayChoice != inst_eng_tray_started());
+        _snprintf(line, sizeof(line) - 1, "%s.\n\n",
+                  inst_eng_summary_head(writes, other));
         line[sizeof(line) - 1] = '\0';
         tb_add(&t, line);
         tb_add(&t, "The devices:\n");
@@ -1942,9 +2108,14 @@ static void summary_fill(HWND dlg)
         if (!any) {
             tb_add(&t, "- none present: the drivers are staged for later.\n");
         }
-        tb_add(&t, usbChoice ? "\nThe components:\n- xhci98.sys and "
-               "xhciuas.sys\n" : "\nThe components:\n- xhci98.sys and "
-               "xhciuas.sys: left out (the connection manager alone)\n");
+        tb_add(&t, usbChoice ? "\nThe components:\n- xhci98.sys\n" :
+               "\nThe components:\n- xhci98.sys and xhciuas.sys: left out "
+               "(the connection manager alone)\n");
+        if (usbChoice) {
+            tb_add(&t, uasChoice ? "- xhciuas.sys, the UAS disk driver\n" :
+                   "- xhciuas.sys, the UAS disk driver: left out (one "
+                   "installed stays)\n");
+        }
         if (tbHave) {
             tb_add(&t, tbChoice ? "- Thunderbolt 3 / USB4 support\n" :
                    "- Thunderbolt 3 / USB4 support: left out\n");
@@ -2038,7 +2209,11 @@ static void summary_fill(HWND dlg)
 
 static int stepsTotal;
 static int stepsDone;
+static int stepOpen = -1;       /* the list's "running" row, or -1 */
 
+/* A step's outcome takes the place of its "running" row (matrix N2,
+ * 2026-10-19: the copy's row stayed "running" above its own "done"); an
+ * outcome with no step open is a row of its own. */
 static void progress_add(HWND dlg, int state, const char *text)
 {
     char line[600];
@@ -2051,7 +2226,17 @@ static void progress_add(HWND dlg, int state, const char *text)
     _snprintf(line, sizeof(line) - 1, "%s - %s", text,
               (state >= 0 && state <= 4) ? mark[state] : "");
     line[sizeof(line) - 1] = '\0';
-    n = (int)SendMessageA(lb, LB_ADDSTRING, 0, (LPARAM)line);
+    if (state != INST_STEP_BEGIN && stepOpen >= 0) {
+        SendMessageA(lb, LB_DELETESTRING, (WPARAM)stepOpen, 0);
+        n = (int)SendMessageA(lb, LB_INSERTSTRING, (WPARAM)stepOpen,
+                              (LPARAM)line);
+        stepOpen = -1;
+    } else {
+        n = (int)SendMessageA(lb, LB_ADDSTRING, 0, (LPARAM)line);
+        if (state == INST_STEP_BEGIN) {
+            stepOpen = n;
+        }
+    }
     SendMessageA(lb, LB_SETCURSEL, n, 0);
     if (state == INST_STEP_BEGIN) {
         stepsTotal++;
@@ -2278,6 +2463,16 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             return TRUE;
         case IDC_C_BROWSE:
             comp_browse(dlg);
+            return TRUE;
+        case IDC_C_TB:
+            if (HIWORD(wp) == BN_CLICKED) {
+                comp_s98_sync(dlg);
+            }
+            return TRUE;
+        case IDC_C_UAS:
+            if (HIWORD(wp) == BN_CLICKED) {
+                uasOwn = IsDlgButtonChecked(dlg, IDC_C_UAS) == BST_CHECKED;
+            }
             return TRUE;
         case IDC_C_DRIVERS:
             if (HIWORD(wp) == BN_CLICKED) {
@@ -2721,12 +2916,13 @@ static int selftest(void)
     static const int fTexts[] = { INST_PT_FOUND };
     static const int cIds[] = {
         IDC_C_DRIVERS, IDC_C_DRIVERS_T, IDC_C_TB, IDC_C_TB_T, IDC_C_S98,
-        IDC_C_S98_T, IDC_C_TRAY, IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR_T
+        IDC_C_S98_T, IDC_C_TRAY, IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR_T,
+        IDC_C_UAS, IDC_C_UAS_T
     };
     static const int cTexts[] = {
         INST_PT_DRIVERS, INST_PT_DRIVERS_T, INST_PT_TB, INST_PT_TB_T,
         INST_PT_S98, INST_PT_S98_T, INST_PT_TRAY, INST_PT_TRAY_T, INST_PT_DIR,
-        INST_PT_DIR_9X
+        INST_PT_DIR_9X, INST_PT_UAS, INST_PT_UAS_T
     };
     static const int s3Ids[] = { IDC_S_HEAD };
     static const int s3Texts[] = { INST_PT_S98SET };
@@ -2795,7 +2991,7 @@ static int selftest(void)
         st_page(parent, IDD_UWELCOME, uIds, uTexts, 3, "the uninstall's "
                 "welcome");
         st_page(parent, IDD_FOUND, fIds, fTexts, 1, "what was found");
-        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 10, "the components");
+        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 12, "the components");
         st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
         st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "
                 "shutdown");
@@ -2840,6 +3036,20 @@ static int selftest(void)
                 msg[sizeof(msg) - 1] = '\0';
                 st(fits(c), msg);
                 DestroyWindow(c);
+                /* A greyed row's words, in its "now" box. */
+                if (inst_value_only(i) != NULL) {
+                    _snprintf(text, sizeof(text) - 1, "(%s)",
+                              inst_value_only(i));
+                    text[sizeof(text) - 1] = '\0';
+                    c = make_ctl(d, "STATIC", text, SS_LEFT | SS_NOPREFIX |
+                                 SS_LEFTNOWORDWRAP, 174, 41, 118, 10,
+                                 IDC_ROW_BASE, font);
+                    _snprintf(msg, sizeof(msg) - 1, "the greyed words of %s "
+                              "fit", instValues[i].Name);
+                    msg[sizeof(msg) - 1] = '\0';
+                    st(fits(c), msg);
+                    DestroyWindow(c);
+                }
             }
             /* Stor98's rows: the label, and each choice in its box. */
             for (i = 0; d != NULL && i < INST_S98_COUNT; i++) {
