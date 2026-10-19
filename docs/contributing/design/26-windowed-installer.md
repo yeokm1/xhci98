@@ -1,10 +1,12 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 9, 2026-10-19 (task 42-A.26, the owner's decision of that
+Status: draft 11, 2026-10-19 (task 42-A.26, the owner's decision of that
 day: the bundled Stor98 on drives behind a Thunderbolt or USB4 tunnel
 only, and the uninstall's adoption of tunnel drives Windows bound after
-the run; sections 5.3, 6.3 and 6.4, and record 23 revision 14);
-draft 8, 2026-10-19 (task 42-A.21, the owner's request of that
+the run; sections 5.3, 6.3, 6.4 and 9.3, and record 23 revision 16);
+draft 9, 2026-10-19 (task 42-A.27, section 7: the settle after a
+root hub's or hub's job within a pass, record 23 revision 14); draft 8, 2026-10-19
+(task 42-A.21, the owner's request of that
 day: the connection manager alone, and Windows 8 and 8.1 for it; sections
 1.2, 5.1, 5.3, 9.1, 9.3, 10, 12 and 13, and record 23 revision 13);
 draft 7, 2026-10-18, reviewed and revised (an INF copy made by
@@ -351,7 +353,7 @@ Check boxes, one a line, each with one sentence:
 |---|---|---|---|
 | xHCI98 USB 3.x host controller driver (`xhci98.sys`) and UAS driver (`xhciuas.sys`) | yes, but on Windows 8 and 8.1 (draft 8) | on 2000 to 7, when the package carries the connection manager (record 23 section 4.5; `/cmonly` preselects it unticked); on 98 SE and ME no, shown ticked and disabled; on 8 and 8.1 shown unticked and disabled | the drivers for the controller, its hubs and devices, and UAS disks; on 8 and 8.1 the sentence says Windows' own USB 3 driver runs the controllers there; unticked on 2000 to 7, the sentence under the box says the run leaves an installed `xhci98.sys` as it is and that the uninstall removes the whole package |
 | Thunderbolt 3 / USB4 support (`xhcicm.sys`) | as record 23 section 8.5 decides: with a controller present yes, with none no | yes | the connection manager; its warning sentence (a device plugged into that port can reach the computer's memory) stands under the box, with "see `XhciCmApprove` on the Thunderbolt settings page" |
-| Stor98, the NVMe driver (bundled) | never unasked (record 23 section 4.4; owner, 2026-10-18) | yes, and it needs the Thunderbolt component: the engine keeps it out of a run without it (owner, 2026-10-19; the box's place under that component is the window's) | shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 9: it no longer offers an internal drive) |
+| Stor98, the NVMe driver (bundled) | never unasked (record 23 section 4.4; owner, 2026-10-18) | yes, and it needs the Thunderbolt component: the engine keeps it out of a run without it (owner, 2026-10-19; the box's place under that component is the window's) | shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 11: it no longer offers an internal drive) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, Next disabled until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
@@ -568,7 +570,7 @@ unasked). With the box ticked:
   (`UpdateDriverForPlugAndPlayDevices`, unforced) on every present device
   `stor98.inf`'s models match that has **no** driver (`Service` absent, or
   problem code 28) **and sits behind a Thunderbolt or USB4 tunnel** (draft
-  9; record 23 section 4.4's gate and place reading), never on one another
+  11; record 23 section 4.4's gate and place reading), never on one another
   driver runs (record 23 decision D3 applies to Stor98's devices as to
   this package's: an internal NVMe drive under a vendor's driver is listed
   and left), and never on an internal drive or one whose place cannot be
@@ -684,7 +686,7 @@ unasked). With the box ticked:
   still names (an update of the hand-installed device from the bundled
   release points its driver key at the newest copy) stays with it, by
   the reference check, and the finish page says so.
-- **Tunnel drives Windows bound after the run** (draft 9; the owner's
+- **Tunnel drives Windows bound after the run** (draft 11; the owner's
   coordinator, 2026-10-19, from the Windows ME matrix leg of that day).
   The install stages Stor98 and records no device when no tunnel was up
   during the run; after the restart the enclosure appears, and Windows'
@@ -723,7 +725,7 @@ pair of `/thunderbolt`), the question "Install Stor98, the bundled NVMe
 driver?" with Enter for N where the package carries it, and the Stor98
 rows in its value questions (asked only when Stor98 is installed by the
 run). Record 23 sections 4.4, 7.1 and 8.1 are revised (section 12).
-Draft 9: the question's text says "For NVMe drives behind a Thunderbolt
+Draft 11: the question's text says "For NVMe drives behind a Thunderbolt
 or USB4 tunnel; the installer selects tunnel drives only", and that an
 internal drive is left for a hand install; with the Thunderbolt
 component out of the run (a No, or `/yes` with no controller) it is not
@@ -753,7 +755,11 @@ machine, its reading of the tree through `cfgmgr32.dll`), shows "Windows
 is installing the devices the controller shows; answer its windows: Next,
 Next, Finish, and type `C:\XHCI98` where it asks", and only then reads the
 tree again and installs, through the helper, what still has no driver (a
-wizard the user cancelled) or an older one (an update's root hub). How
+wizard the user cancelled) or an older one (an update's root hub). Within
+a pass the same settle follows each root hub's, hub's or composite
+entry's job before the next one, and a device such a job hid for a moment
+is waited for and tried once more before it is a step (record 23 section
+5.8, revision 14). How
 the wizards and the helper meet is a reading of the 42-V.1 legs (record 27
 section 12), and the design holds to this order until they are read.
 
@@ -903,7 +909,7 @@ gated on the one before, shown on the Progress page:
    INFs, the services, the files (record 23 section 9.2, unchanged but for
    that first step); the
    bundled Stor98's recorded devices (with the tunnel drives Windows bound
-   after the run, adopted first by section 6.3's draft 9 rule), its
+   after the run, adopted first by section 6.3's draft 11 rule), its
    staged INF and, when nothing else depends on them, its service and
    files first, as section 6.3's record says (children before the NVMe
    device's parent port, which is a filter host and stays).

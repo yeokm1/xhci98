@@ -1,7 +1,9 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 14, 2026-10-19 (the bundled Stor98 on tunnel drives
-only; see below); revision 13, 2026-10-19 (the connection manager alone, and
+Status: revision 16, 2026-10-19 (task 42-A.26: the bundled Stor98 on
+tunnel drives only; see below); revision 14, 2026-10-19 (task 42-A.27:
+a parent's job and the devices below it, sections 5.8 and 10);
+revision 13, 2026-10-19 (the connection manager alone, and
 Windows 8 and 8.1 for it; see below); revision 12, 2026-10-19 (the mark
 service and the machine-wide key); revision 11, 2026-10-18 (the window,
 the helper, the uninstall
@@ -190,7 +192,7 @@ it". What changes here:
 - **Sections 9.5 and 5.1 step 12**: the mark service on 8 and 8.1 too.
 - **Section 13**: D17 to D19.
 
-Revision 14, 2026-10-19 (roadmap-usb4.md task 42-A.26; the owner's
+Revision 16, 2026-10-19 (roadmap-usb4.md task 42-A.26; the owner's
 decision of 2026-10-19): the bundled Stor98 is installed on NVMe drives
 behind a Thunderbolt or USB4 tunnel only.
 
@@ -523,7 +525,7 @@ reinstall refused); a copy whose list is already gone loses only the
 `.PNF`s of this package's INFs, never another file.
 
 **The bundled Stor98 driver: tunnel drives only** (owner, 2026-10-19;
-revision 14). The listing takes the flavour directory's files and `nt\`,
+revision 16). The listing takes the flavour directory's files and `nt\`,
 never another subdirectory, and it leaves out every file whose name
 starts with `stor98` (`inst_bundled_file`) unless Stor98 is in the run,
 because a copy of `stor98.inf` on `DevicePath` or in the driver store
@@ -1081,6 +1083,30 @@ state machine and the retry rule (section 10). Completion is only declared after
 barrier and a fresh plan: a device the plan would still install - one the
 last allowed pass exposed - is listed as "not finished", the steps flag is
 set and the run ends with exit 4 and "run INSTALL.BAT again".
+
+**A parent's job and the devices below it** (revision 14, task 42-A.27;
+read on the 98
+SE update over `3.0.0.0` with an external hub, 2026-10-19: the root hub's
+reinstall restarted it, its hub was gone for about four seconds, and the
+hub's job, made at once, found it not present and left a step for a device
+the next start showed current). A parent is a controller or a device of
+the bus (root hub, hub, composite entry): its job may restart the devices
+below it. Within a pass, a parent's job that reached its device (on NT a
+call that succeeded; on 98 SE and ME any helper verdict but `not-present`
+and `refused`) is followed, when another job of the same pass comes after
+it, by a wait of its own: up to 15 seconds for the parent to be present
+again, then the settle above with no device expected (the quiet stretch
+alone, inside the 10-minute bound). And a job that finds its device not
+present (the helper's `not-present`; on NT `ERROR_NO_SUCH_DEVINST` from
+the call) after a parent's job earlier in the run waits up to 15 seconds
+for the device to come back, settles, and is made once more; only then is
+the device "not present" (a step) or the call a failure. A device that is
+really gone costs that one wait and no more. A wait there that fails or is
+cancelled stops the run as the barrier's does. The controllers' pass needs
+no wait of its own (one controller's job does not touch another, and the
+next pass begins with the barrier), and the later passes' devices begin
+behind the barrier too. The pure half holds the three decisions
+(`inst_parent_kind`, `inst_settle_after_job`, `inst_absent_retry`).
 
 - **XP and XP x64** show Found New Hardware for each, and the unsigned
   question; Windows 2000 can too (the leg above). The settle waits while
@@ -2190,7 +2216,8 @@ and the tool links the same file:
 - `SystemStartOptions`' test-signing word;
 - the switch parser, `/set`'s validation and section 7.4's exit code,
   last line and confirmation wording;
-- section 5.8's settle state machine and busy-retry rule, section 5.9's
+- section 5.8's settle state machine, busy-retry rule and (revision 14)
+  parent rule, section 5.9's
   device state text, and section 5.6's "staged already" test;
 - the registry value table, its applicability (section 8.2) and its
   answer parser;
