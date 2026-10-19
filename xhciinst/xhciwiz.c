@@ -139,6 +139,7 @@ static char s98WinVal[INST_S98_COUNT][32];
 static HWND s98Label[WIZ_S98_ASKED];
 static HWND s98Combo[WIZ_S98_ASKED];
 static HWND s98Now[WIZ_S98_ASKED];
+static HWND s98Sep[WIZ_S98_ASKED];
 static int s98ComboRow[WIZ_S98_ASKED];
 static int s98ComboCount;
 /* One box per drive for the first three; a fourth for every drive after
@@ -1011,6 +1012,7 @@ typedef struct _ROWCTL {
     HWND Label;
     HWND Choice;
     HWND Now;
+    HWND Sep;               /* the line above the row; NULL on the first  */
 } ROWCTL;
 
 typedef struct _ROWPAGE {
@@ -1067,15 +1069,27 @@ static void row_label(const INST_ROW *r, char *out, size_t cap)
     out[cap - 1] = '\0';
 }
 
+/* An etched line across the page, between one row and the next, with the
+ * gap under a choice wider than the one under its own label: a label is
+ * not read as the title of the choice above it (owner, 2026-10-19). */
+static HWND row_sep(HWND dlg, int y, int id)
+{
+    return make_ctl(dlg, "STATIC", "", SS_ETCHEDHORZ, 8, y, 284, 1, id, NULL);
+}
+
 /* One row of a settings page: a label of two lines, the choice under it,
- * the short "now" beside the choice. y in dialog units. */
-#define WIZ_ROW_DLU 32
+ * the short "now" beside the choice, and above a row after the first the
+ * line between rows. y in dialog units; four rows end at 22 + 3 * 38 + 30
+ * = 166, above the note at 176. */
+#define WIZ_ROW_DLU 38
+#define WIZ_ROW_SEP 4
 static void row_make(HWND dlg, ROWCTL *rc, int row, int y, HFONT font, int id)
 {
     const INST_ROW *r = &rows[row];
     char text[256];
 
     rc->Row = row;
+    rc->Sep = y > 22 ? row_sep(dlg, y - WIZ_ROW_SEP, id + 3) : NULL;
     row_label(r, text, sizeof(text));
     rc->Label = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8, y,
                          284, 17, id, font);
@@ -1134,6 +1148,9 @@ static void rows_clear(ROWPAGE *rp)
         DestroyWindow(rp->R[i].Label);
         DestroyWindow(rp->R[i].Choice);
         DestroyWindow(rp->R[i].Now);
+        if (rp->R[i].Sep != NULL) {
+            DestroyWindow(rp->R[i].Sep);
+        }
     }
     rp->Count = 0;
 }
@@ -1435,6 +1452,9 @@ static void s98_page_clear(void)
         DestroyWindow(s98Label[i]);
         DestroyWindow(s98Combo[i]);
         DestroyWindow(s98Now[i]);
+        if (s98Sep[i] != NULL) {
+            DestroyWindow(s98Sep[i]);
+        }
     }
     s98ComboCount = 0;
 }
@@ -1471,6 +1491,10 @@ static void s98_page_fill(HWND dlg)
         }
         _snprintf(text, sizeof(text) - 1, "%s - %s", r.Name, v->What);
         text[sizeof(text) - 1] = '\0';
+        /* The rows' line as on the USB pages: the row's "now" ends at
+         * y + 36, the next label starts 12 under it. */
+        s98Sep[n] = n > 0 ? row_sep(dlg, y - 6, IDC_ROW_BASE +
+                                    IDC_ROW_STRIDE * n + 3) : NULL;
         s98Label[n] = make_ctl(dlg, "STATIC", text, SS_LEFT | SS_NOPREFIX, 8,
                                y, 284, 10, IDC_ROW_BASE + IDC_ROW_STRIDE * n,
                                font);
@@ -1499,7 +1523,7 @@ static void s98_page_fill(HWND dlg)
         }
         SendMessageA(s98Combo[n], CB_SETCURSEL, (WPARAM)sel, 0);
         s98ComboCount++;
-        y += 40;
+        y += 48;
     }
     SetDlgItemTextA(dlg, IDC_S_NOTE, s98_where());
     ShowWindow(GetDlgItem(dlg, IDC_S_ADVANCED), SW_SHOW);
