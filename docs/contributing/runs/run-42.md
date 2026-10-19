@@ -1128,6 +1128,38 @@ that filter from a rebuilt stack needs another driver's chain top read
 safely, an import this driver does not have; under the USB4 profile on an
 ACPI machine an eject leaves the tunnel up until the unplug.
 
+### 42-A.24, continued: the service entries, and the mark service following XhciCmSafeEject (2026-10-19)
+
+The matrix found `pci#cc_0c0340` and the NHI's own id left in the
+CriticalDeviceDatabase naming `xhcicm` after an uninstall (2000, XP and 7),
+the NHI back at Code 19 after the restart. The uninstall now deletes every
+entry whose `Service` is a service of the package that is gone (record 23
+section 9.2 step 6a, `inst_cddb_service_gone` with host vectors; Stor98's
+only when its removal took the service), and every NT install run ends with
+the same pass. Read on the 2000 disk on a two-port USB4 host with the
+connection manager and Stor98 installed: the uninstall deleted the two
+entries naming `xhcicm` and kept `pci#cc_010802` naming the Stor98 a drive
+still used; after the restart the NHI had no driver (Code 1 on that disk,
+as before the first install; not Code 19) and no entry named a removed
+service. `xhci98` and `xhciuas` left no entry on that 2000 disk, nor on
+the XP guest with the package installed (its database named `xhcicm` for
+the NHI's id alone). Gated builds passed, x86 then amd64, at 3fec8fd2 (the
+merge of 3.1.0.0 over this work).
+
+The owner's decision: the mark service follows the `XhciCmSafeEject` in
+force after a run (record 23 section 5.1 step 12, `inst_mk_safe_eject` and
+`inst_mk_end_action` with host vectors). Read on 7 x86: an install with
+`/set XhciCmSafeEject=0` left no `xhcimark`; `/set XhciCmSafeEject=1`
+installed and started it, and after the restart and a plug the unit was
+marked; `/set XhciCmSafeEject=0` again stopped and deleted the service and
+took the unit's mark out, nothing in the database naming `xhcicm` in a
+`LowerFilters`. The first run of that leg also took the filter INF's
+`UpperFilters` copy out of the database while `xhcicm` stayed; that copy
+is the tunnel-port filter's, and a run with safe eject off now leaves it.
+
+Reviewed until the review converged (its last round found one wording
+point in these records, fixed).
+
 ## Phase 42 integration: the installer's hooks, the bench cut and its smoke legs (2026-10-19)
 
 Branch `p42-int` from `3.1.0.0` at `2d2703b9`, with `3.1.0.0` merged in
@@ -1614,3 +1646,53 @@ carries them whole.
 
 Not taken: the driver reading the machine-wide 4 after a cold start, and
 hidusbf codes (42-V.2's leg); Windows 7 and the x64 half.
+
+## 42-A.25: no republication after a resume left a bus unnumbered (2026-10-19)
+
+The matrix reading on Windows ME that morning (the bench zip, two USB4
+NVMe enclosures on the emulator's `usb4-generic` host, `tb0` at `00:05`
+for port 1 and `tb1` at `00:06` for port 2): after a Stand by and resume
+with `enc0` attached, plugging `enc1` into port 2 dropped the volume of
+port 1. The log: at the resume the core rebuilt port 1's tunnel
+(`cm.nvlink.u4-up=00010002`), and the UP hook's and the seam's exposures
+of it found the secondary bus not yet numbered (`cm.nvlink.up.no-bus`),
+so only the bridge's tunnel record took it; at `enc1`'s tunnel up the
+seam's exposure of port 1's member, naming no tunnel, published for that
+record and advanced port 1's entry (`cm.nvlink.up=02000101`) before port
+2's own (`01000201`). Stor98, bound since before the sleep, then ended
+that disk.
+
+Code on branch `p42-nvres` (from `3.1.0.0` at `4b6d3477`): `0213636d`
+(`CmNvlinkPublishUpEx`: only an exposure that itself names a new tunnel
+advances an entry already `UP`; one that names none labels what it
+publishes with the bridge's recorded tunnel and never advances; host
+vector `test_resume_no_bus`), `b860175b` and the merge `d26ccedf`
+(records 21 section 7.2 and 22 section 10, with their revision notes).
+Reviewed: the first round found nothing. Built at `d26ccedf`, the
+current `3.1.0.0` merged in, with every gate, `scripts\build-driver.cmd
+all` and `all -amd64`: both pass (`test_cm_nvlink` 473 checks).
+
+**Windows ME** (the guest of the morning's reading copied, the gated
+`qemu` `xhcicm.sys` of `0213636d` copied over the installed one, cold
+starts only): `enc0` at power-on (`cm.nvlink.up=01000101`), F: compared;
+Stand by and resume as the reading did (`cm.nvlink.u4-up=00010002`,
+`cm.nvlink.up.no-bus=00000028` and `00000030`); `enc1` plugged 60 s after
+the resume: one publication, its own (`cm.nvlink.up=01000201`), none for
+port 1; F: and G: both compared clean. Pass. A first attempt with `enc1`
+plugged at once after the wake saw no tunnel at all: the connection
+manager made no ring access after the plug and the emulator dropped port
+2's hot-plug frames ("fifo overflow"); no publication was reached, so it
+says nothing of this change; not seen again, unattributed.
+
+**Windows 7 x86** (the guest of the 42-A.6 legs, two enclosures, a
+hibernation as its only sleep): the resume's own named exposure advanced
+port 1's entry once (`02000101`, the tunnel being new) and `enc1`'s plug
+published only its own (`01000201`); the rule of 42-A.25 changes nothing
+on this path. But F: (port 1) hung in a read after the hibernate resume:
+with this branch's `qemu` build (after `enc1`'s plug), its `release`
+build of `0213636d` (before any plug) and the `release` build of the
+merge `d26ccedf` (before any plug); and did not hang - read clean before
+and after `enc1`'s plug - with the bench zip's `xhcicm.sys` nor with the
+`qemu` build of `4a708676` (42-A.6's own). Not attributed: a change to
+`xhcicm.sys` between the bench's source and `4b6d3477` is the likeliest
+place; owed to a bisection.

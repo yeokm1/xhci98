@@ -308,8 +308,8 @@ the same tool is built from `xhciinst/inst_eng.c` (the engine) and
 installer's window, from `3.1.0.0` (design record 26), built by
 `xhciinst/build.cmd` from `xhciinst/xhciwiz.c`, `xhciinst/inst_eng.c`,
 `xhciinst/inst_core.c` and `src/xhci_psw.c`, with `xhciinst/xhciwiz.rc`
-embedding `xhciinst/xhciwiz.manifest` and `xhciinst/xhciwiz.ico` (an icon
-drawn for this project in the 16 VGA colours) - all this project's own
+embedding `xhciinst/xhciwiz.manifest` and `xhcitr/xhcitr.ico` (XHCITR's
+icon, drawn for this project in the 16 VGA colours) - all this project's own
 text. Each is not only that, in `XHCITR`'s way:
 
 - `XHCIWIZ.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked
