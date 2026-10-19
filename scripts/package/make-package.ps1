@@ -1544,10 +1544,17 @@ a build that was never made.
         foreach ($f in (Get-ChildItem -LiteralPath $stageDir -Recurse -Force)) {
             $stagedRel[$f.FullName.Substring($stageDir.Length).TrimStart('\')] = $true
         }
+        # An x64 package staged before 3.1.0.0 kept the filter INF and its
+        # copy of the binary in nt\; those three entries, and only those,
+        # are this script's own retired layout and are replaced with it.
+        $retiredRel = @{}
+        if ($Arch -eq "amd64") {
+            foreach ($r in @("nt", "nt\xhcicmf.inf", "nt\xhcicm.sys")) { $retiredRel[$r] = $true }
+        }
         $foreign = @()
         foreach ($f in (Get-ChildItem -LiteralPath $OutDir -Recurse -Force)) {
             $rel = $f.FullName.Substring($OutDir.Length).TrimStart('\')
-            if (-not $stagedRel.ContainsKey($rel)) { $foreign += $rel }
+            if (-not $stagedRel.ContainsKey($rel) -and -not $retiredRel.ContainsKey($rel)) { $foreign += $rel }
         }
         if ($foreign.Count -gt 0) {
             throw @"

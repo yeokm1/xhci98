@@ -2970,6 +2970,21 @@ try {
     # both architectures' media carry xhci98.inf and xhci98.sys, which is why
     # they need directories of their own rather than names of their own.
     Assert-True (Test-Path -LiteralPath (Join-Path $arch64Out "xhci98.sys")) "the amd64 package has no xhci98.sys."
+    # An amd64 output directory staged before 3.1.0.0, with the filter INF
+    # and its copy of the binary in nt\, is this script's own and is
+    # replaced; anything else in nt\ is still somebody else's.
+    Ensure-Directory (Join-Path $arch64Out "nt")
+    foreach ($n in @("xhcicmf.inf", "xhcicm.sys")) {
+        [System.IO.File]::WriteAllText((Join-Path $arch64Out "nt\$n"), "stand-in from a 3.0.0.0 x64 package")
+    }
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver, "-OutDir", $arch64Out)
+    Assert-True ($r.ExitCode -eq 0) ("the amd64 package did not replace one staged in the 3.0.0.0 nt\ layout:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $arch64Out "nt"))) "the replaced amd64 package still has an nt\ subdirectory."
+    Ensure-Directory (Join-Path $arch64Out "nt")
+    [System.IO.File]::WriteAllText((Join-Path $arch64Out "nt\README.TXT"), "somebody else's")
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver, "-OutDir", $arch64Out)
+    Assert-True ($r.ExitCode -ne 0) "the amd64 packager replaced a directory holding nt\README.TXT, which it never staged."
+    Remove-Item -LiteralPath (Join-Path $arch64Out "nt") -Recurse -Force
 
     #
     # **The wrong INF under the 64-bit architecture must be refused**, and this
