@@ -643,13 +643,16 @@ if errorlevel 1 goto stor98fail
 rem Stor98 (task 42-A.30): built once per run, free only - the package ships
 rem its free build whatever this project's flavour - for this architecture,
 rem then gated in each flavour below (:gatestor98). The images it replaces
-rem are deleted first, so a failed build cannot leave an old one to gate.
+rem (this architecture's only; the other run's stay) are deleted first, so a
+rem failed build cannot leave an old one to gate.
 echo.
 echo === build Stor98 (free, %ARCH%) ===
 set "STOR98_DBGPORT="
 set "S98TARGETS=9x x86"
+set "S98IMAGES=win9x\stor98.mpd x86\stor98.sys"
 if /i "%ARCH%"=="amd64" set "S98TARGETS=amd64"
-for %%T in (win9x\stor98.mpd x86\stor98.sys amd64\stor98.sys) do if exist "%REPO%\src\stor98\out\free\%%T" del "%REPO%\src\stor98\out\free\%%T"
+if /i "%ARCH%"=="amd64" set "S98IMAGES=amd64\stor98.sys"
+for %%T in (%S98IMAGES%) do if exist "%REPO%\src\stor98\out\free\%%T" del "%REPO%\src\stor98\out\free\%%T"
 call "%REPO%\src\stor98\scripts\build.cmd" "%S98TARGETS%" free
 if errorlevel 1 goto stor98fail
 

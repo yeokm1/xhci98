@@ -138,7 +138,9 @@ function Get-SourceFiles {
 
     # The .c list comes from src\sources, so it cannot drift from the build.
     $sources = [System.IO.File]::ReadAllText((Join-Path $srcDir "sources"))
-    $m = [regex]::Match($sources, '(?ms)^SOURCES\s*=(.*?)(?:\r?\n\r?\n|\r?\n[A-Z])')
+    # The list ends at a blank line, the next directive or, as src\stor98\src\sources'
+    # does, the end of the file.
+    $m = [regex]::Match($sources, '(?ms)^SOURCES\s*=(.*?)(?:\r?\n\r?\n|\r?\n[A-Z]|\r?\n?\z)')
     if (-not $m.Success) {
         throw "src\sources has no SOURCES= list this script can read."
     }

@@ -1095,7 +1095,8 @@ function ConvertFrom-GatedManifest {
         $seen[$key] = $true
         if ($key.StartsWith("sha256.")) {
             $name = $key.Substring(7)
-            if ($name -notmatch '^[a-z0-9_]+\.sys$') { throw "'$key' does not name a .sys" }
+            # stor98.mpd, Stor98's 98 SE / ME image, since task 42-A.30.
+            if ($name -notmatch '^[a-z0-9_]+\.sys$' -and $name -ne 'stor98.mpd') { throw "'$key' does not name a .sys or stor98.mpd" }
             if ($val -notmatch '^[0-9A-Fa-f]{64}$') { throw "'$key' is not a SHA-256" }
             $m.Sha256[$name] = $val.ToUpperInvariant()
             continue

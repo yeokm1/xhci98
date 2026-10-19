@@ -2837,6 +2837,15 @@ To cut one, run this script without it.
             Write-Ok ("{0}\: '{1}' holds the published binary and INF" -f $dirName, $pubDir)
         }
 
+        # A release cut before 3.1.0.0 with a pinned Stor98 (3.0.0.0 bundled
+        # 0.4.0.0) added it to the upload set only, never to releases\, so
+        # its published tree cannot rebuild that asset (task 42-A.30).
+        $pubReadme = Join-Path $finalRoot "readme.txt"
+        if ((Test-Path -LiteralPath $pubReadme) -and
+            ([System.IO.File]::ReadAllText($pubReadme) -match '(?m)^  Bundled in this download: Stor98 ') -and
+            @($legDirs | Where-Object { $_ -like "release-*" -and (Test-Path -LiteralPath (Join-Path (Join-Path $finalRoot $_) "stor98.inf")) }).Count -eq 0) {
+            throw "'$finalRoot' was cut with a pinned Stor98 that its published tree does not hold (before 3.1.0.0, the upload set alone carried it). Re-assemble it with the make-release.ps1 of its own cut (git checkout of that release), which takes the pins."
+        }
         $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
                              -LegArches $legArches `
                              -PkgDirs @{} -UploadDir $UploadDir -Repo $repo `
@@ -3220,7 +3229,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
             }
             # And the bytes are the build's (signed, on a signed leg, by this
             # cut's key like the other x64 drivers: one signature for all).
-            $nvBuilt = \(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | Where-Object { $_.Dest -eq $nvRel })[0].FullPath
+            $nvBuilt = @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch | Where-Object { $_.Dest -eq $nvRel })[0].FullPath
             if ($legSigned -and $nvRel -eq "stor98.sys") {
                 Assert-TestSigned -Sys (Join-Path $destDir $nvRel) -BuiltSys $nvBuilt -Label "$($leg.Dir)\$nvRel"
             } elseif ((Get-FileHash -LiteralPath (Join-Path $destDir $nvRel) -Algorithm SHA256).Hash -ne
