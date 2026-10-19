@@ -765,22 +765,52 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo,
 
 /*
  * Whether every function behind a bridge is without a device stack: each
- * PDO its last BusRelations reported has nothing attached (an eject, a
- * disable or no driver removed or never built its stack), and that answer
- * was not truncated. Whatever put a stack back - a re-enable, a driver
- * installed - shows as an attached device, so no state is remembered per
- * PDO. The snapshot's PDOs are those pci.sys still reports, so they are
- * not yet deleted. Under the lock.
+ * PDO its last BusRelations reported has nothing attached, or only the
+ * child filter that answer put on it with nothing above it (an eject, a
+ * disable or no driver removed or never built its stack: CmPortsStackless),
+ * and that answer was not truncated. Whatever put a stack back - a
+ * re-enable, a driver installed - shows as an object attached above the
+ * child, so no state is remembered per PDO. The snapshot's PDOs are those
+ * pci.sys still reports, so they are not yet deleted; a child on the
+ * attachment list is not yet deleted either (it leaves the list before
+ * IoDeleteDevice). Under the lock.
  */
 static BOOLEAN cmEjectReady(PCM_FILTER bridge)
 {
     ULONG i;
+    PDEVICE_OBJECT pdo;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    ULONG busChild;
+    ULONG addDev;
+    ULONG above;
 
     if (!bridge->Published || bridge->Gone || bridge->SnapTruncated) {
         return FALSE;
     }
     for (i = 0; i < bridge->SnapCount; i++) {
-        if (((PDEVICE_OBJECT)bridge->Snap[i])->AttachedDevice != NULL) {
+        pdo = (PDEVICE_OBJECT)bridge->Snap[i];
+        if (pdo->AttachedDevice == NULL) {
+            continue;
+        }
+        busChild = 0;
+        addDev = 0;
+        above = 0;
+        for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+            f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+            if (f->Common.Pdo != pdo) {
+                continue;
+            }
+            if (f->Common.Kind == CM_KIND_CHILD && !f->AddDev) {
+                busChild = 1;
+                if (f->Common.Self->AttachedDevice != NULL) {
+                    above = 1;
+                }
+            } else {
+                addDev = 1;
+            }
+        }
+        if (!CmPortsStackless(1, busChild, addDev, above)) {
             return FALSE;
         }
     }

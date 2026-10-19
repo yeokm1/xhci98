@@ -3208,10 +3208,18 @@ reading of D10 for the owner to confirm.
    stack (roadmap-usb4.md 42-0.4 and 42-A.5, formerly EJRB.1), so the
    first plug of a never-seen unit is not
    listed. The re-plugs are listed. Windows 7 x86 listed the first plug
-   too. `cmEjectReady`
-   still reads any attached object as a stack, so on an ACPI machine it
-   depends on that bus filter leaving with the device's stack; the
-   revision's legs read it.
+   too. `cmEjectReady` reads a function as without a stack when nothing
+   is attached to its PDO, or when the only object of this driver's on
+   it is this child with nothing attached above it (`CmPortsStackless`):
+   a function Windows found no driver for (Code 28) keeps the child, and
+   any bus filter below it, on its PDO, because its stack was never built.
+   Before this rule, 7 x86 posted no eject for a unit while a Code 28
+   NVMe drive sat behind the same port (`cm.reenum.confirm` followed by
+   `cm.reenum.eject.stale` on every confirmation), where 2000 posted it. A
+   function driver or an upper filter always attaches above the child, so
+   a built stack still refuses the eject; an object of this driver's that
+   AddDevice made also counts as a stack, and a PDO with other drivers'
+   objects and no child of this one's is not read and counts as a stack.
 2. **The capabilities.** The child filter passes
    `IRP_MN_QUERY_CAPABILITIES` down with a completion wait and, when
    `pci.sys` succeeded it, sets `Removable` to 1 on the way up - the way
