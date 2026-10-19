@@ -308,6 +308,9 @@ VOID EngStop(IN struct _HW_DEVICE_EXTENSION *DevExt);
 // Request submission from the SCSI handlers
 BOOLEAN EngSubmitReadWrite(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN EngSubmitFlush(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb);
+#if defined(NVME2K_W9X) && defined(STOR98_DBGPORT)
+VOID EngProbeSg9x(IN PSCSI_REQUEST_BLOCK Srb);
+#endif
 BOOLEAN EngSubmitLogPage(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN UCHAR LogId);
 VOID EngCompleteSrb(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 

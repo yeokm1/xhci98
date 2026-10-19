@@ -115,6 +115,19 @@ static ULONG Sg9xClassify(const void *Srb, const void *DataBuffer, const STOR98_
     return SG9X_SG;
 }
 
+// IOR_func of the SRB's IOR (IOR.H, IOR + 0x04), or 0xFFFF when the layout is
+// not the one Sg9xClassify checks. Diagnostics only.
+#define SG9X_IOR_FUNC       (SG9X_IOR + 0x04)
+static ULONG Sg9xIorFunc(const void *Srb)
+{
+    ULONG iop = *(const ULONG *)((const UCHAR *)Srb + SG9X_SRB_IOP);
+
+    if (iop < SG9X_ARENA || (iop & 3) != 0 || *(const ULONG *)(iop + SG9X_IOP_SRB) != (ULONG)Srb) {
+        return 0xFFFF;
+    }
+    return *(const USHORT *)(iop + SG9X_IOR_FUNC);
+}
+
 // Copy Bytes between Bounce and the list's data at Offset. The whole span
 // is resolved before anything is copied; FALSE (nothing copied) if any of
 // it lies past the list. ToCaller: Bounce -> list, else list -> Bounce.

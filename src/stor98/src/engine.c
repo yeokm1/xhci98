@@ -64,6 +64,17 @@
 #define ENG_ALL_ONES    0xFFFFFFFF
 #define ENG_MAP_UNRESOLVED  5     // STG_ENG_MAP_FAIL: the caller's buffer could not be resolved (9x)
 
+#ifdef NVME2K_W9X
+// STG_SG9X argument (dbgport.h).
+static ULONG EngSg9xStage(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Kind, IN ULONG Use, IN BOOLEAN Ok)
+{
+    ULONG func = Sg9xIorFunc(Srb);
+
+    return Kind | (Use << 2) | ((ULONG)(Ok ? 1 : 0) << 4) | ((func > 0x3E ? 0x3F : func) << 8) |
+           ((ULONG)Srb->Cdb[0] << 16);
+}
+#endif
+
 // Linear address of byte Offset of the SRB's data, or NULL when it cannot be
 // established (9x: an SG list that does not cover it, or an unknown layout;
 // sg9x.h, Sg9xClassify).
@@ -74,17 +85,43 @@ static PUCHAR EngCallerVa(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset)
     ULONG lin, run;
     const STOR98_SGD9X *sgd;
 
-    switch (Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift)) {
-    case SG9X_LINEAR:
-        break;
-    case SG9X_SG:
-        return Sg9xResolve(sgd, shift, Offset, &lin, &run) ? (PUCHAR)(ULONG_PTR)lin : NULL;
-    default:
-        return NULL;
+    ULONG kind = Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift);
+    BOOLEAN ok;
+
+    ok = (BOOLEAN)(kind == SG9X_LINEAR || (kind == SG9X_SG && Sg9xResolve(sgd, shift, Offset, &lin, &run)));
+#ifdef STOR98_DBGPORT
+    if (kind != SG9X_LINEAR || Sg9xIorFunc(Srb) > 1) {
+        DBGSTAGE(STG_SG9X, EngSg9xStage(Srb, kind, 0, ok));
+    }
+#endif
+    if (kind != SG9X_LINEAR) {
+        return ok ? (PUCHAR)(ULONG_PTR)lin : NULL;
     }
 #endif
     return (PUCHAR)Srb->DataBuffer + Offset;
 }
+
+#if defined(NVME2K_W9X) && defined(STOR98_DBGPORT)
+// Test builds: how the buffer of an SRB that is not READ/WRITE is laid out
+// (pass-through, SMART), logged as STG_SG9X use 3. Nothing is changed.
+VOID EngProbeSg9x(IN PSCSI_REQUEST_BLOCK Srb)
+{
+    UCHAR shift;
+    const STOR98_SGD9X *sgd;
+    ULONG kind;
+
+    if (Srb->Function != SRB_FUNCTION_EXECUTE_SCSI || Srb->DataBuffer == NULL || Srb->DataTransferLength == 0) {
+        return;
+    }
+    switch (Srb->Cdb[0]) {
+    case SCSIOP_READ6: case SCSIOP_READ: case SCSIOP_READ16:
+    case SCSIOP_WRITE6: case SCSIOP_WRITE: case SCSIOP_WRITE16:
+        return;
+    }
+    kind = Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift);
+    DBGSTAGE(STG_SG9X, EngSg9xStage(Srb, kind, 3, (BOOLEAN)(kind == SG9X_LINEAR)));
+}
+#endif
 
 // Copy Bytes between the bounce pages and the SRB's data at Offset, fragment
 // by fragment on 9x. ToCaller: bounce -> caller (a read), else caller ->
@@ -97,13 +134,17 @@ static BOOLEAN EngCallerCopy(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset, IN PUC
     UCHAR shift;
     const STOR98_SGD9X *sgd;
 
-    switch (Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift)) {
-    case SG9X_LINEAR:
-        break;
-    case SG9X_SG:
-        return Sg9xCopy(sgd, shift, Offset, Bounce, Bytes, ToCaller);
-    default:
-        return FALSE;
+    ULONG kind = Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift);
+    BOOLEAN ok = TRUE;
+
+    if (kind == SG9X_SG) {
+        ok = Sg9xCopy(sgd, shift, Offset, Bounce, Bytes, ToCaller);
+    } else if (kind != SG9X_LINEAR) {
+        ok = FALSE;
+    }
+    DBGSTAGE(STG_SG9X, EngSg9xStage(Srb, kind, ToCaller ? 2 : 1, ok));
+    if (kind != SG9X_LINEAR) {
+        return ok;
     }
 #endif
     if (ToCaller) {
