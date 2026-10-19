@@ -2433,3 +2433,62 @@ a guest; the NT routes (unchanged, `test_inst` and review only). The
 legs ran the installer of `f0114d4b`; the later rounds changed the
 declined path, the cancel, the record's first write and the INF
 refresh's retry, not the confirmed path the legs read.
+
+## The 3.1.0.0 cut and its legs (2026-10-19 and 20)
+
+The first cut (5147eef4, release commit 55447b34) was held. The x64
+installer refused to start on 7 x64 and Vista x64: Stor98's audit had
+added an empty undecorated `[Stor98_Models]` to `stor98-x64.inf`, which
+`inst_inf_arch_ok` refuses (fixed in bd0d14dd, and
+`check-stor98-inf.ps1` now refuses one too). On 98 SE, updating 3.0.0.0
+with Stor98 0.4.0.0 and an enclosure mounted gave a fatal exception 0E at
+`0028:FF09E842` twice, when Windows' device installer replaced the running
+`stor98.mpd`; with the enclosure absent, Stor98 was not updated at all.
+The owner's real-hardware run on the ThinkPad P14s Gen 1 under 98 SE found
+Thunderbolt off: an accidental change had set `XhciCmMode` to `0`.
+
+The fix round (`p42-fix1`, merged 6fe49f46), reviewed until it converged:
+on 98 SE and ME Stor98 is updated as a file through WININIT, never by
+reinstalling a running device; one Summary box, "Please disconnect all
+external NVMe drives before proceeding"; a helper that did not finish is
+reported as unfinished; Thunderbolt 3 / USB4 is "(experimental)" and
+unticked by default, its note naming what was found, with Stor98 ticked
+along with it; no Stor98 record in a run that made no Stor98 change; and a
+Summary warning before `XhciCmMode` `0` is written. Documents: Stor98 is
+not for internal NVMe drives (12d55b7b). The second cut (354a4403,
+release commit 051c38d3) first stopped on two lines past 78 columns in
+`tools\xhciinst\readme.txt`, rewrapped in 354a4403.
+
+Legs on the final cut (`E:\xhci98-vm\m31\final2`, every file checked
+against its SHA-256 list; QEMU, headless):
+
+| Leg | Result |
+|---|---|
+| 98 SE, update over 3.0.0.0 + Stor98 0.4.0.0, enclosure unplugged at the Summary box (`p42-fix1`) | pass: no blue screen, `stor98.mpd` 3.1.0.0 after the shut down and start, F: compares clean |
+| 98 SE, the same with the enclosure absent | pass: Stor98 updated as a file, 3.1.0.0 when plugged, F: compares clean |
+| 98 SE, fresh, through the window (`m31\fin`, leg C) | pass: the Components page's new defaults, the `XhciCmMode` warning, Stor98 3.1.0.0 on the enclosure, the uninstall leaves nothing of the package |
+| 7 x64 and Vista x64, SETUP.EXE, two normal-start cold boots (`p42-nvres\fx`) | pass: the install, every device of the package at Code 0, the 7 x64 uninstall (two runs, a stale root hub of an earlier enumeration) leaves the NHI at Code 28, not 19 |
+| 7 x64, the enclosure's NVMe, N5's flat tree, the enclosure hot-plugged after the desktop (`p42-nvres\fx\w7x64-n5`) | pass: the tunnel up, Stor98 at Code 0, the volume mounted (G:). On a TB3 bridge tree with a boot allow-list and the enclosure at power-on, `xhcicm` stalled after DRIVER_READY on 7 x64 and Vista x64 (the reply to its first raw read not consumed); the bench cut's N5 legs used the flat tree, so this is an emulator layout no leg had read, not a change of this cut: left open in OWED31.1 |
+
+On the first cut, before the fix round: 98 SE fresh with SETUP.EXE (L1)
+and 2000 fresh (L2) passed with Stor98 3.1.0.0; 98 SE with a hand-installed
+Stor98 0.4.0.0 on an internal NVMe was left alone (leg A); SETUP.EXE on 98
+SE without Thunderbolt (leg B) passed; `E:\xhci98-vm\p42-s98ver` and
+`m31\fin`.
+
+Real hardware, the owner, 2026-10-19 and 20, the ThinkPad P14s Gen 1 under
+98 SE. On the first cut (Stor98 3.1.0.0 copied by hand): the ORICO
+enclosure's drive, the TS3 Plus dock, an unplug of the enclosure during a
+copy (Windows' own "removed while in use" message, then normal) and the
+USB Tree's Safely Remove of a stick, all as expected. On the final cut, a
+fresh Windows and SETUP.EXE: everything worked. The ORICO sometimes came up
+as a USB (UAS) disk first and tunnelled after a replug or two (DUALMODE.1).
+
+Also read that night: the 7 x86 hang of a tunnelled drive's read after a
+hibernate resume is there with 3.0.0.0's `xhcicm.sys` too, intermittent,
+and inside the release notes' "standby and hibernation with a tunnelled
+device attached are unsupported"; the 7 x64 freezes of the 42-A.23 legs
+were QEMU's SDL window on development host A (the same disk boots
+headless); and the ME control experiment (12 stock boots, no fault) leaves
+the ME `0E : 0177 : BFF62170` unexplained, with nothing pointing at a
+change in this package.

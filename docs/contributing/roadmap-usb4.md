@@ -353,7 +353,7 @@ section 7.7.
 - [x] 42-V.3 the VM matrix on the `release` flavour, as read for `3.1.0.0` (done 2026-10-20, matrices N1 to N5 and the final cut's legs; the rest in OWED31.1)
 - [x] 42-V.7 more than one NVMe drive on 98 SE (was GEN1.2), as read for `3.1.0.0` (done 2026-10-19, `E:\xhci98-vm\m31\v7\RESULT.md`; the rest in GEN1.3)
 - [x] 42-V.9 the legs of Stor98's audit fixes (42-A.19), as read for `3.1.0.0` (done 2026-10-20, Stor98's `docs/TESTING.md`; the rest in OWED31.1)
-- [ ] 42.final `README.md`, the release notes (what `3.1.0.0` adds, "Installing" rewritten around the installer, "Untested ground" naming what is owed), `releases/history.md`, `source-files.md`, `docs/README.md`; the builds, the dry cut, the owner's signed cut of `3.1.0.0` and the install legs from the asset
+- [x] 42.final `README.md`, the release notes (what `3.1.0.0` adds, "Installing" rewritten around the installer, "Untested ground" naming what is owed), `releases/history.md`, `source-files.md`, `docs/README.md`; the builds, the dry cut, the owner's signed cut of `3.1.0.0` and the install legs from the asset (done 2026-10-20: README, the release notes, `releases/history.md` and the release readme; cut at 354a4403, release commit 051c38d3; the legs on the final cut and the owner's P14s run in `runs/run-42.md`)
 
 Checkpoint: design records 26, 27 and 28 and the sections of 42-0.4,
 42-0.5 and 42-0.7 converged before their code; the host suites green
