@@ -11,7 +11,8 @@
 #include "../src/xhci_version.h"
 #include "xhciwiz_res.h"
 
-IDI_WIZ ICON "xhciwiz.ico"
+/* XHCITR's icon: the project's windows show one (owner, 2026-10-19). */
+IDI_WIZ ICON "../xhcitr/xhcitr.ico"
 
 1 24 "xhciwiz.manifest"
 

@@ -259,8 +259,9 @@ the two share:
   on the welcome page as a refusal with "run it as an administrator".
 - The version resource from `src\xhci_version.h`; `make-release.ps1`'s
   freshness and version checks cover the new pair as they cover the old.
-- The icon: `xhciinst\xhciwiz.ico`, drawn for this project in the 16 VGA
-  colours as XHCITR's is.
+- The icon: XHCITR's own, `xhcitr\xhcitr.ico` (record 25), which
+  `xhciwiz.rc` names in place, so the two windows show one icon (owner,
+  2026-10-19).
 - **The wizard** is `PropertySheet` with `PSH_WIZARD`, the form every one of
   the targets' `comctl32.dll` builds draw (the 97-style header needs the
   IE4-era control library, which 98 SE has and 2000 has, but gains nothing
@@ -1067,7 +1068,7 @@ this list is the whole of it:
 | File | What |
 |---|---|
 | `xhciinst\xhciwiz.c` | the window: the pages, the worker thread, the WOW64 start, the restart |
-| `xhciinst\xhciwiz.rc`, `xhciwiz.manifest`, `xhciwiz.ico`, `xhciwiz_res.h` | the dialog templates, the manifest, the icon |
+| `xhciinst\xhciwiz.rc`, `xhciwiz.manifest`, `xhciwiz_res.h` | the dialog templates, the manifest, the icon (`xhcitr\xhcitr.ico`) |
 | `xhciinst\inst_eng.c`, `inst_eng.h` | the engine: record 23's system half behind `INST_FRONT` |
 | `xhciinst\xhciinst.c` | the console front end |
 | `xhciinst\inst_core.c`, `inst_core.h` | the pure half (section 11) |
