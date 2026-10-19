@@ -672,10 +672,18 @@ unasked). With the box ticked:
   still names (an update of the hand-installed device from the bundled
   release points its driver key at the newest copy) stays with it, by
   the reference check, and the finish page says so.
-- The x64 `stor98.sys` keeps Stor98's own test signature; the test-signing
+- The x64 `stor98.sys` is signed in the package's one signing step, by
+  the same certificate as this package's drivers, from `3.1.0.0` (Stor98
+  `0.4.0.0` and earlier carried Stor98's own test signature and
+  `stor98-test.cer`, which the package no longer ships); the test-signing
   note of record 23 section 5.10 names it beside this package's drivers
-  when the box is ticked, and `stor98-test.cer` is never imported (the
-  bundled-Stor98 rule of `build-and-test.md`).
+  when the box is ticked, and no certificate is imported.
+- From `3.1.0.0` the bundled Stor98 carries the package's version (its
+  `stor98.inf` `DriverVer` and its file versions), read from `stor98.inf`
+  as before; a Stor98 `0.4.0.0` or `0.3.0.x` an earlier package installed
+  is older than it by the four-number comparison, so its devices are
+  updated, and `PreExisting` alone, never a version, decides whose Stor98
+  it is.
 
 ### 6.4 The console tool
 

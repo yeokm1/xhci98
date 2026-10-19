@@ -706,6 +706,58 @@ static void test_actions(void)
              "/force never lifts unknown");
     CHECK_EQ(inst_group_verdict(0, 0, 2, 1), INST_GROUP_REFUSED_UNKNOWN,
              "unreadable binary: unknown");
+
+    /* Stor98 took the package's version at 3.1.0.0 (task p42-s98ver): the
+     * bundled stor98.inf says 3.1.0.0, and a Stor98 0.4.0.0 that a 3.0.0.0
+     * package installed is older, so it is updated, never refused. */
+    {
+        static const char s98New[] =
+            "[Version]\r\nSignature=\"$CHICAGO$\"\r\n"
+            "DriverVer=10/19/2026,3.1.0.0\r\n";
+        static const char s98Old[] =
+            "[Version]\r\nSignature=\"$CHICAGO$\"\r\n"
+            "DriverVer=10/16/2026,0.4.0.0\r\n";
+        INST_U32 bundled[4];
+        INST_U32 old[4];
+
+        CHECK(inst_inf_driverver(s98New, bundled) &&
+              bundled[0] == 3 && bundled[1] == 1 && bundled[2] == 0 &&
+              bundled[3] == 0, "the bundled stor98.inf reads 3.1.0.0");
+        CHECK(inst_inf_driverver(s98Old, old) && inst_ver_cmp(old, bundled) < 0,
+              "Stor98 0.4.0.0 is older than the bundled 3.1.0.0");
+        memset(&d, 0, sizeof(d));
+        d.HasService = 1;
+        d.OwnService = 1;
+        d.VersionState = INST_VS_HAVE;
+        memcpy(d.Version, old, sizeof(old));
+        CHECK_EQ(inst_action(&d, bundled), INST_ACT_UPDATE,
+                 "a drive on Stor98 0.4.0.0: updated to 3.1.0.0");
+        CHECK(inst_action_runs(INST_ACT_UPDATE, 0), "that update runs");
+        /* The group: no newer devnode, the installed stor98.sys or
+         * stor98.mpd (file version 0.4.0.0) older than 3.1.0.0. */
+        CHECK_EQ(inst_group_verdict(0, 0, inst_ver_cmp(old, bundled), 0),
+                 INST_GROUP_OK, "Stor98 0.4.0.0 installed: not refused");
+        inst_ver_parse("0.3.0.1", d.Version);
+        CHECK_EQ(inst_action(&d, bundled), INST_ACT_UPDATE,
+                 "Stor98 0.3.0.1: updated to 3.1.0.0");
+        memcpy(d.Version, bundled, sizeof(bundled));
+        CHECK_EQ(inst_action(&d, bundled), INST_ACT_CURRENT,
+                 "Stor98 3.1.0.0 installed: current");
+        CHECK_EQ(inst_group_verdict(0, 0, 0, 0), INST_GROUP_OK,
+                 "Stor98 3.1.0.0 installed: the group runs");
+        inst_ver_parse("3.2.0.0", d.Version);
+        CHECK_EQ(inst_action(&d, bundled), INST_ACT_NEWER,
+                 "Stor98 3.2.0.0 installed: newer, left");
+        CHECK_EQ(inst_group_verdict(1, 0, 1, 0), INST_GROUP_REFUSED_NEWER,
+                 "Stor98 3.2.0.0 installed: refused without /force");
+        /* Ownership does not depend on a version: a Stor98 there before
+         * xhci98's installer (PreExisting 1) stays at uninstall whatever
+         * its version; one a 3.0.0.0 package installed (PreExisting 0)
+         * goes once nothing is bound to it. */
+        CHECK(!inst_s98_service_removable(0, 1) &&
+              inst_s98_service_removable(0, 0),
+              "PreExisting decides, not 0.4.0.0 against 3.1.0.0");
+    }
     CHECK_EQ(inst_uas_fix_9x(0, 90, 1, 2, 0), INST_UASFIX_ME_STICK,
              "ME, UAS at Code 2, no USBNTMAP.SYS: a stick, then a replug");
     CHECK_EQ(inst_uas_fix_9x(0, 10, 1, 2, 0), INST_UASFIX_NUSB,

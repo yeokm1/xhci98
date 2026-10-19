@@ -6882,15 +6882,18 @@ static void note_old_entries(void)
 static void testsigning_note0(void);
 static void testsigning_note_cm(void);
 
-/* Record 26 section 6.3: with Stor98 ticked, its x64 driver keeps
- * Stor98's own test signature, and its certificate is never imported. */
+/* Record 26 section 6.3: with Stor98 ticked, its x64 driver is signed in
+ * the package's one signing step, by the same certificate as the drivers
+ * above (since 3.1.0.0; Stor98 0.4.0.0 and earlier carried a test
+ * signature of their own), so it loads as they do. No certificate is
+ * imported. */
 static void testsigning_note(void)
 {
     testsigning_note0();
     if (INST_MY_ARCH == INST_ARCH_AMD64 && envNow.Major >= 6 && s98Include) {
-        out("stor98.sys, the bundled Stor98, carries Stor98's own test "
-            "signature: it loads\nas the drivers above do. This installer "
-            "never imports stor98-test.cer.\n\n");
+        out("stor98.sys, the bundled Stor98, is signed (or not) with the "
+            "drivers above, by\nthe same certificate: it loads as they "
+            "do.\n\n");
     }
 }
 
