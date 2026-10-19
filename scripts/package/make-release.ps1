@@ -4198,8 +4198,9 @@ helper (xhciinst\di\build.cmd).
         $i32 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIINST.EXE")
         $i64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIIN64.EXE")
         $s32 = Get-Item -LiteralPath (Join-Path $destRoot "SETUP.EXE")
-        $contents += ("  SETUP.EXE       - installs, updates or uninstalls the drivers:")
-        $contents += ("                    double-click it ({0:N0} bytes)" -f $s32.Length)
+        $contents += ("  SETUP.EXE       - installs or updates the drivers: double-click")
+        $contents += ("                    it ({0:N0} bytes); SETUP /uninstall, or" -f $s32.Length)
+        $contents += "                    Add/Remove Programs, uninstalls them"
         $contents += "  INSTALL.BAT     - the same from the command line and scripts"
         $contents += "                    (INSTALL /console); with no arguments it"
         $contents += "                    opens the same window"
