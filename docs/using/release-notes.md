@@ -166,6 +166,10 @@ included.
 This section collects the changes made for the next release, `3.1.0.0`,
 as they are made; the head of this file is rewritten when it is cut.
 
+- **The x64 package's filter INF is in the main folder.** In
+  `release-x64\` and `debug-x64\`, `xhcicmf.inf` now sits beside
+  `xhcicm.inf` and `xhcicm.sys`, with no `nt\` subdirectory; the x86
+  package keeps `nt\` (never point Windows 98 or ME at it).
 - **`XHCISNAP` removed.** `XHCISNAP.EXE`, `SNAPON.BAT`, `SNAPGET.BAT`
   and `SNAPOFF.BAT` are no longer in the package (`tools\xhcisnap\` is
   gone), and the xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE`) does
@@ -319,7 +323,8 @@ from any of these machines, working or not, is new information.
 `INSTALL.BAT` installs `xhcicm.sys` with the rest of the package, and on
 Windows 2000 to 7 it is the way to install it: besides the controller's
 own driver it puts the package's filter on the controller's PCI ports
-(`nt\xhcicmf.inf` in each flavour directory), which on XP and later
+(`nt\xhcicmf.inf` in the x86 directories, `xhcicmf.inf` at the root
+of the x64 ones), which on XP and later
 Windows takes only when it is forced, as the tool does. On Windows 2000
 the first install of that filter takes the Thunderbolt switch's other
 devices away until the restart the tool asks for. On Windows 98 SE and
@@ -1458,10 +1463,11 @@ asks once (`Y`, or Enter), and then:
   a keyboard and mouse that do not go through this driver, then run it
   again. On Vista x64 and 7 x64 it says whether it could confirm
   test-signing mode, and never changes it. The Thunderbolt and USB4
-  tunnel-port filter's INF is in each flavour directory's `nt\`, with its
-  own copy of `xhcicm.sys` (the same file as the one beside `xhcicm.inf`):
-  Windows 98 SE and ME never see it, and Vista and 7 accept it only with
-  its driver file beside it.
+  tunnel-port filter's INF is in each x86 flavour directory's `nt\`, with
+  its own copy of `xhcicm.sys` (the same file as the one beside
+  `xhcicm.inf`): Windows 98 SE and ME never see it, and Vista and 7 accept
+  it only with its driver file beside it. In the x64 directories it is
+  beside `xhcicm.inf` and `xhcicm.sys` (from `3.1.0.0`).
 - **Windows 98 SE and ME**: the tool stages the files and you finish the
   installation in Device Manager. It copies the package's drivers into
   the install directory itself (`C:\XHCI98` by default; on these systems
