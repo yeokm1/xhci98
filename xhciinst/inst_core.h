@@ -533,6 +533,8 @@ typedef struct _INST_OPTS {
     int Restage;
     int Uninstall;
     int Thunderbolt;        /* /thunderbolt: the Thunderbolt support, unasked */
+    int CmOnly;             /* /cmonly: the connection manager alone (record
+                               23 section 4.5)                           */
     int Stor98;             /* /stor98: the bundled Stor98, unasked      */
     int NoTray;             /* /notray: XHCITR not started at login     */
     int NoPause;
@@ -869,6 +871,22 @@ int inst_removal_retry(INST_U32 cr, INST_U32 flags);
  * a re-plug. */
 const char *inst_admin_text(void);
 
+/* The system's kind (record 23 sections 4.3 and 4.5, revision 13): a full
+ * target, Windows 8 and 8.1 for the connection manager alone, or refused.
+ * nt and the version as RtlGetVersion (or GetVersionEx before 8) reads
+ * them; build is the build number's low word. */
+#define INST_OS_REFUSED     0
+#define INST_OS_FULL        1
+#define INST_OS_CMONLY      2
+int inst_os_kind(int nt, INST_U32 major, INST_U32 minor, INST_U32 build);
+const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor);
+
+/* The USB drivers (xhci98.sys, xhciuas.sys; record 23 section 4.5): 1 in
+ * the run, 0 left out, -1 refused (why in *refusal). *offered: the window's
+ * box can be unticked. */
+int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
+                    const char **refusal);
+
 /* The step when that routine is not implemented either: exit 4, nothing
  * changed. */
 const char *inst_not_removable_text(void);
@@ -1107,8 +1125,16 @@ const char *inst_self_file(int arch, int which);
 #define INST_PUBLISHER          "Yeo Kheng Meng"
 
 /* "xHCI98 USB 3.x drivers <version>", ending " (incomplete: run again)"
- * for an uninstall that stopped part-way. */
-void inst_arp_name(char *out, size_t cap, const char *version, int incomplete);
+ * for an uninstall that stopped part-way; with cmOnly (no xhci98 service
+ * registered, xhcicm's registered: record 26 section 9.1, draft 8) "xHCI98
+ * Thunderbolt 3 / USB4 connection manager <version>". */
+void inst_arp_name(char *out, size_t cap, const char *version, int incomplete,
+                   int cmOnly);
+/* 1 when the entry names the connection manager alone: the xhci98 service
+ * read as absent (0), and xhcicm's registered (1) or this run one without
+ * the USB drivers (runCmOnly: a staging-only run registers no service);
+ * -1 is unreadable. The uninstall's warning takes runCmOnly 0. */
+int inst_arp_cm_only(int xhciService, int cmService, int runCmOnly);
 
 /* The UninstallString: the window in dir, /uninstall. NT quotes the path;
  * 98 SE and ME, whose install directory is 8.3 with no space, take it as
@@ -1179,6 +1205,13 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 #define INST_PT_S98_UNUSED      30
 #define INST_PT_SHUT_NOW        31
 #define INST_PT_SHUT_LATER      32
+/* Record 26 draft 8: the connection manager alone (record 23 section 4.5). */
+#define INST_PT_WELCOME_CM      33
+#define INST_PT_DRIVERS_T8      34  /* 8 and 8.1: not offered              */
+#define INST_PT_DRIVERS_OFF     35  /* 2000 to 7: unticked                 */
+#define INST_PT_UN_TITLE_CM     36
+#define INST_PT_UN_WARN_CM      37
+#define INST_PT_UN_AGREE_CM     38
 
 typedef struct _INST_PAGE_TEXT {
     int Id;

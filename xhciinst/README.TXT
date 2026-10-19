@@ -27,6 +27,17 @@ completes.
 It uses only routines Windows documents for this. It is not devcon, and
 this package carries no Microsoft file.
 
+The connection manager alone: on Windows 2000 to 7 you can leave the USB
+drivers (xhci98.sys, xhciuas.sys) out and install only the Thunderbolt 3 /
+USB4 connection manager, for a computer whose USB 3 controllers already
+run another maker's driver - untick the USB drivers on the Components
+page, or INSTALL /console /cmonly. On Windows 8 and 8.1 that is all this
+package installs: Windows' own USB 3 driver runs the USB controllers
+there, and the USB drivers are not offered. Windows 10 and later are
+refused. On Windows 98 SE and ME the USB drivers are always installed:
+those systems have no USB 3 driver of their own. See "The connection
+manager alone" below.
+
 Which file
 ----------
 
@@ -58,7 +69,9 @@ The window walks you through:
   Welcome          the system found, the log's place
   What was found   each device of the package, what runs it now and what
                    will be done, and any warning
-  Components       the drivers (always), Thunderbolt 3 / USB4 support,
+  Components       the USB drivers (always on 98 SE and ME; a box you
+                   can untick on 2000 to 7; never on 8 and 8.1),
+                   Thunderbolt 3 / USB4 support,
                    Stor98 (where the package carries it), the xHCI98 USB
                    Tree started at login, and the tools folder
   USB settings     the options below that apply to this machine
@@ -100,11 +113,12 @@ there: a Stor98 installed before, by hand or by an earlier tool, stays.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
-/thunderbolt) and /notray (the components, preselected), /set
-Name=Value (an option, preselected), /defaults, /force (reinstall this
-release, or go back to it from a newer one), /restage (Vista and 7:
-replace a stored development build with the same DriverVer), /debug
-(the debug- directory, only if a maintainer asks), /log path.
+/thunderbolt or /cmonly), /notray and /cmonly (the components,
+preselected), /set Name=Value (an option, preselected), /defaults,
+/force (reinstall this release, or go back to it from a newer one),
+/restage (Vista and 7: replace a stored development build with the same
+DriverVer), /debug (the debug- directory, only if a maintainer asks),
+/log path.
 
 The console tool
 ----------------
@@ -119,10 +133,15 @@ The console tool
   INSTALL /console /uninstall   removes the drivers (see below)
   INSTALL /console /thunderbolt installs the Thunderbolt 3 / USB4 support
                                 without asking
+  INSTALL /console /cmonly      installs the Thunderbolt 3 / USB4
+                                connection manager alone, without the
+                                USB drivers (2000 to 7; on 8 and 8.1 every
+                                install is this)
   INSTALL /console /thunderbolt /stor98
                                 installs the bundled Stor98 without asking;
                                 it is part of the Thunderbolt 3 / USB4
-                                support, so /stor98 needs /thunderbolt
+                                support, so /stor98 needs /thunderbolt (or
+                                /cmonly); never offered on 8 and 8.1
                                 (without /stor98 the console asks, Enter
                                 for N; /yes leaves it out)
   INSTALL /console /notray      installs without starting the xHCI98 USB
@@ -137,6 +156,41 @@ shortened command. Run TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with
 the same arguments instead for a longer one. On 98 SE and ME the console
 tool installs each device through the helper too; a Windows dialog may
 open (the Windows CD for usbd.sys): answer it as below.
+
+The connection manager alone
+----------------------------
+
+What it gives on a computer whose USB 3 driver is another one (Windows'
+own on 8 and 8.1): the Thunderbolt 3 and USB4 controllers are driven by
+this package's connection manager - the devices are approved (see
+XhciCmApprove), connected and disconnected - and what a device brings is
+driven by whatever driver Windows has for it: an NVMe drive by an NVMe
+driver (Windows 8.1 has its own; Windows 8 has none, and the bundled
+Stor98 is not offered on 8 and 8.1), the USB controller inside a dock by
+Windows' own USB 3 driver on 8 and 8.1 (on 2000 to 7 by another maker's
+driver only where it supports that controller), and the USB devices of a
+USB4 port's USB 3 connection on the computer's own USB controller.
+Safely Remove (the xHCI98 USB Tree, INSTALL /console /eject) works as
+with the whole package. The connection manager needs nothing of
+xhci98.sys.
+
+A run with the USB drivers left out never updates or removes an xhci98
+already installed: it stays as it is. To go from the whole package to
+the connection manager alone, uninstall (Add/Remove Programs, or INSTALL
+/console /uninstall) and install again with the USB drivers unticked. To
+go the other way, run the installer again with them ticked. Add/Remove
+Programs lists one entry either way, named for what is installed.
+
+Windows 8 and 8.1 have never been run with this package: the connection
+manager installs there as on Windows 7, untested. On 64-bit Windows 8 and
+8.1 the connection manager, like every driver of this package's x64 half,
+loads only in test-signing mode, which those systems let you turn on only
+with Secure Boot off in the computer's firmware setup, or on a start with
+driver signature enforcement disabled (Advanced startup, Troubleshoot,
+Startup Settings, "Disable driver signature enforcement", at every start).
+It is not Microsoft-signed. When the installer asks for a restart, use
+Restart, not Shut down: Windows 8's Shut down does not start the drivers
+afresh.
 
 Neither ever runs XHCICLN. After an update from 2.3.x or earlier they say,
 in one line, when old XHCI98\ entries are still recorded; nothing needs
