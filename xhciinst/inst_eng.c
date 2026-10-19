@@ -9921,6 +9921,30 @@ done:
     CloseServiceHandle(scm);
 }
 
+/* The XhciCmSafeEject in force after the run (inst_mk_safe_eject): the
+ * machine-wide value, else each connection manager device's own. */
+static int mk_safe_eject_now(void)
+{
+    INST_VNOW vnow[INST_MAX_NOW];
+    int nNow = 0;
+    int cmNew = 0;
+    int v;
+    int mw;
+    DWORD mwv = 0;
+
+    for (v = 0; v < instValueCount; v++) {
+        if (inst_eq(instValues[v].Name, "XhciCmSafeEject")) {
+            break;
+        }
+    }
+    if (v >= instValueCount || value_inf(v) == NULL) {
+        return 1;
+    }
+    mw = mw_value(v, &mwv);
+    value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
+    return inst_mk_safe_eject(mw, (INST_U32)mwv, vnow, nNow);
+}
+
 /* The end of an install or update run (decision M13): with xhcicm
  * registered and the Thunderbolt component in the run, the service
  * installed or updated; with no xhcicm service, every mark removed, a
@@ -9929,13 +9953,20 @@ done:
 static void mk_end_of_run(void)
 {
     int a;
+    int safe;
 
     if (!envNow.Nt) {
         return;
     }
+    safe = mk_safe_eject_now();
     a = inst_mk_end_action(svc_state(INST_MK_NAME), haveCm && tbInclude,
-                           inst_mk_system(&envNow));
-    logonly("mark service: end-of-run action %d\n", a);
+                           inst_mk_system(&envNow), safe);
+    logonly("mark service: end-of-run action %d (XhciCmSafeEject in force "
+            "%d)\n", a, safe);
+    if (a == INST_MK_REMOVE && !safe) {
+        out("XhciCmSafeEject is 0: the safe-removal mark service is not "
+            "used; it is removed\nwith every mark where it is installed.\n");
+    }
     if (a == INST_MK_INSTALL) {
         mk_install();
     } else if (a == INST_MK_REMOVE && !mk_remove()) {
