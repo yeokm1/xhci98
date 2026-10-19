@@ -1588,6 +1588,7 @@ reviewed and revised (clean, then a clean confirmation of `3733302e`).
 | `build-driver.cmd all`, `544a9640` | BUILD + GATES PASSED (debug release qemu) |
 | `build-driver.cmd all -amd64`, `3733302e` | BUILD + GATES PASSED (debug release qemu) |
 | `xhcitr`, `xhcicln`, `xhcimark` `build.cmd`, `3733302e` | built by hand (the gated build rebuilds none of them) |
+| after the merge of `3.1.0.0` (`cfcef657`), `646762d8`: `xhciinst\build.cmd`, `selftest.cmd`, host suites, `build-driver.cmd all` | passed; 2080 checks, 0 failures (`test_inst` 1515); BUILD + GATES PASSED (debug release qemu) |
 
 `3733302e` changes only the two records' revision notes.
 
