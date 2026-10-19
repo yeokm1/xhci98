@@ -2746,6 +2746,22 @@ int inst_mk_end_action(int cmService, int tbInRun, int markSystem,
     return INST_MK_LEAVE;
 }
 
+int inst_cddb_service_gone(const char *service, const char *const *gone,
+                           int n)
+{
+    int i;
+
+    if (service == NULL || service[0] == '\0' || gone == NULL) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (gone[i] != NULL && inst_eq(service, gone[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int inst_mk_safe_eject(int mwState, INST_U32 mwValue, const INST_VNOW *now,
                        int nNow)
 {

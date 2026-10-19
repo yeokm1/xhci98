@@ -9107,6 +9107,126 @@ static int remove_own_infs(void)
 static const char *const instServices[] = {
     "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi"
 };
+
+/* The package's services this run removed or found absent (the
+ * CriticalDeviceDatabase entries naming them go: cddb_service_scrub). */
+static const char *svcGone[8];
+static int svcGoneCount;
+
+static void svc_gone(const char *name)
+{
+    int i;
+
+    for (i = 0; i < svcGoneCount; i++) {
+        if (inst_eq(svcGone[i], name)) {
+            return;
+        }
+    }
+    if (svcGoneCount < (int)(sizeof(svcGone) / sizeof(svcGone[0]))) {
+        svcGone[svcGoneCount++] = name;
+    }
+}
+
+/* Record 23 section 9.2 step 6a: every CriticalDeviceDatabase entry whose
+ * Service names a service of this package the run removed or found absent
+ * is deleted, and read back gone (inst_cddb_service_gone); an entry naming
+ * another driver's service is never touched. 1 done. */
+static int cddb_service_scrub(void)
+{
+    HKEY root;
+    HKEY k;
+    DWORD i;
+    DWORD nn;
+    DWORD type;
+    DWORD n;
+    LONG r;
+    char name[256];
+    char svc[256];
+    char (*hit)[256] = NULL;
+    int hits = 0;
+    int cap = 0;
+    int ok = 1;
+    int j;
+
+    if (svcGoneCount == 0) {
+        return 1;
+    }
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_CDDB_KEY, 0,
+                      KEY_READ | DELETE, &root);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (r != ERROR_SUCCESS) {
+        out("The CriticalDeviceDatabase could not be opened (error %ld).\n", r);
+        return 0;
+    }
+    for (i = 0;; i++) {
+        nn = sizeof(name);
+        r = RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS) {
+            out("The CriticalDeviceDatabase ended early (error %ld).\n", r);
+            ok = 0;
+            break;
+        }
+        if (RegOpenKeyExA(root, name, 0, KEY_QUERY_VALUE, &k) !=
+            ERROR_SUCCESS) {
+            continue;
+        }
+        memset(svc, 0, sizeof(svc));
+        n = sizeof(svc) - 1;
+        r = RegQueryValueExA(k, "Service", NULL, &type, (LPBYTE)svc, &n);
+        RegCloseKey(k);
+        if (r != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ) ||
+            !inst_cddb_service_gone(svc, svcGone, svcGoneCount)) {
+            continue;
+        }
+        if (hits == cap) {
+            char (*more)[256];
+            cap = cap ? cap * 2 : 8;
+            more = realloc(hit, (size_t)cap * sizeof(*hit));
+            if (more == NULL) {
+                ok = 0;
+                break;
+            }
+            hit = more;
+        }
+        inst_copy(hit[hits], name, sizeof(hit[hits]));
+        hits++;
+    }
+    for (j = 0; j < hits; j++) {
+        if (opts.List) {
+            out("(/list) CriticalDeviceDatabase\\%s would be deleted (its "
+                "service is this package's).\n", hit[j]);
+            continue;
+        }
+        r = RegDeleteKeyA(root, hit[j]);
+        if (r == ERROR_SUCCESS || r == ERROR_FILE_NOT_FOUND) {
+            r = RegOpenKeyExA(root, hit[j], 0, KEY_QUERY_VALUE, &k);
+            if (r == ERROR_SUCCESS) {
+                RegCloseKey(k);
+                r = ERROR_INVALID_DATA;
+            } else if (r == ERROR_FILE_NOT_FOUND) {
+                r = ERROR_SUCCESS;
+            }
+        }
+        if (r == ERROR_SUCCESS) {
+            out("CriticalDeviceDatabase\\%s was deleted (it named a service "
+                "of this package).\n", hit[j]);
+            flagChanged = 1;
+        } else {
+            out("CriticalDeviceDatabase\\%s could not be deleted (error "
+                "%ld): a device of that id\nwould not start (Code 19).\n",
+                hit[j], r);
+            ok = 0;
+        }
+    }
+    free(hit);
+    RegCloseKey(root);
+    return ok;
+}
 static const char *const instFiles[] = {
     "xhci98.sys", "xhciuas.sys", "xhcicm.sys", "xhcihlpr.sys", "xhcimsi.sys"
 };
@@ -9149,6 +9269,8 @@ static void remove_services_and_files(void)
                         "file stays.\n", instServices[i], (unsigned long)e);
                     flagFailed = 1;
                     fileOk = 0;
+                } else {
+                    svc_gone(instServices[i]);
                 }
             } else {
                 /* A state that cannot be read is taken as running: the
@@ -9162,6 +9284,7 @@ static void remove_services_and_files(void)
                     if (e == ERROR_SERVICE_MARKED_FOR_DELETE) {
                         out("already marked for deletion.\n");
                         flagRestart = 1;
+                        svc_gone(instServices[i]);
                     } else {
                         out("FAILED (error %lu): its file stays.\n",
                             (unsigned long)e);
@@ -9172,15 +9295,18 @@ static void remove_services_and_files(void)
                     out("marked for deletion; it goes at the restart.\n");
                     flagRestart = 1;
                     flagChanged = 1;
+                    svc_gone(instServices[i]);
                 } else {
                     out("done.\n");
                     flagChanged = 1;
+                    svc_gone(instServices[i]);
                 }
                 CloseServiceHandle(s);
             }
         } else if (opts.List) {
             out("The service %s, if present, would be removed.\n",
                 instServices[i]);
+            svc_gone(instServices[i]);
         }
         if (!fileOk || sys[0] == '\0') {
             continue;
@@ -9922,27 +10048,53 @@ done:
 }
 
 /* The XhciCmSafeEject in force after the run (inst_mk_safe_eject): the
- * machine-wide value, else each connection manager device's own. */
+ * machine-wide value, else the own value of every present connection
+ * manager device, whether or not the Thunderbolt component is in this run
+ * and with no limit on their number (a reading that cannot be had is the
+ * default 1, which keeps the service). */
 static int mk_safe_eject_now(void)
 {
-    INST_VNOW vnow[INST_MAX_NOW];
+    INST_VNOW *vnow;
     int nNow = 0;
-    int cmNew = 0;
     int v;
+    int i;
     int mw;
+    int r;
+    int safe;
     DWORD mwv = 0;
+    DWORD now;
 
     for (v = 0; v < instValueCount; v++) {
         if (inst_eq(instValues[v].Name, "XhciCmSafeEject")) {
             break;
         }
     }
-    if (v >= instValueCount || value_inf(v) == NULL) {
+    if (v >= instValueCount) {
         return 1;
     }
     mw = mw_value(v, &mwv);
-    value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
-    return inst_mk_safe_eject(mw, (INST_U32)mwv, vnow, nNow);
+    if (mw != 0) {
+        return inst_mk_safe_eject(mw, (INST_U32)mwv, NULL, 0);
+    }
+    vnow = (INST_VNOW *)malloc((devCount > 0 ? devCount : 1) *
+                               sizeof(INST_VNOW));
+    if (vnow == NULL) {
+        return 1;
+    }
+    for (i = 0; i < devCount; i++) {
+        if (!devs[i].Present || devs[i].Refused ||
+            devs[i].Inf != instValues[v].Inf) {
+            continue;
+        }
+        r = value_now(&devs[i], instValues[v].Name, &now);
+        vnow[nNow].State = r > 0 ? 1 : r;
+        vnow[nNow].Value = r > 0 ? (INST_U32)now : 0;
+        vnow[nNow].Desc = devs[i].Id;
+        nNow++;
+    }
+    safe = inst_mk_safe_eject(0, 0, vnow, nNow);
+    free(vnow);
+    return safe;
 }
 
 /* The end of an install or update run (decision M13): with xhcicm
@@ -9970,9 +10122,11 @@ static void mk_end_of_run(void)
     if (a == INST_MK_INSTALL) {
         mk_install();
     } else if (a == INST_MK_REMOVE && !mk_remove()) {
-        out("A Thunderbolt safe-removal mark could not be removed, and the "
-            "xhcicm service\nis not installed: a device naming it would not "
-            "start (Code 39). Restart\nWindows and run INSTALL.BAT again.\n");
+        out("A Thunderbolt safe-removal mark could not be removed%s. "
+            "Restart Windows and\nrun INSTALL.BAT again.\n",
+            safe ? ", and the xhcicm service is not installed: a\ndevice "
+                   "naming it would not start (Code 39)"
+                 : " (XhciCmSafeEject is 0)");
         flagFailed = 1;
     }
 }
@@ -10100,6 +10254,7 @@ static int run_uninstall_nt(void)
     if (opts.List) {
         remove_own_infs();
         remove_services_and_files();
+        cddb_service_scrub();
         finish_remove();
         out("\n/list: nothing was changed.\n");
         return INST_EXIT_DONE;
@@ -10148,6 +10303,9 @@ static int run_uninstall_nt(void)
         return stop_uninstall("cancelled.");
     }
     copies_remove_all();
+    if (!cddb_service_scrub()) {
+        flagFailed = 1;
+    }
     if (flagFailed || flagSteps) {
         return stop_uninstall("a service or a file of this package could not "
                               "be removed.");
@@ -14134,11 +14292,15 @@ static int s98_un_service(void)
                     (unsigned long)e);
                 return 0;
             }
+            svc_gone("stor98");
         } else {
             if (DeleteService(svc)) {
                 out("The stor98 service was removed.\n");
                 flagChanged = 1;
-            } else if (GetLastError() != ERROR_SERVICE_MARKED_FOR_DELETE) {
+                svc_gone("stor98");
+            } else if (GetLastError() == ERROR_SERVICE_MARKED_FOR_DELETE) {
+                svc_gone("stor98");
+            } else {
                 out("The stor98 service could not be removed (error %lu).\n",
                     (unsigned long)GetLastError());
                 CloseServiceHandle(svc);

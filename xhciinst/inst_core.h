@@ -293,6 +293,17 @@ int inst_filter_drop(const char *in, size_t inBytes, const char *name,
  * device, and every new device of that class then gets them. */
 #define INST_CDDB_KEY "SYSTEM\\CurrentControlSet\\Control\\CriticalDeviceDatabase"
 
+/* Whether a CriticalDeviceDatabase entry goes with an uninstall: 1 when
+ * its Service value (service, NULL when it has none or it is not a
+ * string) names, ignoring case, one of the gone[0..n-1] services this run
+ * removed or found absent. Windows writes such an entry when it installs a
+ * boot-critical device (the NHI's id and its class, read on 2000, XP and
+ * 7); left behind it makes the device's next install start from a service
+ * that no longer exists (Code 19). An entry naming another driver's
+ * service is never one. */
+int inst_cddb_service_gone(const char *service, const char *const *gone,
+                           int n);
+
 /* 1 when a SystemStartOptions value holds the word TESTSIGNING. */
 int inst_testsigning(const char *options);
 

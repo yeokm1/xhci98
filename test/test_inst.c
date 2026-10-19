@@ -3300,6 +3300,23 @@ static void test_marks(void)
           "a run's end with XhciCmSafeEject 0: no service, every mark gone "
           "(a run that set it without the Thunderbolt component too)");
     {
+        static const char *const gone[] = { "xhci98", "xhcicm" };
+
+        CHECK(inst_cddb_service_gone("xhcicm", gone, 2) &&
+              inst_cddb_service_gone("XHCI98", gone, 2) &&
+              !inst_cddb_service_gone("xhciuas", gone, 2) &&
+              !inst_cddb_service_gone("pci", gone, 2) &&
+              !inst_cddb_service_gone("usbxhci", gone, 2) &&
+              !inst_cddb_service_gone("xhcicmx", gone, 2) &&
+              !inst_cddb_service_gone("", gone, 2) &&
+              !inst_cddb_service_gone(NULL, gone, 2) &&
+              !inst_cddb_service_gone("xhcicm", gone, 0) &&
+              !inst_cddb_service_gone("xhcicm", NULL, 2),
+              "a CriticalDeviceDatabase entry goes only when its Service is a "
+              "service of this package the run removed (case ignored), never "
+              "another driver's");
+    }
+    {
         INST_VNOW n0[2];
         INST_VNOW n1[2];
         INST_VNOW nn[1];
