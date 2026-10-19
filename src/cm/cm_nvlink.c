@@ -402,13 +402,20 @@ BOOLEAN CmNvlinkWaitAny(const CM_NV_SHADOW *shadow)
     return FALSE;
 }
 
-BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN *missed,
-                           BOOLEAN *vanish, BOOLEAN *fresh)
+BOOLEAN CmNvlinkHoldReenum(PULONG held, BOOLEAN gateUp, BOOLEAN live,
+                           BOOLEAN *missed, BOOLEAN *vanish, BOOLEAN *fresh)
 {
     if (gateUp) {
         *held = *held | CM_HELD_REENUM | (*vanish ? CM_HELD_VANISH : 0) |
                 (*fresh ? CM_HELD_FRESH : 0);
         return TRUE;
+    }
+    if (!live) {
+        /* The loss's own call (NT's unavailable reconciliation) goes
+         * alone: held work and an owed change wait for the transport, as
+         * CmNvlinkHoldRun keeps them, since paying them would read the
+         * bridge and expose while the host interface is lost. */
+        return FALSE;
     }
     if (*held & CM_HELD_REENUM) {
         *vanish = (BOOLEAN)(*vanish || (*held & CM_HELD_VANISH) != 0);
@@ -483,6 +490,15 @@ ULONG CmNvlinkIdleFor(ULONG configured, BOOLEAN up, BOOLEAN pending)
         return CM_NVLINK_IDLE_MS;
     }
     return configured;
+}
+
+BOOLEAN CmNvlinkServiceDue(PULONG lastUs, ULONG nowUs)
+{
+    if (nowUs - *lastUs < CM_NVLINK_PEND_MS * 1000UL) {
+        return FALSE;
+    }
+    *lastUs = nowUs;
+    return TRUE;
 }
 
 ULONG CmNvlinkAckBoundMs(BOOLEAN nt)

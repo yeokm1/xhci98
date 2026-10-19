@@ -1729,6 +1729,15 @@ BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
 
 static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail, ULONG mask);
 
+/* The host interface there and not draining a loss: a member's held work
+ * and its owed skipped change are consumed only then, by every path (the
+ * exposure reads the bridge and a post would undo the loss's own
+ * reconciliation; record 21 section 5.5). */
+static BOOLEAN cmTransport(PCM_NHI nhi)
+{
+    return (BOOLEAN)(CmLiveTransport(&nhi->Live) && !nhi->Reenum.LossDrain);
+}
+
 /* Member i's exposure and its route's call: the stor98 UP first
  * (cm_nvlink.h, obligation 1), then the invalidation or the worker's
  * post (with a marking window when `mark`); with `expose` FALSE the call
@@ -1768,7 +1777,10 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
  * finds the gate down. The exposure is still offered, so the tunnel it
  * names is recorded for the held one (CmNvlinkExpose publishes nothing
  * while the gate is up). Down, any work held before is folded into this
- * call's flags and FALSE is returned. No other member is looked at.
+ * call's flags and FALSE is returned - unless the host interface is lost
+ * (cmTransport): the loss's own call is then made alone and the held work
+ * and owed change kept for the pass that finds the transport back. No
+ * other member is looked at.
  */
 static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
                       BOOLEAN *fresh, ULONG tunnel, BOOLEAN *mark,
@@ -1778,9 +1790,11 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
     ULONG before;
     BOOLEAN up;
     BOOLEAN missed;
+    BOOLEAN live;
 
     r = &nhi->Reenum;
     *mark = FALSE;
+    live = cmTransport(nhi);
     before = r->Port[i].Held;
     up = CmNvlinkHeld(nhi, r->Port[i].Bdf);
     if (up) {
@@ -1793,13 +1807,16 @@ static BOOLEAN cmHeld(PCM_NHI nhi, ULONG i, BOOLEAN *removeVanished,
         }
     }
     missed = (BOOLEAN)(r->Port[i].Missed != 0);
-    if (CmNvlinkHoldReenum(&r->Port[i].Held, up, &missed, removeVanished,
-                           fresh)) {
+    if (CmNvlinkHoldReenum(&r->Port[i].Held, up, live, &missed,
+                           removeVanished, fresh)) {
         /* Its publication mode held with it (record 22 section 7.7, U25):
          * exposing if this call or an owed change it took in exposes. */
         r->Port[i].HeldExpose |= (*expose || r->Port[i].MissedExpose) ? 1UL
                                                                       : 0UL;
         return TRUE;
+    }
+    if (!live) {
+        return FALSE;
     }
     if (r->Port[i].HeldExpose) {
         *expose = TRUE;
@@ -1875,7 +1892,8 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
          * 7.7, decision U25), which the USB4 profile's containment RESYNC
          * and its recovery's take - unless an owed exposing change is paid
          * by this call. */
-        expose = (BOOLEAN)(!none || r->Port[i].MissedExpose != 0);
+        expose = (BOOLEAN)(!none || (r->Port[i].MissedExpose != 0 &&
+                                     cmTransport(nhi)));
         /* A member whose stor98 acknowledgement is pending waits alone;
          * every other member is exposed and called now (task 42-A.12). */
         if (!cmHeld(nhi, i, &vanish, &exposeFresh, tunnel, &mark, &expose)) {
@@ -2457,8 +2475,7 @@ VOID CmReenumService(PCM_NHI nhi)
         missed = (BOOLEAN)(r->Port[i].Missed != 0);
         act = CmNvlinkHoldRun(&r->Port[i].Held,
                               CmNvlinkHeld(nhi, r->Port[i].Bdf),
-                              (BOOLEAN)(CmLiveTransport(&nhi->Live) &&
-                                        !r->LossDrain),
+                              cmTransport(nhi),
                               (BOOLEAN)(r->Reenum != 0),
                               (BOOLEAN)((cmFlags(nhi, i) & CM_PORT_ACTIVE) !=
                                         0),
@@ -2514,8 +2531,9 @@ VOID CmReenumService(PCM_NHI nhi)
         }
     }
     /* A change skipped while a member was not active, now that it is;
-     * the debt stays until a call is actually made. */
-    for (i = 0; i < r->Members && r->Reenum != 0; i++) {
+     * the debt stays until a call is actually made, and while the host
+     * interface is lost (cmTransport). */
+    for (i = 0; i < r->Members && r->Reenum != 0 && cmTransport(nhi); i++) {
         if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE) &&
             (nhi->RecBarred & (1UL << i)) == 0 &&
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS &&

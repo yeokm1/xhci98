@@ -735,15 +735,21 @@ typedef struct _SEAM {
     ULONG Fails[2];
 } SEAM;
 
-static void seamAction(SEAM *s, ULONG i, BOOLEAN gate, BOOLEAN vanish,
-                       BOOLEAN fresh)
+static void seamActionOn(SEAM *s, ULONG i, BOOLEAN gate, BOOLEAN live,
+                         BOOLEAN vanish, BOOLEAN fresh)
 {
-    if (!CmNvlinkHoldReenum(&s->Held[i], gate, &s->Missed[i], &vanish,
+    if (!CmNvlinkHoldReenum(&s->Held[i], gate, live, &s->Missed[i], &vanish,
                             &fresh)) {
         s->Calls[i]++;
         s->Vanish[i] += vanish ? 1 : 0;
         s->Fresh[i] += fresh ? 1 : 0;
     }
+}
+
+static void seamAction(SEAM *s, ULONG i, BOOLEAN gate, BOOLEAN vanish,
+                       BOOLEAN fresh)
+{
+    seamActionOn(s, i, gate, TRUE, vanish, fresh);
 }
 
 static ULONG seamPass(SEAM *s, ULONG i, BOOLEAN gate, BOOLEAN live,
@@ -857,6 +863,84 @@ static void test_hold(void)
     CHECK_EQ(seamPass(&s, 1, FALSE, TRUE, TRUE),
              CM_HELD_DO_RELEASE | CM_HELD_DO_REENUM,
              "release before the re-enumeration, in one pass");
+
+    /* Held and owed, then an action finds the gate down before the pass:
+     * that one call pays both, and the pass has nothing left. */
+    memset(&s, 0, sizeof(s));
+    seamAction(&s, 0, TRUE, FALSE, FALSE);
+    s.Missed[0] = TRUE;
+    seamAction(&s, 0, FALSE, FALSE, FALSE);
+    CHECK_EQ(s.Calls[0], 1, "held + owed + action: one call");
+    CHECK(!s.Missed[0] && s.Held[0] == 0, "both paid by it");
+    CHECK(s.Vanish[0] == 1 && s.Fresh[0] == 1, "as the owed call makes it");
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), 0, "nothing for the pass");
+    CHECK_EQ(s.Calls[0], 1, "never twice");
+
+    /* The host interface lost: the loss's own call (NT's unavailable
+     * reconciliation) goes alone, held work and owed change kept through
+     * the loss's passes, and paid once by the pass that finds it back. */
+    memset(&s, 0, sizeof(s));
+    seamAction(&s, 0, TRUE, FALSE, TRUE);
+    s.Missed[0] = TRUE;
+    seamActionOn(&s, 0, FALSE, FALSE, TRUE, FALSE);
+    CHECK_EQ(s.Calls[0], 1, "lost: the loss's call made");
+    CHECK(s.Vanish[0] == 1 && s.Fresh[0] == 0, "with its own flags alone");
+    CHECK_EQ(s.Held[0], CM_HELD_REENUM | CM_HELD_FRESH, "held work kept");
+    CHECK(s.Missed[0], "owed change kept");
+    CHECK_EQ(seamPass(&s, 0, FALSE, FALSE, TRUE), 0, "lost pass: kept");
+    CHECK_EQ(seamPass(&s, 0, FALSE, TRUE, TRUE), CM_HELD_DO_REENUM,
+             "back: run");
+    CHECK_EQ(s.Calls[0], 2, "once");
+    CHECK(!s.Missed[0] && s.Held[0] == 0, "both paid");
+    CHECK(s.Vanish[0] == 2 && s.Fresh[0] == 1, "fresh, removing vanished");
+    /* Lost with the gate up: held as ever. */
+    seamActionOn(&s, 0, TRUE, FALSE, TRUE, FALSE);
+    CHECK_EQ(s.Calls[0], 2, "gate up and lost: held");
+    CHECK(s.Held[0] & CM_HELD_REENUM, "held");
+}
+
+/*
+ * Task 42-A.12, R10: the busy waits' servicing point (cm_thr.c cmStall).
+ * Requests that each end inside a wait's 2 ms busy phase, back to back,
+ * never sleep; the stall's step comes at most every 50 ms of the clock.
+ */
+static void test_service_due(void)
+{
+    ULONG last;
+    ULONG now;
+    ULONG steps;
+    ULONG gap;
+    ULONG since;
+    ULONG k;
+
+    last = 0;
+    now = 0;
+    steps = 0;
+    gap = 0;
+    since = 0;
+    for (k = 0; k < 5000; k++) {
+        now += 156;     /* one round trip, all stalls */
+        if (CmNvlinkServiceDue(&last, now)) {
+            steps++;
+            since = 0;
+        } else {
+            since += 156;
+        }
+        if (since > gap) {
+            gap = since;
+        }
+    }
+    CHECK_EQ(steps, (5000UL * 156UL) / 50000UL, "a step per 50 ms of stalls");
+    CHECK(gap < 50000UL, "no stretch of 50 ms without one");
+    /* A sleep's step recorded: the next stall step is 50 ms after it. */
+    last = now;
+    CHECK(!CmNvlinkServiceDue(&last, now + 49999UL), "not before 50 ms");
+    CHECK(CmNvlinkServiceDue(&last, now + 50000UL), "at 50 ms");
+    CHECK_EQ(last, now + 50000UL, "recorded");
+    /* The clock's wrap: unsigned difference. */
+    last = 0xFFFFFF00UL;
+    CHECK(!CmNvlinkServiceDue(&last, 0x100UL), "512 us across the wrap");
+    CHECK(CmNvlinkServiceDue(&last, 50000UL), "50 ms across the wrap");
 }
 /*
  * Task 42-A.6 over two members (the U.11 leg of runs/run-41.md: an NVMe
@@ -1231,6 +1315,7 @@ int main(void)
     test_r8b_replug();
     test_pending();
     test_hold();
+    test_service_due();
     test_two_members();
     test_bridge_tunnel();
     test_record();

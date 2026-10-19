@@ -240,6 +240,7 @@ typedef struct _CM_NHI {
     ULONG ClockTickUs;      /* KeQueryTimeIncrement, in microseconds     */
     ULONG ClockRest;        /* microseconds not yet a millisecond        */
     ULONG ClockMs;          /* the millisecond clock TBT_HOST.NowMs reads */
+    ULONG StepUs;           /* cmClockUs at the host waits' last step     */
     TBT_RING Ring;
     TBT_ICM Icm;
     /* The common buffer's size: the ICM's ten-entry rings, or the USB4
