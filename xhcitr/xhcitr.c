@@ -97,6 +97,7 @@ typedef TR_NIDA TR_NID;
 #define TR_CM_DRP_COMPATIBLEIDS     0x00000003UL
 #define TR_CM_DRP_SERVICE           0x00000005UL
 #define TR_CM_DRP_CLASS             0x00000008UL
+#define TR_CM_DRP_CLASSGUID         0x00000009UL
 #define TR_CM_DRP_DRIVER            0x0000000AUL
 #define TR_CM_DRP_FRIENDLYNAME      0x0000000DUL
 #define TR_IOCTL_STORAGE_GET_DEVICE_NUMBER 0x002D1080UL
@@ -409,6 +410,12 @@ static void usb_derive(void);
 static void log_node_add(int parentT, int which, int index, const char *id);
 static void pci_node_add(int parentT, int which, int index, const char *id);
 static void say(const char *text, int warn);
+
+/* Windows 2000, whose devnode held for eject reads Code 24. */
+static int env_w2k(void)
+{
+    return envNt && envMajor == 5 && envMinor == 0;
+}
 
 static FARPROC proc(HMODULE module, const char *name)
 {
@@ -902,6 +909,19 @@ static int dn_read(DNODE *t)
             if (!prop_ok(cm_prop(t->Dn, TR_CM_DRP_CLASS, t->Cls, sizeof(t->Cls),
                                  NULL))) {
                 ok = 0;
+            }
+            if (t->Cls[0] == '\0') {
+                /* Windows 2000 gives a USB disk its class GUID alone, no
+                 * class name (run 42): the name is its class key's. */
+                char guid[64];
+                char path[128];
+                if (cm_prop(t->Dn, TR_CM_DRP_CLASSGUID, guid, sizeof(guid),
+                            NULL) == TR_CR_SUCCESS && guid[0] == '{') {
+                    join(path, sizeof(path),
+                         "SYSTEM\\CurrentControlSet\\Control\\Class", guid);
+                    reg_text(HKEY_LOCAL_MACHINE, path, "Class", t->Cls,
+                             sizeof(t->Cls));
+                }
             }
             t->IsDisk = tr_eq(t->Cls, "DiskDrive");
             t->IsVolume = tr_eq(t->Cls, "Volume");
@@ -2303,7 +2323,8 @@ static void add_devs_below(int parentT, int dn, int depth)
             if (gw.N[i].UnitOf == i && !dn_started(&gw.N[i])) {
                 char tag[64];
                 char sen[8];
-                tr_stopped_text(gw.N[i].Problem, tag, sizeof(tag), sen, sizeof(sen));
+                tr_stopped_text(gw.N[i].Problem, env_w2k(), tag, sizeof(tag),
+                                sen, sizeof(sen));
                 tr_sprintf(label, sizeof(label), "%s  [%s]", name, tag);
             } else if (usb_listed(i)) {
                 usb_label(i, name, sizeof(name));
@@ -2732,7 +2753,8 @@ static void details_unit(TR_TEXT *t, int dn)
     } else if (!dn_started(&gw.N[u])) {
         char tag[64];
         char sen[96];
-        tr_stopped_text(gw.N[u].Problem, tag, sizeof(tag), sen, sizeof(sen));
+        tr_stopped_text(gw.N[u].Problem, env_w2k(), tag, sizeof(tag), sen,
+                        sizeof(sen));
         tr_printf(t, "  %s\n", sen);
     } else {
         tr_printf(t, "  It cannot be stopped here now: %s.\n", ej_why_not(u));
@@ -3733,7 +3755,8 @@ static const char *ej_why_not(int u)
          * start, never "unplug it". */
         static char tag[64];
         char sen[8];
-        tr_stopped_text(gw.N[u].Problem, tag, sizeof(tag), sen, sizeof(sen));
+        tr_stopped_text(gw.N[u].Problem, env_w2k(), tag, sizeof(tag), sen,
+                        sizeof(sen));
         return tag;
     }
     if (!nhi[k].HaveQ) {
@@ -4897,7 +4920,8 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
     if (!dn_started(&w.N[u])) {
         char tag[64];
         char sen[96];
-        if (tr_stopped_text(w.N[u].Problem, tag, sizeof(tag), sen, sizeof(sen))) {
+        if (tr_stopped_text(w.N[u].Problem, env_w2k(), tag, sizeof(tag), sen,
+                            sizeof(sen))) {
             tr_printf(&t, "%s is stopped already: you can unplug it.", q->Desc);
         } else {
             tr_printf(&t, "%s is not running. %s Nothing was stopped.", q->Desc, sen);
@@ -5183,6 +5207,7 @@ static void usb_facts(const WALK *w, int d, int portIsHub, int devClass,
 
     memset(f, 0, sizeof(*f));
     f->Nt = envNt;
+    f->W2k = env_w2k();
     f->HaveDevnode = d >= 0;
     f->IsHub = portIsHub;
     f->Radio = devClass == 0xE0;
@@ -5319,7 +5344,7 @@ static const char *usb_suffix(int d)
     if (gw.N[d].UsbRule == TR_UE_OFFER) {
         return "  [can be stopped]";
     }
-    if (gw.N[d].Problem == TR_CM_PROB_HELD_FOR_EJECT) {
+    if (tr_held_for_eject(gw.N[d].Problem, env_w2k())) {
         return "  [stopped - unplug it]";
     }
     return "";
@@ -5466,8 +5491,7 @@ static int usb_after(const USBREQ *q, TR_TEXT *t)
     }
     kind = tr_usb_after_kind(walked, d >= 0, w.Bad,
                              d >= 0 && dn_started(&w.N[d]),
-                             d >= 0 ? w.N[d].Problem : 0,
-                             envNt && envMajor == 5 && envMinor == 0);
+                             d >= 0 ? w.N[d].Problem : 0, env_w2k());
     if (kind == TR_UA_STARTED) {
         tr_put(t, "\nThe device has started again, so it is not safe to unplug.");
         code = INST_EXIT_STEPS;

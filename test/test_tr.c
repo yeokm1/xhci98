@@ -1660,6 +1660,15 @@ static void test_usb_eject(void)
     CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS,
           "rule: an input device held for eject is still not listed");
     f.Hid = 0;
+    f.Problem = 24;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_DETAILS &&
+          strcmp(why, "no disk on it") == 0,
+          "rule: Code 24 with no disk is not held for eject outside 2000");
+    f.W2k = 1;
+    CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
+          strcmp(why, "stopped - unplug it") == 0,
+          "rule: Code 24 after its disk went with the stop (2000)");
+    f.W2k = 0;
     f.Disks = 1;
     f.Problem = 28;
     CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
@@ -1685,19 +1694,29 @@ static void test_usb_eject(void)
     {
         char tag[64];
         char sen[96];
-        CHECK(tr_stopped_text(47, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
+        CHECK(tr_stopped_text(47, 0, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
               strcmp(tag, "stopped - unplug it") == 0 &&
               strcmp(sen, "Stopped: you can unplug it.") == 0, "stopped: Code 47");
-        CHECK(tr_stopped_text(29, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+        CHECK(tr_stopped_text(29, 0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
               strcmp(tag, "not started - problem code 29") == 0 &&
               strcmp(sen, "Windows could not start this device (problem code 29).") == 0 &&
               !has(tag, "unplug") && !has(sen, "unplug"),
               "stopped: Code 29 is a failed start, never 'unplug it'");
-        CHECK(tr_stopped_text(28, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+        CHECK(tr_stopped_text(28, 0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
               has(tag, "code 28"), "stopped: Code 28, no driver");
-        CHECK(tr_stopped_text(0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+        CHECK(tr_stopped_text(0, 0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
               strcmp(tag, "not started") == 0 && !has(sen, "unplug"),
               "stopped: not started, no problem code");
+        CHECK(tr_stopped_text(24, 1, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
+              strcmp(tag, "stopped - unplug it") == 0 &&
+              strcmp(sen, "Stopped: you can unplug it.") == 0,
+              "stopped: Code 24 on 2000 is held for eject");
+        CHECK(tr_stopped_text(24, 0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              has(tag, "code 24") && !has(sen, "unplug"),
+              "stopped: Code 24 elsewhere is not");
+        CHECK(tr_stopped_text(47, 1, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
+              tr_stopped_text(28, 1, tag, sizeof(tag), sen, sizeof(sen)) == 0,
+              "stopped: 2000 keeps the other codes");
     }
 
     /* what a walk right after an accepted stop reads (section 6.5 step 5) */
