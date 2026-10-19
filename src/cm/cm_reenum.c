@@ -381,9 +381,8 @@ VOID CmRegPublish(PCM_FILTER filter)
         filter->InFlight = 0;
         filter->Held = 0;
         filter->HeldBy = NULL;
-        /* A new publication: no eject taken before it holds it (one whose
-         * hook returned while this bridge was withdrawn found it off the
-         * list). */
+        /* A new publication: an eject's hold ended before the withdrawal
+         * completed (it holds a reference), so none is carried over. */
         filter->EjectHold = 0;
         cmRegSerial++;
         filter->Serial = cmRegSerial;
@@ -2402,6 +2401,7 @@ VOID CmReenumService(PCM_NHI nhi)
     PCM_REENUM r;
     KIRQL irql;
     PCM_FILTER f;
+    PCM_FILTER ejHeld[XHCI_TBT_MAX_TUNNELS];
     ULONG pending;
     ULONG stale;
     ULONG mask;
@@ -2456,6 +2456,9 @@ VOID CmReenumService(PCM_NHI nhi)
      * population, and still no function with a stack behind it. One that
      * no longer holds is dropped and logged; the hook is called after the
      * lock is released. */
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        ejHeld[i] = NULL;
+    }
     KeAcquireSpinLock(&cmRegLock, &irql);
     pending = r->EjectPending;
     r->EjectPending = 0;
@@ -2486,8 +2489,12 @@ VOID CmReenumService(PCM_NHI nhi)
             if (r->EjectHook != NULL) {
                 /* Held with the eligibility, under the lock: a function
                  * found stackless here cannot start before its tunnel is
-                 * torn down (CmRegStartAllowed). */
+                 * torn down (CmRegStartAllowed). The reference keeps the
+                 * bridge from withdrawing (and so from a new publication)
+                 * until the hook has returned. */
                 f->EjectHold = 1;
+                f->InFlight++;
+                ejHeld[i] = f;
             }
         }
     }
@@ -2503,17 +2510,13 @@ VOID CmReenumService(PCM_NHI nhi)
         r->Ejects++;
         CmLogNote(nhi, "cm.reenum.eject", r->Port[i].Bdf);
         if (r->EjectHook != NULL) {
-            PLIST_ENTRY e;
-
             r->EjectHook(r->EjectContext, r->Port[i].Bdf);
-            KeAcquireSpinLock(&cmRegLock, &irql);
-            for (e = cmRegFilters.Flink; e != &cmRegFilters; e = e->Flink) {
-                f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
-                if (f->Bdf == r->Port[i].Bdf) {
-                    f->EjectHold = 0;
-                }
+            if (ejHeld[i] != NULL) {
+                KeAcquireSpinLock(&cmRegLock, &irql);
+                ejHeld[i]->EjectHold = 0;
+                cmRegDrop(ejHeld[i]);
+                KeReleaseSpinLock(&cmRegLock, irql);
             }
-            KeReleaseSpinLock(&cmRegLock, irql);
         } else {
             /* Under the firmware connection manager there is no
              * per-device teardown: the tunnel stays up and the user
