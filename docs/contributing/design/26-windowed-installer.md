@@ -150,10 +150,18 @@ and ME; a windows-subsystem program opens none. `SETUP.EXE`
   once. `ShellExecuteEx` is what raises the window's own
   `requireAdministrator` prompt on Vista and 7; `CreateProcess` refuses
   such an image with `ERROR_ELEVATION_REQUIRED`.
-- Its manifest asks for `asInvoker` and nothing else (no Common Controls:
-  it draws only a message box). Without it, Vista's and 7's installer
-  detection would elevate a program named `SETUP.EXE` before it starts,
-  a second prompt; with it there is exactly one, the window's.
+- Its manifest asks for `asInvoker` (no Common Controls: it draws only a
+  message box). Without it, Vista's and 7's installer detection would
+  elevate a program named `SETUP.EXE` before it starts, a second prompt;
+  with it there is exactly one, the window's. It also declares the
+  supported systems Vista to 10, as `XHCITR`'s does: without that,
+  Windows 7's Program Compatibility Assistant, which takes a program
+  named `SETUP.EXE` for an installer, asked "This program might not have
+  installed correctly" once the window closed (read in a Windows 7
+  guest, 2026-10-19).
+- Its message box is topmost and asks for the foreground: after a
+  declined elevation prompt a plain one opened behind the Explorer
+  window it was started from (read in the same guest).
 - A missing window, a path it cannot read, or a failed start is a message
   box naming the problem; the elevation declined (`ERROR_CANCELLED`) has
   its own text. It returns 0 once the window is started and 1 otherwise:

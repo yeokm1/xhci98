@@ -12,7 +12,8 @@ the profile's list and no delay-load imports:
                     the program exists to stay unelevated, a windows-
                     subsystem image whose embedded manifest asks for
                     asInvoker (Vista's installer detection elevates a
-                    SETUP.EXE that does not say so)
+                    SETUP.EXE that does not say so) and declares Windows 7
+                    (whose compatibility assistant questions it otherwise)
 Any other name - whatever its characters (api-ms-win-*.dll, a name with
 dots) - fails, and so does an image whose import table cannot be read.
 selftest.cmd runs it.
@@ -98,6 +99,11 @@ if ($Profile -eq 'window') {
     }
     if ($text.Contains('requireAdministrator') -or $text.Contains('highestAvailable')) {
         Fail 'it names an elevated execution level'
+    }
+    # Windows 7's supportedOS entry, without which its Program Compatibility
+    # Assistant questions SETUP.EXE once the window has closed.
+    if (-not $text.Contains('<supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>')) {
+        Fail 'its manifest does not declare Windows 7 (the Program Compatibility Assistant would question it)'
     }
 } else {
     $want = @('KERNEL32.DLL', 'ADVAPI32.DLL')
