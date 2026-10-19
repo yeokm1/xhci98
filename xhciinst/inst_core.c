@@ -5290,6 +5290,32 @@ const char *inst_s98_skip_text(int why, int brief)
     }
 }
 
+int inst_inf_names_file(const char *text, size_t n, const char *file)
+{
+    size_t w = strlen(file);
+    size_t i;
+    int comment = 0;
+
+    for (i = 0; i < n; i++) {
+        char c = text[i];
+        if (c == '\n' || c == '\r') {
+            comment = 0;
+            continue;
+        }
+        if (c == ';') {
+            comment = 1;
+        }
+        if (comment || i + w > n || !inst_eqn(text + i, file, w)) {
+            continue;
+        }
+        if ((i == 0 || strchr(" \t,=\"\\\r\n", text[i - 1]) != NULL) &&
+            (i + w == n || strchr(" \t,=\"\r\n;", text[i + w]) != NULL)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int inst_s98_adoptable(int preExisting, int present, int place)
 {
     if (preExisting) {

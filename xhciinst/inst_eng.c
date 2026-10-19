@@ -14554,33 +14554,15 @@ static int s98_rec_there(void)
  * taken: it stays (the conservative side). */
 static int s98_file_names_stor98(const char *path)
 {
-    const char *want = envNow.Nt ? "stor98.sys" : "stor98.mpd";
     DWORD n = 0;
-    DWORD i;
     char *buf = read_file(path, &n);
-    int found = 0;
-    int comment = 0;
+    int found;
 
     if (buf == NULL) {
         return 0;
     }
-    for (i = 0; i < n && !found; i++) {
-        char c = buf[i];
-        if (c == '\n' || c == '\r') {
-            comment = 0;
-            continue;
-        }
-        if (c == ';') {
-            comment = 1;
-        }
-        if (comment || i + 10 > n || !inst_eqn(buf + i, want, 10)) {
-            continue;
-        }
-        if ((i == 0 || strchr(" \t,=\"\\", buf[i - 1]) != NULL) &&
-            (i + 10 == n || strchr(" \t,\r\n\";", buf[i + 10]) != NULL)) {
-            found = 1;
-        }
-    }
+    found = inst_inf_names_file(buf, n, envNow.Nt ? "stor98.sys"
+                                                  : "stor98.mpd");
     free(buf);
     return found;
 }
@@ -14608,14 +14590,24 @@ static int s98_adopt_inf(const char *infPath)
     }
     join(dir, sizeof(dir), win, "INF");
     join(path, sizeof(path), dir, infPath);
-    if (file_state(path) > 0) {
+    h1 = file_state(path);
+    if (h1 < 0) {
+        return 0;   /* unreadable: no candidate can be ruled out */
+    }
+    if (h1 > 0) {
         inst_copy(pick, infPath, sizeof(pick));
         count++;
     }
     if (!envNow.Nt && strchr(infPath, '\\') == NULL) {
         join(path, sizeof(path), dir, "OTHER\\*.INF");
         h = FindFirstFileA(path, &fd);
-        if (h != INVALID_HANDLE_VALUE) {
+        if (h == INVALID_HANDLE_VALUE) {
+            DWORD e = GetLastError();
+            if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND &&
+                e != ERROR_NO_MORE_FILES) {
+                return 0;
+            }
+        } else {
             do {
                 if (inst_eq(fd.cFileName, infPath) ||
                     inst_eq(fd.cAlternateFileName, infPath)) {
@@ -14624,7 +14616,11 @@ static int s98_adopt_inf(const char *infPath)
                     count++;
                 }
             } while (FindNextFileA(h, &fd));
+            h1 = GetLastError() != ERROR_NO_MORE_FILES;
             FindClose(h);
+            if (h1) {
+                return 0;
+            }
         }
     }
     if (count != 1) {

@@ -1378,6 +1378,11 @@ const char *inst_s98_skip_text(int why, int brief);
  * INF copy that appeared outside a Stor98 step of the 98 SE and ME install
  * is the package's when its text names Stor98 and PreExisting is clear. */
 int inst_s98_adoptable(int preExisting, int present, int place);
+/* 1 when an INF's active text (each line up to its ';') names the file
+ * as a word of its own, case aside: a line's start, a blank, ',', '=',
+ * '"' or '\' before it; a blank, ',', '=', '"', ';' or the line's end
+ * after it. */
+int inst_inf_names_file(const char *text, size_t n, const char *file);
 int inst_s98_stray_inf_ours(int preExisting, int namesStor98);
 
 #define INST_S98_SHARE_FREE     0

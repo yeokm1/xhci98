@@ -3264,6 +3264,24 @@ static void test_s98(void)
     CHECK(!inst_s98_adoptable(1, 1, INST_S98_AT_TUNNEL) &&
           !inst_s98_adoptable(1, 0, INST_S98_AT_UNKNOWN),
           "uninstall: a Stor98 there before this installer is never adopted");
+    {
+        static const char a[] = "[Files]\r\nstor98.mpd\r\n";
+        static const char b[] = "[SourceDisksFiles]\r\nSTOR98.MPD=1\r\n";
+        static const char c[] = "PortDriver=stor98.mpd";
+        static const char d[] = "; stor98.mpd in a comment\r\nx=1\r\n";
+        static const char e[] = "x=mystor98.mpd\r\nstor98.mpdx\r\n";
+        static const char f[] = "  stor98.mpd,,,2 ; copy\r\n";
+        CHECK(inst_inf_names_file(a, sizeof(a) - 1, "stor98.mpd") &&
+              inst_inf_names_file(b, sizeof(b) - 1, "stor98.mpd") &&
+              inst_inf_names_file(c, sizeof(c) - 1, "stor98.mpd") &&
+              inst_inf_names_file(f, sizeof(f) - 1, "stor98.mpd"),
+              "an INF names the file: a line's start, a key, a value, a "
+              "list entry");
+        CHECK(!inst_inf_names_file(d, sizeof(d) - 1, "stor98.mpd") &&
+              !inst_inf_names_file(e, sizeof(e) - 1, "stor98.mpd") &&
+              !inst_inf_names_file(c, sizeof(c) - 1, "stor98.sys"),
+              "a comment, a longer word or another file is not the file");
+    }
     CHECK(inst_s98_stray_inf_ours(0, 1) && !inst_s98_stray_inf_ours(1, 1) &&
           !inst_s98_stray_inf_ours(0, 0),
           "a stray INF copy: the package's when Stor98's and none before");
