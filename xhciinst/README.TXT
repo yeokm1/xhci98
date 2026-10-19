@@ -99,10 +99,11 @@ The window walks you through:
 
 Help on every page opens this file.
 
-Thunderbolt 3 / USB4 support: with a Thunderbolt or USB4 controller
-present the box is ticked; with none found it is not - some laptops show
-their controller only while a device is plugged in, or only with a BIOS
-setting, so tick it if yours has the port. With it, a device plugged into
+Thunderbolt 3 / USB4 support (experimental): never ticked unless you
+tick it, whether or not a controller is found; the line under the box
+says whether one was found - some laptops show their controller only
+while a device is plugged in, or only with a BIOS setting, so tick it if
+yours has the port. With it, a device plugged into
 that port is approved automatically and gets a PCI Express connection,
 which lets it read and write the computer's memory: these systems have no
 Thunderbolt control panel to ask first. On a computer whose port is within
@@ -112,14 +113,18 @@ already gave them one. Unticked, a Thunderbolt driver already installed
 stays as it is, and this package's is kept out of Windows' reach.
 
 Stor98, the bundled NVMe driver (a separate project, with its own
-stor98-readme.txt): never ticked unless you tick it. Ticked, it is
-installed on every NVMe drive that has no driver - never on one another
-driver runs - and an older Stor98 is updated. Its settings page shows
+stor98-readme.txt): ticked with the Thunderbolt 3 / USB4 box, and you
+can untick it. Ticked, it is installed on every NVMe drive behind a
+Thunderbolt or USB4 tunnel that has no driver - never on one another
+driver runs, nor on an internal drive - and an older Stor98 is updated. Its settings page shows
 each of Stor98's options as it is now ("not set" means Stor98's built-in
 default); a row left alone writes nothing. On Windows 98 SE and ME an
-update of Stor98 asks you to confirm that nothing is using the drive, and
-the window then offers "Shut down now" rather than a restart: Stor98's
-readme asks for a fresh start after its update there. On 2000 to 7 a
+older Stor98 is updated as a file, replaced when Windows next starts
+(no drive is reinstalled), once you tick "Please disconnect all external
+NVMe drives before proceeding" on the Summary page (unticked, Stor98 is
+left for a later run), and the window then offers "Shut down now"
+rather than a restart: Stor98's readme asks for a fresh start after its
+update there. On 2000 to 7 a
 drive behind a Thunderbolt or USB4 port is unplugged and plugged in again
 after its update; the installer asks for that and waits up to two
 minutes. The uninstall removes Stor98 only where this installer put it
@@ -127,8 +132,8 @@ there: a Stor98 installed before, by hand or by an earlier tool, stays.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
-/thunderbolt or /cmonly), /notray, /nouas and /cmonly (the
-components, preselected), /set Name=Value (an option, preselected), /defaults,
+/thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /notray,
+/nouas and /cmonly (the components, preselected), /set Name=Value (an option, preselected), /defaults,
 /force (reinstall this release, or go back to it from a newer one),
 /restage (Vista and 7: replace a stored development build with the same
 DriverVer), /debug (the debug- directory, only if a maintainer asks),
@@ -146,7 +151,9 @@ The console tool
                                 option /set does not name
   INSTALL /console /uninstall   removes the drivers (see below)
   INSTALL /console /thunderbolt installs the Thunderbolt 3 / USB4 support
-                                without asking
+                                (experimental) without asking; without
+                                it the console asks, Enter for N, and
+                                /yes leaves it out
   INSTALL /console /cmonly      installs the Thunderbolt 3 / USB4
                                 connection manager alone, without the
                                 USB drivers (2000 to 7; on 8 and 8.1 every
@@ -157,7 +164,10 @@ The console tool
                                 support, so /stor98 needs /thunderbolt (or
                                 /cmonly); never offered on 8 and 8.1
                                 (without /stor98 the console asks, Enter
-                                for N; /yes leaves it out)
+                                for Y, and /yes installs it: Stor98 comes
+                                with the Thunderbolt support)
+  INSTALL /console /thunderbolt /nostor98
+                                the Thunderbolt support without Stor98
   INSTALL /console /nouas       installs without the UAS disk driver
                                 (xhciuas.sys); one already installed
                                 stays as it is

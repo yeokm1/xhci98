@@ -572,6 +572,9 @@ typedef struct _INST_OPTS {
     int CmOnly;             /* /cmonly: the connection manager alone (record
                                23 section 4.5)                           */
     int Stor98;             /* /stor98: the bundled Stor98, unasked      */
+    int NoStor98;           /* /nostor98: Stor98 left out of a run that
+                               has the Thunderbolt support (record 23
+                               section 7.1, revision 23)                */
     int NoTray;             /* /notray: XHCITR not started at login     */
     int NoUas;              /* /nouas: xhciuas.inf left out of the run  */
     int NoPause;
@@ -767,6 +770,20 @@ const char *inst_confirm_text(int runs, int writes, int nt, int unsure);
  * added, the tools folder moved). "Every device is current" only when
  * nothing at all changes. */
 const char *inst_summary_head(int runs, int writes, int other, int nt);
+
+/* XhciCmMode 0 turns the Thunderbolt 3 and USB4 support off (owner,
+ * 2026-10-19: a wheel turned it off unnoticed on real hardware): 1 when
+ * the value written is that one, so the Summary and the console say
+ * instCmOffText. */
+int inst_cm_mode_off(const char *name, INST_U32 value);
+
+/* The Thunderbolt row's note when a controller was found (owner,
+ * 2026-10-19): "A Thunderbolt 3 / USB4 controller was found: <name>."
+ * with the name cut to INST_TB_NAME_SHOWN characters, then the memory
+ * sentence of INST_PT_TB_T; with no name, INST_PT_TB_T as it is. */
+#define INST_TB_NAME_SHOWN  36
+void inst_tb_found_text(char *out, size_t cap, const char *name);
+extern const char instCmOffText[];
 
 /* ---- the uninstall's selection and order (record 23 section 9.2) ---------------------- */
 
@@ -990,11 +1007,11 @@ const char *inst_cmf_where(int arch);
  * answer Enter gives:
  *   no driver in the package     no question, not included;
  *   /thunderbolt                 no question, included;
- *   /yes, /list                  no question, the default (present: yes,
- *                                absent: no);
- *   otherwise                    asked, default yes when present, no when
- *                                absent (a laptop may show its controller
- *                                only when a device is connected).
+ *   /yes, /list                  no question, the default: no;
+ *   otherwise                    asked, default no, present or not (owner,
+ *                                2026-10-19: the support is experimental
+ *                                and ticked only on purpose; nhiPresent
+ *                                is said, it no longer decides).
  * A no never removes or updates a Thunderbolt driver already installed: it
  * only leaves this package's out of the copy, the store and the run. */
 int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
@@ -1193,6 +1210,12 @@ int inst_di_parse(const char *text, const char *version, int job,
 #define INST_DI_OUT_ABSENT      4   /* not present: "recorded, not running" */
 #define INST_DI_OUT_REFUSED     5   /* the helper's route fails this run    */
 int inst_di_outcome(int job, int verdict);
+
+/* 1 when the verdict is not one the helper reported: the helper did not
+ * finish (no END line, a count that differs), which is an install left
+ * unfinished with steps, never a failure of the device and never
+ * "nothing to do" (98 SE update, 2026-10-19). */
+int inst_di_unfinished(int verdict);
 
 /* The verdict as one phrase ("installed", "the helper did not finish"). */
 const char *inst_di_verdict_text(int verdict);
@@ -1435,13 +1458,35 @@ int inst_s98_cold_start(int nt);
 void inst_sha256(const unsigned char *data, size_t len, char *hex65);
 
 /* The question "Install Stor98, the bundled NVMe driver?" (record 26
- * section 6.4): never unasked (record 23 section 4.4), so Enter and /yes
- * give N; /stor98 installs it without asking; /list asks nothing. Part of
- * the Thunderbolt 3 / USB4 support (owner, 2026-10-19): with tb (that
- * support in the run) 0, neither asked nor installed. Returns the decision
+ * section 6.4, draft 16). Part of the Thunderbolt 3 / USB4 support and
+ * chosen with it (owner, 2026-10-19, replacing "never unasked"): with tb
+ * (that support in the run) 0, neither asked nor installed; with it,
+ * Enter and /yes give Y, /stor98 installs it without asking, /nostor98
+ * leaves it out without asking, /list asks nothing. Returns the decision
  * when it is not asked; *asked whether it is, *def what Enter gives. */
-int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch, int list,
-                    int *asked, int *def);
+int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
+                    int noStor98, int list, int *asked, int *def);
+
+/* Record 23 section 4.4 (revision 23): a device bound to Stor98 that is a
+ * known tunnel drive, for the shared-file rule. Present: behind a tunnel.
+ * Not present: on NT one the install record names; on 98 SE and ME any
+ * (an internal drive there is always present, so an entry with no
+ * devnode is a drive gone with its tunnel, as the uninstall's adoption
+ * reads it). */
+int inst_s98_known_tunnel(int nt, int present, int place, int recorded);
+
+/* 98 SE and ME (record 26 section 6.3, draft 16): the bundled Stor98 goes
+ * in as a file, never by reinstalling a running device. 1 when the run
+ * replaces stor98.mpd at the next start: Stor98 in the run, the shared
+ * file free to change (inst_s98_share), and the installed file there
+ * (installed 1; 0 absent, -1 unreadable) at an older release (cmp, the
+ * installed version against the bundled one, < 0). */
+int inst_s98_file_update(int nt, int include, int share, int installed,
+                         int cmp);
+
+/* The text of the 98 SE and ME confirmation the file update needs (the
+ * Summary's box and the console's question, owner 2026-10-19). */
+extern const char instS98DisconnectText[];
 
 /* The window's Stor98 box (owner, 2026-10-19): under the Thunderbolt 3 /
  * USB4 box, and open only while that box can be and is ticked. */

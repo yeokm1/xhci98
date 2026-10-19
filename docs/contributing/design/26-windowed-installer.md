@@ -1,6 +1,17 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 15, 2026-10-19 (task 42-A.31, the owner's request of that
+Status: draft 16, 2026-10-19 (the fix round of that night, the owner's
+decisions: on 98 SE and ME the bundled Stor98 is updated as a file
+through `WININIT.INI`, never by reinstalling a device it runs, with one
+Summary box "Please disconnect all external NVMe drives before
+proceeding" in place of one per drive, section 6.3; a helper that did
+not finish is an unfinished install with steps, section 7; the
+Thunderbolt 3 / USB4 box "(experimental)", never ticked unasked, its
+note saying whether a controller was found, and Stor98's box ticked with
+it, section 5.3; no Stor98 install record without a Stor98 change, and
+the uninstall removes the record also when Stor98 stays, sections 6.3
+and 9.3; the `XhciCmMode` 0 line on the Summary, section 5.7; record 23
+revision 23, record 27 draft 9); draft 15, 2026-10-19 (task 42-A.31, the owner's request of that
 day: `SETUP.EXE` at the package root, the program a person double-clicks,
 and `INSTALL.BAT` kept for the command line; sections 2, 5.9, 10, 12, 13
 and 15, and record 23 revision 22); draft 14, 2026-10-19 (section 9.3 step 4: the setup engine's
@@ -435,8 +446,8 @@ Check boxes, one a line, each with one sentence:
 |---|---|---|---|
 | xHCI98 USB 3.x host controller driver (`xhci98.sys`; until 2026-10-19 with `xhciuas.sys` in the same box) | yes, but on Windows 8 and 8.1 (draft 8) | on 2000 to 7, when the package carries the connection manager (record 23 section 4.5; `/cmonly` preselects it unticked); on 98 SE and ME no, shown ticked and disabled; on 8 and 8.1 shown unticked and disabled | the driver for the controller, its hubs and devices, and Bulk-Only disks (UAS disks: the box under it); on 8 and 8.1 the sentence says Windows' own USB 3 driver runs the controllers there; unticked on 2000 to 7, the sentence under the box says the run leaves an installed `xhci98.sys` as it is and that the uninstall removes the whole package |
 | UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still asked, being `xhci98.sys`'s (`inst_uas_decide`) |
-| Thunderbolt 3 / USB4 support (`xhcicm.sys`) | as record 23 section 8.5 decides: with a controller present yes, with none no | yes | the connection manager; its warning sentence (a device plugged into that port can reach the computer's memory) stands under the box, with "see `XhciCmApprove` on the Thunderbolt settings page" |
-| Stor98, the NVMe driver (bundled) | never unasked (record 23 section 4.4; owner, 2026-10-18) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 12: it no longer offers an internal drive), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
+| Thunderbolt 3 / USB4 support (experimental) (`xhcicm.sys`) | no, whether or not a controller is found (draft 16; owner, 2026-10-19, replacing "ticked when a controller is found"): the user ticks it on purpose; `/thunderbolt` preselects it; ticked when it is locked on (the USB drivers unticked, and 8 and 8.1) | yes | the connection manager; the note under the box says whether a controller was found - "A Thunderbolt 3 / USB4 controller was found: <name>." (the name cut to 36 characters, `inst_tb_found_text`) with the sentence that a device plugged into its port can reach the computer's memory, see `XhciCmApprove`; or "No Thunderbolt 3 / USB4 controller was found (some laptops show it only with a device plugged in or a BIOS setting). Tick it only if this computer has such a port." Unticked on an update leaves an installed `xhcicm` as it is (record 23 section 8.5's N) |
+| Stor98, the NVMe driver (bundled) | with the Thunderbolt box (draft 16; owner, 2026-10-19, replacing "never unasked" of 2026-10-18): ticking the Thunderbolt box ticks it, unticking it unticks it; `/nostor98` preselects it unticked | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 12: it no longer offers an internal drive), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next checks it and stays on the page until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
@@ -579,7 +590,10 @@ settings", any other listed change (the Thunderbolt support added,
 Stor98 ticked, the tools installed for the first time or moved, the USB
 Tree's start at login turned on or off) "Make the changes listed
 below", both together say both, and "Every device is current and no
-setting changes" stands only when nothing changes. The list: each device and its action, each component, each setting that will
+setting changes" stands only when nothing changes. Draft 16 (owner,
+2026-10-19): when the run will write `XhciCmMode` 0, the list opens with
+"*** Thunderbolt 3 and USB4 will be turned off (XhciCmMode 0). ***"
+(`inst_cm_mode_off`; the console prints it too, record 23 section 8.3). The list: each device and its action, each component, each setting that will
 be written with its location, the tools folder, and on 98 SE and ME the
 sentence that Windows' own wizards may open for the devices the controller
 shows after its restart. The button is Install (Remove under `/uninstall`,
@@ -673,8 +687,10 @@ concern it. Never on 98 SE or ME.
 ### 6.3 Stor98, only when ticked
 
 Record 23 section 4.4 keeps the bundled Stor98 out of the local copy so
-that no wizard installs it unasked; the owner's rule stands (never
-unasked). With the box ticked:
+that no wizard installs it when it was not chosen. Since draft 16 it is
+chosen with the Thunderbolt 3 / USB4 support (section 5.3; owner,
+2026-10-19, replacing "never unasked"), which is itself never chosen
+unasked. With the box ticked:
 
 - **Before anything**, the run records what Stor98 the machine already
   has: whether a `stor98` service or driver key exists, and every devnode
@@ -712,22 +728,37 @@ unasked). With the box ticked:
   the package's drivers (the flat copy's list names them), where the
   wizards find `stor98.inf` (none when record 23 section 4.4 holds
   Stor98); record 27's helper installs it now on every present NVMe
-  device with no driver behind a tunnel, and updates one such device
-  Stor98 runs at an older release, by the same route and rules as the
-  package's own
-  devices (record 27 section 6 step 6), with Stor98's own read-back after
-  it (section 8).
+  device with no driver behind a tunnel, by the same route and rules as
+  the package's own devices (record 27 section 6 step 6), with Stor98's
+  own read-back after it (section 8). **A device Stor98 runs is never
+  installed again** (draft 16): Windows' device installer replacing the
+  running `stor98.mpd` stopped 98 SE with a fatal exception 0E, every
+  time. An older Stor98 is updated as a file instead (record 23 section
+  4.4, revision 23): `STOR98.TMP` beside it and a `WININIT.INI`
+  `[rename]` entry, the `INF` or `INF\OTHER` copy each Stor98 driver key
+  names made the bundled `stor98.inf`, with or without a drive present,
+  then a shut down and a start; a drive first plugged after it binds to
+  the new file. The printed steps never send the user to Update Driver
+  on a drive Stor98 runs, and a Stor98 drive no helper job touches may
+  be unplugged between the plan and Install, as the confirmation asks,
+  without the run refusing a changed plan (the plan made again reads
+  the gate again).
 - **An update of a Stor98 device** follows Stor98's readme ("Updating the
   driver"), whose two precautions are each for its own systems. On 98 SE
   and ME: nothing may be using the drive's volume, and the machine is
   shut down and started again afterwards rather than restarted with the
   drive attached (the readme records a volume coming back "not ready",
   and ME stopping with a VCACHE error, after a warm restart there). So on
-  those two systems the Summary page lists each Stor98 device the run
-  will update with a check box "nothing is using this drive" that
-  Install requires, and the finish page offers "Shut down now" in place
-  of "Restart now" (section 5.9); the console tool asks the same before
-  such an update and ends with the shutdown line. On 2000 to 7 the
+  those two systems, when the run replaces Stor98's file, the Summary
+  page carries one check box, "Please disconnect all external NVMe
+  drives before proceeding" (draft 16, owner 2026-10-19; until then one
+  box per drive, "nothing is using this drive", that Install required):
+  ticked, the file update goes ahead; unticked, Install still runs and
+  Stor98 is left for a later run, out of this run whole (no copy of its
+  files, no job, no setting, no record; a step, exit 4). The finish page offers
+  "Shut down now" in place of "Restart now" (section 5.9); the console
+  tool asks the same sentence as one yes/no question (`INST_Q_S98_UNUSED`,
+  Enter and `/yes` give N) and ends with the shutdown line. On 2000 to 7 the
   ordinary restart flow stands, and one thing is added: on a USB4 host
   under this package's own connection manager, a driver change on a
   tunnelled drive stops the device, which the connection manager takes as
@@ -750,8 +781,17 @@ unasked). With the box ticked:
   Stor98 only when this package's installer installed it). A key
   `HKLM\Software\xhci98\Stor98` with: `PreExisting` (`REG_DWORD` 1 when
   the baseline of the first bullet found any Stor98, a service, a driver
-  key or a bound devnode; written once, never cleared); `Version` (the
-  bundled release last installed); under `Staged` one value per INF copy
+  key or a bound devnode; written once, never cleared, and since draft 16
+  written with the run's first Stor98 change - with the record's first
+  entry (a staged copy, a device, a setting) on NT, and on 98 SE and ME
+  also once a new local copy that carries Stor98 is made, before
+  `DevicePath` names it, and before a helper job or the file update -
+  never by a run that makes none, such as one that leaves a
+  hand-installed Stor98 alone);
+  `Version` (the bundled release last installed: written only by a run
+  that installed or updated it, a device the call or the helper bound or
+  updated, or the 98 SE and ME file update; record 28 section 4 item 4
+  admits devices to the no-interrupt start by it); under `Staged` one value per INF copy
   the setup engine made for this installer's installs, on NT the
   `oemNN.inf` name `SetupCopyOEMInf` returned when it made a new copy,
   never one it answered with an INF already in the store (that one was
@@ -803,7 +843,10 @@ unasked). With the box ticked:
   files and the `INF\OTHER` copies by the same check), so an INF a
   pre-existing or unlisted device still names stays; then the `stor98`
   service, its files and the recorded settings only when no devnode,
-  present or not, is bound to Stor98 any more and `PreExisting` is clear;
+  present or not, is bound to Stor98 any more and `PreExisting` is clear
+  (on 98 SE and ME a file update this installer queued and the next
+  start has not done yet goes with the file: its `[rename]` entry and
+  `STOR98.TMP`, draft 16);
   otherwise they stay, and the finish page says that a Stor98 this
   installer did not install was left. A device the user installed and
   this installer only updated keeps its binding, and two devices sharing
@@ -859,9 +902,12 @@ unasked). With the box ticked:
 Gains the same: `/stor98` installs the bundled Stor98 without asking (the
 pair of `/thunderbolt`, and refused without it or `/cmonly`: Stor98 is part of the
 Thunderbolt 3 / USB4 support, owner, 2026-10-19), the question "Install
-Stor98, the bundled NVMe driver?" with Enter for N where the package
+Stor98, the bundled NVMe driver?" with Enter for Y (draft 16; N until
+then) where the package
 carries it and the Thunderbolt support is in the run (left out, and said,
-otherwise; `inst_s98_decide`), and the Stor98
+otherwise; `inst_s98_decide`); `/yes` gives Y there, and `/nostor98`
+leaves it out unasked (record 23 section 7.1, revision 23: the console
+follows the window's box, ticked with its parent), and the Stor98
 rows in its value questions (asked only when Stor98 is installed by the
 run). Record 23 sections 4.4, 7.1 and 8.1 are revised (section 12).
 Draft 12: the question's text says "For NVMe drives behind a Thunderbolt
@@ -915,7 +961,12 @@ restart, and "Open Device Manager" (record 23 section 6.4's
 other devices, the values, the tools, the record. The exit code follows
 record 23 section 7.4's precedence: a wizard the user cancelled, a helper
 dialog the user cancelled or a device the helper found no match for sets
-the steps flag (exit 4); a helper that failed or did not finish, or a
+the steps flag (exit 4); so, since draft 16, does a helper that did not
+finish (`inst_di_unfinished`): its install is unfinished, its steps say
+to shut down, start Windows and run the installer again, and never
+"nothing to do" or "this release runs it", whatever the device reads
+afterwards (the 98 SE update of 2026-10-19 reported a helper cut short
+that way, exit 2); a helper that failed, or a
 device read back wrong after it (section 8), sets the failed flag (exit 2)
 with the steps page shown as well; the finish page says to restart after
 the steps in either case, and which it was.
@@ -1079,7 +1130,10 @@ gated on the one before, shown on the Progress page:
    are left, so a later install of this package starts from the INFs'
    defaults and nothing else on the machine is touched); the `Stor98` key
    when Stor98 was removed, and its `Devices` and `Settings` entries that
-   were removed when it was not; `InstallDir`, `MoveFrom`, the
+   were removed when it was not, and since draft 16 the whole `Stor98`
+   key also when Stor98 itself stays (nothing of the package is left for
+   it to describe; the 98 SE matrix leg of 2026-10-19 left
+   `Software\xhci98` behind for it); `InstallDir`, `MoveFrom`, the
    `Software\xhci98` key when empty, the Uninstall entry.
 7. The install directory and `%windir%\XHCI98` when empty.
 

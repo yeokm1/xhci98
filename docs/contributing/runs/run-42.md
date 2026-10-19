@@ -2348,3 +2348,88 @@ prepared snapshot, enclosure plugged after the desktop, `INSTALL /console
 on Stor98, the internal NVMe LEFT as internal, "found before 0,
 PreExisting 0", exit 3; the uninstall then deleted the `INF\OTHER` copy
 and `stor98.mpd` (exit 3); `logs\N1-98-473323ae.log`.
+
+## The 3.1.0.0 fix round: Stor98 as a file on 98 SE and ME, the Thunderbolt and Stor98 boxes, the Stor98 record, the `XhciCmMode` 0 warning (2026-10-19)
+
+Worker p42-fix1, branch `p42-fix1` from `3.1.0.0` at `bd0d14dd`. The
+release held on the night of 2026-10-19 for these, the owner's
+decisions of that night (record 23 revision 23, record 26 draft 16,
+record 27 draft 9).
+
+What was done:
+
+- **98 SE and ME: Stor98 updated as a file.** The update over `3.0.0.0`
+  and Stor98 `0.4.0.0` with a tunnel enclosure attached and mounted
+  stopped 98 SE with "fatal exception 0E at 0028:FF09E842" every time,
+  when the helper had Windows' device installer replace the running
+  `stor98.mpd`; with the enclosure absent Stor98 was held ("Stor98 is
+  LEFT ... another release") and stayed `0.4.0.0`. Now a device Stor98
+  runs is never reinstalled on those systems, and never sent to Update
+  Driver by the printed steps; an older `IOSUBSYS\stor98.mpd` under a
+  free shared-file rule (`inst_s98_file_update`) is written beside the
+  old one as `STOR98.TMP`, checked, and swapped through `WININIT.INI`'s
+  `[rename]` with 8.3 names, the INF copy each Stor98 driver key names
+  is made the bundled `stor98.inf` (and again by any later run while the
+  file is the bundled release), the install directory's copy is the
+  package's, and the run asks for a shut down and a start. A Stor98
+  entry with no present devnode counts on those systems as a drive gone
+  with its tunnel (`inst_s98_known_tunnel`), so the update runs with the
+  enclosure absent. One Summary box and one console question, "Please
+  disconnect all external NVMe drives before proceeding" (Enter and
+  `/yes` N), replace the per-drive boxes; unconfirmed, Stor98 is left
+  out of the run whole (exit 4). A Stor98 drive the run does not touch
+  may be unplugged between the plan and Install. The uninstall takes
+  back a queued swap with the file.
+- **The helper that did not finish** (`inst_di_unfinished`): an
+  unfinished install with steps (exit 4) that say to shut down, start and
+  run the installer again, never "Nothing to do: this release runs it".
+- **The Thunderbolt 3 / USB4 box** "(experimental)", never ticked
+  unasked (the console's Enter and `/yes` N, `/thunderbolt` explicit),
+  its note naming the controller found or saying none was; **Stor98's
+  box ticked with it**, also when the box is locked on, and untickable;
+  the console's `/thunderbolt` implies Stor98 (Enter Y) unless the new
+  `/nostor98`.
+- **The Stor98 record**: `PreExisting` only with the run's first Stor98
+  change, `Version` only when the run installed or updated Stor98; the
+  uninstall removes `Software\xhci98\Stor98`, and `Software\xhci98` when
+  empty, also when Stor98 stays.
+- **`XhciCmMode` 0**: "Thunderbolt 3 and USB4 will be turned off
+  (XhciCmMode 0)" on the Summary and in the console before the
+  confirmation.
+
+Commits: `6a061ddf` (the code), `bb40965b` (the records, the release
+notes, README, the installer readme, the release readme template),
+`f0114d4b`, `5ebd97b0` and `73644472` (reviewed and revised),
+`3ccf37f7` (the self-test's scripted answers). Reviewed and revised in
+three rounds and a confirmation round. Kept as decided: an absent Stor98
+entry on 98 SE and ME is taken for a tunnel drive (the coordinator's
+"whether or not a drive is present"); an internal drive on a Stor98
+installed by hand that is absent at the update finds the bundled release
+when it comes back (record 23 section 4.4).
+
+Host suite: `test_inst` 1621 checks, 0 failures (the file update's
+decision, the known tunnel drive, the unfinished helper, `/nostor98`,
+the Stor98 decision with Enter Y, the Thunderbolt decision with Enter N,
+the `XhciCmMode` 0 warning, the Thunderbolt note and the box's text);
+`XHCIINST /selftest` passes (every screen within 79 columns).
+
+The legs, in QEMU (the `usb4-emu` build `bin-2a893ea`), on 98 SE, kit
+and evidence in `E:\xhci98-vm\p42-fix1` (QMP 48280 and 48282; `logs\`,
+`shots\`), each an overlay of the frozen `p42-s98ver\l3prep` (98 SE with
+`3.0.0.0` and Stor98 `0.4.0.0`, bound by hand to the `usb4-generic`
+enclosure's NVMe, `F:`), cold starts only. The package: `3.1.0.0`'s
+`release-x86` with this branch's installer as built at `f0114d4b`.
+`INSTALL /console /thunderbolt /defaults /nopause`, Stor98's question
+Enter (Y), the disconnect question Y.
+
+| Leg | Result |
+|---|---|
+| f1a: the enclosure attached at boot and during the run | **pass**: "Thunderbolt 3 / USB4 support (experimental)", "A Thunderbolt 3 / USB4 controller was found: xHCI98 USB4 Host Router."; the plan "the installed stor98.mpd is an older release ... replaces it ... as a file"; "other bindings 0 ... share 0, file update 1", the tunnel NVMe "not reinstalled: the file update covers it"; no fatal exception; `WININIT.INI` `[rename]` `C:\WINDOWS\SYSTEM\IOSUBSYS\STOR98.MPD=C:\WINDOWS\SYSTEM\IOSUBSYS\STOR98.TMP` beside the setup engine's `xhci98.sys` entry; `INF\OTHER\Yeo Kheng Mengstor98.inf` refreshed (3,981 to 4,098 bytes); "Changes were made. Please shut down and start Windows again.", exit 3. After the shut down and a start with the enclosure attached: `STOR98.MPD` 52,152 bytes, `3.1.0.0`, the package's SHA-256; a 4 MB file copied to `F:` and compared with no differences |
+| f1b: the enclosure absent during the run | **pass**: the same plan and file update with no drive present ("other bindings 0 ... file update 1"); the record `PreExisting` 1 (Stor98 there before, by hand) and `Version` `3.1.0.0`; exit 3. After the shut down and a start without the enclosure, `STOR98.MPD` `3.1.0.0` (`0.4.0.0` before) and the `[rename]` done; the enclosure then plugged: its NVMe bound with no wizard, `F:` written and compared with no differences |
+
+Not read: the window's pages in a guest (the Components and Summary
+boxes, host vectors and review only); Windows ME; the declined update in
+a guest; the NT routes (unchanged, `test_inst` and review only). The
+legs ran the installer of `f0114d4b`; the later rounds changed the
+declined path, the cancel, the record's first write and the INF
+refresh's retry, not the confirmed path the legs read.

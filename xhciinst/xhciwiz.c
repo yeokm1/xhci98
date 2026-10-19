@@ -151,14 +151,8 @@ static HWND s98Now[WIZ_S98_ASKED];
 static HWND s98Sep[WIZ_S98_ASKED];
 static int s98ComboRow[WIZ_S98_ASKED];
 static int s98ComboCount;
-/* One box per drive for the first three; a fourth for every drive after
- * them, listed in the summary above it. */
-#define WIZ_S98_UPD     4
-#define WIZ_S98_IDS     32
-static HWND s98UnusedBox[WIZ_S98_UPD];
-static int s98UnusedCount;
-static char s98UnusedId[WIZ_S98_IDS][200];
-static int s98UnusedIds;
+/* The one box of the 98 SE and ME file update (record 26 section 6.3). */
+static HWND s98UnusedBox;
 static char dirChoice[WIZ_PATH];
 static char dirNow[WIZ_PATH];
 
@@ -410,16 +404,19 @@ static unsigned __stdcall job_main(void *arg)
             uasChoice = inst_eng_uas_state();
             uasOwn = uasChoice;
             inst_eng_tb_state(&tbHave, &tbPresent, &tbDefault, &tbInstalled);
+            /* Owner, 2026-10-19: unticked unless asked for, a
+             * controller found or not (record 26 section 5.3, draft
+             * 16); tbDefault is 0. */
             tbChoice = tbHave && (opts->Thunderbolt || tbDefault);
             tbOwn = tbChoice;
             if (!usbChoice) {
                 tbChoice = tbHave;
             }
             inst_eng_tb_choose(tbChoice);
-            /* Never unasked (record 23 section 4.4): ticked only by
-             * /stor98. */
+            /* Ticked with the Thunderbolt box (owner, 2026-10-19,
+             * replacing "never unasked"); /nostor98 unticks it. */
             inst_eng_s98_state(&s98Have, s98Ver, sizeof(s98Ver));
-            s98Choice = s98Have && opts->Stor98;
+            s98Choice = s98Have && tbChoice && !opts->NoStor98;
             inst_eng_s98_choose(s98Choice);
             EnterCriticalSection(&textLock);
             sink = &planText;
@@ -789,6 +786,11 @@ static void comp_usb_state(HWND dlg)
                     usbNotHere ? INST_PT_DRIVERS_T8 :
                     usb ? INST_PT_DRIVERS_T : INST_PT_DRIVERS_OFF));
     if (!usb && tbHave) {
+        /* Locked on: Stor98 follows its parent here too (owner,
+         * 2026-10-19), as on a click of the Thunderbolt box. */
+        if (IsDlgButtonChecked(dlg, IDC_C_TB) != BST_CHECKED) {
+            CheckDlgButton(dlg, IDC_C_S98, BST_CHECKED);
+        }
         CheckDlgButton(dlg, IDC_C_TB, BST_CHECKED);
     }
     EnableWindow(GetDlgItem(dlg, IDC_C_TB), usb && tbHave);
@@ -815,9 +817,13 @@ static void comp_fill(HWND dlg)
     SetDlgItemTextA(dlg, IDC_C_UAS, inst_page_text(INST_PT_UAS));
     SetDlgItemTextA(dlg, IDC_C_UAS_T, inst_page_text(INST_PT_UAS_T));
     SetDlgItemTextA(dlg, IDC_C_TB, inst_page_text(INST_PT_TB));
-    SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(tbPresent ?
-                                                    INST_PT_TB_T :
-                                                    INST_PT_TB_ABSENT));
+    if (tbPresent) {
+        char found[300];
+        inst_tb_found_text(found, sizeof(found), inst_eng_tb_name());
+        SetDlgItemTextA(dlg, IDC_C_TB_T, found);
+    } else {
+        SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(INST_PT_TB_ABSENT));
+    }
     CheckDlgButton(dlg, IDC_C_TB, tbChoice ? BST_CHECKED : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_C_TB_T), tbHave);
     comp_usb_state(dlg);
@@ -1961,89 +1967,32 @@ static WIZ_DLGRET CALLBACK s98_adv_proc(HWND dlg, UINT msg, WPARAM wp,
     return FALSE;
 }
 
-/* The Summary page's boxes (record 26 section 6.3): on 98 SE and ME, one
- * per Stor98 drive the run updates; Install waits for every one. */
+/* The Summary page's box (record 26 section 6.3, draft 16; owner,
+ * 2026-10-19): on 98 SE and ME, one box when the run replaces Stor98's
+ * file. Ticked, the update goes ahead; unticked, Stor98 is left for a
+ * later run. Install does not wait for it. */
 static void s98_unused_clear(void)
 {
-    int i;
-
-    for (i = 0; i < s98UnusedCount; i++) {
-        DestroyWindow(s98UnusedBox[i]);
+    if (s98UnusedBox != NULL) {
+        DestroyWindow(s98UnusedBox);
+        s98UnusedBox = NULL;
     }
-    s98UnusedCount = 0;
-}
-
-static int s98_unused_all(void)
-{
-    int i;
-
-    for (i = 0; i < s98UnusedCount; i++) {
-        if (SendMessageA(s98UnusedBox[i], BM_GETCHECK, 0, 0) != BST_CHECKED) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-static void s98_unused_buttons(void)
-{
-    buttons(PSWIZB_BACK | (s98_unused_all() ? PSWIZB_NEXT : 0));
-}
-
-/* The box that speaks for the n-th drive: its own, or with more drives
- * than boxes the last box for every drive from it on. */
-static int s98UnusedMany;
-
-static int s98_unused_box(int n)
-{
-    return (n < WIZ_S98_UPD - 1 || !s98UnusedMany) ? n : WIZ_S98_UPD - 1;
 }
 
 static void s98_unused_make(HWND dlg)
 {
     HFONT font = (HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0);
-    const char *id;
-    const char *desc;
-    char text[300];
-    int n;
-    int h;
-    int total;
 
     s98_unused_clear();
-    s98UnusedIds = 0;
-    if (!is_9x() || !s98Choice) {
+    if (!is_9x() || !s98Choice || !inst_eng_s98_file_update()) {
         return;
     }
-    for (total = 0; total < WIZ_S98_IDS &&
-                    inst_eng_s98_update(total, &id) != NULL; total++) {
-        inst_copy(s98UnusedId[total], id, sizeof(s98UnusedId[total]));
-    }
-    /* A drive past the list gets no box: it is not updated in this run
-     * (the engine updates only a drive confirmed). */
-    s98UnusedIds = total;
-    s98UnusedMany = total > WIZ_S98_UPD;
-    for (n = 0; n < total && s98UnusedCount < WIZ_S98_UPD; n++) {
-        desc = inst_eng_s98_update(n, &id);
-        if (s98_unused_box(n) != n || (s98UnusedMany &&
-                                       n == WIZ_S98_UPD - 1)) {
-            _snprintf(text, sizeof(text) - 1, "Nothing is using any of the "
-                      "other %d drives listed above", total - n);
-        } else {
-            _snprintf(text, sizeof(text) - 1, "Nothing is using %s",
-                      desc != NULL ? desc : "this drive");
-        }
-        text[sizeof(text) - 1] = '\0';
-        s98UnusedBox[n] = make_ctl(dlg, "BUTTON", text, BS_AUTOCHECKBOX |
-                                   WS_TABSTOP, 8, 168 - 11 * (n + 1), 284, 10,
-                                   IDC_SUM_S98 + n, font);
-        s98UnusedCount++;
-    }
-    if (s98UnusedCount > 0) {
-        /* The list above them shortened to make room. */
-        h = 144 - 11 * s98UnusedCount - 2;
-        MoveWindow(GetDlgItem(dlg, IDC_DETAIL), dlu_x(dlg, 8),
-                   dlu_y(dlg, 24), dlu_x(dlg, 284), dlu_y(dlg, h), TRUE);
-    }
+    s98UnusedBox = make_ctl(dlg, "BUTTON", inst_page_text(INST_PT_S98_UNUSED),
+                            BS_AUTOCHECKBOX | WS_TABSTOP, 8, 157, 284, 10,
+                            IDC_SUM_S98, font);
+    /* The list above it shortened to make room. */
+    MoveWindow(GetDlgItem(dlg, IDC_DETAIL), dlu_x(dlg, 8), dlu_y(dlg, 24),
+               dlu_x(dlg, 284), dlu_y(dlg, 144 - 11 - 2), TRUE);
 }
 
 /* ---- the summary (record 26 section 5.7) ----------------------------------- */
@@ -2095,6 +2044,15 @@ static void summary_fill(HWND dlg)
                   inst_eng_summary_head(writes, other));
         line[sizeof(line) - 1] = '\0';
         tb_add(&t, line);
+        for (i = 0; i < INST_MAX_VALUES && i < instValueCount; i++) {
+            if (choiceSet[i] && choice_live(i) &&
+                inst_cm_mode_off(instValues[i].Name, choiceVal[i])) {
+                _snprintf(line, sizeof(line) - 1, "*** %s. ***\n\n",
+                          instCmOffText);
+                line[sizeof(line) - 1] = '\0';
+                tb_add(&t, line);
+            }
+        }
         tb_add(&t, "The devices:\n");
         for (i = 0; inst_eng_found(i, &f); i++) {
             if (!f.Present) {
@@ -2117,8 +2075,9 @@ static void summary_fill(HWND dlg)
                    "installed stays)\n");
         }
         if (tbHave) {
-            tb_add(&t, tbChoice ? "- Thunderbolt 3 / USB4 support\n" :
-                   "- Thunderbolt 3 / USB4 support: left out\n");
+            tb_add(&t, tbChoice ? "- Thunderbolt 3 / USB4 support "
+                   "(experimental)\n" : "- Thunderbolt 3 / USB4 support "
+                   "(experimental): left out\n");
         }
         if (s98Have) {
             _snprintf(line, sizeof(line) - 1, s98Choice ?
@@ -2163,19 +2122,15 @@ static void summary_fill(HWND dlg)
             if (!any) {
                 tb_add(&t, "- none: each stays as it is.\n");
             }
-            if (is_9x() && inst_eng_s98_update(0, &f.Id) != NULL) {
-                const char *desc;
-                tb_add(&t, "\nStor98 is updated on these drives once their "
-                       "boxes below are ticked:\nnothing may be using them "
-                       "while it is. Close every program and window that\n"
-                       "uses their drive letters. Afterwards Windows is shut "
-                       "down and started\nagain, not restarted.\n");
-                for (i = 0; (desc = inst_eng_s98_update(i, &f.Id)) != NULL;
-                     i++) {
-                    _snprintf(line, sizeof(line) - 1, "- %s\n", desc);
-                    line[sizeof(line) - 1] = '\0';
-                    tb_add(&t, line);
-                }
+            if (is_9x() && inst_eng_s98_file_update()) {
+                _snprintf(line, sizeof(line) - 1, "\nStor98's driver file "
+                          "(stor98.mpd) is replaced with %s when\nWindows "
+                          "next starts, once the box below is ticked; no "
+                          "drive is\nreinstalled. Afterwards Windows is shut "
+                          "down and started again, not\nrestarted. Unticked, "
+                          "Stor98 is left for a later run.\n", s98Ver);
+                line[sizeof(line) - 1] = '\0';
+                tb_add(&t, line);
             }
         }
         _snprintf(line, sizeof(line) - 1, "\nThe tools folder: %s\n",
@@ -2466,6 +2421,11 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             return TRUE;
         case IDC_C_TB:
             if (HIWORD(wp) == BN_CLICKED) {
+                /* Stor98 follows its parent (owner, 2026-10-19): ticked
+                 * with it, and can be unticked under it. */
+                CheckDlgButton(dlg, IDC_C_S98,
+                               IsDlgButtonChecked(dlg, IDC_C_TB) ==
+                               BST_CHECKED ? BST_CHECKED : BST_UNCHECKED);
                 comp_s98_sync(dlg);
             }
             return TRUE;
@@ -2500,12 +2460,6 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             open_devmgr(dlg);
             return TRUE;
         default:
-            if (page == P_SUMMARY && LOWORD(wp) >= IDC_SUM_S98 &&
-                LOWORD(wp) < IDC_SUM_S98 + WIZ_S98_UPD &&
-                HIWORD(wp) == BN_CLICKED) {
-                s98_unused_buttons();
-                return TRUE;
-            }
             if (HIWORD(wp) == CBN_SETFOCUS || HIWORD(wp) == CBN_SELCHANGE ||
                 HIWORD(wp) == EN_SETFOCUS) {
                 ROWPAGE *rp = &pageRows[page == P_USB ? 0 : 1];
@@ -2555,11 +2509,7 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 if (!uninstallMode) {
                     s98_unused_make(dlg);
                 }
-                if (s98UnusedCount > 0) {
-                    s98_unused_buttons();
-                } else {
-                    buttons((uninstallMode ? 0 : PSWIZB_BACK) | PSWIZB_NEXT);
-                }
+                buttons((uninstallMode ? 0 : PSWIZB_BACK) | PSWIZB_NEXT);
                 next_text(uninstallMode ? "&Remove" : "&Install");
                 break;
             case P_PROGRESS:
@@ -2587,15 +2537,10 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             if (page == P_S98) {
                 s98_page_leave(dlg);
             }
-            if (page == P_SUMMARY) {
-                int i;
-                for (i = 0; i < s98UnusedIds && s98UnusedCount > 0; i++) {
-                    inst_eng_s98_unused(s98UnusedId[i],
-                                        SendMessageA(s98UnusedBox[
-                                                     s98_unused_box(i)],
-                                                     BM_GETCHECK, 0, 0) ==
-                                        BST_CHECKED);
-                }
+            if (page == P_SUMMARY && !uninstallMode) {
+                inst_eng_s98_file_ok(s98UnusedBox != NULL &&
+                                     SendMessageA(s98UnusedBox, BM_GETCHECK,
+                                                  0, 0) == BST_CHECKED);
             }
             if ((page == P_COMP && !comp_leave(dlg)) ||
                 ((page == P_USB || page == P_TBS) &&

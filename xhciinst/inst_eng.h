@@ -34,7 +34,8 @@
 #define INST_Q_EJECT_OK     9   /* /eject: eject it now?                   */
 #define INST_Q_S98          10  /* Install Stor98, the bundled NVMe driver? */
 #define INST_Q_S98_VALUE    11  /* a Stor98 setting (Value: its row)      */
-#define INST_Q_S98_UNUSED   12  /* 98 SE and ME: nothing uses this drive?  */
+#define INST_Q_S98_UNUSED   12  /* 98 SE and ME: external NVMe drives
+                                   disconnected? (the file update)          */
 
 typedef struct _INST_ASK {
     int Kind;               /* INST_Q_*                                   */
@@ -273,11 +274,15 @@ int inst_eng_s98_row(int i, INST_S98ROW *row);
  * else why not. */
 const char *inst_eng_s98_choose_value(int i, int set, const char *text);
 
-/* 98 SE and ME: the n-th Stor98 device the run updates (its description,
- * and id in *id), NULL past the last; the user's word that nothing uses
- * it (the Summary page's box), without which it is not updated. */
-const char *inst_eng_s98_update(int n, const char **id);
-void inst_eng_s98_unused(const char *id, int ok);
+/* 98 SE and ME (record 26 section 6.3, draft 16): 1 when the run
+ * replaces Stor98's file at the next start; the user's word (the Summary
+ * page's one box, instS98DisconnectText), without which Stor98 is left
+ * for a later run. */
+int inst_eng_s98_file_update(void);
+void inst_eng_s98_file_ok(int ok);
+
+/* The Thunderbolt 3 / USB4 controller found ("" for none). */
+const char *inst_eng_tb_name(void);
 
 /* 1 when the finish offers a shutdown rather than a restart (98 SE and ME
  * after a Stor98 update); 1 when the uninstall left a Stor98 it did not

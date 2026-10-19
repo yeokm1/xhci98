@@ -1882,10 +1882,12 @@ static void test_tb_question(void)
     INST_OPTS o;
     char err[256];
 
-    /* A controller present: asked, default yes; /yes installs it. */
+    /* A controller present: asked, default no (owner, 2026-10-19: the
+     * support is experimental and ticked only on purpose); /yes leaves it
+     * out. */
     CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 0, &ask, &def), 0, "present: asked");
-    CHECK(ask && def, "present: default yes");
-    CHECK_EQ(inst_tb_decide(1, 1, 1, 0, 0, &ask, &def), 1, "present, /yes: yes");
+    CHECK(ask && !def, "present: default no");
+    CHECK_EQ(inst_tb_decide(1, 1, 1, 0, 0, &ask, &def), 0, "present, /yes: no");
     CHECK(!ask, "present, /yes: not asked");
     /* None found: still asked, default no; /yes skips it. */
     CHECK_EQ(inst_tb_decide(1, 0, 0, 0, 0, &ask, &def), 0, "absent: asked");
@@ -1898,7 +1900,7 @@ static void test_tb_question(void)
     CHECK_EQ(inst_tb_decide(1, 0, 1, 1, 0, &ask, &def), 1, "/thunderbolt /yes");
     CHECK_EQ(inst_tb_decide(1, 1, 0, 1, 0, &ask, &def), 1, "/thunderbolt, present");
     /* /list: not asked, the default shown. */
-    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 1, &ask, &def), 1, "/list, present");
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 1, &ask, &def), 0, "/list, present");
     CHECK_EQ(inst_tb_decide(1, 0, 0, 0, 1, &ask, &def), 0, "/list, absent");
     CHECK(!ask, "/list: not asked");
     /* A package without the Thunderbolt driver: nothing, whatever the
@@ -3534,18 +3536,32 @@ static void test_s98(void)
         argv1[2] = "/uninstall";
         CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
               "/stor98 belongs to an install");
-        CHECK(!inst_s98_decide(1, 1, 0, 0, 0, &asked, &def) && asked && !def,
-              "asked, Enter gives N");
-        CHECK(!inst_s98_decide(1, 1, 1, 0, 0, &asked, &def) && !asked,
-              "/yes: N, not asked");
-        CHECK(inst_s98_decide(1, 1, 1, 1, 0, &asked, &def) && !asked,
+        argv1[1] = "/nostor98";
+        argv1[2] = "/thunderbolt";
+        CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
+              o.NoStor98 && !o.Stor98, "/nostor98 /thunderbolt");
+        argv1[2] = "/stor98";
+        CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+              "/nostor98 /stor98: a contradiction");
+        argv1[2] = "/uninstall";
+        CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+              "/nostor98 belongs to an install");
+        /* Chosen with the Thunderbolt support (owner, 2026-10-19,
+         * replacing "never unasked"). */
+        CHECK(inst_s98_decide(1, 1, 0, 0, 0, 0, &asked, &def) && asked && def,
+              "asked, Enter gives Y");
+        CHECK(inst_s98_decide(1, 1, 1, 0, 0, 0, &asked, &def) && !asked,
+              "/thunderbolt /yes: Y, not asked");
+        CHECK(!inst_s98_decide(1, 1, 1, 0, 1, 0, &asked, &def) && !asked,
+              "/nostor98: left out unasked");
+        CHECK(inst_s98_decide(1, 1, 1, 1, 0, 0, &asked, &def) && !asked,
               "/stor98: installed unasked");
-        CHECK(!inst_s98_decide(0, 1, 0, 1, 0, &asked, &def) && !asked,
+        CHECK(!inst_s98_decide(0, 1, 0, 1, 0, 0, &asked, &def) && !asked,
               "no Stor98 in the package: nothing");
-        CHECK(!inst_s98_decide(1, 1, 0, 0, 1, &asked, &def) && !asked,
-              "/list asks nothing");
-        CHECK(!inst_s98_decide(1, 0, 0, 0, 0, &asked, &def) && !asked &&
-              !inst_s98_decide(1, 0, 1, 1, 0, &asked, &def) && !asked,
+        CHECK(inst_s98_decide(1, 1, 0, 0, 0, 1, &asked, &def) && !asked,
+              "/list asks nothing, Y shown");
+        CHECK(!inst_s98_decide(1, 0, 0, 0, 0, 0, &asked, &def) && !asked &&
+              !inst_s98_decide(1, 0, 1, 1, 0, 0, &asked, &def) && !asked,
               "no Thunderbolt support in the run: Stor98 neither asked nor "
               "installed");
         CHECK(inst_s98_box_open(1, 1, 1) && !inst_s98_box_open(1, 1, 0) &&
@@ -3622,6 +3638,71 @@ static void test_s98(void)
           inst_s98_skip_text(INST_S98_NEEDS_TB, 1) != NULL &&
           inst_s98_skip_text(INST_S98_SKIP_SHARED, 1) != NULL,
           "every reason has its sentence");
+    /* Record 23 section 4.4, revision 23: a known tunnel drive. */
+    CHECK(inst_s98_known_tunnel(1, 1, INST_S98_AT_TUNNEL, 0) &&
+          inst_s98_known_tunnel(0, 1, INST_S98_AT_TUNNEL, 0) &&
+          !inst_s98_known_tunnel(0, 1, INST_S98_AT_INTERNAL, 1) &&
+          !inst_s98_known_tunnel(1, 1, INST_S98_AT_UNKNOWN, 1),
+          "present: only behind a tunnel");
+    CHECK(inst_s98_known_tunnel(1, 0, INST_S98_AT_UNKNOWN, 1) &&
+          !inst_s98_known_tunnel(1, 0, INST_S98_AT_UNKNOWN, 0),
+          "NT, not present: only one the record names");
+    CHECK(inst_s98_known_tunnel(0, 0, INST_S98_AT_UNKNOWN, 0),
+          "98 SE and ME, not present: gone with its tunnel");
+    /* Record 26 section 6.3, draft 16: 98 SE and ME's file update. */
+    CHECK(inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, -1),
+          "98: an older stor98.mpd, free: replaced as a file");
+    CHECK(!inst_s98_file_update(1, 1, INST_S98_SHARE_FREE, 1, -1),
+          "NT: never (SetupAPI updates Stor98 there)");
+    CHECK(!inst_s98_file_update(0, 0, INST_S98_SHARE_FREE, 1, -1) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_HOLD, 1, -1) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_SAME, 1, -1),
+          "98: not without Stor98 in the run, nor under the shared-file "
+          "rule");
+    CHECK(!inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 0, -1) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, -1, -1) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, 0) &&
+          !inst_s98_file_update(0, 1, INST_S98_SHARE_FREE, 1, 1),
+          "98: not with no file, an unreadable one, the same release or a "
+          "newer one");
+    CHECK(strcmp(inst_page_text(INST_PT_S98_UNUSED),
+                 "Please disconnect all external NVMe drives before "
+                 "proceeding") == 0 &&
+          strcmp(instS98DisconnectText, inst_page_text(INST_PT_S98_UNUSED))
+          == 0, "the one box's text, the owner's words");
+    /* The helper that did not finish (98 SE update, 2026-10-19). */
+    CHECK(inst_di_unfinished(INST_DI_V_NONE) &&
+          !inst_di_unfinished(INST_DI_V_INSTALLED) &&
+          !inst_di_unfinished(INST_DI_V_FAILED) &&
+          !inst_di_unfinished(INST_DI_V_REFUSED) &&
+          !inst_di_unfinished(INST_DI_V_CANCELLED),
+          "an unfinished helper is told from a failed or refused install");
+    /* XhciCmMode 0 said (owner, 2026-10-19). */
+    CHECK(inst_cm_mode_off("XhciCmMode", 0) &&
+          !inst_cm_mode_off("XhciCmMode", 1) &&
+          !inst_cm_mode_off("XhciCmApprove", 0) &&
+          !inst_cm_mode_off(NULL, 0) &&
+          strcmp(instCmOffText, "Thunderbolt 3 and USB4 will be turned off "
+                 "(XhciCmMode 0)") == 0, "the XhciCmMode 0 warning");
+    /* The Thunderbolt row's note (owner, 2026-10-19). */
+    {
+        char tt[400];
+        inst_tb_found_text(tt, sizeof(tt), "Thunderbolt Controller 15EB");
+        CHECK(strncmp(tt, "A Thunderbolt 3 / USB4 controller was found: "
+                      "Thunderbolt Controller 15EB. ", 74) == 0 &&
+              strstr(tt, "XhciCmApprove") != NULL, "found, with its name");
+        inst_tb_found_text(tt, sizeof(tt), "");
+        CHECK(strcmp(tt, inst_page_text(INST_PT_TB_T)) == 0,
+              "found, no name: the page's text");
+        inst_tb_found_text(tt, sizeof(tt),
+                           "0123456789012345678901234567890123456789XYZ");
+        CHECK(strstr(tt, "XYZ") == NULL && strstr(tt, "012345678901234567"
+                     "890123456789012345.") != NULL, "a long name cut");
+        CHECK(strstr(inst_page_text(INST_PT_TB), "(experimental)") != NULL &&
+              strstr(inst_page_text(INST_PT_TB_ABSENT), "No Thunderbolt 3 / "
+                     "USB4 controller was found") != NULL,
+              "the row says experimental, and whether one was found");
+    }
     CHECK(inst_s98_share(0, 0) == INST_S98_SHARE_FREE &&
           inst_s98_share(0, 1) == INST_S98_SHARE_FREE &&
           inst_s98_share(1, 1) == INST_S98_SHARE_SAME &&
