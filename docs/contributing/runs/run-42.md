@@ -1223,7 +1223,9 @@ revised (`24eec496`, then `7cc49d41`, `dfc07321`, and the leg fix below).
 The legs' package: `make-release.ps1 -Flavor release -Arch x86 -TestLabel
 "connection manager alone legs" -ReleasesDir out\cmorel -SkipQualtool
 -SkipUploadSet` at `dfc07321` (no Stor98), `xhcimark\`, `xhciinst\` and
-`xhcitr\` rebuilt by hand first (the gated build rebuilds none of them).
+`xhcitr\` rebuilt by hand first (the gated build rebuilds neither `xhcimark` nor
+`xhciinst`; its x86 run rebuilds `xhcitr`, which a later edit had made
+older than its sources again).
 
 ### The legs (development host A, QEMU, release flavour)
 
