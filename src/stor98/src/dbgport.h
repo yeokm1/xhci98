@@ -129,7 +129,7 @@
 #define STG_ENG_CAP_WAIT        0xBA    // arg: reason (1 parents, 2 children, 3 PRP page, 4 bounce, 5 barrier) | waiting parents << 8
 #define STG_ENG_CAP_RESUME      0xBB    // arg: free parents | free children << 8
 #define STG_ENG_BOUNCE          0xBC    // arg: CID | pages << 16 | forced << 24
-#define STG_ENG_MAP_FAIL        0xBD    // arg: reason (1 zero length, 2 alignment, 3 PA zero, 4 span not covered) | parent << 8
+#define STG_ENG_MAP_FAIL        0xBD    // arg: reason (1 zero length, 2 alignment, 3 PA zero, 4 span not covered, 5 caller buffer unresolved: parent failed) | parent << 8
 #define STG_ENG_CANCEL          0xBE    // arg: parent | cause << 8 | outstanding << 16
 #define STG_ENG_IDLE_FLUSH      0xBF    // arg: write generation; MD-7 (a) idle flush submitted
 #define STG_QUEUE_CAPS          0xC7    // arg: queue size | DSTRD << 16 | MPSMIN << 20 | result << 24 (0 ok)

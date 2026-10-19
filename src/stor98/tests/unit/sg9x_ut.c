@@ -14,6 +14,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#define SG9X_ARENA 0x10000UL   /* host addresses */
 #include "sg9x.h"
 
 static int failures;
@@ -88,6 +89,66 @@ int main(void)
     }
     check(n == 256 + 4096 + 8192 && memcmp(out, want, n) == 0, "assembled copy matches the fragments");
     check(memcmp(out + 256, pool + 7 * 4096 + 512, 64) != 0, "linear DataBuffer+offset would differ");
+
+    /* The production classifier and copy (Sg9xClassify, Sg9xCopy) over a fake
+       PORT_SRB / IOP / IOR / DCB laid out at the DDK offsets. */
+    {
+        static ULONG srb[0x50 / 4];         /* SCSI_REQUEST_BLOCK + SrbIopPointer */
+        static ULONG iop[0x100 / 4];
+        static UCHAR dcb[0x100];
+        static STOR98_SGD9X l[4];
+        const STOR98_SGD9X *got;
+        UCHAR sh;
+        unsigned char bb[4096 + 1024];
+
+        for (i = 0; i < sizeof(pool); i++) pool[i] = (unsigned char)(i * 13 + 5);
+        l[0].Count = 1; l[0].Linear = base + 6 * 4096 + 512;   /* 512 bytes */
+        l[1].Count = 2; l[1].Linear = base + 1 * 4096;         /* 1 KiB elsewhere */
+        l[2].Count = 0;
+        dcb[0x3C] = 9;
+        srb[0x40 / 4] = (ULONG)iop;
+        iop[0x20 / 4] = (ULONG)srb;
+        iop[0x04 / 4] = (ULONG)dcb;
+        iop[(0x64 + 0x1C) / 4] = (ULONG)l;
+        iop[(0x64 + 0x08) / 4] = 0;
+        check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_LINEAR, "classify: no SG flag -> linear");
+        iop[(0x64 + 0x08) / 4] = SG9X_IORF_SG;
+        check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_SG && got == l && sh == 9,
+              "classify: SG list found, shift 9");
+        check(Sg9xClassify(srb, (void *)(l[0].Linear + 4), &got, &sh) == SG9X_UNKNOWN && got == NULL,
+              "classify: DataBuffer not the first fragment -> unknown");
+        iop[(0x64 + 0x08) / 4] = SG9X_IORF_SG | SG9X_IORF_CHAR;
+        check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_SG && sh == 0,
+              "classify: IORF_CHAR_COMMAND -> byte counts");
+        iop[(0x64 + 0x08) / 4] = SG9X_IORF_SG;
+        iop[0x20 / 4] = (ULONG)srb + 4;
+        check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_UNKNOWN, "classify: IOP_srb does not point back -> unknown");
+        iop[0x20 / 4] = (ULONG)srb;
+        srb[0x40 / 4] = 0;
+        check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_UNKNOWN, "classify: no IOP -> unknown");
+        srb[0x40 / 4] = (ULONG)iop + 2;
+        check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_UNKNOWN, "classify: misaligned IOP -> unknown");
+        srb[0x40 / 4] = (ULONG)iop;
+        iop[0x04 / 4] = 0x100;
+        check(Sg9xClassify(srb, (void *)l[0].Linear, &got, &sh) == SG9X_UNKNOWN, "classify: DCB outside the arena -> unknown");
+        iop[0x04 / 4] = (ULONG)dcb;
+
+        /* read direction: bounce -> two discontiguous fragments, from offset 256 */
+        for (i = 0; i < sizeof(bb); i++) bb[i] = (unsigned char)(i * 3 + 1);
+        check(Sg9xCopy(l, 9, 256, bb, 256 + 1024, TRUE), "copy to caller: 1280 bytes across two fragments");
+        check(memcmp(pool + 6 * 4096 + 512 + 256, bb, 256) == 0 && memcmp(pool + 4096, bb + 256, 1024) == 0,
+              "copy to caller: bytes land in each fragment");
+        /* write direction */
+        memset(bb, 0, sizeof(bb));
+        check(Sg9xCopy(l, 9, 0, bb, 1536, FALSE) && memcmp(bb, pool + 6 * 4096 + 512, 512) == 0 &&
+              memcmp(bb + 512, pool + 4096, 1024) == 0, "copy from caller: both fragments in order");
+        /* a span past the list fails after one good fragment, and copies nothing */
+        memset(bb, 0x3C, sizeof(bb));
+        memcpy(want, pool + 4096, 1024);
+        check(!Sg9xCopy(l, 9, 512, bb, 2048, TRUE), "copy past the list refused");
+        check(memcmp(pool + 4096, want, 1024) == 0, "refused copy wrote nothing to the caller");
+        check(!Sg9xCopy(l, 9, 512, bb, 2048, FALSE) && bb[0] == 0x3C, "refused copy wrote nothing to the bounce");
+    }
 
     printf("%d failure(s)\n", failures);
     return failures;

@@ -62,55 +62,25 @@
 #endif
 
 #define ENG_ALL_ONES    0xFFFFFFFF
+#define ENG_MAP_UNRESOLVED  5     // STG_ENG_MAP_FAIL: the caller's buffer could not be resolved (9x)
 
-#ifdef NVME2K_W9X
-//
-// The caller's buffer on 9x (sg9x.h). SCSIPORT.PDR keeps the IOP of each SRB
-// it hands the miniport in the dword just past the SRB (its own
-// ScsiPortGetPhysicalAddress reads it there: obj1 0x03BC), and the IOR sits
-// at IOP + 0x64 (IOR_flags +0x08, IOR_buffer_ptr +0x1C); the physical DCB is
-// at IOP + 4, its apparent block shift at +0x3C. When the IOR carries a
-// logical scatter/gather list whose first fragment is Srb->DataBuffer, byte
-// offsets are resolved through that list, as SCSIPORT does; otherwise the
-// buffer is linear and DataBuffer + offset is right.
-//
-#define ENG9X_SRB_IOP       0x40
-#define ENG9X_IOR           0x64
-#define ENG9X_IOR_FLAGS     (ENG9X_IOR + 0x08)
-#define ENG9X_IOR_BUFFER    (ENG9X_IOR + 0x1C)
-#define ENG9X_IOP_PDCB      0x04
-#define ENG9X_DCB_SHIFT     0x3C
-#define ENG9X_IORF_SG       0x00000002
-
-static const STOR98_SGD9X *EngSg9x(IN PSCSI_REQUEST_BLOCK Srb, OUT UCHAR *Shift)
-{
-    PUCHAR iop = *(PUCHAR *)((PUCHAR)Srb + ENG9X_SRB_IOP);
-    PUCHAR dcb;
-    const STOR98_SGD9X *sgd;
-
-    if (iop == NULL || (*(PULONG)(iop + ENG9X_IOR_FLAGS) & ENG9X_IORF_SG) == 0) {
-        return NULL;
-    }
-    dcb = *(PUCHAR *)(iop + ENG9X_IOP_PDCB);
-    sgd = *(const STOR98_SGD9X **)(iop + ENG9X_IOR_BUFFER);
-    if (dcb == NULL || sgd == NULL || sgd[0].Linear != (ULONG)(ULONG_PTR)Srb->DataBuffer) {
-        return NULL;
-    }
-    *Shift = dcb[ENG9X_DCB_SHIFT];
-    return sgd;
-}
-#endif
-
-// Linear address of byte Offset of the SRB's data (see EngSg9x on 9x).
+// Linear address of byte Offset of the SRB's data, or NULL when it cannot be
+// established (9x: an SG list that does not cover it, or an unknown layout;
+// sg9x.h, Sg9xClassify).
 static PUCHAR EngCallerVa(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset)
 {
 #ifdef NVME2K_W9X
     UCHAR shift;
     ULONG lin, run;
-    const STOR98_SGD9X *sgd = EngSg9x(Srb, &shift);
+    const STOR98_SGD9X *sgd;
 
-    if (sgd != NULL && Sg9xResolve(sgd, shift, Offset, &lin, &run)) {
-        return (PUCHAR)(ULONG_PTR)lin;
+    switch (Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift)) {
+    case SG9X_LINEAR:
+        break;
+    case SG9X_SG:
+        return Sg9xResolve(sgd, shift, Offset, &lin, &run) ? (PUCHAR)(ULONG_PTR)lin : NULL;
+    default:
+        return NULL;
     }
 #endif
     return (PUCHAR)Srb->DataBuffer + Offset;
@@ -118,31 +88,22 @@ static PUCHAR EngCallerVa(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset)
 
 // Copy Bytes between the bounce pages and the SRB's data at Offset, fragment
 // by fragment on 9x. ToCaller: bounce -> caller (a read), else caller ->
-// bounce (a write).
-static VOID EngCallerCopy(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset, IN PUCHAR Bounce,
-                          IN ULONG Bytes, IN BOOLEAN ToCaller)
+// bounce (a write). FALSE, with nothing copied, when the whole span cannot
+// be resolved: the caller fails the parent instead of guessing an address.
+static BOOLEAN EngCallerCopy(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset, IN PUCHAR Bounce,
+                             IN ULONG Bytes, IN BOOLEAN ToCaller)
 {
 #ifdef NVME2K_W9X
     UCHAR shift;
-    ULONG lin, run, n;
-    const STOR98_SGD9X *sgd = EngSg9x(Srb, &shift);
+    const STOR98_SGD9X *sgd;
 
-    if (sgd != NULL) {
-        while (Bytes != 0 && Sg9xResolve(sgd, shift, Offset, &lin, &run)) {
-            n = (run < Bytes) ? run : Bytes;
-            if (ToCaller) {
-                RtlCopyMemory((PUCHAR)(ULONG_PTR)lin, Bounce, n);
-            } else {
-                RtlCopyMemory(Bounce, (PUCHAR)(ULONG_PTR)lin, n);
-            }
-            Offset += n;
-            Bounce += n;
-            Bytes -= n;
-        }
-        if (Bytes == 0) {
-            return;
-        }
-        // Past the list: the old linear rule for the rest (not expected).
+    switch (Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift)) {
+    case SG9X_LINEAR:
+        break;
+    case SG9X_SG:
+        return Sg9xCopy(sgd, shift, Offset, Bounce, Bytes, ToCaller);
+    default:
+        return FALSE;
     }
 #endif
     if (ToCaller) {
@@ -150,6 +111,7 @@ static VOID EngCallerCopy(IN PSCSI_REQUEST_BLOCK Srb, IN ULONG Offset, IN PUCHAR
     } else {
         RtlCopyMemory(Bounce, (PUCHAR)Srb->DataBuffer + Offset, Bytes);
     }
+    return TRUE;
 }
 
 static ULONG EngNow(IN PHW_DEVICE_EXTENSION DevExt)
@@ -785,6 +747,7 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
                           IN PNVME_COMMAND Cmd)
 {
     PUCHAR va = (PUCHAR)Srb->DataBuffer + c->BufOffset;
+    PUCHAR callerVa;
     PHYSICAL_ADDRESS pa;
     ULONG len, need, offsetInPage, firstBytes, pages, i;
     PULONGLONG list;
@@ -799,8 +762,9 @@ static ULONG EngMapCaller(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
     }
     // PRP entry 1: DWORD aligned (bits 1:0 zero); its page offset is the
     // buffer's page offset.
-    if ((pa.LowPart & 3) != 0 ||
-        (pa.LowPart & (PAGE_SIZE - 1)) != ((ULONG)(ULONG_PTR)EngCallerVa(Srb, c->BufOffset) & (PAGE_SIZE - 1))) {
+    callerVa = EngCallerVa(Srb, c->BufOffset);
+    if (callerVa == NULL || (pa.LowPart & 3) != 0 ||
+        (pa.LowPart & (PAGE_SIZE - 1)) != ((ULONG)(ULONG_PTR)callerVa & (PAGE_SIZE - 1))) {
         return 2;
     }
     offsetInPage = pa.LowPart & (PAGE_SIZE - 1);
@@ -966,8 +930,23 @@ static ULONG EngIssueRwChild(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG Index)
             c->State = ENG_CH_FREE;
             return ENG_WAIT_PRP;
         }
-        if (c->Opcode == NVME_CMD_WRITE) {
-            EngCallerCopy(srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), bytes, FALSE);
+        if (c->Opcode == NVME_CMD_WRITE &&
+            !EngCallerCopy(srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), bytes, FALSE)) {
+            // The caller's buffer cannot be resolved (9x): fail the parent;
+            // children already issued still quiesce first (the dispatcher
+            // finishes it once none is outstanding).
+            if (c->PrpPage != ENG_NONE) {
+                EngPrpFree(DevExt, c->PrpPage);
+                c->PrpPage = ENG_NONE;
+            }
+            EngBounceFree(DevExt, c->BouncePage, c->BounceCount);
+            c->BouncePage = ENG_NONE;
+            c->BounceCount = 0;
+            c->State = ENG_CH_FREE;
+            DBGSTAGE(STG_ENG_MAP_FAIL, ENG_MAP_UNRESOLVED | (Index << 8));
+            EngParentError(p, SRB_STATUS_ERROR, SCSI_SENSE_HARDWARE_ERROR, 0x44, 0x00, 0);
+            p->BlocksLeft = 0;
+            return ENG_WAIT_NONE;
         }
         DBGSTAGE(STG_ENG_BOUNCE, c->Cid | (pages << 16) | ((ULONG)(DevExt->Tun.ForceBounce != 0) << 24));
     }
@@ -1213,6 +1192,11 @@ static VOID EngDispatchEx(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN SoftwareOnl
             }
             if (why != ENG_WAIT_NONE) {
                 break;
+            }
+            if (p->ErrSrbStatus != 0 && p->Outstanding == 0) {
+                // Failed before any child was outstanding (EngIssueRwChild).
+                EngFinishParent(DevExt, (ULONG)idx);
+                continue;
             }
             p->State = ENG_PA_ISSUED;
             continue;
@@ -1519,6 +1503,7 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
     PENG_PARENT p = NULL;
     ULONG reason = 0;
     BOOLEAN ok = (BOOLEAN)((Status & 0x7FF) == 0);
+    BOOLEAN copyFailed;
 
     UNREFERENCED_PARAMETER(Dw0);
 
@@ -1556,8 +1541,11 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
     }
 
     // Data copies first, while everything is still owned.
-    if (p != NULL && p->Srb != NULL && ok && c->BouncePage != ENG_NONE && c->Opcode == NVME_CMD_READ) {
-        EngCallerCopy(p->Srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), c->Bytes, TRUE);
+    copyFailed = FALSE;
+    if (p != NULL && p->Srb != NULL && ok && c->BouncePage != ENG_NONE && c->Opcode == NVME_CMD_READ &&
+        !EngCallerCopy(p->Srb, c->BufOffset, EngBounceVa(DevExt, c->BouncePage), c->Bytes, TRUE)) {
+        DBGSTAGE(STG_ENG_MAP_FAIL, ENG_MAP_UNRESOLVED | ((ULONG)c->Parent << 8));
+        copyFailed = TRUE;
     }
     if (p != NULL && p->Srb != NULL && p->Kind == ENG_K_LOG && c->PrpPage != ENG_NONE &&
         p->Cancel == ENG_CANCEL_NONE) {
@@ -1587,6 +1575,10 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
         return;
     }
     p->Outstanding--;
+    if (copyFailed && p->Kind != ENG_K_SHUTDOWN) {
+        EngParentError(p, SRB_STATUS_ERROR, SCSI_SENSE_HARDWARE_ERROR, 0x44, 0x00, 0);
+        p->BlocksLeft = 0;
+    }
     if (!ok && !(p->Flags & ENG_PF_PRESET)) {
         if (p->Kind == ENG_K_SHUTDOWN) {
             // The shutdown proceeds; the failed Flush is logged and the
