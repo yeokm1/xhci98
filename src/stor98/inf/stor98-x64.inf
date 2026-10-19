@@ -8,8 +8,9 @@
 ; WDM\NVMe2K.inf.
 ;
 ; Only the NTamd64 models section lists a device, so 32-bit Windows does not
-; offer this INF; the 32-bit targets install from x86\stor98.inf. The
-; undecorated models section exists, empty, because ChkINF wants one.
+; offer this INF; the 32-bit targets install from x86\stor98.inf. There is
+; no undecorated models section, empty or not: xhci98's installer refuses a
+; 64-bit INF that has one (inst_inf_arch_ok), as Stor98 0.4.0.0's had none.
 ;
 ; Data disks only. The service is demand-start (StartType=3): Plug and Play
 ; loads stor98.sys when it enumerates an NVMe controller, so a driver that
@@ -45,9 +46,6 @@ stor98.sys=1
 
 [Manufacturer]
 %Mfg%=Stor98_Models,NTamd64
-
-; Empty: no models for 32-bit Windows (see the header).
-[Stor98_Models]
 
 [Stor98_Models.NTamd64]
 %Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802

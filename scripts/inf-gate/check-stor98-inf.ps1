@@ -51,6 +51,19 @@ function Get-InfFault {
     if ($got -cne $Want) { return "its DriverVer is '$got', and src\xhci_version.h says '$Want'" }
     $sig = [regex]::Match($t, '(?im)^[ \t]*Signature[ \t]*=[ \t]*"([^"]*)"')
     if (-not $sig.Success -or $sig.Groups[1].Value -ne $Signature) { return "its Signature is not `"$Signature`"" }
+    if ($Signature -eq '$Windows NT$') {
+        # The 64-bit INF: no undecorated models section, empty or not, for one
+        # the [Manufacturer] line names - xhci98's installer refuses such an
+        # INF (inst_inf_arch_ok), and with it every x64 install (2026-10-19).
+        $mfg = [regex]::Match($t, '(?ims)^[ \t]*\[Manufacturer\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
+        if (-not $mfg.Success) { return "it has no [Manufacturer] section" }
+        foreach ($m in [regex]::Matches($mfg.Groups[1].Value, '(?m)^[ \t]*[^;\s][^=\r\n]*=[ \t]*([^,;\r\n]+)')) {
+            $name = $m.Groups[1].Value.Trim()
+            if ([regex]::IsMatch($t, '(?im)^[ \t]*\[' + [regex]::Escape($name) + '\][ \t]*\r?$')) {
+                return "it has an undecorated models section [$name], which xhci98's 64-bit installer refuses"
+            }
+        }
+    }
     return ""
 }
 
@@ -86,7 +99,25 @@ try {
         } finally {
             Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
         }
-        Write-Host "  check-stor98-inf.ps1 self-test: $($cases.Count) cases"
+        $b64 = [System.IO.File]::ReadAllText($infs[1].File)
+        $c64 = @(
+            @{ T = $b64; Ok = $true; Why = "the committed x64 INF" },
+            @{ T = $b64.Replace("[Stor98_Models.NTamd64]", "[Stor98_Models]`r`n`r`n[Stor98_Models.NTamd64]"); Ok = $false; Why = "an empty undecorated models section in the x64 INF" }
+        )
+        $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("stor98-inf-" + [System.IO.Path]::GetRandomFileName())
+        New-Item -ItemType Directory -Path $tmp | Out-Null
+        try {
+            $i = 0
+            foreach ($c in $c64) {
+                $f = Join-Path $tmp ("x{0}.inf" -f $i); $i++
+                [System.IO.File]::WriteAllText($f, $c.T, (New-Object System.Text.ASCIIEncoding))
+                $why = Get-InfFault -File $f -Signature '$Windows NT$' -Want $want
+                if (($why -eq "") -ne $c.Ok) { throw "self-test: $($c.Why) was $(if ($c.Ok) { 'refused: ' + $why } else { 'accepted' })." }
+            }
+        } finally {
+            Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host "  check-stor98-inf.ps1 self-test: $($cases.Count + $c64.Count) cases"
         exit 0
     }
     if ($Path -ne "") { $infs = @(@{ File = $Path; Sig = '$CHICAGO$' }) }
