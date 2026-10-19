@@ -12868,7 +12868,13 @@ static void tb_question(void)
     }
     out("Thunderbolt 3 / USB4 support (experimental)\n");
     if (tbNhiPresent) {
-        out("  A Thunderbolt 3 / USB4 controller was found: %s.\n", tbNhiName);
+        if (strlen(tbNhiName) + 49 <= INST_COLUMNS) {
+            out("  A Thunderbolt 3 / USB4 controller was found: %s.\n",
+                tbNhiName);
+        } else {
+            out("  A Thunderbolt 3 / USB4 controller was found:\n    %s.\n",
+                tbNhiName);
+        }
     } else {
         out("  No Thunderbolt 3 / USB4 controller was found (some laptops show "
             "it only with\n  a device plugged in or a BIOS setting): answer Y "
@@ -16236,11 +16242,13 @@ static const char stLongName[] =
 /* A run of the screens; longest: names, ids and paths at their longest. */
 static void st_screens_once(int longest)
 {
+    /* The Thunderbolt question answered Y: Enter gives N since record 23
+     * revision 23, and the connection manager's questions follow a Y. */
     static const char *const nt1[] = {
-        "", "", "", "9", "", "", "", "", "C:\\WINDOWS\\X", "", "n", NULL
+        "y", "", "", "9", "", "", "", "", "C:\\WINDOWS\\X", "", "n", NULL
     };
     static const char *const x9[] = {
-        "", "", "", "", "", "", "", "", "C:\\Program Files\\xHCI98", "",
+        "y", "", "", "", "", "", "", "", "C:\\Program Files\\xHCI98", "",
         "y", "n", NULL
     };
     static const char *const un[] = { "REMOVE", NULL };
