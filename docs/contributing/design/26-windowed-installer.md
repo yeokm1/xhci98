@@ -1,6 +1,9 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 7, 2026-10-18, reviewed and revised (an INF copy made by
+Status: draft 8, 2026-10-19 (task 42-A.21, the owner's request of that
+day: the connection manager alone, and Windows 8 and 8.1 for it; sections
+1.2, 5.1, 5.3, 9.1, 9.3, 10, 12 and 13, and record 23 revision 13);
+draft 7, 2026-10-18, reviewed and revised (an INF copy made by
 an update recorded without the device); draft 6, 2026-10-18, reviewed
 and revised (the INF inventory
 around every settle as well); draft 5, 2026-10-18, reviewed and revised
@@ -71,7 +74,9 @@ asks for the restart.
   that entry runs (section 9, task 42-A.3).
 - Every target of the package: Windows 98 SE, ME, 2000, XP, XP x64, Vista
   and 7 in both architectures, one 32-bit program that starts everywhere and
-  under WOW64 starts the x64 one itself (section 4).
+  under WOW64 starts the x64 one itself (section 4); and from draft 8
+  Windows 8 and 8.1, in both architectures, for the Thunderbolt 3 / USB4
+  connection manager alone (record 23 section 4.5).
 
 ### 1.3 Not in scope
 
@@ -305,7 +310,13 @@ The package's name and version, the system found (Windows 98 SE, ME, 2000,
 XP, XP x64, Vista, 7, with the architecture), one paragraph saying what the
 installer will do (install or update the xHCI98 USB 3.x drivers, put the
 xHCI98 tools in a folder, and ask for a restart at the end), the log's
-path, and "Please wait" while `READ` and `PLAN` run. A refusal of record 23
+path, and "Please wait" while `READ` and `PLAN` run. On Windows 8 and 8.1
+(draft 8) the paragraph says instead that the installer puts the xHCI98
+Thunderbolt 3 / USB4 connection manager and the xHCI98 tools on this
+computer, that Windows' own USB 3 driver keeps running the USB
+controllers, and that it asks for a restart at the end; the system line
+names 8 or 8.1 by the version `RtlGetVersion` reads (record 23 section
+4.3). A refusal of record 23
 section 4 (the ZIP folder, a mixed architecture, a wrong flavour, a stale
 `.sys`, a wrong Windows, rights) ends here: the page shows the refusal's
 text and Next is disabled; Cancel closes with exit 1. Under `/uninstall`
@@ -334,7 +345,7 @@ Check boxes, one a line, each with one sentence:
 
 | Component | Ticked | Can be unticked | What it is |
 |---|---|---|---|
-| xHCI98 USB 3.x host controller driver (`xhci98.sys`) and UAS driver (`xhciuas.sys`) | always | no (shown ticked and disabled: the package is these two) | the drivers for the controller, its hubs and devices, and UAS disks |
+| xHCI98 USB 3.x host controller driver (`xhci98.sys`) and UAS driver (`xhciuas.sys`) | yes, but on Windows 8 and 8.1 (draft 8) | on 2000 to 7, when the package carries the connection manager (record 23 section 4.5; `/cmonly` preselects it unticked); on 98 SE and ME no, shown ticked and disabled; on 8 and 8.1 shown unticked and disabled | the drivers for the controller, its hubs and devices, and UAS disks; on 8 and 8.1 the sentence says Windows' own USB 3 driver runs the controllers there; unticked on 2000 to 7, the sentence under the box says the run leaves an installed `xhci98.sys` as it is and that the uninstall removes the whole package |
 | Thunderbolt 3 / USB4 support (`xhcicm.sys`) | as record 23 section 8.5 decides: with a controller present yes, with none no | yes | the connection manager; its warning sentence (a device plugged into that port can reach the computer's memory) stands under the box, with "see `XhciCmApprove` on the Thunderbolt settings page" |
 | Stor98, the NVMe driver (bundled) | never unasked (record 23 section 4.4; owner, 2026-10-18) | yes | shown only when the flavour directory carries it; one sentence saying what it is for (an NVMe drive behind a Thunderbolt or USB4 tunnel, or an internal one) and that it installs on NVMe drives that have no driver (section 6.3) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
@@ -342,7 +353,10 @@ Check boxes, one a line, each with one sentence:
 
 The component page is not shown under `/uninstall`. Unticking Thunderbolt
 support does what record 23 section 8.5's N does; unticking the tray tool
-what `/notray` does.
+what `/notray` does. Unticking the USB drivers does what `/cmonly` does:
+the Thunderbolt box is then ticked and disabled (it is all the run
+installs), the USB settings page is not shown, and the plan is made again;
+ticking them again gives the Thunderbolt box back its own state.
 
 ### 5.4 The USB settings
 
@@ -773,6 +787,24 @@ shows (`tools\nusb36-extracted\_nusb.inf`: a display name and a
 `RUNDLL32 ... LaunchINFSection` command); 2000 to 7 read the rest. The key
 is deleted by the uninstall, last but for the directory.
 
+From draft 8 the display name
+follows what the machine has when the entry is written: with the `xhci98`
+service read as not registered and either the `xhcicm` service registered
+or this run one without the USB drivers (the connection manager alone,
+record 23 section 4.5; the second for a run that staged the connection
+manager with no controller present, which registers no service yet),
+"xHCI98 Thunderbolt 3 / USB4 connection manager 3.1.0.0"; otherwise the
+name above (`inst_arp_cm_only`, host-tested). The key, the
+program it runs and the uninstall are the same either way, so moving
+between the two rewrites the one entry. The owner's rule (2026-10-19,
+task 42-A.21): "let user update existing driver by installing over it.
+Should not have multiple entries in Add remove programs in Control
+Panel." So every run, whatever components it installs over whatever is
+there, is an update in place of the one key above, never a second key;
+on x64 the entry is written by the 64-bit program into the native view
+(the 32-bit window starts the x64 one under WOW64 and never writes the
+registry there, section 4), so no `Wow6432Node` entry is made.
+
 ### 9.2 Running from the install directory
 
 The entry names the copy in the install directory, which is in use while
@@ -808,7 +840,13 @@ gated on the one before, shown on the Progress page:
    and the window's equivalent of the typed word: a check box "I have a
    keyboard and mouse that do not go through this driver, or I accept
    that the USB ones stop working" that enables the Remove button (W7).
-   The console keeps `REMOVE`.
+   The console keeps `REMOVE`. Where the `xhci98` service is not
+   registered and `xhcicm`'s is (draft 8: the connection manager alone,
+   record 23 section 9.1's rule), the page's title, warning and
+   box are the connection manager's: "Remove the xHCI98 Thunderbolt 3 /
+   USB4 connection manager", record 23 section 9.1's second text, and "I
+   have closed every program that uses a device connected through a
+   Thunderbolt or USB4 port".
 2. The pending-install check, the reading of the devices.
 3. On NT: first the safe-removal mark service stopped and every mark it
    wrote removed from the units' `LowerFilters`, present or not (record 21
@@ -894,6 +932,7 @@ page:
 | `/from <dir>` | the relaunch of section 9.2; refused from a package directory |
 | `/to <path>` | preselects the tools folder; the page still shows it |
 | `/thunderbolt`, `/stor98`, `/notray` | preselect the components; the page still shows them |
+| `/cmonly` | (draft 8) preselects the USB drivers unticked on 2000 to 7; refused on 98 SE and ME with the console's text; on 8 and 8.1 changes nothing |
 | `/set Name=Value` | preselects a setting (and makes it "changed", so it is written); the page still shows it |
 | `/defaults` | as record 23 section 7.1: every current value kept and no value question asked, which in the window means the settings pages are shown with the values in force and nothing marked changed (a page left alone writes nothing) |
 | `/force`, `/restage` | as record 23; the Found page shows what they add |
@@ -986,6 +1025,10 @@ this list is the whole of it:
 - Section 13: D2 (the 98 SE and ME route) gains the helper; D10, D11 and
   D14 unchanged.
 
+Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
+(the connection manager alone), 4.3 (Windows 8 and 8.1, `RtlGetVersion`),
+5.10, 7.1 (`/cmonly`), 8.5, 9.1, 9.5, 10 and 13 (D17 to D19).
+
 ## 13. Decisions taken in writing this (the orchestrator's, owner to confirm)
 
 - **W1** The window is a second pair of executables, `XHCIWIZ.EXE` and
@@ -1036,6 +1079,13 @@ this list is the whole of it:
   reconnection, as Stor98's readme asks per system (section 6.3).
 - **W14** An incomplete uninstall keeps its entry point, records and
   helper for the next run (section 9.3).
+- **W15** (draft 8) The USB drivers' box can be unticked on 2000 to 7
+  when the package carries the connection manager, and then ticks and
+  locks the Thunderbolt box; on 98 SE and ME it stays ticked and locked,
+  on 8 and 8.1 unticked and locked (section 5.3; record 23 D17).
+- **W16** (draft 8) One Add/Remove Programs entry, its display name by
+  what is registered when it is written, and the uninstall's warning and
+  agreement by the same reading (sections 9.1 and 9.3).
 - **W12** The uninstall and the device modes need no package: they run
   from the install directory's copy or the temporary one and read the
   system alone; the package-layout refusal stays for an install and an

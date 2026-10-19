@@ -123,6 +123,13 @@ static int tbPresent;
 static int tbDefault;
 static int tbInstalled;
 static int tbChoice;
+/* The USB drivers' box (record 26 section 5.3, draft 8): the choice, and
+ * whether it can be unticked; the Thunderbolt box's own choice while the
+ * USB drivers are out and it is locked on. */
+static int usbChoice = 1;
+static int usbOffered;
+static int usbNotHere;
+static int tbOwn;
 static int trayChoice = 1;
 static int trayHere;
 
@@ -155,6 +162,23 @@ static char dirNow[WIZ_PATH];
 /* The settings chosen on the pages and in Advanced (record 26 section
  * 5.4): set, and the value; handed to the engine at Install. */
 static int choiceSet[INST_MAX_VALUES];
+
+/* A choice whose driver is in the run as the components stand: a value of
+ * the USB drivers' INFs only with them ticked, the connection manager's
+ * only with it. A choice of a component left out is kept, not shown and
+ * not handed to the engine, so ticking the box again brings it back. */
+static int choice_live(int v)
+{
+    int inf = instValues[v].Inf;
+
+    if (inf == INST_INF_XHCI || inf == INST_INF_UAS) {
+        return usbChoice;
+    }
+    if (inf == INST_INF_CM) {
+        return tbChoice;
+    }
+    return 1;
+}
 static INST_U32 choiceVal[INST_MAX_VALUES];
 
 static INST_ROW rows[INST_MAX_VALUES];
@@ -379,8 +403,13 @@ static unsigned __stdcall job_main(void *arg)
             readCode = inst_eng_read();
         }
         if (readCode < 0 && !uninstallMode) {
+            usbChoice = inst_eng_usb_state(&usbOffered, &usbNotHere);
             inst_eng_tb_state(&tbHave, &tbPresent, &tbDefault, &tbInstalled);
             tbChoice = tbHave && (opts->Thunderbolt || tbDefault);
+            tbOwn = tbChoice;
+            if (!usbChoice) {
+                tbChoice = tbHave;
+            }
             inst_eng_tb_choose(tbChoice);
             /* Never unasked (record 23 section 4.4): ticked only by
              * /stor98. */
@@ -415,7 +444,8 @@ static unsigned __stdcall job_main(void *arg)
         opts->NoTray = !trayChoice;
         opts->SetCount = 0;
         for (i = 0; i < INST_MAX_VALUES; i++) {
-            inst_eng_choose_value(i, choiceSet[i], choiceVal[i]);
+            inst_eng_choose_value(i, choiceSet[i] && choice_live(i),
+                                  choiceVal[i]);
         }
         for (i = 0; i < INST_S98_COUNT; i++) {
             inst_eng_s98_choose_value(i, s98Choice && s98WinSet[i],
@@ -480,27 +510,33 @@ static void next_text(const char *text)
     }
 }
 
+/* The version as record 23 section 4.3 reads it (RtlGetVersion on NT). */
+static void os_version(OSVERSIONINFOA *v)
+{
+    if (!inst_eng_os_read(v) && v->dwOSVersionInfoSize == 0) {
+        memset(v, 0, sizeof(*v));
+    }
+}
+
+/* Windows 8 or 8.1: the connection manager alone (record 23 section 4.5). */
+static int is_cm_only_system(void)
+{
+    OSVERSIONINFOA v;
+
+    os_version(&v);
+    return inst_os_kind(v.dwPlatformId == VER_PLATFORM_WIN32_NT,
+                        v.dwMajorVersion, v.dwMinorVersion,
+                        v.dwBuildNumber & 0xFFFFUL) == INST_OS_CMONLY;
+}
+
 static const char *system_name(char *out, size_t cap)
 {
     OSVERSIONINFOA v;
-    const char *name = "Windows";
+    const char *name;
 
-    memset(&v, 0, sizeof(v));
-    v.dwOSVersionInfoSize = sizeof(v);
-    GetVersionExA(&v);
-    if (v.dwPlatformId == VER_PLATFORM_WIN32_WINDOWS) {
-        name = v.dwMinorVersion >= 90 ? "Windows ME" : "Windows 98 SE";
-    } else if (v.dwMajorVersion == 5 && v.dwMinorVersion == 0) {
-        name = "Windows 2000";
-    } else if (v.dwMajorVersion == 5 && v.dwMinorVersion == 1) {
-        name = "Windows XP";
-    } else if (v.dwMajorVersion == 5 && v.dwMinorVersion == 2) {
-        name = "Windows XP x64";
-    } else if (v.dwMajorVersion == 6 && v.dwMinorVersion == 0) {
-        name = "Windows Vista";
-    } else if (v.dwMajorVersion == 6 && v.dwMinorVersion == 1) {
-        name = "Windows 7";
-    }
+    os_version(&v);
+    name = inst_os_name(v.dwPlatformId == VER_PLATFORM_WIN32_NT,
+                        v.dwMajorVersion, v.dwMinorVersion);
     _snprintf(out, cap - 1, "This computer: %s (%lu.%lu.%lu %s), %s.", name,
               (unsigned long)v.dwMajorVersion, (unsigned long)v.dwMinorVersion,
               (unsigned long)(v.dwBuildNumber & 0xFFFFUL), v.szCSDVersion,
@@ -569,18 +605,29 @@ static void welcome_texts(HWND dlg)
     char title[128];
     char sys[256];
     char logLine[WIZ_PATH + 16];
+    /* The connection manager alone: on 8 and 8.1 the install's texts; on a
+     * machine with it alone registered the uninstall's (record 26 draft
+     * 8). */
+    int cm = uninstallMode ? inst_eng_cm_only_machine() : is_cm_only_system();
 
     _snprintf(title, sizeof(title) - 1, "%s %s",
-              uninstallMode ? inst_page_text(INST_PT_UN_TITLE)
-                            : "xHCI98 USB 3.x drivers, release",
+              uninstallMode ? inst_page_text(cm ? INST_PT_UN_TITLE_CM :
+                                             INST_PT_UN_TITLE)
+                            : cm ? "xHCI98 Thunderbolt 3 / USB4 connection "
+                                   "manager, release"
+                                 : "xHCI98 USB 3.x drivers, release",
               uninstallMode ? "" : XHCI_VER_STR);
     title[sizeof(title) - 1] = '\0';
     SetDlgItemTextA(dlg, IDC_TITLE, title);
     SetDlgItemTextA(dlg, IDC_TEXT, inst_page_text(uninstallMode ?
-                                                  INST_PT_UN_WARN :
+                                                  (cm ? INST_PT_UN_WARN_CM :
+                                                   INST_PT_UN_WARN) :
+                                                  cm ? INST_PT_WELCOME_CM :
                                                   INST_PT_WELCOME));
     if (uninstallMode) {
-        SetDlgItemTextA(dlg, IDC_U_AGREE, inst_page_text(INST_PT_UN_AGREE));
+        SetDlgItemTextA(dlg, IDC_U_AGREE, inst_page_text(cm ?
+                                                         INST_PT_UN_AGREE_CM :
+                                                         INST_PT_UN_AGREE));
     }
     SetDlgItemTextA(dlg, IDC_SYSTEM, system_name(sys, sizeof(sys)));
     _snprintf(logLine, sizeof(logLine) - 1, "The log: %s",
@@ -679,6 +726,7 @@ static void replan(void)
     if (busy) {
         return;
     }
+    inst_eng_usb_choose(usbChoice);
     inst_eng_tb_choose(tbChoice);
     inst_eng_s98_choose(s98Choice);
     EnterCriticalSection(&textLock);
@@ -691,17 +739,45 @@ static void replan(void)
 
 /* ---- the Components page (record 26 section 5.3) ------------------------- */
 
+/* The USB drivers' box and what it locks (record 26 section 5.3, draft
+ * 8): unticked, the Thunderbolt box is ticked and disabled, it being all
+ * the run installs; ticked again, the Thunderbolt box has its own state. */
+static void comp_usb_state(HWND dlg)
+{
+    int usb = IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED;
+
+    SetDlgItemTextA(dlg, IDC_C_DRIVERS_T, inst_page_text(
+                    usbNotHere ? INST_PT_DRIVERS_T8 :
+                    usb ? INST_PT_DRIVERS_T : INST_PT_DRIVERS_OFF));
+    if (!usb && tbHave) {
+        CheckDlgButton(dlg, IDC_C_TB, BST_CHECKED);
+    }
+    EnableWindow(GetDlgItem(dlg, IDC_C_TB), usb);
+}
+
+static void comp_usb_click(HWND dlg)
+{
+    int usb = IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED;
+
+    if (!usb) {
+        tbOwn = IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED;
+    } else {
+        CheckDlgButton(dlg, IDC_C_TB, tbOwn ? BST_CHECKED : BST_UNCHECKED);
+    }
+    comp_usb_state(dlg);
+}
+
 static void comp_fill(HWND dlg)
 {
     SetDlgItemTextA(dlg, IDC_C_DRIVERS, inst_page_text(INST_PT_DRIVERS));
-    SetDlgItemTextA(dlg, IDC_C_DRIVERS_T, inst_page_text(INST_PT_DRIVERS_T));
-    CheckDlgButton(dlg, IDC_C_DRIVERS, BST_CHECKED);
-    EnableWindow(GetDlgItem(dlg, IDC_C_DRIVERS), FALSE);
+    CheckDlgButton(dlg, IDC_C_DRIVERS, usbChoice ? BST_CHECKED : BST_UNCHECKED);
+    EnableWindow(GetDlgItem(dlg, IDC_C_DRIVERS), usbOffered);
     SetDlgItemTextA(dlg, IDC_C_TB, inst_page_text(INST_PT_TB));
     SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(tbPresent ?
                                                     INST_PT_TB_T :
                                                     INST_PT_TB_ABSENT));
     CheckDlgButton(dlg, IDC_C_TB, tbChoice ? BST_CHECKED : BST_UNCHECKED);
+    comp_usb_state(dlg);
     ShowWindow(GetDlgItem(dlg, IDC_C_TB), tbHave ? SW_SHOW : SW_HIDE);
     ShowWindow(GetDlgItem(dlg, IDC_C_TB_T), tbHave ? SW_SHOW : SW_HIDE);
     SetDlgItemTextA(dlg, IDC_C_S98, inst_page_text(INST_PT_S98));
@@ -766,6 +842,7 @@ static int comp_leave(HWND dlg)
     const char *why;
     int tb;
     int s98;
+    int usb;
 
     GetDlgItemTextA(dlg, IDC_C_DIR, typed, sizeof(typed));
     why = inst_eng_dir_check(typed, checked, sizeof(checked));
@@ -779,9 +856,15 @@ static int comp_leave(HWND dlg)
     SetDlgItemTextA(dlg, IDC_C_DIR_WHY, "");
     inst_copy(dirChoice, checked, sizeof(dirChoice));
     trayChoice = IsDlgButtonChecked(dlg, IDC_C_TRAY) == BST_CHECKED;
-    tb = tbHave && IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED;
+    usb = usbOffered ? IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED
+                     : usbChoice;
+    tb = tbHave && (!usb || IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED);
+    if (usb) {
+        tbOwn = tb;
+    }
     s98 = s98Have && IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
-    if (tb != tbChoice || s98 != s98Choice) {
+    if (usb != usbChoice || tb != tbChoice || s98 != s98Choice) {
+        usbChoice = usb;
         tbChoice = tb;
         s98Choice = s98;
         replan();
@@ -1859,7 +1942,9 @@ static void summary_fill(HWND dlg)
         if (!any) {
             tb_add(&t, "- none present: the drivers are staged for later.\n");
         }
-        tb_add(&t, "\nThe components:\n- xhci98.sys and xhciuas.sys\n");
+        tb_add(&t, usbChoice ? "\nThe components:\n- xhci98.sys and "
+               "xhciuas.sys\n" : "\nThe components:\n- xhci98.sys and "
+               "xhciuas.sys: left out (the connection manager alone)\n");
         if (tbHave) {
             tb_add(&t, tbChoice ? "- Thunderbolt 3 / USB4 support\n" :
                    "- Thunderbolt 3 / USB4 support: left out\n");
@@ -1880,7 +1965,7 @@ static void summary_fill(HWND dlg)
         tb_add(&t, "\nThe settings written machine-wide:\n");
         any = 0;
         for (i = 0; i < INST_MAX_VALUES && i < instValueCount; i++) {
-            if (choiceSet[i]) {
+            if (choiceSet[i] && choice_live(i)) {
                 _snprintf(line, sizeof(line) - 1, "- %s = %lu\n",
                           instValues[i].Name, (unsigned long)choiceVal[i]);
                 line[sizeof(line) - 1] = '\0';
@@ -2193,6 +2278,11 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             return TRUE;
         case IDC_C_BROWSE:
             comp_browse(dlg);
+            return TRUE;
+        case IDC_C_DRIVERS:
+            if (HIWORD(wp) == BN_CLICKED) {
+                comp_usb_click(dlg);
+            }
             return TRUE;
         case IDC_S_ADVANCED:
             if (page == P_S98) {
@@ -2644,6 +2734,13 @@ static int selftest(void)
     static const int n2Texts[] = { INST_PT_SHUT_NOW, INST_PT_SHUT_LATER };
     static const int c2Ids[] = { IDC_C_TB_T };
     static const int c2Texts[] = { INST_PT_TB_ABSENT };
+    static const int c3Ids[] = { IDC_C_DRIVERS_T, IDC_C_DRIVERS_T };
+    static const int c3Texts[] = { INST_PT_DRIVERS_T8, INST_PT_DRIVERS_OFF };
+    static const int w2Ids[] = { IDC_TEXT };
+    static const int w2Texts[] = { INST_PT_WELCOME_CM };
+    static const int u2Ids[] = { IDC_TITLE, IDC_TEXT, IDC_U_AGREE };
+    static const int u2Texts[] = { INST_PT_UN_TITLE_CM, INST_PT_UN_WARN_CM,
+                                   INST_PT_UN_AGREE_CM };
     static const int sIds[] = { IDC_S_HEAD, IDC_S_NOTE };
     static const int sTexts[] = { INST_PT_USB, INST_PT_TB_LATER };
     static const int s2Ids[] = { IDC_S_HEAD };
@@ -2704,6 +2801,12 @@ static int selftest(void)
                 "shutdown");
         st_page(parent, IDD_COMPONENTS, c2Ids, c2Texts, 1, "the components, "
                 "no controller");
+        st_page(parent, IDD_COMPONENTS, c3Ids, c3Texts, 2, "the components, "
+                "the connection manager alone");
+        st_page(parent, IDD_WELCOME, w2Ids, w2Texts, 1, "the welcome, the "
+                "connection manager alone");
+        st_page(parent, IDD_UWELCOME, u2Ids, u2Texts, 3, "the uninstall's "
+                "welcome, the connection manager alone");
         st_page(parent, IDD_SETTINGS, sIds, sTexts, 2, "the USB settings");
         st_page(parent, IDD_SETTINGS, s2Ids, s2Texts, 1, "the Thunderbolt "
                 "settings");

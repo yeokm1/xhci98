@@ -156,6 +156,10 @@ typedef DWORD (WINAPI *PFN_CM_PROP)(DWORD, ULONG, ULONG *, void *, ULONG *,
                                     ULONG);
 typedef DWORD (WINAPI *PFN_CM_WAIT)(DWORD);
 typedef BOOL (WINAPI *PFN_ISWOW64)(HANDLE, PBOOL);
+/* ntdll's RtlGetVersion (record 23 section 4.3, revision 13): the version
+ * GetVersionEx gives a program with no compatibility manifest stops at
+ * 6.2 from Windows 8.1 on. */
+typedef LONG (WINAPI *PFN_RTLGETVERSION)(OSVERSIONINFOW *);
 
 static struct {
     HMODULE SetupApi;
@@ -407,6 +411,14 @@ static int s98_rec_has(const char *sub, const char *name);
 static int file_state(const char *path);
 
 static int haveCm;
+/* The connection manager alone (record 23 section 4.5, revision 13): the
+ * system's kind, and the USB drivers in this run or out of it. */
+static int osKind = INST_OS_FULL;
+static int usbInclude = 1;
+static int usbOffered;
+static void usb_apply(int include);
+static int usb_decide(void);
+static int pkgCmSigned = -1;    /* xhcicm.sys signed: as pkgSigned */
 static int tbInclude = 1;   /* the Thunderbolt question's answer (section 8.5) */
 static int tbNhiPresent;
 static int tbStaged;        /* NT: xhcicm.inf was staged by this run       */
@@ -446,6 +458,8 @@ static int answerChosen[INST_MAX_VALUES];
  * screens front end, which wraps and measures, shown only when
  * XHCIINST_SCREENS is set. */
 static int stScreens;
+static int stCmOnly;        /* the screens: the machine has the connection
+                               manager alone (the uninstall's warning) */
 static int stShow;
 static const char *const *stInput;     /* the self-test's answers */
 
@@ -1557,6 +1571,12 @@ static void group_verdicts(void)
             groupVerdict[g] = INST_GROUP_OK;
             continue;
         }
+        if ((g == 0 || g == 1) && !usbInclude) {
+            /* The connection manager alone: an installed xhci98 or xhciuas
+             * is not part of the run (section 4.5). */
+            groupVerdict[g] = INST_GROUP_OK;
+            continue;
+        }
         for (i = 0; i < devCount; i++) {
             const DEVREC *d = &devs[i];
             if (group_of(d) != g) {
@@ -1795,6 +1815,17 @@ static void print_plan(void)
     if (!any) {
         out("  none present. The INFs are still staged for devices that "
             "appear later.\n");
+    }
+    if (!usbInclude) {
+        for (i = 0; i < devCount; i++) {
+            if (inst_eq(devs[i].Service, "xhci98") ||
+                inst_eq(devs[i].Service, "xhciuas")) {
+                out("  The xHCI98 USB drivers already installed stay as they "
+                    "are (INSTALL.BAT\n  /uninstall removes the whole "
+                    "package).\n");
+                break;
+            }
+        }
     }
     /* Section 5.4: a group's verdict, and the members not present that it
      * covers - they run the same binary, so a refusal or a /force going
@@ -2155,6 +2186,10 @@ static int check_package(void)
                                               flavour, sizeof(flavour));
                 if (inst_eq(name, "xhci98.sys")) {
                     pkgSigned = inst_pe_signed((const unsigned char *)buf, size);
+                }
+                if (inst_eq(name, "xhcicm.sys") && k == INST_INF_CM) {
+                    pkgCmSigned = inst_pe_signed((const unsigned char *)buf,
+                                                 size);
                 }
                 free(buf);
                 if ((markers == 0 && (inst_eq(name, "xhci98.sys") ||
@@ -6881,6 +6916,7 @@ static void note_old_entries(void)
 }
 
 static void testsigning_note0(void);
+static void testsigning_note_cm(void);
 
 /* Record 26 section 6.3: with Stor98 ticked, its x64 driver keeps
  * Stor98's own test signature, and its certificate is never imported. */
@@ -6900,6 +6936,10 @@ static void testsigning_note0(void)
 
     testSigningConfirmed = 0;
     if (INST_MY_ARCH != INST_ARCH_AMD64 || envNow.Major < 6) {
+        return;
+    }
+    if (!usbInclude) {
+        testsigning_note_cm();
         return;
     }
     if (reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
@@ -6943,6 +6983,59 @@ static void testsigning_note0(void)
         "change it (the package's readme.txt,\n\"WINDOWS VISTA X64 AND "
         "WINDOWS 7 X64: TEST-SIGNING MODE\"). If this start is\n"
         "an F8 start, go on.\n\n");
+}
+
+/* The note for the connection manager alone (record 23 section 5.10,
+ * revision 13): the binary read is xhcicm.sys, the device that shows the
+ * code the NHI, and on 8 and 8.1 the Secure Boot condition. */
+static void testsigning_note_cm(void)
+{
+    char opt[512];
+    int w8 = envNow.Major == 6 && envNow.Minor >= 2;
+
+    if (!stScreens &&
+        reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
+                 "SystemStartOptions", opt, sizeof(opt), NULL)) {
+        logonly("SystemStartOptions: %s\n", opt);
+        if (inst_testsigning(opt)) {
+            testSigningConfirmed = 1;
+        }
+    }
+    if (pkgCmSigned < 0) {
+        testSigningConfirmed = 0;
+        out("NOTE: whether the x64 connection manager (xhcicm.sys) carries "
+            "a\nsignature could not be read. 64-bit Windows loads a test-signed "
+            "driver\nonly in test-signing mode, and an unsigned one only on a "
+            "start with\ndriver signature enforcement disabled.\n");
+    } else if (pkgCmSigned == 0) {
+        testSigningConfirmed = 0;
+        out("NOTE: the x64 connection manager (xhcicm.sys) in this package "
+            "carries no\nsignature (built without the project's test-signing "
+            "key). 64-bit Windows\nloads it only on a start with driver "
+            "signature enforcement disabled;\ntest-signing mode is not "
+            "enough.\n");
+    } else if (testSigningConfirmed) {
+        out("Test-signing mode is on: the test-signed x64 connection manager "
+            "loads.\n\n");
+        return;
+    } else {
+        out("NOTE: test-signing mode could not be confirmed. The x64 "
+            "connection manager\n(xhcicm.sys) is test-signed: it loads in "
+            "test-signing mode (an elevated\nCommand Prompt: bcdedit /set "
+            "testsigning on  then restart), or on a start\nwith driver "
+            "signature enforcement disabled. This tool does not change "
+            "it.\n");
+    }
+    if (w8) {
+        out("Windows 8 and 8.1: test-signing mode can be turned on only with "
+            "Secure Boot\noff in the computer's firmware setup. The start "
+            "without signature enforcement\nis Advanced startup, Troubleshoot, "
+            "Startup Settings, \"Disable driver\nsignature enforcement\", at "
+            "every start.\n");
+    }
+    out("Otherwise the Thunderbolt or USB4 controller shows a problem code "
+        "(52 on 7).\nIf this start is one without signature enforcement, go "
+        "on.\n\n");
 }
 
 static int confirm(const char *what)
@@ -7217,6 +7310,14 @@ static int plan_nt(void)
                 "one is %s.\n", restagePkg, name);
             return INST_EXIT_REFUSED;
         }
+        if (!usbInclude &&
+            (restagePending[INST_INF_XHCI] || restagePending[INST_INF_UAS])) {
+            out("REFUSED: the unfinished /restage includes the USB "
+                "drivers.\n%s\n", instWindow ? "Tick the xHCI98 USB 3.x "
+                "drivers on the Components page to finish it." : "Run it "
+                "again without /cmonly to finish it.");
+            return INST_EXIT_REFUSED;
+        }
         if (haveCm && !tbInclude &&
             (restagePending[INST_INF_CM] || restagePending[INST_INF_CMF])) {
             out("REFUSED: the unfinished /restage includes the Thunderbolt "
@@ -7355,7 +7456,8 @@ static int run_install_nt(void)
         /* The second sentence only where it can apply (the 2000 leg read
          * it after a settings-only run). */
         out("\nRESTART Windows to finish.%s\n",
-            (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86) ?
+            (usbInclude && envNow.Major == 6 &&
+             INST_MY_ARCH == INST_ARCH_X86) ?
             " If the controller was updated from 2.3.x on 32-bit\nVista or "
             "7, run INSTALL.BAT again after the restart for the root hub and "
             "hubs." : "");
@@ -8586,13 +8688,23 @@ static int run_install_9x(void)
 static int warn_uninstall(void)
 {
     char line[32];
+    int cmOnly = envNow.Nt && inst_eng_cm_only_machine();
 
-    out("*** This removes the xhci98 drivers from Windows. ***\n"
-        "On a machine whose only USB controller is xHCI, the USB keyboard and "
-        "mouse\nstop working when the controller's driver is removed, and stay "
-        "dead until\nanother driver is installed. Have a PS/2 keyboard, a "
-        "laptop's built-in one,\nor a USB controller another driver runs, "
-        "before you go on.\n");
+    if (cmOnly) {
+        /* The connection manager alone (record 23 section 9.1, revision
+         * 13): no USB driver of this package is registered. */
+        out("*** This removes the xHCI98 Thunderbolt 3 / USB4 connection "
+            "manager. ***\nDevices connected through a Thunderbolt or USB4 "
+            "port stop working when it\nis removed. Close every program that "
+            "uses one, and save your work, before\nyou go on.\n");
+    } else {
+        out("*** This removes the xhci98 drivers from Windows. ***\n"
+            "On a machine whose only USB controller is xHCI, the USB keyboard "
+            "and mouse\nstop working when the controller's driver is removed, "
+            "and stay dead until\nanother driver is installed. Have a PS/2 "
+            "keyboard, a laptop's built-in one,\nor a USB controller another "
+            "driver runs, before you go on.\n");
+    }
     if (opts.List) {
         out("(/list: nothing will be changed.)\n\n");
         return 1;
@@ -8601,7 +8713,10 @@ static int warn_uninstall(void)
         out("/yes given: going on without the typed word.\n\n");
         return 1;
     }
-    if (!ask(INST_Q_REMOVE, "Remove the drivers?\n"
+    if (!ask(INST_Q_REMOVE, cmOnly ? "Remove the connection manager?\n"
+             "  REMOVE  go on (type the word in capitals)\n"
+             "  N       cancel: nothing is changed (so does anything else)\n"
+             "  Enter for [N]: " : "Remove the drivers?\n"
              "  REMOVE  go on (type the word in capitals)\n"
              "  N       cancel: nothing is changed (so does anything else)\n"
              "  Enter for [N]: ", 0, 0, 0, NULL, line, sizeof(line))) {
@@ -12044,6 +12159,8 @@ static void tb_question(void)
             }
         }
         tbInclude = r;
+    } else if (!usbInclude) {
+        out("  The connection manager alone: installed without asking.\n");
     } else if (opts.Thunderbolt) {
         out("  /thunderbolt: installed without asking.\n");
     } else if (opts.List) {
@@ -12072,8 +12189,11 @@ static int tb_decide(int *asked, int *def, int *installed)
 
     tb_apply(1);
     tbNhiPresent = envNow.CmNhi;
-    include = inst_tb_decide(haveCm, tbNhiPresent, opts.Yes, opts.Thunderbolt,
-                             opts.List, asked, def);
+    /* Without the USB drivers the Thunderbolt support is all the run
+     * installs: in it unasked (section 8.5, revision 13). */
+    include = inst_tb_decide(haveCm, tbNhiPresent, opts.Yes,
+                             opts.Thunderbolt || !usbInclude, opts.List, asked,
+                             def);
     *installed = 0;
     for (i = 0; i < devCount; i++) {
         if (inst_eq(devs[i].Service, "xhcicm") ||
@@ -12110,6 +12230,23 @@ static void s98_apply(int include)
                 inst_s98_skip_text(INST_S98_NEEDS_TB, 0));
     }
     plan();
+}
+
+/* The USB drivers in this run or out of it (record 23 section 4.5): the
+ * connection manager alone takes xhci98.inf and xhciuas.inf out, as a No
+ * to the Thunderbolt question takes its INFs out. The texts are kept, so
+ * the window can tick the box again; the caller plans again. */
+static void usb_apply(int include)
+{
+    int k;
+
+    for (k = INST_INF_XHCI; k <= INST_INF_UAS; k++) {
+        if (infKeep[k] == NULL) {
+            infKeep[k] = infText[k];
+        }
+        infText[k] = include ? infKeep[k] : NULL;
+    }
+    usbInclude = include ? 1 : 0;
 }
 
 static void tb_apply(int include)
@@ -14514,6 +14651,8 @@ void inst_eng_usage(void)
 "                (default C:\\XHCI98, or where an earlier install put them)\n"
 "  /force        reinstall this release, or install it over a newer one\n"
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
+"  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
+"                without the USB drivers (2000 to 7; on 8 and 8.1 always)\n"
 "  /stor98       install the bundled Stor98 NVMe driver without asking\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
@@ -14720,6 +14859,42 @@ static void st_screens_once(int longest)
         stInput = un;
         warn_uninstall();
     }
+
+    /* The connection manager alone (record 23 section 4.5): Windows 8.1,
+     * the USB drivers out of the run, the controller's installed xhci98
+     * left as it is, the Thunderbolt controller a new install; then
+     * /cmonly on 7, and the uninstall's warning on such a machine. */
+    for (k = 0; k < 2; k++) {
+        memset(&opts, 0, sizeof(opts));
+        envNow.Nt = 1;
+        envNow.Major = 6;
+        envNow.Minor = k == 0 ? 3 : 1;
+        osKind = k == 0 ? INST_OS_CMONLY : INST_OS_FULL;
+        opts.CmOnly = k == 1;
+        infText[INST_INF_XHCI] = (char *)stInfXhci;
+        load_ids();
+        out("==== %s, the connection manager alone\n", k == 0 ? "8.1" : "7");
+        usb_decide();
+        devs[0].Inf = -1;
+        devs[1].Inf = -1;
+        devs[2].Inf = INST_INF_CM;
+        devs[2].Action = INST_ACT_INSTALL;
+        stInput = nt1;
+        tb_question();
+        print_plan();
+        for (i = -1; i <= 1; i++) {
+            pkgCmSigned = i;
+            testsigning_note_cm();
+        }
+        pkgCmSigned = -1;
+        testSigningConfirmed = 0;
+        stCmOnly = 1;
+        stInput = un;
+        warn_uninstall();
+        stCmOnly = 0;
+        usb_apply(1);
+    }
+    osKind = INST_OS_FULL;
     stInput = NULL;
     infText[INST_INF_XHCI] = NULL;
     infText[INST_INF_CM] = NULL;
@@ -15366,7 +15541,12 @@ static void arp_write(int incomplete)
                 window, toolDir);
         return;
     }
-    inst_arp_name(name, sizeof(name), XHCIINST_VERSION, incomplete);
+    /* Named by what is registered (record 26 section 9.1, draft 8). */
+    inst_arp_name(name, sizeof(name), XHCIINST_VERSION, incomplete,
+                  envNow.Nt && inst_arp_cm_only(svc_state("xhci98"),
+                                                svc_state("xhcicm"),
+                                                !opts.Uninstall &&
+                                                !usbInclude));
     if (!inst_arp_command(cmd, sizeof(cmd), toolDir, window, envNow.Nt)) {
         out("The Add/Remove Programs entry cannot name %s.\n", exe);
         flagFailed = 1;
@@ -15521,6 +15701,44 @@ int inst_eng_selftest(void)
     return selftest();
 }
 
+/* The version as record 23 section 4.3 reads it (revision 13): on NT
+ * RtlGetVersion's, looked up at run time, the CSD string GetVersionExA's;
+ * where the routine is missing GetVersionExA's alone, which is true below
+ * 6.2 and refused from it. 0: not read (dwOSVersionInfoSize nonzero when
+ * only the exact reading failed). */
+int inst_eng_os_read(OSVERSIONINFOA *v)
+{
+    PFN_RTLGETVERSION rtl;
+    OSVERSIONINFOW w;
+    HMODULE nt;
+
+    memset(v, 0, sizeof(*v));
+    v->dwOSVersionInfoSize = sizeof(*v);
+    if (!GetVersionExA(v)) {
+        v->dwOSVersionInfoSize = 0;
+        return 0;
+    }
+    if (v->dwPlatformId != VER_PLATFORM_WIN32_NT) {
+        return 1;
+    }
+    nt = GetModuleHandleA("ntdll.dll");
+    rtl = nt != NULL ? (PFN_RTLGETVERSION)GetProcAddress(nt, "RtlGetVersion")
+                     : NULL;
+    memset(&w, 0, sizeof(w));
+    w.dwOSVersionInfoSize = sizeof(w);
+    if (rtl != NULL && rtl(&w) == 0) {
+        v->dwMajorVersion = w.dwMajorVersion;
+        v->dwMinorVersion = w.dwMinorVersion;
+        v->dwBuildNumber = w.dwBuildNumber;
+        return 1;
+    }
+    if (v->dwMajorVersion > 6 ||
+        (v->dwMajorVersion == 6 && v->dwMinorVersion >= 2)) {
+        return 0;
+    }
+    return 1;
+}
+
 int inst_eng_begin(int argc, char **argv)
 {
     PFN_ISWOW64 isWow64;
@@ -15540,12 +15758,16 @@ int inst_eng_begin(int argc, char **argv)
         logonly("argv[%d] = %s\n", i, argv[i]);
     }
 
-    memset(&osv, 0, sizeof(osv));
-    osv.dwOSVersionInfoSize = sizeof(osv);
-    if (!GetVersionExA(&osv)) {
-        out("The Windows version could not be read.\n");
+    if (!inst_eng_os_read(&osv)) {
+        out("The Windows version could not be read%s.\n",
+            osv.dwOSVersionInfoSize != 0 ? " exactly (ntdll.dll's "
+            "RtlGetVersion is missing, and Windows answers 6.2 or later)"
+            : "");
         return INST_EXIT_REFUSED;
     }
+    osKind = inst_os_kind(osv.dwPlatformId == VER_PLATFORM_WIN32_NT,
+                          osv.dwMajorVersion, osv.dwMinorVersion,
+                          osv.dwBuildNumber & 0xFFFFUL);
     out("Windows %lu.%lu.%lu %s\n\n", (unsigned long)osv.dwMajorVersion,
         (unsigned long)osv.dwMinorVersion,
         (unsigned long)(osv.dwBuildNumber & 0xFFFFUL), osv.szCSDVersion);
@@ -15566,11 +15788,10 @@ int inst_eng_begin(int argc, char **argv)
         }
     } else if (osv.dwPlatformId == VER_PLATFORM_WIN32_NT) {
         envNow.Nt = 1;
-        if (osv.dwMajorVersion < 5 ||
-            (osv.dwMajorVersion == 6 && osv.dwMinorVersion > 1) ||
-            osv.dwMajorVersion > 6) {
+        if (osKind == INST_OS_REFUSED) {
             out("This Windows is not one this package supports (2000, XP, "
-                "XP x64, Vista, 7).\n");
+                "XP x64, Vista, 7;\n8 and 8.1 for the Thunderbolt 3 / USB4 "
+                "connection manager alone).\n");
             return INST_EXIT_REFUSED;
         }
         isWow64 = (PFN_ISWOW64)GetProcAddress(GetModuleHandleA("kernel32.dll"),
@@ -15598,6 +15819,22 @@ int inst_eng_begin(int argc, char **argv)
     }
     if (!envNow.Nt && INST_MY_ARCH != INST_ARCH_X86) {
         return INST_EXIT_REFUSED;
+    }
+    if (opts.CmOnly && !envNow.Nt) {
+        out("REFUSED: /cmonly: the connection manager alone is not offered on "
+            "Windows 98 SE\nand ME; the USB drivers are what runs the "
+            "controllers there.\n");
+        return INST_EXIT_REFUSED;
+    }
+    for (i = 0; i < opts.SetCount; i++) {
+        int sk = instValues[opts.SetIndex[i]].Inf;
+        if ((opts.CmOnly || osKind == INST_OS_CMONLY) &&
+            (sk == INST_INF_XHCI || sk == INST_INF_UAS)) {
+            out("REFUSED: /set %s:\nthe USB drivers are not in this run "
+                "(/cmonly, or Windows 8 and 8.1).\n",
+                instValues[opts.SetIndex[i]].Name);
+            return INST_EXIT_REFUSED;
+        }
     }
     for (i = 0; i < opts.SetCount; i++) {
         if (!inst_value_allowed(opts.SetIndex[i], &envNow, opts.SetValue[i])) {
@@ -15682,8 +15919,77 @@ int inst_eng_read(void)
         }
         return INST_EXIT_REFUSED;
     }
+    if (!usb_decide()) {
+        return INST_EXIT_REFUSED;
+    }
     plan();
     return -1;
+}
+
+/* Record 23 section 4.5: the USB drivers in the run or out of it, before
+ * the first plan. 0 refused. */
+static int usb_decide(void)
+{
+    const char *why;
+    int r = inst_usb_decide(osKind, envNow.Nt, haveCm, opts.CmOnly,
+                            &usbOffered, &why);
+
+    if (r < 0) {
+        out("REFUSED: %s\n", why != NULL ? why : "the components.");
+        return 0;
+    }
+    if (osKind == INST_OS_CMONLY) {
+        out("%s: this package installs the Thunderbolt 3 / USB4 connection "
+            "manager\nalone here. Windows' own USB 3 driver keeps running the "
+            "USB controllers.\n\n",
+            inst_os_name(1, envNow.Major, envNow.Minor));
+        if (haveS98) {
+            /* Not one of Stor98's targets (decision D18). */
+            out("Stor98, the bundled NVMe driver, is not offered on Windows 8 "
+                "or 8.1.\n\n");
+            haveS98 = 0;
+            s98_apply(0);
+        }
+    } else if (r == 0) {
+        out("/cmonly: the Thunderbolt 3 / USB4 connection manager alone; the "
+            "USB drivers\nare left out of this run.\n\n");
+    }
+    usb_apply(r);
+    logonly("usb drivers: kind %d, offered %d, include %d\n", osKind,
+            usbOffered, usbInclude);
+    return 1;
+}
+
+/* The window's USB drivers' box (record 26 section 5.3, draft 8): *offered
+ * 1 when it can be unticked; returns whether they are in the run. */
+int inst_eng_usb_state(int *offered, int *notOnThisSystem)
+{
+    *offered = usbOffered;
+    *notOnThisSystem = osKind == INST_OS_CMONLY;
+    return usbInclude;
+}
+
+void inst_eng_usb_choose(int include)
+{
+    if (!usbOffered) {
+        return;
+    }
+    usb_apply(include);
+    plan();
+    logonly("usb drivers: chosen %d\n", usbInclude);
+}
+
+/* 1 when this machine has the connection manager alone registered (the
+ * uninstall's warning, record 23 section 9.1, revision 13). */
+int inst_eng_cm_only_machine(void)
+{
+    if (stScreens) {
+        return stCmOnly;
+    }
+    if (!envNow.Nt && (GetVersion() & 0x80000000UL) != 0) {
+        return 0;
+    }
+    return inst_arp_cm_only(svc_state("xhci98"), svc_state("xhcicm"), 0);
 }
 
 void inst_eng_tb_question(void)
