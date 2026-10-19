@@ -481,6 +481,9 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
 {
     PVOID now[CM_SNAP_MAX];
     ULONG isNew[CM_SNAP_MAX];
+    ULONG newLocd[CM_SNAP_MAX];
+    ULONG newBus[CM_SNAP_MAX];
+    ULONG newAddr[CM_SNAP_MAX];
     ULONG count;
     ULONG fresh;
     ULONG i;
@@ -566,7 +569,31 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
         filter->RelEmptyAt = 0;
     }
     for (i = 0; i < count; i++) {
+        ULONG j;
+        ULONG locd;
+        ULONG bus;
+        ULONG addr;
+
+        /* A PDO that stays in the snapshot keeps the location kept for it. */
+        locd = 0;
+        bus = 0;
+        addr = 0;
+        for (j = 0; j < filter->SnapCount && !isNew[i]; j++) {
+            if (filter->Snap[j] == now[i] && filter->SnapLocd[j]) {
+                locd = 1;
+                bus = filter->SnapBus[j];
+                addr = filter->SnapAddr[j];
+            }
+        }
+        newLocd[i] = locd;
+        newBus[i] = bus;
+        newAddr[i] = addr;
+    }
+    for (i = 0; i < count; i++) {
         filter->Snap[i] = now[i];
+        filter->SnapLocd[i] = newLocd[i];
+        filter->SnapBus[i] = newBus[i];
+        filter->SnapAddr[i] = newAddr[i];
     }
     filter->SnapCount = count;
     if (relations != NULL) {
@@ -790,6 +817,27 @@ static PCM_MARK cmMarkFind(PVOID pdo, PCM_NHI *dom)
     return NULL;
 }
 
+/* The location of `pdo` kept beside the snapshot of the member bridge at
+ * `memberBdf` (CM_FILTER.SnapLocd). Under the lock. */
+static VOID cmSnapKeepLoc(ULONG memberBdf, PVOID pdo, ULONG bus,
+                          ULONG address)
+{
+    PCM_FILTER f;
+    ULONG k;
+
+    f = cmRegFind(memberBdf);
+    if (f == NULL) {
+        return;
+    }
+    for (k = 0; k < f->SnapCount; k++) {
+        if (f->Snap[k] == pdo) {
+            f->SnapLocd[k] = 1;
+            f->SnapBus[k] = bus;
+            f->SnapAddr[k] = address;
+        }
+    }
+}
+
 /* An entry's attachments, location and Removable answer, from the
  * attachment list as it stands; an attachment present clears a pending
  * departure (the stack was rebuilt). Under the lock. */
@@ -825,6 +873,9 @@ static VOID cmMarkAtt(PCM_NHI d, PCM_MARK m)
     }
     /* A location once known stays known: the PDO is the same device. */
     flags |= m->Flags & CM_QM_EF_LOCATED;
+    if (flags & CM_QM_EF_LOCATED) {
+        cmSnapKeepLoc(m->MemberBdf, m->Pdo, bus, address);
+    }
     if (flags != m->Flags || bus != m->Bus || address != m->Address ||
         ((flags & (CM_QM_EF_BUS_ATT | CM_QM_EF_ADD_ATT)) != 0 &&
          m->PendingAt != 0)) {
@@ -867,6 +918,11 @@ static VOID cmMarksSyncAll(VOID)
                               active ? f->SnapCount : 0,
                               (BOOLEAN)(active && f->SnapTruncated), active,
                               cmMarkNow(d));
+            if (active) {
+                (VOID)CmMarksLocate(&r->Marks, i, (PVOID const *)f->Snap,
+                                    f->SnapLocd, f->SnapBus, f->SnapAddr,
+                                    f->SnapCount, cmMarkNow(d));
+            }
         }
         (VOID)CmMarksDropMembers(&r->Marks, r->Members, cmMarkNow(d));
         for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {

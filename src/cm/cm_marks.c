@@ -209,6 +209,35 @@ BOOLEAN CmMarksSync(PCM_MARKS m, ULONG member, ULONG memberBdf,
     return changed;
 }
 
+BOOLEAN CmMarksLocate(PCM_MARKS m, ULONG member, PVOID const *snap,
+                      const ULONG *locd, const ULONG *bus,
+                      const ULONG *address, ULONG count, ULONG now)
+{
+    ULONG i;
+    ULONG k;
+    BOOLEAN changed;
+    PCM_MARK e;
+
+    changed = FALSE;
+    for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
+        e = &m->E[i];
+        if (e->Pdo == NULL || e->Tomb || e->Member != member ||
+            (e->Flags & CM_QM_EF_LOCATED) != 0) {
+            continue;
+        }
+        for (k = 0; k < count; k++) {
+            if (snap[k] == e->Pdo && locd[k]) {
+                e->Flags |= CM_QM_EF_LOCATED;
+                e->Bus = bus[k];
+                e->Address = address[k];
+                CmMarksTouch(m, e, now);
+                changed = TRUE;
+            }
+        }
+    }
+    return changed;
+}
+
 BOOLEAN CmMarksDropMembers(PCM_MARKS m, ULONG members, ULONG now)
 {
     ULONG i;

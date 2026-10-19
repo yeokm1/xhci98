@@ -145,6 +145,17 @@ int mk_reconcile(int presence, int ownerKnown, int ownerVerif,
                  int anyUnverif, int anyVerif, int memberActive, int listed,
                  int incomplete, int safeOff);
 
+/* Whether the marks answer lists a unit at bus/address behind member
+ * `member`: MK_L_LISTED (a reported, located entry there), MK_L_UNSURE (no
+ * such entry, but a reported entry behind that member whose location is
+ * not known - it may be this unit, so its absence proves nothing),
+ * MK_L_NOT (neither). *entry the listed one, or NULL. */
+#define MK_L_NOT            0
+#define MK_L_LISTED         1
+#define MK_L_UNSURE         2
+int mk_listed(const MK_MARKS *m, INST_U32 member, INST_U32 bus,
+              INST_U32 address, const MK_ENTRY **entry);
+
 /* ---- the multi-string ----------------------------------------------------- */
 
 /* `in` (inBytes, possibly 0 or one empty string) with MK_NAME appended as

@@ -1050,3 +1050,24 @@ merge, the volume came back after the first recovery and not after the
 second (no Stor98 binding after that re-enumeration, the prompt on C:
 this time, so not a volume held open); owed to the 9x Stor98 rebinding,
 not read further.
+
+### 42-A.5: a unit at Code 28 lost its mark (2026-10-19)
+
+p42-tr's Windows 7 x86 leg read the service write an NVMe's mark (the NVMe
+directly behind the tunnel port, at Code 28: 7 has no NVMe driver) and
+remove it a second later "no longer behind an active member", the unit
+still behind the active port. The marks answer can report a unit's entry
+with no location - an entry made again after its member was inactive,
+with no attachment of the driver left on the PDO to read the location
+from - and the reconciliation read "no located entry here" as the unit
+gone. Two changes, reviewed and revised until the review converged: the
+service treats a reported, unlocated entry behind the member as an answer
+it cannot judge (nothing removed, as for an incomplete one; `mk_listed`,
+with the leg as a self-test vector), and the bridge filter keeps the
+location read for each PDO of its snapshot while the PDO stays in it, so a
+remade entry takes it back (`CmMarksLocate`, `test_cm_marks`). Read again
+on the 7 x86 guest, the NVMe behind the port with no chain: the mark
+written within a second of the plug, deleted by Windows' failed driver
+search and written again, then kept (two minutes, "removable: yes ...
+listed in Safely Remove Hardware" at Code 28); unplugged, removed within a
+poll ("the unit left").

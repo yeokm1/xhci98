@@ -220,6 +220,30 @@ int mk_reconcile(int presence, int ownerKnown, int ownerVerif,
     return MK_R_REMOVE;
 }
 
+int mk_listed(const MK_MARKS *m, INST_U32 member, INST_U32 bus,
+              INST_U32 address, const MK_ENTRY **entry)
+{
+    INST_U32 j;
+    int unsure = 0;
+
+    *entry = NULL;
+    for (j = 0; j < m->Count; j++) {
+        const MK_ENTRY *e = &m->E[j];
+        if ((e->Flags & MK_EF_REPORTED) == 0 || e->Member != member) {
+            continue;
+        }
+        if ((e->Flags & MK_EF_LOCATED) == 0) {
+            unsure = 1;
+            continue;
+        }
+        if (e->Bus == bus && e->Address == address) {
+            *entry = e;
+            return MK_L_LISTED;
+        }
+    }
+    return unsure ? MK_L_UNSURE : MK_L_NOT;
+}
+
 size_t mk_msz_append(const char *in, size_t inBytes, char *out, size_t cap)
 {
     size_t off = 0;
@@ -480,6 +504,39 @@ int mk_selftest(void (*report)(int ok, const char *what))
              "its domain verifiable and complete, not listed: removed (another domain's state aside)");
     mk_check(mk_reconcile(MK_P_PRESENT, 0, 0, 0, 1, 0, 0, 0, 0) == MK_R_REMOVE,
              "behind no member, every NHI verifiable: removed");
+
+    /* The 7 x86 reading of 2026-10-19 (p42-tr's leg): a unit at Code 28
+     * behind an active member, its entry reported with no location known
+     * (no attachment of the driver left to read it), was read as gone and
+     * its mark removed a second after it was written. An entry behind the
+     * member that cannot be placed is no proof of absence. */
+    {
+        MK_MARKS lm;
+        const MK_ENTRY *le;
+
+        memset(&lm, 0, sizeof(lm));
+        lm.Count = 2;
+        lm.E[0].Member = 0x0028;
+        lm.E[0].Flags = MK_EF_REPORTED;
+        lm.E[0].Serial = 1;
+        lm.E[1].Member = 0x0030;
+        lm.E[1].Flags = MK_EF_REPORTED | MK_EF_LOCATED;
+        lm.E[1].Bus = 2;
+        mk_check(mk_listed(&lm, 0x0028, 1, 0x00010000UL, &le) == MK_L_UNSURE &&
+                 le == NULL, "an unlocated entry behind the member: unsure");
+        mk_check(mk_reconcile(MK_P_PRESENT, 1, 1, 0, 1, 1, 0, 1, 0) == MK_R_LEAVE,
+                 "and unsure is left alone, as an incomplete answer is");
+        mk_check(mk_listed(&lm, 0x0030, 1, 0, &le) == MK_L_NOT,
+                 "another member's located unit elsewhere: not listed");
+        lm.E[0].Flags |= MK_EF_LOCATED;
+        lm.E[0].Bus = 1;
+        lm.E[0].Address = 0x00010000UL;
+        mk_check(mk_listed(&lm, 0x0028, 1, 0x00010000UL, &le) == MK_L_LISTED &&
+                 le == &lm.E[0], "located: listed");
+        lm.E[0].Flags &= ~MK_EF_REPORTED;
+        mk_check(mk_listed(&lm, 0x0028, 1, 0x00010000UL, &le) == MK_L_NOT,
+                 "a tombstone is not listed");
+    }
 
     n = mk_msz_append(NULL, 0, out, sizeof(out));
     mk_check(n == 8 && memcmp(out, "xhcicm\0\0", 8) == 0, "an absent value becomes the one name");

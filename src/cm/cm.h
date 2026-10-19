@@ -545,6 +545,14 @@ typedef struct _CM_FILTER {
     ULONG SnapCount;
     PVOID Snap[CM_SNAP_MAX];
     ULONG SnapTruncated;    /* the last answer held more than CM_SNAP_MAX  */
+    /* Beside each snapshot PDO, the location an attachment of this driver
+     * read for it (task 42-A.5), kept while the PDO stays in the snapshot,
+     * which is the bridge's rule for "the same device": the marks table
+     * takes it back when an entry is made again after its member was
+     * inactive (CmMarksLocate). Under the list's lock. */
+    ULONG SnapLocd[CM_SNAP_MAX];
+    ULONG SnapBus[CM_SNAP_MAX];
+    ULONG SnapAddr[CM_SNAP_MAX];
     ULONG RelGen;           /* bumped when the reported population changes */
     ULONG EjectSeen;        /* an orderly child removal since the last
                                eject was posted                           */
