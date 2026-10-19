@@ -9112,6 +9112,10 @@ static const char *const instServices[] = {
  * CriticalDeviceDatabase entries naming them go: cddb_service_scrub). */
 static const char *svcGone[8];
 static int svcGoneCount;
+static const char *const cddbOwn[] = {
+    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi", "stor98"
+};
+static int svc_state(const char *name);
 
 static void svc_gone(const char *name)
 {
@@ -9148,6 +9152,14 @@ static int cddb_service_scrub(void)
     int ok = 1;
     int j;
 
+    /* A service of the package absent now (or marked for deletion) is gone
+     * whoever removed it: a retried uninstall, Stor98 removed by an earlier
+     * run, xhcimsi retired by an update's INF. */
+    for (j = 0; j < (int)(sizeof(cddbOwn) / sizeof(cddbOwn[0])); j++) {
+        if (svc_state(cddbOwn[j]) == 0) {
+            svc_gone(cddbOwn[j]);
+        }
+    }
     if (svcGoneCount == 0) {
         return 1;
     }
@@ -9171,15 +9183,31 @@ static int cddb_service_scrub(void)
             ok = 0;
             break;
         }
-        if (RegOpenKeyExA(root, name, 0, KEY_QUERY_VALUE, &k) !=
-            ERROR_SUCCESS) {
+        r = RegOpenKeyExA(root, name, 0, KEY_QUERY_VALUE, &k);
+        if (r != ERROR_SUCCESS) {
+            if (r != ERROR_FILE_NOT_FOUND) {
+                out("CriticalDeviceDatabase\\%s could not be read (error "
+                    "%ld).\n", name, r);
+                ok = 0;
+            }
             continue;
         }
         memset(svc, 0, sizeof(svc));
         n = sizeof(svc) - 1;
         r = RegQueryValueExA(k, "Service", NULL, &type, (LPBYTE)svc, &n);
         RegCloseKey(k);
-        if (r != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ) ||
+        if (r == ERROR_FILE_NOT_FOUND) {
+            continue;
+        }
+        if (r != ERROR_SUCCESS) {
+            /* ERROR_MORE_DATA: longer than any service name of ours, but
+             * not proven another driver's either. */
+            out("CriticalDeviceDatabase\\%s's Service could not be read "
+                "(error %ld).\n", name, r);
+            ok = 0;
+            continue;
+        }
+        if ((type != REG_SZ && type != REG_EXPAND_SZ) ||
             !inst_cddb_service_gone(svc, svcGone, svcGoneCount)) {
             continue;
         }
@@ -10082,11 +10110,19 @@ static int mk_safe_eject_now(void)
         return 1;
     }
     for (i = 0; i < devCount; i++) {
-        if (!devs[i].Present || devs[i].Refused ||
-            devs[i].Inf != instValues[v].Inf) {
+        char path[INST_PATH_CHARS];
+
+        /* Every present device the connection manager runs on now, by its
+         * service, whatever this run's plan for it. */
+        if (!devs[i].Present || !inst_eq(devs[i].Service, INST_MK_NAME)) {
             continue;
         }
-        r = value_now(&devs[i], instValues[v].Name, &now);
+        r = -1;
+        if (devs[i].Driver[0] != '\0') {
+            driver_key_path(&devs[i], path, sizeof(path));
+            r = reg_dword(HKEY_LOCAL_MACHINE, path, instValues[v].Name, &now)
+                    ? 1 : 0;
+        }
         vnow[nNow].State = r > 0 ? 1 : r;
         vnow[nNow].Value = r > 0 ? (INST_U32)now : 0;
         vnow[nNow].Desc = devs[i].Id;
@@ -16107,6 +16143,11 @@ int inst_eng_run(void)
     /* Whatever the run's verdict, the invariant of record 21 section 7.4
      * holds at its end (decision M13). */
     mk_end_of_run();
+    /* And no CriticalDeviceDatabase entry names a service of the package
+     * that is gone (an update's INF retires xhcimsi on Vista and 7). */
+    if (envNow.Nt && !opts.List && !cddb_service_scrub()) {
+        flagFailed = 1;
+    }
     /* The marks' flags join the run's verdict, which a failure returned
      * without flagFailed (a refused baseline) keeps. */
     if (code != INST_EXIT_REFUSED && code != INST_EXIT_FAILED &&
