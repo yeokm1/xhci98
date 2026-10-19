@@ -5290,6 +5290,19 @@ const char *inst_s98_skip_text(int why, int brief)
     }
 }
 
+int inst_s98_adoptable(int preExisting, int present, int place)
+{
+    if (preExisting) {
+        return 0;
+    }
+    return !present || place == INST_S98_AT_TUNNEL;
+}
+
+int inst_s98_stray_inf_ours(int preExisting, int namesStor98)
+{
+    return !preExisting && namesStor98;
+}
+
 int inst_s98_share(int otherBound, int fileSame)
 {
     if (!otherBound) {

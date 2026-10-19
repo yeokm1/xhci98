@@ -1370,6 +1370,16 @@ const char *inst_s98_skip_text(int why, int brief);
  * release's version. FREE: the run may change both; SAME: the devices
  * may be installed (the file stays what it is) but no setting is
  * written; HOLD: no Stor98 change at all. */
+/* The uninstall's side (owner's coordinator, 2026-10-19). With Stor98
+ * brought by this package's installer (PreExisting clear), a device
+ * Windows bound to Stor98 after the run is the package's too when it sits
+ * behind a tunnel or is gone with its tunnel (not present); one internal
+ * or of unknown place is not, and keeps Stor98 for every device. And an
+ * INF copy that appeared outside a Stor98 step of the 98 SE and ME install
+ * is the package's when its text names Stor98 and PreExisting is clear. */
+int inst_s98_adoptable(int preExisting, int present, int place);
+int inst_s98_stray_inf_ours(int preExisting, int namesStor98);
+
 #define INST_S98_SHARE_FREE     0
 #define INST_S98_SHARE_SAME     1
 #define INST_S98_SHARE_HOLD     2

@@ -391,6 +391,8 @@ static int s98_awaiting(const char *id);
 static void s98_inf_take(int slot, int hash);
 static int s98_inf_changed(int other, const S98INF *x);
 static void s98_inf_after(const char *infPath, int settle);
+static int s98_stray_ours(const char *name);
+static int s98_other_9x(void);
 static void s98_inf_sync(void);
 static int s98_base_9x(void);
 static int s98_param_read(char *param, size_t cap);
@@ -4680,7 +4682,8 @@ static int package_files(PKG_EACH each, void *ctx)
             /* The bundled Stor98 driver goes into the copy only when ticked
              * (record 26 section 6.3): a copy of its INF on DevicePath, or
              * in the store, would install it unasked. */
-            if (inst_bundled_file(fd.cFileName) && !s98Include) {
+            if (inst_bundled_file(fd.cFileName) &&
+                (!s98Include || s98Share == INST_S98_SHARE_HOLD)) {
                 continue;
             }
             /* A No to the Thunderbolt question: none of its files in the
@@ -5913,6 +5916,18 @@ static int stage_nt(void)
             out("%s is not staged: a Stor98 the installer did not put on a "
                 "tunnel drive runs\nanother release (see above).\n",
                 instInfFile[k]);
+            continue;
+        }
+        if (k == INST_INF_S98 && s98Share != INST_S98_SHARE_FREE &&
+            (trapOem[k][0] != '\0' || trapUnknown[k])) {
+            /* /restage would take out a stored Stor98 package a drive the
+             * installer leaves may still name. */
+            out("%s is not staged: another build of it is in the driver "
+                "store, and a Stor98\nthe installer did not put on a tunnel "
+                "drive may name it. Nothing of Stor98 is\nchanged.\n",
+                instInfFile[k]);
+            infTrap[k] = 1;
+            flagSteps = 1;
             continue;
         }
         if (trapUnknown[k]) {
@@ -7623,6 +7638,9 @@ static int steps_9x(const char *dir)
         /* After the helper, only the devices it could not do. */
         if (helperRan && steps_why(d->Id) == NULL) {
             continue;
+        }
+        if (d->Inf == INST_INF_S98 && d->S98Why != INST_S98_ELIGIBLE) {
+            continue;   /* left by the gate: its reason is said */
         }
         fix = uas_fix(d);
         /* The controller and, for an update, its root hub: the release
@@ -12932,6 +12950,11 @@ static void s98_inf_after(const char *infPath, int settle)
                 s98_inf_log(name, "made in this step and named by the "
                             "device: recorded");
                 s98_rec_text("Staged", name, s98VersionText);
+            } else if (s98_stray_ours(name)) {
+                s98_inf_log(name, "appeared in this step, named by no "
+                            "device of this step, Stor98's and no Stor98 "
+                            "before this installer: recorded");
+                s98_rec_text("Staged", name, s98VersionText);
             } else {
                 s98_inf_log(name, "appeared in this step, named by no "
                             "device of this step: left");
@@ -12943,6 +12966,24 @@ static void s98_inf_after(const char *infPath, int settle)
     }
     s98InfCount[0] = s98InfCount[1];
     s98InfOk[0] = s98InfOk[1];
+}
+
+static int s98_file_names_stor98(const char *path);
+
+/* A copy no Stor98 step made (a wizard of Windows' own racing the helper):
+ * the package's when its text names Stor98 and no Stor98 was there before
+ * this installer (inst_s98_stray_inf_ours). */
+static int s98_stray_ours(const char *name)
+{
+    char win[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(path, sizeof(path), win, "INF");
+    join(path, sizeof(path), path, name);
+    return inst_s98_stray_inf_ours(s98Pre, s98_file_names_stor98(path));
 }
 
 /* Before a Stor98 step: the listing taken afresh, a copy that appeared
@@ -12957,7 +12998,15 @@ static void s98_inf_sync(void)
     }
     s98_inf_take(1, 0);
     for (i = 0; s98InfOk[0] && s98InfOk[1] && i < s98InfCount[1]; i++) {
-        if (!s98_inf_in(0, s98Inf[1][i].Name)) {
+        if (s98_inf_in(0, s98Inf[1][i].Name)) {
+            continue;
+        }
+        if (s98_stray_ours(s98Inf[1][i].Name)) {
+            s98_inf_log(s98Inf[1][i].Name, "appeared outside a Stor98 step, "
+                        "Stor98's and no Stor98 before this installer: "
+                        "recorded");
+            s98_rec_text("Staged", s98Inf[1][i].Name, s98VersionText);
+        } else {
             s98_inf_log(s98Inf[1][i].Name, "appeared outside a Stor98 step: "
                         "left");
         }
@@ -13112,6 +13161,14 @@ static void s98_record_devices(void)
     int after;
     int staged;
 
+    /* A place that is still unknown at the end leaves work (exit 4); one
+     * read later in the run does not. */
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].Present && devs[i].Inf == INST_INF_S98 &&
+            devs[i].S98Why == INST_S98_SKIP_UNKNOWN) {
+            flagSteps = 1;
+        }
+    }
     s98NewCount = 0;
     if (!s98Include || !s98Baseline || opts.List) {
         return;
@@ -13372,6 +13429,73 @@ static void s98_read_places(void)
     }
 }
 
+/* 98 SE and ME: the scan holds present devnodes alone, so every driver key
+ * naming Stor98's port driver is read too: 1 when one is not a present
+ * tunnel drive's and not an entry this installer recorded, or cannot be
+ * read. */
+static int s98_other_9x(void)
+{
+    HKEY cls;
+    char sub[16];
+    char drv[32];
+    char path[INST_PATH_CHARS];
+    char text[64];
+    DWORD i;
+    DWORD n;
+    LONG r;
+    int g;
+    int j;
+    int known;
+    int other = 0;
+
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_S98_CLASS_9X, 0, KEY_READ,
+                      &cls);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS) {
+        return 1;
+    }
+    for (i = 0; !other; i++) {
+        n = sizeof(sub);
+        r = RegEnumKeyExA(cls, i, sub, &n, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS) {
+            other = 1;
+            break;
+        }
+        join(path, sizeof(path), INST_S98_CLASS_9X, sub);
+        g = reg_text3(HKEY_LOCAL_MACHINE, path, "PortDriver", text,
+                      sizeof(text));
+        if (g < 0) {
+            other = 1;
+            break;
+        }
+        if (g == 0 || !inst_eq(text, "stor98.mpd")) {
+            continue;
+        }
+        join(drv, sizeof(drv), "SCSIAdapter", sub);
+        known = 0;
+        for (j = 0; j < devCount; j++) {
+            if (inst_eq(devs[j].Driver, drv) &&
+                ((devs[j].Present && !devs[j].RegOnly &&
+                  devs[j].S98Place == INST_S98_AT_TUNNEL) ||
+                 s98_rec_has("Devices", devs[j].Id) == 1)) {
+                known = 1;
+            }
+        }
+        if (!known) {
+            logonly("stor98: the driver key SCSIAdapter\\%s is Stor98's and "
+                    "no present tunnel drive's\n", sub);
+            other = 1;
+        }
+    }
+    RegCloseKey(cls);
+    return other;
+}
+
 /* The reasons said once each after the plan was printed. */
 #define INST_S98_SAID 64
 static char s98SaidId[INST_S98_SAID][INST_ID_CHARS];
@@ -13457,13 +13581,16 @@ static void s98_places(void)
             continue;
         }
         if (d->Present ? d->S98Place == INST_S98_AT_TUNNEL
-                       : s98_rec_has("Devices", d->Id)) {
+                       : s98_rec_has("Devices", d->Id) == 1) {
             continue;
         }
         other = 1;
         logonly("stor98: %s runs Stor98 and is not a known tunnel drive "
                 "(%s)\n", d->Id, d->Present ?
                 s98_place_text(d->S98Place) : "not present, not recorded");
+    }
+    if (!envNow.Nt && !other && s98_other_9x()) {
+        other = 1;
     }
     group_binary(INST_GROUP_S98, path, sizeof(path));
     r = file_version(path, v);
@@ -13489,9 +13616,6 @@ static void s98_places(void)
                     inst_action_text(d->Action), inst_s98_skip_text(why, 0));
         }
         d->Runs = 0;
-        if (why == INST_S98_SKIP_UNKNOWN) {
-            flagSteps = 1;
-        }
         if (s98Shown && !s98_said(d->Id, why)) {
             out("Stor98: %s (%s) is left: %s.\n",
                 d->Desc[0] ? d->Desc : "an NVMe drive", d->Id,
@@ -14344,6 +14468,252 @@ static int s98_rec_there(void)
     return 1;
 }
 
+/* 1 when a file's text names Stor98 (its service or its files). */
+static int s98_file_names_stor98(const char *path)
+{
+    DWORD n = 0;
+    DWORD i;
+    char *buf = read_file(path, &n);
+    int found = 0;
+
+    if (buf == NULL) {
+        return 0;
+    }
+    for (i = 0; i + 6 <= n && !found; i++) {
+        if (inst_eqn(buf + i, "stor98", 6)) {
+            found = 1;
+        }
+    }
+    free(buf);
+    return found;
+}
+
+/* The INF copy an adopted device's driver key names, recorded under
+ * Staged when its text is Stor98's: on NT %windir%\INF\<InfPath>; on 98 SE
+ * and ME that or the INF\OTHER copy whose long or 8.3 name it is. */
+static void s98_adopt_inf(const char *infPath)
+{
+    char win[INST_PATH_CHARS];
+    char dir[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char rel[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+
+    if (infPath[0] == '\0' || strchr(infPath, '\\') != NULL ||
+        GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return;
+    }
+    join(dir, sizeof(dir), win, "INF");
+    join(path, sizeof(path), dir, infPath);
+    if (file_state(path) > 0 && s98_file_names_stor98(path)) {
+        if (s98_rec_has("Staged", infPath) == 0) {
+            s98_rec_text("Staged", infPath, "adopted");
+            logonly("stor98: INF\\%s adopted with its device\n", infPath);
+        }
+        return;
+    }
+    if (envNow.Nt) {
+        return;
+    }
+    join(path, sizeof(path), dir, "OTHER\\*.INF");
+    h = FindFirstFileA(path, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    do {
+        if (!inst_eq(fd.cFileName, infPath) &&
+            !inst_eq(fd.cAlternateFileName, infPath)) {
+            continue;
+        }
+        join(rel, sizeof(rel), "OTHER", fd.cFileName);
+        join(path, sizeof(path), dir, rel);
+        if (s98_file_names_stor98(path) &&
+            s98_rec_has("Staged", rel) == 0) {
+            s98_rec_text("Staged", rel, "adopted");
+            logonly("stor98: INF\\%s adopted with its device\n", rel);
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
+/* 98 SE and ME: every Enum\PCI entry whose driver key names Stor98's port
+ * driver, present or not, with the InfPath that key names. -1 when one
+ * cannot be read. */
+#define INST_S98_ADOPT_MAX 64
+static char s98AdId[INST_S98_ADOPT_MAX][INST_ID_CHARS];
+static char s98AdInf[INST_S98_ADOPT_MAX][64];
+static int s98AdPresent[INST_S98_ADOPT_MAX];
+static int s98AdCount;
+
+static int s98_adopt_add(const char *id, const char *inf, int present)
+{
+    int j;
+
+    for (j = 0; j < s98AdCount; j++) {
+        if (inst_eq(s98AdId[j], id)) {
+            return 1;
+        }
+    }
+    if (s98AdCount >= INST_S98_ADOPT_MAX) {
+        return 0;
+    }
+    inst_copy(s98AdId[s98AdCount], id, INST_ID_CHARS);
+    inst_copy(s98AdInf[s98AdCount], inf, sizeof(s98AdInf[0]));
+    s98AdPresent[s98AdCount++] = present;
+    return 1;
+}
+
+static int s98_enum_bound_9x(void)
+{
+    HKEY pci;
+    HKEY dev;
+    char devName[INST_ID_CHARS];
+    char instName[INST_ID_CHARS];
+    char id[INST_ID_CHARS];
+    char drv[128];
+    char path[INST_PATH_CHARS];
+    char text[64];
+    char inf[64];
+    DWORD i;
+    DWORD j;
+    DWORD n;
+    int ok = 1;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\PCI", 0, KEY_READ, &pci) !=
+        ERROR_SUCCESS) {
+        return -1;
+    }
+    for (i = 0; ok; i++) {
+        n = sizeof(devName);
+        if (RegEnumKeyExA(pci, i, devName, &n, NULL, NULL, NULL, NULL) !=
+            ERROR_SUCCESS) {
+            break;
+        }
+        if (RegOpenKeyExA(pci, devName, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
+            ok = 0;
+            break;
+        }
+        for (j = 0;; j++) {
+            n = sizeof(instName);
+            if (RegEnumKeyExA(dev, j, instName, &n, NULL, NULL, NULL, NULL) !=
+                ERROR_SUCCESS) {
+                break;
+            }
+            join(id, sizeof(id), "PCI", devName);
+            join(id, sizeof(id), id, instName);
+            if (reg9x_value(id, "Driver", drv, sizeof(drv)) <= 0) {
+                continue;
+            }
+            join(path, sizeof(path), "System\\CurrentControlSet\\Services\\Class",
+                 drv);
+            if (reg_text3(HKEY_LOCAL_MACHINE, path, "PortDriver", text,
+                          sizeof(text)) <= 0 ||
+                !inst_eq(text, "stor98.mpd")) {
+                continue;
+            }
+            if (reg_text3(HKEY_LOCAL_MACHINE, path, "InfPath", inf,
+                          sizeof(inf)) <= 0) {
+                inf[0] = '\0';
+            }
+            if (s98_rec_has("Devices", id) == 0 &&
+                !s98_adopt_add(id, inf, 0)) {
+                ok = 0;
+            }
+        }
+        RegCloseKey(dev);
+    }
+    RegCloseKey(pci);
+    return ok ? 1 : -1;
+}
+
+/* The uninstall's side of tunnel-only (owner's coordinator, 2026-10-19):
+ * when this package's installer brought Stor98 (PreExisting clear), a
+ * device Windows bound to Stor98 after the run - the wizard of an
+ * enclosure first plugged later, from the staged INF or the install
+ * directory - is the package's too, with the INF copy its driver key
+ * names, provided every such device sits behind a tunnel or is gone with
+ * its tunnel (not present). One that is internal, or whose place cannot be
+ * read, keeps them all, and is named. */
+static void s98_un_adopt(void)
+{
+    int i;
+    int j;
+    int keep = 0;
+    int anyPresent = 0;
+
+    s98AdCount = 0;
+    if (s98Pre) {
+        return;
+    }
+    if (!scan()) {
+        logonly("stor98: no reading for the adoption: nothing adopted\n");
+        return;
+    }
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        int p = d->Present && !d->RegOnly;
+        if (!inst_eq(d->Service, "stor98") ||
+            s98_rec_has("Devices", d->Id) != 0) {
+            continue;
+        }
+        if (!s98_adopt_add(d->Id, d->InfPathState > 0 ? d->InfPath : "", p)) {
+            keep = 1;
+        }
+        anyPresent |= p;
+    }
+    if (!envNow.Nt && s98_enum_bound_9x() < 0) {
+        out("Stor98 stays: a device bound to it cannot be read.\n");
+        keep = 1;
+    }
+    for (j = 0; j < s98AdCount && !envNow.Nt; j++) {
+        for (i = 0; i < devCount; i++) {
+            if (inst_eq(devs[i].Id, s98AdId[j]) && devs[i].Present &&
+                !devs[i].RegOnly) {
+                s98AdPresent[j] = 1;
+                anyPresent = 1;
+            }
+        }
+    }
+    if (s98AdCount == 0 || keep) {
+        return;
+    }
+    if (anyPresent) {
+        s98_read_places();
+    }
+    for (j = 0; j < s98AdCount; j++) {
+        int place = INST_S98_AT_UNKNOWN;
+        if (!s98AdPresent[j]) {
+            continue;
+        }
+        for (i = 0; i < devCount; i++) {
+            if (inst_eq(devs[i].Id, s98AdId[j])) {
+                place = devs[i].S98Place;
+            }
+        }
+        if (!inst_s98_adoptable(s98Pre, 1, place)) {
+            out("Stor98 stays: %s runs it and is %s, so it is not this "
+                "package's to remove.\n", s98AdId[j],
+                place == INST_S98_AT_INTERNAL ? "an internal drive" :
+                "a drive whose place could not be read");
+            keep = 1;
+        }
+    }
+    if (keep) {
+        return;
+    }
+    for (j = 0; j < s98AdCount; j++) {
+        out("  %s: bound to Stor98 after this installer's run (%s): it "
+            "goes with Stor98.\n", s98AdId[j], s98AdPresent[j] ?
+            "behind a tunnel" : "not present, its tunnel gone");
+        if (opts.List) {
+            continue;
+        }
+        s98_rec_text("Devices", s98AdId[j], "adopted");
+        s98_adopt_inf(s98AdInf[j]);
+    }
+}
+
 /* Record 26 section 6.3, "The uninstall", its first step: the recorded
  * devices, present or not, each removed and its entry dropped once it is
  * gone. 1 go on; 0 stop (said). On NT set is the device list; on 98 SE
@@ -14368,6 +14738,7 @@ static int s98_un_devices(HDEVINFO set)
         }
         return r == 0;
     }
+    s98_un_adopt();
     out("Stor98's devices, as this installer recorded them:\n");
     for (i = 0; (r = s98_rec_enum("Devices", i, id, sizeof(id))) > 0; i++) {
         if (!opts.List && !go_on()) {

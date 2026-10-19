@@ -3254,6 +3254,19 @@ static void test_s98(void)
           inst_s98_share(1, 0) == INST_S98_SHARE_HOLD,
           "the shared file: changed only with no other Stor98, or kept at "
           "its release");
+    CHECK(inst_s98_adoptable(0, 1, INST_S98_AT_TUNNEL) &&
+          inst_s98_adoptable(0, 0, INST_S98_AT_UNKNOWN) &&
+          inst_s98_adoptable(0, 0, INST_S98_AT_INTERNAL),
+          "uninstall: bound after the run, behind a tunnel or gone with it");
+    CHECK(!inst_s98_adoptable(0, 1, INST_S98_AT_INTERNAL) &&
+          !inst_s98_adoptable(0, 1, INST_S98_AT_UNKNOWN),
+          "uninstall: an internal or unknown drive keeps Stor98");
+    CHECK(!inst_s98_adoptable(1, 1, INST_S98_AT_TUNNEL) &&
+          !inst_s98_adoptable(1, 0, INST_S98_AT_UNKNOWN),
+          "uninstall: a Stor98 there before this installer is never adopted");
+    CHECK(inst_s98_stray_inf_ours(0, 1) && !inst_s98_stray_inf_ours(1, 1) &&
+          !inst_s98_stray_inf_ours(0, 0),
+          "a stray INF copy: the package's when Stor98's and none before");
     CHECK(strstr(inst_page_text(INST_PT_S98_T), "tunnel drives only") !=
               NULL &&
           strstr(inst_page_text(INST_PT_S98_T), "internal") == NULL,
