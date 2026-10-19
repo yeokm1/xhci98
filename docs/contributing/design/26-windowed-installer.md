@@ -1,6 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 9, 2026-10-19 (task 42-A.27, section 7: the settle after a
+Status: draft 10, 2026-10-19 (task 42-A.29, the owner: `XhciFastPollFsLs`
+among the USB page's "Advanced..." rows; sections 5.4 and 11, record
+23 revision 15); draft 9, 2026-10-19 (task 42-A.27, section 7: the settle after a
 root hub's or hub's job within a pass, record 23 revision 14); draft 8, 2026-10-19
 (task 42-A.21, the owner's request of that
 day: the connection manager alone, and Windows 8 and 8.1 for it; sections
@@ -393,7 +395,8 @@ value, which then rules both (the console's "Enter for [each keeps its
 own]", record 23 section 8.3, as a page).
 
 **"Advanced..."** opens a dialog with the values record 23 never asks
-(`XhciPollFineTimer`, `XhciSelectiveSuspend`, and from the owner's
+(`XhciPollFineTimer`, `XhciSelectiveSuspend`, `XhciFastPollFsLs` (owner,
+2026-10-19: 0, 2, 3 and 4, the gap at 1 kept), and from the owner's
 decision the rest the console sets only with `/set`), each with its
 default, its range or list, the systems it applies to, and its warning
 (section 11's table carries all three), every one preselected with the
@@ -958,8 +961,9 @@ nothing changed; closed during the progress, the cancel of section 5.8.
 
 - the settings table's new columns: for every value of record 23 section
   8.1 and the `/set`-only values, whether it is asked or advanced, its
-  default, its range or list with meanings, the systems it applies to, its
-  warning, and its location rule (machine-wide for the drivers' values,
+  default, its range or list with meanings (a list names values 0 to 4
+  and may have a gap: `XhciFastPollFsLs` offers 0, 2, 3 and 4), the
+  systems it applies to, its warning, and its location rule (machine-wide for the drivers' values,
   Stor98's two forms for Stor98's); the suite checks every asked and
   advanced row against the INFs of `src\` and `src\cm\` as today, and every
   Stor98 row against the bundled Stor98's readme table (the row names and

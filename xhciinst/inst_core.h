@@ -312,6 +312,9 @@ int inst_testsigning(const char *options);
 #define INST_APPLY_9X_XHCI  4   /* 98 SE and ME with an xHCI controller */
 #define INST_APPLY_9X_CM    5   /* 98 SE and ME with a device xhcicm.inf matches */
 
+/* The values a choice list names (0 to 4: XhciFastPollFsLs's 4). */
+#define INST_CHOICES        5
+
 typedef struct _INST_VALUE {
     const char *Name;
     int Inf;                /* INST_INF_*: whose driver key            */
@@ -321,8 +324,9 @@ typedef struct _INST_VALUE {
     const char *Meaning;
     const char *Caution;    /* shown with the question and with /set, or NULL */
     INST_U32 CautionMask;   /* the values the caution is about (0: every one) */
-    const char *Choice[4];  /* what value n means, or NULL (owner, 2026-10-16:
-                               each choice on its own line with its meaning) */
+    const char *Choice[INST_CHOICES]; /* what value n means, or NULL (owner,
+                               2026-10-16: each choice on its own line with
+                               its meaning) */
     /* Record 26 section 11 (task 42-A.2): a value whose allowed set is a
      * range rather than a list (Hi nonzero: Lo to Hi, the masks unused),
      * and a value the INFs do not write (NoInf: Def is its default, the

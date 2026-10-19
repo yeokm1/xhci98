@@ -1593,6 +1593,18 @@ const INST_VALUE instValues[] = {
       "Device Manager and plugged in again. A UAS-only disk stays on "
       "UAS.", 0,
       { "UAS where the disk offers it", "Bulk-Only", NULL, NULL } },
+    /* Owner, 2026-10-19: never asked, the USB page's "Advanced..." row
+     * and /set; 1 is not a mode (docs\using\tuning.md). */
+    { "XhciFastPollFsLs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
+      0x1DUL, "poll a mouse faster than 1000 Hz, with SweetLow's hidusbf",
+      "this is outside the xHCI specification for Low- and Full-Speed "
+      "devices. It is read when the controller starts: restart Windows "
+      "after changing it. With 4, set the value and restart before "
+      "setting the filter's code.", 0,
+      { "off", NULL,
+        "a root-port mouse set to 31/62 Hz in hidusbf runs at 2000/4000 Hz",
+        "a root-port mouse set to 31/62 Hz in hidusbf runs at 4000/8000 Hz",
+        "the rate the client chooses, codes 128 to 143" } },
     { "XhciCmMode", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0xFUL,
       "the Thunderbolt and USB4 connection manager",
       "2 and 3 force one connection manager whatever the controller "
@@ -3827,7 +3839,7 @@ static int inst_value_question_at(char *out, size_t cap, int index,
             lo = b;
         }
         hi = b;
-        if (b < 4UL && v->Choice[b] != NULL) {
+        if (b < INST_CHOICES && v->Choice[b] != NULL) {
             named = 1;
         }
     }
@@ -3839,7 +3851,7 @@ static int inst_value_question_at(char *out, size_t cap, int index,
             }
             inst_cat(raw, sizeof(raw), "    ");
             inst_cat_number(raw, sizeof(raw), b);
-            if (b < 4UL && v->Choice[b] != NULL) {
+            if (b < INST_CHOICES && v->Choice[b] != NULL) {
                 inst_cat(raw, sizeof(raw), "  ");
                 inst_cat(raw, sizeof(raw), v->Choice[b]);
             }

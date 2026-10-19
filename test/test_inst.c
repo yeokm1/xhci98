@@ -1015,6 +1015,66 @@ static void test_values(void)
         }
     }
 
+    /* Owner, 2026-10-19: XhciFastPollFsLs, never asked, settable for 0, 2,
+     * 3 and 4 (1 is not a mode), each choice named, 4 included. */
+    {
+        int fp = inst_value_find("XhciFastPollFsLs");
+        INST_ENV en = env(0, 4, 10, INST_ARCH_X86);
+        INST_ENV nt = env(1, 6, 1, INST_ARCH_X86);
+        INST_VNOW fnow[1];
+        INST_U32 fenter;
+        char q[4096];
+        en.AnyXhci = 1;
+        nt.AnyXhci = 1;
+        CHECK(fp >= 0, "the fast-poll row");
+        if (fp >= 0) {
+            CHECK_EQ(instValues[fp].Inf, INST_INF_XHCI, "an xhci98 value");
+            CHECK_EQ(instValues[fp].Apply, INST_APPLY_ANY_XHCI, "any system");
+            CHECK_EQ(instValues[fp].Asked, 0, "fast poll never asked");
+            CHECK(!inst_value_applies(fp, &en), "98 SE: not asked");
+            CHECK(inst_value_relevant(fp, &en), "98 SE: an Advanced row");
+            CHECK(inst_value_relevant(fp, &nt), "7: an Advanced row");
+            CHECK_EQ(inst_value_set_mask(fp, &en), 0x1D, "98 SE: 0, 2, 3, 4");
+            CHECK_EQ(inst_value_set_mask(fp, &nt), 0x1D, "7: 0, 2, 3, 4");
+            CHECK(inst_value_set("XhciFastPollFsLs=0", &idx, &v) == 1 &&
+                  idx == fp && v == 0, "/set takes fast poll 0");
+            CHECK_EQ(inst_value_set("XhciFastPollFsLs=1", &idx, &v), -1,
+                     "/set refuses fast poll 1");
+            CHECK(inst_value_set("XhciFastPollFsLs=2", &idx, &v) == 1 &&
+                  v == 2, "/set takes fast poll 2");
+            CHECK(inst_value_set("XhciFastPollFsLs=3", &idx, &v) == 1 &&
+                  v == 3, "/set takes fast poll 3");
+            CHECK(inst_value_set("XhciFastPollFsLs=4", &idx, &v) == 1 &&
+                  idx == fp && v == 4, "/set takes fast poll 4");
+            CHECK_EQ(inst_value_set("XhciFastPollFsLs=5", &idx, &v), -1,
+                     "/set refuses fast poll 5");
+            CHECK(!inst_value_allowed(fp, &nt, 1), "Advanced: 1 refused");
+            CHECK(inst_value_allowed(fp, &nt, 4), "Advanced: 4 taken");
+            CHECK(!inst_value_allowed(fp, &nt, 5), "Advanced: 5 refused");
+            CHECK(instValues[fp].Choice[1] == NULL, "1 has no meaning");
+            CHECK(instValues[fp].Choice[4] != NULL &&
+                  inst_eq(instValues[fp].Choice[4],
+                          "the rate the client chooses, codes 128 to 143"),
+                  "4 named");
+            CHECK(instValues[fp].Caution != NULL &&
+                  instValues[fp].CautionMask == 0 &&
+                  strstr(instValues[fp].Caution, "restart") != NULL &&
+                  strstr(instValues[fp].Caution, "3.1.0.0") == NULL,
+                  "its caution every time, no release history");
+            memset(fnow, 0, sizeof(fnow));
+            fnow[0].State = 1;
+            fnow[0].Value = 0;
+            CHECK(inst_value_question(q, sizeof(q), fp, 0x1D, 0, fnow, 1, 0,
+                                      0, &fenter) == 1, "the row renders");
+            CHECK(strstr(q, "    4  the rate the client chooses, codes 128 "
+                            "to 143\n") != NULL, "choice 4 listed");
+            CHECK(strstr(q, "    2  a root-port mouse set to 31/62 Hz in "
+                            "hidusbf runs at 2000/4000 Hz\n") != NULL,
+                  "choice 2 listed");
+            CHECK(strstr(q, "\n    1") == NULL, "1 not listed");
+        }
+    }
+
     inst_mask_text(0x7, text, sizeof(text));
     CHECK(inst_eq(text, "0, 1, 2"), "mask text");
     inst_mask_text(0x0, text, sizeof(text));
@@ -2252,7 +2312,7 @@ static void test_questions(void)
     for (i = 0; i < instValueCount; i++) {
         int b;
         int named = 0;
-        for (b = 0; b < 4; b++) {
+        for (b = 0; b < INST_CHOICES; b++) {
             named += instValues[i].Choice[b] != NULL;
             if ((instValues[i].Settable & (1UL << b)) == 0) {
                 CHECK(instValues[i].Choice[b] == NULL,

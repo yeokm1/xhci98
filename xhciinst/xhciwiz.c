@@ -972,7 +972,7 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
                 continue;
             }
             _snprintf(line, sizeof(line) - 1, " %lu: %s.", (unsigned long)b,
-                      (b < 4UL && v->Choice[b] != NULL) ? v->Choice[b] :
+                      (b < INST_CHOICES && v->Choice[b] != NULL) ? v->Choice[b] :
                       "allowed");
             line[sizeof(line) - 1] = '\0';
             strncat(out, line, cap - strlen(out) - 1);
@@ -1041,7 +1041,7 @@ static void row_fill_combo(HWND combo, const INST_ROW *r)
             continue;
         }
         _snprintf(text, sizeof(text) - 1, "%lu  %s%s", (unsigned long)b,
-                  (b < 4UL && v->Choice[b] != NULL) ? v->Choice[b] : "",
+                  (b < INST_CHOICES && v->Choice[b] != NULL) ? v->Choice[b] : "",
                   b == r->Def ? " (default)" : "");
         text[sizeof(text) - 1] = '\0';
         item = (int)SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
