@@ -318,6 +318,7 @@ static int s98Want;         /* ticked, or /stor98                          */
 static int s98TopoFresh;    /* the places were read since the last scan   */
 static int s98Share;        /* INST_S98_SHARE_*, the latest plan's        */
 static int s98Shown;        /* the plan was printed: later reasons are said */
+static int s98HoldRun;      /* the copy was made held: held all the run   */
 static void s98_places(void);
 static INST_U32 s98Version[4];
 static char s98VersionText[32];
@@ -381,6 +382,7 @@ static int s98InfOk[2];
 
 static int s98_baseline(void);
 static void s98_record_devices(void);
+static void s98_final_unknown(void);
 static void s98_record_version(void);
 static void s98_write_values(void);
 static void s98_ask_values(void);
@@ -4684,6 +4686,11 @@ static int package_files(PKG_EACH each, void *ctx)
              * in the store, would install it unasked. */
             if (inst_bundled_file(fd.cFileName) &&
                 (!s98Include || s98Share == INST_S98_SHARE_HOLD)) {
+                if (s98Include) {
+                    /* Held for the whole run: a later reading that lifts
+                     * the hold finds no Stor98 in the copy. */
+                    s98HoldRun = 1;
+                }
                 continue;
             }
             /* A No to the Thunderbolt question: none of its files in the
@@ -7454,6 +7461,7 @@ static int run_install_nt(void)
     s98_write_values();
     check_results();
     s98_record_devices();
+    s98_final_unknown();
     s98_record_version();
     restage_settle();
     if (!restage_write()) {
@@ -8679,6 +8687,7 @@ static int run_install_9x(void)
     arp_write(0);
     check_results_9x();
     s98_record_devices();
+    s98_final_unknown();
     s98_record_version();
     steps = 0;
     for (i = 0; i < devCount; i++) {
@@ -13153,6 +13162,20 @@ static void s98_record_device(const DEVREC *d, const char *how)
  * that Stor98 runs now and did not at the baseline, recorded by one of
  * the two rules; a device Stor98 ran at the baseline, or that an update
  * changed, is never added. */
+/* At the end of an install run: a place that is still unknown leaves work
+ * (exit 4); one read later in the run does not. */
+static void s98_final_unknown(void)
+{
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].Present && devs[i].Inf == INST_INF_S98 &&
+            devs[i].S98Why == INST_S98_SKIP_UNKNOWN) {
+            flagSteps = 1;
+        }
+    }
+}
+
 static void s98_record_devices(void)
 {
     int i;
@@ -13161,14 +13184,6 @@ static void s98_record_devices(void)
     int after;
     int staged;
 
-    /* A place that is still unknown at the end leaves work (exit 4); one
-     * read later in the run does not. */
-    for (i = 0; i < devCount; i++) {
-        if (devs[i].Present && devs[i].Inf == INST_INF_S98 &&
-            devs[i].S98Why == INST_S98_SKIP_UNKNOWN) {
-            flagSteps = 1;
-        }
-    }
     s98NewCount = 0;
     if (!s98Include || !s98Baseline || opts.List) {
         return;
@@ -13429,6 +13444,55 @@ static void s98_read_places(void)
     }
 }
 
+/* 98 SE and ME: the Enum\PCI entry whose Driver is drv. 1 found, 0 none,
+ * -1 unreadable. */
+static int s98_enum_id_9x(const char *drv, char *id, size_t cap)
+{
+    HKEY pci;
+    HKEY dev;
+    char devName[INST_ID_CHARS];
+    char instName[INST_ID_CHARS];
+    char one[INST_ID_CHARS];
+    char text[128];
+    DWORD i;
+    DWORD j;
+    DWORD n;
+    int found = 0;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\PCI", 0, KEY_READ, &pci) !=
+        ERROR_SUCCESS) {
+        return -1;
+    }
+    for (i = 0; !found; i++) {
+        n = sizeof(devName);
+        if (RegEnumKeyExA(pci, i, devName, &n, NULL, NULL, NULL, NULL) !=
+            ERROR_SUCCESS) {
+            break;
+        }
+        if (RegOpenKeyExA(pci, devName, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
+            found = -1;
+            break;
+        }
+        for (j = 0; !found; j++) {
+            n = sizeof(instName);
+            if (RegEnumKeyExA(dev, j, instName, &n, NULL, NULL, NULL, NULL) !=
+                ERROR_SUCCESS) {
+                break;
+            }
+            join(one, sizeof(one), "PCI", devName);
+            join(one, sizeof(one), one, instName);
+            if (reg9x_value(one, "Driver", text, sizeof(text)) > 0 &&
+                inst_eq(text, drv)) {
+                inst_copy(id, one, cap);
+                found = 1;
+            }
+        }
+        RegCloseKey(dev);
+    }
+    RegCloseKey(pci);
+    return found;
+}
+
 /* 98 SE and ME: the scan holds present devnodes alone, so every driver key
  * naming Stor98's port driver is read too: 1 when one is not a present
  * tunnel drive's and not an entry this installer recorded, or cannot be
@@ -13483,6 +13547,19 @@ static int s98_other_9x(void)
                 ((devs[j].Present && !devs[j].RegOnly &&
                   devs[j].S98Place == INST_S98_AT_TUNNEL) ||
                  s98_rec_has("Devices", devs[j].Id) == 1)) {
+                known = 1;
+            }
+        }
+        if (!known) {
+            /* An unplugged drive is in no reading: its Enum entry names the
+             * key, and the record may name that entry. */
+            char eid[INST_ID_CHARS];
+            int e = s98_enum_id_9x(drv, eid, sizeof(eid));
+            if (e < 0) {
+                other = 1;
+                break;
+            }
+            if (e > 0 && s98_rec_has("Devices", eid) == 1) {
                 known = 1;
             }
         }
@@ -13595,6 +13672,9 @@ static void s98_places(void)
     group_binary(INST_GROUP_S98, path, sizeof(path));
     r = file_version(path, v);
     s98Share = inst_s98_share(other, r > 0 && inst_ver_cmp(v, s98Version) == 0);
+    if (s98HoldRun) {
+        s98Share = INST_S98_SHARE_HOLD;
+    }
     logonly("stor98: other bindings %d, the file %s (%d), share %d\n", other,
             path, r, s98Share);
     for (i = 0; i < devCount; i++) {
@@ -14468,19 +14548,36 @@ static int s98_rec_there(void)
     return 1;
 }
 
-/* 1 when a file's text names Stor98 (its service or its files). */
+/* 1 when an INF's active text (each line up to its ';') names Stor98's
+ * driver file - stor98.mpd on 98 SE and ME, stor98.sys on NT - as a word
+ * of its own. An INF that names it only through a string token is not
+ * taken: it stays (the conservative side). */
 static int s98_file_names_stor98(const char *path)
 {
+    const char *want = envNow.Nt ? "stor98.sys" : "stor98.mpd";
     DWORD n = 0;
     DWORD i;
     char *buf = read_file(path, &n);
     int found = 0;
+    int comment = 0;
 
     if (buf == NULL) {
         return 0;
     }
-    for (i = 0; i + 6 <= n && !found; i++) {
-        if (inst_eqn(buf + i, "stor98", 6)) {
+    for (i = 0; i < n && !found; i++) {
+        char c = buf[i];
+        if (c == '\n' || c == '\r') {
+            comment = 0;
+            continue;
+        }
+        if (c == ';') {
+            comment = 1;
+        }
+        if (comment || i + 10 > n || !inst_eqn(buf + i, want, 10)) {
+            continue;
+        }
+        if ((i == 0 || strchr(" \t,=\"\\", buf[i - 1]) != NULL) &&
+            (i + 10 == n || strchr(" \t,\r\n\";", buf[i + 10]) != NULL)) {
             found = 1;
         }
     }
@@ -14489,52 +14586,69 @@ static int s98_file_names_stor98(const char *path)
 }
 
 /* The INF copy an adopted device's driver key names, recorded under
- * Staged when its text is Stor98's: on NT %windir%\INF\<InfPath>; on 98 SE
- * and ME that or the INF\OTHER copy whose long or 8.3 name it is. */
-static void s98_adopt_inf(const char *infPath)
+ * Staged when its text is Stor98's. The candidates: INF\<InfPath> (a
+ * qualified OTHER\<name> as it is), and on 98 SE and ME each INF\OTHER copy
+ * whose long or 8.3 name a bare InfPath is. Exactly one is adopted; none
+ * or more than one (the name could mean either) adopts nothing, logged.
+ * 0 when the record could not be written. */
+static int s98_adopt_inf(const char *infPath)
 {
     char win[INST_PATH_CHARS];
     char dir[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
     char rel[INST_PATH_CHARS];
+    char pick[INST_PATH_CHARS];
     WIN32_FIND_DATAA fd;
     HANDLE h;
+    int count = 0;
+    int h1;
 
-    if (infPath[0] == '\0' || strchr(infPath, '\\') != NULL ||
-        GetWindowsDirectoryA(win, sizeof(win)) == 0) {
-        return;
+    if (infPath[0] == '\0' || GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 1;
     }
     join(dir, sizeof(dir), win, "INF");
     join(path, sizeof(path), dir, infPath);
-    if (file_state(path) > 0 && s98_file_names_stor98(path)) {
-        if (s98_rec_has("Staged", infPath) == 0) {
-            s98_rec_text("Staged", infPath, "adopted");
-            logonly("stor98: INF\\%s adopted with its device\n", infPath);
-        }
-        return;
+    if (file_state(path) > 0) {
+        inst_copy(pick, infPath, sizeof(pick));
+        count++;
     }
-    if (envNow.Nt) {
-        return;
-    }
-    join(path, sizeof(path), dir, "OTHER\\*.INF");
-    h = FindFirstFileA(path, &fd);
-    if (h == INVALID_HANDLE_VALUE) {
-        return;
-    }
-    do {
-        if (!inst_eq(fd.cFileName, infPath) &&
-            !inst_eq(fd.cAlternateFileName, infPath)) {
-            continue;
+    if (!envNow.Nt && strchr(infPath, '\\') == NULL) {
+        join(path, sizeof(path), dir, "OTHER\\*.INF");
+        h = FindFirstFileA(path, &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (inst_eq(fd.cFileName, infPath) ||
+                    inst_eq(fd.cAlternateFileName, infPath)) {
+                    join(rel, sizeof(rel), "OTHER", fd.cFileName);
+                    inst_copy(pick, rel, sizeof(pick));
+                    count++;
+                }
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
         }
-        join(rel, sizeof(rel), "OTHER", fd.cFileName);
-        join(path, sizeof(path), dir, rel);
-        if (s98_file_names_stor98(path) &&
-            s98_rec_has("Staged", rel) == 0) {
-            s98_rec_text("Staged", rel, "adopted");
-            logonly("stor98: INF\\%s adopted with its device\n", rel);
+    }
+    if (count != 1) {
+        logonly("stor98: InfPath %s: %d candidate copies, none adopted\n",
+                infPath, count);
+        return 1;
+    }
+    join(path, sizeof(path), dir, pick);
+    if (!s98_file_names_stor98(path)) {
+        logonly("stor98: INF\\%s does not name Stor98's driver: not "
+                "adopted\n", pick);
+        return 1;
+    }
+    h1 = s98_rec_has("Staged", pick);
+    if (h1 < 0) {
+        return 0;
+    }
+    if (h1 == 0) {
+        if (!s98_rec_text("Staged", pick, "adopted")) {
+            return 0;
         }
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
+        logonly("stor98: INF\\%s adopted with its device\n", pick);
+    }
+    return 1;
 }
 
 /* 98 SE and ME: every Enum\PCI entry whose driver key names Stor98's port
@@ -14635,7 +14749,7 @@ static int s98_enum_bound_9x(void)
  * names, provided every such device sits behind a tunnel or is gone with
  * its tunnel (not present). One that is internal, or whose place cannot be
  * read, keeps them all, and is named. */
-static void s98_un_adopt(void)
+static int s98_un_adopt(void)
 {
     int i;
     int j;
@@ -14644,11 +14758,11 @@ static void s98_un_adopt(void)
 
     s98AdCount = 0;
     if (s98Pre) {
-        return;
+        return 1;
     }
     if (!scan()) {
         logonly("stor98: no reading for the adoption: nothing adopted\n");
-        return;
+        return 1;
     }
     for (i = 0; i < devCount; i++) {
         const DEVREC *d = &devs[i];
@@ -14676,7 +14790,7 @@ static void s98_un_adopt(void)
         }
     }
     if (s98AdCount == 0 || keep) {
-        return;
+        return 1;
     }
     if (anyPresent) {
         s98_read_places();
@@ -14700,7 +14814,7 @@ static void s98_un_adopt(void)
         }
     }
     if (keep) {
-        return;
+        return 1;
     }
     for (j = 0; j < s98AdCount; j++) {
         out("  %s: bound to Stor98 after this installer's run (%s): it "
@@ -14709,9 +14823,17 @@ static void s98_un_adopt(void)
         if (opts.List) {
             continue;
         }
-        s98_rec_text("Devices", s98AdId[j], "adopted");
-        s98_adopt_inf(s98AdInf[j]);
+        /* The copy first: the device's entry, once removed, no longer
+         * says which copy it named. */
+        if (!s98_adopt_inf(s98AdInf[j]) ||
+            !s98_rec_text("Devices", s98AdId[j], "adopted")) {
+            out("Stor98's install record could not be written: the "
+                "uninstall stops.\n");
+            flagFailed = 1;
+            return 0;
+        }
     }
+    return 1;
 }
 
 /* Record 26 section 6.3, "The uninstall", its first step: the recorded
@@ -14738,7 +14860,9 @@ static int s98_un_devices(HDEVINFO set)
         }
         return r == 0;
     }
-    s98_un_adopt();
+    if (!s98_un_adopt()) {
+        return 0;
+    }
     out("Stor98's devices, as this installer recorded them:\n");
     for (i = 0; (r = s98_rec_enum("Devices", i, id, sizeof(id))) > 0; i++) {
         if (!opts.List && !go_on()) {
