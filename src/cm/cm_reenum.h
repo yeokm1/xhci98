@@ -689,6 +689,20 @@ VOID CmRegAttLocateCaps(struct _CM_FILTER *filter, ULONG address);
 BOOLEAN CmRegAttMayMark(struct _CM_FILTER *filter);
 VOID CmRegAttAnswered(struct _CM_FILTER *filter);
 VOID CmRegAttEvent(struct _CM_FILTER *filter, ULONG which);
+
+/*
+ * CmRegStartAllowed  at a start's way down, for an object of this driver's
+ *                    on a function's PDO: FALSE while an eject is taken for
+ *                    a member whose last BusRelations reported that PDO and
+ *                    its tunnel teardown has not returned (EjectHold). The
+ *                    eject's eligibility (cmEjectReady) and the hold are
+ *                    one step under the registration list's lock, and a
+ *                    stack being built has its objects attached before its
+ *                    start comes down, so a function either reads as
+ *                    having a stack at that step or has its start refused
+ *                    until the tunnel is gone. PASSIVE_LEVEL.
+ */
+BOOLEAN CmRegStartAllowed(struct _CM_FILTER *filter);
 VOID CmRegAttRemoved(struct _CM_FILTER *filter, BOOLEAN afterQr);
 
 /* The thread's half of the marks: the answer built into out (at least
