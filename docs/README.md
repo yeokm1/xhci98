@@ -227,7 +227,8 @@ reachable from here or from `AGENTS.md`'s repository layout.
   41, design record 25); published as the tool's `readme.txt`.
 - [`src/stor98/README.md`](../src/stor98/README.md) - Stor98, the NVMe
   SCSI miniport the packages bundle, a BSD-3-Clause project in this tree
-  since 2026-10-19 (roadmap-usb4 task 42-A.20), with its own
+  since 2026-10-19 (roadmap-usb4 task 42-A.20) and built, versioned and
+  signed with the package since `3.1.0.0` (task 42-A.30), with its own
   [`AGENTS.md`](../src/stor98/AGENTS.md), [`NOTICE`](../src/stor98/NOTICE)
   and `docs/` ([`BUILD.md`](../src/stor98/docs/BUILD.md),
   [`PLAN.md`](../src/stor98/docs/PLAN.md),

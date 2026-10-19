@@ -449,9 +449,12 @@ engine reads, edits one key at a time and writes back whole, keeping a
 pair it does not know and the order it found. The page names Stor98's
 readme as the authority, from which the table's meanings, defaults,
 ranges, types and key names are copied at the version the package bundles
-(`-Stor98Version`), and the host suite checks every row against that
-readme's table, so a Stor98 release that renames or retypes a value fails
-the build rather than the user. Every Stor98 value the installer writes is
+(since `3.1.0.0` the package's own version: Stor98 is built from
+`src\stor98` with the drivers, roadmap-usb4 task 42-A.30), and the host
+suite checks every row against that readme's table
+(`test\stor98-settings.txt`; `make-release.ps1` holds
+`src\stor98\docs\package-readme.txt`'s table to it), so a Stor98 change
+that renames or retypes a value fails the build rather than the user. Every Stor98 value the installer writes is
 recorded by name under the `Stor98` key of section 6.3, for the uninstall.
 The page is not shown when Stor98 is unticked.
 
@@ -965,8 +968,9 @@ nothing changed; closed during the progress, the cancel of section 5.8.
   Stor98's two forms for Stor98's); the suite checks every asked and
   advanced row against the INFs of `src\` and `src\cm\` as today, and every
   Stor98 row against the bundled Stor98's readme table (the row names and
-  ranges, read from `docs\` of the pinned Stor98 release folder at build
-  time by the suite, so a renamed value fails the build);
+  ranges, as `test\stor98-settings.txt` holds them and the cut holds the
+  bundled readme, `src\stor98\docs\package-readme.txt`, to them, so a
+  renamed value fails the build);
 - the `DriverParameter` string's edit (parse the pairs, set one, write them
   back in order, keep unknown pairs);
 - the component rules: which boxes are shown, their defaults (record 23
@@ -1112,9 +1116,9 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   no interactive desktop (a service session) is to be read when the gate
   first runs there; the fallback is the pure half's text check alone, said
   in the self-test's output.
-- The Stor98 rows depend on the bundled release's readme table; a release
-  that changes its forms fails the build by design, and the fix is the
-  table's, with the cut's `-Stor98Version` bump.
+- The Stor98 rows depend on the bundled Stor98's readme table; a change
+  to its forms fails the build by design, and the fix is the table's
+  (`test\stor98-settings.txt` and the installer's rows) in the same change.
 - The 98 SE and ME uninstall's removal of the INF copies and driver files
   through the engine rather than by hand, and whether the controller comes
   back as an unknown device after the restart, is read on the legs

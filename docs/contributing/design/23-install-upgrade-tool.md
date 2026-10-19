@@ -266,9 +266,12 @@ program around them, in the shape `XHCICLN` already has.
 ```
 
 Since `3.0.0.0` the release download's `release-x86\` and `release-x64\`
-may also carry Stor98, a separate project's NVMe
-driver, bundled unchanged (`build-and-test.md`, "The bundled Stor98
-build"): at the directory's root, every name starting with `stor98`. The
+may also carry Stor98, the NVMe driver (`build-and-test.md`, "The bundled
+Stor98 build"): at the directory's root, every name starting with
+`stor98`. In `3.0.0.0` it was a pinned Stor98 release (`0.4.0.0`) copied
+unchanged; since `3.1.0.0` (roadmap-usb4 task 42-A.30) it is built from
+`src\stor98` with the drivers, carries the package's version and date, and
+is published in `releases\<version>\` like them. The
 tool does not install it (section 4.4).
 
 `INSTALL.BAT` sits at the package root, beside `readme.txt`, because it is

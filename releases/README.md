@@ -147,12 +147,16 @@ generated `NOTICE.TXT`, the third-party notices for what is statically linked
 into its executables (for `XHCIQUAL.EXE`, a DOS/32A executable, that extender
 and the Open Watcom C runtime).
 
-The upload set is this tree zipped, with one addition since 3.0.0.0: a cut
-given the Stor98 pins (`make-release.ps1 -Stor98Version` and the three that go
-with it) bundles that released Stor98 build into the upload set's
-`release-x86\` and `release-x64\`, and not into `releases\<version>\`, because
-Stor98 is a separate project's binary and nothing third-party is tracked. See
-"What actually gets uploaded" below.
+The upload set is this tree zipped. Since 3.1.0.0 (roadmap-usb4 task
+42-A.30) the `release-x86\` and `release-x64\` directories here also hold the
+Stor98 that `scripts\build-driver.cmd` built from `src\stor98` with the
+drivers, at the same version and date (`stor98.inf`, `stor98.mpd` and
+`stor98.sys` on x86, `stor98.inf` and `stor98.sys` on x64, and
+`stor98-LICENSE.txt`, `stor98-NOTICE.txt` and `stor98-readme.txt`); the x64
+`stor98.sys` is signed with the other x64 drivers. `make-release.ps1
+-NoStor98` cuts without it, and the debug directories never carry it. In
+3.0.0.0 a pinned Stor98 release (0.4.0.0) was added to the upload set alone.
+See "What actually gets uploaded" below.
 
 That is the schema a release cut today has: the generated readme sends the
 reader to a licence, so the directory has to carry one, and the tools are the
@@ -185,7 +189,8 @@ The INFs name only this project's own files in `[SourceDisksFiles]`:
 `xhciuas.sys` and itself, the connection manager's `xhcicm.sys` and itself,
 and its filter INF `xhcicm.sys`. A published directory carries those files,
 `txtsetup.oem` and, on x64, the certificate (the block above), and so does the
-release download, apart from a bundled Stor98 build. `src\xhci98-amd64.inf`
+release download, and since 3.1.0.0 a `release-` directory the Stor98 files
+as well. `src\xhci98-amd64.inf`
 names the same files less `xhcihlpr.sys`, and
 `scripts\inf-gate\test-inf-checks.ps1` compares the two files'
 `[SourceDisksFiles]` directly, the helper excepted, so that the 64-bit media
@@ -248,8 +253,8 @@ does - `-Arch amd64` writes `out\pkg-release-amd64\`, around
 
 - `releases\<version>\`: tracked, the schema drawn above, what you see here.
 - `out\upload-<version>\` and `out\xhci98-<version>.zip`: git-ignored, the
-  same tree, plus a bundled Stor98 build in its `release-x86\` and
-  `release-x64\` when the cut was given the Stor98 pins. The zip is the GitHub release asset. It is the one of the two
+  same tree (in 3.0.0.0 plus the pinned Stor98 release in its `release-`
+  directories). The zip is the GitHub release asset. It is the one of the two
   named after the project because it is what a stranger downloads and has to
   recognise afterwards; the directory is a workspace inside `out\`. The
   archive carries no top-level directory, so its name is all the download
@@ -462,8 +467,8 @@ flavour/architecture leg through `make-package.ps1` (the binaries come from a
 prior `scripts\build-driver.cmd all`, plus `scripts\build-driver.cmd all -amd64`
 for a 64-bit cut) so every gate that protects an install runs, copies only the
 publishable files out of each (the drivers, their INFs, `txtsetup.oem` and,
-on x64, the certificate; a bundled Stor98 build goes to the upload set
-alone), and refuses if a flavour pair's two binaries
+on x64, the certificate, and in a `release-` directory the Stor98 built with
+them), and refuses if a flavour pair's two binaries
 are not actually distinct - compared within an architecture, where a collision
 is the only kind that could happen - or are not actually the flavours they are
 being published as. An existing version directory is never overwritten without
