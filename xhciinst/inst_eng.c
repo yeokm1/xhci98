@@ -3879,8 +3879,10 @@ static int forget_dir(void)
         if (w == ERROR_SUCCESS) {
             logonly("deleted HKLM\\%s\n", INST_S98_KEY);
         } else if (w != ERROR_FILE_NOT_FOUND) {
-            out("Stor98's install record could not be removed (error %ld).\n",
-                (long)w);
+            out("Stor98's install record could not be removed (error %ld): "
+                "delete HKLM\\%s\nwith regedit.\n", (long)w, INST_S98_KEY);
+            flagFailed = 1;
+            return 0;
         }
     }
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_DIR_KEY, 0,
@@ -15520,12 +15522,19 @@ static void s98_file_update_9x(void)
         step(INST_STEP_BEGIN, "Updating Stor98's driver file");
     } else if (!s98FileUpd || !s98Include || envNow.Nt || opts.List) {
         if (s98InfRefresh && s98Include && !envNow.Nt && !opts.List &&
-            !s98_inf_refresh_9x()) {
+            go_on() && !s98_inf_refresh_9x()) {
             flagSteps = 1;
         }
         return;
     } else {
         step(INST_STEP_BEGIN, "Updating Stor98's driver file");
+    }
+    if (s98FileOk && !s98Declined && !go_on()) {
+        /* Cancelled during the jobs before it: nothing of it is done. */
+        steps_add_id("stor98.mpd", "not updated: the run was cancelled; run "
+                     "the installer again");
+        step(INST_STEP_LEFT, "Stor98's driver file: left, the run cancelled");
+        return;
     }
     if (!s98FileOk || s98Declined) {
         out("Stor98's driver file is not updated in this run: \"%s\" was "
