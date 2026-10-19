@@ -13561,7 +13561,7 @@ static void s98_question(void)
         out("  /list: it would be asked:\n    Y  install it\n"
             "    N  leave it out\n  Enter would give [N].\n");
     } else {
-        out("  /yes: N (/stor98 installs it).\n");
+        out("  /yes: N (/thunderbolt /stor98 installs it).\n");
     }
     out("\n");
     logonly("stor98: asked %d, include %d\n", asked, r);
@@ -14245,7 +14245,7 @@ void inst_eng_usage(void)
 "                (default C:\\XHCI98, or where an earlier install put them)\n"
 "  /force        reinstall this release, or install it over a newer one\n"
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
-"  /stor98       install the bundled Stor98 NVMe driver without asking\n"
+"  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
