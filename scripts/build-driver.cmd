@@ -73,6 +73,18 @@ rem      source stamp, and its four INFs' own gate
 rem      (scripts\inf-gate\check-cm-inf.ps1, self-tested first, run over
 rem      src\cm\xhcicm.inf, xhcicm-amd64.inf, xhcicmf.inf and
 rem      xhcicmf-amd64.inf on every build)
+rem  14a. Stor98 (src\stor98; roadmap-usb4 task 42-A.30), which the package
+rem      bundles from this build since 3.1.0.0: its two INFs held to
+rem      src\xhci_version.h's DriverVer (scripts\inf-gate\check-stor98-inf.ps1,
+rem      self-tested first) beside the other INF gates; on the x86 run its
+rem      host unit suite (src\stor98\tests\unit\build.cmd) after this
+rem      project's; then, once per run, src\stor98\scripts\build.cmd builds
+rem      the free images of this architecture (stor98.mpd and the x86
+rem      stor98.sys, or the amd64 stor98.sys) into src\stor98\out\free\,
+rem      and every flavour gates them (:gatestor98): the version, the
+rem      STOR98_FLAVOUR_FREE marker and the import allowlist
+rem      (scripts\check-stor98-build.ps1, scripts\import-gate\
+rem      stor98-imports.allow), the source stamp, and the gated record
 rem  15. the gated build's record, out\gated-<arch>-<flavour>.txt
 rem      (scripts\package\write-gated-manifest.ps1; roadmap-usb4.md SIGN.1),
 rem      which make-package.ps1 -SignOnly reads instead of running the host
@@ -446,6 +458,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -Filter -Arch amd64
 if errorlevel 1 goto inffail
 
+rem Stor98's two INFs (task 42-A.30): the package's one DriverVer, from
+rem src\xhci_version.h, self-tested by mutation first.
+echo.
+echo === Stor98 INF gate ===
+set "INFFILE=src\stor98\inf\stor98-x86.inf and stor98-x64.inf"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-stor98-inf.ps1" -SelfTest
+if errorlevel 1 goto inftestfail
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-stor98-inf.ps1"
+if errorlevel 1 goto inffail
+
 rem The text-mode Setup driver descriptions (task 33.3): src\txtsetup.oem and
 rem src\txtsetup-amd64.oem, self-tested by mutation first, then each gated
 rem against the INF of its own architecture and against the other file.
@@ -607,6 +631,30 @@ echo === host tests ===
 call "%REPO%\test\run-host-tests.cmd"
 if errorlevel 2 goto inconclusive
 if errorlevel 1 goto failed
+
+rem Stor98's own host unit suite, on the x86 run (its compiler is MSVC 6.0).
+if /i "%ARCH%"=="amd64" goto skipstor98unit
+echo.
+echo === Stor98 unit tests ===
+call "%REPO%\src\stor98\tests\unit\build.cmd"
+if errorlevel 1 goto stor98fail
+:skipstor98unit
+
+rem Stor98 (task 42-A.30): built once per run, free only - the package ships
+rem its free build whatever this project's flavour - for this architecture,
+rem then gated in each flavour below (:gatestor98). The images it replaces
+rem (this architecture's only; the other run's stay) are deleted first, so a
+rem failed build cannot leave an old one to gate.
+echo.
+echo === build Stor98 (free, %ARCH%) ===
+set "STOR98_DBGPORT="
+set "S98TARGETS=9x x86"
+set "S98IMAGES=win9x\stor98.mpd x86\stor98.sys"
+if /i "%ARCH%"=="amd64" set "S98TARGETS=amd64"
+if /i "%ARCH%"=="amd64" set "S98IMAGES=amd64\stor98.sys"
+for %%T in (%S98IMAGES%) do if exist "%REPO%\src\stor98\out\free\%%T" del "%REPO%\src\stor98\out\free\%%T"
+call "%REPO%\src\stor98\scripts\build.cmd" "%S98TARGETS%" free
+if errorlevel 1 goto stor98fail
 
 rem `if errorlevel` inside the block is evaluated per iteration, so a first
 rem flavor that fails cannot be masked by a second one that succeeds.
@@ -818,6 +866,11 @@ call :buildhlpr %FLAVOR%
 if errorlevel 1 goto hlprfail
 :skiphlpr
 
+rem Stor98's images, built once before the flavours, in every flavour's
+rem record (task 42-A.30).
+call :gatestor98
+if errorlevel 1 goto stor98gatefail
+
 rem Every gate of this flavour has passed: record what they read (roadmap-usb4.md
 rem SIGN.1), for make-package.ps1 -SignOnly - from the hashes captured after
 rem each import gate, and only if every file still has its captured hash.
@@ -847,6 +900,58 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
 set "GATEDRC=%errorlevel%"
 set "XHCI98_GATED_RUN="
 exit /b %GATEDRC%
+
+rem ------------------------------------------------------------------
+rem :gatestor98
+rem
+rem The Stor98 images of this architecture (task 42-A.30), in the current
+rem flavour's record: each hashed, held to scripts\check-stor98-build.ps1
+rem (version from src\xhci_version.h, STOR98_FLAVOUR_FREE, machine, the
+rem import allowlist scripts\import-gate\stor98-imports.allow), captured,
+rem and stamped (scripts\source-stamp.ps1 -Driver stor98 / stor98mpd).
+rem ------------------------------------------------------------------
+:gatestor98
+if /i "%ARCH%"=="amd64" (
+    call :gateonestor98 amd64 stor98.sys stor98
+    exit /b
+)
+call :gateonestor98 win9x stor98.mpd stor98mpd
+if errorlevel 1 exit /b 1
+call :gateonestor98 x86 stor98.sys stor98
+exit /b
+
+:gateonestor98
+set "S98IMG=%REPO%\src\stor98\out\free\%~1\%~2"
+echo.
+echo === Stor98 gate (%FLAVOR%: %~1 %~2) ===
+if not exist "%S98IMG%" (
+    echo ERROR: no "%S98IMG%"
+    exit /b 1
+)
+call :gated -Hash -Name %~2 -Image "%S98IMG%"
+if errorlevel 1 exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-stor98-build.ps1" -Image "%S98IMG%" -Target %~1
+if errorlevel 1 exit /b 1
+call :gated -Capture -Name %~2 -Image "%S98IMG%"
+if errorlevel 1 exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\source-stamp.ps1" -Driver %~3 -Write "%REPO%\src\stor98\out\free\%~1"
+exit /b %errorlevel%
+
+:stor98fail
+echo.
+echo ERROR: Stor98 (src\stor98) failed to build or its unit tests failed - see
+echo above. The package bundles the Stor98 this run builds.
+endlocal
+exit /b 1
+
+:stor98gatefail
+echo.
+echo ERROR: a Stor98 image failed its gate in the %FLAVOR% build - its version,
+echo flavour marker, imports, record or stamp; see above. Do not package it.
+endlocal
+exit /b 1
 
 :gatedrecfail
 echo.

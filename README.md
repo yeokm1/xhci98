@@ -86,7 +86,7 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 
 ### Installing, approving and removing
 
-- **Install:** run `INSTALL.BAT` and answer Y to "Install Thunderbolt 3 / USB4 support?" (see [Install with INSTALL.BAT](#install-with-installbat)). On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`nt\xhcicmf.inf`), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when asked: on Windows 2000 the first install of the filter needs that restart before the controller is used.
+- **Install:** run `INSTALL.BAT` and answer Y to "Install Thunderbolt 3 / USB4 support?" (see [Install with INSTALL.BAT](#install-with-installbat)). On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`xhcicmf.inf`, in `nt\` in the 32-bit package), which lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when asked: on Windows 2000 the first install of the filter needs that restart before the controller is used.
 - **Windows 98 SE and ME:** `INSTALL.BAT` prints the remaining steps: update the controller's entry (an unknown PCI device or PCI System Peripheral) from the driver directory. No filter is needed.
 - **The connection manager alone:** on Windows 2000 to 7 the installer can leave `xhci98.sys` and `xhciuas.sys` out and install `xhcicm.sys` alone, for a computer whose USB 3 controllers run another driver (untick the USB drivers, or `INSTALL /console /cmonly`). On Windows 8 and 8.1 that is the only install it offers: Windows' own USB 3 driver runs the USB controllers there. On the 64-bit editions of 8 and 8.1 the driver loads only in test-signing mode (Secure Boot off) or with signature enforcement disabled.
 - **Names:** the controller shows under the names in the table above. On Windows 2000 to 7 its PCI ports show as "xHCI98 Thunderbolt PCI Bridge" or "xHCI98 USB4 PCI Bridge": still Windows' own PCI bridges, with the filter on them.
@@ -107,11 +107,11 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 
 ### NVMe drives
 
-An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **[Stor98](https://github.com/yeokm1/stor98)**, a separate project, is that driver for Windows 98 SE to 7: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive.
+An NVMe drive in an enclosure needs an NVMe driver, which these systems lack. **[Stor98](src/stor98/)**, built with this package at the same version, is that driver for Windows 98 SE to 7: `xhcicm.sys` brings the tunnel up and down, Stor98 runs the drive.
 
 - The package carries Stor98 in `release-x86\` and `release-x64\` (`stor98.inf` and the `stor98*` files). It reads `xhcicm.sys`'s link-state channel on every system, 98 SE to 7.
 - Stor98's settings, install steps and limits are in its own readme, `stor98-readme.txt` beside it. The release notes have [the detail](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).
-- `INSTALL.BAT` does not install it. When the NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
+- `INSTALL.BAT` installs it when asked (its box under the Thunderbolt 3 / USB4 one on the Components page, which needs that one ticked too, or `/thunderbolt /stor98`), and updates an earlier one, Stor98 `0.4.0.0` included. Otherwise, when the NVMe controller shows without a driver, use Update Driver -> Have Disk -> `release-x86\` (98 SE, ME and 32-bit 2000 to 7) or `release-x64\` (XP x64, Vista x64, 7 x64).
 
 ### Things to know
 
@@ -186,7 +186,7 @@ Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
 
 Each driver directory holds:
 
-- `xhci98.sys`/`.inf` (controller), `xhciuas.sys`/`.inf` (UAS storage), `xhcicm.sys`/`.inf` (Thunderbolt and USB4; its PCI-port filter for 2000 to 7 in `nt\`)
+- `xhci98.sys`/`.inf` (controller), `xhciuas.sys`/`.inf` (UAS storage), `xhcicm.sys`/`.inf` (Thunderbolt and USB4; its PCI-port filter for 2000 to 7, `xhcicmf.inf`, in `nt\` in the x86 directories and beside them in the x64 ones)
 - `xhcihlpr.sys` (32-bit only): a helper 32-bit 2000, XP, Vista and 7 use for a finer timer while polling and, on Vista and 7, a message-signalled interrupt. 98 SE and ME ignore it.
 - `txtsetup.oem`: for F6 during Windows 2000 or XP Setup
 - `xhci98-test.cer` (64-bit only): the public half of the x64 drivers' test certificate; no need to import it
@@ -351,7 +351,7 @@ The drivers are C89 (no C++ or CRT), built on Windows 11 x64. The toolchain unpa
    scripts\build-driver.cmd both -amd64
    ```
 
-   Stor98, the bundled NVMe driver, builds separately with `src\stor98\scripts\build.cmd` (it also needs the Windows 98 DDK's `SCSI.H` and `SRB.H` in `tools\w98ddk\inc`; [src/stor98/docs/BUILD.md](src/stor98/docs/BUILD.md)), or everything at once with `scripts\build-all.cmd`.
+   The same runs build and gate Stor98, the bundled NVMe driver, from `src\stor98` (it also needs the Windows 98 DDK's `SCSI.H` and `SRB.H` in `tools\w98ddk\inc`; [src/stor98/docs/BUILD.md](src/stor98/docs/BUILD.md)); `scripts\build-all.cmd` runs both architectures at once.
 
 4. The tools build with their own `build.cmd` in `xhciqual\` (needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM`), `xhcicln\`, `xhciinst\` and `xhcitr\`.
 5. Install media: `scripts\package\make-package.ps1` (to `out\`); a release cut: `scripts\package\make-release.ps1`. Never hand-copy a `.sys` without its INF.
@@ -410,7 +410,7 @@ None of these PDFs is tracked here; fetch your own into the git-ignored `docs/re
 
 This project's own source is licensed under the GNU General Public License, version 2 ([LICENSE](LICENSE)), `GPL-2.0-only`.
 
-Apart from Stor98's released builds under `src/stor98/releases/` (below), the repository tracks no third-party binary on its own, although the tool executables it tracks under `releases/` carry statically linked third-party runtimes:
+Apart from Stor98's earlier released builds under `src/stor98/releases/` (below), the repository tracks no third-party binary on its own, although the tool executables it tracks under `releases/` carry statically linked third-party runtimes:
 
 - `xhci98.sys` and `xhciuas.sys` link no runtime or extender. The 32-bit builds link no third-party object either; the 64-bit builds, linked by WDK 7.1, carry that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls.
 - Some files of `xhcicm.sys`'s source, under `src/cm/`, are adapted from the `usb4-emu` project (some lifted from its `tools/usb4cm` under its earlier MIT licence) and from Linux's `drivers/thunderbolt`, and keep their copyright lines and licence notices. The [legal and provenance record](docs/contributing/legal-provenance.md), section 2a, lists each file.
@@ -420,7 +420,7 @@ Apart from Stor98's released builds under `src/stor98/releases/` (below), the re
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
 
-The release download's `release-x86\` and `release-x64\` carry Stor98, a released build of a separate project under its own licence, unchanged; its `LICENSE` and `NOTICE.TXT` ship beside it as `stor98-LICENSE.txt` and `stor98-NOTICE.txt`. Since 2026-10-19 Stor98 itself - its source and its released builds - is in this repository as [src/stor98/](src/stor98/), under its own licence ([src/stor98/LICENSE](src/stor98/LICENSE), BSD-3-Clause) with its [NOTICE](src/stor98/NOTICE) recording where its code came from.
+The release download's `release-x86\` and `release-x64\` carry Stor98, built from this repository's `src/stor98/` with the drivers, under its own licence; its `LICENSE` and `NOTICE` ship beside it as `stor98-LICENSE.txt` and `stor98-NOTICE.txt`. Since 2026-10-19 Stor98 itself - its source and its earlier released builds - is in this repository as [src/stor98/](src/stor98/), under its own licence ([src/stor98/LICENSE](src/stor98/LICENSE), BSD-3-Clause) with its [NOTICE](src/stor98/NOTICE) recording where its code came from.
 
 The release download carries no Microsoft file. `usbd.sys` and `usbui.dll` are the OS's own, copied by Windows Setup from its own install source. On Windows 98, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as a filter on the UAS device; the file is named, never shipped, and NUSB's mass-storage install places it.
 

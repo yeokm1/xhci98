@@ -973,8 +973,18 @@ const char *inst_unplug_text(int kind);
 
 /* ---- the Thunderbolt 3 / USB4 question (record 23 section 8.5) ---------------- */
 
+/* Where a flavour directory keeps the tunnel-port filter's INF, relative to
+ * it: nt\xhcicmf.inf in the x86 package, out of the way of Windows 98 and
+ * ME, which read a $Windows NT$ INF (task 39-0.4); xhcicmf.inf, beside
+ * xhcicm.inf and xhcicm.sys, in the x64 package, which 98 and ME never
+ * read. inst_cmf_pnf is the device installer's precompiled copy of it, and
+ * inst_cmf_where the place as the run's text names it for Have Disk. */
+const char *inst_cmf_rel(int arch);
+const char *inst_cmf_pnf(int arch);
+const char *inst_cmf_where(int arch);
+
 /* Whether the run installs and stages the Thunderbolt driver (xhcicm.inf,
- * nt\xhcicmf.inf, xhcicm.sys). haveCm: the package carries it; nhiPresent:
+ * the filter INF, xhcicm.sys). haveCm: the package carries it; nhiPresent:
  * a device xhcicm.inf matches is present. Returns the decision when no
  * question is asked (*ask 0), else 0 with *ask 1 and *defaultYes the
  * answer Enter gives:
@@ -1054,6 +1064,21 @@ int inst_tray_leftover(int bakExists, int exeExists);
 #define INST_TRAY_RUN_SET       1
 #define INST_TRAY_RUN_DELETE    2
 int inst_tray_run_action(int noTray, int runState, int inPlace);
+
+/* /list's words for the start at login (98 SE leg, 2026-10-19: after an
+ * update with the tool unticked, /list said "started at login" with no Run
+ * value): what the value is now (runState as above), then what a run with
+ * the same switches would do to it (action, INST_TRAY_RUN_*). */
+const char *inst_tray_list_text(int runState, int action);
+
+/* 98 SE and ME: SETUPX records each INF\OTHER copy it makes as a value of
+ * this key, named by the copy's path, the INF's own name its data. 1 when
+ * value name is the path of a copy the uninstall deleted (path, or its
+ * short alias shortPath; either may be NULL or empty), case aside. */
+#define INST_OEM_NAME_KEY \
+    "Software\\Microsoft\\Windows\\CurrentVersion\\Setup\\SetupX\\INF\\OEM Name"
+int inst_oem_name_ours(const char *valueName, const char *path,
+                       const char *shortPath);
 
 /* ---- the machine-wide value (record 26 section 5.4; task 42-A.17) ------------ */
 

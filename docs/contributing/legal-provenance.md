@@ -98,10 +98,10 @@ identification.
 |---|---|---|---|
 | This project's source, tests, scripts, docs | Yes | `src/`, `test/`, `scripts/`, `xhciqual/`, `docs/` | GPL-2.0-only (`LICENSE`) |
 | Published driver binary | Yes | `releases/<version>/release-x86/xhci98.sys`, `releases/<version>/debug-x86/xhci98.sys`, and the `-x64` pair in a cut that carries one (the directories cut before roadmap task 21.3 keep the bare `release/` and `debug/` names they were written with) | This project's code, linked by the Windows 2000 DDK (the `-x86` pair) or by WDK 7.1 (the `-x64` pair; `scripts/build-driver.cmd`, `src/usbport_amd64.lib`) against `ntoskrnl.exe`/`hal.dll`/`usbport.sys` import libraries, which contribute no code to the image; the import table names symbols and nothing more (verify with `scripts\import-gate\check-imports.ps1`, which prints every module/symbol pair in it). No runtime or extender is linked into either build, which is what makes this row different from the qualifier's below. The 32-bit build links no third-party object at all. **The amd64 build links one object that is not this project's code**: WDK 7.1 compiles amd64 drivers with `/GS`, and its libraries supply `__security_check_cookie` and `__report_gsfailure`, the handler that issues `KeBugCheckEx(0xF7)` on a cookie mismatch - one call site in the whole of `.text`, reached from nothing in `src/` (`scripts/import-gate/xhci98-imports-amd64.allow`, the `KeBugCheckEx` row; `runs/run-21.md` task 21.3). Static, read from the release image's disassembly; which WDK library supplied the object is not recorded, because no amd64 linker map has been read or tracked. **Open question, per section 6's rule for a new tracked build output:** whether that WDK-supplied object asks for a notice beside the 64-bit binary has not been read, and no `NOTICE.TXT` is generated for the `-x64` directories. This row records the composition and the open question; it draws no conclusion from either. GPL-2.0-only (`LICENSE`) for this project's code |
-| The x64 binaries' embedded test signature, and `xhci98-test.cer` | Yes, from the first cut that carries them (`2.3.0.0`) | Appended to `xhci98.sys` and `xhciuas.sys` in every `-x64` directory, and from `3.0.0.0` to `xhcicm.sys` and its `nt\xhcicm.sys` copy there too (AGENTS.md, "The INF and install media"); `releases/<version>/*-x64/xhci98-test.cer` beside them; never in an `-x86` directory | Design record 19 (owner, 2026-10-11). The signature is a PKCS #7 `WIN_CERTIFICATE` appended to the image by WDK 7.1's `SignTool.exe`, run in place from the git-ignored `tools/WinDDK71/bin/x86` at each cut; it holds this project's own self-signed certificate (`CN=xhci98 project test signing (not trusted)`), the image's SHA-1 digest and the signature over it, and no code. The certificate was made by the owner on 2026-10-11 with WDK 7.1's `MakeCert.exe` and `pvk2pfx.exe`, run in place the same way (the commands of design record 19 section 4, which `scripts/package/make-testcert.ps1` runs); its SHA-1 thumbprint is `A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`; `xhci98-test.cer` is its public half, the DER encoding the packager exports from the `.pfx` at each cut. None of the three tools is tracked or published. The private key (`.pfx`) is not tracked or published (`.gitignore`: `*.pfx`, `*.pvk`). It is not a Microsoft signature and chains to no Microsoft or public root |
+| The x64 binaries' embedded test signature, and `xhci98-test.cer` | Yes, from the first cut that carries them (`2.3.0.0`) | Appended to `xhci98.sys` and `xhciuas.sys` in every `-x64` directory, and from `3.0.0.0` to `xhcicm.sys` there too (in `3.0.0.0` also to its `nt\xhcicm.sys` copy; from `3.1.0.0` an `-x64` directory has no `nt\`; and from `3.1.0.0` to the bundled `stor98.sys` of `release-x64`, one key for every driver, "The bundled Stor98 build" below) (AGENTS.md, "The INF and install media"); `releases/<version>/*-x64/xhci98-test.cer` beside them; never in an `-x86` directory | Design record 19 (owner, 2026-10-11). The signature is a PKCS #7 `WIN_CERTIFICATE` appended to the image by WDK 7.1's `SignTool.exe`, run in place from the git-ignored `tools/WinDDK71/bin/x86` at each cut; it holds this project's own self-signed certificate (`CN=xhci98 project test signing (not trusted)`), the image's SHA-1 digest and the signature over it, and no code. The certificate was made by the owner on 2026-10-11 with WDK 7.1's `MakeCert.exe` and `pvk2pfx.exe`, run in place the same way (the commands of design record 19 section 4, which `scripts/package/make-testcert.ps1` runs); its SHA-1 thumbprint is `A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`; `xhci98-test.cer` is its public half, the DER encoding the packager exports from the `.pfx` at each cut. None of the three tools is tracked or published. The private key (`.pfx`) is not tracked or published (`.gitignore`: `*.pfx`, `*.pvk`). It is not a Microsoft signature and chains to no Microsoft or public root |
 | Published MSI helper binary | Yes, from the first cut that carries it (2.3.0.0) | `releases/<version>/release-x86/xhcimsi.sys` and `debug-x86/xhcimsi.sys`; never in an `-x64` directory | This project's code (`src/msi86/`, `src/xhci_msi86.c`), linked by **WDK 7.1 for x86, Vista target** (`setenv x86 WLH`; design record 18 section 8.1), against `ntoskrnl.exe` import libraries, which contribute no code. **Unlike the 32-bit `xhci98.sys` it links WDK library objects**: `wdmsec.lib`'s `IoCreateDeviceSecure` and the members it pulls in (31 `ntoskrnl.exe` pairs, listed in `scripts/import-gate/xhcimsi-imports.allow` from the first link's import table, 2026-10-10), and, `/GS` being left on as the kit's default, `GsDriverEntry` and `BufferOverflowK.lib`'s cookie support with `__report_gsfailure` (`KeBugCheckEx(0xF7)`), the same kind of object as the amd64 row above. Which members the link retained is to be read from a linker map, which no build here has written yet. **The same open question as the amd64 row**: whether those WDK-supplied objects ask for a notice beside the binary has not been read; this row records the composition and the question and draws no conclusion. GPL-2.0-only (`LICENSE`) for this project's code |
 | Published x86 helper binary, renamed | Yes, from the first cut that carries it (`2.4.0.0`; not cut yet) | `releases/<version>/release-x86/xhcihlpr.sys` and `debug-x86/xhcihlpr.sys`; never in an `-x64` directory; the `2.3.x` directories keep `xhcimsi.sys` (the row above) | The same helper renamed and extended to Windows 2000 and XP (roadmap-hcd task 38.3, design record 18 section 15): this project's code (`src/hlpr/`, `src/xhci_hlpr.c`), linked by **WDK 7.1 for x86, Windows XP target** (`setenv x86 WXP`, `SUBSYSTEM_VERSION=5.00`; record 18 section 15.10, decision H5), against `ntoskrnl.exe` import libraries from `lib\wxp\i386`, which contribute no code. It links the same kinds of WDK library object as the row above, now the `wxp` copies: `wdmsec.lib`'s `IoCreateDeviceSecure` and its members, `GsDriverEntry` and `BufferOverflowK.lib`'s cookie support, and - for a driver whose subsystem is below 6.01 - `lib\crt\i386\safecrtnt.lib` and `libcntpr.lib` (`makefile.new`; the build's own link line, 2026-10-14); its imports, 39 pairs listed in `scripts/import-gate/xhcihlpr-imports.allow` from the first `WXP` link of each flavour, resolve in every kernel and HAL the gate's manifests authenticate for Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1 x86 - the Vista and 7 PAE kernels not among them (section 4). **The same open question as the two rows above** about a notice for the WDK-supplied objects; this row records the composition and draws no conclusion. GPL-2.0-only (`LICENSE`) for this project's code |
-| Published Thunderbolt 3 and USB4 driver binary | Yes, from the first cut that carries it (`3.0.0.0`) | `releases/<version>/<flavour>-<arch>/xhcicm.sys` and the same image under `nt\` beside its tunnel-port filter's INF, in all four flavour directories | This project's code (`src/cm/`, and `src/xhci_log.c` compiled in by path), linked by the Windows 2000 DDK (x86) or by WDK 7.1 (amd64) as `xhci98.sys` is (`src/cm/sources`), against `ntoskrnl.exe` and `hal.dll` import libraries, which contribute no code; its imports are gated against `scripts/import-gate/xhcicm-imports.allow` and `xhcicm-imports-amd64.allow`, every row of the x86 list a pair `xhci98.sys` already imports. The amd64 build carries the same `/GS` cookie support and `__report_gsfailure` as `xhci98.sys`'s amd64 row above (the `KeBugCheckEx` row of `xhcicm-imports-amd64.allow`), and the same open question. **Some of its source files carry third-party code with their notices kept**: the files lifted from `usb4-emu`'s `tools/usb4cm` (MIT) and the files adapted from `usb4-emu` and Linux `drivers/thunderbolt` (GPL-2.0-only), section 2a; and `src/cm/stor98cm.h`, Stor98's header carried unchanged (BSD-3-Clause), section 2a. GPL-2.0-only (`LICENSE`) for this project's code |
+| Published Thunderbolt 3 and USB4 driver binary | Yes, from the first cut that carries it (`3.0.0.0`) | `releases/<version>/<flavour>-<arch>/xhcicm.sys`, in all four flavour directories, and the same image under `nt\` beside its tunnel-port filter's INF in the x86 ones (and in `3.0.0.0`'s x64 ones; from `3.1.0.0` an x64 directory has the filter INF at its root and one copy) | This project's code (`src/cm/`, and `src/xhci_log.c` compiled in by path), linked by the Windows 2000 DDK (x86) or by WDK 7.1 (amd64) as `xhci98.sys` is (`src/cm/sources`), against `ntoskrnl.exe` and `hal.dll` import libraries, which contribute no code; its imports are gated against `scripts/import-gate/xhcicm-imports.allow` and `xhcicm-imports-amd64.allow`, every row of the x86 list a pair `xhci98.sys` already imports. The amd64 build carries the same `/GS` cookie support and `__report_gsfailure` as `xhci98.sys`'s amd64 row above (the `KeBugCheckEx` row of `xhcicm-imports-amd64.allow`), and the same open question. **Some of its source files carry third-party code with their notices kept**: the files lifted from `usb4-emu`'s `tools/usb4cm` (MIT) and the files adapted from `usb4-emu` and Linux `drivers/thunderbolt` (GPL-2.0-only), section 2a; and `src/cm/stor98cm.h`, Stor98's header carried unchanged (BSD-3-Clause), section 2a. GPL-2.0-only (`LICENSE`) for this project's code |
 | Published DOS qualifier binary | Yes | `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` + `.MAP` | Built from this project's sources but not only this project's code; see section 2a |
 | Published cleanup tool binaries | Yes, from the first cut that carries them (`2.4.0.0`) | `releases/<version>/tools/xhcicln/XHCICLN.EXE` and `XHCICL64.EXE` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each (MSVC 6.0's, WDK 7.1's). See section 2a |
 | Published snapshot reader binary | Yes | `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` | Built from this project's sources but not only this project's code: the MSVC 6.0 C runtime is statically linked in. See section 2a |
@@ -527,52 +527,41 @@ project's code stays out of it.
 ### The bundled Stor98 build
 
 From `3.0.0.0` the release download may carry Stor98, an NVMe storage
-driver that is a separate project (owner, 2026-10-16). What is recorded
-here:
+driver under its own licence (owner, 2026-10-16). Since `3.1.0.0`
+(roadmap-usb4 task 42-A.30, owner 2026-10-19) it is built from this
+repository's `src/stor98/` ("Stor98 in this tree" below) with the drivers,
+at the package's version and date. What is recorded here:
 
-- **What is shipped.** One released Stor98 build, copied byte for byte
-  from that build's release folder: its `x86/` files (`stor98.inf`,
-  `stor98.mpd`, `stor98.sys`) at the root of `release-x86/`, and its
-  `x64/` files (`stor98.inf`, `stor98.sys`, `stor98-test.cer`) at the root
-  of `release-x64/`, with no `stor98/` folder. Every name there starts
-  with `stor98`. Binaries only: none of Stor98's source is bundled. The
-  `debug-` directories carry none of it.
-- **The licence files.** Stor98's `LICENSE` (BSD-3-Clause, naming three
-  copyright holders) and `NOTICE.TXT` (where each part of Stor98 came
-  from) ship beside those files in each of the two directories as
-  `stor98-LICENSE.txt` and `stor98-NOTICE.txt`, with its `readme.txt` as
-  `stor98-readme.txt`. Their bytes are the release's.
-- **The pins.** Four parameters of `scripts/package/make-release.ps1` and
-  `make-package.ps1` name the build, and they go together:
-  `-Stor98Version` (the build), `-Stor98Dir` (its release folder, read
-  only), `-Stor98SumsSha256` (the SHA-256 of that folder's
-  `SHA256SUMS.txt`) and `-Stor98InterfaceVersion` (its link-state
-  interface version, `STOR98LS_VERSION`, `4` for `0.3.0.0`, compared with
-  the header this project compiles against). Without them no Stor98 is
-  bundled. `docs/contributing/build-and-test.md`, "The bundled Stor98
-  build", has the full checks.
-- **Where it comes from.** The `SHA256SUMS.txt` hash is checked first;
-  then every file against that list before it is copied, and each copy
-  again after (`scripts/package/package-common.ps1`, "Stor98, the bundled
-  NVMe driver"). A version older than `0.3.0.0` is refused.
-- **Signing.** The x64 `stor98.sys` carries an embedded test signature by
-  Stor98's own test certificate (`CN=stor98 project test signing (not
-  trusted)`, SHA-1 thumbprint `461311C79165DC7985522D46274DCAD8832DD919`;
-  SHA-1 digest, no timestamp), whose public half is `stor98-test.cer`,
-  shipped unchanged. It is not this project's certificate (section 2's
-  test-signature row) and not a Microsoft signature. The
-  packaging scripts do not sign, re-sign or import it.
-- **What is tracked.** None of these files in this project's
-  `releases/`: the packaging scripts copy them from the release folder at
-  each cut. Until 2026-10-19 that folder was outside this repository; since
-  then the release folders are tracked in `src/stor98/releases/` as
-  Stor98 committed them, and `-Stor98Dir` defaults to
-  `src/stor98/releases/<version>/` ("Stor98 in this tree" below). The
-  generated `readme.txt` and `docs/using/release-notes.md` name the
-  bundled version.
+- **What is shipped.** The Stor98 that `scripts/build-driver.cmd` built
+  and gated from `src/stor98/`: `stor98.inf`, `stor98.mpd` and
+  `stor98.sys` at the root of `release-x86/`, and `stor98.inf` and
+  `stor98.sys` at the root of `release-x64/`, with no `stor98/` folder.
+  Every name there starts with `stor98`. Binaries only: none of Stor98's
+  source is bundled. The `debug-` directories carry none of it.
+- **The licence files.** Stor98's `LICENSE` (BSD-3-Clause) and `NOTICE`
+  (where each part of Stor98 came from) ship beside those files in each of
+  the two directories as `stor98-LICENSE.txt` and `stor98-NOTICE.txt`,
+  with its `docs/package-readme.txt` as `stor98-readme.txt`.
+- **Signing.** The x64 `stor98.sys` carries the same embedded test
+  signature as this project's other x64 drivers, by this project's test
+  certificate, applied by `make-package.ps1 -TestSignPfx` in the same step
+  (section 2's test-signature row; design record 19). Stor98's own test
+  certificate (`CN=stor98 project test signing (not trusted)`, SHA-1
+  thumbprint `461311C79165DC7985522D46274DCAD8832DD919`), which signed the
+  bundled `stor98.sys` of `3.0.0.0` (Stor98 `0.4.0.0`, with
+  `stor98-test.cer` beside it), signs nothing any more, and
+  `stor98-test.cer` is not shipped.
+- **What is tracked.** From `3.1.0.0` the Stor98 files of a `release-`
+  directory are published in `releases/<version>/` with this project's
+  own. `3.0.0.0`'s were copied into its upload set alone, from the pinned
+  release folder (four `-Stor98*` parameters, since removed); that release
+  folder is tracked in `src/stor98/releases/0.4.0.0/`. The generated
+  `readme.txt` and `docs/using/release-notes.md` name the bundled version.
 - **The other direction.** No code of this project, and none of
   `usb4-emu`'s, is copied into Stor98 (AGENTS.md, "Reference
-  Implementations").
+  Implementations"). Its version header, `src/stor98/src/stor98ver.h`,
+  includes this project's `src/xhci_version.h` for the version number
+  alone (`#define` lines); no code crosses.
 
 ### Stor98 in this tree (`src/stor98/`)
 
@@ -608,8 +597,9 @@ What is recorded here:
   reference copy stays unmodified, no Microsoft kit file is committed).
   This project's rules on source (C89, ASCII, the gates of
   `build-driver.cmd`) do not bind it.
-- **Tracked binaries.** Its released builds as Stor98 committed them,
-  `src/stor98/releases/0.3.0.1/` and `0.4.0.0/`: `stor98.mpd` and
+- **Tracked binaries.** Its released builds up to `0.4.0.0` as Stor98
+  committed them (history since `3.1.0.0`, which builds it with this
+  package), `src/stor98/releases/0.3.0.1/` and `0.4.0.0/`: `stor98.mpd` and
   `stor98.sys` (x86), `stor98.sys` (x64) with the embedded test signature
   by Stor98's own test certificate, and that certificate's public half
   `stor98-test.cer`, each listed in the folder's `SHA256SUMS.txt`. The

@@ -92,13 +92,18 @@ upstream names (licence clause 3).
 
 ## Releases
 
-`releases/<version>/` is written only by `scripts\make-release.ps1` (`-Stage -TestSignPfx
-<key>`, which signs the amd64 image with the project test certificate while staging, or
-`-Stage` then `scripts\sign-x64.ps1` for another certificate; then `-Finalize`). Only the
-amd64 image is ever signed: SHA-1, no timestamp, no catalog, INFs unchanged (docs/BUILD.md,
-"Test signing"). The maintainer alone creates the key (`scripts\make-testcert.ps1`) and
-signs releases; agents never sign a release, never create a real key and never import a
-certificate into any store. Rules: [releases/README.md](releases/README.md).
+Since xhci98 3.1.0.0 (owner, 2026-10-19) Stor98 has no releases of its own: xhci98's
+gated build builds and checks it from this source, it carries the xhci98 package's version
+and date (`src\stor98ver.h` includes xhci98's `src\xhci_version.h`; the INFs' `DriverVer`
+literals are held to it by xhci98's `scripts\inf-gate\check-stor98-inf.ps1`), and xhci98's
+packager bundles it and signs the amd64 image with xhci98's key, in the same step as
+xhci98's own drivers: SHA-1, no timestamp, no catalog, INFs unchanged (docs/BUILD.md,
+"Releases" and "Test signing"). Stor98 has no certificate or signing script of its own any
+more. The interface versions in `include/stor98cm.h` are protocol versions; never tie them
+to the package version. `releases/0.3.0.1/` and `0.4.0.0/` are write-once history; add no
+folder there ([releases/README.md](releases/README.md)); `releases/history.md` gets the
+entry for each xhci98 version that changes Stor98. Agents never sign, never create a key and
+never import a certificate into any store.
 
 ## Commits
 

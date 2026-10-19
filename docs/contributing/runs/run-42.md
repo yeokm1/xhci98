@@ -1697,6 +1697,315 @@ and after `enc1`'s plug - with the bench zip's `xhcicm.sys` nor with the
 `xhcicm.sys` between the bench's source and `4b6d3477` is the likeliest
 place; owed to a bisection.
 
+## Matrix N1 F3 and F6: SETUPX's OEM Name record and /list's start at login (2026-10-19)
+
+Branch `p42-instsmall`, from `3.1.0.0` at `cfcef657` (`1ed43f0b`, then
+`8fa1060d`), with `3.1.0.0` at `94c22687` merged last. Two findings of the
+matrix's 98 SE and ME legs (agent N1, `E:\xhci98-vm\m31\N1\RESULT.md`):
+
+- **F3.** The 98 SE and ME uninstall deleted this package's `INF\OTHER`
+  copy but left SETUPX's record of it,
+  `HKLM\Software\Microsoft\Windows\CurrentVersion\Setup\SetupX\INF\OEM Name`,
+  value `C:\WINDOWS\INF\OTHER\Yeo Kheng Mengxhci98.inf` = `xhci98.inf`.
+  Now each deletion of an INF copy of the package (`infs_9x`) or of a
+  Stor98 copy the run owns (`s98_un_inf_9x`) is followed by
+  `oem_name_forget`, which deletes only the values named by that copy's
+  path or its short alias (`inst_oem_name_ours`, case aside).
+- **F6, second half.** `INSTALL /console /list` after an update with the
+  tray tool unticked said "... and started at login." with no Run value:
+  the line was the planned action. It now says what the Run value is
+  (present, absent, other data or unreadable) and then what a run with
+  the same switches would do (`inst_tray_list_text`).
+
+Design: record 23 revision 20 (sections 6.1 and 9.5), record 26 draft 14
+(section 9.3 step 4); reviewed and revised. 13 host vectors in
+`test_inst`.
+
+| Build | Result |
+|---|---|
+| `xhciinst\build.cmd` and `selftest.cmd`, the merge | passed |
+| host suites, the merge | 0 failures (`test_inst` 1564) |
+| `build-driver.cmd all`, the merge | BUILD + GATES PASSED (debug release qemu) |
+| `build-driver.cmd all -amd64`, the merge | BUILD + GATES PASSED (debug release qemu) |
+
+The leg (development host A, QEMU, kit `E:\xhci98-vm\p42-hubsettle`,
+the 98 SE overlay left by 42-A.27's leg with 3.1.0.0 installed and a hub
+on port 1; the `1ed43f0b` executables):
+
+| Step | Result |
+|---|---|
+| `INSTALL /console /yes /notray` | "The xHCI98 USB Tree no longer starts at login." (exit 4 for the base image's registry-only `DEV_04` controller entry, matrix F5, unrelated) |
+| `INSTALL /console /list /log ...` | **pass**: "C:\XHCI98\XHCITR.EXE; it does not start at login now (a run without /notray makes it start at login)." |
+| `OEM Name` before the uninstall (`regedit /e`) | `C:\WINDOWS\INF\OTHER\Yeo Kheng Mengxhci98.inf` = `xhci98.inf` beside Windows' own values |
+| `INSTALL /console /uninstall /yes` | **pass**: "Deleted C:\WINDOWS\INF\OTHER\Yeo Kheng Mengxhci98.inf (and its .PNF). Removed the setup engine's record of it (SetupX OEM Name)."; exit 3 |
+| `OEM Name` after it | **pass**: no value naming this package's copy; every other value (`USBSTOR.INF`, `USBNTMAP.INF`, Windows' own) kept |
+
+Not taken: ME (the same code path), a Stor98 copy's record (no NVMe in
+the 9x guests; the alias rule rests on the code read).
+
+## The x64 package's filter INF at the flavour directory's root (2026-10-19)
+
+The owner asked why the x64 package keeps the tunnel-port filter INF in
+`nt\` when the files are the same as the root's, and decided, for
+`3.1.0.0`, that it should not: Windows 98 and ME never read the x64
+package, the driver store's same-directory rule (`SetupCopyOEMInf` error
+`0xA1` on 7 SP1 x86, 2026-10-15) is met at the root, and no other INF in an
+x64 flavour directory binds a PCI bridge. The x86 package keeps `nt\` with
+its own `nt\xhcicm.sys`, because 98 SE and ME read a `$Windows NT$` INF and
+would offer the filter for the tunnel bridge (task 39-0.4, record 23
+section 4.1).
+
+Branch `p42-x64flat`, from `3.1.0.0` at `4b6d3477`, with `3.1.0.0` merged
+in at `470ea34c` (42-A.21), `bc63b037` (42-A.24, 42-A.27, 42-A.28),
+`8dd99004` (42-A.22) and last at the head (42-A.24's revision 17 of
+record 23, 42-A.25):
+
+| Commit | What |
+|---|---|
+| `be8e4358` | the change: `package-common.ps1`'s `Get-CmFilterRel` and `Get-CmPublishable` (per architecture, and per version for a published tree: `3.0.0.0`'s x64 directories keep `nt\`); `make-package.ps1` stages `xhcicmf.inf` at the x64 root and `nt\xhcicm.sys` for x86 alone, the amd64 `xhcicm.sys` signed once and copied once; `make-release.ps1`'s copy set, the `nt\` copy comparison (x86 only), the upload assembly's layout rule and its `check-cm-inf.ps1 -PublishedVersion` call, the readme's file list; `check-cm-inf.ps1`'s CM-NO9XBRIDGE package half by `-Arch` (x86 `nt\` as before; amd64 the root, no `nt\`), with self-test layouts for both and for `3.0.0.0`'s x64 tree; `test-package.ps1`'s four-directory case with the connection manager in both layouts and an x64 `nt\` refused; the installer's `inst_cmf_rel`, `inst_cmf_pnf` and `inst_cmf_where` in `inst_core.c` (host vectors in `test_inst`), used for the filter INF's path, the list-less copy cleanup and the two Have Disk texts, x86 unchanged |
+| `e23e34c5` | an amd64 output directory staged in the `3.0.0.0` `nt\` layout is replaced by `make-package.ps1` (those three entries only), with a test |
+| `654a7b10`, `f399fe0e` | the documents: AGENTS.md, README.md, `build-and-test.md` (packaging; the by-hand install: Have Disk to the main folder on x64, `nt\` on x86), records 19, 21 and 23, `source-files.md`, `legal-provenance.md`, `releases/README.md`, the release notes (the `3.1.0.0` line) and the acceptance test's file-list row |
+| `41361afd` | records 21 and 23 name the revision (record 23 revision 21 after the merges, 17 being 42-A.24's; record 21's status paragraph) |
+| `470ea34c`, `bc63b037`, `8dd99004`, the head | `3.1.0.0` merged in; record 23 section 10's list keeps both new entries, and its status line every revision |
+
+Reviewed and revised: the review of `be8e4358` found the replacement of an
+old amd64 output directory (fixed in `e23e34c5`); the fix and the merge
+came back clean; the documents gave four wording points, taken in
+`f399fe0e`; the three merges came back clean.
+
+Builds at `470ea34c` (development host A), x86 then amd64, one after the
+other, before the legs: `build-driver.cmd all` and `all -amd64` each **BUILD + GATES
+PASSED** (host suites `test_inst` 1443 checks, 0 failures; the CM INF gate's
+self-tests 122 cases; `test-package.ps1` with the new cases; the installer
+self-test). `xhciinst\build.cmd` built the four installer programs for the
+legs. `make-package.ps1 -Flavor release`, both architectures, Stor98
+`0.4.0.0` bundled, unsigned (nothing was signed).
+
+The staged trees against the bench cut's
+(`E:\xhci98-vm\m31\pkg-bench\xhci98-3.1.0.0`, from `be9b9bf6`):
+
+| Directory | Bench cut | This branch |
+|---|---|---|
+| `release-x86` | 16 files, `nt\xhcicmf.inf` and `nt\xhcicm.sys` | the same 16 names; `nt\xhcicm.sys` the same bytes as `xhcicm.sys`; `nt\xhcicmf.inf` the same bytes as the bench's |
+| `release-x64` | 15 files, `nt\xhcicmf.inf` and `nt\xhcicm.sys` | 14 files: `xhcicmf.inf` at the root (the bytes of `src\cm\xhcicmf-amd64.inf`), no `nt\`; every other name the same |
+
+The legs, QEMU only (kit `E:\xhci98-vm\p42-x64flat`, QMP 48170 to 48173,
+emulator `vm\usb4\bin-2a893ea`, the `tb3` tree: root bridge `1B36:0001`,
+four `8086:15C0` switch ports, the NHI `8086:15BF`, the switch's xHCI
+`8086:15C1`, and `qemu-xhci`), on the packages staged at `470ea34c` with
+the installer programs built from it, unsigned; every x64 boot chose
+"Disable Driver Signature Enforcement" from the boot menu. The guests were
+clean (no xhci98, `xhcicm` or Stor98).
+
+| Leg | Result |
+|---|---|
+| 7 SP1 x86, `INSTALL /console /yes /thunderbolt` (regression) | **pass**: `SetupCopyOEMInf("C:\Windows\XHCI98\D2BF7BD7\nt\xhcicmf.inf", "...\nt", SPOST_PATH, 0)`, staged as `oem5.inf`; the filter put on `8086:15C0` (four ports) and `1B36:0001` from `nt\xhcicmf.inf`; the NHI on `xhcicm`; exit 3; after the restart every port `pci` with upper filter `xhcicm` from `oem5.inf`, problem 0, and `/list` "current (this release)" |
+| 7 SP1 x64, `INSTALL /console /yes /thunderbolt` | **pass**: the plan read `E:\PKG31\release-x64` and named `xhcicmf.inf` for the five ports; `SetupCopyOEMInf("C:\Windows\XHCI98\195E4F69\xhcicmf.inf", "C:\Windows\XHCI98\195E4F69", SPOST_PATH, 0)`, staged as `oem5.inf`, no error and no `0xA1`; the filter on the five ports and `xhcicm` on the NHI, all started; exit 3; after the restart the five ports upper `xhcicm` from `oem5.inf`, problem 0, `xhci98`, `xhcicm` and `xhcimark` running, `/list` current |
+| 7 SP1 x64, `INSTALL /console /uninstall` after it | **pass**: the filter taken off the five ports, the four INFs (`oem2` to `oem5`), the services, the binaries, the mark service and the copies removed; after the restart `sc` 1060 for each service, `pnputil -e` Microsoft's two alone, the five ports back on `machine.inf` with no upper filter, `usbd.sys` and `usbui.dll` kept |
+| 7 SP1 x64, by hand after the uninstall: a `15C0` port, Update Driver, Let me pick, Have Disk on `release-x64` itself | **pass**: the list offered "xHCI98 Thunderbolt PCI Bridge" (Windows' own bridge alone before Have Disk); installed, and after the restart that port `pci` with upper filter `xhcicm`, problem 0, `xhcicm` running |
+| 7 SP1 x64, `INSTALL /console /yes /cmonly` on a clean guest (42-A.21) | **pass**: `xhcicm.inf` and `xhcicmf.inf` staged from the copy's root (`SetupCopyOEMInf(... "\195E4F69\xhcicmf.inf", "...\195E4F69", ...)`, `oem3.inf`), nothing else; the NHI and the five ports done; after the restart `xhcicm` and `xhcimark` running, no `xhci98` |
+| Vista SP2 x64, `INSTALL /console /yes /thunderbolt` | **pass** on the third run: the first two refused with exit 4 and changed nothing, Vista's own Found New Hardware windows still open; then `xhcicmf.inf` staged from the copy's root as `oem6.inf`, the filter on the five ports, all started; after the restart upper `xhcicm` on the five ports, problem 0 |
+
+Seen beside the legs, not from this change: QEMU froze six times on the 7
+x64 guest with the whole package (the process at no CPU, QMP silent) -
+four cold boots of one installed overlay, at the NHI's first control-ring
+reads, and two fresh installs, right after the two xHCI controllers'
+installs and before `xhcicm`'s - on both emulator builds tried and with
+single-threaded TCG. None on the connection-manager-only 7 x64 guest, on
+Vista x64 or on 7 x86. Two full installs and their warm restarts went
+through; a cold start of 7 x64 with the full package installed is owed.
+Read afterwards (2026-10-19, the 42-A.25 agent): the frozen R2 overlay,
+its `xhcicm.sys` unchanged, cold-booted twice to the desktop on the same
+command line with `-display sdl` replaced by `-display none -vnc`, the
+connection manager's NHI accesses in the trace (1,116 and 1,139; the
+frozen run's trace has none). The same wedge hit two SDL-window 7 x86
+guests that day and went with the window. So the freezes are QEMU's SDL
+front end on development host A, not the driver; guests run headless
+since. Why they clustered at the first ring reads is not known.
+The frozen overlays are kept in the kit (`w7x64\disk-*-frozen.qcow2`).
+
+After the legs `3.1.0.0` was merged in twice more. At `bc63b037` both
+gated builds passed (`test_inst` 1470 checks, 0 failures); at `8dd99004`,
+the branch's head, `build-driver.cmd all` and `all -amd64`
+each **BUILD + GATES PASSED** (`test_inst` 1556 checks, 0 failures). At
+the last merge, `9aab6759` (record 23's revision renumbered 21, 17
+being 42-A.24's), both again **BUILD + GATES PASSED** (`test_inst` 1562
+checks, 0 failures; `test-package.ps1` with the layout cases), and its
+review came back clean. The legs were not repeated on those merges, which brought no
+change to where the filter INF is read.
+
+## 42-A.30: Stor98 built in-tree, one version, one date, one signature (2026-10-19)
+
+Branch `p42-s98ver` from `3.1.0.0` at `08709480`, with `3.1.0.0` merged in
+at `7e1ab583` (`cfcef657`). The owner's decisions of the day: every binary
+and INF of the package carries one version and one date, Stor98's
+included; Stor98 is built from `src\stor98` by this repository's build, not
+bundled from a pinned release; one key signs every x64 driver, `stor98.sys`
+included; any fix before shipping is a recut of `3.1.0.0`, dated
+`2026-10-19`.
+
+### What it does
+
+- **Version.** `src\stor98\src\stor98ver.h` includes `src\xhci_version.h`
+  and gives `nvme2k.rc` `XHCI_VER_CSV` and `XHCI_VER_STR`: `stor98.mpd`
+  and both `stor98.sys` are `3.1.0.0`. Both Stor98 INFs carry
+  `DriverVer=10/19/2026,3.1.0.0`, held to the header by the new
+  `scripts\inf-gate\check-stor98-inf.ps1` (self-tested by six mutants)
+  beside the other INF gates. Stor98 logs and reports no release version
+  of its own (the version resource was its only one). Its interface
+  versions (`STOR98LS_VERSION` 4 and the rest) are unchanged, and
+  `check-stor98-header.ps1` still holds `src\cm\stor98cm.h` to the master.
+- **Flavour marker.** `nvme2k.c` carries exactly one of
+  `STOR98_FLAVOUR_FREE`, `_CHECKED` or `_DBGPORT`, read in `DriverEntry`
+  so the linker keeps it.
+- **The gated run.** `build-driver.cmd` runs Stor98's unit suite on the
+  x86 run, builds Stor98 free once per run for its architecture (it
+  deletes only that architecture's images first), and gates each image in
+  every flavour: `scripts\check-stor98-build.ps1` (version, the free
+  marker, machine, imports against the new
+  `scripts\import-gate\stor98-imports.allow`; Stor98 had no import gate of
+  its own), the gated record (`stor98.sys`, and `stor98.mpd` on x86) and
+  the source stamp (`source-stamp.ps1 -Driver stor98 / stor98mpd`, whose
+  SOURCES reader now also takes a list that ends the file).
+  `build-all.cmd` lost its separate Stor98 step.
+- **The packager.** `make-package.ps1` bundles that build by default
+  (`-NoStor98` leaves it out; `-Stor98Root` is for its self-tests),
+  re-checks it before staging (`Resolve-Stor98Build`), holds it to the
+  gated record under `-SignOnly`, and with `-TestSignPfx` signs the amd64
+  `stor98.sys` in the same step and with the same key as the other x64
+  drivers. The four pins, the SHA256SUMS handling and `stor98-test.cer`
+  are gone; `src\stor98\docs\package-readme.txt` is the bundled
+  `stor98-readme.txt`. `make-release.ps1`: the release legs publish
+  Stor98 with the project's files into `releases\<ver>\release-*`, each
+  image held to the release version and, on x64, to the cut's signature;
+  the debug legs pass `-NoStor98`; Stor98's INFs join the one-date rule;
+  `-UploadSetOnly` refuses `3.0.0.0`, whose pinned Stor98 was in its upload
+  set only. Stor98's own `make-release.ps1`, `sign-x64.ps1`,
+  `make-testcert.ps1` and `testsign-common.ps1` are removed.
+- **The installer and XHCITR.** XHCIINST/XHCIWIZ read the bundled
+  version from `stor98.inf` and compare four-part versions, so an
+  installed `0.4.0.0` (or `0.3.0.x`) ranks below `3.1.0.0` and is
+  updated; no code change was needed. New `test_inst` vectors: `0.4.0.0`
+  and `0.3.0.1` updated, `3.1.0.0` current, `3.2.0.0` refused without
+  `/force`, PreExisting deciding removal whatever the version. The
+  test-signing note now says `stor98.sys` is signed with the other
+  drivers. XHCITR's report lists the installed `stor98.sys` /
+  `stor98.mpd` with its file version (it had no Stor98 row).
+- **Docs.** AGENTS.md, README.md, records 19 (revision 2), 23 (revision
+  19) and 26 (draft 13), build-and-test.md, source-files.md,
+  legal-provenance.md, the release notes, `releases\README.md` and
+  Stor98's own README, AGENTS, BUILD, TESTING, releases README and a
+  `3.1.0.0` history entry.
+
+Commits: `ce48f465` (installer, XHCITR, vectors), `cf6ca042` (build,
+packager, version), `36a9b701` (docs), `514b5bcf` (review fixes),
+`7e1ab583` (merge of `3.1.0.0`).
+
+### Review
+
+Round 1 on `ce48f465..36a9b701`: three P1 (the Stor98 stamp's SOURCES
+reader, the amd64 run deleting the x86 images, a stray backslash in
+`make-release.ps1`) and two P2 (the manifest reader refusing
+`stor98.mpd`, `-UploadSetOnly` dropping `3.0.0.0`'s Stor98), fixed in
+`514b5bcf`. Round 2 on `514b5bcf`: no findings. Round 3 on the merge
+`7e1ab583`: no findings.
+
+### Builds
+
+| Build | Result |
+|---|---|
+| `test-package.ps1`, `cf6ca042` | 1098 checks passed |
+| `build-driver.cmd both`, `7e1ab583` | BUILD + GATES PASSED (debug release): host tests passed (`test_inst` 1470 checks), Stor98 unit tests all passed, Stor98 INF gate, Stor98 gate x86 and win9x in both flavours |
+| `build-driver.cmd both -amd64`, `7e1ab583` | BUILD + GATES PASSED (debug release), Stor98 gate amd64 in both flavours |
+| gated records | x86 and amd64, release and debug, commit `7e1ab583`, `dirty=0` |
+| `make-release.ps1 -Arch x86 -SkipQualtool -TestLabel "42-A.30, Stor98 built in-tree"` into `out\testrel` | passed; `release-x86\` carries Stor98, `debug-x86\` none |
+| `make-package.ps1 -Flavor release -Arch amd64`, unsigned | passed |
+
+Every binary's file version and every INF's DriverVer, read from the
+staged trees (`out\testrel\3.1.0.0` and `out\pkg-s98-release-amd64`):
+
+| File | x86 (release-x86, debug-x86) | amd64 |
+|---|---|---|
+| `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys`, `nt\xhcicm.sys` | 3.1.0.0 | 3.1.0.0 |
+| `xhcihlpr.sys` | 3.1.0.0 | - |
+| `stor98.mpd` | 3.1.0.0 (release-x86) | - |
+| `stor98.sys` | 3.1.0.0 (release-x86) | 3.1.0.0 |
+| `xhci98.inf`, `xhciuas.inf`, `xhcicm.inf`, `nt\xhcicmf.inf` | 10/19/2026,3.1.0.0 | 10/19/2026,3.1.0.0 |
+| `stor98.inf` | 10/19/2026,3.1.0.0 | 10/19/2026,3.1.0.0 |
+| `XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCITR.EXE`, `XHCITR64.EXE` | 3.1.0.0 | |
+
+`txtsetup.oem` names no driver version. The console tools (XHCIINST,
+XHCICLN, XHCIMARK, XHCIDI and their 64-bit twins) carry no version
+resource, as before; they print `XHCI_VER_STR`. No version resource
+carries a build date or time.
+
+The staged Stor98 against `0.4.0.0`: built from `src\stor98` (the stor98
+repository's `4253b58`, 82 commits after the `0.4.0.0` release commit
+`d2e6056`; 34 files of `src`, `inf` and `include` changed, +1463/-437:
+the audit of 2026-10-18's fixes, FUA, MODE SENSE, the find and recovery
+fixes, the 9x generation rule). `stor98.mpd` 51296 bytes (`0.4.0.0`
+48237), x86 `stor98.sys` 41678 (39403), amd64 `stor98.sys` 49664 (47064);
+imports: `ScsiPortConvertUlongToPhysicalAddress` dropped on all three,
+`NTOSKRNL.EXE!MmSystemRangeStart` added on both `stor98.sys`. SHA-256:
+`stor98.mpd` `1d2bf9f5...9e9ce4`, x86 `stor98.sys` `fe620cd4...776691`,
+amd64 `stor98.sys` `87f02518...`. The `stor98-spd` bounce fix is not in
+it.
+
+### The legs
+
+Not run. The kit was prepared in `E:\xhci98-vm\p42-s98ver` (98 SE fresh
+with the enclosure, 2000 fresh with the Alpine Ridge enclosure, and 98 SE
+with `3.0.0.0` and Stor98 `0.4.0.0` installed for the update, its guest
+read as `0.4.0.0` with the NVMe volume working), and the package above
+was staged into it, but starting the VMs was refused by the session's
+permission check. All three legs are owed: a fresh install with a file
+copy and compare on the NVMe on 98 SE and on 2000, and the update from
+`0.4.0.0` to `3.1.0.0`.
+
+### The merges of the evening and the rebuild
+
+`3.1.0.0` was merged in twice more: at `f5678586` (`94c22687`; conflicts
+in `make-release.ps1`'s readme paragraph, the release notes, this file
+and records 23 and 26, both sides kept) and at `234884a3` (`9cf98652`,
+which brings Stor98's 9x bounce fix of 42-A.33 and the 98 SE / ME
+`OEM Name` cleanup; Stor98's `3.1.0.0` history entry now names the
+bounce fix). This task's record revisions are record 23 revision 19 and
+record 26 draft 13 (42-A.26 took 18 and 12; the `OEM Name` cleanup took
+20 and 14). The merge review found one P2: the bundled
+`stor98-readme.txt`, `README.md` and the release notes still said
+`/stor98` alone, which the installer now refuses without `/thunderbolt`;
+fixed in `6ae57798`, then a confirmation round and the review of the last
+merge found nothing.
+
+| Build | Result |
+|---|---|
+| `build-driver.cmd both`, `234884a3` | BUILD + GATES PASSED (debug release): packager self-tests 1098 checks, host tests passed (`test_inst` 1562 checks), Stor98 unit tests all passed (the bounce fix's `sg9x_ut` with them), Stor98 gate win9x and x86 in both flavours |
+| `build-driver.cmd both -amd64`, `234884a3` | BUILD + GATES PASSED (debug release): packager self-tests 1098 checks, host tests passed (`test_inst` 1575 checks), Stor98 gate amd64 in both flavours |
+| `make-release.ps1 -Arch x86 -SkipQualtool -TestLabel ...` into `out\testrel2`, `7e84f8ef` (before the last merge) | passed; every binary `3.1.0.0`, every INF `10/19/2026,3.1.0.0` |
+| `make-package.ps1 -Flavor release -Arch amd64`, unsigned | passed at `234884a3`; every binary `3.1.0.0`, every INF `10/19/2026,3.1.0.0` |
+
+The Stor98 images of the last merge, the bounce fix in, pass the same
+gate: version `3.1.0.0`, `STOR98_FLAVOUR_FREE`, 11, 19 and 18 imports,
+none new.
+
+The legs were allowed by the owner in the evening, but starting the
+guests was refused by the session's permission check again, so they are
+still owed; the kit `E:\xhci98-vm\p42-s98ver` now starts its guests
+headless (`-display none`, VNC on its own ports).
+
+A third merge, at `2f7dd861` (`200d841b`: the x64 package's filter INF
+at the flavour directory's root, 42-A.23), kept Stor98 in the flat x64
+layout (the upload set's and the release leg's lists take the
+connection manager's files from `Get-CmPublishable` and Stor98's beside
+them); its review found nothing. Rebuilt there: `build-driver.cmd both`
+and `both -amd64` BUILD + GATES PASSED (packager self-tests 1113 checks,
+`test_inst` 1586 checks, Stor98 unit tests passed), gated records of
+both architectures at `2f7dd861`, `dirty=0`; `make-package.ps1
+-Flavor release` for x86 and amd64 (unsigned) passed, every binary
+`3.1.0.0` and every INF `10/19/2026,3.1.0.0`, the amd64 package's
+`xhcicmf.inf` at its root. `3.1.0.0`'s roadmap-only `53619ce4` was
+merged after it.
+
 ## 42-A.26: the bundled Stor98 on tunnel drives only (2026-10-19)
 
 Worker p42-s98tun, branch `p42-s98tun` from `3.1.0.0` at `4b6d3477`,

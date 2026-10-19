@@ -9,9 +9,12 @@
 ; would fall back to. The model lines and the install sections are
 ; xhcicmf.inf's (see that file's header for task 39-0.4's readings; the
 ; 64-bit guests are not read yet). make-package.ps1 stages this file as
-; nt\xhcicmf.inf beside its own copy of xhcicm.sys, its source disk being
-; nt\ itself (the driver store refuses a source outside the INF's
-; directory; see xhcicmf.inf's header).
+; xhcicmf.inf at the root of the x64 flavour directory, beside xhcicm.inf
+; and xhcicm.sys, its source disk being that directory (the driver store
+; refuses a source outside the INF's directory; see xhcicmf.inf's header).
+; It needs no nt\ subdirectory and no second copy of xhcicm.sys, as the
+; x86 package's does: Windows 98 and ME never read the x64 package, and no
+; other INF there binds a PCI bridge (3.1.0.0; 3.0.0.0 staged it in nt\).
 ;
 ; scripts\inf-gate\check-cm-inf.ps1 -Filter -Arch amd64 gates this file on
 ; every build.

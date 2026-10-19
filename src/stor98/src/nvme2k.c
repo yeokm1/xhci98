@@ -40,6 +40,20 @@
 #include "utils.h"
 
 //
+// The build's flavour, found in the file by a byte scan (xhci98's
+// scripts\check-stor98-build.ps1 in the gated build, and the packager):
+// exactly one of these strings is in each image. DriverEntry reads it so
+// the linker keeps it.
+//
+#if defined(STOR98_DBGPORT)
+static const char Stor98Flavour[] = "STOR98_FLAVOUR_DBGPORT";
+#elif DBG
+static const char Stor98Flavour[] = "STOR98_FLAVOUR_CHECKED";
+#else
+static const char Stor98Flavour[] = "STOR98_FLAVOUR_FREE";
+#endif
+
+//
 // DriverEntry - Main entry point
 //
 ULONG DriverEntry(IN PVOID DriverObject, IN PVOID Argument2)
@@ -53,6 +67,10 @@ ULONG DriverEntry(IN PVOID DriverObject, IN PVOID Argument2)
 #ifdef NVME2K_DBG
     ScsiDebugPrint(0, "nvme2k: DriverEntry called\n");
 #endif
+    // Never true; it keeps the flavour string in the image.
+    if (((volatile const char *)Stor98Flavour)[0] == 0) {
+        return 0xC0000001UL;
+    }
     DBGINIT();
     DBGMARK(STG_DRIVER_ENTRY, 0);
     PlatCmLinkDriverEntry(DriverObject, Argument2);
@@ -809,6 +827,9 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
         return TRUE;
     }
 
+#if defined(NVME2K_W9X) && defined(STOR98_DBGPORT)
+    EngProbeSg9x(Srb);
+#endif
     return EngStartIo(DevExt, Srb);
 }
 

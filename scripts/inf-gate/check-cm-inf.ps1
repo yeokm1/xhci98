@@ -26,10 +26,15 @@ rule named as the other gates name their families.
            Windows 98 (record 21 section 6.1). And because Windows 98 SE and
            ME DO read a $Windows NT$ INF (runs/run-39.md, 39-0.4): the filter
            INFs' signature held to $Windows NT$, no undecorated install
-           section ([<install>], .HW, .Services), and, with -PackageDir, the
-           filter INF in the flavour directory's nt\ subdirectory alone -
-           never beside xhcicm.inf - with its own copy of xhcicm.sys, the
-           same bytes as the flavour directory's, nt\ holding nothing else.
+           section ([<install>], .HW, .Services), and, with -PackageDir,
+           the filter INF in its one place: under -Arch x86 the flavour
+           directory's nt\ subdirectory alone - never beside xhcicm.inf -
+           with its own copy of xhcicm.sys, the same bytes as the flavour
+           directory's, nt\ holding nothing else; under -Arch amd64 the
+           flavour directory's root, beside xhcicm.inf and the one
+           xhcicm.sys, and no nt\ (from 3.1.0.0: 98 and ME never read the
+           x64 package; -PublishedVersion before 3.1.0.0 reads a published
+           x64 tree in the nt\ layout it was published with).
   CM-NOROUTER
            No device router's or device-side bridge's id, no USB-only NHI and
            no unclaimed generation's id in any INF (design record 22 section
@@ -109,6 +114,10 @@ param(
     [ValidateSet("x86", "amd64")]
     [string]$Arch = "x86",
     [switch]$Filter,
+    # With -PackageDir: the version a published tree was published at, so an
+    # x64 directory of 3.0.0.0 is read in its nt\ layout (package-common.ps1's
+    # Get-CmFilterRel is the same rule). Empty: the layout of this tree.
+    [string]$PublishedVersion = "",
     [switch]$SelfTest
 )
 
@@ -626,24 +635,50 @@ function Test-CmInfText {
 # NHI, write the same value lines. Each file's own sections must agree
 # already (CM-IDSET, VAL-*), so one set per file is compared.
 # CM-NO9XBRIDGE, the package's half (runs/run-39.md, 39-0.4): Windows 98 SE
-# and ME read a "$Windows NT$" INF, so the filter INF lives only in the
-# flavour directory's nt\ subdirectory, where no 9x wizard is pointed, and
-# nowhere else. nt\ holds it and its own copy of xhcicm.sys and nothing
-# else, the copy byte-identical to the flavour directory's (Vista's and 7's
-# driver store takes no source outside the INF's directory, so the INF's
-# disk has no path).
+# and ME read a "$Windows NT$" INF, so in the x86 package the filter INF
+# lives only in the flavour directory's nt\ subdirectory, where no 9x wizard
+# is pointed, and nowhere else. nt\ holds it and its own copy of xhcicm.sys
+# and nothing else, the copy byte-identical to the flavour directory's
+# (Vista's and 7's driver store takes no source outside the INF's
+# directory, so the INF's disk has no path). The x64 package, which 98 and
+# ME never read, keeps it at the root beside xhcicm.inf and the one
+# xhcicm.sys, and has no nt\ (-Rel xhcicmf.inf; from 3.1.0.0).
+function Get-CmLayoutRel {
+    param([string]$Arch, [string]$PublishedVersion = "")
+    if ($Arch -eq "amd64" -and ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge [version]"3.1.0.0")) {
+        return "xhcicmf.inf"
+    }
+    return "nt\xhcicmf.inf"
+}
+
 function Test-CmLayout {
-    param([string]$Package, [string]$FilterInfPath = "")
+    param([string]$Package, [string]$FilterInfPath = "", [string]$Rel = "nt\xhcicmf.inf")
     $fail = New-Object System.Collections.ArrayList
     if (-not (Test-Path -LiteralPath $Package -PathType Container)) { return $fail }
     $root = (Resolve-Path -LiteralPath $Package).ProviderPath.TrimEnd('\')
-    $want = Join-Path $root "nt\xhcicmf.inf"
+    $want = Join-Path $root $Rel
+    $nt = Join-Path $root "nt"
+    $rootSys = Join-Path $root "xhcicm.sys"
+    if ($Rel -eq "xhcicmf.inf") {
+        foreach ($item in (Get-ChildItem -LiteralPath $root -File -Recurse -Force)) {
+            if ($item.Name -ieq "xhcicmf.inf" -and $item.FullName -ine $want) {
+                [void]$fail.Add("CM-NO9XBRIDGE the staged package holds '$($item.FullName.Substring($root.Length + 1))'; the x64 package keeps the filter INF at the flavour directory's root alone.")
+            }
+        }
+        if (Test-Path -LiteralPath $nt) { [void]$fail.Add("CM-NO9XBRIDGE the staged x64 package has an nt\ subdirectory; its filter INF is at the root, beside xhcicm.inf and the one xhcicm.sys.") }
+        if (-not (Test-Path -LiteralPath $want -PathType Leaf)) { [void]$fail.Add("CM-NO9XBRIDGE the staged x64 package has no xhcicmf.inf at its root.") }
+        if (-not (Test-Path -LiteralPath $rootSys -PathType Leaf)) { [void]$fail.Add("CM-NO9XBRIDGE the staged x64 package has no xhcicm.sys beside its xhcicmf.inf, the filter INF's source.") }
+        if ($FilterInfPath -ne "" -and (Test-Path -LiteralPath $FilterInfPath) -and
+            (Resolve-Path -LiteralPath $FilterInfPath).ProviderPath -ine $want) {
+            [void]$fail.Add("CM-NO9XBRIDGE the filter INF gated against this package is not its xhcicmf.inf.")
+        }
+        return $fail
+    }
     foreach ($item in (Get-ChildItem -LiteralPath $root -File -Recurse -Force)) {
         if ($item.Name -ieq "xhcicmf.inf" -and $item.FullName -ine $want) {
             [void]$fail.Add("CM-NO9XBRIDGE the staged package holds '$($item.FullName.Substring($root.Length + 1))'; the filter INF lives in nt\ alone, out of the 9x engine's way.")
         }
     }
-    $nt = Join-Path $root "nt"
     if (Test-Path -LiteralPath $nt) {
         foreach ($item in (Get-ChildItem -LiteralPath $nt -Force)) {
             if ($item.Name -ine "xhcicmf.inf" -and $item.Name -ine "xhcicm.sys") { [void]$fail.Add("CM-NO9XBRIDGE nt\ holds '$($item.Name)'; it holds the filter INF and its xhcicm.sys alone.") }
@@ -651,7 +686,6 @@ function Test-CmLayout {
     }
     if (-not (Test-Path -LiteralPath $want)) { [void]$fail.Add("CM-NO9XBRIDGE the staged package has no nt\xhcicmf.inf.") }
     $ntSys = Join-Path $nt "xhcicm.sys"
-    $rootSys = Join-Path $root "xhcicm.sys"
     if (-not (Test-Path -LiteralPath $ntSys -PathType Leaf)) {
         [void]$fail.Add("CM-NO9XBRIDGE the staged package has no nt\xhcicm.sys, the filter INF's source.")
     } elseif (-not (Test-Path -LiteralPath $rootSys -PathType Leaf)) {
@@ -854,7 +888,17 @@ if ($SelfTest) {
         $bad++; Write-Err "a default changed in src\cm\cm_vals.c alone was not refused by VAL-DEFAULT."
     } else { Write-Ok "VAL-DEFAULT follows src\cm\cm_vals.c" }
     # CM-NO9XBRIDGE's package half: the filter INF in nt\ alone, nowhere
-    # else, and the one gated against the package is that one.
+    # else, and the one gated against the package is that one; in the x64
+    # package (Rel xhcicmf.inf) at the root alone, with no nt\; and a
+    # published x64 tree before 3.1.0.0 read in its nt\ layout.
+    $x64Rel = Get-CmLayoutRel -Arch "amd64"
+    $x64OldRel = Get-CmLayoutRel -Arch "amd64" -PublishedVersion "3.0.0.0"
+    $total++
+    if ((Get-CmLayoutRel -Arch "x86") -ne "nt\xhcicmf.inf" -or $x64Rel -ne "xhcicmf.inf" -or
+        $x64OldRel -ne "nt\xhcicmf.inf" -or (Get-CmLayoutRel -Arch "amd64" -PublishedVersion "3.1.0.0") -ne "xhcicmf.inf" -or
+        (Get-CmLayoutRel -Arch "x86" -PublishedVersion "3.1.0.0") -ne "nt\xhcicmf.inf") {
+        $bad++; Write-Err "the filter INF's place per architecture and version is not x86 nt\, x64 root from 3.1.0.0, x64 nt\ before."
+    } else { Write-Ok "CM-NO9XBRIDGE the filter INF's place: x86 nt\, x64 root from 3.1.0.0, nt\ before" }
     $layouts = @(
         @{ Name = "clean";       Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys"); Pass = $true },
         @{ Name = "beside";      Root = @("xhcicm.inf", "xhcicm.sys", "xhcicmf.inf"); Nt = @("xhcicmf.inf", "xhcicm.sys"); Pass = $false },
@@ -862,13 +906,25 @@ if ($SelfTest) {
         @{ Name = "nt-extra";    Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys", "xhcicm.inf"); Pass = $false },
         @{ Name = "nt-no-sys";   Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf"); Pass = $false },
         @{ Name = "nt-sys-differs"; Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys"); NtSysText = "another build"; Pass = $false },
-        @{ Name = "deeper";      Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys"); Extra = "osfiles\xhcicmf.inf"; Pass = $false }
+        @{ Name = "deeper";      Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys"); Extra = "osfiles\xhcicmf.inf"; Pass = $false },
+        @{ Name = "x64-clean";   Rel = $x64Rel; Root = @("xhcicm.inf", "xhcicm.sys", "xhcicmf.inf"); Nt = @(); Pass = $true },
+        @{ Name = "x64-in-nt";   Rel = $x64Rel; Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys"); Pass = $false },
+        @{ Name = "x64-both";    Rel = $x64Rel; Root = @("xhcicm.inf", "xhcicm.sys", "xhcicmf.inf"); Nt = @("xhcicmf.inf"); Pass = $false },
+        @{ Name = "x64-nt-copy"; Rel = $x64Rel; Root = @("xhcicm.inf", "xhcicm.sys", "xhcicmf.inf"); Nt = @("xhcicm.sys"); Pass = $false },
+        @{ Name = "x64-no-sys";  Rel = $x64Rel; Root = @("xhcicm.inf", "xhcicmf.inf"); Nt = @(); Pass = $false },
+        @{ Name = "x64-deeper";  Rel = $x64Rel; Root = @("xhcicm.inf", "xhcicm.sys", "xhcicmf.inf"); Nt = @(); Extra = "osfiles\xhcicmf.inf"; Pass = $false },
+        @{ Name = "x64-3.0.0.0"; Rel = $x64OldRel; Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys"); Pass = $true },
+        @{ Name = "x64-3.0.0.0-root"; Rel = $x64OldRel; Root = @("xhcicm.inf", "xhcicm.sys", "xhcicmf.inf"); Nt = @(); Pass = $false }
     )
     foreach ($lc in $layouts) {
         $total++
+        $rel = if ($lc.ContainsKey("Rel")) { $lc.Rel } else { "nt\xhcicmf.inf" }
         $pkg = Join-Path ([System.IO.Path]::GetTempPath()) ("xhcicm-layout-" + [Guid]::NewGuid().ToString("N"))
         try {
-            New-Item -ItemType Directory -Path (Join-Path $pkg "nt") -Force | Out-Null
+            New-Item -ItemType Directory -Path $pkg -Force | Out-Null
+            if ($rel -ne "xhcicmf.inf" -or $lc.Nt.Count -ne 0) {
+                New-Item -ItemType Directory -Path (Join-Path $pkg "nt") -Force | Out-Null
+            }
             foreach ($f in $lc.Root) { [System.IO.File]::WriteAllText((Join-Path $pkg $f), "stand-in") }
             foreach ($f in $lc.Nt) {
                 $body = if ($f -eq "xhcicm.sys" -and $lc.ContainsKey("NtSysText")) { $lc.NtSysText } else { "stand-in" }
@@ -879,10 +935,10 @@ if ($SelfTest) {
                 New-Item -ItemType Directory -Path (Split-Path -Parent $x) -Force | Out-Null
                 [System.IO.File]::WriteAllText($x, "stand-in")
             }
-            $got = @(Test-CmLayout -Package $pkg -FilterInfPath (Join-Path $pkg "nt\xhcicmf.inf"))
-            if ($lc.Name -eq "clean") {
-                # the filter INF gated from anywhere but nt\ is refused too
-                $got2 = @(Test-CmLayout -Package $pkg -FilterInfPath $infFor["filter-x86"])
+            $got = @(Test-CmLayout -Package $pkg -FilterInfPath (Join-Path $pkg $rel) -Rel $rel)
+            if ($lc.Pass) {
+                # the filter INF gated from anywhere but its place is refused too
+                $got2 = @(Test-CmLayout -Package $pkg -FilterInfPath $infFor["filter-x86"] -Rel $rel)
             } else { $got2 = @("CM-NO9XBRIDGE n/a") }
         } finally {
             Remove-Item -LiteralPath $pkg -Recurse -Force -ErrorAction SilentlyContinue
@@ -915,7 +971,8 @@ Write-Step "CM INF gate ($label): $InfPath"
 if (-not (Test-Path -LiteralPath $InfPath)) { Write-Err "no INF at '$InfPath'."; exit 1 }
 $fails = @(Test-CmInfText -Bytes ([System.IO.File]::ReadAllBytes($InfPath)) -HeaderText $headerText -ValsText $valsText -Package $PackageDir -Profile $Arch -Kind $kind -FilterIds $filterIds)
 if ($PackageDir -ne "") {
-    $fails += @(Test-CmLayout -Package $PackageDir -FilterInfPath $(if ($Filter) { $InfPath } else { "" }))
+    $fails += @(Test-CmLayout -Package $PackageDir -FilterInfPath $(if ($Filter) { $InfPath } else { "" }) `
+                              -Rel (Get-CmLayoutRel -Arch $Arch -PublishedVersion $PublishedVersion))
 }
 # The twin comparison reads the committed pair; a staged copy (-PackageDir)
 # is compared against its committed twin.

@@ -2127,9 +2127,12 @@ static int check_package(void)
             continue;
         }
         if (k == INST_INF_CMF) {
-            join(path, sizeof(path), pkgDir, "nt\\xhcicmf.inf");
+            /* nt\ in the x86 package, the flavour directory in the x64
+             * one (inst_cmf_rel). */
+            join(path, sizeof(path), pkgDir, inst_cmf_rel(INST_MY_ARCH));
             if (file_exists(path, NULL)) {
-                inst_copy(infRel[k], "nt\\xhcicmf.inf", sizeof(infRel[k]));
+                inst_copy(infRel[k], inst_cmf_rel(INST_MY_ARCH),
+                          sizeof(infRel[k]));
             }
             if (!envNow.Nt) {
                 /* 98 and ME never read the NT filter INF. */
@@ -4249,13 +4252,12 @@ static void tray_install(void)
     }
     copy = inst_tray_copy_needed(inst, iv, pkg, pv);
     if (opts.List) {
-        action = inst_tray_run_action(opts.NoTray, tray_run_state(t.Run),
+        int runState = tray_run_state(t.Run);
+        action = inst_tray_run_action(opts.NoTray, runState,
                                       copy || inst != 0);
         out("The xHCI98 USB Tree: %s\n  %s%s\n",
             copy ? "would be copied to" : "is current at", t.Exe,
-            action == INST_TRAY_RUN_SET ? ", and started at login." :
-            action == INST_TRAY_RUN_DELETE ? "; it would no longer start at "
-                                             "login (/notray)." : ".");
+            inst_tray_list_text(runState, action));
         if (moving()) {
             out("  The copy in %s would be removed.\n", oldToolDir);
         }
@@ -4444,13 +4446,25 @@ static void local_remove(const char *dir)
          * INFs may be all that is left. */
         for (k = 0; k < INST_INF_COUNT; k++) {
             char pnf[64];
-            inst_copy(pnf, k == INST_INF_CMF ? "nt\\" : "", sizeof(pnf));
-            strncat(pnf, instInfFile[k], sizeof(pnf) - strlen(pnf) - 1);
-            n = strlen(pnf);
-            if (n > 4) {
-                strcpy(pnf + n - 4, ".PNF");
+            if (k == INST_INF_CMF) {
+                inst_copy(pnf, inst_cmf_pnf(INST_MY_ARCH), sizeof(pnf));
+            } else {
+                inst_copy(pnf, instInfFile[k], sizeof(pnf));
+                n = strlen(pnf);
+                if (n > 4) {
+                    strcpy(pnf + n - 4, ".PNF");
+                }
             }
             join(path, sizeof(path), dir, pnf);
+            SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+            if (DeleteFileA(path)) {
+                flagChanged = 1;
+            }
+        }
+        if (INST_MY_ARCH == INST_ARCH_AMD64) {
+            /* A copy of a 3.0.0.0 x64 package, whose filter INF was in
+             * nt\ as the x86 package's is. */
+            join(path, sizeof(path), dir, inst_cmf_pnf(INST_ARCH_X86));
             SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
             if (DeleteFileA(path)) {
                 flagChanged = 1;
@@ -6316,8 +6330,8 @@ static int install_inf(int inf, int controllers)
                 "and an update at\n  once, which one call cannot do on "
                 "Windows 2000. In Device Manager install\n  the filter on "
                 "EVERY port with this id - those without it too - (Update\n"
-                "  Driver, Have Disk, the package's nt\\ directory), then run "
-                "INSTALL.BAT again.\n", hwid);
+                "  Driver, Have Disk, %s), then run "
+                "INSTALL.BAT again.\n", hwid, inst_cmf_where(INST_MY_ARCH));
             for (j = 0; j < devCount; j++) {
                 if (devs[j].Present && devs[j].Inf == inf &&
                     (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
@@ -6481,8 +6495,8 @@ call:
                 "the port higher, and\n  on Windows 2000 the filter's first "
                 "install is never forced (/force does not\n  change that). "
                 "The port keeps Windows' driver without the filter; Device\n"
-                "  Manager's Have Disk on the package's nt\\ directory "
-                "installs it by hand.\n");
+                "  Manager's Have Disk on %s "
+                "installs it by hand.\n", inst_cmf_where(INST_MY_ARCH));
         } else if (err == ERROR_IN_WOW64) {
             out("  A 32-bit program cannot install drivers on 64-bit Windows; "
                 "run %s.\n", INST_OTHER_NAME);
@@ -7073,15 +7087,18 @@ static void note_old_entries(void)
 static void testsigning_note0(void);
 static void testsigning_note_cm(void);
 
-/* Record 26 section 6.3: with Stor98 ticked, its x64 driver keeps
- * Stor98's own test signature, and its certificate is never imported. */
+/* Record 26 section 6.3: with Stor98 ticked, its x64 driver is signed in
+ * the package's one signing step, by the same certificate as the drivers
+ * above (since 3.1.0.0; Stor98 0.4.0.0 and earlier carried a test
+ * signature of their own), so it loads as they do. No certificate is
+ * imported. */
 static void testsigning_note(void)
 {
     testsigning_note0();
     if (INST_MY_ARCH == INST_ARCH_AMD64 && envNow.Major >= 6 && s98Include) {
-        out("stor98.sys, the bundled Stor98, carries Stor98's own test "
-            "signature: it loads\nas the drivers above do. This installer "
-            "never imports stor98-test.cer.\n\n");
+        out("stor98.sys, the bundled Stor98, is signed (or not) with the "
+            "drivers above, by\nthe same certificate: it loads as they "
+            "do.\n\n");
     }
 }
 
@@ -10961,6 +10978,38 @@ static int remove_9x_devnodes(void)
     return 1;
 }
 
+/* 98 SE and ME: the setup engine's record of an INF copy the uninstall
+ * deleted (its OEM Name value, record 23 section 9.2 step 4), removed;
+ * only a value named by that copy's path or short alias. */
+static void oem_name_forget(const char *path, const char *shortPath)
+{
+    char name[INST_PATH_CHARS];
+    HKEY k;
+    DWORD i = 0;
+    DWORD n;
+    LONG r;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_OEM_NAME_KEY, 0,
+                      KEY_QUERY_VALUE | KEY_SET_VALUE, &k) != ERROR_SUCCESS) {
+        return;
+    }
+    for (;;) {
+        n = sizeof(name);
+        r = RegEnumValueA(k, i, name, &n, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r == ERROR_SUCCESS && inst_oem_name_ours(name, path, shortPath) &&
+            RegDeleteValueA(k, name) == ERROR_SUCCESS) {
+            /* The values after it move down one: the same index again. */
+            out("Removed the setup engine's record of it (SetupX OEM Name).\n");
+            continue;
+        }
+        i++;
+    }
+    RegCloseKey(k);
+}
+
 /* The INF copies the device installer keeps for this package (record 23
  * section 9.2 step 4's rule), in INF and INF\OTHER, each with its .PNF:
  * listed (list 1), or deleted once no entry of the package is left. 0
@@ -11043,6 +11092,13 @@ static int infs_9x(int list)
             }
             flagChanged = 1;
             out("Deleted %s (and its .PNF).\n", path);
+            join(pnf, sizeof(pnf), win, sub);
+            if (fd.cAlternateFileName[0] != '\0') {
+                join(pnf, sizeof(pnf), pnf, fd.cAlternateFileName);
+            } else {
+                pnf[0] = '\0';
+            }
+            oem_name_forget(path, pnf);
         } while (FindNextFileA(h, &fd));
         e = GetLastError();
         FindClose(h);
@@ -14935,6 +14991,7 @@ static int s98_un_inf_9x(const char *name)
     char win[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
     char pnf[INST_PATH_CHARS];
+    char alias[INST_PATH_CHARS];
     int named = s98_inf_named_9x(name);
     int s;
 
@@ -14956,6 +15013,12 @@ static int s98_un_inf_9x(const char *name)
         out("(/list) %s would be deleted.\n", path);
         return 1;
     }
+    /* The copy's short alias, read while it exists: SETUPX's OEM Name
+     * record may name it by either. */
+    s = (int)GetShortPathNameA(path, alias, sizeof(alias));
+    if (s <= 0 || s >= (int)sizeof(alias)) {
+        alias[0] = '\0';
+    }
     /* Its .PNF first, then the copy (KB 813449's order). */
     s = file_state(pnf);
     if (s < 0 || (s > 0 && !delete_file(pnf))) {
@@ -14970,6 +15033,7 @@ static int s98_un_inf_9x(const char *name)
         return 0;
     }
     out("Stor98's INF copy %s was deleted.\n", path);
+    oem_name_forget(path, alias);
     flagChanged = 1;
     return s98_rec_del("Staged", name);
 }

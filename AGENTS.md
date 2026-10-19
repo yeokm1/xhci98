@@ -222,8 +222,9 @@ src/            Driver source code (C): the HCD, xhci98.sys (roadmap Phases
                 15), whose code is src/xhci_hlpr.c. The miniport left the
                 tree on 2026-10-02; its last sources are on branch 1.2.0.0
 src/stor98/     Stor98, the NVMe SCSI miniport the packages bundle, a
-                BSD-3-Clause project with its own AGENTS.md, build and
-                releases; see "Stor98 (src/stor98/)" below
+                BSD-3-Clause driver with its own AGENTS.md and build,
+                built and versioned with this package since 3.1.0.0; see
+                "Stor98 (src/stor98/)" below
 test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
 scripts/        The build wrapper, host setup helpers, and the import/INF/
                 packaging gates. `scripts/local/` is git-ignored per-host
@@ -615,8 +616,11 @@ published tree, since every version published before `1.1.0.0` is x86-only.
 
 **Every published x64 directory is test-signed, and only by the packager**
 (owner, 2026-10-11; design record 19 is the authority). `xhci98.sys`,
-`xhciuas.sys` and `xhcicm.sys` (with its `nt\xhcicm.sys` copy, the same
-bytes) of `release-x64` and `debug-x64` carry an embedded Authenticode
+`xhciuas.sys` and `xhcicm.sys` of `release-x64` and `debug-x64` (one copy each
+since 3.1.0.0, whose x64 directories keep the filter INF at the root and
+have no `nt\`), and from `3.1.0.0` the bundled `stor98.sys` of
+`release-x64` (one key signs every driver, owner 2026-10-19; Stor98's own
+certificate is retired), carry an embedded Authenticode
 signature by the project test certificate - SHA-1 file digest, no
 timestamp, no catalog, the INFs unchanged - applied at staging by
 `make-package.ps1 -TestSignPfx` and never by hand, with the certificate's
@@ -707,13 +711,26 @@ packages bundle, in this repository since 2026-10-19 as one snapshot of
 its own repository's tracked files (branch `audit-2026-10-18` at `4253b58`,
 no history; roadmap-usb4 task 42-A.20, owner). It stays its own driver and
 its own files - `stor98.mpd` for 98 SE and ME, `stor98.sys` for x86 and
-x64, its two INFs - built by `src\stor98\scripts\build.cmd` (or with
-everything else by `scripts\build-all.cmd`) into the ignored
-`src\stor98\out\`, never folded into this project's binaries; a package
-bundles only a released build, by default from
-`src\stor98\releases\<version>\`, under `make-package.ps1`'s four pins.
+x64, its two INFs - built by `src\stor98\scripts\build.cmd` into the
+ignored `src\stor98\out\`, never folded into this project's binaries.
+**Since 3.1.0.0 it is built, gated and versioned with this package**
+(roadmap-usb4 task 42-A.30, owner 2026-10-19): `scripts\build-driver.cmd`
+builds its free images for the run's architecture and gates them in every
+flavour (version, the `STOR98_FLAVOUR_FREE` marker and the import
+allowlist, `scripts\check-stor98-build.ps1` and
+`scripts\import-gate\stor98-imports.allow`; the source stamp; the gated
+record), its two INFs carry the package's `DriverVer`
+(`scripts\inf-gate\check-stor98-inf.ps1`), its version resources take
+`src\xhci_version.h` through `src\stor98\src\stor98ver.h`, and
+`make-package.ps1` bundles that build by default (`-NoStor98` leaves it
+out) and signs the x64 `stor98.sys` with the other x64 drivers. One
+version, one date and one signature cover every binary of the package;
+Stor98's interface versions (`STOR98CM_VERSION`, `STOR98LS_VERSION`) are
+protocol versions and stay its own. Its releases up to `0.4.0.0` under
+`src\stor98\releases\` are history; it has no release or signing of its
+own any more.
 **Its own `AGENTS.md` governs its technical rules** (provenance, surprise
-removal and DMA, its write-once releases and signing, no "NVMe" in a name),
+removal and DMA, no "NVMe" in a name),
 and its `LICENSE` and `NOTICE` its files; this file's source rules (C89,
 the arithmetic rules, ASCII, the gates) do not bind it, and
 `check-source-charset.ps1` skips it. This repository's commit rule does

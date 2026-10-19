@@ -3448,6 +3448,26 @@ int inst_out_mirror(int outIsConsole, int errIsConsole, int inIsConsole)
 }
 
 /* ======================================================================== */
+/* The filter INF's place in a flavour directory (record 23 section 4.1)    */
+/* ======================================================================== */
+
+const char *inst_cmf_rel(int arch)
+{
+    return arch == INST_ARCH_AMD64 ? "xhcicmf.inf" : "nt\\xhcicmf.inf";
+}
+
+const char *inst_cmf_pnf(int arch)
+{
+    return arch == INST_ARCH_AMD64 ? "xhcicmf.PNF" : "nt\\xhcicmf.PNF";
+}
+
+const char *inst_cmf_where(int arch)
+{
+    return arch == INST_ARCH_AMD64 ? "the package's x64 directory" :
+                                     "the package's nt\\ directory";
+}
+
+/* ======================================================================== */
 /* The USB tree tool (record 23 section 9.5, record 25 section 8)            */
 /* ======================================================================== */
 
@@ -3498,6 +3518,39 @@ int inst_tray_run_action(int noTray, int runState, int inPlace)
         return INST_TRAY_RUN_SET;
     }
     return INST_TRAY_RUN_KEEP;
+}
+
+const char *inst_tray_list_text(int runState, int action)
+{
+    if (runState == 1) {
+        return action == INST_TRAY_RUN_DELETE ?
+               "; it starts at login now, and would no longer (/notray)." :
+               "; it starts at login.";
+    }
+    if (runState == 0) {
+        return action == INST_TRAY_RUN_SET ?
+               "; it does not start at login now (a run without /notray "
+               "makes it start at login)." :
+               "; it does not start at login.";
+    }
+    if (action == INST_TRAY_RUN_SET) {
+        return "; its start at login holds other data, or could not be read "
+               "(a run without /notray sets it to this file).";
+    }
+    return action == INST_TRAY_RUN_DELETE ?
+           "; its start at login holds other data, or could not be read; it "
+           "would be removed (/notray)." :
+           "; its start at login holds other data, or could not be read.";
+}
+
+int inst_oem_name_ours(const char *valueName, const char *path,
+                       const char *shortPath)
+{
+    if (path != NULL && path[0] != '\0' && inst_eq(valueName, path)) {
+        return 1;
+    }
+    return shortPath != NULL && shortPath[0] != '\0' &&
+           inst_eq(valueName, shortPath);
 }
 
 /* ======================================================================== */

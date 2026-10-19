@@ -706,6 +706,58 @@ static void test_actions(void)
              "/force never lifts unknown");
     CHECK_EQ(inst_group_verdict(0, 0, 2, 1), INST_GROUP_REFUSED_UNKNOWN,
              "unreadable binary: unknown");
+
+    /* Stor98 took the package's version at 3.1.0.0 (task p42-s98ver): the
+     * bundled stor98.inf says 3.1.0.0, and a Stor98 0.4.0.0 that a 3.0.0.0
+     * package installed is older, so it is updated, never refused. */
+    {
+        static const char s98New[] =
+            "[Version]\r\nSignature=\"$CHICAGO$\"\r\n"
+            "DriverVer=10/19/2026,3.1.0.0\r\n";
+        static const char s98Old[] =
+            "[Version]\r\nSignature=\"$CHICAGO$\"\r\n"
+            "DriverVer=10/16/2026,0.4.0.0\r\n";
+        INST_U32 bundled[4];
+        INST_U32 old[4];
+
+        CHECK(inst_inf_driverver(s98New, bundled) &&
+              bundled[0] == 3 && bundled[1] == 1 && bundled[2] == 0 &&
+              bundled[3] == 0, "the bundled stor98.inf reads 3.1.0.0");
+        CHECK(inst_inf_driverver(s98Old, old) && inst_ver_cmp(old, bundled) < 0,
+              "Stor98 0.4.0.0 is older than the bundled 3.1.0.0");
+        memset(&d, 0, sizeof(d));
+        d.HasService = 1;
+        d.OwnService = 1;
+        d.VersionState = INST_VS_HAVE;
+        memcpy(d.Version, old, sizeof(old));
+        CHECK_EQ(inst_action(&d, bundled), INST_ACT_UPDATE,
+                 "a drive on Stor98 0.4.0.0: updated to 3.1.0.0");
+        CHECK(inst_action_runs(INST_ACT_UPDATE, 0), "that update runs");
+        /* The group: no newer devnode, the installed stor98.sys or
+         * stor98.mpd (file version 0.4.0.0) older than 3.1.0.0. */
+        CHECK_EQ(inst_group_verdict(0, 0, inst_ver_cmp(old, bundled), 0),
+                 INST_GROUP_OK, "Stor98 0.4.0.0 installed: not refused");
+        inst_ver_parse("0.3.0.1", d.Version);
+        CHECK_EQ(inst_action(&d, bundled), INST_ACT_UPDATE,
+                 "Stor98 0.3.0.1: updated to 3.1.0.0");
+        memcpy(d.Version, bundled, sizeof(bundled));
+        CHECK_EQ(inst_action(&d, bundled), INST_ACT_CURRENT,
+                 "Stor98 3.1.0.0 installed: current");
+        CHECK_EQ(inst_group_verdict(0, 0, 0, 0), INST_GROUP_OK,
+                 "Stor98 3.1.0.0 installed: the group runs");
+        inst_ver_parse("3.2.0.0", d.Version);
+        CHECK_EQ(inst_action(&d, bundled), INST_ACT_NEWER,
+                 "Stor98 3.2.0.0 installed: newer, left");
+        CHECK_EQ(inst_group_verdict(1, 0, 1, 0), INST_GROUP_REFUSED_NEWER,
+                 "Stor98 3.2.0.0 installed: refused without /force");
+        /* Ownership does not depend on a version: a Stor98 there before
+         * xhci98's installer (PreExisting 1) stays at uninstall whatever
+         * its version; one a 3.0.0.0 package installed (PreExisting 0)
+         * goes once nothing is bound to it. */
+        CHECK(!inst_s98_service_removable(0, 1) &&
+              inst_s98_service_removable(0, 0),
+              "PreExisting decides, not 0.4.0.0 against 3.1.0.0");
+    }
     CHECK_EQ(inst_uas_fix_9x(0, 90, 1, 2, 0), INST_UASFIX_ME_STICK,
              "ME, UAS at Code 2, no USBNTMAP.SYS: a stick, then a replug");
     CHECK_EQ(inst_uas_fix_9x(0, 10, 1, 2, 0), INST_UASFIX_NUSB,
@@ -2135,6 +2187,42 @@ static void test_tb_eject(void)
              "/eject /uninstall refused");
 }
 
+/* The filter INF's place per architecture (record 23 section 4.1): nt\ in
+ * the x86 package, kept as it was; the flavour directory itself in the x64
+ * package. Its .PNF beside it, and the place the Have Disk text names,
+ * short enough that the longest line naming it stays within 79 columns. */
+static void test_cmf_place(void)
+{
+    int a;
+    char pnf[64];
+    size_t n;
+
+    CHECK(strcmp(inst_cmf_rel(INST_ARCH_X86), "nt\\xhcicmf.inf") == 0,
+          "x86: nt\\xhcicmf.inf, as before");
+    CHECK(strcmp(inst_cmf_rel(INST_ARCH_AMD64), "xhcicmf.inf") == 0,
+          "x64: xhcicmf.inf at the flavour directory's root");
+    CHECK(strchr(inst_cmf_rel(INST_ARCH_AMD64), '\\') == NULL,
+          "x64: no subdirectory");
+    CHECK(strcmp(inst_cmf_pnf(INST_ARCH_X86), "nt\\xhcicmf.PNF") == 0,
+          "x86: its .PNF in nt\\");
+    CHECK(strcmp(inst_cmf_pnf(INST_ARCH_AMD64), "xhcicmf.PNF") == 0,
+          "x64: its .PNF at the root");
+    CHECK(strstr(inst_cmf_where(INST_ARCH_X86), "nt\\") != NULL,
+          "x86: the text names nt\\");
+    CHECK(strstr(inst_cmf_where(INST_ARCH_AMD64), "nt\\") == NULL &&
+          strstr(inst_cmf_where(INST_ARCH_AMD64), "x64") != NULL,
+          "x64: the text names the x64 directory, not nt\\");
+    for (a = INST_ARCH_X86; a <= INST_ARCH_AMD64; a++) {
+        strcpy(pnf, inst_cmf_rel(a));
+        n = strlen(pnf);
+        strcpy(pnf + n - 4, ".PNF");
+        CHECK(strcmp(pnf, inst_cmf_pnf(a)) == 0, "the .PNF is the INF's");
+        CHECK(strlen("  Driver, Have Disk, ") + strlen(inst_cmf_where(a)) +
+              strlen("), then run INSTALL.BAT again.") <= 79,
+              "the Have Disk line within 79 columns");
+    }
+}
+
 /* The USB tree tool (record 23 section 9.5, record 25 section 8): its name
  * per architecture, the Run value's data, when it is copied, the leftover
  * .BAK, what becomes of the Run value, and /notray. */
@@ -2198,6 +2286,44 @@ static void test_tray(void)
              "/notray: deleted");
     CHECK_EQ(inst_tray_run_action(1, 2, 0), INST_TRAY_RUN_DELETE,
              "/notray, other data: deleted");
+    /* /list says what the Run value is now (98 SE leg, 2026-10-19). */
+    CHECK(strcmp(inst_tray_list_text(0, INST_TRAY_RUN_KEEP),
+                 "; it does not start at login.") == 0,
+          "/list: no Run value, /notray: does not start");
+    CHECK(strstr(inst_tray_list_text(0, INST_TRAY_RUN_SET),
+                 "does not start at login now") != NULL,
+          "/list: no Run value after an unticked update: not started now");
+    CHECK(strcmp(inst_tray_list_text(1, INST_TRAY_RUN_KEEP),
+                 "; it starts at login.") == 0, "/list: the value: starts");
+    CHECK(strstr(inst_tray_list_text(1, INST_TRAY_RUN_DELETE),
+                 "would no longer") != NULL, "/list /notray over the value");
+    CHECK(strstr(inst_tray_list_text(2, INST_TRAY_RUN_SET),
+                 "other data") != NULL, "/list: other data");
+    CHECK(strstr(inst_tray_list_text(2, INST_TRAY_RUN_KEEP),
+                 "other data") != NULL, "/list: other data, kept");
+    CHECK(strstr(inst_tray_list_text(2, INST_TRAY_RUN_DELETE),
+                 "removed") != NULL, "/list: other data, /notray");
+    /* SETUPX's OEM Name record of a deleted INF\OTHER copy. */
+    CHECK_EQ(inst_oem_name_ours("C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                "C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                "C:\\WINDOWS\\INF\\OTHER\\YEOKHE~1.INF"), 1,
+             "OEM Name: our deleted copy");
+    CHECK_EQ(inst_oem_name_ours("c:\\windows\\inf\\other\\YEO KHENG MENGXHCI98.INF",
+                                "C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                NULL), 1, "OEM Name: case aside");
+    CHECK_EQ(inst_oem_name_ours("C:\\WINDOWS\\INF\\OTHER\\YEOKHE~1.INF",
+                                "C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                "C:\\WINDOWS\\INF\\OTHER\\YEOKHE~1.INF"), 1,
+             "OEM Name: the short alias");
+    CHECK_EQ(inst_oem_name_ours("C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98uas.inf",
+                                "C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                ""), 0, "OEM Name: a longer name is not ours");
+    CHECK_EQ(inst_oem_name_ours("C:\\WINDOWS\\INF\\OTHER\\Other Vendorfoo.inf",
+                                "C:\\WINDOWS\\INF\\OTHER\\Yeo Kheng Mengxhci98.inf",
+                                NULL), 0, "OEM Name: another vendor's stays");
+    CHECK_EQ(inst_oem_name_ours("", "", NULL), 0,
+             "OEM Name: nothing deleted matches nothing");
+
     /* A copy left in use keeps the installed tool and its Run value. */
     CHECK_EQ(inst_tray_run_action(0, 1, 1), INST_TRAY_RUN_KEEP,
              "left in use: the Run value kept");
@@ -3728,6 +3854,7 @@ int main(void)
     test_tb_units();
     test_tb_eject();
     test_tb_question();
+    test_cmf_place();
     test_tray();
     test_wrap();
     test_questions();
