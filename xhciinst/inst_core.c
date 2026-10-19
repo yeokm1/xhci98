@@ -1501,6 +1501,27 @@ size_t inst_msz_remove(const char *in, size_t inBytes, const char *name,
     return used;
 }
 
+int inst_filter_drop(const char *in, size_t inBytes, const char *name,
+                     char *out, size_t cap, size_t *outBytes)
+{
+    size_t n;
+    int removed;
+
+    *outBytes = 0;
+    if (in == NULL || !inst_msz_has(in, inBytes, name)) {
+        return INST_FD_NONE;
+    }
+    n = inst_msz_remove(in, inBytes, name, out, cap, &removed);
+    if (n == (size_t)-1) {
+        return INST_FD_ERROR;
+    }
+    if (n == 0) {
+        return INST_FD_DELETE;
+    }
+    *outBytes = n;
+    return INST_FD_SET;
+}
+
 int inst_testsigning(const char *options)
 {
     const char *s = options;
@@ -2403,6 +2424,24 @@ int inst_busy_spent(const int *tries, int n)
         }
     }
     return 0;
+}
+
+int inst_parent_kind(const char *instanceId, int controller)
+{
+    int old;
+
+    return controller || inst_bus_base(instanceId, &old) != 0;
+}
+
+int inst_settle_after_job(int parent, int outcome, int more)
+{
+    return parent && more && outcome != INST_DI_OUT_ABSENT &&
+           outcome != INST_DI_OUT_REFUSED;
+}
+
+int inst_absent_retry(int outcome, int parentJobs, int retries)
+{
+    return outcome == INST_DI_OUT_ABSENT && parentJobs > 0 && retries == 0;
 }
 
 int inst_tunnel_restart(int win2000, int filterInstalled, int inf, int gone,

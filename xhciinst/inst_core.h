@@ -272,6 +272,27 @@ int inst_path_remove_copies(const char *list, const char *root, char *out,
 size_t inst_msz_remove(const char *in, size_t inBytes, const char *name,
                        char *out, size_t cap, int *removed);
 
+/* A filter list value (LowerFilters or UpperFilters, read as a
+ * multi-string of inBytes; a REG_SZ is passed with its NUL pair) with
+ * every entry equal to `name` taken out, the other names kept in order
+ * (record 21 section 7.4, the CriticalDeviceDatabase scrub, and the
+ * uninstall's step 0): INST_FD_NONE when `name` is not in it (nothing to
+ * write), INST_FD_SET with out[0..*outBytes) the value to write back,
+ * INST_FD_DELETE when nothing else is left (the value is deleted, never
+ * written empty), INST_FD_ERROR when out (cap bytes) is too small. */
+#define INST_FD_NONE        0
+#define INST_FD_SET         1
+#define INST_FD_DELETE      2
+#define INST_FD_ERROR       3
+int inst_filter_drop(const char *in, size_t inBytes, const char *name,
+                     char *out, size_t cap, size_t *outBytes);
+
+/* The CriticalDeviceDatabase key, under HKEY_LOCAL_MACHINE. Windows 2000
+ * and XP copy a boot-critical class's device-specific filter values into
+ * its entries there (pci#cc_0604, pci#cc_010802) when they install such a
+ * device, and every new device of that class then gets them. */
+#define INST_CDDB_KEY "SYSTEM\\CurrentControlSet\\Control\\CriticalDeviceDatabase"
+
 /* 1 when a SystemStartOptions value holds the word TESTSIGNING. */
 int inst_testsigning(const char *options);
 
@@ -679,6 +700,25 @@ int inst_busy_retry(INST_U32 error, int tries);
  * already: the whole call is not made (one call reaches the whole id
  * group, a member that joined later included). */
 int inst_busy_spent(const int *tries, int n);
+
+/* A parent's job and the devices below it (98 SE update over 3.0.0.0 with
+ * an external hub, 2026-10-19: the root hub's reinstall restarted it, its
+ * hub was gone for about four seconds, and the hub's job, made at once,
+ * found it not present). A parent is a controller or a device of the bus
+ * (root hub, hub, composite entry): its job may restart the devices below
+ * it. Outcomes are INST_DI_OUT_* (NT's install call mapped onto them). */
+int inst_parent_kind(const char *instanceId, int controller);
+
+/* 1 when the tree settles before the next job of the same pass: the job
+ * just made was a parent's, it reached its device (not absent, not
+ * refused), and another job of the pass follows. */
+int inst_settle_after_job(int parent, int outcome, int more);
+
+/* 1 when a job that found its device not present is made once more after
+ * a settle: a parent's job ran earlier in this run (parentJobs), and this
+ * device has not been tried again yet (retries). A device that is still
+ * not present then is "not present"; one settle is all it costs. */
+int inst_absent_retry(int outcome, int parentJobs, int retries);
 
 /* Windows 2000 after a tunnel port's first filter install succeeded in
  * this run (owner, 2026-10-15): a device of the connection manager's INFs

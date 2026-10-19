@@ -240,6 +240,7 @@ typedef struct _CM_NHI {
     ULONG ClockTickUs;      /* KeQueryTimeIncrement, in microseconds     */
     ULONG ClockRest;        /* microseconds not yet a millisecond        */
     ULONG ClockMs;          /* the millisecond clock TBT_HOST.NowMs reads */
+    ULONG StepUs;           /* cmClockUs at the host waits' last step     */
     TBT_RING Ring;
     TBT_ICM Icm;
     /* The common buffer's size: the ICM's ten-entry rings, or the USB4
@@ -556,6 +557,10 @@ typedef struct _CM_FILTER {
     ULONG RelGen;           /* bumped when the reported population changes */
     ULONG EjectSeen;        /* an orderly child removal since the last
                                eject was posted                           */
+    ULONG EjectHold;        /* an eject taken for this member, its tunnel
+                               teardown not yet returned: no function
+                               behind it is started meanwhile
+                               (CmRegStartAllowed)                        */
     ULONG Unsettled;        /* a tunnel change since its last BusRelations */
     ULONG ChangeSeq;        /* tunnel changes seen, for that settling     */
     ULONG RelAnswers;       /* successful BusRelations answers seen: the

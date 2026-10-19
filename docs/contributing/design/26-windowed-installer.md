@@ -1,11 +1,14 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 9, 2026-10-19, the owner's (a wider gap and a line between
-settings rows, XHCITR's icon, a row of another system shown greyed,
-Stor98's box a child of the Thunderbolt one, the UAS driver a box of its
-own under the USB drivers') and the matrix legs' (each
-Progress row's outcome in place, the Summary's headline from what it
-lists); draft 8, 2026-10-19 (task 42-A.21, the owner's request of that
+Status: draft 11, 2026-10-19 (task 42-A.22), the owner's (a wider gap
+and a line between settings rows, XHCITR's icon, a row of another
+system shown greyed, Stor98's box a child of the Thunderbolt one, the
+UAS driver a box of its own under the USB drivers') and the matrix
+legs' (each Progress row's outcome in place, the Summary's headline
+from what it lists), record 23 revision 16; draft 9, 2026-10-19 (task
+42-A.27, section 7: the settle after a root hub's or hub's job within a
+pass, record 23 revision 14); draft 8, 2026-10-19
+(task 42-A.21, the owner's request of that
 day: the connection manager alone, and Windows 8 and 8.1 for it; sections
 1.2, 5.1, 5.3, 9.1, 9.3, 10, 12 and 13, and record 23 revision 13);
 draft 7, 2026-10-18, reviewed and revised (an INF copy made by
@@ -748,7 +751,11 @@ machine, its reading of the tree through `cfgmgr32.dll`), shows "Windows
 is installing the devices the controller shows; answer its windows: Next,
 Next, Finish, and type `C:\XHCI98` where it asks", and only then reads the
 tree again and installs, through the helper, what still has no driver (a
-wizard the user cancelled) or an older one (an update's root hub). How
+wizard the user cancelled) or an older one (an update's root hub). Within
+a pass the same settle follows each root hub's, hub's or composite
+entry's job before the next one, and a device such a job hid for a moment
+is waited for and tried once more before it is a step (record 23 section
+5.8, revision 14). How
 the wizards and the helper meet is a reading of the 42-V.1 legs (record 27
 section 12), and the design holds to this order until they are read.
 
@@ -1071,7 +1078,7 @@ this list is the whole of it:
 - Section 13: D2 (the 98 SE and ME route) gains the helper; D10, D11 and
   D14 unchanged.
 
-Draft 9 (task 42-A.22) changes record 23 by its revision 14: section
+Draft 11 (task 42-A.22) changes record 23 by its revision 16: section
 4.4 (Stor98 copied only with the Thunderbolt support; `xhciuas` left out
 of the 98 SE and ME copy under `/nouas`), 7.1 (`/stor98` needs
 `/thunderbolt` or `/cmonly`; `/nouas`), 8.1 (`XhciSilentInstall` shown
