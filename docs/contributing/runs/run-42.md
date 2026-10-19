@@ -1992,3 +1992,16 @@ The legs were allowed by the owner in the evening, but starting the
 guests was refused by the session's permission check again, so they are
 still owed; the kit `E:\xhci98-vm\p42-s98ver` now starts its guests
 headless (`-display none`, VNC on its own ports).
+
+A third merge, at `2f7dd861` (`200d841b`: the x64 package's filter INF
+at the flavour directory's root, 42-A.23), kept Stor98 in the flat x64
+layout (the upload set's and the release leg's lists take the
+connection manager's files from `Get-CmPublishable` and Stor98's beside
+them); its review found nothing. Rebuilt there: `build-driver.cmd both`
+and `both -amd64` BUILD + GATES PASSED (packager self-tests 1113 checks,
+`test_inst` 1586 checks, Stor98 unit tests passed), gated records of
+both architectures at `2f7dd861`, `dirty=0`; `make-package.ps1
+-Flavor release` for x86 and amd64 (unsigned) passed, every binary
+`3.1.0.0` and every INF `10/19/2026,3.1.0.0`, the amd64 package's
+`xhcicmf.inf` at its root. `3.1.0.0`'s roadmap-only `53619ce4` was
+merged after it.
