@@ -216,7 +216,9 @@ bounce, mapping failure, cancellation, idle flush) and 0xC7-0xD9 (queue capabili
 BUSY limit, engine accounting, clock calibration, DMA negotiation, tunables, isolation
 violation, blocked double completion, stop result, admissions, evidence, DMA memory,
 clock re-calibration and OS-clock state, disable rewritten in quarantine, settle before a
-re-enable, sense kept and read, 9x DMA quarantine gap).
+re-enable, sense kept and read, 9x DMA quarantine gap). Stage 0x170 (`STG_SG9X`, 9x test builds)
+records how a caller buffer was resolved (linear, SG list or unknown; the use; the IOR function
+and CDB) for every bounce copy, every non-linear lookup and every pass-through SRB with data.
 The 9x build writes the port with plain IN/OUT. Test-only tunables, read from
 DriverParameter in test builds only: `frag=<KiB>` (largest child, to make multi-child
 parents), `bounce=1` (bounce every data child) and `calx=<percent>` (scale the TSC
@@ -234,6 +236,12 @@ together with `STOR98_DBGPORT=1` (the image lands in the same `out\<flavor>-dbgp
 folder; copy it away before the next build). build.exe does not track `C_DEFINES`: touch
 `src\lifecycle.c` before building with a different `STOR98_TESTDEF` and again before the next
 ordinary build, or the objects of the previous build are linked unchanged.
+Other 9x test defaults: `-DSTOR98_TEST_BOUNCE=1` (`bounce=1`), `-DSTOR98_TEST_FRAG_KB=<KiB>`
+(`frag=`), and `-DSTOR98_TEST_SG9X_FAIL=<n>`, which makes every n-th copy between a bounce buffer and
+the caller's buffer report "unresolved" before anything is copied, to drive the failure path of
+the 9x caller-buffer lookup (PLAN 0.4, "9x caller buffer"). Each of these refuses to compile
+without `STOR98_DBGPORT`. Check the image before trusting a run: stage 0xCC carries the frag
+and bounce defaults, and a wrong or stale image shows up there.
 
 Guest tools on the engine branch (NT, MSVC 6.0, `cl /O2`):
 
