@@ -321,19 +321,26 @@ Open a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose) and atta
 
 The release notes' [Known limitations](docs/using/release-notes.md#known-limitations), [Thunderbolt and USB4 limitations](docs/using/release-notes.md#thunderbolt-and-usb4-known-limitations) and [Untested ground](docs/using/release-notes.md#untested-ground) have the full lists. The ones most likely to matter:
 
-- **Vista x64 and 7 x64** need test-signing mode or F8 at every start; otherwise the controller sits at Code 39 (Vista) or Code 52 (7).
-- **Stock Windows 98 SE** has no USB storage driver without NUSB. HID and audio still work.
-- **XP from the F6 floppy** needs a PS/2 or built-in keyboard to answer GUI-mode Setup's unsigned-driver question. Windows 2000 does not ask.
-- **Windows ME:** do not unplug a device while Windows is installing it. Shut Down can hang with a USB disk not opened since start; open it once (a `dir` is enough) or remove it first. (Both happen on Microsoft's own USB stack too.)
-- **Windows ME:** a UAS drive plugged in before any ordinary stick shows Code 2. Plug in a stick once, then replug the UAS drive.
-- **Windows 2000:** a mounted USB drive can come back at Code 31 after a controller recovery or hibernation. Replug it, or disable and enable it.
-- **Thunderbolt and USB4: standby and hibernation** with a device attached are not supported. Stop and unplug the device first.
-- **Thunderbolt and USB4: a drive attached during the install or update** appears in Safely Remove Hardware only after a restart or a replug.
-- **Windows 2000 to 7 with a USB4 host:** ejecting a dock, or an enclosure with its own PCIe switch, stops it safely, but its connection stays up until you physically disconnect it.
-- **Windows 98 SE and ME:** the first time an NVMe enclosure is plugged in, Windows' wizard may ask for the "Stor98 Storage Controller Disk". Point it at `C:\XHCI98`.
-- Disabling a controller the driver had to close off hangs (very rare). Restart instead.
-- Intel 7-series (`8086:1E31`): too many periodic devices at once (audio, mice) may lose data instead of being refused.
-- Untested: SuperSpeed isochronous, SuperSpeedPlus (USB 3.1 Gen 2 and up), polling above 1000 Hz, controllers below xHCI 1.0 (accepted by default; `XhciAccept096` `0` refuses them), and the Linux-derived controller quirks.
+- **Windows 98 SE and ME**
+  - Stock Windows 98 SE has no USB storage driver without NUSB. HID and audio still work.
+  - The first time an NVMe enclosure is plugged in, Windows' wizard may ask for the "Stor98 Storage Controller Disk". Point it at `C:\XHCI98`.
+  - Windows ME: do not unplug a device while Windows is installing it. Shut Down can hang with a USB disk not opened since start; open it once (a `dir` is enough) or remove it first. (Both happen on Microsoft's own USB stack too.)
+  - Windows ME: a UAS drive plugged in before any ordinary stick shows Code 2. Plug in a stick once, then replug the UAS drive.
+- **Windows 2000**
+  - A mounted USB drive can come back at Code 31 after a controller recovery or hibernation. Replug it, or disable and enable it.
+- **Windows XP**
+  - Installing XP from the F6 floppy needs a PS/2 or built-in keyboard to answer GUI-mode Setup's unsigned-driver question. Windows 2000 does not ask.
+- **Vista x64 and 7 x64**
+  - Test-signing mode or F8 is needed at every start; otherwise the controller sits at Code 39 (Vista) or Code 52 (7).
+- **Thunderbolt and USB4**
+  - Standby and hibernation with a device attached are not supported. Stop and unplug the device first.
+  - A drive attached during the install or update appears in Safely Remove Hardware only after a restart or a replug.
+  - Windows 2000 to 7 with a USB4 host: ejecting a dock, or an enclosure with its own PCIe switch, stops it safely, but its connection stays up until you physically disconnect it.
+- **Controllers**
+  - Disabling a controller the driver had to close off hangs (very rare). Restart instead.
+  - Intel 7-series (`8086:1E31`): too many periodic devices at once (audio, mice) may lose data instead of being refused.
+- **Untested**
+  - SuperSpeed isochronous, SuperSpeedPlus (USB 3.1 Gen 2 and up), polling above 1000 Hz, controllers below xHCI 1.0 (accepted by default; `XhciAccept096` `0` refuses them), and the Linux-derived controller quirks.
 
 ## Toolchain and building
 
