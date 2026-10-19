@@ -8289,11 +8289,66 @@ left:
     }
 }
 
+/* 98 SE and ME: the setup engine cannot replace a driver binary that is
+ * loaded, so an update over a running driver copies the new file beside
+ * it and asks for the swap in WININIT.INI's [rename] section, done at the
+ * next start ("target=source", read on the 98 SE update leg of
+ * 2026-10-19: xhci98.sys=...\xhci98.tmp). 1 when such an entry renames a
+ * file of version `want` over `bin`. */
+static int wininit_pending(const char *bin, const INST_U32 *want)
+{
+    char win[INST_PATH_CHARS];
+    char ini[INST_PATH_CHARS];
+    char *sec;
+    char *p;
+    char sb[INST_PATH_CHARS];
+    char st[INST_PATH_CHARS];
+    INST_U32 v[4];
+    DWORD n;
+    int hit = 0;
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(ini, sizeof(ini), win, "WININIT.INI");
+    sec = (char *)calloc(1, 32768);
+    if (sec == NULL) {
+        return 0;
+    }
+    n = GetPrivateProfileSectionA("rename", sec, 32766, ini);
+    n = GetShortPathNameA(bin, sb, sizeof(sb));
+    if (n == 0 || n >= sizeof(sb)) {
+        inst_copy(sb, bin, sizeof(sb));
+    }
+    for (p = sec; *p != '\0' && !hit; p += strlen(p) + 1) {
+        char *eq = strchr(p, '=');
+        if (eq == NULL || eq == p) {
+            continue;
+        }
+        *eq = '\0';
+        n = GetShortPathNameA(p, st, sizeof(st));
+        if (n == 0 || n >= sizeof(st)) {
+            inst_copy(st, p, sizeof(st));
+        }
+        if ((inst_eq(p, bin) || inst_eq(st, sb)) &&
+            file_version(eq + 1, v) > 0 && inst_ver_cmp(v, want) == 0) {
+            hit = 1;
+        }
+        *eq = '=';
+    }
+    free(sec);
+    logonly("WININIT.INI: %s %s\n", bin,
+            hit ? "is replaced by this package's at the next start"
+                : "has no pending replacement");
+    return hit;
+}
+
 /* Record 26 section 8: each device the helper installed read again - its
  * driver key's NTMPDriver naming the group's .sys, its version the
  * package's (DriverVersion, or the group's binary), the devnode present
  * with no problem code; a device gone, or left with a problem code, is a
- * failure, except one whose install asked for the restart. */
+ * failure, except one whose install asked for the restart, and one whose
+ * binary the next start replaces (wininit_pending). */
 static void check_results_9x(void)
 {
     int c;
@@ -8309,6 +8364,7 @@ static void check_results_9x(void)
     for (c = 0; c < changedCount; c++) {
         const DEVREC *d = NULL;
         int ok;
+        int swapped = 0;
         if (changedState[c] != 2) {
             continue;
         }
@@ -8336,11 +8392,18 @@ static void check_results_9x(void)
             group_binary(group_of_inf(changedInf[c]), bin, sizeof(bin));
             ok = file_version(bin, v) > 0 &&
                  inst_ver_cmp(v, inf_version(changedInf[c])) == 0;
+            if (!ok && wininit_pending(bin, inf_version(changedInf[c]))) {
+                swapped = 1;
+            }
         }
         inst_state_text(state, sizeof(state), d->Service, d->VersionText,
                         (d->Status & INST_DN_STARTED) != 0, d->Problem);
         if (ok) {
             out("  %s: %s\n", d->Desc[0] ? d->Desc : d->Id, state);
+        } else if (swapped) {
+            out("  %s: updated; the new driver file replaces the running one "
+                "at the next start.\n", d->Desc[0] ? d->Desc : d->Id);
+            flagRestart = 1;
         } else if (changedReboot[c]) {
             out("  %s: installed, restart pending (%s)\n",
                 d->Desc[0] ? d->Desc : d->Id, state);
