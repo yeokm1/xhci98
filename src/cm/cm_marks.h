@@ -88,6 +88,16 @@ BOOLEAN CmMarksSync(PCM_MARKS m, ULONG member, ULONG memberBdf,
                     PVOID const *snap, ULONG count, BOOLEAN truncated,
                     BOOLEAN active, ULONG now);
 
+/* A location the member's bridge kept for a PDO of its snapshot
+ * (locd[k], bus[k], address[k] beside snap[k]) given to the member's
+ * current entry of that PDO that has none: an entry buried while its member
+ * was inactive and made again from the same snapshot keeps the location an
+ * attachment once read, though no attachment is left to read it again.
+ * Returns TRUE when anything changed. */
+BOOLEAN CmMarksLocate(PCM_MARKS m, ULONG member, PVOID const *snap,
+                      const ULONG *locd, const ULONG *bus,
+                      const ULONG *address, ULONG count, ULONG now);
+
 /* Every current entry of a member index at or past `members` made a
  * tombstone (the set shrank). */
 BOOLEAN CmMarksDropMembers(PCM_MARKS m, ULONG members, ULONG now);

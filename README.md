@@ -27,6 +27,10 @@ CrystalDiskMark sequential on 1151 MB/s read and 1013 MB/s write on Windows 7 wi
 
 The same enclosure on Windows 98 SE with the same drivers: CrystalDiskMark sequential about 210 MB/s read and 256 MB/s write. Windows 98's own storage stack, not the Thunderbolt link, is the bottleneck here.
 
+<img src="images/xhci98-xhcitr-and-devmgr.png" width="800">
+
+The xHCI98 USB Tree and Device Manager on Windows 98 SE, with an ASMedia USB4 NVMe enclosure on a USB4 host. Emulated hardware in QEMU.
+
 - Video by [Omores](https://www.youtube.com/@O_mores) featuring this driver in its earlier USB 2.0 days:
 
   [![omores video](https://img.youtube.com/vi/7SOyvvC7P4E/hqdefault.jpg)](https://www.youtube.com/watch?v=7SOyvvC7P4E)
