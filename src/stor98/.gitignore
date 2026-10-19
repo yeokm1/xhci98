@@ -25,14 +25,14 @@ build*.err
 *.pvk
 *.spc
 *.cer
-# The maintainer's test-signing key (scripts\make-testcert.ps1) and other
-# machine-local script state
+# Machine-local script state (until 0.4.0.0 also the maintainer's Stor98
+# test-signing key; since xhci98 3.1.0.0 xhci98's key signs stor98.sys)
 scripts/local/
-# Finalized releases (scripts\make-release.ps1 -Finalize) ARE tracked,
-# binaries included; that is the difference between releases\ and out\.
+# The releases made here up to 0.4.0.0 ARE tracked, binaries included;
+# that is the difference between releases\ and out\.
 !releases/**/*.sys
 !releases/**/*.mpd
-# ... and the public half of the certificate amd64/stor98.sys is signed with
+# ... and the public half of the certificate their amd64/stor98.sys was signed with
 !releases/**/*.cer
 # Test VM images: vms\ is a junction to the local VM folder (docs/TESTING.md); never committed
 vms

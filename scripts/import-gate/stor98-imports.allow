@@ -1,0 +1,61 @@
+# stor98.mpd / stor98.sys import allowlist - the DLL!function pairs the Stor98
+# images built from src\stor98 may import, one "<target> DLL!function" per
+# line, target win9x (stor98.mpd), x86 or amd64 (stor98.sys). Read by
+# scripts\check-stor98-build.ps1, which scripts\build-driver.cmd runs on every
+# Stor98 image it builds (roadmap-usb4 task 42-A.30). The format is this
+# file's own, not xhci98-imports.allow's: no evidence tags and no target
+# reading, since Stor98 is a ScsiPort miniport with its own provenance
+# (src\stor98\AGENTS.md). A new import fails the gate until it is added here,
+# which is the point: it is a reviewed change. Listed from the build of
+# 2026-10-19 (src\stor98 at the 42-A.20 snapshot); against Stor98 0.4.0.0 the
+# build dropped ScsiPortConvertUlongToPhysicalAddress and the NT images added
+# the MmSystemRangeStart data import (the link-state receiver's address
+# check, src\stor98\src\cmlinknt.c).
+win9x SCSIPORT.SYS!ScsiPortGetBusData
+win9x SCSIPORT.SYS!ScsiPortGetDeviceBase
+win9x SCSIPORT.SYS!ScsiPortGetPhysicalAddress
+win9x SCSIPORT.SYS!ScsiPortGetUncachedExtension
+win9x SCSIPORT.SYS!ScsiPortInitialize
+win9x SCSIPORT.SYS!ScsiPortNotification
+win9x SCSIPORT.SYS!ScsiPortReadRegisterUlong
+win9x SCSIPORT.SYS!ScsiPortSetBusDataByOffset
+win9x SCSIPORT.SYS!ScsiPortStallExecution
+win9x SCSIPORT.SYS!ScsiPortValidateRange
+win9x SCSIPORT.SYS!ScsiPortWriteRegisterUlong
+x86 NTOSKRNL.EXE!ExCreateCallback
+x86 NTOSKRNL.EXE!ExNotifyCallback
+x86 NTOSKRNL.EXE!MmIsAddressValid
+x86 NTOSKRNL.EXE!MmSystemRangeStart
+x86 NTOSKRNL.EXE!ObfDereferenceObject
+x86 NTOSKRNL.EXE!ZwClose
+x86 NTOSKRNL.EXE!ZwOpenKey
+x86 NTOSKRNL.EXE!ZwSetValueKey
+x86 SCSIPORT.SYS!ScsiPortGetBusData
+x86 SCSIPORT.SYS!ScsiPortGetDeviceBase
+x86 SCSIPORT.SYS!ScsiPortGetPhysicalAddress
+x86 SCSIPORT.SYS!ScsiPortGetUncachedExtension
+x86 SCSIPORT.SYS!ScsiPortInitialize
+x86 SCSIPORT.SYS!ScsiPortNotification
+x86 SCSIPORT.SYS!ScsiPortReadRegisterUlong
+x86 SCSIPORT.SYS!ScsiPortSetBusDataByOffset
+x86 SCSIPORT.SYS!ScsiPortStallExecution
+x86 SCSIPORT.SYS!ScsiPortValidateRange
+x86 SCSIPORT.SYS!ScsiPortWriteRegisterUlong
+amd64 NTOSKRNL.EXE!ExCreateCallback
+amd64 NTOSKRNL.EXE!ExNotifyCallback
+amd64 NTOSKRNL.EXE!KeBugCheckEx
+amd64 NTOSKRNL.EXE!MmIsAddressValid
+amd64 NTOSKRNL.EXE!MmSystemRangeStart
+amd64 NTOSKRNL.EXE!ObfDereferenceObject
+amd64 NTOSKRNL.EXE!ZwClose
+amd64 NTOSKRNL.EXE!ZwOpenKey
+amd64 NTOSKRNL.EXE!ZwSetValueKey
+amd64 SCSIPORT.SYS!ScsiPortGetBusData
+amd64 SCSIPORT.SYS!ScsiPortGetDeviceBase
+amd64 SCSIPORT.SYS!ScsiPortGetPhysicalAddress
+amd64 SCSIPORT.SYS!ScsiPortGetUncachedExtension
+amd64 SCSIPORT.SYS!ScsiPortInitialize
+amd64 SCSIPORT.SYS!ScsiPortNotification
+amd64 SCSIPORT.SYS!ScsiPortSetBusDataByOffset
+amd64 SCSIPORT.SYS!ScsiPortStallExecution
+amd64 SCSIPORT.SYS!ScsiPortValidateRange
