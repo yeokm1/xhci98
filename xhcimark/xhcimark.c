@@ -230,6 +230,8 @@ static SERVICE_STATUS status;
 static DWORD lastInventory;
 static int inventoryDone;
 static const int *curProt;      /* this poll's protected nodes (mk_poll)  */
+static int scrubOk;             /* the last CDDB scrub completed          */
+static int scrubFailLogged;     /* its failure was logged (once per run)  */
 
 /* ======================================================================== */
 /* The log                                                                  */
@@ -1145,7 +1147,8 @@ static void mk_write(const MK_NHI *h, const MK_ENTRY *e, int unit)
     HANDLE m;
     int ok;
 
-    if (!mk_write_due(nodes[unit].Id)) {
+    if (!mk_write_due(nodes[unit].Id) || !scrubOk) {
+        /* An unproven scrub: a new mark could reach the database unseen. */
         return;
     }
     m = mk_lock(MK_WRITE_MUTEX, 5000);
@@ -1562,15 +1565,25 @@ static void mk_judge(const char *id, const char *text)
             return;
         }
         parent = nodes[node].Parent;
-        if (!nodes[node].HasLoc || parent < 0 || !nodes[parent].HasLoc) {
+        if (parent >= 0 && !mk_is_pci(&nodes[parent]) &&
+            nodes[parent].Id[0] != '\0') {
+            /* A parent read and not a PCI function (the root bus, ACPI's
+             * PCI bus): the devnode is no child of a tunnel port, so no
+             * domain owns it; one that took the name from a
+             * CriticalDeviceDatabase copy is removed once every NHI is
+             * verifiable. */
+            owner = NULL;
+        } else if (!nodes[node].HasLoc || parent < 0 ||
+                   !nodes[parent].HasLoc) {
             /* A location that cannot be read is no proof the unit is
              * outside every domain. */
             return;
+        } else {
+            pbdf = (nodes[parent].Bus << 8) |
+                   (((nodes[parent].Address >> 16) & 0x1FUL) << 3) |
+                   (nodes[parent].Address & 7UL);
+            owner = mk_owner(pbdf);
         }
-        pbdf = (nodes[parent].Bus << 8) |
-               (((nodes[parent].Address >> 16) & 0x1FUL) << 3) |
-               (nodes[parent].Address & 7UL);
-        owner = mk_owner(pbdf);
     } else {
         owner = mk_owner(member);
     }
@@ -1738,7 +1751,7 @@ static void mk_reconcile_all(void)
  * is in it. The entries' UpperFilters copies of the filter INF are its own
  * and stay while it is installed; the uninstall removes those. Returns how
  * many values it changed; -1 when the key could not be read. */
-static int mk_cddb_scrub(void)
+static int mk_cddb_scrub(int *complete)
 {
     HKEY root;
     HKEY k;
@@ -1758,26 +1771,47 @@ static int mk_cddb_scrub(void)
     int changed = 0;
     int act;
 
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_CDDB_KEY, 0, KEY_READ, &root) !=
-        ERROR_SUCCESS) {
-        return -1;
+    *complete = 0;
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_CDDB_KEY, 0, KEY_READ, &root);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        *complete = 1;
+        return 0;
+    }
+    if (r != ERROR_SUCCESS) {
+        mk_log("CriticalDeviceDatabase: the key did not open (error %ld)", r);
+        return 0;
     }
     if (RegQueryInfoKeyA(root, NULL, NULL, NULL, &count, NULL, NULL, NULL,
-                         NULL, NULL, NULL, NULL) != ERROR_SUCCESS ||
-        count == 0) {
+                         NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+        mk_log("CriticalDeviceDatabase: the key could not be read");
         RegCloseKey(root);
-        return count == 0 ? 0 : -1;
+        return 0;
+    }
+    if (count == 0) {
+        RegCloseKey(root);
+        *complete = 1;
+        return 0;
     }
     names = malloc(count * sizeof(*names));
     if (names == NULL) {
         RegCloseKey(root);
-        return -1;
+        return 0;
     }
+    *complete = 1;
     for (i = 0, c = 0; c < count; i++) {
         nn = sizeof(name);
-        if (RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL) !=
-            ERROR_SUCCESS) {
+        r = RegEnumKeyExA(root, i, name, &nn, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
             break;
+        }
+        if (r != ERROR_SUCCESS) {
+            /* A name longer than the buffer or a read that failed: the walk
+             * cannot prove every entry clean. */
+            *complete = 0;
+            if (r != ERROR_MORE_DATA) {
+                break;
+            }
+            continue;
         }
         inst_copy(names[c], name, sizeof(names[c]));
         c++;
@@ -1785,26 +1819,45 @@ static int mk_cddb_scrub(void)
     count = c;
     m = NULL;
     for (c = 0; c < count; c++) {
-        if (RegOpenKeyExA(root, names[c], 0, KEY_QUERY_VALUE | KEY_SET_VALUE,
-                          &k) != ERROR_SUCCESS) {
+        r = RegOpenKeyExA(root, names[c], 0, KEY_QUERY_VALUE | KEY_SET_VALUE,
+                          &k);
+        if (r != ERROR_SUCCESS) {
+            if (r != ERROR_FILE_NOT_FOUND) {
+                *complete = 0;
+            }
             continue;
         }
         memset(f, 0, sizeof(f));
         n = sizeof(f) - 2;
         r = RegQueryValueExA(k, "LowerFilters", NULL, &type, (LPBYTE)f, &n);
-        if (r == ERROR_SUCCESS && (type == REG_MULTI_SZ || type == REG_SZ)) {
-            /* A REG_SZ is read as a one-name list (its NUL pair). */
-            if (n + 2 <= sizeof(f)) {
-                f[n] = '\0';
-                f[n + 1] = '\0';
+        if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
+            *complete = 0;
+            if (!scrubFailLogged) {
+                mk_log("CriticalDeviceDatabase\\%s: its LowerFilters could "
+                       "not be read (error %ld)", names[c], r);
             }
+        }
+        if (r == ERROR_SUCCESS && (type == REG_MULTI_SZ || type == REG_SZ)) {
             act = inst_filter_drop(f, n + 1, MK_NAME, nf, sizeof(nf), &ob);
-            if (act != INST_FD_NONE && m == NULL) {
-                m = mk_lock(MK_WRITE_MUTEX, 5000);
+            if (act != INST_FD_NONE) {
                 if (m == NULL) {
-                    RegCloseKey(k);
-                    break;
+                    m = mk_lock(MK_WRITE_MUTEX, 5000);
+                    if (m == NULL) {
+                        RegCloseKey(k);
+                        *complete = 0;
+                        break;
+                    }
                 }
+                /* Read again under the lock: the installer edits it too. */
+                memset(f, 0, sizeof(f));
+                n = sizeof(f) - 2;
+                r = RegQueryValueExA(k, "LowerFilters", NULL, &type,
+                                     (LPBYTE)f, &n);
+                act = (r == ERROR_SUCCESS &&
+                       (type == REG_MULTI_SZ || type == REG_SZ))
+                          ? inst_filter_drop(f, n + 1, MK_NAME, nf,
+                                             sizeof(nf), &ob)
+                          : INST_FD_NONE;
             }
             if (act == INST_FD_SET) {
                 r = RegSetValueExA(k, "LowerFilters", 0, REG_MULTI_SZ,
@@ -1815,6 +1868,9 @@ static int mk_cddb_scrub(void)
                 r = ERROR_INSUFFICIENT_BUFFER;
             }
             if (act != INST_FD_NONE) {
+                if (r != ERROR_SUCCESS) {
+                    *complete = 0;
+                }
                 if (r == ERROR_SUCCESS) {
                     changed++;
                     mk_log("CriticalDeviceDatabase\\%s: %s taken out of its "
@@ -1899,8 +1955,24 @@ static DWORD mk_poll(void)
     /* The scrub every poll; when it found a copy, or every
      * MK_INVENTORY_MS, the inventory too, since a device Windows found
      * meanwhile may have taken the name from it. */
-    if (mk_cddb_scrub() > 0 || !inventoryDone ||
-        GetTickCount() - lastInventory >= MK_INVENTORY_MS) {
+    {
+        int complete;
+        int hits = mk_cddb_scrub(&complete);
+
+        if (!complete && !scrubFailLogged) {
+            mk_log("CriticalDeviceDatabase: the scrub did not complete; no "
+                   "new mark is written until it does");
+            scrubFailLogged = 1;
+        } else if (complete && scrubFailLogged) {
+            mk_log("CriticalDeviceDatabase: the scrub completes again");
+            scrubFailLogged = 0;
+        }
+        scrubOk = complete;
+        if (hits > 0) {
+            lastInventory = GetTickCount() - MK_INVENTORY_MS;
+        }
+    }
+    if (!inventoryDone || GetTickCount() - lastInventory >= MK_INVENTORY_MS) {
         mk_inventory(inventoryDone);
         inventoryDone = 1;
         lastInventory = GetTickCount();

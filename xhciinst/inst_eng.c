@@ -9382,6 +9382,16 @@ static int mk_inventory(int fix, int *left)
             "safe-removal marks\ncannot be read.\n");
         return 0;
     }
+    /* The CriticalDeviceDatabase first: it is the source new devices take
+     * the name from, so the devices are read after it is clean. */
+    {
+        int cleft;
+
+        if (!cddb_scrub(fix, &cleft)) {
+            ok = 0;
+        }
+        *left += cleft;
+    }
     set = api.GetClassDevs(NULL, "PCI", NULL, DIGCF_ALLCLASSES);
     if (set == INVALID_HANDLE_VALUE) {
         out("The PCI device list could not be opened (error %lu): the "
@@ -9453,14 +9463,6 @@ static int mk_inventory(int fix, int *left)
             INST_MK_NAME, id);
     }
     api.Destroy(set);
-    {
-        int cleft;
-
-        if (!cddb_scrub(fix, &cleft)) {
-            ok = 0;
-        }
-        *left += cleft;
-    }
     return ok;
 }
 
@@ -9550,7 +9552,9 @@ static int mk_remove(void)
     if (opts.List) {
         ok = mk_inventory(0, &left);
         if (left > 0) {
-            out("(/list) %s would be removed from %d device(s)' LowerFilters.\n",
+            out("(/list) %s would be removed from %d filter value(s) (devices' "
+                "LowerFilters,\nthe CriticalDeviceDatabase's LowerFilters and "
+                "UpperFilters).\n",
                 INST_MK_NAME, left);
         }
         if (svc_state(INST_MK_SERVICE) == 1) {
@@ -9581,6 +9585,18 @@ static int mk_remove(void)
         return 0;
     }
     ok = mk_inventory(1, &left) && left == 0;
+    if (ok) {
+        /* Read once more, both the database and the devices: Windows does
+         * not take the write lock, and a device it found during the
+         * removal may have taken the name from a copy. */
+        int again;
+
+        ok = mk_inventory(0, &again) && again == 0;
+        if (!ok) {
+            out("A Thunderbolt safe-removal mark (xhcicm) is still named after "
+                "its removal.\n");
+        }
+    }
     if (ok) {
         LONG r = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_MK_MARKS_KEY);
         if (r != ERROR_SUCCESS && r != ERROR_FILE_NOT_FOUND) {
@@ -9976,7 +9992,8 @@ static int run_uninstall_nt(void)
     {
         int left;
         if (!mk_inventory(0, &left) || left != 0) {
-            return stop_uninstall("a device still names xhcicm in its "
+            return stop_uninstall("a device or a CriticalDeviceDatabase entry "
+                                  "still names xhcicm in its filters - "
                                   "LowerFilters, so xhcicm's service\nand "
                                   "file stay.");
         }
