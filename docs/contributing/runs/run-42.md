@@ -1549,3 +1549,53 @@ show is an Enum entry of the base images with no devnode, as in N1's
 logs; the run does not touch it. Not taken: the window (the console runs
 the same engine), NT (no hub ordering leg; the NT rule rests on the code
 read and the vectors), ME over `3.0.0.0` (no such image).
+
+## 42-A.25: no republication after a resume left a bus unnumbered (2026-10-19)
+
+The matrix reading on Windows ME that morning (the bench zip, two USB4
+NVMe enclosures on the emulator's `usb4-generic` host, `tb0` at `00:05`
+for port 1 and `tb1` at `00:06` for port 2): after a Stand by and resume
+with `enc0` attached, plugging `enc1` into port 2 dropped the volume of
+port 1. The log: at the resume the core rebuilt port 1's tunnel
+(`cm.nvlink.u4-up=00010002`), and the UP hook's and the seam's exposures
+of it found the secondary bus not yet numbered (`cm.nvlink.up.no-bus`),
+so only the bridge's tunnel record took it; at `enc1`'s tunnel up the
+seam's exposure of port 1's member, naming no tunnel, published for that
+record and advanced port 1's entry (`cm.nvlink.up=02000101`) before port
+2's own (`01000201`). Stor98, bound since before the sleep, then ended
+that disk.
+
+Code on branch `p42-nvres` (from `3.1.0.0` at `4b6d3477`): `0213636d`
+(`CmNvlinkPublishUpEx`: only an exposure that itself names a new tunnel
+advances an entry already `UP`; one that names none labels what it
+publishes with the bridge's recorded tunnel and never advances; host
+vector `test_resume_no_bus`), `b860175b` and the merge `d26ccedf`
+(records 21 section 7.2 and 22 section 10, with their revision notes).
+Reviewed: the first round found nothing. Built at `d26ccedf`, the
+current `3.1.0.0` merged in, with every gate, `scripts\build-driver.cmd
+all` and `all -amd64`: both pass (`test_cm_nvlink` 473 checks).
+
+**Windows ME** (the guest of the morning's reading copied, the gated
+`qemu` `xhcicm.sys` of `0213636d` copied over the installed one, cold
+starts only): `enc0` at power-on (`cm.nvlink.up=01000101`), F: compared;
+Stand by and resume as the reading did (`cm.nvlink.u4-up=00010002`,
+`cm.nvlink.up.no-bus=00000028` and `00000030`); `enc1` plugged 60 s after
+the resume: one publication, its own (`cm.nvlink.up=01000201`), none for
+port 1; F: and G: both compared clean. Pass. A first attempt with `enc1`
+plugged at once after the wake saw no tunnel at all: the connection
+manager made no ring access after the plug and the emulator dropped port
+2's hot-plug frames ("fifo overflow"); no publication was reached, so it
+says nothing of this change; not seen again, unattributed.
+
+**Windows 7 x86** (the guest of the 42-A.6 legs, two enclosures, a
+hibernation as its only sleep): the resume's own named exposure advanced
+port 1's entry once (`02000101`, the tunnel being new) and `enc1`'s plug
+published only its own (`01000201`); the rule of 42-A.25 changes nothing
+on this path. But F: (port 1) hung in a read after the hibernate resume:
+with this branch's `qemu` build (after `enc1`'s plug), its `release`
+build of `0213636d` (before any plug) and the `release` build of the
+merge `d26ccedf` (before any plug); and did not hang - read clean before
+and after `enc1`'s plug - with the bench zip's `xhcicm.sys` nor with the
+`qemu` build of `4a708676` (42-A.6's own). Not attributed: a change to
+`xhcicm.sys` between the bench's source and `4b6d3477` is the likeliest
+place; owed to a bisection.
