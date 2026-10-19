@@ -3220,6 +3220,20 @@ reading of D10 for the owner to confirm.
    a built stack still refuses the eject; an object of this driver's that
    AddDevice made also counts as a stack, and a PDO with other drivers'
    objects and no child of this one's is not read and counts as a stack.
+   An eject taken holds its member (`EjectHold`, with a reference on the
+   bridge) until the hook returns, and a start reaching an object of this
+   driver's on a PDO that member reported is refused meanwhile
+   (`CmRegStartAllowed`), so a function read stackless cannot start under
+   the teardown. Read again on 7 x86 with this rule, the same layout (a
+   chain's bridge ejected beside a Code 28 NVMe drive) still ended in
+   `cm.reenum.eject.stale`: the ejected bridge's PDO is one ACPI put its
+   bus filter on (`cm.reenum.child.under` `ACPI`, decision 2), and that
+   filter stays on the PDO after the stack above it is removed, so the
+   PDO reads as having a stack. Telling such a filter from a rebuilt stack
+   needs the top of another driver's chain read safely, which this driver
+   does not import; it is open (run-42). Under the firmware connection
+   manager nothing is torn down either way; under the USB4 profile an
+   eject on an ACPI machine leaves the tunnel up until the unplug.
 2. **The capabilities.** The child filter passes
    `IRP_MN_QUERY_CAPABILITIES` down with a completion wait and, when
    `pci.sys` succeeded it, sets `Removable` to 1 on the way up - the way
@@ -4018,8 +4032,8 @@ the code (`runs/run-42.md`, "42-A.5"):
   install). A restart Windows vetoed leaves the unit unlisted and is never
   repeated.
 - **The CriticalDeviceDatabase** (read on Windows 2000 SP4 on 2026-10-19,
-  the release matrix): when Windows 2000 (and XP) installs a driver for a
-  boot-critical class - a PCI-to-PCI bridge (`machine.inf`), a mass-storage
+  the release matrix, then on XP and 7 x86; roadmap-usb4 42-A.24): when
+  Windows installs a driver for a boot-critical class - a PCI-to-PCI bridge (`machine.inf`), a mass-storage
   controller (Stor98 on an NVMe) - it copies the device's own filter values
   into that class's entry under
   `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase`
@@ -4028,7 +4042,16 @@ the code (`runs/run-42.md`, "42-A.5"):
   unit before its install reached every later bridge and NVMe controller,
   recorded nowhere: against "never on another PCI device", and after an
   uninstall a missing filter on any new one (Code 39; on a boot disk, no
-  boot). Windows 7 x86 made no such copy. The service therefore takes
+  boot). 2000 makes the copy at a marked unit's first install, through
+  its Found New Hardware install of Stor98 on an NVMe drive as well (so
+  every NVMe drive after the first came up with an unrecorded mark); XP
+  and 7 x86 made it when a marked bridge's driver was installed again (a
+  forced `machine.inf` update), and XP made none for a Stor98 update over
+  a marked NVMe drive. So the copy is possible on every system the service
+  runs on, 2000 to 7 (`inst_mk_system`), which is where the matrix's tests
+  without the mark found it needed: on 2000 for the first plug, on Vista
+  and 7 (x86 and x64) for a stack rebuilt by a disable and enable or a
+  driver update. The service therefore takes
   `xhcicm` out of every entry's `LowerFilters` at every poll (the other
   names kept, the value deleted when nothing else is left), and runs its
   inventory at once when it took one out and every minute besides; an
@@ -4036,7 +4059,22 @@ the code (`runs/run-42.md`, "42-A.5"):
   judged, kept on a unit behind an active member of a verifiable domain and
   removed from any other device. The `UpperFilters` the filter INF writes
   there for a tunnel port's id are its own and stay while it is installed;
-  the uninstall's step 0 (record 23 section 9.2) takes both kinds out.
+  the uninstall's step 0 (record 23 section 9.2) takes both kinds out,
+  from every entry and not only those the filter INF names, before it
+  takes the devices' values out and verifies both again, so an uninstall
+  cleans a machine that ran a 3.1.0.0 test build whatever is installed;
+  so does any install or update run that ends with no `xhcicm` service
+  (`mk_end_of_run`), and the new service's first poll does the
+  `LowerFilters` part. `XHCICLN` only lists such values, with `xhcicm` not
+  installed, and points at that uninstall: a second writer could not be
+  serialised with the installer. Read on 2000 in the leg of 42-A.24: after
+  a plug and install the database held only the filter INF's
+  `UpperFilters`; a never-seen chain and a second enclosure on the other
+  tunnel port of a two-port USB4 host came up with recorded marks only,
+  the copy 2000's Stor98 install made for the second drive taken out at
+  the next poll; after the uninstall nothing under `Enum\PCI` or the
+  database named `xhcicm`, and a new bridge, an NVMe drive behind it and
+  another on bus 0 started (Code 0).
 - **Hand registration.** `XHCIMARK -register` and `-unregister` register
   and delete the service from `system32` for a test guest before the
   installer's hooks exist; the installer does it in a release.
