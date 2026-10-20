@@ -20,10 +20,13 @@ output and the release is the tracked, written-once record of it. See
 is the published tree, zipped: `out\upload-<version>\` and
 `out\xhci98-<version>.zip` under the git-ignored `out\`, the directory a
 workspace and the zip the GitHub release asset, which is why only the second
-is named after the project. Since release 1.0.0.1 it carries no Microsoft
-file: the INF has the operating system supply `usbd.sys`, `usbhub.sys` and
-`usbui.dll` from its own install source (`docs\contributing\legal-provenance.md` section
-5 records the decision and what it withdrew). It is still assembled here
+is named after the project. From release 1.0.0.1 to 3.1.0.0 it carried no
+Microsoft file: the INF has the operating system supply `usbd.sys`,
+`usbhub.sys` and `usbui.dll` from its own install source. From 3.2.0.0 one
+built with the driver pack carries NUSB 3.3's seven Windows 98 SE storage
+files in a folder of their own, and the readme it renders says which kind
+it is (`docs\contributing\legal-provenance.md` section 5 records both
+decisions and what the first withdrew). It is still assembled here
 rather than by hand, because the layout is checked - every flavour directory
 is gated as the install media it is, nothing the INF does not name goes up -
 and because the archive's entry names have to be ones a non-Windows unzip
@@ -4758,8 +4761,11 @@ and NUSB 3.6 install:
        Driver, pointed at the same folder. It installs "USB Disk".
     2. Unplug the device and plug it back in.
 
-  After that every storage device, USB stick or UAS disk, works with no
-  extra step.
+  After that the storage devices tried, USB sticks and UAS disks, worked
+  with no extra step. THIS WAS READ ONLY ON A WINDOWS 98 SE THAT STILL HELD
+  NUSB'S OTHER FILES (IOS.VXD, DISKTSD.VXD, NTMAP.SYS). Whether a stock
+  Windows 98 SE installed from the CD needs any of those too is not yet
+  known; if storage does not work there, install NUSB 3.3 or 3.6.
 
 On Windows ME, Windows' own storage files serve USB sticks: they are copied
 from the Windows ME CABs when the first stick installs. UAS disks need the
@@ -6990,9 +6996,11 @@ after checkout. Restore it with:  git checkout -- LICENSE
     #
     # `releases\<version>\` is the tracked half. The download a user gets is
     # the same tree, zipped, with each flavour directory gated as install
-    # media on the way. Since 1.0.0.1 it carries no Microsoft file: the OS
-    # supplies usbd.sys, usbhub.sys and usbui.dll through the INF's
-    # LayoutFile. See docs\contributing\legal-provenance.md section 5.
+    # media on the way. Since 1.0.0.1 it carries no Microsoft file of the
+    # OS's: the OS supplies usbd.sys, usbhub.sys and usbui.dll through the
+    # INF's LayoutFile. The one exception is the driver pack's storage
+    # folder ($driverPackIncluded, task 43.3). See
+    # docs\contributing\legal-provenance.md section 5.
     #
     # **Assembled from the staging tree, BEFORE the publish swap below.** It
     # ran after the swap until the audit of 2026-09-17, so a per-directory
@@ -7176,8 +7184,8 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Write-Host "Upload:     $uploadZip"
         if ($driverPackIncluded) {
             Write-Host "            The same tree, zipped, with NUSB 3.3's storage files added in a"
-            Write-Host "            folder of their own: this download's only Microsoft files. This is"
-            Write-Host "            the GitHub release asset; it is git-ignored and must stay that way."
+            Write-Host "            folder of their own: this download's only Microsoft files. This"
+            Write-Host "            is the GitHub release asset; it is git-ignored and must stay so."
         } else {
             Write-Host "            The same tree, zipped, with no Microsoft file. This is the"
             Write-Host "            GitHub release asset; it is git-ignored and must stay that way."

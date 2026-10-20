@@ -2644,15 +2644,45 @@ try {
             Assert-True $tplText.Contains($ph) "the readme template lost $ph, the text that follows whether the driver pack is included."
         }
     }
-    $msChoice = [regex]::Match($releaserText, "(?s)if \(\`$driverPackIncluded\) \{\s*\`$readmeMsStorage = @'(.*?)\} else \{\s*\`$readmeMsStorage = @'(.*?)\n    \}")
+    # The selection block is read from the renderer and run for each value,
+    # so each of the two texts is checked on its own: swapping either pair
+    # of bodies fails here.
+    $msChoice = [regex]::Match($releaserText, "(?s)\n    if \(\`$driverPackIncluded\) \{\s*\`$readmeMsStorage = @'.*?\r?\n    \}\r?\n")
     Assert-True $msChoice.Success "make-release.ps1 no longer chooses the readme's Microsoft-file texts on `$driverPackIncluded as this test reads it."
     if ($msChoice.Success) {
-        Assert-True ($msChoice.Groups[1].Value -notmatch "No Microsoft file|carries no Microsoft") `
-            "the readme's text for a download WITH the driver pack says it carries no Microsoft file."
-        Assert-True ($msChoice.Groups[1].Value -match "NOTICE\.md") `
-            "the readme's text for a download with the driver pack no longer points at the pack's NOTICE.md."
-        Assert-True ($msChoice.Groups[2].Value -match "No Microsoft file is in this download") `
-            "the readme's text for a download without the driver pack no longer says it carries no Microsoft file."
+        $msText = @{}
+        foreach ($included in @($true, $false)) {
+            $sb = [scriptblock]::Create("`$driverPackIncluded = `$$included`r`n" + $msChoice.Value + "`r`n@(`$readmeMsStorage, `$readmeMsFiles)")
+            $msText[$included] = @(& $sb)
+        }
+        Assert-True ($msText[$true][0] -match "download carries" -and $msText[$true][0] -notmatch "does not carry") `
+            "{MSSTORAGE} for a download WITH the driver pack does not say the download carries the storage files."
+        Assert-True ($msText[$false][0] -match "does not carry") `
+            "{MSSTORAGE} for a download without the driver pack does not say the download does not carry them."
+        Assert-True ($msText[$true][1] -notmatch "No Microsoft file|carries no Microsoft" -and $msText[$true][1] -match "NOTICE\.md") `
+            "{MSFILES} for a download WITH the driver pack says it carries no Microsoft file, or no longer points at the pack's NOTICE.md."
+        Assert-True ($msText[$false][1] -match "No Microsoft file is in this download") `
+            "{MSFILES} for a download without the driver pack no longer says it carries no Microsoft file."
+        foreach ($included in @($true, $false)) {
+            foreach ($t in $msText[$included]) {
+                foreach ($line in ($t -split "`r?`n")) {
+                    Assert-True ($line.Length -le 78) "a readme Microsoft-file text (pack included: $included) has a line over 78 columns: '$line'"
+                }
+            }
+        }
+    }
+    $instChoice = [regex]::Match($releaserText, "(?s)\n        if \(\`$driverPackIncluded\) \{\s*\`$instMsFiles = .*?\r?\n        \}\r?\n")
+    Assert-True $instChoice.Success "make-release.ps1 no longer chooses the installer NOTICE.TXT's Microsoft-file line on `$driverPackIncluded as this test reads it."
+    if ($instChoice.Success) {
+        $instText = @{}
+        foreach ($included in @($true, $false)) {
+            $sb = [scriptblock]::Create("`$driverPackIncluded = `$$included`r`n" + $instChoice.Value + "`r`n`$instMsFiles")
+            $instText[$included] = (& $sb)
+        }
+        Assert-True ($instText[$true] -match "NUSB 3\.3" -and $instText[$true] -notmatch "no Microsoft file") `
+            "the installer NOTICE.TXT's line for a download WITH the driver pack says it carries no Microsoft file."
+        Assert-True ($instText[$false] -match "carries no Microsoft file") `
+            "the installer NOTICE.TXT's line for a download without the driver pack no longer says it carries no Microsoft file."
     }
 
     # And the third claim, which a fix after the audit of 2026-09-07 put IN

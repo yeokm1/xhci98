@@ -571,7 +571,7 @@ gated by the import gate's `-GateProfile hlprx86` against
 Windows 98 rules,
 because it is never installed on Windows 98 or ME.
 
-The media carries no Microsoft file. The HCD's INFs have the setup engine
+The media carries no Microsoft file, but for the one exception below. The HCD's INFs have the setup engine
 copy two of the OS's own files, `usbd.sys` (whose helper exports the class
 drivers above the HCD's PDOs import) to dirid 10 (`System32\Drivers`) and
 `usbui.dll` (the property-page provider, and on 9x the drawer of the tabs'
@@ -595,13 +595,15 @@ Since 2.4.0.0 it refuses the CD's compressed names too (`USBD.SY_`): the
 `hidclass.sys` and `hidparse.sys`, which the user copies from their own
 Windows 2000 CD to the floppy - the media still carries none of them
 (`OEM-W2K` holds that entry's shape).
-`legal-provenance.md` section 5 records why. **One exception, from
-`3.2.0.0`, is the release download's, not the media's** (owner,
-2026-10-20): NUSB 3.3's seven Windows 98 SE storage files, unmodified, from
-the separate driver-pack repository `usb-wdm-nonfree`, staged into
-`out\` and the upload set in a folder of their own with the pack's
-`NOTICE.md`, never into a commit or `releases\<version>\`, and never into a
-flavour directory the gates check (roadmap-usb4 tasks 43.1 to 43.3;
+`legal-provenance.md` section 5 records why. **One exception is decided for
+`3.2.0.0`** (owner, 2026-10-20): NUSB 3.3's seven Windows 98 SE storage
+files, unmodified, from the separate driver-pack repository
+`usb-wdm-nonfree`, staged by task 43.3 with the pack's `NOTICE.md` as a
+folder of their own inside the generated `release-x86` and `debug-x86`
+packages and the upload set, and never into a commit or
+`releases\<version>\`. The `OS-*` and `PKG-MSFILE` rules stay as they are
+for this project's own files; they name none of the seven
+(roadmap-usb4 tasks 43.1 to 43.3;
 `legal-provenance.md` section 5, "NUSB 3.3's Windows 98 SE storage
 files"). Build install media with `scripts\package\make-package.ps1`, never by
 hand-copying the `.sys` and `.inf`. Its `-Arch` moves three things together

@@ -485,16 +485,21 @@ composition and that open question, and records the boundary above. The
 drivers are distributed by themselves and loaded by a kernel this project
 does not ship and could not ship.
 
-The release download - as distinct from this repository - carries no Microsoft
-file. Since release 2.0.0.0 the drivers depend on two of the operating
+This repository carries no Microsoft file. The release download carried none
+up to release 3.1.0.0; from 3.2.0.0 one built with the driver pack carries
+NUSB 3.3's seven Windows 98 SE storage files, unmodified, in a folder of
+their own with a NOTICE.md saying whose they are. They are not this
+project's work and are outside the grant above; no licence to
+redistribute them has been established (docs/contributing/legal-provenance.md
+section 5). Since release 2.0.0.0 the drivers depend on two of the operating
 systems' own files: usbd.sys, whose helper functions the class drivers above
 xhci98.sys call, and usbui.dll, which provides the controller's and the root
 hub's property pages. The INF has Windows Setup copy them from the user's own
 installation source, never overwriting a file already present, and neither is
 in the download or in this repository. The Windows Vista and Windows 7 install
 paths copy neither, because every install of those systems already carries
-both. On Windows 98 SE, xhciuas.inf names NUSB's USBNTMAP.SYS as a filter by
-name and never ships it. The 64-bit txtsetup.oem copies no Microsoft file.
+both. On Windows 98 SE, xhciuas.inf names USBNTMAP.SYS as a filter by name
+and copies no file. The 64-bit txtsetup.oem copies no Microsoft file.
 The 32-bit txtsetup.oem's second Windows 2000 entry, since release 2.4.0.0,
 names three files of the Windows 2000 CD - USBD.SY_, HIDCLASS.SY_ and
 HIDPARSE.SY_ - which the user copies from their own CD to the F6 floppy;

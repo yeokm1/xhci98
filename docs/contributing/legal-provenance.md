@@ -1470,6 +1470,7 @@ written, then the three task 22.12 (b) readings of 2026-09-18.
 | **Windows 98 SE's and ME's `cfgmgr32.dll`: its exported names** (design record 24 section 7.1) - `WINDOWS\SYSTEM\CFGMGR32.DLL` of the project's 98 SE guest image (`vm\win98.img`; 4.10.2222, 45,056 bytes, dated 1999-04-23) and ME guest image (`vm\winme.img`; 4.90.3000, 40,960 bytes, dated 2000-06-08), extracted with `7z e` and their PE export name tables read | static (the export table read; nothing executed). Both export the same 179 names, among them `CM_Query_Remove_SubTree`, `CM_Remove_SubTree`, `CM_Reenumerate_DevNode`, `CM_Get_DevNode_Status`, `CM_Locate_DevNodeA`, `CM_Get_Child`, `CM_Get_Sibling` and `CM_Get_Device_IDA`; neither exports `CM_Request_Device_EjectA`. Names only; whether the routines work is the legs' runtime reading. The files are not tracked | design record 24 section 7.1; `xhciinst\xhciinst.c` |
 | **Windows 2000's `cfgmgr32.dll` and `setupapi.dll`: where `CM_Request_Device_EjectA` is exported** (design record 24 section 7.2) - `WINNT\system32\cfgmgr32.dll` and `setupapi.dll` of the project's 2000 SP4 guest image (`vm\win2k-xonly.img`), extracted with `7z e` and their PE export name tables read | static (the export table read; nothing executed). `setupapi.dll` exports `CM_Request_Device_EjectA` and its `W` and `_Ex` forms; `cfgmgr32.dll` does not, and both export `CM_Query_And_Remove_SubTreeA`, `CM_Query_Remove_SubTree` and `CM_Remove_SubTree`. Names only; the files are not tracked | design record 24 section 7.2; `xhciinst\xhciinst.c` |
 | **Windows 2000's `CM_Query_And_Remove_SubTreeA` is a stub, and its `W` form accepts `CM_REMOVE_UI_NOT_OK` and `CM_REMOVE_NO_RESTART`** (design record 24 section 7.2, the fallback for a unit not marked removable) - `WINNT\system32\setupapi.dll` of the project's 2000 SP4 guest image (`vm\win2k-xonly.img`; 570,128 bytes, dated 2003-06-20, SHA-256 `1d0a6e9d062a51e71eaae93d776746823834f5c518096d340f2b332fc059a23d`, image base `0x77880000`), extracted with `7z e`. The export `CM_Query_And_Remove_SubTreeA` (RVA `0x53A1A`) pushes its five arguments and a zero machine handle and calls `CM_Query_And_Remove_SubTree_ExA` (RVA `0x584C7`), whose whole body is `push 34h` / `pop eax` / `ret 18h`: it answers `CR_CALL_NOT_IMPLEMENTED` (0x34) and does nothing else. `CM_Query_And_Remove_SubTreeW` (RVA `0x540F7`) calls `CM_Query_And_Remove_SubTree_ExW` (RVA `0x538C0`), a real body whose flag test (`test dword ptr [ebp+18h],0FFFFFFFCh` at VA `0x778D3906`) refuses any flag above bit 1 with `CR_INVALID_FLAG` (4), so `CM_REMOVE_UI_NOT_OK` (1) and `CM_REMOVE_NO_RESTART` (2) pass it. `cfgmgr32.dll` (17,168 bytes) forwards all four names to `setupapi.dll` | static (MSVC 6.0 `dumpbin /exports` and `/disasm` of a copy in a scratch directory; nothing executed; 2026-10-16, development host A). The file is not tracked | design record 24 section 7.2; `xhciinst\xhciinst.c`; `xhcitr\xhcitr.c` |
+| **NUSB 3.3's seven Windows 98 SE storage files: whose each is, its version and its identity** (roadmap-usb4 task 43.1) - the five binaries' `CompanyName`, `ProductName`, `FileVersion` and `LegalCopyright`, the two INFs' `Provider` and comment headers, and each file's size and SHA-256 | static: PowerShell's `(Get-Item <file>).VersionInfo` on the driver pack's copies, and for `USBMPHLP.PDR` (a VxD that reader does not parse) the `VS_VERSION_INFO` strings in the file; the INFs read as text; `Get-FileHash` against the pack's `SHA256.TXT`, 2026-10-20; nothing executed | section 5, "NUSB 3.3's Windows 98 SE storage files" |
 
 ## 5. Microsoft binaries: what is published, and through which channel
 
@@ -1551,7 +1552,9 @@ Microsoft file" since 1.0.0.1. What is decided:
   commit of this repository, under `releases/<version>/` or anywhere else;
   they are taken at packaging time from a separate repository of the
   owner's, `usb-wdm-nonfree` (its `non-free/storage/nusb33/w98se/`
-  folder), and staged into `out\` and the upload set alone (task 43.3).
+  folder), and staged into `out\` alone - the generated `release-x86` and
+  `debug-x86` packages, as a folder of their own, and the upload set (task
+  43.3, not yet built).
   The reason is the one given for the 0.0.0.4 to 1.0.0.0 exception below: a
   release asset can be withdrawn, and a git blob cannot be without rewriting
   history.
@@ -1565,8 +1568,9 @@ Microsoft file" since 1.0.0.1. What is decided:
   `f1f30a800cf6013eb6f18db775d88e777ddc3924622e6560edd2dcd7b53698d3`.
   NUSB 3.3's INFs are taken rather than 3.6's, which copy no file on their
   own; the binaries are the same in both.
-- **The installer offers them on Windows 98 SE only**, as a row the user can
-  untick, and installs over no file already present (task 43.4).
+- **The decision requires the installer to offer them on Windows 98 SE
+  only**, as a row the user can untick, installing over no file already
+  present (task 43.4, not yet built).
 
 Per file, with its evidence. Static: the version resource read from the
 pack's copy (PowerShell's `(Get-Item <file>).VersionInfo`, and for
