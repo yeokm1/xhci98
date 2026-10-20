@@ -3152,7 +3152,7 @@ static void test_play2_async(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* The isochronous ring page (record 13 section 11.8, ISORING)          */
+/* The isochronous ring page (record 13 section 11.8, 43.39)            */
 /* ------------------------------------------------------------------ */
 
 static void test_iso_page(void)

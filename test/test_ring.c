@@ -1972,7 +1972,7 @@ static void test_set_dequeue_wrapped(void)
 }
 
 /*
- * Record 13 section 11.8 (ISORING): a ring page's ring is `allowance + 2`
+ * Record 13 section 11.8 (task 43.39): a ring page's ring is `allowance + 2`
  * TRBs, 122 at today's allowance of 120 - not a power of two, which nothing
  * in the ring's arithmetic assumes. Its capacity is the allowance; a TD
  * placed across its Link TRB wraps and keeps its cycle; Set TR Dequeue onto

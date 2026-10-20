@@ -946,7 +946,7 @@ typedef struct _XHCI_ISO_REQUEST {
      */
     ULONG TdSizeForm;
     /*
-     * Design record 13 section 11.8 (ISORING). All three are 0 at every
+     * Design record 13 section 11.8 (task 43.39). All three are 0 at every
      * site that zeroes the request, which keeps the behaviour before it.
      *
      * MaxPackets: the request's packet bound, 0 meaning

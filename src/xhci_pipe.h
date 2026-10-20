@@ -284,7 +284,7 @@ ULONG XhciPipeCallerInterval(const UCHAR *config, ULONG length, ULONG offset,
 ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
 
 /* ------------------------------------------------------------------ */
-/* The isochronous ring page (design record 13 section 11.8, ISORING)  */
+/* The isochronous ring page (design record 13 section 11.8, 43.39)    */
 /* ------------------------------------------------------------------ */
 
 /* The event ring entries kept for every source but isochronous rings, and

@@ -1389,7 +1389,7 @@ typedef struct _HCD_CONTROLLER {
     ULONG UrbsMdlShort;             /* length past the MDL: refused      */
     ULONG IsoStartsSia;             /* explicit StartFrame sent as SIA     */
     ULONG IsoStartsFirstFrameId;    /* no CFC: a flow's first TD's Frame ID */
-    /* Design record 13 section 11.8 (ISORING), under the controller lock:
+    /* Design record 13 section 11.8 (task 43.39), under the controller lock:
      * the event budget's count of every open isochronous pipe at its
      * ring's capacity plus XHCI_ISO_EVENTS_OVER_TRBS (IsoCapOut), the
      * pages' telemetry (point

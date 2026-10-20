@@ -6953,7 +6953,7 @@ the blocks to the allocation. The log ring notes `qemu.bigrefuse`;
 one-TD URBs, the largest TD and the TDs of exactly 256, 257, 512 and 513
 TRBs. A change takes effect at the next start.
 
-**`XhciQemuIsoRing`** (roadmap-usb4 ISORING, design record 13 section
+**`XhciQemuIsoRing`** (roadmap-usb4 tasks 43.38 to 43.41, design record 13 section
 11.8, point 2; qemu flavour only, written by no INF). A REG_DWORD read at
 every start: 1 makes every isochronous pipe that is not zero-bandwidth a
 candidate for a ring page, so QEMU's Full Speed `usb-audio` reaches one;

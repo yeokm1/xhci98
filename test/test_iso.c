@@ -2156,7 +2156,7 @@ static void test_spurious_success(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* The ring page's request (record 13 section 11.8, ISORING)           */
+/* The ring page's request (record 13 section 11.8, 43.39)             */
 /* ------------------------------------------------------------------ */
 
 #define ISO_BEI             0x00000200UL    /* Isoch/Normal TRB bit 9 */

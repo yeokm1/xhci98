@@ -3988,7 +3988,7 @@ typedef struct _XHCI_TRANSFER {
  * device asks for more is `XHCI_POOL_RING_TRBS` rather than anything here.
  * `XHCI_EXTENSION.IsoRefusalsTooLarge` is what says whether one ever does.
  *
- * Design record 13 section 11.8 (ISORING) adds the other lever: a pipe on a
+ * Design record 13 section 11.8 (task 43.39) adds the other lever: a pipe on a
  * ring page of its own, whose ring is at most one page of TRBs and whose
  * request is at most XHCI_XFER_MAX_ISO_PAGE_PACKETS packets. The pool
  * ring's two values stay as they are, and so does the extension's scratch.
@@ -8081,7 +8081,7 @@ typedef struct _XHCI_EXTENSION {
      * inside one hold of it, so no second submission can be between them.
      * Nothing outside that hold may read either field.
      *
-     * Since design record 13 section 11.8 (ISORING) the HCD builds into the
+     * Since design record 13 section 11.8 (task 43.39) the HCD builds into the
      * controller's larger IsoTrbs and IsoTdLengths (hcd.h) under the same
      * lock, and IsoScratch is no longer written; it stays, as does
      * IsoLayout's array, because the extension's size and offsets travel in
