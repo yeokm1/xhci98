@@ -16196,7 +16196,7 @@ static int storPreOwed;
 static STORBASE *storBase;
 static int storBaseCount;
 static int storBaseOk;
-static char (*storInfBase)[64];
+static char (*storInfBase)[INST_PATH_CHARS];
 static int storInfBaseCount;
 static int storInfBaseOk;
 static char storJobId[INST_STOR_MAX_JOBS][INST_ID_CHARS];
@@ -16782,7 +16782,8 @@ static void stor_inf_base(void)
     storInfBaseCount = 0;
     storInfBaseOk = 0;
     if (storInfBase == NULL) {
-        storInfBase = (char (*)[64])calloc(INST_STOR_MAX_INF, 64);
+        storInfBase = (char (*)[INST_PATH_CHARS])calloc(INST_STOR_MAX_INF,
+                                                        INST_PATH_CHARS);
         if (storInfBase == NULL) {
             return;
         }
@@ -16803,17 +16804,22 @@ static void stor_inf_base(void)
             continue;
         }
         do {
-            if (storInfBaseCount >= INST_STOR_MAX_INF) {
+            /* Whole names, every one, or the baseline is not whole. */
+            if (storInfBaseCount >= INST_STOR_MAX_INF ||
+                strlen(fd.cFileName) + 7 >= INST_PATH_CHARS) {
                 FindClose(h);
                 return;
             }
             inst_copy(storInfBase[storInfBaseCount], pass == 0 ? "" :
-                      "OTHER\\", 64);
-            strncat(storInfBase[storInfBaseCount], fd.cFileName,
-                    64 - strlen(storInfBase[storInfBaseCount]) - 1);
+                      "OTHER\\", INST_PATH_CHARS);
+            strcat(storInfBase[storInfBaseCount], fd.cFileName);
             storInfBaseCount++;
         } while (FindNextFileA(h, &fd));
+        e = GetLastError();
         FindClose(h);
+        if (e != ERROR_NO_MORE_FILES) {
+            return;
+        }
     }
     storInfBaseOk = 1;
 }
@@ -16912,26 +16918,38 @@ static int stor_place(int i)
     char dest[INST_PATH_CHARS];
     char tmp[INST_PATH_CHARS];
     char src[INST_PATH_CHARS];
+    char *buf;
+    DWORD n = 0;
+    DWORD wrote = 0;
+    HANDLE h;
+    BOOL w;
 
     if (!stor_dest(i, dest, sizeof(dest))) {
         return 0;
     }
     own_variant(dest, ".TMP", tmp, sizeof(tmp));
     join(src, sizeof(src), storPackDir, instStorFile[i].Name);
-    /* A .TMP already there is not this run's: it is never deleted, and
-     * the copy is not made. */
-    if (file_state(tmp) != 0) {
-        out("%s is already there (or cannot be read): %s is not copied.\n",
-            tmp, instStorFile[i].Name);
+    buf = read_file(src, &n);
+    if (buf == NULL) {
+        out("%s could not be read.\n", src);
         return 0;
     }
-    if (!CopyFileA(src, tmp, TRUE)) {
-        out("%s could not be written (error %lu).\n", tmp,
-            (unsigned long)GetLastError());
-        /* Absent before the call: whatever is there now, it made. */
-        if (file_state(tmp) > 0) {
-            delete_file(tmp);
-        }
+    /* The .TMP made with CREATE_NEW: a name already there is another's,
+     * never deleted, and the copy is not made; one this call made is its
+     * own to delete. */
+    h = CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        out("%s could not be made (error %lu): %s is not copied.\n", tmp,
+            (unsigned long)GetLastError(), instStorFile[i].Name);
+        free(buf);
+        return 0;
+    }
+    w = WriteFile(h, buf, n, &wrote, NULL);
+    free(buf);
+    if (!CloseHandle(h) || !w || wrote != n) {
+        out("%s could not be written.\n", tmp);
+        delete_file(tmp);
         return 0;
     }
     if (!same_file(src, tmp)) {
@@ -17456,10 +17474,14 @@ static void stor_record_infs(void)
 
 /* The INF copy a device's driver key names (its InfPath, in INF or
  * INF\OTHER, the 8.3 alias included): 1 exactly one, of the pack's bytes
- * (*isNew: not in the baseline's listing); 0 none, or one of other bytes;
- * -1 the name is ambiguous, or a listing or a copy cannot be read. */
-static int stor_infpath_copy(const DEVREC *d, int *isNew)
+ * (*recorded: one the record's Infs holds, by its exact OEM Name value's
+ * path, with those bytes); 0 none, or one of other bytes; -1 the name is
+ * ambiguous, or a listing or a copy cannot be read. */
+static int stor_infpath_copy(const DEVREC *d, int *recorded)
 {
+    char alias[INST_PATH_CHARS];
+    char rec[96];
+    DWORD an;
     char win[INST_PATH_CHARS];
     char pattern[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
@@ -17474,7 +17496,7 @@ static int stor_infpath_copy(const DEVREC *d, int *isNew)
     int r;
     int i;
 
-    *isNew = 0;
+    *recorded = 0;
     if (d->InfPathState <= 0) {
         return d->InfPathState < 0 ? -1 : 0;
     }
@@ -17514,7 +17536,13 @@ static int stor_infpath_copy(const DEVREC *d, int *isNew)
             for (i = INST_STOR_BINARIES; i < INST_STOR_COUNT; i++) {
                 if (inst_eq(hex, instStorFile[i].Sha256)) {
                     pack = 1;
-                    *isNew = !stor_inf_was(rel);
+                    an = GetShortPathNameA(path, alias, sizeof(alias));
+                    if (an == 0 || an >= sizeof(alias)) {
+                        alias[0] = '\0';
+                    }
+                    *recorded = stor_infs_hash(path, alias, rec,
+                                               sizeof(rec)) > 0 &&
+                                inst_eq(rec, hex);
                 }
             }
         } while (FindNextFileA(h, &fd));
@@ -17567,11 +17595,11 @@ static void stor_record(void)
         }
         {
             /* Windows bound it during a settle: through a copy of the
-             * pack's own INF, made in this run when anything of the seven
-             * was there before (section 6.5.6). */
-            int isNew;
-            int r = stor_infpath_copy(d, &isNew);
-            if (r == 1 && (!storPre || isNew)) {
+             * pack's own INF, and with anything of the seven there before,
+             * one the record holds as this installer's (section 6.5.6). */
+            int recorded;
+            int r = stor_infpath_copy(d, &recorded);
+            if (r == 1 && (!storPre || recorded)) {
                 out("%s is recorded as this installer's (Windows bound it "
                     "from this installer's copy).\n",
                     d->Desc[0] ? d->Desc : d->Id);
@@ -17769,6 +17797,53 @@ static int stor_un_devices(void)
 /* The Enum entries, present or not, that use a file: a driver key's
  * NTMPDriver or PortDriver, or an Enum key's UpperFilters or LowerFilters,
  * naming it. The count, or -1 when the walk is not whole. */
+/* Whether a filter value of the Enum key id names file: one string, or a
+ * list of NUL-separated ones (REG_MULTI_SZ, or the binary form 98 SE may
+ * keep it in). 1 names it, 0 not (or no such value), -1 unreadable. */
+static int stor_filter_names(const char *id, const char *name,
+                             const char *file)
+{
+    char path[INST_ID_CHARS + 16];
+    char data[1024];
+    HKEY k;
+    DWORD type;
+    DWORD n = sizeof(data) - 2;
+    DWORD off;
+    LONG r;
+
+    inst_copy(path, "Enum\\", sizeof(path));
+    if (strlen(path) + strlen(id) >= sizeof(path)) {
+        return -1;
+    }
+    strcat(path, id);
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_QUERY_VALUE, &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS) {
+        return -1;
+    }
+    memset(data, 0, sizeof(data));
+    r = RegQueryValueExA(k, name, NULL, &type, (LPBYTE)data, &n);
+    RegCloseKey(k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS || n >= sizeof(data) - 2 ||
+        (type != REG_SZ && type != REG_MULTI_SZ && type != REG_BINARY)) {
+        return -1;
+    }
+    data[n] = '\0';
+    data[n + 1] = '\0';
+    for (off = 0; off < n; off += (DWORD)strlen(data + off) + 1) {
+        if (data[off] != '\0' &&
+            inst_inf_names_file(data + off, strlen(data + off), file)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int stor_users(const char *file)
 {
     HKEY e1;
@@ -17839,11 +17914,10 @@ static int stor_users(const char *file)
                     break;
                 }
                 for (f = 2; f < 4; f++) {
-                    g = reg9x_value(id, names[f], text, sizeof(text));
+                    g = stor_filter_names(id, names[f], file);
                     if (g < 0) {
                         bad = 1;
-                    } else if (g > 0 && inst_inf_names_file(text, strlen(text),
-                                                            file)) {
+                    } else if (g > 0) {
                         users++;
                     }
                 }
@@ -18030,7 +18104,8 @@ static int stor_un_rest(void)
         if (strlen(pnf) > 4) {
             strcpy(pnf + strlen(pnf) - 4, ".PNF");
         }
-        if ((file_state(pnf) > 0 && !delete_file(pnf)) ||
+        if (file_state(pnf) < 0 ||
+            (file_state(pnf) > 0 && !delete_file(pnf)) ||
             !delete_file(name)) {
             out("  %s could not be deleted (error %lu): restart Windows, "
                 "then run the uninstall\n  again.\n", name,
