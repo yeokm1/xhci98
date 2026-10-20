@@ -498,8 +498,8 @@ hub's property pages. The INF has Windows Setup copy them from the user's own
 installation source, never overwriting a file already present, and neither is
 in the download or in this repository. The Windows Vista and Windows 7 install
 paths copy neither, because every install of those systems already carries
-both. On Windows 98 SE, xhciuas.inf names USBNTMAP.SYS as a filter by name
-and copies no file. The 64-bit txtsetup.oem copies no Microsoft file.
+both. On Windows 98 SE, xhciuas.inf names USBNTMAP.SYS as a filter but
+does not copy that file. The 64-bit txtsetup.oem copies no Microsoft file.
 The 32-bit txtsetup.oem's second Windows 2000 entry, since release 2.4.0.0,
 names three files of the Windows 2000 CD - USBD.SY_, HIDCLASS.SY_ and
 HIDPARSE.SY_ - which the user copies from their own CD to the F6 floppy;
