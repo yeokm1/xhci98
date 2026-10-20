@@ -1003,6 +1003,15 @@ NUSB 3.6's own INFs alike. Each file reads one of four states
 - **other**: present with other bytes, or unreadable, or for an INF any
   candidate that is not the same.
 
+An INF of the same bytes found while every binary present is this
+installer's and at least one is (the setup engine's own copy made from
+the package directory at a plug after an earlier run, which no run has
+recorded yet) counts as this installer's (`inst_stor_norm`): it is this
+install's own source, not another installation. Before the states are
+read, each install run first reconciles what Windows bound since the
+last run, by the uninstall's adoption rule (section 6.5.8 step 1), so
+such copies and devices are recorded where that rule admits them.
+
 NUSB's own uninstall entry, `HKLM\Software\Microsoft\Windows\
 CurrentVersion\Uninstall\USB20U` (static: NUSB 3.3's `_NUSB.INF` line
 129 and 3.6's line 145 write it; NUSB's `_USB2UN.INF` deletes it with
@@ -1067,10 +1076,31 @@ storage part of the run with nothing copied ("the files changed while
 the installer waited"), a step left. No `WININIT.INI` entry is ever made
 for these files.
 
-**Order in the run** (record 23 section 6.2 and record 27 section 6):
-the baseline (section 6.5.6), the package's copy with the seven in it
-and `DevicePath` (record 23 section 4.4), then the storage copies, then
-the helper's devices. So `USBNTMAP.SYS` is in place before
+**What the guarantee covers.** Every one of the seven present when the
+run starts, through every copy the run's own jobs make and every copy a
+later device install makes from the package directory, as long as that
+file is what the run found. A file another package lays down after this
+run over this installer's recorded copy is that package's change, made
+outside this installer's operation; the next run of this installer reads
+it as other (its bytes no longer the recorded ones), and with the case
+then partial-other, the package's copy is made without the seven, so the
+pack leaves `DevicePath`; the uninstall never deletes it (section
+6.5.8). Until that next run a later plug may still find the pack's INFs
+on `DevicePath`, which is said in the release notes as the one limit of
+the guarantee.
+
+**Order in the run** (record 23 section 6.2 and record 27 section 6),
+each step failing closed: the baseline (section 6.5.6) and the
+reconciliation; the states read again and compared with the Summary's
+case; `PreExisting`; the storage copies; and only when every copy of the
+set is in place and the case still admits the route, the package's copy
+made with the seven in it and `DevicePath` naming it (record 23 section
+4.4). A changed case, a copy that fails or a `.TMP` that differs leaves
+the run's storage part there: the package's copy is made without the
+seven (so nothing of the pack reaches `DevicePath`), no storage job runs,
+and the binaries already moved into place in this run stay recorded for
+the uninstall; a step is left (exit 4). So the pack's INFs are never
+published before its files, `USBNTMAP.SYS` is in place before
 `xhciuas.sys` binds a UAS disk, and `USBSTOR.SYS` before a Bulk-Only
 device's install.
 
@@ -1105,11 +1135,15 @@ in the run it installs the storage devices present, in record 27 section
   before it has seen `USBNTMAP.INF` (the release notes and
   `runs/run-28.md`: no drive letter until Update Driver moves it to "USB
   Disk", then a replug), so that binding is the case this step exists
-  for. It is read as the driver key of class `DiskDrive` with no
-  `PortDriver`, its `InfPath` an INF of `%windir%\INF` itself, Windows'
-  own (`inst_stor_unit_generic`; which INF it is, 98 SE's `DISKDRV.INF`
-  expected, is read on 43.5's legs); a unit bound to anything else is
-  left. The helper's job moves it to "USB Disk"; then a settle, and the
+  for. It is read, every value readable, as the driver key of class
+  `DiskDrive` with no `PortDriver` and no `NTMPDriver`, its `InfPath`
+  exactly `DISKDRV.INF` and that file in `%windir%\INF` itself (98 SE's
+  own disk-drive INF; `inst_stor_unit_takes`). That INF's name is
+  expected, not yet read; 43.5's legs read it, and until they do a unit
+  bound any other way - another INF, another loader, a value that cannot
+  be read - is left, so a wrong guess leaves the disk at "Disk drive"
+  (the release notes' hand step) rather than rebinding another driver's
+  device. The helper's job moves it to "USB Disk"; then a settle, and the
   unit is read back: `PortDriver` `USBMPHLP.PDR`, started, no problem
   code. A unit read back bound but not started gets one step, "unplug
   the disk and plug it in again" (the replug of run-28's reading), exit
@@ -1143,8 +1177,8 @@ directory does, then a replug. This is a note, not a step.
   run on 98 SE that offered the row, once its confirmation is given;
 - `PreExisting` (`REG_DWORD`): 1 when the baseline found any of the seven
   that was not this installer's; written once, never cleared, with the
-  run's first storage change (the package's copy carrying the seven,
-  before `DevicePath` names it), never by a run that makes none;
+  run's first storage change (before the first storage copy, or a
+  record the reconciliation makes), never by a run that makes none;
 - `Files`: one value per binary the installer copied, its name the full
   path it was copied to and its data the SHA-256 of its bytes, written
   before the file is moved into place (section 6.5.4);
@@ -1210,13 +1244,17 @@ nothing it does not own. In section 9.3 step 4's order:
    present or not, whose driver key names `USBSTOR.SYS` (`NTMPDriver`) or
    `USBMPHLP.PDR` (`PortDriver`) and that `Devices` does not name is added
    to it when its `InfPath` names exactly one copy in `INF\OTHER` whose
-   bytes are one of the pack's two INFs', with that copy added under
-   `Infs` by its `OEM Name` value first; a device whose `InfPath` names a
-   copy of other bytes, or none, or more than one, is not adopted and
-   keeps every file it uses (step 4). The bytes cannot tell a hand
-   install of the very same files after this install from this
-   installer's own (`inst_stor_adoptable`, host-tested); that one limit is
-   said in the release notes.
+   bytes are one of the pack's two INFs' and whose `OEM Name` value's data
+   names that INF, with that copy added under `Infs` by its `OEM Name`
+   value first; a device whose `InfPath` names a copy of other bytes, or
+   none, or more than one, is not adopted and keeps every file it uses
+   (step 4). This is section 6.3's adoption (draft 12), which the task's
+   ownership model names: with no file of the seven on the machine before
+   the install and NUSB not installed since, a binding through a copy of
+   the pack's own INF text is the install's own source at work. The bytes
+   cannot tell a hand install of the very same seven files from another
+   folder after this install (`inst_stor_adoptable`, host-tested); that
+   one limit is said in the release notes.
 2. **The recorded devices**, present or not, children first: units, then
    Bulk-Only devices, through the helper's `remove` job (record 27
    section 9), before the package's own UAS devices and everything above
@@ -1226,10 +1264,11 @@ nothing it does not own. In section 9.3 step 4's order:
 3. **The recorded INF copies**, after every devnode of the package is
    gone and the package's own INF copies are deleted: each deleted with
    its `.PNF` and its one `OEM Name` value, the exact name the record
-   holds, only when its bytes are still the recorded ones and no driver
-   key, present or not, names it by its `InfPath` (the reference check of
-   record 23 section 9.2 step 4); one still named, or changed, is left and
-   said, and its record value goes.
+   holds, only when its bytes are still the recorded ones, `USB20U` is
+   absent and no driver key, present or not, names it by its `InfPath`
+   (the reference check of record 23 section 9.2 step 4); one still named,
+   or changed, or kept while `USB20U` is present, is left with its `OEM
+   Name` value and said, and its record value goes.
 4. **The recorded files**, last: each deleted only when its bytes are
    still the recorded hash, `USB20U` is absent (NUSB lays the same bytes
    over them, so the hash cannot tell whose they are; `inst_stor_remove`,
@@ -1243,13 +1282,16 @@ nothing it does not own. In section 9.3 step 4's order:
    run again)" (section 9.3), and the uninstall run after the restart
    finishes it, starting from what the record still names. No
    `WININIT.INI` entry is made.
-5. The `Storage` key goes with the records of step 6 when nothing is
-   left in it.
+5. The `Storage` key, its `Choice` and `PreExisting` and its subkeys,
+   deleted whole with the records of section 9.3 step 6 by the run that
+   finishes, as Stor98's is (`forget_dir`); an incomplete uninstall keeps
+   it whole for the next run.
 
 Never deleted: a file the installer did not copy, one whose hash has
 changed, a devnode or INF copy it does not own (one already bound to the
 storage drivers before the install, or bound or made later by another
-package), and none of the files while `USB20U` is present. `/list` lists
+package), and none of the files or INF copies while `USB20U` is present.
+`/list` lists
 each with what would be done.
 
 #### 6.5.9 The console
@@ -1604,8 +1646,9 @@ which waits.
   sentence, and never "ready"), all and this installer's;
   `inst_stor_case` over every combination; `inst_stor_copy_set` (which
   binaries are copied in each case, none in complete and partial-other,
-  never a present one); `inst_stor_kind` and `inst_stor_unit_generic` on
-  the ids and driver keys of section 6.5.5; `inst_stor_adoptable`; and
+  never a present one); `inst_stor_kind` and `inst_stor_unit_takes` on
+  the ids and driver keys of section 6.5.5 (a foreign `DiskDrive` binding
+  left); `inst_stor_norm`; `inst_stor_adoptable`; and
   `inst_stor_remove` (which files are removed: a recorded file with its
   hash, no user and no `USB20U`, and each reason one is kept); the row's
   text at its longest within its control.
