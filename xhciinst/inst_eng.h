@@ -36,6 +36,7 @@
 #define INST_Q_S98_VALUE    11  /* a Stor98 setting (Value: its row)      */
 #define INST_Q_S98_UNUSED   12  /* 98 SE and ME: external NVMe drives
                                    disconnected? (the file update)          */
+#define INST_Q_STOR         13  /* 98 SE: the USB storage drivers?         */
 
 typedef struct _INST_ASK {
     int Kind;               /* INST_Q_*                                   */
@@ -253,6 +254,15 @@ int inst_eng_tray_started(void);
 /* Whether the flavour directory carries it (and its version), and whether
  * it is in the run; the Components page's box. */
 int inst_eng_s98_state(int *have, char *version, size_t cap);
+
+/* The USB storage drivers' row on Windows 98 SE (record 26 section 6.5):
+ * 1 when it is shown; *offered when the download's seven are verified,
+ * *def the box's state now (the default and the switches), note the
+ * detection's line or why it is greyed. */
+int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap);
+void inst_eng_stor_choose(int include);
+/* The Summary's line for it, "" when it is not shown. */
+void inst_eng_stor_summary(char *out, size_t cap);
 void inst_eng_s98_choose(int include);
 
 /* One of its settings (section 5.6): its name on this system, on the page

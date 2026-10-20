@@ -134,6 +134,14 @@ static int uasChoice = 1;       /* the UAS driver's box (owner, 2026-10-19) */
 static int uasOwn = 1;          /* its own state while the USB box is off   */
 static int trayChoice = 1;
 static int trayHere;
+/* The USB storage drivers' box, Windows 98 SE alone (record 26 section
+ * 6.5): shown, offered (the download's seven verified), ticked, the
+ * detection's line. */
+static int storShown;
+static int storOffered;
+static int storChoice;
+static char storNote[600];
+static int compLaidOut;
 
 /* Stor98, the bundled NVMe driver (record 26 sections 5.3 and 5.6): the
  * box, and the settings chosen (a word or a number as text, set or kept),
@@ -418,6 +426,8 @@ static unsigned __stdcall job_main(void *arg)
             inst_eng_s98_state(&s98Have, s98Ver, sizeof(s98Ver));
             s98Choice = s98Have && tbChoice && !opts->NoStor98;
             inst_eng_s98_choose(s98Choice);
+            storShown = inst_eng_stor_state(&storOffered, &storChoice,
+                                            storNote, sizeof(storNote));
             EnterCriticalSection(&textLock);
             sink = &planText;
             LeaveCriticalSection(&textLock);
@@ -740,6 +750,7 @@ static void replan(void)
     inst_eng_usb_choose(usbChoice);
     inst_eng_tb_choose(tbChoice);
     inst_eng_s98_choose(s98Choice);
+    inst_eng_stor_choose(storChoice);
     EnterCriticalSection(&textLock);
     tb_clear(&planText);
     sink = &planText;
@@ -809,8 +820,79 @@ static void comp_usb_click(HWND dlg)
     comp_usb_state(dlg);
 }
 
+/* The page as 98 SE shows it (record 26 section 5.3, draft 17): the USB
+ * storage drivers' row under the UAS box, in the place the locked USB
+ * drivers' sentence leaves, and the rows below it moved down; on every
+ * other system the row is hidden and the template's layout stands. */
+static void comp_layout(HWND dlg)
+{
+    static const int below[] = {
+        IDC_C_TB, IDC_C_TB_T, IDC_C_S98, IDC_C_S98_T, IDC_C_TRAY,
+        IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR, IDC_C_BROWSE, IDC_C_DIR_T,
+        IDC_C_DIR_WHY
+    };
+    RECT r;
+    HWND h;
+    POINT pt;
+    int up;
+    int down;
+    size_t i;
+
+    if (compLaidOut) {
+        return;
+    }
+    compLaidOut = 1;
+    if (!storShown) {
+        ShowWindow(GetDlgItem(dlg, IDC_C_STOR), SW_HIDE);
+        ShowWindow(GetDlgItem(dlg, IDC_C_STOR_T), SW_HIDE);
+        return;
+    }
+    r.left = 0;
+    r.top = 0;
+    r.right = 17;
+    r.bottom = 15;
+    MapDialogRect(dlg, &r);
+    up = r.right;
+    down = r.bottom;
+    ShowWindow(GetDlgItem(dlg, IDC_C_DRIVERS_T), SW_HIDE);
+    h = GetDlgItem(dlg, IDC_C_UAS);
+    GetWindowRect(h, &r);
+    pt.x = r.left;
+    pt.y = r.top;
+    ScreenToClient(dlg, &pt);
+    SetWindowPos(h, NULL, pt.x, pt.y - up, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    h = GetDlgItem(dlg, IDC_C_UAS_T);
+    GetWindowRect(h, &r);
+    pt.x = r.left;
+    pt.y = r.top;
+    ScreenToClient(dlg, &pt);
+    SetWindowPos(h, NULL, pt.x, pt.y - up, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    for (i = 0; i < sizeof(below) / sizeof(below[0]); i++) {
+        h = GetDlgItem(dlg, below[i]);
+        GetWindowRect(h, &r);
+        pt.x = r.left;
+        pt.y = r.top;
+        ScreenToClient(dlg, &pt);
+        SetWindowPos(h, NULL, pt.x, pt.y + down, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER);
+    }
+}
+
 static void comp_fill(HWND dlg)
 {
+    char text[1200];
+
+    comp_layout(dlg);
+    if (storShown) {
+        SetDlgItemTextA(dlg, IDC_C_STOR, inst_page_text(INST_PT_STOR));
+        _snprintf(text, sizeof(text) - 1, "%s\r\n%s",
+                  inst_page_text(INST_PT_STOR_T), storNote);
+        text[sizeof(text) - 1] = '\0';
+        SetDlgItemTextA(dlg, IDC_C_STOR_T, text);
+        CheckDlgButton(dlg, IDC_C_STOR, storOffered && storChoice ?
+                       BST_CHECKED : BST_UNCHECKED);
+        EnableWindow(GetDlgItem(dlg, IDC_C_STOR), storOffered);
+    }
     SetDlgItemTextA(dlg, IDC_C_DRIVERS, inst_page_text(INST_PT_DRIVERS));
     CheckDlgButton(dlg, IDC_C_DRIVERS, usbChoice ? BST_CHECKED : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_C_DRIVERS), usbOffered);
@@ -896,6 +978,7 @@ static int comp_leave(HWND dlg)
     int s98;
     int usb;
     int uas;
+    int stor;
 
     GetDlgItemTextA(dlg, IDC_C_DIR, typed, sizeof(typed));
     why = inst_eng_dir_check(typed, checked, sizeof(checked));
@@ -926,12 +1009,15 @@ static int comp_leave(HWND dlg)
     if (usb) {
         uasOwn = uas;
     }
+    stor = storShown && storOffered &&
+           IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
     if (usb != usbChoice || tb != tbChoice || s98 != s98Choice ||
-        uas != uasChoice) {
+        uas != uasChoice || stor != storChoice) {
         usbChoice = usb;
         uasChoice = uas;
         tbChoice = tb;
         s98Choice = s98;
+        storChoice = stor;
         replan();
     }
     return 1;
@@ -2038,6 +2124,7 @@ static void summary_fill(HWND dlg)
         /* The tools installed for the first time or moved, and the
          * USB Tree's start at login turned on or off, count too. */
         other = (tbChoice && !tbInstalled) || s98Choice ||
+                (storShown && storOffered && storChoice) ||
                 dirNow[0] == '\0' || !inst_eq(dirNow, dirChoice) ||
                 (trayHere && trayChoice != inst_eng_tray_started());
         _snprintf(line, sizeof(line) - 1, "%s.\n\n",
@@ -2086,6 +2173,16 @@ static void summary_fill(HWND dlg)
                       s98Ver);
             line[sizeof(line) - 1] = '\0';
             tb_add(&t, line);
+        }
+        if (storShown) {
+            char sl[400];
+            inst_eng_stor_summary(sl, sizeof(sl));
+            if (sl[0] != '\0') {
+                _snprintf(line, sizeof(line) - 1, "- %s\n  %s\n", sl,
+                          storNote);
+                line[sizeof(line) - 1] = '\0';
+                tb_add(&t, line);
+            }
         }
         if (trayHere) {
             tb_add(&t, trayChoice ? "- the xHCI98 USB Tree, started at login\n"
@@ -2862,12 +2959,12 @@ static int selftest(void)
     static const int cIds[] = {
         IDC_C_DRIVERS, IDC_C_DRIVERS_T, IDC_C_TB, IDC_C_TB_T, IDC_C_S98,
         IDC_C_S98_T, IDC_C_TRAY, IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR_T,
-        IDC_C_UAS, IDC_C_UAS_T
+        IDC_C_UAS, IDC_C_UAS_T, IDC_C_STOR
     };
     static const int cTexts[] = {
         INST_PT_DRIVERS, INST_PT_DRIVERS_T, INST_PT_TB, INST_PT_TB_T,
         INST_PT_S98, INST_PT_S98_T, INST_PT_TRAY, INST_PT_TRAY_T, INST_PT_DIR,
-        INST_PT_DIR_9X, INST_PT_UAS, INST_PT_UAS_T
+        INST_PT_DIR_9X, INST_PT_UAS, INST_PT_UAS_T, INST_PT_STOR
     };
     static const int s3Ids[] = { IDC_S_HEAD };
     static const int s3Texts[] = { INST_PT_S98SET };
@@ -2936,7 +3033,7 @@ static int selftest(void)
         st_page(parent, IDD_UWELCOME, uIds, uTexts, 3, "the uninstall's "
                 "welcome");
         st_page(parent, IDD_FOUND, fIds, fTexts, 1, "what was found");
-        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 12, "the components");
+        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 13, "the components");
         st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
         st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "
                 "shutdown");

@@ -577,6 +577,9 @@ typedef struct _INST_OPTS {
                                section 7.1, revision 23)                */
     int NoTray;             /* /notray: XHCITR not started at login     */
     int NoUas;              /* /nouas: xhciuas.inf left out of the run  */
+    int Storage;            /* /storage: the USB storage drivers, 98 SE
+                               only (record 26 section 6.5.9)          */
+    int NoStorage;          /* /nostorage: left out, on any system      */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -1282,7 +1285,7 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 /* Every fixed text a page shows, with the size of the control it sits in
  * (dialog units, xhciwiz.rc): the host suite checks each fits its control
  * at the dialog font's average width, and the window's self-test renders
- * them. Width 0: shown in a message box. */
+ * them. Width 0: shown in a message box, or in a box that scrolls. */
 #define INST_PT_WELCOME         1
 #define INST_PT_WAIT            2
 #define INST_PT_FOUND           3
@@ -1324,6 +1327,9 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 #define INST_PT_UN_AGREE_CM     38
 #define INST_PT_UAS             39  /* the UAS box (owner, 2026-10-19)    */
 #define INST_PT_UAS_T           40
+/* Record 26 section 6.5 (task 43.4): the USB storage drivers, 98 SE. */
+#define INST_PT_STOR            41
+#define INST_PT_STOR_T          42
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1610,5 +1616,109 @@ int inst_mk_safe_eject(int mwState, INST_U32 mwValue, const INST_VNOW *now,
 int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
                   INST_U32 bus, INST_U32 address, unsigned char *out,
                   INST_U32 *need);
+
+/* ---- the USB storage drivers on Windows 98 SE (record 26 section 6.5;
+ * roadmap-usb4 task 43.4) ----------------------------------------------- */
+
+/* NUSB 3.3's seven files, from the download's INST_STOR_PACK_DIR folder
+ * (task 43.3), each with where its INF sends it and its SHA-256 (the same
+ * as legal-provenance.md section 5's table and package-common.ps1's
+ * allowlist, which test-package.ps1 holds equal). The binaries come first,
+ * the two INFs last. */
+#define INST_STOR_COUNT         7
+#define INST_STOR_BINARIES      5
+#define INST_STOR_IDX_USBSTOR_INF   5
+#define INST_STOR_IDX_USBNTMAP_INF  6
+#define INST_STOR_DIR_DRIVERS   0   /* %windir%\SYSTEM32\DRIVERS (dirid 10) */
+#define INST_STOR_DIR_IOS       1   /* the system directory's IOSUBSYS (12) */
+#define INST_STOR_DIR_INF       2   /* INF or INF\OTHER, the engine's copy  */
+#define INST_STOR_PACK_DIR      "NONFREE\\STORAGE\\NUSB33\\W98SE"
+#define INST_STOR_KEY           "Software\\xhci98\\Storage"
+#define INST_STOR_USB20U_KEY \
+    "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"
+
+typedef struct _INST_STOR_FILE {
+    const char *Name;
+    int Dir;                /* INST_STOR_DIR_*                          */
+    const char *Sha256;     /* hex, upper case                         */
+    const char *KeyFile;    /* an INF: the file its text names (found
+                               under a renamed name by it); else NULL   */
+} INST_STOR_FILE;
+
+extern const INST_STOR_FILE instStorFile[INST_STOR_COUNT];
+
+/* The index of a name among the seven, -1 none. */
+int inst_stor_index(const char *name);
+
+/* A file's state (record 26 section 6.5.3). */
+#define INST_STOR_ABSENT        0
+#define INST_STOR_OWN           1   /* recorded, its bytes the recorded   */
+#define INST_STOR_SAME          2   /* present, the download's bytes      */
+#define INST_STOR_OTHER         3   /* other bytes, or unreadable         */
+/* present: found where it installs; readable: its bytes read; recordHash:
+ * the install record's hash for it (NULL none); hash: its SHA-256 now. */
+int inst_stor_state(int present, int readable, const char *recordHash,
+                    const char *packHash, const char *hash);
+/* An INF's state over its candidates (each already a state): absent with
+ * none, other when any is other, own when every one is own, else same. */
+int inst_stor_inf_state(const int *candidates, int n);
+
+/* 1 when a device INF's text (one with a [Manufacturer] section) names the
+ * key file of the INF at index i as a word: the INF found under another
+ * name (record 26 section 6.5.3). */
+int inst_stor_inf_is(const char *text, size_t n, int i);
+
+/* The run's case (record 26 section 6.5.4). */
+#define INST_STOR_CASE_NONE     0
+#define INST_STOR_CASE_COMPLETE 1
+#define INST_STOR_CASE_SAME     2   /* partial, the same bytes            */
+#define INST_STOR_CASE_OTHER    3   /* partial, another file present      */
+#define INST_STOR_CASE_OWN      4   /* every present file this installer's */
+/* source: the record's Source (an earlier run deployed the seven): with
+ * it, a file of other bytes is partial-other however many are present. */
+int inst_stor_case(const int st[INST_STOR_COUNT], int source);
+/* 1 when the case admits the same-bytes route (copies, the package's copy
+ * of the seven, the device jobs). */
+int inst_stor_route(int storCase);
+/* The row's default: a recorded choice when there is one, else ticked only
+ * when none of the seven is found (absent or this installer's). */
+int inst_stor_default(int haveChoice, int choice,
+                      const int st[INST_STOR_COUNT]);
+/* The binaries a ticked run copies, a bit per index: on the route, each
+ * absent one; never a present one, never an INF. */
+INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
+                            int source);
+/* The detection's text: none, some ("not known to be ready"), all, or
+ * this installer's. */
+void inst_stor_found_text(char *out, size_t cap,
+                          const int st[INST_STOR_COUNT]);
+
+/* A device's storage kind by its ids (record 26 section 6.5.5). */
+#define INST_STOR_KIND_NONE     0
+#define INST_STOR_KIND_BULK     1   /* USB\Class_08&SubClass_0{2,5,6}&Prot_50 */
+#define INST_STOR_KIND_UNIT     2   /* USBSTOR\GenDisk, GenCdRom, GenSfloppy */
+int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,
+                   size_t compatBytes);
+/* A unit's binding: 1 when the helper takes it - no driver, or Windows'
+ * generic disk binding, every value read (readable): class DiskDrive, no
+ * PortDriver and no NTMPDriver ("" for none), its InfPath exactly
+ * DISKDRV.INF and that file in %windir%\INF itself; 0 when it is left
+ * (USBMPHLP.PDR's already, or anything else, or a value unread). */
+int inst_stor_unit_takes(int hasDriver, int readable, const char *cls,
+                         const char *portDriver, const char *ntmpDriver,
+                         const char *infPath, int infInWindowsInf);
+/* With the record's Source (an earlier run put the seven in the package
+ * directory), a file of the download's bytes is this installer's own
+ * deployment, not another installation: made own, in place, before the
+ * case, the default and the text are taken. Without it, nothing changes. */
+void inst_stor_norm(int st[INST_STOR_COUNT], int source);
+/* What the uninstall does with a recorded file. */
+#define INST_STOR_RM_DELETE     0
+#define INST_STOR_RM_CHANGED    1   /* its bytes changed: kept, forgotten  */
+#define INST_STOR_RM_NUSB       2   /* USB20U present: kept, forgotten     */
+#define INST_STOR_RM_USED       3   /* a devnode uses it: kept, forgotten  */
+#define INST_STOR_RM_GONE       4   /* not there: forgotten               */
+int inst_stor_remove(int present, int hashSame, int usb20u, int users);
+const char *inst_stor_remove_text(int why);
 
 #endif /* INST_CORE_H */

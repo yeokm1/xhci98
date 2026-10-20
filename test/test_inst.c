@@ -3912,6 +3912,263 @@ static void test_marks(void)
           "another answer is no marks answer");
 }
 
+/* ---- record 26 section 6.5: the USB storage drivers on Windows 98 SE ---- */
+
+static void stor_fill(int *st, int v)
+{
+    int i;
+
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        st[i] = v;
+    }
+}
+
+static int stor_inf_is(const char *t, int i)
+{
+    return inst_stor_inf_is(t, strlen(t), i);
+}
+
+static void test_storage(void)
+{
+    int st[INST_STOR_COUNT];
+    int cand[3];
+    char text[512];
+    char *lp;
+    int i;
+    char ids[64];
+    size_t n;
+    const char *own = "AAAA";
+    const char *pack = instStorFile[0].Sha256;
+
+    /* The seven against legal-provenance.md section 5's table. */
+    lp = load("..\\docs\\contributing\\legal-provenance.md");
+    CHECK(lp != NULL, "legal-provenance.md read");
+    for (i = 0; lp != NULL && i < INST_STOR_COUNT; i++) {
+        char row[200];
+        char hash[65];
+        size_t k;
+        for (k = 0; k < 64; k++) {
+            char c = instStorFile[i].Sha256[k];
+            hash[k] = (char)((c >= 'A' && c <= 'F') ? c - 'A' + 'a' : c);
+        }
+        hash[64] = '\0';
+        sprintf(row, "| `%s` |", instStorFile[i].Name);
+        CHECK(strstr(lp, row) != NULL &&
+              strstr(strstr(lp, row), hash) != NULL &&
+              strstr(strstr(lp, row), "\n") > strstr(strstr(lp, row), hash),
+              "the seven's hash is legal-provenance.md's");
+        CHECK(inst_stor_index(instStorFile[i].Name) == i, "the seven by name");
+    }
+    free(lp);
+    CHECK(inst_stor_index("xhci98.sys") < 0, "not one of the seven");
+    CHECK(instStorFile[4].Dir == INST_STOR_DIR_IOS &&
+          instStorFile[0].Dir == INST_STOR_DIR_DRIVERS &&
+          instStorFile[INST_STOR_IDX_USBSTOR_INF].Dir == INST_STOR_DIR_INF,
+          "where their INFs send them");
+
+    /* The states. */
+    CHECK(inst_stor_state(0, 0, NULL, pack, NULL) == INST_STOR_ABSENT,
+          "absent");
+    CHECK(inst_stor_state(1, 0, NULL, pack, NULL) == INST_STOR_OTHER,
+          "unreadable is other");
+    CHECK(inst_stor_state(1, 1, NULL, pack, pack) == INST_STOR_SAME,
+          "the download's bytes");
+    CHECK(inst_stor_state(1, 1, pack, pack, pack) == INST_STOR_OWN,
+          "recorded with its bytes");
+    CHECK(inst_stor_state(1, 1, own, pack, pack) == INST_STOR_SAME,
+          "recorded with other bytes than now, the download's: the same");
+    CHECK(inst_stor_state(1, 1, NULL, pack, own) == INST_STOR_OTHER,
+          "other bytes");
+    cand[0] = INST_STOR_OWN;
+    cand[1] = INST_STOR_SAME;
+    cand[2] = INST_STOR_OTHER;
+    CHECK(inst_stor_inf_state(cand, 0) == INST_STOR_ABSENT &&
+          inst_stor_inf_state(cand, 1) == INST_STOR_OWN &&
+          inst_stor_inf_state(cand, 2) == INST_STOR_SAME &&
+          inst_stor_inf_state(cand, 3) == INST_STOR_OTHER,
+          "an INF over its candidates");
+    CHECK(stor_inf_is("[Manufacturer]\r\nx=y\r\n[a]\r\nHKR,,NTMPDriver,,"
+                           "USBSTOR.SYS\r\n", INST_STOR_IDX_USBSTOR_INF),
+          "a renamed USBSTOR.INF by its text");
+    CHECK(!stor_inf_is("[Version]\r\n[W98Un.Sys32]\r\nUSBSTOR.SYS\r\n", INST_STOR_IDX_USBSTOR_INF),
+          "no [Manufacturer]: not a device INF");
+    CHECK(!stor_inf_is("[Manufacturer]\r\n; USBMPHLP.PDR\r\n", INST_STOR_IDX_USBNTMAP_INF),
+          "a comment does not name it");
+    CHECK(!stor_inf_is("[Manufacturer]\r\nUSBSTOR.SYS\r\n", 0),
+          "a binary has no key file");
+
+    /* The cases, the default, the copies, the text. */
+    stor_fill(st, INST_STOR_ABSENT);
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_NONE &&
+          inst_stor_route(INST_STOR_CASE_NONE), "none: the route");
+    CHECK(inst_stor_default(0, 0, st), "none found: ticked");
+    CHECK(!inst_stor_default(1, 0, st), "a recorded No is kept");
+    CHECK(inst_stor_copy_set(1, st, 0) == 0x1FUL,
+          "none: the five binaries copied, never an INF");
+    CHECK(inst_stor_copy_set(0, st, 0) == 0, "unticked: nothing copied");
+    inst_stor_found_text(text, sizeof(text), st);
+    CHECK(strstr(text, "Not installed") != NULL, "none: the text");
+
+    stor_fill(st, INST_STOR_SAME);
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE &&
+          !inst_stor_route(INST_STOR_CASE_COMPLETE), "complete: nothing");
+    CHECK(!inst_stor_default(0, 0, st), "found: unticked");
+    CHECK(inst_stor_default(1, 1, st), "a recorded Yes is kept");
+    CHECK(inst_stor_copy_set(1, st, 0) == 0, "complete: nothing copied");
+    inst_stor_found_text(text, sizeof(text), st);
+    CHECK(strstr(text, "Found installed: USBSTOR.SYS,") != NULL &&
+          strstr(text, "left as they are") != NULL &&
+          strstr(text, "not known") == NULL, "complete: the text");
+    st[1] = INST_STOR_OTHER;
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE,
+          "complete whatever the bytes");
+    stor_fill(st, INST_STOR_OWN);
+    st[2] = INST_STOR_SAME;
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE,
+          "all present, one not this installer's: complete");
+
+    stor_fill(st, INST_STOR_ABSENT);
+    st[0] = INST_STOR_SAME;
+    st[INST_STOR_IDX_USBSTOR_INF] = INST_STOR_SAME;
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_SAME &&
+          inst_stor_route(INST_STOR_CASE_SAME), "partial, the same: the route");
+    CHECK(!inst_stor_default(0, 0, st), "partial: unticked");
+    CHECK(inst_stor_copy_set(1, st, 0) == 0x1EUL,
+          "partial, the same: only the absent binaries copied");
+    inst_stor_found_text(text, sizeof(text), st);
+    CHECK(strcmp(text, "Found: USBSTOR.SYS, USBSTOR.INF. Only some of the "
+                 "seven: USB storage is not known to be ready.") == 0,
+          "partial: the text says not known to be ready");
+    CHECK(strstr(text, "is ready") == NULL, "partial: never ready");
+
+    st[1] = INST_STOR_OTHER;
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_OTHER &&
+          !inst_stor_route(INST_STOR_CASE_OTHER),
+          "partial, other: no route");
+    CHECK(inst_stor_copy_set(1, st, 0) == 0, "partial, other: nothing copied");
+    inst_stor_found_text(text, sizeof(text), st);
+    CHECK(strstr(text, "USBNTMAP.SYS") != NULL &&
+          strstr(text, "not known to be ready") != NULL,
+          "partial, other: the text");
+
+    stor_fill(st, INST_STOR_ABSENT);
+    for (i = 0; i < INST_STOR_BINARIES; i++) {
+        st[i] = INST_STOR_SAME;
+    }
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_SAME &&
+          inst_stor_copy_set(1, st, 0) == 0,
+          "the binaries without their INFs, the same: the route, no copy");
+
+    stor_fill(st, INST_STOR_OWN);
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_OWN &&
+          inst_stor_route(INST_STOR_CASE_OWN), "this installer's: the route");
+    CHECK(inst_stor_default(0, 0, st), "this installer's are not found");
+    CHECK(inst_stor_copy_set(1, st, 0) == 0,
+          "this installer's: nothing present replaced");
+    inst_stor_found_text(text, sizeof(text), st);
+    CHECK(strcmp(text, "Installed by this installer earlier.") == 0,
+          "this installer's: the text");
+    st[3] = INST_STOR_ABSENT;
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_OWN &&
+          inst_stor_copy_set(1, st, 0) == 0x08UL,
+          "this installer's, one deleted since: that one copied again");
+    st[0] = INST_STOR_OTHER;
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_OTHER &&
+          inst_stor_copy_set(1, st, 0) == 0,
+          "a recorded file changed: other, nothing copied");
+
+    /* The devices. */
+    memset(ids, 0, sizeof(ids));
+    strcpy(ids, "USB\\Class_08&SubClass_06&Prot_50");
+    n = strlen(ids) + 2;
+    CHECK(inst_stor_kind(NULL, 0, ids, n) == INST_STOR_KIND_BULK,
+          "Bulk-Only by its compatible id");
+    strcpy(ids, "usb\\class_08&subclass_02&prot_50");
+    CHECK(inst_stor_kind(ids, strlen(ids) + 2, NULL, 0) ==
+          INST_STOR_KIND_BULK, "case aside");
+    memset(ids, 0, sizeof(ids));
+    strcpy(ids, "USB\\Class_08&SubClass_06&Prot_62");
+    CHECK(inst_stor_kind(NULL, 0, ids, strlen(ids) + 2) ==
+          INST_STOR_KIND_NONE, "UAS is xhciuas.inf's");
+    memset(ids, 0, sizeof(ids));
+    strcpy(ids, "USB\\Class_08&SubClass_04&Prot_00");
+    CHECK(inst_stor_kind(NULL, 0, ids, strlen(ids) + 2) ==
+          INST_STOR_KIND_NONE, "CBI is not the helper's");
+    memset(ids, 0, sizeof(ids));
+    strcpy(ids, "USBSTOR\\GenDisk");
+    CHECK(inst_stor_kind(ids, strlen(ids) + 2, NULL, 0) ==
+          INST_STOR_KIND_UNIT, "a unit");
+    CHECK(inst_stor_unit_takes(0, 0, NULL, NULL, NULL, NULL, 0),
+          "a unit with no driver");
+    CHECK(inst_stor_unit_takes(1, 1, "DiskDrive", "", "", "diskdrv.inf", 1),
+          "Windows' generic Disk drive");
+    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "", "", "DISKDRV.INF", 0),
+          "a DISKDRV.INF not in INF itself: left");
+    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "", "", "OEMDISK.INF", 1),
+          "a foreign DiskDrive binding: left");
+    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "", "VENDOR.SYS",
+                                "DISKDRV.INF", 1),
+          "a DiskDrive binding with a WDM driver: left");
+    CHECK(!inst_stor_unit_takes(1, 0, "DiskDrive", "", "", "DISKDRV.INF", 1),
+          "a value unread: left");
+    CHECK(!inst_stor_unit_takes(1, 1, "Storage", "USBMPHLP.PDR", "",
+                                "OTHER\\MICROS~1.INF", 0),
+          "USB Disk already: left");
+    CHECK(!inst_stor_unit_takes(1, 1, "DiskDrive", "OTHER.PDR", "",
+                                "DISKDRV.INF", 1),
+          "another port driver: left");
+
+    /* An update with Source recorded: the engine's later copies, and a
+     * file of the download's bytes the first run found and kept, are this
+     * installer's deployment (a partial-same install, then every file
+     * present, then an update: the route, not complete). */
+    stor_fill(st, INST_STOR_OWN);
+    st[0] = INST_STOR_SAME;
+    st[INST_STOR_IDX_USBSTOR_INF] = INST_STOR_SAME;
+    st[INST_STOR_IDX_USBNTMAP_INF] = INST_STOR_SAME;
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE,
+          "without Source: complete");
+    inst_stor_norm(st, 1);
+    CHECK(st[0] == INST_STOR_OWN && inst_stor_case(st, 0) == INST_STOR_CASE_OWN &&
+          inst_stor_route(inst_stor_case(st, 1)) && inst_stor_default(0, 0, st),
+          "with Source: this installer's, the route");
+    stor_fill(st, INST_STOR_SAME);
+    st[1] = INST_STOR_OTHER;
+    inst_stor_norm(st, 1);
+    CHECK(st[1] == INST_STOR_OTHER &&
+          inst_stor_case(st, 1) == INST_STOR_CASE_OTHER &&
+          !inst_stor_route(INST_STOR_CASE_OTHER) &&
+          inst_stor_copy_set(1, st, 1) == 0,
+          "with Source, all seven present, one changed: partial-other, "
+          "withdrawn, never complete");
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE,
+          "the same files without Source: another installation, complete");
+    stor_fill(st, INST_STOR_ABSENT);
+    st[1] = INST_STOR_OTHER;
+    st[0] = INST_STOR_SAME;
+    inst_stor_norm(st, 1);
+    CHECK(inst_stor_case(st, 1) == INST_STOR_CASE_OTHER &&
+          !inst_stor_route(inst_stor_case(st, 1)),
+          "with Source, another file present: partial-other, withdrawn");
+    stor_fill(st, INST_STOR_SAME);
+    inst_stor_norm(st, 0);
+    CHECK(inst_stor_case(st, 0) == INST_STOR_CASE_COMPLETE,
+          "another installation, no Source: complete");
+    CHECK(inst_stor_remove(1, 1, 0, 0) == INST_STOR_RM_DELETE,
+          "removed: recorded, its hash, no user, no USB20U");
+    CHECK(inst_stor_remove(1, 0, 0, 0) == INST_STOR_RM_CHANGED,
+          "kept: its hash changed");
+    CHECK(inst_stor_remove(1, 1, 1, 0) == INST_STOR_RM_NUSB,
+          "kept: USB20U present");
+    CHECK(inst_stor_remove(1, 1, 0, 1) == INST_STOR_RM_USED,
+          "kept: a devnode uses it");
+    CHECK(inst_stor_remove(0, 1, 1, 1) == INST_STOR_RM_GONE,
+          "already gone");
+    for (i = INST_STOR_RM_DELETE; i <= INST_STOR_RM_GONE; i++) {
+        CHECK(inst_stor_remove_text(i)[0] != '\0', "each reason said");
+    }
+}
+
 int main(void)
 {
     test_versions();
@@ -3950,6 +4207,7 @@ int main(void)
     test_page_texts();
     test_s98();
     test_marks();
+    test_storage();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

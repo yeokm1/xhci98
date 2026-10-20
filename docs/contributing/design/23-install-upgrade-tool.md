@@ -1,6 +1,12 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 23, 2026-10-19 (the fix round of that night, owner:
+Status: revision 24, 2026-10-20 (roadmap-usb4 task 43.4, record 26
+draft 17 section 6.5: on Windows 98 SE the USB storage drivers, NUSB
+3.3's seven files from the download's `NONFREE\`, copied where their
+INFs send them and put in the package's copy when the row is ticked and
+nothing present is another's, the storage devices installed by the
+helper, the uninstall removing what it placed; sections 4.4, 6.4, 7.1,
+7.4, 9.4 and 13); revision 23, 2026-10-19 (the fix round of that night, owner:
 on 98 SE and ME the bundled Stor98 is updated as a file through
 `WININIT.INI`, never by reinstalling a running device, section 4.4 and
 record 26 draft 16; Stor98 chosen with the Thunderbolt 3 / USB4
@@ -729,6 +735,16 @@ tunnel drive that appears later - the usual case, since the tunnel may
 come up only after the restart - installs, so Windows may still offer
 Stor98 for an internal NVMe drive that has no driver. The tool never
 selects one.
+
+**The USB storage drivers on 98 SE (revision 24).** When record 26
+section 6.5's row is ticked and its case admits the same-bytes route,
+the copy of 98 SE also takes the seven files of the download's
+`NONFREE\STORAGE\NUSB33\W98SE\` (`package_files`, from that folder),
+listed as the package's own files are, and only once the five binaries
+are in place where their INFs send them; otherwise it takes none of
+them, and when an earlier run had put them there (the record's
+`Source`) the directory is taken off `DevicePath` before the copy is
+tried (record 26 section 6.5.4).
 
 **The UAS driver left out (revision 16).** Under `/nouas`, or its
 unticked box in the window (record 26 section 5.3), `xhciuas.inf` and
@@ -1559,6 +1575,13 @@ Have Disk, that Windows asks for the "xhci98 xHCI Host Controller Disk"
 Driver" list may name the driver twice (one copy under `INF\OTHER`),
 either being the same driver (both read on the legs).
 
+(Revision 24) On 98 SE with the USB storage drivers' row ticked, the run
+copies `USBNTMAP.SYS` itself before any device job, so the step below
+is printed only where the row is not ticked or its case copies nothing;
+a UAS entry already at Code 2 then starts once Windows is shut down and
+started again, which the final line says (section 7.4, record 26
+section 6.5.5).
+
 A UAS entry at Code 2 with no `USBNTMAP.SYS` in `System32\Drivers` (the
 upper filter `xhciuas.inf` names) gets a step of its own, in the plan and
 in the steps, in place of "Nothing" when it is current: on ME, plug in any
@@ -1599,6 +1622,7 @@ these systems.
 | `/nostor98` | (revision 23) leave the bundled Stor98 out of a run that has the Thunderbolt support. The console follows the window: Stor98 is chosen with the Thunderbolt support (owner, 2026-10-19), so `/thunderbolt` alone implies Stor98 - asked with Enter for Y, unasked under `/yes` - unless `/nostor98` is given; `/thunderbolt` itself stays explicit (section 8.5). Refused with `/stor98`, `/uninstall`, `/devices` and `/eject` |
 | `/to <path>` | the install directory (section 9.6) without asking; refused with `/uninstall`, `/devices` and `/eject`, and checked as a typed answer is (a path that fails refuses the run, exit 1) |
 | `/nouas` | leave the UAS disk driver out of the run (owner, 2026-10-19; record 26 section 5.3): `xhciuas.inf` neither staged nor installed, nor copied to `DevicePath` on 98 SE and ME, and an `xhciuas` already installed left as it is; refused with `/uninstall`, `/devices` and `/eject` |
+| `/storage`, `/nostorage` | (revision 24) Windows 98 SE: install the USB storage drivers of record 26 section 6.5 without asking, or leave them out; `/storage` refused on any other system, where the download does not carry them or carries other bytes, and with `/nostorage`; both refused with `/uninstall`, `/devices` and `/eject`; `/nostorage` changes nothing on another system |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
@@ -1680,6 +1704,12 @@ were made, but not everything is done: do what is said above first, then
 restart Windows.", its code unchanged (a change under a refusal's code is
 reported as 2). The 2000 leg read the restart line on an unchanged rerun
 and beside a stop; the rule lives in the pure half (section 10).
+(Revision 24) On 98 SE the line takes record 26 section 5.9's shutdown
+form ("shut down and start Windows again") also when the run copied the
+USB storage drivers' `USBNTMAP.SYS` with a UAS entry already at Code 2,
+which starts only after a fresh start (record 26 section 6.5.5); the
+codes are unchanged. The USB storage drivers' copies count as a change,
+and as a device change for the confirmation's words.
 
 **The device modes are the one exception** (design record 24 section 8):
 `/devices` changes nothing and ends "No changes were made.", exit 0; an
@@ -2217,6 +2247,13 @@ system's `CFGMGR32.DLL`). So the tool:
 Whether the wizard offers the controller again after step 3's restart, and
 what it finds, is read on the legs. Exit 4.
 
+(Revision 24) On 98 SE the uninstall also removes the USB storage
+drivers this installer placed, as record 26 section 6.5.8 says: its
+recorded storage devices before this package's own, then, after the
+package's INF copies and driver files, the INF copies the setup engine
+made for it and the files it copied, each only by its record and the
+reference checks, none while NUSB's `Uninstall\USB20U` is present.
+
 ### 9.5 The xHCI98 USB Tree (`XHCITR`)
 
 Design record 25 section 8 is the source; this is how the tool does it.
@@ -2566,7 +2603,8 @@ the user.
 - **D2** Windows 98 SE and ME through `DevicePath` and the local copy in
   in this package's own directory under `%windir%\XHCI98\`, which
   `DevicePath` names in place of an earlier copy's, never `INF\OTHER` or
-  `SETUPX` (section 6).
+  `SETUPX` (section 6). (Revision 24) On 98 SE the same route carries the
+  USB storage drivers' INFs when record 26 section 6.5's row is ticked.
 - **D3** A device bound to another vendor's driver is listed and left,
   including an xHCI controller, whatever its problem code; Device Manager
   remains the way to replace a vendor driver (section 5.4).

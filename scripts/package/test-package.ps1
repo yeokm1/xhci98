@@ -1802,6 +1802,20 @@ try {
         $hits = @(Find-DriverPackTrackedNames -Repo $quotedRepo -Names @($script:DriverPackSeven.Keys))
         Assert-True ($hits.Count -eq 1 -and $hits[0].EndsWith("/USBSTOR.SYS")) ("a tracked USBSTOR.SYS under a non-ASCII directory was not found: " + ($hits -join ", "))
 
+        # The installer's own table of the seven (xhciinst\inst_core.c,
+        # instStorFile; design record 26 section 6.5.1) is this allowlist:
+        # the same names and the same hashes, so the installer verifies the
+        # download's NONFREE\ folder by what the cut put there.
+        $coreText = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "xhciinst\inst_core.c"))
+        $instSeven = [ordered]@{}
+        foreach ($m in [regex]::Matches($coreText, '\{\s*"([A-Za-z0-9.]+)",\s*INST_STOR_DIR_\w+,\s*"([0-9A-Fa-f]{64})"')) {
+            $instSeven[$m.Groups[1].Value.ToUpperInvariant()] = $m.Groups[2].Value.ToUpperInvariant()
+        }
+        Assert-True ($instSeven.Count -eq $script:DriverPackSeven.Count) ("the installer's table holds {0} files, the allowlist {1}." -f $instSeven.Count, $script:DriverPackSeven.Count)
+        foreach ($name in $script:DriverPackSeven.Keys) {
+            Assert-True ($instSeven.Contains($name.ToUpperInvariant()) -and $instSeven[$name.ToUpperInvariant()] -eq $script:DriverPackSeven[$name].ToUpperInvariant()) ("the installer's table and the allowlist differ for {0}." -f $name)
+        }
+
         # A cut checks the pack at the checkout's HEAD before it builds
         # anything: c4's wrong SHA256.TXT stops it there.
         $cutRel = Join-Path $script:work "releases-cut"

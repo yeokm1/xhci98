@@ -131,10 +131,24 @@ after its update; the installer asks for that and waits up to two
 minutes. The uninstall removes Stor98 only where this installer put it
 there: a Stor98 installed before, by hand or by an earlier tool, stays.
 
+USB storage drivers (Windows 98 SE only). Windows 98 SE has no USB
+mass-storage driver: every USB disk, Bulk-Only or UAS under xhciuas.sys,
+needs NUSB 3.3's seven storage files, which a download built with them
+carries in its NONFREE\ folder. The row for them is ticked when none of
+the seven is found, and unticked when any of them is there; the
+installer never copies over a file already present, and with only some
+of the seven found, one of them not this download's, it copies nothing
+and says the storage install is not complete. It installs a stick at
+"Unknown Device" and moves a disk from "Disk drive" to "USB Disk". The
+uninstall removes the files it copied, the copies Windows made of their
+INFs for it and the devices it installed, never while NUSB is installed;
+a stick first plugged in after the install keeps the files it uses.
+
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
 /thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /notray,
-/nouas and /cmonly (the components, preselected), /set Name=Value
+/nouas, /storage, /nostorage and /cmonly (the components, preselected),
+/set Name=Value
 (an option, preselected), /defaults,
 /force (reinstall this release, or go back to it from a newer one),
 /restage (Vista and 7: replace a stored development build with the same
@@ -173,6 +187,11 @@ The console tool
   INSTALL /console /nouas       installs without the UAS disk driver
                                 (xhciuas.sys); one already installed
                                 stays as it is
+  INSTALL /console /storage     Windows 98 SE: installs the USB storage
+                                drivers without asking (refused on any
+                                other system); /nostorage leaves them out
+                                on any system; without either the console
+                                asks, and /yes takes the row's default
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /to path     installs the xHCI98 tools in that

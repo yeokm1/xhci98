@@ -2035,6 +2035,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->NoStor98 = 1;
         } else if (inst_switch(a, "nouas")) {
             opts->NoUas = 1;
+        } else if (inst_switch(a, "storage")) {
+            opts->Storage = 1;
+        } else if (inst_switch(a, "nostorage")) {
+            opts->NoStorage = 1;
         } else if (inst_switch(a, "notray")) {
             opts->NoTray = 1;
         } else if (inst_switch(a, "devices")) {
@@ -2219,6 +2223,17 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     }
     if (opts->NoUas && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/nouas belongs to an install", NULL);
+        return 1;
+    }
+    if ((opts->Storage || opts->NoStorage) &&
+        (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, opts->Storage ? "/storage belongs to an install"
+                 : "/nostorage belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->Storage && opts->NoStorage) {
+        inst_err(err, errCap, "/storage and /nostorage contradict each other",
+                 NULL);
         return 1;
     }
     if (opts->NoTray && (opts->Uninstall || opts->Devices || opts->Eject)) {
@@ -4932,6 +4947,15 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "Untick only if you use another UAS driver. Bulk-Only disks are not "
       "affected; XhciForceBulkOnly also avoids UAS.",
       260, 18 },
+    { INST_PT_STOR, "USB storage drivers for Windows 98 SE (NUSB 3.3's)",
+      284, 10 },
+    /* In a box that scrolls under the row, with the detection's line. */
+    { INST_PT_STOR_T,
+      "Windows 98 SE needs these files for every USB disk: Bulk-Only disks, "
+      "and UAS disks under xhciuas.sys too (its INF names USBNTMAP.SYS as a "
+      "filter; without it a UAS disk stays at Code 2). Install them unless "
+      "NUSB is installed.",
+      0, 0 },
     { INST_PT_TB,
       "Thunderbolt 3 / USB4 support (experimental) (xhcicm.sys)", 270, 10 },
     { INST_PT_TB_T,
@@ -5755,4 +5779,343 @@ void inst_sha256(const unsigned char *data, size_t len, char *hex65)
         }
     }
     hex65[64] = '\0';
+}
+
+/* ======================================================================== */
+/* The USB storage drivers on Windows 98 SE (record 26 section 6.5)          */
+/* ======================================================================== */
+
+const INST_STOR_FILE instStorFile[INST_STOR_COUNT] = {
+    { "USBSTOR.SYS", INST_STOR_DIR_DRIVERS,
+      "B92A6A1582287867D4950495C0A746F0F5D8831BC311061423F8645073E42D8C",
+      NULL },
+    { "USBNTMAP.SYS", INST_STOR_DIR_DRIVERS,
+      "D1595CDBFDC22925C4E47D1720F117FE6C9BEDA36417BA41A1FD7398878CC6E4",
+      NULL },
+    { "USBAUTH.SYS", INST_STOR_DIR_DRIVERS,
+      "12B09E67A5A9A8A883AB40B91C59BE294F2DDC5940B9780C056176DF04A463D1",
+      NULL },
+    { "USBU2A.SYS", INST_STOR_DIR_DRIVERS,
+      "1C5656DCF3DBBCA97236FC0239537A34AE5A6CA1597F29CADC9C38537B2A7B78",
+      NULL },
+    { "USBMPHLP.PDR", INST_STOR_DIR_IOS,
+      "E8E0604FDDCD1772F1C5CBA99DE9D72D79288D0B303ED3E7BF02D36160698C1C",
+      NULL },
+    { "USBSTOR.INF", INST_STOR_DIR_INF,
+      "E78B5F2D2D30B039D74D670F09BA41C39BDFCA058B72FD7C22EB7D55F81F0F6B",
+      "USBSTOR.SYS" },
+    { "USBNTMAP.INF", INST_STOR_DIR_INF,
+      "372D0A4829EAB33CF5C6A1FCA347A3BE45DA82D69A692E89B33D28DC02848657",
+      "USBMPHLP.PDR" }
+};
+
+int inst_stor_index(const char *name)
+{
+    int i;
+
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        if (inst_eq(name, instStorFile[i].Name)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int inst_stor_state(int present, int readable, const char *recordHash,
+                    const char *packHash, const char *hash)
+{
+    if (!present) {
+        return INST_STOR_ABSENT;
+    }
+    if (!readable || hash == NULL || hash[0] == '\0') {
+        return INST_STOR_OTHER;
+    }
+    if (recordHash != NULL && recordHash[0] != '\0' &&
+        inst_eq(recordHash, hash)) {
+        return INST_STOR_OWN;
+    }
+    if (packHash != NULL && inst_eq(packHash, hash)) {
+        return INST_STOR_SAME;
+    }
+    return INST_STOR_OTHER;
+}
+
+int inst_stor_inf_state(const int *candidates, int n)
+{
+    int i;
+    int own = 0;
+    int same = 0;
+
+    for (i = 0; i < n; i++) {
+        if (candidates[i] == INST_STOR_OTHER) {
+            return INST_STOR_OTHER;
+        }
+        if (candidates[i] == INST_STOR_OWN) {
+            own++;
+        } else if (candidates[i] == INST_STOR_SAME) {
+            same++;
+        }
+    }
+    if (own + same == 0) {
+        return INST_STOR_ABSENT;
+    }
+    return same > 0 ? INST_STOR_SAME : INST_STOR_OWN;
+}
+
+/* 1 when the text has a [Manufacturer] section header (a device INF). */
+static int inst_inf_has_manufacturer(const char *text, size_t n)
+{
+    size_t i = 0;
+
+    while (i < n) {
+        size_t j = i;
+        while (j < n && (text[j] == ' ' || text[j] == '\t')) {
+            j++;
+        }
+        if (j + 14 <= n && inst_eqn(text + j, "[Manufacturer]", 14)) {
+            return 1;
+        }
+        while (i < n && text[i] != '\n') {
+            i++;
+        }
+        i++;
+    }
+    return 0;
+}
+
+int inst_stor_inf_is(const char *text, size_t n, int i)
+{
+    if (text == NULL || i < 0 || i >= INST_STOR_COUNT ||
+        instStorFile[i].KeyFile == NULL) {
+        return 0;
+    }
+    return inst_inf_has_manufacturer(text, n) &&
+           inst_inf_names_file(text, n, instStorFile[i].KeyFile);
+}
+
+int inst_stor_case(const int st[INST_STOR_COUNT], int source)
+{
+    int i;
+    int absent = 0;
+    int same = 0;
+    int other = 0;
+
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        if (st[i] == INST_STOR_ABSENT) {
+            absent++;
+        } else if (st[i] == INST_STOR_SAME) {
+            same++;
+        } else if (st[i] != INST_STOR_OWN) {
+            other++;
+        }
+    }
+    if (absent == INST_STOR_COUNT) {
+        return INST_STOR_CASE_NONE;
+    }
+    /* With Source recorded nothing found is another installation's: a
+     * file of other bytes is a changed file, withdrawn (section 6.5.4). */
+    if (absent == 0 && same + other > 0 && !source) {
+        return INST_STOR_CASE_COMPLETE;
+    }
+    if (other > 0) {
+        return INST_STOR_CASE_OTHER;
+    }
+    if (same > 0) {
+        return INST_STOR_CASE_SAME;
+    }
+    return INST_STOR_CASE_OWN;
+}
+
+int inst_stor_route(int storCase)
+{
+    return storCase == INST_STOR_CASE_NONE ||
+           storCase == INST_STOR_CASE_SAME ||
+           storCase == INST_STOR_CASE_OWN;
+}
+
+int inst_stor_default(int haveChoice, int choice,
+                      const int st[INST_STOR_COUNT])
+{
+    int i;
+
+    if (haveChoice) {
+        return choice != 0;
+    }
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        if (st[i] == INST_STOR_SAME || st[i] == INST_STOR_OTHER) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
+                            int source)
+{
+    INST_U32 set = 0;
+    int i;
+
+    if (!ticked || !inst_stor_route(inst_stor_case(st, source))) {
+        return 0;
+    }
+    for (i = 0; i < INST_STOR_BINARIES; i++) {
+        if (st[i] == INST_STOR_ABSENT) {
+            set |= 1UL << i;
+        }
+    }
+    return set;
+}
+
+static void inst_stor_names(char *out, size_t cap,
+                            const int st[INST_STOR_COUNT])
+{
+    int i;
+    int any = 0;
+
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        if (st[i] != INST_STOR_SAME && st[i] != INST_STOR_OTHER) {
+            continue;
+        }
+        if (any) {
+            strncat(out, ", ", cap - strlen(out) - 1);
+        }
+        strncat(out, instStorFile[i].Name, cap - strlen(out) - 1);
+        any = 1;
+    }
+}
+
+void inst_stor_found_text(char *out, size_t cap,
+                          const int st[INST_STOR_COUNT])
+{
+    int i;
+    int found = 0;
+    int own = 0;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        if (st[i] == INST_STOR_SAME || st[i] == INST_STOR_OTHER) {
+            found++;
+        } else if (st[i] == INST_STOR_OWN) {
+            own++;
+        }
+    }
+    if (found == 0 && own == 0) {
+        inst_copy(out, "Not installed: USB disks do not work on Windows 98 SE "
+                  "without them.", cap);
+        return;
+    }
+    if (found == 0) {
+        inst_copy(out, own == INST_STOR_COUNT ?
+                  "Installed by this installer earlier." :
+                  "Installed by this installer earlier (some of the seven "
+                  "only).", cap);
+        return;
+    }
+    if (found + own == INST_STOR_COUNT) {
+        inst_copy(out, "Found installed: ", cap);
+        inst_stor_names(out, cap, st);
+        strncat(out, ". They are left as they are.", cap - strlen(out) - 1);
+        return;
+    }
+    inst_copy(out, "Found: ", cap);
+    inst_stor_names(out, cap, st);
+    strncat(out, ". Only some of the seven: USB storage is not known to be "
+            "ready.", cap - strlen(out) - 1);
+}
+
+int inst_stor_kind(const char *hw, size_t hwBytes, const char *compat,
+                   size_t compatBytes)
+{
+    static const char *const bulk[] = {
+        "USB\\Class_08&SubClass_02&Prot_50",
+        "USB\\Class_08&SubClass_05&Prot_50",
+        "USB\\Class_08&SubClass_06&Prot_50"
+    };
+    static const char *const unit[] = {
+        "USBSTOR\\GenDisk", "USBSTOR\\GenCdRom", "USBSTOR\\GenSfloppy"
+    };
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        if (inst_msz_has(hw, hwBytes, unit[i]) ||
+            inst_msz_has(compat, compatBytes, unit[i])) {
+            return INST_STOR_KIND_UNIT;
+        }
+    }
+    for (i = 0; i < 3; i++) {
+        if (inst_msz_has(hw, hwBytes, bulk[i]) ||
+            inst_msz_has(compat, compatBytes, bulk[i])) {
+            return INST_STOR_KIND_BULK;
+        }
+    }
+    return INST_STOR_KIND_NONE;
+}
+
+int inst_stor_unit_takes(int hasDriver, int readable, const char *cls,
+                         const char *portDriver, const char *ntmpDriver,
+                         const char *infPath, int infInWindowsInf)
+{
+    if (!hasDriver) {
+        return 1;
+    }
+    if (!readable || cls == NULL || portDriver == NULL ||
+        ntmpDriver == NULL || infPath == NULL) {
+        return 0;
+    }
+    return inst_eq(cls, "DiskDrive") && portDriver[0] == '\0' &&
+           ntmpDriver[0] == '\0' && inst_eq(infPath, "DISKDRV.INF") &&
+           infInWindowsInf;
+}
+
+void inst_stor_norm(int st[INST_STOR_COUNT], int source)
+{
+    int i;
+
+    if (!source) {
+        return;
+    }
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        if (st[i] == INST_STOR_SAME) {
+            st[i] = INST_STOR_OWN;
+        }
+    }
+}
+
+int inst_stor_remove(int present, int hashSame, int usb20u, int users)
+{
+    if (!present) {
+        return INST_STOR_RM_GONE;
+    }
+    if (!hashSame) {
+        return INST_STOR_RM_CHANGED;
+    }
+    if (usb20u) {
+        return INST_STOR_RM_NUSB;
+    }
+    if (users) {
+        return INST_STOR_RM_USED;
+    }
+    return INST_STOR_RM_DELETE;
+}
+
+const char *inst_stor_remove_text(int why)
+{
+    switch (why) {
+    case INST_STOR_RM_DELETE:
+        return "deleted";
+    case INST_STOR_RM_CHANGED:
+        return "kept: its bytes are not the ones this installer copied";
+    case INST_STOR_RM_NUSB:
+        return "kept: NUSB is installed (Uninstall\\USB20U), and it lays "
+               "down the same bytes";
+    case INST_STOR_RM_USED:
+        return "kept: a device this uninstall does not own still uses it";
+    case INST_STOR_RM_GONE:
+        return "already gone";
+    default:
+        return "";
+    }
 }
