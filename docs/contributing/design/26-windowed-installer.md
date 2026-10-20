@@ -1201,6 +1201,10 @@ directory does, then a replug. This is a note, not a step.
   bytes in `INF` or `INF\OTHER` when the first deployment begins, one value
   per copy by its path, and `BeforeOk` 1 once that list is whole; written
   once, before that run's first copy (section 6.5.8 step 1);
+- `Published` (`REG_DWORD`, draft 18): 1 once a run's package copy with
+  the seven was made and `DevicePath` named it; never cleared (a later
+  withdrawal included), deleted only with the record. The uninstall's
+  adoption rests on it (section 6.5.8 step 1);
 - `Source` (`REG_DWORD`): 1 once a run has made the package's copy with
   the seven in it, written just before that copy; cleared by a run that
   makes the copy without them (the withdrawal of section 6.5.4, or the
@@ -1276,8 +1280,9 @@ nothing it does not own. In section 9.3 step 4's order:
    flow - the install, the first stick, the uninstall - leaves none of
    the seven. It runs after the gate of record 27 section 6 (the tree
    settled, no wizard open), before any removal, and only where this
-   installer deployed the seven (the record's `Source` value is there; a
-   recorded choice alone is no evidence) and NUSB's `USB20U` is absent.
+   installer published the seven (the record's `Published` is 1; a
+   recorded choice, or a `Source` written before a package copy that then
+   failed, is no evidence) and NUSB's `USB20U` is absent.
    Every devnode, present or not, whose driver key names `USBSTOR.SYS`
    (`NTMPDriver`) or `USBMPHLP.PDR` (`PortDriver`) and that `Devices`
    does not name is adopted when its `InfPath` names exactly one copy in

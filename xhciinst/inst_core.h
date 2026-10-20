@@ -1717,11 +1717,13 @@ void inst_stor_norm(int st[INST_STOR_COUNT], int source);
  * stor_infpath_copy's answer for its InfPath (1 exactly one copy of the
  * pack's own INF bytes), recorded whether the record's Infs holds that
  * copy, beforeOk whether the list of such copies already there before the
- * first deployment is whole, inBefore whether this copy is on it. Adopted
- * when it is the pack's copy, NUSB is not installed, and the copy is
- * recorded, or known not to have been there before. */
-int inst_stor_adoptable(int beforeOk, int inBefore, int usb20u, int copy,
-                        int recorded);
+ * first deployment is whole, inBefore whether this copy is on it,
+ * published whether a run ever made the package's copy with the seven and
+ * put it on DevicePath (the record's Published). Adopted only after such
+ * a publication, when it is the pack's copy, NUSB is not installed, and
+ * the copy is recorded, or known not to have been there before. */
+int inst_stor_adoptable(int published, int beforeOk, int inBefore,
+                        int usb20u, int copy, int recorded);
 /* What the uninstall does with a recorded file. */
 #define INST_STOR_RM_DELETE     0
 #define INST_STOR_RM_CHANGED    1   /* its bytes changed: kept, forgotten  */

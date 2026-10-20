@@ -4226,27 +4226,34 @@ static void test_storage(void)
      * installer's copy on DevicePath (owner, 2026-10-20): adopted when its
      * InfPath names one copy of the pack's bytes, then removed with its
      * files; one bound from a hand install of other bytes is not. */
-    CHECK(inst_stor_adoptable(1, 0, 0, 1, 0),
+    CHECK(inst_stor_adoptable(1, 1, 0, 0, 1, 0),
           "a later stick, a new copy of the pack's INF bytes: adopted");
-    CHECK(inst_stor_adoptable(1, 0, 0, 1, 1) &&
-          inst_stor_adoptable(0, 0, 0, 1, 1),
+    CHECK(inst_stor_adoptable(1, 1, 0, 0, 1, 1) &&
+          inst_stor_adoptable(1, 0, 0, 0, 1, 1),
           "a later stick through a recorded copy: adopted");
     /* A partial install (one identical binary there before), then the
      * first stick, then the uninstall: the stick's copy is new, so it is
      * adopted though the install found a file of the seven. */
-    CHECK(inst_stor_adoptable(1, 0, 0, 1, 0),
+    CHECK(inst_stor_adoptable(1, 1, 0, 0, 1, 0),
           "partial install, first stick, uninstall: adopted");
-    CHECK(!inst_stor_adoptable(1, 1, 0, 1, 0),
+    CHECK(!inst_stor_adoptable(1, 1, 1, 0, 1, 0),
           "a copy of the pack's bytes there before the deployment: not "
           "adopted");
-    CHECK(!inst_stor_adoptable(0, 0, 0, 1, 0),
+    CHECK(!inst_stor_adoptable(1, 0, 0, 0, 1, 0),
           "the before-list not whole, the copy not recorded: not adopted");
-    CHECK(!inst_stor_adoptable(1, 0, 0, 0, 0),
+    CHECK(!inst_stor_adoptable(1, 1, 0, 0, 0, 0),
           "a copy of other bytes (a hand install): not adopted");
-    CHECK(!inst_stor_adoptable(1, 0, 0, -1, 0),
+    CHECK(!inst_stor_adoptable(1, 1, 0, 0, -1, 0),
           "an InfPath that names more than one copy, or unreadable: not "
           "adopted");
-    CHECK(!inst_stor_adoptable(1, 0, 1, 1, 1), "USB20U present: not adopted");
+    CHECK(!inst_stor_adoptable(1, 1, 0, 1, 1, 1), "USB20U present: not adopted");
+    /* A run whose package copy failed after its storage copies: nothing
+     * published, so a hand install of the same INFs later is never
+     * taken by the uninstall. */
+    CHECK(!inst_stor_adoptable(0, 1, 0, 0, 1, 0) &&
+          !inst_stor_adoptable(0, 1, 0, 0, 1, 1),
+          "failed staging, a hand install after it, the uninstall: not "
+          "adopted");
     /* The usual flow after the adoption: the device recorded, no user
      * left, the hash unchanged, no USB20U - every file deleted. */
     CHECK(inst_stor_remove(1, 1, 0, 0) == INST_STOR_RM_DELETE,

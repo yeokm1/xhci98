@@ -17234,6 +17234,12 @@ static void stor_run_begin_body(void)
  * without the seven over an earlier deployment. */
 static void stor_copy_made(void)
 {
+    /* The package's copy with the seven made and DevicePath naming it:
+     * the publication the uninstall's adoption rests on, kept for good
+     * (record 26 section 6.5.6). */
+    if (storCopyOk && !opts.List) {
+        stor_rec_dword("Published", 1);
+    }
     if (storSourceOff && !storCopyOk && !opts.List &&
         stor_rec_dword("Source", 0)) {
         storSource = 0;
@@ -17889,7 +17895,8 @@ static int stor_un_adopt(int record)
         return -1;
     }
     RegCloseKey(u);
-    if (!reg_dword(HKEY_LOCAL_MACHINE, INST_STOR_KEY, "Source", &v)) {
+    if (!reg_dword(HKEY_LOCAL_MACHINE, INST_STOR_KEY, "Published", &v) ||
+        v != 1) {
         return 0;
     }
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_USB20U_KEY, 0, KEY_READ,
@@ -17978,7 +17985,7 @@ static int stor_un_adopt(int record)
                 inBefore = g == 1 &&
                            stor_rec_get("Before", storLastCopy, bh,
                                         sizeof(bh)) != 0;
-                if (!inst_stor_adoptable(beforeOk, inBefore, 0, g,
+                if (!inst_stor_adoptable(1, beforeOk, inBefore, 0, g,
                                          recorded)) {
                     logonly("storage: %s not adopted (copy %d, recorded %d, "
                             "before %d/%d)\n", id, g, recorded, beforeOk,
