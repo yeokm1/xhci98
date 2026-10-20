@@ -8645,9 +8645,9 @@ records (`HCD_PIPE_XFERS`) is published at most once: a record that
 reached the ring is freed only by its completion, which the drain
 delivers (an event of its own, or the Stop Endpoint's completion a cancel
 waits for), and a record completed without reaching the ring - refused,
-cancelled while held, or released from the pipe's held list by another
-record's software completion - publishes nothing and rings no doorbell.
-So at most four doorbells reach the ring in that time: four more empty
+or cancelled while held - publishes nothing and rings no doorbell; a held
+record that such a completion releases is still one of the four, published
+once. So at most four doorbells reach the ring in that time: four more empty
 stretches, and the one already running when it began. So
 a pipe's events are at most its ring's TRBs plus five - on a compliant
 controller. Controllers under
