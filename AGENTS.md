@@ -598,7 +598,7 @@ Windows 2000 CD to the floppy - the media still carries none of them
 `legal-provenance.md` section 5 records why. **One exception, from
 `3.2.0.0`, is the release download's, not the media's** (owner,
 2026-10-20): NUSB 3.3's seven Windows 98 SE storage files, unmodified, from
-the separate driver-pack repository `usb98-drivers-nonfree`, staged into
+the separate driver-pack repository `usb-wdm-nonfree`, staged into
 `out\` and the upload set in a folder of their own with the pack's
 `NOTICE.md`, never into a commit or `releases\<version>\`, and never into a
 flavour directory the gates check (roadmap-usb4 tasks 43.1 to 43.3;
@@ -772,7 +772,7 @@ rules that bind day-to-day work, and none of them is optional.
   on all four paths by it, to dirid 11 rather than 10. The one exception
   since is decided for `3.2.0.0` (owner, 2026-10-20) and recorded there:
   NUSB 3.3's seven Windows 98 SE storage files, unmodified, in the release
-  download only, from the driver pack `usb98-drivers-nonfree` with its
+  download only, from the driver pack `usb-wdm-nonfree` with its
   `NOTICE.md`, never in a commit, and with no licence to redistribute them
   established; the generated readme says which kind of download it is.
   **Do not put any other Microsoft file onto the media or the download,
