@@ -128,11 +128,11 @@ on branch `1.2.0.0`), and the successor's one cut is `2.0.0.0` after Phase 31. I
 `design/13-superspeed-hcd.md`, grown from the future-plans page that moved
 there the same day.
 
-**Since then** (2026-10-18): `2.0.0.0` (Phase 32), `2.1.0.0` (Phase 33),
+**Since then** (2026-10-20): `2.0.0.0` (Phase 32), `2.1.0.0` (Phase 33),
 `2.1.1.0` (Phase 34), `2.2.0.0` (Phase 35), `2.3.0.0` (Phase 36),
-`2.3.1.0` (Phase 37, 2026-10-13), `2.4.0.0` (Phase 38, 2026-10-14) and
-`3.0.0.0` (Phases 39 to 41, 2026-10-17) are cut, and Phase 42, release
-`3.1.0.0`, is open. **Phase 36 is closed**, release `2.3.0.0` on branch `2.3.0.0`: issue 12's E7250 interrupt
+`2.3.1.0` (Phase 37, 2026-10-13), `2.4.0.0` (Phase 38, 2026-10-14),
+`3.0.0.0` (Phases 39 to 41, 2026-10-17) and `3.1.0.0` (Phase 42,
+2026-10-20) are cut, and Phase 43, release `3.2.0.0`, is open. **Phase 36 is closed**, release `2.3.0.0` on branch `2.3.0.0`: issue 12's E7250 interrupt
 routing, polled event delivery, MSI on Vista and 7, three items of
 GitHub issue 17, UAS commands of 1 MiB (36.21 to 36.27, a plan
 reviewed clean at `86db9a3`), and selective suspend, off by default
@@ -156,10 +156,12 @@ under `USB\`, Linux's controller quirks and xHCI 0.96 controllers.
 **Phases 39, 40 and 41 are closed** on the `3.0.0.0` cut of 2026-10-17:
 the Thunderbolt 3 firmware-connection-manager client with tunnel
 re-enumeration and safe eject, the USB4 software connection manager, and
-`XHCITR`, the USB and Thunderbolt tree tool. **Phase 42 is open**
-(2026-10-18), release `3.1.0.0` on branch `3.1.0.0`: the windowed
-installer, the uninstall, the Windows 98 SE and ME device install,
-`XHCISNAP` retired, and the connection-manager follow-ups.
+`XHCITR`, the USB and Thunderbolt tree tool. **Phase 42 is closed** on
+the `3.1.0.0` cut of 2026-10-20: the windowed installer, the uninstall,
+the Windows 98 SE and ME device install, `XHCISNAP` retired, and the
+connection-manager follow-ups. **Phase 43 is open** (2026-10-20), release
+`3.2.0.0`: the cut's checks without a build, faster emulator legs, the
+unsafe-unplug notice, the 9x Stor98 channel, and what `3.1.0.0` owed.
 [`roadmap-usb4.md`](roadmap-usb4.md) is the record from Phase 39 on.
 
 ---
