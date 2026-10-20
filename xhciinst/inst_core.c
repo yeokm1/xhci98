@@ -6070,6 +6070,11 @@ int inst_stor_unit_takes(int hasDriver, int readable, const char *cls,
            infInWindowsInf;
 }
 
+int inst_stor_adoptable(int preExisting, int usb20u, int copy, int recorded)
+{
+    return copy == 1 && !usb20u && (recorded || !preExisting);
+}
+
 void inst_stor_norm(int st[INST_STOR_COUNT], int source)
 {
     int i;

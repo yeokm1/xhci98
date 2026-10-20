@@ -1712,6 +1712,13 @@ int inst_stor_unit_takes(int hasDriver, int readable, const char *cls,
  * deployment, not another installation: made own, in place, before the
  * case, the default and the text are taken. Without it, nothing changes. */
 void inst_stor_norm(int st[INST_STOR_COUNT], int source);
+/* The uninstall's adoption of a storage device Windows bound after the
+ * run (owner, 2026-10-20; record 26 section 6.5.8 step 1): copy is
+ * stor_infpath_copy's answer for its InfPath (1 exactly one copy of the
+ * pack's own INF bytes), recorded whether the record's Infs holds that
+ * copy. Adopted when it is the pack's copy, NUSB is not installed, and the
+ * copy is recorded or no file of the seven was there before the install. */
+int inst_stor_adoptable(int preExisting, int usb20u, int copy, int recorded);
 /* What the uninstall does with a recorded file. */
 #define INST_STOR_RM_DELETE     0
 #define INST_STOR_RM_CHANGED    1   /* its bytes changed: kept, forgotten  */

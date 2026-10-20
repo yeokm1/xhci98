@@ -1,6 +1,9 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 17, 2026-10-20 (roadmap-usb4 task 43.4, the owner's
+Status: draft 18, 2026-10-20 (the owner's answers to draft 17's open
+questions: the uninstall adopts the storage devices bound from this
+installer's copy after the run, section 6.5.8, and the rest accepted as
+designed, section 14); draft 17, 2026-10-20 (roadmap-usb4 task 43.4, the owner's
 decisions of that day: the USB storage drivers on Windows 98 SE, NUSB
 3.3's seven files from the download's `NONFREE\`, a Components row of
 their own that never copies over a file already present and an
@@ -1262,17 +1265,27 @@ asks.
 On Stor98's ownership model (section 6.3): it removes what it placed, and
 nothing it does not own. In section 9.3 step 4's order:
 
-1. **No adoption.** A storage device Windows bound after the run (a
-   stick first plugged after the install, the usual case) is not this
-   installer's: no reading tells a binding made from the package
-   directory from one made from a hand install of the very same files
-   in another folder, which the 43.4 line's "bound or made later by
-   another package" excludes, so section 6.3's draft 12 adoption is not
-   taken for these files. Such a device keeps its binding, its INF copy
-   stays (it was never recorded), and every file it uses is kept by step
-   4's reference check, said on the Finish page with the device's name.
-   Whether the owner wants Stor98's adoption here despite that is
-   section 14's open decision.
+1. **Adoption** (the owner's decision of 2026-10-20, draft 18): a
+   storage device whose driver came from the pack's INF through this
+   installer's `DevicePath` copy is this installer's, a stick first
+   plugged after the install (the usual case) included, so the usual
+   flow - the install, the first stick, the uninstall - leaves none of
+   the seven. Before any removal, when the record exists and NUSB's
+   `USB20U` is absent, every devnode, present or not, whose driver key
+   names `USBSTOR.SYS` (`NTMPDriver`) or `USBMPHLP.PDR` (`PortDriver`)
+   and that `Devices` does not name is adopted when its `InfPath` names
+   exactly one copy in `INF` or `INF\OTHER` of the pack's own INF bytes
+   (`stor_infpath_copy`, the 8.3 alias included) and that copy is one
+   `Infs` holds, or `PreExisting` is clear (`inst_stor_adoptable`,
+   host-tested). An unrecorded copy is recorded first, by its `OEM Name`
+   value whose data names that INF (none found: the device is not
+   adopted), then the device under `Devices` (`bulk` or `unit`). A device
+   bound from a hand install of other bytes, from a copy that cannot be
+   read or is named twice, or with `USB20U` present, is left with its
+   copy and every file it uses (step 4's reference check). The bytes
+   cannot tell a hand install of the very same seven files from this
+   installer's copy; the owner accepted that (section 14). `/list` says
+   what would be adopted.
 2. **The recorded devices**, present or not, children first: units, then
    Bulk-Only devices, through the helper's `remove` job (record 27
    section 9), before the package's own UAS devices and everything above
@@ -1824,10 +1837,11 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   index, record 27 section 2).
 - **W19** (draft 17) The record's `Choice` is the row's default on an
   update, the detection's only on a first offer (section 6.5.7).
-- **W20** (draft 17) No adoption of storage devices Windows bound after
-  the run: nothing tells them from a hand install of the same files, so
-  they, their INF copies and the files they use are kept (section 6.5.8);
-  the owner may choose Stor98's adoption instead (section 14).
+- **W20** (draft 18; the owner, 2026-10-20) The uninstall adopts the
+  storage devices whose driver came from the pack's INF through this
+  installer's copy, first plugged after the install included, by the INF
+  copy's bytes and `OEM Name` value (section 6.5.8); devices of a hand
+  install of other bytes are left.
 - **W21** (draft 17) A storage file whose deletion fails keeps its
   record and the uninstall's entry point; the uninstall run after the
   restart finishes it. No `WININIT.INI` entry (section 6.5.8).
@@ -1868,18 +1882,19 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   Code 2 starts after the shut down; and whether a stock 98 SE needs any
   of NUSB's other files. Until each is read the design takes the cautious
   reading named where it is used.
-- (draft 17) Two decisions for the owner, each taken here in its
-  cautious form. First, a later plug may install from the pack's INFs on
+- (draft 18) The owner's decisions of 2026-10-20 on the questions draft
+  17 left open. A later plug may install from the pack's INFs on
   `DevicePath` over a file another package laid down after the run
-  (section 6.5.4): the 43.4 line's `DevicePath` delivery leaves that
-  open; the alternative is withdrawing the pack from `DevicePath` once
-  the setup engine has made its own `INF\OTHER` copies, which costs a
-  wizard for the next device of a kind not yet installed. Second, storage
-  devices Windows bound after the run are not adopted by the uninstall
-  (section 6.5.8), so in the usual flow (the install, then the first
-  stick) the uninstall keeps the files that stick uses; Stor98's draft 12
-  adoption would remove them, at the cost that a hand install of the
-  same files in another folder cannot be told apart.
+  (section 6.5.4): accepted as designed, the next run withdrawing the
+  pack. Storage devices Windows bound from this installer's copy after
+  the run are adopted by the uninstall (section 6.5.8): changed, so the
+  usual flow leaves none of the seven; a hand install of the very same
+  bytes cannot be told apart, which is accepted. Also accepted as
+  designed: a copy of the same bytes over a present file counts as no
+  overwrite; a failed deletion finished by the uninstall run after the
+  restart; the shutdown line for a UAS disk at Code 2; `/storage` and
+  `/nostorage`; the page's fit at 640 by 480 read by tasks 43.10 and
+  43.11; `DISKDRV.INF` read on 43.5's legs.
 
 ## 15. Files
 

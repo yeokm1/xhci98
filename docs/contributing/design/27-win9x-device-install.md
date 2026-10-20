@@ -868,7 +868,8 @@ parameter block"), and `DiCallClassInstaller(DIF_REMOVE, lpdi)`, the class
 installer first and the engine's `DiRemoveDevice` as the default action.
 Children first is the installer's order (record 26 section 9.3 step 4):
 on 98 SE the storage units and then the Bulk-Only devices the installer
-recorded (record 26 section 6.5.8, draft 10), UAS devices,
+recorded or adopted (record 26 section 6.5.8, draft 10; adopted since
+record 26 draft 18), UAS devices,
 Stor98's recorded devices, the host interface, hubs and
 composite entries, root hubs, controllers. Whether the engine lists an
 absent device's entry without `DIGCF_PRESENT`, whether `DIF_REMOVE` on it

@@ -458,6 +458,7 @@ static void stor_run_end(void);
 static int stor_any(int kind);
 static int stor_covered(void);
 static int stor_un_devices(void);
+static int stor_un_adopt(void);
 static int stor_un_rest(void);
 static int stor_forget(void);
 static int stor_rec_devices_any(void);
@@ -11016,6 +11017,12 @@ static int remove_9x_devnodes(void)
         flagFailed = 1;
         return 0;
     }
+    /* The USB storage devices Windows bound from this installer's copy
+     * after the run, adopted before anything is removed (record 26
+     * section 6.5.8 step 1; owner, 2026-10-20). */
+    if (!stor_un_adopt()) {
+        return 0;
+    }
     if (un9xCount == 0 && !s98_rec_devices_any(1) &&
         !stor_rec_devices_any()) {
         /* Nothing left that needs the helper; recorded Stor98 devices
@@ -17477,6 +17484,9 @@ static void stor_record_infs(void)
  * (*recorded: one the record's Infs holds, by its exact OEM Name value's
  * path, with those bytes); 0 none, or one of other bytes; -1 the name is
  * ambiguous, or a listing or a copy cannot be read. */
+static char storLastCopy[INST_PATH_CHARS];  /* the copy it last matched */
+static int storLastWhich;                   /* and which INF of the pack */
+
 static int stor_infpath_copy(const DEVREC *d, int *recorded)
 {
     char alias[INST_PATH_CHARS];
@@ -17536,6 +17546,8 @@ static int stor_infpath_copy(const DEVREC *d, int *recorded)
             for (i = INST_STOR_BINARIES; i < INST_STOR_COUNT; i++) {
                 if (inst_eq(hex, instStorFile[i].Sha256)) {
                     pack = 1;
+                    inst_copy(storLastCopy, path, sizeof(storLastCopy));
+                    storLastWhich = i;
                     an = GetShortPathNameA(path, alias, sizeof(alias));
                     if (an == 0 || an >= sizeof(alias)) {
                         alias[0] = '\0';
@@ -17701,6 +17713,231 @@ static int stor_rec_devices_any(void)
 
     return stor_rec_enum("Devices", 0, name, sizeof(name), data,
                          sizeof(data)) != 0;
+}
+
+/* The OEM Name value of an INF copy (by its path or 8.3 alias) whose data
+ * names the pack's INF which: 1 found (vname filled), 0 none, -1 the key
+ * cannot be read. */
+static int stor_oem_value(const char *path, int which, char *vname,
+                          DWORD cap)
+{
+    char alias[INST_PATH_CHARS];
+    char vdata[96];
+    HKEY k;
+    DWORD n;
+    DWORD dn;
+    DWORD type;
+    DWORD vi;
+    LONG r;
+
+    n = GetShortPathNameA(path, alias, sizeof(alias));
+    if (n == 0 || n >= sizeof(alias)) {
+        alias[0] = '\0';
+    }
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_OEM_NAME_KEY, 0,
+                      KEY_QUERY_VALUE, &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS) {
+        return -1;
+    }
+    for (vi = 0;; vi++) {
+        n = cap;
+        dn = sizeof(vdata) - 1;
+        r = RegEnumValueA(k, vi, vname, &n, NULL, &type, (LPBYTE)vdata, &dn);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS) {
+            RegCloseKey(k);
+            return -1;
+        }
+        vdata[type == REG_SZ && dn < sizeof(vdata) ? dn : 0] = '\0';
+        if (inst_oem_name_ours(vname, path, alias) &&
+            inst_eq(vdata, instStorFile[which].Name)) {
+            RegCloseKey(k);
+            return 1;
+        }
+    }
+    RegCloseKey(k);
+    vname[0] = '\0';
+    return 0;
+}
+
+/* The owner's decision of 2026-10-20 (record 26 section 6.5.8 step 1):
+ * every storage devnode, present or not, whose driver key names
+ * USBSTOR.SYS or USBMPHLP.PDR and whose InfPath names exactly one copy of
+ * the pack's own INF bytes, with its OEM Name value naming that INF, is
+ * the installer's - first plugged after the install included - when the
+ * copy is one the record holds, or PreExisting is clear; NUSB installed
+ * (USB20U) adopts nothing. The copy is recorded first, then the device.
+ * 1 done (or nothing to adopt); 0 a reading failed (the uninstall stops). */
+static int stor_un_adopt(void)
+{
+    HKEY e1;
+    HKEY e2;
+    HKEY e3;
+    char n1[64];
+    char n2[INST_ID_CHARS];
+    char n3[INST_ID_CHARS];
+    char id[INST_ID_CHARS * 2];
+    char path[INST_PATH_CHARS];
+    char text[64];
+    char vname[INST_PATH_CHARS];
+    char hex[65];
+    char dv[64];
+    DEVREC t;
+    DWORD i;
+    DWORD j;
+    DWORD l;
+    DWORD n;
+    DWORD pre = 0;
+    LONG r;
+    HKEY u;
+    int bad = 0;
+    int kind;
+    int recorded;
+    int g;
+
+    if (envNow.Nt) {
+        return 1;
+    }
+    /* Only where this installer deployed the files (its record). */
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_KEY, 0, KEY_READ, &u);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (r != ERROR_SUCCESS) {
+        return 0;
+    }
+    RegCloseKey(u);
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_USB20U_KEY, 0, KEY_READ,
+                      &u);
+    if (r == ERROR_SUCCESS) {
+        RegCloseKey(u);
+    }
+    if (r != ERROR_FILE_NOT_FOUND) {
+        out("NUSB is installed (Uninstall\\USB20U): no USB storage device "
+            "Windows bound later\nis taken as this installer's.\n");
+        return 1;
+    }
+    if (!reg_dword(HKEY_LOCAL_MACHINE, INST_STOR_KEY, "PreExisting", &pre)) {
+        pre = 0;
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum", 0, KEY_READ, &e1) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    for (i = 0; !bad; i++) {
+        n = sizeof(n1);
+        r = RegEnumKeyExA(e1, i, n1, &n, NULL, NULL, NULL, NULL);
+        if (r == ERROR_NO_MORE_ITEMS) {
+            break;
+        }
+        if (r != ERROR_SUCCESS ||
+            RegOpenKeyExA(e1, n1, 0, KEY_READ, &e2) != ERROR_SUCCESS) {
+            bad = 1;
+            break;
+        }
+        for (j = 0; !bad; j++) {
+            n = sizeof(n2);
+            r = RegEnumKeyExA(e2, j, n2, &n, NULL, NULL, NULL, NULL);
+            if (r == ERROR_NO_MORE_ITEMS) {
+                break;
+            }
+            if (r != ERROR_SUCCESS ||
+                RegOpenKeyExA(e2, n2, 0, KEY_READ, &e3) != ERROR_SUCCESS) {
+                bad = 1;
+                break;
+            }
+            for (l = 0; !bad; l++) {
+                n = sizeof(n3);
+                r = RegEnumKeyExA(e3, l, n3, &n, NULL, NULL, NULL, NULL);
+                if (r == ERROR_NO_MORE_ITEMS) {
+                    break;
+                }
+                if (r != ERROR_SUCCESS) {
+                    bad = 1;
+                    break;
+                }
+                _snprintf(id, sizeof(id) - 1, "%s\\%s\\%s", n1, n2, n3);
+                id[sizeof(id) - 1] = '\0';
+                if (strlen(id) >= INST_ID_CHARS) {
+                    continue;
+                }
+                memset(&t, 0, sizeof(t));
+                inst_copy(t.Id, id, sizeof(t.Id));
+                g = reg9x_value(id, "Driver", t.Driver, sizeof(t.Driver));
+                if (g <= 0 || t.Driver[0] == '\0') {
+                    continue;
+                }
+                driver_key_path(&t, path, sizeof(path));
+                kind = INST_STOR_KIND_NONE;
+                if (reg_text3(HKEY_LOCAL_MACHINE, path, "NTMPDriver", text,
+                              sizeof(text)) > 0 &&
+                    inst_eq(text, "USBSTOR.SYS")) {
+                    kind = INST_STOR_KIND_BULK;
+                } else if (reg_text3(HKEY_LOCAL_MACHINE, path, "PortDriver",
+                                     text, sizeof(text)) > 0 &&
+                           inst_eq(text, "USBMPHLP.PDR")) {
+                    kind = INST_STOR_KIND_UNIT;
+                }
+                if (kind == INST_STOR_KIND_NONE ||
+                    stor_rec_get("Devices", id, dv, sizeof(dv)) != 0) {
+                    continue;
+                }
+                t.InfPathState = reg_text3(HKEY_LOCAL_MACHINE, path,
+                                           "InfPath", t.InfPath,
+                                           sizeof(t.InfPath));
+                g = stor_infpath_copy(&t, &recorded);
+                if (!inst_stor_adoptable(pre != 0, 0, g, recorded)) {
+                    logonly("storage: %s not adopted (copy %d, recorded %d, "
+                            "PreExisting %lu)\n", id, g, recorded,
+                            (unsigned long)pre);
+                    continue;
+                }
+                if (!recorded) {
+                    if (stor_oem_value(storLastCopy, storLastWhich, vname,
+                                       sizeof(vname)) <= 0 ||
+                        stor_hash(storLastCopy, hex) <= 0) {
+                        logonly("storage: %s's copy %s has no OEM Name value "
+                                "naming %s: not adopted\n", id, storLastCopy,
+                                instStorFile[storLastWhich].Name);
+                        continue;
+                    }
+                    if (opts.List) {
+                        out("(/list) %s would be taken as this installer's.\n",
+                            storLastCopy);
+                    } else if (!stor_rec_text("Infs", vname, hex)) {
+                        bad = 1;
+                        break;
+                    }
+                }
+                if (opts.List) {
+                    out("(/list) %s would be taken as this installer's.\n", id);
+                    continue;
+                }
+                out("%s: bound from this installer's copy of %s, taken as "
+                    "this installer's.\n", id, instStorFile[storLastWhich].Name);
+                if (!stor_rec_text("Devices", id, kind == INST_STOR_KIND_BULK ?
+                                   "bulk" : "unit")) {
+                    bad = 1;
+                    break;
+                }
+            }
+            RegCloseKey(e3);
+        }
+        RegCloseKey(e2);
+    }
+    RegCloseKey(e1);
+    if (bad) {
+        out("The device entries could not be read whole: nothing is "
+            "removed.\n");
+        flagFailed = 1;
+        return 0;
+    }
+    return 1;
 }
 
 /* The recorded devices, units then Bulk-Only devices, through the helper.

@@ -2249,7 +2249,9 @@ what it finds, is read on the legs. Exit 4.
 
 (Revision 24) On 98 SE the uninstall also removes the USB storage
 drivers this installer placed, as record 26 section 6.5.8 says: its
-recorded storage devices before this package's own, then, after the
+recorded storage devices, and those Windows bound from its copy after
+the run (adopted first, record 26 draft 18), before this package's own,
+then, after the
 package's INF copies and driver files, the INF copies the setup engine
 made for it and the files it copied, each only by its record and the
 reference checks, none while NUSB's `Uninstall\USB20U` is present.

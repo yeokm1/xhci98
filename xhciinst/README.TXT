@@ -141,8 +141,8 @@ of the seven found, one of them not this download's, it copies nothing
 and says the storage install is not complete. It installs a stick at
 "Unknown Device" and moves a disk from "Disk drive" to "USB Disk". The
 uninstall removes the files it copied, the copies Windows made of their
-INFs for it and the devices it installed, never while NUSB is installed;
-a stick first plugged in after the install keeps the files it uses.
+INFs for it and the devices installed from them (a stick first plugged in
+after the install included), never while NUSB is installed.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
