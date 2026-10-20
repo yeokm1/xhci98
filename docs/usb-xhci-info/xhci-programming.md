@@ -685,7 +685,7 @@ There is no per-controller quirk table in this driver, and there is not going to
 | What | Why it is here rather than in a quirk table |
 |---|---|
 | BIOS handoff | Spec-mandated on every controller (4.22.1), so not a quirk at all. Implemented in `src/xhci_init.c` |
-| BEI at most seven TDs in a row | Applied on every controller of xHCI 1.0 or later at the tightest interval Linux uses on Intel parts, so no controller has to be identified for it to be applied (design record 13 section 11.8) |
+| BEI at most seven TDs in a row (planned, roadmap-usb4 ISORING.2) | To be applied on every controller of xHCI 1.0 or later at the tightest interval Linux uses on Intel parts, so no controller has to be identified for it to be applied (design record 13 section 11.8) |
 | Residual-length computation | The correct rule for every controller; the spurious-success silicon is only why it is never short-circuited |
 | `XUSB2PR` routing | Handled since `2.1.1.0` (roadmap-hcd task 34.3, design record 16): on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 the driver routes the switchable ports to xHCI at each start and resume and hands them back at each stop, when `XhciIntelPortSwitch` turns it on: since `2.3.0.0` (task 36.42) a DWORD that is not 0, off when 0, absent, unreadable or of another type (up to `2.2.0.0` everything but an explicit 0 was on). One mechanism with its own six-id gate, not a quirk table; and still a diagnosis, because when it does not run its symptom is a controller that looks dead |
 
@@ -716,9 +716,9 @@ This happens before the halt+reset sequence; it is step 1 of "Initialization Seq
 
 ### BEI at most seven TDs in a row
 
-The Block Event Interrupt bit (Isoch and Normal TRB bit 9) keeps the Transfer Event that IOC generates and stops it asserting an interrupt (Table 6-34, 4.17.5). Linux sets it on every isochronous TD but a request's last (`xhci-ring.c`, `trb_block_event_intr`), and on Intel controllers, where it sets `XHCI_AVOID_BEI` on the vendor alone (`xhci-pci.c`; "the host handles full event rings poorly"), it leaves an unblocked TD at least every `isoc_bei_interval` TDs, an interval that starts at 32 and halves to 8 when a drain runs long. It does not mean "never set BEI", which is how this section read until 2026-10-20.
+The Block Event Interrupt bit (Isoch and Normal TRB bit 9) keeps the Transfer Event that IOC generates and stops it asserting an interrupt (Table 6-34, 4.17.5). Linux sets it on every isochronous TD but a request's last (`xhci-ring.c`, `trb_block_event_intr`), and on Intel controllers, where it sets `XHCI_AVOID_BEI` on the vendor alone (`xhci-pci.c`; "the host handles full event rings poorly"), it also clears it where a TD's zero-based index is a nonzero multiple of `isoc_bei_interval` - the 9th, 17th and so on at an interval of 8, the 33rd at 32 - an interval that starts at 32 and halves to 8 when a drain runs long. It does not mean "never set BEI", which is how this section read until 2026-10-20.
 
-This driver keeps IOC on every isochronous TD, so every packet still has its own event, and since 2026-10-20 (design record 13 section 11.8, point 7) sets BEI on every TD but every eighth and the request's last, on every controller of xHCI 1.0 or later and none below it: Linux's tightest Intel interval, applied to every vendor, so no controller has to be identified. A request's completion is never behind a blocked interrupt. The bit's position is in `docs/usb-xhci-info/xhci-data-structures.md`.
+This driver keeps IOC on every isochronous TD, so every packet has its own event, and does not set BEI. Design record 13 section 11.8, point 7 (planned, roadmap-usb4 ISORING.2) sets it on every TD but every eighth (counting from 1) and the request's last, on every controller of xHCI 1.0 or later and none below it: modelled on Linux's Intel rule at its tightest interval, applied to every vendor, so no controller has to be identified, and a request's completion never behind a blocked interrupt. The bit's position is in `docs/usb-xhci-info/xhci-data-structures.md`.
 
 ### Spurious success - why length never comes from the completion code
 
