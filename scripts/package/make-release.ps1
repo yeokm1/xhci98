@@ -315,6 +315,14 @@ roadmap Phase 20, F15 has the record. Until that fix this mode also required
 over from when the media carried files the package supplied; since 1.0.0.1
 nothing from the package enters the asset, and the check is gone.
 
+**The driver pack is the one input from outside the tree** (task 43.3). Where
+`releases\<version>\drvpack.txt` says the pack was included, this mode exports
+the recorded revision from the `-DriverPackRoot` checkout and refuses unless
+every file's bytes are the recorded ones; where the checkout or the revision
+is unavailable, it refuses rather than assemble a download without them. A
+version with no `drvpack.txt` (cut before 3.2.0.0) or one saying
+`Included: no` is assembled without it.
+
 .PARAMETER PackageRoot
 Where the gated `pkg-<flavour>\` directories are read from and written to by an
 ordinary cut. Defaults to `out\` in the repository, which is where
@@ -360,6 +368,35 @@ release notes must declare the bundled version ("This download bundles
 Stor98 `<version>`.", or "This download bundles no Stor98." with this
 switch).
 
+.PARAMETER NoDriverPack
+Cut without the driver pack. By default (roadmap-usb4 task 43.3; the owner's
+decision of 2026-10-20, docs\contributing\legal-provenance.md section 5) a
+cut that publishes x86 directories reads NUSB 3.3's seven Windows 98 SE
+storage files and the pack's NOTICE.md from the usb-wdm-nonfree checkout
+(-DriverPackRoot), from its git objects at HEAD, and holds them to the
+pack's SHA256.TXT and to the allowlist of the seven (package-common.ps1),
+before anything is built. They go into the upload set alone, at its root
+as NONFREE\ (the pack's layout, storage part only, 8.3 names:
+NONFREE\NOTICE.md, NONFREE\SHA256.TXT and NONFREE\STORAGE\NUSB33\W98SE\;
+owner, 2026-10-20), where the installer takes them from; never into a
+package of make-package.ps1's or into releases\<version>\: the cut refuses to start while any of the seven names
+is under releases\ or among the tracked files. What releases\<version>\
+does hold is drvpack.txt, a record of whether the pack was included and, if
+it was, its revision and every file's hash; -UploadSetOnly rebuilds the
+download from that record. The generated readme and the installer's
+NOTICE.TXT name the files when the pack is in the download, and say there is
+no Microsoft file in it when it is not.
+
+.PARAMETER DriverPackRoot
+The usb-wdm-nonfree checkout, overriding scripts\local\usb-wdm-nonfree
+(git-ignored: a clone there, or a junction to one). -UploadSetOnly reads the
+recorded revision from it, so a checkout that has moved on still serves as
+long as that revision is in it.
+
+.PARAMETER DriverPackAllowlist
+A SHA256.TXT-form file standing in for the allowlist of the seven, for
+test-package.ps1's stand-ins. Refused with the repository's own releases\.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
 
@@ -398,7 +435,10 @@ param(
     [switch]$AllowUnstampedDriver,
     [string]$TestLabel = "",
     [string]$TestSignPfx = "",
-    [switch]$NoStor98
+    [switch]$NoStor98,
+    [switch]$NoDriverPack,
+    [string]$DriverPackRoot = "",
+    [string]$DriverPackAllowlist = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -1615,6 +1655,9 @@ function Get-UploadSetRepairCommand {
     if ($bound.ContainsKey("ReleasesDir")) { $cmd += " -ReleasesDir " + (& $quote $ReleasesDir) }
     if ($bound.ContainsKey("UploadDir")) { $cmd += " -UploadDir " + (& $quote $UploadDir) }
     if ($bound.ContainsKey("NoStor98")) { $cmd += " -NoStor98" }
+    # The pack's checkout, where it was named; drvpack.txt says whether the
+    # download needs it, so -NoDriverPack is never carried over.
+    if ($bound.ContainsKey("DriverPackRoot")) { $cmd += " -DriverPackRoot " + (& $quote $DriverPackRoot) }
     return $cmd
 }
 
@@ -2087,6 +2130,11 @@ function New-UploadSet {
         # Unused since task 42-A.30: Stor98's files are in the published
         # tree like this project's own. Kept so callers need not change.
         $Stor98 = $null,
+        # The driver pack (task 43.3), Export-DriverPack's result, or $null
+        # for a download without it. Its folder is added at the set's root
+        # as NONFREE\, the one thing the set holds that the published tree
+        # does not.
+        $DriverPack = $null,
         # Build under the `.staging` names of Get-UploadSetPaths -Staged; the
         # caller moves the result onto the final names with Publish-UploadSet
         # once its publish has succeeded, or drops it with
@@ -2147,6 +2195,21 @@ function New-UploadSet {
     # that a failed run rather than a shipped one; this comment is why the call
     # is shaped the way it is.
     Copy-Item -LiteralPath $PublishedRoot -Destination $uploadRoot -Recurse -Force
+
+    # **The driver pack, at the download's root as NONFREE\** (task 43.3;
+    # owner, 2026-10-20): the one thing the set holds that the published
+    # tree does not, where the installer takes it from. A published tree
+    # holding one is refused - the pack is never in releases\.
+    $packTarget = Join-Path $uploadRoot $script:DriverPackFolder
+    if (Test-Path -LiteralPath $packTarget) {
+        throw "'$PublishedRoot' holds a $($script:DriverPackFolder)\; the driver pack is never in releases\ (docs\contributing\legal-provenance.md section 5)."
+    }
+    if ($null -ne $DriverPack) {
+        Copy-Item -LiteralPath $DriverPack.Dir -Destination $packTarget -Recurse
+        $packFault = Get-DriverPackFolderFault -Dir $packTarget -Files $DriverPack.Files
+        if ($packFault -ne "") { throw "the upload set's driver pack is not the folder that was verified: $packFault." }
+        Write-Ok ("{0}\ holds the driver pack's files, usb-wdm-nonfree {1}" -f $script:DriverPackFolder, $DriverPack.Revision)
+    }
 
     $publishableKeys = @($Publishable | ForEach-Object { $_.ToLowerInvariant() })
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
@@ -2519,8 +2582,21 @@ $gateOut
     # And what they say, before anything is archived: the cut checked them
     # when it staged them, but -UploadSetOnly reads a tree it did not stage.
     Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
-    # Stor98's INFs too, since task 42-A.30: one date for every INF.
+    # Stor98's INFs too, since task 42-A.30: one date for every INF of this
+    # project's. **The driver pack's two INFs are not among them** (task
+    # 43.3): NUSB 3.3's carry their own historical dates (USBSTOR.INF
+    # 07/01/2001, USBNTMAP.INF 06/08/2000 with no version after it, which
+    # Get-InfDriverDate cannot read at all), so they are held to the hashes
+    # they were verified with instead, and their folder is dated with the
+    # rest below.
+    $packPrefix = $null
+    if ($null -ne $DriverPack) {
+        $packFault = Get-DriverPackFolderFault -Dir $packTarget -Files $DriverPack.Files
+        if ($packFault -ne "") { throw "the upload set's driver pack changed after it was verified: $packFault." }
+        $packPrefix = (Get-Item -LiteralPath $packTarget).FullName.TrimEnd('\') + '\'
+    }
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
+                  Where-Object { $null -eq $packPrefix -or -not $_.FullName.StartsWith($packPrefix, [System.StringComparison]::OrdinalIgnoreCase) } |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
         throw "the assembled upload set's INFs declare $($infDates.Count) DriverVer dates ($($infDates -join ', ')), not one: the release has no single date to give its files."
@@ -2596,6 +2672,11 @@ $swapDone = $false
 $boundArgs = $PSBoundParameters
 # The verified Stor98 build, once resolved below; $null for none.
 $stor98 = $null
+# The driver pack (task 43.3) once exported below, the private directory it
+# was exported into, and the self-tests' allowlist; $null and "" for none.
+$driverPack = $null
+$driverPackDir = ""
+$driverPackAllow = $null
 
 try {
     if ($UploadSetOnly -and $SkipUploadSet) {
@@ -2705,10 +2786,63 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
     # The one exception to "no Microsoft file in the download"
     # (docs\contributing\legal-provenance.md section 5, the owner's decision
     # of 2026-10-20): NUSB 3.3's seven storage files, from the driver pack,
-    # in the upload set only and never in releases\. Staging them is
-    # roadmap-usb4 task 43.3; until it sets this, every generated text says
-    # the download carries no Microsoft file.
+    # in the upload set's NONFREE\ only and never in releases\ (task 43.3).
+    # A cut resolves the checkout's HEAD here, once, before anything is
+    # built; -UploadSetOnly takes the revision drvpack.txt recorded
+    # instead, below. Every generated text follows $driverPackIncluded.
     $driverPackIncluded = $false
+    if ($DriverPackAllowlist -ne "") {
+        $repoReleases = (Join-Path $repo "releases").TrimEnd('\')
+        $rd = $ReleasesDir.TrimEnd('\')
+        if ($rd -eq $repoReleases -or
+            $rd.StartsWith($repoReleases + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "-DriverPackAllowlist replaces the allowlist of NUSB 3.3's seven files, so it is for test-package.ps1's stand-ins only, and never with the repository's own releases\ ('$ReleasesDir')."
+        }
+        $driverPackAllow = Read-DriverPackAllowlist -Path $DriverPackAllowlist
+    }
+    if ($NoDriverPack -and $DriverPackRoot -ne "") { throw "-NoDriverPack and -DriverPackRoot contradict each other." }
+    if ($DriverPackRoot -eq "") { $DriverPackRoot = Get-DefaultDriverPackRoot }
+    if (-not $NoDriverPack -and -not $UploadSetOnly -and $Arch -contains "x86") {
+        $driverPackDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-drvpack-" + [System.IO.Path]::GetRandomFileName())
+        $driverPack = Export-DriverPack -Root $DriverPackRoot -Revision "HEAD" -Dest $driverPackDir -Allowlist $driverPackAllow
+        $driverPackIncluded = $true
+        Write-Ok ("driver pack: usb-wdm-nonfree {0}, its seven storage files the allowlisted bytes, for the download's {1}\" -f `
+            $driverPack.Revision, $script:DriverPackFolder)
+    }
+    # **None of the seven is ever tracked.** A cut refuses while any of their
+    # names is under releases\ or among this repository's tracked files,
+    # whether or not it includes the pack, since a copy committed by hand is
+    # in git's history whatever the download says.
+    if (-not $UploadSetOnly) {
+        $sevenNames = @($script:DriverPackSeven.Keys)
+        $trackedHits = @()
+        $savedEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $trackedAll = @(& git -C $repo ls-files 2>$null)
+            $lsRc = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $savedEap
+        }
+        if ($lsRc -ne 0) { throw "git ls-files failed in '$repo', so the cut cannot show that none of NUSB 3.3's seven files is tracked." }
+        foreach ($t in $trackedAll) {
+            $leaf = ($t -split '/')[-1]
+            if ($sevenNames -contains $leaf) { $trackedHits += $t }
+        }
+        if (Test-Path -LiteralPath $ReleasesDir) {
+            foreach ($item in @(Get-ChildItem -LiteralPath $ReleasesDir -Recurse -Force -File)) {
+                if ($sevenNames -contains $item.Name) { $trackedHits += $item.FullName }
+            }
+        }
+        if ($trackedHits.Count -gt 0) {
+            throw @"
+NUSB 3.3's storage files are in the download only, never in this repository
+(docs\contributing\legal-provenance.md section 5), and these carry their names:
+  - $(@($trackedHits | Sort-Object -Unique) -join "`n  - ")
+Take them out (and out of history, if committed) before cutting.
+"@
+        }
+    }
 
     # --- the version, from the INF ------------------------------------------
     $infVersion = Get-InfDriverVersion -Path $infPath
@@ -2870,10 +3004,40 @@ To cut one, run this script without it.
             @($legDirs | Where-Object { $_ -like "release-*" -and (Test-Path -LiteralPath (Join-Path (Join-Path $finalRoot $_) "stor98.inf")) }).Count -eq 0) {
             throw "'$finalRoot' was cut with a pinned Stor98 that its published tree does not hold (before 3.1.0.0, the upload set alone carried it). Re-assemble it with the make-release.ps1 of its own cut (git checkout of that release), which takes the pins."
         }
+        # The driver pack (task 43.3), from the record the cut wrote: the
+        # recorded revision, exported from the checkout and held to the
+        # recorded hashes as well as to the allowlist. No record is a release
+        # cut before 3.2.0.0, which carried no pack.
+        $packRecordPath = Join-Path $finalRoot $script:DriverPackRecordName
+        if (Test-Path -LiteralPath $packRecordPath) {
+            $packRecord = ConvertFrom-DriverPackRecord -Text ([System.IO.File]::ReadAllText($packRecordPath)) -Label "'$packRecordPath'"
+            if ($packRecord.Included -and @($legArches.Values | Where-Object { $_ -eq "x86" }).Count -gt 0) {
+                if ($NoDriverPack) {
+                    throw "'$packRecordPath' records that $Version's download carries the driver pack, so it is not rebuilt with -NoDriverPack: that would be a different download under the same name."
+                }
+                $driverPackDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-drvpack-" + [System.IO.Path]::GetRandomFileName())
+                try {
+                    $driverPack = Export-DriverPack -Root $DriverPackRoot -Revision $packRecord.Revision -Dest $driverPackDir -Allowlist $driverPackAllow
+                } catch {
+                    throw @"
+$Version's download carries the driver pack at usb-wdm-nonfree $($packRecord.Revision)
+('$packRecordPath'), and that pack could not be read: $($_.Exception.Message)
+Name a checkout holding that revision with -DriverPackRoot.
+"@
+                }
+                $recDiff = @($packRecord.Files.Keys | Where-Object { -not $driverPack.Files.Contains($_) -or $driverPack.Files[$_] -ne $packRecord.Files[$_] }) +
+                           @($driverPack.Files.Keys | Where-Object { -not $packRecord.Files.Contains($_) })
+                if ($recDiff.Count -gt 0) {
+                    throw "usb-wdm-nonfree $($packRecord.Revision) does not hold the bytes '$packRecordPath' records for: $(@($recDiff | Sort-Object -Unique) -join ', ')."
+                }
+                $driverPackIncluded = $true
+                Write-Ok ("driver pack: usb-wdm-nonfree {0}, every file the bytes {1} records" -f $driverPack.Revision, $script:DriverPackRecordName)
+            }
+        }
         $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
                              -LegArches $legArches `
                              -PkgDirs @{} -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable -Stor98 $stor98
+                             -Publishable $publishable -Stor98 $stor98 -DriverPack $driverPack
 
         Write-Step "Done"
         Write-Host "Upload:     $($set.Zip)"
@@ -2881,6 +3045,10 @@ To cut one, run this script without it.
         Write-Host "            releases\ was read for anything but copying, and nothing was"
         Write-Host "            written there. This is the GitHub release asset; it is"
         Write-Host "            git-ignored and must stay that way."
+        if ($driverPackIncluded) {
+            Write-Host ("            NUSB 3.3's storage files were added from usb-wdm-nonfree {0}," -f $driverPack.Revision.Substring(0, 12))
+            Write-Host "            the revision and bytes drvpack.txt records."
+        }
         exit 0
     }
 
@@ -4102,6 +4270,14 @@ helper (xhciinst\di\build.cmd).
         $contents += "  -X64 ones for 64-bit Windows. If you pick the wrong one nothing"
         $contents += "  breaks - Windows simply finds no driver in it and says so - so"
         $contents += "  try the other."
+        $contents += ""
+    }
+    if ($driverPackIncluded) {
+        $contents += "  NONFREE\        - NUSB 3.3's Windows 98 SE storage files (section 3)"
+        $contents += ""
+        $contents += "      NOTICE.md    whose they are: not this project's"
+        $contents += "      SHA256.TXT   their hashes"
+        $contents += "      STORAGE\NUSB33\W98SE\  the seven files, unmodified"
         $contents += ""
     }
     if ($null -ne $qualtoolStaged) {
@@ -6992,6 +7168,18 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Copy-Item -LiteralPath $licenseSrc -Destination (Join-Path $destRoot "LICENSE") -Force
     Write-Ok "LICENSE copied into the release root, CRLF throughout"
 
+    # The driver pack's record (task 43.3): tracked, plain text, and the one
+    # thing -UploadSetOnly rebuilds the download's pack from. Written by
+    # every cut, so a release without the pack says so rather than leaving
+    # the question to the absence of a file.
+    Write-AsciiFile -Path (Join-Path $destRoot $script:DriverPackRecordName) `
+                    -Lines (ConvertTo-DriverPackRecord -Version $Version -Pack $driverPack)
+    if ($null -ne $driverPack) {
+        Write-Ok ("{0} records usb-wdm-nonfree {1} and its files' hashes" -f $script:DriverPackRecordName, $driverPack.Revision)
+    } else {
+        Write-Ok ("{0} records that this download carries no driver pack" -f $script:DriverPackRecordName)
+    }
+
     # --- the upload set: what actually goes to the GitHub release ------------
     #
     # `releases\<version>\` is the tracked half. The download a user gets is
@@ -7036,7 +7224,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
         $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
                              -LegArches $legArches `
                              -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable -Staged -Stor98 $stor98
+                             -Publishable $publishable -Staged -Stor98 $stor98 -DriverPack $driverPack
         $stagedUpload = $set
     }
 
@@ -7179,6 +7367,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Write-Host "            them, and in an x64 directory the test certificate; tools\,"
     Write-Host "            SETUP.EXE and INSTALL.BAT at the root; in each release- directory"
     Write-Host "            the Stor98 built with them. No Microsoft file. Commit this."
+    Write-Host ("            {0} records whether the download carries the driver pack." -f $script:DriverPackRecordName)
     if ($null -ne $uploadRoot) {
         Write-Host ""
         Write-Host "Upload:     $uploadZip"
@@ -7212,6 +7401,10 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Write-Warn ("the release IS published at {0}; what failed came after the publish swap. If the upload set is missing or stale, rebuild it with: {1}" -f $finalRoot, (Get-UploadSetRepairCommand))
     }
     exit 1
+} finally {
+    if ($driverPackDir -ne "" -and (Test-Path -LiteralPath $driverPackDir)) {
+        Remove-Item -LiteralPath $driverPackDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 exit 0

@@ -1552,9 +1552,14 @@ Microsoft file" since 1.0.0.1. What is decided:
   commit of this repository, under `releases/<version>/` or anywhere else;
   they are taken at packaging time from a separate repository of the
   owner's, `usb-wdm-nonfree` (its `non-free/storage/nusb33/w98se/`
-  folder), and staged into `out\` alone - the generated `release-x86` and
-  `debug-x86` packages, as a folder of their own, and the upload set (task
-  43.3, not yet built).
+  folder), and staged into the upload set in `out\` alone, at the
+  download's root as `NONFREE\` (the pack's layout, storage part only:
+  `NONFREE\NOTICE.md`, `NONFREE\SHA256.TXT`,
+  `NONFREE\STORAGE\NUSB33\W98SE\`; owner, 2026-10-20), where the installer
+  takes them from; no package of `make-package.ps1`'s carries them (task
+  43.3: `make-release.ps1`, reading them from the checkout's git objects at
+  one revision and holding them to the pack's `SHA256.TXT` and to an
+  allowlist of the seven hashes below).
   The reason is the one given for the 0.0.0.4 to 1.0.0.0 exception below: a
   release asset can be withdrawn, and a git blob cannot be without rewriting
   history.
@@ -1589,12 +1594,16 @@ headers; nothing was executed. The hashes are those of the pack's
 | `USBSTOR.INF` | 22,017 | `e78b5f2d2d30b039d74d670f09ba41c39bdfca058b72fd7c22eb7d55f81f0f6b` | Microsoft's INF (`provider=%MSFT%`), with the edits its own comment header lists (eight, seven of them Maximus Decim's and one unattributed); its `CopyFiles` copy `USBAUTH.SYS` and `USBU2A.SYS` with the driver |
 | `USBNTMAP.INF` | 1,339 | `372d0a4829eab33cf5c6a1fca347a3be45da82d69a692e89b33d28dc02848657` | Microsoft's INF (`Provider=%Msft%`), with the two edits its own comment header lists, both Maximus Decim's |
 
-What is published, when the pack is included: the seven files and the
-pack's `NOTICE.md`, in a folder of their own in the upload set; the
+What is published, when the pack is included: the seven files, the
+pack's `NOTICE.md` and a `SHA256.TXT` of the seven, in a folder of their
+own at the upload set's root (`NONFREE\`); the
 generated readme and the installer's `NOTICE.TXT` saying so in place of
 "No Microsoft file is in this download" (`make-release.ps1`, which chooses
 the text by whether the pack is in the download); and the record of which
-pack revision was used (task 43.3). A download built without the pack
+pack revision was used, `releases/<version>/drvpack.txt` (tracked, plain
+text: whether the pack is included, its revision and every file's hash,
+from which `make-release.ps1 -UploadSetOnly` rebuilds the download and
+which holds none of the files; task 43.3). A download built without the pack
 carries none of them and says so as before. Whether the seven are all a
 stock Windows 98 SE needs is not yet read (task 43.5); nothing here or in the
 pack claims it.

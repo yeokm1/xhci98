@@ -3248,6 +3248,42 @@ one of this project's files is a refusal. The package's `PKG-MSFILE` name
 rule covers every file, Stor98's included. `XHCIINST` must copy no file
 whose name starts with `stor98` into its local copy, which is on the
 hardware wizard's search path (design record 23 section 4.4).
+
+#### The driver pack: NUSB 3.3's 98 SE storage files (roadmap-usb4 task 43.3)
+
+The release download carries NUSB 3.3's seven Windows 98 SE storage files
+at its root as `NONFREE\`, the pack's own layout, storage part only, in 8.3
+names (owner, 2026-10-20): `NONFREE\NOTICE.md` (the pack's),
+`NONFREE\SHA256.TXT` (the seven's hashes at their paths under `NONFREE\`)
+and `NONFREE\STORAGE\NUSB33\W98SE\` with the seven files, where the
+installer takes them from (task 43.4). This is the one Microsoft file
+exception of the download (`legal-provenance.md` section 5). Only
+`make-release.ps1` adds it, to the upload set; no package of
+`make-package.ps1`'s carries it, and `releases\<version>\` never does.
+
+The files come from the owner's `usb-wdm-nonfree` repository, a checkout at
+`scripts\local\usb-wdm-nonfree` (git-ignored: a clone there or a junction
+to one; `-DriverPackRoot` names another), **read from its git objects at
+one revision** rather than from its working tree (`Export-DriverPack`,
+`scripts\package\package-common.ps1`). The folder is refused unless it holds
+exactly the seven names as plain files, each hashing as the pack's
+`SHA256.TXT` at that revision lists it and as the allowlist in
+`package-common.ps1` (section 5's table) pins it.
+
+A cut that publishes x86 directories resolves the checkout's `HEAD` once,
+before anything is built (`-NoDriverPack` cuts without the pack). It
+refuses to start while any of the seven names is under `releases\` or among
+the tracked files, and writes `releases\<version>\drvpack.txt`: whether the
+pack is included and, if so, its revision and every file's hash. The upload
+set adds `NONFREE\` before its gates run, and refuses a published tree that
+already holds one; its one-date rule reads this project's INFs only, the
+pack's two INFs (`USBSTOR.INF` dated 07/01/2001, `USBNTMAP.INF` 06/08/2000
+with no version) being held to their hashes instead, and every file, the
+pack's included, is dated by the release. `-UploadSetOnly` exports the
+revision `drvpack.txt` records and refuses unless every file's bytes are the
+recorded ones; a missing checkout or revision is a refusal, not a download
+without the pack. `-DriverPackAllowlist` (a stand-in allowlist) is for
+`test-package.ps1` alone and is refused with the repository's `releases\`.
 `scripts\package\test-package.ps1` holds the layout with a stand-in Stor98
 tree.
 

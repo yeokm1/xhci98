@@ -1586,6 +1586,223 @@ try {
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not re-assembled once QUALREP.BAT was restored:`n" + $r.Output)
 
+        # --- the driver pack (roadmap-usb4 task 43.3) -------------------------
+        #
+        # A stand-in usb-wdm-nonfree: a git repository of its own holding the
+        # seven names as text, the two INFs carrying NUSB 3.3's own DriverVer
+        # lines (USBSTOR.INF a date of its own, USBNTMAP.INF a date with no
+        # version after it, which Get-InfDriverDate cannot read), and an
+        # allowlist of their hashes standing in for package-common.ps1's.
+        # Four commits: c1 the good pack; c2 one file's bytes changed with
+        # SHA256.TXT updated to match, so the allowlist alone catches it; c3
+        # an eighth file; c4 the good files under a SHA256.TXT that lists a
+        # wrong hash.
+        Write-Step "the driver pack: one revision's bytes, held to SHA256.TXT and the allowlist"
+        $packRepo = Join-Path $script:work "usb-wdm-nonfree"
+        $packSub = "non-free/storage/nusb33/w98se"
+        $packDirFx = Join-Path $packRepo ($packSub.Replace('/', '\'))
+        Ensure-Directory $packDirFx
+        function Invoke-PackGit {
+            param([string[]]$GitArgs)
+            $saved = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $o = & git -C $packRepo -c user.name=xhci98-test -c user.email=test@invalid @GitArgs 2>&1 | Out-String
+            } finally {
+                $ErrorActionPreference = $saved
+            }
+            if ($LASTEXITCODE -ne 0) { throw "git $($GitArgs -join ' ') failed: $o" }
+            return $o.Trim()
+        }
+        function Write-PackFixture {
+            # Writes the folder and SHA256.TXT; -WrongSum lists a wrong hash
+            # for that one file.
+            param($Map, [string]$WrongSum = "")
+            Get-ChildItem -LiteralPath $packDirFx -File | Remove-Item -Force
+            $sums = @()
+            foreach ($name in $Map.Keys) {
+                $p = Join-Path $packDirFx $name
+                [System.IO.File]::WriteAllBytes($p, [System.Text.Encoding]::ASCII.GetBytes($Map[$name]))
+                $h = (Get-FileSha256 -Path $p).ToLowerInvariant()
+                if ($name -eq $WrongSum) { $h = "0" * 64 }
+                $sums += "$h  $packSub/$name"
+            }
+            [System.IO.File]::WriteAllText((Join-Path $packRepo "SHA256.TXT"), (($sums -join "`n") + "`n"))
+        }
+        $packText = [ordered]@{
+            "USBAUTH.SYS"  = "stand-in USBAUTH.SYS"
+            "USBMPHLP.PDR" = "stand-in USBMPHLP.PDR"
+            "USBNTMAP.INF" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=06/08/2000`r`n"
+            "USBNTMAP.SYS" = "stand-in USBNTMAP.SYS"
+            "USBSTOR.INF"  = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=07/01/2001,5.1.2600.0`r`n"
+            "USBSTOR.SYS"  = "stand-in USBSTOR.SYS"
+            "USBU2A.SYS"   = "stand-in USBU2A.SYS"
+        }
+        Invoke-PackGit @("init", "-q") | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $packRepo ".gitattributes"), "* -text`n")
+        [System.IO.File]::WriteAllText((Join-Path $packRepo "NOTICE.md"), "# Notice`n`nStand-in.`n")
+        Write-PackFixture -Map $packText
+        $allowPath = Join-Path $script:work "drvpack-allow.txt"
+        [System.IO.File]::WriteAllText($allowPath, ((@($packText.Keys | ForEach-Object {
+            (Get-FileSha256 -Path (Join-Path $packDirFx $_)) + "  " + $_ }) -join "`r`n") + "`r`n"))
+        $packGood = [ordered]@{}
+        foreach ($name in $packText.Keys) { $packGood[$name] = Get-FileSha256 -Path (Join-Path $packDirFx $name) }
+        $packGood["NOTICE.md"] = Get-FileSha256 -Path (Join-Path $packRepo "NOTICE.md")
+        Invoke-PackGit @("add", "-A") | Out-Null
+        Invoke-PackGit @("commit", "-q", "-m", "c1") | Out-Null
+        $c1 = Invoke-PackGit @("rev-parse", "HEAD")
+        $packChanged = [ordered]@{}
+        foreach ($k in $packText.Keys) { $packChanged[$k] = $packText[$k] }
+        $packChanged["USBAUTH.SYS"] = "stand-in USBAUTH.SYS, other bytes"
+        Write-PackFixture -Map $packChanged
+        Invoke-PackGit @("commit", "-q", "-a", "-m", "c2") | Out-Null
+        $c2 = Invoke-PackGit @("rev-parse", "HEAD")
+        $packExtra = [ordered]@{}
+        foreach ($k in $packText.Keys) { $packExtra[$k] = $packText[$k] }
+        $packExtra["USBEXTRA.SYS"] = "a file the allowlist does not name"
+        Write-PackFixture -Map $packExtra
+        Invoke-PackGit @("add", "-A") | Out-Null
+        Invoke-PackGit @("commit", "-q", "-m", "c3") | Out-Null
+        $c3 = Invoke-PackGit @("rev-parse", "HEAD")
+        Write-PackFixture -Map $packText -WrongSum "USBSTOR.SYS"
+        Invoke-PackGit @("add", "-A") | Out-Null
+        Invoke-PackGit @("commit", "-q", "-m", "c4") | Out-Null
+
+        # The export: c1's folder in the download's layout, and each bad
+        # revision refused with its reason. A package of make-package.ps1's
+        # never carries the pack.
+        $packDl = [ordered]@{}
+        foreach ($name in $packText.Keys) { $packDl["STORAGE\NUSB33\W98SE\$name"] = $packGood[$name] }
+        $packDl["NOTICE.md"] = $packGood["NOTICE.md"]
+        $packAllow = Read-DriverPackAllowlist -Path $allowPath
+        $exp = Export-DriverPack -Root $packRepo -Revision $c1 -Dest (Join-Path $script:work "drvpack-c1") -Allowlist $packAllow
+        Assert-True ($exp.Revision -eq $c1) "the export did not resolve c1."
+        foreach ($k in $packDl.Keys) {
+            Assert-True ($exp.Files.Contains($k) -and $exp.Files[$k] -eq $packDl[$k]) "the export's $k is not c1's."
+        }
+        Assert-True ($exp.Files.Count -eq 9 -and $exp.Files.Contains("SHA256.TXT")) "the export does not hold the seven, NOTICE.md and its own SHA256.TXT."
+        $sumsDl = Read-DriverPackHashList -Text ([System.IO.File]::ReadAllText((Join-Path $exp.Dir "SHA256.TXT"))) -Label "the download's SHA256.TXT"
+        Assert-True ($sumsDl.Count -eq 7 -and $sumsDl["STORAGE/NUSB33/W98SE/USBSTOR.INF"] -eq $packGood["USBSTOR.INF"]) "the download's SHA256.TXT does not list the seven at their NONFREE\ paths."
+        Assert-True ((Get-DriverPackFolderFault -Dir $exp.Dir -Files $exp.Files) -eq "") "the export does not pass its own folder check."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut "NONFREE"))) "a package of make-package.ps1's carries NONFREE\."
+        foreach ($bad in @(
+                @{ Rev = $c2; Want = "not the allowlisted file"; Why = "changed bytes under a matching SHA256.TXT" },
+                @{ Rev = $c3; Want = "not the allowlisted folder"; Why = "an eighth file" },
+                @{ Rev = "HEAD"; Want = "SHA256.TXT"; Why = "a SHA256.TXT that lists a wrong hash" },
+                @{ Rev = ("0" * 40); Want = "has no commit"; Why = "a revision the checkout does not hold" })) {
+            $msg = ""
+            try {
+                Export-DriverPack -Root $packRepo -Revision $bad.Rev -Dest (Join-Path $script:work ("drvpack-bad-" + [System.IO.Path]::GetRandomFileName())) -Allowlist $packAllow | Out-Null
+            } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("the export of a pack with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+
+        # The record, read back strictly.
+        $recYes = (ConvertTo-DriverPackRecord -Version $relVersion -Pack $exp) -join "`r`n"
+        $parsed = ConvertFrom-DriverPackRecord -Text $recYes -Label "the record"
+        Assert-True ($parsed.Included -and $parsed.Revision -eq $c1 -and $parsed.Files.Count -eq 9) "the driver pack record does not read back as written."
+        $threw = $false
+        try { ConvertFrom-DriverPackRecord -Text "Included: no`r`nRevision: $c1" -Label "the record" | Out-Null } catch { $threw = $true }
+        Assert-True $threw "a record saying 'Included: no' with a revision was accepted."
+
+        # -UploadSetOnly from the record: c1's folder at the root of
+        # the download and never in releases\, every file dated by this
+        # project's INFs whatever NUSB's INFs say, and nothing under
+        # releases\ written.
+        Write-Step "the upload set takes the recorded pack, and only that"
+        $recPath = Join-Path $pubRoot "drvpack.txt"
+        [System.IO.File]::WriteAllText($recPath, $recYes + "`r`n")
+        $pubBefore = @{}
+        foreach ($f in (Get-ChildItem -LiteralPath $pubRoot -File -Recurse)) { $pubBefore[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName).Hash }
+        $packRelArgs = @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot, "-PackageRoot", $noOut, "-UploadDir", $upRoot,
+                         "-DriverPackAllowlist", $allowPath)
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        $r = Invoke-Releaser ($packRelArgs + @("-DriverPackRoot", $packRepo))
+        Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the recorded driver pack:`n" + $r.Output)
+        $projStamp = (Get-Item -LiteralPath (Join-Path $uploadDir "release\xhci98.inf")).LastWriteTime
+        foreach ($fl in @("release", "debug")) {
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\NONFREE"))) "the upload set's $fl\ holds NONFREE\; it belongs at the root."
+        }
+        $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "NONFREE") -Files $exp.Files
+        Assert-True ($fault -eq "") "the upload set's NONFREE\ is not the recorded folder: $fault."
+        foreach ($inf in @("USBSTOR.INF", "USBNTMAP.INF")) {
+            $p = Join-Path $uploadDir "NONFREE\STORAGE\NUSB33\W98SE\$inf"
+            Assert-True ((Test-Path -LiteralPath $p) -and (Get-Item -LiteralPath $p).LastWriteTime -eq $projStamp) "the upload set's $inf is not dated by this project's INFs."
+        }
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $pubRoot "NONFREE"))) "-UploadSetOnly put the driver pack under releases\."
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($uploadZip)
+        try { $entries = @($zip.Entries | ForEach-Object { $_.FullName }) } finally { $zip.Dispose() }
+        foreach ($want in @("NONFREE/STORAGE/NUSB33/W98SE/USBSTOR.INF", "NONFREE/NOTICE.md", "NONFREE/SHA256.TXT")) {
+            Assert-True ($entries -contains $want) "the archive has no '$want' entry."
+        }
+        $pubAfter = @{}
+        foreach ($f in (Get-ChildItem -LiteralPath $pubRoot -File -Recurse)) { $pubAfter[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName).Hash }
+        Assert-True ($pubAfter.Count -eq $pubBefore.Count -and @($pubBefore.Keys | Where-Object { $pubAfter[$_] -ne $pubBefore[$_] }).Count -eq 0) `
+            "-UploadSetOnly with the driver pack wrote under releases\."
+
+        # Each refusal leaves no archive behind.
+        $recBadBytes = $recYes.Replace(("SHA256: " + $packGood["USBU2A.SYS"]), ("SHA256: " + ("A" * 64)))
+        foreach ($bad in @(
+                @{ Args = @("-DriverPackRoot", (Join-Path $script:work "no-such-pack")); Rec = $recYes; Want = "could not be read"; Why = "the pack's checkout unavailable" },
+                @{ Args = @("-DriverPackRoot", $packRepo); Rec = $recYes.Replace($c1, ("1" * 40)); Want = "could not be read"; Why = "the recorded revision not in the checkout" },
+                @{ Args = @("-DriverPackRoot", $packRepo); Rec = $recBadBytes; Want = "does not hold the bytes"; Why = "the record's bytes not the revision's" },
+                @{ Args = @("-NoDriverPack"); Rec = $recYes; Want = "not rebuilt with -NoDriverPack"; Why = "-NoDriverPack for a download recorded with the pack" })) {
+            [System.IO.File]::WriteAllText($recPath, $bad.Rec + "`r`n")
+            if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+            if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+            $r = Invoke-Releaser ($packRelArgs + $bad.Args)
+            Assert-True ($r.ExitCode -ne 0) "-UploadSetOnly assembled a download with $($bad.Why)."
+            Assert-True ($r.Output.Contains($bad.Want)) ("expected '" + $bad.Want + "' for " + $bad.Why + ". Output:`n" + $r.Output)
+            Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written with $($bad.Why)."
+        }
+
+        # A release cut without the pack is rebuilt without it, and needs no
+        # checkout.
+        Write-Step "a release recorded without the pack is assembled without it"
+        [System.IO.File]::WriteAllText($recPath, ((ConvertTo-DriverPackRecord -Version $relVersion -Pack $null) -join "`r`n") + "`r`n")
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        $r = Invoke-Releaser ($packRelArgs + @("-DriverPackRoot", (Join-Path $script:work "no-such-pack")))
+        Assert-True ($r.ExitCode -eq 0) ("a release recorded without the driver pack was not assembled:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "NONFREE"))) "a release recorded without the driver pack got NONFREE\ in its download."
+        # A published tree holding NONFREE\ is refused: the pack is never
+        # in releases\.
+        Ensure-Directory (Join-Path $pubRoot "NONFREE")
+        Set-Content -LiteralPath (Join-Path $pubRoot "NONFREE\NOTICE.md") -Value "committed by hand" -Encoding ASCII
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser $packRelArgs
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NONFREE\ was assembled:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a published NONFREE\."
+        Remove-Item -LiteralPath (Join-Path $pubRoot "NONFREE") -Recurse -Force
+        Remove-Item -LiteralPath $recPath -Force
+
+        # A cut checks the pack at the checkout's HEAD before it builds
+        # anything: c4's wrong SHA256.TXT stops it there.
+        $cutRel = Join-Path $script:work "releases-cut"
+        Ensure-Directory $cutRel
+        $r = Invoke-Releaser @("-Arch", "x86", "-NoStor98", "-ReleasesDir", $cutRel, "-PackageRoot", $noOut, "-UploadDir", $upRoot,
+                               "-DriverPackRoot", $packRepo, "-DriverPackAllowlist", $allowPath)
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("SHA256.TXT")) ("a cut started with a pack whose SHA256.TXT is wrong:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath $noOut)) "the cut refused for its pack built something."
+
+        # -DriverPackAllowlist never with the repository's own releases\, and
+        # a cut never with one of the seven names under releases\.
+        $r = Invoke-Releaser @("-UploadSetOnly", "-DriverPackAllowlist", $allowPath, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never with the repository's own releases")) ("-DriverPackAllowlist was accepted with the repository's releases\:`n" + $r.Output)
+        $badRel = Join-Path $script:work "releases-seven"
+        Ensure-Directory (Join-Path $badRel "0.0.0.1\release")
+        Set-Content -LiteralPath (Join-Path $badRel "0.0.0.1\release\USBSTOR.SYS") -Value "a copy committed by hand" -Encoding ASCII
+        $r = Invoke-Releaser @("-Arch", "x86", "-NoStor98", "-NoDriverPack", "-ReleasesDir", $badRel, "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("in the download only")) ("a cut started with USBSTOR.SYS under releases\:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath $noOut)) "the refused cut built something."
+
+        # Back to the fixture's ordinary asset, which the cases below start
+        # from.
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set was not re-assembled after the driver pack cases:`n" + $r.Output)
+
         # --- the UAS class driver's pair (roadmap task 31-A.2) ---------------
         #
         # A flavour directory carrying xhciuas.inf is gated by that INF's own

@@ -1243,3 +1243,275 @@ function Get-GitTreeState {
     if (-not $ok) { return @{ Head = "none"; Dirty = $true } }
     return @{ Head = $head; Dirty = ($status -ne "" -or $hidden.Count -gt 0) }
 }
+
+# --- NUSB 3.3's 98 SE storage files, from the driver pack (task 43.3) -----
+#
+# The one exception to "no Microsoft file in the download"
+# (docs\contributing\legal-provenance.md section 5, the owner's decision of
+# 2026-10-20): the seven files of the driver pack's
+# non-free/storage/nusb33/w98se/ folder, with the pack's NOTICE.md, in the
+# upload set alone, at its root as NONFREE\ - the pack's own layout, its
+# storage part only, in 8.3 names (owner, 2026-10-20): NONFREE\NOTICE.md,
+# NONFREE\SHA256.TXT (the seven's lines) and NONFREE\STORAGE\NUSB33\W98SE\,
+# where the installer takes them from (task 43.4). Never in a package of
+# make-package.ps1's and never in releases\. The pack is the owner's
+# usb-wdm-nonfree repository, a git
+# checkout, and its files are read from the checkout's object store at one
+# revision rather than from its working tree, so what is staged is exactly
+# the bytes of the revision the release records. Each of the seven is held
+# to the pack's SHA256.TXT at that revision and to this allowlist, which is
+# legal-provenance.md section 5's table: changing it is a decision recorded
+# there first.
+$script:DriverPackFolder = "NONFREE"
+$script:DriverPackStorageRel = "non-free/storage/nusb33/w98se"
+# Where the seven sit under NONFREE\ in the download.
+$script:DriverPackStorageDir = "STORAGE\NUSB33\W98SE"
+$script:DriverPackNotice = "NOTICE.md"
+$script:DriverPackSums = "SHA256.TXT"
+$script:DriverPackRecordName = "drvpack.txt"
+$script:DriverPackSeven = [ordered]@{
+    "USBAUTH.SYS"  = "12B09E67A5A9A8A883AB40B91C59BE294F2DDC5940B9780C056176DF04A463D1"
+    "USBMPHLP.PDR" = "E8E0604FDDCD1772F1C5CBA99DE9D72D79288D0B303ED3E7BF02D36160698C1C"
+    "USBNTMAP.INF" = "372D0A4829EAB33CF5C6A1FCA347A3BE45DA82D69A692E89B33D28DC02848657"
+    "USBNTMAP.SYS" = "D1595CDBFDC22925C4E47D1720F117FE6C9BEDA36417BA41A1FD7398878CC6E4"
+    "USBSTOR.INF"  = "E78B5F2D2D30B039D74D670F09BA41C39BDFCA058B72FD7C22EB7D55F81F0F6B"
+    "USBSTOR.SYS"  = "B92A6A1582287867D4950495C0A746F0F5D8831BC311061423F8645073E42D8C"
+    "USBU2A.SYS"   = "1C5656DCF3DBBCA97236FC0239537A34AE5A6CA1597F29CADC9C38537B2A7B78"
+}
+
+function Get-DefaultDriverPackRoot {
+    # A checkout of usb-wdm-nonfree (or a junction to one) in the git-ignored
+    # scripts\local\.
+    return (Join-Path (Get-DefaultLocalScriptDir) "usb-wdm-nonfree")
+}
+
+function Read-DriverPackHashList {
+    # A SHA256.TXT ("<64 hex>  <path>" a line) as an ordered map of path to
+    # upper-case hash. Anything else on a line that is not blank is refused.
+    param([string]$Text, [string]$Label)
+    $map = [ordered]@{}
+    foreach ($line in ($Text -split "`r?`n")) {
+        if ($line.Trim() -eq "") { continue }
+        $m = [regex]::Match($line, '^([0-9A-Fa-f]{64}) [ *]?(\S.*?)\s*$')
+        if (-not $m.Success) { throw "$Label has a line that is not '<sha256>  <path>': '$line'." }
+        if ($map.Contains($m.Groups[2].Value)) { throw "$Label lists '$($m.Groups[2].Value)' twice." }
+        $map[$m.Groups[2].Value] = $m.Groups[1].Value.ToUpperInvariant()
+    }
+    return $map
+}
+
+function Read-DriverPackAllowlist {
+    # An allowlist in SHA256.TXT form, names only, for the packaging scripts'
+    # self-tests (-DriverPackAllowlist), which stage stand-ins.
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "no driver pack allowlist at '$Path'." }
+    $map = Read-DriverPackHashList -Text ([System.IO.File]::ReadAllText($Path)) -Label "'$Path'"
+    if ($map.Count -eq 0) { throw "'$Path' names no file." }
+    return $map
+}
+
+function Invoke-DriverPackGit {
+    # git in the driver pack's checkout, in a process of its own: its output
+    # is returned as text or, with -OutFile, written to a new file byte for
+    # byte (a blob through PowerShell's pipeline would be re-encoded).
+    param([string]$Root, [string[]]$Arguments, [string]$OutFile = "")
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "git"
+    $psi.Arguments = ((@("-C", $Root.TrimEnd('\')) + $Arguments) | ForEach-Object { '"' + $_ + '"' }) -join " "
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    try {
+        $p = [System.Diagnostics.Process]::Start($psi)
+    } catch {
+        throw "git could not be started ($($_.Exception.Message)); the driver pack is read from its checkout with git."
+    }
+    try {
+        $errTask = $p.StandardError.ReadToEndAsync()
+        $text = ""
+        if ($OutFile -ne "") {
+            $fs = New-Object System.IO.FileStream($OutFile, [System.IO.FileMode]::CreateNew)
+            try { $p.StandardOutput.BaseStream.CopyTo($fs) } finally { $fs.Dispose() }
+        } else {
+            $text = $p.StandardOutput.ReadToEnd()
+        }
+        $p.WaitForExit()
+        $rc = $p.ExitCode
+        $err = $errTask.Result.Trim()
+    } finally {
+        $p.Dispose()
+    }
+    if ($rc -ne 0) {
+        throw "git $($Arguments -join ' ') in '$Root' failed (exit $rc): $err"
+    }
+    return $text
+}
+
+function Export-DriverPack {
+    # Writes the download's NONFREE\ folder into -Dest (a new directory): the
+    # pack's seven storage files as they are at -Revision in the checkout at
+    # -Root, under STORAGE\NUSB33\W98SE\, its NOTICE.md, and a SHA256.TXT of
+    # the seven. The pack's folder is held to the allowlist exactly - the
+    # seven names, nothing else, each a plain file - and each file to the
+    # pack's SHA256.TXT at that revision and to its allowlisted hash. Returns
+    # the revision and an ordered map of each written file's path under
+    # -Dest to its hash: what make-release.ps1 records.
+    param([string]$Root, [string]$Revision = "HEAD", [string]$Dest, $Allowlist = $null)
+    if ($null -eq $Allowlist) { $Allowlist = $script:DriverPackSeven }
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        throw @"
+no driver pack at '$Root'.
+The x86 packages carry NUSB 3.3's Windows 98 SE storage files from the owner's
+usb-wdm-nonfree repository (roadmap-usb4 task 43.3): clone it there, or make a
+junction there to a clone, or name a clone with -DriverPackRoot. A package
+without them is built with -NoDriverPack.
+"@
+    }
+    $Root = (Resolve-Path -LiteralPath $Root).ProviderPath.TrimEnd('\')
+    $rel = $script:DriverPackStorageRel
+    $rev = ""
+    try {
+        $rev = (Invoke-DriverPackGit -Root $Root -Arguments @("rev-parse", "--verify", "--quiet", "$Revision^{commit}")).Trim()
+    } catch {
+        $rev = ""
+    }
+    if ($rev -notmatch '^[0-9a-f]{40}$') {
+        throw "the driver pack at '$Root' has no commit '$Revision': it is not a git checkout of usb-wdm-nonfree, or that revision is not in it."
+    }
+    $tree = Invoke-DriverPackGit -Root $Root -Arguments @("ls-tree", $rev, "$rel/")
+    $names = @()
+    foreach ($line in @($tree -split "`n" | Where-Object { $_.Trim() -ne "" })) {
+        $m = [regex]::Match($line.TrimEnd("`r"), '^(\d{6}) (\w+) [0-9a-f]{40}\t(.+)$')
+        if (-not $m.Success) { throw "git ls-tree printed a line this script cannot read: '$line'." }
+        $name = $m.Groups[3].Value.Substring($m.Groups[3].Value.LastIndexOf('/') + 1)
+        if ($m.Groups[2].Value -ne "blob" -or $m.Groups[1].Value -ne "100644") {
+            throw "the driver pack's $rel/$name at $rev is not a plain file (mode $($m.Groups[1].Value), $($m.Groups[2].Value))."
+        }
+        $names += $name
+    }
+    $want = @($Allowlist.Keys)
+    $extra = @($names | Where-Object { $want -cnotcontains $_ })
+    $missing = @($want | Where-Object { $names -cnotcontains $_ })
+    if ($extra.Count -gt 0 -or $missing.Count -gt 0) {
+        throw @"
+the driver pack's $rel/ at $rev is not the allowlisted folder.
+  Not allowlisted: $(if ($extra.Count) { $extra -join ', ' } else { '(none)' })
+  Missing:         $(if ($missing.Count) { $missing -join ', ' } else { '(none)' })
+The folder is staged whole or not at all, and holds exactly these: $($want -join ', ').
+Widening it is the owner's decision, recorded in
+docs\contributing\legal-provenance.md section 5 before the allowlist changes.
+"@
+    }
+    $sums = Read-DriverPackHashList -Text (Invoke-DriverPackGit -Root $Root -Arguments @("show", "${rev}:SHA256.TXT")) `
+                                    -Label "the driver pack's SHA256.TXT at $rev"
+    if (Test-Path -LiteralPath $Dest) { throw "'$Dest' already exists; the driver pack is exported into a new directory." }
+    $storageDest = Join-Path $Dest $script:DriverPackStorageDir
+    New-Item -ItemType Directory -Path $storageDest | Out-Null
+    $files = [ordered]@{}
+    $sumLines = @()
+    foreach ($name in $want) {
+        $out = Join-Path $storageDest $name
+        Invoke-DriverPackGit -Root $Root -Arguments @("cat-file", "blob", "${rev}:$rel/$name") -OutFile $out | Out-Null
+        $hash = Get-FileSha256 -Path $out
+        if (-not $sums.Contains("$rel/$name") -or $sums["$rel/$name"] -ne $hash) {
+            throw "the driver pack's $rel/$name at $rev does not hash as its SHA256.TXT lists it ($hash)."
+        }
+        if ($Allowlist[$name] -ne $hash) {
+            throw "the driver pack's $rel/$name at $rev is not the allowlisted file: $hash, not $($Allowlist[$name]) (legal-provenance.md section 5)."
+        }
+        $files[(Join-Path $script:DriverPackStorageDir $name)] = $hash
+        $sumLines += ("{0}  {1}/{2}" -f $hash.ToLowerInvariant(), $script:DriverPackStorageDir.Replace('\', '/'), $name)
+    }
+    $noticeOut = Join-Path $Dest $script:DriverPackNotice
+    Invoke-DriverPackGit -Root $Root -Arguments @("cat-file", "blob", "${rev}:$($script:DriverPackNotice)") -OutFile $noticeOut | Out-Null
+    $files[$script:DriverPackNotice] = Get-FileSha256 -Path $noticeOut
+    # The download's own SHA256.TXT: the seven's hashes at their paths
+    # under NONFREE\ (the pack's lists its other folders too).
+    $sumsOut = Join-Path $Dest $script:DriverPackSums
+    [System.IO.File]::WriteAllText($sumsOut, (($sumLines -join "`r`n") + "`r`n"), (New-Object System.Text.ASCIIEncoding))
+    $files[$script:DriverPackSums] = Get-FileSha256 -Path $sumsOut
+    return [pscustomobject]@{ Root = $Root; Revision = $rev; Dir = $Dest; Files = $files }
+}
+
+function Get-DriverPackFolderFault {
+    # "" when -Dir holds exactly the files of -Files (path relative to -Dir
+    # to hash) and nothing else; otherwise what is wrong.
+    param([string]$Dir, $Files)
+    if (-not (Test-Path -LiteralPath $Dir -PathType Container)) { return "'$Dir' does not exist" }
+    $full = (Get-Item -LiteralPath $Dir).FullName.TrimEnd('\')
+    $names = @(Get-ChildItem -LiteralPath $Dir -Force -File -Recurse | ForEach-Object { $_.FullName.Substring($full.Length + 1) })
+    $want = @($Files.Keys)
+    $extra = @($names | Where-Object { $want -notcontains $_ })
+    if ($extra.Count -gt 0) { return "'$Dir' holds $($extra -join ', '), which the driver pack's folder does not" }
+    foreach ($name in $want) {
+        $path = Join-Path $Dir $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return "'$Dir' has no $name" }
+        $hash = Get-FileSha256 -Path $path
+        if ($hash -ne $Files[$name]) { return "'$Dir\$name' is $hash, not $($Files[$name])" }
+    }
+    return ""
+}
+
+function ConvertTo-DriverPackRecord {
+    # The tracked record in releases\<version>\ of whether the download
+    # carries the driver pack and, when it does, which revision and bytes:
+    # what -UploadSetOnly rebuilds the download from. $Pack is
+    # Export-DriverPack's result, or $null for a release without the pack.
+    param([string]$Version, $Pack)
+    $lines = @(
+        "xhci98 $Version - the driver pack in this release's download",
+        "Written by scripts\package\make-release.ps1 (roadmap-usb4 task 43.3) and",
+        "read back by its -UploadSetOnly. The files are never in this directory.",
+        ""
+    )
+    if ($null -eq $Pack) {
+        $lines += "Included: no"
+        return $lines
+    }
+    $lines += "Included: yes"
+    $lines += "Repository: usb-wdm-nonfree"
+    $lines += "Revision: $($Pack.Revision)"
+    $lines += "Folder: $($script:DriverPackFolder)"
+    foreach ($name in $Pack.Files.Keys) {
+        $lines += "SHA256: $($Pack.Files[$name]) $name"
+    }
+    return $lines
+}
+
+function ConvertFrom-DriverPackRecord {
+    # The record ConvertTo-DriverPackRecord writes, read back strictly:
+    # Included, and for a release with the pack its revision, folder and
+    # files (NOTICE.md among them).
+    param([string]$Text, [string]$Label)
+    $included = $null
+    $revision = ""
+    $folder = ""
+    $files = [ordered]@{}
+    foreach ($line in ($Text -split "`r?`n")) {
+        if ($line -match '^Included: (yes|no)$') {
+            if ($null -ne $included) { throw "$Label says Included twice." }
+            $included = ($Matches[1] -eq "yes")
+        } elseif ($line -match '^Revision: ([0-9a-f]{40})$') {
+            $revision = $Matches[1]
+        } elseif ($line -match '^Folder: (\S+)$') {
+            $folder = $Matches[1]
+        } elseif ($line -match '^SHA256: ([0-9A-F]{64}) (\S+)$') {
+            if ($files.Contains($Matches[2])) { throw "$Label lists $($Matches[2]) twice." }
+            $files[$Matches[2]] = $Matches[1]
+        } elseif ($line -match '^(Included|Revision|Folder|SHA256):') {
+            throw "$Label has a line it cannot read: '$line'."
+        }
+    }
+    if ($null -eq $included) { throw "$Label says neither 'Included: yes' nor 'Included: no'." }
+    if ($included) {
+        if ($revision -eq "") { throw "$Label names no revision." }
+        if ($folder -ne $script:DriverPackFolder) { throw "$Label names the folder '$folder', not $($script:DriverPackFolder)." }
+        if (-not $files.Contains($script:DriverPackNotice) -or $files.Count -lt 2) {
+            throw "$Label does not list the pack's files and $($script:DriverPackNotice)."
+        }
+    } elseif ($revision -ne "" -or $files.Count -gt 0) {
+        throw "$Label says 'Included: no' and still names a revision or files."
+    }
+    return [pscustomobject]@{ Included = $included; Revision = $revision; Files = $files }
+}

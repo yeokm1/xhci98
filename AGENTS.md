@@ -598,9 +598,9 @@ Windows 2000 CD to the floppy - the media still carries none of them
 `legal-provenance.md` section 5 records why. **One exception is decided for
 `3.2.0.0`** (owner, 2026-10-20): NUSB 3.3's seven Windows 98 SE storage
 files, unmodified, from the separate driver-pack repository
-`usb-wdm-nonfree`, staged by task 43.3 with the pack's `NOTICE.md` as a
-folder of their own inside the generated `release-x86` and `debug-x86`
-packages and the upload set, and never into a commit or
+`usb-wdm-nonfree`, staged by task 43.3 with the pack's `NOTICE.md` into
+the upload set alone, at the download's root as `NONFREE\` (owner,
+2026-10-20), and never into a package, a commit or
 `releases\<version>\`. The `OS-*` and `PKG-MSFILE` rules stay as they are
 for this project's own files; they name none of the seven
 (roadmap-usb4 tasks 43.1 to 43.3;
