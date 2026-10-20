@@ -426,7 +426,8 @@ For an isochronous pipe the pool ring is no longer the only home (design
 record 13 section 11.8, 2026-10-20): one serviced more than once a frame
 may be granted a ring in a common-buffer page of its own, outside this
 block, sized by the event ring's budget. The pool, its stride and this
-layout are unchanged; such a pipe holds no pool ring.
+layout are unchanged, and such a pipe still takes its pool entry, unused,
+so the pool keeps bounding the endpoint contexts.
 
 `MiniPortResourcesSize` therefore becomes 409,600 bytes (400 KiB), up from
 376,832: a 2.25x multiple of the shipping EHCI miniport's 182,272 rather than

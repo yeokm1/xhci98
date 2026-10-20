@@ -8636,10 +8636,16 @@ two: a short packet on its first TRB raises one by ISP and the TD's last
 TRB raises a second ("a second for the last TRB with the IOC flag set",
 4.10.1.1.2 p.175), and a Missed Service Error on its first TRB is followed
 by the IOC TRB's own ("shall not drop Events associated with TRBs",
-p.201). A ring adds one event more when it runs empty, the Ring Underrun
-or Overrun (4.10.3.1 p.185; "only generated the first Interval that an
-empty Transfer Ring is detected", p.196). So a ring's events are at most
-its TRBs plus one - on a compliant controller. Controllers under
+p.201). A ring adds one event more each time it runs empty, the Ring
+Underrun or Overrun (4.10.3.1 p.185; "only generated the first Interval
+that an empty Transfer Ring is detected", p.196) - once per empty stretch,
+and a stretch ends at the next doorbell, which every publication rings
+(`HcdIoMapped`). While software is not draining, no record of the pipe is
+freed (a record is freed by its completion, which the drain delivers), so
+at most its four records (`HCD_PIPE_XFERS`) are published in that time:
+four more empty stretches, and the one already running when it began. So
+a pipe's events are at most its ring's TRBs plus five - on a compliant
+controller. Controllers under
 `XhciIsochSpuriousSuccess` (design record 20 section 4.14) may follow an
 error with a Success for the same TRB, two events for one; on those the
 bound does not hold and no page is granted (point 2). The event ring is
@@ -8704,26 +8710,26 @@ transfer ring.
    logged, as `XhciQemuBigRefuse` is, and never exists in a published
    flavour.
 3. **The event budget.** Every open isochronous pipe of the controller,
-   on a pool ring or a page, is counted at its ring's capacity plus one
-   (the underrun event above): 63 on a pool ring. A page is granted only
+   on a pool ring or a page, is counted at its ring's capacity plus five
+   (the underrun events above): 67 on a pool ring. A page is granted only
    when that count, a margin and room for the new pipe and one more pool
    pipe fit the event ring: the grant is `EventRingTrbs - 64 - counted -
-   2 x 63`, at most 192 (so the ring is at most 256 TRBs, one page), and
+   2 x 67`, at most 192 (so the ring is at most 256 TRBs, one page), and
    refused below 16 (not worth a page). The 64 is a margin for every
    other source (commands, port changes, bulk, interrupt and stream TDs,
    each pipe holding a few TDs), which nothing enforces, as nothing does
    today. The "one more pool pipe" keeps room for a second isochronous
    pipe opened after the page - a camera's microphone, an audio device's
    other direction. With today's 256-entry event ring and no other
-   isochronous pipe open the grant is 66: allowance 128, ring 130 TRBs,
-   counted 129, and 129 + 63 = 192, the 256 less the margin. With any
+   isochronous pipe open the grant is 58: allowance 120, ring 122 TRBs,
+   counted 125, and 125 + 67 = 192, the 256 less the margin. With any
    isochronous pipe already open no page is granted at 256 entries (the
    order matters: a camera opened before its microphone gets a page, one
    opened after does not). **What it bounds, and what it does not**: a
    page is granted only into room the event ring has, but a pipe is never
    refused for the budget, so pipes opened after a page are counted and
-   may take the count past the event ring, as five pool pipes do today (5
-   x 63 = 315); the page adds at most 66 to what today's rule would allow
+   may take the count past the event ring, as four pool pipes do today (4
+   x 67 = 268); the page adds at most 58 to what today's rule would allow
    for the same pipes. The count lives in the controller (`IsoCapOut`,
    controller lock); a pipe gives its count back when it can publish no
    more and holds no TD - when it is freed or held (`hcdCfgPipeFree`,
@@ -8842,8 +8848,8 @@ transfer ring.
    until its own release, as it keeps its pool ring.
 9. **What lifts the limit next.** A larger event ring raises the grant by
    the difference: at 1,024 entries three page pipes take the full
-   allowance of 254 and a fourth 131 (each counted at its allowance plus
-   one, with the margin and one pool pipe's room kept). The event ring is
+   allowance of 254 and a fourth 111 (each counted at its allowance plus
+   five, with the margin and one pool pipe's room kept). The event ring is
    record 04's fixed one-page segment, so that is a change of its own - a
    second allocation or a larger, physically placed region, every leg
    touching it - and it is the owner's question, not this one's.
@@ -8862,34 +8868,37 @@ a TD; a TD of one page or two):
 | | TRBs a pipe | every TD two TRBs | half (page-aligned buffer) | none crossing |
 |---|---|---|---|---|
 | Today, pool ring | 62 | 31 TDs, 3.9 ms | 41 TDs, 5.1 ms | 62 TDs, 7.75 ms |
-| A page, 256-entry event ring | 128 | 64 TDs, 8.0 ms | 85 TDs, 10.6 ms | 128 TDs, 16.0 ms |
-| A page, 1,024-entry event ring (point 9) | 254 | 127 TDs, 15.9 ms | 169 TDs, 21.1 ms | 254 TDs, 31.8 ms |
+| A page, 256-entry event ring | 120 | 60 TDs, 7.5 ms | 80 TDs, 10.0 ms | 120 TDs, 15.0 ms |
+| A page, 1,024-entry event ring (point 9) | 254 | 127 TDs, 15.9 ms | 168 TDs, 21.0 ms | 168 TDs, 21.0 ms |
 
-A High Speed UAC 2 stream of small packets, one TRB a TD, moves from 7.75
-to 16 ms. Memory on Windows 98 SE, per page pipe: one page of contiguous
-common buffer (two with the overfetch pad), its pool ring idle, and its
-four request blocks at 128 packets, 4 x 7,184 = 28,736 bytes of
-non-paged pool against 4 x 3,488 = 13,952 today; the controller's
-scratch, 4,576 bytes once.
+The last row is held by the records, not the ring: a 3,072-byte TD's
+request carries at most 42 packets (point 5), so four records hold at
+most 168 TDs whatever the ring's geometry (169 and 254 without that cap),
+and fewer with a smaller adapter grant or an unaligned buffer. A High
+Speed UAC 2 stream of small packets, one TRB a TD, moves from 7.75 to 15
+ms. Memory on Windows 98 SE, per page pipe: one page of contiguous common
+buffer (also with the overfetch pad: 122 TRBs doubled is 3,904 bytes),
+its pool ring idle, and its four request blocks at 120 packets, 4 x
+6,736 = 26,944 bytes of non-paged pool against 4 x 3,488 = 13,952 today;
+the controller's scratch, 4,576 bytes once.
 
 **Host vectors.**
 - `test_iso`: `MaxPackets` 0 as today and 128 accepted, 129 refused
   before a packet is read; the length array honoured and
   `IsoLayout.TdLengths` untouched when it is given; `MaxPackets` above 62
-  with no array refused before a packet is read; a 128-packet request of
-  one-TRB TDs built and published on a 130-TRB ring at both cycles and
-  across the Link TRB, and a request of two-TRB TDs; the empty-ring
-  refusal at 129 TRBs; BEI on exactly the TDs the rule names for 1, 7, 8,
+  with no array refused before a packet is read; a 120-packet request of
+  one-TRB TDs built and published on a 122-TRB ring, and a request of
+  two-TRB TDs across its Link TRB; the empty-ring refusal at 121 TRBs; BEI on exactly the TDs the rule names for 1, 7, 8,
   9, 16 and 128 packets, never on the last, none at interval 0; IOC
   still on every TD; completion of a request whose middle TDs carried
   BEI, with a short packet, a Missed Service and a skipped packet, as
   today.
-- `test_ring`: a 130-TRB ring's wrap, capacity 128, and Set TR Dequeue
+- `test_ring`: a 122-TRB ring's wrap, capacity 120, and Set TR Dequeue
   across its Link TRB.
 - `test_pipe`: the candidate rule per Interval, zero bandwidth and the
   `qemu` override; the grant from 256 and 1,024 entries with nothing,
-  one pool pipe, one page and the borrow of a switch counted, refusals
-  below 16, the cap at 192; the ring's TRBs from the grant; the
+  one pool pipe, one page and the borrow of a switch counted (each pipe
+  at its capacity plus five), refusals below 16, the cap at 192; the ring's TRBs from the grant; the
   allocation's bytes with and without the pad.
 - `test_td`: hcdIsoFill's model over a 128-packet block at the new
   stride.
@@ -8904,18 +8913,22 @@ mechanics under `XhciQemuIsoRing` 1: QEMU's audio device played whole
 (`TONE.WAV`) on Windows 2000, XP and 7 x64 (98 SE's own `USBAUDIO.VXD`
 faults on it, so its leg is the binding and the counters), once on the
 pool ring and once on a page, `IsoPacketErrors` and Missed Service at 0,
-`iso.page` granted with allowance 128 and the requests' TRB counts read
+`iso.page` granted with allowance 120 and the requests' TRB counts read
 from the trace; a second play after the device's alternate setting went
 back to 0 and up again (the page freed or retired and granted anew, the
 count back at 0 between); the device unplugged while playing (the page
-freed or retired, then freed); RESET_PORT through a device disable and
-enable; and the switch's failure paths through the `qemu` flavour's
+freed or retired, then freed); and the switch's failure paths through the `qemu` flavour's
 faults 18 (SET_INTERFACE stalled or not established) and 19 (the
 switch's Configure Endpoint refused, or answered with no completion and
 the controller reset), each read for `iso.page.free` exactly once per
 grant, the pages freed or retired then freed, and the pool's count back
 at its start value; and the other traffic - a stick read and written, a
-mouse - on the same controller, unchanged.
+mouse - on the same controller, unchanged. RESET_PORT with a page pipe
+open is not among them: `usbaudio.sys` sends no port request
+(`legal-provenance.md` section 4, task 35-T.0's row) and a
+device's disable and enable does not reach `hcdCfgResetPort`, so the page
+across RESET_PORT, which re-adds the pipe with its ring as it re-adds a
+stream's, is read by review and owed to a client that sends one.
 
 ## 12. What Phase 25 leaves open, and where each item binds
 
