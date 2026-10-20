@@ -458,7 +458,7 @@ static void stor_run_end(void);
 static int stor_any(int kind);
 static int stor_covered(void);
 static int stor_un_devices(void);
-static int stor_un_adopt(void);
+static int stor_un_adopt(int record);
 static int stor_un_rest(void);
 static int stor_forget(void);
 static int stor_rec_devices_any(void);
@@ -11008,6 +11008,7 @@ static int remove_9x_devnodes(void)
 {
     INST_DI_RESULT r;
     DEVREC d;
+    int adopt;
     int rank;
     int i;
     int v;
@@ -11018,13 +11019,15 @@ static int remove_9x_devnodes(void)
         return 0;
     }
     /* The USB storage devices Windows bound from this installer's copy
-     * after the run, adopted before anything is removed (record 26
-     * section 6.5.8 step 1; owner, 2026-10-20). */
-    if (!stor_un_adopt()) {
+     * after the run (record 26 section 6.5.8 step 1; owner, 2026-10-20):
+     * counted here, adopted after the gate, before anything is removed. */
+    adopt = stor_un_adopt(0);
+    if (adopt < 0) {
+        flagFailed = 1;
         return 0;
     }
     if (un9xCount == 0 && !s98_rec_devices_any(1) &&
-        !stor_rec_devices_any()) {
+        !stor_rec_devices_any() && adopt == 0) {
         /* Nothing left that needs the helper; recorded Stor98 devices
          * already gone are cleared without it. */
         return s98_un_devices(NULL) && s98_un_verify();
@@ -11038,6 +11041,7 @@ static int remove_9x_devnodes(void)
     if (opts.List) {
         out("(/list) each would be removed through Windows' own device "
             "installer.\n\n");
+        stor_un_adopt(1);
         stor_un_devices();
         s98_un_devices(NULL);
         return 1;
@@ -11066,9 +11070,10 @@ static int remove_9x_devnodes(void)
         flagFailed = 1;
         return 0;
     }
-    /* The USB storage drivers' recorded devices first, units then
-     * Bulk-Only devices (record 26 section 6.5.8). */
-    if (!stor_un_devices()) {
+    /* The USB storage drivers' devices first, adopted now that the tree
+     * is settled and no wizard is open, then the recorded ones removed,
+     * units then Bulk-Only devices (record 26 section 6.5.8). */
+    if (stor_un_adopt(1) < 0 || !stor_un_devices()) {
         return 0;
     }
     for (rank = 0; rank <= 5; rank++) {
@@ -16981,6 +16986,67 @@ static int stor_place(int i)
     return 1;
 }
 
+/* At the first deployment (no Source yet): every copy of the pack's own
+ * INF bytes already in INF or INF\\OTHER, listed under Before by its path
+ * with BeforeOk 1 once the list is whole (record 26 section 6.5.8 step 1:
+ * neither they nor the devices bound through them are ever this
+ * installer's). 0 a listing or a record failed. */
+static int stor_before_write(void)
+{
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char hex[65];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    DWORD v;
+    DWORD e;
+    int pass;
+    int i;
+
+    if (opts.List || reg_dword(HKEY_LOCAL_MACHINE, INST_STOR_KEY, "Source",
+                               &v)) {
+        return 1;
+    }
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    for (pass = 0; pass < 2; pass++) {
+        join(pattern, sizeof(pattern), win,
+             pass == 0 ? "INF\\*.INF" : "INF\\OTHER\\*.INF");
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) {
+            e = GetLastError();
+            if (e != ERROR_FILE_NOT_FOUND && e != ERROR_PATH_NOT_FOUND &&
+                e != ERROR_NO_MORE_FILES) {
+                return 0;
+            }
+            continue;
+        }
+        do {
+            join(path, sizeof(path), win, pass == 0 ? "INF" : "INF\\OTHER");
+            join(path, sizeof(path), path, fd.cFileName);
+            if (stor_hash(path, hex) < 0) {
+                FindClose(h);
+                return 0;
+            }
+            for (i = INST_STOR_BINARIES; i < INST_STOR_COUNT; i++) {
+                if (inst_eq(hex, instStorFile[i].Sha256) &&
+                    !stor_rec_text("Before", path, hex)) {
+                    FindClose(h);
+                    return 0;
+                }
+            }
+        } while (FindNextFileA(h, &fd));
+        e = GetLastError();
+        FindClose(h);
+        if (e != ERROR_NO_MORE_FILES) {
+            return 0;
+        }
+    }
+    return stor_rec_dword("BeforeOk", 1);
+}
+
 /* Before the package's copy (record 26 section 6.5.4's order): the
  * withdrawal, the baseline, the states read again, PreExisting, the
  * copies, Source. Sets storCopyOk when the seven go into the package's
@@ -17113,6 +17179,10 @@ static void stor_run_begin_body(void)
                 out("(/list) %s would be copied.\n", instStorFile[i].Name);
             }
         }
+        return;
+    }
+    if (!stor_before_write()) {
+        storStepsLeft = 1;
         return;
     }
     if (set != 0 && storPreOwed) {
@@ -17773,7 +17843,7 @@ static int stor_oem_value(const char *path, int which, char *vname,
  * copy is one the record holds, or PreExisting is clear; NUSB installed
  * (USB20U) adopts nothing. The copy is recorded first, then the device.
  * 1 done (or nothing to adopt); 0 a reading failed (the uninstall stops). */
-static int stor_un_adopt(void)
+static int stor_un_adopt(int record)
 {
     HKEY e1;
     HKEY e2;
@@ -17792,42 +17862,56 @@ static int stor_un_adopt(void)
     DWORD j;
     DWORD l;
     DWORD n;
-    DWORD pre = 0;
+    DWORD v = 0;
     LONG r;
     HKEY u;
     int bad = 0;
     int kind;
     int recorded;
+    int beforeOk;
+    int inBefore;
+    int count = 0;
     int g;
+    char bh[96];
 
     if (envNow.Nt) {
-        return 1;
-    }
-    /* Only where this installer deployed the files (its record). */
-    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_KEY, 0, KEY_READ, &u);
-    if (r == ERROR_FILE_NOT_FOUND) {
-        return 1;
-    }
-    if (r != ERROR_SUCCESS) {
         return 0;
     }
+    /* Only where this installer deployed the seven: its Source value is
+     * there (written once a run put them in the package's copy, cleared to
+     * 0 by a withdrawal, never deleted but with the record). A choice
+     * alone is no evidence. */
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_KEY, 0, KEY_READ, &u);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS) {
+        return -1;
+    }
     RegCloseKey(u);
+    if (!reg_dword(HKEY_LOCAL_MACHINE, INST_STOR_KEY, "Source", &v)) {
+        return 0;
+    }
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_STOR_USB20U_KEY, 0, KEY_READ,
                       &u);
     if (r == ERROR_SUCCESS) {
         RegCloseKey(u);
     }
     if (r != ERROR_FILE_NOT_FOUND) {
-        out("NUSB is installed (Uninstall\\USB20U): no USB storage device "
-            "Windows bound later\nis taken as this installer's.\n");
-        return 1;
+        if (record) {
+            out("NUSB is installed (Uninstall\\USB20U): no USB storage device "
+                "Windows bound later\nis taken as this installer's.\n");
+        }
+        return 0;
     }
-    if (!reg_dword(HKEY_LOCAL_MACHINE, INST_STOR_KEY, "PreExisting", &pre)) {
-        pre = 0;
-    }
+    /* The copies of the pack's bytes that were there before the first
+     * deployment (Before, whole when BeforeOk is 1): never this
+     * installer's, nor the devices bound through them. */
+    beforeOk = reg_dword(HKEY_LOCAL_MACHINE, INST_STOR_KEY, "BeforeOk", &v) &&
+               v == 1;
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum", 0, KEY_READ, &e1) !=
         ERROR_SUCCESS) {
-        return 0;
+        return -1;
     }
     for (i = 0; !bad; i++) {
         n = sizeof(n1);
@@ -17891,32 +17975,43 @@ static int stor_un_adopt(void)
                                            "InfPath", t.InfPath,
                                            sizeof(t.InfPath));
                 g = stor_infpath_copy(&t, &recorded);
-                if (!inst_stor_adoptable(pre != 0, 0, g, recorded)) {
+                inBefore = g == 1 &&
+                           stor_rec_get("Before", storLastCopy, bh,
+                                        sizeof(bh)) != 0;
+                if (!inst_stor_adoptable(beforeOk, inBefore, 0, g,
+                                         recorded)) {
                     logonly("storage: %s not adopted (copy %d, recorded %d, "
-                            "PreExisting %lu)\n", id, g, recorded,
-                            (unsigned long)pre);
+                            "before %d/%d)\n", id, g, recorded, beforeOk,
+                            inBefore);
                     continue;
                 }
-                if (!recorded) {
-                    if (stor_oem_value(storLastCopy, storLastWhich, vname,
-                                       sizeof(vname)) <= 0 ||
-                        stor_hash(storLastCopy, hex) <= 0) {
-                        logonly("storage: %s's copy %s has no OEM Name value "
-                                "naming %s: not adopted\n", id, storLastCopy,
-                                instStorFile[storLastWhich].Name);
-                        continue;
-                    }
+                /* The copy read again: still the pack's own bytes, or the
+                 * evidence changed and nothing is taken. */
+                if (stor_hash(storLastCopy, hex) <= 0 ||
+                    !inst_eq(hex, instStorFile[storLastWhich].Sha256)) {
+                    logonly("storage: %s's copy %s changed: not adopted\n",
+                            id, storLastCopy);
+                    continue;
+                }
+                if (!recorded &&
+                    stor_oem_value(storLastCopy, storLastWhich, vname,
+                                   sizeof(vname)) <= 0) {
+                    logonly("storage: %s's copy %s has no OEM Name value "
+                            "naming %s: not adopted\n", id, storLastCopy,
+                            instStorFile[storLastWhich].Name);
+                    continue;
+                }
+                count++;
+                if (!record || opts.List) {
                     if (opts.List) {
                         out("(/list) %s would be taken as this installer's.\n",
-                            storLastCopy);
-                    } else if (!stor_rec_text("Infs", vname, hex)) {
-                        bad = 1;
-                        break;
+                            id);
                     }
-                }
-                if (opts.List) {
-                    out("(/list) %s would be taken as this installer's.\n", id);
                     continue;
+                }
+                if (!recorded && !stor_rec_text("Infs", vname, hex)) {
+                    bad = 1;
+                    break;
                 }
                 out("%s: bound from this installer's copy of %s, taken as "
                     "this installer's.\n", id, instStorFile[storLastWhich].Name);
@@ -17935,9 +18030,9 @@ static int stor_un_adopt(void)
         out("The device entries could not be read whole: nothing is "
             "removed.\n");
         flagFailed = 1;
-        return 0;
+        return -1;
     }
-    return 1;
+    return count;
 }
 
 /* The recorded devices, units then Bulk-Only devices, through the helper.
@@ -18449,6 +18544,7 @@ static int stor_forget(void)
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Files");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Infs");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Devices");
+    RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Before");
     w = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY);
     if (w == ERROR_SUCCESS) {
         logonly("deleted HKLM\\%s\n", INST_STOR_KEY);

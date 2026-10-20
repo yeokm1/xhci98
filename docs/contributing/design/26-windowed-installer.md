@@ -1197,6 +1197,10 @@ directory does, then a replug. This is a note, not a step.
   that was not this installer's; written once, never cleared, with the
   run's first storage change (before the first storage copy), never by
   a run that makes none;
+- `Before` and `BeforeOk` (draft 18): every copy of the pack's own INF
+  bytes in `INF` or `INF\OTHER` when the first deployment begins, one value
+  per copy by its path, and `BeforeOk` 1 once that list is whole; written
+  once, before that run's first copy (section 6.5.8 step 1);
 - `Source` (`REG_DWORD`): 1 once a run has made the package's copy with
   the seven in it, written just before that copy; cleared by a run that
   makes the copy without them (the withdrawal of section 6.5.4, or the
@@ -1270,16 +1274,23 @@ nothing it does not own. In section 9.3 step 4's order:
    installer's `DevicePath` copy is this installer's, a stick first
    plugged after the install (the usual case) included, so the usual
    flow - the install, the first stick, the uninstall - leaves none of
-   the seven. Before any removal, when the record exists and NUSB's
-   `USB20U` is absent, every devnode, present or not, whose driver key
-   names `USBSTOR.SYS` (`NTMPDriver`) or `USBMPHLP.PDR` (`PortDriver`)
-   and that `Devices` does not name is adopted when its `InfPath` names
-   exactly one copy in `INF` or `INF\OTHER` of the pack's own INF bytes
-   (`stor_infpath_copy`, the 8.3 alias included) and that copy is one
-   `Infs` holds, or `PreExisting` is clear (`inst_stor_adoptable`,
-   host-tested). An unrecorded copy is recorded first, by its `OEM Name`
-   value whose data names that INF (none found: the device is not
-   adopted), then the device under `Devices` (`bulk` or `unit`). A device
+   the seven. It runs after the gate of record 27 section 6 (the tree
+   settled, no wizard open), before any removal, and only where this
+   installer deployed the seven (the record's `Source` value is there; a
+   recorded choice alone is no evidence) and NUSB's `USB20U` is absent.
+   Every devnode, present or not, whose driver key names `USBSTOR.SYS`
+   (`NTMPDriver`) or `USBMPHLP.PDR` (`PortDriver`) and that `Devices`
+   does not name is adopted when its `InfPath` names exactly one copy in
+   `INF` or `INF\OTHER` of the pack's own INF bytes (`stor_infpath_copy`,
+   the 8.3 alias included) and that copy is one `Infs` holds, or is not
+   one of the copies of those bytes that were already there before the
+   first deployment (the record's `Before`, listed by path just before the
+   first deployment's copies, and trusted only with `BeforeOk` 1;
+   `inst_stor_adoptable`, host-tested, a partial install's first stick
+   included). The copy is read again and must still hold the pack's bytes;
+   an unrecorded one is recorded first, by its `OEM Name` value whose data
+   names that INF (none found: the device is not adopted), then the device
+   under `Devices` (`bulk` or `unit`). A device
    bound from a hand install of other bytes, from a copy that cannot be
    read or is named twice, or with `USB20U` present, is left with its
    copy and every file it uses (step 4's reference check). The bytes
