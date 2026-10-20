@@ -3282,7 +3282,10 @@ with no version) being held to their hashes instead, and every file, the
 pack's included, is dated by the release. `-UploadSetOnly` exports the
 revision `drvpack.txt` records and refuses unless every file's bytes are the
 recorded ones; a missing checkout or revision is a refusal, not a download
-without the pack. `-DriverPackAllowlist` (a stand-in allowlist) is for
+without the pack, and so is a release from `3.2.0.0` with no `drvpack.txt`
+(an older one has none and is assembled without the pack). The tracked-name
+check reads `git ls-files -z`, so git's quoting of an unusual path cannot
+hide a name. `-DriverPackAllowlist` (a stand-in allowlist) is for
 `test-package.ps1` alone and is refused with the repository's `releases\`.
 `scripts\package\test-package.ps1` holds the layout with a stand-in Stor98
 tree.

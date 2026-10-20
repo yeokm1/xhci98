@@ -2815,19 +2815,10 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
     # in git's history whatever the download says.
     if (-not $UploadSetOnly) {
         $sevenNames = @($script:DriverPackSeven.Keys)
-        $trackedHits = @()
-        $savedEap = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
         try {
-            $trackedAll = @(& git -C $repo ls-files 2>$null)
-            $lsRc = $LASTEXITCODE
-        } finally {
-            $ErrorActionPreference = $savedEap
-        }
-        if ($lsRc -ne 0) { throw "git ls-files failed in '$repo', so the cut cannot show that none of NUSB 3.3's seven files is tracked." }
-        foreach ($t in $trackedAll) {
-            $leaf = ($t -split '/')[-1]
-            if ($sevenNames -contains $leaf) { $trackedHits += $t }
+            $trackedHits = @(Find-DriverPackTrackedNames -Repo $repo -Names $sevenNames)
+        } catch {
+            throw "the cut cannot show that none of NUSB 3.3's seven files is tracked: $($_.Exception.Message)"
         }
         if (Test-Path -LiteralPath $ReleasesDir) {
             foreach ($item in @(Get-ChildItem -LiteralPath $ReleasesDir -Recurse -Force -File)) {
@@ -3009,6 +3000,9 @@ To cut one, run this script without it.
         # recorded hashes as well as to the allowlist. No record is a release
         # cut before 3.2.0.0, which carried no pack.
         $packRecordPath = Join-Path $finalRoot $script:DriverPackRecordName
+        if (-not (Test-Path -LiteralPath $packRecordPath) -and (Test-DriverPackRecordRequired -Version $Version)) {
+            throw "'$finalRoot' has no $($script:DriverPackRecordName), which every release from 3.2.0.0 is cut with: without it this run cannot tell whether the download carries the driver pack. Restore it from git (git checkout -- releases)."
+        }
         if (Test-Path -LiteralPath $packRecordPath) {
             $packRecord = ConvertFrom-DriverPackRecord -Text ([System.IO.File]::ReadAllText($packRecordPath)) -Label "'$packRecordPath'"
             if ($packRecord.Included -and @($legArches.Values | Where-Object { $_ -eq "x86" }).Count -gt 0) {

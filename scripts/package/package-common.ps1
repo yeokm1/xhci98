@@ -1321,6 +1321,7 @@ function Invoke-DriverPackGit {
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.CreateNoWindow = $true
     try {
         $p = [System.Diagnostics.Process]::Start($psi)
@@ -1451,6 +1452,29 @@ function Get-DriverPackFolderFault {
         if ($hash -ne $Files[$name]) { return "'$Dir\$name' is $hash, not $($Files[$name])" }
     }
     return ""
+}
+
+function Test-DriverPackRecordRequired {
+    # Every release cut from 3.2.0.0 writes drvpack.txt, so its absence from
+    # one of those is a damaged tree, never "a release without the pack";
+    # only an older release may lack it.
+    param([string]$Version)
+    return ([version]$Version -ge [version]"3.2.0.0")
+}
+
+function Find-DriverPackTrackedNames {
+    # The tracked files of the repository at -Repo whose name is one of
+    # -Names, read NUL-separated so that git's quoting of a path with an
+    # unusual character cannot hide its name.
+    param([string]$Repo, [string[]]$Names)
+    $listing = Invoke-DriverPackGit -Root $Repo -Arguments @("ls-files", "-z")
+    $hits = @()
+    foreach ($path in ($listing -split "`0")) {
+        if ($path -eq "") { continue }
+        $leaf = ($path -split '/')[-1]
+        if ($Names -contains $leaf) { $hits += $path }
+    }
+    return $hits
 }
 
 function ConvertTo-DriverPackRecord {

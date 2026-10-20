@@ -1467,6 +1467,10 @@ try {
         foreach ($pair in @(@("silent.reg", "SILENT.REG"), @("silent.vbs", "SILENT.VBS"), @("silent-on.bat", "silent-on.bat"), @("silent-off.bat", "silent-off.bat"))) {
             Copy-Item -LiteralPath (Join-Path $repo ("src\" + $pair[0])) -Destination (Join-Path $pubRoot ("tools\silent\" + $pair[1])) -Force
         }
+        # The driver pack's record (roadmap-usb4 task 43.3), which every cut
+        # from 3.2.0.0 writes and -UploadSetOnly then requires: this
+        # fixture's release carries no pack.
+        Write-AsciiFile -Path (Join-Path $pubRoot "drvpack.txt") -Lines (ConvertTo-DriverPackRecord -Version $relVersion -Pack $null)
 
         # What the published tree looks like before the run, so that a mode
         # whose whole promise is "writes nothing under releases\" is held to it.
@@ -1774,7 +1778,29 @@ try {
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("never in releases")) ("a published tree holding NONFREE\ was assembled:`n" + $r.Output)
         Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a published NONFREE\."
         Remove-Item -LiteralPath (Join-Path $pubRoot "NONFREE") -Recurse -Force
-        Remove-Item -LiteralPath $recPath -Force
+        Write-AsciiFile -Path $recPath -Lines (ConvertTo-DriverPackRecord -Version $relVersion -Pack $null)
+
+        # The record is required from 3.2.0.0 (an older release may lack
+        # it), and a tracked file named like one of the seven is found
+        # whatever its path, git's quoting of a non-ASCII directory included.
+        Assert-True (Test-DriverPackRecordRequired -Version "3.2.0.0") "a 3.2.0.0 release may lack drvpack.txt."
+        Assert-True (Test-DriverPackRecordRequired -Version "10.0.0.0") "a 10.0.0.0 release may lack drvpack.txt."
+        Assert-True (-not (Test-DriverPackRecordRequired -Version "3.1.0.0")) "a 3.1.0.0 release is required to carry drvpack.txt."
+        $quotedRepo = Join-Path $script:work "tracked-names"
+        $oddDir = Join-Path $quotedRepo ("docs\" + [string][char]0x00E9)
+        Ensure-Directory $oddDir
+        Set-Content -LiteralPath (Join-Path $oddDir "USBSTOR.SYS") -Value "tracked by hand" -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $quotedRepo "usbstor.txt") -Value "not one of the seven" -Encoding ASCII
+        $saved = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & git -C $quotedRepo init -q 2>&1 | Out-Null
+            & git -C $quotedRepo add -A 2>&1 | Out-Null
+        } finally {
+            $ErrorActionPreference = $saved
+        }
+        $hits = @(Find-DriverPackTrackedNames -Repo $quotedRepo -Names @($script:DriverPackSeven.Keys))
+        Assert-True ($hits.Count -eq 1 -and $hits[0].EndsWith("/USBSTOR.SYS")) ("a tracked USBSTOR.SYS under a non-ASCII directory was not found: " + ($hits -join ", "))
 
         # A cut checks the pack at the checkout's HEAD before it builds
         # anything: c4's wrong SHA256.TXT stops it there.
@@ -2090,6 +2116,8 @@ try {
         foreach ($pair in @(@("silent.reg", "SILENT.REG"), @("silent.vbs", "SILENT.VBS"), @("silent-on.bat", "silent-on.bat"), @("silent-off.bat", "silent-off.bat"))) {
             Copy-Item -LiteralPath (Join-Path $repo ("src\" + $pair[0])) -Destination (Join-Path $pubRoot4 ("tools\silent\" + $pair[1])) -Force
         }
+        # The driver pack's record, required from 3.2.0.0 (task 43.3).
+        Write-AsciiFile -Path (Join-Path $pubRoot4 "drvpack.txt") -Lines (ConvertTo-DriverPackRecord -Version $relVersion -Pack $null)
 
         $up4 = Join-Path $script:work "upload-4dir"
         Ensure-Directory $up4
