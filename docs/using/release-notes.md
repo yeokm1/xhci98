@@ -142,8 +142,9 @@ included.
   "Targets and their standing"
   says what each one rests on.
 - It is not a mass-storage driver for Windows 98 SE. Storage on Windows 98
-  SE, Bulk-Only and UAS alike, needs NUSB's mass-storage component; see
-  "Windows 98 SE and ME: the stock install, and storage".
+  SE, Bulk-Only and UAS alike, needs NUSB's mass-storage files, which from
+  `3.2.0.0` the download carries and the installer offers; see "Windows 98
+  SE and ME: the stock install, and storage".
 - It is not signed by Microsoft. The 32-bit drivers are not signed at all:
   Windows 98 SE and ME do not check; Windows 2000 and XP warn and install;
   32-bit Vista and 7 warn and install. From `2.3.0.0` the 64-bit drivers
@@ -1341,15 +1342,27 @@ storage through Windows ME's own class drivers (read on `2.3.0.0`,
 **Storage on Windows 98 SE needs NUSB's mass-storage component**, for
 Bulk-Only and UAS devices alike. Windows 98 SE has no USB mass-storage
 driver, and a drive letter there comes from a mapping layer that this
-package does not replace. The component is five files, which NUSB 3.3 and
+package does not replace. The component is seven files, which NUSB 3.3 and
 3.6 install:
 
-- `USBSTOR.INF` and `USBSTOR.SYS`, the Bulk-Only driver;
+- `USBSTOR.INF` and `USBSTOR.SYS`, the USB storage driver;
+- `USBAUTH.SYS` and `USBU2A.SYS`, two filters `USBSTOR.INF` copies with it
+  and installs for a few card readers and older devices;
 - `USBNTMAP.INF` and `USBNTMAP.SYS`, which map a USB disk to a drive letter;
 - `USBMPHLP.PDR`, the mapping port driver.
 
-They are Microsoft's, and this package does not carry them. SweetLow's stack
-alone has no storage part.
+They are Microsoft's, apart from `USBU2A.SYS`, a third party's. SweetLow's
+stack alone has no storage part.
+
+**From `3.2.0.0` the download carries them, and the installer offers them
+on Windows 98 SE.** They are NUSB 3.3's copies, unmodified, in a folder of
+their own beside the package with a `NOTICE.md` saying whose they are; they
+are not this project's work, and no licence to redistribute them has been
+established. The installer's Components page has a row for them on Windows
+98 SE only. Install them unless NUSB is already installed: UAS disks under
+`xhciuas.sys` need them as well as Bulk-Only ones. A download built without
+them says so in its `readme.txt`, and then the routes below are the only
+ones.
 
 - **Without them**, a Bulk-Only stick has no driver at all: "Unknown Device",
   Code 28. A UAS device installs "xHCI98 USB Attached SCSI Storage" and then
@@ -1357,7 +1370,7 @@ alone has no storage part.
   load the device driver"), because `xhciuas.inf` names `USBNTMAP.SYS` as a
   filter on the device; a restart does not change that.
 - **With NUSB 3.3 or 3.6 installed**, storage works.
-- **The five files can also be installed on their own**, without NUSB's USB
+- **The seven files can also be installed on their own**, without NUSB's USB
   2.0 stack: point the Add New Hardware Wizard, or Update Driver on the
   device, at a folder holding them. **On the first storage device, one step
   is not obvious**: Windows binds the new disk to its own generic "Disk
@@ -3857,9 +3870,9 @@ or says it was found by reading the code.
   suspended when Windows asks, but a hub, the root hub and the controller
   never are, and the driver never suspends anything on a timer of its own.
   See "XhciSelectiveSuspend: putting idle devices to sleep".
-- **No USB storage on a stock Windows 98 SE.** Storage needs NUSB's
-  mass-storage component; see "Windows 98 SE and ME: the stock install, and
-  storage".
+- **No USB storage on a stock Windows 98 SE without NUSB's storage files.**
+  From `3.2.0.0` the installer offers them on Windows 98 SE; see "Windows 98
+  SE and ME: the stock install, and storage".
 - **Windows Vista x64 and Windows 7 x64 need test-signing mode, or driver
   signature enforcement disabled.** The x64 drivers carry the project's own
   test signature, not Microsoft's. Turn on test-signing mode once (see
@@ -4127,8 +4140,13 @@ record is `docs/contributing/legal-provenance.md`.
 project's own work. A download that bundles Stor98 carries it built from
 this project's source tree but under its own licence (BSD-3-Clause), with
 its licence and notice beside it ("NVMe drives behind Thunderbolt or
-USB4"). No Microsoft file is in the download: the `usbd.sys` and `usbui.dll` the install
-needs are Windows' own and are copied by Windows from your own installation
-source. On Windows 98 SE, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as a
-filter on the UAS device; the file is named, never shipped, and NUSB's
-mass-storage install places it.
+USB4"). The `usbd.sys` and `usbui.dll` the install needs are not in the
+download: they are Windows' own and are copied by Windows from your own
+installation source. From `3.2.0.0` the download's only Microsoft files are
+NUSB 3.3's seven Windows 98 SE storage files ("Windows 98 SE and ME: the
+stock install, and storage"), unmodified, in a folder of their own with a
+`NOTICE.md` saying whose they are; they are not this project's work and are
+under no licence of this project's, and no licence to redistribute them has
+been established. A download built without them carries no Microsoft file,
+and its `readme.txt` says so. On Windows 98 SE, `xhciuas.inf` names
+`USBNTMAP.SYS` as a filter on the UAS device.

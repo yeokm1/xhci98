@@ -2631,6 +2631,30 @@ try {
     Assert-True ($releaserText -match "No Microsoft file is in this download") `
         "make-release.ps1 lost the one defensible form of the no-Microsoft-file statement."
 
+    # Since roadmap-usb4 task 43.1 the download may carry NUSB 3.3's storage
+    # files from the driver pack (legal-provenance.md section 5), so that
+    # statement is one of two texts chosen by whether the pack is in it. The
+    # template must hold neither directly, and the text for a download with
+    # the pack must not say it carries no Microsoft file.
+    Write-Step "the download's Microsoft-file texts follow whether the driver pack is in it"
+    if ($tplStart -ge 0 -and $tplEnd -gt $tplStart) {
+        Assert-True (-not $tplText.Contains("No Microsoft file is in this download")) `
+            "the readme template says 'No Microsoft file is in this download' itself; it must come through {MSFILES}, chosen by whether the driver pack is included."
+        foreach ($ph in @("{MSFILES}", "{MSSTORAGE}")) {
+            Assert-True $tplText.Contains($ph) "the readme template lost $ph, the text that follows whether the driver pack is included."
+        }
+    }
+    $msChoice = [regex]::Match($releaserText, "(?s)if \(\`$driverPackIncluded\) \{\s*\`$readmeMsStorage = @'(.*?)\} else \{\s*\`$readmeMsStorage = @'(.*?)\n    \}")
+    Assert-True $msChoice.Success "make-release.ps1 no longer chooses the readme's Microsoft-file texts on `$driverPackIncluded as this test reads it."
+    if ($msChoice.Success) {
+        Assert-True ($msChoice.Groups[1].Value -notmatch "No Microsoft file|carries no Microsoft") `
+            "the readme's text for a download WITH the driver pack says it carries no Microsoft file."
+        Assert-True ($msChoice.Groups[1].Value -match "NOTICE\.md") `
+            "the readme's text for a download with the driver pack no longer points at the pack's NOTICE.md."
+        Assert-True ($msChoice.Groups[2].Value -match "No Microsoft file is in this download") `
+            "the readme's text for a download without the driver pack no longer says it carries no Microsoft file."
+    }
+
     # And the third claim, which a fix after the audit of 2026-09-07 put IN
     # while
     # removing the other two: an introduction that named Windows 98 SE and

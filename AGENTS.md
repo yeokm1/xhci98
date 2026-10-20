@@ -595,7 +595,15 @@ Since 2.4.0.0 it refuses the CD's compressed names too (`USBD.SY_`): the
 `hidclass.sys` and `hidparse.sys`, which the user copies from their own
 Windows 2000 CD to the floppy - the media still carries none of them
 (`OEM-W2K` holds that entry's shape).
-`legal-provenance.md` section 5 records why. Build install media with `scripts\package\make-package.ps1`, never by
+`legal-provenance.md` section 5 records why. **One exception, from
+`3.2.0.0`, is the release download's, not the media's** (owner,
+2026-10-20): NUSB 3.3's seven Windows 98 SE storage files, unmodified, from
+the separate driver-pack repository `usb98-drivers-nonfree`, staged into
+`out\` and the upload set in a folder of their own with the pack's
+`NOTICE.md`, never into a commit or `releases\<version>\`, and never into a
+flavour directory the gates check (roadmap-usb4 tasks 43.1 to 43.3;
+`legal-provenance.md` section 5, "NUSB 3.3's Windows 98 SE storage
+files"). Build install media with `scripts\package\make-package.ps1`, never by
 hand-copying the `.sys` and `.inf`. Its `-Arch` moves three things together
 and they are not separable: the obj subdirectory, which of the two INFs is
 staged for each driver, and the architecture both gates run under. A published release
@@ -754,15 +762,22 @@ rules that bind day-to-day work, and none of them is optional.
   the repository records where to fetch them: filename, version, SHA-256,
   URL, stated licence limit (`docs/references/README.md` is the pattern).
   Public availability of a document is not permission to rehost it.
-- The release download carries no Microsoft file. From 0.0.0.4 to 1.0.0.0
+- The release download carries no Microsoft file but one recorded
+  exception (below). From 0.0.0.4 to 1.0.0.0
   the assembled asset carried three (`usbd98.sys`, `usbd2k.sys`,
   `usbhub98.sys`), by a decision `legal-provenance.md` section 5 records, and
   that was withdrawn on 2026-09-02 before any upload: release 1.0.0.1 has the
   OS supply both files through the INF's `LayoutFile`, 1.0.1.0 adds
   `usbport.sys` on the NT path by the same route, and 1.0.2.0 adds `usbui.dll`
-  on all four paths by it, to dirid 11 rather than 10. **Do not put a
-  Microsoft file back onto the media, under any name, without a decision
-  recorded there**, and do not write "this project redistributes nothing"
+  on all four paths by it, to dirid 11 rather than 10. The one exception
+  since is decided for `3.2.0.0` (owner, 2026-10-20) and recorded there:
+  NUSB 3.3's seven Windows 98 SE storage files, unmodified, in the release
+  download only, from the driver pack `usb98-drivers-nonfree` with its
+  `NOTICE.md`, never in a commit, and with no licence to redistribute them
+  established; the generated readme says which kind of download it is.
+  **Do not put any other Microsoft file onto the media or the download,
+  under any name, without a decision recorded there**, and do not write
+  "this project redistributes nothing"
   anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP` up to
   `3.0.0.0`, from `2.4.0.0` `XHCICLN` and `XHCICL64`, from `3.0.0.0`
   `XHCIINST`, `XHCIIN64`, `XHCITR` and `XHCITR64`, and from `3.1.0.0`

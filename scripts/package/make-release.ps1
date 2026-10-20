@@ -2697,6 +2697,16 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             $stor98.Version, ($s98Arches -join " and "))
     }
 
+    # --- NUSB's 98 SE storage files, from the driver pack -------------------
+    #
+    # The one exception to "no Microsoft file in the download"
+    # (docs\contributing\legal-provenance.md section 5, the owner's decision
+    # of 2026-10-20): NUSB 3.3's seven storage files, from the driver pack,
+    # in the upload set only and never in releases\. Staging them is
+    # roadmap-usb4 task 43.3; until it sets this, every generated text says
+    # the download carries no Microsoft file.
+    $driverPackIncluded = $false
+
     # --- the version, from the INF ------------------------------------------
     $infVersion = Get-InfDriverVersion -Path $infPath
     if ($Version -eq "") {
@@ -4685,7 +4695,7 @@ part of it: they are in the TOOLS\PORTSW directory, one copy for all of
 them.
 
 Two files the driver depends on are NOT in the package, because they are
-Windows' own, unmodified, and no Microsoft file is in this download:
+Windows' own, unmodified, and this download does not carry them:
 
   usbd.sys     Helper routines the drivers above this one call. Without it
                the USB devices' own drivers do not load.
@@ -4720,14 +4730,16 @@ USB STORAGE ON WINDOWS 98 SE NEEDS NUSB'S MASS-STORAGE PART
 ...........................................................
 
 Windows 98 SE has no USB storage driver, and a drive letter there comes from
-a layer this package does not replace. It needs five files, which NUSB 3.3
+a layer this package does not replace. It needs seven files, which NUSB 3.3
 and NUSB 3.6 install:
 
-      USBSTOR.INF, USBSTOR.SYS     the Bulk-Only storage driver
+      USBSTOR.INF, USBSTOR.SYS     the USB storage driver
+      USBAUTH.SYS, USBU2A.SYS      two filters USBSTOR.INF installs for a
+                                   few card readers and older devices
       USBNTMAP.INF, USBNTMAP.SYS   what gives a USB disk a drive letter
       USBMPHLP.PDR                 the mapping port driver
 
-They are Microsoft's, and this package does not carry them.
+{MSSTORAGE}
 
   WITHOUT THEM a USB stick has no driver at all ("Unknown Device", Code 28),
   and a UAS disk installs and then sits at Code 2 ("The NTKERN.VXD device
@@ -4736,7 +4748,7 @@ They are Microsoft's, and this package does not carry them.
 
   WITH NUSB 3.3 OR 3.6 INSTALLED, storage works.
 
-  THE FIVE FILES CAN ALSO BE INSTALLED ON THEIR OWN, without the rest of
+  THE SEVEN FILES CAN ALSO BE INSTALLED ON THEIR OWN, without the rest of
   NUSB: point the Add New Hardware Wizard, or Update Driver on the device,
   at a folder holding them. ON THE FIRST STORAGE DEVICE, ONE STEP IS NOT
   OBVIOUS. Windows gives the new disk its own generic "Disk drive" before it
@@ -6066,12 +6078,7 @@ also carry a few small support routines that Microsoft's driver kit links in
 are not this project's work; docs/contributing/legal-provenance.md, in the
 project's source repository, records them.
 
-No Microsoft file is in this download. The usbd.sys and usbui.dll the
-install needs are copied by Windows from your own Windows installation
-source (section 3), and on Windows 98 SE the storage files of section 3 come
-from NUSB; nothing here grants you any right in them, and nothing here
-copies them. xhciuas.inf names NUSB's USBNTMAP.SYS on Windows 98 SE; the
-file is named, never shipped.
+{MSFILES}
 
 The provenance record for everything the project depends on but does not own
 is in docs/contributing/legal-provenance.md, in the project's source
@@ -6189,8 +6196,45 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
 "@
     }
 
+    # **What the download says of Microsoft's files follows what it carries.**
+    # Without the driver pack it carries none; with it, NUSB 3.3's seven
+    # storage files in a folder of their own, and the readme - which is
+    # tracked, in releases\ - says so without the files ever being there.
+    if ($driverPackIncluded) {
+        $readmeMsStorage = @'
+They are Microsoft's, apart from USBU2A.SYS (a third party's). This
+download carries NUSB 3.3's copies of them, unmodified, in a folder of their
+own with a NOTICE.md saying whose they are (LICENCE, at the end).
+'@
+        $readmeMsFiles = @'
+Microsoft files are in this download in one place only: the seven Windows
+98 SE storage files of section 3, in a folder of their own, copied
+unmodified from NUSB 3.3 (Microsoft's, apart from USBU2A.SYS, a third
+party's). They are not this project's work. No licence to redistribute them
+has been established, nothing here grants you any right in them, and the
+NOTICE.md beside them says whose they are. The usbd.sys and usbui.dll the
+install needs are not in this download: Windows copies them from your own
+Windows installation source (section 3).
+'@
+    } else {
+        $readmeMsStorage = @'
+They are Microsoft's, apart from USBU2A.SYS (a third party's), and this
+download does not carry them.
+'@
+        $readmeMsFiles = @'
+No Microsoft file is in this download. The usbd.sys and usbui.dll the
+install needs are copied by Windows from your own Windows installation
+source (section 3), and on Windows 98 SE the storage files of section 3 come
+from NUSB; nothing here grants you any right in them, and nothing here
+copies them. xhciuas.inf names NUSB's USBNTMAP.SYS on Windows 98 SE; the
+file is named, never shipped.
+'@
+    }
+
     $readme = $template.
         Replace("{TESTBANNER}", $testBanner).
+        Replace("{MSSTORAGE}", $readmeMsStorage.TrimEnd()).
+        Replace("{MSFILES}", $readmeMsFiles.TrimEnd()).
         Replace("{VERSION}", $Version).
         Replace("{DATE}", $today).
         Replace("{RELEASEDIR}", $readmeReleaseDir).
@@ -6753,6 +6797,12 @@ is statically linked into each, which NOTICE.TXT beside this file records.
         Write-GeneratedText -Path (Join-Path $insttoolStaged "readme.txt") -Lines $instLines
         Write-Ok "readme.txt written beside the installer's executables"
 
+        if ($driverPackIncluded) {
+            $instMsFiles = "The download's only Microsoft files are NUSB 3.3's Windows 98 SE storage`r`n" +
+                           "files, in a folder of their own with their own NOTICE.md."
+        } else {
+            $instMsFiles = "This package carries no Microsoft file."
+        }
         $instNotice = @"
 ==============================================================================
                           x h c i 9 8   {VERSION}
@@ -6779,7 +6829,8 @@ Driver Kit 7.1. What this file records is the linkage; the project's full
 provenance record is docs\contributing\legal-provenance.md, section 2a.
 Nothing in this file is a statement that the arrangement is or is not
 sufficient. The tools call Windows' own setup routines at run time; they
-carry no Microsoft setup program and this package carries no Microsoft file.
+carry no Microsoft setup program.
+$instMsFiles
 "@
         $instNotice = $instNotice.Replace("{VERSION}", $Version)
         Write-GeneratedText -Path (Join-Path $insttoolStaged "NOTICE.TXT") `
@@ -7123,8 +7174,14 @@ after checkout. Restore it with:  git checkout -- LICENSE
     if ($null -ne $uploadRoot) {
         Write-Host ""
         Write-Host "Upload:     $uploadZip"
-        Write-Host "            The same tree, zipped, with no Microsoft file. This is the"
-        Write-Host "            GitHub release asset; it is git-ignored and must stay that way."
+        if ($driverPackIncluded) {
+            Write-Host "            The same tree, zipped, with NUSB 3.3's storage files added in a"
+            Write-Host "            folder of their own: this download's only Microsoft files. This is"
+            Write-Host "            the GitHub release asset; it is git-ignored and must stay that way."
+        } else {
+            Write-Host "            The same tree, zipped, with no Microsoft file. This is the"
+            Write-Host "            GitHub release asset; it is git-ignored and must stay that way."
+        }
         Write-Host "            See releases\README.md and docs\contributing\legal-provenance.md"
         Write-Host "            section 5."
     } elseif ($uploadPublishError -ne "") {

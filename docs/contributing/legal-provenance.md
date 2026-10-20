@@ -117,6 +117,7 @@ identification.
 | The two `usbd.sys` builds and Windows 98 SE's `usbhub.sys` | No | `tools/` (git-ignored) | Reference copies, staged from the user's own install media for the import gate's Windows 98 evidence and the Windows 2000 VM setup. The assembled release download carried them from 0.0.0.4 to 1.0.0.0 and carries them no longer; see section 5 |
 | Disassembly extracts taken from those binaries | No | `tools/*-extracted/` (git-ignored) | Convenience copies only; see section 4 |
 | Staged install media | No | `out/` (git-ignored) | Generated; the upload set for a release is assembled here |
+| NUSB 3.3's Windows 98 SE storage files (`USBSTOR.INF`, `USBSTOR.SYS`, `USBNTMAP.INF`, `USBNTMAP.SYS`, `USBMPHLP.PDR`, `USBAUTH.SYS`, `USBU2A.SYS`) and the driver pack's `NOTICE.md` | No, and never; from task 43.3 a cut is refused whose `releases/` tree or tracked files hold any of the seven names | The owner's separate repository `usb98-drivers-nonfree`, `non-free/storage/nusb33/w98se/`; copied at packaging time into `out/` and the upload set only, from `3.2.0.0` | Microsoft's, apart from `USBU2A.SYS` ("USB Compliance"), unmodified from NUSB 3.3; not this project's work, and no licence to redistribute them has been established. The decision, the channel and each file's evidence are in section 5, "NUSB 3.3's Windows 98 SE storage files" |
 | Stor98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled Stor98 build" below. Since 2026-10-19 the release folders they are copied from are tracked, as part of `src/stor98/` (the next row); the copies in `out/` are not |
 | Stor98, its source, docs, tests and released builds (BSD-3-Clause) | Yes, from 2026-10-19 (roadmap-usb4 task 42-A.20) | `src/stor98/` | The Stor98 project's tracked files, imported as one snapshot (owner, 2026-10-19). Not this project's GPL-2.0 code: Stor98's own `LICENSE` and `NOTICE` govern every file there; see "Stor98 in this tree" below |
 | The Windows 98 Second Edition DDK (`win98se_ddk.exe`) | No | `tools/win98ddk/`, extracted into `tools/win98ddk-extracted/` (git-ignored) | Fetched on 2026-10-15 from the Internet Archive for roadmap-usb4 task 39-0.3; its identity, SHA-256, source URL and the licence it states are in `docs/references/README.md`, "Windows 98 DDK". Extracted with 7-Zip, not installed; nothing in it was executed. The CONFIGMG and VMM values of `src/cm/cm_cfgmg.h` are what is taken from it (section 4, the CONFIGMG row) |
@@ -1505,7 +1506,9 @@ by `scripts/package/extract-usbd-sources.ps1`, as reference copies;
 `scripts/import-gate/win98-evidence.list` records the Windows 98 pair's
 identity, never content. `releases/<version>/`, the tracked half of
 packaging, carries `xhci98.sys` and `xhci98.inf` and stops there, and since
-1.0.0.1 so does the release download.
+1.0.0.1 so does the release download, with one exception decided for
+`3.2.0.0` that the repository never carries: NUSB 3.3's Windows 98 SE
+storage files, below.
 
 The overlap audit swept the full added-file history and found no Microsoft or
 NUSB binary in it. That is still true. The exception below was made a release
@@ -1533,6 +1536,67 @@ holding any of them or the compressed name of any file it refuses, and
 lines. The legs that read the route used copies taken from the
 development machine's own Windows 2000 SP4 CD image, in a git-ignored
 directory (`out\p38-matrix\legs\f6w2k\`).
+
+### NUSB 3.3's Windows 98 SE storage files: in the release download, from the driver pack
+
+Decided by the owner on 2026-10-20 (roadmap-usb4 tasks 43.1 to 43.5). Windows
+98 SE has no USB mass-storage driver, and storage there, Bulk-Only and UAS
+alike, needs the files NUSB's mass-storage part installs (`xhciuas.inf`
+names `USBNTMAP.SYS` as a filter on the UAS device; without it a UAS disk
+sits at Code 2). From `3.2.0.0` the release download may carry seven of
+them, and this is the one exception to "the release download carries no
+Microsoft file" since 1.0.0.1. What is decided:
+
+- **The channel is the release download only.** The files are never in a
+  commit of this repository, under `releases/<version>/` or anywhere else;
+  they are taken at packaging time from a separate repository of the
+  owner's, `usb98-drivers-nonfree` (its `non-free/storage/nusb33/w98se/`
+  folder), and staged into `out\` and the upload set alone (task 43.3).
+  The reason is the one given for the 0.0.0.4 to 1.0.0.0 exception below: a
+  release asset can be withdrawn, and a git blob cannot be without rewriting
+  history.
+- **No licence to redistribute them has been established.** None was found
+  for any of the seven, none is claimed here or in the pack, and the pack's
+  `NOTICE.md`, shipped beside the files, says whose each is and that its
+  owner grants no licence to them. The owner took the decision with that
+  stated; it is a fact about the decision, not a permission.
+- **The files are unmodified**, byte for byte as NUSB 3.3 for English
+  Windows 98 SE ships them: `nusb33e.exe`, 774,144 bytes, SHA-256
+  `f1f30a800cf6013eb6f18db775d88e777ddc3924622e6560edd2dcd7b53698d3`.
+  NUSB 3.3's INFs are taken rather than 3.6's, which copy no file on their
+  own; the binaries are the same in both.
+- **The installer offers them on Windows 98 SE only**, as a row the user can
+  untick, and installs over no file already present (task 43.4).
+
+Per file, with its evidence. Static: the version resource read from the
+pack's copy (PowerShell's `(Get-Item <file>).VersionInfo`, and for
+`USBMPHLP.PDR`, a VxD whose resource that reader does not parse, the
+`VS_VERSION_INFO` strings in the file itself); the INFs' own comment
+headers; nothing was executed. The hashes are those of the pack's
+`SHA256.TXT`, checked against the files on 2026-10-20.
+
+| File | Bytes | SHA-256 | Whose, by the evidence |
+|---|---|---|---|
+| `USBSTOR.SYS` | 21,040 | `b92a6a1582287867d4950495c0a746f0f5d8831bc311061423f8645073e42d8c` | Microsoft Corporation, "Microsoft(R) Windows(R) Millennium Operating System", 4.90.3000.1 |
+| `USBNTMAP.SYS` | 7,136 | `d1595cdbfdc22925c4e47d1720f117fe6c9beda36417ba41a1fd7398878cc6e4` | Microsoft Corporation, the same product, 4.90.3000 |
+| `USBMPHLP.PDR` | 4,861 | `e8e0604fddcd1772f1c5cba99de9d72d79288d0b303ed3e7bf02d36160698c1c` | Microsoft Corporation, the same product, 4.90.3000 ("USBMPHLP Virtual Device (Version 4.0)") |
+| `USBAUTH.SYS` | 6,608 | `12b09e67a5a9a8a883ab40b91c59be294f2ddc5940b9780c056176df04a463d1` | Microsoft Corporation, the same product, 4.90.3000.1 |
+| `USBU2A.SYS` | 5,183 | `1c5656dcf3dbbca97236fc0239537a34ae5a6ca1597f29cadc9c38537b2a7b78` | "USB Compliance", 1.42, "Copyright c 2000"; no product name |
+| `USBSTOR.INF` | 22,017 | `e78b5f2d2d30b039d74d670f09ba41c39bdfca058b72fd7c22eb7d55f81f0f6b` | Microsoft's INF (`provider=%MSFT%`), with the edits its own comment header lists (eight, seven of them Maximus Decim's and one unattributed); its `CopyFiles` copy `USBAUTH.SYS` and `USBU2A.SYS` with the driver |
+| `USBNTMAP.INF` | 1,339 | `372d0a4829eab33cf5c6a1fca347a3be45da82d69a692e89b33d28dc02848657` | Microsoft's INF (`Provider=%Msft%`), with the two edits its own comment header lists, both Maximus Decim's |
+
+What is published, when the pack is included: the seven files and the
+pack's `NOTICE.md`, in a folder of their own in the upload set; the
+generated readme and the installer's `NOTICE.TXT` saying so in place of
+"No Microsoft file is in this download" (`make-release.ps1`, which chooses
+the text by whether the pack is in the download); and the record of which
+pack revision was used (task 43.3). A download built without the pack
+carries none of them and says so as before. Whether the seven are all a
+stock Windows 98 SE needs is not yet read (task 43.5); nothing here or in the
+pack claims it.
+
+Status: decided, not yet in any cut. `3.1.0.0` and every earlier download
+carry none of the seven.
 
 ### The GitHub release download carried three of them, until 1.0.0.1
 
