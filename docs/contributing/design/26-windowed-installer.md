@@ -1003,14 +1003,12 @@ NUSB 3.6's own INFs alike. Each file reads one of four states
 - **other**: present with other bytes, or unreadable, or for an INF any
   candidate that is not the same.
 
-An INF of the same bytes found while every binary present is this
-installer's and at least one is (the setup engine's own copy made from
-the package directory at a plug after an earlier run, which no run has
-recorded yet) counts as this installer's (`inst_stor_norm`): it is this
-install's own source, not another installation. Before the states are
-read, each install run first reconciles what Windows bound since the
-last run, by the uninstall's adoption rule (section 6.5.8 step 1), so
-such copies and devices are recorded where that rule admits them.
+Whether an earlier run of this installer put the seven in the package
+directory is recorded apart from the files (the record's `Source`,
+section 6.5.6): it tells this installer's own deployment from another
+installation when the files alone cannot, as when the setup engine has
+since made its own copies of the INFs at a plug, or when a file present
+before that run was the download's own bytes.
 
 NUSB's own uninstall entry, `HKLM\Software\Microsoft\Windows\
 CurrentVersion\Uninstall\USB20U` (static: NUSB 3.3's `_NUSB.INF` line
@@ -1056,10 +1054,10 @@ case (`inst_stor_case`, host-tested on every combination of states):
 | Case | When | A ticked run |
 |---|---|---|
 | none | every file absent | the same-bytes route: the five binaries copied, the seven in the package directory, the devices of section 6.5.5 |
-| complete | all seven present, at least one not this installer's | nothing: no file copied, the pack not in the package directory, no device job; Setup binds with what is there. The text says the files were found installed and are left as they are |
+| complete | all seven present, at least one not this installer's, and no `Source` recorded | nothing: no file copied, the pack not in the package directory, no device job; Setup binds with what is there. The text says the files were found installed and are left as they are |
 | partial, the same | some present, every present one the same or this installer's (the binaries without their INFs, when the binaries are the same, are this row) | the same-bytes route: only the absent binaries copied; the present ones untouched by the installer, and any copy Setup makes over them the same bytes |
 | partial, other | some present and one of them other: another release, a patched file, a file that cannot be read, an INF of another text under a renamed name | no route that keeps the bytes is established: nothing copied, the pack not in the package directory (so no first plug can take it either), no device job; the run reports the storage install incomplete with the files found and their states, a step left (exit 4), and the text that storage is not known to be ready |
-| this installer's | every present file this installer's (an update over its own install, section 6.5.7) | the same-bytes route: an absent one (deleted since) copied again; nothing present replaced |
+| this installer's | every present file this installer's, or `Source` recorded and every present file this installer's or the same (an update over its own install, section 6.5.7) | the same-bytes route: an absent one (deleted since) copied again; nothing present replaced; the package directory's seven refreshed |
 
 **The installer's own copies** (`stor_place`), only on the same-bytes
 route and only for the binaries (`inst_stor_copy_set`, host-tested); the
@@ -1078,24 +1076,37 @@ for these files.
 
 **What the guarantee covers.** Every one of the seven present when the
 run starts, through every copy the run's own jobs make and every copy a
-later device install makes from the package directory, as long as that
-file is what the run found. A file another package lays down after this
-run over this installer's recorded copy is that package's change, made
-outside this installer's operation; the next run of this installer reads
-it as other (its bytes no longer the recorded ones), and with the case
-then partial-other, the package's copy is made without the seven, so the
-pack leaves `DevicePath`; the uninstall never deletes it (section
-6.5.8). Until that next run a later plug may still find the pack's INFs
-on `DevicePath`, which is said in the release notes as the one limit of
-the guarantee.
+later device install makes from the package directory while that file
+is still the one the run found. The 43.4 line itself sends the pack's
+INFs to Setup through the package directory on `DevicePath`, and Setup
+copies from them over whatever is at the destination when a device is
+later installed: a file another package lays down at a destination
+after this run, with other bytes, could be replaced by a later first
+plug that picks the pack's INF. Nothing documented closes that without
+editing the pack's INFs or keeping them off `DevicePath`, which the line
+excludes, so the design does not claim it: the next run of this
+installer reads such a file as other and withdraws the pack (below), the
+uninstall never deletes it (section 6.5.8), and whether the owner
+accepts this residual or wants the pack withdrawn from `DevicePath`
+once the setup engine has made its own copies is section 14's open
+decision. The release notes state the residual.
+
+**Withdrawal.** When a run finds the case partial-other while `Source`
+is recorded (an earlier run deployed the seven), or the row is unticked
+over a recorded `Source`, the install directory is taken off
+`DevicePath` first, before any step that can fail (`devicepath_update`
+without it), and only the package's copy made without the seven puts it
+back; a copy that fails leaves the directory off `DevicePath`, the run
+saying to run the installer again, so the pack is never left published
+over a file it could replace. `Source` is then cleared.
 
 **Order in the run** (record 23 section 6.2 and record 27 section 6),
-each step failing closed: the baseline (section 6.5.6) and the
-reconciliation; the states read again and compared with the Summary's
+each step failing closed: the baseline (section 6.5.6); the withdrawal
+above where it applies; the states read again and compared with the Summary's
 case; `PreExisting`; the storage copies; and only when every copy of the
-set is in place and the case still admits the route, the package's copy
-made with the seven in it and `DevicePath` naming it (record 23 section
-4.4). A changed case, a copy that fails or a `.TMP` that differs leaves
+set is in place and the case still admits the route, `Source`, then the
+package's copy made with the seven in it and `DevicePath` naming it
+(record 23 section 4.4). A changed case, a copy that fails or a `.TMP` that differs leaves
 the run's storage part there: the package's copy is made without the
 seven (so nothing of the pack reaches `DevicePath`), no storage job runs,
 and the binaries already moved into place in this run stay recorded for
@@ -1177,8 +1188,13 @@ directory does, then a replug. This is a note, not a step.
   run on 98 SE that offered the row, once its confirmation is given;
 - `PreExisting` (`REG_DWORD`): 1 when the baseline found any of the seven
   that was not this installer's; written once, never cleared, with the
-  run's first storage change (before the first storage copy, or a
-  record the reconciliation makes), never by a run that makes none;
+  run's first storage change (before the first storage copy), never by
+  a run that makes none;
+- `Source` (`REG_DWORD`): 1 once a run has made the package's copy with
+  the seven in it, written just before that copy; cleared by a run that
+  makes the copy without them (the withdrawal of section 6.5.4, or the
+  row unticked). It is what tells this installer's own deployment from
+  another installation on an update (section 6.5.3);
 - `Files`: one value per binary the installer copied, its name the full
   path it was copied to and its data the SHA-256 of its bytes, written
   before the file is moved into place (section 6.5.4);
@@ -1217,8 +1233,11 @@ the end of the run; the baseline before the run's first change.
 
 The record's `Choice` is the row's default (an update keeps the choice;
 the console's question takes it as its Enter). Ticked, the files the
-record names with their bytes unchanged are this installer's, so the
-case is "this installer's" and nothing present is replaced: the
+record names with their bytes unchanged are this installer's, and with
+`Source` recorded a file of the download's bytes (one the setup engine
+copied at a later plug, or one that was there before the first run and
+that run kept) counts with them, so the case is "this installer's" and
+nothing present is replaced: the
 installed system files stay as they are, and only the package
 directory's copy of the seven is refreshed by the package's copy (record
 23 section 4.4's lists), where the wizards and the helper take them from.
@@ -1226,7 +1245,8 @@ A recorded file whose bytes have changed is other, and the run copies
 nothing (the partial, other case). Unticked, the package's copy is made
 without the seven and nothing else changes: the system files, the
 devices and the record stay (unticking is "not now", as for every
-component, section 5.3), and the uninstall removes them later. A download
+component, section 5.3), and the uninstall removes them later; with
+`Source` recorded the withdrawal of section 6.5.4 runs first. A download
 without the pack keeps the record and the system files as they are; the
 row is greyed (section 6.5.1) and the package's copy has no seven, so
 devices first plugged afterwards find the setup engine's own copies in
@@ -1238,23 +1258,17 @@ asks.
 On Stor98's ownership model (section 6.3): it removes what it placed, and
 nothing it does not own. In section 9.3 step 4's order:
 
-1. **Adoption** of the storage devices Windows bound after the run,
-   which is the usual case (a stick first plugged after the install):
-   when `PreExisting` is clear and `USB20U` is absent, every devnode,
-   present or not, whose driver key names `USBSTOR.SYS` (`NTMPDriver`) or
-   `USBMPHLP.PDR` (`PortDriver`) and that `Devices` does not name is added
-   to it when its `InfPath` names exactly one copy in `INF\OTHER` whose
-   bytes are one of the pack's two INFs' and whose `OEM Name` value's data
-   names that INF, with that copy added under `Infs` by its `OEM Name`
-   value first; a device whose `InfPath` names a copy of other bytes, or
-   none, or more than one, is not adopted and keeps every file it uses
-   (step 4). This is section 6.3's adoption (draft 12), which the task's
-   ownership model names: with no file of the seven on the machine before
-   the install and NUSB not installed since, a binding through a copy of
-   the pack's own INF text is the install's own source at work. The bytes
-   cannot tell a hand install of the very same seven files from another
-   folder after this install (`inst_stor_adoptable`, host-tested); that
-   one limit is said in the release notes.
+1. **No adoption.** A storage device Windows bound after the run (a
+   stick first plugged after the install, the usual case) is not this
+   installer's: no reading tells a binding made from the package
+   directory from one made from a hand install of the very same files
+   in another folder, which the 43.4 line's "bound or made later by
+   another package" excludes, so section 6.3's draft 12 adoption is not
+   taken for these files. Such a device keeps its binding, its INF copy
+   stays (it was never recorded), and every file it uses is kept by step
+   4's reference check, said on the Finish page with the device's name.
+   Whether the owner wants Stor98's adoption here despite that is
+   section 14's open decision.
 2. **The recorded devices**, present or not, children first: units, then
    Bulk-Only devices, through the helper's `remove` job (record 27
    section 9), before the package's own UAS devices and everything above
@@ -1507,7 +1521,7 @@ gated on the one before, shown on the Progress page:
    device's parent port, which is a filter host and stays).
 4. On 98 SE and ME: record 27's removal for each devnode of the package,
    present or not, children first (on 98 SE the storage devices section
-   6.5.8 adopts and records, units then Bulk-Only devices; then UAS
+   6.5.8 records, units then Bulk-Only devices; then UAS
    devices, Stor98's recorded
    devices, the NHI, hubs and composite entries, root hubs, controllers
    last), through the helper, an entry left after its removal stopping
@@ -1648,7 +1662,8 @@ which waits.
   binaries are copied in each case, none in complete and partial-other,
   never a present one); `inst_stor_kind` and `inst_stor_unit_takes` on
   the ids and driver keys of section 6.5.5 (a foreign `DiskDrive` binding
-  left); `inst_stor_norm`; `inst_stor_adoptable`; and
+  left); the case with `Source` recorded (a partial-same install, then
+  every file present, then an update: the route, not complete); and
   `inst_stor_remove` (which files are removed: a recorded file with its
   hash, no user and no `USB20U`, and each reason one is kept); the row's
   text at its longest within its control.
@@ -1805,10 +1820,10 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   index, record 27 section 2).
 - **W19** (draft 17) The record's `Choice` is the row's default on an
   update, the detection's only on a first offer (section 6.5.7).
-- **W20** (draft 17) The uninstall adopts the storage devices Windows
-  bound after the run on Stor98's draft 12 rule, by the bytes of the INF
-  copy their driver key names (section 6.5.8); the bytes cannot tell a
-  hand install of the same files made after this install.
+- **W20** (draft 17) No adoption of storage devices Windows bound after
+  the run: nothing tells them from a hand install of the same files, so
+  they, their INF copies and the files they use are kept (section 6.5.8);
+  the owner may choose Stor98's adoption instead (section 14).
 - **W21** (draft 17) A storage file whose deletion fails keeps its
   record and the uninstall's entry point; the uninstall run after the
   restart finishes it. No `WININIT.INI` entry (section 6.5.8).
@@ -1849,6 +1864,18 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
   Code 2 starts after the shut down; and whether a stock 98 SE needs any
   of NUSB's other files. Until each is read the design takes the cautious
   reading named where it is used.
+- (draft 17) Two decisions for the owner, each taken here in its
+  cautious form. First, a later plug may install from the pack's INFs on
+  `DevicePath` over a file another package laid down after the run
+  (section 6.5.4): the 43.4 line's `DevicePath` delivery leaves that
+  open; the alternative is withdrawing the pack from `DevicePath` once
+  the setup engine has made its own `INF\OTHER` copies, which costs a
+  wizard for the next device of a kind not yet installed. Second, storage
+  devices Windows bound after the run are not adopted by the uninstall
+  (section 6.5.8), so in the usual flow (the install, then the first
+  stick) the uninstall keeps the files that stick uses; Stor98's draft 12
+  adoption would remove them, at the cost that a hand install of the
+  same files in another folder cannot be told apart.
 
 ## 15. Files
 
