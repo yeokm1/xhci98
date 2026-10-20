@@ -1,6 +1,11 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 9, 2026-10-19 (the fix round of that night: a helper that
+Status: draft 10, 2026-10-20 (roadmap-usb4 task 43.4: on Windows 98 SE
+the USB storage drivers of record 26 section 6.5 - Bulk-Only devices
+and storage units installed by NUSB 3.3's `USBSTOR.INF` and
+`USBNTMAP.INF` from the install directory, two steps of section 6, and
+the recorded storage devices removed first, section 9; sections 1.2,
+4.1, 8 and 12 to match; the helper itself unchanged); draft 9, 2026-10-19 (the fix round of that night: a helper that
 did not finish is an unfinished install with steps, exit 4, never a
 failure of the device and never "nothing to do", sections 4.1 and 4.2;
 and the installer never runs a job on a device Stor98 runs, record 26
@@ -72,8 +77,11 @@ steps", and this record says how, with what, and what it may not do.
 - The devices: the xHCI controller, its root hub, the hubs and composite
   entries the bus presents, a UAS device, the Thunderbolt or USB4 host
   interface (`xhcicm.inf`), and, when the user ticks it, the bundled
-  Stor98's NVMe devices (record 26 section 6.3); each a present devnode
-  (section 6).
+  Stor98's NVMe devices (record 26 section 6.3); on Windows 98 SE, when
+  the user ticks the USB storage drivers (record 26 section 6.5, draft
+  10), a Bulk-Only device with no driver and a storage unit with none or
+  with Windows' generic "Disk drive", by the pack's own INFs from the
+  install directory; each a present devnode (section 6).
 - The removal of a devnode, present or not, for the uninstall (section 9).
 - The toolchain and its place in the build and the cut (section 3), its
   provenance rows (section 3.4), the helper's interface to the installer
@@ -391,7 +399,10 @@ The operands:
 - `INF <inf path>`: the INF in the install directory
   (`C:\XHCI98\XHCI98.INF`), at most 255 characters, every part 8.3 and no
   space (the engine's `atDriverPath` is one atom of at most 255
-  characters).
+  characters). From draft 10 it may be one of the two storage INFs the
+  install directory holds when record 26 section 6.5's row is ticked
+  (`C:\XHCI98\USBSTOR.INF`, `C:\XHCI98\USBNTMAP.INF`), unmodified, in
+  the same form: the helper treats every INF alike.
 - `FLAGS`: one or both of `force` (reinstall a current driver: record
   23's `/force` and the Have Disk cases of its section 6.4) and `quiet`
   (section 5.2), lower case, each at most once; the line is left out for
@@ -738,9 +749,28 @@ plan goes on.
    device the helper answers `not-present` for after a parent's job of the
    run is waited for, the tree settled, and the job made once more before
    it is a step (record 23 section 5.8, revision 14).
+3a. **Bulk-Only devices** (draft 10; on 98 SE, only when record 26
+   section 6.5's row is ticked and its case allows a copy): each present
+   devnode with a Bulk-Only id (`USB\Class_08&SubClass_02&Prot_50`,
+   `SubClass_05`, `SubClass_06`) that no INF of this package matches and
+   that has no driver, by `USBSTOR.INF` from the install directory, after
+   the passes of step 3 and their settle. The storage files are already
+   in place (record 26 section 6.5.4), so the engine's copy writes the
+   same bytes.
 4. **UAS devices** (`xhciuas.inf`) present, install or update; on 98 SE
    the NUSB mass-storage prerequisite and on ME the first-stick advice
-   stay as record 23 section 6.4 says them, on the Found page.
+   stay as record 23 section 6.4 says them, on the Found page; on 98 SE
+   with the storage row ticked, `USBNTMAP.SYS` is in place before this
+   step, so a UAS disk installed here starts with its filter.
+4a. **Storage units** (draft 10; on 98 SE, as step 3a): after a settle,
+   each present unit (`USBSTOR\GenDisk`, `USBSTOR\GenCdRom` or
+   `USBSTOR\GenSfloppy` among its ids) not bound to `USBMPHLP.PDR` that
+   has no driver or Windows' generic "Disk drive" binding, by
+   `USBNTMAP.INF` from the install directory: the move of a first disk
+   from "Disk drive" to "USB Disk" (record 26 section 6.5.5); then a
+   settle and the read-back, a unit bound but not started given the
+   replug step. A unit that appears in a later settle of the run is
+   taken the same way.
 5. **The Thunderbolt or USB4 host interface** (`xhcicm.inf`) when the
    component is ticked; its own devices (the bridges a tunnel brings up)
    are `xhcicm.sys`'s to number (task 42-A.14 and record 28 for what is
@@ -811,6 +841,16 @@ them, and its uninstall removes the `INF\OTHER` copies whose provider is
 this package's (record 26 section 9.3 step 4) after the devnodes are gone.
 Nothing here is written by the helper or the installer directly.
 
+The storage INFs (draft 10) leave the same kind of bookkeeping under
+their own provider, Microsoft's: a copy in `INF\OTHER` and its `OEM Name`
+value, a driver key of class `USB` (`USBSTOR.INF`, `NTMPDriver`
+`USBSTOR.SYS`) or `Storage` (`USBNTMAP.INF`, `DevLoader` `*IOS`,
+`PortDriver` `USBMPHLP.PDR`). Their provider is not this package's, so
+the rule above never reaches them; record 26 section 6.5.6 records each
+copy made for the installer by its exact `OEM Name` value, and section
+6.5.8 removes only those. Which name the engine gives the copy is read on
+43.5's legs.
+
 ## 9. Removal, for the uninstall
 
 A `remove` job (section 4.1: `JOB remove`, `RESULT`, `HWND`, `DEVICE`): the
@@ -827,7 +867,9 @@ flag's: "Set if the lpClassInstallParams field points to a class install
 parameter block"), and `DiCallClassInstaller(DIF_REMOVE, lpdi)`, the class
 installer first and the engine's `DiRemoveDevice` as the default action.
 Children first is the installer's order (record 26 section 9.3 step 4):
-UAS devices, Stor98's recorded devices, the host interface, hubs and
+on 98 SE the storage units and then the Bulk-Only devices the installer
+recorded or adopted (record 26 section 6.5.8, draft 10), UAS devices,
+Stor98's recorded devices, the host interface, hubs and
 composite entries, root hubs, controllers. Whether the engine lists an
 absent device's entry without `DIGCF_PRESENT`, whether `DIF_REMOVE` on it
 deletes its `Enum` and driver keys, and whether the removal of a
@@ -908,6 +950,7 @@ key, `INF\OTHER`'s listing, and Device Manager:
 | UN, uninstall | each devnode removed through the helper in order, an unplugged UAS disk's entry and a moved controller's old entry among them (the removal of an entry that is not present); the subtree removal; the `INF\OTHER` copies and the files deleted by the installer; the restart; the controller back as an unknown device with no wizard finding a driver |
 | Probe | the `probe` job on 98 SE and ME: the helper loads (its ordinals resolved), writes its version, and refuses a job with another version before any call |
 | ME | every row above on ME, and ME's own prompts |
+| Storage (98 SE, draft 10; roadmap-usb4 task 43.5) | a Bulk-Only stick at "Unknown Device" and a disk at "Disk drive" installed by the pack's INFs from the install directory, the unit's move to "USB Disk" and whether it starts without a replug; the `INF\OTHER` copies and `OEM Name` values the engine makes for them; whether the engine copies over a file of the same bytes, or one in use; the removal of the recorded storage devices before the UAS devices |
 | Dialogs and handles | that the engine's dialogs are owned by the installer's window; that the process handle of the 16-bit helper signals at its exit and what its exit code reads; the fallback poll of the result file |
 
 What the 98 SE smoke run of 2026-10-18 read before the legs (task 42-A.1,
@@ -984,6 +1027,10 @@ found through `DevicePath`.
   `not-present` until the next start, so the installer asks for wizards
   to be finished, not cancelled, and lists a device left so as a
   restart-and-run-again step (sections 5.1 and 6).
+- **H12** (draft 10) The storage devices of record 26 section 6.5 go
+  through the same helper and the same calls as the package's own, with
+  the pack's unmodified INFs as the job's INF; the helper gains nothing
+  for them (no flag, no job kind).
 
 ## 14. Open, and the risks
 
