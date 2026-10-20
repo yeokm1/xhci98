@@ -8632,113 +8632,130 @@ notes, "Untested ground").
 **The limit that is not the ring: the event ring.** Every isochronous TD
 carries IOC (the builder, `xhciXferBuildIsoPacket`), so each TD the
 controller completes is one Transfer Event, and a TD of two TRBs can be
-two: a short packet on its first TRB raises one by ISP and its last TRB's
-IOC raises the second ("a Short Packet ... on an intermediate TRB", 4.10.1.1
-p.171), and a Missed Service Error on its first TRB is followed by the IOC
-TRB's own Missed Service Error ("shall not drop Events associated with
-TRBs", p.201). So a ring's events are at most its TRBs, and the TRBs a pipe
-holds on its ring are the events it can leave on the event ring while
-software is not draining it. The event ring is one segment of 256 entries
-(record 04 section 4), and an Event Ring Full is fatal here: a Host
-Controller Event escalates to a controller reset (`xhci_evt.c`, the
-`XHCI_TRB_TYPE_HOST_CONTROLLER` case), because a dropped event strands a
-completion matched by identity. Software stops draining whenever the event
-DPC is late, and under polled delivery (design record 15) for a whole poll
-period, which the system timer stretches to 15 ms or more (`runs/run-36.md`
-read 15 to 62 ms on the E7250). Today a pipe's 62 TRBs cap what it can
-leave there; a ring sized for 20 ms at High Speed would let one stream fill
-the event ring during a 20 ms stall and reset the controller with every
-device on it, where today the same stall costs an underrun. **So the ring
-is enlarged only as far as an event budget allows**, and the budget is
-the event ring's: what lifts the limit further is a larger event ring
-(point 9), not a larger transfer ring.
+two: a short packet on its first TRB raises one by ISP and the TD's last
+TRB raises a second ("a second for the last TRB with the IOC flag set",
+4.10.1.1.2 p.175), and a Missed Service Error on its first TRB is followed
+by the IOC TRB's own ("shall not drop Events associated with TRBs",
+p.201). A ring adds one event more when it runs empty, the Ring Underrun
+or Overrun (4.10.3.1 p.185; "only generated the first Interval that an
+empty Transfer Ring is detected", p.196). So a ring's events are at most
+its TRBs plus one - on a compliant controller. Controllers under
+`XhciIsochSpuriousSuccess` (design record 20 section 4.14) may follow an
+error with a Success for the same TRB, two events for one; on those the
+bound does not hold and no page is granted (point 2). The event ring is
+one segment of 256 entries (record 04 section 4), and an Event Ring Full
+is fatal here: a Host Controller Event escalates to a controller reset
+(`xhci_evt.c`, the `XHCI_TRB_TYPE_HOST_CONTROLLER` case), because a
+dropped event strands a completion matched by identity. Software stops
+draining whenever the event DPC is late, and under polled delivery
+(design record 15) for a whole poll period, which the system timer
+stretches to 15 ms or more (`runs/run-36.md` read 15 to 62 ms on the
+E7250). Today a pipe's 62 TRBs cap what it can leave there; a ring sized
+for 20 ms at High Speed would let one stream fill the event ring during a
+20 ms stall and reset the controller with every device on it, where
+today the same stall costs an underrun. **So the ring is enlarged only as
+far as an event budget allows**, and the budget is the event ring's: what
+lifts the limit further is a larger event ring (point 9), not a larger
+transfer ring.
 
 **What changes.**
 
 1. **A page of its own.** An isochronous pipe that needs more than the
-   pool ring (point 2) and is granted a budget (point 3) gets a ring in a
-   common-buffer allocation of its own, the **iso page**, instead of a
-   pool ring: whole pages from `AllocateCommonBuffer` through the
-   adapter, cache-enabled, below 4 GB, as a stream block is
-   (`HcdDmaStreamAlloc`, section 11.2), allocated at the pipe's open on
-   the thread at PASSIVE_LEVEL. The ring is `allowance + 2` TRBs
-   (`XhciRingInit` takes any count of 3 or more; no ring arithmetic in
-   `xhci_ring.c` assumes a power of two), so `XhciRingCapacity` is the
-   allowance itself and every existing check - the empty-ring refusal
-   `XHCI_XFER_ISO_TOO_LARGE`, the ring-full `XHCI_XFER_BUSY` and the
-   pipe's `RingWait` - enforces the budget with no new arithmetic. The
-   ring starts at the page's start and is at most 256 TRBs (4,096 bytes),
-   so a page-aligned allocation never crosses 64 KiB (record 04's
-   alignment table; `XhciSegmentUsable` refuses it anyway). On a
-   controller with `XhciStreamRingPad` in effect (design record 20 section
-   4.12, `XHCI_TRB_OVERFETCH`), the allocation holds a second ring's bytes
-   after the ring, as a stream block does: one page while the doubled
-   ring fits in it, two otherwise. The pipe holds no pool ring
-   (`PoolIndex` = `0xFFFFFFFF`, as a stream's pipe), so `PoolRings`, the
-   per-device cap, the pool's fairness count and an interface switch's
-   reservation (`hcdCfgSwitchReserved`, `hcdCfgRetainedCount`) count only
-   pipes that hold one. A pipe that is refused a page - no need, no
-   budget, or no memory - opens on a pool ring exactly as today, counted.
+   pool ring (point 2) and is granted a budget (point 3) has its ring in
+   a common-buffer allocation of its own, the **iso page**: whole pages
+   from `AllocateCommonBuffer` through the adapter, cache-enabled, below
+   4 GB, as a stream block is (`HcdDmaStreamAlloc`, section 11.2),
+   allocated at the pipe's open on the thread at PASSIVE_LEVEL. The ring
+   is `allowance + 2` TRBs (`XhciRingInit` takes any count of 3 or more;
+   no ring arithmetic in `xhci_ring.c` assumes a power of two), so
+   `XhciRingCapacity` is the allowance itself and every existing check -
+   the empty-ring refusal `XHCI_XFER_ISO_TOO_LARGE`, the ring-full
+   `XHCI_XFER_BUSY` and the pipe's `RingWait` - enforces the budget with
+   no new arithmetic. The ring starts at the page's start and is at most
+   256 TRBs (4,096 bytes), so a page-aligned allocation never crosses 64
+   KiB (record 04's alignment table; `XhciSegmentUsable` refuses it
+   anyway). On a controller with `XhciStreamRingPad` in effect (design
+   record 20 section 4.12, `XHCI_TRB_OVERFETCH`), the allocation holds a
+   second ring's bytes after the ring, as a stream block does: one page
+   while the doubled ring fits in it, two otherwise. **The pipe still
+   takes its pool entry**, as every endpoint's pipe does, and leaves that
+   ring unused: the pool's count is also the bound on the controller's
+   endpoint contexts that design record 20 rests on (32 EP0 contexts and
+   32 pool-backed ones against Panther Point's 64, its
+   `XHCI_EP_LIMIT_QUIRK` row), and `PoolRings`, the per-device cap, the
+   fairness count, a switch's reservation and the held pipes' accounting
+   stay exactly as they are. The cost is one 1 KiB pool ring idle while
+   the page pipe is open. A pipe refused a page - not a candidate, no
+   budget, or no memory - opens on its pool ring exactly as today,
+   counted.
 2. **Which pipes.** One whose endpoint is serviced more than once a
-   frame: the Endpoint Context's Interval (`XHCI_PIPE_EP.Interval`, 125 us
-   units as a power of two) of 0, 1 or 2 - High Speed or SuperSpeed with
-   `bInterval` 1 to 3 - and not zero-bandwidth (`XhciPipeZeroBandwidth`;
-   `roadmap-hcd.md`, decisions table, "Zero-size isochronous endpoints"). At one TD a frame or fewer the pool ring
-   already holds 31 to 62 ms, so Full and Low Speed isochronous pipes, and
-   High Speed ones with `bInterval` 4 or more, keep it: Full Speed audio,
-   the only isochronous device in this project's records, is unchanged.
-   The `qemu` flavour's `XhciQemuIsoRing` (1: every non-zero-bandwidth
-   isochronous pipe is a candidate) lets QEMU's Full Speed `usb-audio`
-   exercise the page in a leg; it is read at start and logged, as
-   `XhciQemuBigRefuse` is, and never exists in a published flavour.
-3. **The event budget.** The controller's isochronous rings may together
-   hold at most the event ring's entries less a reserve of 64 for every
+   frame: the Endpoint Context's Interval (`XHCI_PIPE_EP.Interval`, 125
+   us units as a power of two) of 0, 1 or 2 - High Speed or SuperSpeed
+   with `bInterval` 1 to 3 - and not zero-bandwidth
+   (`XhciPipeZeroBandwidth`; `roadmap-hcd.md`, decisions table,
+   "Zero-size isochronous endpoints"), on a controller where
+   `XhciIsochSpuriousSuccess` is not in effect. At one TD a frame or
+   fewer the pool ring already holds 31 to 62 ms, so Full and Low Speed
+   isochronous pipes, and High Speed ones with `bInterval` 4 or more, keep
+   it: Full Speed audio, the only isochronous device in this project's
+   records, is unchanged. The `qemu` flavour's `XhciQemuIsoRing` (1: every
+   non-zero-bandwidth isochronous pipe is a candidate) lets QEMU's Full
+   Speed `usb-audio` exercise the page in a leg; it is read at start and
+   logged, as `XhciQemuBigRefuse` is, and never exists in a published
+   flavour.
+3. **The event budget.** Every open isochronous pipe of the controller,
+   on a pool ring or a page, is counted at its ring's capacity plus one
+   (the underrun event above): 63 on a pool ring. A page is granted only
+   when that count, a margin and room for the new pipe and one more pool
+   pipe fit the event ring: the grant is `EventRingTrbs - 64 - counted -
+   2 x 63`, at most 192 (so the ring is at most 256 TRBs, one page), and
+   refused below 16 (not worth a page). The 64 is a margin for every
    other source (commands, port changes, bulk, interrupt and stream TDs,
-   each pipe holding a few TDs at most) - with one more pool ring's 62
-   kept back so that a second isochronous pipe, a camera's microphone or
-   an audio device's other direction, still opens on its pool ring
-   inside the budget. What is left is the **extra**: `EventRingTrbs - 64
-   - 2 x 62`, 68 TRBs with today's 256-entry event ring. A page pipe's
-   allowance is `62 + grant`, the grant being the extra still free, at
-   most 192 (so the ring is at most 256 TRBs, one page), and refused below
-   16 (not worth a page); today that is one page pipe at a time per
-   controller, allowance 130, ring 132 TRBs. The budget is per
-   controller, under the controller lock, as a count of grants out
-   (`IsoExtraOut`); a grant is returned when its pipe can publish no more
-   and holds no TD - when it is freed or held (`hcdCfgPipeFree`,
-   `hcdCfgRetain`) - never at a stop or reset of the endpoint, which keeps
-   the pipe. What it bounds: with one page pipe and one pool pipe, 130 +
-   62 = 192 entries, the 256 less the reserve; each further pool pipe adds
-   its 62 as today, so isochronous exposure is never more than today's 62
-   a pipe plus 68. Pipes beyond the budget are not refused: they open on
-   pool rings as they do today. **An interface switch** (`SELECT_INTERFACE`,
-   `hcdCfgSelectInterface`, and a function's select, `hcdCfgSelectFunction`;
-   record 20 section 5.3) creates the
-   new setting's pipes while the old ones are detached, aborted and
-   drained (step 1 before step 2), and the old ones are dropped by the
-   switch's own command: their grants count as free for the new pipes'
+   each pipe holding a few TDs), which nothing enforces, as nothing does
+   today. The "one more pool pipe" keeps room for a second isochronous
+   pipe opened after the page - a camera's microphone, an audio device's
+   other direction. With today's 256-entry event ring and no other
+   isochronous pipe open the grant is 66: allowance 128, ring 130 TRBs,
+   counted 129, and 129 + 63 = 192, the 256 less the margin. With any
+   isochronous pipe already open no page is granted at 256 entries (the
+   order matters: a camera opened before its microphone gets a page, one
+   opened after does not). **What it bounds, and what it does not**: a
+   page is granted only into room the event ring has, but a pipe is never
+   refused for the budget, so pipes opened after a page are counted and
+   may take the count past the event ring, as five pool pipes do today (5
+   x 63 = 315); the page adds at most 66 to what today's rule would allow
+   for the same pipes. The count lives in the controller (`IsoCapOut`,
+   controller lock); a pipe gives its count back when it can publish no
+   more and holds no TD - when it is freed or held (`hcdCfgPipeFree`,
+   `hcdCfgRetain`) - exactly once, never at a stop or reset of the
+   endpoint, which keeps the pipe. **An interface switch**
+   (`hcdCfgSelectInterface`, and a function's select,
+   `hcdCfgSelectFunction`; record 20 section 5.3) creates the new
+   setting's pipes after the old ones are detached, aborted and drained
+   (step 1 before step 2), and the old ones are dropped by the switch's
+   own command: their counts are subtracted when the new pipes are sized
    (`hcdCfgSwitchIsoBorrow`), as the pool reservation counts their rings.
-   Old and new together then exceed the budget only while the old hold no
-   TD; a switch that fails frees the new pipes, returning their grants,
-   and reattaches the old with theirs.
-4. **The request's limits on a page.** Packets: at most 128 (16 ms at
-   one a microframe; a multiple of 8, as High Speed URBs are), and at
-   most the allowance; TRBs: at most the allowance, refused as
+   Old and new are then both counted while the old hold no TD; a switch
+   that fails frees the new pipes, returning their counts, and reattaches
+   the old with theirs.
+4. **The request's limits on a page.** Packets: at most 128 (16 ms at one
+   a microframe; a multiple of 8, as High Speed URBs are), and at most the
+   allowance; TRBs: at most the allowance, refused as
    `XHCI_XFER_ISO_TOO_LARGE` from the ring's own capacity. On a pool ring
    both stay 62. The URB-side check (`hcd_urb.c`, before the pipe is
    known) takes 128 and the pipe's own bound is `hcdIsoAdmit`'s, refused
    as today (`IsoRefusalsTooLarge`, `USBD_STATUS_INVALID_PARAMETER`). The
    per-record block the engine reads (`HCD_ISO_BLOCK`) is allocated with
    the pipe at the pipe's own packet bound, by a stride, so a pool pipe's
-   blocks stay their present size. **Not chained.** A request is still
-   one group of TDs published at once; one longer than the allowance is
+   blocks stay their present size. **Not chained.** A request is still one
+   group of TDs published at once; one longer than the allowance is
    refused rather than split across ring refills, because a split request
-   would retire positionally across two publications - the engine's
-   group rule (`XhciRingRetireIsoGroup`, the tail rule of 4.11.7 p.214) -
-   and the budget, not the ring, is what bounds a request anyway. A
-   client keeps a stream continuous with at least two requests in flight,
-   each at most half the allowance; that is stated in the release notes'
-   isochronous row with the numbers below.
+   would retire positionally across two publications - the engine's group
+   rule (`XhciRingRetireIsoGroup`, the tail rule of 4.11.7 p.214) - and the
+   budget, not the ring, is what bounds a request anyway. A client keeps a
+   stream continuous with at least two requests in flight, each at most
+   half the allowance; that is stated in the release notes' isochronous
+   row with the numbers below.
 5. **The data a request may carry is unchanged**: one chunk, at most
    `HCD_SG_ELEMENTS` (32) pages and the adapter's grant (section 11.5;
    `hcdPlanChunk` never splits an isochronous URB), so a 3 x 1024-byte
@@ -8752,82 +8769,92 @@ the event ring's: what lifts the limit further is a larger event ring
    changed (its size and offsets travel in the snapshot, section 8). The
    controller (`HCD_CONTROLLER`) gains one scratch of 254 TRBs and one
    array of 128 TD lengths, used by every isochronous publication under
-   the controller lock, as the extension's were; the request gains
-   `MaxPackets` (0 meaning 62) and a pointer to the length array (NULL
-   meaning `IsoLayout.TdLengths`), so every existing caller and host
-   vector keeps its behaviour. `XhciXferIsoUsesFrameIds` takes the same
-   bound.
+   the controller lock, as the extension's were. The request gains
+   `MaxPackets` (0 meaning 62, above 128 refused), a pointer to a length
+   array of `MaxPackets` entries, and `BeiInterval`. With the pointer NULL
+   the layout's own 62-entry array is used and a `MaxPackets` above 62 is
+   refused as `XHCI_XFER_BAD_PARAM` before any packet is read; the build
+   and the ring's enqueue take the same array. The host suites' request
+   constructors (`test_iso.c`'s `iso_request`, `test_td.c`'s) zero the
+   whole request first, as `hcdIsoPublish` does, so the new fields start
+   0. `XhciXferIsoUsesFrameIds` takes the same bound.
 7. **Moderation: BEI, never fewer events.** IOC stays on every TD's last
    TRB, so every TD still answers its packet with its own event - the
    per-packet truth the completion relies on (`XhciXferIsoEvent`: packets
    answered in ring order, a skipped one stamped `NOT_ACCESSED`). IOC on
    the request's last TD alone was considered and rejected: a successful
-   TD without IOC raises no event, so its packet would have to be
-   inferred as complete, which the spec forbids ("Software shall not
-   infer TRB completions based on Frame ID, MFINDEX, or other
-   information", 4.11.2 p.191), and a controller without CFC "may not
-   generate a Missed Service Error Transfer Event for every ESIT missed"
-   (4.10.3.2 p.187), so a skipped IN packet would be reported full of
-   whatever the buffer held - QEMU's controller, CFC 0, among them.
-   Instead the last TRB of every TD but the request's last and every
-   eighth carries **BEI** (Block Event Interrupt, Isoch and Normal TRB bit
-   9: "the Transfer Event generated by IOC shall not assert an interrupt
-   to the host at the next interrupt threshold", Table 6-34 p.437, 4.17.5):
-   the event is written, and drained at the next interrupt that is not
-   blocked - the eighth TD's, the request's last, any other source's.
-   That is Linux's rule on Intel controllers (`xhci-ring.c:4036-4052`,
-   `trb_block_event_intr`: BEI on every TD but the last, and with
-   `XHCI_AVOID_BEI`, set on every Intel controller at `xhci-pci.c:345-349`,
-   an unblocked TD at least every `AVOID_BEI_INTERVAL_MIN` = 8,
-   `xhci.h:1279`), here on every controller at the fixed interval 8, the
-   minimum Linux falls to under load (`xhci-ring.c:3097-3104`); and like
-   Linux never below xHCI 1.0 (`hci_version < 0x100`), where 38.11's
-   policy writes no new field anyway. `docs/usb-xhci-info/xhci-programming.md`'s
-   "Never set BEI" read `XHCI_AVOID_BEI` as "never", which Linux does not
-   do; it is rewritten to this rule, and design record 20's row for the
-   flag with it. A High Speed stream interrupts once a millisecond and at
-   each request's end instead of eight times a millisecond; Full Speed
-   once every eight TDs and at each request's end. URB completion is not
-   later: a request completes on its last TD's event, which is never
-   blocked. Errors, Missed Service and short packets raise events as
-   before; nothing in the drain depends on which interrupt delivered an
-   event. Polled delivery reads the ring on its own schedule and is
-   unaffected; QEMU ignores BEI (`hcd-xhci.c` defines `TRB_TR_BEI` and
-   never reads it), so a leg there shows the events, not the interrupt
-   saving, which is a reading for real hardware.
+   TD without IOC raises no event, so its packet would have to be inferred
+   as complete, which the spec forbids ("Software shall not infer TRB
+   completions based on Frame ID, MFINDEX, or other information", 4.11.2
+   p.191), and a controller without CFC "may not generate a Missed Service
+   Error Transfer Event for every ESIT missed" (4.10.3.2 p.187), so a
+   skipped IN packet would be reported full of whatever the buffer held -
+   QEMU's controller, CFC 0, among them. Instead the last TRB of every TD
+   carries **BEI** (Block Event Interrupt, Isoch and Normal TRB bit 9:
+   "the Transfer Event generated by IOC shall not assert an interrupt to
+   the host at the next interrupt threshold", Table 6-34 p.437, 4.17.5)
+   but the request's last and every eighth (the 8th, 16th, 24th and so
+   on, counting from 1): the event is written, and drained at the next
+   interrupt that is not blocked - the eighth TD's, the request's last,
+   any other source's. This is this driver's policy, modelled on Linux's
+   (`xhci-ring.c:4036-4052`, `trb_block_event_intr`: BEI on every TD but
+   the last, and with `XHCI_AVOID_BEI`, set on every Intel controller at
+   `xhci-pci.c:345-349`, BEI cleared where the zero-based index is a
+   nonzero multiple of the interval - the 9th, 17th and so on - the
+   interval falling to `AVOID_BEI_INTERVAL_MIN` = 8 under load,
+   `xhci.h:1279`, `xhci-ring.c:3097-3104`): here on every controller at
+   the fixed interval 8, and like Linux never below xHCI 1.0
+   (`hci_version < 0x100`), where 38.11's policy writes no new field
+   anyway. `docs/usb-xhci-info/xhci-programming.md`'s "Never set BEI" read
+   `XHCI_AVOID_BEI` as "never", which Linux does not do; it is rewritten
+   to this rule, and design record 20's row for the flag with it. A High
+   Speed stream interrupts once a millisecond and at each request's end
+   instead of eight times a millisecond; Full Speed once every eight TDs
+   and at each request's end. URB completion is not later: a request
+   completes on its last TD's event, which is never blocked. Errors,
+   Missed Service and short packets raise events as before; nothing in
+   the drain depends on which interrupt delivered an event. Polled
+   delivery reads the ring on its own schedule and is unaffected; QEMU
+   ignores BEI (`hcd-xhci.c` defines `TRB_TR_BEI` and never reads it), so
+   a leg there shows the events, not the interrupt saving, which is a
+   reading for real hardware.
 8. **Everything else is the ring's own geometry, unchanged.** Configure
    Endpoint names the page's ring (TR Dequeue Pointer, DCS 1) as it named
    the pool ring; bandwidth admission is the Endpoint Context's Max ESIT
    Payload and Interval, which the ring does not touch, and a refusal
-   (Bandwidth Error, Resource Error) frees the pipe and its page, or
-   holds it under 38.10's rule when the command's outcome is unknown.
-   Missed Service, Ring Underrun and Overrun, the flow rule (36.57,
+   (Bandwidth Error, Resource Error) frees the pipe and its page, or holds
+   it under 38.10's rule when the command's outcome is unknown. Missed
+   Service, Ring Underrun and Overrun, the flow rule (36.57,
    `XhciXferIsoFlowNext`) and TRB Error's recovery are the engine's, by
-   the ring's PA and size; Stop Endpoint, Set TR Dequeue and the abort and
-   cancel chain address the ring by `ring->Trbs` as stream rings do
-   (section 11.7, point 5); a suspend leaves the page allocated with its
-   pipe and a resume that cannot restore rebuilds the device, freeing it.
-   **The page's lifetime is the stream block's** (section 11.7, point 7):
-   freed with its pipe when the endpoint is Disabled or the slot gone;
-   otherwise retired to the device (`IsoPagesRetired`) and freed by the
-   proof that frees a retired stream block - a Configure Endpoint that
-   dropped the DCI (`hcdCfgRetiredReclaim`), a Reset Device, the slot's
-   going (`HcdCfgDeviceGone`) - and kept for good and counted while a bus
-   master may still run (`CommonBufferPinned`, `HcdDmaStreamFree`).
-9. **What lifts the limit next.** A larger event ring raises the extra by
-   the difference: at 1,024 entries the extra is 836, a page pipe's
-   allowance its 254 maximum and three page pipes fit. The event ring is
-   record 04's fixed one-page segment, so that is a change of its own -
-   a second allocation or a larger, physically placed region, every leg
+   the ring's PA and size; Stop Endpoint, Set TR Dequeue and the abort
+   and cancel chain address the ring by `ring->Trbs` as stream rings do
+   (section 11.7, point 5); RESET_PORT and a recycle re-add the pipe with
+   its ring (`hcdCfgConfigureAdd`); a suspend leaves the page allocated
+   with its pipe and a resume that cannot restore rebuilds the device,
+   freeing it. **The page's lifetime is the stream block's** (section
+   11.7, point 7): freed with its pipe when the endpoint is Disabled or
+   the slot gone; otherwise retired to the device (`IsoPagesRetired`) and
+   freed by the proof that frees a retired stream block - a Configure
+   Endpoint that dropped the DCI (`hcdCfgRetiredReclaim`), a Reset Device,
+   the slot's going (`HcdCfgDeviceGone`) - and kept for good and counted
+   while a bus master may still run (`CommonBufferPinned`,
+   `HcdDmaStreamFree`). A held (retained or pinned) pipe keeps its page
+   until its own release, as it keeps its pool ring.
+9. **What lifts the limit next.** A larger event ring raises the grant by
+   the difference: at 1,024 entries three page pipes take the full
+   allowance of 254 and a fourth 131 (each counted at its allowance plus
+   one, with the margin and one pool pipe's room kept). The event ring is
+   record 04's fixed one-page segment, so that is a change of its own - a
+   second allocation or a larger, physically placed region, every leg
    touching it - and it is the owner's question, not this one's.
 10. **Telemetry.** No serialized structure grows (section 8's snapshot
-    and `XHCITR` read the extension and the counter block by layout).
-    The controller keeps pages granted, refused for need, budget and
-    memory, the largest request published on a page (TRBs and packets)
-    and BEI TDs published, for the debugger and the `qemu` trace; the log
-    notes `iso.page` at each grant or refusal (slot, DCI, allowance or the
-    reason) and `iso.page.free` at each return, and the existing
-    `hcd: isoch published` trace carries the TRB count.
+    and `XHCITR` read the extension and the counter block by layout). The
+    controller keeps pages granted, refused for budget and for memory,
+    pages retired, the largest request published on a page (TRBs and
+    packets) and BEI TDs published, for the debugger and the `qemu`
+    trace; the log notes `iso.page` at each grant or refusal (slot, DCI,
+    allowance or the reason) and `iso.page.free` at each return, and the
+    existing `hcd: isoch published` trace carries the TRB count.
 
 **The numbers** (High Speed, one TD a microframe, 3 x 1024 = 3,072 bytes
 a TD; a TD of one page or two):
@@ -8835,48 +8862,60 @@ a TD; a TD of one page or two):
 | | TRBs a pipe | every TD two TRBs | half (page-aligned buffer) | none crossing |
 |---|---|---|---|---|
 | Today, pool ring | 62 | 31 TDs, 3.9 ms | 41 TDs, 5.1 ms | 62 TDs, 7.75 ms |
-| A page, 256-entry event ring | 130 | 65 TDs, 8.1 ms | 86 TDs, 10.8 ms | 130 TDs, 16.3 ms |
+| A page, 256-entry event ring | 128 | 64 TDs, 8.0 ms | 85 TDs, 10.6 ms | 128 TDs, 16.0 ms |
 | A page, 1,024-entry event ring (point 9) | 254 | 127 TDs, 15.9 ms | 169 TDs, 21.1 ms | 254 TDs, 31.8 ms |
 
 A High Speed UAC 2 stream of small packets, one TRB a TD, moves from 7.75
-to 16.25 ms. Memory on Windows 98 SE, per page pipe: one page of
-contiguous common buffer (two with the overfetch pad), and its four
-request blocks at 128 packets, 4 x 7,184 = 28,736 bytes of non-paged pool
-against 4 x 3,488 = 13,952 today; the controller's scratch, 4,576 bytes
-once; and one pool ring (1 KiB of the controller's block) left free.
+to 16 ms. Memory on Windows 98 SE, per page pipe: one page of contiguous
+common buffer (two with the overfetch pad), its pool ring idle, and its
+four request blocks at 128 packets, 4 x 7,184 = 28,736 bytes of
+non-paged pool against 4 x 3,488 = 13,952 today; the controller's
+scratch, 4,576 bytes once.
 
 **Host vectors.**
-- `test_iso`: `MaxPackets` 0 as today and 128 accepted, 129 refused before
-  a packet is read; the length array honoured and `IsoLayout.TdLengths`
-  untouched when it is given; a 128-packet request of one- and two-TRB
-  TDs built and published on a 132-TRB ring at both cycles and across
-  the Link TRB; the empty-ring refusal at 131 TRBs; BEI on exactly the
-  TDs the rule names for 1, 7, 8, 9, 16 and 128 packets, never on the
-  last, never below 1.0, and none at interval 0; IOC still on every TD;
-  completion of a request whose middle TDs carried BEI, with a short
-  packet, a Missed Service and a skipped packet, as today.
-- `test_ring`: a 132-TRB ring's wrap, capacity 130, and Set TR Dequeue
+- `test_iso`: `MaxPackets` 0 as today and 128 accepted, 129 refused
+  before a packet is read; the length array honoured and
+  `IsoLayout.TdLengths` untouched when it is given; `MaxPackets` above 62
+  with no array refused before a packet is read; a 128-packet request of
+  one-TRB TDs built and published on a 130-TRB ring at both cycles and
+  across the Link TRB, and a request of two-TRB TDs; the empty-ring
+  refusal at 129 TRBs; BEI on exactly the TDs the rule names for 1, 7, 8,
+  9, 16 and 128 packets, never on the last, none at interval 0; IOC
+  still on every TD; completion of a request whose middle TDs carried
+  BEI, with a short packet, a Missed Service and a skipped packet, as
+  today.
+- `test_ring`: a 130-TRB ring's wrap, capacity 128, and Set TR Dequeue
   across its Link TRB.
-- `test_pipe` (or the file the pure half lands in): the candidate rule
-  per speed and Interval and the `qemu` override; the budget - the extra
-  from 256 and 1,024 entries, grants of 68, refusals below 16, the
-  borrow of a switch, return on free and hold; the ring's TRBs from the
-  allowance; the allocation's bytes with and without the pad.
-- `test_td`: hcdIsoFill's model over a 128-packet block at the new stride.
+- `test_pipe`: the candidate rule per Interval, zero bandwidth and the
+  `qemu` override; the grant from 256 and 1,024 entries with nothing,
+  one pool pipe, one page and the borrow of a switch counted, refusals
+  below 16, the cap at 192; the ring's TRBs from the grant; the
+  allocation's bytes with and without the pad.
+- `test_td`: hcdIsoFill's model over a 128-packet block at the new
+  stride.
 
 **What the legs show.** QEMU's controller has no High Speed isochronous
 device: its `usb-audio` is Full Speed, so a High Speed stream, a camera,
-the interrupt saving and High Speed's 8,000 events a second remain
-unread until real hardware. The legs read the regression and the page's
+the interrupt saving, High Speed's 8,000 events a second and a request
+of more than 62 packets through the whole HCD path (`usbaudio.sys` sends
+short requests) remain unread until real hardware; the engine's side of
+those is the host vectors'. The legs read the regression and the page's
 mechanics under `XhciQemuIsoRing` 1: QEMU's audio device played whole
 (`TONE.WAV`) on Windows 2000, XP and 7 x64 (98 SE's own `USBAUDIO.VXD`
 faults on it, so its leg is the binding and the counters), once on the
 pool ring and once on a page, `IsoPacketErrors` and Missed Service at 0,
-`iso.page` granted with allowance 130 and the requests' TRB counts read
-from the trace; an alternate-setting switch while playing (the borrow);
-the device unplugged while playing (the page freed or retired, then
-freed); the other traffic - a stick read and written, a mouse - on the
-same controller, unchanged.
+`iso.page` granted with allowance 128 and the requests' TRB counts read
+from the trace; a second play after the device's alternate setting went
+back to 0 and up again (the page freed or retired and granted anew, the
+count back at 0 between); the device unplugged while playing (the page
+freed or retired, then freed); RESET_PORT through a device disable and
+enable; and the switch's failure paths through the `qemu` flavour's
+faults 18 (SET_INTERFACE stalled or not established) and 19 (the
+switch's Configure Endpoint refused, or answered with no completion and
+the controller reset), each read for `iso.page.free` exactly once per
+grant, the pages freed or retired then freed, and the pool's count back
+at its start value; and the other traffic - a stick read and written, a
+mouse - on the same controller, unchanged.
 
 ## 12. What Phase 25 leaves open, and where each item binds
 
