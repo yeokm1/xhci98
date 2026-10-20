@@ -174,6 +174,13 @@ static void iso_request(XHCI_ISO_REQUEST *req,
                         ULONG maxPacketSize,
                         ULONG maxBurstSize)
 {
+    ULONG b;
+
+    /* Whole, as hcdIsoPublish does: the fields record 13 section 11.8
+     * added start 0, today's behaviour. */
+    for (b = 0; b < sizeof(*req); b++) {
+        ((unsigned char *)req)[b] = 0;
+    }
     req->Iso = &iso->Block;
     req->TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req->DirectionIn = directionIn;
@@ -2148,6 +2155,294 @@ static void test_spurious_success(void)
              "after a Short Packet: not this quirk's");
 }
 
+/* ------------------------------------------------------------------ */
+/* The ring page's request (record 13 section 11.8, ISORING)           */
+/* ------------------------------------------------------------------ */
+
+#define ISO_BEI             0x00000200UL    /* Isoch/Normal TRB bit 9 */
+#define PAGE_RING_TRBS      122UL           /* allowance 120          */
+#define PAGE_PACKETS        128UL
+
+typedef struct _PAGE_BUFFER {
+    USBPORT_ISO_TRANSFER Block;
+    USBPORT_ISO_PACKET More[PAGE_PACKETS + 2];
+} PAGE_BUFFER;
+
+typedef struct _PAGE_FIXTURE {
+    XHCI_TRB mem[PAGE_RING_TRBS];
+    XHCI_RING ring;
+    XHCI_TRANSFER_QUEUE queue;
+    XHCI_TRB scratch[XHCI_XFER_MAX_ISO_PAGE_TRBS];
+    ULONG lengths[PAGE_PACKETS];
+    XHCI_ISO_LAYOUT layout;
+    XHCI_TRANSFER transfers[2];
+    PAGE_BUFFER iso[2];
+    XHCI_ISO_REQUEST req;
+} PAGE_FIXTURE;
+
+/* Static: this is larger than a test's stack should carry. */
+static PAGE_FIXTURE page_fix;
+
+/* `packets` packets of `length`, each in a page of its own (one TRB), or
+ * with `split` straddling a page (two TRBs, 0x40 bytes in the first). */
+static void page_fill(PAGE_BUFFER *iso, ULONG base, ULONG packets,
+                      ULONG length, ULONG split)
+{
+    USBPORT_ISO_PACKET *p;
+    ULONG *raw;
+    ULONG i;
+
+    raw = (ULONG *)iso;
+    for (i = 0; i < sizeof(PAGE_BUFFER) / sizeof(ULONG); i++) {
+        raw[i] = 0;
+    }
+    iso->Block.Signature = USBPORT_ISO_SIGNATURE;
+    for (i = 0; i < packets; i++) {
+        p = &iso->Block.Packet[i];
+        p->Length = length;
+        p->FrameNumber = 700 + i;
+        if (split) {
+            p->FragmentCount = 2;
+            p->Fragment0Length = 0x40;
+            p->Fragment0AddressLo = base + i * 0x2000UL + 0xFC0UL;
+            p->Fragment1Length = length - 0x40;
+            p->Fragment1AddressLo = base + i * 0x2000UL + 0x1000UL;
+        } else {
+            p->FragmentCount = 1;
+            p->Fragment0Length = length;
+            p->Fragment0AddressLo = base + i * 0x1000UL;
+        }
+    }
+    iso->Block.NumberOfPackets = packets;
+}
+
+static void page_request(PAGE_FIXTURE *fix, ULONG which, ULONG maxPackets,
+                         ULONG withLengths, ULONG bei)
+{
+    ULONG b;
+
+    for (b = 0; b < sizeof(fix->req); b++) {
+        ((unsigned char *)&fix->req)[b] = 0;
+    }
+    fix->req.Iso = &fix->iso[which].Block;
+    fix->req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
+    fix->req.DirectionIn = 1;
+    fix->req.MaxPacketSize = 1024;
+    fix->req.MaxBurstSize = 0;
+    fix->req.MaxEsitPayload = 1024;
+    fix->req.PacketsPerFrame = 1;
+    fix->req.MaxPackets = maxPackets;
+    fix->req.TdLengths = withLengths ? fix->lengths : NULL;
+    fix->req.BeiInterval = bei;
+}
+
+static ULONG page_build(PAGE_FIXTURE *fix)
+{
+    return XhciXferBuildIso(&fix->req, 1, fix->scratch,
+                            XHCI_XFER_MAX_ISO_PAGE_TRBS, &fix->layout);
+}
+
+static ULONG page_submit(PAGE_FIXTURE *fix, ULONG which)
+{
+    return XhciXferSubmitIso(&fix->queue, &fix->ring, &fix->req, 1,
+                             &fix->transfers[which],
+                             (PVOID)(0x3000UL + which), fix->scratch,
+                             XHCI_XFER_MAX_ISO_PAGE_TRBS, &fix->layout);
+}
+
+static ULONG page_event(PAGE_FIXTURE *fix, ULONG trbIndex, ULONG code,
+                        ULONG residual, PXHCI_XFER_EVENT_RESULT result)
+{
+    return XhciXferIsoEvent(&fix->queue, &fix->ring, ISO_FIX_SLOT, ISO_FIX_DCI,
+                            RING_PA + trbIndex * 16UL,
+                            event_dw2(code, residual),
+                            event_dw3(ISO_FIX_SLOT, ISO_FIX_DCI), result);
+}
+
+static void test_page_bounds(void)
+{
+    PAGE_FIXTURE *fix;
+    ULONG i;
+
+    fix = &page_fix;
+    /* MaxPackets 0 is today's 62, from the layout's own array. */
+    page_fill(&fix->iso[0], 0x0D000000UL, 62, 192, 0);
+    page_request(fix, 0, 0, 0, 0);
+    CHECK_EQ(page_build(fix), XHCI_XFER_OK, "62 packets at MaxPackets 0");
+    page_fill(&fix->iso[0], 0x0D000000UL, 63, 192, 0);
+    CHECK_EQ(page_build(fix), XHCI_XFER_ISO_TOO_LARGE,
+             "63 at MaxPackets 0: too large");
+    /* Above 62 with no array of the caller's: refused outright. */
+    page_request(fix, 0, 100, 0, 0);
+    CHECK_EQ(page_build(fix), XHCI_XFER_BAD_PARAM,
+             "100 without an array: bad param");
+    page_request(fix, 0, 129, 1, 0);
+    CHECK_EQ(page_build(fix), XHCI_XFER_BAD_PARAM, "MaxPackets 129: bad param");
+    /* 128 with an array: accepted, the layout's own array untouched. */
+    for (i = 0; i < XHCI_XFER_MAX_ISO_PACKETS; i++) {
+        fix->layout.TdLengths[i] = 0xA5A5A5A5UL;
+    }
+    page_fill(&fix->iso[0], 0x0D000000UL, 128, 192, 0);
+    page_request(fix, 0, 128, 1, 0);
+    CHECK_EQ(page_build(fix), XHCI_XFER_OK, "128 packets with an array");
+    CHECK_EQ(fix->layout.TdCount, 128, "128 TDs");
+    CHECK_EQ(fix->layout.TrbCount, 128, "128 TRBs");
+    CHECK_EQ(fix->lengths[127], 1, "the caller's array written");
+    CHECK_EQ(fix->layout.TdLengths[0], 0xA5A5A5A5UL,
+             "the layout's own array untouched");
+    CHECK_EQ(fix->layout.TdLengths[61], 0xA5A5A5A5UL, "to its end");
+    page_fill(&fix->iso[0], 0x0D000000UL, 129, 192, 0);
+    CHECK_EQ(page_build(fix), XHCI_XFER_ISO_TOO_LARGE,
+             "129 packets at 128: too large");
+    /* The Frame ID question takes the same bound. */
+    page_fill(&fix->iso[0], 0x0D000000UL, 100, 192, 0);
+    page_request(fix, 0, 0, 0, 0);
+    fix->req.Frames.Allowed = 1;
+    CHECK_EQ(XhciXferIsoUsesFrameIds(&fix->req), 0,
+             "100 packets at the pool bound: no Frame IDs");
+}
+
+static void test_page_bei(void)
+{
+    static const ULONG counts[] = { 1, 7, 8, 9, 16, 128 };
+    PAGE_FIXTURE *fix;
+    ULONG want;
+    ULONG c;
+    ULONG n;
+    ULONG i;
+
+    /* The rule by hand: BEI unless (i + 1) is a multiple of 8 or i is the
+     * last; never at interval 0. */
+    CHECK_EQ(XhciXferIsoBei(0, 1, 8), 0, "one packet: the last");
+    CHECK_EQ(XhciXferIsoBei(0, 2, 8), 1, "first of two");
+    CHECK_EQ(XhciXferIsoBei(6, 9, 8), 1, "7th of 9");
+    CHECK_EQ(XhciXferIsoBei(7, 9, 8), 0, "8th of 9: unblocked");
+    CHECK_EQ(XhciXferIsoBei(8, 9, 8), 0, "9th of 9: the last");
+    CHECK_EQ(XhciXferIsoBei(14, 16, 8), 1, "15th of 16");
+    CHECK_EQ(XhciXferIsoBei(15, 16, 8), 0, "16th of 16");
+    CHECK_EQ(XhciXferIsoBei(3, 9, 0), 0, "interval 0: never");
+
+    fix = &page_fix;
+    for (c = 0; c < sizeof(counts) / sizeof(counts[0]); c++) {
+        n = counts[c];
+        page_fill(&fix->iso[0], 0x0D000000UL, n, 192, 0);
+        page_request(fix, 0, 128, 1, 8);
+        CHECK_EQ(page_build(fix), XHCI_XFER_OK, "built");
+        for (i = 0; i < n; i++) {
+            want = (i + 1 < n && ((i + 1) % 8) != 0) ? ISO_BEI : 0UL;
+            CHECK_EQ(fix->scratch[i].Control & ISO_BEI, want,
+                     "BEI exactly where the rule names it");
+            CHECK_EQ(fix->scratch[i].Control & ISO_IOC, ISO_IOC,
+                     "IOC on every TD still");
+        }
+    }
+    /* Two-TRB TDs: BEI and IOC on the last TRB only. */
+    page_fill(&fix->iso[0], 0x0D000000UL, 3, 192, 1);
+    page_request(fix, 0, 128, 1, 8);
+    CHECK_EQ(page_build(fix), XHCI_XFER_OK, "split packets built");
+    CHECK_EQ(fix->scratch[0].Control & (ISO_BEI | ISO_IOC), 0UL,
+             "first TRB of a TD: neither");
+    CHECK_EQ(fix->scratch[1].Control & (ISO_BEI | ISO_IOC),
+             ISO_BEI | ISO_IOC, "last TRB of TD 0: both");
+    CHECK_EQ(fix->scratch[5].Control & (ISO_BEI | ISO_IOC), ISO_IOC,
+             "the request's last: IOC alone");
+    /* Interval 0: none anywhere. */
+    page_fill(&fix->iso[0], 0x0D000000UL, 16, 192, 0);
+    page_request(fix, 0, 128, 1, 0);
+    CHECK_EQ(page_build(fix), XHCI_XFER_OK, "built at interval 0");
+    for (i = 0; i < 16; i++) {
+        CHECK_EQ(fix->scratch[i].Control & ISO_BEI, 0UL, "no BEI");
+    }
+}
+
+static void test_page_publish(void)
+{
+    PAGE_FIXTURE *fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PUSBPORT_ISO_PACKET packet;
+    ULONG idx;
+    ULONG i;
+
+    fix = &page_fix;
+    CHECK_EQ(XhciRingInit(&fix->ring, fix->mem, RING_PA, PAGE_RING_TRBS,
+                          XHCI_RING_KIND_ISOCH),
+             XHCI_RING_OK, "a 122-TRB page ring");
+    XhciXferQueueInit(&fix->queue);
+    CHECK_EQ(XhciRingCapacity(&fix->ring), 120, "capacity 120");
+
+    /* 60 two-TRB packets and one more: 121 TRBs, past an empty ring. */
+    page_fill(&fix->iso[0], 0x0D000000UL, 61, 192, 1);
+    fix->iso[0].Block.Packet[60].FragmentCount = 1;
+    fix->iso[0].Block.Packet[60].Fragment0Length = 192;
+    fix->iso[0].Block.Packet[60].Fragment1Length = 0;
+    page_request(fix, 0, 120, 1, 8);
+    CHECK_EQ(page_submit(fix, 0), XHCI_XFER_ISO_TOO_LARGE,
+             "121 TRBs on a 120-TRB allowance: refused as too large");
+    CHECK_EQ(fix->queue.Count, 0, "nothing queued");
+
+    /* 120 one-TRB packets fill it exactly. */
+    page_fill(&fix->iso[0], 0x0D000000UL, 120, 192, 0);
+    page_request(fix, 0, 120, 1, 8);
+    CHECK_EQ(page_submit(fix, 0), XHCI_XFER_OK, "120 packets placed");
+    CHECK_EQ(fix->transfers[0].FirstIndex, 0, "from 0");
+    CHECK_EQ(fix->transfers[0].LastIndex, 119, "to 119");
+    CHECK_EQ(fix->mem[6].Control & ISO_BEI, ISO_BEI, "TD 7 blocked");
+    CHECK_EQ(fix->mem[7].Control & ISO_BEI, 0UL, "TD 8 not");
+    CHECK_EQ(fix->mem[119].Control & ISO_BEI, 0UL, "the last not");
+    page_fill(&fix->iso[1], 0x0E000000UL, 1, 192, 0);
+    page_request(fix, 1, 120, 1, 8);
+    CHECK_EQ(page_submit(fix, 1), XHCI_XFER_BUSY, "full: busy, not refused");
+
+    /* Completion as before: a short, a Missed Service, a skip. */
+    packet = fix->iso[0].Block.Packet;
+    for (i = 0; i < 120; i++) {
+        if (i == 50) {
+            CHECK_EQ(page_event(fix, i, WANT_CC_SHORT_PACKET, 2, &result),
+                     XHCI_XFER_OK, "short");
+        } else if (i == 60) {
+            CHECK_EQ(page_event(fix, i, WANT_CC_MISSED_SERVICE, 192, &result),
+                     XHCI_XFER_OK, "missed");
+        } else if (i == 70) {
+            continue;   /* no event: skipped */
+        } else {
+            CHECK_EQ(page_event(fix, i, WANT_CC_SUCCESS, 0, &result),
+                     XHCI_XFER_OK, "success");
+        }
+        if (i < 119) {
+            CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "not yet");
+        }
+    }
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "the last completes");
+    CHECK_EQ(packet[49].LengthTransferred, 192, "full");
+    CHECK_EQ(packet[50].LengthTransferred, 190, "short: 192 - 2");
+    CHECK_EQ((ULONG)packet[50].Status, WANT_USBD_DATA_UNDERRUN, "underrun");
+    CHECK((ULONG)packet[60].Status != WANT_USBD_SUCCESS, "missed: failed");
+    CHECK_EQ((ULONG)packet[70].Status, WANT_USBD_NOT_ACCESSED,
+             "skipped: not accessed");
+    CHECK_EQ(packet[119].LengthTransferred, 192, "the last full");
+    CHECK_EQ(fix->ring.Dequeue, 120, "dequeue at 120");
+
+    /* Two-TRB TDs across the Link at 121: 40 of them from 120. */
+    page_fill(&fix->iso[1], 0x0E000000UL, 40, 192, 1);
+    page_request(fix, 1, 120, 1, 8);
+    CHECK_EQ(page_submit(fix, 1), XHCI_XFER_OK, "80 TRBs across the Link");
+    CHECK_EQ(fix->transfers[1].FirstIndex, 120, "from 120");
+    CHECK_EQ(fix->transfers[1].LastIndex, 78, "to 78 after the wrap");
+    CHECK_EQ(fix->mem[121].Control & ISO_CH, ISO_CH,
+             "the Link inside TD 0 carries Chain");
+    for (i = 0; i < 40; i++) {
+        idx = 120 + 2 * i + 1;
+        if (idx >= 121) {
+            idx -= 121;
+        }
+        CHECK_EQ(page_event(fix, idx, WANT_CC_SUCCESS, 0, &result),
+                 XHCI_XFER_OK, "tail event");
+    }
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "completed");
+    CHECK_EQ(fix->transfers[1].IsoPacketsAnswered, 40, "every packet");
+    CHECK_EQ(fix->iso[1].Block.Packet[39].LengthTransferred, 192, "full");
+}
+
 int main(void)
 {
     test_spurious_success();
@@ -2175,6 +2470,9 @@ int main(void)
     test_event_rejections();
     test_event_stopped_family_refused();
     test_submit_across_the_link();
+    test_page_bounds();
+    test_page_bei();
+    test_page_publish();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

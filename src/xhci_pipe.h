@@ -284,6 +284,43 @@ ULONG XhciPipeCallerInterval(const UCHAR *config, ULONG length, ULONG offset,
 ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep);
 
 /* ------------------------------------------------------------------ */
+/* The isochronous ring page (design record 13 section 11.8, ISORING)  */
+/* ------------------------------------------------------------------ */
+
+/* The event ring entries kept for every source but isochronous rings, and
+ * the smallest grant worth a page (point 3). */
+#define XHCI_ISO_EVENT_RESERVE      64UL
+#define XHCI_ISO_PAGE_MIN_GRANT     16UL
+/* The events a pipe can add beyond its ring's TRBs while nothing drains:
+ * one underrun for each of its records published meanwhile (hcd.h
+ * HCD_PIPE_XFERS, 4) and the empty stretch already running. A pipe is
+ * counted at its capacity plus this. */
+#define XHCI_ISO_EVENTS_OVER_TRBS   5UL
+
+/* Nonzero when `ep` is a candidate for a page (point 2): isochronous, not
+ * zero-bandwidth, and serviced more than once a frame (Interval 0 to 2),
+ * or any isochronous endpoint under `force` (the qemu flavour's
+ * XhciQemuIsoRing). 0 for NULL. */
+ULONG XhciPipeIsoPageWanted(const XHCI_PIPE_EP *ep, ULONG force);
+
+/* A page's grant (point 3): the TRBs over a pool ring's `poolCapacity`
+ * the event ring still has room for, with `counted` (every open
+ * isochronous pipe at its capacity plus XHCI_ISO_EVENTS_OVER_TRBS) less
+ * `borrow` (what an
+ * interface switch's own command drops), the reserve, and the new pipe's
+ * and one more pool pipe's base kept; at most the page's room over
+ * `poolCapacity`, 0 below the minimum. */
+ULONG XhciPipeIsoGrant(ULONG eventRingTrbs, ULONG counted, ULONG borrow,
+                       ULONG poolCapacity);
+
+/* The ring's TRBs for a grant (capacity = poolCapacity + grant), and the
+ * bytes the page allocation takes: the ring, doubled when `pad` (the
+ * overfetch quirk), rounded up to whole `pageSize` pages. 0 when the ring
+ * would be larger than XHCI_ISO_PAGE_MAX_RING_TRBS. */
+ULONG XhciPipeIsoRingTrbs(ULONG grant, ULONG poolCapacity);
+ULONG XhciPipeIsoPageBytes(ULONG ringTrbs, ULONG pad, ULONG pageSize);
+
+/* ------------------------------------------------------------------ */
 /* Fast polling of Low- and Full-Speed interrupt endpoints (33.8)       */
 /* ------------------------------------------------------------------ */
 

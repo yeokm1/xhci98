@@ -68,10 +68,12 @@ typedef struct _TD_SG {
     USBPORT_SCATTER_GATHER_ELEMENT More[HCD_SG_ELEMENTS];
 } TD_SG;
 
-/* hcd.h HCD_ISO_BLOCK. */
+/* hcd.h HCD_ISO_BLOCK, at a ring page's packet bound (record 13 section
+ * 11.8): hcd_cfg.c allocates a pipe's blocks at its own bound, a stride
+ * apart, and the largest is this. */
 typedef struct _TD_ISO_BLOCK {
     USBPORT_ISO_TRANSFER Block;
-    USBPORT_ISO_PACKET More[XHCI_XFER_MAX_ISO_PACKETS - 1];
+    USBPORT_ISO_PACKET More[XHCI_XFER_MAX_ISO_PAGE_PACKETS - 1];
 } TD_ISO_BLOCK;
 
 static const char *layout_name;
@@ -827,7 +829,8 @@ static void test_submit_and_short(void)
 /* ------------------------------------------------------------------ */
 
 static TD_ISO_BLOCK iso_block;
-static XHCI_TRB iso_out[XHCI_XFER_MAX_ISO_TRBS];
+static XHCI_TRB iso_out[XHCI_XFER_MAX_ISO_PAGE_TRBS];
+static ULONG iso_lengths[XHCI_XFER_MAX_ISO_PAGE_PACKETS];
 static XHCI_ISO_LAYOUT iso_layout;
 
 /* hcdIsoFill over a URB table of `n` packets, all `size` bytes but packet
@@ -836,7 +839,7 @@ static ULONG iso_fill(ULONG vo, ULONG n, ULONG size, ULONG empty,
                       ULONG start, ULONG interval, TD_SG *sg,
                       ULONG *bufferLength)
 {
-    XHCI_PIPE_ISO_PACKET urb[XHCI_XFER_MAX_ISO_PACKETS];
+    XHCI_PIPE_ISO_PACKET urb[XHCI_XFER_MAX_ISO_PAGE_PACKETS];
     USBPORT_ISO_PACKET *p;
     ULONG lengths[2];
     ULONG off;
@@ -852,7 +855,7 @@ static ULONG iso_fill(ULONG vo, ULONG n, ULONG size, ULONG empty,
         off += (i == empty) ? 0 : size;
     }
     *bufferLength = off;
-    if (XhciPipeIsoCheck(urb, n, off, XHCI_XFER_MAX_ISO_PACKETS, size) !=
+    if (XhciPipeIsoCheck(urb, n, off, XHCI_XFER_MAX_ISO_PAGE_PACKETS, size) !=
             XHCI_PIPE_OK ||
         !map_chunk(vo, off, sg)) {
         return 0;
@@ -897,6 +900,13 @@ static ULONG iso_fill(ULONG vo, ULONG n, ULONG size, ULONG empty,
 static void iso_request(XHCI_ISO_REQUEST *req, ULONG interval, ULONG mps,
                         ULONG allowed, ULONG now)
 {
+    ULONG b;
+
+    /* Whole, as hcdIsoPublish does: the fields record 13 section 11.8
+     * added start 0, today's behaviour. */
+    for (b = 0; b < sizeof(*req); b++) {
+        ((unsigned char *)req)[b] = 0;
+    }
     req->Iso = &iso_block.Block;
     req->TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req->DirectionIn = 0;
@@ -1425,6 +1435,34 @@ static void test_iso_ceiling(void)
                               &iso_layout), XHCI_XFER_ISO_TOO_LARGE,
              "62 FS audio packets that cross two pages: refused as too "
              "large, not truncated");
+
+    /* Record 13 section 11.8: a page's request, 120 packets at the
+     * allowance's bound with the controller's length array, through the
+     * same fill. 120 x 192 = 23040 bytes from page offset 0: four page
+     * crossings (12288 is a packet edge), so 124 TRBs - built; the ring
+     * capacity (120) is what refuses it at the submit, not the build. */
+    CHECK_EQ(iso_fill(0, 120, 192, 120, 1003, 3, &sg, &length), 1,
+             "120 packets filled");
+    iso_request(&req, 3, 192, 0, 1000);
+    req.MaxPackets = 120;
+    req.TdLengths = iso_lengths;
+    CHECK_EQ(XhciXferBuildIso(&req, 0, iso_out, XHCI_XFER_MAX_ISO_PAGE_TRBS,
+                              &iso_layout), XHCI_XFER_OK,
+             "120 packets built at the page bound");
+    CHECK_EQ(iso_layout.TdCount, 120, "120 TDs");
+    CHECK_EQ(iso_layout.TrbCount, 124, "120 TRBs and four crossings");
+    /* 120 x 32 = 3840 bytes in one page: 120 TRBs, a full allowance. */
+    CHECK_EQ(iso_fill(0, 120, 32, 120, 1003, 3, &sg, &length), 1, "filled");
+    iso_request(&req, 3, 32, 0, 1000);
+    req.MaxPackets = 120;
+    req.TdLengths = iso_lengths;
+    CHECK_EQ(XhciXferBuildIso(&req, 0, iso_out, XHCI_XFER_MAX_ISO_PAGE_TRBS,
+                              &iso_layout), XHCI_XFER_OK, "built");
+    CHECK_EQ(iso_layout.TrbCount, 120, "120 TRBs exactly");
+    /* hcd_cfg.c's stride at 120 packets: 16 + 120 x 56, a multiple of 8. */
+    CHECK_EQ(((ULONG)XHCI_OFFSET_OF(USBPORT_ISO_TRANSFER, Packet) +
+              120UL * (ULONG)sizeof(USBPORT_ISO_PACKET) + 7UL) & ~7UL,
+             6736UL, "a page pipe's block is 6,736 bytes");
 }
 
 /*

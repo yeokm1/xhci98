@@ -490,7 +490,7 @@ by an event budget the 256-entry event ring sets (allowance 120 TRBs, 120
 packets a request), and BEI on all but every eighth TD and the request's
 last. On branch `isoch-ring`.
 
-- [ ] ISORING.1 the design, record 13 section 11.8: the page, the candidates, the event budget and an interface switch's borrow, the request's limits, the scratch, BEI, the page's lifetime, the numbers, the host vectors and the legs
+- [x] ISORING.1 the design, record 13 section 11.8. Done 2026-10-20 (`7ef4bac6`..`69eed86e`), reviewed to convergence: the page, the candidates, the event budget and an interface switch's borrow, the request's limits, the scratch, BEI, the page's lifetime, the numbers, the host vectors and the legs
 - [ ] ISORING.2 the code and host vectors (`hcd_cfg.c`, `hcd_io.c`, `hcd_urb.c`, `hcd_dma.c`, `xhci_xfer.c` and the pure budget), with `docs/usb-xhci-info/xhci-programming.md`'s "Never set BEI" and design record 20's `XHCI_AVOID_BEI` row rewritten to the rule; x86 and amd64 built, the host suites run
 - [ ] ISORING.3 the legs: QEMU's Full Speed `usb-audio` played on Windows 2000, XP and 7 x64 on the pool ring and on a page (`XhciQemuIsoRing` 1), 98 SE's binding and counters, an alternate setting dropped and taken again, an unplug while playing, the switch's failure paths through faults 18 and 19 with every grant returned once, and the other traffic on the same controller unchanged. Owed after them, and said in the release notes' "Untested ground": a High Speed isochronous stream, a camera, and the interrupt saving, on real hardware
 - [ ] ISORING.4 a larger event ring (record 13 section 11.8, point 9), which raises the budget: the owner's decision whether to take it, as a task of its own

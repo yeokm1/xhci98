@@ -233,6 +233,68 @@ ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep)
 }
 
 /*
+ * Design record 13 section 11.8 (ISORING). A ring's events are at most its
+ * TRBs, so what isochronous rings hold is what they can leave on the event
+ * ring unread; these size a page's ring from what the event ring allows.
+ */
+ULONG XhciPipeIsoPageWanted(const XHCI_PIPE_EP *ep, ULONG force)
+{
+    if (ep == NULL || ep->TransferType != XHCI_PIPE_XFER_ISOCH ||
+        XhciPipeZeroBandwidth(ep)) {
+        return 0;
+    }
+    return (force || ep->Interval <= 2UL) ? 1UL : 0UL;
+}
+
+ULONG XhciPipeIsoGrant(ULONG eventRingTrbs, ULONG counted, ULONG borrow,
+                       ULONG poolCapacity)
+{
+    ULONG kept;
+    ULONG avail;
+    ULONG room;
+
+    if (poolCapacity >= XHCI_XFER_MAX_ISO_PAGE_TRBS) {
+        return 0;
+    }
+    counted = (borrow >= counted) ? 0UL : counted - borrow;
+    /* The reserve, and the new pipe's and one more pool pipe's base:
+     * capacity plus the underrun events each can add. */
+    kept = XHCI_ISO_EVENT_RESERVE +
+           2UL * (poolCapacity + XHCI_ISO_EVENTS_OVER_TRBS);
+    if (counted >= 0xFFFFFFFFUL - kept ||
+        eventRingTrbs <= kept + counted) {
+        return 0;
+    }
+    avail = eventRingTrbs - kept - counted;
+    room = XHCI_XFER_MAX_ISO_PAGE_TRBS - poolCapacity;
+    if (avail > room) {
+        avail = room;
+    }
+    return (avail >= XHCI_ISO_PAGE_MIN_GRANT) ? avail : 0UL;
+}
+
+ULONG XhciPipeIsoRingTrbs(ULONG grant, ULONG poolCapacity)
+{
+    if (grant == 0 || poolCapacity >= XHCI_XFER_MAX_ISO_PAGE_TRBS ||
+        grant > XHCI_XFER_MAX_ISO_PAGE_TRBS - poolCapacity) {
+        return 0;
+    }
+    return poolCapacity + grant + 2UL;
+}
+
+ULONG XhciPipeIsoPageBytes(ULONG ringTrbs, ULONG pad, ULONG pageSize)
+{
+    ULONG bytes;
+
+    if (ringTrbs < 3UL || ringTrbs > XHCI_ISO_PAGE_MAX_RING_TRBS ||
+        pageSize == 0 || (pageSize & (pageSize - 1UL)) != 0) {
+        return 0;
+    }
+    bytes = ringTrbs * XHCI_TRB_BYTES * (pad ? 2UL : 1UL);
+    return (bytes + pageSize - 1UL) & ~(pageSize - 1UL);
+}
+
+/*
  * Table 6-12's bInterval range for the rows that take 2^(bInterval-1): the
  * HS interrupt and isoch row and the FS isoch row both list 1-16.
  */

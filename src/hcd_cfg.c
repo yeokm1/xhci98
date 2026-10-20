@@ -748,6 +748,9 @@ static VOID hcdCfgRetiredReclaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             link = &st->Next;
         }
     }
+    /* Record 13 section 11.8, point 8: the retired ring pages by the same
+     * proof. */
+    hcdCfgIsoPagesReclaim(hc, dev, dropped);
 }
 
 /* Every command this file issues: the thread's, and a Configure Endpoint
@@ -1142,14 +1145,197 @@ static ULONG hcdCfgRingless(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     return n;
 }
 
-/* A new pipe for one endpoint, on a pool ring of its own. NULL when the
- * pool or the pool allocator has nothing; *usbd says which. `reserved` is
- * how many of the device's rings an interface switch's own command will
- * drop, outside the per-device cap (XhciPoolAcquireReserved; design record
- * 20 section 5.2); 0 outside a switch. */
+/* An isochronous pipe's count given back to the event budget (record 13
+ * section 11.8, point 3), once: it can publish no more and holds no TD.
+ * Its ring, pool or page, stays with it. Thread only. */
+static VOID hcdCfgIsoCountReturn(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
+{
+    KIRQL oldIrql;
+    ULONG count;
+
+    count = pipe->IsoCount;
+    if (count == 0) {
+        return;
+    }
+    pipe->IsoCount = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->IsoCapOut = (hc->IsoCapOut >= count) ? hc->IsoCapOut - count : 0UL;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    XhciLogNote(&hc->Hc, "iso.page.free",
+                (pipe->Device->SlotId << 24) |
+                    ((pipe->Dci & 0xFFUL) << 16) | (count & 0xFFFFUL));
+}
+
+/*
+ * Record 13 section 11.8, points 1 to 3: an isochronous pipe counted into
+ * the event budget, with a ring page if its endpoint is a candidate and the
+ * budget grants one - `borrow` being the counts of the pipes an interface
+ * switch's own command drops - and its ring built in the page. Returns 1
+ * with the page; 0 leaves the pipe on its pool ring, counted at the pool
+ * ring's capacity plus XHCI_ISO_EVENTS_OVER_TRBS. `iso.page` notes slot
+ * 31:24, DCI 23:16, then the allowance, or 0x8000 refused by the budget,
+ * 0x4000 by memory.
+ * Thread only, PASSIVE_LEVEL.
+ */
+static ULONG hcdCfgIsoPage(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           PHCD_PIPE pipe, const XHCI_PIPE_EP *ep,
+                           ULONG borrow)
+{
+    PXHCI_EXTENSION ext;
+    PHYSICAL_ADDRESS pa;
+    KIRQL oldIrql;
+    PVOID va;
+    ULONG wanted;
+    ULONG grant;
+    ULONG trbs;
+    ULONG bytes;
+    ULONG i;
+
+    ext = &hc->Hc;
+#if defined(XHCI_FLAVOUR_QEMU)
+    wanted = XhciPipeIsoPageWanted(ep, hc->QemuIsoRing);
+#else
+    wanted = XhciPipeIsoPageWanted(ep, 0);
+#endif
+    /* Point 2: a controller that may answer one TRB twice breaks the
+     * bound the budget rests on. */
+    if (XhciQuirkOn(&ext->Quirk, XHCI_QK_ISOCH_SUCCESS)) {
+        wanted = 0;
+    }
+    grant = 0;
+    trbs = 0;
+    bytes = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (wanted) {
+        grant = XhciPipeIsoGrant(ext->Layout.EventRingTrbs, hc->IsoCapOut,
+                                 borrow, XHCI_XFER_MAX_ISO_TRBS);
+        trbs = XhciPipeIsoRingTrbs(grant, XHCI_XFER_MAX_ISO_TRBS);
+        bytes = XhciPipeIsoPageBytes(
+            trbs, XhciQuirkOn(&ext->Quirk, XHCI_QK_RING_PAD), PAGE_SIZE);
+        if (grant == 0 || trbs == 0 || bytes == 0) {
+            grant = 0;
+            hc->IsoPagesRefusedBudget++;
+        }
+    }
+    /* Counted now, at the allowance asked for, so a concurrent open sees
+     * it; the pool ring's count if no page comes of it. */
+    pipe->IsoCount = ((grant != 0) ? trbs - 2UL : XHCI_XFER_MAX_ISO_TRBS) +
+                     XHCI_ISO_EVENTS_OVER_TRBS;
+    hc->IsoCapOut += pipe->IsoCount;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!wanted) {
+        return 0;
+    }
+    if (grant == 0) {
+        XhciLogNote(ext, "iso.page",
+                    (dev->SlotId << 24) | ((ep->Dci & 0xFFUL) << 16) |
+                        0x8000UL);
+        return 0;
+    }
+    va = HcdDmaStreamAlloc(hc, bytes, &pa);
+    if (va != NULL) {
+        for (i = 0; i < bytes / sizeof(ULONG); i++) {
+            ((volatile ULONG *)va)[i] = 0;
+        }
+        if (XhciRingInit(&pipe->OwnRing, (volatile XHCI_TRB *)va, pa.LowPart,
+                         trbs, XHCI_RING_KIND_ISOCH) != XHCI_RING_OK) {
+            HcdDmaStreamFree(hc, bytes, pa, va);
+            va = NULL;
+        }
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (va == NULL) {
+        hc->IsoCapOut -= pipe->IsoCount - (XHCI_XFER_MAX_ISO_TRBS +
+                                           XHCI_ISO_EVENTS_OVER_TRBS);
+        pipe->IsoCount = XHCI_XFER_MAX_ISO_TRBS + XHCI_ISO_EVENTS_OVER_TRBS;
+        hc->IsoPagesRefusedMemory++;
+    } else {
+        hc->IsoPagesBuilt++;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (va == NULL) {
+        XhciLogNote(ext, "iso.page",
+                    (dev->SlotId << 24) | ((ep->Dci & 0xFFUL) << 16) |
+                        0x4000UL);
+        return 0;
+    }
+    pipe->IsoPageVa = va;
+    pipe->IsoPagePa = pa;
+    pipe->IsoPageBytes = bytes;
+    XhciLogNote(ext, "iso.page",
+                (dev->SlotId << 24) | ((ep->Dci & 0xFFUL) << 16) |
+                    ((trbs - 2UL) & 0x3FFFUL));
+    return 1;
+}
+
+/* A page's allocation given up (record 13 section 11.8, point 8): freed
+ * when `endpointOff` (the endpoint Disabled or the slot gone), else
+ * retired to the device until the proof that frees a retired stream block.
+ * Thread only. */
+static VOID hcdCfgIsoPageRelease(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                 PHCD_PIPE pipe, ULONG endpointOff)
+{
+    PHCD_ISO_PAGE page;
+
+    if (pipe->IsoPageVa == NULL) {
+        return;
+    }
+    if (endpointOff) {
+        HcdDmaStreamFree(hc, pipe->IsoPageBytes, pipe->IsoPagePa,
+                         pipe->IsoPageVa);
+    } else {
+        page = (PHCD_ISO_PAGE)HcdPoolAlloc(sizeof(HCD_ISO_PAGE));
+        if (page != NULL) {
+            page->Dci = pipe->Dci;
+            page->Va = pipe->IsoPageVa;
+            page->Pa = pipe->IsoPagePa;
+            page->Bytes = pipe->IsoPageBytes;
+            page->Next = dev->IsoPagesRetired;
+            dev->IsoPagesRetired = page;
+            hc->IsoPagesRetiredCount++;
+        } else {
+            /* No record to retire it with: kept for good rather than
+             * freed under a context that may name it, and counted as a
+             * kept block is (HcdDmaStreamFree). */
+            hc->CommonBuffersKept++;
+        }
+    }
+    pipe->IsoPageVa = NULL;
+    pipe->IsoPageBytes = 0;
+}
+
+/* The retired pages whose endpoint is in `dropped` (DCI bits), freed: a
+ * proof has shown no context names them. Thread only. */
+static VOID hcdCfgIsoPagesReclaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                  ULONG dropped)
+{
+    PHCD_ISO_PAGE *link;
+    PHCD_ISO_PAGE page;
+
+    link = &dev->IsoPagesRetired;
+    while ((page = *link) != NULL) {
+        if (page->Dci < 32UL && (dropped & (1UL << page->Dci)) != 0) {
+            *link = page->Next;
+            HcdDmaStreamFree(hc, page->Bytes, page->Pa, page->Va);
+            HcdPoolFree(page);
+        } else {
+            link = &page->Next;
+        }
+    }
+}
+
+/* A new pipe for one endpoint, on a pool ring of its own - for an
+ * isochronous endpoint granted a ring page (hcdCfgIsoPage) the pool entry
+ * is taken all the same and its ring left unused, so the pool still
+ * bounds the endpoint contexts (record 13 section 11.8, point 1). NULL
+ * when the pool or the pool allocator has nothing; *usbd says which.
+ * `reserved` is how many of the device's rings an interface switch's own
+ * command will drop, outside the per-device cap (XhciPoolAcquireReserved;
+ * design record 20 section 5.2), and `isoBorrow` the event-budget counts it
+ * drops (record 13 section 11.8, point 3); both 0 outside a switch. */
 static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                const XHCI_PIPE_EP *ep, ULONG reserved,
-                               PLONG usbd)
+                               ULONG isoBorrow, PLONG usbd)
 {
     PXHCI_EXTENSION ext;
     PHCD_PIPE pipe;
@@ -1188,15 +1374,6 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         (ep->TransferType == XHCI_PIPE_XFER_BULK ||
          ep->TransferType == XHCI_PIPE_XFER_INTERRUPT) ? 1UL : 0UL,
         dev->TtSlot != 0 ? 1UL : 0UL);
-    if (ep->TransferType == XHCI_PIPE_XFER_ISOCH) {
-        pipe->Iso = (PHCD_ISO_BLOCK)HcdPoolAlloc(
-            (ULONG)(HCD_PIPE_XFERS * sizeof(HCD_ISO_BLOCK)));
-        if (pipe->Iso == NULL) {
-            HcdPoolFree(pipe);
-            *usbd = HCD_USBD_NO_MEMORY;
-            return NULL;
-        }
-    }
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     answer = XhciPoolAcquireReserved(&ext->RingPool, dev->SlotId,
@@ -1214,29 +1391,62 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             dev->PoolRings--;
             XhciControllerLockRelease(&hc->Hc, oldIrql);
         }
-        HcdPoolFree(pipe->Iso);
         HcdPoolFree(pipe);
         *usbd = HCD_USBD_NO_MEMORY;
         return NULL;
     }
     pipe->PoolIndex = index;
     hcdCfgZero(ext, offset, ext->Layout.PoolRingTrbs * XHCI_TRB_BYTES);
+
+    if (ep->TransferType == XHCI_PIPE_XFER_ISOCH) {
+        /* Record 13 section 11.8, point 4: a page's request bound is its
+         * allowance's, at most XHCI_XFER_MAX_ISO_PAGE_PACKETS; the blocks
+         * are allocated at the pipe's bound, a stride apart. */
+        pipe->IsoMaxPackets = XHCI_XFER_MAX_ISO_PACKETS;
+        if (hcdCfgIsoPage(hc, dev, pipe, ep, isoBorrow)) {
+            pipe->IsoMaxPackets = XhciRingCapacity(&pipe->OwnRing);
+            if (pipe->IsoMaxPackets > XHCI_XFER_MAX_ISO_PAGE_PACKETS) {
+                pipe->IsoMaxPackets = XHCI_XFER_MAX_ISO_PAGE_PACKETS;
+            }
+        }
+        pipe->IsoBlockBytes =
+            ((ULONG)FIELD_OFFSET(USBPORT_ISO_TRANSFER, Packet) +
+             pipe->IsoMaxPackets * (ULONG)sizeof(USBPORT_ISO_PACKET) + 7UL) &
+            ~7UL;
+        pipe->Iso = (PHCD_ISO_BLOCK)HcdPoolAlloc(HCD_PIPE_XFERS *
+                                                 pipe->IsoBlockBytes);
+        if (pipe->Iso == NULL) {
+            *usbd = HCD_USBD_NO_MEMORY;
+            goto refused;
+        }
+        if (pipe->IsoPageVa != NULL) {
+            return pipe;
+        }
+    }
+
     if (XhciRingInit(&pipe->OwnRing,
                      (volatile XHCI_TRB *)XhciCommonAt(ext, offset),
                      XhciCommonPA(ext, offset), ext->Layout.PoolRingTrbs,
                      ep->TransferType == XHCI_PIPE_XFER_ISOCH
                          ? XHCI_RING_KIND_ISOCH
                          : XHCI_RING_KIND_ENDPOINT) != XHCI_RING_OK) {
-        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        (VOID)XhciPoolRelease(&ext->RingPool, dev->SlotId, index);
-        dev->PoolRings--;
-        XhciControllerLockRelease(&hc->Hc, oldIrql);
-        HcdPoolFree(pipe->Iso);
-        HcdPoolFree(pipe);
         *usbd = HCD_USBD_INTERNAL_HC_ERROR;
-        return NULL;
+        goto refused;
     }
     return pipe;
+
+refused:
+    /* Never installed in a context: the page, the count and the pool
+     * entry go back at once. */
+    hcdCfgIsoCountReturn(hc, pipe);
+    hcdCfgIsoPageRelease(hc, dev, pipe, 1);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    (VOID)XhciPoolRelease(&ext->RingPool, dev->SlotId, index);
+    dev->PoolRings--;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdPoolFree(pipe->Iso);
+    HcdPoolFree(pipe);
+    return NULL;
 }
 
 /* An endpoint's streams freed (31-A.1): every stream's pipe, and the block
@@ -1290,6 +1500,17 @@ static VOID hcdCfgPipeFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         st = NULL;
     }
     hcdCfgStreamsFree(hc, st);
+
+    /* Record 13 section 11.8, point 8: a ring page follows the stream
+     * block's rule, since unlike a pool ring it does not stay in the
+     * controller's own block. */
+    hcdCfgIsoCountReturn(hc, pipe);
+    if (pipe->IsoPageVa != NULL) {
+        hcdCfgIsoPageRelease(
+            hc, dev, pipe,
+            (dev->Gone || hcdCfgEpState(hc, dev, pipe->Dci) ==
+                              XHCI_EP_STATE_DISABLED) ? 1UL : 0UL);
+    }
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     (VOID)XhciPoolRelease(&hc->Hc.RingPool, dev->SlotId, pipe->PoolIndex);
@@ -1372,6 +1593,9 @@ static VOID hcdCfgRetain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     pipe->Closed = 1;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    /* Closed and holding no TD: its event-budget count goes back now, its
+     * ring stays with it (record 13 section 11.8, point 3). */
+    hcdCfgIsoCountReturn(hc, pipe);
     pipe->Pinned = pinned;
     pipe->RetainNext = dev->Retained;
     dev->Retained = pipe;
@@ -1467,6 +1691,7 @@ VOID HcdCfgDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         dev->StreamsRetired = st->Next;
         hcdCfgStreamsFree(hc, st);
     }
+    hcdCfgIsoPagesReclaim(hc, dev, 0xFFFFFFFFUL);
 }
 
 /* An endpoint's own handle, if the device still has it open: never a
@@ -1604,7 +1829,7 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     (VOID)hcdCfgTolerance(hc, dev, &tol);
     ep = &tol;
     usbd = XHCI_USBD_STATUS_SUCCESS;
-    pipe = hcdCfgPipeNew(hc, dev, ep, 0, &usbd);
+    pipe = hcdCfgPipeNew(hc, dev, ep, 0, 0, &usbd);
     if (pipe == NULL) {
         return NULL;
     }
@@ -1802,7 +2027,7 @@ static LONG hcdCfgSelectOnce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 break;
             }
             hcdCfgFastPoll(hc, dev, &ep);
-            add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, 0, &usbd);
+            add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, 0, 0, &usbd);
             if (add[ep.Dci] == NULL) {
                 hc->Counters.EndpointRefusalsPool++;
                 break;
@@ -2071,6 +2296,23 @@ static ULONG hcdCfgSwitchReserved(PHCD_USB_DEVICE dev,
         n++;
     }
     return n + hcdCfgRetainedCount(dev);
+}
+
+/* The event-budget counts of the pipes a switch's own command drops,
+ * detached and drained, so free for its new pipes (record 13 section
+ * 11.8, point 3). Thread only. */
+static ULONG hcdCfgSwitchIsoBorrow(const HCD_CFG_SWITCH *sw)
+{
+    ULONG n;
+    ULONG dci;
+
+    n = 0;
+    for (dci = 2; dci < 32; dci++) {
+        if ((sw->OldMask & (1UL << dci)) != 0 && sw->Old[dci] != NULL) {
+            n += sw->Old[dci]->IsoCount;
+        }
+    }
+    return n;
 }
 
 /* A detached old pipe put back with its own handle: republished, its
@@ -2453,6 +2695,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     PHCD_PIPE pipe;
     UCHAR before;
     ULONG reserved;
+    ULONG isoBorrow;
     ULONG reattached;
     ULONG manual;
     ULONG fixed;
@@ -2538,6 +2781,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     /* Step 2: the new setting's pipes, their rings from the pool, the
      * rings this switch's command will drop reserved apart from the cap. */
     reserved = hcdCfgSwitchReserved(dev, &sw);
+    isoBorrow = hcdCfgSwitchIsoBorrow(&sw);
     usbd = XHCI_USBD_STATUS_SUCCESS;
     for (e = 0; e < iface.EndpointCount; e++) {
         /* A function's takes the composite devnode's own rate, if it has
@@ -2563,7 +2807,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             break;
         }
         hcdCfgFastPoll(hc, dev, &ep);
-        pipe = hcdCfgPipeNew(hc, dev, &ep, reserved, &usbd);
+        pipe = hcdCfgPipeNew(hc, dev, &ep, reserved, isoBorrow, &usbd);
         if (pipe == NULL) {
             hc->Counters.EndpointRefusalsPool++;
             break;
@@ -2964,6 +3208,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     PUCHAR end;
     ULONG reattached;
     ULONG reserved;
+    ULONG isoBorrow;
     ULONG manual;
     ULONG fixed;
     ULONG named;
@@ -3059,6 +3304,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * SELECT_INTERFACE's), the rings the switch's command will drop
      * reserved apart from the cap. */
     reserved = hcdCfgSwitchReserved(dev, &sw);
+    isoBorrow = hcdCfgSwitchIsoBorrow(&sw);
     opened = 0;
     usbd = XHCI_USBD_STATUS_SUCCESS;
     for (p = (PUCHAR)&sc->Interface;
@@ -3088,7 +3334,8 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 break;
             }
             hcdCfgFastPoll(hc, dev, &ep);
-            pipe = hcdCfgPipeNew(hc, dev, &ep, reserved, &usbd);
+            pipe = hcdCfgPipeNew(hc, dev, &ep, reserved, isoBorrow,
+                                 &usbd);
             if (pipe == NULL) {
                 hc->Counters.EndpointRefusalsPool++;
                 break;

@@ -3247,11 +3247,57 @@ static ULONG xhciXferIsoBurstFields(ULONG packetLength,
     return (*tbc <= XHCI_TRB_TBC_MAX && *tlbpc <= XHCI_TRB_TLBPC_MAX) ? 1 : 0;
 }
 
+/*
+ * The request's packet bound and where its TD lengths go (design record 13
+ * section 11.8, point 6): MaxPackets 0 is the pool ring's bound, and a bound
+ * above it needs an array of the caller's, since the layout's holds only
+ * XHCI_XFER_MAX_ISO_PACKETS. 0 for a combination nothing may build.
+ */
+static ULONG xhciXferIsoBound(const XHCI_ISO_REQUEST *request,
+                              PXHCI_ISO_LAYOUT layout,
+                              PULONG *lengths)
+{
+    ULONG bound;
+
+    bound = (request->MaxPackets == 0) ? XHCI_XFER_MAX_ISO_PACKETS
+                                       : request->MaxPackets;
+    if (bound > XHCI_XFER_MAX_ISO_PAGE_PACKETS) {
+        return 0;
+    }
+    if (request->TdLengths != NULL) {
+        if (lengths != NULL) {
+            *lengths = request->TdLengths;
+        }
+        return bound;
+    }
+    if (bound > XHCI_XFER_MAX_ISO_PACKETS) {
+        return 0;
+    }
+    if (lengths != NULL) {
+        *lengths = (layout != NULL) ? layout->TdLengths : NULL;
+    }
+    return bound;
+}
+
+/*
+ * Whether packet `i` of `packets` carries BEI (point 7): every TD but every
+ * `interval`-th and the request's last, so an unblocked interrupt comes at
+ * least every `interval` TDs and always at the request's end. 0 never.
+ */
+ULONG XhciXferIsoBei(ULONG i, ULONG packets, ULONG interval)
+{
+    if (interval == 0 || i + 1 >= packets) {
+        return 0;
+    }
+    return ((i + 1) % interval) != 0 ? 1UL : 0UL;
+}
+
 /* One packet as one Isoch TD. `tdLength` receives the TRB count. */
 static ULONG xhciXferBuildIsoPacket(XHCI_ISO_BUILD_STATE *state,
                                     const USBPORT_ISO_PACKET *packet,
                                     const XHCI_ISO_REQUEST *request,
                                     ULONG useFrameId,
+                                    ULONG bei,
                                     ULONG *tdLength)
 {
     XHCI_TRB *last;
@@ -3377,12 +3423,16 @@ static ULONG xhciXferBuildIsoPacket(XHCI_ISO_BUILD_STATE *state,
      * value by the restore) is what absorbs that.
      *
      * BEI suppresses the interrupt while keeping the event, which is exactly
-     * what this wants and is **not available**: `docs/usb-xhci-info/xhci-programming.md`
-     * records Linux setting `XHCI_AVOID_BEI` on every Intel controller, and
-     * every machine in this project's fleet is Intel. It is the one optimisation
-     * here that could silently stop a stream.
+     * what this wants (design record 13 section 11.8, point 7): every TD but
+     * every BeiInterval-th and the request's last carries it, Linux's rule
+     * with `XHCI_AVOID_BEI` (`xhci-ring.c`, `trb_block_event_intr`), so the
+     * event of every packet is still written and the interrupts that drain
+     * them come at least every BeiInterval TDs and at the request's end.
      */
     last->Control |= XHCI_TRB_IOC;
+    if (bei) {
+        last->Control |= XHCI_TRB_BEI;
+    }
 
     *tdLength = state->TdTrbs;
     return XHCI_XFER_OK;
@@ -3460,7 +3510,7 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
     iso = request->Iso;
     if (iso->Signature != USBPORT_ISO_SIGNATURE ||
         iso->NumberOfPackets == 0 ||
-        iso->NumberOfPackets > XHCI_XFER_MAX_ISO_PACKETS) {
+        iso->NumberOfPackets > xhciXferIsoBound(request, NULL, NULL)) {
         return 0;
     }
     /* 36.57: the first TD alone names a frame; the rest are SIA. An ESIT
@@ -3574,12 +3624,19 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
 {
     XHCI_ISO_BUILD_STATE state;
     const USBPORT_ISO_TRANSFER *iso;
+    PULONG lengths;
     ULONG packets;
+    ULONG bound;
     ULONG useFrameId;
     ULONG status;
     ULONG i;
 
     if (request == NULL || out == NULL || layout == NULL || capacity == 0) {
+        return XHCI_XFER_BAD_PARAM;
+    }
+    lengths = NULL;
+    bound = xhciXferIsoBound(request, layout, &lengths);
+    if (bound == 0 || lengths == NULL) {
         return XHCI_XFER_BAD_PARAM;
     }
     layout->TrbCount = 0;
@@ -3620,7 +3677,7 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
      * capacity check inside the emitter cannot stand in for it - by the time
      * that fires, packets have already been read.
      */
-    if (packets > XHCI_XFER_MAX_ISO_PACKETS) {
+    if (packets > bound) {
         return XHCI_XFER_ISO_TOO_LARGE;
     }
     /*
@@ -3686,7 +3743,8 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
             &state, &iso->Packet[i], request,
             (useFrameId && (!request->Frames.FirstOnly || i == 0)) ? 1UL
                                                                     : 0UL,
-            &layout->TdLengths[i]);
+            XhciXferIsoBei(i, packets, request->BeiInterval),
+            &lengths[i]);
         if (status != XHCI_XFER_OK) {
             /*
              * **Running out of scratch is a size refusal, not a malformed
@@ -3722,6 +3780,7 @@ ULONG XhciXferSubmitIso(PXHCI_TRANSFER_QUEUE queue,
                         PXHCI_ISO_LAYOUT layout)
 {
     XHCI_TD_GROUP_PLACEMENT placement;
+    PULONG lengths;
     ULONG requested;
     ULONG status;
     ULONG i;
@@ -3736,6 +3795,8 @@ ULONG XhciXferSubmitIso(PXHCI_TRANSFER_QUEUE queue,
     if (status != XHCI_XFER_OK) {
         return status;
     }
+    lengths = NULL;
+    (VOID)xhciXferIsoBound(request, layout, &lengths);
     /*
      * A request that cannot fit an **empty** ring can never be placed, so it is
      * separated from ring-full here rather than answered with a retry usbport
@@ -3749,8 +3810,7 @@ ULONG XhciXferSubmitIso(PXHCI_TRANSFER_QUEUE queue,
     }
 
     status = XhciRingEnqueueTdGroup(ring, scratch, layout->TrbCount,
-                                    layout->TdLengths, layout->TdCount,
-                                    &placement);
+                                    lengths, layout->TdCount, &placement);
     if (status == XHCI_RING_FULL) {
         return XHCI_XFER_BUSY;
     }

@@ -221,6 +221,11 @@ XHCI_C_ASSERT(hcd_iso_block_tail,
 #define HCD_XFER_DONE       3UL     /* retired, on the done list          */
 #define HCD_XFER_HELD       4UL     /* mapped, waiting for its pipe       */
 
+/* Record 13 section 11.8, point 3: the event budget counts one underrun
+ * for each record a pipe can publish while nothing drains, and one more. */
+XHCI_C_ASSERT(hcd_iso_events_over_trbs,
+              XHCI_ISO_EVENTS_OVER_TRBS == HCD_PIPE_XFERS + 1UL);
+
 typedef struct _HCD_XFER {
     XHCI_TRANSFER Xfer;             /* first: CONTAINING_RECORD target    */
     LIST_ENTRY Link;                /* the map queue, then the done list  */
@@ -414,7 +419,20 @@ typedef struct _HCD_PIPE {
                                      * pipe's doorbell; controller lock   */
     ULONG Seq;                      /* the last submission's order         */
     XHCI_PIPE_EP Ep;                /* its descriptor, decoded (xhci_pipe) */
-    PHCD_ISO_BLOCK Iso;             /* isochronous: HCD_PIPE_XFERS blocks  */
+    PHCD_ISO_BLOCK Iso;             /* isochronous: HCD_PIPE_XFERS blocks,
+                                     * IsoBlockBytes apart (hcdIsoBlock)  */
+    ULONG IsoBlockBytes;            /* one block at IsoMaxPackets          */
+    ULONG IsoMaxPackets;            /* a request's packet bound: 62 on a
+                                     * pool ring, up to 128 on a page     */
+    /* Record 13 section 11.8 (the thread's; read under the controller
+     * lock): the ring page this pipe's ring lives in, NULL on a pool
+     * ring, and what the pipe adds to the event budget's IsoCapOut - its
+     * ring's capacity plus XHCI_ISO_EVENTS_OVER_TRBS - given back once,
+     * when it can publish no more (hcdCfgIsoCountReturn). */
+    PVOID IsoPageVa;
+    PHYSICAL_ADDRESS IsoPagePa;
+    ULONG IsoPageBytes;
+    ULONG IsoCount;
     ULONG IsoNext;                  /* the frame after the last queued
                                      * packet's; controller lock          */
     ULONG IsoFlowFresh;             /* 36.57: the next isochronous request
@@ -471,6 +489,18 @@ typedef struct _HCD_PIPE {
  * resolve. Allocated and freed by the thread; read by the event DPC and the
  * dispatch under the controller lock.
  */
+/* A retired isochronous ring page (record 13 section 11.8, point 8): the
+ * allocation of a pipe freed while its endpoint's context may still name
+ * the ring, on its device's IsoPagesRetired until a proof frees it. Pool,
+ * the thread's. */
+typedef struct _HCD_ISO_PAGE {
+    struct _HCD_ISO_PAGE *Next;
+    ULONG Dci;
+    PVOID Va;
+    PHYSICAL_ADDRESS Pa;
+    ULONG Bytes;
+} HCD_ISO_PAGE, *PHCD_ISO_PAGE;
+
 typedef struct _HCD_STREAMS {
     ULONG Count;                    /* granted: Stream IDs 1..Count       */
     ULONG Dci;                      /* the endpoint's, for a retired block */
@@ -635,6 +665,11 @@ typedef struct _HCD_USB_DEVICE {
                                      * is retried, but not forever; reset
                                      * when its debt is settled or taken
                                      * over (hcd_cfg.c); thread           */
+    struct _HCD_ISO_PAGE *IsoPagesRetired; /* record 13 section 11.8:
+                                     * isochronous ring pages of pipes
+                                     * freed while their endpoint was not
+                                     * Disabled, freed by the proof that
+                                     * frees a retired stream block; thread */
     struct _HCD_STREAMS *StreamsRetired; /* stream blocks of pipes closed
                                      * while their endpoint was still
                                      * enabled: the controller may hold
@@ -1354,7 +1389,23 @@ typedef struct _HCD_CONTROLLER {
     ULONG UrbsMdlShort;             /* length past the MDL: refused      */
     ULONG IsoStartsSia;             /* explicit StartFrame sent as SIA     */
     ULONG IsoStartsFirstFrameId;    /* no CFC: a flow's first TD's Frame ID */
-    ULONG WaitingKicks;             /* a waiter started by admission or a
+    /* Design record 13 section 11.8 (ISORING), under the controller lock:
+     * the event budget's count of every open isochronous pipe at its
+     * ring's capacity plus one (IsoCapOut), the pages' telemetry (point
+     * 10), and the one
+     * scratch every isochronous publication builds into - TRBs and TD
+     * lengths for the largest request a page takes. Not serialized. */
+    ULONG IsoCapOut;
+    ULONG IsoPagesBuilt;
+    ULONG IsoPagesRefusedBudget;
+    ULONG IsoPagesRefusedMemory;
+    ULONG IsoPagesRetiredCount;
+    ULONG IsoPageLargestTrbs;
+    ULONG IsoPageLargestPackets;
+    ULONG IsoBeiTds;
+    XHCI_TRB IsoTrbs[XHCI_XFER_MAX_ISO_PAGE_TRBS];
+    ULONG IsoTdLengths[XHCI_XFER_MAX_ISO_PAGE_PACKETS];
+    ULONG WaitingKicks;            /* a waiter started by admission or a
                                      * cancel, not by a record's release  */
     ULONG DevicesKept;              /* freed with URBs left: DMA not stopped */
     ULONG Ep0Resets;
@@ -1584,6 +1635,10 @@ typedef struct _HCD_CONTROLLER {
     /* Task 36.25: XhciQemuBigRefuse as the start read it - 1 refuses every
      * big stream block, forcing 11.7's fallback for a leg. */
     ULONG QemuBigRefuse;
+    /* Record 13 section 11.8, point 2: XhciQemuIsoRing as the start read
+     * it - 1 makes every non-zero-bandwidth isochronous pipe a candidate
+     * for a ring page, so QEMU's Full Speed audio reaches one in a leg. */
+    ULONG QemuIsoRing;
     /* Record 15 section 7.2.12, leg T3: XhciQemuSuspHoldDx as the start
      * read it - 1 keeps the selective-suspend executor from claiming a
      * child's pended Dx, so a stop can meet it still pended. */

@@ -1972,6 +1972,48 @@ static void test_set_dequeue_wrapped(void)
 }
 
 /*
+ * Record 13 section 11.8 (ISORING): a ring page's ring is `allowance + 2`
+ * TRBs, 122 at today's allowance of 120 - not a power of two, which nothing
+ * in the ring's arithmetic assumes. Its capacity is the allowance; a TD
+ * placed across its Link TRB wraps and keeps its cycle; Set TR Dequeue onto
+ * the next TD's head across the wrap carries the lap's cycle.
+ */
+static void test_page_ring(void)
+{
+    static XHCI_TRB mem[122];
+    XHCI_TRB td[3];
+    XHCI_TRB one;
+    XHCI_RING ring;
+    ULONG pa;
+    ULONG i;
+
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 122, XHCI_RING_KIND_ISOCH),
+             XHCI_RING_OK, "a 122-TRB ring");
+    CHECK_EQ(XhciRingCapacity(&ring), 120, "capacity 120");
+    CHECK_EQ(mem[121].Control & (0x3FUL << 10), 6UL << 10,
+             "the Link TRB at 121");
+    XhciTrbNoOpCommand(&one);
+    for (i = 0; i < 119; i++) {
+        CHECK_EQ(XhciRingEnqueue(&ring, &one, &pa), XHCI_RING_OK, "filler");
+        CHECK_EQ(retire_success(&ring, pa), XHCI_RING_OK, "retired");
+    }
+    /* A TD at 119, 120, wrap, 0 - then a second at 1, 2, 3. */
+    build_td(td, 3);
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, &pa), XHCI_RING_OK, "wrapped");
+    CHECK_EQ(pa, RING_PA + 119 * 16, "head at 119");
+    CHECK_EQ(mem[0].Control & XHCI_TRB_CYCLE, 0UL,
+             "the TRB after the wrap is on the second lap");
+    CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_OK, "second");
+    CHECK_EQ(ring.Enqueue, 4, "enqueue past it");
+    CHECK_EQ(XhciRingSetDequeue(&ring, RING_PA + 120 * 16),
+             XHCI_RING_NOT_TD_HEAD, "inside the wrapped TD");
+    CHECK_EQ(XhciRingSetDequeue(&ring, RING_PA + 1 * 16), XHCI_RING_OK,
+             "the second TD's head, across the wrap");
+    CHECK_EQ(XhciRingDequeueCycle(&ring), 0, "with the second lap's cycle");
+    CHECK_EQ(XhciRingFree(&ring), 117, "the wrapped TD's three back");
+}
+
+/*
  * A Set TR Dequeue Pointer command carries a *pair*: the address and the
  * Dequeue Cycle State that goes in bit 0 of the same field. DCS "identifies
  * the value of the xHC Consumer Cycle State (CCS) flag for the TRB referenced
@@ -3222,6 +3264,7 @@ int main(void)
     test_deferred_td_swept_by_later_event();
     test_set_dequeue();
     test_set_dequeue_wrapped();
+    test_page_ring();
     test_dequeue_cycle();
     test_ring_restart();
     test_ring_resync_owed();

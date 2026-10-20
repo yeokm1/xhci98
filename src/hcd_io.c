@@ -1131,10 +1131,19 @@ static PHCD_PIPE hcdPipeFromHandle(PHCD_USB_DEVICE dev, PVOID handle)
  * the rest are the same streams'. */
 #define HCD_ISO_SIA_NOTES 4UL
 
+/* A record's block: the pipe's blocks are IsoBlockBytes apart, sized at
+ * its own packet bound (record 13 section 11.8, point 4). */
 static PUSBPORT_ISO_TRANSFER hcdIsoBlock(PHCD_XFER x)
 {
-    return &x->Pipe->Iso[x - x->Pipe->Xfers].Block;
+    return (PUSBPORT_ISO_TRANSFER)((PUCHAR)x->Pipe->Iso +
+                                   (ULONG)(x - x->Pipe->Xfers) *
+                                       x->Pipe->IsoBlockBytes);
 }
+
+/* BEI's interval (record 13 section 11.8, point 7), Linux's
+ * AVOID_BEI_INTERVAL_MIN: an unblocked interrupt at least every eighth
+ * TD and at each request's end; none below xHCI 1.0. */
+#define HCD_ISO_BEI_INTERVAL 8UL
 
 /*
  * The pipe-dependent half of an isochronous URB's checks (hcd_urb.c has the
@@ -1166,9 +1175,16 @@ static LONG hcdIsoAdmit(PHCD_CONTROLLER hc, PHCD_XFER x)
                        pipe->Dci);
         return HCD_USBD_INVALID_PARAMETER;
     }
+    /* The pipe's own packet bound: 62 on a pool ring, up to 128 on a ring
+     * page (record 13 section 11.8, point 4); hcd_urb.c checked the larger
+     * one before the pipe was known. */
+    if (it->NumberOfPackets > pipe->IsoMaxPackets) {
+        (VOID)InterlockedIncrement((PLONG)&hc->Hc.IsoRefusalsTooLarge);
+        return HCD_USBD_INVALID_PARAMETER;
+    }
     if (XhciPipeIsoCheck((const XHCI_PIPE_ISO_PACKET *)it->IsoPacket,
                          it->NumberOfPackets, it->TransferBufferLength,
-                         XHCI_XFER_MAX_ISO_PACKETS,
+                         pipe->IsoMaxPackets,
                          pipe->Ep.MaxEsitPayload) != XHCI_PIPE_OK) {
         (VOID)InterlockedIncrement((PLONG)&hc->Hc.IsoRefusalsMalformed);
         return HCD_USBD_INVALID_PARAMETER;
@@ -1282,9 +1298,10 @@ static ULONG hcdIsoFill(PHCD_XFER x)
  * have no Frame ID goes out with SIA rather than being refused (task 36.57,
  * design record 13 section 6.10): Windows 7's usbaudio.sys gives every URB
  * of an asynchronous stream an explicit StartFrame, and paces its feedback
- * read by that read's completion. The extension's
- * IsoScratch and IsoLayout are shared by every isochronous pipe, which the
- * controller lock makes sound. Controller lock held.
+ * read by that read's completion. The controller's IsoTrbs and
+ * IsoTdLengths (record 13 section 11.8, point 6) and the extension's
+ * IsoLayout are shared by every isochronous pipe, which the controller
+ * lock makes sound. Controller lock held.
  */
 static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
 {
@@ -1316,6 +1333,13 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     req.PacketsPerFrame = (interval <= 3UL) ? (8UL >> interval) : 0UL;
     req.Frames.IstFrames = ext->HcInfo.IstFrames;
     req.TdSizeForm = XhciTdSizeFormOf(ext->HcInfo.HciVersion);
+    /* Record 13 section 11.8, points 6 and 7: the pipe's bound, the
+     * controller's scratch, BEI from xHCI 1.0. */
+    req.MaxPackets = pipe->IsoMaxPackets;
+    req.TdLengths = hc->IsoTdLengths;
+    req.BeiInterval = (ext->HcInfo.HciVersion >= XHCI_HCIVERSION_1_0)
+                          ? HCD_ISO_BEI_INTERVAL
+                          : 0UL;
     sampled = XhciFrameIdNow(ext, &now);
     if (sampled) {
         req.Frames.CurrentFrame = now;
@@ -1348,8 +1372,8 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     plan = XhciXferIsoStartPlan(&req, x->Asap, ext->HcInfo.Cfc, sampled,
                                 fresh, ext->HcInfo.HciVersion);
     answer = XhciXferSubmitIso(pipe->Queue, pipe->Ring, &req,
-                               req.DirectionIn, &x->Xfer, x, ext->IsoScratch,
-                               XHCI_XFER_MAX_ISO_TRBS, &ext->IsoLayout);
+                               req.DirectionIn, &x->Xfer, x, hc->IsoTrbs,
+                               XHCI_XFER_MAX_ISO_PAGE_TRBS, &ext->IsoLayout);
     if (answer == XHCI_XFER_OK) {
         pipe->IsoFlowFresh = XhciXferIsoFlowNext(pipe->IsoFlowFresh,
                                                  XHCI_ISO_FLOW_PUBLISHED, 0);
@@ -1360,6 +1384,18 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
                                                   interval);
         ext->IsoSubmits++;
         ext->IsoPacketsSubmitted += ext->IsoLayout.TdCount;
+        for (i = 0; i < ext->IsoLayout.TdCount; i++) {
+            hc->IsoBeiTds += XhciXferIsoBei(i, ext->IsoLayout.TdCount,
+                                            req.BeiInterval);
+        }
+        if (pipe->IsoPageVa != NULL) {
+            if (ext->IsoLayout.TrbCount > hc->IsoPageLargestTrbs) {
+                hc->IsoPageLargestTrbs = ext->IsoLayout.TrbCount;
+            }
+            if (ext->IsoLayout.TdCount > hc->IsoPageLargestPackets) {
+                hc->IsoPageLargestPackets = ext->IsoLayout.TdCount;
+            }
+        }
         if (ext->IsoLayout.FrameIdsUsed) {
             ext->IsoSubmitsWithFrameId++;
         }
