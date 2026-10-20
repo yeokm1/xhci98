@@ -847,12 +847,18 @@ static void comp_layout(HWND dlg)
         ShowWindow(GetDlgItem(dlg, IDC_C_STOR_T), SW_HIDE);
         return;
     }
+    /* Both are vertical distances, in the dialog's vertical units. */
     r.left = 0;
     r.top = 0;
-    r.right = 17;
+    r.right = 0;
+    r.bottom = 17;
+    MapDialogRect(dlg, &r);
+    up = r.bottom;
+    r.left = 0;
+    r.top = 0;
+    r.right = 0;
     r.bottom = 15;
     MapDialogRect(dlg, &r);
-    up = r.right;
     down = r.bottom;
     ShowWindow(GetDlgItem(dlg, IDC_C_DRIVERS_T), SW_HIDE);
     h = GetDlgItem(dlg, IDC_C_UAS);
@@ -2947,6 +2953,57 @@ static void st_page(HWND parent, int tmpl, const int *ids, const int *texts,
     DestroyWindow(d);
 }
 
+/* The Components page as 98 SE lays it out (comp_layout, record 26
+ * section 5.3, draft 17): the rows one below another, none overlapping,
+ * the last inside the page. */
+static void st_comp_layout(HWND parent)
+{
+    static const int order[] = {
+        IDC_C_DRIVERS, IDC_C_UAS, IDC_C_UAS_T, IDC_C_STOR, IDC_C_STOR_T,
+        IDC_C_TB, IDC_C_TB_T, IDC_C_S98, IDC_C_S98_T, IDC_C_TRAY,
+        IDC_C_TRAY_T, IDC_C_DIR_L, IDC_C_DIR, IDC_C_DIR_T
+    };
+    HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS),
+                                parent, st_proc, 0);
+    RECT prev;
+    RECT r;
+    RECT page;
+    POINT pt;
+    size_t i;
+    int ok = 1;
+    int saved = storShown;
+
+    st(d != NULL, "the components, as 98 SE lays them out");
+    if (d == NULL) {
+        return;
+    }
+    storShown = 1;
+    compLaidOut = 0;
+    comp_layout(d);
+    GetClientRect(d, &page);
+    memset(&prev, 0, sizeof(prev));
+    for (i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
+        GetWindowRect(GetDlgItem(d, order[i]), &r);
+        pt.x = r.left;
+        pt.y = r.top;
+        ScreenToClient(d, &pt);
+        r.bottom = pt.y + (r.bottom - r.top);
+        r.top = pt.y;
+        if ((i > 0 && r.top < prev.bottom) || r.bottom > page.bottom) {
+            printf("components on 98 SE: control %d at %ld..%ld, the one "
+                   "before ends at %ld, the page at %ld\n", order[i],
+                   (long)r.top, (long)r.bottom, (long)prev.bottom,
+                   (long)page.bottom);
+            ok = 0;
+        }
+        prev = r;
+    }
+    st(ok, "the components on 98 SE: no row over another, all on the page");
+    storShown = saved;
+    compLaidOut = 0;
+    DestroyWindow(d);
+}
+
 static int selftest(void)
 {
     static const int wIds[] = { IDC_TEXT };
@@ -3034,6 +3091,7 @@ static int selftest(void)
                 "welcome");
         st_page(parent, IDD_FOUND, fIds, fTexts, 1, "what was found");
         st_page(parent, IDD_COMPONENTS, cIds, cTexts, 13, "the components");
+        st_comp_layout(parent);
         st_page(parent, IDD_SETTINGS, s3Ids, s3Texts, 1, "Stor98's settings");
         st_page(parent, IDD_FINISH, n2Ids, n2Texts, 2, "the finish, a "
                 "shutdown");

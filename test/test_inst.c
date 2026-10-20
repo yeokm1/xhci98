@@ -4077,6 +4077,74 @@ static void test_storage(void)
           inst_stor_copy_set(1, st, 0) == 0,
           "a recorded file changed: other, nothing copied");
 
+    /* Every combination of the seven's states, with and without Source,
+     * ticked and not: the case, the route and the copies held to the
+     * design's rules stated as properties (record 26 section 6.5.4). */
+    {
+        long combo;
+        int source;
+        int bad = 0;
+        for (combo = 0; combo < 16384L && !bad; combo++) {
+            int absent = 0;
+            int found = 0;
+            int other = 0;
+            long c = combo;
+            for (i = 0; i < INST_STOR_COUNT; i++) {
+                st[i] = (int)(c % 4);
+                c /= 4;
+                absent += st[i] == INST_STOR_ABSENT;
+                found += st[i] == INST_STOR_SAME || st[i] == INST_STOR_OTHER;
+                other += st[i] == INST_STOR_OTHER;
+            }
+            for (source = 0; source < 2 && !bad; source++) {
+                int cs = inst_stor_case(st, source);
+                int route = inst_stor_route(cs);
+                INST_U32 set1 = inst_stor_copy_set(1, st, source);
+                INST_U32 set0 = inst_stor_copy_set(0, st, source);
+                int want = other == 0 &&
+                           !(absent == 0 && found > 0 && !source);
+                /* The route exactly when nothing of another's bytes is
+                 * there and it is not a complete installation that is not
+                 * this installer's deployment. */
+                if (route != want) {
+                    bad = 1;
+                }
+                /* Complete only with every file present. */
+                if (cs == INST_STOR_CASE_COMPLETE && absent != 0) {
+                    bad = 1;
+                }
+                /* Never a copy unticked, off the route, over a present
+                 * file, or of an INF; every absent binary on the route. */
+                if (set0 != 0 || (!route && set1 != 0)) {
+                    bad = 1;
+                }
+                for (i = 0; i < INST_STOR_COUNT; i++) {
+                    int copied = i < 32 && (set1 & (1UL << i)) != 0;
+                    if (copied && (st[i] != INST_STOR_ABSENT ||
+                                   i >= INST_STOR_BINARIES)) {
+                        bad = 1;
+                    }
+                    if (route && i < INST_STOR_BINARIES &&
+                        st[i] == INST_STOR_ABSENT && !copied) {
+                        bad = 1;
+                    }
+                }
+                /* The default: ticked exactly when nothing is found. */
+                if (inst_stor_default(0, 0, st) != (found == 0) ||
+                    !inst_stor_default(1, 1, st) ||
+                    inst_stor_default(1, 0, st)) {
+                    bad = 1;
+                }
+                if (bad) {
+                    printf("storage combination %ld, Source %d: case %d\n",
+                           combo, source, cs);
+                }
+            }
+        }
+        CHECK(!bad, "every combination of the seven's states: the case, the "
+              "route, the copies and the default");
+    }
+
     /* The devices. */
     memset(ids, 0, sizeof(ids));
     strcpy(ids, "USB\\Class_08&SubClass_06&Prot_50");
