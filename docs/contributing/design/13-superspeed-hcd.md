@@ -8640,10 +8640,15 @@ p.201). A ring adds one event more each time it runs empty, the Ring
 Underrun or Overrun (4.10.3.1 p.185; "only generated the first Interval
 that an empty Transfer Ring is detected", p.196) - once per empty stretch,
 and a stretch ends at the next doorbell, which every publication rings
-(`HcdIoMapped`). While software is not draining, no record of the pipe is
-freed (a record is freed by its completion, which the drain delivers), so
-at most its four records (`HCD_PIPE_XFERS`) are published in that time:
-four more empty stretches, and the one already running when it began. So
+(`HcdIoMapped`). While software is not draining, each of the pipe's four
+records (`HCD_PIPE_XFERS`) is published at most once: a record that
+reached the ring is freed only by its completion, which the drain
+delivers (an event of its own, or the Stop Endpoint's completion a cancel
+waits for), and a record completed without reaching the ring - refused,
+cancelled while held, or released from the pipe's held list by another
+record's software completion - publishes nothing and rings no doorbell.
+So at most four doorbells reach the ring in that time: four more empty
+stretches, and the one already running when it began. So
 a pipe's events are at most its ring's TRBs plus five - on a compliant
 controller. Controllers under
 `XhciIsochSpuriousSuccess` (design record 20 section 4.14) may follow an
