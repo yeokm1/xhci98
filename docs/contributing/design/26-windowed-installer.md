@@ -1056,7 +1056,7 @@ case (`inst_stor_case`, host-tested on every combination of states):
 | none | every file absent | the same-bytes route: the five binaries copied, the seven in the package directory, the devices of section 6.5.5 |
 | complete | all seven present, at least one not this installer's, and no `Source` recorded | nothing: no file copied, the pack not in the package directory, no device job; Setup binds with what is there. The text says the files were found installed and are left as they are |
 | partial, the same | some present, every present one the same or this installer's (the binaries without their INFs, when the binaries are the same, are this row) | the same-bytes route: only the absent binaries copied; the present ones untouched by the installer, and any copy Setup makes over them the same bytes |
-| partial, other | some present and one of them other: another release, a patched file, a file that cannot be read, an INF of another text under a renamed name | no route that keeps the bytes is established: nothing copied, the pack not in the package directory (so no first plug can take it either), no device job; the run reports the storage install incomplete with the files found and their states, a step left (exit 4), and the text that storage is not known to be ready |
+| partial, other | some present and one of them other: another release, a patched file, a file that cannot be read, an INF of another text under a renamed name; and with `Source` recorded, any file other however many are present (an installed file changed since this installer's deployment: the withdrawal below) | no route that keeps the bytes is established: nothing copied, the pack not in the package directory (so no first plug can take it either), no device job; the run reports the storage install incomplete with the files found and their states, a step left (exit 4), and the text that storage is not known to be ready |
 | this installer's | every present file this installer's, or `Source` recorded and every present file this installer's or the same (an update over its own install, section 6.5.7) | the same-bytes route: an absent one (deleted since) copied again; nothing present replaced; the package directory's seven refreshed |
 
 **The installer's own copies** (`stor_place`), only on the same-bytes
@@ -1091,14 +1091,18 @@ accepts this residual or wants the pack withdrawn from `DevicePath`
 once the setup engine has made its own copies is section 14's open
 decision. The release notes state the residual.
 
-**Withdrawal.** When a run finds the case partial-other while `Source`
-is recorded (an earlier run deployed the seven), or the row is unticked
-over a recorded `Source`, the install directory is taken off
-`DevicePath` first, before any step that can fail (`devicepath_update`
-without it), and only the package's copy made without the seven puts it
-back; a copy that fails leaves the directory off `DevicePath`, the run
-saying to run the installer again, so the pack is never left published
-over a file it could replace. `Source` is then cleared.
+**Withdrawal.** Whenever a run's package copy will not carry the seven
+while `Source` is recorded (an earlier run deployed them) - the row
+unticked, the download without the pack, the case partial-other, the
+case changed at the second reading, a copy or a move that failed, a
+binary found not in place - the install directory is taken off
+`DevicePath` before the package's copy is attempted, so before any of
+its steps that can fail (`devicepath_update` without it), and only the
+package's copy made without the seven puts it back; a copy that fails
+leaves the directory off `DevicePath`, the run saying to run the
+installer again, so the pack is never left published over a file it
+could replace. `Source` is cleared only once that copy is made, so a run
+cut short leaves it for the next run to withdraw again.
 
 **Order in the run** (record 23 section 6.2 and record 27 section 6),
 each step failing closed: the baseline (section 6.5.6); the withdrawal
