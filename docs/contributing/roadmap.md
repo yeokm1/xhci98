@@ -161,7 +161,9 @@ the `3.1.0.0` cut of 2026-10-20: the windowed installer, the uninstall,
 the Windows 98 SE and ME device install, `XHCISNAP` retired, and the
 connection-manager follow-ups. **Phase 43 is open** (2026-10-20), release
 `3.2.0.0`: the cut's checks without a build, faster emulator legs, the
-unsafe-unplug notice, the 9x Stor98 channel, and what `3.1.0.0` owed.
+unsafe-unplug notice, the 9x Stor98 channel, what `3.1.0.0` owed, and
+NUSB's Windows 98 SE storage drivers in the download from a separate
+driver pack.
 [`roadmap-usb4.md`](roadmap-usb4.md) is the record from Phase 39 on.
 
 ---
