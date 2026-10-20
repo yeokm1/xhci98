@@ -3284,6 +3284,22 @@ static ULONG xhciXferIsoBound(const XHCI_ISO_REQUEST *request,
  * `interval`-th and the request's last, so an unblocked interrupt comes at
  * least every `interval` TDs and always at the request's end. 0 never.
  */
+ULONG XhciXferIsoBlockBytes(ULONG packets)
+{
+    if (packets == 0 || packets > XHCI_XFER_MAX_ISO_PAGE_PACKETS) {
+        return 0;
+    }
+    return ((ULONG)XHCI_OFFSET_OF(USBPORT_ISO_TRANSFER, Packet) +
+            packets * (ULONG)sizeof(USBPORT_ISO_PACKET) + 7UL) &
+           ~7UL;
+}
+
+PUSBPORT_ISO_TRANSFER XhciXferIsoBlockAt(PVOID base, ULONG index,
+                                         ULONG stride)
+{
+    return (PUSBPORT_ISO_TRANSFER)((PUCHAR)base + index * stride);
+}
+
 ULONG XhciXferIsoBei(ULONG i, ULONG packets, ULONG interval)
 {
     if (interval == 0 || i + 1 >= packets) {

@@ -1135,9 +1135,8 @@ static PHCD_PIPE hcdPipeFromHandle(PHCD_USB_DEVICE dev, PVOID handle)
  * its own packet bound (record 13 section 11.8, point 4). */
 static PUSBPORT_ISO_TRANSFER hcdIsoBlock(PHCD_XFER x)
 {
-    return (PUSBPORT_ISO_TRANSFER)((PUCHAR)x->Pipe->Iso +
-                                   (ULONG)(x - x->Pipe->Xfers) *
-                                       x->Pipe->IsoBlockBytes);
+    return XhciXferIsoBlockAt(x->Pipe->Iso, (ULONG)(x - x->Pipe->Xfers),
+                              x->Pipe->IsoBlockBytes);
 }
 
 /* BEI's interval (record 13 section 11.8, point 7), Linux's

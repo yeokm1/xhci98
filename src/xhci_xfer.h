@@ -969,6 +969,15 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
  * never every interval-th, never at interval 0. Pure. */
 ULONG XhciXferIsoBei(ULONG i, ULONG packets, ULONG interval);
 
+/* A pipe's request blocks (hcd.h HCD_ISO_BLOCK's shape, record 13 section
+ * 11.8, point 4): the bytes of one at `packets` packets, rounded to 8 so
+ * every block of an array starts aligned, 0 above
+ * XHCI_XFER_MAX_ISO_PAGE_PACKETS; and block `index` of an array of them
+ * `stride` bytes apart. Pure. */
+ULONG XhciXferIsoBlockBytes(ULONG packets);
+PUSBPORT_ISO_TRANSFER XhciXferIsoBlockAt(PVOID base, ULONG index,
+                                         ULONG stride);
+
 /*
  * How hcdIsoPublish schedules a request (task 36.57, design record 13
  * section 6.10). An explicit StartFrame is never refused for want of Frame

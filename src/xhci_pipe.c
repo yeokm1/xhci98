@@ -233,9 +233,11 @@ ULONG XhciPipeZeroBandwidth(const XHCI_PIPE_EP *ep)
 }
 
 /*
- * Design record 13 section 11.8 (ISORING). A ring's events are at most its
- * TRBs, so what isochronous rings hold is what they can leave on the event
- * ring unread; these size a page's ring from what the event ring allows.
+ * Design record 13 section 11.8 (ISORING). A pipe's events while nothing
+ * drains are at most its ring's TRBs plus XHCI_ISO_EVENTS_OVER_TRBS (an
+ * underrun per publication, and one running), so what isochronous rings
+ * hold is what they can leave on the event ring unread; these size a
+ * page's ring from what the event ring allows.
  */
 ULONG XhciPipeIsoPageWanted(const XHCI_PIPE_EP *ep, ULONG force)
 {

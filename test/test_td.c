@@ -1400,6 +1400,78 @@ static void test_iso_start_plan(void)
 }
 
 /*
+ * Record 13 section 11.8, point 4: a pipe's four request blocks allocated
+ * at its own packet bound, a stride apart, and addressed as hcd_io.c's
+ * hcdIsoBlock does (XhciXferIsoBlockAt). Each record's block is filled
+ * whole and built; its neighbours, and the bytes past the last, keep their
+ * sentinel - so a block sized or addressed at another bound than the
+ * stride's shows here.
+ */
+#define STRIDE_SENTINEL 0x5AUL
+static UCHAR stride_mem[4 * 7184 + 64];
+
+static void test_iso_stride(void)
+{
+    static const ULONG bounds[] = { 62, 120, 128 };
+    PUSBPORT_ISO_TRANSFER blk;
+    XHCI_ISO_REQUEST req;
+    ULONG stride;
+    ULONG c;
+    ULONG r;
+    ULONG o;
+    ULONG i;
+    ULONG bad;
+
+    /* By hand: 16 + n x 56, rounded to 8. */
+    CHECK_EQ(XhciXferIsoBlockBytes(62), 3488, "62 packets: 3,488 bytes");
+    CHECK_EQ(XhciXferIsoBlockBytes(120), 6736, "120 packets: 6,736 bytes");
+    CHECK_EQ(XhciXferIsoBlockBytes(128), 7184, "128 packets: 7,184 bytes");
+    CHECK_EQ(XhciXferIsoBlockBytes(0), 0, "0 packets: refused");
+    CHECK_EQ(XhciXferIsoBlockBytes(129), 0, "129 packets: refused");
+    for (c = 0; c < 3; c++) {
+        stride = XhciXferIsoBlockBytes(bounds[c]);
+        for (r = 0; r < 4; r++) {
+            for (i = 0; i < sizeof(stride_mem); i++) {
+                stride_mem[i] = (UCHAR)STRIDE_SENTINEL;
+            }
+            blk = XhciXferIsoBlockAt(stride_mem, r, stride);
+            CHECK((UCHAR *)blk == stride_mem + r * stride, "addressed");
+            /* Filled whole at the bound, as hcdIsoFill writes it. */
+            for (i = 0; i < stride; i++) {
+                ((UCHAR *)blk)[i] = 0;
+            }
+            blk->Signature = USBPORT_ISO_SIGNATURE;
+            blk->NumberOfPackets = bounds[c];
+            for (i = 0; i < bounds[c]; i++) {
+                blk->Packet[i].Length = 32;
+                blk->Packet[i].FrameNumber = 1003 + i;
+                blk->Packet[i].FragmentCount = 1;
+                blk->Packet[i].Fragment0Length = 32;
+                blk->Packet[i].Fragment0AddressLo = 0x00300000UL + i * 32;
+            }
+            iso_request(&req, 3, 32, 0, 1000);
+            req.Iso = blk;
+            req.MaxPackets = bounds[c];
+            req.TdLengths = (bounds[c] > XHCI_XFER_MAX_ISO_PACKETS)
+                                ? iso_lengths : NULL;
+            CHECK_EQ(XhciXferBuildIso(&req, 0, iso_out,
+                                      XHCI_XFER_MAX_ISO_PAGE_TRBS,
+                                      &iso_layout), XHCI_XFER_OK,
+                     "each record's block builds at the bound");
+            CHECK_EQ(iso_layout.TdCount, bounds[c], "every packet read");
+            bad = 0;
+            for (o = 0; o < sizeof(stride_mem); o++) {
+                if ((o < r * stride || o >= (r + 1) * stride) &&
+                    stride_mem[o] != (UCHAR)STRIDE_SENTINEL) {
+                    bad++;
+                }
+            }
+            CHECK_EQ(bad, 0, "the neighbours untouched");
+        }
+    }
+}
+
+/*
  * The block's ceiling. hcd_io.c admits up to XHCI_XFER_MAX_ISO_PACKETS
  * packets and builds into XHCI_XFER_MAX_ISO_TRBS TRBs of scratch, the same
  * number, so a URB at the packet cap fits only while no packet crosses a
@@ -1459,10 +1531,7 @@ static void test_iso_ceiling(void)
     CHECK_EQ(XhciXferBuildIso(&req, 0, iso_out, XHCI_XFER_MAX_ISO_PAGE_TRBS,
                               &iso_layout), XHCI_XFER_OK, "built");
     CHECK_EQ(iso_layout.TrbCount, 120, "120 TRBs exactly");
-    /* hcd_cfg.c's stride at 120 packets: 16 + 120 x 56, a multiple of 8. */
-    CHECK_EQ(((ULONG)XHCI_OFFSET_OF(USBPORT_ISO_TRANSFER, Packet) +
-              120UL * (ULONG)sizeof(USBPORT_ISO_PACKET) + 7UL) & ~7UL,
-             6736UL, "a page pipe's block is 6,736 bytes");
+    test_iso_stride();
 }
 
 /*

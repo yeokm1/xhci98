@@ -724,6 +724,8 @@ static VOID hcdCfgZero(PXHCI_EXTENSION ext, ULONG offset, ULONG bytes)
 #define HCD_CFG_NOT_ISSUED  XHCI_OWN_NOT_ISSUED_CODE
 
 static VOID hcdCfgStreamsFree(PHCD_CONTROLLER hc, PHCD_STREAMS st);
+static VOID hcdCfgIsoPagesReclaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                  ULONG dropped);
 static VOID hcdCfgRetainedReclaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                   ULONG dropped);
 static VOID hcdCfgRetain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
@@ -754,8 +756,8 @@ static VOID hcdCfgRetiredReclaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /* Every command this file issues: the thread's, and a Configure Endpoint
- * that completed successfully reclaims the retired stream blocks of the
- * endpoints it dropped - all of them with DC = 1, else those of the Input
+ * that completed successfully reclaims the retired stream blocks and
+ * isochronous ring pages of the endpoints it dropped - all of them with DC = 1, else those of the Input
  * Control Context's Drop flags, which the shared Input Context still holds
  * (31-A.1) - and the retained pipes of those endpoints, whose rings no
  * context names now (task 38.10, design record 20 section 5.2). Thread
@@ -769,7 +771,8 @@ static ULONG hcdCfgCommand(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
     code = HcdThreadCommand(hc, trb, control);
     if (code == XHCI_CC_SUCCESS &&
-        (dev->StreamsRetired != NULL || dev->Retained != NULL) &&
+        (dev->StreamsRetired != NULL || dev->Retained != NULL ||
+         dev->IsoPagesRetired != NULL) &&
         XHCI_TRB_GET_TYPE(trb->Control) == XHCI_TRB_TYPE_CONFIGURE_EP) {
         dropped = 0;
         if ((trb->Control & XHCI_TRB_DC) != 0) {
@@ -1409,10 +1412,7 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 pipe->IsoMaxPackets = XHCI_XFER_MAX_ISO_PAGE_PACKETS;
             }
         }
-        pipe->IsoBlockBytes =
-            ((ULONG)FIELD_OFFSET(USBPORT_ISO_TRANSFER, Packet) +
-             pipe->IsoMaxPackets * (ULONG)sizeof(USBPORT_ISO_PACKET) + 7UL) &
-            ~7UL;
+        pipe->IsoBlockBytes = XhciXferIsoBlockBytes(pipe->IsoMaxPackets);
         pipe->Iso = (PHCD_ISO_BLOCK)HcdPoolAlloc(HCD_PIPE_XFERS *
                                                  pipe->IsoBlockBytes);
         if (pipe->Iso == NULL) {
@@ -1481,9 +1481,16 @@ static ULONG hcdCfgEpState(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * controller done with it (hcdCfgRetiredReclaim, HcdCfgDeviceGone). A pool
  * ring returned
  * there stays in the controller's own block, which is why rings need no
- * such care. */
-static VOID hcdCfgPipeFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                           PHCD_PIPE pipe)
+ * such care.
+ *
+ * `released` (record 13 section 11.8, point 8): the caller holds a proof
+ * that no context names this pipe's own ring - the command that would have
+ * installed it was refused or never issued, or a command that succeeded
+ * dropped or superseded it (xhci_own.c's FREE_NEW and FREE_OLD), or a held
+ * pipe's release - so its ring page is freed at once; without one the page
+ * follows the stream block's rule. hcdCfgPipeFree is the call without. */
+static VOID hcdCfgPipeFreeEx(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                             PHCD_PIPE pipe, ULONG released)
 {
     PHCD_STREAMS st;
     KIRQL oldIrql;
@@ -1508,8 +1515,10 @@ static VOID hcdCfgPipeFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (pipe->IsoPageVa != NULL) {
         hcdCfgIsoPageRelease(
             hc, dev, pipe,
-            (dev->Gone || hcdCfgEpState(hc, dev, pipe->Dci) ==
-                              XHCI_EP_STATE_DISABLED) ? 1UL : 0UL);
+            (released || dev->Gone ||
+             hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_DISABLED)
+                ? 1UL
+                : 0UL);
     }
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -1520,6 +1529,13 @@ static VOID hcdCfgPipeFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     HcdPoolFree(pipe->Iso);
     HcdPoolFree(pipe);
+}
+
+/* A pipe freed with no proof of its own (hcdCfgPipeFreeEx). */
+static VOID hcdCfgPipeFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           PHCD_PIPE pipe)
+{
+    hcdCfgPipeFreeEx(hc, dev, pipe, 0);
 }
 
 /* Close the open pipes of `mask` (DCI bits): unpublished under the lock,
@@ -1627,7 +1643,7 @@ static VOID hcdCfgRetainedFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     hcdCfgStreamsFree(hc, st);
     pipe->RetainNext = NULL;
-    hcdCfgPipeFree(hc, dev, pipe);
+    hcdCfgPipeFreeEx(hc, dev, pipe, 1);
 }
 
 /* The held pipes a proof releases: a successful Configure Endpoint that
@@ -2102,9 +2118,11 @@ static LONG hcdCfgSelectOnce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             XhciControllerLockRelease(&hc->Hc, oldIrql);
             (VOID)hcdCfgDeconfigure(hc, dev);
         } else {
+            /* Refused or never issued (an unknown outcome held them
+             * above): no context names their rings. */
             for (dci = 2; dci < 32; dci++) {
                 if (add[dci] != NULL) {
-                    hcdCfgPipeFree(hc, dev, add[dci]);
+                    hcdCfgPipeFreeEx(hc, dev, add[dci], 1);
                 }
             }
         }
@@ -2364,7 +2382,7 @@ static VOID hcdCfgSwitchApply(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         if (sw->New[dci] != NULL) {
             if ((actions & XHCI_OWN_A_FREE_NEW) != 0) {
-                hcdCfgPipeFree(hc, dev, sw->New[dci]);
+                hcdCfgPipeFreeEx(hc, dev, sw->New[dci], 1);
                 sw->New[dci] = NULL;
             } else if ((actions & (XHCI_OWN_A_RETAIN_NEW |
                                    XHCI_OWN_A_PIN_NEW)) != 0) {
@@ -2375,7 +2393,7 @@ static VOID hcdCfgSwitchApply(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         if (sw->Old[dci] != NULL) {
             if ((actions & XHCI_OWN_A_FREE_OLD) != 0) {
-                hcdCfgPipeFree(hc, dev, sw->Old[dci]);
+                hcdCfgPipeFreeEx(hc, dev, sw->Old[dci], 1);
                 sw->Old[dci] = NULL;
             } else if ((actions & (XHCI_OWN_A_RETAIN_OLD |
                                    XHCI_OWN_A_PIN_OLD)) != 0) {

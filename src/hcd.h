@@ -1391,7 +1391,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG IsoStartsFirstFrameId;    /* no CFC: a flow's first TD's Frame ID */
     /* Design record 13 section 11.8 (ISORING), under the controller lock:
      * the event budget's count of every open isochronous pipe at its
-     * ring's capacity plus one (IsoCapOut), the pages' telemetry (point
+     * ring's capacity plus XHCI_ISO_EVENTS_OVER_TRBS (IsoCapOut), the
+     * pages' telemetry (point
      * 10), and the one
      * scratch every isochronous publication builds into - TRBs and TD
      * lengths for the largest request a page takes. Not serialized. */
