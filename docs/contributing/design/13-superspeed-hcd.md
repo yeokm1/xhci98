@@ -3146,7 +3146,11 @@ disk plugged in for the first time later is ranked by Windows, so it gets
 implement `GUID_USBD_INTERFACE_V1` and `0x49104B` with URB `0x35` and
 `0x36` for `uaspstor` (and with them the V1 interface's allocators, since a
 `0x602` contract sends `USBD_UrbAllocate` there), or leave UAS disks to
-`usbstor`'s Bulk-Only alternate setting where the device has one.
+`usbstor`'s Bulk-Only alternate setting where the device has one. The
+owner took the second on 2026-10-22 (6.12.10): no forced `xhciuas.inf` on
+8 and 8.1, the bus answering the `0x602` contract so that `uaspstor`
+starts a SuperSpeed UAS disk with streams (43.30); what is said above of
+the `0x600` path is the bus as it is before that work.
 
 #### 6.12.5 What Windows 8's own hub PDOs answer
 
@@ -3248,10 +3252,12 @@ and earlier only). All three are 43.24's and 43.31's legs.
    answered` with `GUID_USBD_INTERFACE_V1`'s Data1 `deee98ea` and
    `hcd: internal IOCTL not served` for any new code (a debug build).
 5. A UAS disk on 8 under `uaspstor`: High Speed (no streams, expected to
-   run) and SuperSpeed (expected `0xC0000182`, Code 10), and the same disk
-   under a forced `xhciuas.inf`; and a SuperSpeed UAS disk plugged in for
-   the first time after the install, to read which driver Windows gives
-   it.
+   run) and SuperSpeed, which after 43.30's `0x602` contract (the owner,
+   2026-10-22, 6.12.10) is expected to start with streams and run, a
+   SuperSpeed UAS disk plugged in for the first time after the install
+   included; read on the bus before that work, SuperSpeed is expected to
+   fail with `0xC0000182` (Code 10), a baseline only. No forced
+   `xhciuas.inf` leg on 8 and 8.1.
 6. Test-signing mode on 8 x64 and 8.1 x64 with Secure Boot off, the
    watermark and the Code shown without it; 8 x86 with the unsigned
    binary.
