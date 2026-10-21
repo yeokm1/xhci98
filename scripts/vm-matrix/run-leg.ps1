@@ -220,6 +220,14 @@ try {
                 }
                 Start-Sleep -Seconds 2
             }
+            # A pause still open when QEMU ended (it resumed and powered off
+            # between two samples) is credited too.
+            if ($pausedSince) {
+                $gap = (Get-Date) - $pausedSince
+                $pausedSince = $null
+                $legDeadline = $legDeadline + $gap
+                $rec.pausedSeconds = [math]::Round($rec.pausedSeconds + $gap.TotalSeconds, 1)
+            }
         } catch {
             $rec.reasons += "boot ${boot}: $_"
             $failed = $true
