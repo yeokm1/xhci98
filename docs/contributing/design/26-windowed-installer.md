@@ -1,6 +1,11 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 18, 2026-10-20 (the owner's answers to draft 17's open
+Status: draft 19, 2026-10-21 (roadmap-usb4 task 43.42, the owner's
+decision of 2026-10-20, NUSB parity for the first plug: the pack's two
+INFs placed in `%windir%\INF` by this installer, never over a file of
+that name, recorded and removed by the uninstall and withdrawn with the
+pack, section 6.5.11; with it two texts of the 98 SE and ME steps,
+section 7; record 23 revision 25, record 27 draft 11); draft 18, 2026-10-20 (the owner's answers to draft 17's open
 questions: the uninstall adopts the storage devices bound from this
 installer's copy after the run, section 6.5.8, and the rest accepted as
 designed, section 14); draft 17, 2026-10-20 (roadmap-usb4 task 43.4, the owner's
@@ -951,7 +956,7 @@ text; nothing here edits them):
 |---|---|---|---|
 | `USBSTOR.SYS`, `USBNTMAP.SYS`, `USBAUTH.SYS`, `USBU2A.SYS` | `%windir%\SYSTEM32\DRIVERS` | `USBSTOR.INF`'s `[DestinationDirs]`, dirid 10 `system32\drivers` | a Bulk-Only (and CBI, CB) device: `NTMPDriver` `USBSTOR.SYS`, `upperfilters` `USBNTMAP.SYS` (`[USBSTOR.HW.AddReg]`); `USBAUTH.SYS` and `USBU2A.SYS` lower filters of some vendors' lines |
 | `USBMPHLP.PDR` | `%windir%\SYSTEM\IOSUBSYS` | `USBNTMAP.INF`'s `defaultdestdir=12` | a disk, CD-ROM or floppy unit (`USBSTOR\GenDisk`, `USBSTOR\GenCdRom`, `USBSTOR\GenSfloppy`): "USB Disk", `DevLoader` `*IOS`, `PortDriver` `USBMPHLP.PDR` |
-| `USBSTOR.INF`, `USBNTMAP.INF` | the package directory (record 23 section 9.6) | this installer, which `DevicePath` names (record 23 section 6.1); the setup engine then makes its own copy in `INF\OTHER` when it installs from one | - |
+| `USBSTOR.INF`, `USBNTMAP.INF` | the package directory (record 23 section 9.6), and from draft 19 `%windir%\INF` under their own names (section 6.5.11) | this installer, which `DevicePath` names (record 23 section 6.1); the setup engine then makes its own copy in `INF\OTHER` when it installs from the package directory; and this installer's own placement in `%windir%\INF`, where NUSB's installer puts them (section 6.5.11) | - |
 
 #### 6.5.1 Where the files come from
 
@@ -999,8 +1004,8 @@ NUSB 3.6's own INFs alike. Each file reads one of four states
 (`inst_stor_state`):
 
 - **absent**;
-- **this installer's**: named by the install record's `Files` or `Infs`
-  (section 6.5.6) with its bytes still the recorded ones;
+- **this installer's**: named by the install record's `Files`, `Infs`
+  or `Placed` (section 6.5.6) with its bytes still the recorded ones;
 - **the same**: present, not recorded, and byte for byte this download's
   file (for an INF, every candidate found is);
 - **other**: present with other bytes, or unreadable, or for an INF any
@@ -1063,15 +1068,18 @@ case (`inst_stor_case`, host-tested on every combination of states):
 | this installer's | every present file this installer's, or `Source` recorded and every present file this installer's or the same (an update over its own install, section 6.5.7) | the same-bytes route: an absent one (deleted since) copied again; nothing present replaced; the package directory's seven refreshed |
 
 **The installer's own copies** (`stor_place`), only on the same-bytes
-route and only for the binaries (`inst_stor_copy_set`, host-tested); the
-two INFs are never copied into `INF` or `INF\OTHER` by the installer -
-the setup engine makes those copies (record 23 section 6.1). Each absent
+route and only for the binaries (`inst_stor_copy_set`, host-tested); until
+draft 19 the two INFs were never copied into `INF` or `INF\OTHER` by the
+installer - the setup engine makes its `INF\OTHER` copies (record 23
+section 6.1), and from draft 19 the installer places them in `INF`
+itself after the binaries (section 6.5.11). Each absent
 binary is written beside its destination as `<name>.TMP`, compared byte
 for byte with the download's, its record value written (section 6.5.6),
 and only then renamed to its name with `MoveFileA`, which fails when the
 name exists and so never replaces a file that appeared meanwhile; a move
 that fails deletes the `.TMP` and the record value and leaves the file
-that is there. The states are read again immediately before the first
+that is there. (Draft 19: the two INFs are then placed in `%windir%\INF`
+by the same steps, section 6.5.11; never in `INF\OTHER`.) The states are read again immediately before the first
 copy; a case that differs from the one the Summary showed stops the
 storage part of the run with nothing copied ("the files changed while
 the installer waited"), a step left. No `WININIT.INI` entry is ever made
@@ -1095,13 +1103,19 @@ once the setup engine has made its own copies is section 14's open
 decision. The release notes state the residual.
 
 **Withdrawal.** Whenever a run's package copy will not carry the seven
-while `Source` is recorded (an earlier run deployed them) - the row
+while `Source` is recorded (an earlier run deployed them), or while the
+record's `Placed` names a copy (draft 19) - the row
 unticked, the download without the pack, the case partial-other, the
 case changed at the second reading, a copy or a move that failed, a
 binary found not in place - the install directory is taken off
 `DevicePath` before the package's copy is attempted, so before any of
-its steps that can fail (`devicepath_update` without it), and only the
-package's copy made without the seven puts it back; a copy that fails
+its steps that can fail (`devicepath_update` without it); in the same
+step (draft 19) every INF this installer placed in `%windir%\INF`
+(the record's `Placed`, section 6.5.11) whose bytes are still the
+recorded ones is deleted with its `.PNF`, and a placed copy that
+cannot be deleted stops the run there, as a `DevicePath` that cannot
+be written does; only the package's copy made without the seven puts
+the directory back on `DevicePath`; a copy that fails
 leaves the directory off `DevicePath`, the run saying to run the
 installer again, so the pack is never left published over a file it
 could replace. `Source` is cleared only once that copy is made, so a run
@@ -1111,7 +1125,8 @@ cut short leaves it for the next run to withdraw again.
 each step failing closed: the baseline (section 6.5.6); the withdrawal
 above where it applies; the states read again and compared with the Summary's
 case; `PreExisting`; the storage copies; and only when every copy of the
-set is in place and the case still admits the route, `Source`, then the
+set is in place and the case still admits the route, `Source`, the two
+INFs placed in `%windir%\INF` (draft 19, section 6.5.11), then the
 package's copy made with the seven in it and `DevicePath` naming it
 (record 23 section 4.4). A changed case, a copy that fails or a `.TMP` that differs leaves
 the run's storage part there: the package's copy is made without the
@@ -1172,11 +1187,17 @@ in the run it installs the storage devices present, in record 27 section
 - **CBI and CB devices** (floppy drives, `Prot_00` and `Prot_01`) are not
   installed by the helper: they bind at their plug from `DevicePath`.
 
-**Absent devices** bind at their first plug from the package directory
-on `DevicePath`, through Windows' own detection: its New Hardware
-wizard, or the silent install where `XhciSilentInstall` is on (record 23
-section 8.1). The files are already in place, so the engine's copy from
-the package directory writes the same bytes. Whether a first disk then
+**Absent devices** bind at their first plug through Windows' own
+detection. Until draft 19 that was from the package directory on
+`DevicePath`: its New Hardware wizard (read on 43.5's first leg,
+2026-10-20: every new stick raised the wizard, which found
+`C:\XHCI98\USBSTOR.INF` without a prompt), or the silent install where
+`XhciSilentInstall` is on (record 23 section 8.1). From draft 19 the
+two INFs are in `%windir%\INF` as well, where NUSB's installer puts
+them, so that Windows finds the driver as it does under NUSB, with no
+wizard (section 6.5.11; that it does is the reading of 43.5's first
+leg taken again). The files are already in place, so the engine's copy
+writes the same bytes. Whether a first disk then
 lands on "USB Disk" or on "Disk drive" is a reading of 43.5's legs; when
 no unit of this run was bound to `USBMPHLP.PDR` (so the setup engine has
 not yet installed `USBNTMAP.INF` from the package directory), the Finish
@@ -1227,6 +1248,15 @@ directory does, then a replug. This is a note, not a step.
   clear. A copy that was there before, one whose `OEM Name` value cannot
   be found, or one of other bytes is never recorded, and is said in the
   log. Nothing else of the driver index is read or recorded;
+- `Placed` (draft 19): one value per INF this installer placed in
+  `%windir%\INF` (section 6.5.11), its name the full path it was placed
+  at and its data the SHA-256 of its bytes, written before the file is
+  moved into place and deleted when the copy is deleted (the
+  withdrawal, the uninstall) or found gone. A copy `Placed` names with
+  its bytes unchanged is this installer's in every reading `Infs`
+  serves: the detection (section 6.5.3), a device's `InfPath` copy
+  (`stor_infpath_copy`'s `recorded`), and the adoption (section 6.5.8
+  step 1);
 - `Devices`: one value per devnode the installer first bound to the
   storage drivers (data `bulk` or `unit`). Ownership goes by first
   binding, as section 6.3 has it for Stor98: a device the baseline read
@@ -1235,8 +1265,8 @@ directory does, then a replug. This is a note, not a step.
   then bound to `USBSTOR.SYS` or `USBMPHLP.PDR` is recorded on that
   evidence; one Windows bound during a settle of the run is recorded
   when the reading after the settle shows it newly bound and its
-  `InfPath` names a copy recorded under `Infs`, or `PreExisting` is
-  clear; one already bound to the storage drivers at the baseline, or
+  `InfPath` names a copy recorded under `Infs` or `Placed`, or
+  `PreExisting` is clear; one already bound to the storage drivers at the baseline, or
   bound by another package (an `InfPath` naming a copy of other bytes)
   is never recorded.
 
@@ -1287,7 +1317,9 @@ nothing it does not own. In section 9.3 step 4's order:
    (`NTMPDriver`) or `USBMPHLP.PDR` (`PortDriver`) and that `Devices`
    does not name is adopted when its `InfPath` names exactly one copy in
    `INF` or `INF\OTHER` of the pack's own INF bytes (`stor_infpath_copy`,
-   the 8.3 alias included) and that copy is one `Infs` holds, or is not
+   the 8.3 alias included) and that copy is one `Infs` or (draft 19)
+   `Placed` holds - a stick bound with no wizard from the INF this
+   installer placed in `%windir%\INF` names it by its bare name - or is not
    one of the copies of those bytes that were already there before the
    first deployment (the record's `Before`, listed by path just before the
    first deployment's copies, and trusted only with `BeforeOk` 1;
@@ -1315,7 +1347,15 @@ nothing it does not own. In section 9.3 step 4's order:
    absent and no driver key, present or not, names it by its `InfPath`
    (the reference check of record 23 section 9.2 step 4); one still named,
    or changed, or kept while `USB20U` is present, is left with its `OEM
-   Name` value and said, and its record value goes.
+   Name` value and said, and its record value goes. The INFs this
+   installer placed in `%windir%\INF` (draft 19, the record's `Placed`)
+   follow the same rules in the same step - its bytes still the recorded
+   ones, `USB20U` absent, no driver key naming it - each deleted with its
+   `.PNF`; they have no `OEM Name` value, so none is touched for them.
+   NUSB's own uninstall deletes an INF of its from `%windir%\INF` the same
+   way, by name (static: `_USB2UN.INF`'s `DelFiles` of `USB2.INF` from
+   dirid 17), and the setup engine's index then holds an entry for a file
+   that is gone, as after NUSB's.
 4. **The recorded files**, last: each deleted only when its bytes are
    still the recorded hash, `USB20U` is absent (NUSB lays the same bytes
    over them, so the hash cannot tell whose they are; `inst_stor_remove`,
@@ -1357,13 +1397,142 @@ preselections (section 10).
 
 #### 6.5.10 Not done
 
-The setup engine's driver index is never written (no INF placed in
-`INF` or `INF\OTHER` by the installer; record 27 section 2), the pack's
+The setup engine's driver index is never written (record 27 section 2):
+until draft 19 no INF was placed in `INF` or `INF\OTHER` by the
+installer; from draft 19 the pack's two INFs are placed in `INF` itself
+(never `INF\OTHER`) by a file copy, as NUSB's installer places them,
+and what the engine then makes of them is its own (section 6.5.11). The pack's
 INFs are never edited, and no `WININIT.INI` entry is made for the seven.
 NUSB's other files (`IOS.VXD`, `DISKTSD.VXD`, `NTMAP.SYS`) are not part
 of the pack: whether a stock 98 SE needs any of them is 43.5's reading,
 and the row's text makes no claim that it does not. On ME, 2000 and
 later nothing of this section runs.
+
+#### 6.5.11 The silent first plug: the INFs in `%windir%\INF` (task 43.42; draft 19)
+
+**What was found.** 43.5's first leg (2026-10-20, the 43.4 cut on a
+fresh 98 SE): with the row installed, every new Bulk-Only stick raised
+the Add New Hardware Wizard for "USB Mass Storage Device", which found
+`C:\XHCI98\USBSTOR.INF` through `DevicePath` with no prompt and gave
+the drive letter after Finish; a second stick raised it again, after
+the setup engine had made its `INF\OTHER` copy of the INF at the first.
+43.5 asks for no wizard. The owner's decision (2026-10-20): NUSB parity
+- the pack's two INFs in `%windir%\INF` as NUSB's own installer puts
+them, so a new stick installs with no wizard; the copies owned,
+recorded and removed by the uninstall, and never over an INF already
+there.
+
+**What NUSB's installer does** (static: `nusb33e.exe` of
+`legal-provenance.md` section 5, its resources read from the file and
+its INFs read as text; nothing executed; `legal-provenance.md`
+section 4's row "NUSB 3.3's installer: how it places its INFs"):
+
+- `nusb33e.exe` is an IExpress package. Its `RCDATA` resources:
+  `RUNPROGRAM` `rundll32 advpack.dll,LaunchINFSection _nusb.inf`,
+  `POSTRUNPROGRAM`, `ADMQCMD` and `USRQCMD` `<None>`, `REBOOT` four
+  zero bytes, and `CABINET` the 38 files it unpacks.
+- `_NUSB.INF`'s `[DefaultInstall]` is `CopyFiles` and `AddReg` alone. Its
+  `W98Upd.Copy.inf` list (`1394.INF`, `ntmap.inf`, `usbstor.inf`,
+  `usbntmap.inf`, `NODRIVER.INF`, `USB2.INF`, `_USB2UN.INF`) goes to
+  dirid 17, the INF directory itself (`[DestinationDirs]`
+  `W98Upd.Copy.inf = 17`); a second list, `Win98.Copy.cab`, puts the
+  binaries and the INFs again in `10,Options\Cabs`. It has no
+  `DelFiles`, no `RunPreSetupCommands` or `RunPostSetupCommands`, and
+  nothing naming the index files `DRVIDX.BIN` or `DRVDATA.BIN`; its
+  `AddReg` writes the Active Setup and update records, `SysTray.Exe`
+  under `Run`, and the `USB20U` uninstall entry.
+- The section runs through `ADVPACK.DLL` and the thunk pair
+  `W95INF32.DLL` (which exports `GenInstall32@20`) and `W95INF16.DLL`
+  (which imports `SETUPX`): the setup engine's own INF install, copying
+  the files with its copy engine. `CSETUP.EXE` in the cabinet is a
+  catalog registration program (its strings: "CAT File registration
+  program", `MSCAT32.DLL`, `CryptCATAdminAddCatalog`) that neither the
+  run command nor the INF names.
+
+So NUSB's installer does not rebuild the driver database itself: it
+places the INFs in the INF directory and leaves its index to the setup
+engine. That the engine takes an INF placed in that directory into its
+index by itself is what NUSB's silent first plug rests on; it is the
+engine's behaviour, not a step of NUSB's, and it is read again here (the
+legs below). "The driver database rebuilt as NUSB's own installer does"
+is therefore the same placement, the engine's own update of its index,
+and a restart at the end of the run.
+
+**What this installer does.** On the same-bytes route only (section
+6.5.4), after every binary of the seven is read in place and `Source`
+is written, and before the package's copy: each of the two INFs with no
+file of its own name in `%windir%\INF` is placed there under that name
+(`inst_stor_inf_set`, host-tested: the route admitted, and the name
+free). The steps are `stor_place`'s: `<name>.TMP` beside it made with
+`CREATE_NEW` from the download's file and compared byte for byte, its
+`Placed` value written (section 6.5.6), then `MoveFileA` to the name,
+which fails when the name exists; a step that fails deletes the `.TMP`
+and the `Placed` value, leaves what is there, and the run says that the
+first plug of a new USB disk may still open Windows' wizard (a note,
+not a step: the route through `DevicePath` stands as in draft 18). A
+file of the INF's name already in `%windir%\INF` is never written over,
+and on this route it is the download's bytes or this installer's (any
+other bytes make the case partial-other, section 6.5.3), so it is
+already where NUSB's installer would have put it and nothing is copied.
+Nothing goes to `INF\OTHER`, no `OEM Name` value is written, no `.PNF`
+is made by the installer, the index files are never touched, no setup
+engine routine is called (`DiBuildDriverIndex` and
+`DiAddSingleInfToDrvIdx` stay unused, record 27 section 2), and nothing
+is written to `Options\Cabs` or to the Windows source path.
+
+Why a file copy and not the setup engine's `GenInstall`, as NUSB's
+does: `GenInstall`'s `CopyFiles` replaces a file already present by the
+engine's version rules, so the no-overwrite rule would rest on a flag
+of an INF of this package's own rather than on `MoveFileA`; it would
+need a new helper job (record 27); and both leave the same bytes under
+the same name in the same directory. Whether the engine takes an INF
+that arrived by a file copy into its index as it takes one its own copy
+engine placed is the reading below.
+
+**The restart, and the plug.** The run that places them changed the
+system, so on 98 SE it ends with section 5.9's restart, as NUSB's ends
+with its own. The package directory keeps the seven and stays on
+`DevicePath` (section 6.5.4), and the present devices are installed by
+the helper from it as in draft 18 (section 6.5.5): the placement changes
+only what Windows finds at a later first plug. An INF in `%windir%\INF`
+has no `OEM Name` record naming where its files came from; the files are
+at their destinations with the same bytes. Whether the engine still asks
+for a file at that plug, and which path its prompt offers, is a reading;
+the Finish page and the console's end say once, on 98 SE when an INF
+was placed in the run, "If Windows asks for a file such as USBSTOR.SYS
+when a USB disk is first plugged in, type <the install directory>."
+
+**An update over its own install** reads a placed INF whose bytes are
+the recorded ones as this installer's (section 6.5.3) and places
+nothing again; one deleted since is placed again on the route. The
+complete case (section 6.5.4: all seven present, not this installer's,
+no `Source`; NUSB installed is that case) places nothing. **The
+withdrawal** deletes the placed INFs (section 6.5.4) and **the
+uninstall** deletes them in section 6.5.8 step 3, each with its `.PNF`,
+under the rules of the recorded copies there. The residual of section
+6.5.4 is the same for a placed INF as for the package directory on
+`DevicePath`, and the withdrawal covers both.
+
+**What the legs read** (43.5's first leg taken again on this design's
+cut; the agent of those legs runs them, record 27 section 12's kit):
+
+1. after the install and its restart, a new Bulk-Only stick installs
+   with no wizard; its driver key's `InfPath` (`USBSTOR.INF` expected,
+   the placed copy) and the unit's (`USBNTMAP.INF` expected, "USB Disk"
+   at the first plug rather than "Disk drive");
+2. whether any file prompt appears at that plug, and the path it offers;
+3. a second new stick: no wizard either;
+4. a stick plugged in the same boot as the install, before the restart:
+   recorded as found (wizard or not), not a requirement;
+5. the uninstall leaves neither INF nor its `.PNF` in `%windir%\INF`;
+6. NUSB installed first (the complete case): nothing placed.
+
+If the first does not hold - the engine does not take a copied INF
+into its index, or not until something else happens - the code stops
+there and the owner chooses; the candidates are the helper running the
+setup engine's `GenInstall` over a section of an INF of this package's
+own that copies the two INFs to dirid 17 as `_NUSB.INF` does, and
+accepting the wizard with 43.5 amended.
 
 ## 7. Windows 98 SE and ME: the helper, and the steps page
 
@@ -1419,6 +1588,25 @@ that way, exit 2); a helper that failed, or a
 device read back wrong after it (section 8), sets the failed flag (exit 2)
 with the steps page shown as well; the finish page says to restart after
 the steps in either case, and which it was.
+
+**Two texts of the steps** (draft 19, from 43.5's first leg,
+2026-10-20). The 98 SE sentence that any disk, UAS included, needs
+NUSB's mass-storage component was printed after the printed steps
+whatever the storage row had done; it is printed only where the storage
+drivers are not taken care of on this machine (`stor_covered`: this
+run put the seven in place, or found all of them installed), on 98 SE
+alone, and names both ways: "the installer's row for them, or NUSB's
+mass-storage component", as the steps' other storage sentence does.
+And where the reading finds no xHCI controller at all - no devnode in
+the tree and no `Enum\PCI` entry with no driver (record 23 section 6.3;
+on that leg the log listed neither, after the boot's New Hardware wizard
+for the controller had been cancelled) - "No device of this package is
+present" is followed, on 98 SE and ME, by what to do: "No USB 3
+controller is listed by Windows now. If its New Hardware wizard was
+cancelled at this start, restart: the wizard comes back; finish it
+(Next until Finish, typing <the install directory> where it asks for a
+disk), then run the installer again." The window's Found
+page says the same under its empty list.
 
 The keyboard-and-mouse warning of record 23 section 5.8 stands on the
 Found page unconditionally when a controller changes, and on 98 SE and ME
@@ -1699,7 +1887,10 @@ which waits.
   every file present, then an update: the route, not complete); and
   `inst_stor_remove` (which files are removed: a recorded file with its
   hash, no user and no `USB20U`, and each reason one is kept); the row's
-  text at its longest within its control.
+  text at its longest within its control; (draft 19) `inst_stor_inf_set`
+  (which INFs are placed in `%windir%\INF`: on the route only, and only
+  where no file of the name is there) and `inst_stor_adoptable` with a
+  copy held by `Placed`.
 
 `xhciinst\selftest.cmd` runs the four executables' `/selftest`: the
 window's renders every page with made-up devices through its own dialog
@@ -1760,6 +1951,14 @@ rebind; the UAS Code 2 step taken by the copy when the row is ticked,
 and the advice kept where it is not), 7.1 (`/storage`, `/nostorage`),
 7.4 (the shutdown form for a UAS devnode at Code 2 before the copies),
 9 (the storage removal of section 6.5.8) and 13 (D2 gains the row).
+
+Draft 19 (task 43.42) changes record 23 by its revision 25, made with the
+code: section 6.1 (the `INF\OTHER` bullet: the pack's two INFs placed in
+`%windir%\INF` itself on 98 SE, section 6.5.11 here, the one INF this
+installer ever writes there, never into `INF\OTHER` and never through
+the engine's index), 6.4 (the storage sentence only where storage is not
+taken care of, and the empty reading's steps, section 7 here) and 9 (the
+placed INFs removed with the recorded copies).
 
 Draft 11 (task 42-A.22) changes record 23 by its revision 16: section
 4.4 (Stor98 copied only with the Thunderbolt support; `xhciuas` left out

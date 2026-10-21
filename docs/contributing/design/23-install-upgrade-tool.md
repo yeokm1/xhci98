@@ -1,6 +1,10 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 24, 2026-10-20 (roadmap-usb4 task 43.4, record 26
+Status: revision 25, 2026-10-21 (roadmap-usb4 task 43.42, record 26
+draft 19 section 6.5.11: on Windows 98 SE the pack's two storage INFs
+placed in `%windir%\INF` itself, as NUSB's installer places them, so a
+new USB disk installs with no wizard, recorded and removed by the
+uninstall; section 6.1; and two texts of section 6.4's steps); revision 24, 2026-10-20 (roadmap-usb4 task 43.4, record 26
 draft 17 section 6.5: on Windows 98 SE the USB storage drivers, NUSB
 3.3's seven files from the download's `NONFREE\`, copied where their
 INFs send them and put in the package's copy when the row is ticked and
@@ -1414,7 +1418,12 @@ its set.
   `HKLM\Software\Microsoft\Windows\CurrentVersion\Setup\SetupX\INF\OEM Name`
   (`REGSTR_PATH_INF_OEMNAME`, the Windows 98 DDK's `regstr.h`). Writing
   into either by hand is driving the engine's own bookkeeping. Not used
-  to install. (Revision 20) The uninstall that deletes one of this
+  to install. (Revision 25) The one exception is the 98 SE storage row's
+  (record 26 section 6.5.11, the owner's decision of 2026-10-20): NUSB
+  3.3's `USBSTOR.INF` and `USBNTMAP.INF` placed in `%windir%\INF` itself
+  under their own names, never over a file there and never in
+  `INF\OTHER`, as NUSB's own installer places them, with nothing written
+  to the engine's index or its `OEM Name` key. (Revision 20) The uninstall that deletes one of this
   package's copies there (record 26 section 9.3 step 4, Stor98's owned
   copies too) deletes the `OEM Name` value named by that copy's path, or
   by its short alias, and no other value (`inst_oem_name_ours`): read on
@@ -1581,6 +1590,17 @@ is printed only where the row is not ticked or its case copies nothing;
 a UAS entry already at Code 2 then starts once Windows is shut down and
 started again, which the final line says (section 7.4, record 26
 section 6.5.5).
+
+(Revision 25, record 26 section 7) The storage prerequisite's sentence
+after the steps ("On Windows 98 SE any disk, UAS included, needs ...")
+is printed only on 98 SE and only where the storage drivers are not
+taken care of on this machine (the run put the seven in place, or found
+all of them installed), and names the installer's row beside NUSB's
+component. Where the reading finds no xHCI controller at all, "No device
+of this package is present" is followed on 98 SE and ME by the steps
+for a controller whose New Hardware wizard was cancelled at this start:
+restart, finish the wizard (typing the install directory where it asks
+for a disk), run the installer again.
 
 A UAS entry at Code 2 with no `USBNTMAP.SYS` in `System32\Drivers` (the
 upper filter `xhciuas.inf` names) gets a step of its own, in the plan and
@@ -2253,8 +2273,10 @@ recorded storage devices, and those Windows bound from its copy after
 the run (adopted first, record 26 draft 18), before this package's own,
 then, after the
 package's INF copies and driver files, the INF copies the setup engine
-made for it and the files it copied, each only by its record and the
-reference checks, none while NUSB's `Uninstall\USB20U` is present.
+made for it, (revision 25) the two INFs it placed in `%windir%\INF`
+itself with their `.PNF` files, and the files it copied, each only by
+its record and the reference checks, none while NUSB's
+`Uninstall\USB20U` is present.
 
 ### 9.5 The xHCI98 USB Tree (`XHCITR`)
 

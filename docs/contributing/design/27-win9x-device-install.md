@@ -1,6 +1,9 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 10, 2026-10-20 (roadmap-usb4 task 43.4: on Windows 98 SE
+Status: draft 11, 2026-10-21 (roadmap-usb4 task 43.42: the installer,
+not the helper, places the pack's two storage INFs in `%windir%\INF`
+on 98 SE, record 26 section 6.5.11; sections 2 and 8 say where that
+stands against the driver index; the helper unchanged); draft 10, 2026-10-20 (roadmap-usb4 task 43.4: on Windows 98 SE
 the USB storage drivers of record 26 section 6.5 - Bulk-Only devices
 and storage units installed by NUSB 3.3's `USBSTOR.INF` and
 `USBNTMAP.INF` from the install directory, two steps of section 6, and
@@ -155,7 +158,11 @@ Not used, and why: anything the header marks reserved, `BUGBUG`, or "for
 use by Setup" (`dwSetupReserved`, `lpReserved`); the driver index
 (`DiBuildDriverIndex`, `DiAddSingleInfToDrvIdx`: prototypes with no
 documentation block, and a write into the engine's own index, which record
-23 section 6.1 already refuses for `INF\OTHER`); `GenInstall` on the INF's
+23 section 6.1 already refuses for `INF\OTHER`; draft 11: the pack's two
+INFs that record 26 section 6.5.11 has the installer place in
+`%windir%\INF` are a file copy of the 32-bit installer, which leaves
+the index to the engine as NUSB's own installer does, and no call of
+the helper's); `GenInstall` on the INF's
 sections by hand (the engine does it inside `DiInstallDevice`, which is
 the point); `DiInstallDrvSection` (a class-driver install, not a device's);
 and any registry key of the engine's bookkeeping (section 8) written
@@ -849,7 +856,13 @@ value, a driver key of class `USB` (`USBSTOR.INF`, `NTMPDriver`
 the rule above never reaches them; record 26 section 6.5.6 records each
 copy made for the installer by its exact `OEM Name` value, and section
 6.5.8 removes only those. Which name the engine gives the copy is read on
-43.5's legs.
+43.5's legs. From draft 11 the same two INFs may also be in
+`%windir%\INF` under their own names, placed there by the installer
+(record 26 section 6.5.11): a device Windows then installs from one of
+them at its first plug is expected to carry the bare name (`USBSTOR.INF`)
+as its `InfPath`, with no `INF\OTHER` copy and no `OEM Name` value, which
+43.5's first leg, taken again, reads. The helper's own storage jobs still
+name the install directory's copy.
 
 ## 9. Removal, for the uninstall
 
