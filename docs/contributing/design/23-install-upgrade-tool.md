@@ -1599,8 +1599,9 @@ all of them installed), and names the installer's row beside NUSB's
 component. Where the reading finds no xHCI controller at all, "No device
 of this package is present" is followed on 98 SE and ME by the steps
 for a controller whose New Hardware wizard was cancelled at this start:
-restart, finish the wizard (typing the install directory where it asks
-for a disk), run the installer again.
+restart, finish the wizard (the install directory where it asks for the
+xHCI98 driver disk, the Windows CD or its setup files' folder where it
+asks for a Windows file), run the installer again.
 
 A UAS entry at Code 2 with no `USBNTMAP.SYS` in `System32\Drivers` (the
 upper filter `xhciuas.inf` names) gets a step of its own, in the plan and

@@ -1320,9 +1320,12 @@ nothing it does not own. In section 9.3 step 4's order:
    flow - the install, the first stick, the uninstall - leaves none of
    the seven. It runs after the gate of record 27 section 6 (the tree
    settled, no wizard open), before any removal, and only where this
-   installer published the seven (the record's `Published` is 1; a
-   recorded choice, or a `Source` written before a package copy that then
-   failed, is no evidence) and NUSB's `USB20U` is absent.
+   installer published the seven (the record's `Published` is 1, or
+   (draft 19) a copy `Placed` names is in `%windir%\INF` with its
+   recorded bytes, the evidence of a placement whose `Published` write
+   did not happen; a recorded choice, or a `Source` written before a
+   package copy that then failed, is no evidence) and NUSB's `USB20U` is
+   absent.
    Every devnode, present or not, whose driver key names `USBSTOR.SYS`
    (`NTMPDriver`) or `USBMPHLP.PDR` (`PortDriver`) and that `Devices`
    does not name is adopted when its `InfPath` names exactly one copy in
@@ -1483,7 +1486,10 @@ which fails when the name exists; a step that fails deletes the `.TMP`
 and the `Placed` value and leaves what is there. A placement is a
 publication of the pack, so the first one also writes `Published` 1
 (section 6.5.6), the adoption's evidence, whatever happens to the
-package's copy afterwards. **After the placements** the states of the
+package's copy afterwards; and because a run can stop between the move
+and that write (or the write can fail), the adoption also takes a
+`Placed` copy that is still in place with its recorded bytes as that
+evidence, with `Published` absent (section 6.5.8 step 1). **After the placements** the states of the
 seven are read again (section 6.5.3): if the same-bytes route no longer
 holds - a file of other bytes appeared under an INF's name between the
 reading and the move, or anywhere else of the seven - the run takes
@@ -1630,11 +1636,15 @@ for the controller had been cancelled) - "No device of this package is
 present" is followed, on 98 SE and ME, by what to do: "No USB 3
 controller is listed by Windows now. If its New Hardware wizard was
 cancelled at this start, restart: the wizard comes back; finish it
-(Next until Finish, typing <the install directory> where it asks for a
-disk), then run the installer again." The plan's own empty line ("none
-present") is followed by the same sentence, so the console's plan and
-the window's Found page, whose detail text is the plan, say it before
-anything is done.
+(Next until Finish; where it asks for the xHCI98 driver disk, type <the
+install directory>, and where it asks for a Windows file, the Windows CD
+or the folder of its setup files), then run the installer again." The plan's own empty line ("none
+present") is followed by the same advice in its before-the-run form
+("If its New Hardware wizard was cancelled at this start, go on: after
+the restart the wizard comes back; finish it ..." with the same two
+answers, the install directory named as "the folder the tools go to"),
+so the console's plan and the window's Found page, whose detail text is
+the plan, say it before anything is done.
 
 The keyboard-and-mouse warning of record 23 section 5.8 stands on the
 Found page unconditionally when a controller changes, and on 98 SE and ME
