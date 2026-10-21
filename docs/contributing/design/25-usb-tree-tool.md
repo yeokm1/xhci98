@@ -753,7 +753,9 @@ record.
 1. Confirm with the user: a dialog like Windows' "Stop a Hardware
    device", the unit and the devnodes that will stop as the tree last
    showed them, OK / Cancel (from the tray menu the selection is the
-   request and the dialog follows it). Nothing below waits on the user.
+   request and the dialog follows it), with record 24 section 5.4's
+   reminder where it gives one (its revision 7, roadmap-usb4 task 43.8).
+   Nothing below waits on the user.
 2. Take the shared eject mutex (section 6.3). Query (Q1). An answer is
    eligible when the record's stage is active, the inert and stopping
    flags are clear and the liveness state is ACTIVE; refuse unless Q1 is.

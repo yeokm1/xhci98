@@ -1643,8 +1643,7 @@ each only where the hardware or the Windows it affects is present:
 `XhciInterruptMode`, `XhciForceBulkOnly`, `XhciSilentInstall` (Windows 98
 SE and ME only, off by default; on does exactly what
 `tools\silent\silent-on.bat` does, off what `silent-off.bat` does, and the
-question first says to turn it on only once each listed class's drivers
-have been installed at least once, and to restart after), and
+question says to restart after), and
 `XhciCmMode`, `XhciCmApprove` and `XhciCmSafeEject` (only with a
 Thunderbolt or USB4 controller). Each shows the value now, the default
 and the values allowed, with a warning where the setting has one; Enter

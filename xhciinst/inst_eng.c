@@ -12849,6 +12849,10 @@ static int run_eject(void)
     portBdf = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORTS + 4 * portIndex);
     out("\nDevice %d: %s\n  %s\n", tbn[u].Number, desc, id);
     if (!(opts.Yes && opts.EjectId[0] != '\0')) {
+        if (inst_eject_remind(tb_single(u),
+                              inst_port_usb3(tbh[nhiK].Rec, portBdf))) {
+            out("%s\n", inst_eject_remind_text());
+        }
         if (!eject_confirm()) {
             out("\nCancelled.\n");
             tb_unask();
@@ -12967,7 +12971,7 @@ static int run_eject(void)
             "again.\n");
     }
     i = tb_after(portId, id, nhiK, portBdf, single);
-    devLast = inst_unplug_text(i);
+    devLast = inst_unplug_text(i, INST_TOOL_CONSOLE);
     tb_unask();
     return i == INST_UNPLUG_RESTARTED ? INST_EXIT_STEPS : INST_EXIT_DONE;
 }
@@ -15018,8 +15022,7 @@ static void s98_question(void)
         s98_apply(0);
         return;
     }
-    out("Stor98 %s, the bundled NVMe driver (a separate project)\n",
-        s98VersionText);
+    out("Stor98 %s, the bundled NVMe driver\n", s98VersionText);
     out("  For NVMe drives behind a Thunderbolt or USB4 tunnel; the "
         "installer selects tunnel drives only. On such a drive it installs "
         "where no driver is, and updates an older Stor98. An internal NVMe "
@@ -19068,12 +19071,13 @@ static void st_screens_once(int longest)
     {
         INST_U32 n;
         if (eject_choose(&n)) {
+            out("%s\n", inst_eject_remind_text());
             eject_confirm();
         }
     }
     stInput = NULL;
     for (i = 0; i < 6; i++) {
-        out("%s\n", inst_unplug_text(i < 4 ? i : 0));
+        out("%s\n", inst_unplug_text(i < 4 ? i : 0, INST_TOOL_CONSOLE));
     }
     out("%s\n", inst_not_removable_text());
     tbnCount = 0;

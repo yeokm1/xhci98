@@ -1582,8 +1582,6 @@ const INST_VALUE instValues[] = {
     { "XhciSilentInstall", INST_INF_XHCI, INST_APPLY_9X_XHCI, 0x3UL, 0x3UL,
       "install hubs, boot keyboards and mice and Bulk-Only storage with no "
       "Add New Hardware wizard",
-      "turn it on only once each listed class's drivers have been installed "
-      "at least once: otherwise 98 SE asks for its CD, with no wizard. "
       "Restart Windows after changing it.", 0,
       { "off", "on", NULL, NULL } },
     { "XhciForceBulkOnly", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3UL, 0x3UL,
@@ -3324,22 +3322,65 @@ int inst_unplug_kind(int walkWhole, int othersLeft, int singleFunction,
     return INST_UNPLUG_CHECK;
 }
 
-const char *inst_unplug_text(int kind)
+/* Roadmap 43.8 (owner, 2026-10-20): once Windows has stopped the device
+ * it is too late to stop its other devices first, so the text after a
+ * successful eject says only what to do now, and the reminder is asked
+ * before the eject (inst_eject_remind). */
+const char *inst_unplug_text(int kind, int tool)
 {
     switch (kind) {
-    case INST_UNPLUG_NOW:
-        return "You can now unplug the device.";
     case INST_UNPLUG_OTHERS:
         return "Other devices behind the same Thunderbolt port are still "
                "running: eject them\ntoo before you unplug it.";
     case INST_UNPLUG_RESTARTED:
-        return "The device has started again, so it is not safe to unplug. "
-               "Close the programs\nusing it and run INSTALL /console /eject again.";
+        return tool == INST_TOOL_TREE
+                   ? "The device has started again, so it is not safe to "
+                     "unplug. Close the programs using it and stop it again "
+                     "in the xHCI98 USB Tree."
+                   : "The device has started again, so it is not safe to "
+                     "unplug. Close the programs using it and run INSTALL "
+                     "/console /eject again.";
     default:
-        return "Before you unplug it, make sure none of its other devices "
-               "(USB ports, card\nreaders, network) is in use; stop them in "
-               "Windows first.";
+        return "You can now unplug the device.";
     }
+}
+
+INST_U32 inst_port_usb3(const unsigned char *rec, INST_U32 portBdf)
+{
+    INST_U32 count = inst_get32(rec, 48);       /* CM_ST_O_PORT_COUNT   */
+    INST_U32 active = inst_get32(rec, 52);      /* CM_ST_O_PORT_ACTIVE  */
+    INST_U32 n = inst_get32(rec, 72);           /* CM_ST_O_ROUTER_COUNT */
+    INST_U32 usb3 = 5UL;                        /* CM_ST_TUN_UNKNOWN    */
+    INST_U32 j;
+    int portKnown = 0;
+    int routers = 0;
+
+    for (j = 0; j < count && j < 4UL; j++) {    /* CM_ST_MAX_PORTS      */
+        if ((active & (1UL << j)) != 0 &&
+            inst_get32(rec, 56 + 4 * j) == portBdf) {   /* CM_ST_O_PORTS */
+            portKnown = 1;
+        }
+    }
+    for (j = 0; portKnown && j < n && j < INST_ST_MAX_ROUTERS; j++) {
+        const unsigned char *e = rec + INST_ST_HDR + j * INST_ST_ENTRY;
+        if (inst_get32(e, 40) == portBdf) {     /* CM_ST_E_BRIDGE       */
+            routers++;
+            usb3 = (inst_get32(e, 36) >> 4) & 0xFUL;    /* CM_ST_E_TUNNELS */
+        }
+    }
+    return routers == 1 ? usb3 : 5UL;
+}
+
+int inst_eject_remind(int singleFunction, INST_U32 usb3)
+{
+    return inst_unplug_kind(1, 0, singleFunction, usb3) != INST_UNPLUG_NOW;
+}
+
+const char *inst_eject_remind_text(void)
+{
+    return "Before you eject it, make sure none of its other devices (USB "
+           "ports, card readers, network) is in use; stop them in Windows "
+           "first.";
 }
 
 /* ======================================================================== */
@@ -5004,8 +5045,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       284, 20 },
     { INST_PT_NOW, "Restart Windows now", 284, 10 },
     { INST_PT_LATER, "Restart Windows later", 284, 10 },
-    { INST_PT_S98, "Stor98, the bundled NVMe driver (a separate project)",
-      258, 10 },
+    { INST_PT_S98, "Stor98, the bundled NVMe driver", 258, 10 },
     { INST_PT_S98_T,
       "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer "
       "selects tunnel drives only.",

@@ -1882,10 +1882,11 @@ your machine"; `XhciSelectiveSuspend` 1 (set with `/set` only): "leave it
 off unless a device needs it; if a device stops responding after idling,
 set it back to 0"; `XhciCmMode` 2 and 3 force one connection manager,
 "use them only on the release notes' advice"; `XhciSilentInstall`, before
-its question every time: turn
-it on only once each listed class's drivers have been installed at least
-once, otherwise 98 SE asks for its CD with no wizard, and restart Windows
-after changing it; `XhciForceBulkOnly` is read as each device is connected, and on Windows
+its question every time: restart Windows after changing it (roadmap-usb4
+task 43.6, the owner, 2026-10-19: no warning about the listed classes'
+drivers, since the user knows what is being plugged in; until then it
+also said to turn it on only once each listed class's drivers had been
+installed at least once); `XhciForceBulkOnly` is read as each device is connected, and on Windows
 2000 and later a disk already installed keeps its driver until it is
 uninstalled in Device Manager and plugged in again; `XhciInterruptMode` 1
 and 3 refuse a controller Windows gives no line or no message.
