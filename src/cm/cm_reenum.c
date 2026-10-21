@@ -1632,6 +1632,37 @@ static ULONG cmOwnedMask(PCM_NHI nhi)
     return mask;
 }
 
+ULONG CmReenumMemberFlags(PCM_NHI nhi, ULONG bdf, PULONG flags)
+{
+    ULONG i;
+
+    *flags = 0;
+    for (i = 0; i < nhi->Reenum.Members; i++) {
+        if (nhi->Reenum.Port[i].Bdf == bdf) {
+            *flags = cmFlags(nhi, i);
+            return i;
+        }
+    }
+    return XHCI_TBT_NO_MEMBER;
+}
+
+VOID CmReenumOwe(PCM_NHI nhi, ULONG i)
+{
+    PCM_REENUM r;
+
+    r = &nhi->Reenum;
+    if (i >= r->Members) {
+        return;
+    }
+    /* Owed with its exposure, run by the pass's owed-change loop at once
+     * once the member's gate is down: the UP before the call
+     * (obligation 1), the re-enumeration with its vanished-child scan. */
+    r->Port[i].Missed = 1;
+    r->Port[i].MissedExpose = 1;
+    r->Port[i].MissedAt = cmNow(nhi) - CM_MISSED_RETRY_MS;
+    CmLogNote(nhi, "cm.reenum.owed", r->Port[i].Bdf);
+}
+
 /*
  * Every post to the worker, on the CM thread: the owned-member mask read
  * once, sent, and recorded as the one the worker holds (WkActive), so the
@@ -2077,6 +2108,7 @@ VOID CmReenumStart(PCM_NHI nhi)
 
     r = &nhi->Reenum;
     r->Starts++;
+    CmEjectReset(nhi);
     r->Route = CM_ROUTE_NONE;
     r->Why = CM_NOROUTE_NONE;
     r->Members = 0;
@@ -2403,6 +2435,18 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         } else if ((action->Why & CM_U4_WHY_BASE) == 0) {
             (VOID)CmNvlinkIcmDown(nhi, state);
         }
+        /* A 9x eject transaction on the member learns of the tunnel down
+         * only now, after the statement's decision was entered (the USB4
+         * profile's DOWN hook entered it before this action was queued),
+         * so a decision not pending then has completed: its unit's
+         * function read gone after this, and after any acknowledgement
+         * wait, is retired by its own removal (task 43.18). Under the
+         * firmware connection manager no member is named: every member. */
+        if (r->Route == CM_ROUTE_CONFIGMG &&
+            action->Why != TBT_ICM_WHY_UNAVAILABLE) {
+            CmEjectDown(nhi, nhi->U4On ? CmNhiActionMember(nhi, action)
+                                       : XHCI_TBT_NO_MEMBER);
+        }
         /* The acknowledgement before the removal is per member: a member
          * with a statement pending is held, the rest go on (cmHeld). */
         cmReenumAll(nhi, TRUE, FALSE, action);
@@ -2457,6 +2501,10 @@ VOID CmReenumService(PCM_NHI nhi)
     if (!r->Listed) {
         return;
     }
+    /* The 9x eject transactions and statement decisions (task 43.18),
+     * before any member's held work is looked at: a transaction retired or
+     * a decision made this pass lowers its member's gate for it. */
+    CmEjectService(nhi, FALSE);
     if (r->Route == CM_ROUTE_FILTER) {
         cmConnGens(nhi);
     }
@@ -2892,6 +2940,9 @@ VOID CmReenumStop(PCM_NHI nhi)
                   (wc.NoIrqPin0Started << 16) | (wc.NoIrqPin0Seen & 0xFFFFUL));
     }
     if (r->Callwk != NULL) {
+        /* The eject transactions detached first: one already authorised
+         * to remove is handed to its worker to finish alone (task 43.18). */
+        CmEjectStop(nhi);
         /* Never waited for: a worker inside a call frees the block itself
          * when the call returns (cm_callwk.c). */
         CmCallwkStop(r->Callwk);
@@ -2997,7 +3048,8 @@ BOOLEAN CmReenumRetire(PCM_NHI nhi, ULONG i, PULONG answers)
     }
     if (CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
         /* A stor98 statement behind this member still awaits its
-         * acknowledgement: no removal call before it falls (task 42-A.12);
+         * acknowledgement, or a 9x eject transaction or decision holds
+         * it: no removal call before it falls (tasks 42-A.12, 43.18);
          * asked again at a later pass. */
         return FALSE;
     }

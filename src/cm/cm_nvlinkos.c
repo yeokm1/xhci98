@@ -345,6 +345,13 @@ VOID CmNvlinkInit(VOID)
     cmNvOsQualified = (BOOLEAN)(cmNvNt && !IoIsWdmVersionAvailable(6, 0));
 #else
     cmNvOsQualified = (BOOLEAN)(cmNvNt && !IoIsWdmVersionAvailable(1, 0x20));
+    if (!cmNvNt) {
+        /* 98 SE and ME, each on its own G3 reading (record 21 section 7.2
+         * part 2, decision V4; cm_eject.c CmEjQualified9x). Until this
+         * driver tells the two apart, both are needed. */
+        cmNvOsQualified = (BOOLEAN)(CmEjQualified9x(FALSE) &&
+                                    CmEjQualified9x(TRUE));
+    }
 #endif
     cmNvTable = (PSTOR98LS_TABLE)CmAlloc(sizeof(STOR98LS_TABLE));
     if (cmNvTable == NULL) {
@@ -1080,6 +1087,16 @@ ULONG CmNvlinkIcmDown(PCM_NHI nhi, ULONG pollState)
     reading = XHCI_TBT_PORT_ERROR;
     state = XHCI_TBT_POLL_NO_READING;
     if (r->Topo.Tunnels == 1 && r->Topo.Source[0] == XHCI_TBT_SRC_SHPC) {
+        if (!cmNvNt && CmEjectDecide(nhi, 0, 1, FALSE,
+                                     XHCI_TBT_POLL_BUDGET_MS)) {
+            /* 98 SE and ME: the decision is entered and the reading posted
+             * to the member's call worker; its completion publishes or
+             * withholds (CmNvlinkDecided), and the member's removal is held
+             * until then (record 21 section 7.2 part 2). */
+            CmLogNote(nhi, "cm.nvlink.icm-down",
+                      (CM_NVLINK_PENDING << 16) | (pollState << 8));
+            return CM_NVLINK_PENDING;
+        }
         reading = cmNvRead(nhi, r->Topo.Set[0], XHCI_TBT_PORT_DOWN,
                            XHCI_TBT_POLL_BUDGET_MS, &emulator);
         state = reading == XHCI_TBT_PORT_DOWN ? XHCI_TBT_POLL_REACHED
@@ -1167,6 +1184,16 @@ ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
     bridge = r->Topo.Set[member];
     reading = XHCI_TBT_PORT_ERROR;
     left = remainingMs;
+    if (!cmNvNt && pathClosed &&
+        r->Topo.Source[member] == XHCI_TBT_SRC_SHPC &&
+        remainingMs > CM_NVLINK_DELIVERY_MS &&
+        CmEjectDecide(nhi, member, 2, pathClosed,
+                      remainingMs - CM_NVLINK_DELIVERY_MS)) {
+        /* 98 SE and ME: asynchronous, within the same allowance (record
+         * 21 section 7.2 part 2); the core's teardown goes on. */
+        CmLogNote(nhi, "cm.nvlink.u4-down", CM_NVLINK_PENDING << 16);
+        return CM_NVLINK_PENDING;
+    }
     if (pathClosed && r->Topo.Source[member] == XHCI_TBT_SRC_SHPC &&
         remainingMs > CM_NVLINK_DELIVERY_MS) {
         /* Within what is left of the 3 s, the delivery bound kept back. */
@@ -1239,9 +1266,13 @@ VOID CmNvlinkStep(PCM_NHI nhi)
     if (u != NULL) {
         u->Stepping = 0;
     }
+    /* The 9x eject transactions and statement decisions are stepped at
+     * the same servicing points (task 43.18; record 21 section 7.2 part
+     * 0): results taken, deadlines read, calls submitted. */
+    CmEjectService(nhi, TRUE);
 }
 
-BOOLEAN CmNvlinkHeld(PCM_NHI nhi, ULONG bridge)
+BOOLEAN CmNvlinkAckHeld(PCM_NHI nhi, ULONG bridge)
 {
     BOOLEAN held;
     KIRQL irql;
@@ -1249,11 +1280,95 @@ BOOLEAN CmNvlinkHeld(PCM_NHI nhi, ULONG bridge)
     if (cmNvTable == NULL) {
         return FALSE;
     }
-    CmNvlinkStep(nhi);
     KeAcquireSpinLock(&cmNvLock, &irql);
     held = CmNvlinkWaitHeld(cmNvShadow, nhi, bridge);
     KeReleaseSpinLock(&cmNvLock, irql);
     return held;
+}
+
+BOOLEAN CmNvlinkHeld(PCM_NHI nhi, ULONG bridge)
+{
+    if (cmNvTable == NULL) {
+        return FALSE;
+    }
+    CmNvlinkStep(nhi);
+    /* The acknowledgement waits behind the member, and on 98 SE and ME its
+     * eject transaction not yet retired, its block, or its statement
+     * decision (task 43.18). */
+    return (BOOLEAN)(CmNvlinkAckHeld(nhi, bridge) ||
+                     CmEjectHeld(nhi, bridge));
+}
+
+BOOLEAN CmNvlinkMarkEntry(PCM_NHI nhi, ULONG bridge, ULONG index,
+                          BOOLEAN wait)
+{
+    BOOLEAN marked;
+    KIRQL irql;
+
+    if (cmNvTable == NULL || index >= STOR98LS_ENTRIES) {
+        return FALSE;
+    }
+    marked = FALSE;
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    if (cmNvShadow[index].Owner == nhi &&
+        cmNvShadow[index].Bridge == bridge &&
+        CmNvlinkSetDown(cmNvTable, index, TRUE)) {
+        marked = TRUE;
+        if (wait) {
+            cmNvShadow[index].Waiting = 1;
+            cmNvShadow[index].MarkedAt = cmNvNow(nhi);
+        }
+    }
+    KeReleaseSpinLock(&cmNvLock, irql);
+    if (marked) {
+        cmNvSent++;
+        CmLogNote(nhi, "cm.nvlink.down",
+                  (index << 16) |
+                      (cmNvTable->Entry[index].LinkGeneration & 0xFFFFUL));
+    }
+    return marked;
+}
+
+VOID CmNvlinkDecided(PCM_NHI nhi, const CM_EJ_DECISION *d)
+{
+    PCM_REENUM r;
+    ULONG verdict;
+    ULONG state;
+    ULONG left;
+    ULONG source;
+    ULONG took;
+    BOOLEAN emulator;
+
+    r = &nhi->Reenum;
+    if (cmNvTable == NULL || d->Member >= r->Topo.Tunnels ||
+        r->Topo.Set[d->Member] != d->Bridge) {
+        /* The set changed under the decision: nothing stated. */
+        CmLogNote(nhi, "cm.nvlink.9x.decision-stale", d->Bridge);
+        return;
+    }
+    source = r->Topo.Source[d->Member];
+    emulator = (BOOLEAN)(d->Emulator != 0 && cmNvEmulator(d->Bridge));
+    if (d->Kind == 1) {
+        state = d->Reading == XHCI_TBT_PORT_DOWN ? XHCI_TBT_POLL_REACHED
+                                                 : XHCI_TBT_POLL_TIMEOUT;
+        verdict = CmNvlinkIcmVerdict(r->Topo.Tunnels, source, emulator,
+                                     cmNvOsQualified, state, d->Reading);
+    } else {
+        /* What is left of the 3 s now, as the statement is published (the
+         * thread's taking, not the worker's read), with the delivery bound
+         * the deadline kept back added again. */
+        left = d->Reading == XHCI_TBT_PORT_ERROR
+                   ? 0
+                   : CmEjDecideLeft(d, d->DecidedAt) + CM_NVLINK_DELIVERY_MS;
+        verdict = CmNvlinkU4Verdict(d->PathClosed, TRUE, source, emulator,
+                                    cmNvOsQualified, d->Reading, left);
+    }
+    took = d->ReadAt - d->BeganAt;
+    CmLogNote(nhi, "cm.nvlink.9x.decided",
+              (verdict << 24) | (d->Member << 16) |
+                  ((d->Reading & 0xFFUL) << 8) |
+                  (took / 16UL > 0xFFUL ? 0xFFUL : took / 16UL));
+    (VOID)cmNvMark(nhi, d->Bridge, verdict);
 }
 
 BOOLEAN CmNvlinkPending(VOID)
@@ -1267,7 +1382,7 @@ BOOLEAN CmNvlinkPending(VOID)
     KeAcquireSpinLock(&cmNvLock, &irql);
     pending = CmNvlinkWaitAny(cmNvShadow);
     KeReleaseSpinLock(&cmNvLock, irql);
-    return pending;
+    return (BOOLEAN)(pending || CmEjectPending());
 }
 
 /*
@@ -1414,7 +1529,9 @@ ULONG CmNvlinkIdleMs(ULONG configured)
     }
     /* Read without the lock (any IRQL): a wait marked just after is
      * stepped on the next pass all the same. */
-    return CmNvlinkIdleFor(configured, up, CmNvlinkWaitAny(cmNvShadow));
+    return CmNvlinkIdleFor(configured, up,
+                           (BOOLEAN)(CmNvlinkWaitAny(cmNvShadow) ||
+                                     CmEjectPending()));
 }
 
 /* ====================================================================== */
@@ -1555,6 +1672,9 @@ ULONG CmNvlinkU4Down(PVOID context, const TBT_U4_LINKDOWN *info)
     r = CmNvlinkPortDown(nhi, member, info->PathClosed,
                          info->AnchorValid ? info->RemainingUs / 1000UL
                                            : 0);
+    if (r == CM_NVLINK_PENDING) {
+        return TBT_U4_STMT_PENDING;
+    }
     return r == CM_NVLINK_SEND ? TBT_U4_STMT_SENT : TBT_U4_STMT_WITHHELD;
 }
 

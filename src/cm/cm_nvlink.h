@@ -40,10 +40,10 @@
  * CmNvlinkPublish9x's. Every read of the proof is counted, as NT counts
  * its callback's queries: until stor98 has read it, no receiver exists
  * and nothing waits for one. The REMOVE_PENDING request below is
- * interface 3's removal transaction (R9, R11); the 9x link-down statement
- * is not made (THE OBLIGATIONS, 2: no reading on 98 SE and ME), and an
- * eject the install or tray tool makes goes to Windows directly, without
- * the request (record 24 section 7.1).
+ * interface 3's removal transaction (R9, R11); since task 43.18 an eject
+ * the install or tray tool makes is asked of this driver and runs it
+ * (cm_eject.h), and a 9x tunnel down enters a statement decision whose
+ * slot reading the member's call worker makes (THE OBLIGATIONS, 2).
  *
  * THE OBLIGATIONS, and where each is met:
  *  1. UP with a new link generation BEFORE the operating system can
@@ -67,8 +67,12 @@
  *     and architecture are a pair the ordering is qualified on (Windows
  *     2000 on x86, XP x64 on amd64; not XP x86 until gate G3 runs there,
  *     not Vista or 7, whose native hot plug races the connection manager,
- *     not 98 SE or ME, where nothing here reads the SHPC slot), and the
- *     channel's own reading of the slot came DOWN within 2 s. USB4
+ *     not 98 SE or ME until each is admitted on its own reading,
+ *     cm_eject.c CmEjQualified9x), and the channel's own reading of the
+ *     slot came DOWN within 2 s - on 98 SE and ME asynchronously: the
+ *     decision entered, the reading made through PCI.VXD by the member's
+ *     call worker, the verdict at CmNvlinkDecided (CM_NVLINK_PENDING
+ *     meanwhile, the member's removal held). USB4
  *     profile, CmNvlinkPortDown from the CM_U4_DOWN_HOOK - the same, plus
  *     TBT_U4_LINKDOWN.PathClosed (record 22 section 7.3 step 1 read back),
  *     the port's member known by correspondence, the reading DOWN within
@@ -105,9 +109,10 @@
  *     7.1) and by the Detect gate under the USB4 profile (record 22 section
  *     10.1); nothing here.
  *
- * 9x ORDERLY REMOVAL (MD-5). On Windows 98 SE and ME every CONFIGMG call
- * is the domain's worker's (cm_cfgwk.c), never the connection-manager
- * thread's, and the worker's removal step (cmWkRemoveChild) wraps the
+ * 9x ORDERLY REMOVAL (MD-5). A tool's eject of a unit is the transaction of
+ * cm_eject.h (task 43.18): R11 O5's branches and O6 apart, on the thread,
+ * its calls on the member's call worker. What follows is the domain's
+ * CONFIGMG worker (cm_cfgwk.c), whose removal step (cmWkRemoveChild) wraps the
  * handshake around a removal of a function still present: Query_Remove_
  * SubTree first (the file system's quiescence and the configuration
  * manager's veto: a refusal is final, nothing is forced); then, accepted,
@@ -217,6 +222,9 @@
 #define CM_NVLINK_LOST              10UL /* the host interface lost (record
                                            21 section 5.5): presence lost,
                                            nothing proven of the endpoint  */
+#define CM_NVLINK_PENDING           11UL /* 98 SE and ME: the decision is
+                                           entered, the slot reading posted
+                                           (task 43.18; CmNvlinkDecided)   */
 
 /* The 9x REMOVE_PENDING request (interface 3, R9): Flags bit 3 is the
  * request, RemoveSequence the connection manager's request sequence
@@ -712,6 +720,19 @@ ULONG CmNvlinkPortDown(struct _CM_NHI *nhi, ULONG member,
 VOID CmNvlinkStep(struct _CM_NHI *nhi);
 BOOLEAN CmNvlinkHeld(struct _CM_NHI *nhi, ULONG bridge);
 BOOLEAN CmNvlinkPending(VOID);
+/* Task 43.18: member `bridge`'s acknowledgement waits alone (CmNvlinkHeld
+ * without the 9x eject's gate), for the eject's isolation branch.
+ * CmNvlinkMarkEntry: DOWN_QUIESCED on entry `index` this domain published
+ * behind `bridge`, with its acknowledgement wait when `wait`; TRUE when
+ * written. CmNvlinkDecided: a 9x statement decision's end (cm_ejectos.c) -
+ * the verdict from its reading, then the statement made or withheld as
+ * CmNvlinkIcmDown and CmNvlinkPortDown make it. On the thread. */
+BOOLEAN CmNvlinkAckHeld(struct _CM_NHI *nhi, ULONG bridge);
+BOOLEAN CmNvlinkMarkEntry(struct _CM_NHI *nhi, ULONG bridge, ULONG index,
+                          BOOLEAN wait);
+struct _CM_EJ_DECISION;
+VOID CmNvlinkDecided(struct _CM_NHI *nhi,
+                     const struct _CM_EJ_DECISION *d);
 
 /* Windows 98 SE and ME, the CONFIGMG worker's removal step (see the file
  * header). CmNvlinkWkCandidate: whether entry `index` is one domain

@@ -400,7 +400,8 @@ static const char *const cmU4CounterNames[] = {
     "u4.quarantine.lifted", "u4.ports.preserved", "u4.ports.held",
     "u4.connects.deferred", "u4.resume.budgets-spent", "u4.ports.cleaned",
     "u4.dpr", "u4.hrr", "u4.quirks", "u4.statements.sent",
-    "u4.statements.withheld", "u4.unplugs", "u4.unplugs.nested",
+    "u4.statements.withheld",
+    "u4.statements.pending", "u4.unplugs", "u4.unplugs.nested",
     "u4.quick-replugs", "u4.hotplug.lane0", "u4.hotplug.other",
     "u4.hotplug.downstream", "u4.links.discovered", "u4.links.removed",
     "u4.action-overflows", "u4.ejects", "u4.contained.refused",
@@ -2088,6 +2089,9 @@ static ULONG cmU4LinkDown(PVOID context, const TBT_U4_LINKDOWN *info)
             nhi->U4UpValid &= ~(1UL << (info->Port - 1));
         }
         r = nhi->U4DownHook(nhi->U4HookContext, info);
+        if (r == TBT_U4_STMT_PENDING) {
+            return TBT_U4_STMT_PENDING;
+        }
         return r == TBT_U4_STMT_SENT ? TBT_U4_STMT_SENT
                                      : TBT_U4_STMT_WITHHELD;
     }
@@ -2137,29 +2141,44 @@ ULONG CmNhiMemberGen(PCM_NHI nhi, ULONG member)
     return 0;
 }
 
-static VOID cmU4Eject(PVOID context, ULONG bdf)
+ULONG CmNhiMemberPort(PCM_NHI nhi, ULONG member)
+{
+    ULONG i;
+
+    if (!nhi->U4On || !cmTopoUsable(nhi)) {
+        return 0;
+    }
+    for (i = 1; i <= nhi->U4.PortCount; i++) {
+        if (XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, i) == member) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+/* The teardown itself; TRUE when the PCIe path was torn down and read back
+ * closed (TbtU4EjectPcie answered TBT_OK). */
+static BOOLEAN cmU4EjectBridge(PCM_NHI nhi, ULONG bdf)
 {
     const TBT_U4_PORT *p;
-    PCM_NHI nhi;
     ULONG member;
     ULONG port;
     ULONG i;
     LONG rc;
 
-    nhi = (PCM_NHI)context;
     nhi->Counters.U4Ejects++;
     CmLogNote(nhi, "u4.eject.bridge", bdf);
     if (cmU4Contained(nhi)) {
         /* Record 22 section 7.7: no request after the loss. */
         nhi->Counters.U4ContainRefused++;
         CmLogNote(nhi, "u4.eject.contained", nhi->Live.State);
-        return;
+        return FALSE;
     }
     if (!nhi->U4On || !CmNhiRunning(nhi) || nhi->Suspended ||
         nhi->DevicePower != PowerDeviceD0) {
         nhi->Counters.U4EjectsUnmapped++;
         CmLogNote(nhi, "u4.eject.not-running", nhi->Stage);
-        return;
+        return FALSE;
     }
     port = 0;
     member = XHCI_TBT_NO_MEMBER;
@@ -2183,7 +2202,7 @@ static VOID cmU4Eject(PVOID context, ULONG bdf)
     if (port == 0) {
         nhi->Counters.U4EjectsUnmapped++;
         CmLogNote(nhi, "u4.eject.unmapped", bdf);
-        return;
+        return FALSE;
     }
     p = TbtU4Port(&nhi->U4, port);
     if (p == NULL || !p->Dev.Present || !p->Pcie.Up ||
@@ -2195,7 +2214,7 @@ static VOID cmU4Eject(PVOID context, ULONG bdf)
         nhi->Counters.U4EjectsUnmapped++;
         CmLogNote(nhi, "u4.eject.stale", (port << 16) |
                                              (p != NULL ? (p->Generation & 0xFFFFUL) : 0));
-        return;
+        return FALSE;
     }
     /* The PCIe tunnel alone: a USB3 tunnel on the same port carries the
      * host xHCI's devices, which this eject never asked to stop. */
@@ -2204,6 +2223,22 @@ static VOID cmU4Eject(PVOID context, ULONG bdf)
     if (rc != TBT_OK) {
         nhi->Counters.U4EjectsFailed++;
     }
+    return (BOOLEAN)(rc == TBT_OK);
+}
+
+static VOID cmU4Eject(PVOID context, ULONG bdf)
+{
+    (VOID)cmU4EjectBridge((PCM_NHI)context, bdf);
+}
+
+BOOLEAN CmNhiU4EjectMember(PCM_NHI nhi, ULONG bdf)
+{
+    /* The 9x eject transaction's teardown (task 43.18; record 21 section
+     * 7.2 part 1): the NT eject hook's own path, its answer kept. */
+    if (!nhi->U4On) {
+        return FALSE;
+    }
+    return cmU4EjectBridge(nhi, bdf);
 }
 
 /* The domain's state at stop, port by port (record 22 section 12's

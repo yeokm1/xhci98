@@ -433,6 +433,10 @@ typedef struct _TBT_U4_ACTION {
  */
 #define TBT_U4_STMT_SENT            1UL
 #define TBT_U4_STMT_WITHHELD        2UL
+/* Windows 98 SE and ME: the driver's reading is posted and its statement
+ * will be made or withheld later, within the same allowance (record 21
+ * section 7.2 part 2); the teardown goes on. */
+#define TBT_U4_STMT_PENDING         3UL
 
 typedef struct _TBT_U4_LINKDOWN {
     ULONG Port;
@@ -531,6 +535,7 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG QuirksFired;
     ULONG StatementsSent;
     ULONG StatementsWithheld;
+    ULONG StatementsPending;    /* 9x: decided later (TBT_U4_STMT_PENDING) */
     ULONG Unplugs;
     ULONG UnplugsNested;
     ULONG QuickReplugs;

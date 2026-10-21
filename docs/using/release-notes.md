@@ -560,12 +560,28 @@ every system `INSTALL /devices` shows what is connected and
 - **Windows 98 SE and ME:** use the xHCI98 USB Tree or `INSTALL /eject`;
   these systems have no other way, since the "Unplug or Eject Hardware" applet NUSB installs
   does not list a device behind a Thunderbolt port. The tool lists the
-  devices, asks which one, and asks Windows to query the device's
-  removal (a volume with a file open on it refuses, and the tool says so
-  and changes nothing) and, once Windows has agreed, to remove it; then it
-  says whether the device can be unplugged. Until it is unplugged, Device
-  Manager's Refresh, or the Thunderbolt driver looking at the port again,
-  can start the device again.
+  devices, asks which one, and then (from `3.2.0.0`) asks the Thunderbolt
+  driver, `xhcicm.sys`, to remove it; before, the tool asked Windows
+  itself. The driver asks Windows to query the device's removal (a volume
+  with a file open on it refuses, and the tool says so and nothing is
+  changed); once Windows has agreed, for an NVMe drive bound to the
+  bundled Stor98 it asks Stor98 to stop the drive cleanly (flush and shut
+  down) and waits up to about 14 seconds for its answer, then removes the
+  device; the tool then says whether it can be unplugged. An NVMe drive
+  that the bundled Stor98 is not running is not ejected from here: the
+  tool says so and nothing changes. A drive that
+  does not confirm its stop is not removed: it stays stopped until it is
+  unplugged, the tool says "Blocked: the drive did not stop; shut down
+  Windows before you unplug it" (exit 2), and the USB Tree shows the port
+  as blocked. So does a removal Windows keeps refusing for 30 seconds
+  (the driver keeps trying until it succeeds or the device is unplugged).
+  A tool that hears no answer from the driver says so (exit 2) and does
+  not claim that nothing changed. Under the USB4 connection manager the
+  port's tunnel is closed after a clean removal when no other device
+  behind it is running; under the Thunderbolt 3 firmware connection
+  manager the tunnel stays up until the unplug. Until it is unplugged,
+  Device Manager's Refresh, or the Thunderbolt driver looking at the port
+  again, can start the device again.
 - **Windows 2000:** "Unplug or Eject Hardware" lists the device; stop it,
   then unplug it. Unplugged without a stop, the device is removed all the
   same and Windows 2000 shows its "Unsafe Removal of Device" dialog.
@@ -671,10 +687,13 @@ as Windows runs. The bundled Stor98 reads it on every target:
   itself, at that deadline.
 - On Windows 98 SE and ME Stor98 finds the channel, also for a drive
   plugged in after Windows started (it looks for its drive's entry again
-  after it starts). This release makes no link-down statement there and
-  no clean-eject handshake: an eject with the install or tray tool is
-  Windows' own (flush and stop), and for an unplugged drive Stor98
-  relies on its own deadline.
+  after it starts). From `3.2.0.0` an eject with the install or tray tool
+  goes through `xhcicm.sys`, which asks Stor98 for a clean stop and waits
+  for its answer before Windows removes the drive ("Removing a Thunderbolt
+  or USB4 device safely"). The link-down statement is prepared there but
+  not made: each of 98 SE and ME is admitted only once its own reading of
+  the statement's ordering exists, and neither has one yet, so for an
+  unplugged drive Stor98 relies on its own deadline.
 
 ### The connection manager's registry values
 

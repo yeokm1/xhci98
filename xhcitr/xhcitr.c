@@ -48,6 +48,8 @@
 #include "../xhciinst/inst_core.h"
 #include "../src/cm/cm_status.h"
 #include "../src/cm/cm_query.h"
+#include "../src/cm/cm_ejask.h"
+#include "../xhciinst/inst_ej9x.h"
 #include "tr_core.h"
 #include "tr_log.h"
 #include "tr_pci.h"
@@ -3469,6 +3471,20 @@ static void details_of(TR_TEXT *t, int i, int fetch)
     case K_PORT:
         tr_printf(t, "Thunderbolt tunnel port %d of %s\n", n->B + 1,
                   dn_name(&gw.N[nhi[n->A].Node]));
+        if (nhi[n->A].R != NULL && n->B >= 0 && n->B < 4 &&
+            ((inst_get32(nhi[n->A].R, CM_ST_O_FLAGS) >>
+              CM_ST_F_BLOCKED_SHIFT) & (1UL << n->B)) != 0) {
+            /* Record 21 section 7.2 part 1 (task 43.18): a 98 SE or ME
+             * eject on this port left its device stopped and not removed,
+             * or its removal keeps failing. */
+            tr_put(t, "  Blocked: a device on this port was stopped and not "
+                      "removed. Shut down\n  Windows before you unplug it.\n");
+        } else if (nhi[n->A].R != NULL && n->B >= 0 && n->B < 4 &&
+                   ((inst_get32(nhi[n->A].R, CM_ST_O_FLAGS) >>
+                     CM_ST_F_EJECTING_SHIFT) & (1UL << n->B)) != 0) {
+            tr_put(t, "  A removal is in progress on this port. Wait for it "
+                      "before you unplug\n  its device.\n");
+        }
         if (n->Dn >= 0) {
             details_devnode(t, n->Dn);
         } else {
@@ -4827,6 +4843,114 @@ static int run_setlevel(void)
     return code;
 }
 
+/*
+ * 98 SE and ME: a unit's eject asked of xhcicm.sys (record 21 section 7.2
+ * part 1; record 24 section 7.1, revision 6; task 43.18), under the mutex
+ * ej_run holds: XhciCmEjectAsk written to the NHI's driver key, the reply
+ * and the result read from its hardware key every CM_EJ_POLL_MS. Returns
+ * the outcome (INST_EJ_*) with its text, -1 for the uncertain end;
+ * *notClean as inst_ej_outcome's.
+ */
+static int ej_ask9x(const EJREQ *q, const WALK *w, const TR_QUERY *tok,
+                    TR_U32 unit, const char **text, int *notClean)
+{
+    char drv[520];
+    char hw[520];
+    unsigned char ask[CM_EJ_ASK_BYTES];
+    unsigned char res[CM_EJ_RESULT_BYTES];
+    unsigned char rep[CM_EJ_REPLY_BYTES];
+    INST_EJ_TOKEN tk;
+    INST_EJ_RESULT r;
+    INST_EJ_WAIT wt;
+    INST_U32 nonce;
+    INST_U32 reason;
+    HKEY key;
+    DWORD type;
+    DWORD n;
+    int i;
+    int got;
+    int end;
+    int written;
+    static INST_U32 lastNonce;
+
+    *notClean = 0;
+    *text = "";
+    drv[0] = '\0';
+    for (i = 0; i < w->Count; i++) {
+        if (tr_eq(w->N[i].Id, q->NhiId) && w->N[i].Driver[0] != '\0') {
+            driver_key_path(&w->N[i], drv, sizeof(drv));
+        }
+    }
+    if (drv[0] == '\0') {
+        *text = "The Thunderbolt controller's registry key was not found; "
+                "nothing was stopped.";
+        return INST_EJ_CHANGED;
+    }
+    nhi_hw_key(q->NhiId, hw, sizeof(hw));
+    tk.EpochLo = tok->EpochLo;
+    tk.EpochHi = tok->EpochHi;
+    tk.ContentGen = tok->ContentGen;
+    tk.Eligible = 1;
+    nonce = inst_ej_nonce(GetTickCount() ^ (GetCurrentProcessId() << 8),
+                          lastNonce);
+    lastNonce = nonce;
+    inst_ej_ask(ask, nonce, q->PortBdf, unit, &tk);
+    written = 0;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, drv, 0, KEY_SET_VALUE, &key) ==
+        ERROR_SUCCESS) {
+        written = RegSetValueExA(key, CM_EJ_ASK_VALUE, 0, REG_BINARY, ask,
+                                 sizeof(ask)) == ERROR_SUCCESS;
+        RegCloseKey(key);
+    }
+    if (!written) {
+        *text = "The Thunderbolt driver could not be asked (its registry key "
+                "is not writable); nothing was stopped.";
+        return INST_EJ_UNSUPPORTED;
+    }
+    inst_ej_wait_init(&wt, GetTickCount());
+    end = INST_EJ_W_WAIT;
+    while (end == INST_EJ_W_WAIT || end == INST_EJ_W_DELETE) {
+        Sleep(CM_EJ_POLL_MS);
+        reason = 0;
+        got = 0;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, hw, 0, KEY_READ, &key) ==
+            ERROR_SUCCESS) {
+            n = sizeof(rep);
+            if (RegQueryValueExA(key, CM_EJ_REPLY_VALUE, NULL, &type, rep,
+                                 &n) == ERROR_SUCCESS &&
+                type == REG_BINARY) {
+                reason = inst_ej_reply(rep, n, nonce);
+            }
+            n = sizeof(res);
+            got = RegQueryValueExA(key, CM_EJ_RESULT_VALUE, NULL, &type, res,
+                                   &n) == ERROR_SUCCESS &&
+                  type == REG_BINARY && inst_ej_result(res, n, nonce, &r);
+            RegCloseKey(key);
+        }
+        end = inst_ej_wait_step(&wt, GetTickCount(), reason,
+                                got ? &r : NULL);
+        if (end == INST_EJ_W_DELETE &&
+            RegOpenKeyExA(HKEY_LOCAL_MACHINE, drv, 0, KEY_SET_VALUE, &key) ==
+                ERROR_SUCCESS) {
+            RegDeleteValueA(key, CM_EJ_ASK_VALUE);
+            RegCloseKey(key);
+        }
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, drv, 0, KEY_SET_VALUE, &key) ==
+        ERROR_SUCCESS) {
+        RegDeleteValueA(key, CM_EJ_ASK_VALUE);
+        RegCloseKey(key);
+    }
+    if (end == INST_EJ_W_REJECTED) {
+        return inst_ej_rejected(reason, text);
+    }
+    if (end == INST_EJ_W_UNCERTAIN) {
+        *text = inst_ej_uncertain_text();
+        return -1;
+    }
+    return inst_ej_outcome(&r, text, notClean);
+}
+
 /* The transaction (record 25 section 6.2 steps 2 to 8). Returns
  * XHCIINST's exit code; msg the answer; *rights set for a rights failure
  * Windows answered (the elevated retry is the caller's, after this has
@@ -4858,7 +4982,7 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
     *rights = 0;
     tr_text_init(&t, msg, cap);
     memset(&w, 0, sizeof(w));
-    if (envNt ? api.Eject == NULL : (api.QueryRemove == NULL || api.Remove == NULL)) {
+    if (envNt && api.Eject == NULL) {
         tr_put(&t, "This Windows does not offer the call that stops a device.");
         return INST_EXIT_REFUSED;
     }
@@ -5051,25 +5175,33 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         }
         tunnelNote = ej_watch_tunnel(q);
     } else {
-        cr = api.QueryRemove(w.N[u].Dn, TR_UI_NOT_OK);
-        outcome = inst_eject9x_query(cr, &text);
-        if (outcome != INST_EJ_DONE) {
-            tr_put(&t, text);
-            if (cr != INST_CR_REMOVE_VETOED && outcome == INST_EJ_VETO) {
-                tr_printf(&t, "\n(code 0x%08lX)", (unsigned long)cr);
-            }
-            code = inst_eject_code(outcome);
+        int notClean;
+        TR_U32 unit;
+
+        /* Asked of the Thunderbolt driver (task 43.18), under Q3's start
+         * epoch and content generation, which the last query just now
+         * still carried. */
+        unit = inst_ej_unit_loc(w.N[u].Id);
+        if (unit == INST_EJ_NO_LOC) {
+            tr_put(&t, "The device's place below the port could not be read; "
+                       "nothing was stopped.");
             goto out;
         }
-        /* Accepted: the removal always follows (record 24 section 7.1). */
-        cr = api.Remove(w.N[u].Dn, TR_UI_NOT_OK);
-        outcome = inst_eject9x_remove(cr, &text);
+        outcome = ej_ask9x(q, &w, &q3, unit, &text, &notClean);
+        if (outcome < 0) {
+            tr_put(&t, text);
+            code = INST_EXIT_FAILED;
+            goto out;
+        }
         if (outcome != INST_EJ_DONE) {
-            tr_printf(&t, "%s\n(code 0x%08lX)", text, (unsigned long)cr);
+            tr_put(&t, text);
             code = inst_eject_code(outcome);
             goto out;
         }
         tr_printf(&t, "Windows has stopped %s.\n", q->Desc);
+        if (notClean) {
+            tr_printf(&t, "%s\n", inst_ej_not_clean_text());
+        }
         tr_put(&t, "Until you unplug it, Device Manager's Refresh, or the "
                    "Thunderbolt driver looking at the port again, can start it "
                    "again.\n");

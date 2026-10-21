@@ -601,8 +601,10 @@ bus 0, which names the member's secondary bus (a 98 instance id below a
 bridge holds no bus number), and the tool reads the query device's token
 before and after section 7.3's revalidation and asks only when the two
 are the same start and content generation, the answer eligible (record
-21 section 7.2, "As built"). The layout is `src\cm\cm_ejask.h`, the
-tools' half `xhciinst\inst_ej9x.c`.
+21 section 7.2, "As built"). One more rejection exists: an NVMe drive
+no Stor98 channel entry names (no Stor98 runs it) is refused before its
+query, exit 1, since no clean stop can be asked of it. The layout is
+`src\cm\cm_ejask.h`, the tools' half `xhciinst\inst_ej9x.c`.
 
 `cfgmgr32.dll` on 98 SE (4.10.2222, 45,056 bytes) and ME (4.90.3000, 40,960
 bytes) exports the same 179 names (read 2026-10-15 from each guest image's

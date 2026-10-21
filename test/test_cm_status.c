@@ -208,6 +208,17 @@ static void test_limit(void)
           "the ICM maximum fits the record");
     CHECK(n <= CM_ST_MAX_BYTES, "within the maximum");
     CHECK_EQ(get32(rec, CM_ST_O_FLAGS), 0, "not truncated");
+    /* Task 43.18: the members a 9x eject blocked, bits 11:8. */
+    in.Blocked = 0x5UL;
+    (VOID)CmStatusBuild(rec, &in, NULL, &u4, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS), 0x500UL, "ports 0 and 2 blocked");
+    in.Blocked = 0x30UL;
+    (VOID)CmStatusBuild(rec, &in, NULL, &u4, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS), 0x3000UL,
+             "ports 0 and 1 with an eject in progress");
+    in.Blocked = 0x100UL;
+    (VOID)CmStatusBuild(rec, &in, NULL, &u4, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS), 0, "nothing past bit 7 of the mask");
     CHECK_EQ(CM_ST_MAX_BYTES, 128 + 24 * 128, "the maximum size");
     CHECK_EQ(CM_ST_O_ECHO + 4, CM_ST_HDR_BYTES, "the echo ends the header");
     CHECK_EQ(CM_ST_O_PATHS + CM_ST_MAX_PORTS * CM_ST_PATH_BYTES,

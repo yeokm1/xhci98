@@ -90,7 +90,9 @@ typedef ULONG (*CM_CALL_RUN)(PVOID route, PVOID context, const VOID *op,
  * transaction was already authorised to make). Every operation the thread
  * has not taken back by the stop ends at the operation's `late` callback
  * (CmCallSetLate), called by the member's worker before it leaves -
- * PASSIVE_LEVEL, no lock held, never on the stopping thread - with
+ * PASSIVE_LEVEL, no lock held, never on the stopping thread, with that
+ * worker's own CONFIGMG route as `route` (a detached transaction's removal
+ * is made on it, task 43.18) - with
  * CM_CALL_L_RESULT and the result (one that finished before the stop and
  * was not taken, or that finished after it: a detached one, or one running
  * when the stop came) or with CM_CALL_L_WITHDRAWN and no result (never
@@ -106,8 +108,9 @@ typedef ULONG (*CM_CALL_RUN)(PVOID route, PVOID context, const VOID *op,
 #define CM_CALL_L_RESULT    1UL /* the operation ran: its result          */
 #define CM_CALL_L_WITHDRAWN 2UL /* withdrawn by the stop, never run       */
 
-typedef VOID (*CM_CALL_LATE)(PVOID context, ULONG kind, ULONG id,
-                             ULONG outcome, const VOID *res, ULONG bytes);
+typedef VOID (*CM_CALL_LATE)(PVOID route, PVOID context, ULONG kind,
+                             ULONG id, ULONG outcome, const VOID *res,
+                             ULONG bytes);
 
 typedef struct _CM_CALL {
     ULONG State;            /* CM_CALL_*: the handoff word               */
