@@ -972,8 +972,9 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
 #define INST_CW_CMALONE     0x02UL  /* 98 SE, ME: the CM alone           */
 #define INST_CW_USB8        0x04UL  /* 8, 8.1: the USB drivers           */
 #define INST_CW_S98_8       0x08UL  /* 8, 8.1: Stor98                    */
-INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int usb, int stor,
-                            int s98);
+#define INST_CW_NOCM8       0x10UL  /* 8, 8.1: no connection manager     */
+INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
+                            int usb, int stor, int s98);
 /* Every warning of the set, one paragraph each in that order, separated by
  * a blank line; dir the tools folder. "" for none. */
 void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,

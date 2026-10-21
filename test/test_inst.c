@@ -211,8 +211,13 @@ static void test_cm_only(void)
           offered, "8 and 8.1, /usb: in");
     CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 1, 1, 0, &offered, &why) == 0 &&
           offered, "8 and 8.1, /cmonly: out");
-    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 0, 0, &offered, &why) == -1 &&
-          why != NULL, "8 and 8.1 with no connection manager: refused");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 0, 0, &offered, &why) == 0 &&
+          offered && why == NULL,
+          "8 and 8.1 with no connection manager: not refused (case 5)");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 0, 1, &offered, &why) == 1,
+          "8 and 8.1 with no connection manager, /usb: the USB drivers");
+    CHECK(inst_usb_decide(INST_OS_CMONLY, 1, 0, 1, 0, &offered, &why) == -1,
+          "8 and 8.1 with no connection manager, /cmonly: refused");
     CHECK(inst_usb_decide(INST_OS_REFUSED, 1, 1, 0, 0, &offered, &why) == -1,
           "a refused system");
 
@@ -229,7 +234,7 @@ static void test_cm_only(void)
                 int stor = (box & 2) != 0;
                 int s98 = (box & 4) != 0;
                 INST_U32 w = inst_comp_warnings(sys == 0, sys <= 1, sys == 3,
-                                                usb, stor, s98);
+                                                1, usb, stor, s98);
                 INST_U32 want = 0;
                 if (stor && sys != 0) {
                     want |= INST_CW_STOR;
@@ -251,10 +256,14 @@ static void test_cm_only(void)
             }
         }
         CHECK(!bad, "the warnings: exactly the owner's four cases");
+        CHECK(inst_comp_warnings(0, 0, 1, 0, 0, 0, 0) == INST_CW_NOCM8 &&
+              inst_comp_warnings(0, 0, 0, 0, 1, 0, 0) == 0,
+              "8 and 8.1 without the connection manager: warned (case 5)");
         inst_comp_warn_text(0, "C:\\XHCI98", text, sizeof(text));
         CHECK(text[0] == '\0', "no warning: no text");
         inst_comp_warn_text(INST_CW_STOR | INST_CW_CMALONE | INST_CW_USB8 |
-                            INST_CW_S98_8, "C:\\XHCI98", text, sizeof(text));
+                            INST_CW_S98_8 | INST_CW_NOCM8, "C:\\XHCI98", text,
+                            sizeof(text));
         CHECK(strstr(text, "C:\\XHCI98\\NUSB33") != NULL &&
               strstr(text, "connection manager is installed") != NULL &&
               strstr(text, "not been tested on Windows 8 or 8.1") != NULL &&

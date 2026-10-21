@@ -3413,9 +3413,12 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
         return -1;
     }
     if (osKind == INST_OS_CMONLY) {
-        if (!haveCm) {
-            *refusal = "this package carries no Thunderbolt or USB4 driver: "
-                       "there is nothing to install on Windows 8 or 8.1.";
+        /* Without the connection manager (owner, 2026-10-22, record 26
+         * section 5.3.1 case 5): warned, and the run goes on with what
+         * the package has. */
+        if (!haveCm && cmOnly) {
+            *refusal = "/cmonly: this package carries no Thunderbolt or USB4 "
+                       "driver.";
             return -1;
         }
         *offered = 1;
@@ -3437,11 +3440,14 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
     return cmOnly ? 0 : 1;
 }
 
-INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int usb, int stor,
-                            int s98)
+INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
+                            int usb, int stor, int s98)
 {
     INST_U32 w = 0;
 
+    if (is8 && !haveCm) {
+        w |= INST_CW_NOCM8;
+    }
     if (stor && !is98se) {
         w |= INST_CW_STOR;
     }
@@ -3508,6 +3514,13 @@ void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
                       "may use included. The uninstall is meant to give the "
                       "controllers back to Windows' own driver; that has not "
                       "been tested either.");
+    }
+    if (set & INST_CW_NOCM8) {
+        inst_cat_para(out, cap,
+                      "This package carries no Thunderbolt 3 / USB4 driver. "
+                      "On Windows 8 and 8.1 it installs only what is ticked: "
+                      "the xHCI98 tools, and the xHCI98 USB drivers if their "
+                      "box is ticked.");
     }
     if (set & INST_CW_S98_8) {
         inst_cat_para(out, cap,

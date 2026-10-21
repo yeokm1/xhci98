@@ -21010,7 +21010,13 @@ static int usb_decide(void)
         out("REFUSED: %s\n", why != NULL ? why : "the components.");
         return 0;
     }
-    if (osKind == INST_OS_CMONLY && r == 0) {
+    if (osKind == INST_OS_CMONLY && r == 0 && !haveCm) {
+        /* Record 26 section 5.3.1 case 5 (owner, 2026-10-22). */
+        out("%s: this package carries no Thunderbolt 3 / USB4 driver; it "
+            "installs the xHCI98\ntools, and the xHCI98 USB drivers only "
+            "with /usb (untested on Windows 8 and\n8.1).\n\n",
+            inst_os_name(1, envNow.Major, envNow.Minor));
+    } else if (osKind == INST_OS_CMONLY && r == 0) {
         /* Decision D18 as amended by record 23 revision 26 (task 43.43):
          * the USB drivers and Stor98 are offered here, unticked. */
         out("%s: this package installs the Thunderbolt 3 / USB4 connection "
@@ -21139,7 +21145,8 @@ static void cm_off_warning(void)
 static INST_U32 comp_warnings_for(int usb, int stor, int s98)
 {
     return inst_comp_warnings(!envNow.Nt && envNow.Minor == 10, !envNow.Nt,
-                              osKind == INST_OS_CMONLY, usb, stor, s98);
+                              osKind == INST_OS_CMONLY, haveCm, usb, stor,
+                              s98);
 }
 
 static void comp_warnings_out(void)
