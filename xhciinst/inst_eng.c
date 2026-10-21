@@ -427,6 +427,8 @@ static int s98_reread_9x(const char *id, char *infPath, size_t cap);
 static int s98_base_state(const char *id);
 static int s98_rec_text(const char *sub, const char *name, const char *text);
 static int s98_rec_has(const char *sub, const char *name);
+static void s98_pending_resolve(int uninstall);
+static void s98_pending_mark(const char *id, const char *state);
 static int file_state(const char *path);
 
 static int haveCm;
@@ -438,6 +440,10 @@ static int usbOffered;
 static int uasInclude = 1;  /* xhciuas.inf in the run, with the USB drivers */
 /* The USB storage drivers on Windows 98 SE (record 26 section 6.5). */
 static int storHere;        /* 98 SE: the row is shown                   */
+static int storTools;       /* any other system: the row is shown, and a
+                               tick copies the seven to the tools folder
+                               only (record 26 section 5.3.1 case 1)     */
+static int storToolsInclude;
 static int storPack;        /* 1 the download's seven verified, 0 absent,
                                -1 not this release's                    */
 static int storInclude;     /* the row ticked                            */
@@ -457,6 +463,8 @@ static void stor_record(void);
 static void stor_run_end(void);
 static int stor_any(int kind);
 static int stor_covered(void);
+static void stor_tools_copy(void);
+static int stor_tools_remove(void);
 static int controller_listed(void);
 static int stor_un_devices(void);
 static int stor_un_adopt(int record);
@@ -1754,6 +1762,15 @@ static void plan(void)
             if (d->Problem == 28UL && !inst_eq(d->Service, "stor98")) {
                 dv.HasService = 0;
             }
+        }
+        /* Windows 8 and 8.1, the box ticked (record 23 decision D3 as
+         * revision 26 amends it, record 26 section 5.3.1 cases 3a and
+         * 3b): Windows' own in-box USBXHCI on a controller, and stornvme
+         * on a drive, are installed over; every other driver stays. */
+        if (osKind == INST_OS_CMONLY && dv.HasService &&
+            ((d->Inf == INST_INF_XHCI && inst_eq(d->Service, "USBXHCI")) ||
+             (d->Inf == INST_INF_S98 && inst_eq(d->Service, "stornvme")))) {
+            dv.HasService = 0;
         }
         dv.OwnService = inst_eq(d->Service, instInfService[d->Inf]);
         dv.ServiceIsPci = inst_eq(d->Service, "pci");
@@ -3914,6 +3931,7 @@ static int forget_dir(void)
         LONG w;
         RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Staged");
         RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Devices");
+        RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Pending");
         RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Settings");
         w = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY);
         if (w == ERROR_SUCCESS) {
@@ -4811,6 +4829,16 @@ static int package_files(PKG_EACH each, void *ctx)
              * unasked; on NT it is simply not staged. */
             if (!envNow.Nt && !uasInclude &&
                 (inst_eq(fd.cFileName, "xhciuas.inf") ||
+                 inst_eq(fd.cFileName, "xhciuas.sys"))) {
+                continue;
+            }
+            /* The connection manager alone on 98 SE and ME (record 26
+             * section 5.3.1 case 2): no wizard may offer the USB drivers
+             * from the copy on DevicePath. */
+            if (!envNow.Nt && !usbInclude &&
+                (inst_eq(fd.cFileName, "xhci98.inf") ||
+                 inst_eq(fd.cFileName, "xhci98.sys") ||
+                 inst_eq(fd.cFileName, "xhciuas.inf") ||
                  inst_eq(fd.cFileName, "xhciuas.sys"))) {
                 continue;
             }
@@ -6254,6 +6282,11 @@ static DWORD call_flags(const DEVREC *x, int inf)
      * (record 26 section 6.3); an update of a Stor98 it runs, or /force's
      * reinstall, takes record 23's forced route. */
     if (inf == INST_INF_S98) {
+        /* Over Windows' own stornvme (8.1, record 26 section 5.3.1 case
+         * 3b): its signed in-box INF outranks Stor98's, so forced. */
+        if (x->Action == INST_ACT_INSTALL && inst_eq(x->Service, "stornvme")) {
+            return INST_INSTALLFLAG_FORCE;
+        }
         return x->Action == INST_ACT_INSTALL ? 0 : INST_INSTALLFLAG_FORCE;
     }
     return (inf == INST_INF_CMF && x->Action == INST_ACT_FILTER &&
@@ -6476,6 +6509,13 @@ static int install_inf(int inf, int controllers)
                     full = 1;
                 } else {
                     callIdx[n++] = c;
+                    if (inf == INST_INF_S98 &&
+                        inst_eq(devs[j].Service, "stornvme")) {
+                        /* Its ownership survives a reconnection that comes
+                         * only in a later run (record 26 section 5.3.1 case
+                         * 3b): attempted now, done once the call says so. */
+                        s98_pending_mark(devs[j].Id, "attempt");
+                    }
                 }
             }
         }
@@ -6508,6 +6548,9 @@ call:
                 if (reboot) {
                     changedReboot[callIdx[j]] = 1;
                 }
+                if (inf == INST_INF_S98) {
+                    s98_pending_mark(changedId[callIdx[j]], "done");
+                }
             }
             if (reboot) {
                 flagRestart = 1;
@@ -6526,6 +6569,12 @@ call:
             continue;
         }
         err = GetLastError();
+        if (inf == INST_INF_S98) {
+            /* The call failed or was cancelled: no replacement to own. */
+            for (j = 0; j < n; j++) {
+                s98_pending_mark(changedId[callIdx[j]], NULL);
+            }
+        }
         /* Not Stor98: its call reaches every device of the id, and its gate
          * (the place, the shared file, the shared id) is read again only by
          * a fresh scan and plan, so a Stor98 drive waits for the next pass. */
@@ -7729,6 +7778,7 @@ static int run_install_nt(void)
     if (begin_move()) {
         tray_install();
         own_install();
+        stor_tools_copy();
         old_dir_cleanup();
         arp_write(0);
     }
@@ -9105,6 +9155,7 @@ static int run_install_9x(void)
     s98_write_values();
     tray_install();
     own_install();
+    stor_tools_copy();
     old_dir_cleanup();
     arp_write(0);
     check_results_9x();
@@ -10804,6 +10855,7 @@ static int run_uninstall_nt(void)
         remove_own_infs();
         remove_services_and_files();
         cddb_service_scrub();
+        stor_tools_remove();
         finish_remove();
         out("\n/list: nothing was changed.\n");
         return INST_EXIT_DONE;
@@ -10854,6 +10906,10 @@ static int run_uninstall_nt(void)
     copies_remove_all();
     if (!cddb_service_scrub()) {
         flagFailed = 1;
+    }
+    if (!stor_tools_remove()) {
+        return stop_uninstall("a USB storage file in the tools folder could "
+                              "not be removed.");
     }
     if (flagFailed || flagSteps) {
         return stop_uninstall("a service or a file of this package could not "
@@ -11400,6 +11456,7 @@ static int run_uninstall_9x(void)
         out("The driver files:\n");
         files_9x(1);
         stor_un_rest();
+        stor_tools_remove();
         finish_remove();
         return INST_EXIT_DONE;
     }
@@ -11450,6 +11507,10 @@ static int run_uninstall_9x(void)
     if (!stor_un_rest()) {
         return stop_uninstall("a USB storage file is still in use, or its "
                               "record could not be read.");
+    }
+    if (!stor_tools_remove()) {
+        return stop_uninstall("a USB storage file in the tools folder could "
+                              "not be removed.");
     }
     if (flagSteps || flagFailed) {
         return stop_uninstall("a driver file is still in use.");
@@ -13534,6 +13595,7 @@ static int s98_baseline(void)
         }
     }
     s98Baseline = 1;
+    s98_pending_resolve(0);
     /* PreExisting: written once, never cleared; a value there that cannot
      * be read refuses rather than being written over. */
     h = s98_rec_has(NULL, "PreExisting");
@@ -14073,8 +14135,96 @@ static int s98_reread_9x(const char *id, char *infPath, size_t cap)
 
 /* ---- the record's devices (record 26 section 6.3, "The record") --------- */
 
+static void s98_record_device(const DEVREC *d, const char *how);
+
+/* Each drive whose stornvme this installer replaced on 8.1 (Pending,
+ * record 26 section 5.3.1 case 3b), resolved from the reading: running
+ * Stor98, it is recorded as this installer's; running another driver, or
+ * with no entry left, it is forgotten; not present, it stays pending, but
+ * for the uninstall, which takes one whose entry names Stor98. */
+/* A drive's pending value (case 3b): state written ("attempt" only for a
+ * drive Windows' stornvme runs; "done" only over an "attempt"), or deleted
+ * (NULL). */
+static void s98_pending_mark(const char *id, const char *state)
+{
+    char path[INST_PATH_CHARS];
+    char now[16];
+
+    if (opts.List || !envNow.Nt) {
+        return;
+    }
+    if (state != NULL && inst_eq(state, "attempt")) {
+        s98_rec_text("Pending", id, state);
+        return;
+    }
+    join(path, sizeof(path), INST_S98_KEY, "Pending");
+    if (reg_text3(HKEY_LOCAL_MACHINE, path, id, now, sizeof(now)) <= 0) {
+        return;
+    }
+    if (state == NULL) {
+        s98_rec_del("Pending", id);
+    } else {
+        s98_rec_text("Pending", id, state);
+    }
+}
+
+static void s98_pending_resolve(int uninstall)
+{
+    char id[INST_ID_CHARS];
+    char state[16];
+    DWORD i = 0;
+    int j;
+    int e;
+    int done;
+    const DEVREC *d;
+
+    if (!envNow.Nt || opts.List) {
+        return;
+    }
+    for (;;) {
+        e = s98_rec_enum("Pending", i, id, sizeof(id));
+        if (e <= 0) {
+            return;
+        }
+        d = NULL;
+        for (j = 0; j < devCount; j++) {
+            if (inst_eq(devs[j].Id, id)) {
+                d = &devs[j];
+                break;
+            }
+        }
+        {
+            char path[INST_PATH_CHARS];
+            join(path, sizeof(path), INST_S98_KEY, "Pending");
+            done = reg_text3(HKEY_LOCAL_MACHINE, path, id, state,
+                             sizeof(state)) > 0 && inst_eq(state, "done");
+        }
+        if (done && d != NULL && inst_eq(d->Service, "stor98") &&
+            (d->Present || uninstall)) {
+            s98_record_device(d, "its Windows NVMe driver was replaced by "
+                              "this installer");
+            continue;
+        }
+        if (!done || d == NULL || d->Present) {
+            logonly("stor98: pending %s forgotten (%s)\n", id,
+                    !done ? "its call's outcome is unknown" :
+                    d == NULL ? "no entry" : "another driver");
+            if (!s98_rec_del("Pending", id)) {
+                return;
+            }
+            continue;
+        }
+        i++;
+    }
+}
+
+static int s98_rec_del(const char *sub, const char *name);
+
 static void s98_record_device(const DEVREC *d, const char *how)
 {
+    if (s98_rec_has("Pending", d->Id) == 1 && !opts.List) {
+        s98_rec_del("Pending", d->Id);
+    }
     if (s98_rec_has("Devices", d->Id) == 1) {
         return;
     }
@@ -14728,7 +14878,8 @@ static void s98_reconnect_nt(void)
     }
     for (c = 0; c < changedCount; c++) {
         if (changedInf[c] != INST_INF_S98 || changedState[c] != 2 ||
-            s98_base_state(changedId[c]) != 2 ||
+            (s98_base_state(changedId[c]) != 2 &&
+             s98_rec_has("Pending", changedId[c]) != 1) ||
             !inst_s98_await_reconnect(envNow.Nt, 1, 1,
                                       s98_tunnelled(changedId[c]))) {
             continue;
@@ -15045,7 +15196,8 @@ static void s98_question(void)
     char text[1024];
 
     r = inst_s98_decide(haveS98, haveCm && tbInclude, opts.Yes, opts.Stor98,
-                        opts.NoStor98, opts.List, &asked, &def);
+                        opts.NoStor98, opts.List, osKind == INST_OS_CMONLY,
+                        &asked, &def);
     if (!haveS98) {
         s98_apply(0);
         return;
@@ -15069,8 +15221,9 @@ static void s98_question(void)
                             "Install Stor98, the bundled NVMe driver?",
                             "install it", "leave it out", def);
         for (k = 0;; k++) {
-            if (!ask(INST_Q_S98, k == 0 ? text : "  Type Y or N, or Enter "
-                     "for [Y]: ", k > 0, 0, def, NULL, line, sizeof(line))) {
+            if (!ask(INST_Q_S98, k == 0 ? text : def ? "  Type Y or N, or "
+                     "Enter for [Y]: " : "  Type Y or N, or Enter for [N]: ",
+                     k > 0, 0, def, NULL, line, sizeof(line))) {
                 r = def;
                 out("\n");
                 break;
@@ -15086,7 +15239,9 @@ static void s98_question(void)
         out("  /stor98: installed without asking.\n");
     } else if (opts.List) {
         out("  /list: it would be asked:\n    Y  install it\n"
-            "    N  leave it out\n  Enter would give [Y].\n");
+            "    N  leave it out\n  Enter would give [%s].\n", def ? "Y" : "N");
+    } else if (!def) {
+        out("  /yes: N on Windows 8 and 8.1 (/stor98 installs it).\n");
     } else {
         out("  /yes: Y, with the Thunderbolt support (/nostor98 leaves it "
             "out).\n");
@@ -15431,6 +15586,7 @@ static int s98_un_service(void)
     }
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Staged");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Devices");
+    RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Pending");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY "\\Settings");
     w = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_S98_KEY);
     if (w != ERROR_SUCCESS && w != ERROR_FILE_NOT_FOUND) {
@@ -15929,11 +16085,14 @@ static int s98_un_adopt(void)
     int anyPresent = 0;
 
     s98AdCount = 0;
-    if (s98Pre) {
-        return 1;
-    }
     if (!scan()) {
         logonly("stor98: no reading for the adoption: nothing adopted\n");
+        return 1;
+    }
+    /* A drive whose stornvme this installer replaced is its own whatever
+     * PreExisting says (record 26 section 5.3.1 case 3b). */
+    s98_pending_resolve(1);
+    if (s98Pre) {
         return 1;
     }
     for (i = 0; i < devCount; i++) {
@@ -16688,7 +16847,19 @@ static void stor_read(void)
     storHere = 0;
     storInclude = 0;
     storPack = 0;
-    if (!stor_98se() || opts.Uninstall) {
+    storTools = 0;
+    storToolsInclude = 0;
+    if (opts.Uninstall) {
+        return;
+    }
+    if (!stor_98se()) {
+        /* Shown everywhere (task 43.43): elsewhere a tick only copies the
+         * seven to the tools folder; unticked by default. */
+        storTools = 1;
+        storPack = stor_pack_check();
+        storToolsInclude = storPack > 0 && opts.Storage;
+        logonly("storage: elsewhere, pack %d, include %d\n", storPack,
+                storToolsInclude);
         return;
     }
     storHere = 1;
@@ -17022,9 +17193,21 @@ static int stor_base_state(const char *id)
 /* Binary i copied where its INF sends it (section 6.5.4), or INF i placed
  * in %windir%\INF (section 6.5.11): the .TMP beside it, compared, the
  * record (Files, or Placed), then the rename, which never replaces. */
+static int stor_place_to(int i, const char *dest, const char *sub);
+
 static int stor_place(int i)
 {
     char dest[INST_PATH_CHARS];
+
+    if (!stor_dest(i, dest, sizeof(dest))) {
+        return 0;
+    }
+    return stor_place_to(i, dest, i < INST_STOR_BINARIES ? "Files" : "Placed");
+}
+
+/* File i to dest, its record value under sub, never over a file there. */
+static int stor_place_to(int i, const char *dest, const char *sub)
+{
     char tmp[INST_PATH_CHARS];
     char src[INST_PATH_CHARS];
     char *buf;
@@ -17032,11 +17215,7 @@ static int stor_place(int i)
     DWORD wrote = 0;
     HANDLE h;
     BOOL w;
-    const char *sub = i < INST_STOR_BINARIES ? "Files" : "Placed";
 
-    if (!stor_dest(i, dest, sizeof(dest))) {
-        return 0;
-    }
     own_variant(dest, ".TMP", tmp, sizeof(tmp));
     join(src, sizeof(src), storPackDir, instStorFile[i].Name);
     buf = read_file(src, &n);
@@ -18850,6 +19029,7 @@ static int stor_forget(void)
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Files");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Infs");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Placed");
+    RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Tools");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Devices");
     RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY "\\Before");
     w = RegDeleteKeyA(HKEY_LOCAL_MACHINE, INST_STOR_KEY);
@@ -18865,10 +19045,146 @@ static int stor_forget(void)
     return 1;
 }
 
+/* ---- elsewhere: the copy to the tools folder (record 26 section 5.3.1
+ * case 1, task 43.43) ------------------------------------------------- */
+
+static void stor_tools_copy(void)
+{
+    char dir[INST_PATH_CHARS];
+    char dest[INST_PATH_CHARS];
+    char left[256];
+    int i;
+    int there = 0;
+
+    if (!storTools || !storToolsInclude || storPack <= 0 ||
+        toolDir[0] == '\0') {
+        return;
+    }
+    join(dir, sizeof(dir), toolDir, "NUSB33");
+    if (opts.List) {
+        out("(/list) the USB storage drivers' seven files would be copied to "
+            "%s.\n", dir);
+        return;
+    }
+    if (!CreateDirectoryA(dir, NULL) && file_state(dir) != -1) {
+        out("%s could not be made: the USB storage drivers' files are not "
+            "copied.\n", dir);
+        return;
+    }
+    left[0] = '\0';
+    for (i = 0; i < INST_STOR_COUNT; i++) {
+        join(dest, sizeof(dest), dir, instStorFile[i].Name);
+        /* A file of the name already there is never replaced, nor ever
+         * recorded as this installer's. */
+        if (file_state(dest) != 0 || stor_place_to(i, dest, "Tools")) {
+            there++;
+            continue;
+        }
+        if (left[0] != '\0') {
+            strncat(left, ", ", sizeof(left) - strlen(left) - 1);
+        }
+        strncat(left, instStorFile[i].Name, sizeof(left) - strlen(left) - 1);
+    }
+    out("USB storage drivers for Windows 98 SE: %d of the seven files are in "
+        "%s, for use by\nhand on Windows 98 SE; nothing installs them "
+        "here.\n", there, dir);
+    if (left[0] != '\0') {
+        out("Not copied: %s.\n", left);
+    }
+}
+
+/* The uninstall, on every system: each copy the Tools record names, by its
+ * bytes, then the folder if it is empty. 1 nothing left for a later run. */
+static int stor_tools_remove(void)
+{
+    char name[INST_PATH_CHARS];
+    char data[96];
+    char hex[65];
+    char dir[INST_PATH_CHARS];
+    DWORD i = 0;
+    int e;
+    int h;
+    int left = 0;
+    char *s;
+
+    dir[0] = '\0';
+    for (;;) {
+        e = stor_rec_enum("Tools", i, name, sizeof(name), data, sizeof(data));
+        if (e < 0) {
+            flagFailed = 1;
+            return 0;
+        }
+        if (e == 0) {
+            break;
+        }
+        inst_copy(dir, name, sizeof(dir));
+        s = strrchr(dir, '\\');
+        if (s != NULL) {
+            *s = '\0';
+        }
+        h = stor_hash(name, hex);
+        if (h < 0) {
+            out("  %s cannot be read: it stays for now.\n", name);
+            flagRestart = 1;
+            flagSteps = 1;
+            left = 1;
+            i++;
+            continue;
+        }
+        if (opts.List) {
+            out("(/list) %s %s.\n", name, h == 0 ? "is gone" :
+                inst_eq(hex, data) ? "would be deleted" :
+                "has changed and would stay");
+            i++;
+            continue;
+        }
+        if (h > 0 && !inst_eq(hex, data)) {
+            out("  %s stays: it has changed since this installer copied it.\n",
+                name);
+        } else if (h > 0) {
+            if (!delete_file(name)) {
+                out("  %s could not be deleted: restart Windows, then run the "
+                    "uninstall again.\n", name);
+                flagRestart = 1;
+                flagSteps = 1;
+                left = 1;
+                i++;
+                continue;
+            }
+            out("Deleted %s.\n", name);
+            flagChanged = 1;
+        }
+        if (!stor_rec_del("Tools", name)) {
+            return 0;
+        }
+    }
+    if (dir[0] != '\0' && !opts.List && !left && RemoveDirectoryA(dir)) {
+        out("%s removed.\n", dir);
+    }
+    return !left;
+}
+
 /* ---- the window's (record 26 section 5.3) ------------------------------- */
 
 int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap)
 {
+    if (storTools) {
+        *offered = storPack > 0;
+        *def = storToolsInclude;
+        if (cap > 0) {
+            if (storPack == 0) {
+                inst_copy(note, "This download does not carry them.", cap);
+            } else if (storPack < 0) {
+                inst_copy(note, "The storage files in this download are not "
+                          "the ones this release carries.", cap);
+            } else {
+                inst_copy(note, "For Windows 98 SE only: ticked here, the "
+                          "files are copied to the tools folder, nothing "
+                          "installs them.", cap);
+            }
+        }
+        return 1;
+    }
     *offered = storHere && storPack > 0;
     *def = storInclude;
     if (cap > 0) {
@@ -18882,6 +19198,11 @@ int inst_eng_stor_state(int *offered, int *def, char *note, size_t cap)
 
 void inst_eng_stor_choose(int include)
 {
+    if (storTools) {
+        storToolsInclude = include && storPack > 0;
+        logonly("storage: elsewhere, chosen %d\n", storToolsInclude);
+        return;
+    }
     if (!storHere || storPack <= 0) {
         storInclude = 0;
         return;
@@ -18896,6 +19217,13 @@ void inst_eng_stor_summary(char *out, size_t cap)
         return;
     }
     out[0] = '\0';
+    if (storTools && storToolsInclude) {
+        _snprintf(out, cap - 1, "USB storage drivers for Windows 98 SE: their "
+                  "files copied to %s\\NUSB33 only; nothing installs them "
+                  "here.", toolDir);
+        out[cap - 1] = '\0';
+        return;
+    }
     if (!storHere || storPack <= 0) {
         return;
     }
@@ -19025,12 +19353,14 @@ void inst_eng_usage(void)
 "  /force        reinstall this release, or install it over a newer one\n"
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
 "  /cmonly       install the Thunderbolt 3 / USB4 connection manager alone,\n"
-"                without the USB drivers (2000 to 7; on 8 and 8.1 always)\n"
+"                without the USB drivers (on 98 SE and ME with a warning)\n"
+"  /usb          Windows 8 and 8.1: install the USB drivers too (untested)\n"
 "  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
 "                (the default with /thunderbolt /yes)\n"
 "  /nostor98     leave the bundled Stor98 out of a /thunderbolt run\n"
 "  /nouas        leave the UAS disk driver (xhciuas.sys) out of this run\n"
-"  /storage      Windows 98 SE: install the USB storage drivers (NUSB 3.3's)\n"
+"  /storage      Windows 98 SE: install the USB storage drivers (NUSB 3.3's);\n"
+"                elsewhere copy their files to the tools folder only\n"
 "  /nostorage    leave the USB storage drivers out of this run\n"
 "  /notray       do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
@@ -20225,15 +20555,9 @@ int inst_eng_begin(int argc, char **argv)
     if (!envNow.Nt && INST_MY_ARCH != INST_ARCH_X86) {
         return INST_EXIT_REFUSED;
     }
-    if (opts.CmOnly && !envNow.Nt) {
-        out("REFUSED: /cmonly: the connection manager alone is not offered on "
-            "Windows 98 SE\nand ME; the USB drivers are what runs the "
-            "controllers there.\n");
-        return INST_EXIT_REFUSED;
-    }
     for (i = 0; i < opts.SetCount; i++) {
         int sk = instValues[opts.SetIndex[i]].Inf;
-        if ((opts.CmOnly || osKind == INST_OS_CMONLY) &&
+        if ((opts.CmOnly || (osKind == INST_OS_CMONLY && !opts.Usb)) &&
             (sk == INST_INF_XHCI || sk == INST_INF_UAS)) {
             out("REFUSED: /set %s:\nthe USB drivers are not in this run "
                 "(/cmonly, or Windows 8 and 8.1).\n",
@@ -20328,12 +20652,8 @@ int inst_eng_read(void)
         return INST_EXIT_REFUSED;
     }
     plan();
-    /* Record 26 section 6.5: Windows 98 SE alone. */
-    if (opts.Storage && (envNow.Nt || envNow.Minor != 10)) {
-        out("REFUSED: /storage: the USB storage drivers are for Windows 98 SE "
-            "only.\n");
-        return INST_EXIT_REFUSED;
-    }
+    /* Record 26 section 6.5 on Windows 98 SE; elsewhere (section 5.3.1,
+     * task 43.43) /storage copies the files to the tools folder only. */
     stor_read();
     if (opts.Storage && storPack <= 0) {
         out("REFUSED: /storage: %s\n", storPack == 0 ?
@@ -20351,24 +20671,23 @@ static int usb_decide(void)
 {
     const char *why;
     int r = inst_usb_decide(osKind, envNow.Nt, haveCm, opts.CmOnly,
-                            &usbOffered, &why);
+                            opts.Usb, &usbOffered, &why);
 
     if (r < 0) {
         out("REFUSED: %s\n", why != NULL ? why : "the components.");
         return 0;
     }
-    if (osKind == INST_OS_CMONLY) {
+    if (osKind == INST_OS_CMONLY && r == 0) {
+        /* Decision D18 as amended by record 23 revision 26 (task 43.43):
+         * the USB drivers and Stor98 are offered here, unticked. */
         out("%s: this package installs the Thunderbolt 3 / USB4 connection "
-            "manager\nalone here. Windows' own USB 3 driver keeps running the "
-            "USB controllers.\n\n",
+            "manager\nhere; Windows' own USB 3 driver keeps running the USB "
+            "controllers unless\n/usb puts the xHCI98 USB drivers in the run "
+            "(untested on Windows 8 and 8.1).\n\n",
             inst_os_name(1, envNow.Major, envNow.Minor));
-        if (haveS98) {
-            /* Not one of Stor98's targets (decision D18). */
-            out("Stor98, the bundled NVMe driver, is not offered on Windows 8 "
-                "or 8.1.\n\n");
-            haveS98 = 0;
-            s98_apply(0);
-        }
+    } else if (osKind == INST_OS_CMONLY) {
+        out("/usb: the xHCI98 USB drivers are in this run (untested on %s).\n\n",
+            inst_os_name(1, envNow.Major, envNow.Minor));
     } else if (r == 0) {
         out("/cmonly: the Thunderbolt 3 / USB4 connection manager alone; the "
             "USB drivers\nare left out of this run.\n\n");
@@ -20480,6 +20799,56 @@ static void cm_off_warning(void)
     }
 }
 
+/* Record 26 section 5.3.1 (task 43.43): a box ticked, or the USB drivers
+ * unticked, where it does not apply - each warning in the window's words,
+ * before the go-ahead question; printed and logged under /yes and /list,
+ * never a question of its own. */
+static INST_U32 comp_warnings_for(int usb, int stor, int s98)
+{
+    return inst_comp_warnings(!envNow.Nt && envNow.Minor == 10, !envNow.Nt,
+                              osKind == INST_OS_CMONLY, usb, stor, s98);
+}
+
+static void comp_warnings_out(void)
+{
+    char text[2048];
+    char *p;
+    char *q;
+    INST_U32 w = comp_warnings_for(usbInclude, storToolsInclude, s98Include);
+
+    if (w == 0) {
+        return;
+    }
+    inst_comp_warn_text(w, toolDir, text, sizeof(text));
+    out("\nWARNING:\n");
+    for (p = text; *p != '\0'; p = q) {
+        q = strstr(p, "\n\n");
+        if (q != NULL) {
+            *q = '\0';
+            q += 2;
+        } else {
+            q = p + strlen(p);
+        }
+        stor_out_wrapped("  ", p);
+        if (*q != '\0') {
+            out("\n");
+        }
+    }
+    out("\n");
+}
+
+INST_U32 inst_eng_comp_warn(int usb, int stor, int s98, const char *dir,
+                            char *text, size_t cap)
+{
+    INST_U32 w = comp_warnings_for(usb, stor && storTools, s98);
+
+    inst_comp_warn_text(w, dir, text, cap);
+    if (w != 0) {
+        logonly("components: warning %lu shown\n", (unsigned long)w);
+    }
+    return w;
+}
+
 int inst_eng_ask(void)
 {
     if (planResult >= 0) {
@@ -20492,6 +20861,7 @@ int inst_eng_ask(void)
     }
     s98_ask_unused();
     cm_off_warning();
+    comp_warnings_out();
     if (opts.List) {
         tray_install();
         out("/list: nothing was changed.\n");

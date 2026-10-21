@@ -603,13 +603,16 @@ carries the storage row everywhere, so 98 SE's layout (section 6.5.2,
 box gives way to the storage row as on 98 SE today, and the host suite
 renders the page at its longest on each system.
 
-**The texts under the boxes** become per system: the USB drivers' box
-on 8 and 8.1 "Windows' own USB 3 driver runs the USB controllers here;
-tick this only to replace it (untested on Windows 8 and 8.1)" in place of
-"Not offered on Windows 8 and 8.1"; the storage row's sentence on ME and
-2000 to 8.1 "For Windows 98 SE only: ticked here, its files are copied to
-the tools folder, nothing is installed"; Stor98's sentence on 8 and 8.1
-gains "(untested on Windows 8 and 8.1)".
+**The texts under the boxes.** The storage row's line under its sentence
+on ME and 2000 to 8.1 is "For Windows 98 SE only: ticked here, the files
+are copied to the tools folder, nothing installs them" (in place of the
+detection's line, which only 98 SE reads). The USB drivers' sentence is
+the one the storage row's layout hides on every system now (the 98 SE
+layout above), so its 8 and 8.1 form ("Windows' own USB 3 driver runs
+the controllers here; ticked, this replaces it (untested here)", in
+place of "Not offered on Windows 8 and 8.1") is kept for the template
+alone, and the untested state of the USB drivers and Stor98 there is
+said by the warning, which their ticks raise.
 
 **The legs** (roadmap 43.43): the page at 640 by 480 on 98 SE with every
 row shown; case 1 on ME and XP (the folder's seven, nothing in `%windir%\INF`,

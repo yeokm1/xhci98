@@ -571,6 +571,8 @@ typedef struct _INST_OPTS {
     int Thunderbolt;        /* /thunderbolt: the Thunderbolt support, unasked */
     int CmOnly;             /* /cmonly: the connection manager alone (record
                                23 section 4.5)                           */
+    int Usb;                /* /usb: the USB drivers in the run on 8 and
+                               8.1 (record 23 section 7.1, revision 26)  */
     int Stor98;             /* /stor98: the bundled Stor98, unasked      */
     int NoStor98;           /* /nostor98: Stor98 left out of a run that
                                has the Thunderbolt support (record 23
@@ -960,8 +962,22 @@ const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor);
 /* The USB drivers (xhci98.sys, xhciuas.sys; record 23 section 4.5): 1 in
  * the run, 0 left out, -1 refused (why in *refusal). *offered: the window's
  * box can be unticked. */
-int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int *offered,
-                    const char **refusal);
+int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
+                    int *offered, const char **refusal);
+
+/* The Components page's warnings (record 26 section 5.3.1, task 43.43): a
+ * box ticked, or the USB drivers unticked, where it does not apply. is98se,
+ * is9x (98 SE or ME), is8 (8 or 8.1); usb, stor, s98 the boxes as ticked. */
+#define INST_CW_STOR        0x01UL  /* the 98 SE storage pack elsewhere  */
+#define INST_CW_CMALONE     0x02UL  /* 98 SE, ME: the CM alone           */
+#define INST_CW_USB8        0x04UL  /* 8, 8.1: the USB drivers           */
+#define INST_CW_S98_8       0x08UL  /* 8, 8.1: Stor98                    */
+INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int usb, int stor,
+                            int s98);
+/* Every warning of the set, one paragraph each in that order, separated by
+ * a blank line; dir the tools folder. "" for none. */
+void inst_comp_warn_text(INST_U32 set, const char *dir, char *out,
+                         size_t cap);
 
 /* The UAS disk driver, xhciuas.sys (owner, 2026-10-19): a child of the
  * USB drivers, in the run only with them and unless /nouas or its
@@ -1469,9 +1485,11 @@ void inst_sha256(const unsigned char *data, size_t len, char *hex65);
  * (that support in the run) 0, neither asked nor installed; with it,
  * Enter and /yes give Y, /stor98 installs it without asking, /nostor98
  * leaves it out without asking, /list asks nothing. Returns the decision
- * when it is not asked; *asked whether it is, *def what Enter gives. */
+ * when it is not asked; *asked whether it is, *def what Enter gives.
+ * is8 (Windows 8 and 8.1, record 26 section 5.3.1 case 3b, draft 20):
+ * Enter and /yes give N, only /stor98 installs it unasked. */
 int inst_s98_decide(int haveS98, int tb, int yes, int stor98Switch,
-                    int noStor98, int list, int *asked, int *def);
+                    int noStor98, int list, int is8, int *asked, int *def);
 
 /* Record 23 section 4.4 (revision 23): a device bound to Stor98 that is a
  * known tunnel drive, for the shared-file rule. Present: behind a tunnel.
