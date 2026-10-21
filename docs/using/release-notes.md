@@ -568,8 +568,10 @@ every system `INSTALL /devices` shows what is connected and
   bundled Stor98 it asks Stor98 to stop the drive cleanly (flush and shut
   down) and waits up to about 14 seconds for its answer, then removes the
   device; the tool then says whether it can be unplugged. An NVMe drive
-  that the bundled Stor98 is not running is not ejected from here: the
-  tool says so and nothing changes. A drive that
+  that the bundled Stor98 is not running is not ejected from here, since
+  it cannot be asked to stop cleanly: the tool says so, nothing changes
+  (exit 1), and the tool tells you to shut Windows down before you
+  unplug it. A drive that
   does not confirm its stop is not removed: it stays stopped until it is
   unplugged, the tool says "Blocked: the drive did not stop; shut down
   Windows before you unplug it" (exit 2), and the USB Tree shows the port

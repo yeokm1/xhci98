@@ -2868,14 +2868,19 @@ still present. The ask is the status record's mechanism (record 24 section
     O6 cannot be met as the interface writes it**: it asks for the tunnel
     to be torn down after the deadline, and a firmware connection manager
     offers no per-port teardown (section 7.4), so this driver blocks and
-    retries and tears nothing down. That is a departure from interface
-    3's O6 that `stor98cm.h` does not provide for; it is recorded here as
-    an **open interface exception** to be agreed with Stor98's maintainer
-    (an O6 clause for a connection manager without a per-port teardown,
-    or Stor98's own handling of a request left in place past O6) before
-    42-A.13 ships it, and until then the release notes say that under the
-    firmware connection manager on 98 SE and ME a removal that keeps
-    failing leaves the drive stopped until the unplug (decision V8).
+    retries and tears nothing down. That was a departure from interface
+    3's O6 that `stor98cm.h` did not provide for, recorded here as an
+    open interface exception for Stor98's maintainer; **it is agreed**
+    (the owner, as Stor98's maintainer, 2026-10-22; decision V8): O6
+    now carries a clause for a connection manager without a per-port
+    teardown - no teardown is made, the devnode and the request stay in
+    place (the instance stays terminal, R9d), the eject is reported
+    failed, the removal is retried every 2 s with vetoes honoured, and no
+    `UP` is published on that port until the removal succeeds or the
+    devnode is gone; the unplug's link down is then R12's. The release
+    notes say that under the firmware connection manager on 98 SE and ME
+    a removal that keeps failing leaves the drive stopped until the
+    unplug.
 - **A unit that is not an NVMe function** (a dock's switch upstream port)
   gets the query and the removal with no request, as record 24 section 7.1
   made them, under the same transaction (the population check before any
@@ -3168,9 +3173,10 @@ word per member, the 50 ms pass while a wait is pending; V6 no isolation
 is ever synthesised: where none can be made the devnode stays
 query-removed and the member blocked until the unplug, said in the release
 notes; V7 no answer to an ask is an uncertain outcome, never "nothing was
-changed"; V8 O6 under the firmware connection manager is an open
-interface exception for Stor98's maintainer, the driver blocking and
-retrying meanwhile; V9 one tool eject per domain at a time, the result
+changed"; V8 O6 under the firmware connection manager is an interface
+exception, the driver blocking and retrying and tearing nothing down
+(agreed by Stor98's maintainer, the owner, 2026-10-22, and written into
+O6); V9 one tool eject per domain at a time, the result
 slot owned by one accepted transaction until consumed, rejections in a
 value of their own, the acceptance word persistent, the budget governing
 the tool's wait; V10 acceptance is the ownership boundary of an ask, and
@@ -3178,8 +3184,7 @@ a detached block completes only a removal already authorised, the
 retirement debt kept in a persistent member blocker a later start adopts.
 
 *Open.* Interface 3's O6 under a connection manager with no per-port
-teardown (V8), to be settled with Stor98's maintainer before 42-A.13.
-Whether four call workers per domain cost anything measurable on
+teardown (V8) is settled: agreed 2026-10-22 (above). Whether four call workers per domain cost anything measurable on
 98 SE and ME (threads are cheap there, but the leg reads it); whether a
 `Query_Remove_SubTree` left accepted and never followed by `Remove_SubTree`
 (the blocked case) disturbs the configuration manager's own state on ME,
@@ -3244,7 +3249,8 @@ this, reviewed and revised:
   22 section 7.7's removal-only request sharing the same accepted-query
   state, capacity reserved before an irreversible query), which is
   this record's part 0 machinery applied to those removals: a task of its
-  own, for the owner to place.
+  own, which the owner placed on 2026-10-22 as roadmap-usb4.md task
+  43.47, built on these transaction records.
 - **The unit's own disappearance.** The transaction cannot wait on its
   own gate, so it removes its own unit itself, and only on evidence the
   rest of the channel accepts: a tunnel down on its member
@@ -3298,7 +3304,10 @@ this, reviewed and revised:
   nothing changed, exit 1) when no Stor98 channel entry names the
   function - no Stor98 runs it, or none has read the channel - since a
   missing channel is no removal support (`stor98cm.h` R2) and an accepted
-  query alone is no isolation; and an NVMe function the channel no longer
+  query alone is no isolation (the owner confirmed the refusal on
+  2026-10-22; both tools say "The drive cannot be asked to stop cleanly
+  (Stor98 is not running it), so it is not ejected from here. Shut down
+  Windows before you unplug it."); and an NVMe function the channel no longer
   names after its query, or whose request was not published, takes the
   branch of no answer: isolation first, or the block - never a plain
   removal. A unit whose class code cannot be read is taken as nothing
