@@ -2546,9 +2546,12 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             if (HIWORD(wp) == BN_CLICKED) {
                 /* Stor98 follows its parent (owner, 2026-10-19): ticked
                  * with it, and can be unticked under it. */
+                /* On 8 and 8.1 never ticked unasked (record 26 section
+                 * 5.3.1 case 3b). */
                 CheckDlgButton(dlg, IDC_C_S98,
                                IsDlgButtonChecked(dlg, IDC_C_TB) ==
-                               BST_CHECKED ? BST_CHECKED : BST_UNCHECKED);
+                               BST_CHECKED && !usbNotHere ?
+                               BST_CHECKED : BST_UNCHECKED);
                 comp_s98_sync(dlg);
             }
             return TRUE;

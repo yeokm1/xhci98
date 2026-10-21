@@ -428,7 +428,7 @@ static int s98_base_state(const char *id);
 static int s98_rec_text(const char *sub, const char *name, const char *text);
 static int s98_rec_has(const char *sub, const char *name);
 static void s98_pending_resolve(int uninstall);
-static void s98_pending_mark(const char *id, const char *state);
+static int s98_pending_mark(const char *id, const char *state);
 static int file_state(const char *path);
 
 static int haveCm;
@@ -6510,18 +6510,24 @@ static int install_inf(int inf, int controllers)
                 } else {
                     callIdx[n++] = c;
                     if (inf == INST_INF_S98 &&
-                        inst_eq(devs[j].Service, "stornvme")) {
+                        inst_eq(devs[j].Service, "stornvme") &&
+                        !s98_pending_mark(devs[j].Id, "attempt")) {
                         /* Its ownership survives a reconnection that comes
                          * only in a later run (record 26 section 5.3.1 case
-                         * 3b): attempted now, done once the call says so. */
-                        s98_pending_mark(devs[j].Id, "attempt");
+                         * 3b): attempted now, done once the call says so -
+                         * and no replacement without that record. */
+                        full = 1;
                     }
                 }
             }
         }
         if (full) {
-            out("Too many devices to follow: %s is not changed.\n", hwid);
+            out("Too many devices to follow, or a record could not be "
+                "written: %s is not\nchanged.\n", hwid);
             flagFailed = 1;
+            for (j = 0; j < n; j++) {
+                changedState[callIdx[j]] = 0;
+            }
             continue;
         }
         out("%s %s ... ", d->Action == INST_ACT_INSTALL ? "Installing" :
@@ -14135,7 +14141,7 @@ static int s98_reread_9x(const char *id, char *infPath, size_t cap)
 
 /* ---- the record's devices (record 26 section 6.3, "The record") --------- */
 
-static void s98_record_device(const DEVREC *d, const char *how);
+static int s98_record_device(const DEVREC *d, const char *how);
 
 /* Each drive whose stornvme this installer replaced on 8.1 (Pending,
  * record 26 section 5.3.1 case 3b), resolved from the reading: running
@@ -14145,42 +14151,44 @@ static void s98_record_device(const DEVREC *d, const char *how);
 /* A drive's pending value (case 3b): state written ("attempt" only for a
  * drive Windows' stornvme runs; "done" only over an "attempt"), or deleted
  * (NULL). */
-static void s98_pending_mark(const char *id, const char *state)
+static int s98_pending_mark(const char *id, const char *state)
 {
     char path[INST_PATH_CHARS];
     char now[16];
+    int g;
 
     if (opts.List || !envNow.Nt) {
-        return;
+        return 1;
     }
     if (state != NULL && inst_eq(state, "attempt")) {
-        s98_rec_text("Pending", id, state);
-        return;
+        return s98_rec_text("Pending", id, state);
     }
     join(path, sizeof(path), INST_S98_KEY, "Pending");
-    if (reg_text3(HKEY_LOCAL_MACHINE, path, id, now, sizeof(now)) <= 0) {
-        return;
+    g = reg_text3(HKEY_LOCAL_MACHINE, path, id, now, sizeof(now));
+    if (g <= 0) {
+        return g == 0;
     }
     if (state == NULL) {
-        s98_rec_del("Pending", id);
-    } else {
-        s98_rec_text("Pending", id, state);
+        return s98_rec_del("Pending", id);
     }
+    return s98_rec_text("Pending", id, state);
 }
 
 static void s98_pending_resolve(int uninstall)
 {
     char id[INST_ID_CHARS];
     char state[16];
+    char path[INST_PATH_CHARS];
     DWORD i = 0;
     int j;
     int e;
-    int done;
+    int g;
     const DEVREC *d;
 
     if (!envNow.Nt || opts.List) {
         return;
     }
+    join(path, sizeof(path), INST_S98_KEY, "Pending");
     for (;;) {
         e = s98_rec_enum("Pending", i, id, sizeof(id));
         if (e <= 0) {
@@ -14193,48 +14201,71 @@ static void s98_pending_resolve(int uninstall)
                 break;
             }
         }
-        {
-            char path[INST_PATH_CHARS];
-            join(path, sizeof(path), INST_S98_KEY, "Pending");
-            done = reg_text3(HKEY_LOCAL_MACHINE, path, id, state,
-                             sizeof(state)) > 0 && inst_eq(state, "done");
+        g = reg_text3(HKEY_LOCAL_MACHINE, path, id, state, sizeof(state));
+        if (g < 0) {
+            /* Evidence that cannot be read is kept, and nothing else is
+             * resolved in this run. */
+            logonly("stor98: pending %s cannot be read: kept\n", id);
+            return;
         }
-        if (done && d != NULL && inst_eq(d->Service, "stor98") &&
-            (d->Present || uninstall)) {
-            s98_record_device(d, "its Windows NVMe driver was replaced by "
-                              "this installer");
-            continue;
-        }
-        if (!done || d == NULL || d->Present) {
-            logonly("stor98: pending %s forgotten (%s)\n", id,
-                    !done ? "its call's outcome is unknown" :
-                    d == NULL ? "no entry" : "another driver");
-            if (!s98_rec_del("Pending", id)) {
+        if (g > 0 && inst_eq(state, "done")) {
+            if (d != NULL && inst_eq(d->Service, "stor98") &&
+                (d->Present || uninstall)) {
+                if (!s98_record_device(d, "its Windows NVMe driver was "
+                                       "replaced by this installer")) {
+                    return;
+                }
+                continue;
+            }
+            if (d != NULL && !d->Present) {
+                i++;        /* still to be read back */
+                continue;
+            }
+        } else if (d != NULL && inst_eq(d->Service, "stor98")) {
+            /* An attempt whose outcome is unknown, now running Stor98: never
+             * this installer's, and kept, so no later adoption takes it. */
+            if (!(g > 0 && inst_eq(state, "unknown")) &&
+                !s98_rec_text("Pending", id, "unknown")) {
                 return;
             }
+            logonly("stor98: %s runs Stor98 after a replacement of unknown "
+                    "outcome: not this installer's\n", id);
+            i++;
+            continue;
+        } else if (d != NULL && !d->Present) {
+            i++;
             continue;
         }
-        i++;
+        logonly("stor98: pending %s forgotten (%s)\n", id,
+                d == NULL ? "no entry" : "another driver");
+        if (!s98_rec_del("Pending", id)) {
+            return;
+        }
     }
 }
 
 static int s98_rec_del(const char *sub, const char *name);
 
-static void s98_record_device(const DEVREC *d, const char *how)
+/* 1 recorded (or already), 0 a value could not be written or deleted. */
+static int s98_record_device(const DEVREC *d, const char *how)
 {
-    if (s98_rec_has("Pending", d->Id) == 1 && !opts.List) {
-        s98_rec_del("Pending", d->Id);
+    if (s98_rec_has("Devices", d->Id) != 1) {
+        out("Stor98 now runs %s: recorded as this installer's (%s).\n",
+            d->Desc[0] ? d->Desc : d->Id, how);
+        if (!s98_rec_text("Devices", d->Id, s98VersionText)) {
+            return 0;
+        }
+        if (s98NewCount < INST_S98_MAX_DEV) {
+            /* This step's: a copy made in it may be named by it. */
+            inst_copy(s98NewId[s98NewCount++], d->Id, INST_ID_CHARS);
+        }
     }
-    if (s98_rec_has("Devices", d->Id) == 1) {
-        return;
+    /* The pending evidence goes only once the device is recorded. */
+    if (!opts.List && s98_rec_has("Pending", d->Id) == 1 &&
+        !s98_rec_del("Pending", d->Id)) {
+        return 0;
     }
-    out("Stor98 now runs %s: recorded as this installer's (%s).\n",
-        d->Desc[0] ? d->Desc : d->Id, how);
-    if (s98_rec_text("Devices", d->Id, s98VersionText) &&
-        s98NewCount < INST_S98_MAX_DEV) {
-        /* This step's: a copy made in it may be named by it. */
-        inst_copy(s98NewId[s98NewCount++], d->Id, INST_ID_CHARS);
-    }
+    return 1;
 }
 
 /* After the installs and every settle: each present device of stor98.inf
@@ -16100,6 +16131,13 @@ static int s98_un_adopt(void)
         int p = d->Present && !d->RegOnly;
         if (!inst_eq(d->Service, "stor98") ||
             s98_rec_has("Devices", d->Id) != 0) {
+            continue;
+        }
+        if (s98_rec_has("Pending", d->Id) != 0) {
+            /* A replacement of unknown outcome, or one not yet read back
+             * (record 26 section 5.3.1 case 3b): never adopted. */
+            logonly("stor98: %s has a pending replacement: not adopted\n",
+                    d->Id);
             continue;
         }
         if (!s98_adopt_add(d->Id, d->InfPathState > 0 ? d->InfPath : "", p)) {
@@ -19101,13 +19139,15 @@ static int stor_tools_remove(void)
     char data[96];
     char hex[65];
     char dir[INST_PATH_CHARS];
+    char dirs[4][INST_PATH_CHARS];
     DWORD i = 0;
+    int nd = 0;
+    int k;
     int e;
     int h;
     int left = 0;
     char *s;
 
-    dir[0] = '\0';
     for (;;) {
         e = stor_rec_enum("Tools", i, name, sizeof(name), data, sizeof(data));
         if (e < 0) {
@@ -19121,6 +19161,11 @@ static int stor_tools_remove(void)
         s = strrchr(dir, '\\');
         if (s != NULL) {
             *s = '\0';
+        }
+        for (k = 0; k < nd && !inst_eq(dirs[k], dir); k++) {
+        }
+        if (k == nd && nd < 4) {
+            inst_copy(dirs[nd++], dir, INST_PATH_CHARS);
         }
         h = stor_hash(name, hex);
         if (h < 0) {
@@ -19158,8 +19203,10 @@ static int stor_tools_remove(void)
             return 0;
         }
     }
-    if (dir[0] != '\0' && !opts.List && !left && RemoveDirectoryA(dir)) {
-        out("%s removed.\n", dir);
+    for (k = 0; k < nd && !opts.List; k++) {
+        if (RemoveDirectoryA(dirs[k])) {
+            out("%s removed.\n", dirs[k]);
+        }
     }
     return !left;
 }
