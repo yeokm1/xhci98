@@ -3231,21 +3231,29 @@ this, reviewed and revised:
 - **Vanished children** stay on the domain's CONFIGMG worker
   (`cm_cfgwk.c`), as 42-A.12 left them, with part 3's barrier added
   there: a vanished child whose query is vetoed, or whose removal fails,
-  is a debt of its member (`CmCfgwkDebt`); the worker makes no
+  is a debt of its member, recorded by its devnode handle and instance id
+  (`CM_WK_PORT.Debt`, `CmCfgwkDebt`); the worker makes no
   `Reenumerate_DevNode` of that member and tries the removal again every
   2 s, never forcing it, and the debt raises the member's gate, so no
   `UP` is published and no re-enumeration posted there before every
-  vanished child is retired (R8c, R12 S4 and S5). A debt is cleared by a
-  complete reading that finds no vanished child left unretired, or by
-  `CONTROLLER_UNAVAILABLE`'s own removal of the retained children taking
-  them over.
+  vanished child is retired (R8c, R12 S4 and S5). An entry is discharged
+  only by its removal succeeding or by its handle no longer carrying its
+  instance id (verified gone): what answers on the bus has no say, so a
+  device plugged in again with the same ids does not discharge the old
+  devnode. `CONTROLLER_UNAVAILABLE` and record 22 section 7.7's
+  removal-only request leave the debt as it stands (their own removals
+  may retire the same devnodes, which the next payment then finds gone);
+  the removal-only request is held by the acknowledgement waits and the
+  eject's gate but not by the debt, which it is one way of paying.
 - **The unit's own disappearance.** The transaction cannot wait on its
   own gate, so it removes its own unit itself, and only on evidence the
   rest of the channel accepts: a tunnel down on its member
-  (`CmEjectDown`, from the seam's tunnel-down action; every member under
-  the firmware connection manager), after which the unit's function is
-  read gone, the member's statement decided and any acknowledgement wait
-  ended (the deadline read before the answer, as always). That is the
+  (`CmEjectDown`, from the seam's tunnel-down action, called after that
+  action has entered the member's statement decision, so a decision not
+  pending then has completed; every member under the firmware connection
+  manager), after which the unit's function is read gone, the member's
+  statement decided and any acknowledgement wait ended (the deadline read
+  before the answer, as always). That is the
   unplug's link-down reset, assumption A1, as for every vanished child; an
   all-ones read without a tunnel down is a presence signal and nothing
   else (section 7.3) and authorises nothing. The removal retires the
