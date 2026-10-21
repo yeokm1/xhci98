@@ -2924,7 +2924,8 @@ says, 8 (`DriverVer=07/25/2012,6.2.9200.16384`, `signature="$Windows NT$"`):
   sets `MSISupported` 1 with no `MessageNumberLimit`; `Needs=PciD3ColdSupported`
   from `machine.inf`; 8.1 adds a `.WMI` section.
 
-`usbhub3.inf` (`FeatureScore=0`) binds `USB\ROOT_HUB30`, `USB\USB30_HUB` and
+`usbhub3.inf` (`FeatureScore=0` on 8, `FeatureScore=80` on 8.1, with the
+comment `usbxhci.inf` carries) binds `USB\ROOT_HUB30`, `USB\USB30_HUB` and
 `USB\USB20_HUB`, the ids Windows 8's own USB 3 stack gives its hubs;
 `usb.inf` keeps `USB\CLASS_09&SUBCLASS_01` and `USB\CLASS_09` (its
 `StandardHub.Dev` includes `usbport.inf`'s `ROOTHUB.Dev`) and
@@ -2951,8 +2952,11 @@ choice - which is the default 43.29 wants - **except on the three excluded
 Fresco Logic ids**, where no inbox INF matches and a staged `xhci98.inf`
 is the only candidate, so a controller of those ids that appears after the
 package was staged (a hot-plugged card, a tunnelled one) would be offered
-this driver unasked. The uninstall's way back is the same rule in reverse:
-with the OEM INF deleted, the next search finds `usbxhci.inf` alone.
+this driver unasked. The uninstall's way back is the same rule in reverse,
+and only where that INF matches: with the OEM INF deleted, the next search
+finds `usbxhci.inf` alone on a controller it does not exclude, and on one
+of the three excluded Fresco Logic ids finds no inbox driver at all (the
+controller is left without one, as before the install; inference, VM).
 
 **This package's INFs on NT 6.2 and 6.3.** `src\xhci98.inf`'s
 `%Mfg%=XhciModels,NTx86.6.0` and `src\xhci98-amd64.inf`'s
@@ -3191,8 +3195,10 @@ inbox driver that does not start on this bus by static reading is
 Windows 8's and 8.1's `usbui.dll` carry as DWORD bytes the request codes
 Windows 7's does (`0x220408` to `0x220450`, the 8.1 build `0x220440`
 twice), plus **`0x22045C`, `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`**,
-which no Windows 7 build carries (a byte scan of the files for `0x0022xxxx`
-codes of function index 0x100 to 0x13F, not attributed to code). The bus
+which none of the Vista SP2 and Windows 7 SP1 builds of section 8's table carries
+(`tools\{vista,win7}-{x86,x64}-extracted\ui\usbui.dll`; a byte scan of
+the files for `0x0022xxxx` codes of function index 0x100 to 0x13F, not
+attributed to code). The bus
 answers it on every target since task 36.18 (8.4), and its capable flags
 stay false for a USB 3 device on a USB 2.0 port (8.4, the BOS read at High
 Speed left out). Whether 8's pages read it, and for what, is 43.25's
@@ -3203,8 +3209,7 @@ reading.
 Nothing in this reading changes record 19: the x64 binaries carry the
 embedded SHA-1 Authenticode test signature, no catalog, the services are
 demand-start. Not read statically: whether Windows 8's and 8.1's code
-integrity (`ci.dll` 6.2.9200.16384 and 6.3.9600.17031, identified above, not
-disassembled) loads a SHA-1-signed test binary in test-signing mode as 7
+integrity (`ci.dll`, extracted beside the files above and not read) loads a SHA-1-signed test binary in test-signing mode as 7
 did, the Secure Boot interaction (the owner's Windows 10 rows assume Secure
 Boot off; not read for 8),
 and what the 32-bit Windows 8 does with the unsigned x86 binary (record 19
@@ -3221,8 +3226,9 @@ and earlier only). All three are 43.24's and 43.31's legs.
    stays on `usbxhci.sys` unless forced; and a Fresco Logic `1B73:1000`,
    `1B73:1400` or `1B73:1009` rev 00 controller is offered this driver
    unasked (needs such a controller or an emulator that presents one).
-3. The uninstall giving the controller back to `usbxhci.sys` (and the root
-   hub to `usbhub3.sys`).
+3. The uninstall giving a controller `usbxhci.inf` matches back to
+   `usbxhci.sys` (and the root hub to `usbhub3.sys`); on an excluded
+   Fresco Logic id, what the controller is left with.
 4. The class drivers on the `0x600` path as read: HID, a Bulk-Only stick, a
    hub, audio, a winusb device; the trace line `hcd: QUERY_INTERFACE not
    answered` with `GUID_USBD_INTERFACE_V1`'s Data1 `deee98ea` and
