@@ -3224,39 +3224,27 @@ this, reviewed and revised:
   progress"; a clear bit says neither that a removal ended nor that
   nothing changed.
 - **One gate.** The member's removal gate and exposure gate are one: an
-  eject transaction not retired, a block, a statement decision pending,
-  or a vanished child not retired raises the member's existing gate
-  (`CmNvlinkHeld`, task 42-A.12), which holds that member's removal calls,
-  exposures and re-enumerations together.
-- **Vanished children** stay on the domain's CONFIGMG worker
-  (`cm_cfgwk.c`), as 42-A.12 left them, with part 3's barrier added
-  there: a vanished child whose query is vetoed, or whose removal fails
-  after its query was accepted, is a debt of its member, recorded by the
-  member's location, its devnode handle, its instance id's hash and
-  whether its query was accepted, in a boot-resident table beside the
-  eject records (`CmEjectDebt*` in `cm_ejectos.c`), so the debt and its
-  gate outlive the worker and a later start pays it. The worker makes no
-  `Reenumerate_DevNode` of that member, and pays the member's debts every
-  2 s on its own, whether or not any request names the member: a vetoed
-  query asked again, never forced; after an accepted query,
-  `Remove_SubTree` alone (an accepted query is never issued twice). The
-  debt raises the member's gate, so no `UP` is published and no
-  re-enumeration posted there before every vanished child is retired
-  (R8c, R12 S4 and S5). An entry is discharged only by its removal
-  succeeding, by CONFIGMG answering that the handle does not exist, or by
-  a successful read of the handle's instance id finding another id
-  (verified gone); an inconclusive read keeps it, and what answers on the
-  bus has no say, so a device plugged in again with the same ids does not
-  discharge the old devnode. `CONTROLLER_UNAVAILABLE` and record 22
-  section 7.7's removal-only request leave the debt standing (their own
-  removals may retire the same devnodes, which the next payment, made on
-  the worker's own 2 s clock, finds gone); the payment waits while that
-  member's `CONTROLLER_UNAVAILABLE` removal or retirement barrier stands,
-  and the removal-only request is held by the acknowledgement waits and
-  the eject's gate but not by the debt, which it is one way of paying.
-  A Stor98 request the worker's removal step made for such a child is
-  withdrawn after that step whatever its outcome, as before 43.18; a
-  later payment makes a new one only with a new query.
+  eject transaction not retired, a block, or a statement decision pending
+  raises the member's existing gate (`CmNvlinkHeld`, task 42-A.12), which
+  holds that member's removal calls, exposures and re-enumerations
+  together.
+- **Vanished children are not moved (open).** Part 3's transaction for
+  the functions a tunnel down took away - a veto retried every 2 s, the
+  member's exposure and re-enumeration held until every one is retired,
+  the obligation kept across the NHI's stop, an accepted query never
+  issued twice, a Stor98 request left in place through the retries - is
+  not built: those removals stay on the domain's CONFIGMG worker
+  (`cm_cfgwk.c`) as 42-A.12 left them, where a vanished child's vetoed
+  query is not retried and the member's re-enumeration goes ahead (the
+  behaviour since `3.0.0.0`; R8c and R12 S4 and S5 are not met for that
+  case). A barrier added to the worker alone was tried and set aside
+  while 43.18 was built: done properly it needs the transaction's whole
+  lifetime discipline (a call owner and operation identity per obligation
+  across the stop, the takeovers by `CONTROLLER_UNAVAILABLE` and record
+  22 section 7.7's removal-only request sharing the same accepted-query
+  state, capacity reserved before an irreversible query), which is
+  this record's part 0 machinery applied to those removals: a task of its
+  own, for the owner to place.
 - **The unit's own disappearance.** The transaction cannot wait on its
   own gate, so it removes its own unit itself, and only on evidence the
   rest of the channel accepts: a tunnel down on its member
