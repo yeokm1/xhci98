@@ -6086,15 +6086,17 @@ INST_U32 inst_stor_silent_add(const unsigned char (*have)[4],
     return set;
 }
 
-void inst_stor_silent_name(int k, int (*taken)(const char *, void *),
-                           void *ctx, char *out, size_t cap)
+int inst_stor_silent_name(int k, int (*taken)(const char *, void *),
+                          void *ctx, char *out, size_t cap)
 {
     unsigned long n = (unsigned long)k + 1UL;
     char num[16];
     int d;
+    int tries;
+    int r;
     unsigned long t;
 
-    for (;;) {
+    for (tries = 0; tries < 1000; tries++) {
         /* "XHCI98S" and the number in decimal, built by hand (no stdio in
          * the pure half). */
         d = 0;
@@ -6109,11 +6111,16 @@ void inst_stor_silent_name(int k, int (*taken)(const char *, void *),
             out[l] = num[--d];
             out[l + 1] = '\0';
         }
-        if (taken == NULL || !taken(out, ctx)) {
-            return;
+        r = taken == NULL ? 0 : taken(out, ctx);
+        if (r < 0) {
+            return 0;
+        }
+        if (r == 0) {
+            return 1;
         }
         n += INST_STOR_SILENT_COUNT;
     }
+    return 0;
 }
 
 INST_U32 inst_stor_inf_set(int copyOk, const int named[2])

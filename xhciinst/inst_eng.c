@@ -2812,6 +2812,17 @@ static int value_needs_write(int v)
         value_inf(v) == NULL) {
         return 0;
     }
+    /* The storage row's preselection (record 26 section 6.5.12): only
+     * when its route was taken, and written machine-wide where none is
+     * set, whatever the controllers' own values. */
+    if (answerChosen[v] == 2) {
+        if (!storCopyOk) {
+            logonly("storage: XhciSilentInstall not written, the route not "
+                    "taken\n");
+            return 0;
+        }
+        return mw_value(v, &mwv) == 0;
+    }
     inst_value_default(v, value_inf(v), &def);
     value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
     mw = mw_value(v, &mwv);
@@ -19257,7 +19268,12 @@ static int silent_taken(const char *name, void *ctx)
     DWORD t;
     DWORD n = 0;
 
-    return RegQueryValueExA(k, name, NULL, &t, NULL, &n) != ERROR_FILE_NOT_FOUND;
+    LONG r = RegQueryValueExA(k, name, NULL, &t, NULL, &n);
+
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    return r == ERROR_SUCCESS || r == ERROR_MORE_DATA ? 1 : -1;
 }
 
 static void silent_hex(const unsigned char *e, char *out)
@@ -19338,7 +19354,12 @@ static void stor_silent_merge(void)
         if ((set & (1UL << e)) == 0) {
             continue;
         }
-        inst_stor_silent_name(e, silent_taken, (void *)k, name, sizeof(name));
+        if (!inst_stor_silent_name(e, silent_taken, (void *)k, name,
+                                   sizeof(name))) {
+            out("USB storage: the SilentClasses names could not be read: "
+                "nothing more is added.\n");
+            break;
+        }
         silent_hex(instStorSilent[e], hex);
         if (!stor_rec_text("Silent", name, hex)) {
             continue;

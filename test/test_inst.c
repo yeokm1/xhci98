@@ -3987,6 +3987,14 @@ static void test_marks(void)
 
 /* ---- record 26 section 6.5: the USB storage drivers on Windows 98 SE ---- */
 
+/* Every name unreadable. */
+static int silent_taken_err(const char *name, void *ctx)
+{
+    (void)name;
+    (void)ctx;
+    return -1;
+}
+
 /* A name taken: XHCI98S2 alone. */
 static int silent_taken_s2(const char *name, void *ctx)
 {
@@ -4395,11 +4403,14 @@ static void test_storage(void)
         CHECK(inst_stor_silent_add((const unsigned char (*)[4])have, valid,
                                    4) == 0,
               "silent: all three there (silent-on.bat and more): none added");
-        inst_stor_silent_name(0, NULL, NULL, nm, sizeof(nm));
-        CHECK(strcmp(nm, "XHCI98S1") == 0, "silent: the first name");
-        inst_stor_silent_name(1, silent_taken_s2, NULL, nm, sizeof(nm));
-        CHECK(strcmp(nm, "XHCI98S5") == 0,
+        CHECK(inst_stor_silent_name(0, NULL, NULL, nm, sizeof(nm)) &&
+              strcmp(nm, "XHCI98S1") == 0, "silent: the first name");
+        CHECK(inst_stor_silent_name(1, silent_taken_s2, NULL, nm, sizeof(nm)) &&
+              strcmp(nm, "XHCI98S5") == 0,
               "silent: a name in use is never written over");
+        CHECK(!inst_stor_silent_name(0, silent_taken_err, NULL, nm,
+                                     sizeof(nm)),
+              "silent: a name that cannot be read stops the merge");
     }
     /* A run whose package copy failed after its storage copies: nothing
      * published, so a hand install of the same INFs later is never

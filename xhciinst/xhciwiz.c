@@ -459,6 +459,12 @@ static unsigned __stdcall job_main(void *arg)
                     opts->SetIndex[i] < INST_MAX_VALUES) {
                     choiceSet[opts->SetIndex[i]] = 1;
                     choiceVal[opts->SetIndex[i]] = opts->SetValue[i];
+                    /* A /set of the gate is the user's own (record 26
+                     * section 6.5.12). */
+                    if (opts->SetIndex[i] ==
+                        inst_value_find("XhciSilentInstall")) {
+                        silentExplicit = 1;
+                    }
                 }
             }
         }
@@ -1526,6 +1532,7 @@ static int settings_leave(HWND dlg, int page)
         if (instValues[r->Value].Hi != 0) {
             GetWindowTextA(rp->R[i].Choice, typed, sizeof(typed));
         }
+        v = 1;
         if (row_read(&rp->R[i], &v)) {
             choiceSet[r->Value] = 1;
             choiceVal[r->Value] = v;
@@ -1543,15 +1550,17 @@ static int settings_leave(HWND dlg, int page)
         } else {
             choiceSet[r->Value] = 0;
         }
-    }
-    /* The storage row's preselection left at 1, or changed by the user,
-     * whose choice it then is (record 26 section 6.5.12). */
-    if (page == P_USB && silentAuto) {
-        int sv = inst_value_find("XhciSilentInstall");
-        if (sv >= 0 && sv < INST_MAX_VALUES &&
-            !(choiceSet[sv] && choiceVal[sv] == 1)) {
-            silentAuto = 0;
-            silentExplicit = 1;
+        /* The storage row's preselection left at 1 stays the engine's;
+         * any other value the user chose there is the user's own (record
+         * 26 section 6.5.12). */
+        if (silentAuto && r->Value == inst_value_find("XhciSilentInstall")) {
+            if (v != 1) {
+                silentAuto = 0;
+                silentExplicit = 1;
+            } else {
+                choiceSet[r->Value] = 1;
+                choiceVal[r->Value] = 1;
+            }
         }
     }
     return 1;

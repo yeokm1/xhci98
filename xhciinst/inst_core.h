@@ -1724,9 +1724,10 @@ extern const unsigned char instStorSilent[INST_STOR_SILENT_COUNT][4];
 INST_U32 inst_stor_silent_add(const unsigned char (*have)[4],
                               const int *valid, int n);
 /* The name for added entry k: "XHCI98S<k+1>", or the next number when that
- * name is taken (taken(name, ctx) 1). */
-void inst_stor_silent_name(int k, int (*taken)(const char *, void *),
-                           void *ctx, char *out, size_t cap);
+ * name is taken (taken(name, ctx) 1; -1 it cannot be told). 1 named; 0
+ * not (a reading failed, or no free name in reach). */
+int inst_stor_silent_name(int k, int (*taken)(const char *, void *),
+                          void *ctx, char *out, size_t cap);
 /* The detection's text: none, some ("not known to be ready"), all, or
  * this installer's. */
 void inst_stor_found_text(char *out, size_t cap,
