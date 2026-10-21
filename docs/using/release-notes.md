@@ -1744,6 +1744,15 @@ Limits:
 
 - Pressing F6 needs the firmware's own USB keyboard support.
 - The floppy must be drive A: as the firmware sees it.
+- **A USB floppy drive works as the F6 drive only if it is one of the
+  three text-mode Setup knows.** Windows 2000 SP4's and XP SP3's
+  `I386\TXTSETUP.SIF` name the same three USB floppy drives: the Mitsumi
+  (`USB\VID_03EE&PID_6901`), the Y-E Data (`USB\VID_057B&PID_0000`) and
+  the TEAC (`USB\VID_0644&PID_0000`). XP's `usbstor.inf` names more
+  floppy drives, but text mode reads only `TXTSETUP.SIF`, and no INF,
+  this package's included, can add a drive to it. With any other USB
+  floppy drive the driver cannot be loaded from it: use one of those
+  three, or a floppy drive on the machine's own floppy controller.
 - A disk that offers only UAS is not usable until GUI-mode Setup. Since
   `2.3.1.0` a disk that offers Bulk-Only as well as UAS, as most USB 3
   enclosures, SSDs and sticks do, runs as Bulk-Only in text mode and is
