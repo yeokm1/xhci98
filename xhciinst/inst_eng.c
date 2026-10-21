@@ -17251,6 +17251,21 @@ static int stor_run_begin(void)
      * %windir%\INF deleted, before the copy is tried (sections 6.5.4 and
      * 6.5.11); Source goes only once that copy is made. */
     placed = storHere && !storCopyOk && !opts.List ? stor_placed_any() : 0;
+    /* DevicePath first, so a placed copy that cannot be read or deleted
+     * never leaves the package directory published. */
+    if (storHere && !storCopyOk && (storSource || placed != 0) &&
+        !storWithdrawn && !opts.List) {
+        if (!devicepath_update(NULL)) {
+            out("The USB storage drivers' copy in %s could not be withdrawn "
+                "from DevicePath:\nnothing else is changed. Run the "
+                "installer again.\n", toolDir);
+            flagFailed = 1;
+            return 0;
+        }
+        storWithdrawn = 1;
+        out("The USB storage drivers' copy in %s is withdrawn from "
+            "DevicePath.\n", toolDir);
+    }
     if (placed < 0) {
         out("The USB storage drivers' install record cannot be read: "
             "nothing else is changed.\nRun the installer again.\n");
@@ -17263,19 +17278,6 @@ static int stor_run_begin(void)
             "again.\n");
         flagFailed = 1;
         return 0;
-    }
-    if (storHere && !storCopyOk && storSource && !storWithdrawn &&
-        !opts.List) {
-        if (!devicepath_update(NULL)) {
-            out("The USB storage drivers' copy in %s could not be withdrawn "
-                "from DevicePath:\nnothing else is changed. Run the "
-                "installer again.\n", toolDir);
-            flagFailed = 1;
-            return 0;
-        }
-        storWithdrawn = 1;
-        out("The USB storage drivers' copy in %s is withdrawn from "
-            "DevicePath.\n", toolDir);
     }
     storSourceOff = storSource && !storCopyOk;
     return 1;
@@ -17483,12 +17485,10 @@ static void stor_place_infs(void)
             storInfMissed = 1;
         }
     }
-    if (set == 0) {
-        return;
-    }
-    /* The route read again after the moves: a file of other bytes that
-     * appeared meanwhile makes it partial-other, and the withdrawal runs
-     * before the package's copy (section 6.5.11). */
+    /* The route read again after the moves, and when nothing was moved:
+     * a file of other bytes that appeared meanwhile makes it
+     * partial-other, and the withdrawal runs before the package's copy
+     * (section 6.5.11). */
     stor_read_states(st);
     for (i = 0; i < INST_STOR_COUNT; i++) {
         if (st[i] == INST_STOR_OTHER ||
