@@ -3279,14 +3279,34 @@ this, reviewed and revised:
   record stood in: an answer still awaited is read with its original
   deadline, so it has usually passed and the failed branch follows; a
   teardown, statement or re-enumeration in progress at the stop is not
-  carried over (an isolation in progress becomes the block). The query's
-  recorded outcome is never re-issued.
+  carried over (an isolation in progress, its acknowledgement wait
+  included, becomes the block). The query's recorded outcome is never
+  re-issued.
 - **Every call that names the unit's devnode** reads that handle's
-  instance id back first and answers `CR_NO_SUCH_DEVNODE` when it is no
-  longer the unit's (CONFIGMG reuses handles); a removal answered so
-  retires the transaction as a devnode verified gone. The unit's identity
-  at acceptance is read through `HalGetBusData` (the route the rest of the
-  thread reads with), not `PCI.VXD`.
+  instance id back first: CONFIGMG answering that the handle does not
+  exist, or a successful read finding another id (CONFIGMG reuses
+  handles), is the devnode verified gone, the call answering
+  `CR_NO_SUCH_DEVNODE` and a removal so answered retiring the
+  transaction; an inconclusive read makes no call and concludes nothing
+  (`CR_FAILURE`, a retry's outcome). The unit's identity at acceptance is
+  read through `HalGetBusData` (the route the rest of the thread reads
+  with), not `PCI.VXD`.
+- **No request, two cases.** A unit no `UP` entry names - a dock's switch
+  port, or a function with no Stor98 channel (no receiver has read the
+  proof, or none was published) - gets the query and the removal with no
+  request, as part 1 says for "an NVMe function with an `UP` entry" and
+  record 24 section 7.1 made them. A unit an `UP` entry names whose
+  request was not published (its identity changed between the query and
+  the request) takes the branch of no answer: isolation first, or the
+  block - never a plain removal.
+- **O6 read before every removal result.** A removal's result taken after
+  the 30 s from its first attempt, whatever it says and on whichever
+  thread, is a retry's outcome: the result is "blocked" (it keeps failing)
+  before the success is applied, never "removed clean".
+- **The decision's deadline at its taking.** A slot reading counts only
+  when both its read (the worker's clock) and its taking by the thread
+  fall before the decision's deadline; the USB4 allowance left is read at
+  the taking, which is when the statement is published.
 - **A terminal step is written once.** What follows it - O6's later
   success, a block lifted by the unplug - is the member's state (the
   mask), never a second terminal step in the slot.
