@@ -9149,10 +9149,11 @@ either; on Windows 98 SE, the roadmap's low-memory machine
 regression leg, since nothing here runs there. The full 36.26
 compatibility and multi-device load matrix applies.
 
-### 11.8 The isochronous ring: a page of its own, the event budget and moderation (43.38 to 43.41)
+### 11.8 The isochronous ring: a page of its own, the event budget and moderation (43.38 to 43.40)
 
 **Why.** The owner's decision of 2026-10-20 (roadmap-usb4, Phase 43, tasks 43.38 to
-43.41): enlarge the isochronous ring now, and consider
+43.40; the larger event ring of point 9, 43.41 until the owner deferred it on
+2026-10-22, is the planned ISORING.4): enlarge the isochronous ring now, and consider
 interrupt moderation in the same work. Today every isochronous pipe sits
 on a pool ring of 64 TRBs, 62 usable (design record 04 section 3.6), a
 request may carry at most 62 packets and 62 TRBs
