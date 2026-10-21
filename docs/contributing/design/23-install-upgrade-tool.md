@@ -1,6 +1,9 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 25, 2026-10-21 (roadmap-usb4 task 43.42, record 26
+Status: revision 26, 2026-10-21 (roadmap-usb4 task 43.43, record 26
+draft 20 section 5.3.1: every component on every system, the defaults as
+they are, a warning where one does not apply; sections 4.5 and 7.1, and
+decision D18 amended); revision 25, 2026-10-21 (roadmap-usb4 task 43.42, record 26
 draft 19 section 6.5.11: on Windows 98 SE the pack's two storage INFs
 placed in `%windir%\INF` itself, as NUSB's installer places them, so a
 new USB disk installs with no wizard, recorded and removed by the
@@ -774,6 +777,23 @@ tunnel brings are driven by whatever driver Windows binds to them.
 | 98 SE, ME | required, as before | refused: "the connection manager alone is not offered on Windows 98 SE and ME" |
 | 2000, XP, XP x64, Vista, 7 | in the run unless left out; can be left out only when the package carries the connection manager | leaves them out; refused when the package carries no connection manager |
 | 8, 8.1 | never in the run, never offered | accepted, and changes nothing |
+
+(Revision 26, record 26 draft 20 section 5.3.1, roadmap-usb4 task 43.43,
+the owner's decision of 2026-10-21: every component on every system,
+the defaults as they are, a warning where one does not apply.) The table
+becomes, with `inst_usb_decide` refusing nothing but a `/cmonly` with no
+connection manager in the package, `/usb` with `/cmonly`, and a package
+without the connection manager on 8 and 8.1:
+
+| System | The USB drivers | `/cmonly` |
+|---|---|---|
+| 98 SE, ME | in the run unless left out; can be left out when the package carries the connection manager, with the warning of record 26 section 5.3.1 case 2 (the connection manager alone, untested there) | leaves them out, with that warning |
+| 2000, XP, XP x64, Vista, 7 | as before | as before |
+| 8, 8.1 | left out unless `/usb` (or the window's box) puts them in, with case 3a's warning (untested there); installed as on Vista and 7 | accepted; leaves them out, as before |
+
+The paragraph below, which keeps them required on 98 SE and ME and never
+offered on 8 and 8.1, stands as the reason for the warnings' words
+rather than as a refusal.
 
 98 SE and ME keep them required because those systems have no USB 3
 driver of their own: a machine with the connection manager and no
@@ -1644,6 +1664,7 @@ these systems.
 | `/to <path>` | the install directory (section 9.6) without asking; refused with `/uninstall`, `/devices` and `/eject`, and checked as a typed answer is (a path that fails refuses the run, exit 1) |
 | `/nouas` | leave the UAS disk driver out of the run (owner, 2026-10-19; record 26 section 5.3): `xhciuas.inf` neither staged nor installed, nor copied to `DevicePath` on 98 SE and ME, and an `xhciuas` already installed left as it is; refused with `/uninstall`, `/devices` and `/eject` |
 | `/storage`, `/nostorage` | (revision 24) Windows 98 SE: install the USB storage drivers of record 26 section 6.5 without asking, or leave them out; `/storage` refused on any other system, where the download does not carry them or carries other bytes, and with `/nostorage`; both refused with `/uninstall`, `/devices` and `/eject`; `/nostorage` changes nothing on another system |
+| `/usb` | (revision 26, proposal) Windows 8 and 8.1: put the USB drivers in the run, which there are otherwise left out, with record 26 section 5.3.1 case 3a's warning; elsewhere it changes nothing; refused with `/cmonly`, `/uninstall`, `/devices` and `/eject`. Revision 26 also lifts `/cmonly`'s refusal on 98 SE and ME (case 2's warning), `/storage`'s on any system but 98 SE (case 1: the copy to the tools folder), and `/stor98`'s "never offered on 8 and 8.1" (case 3b), each warning printed before the go-ahead question and printed and logged under `/yes` |
 | `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
@@ -2686,6 +2707,11 @@ the user.
 - **D18** (revision 13) Windows 8 and 8.1 admitted for the connection
   manager alone, read through `RtlGetVersion`; 10 and later refused as
   before; the bundled Stor98 not offered on 8 and 8.1 (section 4.5).
+  Amended by revision 26 (roadmap-usb4 task 43.43, the owner's decision
+  of 2026-10-21): on 8 and 8.1 the USB drivers and Stor98 are offered,
+  unticked by default, untested there until roadmap tasks 43.31 and
+  43.24 pass, each with record 26 section 5.3.1's warning; this takes
+  tasks 43.29's and 43.23's installer rows.
 - **D19** (revision 13) The mark service on 8 and 8.1 as on 2000 to 7
   (section 9.5).
 

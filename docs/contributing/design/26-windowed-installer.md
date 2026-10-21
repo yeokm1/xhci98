@@ -1,6 +1,11 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 19, 2026-10-21 (roadmap-usb4 task 43.42, the owner's
+Status: draft 20, 2026-10-21 (roadmap-usb4 task 43.43, the owner's
+decisions of that day: every Components box shown and tickable on every
+system, the defaults as they are, a box ticked where it does not apply
+warned in one message box on Next and the run going on, section 5.3.1;
+sections 5.3, 6.5.2, 6.5.9, 6.5.10 and 12; record 23 revision 26; the
+proposals in 5.3.1 are the owner's to confirm); draft 19, 2026-10-21 (roadmap-usb4 task 43.42, the owner's
 decision of 2026-10-20, NUSB parity for the first plug: the pack's two
 INFs placed in `%windir%\INF` by this installer, never over a file of
 that name, recorded and removed by the uninstall and withdrawn with the
@@ -459,11 +464,11 @@ Check boxes, one a line, each with one sentence:
 
 | Component | Ticked | Can be unticked | What it is |
 |---|---|---|---|
-| xHCI98 USB 3.x host controller driver (`xhci98.sys`; until 2026-10-19 with `xhciuas.sys` in the same box) | yes, but on Windows 8 and 8.1 (draft 8) | on 2000 to 7, when the package carries the connection manager (record 23 section 4.5; `/cmonly` preselects it unticked); on 98 SE and ME no, shown ticked and disabled; on 8 and 8.1 shown unticked and disabled | the driver for the controller, its hubs and devices, and Bulk-Only disks (UAS disks: the box under it); on 8 and 8.1 the sentence says Windows' own USB 3 driver runs the controllers there; unticked on 2000 to 7, the sentence under the box says the run leaves an installed `xhci98.sys` as it is and that the uninstall removes the whole package |
+| xHCI98 USB 3.x host controller driver (`xhci98.sys`; until 2026-10-19 with `xhciuas.sys` in the same box) | yes, but on Windows 8 and 8.1 (draft 8) | when the package carries the connection manager (record 23 section 4.5; `/cmonly` preselects it unticked): until draft 20 on 2000 to 7 alone, shown ticked and disabled on 98 SE and ME and unticked and disabled on 8 and 8.1; from draft 20 on every system, with section 5.3.1's warning where it does not apply (unticked on 98 SE and ME, ticked on 8 and 8.1) | the driver for the controller, its hubs and devices, and Bulk-Only disks (UAS disks: the box under it); on 8 and 8.1 the sentence says Windows' own USB 3 driver runs the controllers there; unticked on 2000 to 7, the sentence under the box says the run leaves an installed `xhci98.sys` as it is and that the uninstall removes the whole package |
 | UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still asked, being `xhci98.sys`'s (`inst_uas_decide`) |
 | Thunderbolt 3 / USB4 support (experimental) (`xhcicm.sys`) | no, whether or not a controller is found (draft 16; owner, 2026-10-19, replacing "ticked when a controller is found"): the user ticks it on purpose; `/thunderbolt` preselects it; ticked when it is locked on (the USB drivers unticked, and 8 and 8.1) | yes | the connection manager; the note under the box says whether a controller was found - "A Thunderbolt 3 / USB4 controller was found: <name>." (the name cut to 36 characters, `inst_tb_found_text`) with the sentence that a device plugged into its port can reach the computer's memory, see `XhciCmApprove`; or "No Thunderbolt 3 / USB4 controller was found (some laptops show it only with a device plugged in or a BIOS setting). Tick it only if this computer has such a port." Unticked on an update leaves an installed `xhcicm` as it is (record 23 section 8.5's N) |
-| Stor98, the NVMe driver (bundled) | with the Thunderbolt box (draft 16; owner, 2026-10-19, replacing "never unasked" of 2026-10-18): ticking the Thunderbolt box ticks it, unticking it unticks it; `/nostor98` preselects it unticked | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 12: it no longer offers an internal drive), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
-| USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone, never on ME, 2000 or later; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
+| Stor98, the NVMe driver (bundled) | with the Thunderbolt box (draft 16; owner, 2026-10-19, replacing "never unasked" of 2026-10-18): ticking the Thunderbolt box ticks it, unticking it unticks it; `/nostor98` preselects it unticked; on 8 and 8.1 (draft 20) shown, and never ticked but by the user (section 5.3.1) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel; the installer selects tunnel drives only." (section 6.3; draft 12: it no longer offers an internal drive), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
+| USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone until draft 20, and from draft 20 on every system, unticked by default but on 98 SE, ticked elsewhere with section 5.3.1's warning and its files then only copied to the tools folder; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
 | xHCI98 USB Tree, started at login | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | The tools folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next checks it and stays on the page until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
@@ -473,6 +478,139 @@ what `/notray` does. Unticking the USB drivers does what `/cmonly` does:
 the Thunderbolt box is then ticked and disabled (it is all the run
 installs), the USB settings page is not shown, and the plan is made again;
 ticking them again gives the Thunderbolt box back its own state.
+
+#### 5.3.1 Every box on every system (task 43.43; draft 20)
+
+The owner, 2026-10-21: "for the installer first page, all options should
+be available to all OS. Defaults can remain", and the same day, in place
+of "greyed with a reason": every box shown and tickable on every system,
+none refused; a box ticked where it does not apply gets a warning that
+says so, and the run goes on. Until draft 20 the page gated four boxes by
+the system: the USB storage drivers' row shown on 98 SE alone
+(section 6.5.2); the USB drivers' box locked ticked on 98 SE and ME and
+locked unticked on 8 and 8.1 (`inst_usb_decide`, record 23 section 4.5);
+Stor98's box hidden on 8 and 8.1 (record 23 decision D18); and the
+Thunderbolt and UAS boxes, which follow the USB drivers' box.
+
+**What stays.** The defaults (section 5.3's table, unchanged on every
+system), and the boxes' dependencies on one another, which are not a
+system's gate: the UAS box a child of the USB drivers' box, the
+Thunderbolt box ticked and locked while the USB drivers are unticked (it
+is then all the run installs), Stor98's box a child of the Thunderbolt
+box, and a box greyed because the package or the download lacks its files
+(the Thunderbolt support, Stor98, the storage pack, section 6.5.1; the
+USB drivers' box can be unticked only where the package carries the
+connection manager, since without it a run would install nothing; and on
+8 and 8.1 a package without the connection manager is still refused at
+the Welcome page, as record 23 section 4.5 has it, a refusal of the
+package rather than of a box - proposal for the owner). The
+tray box follows the package (`XHCITR` for this architecture), as
+before. A box shown greyed for a missing file is not one the system
+gates, and stays as it is (proposal for the owner).
+
+**The cases** (the owner's, 2026-10-21; the pure half's
+`inst_comp_warnings`, host-tested on every system and every combination
+of the four boxes, a bit per warning, and `inst_comp_warn_text`, the
+words):
+
+| Case | When | What the run does | The warning's words (proposal for the owner) |
+|---|---|---|---|
+| 1 | the USB storage drivers ticked on ME, or on 2000 to 8.1 | the pack's seven files copied to `<the install directory>\NUSB33\` and nothing else: nothing in `%windir%`, the INF directory, `INF\OTHER` or `DevicePath`, no device job, no `Storage` record but the copies' own (below) | "The USB storage drivers (NUSB 3.3's) are for Windows 98 SE only. On this Windows they are not installed: their seven files are copied to <dir>\NUSB33 for you to use by hand, and Windows is not told about them." |
+| 2 | the USB drivers unticked on 98 SE or ME | the connection manager installed alone, as on 2000 to 7 (record 23 section 4.5, amended): `xhci98.inf` and `xhciuas.inf` out of the run, the Thunderbolt support in it; on these two systems through the helper (record 27 section 6 step 5), and the local copy on `DevicePath` made without `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`, as `/nouas` already leaves the UAS pair out of it, so no hardware wizard can offer them; an `xhci98.sys` already installed stays as it is (record 23 section 4.5) | "Without the xHCI98 USB drivers, Windows 98 SE and ME have no driver for a USB 3 controller: every xHCI controller, a dock's included, stays without one, and the USB devices on it do not work. Only the Thunderbolt 3 / USB4 connection manager is installed. This has not been tested on Windows 98 SE or ME." |
+| 3a | the USB drivers ticked on 8 or 8.1 | `xhci98.sys` and, with its box, `xhciuas.sys` installed as on Vista and 7 (`Xhci.Dev6`, the NT route of record 23 section 5), taking roadmap task 43.29's row | "The xHCI98 USB drivers have not been tested on Windows 8 or 8.1. They replace Windows' own USB 3 driver on every xHCI controller, the one your keyboard and mouse may use included. The uninstall removes them; Windows then installs its own driver again." |
+| 3b | Stor98 ticked on 8 or 8.1 | the bundled Stor98 on tunnel drives as on 2000 to 7 (section 6.3), taking roadmap task 43.23's row | "Stor98 has not been tested on Windows 8 or 8.1." |
+
+Case 3's defaults: on 8 and 8.1 both boxes are shown unticked, as the
+USB drivers' box was; Stor98's box, which elsewhere is ticked with the
+Thunderbolt box (draft 16), is unticked there whatever the Thunderbolt
+box does, and only a tick of the user's own takes it. Each 8 and 8.1 row
+says "untested" until roadmap tasks 43.31 (the USB drivers) and 43.24
+(Stor98 with the connection manager) pass; record 23 decision D18 is
+amended to "admitted for the connection manager, with the USB drivers
+and Stor98 opt-in and untested".
+
+The words of case 3a's last sentence state what 43.29 asks of the
+uninstall (the controller given back to `usbxhci.sys`); no leg has read
+it, and the warning's first sentence covers it.
+
+**The window** (case 4, the owner's): on Next from the Components page,
+after the folder's check, when `inst_comp_warnings` is not zero for the
+boxes as ticked, one message box (`MessageBoxA`, `MB_OKCANCEL |
+MB_ICONWARNING`, the window's title) shows every warning that applies,
+one paragraph each in the table's order, then "OK goes on; Cancel stays
+on this page to change the choice." OK goes on to the next page; Cancel
+stays on the Components page with the boxes as they were. It is shown
+once per Next: a Back to the page and a Next again with the same boxes
+shows it again (a proposal; the alternative is once per run). The
+Summary repeats each warning's first sentence in its list (proposal).
+
+**The console** prints the same words, each under a line "WARNING:",
+before its go-ahead question (record 23 section 7.4), and asks nothing
+more: the go-ahead is the answer. Under `/yes`, `/defaults` and `/list`
+(the unattended runs; the window takes none of them, `inst_window_refusal`)
+the words are printed and logged and nothing is asked, and the run goes
+on (proposal; the owner's "logged and printed, never shown"). The
+console's choices:
+
+- case 1: `/storage` accepted on every system (it was refused off 98 SE),
+  ticking the row; on ME and 2000 to 8.1 the row's question is not asked
+  and its default is unticked, so only `/storage` takes it there;
+- case 2: `/cmonly` accepted on 98 SE and ME (it was refused there), with
+  the warning; a package without the connection manager still refuses
+  `/cmonly` as on 2000 to 7;
+- case 3a: `/usb` (new, proposal) puts the USB drivers in the run on 8
+  and 8.1, where they are otherwise left out; elsewhere it changes
+  nothing (they are in the run unless `/cmonly`); `/usb` with `/cmonly`
+  is refused as a contradiction;
+- case 3b: the Stor98 question is asked on 8 and 8.1 with Enter for N
+  (Y elsewhere, draft 16), `/stor98` ticks it and `/yes` takes the N.
+
+**What the uninstall removes** (proposals for the owner):
+
+- case 1: the seven in `<the install directory>\NUSB33\`, each by the
+  record `HKLM\Software\xhci98\Storage\Tools` (one value per copy, its
+  path and SHA-256, written before its copy is made, as `Files` is),
+  deleted when its bytes are still the recorded ones, then the folder if
+  it is empty; a changed file is kept and said. On ME and 2000 to 8.1
+  nothing else of section 6.5.8 runs (no `Files`, `Infs`, `Placed` or
+  `Devices` can exist there). A later run with the row unticked leaves
+  the copies (unticking is "not now"); a later run with it ticked again
+  finds them by the record and copies only what is missing.
+- case 2: what the connection manager's install placed, as record 23
+  section 9 and record 26 section 9.3 remove it on 98 SE and ME (its
+  devnodes through the helper, its INF copies, its file, the mark
+  nothing: the mark service is NT's), and the Add/Remove Programs entry,
+  whose name follows what the machine has (section 9.1); nothing of the
+  USB drivers, which the run did not install. An `xhci98.sys` already
+  installed before the run is the whole package's and goes with it, as
+  on 2000 to 7.
+- case 3: as on Vista and 7 (section 9.3, record 23 section 9.2): the
+  controllers' devnodes removed and rescanned, so Windows binds its own
+  driver again (43.29's "the controller given back", unread); Stor98 by
+  its record (section 6.3).
+
+**The 640 by 480 page.** With every row shown on every system the page
+carries the storage row everywhere, so 98 SE's layout (section 6.5.2,
+`comp_layout`) becomes the only one: the USB drivers' sentence under its
+box gives way to the storage row as on 98 SE today, and the host suite
+renders the page at its longest on each system.
+
+**The texts under the boxes** become per system: the USB drivers' box
+on 8 and 8.1 "Windows' own USB 3 driver runs the USB controllers here;
+tick this only to replace it (untested on Windows 8 and 8.1)" in place of
+"Not offered on Windows 8 and 8.1"; the storage row's sentence on ME and
+2000 to 8.1 "For Windows 98 SE only: ticked here, its files are copied to
+the tools folder, nothing is installed"; Stor98's sentence on 8 and 8.1
+gains "(untested on Windows 8 and 8.1)".
+
+**The legs** (roadmap 43.43): the page at 640 by 480 on 98 SE with every
+row shown; case 1 on ME and XP (the folder's seven, nothing in `%windir%\INF`,
+an ordinary stick on ME still bound by ME's own `USBSTOR.INF` and the
+driver key's `InfPath` and version read, whether ME's search reaches
+`<dir>\NUSB33` read; the uninstall); case 2 on 98 SE and ME (the
+connection manager alone with the helper, the emulator's host interface
+bound, the warning, the uninstall); case 3 on 8 with 43.24's VMs; the
+console's warnings and `/yes` on each.
 
 ### 5.4 The USB settings
 
@@ -979,7 +1117,9 @@ Nothing in `NONFREE\` but the seven is read.
 
 A Components row (section 5.3) shown on Windows 98 SE (4.10.2222) alone:
 never on ME, 2000 or later, not even greyed, and the engine keeps it out
-of a run on any other system (`stor_set`). Its label, "USB storage
+of a run on any other system (`stor_set`). (Draft 20, section 5.3.1:
+shown on every system; ticked on any but 98 SE it only copies the
+seven to the tools folder, and nothing else of section 6.5 runs there.) Its label, "USB storage
 drivers for Windows 98 SE (NUSB 3.3's)", and its sentence: "Windows 98 SE
 needs these files for every USB disk: Bulk-Only disks, and UAS disks
 under xhciuas.sys too (its INF names USBNTMAP.SYS as a filter; without
@@ -1403,7 +1543,9 @@ lines of their own and Enter for the default of section 6.5.3, is asked
 after the Stor98 question on 98 SE when the download carries the pack;
 `/yes` and `/defaults` take the default. `/storage` is refused on any
 other system ("the USB storage drivers are for Windows 98 SE only") and
-in an uninstall; `/nostorage` is accepted everywhere (on any other system
+in an uninstall (draft 20, section 5.3.1: accepted on every system, the
+copy to the tools folder with its warning, and still refused in an
+uninstall and without the pack); `/nostorage` is accepted everywhere (on any other system
 it changes nothing), so one script serves every target. `/list` says
 what the case is and what a run would copy. The window takes both as
 preselections (section 10).
@@ -1419,7 +1561,8 @@ INFs are never edited, and no `WININIT.INI` entry is made for the seven.
 NUSB's other files (`IOS.VXD`, `DISKTSD.VXD`, `NTMAP.SYS`) are not part
 of the pack: whether a stock 98 SE needs any of them is 43.5's reading,
 and the row's text makes no claim that it does not. On ME, 2000 and
-later nothing of this section runs.
+later nothing of this section runs (draft 20: but section 5.3.1's copy
+to the tools folder and its record, when the row is ticked there).
 
 #### 6.5.11 The silent first plug: the INFs in `%windir%\INF` (task 43.42; draft 19)
 
@@ -1928,7 +2071,10 @@ which waits.
   text at its longest within its control; (draft 19) `inst_stor_inf_set`
   (which INFs are placed in `%windir%\INF`: on the route only, and only
   where no file of the name is there) and `inst_stor_adoptable` with a
-  copy held by `Placed`.
+  copy held by `Placed`; (draft 20) `inst_comp_warnings` on every system
+  and every combination of the four boxes, `inst_comp_warn_text` at its
+  longest, `inst_usb_decide` with its refusals lifted, and the Components
+  page rendered at its longest on each system.
 
 `xhciinst\selftest.cmd` runs the four executables' `/selftest`: the
 window's renders every page with made-up devices through its own dialog
@@ -1997,6 +2143,12 @@ installer ever writes there, never into `INF\OTHER` and never through
 the engine's index), 6.4 (the storage sentence only where storage is not
 taken care of, and the empty reading's steps, section 7 here) and 9 (the
 placed INFs removed with the recorded copies).
+
+Draft 20 (task 43.43) changes record 23 by its revision 26, made with the
+code: section 4.5 (the table: the connection manager alone on 98 SE and
+ME with a warning, the USB drivers opt-in on 8 and 8.1), 7.1 (`/usb`;
+`/cmonly` on 98 SE and ME, `/storage` everywhere and `/stor98` on 8 and
+8.1, each with its warning) and decision D18 amended.
 
 Draft 11 (task 42-A.22) changes record 23 by its revision 16: section
 4.4 (Stor98 copied only with the Thunderbolt support; `xhciuas` left out
