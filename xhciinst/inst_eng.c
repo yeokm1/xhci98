@@ -19267,8 +19267,18 @@ static int silent_gate_on(void)
             continue;
         }
         any = 1;
-        if (value_now(&devs[i], instValues[v].Name, &now) <= 0 || now != 1) {
-            return 0;
+        /* Its driver key read directly: the device's Inf is -1 when the
+         * USB drivers are out of this run. */
+        {
+            char path[INST_PATH_CHARS];
+            if (devs[i].Driver[0] == '\0') {
+                return 0;
+            }
+            driver_key_path(&devs[i], path, sizeof(path));
+            if (!reg_dword(HKEY_LOCAL_MACHINE, path, instValues[v].Name,
+                           &now) || now != 1) {
+                return 0;
+            }
         }
     }
     return any;
