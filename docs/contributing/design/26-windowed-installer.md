@@ -1,6 +1,9 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 20, 2026-10-21 (roadmap-usb4 task 43.43, the owner's
+Status: draft 21, 2026-10-22 (roadmap-usb4 task 43.42, the owner's
+option A of that day: with the storage row on 98 SE the Bulk-Only
+entries added to SilentClasses and XhciSilentInstall preselected,
+section 6.5.12); draft 20, 2026-10-21 (roadmap-usb4 task 43.43, the owner's
 decisions of that day: every Components box shown and tickable on every
 system, the defaults as they are, a box ticked where it does not apply
 warned in one message box on Next and the run going on, section 5.3.1;
@@ -1419,6 +1422,10 @@ directory does, then a replug. This is a note, not a step.
   serves: the detection (section 6.5.3), a device's `InfPath` copy
   (`stor_infpath_copy`'s `recorded`), and the adoption (section 6.5.8
   step 1);
+- `Silent` (draft 21): one value per `SilentClasses` entry this installer
+  added (section 6.5.12), its name the entry's value name and its data the
+  entry's four bytes in hex, written before the entry; the uninstall
+  removes exactly those;
 - `Devices`: one value per devnode the installer first bound to the
   storage drivers (data `bulk` or `unit`). Ownership goes by first
   binding, as section 6.3 has it for Stor98: a device the baseline read
@@ -1534,6 +1541,9 @@ nothing it does not own. In section 9.3 step 4's order:
    run again)" (section 9.3), and the uninstall run after the restart
    finishes it, starting from what the record still names. No
    `WININIT.INI` entry is made.
+4a. (Draft 21) The `SilentClasses` entries the record's `Silent` names,
+   each deleted while it holds the recorded bytes (section 6.5.12),
+   whether or not NUSB is installed.
 5. The `Storage` key, its `Choice` and `PreExisting` and its subkeys,
    deleted whole with the records of section 9.3 step 6 by the run that
    finishes, as Stor98's is (`forget_dir`); an incomplete uninstall keeps
@@ -1720,6 +1730,85 @@ there and the owner chooses; the candidates are the helper running the
 setup engine's `GenInstall` over a section of an INF of this package's
 own that copies the two INFs to dirid 17 as `_NUSB.INF` does, and
 accepting the wizard with 43.5 amended.
+
+#### 6.5.12 The silent install with the storage row (task 43.42, option A; draft 21)
+
+**What the readings showed.** 43.5's first leg taken again on draft 19's
+cut (2026-10-22) still raised the Add New Hardware wizard for a new stick,
+and so did a 98 SE with NUSB 3.3 installed in full: with `USBSTOR.INF` and
+`USBNTMAP.INF` in `%windir%\INF`, a new Bulk-Only devnode behind this bus
+still brings the wizard, which finds `C:\WINDOWS\INF\USBSTOR.INF` with no
+file prompt. Under this bus a new devnode of a class with drivers installs
+with no wizard only through the driver's own silent install:
+`XhciSilentInstall` 1 and the device's interface in
+`HKLM\System\CurrentControlSet\Services\USB\SilentClasses` (design record
+13 section 6.11; the release notes, "The silent install"). The owner's
+decision (2026-10-22): option A.
+
+**What the run does**, on 98 SE when the storage row's same-bytes route is
+taken (section 6.5.4: `storCopyOk`), after the INFs' placement and its
+reading (section 6.5.11):
+
+1. **The list.** The three Bulk-Only entries of `USBSTOR.INF`'s generic
+   lines (the ids `inst_stor_kind` reads, section 6.5.5), each a 4-byte
+   `REG_BINARY` of record 13 section 6.11's form: `c3 08 02 50`,
+   `c3 08 05 50` and `c3 08 06 50` (control `0xC3`: a device the bus does
+   not split and a composite function, subclass and protocol compared;
+   the last is `src\silent.reg`'s own storage entry). Each is added to
+   `SilentClasses` only when no value there already holds those four bytes,
+   under a name of its own (`XHCI98S1`, `XHCI98S2`, ... the first not in
+   use; the driver ignores the names), never over a value of that name.
+   Each value added is first recorded under the `Storage` record's
+   `Silent` subkey (its name, and its four bytes as hex), then written; a
+   write that fails deletes the record's value and is a note. The key is
+   created when it is not there. The driver keeps 32 entries
+   (`XHCI_SILENT_MAX`); a list already full keeps its own first 32, and
+   the run says so.
+2. **The gate.** `XhciSilentInstall` is preselected 1, machine-wide, when
+   the storage row is ticked on 98 SE and no machine-wide value is set
+   (record 23 section 8.4's location; a value the user set is kept, an
+   update included). In the window the USB settings page shows the row at
+   1 (the page's own preselection, as a `/set` preselects), which the user
+   can change to 0 before Next; unticking the storage row takes the
+   preselection back. In the console the run says "XhciSilentInstall: set
+   to 1 with the USB storage drivers (/set XhciSilentInstall=0 keeps it
+   off)" in place of the question; `/yes` takes it as the window's
+   untouched page would (proposal for the owner), and `/defaults`, which
+   keeps every value, does not. A per-controller value is left as it is;
+   the machine-wide one rules (section 5.4).
+3. **The INF placement of section 6.5.11 stays**: a silent install takes
+   the class's driver from the index with no wizard, so an INF the index
+   holds is what lets it find `USBSTOR.INF` with no prompt.
+
+**The uninstall** (section 6.5.8): each value the `Silent` record names
+is deleted from `SilentClasses` when it still holds the recorded bytes, a
+changed one is left and said, and the record's value goes; the key and
+every value it did not add stay. This runs whether or not NUSB is
+installed (the entries are this installer's own). `XhciSilentInstall`
+machine-wide goes with the other machine-wide values the uninstall
+removes (section 9.3). The `Silent` subkey goes with the `Storage` key.
+
+**Not done.** The other classes of `src\silent.reg` (hubs, boot keyboards
+and mice) are not added: they are the user's choice through
+`silent-on.bat`. The storage units (`USBSTOR\GenDisk`, the "USB Disk"
+binding of `USBNTMAP.INF`) are not USB devnodes and no `SilentClasses`
+entry covers them; whether the first disk's unit installs with no wizard,
+and lands on "USB Disk" rather than "Disk drive", is the legs' reading.
+
+**Interactions.** Roadmap task 43.6 drops `XhciSilentInstall`'s
+caution ("turn it on only once each listed class's drivers have been
+installed at least once"); with the storage row the condition is met for
+the storage class by the row itself (the files in place, the INFs
+indexed), and until 43.6 is done the caution is still printed beside the
+preselection. Task 43.43's case 1 (the row elsewhere) neither adds entries
+nor preselects anything.
+
+**The legs** (43.5's first leg taken again on this draft's cut): a new
+Bulk-Only stick after the install's restart installs with no wizard, on
+a SuperSpeed and a High Speed port; a second stick; a subclass 02 or 05
+device where one is at hand; the unit's binding and whether it raises a
+wizard; `XhciSilentInstall` 0 chosen on the page leaves the wizard; the
+uninstall leaves `SilentClasses` as it found it.
 
 ## 7. Windows 98 SE and ME: the helper, and the steps page
 

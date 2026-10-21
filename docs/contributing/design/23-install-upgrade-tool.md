@@ -1,6 +1,11 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 26, 2026-10-21 (roadmap-usb4 task 43.43, record 26
+Status: revision 27, 2026-10-22 (roadmap-usb4 task 43.42, option A,
+record 26 draft 21 section 6.5.12: with the 98 SE storage row the
+Bulk-Only SilentClasses entries added and recorded, and XhciSilentInstall
+preselected 1 machine-wide where none is set - the console's question
+replaced by that preselection, section 8.3; the uninstall removes the
+entries it added, section 9); revision 26, 2026-10-21 (roadmap-usb4 task 43.43, record 26
 draft 20 section 5.3.1: every component on every system, the defaults as
 they are, a warning where one does not apply; sections 4.5 and 7.1, and
 decision D18 amended); revision 25, 2026-10-21 (roadmap-usb4 task 43.42, record 26
