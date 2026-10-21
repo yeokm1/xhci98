@@ -5165,7 +5165,8 @@ static LONG hcdCfgStaticStreams(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
     }
     if (answer != XHCI98_STREAMS_SUCCESS) {
-        hc->UsbdxStreamRefused++;
+        /* Interlocked: the dispatch counts its refusals here too. */
+        (VOID)InterlockedIncrement((PLONG)&hc->UsbdxStreamRefused);
         XhciLogNote(&hc->Hc, "usbdx.streams",
                     ((ULONG)urb->UrbHeader.Function << 24) |
                         ((answer & 0xFFUL) << 16) |

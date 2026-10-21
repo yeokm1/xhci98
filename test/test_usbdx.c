@@ -363,7 +363,8 @@ static void test_fill(void)
         CHECK_EQ(get32(urb + 0x28 + i * 0x14 + 0x10), 0,
                  "x86 cfg PipeFlags left 0");
     }
-    CHECK_EQ(get32(urb + 0x1C), 0, "x86 cfg InterfaceHandle left 0");
+    CHECK_EQ(get32(urb + 0x1C), 0, "x86 cfg class bytes left 0");
+    CHECK_EQ(get32(urb + 0x20), 0, "x86 cfg InterfaceHandle left 0");
     CHECK_EQ(get32(urb + 0x10), 0, "x86 cfg ConfigurationDescriptor left 0");
 
     /* amd64, SELECT_CONFIGURATION, two interfaces: number 0 with no pipes

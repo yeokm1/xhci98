@@ -701,6 +701,9 @@ static ULONG hcdUnreadable(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     return 1;
 }
 
+static NTSTATUS hcdStaticStreamsUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                    PIRP irp, PURB urb, ULONG function);
+
 static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                              PIRP irp, PURB urb)
 {
