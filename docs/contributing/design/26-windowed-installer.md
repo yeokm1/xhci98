@@ -576,10 +576,11 @@ under the rows 20 dialog units tall, two lines.
   narrower than the closed box, and never wider than the work area
   (`SPI_GETWORKAREA`), where the placing of a list near the screen's
   edge is USER's. The self-test holds every entry the table and
-  Stor98's rows offer within the closed box's text room (the box less
-  its frame and its arrow) at the template's size, so with the shipped
-  texts the open list is the closed box's width and nothing is placed
-  past the box; the measured width is the guard for an entry a later
+  Stor98's rows offer within the closed box's width less the very
+  allowance the open list adds (the frame, the scroll bar and the
+  4 dialog units), so the open list's width before any cap is the
+  closed box's, which it checks too: with the shipped texts nothing is
+  placed past the box; the measured width is the guard for an entry a later
   change makes longer, and a drivers' row's note names each choice
   whole as well. The same on Stor98's page and on the Advanced
   dialogs' choice, whose closed box is widened to the dialog's right
