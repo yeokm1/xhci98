@@ -1,6 +1,10 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 27, 2026-10-22 (roadmap-usb4 task 43.42, option A,
+Status: revision 29, 2026-10-22 (roadmap-usb4 task 43.42, the owner:
+the storage row does not preselect XhciSilentInstall, section 8.4);
+revision 28, 2026-10-22 (roadmap-usb4 task 43.43, the owner: on
+8 and 8.1 a package without the connection manager warned, not refused,
+section 4.5); revision 27, 2026-10-22 (roadmap-usb4 task 43.42, option A,
 record 26 draft 21 section 6.5.12: with the 98 SE storage row the
 Bulk-Only SilentClasses entries added and recorded, and XhciSilentInstall
 preselected 1 machine-wide where none is set - the console's question
@@ -787,8 +791,10 @@ tunnel brings are driven by whatever driver Windows binds to them.
 the owner's decision of 2026-10-21: every component on every system,
 the defaults as they are, a warning where one does not apply.) The table
 becomes, with `inst_usb_decide` refusing nothing but a `/cmonly` with no
-connection manager in the package, `/usb` with `/cmonly`, and a package
-without the connection manager on 8 and 8.1:
+connection manager in the package and `/usb` with `/cmonly` (revision 28,
+owner 2026-10-22: a package without the connection manager on 8 and 8.1
+is no longer refused; the run warns, record 26 section 5.3.1 case 5, and
+goes on with the USB drivers' box and the tools):
 
 | System | The USB drivers | `/cmonly` |
 |---|---|---|
@@ -1982,11 +1988,9 @@ controller's driver key, as `silent-on.bat` does; a list that cannot be
 read or does not read back leaves the switch unchanged (exit 2). Off (an
 explicit 0 when the switch is on) writes the switch at 0 and leaves the
 list, as `silent-off.bat` does. Enter keeps the state; the default answer
-is off. (Revision 27, record 26 section 6.5.12) The one exception is the
-98 SE storage row's preselection of 1, written machine-wide where no
-machine-wide value is set and nothing explicit was chosen: it merges no
-`SILENT.REG` line, the row adding its own Bulk-Only entries to the list
-under its record instead; an explicit 1 still merges the whole list.
+is off. (Revision 29, record 26 section 6.5.12) The 98 SE storage row
+adds its own Bulk-Only entries to the list under its record and does
+not turn the switch on: it stays the user's, as above.
 
 ### 8.5 The Thunderbolt 3 / USB4 question (owner, 2026-10-15)
 

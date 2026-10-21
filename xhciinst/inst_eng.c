@@ -467,7 +467,7 @@ static void stor_tools_copy(void);
 static int stor_tools_remove(void);
 static void stor_silent_merge(void);
 static int stor_silent_remove(void);
-static int silentDeclined;  /* the window's explicit 0 (section 6.5.12) */
+static int silent_gate_on(void);
 static int controller_listed(void);
 static int stor_un_devices(void);
 static int stor_un_adopt(int record);
@@ -2524,16 +2524,7 @@ static void ask_values(void)
             answerValue[v] = chosenValue[v];
         }
     }
-    /* The console's preselection with the storage row (record 26 section
-     * 6.5.12); the window's page carries its own. */
-    v = inst_value_find("XhciSilentInstall");
-    if (v >= 0 && v < INST_MAX_VALUES && !answerSet[v] && !silentDeclined &&
-        !opts.Defaults && inst_eng_stor_silent_pre()) {
-        answerSet[v] = 1;
-        answerValue[v] = 1;
-        logonly("storage: XhciSilentInstall preselected\n");
-        answerChosen[v] = 2;
-    }
+
     for (v = 0; v < instValueCount && v < INST_MAX_VALUES; v++) {
         INST_U32 m = inst_value_asked_mask(v, &envNow);
         INST_U32 def;
@@ -2547,8 +2538,6 @@ static void ask_values(void)
         if (answerSet[v]) {
             out("%s: set to %lu %s%s.\n", instValues[v].Name,
                 (unsigned long)answerValue[v],
-                answerChosen[v] == 2 ? "with the USB storage drivers (/set "
-                "XhciSilentInstall=0\nkeeps it off)" :
                 answerChosen[v] ? "on the settings page" : "by /set",
                 targets ? "" : " (machine-wide: no device takes it now)");
             set_caution(v, answerValue[v]);
@@ -2812,17 +2801,7 @@ static int value_needs_write(int v)
         value_inf(v) == NULL) {
         return 0;
     }
-    /* The storage row's preselection (record 26 section 6.5.12): only
-     * when its route was taken, and written machine-wide where none is
-     * set, whatever the controllers' own values. */
-    if (answerChosen[v] == 2) {
-        if (!storCopyOk) {
-            logonly("storage: XhciSilentInstall not written, the route not "
-                    "taken\n");
-            return 0;
-        }
-        return mw_value(v, &mwv) == 0;
-    }
+
     inst_value_default(v, value_inf(v), &def);
     value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew);
     mw = mw_value(v, &mwv);
@@ -2870,11 +2849,7 @@ static void write_values(void)
             if (envNow.Nt) {
                 continue;
             }
-            /* The storage row's preselection (answerChosen 2) merges
-             * no SILENT.REG line: the row adds its own entries (record 26
-             * section 6.5.12). */
-            if (answerValue[v] == 1 && answerChosen[v] != 2 &&
-                !silent_list_merge()) {
+            if (answerValue[v] == 1 && !silent_list_merge()) {
                 flagFailed = 1;
                 continue;
             }
@@ -18318,6 +18293,11 @@ static void stor_run_end(void)
                 toolDir);
         }
     }
+    if (storCopyOk && !opts.List && !silent_gate_on()) {
+        out("\nUSB storage: Windows' wizard still opens for each new USB disk "
+            "unless the silent\ninstall (XhciSilentInstall) is turned on in "
+            "the USB settings.\n");
+    }
     if (storInfPlaced && !opts.List) {
         out("\nUSB storage: if Windows asks for a file such as USBSTOR.SYS "
             "when a USB disk is\nfirst plugged in, type %s.\n", toolDir);
@@ -19262,6 +19242,22 @@ static int stor_tools_remove(void)
 /* ---- the silent install with the storage row (record 26 section 6.5.12,
  * task 43.42 option A) ------------------------------------------------- */
 
+/* 1 when XhciSilentInstall is on after this run: machine-wide, or written
+ * 1 by it. */
+static int silent_gate_on(void)
+{
+    int v = inst_value_find("XhciSilentInstall");
+    DWORD mwv = 0;
+
+    if (v < 0 || v >= INST_MAX_VALUES) {
+        return 0;
+    }
+    if (answerSet[v]) {
+        return answerValue[v] == 1;
+    }
+    return mw_value(v, &mwv) > 0 && mwv == 1;
+}
+
 static int silent_taken(const char *name, void *ctx)
 {
     HKEY k = (HKEY)ctx;
@@ -19473,24 +19469,6 @@ static int stor_silent_remove(void)
         RegCloseKey(k);
     }
     return !flagFailed;
-}
-
-/* The window's 0 chosen on the USB page over the preselection: the user's
- * own, so the preselection is not written. */
-void inst_eng_silent_decline(int declined)
-{
-    silentDeclined = declined ? 1 : 0;
-}
-
-/* The gate's preselection (section 6.5.12): the storage row on 98 SE with
- * its pack, and no machine-wide XhciSilentInstall set. */
-int inst_eng_stor_silent_pre(void)
-{
-    int v = inst_value_find("XhciSilentInstall");
-    DWORD mwv;
-
-    return v >= 0 && storHere && storInclude && storPack > 0 && stor_98se() &&
-           usbInclude && mw_value(v, &mwv) == 0;
 }
 
 /* ---- the window's (record 26 section 5.3) ------------------------------- */

@@ -167,9 +167,6 @@ static char dirNow[WIZ_PATH];
 /* The settings chosen on the pages and in Advanced (record 26 section
  * 5.4): set, and the value; handed to the engine at Install. */
 static int choiceSet[INST_MAX_VALUES];
-static int silentAuto;      /* choiceSet of XhciSilentInstall is the storage
-                               row's preselection (record 26 6.5.12)      */
-static int silentExplicit;  /* the user changed that row on the page      */
 
 /* A choice whose driver is in the run as the components stand: a value of
  * the USB drivers' INFs only with them ticked, the connection manager's
@@ -459,12 +456,6 @@ static unsigned __stdcall job_main(void *arg)
                     opts->SetIndex[i] < INST_MAX_VALUES) {
                     choiceSet[opts->SetIndex[i]] = 1;
                     choiceVal[opts->SetIndex[i]] = opts->SetValue[i];
-                    /* A /set of the gate is the user's own (record 26
-                     * section 6.5.12). */
-                    if (opts->SetIndex[i] ==
-                        inst_value_find("XhciSilentInstall")) {
-                        silentExplicit = 1;
-                    }
                 }
             }
         }
@@ -475,17 +466,9 @@ static unsigned __stdcall job_main(void *arg)
         inst_copy(opts->To, dirChoice, sizeof(opts->To));
         opts->NoTray = !trayChoice;
         opts->SetCount = 0;
-        {
-            int sv = inst_value_find("XhciSilentInstall");
-            for (i = 0; i < INST_MAX_VALUES; i++) {
-                /* The storage row's preselection is the engine's own
-                 * write (no SILENT.REG merge): not passed as a choice. */
-                inst_eng_choose_value(i, choiceSet[i] && choice_live(i) &&
-                                      !(i == sv && silentAuto),
-                                      choiceVal[i]);
-            }
-            inst_eng_silent_decline(silentExplicit && sv >= 0 &&
-                                    !(choiceSet[sv] && choiceVal[sv] == 1));
+        for (i = 0; i < INST_MAX_VALUES; i++) {
+            inst_eng_choose_value(i, choiceSet[i] && choice_live(i),
+                                  choiceVal[i]);
         }
         for (i = 0; i < INST_S98_COUNT; i++) {
             inst_eng_s98_choose_value(i, s98Choice && s98WinSet[i],
@@ -1063,25 +1046,6 @@ static int comp_leave(HWND dlg)
         storChoice = stor;
         replan();
     }
-    /* With the storage row on 98 SE, XhciSilentInstall starts at 1 on the
-     * USB page where no machine-wide value is set (record 26 section
-     * 6.5.12); the page can set 0, and unticking the row takes the
-     * preselection back. */
-    {
-        int sv = inst_value_find("XhciSilentInstall");
-        if (sv >= 0 && sv < INST_MAX_VALUES) {
-            if (inst_eng_stor_silent_pre()) {
-                if (!silentExplicit) {
-                    choiceSet[sv] = 1;
-                    choiceVal[sv] = 1;
-                    silentAuto = 1;
-                }
-            } else if (silentAuto) {
-                choiceSet[sv] = 0;
-                silentAuto = 0;
-            }
-        }
-    }
     return 1;
 }
 
@@ -1532,7 +1496,6 @@ static int settings_leave(HWND dlg, int page)
         if (instValues[r->Value].Hi != 0) {
             GetWindowTextA(rp->R[i].Choice, typed, sizeof(typed));
         }
-        v = 1;
         if (row_read(&rp->R[i], &v)) {
             choiceSet[r->Value] = 1;
             choiceVal[r->Value] = v;
@@ -1549,22 +1512,6 @@ static int settings_leave(HWND dlg, int page)
             return 0;
         } else {
             choiceSet[r->Value] = 0;
-        }
-        /* The storage row's preselection left at 1 stays the engine's;
-         * any other value the user chose there is the user's own (record
-         * 26 section 6.5.12). */
-        if (r->Value == inst_value_find("XhciSilentInstall")) {
-            if (silentAuto && v != 1) {
-                silentAuto = 0;
-                silentExplicit = 1;
-            } else if (silentAuto) {
-                choiceSet[r->Value] = 1;
-                choiceVal[r->Value] = 1;
-            } else if (choiceSet[r->Value]) {
-                /* A change made before any preselection is the user's
-                 * too, and survives the storage row ticked later. */
-                silentExplicit = 1;
-            }
         }
     }
     return 1;

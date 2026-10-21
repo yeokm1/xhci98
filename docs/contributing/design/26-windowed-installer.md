@@ -1,6 +1,11 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 21, 2026-10-22 (roadmap-usb4 task 43.42, the owner's
+Status: draft 23, 2026-10-22 (roadmap-usb4 task 43.42, the owner: no
+preselection of XhciSilentInstall, section 6.5.12 item 2; record 23
+revision 29); draft 22, 2026-10-22 (roadmap-usb4 task 43.43, the owner's
+answers of that day: every proposal of section 5.3.1 accepted but the
+refusal of a package without the connection manager on 8 and 8.1, which
+becomes case 5's warning; record 23 revision 28); draft 21, 2026-10-22 (roadmap-usb4 task 43.42, the owner's
 option A of that day: with the storage row on 98 SE the Bulk-Only
 entries added to SilentClasses and XhciSilentInstall preselected,
 section 6.5.12); draft 20, 2026-10-21 (roadmap-usb4 task 43.43, the owner's
@@ -503,10 +508,8 @@ is then all the run installs), Stor98's box a child of the Thunderbolt
 box, and a box greyed because the package or the download lacks its files
 (the Thunderbolt support, Stor98, the storage pack, section 6.5.1; the
 USB drivers' box can be unticked only where the package carries the
-connection manager, since without it a run would install nothing; and on
-8 and 8.1 a package without the connection manager is still refused at
-the Welcome page, as record 23 section 4.5 has it, a refusal of the
-package rather than of a box - proposal for the owner). The
+connection manager, since without it a run would install nothing - but
+on 8 and 8.1, where unticked is their default, case 5 below). The
 tray box follows the package (`XHCITR` for this architecture), as
 before. A box shown greyed for a missing file is not one the system
 gates, and stays as it is (proposal for the owner).
@@ -522,6 +525,7 @@ words):
 | 2 | the USB drivers unticked on 98 SE or ME | the connection manager installed alone, as on 2000 to 7 (record 23 section 4.5, amended): `xhci98.inf` and `xhciuas.inf` out of the run, the Thunderbolt support in it; on these two systems through the helper (record 27 section 6 step 5), and the local copy on `DevicePath` made without `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`, as `/nouas` already leaves the UAS pair out of it, so no hardware wizard can offer them; an `xhci98.sys` already installed stays as it is (record 23 section 4.5) | "Without the xHCI98 USB drivers, Windows 98 SE and ME have no driver of their own for a USB 3 controller: an xHCI controller with no other driver installed, a dock's included, stays without one, and the USB devices on it do not work. Only the Thunderbolt 3 / USB4 connection manager is installed; xHCI98 USB drivers already installed stay as they are. This has not been tested on Windows 98 SE or ME." |
 | 3a | the USB drivers ticked on 8 or 8.1 | `xhci98.sys` and, with its box, `xhciuas.sys` installed through the NT route of record 23 section 5 (`Xhci.Dev6`), taking roadmap task 43.29's row; and, the one narrow exception to record 23 decision D3 (amended, revision 26), a controller whose service is Windows' own `USBXHCI` is not "another driver" here: with the box ticked it is planned as an install and installed with `INSTALLFLAG_FORCE` (Windows' signed in-box driver otherwise outranks this package's INF), as the user chose; every other vendor's driver on a controller stays foreign and left, as before; such a controller is this package's from then on, and the uninstall removes its devnode and rescans (record 23 section 9.2), after which Windows is expected to bind `usbxhci.sys` again (43.29's "the controller given back", unread until 43.31) | "The xHCI98 USB drivers have not been tested on Windows 8 or 8.1. They replace Windows' own USB 3 driver on every xHCI controller, the one your keyboard and mouse may use included. The uninstall is meant to give the controllers back to Windows' own driver; that has not been tested either." |
 | 3b | Stor98 ticked on 8 or 8.1 | the bundled Stor98 on tunnel drives as on 2000 to 7 (section 6.3), taking roadmap task 43.23's installer row; the same narrow exception as 3a for Windows' own NVMe driver: on 8.1 a tunnel drive whose service is `stornvme` is installed over with `INSTALLFLAG_FORCE` when the box is ticked, and becomes Stor98's by section 6.3's record (its first binding by this installer); the replacement goes through section 6.3's reconnection rules as an update of a drive Stor98 runs does - the tunnel may be torn down and brought back when the drive's driver changes (the connection manager's child filter sees the removal whatever storage driver ran), so a drive gone after its job is "installed, awaiting reconnection", its read-back deferred to the reconnection (`s98_reconnect_nt`, which then admits a baseline of `stornvme` beside Stor98's own), and its ownership recorded when it is read back running Stor98; because that read-back may come only in a later run (a skipped or timed-out reconnection wait, a run cut short), the drive's id is written under the `Stor98` record's `Pending` subkey with the data `attempt` before its job starts, rewritten `done` once the install call returns success for it, and deleted when the call fails or is cancelled; every later install run and the uninstall resolve each pending id first: a `done` drive read back running Stor98 moves to the record's devices as this installer's (its first binding, evidenced by the call's success); a `done` drive not present stays pending, and the uninstall takes it when its `Enum` entry names Stor98; an `attempt` drive (a run cut short during the call, its outcome unknown) is never taken: read back running Stor98, its value is kept as `unknown`, a durable exclusion that the uninstall's adoption of tunnel drives (section 6.3) honours too, so that Stor98 stays as anyone's; the `attempt` value must be written before the call is made, and a write that fails leaves the drive's group unchanged; a `done` value moves to the devices only once the devices' value is written; a drive read back running another driver, or gone with no `Enum` entry, has its pending value deleted; an internal drive, and a drive another vendor's driver runs, are left as before; the uninstall removes Stor98 from it and rescans, Windows then expected to bind `stornvme` again, unread until 43.24, whose legs gain the `stornvme` replacement, its reconnection, a replug, and the wait skipped, timed out and cut short with the next run and the uninstall resolving the pending drive | "Stor98 has not been tested on Windows 8 or 8.1. If a drive behind a Thunderbolt or USB4 tunnel uses Windows' own NVMe driver, this choice replaces it." |
+| 5 | a package without the connection manager on 8 or 8.1 (owner, 2026-10-22, in place of draft 20's refusal) | the run goes on with what the package has: the USB drivers' box, tickable and unticked by default (case 3a's warning when ticked), and the tools; Stor98, a child of the Thunderbolt support, is not in the run; with nothing ticked the run installs the tools alone | "This package carries no Thunderbolt 3 / USB4 driver. On Windows 8 and 8.1 it installs only what is ticked: the xHCI98 tools, and the xHCI98 USB drivers if their box is ticked." |
 
 Case 3's defaults: on 8 and 8.1 both boxes are shown unticked, as the
 USB drivers' box was; Stor98's box, which elsewhere is ticked with the
@@ -1766,32 +1770,19 @@ reading (section 6.5.11):
    created when it is not there. The driver keeps 32 entries
    (`XHCI_SILENT_MAX`); a list already full keeps its own first 32, and
    the run says so.
-2. **The gate.** `XhciSilentInstall` is preselected 1, machine-wide, when
-   the storage row is ticked on 98 SE, the USB drivers are in the run (the
-   value is `xhci98.sys`'s; with them out, section 5.3.1 case 2, there is
-   no gate to set and only the list is added), and no machine-wide value
-   is set (record 23 section 8.4's location; a value the user set is kept,
-   an update included). **The preselection is the engine's own**, written
-   machine-wide in the run whatever page is shown, and it is the one
-   write of `XhciSilentInstall` 1 that does **not** merge the whole
-   `SILENT.REG` list (record 23 section 8.4's `silent_list_merge`, which
-   an explicit 1 - the page's choice of the user's own, `/set`,
-   `silent-on.bat` - still does): only the storage entries of item 1 are
-   added. **An explicit choice overrides it**: `/set XhciSilentInstall=0`
-   or `=1`, `/defaults` (which keeps every value), and in the window the
-   USB settings page's row, which starts at 1 as the preselection; a 0
-   chosen there is remembered as the user's own (`inst_eng_silent_decline`)
-   across Back, the plan made again and the storage row ticked again, and
-   the preselection is then not written. Unticking the storage row takes
-   the preselection back; a 1 the user chose stays the user's. Where the
-   row is not on the page (no controller present yet), the preselection
-   applies as in the console. In the console the run says
-   "XhciSilentInstall: set to 1 with the USB storage drivers (/set
-   XhciSilentInstall=0 keeps it off)" in place of the question, and `/yes`
-   takes it as the window's untouched page does (owner, 2026-10-22, the
-   proposals of option A accepted). A per-controller value is left as it
-   is; the machine-wide one rules (section 5.4). Record 23 section 8.4 is
-   amended so (revision 27).
+2. **The gate is the user's** (owner, 2026-10-22, in place of draft 21's
+   preselection): `XhciSilentInstall` is not turned on by the row and
+   stays as it is unless the user picks it - on the USB settings page,
+   by the console's question or by `/set` - and an explicit 1 still
+   merges the whole `SILENT.REG` list as record 23 section 8.4 says.
+   With the gate off, the entries the row added change nothing and a
+   new stick raises the wizard as before; with it on, they are what
+   lets a Bulk-Only device install with no wizard (the legs' reading).
+   When the run took the route and the gate is not on afterwards, the
+   Finish page and the console's end say once: "USB storage: Windows'
+   wizard still opens for each new USB disk unless the silent install
+   (XhciSilentInstall) is turned on in the USB settings." (a note, not a
+   step).
 3. **The INF placement of section 6.5.11 stays**: a silent install is
    expected to take the class's driver from the index with no wizard, so
    an INF the index holds is expected to let it find `USBSTOR.INF` with no
@@ -1822,9 +1813,9 @@ caution ("turn it on only once each listed class's drivers have been
 installed at least once"); the storage row is meant to supply that
 condition for the storage class itself (the files in place, the INFs
 placed for the index; whether they are indexed, and the first plug, are
-the legs' readings), and until 43.6 is done the caution is still printed beside the
-preselection. Task 43.43's case 1 (the row elsewhere) neither adds entries
-nor preselects anything.
+the legs' readings), and until 43.6 is done the caution is still printed
+when the user turns the gate on. Task 43.43's case 1 (the row elsewhere)
+adds no entries.
 
 **The legs** (43.5's first leg taken again on this draft's cut): a new
 Bulk-Only stick after the install's restart installs with no wizard, on
