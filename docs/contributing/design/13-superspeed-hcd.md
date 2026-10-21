@@ -3296,6 +3296,17 @@ the strings and their callers in 8's `usbui.dll` and the shell
    staging `xhci98.inf` where it would become the only match, or say so in
    the note.
 
+Owner, 2026-10-22: (1) and (2) `xhciuas.inf` is not forced on 8 and
+8.1; instead the bus answers Windows 8's newer client contract - the
+`0x602` `GUID_USBD_INTERFACE_V1` interface, the capability query
+`0x49104B` and stream allocation - so that Windows' own `uaspstor` runs a
+UAS disk at SuperSpeed, a disk first plugged in after the install
+included. This reverses the recommendations of questions 1 and 2 above;
+what the contract needs beyond them (6.12.3, 6.12.4: UCX's allocator
+interface among them) is 43.30's design to settle. (3) `0x220FB3` is
+served as `RESET_PORT`. (4) The three Fresco Logic ids are noted only;
+43.29's install does not change what it stages for them.
+
 ## 7. The Windows 98 export evidence (task 25.3)
 
 The miniport imported almost nothing because `usbport.sys` did the work; the
