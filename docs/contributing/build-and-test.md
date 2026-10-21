@@ -6639,7 +6639,8 @@ Not in the table, and written by no INF on purpose:
 
 - the `qemu` flavour's test hooks, compiled into no other flavour:
   `XhciQemuInject`, `XhciQemuStartHold`, `XhciQemuMapGrant`,
-  `XhciQemuBigRefuse`, `XhciQemuPsiE460`, `XhciQemuNoInterrupt`,
+  `XhciQemuBigRefuse`, `XhciQemuIsoRing`, `XhciQemuPsiE460`,
+  `XhciQemuNoInterrupt`,
   `XhciQemuPinUnreadable`, `XhciQemuDeadLine`, `XhciQemuMsgConnectFail`,
   `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`, `XhciQemuTmrDelayMs`,
   `XhciQemuSuspHoldDx`, and `xhcihlpr.sys`'s `XhciHlprInject` (its service
@@ -6951,6 +6952,17 @@ the blocks to the allocation. The log ring notes `qemu.bigrefuse`;
 `XHCISNAP`'s "stage 2" section counts the blocks built and refused, the
 one-TD URBs, the largest TD and the TDs of exactly 256, 257, 512 and 513
 TRBs. A change takes effect at the next start.
+
+**`XhciQemuIsoRing`** (roadmap-usb4 tasks 43.38 to 43.41, design record 13 section
+11.8, point 2; qemu flavour only, written by no INF). A REG_DWORD read at
+every start: 1 makes every isochronous pipe that is not zero-bandwidth a
+candidate for a ring page, so QEMU's Full Speed `usb-audio` reaches one;
+anything else leaves the candidates to the rule (serviced more than once
+a frame). The event budget still decides. The log ring notes
+`qemu.isoring`, `iso.page` at each grant or refusal and `iso.page.free` at
+each return; the qemu trace prints `iso pages built`, `iso pages refused -
+budget`, `iso budget counted`, `iso page largest request TRBs` and
+`iso BEI TDs` as they change. A change takes effect at the next start.
 
 **`XhciWideMap`** (roadmap-hcd task 36.24, design record 13 section 11.6;
 every flavour, not only qemu). A REG_DWORD in the controller's key, read at
