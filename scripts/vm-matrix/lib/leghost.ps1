@@ -206,6 +206,7 @@ function Invoke-LegHostStep {
                 $keys++
                 Save-LegShot $QmpPort $Dir "$Tag-stor-$keys"
             }
+            if ($Process.HasExited) { return "${Step}: QEMU ended after $keys pages (the leg's checks decide)" }
             Save-LegShot $QmpPort $Dir "$Tag-stor-end"
             return "${Step}: FAILED, the wizard was still up after $keys pages"
         }
