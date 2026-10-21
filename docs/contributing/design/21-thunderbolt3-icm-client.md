@@ -1385,27 +1385,48 @@ router space at the route, then ROUTER_CS_0 to 4, five DWs, and
   the firmware holds configuration requests while it announces (about
   580 ms, 2.77 s under BIOS Assist with a pre-boot device [obs] section
   5.5's paragraph on held requests); the read is made only after the
-  host-router poll, which waited out that hold, and its timeout covers
-  it in any case.
+  host-router poll, which waited out that hold; a read that met a hold
+  still on would time out and leave the generation not known.
 - **When.** Never in an event's path and never in a wait: a new entry
   (a new occupancy, section 5.3's last case) is marked "version owed",
   and the next idle poll (`TbtIcmPoll`) makes the read before it takes
   any frame, so the actions of the poll that created the entry have
-  already been drained (section 6.5) and an approve or a tunnel-up
-  sequence never waits behind it. One read per poll, the oldest owed
-  entry first; the client counts itself in a wait for its duration
-  (section 5.2), so a re-entrant command is refused. A read is owed
-  only by an entry with a route; not on a failed or stopped instance,
-  in a resume, a recovery or a rediscovery.
-- **Timeout and retry.** One attempt, bounded by the command timeout
-  (`XhciCmCmdTimeoutMs`, 5 s by default, the value Linux's control
-  channel takes under the ICM, `ICM_TIMEOUT`), with no retry: a read
-  that answers comes in milliseconds [obs], and its value is
-  informational, so a timeout is cheaper to report as "not known" than
-  to retry at the cost of the thread. That is inside section 5.5's
-  per-command bound and outside the resume budget of section 5.6 (no
-  read runs in a resume). The liveness monitor's gate (section 5.5)
-  ends the wait at once on a lost host interface.
+  already been drained (section 6.5) and never wait behind it. An
+  announcement already on the RX ring, or arriving during the read, is
+  queued as in any wait (section 5.2) and handled after the read: its
+  route request and approve wait at most the read's bound below, which
+  is well inside the 9.4 s a USB4 device waits for its approve on the
+  P14s before it falls back to USB (section 5.4) - and at most once per
+  ring session, since a read that goes unanswered stops the reads (the
+  stale answer, below). One read per poll, the oldest owed entry
+  first; the client counts itself in a wait for its duration, so a
+  re-entrant command is refused. A read is owed only by an entry with a
+  route; none is made on a failed or stopped instance, nor inside a
+  resume, a recovery or a rediscovery.
+- **Timeout and retry.** One attempt, bounded by its own 1 s
+  (`TBT_ICM_VERSION_TIMEOUT_MS`), not the command timeout, with no
+  retry: a read that answers comes in milliseconds [obs] (85 requests
+  in 13 ms), and its value is informational, so a timeout is cheaper to
+  report as "not known" than to retry, or to wait longer, at the cost of
+  the thread and of an approve queued behind it. That is inside section
+  5.5's per-command bound and outside the resume budget of section 5.6
+  (no read runs in a resume). A liveness gate already closed, or
+  revoked from another context, ends the wait at once; otherwise a host
+  interface lost during the read is seen at the thread's next sample
+  (section 5.5) and the read's own bound is what it costs.
+- **The stale answer.** A Read Response is matched by its route and the
+  echo of Address, Size, CS and a Sequence Number of two bits
+  (`tbt_ring.c`); nothing in it names the occupancy. A read that was
+  sent and not answered (a timeout, or a request published and not seen
+  consumed) may still be answered later, and after a replacement at the
+  same route and three more requests that late answer would match a new
+  read of the same header and be taken for the new router's. So the
+  first unanswered read stops the reads until the rings restart (a
+  resume, a full recovery, a new bind: a restarted ring delivers
+  nothing of an earlier request, section 5.6), and every occupancy
+  owed a read meanwhile stays "not known" and is read after the
+  restart. A request-error notification is an answer and stops
+  nothing.
 - **What is kept.** The fifth DW's bits 31:24, the USB4 Version, by its
   major alone (design record 22 section 3.5, `TbtHwRouterVersion`): a
   major of 1 or 2 is USB4 with the byte kept, and the entry carries
@@ -1433,6 +1454,17 @@ router space at the route, then ROUTER_CS_0 to 4, five DWs, and
   occupancy, and the new one is read afresh. An answer that lands after
   its entry left, or after the slot was taken by another occupancy, is
   discarded.
+- **What has been verified, and where.** The host vectors (section
+  10.1) exercise the client against the read and the selection of the
+  hosts that make it. No virtual-machine leg exercises it: the
+  emulator's firmware-connection-manager models are Alpine Ridge and
+  Titan Ridge (`usb4-emu` `src/qemu/hw/usb4/usb4-host.c`, its profile
+  selector), it has no Ice Lake class or Maple Ridge model, and a leg
+  on either of the two exercises only that this driver still reads
+  nothing there. An emulator model of an integrated or Maple Ridge
+  ICM is the prerequisite of such a leg, asked of its maintainer
+  through the owner; until then the evidence is the owner's Framework
+  13 with the ORICO enclosure, which must read USB4 Version major 1.
 - **The USB3 tunnel stays "not known".** The record's USB3 field on
   these hosts is not filled from this read. ROUTER_CS_5's USB3
   Tunneling On is a bit the connection manager sets to let the router's
@@ -4547,7 +4579,9 @@ vectors):
   on the Thunderbolt 3 rows, one per occupancy on the others at the next
   idle poll and none on a refresh, a USB4 major 1 and 2, a major 0, a
   reserved major, a header that is not the route's, no answer, a
-  request-error notification, and a disconnect during the read - with
+  request-error notification, a disconnect during the read, an
+  announcement arriving during an unanswered read, and the reads stopped
+  by an unanswered one until the rings restart - with
   the status record's generation for each (`test_cm_status`);
 - selection and hardware profiles (`test_tbt_hw`), pure (section 1.4.2),
   as a table of register readings to
