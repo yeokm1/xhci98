@@ -1111,10 +1111,19 @@ binary found not in place - the install directory is taken off
 `DevicePath` before the package's copy is attempted, so before any of
 its steps that can fail (`devicepath_update` without it); in the same
 step (draft 19) every INF this installer placed in `%windir%\INF`
-(the record's `Placed`, section 6.5.11) whose bytes are still the
-recorded ones is deleted with its `.PNF`, and a placed copy that
-cannot be deleted stops the run there, as a `DevicePath` that cannot
-be written does; only the package's copy made without the seven puts
+(the record's `Placed`, section 6.5.11) is deleted with its `.PNF` by
+section 6.5.8 step 3's protections: only while its bytes are still the
+recorded ones, NUSB's `USB20U` is absent and no driver key, present or
+not, names it by its `InfPath`. One whose bytes changed, or with
+`USB20U` present (NUSB lays the same INF there, so it may be NUSB's
+now), is left and relinquished: its `Placed` value goes, and it is
+never this installer's again. One a driver key names is left and stays
+recorded, said in the log, for the uninstall to remove after its
+devices (step 3 again); it stays published, which is the residual
+above for the copies the setup engine makes, unchanged. A reading
+that fails, or a placed copy that cannot be deleted, stops the run
+there, as a `DevicePath` that cannot be written does; only the
+package's copy made without the seven puts
 the directory back on `DevicePath`; a copy that fails
 leaves the directory off `DevicePath`, the run saying to run the
 installer again, so the pack is never left published over a file it
@@ -1223,7 +1232,8 @@ directory does, then a replug. This is a note, not a step.
   per copy by its path, and `BeforeOk` 1 once that list is whole; written
   once, before that run's first copy (section 6.5.8 step 1);
 - `Published` (`REG_DWORD`, draft 18): 1 once a run's package copy with
-  the seven was made and `DevicePath` named it; never cleared (a later
+  the seven was made and `DevicePath` named it, or (draft 19) once a run
+  placed one of the INFs in `%windir%\INF` (section 6.5.11); never cleared (a later
   withdrawal included), deleted only with the record. The uninstall's
   adoption rests on it (section 6.5.8 step 1);
 - `Source` (`REG_DWORD`): 1 once a run has made the package's copy with
@@ -1354,8 +1364,8 @@ nothing it does not own. In section 9.3 step 4's order:
    `.PNF`; they have no `OEM Name` value, so none is touched for them.
    NUSB's own uninstall deletes an INF of its from `%windir%\INF` the same
    way, by name (static: `_USB2UN.INF`'s `DelFiles` of `USB2.INF` from
-   dirid 17), and the setup engine's index then holds an entry for a file
-   that is gone, as after NUSB's.
+   dirid 17); what the setup engine's index holds after such a deletion
+   is the engine's own and is not read here.
 4. **The recorded files**, last: each deleted only when its bytes are
    still the recorded hash, `USB20U` is absent (NUSB lays the same bytes
    over them, so the hash cannot tell whose they are; `inst_stor_remove`,
@@ -1449,14 +1459,17 @@ section 4's row "NUSB 3.3's installer: how it places its INFs"):
   program", `MSCAT32.DLL`, `CryptCATAdminAddCatalog`) that neither the
   run command nor the INF names.
 
-So NUSB's installer does not rebuild the driver database itself: it
-places the INFs in the INF directory and leaves its index to the setup
-engine. That the engine takes an INF placed in that directory into its
-index by itself is what NUSB's silent first plug rests on; it is the
-engine's behaviour, not a step of NUSB's, and it is read again here (the
-legs below). "The driver database rebuilt as NUSB's own installer does"
-is therefore the same placement, the engine's own update of its index,
-and a restart at the end of the run.
+So no explicit index-rebuild step was found in NUSB's installer: it
+places the INFs in the INF directory through the setup engine's own INF
+install, and nothing of it names the index. What ADVPACK and the setup
+engine do inside that install beyond copying the files, and how the
+engine's index comes to hold the INFs, are not established by this
+reading. That the engine takes an INF placed in that directory into its
+index by itself is the inference NUSB's silent first plug suggests, and
+it is read here (the legs below). "The driver database rebuilt as
+NUSB's own installer does" is therefore taken as the same placement,
+the engine's own update of its index, and a restart at the end of the
+run.
 
 **What this installer does.** On the same-bytes route only (section
 6.5.4), after every binary of the seven is read in place and `Source`
@@ -1467,9 +1480,21 @@ free). The steps are `stor_place`'s: `<name>.TMP` beside it made with
 `CREATE_NEW` from the download's file and compared byte for byte, its
 `Placed` value written (section 6.5.6), then `MoveFileA` to the name,
 which fails when the name exists; a step that fails deletes the `.TMP`
-and the `Placed` value, leaves what is there, and the run says that the
-first plug of a new USB disk may still open Windows' wizard (a note,
-not a step: the route through `DevicePath` stands as in draft 18). A
+and the `Placed` value and leaves what is there. A placement is a
+publication of the pack, so the first one also writes `Published` 1
+(section 6.5.6), the adoption's evidence, whatever happens to the
+package's copy afterwards. **After the placements** the states of the
+seven are read again (section 6.5.3): if the same-bytes route no longer
+holds - a file of other bytes appeared under an INF's name between the
+reading and the move, or anywhere else of the seven - the run takes
+the storage part as the partial-other case: `storCopyOk` is cleared, so
+the withdrawal of section 6.5.4 runs before the package's copy (the
+placed INFs deleted under its protections, the directory off
+`DevicePath`), and a step is left (exit 4). While the route still
+holds, a placement that failed is a note: the run says that the first
+plug of a new USB disk may still open Windows' wizard, which finds the
+driver in the install directory (not a step: the route through
+`DevicePath` stands as in draft 18). A
 file of the INF's name already in `%windir%\INF` is never written over,
 and on this route it is the download's bytes or this installer's (any
 other bytes make the case partial-other, section 6.5.3), so it is
@@ -1490,8 +1515,9 @@ that arrived by a file copy into its index as it takes one its own copy
 engine placed is the reading below.
 
 **The restart, and the plug.** The run that places them changed the
-system, so on 98 SE it ends with section 5.9's restart, as NUSB's ends
-with its own. The package directory keeps the seven and stays on
+system, so on 98 SE it ends with section 5.9's restart (NUSB's package
+leaves its restart to IExpress's own handling, its `REBOOT` resource
+zero; what that asks for is not read here). The package directory keeps the seven and stays on
 `DevicePath` (section 6.5.4), and the present devices are installed by
 the helper from it as in draft 18 (section 6.5.5): the placement changes
 only what Windows finds at a later first plug. An INF in `%windir%\INF`
@@ -1605,8 +1631,10 @@ present" is followed, on 98 SE and ME, by what to do: "No USB 3
 controller is listed by Windows now. If its New Hardware wizard was
 cancelled at this start, restart: the wizard comes back; finish it
 (Next until Finish, typing <the install directory> where it asks for a
-disk), then run the installer again." The window's Found
-page says the same under its empty list.
+disk), then run the installer again." The plan's own empty line ("none
+present") is followed by the same sentence, so the console's plan and
+the window's Found page, whose detail text is the plan, say it before
+anything is done.
 
 The keyboard-and-mouse warning of record 23 section 5.8 stands on the
 Found page unconditionally when a controller changes, and on 98 SE and ME
