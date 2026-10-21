@@ -83,7 +83,8 @@ source comments, scripts, and other docs use these same locations.
   install tool's legs (task 40.4 onward, design record 23) on every target.
 - [Phase 43 record](contributing/runs/run-43.md) - release `3.2.0.0`'s
   readings, from task 43.14's: whether an INF naming a refused storage
-  interface's VID/PID binds it on Windows 98 SE and ME.
+  interface's VID/PID binds it on Windows 98 SE and ME, and task 43.16's
+  legs of the device id that replaced it.
 - The post-release matrix reports, one pair per release (four from `1.1.0.0`
   on, which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against

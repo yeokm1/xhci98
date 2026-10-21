@@ -104,3 +104,60 @@ excepted, which took it in the same session).
 By record 13 section 10.7.1's decision 1, the refused PDO's device id
 moves to `USB\XHCI98_NOXPORT&VID_v&PID_p[&MI_nn]` on every target: task
 43.15.
+
+## 43.16 the legs: a refused interface under the new device id, 98 SE and ME (2026-10-22)
+
+NOX.1's legs (design record 13 section 10.7.1) for task 43.15's change,
+on the three guests 43.14 read, each continued from the disk 43.14 left:
+probe V (`USB\VID_46F4&PID_0003`) installed in `INF\OTHER` and bound to
+the two refused devnodes 43.14 made. Runtime, development host A.
+
+### The vehicle
+
+- As 43.14's: QEMU 11.1.0 under TCG, headless, 1 vCPU, 256 MB,
+  `qemu-xhci,p2=1,p3=4,streams=off`, a `usb-uas` with a `scsi-hd` (a fresh
+  overlay of the 128 MiB FAT16 image) hot-plugged on port 3 after the
+  desktop, `attached` set, a serial never seen before (`NOXW98N1`,
+  `NOXN98N1`, `NOXMEN1`).
+- The driver: this branch's x86 release `xhci98.sys` (the gated build of
+  `66840a9e`, 300,271 bytes, SHA-256
+  `81E163EC145B5A99996E5E2F0456F6083A6A4247AFB0B3E786A4C309FF4E005D`),
+  copied over `3.1.0.0`'s in `C:\WINDOWS\SYSTEM32\DRIVERS` from an MS-DOS
+  Prompt; the INF and the rest of `3.1.0.0` unchanged. The guest shut
+  down, the copy read back off the disk with the same SHA-256, then a cold
+  boot.
+- Guests: 98 SE, 98 SE + NUSB 3.3, ME, as in 43.14.
+
+### Results
+
+| Guest | The plug | The wizard pointed at `D:\PV` (probe V) | The new devnode |
+|---|---|---|---|
+| 98 SE | Add New Hardware Wizard for "USB Attached SCSI HBA" | "Windows was unable to locate a driver for this device"; Finish: "Unknown Device", no driver installed | `Enum\USB\XHCI98_NOXPORT&VID_46F4&PID_0003\NOXW98N1` |
+| 98 SE + NUSB 3.3 | The same | The same | `...\NOXN98N1` |
+| ME | The same (ME's wizard) | "Windows was unable to locate the software for this device"; Finish | `...\NOXMEN1` |
+
+Every new devnode read the same (`regedit /e` of `HKLM\Enum\USB` and of
+`...\Services\Class\USB`, taken off the disk after a clean shut down), for
+example 98 SE's:
+
+```
+[HKEY_LOCAL_MACHINE\Enum\USB\XHCI98_NOXPORT&VID_46F4&PID_0003\NOXW98N1]
+"HardwareID"="USB\\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\\XHCI98_NOXPORT&VID_46F4&PID_0003"
+"DeviceDesc"="USB Attached SCSI HBA"
+"Class"="Unknown"
+"ConfigFlags"=hex:40,00,00,00
+```
+
+No `Driver` value and no new `Class\USB` key: probe V, already installed
+and offered again at the wizard, did not bind, on any of the three. The
+device id is the second `HardwareID` entry, as 43.14 read for the old form.
+The old devnodes, `Enum\USB\VID_46F4&PID_0003\<serial>` (43.14's two per
+guest), were left as they were - the same `HardwareID`, `Driver`
+(`USB\0002`, `USB\0003`) and probe V's `Class\USB` keys as 43.14 read -
+by decision 4; the device did not return to them.
+
+### Not read
+
+- Windows 2000 (the plan's NT target): no 2000 guest with `xhci98` and
+  this branch's driver was at hand; owed.
+- A refused function of a composite device (`&MI_nn`): host vectors only.
