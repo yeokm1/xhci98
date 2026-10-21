@@ -406,7 +406,7 @@ machines, and the Windows 8 readings and what follows them.
 - [ ] 43.11 the installer's settings pages (43.10) on 98 SE at 640x480, XP and 7 at 96 DPI and 7 at 120 DPI: every page's drop-downs open and closed with their longest entry whole, the description's whole text read without more than a short scroll, the page count and Back and Next across the added pages, a value set on one page kept after Back
 - [ ] 43.12 faster emulator legs (was EMUFAST.1, earlier 42-V.11, without WHPX; owner, 2026-10-20: WHPX has issues with the NT guests, so every guest stays on TCG): saved starting points per guest, taken after a shut down so 98 SE's cold-start rule holds; unattended legs through `INSTALL /console ... /yes` with results read over the serial port, one window leg per system kept; one release-matrix script that starts the standard legs in parallel and gathers one results table
 - [ ] 43.13 the idle poll period, 50 against 500 ms (was IDLE.1, earlier 42-V.4): the table of `runs/run-38.md` "38.3" completed on 98 SE, ME and 7 x86 and x64 under mode 2 - the idle processor load over a minute, plug-to-working at a root port and behind a hub, USB 2.0 remote wake, the timer's holds and releases per minute - and `XhciPollIdleMs`'s default decided by the owner on the full table before the cut
-- [ ] 43.14 a refused interface's device id on 98 SE and ME, read first (was NOX.1's reading): whether an INF whose only line is the refused device's VID/PID binds it, on 98 SE and ME, with NUSB 3.3's stack too
+- [x] 43.14 a refused interface's device id on 98 SE and ME, read first (was NOX.1's reading): whether an INF whose only line is the refused device's VID/PID binds it, on 98 SE and ME, with NUSB 3.3's stack too. Done 2026-10-22 (`runs/run-43.md`, "43.14"; runtime, QEMU, the published `3.1.0.0`): it binds, on 98 SE fresh from its CD, on the same under NUSB 3.3 and on stock ME - the probe's line chosen, its `MatchingDeviceId` the device id `USB\VID_46F4&PID_0003`, and a second refused device bound with no wizard once the probe was installed. Probe C (the control) was not needed; 2000 and the plan's route 2 not read (record 13 section 10.7.1, "The reading"). Decides 43.15: the device id moves
 - [ ] 43.15 a refused interface's device id, as 43.14 reads it (was NOX.1's fix): the `XHCI98_NOXPORT` device id, or record 13 and `xhci_xport.h` corrected to why it is harmless; host tests, both builds
 - [ ] 43.16 NOX.1's legs on 98 SE, ME and one NT target, a UAS-only device at SuperSpeed on a controller that does not stream
 - [ ] 43.17 the virtual-machine part of OWED31.1 (earlier 42-V.12): 42-A.14 on ME; the installer on XP x64; the cut's full matrix on every target rather than the legs its changes touched; the connection-manager rows the `3.1.0.0` matrices did not reach (42-A.6's U.11 on 98 SE and ME with an NVMe on each tunnel bus, the USB4 eject behind ACPI's bus filter on 2000 to Vista); the TESTING.md rows of Stor98's audit fixes not yet read
@@ -494,7 +494,9 @@ Goal: the read-first task deferred from Phase 38 (owner, 2026-10-13).
 
 Status: moved into Phase 43 on 2026-10-20 (owner) as 43.14 (the
 reading), 43.15 (the id or the corrected claim) and 43.16 (the legs);
-the task below stays as their plan. Opened as 38.12 on
+the task below stays as their plan. 43.14 read on 2026-10-22 that a
+VID/PID line binds a refused device on 98 SE and ME, so 43.15 moves its
+device id (record 13 section 10.7.1). Opened as 38.12 on
 2026-10-13 and deferred to after `2.4.0.0` the same day (owner); the plan,
 with the owner's answers to its decisions, is design record 13 section
 10.7.1, and Phase 38 corrects the record's and `src\xhci_xport.h`'s claim
