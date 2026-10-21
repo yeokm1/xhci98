@@ -1322,8 +1322,12 @@ shown as disconnected, as before.
      21 section 7.4, revision 3: a PDO an active member's bridge
      reported). Whenever the table brings a current entry up to date
      from the attachment list (`cmMarkAtt`), each attachment on its PDO
-     takes the entry's serial and its domain; the event finds that entry
-     by serial in that domain, current or a tombstone - a tombstone
+     takes the entry's serial, its domain and that domain's start count
+     (`CM_REENUM.Starts`, which a stop and start moves on while the
+     table and its serials begin again); the event finds that entry by
+     serial in that domain, only while the domain is listed at the same
+     start and the entry's PDO is the attachment's, current or a
+     tombstone - a tombstone
      because the PnP manager surprise-removes a device after the bus
      answer that no longer lists it, and the member bridge's filter,
      reading that answer on its way back, has already made the entry a
@@ -1339,14 +1343,19 @@ shown as disconnected, as before.
    - the entry has not been counted before. A PDO is counted once however
      many of this driver's attachments it carries; a surprise-removed PDO
      never starts again, and a re-plug is a new PDO with a new entry; and
-   - the domain's liveness is ACTIVE with no loss being drained
-     (`CM_REENUM.LossDrain`). In a loss of the host interface the
-     bridges' children are removed and the recovery waits for every
-     child filter's removal (record 22 section 7.7 part 4,
-     `CmReenumRetired`) before the liveness returns to ACTIVE, so those
-     removals come while it is not ACTIVE: they are counted apart
-     (`CM_Q_RM_LOST`) and give no notice. A loss the liveness has not yet
-     noticed when the removal comes is not told apart.
+   - the device's removal is not owed to a loss of the host interface.
+     It is, and is counted apart (`CM_Q_RM_LOST`, no notice), when at the
+     event the domain's liveness is not ACTIVE, a loss is being drained
+     (`CM_REENUM.LossDrain`), or the device's member is one a recovery
+     owes or holds a retirement for (`CM_NHI.RecDebtMask`, accumulated
+     during the attempt, and `RecBarred`, the barrier it becomes at the
+     commit, record 22 section 7.7 part 4). The liveness returns to
+     ACTIVE at the commit, before the barrier is serviced, and a
+     member's bit leaves `RecBarred` only once `CmReenumRetired` has seen
+     its old devices' removal finish - so a lost device's surprise
+     removal, which comes before that removal finishes, finds its member
+     barred even after ACTIVE. A loss the liveness has not yet noticed
+     when the removal comes is not told apart.
 
    Never counted: a removal after a query-remove (an eject from any tool,
    a disable, a driver update, an uninstall: Windows does not
@@ -1368,9 +1377,14 @@ shown as disconnected, as before.
    USB4 port is depth 1; a deeper USB4 router has no bridge word). Where
    there is exactly one:
    - a current entry of that member holding no router takes a copy of it
-     (the whole 128-byte record entry) and the member's connection
-     generation (`CM_REENUM` port `ConnGen`: the USB4 profile's; 0 under
-     the ICM);
+     (the whole 128-byte record entry) with the member's connection
+     generation (`CM_REENUM` port `ConnGen`, the USB4 profile's) - but
+     only where that generation is still the entry's own, the one the
+     member had when the bridge's answer first listed the device
+     (`cmMarksSyncAll` gives it to a new entry), so a router of a later
+     connection never names a device of an earlier one; and under the
+     ICM, which has no generation, only in the first pass that sees the
+     entry (a later candidate could be a replacement);
    - an entry holding a router refreshes its copy when it is the same
      router (the same kind, place, route, ids and UUID suffix) and the
      member's connection generation is still the one it took;
@@ -1389,8 +1403,8 @@ shown as disconnected, as before.
    count and the last removal live beside the marks table, under the
    registration list's lock, and are emptied with it at the domain's
    start and stop, so they are per start, as the epoch is.
-   Where this names no unit: a device whose member never had exactly one
-   router while it was current (under the ICM the bridge word is given
+   Where this names no unit: a device whose member had no single router
+   when it could be bound (under the ICM the bridge word is given
    only while the domain has one active member, `cm_status.c`; a USB4
    bind in conflict gives none); a device surprise-removed before any
    pass bound it. A chain's first device is named when it is unplugged
@@ -1434,12 +1448,17 @@ shown as disconnected, as before.
    straddles two polls a second notice can follow; that is accepted.
 
    The router's departure from the record and the count's rise are not
-   ordered: either can come a poll before the other. So on a watched
-   NHI, a router's "disconnected" is held one poll and shown at the next
-   unless a removal names it (`tr_same_router`, the entry read with the
-   NHI's key and epoch) by then; and a router a removal named is
-   remembered for three polls, in which its "disconnected" is not shown.
-   The snapshot carries both lists from one poll to the next. A held
+   ordered, and nothing bounds how far apart they come; they usually
+   fall in one poll or the next. The tray suppresses the duplicate on a
+   best-effort, bounded basis: on a watched NHI, a router's
+   "disconnected" is held one poll and shown at the next unless a
+   removal names it (`tr_same_router`, the entry read with the NHI's key
+   and epoch) by then; and a router a removal named is remembered for
+   three polls, in which its "disconnected" is not shown - until a
+   router of the same key connects again (a replacement at the same
+   route is a new connection, whose own departure is shown). Further
+   apart than that, both balloons come. The snapshot carries both lists
+   from one poll to the next. A held
    event whose NHI is gone or at another epoch is dropped, as any event
    of an old epoch is. On an NHI that is not watched the event is shown
    at once, as before. Balloons are 2000 and later anyway, and 98 SE and
@@ -1557,14 +1576,19 @@ what each level serves, the ring's text and cut, the configuration read's
 states, the sizing) and the tool's reader and texts of it in
 `test\test_xhq.c`, with the default level.
 
-Revision 16: the count and the kept routers (`cm_marks.c`: once per PDO,
-a tombstone found, a device never started, the smallest depth, two at
-it, none, the keep window, the reset) in `test\test_cm_marks.c`; the
+Revision 16: the count and the bound routers (`cm_marks.c`: once per
+PDO, a tombstone found by serial, a member's stop and start, a device
+never started, a loss counted apart, the smallest depth, two at it, none,
+the first binding refused at a later generation and, under the ICM,
+after the first pass, the same router refreshed, a newer generation, a
+different router clearing, the reset) in `test\test_cm_marks.c`; the
 version 2 layout, the block, the record at its offset and the content
 generation in `test\test_cm_query.c`; the readers of both versions, the
 event (a rise, a wrap, an epoch change, the liveness gate, not watched,
-no entry, the dropped "disconnected") and the details line in
-`test\test_tr.c`, with the mark service's reader of version 2.
+no entry, the "disconnected" held a poll and dropped either way round,
+both shown beyond the two windows, the memory ended by a reconnection)
+and the details line in `test\test_tr.c`, with the mark service's reader
+of version 2.
 
 ## 11. Legs
 
@@ -1579,7 +1603,7 @@ no entry, the dropped "disconnected") and the details line in
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
 | T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciCmLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
 | T.9 | 98 SE (TB3 enclosure), 7 x86 as a standard user; xhci98's nodes on 98 SE, ME, 2000, XP, 7 x86 and 7 x64 | revision 12: the NHI's node shows the NHI and the tunnel port with pin and line and capabilities; below the port, the enclosure's functions on 7 and "not read on this system" on 98 SE; xhci98's PCI node and Driver log node read through the query request at the new default level 2; `/report` holds them; with the HCD regression (enumeration, a mass-storage copy, an unplug and re-plug) on each of the six |
-| T.11 | 2000, XP, 7 x86, 7 x64 (the TB3 and USB4 emulator devices); 98 SE | revision 16: an unplug with no eject gives "<name> was removed unexpectedly." and no "disconnected" balloon for that unit besides; an eject and then an unplug, a disable and enable of the unit's device, a driver update and a sleep and resume with the unit attached give none; the NHI's details count each; on 98 SE the unplug reads "disconnected" and the details "not watched on this system" |
+| T.11 | 2000, XP, 7 x86, 7 x64 (the TB3 and USB4 emulator devices); 98 SE | revision 16: an unplug with no eject gives "<name> was removed unexpectedly." and, where the two readings come within a poll of each other, no "disconnected" balloon for that unit besides; an eject and then an unplug, a disable and enable of the unit's device, a driver update and a sleep and resume with the unit attached give none; the NHI's details count each; on 98 SE the unplug reads "disconnected" and the details "not watched on this system" |
 | T.10 | 98 SE, 7 x86 | revision 13, 7 x86 as a standard user: each driver's level set to 3 (on 7 through "Set as administrator..."), the restart, the registry and the dialog read 3 for each; then set back to 2 |
 
 ## 12. Decisions
