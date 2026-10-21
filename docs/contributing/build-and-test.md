@@ -8048,6 +8048,130 @@ Three things about it that are easy to get wrong:
   after the last transfer), never after, and never on the QEMU command line,
   which wedges SeaBIOS.
 
+### Faster emulator legs: starting points and the release matrix (roadmap-usb4 43.12)
+
+Release legs used to start each guest cold from its base image. Then an
+operator, or an agent typing blind into the guest, ran the installer, and
+the results were read off screenshots. Most of a leg's time went on boots
+under TCG and on that driving. Three things now replace it. Each is a
+tracked script in `scripts\vm-matrix\` and none depends on `scripts\local\`.
+Every guest stays on TCG: the owner ruled out WHPX on 2026-10-20, because
+the NT guests have problems under it.
+
+**A starting point per guest** (`make-start.ps1 -Guest <id>`). This is a
+saved machine state beside a frozen disk:
+
+1. An overlay of the guest's base image becomes the starting point's disk.
+   The base image itself is only read.
+2. A first, cold start with a CD that holds the poller. The host types the
+   CD's `XHSETUP` into Start, Run. It copies the poller to `C:\XHLEG` and
+   makes it start at every logon, then says so on COM1. On 98 SE and ME
+   this is a Run value. On 2000 and XP it is a Run value, and the
+   unsigned-driver policy is set to Ignore. On Vista and 7 it is an
+   elevated logon task, so that no elevation prompt stops an unattended
+   install. The host then shuts Windows down from Start, Run.
+3. A second, cold start follows that shut down. Once the poller has said
+   `XHLEG BOOT` on COM1, and a settling time has passed, the host stops the
+   machine and saves its state.
+
+Every leg begins from that state, which is one cold start after a shut
+down. So Windows 98 SE's rule holds (feedback: never a warm restart; shut
+down, power off, start cold) and no leg starts from a warm restart.
+`start.json` records a hash of the machine's command line and the QEMU
+version. A leg refuses a starting point that was saved for another
+machine or another QEMU.
+
+**Unattended legs** (`run-leg.ps1 -Leg <id> -Package <unpacked download>`).
+The leg restores the starting point into a fresh overlay and puts the leg's
+CD in the drive. The CD holds the package under `PKG\` and the guest's leg
+script (`leg\LEG9X.BAT` or `leg\LEGNT.CMD`). The poller finds the CD and
+runs the script. The script runs one phase per Windows start, and each
+phase ends by switching the machine off:
+
+1. `INSTALL /console /yes /nopause /log ...`.
+2. After the start that follows:
+   - the driver file is checked;
+   - `INSTALL /console /list` must show the controller current;
+   - a USB stick the host plugs in on request must show up, and a 4 MiB
+     file copied to it must compare equal with `fc /b`;
+   - `INSTALL /console /uninstall /yes /nopause` runs.
+3. After the next start, `/list` must show nothing current.
+
+Each exit code and check, and the logs, go to COM1 as `XHLEG ...` lines.
+The host reads only COM1, and every restart is a cold start that the host
+makes. QEMU runs with `-action reboot=shutdown`, so a guest's restart ends
+the process.
+
+The host takes the steps a guest cannot take. These are named in
+`release-legs.psd1`:
+
+- on 98 SE, the controller's Add New Hardware wizard at the first start
+  after the install (record 23 section 6.2). It blocks every program
+  started at logon until it is answered, so the poller cannot run until
+  the host has walked it;
+- the first stick's wizard (roadmap-usb4 43.42, still open).
+
+The verdict is PASS when all of these hold:
+
+- the guest says `END`;
+- every check passed;
+- each exit code is one the leg allows;
+- no step failed.
+
+`-Cold` runs the same leg from a cold start instead of the saved state.
+That is the measurement of what the starting points save.
+
+**One leg per system stays with the installer's window.** These are the
+Manual legs, run as `run-leg.ps1 -Leg <id>-window`. The guest is restored
+with the CD in and VNC on `127.0.0.1`. The operator runs `PKG\SETUP.EXE`
+and shuts Windows down, and the same checks follow unattended. The script
+opens no viewer.
+
+**The release matrix** (`release-matrix.ps1 -Package <dir>`). It checks
+every leg's starting point and starts nothing if one is stale. It then
+starts the standard legs of `release-legs.psd1` in parallel, each in its
+own port slot of three ports (QMP, VNC and the migration socket), within
+the budget:
+
+- the matrix's own vCPUs at most `MaxVcpu`;
+- every QEMU on the host together at most its logical processors.
+
+It writes one table, `results.md` and `results.csv`, with each leg's
+verdict, minutes, starts, restore time, exit codes and reasons. The Manual
+legs appear in it as owed. The package goes onto each CD and is never run
+on the host.
+
+Per-host settings live in `release.config.psd1`, a copy of
+`release.config.sample.psd1` that is git-ignored: QEMU, the work
+directory, the port block, the vCPU cap, the stick image, and the guests
+with their base images, CPU, memory and keyboard layout. The NT images of
+this file are US Dvorak, and the host types through that layout.
+
+Facts these scripts rest on, read on development host A on 2026-10-22 with
+QEMU 11.1.0, are below. Each one is enforced in code.
+
+- **QEMU on Windows cannot migrate to a `file:` URI.** It fails with
+  "Failed to set FD nonblocking". The host listens on the migration port
+  and writes the stream itself, and a restore feeds the file back to
+  `-incoming tcp:`. QEMU keeps the socket open after the migration
+  completes, so the copy ends when `query-migrate` says completed and every
+  byte it counted has arrived.
+- **A qemu-xhci whose MSI-X was not set up cannot load its state.** The
+  state load asserts in `msix_vector_unuse` and QEMU exits. A CPU without
+  an APIC (`pentium3,-apic`, as earlier 98 SE kits used) has no MSI, so
+  the 9x guests take `pentium3` with its local APIC, which Windows 98 SE
+  does not use.
+- **The 98 SE wizard blocks logon programs.** Until the Add New Hardware
+  wizard for a controller with no driver is closed, nothing in the Run key
+  starts. So the host escapes it on a cold start (`ColdStep`) and walks it
+  after an install.
+- **98 SE can switch itself off from a batch file.**
+  `rundll32.exe shell32.dll,SHExitWindowsEx 5` does it from the poller's
+  minimised DOS box, with no dialog.
+
+Timings, read on development host A with `3.2.0.0` at `e61538ae` (TCG):
+TIMINGS-PENDING
+
 ### Testing Checklist
 
 From Phase 3 onward, run every applicable checklist item on both target VMs
