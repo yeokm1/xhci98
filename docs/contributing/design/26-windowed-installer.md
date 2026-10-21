@@ -1825,7 +1825,10 @@ user (the USB settings page, or `/set XhciSilentInstall=1`) and Windows
 restarted, a new Bulk-Only stick installs with no wizard, on a SuperSpeed
 and a High Speed port, and a second stick too; a subclass 02 or 05 device
 where one is at hand; the unit's binding and whether it raises a wizard;
-the uninstall leaves `SilentClasses` as it found it.
+the uninstall removes exactly the entries the `Silent` record names and
+leaves every other value (the whole list an explicit 1 merged stays); and,
+on a run that never turned the gate on, the uninstall leaves
+`SilentClasses` as it found it.
 
 ## 7. Windows 98 SE and ME: the helper, and the steps page
 

@@ -19249,11 +19249,10 @@ static int silent_gate_on(void)
 {
     int v = inst_value_find("XhciSilentInstall");
     DWORD mwv = 0;
-    INST_VNOW vnow[INST_MAX_NOW];
-    int nNow = 0;
-    int cmNew = 0;
+    DWORD now;
     int mw;
     int i;
+    int any = 0;
 
     if (v < 0 || v >= INST_MAX_VALUES) {
         return 0;
@@ -19262,16 +19261,17 @@ static int silent_gate_on(void)
     if (mw != 0) {
         return mw > 0 && mwv == 1;
     }
-    if (value_targets(v, vnow, INST_MAX_NOW, &nNow, &cmNew) == 0 ||
-        nNow == 0) {
-        return 0;
-    }
-    for (i = 0; i < nNow; i++) {
-        if (vnow[i].State != 1 || vnow[i].Value != 1) {
+    /* Every controller xhci98 runs, whether or not this run reached it. */
+    for (i = 0; i < devCount; i++) {
+        if (!is_controller(&devs[i]) || !inst_eq(devs[i].Service, "xhci98")) {
+            continue;
+        }
+        any = 1;
+        if (value_now(&devs[i], instValues[v].Name, &now) <= 0 || now != 1) {
             return 0;
         }
     }
-    return 1;
+    return any;
 }
 
 static int silent_taken(const char *name, void *ctx)
