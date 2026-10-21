@@ -1087,8 +1087,17 @@ ULONG CmNvlinkIcmDown(PCM_NHI nhi, ULONG pollState)
     reading = XHCI_TBT_PORT_ERROR;
     state = XHCI_TBT_POLL_NO_READING;
     if (r->Topo.Tunnels == 1 && r->Topo.Source[0] == XHCI_TBT_SRC_SHPC) {
-        if (!cmNvNt && CmEjectDecide(nhi, 0, 1, FALSE,
-                                     XHCI_TBT_POLL_BUDGET_MS)) {
+        if (!cmNvNt && CmEjectDownLeft(nhi, XHCI_TBT_POLL_BUDGET_MS) == 0) {
+            /* 98 SE and ME: the seam's poll spent the 2 s counted from the
+             * tunnel down; no reading is made, and none could come in
+             * time (record 21 section 7.2 part 2). */
+            CmLogNote(nhi, "cm.nvlink.9x.no-time", pollState);
+            reading = XHCI_TBT_PORT_ERROR;
+            state = XHCI_TBT_POLL_TIMEOUT;
+        } else if (!cmNvNt &&
+                   CmEjectDecide(nhi, 0, 1, FALSE,
+                                 CmEjectDownLeft(nhi,
+                                                 XHCI_TBT_POLL_BUDGET_MS))) {
             /* 98 SE and ME: the decision is entered and the reading posted
              * to the member's call worker; its completion publishes or
              * withholds (CmNvlinkDecided), and the member's removal is held
@@ -1096,11 +1105,12 @@ ULONG CmNvlinkIcmDown(PCM_NHI nhi, ULONG pollState)
             CmLogNote(nhi, "cm.nvlink.icm-down",
                       (CM_NVLINK_PENDING << 16) | (pollState << 8));
             return CM_NVLINK_PENDING;
+        } else {
+            reading = cmNvRead(nhi, r->Topo.Set[0], XHCI_TBT_PORT_DOWN,
+                               XHCI_TBT_POLL_BUDGET_MS, &emulator);
+            state = reading == XHCI_TBT_PORT_DOWN ? XHCI_TBT_POLL_REACHED
+                                                  : XHCI_TBT_POLL_TIMEOUT;
         }
-        reading = cmNvRead(nhi, r->Topo.Set[0], XHCI_TBT_PORT_DOWN,
-                           XHCI_TBT_POLL_BUDGET_MS, &emulator);
-        state = reading == XHCI_TBT_PORT_DOWN ? XHCI_TBT_POLL_REACHED
-                                              : XHCI_TBT_POLL_TIMEOUT;
     }
     verdict = CmNvlinkIcmVerdict(r->Topo.Tunnels,
                                  r->Topo.Tunnels != 0 ? r->Topo.Source[0] : 0,

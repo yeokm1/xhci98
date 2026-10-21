@@ -249,8 +249,9 @@ static VOID cmEjAfterTeardown(CM_EJ_TX *t, const CM_EJ_IN *in, BOOLEAN made,
         }
     } else if ((t->Flags & CM_EJ_F_POST) != 0) {
         /* O5: DOWN_QUIESCED for the generation, no wait (no instance is
-         * left), on a system qualified for the statement. */
-        if (made && in->Qualified && t->Entry != CM_EJ_NONE) {
+         * left), on a system qualified for the statement, and only after
+         * a teardown read back closed. */
+        if (made && closed && in->Qualified && t->Entry != CM_EJ_NONE) {
             t->Phase = CM_EJ_P_MARK;
         } else {
             t->Flags &= ~CM_EJ_F_POST;
@@ -260,7 +261,7 @@ static VOID cmEjAfterTeardown(CM_EJ_TX *t, const CM_EJ_IN *in, BOOLEAN made,
         /* O6's teardown after the deadline: DOWN_QUIESCED releases what
          * the terminal instance holds, the retries go on. */
         t->Flags &= ~CM_EJ_F_O6TEAR;
-        if (made && in->Qualified && t->Entry != CM_EJ_NONE) {
+        if (made && closed && in->Qualified && t->Entry != CM_EJ_NONE) {
             t->Phase = CM_EJ_P_MARK;
             t->Flags |= CM_EJ_F_O6TEAR;
         } else {
@@ -301,7 +302,18 @@ ULONG CmEjNext(CM_EJ_TX *t, const CM_EJ_IN *in)
             /* Nothing before the devnode is found again; a call of the
              * stopped start still outstanding comes back first (its late
              * taker feeds it). */
-            if (t->Pending != 0 || !in->SlotIdle ||
+            if (t->Pending != 0) {
+                return CM_EJ_DO_NONE;
+            }
+            if ((t->Flags & CM_EJ_F_QUERIED) == 0 &&
+                (t->Phase == CM_EJ_P_IDENT || t->Phase == CM_EJ_P_QUERY)) {
+                /* No query was accepted (none made, or refused): nothing
+                 * is owed, and no lookup is needed. */
+                t->Flags &= ~CM_EJ_F_ADOPT;
+                t->Phase = CM_EJ_P_DONE;
+                return CM_EJ_DO_NONE;
+            }
+            if (!in->SlotIdle ||
                 (t->AdoptAt != 0 &&
                  in->NowMs - t->AdoptAt < CM_NVLINK_RETRY_MS)) {
                 return CM_EJ_DO_NONE;
@@ -360,7 +372,9 @@ ULONG CmEjNext(CM_EJ_TX *t, const CM_EJ_IN *in)
                 return CM_EJ_DO_NONE;
             }
             /* Acknowledged, timed out or no receiver: the isolation the
-             * teardown proved stands either way. */
+             * teardown proved stands either way, and authorises the
+             * removal (a detached worker may complete it). */
+            t->Flags |= CM_EJ_F_AUTH;
             t->Outcome = CM_EJ_OUT_ISOLATED;
             t->Phase = CM_EJ_P_REMOVE;
             continue;

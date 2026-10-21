@@ -403,6 +403,9 @@ typedef struct _CM_EJ_DOM {
     ULONG WriteFailures;
     ULONG Decided;
     ULONG DecidedLate;
+    ULONG DownAt;           /* the tunnel-down action's start (the ICM
+                               decision's allowance is counted from it)    */
+    ULONG DownAtValid;
 } CM_EJ_DOM;
 
 #ifndef XHCI_HOST_TEST
@@ -459,6 +462,13 @@ VOID CmEjectDown(struct _CM_NHI *nhi, ULONG member);
  */
 BOOLEAN CmEjectDecide(struct _CM_NHI *nhi, ULONG member, ULONG kind,
                       BOOLEAN pathClosed, ULONG budgetMs);
+
+/* A tunnel-down action begins (CmReenumAction, before its poll): the
+ * moment the ICM decision's 2 s are counted from. CmEjectDownLeft: what is
+ * left of `budgetMs` since then (all of it when none was recorded). On the
+ * thread. */
+VOID CmEjectDownBegin(struct _CM_NHI *nhi);
+ULONG CmEjectDownLeft(struct _CM_NHI *nhi, ULONG budgetMs);
 
 /* The NHI's stop, before its call workers stop: every record it owns is
  * detached, and one whose removal is authorised and owed is handed to its

@@ -64,6 +64,7 @@ NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
 #define CM_EJ_WALK_STACK    64UL
 #define CM_EJ_WALK_NODES    2048UL
 #define CM_EJ_DETACH_TICK   100UL
+#define CM_EJ_CLOCK_MAX_TICKS 4000000UL
 
 /* The call kinds (the log's), and the executors' result layouts. */
 #define CM_EJ_K_FIND        0x41UL
@@ -88,6 +89,9 @@ typedef struct _CM_EJ_REC {
     ULONG LateRunning;      /* the stopped start's worker completes it     */
     ULONG DownSeen;         /* a tunnel down on its member since this
                                start took it (CmEjectDown)                */
+    ULONG InStep;           /* the thread is inside this record's step (a
+                               teardown waits there): a servicing point
+                               reached from it steps the others alone      */
     ULONG MemberDevnode;
     char Id[CM_EJ_ID_CHARS];
 } CM_EJ_REC;
@@ -117,12 +121,15 @@ static ULONG cmEjNow(VOID)
     KeQueryTickCount(&ticks);
     delta = ticks.LowPart - cmEjClockLast;
     cmEjClockLast = ticks.LowPart;
-    if (delta > 200000UL) {
-        /* Inside 32 bits for any tick; a gap this long runs slow. */
-        delta = 200000UL;
+    if (delta > CM_EJ_CLOCK_MAX_TICKS) {
+        /* A gap this long (61 hours at 55 ms ticks) runs slow. */
+        delta = CM_EJ_CLOCK_MAX_TICKS;
     }
-    cmEjClockRest += delta * cmEjTickUs;
-    cmEjClockMs += cmEjClockRest / 1000UL;
+    /* delta x tick (us) / 1000 in words: the whole milliseconds of a tick
+     * times delta (at most 55 x 4,000,000), its microsecond part kept in
+     * the rest (at most 999 x 4,000,000 + 999): no product past 32 bits. */
+    cmEjClockRest += delta * (cmEjTickUs % 1000UL);
+    cmEjClockMs += delta * (cmEjTickUs / 1000UL) + cmEjClockRest / 1000UL;
     cmEjClockRest %= 1000UL;
     now = cmEjClockMs;
     KeReleaseSpinLock(&cmEjLock, irql);
@@ -1113,11 +1120,16 @@ VOID CmEjectService(PCM_NHI nhi, BOOLEAN nested)
     BOOLEAN consumed;
     UCHAR zero[CM_EJ_RESULT_BYTES];
 
-    if (!cmEj9x(nhi) || nhi->Ej.Stepping) {
+    if (!cmEj9x(nhi)) {
         return;
     }
-    nhi->Ej.Stepping = 1;
-    cmEjDecisions(nhi);
+    if (!nhi->Ej.Stepping) {
+        /* The decisions once at a time; a servicing point reached from
+         * inside them (none waits) skips them. */
+        nhi->Ej.Stepping = 1;
+        cmEjDecisions(nhi);
+        nhi->Ej.Stepping = 0;
+    }
     for (i = 0; i < CM_EJ_RECORDS; i++) {
         rec = &cmEj[i];
         /* A stopped start's record on one of this start's members is
@@ -1144,12 +1156,21 @@ VOID CmEjectService(PCM_NHI nhi, BOOLEAN nested)
                 KeAcquireSpinLock(&cmEjLock, &irql);
             }
         }
-        if (rec->Nhi != nhi || rec->Tx.Phase == CM_EJ_P_FREE) {
+        if (rec->Nhi != nhi || rec->Tx.Phase == CM_EJ_P_FREE ||
+            rec->InStep) {
+            /* A record whose own step is waiting further up this thread
+             * (a teardown's safe points) is left to that step; every
+             * other record is stepped (R6e: no member's wait delays
+             * another's work). */
             KeReleaseSpinLock(&cmEjLock, irql);
             continue;
         }
+        rec->InStep = 1;
         KeReleaseSpinLock(&cmEjLock, irql);
         cmEjStepRec(nhi, rec, nested);
+        KeAcquireSpinLock(&cmEjLock, &irql);
+        rec->InStep = 0;
+        KeReleaseSpinLock(&cmEjLock, irql);
         if (nested) {
             continue;
         }
@@ -1181,7 +1202,6 @@ VOID CmEjectService(PCM_NHI nhi, BOOLEAN nested)
             CmLogNote(nhi, "cm.eject.consumed", present ? 1UL : 0UL);
         }
     }
-    nhi->Ej.Stepping = 0;
 }
 
 VOID CmEjectAsk(PCM_NHI nhi, BOOLEAN present, const UCHAR *bytes,
@@ -1238,6 +1258,11 @@ VOID CmEjectAsk(PCM_NHI nhi, BOOLEAN present, const UCHAR *bytes,
     member = cmEjMemberOf(nhi, ask.Member & 0xFFFFUL, TRUE);
     check.Member = (BOOLEAN)(member != XHCI_TBT_NO_MEMBER &&
                              member < XHCI_TBT_MAX_TUNNELS);
+    if (check.Member && !CmCallwkLive(nhi->Reenum.Callwk, member)) {
+        /* That member's call worker was never made: nothing could make
+         * the transaction's calls. */
+        check.Available = FALSE;
+    }
     cls = 0;
     if (check.Member) {
         secondary = (cmEjCfg(ask.Member, 0x18) >> 8) & 0xFFUL;
@@ -1410,6 +1435,23 @@ VOID CmEjectDown(PCM_NHI nhi, ULONG member)
     KeReleaseSpinLock(&cmEjLock, irql);
 }
 
+VOID CmEjectDownBegin(PCM_NHI nhi)
+{
+    nhi->Ej.DownAt = cmEjNow();
+    nhi->Ej.DownAtValid = 1;
+}
+
+ULONG CmEjectDownLeft(PCM_NHI nhi, ULONG budgetMs)
+{
+    ULONG used;
+
+    if (!nhi->Ej.DownAtValid) {
+        return budgetMs;
+    }
+    used = cmEjNow() - nhi->Ej.DownAt;
+    return used >= budgetMs ? 0 : budgetMs - used;
+}
+
 BOOLEAN CmEjectDecide(PCM_NHI nhi, ULONG member, ULONG kind,
                       BOOLEAN pathClosed, ULONG budgetMs)
 {
@@ -1477,6 +1519,9 @@ VOID CmEjectStop(PCM_NHI nhi)
         owes = (BOOLEAN)((CmEjOwesRemoval(&rec->Tx) ||
                           rec->Tx.Phase == CM_EJ_P_WITHDRAW) &&
                          rec->OpId == 0 && rec->LateRunning == 0);
+        /* Detached, and (when owed) held for the detached operation, before
+         * the worker can run it: no adoption meanwhile. */
+        rec->Nhi = NULL;
         if (owes) {
             rec->LateRunning = 1;
         }
@@ -1487,13 +1532,12 @@ VOID CmEjectStop(PCM_NHI nhi)
                                 CM_EJ_K_DETACHED, cmEjRunDetached, cmEjLate,
                                 rec, NULL, 0, nhi->ClockMs);
         }
-        KeAcquireSpinLock(&cmEjLock, &irql);
         if (owes && id == 0) {
             /* No worker to take it: a later start adopts it. */
+            KeAcquireSpinLock(&cmEjLock, &irql);
             rec->LateRunning = 0;
+            KeReleaseSpinLock(&cmEjLock, irql);
         }
-        rec->Nhi = NULL;
-        KeReleaseSpinLock(&cmEjLock, irql);
         CmLogNote(nhi, "cm.eject.detached",
                   (rec->Tx.Bridge << 8) | (rec->Tx.Phase & 0xFFUL));
     }

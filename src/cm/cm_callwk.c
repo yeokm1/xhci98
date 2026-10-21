@@ -290,6 +290,12 @@ BOOLEAN CmCallwkBusy(PCM_CALLWK b, ULONG member)
     return (BOOLEAN)(state == CM_CALL_SUBMITTED || state == CM_CALL_RUNNING);
 }
 
+BOOLEAN CmCallwkLive(PCM_CALLWK b, ULONG member)
+{
+    return (BOOLEAN)(b != NULL && member < b->Members &&
+                     b->M[member].Live != 0);
+}
+
 VOID CmCallwkService(struct _CM_NHI *nhi, PCM_CALLWK b)
 {
     CM_CALLWK_M *m;

@@ -598,6 +598,71 @@ static VOID test_edges(VOID)
     CmEjAdopt(&t, 100);
     CHECK_EQ(t.Phase, CM_EJ_P_HELD, "adopted as the block");
     CHECK(!CmEjOwesRemoval(&t), "no removal authorised by it");
+
+    /* The wait ended: the isolation authorises the removal, which a
+     * detached worker may complete. */
+    fakeInit(&f);
+    f.Hold = TRUE;
+    begin(&t, TRUE, 0);
+    CmEjSubmitted(&t, CM_EJ_DO_FIND, TRUE, 0);
+    CmEjFeed(&t, CM_EJ_FED_FIND, f.Devnode, 0, 0);
+    CmEjSubmitted(&t, CM_EJ_DO_QUERY, TRUE, 0);
+    CmEjFeed(&t, CM_EJ_FED_QUERY, 0, 0, 0);
+    CmEjFeed(&t, CM_EJ_FED_REQUEST, 3, 9, 0);
+    in = mkIn(5);
+    in.U4Known = TRUE;
+    in.Qualified = TRUE;
+    in.Answer = CM_EJ_ANS_FAILED;
+    f.Hold = FALSE;
+    in.AckHeld = TRUE;
+    drive(&t, &f, &in);
+    CHECK_EQ(t.Phase, CM_EJ_P_ACK, "isolated, waiting");
+    in.AckHeld = FALSE;
+    f.Hold = TRUE;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Held, CM_EJ_DO_REMOVE, "the removal running at the stop");
+    CHECK(CmEjOwesRemoval(&t), "authorised by the proven isolation");
+
+    /* A teardown whose read-back failed makes no statement after a clean
+     * removal, nor after O6. */
+    fakeInit(&f);
+    f.Closed = 0;
+    begin(&t, TRUE, 0);
+    in = mkIn(5);
+    in.U4Known = TRUE;
+    in.Qualified = TRUE;
+    drive(&t, &f, &in);
+    in.Answer = CM_EJ_ANS_CLEAN;
+    drive(&t, &f, &in);
+    CHECK_EQ(f.Calls[CM_EJ_DO_TEARDOWN], 1, "torn down");
+    CHECK_EQ(f.Calls[CM_EJ_DO_MARK], 0, "no DOWN_QUIESCED unproven");
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "done");
+
+    fakeInit(&f);
+    f.Closed = 0;
+    f.RemoveCr = 0x17UL;
+    begin(&t, TRUE, 0);
+    in = mkIn(0);
+    in.U4Known = TRUE;
+    in.Qualified = TRUE;
+    drive(&t, &f, &in);
+    in.Answer = CM_EJ_ANS_CLEAN;
+    drive(&t, &f, &in);
+    for (in.NowMs = 50; in.NowMs <= 33000; in.NowMs += 50) {
+        drive(&t, &f, &in);
+    }
+    CHECK_EQ(f.Calls[CM_EJ_DO_TEARDOWN], 1, "O6's teardown once");
+    CHECK_EQ(f.Calls[CM_EJ_DO_MARK], 0, "no statement after it, unproven");
+
+    /* Stopped before the find: no query was made, nothing is owed. */
+    fakeInit(&f);
+    f.Hold = TRUE;
+    begin(&t, TRUE, 0);
+    CmEjAdopt(&t, 10);
+    in = mkIn(20);
+    drive(&t, &f, &in);
+    CHECK_EQ(t.Phase, CM_EJ_P_DONE, "released without a lookup");
+    CHECK_EQ(f.Calls[CM_EJ_DO_ADOPT], 0, "no lookup by an empty id");
 }
 
 static VOID test_vanish(VOID)

@@ -2419,6 +2419,9 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         }
         cmReenumAll(nhi, FALSE, TRUE, action);
     } else if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN) {
+        /* The 9x statement decision's allowance counts from here (task
+         * 43.18). */
+        CmEjectDownBegin(nhi);
         state = cmPoll(nhi, action, XHCI_TBT_WANT_DOWN);
         CmLogNote(nhi, "cm.reenum.down.poll", (state << 8) | r->Poll.Last);
         if (state == XHCI_TBT_POLL_TIMEOUT) {
