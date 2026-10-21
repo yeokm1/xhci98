@@ -1,6 +1,10 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 18, 2026-10-20 (the owner's answers to draft 17's open
+Status: draft 19, 2026-10-21 (roadmap-usb4 task 43.10, the owner's
+request of 2026-10-20: the settings pages laid out from their own font
+and size, the open lists as wide as their longest entry, three rows a
+part and more parts where needed, the note six lines at least; section
+5.4, "The layout", and sections 5.6, 11 and 15); draft 18, 2026-10-20 (the owner's answers to draft 17's open
 questions: the uninstall adopts the storage devices bound from this
 installer's copy after the run, section 6.5.8, and the rest accepted as
 designed, section 14); draft 17, 2026-10-20 (roadmap-usb4 task 43.4, the owner's
@@ -491,9 +495,9 @@ systems it is for ("(Windows 98 SE and ME only)", "(Windows 2000 to 7
 only)", "(Intel 7-9 series, C610 only)"), and it never writes: the page
 does not take it and the engine refuses it (`inst_value_greyed`,
 `inst_value_only`, host-tested). A value with no controller for it at all
-stays off the pages. Rows are 38 dialog units apart with an etched line
-between them, so a label is not read as the title of the choice above it
-(owner, 2026-10-19).
+stays off the pages. An etched line stands between rows, so a label is
+not read as the title of the choice above it (owner, 2026-10-19); where
+the rows go is "The layout" below (draft 19).
 
 **Where it is written** (task 42-A.17, the owner's decision of 2026-10-18,
 "The machine-wide registry key"): the settings pages write the machine-wide
@@ -527,6 +531,86 @@ that these are for the release notes' advice and a tester's use. The
 fourteen Linux quirk values (record 20), the log values and the poll
 periods stay out, as record 23 section 8.1 keeps them out: a value nobody
 should set from an installer is not offered by one.
+
+**The layout** (draft 19, roadmap-usb4 task 43.10; the owner, 2026-10-20:
+"some drop-down text is longer than the menu, and the description at the
+bottom shows only two lines"). The USB, Thunderbolt and Stor98 settings
+pages are laid out when each is shown, from the page itself, not from
+fixed sizes: the page's client rectangle (the sheet gives every page the
+size of its largest template), the page's own font (the dialog's), text
+measured with `DrawTextA` (`DT_CALCRECT | DT_WORDBREAK`) in a device
+context holding that font, and the margins and gaps in dialog units
+through `MapDialogRect`. No size is a pixel constant, so 98 SE's 96 DPI,
+7's 120 DPI and any shell font lay out by the same rule. Up to draft 18
+the rows were placed at fixed dialog-unit offsets, four to a page, each
+drop-down 160 dialog units wide (200 on Stor98's page) with the "now"
+text beside it, and the note under the rows 20 dialog units tall, two
+lines.
+
+- *The column*: the page's width less 8 dialog units each side. The
+  head (the page's sentence of section 5.4, 5.5 or 5.6) runs across it
+  at its measured height, 2 dialog units from the top.
+- *A row*: the label (the value's name and its sentence) at the left,
+  wrapped to its measured height; the "now" text on the label's line,
+  at the right, right-aligned in a column as wide as the widest "now"
+  text of the page's rows (all its parts, so the column does not move
+  between parts), at most two fifths of the column, wrapping inside it
+  past that; the label takes the rest of the line less a 6-unit gap.
+  Under the taller of the two, 2 dialog units down, the choice: a
+  drop-down across the whole column, so a long choice shows whole in
+  the closed box, or for a range (`Hi` nonzero) the number box,
+  60 dialog units wide as before. Rows are 9 dialog units apart, the
+  etched line in the middle of that gap.
+- *The open list*: every drop-down's list as wide as its longest
+  entry (`CB_SETDROPPEDWIDTH`), the entries measured in the box's own
+  font, plus the list's frame and vertical scroll bar (system metrics)
+  and 4 dialog units; never narrower than the closed box, never wider
+  than the screen. The same on Stor98's page and on the Advanced
+  dialogs' choice, whose closed box is widened to the dialog's right
+  margin (`IDC_A_CHOICE`, 262 dialog units in place of 200).
+- *Parts, three rows at most*: a page whose asked rows do not fit
+  takes more than one part. The room for rows is from under the head
+  to the note's least height above the page's bottom margin; the
+  split is the fewest parts of at most three rows each, the rows in
+  their order and spread evenly (the first parts take one row more
+  where they cannot be equal: four rows are two and two), such that
+  every part's rows and the gaps between them fit that room; a part
+  of one row stands whatever its height. The head then ends with
+  "(page k of n)", and its height is measured with the widest such
+  words whenever the page has more than one row, so the head does not
+  grow when a split is decided. One property-sheet page carries every
+  part: Next on a part before the last takes that part's choices with
+  the check that leaving the page makes (a range's number out of its
+  range keeps the user there, as today) and shows the next part;
+  Back on a part after the first does the same towards the first.
+  Entered with Next from the page before, a page shows its first
+  part; entered with Back from a page after, its last. A choice is
+  kept where leaving the page keeps it today (`choiceSet` and
+  `choiceVal`, Stor98's `s98WinSet` and `s98WinVal`), so a value set
+  on one part is there when the user comes back to it, and the
+  Summary and the run read every part's choices.
+- *The note* (`IDC_S_NOTE`): from under the tallest part's rows (the
+  same top on every part, so it does not move as Next steps) down to
+  the page's bottom margin, "Advanced..." at its right at its foot;
+  never less than six lines of the note's font with its frame, a
+  longer text scrolling in it as today.
+- *640 by 480 on 98 SE*: no template grows (`IDD_SETTINGS` stays 300
+  by 200 dialog units, the Components page the tallest), so the
+  window is the size it was.
+- *The arithmetic*, pure and host-tested (`test\test_wizlay.c`), is
+  in `xhciinst\wiz_lay.c` of its own, not in `inst_core.c`, which
+  `XHCICLN`, the mark service and `XHCITR` also compile and whose
+  change would make their binaries stale for `make-release.ps1`
+  without a change of theirs: the "now" column's width, a part's
+  height, the split, the open list's width and the note's top. What
+  measures, makes and places the controls is the window's
+  (`xhciwiz.c`), and its `/selftest` lays out every settings page on
+  the `IDD_SETTINGS` template at its own size, every part, with every
+  asked value of the table in its mixed, machine-wide and greyed
+  forms and every asked Stor98 row on both systems, set and not set:
+  each text whole in its control, no control over another or outside
+  the page, the note at least six lines, each closed box across the
+  column, and each open list at least as wide as its longest entry.
 
 ### 5.5 The Thunderbolt settings
 
@@ -576,8 +660,9 @@ DWORD); on 2000 to 7 the one `DriverParameter` string (`REG_SZ`) under
 separated by semicolons (`writethrough=`, `pollmode=`, `maxtransferkb=`,
 `pollbusyus=`, `pollidlems=`, `pollspinus=`, `gone=`, `idle=`), which the
 engine reads, edits one key at a time and writes back whole, keeping a
-pair it does not know and the order it found. Its rows are 48 dialog units apart with an etched line between them, as
-section 5.4's are (owner, 2026-10-19). The page names Stor98's
+pair it does not know and the order it found. Its rows are laid out as
+section 5.4's, "The layout" (draft 19), with an etched line between
+them as there (owner, 2026-10-19). The page names Stor98's
 readme as the authority, from which the table's meanings, defaults,
 ranges, types and key names are copied at the version the package bundles
 (since `3.1.0.0` the package's own version: Stor98 is built from
@@ -1709,6 +1794,15 @@ checks each control holds its text whole; the import tables of all four;
 the switch refusals, the window's included (`/yes` refused, `/console`
 refused).
 
+(Draft 19) `wiz_lay.c` holds the settings pages' layout arithmetic of
+section 5.4, "The layout", host-tested in `test\test_wizlay.c`: the "now"
+column (the widest text, at most two fifths), a part's height, the split
+(at most three rows a part, the fewest parts, even, a part of one row
+always standing, every row in exactly one part, in order), the open
+list's width (the longest entry and its frame, at least the closed box,
+at most the screen) and the note's top; the window's self-test lays the
+pages out as that section's last item says.
+
 ## 12. What this record changes in record 23
 
 Record 23 is revised in the same change as the code (task 42-A.2), and
@@ -1921,11 +2015,13 @@ Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 | `xhciinst\inst_eng.c`, `inst_eng.h` | the engine: record 23's system half behind `INST_FRONT` |
 | `xhciinst\xhciinst.c` | the console front end |
 | `xhciinst\inst_core.c`, `inst_core.h` | the pure half (section 11) |
+| `xhciinst\wiz_lay.c`, `wiz_lay.h` | (draft 19) the settings pages' layout arithmetic (sections 5.4 and 11) |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the four builds and the helper's; the self-tests; the import allowlists per executable |
 | `xhciinst\INSTALL.BAT` | the launcher with `/console` |
 | `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, the package root's starter of the window (draft 15) |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt`; the wizard first, the console second |
 | `test\test_inst.c` | the host suite |
+| `test\test_wizlay.c` | (draft 19) the layout arithmetic's host suite |
 | `scripts\package\test-package.ps1` | (draft 17) the installer's table of the seven held to `package-common.ps1`'s allowlist |
 | `scripts\package\make-release.ps1`, `test-package.ps1`, `scripts\build-driver.cmd` | staging, the mutation cases, the gates |
 | `docs\contributing\design\23-install-upgrade-tool.md` | revised as section 12 says |
