@@ -1201,6 +1201,23 @@ static void test_removals(void)
     snap_of(&so, qa, qb_build(qa, 1UL, 0x11111111UL, 5UL), 1UL);
     qbV1 = 0;
     CHECK_EQ(tr_diff(&so, &sn, ev, 8), 0, "a v1 answer before: none");
+    /* A full buffer: the warning comes first. */
+    qbRmCount = 1UL;
+    n = qb_build(qa, 0UL, 0x11111111UL, 5UL);
+    snap_of(&so, qa, n, 1UL);
+    qbRmCount = 2UL;
+    n = qb_build(qb, 3UL, 0x11111111UL, 6UL);
+    qb_entry(qb, 0UL, CM_ST_KIND_USB4_PORT, 0x0101UL, 1UL,
+             CM_ST_APPR_APPROVED, CM_ST_TUN_UP, CM_ST_GEN_USB4, "A", "1");
+    qb_entry(qb, 1UL, CM_ST_KIND_USB4_PORT, 0x0102UL, 2UL,
+             CM_ST_APPR_APPROVED, CM_ST_TUN_UP, CM_ST_GEN_USB4, "B", "2");
+    qb_entry(qb, 2UL, CM_ST_KIND_USB4_PORT, 0x0103UL, 3UL,
+             CM_ST_APPR_APPROVED, CM_ST_TUN_UP, CM_ST_GEN_USB4, "C", "3");
+    snap_of(&sn, qb, n, 1UL);
+    k = tr_diff(&so, &sn, ev, 2);
+    CHECK_EQ(k, 2, "a full buffer");
+    CHECK_EQ(ev[0].Kind, TR_EV_REMOVED, "the warning not dropped");
+
     /* Beside a departure, which is shown as before. */
     qbRmCount = 1UL;
     n = qb_build(qa, 1UL, 0x11111111UL, 5UL);
@@ -1211,9 +1228,9 @@ static void test_removals(void)
     snap_of(&sn, qb, qb_build(qb, 0UL, 0x11111111UL, 6UL), 1UL);
     k = tr_diff(&so, &sn, ev, 8);
     CHECK_EQ(k, 2, "a departure and a removal");
-    CHECK(ev[0].Kind == TR_EV_LEFT && strcmp(ev[0].Name, "Acme Dock") == 0,
+    CHECK_EQ(ev[0].Kind, TR_EV_REMOVED, "the removal first");
+    CHECK(ev[1].Kind == TR_EV_LEFT && strcmp(ev[1].Name, "Acme Dock") == 0,
           "the unit's disconnected, named");
-    CHECK_EQ(ev[1].Kind, TR_EV_REMOVED, "then the removal");
 
     qbRmFlags = 0UL;
     qbRmCount = 0UL;

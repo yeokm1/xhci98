@@ -121,6 +121,20 @@ VOID CmMarksCount(PCM_MARKS m, PCM_MARK e, ULONG which, ULONG now);
  * its PDO's address, which a tombstone keeps after the PDO is gone. */
 PCM_MARK CmMarksFindSerial(PCM_MARKS m, ULONG serial);
 
+/* The entry an attachment bound in start `boundStarts` with `serial` to
+ * `pdo` (cmMarkAtt) is, in a domain now at start `starts`: that entry,
+ * current or a tombstone, only when the starts agree and its PDO is still
+ * `pdo` - a stop and start begins the serials again. Else NULL. */
+PCM_MARK CmMarksBound(PCM_MARKS m, ULONG starts, ULONG boundStarts,
+                      ULONG serial, PVOID pdo);
+
+/* Whether a surprise removal on member `member` is owed to a loss of the
+ * host interface: the liveness not ACTIVE, a loss being drained, or the
+ * member owed (`debt`) or held (`barred`) for a recovery's retirement,
+ * which outlives the return to ACTIVE until the removal finishes. */
+BOOLEAN CmMarksLoss(BOOLEAN active, BOOLEAN draining, ULONG barred,
+                    ULONG debt, ULONG member);
+
 /* An attachment saw IRP_MN_SURPRISE_REMOVAL on entry e's PDO: the entry's
  * own count moves (CM_MK_SURPRISE), and when the attachment saw the device
  * `started` and the entry was not counted before, one surprise removal is

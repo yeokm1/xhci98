@@ -119,8 +119,8 @@
  * CM_Q_HDR_BYTES, before the record. What this driver's attachments saw
  * Windows do on NT: a surprise removal of a started device an active
  * member's bridge reported, counted once per PDO (cm_marks.h), and the
- * member (tunnel port) of the last one, the key a reader names the unit
- * by from a router it saw leave from that port.
+ * member (tunnel port) of the last one, shown for diagnosis: the notice a
+ * reader gives names no unit.
  */
 #define CM_Q_RM_BYTES           32UL
 #define CM_Q_RM_FLAGS           0UL     /* CM_Q_RF_*                      */

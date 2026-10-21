@@ -422,6 +422,44 @@ static void test_removals(void)
     CmMarksReset(&t);
     CHECK_EQ(t.Removals | t.Lost, 0, "reset: counts 0");
     CHECK(CmMarksFindSerial(&t, s1) == NULL, "reset: no entry");
+
+    /* The binding's gates: the start, the serial, the PDO. */
+    snap[0] = P(5);
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 0, 0x0300, snap, 1, FALSE, TRUE, 400);
+    e1 = CmMarksFind(&t, P(5));
+    s1 = e1->Serial;
+    CHECK(CmMarksBound(&t, 2, 2, s1, P(5)) == e1, "bound: found");
+    CHECK(CmMarksBound(&t, 3, 2, s1, P(5)) == NULL,
+          "bound in an earlier start: refused (serials begin again)");
+    CHECK(CmMarksBound(&t, 2, 2, s1, P(6)) == NULL,
+          "another PDO under that serial: refused");
+    CHECK(CmMarksBound(&t, 2, 2, 0, P(5)) == NULL, "never bound: refused");
+    CHECK(CmMarksBound(&t, 2, 2, s1, NULL) == NULL, "no PDO: refused");
+    /* The member stops and starts: buried, then a new entry and serial
+     * for the same PDO; the old serial still finds the tombstone. */
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 0, 0x0300, NULL, 0, FALSE, FALSE, 410);
+    CmMarksBegin(&t);
+    (void)CmMarksSync(&t, 0, 0x0300, snap, 1, FALSE, TRUE, 420);
+    e2 = CmMarksFind(&t, P(5));
+    s2 = e2->Serial;
+    CHECK(s2 != s1, "a new serial after the member's restart");
+    CHECK(CmMarksBound(&t, 2, 2, s2, P(5)) == e2, "rebound: the new entry");
+    e3 = CmMarksBound(&t, 2, 2, s1, P(5));
+    CHECK(e3 != NULL && e3->Tomb, "the old binding: its tombstone");
+
+    /* The loss predicate. */
+    CHECK(!CmMarksLoss(TRUE, FALSE, 0, 0, 1), "ACTIVE, nothing owed: no loss");
+    CHECK(CmMarksLoss(FALSE, FALSE, 0, 0, 1), "not ACTIVE: a loss");
+    CHECK(CmMarksLoss(TRUE, TRUE, 0, 0, 1), "a loss drained: a loss");
+    CHECK(CmMarksLoss(TRUE, FALSE, 0, 0x2, 1), "ACTIVE, the member owed: a loss");
+    CHECK(CmMarksLoss(TRUE, FALSE, 0x2, 0, 1),
+          "ACTIVE, the member barred: a loss");
+    CHECK(!CmMarksLoss(TRUE, FALSE, 0x1, 0x4, 1),
+          "another member owed or barred: no loss");
+    CHECK(!CmMarksLoss(TRUE, FALSE, 0xFFFFFFFFUL, 0, 32),
+          "a member past the mask: no loss by it");
 }
 
 int main(void)

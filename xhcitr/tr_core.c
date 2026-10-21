@@ -1512,6 +1512,15 @@ int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
             }
         }
     }
+    /* The warnings before the ordinary events, so a full buffer never
+     * drops one (the caller moves on to the next sample either way). */
+    for (i = 0; i < now->NhiCount && i < TR_SNAP_NHI; i++) {
+        if (tr_removed(old, now, i) && count < cap) {
+            memset(&ev[count], 0, sizeof(ev[count]));
+            ev[count].Kind = TR_EV_REMOVED;
+            count++;
+        }
+    }
     for (i = 0; i < now->Count; i++) {
         const TR_SROUTER *r = &now->R[i];
         const TR_SROUTER *o;
@@ -1556,13 +1565,6 @@ int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap)
             continue;
         }
         count = tr_ev(ev, cap, count, TR_EV_LEFT, o, nOld == 1);
-    }
-    for (i = 0; i < now->NhiCount && i < TR_SNAP_NHI; i++) {
-        if (tr_removed(old, now, i) && count < cap) {
-            memset(&ev[count], 0, sizeof(ev[count]));
-            ev[count].Kind = TR_EV_REMOVED;
-            count++;
-        }
     }
     return count;
 }

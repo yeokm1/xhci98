@@ -368,7 +368,8 @@ static size_t mk_fake_query(unsigned char *b, INST_U32 stage, INST_U32 live,
     memset(b, 0, 1024);
     id = rec + recBytes;
     mk_put32(b, CM_Q_O_MAGIC, CM_Q_MAGIC);
-    mk_put32(b, CM_Q_O_VERSION, CM_Q_VERSION);
+    /* Version 1's layout, the record at 64 (no removal block). */
+    mk_put32(b, CM_Q_O_VERSION, CM_Q_VERSION_1);
     mk_put32(b, CM_Q_O_BYTES, (INST_U32)(id + strlen(text)));
     mk_put32(b, CM_Q_O_LIVE, live);
     mk_put32(b, CM_Q_O_FLAGS, flags);

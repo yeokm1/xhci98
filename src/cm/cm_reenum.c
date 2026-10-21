@@ -1212,21 +1212,18 @@ VOID CmRegAttSurprise(PCM_FILTER filter, BOOLEAN started)
     for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
         d = CONTAINING_RECORD(CONTAINING_RECORD(e, CM_REENUM, Link), CM_NHI,
                               Reenum);
-        if (d != filter->MarkDom || d->Reenum.Starts != filter->MarkStarts) {
+        if (d != filter->MarkDom) {
             continue;
         }
-        m = CmMarksFindSerial(&d->Reenum.Marks, filter->MarkSerial);
-        if (m == NULL || (PVOID)filter->Common.Pdo != m->Pdo) {
+        m = CmMarksBound(&d->Reenum.Marks, d->Reenum.Starts,
+                         filter->MarkStarts, filter->MarkSerial,
+                         (PVOID)filter->Common.Pdo);
+        if (m == NULL) {
             break;
         }
-        /* A loss: the liveness not ACTIVE, a loss drained, or the
-         * member owed or held for a recovery's retirement (the barrier
-         * outlives the return to ACTIVE until the removal finishes). */
-        lost = (BOOLEAN)(d->Live.State != CM_LIVE_ACTIVE ||
-                         d->Reenum.LossDrain != 0 ||
-                         (m->Member < 32 &&
-                          ((d->RecBarred | d->RecDebtMask) &
-                           (1UL << m->Member)) != 0));
+        lost = CmMarksLoss((BOOLEAN)(d->Live.State == CM_LIVE_ACTIVE),
+                           (BOOLEAN)(d->Reenum.LossDrain != 0),
+                           d->RecBarred, d->RecDebtMask, m->Member);
         if (CmMarksSurprise(&d->Reenum.Marks, m, started, lost,
                             cmMarkNow(d))) {
             CmLogNote(d, "cm.reenum.unexpected", m->MemberBdf);
@@ -1401,10 +1398,14 @@ VOID CmReenumRemovals(PCM_NHI nhi, UCHAR *out)
     KIRQL irql;
 
     r = &nhi->Reenum;
+    /* Unlisted (no route, or an inert start that never reached
+     * CmReenumStart, whose table was never reset): nothing watched. */
     KeAcquireSpinLock(&cmRegLock, &irql);
-    CmMarksRemovalBlock(out, &r->Marks,
-                        (BOOLEAN)(r->Listed &&
-                                  r->Route == CM_ROUTE_FILTER));
+    if (r->Listed && r->Route == CM_ROUTE_FILTER) {
+        CmMarksRemovalBlock(out, &r->Marks, TRUE);
+    } else {
+        CmMarksRemovalBlock(out, NULL, FALSE);
+    }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 

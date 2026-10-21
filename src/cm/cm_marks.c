@@ -281,6 +281,30 @@ PCM_MARK CmMarksFindSerial(PCM_MARKS m, ULONG serial)
     return NULL;
 }
 
+PCM_MARK CmMarksBound(PCM_MARKS m, ULONG starts, ULONG boundStarts,
+                      ULONG serial, PVOID pdo)
+{
+    PCM_MARK e;
+
+    if (starts != boundStarts) {
+        return NULL;
+    }
+    e = CmMarksFindSerial(m, serial);
+    if (e == NULL || pdo == NULL || e->Pdo != pdo) {
+        return NULL;
+    }
+    return e;
+}
+
+BOOLEAN CmMarksLoss(BOOLEAN active, BOOLEAN draining, ULONG barred,
+                    ULONG debt, ULONG member)
+{
+    if (!active || draining) {
+        return TRUE;
+    }
+    return (BOOLEAN)(member < 32 && ((barred | debt) & (1UL << member)) != 0);
+}
+
 BOOLEAN CmMarksSurprise(PCM_MARKS m, PCM_MARK e, BOOLEAN started,
                         BOOLEAN lost, ULONG now)
 {
