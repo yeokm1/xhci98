@@ -8212,9 +8212,20 @@ QEMU 11.1.0, are below. Each one is enforced in code.
 - **The CD image builder holds its source files** until its objects are
   collected, so a staging directory deleted at once can fail with "in use";
   the scripts collect first and retry.
-Timings, read on development host A with `3.2.0.0` at `e61538ae` (TCG):
-TIMINGS-PENDING
+Timings, read on development host A with `3.2.0.0` at `e61538ae` (TCG, QEMU
+11.1.0, 2026-10-22; the x86 upload set built locally with the driver pack):
 
+| What | Before (cold start) | After (saved starting point) |
+|---|---|---|
+| 98 SE console leg (4 starts) | 700 s; first start 230 s | 553 s; restore 0.7 s, first start 35 s |
+| XP console leg (3 starts, 2 vCPUs) | 572 s; first start 301 s | 424 s; restore 1.5 s, first start 130 s |
+| Both legs | 1272 s one after the other | 7.4 min wall time (`release-matrix.ps1`, run together, 3 vCPUs) |
+
+Making a starting point took 206 s on 98 SE (state 36 MB) and 335 s on XP
+(state 221 MB), once per guest and QEMU. The later starts are cold starts
+in both columns, so the saving is in the first start: the cold boot, and
+on 98 SE the wizard escaped. Before 43.12 the same checks were typed or
+clicked in a guest by an operator or by an agent reading screenshots.
 ### Testing Checklist
 
 From Phase 3 onward, run every applicable checklist item on both target VMs
