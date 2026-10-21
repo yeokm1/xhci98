@@ -7255,7 +7255,11 @@ static void testsigning_note0(void)
         return;
     }
     if (!usbInclude) {
-        testsigning_note_cm();
+        /* No kernel driver in a tools-only run (record 26 section 5.3.1
+         * case 5): nothing to sign. */
+        if (haveCm && tbInclude) {
+            testsigning_note_cm();
+        }
         return;
     }
     if (reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
@@ -20616,7 +20620,8 @@ static void arp_write(int incomplete)
                   envNow.Nt && inst_arp_cm_only(svc_state("xhci98"),
                                                 svc_state("xhcicm"),
                                                 !opts.Uninstall &&
-                                                !usbInclude));
+                                                !usbInclude && haveCm &&
+                                                tbInclude));
     if (!inst_arp_command(cmd, sizeof(cmd), toolDir, window, envNow.Nt)) {
         out("The Add/Remove Programs entry cannot name %s.\n", exe);
         flagFailed = 1;

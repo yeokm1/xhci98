@@ -631,7 +631,8 @@ static void welcome_texts(HWND dlg)
     /* The connection manager alone: on 8 and 8.1 the install's texts; on a
      * machine with it alone registered the uninstall's (record 26 draft
      * 8). */
-    int cm = uninstallMode ? inst_eng_cm_only_machine() : is_cm_only_system();
+    int cm = uninstallMode ? inst_eng_cm_only_machine() :
+             (is_cm_only_system() && tbHave);
 
     _snprintf(title, sizeof(title) - 1, "%s %s",
               uninstallMode ? inst_page_text(cm ? INST_PT_UN_TITLE_CM :
@@ -2180,8 +2181,10 @@ static void summary_fill(HWND dlg)
             tb_add(&t, "- none present: the drivers are staged for later.\n");
         }
         tb_add(&t, usbChoice ? "\nThe components:\n- xhci98.sys\n" :
+               tbHave ? "\nThe components:\n- xhci98.sys and xhciuas.sys: "
+               "left out (the connection manager alone)\n" :
                "\nThe components:\n- xhci98.sys and xhciuas.sys: left out "
-               "(the connection manager alone)\n");
+               "(the xHCI98 tools alone)\n");
         if (usbChoice) {
             tb_add(&t, uasChoice ? "- xhciuas.sys, the UAS disk driver\n" :
                    "- xhciuas.sys, the UAS disk driver: left out (one "
