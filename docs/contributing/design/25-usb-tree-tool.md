@@ -1,6 +1,7 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 15, 2026-10-19 (revision 15, Windows 2000's USB disk
+Status: revision 16, 2026-10-21 (revision 16, the unexpected-removal
+notice, roadmap-usb4 task 43.21, below; revision 15, Windows 2000's USB disk
 class and its stopped mark, roadmap-usb4 task 42-A.28: sections 6.5 and
 14; revision 14, XHCISNAP's reading
 moved here, below; revision 13, the drivers' logging level, below;
@@ -81,6 +82,16 @@ File > Save Snapshot..., and a "Snapshot" part at the end of Save Report
 and `/report` (section 15). XHCISNAP.EXE and its SNAPON.BAT, SNAPGET.BAT
 and SNAPOFF.BAT leave the package. Sections 4.6, 4.8 and 12 change with
 it.
+
+Revision 16, 2026-10-21 (roadmap-usb4 task 43.21, which was UNPL.1 and
+earlier 42-A.8; the owner's request behind decision T9, and the owner's
+decision of 2026-10-18 that it is NT-only): the tray says when a
+Thunderbolt or USB4 unit was removed unexpectedly - Windows surprise-removed
+a running device of it - from a count the child filter keeps, published in
+the query's answer as its version 2 (section 7.6). The notice says the
+unit was removed unexpectedly, never that data was lost. 98 SE and ME
+have no child filter and show such a unit as disconnected, as before.
+Sections 4.3, 4.4, 7.2, 10, 11 and 12 change with it.
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
 changes no security level, updates no firmware, and shows no secret or
@@ -418,7 +429,9 @@ then the status record byte for byte as `CmStatusBuild` builds it (record
 24 section 3.1), one 32-byte extension per router entry (link rate per
 lane, width, the lane adapter's link state and speed code as read, the
 IDs the connection manager holds for a router the record has none for,
-flags), then the instance ID.
+flags), then the instance ID. Since revision 16 the answer is version 2:
+the same header, then section 7.6's removal block, then the record, the
+extensions and the instance ID as before, each found by its offset.
 
 - **Publication.** After each pass the connection-manager thread builds
   the whole answer on its own thread and copies it into the query
@@ -450,7 +463,9 @@ flags), then the instance ID.
 
 The registry record (`XhciCmStatus`, version 1), the ask and echo, and
 XHCIINST's use of them stay exactly as record 24 has them. Revision 9
-leaves the query's answer (`XCMQ`, version 1) as it is.
+leaves the query's answer (`XCMQ`, version 1) as it is. Revision 16 makes
+it version 2 (section 7.6); the registry record stays version 1 and
+XHCIINST, which never reads the query, is untouched.
 
 ### 4.5 `IOCTL_XHCICM_LOG` (revision 9)
 
@@ -1135,6 +1150,7 @@ A new epoch is a new set of devices.
 | an ICM device's approval becomes failed | "<name> could not be approved." |
 | a router entry leaves | "<name> was disconnected." |
 | the liveness state leaves ACTIVE | "The Thunderbolt/USB4 controller stopped answering." |
+| the NHI's unexpected-removal count rises (revision 16, section 7.6; NT) | "<name> was removed unexpectedly." |
 
 The approval events read the ICM's approval states only: a USB4 entry's
 approval word folds held, failed and unsupported together and an eject
@@ -1148,7 +1164,9 @@ without the child filter (record 21 section 7.4, record 24 section 5.2),
 and another program can stop a unit and the user unplug it between two
 samples. So the tray says "disconnected", never "unplugged while in use"
 (decision T9). The outcome of an eject comes from the transaction
-(section 6.2 step 7), not from this diff.
+(section 6.2 step 7), not from this diff. The unexpected-removal notice of
+revision 16 is no reading of this diff either: it comes from a count the
+driver keeps of what Windows itself did to a running device (section 7.6).
 
 **Balloons.** Where `shell32.dll` is version 5.0 or later (2000, ME, XP
 and later) the tray uses the version 2 `NOTIFYICONDATAA` size with
@@ -1283,6 +1301,126 @@ each driver's log, in place of `XHCISNAP -verbosity` and `SNAPON.BAT`.
    block before the tree, and a controller's and an NHI's details carry
    its own line.
 
+### 7.6 The unexpected-removal notice (revision 16)
+
+Roadmap-usb4 task 43.21. Decision T9 left the owner's request for a
+notice on an unsafe unplug open because a 1 s sample cannot prove one, and
+named the source that can: the child filter, which on NT sees Windows
+surprise-remove a unit's device (record 21 section 7.4). This section
+publishes what it sees and has the tray say so. It is NT-only (the
+owner, 2026-10-18): 98 SE and ME offer no documented way to watch a
+removal from outside the device's stack, and a unit gone there without an
+eject the tool saw proves nothing - an eject from Windows' own applet, a
+re-enumeration and a power loss look the same - so there such a unit is
+shown as disconnected, as before.
+
+1. **What is counted.** An attachment of `xhcicm.sys` on a PDO (a child
+   filter of either kind, or a bridge filter on a child that is a
+   bridge) that receives `IRP_MN_SURPRISE_REMOVAL` counts one unexpected
+   removal in its domain when:
+   - the PDO has a marks entry in the domain (record 21 section 7.4,
+     revision 3: a PDO an active member's bridge reported), current or a
+     tombstone - a tombstone because the PnP manager surprise-removes a
+     device after the bus answer that no longer lists it, and the member
+     bridge's filter, reading that answer on its way back, has already
+     made the entry a tombstone (`cmMarksSyncAll`). The entry's own
+     surprise-removal count (`CM_QM_E_COUNTS1`) is found the same way;
+     until revision 16 it looked among the current entries only, so an
+     unplug's surprise removal reached it only where the member bridge's
+     snapshot had not yet been taken;
+   - that attachment saw the device started: its start succeeded below
+     it and no stop or removal followed; and
+   - the entry has not been counted before. A PDO is counted once however
+     many of this driver's attachments it carries; a surprise-removed PDO
+     never starts again, and a re-plug is a new PDO with a new entry.
+
+   Never counted: a removal after a query-remove (an eject from any tool,
+   a disable, a driver update, an uninstall: Windows does not
+   surprise-remove those); a device that never started (no driver of its
+   own, or a start refused while its tunnel is torn down for an eject,
+   `CmRegStartAllowed`); a function deeper than a member's direct
+   children, which has no marks entry (the devices of a chain's second
+   router); anything on 98 SE and ME, where there is no filter. Windows
+   surprise-removes more than an unplugged unit: a device whose driver
+   reports itself failed (`PNP_DEVICE_FAILED`), a function its tunnel lost
+   (a link fault, record 22 section 7.7's containment), a unit gone across
+   a sleep. That is why the notice says "removed unexpectedly", never
+   "unplugged", and nothing about data.
+2. **Which unit.** The child filter knows the PDO's member, not a router,
+   so the connection-manager thread keeps, per member, the router last
+   seen on it. After each pass it reads the record it built: of the
+   router entries whose bridge word (`CM_ST_E_BRIDGE`) is the member's
+   bus, device and function, those at the smallest depth (an ICM entry's
+   place bits 15:8; a router on a host USB4 port is depth 1; a deeper USB4
+   router has no bridge word). Exactly one is kept - the whole 128-byte
+   entry, with the thread's clock; more than one at that depth clears
+   what was kept (no identity); none leaves it as it was, so a router that
+   left the record just before its device's surprise removal is still
+   named. At the count, the domain's last removal takes the member's
+   bus, device and function, and the kept entry when it was last seen
+   within `CM_Q_RM_KEEP_MS` (10 s) of the count by the same clock; else
+   none, so a router long gone never names a later device. The kept
+   entries and the count live beside the marks table, under the
+   registration list's lock, and are emptied with it at the domain's
+   start and stop, so they are per start, as the epoch is.
+   Where this names no unit: under the ICM the bridge word is given only
+   while the domain has one active member (`cm_status.c`), so two active
+   members name none; a chain's first device is named when it is
+   unplugged (its followers leave with it), and a deeper device's unplug
+   removes no member's direct child and gives no notice.
+3. **The answer, version 2.** `CM_Q_VERSION` is 2. The 64-byte header is
+   version 1's. At offset 64 follows the removal block, `CM_Q_RM_BYTES`
+   = 160:
+
+   | Offset | Field |
+   |---|---|
+   | +0 | `CM_Q_RM_FLAGS`: `CM_Q_RF_WATCHED` (this domain's removals are watched: an NT target whose domain has the filter route), `CM_Q_RF_ENTRY` (the entry below names the last removal's unit) |
+   | +4 | `CM_Q_RM_COUNT`: unexpected removals counted since this start; it wraps |
+   | +8 | `CM_Q_RM_MEMBER`: the last removal's member, bus 15:8, device 7:3, function 2:0; `CM_Q_UNKNOWN` before the first |
+   | +12 | reserved, 0, to +31 |
+   | +32 | `CM_Q_RM_ENTRY`: the router entry (record 24 section 3.1's layout, `CM_ST_ENTRY_BYTES`) as the record carried it when last seen on that member; zeros without `CM_Q_RF_ENTRY` |
+
+   The record follows at 224 (`CM_Q_O_REC_OFFSET` says so), then the
+   extensions and the instance ID, each at its offset as before;
+   `CM_Q_BUILD_MAX` grows by the block. The answer the device holds
+   before the thread's first pass carries the block with count 0. The
+   content generation follows the block like any other byte. The
+   driver's own stamp clearing of the embedded record (`CmQueryPublish`)
+   finds the record by its offset, not at 64.
+
+   Readers: XHCITR takes versions 1 and 2, reading version 1 as "not
+   reported by this driver"; the mark service (`xhcimark`), which reads
+   nothing of the block, takes both. A reader from before revision 16
+   refuses version 2, as the header's rule says; the package replaces
+   its drivers and tools together (section 8).
+4. **The tray.** The snapshot keeps each NHI's block (flags, count,
+   entry). Between two snapshots, for an NHI both hold at the same epoch,
+   each with `CM_Q_RF_WATCHED` and the liveness ACTIVE, a count that
+   differs gives one event, however much it moved (one unplug can remove
+   several devices, and they are counted in one burst): "<name> was
+   removed unexpectedly.", titled as a warning, named from the entry
+   (`tr_router_name`) with `CM_Q_RF_ENTRY`, else "A Thunderbolt/USB4
+   device was removed unexpectedly." When the same diff holds the
+   "disconnected" event of the same router (`tr_same_router`, the entry
+   read with the NHI's key and epoch), that event is dropped: one
+   balloon says the more specific thing. A domain whose liveness has left
+   ACTIVE already says it stopped answering, and its devices' removal is
+   that, not the user's: no notice. Where a burst straddles two polls a
+   second notice can follow; that is accepted. Balloons are 2000 and
+   later anyway, and 98 SE and ME never set `CM_Q_RF_WATCHED`.
+5. **The window and the report.** The NHI's details carry
+   "Unexpected removals:" with the count since this start and, after
+   the first, the last one's unit name and tunnel port; "not watched on
+   this system" without `CM_Q_RF_WATCHED`; "not reported by this driver"
+   for a version 1 answer. Save Report and `/report` carry the same line.
+6. **Windows 2000** shows its own Unsafe Removal dialog after an unplug
+   without an eject (record 21 section 7.4, read by leg 39-V.2). The
+   tray's notice comes as well there; whether to leave it out on 2000 is
+   the owner's (section 13).
+7. **Release notes.** "The tray's unexpected-removal notice is shown on
+   Windows 2000 and later only; on Windows 98 SE and ME a Thunderbolt or
+   USB4 unit removed without an eject is shown as disconnected."
+
 ## 8. Install, upgrade and uninstall
 
 - XHCIINST owns the tool's file (and its `.TMP`, `.BAK` and `.DEL`
@@ -1383,6 +1521,15 @@ what each level serves, the ring's text and cut, the configuration read's
 states, the sizing) and the tool's reader and texts of it in
 `test\test_xhq.c`, with the default level.
 
+Revision 16: the count and the kept routers (`cm_marks.c`: once per PDO,
+a tombstone found, a device never started, the smallest depth, two at
+it, none, the keep window, the reset) in `test\test_cm_marks.c`; the
+version 2 layout, the block, the record at its offset and the content
+generation in `test\test_cm_query.c`; the readers of both versions, the
+event (a rise, a wrap, an epoch change, the liveness gate, not watched,
+no entry, the dropped "disconnected") and the details line in
+`test\test_tr.c`, with the mark service's reader of version 2.
+
 ## 11. Legs
 
 | Leg | Systems | What it reads |
@@ -1396,6 +1543,7 @@ states, the sizing) and the tool's reader and texts of it in
 | T.7 | 98 SE, ME, XP, 7 x86 | revision 7, as a standard user: a Bulk-Only stick at a USB 3 and a USB 2 port and a UAS disk (98 SE, XP, 7) - the label with its letter, Safely Remove from the window, a right click, Delete and the tray, the result, the device gone or held, unplug and re-plug with the drive back, a refusal with a file open on it; a tablet, a keyboard, a hub and a device with no storage never offered |
 | T.8 | 98 SE, 2000, 7 x86 (as a standard user) | revision 9: `XhciCmLogVerbosity` 2 on xhcicm's NHI and `SNAPON.BAT` for xhci98, restart; both "Driver log" nodes show the counters and the log live, after a plug and after an eject; Save Report holds both with no address; with recording off, the advice |
 | T.9 | 98 SE (TB3 enclosure), 7 x86 as a standard user; xhci98's nodes on 98 SE, ME, 2000, XP, 7 x86 and 7 x64 | revision 12: the NHI's node shows the NHI and the tunnel port with pin and line and capabilities; below the port, the enclosure's functions on 7 and "not read on this system" on 98 SE; xhci98's PCI node and Driver log node read through the query request at the new default level 2; `/report` holds them; with the HCD regression (enumeration, a mass-storage copy, an unplug and re-plug) on each of the six |
+| T.11 | 2000, XP, 7 x86, 7 x64 (the TB3 and USB4 emulator devices); 98 SE | revision 16: an unplug with no eject gives "<name> was removed unexpectedly." and no "disconnected" balloon besides; an eject and then an unplug, a disable and enable of the unit's device, a driver update and a sleep and resume with the unit attached give none; the NHI's details count each; on 98 SE the unplug reads "disconnected" and the details "not watched on this system" |
 | T.10 | 98 SE, 7 x86 | revision 13, 7 x86 as a standard user: each driver's level set to 3 (on 7 through "Set as administrator..."), the restart, the registry and the dialog read 3 for each; then set back to 2 |
 
 ## 12. Decisions
@@ -1440,7 +1588,8 @@ states, the sizing) and the tool's reader and texts of it in
   the owner asked for a notice on an unsafe unplug: polling cannot prove
   one (section 7.2). The authoritative source is the child filter, which
   sees a unit's surprise removal on NT; publishing a count of those in the
-  query is planned work for the owner to open.
+  query is planned work for the owner to open. **Opened by revision 16**
+  (roadmap-usb4 43.21): decision T22.
 - **T10** A USB device's eject is section 6.5's short transaction - the
   shared mutex, the device found again by instance ID and its eligibility
   read again just before the call - not section 6.2's: no query device
@@ -1509,6 +1658,14 @@ states, the sizing) and the tool's reader and texts of it in
   Report carries the snapshot, so one file is the bug report. Its level
   switches do not move: section 7.5 already replaces them.
 
+- **T22** (owner, 2026-10-18 and 2026-10-20, roadmap-usb4 43.21; revision
+  16) The tray says a unit "was removed unexpectedly" when the child
+  filter saw Windows surprise-remove a running device of it, from a
+  count in the query's answer (version 2), on NT only; never that it was
+  unplugged or that data was lost (section 7.6). The count, not the 1 s
+  diff, is the evidence; the router named is the one the thread last
+  saw on the device's tunnel port, within 10 s, or none.
+
 ## 13. Open
 
 - Revision 7: whether a USB disk on 98 SE (NUSB's `usbstor.sys` and
@@ -1526,6 +1683,10 @@ states, the sizing) and the tool's reader and texts of it in
   returns to `DeviceIoControl` for the removed-device answer.
 - Whether the ICM's firmware messages carry a link rate the client could
   keep; until read, "not reported by the firmware".
+- Revision 16, for the owner: whether Windows 2000, which shows its own
+  Unsafe Removal dialog after an unplug without an eject, should get the
+  tray's notice too. As designed it does (one rule for every NT target,
+  and the dialog names the disk, not the unit).
 
 ## 14. As built
 
