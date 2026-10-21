@@ -2924,6 +2924,16 @@ says, 8 (`DriverVer=07/25/2012,6.2.9200.16384`, `signature="$Windows NT$"`):
   sets `MSISupported` 1 with no `MessageNumberLimit`; `Needs=PciD3ColdSupported`
   from `machine.inf`; 8.1 adds a `.WMI` section.
 
+`usbxhci.sys` itself refuses no controller by id in what was read: a
+string and immediate search of the x64 builds finds no refusal table, and
+`Controller_RetrieveDeviceFlags` (8 x64 `0x46C54`; 8.1
+`Controller_PopulateDeviceFlags`) only sets quirk bits for hard-coded ids
+(`1B73:1009` flags 2, `1B6F:7023` `|= 0xC`, `1B21:1040` to `1042`
+`|= 0x10`), with more from the kernel shim database (keys formatted
+`USBXHCI:PCI\VEN_%04X&DEV_%04X...`, `g_KseQueryDeviceFlags`) and the
+registry, whose contents are not in the image. What the bits do was not
+traced, nor the x86 function.
+
 `usbhub3.inf` (`FeatureScore=0` on 8, `FeatureScore=80` on 8.1, with the
 comment `usbxhci.inf` carries) binds `USB\ROOT_HUB30`, `USB\USB30_HUB` and
 `USB\USB20_HUB`, the ids Windows 8's own USB 3 stack gives its hubs;
@@ -3128,7 +3138,11 @@ the code above; VM). This package's own `xhciuas.sys` reaches streams
 through the bus's private interface (`xhci98_streams.h`), not through
 `usbdex`; but 6.12.1's ranking puts `uaspstor` on the interface unless the
 installer forces `xhciuas.inf` there. For 43.29 (owner's decision, 6.12.10):
-force `xhciuas.inf` onto the UAS interfaces under this bus as on 7, or
+force `xhciuas.inf` onto the UAS interfaces under this bus as on 7 (which
+reaches only the devices present when the installer runs: `install_inf`
+in `inst_eng.c` forces the hardware ids of the devices it finds, and a UAS
+disk plugged in for the first time later is ranked by Windows, so it gets
+`uaspstor`), or
 implement `GUID_USBD_INTERFACE_V1` and `0x49104B` with URB `0x35` and
 `0x36` for `uaspstor` (and with them the V1 interface's allocators, since a
 `0x602` contract sends `USBD_UrbAllocate` there), or leave UAS disks to
@@ -3235,7 +3249,9 @@ and earlier only). All three are 43.24's and 43.31's legs.
    `hcd: internal IOCTL not served` for any new code (a debug build).
 5. A UAS disk on 8 under `uaspstor`: High Speed (no streams, expected to
    run) and SuperSpeed (expected `0xC0000182`, Code 10), and the same disk
-   under a forced `xhciuas.inf`.
+   under a forced `xhciuas.inf`; and a SuperSpeed UAS disk plugged in for
+   the first time after the install, to read which driver Windows gives
+   it.
 6. Test-signing mode on 8 x64 and 8.1 x64 with Secure Boot off, the
    watermark and the Code shown without it; 8 x86 with the unsigned
    binary.
@@ -3263,7 +3279,12 @@ the strings and their callers in 8's `usbui.dll` and the shell
    install and the 2000 filter), or teach the bus the `0x602` contract for
    `uaspstor`. Recommendation: force `xhciuas.inf`; the `0x602` contract
    brings UCX's allocator interface with it, which Windows 8's own USB 2.0
-   stack does not offer either.
+   stack does not offer either. The force covers only the disks present
+   at install; for a disk first plugged in later, either the release notes
+   say to run the installer again (or use Device Manager's Update Driver),
+   or 43.29 finds a way for the package to win that device's ranking (a
+   more specific id the bus presents and `xhciuas.inf` alone names is one
+   to read: 10.13's namespace rules apply). The owner to choose.
 2. **`GUID_USBD_INTERFACE_V1` and `0x49104B`**: recommendation, not
    answered (the `0x600` path is the one Windows 8's own `usbhub.sys`
    gives every client, so every inbox client already copes with it).
