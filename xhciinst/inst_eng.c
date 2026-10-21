@@ -13601,7 +13601,11 @@ static int s98_baseline(void)
         }
     }
     s98Baseline = 1;
-    s98_pending_resolve(0);
+    if (!s98_pending_resolve(0)) {
+        s98Baseline = 0;
+        out("Nothing was changed: run the installer again.\n");
+        return 0;
+    }
     /* PreExisting: written once, never cleared; a value there that cannot
      * be read refuses rather than being written over. */
     h = s98_rec_has(NULL, "PreExisting");
@@ -14167,6 +14171,11 @@ static int s98_pending_mark(const char *id, const char *state)
     g = reg_text3(HKEY_LOCAL_MACHINE, path, id, now, sizeof(now));
     if (g <= 0) {
         return g == 0;
+    }
+    /* Only this call's own attempt changes: an unknown outcome kept from
+     * an earlier run stays the exclusion it is. */
+    if (!inst_eq(now, "attempt")) {
+        return 1;
     }
     if (state == NULL) {
         return s98_rec_del("Pending", id);
