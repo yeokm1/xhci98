@@ -2160,6 +2160,68 @@ static void test_router_version(void)
     CHECK_EQ(g_fw.DevReadRouteLo, 1, "FR: at the walked route");
     CHECK(firstDev() != NULL && firstDev()->VersionState == TBT_ICM_VER_TBT3,
           "FR: major 0");
+    /* FR at depth 2: the read goes to the whole walked route. */
+    g_fw.VerByte = 0x20;
+    arConnected(9, 1, 1, 2, kUuid2, 0);
+    idle(200);
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 2, "FR depth 2: read");
+    CHECK_EQ(g_fw.DevReadRouteLo, 0x0301, "FR depth 2: at route 0x0301");
+    CHECK(TbtIcmDevice(&g_icm, 1) != NULL &&
+              TbtIcmDevice(&g_icm, 1)->VersionState == TBT_ICM_VER_USB4,
+          "FR depth 2: USB4");
+
+    /* AR unrouted (get route never answered): owed, nothing sent, until
+     * the next announcement routes it - the same occupancy. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "AR bind, nothing attached");
+    g_fw.RouteMode = MODE_NEVER;
+    arConnected(5, 1, 1, 1, kUuid, 0);
+    idle(200);
+    idle(1000);
+    CHECK(firstDev() != NULL && !firstDev()->RouteValid, "unrouted");
+    CHECK_EQ(g_fw.DevReads, 0, "no read without a route");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_OWED, "owed");
+    serial = firstDev()->Serial;
+    g_fw.RouteMode = MODE_ANSWER;
+    arConnected(6, 1, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK(firstDev() != NULL && firstDev()->RouteValid &&
+              firstDev()->Serial == serial,
+          "routed by the refresh, the same occupancy");
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 1, "read once routed");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_USB4, "USB4");
+
+    /* AR re-announced through the port's other link: the route is asked
+     * again, the occupancy and its value stand, nothing is read again. */
+    arConnected(7, 1, 2, 1, kUuid, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.Refreshes, 2, "a refresh");
+    CHECK(firstDev() != NULL && firstDev()->Serial == serial &&
+              firstDev()->Route.Lo == 2,
+          "the same occupancy, re-routed");
+    CHECK_EQ(g_fw.DevReads, 1, "not read again");
+    CHECK_EQ(firstDev()->VersionState, TBT_ICM_VER_USB4, "the value stands");
+
+    /* The same move while the read is still owed: read at the new route. */
+    setup(GEN_AR, 0, 0);
+    g_fw.VerByte = 0x20;
+    CHECK_EQ(start(), TBT_OK, "AR bind, reads off for now");
+    arConnected(5, 1, 1, 1, kUuid, 0);
+    idle(200);
+    arConnected(6, 1, 2, 1, kUuid, 0);
+    idle(200);
+    CHECK(firstDev() != NULL && firstDev()->RouteValid &&
+              firstDev()->Route.Lo == 2 &&
+              firstDev()->VersionState == TBT_ICM_VER_OWED,
+          "re-routed, still owed");
+    TbtIcmSetReadVersion(&g_icm, TRUE);
+    idle(200);
+    CHECK_EQ(g_fw.DevReads, 1, "read");
+    CHECK_EQ(g_fw.DevReadRouteLo, 2, "at the route asked again");
 
     /* USB4 1.0, as the ORICO reads (ICM-PROTOCOL 13.3 [obs]). */
     setup(GEN_ICL, 1, 1);
