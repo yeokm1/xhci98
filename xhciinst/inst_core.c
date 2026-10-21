@@ -5966,6 +5966,22 @@ INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
     return set;
 }
 
+INST_U32 inst_stor_inf_set(int copyOk, const int named[2])
+{
+    INST_U32 set = 0;
+
+    if (!copyOk) {
+        return 0;
+    }
+    if (named[0] == 0) {
+        set |= 1UL << INST_STOR_IDX_USBSTOR_INF;
+    }
+    if (named[1] == 0) {
+        set |= 1UL << INST_STOR_IDX_USBNTMAP_INF;
+    }
+    return set;
+}
+
 static void inst_stor_names(char *out, size_t cap,
                             const int st[INST_STOR_COUNT])
 {

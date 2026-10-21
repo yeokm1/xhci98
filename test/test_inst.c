@@ -4247,6 +4247,41 @@ static void test_storage(void)
           "an InfPath that names more than one copy, or unreadable: not "
           "adopted");
     CHECK(!inst_stor_adoptable(1, 1, 0, 1, 1, 1), "USB20U present: not adopted");
+    /* The INFs placed in %windir%\INF (task 43.42, record 26 section
+     * 6.5.11): only on the route with every binary in place, only where
+     * no file of the name is there, never over one. */
+    {
+        int named[2];
+        named[0] = 0;
+        named[1] = 0;
+        CHECK(inst_stor_inf_set(1, named) ==
+              ((1UL << INST_STOR_IDX_USBSTOR_INF) |
+               (1UL << INST_STOR_IDX_USBNTMAP_INF)),
+              "placed: both INFs, neither name there");
+        CHECK(inst_stor_inf_set(0, named) == 0,
+              "placed: nothing off the route or with a binary not in place");
+        named[0] = 1;
+        CHECK(inst_stor_inf_set(1, named) ==
+              (1UL << INST_STOR_IDX_USBNTMAP_INF),
+              "placed: never over a USBSTOR.INF already there");
+        named[0] = 0;
+        named[1] = -1;
+        CHECK(inst_stor_inf_set(1, named) ==
+              (1UL << INST_STOR_IDX_USBSTOR_INF),
+              "placed: a name that cannot be read is kept out");
+        named[0] = 1;
+        named[1] = 1;
+        CHECK(inst_stor_inf_set(1, named) == 0,
+              "placed: both there (NUSB's own, or an earlier run's): none");
+        named[0] = 0;
+        named[1] = 0;
+        CHECK((inst_stor_inf_set(1, named) & 0x1FUL) == 0,
+              "placed: never a binary");
+    }
+    /* A stick bound with no wizard from the placed USBSTOR.INF: its copy
+     * is held by Placed, so recorded, and adopted. */
+    CHECK(inst_stor_adoptable(1, 1, 0, 0, 1, 1),
+          "a stick bound from the placed INF: adopted");
     /* A run whose package copy failed after its storage copies: nothing
      * published, so a hand install of the same INFs later is never
      * taken by the uninstall. */

@@ -1688,6 +1688,12 @@ int inst_stor_default(int haveChoice, int choice,
  * absent one; never a present one, never an INF. */
 INST_U32 inst_stor_copy_set(int ticked, const int st[INST_STOR_COUNT],
                             int source);
+/* The INFs a run places in %windir%\INF (record 26 section 6.5.11), a bit
+ * per index (INST_STOR_IDX_*): only when the run's route put every binary
+ * in place (copyOk), and only an INF with no file of its own name there
+ * (named[0] USBSTOR.INF, named[1] USBNTMAP.INF: 1 a file of the name is
+ * there, -1 unreadable, either keeping it out). */
+INST_U32 inst_stor_inf_set(int copyOk, const int named[2]);
 /* The detection's text: none, some ("not known to be ready"), all, or
  * this installer's. */
 void inst_stor_found_text(char *out, size_t cap,

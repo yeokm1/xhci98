@@ -139,10 +139,14 @@ the seven is found, and unticked when any of them is there; the
 installer never copies over a file already present, and with only some
 of the seven found, one of them not this download's, it copies nothing
 and says the storage install is not complete. It installs a stick at
-"Unknown Device" and moves a disk from "Disk drive" to "USB Disk". The
-uninstall removes the files it copied, the copies Windows made of their
-INFs for it and the devices installed from them (a stick first plugged in
-after the install included), never while NUSB is installed.
+"Unknown Device" and moves a disk from "Disk drive" to "USB Disk". It
+also puts the two INFs, USBSTOR.INF and USBNTMAP.INF, in Windows' INF
+folder where NUSB's installer puts them, never over a file of that name,
+so that a USB disk plugged in later is meant to install without the New
+Hardware wizard. The uninstall removes the files it copied, the INFs it
+put in the INF folder, the copies Windows made of their INFs for it and
+the devices installed from them (a stick first plugged in after the
+install included), never while NUSB is installed.
 
 Switches the window takes: /uninstall (the uninstall, below), /to path
 (the tools folder, preselected), /thunderbolt, /stor98 (only with
