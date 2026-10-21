@@ -1347,6 +1347,8 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 /* Record 26 section 6.5 (task 43.4): the USB storage drivers, 98 SE. */
 #define INST_PT_STOR            41
 #define INST_PT_STOR_T          42
+/* Record 26 section 5.3.1 case 5: 8 and 8.1, no connection manager. */
+#define INST_PT_WELCOME_TOOLS   43
 
 typedef struct _INST_PAGE_TEXT {
     int Id;

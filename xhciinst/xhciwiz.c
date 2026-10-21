@@ -647,6 +647,8 @@ static void welcome_texts(HWND dlg)
                                                   (cm ? INST_PT_UN_WARN_CM :
                                                    INST_PT_UN_WARN) :
                                                   cm ? INST_PT_WELCOME_CM :
+                                                  is_cm_only_system() ?
+                                                  INST_PT_WELCOME_TOOLS :
                                                   INST_PT_WELCOME));
     if (uninstallMode) {
         SetDlgItemTextA(dlg, IDC_U_AGREE, inst_page_text(cm ?

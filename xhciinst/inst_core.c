@@ -5128,6 +5128,13 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "3 driver keeps running the USB controllers. Nothing is changed until "
       "you click Install on the Summary page. Help opens the readme.",
       284, 58 },
+    { INST_PT_WELCOME_TOOLS,
+      "This puts the xHCI98 tools in a folder you choose, and installs the "
+      "xHCI98 USB 3.x drivers only if you tick them on the next page "
+      "(untested on this Windows, where its own USB 3 driver runs the "
+      "controllers). Nothing is changed until you click Install on the "
+      "Summary page. Help opens the readme.",
+      284, 58 },
     { INST_PT_DRIVERS_T8,
       "Windows' own USB 3 driver runs the controllers here; ticked, this "
       "replaces it (untested here).",
