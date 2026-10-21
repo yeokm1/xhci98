@@ -120,6 +120,13 @@ try {
     }
     Save-LegShot $ports.Qmp $dir 'prep-setup'
     if (-not $ok -or -not ((Get-LegSerialLines $serial) -match '^XHLEG SETUP OK')) { throw "guest ${Guest}: XHSETUP did not report OK on COM1 (see $dir\prep-setup.png)" }
+    if ($g.ContainsKey('PrepSteps')) {
+        foreach ($s in @($g.PrepSteps)) {
+            $r = Invoke-LegHostStep -Step $s -QmpPort $ports.Qmp -Dir $dir -Since (Get-Date) -Process $proc -SerialPath $serial -Tag 'prep' -Layout $layout
+            Write-Host $r
+            if ($r -match 'FAILED') { throw "guest ${Guest}: $r" }
+        }
+    }
     if ($g.Family -eq '9x') { Invoke-RunBox 'rundll32.exe shell32.dll,SHExitWindowsEx 5' }
     else { Invoke-RunBox 'shutdown -s -f -t 0' }
     if (-not $proc.WaitForExit(300000)) { Save-LegShot $ports.Qmp $dir 'prep-noshutdown'; throw "guest $Guest did not power off after the shut down" }

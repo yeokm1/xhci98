@@ -35,7 +35,10 @@
     # nt picks the guest scripts; Layout is the guest keyboard's (the NT
     # images of build-and-test.md are US Dvorak). ColdStep is the host step a
     # cold start needs before the poller can run (a 9x guest raises the Add
-    # New Hardware wizard for a controller with no driver at every start).
+    # New Hardware wizard for a controller with no driver at every start),
+    # or before an install can (XP's Found New Hardware wizard, esc-fnh).
+    # PrepSteps are host steps make-start.ps1 takes once, after the poller's
+    # setup (XP's unsigned-driver policy at Ignore, xp-signing-ignore).
     # Every guest runs on TCG (owner, 2026-10-20: no WHPX). A 9x guest takes
     # a CPU with a local APIC (pentium3, not pentium3,-apic): QEMU 11.1
     # cannot load a qemu-xhci's saved state when MSI-X could not be set up.
@@ -50,7 +53,8 @@
             Id = 'xp'; Name = 'Windows XP SP3'; Family = 'nt'
             Base = 'vm\winxp.img'
             Cpu = 'pentium3'; Smp = 2; Memory = 1024; Layout = 'dvorak'
-            BootSeconds = 900; SettleSeconds = 90
+            ColdStep = 'esc-fnh'; PrepSteps = @('xp-signing-ignore')
+            BootSeconds = 900; SettleSeconds = 30
         }
     )
 }

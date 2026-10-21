@@ -8065,9 +8065,14 @@ saved machine state beside a frozen disk:
    The base image itself is only read.
 2. A first, cold start with a CD that holds the poller. The host types the
    CD's `XHSETUP` into Start, Run. It copies the poller to `C:\XHLEG` and
-   makes it start at every logon, then says so on COM1. On 98 SE and ME
-   this is a Run value. On 2000 and XP it is a Run value, and the
-   unsigned-driver policy is set to Ignore. On Vista and 7 it is an
+   makes it start at every logon, then says so on COM1, and turns AutoRun
+   off on NT, so a leg's CD opens no window. On 98 SE and ME this is a Run
+   value. On 2000 and XP it is a Run value; on XP the host then sets the
+   unsigned-driver policy to Ignore, made the system default, through
+   System Properties' Driver Signing dialog (`PrepSteps`,
+   `xp-signing-ignore`), because the registry value a script writes is not
+   honoured and under Warn every unsigned install raises a question and a
+   Found New Hardware wizard. On Vista and 7 it is an
    elevated logon task, so that no elevation prompt stops an unattended
    install; creating it needs elevation itself, so for a guest marked
    `SetupElevated` the host types the command into the Start menu's search
@@ -8115,7 +8120,13 @@ The host takes the steps a guest cannot take. These are named in
   the host has walked it;
 - on 98 SE, the same wizard at the start after the uninstall, when the
   controller has no driver again: it is escaped;
-- the first stick's wizard (roadmap-usb4 43.42, still open).
+- the first stick's wizard (roadmap-usb4 43.42, still open);
+- on XP, the Found New Hardware wizard for the controller with no driver,
+  which opens after logon without the focus and makes an install wait on
+  it (exit 4, "Windows is still installing something"): Alt+Tab and
+  Escape, before the state is saved and on a cold start (`esc-fnh`);
+- on XP, should the unsigned-driver question come all the same, Continue
+  Anyway (`PromptStep`, `xp-logo`, recognised by its warning sign).
 
 A step is tied to the phase the guest last reported (`AfterPhaseN`), not
 to a count of starts, so it follows the guest, and it is taken once: the

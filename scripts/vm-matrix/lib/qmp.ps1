@@ -122,7 +122,10 @@ function Send-QmpChord {
     $keys = @()
     for ($i = 0; $i -lt $parts.Count; $i++) {
         $k = $parts[$i]
-        if ($i -eq $parts.Count - 1 -and $k.Length -eq 1) { $k = [string](ConvertTo-PhysicalChar ([char]$k) $Layout) }
+        if ($i -eq $parts.Count - 1 -and $k.Length -eq 1) {
+            $k = [string](ConvertTo-PhysicalChar ([char]$k) $Layout)
+            if ($script:QcodeOf.ContainsKey($k)) { $k = $script:QcodeOf[$k] }
+        }
         if ($k -eq 'win') { $k = 'meta_l' }
         $keys += @{ type = 'qcode'; data = $k }
     }

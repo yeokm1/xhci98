@@ -14,6 +14,11 @@
     HostSteps  AfterPhaseN = a host step for the start that follows the one
                whose last phase was N: lib\leghost.ps1 Invoke-LegHostStep
     PlugStep   a host step right after the stick is plugged in
+    PromptStep xp: whenever it is on the screen, XP's unsigned-driver
+               question ("has not passed Windows Logo testing") answered
+               Continue Anyway, and the Found New Hardware wizard the
+               install raises for the root hub walked page by page ("No, not
+               this time", install automatically, Finish)
     Checks     the guest's checks that must each be reported PASS (default:
                driver-file, list-current, stick-seen, stick-copy, list-removed)
     Manual     $true: not started by release-matrix.ps1
@@ -37,9 +42,10 @@
             PlugStep  = 'wizard98-stor'
         }
         @{
-            Id    = 'xp-console'
-            Guest = 'xp'
-            Mode  = 'console'
+            Id         = 'xp-console'
+            Guest      = 'xp'
+            Mode       = 'console'
+            PromptStep = 'xp'
             Exits = @{ install = @(3); list = @(0); uninstall = @(3); 'list-final' = @(0) }
         }
         @{
@@ -52,10 +58,11 @@
             PlugStep  = 'wizard98-stor'
         }
         @{
-            Id     = 'xp-window'
-            Guest  = 'xp'
-            Mode   = 'window'
-            Manual = $true
+            Id         = 'xp-window'
+            Guest      = 'xp'
+            Mode       = 'window'
+            Manual     = $true
+            PromptStep = 'xp'
             Exits  = @{ list = @(0); uninstall = @(3); 'list-final' = @(0) }
         }
     )

@@ -103,6 +103,8 @@ $boot = 0
 $maxBoots = 6
 $failed = $false
 $pendingStep = ''
+$prompts = 0
+$fnhPages = 0
 
 # The guest's new complete lines since the last call, acted on in order.
 function Read-LegLines {
@@ -182,6 +184,7 @@ try {
             $lastNew = Get-Date
             $lastShot = Get-Date
             $pausedSince = $null
+            $lastPrompt = Get-Date
             while (-not $proc.HasExited) {
                 # A guest frozen from outside (QMP stop, for a quiet host) does
                 # not run down the stall timer or the leg's deadline: the time
@@ -198,7 +201,13 @@ try {
                     if ($endAt) { $endAt = $endAt + $gap }
                     $rec.pausedSeconds = [math]::Round($rec.pausedSeconds + $gap.TotalSeconds, 1)
                 }
-                if (Read-LegLines $serial $proc $tag) { $lastNew = Get-Date }                if (((Get-Date) - $lastShot).TotalSeconds -ge 60) { Save-LegShot $ports.Qmp $RunDir "$tag-last"; $lastShot = Get-Date }
+                if (Read-LegLines $serial $proc $tag) { $lastNew = Get-Date }
+                if ($def.ContainsKey('PromptStep') -and $def.PromptStep -eq 'xp' -and -not ($mode -eq 'window' -and $boot -eq 1) -and ((Get-Date) - $lastPrompt).TotalSeconds -ge 6) {
+                    $lastPrompt = Get-Date
+                    if (Invoke-LegXpLogoAnswer -QmpPort $ports.Qmp -Dir $RunDir -Tag $tag) { $prompts++; $lastNew = Get-Date }
+                    elseif (Invoke-LegXpFnhPage -QmpPort $ports.Qmp -Dir $RunDir -Tag $tag -Layout $guest.Layout) { $fnhPages++; $lastNew = Get-Date }
+                }
+                if (((Get-Date) - $lastShot).TotalSeconds -ge 60) { Save-LegShot $ports.Qmp $RunDir "$tag-last"; $lastShot = Get-Date }
                 $waitLimit = $stall
                 if ($mode -eq 'window' -and $boot -eq 1) { $waitLimit = 4 * 3600 }
                 if (((Get-Date) - $lastNew).TotalSeconds -gt $waitLimit) {
@@ -259,6 +268,8 @@ try {
 } catch {
     $rec.reasons += "host: $_"
 }
+if ($prompts) { $rec.steps += "unsigned-driver question answered Continue Anyway $prompts times" }
+if ($fnhPages) { $rec.steps += "Found New Hardware wizard pages answered: $fnhPages" }
 # The verdict.
 if (-not $ended) { $rec.reasons += 'the guest never said END' }
 $need = @('driver-file', 'list-current', 'stick-seen', 'stick-copy', 'list-removed')

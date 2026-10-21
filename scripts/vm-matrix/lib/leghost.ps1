@@ -100,12 +100,101 @@ function Get-Leg98DialogOf {
         return 'other'
     } catch { return 'unknown' } finally { if ($b) { $b.Dispose() } }
 }
+# Answers XP's unsigned-driver question ("Software Installation" or
+# "Hardware Installation": "has not passed Windows Logo testing") with
+# Continue Anyway when it is on the screen: its yellow warning sign sits at
+# the same place in both dialogs, centred on a 1024x768 screen (read on
+# 2026-10-22). STOP Installation has the focus, so Shift+Tab, then Enter
+# (Alt+C did not reach the button). Returns $true when it answered.
+function Invoke-LegXpLogoAnswer {
+    param([int]$QmpPort, [string]$Dir, [string]$Tag)
+    $p = Join-Path $Dir 'state.png'
+    try { Save-QmpScreen -Port $QmpPort -Path $p; Start-Sleep -Milliseconds 400 } catch { return $false }
+    Add-Type -AssemblyName System.Drawing
+    $b = $null; $hit = $false
+    try {
+        $b = New-Object System.Drawing.Bitmap $p
+        if ($b.Width -eq 1024 -and $b.Height -eq 768) {
+            $hit = $true
+            foreach ($pt in @(@(343, 275), @(338, 280), @(348, 280))) {
+                $c = $b.GetPixel($pt[0], $pt[1])
+                if (-not ($c.R -gt 220 -and $c.G -gt 180 -and $c.B -lt 50)) { $hit = $false }
+            }
+        }
+    } catch { $hit = $false } finally { if ($b) { $b.Dispose() } }
+    if (-not $hit) { return $false }
+    Copy-Item -LiteralPath $p -Destination (Join-Path $Dir "$Tag-logo-$(Get-Date -Format HHmmss).png") -Force
+    Send-QmpChord -Port $QmpPort -Chord 'shift-tab'; Start-Sleep -Seconds 1
+    Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 3
+    return $true
+}
+
+# Walks XP's Found New Hardware wizard one page when it is on the screen
+# (the installer expects it for the root hub: record 23 section 5.8, read
+# again on 2026-10-22): its left panel is pure navy; its title bar, just
+# above the panel, is dark blue when it has the focus, so Alt+Tab first when
+# it has not. On the first page Alt+T takes "No, not this time" (no other
+# page has a T accelerator), then Enter takes each page's default (Next,
+# "Install the software automatically", Finish). Returns $true when it acted.
+function Invoke-LegXpFnhPage {
+    param([int]$QmpPort, [string]$Dir, [string]$Tag, [string]$Layout = 'dvorak')
+    $p = Join-Path $Dir 'state.png'
+    try { Save-QmpScreen -Port $QmpPort -Path $p; Start-Sleep -Milliseconds 400 } catch { return $false }
+    Add-Type -AssemblyName System.Drawing
+    $b = $null; $found = $false; $active = $false
+    try {
+        $b = New-Object System.Drawing.Bitmap $p
+        $n = 0; $top = $b.Height; $tx = 0
+        for ($y = 8; $y -lt $b.Height; $y += 8) {
+            for ($x = 8; $x -lt $b.Width; $x += 8) {
+                $c = $b.GetPixel($x, $y)
+                if ($c.R -eq 0 -and $c.G -eq 0 -and $c.B -eq 128) { $n++; if ($y -lt $top) { $top = $y; $tx = $x } }
+            }
+        }
+        if ($n -ge 80) {
+            $found = $true
+            for ($y = $top; $y -gt [math]::Max(0, $top - 40); $y--) {
+                $c = $b.GetPixel([math]::Min($b.Width - 1, $tx + 20), $y)
+                if ($c.R -lt 30 -and $c.B -gt 200) { $active = $true; break }
+            }
+        }
+    } catch { $found = $false } finally { if ($b) { $b.Dispose() } }
+    if (-not $found) { return $false }
+    Copy-Item -LiteralPath $p -Destination (Join-Path $Dir "$Tag-fnh-$(Get-Date -Format HHmmss).png") -Force
+    if (-not $active) { Send-QmpChord -Port $QmpPort -Chord 'alt-tab'; Start-Sleep -Seconds 3 }
+    Send-QmpChord -Port $QmpPort -Chord 'alt-t' -Layout $Layout; Start-Sleep -Seconds 1
+    Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 8
+    return $true
+}
+
+# How many points of a 16-pixel grid on the screen are pure navy (0,0,128):
+# the Found New Hardware wizard's left panel on XP; nothing else on its
+# default desktop is that colour. -1 when no screen could be read.
+function Get-LegNavyCount {
+    param([int]$QmpPort, [string]$Dir)
+    $p = Join-Path $Dir 'state.png'
+    try { Save-QmpScreen -Port $QmpPort -Path $p; Start-Sleep -Milliseconds 400 } catch { return -1 }
+    Add-Type -AssemblyName System.Drawing
+    $b = $null
+    try {
+        $b = New-Object System.Drawing.Bitmap $p
+        $n = 0
+        for ($y = 8; $y -lt $b.Height; $y += 16) {
+            for ($x = 8; $x -lt $b.Width; $x += 16) {
+                $c = $b.GetPixel($x, $y)
+                if ($c.R -eq 0 -and $c.G -eq 0 -and $c.B -eq 128) { $n++ }
+            }
+        }
+        return $n
+    } catch { return -1 } finally { if ($b) { $b.Dispose() } }
+}
+
 # One named host step. Returns a line for the leg's record. The key
 # sequences are the ones the 43.5 legs walked by hand on 98 SE with this
 # package (Enter takes each wizard page's default button).
 function Invoke-LegHostStep {
     param([string]$Step, [int]$QmpPort, [string]$Dir, [datetime]$Since, $Process, [string]$SerialPath, [string]$Tag,
-        [string]$InstallDir = 'C:\XHCI98')
+        [string]$InstallDir = 'C:\XHCI98', [string]$Layout = 'qwerty')
     switch ($Step) {
         'esc-wizard98' {
             # A 9x guest with a controller it has no driver for raises the Add
@@ -120,6 +209,52 @@ function Invoke-LegHostStep {
             }
             if ((Get-LegSerialLines $SerialPath) -match '^XHLEG BOOT') { return "${Step}: poller up" }
             return "${Step}: no BOOT line in 420 s"
+        }
+        'xp-signing-ignore' {
+            # XP's unsigned-driver policy at Ignore, made the system default,
+            # through System Properties, Hardware, Driver Signing (read on
+            # 2026-10-22: the registry value a script writes is not honoured,
+            # and with Warn every unsigned device install raises a question
+            # and a Found New Hardware wizard). Keys on the guest's layout.
+            Send-QmpChord -Port $QmpPort -Chord 'meta_l-r' -Layout $Layout; Start-Sleep -Seconds 4
+            Send-QmpText -Port $QmpPort -Text 'sysdm.cpl' -Layout $Layout; Start-Sleep -Seconds 1
+            Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 12
+            Send-QmpChord -Port $QmpPort -Chord 'ctrl-tab'; Start-Sleep -Seconds 2
+            Send-QmpChord -Port $QmpPort -Chord 'ctrl-tab'; Start-Sleep -Seconds 3
+            Save-LegShot $QmpPort $Dir "$Tag-sig-1"
+            Send-QmpChord -Port $QmpPort -Chord 'alt-s' -Layout $Layout; Start-Sleep -Seconds 5
+            Send-QmpChord -Port $QmpPort -Chord 'alt-i' -Layout $Layout; Start-Sleep -Seconds 2
+            Save-LegShot $QmpPort $Dir "$Tag-sig-2"
+            Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 3
+            Send-QmpChord -Port $QmpPort -Chord 'ret'; Start-Sleep -Seconds 3
+            Save-LegShot $QmpPort $Dir "$Tag-sig-3"
+            return "${Step}: keys sent (shots $Tag-sig-1..3)"
+        }
+        'esc-fnh' {
+            # An NT guest with a controller it has no driver for opens the
+            # Found New Hardware wizard after logon (XP, read 2026-10-22);
+            # the poller runs beside it, but an install made under an open
+            # wizard waits on it. Once the poller is up and the screen still,
+            # Escape cancels it.
+            $deadline = $Since.AddSeconds(900)
+            while ((Get-Date) -lt $deadline -and -not $Process.HasExited) {
+                if ((Get-LegSerialLines $SerialPath) -match '^XHLEG BOOT') { break }
+                Start-Sleep -Seconds 5
+            }
+            if (-not ((Get-LegSerialLines $SerialPath) -match '^XHLEG BOOT')) { return "${Step}: no BOOT line in 900 s" }
+            $null = Wait-LegScreen -QmpPort $QmpPort -Dir $Dir -Since (Get-Date) -MinSeconds 20 -MaxSeconds 120
+            Save-LegShot $QmpPort $Dir "$Tag-fnh-0"
+            # The wizard opens without the focus (the poller's window keeps
+            # it), so Alt+Tab brings it forward and Escape cancels it; its
+            # left panel is the one place XP's screen shows pure navy.
+            for ($i = 1; $i -le 4; $i++) {
+                if ((Get-LegNavyCount -QmpPort $QmpPort -Dir $Dir) -lt 20) { return "${Step}: poller up, no wizard open (after $($i - 1) tries)" }
+                Send-QmpChord -Port $QmpPort -Chord 'alt-tab'; Start-Sleep -Seconds 3
+                Send-QmpChord -Port $QmpPort -Chord 'esc'; Start-Sleep -Seconds 6
+                Save-LegShot $QmpPort $Dir "$Tag-fnh-$i"
+            }
+            if ((Get-LegNavyCount -QmpPort $QmpPort -Dir $Dir) -lt 20) { return "${Step}: poller up, wizard cancelled" }
+            return "${Step}: FAILED, the Found New Hardware wizard is still open"
         }
         'wizard98-hcd' {
             # The first start after the console install on 98 SE: the wizard
