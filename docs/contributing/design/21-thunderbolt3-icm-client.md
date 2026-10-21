@@ -1402,10 +1402,13 @@ router space at the route, then ROUTER_CS_0 to 4, five DWs, and
   first; the client counts itself in a wait for its duration, so a
   re-entrant command is refused. A read is owed only by an entry with a
   route; none is made on a failed or stopped instance, nor inside a
-  resume, a recovery or a rediscovery.
-- **Timeout and retry.** One attempt, bounded by its own 1 s
-  (`TBT_ICM_VERSION_TIMEOUT_MS`), not the command timeout, with no
-  retry: a read that answers comes in milliseconds [obs] (85 requests
+  resume, a recovery or a rediscovery, nor after a `driver ready` whose
+  host-router poll was never answered (until a later one is).
+- **Timeout and retry.** One attempt: a response wait of its own 1 s
+  (`TBT_ICM_VERSION_TIMEOUT_MS`), not the command timeout, after the
+  request's consumption by the host interface, which the ring bounds
+  separately (`TBT_TX_CONSUME_MS`, 100 ms) - about 1.1 s in all - with
+  no retry: a read that answers comes in milliseconds [obs] (85 requests
   in 13 ms), and its value is informational, so a timeout is cheaper to
   report as "not known" than to retry, or to wait longer, at the cost of
   the thread and of an approve queued behind it. That is inside section
@@ -1425,8 +1428,16 @@ router space at the route, then ROUTER_CS_0 to 4, five DWs, and
   resume, a full recovery, a new bind: a restarted ring delivers
   nothing of an earlier request, section 5.6), and every occupancy
   owed a read meanwhile stays "not known" and is read after the
-  restart. A request-error notification is an answer and stops
-  nothing.
+  restart. A request-error notification carries no sequence number
+  either, so it is taken as this read's answer only where no other
+  request outstanding could have drawn it: no earlier router read (an
+  unanswered one has stopped the reads), and no host-router poll - the
+  polls read route 0's DW 0, which the host router answers and has no
+  request error to give, and a router read is made only in a session
+  whose last host-router poll was answered (section 5.1 step 9; the
+  firmware serves the requests it held when it releases the hold [obs]
+  section 6.2). A notification so taken stops nothing, so a device that
+  left and its re-plug at the same port are not left "not known".
 - **What is kept.** The fifth DW's bits 31:24, the USB4 Version, by its
   major alone (design record 22 section 3.5, `TbtHwRouterVersion`): a
   major of 1 or 2 is USB4 with the byte kept, and the entry carries
